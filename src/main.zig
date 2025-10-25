@@ -38,7 +38,7 @@ fn repl(ctx: *Context) !void {
     try writer.flush();
 
     while (true) {
-        // Print prompt
+        // Prompt
         try writer.writeAll("> ");
         try writer.flush();
 
@@ -67,7 +67,6 @@ fn repl(ctx: *Context) !void {
             continue;
         }
 
-        // Tokenize and interpret the input line
         var tokenizer = Tokenizer.init(trimmed);
         var had_error = false;
 
@@ -78,9 +77,20 @@ fn repl(ctx: *Context) !void {
                     had_error = true;
                     break;
                 };
+
+            } else if (ctx.dictionary.get(token)) |word| {
+                switch (word.action) {
+                    .native => |func| {
+                        func(ctx) catch |err| {
+                            try writer.print("Error: {any}\n", .{err});
+                            had_error = true;
+                            break;
+                        };
+                    },
+                }
+
             } else {
-                // TODO(ripta) unknown tokens are errors
-                try writer.print("Error: unknown token '{s}'\n", .{token});
+                try writer.print("Error: unknown word '{s}'\n", .{token});
                 had_error = true;
                 break;
             }
@@ -104,4 +114,6 @@ test {
     _ = @import("stack.zig");
     _ = @import("context.zig");
     _ = @import("tokenizer.zig");
+    _ = @import("dictionary.zig");
+    _ = @import("primitives.zig");
 }

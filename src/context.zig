@@ -1,22 +1,34 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+
 const Stack = @import("stack.zig").Stack;
+const Dictionary = @import("dictionary.zig").Dictionary;
+const primitives = @import("primitives.zig");
 
 /// The Context holds all interpreter state.
 pub const Context = struct {
     stack: Stack,
+    dictionary: Dictionary,
     allocator: Allocator,
 
-    /// Initialize a new interpreter context with an empty stack.
+    /// Initialize a new interpreter context with an empty stack and primitives.
     pub fn init(allocator: Allocator) Context {
-        return Context{
+        var ctx = Context{
             .stack = Stack.init(allocator),
+            .dictionary = Dictionary.init(allocator),
             .allocator = allocator,
         };
+
+        primitives.registerPrimitives(&ctx.dictionary) catch |err| {
+            std.debug.panic("Failed to register primitives: {any}", .{err});
+        };
+
+        return ctx;
     }
 
     /// Free all resources used by the context.
     pub fn deinit(self: *Context) void {
+        self.dictionary.deinit();
         self.stack.deinit();
     }
 };
