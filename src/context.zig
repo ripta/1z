@@ -48,6 +48,7 @@ pub const Context = struct {
                     if (self.dictionary.get(name)) |word| {
                         switch (word.action) {
                             .native => |func| try func(self),
+                            .compound => |instrs| try self.executeQuotation(instrs),
                         }
                     } else {
                         return ExecutionError.UnknownWord;

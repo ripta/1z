@@ -24,6 +24,7 @@ const primitives = [_]Primitive{
     .{ .name = "+", .func = nativeAdd },
     .{ .name = "-", .func = nativeSub },
     .{ .name = "call", .func = nativeCall },
+    .{ .name = ";", .func = nativeSemicolon },
 };
 
 pub fn registerPrimitives(dict: *Dictionary) !void {
@@ -70,6 +71,16 @@ fn nativeCall(ctx: *Context) anyerror!void {
     try ctx.executeQuotation(instrs);
 }
 
+/// ; ( name: quot -- ) - Define a new word
+fn nativeSemicolon(ctx: *Context) anyerror!void {
+    const instrs = try popQuotation(ctx);
+    const name = try popSymbol(ctx);
+    try ctx.dictionary.put(name, WordDefinition{
+        .name = name,
+        .action = .{ .compound = instrs },
+    });
+}
+
 // =============================================================================
 // Helper functions
 // =============================================================================
@@ -78,7 +89,7 @@ fn popInteger(ctx: *Context) !i64 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .integer => |i| i,
-        .quotation => error.TypeError,
+        .symbol, .quotation => error.TypeError,
     };
 }
 
@@ -86,7 +97,15 @@ fn popQuotation(ctx: *Context) ![]const Instruction {
     const val = try ctx.stack.pop();
     return switch (val) {
         .quotation => |q| q,
-        .integer => error.TypeError,
+        .integer, .symbol => error.TypeError,
+    };
+}
+
+fn popSymbol(ctx: *Context) ![]const u8 {
+    const val = try ctx.stack.pop();
+    return switch (val) {
+        .symbol => |s| s,
+        .integer, .quotation => error.TypeError,
     };
 }
 
@@ -163,6 +182,24 @@ test "call executes quotation" {
     try std.testing.expectEqual(@as(i64, 3), (try ctx.stack.pop()).integer);
 }
 
+test "semicolon defines word" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    const instrs = [_]Instruction{
+        .{ .push_literal = .{ .integer = 2 } },
+        .{ .call_word = "+" },
+    };
+    try ctx.stack.push(.{ .symbol = "add2" });
+    try ctx.stack.push(.{ .quotation = &instrs });
+    try nativeSemicolon(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+    const word = ctx.dictionary.get("add2");
+    try std.testing.expect(word != null);
+}
+
 test "register primitives" {
     const allocator = std.testing.allocator;
     var dict = Dictionary.init(allocator);
@@ -175,4 +212,5 @@ test "register primitives" {
     try std.testing.expect(dict.get("-") != null);
     try std.testing.expect(dict.get("drop") != null);
     try std.testing.expect(dict.get("call") != null);
+    try std.testing.expect(dict.get(";") != null);
 }

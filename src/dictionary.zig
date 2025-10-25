@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Context = @import("context.zig").Context;
+const Instruction = @import("value.zig").Instruction;
 
 /// Native function signature: takes context, can return errors.
 pub const NativeFn = *const fn (ctx: *Context) anyerror!void;
@@ -11,6 +12,7 @@ pub const WordDefinition = struct {
     parse_time: bool = false,
     action: union(enum) {
         native: NativeFn,
+        compound: []const Instruction,
     },
 };
 

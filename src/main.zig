@@ -101,9 +101,12 @@ fn interpretTokens(ctx: *Context, tokenizer: *Tokenizer, writer: anytype) !void 
             return ParseError.UnmatchedCloseBracket;
         } else if (parseInteger(token)) |n| {
             try ctx.stack.push(.{ .integer = n });
+        } else if (token.len > 1 and token[token.len - 1] == ':') {
+            try ctx.stack.push(.{ .symbol = token[0 .. token.len - 1] });
         } else if (ctx.dictionary.get(token)) |word| {
             switch (word.action) {
                 .native => |func| try func(ctx),
+                .compound => |instrs| try ctx.executeQuotation(instrs),
             }
         } else {
             writer.print("Error: unknown word '{s}'\n", .{token}) catch {};
@@ -124,6 +127,8 @@ fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]cons
             return instructions.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
         } else if (parseInteger(token)) |n| {
             instructions.append(allocator, .{ .push_literal = .{ .integer = n } }) catch return ParseError.OutOfMemory;
+        } else if (token.len > 1 and token[token.len - 1] == ':') {
+            instructions.append(allocator, .{ .push_literal = .{ .symbol = token[0 .. token.len - 1] } }) catch return ParseError.OutOfMemory;
         } else {
             instructions.append(allocator, .{ .call_word = token }) catch return ParseError.OutOfMemory;
         }

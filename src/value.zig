@@ -9,11 +9,13 @@ pub const Instruction = union(enum) {
 /// Value represents any value that can be stored on the stack.
 pub const Value = union(enum) {
     integer: i64,
+    symbol: []const u8,
     quotation: []const Instruction,
 
     pub fn format(self: Value, writer: anytype) !void {
         switch (self) {
             .integer => |i| try writer.print("{d}", .{i}),
+            .symbol => |s| try writer.print("{s}:", .{s}),
             .quotation => |instrs| {
                 try writer.writeAll("[ ");
                 for (instrs) |instr| {
@@ -38,6 +40,7 @@ pub const Value = union(enum) {
 
         return switch (self) {
             .integer => |a| a == other.integer,
+            .symbol => |a| std.mem.eql(u8, a, other.symbol),
             .quotation => |a| {
                 const b = other.quotation;
                 if (a.len != b.len) return false;
