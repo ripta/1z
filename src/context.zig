@@ -7,7 +7,7 @@ pub const Context = struct {
     stack: Stack,
     allocator: Allocator,
 
-    /// Initialize a new interpreter context.
+    /// Initialize a new interpreter context with an empty stack.
     pub fn init(allocator: Allocator) Context {
         return Context{
             .stack = Stack.init(allocator),

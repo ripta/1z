@@ -1,5 +1,8 @@
 const std = @import("std");
 const Context = @import("context.zig").Context;
+const Tokenizer = @import("tokenizer.zig").Tokenizer;
+const parseInteger = @import("tokenizer.zig").parseInteger;
+const Value = @import("value.zig").Value;
 const File = std.fs.File;
 
 const build_options = @import("build_options");
@@ -64,11 +67,30 @@ fn repl(ctx: *Context) !void {
             continue;
         }
 
-        // TODO(ripta): parse and interpret the input line
-        try writer.print("Input: {s}\n", .{trimmed});
-        try writer.writeAll("Stack: ");
-        try ctx.stack.dump(writer);
-        try writer.writeAll("\n");
+        // Tokenize and interpret the input line
+        var tokenizer = Tokenizer.init(trimmed);
+        var had_error = false;
+
+        while (tokenizer.next()) |token| {
+            if (parseInteger(token)) |n| {
+                ctx.stack.push(Value{ .integer = n }) catch |err| {
+                    try writer.print("Error: {any}\n", .{err});
+                    had_error = true;
+                    break;
+                };
+            } else {
+                // TODO(ripta) unknown tokens are errors
+                try writer.print("Error: unknown token '{s}'\n", .{token});
+                had_error = true;
+                break;
+            }
+        }
+
+        if (!had_error) {
+            try writer.writeAll("Stack: ");
+            try ctx.stack.dump(writer);
+            try writer.writeAll("\n");
+        }
         try writer.flush();
     }
 }
@@ -81,4 +103,5 @@ test {
     _ = @import("value.zig");
     _ = @import("stack.zig");
     _ = @import("context.zig");
+    _ = @import("tokenizer.zig");
 }
