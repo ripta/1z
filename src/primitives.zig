@@ -69,6 +69,7 @@ fn popInteger(ctx: *Context) !i64 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .integer => |i| i,
+        .quotation => error.TypeError,
     };
 }
 

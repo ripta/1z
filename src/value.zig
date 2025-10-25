@@ -1,13 +1,32 @@
 const std = @import("std");
 
-/// Value represents any value that can be stored on the stack, which we'll
-/// extend to support floats, booleans, strings, symbols, arrays, quotations.
+/// Instruction represents a single operation in a compiled quotation.
+pub const Instruction = union(enum) {
+    push_literal: Value,
+    call_word: []const u8,
+};
+
+/// Value represents any value that can be stored on the stack.
 pub const Value = union(enum) {
     integer: i64,
+    quotation: []const Instruction,
 
     pub fn format(self: Value, writer: anytype) !void {
         switch (self) {
             .integer => |i| try writer.print("{d}", .{i}),
+            .quotation => |instrs| {
+                try writer.writeAll("[ ");
+                for (instrs) |instr| {
+                    switch (instr) {
+                        .push_literal => |v| {
+                            try v.format(writer);
+                            try writer.writeAll(" ");
+                        },
+                        .call_word => |name| try writer.print("{s} ", .{name}),
+                    }
+                }
+                try writer.writeAll("]");
+            },
         }
     }
 
@@ -19,9 +38,26 @@ pub const Value = union(enum) {
 
         return switch (self) {
             .integer => |a| a == other.integer,
+            .quotation => |a| {
+                const b = other.quotation;
+                if (a.len != b.len) return false;
+                for (a, b) |ai, bi| {
+                    if (!instructionEql(ai, bi)) return false;
+                }
+                return true;
+            },
         };
     }
 };
+
+fn instructionEql(a: Instruction, b: Instruction) bool {
+    const Tag = std.meta.Tag(Instruction);
+    if (@as(Tag, a) != @as(Tag, b)) return false;
+    return switch (a) {
+        .push_literal => |va| va.eql(b.push_literal),
+        .call_word => |na| std.mem.eql(u8, na, b.call_word),
+    };
+}
 
 // =============================================================================
 // Tests

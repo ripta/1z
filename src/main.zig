@@ -1,12 +1,21 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
+const File = std.fs.File;
+
 const Context = @import("context.zig").Context;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const parseInteger = @import("tokenizer.zig").parseInteger;
 const Value = @import("value.zig").Value;
-const File = std.fs.File;
+const Instruction = @import("value.zig").Instruction;
 
 const build_options = @import("build_options");
 pub const version = build_options.version;
+
+const ParseError = error{
+    UnmatchedOpenBracket,
+    UnmatchedCloseBracket,
+    OutOfMemory,
+};
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -68,33 +77,11 @@ fn repl(ctx: *Context) !void {
         }
 
         var tokenizer = Tokenizer.init(trimmed);
-        var had_error = false;
-
-        while (tokenizer.next()) |token| {
-            if (parseInteger(token)) |n| {
-                ctx.stack.push(Value{ .integer = n }) catch |err| {
-                    try writer.print("Error: {any}\n", .{err});
-                    had_error = true;
-                    break;
-                };
-
-            } else if (ctx.dictionary.get(token)) |word| {
-                switch (word.action) {
-                    .native => |func| {
-                        func(ctx) catch |err| {
-                            try writer.print("Error: {any}\n", .{err});
-                            had_error = true;
-                            break;
-                        };
-                    },
-                }
-
-            } else {
-                try writer.print("Error: unknown word '{s}'\n", .{token});
-                had_error = true;
-                break;
-            }
-        }
+        const result = interpretTokens(ctx, &tokenizer, writer);
+        const had_error = if (result) |_| false else |_| true;
+        result catch |err| {
+            try writer.print("Error: {any}\n", .{err});
+        };
 
         if (!had_error) {
             try writer.writeAll("Stack: ");
@@ -103,6 +90,46 @@ fn repl(ctx: *Context) !void {
         }
         try writer.flush();
     }
+}
+
+fn interpretTokens(ctx: *Context, tokenizer: *Tokenizer, writer: anytype) !void {
+    while (tokenizer.next()) |token| {
+        if (std.mem.eql(u8, token, "[")) {
+            const quotation = try parseQuotation(ctx.allocator, tokenizer);
+            try ctx.stack.push(.{ .quotation = quotation });
+        } else if (std.mem.eql(u8, token, "]")) {
+            return ParseError.UnmatchedCloseBracket;
+        } else if (parseInteger(token)) |n| {
+            try ctx.stack.push(.{ .integer = n });
+        } else if (ctx.dictionary.get(token)) |word| {
+            switch (word.action) {
+                .native => |func| try func(ctx),
+            }
+        } else {
+            writer.print("Error: unknown word '{s}'\n", .{token}) catch {};
+            return error.UnknownWord;
+        }
+    }
+}
+
+fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]const Instruction {
+    var instructions: std.ArrayListUnmanaged(Instruction) = .{};
+    errdefer instructions.deinit(allocator);
+
+    while (tokenizer.next()) |token| {
+        if (std.mem.eql(u8, token, "[")) {
+            const nested = try parseQuotation(allocator, tokenizer);
+            instructions.append(allocator, .{ .push_literal = .{ .quotation = nested } }) catch return ParseError.OutOfMemory;
+        } else if (std.mem.eql(u8, token, "]")) {
+            return instructions.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
+        } else if (parseInteger(token)) |n| {
+            instructions.append(allocator, .{ .push_literal = .{ .integer = n } }) catch return ParseError.OutOfMemory;
+        } else {
+            instructions.append(allocator, .{ .call_word = token }) catch return ParseError.OutOfMemory;
+        }
+    }
+
+    return ParseError.UnmatchedOpenBracket;
 }
 
 // =============================================================================
@@ -116,4 +143,33 @@ test {
     _ = @import("tokenizer.zig");
     _ = @import("dictionary.zig");
     _ = @import("primitives.zig");
+}
+
+test "parse simple quotation" {
+    var tokenizer = Tokenizer.init("1 2 + ]");
+    const instrs = try parseQuotation(std.testing.allocator, &tokenizer);
+    defer std.testing.allocator.free(instrs);
+
+    try std.testing.expectEqual(@as(usize, 3), instrs.len);
+    try std.testing.expectEqual(@as(i64, 1), instrs[0].push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 2), instrs[1].push_literal.integer);
+    try std.testing.expectEqualStrings("+", instrs[2].call_word);
+}
+
+test "parse nested quotation" {
+    var tokenizer = Tokenizer.init("[ 1 ] ]");
+    const instrs = try parseQuotation(std.testing.allocator, &tokenizer);
+    defer std.testing.allocator.free(instrs);
+
+    try std.testing.expectEqual(@as(usize, 1), instrs.len);
+    const nested = instrs[0].push_literal.quotation;
+    defer std.testing.allocator.free(nested);
+    try std.testing.expectEqual(@as(usize, 1), nested.len);
+    try std.testing.expectEqual(@as(i64, 1), nested[0].push_literal.integer);
+}
+
+test "unmatched open bracket" {
+    var tokenizer = Tokenizer.init("1 2");
+    const result = parseQuotation(std.testing.allocator, &tokenizer);
+    try std.testing.expectError(ParseError.UnmatchedOpenBracket, result);
 }
