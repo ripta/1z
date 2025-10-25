@@ -16,6 +16,7 @@ pub const ExecutionError = error{
 pub const Context = struct {
     stack: Stack,
     dictionary: Dictionary,
+    arena: std.heap.ArenaAllocator,
     allocator: Allocator,
 
     /// Initialize a new interpreter context with an empty stack and primitives.
@@ -23,6 +24,7 @@ pub const Context = struct {
         var ctx = Context{
             .stack = Stack.init(allocator),
             .dictionary = Dictionary.init(allocator),
+            .arena = std.heap.ArenaAllocator.init(allocator),
             .allocator = allocator,
         };
 
@@ -35,8 +37,14 @@ pub const Context = struct {
 
     /// Free all resources used by the context.
     pub fn deinit(self: *Context) void {
+        self.arena.deinit();
         self.dictionary.deinit();
         self.stack.deinit();
+    }
+
+    /// Allocator for quotations and other parsed data.
+    pub fn quotationAllocator(self: *Context) Allocator {
+        return self.arena.allocator();
     }
 
     /// Execute a quotation's instructions.

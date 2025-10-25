@@ -95,7 +95,7 @@ fn repl(ctx: *Context) !void {
 fn interpretTokens(ctx: *Context, tokenizer: *Tokenizer, writer: anytype) !void {
     while (tokenizer.next()) |token| {
         if (std.mem.eql(u8, token, "[")) {
-            const quotation = try parseQuotation(ctx.allocator, tokenizer);
+            const quotation = try parseQuotation(ctx.quotationAllocator(), tokenizer);
             try ctx.stack.push(.{ .quotation = quotation });
         } else if (std.mem.eql(u8, token, "]")) {
             return ParseError.UnmatchedCloseBracket;
