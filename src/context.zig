@@ -3,7 +3,14 @@ const Allocator = std.mem.Allocator;
 
 const Stack = @import("stack.zig").Stack;
 const Dictionary = @import("dictionary.zig").Dictionary;
+const Instruction = @import("value.zig").Instruction;
 const primitives = @import("primitives.zig");
+
+pub const ExecutionError = error{
+    UnknownWord,
+    StackUnderflow,
+    OutOfMemory,
+};
 
 /// The Context holds all interpreter state.
 pub const Context = struct {
@@ -30,6 +37,24 @@ pub const Context = struct {
     pub fn deinit(self: *Context) void {
         self.dictionary.deinit();
         self.stack.deinit();
+    }
+
+    /// Execute a quotation's instructions.
+    pub fn executeQuotation(self: *Context, instructions: []const Instruction) anyerror!void {
+        for (instructions) |instr| {
+            switch (instr) {
+                .push_literal => |val| try self.stack.push(val),
+                .call_word => |name| {
+                    if (self.dictionary.get(name)) |word| {
+                        switch (word.action) {
+                            .native => |func| try func(self),
+                        }
+                    } else {
+                        return ExecutionError.UnknownWord;
+                    }
+                },
+            }
+        }
     }
 };
 

@@ -16,11 +16,14 @@ const Primitive = struct {
     func: NativeFn,
 };
 
+const Instruction = @import("value.zig").Instruction;
+
 const primitives = [_]Primitive{
     .{ .name = "dup", .func = nativeDup },
     .{ .name = "drop", .func = nativeDrop },
     .{ .name = "+", .func = nativeAdd },
     .{ .name = "-", .func = nativeSub },
+    .{ .name = "call", .func = nativeCall },
 };
 
 pub fn registerPrimitives(dict: *Dictionary) !void {
@@ -61,6 +64,12 @@ fn nativeSub(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .integer = a - b });
 }
 
+/// call ( quot -- ) - Execute a quotation
+fn nativeCall(ctx: *Context) anyerror!void {
+    const instrs = try popQuotation(ctx);
+    try ctx.executeQuotation(instrs);
+}
+
 // =============================================================================
 // Helper functions
 // =============================================================================
@@ -70,6 +79,14 @@ fn popInteger(ctx: *Context) !i64 {
     return switch (val) {
         .integer => |i| i,
         .quotation => error.TypeError,
+    };
+}
+
+fn popQuotation(ctx: *Context) ![]const Instruction {
+    const val = try ctx.stack.pop();
+    return switch (val) {
+        .quotation => |q| q,
+        .integer => error.TypeError,
     };
 }
 
@@ -129,6 +146,23 @@ test "sub" {
     try std.testing.expectEqual(@as(i64, 7), (try ctx.stack.pop()).integer);
 }
 
+test "call executes quotation" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    const instrs = [_]Instruction{
+        .{ .push_literal = .{ .integer = 1 } },
+        .{ .push_literal = .{ .integer = 2 } },
+        .{ .call_word = "+" },
+    };
+    try ctx.stack.push(.{ .quotation = &instrs });
+    try nativeCall(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 3), (try ctx.stack.pop()).integer);
+}
+
 test "register primitives" {
     const allocator = std.testing.allocator;
     var dict = Dictionary.init(allocator);
@@ -140,4 +174,5 @@ test "register primitives" {
     try std.testing.expect(dict.get("+") != null);
     try std.testing.expect(dict.get("-") != null);
     try std.testing.expect(dict.get("drop") != null);
+    try std.testing.expect(dict.get("call") != null);
 }
