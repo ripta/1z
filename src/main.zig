@@ -1,7 +1,9 @@
 const std = @import("std");
 const Context = @import("context.zig").Context;
 const File = std.fs.File;
-const Io = std.io;
+
+const build_options = @import("build_options");
+pub const version = build_options.version;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -25,11 +27,10 @@ fn repl(ctx: *Context) !void {
     var stdin = stdin_file.reader(&stdin_buf);
     var stdout = stdout_file.writer(&stdout_buf);
 
-    // Get the interfaces
     const writer = &stdout.interface;
     const reader = &stdin.interface;
 
-    try writer.writeAll("1z interpreter\n");
+    try writer.print("1z interpreter v{s}\n", .{version});
     try writer.writeAll("Type '.q' to quit\n\n");
     try writer.flush();
 
