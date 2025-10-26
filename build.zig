@@ -48,4 +48,14 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
+
+    // Integration tests
+    const integration_test_step = b.step("integration-test", "Run integration tests");
+    integration_test_step.dependOn(&run_lib_unit_tests.step);
+
+    // Test: no memory leaks when defining words
+    const leak_test = b.addRunArtifact(exe);
+    leak_test.setStdIn(.{ .bytes = "foo: [ 1 2 + ] ;\nbar: [ foo foo ] ;\n.q\n" });
+    leak_test.expectStdErrEqual("");
+    integration_test_step.dependOn(&leak_test.step);
 }

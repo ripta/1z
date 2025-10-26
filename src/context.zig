@@ -89,3 +89,19 @@ test "stack operations through context" {
     const val = try ctx.stack.pop();
     try std.testing.expectEqual(@as(i64, 42), val.integer);
 }
+
+test "quotation allocator frees on deinit" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.quotationAllocator();
+    const instrs = try alloc.alloc(Instruction, 3);
+    instrs[0] = .{ .push_literal = .{ .integer = 1 } };
+    instrs[1] = .{ .push_literal = .{ .integer = 2 } };
+    instrs[2] = .{ .call_word = "+" };
+
+    try ctx.dictionary.put("test-word", .{
+        .name = "test-word",
+        .action = .{ .compound = instrs },
+    });
+}
