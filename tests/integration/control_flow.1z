@@ -1,0 +1,4 @@
+5 3 > [ 1 ] [ 0 ] if drop
+t [ 42 ] when drop
+f [ 99 ] unless drop
+.q

@@ -53,15 +53,25 @@ pub fn build(b: *std.Build) void {
     const integration_test_step = b.step("integration-test", "Run integration tests");
     integration_test_step.dependOn(&run_lib_unit_tests.step);
 
-    // Test: no memory leaks when defining words
-    const leak_test = b.addRunArtifact(exe);
-    leak_test.setStdIn(.{ .bytes = "foo: [ 1 2 + ] ;\nbar: [ foo foo ] ;\n.q\n" });
-    leak_test.expectStdErrEqual("");
-    integration_test_step.dependOn(&leak_test.step);
+    // Dynamically discover and run all .1z files in tests/integration/
+    const test_dir = b.build_root.handle.openDir("tests/integration", .{ .iterate = true }) catch |err| {
+        std.debug.print("Warning: Could not open tests/integration: {}\n", .{err});
+        return;
+    };
 
-    // Test: strings and arrays don't leak memory
-    const string_test = b.addRunArtifact(exe);
-    string_test.setStdIn(.{ .bytes = "\"hello world\" print\n{ 1 2 3 } print\n{ \"a\" { 1 } } print\n.q\n" });
-    string_test.expectStdErrEqual("");
-    integration_test_step.dependOn(&string_test.step);
+    var iter = test_dir.iterate();
+    while (iter.next() catch null) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".1z")) continue;
+
+        const test_run = b.addRunArtifact(exe);
+        const file_path = b.fmt("tests/integration/{s}", .{entry.name});
+        const content = b.build_root.handle.readFileAlloc(b.allocator, file_path, 1024 * 1024) catch |err| {
+            std.debug.print("Warning: Could not read {s}: {}\n", .{ file_path, err });
+            continue;
+        };
+        test_run.setStdIn(.{ .bytes = content });
+        test_run.expectStdErrEqual("");
+        integration_test_step.dependOn(&test_run.step);
+    }
 }
