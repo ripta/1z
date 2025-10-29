@@ -5,6 +5,7 @@ const File = std.fs.File;
 const Context = @import("context.zig").Context;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const parseInteger = @import("tokenizer.zig").parseInteger;
+const parseString = @import("tokenizer.zig").parseString;
 const Value = @import("value.zig").Value;
 const Instruction = @import("value.zig").Instruction;
 
@@ -14,6 +15,8 @@ pub const version = build_options.version;
 const ParseError = error{
     UnmatchedOpenBracket,
     UnmatchedCloseBracket,
+    UnmatchedOpenBrace,
+    UnmatchedCloseBrace,
     OutOfMemory,
 };
 
@@ -99,8 +102,15 @@ fn interpretTokens(ctx: *Context, tokenizer: *Tokenizer, writer: anytype) !void 
             try ctx.stack.push(.{ .quotation = quotation });
         } else if (std.mem.eql(u8, token, "]")) {
             return ParseError.UnmatchedCloseBracket;
+        } else if (std.mem.eql(u8, token, "{")) {
+            const arr = try parseArray(ctx.quotationAllocator(), tokenizer);
+            try ctx.stack.push(.{ .array = arr });
+        } else if (std.mem.eql(u8, token, "}")) {
+            return ParseError.UnmatchedCloseBrace;
         } else if (parseInteger(token)) |n| {
             try ctx.stack.push(.{ .integer = n });
+        } else if (parseString(token)) |s| {
+            try ctx.stack.push(.{ .string = s });
         } else if (token.len > 1 and token[token.len - 1] == ':') {
             try ctx.stack.push(.{ .symbol = token[0 .. token.len - 1] });
         } else if (ctx.dictionary.get(token)) |word| {
@@ -125,8 +135,13 @@ fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]cons
             instructions.append(allocator, .{ .push_literal = .{ .quotation = nested } }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "]")) {
             return instructions.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
+        } else if (std.mem.eql(u8, token, "{")) {
+            const arr = try parseArray(allocator, tokenizer);
+            instructions.append(allocator, .{ .push_literal = .{ .array = arr } }) catch return ParseError.OutOfMemory;
         } else if (parseInteger(token)) |n| {
             instructions.append(allocator, .{ .push_literal = .{ .integer = n } }) catch return ParseError.OutOfMemory;
+        } else if (parseString(token)) |s| {
+            instructions.append(allocator, .{ .push_literal = .{ .string = s } }) catch return ParseError.OutOfMemory;
         } else if (token.len > 1 and token[token.len - 1] == ':') {
             instructions.append(allocator, .{ .push_literal = .{ .symbol = token[0 .. token.len - 1] } }) catch return ParseError.OutOfMemory;
         } else {
@@ -135,6 +150,34 @@ fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]cons
     }
 
     return ParseError.UnmatchedOpenBracket;
+}
+
+fn parseArray(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]const Value {
+    var values: std.ArrayListUnmanaged(Value) = .{};
+    errdefer values.deinit(allocator);
+
+    while (tokenizer.next()) |token| {
+        if (std.mem.eql(u8, token, "{")) {
+            const nested = try parseArray(allocator, tokenizer);
+            values.append(allocator, .{ .array = nested }) catch return ParseError.OutOfMemory;
+        } else if (std.mem.eql(u8, token, "}")) {
+            return values.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
+        } else if (std.mem.eql(u8, token, "[")) {
+            const quot = try parseQuotation(allocator, tokenizer);
+            values.append(allocator, .{ .quotation = quot }) catch return ParseError.OutOfMemory;
+        } else if (parseInteger(token)) |n| {
+            values.append(allocator, .{ .integer = n }) catch return ParseError.OutOfMemory;
+        } else if (parseString(token)) |s| {
+            values.append(allocator, .{ .string = s }) catch return ParseError.OutOfMemory;
+        } else if (token.len > 1 and token[token.len - 1] == ':') {
+            values.append(allocator, .{ .symbol = token[0 .. token.len - 1] }) catch return ParseError.OutOfMemory;
+        } else {
+            // Unknown token in array - treat as error for now
+            return ParseError.OutOfMemory;
+        }
+    }
+
+    return ParseError.UnmatchedOpenBrace;
 }
 
 // =============================================================================
@@ -177,4 +220,44 @@ test "unmatched open bracket" {
     var tokenizer = Tokenizer.init("1 2");
     const result = parseQuotation(std.testing.allocator, &tokenizer);
     try std.testing.expectError(ParseError.UnmatchedOpenBracket, result);
+}
+
+test "parse simple array" {
+    var tokenizer = Tokenizer.init("1 2 3 }");
+    const arr = try parseArray(std.testing.allocator, &tokenizer);
+    defer std.testing.allocator.free(arr);
+
+    try std.testing.expectEqual(@as(usize, 3), arr.len);
+    try std.testing.expectEqual(@as(i64, 1), arr[0].integer);
+    try std.testing.expectEqual(@as(i64, 2), arr[1].integer);
+    try std.testing.expectEqual(@as(i64, 3), arr[2].integer);
+}
+
+test "parse nested array" {
+    var tokenizer = Tokenizer.init("{ 1 2 } }");
+    const arr = try parseArray(std.testing.allocator, &tokenizer);
+    defer std.testing.allocator.free(arr);
+
+    try std.testing.expectEqual(@as(usize, 1), arr.len);
+    const nested = arr[0].array;
+    defer std.testing.allocator.free(nested);
+    try std.testing.expectEqual(@as(usize, 2), nested.len);
+    try std.testing.expectEqual(@as(i64, 1), nested[0].integer);
+    try std.testing.expectEqual(@as(i64, 2), nested[1].integer);
+}
+
+test "parse array with string" {
+    var tokenizer = Tokenizer.init("\"hello\" 42 }");
+    const arr = try parseArray(std.testing.allocator, &tokenizer);
+    defer std.testing.allocator.free(arr);
+
+    try std.testing.expectEqual(@as(usize, 2), arr.len);
+    try std.testing.expectEqualStrings("hello", arr[0].string);
+    try std.testing.expectEqual(@as(i64, 42), arr[1].integer);
+}
+
+test "unmatched open brace" {
+    var tokenizer = Tokenizer.init("1 2");
+    const result = parseArray(std.testing.allocator, &tokenizer);
+    try std.testing.expectError(ParseError.UnmatchedOpenBrace, result);
 }

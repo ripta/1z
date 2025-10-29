@@ -26,6 +26,18 @@ pub const Tokenizer = struct {
 
         const start = self.pos;
 
+        // String literal: collect until closing quote
+        if (self.input[self.pos] == '"') {
+            self.pos += 1; // skip opening quote
+            while (self.pos < self.input.len and self.input[self.pos] != '"') {
+                self.pos += 1;
+            }
+            if (self.pos < self.input.len) {
+                self.pos += 1; // skip closing quote
+            }
+            return self.input[start..self.pos];
+        }
+
         // Collect non-whitespace characters
         while (self.pos < self.input.len and !isWhitespace(self.input[self.pos])) {
             self.pos += 1;
@@ -47,6 +59,15 @@ pub const Tokenizer = struct {
 /// Parse an integer from a token. Returns null if not a valid integer.
 pub fn parseInteger(token: []const u8) ?i64 {
     return std.fmt.parseInt(i64, token, 10) catch null;
+}
+
+/// Parse a string literal from a token. Returns the content without quotes,
+/// or null if not a valid string literal.
+pub fn parseString(token: []const u8) ?[]const u8 {
+    if (token.len < 2) return null;
+    if (token[0] != '"') return null;
+    if (token[token.len - 1] != '"') return null;
+    return token[1 .. token.len - 1];
 }
 
 // =============================================================================
@@ -113,4 +134,35 @@ test "reset" {
 
     t.reset();
     try std.testing.expectEqualStrings("a", t.next().?);
+}
+
+test "string literal" {
+    var t = Tokenizer.init("\"hello world\"");
+    try std.testing.expectEqualStrings("\"hello world\"", t.next().?);
+    try std.testing.expectEqual(null, t.next());
+}
+
+test "string literal with surrounding tokens" {
+    var t = Tokenizer.init("1 \"hello\" 2");
+    try std.testing.expectEqualStrings("1", t.next().?);
+    try std.testing.expectEqualStrings("\"hello\"", t.next().?);
+    try std.testing.expectEqualStrings("2", t.next().?);
+    try std.testing.expectEqual(null, t.next());
+}
+
+test "empty string literal" {
+    var t = Tokenizer.init("\"\"");
+    try std.testing.expectEqualStrings("\"\"", t.next().?);
+}
+
+test "parseString valid" {
+    try std.testing.expectEqualStrings("hello", parseString("\"hello\"").?);
+    try std.testing.expectEqualStrings("hello world", parseString("\"hello world\"").?);
+    try std.testing.expectEqualStrings("", parseString("\"\"").?);
+}
+
+test "parseString invalid" {
+    try std.testing.expectEqual(null, parseString("hello"));
+    try std.testing.expectEqual(null, parseString("\""));
+    try std.testing.expectEqual(null, parseString(""));
 }

@@ -10,14 +10,25 @@ pub const Instruction = union(enum) {
 pub const Value = union(enum) {
     integer: i64,
     boolean: bool,
+    string: []const u8,
     symbol: []const u8,
+    array: []const Value,
     quotation: []const Instruction,
 
     pub fn format(self: Value, writer: anytype) !void {
         switch (self) {
             .integer => |i| try writer.print("{d}", .{i}),
             .boolean => |b| try writer.writeAll(if (b) "t" else "f"),
+            .string => |s| try writer.print("\"{s}\"", .{s}),
             .symbol => |s| try writer.print("{s}:", .{s}),
+            .array => |items| {
+                try writer.writeAll("{ ");
+                for (items) |item| {
+                    try item.format(writer);
+                    try writer.writeAll(" ");
+                }
+                try writer.writeAll("}");
+            },
             .quotation => |instrs| {
                 try writer.writeAll("[ ");
                 for (instrs) |instr| {
@@ -43,7 +54,16 @@ pub const Value = union(enum) {
         return switch (self) {
             .integer => |a| a == other.integer,
             .boolean => |a| a == other.boolean,
+            .string => |a| std.mem.eql(u8, a, other.string),
             .symbol => |a| std.mem.eql(u8, a, other.symbol),
+            .array => |a| {
+                const b = other.array;
+                if (a.len != b.len) return false;
+                for (a, b) |ai, bi| {
+                    if (!ai.eql(bi)) return false;
+                }
+                return true;
+            },
             .quotation => |a| {
                 const b = other.quotation;
                 if (a.len != b.len) return false;

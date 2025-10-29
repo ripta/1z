@@ -33,6 +33,8 @@ const primitives = [_]Primitive{
     .{ .name = "if", .func = nativeIf },
     .{ .name = "when", .func = nativeWhen },
     .{ .name = "unless", .func = nativeUnless },
+    .{ .name = "print", .func = nativePrint },
+    .{ .name = ".", .func = nativePrint },
 };
 
 pub fn registerPrimitives(dict: *Dictionary) !void {
@@ -140,6 +142,17 @@ fn nativeUnless(ctx: *Context) anyerror!void {
     if (!cond) try ctx.executeQuotation(quot);
 }
 
+/// print ( a -- ) - Print top of stack to stdout
+fn nativePrint(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const stdout_file: std.fs.File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writer(&stdout_buf);
+    try val.format(&stdout.interface);
+    try stdout.interface.writeAll("\n");
+    try stdout.interface.flush();
+}
+
 // =============================================================================
 // Helper functions
 // =============================================================================
@@ -148,7 +161,7 @@ fn popInteger(ctx: *Context) !i64 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .integer => |i| i,
-        .boolean, .symbol, .quotation => error.TypeError,
+        .boolean, .string, .symbol, .array, .quotation => error.TypeError,
     };
 }
 
@@ -157,7 +170,7 @@ fn popBoolean(ctx: *Context) !bool {
     return switch (val) {
         .boolean => |b| b,
         .integer => |i| i != 0,
-        .symbol, .quotation => error.TypeError,
+        .string, .symbol, .array, .quotation => error.TypeError,
     };
 }
 
@@ -165,7 +178,7 @@ fn popQuotation(ctx: *Context) ![]const Instruction {
     const val = try ctx.stack.pop();
     return switch (val) {
         .quotation => |q| q,
-        .integer, .boolean, .symbol => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array => error.TypeError,
     };
 }
 
@@ -173,7 +186,7 @@ fn popSymbol(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .symbol => |s| s,
-        .integer, .boolean, .quotation => error.TypeError,
+        .integer, .boolean, .string, .array, .quotation => error.TypeError,
     };
 }
 
@@ -362,4 +375,6 @@ test "register primitives" {
     try std.testing.expect(dict.get("if") != null);
     try std.testing.expect(dict.get("when") != null);
     try std.testing.expect(dict.get("unless") != null);
+    try std.testing.expect(dict.get("print") != null);
+    try std.testing.expect(dict.get(".") != null);
 }
