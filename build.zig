@@ -54,10 +54,11 @@ pub fn build(b: *std.Build) void {
     integration_test_step.dependOn(&run_lib_unit_tests.step);
 
     // Dynamically discover and run all .1z files in tests/integration/
-    const test_dir = b.build_root.handle.openDir("tests/integration", .{ .iterate = true }) catch |err| {
+    var test_dir = b.build_root.handle.openDir("tests/integration", .{ .iterate = true }) catch |err| {
         std.debug.print("Warning: Could not open tests/integration: {}\n", .{err});
         return;
     };
+    defer test_dir.close();
 
     var iter = test_dir.iterate();
     while (iter.next() catch null) |entry| {
@@ -66,12 +67,9 @@ pub fn build(b: *std.Build) void {
 
         const test_run = b.addRunArtifact(exe);
         const file_path = b.fmt("tests/integration/{s}", .{entry.name});
-        const content = b.build_root.handle.readFileAlloc(b.allocator, file_path, 1024 * 1024) catch |err| {
-            std.debug.print("Warning: Could not read {s}: {}\n", .{ file_path, err });
-            continue;
-        };
-        test_run.setStdIn(.{ .bytes = content });
+        test_run.addArg(file_path);
         test_run.expectStdErrEqual("");
+        test_run.expectExitCode(0);
         integration_test_step.dependOn(&test_run.step);
     }
 }
