@@ -120,9 +120,24 @@ fn batch(ctx: *Context, file_path: []const u8) u8 {
     var file_buf: [4096]u8 = undefined;
     var reader = file.reader(&file_buf);
 
+    // Buffer for accumulating multiline statements
+    var stmt_buf: [65536]u8 = undefined;
+    var stmt_len: usize = 0;
+
     while (true) {
         const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
-            error.EndOfStream => break,
+            error.EndOfStream => {
+                // Try to execute any remaining buffered content
+                if (stmt_len > 0) {
+                    var tokenizer = Tokenizer.init(stmt_buf[0..stmt_len]);
+                    interpretTokens(ctx, &tokenizer, err_writer) catch |err2| {
+                        err_writer.print("Error: {any}\n", .{err2}) catch {};
+                        err_writer.flush() catch {};
+                        return 1;
+                    };
+                }
+                break;
+            },
             else => {
                 err_writer.print("Error reading file: {any}\n", .{err}) catch {};
                 err_writer.flush() catch {};
@@ -132,17 +147,39 @@ fn batch(ctx: *Context, file_path: []const u8) u8 {
 
         const trimmed = std.mem.trim(u8, line, " \t\r\n");
         if (trimmed.len == 0) continue;
-        if (std.mem.eql(u8, trimmed, ".q") or std.mem.eql(u8, trimmed, "quit")) break;
+        if (std.mem.eql(u8, trimmed, ".q")) break;
 
-        var tokenizer = Tokenizer.init(trimmed);
-        interpretTokens(ctx, &tokenizer, err_writer) catch |err| {
-            err_writer.print("Error: {any}\n", .{err}) catch {};
-            err_writer.flush() catch {};
-            return 1;
-        };
+        // Append line to statement buffer (with space separator)
+        if (stmt_len > 0) {
+            if (stmt_len < stmt_buf.len) {
+                stmt_buf[stmt_len] = ' ';
+                stmt_len += 1;
+            }
+        }
+        const copy_len = @min(trimmed.len, stmt_buf.len - stmt_len);
+        @memcpy(stmt_buf[stmt_len..][0..copy_len], trimmed[0..copy_len]);
+        stmt_len += copy_len;
+
+        // Try to execute - if we get an "incomplete" error, keep accumulating
+        var tokenizer = Tokenizer.init(stmt_buf[0..stmt_len]);
+        if (interpretTokens(ctx, &tokenizer, err_writer)) |_| {
+            stmt_len = 0;
+        } else |err| {
+            if (isIncompleteError(err)) {
+                continue;
+            } else {
+                err_writer.print("Error: {any}\n", .{err}) catch {};
+                err_writer.flush() catch {};
+                return 1;
+            }
+        }
     }
 
     return 0;
+}
+
+fn isIncompleteError(err: anyerror) bool {
+    return err == ParseError.UnmatchedOpenBracket or err == ParseError.UnmatchedOpenBrace;
 }
 
 fn interpretTokens(ctx: *Context, tokenizer: *Tokenizer, writer: anytype) !void {
