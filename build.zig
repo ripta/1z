@@ -58,4 +58,10 @@ pub fn build(b: *std.Build) void {
     leak_test.setStdIn(.{ .bytes = "foo: [ 1 2 + ] ;\nbar: [ foo foo ] ;\n.q\n" });
     leak_test.expectStdErrEqual("");
     integration_test_step.dependOn(&leak_test.step);
+
+    // Test: strings and arrays don't leak memory
+    const string_test = b.addRunArtifact(exe);
+    string_test.setStdIn(.{ .bytes = "\"hello world\" print\n{ 1 2 3 } print\n{ \"a\" { 1 } } print\n.q\n" });
+    string_test.expectStdErrEqual("");
+    integration_test_step.dependOn(&string_test.step);
 }
