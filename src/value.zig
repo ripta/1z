@@ -14,6 +14,7 @@ pub const Value = union(enum) {
     symbol: []const u8,
     array: []const Value,
     quotation: []const Instruction,
+    stack_effect: []const u8,
 
     pub fn format(self: Value, writer: anytype) !void {
         switch (self) {
@@ -42,6 +43,7 @@ pub const Value = union(enum) {
                 }
                 try writer.writeAll("]");
             },
+            .stack_effect => |effect| try writer.print("( {s} )", .{effect}),
         }
     }
 
@@ -72,6 +74,7 @@ pub const Value = union(enum) {
                 }
                 return true;
             },
+            .stack_effect => |a| std.mem.eql(u8, a, other.stack_effect),
         };
     }
 };

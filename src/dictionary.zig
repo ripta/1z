@@ -10,6 +10,7 @@ pub const NativeFn = *const fn (ctx: *Context) anyerror!void;
 pub const WordDefinition = struct {
     name: []const u8,
     parse_time: bool = false,
+    stack_effect: ?[]const u8 = null,
     action: union(enum) {
         native: NativeFn,
         compound: []const Instruction,

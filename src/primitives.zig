@@ -81,14 +81,34 @@ fn nativeCall(ctx: *Context) anyerror!void {
     try ctx.executeQuotation(instrs);
 }
 
-/// ; ( name: quot -- ) - Define a new word
+/// ; ( name: quot -- ) or ( name: ( effect ) quot -- ) - Define a new word
 fn nativeSemicolon(ctx: *Context) anyerror!void {
     const instrs = try popQuotation(ctx);
+
+    // Check if there's a stack effect between symbol and quotation
+    var stack_effect_str: ?[]const u8 = null;
+    const next_val = try ctx.stack.peek();
+    switch (next_val) {
+        .stack_effect => |se| {
+            _ = try ctx.stack.pop();
+            stack_effect_str = se;
+        },
+        else => {},
+    }
+
     const name = try popSymbol(ctx);
     // Copy name to arena so it persists after input buffer is reused
     const name_copy = try ctx.quotationAllocator().dupe(u8, name);
+
+    // Copy stack effect if present
+    var effect_copy: ?[]const u8 = null;
+    if (stack_effect_str) |se| {
+        effect_copy = try ctx.quotationAllocator().dupe(u8, se);
+    }
+
     try ctx.dictionary.put(name_copy, WordDefinition{
         .name = name_copy,
+        .stack_effect = effect_copy,
         .action = .{ .compound = instrs },
     });
 }
@@ -163,7 +183,7 @@ fn popInteger(ctx: *Context) !i64 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .integer => |i| i,
-        .boolean, .string, .symbol, .array, .quotation => error.TypeError,
+        .boolean, .string, .symbol, .array, .quotation, .stack_effect => error.TypeError,
     };
 }
 
@@ -172,7 +192,7 @@ fn popBoolean(ctx: *Context) !bool {
     return switch (val) {
         .boolean => |b| b,
         .integer => |i| i != 0,
-        .string, .symbol, .array, .quotation => error.TypeError,
+        .string, .symbol, .array, .quotation, .stack_effect => error.TypeError,
     };
 }
 
@@ -180,7 +200,7 @@ fn popQuotation(ctx: *Context) ![]const Instruction {
     const val = try ctx.stack.pop();
     return switch (val) {
         .quotation => |q| q,
-        .integer, .boolean, .string, .symbol, .array => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .stack_effect => error.TypeError,
     };
 }
 
@@ -188,7 +208,15 @@ fn popSymbol(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .symbol => |s| s,
-        .integer, .boolean, .string, .array, .quotation => error.TypeError,
+        .integer, .boolean, .string, .array, .quotation, .stack_effect => error.TypeError,
+    };
+}
+
+fn popStackEffect(ctx: *Context) ![]const u8 {
+    const val = try ctx.stack.pop();
+    return switch (val) {
+        .stack_effect => |se| se,
+        .integer, .boolean, .string, .symbol, .array, .quotation => error.TypeError,
     };
 }
 

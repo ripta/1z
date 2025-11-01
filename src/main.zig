@@ -17,6 +17,8 @@ const ParseError = error{
     UnmatchedCloseBracket,
     UnmatchedOpenBrace,
     UnmatchedCloseBrace,
+    UnmatchedOpenParen,
+    UnmatchedCloseParen,
     OutOfMemory,
 };
 
@@ -249,6 +251,11 @@ fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]const
             instructions.append(allocator, .{ .push_literal = .{ .array = arr } }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "}")) {
             return ParseError.UnmatchedCloseBrace;
+        } else if (std.mem.eql(u8, token, "(")) {
+            const effect = try parseStackEffect(allocator, tokenizer);
+            instructions.append(allocator, .{ .push_literal = .{ .stack_effect = effect } }) catch return ParseError.OutOfMemory;
+        } else if (std.mem.eql(u8, token, ")")) {
+            return ParseError.UnmatchedCloseParen;
         } else if (parseInteger(token)) |n| {
             instructions.append(allocator, .{ .push_literal = .{ .integer = n } }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
@@ -284,6 +291,11 @@ fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]cons
         } else if (std.mem.eql(u8, token, "{")) {
             const arr = try parseArray(allocator, tokenizer);
             instructions.append(allocator, .{ .push_literal = .{ .array = arr } }) catch return ParseError.OutOfMemory;
+        } else if (std.mem.eql(u8, token, "(")) {
+            const effect = try parseStackEffect(allocator, tokenizer);
+            instructions.append(allocator, .{ .push_literal = .{ .stack_effect = effect } }) catch return ParseError.OutOfMemory;
+        } else if (std.mem.eql(u8, token, ")")) {
+            return ParseError.UnmatchedCloseParen;
         } else if (parseInteger(token)) |n| {
             instructions.append(allocator, .{ .push_literal = .{ .integer = n } }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
@@ -302,6 +314,23 @@ fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]cons
     }
 
     return ParseError.UnmatchedOpenBracket;
+}
+
+fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]const u8 {
+    var tokens: std.ArrayListUnmanaged([]const u8) = .{};
+    defer tokens.deinit(allocator);
+
+    while (tokenizer.next()) |token| {
+        if (std.mem.eql(u8, token, ")")) {
+            // Join tokens with spaces to form the stack effect string
+            const result = std.mem.join(allocator, " ", tokens.items) catch return ParseError.OutOfMemory;
+            return result;
+        }
+        const token_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
+        tokens.append(allocator, token_copy) catch return ParseError.OutOfMemory;
+    }
+
+    return ParseError.UnmatchedOpenParen;
 }
 
 fn parseArray(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]const Value {
