@@ -43,7 +43,7 @@ fn repl(ctx: *Context) void {
     const reader = &stdin.interface;
 
     writer.print("1z interpreter v{s}\n", .{version}) catch return;
-    writer.writeAll("Type '.q' to quit\n\n") catch return;
+    writer.writeAll("Press ^D to quit\n\n") catch return;
     writer.flush() catch return;
 
     var processor: StatementProcessor = .{};
@@ -68,13 +68,6 @@ fn repl(ctx: *Context) void {
                 continue;
             },
         };
-
-        const trimmed = std.mem.trim(u8, line, " \t\r\n");
-        if (std.mem.eql(u8, trimmed, ".q")) {
-            writer.writeAll("Goodbye!\n") catch {};
-            writer.flush() catch {};
-            break;
-        }
 
         switch (processor.feedLine(ctx.quotationAllocator(), line)) {
             .needs_more_input => continue,
@@ -149,9 +142,6 @@ fn batch(ctx: *Context, file_path: []const u8) u8 {
                 return 1;
             },
         };
-
-        const trimmed = std.mem.trim(u8, line, " \t\r\n");
-        if (std.mem.eql(u8, trimmed, ".q")) break;
 
         switch (processor.feedLine(ctx.quotationAllocator(), line)) {
             .needs_more_input => continue,
