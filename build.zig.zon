@@ -1,6 +1,6 @@
 .{
     .name = .onez,
-    .version = "0.0.0-pre.1.1",
+    .version = "0.0.1",
     .fingerprint = 0xa812d9a3fc599a21,
     .minimum_zig_version = "0.15.0",
     .paths = .{
