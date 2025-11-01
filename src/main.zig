@@ -55,12 +55,23 @@ fn repl(ctx: *Context) void {
     const writer = &stdout.interface;
     const reader = &stdin.interface;
 
+    // Buffer for accumulating multiline statements
+    var stmt_buf: [65536]u8 = undefined;
+    var stmt_len: usize = 0;
+
     writer.print("1z interpreter v{s}\n", .{version}) catch return;
     writer.writeAll("Type '.q' to quit\n\n") catch return;
     writer.flush() catch return;
 
+    // TODO(ripta): Refactor this loop and batch mode to share more code,
+    // potentially into an evaluator.
     while (true) {
-        writer.writeAll("> ") catch return;
+        // Show continuation prompt if accumulating, otherwise primary prompt
+        if (stmt_len > 0) {
+            writer.writeAll("+ ") catch return;
+        } else {
+            writer.writeAll("> ") catch return;
+        }
         writer.flush() catch return;
 
         const line = reader.takeDelimiterInclusive('\n') catch |err| switch (err) {
@@ -87,13 +98,41 @@ fn repl(ctx: *Context) void {
             continue;
         }
 
-        var tokenizer = Tokenizer.init(trimmed);
-        const result = interpretTokens(ctx, &tokenizer, writer);
-        const had_error = if (result) |_| false else |_| true;
-        result catch |err| {
+        // Accumulate multiple lines into the statement buffer
+        if (stmt_len > 0) {
+            if (stmt_len < stmt_buf.len) {
+                stmt_buf[stmt_len] = ' ';
+                stmt_len += 1;
+            }
+        }
+        const copy_len = @min(trimmed.len, stmt_buf.len - stmt_len);
+        @memcpy(stmt_buf[stmt_len..][0..copy_len], trimmed[0..copy_len]);
+        stmt_len += copy_len;
+
+        // Attempt to parse the accumulated statement. If incomplete, continue
+        // accumulating more input. If an error occurs, report it and reset the buffer.
+        // If parsing succeeds, execute the quotation.
+        var tokenizer = Tokenizer.init(stmt_buf[0..stmt_len]);
+        const instrs = parseTopLevel(ctx.quotationAllocator(), &tokenizer) catch |err| {
+            if (isIncompleteError(err)) {
+                continue;
+            }
+
             writer.print("Error: {any}\n", .{err}) catch {};
+            writer.flush() catch return;
+            stmt_len = 0;
+            continue;
         };
 
+        var had_error = false;
+        ctx.executeQuotation(instrs) catch |err| {
+            writer.print("Error: {any}\n", .{err}) catch {};
+            had_error = true;
+        };
+
+        // On success, print the current stack state.
+        // TODO(ripta): Consider printing stack on error as well. We need to be
+        // careful about partial state and large stacks.
         if (!had_error) {
             writer.writeAll("Stack: ") catch return;
             ctx.stack.dump(writer) catch return;
@@ -101,6 +140,7 @@ fn repl(ctx: *Context) void {
         }
 
         writer.flush() catch return;
+        stmt_len = 0;
     }
 }
 
@@ -130,7 +170,12 @@ fn batch(ctx: *Context, file_path: []const u8) u8 {
                 // Try to execute any remaining buffered content
                 if (stmt_len > 0) {
                     var tokenizer = Tokenizer.init(stmt_buf[0..stmt_len]);
-                    interpretTokens(ctx, &tokenizer, err_writer) catch |err2| {
+                    const instrs = parseTopLevel(ctx.quotationAllocator(), &tokenizer) catch |err2| {
+                        err_writer.print("Error: {any}\n", .{err2}) catch {};
+                        err_writer.flush() catch {};
+                        return 1;
+                    };
+                    ctx.executeQuotation(instrs) catch |err2| {
                         err_writer.print("Error: {any}\n", .{err2}) catch {};
                         err_writer.flush() catch {};
                         return 1;
@@ -149,7 +194,7 @@ fn batch(ctx: *Context, file_path: []const u8) u8 {
         if (trimmed.len == 0) continue;
         if (std.mem.eql(u8, trimmed, ".q")) break;
 
-        // Append line to statement buffer (with space separator)
+        // Accumulate multiple lines into the statement buffer
         if (stmt_len > 0) {
             if (stmt_len < stmt_buf.len) {
                 stmt_buf[stmt_len] = ' ';
@@ -160,56 +205,70 @@ fn batch(ctx: *Context, file_path: []const u8) u8 {
         @memcpy(stmt_buf[stmt_len..][0..copy_len], trimmed[0..copy_len]);
         stmt_len += copy_len;
 
-        // Try to execute - if we get an "incomplete" error, keep accumulating
+        // Attempt to parse the accumulated statement. If incomplete, continue
+        // accumulating more input. If an error occurs, report it and reset the buffer.
+        // If parsing succeeds, execute the quotation.
         var tokenizer = Tokenizer.init(stmt_buf[0..stmt_len]);
-        if (interpretTokens(ctx, &tokenizer, err_writer)) |_| {
-            stmt_len = 0;
-        } else |err| {
+        const instrs = parseTopLevel(ctx.quotationAllocator(), &tokenizer) catch |err| {
             if (isIncompleteError(err)) {
-                continue;
-            } else {
-                err_writer.print("Error: {any}\n", .{err}) catch {};
-                err_writer.flush() catch {};
-                return 1;
+                continue; // Accumulate more input
             }
-        }
+            err_writer.print("Error: {any}\n", .{err}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        };
+
+        ctx.executeQuotation(instrs) catch |err| {
+            err_writer.print("Error: {any}\n", .{err}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        };
+        stmt_len = 0;
     }
 
     return 0;
 }
 
+/// Returns true if the parse error indicates incomplete input.
 fn isIncompleteError(err: anyerror) bool {
-    return err == ParseError.UnmatchedOpenBracket or err == ParseError.UnmatchedOpenBrace;
+    return err == error.UnmatchedOpenBracket or err == error.UnmatchedOpenBrace;
 }
 
-fn interpretTokens(ctx: *Context, tokenizer: *Tokenizer, writer: anytype) !void {
+fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]const Instruction {
+    var instructions: std.ArrayListUnmanaged(Instruction) = .{};
+    errdefer instructions.deinit(allocator);
+
     while (tokenizer.next()) |token| {
         if (std.mem.eql(u8, token, "[")) {
-            const quotation = try parseQuotation(ctx.quotationAllocator(), tokenizer);
-            try ctx.stack.push(.{ .quotation = quotation });
+            const quotation = try parseQuotation(allocator, tokenizer);
+            instructions.append(allocator, .{ .push_literal = .{ .quotation = quotation } }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "]")) {
             return ParseError.UnmatchedCloseBracket;
         } else if (std.mem.eql(u8, token, "{")) {
-            const arr = try parseArray(ctx.quotationAllocator(), tokenizer);
-            try ctx.stack.push(.{ .array = arr });
+            const arr = try parseArray(allocator, tokenizer);
+            instructions.append(allocator, .{ .push_literal = .{ .array = arr } }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "}")) {
             return ParseError.UnmatchedCloseBrace;
         } else if (parseInteger(token)) |n| {
-            try ctx.stack.push(.{ .integer = n });
+            instructions.append(allocator, .{ .push_literal = .{ .integer = n } }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
-            try ctx.stack.push(.{ .string = s });
+            const s_copy = allocator.dupe(u8, s) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .push_literal = .{ .string = s_copy } }) catch return ParseError.OutOfMemory;
         } else if (token.len > 1 and token[token.len - 1] == ':') {
-            try ctx.stack.push(.{ .symbol = token[0 .. token.len - 1] });
-        } else if (ctx.dictionary.get(token)) |word| {
-            switch (word.action) {
-                .native => |func| try func(ctx),
-                .compound => |instrs| try ctx.executeQuotation(instrs),
-            }
+            const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .push_literal = .{ .symbol = sym_copy } }) catch return ParseError.OutOfMemory;
         } else {
-            writer.print("Error: unknown word '{s}'\n", .{token}) catch {};
-            return error.UnknownWord;
+            const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .call_word = name_copy }) catch return ParseError.OutOfMemory;
         }
     }
+
+    return instructions.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
+}
+
+fn interpretTokens(ctx: *Context, tokenizer: *Tokenizer, _: anytype) !void {
+    const instrs = try parseTopLevel(ctx.quotationAllocator(), tokenizer);
+    try ctx.executeQuotation(instrs);
 }
 
 fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]const Instruction {
@@ -228,11 +287,17 @@ fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]cons
         } else if (parseInteger(token)) |n| {
             instructions.append(allocator, .{ .push_literal = .{ .integer = n } }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
-            instructions.append(allocator, .{ .push_literal = .{ .string = s } }) catch return ParseError.OutOfMemory;
+            // Copy string to arena so it persists after input buffer is reused
+            const s_copy = allocator.dupe(u8, s) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .push_literal = .{ .string = s_copy } }) catch return ParseError.OutOfMemory;
         } else if (token.len > 1 and token[token.len - 1] == ':') {
-            instructions.append(allocator, .{ .push_literal = .{ .symbol = token[0 .. token.len - 1] } }) catch return ParseError.OutOfMemory;
+            // Copy symbol to arena so it persists after input buffer is reused
+            const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .push_literal = .{ .symbol = sym_copy } }) catch return ParseError.OutOfMemory;
         } else {
-            instructions.append(allocator, .{ .call_word = token }) catch return ParseError.OutOfMemory;
+            // Copy word name to arena so it persists after input buffer is reused
+            const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .call_word = name_copy }) catch return ParseError.OutOfMemory;
         }
     }
 
@@ -281,9 +346,11 @@ test {
 }
 
 test "parse simple quotation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
     var tokenizer = Tokenizer.init("1 2 + ]");
-    const instrs = try parseQuotation(std.testing.allocator, &tokenizer);
-    defer std.testing.allocator.free(instrs);
+    const instrs = try parseQuotation(arena.allocator(), &tokenizer);
 
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
     try std.testing.expectEqual(@as(i64, 1), instrs[0].push_literal.integer);
@@ -292,13 +359,14 @@ test "parse simple quotation" {
 }
 
 test "parse nested quotation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
     var tokenizer = Tokenizer.init("[ 1 ] ]");
-    const instrs = try parseQuotation(std.testing.allocator, &tokenizer);
-    defer std.testing.allocator.free(instrs);
+    const instrs = try parseQuotation(arena.allocator(), &tokenizer);
 
     try std.testing.expectEqual(@as(usize, 1), instrs.len);
     const nested = instrs[0].push_literal.quotation;
-    defer std.testing.allocator.free(nested);
     try std.testing.expectEqual(@as(usize, 1), nested.len);
     try std.testing.expectEqual(@as(i64, 1), nested[0].push_literal.integer);
 }
