@@ -309,6 +309,28 @@ test "semicolon defines word" {
     try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
     const word = ctx.dictionary.get("add2");
     try std.testing.expect(word != null);
+    try std.testing.expectEqual(@as(?[]const u8, null), word.?.stack_effect);
+}
+
+test "semicolon defines word with stack effect" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    const instrs = [_]Instruction{
+        .{ .push_literal = .{ .integer = 2 } },
+        .{ .call_word = "+" },
+    };
+    try ctx.stack.push(.{ .symbol = "add2" });
+    try ctx.stack.push(.{ .stack_effect = "n -- n" });
+    try ctx.stack.push(.{ .quotation = &instrs });
+    try nativeSemicolon(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+    const word = ctx.dictionary.get("add2");
+    try std.testing.expect(word != null);
+    try std.testing.expect(word.?.stack_effect != null);
+    try std.testing.expectEqualStrings("n -- n", word.?.stack_effect.?);
 }
 
 test "if true branch" {

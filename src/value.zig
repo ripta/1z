@@ -114,3 +114,29 @@ test "integer equality" {
     try std.testing.expect(a.eql(b));
     try std.testing.expect(!a.eql(c));
 }
+
+test "stack effect format" {
+    const val = Value{ .stack_effect = "n -- n" };
+    var buf: [32]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try val.format(fbs.writer());
+    try std.testing.expectEqualStrings("( n -- n )", fbs.getWritten());
+}
+
+test "stack effect equality" {
+    const a = Value{ .stack_effect = "n -- n" };
+    const b = Value{ .stack_effect = "n -- n" };
+    const c = Value{ .stack_effect = "a b -- c" };
+
+    try std.testing.expect(a.eql(b));
+    try std.testing.expect(!a.eql(c));
+}
+
+test "stack effect not equal to other types" {
+    const effect = Value{ .stack_effect = "n -- n" };
+    const str = Value{ .string = "n -- n" };
+    const sym = Value{ .symbol = "n -- n" };
+
+    try std.testing.expect(!effect.eql(str));
+    try std.testing.expect(!effect.eql(sym));
+}

@@ -445,3 +445,52 @@ test "unmatched open brace" {
     const result = parseArray(std.testing.allocator, &tokenizer);
     try std.testing.expectError(ParseError.UnmatchedOpenBrace, result);
 }
+
+test "parse simple stack effect" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("n -- n )");
+    const effect = try parseStackEffect(arena.allocator(), &tokenizer);
+    try std.testing.expectEqualStrings("n -- n", effect);
+}
+
+test "parse multi-arg stack effect" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("a b c -- sum )");
+    const effect = try parseStackEffect(arena.allocator(), &tokenizer);
+    try std.testing.expectEqualStrings("a b c -- sum", effect);
+}
+
+test "parse empty stack effect" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init(")");
+    const effect = try parseStackEffect(arena.allocator(), &tokenizer);
+    try std.testing.expectEqualStrings("", effect);
+}
+
+test "unmatched open paren" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("n -- n");
+    const result = parseStackEffect(arena.allocator(), &tokenizer);
+    try std.testing.expectError(ParseError.UnmatchedOpenParen, result);
+}
+
+test "parse top level with stack effect" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("foo: ( n -- n ) [ 1 ]");
+    const instrs = try parseTopLevel(arena.allocator(), &tokenizer);
+
+    try std.testing.expectEqual(@as(usize, 3), instrs.len);
+    try std.testing.expectEqualStrings("foo", instrs[0].push_literal.symbol);
+    try std.testing.expectEqualStrings("n -- n", instrs[1].push_literal.stack_effect);
+    try std.testing.expectEqual(@as(usize, 1), instrs[2].push_literal.quotation.len);
+}
