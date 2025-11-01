@@ -85,8 +85,10 @@ fn nativeCall(ctx: *Context) anyerror!void {
 fn nativeSemicolon(ctx: *Context) anyerror!void {
     const instrs = try popQuotation(ctx);
     const name = try popSymbol(ctx);
-    try ctx.dictionary.put(name, WordDefinition{
-        .name = name,
+    // Copy name to arena so it persists after input buffer is reused
+    const name_copy = try ctx.quotationAllocator().dupe(u8, name);
+    try ctx.dictionary.put(name_copy, WordDefinition{
+        .name = name_copy,
         .action = .{ .compound = instrs },
     });
 }
