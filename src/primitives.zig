@@ -35,6 +35,7 @@ const primitives = [_]Primitive{
     .{ .name = "unless", .func = nativeUnless },
     .{ .name = "print", .func = nativePrint },
     .{ .name = ".", .func = nativePrint },
+    .{ .name = "help", .func = nativeHelp },
 };
 
 pub fn registerPrimitives(dict: *Dictionary) !void {
@@ -172,6 +173,32 @@ fn nativePrint(ctx: *Context) anyerror!void {
     var stdout = stdout_file.writer(&stdout_buf);
     try val.format(&stdout.interface);
     try stdout.interface.writeAll("\n");
+    try stdout.interface.flush();
+}
+
+/// help ( symbol -- ) - Display help for a word
+fn nativeHelp(ctx: *Context) anyerror!void {
+    const name = try popSymbol(ctx);
+
+    const stdout_file: std.fs.File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writer(&stdout_buf);
+    const writer = &stdout.interface;
+
+    if (ctx.dictionary.get(name)) |word| {
+        try writer.print("{s}", .{word.name});
+        if (word.stack_effect) |effect| {
+            try writer.print(" ( {s} )", .{effect});
+        }
+
+        switch (word.action) {
+            .native => try writer.writeAll(" \\native\n"),
+            .compound => try writer.writeAll(" [compound]\n"),
+        }
+    } else {
+        try writer.print("{s}: no such word\n", .{name});
+    }
+
     try stdout.interface.flush();
 }
 
