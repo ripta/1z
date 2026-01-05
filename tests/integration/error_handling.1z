@@ -1,0 +1,14 @@
+[ 5 3 + ] [ drop 0 ] recover
+.
+
+[ drop ] [ drop 42 ] recover
+.
+
+[ drop ] ignore-errors
+"still running" .
+
+[ 100 ] ignore-errors
+.
+
+[ [ drop ] [ drop 1 ] recover ] [ drop 2 ] recover
+.

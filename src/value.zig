@@ -15,6 +15,7 @@ pub const Value = union(enum) {
     array: []const Value,
     quotation: []const Instruction,
     stack_effect: []const u8,
+    error_value: []const u8,
 
     pub fn format(self: Value, writer: anytype) !void {
         switch (self) {
@@ -44,6 +45,7 @@ pub const Value = union(enum) {
                 try writer.writeAll("]");
             },
             .stack_effect => |effect| try writer.print("( {s} )", .{effect}),
+            .error_value => |msg| try writer.print("<error: {s}>", .{msg}),
         }
     }
 
@@ -75,6 +77,7 @@ pub const Value = union(enum) {
                 return true;
             },
             .stack_effect => |a| std.mem.eql(u8, a, other.stack_effect),
+            .error_value => |a| std.mem.eql(u8, a, other.error_value),
         };
     }
 };

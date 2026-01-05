@@ -36,6 +36,8 @@ const primitives = [_]Primitive{
     .{ .name = "print", .func = nativePrint },
     .{ .name = ".", .func = nativePrint },
     .{ .name = "help", .func = nativeHelp },
+    .{ .name = "recover", .func = nativeRecover },
+    .{ .name = "ignore-errors", .func = nativeIgnoreErrors },
 };
 
 pub fn registerPrimitives(dict: *Dictionary) !void {
@@ -202,6 +204,36 @@ fn nativeHelp(ctx: *Context) anyerror!void {
     try stdout.interface.flush();
 }
 
+/// recover ( try-quot recover-quot -- ) - Execute try quotation; if error,
+/// execute recover quotation with error on stack
+fn nativeRecover(ctx: *Context) anyerror!void {
+    const recover_quot = try popQuotation(ctx);
+    const try_quot = try popQuotation(ctx);
+
+    // Execute try quotation with error catching
+    ctx.executeQuotation(try_quot) catch |err| {
+        // Convert error to string and push as error value
+        const error_msg = @errorName(err);
+        try ctx.stack.push(.{ .error_value = error_msg });
+
+        // Execute recovery quotation
+        try ctx.executeQuotation(recover_quot);
+        return;
+    };
+
+    // If no error, continue normally
+}
+
+/// ignore-errors ( quot -- ) - Execute quotation and suppress any errors
+fn nativeIgnoreErrors(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+
+    // Execute quotation, ignoring any errors
+    ctx.executeQuotation(quot) catch {
+        // Silently ignore the error
+    };
+}
+
 // =============================================================================
 // Helper functions
 // =============================================================================
@@ -210,7 +242,7 @@ fn popInteger(ctx: *Context) !i64 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .integer => |i| i,
-        .boolean, .string, .symbol, .array, .quotation, .stack_effect => error.TypeError,
+        .boolean, .string, .symbol, .array, .quotation, .stack_effect, .error_value => error.TypeError,
     };
 }
 
@@ -219,7 +251,7 @@ fn popBoolean(ctx: *Context) !bool {
     return switch (val) {
         .boolean => |b| b,
         .integer => |i| i != 0,
-        .string, .symbol, .array, .quotation, .stack_effect => error.TypeError,
+        .string, .symbol, .array, .quotation, .stack_effect, .error_value => error.TypeError,
     };
 }
 
@@ -227,7 +259,7 @@ fn popQuotation(ctx: *Context) ![]const Instruction {
     const val = try ctx.stack.pop();
     return switch (val) {
         .quotation => |q| q,
-        .integer, .boolean, .string, .symbol, .array, .stack_effect => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .stack_effect, .error_value => error.TypeError,
     };
 }
 
@@ -235,7 +267,7 @@ fn popSymbol(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .symbol => |s| s,
-        .integer, .boolean, .string, .array, .quotation, .stack_effect => error.TypeError,
+        .integer, .boolean, .string, .array, .quotation, .stack_effect, .error_value => error.TypeError,
     };
 }
 
@@ -243,7 +275,7 @@ fn popStackEffect(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .stack_effect => |se| se,
-        .integer, .boolean, .string, .symbol, .array, .quotation => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .error_value => error.TypeError,
     };
 }
 
@@ -456,4 +488,86 @@ test "register primitives" {
     try std.testing.expect(dict.get("unless") != null);
     try std.testing.expect(dict.get("print") != null);
     try std.testing.expect(dict.get(".") != null);
+    try std.testing.expect(dict.get("recover") != null);
+    try std.testing.expect(dict.get("ignore-errors") != null);
+}
+
+test "recover catches error and executes recovery" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Try quotation that causes stack underflow, recovery pushes 42
+    const try_quot = [_]Instruction{.{ .call_word = "drop" }}; // Stack underflow
+    const recover_quot = [_]Instruction{
+        .{ .call_word = "drop" }, // Drop the error value
+        .{ .push_literal = .{ .integer = 42 } },
+    };
+    try ctx.stack.push(.{ .quotation = &try_quot });
+    try ctx.stack.push(.{ .quotation = &recover_quot });
+    try nativeRecover(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 42), (try ctx.stack.pop()).integer);
+}
+
+test "recover succeeds without error" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Try quotation succeeds
+    const try_quot = [_]Instruction{.{ .push_literal = .{ .integer = 100 } }};
+    const recover_quot = [_]Instruction{.{ .push_literal = .{ .integer = 42 } }};
+    try ctx.stack.push(.{ .quotation = &try_quot });
+    try ctx.stack.push(.{ .quotation = &recover_quot });
+    try nativeRecover(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 100), (try ctx.stack.pop()).integer);
+}
+
+test "recover pushes error value on failure" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Try quotation fails, recovery just leaves error on stack
+    const try_quot = [_]Instruction{.{ .call_word = "drop" }}; // Stack underflow
+    const recover_quot = [_]Instruction{}; // Do nothing, leave error on stack
+    try ctx.stack.push(.{ .quotation = &try_quot });
+    try ctx.stack.push(.{ .quotation = &recover_quot });
+    try nativeRecover(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    const val = try ctx.stack.pop();
+    try std.testing.expectEqualStrings("StackUnderflow", val.error_value);
+}
+
+test "ignore-errors suppresses error" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Quotation that causes stack underflow
+    const quot = [_]Instruction{.{ .call_word = "drop" }};
+    try ctx.stack.push(.{ .quotation = &quot });
+    try nativeIgnoreErrors(&ctx);
+
+    // Stack should be empty, no error propagated
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+}
+
+test "ignore-errors allows success" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Quotation that succeeds
+    const quot = [_]Instruction{.{ .push_literal = .{ .integer = 42 } }};
+    try ctx.stack.push(.{ .quotation = &quot });
+    try nativeIgnoreErrors(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 42), (try ctx.stack.pop()).integer);
 }
