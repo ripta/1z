@@ -13,37 +13,39 @@ pub const InterpreterError = error{
 
 const Primitive = struct {
     name: []const u8,
+    stack_effect: ?[]const u8 = null,
     func: NativeFn,
 };
 
 const Instruction = @import("value.zig").Instruction;
 
 const primitives = [_]Primitive{
-    .{ .name = "dup", .func = nativeDup },
-    .{ .name = "drop", .func = nativeDrop },
-    .{ .name = "+", .func = nativeAdd },
-    .{ .name = "-", .func = nativeSub },
-    .{ .name = "call", .func = nativeCall },
-    .{ .name = ";", .func = nativeSemicolon },
-    .{ .name = "t", .func = nativeTrue },
-    .{ .name = "f", .func = nativeFalse },
-    .{ .name = "=", .func = nativeEq },
-    .{ .name = "<", .func = nativeLt },
-    .{ .name = ">", .func = nativeGt },
-    .{ .name = "if", .func = nativeIf },
-    .{ .name = "when", .func = nativeWhen },
-    .{ .name = "unless", .func = nativeUnless },
-    .{ .name = "print", .func = nativePrint },
-    .{ .name = ".", .func = nativePrint },
-    .{ .name = "help", .func = nativeHelp },
-    .{ .name = "recover", .func = nativeRecover },
-    .{ .name = "ignore-errors", .func = nativeIgnoreErrors },
+    .{ .name = "dup", .stack_effect = "a -- a a", .func = nativeDup },
+    .{ .name = "drop", .stack_effect = "a --", .func = nativeDrop },
+    .{ .name = "+", .stack_effect = "a b -- a+b", .func = nativeAdd },
+    .{ .name = "-", .stack_effect = "a b -- a-b", .func = nativeSub },
+    .{ .name = "call", .stack_effect = "quot --", .func = nativeCall },
+    .{ .name = ";", .stack_effect = "name quot --", .func = nativeSemicolon },
+    .{ .name = "t", .stack_effect = "-- t", .func = nativeTrue },
+    .{ .name = "f", .stack_effect = "-- f", .func = nativeFalse },
+    .{ .name = "=", .stack_effect = "a b -- ?", .func = nativeEq },
+    .{ .name = "<", .stack_effect = "a b -- ?", .func = nativeLt },
+    .{ .name = ">", .stack_effect = "a b -- ?", .func = nativeGt },
+    .{ .name = "if", .stack_effect = "? true-quot false-quot --", .func = nativeIf },
+    .{ .name = "when", .stack_effect = "? quot --", .func = nativeWhen },
+    .{ .name = "unless", .stack_effect = "? quot --", .func = nativeUnless },
+    .{ .name = "print", .stack_effect = "a --", .func = nativePrint },
+    .{ .name = ".", .stack_effect = "a --", .func = nativePrint },
+    .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
+    .{ .name = "recover", .stack_effect = "try-quot recover-quot --", .func = nativeRecover },
+    .{ .name = "ignore-errors", .stack_effect = "quot --", .func = nativeIgnoreErrors },
 };
 
 pub fn registerPrimitives(dict: *Dictionary) !void {
     for (primitives) |p| {
         try dict.put(p.name, WordDefinition{
             .name = p.name,
+            .stack_effect = p.stack_effect,
             .action = .{ .native = p.func },
         });
     }
