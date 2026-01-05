@@ -8,4 +8,5 @@ Useful commands:
 - `zig build` to build into `./zig-out/bin/`
 - `zig build --release` to do optimized build
 - `zig build test` to run tests
-- `zig build integration-test` to run integration tests
+- `zig build integration-test` to run integration tests against golden files
+- `zig build update-golden` to update the golden files for integration tests

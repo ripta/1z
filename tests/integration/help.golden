@@ -1,0 +1,5 @@
+Stack: [ ]
+double ( n -- n ) [compound]
+Stack: [ ]
++ \native
+Stack: [ ]

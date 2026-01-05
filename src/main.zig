@@ -21,8 +21,17 @@ pub fn main() u8 {
     // If a file path is provided, run in batch mode, which executes the file
     // and exits. Errors print to stderr, and cause a non-zero exit code.
     // Otherwise, interactive REPL starts.
-    if (args.len > 1) {
-        return batch(&ctx, args[1]);
+    var show_stack = false;
+    var file_path: ?[]const u8 = null;
+    for (args[1..]) |arg| {
+        if (std.mem.eql(u8, arg, "--show-stack")) {
+            show_stack = true;
+        } else {
+            file_path = arg;
+        }
+    }
+    if (file_path) |path| {
+        return batch(&ctx, path, show_stack);
     } else {
         repl(&ctx);
         return 0;
@@ -96,11 +105,17 @@ fn repl(ctx: *Context) void {
     }
 }
 
-fn batch(ctx: *Context, file_path: []const u8) u8 {
+fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
     var stderr = stderr_file.writer(&stderr_buf);
     const err_writer = &stderr.interface;
+
+    // For --show-stack, prepare stdout writer
+    const stdout_file: File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writer(&stdout_buf);
+    const out_writer = &stdout.interface;
 
     const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
         err_writer.print("Error opening file '{s}': {any}\n", .{ file_path, err }) catch {};
@@ -131,6 +146,12 @@ fn batch(ctx: *Context, file_path: []const u8) u8 {
                                 err_writer.flush() catch {};
                                 return 1;
                             };
+                            if (show_stack) {
+                                out_writer.writeAll("Stack: ") catch {};
+                                ctx.stack.dump(out_writer) catch {};
+                                out_writer.writeAll("\n") catch {};
+                                out_writer.flush() catch {};
+                            }
                         }
                     },
                 }
@@ -157,6 +178,12 @@ fn batch(ctx: *Context, file_path: []const u8) u8 {
                         err_writer.flush() catch {};
                         return 1;
                     };
+                    if (show_stack) {
+                        out_writer.writeAll("Stack: ") catch {};
+                        ctx.stack.dump(out_writer) catch {};
+                        out_writer.writeAll("\n") catch {};
+                        out_writer.flush() catch {};
+                    }
                 }
                 processor.reset();
             },

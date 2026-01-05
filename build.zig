@@ -53,6 +53,10 @@ pub fn build(b: *std.Build) void {
     const integration_test_step = b.step("integration-test", "Run integration tests");
     integration_test_step.dependOn(&run_lib_unit_tests.step);
 
+    // Update golden files step
+    const update_golden_step = b.step("update-golden", "Update golden files for integration tests");
+    var update_files = b.addUpdateSourceFiles();
+
     // Dynamically discover and run all .1z files in tests/integration/
     var test_dir = b.build_root.handle.openDir("tests/integration", .{ .iterate = true }) catch |err| {
         std.debug.print("Warning: Could not open tests/integration: {}\n", .{err});
@@ -65,11 +69,33 @@ pub fn build(b: *std.Build) void {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.name, ".1z")) continue;
 
-        const test_run = b.addRunArtifact(exe);
+        const name_without_ext = entry.name[0 .. entry.name.len - 3];
         const file_path = b.fmt("tests/integration/{s}", .{entry.name});
+        const golden_path = b.fmt("tests/integration/{s}.golden", .{name_without_ext});
+
+        // Integration test: compare against golden file if it exists
+        const test_run = b.addRunArtifact(exe);
+        test_run.addArg("--show-stack");
         test_run.addArg(file_path);
         test_run.expectStdErrEqual("");
         test_run.expectExitCode(0);
+
+        // Try to read golden file for stdout comparison
+        if (test_dir.openFile(b.fmt("{s}.golden", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            const golden_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            test_run.expectStdOutEqual(golden_content);
+        } else |_| {
+            // No golden file - just check exit code (already done above)
+        }
         integration_test_step.dependOn(&test_run.step);
+
+        // Update golden: capture stdout and write to .golden file
+        const update_run = b.addRunArtifact(exe);
+        update_run.addArg("--show-stack");
+        update_run.addArg(file_path);
+        update_files.addCopyFileToSource(update_run.captureStdOut(), golden_path);
     }
+
+    update_golden_step.dependOn(&update_files.step);
 }
