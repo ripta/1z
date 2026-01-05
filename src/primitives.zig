@@ -1,15 +1,102 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const Context = @import("context.zig").Context;
 const Value = @import("value.zig").Value;
 const Dictionary = @import("dictionary.zig").Dictionary;
 const WordDefinition = @import("dictionary.zig").WordDefinition;
 const NativeFn = @import("dictionary.zig").NativeFn;
+const StackEffect = @import("stack_effect.zig").StackEffect;
+const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
 
 pub const InterpreterError = error{
     StackUnderflow,
     TypeError,
     DivisionByZero,
 };
+
+/// Helper to create a stack effect from a raw string at runtime.
+/// Supports quotation annotations like "seq quot: ( elem -- elem' ) -- seq'"
+fn makeSimpleEffect(allocator: Allocator, raw: []const u8) !StackEffect {
+    var inputs: std.ArrayListUnmanaged(StackEffectParam) = .{};
+    errdefer inputs.deinit(allocator);
+    var outputs: std.ArrayListUnmanaged(StackEffectParam) = .{};
+    errdefer outputs.deinit(allocator);
+
+    var iter = std.mem.splitScalar(u8, raw, ' ');
+    var current_list = &inputs;
+    var pending_name: ?[]const u8 = null;
+
+    while (iter.next()) |token| {
+        if (token.len == 0) continue;
+
+        if (std.mem.eql(u8, token, "--")) {
+            // Flush pending parameter
+            if (pending_name) |name| {
+                try current_list.append(allocator, .{ .name = name });
+                pending_name = null;
+            }
+            current_list = &outputs;
+            continue;
+        }
+
+        if (std.mem.eql(u8, token, "(")) {
+            // Start of nested effect - parse until matching )
+            if (pending_name) |name| {
+                var nested_tokens: std.ArrayListUnmanaged([]const u8) = .{};
+                defer nested_tokens.deinit(allocator);
+                var depth: usize = 1;
+
+                while (iter.next()) |nested_token| {
+                    if (std.mem.eql(u8, nested_token, "(")) {
+                        depth += 1;
+                        try nested_tokens.append(allocator, nested_token);
+                    } else if (std.mem.eql(u8, nested_token, ")")) {
+                        depth -= 1;
+                        if (depth == 0) break;
+                        try nested_tokens.append(allocator, nested_token);
+                    } else {
+                        try nested_tokens.append(allocator, nested_token);
+                    }
+                }
+
+                // Join and recursively parse (don't free nested_str - arena will handle it)
+                const nested_str = try std.mem.join(allocator, " ", nested_tokens.items);
+                const nested_effect = try makeSimpleEffect(allocator, nested_str);
+                const nested_ptr = try allocator.create(StackEffect);
+                nested_ptr.* = nested_effect;
+
+                try current_list.append(allocator, .{
+                    .name = name,
+                    .quotation_effect = nested_ptr,
+                });
+                pending_name = null;
+            }
+            continue;
+        }
+
+        // Flush previous pending parameter
+        if (pending_name) |name| {
+            try current_list.append(allocator, .{ .name = name });
+        }
+
+        // Check if this token ends with : (annotation marker)
+        if (token.len > 1 and token[token.len - 1] == ':') {
+            pending_name = token[0 .. token.len - 1];
+        } else {
+            pending_name = token;
+        }
+    }
+
+    // Flush final pending parameter
+    if (pending_name) |name| {
+        try current_list.append(allocator, .{ .name = name });
+    }
+
+    return StackEffect{
+        .inputs = try inputs.toOwnedSlice(allocator),
+        .outputs = try outputs.toOwnedSlice(allocator),
+    };
+}
 
 const Primitive = struct {
     name: []const u8,
@@ -37,15 +124,20 @@ const primitives = [_]Primitive{
     .{ .name = "print", .stack_effect = "a --", .func = nativePrint },
     .{ .name = ".", .stack_effect = "a --", .func = nativePrint },
     .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
-    .{ .name = "recover", .stack_effect = "try-quot recover-quot --", .func = nativeRecover },
+    .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ) --", .func = nativeRecover },
     .{ .name = "ignore-errors", .stack_effect = "quot --", .func = nativeIgnoreErrors },
 };
 
-pub fn registerPrimitives(dict: *Dictionary) !void {
+pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
     for (primitives) |p| {
+        const effect: ?StackEffect = if (p.stack_effect) |raw|
+            try makeSimpleEffect(allocator, raw)
+        else
+            null;
+
         try dict.put(p.name, WordDefinition{
             .name = p.name,
-            .stack_effect = p.stack_effect,
+            .stack_effect = effect,
             .action = .{ .native = p.func },
         });
     }
@@ -91,12 +183,12 @@ fn nativeSemicolon(ctx: *Context) anyerror!void {
     const instrs = try popQuotation(ctx);
 
     // Check if there's a stack effect between symbol and quotation
-    var stack_effect_str: ?[]const u8 = null;
+    var stack_effect_val: ?StackEffect = null;
     const next_val = try ctx.stack.peek();
     switch (next_val) {
         .stack_effect => |se| {
             _ = try ctx.stack.pop();
-            stack_effect_str = se;
+            stack_effect_val = se;
         },
         else => {},
     }
@@ -105,15 +197,9 @@ fn nativeSemicolon(ctx: *Context) anyerror!void {
     // Copy name to arena so it persists after input buffer is reused
     const name_copy = try ctx.quotationAllocator().dupe(u8, name);
 
-    // Copy stack effect if present
-    var effect_copy: ?[]const u8 = null;
-    if (stack_effect_str) |se| {
-        effect_copy = try ctx.quotationAllocator().dupe(u8, se);
-    }
-
     try ctx.dictionary.put(name_copy, WordDefinition{
         .name = name_copy,
-        .stack_effect = effect_copy,
+        .stack_effect = stack_effect_val,
         .action = .{ .compound = instrs },
     });
 }
@@ -175,7 +261,7 @@ fn nativePrint(ctx: *Context) anyerror!void {
     const stdout_file: std.fs.File = .stdout();
     var stdout_buf: [4096]u8 = undefined;
     var stdout = stdout_file.writer(&stdout_buf);
-    try val.format(&stdout.interface);
+    try val.write(&stdout.interface);
     try stdout.interface.writeAll("\n");
     try stdout.interface.flush();
 }
@@ -192,7 +278,8 @@ fn nativeHelp(ctx: *Context) anyerror!void {
     if (ctx.dictionary.get(name)) |word| {
         try writer.print("{s}", .{word.name});
         if (word.stack_effect) |effect| {
-            try writer.print(" ( {s} )", .{effect});
+            try writer.writeAll(" ");
+            try effect.write(writer);
         }
 
         switch (word.action) {
@@ -273,7 +360,7 @@ fn popSymbol(ctx: *Context) ![]const u8 {
     };
 }
 
-fn popStackEffect(ctx: *Context) ![]const u8 {
+fn popStackEffect(ctx: *Context) !StackEffect {
     const val = try ctx.stack.pop();
     return switch (val) {
         .stack_effect => |se| se,
@@ -370,7 +457,7 @@ test "semicolon defines word" {
     try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
     const word = ctx.dictionary.get("add2");
     try std.testing.expect(word != null);
-    try std.testing.expectEqual(@as(?[]const u8, null), word.?.stack_effect);
+    try std.testing.expect(word.?.stack_effect == null);
 }
 
 test "semicolon defines word with stack effect" {
@@ -383,7 +470,10 @@ test "semicolon defines word with stack effect" {
         .{ .call_word = "+" },
     };
     try ctx.stack.push(.{ .symbol = "add2" });
-    try ctx.stack.push(.{ .stack_effect = "n -- n" });
+    try ctx.stack.push(.{ .stack_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "n" }},
+        .outputs = &[_]StackEffectParam{.{ .name = "n" }},
+    } });
     try ctx.stack.push(.{ .quotation = &instrs });
     try nativeSemicolon(&ctx);
 
@@ -391,7 +481,8 @@ test "semicolon defines word with stack effect" {
     const word = ctx.dictionary.get("add2");
     try std.testing.expect(word != null);
     try std.testing.expect(word.?.stack_effect != null);
-    try std.testing.expectEqualStrings("n -- n", word.?.stack_effect.?);
+    try std.testing.expectEqual(@as(usize, 1), word.?.stack_effect.?.inputs.len);
+    try std.testing.expectEqualStrings("n", word.?.stack_effect.?.inputs[0].name);
 }
 
 test "if true branch" {
@@ -474,10 +565,13 @@ test "comparison operators" {
 
 test "register primitives" {
     const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
     var dict = Dictionary.init(allocator);
     defer dict.deinit();
 
-    try registerPrimitives(&dict);
+    try registerPrimitives(&dict, arena.allocator());
 
     try std.testing.expect(dict.get("dup") != null);
     try std.testing.expect(dict.get("+") != null);

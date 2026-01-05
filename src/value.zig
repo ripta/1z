@@ -1,4 +1,5 @@
 const std = @import("std");
+const StackEffect = @import("stack_effect.zig").StackEffect;
 
 /// Instruction represents a single operation in a compiled quotation.
 pub const Instruction = union(enum) {
@@ -14,10 +15,10 @@ pub const Value = union(enum) {
     symbol: []const u8,
     array: []const Value,
     quotation: []const Instruction,
-    stack_effect: []const u8,
+    stack_effect: StackEffect,
     error_value: []const u8,
 
-    pub fn format(self: Value, writer: anytype) !void {
+    pub fn write(self: Value, writer: anytype) anyerror!void {
         switch (self) {
             .integer => |i| try writer.print("{d}", .{i}),
             .boolean => |b| try writer.writeAll(if (b) "t" else "f"),
@@ -26,7 +27,7 @@ pub const Value = union(enum) {
             .array => |items| {
                 try writer.writeAll("{ ");
                 for (items) |item| {
-                    try item.format(writer);
+                    try item.write(writer);
                     try writer.writeAll(" ");
                 }
                 try writer.writeAll("}");
@@ -36,7 +37,7 @@ pub const Value = union(enum) {
                 for (instrs) |instr| {
                     switch (instr) {
                         .push_literal => |v| {
-                            try v.format(writer);
+                            try v.write(writer);
                             try writer.writeAll(" ");
                         },
                         .call_word => |name| try writer.print("{s} ", .{name}),
@@ -44,7 +45,7 @@ pub const Value = union(enum) {
                 }
                 try writer.writeAll("]");
             },
-            .stack_effect => |effect| try writer.print("( {s} )", .{effect}),
+            .stack_effect => |effect| try effect.write(writer),
             .error_value => |msg| try writer.print("<error: {s}>", .{msg}),
         }
     }
@@ -76,7 +77,7 @@ pub const Value = union(enum) {
                 }
                 return true;
             },
-            .stack_effect => |a| std.mem.eql(u8, a, other.stack_effect),
+            .stack_effect => |a| a.eql(other.stack_effect),
             .error_value => |a| std.mem.eql(u8, a, other.error_value),
         };
     }
@@ -98,15 +99,17 @@ fn instructionEql(a: Instruction, b: Instruction) bool {
 test "integer format" {
     const val = Value{ .integer = 42 };
     var buf: [32]u8 = undefined;
-    const result = try std.fmt.bufPrint(&buf, "{f}", .{val});
-    try std.testing.expectEqualStrings("42", result);
+    var fbs = std.io.fixedBufferStream(&buf);
+    try val.write(fbs.writer());
+    try std.testing.expectEqualStrings("42", fbs.getWritten());
 }
 
 test "negative integer format" {
     const val = Value{ .integer = -123 };
     var buf: [32]u8 = undefined;
-    const result = try std.fmt.bufPrint(&buf, "{f}", .{val});
-    try std.testing.expectEqualStrings("-123", result);
+    var fbs = std.io.fixedBufferStream(&buf);
+    try val.write(fbs.writer());
+    try std.testing.expectEqualStrings("-123", fbs.getWritten());
 }
 
 test "integer equality" {
@@ -119,24 +122,42 @@ test "integer equality" {
 }
 
 test "stack effect format" {
-    const val = Value{ .stack_effect = "n -- n" };
+    const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
+    const val = Value{ .stack_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "n" }},
+        .outputs = &[_]StackEffectParam{.{ .name = "n" }},
+    } };
     var buf: [32]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
-    try val.format(fbs.writer());
+    try val.write(fbs.writer());
     try std.testing.expectEqualStrings("( n -- n )", fbs.getWritten());
 }
 
 test "stack effect equality" {
-    const a = Value{ .stack_effect = "n -- n" };
-    const b = Value{ .stack_effect = "n -- n" };
-    const c = Value{ .stack_effect = "a b -- c" };
+    const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
+    const a = Value{ .stack_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "n" }},
+        .outputs = &[_]StackEffectParam{.{ .name = "n" }},
+    } };
+    const b = Value{ .stack_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "n" }},
+        .outputs = &[_]StackEffectParam{.{ .name = "n" }},
+    } };
+    const c = Value{ .stack_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{ .{ .name = "a" }, .{ .name = "b" } },
+        .outputs = &[_]StackEffectParam{.{ .name = "c" }},
+    } };
 
     try std.testing.expect(a.eql(b));
     try std.testing.expect(!a.eql(c));
 }
 
 test "stack effect not equal to other types" {
-    const effect = Value{ .stack_effect = "n -- n" };
+    const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
+    const effect = Value{ .stack_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "n" }},
+        .outputs = &[_]StackEffectParam{.{ .name = "n" }},
+    } };
     const str = Value{ .string = "n -- n" };
     const sym = Value{ .symbol = "n -- n" };
 

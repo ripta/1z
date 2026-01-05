@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Context = @import("context.zig").Context;
 const Instruction = @import("value.zig").Instruction;
+const StackEffect = @import("stack_effect.zig").StackEffect;
 
 /// Native function signature: takes context, can return errors.
 pub const NativeFn = *const fn (ctx: *Context) anyerror!void;
@@ -10,7 +11,7 @@ pub const NativeFn = *const fn (ctx: *Context) anyerror!void;
 pub const WordDefinition = struct {
     name: []const u8,
     parse_time: bool = false,
-    stack_effect: ?[]const u8 = null,
+    stack_effect: ?StackEffect = null,
     action: union(enum) {
         native: NativeFn,
         compound: []const Instruction,

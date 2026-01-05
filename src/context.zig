@@ -28,7 +28,7 @@ pub const Context = struct {
             .allocator = allocator,
         };
 
-        primitives.registerPrimitives(&ctx.dictionary) catch |err| {
+        primitives.registerPrimitives(&ctx.dictionary, ctx.arena.allocator()) catch |err| {
             std.debug.panic("Failed to register primitives: {any}", .{err});
         };
 

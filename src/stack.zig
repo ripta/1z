@@ -54,7 +54,8 @@ pub const Stack = struct {
     pub fn dump(self: *const Stack, writer: anytype) !void {
         try writer.writeAll("[ ");
         for (self.items.items) |item| {
-            try writer.print("{f} ", .{item});
+            try item.write(writer);
+            try writer.writeAll(" ");
         }
         try writer.writeAll("]");
     }
