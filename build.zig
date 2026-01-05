@@ -23,6 +23,16 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    // zig-out/docs
+    const docs = b.addInstallDirectory(.{
+        .source_dir = exe.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs",
+    });
+
+    const docs_step = b.step("docs", "Install documentation");
+    docs_step.dependOn(&docs.step);
+
     // zig build run
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
