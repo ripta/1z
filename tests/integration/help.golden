@@ -1,5 +1,5 @@
 Stack: [ ]
 double ( n -- n ) [compound]
 Stack: [ ]
-+ \native
++ ( a b -- a+b ) \native
 Stack: [ ]
