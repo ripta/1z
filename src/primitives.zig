@@ -7,11 +7,14 @@ const WordDefinition = @import("dictionary.zig").WordDefinition;
 const NativeFn = @import("dictionary.zig").NativeFn;
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
+const StatementProcessor = @import("statement.zig").StatementProcessor;
 
 pub const InterpreterError = error{
     StackUnderflow,
     TypeError,
     DivisionByZero,
+    FileNotFound,
+    FileReadError,
 };
 
 /// Helper to create a stack effect from a raw string at runtime.
@@ -126,6 +129,7 @@ const primitives = [_]Primitive{
     .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
     .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ) --", .func = nativeRecover },
     .{ .name = "ignore-errors", .stack_effect = "quot --", .func = nativeIgnoreErrors },
+    .{ .name = "load", .stack_effect = "filename --", .func = nativeLoad },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -323,6 +327,51 @@ fn nativeIgnoreErrors(ctx: *Context) anyerror!void {
     };
 }
 
+/// load ( filename -- ) - Load and execute a 1z source file
+fn nativeLoad(ctx: *Context) anyerror!void {
+    const filename = try popString(ctx);
+
+    const file = std.fs.cwd().openFile(filename, .{}) catch {
+        return error.FileNotFound;
+    };
+    defer file.close();
+
+    var file_buf: [4096]u8 = undefined;
+    var reader = file.reader(&file_buf);
+
+    var processor: StatementProcessor = .{};
+
+    while (true) {
+        const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
+            error.EndOfStream => {
+                // Try to execute any remaining buffered content
+                switch (processor.flush(ctx.quotationAllocator())) {
+                    .needs_more_input => {},
+                    .parse_error => |e| return e,
+                    .complete => |instrs| {
+                        if (instrs.len > 0) {
+                            try ctx.executeQuotation(instrs);
+                        }
+                    },
+                }
+                break;
+            },
+            else => return error.FileReadError,
+        };
+
+        switch (processor.feedLine(ctx.quotationAllocator(), line)) {
+            .needs_more_input => continue,
+            .parse_error => |err| return err,
+            .complete => |instrs| {
+                if (instrs.len > 0) {
+                    try ctx.executeQuotation(instrs);
+                }
+                processor.reset();
+            },
+        }
+    }
+}
+
 // =============================================================================
 // Helper functions
 // =============================================================================
@@ -357,6 +406,14 @@ fn popSymbol(ctx: *Context) ![]const u8 {
     return switch (val) {
         .symbol => |s| s,
         .integer, .boolean, .string, .array, .quotation, .stack_effect, .error_value => error.TypeError,
+    };
+}
+
+fn popString(ctx: *Context) ![]const u8 {
+    const val = try ctx.stack.pop();
+    return switch (val) {
+        .string => |s| s,
+        .integer, .boolean, .symbol, .array, .quotation, .stack_effect, .error_value => error.TypeError,
     };
 }
 
