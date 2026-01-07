@@ -3,6 +3,7 @@ const File = std.fs.File;
 
 const Context = @import("context.zig").Context;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
+const formatter = @import("formatter.zig");
 
 const build_options = @import("build_options");
 pub const version = build_options.version;
@@ -12,11 +13,16 @@ pub fn main() u8 {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var ctx = Context.init(allocator);
-    defer ctx.deinit();
-
     const args = std.process.argsAlloc(allocator) catch return 1;
     defer std.process.argsFree(allocator, args);
+
+    // Check for fmt subcommand first
+    if (args.len > 1 and std.mem.eql(u8, args[1], "fmt")) {
+        return handleFmt(allocator, args[2..]);
+    }
+
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
 
     // If a file path is provided, run in batch mode, which executes the file
     // and exits. Errors print to stderr, and cause a non-zero exit code.
@@ -36,6 +42,124 @@ pub fn main() u8 {
         repl(&ctx);
         return 0;
     }
+}
+
+fn handleFmt(allocator: std.mem.Allocator, args: []const []const u8) u8 {
+    const stderr_file: File = .stderr();
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr = stderr_file.writer(&stderr_buf);
+    const err_writer = &stderr.interface;
+
+    var check_only = false;
+    var paths: std.ArrayListUnmanaged([]const u8) = .{};
+    defer paths.deinit(allocator);
+
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--check")) {
+            check_only = true;
+        } else {
+            paths.append(allocator, arg) catch {
+                err_writer.writeAll("Error: out of memory\n") catch {};
+                err_writer.flush() catch {};
+                return 1;
+            };
+        }
+    }
+
+    if (paths.items.len == 0) {
+        err_writer.writeAll("Usage: 1z fmt [--check] <file...>\n") catch {};
+        err_writer.writeAll("       1z fmt [--check] .\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
+    }
+
+    var any_changes = false;
+    var any_errors = false;
+
+    for (paths.items) |path| {
+        // Check if path is a directory
+        const stat = std.fs.cwd().statFile(path) catch |err| {
+            err_writer.print("Error accessing '{s}': {any}\n", .{ path, err }) catch {};
+            any_errors = true;
+            continue;
+        };
+
+        if (stat.kind == .directory) {
+            const result = formatDirectory(allocator, path, check_only, err_writer);
+            if (result.had_errors) any_errors = true;
+            if (result.had_changes) any_changes = true;
+        } else {
+            const result = formatSingleFile(allocator, path, check_only, err_writer);
+            if (result.had_errors) any_errors = true;
+            if (result.had_changes) any_changes = true;
+        }
+    }
+
+    err_writer.flush() catch {};
+
+    if (any_errors) return 1;
+    if (check_only and any_changes) return 1;
+    return 0;
+}
+
+const FormatResult = struct {
+    had_errors: bool,
+    had_changes: bool,
+};
+
+fn formatSingleFile(allocator: std.mem.Allocator, path: []const u8, check_only: bool, err_writer: anytype) FormatResult {
+    if (check_only) {
+        const is_formatted = formatter.checkFile(allocator, path) catch |err| {
+            err_writer.print("Error checking '{s}': {any}\n", .{ path, err }) catch {};
+            return .{ .had_errors = true, .had_changes = false };
+        };
+        if (!is_formatted) {
+            err_writer.print("{s} needs formatting\n", .{path}) catch {};
+            return .{ .had_errors = false, .had_changes = true };
+        }
+        return .{ .had_errors = false, .had_changes = false };
+    } else {
+        formatter.formatFile(allocator, path) catch |err| {
+            err_writer.print("Error formatting '{s}': {any}\n", .{ path, err }) catch {};
+            return .{ .had_errors = true, .had_changes = false };
+        };
+        return .{ .had_errors = false, .had_changes = false };
+    }
+}
+
+fn formatDirectory(allocator: std.mem.Allocator, dir_path: []const u8, check_only: bool, err_writer: anytype) FormatResult {
+    var result = FormatResult{ .had_errors = false, .had_changes = false };
+
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+        err_writer.print("Error opening directory '{s}': {any}\n", .{ dir_path, err }) catch {};
+        return .{ .had_errors = true, .had_changes = false };
+    };
+    defer dir.close();
+
+    var iter = dir.iterate();
+    while (iter.next() catch null) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".1z")) continue;
+
+        // Build full path
+        const full_path = if (std.mem.eql(u8, dir_path, "."))
+            allocator.dupe(u8, entry.name) catch {
+                result.had_errors = true;
+                continue;
+            }
+        else
+            std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name }) catch {
+                result.had_errors = true;
+                continue;
+            };
+        defer allocator.free(full_path);
+
+        const file_result = formatSingleFile(allocator, full_path, check_only, err_writer);
+        if (file_result.had_errors) result.had_errors = true;
+        if (file_result.had_changes) result.had_changes = true;
+    }
+
+    return result;
 }
 
 fn repl(ctx: *Context) void {
@@ -206,4 +330,5 @@ test {
     _ = @import("primitives.zig");
     _ = @import("parser.zig");
     _ = @import("statement.zig");
+    _ = @import("formatter.zig");
 }
