@@ -19,3 +19,4 @@ steps:
         zig build test --verbose
         zig build integration-test --verbose
         zig build --verbose
+        ./zig-out/bin/1z ./examples/showcase.1z

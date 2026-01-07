@@ -1,0 +1,300 @@
+\ 1Z Language Showcase
+\
+\ This file demonstrates the core features of 1Z.
+
+\ ------------------------------------------------------------
+\ 1. Basic Stack Operations and Arithmetic
+\ ------------------------------------------------------------
+
+"=== Basic Operations ===" print
+
+\ Push numbers onto the stack and perform arithmetic
+10 20 + .                                        \ prints 30
+
+\ Subtraction
+100 42 - .                                       \ prints 58
+
+\ The stack is LIFO (last in, first out)
+5 3 - .                                          \ 5 - 3 = 2
+
+\ dup duplicates the top of the stack
+7 dup + .                                        \ 7 + 7 = 14
+
+\ drop removes the top of the stack
+99 42 drop .                                     \ prints 99
+
+\ ------------------------------------------------------------
+\ 2. Defining Words (Functions)
+\ ------------------------------------------------------------
+
+"" print
+"=== Word Definitions ===" print
+
+\ Words are defined using symbol: [ body ] ;
+\ The symbol ends with : and becomes the word's name
+
+double: [ dup + ] ;
+7 double .                                       \ prints 14
+
+\ Triple a number
+triple: [ dup dup + + ] ;
+4 triple .                                       \ prints 12
+
+\ ------------------------------------------------------------
+\ 3. Stack Effects (Documentation)
+\ ------------------------------------------------------------
+
+"" print
+"=== Stack Effects ===" print
+
+\ Stack effects document how a word transforms the stack
+\ Format: ( inputs -- outputs )
+
+inc: ( n -- n ) [ 1 + ] ;
+dec: ( n -- n ) [ 1 - ] ;
+
+5 inc .                                          \ prints 6
+5 dec .                                          \ prints 4
+
+\ Stack effects are stored and can be queried with help
+"Showing help for inc:" print
+inc: help                           \ shows: inc: ( n -- n )
+
+"Showing help for +:" print
++: help                             \ shows: +: ( a b -- a+b )
+
+\ ------------------------------------------------------------
+\ 4. Booleans and Comparisons
+\ ------------------------------------------------------------
+
+"" print
+"=== Booleans ===" print
+
+\ t and f are boolean literals
+t .                          \ prints t
+f .                          \ prints f
+
+\ Comparison operators return booleans
+5 3 > .                      \ prints t (5 > 3)
+5 10 > .                     \ prints f (5 is not > 10)
+5 5 = .                      \ prints t (equality)
+3 7 < .                      \ prints t (3 < 7)
+
+\ ------------------------------------------------------------
+\ 5. Control Flow with Quotations
+\ ------------------------------------------------------------
+
+"" print
+"=== Control Flow ===" print
+
+\ Quotations are code blocks: [ ... ]
+\ They are pushed onto the stack as values, not executed
+
+\ 'call' executes a quotation
+[ 1 2 + ] call .             \ prints 3
+
+\ 'if' takes a condition and two quotations
+\ ( condition true-branch false-branch -- )
+5 3 >
+  [ "five is greater than three" print ]
+  [ "five is not greater" print ]
+  if
+
+10 20 <
+  [ "ten is less than twenty" print ]
+  [ "ten is not less" print ]
+  if
+
+\ 'when' executes only if condition is true
+t [ "this runs because condition is true" print ] when
+
+\ 'unless' executes only if condition is false
+f [ "this runs because condition is false" print ] unless
+
+\ More complex conditionals
+check-sign: ( n -- )
+  [
+    dup 0 >
+      [ drop "positive" print ]
+      [ dup 0 <
+          [ drop "negative" print ]
+          [ drop "zero" print ]
+          if
+      ]
+      if
+  ] ;
+
+5 check-sign
+0 5 - check-sign
+0 check-sign
+
+\ ------------------------------------------------------------
+\ 6. Strings
+\ ------------------------------------------------------------
+
+"" print
+"=== Strings ===" print
+
+\ String literals use double quotes
+"Hello, 1Z!" print
+
+\ Strings are values and can be stored in word definitions
+greeting: [ "Welcome to the showcase!" ] ;
+greeting print
+
+\ Strings can contain multiple words
+"Strings can have spaces and punctuation!" print
+
+\ ------------------------------------------------------------
+\ 7. Arrays (Immutable Sequences)
+\ ------------------------------------------------------------
+
+"" print
+"=== Arrays ===" print
+
+\ Arrays use curly braces: { ... }
+"A simple array:" print
+{ 1 2 3 } .
+
+"Another array:" print
+{ 10 20 30 40 50 } .
+
+\ Nested arrays of numbers
+"Nested arrays (matrix):" print
+{ { 1 2 } { 3 4 } } .
+
+\ Multi-line arrays work too
+"Multi-line array:" print
+{
+  100
+  200
+  300
+} .
+
+\ Array with strings
+"String array:" print
+{ "apple" "banana" "cherry" } .
+
+\ ------------------------------------------------------------
+\ 8. Error Handling with Combinators
+\ ------------------------------------------------------------
+
+"" print
+"=== Error Handling ===" print
+
+\ 'recover' catches errors: ( try-quot recover-quot -- )
+\ If try-quot fails, recover-quot runs with error on stack
+
+\ This succeeds normally
+"Successful operation:" print
+[ 5 3 + ] [ drop 0 ] recover .      \ prints 8
+
+\ This would fail (stack underflow), so recovery runs
+"Recovered from error:" print
+[ drop ] [ drop 42 ] recover .      \ prints 42
+
+\ 'ignore-errors' suppresses any errors
+[ drop ] ignore-errors              \ silently continues
+"Program continued after suppressed error" print
+
+\ Nested error handling
+"Nested recovery (inner recovers to 1):" print
+[ [ drop ] [ drop 1 ] recover ] [ drop 2 ] recover .
+
+\ ------------------------------------------------------------
+\ 9. Higher-Order Programming
+\ ------------------------------------------------------------
+
+"" print
+"=== Higher-Order Programming ===" print
+
+\ Quotations enable functional programming patterns
+
+\ Execute a quotation twice
+do-twice: ( quot -- ) [ dup call call ] ;
+
+"Calling print twice:" print
+[ "hello" print ] do-twice
+
+\ Quotations capture operations
+"Executing a math quotation:" print
+[ 3 4 + ] call .
+
+"Another quotation example:" print
+[ 10 20 + 5 - ] call .
+
+\ ------------------------------------------------------------
+\ 10. Abstractions
+\ ------------------------------------------------------------
+
+"" print
+"=== Abstractions ===" print
+
+\ Check if zero
+zero?: ( n -- ? ) [ 0 = ] ;
+"Is 0 zero?" print  0 zero? .       \ t
+"Is 5 zero?" print  5 zero? .       \ f
+
+\ Check if positive
+positive?: ( n -- ? ) [ 0 > ] ;
+"Is 5 positive?" print  5 positive? .
+
+\ Check if negative
+negative?: ( n -- ? ) [ 0 < ] ;
+"Is -3 negative?" print  0 3 - negative? .
+
+\ Quadruple by composing double
+quadruple: ( n -- n ) [ double double ] ;
+"3 quadrupled:" print  3 quadruple .
+
+\ Sum of three numbers
+sum3: ( a b c -- sum ) [ + + ] ;
+"1 + 2 + 3 =" print  1 2 3 sum3 .
+
+\ ------------------------------------------------------------
+\ 11. Data <=> Code
+\ ------------------------------------------------------------
+
+"" print
+"=== Data <=> Code ===" print
+
+\ Define data templates
+point: [ { 10 20 } ] ;
+"A point:" print
+point .
+
+\ Arrays of numbers as data
+coords: [ { 100 200 300 } ] ;
+"Coordinates:" print
+coords .
+
+\ Arrays of strings as data
+colors: [ { "red" "green" "blue" } ] ;
+"Colors:" print
+colors .
+
+\ ------------------------------------------------------------
+\ 12. Mini Calculator Demo
+\ ------------------------------------------------------------
+
+"" print
+"=== Calculator Demo ===" print
+
+calc-add: ( a b -- ) [ + "Result:" print . ] ;
+calc-sub: ( a b -- ) [ - "Result:" print . ] ;
+
+"5 + 3:" print
+5 3 calc-add
+
+"10 - 4:" print
+10 4 calc-sub
+
+"7 doubled:" print
+7 double "Result:" print .
+
+"3 quadrupled:" print
+3 quadruple "Result:" print .
+
+\ ------------------------------------------------------------
+\ Complete!
+\ ------------------------------------------------------------
