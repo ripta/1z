@@ -1,13 +1,27 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const Tokenizer = @import("tokenizer.zig").Tokenizer;
-const parseInteger = @import("tokenizer.zig").parseInteger;
-const parseString = @import("tokenizer.zig").parseString;
+const tokenizer_mod = @import("tokenizer.zig");
+const Tokenizer = tokenizer_mod.Tokenizer;
+const Token = tokenizer_mod.Token;
+const parseInteger = tokenizer_mod.parseInteger;
+const parseString = tokenizer_mod.parseString;
 const Value = @import("value.zig").Value;
 const Instruction = @import("value.zig").Instruction;
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
+
+/// Get the next non-comment, non-newline token from the tokenizer.
+fn nextToken(tokenizer: *Tokenizer) ?[]const u8 {
+    while (tokenizer.next()) |tok| {
+        // Skip comments and newlines during parsing
+        if (tok.kind == .comment or tok.kind == .newline) {
+            continue;
+        }
+        return tok.text;
+    }
+    return null;
+}
 
 /// All the different errors that can occur during parsing.
 pub const ParseError = error{
@@ -31,7 +45,7 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]c
     var instructions: std.ArrayListUnmanaged(Instruction) = .{};
     errdefer instructions.deinit(allocator);
 
-    while (tokenizer.next()) |token| {
+    while (nextToken(tokenizer)) |token| {
         if (std.mem.eql(u8, token, "[")) {
             const quotation = try parseQuotation(allocator, tokenizer);
             instructions.append(allocator, .{ .push_literal = .{ .quotation = quotation } }) catch return ParseError.OutOfMemory;
@@ -68,7 +82,7 @@ pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]
     var instructions: std.ArrayListUnmanaged(Instruction) = .{};
     errdefer instructions.deinit(allocator);
 
-    while (tokenizer.next()) |token| {
+    while (nextToken(tokenizer)) |token| {
         if (std.mem.eql(u8, token, "[")) {
             const nested = try parseQuotation(allocator, tokenizer);
             instructions.append(allocator, .{ .push_literal = .{ .quotation = nested } }) catch return ParseError.OutOfMemory;
@@ -113,7 +127,7 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer) ParseError!
     var current_list = &inputs;
     var pending_param_name: ?[]const u8 = null;
 
-    while (tokenizer.next()) |token| {
+    while (nextToken(tokenizer)) |token| {
         if (std.mem.eql(u8, token, "(")) {
             // This should be a nested effect for the pending parameter
             if (pending_param_name) |name| {
@@ -172,7 +186,7 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]cons
     var values: std.ArrayListUnmanaged(Value) = .{};
     errdefer values.deinit(allocator);
 
-    while (tokenizer.next()) |token| {
+    while (nextToken(tokenizer)) |token| {
         if (std.mem.eql(u8, token, "{")) {
             const nested = try parseArray(allocator, tokenizer);
             values.append(allocator, .{ .array = nested }) catch return ParseError.OutOfMemory;
@@ -403,4 +417,31 @@ test "parse top level with stack effect" {
     try std.testing.expectEqualStrings("n", effect.inputs[0].name);
 
     try std.testing.expectEqual(@as(usize, 1), instrs[2].push_literal.quotation.len);
+}
+
+test "parse top level with comments" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("\\ This is a comment\n1 2 +");
+    const instrs = try parseTopLevel(arena.allocator(), &tokenizer);
+
+    // Comment should be skipped
+    try std.testing.expectEqual(@as(usize, 3), instrs.len);
+    try std.testing.expectEqual(@as(i64, 1), instrs[0].push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 2), instrs[1].push_literal.integer);
+    try std.testing.expectEqualStrings("+", instrs[2].call_word);
+}
+
+test "parse with inline comment" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("1 2 \\ inline comment\n+");
+    const instrs = try parseTopLevel(arena.allocator(), &tokenizer);
+
+    try std.testing.expectEqual(@as(usize, 3), instrs.len);
+    try std.testing.expectEqual(@as(i64, 1), instrs[0].push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 2), instrs[1].push_literal.integer);
+    try std.testing.expectEqualStrings("+", instrs[2].call_word);
 }
