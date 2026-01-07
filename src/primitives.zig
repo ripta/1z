@@ -124,8 +124,8 @@ const primitives = [_]Primitive{
     .{ .name = "if", .stack_effect = "? true-quot false-quot --", .func = nativeIf },
     .{ .name = "when", .stack_effect = "? quot --", .func = nativeWhen },
     .{ .name = "unless", .stack_effect = "? quot --", .func = nativeUnless },
-    .{ .name = "print", .stack_effect = "a --", .func = nativePrint },
-    .{ .name = ".", .stack_effect = "a --", .func = nativePrint },
+    .{ .name = "print", .stack_effect = "str --", .func = nativePrint },
+    .{ .name = ".", .stack_effect = "a --", .func = nativeDot },
     .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
     .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ) --", .func = nativeRecover },
     .{ .name = "ignore-errors", .stack_effect = "quot --", .func = nativeIgnoreErrors },
@@ -259,8 +259,8 @@ fn nativeUnless(ctx: *Context) anyerror!void {
     if (!cond) try ctx.executeQuotation(quot);
 }
 
-/// print ( a -- ) - Print top of stack to stdout
-fn nativePrint(ctx: *Context) anyerror!void {
+/// . ( a -- ) - Print any value to stdout (with type formatting)
+fn nativeDot(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const stdout_file: std.fs.File = .stdout();
     var stdout_buf: [4096]u8 = undefined;
@@ -268,6 +268,22 @@ fn nativePrint(ctx: *Context) anyerror!void {
     try val.write(&stdout.interface);
     try stdout.interface.writeAll("\n");
     try stdout.interface.flush();
+}
+
+/// print ( str -- ) - Print a string to stdout (unquoted, strings only)
+fn nativePrint(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .string => |s| {
+            const stdout_file: std.fs.File = .stdout();
+            var stdout_buf: [4096]u8 = undefined;
+            var stdout = stdout_file.writer(&stdout_buf);
+            try stdout.interface.writeAll(s);
+            try stdout.interface.writeAll("\n");
+            try stdout.interface.flush();
+        },
+        else => return error.TypeError,
+    }
 }
 
 /// help ( symbol -- ) - Display help for a word

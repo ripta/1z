@@ -1,0 +1,3 @@
+\ Bug: print should output unquoted strings, . should output quoted
+"Hello world" print
+"Hello world" .
