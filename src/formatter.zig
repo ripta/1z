@@ -89,77 +89,177 @@ pub const Formatter = struct {
         var indent_level: usize = 0;
         var in_stack_effect = false;
         var line_start = true;
-        var after_opening = false; // Track if we just wrote an opening bracket
+        // Track if we just wrote an opening bracket
+        var after_opening = false;
         var pending_comment: ?[]const u8 = null;
+        // Track if last content was a comment (no blank lines after)
+        var after_comment = false;
+        // Track if we're at the start of the file
+        var at_file_start = true;
+        // Track consecutive newlines written
+        var newlines_written: usize = 0;
 
         while (i < self.tokens.items.len) {
             const tok = self.tokens.items[i];
 
             switch (tok.kind) {
                 .newline => {
-                    // Check if this newline should be preserved
-                    const should_preserve = self.shouldPreserveNewline(i, in_stack_effect);
+                    // Count consecutive newlines
+                    var newline_count: usize = 0;
+                    var j = i;
+                    while (j < self.tokens.items.len and self.tokens.items[j].kind == .newline) {
+                        newline_count += 1;
+                        j += 1;
+                    }
 
-                    if (should_preserve) {
+                    // Check if these newlines are at end of file (no more content)
+                    const is_trailing = self.peekNextNonNewline(j) == null;
+
+                    // Determine how many total newlines to allow based on context
+                    const max_newlines: usize = blk: {
+                        // Inside stack effects: no newlines
+                        if (in_stack_effect) break :blk 0;
+
+                        // Trailing newlines at end of file: none (file will end with 1 from last content)
+                        if (is_trailing) break :blk 0;
+
+                        const prev = if (i > 0) self.tokens.items[i - 1] else null;
+                        const next_content = self.peekNextNonNewline(j);
+
+                        // Check for places where newlines should be removed (normalization)
+                        if (next_content) |n| {
+                            // Before opening bracket (except in multi-line blocks) - normalize
+                            if (n.isOpening()) {
+                                if (prev) |p| {
+                                    // After stack effect or symbol, before bracket - remove newline
+                                    if (p.kind == .close_paren or p.kind == .symbol) break :blk 0;
+                                }
+                            }
+
+                            // Before semicolon - remove newline
+                            if (n.kind == .semicolon) break :blk 0;
+
+                            // Before closing bracket in single-line block - remove newline
+                            if (n.isClosing() and !self.isMultiLineBlock(i)) break :blk 0;
+                        }
+
+                        // After a comment: no blank lines allowed (max 1 newline total)
+                        if (after_comment) break :blk 1;
+
+                        // At file start: allow up to 1 blank line (2 newlines)
+                        if (at_file_start) break :blk 2;
+
+                        // After opening bracket with content - multi-line block structure
+                        if (prev) |p| {
+                            if (p.isOpening()) {
+                                if (next_content) |n| {
+                                    if (!n.isClosing()) break :blk @min(newline_count, 2);
+                                }
+                            }
+                        }
+
+                        // Before closing bracket in multi-line block
+                        if (next_content) |n| {
+                            if (n.isClosing() and self.isMultiLineBlock(i)) {
+                                break :blk @min(newline_count, 2);
+                            }
+                        }
+
+                        // After semicolon (between statements) - allow up to 1 blank line
+                        if (prev) |p| {
+                            if (p.kind == .semicolon) break :blk 2;
+                        }
+
+                        // Default: remove newlines (normalize)
+                        break :blk 0;
+                    };
+
+                    // Calculate how many more newlines to write (accounting for already written)
+                    const desired = @min(max_newlines, newline_count);
+                    const to_write = if (desired > newlines_written) desired - newlines_written else 0;
+
+                    if (to_write > 0) {
                         // Write pending comment first
                         if (pending_comment) |comment| {
                             try writer.writeAll("  ");
                             try writer.writeAll(comment);
                             pending_comment = null;
                         }
-                        try writer.writeAll("\n");
+
+                        // Write the additional newlines
+                        for (0..to_write) |_| {
+                            try writer.writeAll("\n");
+                        }
+                        newlines_written += to_write;
                         line_start = true;
                         after_opening = false;
                     }
-                    i += 1;
+
+                    // Skip all consecutive newlines
+                    i = j;
                     continue;
                 },
 
                 .comment => {
+                    at_file_start = false;
                     // Store comment to write at end of line or on its own line
                     if (line_start) {
                         try self.writeIndent(writer, indent_level);
                         try writer.writeAll(tok.text);
-                        // Don't add newline here - let the newline token handle it
-                        // or the next token will add one
                         line_start = false;
+                        after_comment = true;
                     } else {
                         pending_comment = tok.text;
                     }
+                    newlines_written = 0;
                     i += 1;
                     continue;
                 },
 
                 .open_paren => {
+                    at_file_start = false;
+                    after_comment = false;
                     in_stack_effect = true;
                     if (!line_start) try writer.writeAll(" ");
                     try writer.writeAll("(");
                     line_start = false;
                     after_opening = true;
+                    newlines_written = 0;
                 },
 
                 .close_paren => {
+                    at_file_start = false;
+                    after_comment = false;
                     in_stack_effect = false;
                     try writer.writeAll(" )");
                     line_start = false;
                     after_opening = false;
+                    newlines_written = 0;
                 },
 
                 .arrow => {
+                    at_file_start = false;
+                    after_comment = false;
                     try writer.writeAll(" --");
                     line_start = false;
                     after_opening = false;
+                    newlines_written = 0;
                 },
 
                 .open_bracket, .open_brace => {
+                    at_file_start = false;
+                    after_comment = false;
                     if (!line_start) try writer.writeAll(" ");
                     try writer.writeAll(tok.text);
                     indent_level += 1;
                     line_start = false;
                     after_opening = true;
+                    newlines_written = 0;
                 },
 
                 .close_bracket, .close_brace => {
+                    at_file_start = false;
+                    after_comment = false;
                     indent_level -|= 1;
 
                     // Check if we need to be on a new line
@@ -180,9 +280,12 @@ pub const Formatter = struct {
                     try writer.writeAll(tok.text);
                     line_start = false;
                     after_opening = false;
+                    newlines_written = 0;
                 },
 
                 .semicolon => {
+                    at_file_start = false;
+                    after_comment = false;
                     try writer.writeAll(" ;");
                     // After semicolon, write pending comment and newline
                     if (pending_comment) |comment| {
@@ -193,33 +296,35 @@ pub const Formatter = struct {
                     try writer.writeAll("\n");
                     line_start = true;
                     after_opening = false;
+                    newlines_written = 1;
                 },
 
                 .symbol => {
+                    at_file_start = false;
+                    after_comment = false;
                     if (line_start) {
                         try self.writeIndent(writer, indent_level);
-                    } else if (!after_opening) {
-                        try writer.writeAll(" ");
                     } else {
-                        try writer.writeAll(" "); // Space after opening bracket
+                        try writer.writeAll(" ");
                     }
                     try writer.writeAll(tok.text);
                     line_start = false;
                     after_opening = false;
+                    newlines_written = 0;
                 },
 
                 else => {
-                    // word, string, etc.
+                    at_file_start = false;
+                    after_comment = false;
                     if (line_start) {
                         try self.writeIndent(writer, indent_level);
-                    } else if (after_opening) {
-                        try writer.writeAll(" "); // Space after opening bracket
                     } else {
                         try writer.writeAll(" ");
                     }
                     try writer.writeAll(tok.text);
                     line_start = false;
                     after_opening = false;
+                    newlines_written = 0;
                 },
             }
 
@@ -230,43 +335,13 @@ pub const Formatter = struct {
         if (pending_comment) |comment| {
             try writer.writeAll("  ");
             try writer.writeAll(comment);
+            line_start = false;
         }
 
-        // Ensure file ends with newline if not already
+        // Ensure file ends with exactly one newline (no trailing blank lines)
         if (!line_start) {
             try writer.writeAll("\n");
         }
-    }
-
-    /// Determine if a newline at position i should be preserved.
-    fn shouldPreserveNewline(self: *Formatter, i: usize, in_stack_effect: bool) bool {
-        // Never preserve newlines inside stack effects
-        if (in_stack_effect) return false;
-
-        const prev = if (i > 0) self.tokens.items[i - 1] else null;
-        const next = self.peekNextNonNewline(i + 1);
-
-        // After a comment that's not at end of meaningful line, preserve
-        if (prev) |p| {
-            if (p.kind == .comment) {
-                return true;
-            }
-            // After opening bracket with content - multi-line block
-            if (p.isOpening()) {
-                if (next) |n| {
-                    if (!n.isClosing()) return true;
-                }
-            }
-        }
-
-        // Before closing bracket in multi-line
-        if (next) |n| {
-            if (n.isClosing()) {
-                return self.isMultiLineBlock(i);
-            }
-        }
-
-        return false;
     }
 
     /// Peek at next token that's not a newline.
@@ -337,7 +412,8 @@ pub fn formatFile(allocator: Allocator, path: []const u8) !void {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
-    const content = try file.readToEndAlloc(allocator, 1024 * 1024 * 10); // 10MB max
+    // 10MB max
+    const content = try file.readToEndAlloc(allocator, 1024 * 1024 * 10);
     defer allocator.free(content);
 
     const formatted = try formatString(allocator, content);
@@ -376,8 +452,7 @@ test "format simple definition" {
     try std.testing.expectEqualStrings("double: ( n -- n ) [ 2 * ] ;\n", result);
 }
 
-test "format with inconsistent spacing" {
-    // Extra spaces should be normalized
+test "format compress extra spaces" {
     const input = "double:   (  n  --  n  )   [  2   *  ]   ;";
     const result = try formatString(std.testing.allocator, input);
     defer std.testing.allocator.free(result);
@@ -393,22 +468,20 @@ test "format preserves comments" {
     try std.testing.expectEqualStrings("\\ This is a comment\n1 2 +\n", result);
 }
 
-test "format multi-line quotation" {
+test "format preserves multi-line structure" {
     const input = "factorial: ( n -- n! ) [\n  dup 1 >\n  [ dup 1 - factorial * ]\n  [ drop 1 ]\n  if\n] ;";
     const result = try formatString(std.testing.allocator, input);
     defer std.testing.allocator.free(result);
 
-    // Should preserve multi-line structure
     try std.testing.expect(std.mem.indexOf(u8, result, "\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "] ;") != null);
 }
 
-test "format normalizes split definition" {
+test "format opening bracket on same line" {
     const input = "square: ( n -- n )\n[ dup * ]\n;";
     const result = try formatString(std.testing.allocator, input);
     defer std.testing.allocator.free(result);
 
-    // Opening bracket should be on same line
     try std.testing.expectEqualStrings("square: ( n -- n ) [ dup * ] ;\n", result);
 }
 
@@ -434,4 +507,44 @@ test "format inline comment" {
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings("1 2 +  \\ add numbers\n", result);
+}
+
+test "format preserves single blank line between statements" {
+    const input = "double: [ 2 * ] ;\n\ntriple: [ 3 * ] ;";
+    const result = try formatString(std.testing.allocator, input);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("double: [ 2 * ] ;\n\ntriple: [ 3 * ] ;\n", result);
+}
+
+test "format compresses multiple blank lines to one" {
+    const input = "double: [ 2 * ] ;\n\n\n\ntriple: [ 3 * ] ;";
+    const result = try formatString(std.testing.allocator, input);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("double: [ 2 * ] ;\n\ntriple: [ 3 * ] ;\n", result);
+}
+
+test "format no blank line after comment" {
+    const input = "\\ a comment\n\ndouble: [ 2 * ] ;";
+    const result = try formatString(std.testing.allocator, input);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("\\ a comment\ndouble: [ 2 * ] ;\n", result);
+}
+
+test "format blank line before comment is ok" {
+    const input = "double: [ 2 * ] ;\n\n\\ a comment\ntriple: [ 3 * ] ;";
+    const result = try formatString(std.testing.allocator, input);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("double: [ 2 * ] ;\n\n\\ a comment\ntriple: [ 3 * ] ;\n", result);
+}
+
+test "format no trailing blank lines" {
+    const input = "double: [ 2 * ] ;\n\n\n";
+    const result = try formatString(std.testing.allocator, input);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("double: [ 2 * ] ;\n", result);
 }
