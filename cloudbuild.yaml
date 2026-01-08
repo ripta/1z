@@ -1,0 +1,22 @@
+steps:
+  - name: 'bash'
+    args:
+      - -c
+      - |
+        chown -R 65532:999 /workspace
+
+  - name: 'gcr.io/$PROJECT_ID/zag:v0.15.2'
+    env:
+      - ZIG_GLOBAL_CACHE_DIR=/home/build/.cache/zig
+      - ZIG_LOCAL_CACHE_DIR=/home/build/.zig-cache
+    entrypoint: 'bash'
+    args:
+      - -c
+      - |
+        set -eux
+        mkdir -p /home/build/.cache/zig
+        mkdir -p /home/build/.zig-cache
+        zig build test --verbose
+        zig build integration-test --verbose
+        zig build --verbose
+        ./zig-out/bin/1z ./examples/showcase.1z

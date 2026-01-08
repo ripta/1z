@@ -1,0 +1,5 @@
+\ Test nested error reporting with call stack
+failing-inner: [ bad-word ] ;
+failing-outer: [ failing-inner ] ;
+1 2 +
+failing-outer

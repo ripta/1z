@@ -1,12 +1,32 @@
 const std = @import("std");
 const File = std.fs.File;
 
-const Context = @import("context.zig").Context;
+const context = @import("context.zig");
+const Context = context.Context;
+const ErrorDetail = context.ErrorDetail;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 const formatter = @import("formatter.zig");
 
 const build_options = @import("build_options");
 pub const version = build_options.version;
+
+/// Print error details from the context's error stack.
+fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
+    writer.print("Error: {any}\n", .{err}) catch return;
+
+    // Print error details in reverse order (most recent first is the innermost error)
+    const details = ctx.error_details.items;
+    if (details.len > 0) {
+        for (details) |detail| {
+            if (detail.line > 0) {
+                writer.print("  at line {d}: {s}\n", .{ detail.line, detail.word_name orelse detail.message }) catch return;
+            } else {
+                writer.print("  in: {s}\n", .{detail.word_name orelse detail.message}) catch return;
+            }
+        }
+    }
+    ctx.clearErrorDetails();
+}
 
 pub fn main() u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -212,7 +232,7 @@ fn repl(ctx: *Context) void {
             .complete => |instrs| {
                 var had_error = false;
                 ctx.executeQuotation(instrs) catch |err| {
-                    writer.print("Error: {any}\n", .{err}) catch {};
+                    printErrorDetails(ctx, writer, err);
                     had_error = true;
                 };
 
@@ -252,6 +272,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
     var reader = file.reader(&file_buf);
 
     var processor: StatementProcessor = .{};
+    var file_line: usize = 0;
     while (true) {
         const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
             error.EndOfStream => {
@@ -265,8 +286,10 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                     },
                     .complete => |instrs| {
                         if (instrs.len > 0) {
+                            // Adjust line numbers in instructions based on file position
+                            adjustInstructionLines(instrs, processor.start_line);
                             ctx.executeQuotation(instrs) catch |e| {
-                                err_writer.print("Error: {any}\n", .{e}) catch {};
+                                printErrorDetails(ctx, err_writer, e);
                                 err_writer.flush() catch {};
                                 return 1;
                             };
@@ -288,17 +311,22 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
             },
         };
 
+        file_line += 1;
+        processor.trackLine(file_line);
+
         switch (processor.feedLine(ctx.quotationAllocator(), line)) {
             .needs_more_input => continue,
             .parse_error => |err| {
-                err_writer.print("Error: {any}\n", .{err}) catch {};
+                err_writer.print("Error at line {d}: {any}\n", .{ file_line, err }) catch {};
                 err_writer.flush() catch {};
                 return 1;
             },
             .complete => |instrs| {
                 if (instrs.len > 0) {
+                    // Adjust line numbers in instructions based on file position
+                    adjustInstructionLines(instrs, processor.start_line);
                     ctx.executeQuotation(instrs) catch |err| {
-                        err_writer.print("Error: {any}\n", .{err}) catch {};
+                        printErrorDetails(ctx, err_writer, err);
                         err_writer.flush() catch {};
                         return 1;
                     };
@@ -315,6 +343,25 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
     }
 
     return 0;
+}
+
+/// Adjust line numbers in instructions by adding an offset.
+fn adjustInstructionLines(instrs: []const @import("value.zig").Instruction, line_offset: usize) void {
+    if (line_offset == 0) return;
+    for (instrs) |*instr| {
+        const ptr = @constCast(instr);
+        ptr.line += line_offset - 1; // -1 because tokenizer starts at line 1
+        // Recursively adjust nested quotations
+        switch (instr.op) {
+            .push_literal => |val| {
+                switch (val) {
+                    .quotation => |nested| adjustInstructionLines(nested, line_offset),
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
 }
 
 // =============================================================================

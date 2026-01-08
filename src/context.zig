@@ -12,12 +12,21 @@ pub const ExecutionError = error{
     OutOfMemory,
 };
 
+/// ErrorDetail captures information about an error for debugging purposes.
+pub const ErrorDetail = struct {
+    error_type: []const u8,
+    message: []const u8,
+    line: usize,
+    word_name: ?[]const u8,
+};
+
 /// The Context holds all interpreter state.
 pub const Context = struct {
     stack: Stack,
     dictionary: Dictionary,
     arena: std.heap.ArenaAllocator,
     allocator: Allocator,
+    error_details: std.ArrayListUnmanaged(ErrorDetail),
 
     /// Initialize a new interpreter context with an empty stack and primitives.
     pub fn init(allocator: Allocator) Context {
@@ -26,6 +35,7 @@ pub const Context = struct {
             .dictionary = Dictionary.init(allocator),
             .arena = std.heap.ArenaAllocator.init(allocator),
             .allocator = allocator,
+            .error_details = .{},
         };
 
         primitives.registerPrimitives(&ctx.dictionary, ctx.arena.allocator()) catch |err| {
@@ -37,6 +47,7 @@ pub const Context = struct {
 
     /// Free all resources used by the context.
     pub fn deinit(self: *Context) void {
+        self.error_details.deinit(self.allocator);
         self.arena.deinit();
         self.dictionary.deinit();
         self.stack.deinit();
@@ -47,18 +58,50 @@ pub const Context = struct {
         return self.arena.allocator();
     }
 
+    /// Clear all error details.
+    pub fn clearErrorDetails(self: *Context) void {
+        self.error_details.clearRetainingCapacity();
+    }
+
+    /// Push an error detail onto the error stack.
+    pub fn pushErrorDetail(self: *Context, detail: ErrorDetail) void {
+        self.error_details.append(self.allocator, detail) catch {};
+    }
+
     /// Execute a quotation's instructions.
     pub fn executeQuotation(self: *Context, instructions: []const Instruction) anyerror!void {
         for (instructions) |instr| {
-            switch (instr) {
+            switch (instr.op) {
                 .push_literal => |val| try self.stack.push(val),
                 .call_word => |name| {
                     if (self.dictionary.get(name)) |word| {
                         switch (word.action) {
-                            .native => |func| try func(self),
-                            .compound => |instrs| try self.executeQuotation(instrs),
+                            .native => |func| func(self) catch |err| {
+                                self.pushErrorDetail(.{
+                                    .error_type = @errorName(err),
+                                    .message = name,
+                                    .line = instr.line,
+                                    .word_name = name,
+                                });
+                                return err;
+                            },
+                            .compound => |instrs| self.executeQuotation(instrs) catch |err| {
+                                self.pushErrorDetail(.{
+                                    .error_type = @errorName(err),
+                                    .message = name,
+                                    .line = instr.line,
+                                    .word_name = name,
+                                });
+                                return err;
+                            },
                         }
                     } else {
+                        self.pushErrorDetail(.{
+                            .error_type = "UnknownWord",
+                            .message = name,
+                            .line = instr.line,
+                            .word_name = name,
+                        });
                         return ExecutionError.UnknownWord;
                     }
                 },
@@ -96,9 +139,9 @@ test "quotation allocator frees on deinit" {
 
     const alloc = ctx.quotationAllocator();
     const instrs = try alloc.alloc(Instruction, 3);
-    instrs[0] = .{ .push_literal = .{ .integer = 1 } };
-    instrs[1] = .{ .push_literal = .{ .integer = 2 } };
-    instrs[2] = .{ .call_word = "+" };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 0 };
+    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 0 };
+    instrs[2] = .{ .op = .{ .call_word = "+" }, .line = 0 };
 
     try ctx.dictionary.put("test-word", .{
         .name = "test-word",

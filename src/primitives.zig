@@ -124,8 +124,8 @@ const primitives = [_]Primitive{
     .{ .name = "if", .stack_effect = "? true-quot false-quot --", .func = nativeIf },
     .{ .name = "when", .stack_effect = "? quot --", .func = nativeWhen },
     .{ .name = "unless", .stack_effect = "? quot --", .func = nativeUnless },
-    .{ .name = "print", .stack_effect = "a --", .func = nativePrint },
-    .{ .name = ".", .stack_effect = "a --", .func = nativePrint },
+    .{ .name = "print", .stack_effect = "str --", .func = nativePrint },
+    .{ .name = ".", .stack_effect = "a --", .func = nativeDot },
     .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
     .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ) --", .func = nativeRecover },
     .{ .name = "ignore-errors", .stack_effect = "quot --", .func = nativeIgnoreErrors },
@@ -259,8 +259,8 @@ fn nativeUnless(ctx: *Context) anyerror!void {
     if (!cond) try ctx.executeQuotation(quot);
 }
 
-/// print ( a -- ) - Print top of stack to stdout
-fn nativePrint(ctx: *Context) anyerror!void {
+/// . ( a -- ) - Print any value to stdout (with type formatting)
+fn nativeDot(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const stdout_file: std.fs.File = .stdout();
     var stdout_buf: [4096]u8 = undefined;
@@ -268,6 +268,22 @@ fn nativePrint(ctx: *Context) anyerror!void {
     try val.write(&stdout.interface);
     try stdout.interface.writeAll("\n");
     try stdout.interface.flush();
+}
+
+/// print ( str -- ) - Print a string to stdout (unquoted, strings only)
+fn nativePrint(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .string => |s| {
+            const stdout_file: std.fs.File = .stdout();
+            var stdout_buf: [4096]u8 = undefined;
+            var stdout = stdout_file.writer(&stdout_buf);
+            try stdout.interface.writeAll(s);
+            try stdout.interface.writeAll("\n");
+            try stdout.interface.flush();
+        },
+        else => return error.TypeError,
+    }
 }
 
 /// help ( symbol -- ) - Display help for a word
@@ -487,9 +503,9 @@ test "call executes quotation" {
     defer ctx.deinit();
 
     const instrs = [_]Instruction{
-        .{ .push_literal = .{ .integer = 1 } },
-        .{ .push_literal = .{ .integer = 2 } },
-        .{ .call_word = "+" },
+        .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 0 },
+        .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
     try ctx.stack.push(.{ .quotation = &instrs });
     try nativeCall(&ctx);
@@ -504,8 +520,8 @@ test "semicolon defines word" {
     defer ctx.deinit();
 
     const instrs = [_]Instruction{
-        .{ .push_literal = .{ .integer = 2 } },
-        .{ .call_word = "+" },
+        .{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 0 },
+        .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
     try ctx.stack.push(.{ .symbol = "add2" });
     try ctx.stack.push(.{ .quotation = &instrs });
@@ -523,8 +539,8 @@ test "semicolon defines word with stack effect" {
     defer ctx.deinit();
 
     const instrs = [_]Instruction{
-        .{ .push_literal = .{ .integer = 2 } },
-        .{ .call_word = "+" },
+        .{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 0 },
+        .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
     try ctx.stack.push(.{ .symbol = "add2" });
     try ctx.stack.push(.{ .stack_effect = StackEffect{
@@ -547,8 +563,8 @@ test "if true branch" {
     var ctx = Context.init(allocator);
     defer ctx.deinit();
 
-    const true_quot = [_]Instruction{.{ .push_literal = .{ .integer = 1 } }};
-    const false_quot = [_]Instruction{.{ .push_literal = .{ .integer = 2 } }};
+    const true_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 0 }};
+    const false_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 0 }};
     try ctx.stack.push(.{ .boolean = true });
     try ctx.stack.push(.{ .quotation = &true_quot });
     try ctx.stack.push(.{ .quotation = &false_quot });
@@ -562,8 +578,8 @@ test "if false branch" {
     var ctx = Context.init(allocator);
     defer ctx.deinit();
 
-    const true_quot = [_]Instruction{.{ .push_literal = .{ .integer = 1 } }};
-    const false_quot = [_]Instruction{.{ .push_literal = .{ .integer = 2 } }};
+    const true_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 0 }};
+    const false_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 0 }};
     try ctx.stack.push(.{ .boolean = false });
     try ctx.stack.push(.{ .quotation = &true_quot });
     try ctx.stack.push(.{ .quotation = &false_quot });
@@ -577,7 +593,7 @@ test "when executes on true" {
     var ctx = Context.init(allocator);
     defer ctx.deinit();
 
-    const quot = [_]Instruction{.{ .push_literal = .{ .integer = 42 } }};
+    const quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 }};
     try ctx.stack.push(.{ .boolean = true });
     try ctx.stack.push(.{ .quotation = &quot });
     try nativeWhen(&ctx);
@@ -591,7 +607,7 @@ test "when skips on false" {
     var ctx = Context.init(allocator);
     defer ctx.deinit();
 
-    const quot = [_]Instruction{.{ .push_literal = .{ .integer = 42 } }};
+    const quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 }};
     try ctx.stack.push(.{ .boolean = false });
     try ctx.stack.push(.{ .quotation = &quot });
     try nativeWhen(&ctx);
@@ -651,10 +667,10 @@ test "recover catches error and executes recovery" {
     defer ctx.deinit();
 
     // Try quotation that causes stack underflow, recovery pushes 42
-    const try_quot = [_]Instruction{.{ .call_word = "drop" }}; // Stack underflow
+    const try_quot = [_]Instruction{.{ .op = .{ .call_word = "drop" }, .line = 0 }}; // Stack underflow
     const recover_quot = [_]Instruction{
-        .{ .call_word = "drop" }, // Drop the error value
-        .{ .push_literal = .{ .integer = 42 } },
+        .{ .op = .{ .call_word = "drop" }, .line = 0 }, // Drop the error value
+        .{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 },
     };
     try ctx.stack.push(.{ .quotation = &try_quot });
     try ctx.stack.push(.{ .quotation = &recover_quot });
@@ -670,8 +686,8 @@ test "recover succeeds without error" {
     defer ctx.deinit();
 
     // Try quotation succeeds
-    const try_quot = [_]Instruction{.{ .push_literal = .{ .integer = 100 } }};
-    const recover_quot = [_]Instruction{.{ .push_literal = .{ .integer = 42 } }};
+    const try_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 100 } }, .line = 0 }};
+    const recover_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 }};
     try ctx.stack.push(.{ .quotation = &try_quot });
     try ctx.stack.push(.{ .quotation = &recover_quot });
     try nativeRecover(&ctx);
@@ -686,7 +702,7 @@ test "recover pushes error value on failure" {
     defer ctx.deinit();
 
     // Try quotation fails, recovery just leaves error on stack
-    const try_quot = [_]Instruction{.{ .call_word = "drop" }}; // Stack underflow
+    const try_quot = [_]Instruction{.{ .op = .{ .call_word = "drop" }, .line = 0 }}; // Stack underflow
     const recover_quot = [_]Instruction{}; // Do nothing, leave error on stack
     try ctx.stack.push(.{ .quotation = &try_quot });
     try ctx.stack.push(.{ .quotation = &recover_quot });
@@ -703,7 +719,7 @@ test "ignore-errors suppresses error" {
     defer ctx.deinit();
 
     // Quotation that causes stack underflow
-    const quot = [_]Instruction{.{ .call_word = "drop" }};
+    const quot = [_]Instruction{.{ .op = .{ .call_word = "drop" }, .line = 0 }};
     try ctx.stack.push(.{ .quotation = &quot });
     try nativeIgnoreErrors(&ctx);
 
@@ -717,7 +733,7 @@ test "ignore-errors allows success" {
     defer ctx.deinit();
 
     // Quotation that succeeds
-    const quot = [_]Instruction{.{ .push_literal = .{ .integer = 42 } }};
+    const quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 }};
     try ctx.stack.push(.{ .quotation = &quot });
     try nativeIgnoreErrors(&ctx);
 
