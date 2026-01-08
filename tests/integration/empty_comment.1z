@@ -1,0 +1,7 @@
+\ Test for empty comments (Bug 2 fix)
+\ Normal comment
+1 2 + .
+\
+3 4 + .
+\
+5 6 + .

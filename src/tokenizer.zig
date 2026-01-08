@@ -76,10 +76,13 @@ pub const Tokenizer = struct {
         const start = self.pos;
         const token_line = self.line;
 
-        // Line comment: `\ ` followed by rest of line
+        // Line comment: `\ ` followed by space/tab, or `\` at end-of-line/input
         if (self.input[self.pos] == '\\' and
-            self.pos + 1 < self.input.len and
-            (self.input[self.pos + 1] == ' ' or self.input[self.pos + 1] == '\t'))
+            (self.pos + 1 >= self.input.len or
+            self.input[self.pos + 1] == ' ' or
+            self.input[self.pos + 1] == '\t' or
+            self.input[self.pos + 1] == '\n' or
+            self.input[self.pos + 1] == '\r'))
         {
             // Consume until end of line or end of input
             while (self.pos < self.input.len and self.input[self.pos] != '\n') {
@@ -318,4 +321,43 @@ test "line tracking with comments" {
 
     const tok2 = t.next().?;
     try std.testing.expectEqual(@as(usize, 3), tok2.line);
+}
+
+test "empty comment at end of input" {
+    var t = Tokenizer.init("\\");
+    const tok = t.next().?;
+    try std.testing.expectEqual(Token.Kind.comment, tok.kind);
+    try std.testing.expectEqualStrings("\\", tok.text);
+    try std.testing.expectEqual(null, t.next());
+}
+
+test "empty comment followed by newline" {
+    var t = Tokenizer.init("\\\n42");
+    const comment = t.next().?;
+    try std.testing.expectEqual(Token.Kind.comment, comment.kind);
+    try std.testing.expectEqualStrings("\\", comment.text);
+    try std.testing.expectEqualStrings("42", t.next().?.text);
+    try std.testing.expectEqual(null, t.next());
+}
+
+test "empty comment with carriage return" {
+    var t = Tokenizer.init("\\\r\n42");
+    const comment = t.next().?;
+    try std.testing.expectEqual(Token.Kind.comment, comment.kind);
+    // The \r is included in the comment text (before the \n)
+    try std.testing.expectEqualStrings("\\\r", comment.text);
+    try std.testing.expectEqualStrings("42", t.next().?.text);
+    try std.testing.expectEqual(null, t.next());
+}
+
+test "empty comment with code before" {
+    var t = Tokenizer.init("1 2 + \\\n3");
+    try std.testing.expectEqualStrings("1", t.next().?.text);
+    try std.testing.expectEqualStrings("2", t.next().?.text);
+    try std.testing.expectEqualStrings("+", t.next().?.text);
+    const comment = t.next().?;
+    try std.testing.expectEqual(Token.Kind.comment, comment.kind);
+    try std.testing.expectEqualStrings("\\", comment.text);
+    try std.testing.expectEqualStrings("3", t.next().?.text);
+    try std.testing.expectEqual(null, t.next());
 }
