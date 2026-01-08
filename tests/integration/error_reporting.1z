@@ -1,0 +1,7 @@
+\ Test error reporting with line numbers
+\ This file contains an unknown word to test error output
+
+1 2 +
+3 4 +
+unknown-word-here
+5 6 +

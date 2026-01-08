@@ -1,9 +1,10 @@
 const std = @import("std");
 
-/// Token represents a lexical token with its kind and text.
+/// Token represents a lexical token with its kind, text, and source location.
 pub const Token = struct {
     kind: Kind,
     text: []const u8,
+    line: usize, // 1-based line number
 
     pub const Kind = enum {
         word, // Regular token (word, number, symbol, bracket, etc.)
@@ -27,12 +28,14 @@ pub const Token = struct {
 pub const Tokenizer = struct {
     input: []const u8,
     pos: usize,
+    line: usize, // 1-based line number
     preserve_newlines: bool,
 
     pub fn init(input: []const u8) Tokenizer {
         return .{
             .input = input,
             .pos = 0,
+            .line = 1,
             .preserve_newlines = false,
         };
     }
@@ -42,6 +45,7 @@ pub const Tokenizer = struct {
         return .{
             .input = input,
             .pos = 0,
+            .line = 1,
             .preserve_newlines = true,
         };
     }
@@ -52,11 +56,12 @@ pub const Tokenizer = struct {
         while (self.pos < self.input.len) {
             const c = self.input[self.pos];
             if (c == '\n') {
-                if (self.preserve_newlines) {
-                    self.pos += 1;
-                    return .{ .kind = .newline, .text = "\n" };
-                }
+                const current_line = self.line;
+                self.line += 1;
                 self.pos += 1;
+                if (self.preserve_newlines) {
+                    return .{ .kind = .newline, .text = "\n", .line = current_line };
+                }
             } else if (c == ' ' or c == '\t' or c == '\r') {
                 self.pos += 1;
             } else {
@@ -69,6 +74,7 @@ pub const Tokenizer = struct {
         }
 
         const start = self.pos;
+        const token_line = self.line;
 
         // Line comment: `\ ` followed by rest of line
         if (self.input[self.pos] == '\\' and
@@ -79,7 +85,7 @@ pub const Tokenizer = struct {
             while (self.pos < self.input.len and self.input[self.pos] != '\n') {
                 self.pos += 1;
             }
-            return .{ .kind = .comment, .text = self.input[start..self.pos] };
+            return .{ .kind = .comment, .text = self.input[start..self.pos], .line = token_line };
         }
 
         // String literal: collect until closing quote
@@ -91,7 +97,7 @@ pub const Tokenizer = struct {
             if (self.pos < self.input.len) {
                 self.pos += 1; // skip closing quote
             }
-            return .{ .kind = .word, .text = self.input[start..self.pos] };
+            return .{ .kind = .word, .text = self.input[start..self.pos], .line = token_line };
         }
 
         // Collect non-whitespace characters
@@ -99,12 +105,13 @@ pub const Tokenizer = struct {
             self.pos += 1;
         }
 
-        return .{ .kind = .word, .text = self.input[start..self.pos] };
+        return .{ .kind = .word, .text = self.input[start..self.pos], .line = token_line };
     }
 
     /// Reset the tokenizer to the beginning.
     pub fn reset(self: *Tokenizer) void {
         self.pos = 0;
+        self.line = 1;
     }
 
     fn isWhitespace(c: u8) bool {
@@ -283,4 +290,32 @@ test "default mode skips newlines" {
     try std.testing.expectEqualStrings("a", t.next().?.text);
     try std.testing.expectEqualStrings("b", t.next().?.text);
     try std.testing.expectEqual(null, t.next());
+}
+
+test "line tracking" {
+    var t = Tokenizer.init("a\nb\n\nc");
+    const tok1 = t.next().?;
+    try std.testing.expectEqualStrings("a", tok1.text);
+    try std.testing.expectEqual(@as(usize, 1), tok1.line);
+
+    const tok2 = t.next().?;
+    try std.testing.expectEqualStrings("b", tok2.text);
+    try std.testing.expectEqual(@as(usize, 2), tok2.line);
+
+    const tok3 = t.next().?;
+    try std.testing.expectEqualStrings("c", tok3.text);
+    try std.testing.expectEqual(@as(usize, 4), tok3.line);
+}
+
+test "line tracking with comments" {
+    var t = Tokenizer.init("a\n\\ comment\nb");
+    const tok1 = t.next().?;
+    try std.testing.expectEqual(@as(usize, 1), tok1.line);
+
+    const comment = t.next().?;
+    try std.testing.expectEqual(Token.Kind.comment, comment.kind);
+    try std.testing.expectEqual(@as(usize, 2), comment.line);
+
+    const tok2 = t.next().?;
+    try std.testing.expectEqual(@as(usize, 3), tok2.line);
 }

@@ -10,12 +10,21 @@ const parser = @import("parser.zig");
 pub const StatementProcessor = struct {
     stmt_buf: [65536]u8 = undefined,
     stmt_len: usize = 0,
+    start_line: usize = 0, // File line number where current statement started
 
     pub const Result = union(enum) {
         needs_more_input,
         complete: []const Instruction,
         parse_error: anyerror,
     };
+
+    /// Track the current file line number for error reporting.
+    pub fn trackLine(self: *StatementProcessor, line_num: usize) void {
+        if (self.stmt_len == 0) {
+            // This is the start of a new statement
+            self.start_line = line_num;
+        }
+    }
 
     // Feed a line of input. Returns the result of attempting to parse.
     pub fn feedLine(self: *StatementProcessor, allocator: Allocator, line: []const u8) Result {
@@ -50,6 +59,7 @@ pub const StatementProcessor = struct {
     // Reset buffer after successful execution or fatal error.
     pub fn reset(self: *StatementProcessor) void {
         self.stmt_len = 0;
+        self.start_line = 0;
     }
 
     // Check if currently accumulating input (for continuation prompt).

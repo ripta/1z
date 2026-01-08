@@ -87,8 +87,23 @@ pub fn build(b: *std.Build) void {
         const test_run = b.addRunArtifact(exe);
         test_run.addArg("--show-stack");
         test_run.addArg(file_path);
-        test_run.expectStdErrEqual("");
-        test_run.expectExitCode(0);
+
+        // Check for stderr golden file (error tests)
+        var has_stderr_golden = false;
+        if (test_dir.openFile(b.fmt("{s}.stderr.golden", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            const stderr_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            if (stderr_content.len > 0) {
+                has_stderr_golden = true;
+                test_run.expectStdErrEqual(stderr_content);
+                test_run.expectExitCode(1); // Error tests should fail
+            }
+        } else |_| {}
+
+        if (!has_stderr_golden) {
+            test_run.expectStdErrEqual("");
+            test_run.expectExitCode(0);
+        }
 
         // Try to read golden file for stdout comparison
         if (test_dir.openFile(b.fmt("{s}.golden", .{name_without_ext}), .{})) |file| {

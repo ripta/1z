@@ -12,13 +12,13 @@ const StackEffect = @import("stack_effect.zig").StackEffect;
 const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
 
 /// Get the next non-comment, non-newline token from the tokenizer.
-fn nextToken(tokenizer: *Tokenizer) ?[]const u8 {
+fn nextToken(tokenizer: *Tokenizer) ?Token {
     while (tokenizer.next()) |tok| {
         // Skip comments and newlines during parsing
         if (tok.kind == .comment or tok.kind == .newline) {
             continue;
         }
-        return tok.text;
+        return tok;
     }
     return null;
 }
@@ -45,33 +45,35 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]c
     var instructions: std.ArrayListUnmanaged(Instruction) = .{};
     errdefer instructions.deinit(allocator);
 
-    while (nextToken(tokenizer)) |token| {
+    while (nextToken(tokenizer)) |tok| {
+        const token = tok.text;
+        const line = tok.line;
         if (std.mem.eql(u8, token, "[")) {
             const quotation = try parseQuotation(allocator, tokenizer);
-            instructions.append(allocator, .{ .push_literal = .{ .quotation = quotation } }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = quotation } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "]")) {
             return ParseError.UnmatchedCloseBracket;
         } else if (std.mem.eql(u8, token, "{")) {
             const arr = try parseArray(allocator, tokenizer);
-            instructions.append(allocator, .{ .push_literal = .{ .array = arr } }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .array = arr } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "}")) {
             return ParseError.UnmatchedCloseBrace;
         } else if (std.mem.eql(u8, token, "(")) {
             const effect = try parseStackEffect(allocator, tokenizer);
-            instructions.append(allocator, .{ .push_literal = .{ .stack_effect = effect } }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, ")")) {
             return ParseError.UnmatchedCloseParen;
         } else if (parseInteger(token)) |n| {
-            instructions.append(allocator, .{ .push_literal = .{ .integer = n } }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .integer = n } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
             const s_copy = allocator.dupe(u8, s) catch return ParseError.OutOfMemory;
-            instructions.append(allocator, .{ .push_literal = .{ .string = s_copy } }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (token.len > 1 and token[token.len - 1] == ':') {
             const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
-            instructions.append(allocator, .{ .push_literal = .{ .symbol = sym_copy } }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .symbol = sym_copy } }, .line = line }) catch return ParseError.OutOfMemory;
         } else {
             const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
-            instructions.append(allocator, .{ .call_word = name_copy }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line }) catch return ParseError.OutOfMemory;
         }
     }
 
@@ -82,31 +84,33 @@ pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]
     var instructions: std.ArrayListUnmanaged(Instruction) = .{};
     errdefer instructions.deinit(allocator);
 
-    while (nextToken(tokenizer)) |token| {
+    while (nextToken(tokenizer)) |tok| {
+        const token = tok.text;
+        const line = tok.line;
         if (std.mem.eql(u8, token, "[")) {
             const nested = try parseQuotation(allocator, tokenizer);
-            instructions.append(allocator, .{ .push_literal = .{ .quotation = nested } }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = nested } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "]")) {
             return instructions.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "{")) {
             const arr = try parseArray(allocator, tokenizer);
-            instructions.append(allocator, .{ .push_literal = .{ .array = arr } }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .array = arr } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "(")) {
             const effect = try parseStackEffect(allocator, tokenizer);
-            instructions.append(allocator, .{ .push_literal = .{ .stack_effect = effect } }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, ")")) {
             return ParseError.UnmatchedCloseParen;
         } else if (parseInteger(token)) |n| {
-            instructions.append(allocator, .{ .push_literal = .{ .integer = n } }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .integer = n } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
             const s_copy = allocator.dupe(u8, s) catch return ParseError.OutOfMemory;
-            instructions.append(allocator, .{ .push_literal = .{ .string = s_copy } }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (token.len > 1 and token[token.len - 1] == ':') {
             const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
-            instructions.append(allocator, .{ .push_literal = .{ .symbol = sym_copy } }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .symbol = sym_copy } }, .line = line }) catch return ParseError.OutOfMemory;
         } else {
             const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
-            instructions.append(allocator, .{ .call_word = name_copy }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line }) catch return ParseError.OutOfMemory;
         }
     }
 
@@ -127,7 +131,8 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer) ParseError!
     var current_list = &inputs;
     var pending_param_name: ?[]const u8 = null;
 
-    while (nextToken(tokenizer)) |token| {
+    while (nextToken(tokenizer)) |tok| {
+        const token = tok.text;
         if (std.mem.eql(u8, token, "(")) {
             // This should be a nested effect for the pending parameter
             if (pending_param_name) |name| {
@@ -186,7 +191,8 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]cons
     var values: std.ArrayListUnmanaged(Value) = .{};
     errdefer values.deinit(allocator);
 
-    while (nextToken(tokenizer)) |token| {
+    while (nextToken(tokenizer)) |tok| {
+        const token = tok.text;
         if (std.mem.eql(u8, token, "{")) {
             const nested = try parseArray(allocator, tokenizer);
             values.append(allocator, .{ .array = nested }) catch return ParseError.OutOfMemory;
@@ -221,9 +227,9 @@ test "parse simple quotation" {
     const instrs = try parseQuotation(arena.allocator(), &tokenizer);
 
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
-    try std.testing.expectEqual(@as(i64, 1), instrs[0].push_literal.integer);
-    try std.testing.expectEqual(@as(i64, 2), instrs[1].push_literal.integer);
-    try std.testing.expectEqualStrings("+", instrs[2].call_word);
+    try std.testing.expectEqual(@as(i64, 1), instrs[0].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 2), instrs[1].op.push_literal.integer);
+    try std.testing.expectEqualStrings("+", instrs[2].op.call_word);
 }
 
 test "parse nested quotation" {
@@ -234,9 +240,9 @@ test "parse nested quotation" {
     const instrs = try parseQuotation(arena.allocator(), &tokenizer);
 
     try std.testing.expectEqual(@as(usize, 1), instrs.len);
-    const nested = instrs[0].push_literal.quotation;
+    const nested = instrs[0].op.push_literal.quotation;
     try std.testing.expectEqual(@as(usize, 1), nested.len);
-    try std.testing.expectEqual(@as(i64, 1), nested[0].push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 1), nested[0].op.push_literal.integer);
 }
 
 test "unmatched open bracket" {
@@ -409,14 +415,14 @@ test "parse top level with stack effect" {
     const instrs = try parseTopLevel(arena.allocator(), &tokenizer);
 
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
-    try std.testing.expectEqualStrings("foo", instrs[0].push_literal.symbol);
+    try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol);
 
-    const effect = instrs[1].push_literal.stack_effect;
+    const effect = instrs[1].op.push_literal.stack_effect;
     try std.testing.expectEqual(@as(usize, 1), effect.inputs.len);
     try std.testing.expectEqual(@as(usize, 1), effect.outputs.len);
     try std.testing.expectEqualStrings("n", effect.inputs[0].name);
 
-    try std.testing.expectEqual(@as(usize, 1), instrs[2].push_literal.quotation.len);
+    try std.testing.expectEqual(@as(usize, 1), instrs[2].op.push_literal.quotation.len);
 }
 
 test "parse top level with comments" {
@@ -428,9 +434,9 @@ test "parse top level with comments" {
 
     // Comment should be skipped
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
-    try std.testing.expectEqual(@as(i64, 1), instrs[0].push_literal.integer);
-    try std.testing.expectEqual(@as(i64, 2), instrs[1].push_literal.integer);
-    try std.testing.expectEqualStrings("+", instrs[2].call_word);
+    try std.testing.expectEqual(@as(i64, 1), instrs[0].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 2), instrs[1].op.push_literal.integer);
+    try std.testing.expectEqualStrings("+", instrs[2].op.call_word);
 }
 
 test "parse with inline comment" {
@@ -441,7 +447,7 @@ test "parse with inline comment" {
     const instrs = try parseTopLevel(arena.allocator(), &tokenizer);
 
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
-    try std.testing.expectEqual(@as(i64, 1), instrs[0].push_literal.integer);
-    try std.testing.expectEqual(@as(i64, 2), instrs[1].push_literal.integer);
-    try std.testing.expectEqualStrings("+", instrs[2].call_word);
+    try std.testing.expectEqual(@as(i64, 1), instrs[0].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 2), instrs[1].op.push_literal.integer);
+    try std.testing.expectEqualStrings("+", instrs[2].op.call_word);
 }

@@ -1,0 +1,4 @@
+Error: error.UnknownWord
+  at line 2: bad-word
+  at line 3: failing-inner
+  at line 5: failing-outer

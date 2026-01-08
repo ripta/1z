@@ -2,9 +2,14 @@ const std = @import("std");
 const StackEffect = @import("stack_effect.zig").StackEffect;
 
 /// Instruction represents a single operation in a compiled quotation.
-pub const Instruction = union(enum) {
-    push_literal: Value,
-    call_word: []const u8,
+pub const Instruction = struct {
+    op: Op,
+    line: usize, // 1-based line number from source
+
+    pub const Op = union(enum) {
+        push_literal: Value,
+        call_word: []const u8,
+    };
 };
 
 /// Value represents any value that can be stored on the stack.
@@ -35,7 +40,7 @@ pub const Value = union(enum) {
             .quotation => |instrs| {
                 try writer.writeAll("[ ");
                 for (instrs) |instr| {
-                    switch (instr) {
+                    switch (instr.op) {
                         .push_literal => |v| {
                             try v.write(writer);
                             try writer.writeAll(" ");
@@ -84,11 +89,11 @@ pub const Value = union(enum) {
 };
 
 fn instructionEql(a: Instruction, b: Instruction) bool {
-    const Tag = std.meta.Tag(Instruction);
-    if (@as(Tag, a) != @as(Tag, b)) return false;
-    return switch (a) {
-        .push_literal => |va| va.eql(b.push_literal),
-        .call_word => |na| std.mem.eql(u8, na, b.call_word),
+    const Tag = std.meta.Tag(Instruction.Op);
+    if (@as(Tag, a.op) != @as(Tag, b.op)) return false;
+    return switch (a.op) {
+        .push_literal => |va| va.eql(b.op.push_literal),
+        .call_word => |na| std.mem.eql(u8, na, b.op.call_word),
     };
 }
 
