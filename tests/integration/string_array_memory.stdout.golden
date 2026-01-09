@@ -1,0 +1,15 @@
+Stack: [ ]
+Some intermediate text here:
+Stack: [ ]
+{ "red" "green" "blue" }
+Stack: [ ]
+Stack: [ ]
+Another intermediate:
+Stack: [ ]
+{ x: y: }
+Stack: [ ]
+Stack: [ ]
+More intermediate text:
+Stack: [ ]
+{ { "hello" "world" } { "foo" "bar" } }
+Stack: [ ]

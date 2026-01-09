@@ -1,0 +1,20 @@
+\ Bug: string memory corruption in array word definitions
+\
+\ Define a word containing an array with strings
+colors: [ { "red" "green" "blue" } ] ;
+
+\ This intermediate operation would corrupt the strings if they were slices
+"Some intermediate text here:" print
+
+\ Access the array - strings should not be corrupted
+colors .
+
+\ Test with symbols in arrays too (same bug)
+point: [ { x: y: } ] ;
+"Another intermediate:" print
+point .
+
+\ Nested arrays with strings
+nested: [ { { "hello" "world" } { "foo" "bar" } } ] ;
+"More intermediate text:" print
+nested .
