@@ -1,0 +1,28 @@
+\ Bug: comments in quotations should not consume tokens on subsequent lines
+
+\ Test comment in a multiline quotation
+[ 1 2 \ this comment should end at the newline
++ ] call .
+
+\ Test comment at the start of a continuation line
+[
+\ comment on its own line
+1 2 + ] call .
+
+\ Test empty quotation (should work)
+[ ] .
+
+\ Test quotation with only a comment
+[
+\ just a comment
+] .
+
+\ Test multiple comments in quotation
+[
+\ first comment
+1
+\ second comment
+12
+\ third comment
++
+] call .

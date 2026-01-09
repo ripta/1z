@@ -33,9 +33,9 @@ pub const StatementProcessor = struct {
             return if (self.stmt_len > 0) .needs_more_input else .{ .complete = &.{} };
         }
 
-        // Add separator if accumulating
+        // Add newline separator if accumulating (preserves comment boundaries)
         if (self.stmt_len > 0 and self.stmt_len < self.stmt_buf.len) {
-            self.stmt_buf[self.stmt_len] = ' ';
+            self.stmt_buf[self.stmt_len] = '\n';
             self.stmt_len += 1;
         }
 
