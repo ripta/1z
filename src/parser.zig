@@ -204,9 +204,11 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]cons
         } else if (parseInteger(token)) |n| {
             values.append(allocator, .{ .integer = n }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
-            values.append(allocator, .{ .string = s }) catch return ParseError.OutOfMemory;
+            const s_copy = allocator.dupe(u8, s) catch return ParseError.OutOfMemory;
+            values.append(allocator, .{ .string = s_copy }) catch return ParseError.OutOfMemory;
         } else if (token.len > 1 and token[token.len - 1] == ':') {
-            values.append(allocator, .{ .symbol = token[0 .. token.len - 1] }) catch return ParseError.OutOfMemory;
+            const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
+            values.append(allocator, .{ .symbol = sym_copy }) catch return ParseError.OutOfMemory;
         } else {
             return ParseError.OutOfMemory;
         }
@@ -276,9 +278,11 @@ test "parse nested array" {
 }
 
 test "parse array with string" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
     var tokenizer = Tokenizer.init("\"hello\" 42 }");
-    const arr = try parseArray(std.testing.allocator, &tokenizer);
-    defer std.testing.allocator.free(arr);
+    const arr = try parseArray(arena.allocator(), &tokenizer);
 
     try std.testing.expectEqual(@as(usize, 2), arr.len);
     try std.testing.expectEqualStrings("hello", arr[0].string);
