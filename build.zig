@@ -86,15 +86,18 @@ pub fn build(b: *std.Build) void {
         // Integration test: compare against golden file if it exists
         const test_run = b.addRunArtifact(exe);
         test_run.addArg("--show-stack");
-        test_run.addArg(file_path);
+        test_run.addFileArg(b.path(file_path));
 
         // Check for stderr golden file (error tests)
         var has_stderr_golden = false;
-        if (test_dir.openFile(b.fmt("{s}.stderr.golden", .{name_without_ext}), .{})) |file| {
+        const stderr_golden_name = b.fmt("{s}.stderr.golden", .{name_without_ext});
+        if (test_dir.openFile(stderr_golden_name, .{})) |file| {
             defer file.close();
             const stderr_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
             if (stderr_content.len > 0) {
                 has_stderr_golden = true;
+                // Track the stderr golden file as a dependency
+                test_run.addFileInput(b.path(b.fmt("tests/integration/{s}", .{stderr_golden_name})));
                 test_run.expectStdErrEqual(stderr_content);
                 test_run.expectExitCode(1); // Error tests should fail
             }
@@ -109,6 +112,8 @@ pub fn build(b: *std.Build) void {
         if (test_dir.openFile(b.fmt("{s}.stdout.golden", .{name_without_ext}), .{})) |file| {
             defer file.close();
             const golden_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            // Track the stdout golden file as a dependency
+            test_run.addFileInput(b.path(stdout_golden_path));
             test_run.expectStdOutEqual(golden_content);
         } else |_| {
             // No golden file - just check exit code (already done above)
@@ -118,7 +123,7 @@ pub fn build(b: *std.Build) void {
         // Update golden: capture stdout and write to .stdout.golden file
         const update_run = b.addRunArtifact(exe);
         update_run.addArg("--show-stack");
-        update_run.addArg(file_path);
+        update_run.addFileArg(b.path(file_path));
         update_files.addCopyFileToSource(update_run.captureStdOut(), stdout_golden_path);
     }
 
