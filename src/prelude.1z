@@ -32,6 +32,9 @@ max: ( a1 a2 -- a ) [ [ > ] choose ] ;
 ++: ( a1 -- a2 ) [ 1 + ] ;
 0?: ( a -- ? ) [ 0 = ] ;
 
+\ Boolean operators
+not: ( t/f -- ? ) [ [ f ] [ t ] if ] ;
+
 \ Loops
 times: ( n quot -- ) [
   over 0 >
@@ -55,3 +58,6 @@ while: ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b ) [
   if
 ] ;
 do: ( pred body -- pred body ) [ dup 2dip ] ;
+loop: ( ... pred: ( ... -- ... ? ) -- ... ) [
+  [ call ] keep [ loop ] curry when
+] ;

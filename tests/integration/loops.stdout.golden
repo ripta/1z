@@ -2,6 +2,7 @@ Hello, World!
 Hello, World!
 Hello, World!
 Stack: [ ]
+Stack: [ ]
 10
 9
 8
@@ -13,3 +14,17 @@ Stack: [ ]
 2
 1
 Stack: [ 0 ]
+Stack: [ ]
+3
+10
+6
+2
+9
+5
+1
+8
+4
+0
+7
+Stack: [ 3 ]
+Stack: [ ]
