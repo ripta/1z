@@ -1,7 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Context = @import("context.zig").Context;
-const Value = @import("value.zig").Value;
+const value_mod = @import("value.zig");
+const Value = value_mod.Value;
+const HashTable = value_mod.HashTable;
 const Dictionary = @import("dictionary.zig").Dictionary;
 const WordDefinition = @import("dictionary.zig").WordDefinition;
 const NativeFn = @import("dictionary.zig").NativeFn;
@@ -18,6 +20,7 @@ pub const InterpreterError = error{
     FileNotFound,
     FileReadError,
     NoTokenizerAvailable,
+    InvalidHashSyntax,
 };
 
 /// Helper to create a stack effect from a raw string at runtime.
@@ -136,6 +139,7 @@ const primitives = [_]Primitive{
     .{ .name = "load", .stack_effect = "filename --", .func = nativeLoad },
     .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTime },
     .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .func = nativeParseUntil },
+    .{ .name = "make-hash", .stack_effect = "quotation -- hash", .func = nativeMakeHash },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -451,6 +455,53 @@ fn nativeParseUntil(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .quotation = instrs });
 }
 
+/// make-hash ( quotation -- hash ) - Create a hash table from key: value pairs
+/// The quotation should contain alternating symbol keys and values.
+/// Example: [ name: "Alice" age: 30 ] make-hash
+fn nativeMakeHash(ctx: *Context) anyerror!void {
+    const instrs = try popQuotation(ctx);
+
+    // Create a new hash table
+    const hash = ctx.quotationAllocator().create(HashTable) catch return error.OutOfMemory;
+    hash.* = HashTable{};
+
+    // Parse instructions as key: value pairs
+    var i: usize = 0;
+    while (i < instrs.len) {
+        // Expect a symbol key
+        const key_instr = instrs[i];
+        const key = switch (key_instr.op) {
+            .push_literal => |v| switch (v) {
+                .symbol => |s| s,
+                else => return error.InvalidHashSyntax,
+            },
+            .call_word => return error.InvalidHashSyntax,
+        };
+        i += 1;
+
+        if (i >= instrs.len) return error.InvalidHashSyntax;
+
+        // Get the value - could be a literal or need execution
+        const val_instr = instrs[i];
+        const val = switch (val_instr.op) {
+            .push_literal => |v| v,
+            .call_word => blk: {
+                // Execute the remaining instructions to get the value
+                // TODO(ripta): figure out supporting beyond single-words
+                try ctx.executeQuotation(instrs[i .. i + 1]);
+                break :blk ctx.stack.pop() catch return error.InvalidHashSyntax;
+            },
+        };
+        i += 1;
+
+        // Copy key to arena for persistence
+        const key_copy = ctx.quotationAllocator().dupe(u8, key) catch return error.OutOfMemory;
+        hash.put(ctx.quotationAllocator(), key_copy, val) catch return error.OutOfMemory;
+    }
+
+    try ctx.stack.push(.{ .hash = hash });
+}
+
 // =============================================================================
 // Helper functions
 // =============================================================================
@@ -459,7 +510,7 @@ fn popInteger(ctx: *Context) !i64 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .integer => |i| i,
-        .boolean, .string, .symbol, .array, .quotation, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .boolean, .string, .symbol, .array, .quotation, .hash, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 
@@ -468,7 +519,7 @@ fn popBoolean(ctx: *Context) !bool {
     return switch (val) {
         .boolean => |b| b,
         .integer => |i| i != 0,
-        .string, .symbol, .array, .quotation, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .string, .symbol, .array, .quotation, .hash, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 
@@ -476,7 +527,7 @@ fn popQuotation(ctx: *Context) ![]const Instruction {
     const val = try ctx.stack.pop();
     return switch (val) {
         .quotation => |q| q,
-        .integer, .boolean, .string, .symbol, .array, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .hash, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 
@@ -484,7 +535,7 @@ fn popSymbol(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .symbol => |s| s,
-        .integer, .boolean, .string, .array, .quotation, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .string, .array, .quotation, .hash, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 
@@ -492,7 +543,7 @@ fn popString(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .string => |s| s,
-        .integer, .boolean, .symbol, .array, .quotation, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .symbol, .array, .quotation, .hash, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 
@@ -500,7 +551,7 @@ fn popStackEffect(ctx: *Context) !StackEffect {
     const val = try ctx.stack.pop();
     return switch (val) {
         .stack_effect => |se| se,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 
