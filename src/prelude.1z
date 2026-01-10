@@ -33,7 +33,9 @@ max: ( a1 a2 -- a ) [ [ > ] choose ] ;
 0?: ( a -- ? ) [ 0 = ] ;
 
 \ Boolean operators
-not: ( t/f -- ? ) [ [ f ] [ t ] if ] ;
+not: ( ? -- ? ) [ [ f ] [ t ] if ] ;
+and: ( ? ? -- ? ) [ [ ] [ drop f ] if ] ;
+or: ( ? ? -- ? ) [ [ drop t ] [ ] if ] ;
 
 \ Loops
 times: ( n quot -- ) [
