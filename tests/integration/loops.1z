@@ -11,3 +11,7 @@ wipe
 \ loop ( pred -- ) - Loops execution of the quotation until it results in false
 3 [ dup . 7 + 11 % dup 3 = not ] loop
 wipe
+
+\ do ( pred body -- pred body ) - Execute body once, then use with while
+5 [ dup 0 > ] [ dup . 1 - ] do while
+wipe

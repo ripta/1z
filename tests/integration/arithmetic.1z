@@ -47,3 +47,31 @@ wipe
 \ max with equal values
 7 7 max
 wipe
+
+\ -- ( a1 -- a2 ) - decrement
+5 --
+wipe
+
+\ -- with negative
+-3 --
+wipe
+
+\ ++ ( a1 -- a2 ) - increment
+5 ++
+wipe
+
+\ ++ with negative
+-3 ++
+wipe
+
+\ 0? ( a -- ? ) - test if zero
+0 0?
+wipe
+
+\ 0? with non-zero
+5 0?
+wipe
+
+\ 0? with negative
+-3 0?
+wipe

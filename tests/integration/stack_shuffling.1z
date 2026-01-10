@@ -39,3 +39,7 @@ wipe
 \ choose with false result
 5 3 [ < ] choose
 wipe
+
+\ 2dip ( a b quot -- a b ) - execute quot under top two items
+1 2 3 [ dup + ] 2dip
+wipe
