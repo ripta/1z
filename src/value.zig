@@ -18,6 +18,9 @@ pub const HashTable = std.StringHashMapUnmanaged(Value);
 /// Vector type for V{ } literals - mutable, dynamically-sized sequences.
 pub const Vector = std.ArrayListUnmanaged(Value);
 
+/// ByteArray type for B{ } literals - mutable, dynamically-sized byte sequences.
+pub const ByteArray = std.ArrayListUnmanaged(u8);
+
 /// StackFrame represents a single frame in a stack trace.
 pub const StackFrame = struct {
     word_name: []const u8,
@@ -100,6 +103,7 @@ pub const Value = union(enum) {
     quotation: Quotation,
     hash: *HashTable,
     vector: *Vector,
+    byte_array: *ByteArray,
     stack_effect: StackEffect,
     parse_time_marker: void, // Marker for parse-time word definitions
     error_value: ErrorObject,
@@ -152,6 +156,13 @@ pub const Value = union(enum) {
                 }
                 try writer.writeAll("}");
             },
+            .byte_array => |b| {
+                try writer.writeAll("B{ ");
+                for (b.items) |byte| {
+                    try writer.print("0x{X:0>2} ", .{byte});
+                }
+                try writer.writeAll("}");
+            },
             .stack_effect => |effect| try effect.write(writer),
             .parse_time_marker => try writer.writeAll("parse-time"),
             .error_value => |err| try err.write(writer),
@@ -201,6 +212,10 @@ pub const Value = union(enum) {
                     if (!ai.eql(bi)) return false;
                 }
                 return true;
+            },
+            .byte_array => |a| {
+                const b = other.byte_array;
+                return std.mem.eql(u8, a.items, b.items);
             },
             .stack_effect => |a| a.eql(other.stack_effect),
             .parse_time_marker => true, // All parse_time_markers are equal

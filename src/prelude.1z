@@ -10,6 +10,9 @@ H{: parse-time [ "}" parse-until make-hash ] ;
 \ Vector literal syntax
 V{: parse-time [ "}" parse-until make-vector ] ;
 
+\ Byte array literal syntax
+B{: parse-time [ "}" parse-until make-byte-array ] ;
+
 \ Control flow
 when: ( ? quot -- ) [ [ ] if ] ;
 unless: ( ? quot -- ) [ [ ] swap if ] ;

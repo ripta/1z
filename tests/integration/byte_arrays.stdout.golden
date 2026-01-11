@@ -1,0 +1,105 @@
+Stack: [ ]
+=== Byte array creation ===
+Stack: [ ]
+PASS: empty byte array length
+Stack: [ ]
+PASS: byte array length
+Stack: [ ]
+PASS: hex byte array length
+Stack: [ ]
+PASS: decimal byte array length
+Stack: [ ]
+=== Byte array element access ===
+Stack: [ ]
+PASS: #nth first byte
+Stack: [ ]
+PASS: #nth middle byte
+Stack: [ ]
+PASS: #nth last byte
+Stack: [ ]
+PASS: #nth hex first
+Stack: [ ]
+PASS: #nth hex last
+Stack: [ ]
+PASS: #first
+Stack: [ ]
+PASS: #last
+Stack: [ ]
+=== Byte array #slice ===
+Stack: [ ]
+PASS: #slice length
+Stack: [ ]
+PASS: #slice first element
+Stack: [ ]
+PASS: #slice last element
+Stack: [ ]
+=== Byte array #append ===
+Stack: [ ]
+PASS: #append length
+Stack: [ ]
+PASS: #append first
+Stack: [ ]
+PASS: #append last
+Stack: [ ]
+=== Byte array #prepend ===
+Stack: [ ]
+PASS: #prepend length
+Stack: [ ]
+PASS: #prepend first
+Stack: [ ]
+PASS: #prepend last
+Stack: [ ]
+=== Byte array higher-order operations ===
+Stack: [ ]
+PASS: #map returns array, first element
+Stack: [ ]
+PASS: #map last element
+Stack: [ ]
+PASS: #filter count evens
+Stack: [ ]
+PASS: #filter first even
+Stack: [ ]
+PASS: #reduce sum
+Stack: [ ]
+=== Byte array #each ===
+Stack: [ ]
+PASS: #each accumulate
+Stack: [ ]
+=== String to bytes conversion ===
+Stack: [ ]
+PASS: >bytes length
+Stack: [ ]
+PASS: >bytes first byte is 'h'
+Stack: [ ]
+PASS: >bytes last byte is 'o'
+Stack: [ ]
+=== Bytes to string conversion ===
+Stack: [ ]
+PASS: bytes> creates string
+Stack: [ ]
+PASS: bytes> hex to string
+Stack: [ ]
+=== Round-trip conversion ===
+Stack: [ ]
+PASS: string -> bytes -> string
+Stack: [ ]
+PASS: bytes -> string -> bytes
+Stack: [ ]
+=== Byte array to-string ===
+Stack: [ ]
+PASS: empty byte array to-string
+Stack: [ ]
+PASS: byte array to-string
+Stack: [ ]
+PASS: hex format in to-string
+Stack: [ ]
+=== Error cases ===
+Stack: [ ]
+PASS: index out of bounds error
+Stack: [ ]
+PASS: first on empty byte array error
+Stack: [ ]
+PASS: last on empty byte array error
+Stack: [ ]
+All byte array tests complete!
+Stack: [ ]

@@ -123,7 +123,12 @@ pub const Tokenizer = struct {
 };
 
 /// Parse an integer from a token. Returns null if not a valid integer.
+/// Supports hex literals with 0x or 0X prefix.
 pub fn parseInteger(token: []const u8) ?i64 {
+    // Support hex literals (0x or 0X prefix)
+    if (token.len > 2 and (token[0] == '0') and (token[1] == 'x' or token[1] == 'X')) {
+        return std.fmt.parseInt(i64, token[2..], 16) catch null;
+    }
     return std.fmt.parseInt(i64, token, 10) catch null;
 }
 
