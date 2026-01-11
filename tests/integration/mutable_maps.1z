@@ -1,0 +1,69 @@
+\ Integration tests for mutable maps M{ }
+
+"lib/testing.1z" load
+
+"Mutable map creation" test-section
+M{ } #len 0 "empty mutable map length" assert=
+M{ a: 1 b: 2 } #len 2 "mutable map length" assert=
+M{ a: 1 b: 2 c: 3 } #len 3 "mutable map with three entries" assert=
+
+"Mutable map @get" test-section
+M{ name: "Alice" age: 30 } name: @get "Alice" "mmap @get with symbol" assert=
+M{ name: "Alice" age: 30 } "name" @get "Alice" "mmap @get with string" assert=
+M{ name: "Alice" age: 30 } age: @get 30 "mmap @get integer value" assert=
+
+"Mutable map @get error" test-section
+[ M{ a: 1 } b: @get ] [ drop "PASS: mmap @get key not found error" print ] recover
+
+"Mutable map @has?" test-section
+M{ name: "Alice" } name: @has? t "mmap @has? true" assert=
+M{ name: "Alice" } "name" @has? t "mmap @has? string key true" assert=
+M{ name: "Alice" } missing: @has? f "mmap @has? false" assert=
+M{ } anything: @has? f "mmap @has? empty map" assert=
+
+"Mutable map @set! adds new key" test-section
+M{ a: 1 } b: 2 @set! #len 2 "@set! adds new key" assert=
+M{ a: 1 } b: 2 @set! b: @get 2 "@set! value accessible" assert=
+
+"Mutable map @set! updates existing key" test-section
+M{ a: 1 } a: 99 @set! a: @get 99 "@set! updates existing key" assert=
+M{ a: 1 } a: 99 @set! #len 1 "@set! update keeps same length" assert=
+
+"Mutable map @set! actually mutates" test-section
+M{ x: 1 } dup y: 2 @set! drop x: @get 1 "@set! preserves original key" assert=
+
+"Mutable map @remove!" test-section
+M{ a: 1 b: 2 } a: @remove! #len 1 "@remove! decreases length" assert=
+M{ a: 1 b: 2 } a: @remove! a: @has? f "@remove! removes key" assert=
+M{ a: 1 b: 2 } a: @remove! b: @has? t "@remove! keeps other keys" assert=
+M{ a: 1 } c: @remove! #len 1 "@remove! missing key is no-op" assert=
+M{ a: 1 } a: @remove! #len 0 "@remove! can empty map" assert=
+
+"Mutable map @keys" test-section
+M{ a: 1 b: 2 } @keys #len 2 "mmap @keys count" assert=
+
+"Mutable map @values" test-section
+M{ a: 1 b: 2 } @values #len 2 "mmap @values count" assert=
+
+"Mutable map to-string" test-section
+M{ } to-string "M{ }" "empty mmap to-string" assert=
+
+"Mutable map equality" test-section
+M{ a: 1 b: 2 } M{ a: 1 b: 2 } = t "mmap equality same" assert=
+M{ a: 1 b: 2 } M{ b: 2 a: 1 } = t "mmap equality different order" assert=
+M{ a: 1 } M{ a: 2 } = f "mmap inequality different value" assert=
+M{ a: 1 } M{ b: 1 } = f "mmap inequality different key" assert=
+M{ } M{ } = t "empty mmaps equal" assert=
+
+"Chained @set!" test-section
+M{ } a: 1 @set! b: 2 @set! c: 3 @set! #len 3 "chained @set!" assert=
+M{ } a: 1 @set! b: 2 @set! c: 3 @set! a: @get 1 "chained @set! first key" assert=
+M{ } a: 1 @set! b: 2 @set! c: 3 @set! c: @get 3 "chained @set! last key" assert=
+
+"Error: @set on mutable map should fail" test-section
+[ M{ a: 1 } b: 2 @set ] [ drop "PASS: @set on mutable map error" print ] recover
+
+"Mutable map vs immutable hash" test-section
+M{ a: 1 } H{ a: 1 } = f "mutable map not equal to hash" assert=
+
+"All mutable map tests complete!" print

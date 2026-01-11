@@ -10,6 +10,7 @@ const HashTable = value_mod.HashTable;
 const Vector = value_mod.Vector;
 const ByteArray = value_mod.ByteArray;
 const Set = value_mod.Set;
+const MutableMap = value_mod.MutableMap;
 const ErrorObject = value_mod.ErrorObject;
 const StackFrame = value_mod.StackFrame;
 
@@ -169,6 +170,9 @@ const primitives = [_]Primitive{
     .{ .name = "make-vector", .stack_effect = "quotation -- vector", .func = nativeMakeVector },
     .{ .name = "make-byte-array", .stack_effect = "quotation -- byte-array", .func = nativeMakeByteArray },
     .{ .name = "make-set", .stack_effect = "quotation -- set", .func = nativeMakeSet },
+    .{ .name = "make-mutable-map", .stack_effect = "quotation -- mmap", .func = nativeMakeMutableMap },
+    .{ .name = "@set!", .stack_effect = "mmap key value -- mmap", .func = nativeAtSetMut },
+    .{ .name = "@remove!", .stack_effect = "mmap key -- mmap", .func = nativeAtRemoveMut },
     .{ .name = "1array", .stack_effect = "elem -- array", .func = native1Array },
     .{ .name = "curry", .stack_effect = "x quot -- quot'", .func = nativeCurry },
     .{ .name = "compose", .stack_effect = "quot1 quot2 -- quot'", .func = nativeCompose },
@@ -405,6 +409,7 @@ fn nativeEq(ctx: *Context) anyerror!void {
         .array => a.eql(b),
         .hash => a.eql(b),
         .vector => a.eql(b),
+        .mutable_map => a.eql(b),
         else => false,
     };
     try ctx.stack.push(.{ .boolean = result });
@@ -840,6 +845,96 @@ fn nativeMakeSet(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .set = set });
 }
 
+/// make-mutable-map ( quotation -- mmap ) - Create a mutable map from key: value pairs
+/// Example: [ name: "Alice" age: 30 ] make-mutable-map
+fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    const instrs = quot.instructions;
+    const alloc = ctx.quotationAllocator();
+
+    // Create a new mutable map
+    const mmap = alloc.create(MutableMap) catch return error.OutOfMemory;
+    mmap.* = MutableMap{};
+
+    // Parse instructions as key: value pairs (same as make-hash)
+    var i: usize = 0;
+    while (i < instrs.len) {
+        // Expect a symbol key
+        const key_instr = instrs[i];
+        const key = switch (key_instr.op) {
+            .push_literal => |v| switch (v) {
+                .symbol => |s| s,
+                else => return error.InvalidHashSyntax,
+            },
+            .call_word => return error.InvalidHashSyntax,
+        };
+        i += 1;
+
+        if (i >= instrs.len) return error.InvalidHashSyntax;
+
+        // Get the value - could be a literal or need execution
+        const val_instr = instrs[i];
+        const val = switch (val_instr.op) {
+            .push_literal => |v| v,
+            .call_word => blk: {
+                try ctx.executeQuotation(.{ .instructions = instrs[i .. i + 1] });
+                break :blk ctx.stack.pop() catch return error.InvalidHashSyntax;
+            },
+        };
+        i += 1;
+
+        // Copy key to arena for persistence
+        const key_copy = alloc.dupe(u8, key) catch return error.OutOfMemory;
+        mmap.put(alloc, key_copy, val) catch return error.OutOfMemory;
+    }
+
+    try ctx.stack.push(.{ .mutable_map = mmap });
+}
+
+/// @set! ( mmap key value -- mmap ) - Set value in mutable map, mutate in place
+fn nativeAtSetMut(ctx: *Context) anyerror!void {
+    const new_value = try ctx.stack.pop();
+    const key = try ctx.stack.pop();
+    const obj = try ctx.stack.pop();
+
+    const key_str = try extractKeyString(key);
+
+    switch (obj) {
+        .mutable_map => |m| {
+            const alloc = ctx.quotationAllocator();
+
+            // Check if key already exists
+            if (m.get(key_str) != null) {
+                // Update existing key in place (use the same key pointer)
+                m.putAssumeCapacity(key_str, new_value);
+            } else {
+                // New key - need to copy it
+                const key_copy = alloc.dupe(u8, key_str) catch return error.OutOfMemory;
+                m.put(alloc, key_copy, new_value) catch return error.OutOfMemory;
+            }
+
+            try ctx.stack.push(.{ .mutable_map = m });
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// @remove! ( mmap key -- mmap ) - Remove key from mutable map, mutate in place
+fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
+    const key = try ctx.stack.pop();
+    const obj = try ctx.stack.pop();
+
+    const key_str = try extractKeyString(key);
+
+    switch (obj) {
+        .mutable_map => |m| {
+            _ = m.remove(key_str);
+            try ctx.stack.push(.{ .mutable_map = m });
+        },
+        else => return error.TypeError,
+    }
+}
+
 /// @in? ( set value -- ? ) - Check if value is in the set
 fn nativeAtIn(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
@@ -1149,6 +1244,7 @@ fn nativeLen(ctx: *Context) anyerror!void {
         .vector => |v| @intCast(v.items.len),
         .byte_array => |b| @intCast(b.items.len),
         .set => |s| @intCast(s.count()),
+        .mutable_map => |m| @intCast(m.count()),
         else => return error.TypeError,
     };
     try ctx.stack.push(.{ .integer = len });
@@ -1296,6 +1392,13 @@ fn nativeAtGet(ctx: *Context) anyerror!void {
                 return error.KeyNotFound;
             }
         },
+        .mutable_map => |m| {
+            if (m.get(key_str)) |val| {
+                try ctx.stack.push(val);
+            } else {
+                return error.KeyNotFound;
+            }
+        },
         .error_value => |err| {
             const val = try getErrorField(ctx, err, key_str);
             try ctx.stack.push(val);
@@ -1304,7 +1407,7 @@ fn nativeAtGet(ctx: *Context) anyerror!void {
     }
 }
 
-/// @has? ( assoc key -- ? ) - Check if key/field exists (polymorphic on hash, error)
+/// @has? ( assoc key -- ? ) - Check if key/field exists (polymorphic on hash, mmap, error)
 fn nativeAtHas(ctx: *Context) anyerror!void {
     const key = try ctx.stack.pop();
     const obj = try ctx.stack.pop();
@@ -1314,6 +1417,10 @@ fn nativeAtHas(ctx: *Context) anyerror!void {
     switch (obj) {
         .hash => |h| {
             const exists = h.get(key_str) != null;
+            try ctx.stack.push(.{ .boolean = exists });
+        },
+        .mutable_map => |m| {
+            const exists = m.get(key_str) != null;
             try ctx.stack.push(.{ .boolean = exists });
         },
         .error_value => {
@@ -1380,6 +1487,17 @@ fn nativeAtKeys(ctx: *Context) anyerror!void {
             }
             try ctx.stack.push(.{ .array = keys });
         },
+        .mutable_map => |m| {
+            const alloc = ctx.quotationAllocator();
+            const keys = alloc.alloc(Value, m.count()) catch return error.OutOfMemory;
+            var iter = m.iterator();
+            var i: usize = 0;
+            while (iter.next()) |entry| {
+                keys[i] = .{ .symbol = entry.key_ptr.* };
+                i += 1;
+            }
+            try ctx.stack.push(.{ .array = keys });
+        },
         .error_value => {
             // Error objects have fixed fields
             const alloc = ctx.quotationAllocator();
@@ -1393,7 +1511,7 @@ fn nativeAtKeys(ctx: *Context) anyerror!void {
     }
 }
 
-/// @values ( assoc -- array ) - Get all values (polymorphic on hash, error)
+/// @values ( assoc -- array ) - Get all values (polymorphic on hash, mmap, error)
 fn nativeAtValues(ctx: *Context) anyerror!void {
     const obj = try ctx.stack.pop();
 
@@ -1402,6 +1520,17 @@ fn nativeAtValues(ctx: *Context) anyerror!void {
             const alloc = ctx.quotationAllocator();
             const values = alloc.alloc(Value, h.count()) catch return error.OutOfMemory;
             var iter = h.iterator();
+            var i: usize = 0;
+            while (iter.next()) |entry| {
+                values[i] = entry.value_ptr.*;
+                i += 1;
+            }
+            try ctx.stack.push(.{ .array = values });
+        },
+        .mutable_map => |m| {
+            const alloc = ctx.quotationAllocator();
+            const values = alloc.alloc(Value, m.count()) catch return error.OutOfMemory;
+            var iter = m.iterator();
             var i: usize = 0;
             while (iter.next()) |entry| {
                 values[i] = entry.value_ptr.*;
@@ -2083,7 +2212,7 @@ fn popInteger(ctx: *Context) !i64 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .integer => |i| i,
-        .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set => error.TypeError,
+        .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2093,7 +2222,7 @@ fn popBoolean(ctx: *Context) !bool {
     return switch (val) {
         .boolean => |b| b,
         .integer => |i| i != 0,
-        .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set => error.TypeError,
+        .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2102,7 +2231,7 @@ fn popQuotation(ctx: *Context) !Quotation {
     const val = try ctx.stack.pop();
     return switch (val) {
         .quotation => |q| q,
-        .integer, .boolean, .string, .symbol, .array, .hash, .vector, .byte_array, .set => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .hash, .vector, .byte_array, .set, .mutable_map => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2111,7 +2240,7 @@ fn popSymbol(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .symbol => |s| s,
-        .integer, .boolean, .string, .array, .quotation, .hash, .vector, .byte_array, .set => error.TypeError,
+        .integer, .boolean, .string, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2120,7 +2249,7 @@ fn popString(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .string => |s| s,
-        .integer, .boolean, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set => error.TypeError,
+        .integer, .boolean, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2129,7 +2258,7 @@ fn popStackEffect(ctx: *Context) !StackEffect {
     const val = try ctx.stack.pop();
     return switch (val) {
         .stack_effect => |se| se,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map => error.TypeError,
         .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2138,7 +2267,7 @@ fn popVector(ctx: *Context) !*Vector {
     const val = try ctx.stack.pop();
     return switch (val) {
         .vector => |v| v,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .byte_array, .set => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .byte_array, .set, .mutable_map => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2147,7 +2276,7 @@ fn popByteArray(ctx: *Context) !*ByteArray {
     const val = try ctx.stack.pop();
     return switch (val) {
         .byte_array => |b| b,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .set => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .set, .mutable_map => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }

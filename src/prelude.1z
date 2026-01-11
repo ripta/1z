@@ -16,6 +16,9 @@ B{: parse-time [ "}" parse-until make-byte-array ] ;
 \ Set literal syntax
 S{: parse-time [ "}" parse-until make-set ] ;
 
+\ Mutable map literal syntax
+M{: parse-time [ "}" parse-until make-mutable-map ] ;
+
 \ Control flow
 when: ( ? quot -- ) [ [ ] if ] ;
 unless: ( ? quot -- ) [ [ ] swap if ] ;

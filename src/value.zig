@@ -40,6 +40,9 @@ pub const ValueContext = struct {
 /// Uses hash-based storage for O(1) average-case membership testing.
 pub const Set = std.ArrayHashMapUnmanaged(Value, void, ValueContext, true);
 
+/// MutableMap type for M{ } literals - mutable key-value store.
+pub const MutableMap = std.StringHashMapUnmanaged(Value);
+
 /// StackFrame represents a single frame in a stack trace.
 pub const StackFrame = struct {
     word_name: []const u8,
@@ -124,6 +127,7 @@ pub const Value = union(enum) {
     vector: *Vector,
     byte_array: *ByteArray,
     set: *Set,
+    mutable_map: *MutableMap,
     stack_effect: StackEffect,
     parse_time_marker: void, // Marker for parse-time word definitions
     error_value: ErrorObject,
@@ -187,6 +191,16 @@ pub const Value = union(enum) {
                 try writer.writeAll("S{ ");
                 for (s.keys()) |key| {
                     try key.write(writer);
+                    try writer.writeAll(" ");
+                }
+                try writer.writeAll("}");
+            },
+            .mutable_map => |m| {
+                try writer.writeAll("M{ ");
+                var iter = m.iterator();
+                while (iter.next()) |entry| {
+                    try writer.print("{s}: ", .{entry.key_ptr.*});
+                    try entry.value_ptr.write(writer);
                     try writer.writeAll(" ");
                 }
                 try writer.writeAll("}");
@@ -256,6 +270,19 @@ pub const Value = union(enum) {
                 }
                 return true;
             },
+            .mutable_map => |a| {
+                const b = other.mutable_map;
+                if (a.count() != b.count()) return false;
+                var iter = a.iterator();
+                while (iter.next()) |entry| {
+                    if (b.get(entry.key_ptr.*)) |bval| {
+                        if (!entry.value_ptr.eql(bval)) return false;
+                    } else {
+                        return false;
+                    }
+                }
+                return true;
+            },
             .stack_effect => |a| a.eql(other.stack_effect),
             .parse_time_marker => true, // All parse_time_markers are equal
             .error_value => |a| a.eql(other.error_value),
@@ -320,6 +347,19 @@ pub const Value = union(enum) {
                 var combined: u64 = 0;
                 for (s.keys()) |key| {
                     combined ^= key.hashValue();
+                }
+                hasher.update(std.mem.asBytes(&combined));
+            },
+            .mutable_map => |m| {
+                // Order-independent hash using XOR (same as immutable hash)
+                var combined: u64 = 0;
+                var iter = m.iterator();
+                while (iter.next()) |entry| {
+                    var pair_hasher = Hasher.init(0);
+                    pair_hasher.update(entry.key_ptr.*);
+                    const val_hash = entry.value_ptr.hashValue();
+                    pair_hasher.update(std.mem.asBytes(&val_hash));
+                    combined ^= pair_hasher.final();
                 }
                 hasher.update(std.mem.asBytes(&combined));
             },
