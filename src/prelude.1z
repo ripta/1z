@@ -13,6 +13,19 @@ unless: ( ? quot -- ) [ [ ] swap if ] ;
 
 \ Error-handling
 ignore-errors: ( quot -- ) [ [ drop ] recover ] ;
+error-type?: ( error type -- error ? ) [ over error-type: @get = ] ;
+
+\ Error type constants
+EStackUnderflow: [ "StackUnderflow" ] ;
+ETypeError: [ "TypeError" ] ;
+EDivisionByZero: [ "DivisionByZero" ] ;
+EIntegerOverflow: [ "IntegerOverflow" ] ;
+EStackEffectMismatch: [ "StackEffectMismatch" ] ;
+EUnknownWord: [ "UnknownWord" ] ;
+EFileNotFound: [ "FileNotFound" ] ;
+EFileReadError: [ "FileReadError" ] ;
+ERethrowError: [ "RethrowError" ] ;
+EKeyNotFound: [ "KeyNotFound" ] ;
 
 \ Stack-shuffling
 nip: ( a b -- b ) [ swap drop ] ;
