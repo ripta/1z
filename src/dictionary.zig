@@ -74,3 +74,32 @@ test "dictionary returns null for unknown word" {
 
     try std.testing.expectEqual(null, dict.get("nonexistent"));
 }
+
+test "parse_time flag defaults to false" {
+    const testFn: NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    // Create word without specifying parse_time
+    const word: WordDefinition = .{
+        .name = "regular-word",
+        .action = .{ .native = testFn },
+    };
+
+    try std.testing.expectEqual(false, word.parse_time);
+}
+
+test "parse_time flag can be set to true" {
+    const testFn: NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    // Create parse-time word
+    const word: WordDefinition = .{
+        .name = "parse-time-word",
+        .parse_time = true,
+        .action = .{ .native = testFn },
+    };
+
+    try std.testing.expectEqual(true, word.parse_time);
+}

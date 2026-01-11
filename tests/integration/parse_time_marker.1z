@@ -1,0 +1,16 @@
+\ Test that parse-time word pushes a marker
+\ and that ; can define words with both marker and stack effect
+
+\ Define a regular word (not parse-time)
+regular-word: [ 42 ] ;
+regular-word .
+
+\ Define a parse-time word
+\ TODO(ripta): This test just verifies the syntax works, since nothing
+\              observable happens at runtime
+my-macro: parse-time [ 100 ] ;
+my-macro .
+
+\ Define a parse-time word with stack effect
+another-macro: parse-time ( -- n ) [ 200 ] ;
+another-macro .

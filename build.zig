@@ -116,7 +116,7 @@ pub fn build(b: *std.Build) void {
             test_run.addFileInput(b.path(stdout_golden_path));
             test_run.expectStdOutEqual(golden_content);
         } else |_| {
-            // No golden file - just check exit code (already done above)
+            test_run.expectStdOutEqual("");
         }
         integration_test_step.dependOn(&test_run.step);
 
@@ -125,6 +125,13 @@ pub fn build(b: *std.Build) void {
         update_run.addArg("--show-stack");
         update_run.addFileArg(b.path(file_path));
         update_files.addCopyFileToSource(update_run.captureStdOut(), stdout_golden_path);
+
+        // For error tests, allow exit code 1 and capture stderr
+        if (has_stderr_golden) {
+            update_run.expectExitCode(1);
+            const stderr_golden_path = b.fmt("tests/integration/{s}.stderr.golden", .{name_without_ext});
+            update_files.addCopyFileToSource(update_run.captureStdErr(), stderr_golden_path);
+        }
     }
 
     update_golden_step.dependOn(&update_files.step);

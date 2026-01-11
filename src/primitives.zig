@@ -8,6 +8,8 @@ const NativeFn = @import("dictionary.zig").NativeFn;
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
+const Tokenizer = @import("tokenizer.zig").Tokenizer;
+const parser = @import("parser.zig");
 
 pub const InterpreterError = error{
     StackUnderflow,
@@ -15,6 +17,7 @@ pub const InterpreterError = error{
     DivisionByZero,
     FileNotFound,
     FileReadError,
+    NoTokenizerAvailable,
 };
 
 /// Helper to create a stack effect from a raw string at runtime.
@@ -105,6 +108,7 @@ const Primitive = struct {
     name: []const u8,
     stack_effect: ?[]const u8 = null,
     func: NativeFn,
+    parse_time: bool = false,
 };
 
 const Instruction = @import("value.zig").Instruction;
@@ -130,6 +134,8 @@ const primitives = [_]Primitive{
     .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ) --", .func = nativeRecover },
     .{ .name = "ignore-errors", .stack_effect = "quot --", .func = nativeIgnoreErrors },
     .{ .name = "load", .stack_effect = "filename --", .func = nativeLoad },
+    .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTime },
+    .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .func = nativeParseUntil },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -141,6 +147,7 @@ pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
 
         try dict.put(p.name, WordDefinition{
             .name = p.name,
+            .parse_time = p.parse_time,
             .stack_effect = effect,
             .action = .{ .native = p.func },
         });
@@ -182,19 +189,33 @@ fn nativeCall(ctx: *Context) anyerror!void {
     try ctx.executeQuotation(instrs);
 }
 
-/// ; ( name: quot -- ) or ( name: ( effect ) quot -- ) - Define a new word
+/// ; ( name: quot -- ) or ( name: ( effect ) quot -- ) or ( name: parse-time quot -- ) - Define a new word
 fn nativeSemicolon(ctx: *Context) anyerror!void {
     const instrs = try popQuotation(ctx);
 
-    // Check if there's a stack effect between symbol and quotation
+    // Check for optional metadata (stack effect and/or parse-time marker)
+    // Stack could be: symbol quot
+    //            or: symbol stack-effect quot
+    //            or: symbol parse-time quot
+    //            or: symbol parse-time stack-effect quot
     var stack_effect_val: ?StackEffect = null;
-    const next_val = try ctx.stack.peek();
-    switch (next_val) {
-        .stack_effect => |se| {
-            _ = try ctx.stack.pop();
-            stack_effect_val = se;
-        },
-        else => {},
+    var is_parse_time = false;
+
+    // Loop to collect metadata until we find the symbol
+    while (true) {
+        const next_val = try ctx.stack.peek();
+        switch (next_val) {
+            .stack_effect => |se| {
+                _ = try ctx.stack.pop();
+                stack_effect_val = se;
+            },
+            .parse_time_marker => {
+                _ = try ctx.stack.pop();
+                is_parse_time = true;
+            },
+            .symbol => break, // Found the name, stop
+            else => return error.TypeError, // Invalid definition syntax
+        }
     }
 
     const name = try popSymbol(ctx);
@@ -203,6 +224,7 @@ fn nativeSemicolon(ctx: *Context) anyerror!void {
 
     try ctx.dictionary.put(name_copy, WordDefinition{
         .name = name_copy,
+        .parse_time = is_parse_time,
         .stack_effect = stack_effect_val,
         .action = .{ .compound = instrs },
     });
@@ -361,7 +383,7 @@ fn nativeLoad(ctx: *Context) anyerror!void {
         const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
             error.EndOfStream => {
                 // Try to execute any remaining buffered content
-                switch (processor.flush(ctx.quotationAllocator())) {
+                switch (processor.flush(ctx.quotationAllocator(), ctx)) {
                     .needs_more_input => {},
                     .parse_error => |e| return e,
                     .complete => |instrs| {
@@ -375,7 +397,7 @@ fn nativeLoad(ctx: *Context) anyerror!void {
             else => return error.FileReadError,
         };
 
-        switch (processor.feedLine(ctx.quotationAllocator(), line)) {
+        switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
             .needs_more_input => continue,
             .parse_error => |err| return err,
             .complete => |instrs| {
@@ -388,6 +410,47 @@ fn nativeLoad(ctx: *Context) anyerror!void {
     }
 }
 
+/// parse-time ( -- marker ) - Push parse-time marker onto stack
+/// When `;` sees this marker, it will set the word's parse_time flag
+fn nativeParseTime(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .parse_time_marker = {} });
+}
+
+/// parse-until ( delimiter -- quotation ) - Read tokens until delimiter, return as quotation
+/// This is a parse-time primitive that reads from the active tokenizer.
+fn nativeParseUntil(ctx: *Context) anyerror!void {
+    const delimiter = try popString(ctx);
+
+    // Get the tokenizer from parse-time context
+    const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
+
+    // Collect tokens until we hit the delimiter
+    var tokens: std.ArrayListUnmanaged([]const u8) = .{};
+    defer tokens.deinit(ctx.allocator);
+
+    while (tokenizer.next()) |tok| {
+        // Skip comments
+        if (tok.kind == .comment or tok.kind == .newline) continue;
+
+        if (std.mem.eql(u8, tok.text, delimiter)) {
+            break;
+        }
+        tokens.append(ctx.allocator, tok.text) catch return error.OutOfMemory;
+    }
+
+    // Join tokens into a single string and parse as a quotation body
+    const joined = std.mem.join(ctx.quotationAllocator(), " ", tokens.items) catch return error.OutOfMemory;
+
+    // Parse the tokens as a quotation body (without enclosing brackets)
+    // We add a closing bracket so parseQuotation can work correctly
+    const with_bracket = std.fmt.allocPrint(ctx.quotationAllocator(), "{s} ]", .{joined}) catch return error.OutOfMemory;
+
+    var inner_tokenizer = Tokenizer.init(with_bracket);
+    const instrs = parser.parseQuotation(ctx.quotationAllocator(), &inner_tokenizer, ctx) catch return error.OutOfMemory;
+
+    try ctx.stack.push(.{ .quotation = instrs });
+}
+
 // =============================================================================
 // Helper functions
 // =============================================================================
@@ -396,7 +459,7 @@ fn popInteger(ctx: *Context) !i64 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .integer => |i| i,
-        .boolean, .string, .symbol, .array, .quotation, .stack_effect, .error_value => error.TypeError,
+        .boolean, .string, .symbol, .array, .quotation, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 
@@ -405,7 +468,7 @@ fn popBoolean(ctx: *Context) !bool {
     return switch (val) {
         .boolean => |b| b,
         .integer => |i| i != 0,
-        .string, .symbol, .array, .quotation, .stack_effect, .error_value => error.TypeError,
+        .string, .symbol, .array, .quotation, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 
@@ -413,7 +476,7 @@ fn popQuotation(ctx: *Context) ![]const Instruction {
     const val = try ctx.stack.pop();
     return switch (val) {
         .quotation => |q| q,
-        .integer, .boolean, .string, .symbol, .array, .stack_effect, .error_value => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 
@@ -421,7 +484,7 @@ fn popSymbol(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .symbol => |s| s,
-        .integer, .boolean, .string, .array, .quotation, .stack_effect, .error_value => error.TypeError,
+        .integer, .boolean, .string, .array, .quotation, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 
@@ -429,7 +492,7 @@ fn popString(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .string => |s| s,
-        .integer, .boolean, .symbol, .array, .quotation, .stack_effect, .error_value => error.TypeError,
+        .integer, .boolean, .symbol, .array, .quotation, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 
@@ -437,7 +500,7 @@ fn popStackEffect(ctx: *Context) !StackEffect {
     const val = try ctx.stack.pop();
     return switch (val) {
         .stack_effect => |se| se,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .error_value => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 
@@ -739,4 +802,145 @@ test "ignore-errors allows success" {
 
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     try std.testing.expectEqual(@as(i64, 42), (try ctx.stack.pop()).integer);
+}
+
+test "parse-time pushes marker onto stack" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try nativeParseTime(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    const val = try ctx.stack.pop();
+    try std.testing.expectEqual(Value.parse_time_marker, std.meta.activeTag(val));
+}
+
+test "semicolon defines parse-time word when marker is present" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 },
+    };
+    // Stack: symbol, parse-time marker, quotation
+    try ctx.stack.push(.{ .symbol = "my-macro" });
+    try ctx.stack.push(.{ .parse_time_marker = {} });
+    try ctx.stack.push(.{ .quotation = &instrs });
+    try nativeSemicolon(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+    const word = ctx.dictionary.get("my-macro");
+    try std.testing.expect(word != null);
+    try std.testing.expectEqual(true, word.?.parse_time);
+}
+
+test "semicolon defines non-parse-time word by default" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 },
+    };
+    // Stack: symbol, quotation (no parse-time marker)
+    try ctx.stack.push(.{ .symbol = "regular-word" });
+    try ctx.stack.push(.{ .quotation = &instrs });
+    try nativeSemicolon(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+    const word = ctx.dictionary.get("regular-word");
+    try std.testing.expect(word != null);
+    try std.testing.expectEqual(false, word.?.parse_time);
+}
+
+test "semicolon defines parse-time word with stack effect" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 },
+    };
+    // Stack: symbol, parse-time marker, stack effect, quotation
+    try ctx.stack.push(.{ .symbol = "my-macro" });
+    try ctx.stack.push(.{ .parse_time_marker = {} });
+    try ctx.stack.push(.{ .stack_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{},
+        .outputs = &[_]StackEffectParam{.{ .name = "x" }},
+    } });
+    try ctx.stack.push(.{ .quotation = &instrs });
+    try nativeSemicolon(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+    const word = ctx.dictionary.get("my-macro");
+    try std.testing.expect(word != null);
+    try std.testing.expectEqual(true, word.?.parse_time);
+    try std.testing.expect(word.?.stack_effect != null);
+    try std.testing.expectEqual(@as(usize, 0), word.?.stack_effect.?.inputs.len);
+    try std.testing.expectEqual(@as(usize, 1), word.?.stack_effect.?.outputs.len);
+}
+
+test "parse-until reads tokens until delimiter" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Set up a tokenizer as if we're in parse-time context
+    var tokenizer = Tokenizer.init("1 2 + }");
+    ctx.parse_tokenizer = &tokenizer;
+
+    // Push the delimiter
+    try ctx.stack.push(.{ .string = "}" });
+
+    // Call parse-until
+    try nativeParseUntil(&ctx);
+
+    // Should have a quotation on the stack
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    const val = try ctx.stack.pop();
+    try std.testing.expectEqual(Value.quotation, std.meta.activeTag(val));
+
+    // The quotation should contain: push 1, push 2, call +
+    const quot = val.quotation;
+    try std.testing.expectEqual(@as(usize, 3), quot.len);
+    try std.testing.expectEqual(@as(i64, 1), quot[0].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 2), quot[1].op.push_literal.integer);
+    try std.testing.expectEqualStrings("+", quot[2].op.call_word);
+}
+
+test "parse-until with empty content" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Set up a tokenizer with just the delimiter
+    var tokenizer = Tokenizer.init("}");
+    ctx.parse_tokenizer = &tokenizer;
+
+    // Push the delimiter
+    try ctx.stack.push(.{ .string = "}" });
+
+    // Call parse-until
+    try nativeParseUntil(&ctx);
+
+    // Should have an empty quotation on the stack
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    const val = try ctx.stack.pop();
+    const quot = val.quotation;
+    try std.testing.expectEqual(@as(usize, 0), quot.len);
+}
+
+test "parse-until fails without tokenizer" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // No tokenizer set (parse_tokenizer is null)
+    try ctx.stack.push(.{ .string = "}" });
+
+    // Should fail with NoTokenizerAvailable
+    const result = nativeParseUntil(&ctx);
+    try std.testing.expectError(error.NoTokenizerAvailable, result);
 }

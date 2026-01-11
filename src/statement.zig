@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const Instruction = @import("value.zig").Instruction;
 const parser = @import("parser.zig");
+const Context = @import("context.zig").Context;
 
 /// StatementProcessor handles accumulating multi-line input and parsing.
 /// Used by both REPL and batch modes to share the core logic.
@@ -27,7 +28,8 @@ pub const StatementProcessor = struct {
     }
 
     // Feed a line of input. Returns the result of attempting to parse.
-    pub fn feedLine(self: *StatementProcessor, allocator: Allocator, line: []const u8) Result {
+    // If ctx is provided, parse-time words will be executed during parsing.
+    pub fn feedLine(self: *StatementProcessor, allocator: Allocator, line: []const u8, ctx: ?*Context) Result {
         const trimmed = std.mem.trim(u8, line, " \t\r\n");
         if (trimmed.len == 0) {
             return if (self.stmt_len > 0) .needs_more_input else .{ .complete = &.{} };
@@ -46,7 +48,7 @@ pub const StatementProcessor = struct {
 
         // Attempt to parse
         var tokenizer = Tokenizer.init(self.stmt_buf[0..self.stmt_len]);
-        const instrs = parser.parseTopLevel(allocator, &tokenizer) catch |err| {
+        const instrs = parser.parseTopLevel(allocator, &tokenizer, ctx) catch |err| {
             if (parser.isIncompleteError(err)) {
                 return .needs_more_input;
             }
@@ -68,13 +70,14 @@ pub const StatementProcessor = struct {
     }
 
     // Try to parse any remaining buffered content (for EOF handling).
-    pub fn flush(self: *StatementProcessor, allocator: Allocator) Result {
+    // If ctx is provided, parse-time words will be executed during parsing.
+    pub fn flush(self: *StatementProcessor, allocator: Allocator, ctx: ?*Context) Result {
         if (self.stmt_len == 0) {
             return .{ .complete = &.{} };
         }
 
         var tokenizer = Tokenizer.init(self.stmt_buf[0..self.stmt_len]);
-        const instrs = parser.parseTopLevel(allocator, &tokenizer) catch |err| {
+        const instrs = parser.parseTopLevel(allocator, &tokenizer, ctx) catch |err| {
             return .{ .parse_error = err };
         };
 
@@ -92,7 +95,7 @@ test "StatementProcessor complete input" {
 
     var processor: StatementProcessor = .{};
 
-    const result = processor.feedLine(arena.allocator(), "1 2 +");
+    const result = processor.feedLine(arena.allocator(), "1 2 +", null);
     switch (result) {
         .complete => |instrs| {
             try std.testing.expectEqual(@as(usize, 3), instrs.len);
@@ -108,7 +111,7 @@ test "StatementProcessor multiline input" {
     var processor: StatementProcessor = .{};
 
     // First line opens a quotation
-    switch (processor.feedLine(arena.allocator(), "[")) {
+    switch (processor.feedLine(arena.allocator(), "[", null)) {
         .needs_more_input => {},
         else => return error.UnexpectedResult,
     }
@@ -116,7 +119,7 @@ test "StatementProcessor multiline input" {
     try std.testing.expect(processor.isAccumulating());
 
     // Second line closes it
-    switch (processor.feedLine(arena.allocator(), "1 2 + ]")) {
+    switch (processor.feedLine(arena.allocator(), "1 2 + ]", null)) {
         .complete => |instrs| {
             try std.testing.expectEqual(@as(usize, 1), instrs.len);
         },
@@ -131,7 +134,7 @@ test "StatementProcessor empty line" {
     var processor: StatementProcessor = .{};
 
     // Empty line with no accumulation returns empty complete
-    switch (processor.feedLine(arena.allocator(), "   ")) {
+    switch (processor.feedLine(arena.allocator(), "   ", null)) {
         .complete => |instrs| {
             try std.testing.expectEqual(@as(usize, 0), instrs.len);
         },
@@ -146,10 +149,10 @@ test "StatementProcessor flush" {
     var processor: StatementProcessor = .{};
 
     // Feed incomplete input
-    _ = processor.feedLine(arena.allocator(), "[");
+    _ = processor.feedLine(arena.allocator(), "[", null);
 
     // Flush should return parse error for incomplete input
-    switch (processor.flush(arena.allocator())) {
+    switch (processor.flush(arena.allocator(), null)) {
         .parse_error => {},
         else => return error.UnexpectedResult,
     }
