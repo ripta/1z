@@ -1547,68 +1547,158 @@ fn nativeAppend(ctx: *Context) anyerror!void {
 
     switch (seq1) {
         .array => |arr1| {
-            // Get seq2's items
-            const items2 = getSequenceItems(seq2) orelse return error.TypeError;
+            const items2 = try sequenceToValues(seq2, alloc);
             const result = alloc.alloc(Value, arr1.len + items2.len) catch return error.OutOfMemory;
             @memcpy(result[0..arr1.len], arr1);
             @memcpy(result[arr1.len..], items2);
             try ctx.stack.push(.{ .array = result });
         },
         .vector => |vec1| {
-            // Create new vector with seq1's items, then append seq2's items
+            const items2 = try sequenceToValues(seq2, alloc);
             const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
             new_vec.* = Vector{};
-            // Copy vec1 items
+            new_vec.ensureTotalCapacity(alloc, vec1.items.len + items2.len) catch return error.OutOfMemory;
             for (vec1.items) |item| {
-                new_vec.append(alloc, item) catch return error.OutOfMemory;
+                new_vec.appendAssumeCapacity(item);
             }
-            // Append seq2 items
-            const items2 = getSequenceItems(seq2) orelse return error.TypeError;
             for (items2) |item| {
-                new_vec.append(alloc, item) catch return error.OutOfMemory;
+                new_vec.appendAssumeCapacity(item);
             }
             try ctx.stack.push(.{ .vector = new_vec });
         },
         .string => |s1| {
-            // String concatenation - seq2 must also be string
-            switch (seq2) {
-                .string => |s2| {
-                    const result = alloc.alloc(u8, s1.len + s2.len) catch return error.OutOfMemory;
-                    @memcpy(result[0..s1.len], s1);
-                    @memcpy(result[s1.len..], s2);
-                    try ctx.stack.push(.{ .string = result });
-                },
-                else => return error.TypeError,
+            // For strings, convert seq2 elements to strings and concatenate
+            // Accept both strings (codepoints) and integers 0-255 (single bytes)
+            const items2 = try sequenceToValues(seq2, alloc);
+            var total_len: usize = s1.len;
+            for (items2) |item| {
+                switch (item) {
+                    .string => |s| total_len += s.len,
+                    .integer => |i| {
+                        if (i < 0 or i > 255) return error.IntegerOverflow;
+                        total_len += 1;
+                    },
+                    else => return error.TypeError,
+                }
             }
+            const result = alloc.alloc(u8, total_len) catch return error.OutOfMemory;
+            @memcpy(result[0..s1.len], s1);
+            var pos: usize = s1.len;
+            for (items2) |item| {
+                switch (item) {
+                    .string => |s| {
+                        @memcpy(result[pos..][0..s.len], s);
+                        pos += s.len;
+                    },
+                    .integer => |i| {
+                        result[pos] = @intCast(i);
+                        pos += 1;
+                    },
+                    else => unreachable,
+                }
+            }
+            try ctx.stack.push(.{ .string = result });
         },
         .byte_array => |b1| {
-            // Byte array concatenation - seq2 must also be byte_array
-            switch (seq2) {
-                .byte_array => |b2| {
-                    const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-                    result_ba.* = ByteArray{};
-                    result_ba.ensureTotalCapacity(alloc, b1.items.len + b2.items.len) catch return error.OutOfMemory;
-                    for (b1.items) |byte| {
-                        result_ba.appendAssumeCapacity(byte);
-                    }
-                    for (b2.items) |byte| {
-                        result_ba.appendAssumeCapacity(byte);
-                    }
-                    try ctx.stack.push(.{ .byte_array = result_ba });
-                },
-                else => return error.TypeError,
+            // For byte arrays, accept integers 0-255 and strings (as UTF-8 bytes)
+            const items2 = try sequenceToValues(seq2, alloc);
+
+            var extra_len: usize = 0;
+            for (items2) |item| {
+                switch (item) {
+                    .integer => |i| {
+                        if (i < 0 or i > 255) return error.IntegerOverflow;
+                        extra_len += 1;
+                    },
+                    .string => |s| extra_len += s.len,
+                    else => return error.TypeError,
+                }
             }
+            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+            result_ba.* = ByteArray{};
+            result_ba.ensureTotalCapacity(alloc, b1.items.len + extra_len) catch return error.OutOfMemory;
+            for (b1.items) |byte| {
+                result_ba.appendAssumeCapacity(byte);
+            }
+            for (items2) |item| {
+                switch (item) {
+                    .integer => |i| {
+                        result_ba.appendAssumeCapacity(@intCast(i));
+                    },
+                    .string => |s| {
+                        for (s) |byte| {
+                            result_ba.appendAssumeCapacity(byte);
+                        }
+                    },
+                    else => unreachable,
+                }
+            }
+            try ctx.stack.push(.{ .byte_array = result_ba });
         },
         else => return error.TypeError,
     }
 }
 
-/// Helper to get items slice from any sequence type
+/// Helper to get items slice from array or vector (no allocation needed)
 fn getSequenceItems(seq: Value) ?[]const Value {
     return switch (seq) {
         .array => |arr| arr,
         .vector => |vec| vec.items,
         else => null,
+    };
+}
+
+/// Helper to convert any sequence to an allocated slice of Values.
+/// - For strings: each codepoint becomes a Value.string
+/// - For byte arrays: each byte becomes a Value.integer
+/// - For arrays/vectors: returns a copy of the items
+fn sequenceToValues(seq: Value, alloc: Allocator) ![]const Value {
+    switch (seq) {
+        .array => |arr| {
+            const result = alloc.alloc(Value, arr.len) catch return error.OutOfMemory;
+            @memcpy(result, arr);
+            return result;
+        },
+        .vector => |vec| {
+            const result = alloc.alloc(Value, vec.items.len) catch return error.OutOfMemory;
+            @memcpy(result, vec.items);
+            return result;
+        },
+        .string => |s| {
+            const count = utf8CodepointCount(s);
+            const result = alloc.alloc(Value, count) catch return error.OutOfMemory;
+            const utf8 = std.unicode.Utf8View.initUnchecked(s);
+
+            var iter = utf8.iterator();
+            var i: usize = 0;
+            while (iter.nextCodepointSlice()) |cp_slice| {
+                const char_str = alloc.dupe(u8, cp_slice) catch return error.OutOfMemory;
+                result[i] = .{ .string = char_str };
+                i += 1;
+            }
+
+            return result;
+        },
+        .byte_array => |b| {
+            const result = alloc.alloc(Value, b.items.len) catch return error.OutOfMemory;
+            for (b.items, 0..) |byte, i| {
+                result[i] = .{ .integer = byte };
+            }
+
+            return result;
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// Helper to get the length of any sequence
+fn sequenceLength(seq: Value) !usize {
+    return switch (seq) {
+        .array => |arr| arr.len,
+        .vector => |vec| vec.items.len,
+        .string => |s| utf8CodepointCount(s),
+        .byte_array => |b| b.items.len,
+        else => error.TypeError,
     };
 }
 
@@ -1618,26 +1708,9 @@ fn nativeAppendMut(ctx: *Context) anyerror!void {
     const vec = try popVector(ctx);
     const alloc = ctx.quotationAllocator();
 
-    switch (seq) {
-        .array => |arr| {
-            for (arr) |elem| {
-                vec.append(alloc, elem) catch return error.OutOfMemory;
-            }
-        },
-        .vector => |v| {
-            for (v.items) |elem| {
-                vec.append(alloc, elem) catch return error.OutOfMemory;
-            }
-        },
-        .string => |s| {
-            const utf8 = std.unicode.Utf8View.initUnchecked(s);
-            var iter = utf8.iterator();
-            while (iter.nextCodepointSlice()) |cp_slice| {
-                const char_str = alloc.dupe(u8, cp_slice) catch return error.OutOfMemory;
-                vec.append(alloc, .{ .string = char_str }) catch return error.OutOfMemory;
-            }
-        },
-        else => return error.TypeError,
+    const items = try sequenceToValues(seq, alloc);
+    for (items) |elem| {
+        vec.append(alloc, elem) catch return error.OutOfMemory;
     }
 
     try ctx.stack.push(.{ .vector = vec });
@@ -1653,57 +1726,98 @@ fn nativePrepend(ctx: *Context) anyerror!void {
 
     switch (seq1) {
         .array => |arr1| {
-            // Get seq2's items
-            const items2 = getSequenceItems(seq2) orelse return error.TypeError;
+            const items2 = try sequenceToValues(seq2, alloc);
             const result = alloc.alloc(Value, items2.len + arr1.len) catch return error.OutOfMemory;
             @memcpy(result[0..items2.len], items2);
             @memcpy(result[items2.len..], arr1);
             try ctx.stack.push(.{ .array = result });
         },
         .vector => |vec1| {
-            // Create new vector with seq2's items, then append seq1's items
+            const items2 = try sequenceToValues(seq2, alloc);
             const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
             new_vec.* = Vector{};
-            // Copy seq2 items first
-            const items2 = getSequenceItems(seq2) orelse return error.TypeError;
+            new_vec.ensureTotalCapacity(alloc, items2.len + vec1.items.len) catch return error.OutOfMemory;
             for (items2) |item| {
-                new_vec.append(alloc, item) catch return error.OutOfMemory;
+                new_vec.appendAssumeCapacity(item);
             }
-            // Then append vec1 items
             for (vec1.items) |item| {
-                new_vec.append(alloc, item) catch return error.OutOfMemory;
+                new_vec.appendAssumeCapacity(item);
             }
             try ctx.stack.push(.{ .vector = new_vec });
         },
         .string => |s1| {
-            // String concatenation - seq2 must also be string
-            switch (seq2) {
-                .string => |s2| {
-                    const result = alloc.alloc(u8, s2.len + s1.len) catch return error.OutOfMemory;
-                    @memcpy(result[0..s2.len], s2);
-                    @memcpy(result[s2.len..], s1);
-                    try ctx.stack.push(.{ .string = result });
-                },
-                else => return error.TypeError,
+            // For strings, convert seq2 elements to strings and prepend
+            // Accept both strings (codepoints) and integers 0-255 (single bytes)
+            const items2 = try sequenceToValues(seq2, alloc);
+            var total_len: usize = s1.len;
+            for (items2) |item| {
+                switch (item) {
+                    .string => |s| total_len += s.len,
+                    .integer => |i| {
+                        if (i < 0 or i > 255) return error.IntegerOverflow;
+                        total_len += 1; // single byte
+                    },
+                    else => return error.TypeError,
+                }
             }
+
+            const result = alloc.alloc(u8, total_len) catch return error.OutOfMemory;
+            var pos: usize = 0;
+            for (items2) |item| {
+                switch (item) {
+                    .string => |s| {
+                        @memcpy(result[pos..][0..s.len], s);
+                        pos += s.len;
+                    },
+                    .integer => |i| {
+                        result[pos] = @intCast(i);
+                        pos += 1;
+                    },
+                    else => unreachable,
+                }
+            }
+
+            @memcpy(result[pos..], s1);
+            try ctx.stack.push(.{ .string = result });
         },
         .byte_array => |b1| {
-            // Byte array concatenation - seq2 must also be byte_array
-            switch (seq2) {
-                .byte_array => |b2| {
-                    const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-                    result_ba.* = ByteArray{};
-                    result_ba.ensureTotalCapacity(alloc, b2.items.len + b1.items.len) catch return error.OutOfMemory;
-                    for (b2.items) |byte| {
-                        result_ba.appendAssumeCapacity(byte);
-                    }
-                    for (b1.items) |byte| {
-                        result_ba.appendAssumeCapacity(byte);
-                    }
-                    try ctx.stack.push(.{ .byte_array = result_ba });
-                },
-                else => return error.TypeError,
+            // For byte arrays, accept integers 0-255 and strings (as UTF-8 bytes)
+            const items2 = try sequenceToValues(seq2, alloc);
+
+            var extra_len: usize = 0;
+            for (items2) |item| {
+                switch (item) {
+                    .integer => |i| {
+                        if (i < 0 or i > 255) return error.IntegerOverflow;
+                        extra_len += 1;
+                    },
+                    .string => |s| extra_len += s.len,
+                    else => return error.TypeError,
+                }
             }
+
+            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+            result_ba.* = ByteArray{};
+            result_ba.ensureTotalCapacity(alloc, extra_len + b1.items.len) catch return error.OutOfMemory;
+            for (items2) |item| {
+                switch (item) {
+                    .integer => |i| {
+                        result_ba.appendAssumeCapacity(@intCast(i));
+                    },
+                    .string => |s| {
+                        for (s) |byte| {
+                            result_ba.appendAssumeCapacity(byte);
+                        }
+                    },
+                    else => unreachable,
+                }
+            }
+
+            for (b1.items) |byte| {
+                result_ba.appendAssumeCapacity(byte);
+            }
+
+            try ctx.stack.push(.{ .byte_array = result_ba });
         },
         else => return error.TypeError,
     }

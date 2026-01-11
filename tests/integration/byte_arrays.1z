@@ -32,6 +32,44 @@ B{ 3 4 } B{ 1 2 } #prepend #len 4 "#prepend length" assert=
 B{ 3 4 } B{ 1 2 } #prepend #first 1 "#prepend first" assert=
 B{ 3 4 } B{ 1 2 } #prepend #last 4 "#prepend last" assert=
 
+"Cross-sequence #append to byte array" test-section
+B{ 1 2 } { 3 4 } #append #len 4 "#append array to byte array length" assert=
+B{ 1 2 } { 3 4 } #append #first 1 "#append array to byte array first" assert=
+B{ 1 2 } { 3 4 } #append #last 4 "#append array to byte array last" assert=
+
+"Cross-sequence #prepend to byte array" test-section
+B{ 3 4 } { 1 2 } #prepend #len 4 "#prepend array to byte array length" assert=
+B{ 3 4 } { 1 2 } #prepend #first 1 "#prepend array to byte array first" assert=
+B{ 3 4 } { 1 2 } #prepend #last 4 "#prepend array to byte array last" assert=
+
+"Cross-sequence #append byte array to array" test-section
+{ 1 2 } B{ 3 4 } #append #len 4 "#append byte array to array length" assert=
+{ 1 2 } B{ 3 4 } #append 2 #nth 3 "#append byte array to array elem 2" assert=
+{ 1 2 } B{ 3 4 } #append 3 #nth 4 "#append byte array to array elem 3" assert=
+
+"Cross-sequence #append byte array to string" test-section
+"a" B{ 66 67 } #append "aBC" "#append byte array to string" assert=
+"" B{ 72 105 } #append "Hi" "#append byte array to empty string" assert=
+"x" B{ } #append "x" "#append empty byte array to string" assert=
+
+"Cross-sequence #prepend byte array to string" test-section
+"c" B{ 65 66 } #prepend "ABc" "#prepend byte array to string" assert=
+"" B{ 72 105 } #prepend "Hi" "#prepend byte array to empty string" assert=
+
+"Cross-sequence #append vector to string" test-section
+"a" V{ 66 67 } #append "aBC" "#append vector of integers to string" assert=
+
+"Cross-sequence #append array to string" test-section
+"a" { 66 67 } #append "aBC" "#append array of integers to string" assert=
+
+"Cross-sequence #append string to byte array" test-section
+B{ 65 } "BC" #append #len 3 "#append string to byte array length" assert=
+B{ 65 } "BC" #append bytes> "ABC" "#append string to byte array content" assert=
+
+"Cross-sequence #prepend string to byte array" test-section
+B{ 67 } "AB" #prepend #len 3 "#prepend string to byte array length" assert=
+B{ 67 } "AB" #prepend bytes> "ABC" "#prepend string to byte array content" assert=
+
 "Byte array higher-order operations" test-section
 B{ 1 2 3 } [ 2 * ] #map #first 2 "#map returns array, first element" assert=
 B{ 1 2 3 } [ 2 * ] #map #last 6 "#map last element" assert=

@@ -27,8 +27,18 @@ dup 2 #nth 3 = [ "PASS: array #append elem 2" print ] [ "FAIL: array #append ele
 "" "xyz" #append "xyz" = [ "PASS: string #append with empty left" print ] [ "FAIL: string #append with empty left" print ] if
 "" "" #append "" = [ "PASS: string #append both empty" print ] [ "FAIL: string #append both empty" print ] if
 
-\ Test #append type mismatch error (string + array should fail)
-[ { 1 } "abc" #append ] [ drop "PASS: #append type mismatch error" print ] recover
+\ Test cross-sequence #append (array + string -> array of chars)
+{ 1 } "abc" #append
+dup #len 4 = [ "PASS: array #append string length" print ] [ "FAIL: array #append string length" print ] if
+dup 0 #nth 1 = [ "PASS: array #append string elem 0" print ] [ "FAIL: array #append string elem 0" print ] if
+dup 1 #nth "a" = [ "PASS: array #append string elem 1" print ] [ "FAIL: array #append string elem 1" print ] if
+3 #nth "c" = [ "PASS: array #append string elem 3" print ] [ "FAIL: array #append string elem 3" print ] if
+
+\ Test cross-sequence #append (array + byte array -> array of integers)
+{ 1 } B{ 2 3 } #append
+dup #len 3 = [ "PASS: array #append byte-array length" print ] [ "FAIL: array #append byte-array length" print ] if
+dup 1 #nth 2 = [ "PASS: array #append byte-array elem 1" print ] [ "FAIL: array #append byte-array elem 1" print ] if
+2 #nth 3 = [ "PASS: array #append byte-array elem 2" print ] [ "FAIL: array #append byte-array elem 2" print ] if
 
 \ ============================================================================
 \ #prepend tests (sequence + sequence)

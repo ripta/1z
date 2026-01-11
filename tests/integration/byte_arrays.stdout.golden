@@ -49,6 +49,64 @@ PASS: #prepend first
 Stack: [ ]
 PASS: #prepend last
 Stack: [ ]
+=== Cross-sequence #append to byte array ===
+Stack: [ ]
+PASS: #append array to byte array length
+Stack: [ ]
+PASS: #append array to byte array first
+Stack: [ ]
+PASS: #append array to byte array last
+Stack: [ ]
+=== Cross-sequence #prepend to byte array ===
+Stack: [ ]
+PASS: #prepend array to byte array length
+Stack: [ ]
+PASS: #prepend array to byte array first
+Stack: [ ]
+PASS: #prepend array to byte array last
+Stack: [ ]
+=== Cross-sequence #append byte array to array ===
+Stack: [ ]
+PASS: #append byte array to array length
+Stack: [ ]
+PASS: #append byte array to array elem 2
+Stack: [ ]
+PASS: #append byte array to array elem 3
+Stack: [ ]
+=== Cross-sequence #append byte array to string ===
+Stack: [ ]
+PASS: #append byte array to string
+Stack: [ ]
+PASS: #append byte array to empty string
+Stack: [ ]
+PASS: #append empty byte array to string
+Stack: [ ]
+=== Cross-sequence #prepend byte array to string ===
+Stack: [ ]
+PASS: #prepend byte array to string
+Stack: [ ]
+PASS: #prepend byte array to empty string
+Stack: [ ]
+=== Cross-sequence #append vector to string ===
+Stack: [ ]
+PASS: #append vector of integers to string
+Stack: [ ]
+=== Cross-sequence #append array to string ===
+Stack: [ ]
+PASS: #append array of integers to string
+Stack: [ ]
+=== Cross-sequence #append string to byte array ===
+Stack: [ ]
+PASS: #append string to byte array length
+Stack: [ ]
+PASS: #append string to byte array content
+Stack: [ ]
+=== Cross-sequence #prepend string to byte array ===
+Stack: [ ]
+PASS: #prepend string to byte array length
+Stack: [ ]
+PASS: #prepend string to byte array content
+Stack: [ ]
 === Byte array higher-order operations ===
 Stack: [ ]
 PASS: #map returns array, first element
