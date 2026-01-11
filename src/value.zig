@@ -15,6 +15,9 @@ pub const Instruction = struct {
 /// Hash table type for H{ } literals.
 pub const HashTable = std.StringHashMapUnmanaged(Value);
 
+/// Vector type for V{ } literals - mutable, dynamically-sized sequences.
+pub const Vector = std.ArrayListUnmanaged(Value);
+
 /// StackFrame represents a single frame in a stack trace.
 pub const StackFrame = struct {
     word_name: []const u8,
@@ -96,6 +99,7 @@ pub const Value = union(enum) {
     array: []const Value,
     quotation: Quotation,
     hash: *HashTable,
+    vector: *Vector,
     stack_effect: StackEffect,
     parse_time_marker: void, // Marker for parse-time word definitions
     error_value: ErrorObject,
@@ -140,6 +144,14 @@ pub const Value = union(enum) {
                 }
                 try writer.writeAll("}");
             },
+            .vector => |v| {
+                try writer.writeAll("V{ ");
+                for (v.items) |item| {
+                    try item.write(writer);
+                    try writer.writeAll(" ");
+                }
+                try writer.writeAll("}");
+            },
             .stack_effect => |effect| try effect.write(writer),
             .parse_time_marker => try writer.writeAll("parse-time"),
             .error_value => |err| try err.write(writer),
@@ -179,6 +191,14 @@ pub const Value = union(enum) {
                     } else {
                         return false;
                     }
+                }
+                return true;
+            },
+            .vector => |a| {
+                const b = other.vector;
+                if (a.items.len != b.items.len) return false;
+                for (a.items, b.items) |ai, bi| {
+                    if (!ai.eql(bi)) return false;
                 }
                 return true;
             },

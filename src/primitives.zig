@@ -7,6 +7,7 @@ const Value = value_mod.Value;
 const Quotation = value_mod.Quotation;
 const Instruction = value_mod.Instruction;
 const HashTable = value_mod.HashTable;
+const Vector = value_mod.Vector;
 const ErrorObject = value_mod.ErrorObject;
 const StackFrame = value_mod.StackFrame;
 
@@ -161,6 +162,8 @@ const primitives = [_]Primitive{
     .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTime },
     .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .func = nativeParseUntil },
     .{ .name = "make-hash", .stack_effect = "quotation -- hash", .func = nativeMakeHash },
+    .{ .name = "make-vector", .stack_effect = "quotation -- vector", .func = nativeMakeVector },
+    .{ .name = "1array", .stack_effect = "elem -- array", .func = native1Array },
     .{ .name = "curry", .stack_effect = "x quot -- quot'", .func = nativeCurry },
     .{ .name = "compose", .stack_effect = "quot1 quot2 -- quot'", .func = nativeCompose },
     .{ .name = "benchmark", .stack_effect = "quot -- hash", .func = nativeBenchmark },
@@ -177,10 +180,12 @@ const primitives = [_]Primitive{
     .{ .name = "#map", .stack_effect = "seq quot: ( elem -- elem' ) -- seq'", .func = nativeMap },
     .{ .name = "#filter", .stack_effect = "seq quot: ( elem -- ? ) -- seq'", .func = nativeFilter },
     .{ .name = "#reduce", .stack_effect = "seq init quot: ( acc elem -- acc' ) -- value", .func = nativeReduce },
-    .{ .name = "#concat", .stack_effect = "seq1 seq2 -- seq3", .func = nativeConcat },
     .{ .name = "#slice", .stack_effect = "seq start end -- subseq", .func = nativeSlice },
-    .{ .name = "#append", .stack_effect = "array elem -- array'", .func = nativeAppend },
-    .{ .name = "#prepend", .stack_effect = "elem array -- array'", .func = nativePrepend },
+    .{ .name = "#append", .stack_effect = "seq1 seq2 -- seq", .func = nativeAppend },
+    .{ .name = "#append!", .stack_effect = "vec seq -- vec", .func = nativeAppendMut },
+    .{ .name = "#prepend", .stack_effect = "seq1 seq2 -- seq", .func = nativePrepend },
+    .{ .name = "#push!", .stack_effect = "vec elem -- vec", .func = nativePushMut },
+    .{ .name = "#pop!", .stack_effect = "vec -- elem", .func = nativePopMut },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -698,6 +703,44 @@ fn nativeMakeHash(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .hash = hash });
 }
 
+/// make-vector ( quotation -- vector ) - Create a vector from values in quotation
+/// Example: [ 1 2 3 ] make-vector
+fn nativeMakeVector(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    const instrs = quot.instructions;
+    const alloc = ctx.quotationAllocator();
+
+    // Create a new vector
+    const vec = alloc.create(Vector) catch return error.OutOfMemory;
+    vec.* = Vector{};
+
+    // Execute each instruction and collect values
+    for (instrs) |instr| {
+        const val = switch (instr.op) {
+            .push_literal => |v| v,
+            .call_word => blk: {
+                // Execute the word to get the value
+                try ctx.executeQuotation(.{ .instructions = @as(*const [1]Instruction, &instr) });
+                break :blk ctx.stack.pop() catch return error.OutOfMemory;
+            },
+        };
+        vec.append(alloc, val) catch return error.OutOfMemory;
+    }
+
+    try ctx.stack.push(.{ .vector = vec });
+}
+
+/// 1array ( elem -- array ) - Wrap element in single-element array
+fn native1Array(ctx: *Context) anyerror!void {
+    const elem = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+
+    const arr = alloc.alloc(Value, 1) catch return error.OutOfMemory;
+    arr[0] = elem;
+
+    try ctx.stack.push(.{ .array = arr });
+}
+
 /// curry ( x quot -- quot' ) - Create new quotation with x prepended
 /// Example: 5 [ + ] curry creates [ 5 + ]
 fn nativeCurry(ctx: *Context) anyerror!void {
@@ -787,12 +830,13 @@ fn nativeBenchmark(ctx: *Context) anyerror!void {
 // Sequence Accessors
 // =============================================================================
 
-/// #len ( seq -- n ) - Get sequence length (polymorphic on string, array)
+/// #len ( seq -- n ) - Get sequence length (polymorphic on string, array, vector)
 fn nativeLen(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const len: i64 = switch (val) {
         .string => |s| @intCast(s.len),
         .array => |a| @intCast(a.len),
+        .vector => |v| @intCast(v.items.len),
         else => return error.TypeError,
     };
     try ctx.stack.push(.{ .integer = len });
@@ -818,11 +862,15 @@ fn nativeNth(ctx: *Context) anyerror!void {
             if (idx >= a.len) return error.IndexOutOfBounds;
             try ctx.stack.push(a[idx]);
         },
+        .vector => |v| {
+            if (idx >= v.items.len) return error.IndexOutOfBounds;
+            try ctx.stack.push(v.items[idx]);
+        },
         else => return error.TypeError,
     }
 }
 
-/// #first ( seq -- elem ) - Get first element (polymorphic on string, array)
+/// #first ( seq -- elem ) - Get first element (polymorphic on string, array, vector)
 fn nativeFirst(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
 
@@ -837,11 +885,15 @@ fn nativeFirst(ctx: *Context) anyerror!void {
             if (a.len == 0) return error.EmptySequence;
             try ctx.stack.push(a[0]);
         },
+        .vector => |v| {
+            if (v.items.len == 0) return error.EmptySequence;
+            try ctx.stack.push(v.items[0]);
+        },
         else => return error.TypeError,
     }
 }
 
-/// #last ( seq -- elem ) - Get last element (polymorphic on string, array)
+/// #last ( seq -- elem ) - Get last element (polymorphic on string, array, vector)
 fn nativeLast(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
 
@@ -855,6 +907,10 @@ fn nativeLast(ctx: *Context) anyerror!void {
         .array => |a| {
             if (a.len == 0) return error.EmptySequence;
             try ctx.stack.push(a[a.len - 1]);
+        },
+        .vector => |v| {
+            if (v.items.len == 0) return error.EmptySequence;
+            try ctx.stack.push(v.items[v.items.len - 1]);
         },
         else => return error.TypeError,
     }
@@ -1069,6 +1125,12 @@ fn nativeEach(ctx: *Context) anyerror!void {
                 try ctx.executeQuotation(quot);
             }
         },
+        .vector => |v| {
+            for (v.items) |elem| {
+                try ctx.stack.push(elem);
+                try ctx.executeQuotation(quot);
+            }
+        },
         else => return error.TypeError,
     }
 }
@@ -1101,6 +1163,19 @@ fn nativeMap(ctx: *Context) anyerror!void {
                 result[i] = try ctx.stack.pop();
             }
             try ctx.stack.push(.{ .array = result });
+        },
+        .vector => |v| {
+            // Map over vector returns a new vector
+            const result_vec = alloc.create(Vector) catch return error.OutOfMemory;
+            result_vec.* = Vector{};
+            result_vec.ensureTotalCapacity(alloc, v.items.len) catch return error.OutOfMemory;
+            for (v.items) |elem| {
+                try ctx.stack.push(elem);
+                try ctx.executeQuotation(quot);
+                const mapped = try ctx.stack.pop();
+                result_vec.appendAssumeCapacity(mapped);
+            }
+            try ctx.stack.push(.{ .vector = result_vec });
         },
         else => return error.TypeError,
     }
@@ -1167,6 +1242,21 @@ fn nativeFilter(ctx: *Context) anyerror!void {
             }
             try ctx.stack.push(.{ .string = result });
         },
+        .vector => |v| {
+            // Filter over vector returns a new vector
+            // Use dynamic vector since we don't know final size
+            const result_vec = alloc.create(Vector) catch return error.OutOfMemory;
+            result_vec.* = Vector{};
+            for (v.items) |elem| {
+                try ctx.stack.push(elem);
+                try ctx.executeQuotation(quot);
+                const predicate = try popBoolean(ctx);
+                if (predicate) {
+                    result_vec.append(alloc, elem) catch return error.OutOfMemory;
+                }
+            }
+            try ctx.stack.push(.{ .vector = result_vec });
+        },
         else => return error.TypeError,
     }
 }
@@ -1199,39 +1289,14 @@ fn nativeReduce(ctx: *Context) anyerror!void {
             }
             try ctx.stack.push(acc);
         },
-        else => return error.TypeError,
-    }
-}
-
-/// #concat ( seq1 seq2 -- seq3 ) - Concatenate two sequences of same type
-fn nativeConcat(ctx: *Context) anyerror!void {
-    const seq2 = try ctx.stack.pop();
-    const seq1 = try ctx.stack.pop();
-
-    const alloc = ctx.quotationAllocator();
-
-    switch (seq1) {
-        .array => |arr1| {
-            switch (seq2) {
-                .array => |arr2| {
-                    const result = alloc.alloc(Value, arr1.len + arr2.len) catch return error.OutOfMemory;
-                    @memcpy(result[0..arr1.len], arr1);
-                    @memcpy(result[arr1.len..], arr2);
-                    try ctx.stack.push(.{ .array = result });
-                },
-                else => return error.TypeError,
+        .vector => |v| {
+            for (v.items) |elem| {
+                try ctx.stack.push(acc);
+                try ctx.stack.push(elem);
+                try ctx.executeQuotation(quot);
+                acc = try ctx.stack.pop();
             }
-        },
-        .string => |s1| {
-            switch (seq2) {
-                .string => |s2| {
-                    const result = alloc.alloc(u8, s1.len + s2.len) catch return error.OutOfMemory;
-                    @memcpy(result[0..s1.len], s1);
-                    @memcpy(result[s1.len..], s2);
-                    try ctx.stack.push(.{ .string = result });
-                },
-                else => return error.TypeError,
-            }
+            try ctx.stack.push(acc);
         },
         else => return error.TypeError,
     }
@@ -1267,44 +1332,177 @@ fn nativeSlice(ctx: *Context) anyerror!void {
             @memcpy(result, s[start..end]);
             try ctx.stack.push(.{ .string = result });
         },
+        .vector => |v| {
+            if (end > v.items.len) return error.IndexOutOfBounds;
+            const slice_len = end - start;
+            const result_vec = alloc.create(Vector) catch return error.OutOfMemory;
+            result_vec.* = Vector{};
+            result_vec.ensureTotalCapacity(alloc, slice_len) catch return error.OutOfMemory;
+            for (v.items[start..end]) |elem| {
+                result_vec.appendAssumeCapacity(elem);
+            }
+            try ctx.stack.push(.{ .vector = result_vec });
+        },
         else => return error.TypeError,
     }
 }
 
-/// #append ( array elem -- array' ) - Append element to array (returns new array)
+/// #append ( seq1 seq2 -- seq ) - Concatenate seq2 to seq1, returns new sequence of type seq1
+/// seq1 determines the result type. seq2 elements are converted/iterated into seq1's type.
 fn nativeAppend(ctx: *Context) anyerror!void {
-    const elem = try ctx.stack.pop();
-    const seq = try ctx.stack.pop();
+    const seq2 = try ctx.stack.pop();
+    const seq1 = try ctx.stack.pop();
 
     const alloc = ctx.quotationAllocator();
 
-    switch (seq) {
-        .array => |arr| {
-            const result = alloc.alloc(Value, arr.len + 1) catch return error.OutOfMemory;
-            @memcpy(result[0..arr.len], arr);
-            result[arr.len] = elem;
+    switch (seq1) {
+        .array => |arr1| {
+            // Get seq2's items
+            const items2 = getSequenceItems(seq2) orelse return error.TypeError;
+            const result = alloc.alloc(Value, arr1.len + items2.len) catch return error.OutOfMemory;
+            @memcpy(result[0..arr1.len], arr1);
+            @memcpy(result[arr1.len..], items2);
             try ctx.stack.push(.{ .array = result });
+        },
+        .vector => |vec1| {
+            // Create new vector with seq1's items, then append seq2's items
+            const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
+            new_vec.* = Vector{};
+            // Copy vec1 items
+            for (vec1.items) |item| {
+                new_vec.append(alloc, item) catch return error.OutOfMemory;
+            }
+            // Append seq2 items
+            const items2 = getSequenceItems(seq2) orelse return error.TypeError;
+            for (items2) |item| {
+                new_vec.append(alloc, item) catch return error.OutOfMemory;
+            }
+            try ctx.stack.push(.{ .vector = new_vec });
+        },
+        .string => |s1| {
+            // String concatenation - seq2 must also be string
+            switch (seq2) {
+                .string => |s2| {
+                    const result = alloc.alloc(u8, s1.len + s2.len) catch return error.OutOfMemory;
+                    @memcpy(result[0..s1.len], s1);
+                    @memcpy(result[s1.len..], s2);
+                    try ctx.stack.push(.{ .string = result });
+                },
+                else => return error.TypeError,
+            }
         },
         else => return error.TypeError,
     }
 }
 
-/// #prepend ( elem array -- array' ) - Prepend element to array (returns new array)
-fn nativePrepend(ctx: *Context) anyerror!void {
-    const seq = try ctx.stack.pop();
-    const elem = try ctx.stack.pop();
+/// Helper to get items slice from any sequence type
+fn getSequenceItems(seq: Value) ?[]const Value {
+    return switch (seq) {
+        .array => |arr| arr,
+        .vector => |vec| vec.items,
+        else => null,
+    };
+}
 
+/// #append! ( vec seq -- vec ) - Extend vector with elements from sequence, mutate in place
+fn nativeAppendMut(ctx: *Context) anyerror!void {
+    const seq = try ctx.stack.pop();
+    const vec = try popVector(ctx);
     const alloc = ctx.quotationAllocator();
 
     switch (seq) {
         .array => |arr| {
-            const result = alloc.alloc(Value, arr.len + 1) catch return error.OutOfMemory;
-            result[0] = elem;
-            @memcpy(result[1..], arr);
-            try ctx.stack.push(.{ .array = result });
+            for (arr) |elem| {
+                vec.append(alloc, elem) catch return error.OutOfMemory;
+            }
+        },
+        .vector => |v| {
+            for (v.items) |elem| {
+                vec.append(alloc, elem) catch return error.OutOfMemory;
+            }
+        },
+        .string => |s| {
+            // Append each character as a single-char string
+            for (s) |c| {
+                const char_str = alloc.alloc(u8, 1) catch return error.OutOfMemory;
+                char_str[0] = c;
+                vec.append(alloc, .{ .string = char_str }) catch return error.OutOfMemory;
+            }
         },
         else => return error.TypeError,
     }
+
+    try ctx.stack.push(.{ .vector = vec });
+}
+
+/// #prepend ( seq1 seq2 -- seq ) - Prepend seq2's elements to seq1, returns new sequence of type seq1
+/// Result contains seq2's elements followed by seq1's elements, with type of seq1.
+fn nativePrepend(ctx: *Context) anyerror!void {
+    const seq2 = try ctx.stack.pop();
+    const seq1 = try ctx.stack.pop();
+
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq1) {
+        .array => |arr1| {
+            // Get seq2's items
+            const items2 = getSequenceItems(seq2) orelse return error.TypeError;
+            const result = alloc.alloc(Value, items2.len + arr1.len) catch return error.OutOfMemory;
+            @memcpy(result[0..items2.len], items2);
+            @memcpy(result[items2.len..], arr1);
+            try ctx.stack.push(.{ .array = result });
+        },
+        .vector => |vec1| {
+            // Create new vector with seq2's items, then append seq1's items
+            const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
+            new_vec.* = Vector{};
+            // Copy seq2 items first
+            const items2 = getSequenceItems(seq2) orelse return error.TypeError;
+            for (items2) |item| {
+                new_vec.append(alloc, item) catch return error.OutOfMemory;
+            }
+            // Then append vec1 items
+            for (vec1.items) |item| {
+                new_vec.append(alloc, item) catch return error.OutOfMemory;
+            }
+            try ctx.stack.push(.{ .vector = new_vec });
+        },
+        .string => |s1| {
+            // String concatenation - seq2 must also be string
+            switch (seq2) {
+                .string => |s2| {
+                    const result = alloc.alloc(u8, s2.len + s1.len) catch return error.OutOfMemory;
+                    @memcpy(result[0..s2.len], s2);
+                    @memcpy(result[s2.len..], s1);
+                    try ctx.stack.push(.{ .string = result });
+                },
+                else => return error.TypeError,
+            }
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #push! ( vec elem -- vec ) - Append element to vector, mutate in place
+fn nativePushMut(ctx: *Context) anyerror!void {
+    const elem = try ctx.stack.pop();
+    const vec = try popVector(ctx);
+
+    vec.append(ctx.quotationAllocator(), elem) catch return error.OutOfMemory;
+
+    try ctx.stack.push(.{ .vector = vec });
+}
+
+/// #pop! ( vec -- elem ) - Remove and return last element from vector
+fn nativePopMut(ctx: *Context) anyerror!void {
+    const vec = try popVector(ctx);
+
+    if (vec.items.len == 0) {
+        return error.EmptySequence;
+    }
+
+    const elem = vec.pop().?; // Safe: we checked len > 0
+    try ctx.stack.push(elem);
 }
 
 // =============================================================================
@@ -1315,7 +1513,8 @@ fn popInteger(ctx: *Context) !i64 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .integer => |i| i,
-        .boolean, .string, .symbol, .array, .quotation, .hash, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .boolean, .string, .symbol, .array, .quotation, .hash, .vector => error.TypeError,
+        .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 
@@ -1324,7 +1523,8 @@ fn popBoolean(ctx: *Context) !bool {
     return switch (val) {
         .boolean => |b| b,
         .integer => |i| i != 0,
-        .string, .symbol, .array, .quotation, .hash, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .string, .symbol, .array, .quotation, .hash, .vector => error.TypeError,
+        .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 
@@ -1332,7 +1532,8 @@ fn popQuotation(ctx: *Context) !Quotation {
     const val = try ctx.stack.pop();
     return switch (val) {
         .quotation => |q| q,
-        .integer, .boolean, .string, .symbol, .array, .hash, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .hash, .vector => error.TypeError,
+        .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 
@@ -1340,7 +1541,8 @@ fn popSymbol(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .symbol => |s| s,
-        .integer, .boolean, .string, .array, .quotation, .hash, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .string, .array, .quotation, .hash, .vector => error.TypeError,
+        .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 
@@ -1348,7 +1550,8 @@ fn popString(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .string => |s| s,
-        .integer, .boolean, .symbol, .array, .quotation, .hash, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .symbol, .array, .quotation, .hash, .vector => error.TypeError,
+        .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 
@@ -1356,7 +1559,17 @@ fn popStackEffect(ctx: *Context) !StackEffect {
     const val = try ctx.stack.pop();
     return switch (val) {
         .stack_effect => |se| se,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector => error.TypeError,
+        .parse_time_marker, .error_value => error.TypeError,
+    };
+}
+
+fn popVector(ctx: *Context) !*Vector {
+    const val = try ctx.stack.pop();
+    return switch (val) {
+        .vector => |v| v,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash => error.TypeError,
+        .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
 

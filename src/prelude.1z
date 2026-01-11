@@ -7,6 +7,9 @@
 \ Hash literal syntax
 H{: parse-time [ "}" parse-until make-hash ] ;
 
+\ Vector literal syntax
+V{: parse-time [ "}" parse-until make-vector ] ;
+
 \ Control flow
 when: ( ? quot -- ) [ [ ] if ] ;
 unless: ( ? quot -- ) [ [ ] swap if ] ;
