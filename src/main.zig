@@ -222,7 +222,7 @@ fn repl(ctx: *Context) void {
             },
         };
 
-        switch (processor.feedLine(ctx.quotationAllocator(), line)) {
+        switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
             .needs_more_input => continue,
             .parse_error => |err| {
                 writer.print("Error: {any}\n", .{err}) catch {};
@@ -277,7 +277,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
         const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
             error.EndOfStream => {
                 // Try to execute any remaining buffered content
-                switch (processor.flush(ctx.quotationAllocator())) {
+                switch (processor.flush(ctx.quotationAllocator(), ctx)) {
                     .needs_more_input => {},
                     .parse_error => |e| {
                         err_writer.print("Error: {any}\n", .{e}) catch {};
@@ -314,7 +314,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
         file_line += 1;
         processor.trackLine(file_line);
 
-        switch (processor.feedLine(ctx.quotationAllocator(), line)) {
+        switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
             .needs_more_input => continue,
             .parse_error => |err| {
                 err_writer.print("Error at line {d}: {any}\n", .{ file_line, err }) catch {};

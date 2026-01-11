@@ -377,7 +377,7 @@ fn nativeLoad(ctx: *Context) anyerror!void {
         const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
             error.EndOfStream => {
                 // Try to execute any remaining buffered content
-                switch (processor.flush(ctx.quotationAllocator())) {
+                switch (processor.flush(ctx.quotationAllocator(), ctx)) {
                     .needs_more_input => {},
                     .parse_error => |e| return e,
                     .complete => |instrs| {
@@ -391,7 +391,7 @@ fn nativeLoad(ctx: *Context) anyerror!void {
             else => return error.FileReadError,
         };
 
-        switch (processor.feedLine(ctx.quotationAllocator(), line)) {
+        switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
             .needs_more_input => continue,
             .parse_error => |err| return err,
             .complete => |instrs| {

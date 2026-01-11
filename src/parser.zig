@@ -10,6 +10,7 @@ const Value = @import("value.zig").Value;
 const Instruction = @import("value.zig").Instruction;
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
+const Context = @import("context.zig").Context;
 
 /// Get the next non-comment, non-newline token from the tokenizer.
 fn nextToken(tokenizer: *Tokenizer) ?Token {
@@ -32,6 +33,7 @@ pub const ParseError = error{
     UnmatchedOpenParen,
     UnmatchedCloseParen,
     OutOfMemory,
+    ParseTimeExecutionError,
 };
 
 /// Returns true if the parse error indicates incomplete input.
@@ -41,7 +43,8 @@ pub fn isIncompleteError(err: anyerror) bool {
 
 /// Parse a top-level sequence of instructions. This is the entry point for
 /// parsing, and handles continuation lines (multiline statements).
-pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]const Instruction {
+/// If ctx is provided, parse-time words will be executed during parsing.
+pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) ParseError![]const Instruction {
     var instructions: std.ArrayListUnmanaged(Instruction) = .{};
     errdefer instructions.deinit(allocator);
 
@@ -49,7 +52,7 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]c
         const token = tok.text;
         const line = tok.line;
         if (std.mem.eql(u8, token, "[")) {
-            const quotation = try parseQuotation(allocator, tokenizer);
+            const quotation = try parseQuotation(allocator, tokenizer, ctx);
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = quotation } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "]")) {
             return ParseError.UnmatchedCloseBracket;
@@ -72,6 +75,31 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]c
             const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .symbol = sym_copy } }, .line = line }) catch return ParseError.OutOfMemory;
         } else {
+            // Check if this is a parse-time word (only if context provided)
+            if (ctx) |c| {
+                if (c.dictionary.get(token)) |word| {
+                    if (word.parse_time) {
+                        // Execute parse-time word immediately
+                        const pre_depth = c.stack.depth();
+                        switch (word.action) {
+                            .native => |func| func(c) catch return ParseError.ParseTimeExecutionError,
+                            .compound => |instrs| c.executeQuotation(instrs) catch return ParseError.ParseTimeExecutionError,
+                        }
+                        // Capture any values pushed onto stack as push_literal instructions
+                        const post_depth = c.stack.depth();
+                        if (post_depth > pre_depth) {
+                            const num_results = post_depth - pre_depth;
+                            var i: usize = 0;
+                            while (i < num_results) : (i += 1) {
+                                const val = c.stack.pop() catch return ParseError.ParseTimeExecutionError;
+                                instructions.append(allocator, .{ .op = .{ .push_literal = val }, .line = line }) catch return ParseError.OutOfMemory;
+                            }
+                        }
+                        continue;
+                    }
+                }
+            }
+            // Regular word - compile as call_word
             const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
             instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line }) catch return ParseError.OutOfMemory;
         }
@@ -80,7 +108,8 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]c
     return instructions.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
 }
 
-pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]const Instruction {
+/// Parse a quotation. If ctx is provided, parse-time words will be executed.
+pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) ParseError![]const Instruction {
     var instructions: std.ArrayListUnmanaged(Instruction) = .{};
     errdefer instructions.deinit(allocator);
 
@@ -88,7 +117,7 @@ pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]
         const token = tok.text;
         const line = tok.line;
         if (std.mem.eql(u8, token, "[")) {
-            const nested = try parseQuotation(allocator, tokenizer);
+            const nested = try parseQuotation(allocator, tokenizer, ctx);
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = nested } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "]")) {
             return instructions.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
@@ -109,6 +138,31 @@ pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]
             const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .symbol = sym_copy } }, .line = line }) catch return ParseError.OutOfMemory;
         } else {
+            // Check if this is a parse-time word (only if context provided)
+            if (ctx) |c| {
+                if (c.dictionary.get(token)) |word| {
+                    if (word.parse_time) {
+                        // Execute parse-time word immediately
+                        const pre_depth = c.stack.depth();
+                        switch (word.action) {
+                            .native => |func| func(c) catch return ParseError.ParseTimeExecutionError,
+                            .compound => |instrs| c.executeQuotation(instrs) catch return ParseError.ParseTimeExecutionError,
+                        }
+                        // Capture any values pushed onto stack as push_literal instructions
+                        const post_depth = c.stack.depth();
+                        if (post_depth > pre_depth) {
+                            const num_results = post_depth - pre_depth;
+                            var i: usize = 0;
+                            while (i < num_results) : (i += 1) {
+                                const val = c.stack.pop() catch return ParseError.ParseTimeExecutionError;
+                                instructions.append(allocator, .{ .op = .{ .push_literal = val }, .line = line }) catch return ParseError.OutOfMemory;
+                            }
+                        }
+                        continue;
+                    }
+                }
+            }
+            // Regular word - compile as call_word
             const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
             instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line }) catch return ParseError.OutOfMemory;
         }
@@ -199,7 +253,8 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]cons
         } else if (std.mem.eql(u8, token, "}")) {
             return values.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "[")) {
-            const quot = try parseQuotation(allocator, tokenizer);
+            // Quotations inside arrays don't execute parse-time words (arrays are data)
+            const quot = try parseQuotation(allocator, tokenizer, null);
             values.append(allocator, .{ .quotation = quot }) catch return ParseError.OutOfMemory;
         } else if (parseInteger(token)) |n| {
             values.append(allocator, .{ .integer = n }) catch return ParseError.OutOfMemory;
@@ -226,7 +281,7 @@ test "parse simple quotation" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("1 2 + ]");
-    const instrs = try parseQuotation(arena.allocator(), &tokenizer);
+    const instrs = try parseQuotation(arena.allocator(), &tokenizer, null);
 
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
     try std.testing.expectEqual(@as(i64, 1), instrs[0].op.push_literal.integer);
@@ -239,7 +294,7 @@ test "parse nested quotation" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("[ 1 ] ]");
-    const instrs = try parseQuotation(arena.allocator(), &tokenizer);
+    const instrs = try parseQuotation(arena.allocator(), &tokenizer, null);
 
     try std.testing.expectEqual(@as(usize, 1), instrs.len);
     const nested = instrs[0].op.push_literal.quotation;
@@ -249,7 +304,7 @@ test "parse nested quotation" {
 
 test "unmatched open bracket" {
     var tokenizer = Tokenizer.init("1 2");
-    const result = parseQuotation(std.testing.allocator, &tokenizer);
+    const result = parseQuotation(std.testing.allocator, &tokenizer, null);
     try std.testing.expectError(ParseError.UnmatchedOpenBracket, result);
 }
 
@@ -416,7 +471,7 @@ test "parse top level with stack effect" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("foo: ( n -- n ) [ 1 ]");
-    const instrs = try parseTopLevel(arena.allocator(), &tokenizer);
+    const instrs = try parseTopLevel(arena.allocator(), &tokenizer, null);
 
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
     try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol);
@@ -434,7 +489,7 @@ test "parse top level with comments" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("\\ This is a comment\n1 2 +");
-    const instrs = try parseTopLevel(arena.allocator(), &tokenizer);
+    const instrs = try parseTopLevel(arena.allocator(), &tokenizer, null);
 
     // Comment should be skipped
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
@@ -448,7 +503,7 @@ test "parse with inline comment" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("1 2 \\ inline comment\n+");
-    const instrs = try parseTopLevel(arena.allocator(), &tokenizer);
+    const instrs = try parseTopLevel(arena.allocator(), &tokenizer, null);
 
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
     try std.testing.expectEqual(@as(i64, 1), instrs[0].op.push_literal.integer);
