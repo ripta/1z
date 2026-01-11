@@ -1,8 +1,12 @@
 Stack: [ ]
 Stack: [ ]
-"caught-bad-while"
+"caught-double-wrong"
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
-"caught-bad-rowvar"
+"caught-add-wrong"
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+"caught-consume-wrong"
 Stack: [ ]
