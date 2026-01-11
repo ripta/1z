@@ -1,0 +1,11 @@
+\ Test parse-until primitive
+
+\ Define a parse-time word that uses parse-until
+capture-until-end: parse-time [ "END" parse-until ] ;
+
+\ Use the parse-time word to capture tokens
+capture-until-end 1 2 3 END
+
+\ The result should be a quotation containing [ 1 2 3 ]
+\ Execute it and print the result
+call + + .

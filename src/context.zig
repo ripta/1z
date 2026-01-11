@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const Stack = @import("stack.zig").Stack;
 const Dictionary = @import("dictionary.zig").Dictionary;
 const Instruction = @import("value.zig").Instruction;
+const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const primitives = @import("primitives.zig");
 
 pub const ExecutionError = error{
@@ -27,6 +28,8 @@ pub const Context = struct {
     arena: std.heap.ArenaAllocator,
     allocator: Allocator,
     error_details: std.ArrayListUnmanaged(ErrorDetail),
+    /// Tokenizer for parse-time word access (set during parsing, null otherwise)
+    parse_tokenizer: ?*Tokenizer = null,
 
     /// Initialize a new interpreter context with an empty stack and primitives.
     pub fn init(allocator: Allocator) Context {
@@ -36,6 +39,7 @@ pub const Context = struct {
             .arena = std.heap.ArenaAllocator.init(allocator),
             .allocator = allocator,
             .error_details = .{},
+            .parse_tokenizer = null,
         };
 
         primitives.registerPrimitives(&ctx.dictionary, ctx.arena.allocator()) catch |err| {

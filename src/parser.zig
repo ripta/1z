@@ -79,6 +79,11 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
             if (ctx) |c| {
                 if (c.dictionary.get(token)) |word| {
                     if (word.parse_time) {
+                        // Set tokenizer for parse-time word access
+                        const old_tokenizer = c.parse_tokenizer;
+                        c.parse_tokenizer = tokenizer;
+                        defer c.parse_tokenizer = old_tokenizer;
+
                         // Execute parse-time word immediately
                         const pre_depth = c.stack.depth();
                         switch (word.action) {
@@ -142,6 +147,11 @@ pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Contex
             if (ctx) |c| {
                 if (c.dictionary.get(token)) |word| {
                     if (word.parse_time) {
+                        // Set tokenizer for parse-time word access
+                        const old_tokenizer = c.parse_tokenizer;
+                        c.parse_tokenizer = tokenizer;
+                        defer c.parse_tokenizer = old_tokenizer;
+
                         // Execute parse-time word immediately
                         const pre_depth = c.stack.depth();
                         switch (word.action) {
