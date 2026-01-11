@@ -6,7 +6,7 @@ PASS: #starts-with? true
 Stack: [ ]
 PASS: #starts-with? false
 Stack: [ ]
-FAIL: #starts-with? array , got f(expected t)
+PASS: #starts-with? array
 Stack: [ ]
 PASS: #starts-with? empty
 Stack: [ ]
@@ -16,7 +16,7 @@ PASS: #ends-with? true
 Stack: [ ]
 PASS: #ends-with? false
 Stack: [ ]
-FAIL: #ends-with? array , got f(expected t)
+PASS: #ends-with? array
 Stack: [ ]
 PASS: #ends-with? empty
 Stack: [ ]

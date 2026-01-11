@@ -21,6 +21,25 @@ pub const Vector = std.ArrayListUnmanaged(Value);
 /// ByteArray type for B{ } literals - mutable, dynamically-sized byte sequences.
 pub const ByteArray = std.ArrayListUnmanaged(u8);
 
+/// Context for hashing and comparing Values in hash-based containers.
+pub const ValueContext = struct {
+    pub fn hash(self: @This(), key: Value) u32 {
+        _ = self;
+        // Truncate 64-bit hash to 32-bit as required by ArrayHashMap
+        return @truncate(key.hashValue());
+    }
+
+    pub fn eql(self: @This(), a: Value, b: Value, index: usize) bool {
+        _ = self;
+        _ = index;
+        return a.eql(b);
+    }
+};
+
+/// Set type for S{ } literals - immutable collections of unique values.
+/// Uses hash-based storage for O(1) average-case membership testing.
+pub const Set = std.ArrayHashMapUnmanaged(Value, void, ValueContext, true);
+
 /// StackFrame represents a single frame in a stack trace.
 pub const StackFrame = struct {
     word_name: []const u8,
@@ -104,6 +123,7 @@ pub const Value = union(enum) {
     hash: *HashTable,
     vector: *Vector,
     byte_array: *ByteArray,
+    set: *Set,
     stack_effect: StackEffect,
     parse_time_marker: void, // Marker for parse-time word definitions
     error_value: ErrorObject,
@@ -163,6 +183,14 @@ pub const Value = union(enum) {
                 }
                 try writer.writeAll("}");
             },
+            .set => |s| {
+                try writer.writeAll("S{ ");
+                for (s.keys()) |key| {
+                    try key.write(writer);
+                    try writer.writeAll(" ");
+                }
+                try writer.writeAll("}");
+            },
             .stack_effect => |effect| try effect.write(writer),
             .parse_time_marker => try writer.writeAll("parse-time"),
             .error_value => |err| try err.write(writer),
@@ -217,10 +245,104 @@ pub const Value = union(enum) {
                 const b = other.byte_array;
                 return std.mem.eql(u8, a.items, b.items);
             },
+            // Sets use order-independent equality: two sets are equal if they
+            // contain the same elements regardless of iteration order.
+            .set => |a| {
+                const b = other.set;
+                if (a.count() != b.count()) return false;
+                // Check that every element in a exists in b (O(n) with O(1) lookups)
+                for (a.keys()) |key| {
+                    if (!b.contains(key)) return false;
+                }
+                return true;
+            },
             .stack_effect => |a| a.eql(other.stack_effect),
             .parse_time_marker => true, // All parse_time_markers are equal
             .error_value => |a| a.eql(other.error_value),
         };
+    }
+
+    /// Compute a hash value for this Value.
+    /// Used by hash-based containers like Set.
+    pub fn hashValue(self: Value) u64 {
+        const Hasher = std.hash.Wyhash;
+        var hasher = Hasher.init(0);
+
+        // Hash the tag first to distinguish types
+        const tag = @intFromEnum(self);
+        hasher.update(std.mem.asBytes(&tag));
+
+        switch (self) {
+            .integer => |i| hasher.update(std.mem.asBytes(&i)),
+            .boolean => |b| hasher.update(std.mem.asBytes(&b)),
+            .string, .symbol => |s| hasher.update(s),
+            .array => |arr| {
+                for (arr) |elem| {
+                    const elem_hash = elem.hashValue();
+                    hasher.update(std.mem.asBytes(&elem_hash));
+                }
+            },
+            .quotation => |quot| {
+                for (quot.instructions) |instr| {
+                    const line_hash = instr.line;
+                    hasher.update(std.mem.asBytes(&line_hash));
+                    switch (instr.op) {
+                        .push_literal => |v| {
+                            const v_hash = v.hashValue();
+                            hasher.update(std.mem.asBytes(&v_hash));
+                        },
+                        .call_word => |name| hasher.update(name),
+                    }
+                }
+            },
+            .hash => |h| {
+                // Order-independent hash using XOR
+                var combined: u64 = 0;
+                var iter = h.iterator();
+                while (iter.next()) |entry| {
+                    var pair_hasher = Hasher.init(0);
+                    pair_hasher.update(entry.key_ptr.*);
+                    const val_hash = entry.value_ptr.hashValue();
+                    pair_hasher.update(std.mem.asBytes(&val_hash));
+                    combined ^= pair_hasher.final();
+                }
+                hasher.update(std.mem.asBytes(&combined));
+            },
+            .vector => |v| {
+                for (v.items) |elem| {
+                    const elem_hash = elem.hashValue();
+                    hasher.update(std.mem.asBytes(&elem_hash));
+                }
+            },
+            .byte_array => |b| hasher.update(b.items),
+            .set => |s| {
+                // Order-independent hash using XOR
+                var combined: u64 = 0;
+                for (s.keys()) |key| {
+                    combined ^= key.hashValue();
+                }
+                hasher.update(std.mem.asBytes(&combined));
+            },
+            .stack_effect => |effect| {
+                for (effect.inputs) |param| {
+                    hasher.update(param.name);
+                }
+                hasher.update("--");
+                for (effect.outputs) |param| {
+                    hasher.update(param.name);
+                }
+            },
+            .parse_time_marker => {
+                // All parse_time_markers hash the same
+                hasher.update("parse_time_marker");
+            },
+            .error_value => |err| {
+                hasher.update(err.error_type);
+                hasher.update(err.message);
+            },
+        }
+
+        return hasher.final();
     }
 };
 

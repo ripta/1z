@@ -9,6 +9,7 @@ const Instruction = value_mod.Instruction;
 const HashTable = value_mod.HashTable;
 const Vector = value_mod.Vector;
 const ByteArray = value_mod.ByteArray;
+const Set = value_mod.Set;
 const ErrorObject = value_mod.ErrorObject;
 const StackFrame = value_mod.StackFrame;
 
@@ -167,6 +168,7 @@ const primitives = [_]Primitive{
     .{ .name = "make-hash", .stack_effect = "quotation -- hash", .func = nativeMakeHash },
     .{ .name = "make-vector", .stack_effect = "quotation -- vector", .func = nativeMakeVector },
     .{ .name = "make-byte-array", .stack_effect = "quotation -- byte-array", .func = nativeMakeByteArray },
+    .{ .name = "make-set", .stack_effect = "quotation -- set", .func = nativeMakeSet },
     .{ .name = "1array", .stack_effect = "elem -- array", .func = native1Array },
     .{ .name = "curry", .stack_effect = "x quot -- quot'", .func = nativeCurry },
     .{ .name = "compose", .stack_effect = "quot1 quot2 -- quot'", .func = nativeCompose },
@@ -190,6 +192,12 @@ const primitives = [_]Primitive{
     .{ .name = "#prepend", .stack_effect = "seq1 seq2 -- seq", .func = nativePrepend },
     .{ .name = "#push!", .stack_effect = "vec elem -- vec", .func = nativePushMut },
     .{ .name = "#pop!", .stack_effect = "vec -- elem", .func = nativePopMut },
+    .{ .name = "@in?", .stack_effect = "set value -- ?", .func = nativeAtIn },
+    .{ .name = "@adjoin", .stack_effect = "set value -- set'", .func = nativeAtAdjoin },
+    .{ .name = "@remove", .stack_effect = "set value -- set'", .func = nativeAtRemove },
+    .{ .name = "@union", .stack_effect = "set1 set2 -- set'", .func = nativeAtUnion },
+    .{ .name = "@intersection", .stack_effect = "set1 set2 -- set'", .func = nativeAtIntersection },
+    .{ .name = "@difference", .stack_effect = "set1 set2 -- set'", .func = nativeAtDifference },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -393,6 +401,10 @@ fn nativeEq(ctx: *Context) anyerror!void {
             .symbol => |bs| std.mem.eql(u8, as, bs),
             else => false,
         },
+        .set => a.eql(b),
+        .array => a.eql(b),
+        .hash => a.eql(b),
+        .vector => a.eql(b),
         else => false,
     };
     try ctx.stack.push(.{ .boolean = result });
@@ -800,6 +812,181 @@ fn nativeMakeByteArray(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .byte_array = ba });
 }
 
+/// make-set ( quotation -- set ) - Create a set from unique values in quotation
+/// Example: [ 1 2 3 2 1 ] make-set creates S{ 1 2 3 } (duplicates removed)
+fn nativeMakeSet(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    const instrs = quot.instructions;
+    const alloc = ctx.quotationAllocator();
+
+    // Create a new set
+    const set = alloc.create(Set) catch return error.OutOfMemory;
+    set.* = Set{};
+
+    // Execute each instruction and collect unique values
+    for (instrs) |instr| {
+        const val = switch (instr.op) {
+            .push_literal => |v| v,
+            .call_word => blk: {
+                // Execute the word to get the value
+                try ctx.executeQuotation(.{ .instructions = @as(*const [1]Instruction, &instr) });
+                break :blk ctx.stack.pop() catch return error.OutOfMemory;
+            },
+        };
+
+        set.put(alloc, val, {}) catch return error.OutOfMemory;
+    }
+
+    try ctx.stack.push(.{ .set = set });
+}
+
+/// @in? ( set value -- ? ) - Check if value is in the set
+fn nativeAtIn(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const set_val = try ctx.stack.pop();
+
+    const set = switch (set_val) {
+        .set => |s| s,
+        else => return error.TypeError,
+    };
+
+    try ctx.stack.push(.{ .boolean = set.contains(val) });
+}
+
+/// @adjoin ( set value -- set' ) - Add value to set, returning new set (immutable)
+fn nativeAtAdjoin(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const set_val = try ctx.stack.pop();
+
+    const old_set = switch (set_val) {
+        .set => |s| s,
+        else => return error.TypeError,
+    };
+
+    if (old_set.contains(val)) {
+        // Value already in set, return same set
+        try ctx.stack.push(.{ .set = old_set });
+        return;
+    }
+
+    const alloc = ctx.quotationAllocator();
+
+    // Create new set with the additional value
+    const new_set = alloc.create(Set) catch return error.OutOfMemory;
+    new_set.* = old_set.clone(alloc) catch return error.OutOfMemory;
+
+    // Add new element
+    new_set.put(alloc, val, {}) catch return error.OutOfMemory;
+
+    try ctx.stack.push(.{ .set = new_set });
+}
+
+/// @remove ( set value -- set' ) - Remove value from set, returning new set (immutable)
+fn nativeAtRemove(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const set_val = try ctx.stack.pop();
+
+    const old_set = switch (set_val) {
+        .set => |s| s,
+        else => return error.TypeError,
+    };
+
+    const alloc = ctx.quotationAllocator();
+
+    // Create new set without the specified value
+    const new_set = alloc.create(Set) catch return error.OutOfMemory;
+    new_set.* = old_set.clone(alloc) catch return error.OutOfMemory;
+
+    _ = new_set.swapRemove(val);
+    try ctx.stack.push(.{ .set = new_set });
+}
+
+/// @union ( set1 set2 -- set' ) - Return union of two sets
+fn nativeAtUnion(ctx: *Context) anyerror!void {
+    const set2_val = try ctx.stack.pop();
+    const set1_val = try ctx.stack.pop();
+
+    const set1 = switch (set1_val) {
+        .set => |s| s,
+        else => return error.TypeError,
+    };
+    const set2 = switch (set2_val) {
+        .set => |s| s,
+        else => return error.TypeError,
+    };
+
+    const alloc = ctx.quotationAllocator();
+
+    // Create new set with all elements from both sets
+    const new_set = alloc.create(Set) catch return error.OutOfMemory;
+    new_set.* = set1.clone(alloc) catch return error.OutOfMemory;
+
+    // Add all elements from set2 (duplicates handled automatically)
+    for (set2.keys()) |key| {
+        new_set.put(alloc, key, {}) catch return error.OutOfMemory;
+    }
+
+    try ctx.stack.push(.{ .set = new_set });
+}
+
+/// @intersection ( set1 set2 -- set' ) - Return intersection of two sets
+fn nativeAtIntersection(ctx: *Context) anyerror!void {
+    const set2_val = try ctx.stack.pop();
+    const set1_val = try ctx.stack.pop();
+
+    const set1 = switch (set1_val) {
+        .set => |s| s,
+        else => return error.TypeError,
+    };
+    const set2 = switch (set2_val) {
+        .set => |s| s,
+        else => return error.TypeError,
+    };
+
+    const alloc = ctx.quotationAllocator();
+
+    // Create new set with elements that are in both sets
+    const new_set = alloc.create(Set) catch return error.OutOfMemory;
+    new_set.* = Set{};
+
+    for (set1.keys()) |key| {
+        if (set2.contains(key)) {
+            new_set.put(alloc, key, {}) catch return error.OutOfMemory;
+        }
+    }
+
+    try ctx.stack.push(.{ .set = new_set });
+}
+
+/// @difference ( set1 set2 -- set' ) - Return elements in set1 but not in set2
+fn nativeAtDifference(ctx: *Context) anyerror!void {
+    const set2_val = try ctx.stack.pop();
+    const set1_val = try ctx.stack.pop();
+
+    const set1 = switch (set1_val) {
+        .set => |s| s,
+        else => return error.TypeError,
+    };
+    const set2 = switch (set2_val) {
+        .set => |s| s,
+        else => return error.TypeError,
+    };
+
+    const alloc = ctx.quotationAllocator();
+
+    // Create new set with elements from set1 that aren't in set2
+    const new_set = alloc.create(Set) catch return error.OutOfMemory;
+    new_set.* = Set{};
+
+    for (set1.keys()) |key| {
+        if (!set2.contains(key)) {
+            new_set.put(alloc, key, {}) catch return error.OutOfMemory;
+        }
+    }
+
+    try ctx.stack.push(.{ .set = new_set });
+}
+
 /// 1array ( elem -- array ) - Wrap element in single-element array
 fn native1Array(ctx: *Context) anyerror!void {
     const elem = try ctx.stack.pop();
@@ -961,6 +1148,7 @@ fn nativeLen(ctx: *Context) anyerror!void {
         .array => |a| @intCast(a.len),
         .vector => |v| @intCast(v.items.len),
         .byte_array => |b| @intCast(b.items.len),
+        .set => |s| @intCast(s.count()),
         else => return error.TypeError,
     };
     try ctx.stack.push(.{ .integer = len });
@@ -1272,6 +1460,12 @@ fn nativeEach(ctx: *Context) anyerror!void {
                 try ctx.executeQuotation(quot);
             }
         },
+        .set => |s| {
+            for (s.keys()) |elem| {
+                try ctx.stack.push(elem);
+                try ctx.executeQuotation(quot);
+            }
+        },
         else => return error.TypeError,
     }
 }
@@ -1331,6 +1525,19 @@ fn nativeMap(ctx: *Context) anyerror!void {
                 result[i] = try ctx.stack.pop();
             }
             try ctx.stack.push(.{ .array = result });
+        },
+        .set => |s| {
+            const result_set = alloc.create(Set) catch return error.OutOfMemory;
+            result_set.* = Set{};
+            for (s.keys()) |elem| {
+                try ctx.stack.push(elem);
+                try ctx.executeQuotation(quot);
+                const mapped = try ctx.stack.pop();
+
+                result_set.put(alloc, mapped, {}) catch return error.OutOfMemory;
+            }
+
+            try ctx.stack.push(.{ .set = result_set });
         },
         else => return error.TypeError,
     }
@@ -1428,6 +1635,20 @@ fn nativeFilter(ctx: *Context) anyerror!void {
             }
             try ctx.stack.push(.{ .byte_array = result_ba });
         },
+        .set => |s| {
+            // Filter over set returns a new set with matching elements
+            const result_set = alloc.create(Set) catch return error.OutOfMemory;
+            result_set.* = Set{};
+            for (s.keys()) |elem| {
+                try ctx.stack.push(elem);
+                try ctx.executeQuotation(quot);
+                const predicate = try popBoolean(ctx);
+                if (predicate) {
+                    result_set.put(alloc, elem, {}) catch return error.OutOfMemory;
+                }
+            }
+            try ctx.stack.push(.{ .set = result_set });
+        },
         else => return error.TypeError,
     }
 }
@@ -1474,6 +1695,15 @@ fn nativeReduce(ctx: *Context) anyerror!void {
             for (b.items) |byte| {
                 try ctx.stack.push(acc);
                 try ctx.stack.push(.{ .integer = byte });
+                try ctx.executeQuotation(quot);
+                acc = try ctx.stack.pop();
+            }
+            try ctx.stack.push(acc);
+        },
+        .set => |s| {
+            for (s.keys()) |elem| {
+                try ctx.stack.push(acc);
+                try ctx.stack.push(elem);
                 try ctx.executeQuotation(quot);
                 acc = try ctx.stack.pop();
             }
@@ -1853,7 +2083,7 @@ fn popInteger(ctx: *Context) !i64 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .integer => |i| i,
-        .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array => error.TypeError,
+        .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -1863,7 +2093,7 @@ fn popBoolean(ctx: *Context) !bool {
     return switch (val) {
         .boolean => |b| b,
         .integer => |i| i != 0,
-        .string, .symbol, .array, .quotation, .hash, .vector, .byte_array => error.TypeError,
+        .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -1872,7 +2102,7 @@ fn popQuotation(ctx: *Context) !Quotation {
     const val = try ctx.stack.pop();
     return switch (val) {
         .quotation => |q| q,
-        .integer, .boolean, .string, .symbol, .array, .hash, .vector, .byte_array => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .hash, .vector, .byte_array, .set => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -1881,7 +2111,7 @@ fn popSymbol(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .symbol => |s| s,
-        .integer, .boolean, .string, .array, .quotation, .hash, .vector, .byte_array => error.TypeError,
+        .integer, .boolean, .string, .array, .quotation, .hash, .vector, .byte_array, .set => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -1890,7 +2120,7 @@ fn popString(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .string => |s| s,
-        .integer, .boolean, .symbol, .array, .quotation, .hash, .vector, .byte_array => error.TypeError,
+        .integer, .boolean, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -1899,7 +2129,7 @@ fn popStackEffect(ctx: *Context) !StackEffect {
     const val = try ctx.stack.pop();
     return switch (val) {
         .stack_effect => |se| se,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set => error.TypeError,
         .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -1908,7 +2138,7 @@ fn popVector(ctx: *Context) !*Vector {
     const val = try ctx.stack.pop();
     return switch (val) {
         .vector => |v| v,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .byte_array => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .byte_array, .set => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -1917,7 +2147,7 @@ fn popByteArray(ctx: *Context) !*ByteArray {
     const val = try ctx.stack.pop();
     return switch (val) {
         .byte_array => |b| b,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .set => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }

@@ -13,6 +13,9 @@ V{: parse-time [ "}" parse-until make-vector ] ;
 \ Byte array literal syntax
 B{: parse-time [ "}" parse-until make-byte-array ] ;
 
+\ Set literal syntax
+S{: parse-time [ "}" parse-until make-set ] ;
+
 \ Control flow
 when: ( ? quot -- ) [ [ ] if ] ;
 unless: ( ? quot -- ) [ [ ] swap if ] ;
