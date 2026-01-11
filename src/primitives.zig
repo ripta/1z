@@ -108,6 +108,7 @@ const Primitive = struct {
     name: []const u8,
     stack_effect: ?[]const u8 = null,
     func: NativeFn,
+    parse_time: bool = false,
 };
 
 const Instruction = @import("value.zig").Instruction;
@@ -146,6 +147,7 @@ pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
 
         try dict.put(p.name, WordDefinition{
             .name = p.name,
+            .parse_time = p.parse_time,
             .stack_effect = effect,
             .action = .{ .native = p.func },
         });
