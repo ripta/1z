@@ -827,6 +827,59 @@ fn nativeBenchmark(ctx: *Context) anyerror!void {
 }
 
 // =============================================================================
+// UTF-8 Helpers
+// =============================================================================
+
+/// Get the byte slice for a codepoint at the given codepoint index.
+/// Assumes valid UTF-8 (strings are valid by construction).
+fn utf8NthCodepoint(s: []const u8, n: usize) ?[]const u8 {
+    const utf8 = std.unicode.Utf8View.initUnchecked(s);
+    var iter = utf8.iterator();
+    var idx: usize = 0;
+    while (iter.nextCodepointSlice()) |slice| {
+        if (idx == n) return slice;
+        idx += 1;
+    }
+    return null; // Index out of bounds
+}
+
+/// Get byte range for codepoint slice [start, end).
+/// Assumes valid UTF-8 (strings are valid by construction).
+fn utf8SliceByCodepoints(s: []const u8, start: usize, end: usize) ?struct { start_byte: usize, end_byte: usize } {
+    const utf8 = std.unicode.Utf8View.initUnchecked(s);
+    var iter = utf8.iterator();
+    var cp_idx: usize = 0;
+    var start_byte: usize = 0;
+    var byte_pos: usize = 0;
+
+    while (iter.nextCodepointSlice()) |slice| {
+        if (cp_idx == start) start_byte = byte_pos;
+        byte_pos += slice.len;
+        if (cp_idx + 1 == end) {
+            return .{ .start_byte = start_byte, .end_byte = byte_pos };
+        }
+        cp_idx += 1;
+    }
+    // Handle case where end == total codepoint count
+    if (cp_idx == end) {
+        return .{ .start_byte = start_byte, .end_byte = byte_pos };
+    }
+    return null; // Invalid range
+}
+
+/// Count codepoints in a UTF-8 string.
+/// Assumes valid UTF-8 (strings are valid by construction).
+fn utf8CodepointCount(s: []const u8) usize {
+    const utf8 = std.unicode.Utf8View.initUnchecked(s);
+    var iter = utf8.iterator();
+    var count: usize = 0;
+    while (iter.nextCodepointSlice()) |_| {
+        count += 1;
+    }
+    return count;
+}
+
+// =============================================================================
 // Sequence Accessors
 // =============================================================================
 
@@ -834,7 +887,7 @@ fn nativeBenchmark(ctx: *Context) anyerror!void {
 fn nativeLen(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const len: i64 = switch (val) {
-        .string => |s| @intCast(s.len),
+        .string => |s| @intCast(utf8CodepointCount(s)),
         .array => |a| @intCast(a.len),
         .vector => |v| @intCast(v.items.len),
         else => return error.TypeError,
@@ -852,11 +905,9 @@ fn nativeNth(ctx: *Context) anyerror!void {
 
     switch (val) {
         .string => |s| {
-            if (idx >= s.len) return error.IndexOutOfBounds;
-            // Return the character as a single-character string
-            const char_slice = ctx.quotationAllocator().alloc(u8, 1) catch return error.OutOfMemory;
-            char_slice[0] = s[idx];
-            try ctx.stack.push(.{ .string = char_slice });
+            const cp_slice = utf8NthCodepoint(s, idx) orelse return error.IndexOutOfBounds;
+            const result = ctx.quotationAllocator().dupe(u8, cp_slice) catch return error.OutOfMemory;
+            try ctx.stack.push(.{ .string = result });
         },
         .array => |a| {
             if (idx >= a.len) return error.IndexOutOfBounds;
@@ -876,10 +927,9 @@ fn nativeFirst(ctx: *Context) anyerror!void {
 
     switch (val) {
         .string => |s| {
-            if (s.len == 0) return error.EmptySequence;
-            const char_slice = ctx.quotationAllocator().alloc(u8, 1) catch return error.OutOfMemory;
-            char_slice[0] = s[0];
-            try ctx.stack.push(.{ .string = char_slice });
+            const cp_slice = utf8NthCodepoint(s, 0) orelse return error.EmptySequence;
+            const result = ctx.quotationAllocator().dupe(u8, cp_slice) catch return error.OutOfMemory;
+            try ctx.stack.push(.{ .string = result });
         },
         .array => |a| {
             if (a.len == 0) return error.EmptySequence;
@@ -899,10 +949,12 @@ fn nativeLast(ctx: *Context) anyerror!void {
 
     switch (val) {
         .string => |s| {
-            if (s.len == 0) return error.EmptySequence;
-            const char_slice = ctx.quotationAllocator().alloc(u8, 1) catch return error.OutOfMemory;
-            char_slice[0] = s[s.len - 1];
-            try ctx.stack.push(.{ .string = char_slice });
+            const count = utf8CodepointCount(s);
+            if (count == 0) return error.EmptySequence;
+            // Safe to use .? since count > 0 means at least one codepoint exists
+            const cp_slice = utf8NthCodepoint(s, count - 1).?;
+            const result = ctx.quotationAllocator().dupe(u8, cp_slice) catch return error.OutOfMemory;
+            try ctx.stack.push(.{ .string = result });
         },
         .array => |a| {
             if (a.len == 0) return error.EmptySequence;
@@ -1103,7 +1155,7 @@ fn nativeAtValues(ctx: *Context) anyerror!void {
 // Higher-Order Combinators
 // =============================================================================
 
-/// #each ( seq quot -- ) - Execute quotation for each element of sequence
+/// #each ( seq quot -- ) - Execute quotation for each element
 fn nativeEach(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
@@ -1117,11 +1169,11 @@ fn nativeEach(ctx: *Context) anyerror!void {
         },
         .string => |s| {
             const alloc = ctx.quotationAllocator();
-            for (s) |c| {
-                // Create single-character string for each char
-                const char_slice = alloc.alloc(u8, 1) catch return error.OutOfMemory;
-                char_slice[0] = c;
-                try ctx.stack.push(.{ .string = char_slice });
+            const utf8 = std.unicode.Utf8View.initUnchecked(s);
+            var iter = utf8.iterator();
+            while (iter.nextCodepointSlice()) |cp_slice| {
+                const char_str = alloc.dupe(u8, cp_slice) catch return error.OutOfMemory;
+                try ctx.stack.push(.{ .string = char_str });
                 try ctx.executeQuotation(quot);
             }
         },
@@ -1154,13 +1206,17 @@ fn nativeMap(ctx: *Context) anyerror!void {
         },
         .string => |s| {
             // Map over string produces array of results (could be strings or other values)
-            const result = alloc.alloc(Value, s.len) catch return error.OutOfMemory;
-            for (s, 0..) |c, i| {
-                const char_slice = alloc.alloc(u8, 1) catch return error.OutOfMemory;
-                char_slice[0] = c;
-                try ctx.stack.push(.{ .string = char_slice });
+            const cp_count = utf8CodepointCount(s);
+            const result = alloc.alloc(Value, cp_count) catch return error.OutOfMemory;
+            const utf8 = std.unicode.Utf8View.initUnchecked(s);
+            var iter = utf8.iterator();
+            var i: usize = 0;
+            while (iter.nextCodepointSlice()) |cp_slice| {
+                const char_str = alloc.dupe(u8, cp_slice) catch return error.OutOfMemory;
+                try ctx.stack.push(.{ .string = char_str });
                 try ctx.executeQuotation(quot);
                 result[i] = try ctx.stack.pop();
+                i += 1;
             }
             try ctx.stack.push(.{ .array = result });
         },
@@ -1214,30 +1270,32 @@ fn nativeFilter(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .array = result });
         },
         .string => |s| {
-            // Filter over string produces filtered string
-            // First pass: count matching characters
-            var count: usize = 0;
-            for (s) |c| {
-                const char_slice = alloc.alloc(u8, 1) catch return error.OutOfMemory;
-                char_slice[0] = c;
-                try ctx.stack.push(.{ .string = char_slice });
+            // Filter over string produces filtered string (iterating by codepoint)
+            // First pass: count total byte length of matching codepoints
+            var total_bytes: usize = 0;
+            const utf8_1 = std.unicode.Utf8View.initUnchecked(s);
+            var iter_1 = utf8_1.iterator();
+            while (iter_1.nextCodepointSlice()) |cp_slice| {
+                const char_str = alloc.dupe(u8, cp_slice) catch return error.OutOfMemory;
+                try ctx.stack.push(.{ .string = char_str });
                 try ctx.executeQuotation(quot);
                 const predicate = try popBoolean(ctx);
-                if (predicate) count += 1;
+                if (predicate) total_bytes += cp_slice.len;
             }
 
             // Second pass: build result string
-            const result = alloc.alloc(u8, count) catch return error.OutOfMemory;
-            var idx: usize = 0;
-            for (s) |c| {
-                const char_slice = alloc.alloc(u8, 1) catch return error.OutOfMemory;
-                char_slice[0] = c;
-                try ctx.stack.push(.{ .string = char_slice });
+            const result = alloc.alloc(u8, total_bytes) catch return error.OutOfMemory;
+            var write_pos: usize = 0;
+            const utf8_2 = std.unicode.Utf8View.initUnchecked(s);
+            var iter_2 = utf8_2.iterator();
+            while (iter_2.nextCodepointSlice()) |cp_slice| {
+                const char_str = alloc.dupe(u8, cp_slice) catch return error.OutOfMemory;
+                try ctx.stack.push(.{ .string = char_str });
                 try ctx.executeQuotation(quot);
                 const predicate = try popBoolean(ctx);
                 if (predicate) {
-                    result[idx] = c;
-                    idx += 1;
+                    @memcpy(result[write_pos..][0..cp_slice.len], cp_slice);
+                    write_pos += cp_slice.len;
                 }
             }
             try ctx.stack.push(.{ .string = result });
@@ -1261,7 +1319,7 @@ fn nativeFilter(ctx: *Context) anyerror!void {
     }
 }
 
-/// #reduce ( seq init quot -- value ) - Fold/accumulate sequence
+/// #reduce ( seq init quot -- result ) - Fold sequence with accumulator
 fn nativeReduce(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     var acc = try ctx.stack.pop(); // initial accumulator
@@ -1279,11 +1337,12 @@ fn nativeReduce(ctx: *Context) anyerror!void {
         },
         .string => |s| {
             const alloc = ctx.quotationAllocator();
-            for (s) |c| {
-                const char_slice = alloc.alloc(u8, 1) catch return error.OutOfMemory;
-                char_slice[0] = c;
+            const utf8 = std.unicode.Utf8View.initUnchecked(s);
+            var iter = utf8.iterator();
+            while (iter.nextCodepointSlice()) |cp_slice| {
+                const char_str = alloc.dupe(u8, cp_slice) catch return error.OutOfMemory;
                 try ctx.stack.push(acc);
-                try ctx.stack.push(.{ .string = char_slice });
+                try ctx.stack.push(.{ .string = char_str });
                 try ctx.executeQuotation(quot);
                 acc = try ctx.stack.pop();
             }
@@ -1326,10 +1385,8 @@ fn nativeSlice(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .array = result });
         },
         .string => |s| {
-            if (end > s.len) return error.IndexOutOfBounds;
-            const slice_len = end - start;
-            const result = alloc.alloc(u8, slice_len) catch return error.OutOfMemory;
-            @memcpy(result, s[start..end]);
+            const bounds = utf8SliceByCodepoints(s, start, end) orelse return error.IndexOutOfBounds;
+            const result = alloc.dupe(u8, s[bounds.start_byte..bounds.end_byte]) catch return error.OutOfMemory;
             try ctx.stack.push(.{ .string = result });
         },
         .vector => |v| {
@@ -1404,7 +1461,7 @@ fn getSequenceItems(seq: Value) ?[]const Value {
     };
 }
 
-/// #append! ( vec seq -- vec ) - Extend vector with elements from sequence, mutate in place
+/// #append! ( vec seq -- vec ) - Mutably append sequence elements to vector
 fn nativeAppendMut(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     const vec = try popVector(ctx);
@@ -1422,10 +1479,10 @@ fn nativeAppendMut(ctx: *Context) anyerror!void {
             }
         },
         .string => |s| {
-            // Append each character as a single-char string
-            for (s) |c| {
-                const char_str = alloc.alloc(u8, 1) catch return error.OutOfMemory;
-                char_str[0] = c;
+            const utf8 = std.unicode.Utf8View.initUnchecked(s);
+            var iter = utf8.iterator();
+            while (iter.nextCodepointSlice()) |cp_slice| {
+                const char_str = alloc.dupe(u8, cp_slice) catch return error.OutOfMemory;
                 vec.append(alloc, .{ .string = char_str }) catch return error.OutOfMemory;
             }
         },
