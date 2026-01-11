@@ -173,7 +173,7 @@ const primitives = [_]Primitive{
     .{ .name = "#last", .stack_effect = "seq -- elem", .func = nativeLast },
     .{ .name = "@get", .stack_effect = "assoc key -- value", .func = nativeAtGet },
     .{ .name = "@has?", .stack_effect = "assoc key -- ?", .func = nativeAtHas },
-    .{ .name = "@set!", .stack_effect = "assoc key value -- assoc'", .func = nativeAtSet },
+    .{ .name = "@set", .stack_effect = "assoc key value -- assoc'", .func = nativeAtSet },
     .{ .name = "@keys", .stack_effect = "assoc -- array", .func = nativeAtKeys },
     .{ .name = "@values", .stack_effect = "assoc -- array", .func = nativeAtValues },
     .{ .name = "#each", .stack_effect = "seq quot: ( elem -- ) --", .func = nativeEach },
@@ -1004,7 +1004,7 @@ fn nativeAtHas(ctx: *Context) anyerror!void {
     }
 }
 
-/// @set! ( assoc key value -- assoc' ) - Set value, returns new hash (hash only)
+/// @set ( assoc key value -- assoc' ) - Set value, returns new hash (hash only)
 fn nativeAtSet(ctx: *Context) anyerror!void {
     const new_value = try ctx.stack.pop();
     const key = try ctx.stack.pop();

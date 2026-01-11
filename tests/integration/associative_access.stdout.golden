@@ -12,13 +12,13 @@ PASS: hash @has? string key true
 Stack: [ ]
 PASS: hash @has? false
 Stack: [ ]
-PASS: hash @set! add new key
+PASS: hash @set add new key
 Stack: [ ]
-PASS: hash @set! update existing key
+PASS: hash @set update existing key
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
-PASS: hash @set! immutability
+PASS: hash @set immutability
 Stack: [ ]
 PASS: hash @keys count
 Stack: [ ]
@@ -50,7 +50,7 @@ PASS: empty hash @keys
 Stack: [ ]
 PASS: empty hash @values
 Stack: [ ]
-PASS: chained @set!
+PASS: chained @set
 Stack: [ ]
 All associative accessor tests complete!
 Stack: [ ]
