@@ -32,6 +32,7 @@ nip: ( a b -- b ) [ swap drop ] ;
 keep: ( x quot -- ... x ) [ over [ call ] dip ] ;
 bi: ( x p q -- ) [ [ keep ] dip call ] ;
 2dup: ( a b -- a b a b ) [ over over ] ;
+dupd: ( a b -- a a b ) [ over swap ] ;
 2drop: ( a b -- ) [ drop drop ] ;
 2dip: ( a b quot -- a b ) [ swap [ dip ] dip ] ;
 <rot-: ( a b c -- b c a ) [ [ swap ] dip swap ] ;

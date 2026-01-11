@@ -131,7 +131,7 @@ const primitives = [_]Primitive{
     .{ .name = "dup", .stack_effect = "a -- a a", .func = nativeDup },
     .{ .name = "drop", .stack_effect = "a --", .func = nativeDrop },
     .{ .name = "swap", .stack_effect = "a b -- b a", .func = nativeSwap },
-    .{ .name = "over", .stack_effect = "x y -- x y x", .func = nativeOver },
+    .{ .name = "over", .stack_effect = "a b -- a b a", .func = nativeOver },
     .{ .name = "dip", .stack_effect = "x quot -- x", .func = nativeDip },
     .{ .name = "wipe", .stack_effect = "... --", .func = nativeWipe },
     .{ .name = "+", .stack_effect = "a b -- a+b", .func = nativeAdd },
