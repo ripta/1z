@@ -21,6 +21,7 @@ pub const Value = union(enum) {
     array: []const Value,
     quotation: []const Instruction,
     stack_effect: StackEffect,
+    parse_time_marker: void, // Marker for parse-time word definitions
     error_value: []const u8,
 
     pub fn write(self: Value, writer: anytype) anyerror!void {
@@ -51,6 +52,7 @@ pub const Value = union(enum) {
                 try writer.writeAll("]");
             },
             .stack_effect => |effect| try effect.write(writer),
+            .parse_time_marker => try writer.writeAll("parse-time"),
             .error_value => |msg| try writer.print("<error: {s}>", .{msg}),
         }
     }
@@ -83,6 +85,7 @@ pub const Value = union(enum) {
                 return true;
             },
             .stack_effect => |a| a.eql(other.stack_effect),
+            .parse_time_marker => true, // All parse_time_markers are equal
             .error_value => |a| std.mem.eql(u8, a, other.error_value),
         };
     }
