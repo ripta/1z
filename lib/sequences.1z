@@ -11,6 +11,7 @@
     =
   ] if
 ] ;
+#head?: [ #starts-with? ] ;
 
 \ Check if sequence ends with suffix
 #ends-with?: ( seq suffix -- ? ) [
@@ -23,4 +24,10 @@
     [ over #len #slice ] dip  \ seq[start:end] suffix
     =
   ] if
+] ;
+#tail?: [ #ends-with? ] ;
+
+\ Check if index is within bounds of sequence
+#in-bounds?: ( index seq -- ? ) [
+  dupd #len < [ 0 >= ] [ drop f ] if
 ] ;
