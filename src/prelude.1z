@@ -29,8 +29,8 @@ EKeyNotFound: [ "KeyNotFound" ] ;
 
 \ Stack-shuffling
 nip: ( a b -- b ) [ swap drop ] ;
-keep: ( x quot -- ... x ) [ over [ call ] dip ] ;
-bi: ( x p q -- ) [ [ keep ] dip call ] ;
+keep: ( ..a x quot: ( ..a x -- ..b ) -- ..b x ) [ over [ call ] dip ] ;
+bi: ( x quot1 quot2 -- ) [ [ keep ] dip call ] ;
 2dup: ( a b -- a b a b ) [ over over ] ;
 dupd: ( a b -- a a b ) [ over swap ] ;
 2drop: ( a b -- ) [ drop drop ] ;

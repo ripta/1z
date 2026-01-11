@@ -173,6 +173,13 @@ pub const Context = struct {
     /// Validate a quotation against an expected effect by inferring its delta.
     /// Returns an error if the quotation doesn't match the expected effect.
     fn validateQuotationEffect(self: *Context, quot: Quotation, expected_effect: *const StackEffect, param_name: []const u8) !void {
+        // If the effect has unbalanced row variables (row vars that appear only in
+        // inputs or only in outputs), we can't determine a fixed expected delta.
+        // Skip validation in this case since the effect is polymorphic.
+        if (hasUnbalancedRowVariables(expected_effect)) {
+            return;
+        }
+
         // Compute expected delta from effect
         var expected_concrete_inputs: i64 = 0;
         var expected_concrete_outputs: i64 = 0;
@@ -217,6 +224,56 @@ pub const Context = struct {
             }
         }
         // If we can't infer the delta, don't error - allow dynamic validation
+    }
+
+    /// Check if an effect has row variables that appear only in inputs or only in outputs.
+    /// Such effects are polymorphic and their delta cannot be determined statically.
+    fn hasUnbalancedRowVariables(effect: *const StackEffect) bool {
+        // Collect row variables from inputs
+        var input_row_vars: [8][]const u8 = undefined;
+        var input_count: usize = 0;
+        for (effect.inputs) |param| {
+            if (isRowVariable(param.name) and input_count < 8) {
+                input_row_vars[input_count] = param.name;
+                input_count += 1;
+            }
+        }
+
+        // Collect row variables from outputs
+        var output_row_vars: [8][]const u8 = undefined;
+        var output_count: usize = 0;
+        for (effect.outputs) |param| {
+            if (isRowVariable(param.name) and output_count < 8) {
+                output_row_vars[output_count] = param.name;
+                output_count += 1;
+            }
+        }
+
+        // Check if any input row var is missing from outputs
+        for (input_row_vars[0..input_count]) |input_var| {
+            var found = false;
+            for (output_row_vars[0..output_count]) |output_var| {
+                if (std.mem.eql(u8, input_var, output_var)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return true;
+        }
+
+        // Check if any output row var is missing from inputs
+        for (output_row_vars[0..output_count]) |output_var| {
+            var found = false;
+            for (input_row_vars[0..input_count]) |input_var| {
+                if (std.mem.eql(u8, output_var, input_var)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return true;
+        }
+
+        return false;
     }
 
     /// Check if a name is a row variable (starts with "..")
