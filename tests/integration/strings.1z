@@ -17,4 +17,11 @@
 "#join mixed types" test-section
 { "count" 42 } ": " #join "count: 42" "#join string and int" assert=
 
-"All #join tests complete!" print
+"repeat" test-section
+"ab" 3 repeat "ababab" "repeat 3 times" assert=
+"x" 1 repeat "x" "repeat 1 time" assert=
+"hello" 0 repeat "" "repeat 0 times" assert=
+"test" -1 repeat "" "repeat negative" assert=
+"" 5 repeat "" "repeat empty string" assert=
+
+"All string tests complete!" print

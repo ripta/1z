@@ -18,5 +18,17 @@ Stack: [ ]
 Stack: [ ]
 PASS: #join string and int
 Stack: [ ]
-All #join tests complete!
+=== repeat ===
+Stack: [ ]
+PASS: repeat 3 times
+Stack: [ ]
+PASS: repeat 1 time
+Stack: [ ]
+PASS: repeat 0 times
+Stack: [ ]
+PASS: repeat negative
+Stack: [ ]
+PASS: repeat empty string
+Stack: [ ]
+All string tests complete!
 Stack: [ ]
