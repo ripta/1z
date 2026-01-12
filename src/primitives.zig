@@ -11,6 +11,8 @@ const Vector = value_mod.Vector;
 const ByteArray = value_mod.ByteArray;
 const Set = value_mod.Set;
 const MutableMap = value_mod.MutableMap;
+const Stream = value_mod.Stream;
+const StreamMode = value_mod.StreamMode;
 const ErrorObject = value_mod.ErrorObject;
 const StackFrame = value_mod.StackFrame;
 
@@ -144,20 +146,24 @@ const Primitive = struct {
 };
 
 const primitives = [_]Primitive{
+    // Stack manipulation primitives
     .{ .name = "dup", .stack_effect = "a -- a a", .func = nativeDup },
     .{ .name = "drop", .stack_effect = "a --", .func = nativeDrop },
     .{ .name = "swap", .stack_effect = "a b -- b a", .func = nativeSwap },
     .{ .name = "over", .stack_effect = "a b -- a b a", .func = nativeOver },
     .{ .name = "dip", .stack_effect = "x quot -- x", .func = nativeDip },
     .{ .name = "wipe", .stack_effect = "... --", .func = nativeWipe },
+    // Integer arithmetic primitives
     .{ .name = "+", .stack_effect = "a b -- a+b", .func = nativeAdd },
     .{ .name = "-", .stack_effect = "a b -- a-b", .func = nativeSub },
     .{ .name = "*", .stack_effect = "a b -- a*b", .func = nativeMul },
     .{ .name = "/", .stack_effect = "a b -- a/b", .func = nativeDiv },
     .{ .name = "%", .stack_effect = "a b -- a%b", .func = nativeMod },
+    // Integer arithmetic with wraparound
     .{ .name = "+%", .stack_effect = "a b -- a+b", .func = nativeAddWrap },
     .{ .name = "-%", .stack_effect = "a b -- a-b", .func = nativeSubWrap },
     .{ .name = "*%", .stack_effect = "a b -- a*b", .func = nativeMulWrap },
+    // Control flow, constants, and comparators
     .{ .name = "call", .stack_effect = "quot --", .func = nativeCall },
     .{ .name = ";", .stack_effect = "name quot --", .func = nativeSemicolon },
     .{ .name = "t", .stack_effect = "-- t", .func = nativeTrue },
@@ -166,18 +172,24 @@ const primitives = [_]Primitive{
     .{ .name = "<", .stack_effect = "a b -- ?", .func = nativeLt },
     .{ .name = ">", .stack_effect = "a b -- ?", .func = nativeGt },
     .{ .name = "if", .stack_effect = "? true-quot false-quot --", .func = nativeIf },
+    // String manipulation
     .{ .name = "print", .stack_effect = "str --", .func = nativePrint },
     .{ .name = "to-string", .stack_effect = "value -- string", .func = nativeToString },
     .{ .name = ">string", .stack_effect = "value -- string", .func = nativeAsString },
     .{ .name = ">bytes", .stack_effect = "string -- byte-array", .func = nativeToBytes },
     .{ .name = "bytes>", .stack_effect = "byte-array -- string", .func = nativeBytesToString },
+    // Documentation
     .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
+    // Error handling
     .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ) --", .func = nativeRecover },
     .{ .name = "cleanup", .stack_effect = "body-quot cleanup-quot --", .func = nativeCleanup },
     .{ .name = "rethrow", .stack_effect = "error --", .func = nativeRethrow },
+    // Library loading
     .{ .name = "load", .stack_effect = "filename --", .func = nativeLoad },
+    // Parse-time primitives
     .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTime },
     .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .func = nativeParseUntil },
+    // Data structure creation and manipulation
     .{ .name = "make-hash", .stack_effect = "quotation -- hash", .func = nativeMakeHash },
     .{ .name = "make-vector", .stack_effect = "quotation -- vector", .func = nativeMakeVector },
     .{ .name = "make-byte-array", .stack_effect = "quotation -- byte-array", .func = nativeMakeByteArray },
@@ -186,18 +198,23 @@ const primitives = [_]Primitive{
     .{ .name = "@set!", .stack_effect = "mmap key value -- mmap", .func = nativeAtSetMut },
     .{ .name = "@remove!", .stack_effect = "mmap key -- mmap", .func = nativeAtRemoveMut },
     .{ .name = "1array", .stack_effect = "elem -- array", .func = native1Array },
+    // Functional programming primitives
     .{ .name = "curry", .stack_effect = "x quot -- quot'", .func = nativeCurry },
     .{ .name = "compose", .stack_effect = "quot1 quot2 -- quot'", .func = nativeCompose },
+    // Benchmarking
     .{ .name = "benchmark", .stack_effect = "quot -- hash", .func = nativeBenchmark },
+    // Sequence queries
     .{ .name = "#len", .stack_effect = "seq -- n", .func = nativeLen },
     .{ .name = "#nth", .stack_effect = "seq n -- elem", .func = nativeNth },
     .{ .name = "#first", .stack_effect = "seq -- elem", .func = nativeFirst },
     .{ .name = "#last", .stack_effect = "seq -- elem", .func = nativeLast },
+    // Associative operations
     .{ .name = "@get", .stack_effect = "assoc key -- value", .func = nativeAtGet },
     .{ .name = "@has?", .stack_effect = "assoc key -- ?", .func = nativeAtHas },
     .{ .name = "@set", .stack_effect = "assoc key value -- assoc'", .func = nativeAtSet },
     .{ .name = "@keys", .stack_effect = "assoc -- array", .func = nativeAtKeys },
     .{ .name = "@values", .stack_effect = "assoc -- array", .func = nativeAtValues },
+    // Sequence operations
     .{ .name = "#each", .stack_effect = "seq quot: ( elem -- ) --", .func = nativeEach },
     .{ .name = "#map", .stack_effect = "seq quot: ( elem -- elem' ) -- seq'", .func = nativeMap },
     .{ .name = "#filter", .stack_effect = "seq quot: ( elem -- ? ) -- seq'", .func = nativeFilter },
@@ -206,14 +223,22 @@ const primitives = [_]Primitive{
     .{ .name = "#append", .stack_effect = "seq1 seq2 -- seq", .func = nativeAppend },
     .{ .name = "#append!", .stack_effect = "vec seq -- vec", .func = nativeAppendMut },
     .{ .name = "#prepend", .stack_effect = "seq1 seq2 -- seq", .func = nativePrepend },
+    // Mutable vector operations
     .{ .name = "#push!", .stack_effect = "vec elem -- vec", .func = nativePushMut },
     .{ .name = "#pop!", .stack_effect = "vec -- elem", .func = nativePopMut },
+    // Set operations
     .{ .name = "@in?", .stack_effect = "set value -- ?", .func = nativeAtIn },
     .{ .name = "@adjoin", .stack_effect = "set value -- set'", .func = nativeAtAdjoin },
     .{ .name = "@remove", .stack_effect = "set value -- set'", .func = nativeAtRemove },
     .{ .name = "@union", .stack_effect = "set1 set2 -- set'", .func = nativeAtUnion },
     .{ .name = "@intersection", .stack_effect = "set1 set2 -- set'", .func = nativeAtIntersection },
     .{ .name = "@difference", .stack_effect = "set1 set2 -- set'", .func = nativeAtDifference },
+    // Stream I/O primitives
+    .{ .name = "stdin", .stack_effect = "-- stream", .func = nativeStdin },
+    .{ .name = "stdout", .stack_effect = "-- stream", .func = nativeStdout },
+    .{ .name = "stderr", .stack_effect = "-- stream", .func = nativeStderr },
+    .{ .name = "stream-open", .stack_effect = "path mode -- stream", .func = nativeStreamOpen },
+    .{ .name = "stream-close", .stack_effect = "stream --", .func = nativeStreamClose },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -2217,6 +2242,151 @@ fn nativePopMut(ctx: *Context) anyerror!void {
 }
 
 // =============================================================================
+// Stream I/O primitives
+// =============================================================================
+
+/// stdin ( -- stream ) - Push standard input stream
+fn nativeStdin(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const stream = alloc.create(Stream) catch return error.OutOfMemory;
+    stream.* = Stream{
+        .file = std.fs.File.stdin(),
+        .mode = .read,
+        .name = "stdin",
+    };
+    try ctx.stack.push(.{ .stream = stream });
+}
+
+/// stdout ( -- stream ) - Push standard output stream
+fn nativeStdout(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const stream = alloc.create(Stream) catch return error.OutOfMemory;
+    stream.* = Stream{
+        .file = std.fs.File.stdout(),
+        .mode = .write,
+        .name = "stdout",
+    };
+    try ctx.stack.push(.{ .stream = stream });
+}
+
+/// stderr ( -- stream ) - Push standard error stream
+fn nativeStderr(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const stream = alloc.create(Stream) catch return error.OutOfMemory;
+    stream.* = Stream{
+        .file = std.fs.File.stderr(),
+        .mode = .write,
+        .name = "stderr",
+    };
+    try ctx.stack.push(.{ .stream = stream });
+}
+
+/// stream-open ( path mode -- stream ) - Open a file stream
+/// Mode symbols: read: write: append: read-write:
+fn nativeStreamOpen(ctx: *Context) anyerror!void {
+    const mode_sym = try popSymbol(ctx);
+    const path = try popString(ctx);
+    const alloc = ctx.quotationAllocator();
+
+    // Parse mode symbol
+    const mode: StreamMode = if (std.mem.eql(u8, mode_sym, "read"))
+        .read
+    else if (std.mem.eql(u8, mode_sym, "write"))
+        .write
+    else if (std.mem.eql(u8, mode_sym, "append"))
+        .append
+    else if (std.mem.eql(u8, mode_sym, "read-write"))
+        .read_write
+    else
+        return error.TypeError;
+
+    // Open file based on mode
+    const file = switch (mode) {
+        .read => std.fs.cwd().openFile(path, .{ .mode = .read_only }) catch |err| {
+            return switch (err) {
+                error.FileNotFound => error.FileNotFound,
+                error.AccessDenied => error.PermissionDenied,
+                else => error.IOError,
+            };
+        },
+        .write => std.fs.cwd().createFile(path, .{ .truncate = true }) catch |err| {
+            return switch (err) {
+                error.AccessDenied => error.PermissionDenied,
+                else => error.IOError,
+            };
+        },
+        .append => blk: {
+            const f = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch |open_err| {
+                // File doesn't exist, create it
+                if (open_err == error.FileNotFound) {
+                    break :blk std.fs.cwd().createFile(path, .{}) catch |err| {
+                        return switch (err) {
+                            error.AccessDenied => error.PermissionDenied,
+                            else => error.IOError,
+                        };
+                    };
+                }
+                return switch (open_err) {
+                    error.AccessDenied => error.PermissionDenied,
+                    else => error.IOError,
+                };
+            };
+            // Seek to end for append mode
+            f.seekFromEnd(0) catch return error.IOError;
+            break :blk f;
+        },
+        .read_write => blk: {
+            break :blk std.fs.cwd().openFile(path, .{ .mode = .read_write }) catch |err| {
+                // Try creating if doesn't exist
+                if (err == error.FileNotFound) {
+                    break :blk std.fs.cwd().createFile(path, .{ .read = true }) catch |create_err| {
+                        return switch (create_err) {
+                            error.AccessDenied => error.PermissionDenied,
+                            else => error.IOError,
+                        };
+                    };
+                }
+                return switch (err) {
+                    error.AccessDenied => error.PermissionDenied,
+                    else => error.IOError,
+                };
+            };
+        },
+    };
+
+    // Create stream object
+    const stream = alloc.create(Stream) catch return error.OutOfMemory;
+    const name_copy = alloc.dupe(u8, path) catch return error.OutOfMemory;
+    stream.* = Stream{
+        .file = file,
+        .mode = mode,
+        .name = name_copy,
+    };
+    try ctx.stack.push(.{ .stream = stream });
+}
+
+/// stream-close ( stream -- ) - Close a stream
+fn nativeStreamClose(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    // Don't actually close stdin/stdout/stderr
+    if (std.mem.eql(u8, stream.name, "stdin") or
+        std.mem.eql(u8, stream.name, "stdout") or
+        std.mem.eql(u8, stream.name, "stderr"))
+    {
+        stream.closed = true;
+        return;
+    }
+
+    stream.file.close();
+    stream.closed = true;
+}
+
+// =============================================================================
 // Helper functions
 // =============================================================================
 
@@ -2289,6 +2459,15 @@ fn popByteArray(ctx: *Context) !*ByteArray {
     return switch (val) {
         .byte_array => |b| b,
         .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .set, .mutable_map, .stream => error.TypeError,
+        .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+    };
+}
+
+fn popStream(ctx: *Context) !*Stream {
+    const val = try ctx.stack.pop();
+    return switch (val) {
+        .stream => |s| s,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }

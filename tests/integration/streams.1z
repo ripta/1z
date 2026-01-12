@@ -1,0 +1,38 @@
+\ Integration tests for stream I/O primitives
+
+"lib/testing.1z" load
+
+"Standard streams" test-section
+stdout to-string "<stream stdout write>" "stdout to-string" assert=
+stderr to-string "<stream stderr write>" "stderr to-string" assert=
+stdin to-string "<stream stdin read>" "stdin to-string" assert=
+
+"Stream close on standard streams" test-section
+\ Closing standard streams marks them closed but doesn't actually close
+stdout dup stream-close to-string "<stream stdout (closed)>" "closed stdout to-string" assert=
+stderr dup stream-close to-string "<stream stderr (closed)>" "closed stderr to-string" assert=
+
+"Stream open and close" test-section
+\ Create a test file, then close it
+"/tmp/1z_tests/1z_stream_test.txt" write: stream-open
+stream-close
+"PASS: stream-open write and close" print
+
+\ Open for reading
+"/tmp/1z_tests/1z_stream_test.txt" read: stream-open
+dup to-string "<stream /tmp/1z_tests/1z_stream_test.txt read>" "read stream to-string" assert=
+stream-close
+"PASS: stream-open read and close" print
+
+"Error cases" test-section
+\ FileNotFound error
+[ "/nonexistent/path/file.txt" read: stream-open ]
+[ drop "PASS: FileNotFound error for nonexistent file" print ]
+recover
+
+\ ClosedStream error
+[ stdout dup stream-close stream-close ]
+[ drop "PASS: ClosedStream error on double close" print ]
+recover
+
+"All stream tests complete!" print

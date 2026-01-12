@@ -1,0 +1,39 @@
+Stack: [ ]
+=== Standard streams ===
+Stack: [ ]
+PASS: stdout to-string
+Stack: [ ]
+PASS: stderr to-string
+Stack: [ ]
+PASS: stdin to-string
+Stack: [ ]
+=== Stream close on standard streams ===
+Stack: [ ]
+PASS: closed stdout to-string
+Stack: [ ]
+PASS: closed stderr to-string
+Stack: [ ]
+=== Stream open and close ===
+Stack: [ ]
+Stack: [ <stream /tmp/1z_tests/1z_stream_test.txt write> ]
+Stack: [ ]
+PASS: stream-open write and close
+Stack: [ ]
+Stack: [ <stream /tmp/1z_tests/1z_stream_test.txt read> ]
+PASS: read stream to-string
+Stack: [ <stream /tmp/1z_tests/1z_stream_test.txt read> ]
+Stack: [ ]
+PASS: stream-open read and close
+Stack: [ ]
+=== Error cases ===
+Stack: [ ]
+Stack: [ [ "/nonexistent/path/file.txt" read: stream-open ] ]
+Stack: [ [ "/nonexistent/path/file.txt" read: stream-open ] [ drop "PASS: FileNotFound error for nonexistent file" print ] ]
+PASS: FileNotFound error for nonexistent file
+Stack: [ ]
+Stack: [ [ stdout dup stream-close stream-close ] ]
+Stack: [ [ stdout dup stream-close stream-close ] [ drop "PASS: ClosedStream error on double close" print ] ]
+PASS: ClosedStream error on double close
+Stack: [ ]
+All stream tests complete!
+Stack: [ ]
