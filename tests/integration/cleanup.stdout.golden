@@ -1,0 +1,10 @@
+Stack: [ 10 20 ]
+20
+Stack: [ 10 ]
+10
+Stack: [ ]
+Stack: [ 99 <error StackUnderflow: StackUnderflow [drop:10 <- cleanup:10 <- recover:10]> ]
+<error StackUnderflow: StackUnderflow [drop:10 <- cleanup:10 <- recover:10]>
+Stack: [ 99 ]
+99
+Stack: [ ]

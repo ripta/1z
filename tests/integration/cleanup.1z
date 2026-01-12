@@ -1,0 +1,12 @@
+\ Test cleanup combinator
+
+\ Cleanup runs on success - both body and cleanup execute
+[ 10 ] [ 20 ] cleanup
+.
+.
+
+\ Cleanup runs on error - cleanup executes, then error propagates
+\ Use recover to catch the rethrown error
+[ [ drop ] [ 99 ] cleanup ] [ ] recover
+.
+.

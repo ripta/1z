@@ -140,6 +140,7 @@ const primitives = [_]Primitive{
     .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
     .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ) --", .func = nativeRecover },
     .{ .name = "ignore-errors", .stack_effect = "quot --", .func = nativeIgnoreErrors },
+    .{ .name = "cleanup", .stack_effect = "body-quot cleanup-quot --", .func = nativeCleanup },
     .{ .name = "load", .stack_effect = "filename --", .func = nativeLoad },
     .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTime },
     .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .func = nativeParseUntil },
@@ -388,7 +389,27 @@ fn nativeIgnoreErrors(ctx: *Context) anyerror!void {
     // Execute quotation, ignoring any errors
     ctx.executeQuotation(quot) catch {
         // Silently ignore the error
+        ctx.clearExecutionDetails();
     };
+}
+
+/// cleanup ( body-quot cleanup-quot -- ) - Execute body, always run cleanup,
+/// then re-throw any error from body
+fn nativeCleanup(ctx: *Context) anyerror!void {
+    const cleanup_quot = try popQuotation(ctx);
+    const body_quot = try popQuotation(ctx);
+
+    // Execute body quotation, capturing any error
+    const body_result = ctx.executeQuotation(body_quot);
+
+    // Always execute cleanup quotation, even if body failed
+    // If cleanup also fails, we ignore that error and prioritize the body error
+    ctx.executeQuotation(cleanup_quot) catch {
+        // Cleanup error is suppressed; body error takes priority
+    };
+
+    // Re-throw original error if body failed
+    try body_result;
 }
 
 /// load ( filename -- ) - Load and execute a 1z source file
@@ -795,6 +816,7 @@ test "register primitives" {
     try std.testing.expect(dict.get(".") != null);
     try std.testing.expect(dict.get("recover") != null);
     try std.testing.expect(dict.get("ignore-errors") != null);
+    try std.testing.expect(dict.get("cleanup") != null);
 }
 
 test "recover catches error and executes recovery" {
@@ -881,6 +903,60 @@ test "ignore-errors allows success" {
 
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     try std.testing.expectEqual(@as(i64, 42), (try ctx.stack.pop()).integer);
+}
+
+test "cleanup runs on success" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Body pushes 10, cleanup pushes 20
+    const body_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 10 } }, .line = 0 }};
+    const cleanup_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 20 } }, .line = 0 }};
+    try ctx.stack.push(.{ .quotation = &body_quot });
+    try ctx.stack.push(.{ .quotation = &cleanup_quot });
+    try nativeCleanup(&ctx);
+
+    // Both should have run: stack has 10, then 20
+    try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 20), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 10), (try ctx.stack.pop()).integer);
+}
+
+test "cleanup runs on error and rethrows" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Body fails (stack underflow), cleanup pushes 99
+    const body_quot = [_]Instruction{.{ .op = .{ .call_word = "drop" }, .line = 0 }};
+    const cleanup_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 99 } }, .line = 0 }};
+    try ctx.stack.push(.{ .quotation = &body_quot });
+    try ctx.stack.push(.{ .quotation = &cleanup_quot });
+
+    // cleanup should rethrow the error
+    const result = nativeCleanup(&ctx);
+    try std.testing.expectError(error.StackUnderflow, result);
+
+    // But cleanup should have run - 99 is on the stack
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 99), (try ctx.stack.pop()).integer);
+}
+
+test "cleanup error is suppressed if body fails" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Both body and cleanup fail
+    const body_quot = [_]Instruction{.{ .op = .{ .call_word = "drop" }, .line = 0 }};
+    const cleanup_quot = [_]Instruction{.{ .op = .{ .call_word = "drop" }, .line = 0 }};
+    try ctx.stack.push(.{ .quotation = &body_quot });
+    try ctx.stack.push(.{ .quotation = &cleanup_quot });
+
+    // Body error should be rethrown (cleanup error suppressed)
+    const result = nativeCleanup(&ctx);
+    try std.testing.expectError(error.StackUnderflow, result);
 }
 
 test "parse-time pushes marker onto stack" {
