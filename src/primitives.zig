@@ -139,7 +139,6 @@ const primitives = [_]Primitive{
     .{ .name = ".", .stack_effect = "a --", .func = nativeDot },
     .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
     .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ) --", .func = nativeRecover },
-    .{ .name = "ignore-errors", .stack_effect = "quot --", .func = nativeIgnoreErrors },
     .{ .name = "cleanup", .stack_effect = "body-quot cleanup-quot --", .func = nativeCleanup },
     .{ .name = "rethrow", .stack_effect = "error --", .func = nativeRethrow },
     .{ .name = "load", .stack_effect = "filename --", .func = nativeLoad },
@@ -373,17 +372,6 @@ fn nativeRecover(ctx: *Context) anyerror!void {
         ctx.clearExecutionDetails();
         try ctx.executeQuotation(recover_quot);
         return;
-    };
-}
-
-/// ignore-errors ( quot -- ) - Execute quotation and suppress any errors
-fn nativeIgnoreErrors(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
-
-    // Execute quotation, ignoring any errors
-    ctx.executeQuotation(quot) catch {
-        // Silently ignore the error
-        ctx.clearExecutionDetails();
     };
 }
 
@@ -805,7 +793,6 @@ test "register primitives" {
     try std.testing.expect(dict.get("print") != null);
     try std.testing.expect(dict.get(".") != null);
     try std.testing.expect(dict.get("recover") != null);
-    try std.testing.expect(dict.get("ignore-errors") != null);
     try std.testing.expect(dict.get("cleanup") != null);
     try std.testing.expect(dict.get("rethrow") != null);
 }
@@ -866,34 +853,6 @@ test "recover pushes error value on failure" {
     try std.testing.expect(val.error_value.stack_trace != null);
     try std.testing.expectEqual(@as(usize, 1), val.error_value.stack_trace.?.len);
     try std.testing.expectEqualStrings("drop", val.error_value.stack_trace.?[0].word_name);
-}
-
-test "ignore-errors suppresses error" {
-    const allocator = std.testing.allocator;
-    var ctx = Context.init(allocator);
-    defer ctx.deinit();
-
-    // Quotation that causes stack underflow
-    const quot = [_]Instruction{.{ .op = .{ .call_word = "drop" }, .line = 0 }};
-    try ctx.stack.push(.{ .quotation = &quot });
-    try nativeIgnoreErrors(&ctx);
-
-    // Stack should be empty, no error propagated
-    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
-}
-
-test "ignore-errors allows success" {
-    const allocator = std.testing.allocator;
-    var ctx = Context.init(allocator);
-    defer ctx.deinit();
-
-    // Quotation that succeeds
-    const quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 }};
-    try ctx.stack.push(.{ .quotation = &quot });
-    try nativeIgnoreErrors(&ctx);
-
-    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
-    try std.testing.expectEqual(@as(i64, 42), (try ctx.stack.pop()).integer);
 }
 
 test "cleanup runs on success" {
