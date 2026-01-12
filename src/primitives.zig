@@ -25,19 +25,31 @@ const parser = @import("parser.zig");
 const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
 
 pub const InterpreterError = error{
+    // General error types
     StackUnderflow,
     TypeError,
+    NoTokenizerAvailable,
+    // Error handling types
+    RethrowError,
+    // Stack effect error types
+    StackEffectMismatch,
+    // Arithmetic error types
     DivisionByZero,
     IntegerOverflow,
+    // File error types
     FileNotFound,
     FileReadError,
-    NoTokenizerAvailable,
+    // Hash table error types
     InvalidHashSyntax,
-    RethrowError,
-    StackEffectMismatch,
+    // Sequence error types
     IndexOutOfBounds,
     EmptySequence,
     KeyNotFound,
+    // I/O error types
+    IOError,
+    ClosedStream,
+    PermissionDenied,
+    NotSeekable,
 };
 
 /// Helper to create a stack effect from a raw string at runtime.
