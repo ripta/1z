@@ -1,0 +1,6 @@
+H{ name: "Alice" age: 30 }
+Stack: [ ]
+H{ }
+Stack: [ ]
+H{ x: 1 z: 3 y: 2 }
+Stack: [ ]

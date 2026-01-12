@@ -1,0 +1,10 @@
+\ Test H{ hash literal syntax
+
+\ Simple hash literal
+H{ name: "Alice" age: 30 } .
+
+\ Empty hash
+H{ } .
+
+\ Hash with nested values
+H{ x: 1 y: 2 z: 3 } .
