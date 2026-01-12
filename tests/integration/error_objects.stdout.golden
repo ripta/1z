@@ -9,3 +9,6 @@ Stack: [ ]
 Stack: [ <error UnknownWord: UnknownWord [unknown-word-xyz:14 <- recover:14]> ]
 <error UnknownWord: UnknownWord [unknown-word-xyz:14 <- recover:14]>
 Stack: [ ]
+Stack: [ <error RethrowError: RethrowError [drop:19 <- recover:19 <- recover:19]> ]
+<error RethrowError: RethrowError [drop:19 <- recover:19 <- recover:19]>
+Stack: [ ]

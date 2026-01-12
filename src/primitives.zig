@@ -25,6 +25,7 @@ pub const InterpreterError = error{
     FileReadError,
     NoTokenizerAvailable,
     InvalidHashSyntax,
+    RethrowError,
 };
 
 /// Helper to create a stack effect from a raw string at runtime.
@@ -141,6 +142,7 @@ const primitives = [_]Primitive{
     .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ) --", .func = nativeRecover },
     .{ .name = "ignore-errors", .stack_effect = "quot --", .func = nativeIgnoreErrors },
     .{ .name = "cleanup", .stack_effect = "body-quot cleanup-quot --", .func = nativeCleanup },
+    .{ .name = "rethrow", .stack_effect = "error --", .func = nativeRethrow },
     .{ .name = "load", .stack_effect = "filename --", .func = nativeLoad },
     .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTime },
     .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .func = nativeParseUntil },
@@ -410,6 +412,30 @@ fn nativeCleanup(ctx: *Context) anyerror!void {
 
     // Re-throw original error if body failed
     try body_result;
+}
+
+/// rethrow ( error -- ) - Re-raise an error value as an actual error
+fn nativeRethrow(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .error_value => |err_obj| {
+            // Restore the error details from the ErrorObject's stack trace
+            if (err_obj.stack_trace) |trace| {
+                // Clear any existing error details and restore from the error object
+                ctx.error_details.clearRetainingCapacity();
+                for (trace) |frame| {
+                    ctx.error_details.append(ctx.allocator, .{
+                        .error_type = err_obj.error_type,
+                        .message = err_obj.message,
+                        .line = frame.line,
+                        .word_name = frame.word_name,
+                    }) catch {};
+                }
+            }
+            return error.RethrowError;
+        },
+        else => return error.TypeError,
+    }
 }
 
 /// load ( filename -- ) - Load and execute a 1z source file
@@ -817,6 +843,7 @@ test "register primitives" {
     try std.testing.expect(dict.get("recover") != null);
     try std.testing.expect(dict.get("ignore-errors") != null);
     try std.testing.expect(dict.get("cleanup") != null);
+    try std.testing.expect(dict.get("rethrow") != null);
 }
 
 test "recover catches error and executes recovery" {
@@ -957,6 +984,65 @@ test "cleanup error is suppressed if body fails" {
     // Body error should be rethrown (cleanup error suppressed)
     const result = nativeCleanup(&ctx);
     try std.testing.expectError(error.StackUnderflow, result);
+}
+
+test "rethrow re-raises error value" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Create an error object and push it
+    const error_obj = ErrorObject{
+        .error_type = "StackUnderflow",
+        .message = "StackUnderflow",
+        .stack_trace = null,
+    };
+    try ctx.stack.push(.{ .error_value = error_obj });
+
+    // rethrow should return RethrowError
+    const result = nativeRethrow(&ctx);
+    try std.testing.expectError(error.RethrowError, result);
+}
+
+test "rethrow restores stack trace" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Create an error object with stack trace
+    const frames = [_]StackFrame{
+        .{ .word_name = "inner", .line = 10 },
+        .{ .word_name = "outer", .line = 20 },
+    };
+    const error_obj = ErrorObject{
+        .error_type = "TestError",
+        .message = "test message",
+        .stack_trace = &frames,
+    };
+    try ctx.stack.push(.{ .error_value = error_obj });
+
+    // rethrow should restore error_details
+    _ = nativeRethrow(&ctx) catch {};
+
+    // Check that error_details were restored
+    try std.testing.expectEqual(@as(usize, 2), ctx.error_details.items.len);
+    try std.testing.expectEqualStrings("inner", ctx.error_details.items[0].word_name.?);
+    try std.testing.expectEqual(@as(usize, 10), ctx.error_details.items[0].line);
+    try std.testing.expectEqualStrings("outer", ctx.error_details.items[1].word_name.?);
+    try std.testing.expectEqual(@as(usize, 20), ctx.error_details.items[1].line);
+}
+
+test "rethrow fails on non-error value" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Push a non-error value
+    try ctx.stack.push(.{ .integer = 42 });
+
+    // rethrow should return TypeError
+    const result = nativeRethrow(&ctx);
+    try std.testing.expectError(error.TypeError, result);
 }
 
 test "parse-time pushes marker onto stack" {

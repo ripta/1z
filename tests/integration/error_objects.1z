@@ -13,3 +13,8 @@ outer-fail: [ nested-fail ] ;
 \ Unknown word error - different error type
 [ unknown-word-xyz ] [ ] recover
 .
+
+\ Rethrow - catch an error, then re-raise it
+\ The outer recover catches the rethrown error
+[ [ drop ] [ rethrow ] recover ] [ ] recover
+.
