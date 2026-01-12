@@ -25,7 +25,7 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
             }
         }
     }
-    ctx.clearErrorDetails();
+    ctx.clearExecutionDetails();
 }
 
 pub fn main() u8 {
