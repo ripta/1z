@@ -3,3 +3,6 @@
 
 \ Hash literal syntax
 H{: parse-time [ "}" parse-until make-hash ] ;
+
+\ Control flow
+when: ( ? quot -- ) [ [ ] if ] ;

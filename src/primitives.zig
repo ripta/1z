@@ -134,7 +134,6 @@ const primitives = [_]Primitive{
     .{ .name = "<", .stack_effect = "a b -- ?", .func = nativeLt },
     .{ .name = ">", .stack_effect = "a b -- ?", .func = nativeGt },
     .{ .name = "if", .stack_effect = "? true-quot false-quot --", .func = nativeIf },
-    .{ .name = "when", .stack_effect = "? quot --", .func = nativeWhen },
     .{ .name = "unless", .stack_effect = "? quot --", .func = nativeUnless },
     .{ .name = "print", .stack_effect = "str --", .func = nativePrint },
     .{ .name = ".", .stack_effect = "a --", .func = nativeDot },
@@ -276,13 +275,6 @@ fn nativeIf(ctx: *Context) anyerror!void {
     const true_quot = try popQuotation(ctx);
     const cond = try popBoolean(ctx);
     try ctx.executeQuotation(if (cond) true_quot else false_quot);
-}
-
-/// when ( ? quot -- ) - Execute quotation if true
-fn nativeWhen(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
-    const cond = try popBoolean(ctx);
-    if (cond) try ctx.executeQuotation(quot);
 }
 
 /// unless ( ? quot -- ) - Execute quotation if false
@@ -771,33 +763,6 @@ test "if false branch" {
     try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).integer);
 }
 
-test "when executes on true" {
-    const allocator = std.testing.allocator;
-    var ctx = Context.init(allocator);
-    defer ctx.deinit();
-
-    const quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 }};
-    try ctx.stack.push(.{ .boolean = true });
-    try ctx.stack.push(.{ .quotation = &quot });
-    try nativeWhen(&ctx);
-
-    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
-    try std.testing.expectEqual(@as(i64, 42), (try ctx.stack.pop()).integer);
-}
-
-test "when skips on false" {
-    const allocator = std.testing.allocator;
-    var ctx = Context.init(allocator);
-    defer ctx.deinit();
-
-    const quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 }};
-    try ctx.stack.push(.{ .boolean = false });
-    try ctx.stack.push(.{ .quotation = &quot });
-    try nativeWhen(&ctx);
-
-    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
-}
-
 test "comparison operators" {
     const allocator = std.testing.allocator;
     var ctx = Context.init(allocator);
@@ -836,7 +801,6 @@ test "register primitives" {
     try std.testing.expect(dict.get("call") != null);
     try std.testing.expect(dict.get(";") != null);
     try std.testing.expect(dict.get("if") != null);
-    try std.testing.expect(dict.get("when") != null);
     try std.testing.expect(dict.get("unless") != null);
     try std.testing.expect(dict.get("print") != null);
     try std.testing.expect(dict.get(".") != null);
