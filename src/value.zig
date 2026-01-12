@@ -12,6 +12,9 @@ pub const Instruction = struct {
     };
 };
 
+/// Hash table type for H{ } literals.
+pub const HashTable = std.StringHashMapUnmanaged(Value);
+
 /// Value represents any value that can be stored on the stack.
 pub const Value = union(enum) {
     integer: i64,
@@ -20,6 +23,7 @@ pub const Value = union(enum) {
     symbol: []const u8,
     array: []const Value,
     quotation: []const Instruction,
+    hash: *HashTable,
     stack_effect: StackEffect,
     parse_time_marker: void, // Marker for parse-time word definitions
     error_value: []const u8,
@@ -51,6 +55,19 @@ pub const Value = union(enum) {
                 }
                 try writer.writeAll("]");
             },
+            // TODO(ripta): This is currently tightly-coupled to the internal
+            // representation of HashTable, despite H{ } being a non-native
+            // implementation in the prelude.
+            .hash => |h| {
+                try writer.writeAll("H{ ");
+                var iter = h.iterator();
+                while (iter.next()) |entry| {
+                    try writer.print("{s}: ", .{entry.key_ptr.*});
+                    try entry.value_ptr.write(writer);
+                    try writer.writeAll(" ");
+                }
+                try writer.writeAll("}");
+            },
             .stack_effect => |effect| try effect.write(writer),
             .parse_time_marker => try writer.writeAll("parse-time"),
             .error_value => |msg| try writer.print("<error: {s}>", .{msg}),
@@ -81,6 +98,22 @@ pub const Value = union(enum) {
                 if (a.len != b.len) return false;
                 for (a, b) |ai, bi| {
                     if (!instructionEql(ai, bi)) return false;
+                }
+                return true;
+            },
+            // TODO(ripta): This is currently tightly-coupled to the internal
+            // representation of HashTable, despite H{ } being a non-native
+            // implementation in the prelude.
+            .hash => |a| {
+                const b = other.hash;
+                if (a.count() != b.count()) return false;
+                var iter = a.iterator();
+                while (iter.next()) |entry| {
+                    if (b.get(entry.key_ptr.*)) |bval| {
+                        if (!entry.value_ptr.eql(bval)) return false;
+                    } else {
+                        return false;
+                    }
                 }
                 return true;
             },

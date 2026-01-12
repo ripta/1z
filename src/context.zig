@@ -6,6 +6,10 @@ const Dictionary = @import("dictionary.zig").Dictionary;
 const Instruction = @import("value.zig").Instruction;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const primitives = @import("primitives.zig");
+const parser = @import("parser.zig");
+
+/// Embedded prelude source code
+const prelude_source = @embedFile("prelude.1z");
 
 pub const ExecutionError = error{
     UnknownWord,
@@ -46,7 +50,19 @@ pub const Context = struct {
             std.debug.panic("Failed to register primitives: {any}", .{err});
         };
 
+        // Load the embedded prelude
+        ctx.loadPrelude() catch |err| {
+            std.debug.panic("Failed to load prelude: {any}", .{err});
+        };
+
         return ctx;
+    }
+
+    /// Load the embedded prelude source.
+    fn loadPrelude(self: *Context) !void {
+        var tokenizer = Tokenizer.init(prelude_source);
+        const instrs = try parser.parseTopLevel(self.arena.allocator(), &tokenizer, self);
+        try self.executeQuotation(instrs);
     }
 
     /// Free all resources used by the context.

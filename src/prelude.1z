@@ -1,0 +1,5 @@
+\ Standard library prelude
+\ This file is embedded and loaded automatically during initialization.
+
+\ Hash literal syntax
+H{: parse-time [ "}" parse-until make-hash ] ;
