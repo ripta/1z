@@ -15,6 +15,50 @@ pub const Instruction = struct {
 /// Hash table type for H{ } literals.
 pub const HashTable = std.StringHashMapUnmanaged(Value);
 
+/// StackFrame represents a single frame in a stack trace.
+pub const StackFrame = struct {
+    word_name: []const u8,
+    line: usize,
+};
+
+/// ErrorObject represents a structured error with type, message, and optional stack trace.
+pub const ErrorObject = struct {
+    error_type: []const u8,
+    message: []const u8,
+    stack_trace: ?[]const StackFrame,
+
+    pub fn write(self: ErrorObject, writer: anytype) !void {
+        try writer.print("<error {s}: {s}", .{ self.error_type, self.message });
+        if (self.stack_trace) |trace| {
+            try writer.writeAll(" [");
+            for (trace, 0..) |frame, i| {
+                if (i > 0) try writer.writeAll(" <- ");
+                try writer.print("{s}:{d}", .{ frame.word_name, frame.line });
+            }
+            try writer.writeAll("]");
+        }
+        try writer.writeAll(">");
+    }
+
+    pub fn eql(self: ErrorObject, other: ErrorObject) bool {
+        if (!std.mem.eql(u8, self.error_type, other.error_type)) return false;
+        if (!std.mem.eql(u8, self.message, other.message)) return false;
+
+        // Compare stack traces
+        if (self.stack_trace == null and other.stack_trace == null) return true;
+        if (self.stack_trace == null or other.stack_trace == null) return false;
+
+        const a = self.stack_trace.?;
+        const b = other.stack_trace.?;
+        if (a.len != b.len) return false;
+        for (a, b) |fa, fb| {
+            if (!std.mem.eql(u8, fa.word_name, fb.word_name)) return false;
+            if (fa.line != fb.line) return false;
+        }
+        return true;
+    }
+};
+
 /// Value represents any value that can be stored on the stack.
 pub const Value = union(enum) {
     integer: i64,
@@ -26,7 +70,7 @@ pub const Value = union(enum) {
     hash: *HashTable,
     stack_effect: StackEffect,
     parse_time_marker: void, // Marker for parse-time word definitions
-    error_value: []const u8,
+    error_value: ErrorObject,
 
     pub fn write(self: Value, writer: anytype) anyerror!void {
         switch (self) {
@@ -70,7 +114,7 @@ pub const Value = union(enum) {
             },
             .stack_effect => |effect| try effect.write(writer),
             .parse_time_marker => try writer.writeAll("parse-time"),
-            .error_value => |msg| try writer.print("<error: {s}>", .{msg}),
+            .error_value => |err| try err.write(writer),
         }
     }
 
@@ -119,7 +163,7 @@ pub const Value = union(enum) {
             },
             .stack_effect => |a| a.eql(other.stack_effect),
             .parse_time_marker => true, // All parse_time_markers are equal
-            .error_value => |a| std.mem.eql(u8, a, other.error_value),
+            .error_value => |a| a.eql(other.error_value),
         };
     }
 };

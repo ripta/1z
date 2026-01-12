@@ -1,0 +1,20 @@
+\ Test structured error objects with recover
+
+\ Simple error - print the error object showing stack trace
+[ drop ] [ ] recover
+.
+
+\ Nested error - should show full call chain in stack trace
+nested-fail: [ drop ] ;
+outer-fail: [ nested-fail ] ;
+[ outer-fail ] [ ] recover
+.
+
+\ Unknown word error - different error type
+[ unknown-word-xyz ] [ ] recover
+.
+
+\ Rethrow - catch an error, then re-raise it
+\ The outer recover catches the rethrown error
+[ [ drop ] [ rethrow ] recover ] [ ] recover
+.

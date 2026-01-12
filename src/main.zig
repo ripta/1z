@@ -25,7 +25,7 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
             }
         }
     }
-    ctx.clearErrorDetails();
+    ctx.clearExecutionDetails();
 }
 
 pub fn main() u8 {
@@ -200,6 +200,7 @@ fn repl(ctx: *Context) void {
     writer.flush() catch return;
 
     var processor: StatementProcessor = .{};
+    var repl_line: usize = 0;
     while (true) {
         // Show continuation prompt if accumulating, otherwise primary prompt
         if (processor.isAccumulating()) {
@@ -222,6 +223,9 @@ fn repl(ctx: *Context) void {
             },
         };
 
+        repl_line += 1;
+        processor.trackLine(repl_line);
+
         switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
             .needs_more_input => continue,
             .parse_error => |err| {
@@ -230,6 +234,10 @@ fn repl(ctx: *Context) void {
                 processor.reset();
             },
             .complete => |instrs| {
+                if (instrs.len > 0) {
+                    adjustInstructionLines(instrs, processor.start_line);
+                }
+
                 var had_error = false;
                 ctx.executeQuotation(instrs) catch |err| {
                     printErrorDetails(ctx, writer, err);

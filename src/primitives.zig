@@ -1,9 +1,13 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+
 const Context = @import("context.zig").Context;
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const HashTable = value_mod.HashTable;
+const ErrorObject = value_mod.ErrorObject;
+const StackFrame = value_mod.StackFrame;
+
 const Dictionary = @import("dictionary.zig").Dictionary;
 const WordDefinition = @import("dictionary.zig").WordDefinition;
 const NativeFn = @import("dictionary.zig").NativeFn;
@@ -21,6 +25,7 @@ pub const InterpreterError = error{
     FileReadError,
     NoTokenizerAvailable,
     InvalidHashSyntax,
+    RethrowError,
 };
 
 /// Helper to create a stack effect from a raw string at runtime.
@@ -129,13 +134,13 @@ const primitives = [_]Primitive{
     .{ .name = "<", .stack_effect = "a b -- ?", .func = nativeLt },
     .{ .name = ">", .stack_effect = "a b -- ?", .func = nativeGt },
     .{ .name = "if", .stack_effect = "? true-quot false-quot --", .func = nativeIf },
-    .{ .name = "when", .stack_effect = "? quot --", .func = nativeWhen },
     .{ .name = "unless", .stack_effect = "? quot --", .func = nativeUnless },
     .{ .name = "print", .stack_effect = "str --", .func = nativePrint },
     .{ .name = ".", .stack_effect = "a --", .func = nativeDot },
     .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
     .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ) --", .func = nativeRecover },
-    .{ .name = "ignore-errors", .stack_effect = "quot --", .func = nativeIgnoreErrors },
+    .{ .name = "cleanup", .stack_effect = "body-quot cleanup-quot --", .func = nativeCleanup },
+    .{ .name = "rethrow", .stack_effect = "error --", .func = nativeRethrow },
     .{ .name = "load", .stack_effect = "filename --", .func = nativeLoad },
     .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTime },
     .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .func = nativeParseUntil },
@@ -271,13 +276,6 @@ fn nativeIf(ctx: *Context) anyerror!void {
     try ctx.executeQuotation(if (cond) true_quot else false_quot);
 }
 
-/// when ( ? quot -- ) - Execute quotation if true
-fn nativeWhen(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
-    const cond = try popBoolean(ctx);
-    if (cond) try ctx.executeQuotation(quot);
-}
-
 /// unless ( ? quot -- ) - Execute quotation if false
 fn nativeUnless(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
@@ -345,28 +343,79 @@ fn nativeRecover(ctx: *Context) anyerror!void {
     const recover_quot = try popQuotation(ctx);
     const try_quot = try popQuotation(ctx);
 
-    // Execute try quotation with error catching
+    // Execute try quotation with error-catching
     ctx.executeQuotation(try_quot) catch |err| {
-        // Convert error to string and push as error value
-        const error_msg = @errorName(err);
-        try ctx.stack.push(.{ .error_value = error_msg });
+        const alloc = ctx.quotationAllocator();
+        var stack_trace: ?[]const StackFrame = null;
 
-        // Execute recovery quotation
+        if (ctx.error_details.items.len > 0) {
+            const frames = alloc.alloc(StackFrame, ctx.error_details.items.len) catch null;
+            if (frames) |f| {
+                for (ctx.error_details.items, 0..) |detail, i| {
+                    f[i] = .{
+                        .word_name = detail.word_name orelse detail.message,
+                        .line = detail.line,
+                    };
+                }
+                stack_trace = f;
+            }
+        }
+
+        const error_obj = ErrorObject{
+            .error_type = @errorName(err),
+            .message = @errorName(err),
+            .stack_trace = stack_trace,
+        };
+        try ctx.stack.push(.{ .error_value = error_obj });
+
+        // Clear error details after capturing, and execute recovery
+        ctx.clearExecutionDetails();
         try ctx.executeQuotation(recover_quot);
         return;
     };
-
-    // If no error, continue normally
 }
 
-/// ignore-errors ( quot -- ) - Execute quotation and suppress any errors
-fn nativeIgnoreErrors(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
+/// cleanup ( body-quot cleanup-quot -- ) - Execute body, always run cleanup,
+/// then re-throw any error from body
+fn nativeCleanup(ctx: *Context) anyerror!void {
+    const cleanup_quot = try popQuotation(ctx);
+    const body_quot = try popQuotation(ctx);
 
-    // Execute quotation, ignoring any errors
-    ctx.executeQuotation(quot) catch {
-        // Silently ignore the error
+    // Execute body quotation, capturing any error
+    const body_result = ctx.executeQuotation(body_quot);
+
+    // Always execute cleanup quotation, even if body failed
+    // If cleanup also fails, we ignore that error and prioritize the body error
+    ctx.executeQuotation(cleanup_quot) catch {
+        // Cleanup error is suppressed; body error takes priority
     };
+
+    // Re-throw original error if body failed
+    try body_result;
+}
+
+/// rethrow ( error -- ) - Re-raise an error value as an actual error
+fn nativeRethrow(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .error_value => |err_obj| {
+            // Restore the error details from the ErrorObject's stack trace
+            if (err_obj.stack_trace) |trace| {
+                // Clear any existing error details and restore from the error object
+                ctx.error_details.clearRetainingCapacity();
+                for (trace) |frame| {
+                    ctx.error_details.append(ctx.allocator, .{
+                        .error_type = err_obj.error_type,
+                        .message = err_obj.message,
+                        .line = frame.line,
+                        .word_name = frame.word_name,
+                    }) catch {};
+                }
+            }
+            return error.RethrowError;
+        },
+        else => return error.TypeError,
+    }
 }
 
 /// load ( filename -- ) - Load and execute a 1z source file
@@ -702,33 +751,6 @@ test "if false branch" {
     try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).integer);
 }
 
-test "when executes on true" {
-    const allocator = std.testing.allocator;
-    var ctx = Context.init(allocator);
-    defer ctx.deinit();
-
-    const quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 }};
-    try ctx.stack.push(.{ .boolean = true });
-    try ctx.stack.push(.{ .quotation = &quot });
-    try nativeWhen(&ctx);
-
-    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
-    try std.testing.expectEqual(@as(i64, 42), (try ctx.stack.pop()).integer);
-}
-
-test "when skips on false" {
-    const allocator = std.testing.allocator;
-    var ctx = Context.init(allocator);
-    defer ctx.deinit();
-
-    const quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 }};
-    try ctx.stack.push(.{ .boolean = false });
-    try ctx.stack.push(.{ .quotation = &quot });
-    try nativeWhen(&ctx);
-
-    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
-}
-
 test "comparison operators" {
     const allocator = std.testing.allocator;
     var ctx = Context.init(allocator);
@@ -767,12 +789,12 @@ test "register primitives" {
     try std.testing.expect(dict.get("call") != null);
     try std.testing.expect(dict.get(";") != null);
     try std.testing.expect(dict.get("if") != null);
-    try std.testing.expect(dict.get("when") != null);
     try std.testing.expect(dict.get("unless") != null);
     try std.testing.expect(dict.get("print") != null);
     try std.testing.expect(dict.get(".") != null);
     try std.testing.expect(dict.get("recover") != null);
-    try std.testing.expect(dict.get("ignore-errors") != null);
+    try std.testing.expect(dict.get("cleanup") != null);
+    try std.testing.expect(dict.get("rethrow") != null);
 }
 
 test "recover catches error and executes recovery" {
@@ -824,35 +846,126 @@ test "recover pushes error value on failure" {
 
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     const val = try ctx.stack.pop();
-    try std.testing.expectEqualStrings("StackUnderflow", val.error_value);
+
+    try std.testing.expectEqualStrings("StackUnderflow", val.error_value.error_type);
+    try std.testing.expectEqualStrings("StackUnderflow", val.error_value.message);
+
+    try std.testing.expect(val.error_value.stack_trace != null);
+    try std.testing.expectEqual(@as(usize, 1), val.error_value.stack_trace.?.len);
+    try std.testing.expectEqualStrings("drop", val.error_value.stack_trace.?[0].word_name);
 }
 
-test "ignore-errors suppresses error" {
+test "cleanup runs on success" {
     const allocator = std.testing.allocator;
     var ctx = Context.init(allocator);
     defer ctx.deinit();
 
-    // Quotation that causes stack underflow
-    const quot = [_]Instruction{.{ .op = .{ .call_word = "drop" }, .line = 0 }};
-    try ctx.stack.push(.{ .quotation = &quot });
-    try nativeIgnoreErrors(&ctx);
+    // Body pushes 10, cleanup pushes 20
+    const body_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 10 } }, .line = 0 }};
+    const cleanup_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 20 } }, .line = 0 }};
+    try ctx.stack.push(.{ .quotation = &body_quot });
+    try ctx.stack.push(.{ .quotation = &cleanup_quot });
+    try nativeCleanup(&ctx);
 
-    // Stack should be empty, no error propagated
-    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+    // Both should have run: stack has 10, then 20
+    try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 20), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 10), (try ctx.stack.pop()).integer);
 }
 
-test "ignore-errors allows success" {
+test "cleanup runs on error and rethrows" {
     const allocator = std.testing.allocator;
     var ctx = Context.init(allocator);
     defer ctx.deinit();
 
-    // Quotation that succeeds
-    const quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 }};
-    try ctx.stack.push(.{ .quotation = &quot });
-    try nativeIgnoreErrors(&ctx);
+    // Body fails (stack underflow), cleanup pushes 99
+    const body_quot = [_]Instruction{.{ .op = .{ .call_word = "drop" }, .line = 0 }};
+    const cleanup_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 99 } }, .line = 0 }};
+    try ctx.stack.push(.{ .quotation = &body_quot });
+    try ctx.stack.push(.{ .quotation = &cleanup_quot });
 
+    // cleanup should rethrow the error
+    const result = nativeCleanup(&ctx);
+    try std.testing.expectError(error.StackUnderflow, result);
+
+    // But cleanup should have run - 99 is on the stack
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
-    try std.testing.expectEqual(@as(i64, 42), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 99), (try ctx.stack.pop()).integer);
+}
+
+test "cleanup error is suppressed if body fails" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Both body and cleanup fail
+    const body_quot = [_]Instruction{.{ .op = .{ .call_word = "drop" }, .line = 0 }};
+    const cleanup_quot = [_]Instruction{.{ .op = .{ .call_word = "drop" }, .line = 0 }};
+    try ctx.stack.push(.{ .quotation = &body_quot });
+    try ctx.stack.push(.{ .quotation = &cleanup_quot });
+
+    // Body error should be rethrown (cleanup error suppressed)
+    const result = nativeCleanup(&ctx);
+    try std.testing.expectError(error.StackUnderflow, result);
+}
+
+test "rethrow re-raises error value" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Create an error object and push it
+    const error_obj = ErrorObject{
+        .error_type = "StackUnderflow",
+        .message = "StackUnderflow",
+        .stack_trace = null,
+    };
+    try ctx.stack.push(.{ .error_value = error_obj });
+
+    // rethrow should return RethrowError
+    const result = nativeRethrow(&ctx);
+    try std.testing.expectError(error.RethrowError, result);
+}
+
+test "rethrow restores stack trace" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Create an error object with stack trace
+    const frames = [_]StackFrame{
+        .{ .word_name = "inner", .line = 10 },
+        .{ .word_name = "outer", .line = 20 },
+    };
+    const error_obj = ErrorObject{
+        .error_type = "TestError",
+        .message = "test message",
+        .stack_trace = &frames,
+    };
+    try ctx.stack.push(.{ .error_value = error_obj });
+
+    // rethrow should restore error_details
+    _ = nativeRethrow(&ctx) catch {};
+
+    // Check that error_details were restored
+    try std.testing.expectEqual(@as(usize, 2), ctx.error_details.items.len);
+    try std.testing.expectEqualStrings("inner", ctx.error_details.items[0].word_name.?);
+    try std.testing.expectEqual(@as(usize, 10), ctx.error_details.items[0].line);
+    try std.testing.expectEqualStrings("outer", ctx.error_details.items[1].word_name.?);
+    try std.testing.expectEqual(@as(usize, 20), ctx.error_details.items[1].line);
+}
+
+test "rethrow fails on non-error value" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Push a non-error value
+    try ctx.stack.push(.{ .integer = 42 });
+
+    // rethrow should return TypeError
+    const result = nativeRethrow(&ctx);
+    try std.testing.expectError(error.TypeError, result);
 }
 
 test "parse-time pushes marker onto stack" {
