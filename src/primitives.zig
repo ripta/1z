@@ -1,9 +1,13 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+
 const Context = @import("context.zig").Context;
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const HashTable = value_mod.HashTable;
+const ErrorObject = value_mod.ErrorObject;
+const StackFrame = value_mod.StackFrame;
+
 const Dictionary = @import("dictionary.zig").Dictionary;
 const WordDefinition = @import("dictionary.zig").WordDefinition;
 const NativeFn = @import("dictionary.zig").NativeFn;
@@ -345,18 +349,36 @@ fn nativeRecover(ctx: *Context) anyerror!void {
     const recover_quot = try popQuotation(ctx);
     const try_quot = try popQuotation(ctx);
 
-    // Execute try quotation with error catching
+    // Execute try quotation with error-catching
     ctx.executeQuotation(try_quot) catch |err| {
-        // Convert error to string and push as error value
-        const error_msg = @errorName(err);
-        try ctx.stack.push(.{ .error_value = error_msg });
+        const alloc = ctx.quotationAllocator();
+        var stack_trace: ?[]const StackFrame = null;
 
-        // Execute recovery quotation
+        if (ctx.error_details.items.len > 0) {
+            const frames = alloc.alloc(StackFrame, ctx.error_details.items.len) catch null;
+            if (frames) |f| {
+                for (ctx.error_details.items, 0..) |detail, i| {
+                    f[i] = .{
+                        .word_name = detail.word_name orelse detail.message,
+                        .line = detail.line,
+                    };
+                }
+                stack_trace = f;
+            }
+        }
+
+        const error_obj = ErrorObject{
+            .error_type = @errorName(err),
+            .message = @errorName(err),
+            .stack_trace = stack_trace,
+        };
+        try ctx.stack.push(.{ .error_value = error_obj });
+
+        // Clear error details after capturing, and execute recovery
+        ctx.clearExecutionDetails();
         try ctx.executeQuotation(recover_quot);
         return;
     };
-
-    // If no error, continue normally
 }
 
 /// ignore-errors ( quot -- ) - Execute quotation and suppress any errors
@@ -824,7 +846,13 @@ test "recover pushes error value on failure" {
 
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     const val = try ctx.stack.pop();
-    try std.testing.expectEqualStrings("StackUnderflow", val.error_value);
+
+    try std.testing.expectEqualStrings("StackUnderflow", val.error_value.error_type);
+    try std.testing.expectEqualStrings("StackUnderflow", val.error_value.message);
+
+    try std.testing.expect(val.error_value.stack_trace != null);
+    try std.testing.expectEqual(@as(usize, 1), val.error_value.stack_trace.?.len);
+    try std.testing.expectEqualStrings("drop", val.error_value.stack_trace.?[0].word_name);
 }
 
 test "ignore-errors suppresses error" {
