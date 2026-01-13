@@ -25,6 +25,31 @@ Stack: [ <stream /tmp/1z_tests/1z_stream_test.txt read> ]
 Stack: [ ]
 PASS: stream-open read and close
 Stack: [ ]
+=== Stream write ===
+Stack: [ ]
+Stack: [ <stream /tmp/1z_tests/1z_write_test.txt write> ]
+PASS: stream-write returns byte count
+Stack: [ <stream /tmp/1z_tests/1z_write_test.txt write> ]
+Stack: [ ]
+PASS: stream-write string
+Stack: [ ]
+Stack: [ <stream /tmp/1z_tests/1z_write_test2.txt write> ]
+PASS: stream-write byte array returns count
+Stack: [ <stream /tmp/1z_tests/1z_write_test2.txt write> ]
+Stack: [ ]
+PASS: stream-write byte array
+Stack: [ ]
+=== Stream flush ===
+Stack: [ ]
+Stack: [ <stream /tmp/1z_tests/1z_flush_test.txt write> ]
+Stack: [ <stream /tmp/1z_tests/1z_flush_test.txt write> ]
+Stack: [ <stream /tmp/1z_tests/1z_flush_test.txt write> ]
+Stack: [ ]
+PASS: stream-flush on file
+Stack: [ ]
+Stack: [ ]
+PASS: stream-flush on stdout
+Stack: [ ]
 === Error cases ===
 Stack: [ ]
 Stack: [ [ "/nonexistent/path/file.txt" read: stream-open ] ]
@@ -34,6 +59,14 @@ Stack: [ ]
 Stack: [ [ stdout dup stream-close stream-close ] ]
 Stack: [ [ stdout dup stream-close stream-close ] [ drop "PASS: ClosedStream error on double close" print ] ]
 PASS: ClosedStream error on double close
+Stack: [ ]
+Stack: [ [ "/tmp/1z_tests/1z_closed_test.txt" write: stream-open dup stream-close "test" stream-write ] ]
+Stack: [ [ "/tmp/1z_tests/1z_closed_test.txt" write: stream-open dup stream-close "test" stream-write ] [ drop "PASS: ClosedStream error on write to closed stream" print ] ]
+PASS: ClosedStream error on write to closed stream
+Stack: [ ]
+Stack: [ [ "/tmp/1z_tests/1z_closed_test2.txt" write: stream-open dup stream-close stream-flush ] ]
+Stack: [ [ "/tmp/1z_tests/1z_closed_test2.txt" write: stream-open dup stream-close stream-flush ] [ drop "PASS: ClosedStream error on flush closed stream" print ] ]
+PASS: ClosedStream error on flush closed stream
 Stack: [ ]
 All stream tests complete!
 Stack: [ ]

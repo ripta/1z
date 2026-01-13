@@ -239,6 +239,8 @@ const primitives = [_]Primitive{
     .{ .name = "stderr", .stack_effect = "-- stream", .func = nativeStderr },
     .{ .name = "stream-open", .stack_effect = "path mode -- stream", .func = nativeStreamOpen },
     .{ .name = "stream-close", .stack_effect = "stream --", .func = nativeStreamClose },
+    .{ .name = "stream-write", .stack_effect = "stream bytes -- n", .func = nativeStreamWrite },
+    .{ .name = "stream-flush", .stack_effect = "stream --", .func = nativeStreamFlush },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -2384,6 +2386,68 @@ fn nativeStreamClose(ctx: *Context) anyerror!void {
 
     stream.file.close();
     stream.closed = true;
+}
+
+// =============================================================================
+// Stream writing primitives
+// =============================================================================
+
+/// stream-write ( stream bytes -- n ) - Write bytes to stream, return count written
+fn nativeStreamWrite(ctx: *Context) anyerror!void {
+    const bytes_val = try ctx.stack.pop();
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    // Get bytes to write - accept byte arrays or strings
+    const bytes: []const u8 = switch (bytes_val) {
+        .byte_array => |ba| ba.items,
+        .string => |s| s,
+        else => return error.TypeError,
+    };
+
+    // Write to file
+    const written = stream.file.write(bytes) catch |err| {
+        return switch (err) {
+            error.BrokenPipe => error.IOError,
+            error.ConnectionResetByPeer => error.IOError,
+            error.DiskQuota => error.IOError,
+            error.FileTooBig => error.IOError,
+            error.InputOutput => error.IOError,
+            error.NoSpaceLeft => error.IOError,
+            error.AccessDenied => error.PermissionDenied,
+            else => error.IOError,
+        };
+    };
+
+    try ctx.stack.push(.{ .integer = @intCast(written) });
+}
+
+/// stream-flush ( stream -- ) - Flush stream buffer
+fn nativeStreamFlush(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    // Note: Zig's std.fs.File doesn't have a direct flush method for unbuffered I/O
+    // For buffered streams, we'd need to sync. For now, use sync for file streams.
+    // Standard streams (stdout/stderr) are typically line-buffered or unbuffered.
+    if (!std.mem.eql(u8, stream.name, "stdin") and
+        !std.mem.eql(u8, stream.name, "stdout") and
+        !std.mem.eql(u8, stream.name, "stderr"))
+    {
+        stream.file.sync() catch |err| {
+            return switch (err) {
+                error.InputOutput => error.IOError,
+                error.AccessDenied => error.PermissionDenied,
+                else => error.IOError,
+            };
+        };
+    }
 }
 
 // =============================================================================

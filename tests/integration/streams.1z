@@ -24,15 +24,50 @@ dup to-string "<stream /tmp/1z_tests/1z_stream_test.txt read>" "read stream to-s
 stream-close
 "PASS: stream-open read and close" print
 
+"Stream write" test-section
+\ Write a string to a file
+"/tmp/1z_tests/1z_write_test.txt" write: stream-open
+dup "Hello, World!" stream-write 13 "stream-write returns byte count" assert=
+stream-close
+"PASS: stream-write string" print
+
+\ Write a byte array to a file
+"/tmp/1z_tests/1z_write_test2.txt" write: stream-open
+dup B{ 0x48 0x69 0x21 } stream-write 3 "stream-write byte array returns count" assert=
+stream-close
+"PASS: stream-write byte array" print
+
+"Stream flush" test-section
+\ Flush a file stream (no error expected)
+"/tmp/1z_tests/1z_flush_test.txt" write: stream-open
+dup "test" stream-write drop
+dup stream-flush
+stream-close
+"PASS: stream-flush on file" print
+
+\ Flush stdout (should be a no-op but not error)
+stdout stream-flush
+"PASS: stream-flush on stdout" print
+
 "Error cases" test-section
 \ FileNotFound error
 [ "/nonexistent/path/file.txt" read: stream-open ]
 [ drop "PASS: FileNotFound error for nonexistent file" print ]
 recover
 
-\ ClosedStream error
+\ ClosedStream error on close
 [ stdout dup stream-close stream-close ]
 [ drop "PASS: ClosedStream error on double close" print ]
+recover
+
+\ ClosedStream error on write
+[ "/tmp/1z_tests/1z_closed_test.txt" write: stream-open dup stream-close "test" stream-write ]
+[ drop "PASS: ClosedStream error on write to closed stream" print ]
+recover
+
+\ ClosedStream error on flush
+[ "/tmp/1z_tests/1z_closed_test2.txt" write: stream-open dup stream-close stream-flush ]
+[ drop "PASS: ClosedStream error on flush closed stream" print ]
 recover
 
 "All stream tests complete!" print
