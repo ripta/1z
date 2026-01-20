@@ -17,6 +17,7 @@ keep: ( x quot -- ... x ) [ over [ call ] dip ] ;
 bi: ( x p q -- ) [ [ keep ] dip call ] ;
 2dup: ( a b -- a b a b ) [ over over ] ;
 2drop: ( a b -- ) [ drop drop ] ;
+2dip: ( a b quot -- a b ) [ swap [ dip ] dip ] ;
 <rot-: ( a b c -- b c a ) [ [ swap ] dip swap ] ;
 -rot>: ( a b c -- c a b ) [ swap [ swap ] dip ] ;
 tuck: ( a b -- b a b ) [ swap over ] ;
@@ -53,3 +54,4 @@ while: ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b ) [
   [ drop drop nip ]
   if
 ] ;
+do: ( pred body -- pred body ) [ dup 2dip ] ;
