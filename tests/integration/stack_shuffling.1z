@@ -2,30 +2,40 @@
 
 \ nip ( a b -- b ) - removes second item
 1 2 nip
+wipe
 
 \ keep ( x quot -- ... x ) - execute quot, preserve x
-drop 5 [ dup + ] keep
+5 [ dup + ] keep
+wipe
 
 \ bi ( x p q -- ) - apply two quotations to one value
-2drop 5 [ dup + ] [ 1 + ] bi
+5 [ dup + ] [ 1 + ] bi
+wipe
 
 \ 2dup ( a b -- a b a b ) - duplicate top two items
-2drop 1 2 2dup
+1 2 2dup
+wipe
 
 \ 2drop ( a b -- ) - drop top two items
-2drop 2drop 1 2 3 4 2drop
+1 2 3 4 2drop
+wipe
 
 \ <rot- ( a b c -- b c a ) - bring third item to top
-2drop 1 2 3 <rot-
+1 2 3 <rot-
+wipe
 
 \ -rot> ( a b c -- c a b ) - send top item to third position
-drop drop drop 1 2 3 -rot>
+1 2 3 -rot>
+wipe
 
 \ tuck ( a b -- b a b ) - copy top item below second
-drop drop drop 1 2 tuck
+1 2 tuck
+wipe
 
 \ choose ( a1 a2 quot -- a ) - apply quot to copies, select based on result
-drop drop drop 3 5 [ < ] choose
+3 5 [ < ] choose
+wipe
 
 \ choose with false result
-drop 5 3 [ < ] choose
+5 3 [ < ] choose
+wipe

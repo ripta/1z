@@ -49,6 +49,11 @@ pub const Stack = struct {
         return self.items.items.len;
     }
 
+    /// Remove all items from the stack.
+    pub fn clear(self: *Stack) void {
+        self.items.clearRetainingCapacity();
+    }
+
     /// Print the stack contents for debugging/REPL display.
     /// Format: [bottom ... ... ... top]
     pub fn dump(self: *const Stack, writer: anytype) !void {

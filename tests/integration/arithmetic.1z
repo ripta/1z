@@ -2,36 +2,48 @@
 
 \ -@ ( a -- -a ) - arithmetic negation
 42 -@
+wipe
 
 \ -@ with negative number
-drop -7 -@
+-7 -@
+wipe
 
 \ -@ with zero
-drop 0 -@
+0 -@
+wipe
 
 \ abs ( a -- b ) - absolute value of positive
-drop 42 abs
+42 abs
+wipe
 
 \ abs with negative number
-drop -42 abs
+-42 abs
+wipe
 
 \ abs with zero
-drop 0 abs
+0 abs
+wipe
 
 \ min ( a1 a2 -- a ) - minimum of two values
-drop 3 5 min
+3 5 min
+wipe
 
 \ min with second smaller
-drop 5 3 min
+5 3 min
+wipe
 
 \ min with equal values
-drop 7 7 min
+7 7 min
+wipe
 
 \ max ( a1 a2 -- a ) - maximum of two values
-drop 3 5 max
+3 5 max
+wipe
 
 \ max with first larger
-drop 5 3 max
+5 3 max
+wipe
 
 \ max with equal values
-drop 7 7 max
+7 7 max
+wipe
