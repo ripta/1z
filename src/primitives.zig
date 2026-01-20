@@ -16,6 +16,7 @@ const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const parser = @import("parser.zig");
+const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
 
 pub const InterpreterError = error{
     StackUnderflow,
@@ -157,6 +158,7 @@ const primitives = [_]Primitive{
     .{ .name = "make-hash", .stack_effect = "quotation -- hash", .func = nativeMakeHash },
     .{ .name = "curry", .stack_effect = "x quot -- quot'", .func = nativeCurry },
     .{ .name = "compose", .stack_effect = "quot1 quot2 -- quot'", .func = nativeCompose },
+    .{ .name = "benchmark", .stack_effect = "quot -- hash", .func = nativeBenchmark },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -670,6 +672,53 @@ fn nativeCompose(ctx: *Context) anyerror!void {
     @memcpy(new_instrs[quot1.len..], quot2);
 
     try ctx.stack.push(.{ .quotation = new_instrs });
+}
+
+/// benchmark ( quot -- hash ) - Execute quotation and return benchmark stats
+fn nativeBenchmark(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+
+    // Create temporary benchmark stats for this execution
+    var local_stats = BenchmarkStats{};
+
+    // Save and replace context benchmark pointer
+    const saved_benchmark = ctx.benchmark;
+    ctx.benchmark = &local_stats;
+
+    // Time and execute
+    const start_time = std.time.nanoTimestamp();
+    const exec_result = ctx.executeQuotation(quot);
+
+    const end_time = std.time.nanoTimestamp();
+    const elapsed_ns = end_time - start_time;
+
+    // Restore original benchmark pointer
+    ctx.benchmark = saved_benchmark;
+
+    // Propagate execution error after restoring state
+    try exec_result;
+
+    // Build result hash
+    const alloc = ctx.quotationAllocator();
+    const hash = alloc.create(HashTable) catch return error.OutOfMemory;
+    hash.* = HashTable{};
+
+    const key1 = alloc.dupe(u8, "elapsed_ns") catch return error.OutOfMemory;
+    hash.put(alloc, key1, .{ .integer = @intCast(elapsed_ns) }) catch return error.OutOfMemory;
+
+    const key2 = alloc.dupe(u8, "push_literal") catch return error.OutOfMemory;
+    hash.put(alloc, key2, .{ .integer = @intCast(local_stats.push_literal_count) }) catch return error.OutOfMemory;
+
+    const key3 = alloc.dupe(u8, "call_word") catch return error.OutOfMemory;
+    hash.put(alloc, key3, .{ .integer = @intCast(local_stats.call_word_count) }) catch return error.OutOfMemory;
+
+    const key4 = alloc.dupe(u8, "total_instructions") catch return error.OutOfMemory;
+    hash.put(alloc, key4, .{ .integer = @intCast(local_stats.totalInstructions()) }) catch return error.OutOfMemory;
+
+    const key5 = alloc.dupe(u8, "peak_stack_depth") catch return error.OutOfMemory;
+    hash.put(alloc, key5, .{ .integer = @intCast(local_stats.peak_stack_depth) }) catch return error.OutOfMemory;
+
+    try ctx.stack.push(.{ .hash = hash });
 }
 
 // =============================================================================
