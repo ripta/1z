@@ -126,6 +126,7 @@ const primitives = [_]Primitive{
     .{ .name = "drop", .stack_effect = "a --", .func = nativeDrop },
     .{ .name = "swap", .stack_effect = "a b -- b a", .func = nativeSwap },
     .{ .name = "over", .stack_effect = "x y -- x y x", .func = nativeOver },
+    .{ .name = "dip", .stack_effect = "x quot -- x", .func = nativeDip },
     .{ .name = "+", .stack_effect = "a b -- a+b", .func = nativeAdd },
     .{ .name = "-", .stack_effect = "a b -- a-b", .func = nativeSub },
     .{ .name = "call", .stack_effect = "quot --", .func = nativeCall },
@@ -192,6 +193,14 @@ fn nativeOver(ctx: *Context) anyerror!void {
     const y = try ctx.stack.pop();
     const x = try ctx.stack.peek();
     try ctx.stack.push(y);
+    try ctx.stack.push(x);
+}
+
+/// dip ( x quot -- x ) - Execute quotation with x temporarily removed
+fn nativeDip(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    const x = try ctx.stack.pop();
+    try ctx.executeQuotation(quot);
     try ctx.stack.push(x);
 }
 
@@ -673,6 +682,69 @@ test "over" {
     try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).integer);
 }
 
+test "dip executes quotation with top item hidden" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Stack: 10 20, then dip with [ 1 + ]
+    // Should: hide 20, execute [ 1 + ] on 10 -> 11, restore 20
+    // Result: 11 20
+    const quot = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 0 },
+        .{ .op = .{ .call_word = "+" }, .line = 0 },
+    };
+    try ctx.stack.push(.{ .integer = 10 });
+    try ctx.stack.push(.{ .integer = 20 });
+    try ctx.stack.push(.{ .quotation = &quot });
+    try nativeDip(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 20), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 11), (try ctx.stack.pop()).integer);
+}
+
+test "dip with empty quotation" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Stack: 1 2, dip with [ ] should just restore 2
+    const quot = [_]Instruction{};
+    try ctx.stack.push(.{ .integer = 1 });
+    try ctx.stack.push(.{ .integer = 2 });
+    try ctx.stack.push(.{ .quotation = &quot });
+    try nativeDip(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).integer);
+}
+
+test "dip with quotation that pushes multiple values" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Stack: 5, dip with [ 1 2 3 ]
+    // Should: hide 5, push 1 2 3, restore 5
+    // Result: 1 2 3 5
+    const quot = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .integer = 3 } }, .line = 0 },
+    };
+    try ctx.stack.push(.{ .integer = 5 });
+    try ctx.stack.push(.{ .quotation = &quot });
+    try nativeDip(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 4), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 5), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 3), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).integer);
+}
+
 test "add" {
     const allocator = std.testing.allocator;
     var ctx = Context.init(allocator);
@@ -825,6 +897,7 @@ test "register primitives" {
     try std.testing.expect(dict.get("drop") != null);
     try std.testing.expect(dict.get("swap") != null);
     try std.testing.expect(dict.get("over") != null);
+    try std.testing.expect(dict.get("dip") != null);
     try std.testing.expect(dict.get("+") != null);
     try std.testing.expect(dict.get("-") != null);
     try std.testing.expect(dict.get("call") != null);
