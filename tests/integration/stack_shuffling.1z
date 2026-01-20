@@ -7,7 +7,10 @@
 drop 5 [ dup + ] keep
 
 \ bi ( x p q -- ) - apply two quotations to one value
-drop drop 5 [ dup + ] [ 1 + ] bi
+2drop 5 [ dup + ] [ 1 + ] bi
 
 \ 2dup ( a b -- a b a b ) - duplicate top two items
-drop drop 1 2 2dup
+2drop 1 2 2dup
+
+\ 2drop ( a b -- ) - drop top two items
+2drop 2drop 1 2 3 4 2drop

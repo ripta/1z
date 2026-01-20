@@ -16,3 +16,4 @@ nip: ( a b -- b ) [ swap drop ] ;
 keep: ( x quot -- ... x ) [ over [ call ] dip ] ;
 bi: ( x p q -- ) [ [ keep ] dip call ] ;
 2dup: ( a b -- a b a b ) [ over over ] ;
+2drop: ( a b -- ) [ drop drop ] ;
