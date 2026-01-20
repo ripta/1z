@@ -8,5 +8,8 @@ H{: parse-time [ "}" parse-until make-hash ] ;
 when: ( ? quot -- ) [ [ ] if ] ;
 unless: ( ? quot -- ) [ [ ] swap if ] ;
 
-\ Error handling
+\ Error-handling
 ignore-errors: ( quot -- ) [ [ drop ] recover ] ;
+
+\ Stack-shuffling
+nip: ( a b -- b ) [ swap drop ] ;

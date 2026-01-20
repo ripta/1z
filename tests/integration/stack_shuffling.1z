@@ -1,0 +1,4 @@
+\ Test stack-shuffling words from prelude
+
+\ nip ( a b -- b ) - removes second item
+1 2 nip
