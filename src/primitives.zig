@@ -124,6 +124,7 @@ const Instruction = @import("value.zig").Instruction;
 const primitives = [_]Primitive{
     .{ .name = "dup", .stack_effect = "a -- a a", .func = nativeDup },
     .{ .name = "drop", .stack_effect = "a --", .func = nativeDrop },
+    .{ .name = "swap", .stack_effect = "a b -- b a", .func = nativeSwap },
     .{ .name = "+", .stack_effect = "a b -- a+b", .func = nativeAdd },
     .{ .name = "-", .stack_effect = "a b -- a-b", .func = nativeSub },
     .{ .name = "call", .stack_effect = "quot --", .func = nativeCall },
@@ -176,6 +177,14 @@ fn nativeDup(ctx: *Context) anyerror!void {
 /// drop ( a -- ) - Remove top of stack
 fn nativeDrop(ctx: *Context) anyerror!void {
     _ = try ctx.stack.pop();
+}
+
+/// swap ( a b -- b a ) - Swap top two items
+fn nativeSwap(ctx: *Context) anyerror!void {
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    try ctx.stack.push(b);
+    try ctx.stack.push(a);
 }
 
 /// + ( a b -- a+b ) - Add two integers
@@ -634,6 +643,20 @@ test "drop" {
     try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).integer);
 }
 
+test "swap" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = 1 });
+    try ctx.stack.push(.{ .integer = 2 });
+    try nativeSwap(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).integer);
+}
+
 test "add" {
     const allocator = std.testing.allocator;
     var ctx = Context.init(allocator);
@@ -783,9 +806,10 @@ test "register primitives" {
     try registerPrimitives(&dict, arena.allocator());
 
     try std.testing.expect(dict.get("dup") != null);
+    try std.testing.expect(dict.get("drop") != null);
+    try std.testing.expect(dict.get("swap") != null);
     try std.testing.expect(dict.get("+") != null);
     try std.testing.expect(dict.get("-") != null);
-    try std.testing.expect(dict.get("drop") != null);
     try std.testing.expect(dict.get("call") != null);
     try std.testing.expect(dict.get(";") != null);
     try std.testing.expect(dict.get("if") != null);
