@@ -30,3 +30,26 @@ max: ( a1 a2 -- a ) [ [ > ] choose ] ;
 --: ( a1 -- a2 ) [ 1 - ] ;
 ++: ( a1 -- a2 ) [ 1 + ] ;
 0?: ( a -- ? ) [ 0 = ] ;
+
+\ Loops
+times: ( n quot -- ) [
+  over 0 >
+  [
+    dup call
+    swap -- swap
+    times
+  ]
+  [ 2drop ]
+  if
+] ;
+while: ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b ) [
+  -rot> 2dup call
+  [
+    drop -rot> 2dup
+    drop call
+    -rot>
+    while
+  ]
+  [ drop drop nip ]
+  if
+] ;
