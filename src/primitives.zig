@@ -155,6 +155,8 @@ const primitives = [_]Primitive{
     .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTime },
     .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .func = nativeParseUntil },
     .{ .name = "make-hash", .stack_effect = "quotation -- hash", .func = nativeMakeHash },
+    .{ .name = "curry", .stack_effect = "x quot -- quot'", .func = nativeCurry },
+    .{ .name = "compose", .stack_effect = "quot1 quot2 -- quot'", .func = nativeCompose },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -632,6 +634,42 @@ fn nativeMakeHash(ctx: *Context) anyerror!void {
     }
 
     try ctx.stack.push(.{ .hash = hash });
+}
+
+/// curry ( x quot -- quot' ) - Create new quotation with x prepended
+/// Example: 5 [ + ] curry creates [ 5 + ]
+fn nativeCurry(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    const x = try ctx.stack.pop();
+
+    // Allocate new instruction array: 1 (for push x) + original length
+    const alloc = ctx.quotationAllocator();
+    const new_instrs = try alloc.alloc(Instruction, 1 + quot.len);
+
+    // First instruction: push the value x
+    new_instrs[0] = .{ .op = .{ .push_literal = x }, .line = 0 };
+
+    // Copy original quotation instructions
+    @memcpy(new_instrs[1..], quot);
+
+    try ctx.stack.push(.{ .quotation = new_instrs });
+}
+
+/// compose ( quot1 quot2 -- quot' ) - Concatenate two quotations
+/// Example: [ 2 * ] [ 3 + ] compose creates [ 2 * 3 + ]
+fn nativeCompose(ctx: *Context) anyerror!void {
+    const quot2 = try popQuotation(ctx);
+    const quot1 = try popQuotation(ctx);
+
+    // Allocate new instruction array: quot1.len + quot2.len
+    const alloc = ctx.quotationAllocator();
+    const new_instrs = try alloc.alloc(Instruction, quot1.len + quot2.len);
+
+    // Copy quot1 then quot2
+    @memcpy(new_instrs[0..quot1.len], quot1);
+    @memcpy(new_instrs[quot1.len..], quot2);
+
+    try ctx.stack.push(.{ .quotation = new_instrs });
 }
 
 // =============================================================================
@@ -1155,6 +1193,8 @@ test "register primitives" {
     try std.testing.expect(dict.get("recover") != null);
     try std.testing.expect(dict.get("cleanup") != null);
     try std.testing.expect(dict.get("rethrow") != null);
+    try std.testing.expect(dict.get("curry") != null);
+    try std.testing.expect(dict.get("compose") != null);
 }
 
 test "recover catches error and executes recovery" {
@@ -1467,4 +1507,92 @@ test "parse-until fails without tokenizer" {
     // Should fail with NoTokenizerAvailable
     const result = nativeParseUntil(&ctx);
     try std.testing.expectError(error.NoTokenizerAvailable, result);
+}
+
+test "curry prepends value to quotation" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // 3 5 [ + ] curry call should give 8
+    // First create quotation [ + ]
+    const quot = [_]Instruction{
+        .{ .op = .{ .call_word = "+" }, .line = 0 },
+    };
+    try ctx.stack.push(.{ .integer = 3 }); // Will be on stack when curried quot runs
+    try ctx.stack.push(.{ .integer = 5 }); // Value to curry
+    try ctx.stack.push(.{ .quotation = &quot });
+    try nativeCurry(&ctx);
+
+    // Now we have: 3 [ 5 + ]
+    try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+
+    // Call the curried quotation
+    try nativeCall(&ctx);
+
+    // Result: 8 (3 + 5)
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 8), (try ctx.stack.pop()).integer);
+}
+
+test "curry with empty quotation" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // 42 [ ] curry call should leave 42 on stack
+    const quot = [_]Instruction{};
+    try ctx.stack.push(.{ .integer = 42 });
+    try ctx.stack.push(.{ .quotation = &quot });
+    try nativeCurry(&ctx);
+    try nativeCall(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 42), (try ctx.stack.pop()).integer);
+}
+
+test "compose concatenates quotations" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // 5 [ 2 * ] [ 3 + ] compose call should give 13 (5*2 + 3)
+    const quot1 = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 0 },
+        .{ .op = .{ .call_word = "*" }, .line = 0 },
+    };
+    const quot2 = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .integer = 3 } }, .line = 0 },
+        .{ .op = .{ .call_word = "+" }, .line = 0 },
+    };
+    try ctx.stack.push(.{ .integer = 5 });
+    try ctx.stack.push(.{ .quotation = &quot1 });
+    try ctx.stack.push(.{ .quotation = &quot2 });
+    try nativeCompose(&ctx);
+
+    // Now we have: 5 [ 2 * 3 + ]
+    try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+
+    // Call the composed quotation
+    try nativeCall(&ctx);
+
+    // Result: 13 (5 * 2 + 3)
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 13), (try ctx.stack.pop()).integer);
+}
+
+test "compose with empty quotations" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // [ ] [ ] compose should give [ ]
+    const quot1 = [_]Instruction{};
+    const quot2 = [_]Instruction{};
+    try ctx.stack.push(.{ .quotation = &quot1 });
+    try ctx.stack.push(.{ .quotation = &quot2 });
+    try nativeCompose(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expectEqual(@as(usize, 0), result.quotation.len);
 }
