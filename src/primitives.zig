@@ -241,6 +241,9 @@ const primitives = [_]Primitive{
     .{ .name = "stream-close", .stack_effect = "stream --", .func = nativeStreamClose },
     .{ .name = "stream-write", .stack_effect = "stream bytes -- n", .func = nativeStreamWrite },
     .{ .name = "stream-flush", .stack_effect = "stream --", .func = nativeStreamFlush },
+    .{ .name = "stream-read", .stack_effect = "stream n -- bytes", .func = nativeStreamRead },
+    .{ .name = "stream-read-line", .stack_effect = "stream -- str/f", .func = nativeStreamReadLine },
+    .{ .name = "stream-read-all", .stack_effect = "stream -- bytes", .func = nativeStreamReadAll },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -2448,6 +2451,170 @@ fn nativeStreamFlush(ctx: *Context) anyerror!void {
             };
         };
     }
+}
+
+// =============================================================================
+// Stream reading primitives
+// =============================================================================
+
+/// stream-read ( stream n -- bytes ) - Read up to n bytes from stream
+fn nativeStreamRead(ctx: *Context) anyerror!void {
+    const n = try popInteger(ctx);
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    if (n < 0) {
+        return error.InvalidArgument;
+    }
+
+    const alloc = ctx.quotationAllocator();
+    const buffer = alloc.alloc(u8, @intCast(n)) catch return error.OutOfMemory;
+    defer alloc.free(buffer);
+
+    const bytes_read = stream.file.read(buffer) catch |err| {
+        return switch (err) {
+            error.InputOutput => error.IOError,
+            error.AccessDenied => error.PermissionDenied,
+            error.BrokenPipe => error.IOError,
+            error.ConnectionResetByPeer => error.IOError,
+            error.ConnectionTimedOut => error.IOError,
+            error.NotOpenForReading => error.PermissionDenied,
+            else => error.IOError,
+        };
+    };
+
+    const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+    ba.* = ByteArray{};
+    ba.ensureTotalCapacity(alloc, bytes_read) catch return error.OutOfMemory;
+    for (buffer[0..bytes_read]) |byte| {
+        ba.appendAssumeCapacity(byte);
+    }
+
+    try ctx.stack.push(.{ .byte_array = ba });
+}
+
+/// stream-read-line ( stream -- str/f ) - Read line (no newline), f at EOF
+fn nativeStreamReadLine(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    const alloc = ctx.quotationAllocator();
+    var line_buf: std.ArrayListUnmanaged(u8) = .{};
+    defer line_buf.deinit(alloc);
+
+    while (true) {
+        var byte_buf: [1]u8 = undefined;
+        const bytes_read = stream.file.read(&byte_buf) catch |err| {
+            return switch (err) {
+                error.InputOutput => error.IOError,
+                error.AccessDenied => error.PermissionDenied,
+                error.BrokenPipe => error.IOError,
+                error.ConnectionResetByPeer => error.IOError,
+                error.NotOpenForReading => error.PermissionDenied,
+                else => error.IOError,
+            };
+        };
+
+        if (bytes_read == 0) {
+            // No data read at all, return false for EOF
+            if (line_buf.items.len == 0) {
+                try ctx.stack.push(.{ .boolean = false });
+                return;
+            }
+            // Return what we have; last line without newline
+            break;
+        }
+
+        const byte = byte_buf[0];
+        if (byte == '\n') {
+            // End of line, sans newline
+            break;
+        }
+
+        // Handle \r\n by skipping \r if followed by \n
+        if (byte == '\r') {
+            var peek_buf: [1]u8 = undefined;
+            const peek_read = stream.file.read(&peek_buf) catch |err| {
+                return switch (err) {
+                    error.InputOutput => error.IOError,
+                    error.AccessDenied => error.PermissionDenied,
+                    else => error.IOError,
+                };
+            };
+            if (peek_read > 0 and peek_buf[0] == '\n') {
+                break;
+            }
+            line_buf.append(alloc, '\r') catch return error.OutOfMemory;
+            if (peek_read > 0) {
+                if (peek_buf[0] == '\n') {
+                    break;
+                }
+                line_buf.append(alloc, peek_buf[0]) catch return error.OutOfMemory;
+            }
+            continue;
+        }
+
+        line_buf.append(alloc, byte) catch return error.OutOfMemory;
+    }
+
+    const result = alloc.dupe(u8, line_buf.items) catch return error.OutOfMemory;
+    try ctx.stack.push(.{ .string = result });
+}
+
+/// stream-read-all ( stream -- bytes ) - Read all remaining content
+fn nativeStreamReadAll(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    const alloc = ctx.quotationAllocator();
+
+    // TODO(ripta): 10 MB seems reasonable, right?
+    const max_size: usize = 10 * 1024 * 1024;
+    var content: std.ArrayListUnmanaged(u8) = .{};
+    defer content.deinit(alloc);
+
+    var buffer: [4096]u8 = undefined;
+    while (true) {
+        const bytes_read = stream.file.read(&buffer) catch |err| {
+            return switch (err) {
+                error.InputOutput => error.IOError,
+                error.AccessDenied => error.PermissionDenied,
+                error.BrokenPipe => error.IOError,
+                error.ConnectionResetByPeer => error.IOError,
+                error.NotOpenForReading => error.PermissionDenied,
+                else => error.IOError,
+            };
+        };
+
+        // EOF?
+        if (bytes_read == 0) {
+            break;
+        }
+
+        if (content.items.len + bytes_read > max_size) {
+            return error.OutOfMemory;
+        }
+
+        content.appendSlice(alloc, buffer[0..bytes_read]) catch return error.OutOfMemory;
+    }
+
+    const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+    ba.* = ByteArray{};
+    ba.ensureTotalCapacity(alloc, content.items.len) catch return error.OutOfMemory;
+    for (content.items) |byte| {
+        ba.appendAssumeCapacity(byte);
+    }
+
+    try ctx.stack.push(.{ .byte_array = ba });
 }
 
 // =============================================================================

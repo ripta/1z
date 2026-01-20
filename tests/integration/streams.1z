@@ -70,4 +70,67 @@ recover
 [ drop "PASS: ClosedStream error on flush closed stream" print ]
 recover
 
+"Stream read" test-section
+\ Write test data then read it back
+"/tmp/1z_tests/1z_read_test.txt" write: stream-open
+dup "Hello, World!" stream-write drop
+stream-close
+
+\ Read partial content
+"/tmp/1z_tests/1z_read_test.txt" read: stream-open
+dup 5 stream-read
+#len 5 "stream-read returns 5 bytes" assert=
+stream-close
+"PASS: stream-read partial" print
+
+\ Read more than available
+"/tmp/1z_tests/1z_read_test.txt" read: stream-open
+dup 100 stream-read
+#len 13 "stream-read returns available bytes" assert=
+stream-close
+"PASS: stream-read more than available" print
+
+"Stream read-line" test-section
+\ Write multi-line content (using byte array with actual newlines: 0x0A)
+"/tmp/1z_tests/1z_readline_test.txt" write: stream-open
+dup B{ 0x4C 0x31 0x0A 0x4C 0x32 0x0A 0x4C 0x33 } stream-write drop
+stream-close
+
+\ Read lines (L1, L2, L3 separated by newlines)
+"/tmp/1z_tests/1z_readline_test.txt" read: stream-open
+dup stream-read-line "L1" "first line" assert=
+dup stream-read-line "L2" "second line" assert=
+dup stream-read-line "L3" "third line" assert=
+dup stream-read-line f "EOF returns false" assert=
+stream-close
+"PASS: stream-read-line multiple lines" print
+
+"Stream read-all" test-section
+\ Write content then read all
+"/tmp/1z_tests/1z_readall_test.txt" write: stream-open
+dup "Complete file content" stream-write drop
+stream-close
+
+"/tmp/1z_tests/1z_readall_test.txt" read: stream-open
+dup stream-read-all
+#len 21 "stream-read-all returns all bytes" assert=
+stream-close
+"PASS: stream-read-all" print
+
+"Stream read error cases" test-section
+\ ClosedStream error on read
+[ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close 10 stream-read ]
+[ drop "PASS: ClosedStream error on read from closed stream" print ]
+recover
+
+\ ClosedStream error on read-line
+[ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close stream-read-line ]
+[ drop "PASS: ClosedStream error on read-line from closed stream" print ]
+recover
+
+\ ClosedStream error on read-all
+[ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close stream-read-all ]
+[ drop "PASS: ClosedStream error on read-all from closed stream" print ]
+recover
+
 "All stream tests complete!" print

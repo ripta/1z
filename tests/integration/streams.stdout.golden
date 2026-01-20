@@ -68,5 +68,67 @@ Stack: [ [ "/tmp/1z_tests/1z_closed_test2.txt" write: stream-open dup stream-clo
 Stack: [ [ "/tmp/1z_tests/1z_closed_test2.txt" write: stream-open dup stream-close stream-flush ] [ drop "PASS: ClosedStream error on flush closed stream" print ] ]
 PASS: ClosedStream error on flush closed stream
 Stack: [ ]
+=== Stream read ===
+Stack: [ ]
+Stack: [ <stream /tmp/1z_tests/1z_read_test.txt write> ]
+Stack: [ <stream /tmp/1z_tests/1z_read_test.txt write> ]
+Stack: [ ]
+Stack: [ <stream /tmp/1z_tests/1z_read_test.txt read> ]
+Stack: [ <stream /tmp/1z_tests/1z_read_test.txt read> B{ 0x48 0x65 0x6C 0x6C 0x6F } ]
+PASS: stream-read returns 5 bytes
+Stack: [ <stream /tmp/1z_tests/1z_read_test.txt read> ]
+Stack: [ ]
+PASS: stream-read partial
+Stack: [ ]
+Stack: [ <stream /tmp/1z_tests/1z_read_test.txt read> ]
+Stack: [ <stream /tmp/1z_tests/1z_read_test.txt read> B{ 0x48 0x65 0x6C 0x6C 0x6F 0x2C 0x20 0x57 0x6F 0x72 0x6C 0x64 0x21 } ]
+PASS: stream-read returns available bytes
+Stack: [ <stream /tmp/1z_tests/1z_read_test.txt read> ]
+Stack: [ ]
+PASS: stream-read more than available
+Stack: [ ]
+=== Stream read-line ===
+Stack: [ ]
+Stack: [ <stream /tmp/1z_tests/1z_readline_test.txt write> ]
+Stack: [ <stream /tmp/1z_tests/1z_readline_test.txt write> ]
+Stack: [ ]
+Stack: [ <stream /tmp/1z_tests/1z_readline_test.txt read> ]
+PASS: first line
+Stack: [ <stream /tmp/1z_tests/1z_readline_test.txt read> ]
+PASS: second line
+Stack: [ <stream /tmp/1z_tests/1z_readline_test.txt read> ]
+PASS: third line
+Stack: [ <stream /tmp/1z_tests/1z_readline_test.txt read> ]
+PASS: EOF returns false
+Stack: [ <stream /tmp/1z_tests/1z_readline_test.txt read> ]
+Stack: [ ]
+PASS: stream-read-line multiple lines
+Stack: [ ]
+=== Stream read-all ===
+Stack: [ ]
+Stack: [ <stream /tmp/1z_tests/1z_readall_test.txt write> ]
+Stack: [ <stream /tmp/1z_tests/1z_readall_test.txt write> ]
+Stack: [ ]
+Stack: [ <stream /tmp/1z_tests/1z_readall_test.txt read> ]
+Stack: [ <stream /tmp/1z_tests/1z_readall_test.txt read> B{ 0x43 0x6F 0x6D 0x70 0x6C 0x65 0x74 0x65 0x20 0x66 0x69 0x6C 0x65 0x20 0x63 0x6F 0x6E 0x74 0x65 0x6E 0x74 } ]
+PASS: stream-read-all returns all bytes
+Stack: [ <stream /tmp/1z_tests/1z_readall_test.txt read> ]
+Stack: [ ]
+PASS: stream-read-all
+Stack: [ ]
+=== Stream read error cases ===
+Stack: [ ]
+Stack: [ [ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close 10 stream-read ] ]
+Stack: [ [ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close 10 stream-read ] [ drop "PASS: ClosedStream error on read from closed stream" print ] ]
+PASS: ClosedStream error on read from closed stream
+Stack: [ ]
+Stack: [ [ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close stream-read-line ] ]
+Stack: [ [ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close stream-read-line ] [ drop "PASS: ClosedStream error on read-line from closed stream" print ] ]
+PASS: ClosedStream error on read-line from closed stream
+Stack: [ ]
+Stack: [ [ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close stream-read-all ] ]
+Stack: [ [ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close stream-read-all ] [ drop "PASS: ClosedStream error on read-all from closed stream" print ] ]
+PASS: ClosedStream error on read-all from closed stream
+Stack: [ ]
 All stream tests complete!
 Stack: [ ]
