@@ -7,6 +7,7 @@ const Instruction = @import("value.zig").Instruction;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const primitives = @import("primitives.zig");
 const parser = @import("parser.zig");
+const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
 
 /// Embedded prelude source code
 const prelude_source = @embedFile("prelude.1z");
@@ -41,8 +42,11 @@ pub const Context = struct {
     error_details: std.ArrayListUnmanaged(ErrorDetail),
     /// Tokenizer for parse-time word access (set during parsing, null otherwise)
     parse_tokenizer: ?*Tokenizer = null,
+    /// Optional benchmark stats (null when benchmarking is disabled)
+    benchmark: ?*BenchmarkStats = null,
 
     /// Initialize a new interpreter context with an empty stack and primitives.
+    /// Note: This does NOT load the prelude. Call loadPrelude() separately.
     pub fn init(allocator: Allocator) Context {
         var ctx = Context{
             .stack = Stack.init(allocator),
@@ -52,22 +56,27 @@ pub const Context = struct {
             .call_stack = .{},
             .error_details = .{},
             .parse_tokenizer = null,
+            .benchmark = null,
         };
 
         primitives.registerPrimitives(&ctx.dictionary, ctx.arena.allocator()) catch |err| {
             std.debug.panic("Failed to register primitives: {any}", .{err});
         };
 
-        // Load the embedded prelude
+        return ctx;
+    }
+
+    /// Initialize context and load prelude. Convenience method for non-benchmark use.
+    pub fn initWithPrelude(allocator: Allocator) Context {
+        var ctx = init(allocator);
         ctx.loadPrelude() catch |err| {
             std.debug.panic("Failed to load prelude: {any}", .{err});
         };
-
         return ctx;
     }
 
     /// Load the embedded prelude source.
-    fn loadPrelude(self: *Context) !void {
+    pub fn loadPrelude(self: *Context) !void {
         var tokenizer = Tokenizer.init(prelude_source);
         const instrs = try parser.parseTopLevel(self.arena.allocator(), &tokenizer, self);
         try self.executeQuotation(instrs);
@@ -132,8 +141,20 @@ pub const Context = struct {
     pub fn executeQuotation(self: *Context, instructions: []const Instruction) anyerror!void {
         for (instructions) |instr| {
             switch (instr.op) {
-                .push_literal => |val| try self.stack.push(val),
+                .push_literal => |val| {
+                    try self.stack.push(val);
+                    // Benchmark: count push_literal and update stack depth
+                    if (self.benchmark) |b| {
+                        b.recordPushLiteral();
+                        b.updatePeakStackDepth(self.stack.depth());
+                    }
+                },
                 .call_word => |name| {
+                    // Benchmark: count call_word
+                    if (self.benchmark) |b| {
+                        b.recordCallWord();
+                    }
+
                     if (self.dictionary.get(name)) |word| {
                         // Push call frame before execution
                         self.pushCallFrame(name, instr.line);
@@ -145,6 +166,10 @@ pub const Context = struct {
                         if (result) |_| {
                             // Success - just pop frame
                             self.popCallFrame();
+                            // Benchmark: update stack depth after word execution
+                            if (self.benchmark) |b| {
+                                b.updatePeakStackDepth(self.stack.depth());
+                            }
                         } else |err| {
                             // Error - capture call stack (before popping), then pop
                             self.captureCallStackOnError(err);
