@@ -129,6 +129,9 @@ const primitives = [_]Primitive{
     .{ .name = "dip", .stack_effect = "x quot -- x", .func = nativeDip },
     .{ .name = "+", .stack_effect = "a b -- a+b", .func = nativeAdd },
     .{ .name = "-", .stack_effect = "a b -- a-b", .func = nativeSub },
+    .{ .name = "*", .stack_effect = "a b -- a*b", .func = nativeMul },
+    .{ .name = "/", .stack_effect = "a b -- a/b", .func = nativeDiv },
+    .{ .name = "%", .stack_effect = "a b -- a%b", .func = nativeMod },
     .{ .name = "call", .stack_effect = "quot --", .func = nativeCall },
     .{ .name = ";", .stack_effect = "name quot --", .func = nativeSemicolon },
     .{ .name = "t", .stack_effect = "-- t", .func = nativeTrue },
@@ -216,6 +219,29 @@ fn nativeSub(ctx: *Context) anyerror!void {
     const b = try popInteger(ctx);
     const a = try popInteger(ctx);
     try ctx.stack.push(.{ .integer = a - b });
+}
+
+/// * ( a b -- a*b ) - Multiply two integers
+fn nativeMul(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    try ctx.stack.push(.{ .integer = a * b });
+}
+
+/// / ( a b -- a/b ) - Integer division
+fn nativeDiv(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    if (b == 0) return error.DivisionByZero;
+    try ctx.stack.push(.{ .integer = @divTrunc(a, b) });
+}
+
+/// % ( a b -- a%b ) - Modulo (remainder)
+fn nativeMod(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    if (b == 0) return error.DivisionByZero;
+    try ctx.stack.push(.{ .integer = @mod(a, b) });
 }
 
 /// call ( quot -- ) - Execute a quotation
@@ -771,6 +797,69 @@ test "sub" {
     try std.testing.expectEqual(@as(i64, 7), (try ctx.stack.pop()).integer);
 }
 
+test "mul" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = 3 });
+    try ctx.stack.push(.{ .integer = 4 });
+    try nativeMul(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 12), (try ctx.stack.pop()).integer);
+}
+
+test "div" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = 10 });
+    try ctx.stack.push(.{ .integer = 3 });
+    try nativeDiv(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 3), (try ctx.stack.pop()).integer);
+}
+
+test "div by zero" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = 10 });
+    try ctx.stack.push(.{ .integer = 0 });
+
+    const result = nativeDiv(&ctx);
+    try std.testing.expectError(error.DivisionByZero, result);
+}
+
+test "mod" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = 10 });
+    try ctx.stack.push(.{ .integer = 3 });
+    try nativeMod(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).integer);
+}
+
+test "mod by zero" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = 10 });
+    try ctx.stack.push(.{ .integer = 0 });
+
+    const result = nativeMod(&ctx);
+    try std.testing.expectError(error.DivisionByZero, result);
+}
+
 test "call executes quotation" {
     const allocator = std.testing.allocator;
     var ctx = Context.init(allocator);
@@ -900,6 +989,9 @@ test "register primitives" {
     try std.testing.expect(dict.get("dip") != null);
     try std.testing.expect(dict.get("+") != null);
     try std.testing.expect(dict.get("-") != null);
+    try std.testing.expect(dict.get("*") != null);
+    try std.testing.expect(dict.get("/") != null);
+    try std.testing.expect(dict.get("%") != null);
     try std.testing.expect(dict.get("call") != null);
     try std.testing.expect(dict.get(";") != null);
     try std.testing.expect(dict.get("if") != null);
