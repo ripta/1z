@@ -343,9 +343,28 @@ fn nativeFalse(ctx: *Context) anyerror!void {
 
 /// = ( a b -- ? ) - Equality comparison
 fn nativeEq(ctx: *Context) anyerror!void {
-    const b = try popInteger(ctx);
-    const a = try popInteger(ctx);
-    try ctx.stack.push(.{ .boolean = a == b });
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    const result = switch (a) {
+        .integer => |ai| switch (b) {
+            .integer => |bi| ai == bi,
+            else => false,
+        },
+        .boolean => |ab| switch (b) {
+            .boolean => |bb| ab == bb,
+            else => false,
+        },
+        .string => |as| switch (b) {
+            .string => |bs| std.mem.eql(u8, as, bs),
+            else => false,
+        },
+        .symbol => |as| switch (b) {
+            .symbol => |bs| std.mem.eql(u8, as, bs),
+            else => false,
+        },
+        else => false,
+    };
+    try ctx.stack.push(.{ .boolean = result });
 }
 
 /// < ( a b -- ? ) - Less than
