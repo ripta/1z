@@ -133,6 +133,9 @@ const primitives = [_]Primitive{
     .{ .name = "*", .stack_effect = "a b -- a*b", .func = nativeMul },
     .{ .name = "/", .stack_effect = "a b -- a/b", .func = nativeDiv },
     .{ .name = "%", .stack_effect = "a b -- a%b", .func = nativeMod },
+    .{ .name = "+%", .stack_effect = "a b -- a+b", .func = nativeAddWrap },
+    .{ .name = "-%", .stack_effect = "a b -- a-b", .func = nativeSubWrap },
+    .{ .name = "*%", .stack_effect = "a b -- a*b", .func = nativeMulWrap },
     .{ .name = "call", .stack_effect = "quot --", .func = nativeCall },
     .{ .name = ";", .stack_effect = "name quot --", .func = nativeSemicolon },
     .{ .name = "t", .stack_effect = "-- t", .func = nativeTrue },
@@ -250,6 +253,27 @@ fn nativeMod(ctx: *Context) anyerror!void {
     const a = try popInteger(ctx);
     if (b == 0) return error.DivisionByZero;
     try ctx.stack.push(.{ .integer = @mod(a, b) });
+}
+
+/// +% ( a b -- a+b ) - Add two integers with wraparound on overflow
+fn nativeAddWrap(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    try ctx.stack.push(.{ .integer = a +% b });
+}
+
+/// -% ( a b -- a-b ) - Subtract with wraparound on overflow
+fn nativeSubWrap(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    try ctx.stack.push(.{ .integer = a -% b });
+}
+
+/// *% ( a b -- a*b ) - Multiply with wraparound on overflow
+fn nativeMulWrap(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    try ctx.stack.push(.{ .integer = a *% b });
 }
 
 /// call ( quot -- ) - Execute a quotation
@@ -917,6 +941,48 @@ test "mod by zero" {
     try std.testing.expectError(error.DivisionByZero, result);
 }
 
+test "+% wrapping addition" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // MAX_INT +w 1 should wrap to MIN_INT
+    try ctx.stack.push(.{ .integer = std.math.maxInt(i64) });
+    try ctx.stack.push(.{ .integer = 1 });
+    try nativeAddWrap(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(std.math.minInt(i64), (try ctx.stack.pop()).integer);
+}
+
+test "-% wrapping subtraction" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // MIN_INT -w 1 should wrap to MAX_INT
+    try ctx.stack.push(.{ .integer = std.math.minInt(i64) });
+    try ctx.stack.push(.{ .integer = 1 });
+    try nativeSubWrap(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(std.math.maxInt(i64), (try ctx.stack.pop()).integer);
+}
+
+test "*% wrapping multiplication" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // MAX_INT *w 2 should wrap
+    try ctx.stack.push(.{ .integer = std.math.maxInt(i64) });
+    try ctx.stack.push(.{ .integer = 2 });
+    try nativeMulWrap(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, -2), (try ctx.stack.pop()).integer);
+}
+
 test "call executes quotation" {
     const allocator = std.testing.allocator;
     var ctx = Context.init(allocator);
@@ -1049,6 +1115,9 @@ test "register primitives" {
     try std.testing.expect(dict.get("*") != null);
     try std.testing.expect(dict.get("/") != null);
     try std.testing.expect(dict.get("%") != null);
+    try std.testing.expect(dict.get("+%") != null);
+    try std.testing.expect(dict.get("-%") != null);
+    try std.testing.expect(dict.get("*%") != null);
     try std.testing.expect(dict.get("call") != null);
     try std.testing.expect(dict.get(";") != null);
     try std.testing.expect(dict.get("if") != null);
