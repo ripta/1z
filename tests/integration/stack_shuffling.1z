@@ -14,3 +14,9 @@ drop 5 [ dup + ] keep
 
 \ 2drop ( a b -- ) - drop top two items
 2drop 2drop 1 2 3 4 2drop
+
+\ <rot- ( a b c -- b c a ) - bring third item to top
+2drop 1 2 3 <rot-
+
+\ -rot> ( a b c -- c a b ) - send top item to third position
+drop drop drop 1 2 3 -rot>
