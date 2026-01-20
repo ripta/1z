@@ -1,0 +1,41 @@
+\ Test stack-shuffling words from prelude
+
+\ nip ( a b -- b ) - removes second item
+1 2 nip
+wipe
+
+\ keep ( x quot -- ... x ) - execute quot, preserve x
+5 [ dup + ] keep
+wipe
+
+\ bi ( x p q -- ) - apply two quotations to one value
+5 [ dup + ] [ 1 + ] bi
+wipe
+
+\ 2dup ( a b -- a b a b ) - duplicate top two items
+1 2 2dup
+wipe
+
+\ 2drop ( a b -- ) - drop top two items
+1 2 3 4 2drop
+wipe
+
+\ <rot- ( a b c -- b c a ) - bring third item to top
+1 2 3 <rot-
+wipe
+
+\ -rot> ( a b c -- c a b ) - send top item to third position
+1 2 3 -rot>
+wipe
+
+\ tuck ( a b -- b a b ) - copy top item below second
+1 2 tuck
+wipe
+
+\ choose ( a1 a2 quot -- a ) - apply quot to copies, select based on result
+3 5 [ < ] choose
+wipe
+
+\ choose with false result
+5 3 [ < ] choose
+wipe

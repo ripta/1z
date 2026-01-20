@@ -1,0 +1,18 @@
+
+=== Benchmark Results ===
+Timing:
+  Prelude load:    580.000 us
+  User code:       40.627 ms
+  Total:           41.207 ms
+
+Instructions:
+  push_literal:    98,092
+  call_word:       159,366
+  Total:           257,458
+
+Stack:
+  Peak depth:      23
+
+Memory:
+  Allocations:     22
+  Total bytes:     140.60 KB

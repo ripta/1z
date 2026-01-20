@@ -16,11 +16,13 @@ const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const parser = @import("parser.zig");
+const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
 
 pub const InterpreterError = error{
     StackUnderflow,
     TypeError,
     DivisionByZero,
+    IntegerOverflow,
     FileNotFound,
     FileReadError,
     NoTokenizerAvailable,
@@ -124,8 +126,18 @@ const Instruction = @import("value.zig").Instruction;
 const primitives = [_]Primitive{
     .{ .name = "dup", .stack_effect = "a -- a a", .func = nativeDup },
     .{ .name = "drop", .stack_effect = "a --", .func = nativeDrop },
+    .{ .name = "swap", .stack_effect = "a b -- b a", .func = nativeSwap },
+    .{ .name = "over", .stack_effect = "x y -- x y x", .func = nativeOver },
+    .{ .name = "dip", .stack_effect = "x quot -- x", .func = nativeDip },
+    .{ .name = "wipe", .stack_effect = "... --", .func = nativeWipe },
     .{ .name = "+", .stack_effect = "a b -- a+b", .func = nativeAdd },
     .{ .name = "-", .stack_effect = "a b -- a-b", .func = nativeSub },
+    .{ .name = "*", .stack_effect = "a b -- a*b", .func = nativeMul },
+    .{ .name = "/", .stack_effect = "a b -- a/b", .func = nativeDiv },
+    .{ .name = "%", .stack_effect = "a b -- a%b", .func = nativeMod },
+    .{ .name = "+%", .stack_effect = "a b -- a+b", .func = nativeAddWrap },
+    .{ .name = "-%", .stack_effect = "a b -- a-b", .func = nativeSubWrap },
+    .{ .name = "*%", .stack_effect = "a b -- a*b", .func = nativeMulWrap },
     .{ .name = "call", .stack_effect = "quot --", .func = nativeCall },
     .{ .name = ";", .stack_effect = "name quot --", .func = nativeSemicolon },
     .{ .name = "t", .stack_effect = "-- t", .func = nativeTrue },
@@ -134,7 +146,6 @@ const primitives = [_]Primitive{
     .{ .name = "<", .stack_effect = "a b -- ?", .func = nativeLt },
     .{ .name = ">", .stack_effect = "a b -- ?", .func = nativeGt },
     .{ .name = "if", .stack_effect = "? true-quot false-quot --", .func = nativeIf },
-    .{ .name = "unless", .stack_effect = "? quot --", .func = nativeUnless },
     .{ .name = "print", .stack_effect = "str --", .func = nativePrint },
     .{ .name = ".", .stack_effect = "a --", .func = nativeDot },
     .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
@@ -145,6 +156,9 @@ const primitives = [_]Primitive{
     .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTime },
     .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .func = nativeParseUntil },
     .{ .name = "make-hash", .stack_effect = "quotation -- hash", .func = nativeMakeHash },
+    .{ .name = "curry", .stack_effect = "x quot -- quot'", .func = nativeCurry },
+    .{ .name = "compose", .stack_effect = "quot1 quot2 -- quot'", .func = nativeCompose },
+    .{ .name = "benchmark", .stack_effect = "quot -- hash", .func = nativeBenchmark },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -178,18 +192,98 @@ fn nativeDrop(ctx: *Context) anyerror!void {
     _ = try ctx.stack.pop();
 }
 
+/// swap ( a b -- b a ) - Swap top two items
+fn nativeSwap(ctx: *Context) anyerror!void {
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    try ctx.stack.push(b);
+    try ctx.stack.push(a);
+}
+
+/// over ( x y -- x y x ) - Copy second item to top
+fn nativeOver(ctx: *Context) anyerror!void {
+    const y = try ctx.stack.pop();
+    const x = try ctx.stack.peek();
+    try ctx.stack.push(y);
+    try ctx.stack.push(x);
+}
+
+/// dip ( x quot -- x ) - Execute quotation with x temporarily removed
+fn nativeDip(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    const x = try ctx.stack.pop();
+    try ctx.executeQuotation(quot);
+    try ctx.stack.push(x);
+}
+
+/// wipe ( ... -- ) - Clear the entire stack
+fn nativeWipe(ctx: *Context) anyerror!void {
+    ctx.stack.clear();
+}
+
 /// + ( a b -- a+b ) - Add two integers
 fn nativeAdd(ctx: *Context) anyerror!void {
     const b = try popInteger(ctx);
     const a = try popInteger(ctx);
-    try ctx.stack.push(.{ .integer = a + b });
+    const result = @addWithOverflow(a, b);
+    if (result[1] != 0) return error.IntegerOverflow;
+    try ctx.stack.push(.{ .integer = result[0] });
 }
 
 /// - ( a b -- a-b ) - Subtract: a minus b
 fn nativeSub(ctx: *Context) anyerror!void {
     const b = try popInteger(ctx);
     const a = try popInteger(ctx);
-    try ctx.stack.push(.{ .integer = a - b });
+    const result = @subWithOverflow(a, b);
+    if (result[1] != 0) return error.IntegerOverflow;
+    try ctx.stack.push(.{ .integer = result[0] });
+}
+
+/// * ( a b -- a*b ) - Multiply two integers
+fn nativeMul(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    const result = @mulWithOverflow(a, b);
+    if (result[1] != 0) return error.IntegerOverflow;
+    try ctx.stack.push(.{ .integer = result[0] });
+}
+
+/// / ( a b -- a/b ) - Integer division
+fn nativeDiv(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    if (b == 0) return error.DivisionByZero;
+    if (a == std.math.minInt(i64) and b == -1) return error.IntegerOverflow;
+    try ctx.stack.push(.{ .integer = @divTrunc(a, b) });
+}
+
+/// % ( a b -- a%b ) - Modulo (remainder)
+fn nativeMod(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    if (b == 0) return error.DivisionByZero;
+    try ctx.stack.push(.{ .integer = @mod(a, b) });
+}
+
+/// +% ( a b -- a+b ) - Add two integers with wraparound on overflow
+fn nativeAddWrap(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    try ctx.stack.push(.{ .integer = a +% b });
+}
+
+/// -% ( a b -- a-b ) - Subtract with wraparound on overflow
+fn nativeSubWrap(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    try ctx.stack.push(.{ .integer = a -% b });
+}
+
+/// *% ( a b -- a*b ) - Multiply with wraparound on overflow
+fn nativeMulWrap(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    try ctx.stack.push(.{ .integer = a *% b });
 }
 
 /// call ( quot -- ) - Execute a quotation
@@ -249,9 +343,28 @@ fn nativeFalse(ctx: *Context) anyerror!void {
 
 /// = ( a b -- ? ) - Equality comparison
 fn nativeEq(ctx: *Context) anyerror!void {
-    const b = try popInteger(ctx);
-    const a = try popInteger(ctx);
-    try ctx.stack.push(.{ .boolean = a == b });
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    const result = switch (a) {
+        .integer => |ai| switch (b) {
+            .integer => |bi| ai == bi,
+            else => false,
+        },
+        .boolean => |ab| switch (b) {
+            .boolean => |bb| ab == bb,
+            else => false,
+        },
+        .string => |as| switch (b) {
+            .string => |bs| std.mem.eql(u8, as, bs),
+            else => false,
+        },
+        .symbol => |as| switch (b) {
+            .symbol => |bs| std.mem.eql(u8, as, bs),
+            else => false,
+        },
+        else => false,
+    };
+    try ctx.stack.push(.{ .boolean = result });
 }
 
 /// < ( a b -- ? ) - Less than
@@ -274,13 +387,6 @@ fn nativeIf(ctx: *Context) anyerror!void {
     const true_quot = try popQuotation(ctx);
     const cond = try popBoolean(ctx);
     try ctx.executeQuotation(if (cond) true_quot else false_quot);
-}
-
-/// unless ( ? quot -- ) - Execute quotation if false
-fn nativeUnless(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
-    const cond = try popBoolean(ctx);
-    if (!cond) try ctx.executeQuotation(quot);
 }
 
 /// . ( a -- ) - Print any value to stdout (with type formatting)
@@ -551,6 +657,89 @@ fn nativeMakeHash(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .hash = hash });
 }
 
+/// curry ( x quot -- quot' ) - Create new quotation with x prepended
+/// Example: 5 [ + ] curry creates [ 5 + ]
+fn nativeCurry(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    const x = try ctx.stack.pop();
+
+    // Allocate new instruction array: 1 (for push x) + original length
+    const alloc = ctx.quotationAllocator();
+    const new_instrs = try alloc.alloc(Instruction, 1 + quot.len);
+
+    // First instruction: push the value x
+    new_instrs[0] = .{ .op = .{ .push_literal = x }, .line = 0 };
+
+    // Copy original quotation instructions
+    @memcpy(new_instrs[1..], quot);
+
+    try ctx.stack.push(.{ .quotation = new_instrs });
+}
+
+/// compose ( quot1 quot2 -- quot' ) - Concatenate two quotations
+/// Example: [ 2 * ] [ 3 + ] compose creates [ 2 * 3 + ]
+fn nativeCompose(ctx: *Context) anyerror!void {
+    const quot2 = try popQuotation(ctx);
+    const quot1 = try popQuotation(ctx);
+
+    // Allocate new instruction array: quot1.len + quot2.len
+    const alloc = ctx.quotationAllocator();
+    const new_instrs = try alloc.alloc(Instruction, quot1.len + quot2.len);
+
+    // Copy quot1 then quot2
+    @memcpy(new_instrs[0..quot1.len], quot1);
+    @memcpy(new_instrs[quot1.len..], quot2);
+
+    try ctx.stack.push(.{ .quotation = new_instrs });
+}
+
+/// benchmark ( quot -- hash ) - Execute quotation and return benchmark stats
+fn nativeBenchmark(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+
+    // Create temporary benchmark stats for this execution
+    var local_stats = BenchmarkStats{};
+
+    // Save and replace context benchmark pointer
+    const saved_benchmark = ctx.benchmark;
+    ctx.benchmark = &local_stats;
+
+    // Time and execute
+    const start_time = std.time.nanoTimestamp();
+    const exec_result = ctx.executeQuotation(quot);
+
+    const end_time = std.time.nanoTimestamp();
+    const elapsed_ns = end_time - start_time;
+
+    // Restore original benchmark pointer
+    ctx.benchmark = saved_benchmark;
+
+    // Propagate execution error after restoring state
+    try exec_result;
+
+    // Build result hash
+    const alloc = ctx.quotationAllocator();
+    const hash = alloc.create(HashTable) catch return error.OutOfMemory;
+    hash.* = HashTable{};
+
+    const key1 = alloc.dupe(u8, "elapsed_ns") catch return error.OutOfMemory;
+    hash.put(alloc, key1, .{ .integer = @intCast(elapsed_ns) }) catch return error.OutOfMemory;
+
+    const key2 = alloc.dupe(u8, "push_literal") catch return error.OutOfMemory;
+    hash.put(alloc, key2, .{ .integer = @intCast(local_stats.push_literal_count) }) catch return error.OutOfMemory;
+
+    const key3 = alloc.dupe(u8, "call_word") catch return error.OutOfMemory;
+    hash.put(alloc, key3, .{ .integer = @intCast(local_stats.call_word_count) }) catch return error.OutOfMemory;
+
+    const key4 = alloc.dupe(u8, "total_instructions") catch return error.OutOfMemory;
+    hash.put(alloc, key4, .{ .integer = @intCast(local_stats.totalInstructions()) }) catch return error.OutOfMemory;
+
+    const key5 = alloc.dupe(u8, "peak_stack_depth") catch return error.OutOfMemory;
+    hash.put(alloc, key5, .{ .integer = @intCast(local_stats.peak_stack_depth) }) catch return error.OutOfMemory;
+
+    try ctx.stack.push(.{ .hash = hash });
+}
+
 // =============================================================================
 // Helper functions
 // =============================================================================
@@ -634,6 +823,120 @@ test "drop" {
     try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).integer);
 }
 
+test "swap" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = 1 });
+    try ctx.stack.push(.{ .integer = 2 });
+    try nativeSwap(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).integer);
+}
+
+test "over" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = 1 });
+    try ctx.stack.push(.{ .integer = 2 });
+    try nativeOver(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 3), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).integer);
+}
+
+test "dip executes quotation with top item hidden" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Stack: 10 20, then dip with [ 1 + ]
+    // Should: hide 20, execute [ 1 + ] on 10 -> 11, restore 20
+    // Result: 11 20
+    const quot = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 0 },
+        .{ .op = .{ .call_word = "+" }, .line = 0 },
+    };
+    try ctx.stack.push(.{ .integer = 10 });
+    try ctx.stack.push(.{ .integer = 20 });
+    try ctx.stack.push(.{ .quotation = &quot });
+    try nativeDip(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 20), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 11), (try ctx.stack.pop()).integer);
+}
+
+test "dip with empty quotation" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Stack: 1 2, dip with [ ] should just restore 2
+    const quot = [_]Instruction{};
+    try ctx.stack.push(.{ .integer = 1 });
+    try ctx.stack.push(.{ .integer = 2 });
+    try ctx.stack.push(.{ .quotation = &quot });
+    try nativeDip(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).integer);
+}
+
+test "dip with quotation that pushes multiple values" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Stack: 5, dip with [ 1 2 3 ]
+    // Should: hide 5, push 1 2 3, restore 5
+    // Result: 1 2 3 5
+    const quot = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .integer = 3 } }, .line = 0 },
+    };
+    try ctx.stack.push(.{ .integer = 5 });
+    try ctx.stack.push(.{ .quotation = &quot });
+    try nativeDip(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 4), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 5), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 3), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).integer);
+}
+
+test "wipe" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = 1 });
+    try ctx.stack.push(.{ .integer = 2 });
+    try ctx.stack.push(.{ .integer = 3 });
+    try nativeWipe(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+}
+
+test "wipe empty stack" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try nativeWipe(&ctx);
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+}
+
 test "add" {
     const allocator = std.testing.allocator;
     var ctx = Context.init(allocator);
@@ -647,6 +950,18 @@ test "add" {
     try std.testing.expectEqual(@as(i64, 7), (try ctx.stack.pop()).integer);
 }
 
+test "add overflow" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = std.math.maxInt(i64) });
+    try ctx.stack.push(.{ .integer = 1 });
+
+    const result = nativeAdd(&ctx);
+    try std.testing.expectError(error.IntegerOverflow, result);
+}
+
 test "sub" {
     const allocator = std.testing.allocator;
     var ctx = Context.init(allocator);
@@ -658,6 +973,148 @@ test "sub" {
 
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     try std.testing.expectEqual(@as(i64, 7), (try ctx.stack.pop()).integer);
+}
+
+test "sub overflow" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = std.math.minInt(i64) });
+    try ctx.stack.push(.{ .integer = 1 });
+
+    const result = nativeSub(&ctx);
+    try std.testing.expectError(error.IntegerOverflow, result);
+}
+
+test "mul" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = 3 });
+    try ctx.stack.push(.{ .integer = 4 });
+    try nativeMul(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 12), (try ctx.stack.pop()).integer);
+}
+
+test "mul overflow" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = std.math.maxInt(i64) });
+    try ctx.stack.push(.{ .integer = 2 });
+
+    const result = nativeMul(&ctx);
+    try std.testing.expectError(error.IntegerOverflow, result);
+}
+
+test "div" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = 10 });
+    try ctx.stack.push(.{ .integer = 3 });
+    try nativeDiv(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 3), (try ctx.stack.pop()).integer);
+}
+
+test "div by zero" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = 10 });
+    try ctx.stack.push(.{ .integer = 0 });
+
+    const result = nativeDiv(&ctx);
+    try std.testing.expectError(error.DivisionByZero, result);
+}
+
+test "div overflow" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // MIN_INT / -1 would overflow because -MIN_INT > MAX_INT
+    try ctx.stack.push(.{ .integer = std.math.minInt(i64) });
+    try ctx.stack.push(.{ .integer = -1 });
+
+    const result = nativeDiv(&ctx);
+    try std.testing.expectError(error.IntegerOverflow, result);
+}
+
+test "mod" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = 10 });
+    try ctx.stack.push(.{ .integer = 3 });
+    try nativeMod(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).integer);
+}
+
+test "mod by zero" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = 10 });
+    try ctx.stack.push(.{ .integer = 0 });
+
+    const result = nativeMod(&ctx);
+    try std.testing.expectError(error.DivisionByZero, result);
+}
+
+test "+% wrapping addition" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // MAX_INT +w 1 should wrap to MIN_INT
+    try ctx.stack.push(.{ .integer = std.math.maxInt(i64) });
+    try ctx.stack.push(.{ .integer = 1 });
+    try nativeAddWrap(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(std.math.minInt(i64), (try ctx.stack.pop()).integer);
+}
+
+test "-% wrapping subtraction" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // MIN_INT -w 1 should wrap to MAX_INT
+    try ctx.stack.push(.{ .integer = std.math.minInt(i64) });
+    try ctx.stack.push(.{ .integer = 1 });
+    try nativeSubWrap(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(std.math.maxInt(i64), (try ctx.stack.pop()).integer);
+}
+
+test "*% wrapping multiplication" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // MAX_INT *w 2 should wrap
+    try ctx.stack.push(.{ .integer = std.math.maxInt(i64) });
+    try ctx.stack.push(.{ .integer = 2 });
+    try nativeMulWrap(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, -2), (try ctx.stack.pop()).integer);
 }
 
 test "call executes quotation" {
@@ -783,18 +1240,29 @@ test "register primitives" {
     try registerPrimitives(&dict, arena.allocator());
 
     try std.testing.expect(dict.get("dup") != null);
+    try std.testing.expect(dict.get("drop") != null);
+    try std.testing.expect(dict.get("swap") != null);
+    try std.testing.expect(dict.get("over") != null);
+    try std.testing.expect(dict.get("dip") != null);
+    try std.testing.expect(dict.get("wipe") != null);
     try std.testing.expect(dict.get("+") != null);
     try std.testing.expect(dict.get("-") != null);
-    try std.testing.expect(dict.get("drop") != null);
+    try std.testing.expect(dict.get("*") != null);
+    try std.testing.expect(dict.get("/") != null);
+    try std.testing.expect(dict.get("%") != null);
+    try std.testing.expect(dict.get("+%") != null);
+    try std.testing.expect(dict.get("-%") != null);
+    try std.testing.expect(dict.get("*%") != null);
     try std.testing.expect(dict.get("call") != null);
     try std.testing.expect(dict.get(";") != null);
     try std.testing.expect(dict.get("if") != null);
-    try std.testing.expect(dict.get("unless") != null);
     try std.testing.expect(dict.get("print") != null);
     try std.testing.expect(dict.get(".") != null);
     try std.testing.expect(dict.get("recover") != null);
     try std.testing.expect(dict.get("cleanup") != null);
     try std.testing.expect(dict.get("rethrow") != null);
+    try std.testing.expect(dict.get("curry") != null);
+    try std.testing.expect(dict.get("compose") != null);
 }
 
 test "recover catches error and executes recovery" {
@@ -1107,4 +1575,92 @@ test "parse-until fails without tokenizer" {
     // Should fail with NoTokenizerAvailable
     const result = nativeParseUntil(&ctx);
     try std.testing.expectError(error.NoTokenizerAvailable, result);
+}
+
+test "curry prepends value to quotation" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // 3 5 [ + ] curry call should give 8
+    // First create quotation [ + ]
+    const quot = [_]Instruction{
+        .{ .op = .{ .call_word = "+" }, .line = 0 },
+    };
+    try ctx.stack.push(.{ .integer = 3 }); // Will be on stack when curried quot runs
+    try ctx.stack.push(.{ .integer = 5 }); // Value to curry
+    try ctx.stack.push(.{ .quotation = &quot });
+    try nativeCurry(&ctx);
+
+    // Now we have: 3 [ 5 + ]
+    try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+
+    // Call the curried quotation
+    try nativeCall(&ctx);
+
+    // Result: 8 (3 + 5)
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 8), (try ctx.stack.pop()).integer);
+}
+
+test "curry with empty quotation" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // 42 [ ] curry call should leave 42 on stack
+    const quot = [_]Instruction{};
+    try ctx.stack.push(.{ .integer = 42 });
+    try ctx.stack.push(.{ .quotation = &quot });
+    try nativeCurry(&ctx);
+    try nativeCall(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 42), (try ctx.stack.pop()).integer);
+}
+
+test "compose concatenates quotations" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // 5 [ 2 * ] [ 3 + ] compose call should give 13 (5*2 + 3)
+    const quot1 = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 0 },
+        .{ .op = .{ .call_word = "*" }, .line = 0 },
+    };
+    const quot2 = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .integer = 3 } }, .line = 0 },
+        .{ .op = .{ .call_word = "+" }, .line = 0 },
+    };
+    try ctx.stack.push(.{ .integer = 5 });
+    try ctx.stack.push(.{ .quotation = &quot1 });
+    try ctx.stack.push(.{ .quotation = &quot2 });
+    try nativeCompose(&ctx);
+
+    // Now we have: 5 [ 2 * 3 + ]
+    try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+
+    // Call the composed quotation
+    try nativeCall(&ctx);
+
+    // Result: 13 (5 * 2 + 3)
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 13), (try ctx.stack.pop()).integer);
+}
+
+test "compose with empty quotations" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // [ ] [ ] compose should give [ ]
+    const quot1 = [_]Instruction{};
+    const quot2 = [_]Instruction{};
+    try ctx.stack.push(.{ .quotation = &quot1 });
+    try ctx.stack.push(.{ .quotation = &quot2 });
+    try nativeCompose(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expectEqual(@as(usize, 0), result.quotation.len);
 }

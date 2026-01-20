@@ -1,0 +1,7 @@
+\ Test loop words from prelude
+
+\ times ( n quot -- ) - Repeats the following word n times
+3 [ "Hello, World!" print ] times
+
+\ while ( pred body -- ) - Repeats body while pred is true
+10 [ dup 0 > ] [ dup . 1 - ] while

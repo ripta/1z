@@ -6,6 +6,52 @@ H{: parse-time [ "}" parse-until make-hash ] ;
 
 \ Control flow
 when: ( ? quot -- ) [ [ ] if ] ;
+unless: ( ? quot -- ) [ [ ] swap if ] ;
 
-\ Error handling
+\ Error-handling
 ignore-errors: ( quot -- ) [ [ drop ] recover ] ;
+
+\ Stack-shuffling
+nip: ( a b -- b ) [ swap drop ] ;
+keep: ( x quot -- ... x ) [ over [ call ] dip ] ;
+bi: ( x p q -- ) [ [ keep ] dip call ] ;
+2dup: ( a b -- a b a b ) [ over over ] ;
+2drop: ( a b -- ) [ drop drop ] ;
+2dip: ( a b quot -- a b ) [ swap [ dip ] dip ] ;
+<rot-: ( a b c -- b c a ) [ [ swap ] dip swap ] ;
+-rot>: ( a b c -- c a b ) [ swap [ swap ] dip ] ;
+tuck: ( a b -- b a b ) [ swap over ] ;
+choose: ( a1 a2 quot -- a ) [ [ over over ] dip call [ drop ] [ nip ] if ] ;
+
+\ Arithmetic operators
+-@: ( a -- -a ) [ 0 swap - ] ;
+abs: ( a -- b ) [ dup 0 < [ -@ ] when ] ;
+min: ( a1 a2 -- a ) [ [ < ] choose ] ;
+max: ( a1 a2 -- a ) [ [ > ] choose ] ;
+--: ( a1 -- a2 ) [ 1 - ] ;
+++: ( a1 -- a2 ) [ 1 + ] ;
+0?: ( a -- ? ) [ 0 = ] ;
+
+\ Loops
+times: ( n quot -- ) [
+  over 0 >
+  [
+    dup call
+    swap -- swap
+    times
+  ]
+  [ 2drop ]
+  if
+] ;
+while: ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b ) [
+  -rot> 2dup call
+  [
+    drop -rot> 2dup
+    drop call
+    -rot>
+    while
+  ]
+  [ drop drop nip ]
+  if
+] ;
+do: ( pred body -- pred body ) [ dup 2dip ] ;

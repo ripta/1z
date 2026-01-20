@@ -6,6 +6,10 @@ const Context = context.Context;
 const ErrorDetail = context.ErrorDetail;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 const formatter = @import("formatter.zig");
+const benchmark = @import("benchmark.zig");
+const BenchmarkStats = benchmark.BenchmarkStats;
+const BenchmarkConfig = benchmark.BenchmarkConfig;
+const CountingAllocator = benchmark.CountingAllocator;
 
 const build_options = @import("build_options");
 pub const version = build_options.version;
@@ -31,37 +35,91 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
 pub fn main() u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const gpa_allocator = gpa.allocator();
 
-    const args = std.process.argsAlloc(allocator) catch return 1;
-    defer std.process.argsFree(allocator, args);
+    // Use GPA for initial arg parsing
+    const args = std.process.argsAlloc(gpa_allocator) catch return 1;
+    defer std.process.argsFree(gpa_allocator, args);
 
     // Check for fmt subcommand first
     if (args.len > 1 and std.mem.eql(u8, args[1], "fmt")) {
-        return handleFmt(allocator, args[2..]);
+        return handleFmt(gpa_allocator, args[2..]);
     }
 
-    var ctx = Context.init(allocator);
-    defer ctx.deinit();
-
-    // If a file path is provided, run in batch mode, which executes the file
-    // and exits. Errors print to stderr, and cause a non-zero exit code.
-    // Otherwise, interactive REPL starts.
+    // Parse flags
     var show_stack = false;
     var file_path: ?[]const u8 = null;
+    var bench_config = BenchmarkConfig{};
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--show-stack")) {
             show_stack = true;
+        } else if (std.mem.eql(u8, arg, "--benchmark") or std.mem.eql(u8, arg, "-b")) {
+            bench_config.enabled = true;
+        } else if (std.mem.eql(u8, arg, "--benchmark-json")) {
+            bench_config.enabled = true;
+            bench_config.json_output = true;
         } else {
             file_path = arg;
         }
     }
-    if (file_path) |path| {
-        return batch(&ctx, path, show_stack);
-    } else {
-        repl(&ctx);
-        return 0;
+
+    // Create benchmark stats and counting allocator if benchmarking enabled
+    var bench_stats = BenchmarkStats{};
+    var counting_allocator = CountingAllocator.init(gpa_allocator, &bench_stats);
+
+    // Use counting allocator when benchmarking, GPA directly otherwise
+    const allocator = if (bench_config.enabled) counting_allocator.allocator() else gpa_allocator;
+
+    if (bench_config.enabled) {
+        bench_stats.start();
     }
+
+    // Initialize context (primitives only, no prelude yet)
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Attach benchmark to context if enabled
+    if (bench_config.enabled) {
+        ctx.benchmark = &bench_stats;
+    }
+
+    // Load prelude (timed separately when benchmarking)
+    ctx.loadPrelude() catch |err| {
+        std.debug.panic("Failed to load prelude: {any}", .{err});
+    };
+
+    if (bench_config.enabled) {
+        bench_stats.markPreludeEnd();
+    }
+
+    // If a file path is provided, run in batch mode, which executes the file
+    // and exits. Errors print to stderr, and cause a non-zero exit code.
+    // Otherwise, interactive REPL starts.
+    const result = if (file_path) |path|
+        batch(&ctx, path, show_stack)
+    else blk: {
+        repl(&ctx);
+        break :blk @as(u8, 0);
+    };
+
+    // Print benchmark results if enabled
+    if (bench_config.enabled) {
+        bench_stats.stop();
+
+        const stdout_file: File = .stdout();
+        var stdout_buf: [8192]u8 = undefined;
+        var stdout = stdout_file.writer(&stdout_buf);
+        const writer = &stdout.interface;
+
+        if (bench_config.json_output) {
+            bench_stats.formatJson(writer) catch {};
+        } else {
+            bench_stats.formatHuman(writer) catch {};
+        }
+        stdout.interface.flush() catch {};
+    }
+
+    return result;
 }
 
 fn handleFmt(allocator: std.mem.Allocator, args: []const []const u8) u8 {
@@ -386,4 +444,5 @@ test {
     _ = @import("parser.zig");
     _ = @import("statement.zig");
     _ = @import("formatter.zig");
+    _ = @import("benchmark.zig");
 }
