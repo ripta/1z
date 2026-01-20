@@ -21,6 +21,7 @@ pub const InterpreterError = error{
     StackUnderflow,
     TypeError,
     DivisionByZero,
+    IntegerOverflow,
     FileNotFound,
     FileReadError,
     NoTokenizerAvailable,
@@ -211,21 +212,27 @@ fn nativeDip(ctx: *Context) anyerror!void {
 fn nativeAdd(ctx: *Context) anyerror!void {
     const b = try popInteger(ctx);
     const a = try popInteger(ctx);
-    try ctx.stack.push(.{ .integer = a + b });
+    const result = @addWithOverflow(a, b);
+    if (result[1] != 0) return error.IntegerOverflow;
+    try ctx.stack.push(.{ .integer = result[0] });
 }
 
 /// - ( a b -- a-b ) - Subtract: a minus b
 fn nativeSub(ctx: *Context) anyerror!void {
     const b = try popInteger(ctx);
     const a = try popInteger(ctx);
-    try ctx.stack.push(.{ .integer = a - b });
+    const result = @subWithOverflow(a, b);
+    if (result[1] != 0) return error.IntegerOverflow;
+    try ctx.stack.push(.{ .integer = result[0] });
 }
 
 /// * ( a b -- a*b ) - Multiply two integers
 fn nativeMul(ctx: *Context) anyerror!void {
     const b = try popInteger(ctx);
     const a = try popInteger(ctx);
-    try ctx.stack.push(.{ .integer = a * b });
+    const result = @mulWithOverflow(a, b);
+    if (result[1] != 0) return error.IntegerOverflow;
+    try ctx.stack.push(.{ .integer = result[0] });
 }
 
 /// / ( a b -- a/b ) - Integer division
@@ -233,6 +240,7 @@ fn nativeDiv(ctx: *Context) anyerror!void {
     const b = try popInteger(ctx);
     const a = try popInteger(ctx);
     if (b == 0) return error.DivisionByZero;
+    if (a == std.math.minInt(i64) and b == -1) return error.IntegerOverflow;
     try ctx.stack.push(.{ .integer = @divTrunc(a, b) });
 }
 
@@ -784,6 +792,18 @@ test "add" {
     try std.testing.expectEqual(@as(i64, 7), (try ctx.stack.pop()).integer);
 }
 
+test "add overflow" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = std.math.maxInt(i64) });
+    try ctx.stack.push(.{ .integer = 1 });
+
+    const result = nativeAdd(&ctx);
+    try std.testing.expectError(error.IntegerOverflow, result);
+}
+
 test "sub" {
     const allocator = std.testing.allocator;
     var ctx = Context.init(allocator);
@@ -797,6 +817,18 @@ test "sub" {
     try std.testing.expectEqual(@as(i64, 7), (try ctx.stack.pop()).integer);
 }
 
+test "sub overflow" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = std.math.minInt(i64) });
+    try ctx.stack.push(.{ .integer = 1 });
+
+    const result = nativeSub(&ctx);
+    try std.testing.expectError(error.IntegerOverflow, result);
+}
+
 test "mul" {
     const allocator = std.testing.allocator;
     var ctx = Context.init(allocator);
@@ -808,6 +840,18 @@ test "mul" {
 
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     try std.testing.expectEqual(@as(i64, 12), (try ctx.stack.pop()).integer);
+}
+
+test "mul overflow" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = std.math.maxInt(i64) });
+    try ctx.stack.push(.{ .integer = 2 });
+
+    const result = nativeMul(&ctx);
+    try std.testing.expectError(error.IntegerOverflow, result);
 }
 
 test "div" {
@@ -833,6 +877,19 @@ test "div by zero" {
 
     const result = nativeDiv(&ctx);
     try std.testing.expectError(error.DivisionByZero, result);
+}
+
+test "div overflow" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // MIN_INT / -1 would overflow because -MIN_INT > MAX_INT
+    try ctx.stack.push(.{ .integer = std.math.minInt(i64) });
+    try ctx.stack.push(.{ .integer = -1 });
+
+    const result = nativeDiv(&ctx);
+    try std.testing.expectError(error.IntegerOverflow, result);
 }
 
 test "mod" {
