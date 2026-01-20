@@ -125,6 +125,7 @@ const primitives = [_]Primitive{
     .{ .name = "dup", .stack_effect = "a -- a a", .func = nativeDup },
     .{ .name = "drop", .stack_effect = "a --", .func = nativeDrop },
     .{ .name = "swap", .stack_effect = "a b -- b a", .func = nativeSwap },
+    .{ .name = "over", .stack_effect = "x y -- x y x", .func = nativeOver },
     .{ .name = "+", .stack_effect = "a b -- a+b", .func = nativeAdd },
     .{ .name = "-", .stack_effect = "a b -- a-b", .func = nativeSub },
     .{ .name = "call", .stack_effect = "quot --", .func = nativeCall },
@@ -184,6 +185,14 @@ fn nativeSwap(ctx: *Context) anyerror!void {
     const a = try ctx.stack.pop();
     try ctx.stack.push(b);
     try ctx.stack.push(a);
+}
+
+/// over ( x y -- x y x ) - Copy second item to top
+fn nativeOver(ctx: *Context) anyerror!void {
+    const y = try ctx.stack.pop();
+    const x = try ctx.stack.peek();
+    try ctx.stack.push(y);
+    try ctx.stack.push(x);
 }
 
 /// + ( a b -- a+b ) - Add two integers
@@ -649,6 +658,21 @@ test "swap" {
     try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).integer);
 }
 
+test "over" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .integer = 1 });
+    try ctx.stack.push(.{ .integer = 2 });
+    try nativeOver(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 3), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).integer);
+}
+
 test "add" {
     const allocator = std.testing.allocator;
     var ctx = Context.init(allocator);
@@ -800,6 +824,7 @@ test "register primitives" {
     try std.testing.expect(dict.get("dup") != null);
     try std.testing.expect(dict.get("drop") != null);
     try std.testing.expect(dict.get("swap") != null);
+    try std.testing.expect(dict.get("over") != null);
     try std.testing.expect(dict.get("+") != null);
     try std.testing.expect(dict.get("-") != null);
     try std.testing.expect(dict.get("call") != null);
