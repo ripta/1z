@@ -2,3 +2,6 @@
 
 \ nip ( a b -- b ) - removes second item
 1 2 nip
+
+\ keep ( x quot -- ... x ) - execute quot, preserve x
+drop 5 [ dup + ] keep

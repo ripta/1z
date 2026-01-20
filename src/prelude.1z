@@ -13,3 +13,4 @@ ignore-errors: ( quot -- ) [ [ drop ] recover ] ;
 
 \ Stack-shuffling
 nip: ( a b -- b ) [ swap drop ] ;
+keep: ( x quot -- ... x ) [ over [ call ] dip ] ;
