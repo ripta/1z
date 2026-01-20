@@ -20,3 +20,10 @@ bi: ( x p q -- ) [ [ keep ] dip call ] ;
 <rot-: ( a b c -- b c a ) [ [ swap ] dip swap ] ;
 -rot>: ( a b c -- c a b ) [ swap [ swap ] dip ] ;
 tuck: ( a b -- b a b ) [ swap over ] ;
+choose: ( a1 a2 quot -- a ) [ [ over over ] dip call [ drop ] [ nip ] if ] ;
+
+\ Arithmetic operators
+-@: ( a -- -a ) [ 0 swap - ] ;
+abs: ( a -- b ) [ dup 0 < [ -@ ] when ] ;
+min: ( a1 a2 -- a ) [ [ < ] choose ] ;
+max: ( a1 a2 -- a ) [ [ > ] choose ] ;

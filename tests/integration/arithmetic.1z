@@ -1,0 +1,37 @@
+\ Test arithmetic words from prelude
+
+\ -@ ( a -- -a ) - arithmetic negation
+42 -@
+
+\ -@ with negative number
+drop -7 -@
+
+\ -@ with zero
+drop 0 -@
+
+\ abs ( a -- b ) - absolute value of positive
+drop 42 abs
+
+\ abs with negative number
+drop -42 abs
+
+\ abs with zero
+drop 0 abs
+
+\ min ( a1 a2 -- a ) - minimum of two values
+drop 3 5 min
+
+\ min with second smaller
+drop 5 3 min
+
+\ min with equal values
+drop 7 7 min
+
+\ max ( a1 a2 -- a ) - maximum of two values
+drop 3 5 max
+
+\ max with first larger
+drop 5 3 max
+
+\ max with equal values
+drop 7 7 max

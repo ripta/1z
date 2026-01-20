@@ -23,3 +23,9 @@ drop drop drop 1 2 3 -rot>
 
 \ tuck ( a b -- b a b ) - copy top item below second
 drop drop drop 1 2 tuck
+
+\ choose ( a1 a2 quot -- a ) - apply quot to copies, select based on result
+drop drop drop 3 5 [ < ] choose
+
+\ choose with false result
+drop 5 3 [ < ] choose
