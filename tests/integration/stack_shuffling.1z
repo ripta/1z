@@ -20,3 +20,6 @@ drop 5 [ dup + ] keep
 
 \ -rot> ( a b c -- c a b ) - send top item to third position
 drop drop drop 1 2 3 -rot>
+
+\ tuck ( a b -- b a b ) - copy top item below second
+drop drop drop 1 2 tuck
