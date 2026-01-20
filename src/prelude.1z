@@ -27,3 +27,6 @@ choose: ( a1 a2 quot -- a ) [ [ over over ] dip call [ drop ] [ nip ] if ] ;
 abs: ( a -- b ) [ dup 0 < [ -@ ] when ] ;
 min: ( a1 a2 -- a ) [ [ < ] choose ] ;
 max: ( a1 a2 -- a ) [ [ > ] choose ] ;
+--: ( a1 -- a2 ) [ 1 - ] ;
+++: ( a1 -- a2 ) [ 1 + ] ;
+0?: ( a -- ? ) [ 0 = ] ;
