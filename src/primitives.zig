@@ -135,7 +135,6 @@ const primitives = [_]Primitive{
     .{ .name = "<", .stack_effect = "a b -- ?", .func = nativeLt },
     .{ .name = ">", .stack_effect = "a b -- ?", .func = nativeGt },
     .{ .name = "if", .stack_effect = "? true-quot false-quot --", .func = nativeIf },
-    .{ .name = "unless", .stack_effect = "? quot --", .func = nativeUnless },
     .{ .name = "print", .stack_effect = "str --", .func = nativePrint },
     .{ .name = ".", .stack_effect = "a --", .func = nativeDot },
     .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
@@ -283,13 +282,6 @@ fn nativeIf(ctx: *Context) anyerror!void {
     const true_quot = try popQuotation(ctx);
     const cond = try popBoolean(ctx);
     try ctx.executeQuotation(if (cond) true_quot else false_quot);
-}
-
-/// unless ( ? quot -- ) - Execute quotation if false
-fn nativeUnless(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
-    const cond = try popBoolean(ctx);
-    if (!cond) try ctx.executeQuotation(quot);
 }
 
 /// . ( a -- ) - Print any value to stdout (with type formatting)
@@ -813,7 +805,6 @@ test "register primitives" {
     try std.testing.expect(dict.get("call") != null);
     try std.testing.expect(dict.get(";") != null);
     try std.testing.expect(dict.get("if") != null);
-    try std.testing.expect(dict.get("unless") != null);
     try std.testing.expect(dict.get("print") != null);
     try std.testing.expect(dict.get(".") != null);
     try std.testing.expect(dict.get("recover") != null);

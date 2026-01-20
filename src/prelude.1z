@@ -6,6 +6,7 @@ H{: parse-time [ "}" parse-until make-hash ] ;
 
 \ Control flow
 when: ( ? quot -- ) [ [ ] if ] ;
+unless: ( ? quot -- ) [ [ ] swap if ] ;
 
 \ Error handling
 ignore-errors: ( quot -- ) [ [ drop ] recover ] ;
