@@ -66,8 +66,19 @@ not: ( ? -- ? ) [ [ f ] [ t ] if ] ;
 and: ( ? ? -- ? ) [ [ ] [ drop f ] if ] ;
 or: ( ? ? -- ? ) [ [ drop t ] [ ] if ] ;
 
-\ I/O
-.: ( a -- ) [ to-string print ] ;
+\ I/O - stream-based primitives
+stream-write-string: ( stream str -- n ) [ >bytes stream-write ] ;
+
+print-line: ( str -- ) [ print "\n" print flush ] ;
+
+emit: ( codepoint -- ) [ >char print ] ;
+nl: ( -- ) [ "\n" print ] ;
+bl: ( -- ) [ " " print ] ;
+flush: ( -- ) [ stdout stream-flush ] ;
+
+read-line: ( -- str/f ) [ stdin stream-read-line ] ;
+
+.: ( a -- ) [ to-string print-line ] ;
 
 \ Loops
 times: ( n quot -- ) [

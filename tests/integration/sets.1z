@@ -102,4 +102,4 @@ S{ 1 "a" t } 1 @in? t "mixed set has integer" assert=
 S{ 1 "a" t } "a" @in? t "mixed set has string" assert=
 S{ 1 "a" t } t @in? t "mixed set has boolean" assert=
 
-"All set tests complete!" print
+"All set tests complete!" print-line

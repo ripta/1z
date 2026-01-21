@@ -1,166 +1,86 @@
 Stack: [ ]
 Stack: [ ]
-=== Set creation ===
-Stack: [ ]
-PASS: empty set length
-Stack: [ ]
-PASS: set length
-Stack: [ ]
-PASS: set deduplicates on creation
-Stack: [ ]
-=== Set @in? ===
-Stack: [ ]
-PASS: @in? finds element
-Stack: [ ]
-PASS: @in? finds middle element
-Stack: [ ]
-PASS: @in? finds last element
-Stack: [ ]
-PASS: @in? returns false for missing element
-Stack: [ ]
-PASS: @in? on empty set
-Stack: [ ]
-PASS: @in? with strings
-Stack: [ ]
-PASS: @in? with missing string
-Stack: [ ]
-=== Set @adjoin ===
-Stack: [ ]
-PASS: @adjoin increases length
-Stack: [ ]
-PASS: @adjoin adds element
-Stack: [ ]
-PASS: @adjoin with existing element keeps same length
-Stack: [ ]
-PASS: @adjoin on empty set
-Stack: [ ]
-=== Set @remove ===
-Stack: [ ]
-PASS: @remove decreases length
-Stack: [ ]
-PASS: @remove removes element
-Stack: [ ]
-PASS: @remove keeps other elements
-Stack: [ ]
-PASS: @remove with missing element keeps same length
-Stack: [ ]
-PASS: @remove can empty set
-Stack: [ ]
-=== Set @union ===
-Stack: [ ]
-PASS: @union combines sets
-Stack: [ ]
-PASS: @union keeps first set elements
-Stack: [ ]
-PASS: @union keeps second set elements
-Stack: [ ]
-PASS: @union deduplicates
-Stack: [ ]
-PASS: @union with empty set
-Stack: [ ]
-PASS: @union empty with set
-Stack: [ ]
-=== Set @intersection ===
-Stack: [ ]
-PASS: @intersection size
-Stack: [ ]
-PASS: @intersection has common element
-Stack: [ ]
-PASS: @intersection excludes non-common
-Stack: [ ]
-PASS: @intersection of disjoint sets
-Stack: [ ]
-PASS: @intersection with empty set
-Stack: [ ]
-PASS: @intersection of identical sets
-Stack: [ ]
-=== Set @difference ===
-Stack: [ ]
-PASS: @difference size
-Stack: [ ]
-PASS: @difference keeps unique
-Stack: [ ]
-PASS: @difference removes common
-Stack: [ ]
-PASS: @difference of disjoint sets
-Stack: [ ]
-PASS: @difference of identical sets
-Stack: [ ]
-PASS: @difference from empty set
-Stack: [ ]
-=== Set #len ===
-Stack: [ ]
-PASS: #len empty set
-Stack: [ ]
-PASS: #len single element
-Stack: [ ]
-PASS: #len multiple elements
-Stack: [ ]
-=== Set #each ===
-Stack: [ ]
-PASS: #each sum
-Stack: [ ]
-PASS: #each empty set
-Stack: [ ]
-=== Set #map ===
-Stack: [ ]
-PASS: #map preserves size
-Stack: [ ]
-PASS: #map transforms elements
-Stack: [ ]
-PASS: #map has transformed element
-Stack: [ ]
-PASS: #map has all transformed
-Stack: [ ]
-PASS: #map deduplicates results
-Stack: [ ]
-=== Set #filter ===
-Stack: [ ]
-PASS: #filter count
-Stack: [ ]
-PASS: #filter keeps matching
-Stack: [ ]
-PASS: #filter removes non-matching
-Stack: [ ]
-PASS: #filter evens count
-Stack: [ ]
-=== Set #reduce ===
-Stack: [ ]
-PASS: #reduce sum
-Stack: [ ]
-PASS: #reduce product
-Stack: [ ]
-PASS: #reduce empty set returns init
-Stack: [ ]
-=== Set equality ===
-Stack: [ ]
-PASS: set equality same order
-Stack: [ ]
-PASS: set equality different order
-Stack: [ ]
-PASS: set inequality different size
-Stack: [ ]
-PASS: set inequality different elements
-Stack: [ ]
-PASS: empty sets equal
-Stack: [ ]
-=== Set to-string ===
-Stack: [ ]
-PASS: empty set to-string
-Stack: [ ]
-=== Set immutability ===
-Stack: [ ]
-Stack: [ ]
-Stack: [ ]
-=== Mixed type sets ===
-Stack: [ ]
-PASS: mixed type set
-Stack: [ ]
-PASS: mixed set has integer
-Stack: [ ]
-PASS: mixed set has string
-Stack: [ ]
-PASS: mixed set has boolean
-Stack: [ ]
+=== Set creation ===Stack: [ ]
+PASS: empty set lengthStack: [ ]
+PASS: set lengthStack: [ ]
+PASS: set deduplicates on creationStack: [ ]
+=== Set @in? ===Stack: [ ]
+PASS: @in? finds elementStack: [ ]
+PASS: @in? finds middle elementStack: [ ]
+PASS: @in? finds last elementStack: [ ]
+PASS: @in? returns false for missing elementStack: [ ]
+PASS: @in? on empty setStack: [ ]
+PASS: @in? with stringsStack: [ ]
+PASS: @in? with missing stringStack: [ ]
+=== Set @adjoin ===Stack: [ ]
+PASS: @adjoin increases lengthStack: [ ]
+PASS: @adjoin adds elementStack: [ ]
+PASS: @adjoin with existing element keeps same lengthStack: [ ]
+PASS: @adjoin on empty setStack: [ ]
+=== Set @remove ===Stack: [ ]
+PASS: @remove decreases lengthStack: [ ]
+PASS: @remove removes elementStack: [ ]
+PASS: @remove keeps other elementsStack: [ ]
+PASS: @remove with missing element keeps same lengthStack: [ ]
+PASS: @remove can empty setStack: [ ]
+=== Set @union ===Stack: [ ]
+PASS: @union combines setsStack: [ ]
+PASS: @union keeps first set elementsStack: [ ]
+PASS: @union keeps second set elementsStack: [ ]
+PASS: @union deduplicatesStack: [ ]
+PASS: @union with empty setStack: [ ]
+PASS: @union empty with setStack: [ ]
+=== Set @intersection ===Stack: [ ]
+PASS: @intersection sizeStack: [ ]
+PASS: @intersection has common elementStack: [ ]
+PASS: @intersection excludes non-commonStack: [ ]
+PASS: @intersection of disjoint setsStack: [ ]
+PASS: @intersection with empty setStack: [ ]
+PASS: @intersection of identical setsStack: [ ]
+=== Set @difference ===Stack: [ ]
+PASS: @difference sizeStack: [ ]
+PASS: @difference keeps uniqueStack: [ ]
+PASS: @difference removes commonStack: [ ]
+PASS: @difference of disjoint setsStack: [ ]
+PASS: @difference of identical setsStack: [ ]
+PASS: @difference from empty setStack: [ ]
+=== Set #len ===Stack: [ ]
+PASS: #len empty setStack: [ ]
+PASS: #len single elementStack: [ ]
+PASS: #len multiple elementsStack: [ ]
+=== Set #each ===Stack: [ ]
+PASS: #each sumStack: [ ]
+PASS: #each empty setStack: [ ]
+=== Set #map ===Stack: [ ]
+PASS: #map preserves sizeStack: [ ]
+PASS: #map transforms elementsStack: [ ]
+PASS: #map has transformed elementStack: [ ]
+PASS: #map has all transformedStack: [ ]
+PASS: #map deduplicates resultsStack: [ ]
+=== Set #filter ===Stack: [ ]
+PASS: #filter countStack: [ ]
+PASS: #filter keeps matchingStack: [ ]
+PASS: #filter removes non-matchingStack: [ ]
+PASS: #filter evens countStack: [ ]
+=== Set #reduce ===Stack: [ ]
+PASS: #reduce sumStack: [ ]
+PASS: #reduce productStack: [ ]
+PASS: #reduce empty set returns initStack: [ ]
+=== Set equality ===Stack: [ ]
+PASS: set equality same orderStack: [ ]
+PASS: set equality different orderStack: [ ]
+PASS: set inequality different sizeStack: [ ]
+PASS: set inequality different elementsStack: [ ]
+PASS: empty sets equalStack: [ ]
+=== Set to-string ===Stack: [ ]
+PASS: empty set to-stringStack: [ ]
+=== Set immutability ===Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== Mixed type sets ===Stack: [ ]
+PASS: mixed type setStack: [ ]
+PASS: mixed set has integerStack: [ ]
+PASS: mixed set has stringStack: [ ]
+PASS: mixed set has booleanStack: [ ]
 All set tests complete!
 Stack: [ ]

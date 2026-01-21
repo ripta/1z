@@ -2,58 +2,58 @@
 \ Tests that string operations work on codepoints, not bytes
 
 \ Test #len with Unicode
-"hello" #len 5 = [ "PASS: ASCII #len" print ] [ "FAIL: ASCII #len" print ] if
-"café" #len 4 = [ "PASS: café #len (4 codepoints)" print ] [ "FAIL: café #len (got bytes not codepoints)" print ] if
-"日本語" #len 3 = [ "PASS: CJK #len (3 codepoints)" print ] [ "FAIL: CJK #len" print ] if
-"" #len 0 = [ "PASS: empty string #len" print ] [ "FAIL: empty string #len" print ] if
+"hello" #len 5 = [ "PASS: ASCII #len" print-line ] [ "FAIL: ASCII #len" print-line ] if
+"café" #len 4 = [ "PASS: café #len (4 codepoints)" print-line ] [ "FAIL: café #len (got bytes not codepoints)" print-line ] if
+"日本語" #len 3 = [ "PASS: CJK #len (3 codepoints)" print-line ] [ "FAIL: CJK #len" print-line ] if
+"" #len 0 = [ "PASS: empty string #len" print-line ] [ "FAIL: empty string #len" print-line ] if
 
 \ Test #nth with Unicode
-"café" 0 #nth "c" = [ "PASS: #nth café[0]" print ] [ "FAIL: #nth café[0]" print ] if
-"café" 1 #nth "a" = [ "PASS: #nth café[1]" print ] [ "FAIL: #nth café[1]" print ] if
-"café" 2 #nth "f" = [ "PASS: #nth café[2]" print ] [ "FAIL: #nth café[2]" print ] if
-"café" 3 #nth "é" = [ "PASS: #nth café[3] (multi-byte)" print ] [ "FAIL: #nth café[3]" print ] if
-"日本語" 0 #nth "日" = [ "PASS: #nth CJK[0]" print ] [ "FAIL: #nth CJK[0]" print ] if
-"日本語" 1 #nth "本" = [ "PASS: #nth CJK[1]" print ] [ "FAIL: #nth CJK[1]" print ] if
-"日本語" 2 #nth "語" = [ "PASS: #nth CJK[2]" print ] [ "FAIL: #nth CJK[2]" print ] if
+"café" 0 #nth "c" = [ "PASS: #nth café[0]" print-line ] [ "FAIL: #nth café[0]" print-line ] if
+"café" 1 #nth "a" = [ "PASS: #nth café[1]" print-line ] [ "FAIL: #nth café[1]" print-line ] if
+"café" 2 #nth "f" = [ "PASS: #nth café[2]" print-line ] [ "FAIL: #nth café[2]" print-line ] if
+"café" 3 #nth "é" = [ "PASS: #nth café[3] (multi-byte)" print-line ] [ "FAIL: #nth café[3]" print-line ] if
+"日本語" 0 #nth "日" = [ "PASS: #nth CJK[0]" print-line ] [ "FAIL: #nth CJK[0]" print-line ] if
+"日本語" 1 #nth "本" = [ "PASS: #nth CJK[1]" print-line ] [ "FAIL: #nth CJK[1]" print-line ] if
+"日本語" 2 #nth "語" = [ "PASS: #nth CJK[2]" print-line ] [ "FAIL: #nth CJK[2]" print-line ] if
 
 \ Test #first with Unicode
-"café" #first "c" = [ "PASS: #first café" print ] [ "FAIL: #first café" print ] if
-"日本語" #first "日" = [ "PASS: #first CJK" print ] [ "FAIL: #first CJK" print ] if
-"é" #first "é" = [ "PASS: #first single multi-byte" print ] [ "FAIL: #first single multi-byte" print ] if
+"café" #first "c" = [ "PASS: #first café" print-line ] [ "FAIL: #first café" print-line ] if
+"日本語" #first "日" = [ "PASS: #first CJK" print-line ] [ "FAIL: #first CJK" print-line ] if
+"é" #first "é" = [ "PASS: #first single multi-byte" print-line ] [ "FAIL: #first single multi-byte" print-line ] if
 
 \ Test #last with Unicode
-"café" #last "é" = [ "PASS: #last café" print ] [ "FAIL: #last café" print ] if
-"日本語" #last "語" = [ "PASS: #last CJK" print ] [ "FAIL: #last CJK" print ] if
-"é" #last "é" = [ "PASS: #last single multi-byte" print ] [ "FAIL: #last single multi-byte" print ] if
+"café" #last "é" = [ "PASS: #last café" print-line ] [ "FAIL: #last café" print-line ] if
+"日本語" #last "語" = [ "PASS: #last CJK" print-line ] [ "FAIL: #last CJK" print-line ] if
+"é" #last "é" = [ "PASS: #last single multi-byte" print-line ] [ "FAIL: #last single multi-byte" print-line ] if
 
 \ Test #slice with Unicode
-"café" 0 2 #slice "ca" = [ "PASS: #slice café[0:2]" print ] [ "FAIL: #slice café[0:2]" print ] if
-"café" 2 4 #slice "fé" = [ "PASS: #slice café[2:4]" print ] [ "FAIL: #slice café[2:4]" print ] if
-"日本語" 0 2 #slice "日本" = [ "PASS: #slice CJK[0:2]" print ] [ "FAIL: #slice CJK[0:2]" print ] if
-"日本語" 1 3 #slice "本語" = [ "PASS: #slice CJK[1:3]" print ] [ "FAIL: #slice CJK[1:3]" print ] if
-"日本語" 1 2 #slice "本" = [ "PASS: #slice CJK[1:2]" print ] [ "FAIL: #slice CJK[1:2]" print ] if
+"café" 0 2 #slice "ca" = [ "PASS: #slice café[0:2]" print-line ] [ "FAIL: #slice café[0:2]" print-line ] if
+"café" 2 4 #slice "fé" = [ "PASS: #slice café[2:4]" print-line ] [ "FAIL: #slice café[2:4]" print-line ] if
+"日本語" 0 2 #slice "日本" = [ "PASS: #slice CJK[0:2]" print-line ] [ "FAIL: #slice CJK[0:2]" print-line ] if
+"日本語" 1 3 #slice "本語" = [ "PASS: #slice CJK[1:3]" print-line ] [ "FAIL: #slice CJK[1:3]" print-line ] if
+"日本語" 1 2 #slice "本" = [ "PASS: #slice CJK[1:2]" print-line ] [ "FAIL: #slice CJK[1:2]" print-line ] if
 
 \ Test #each with Unicode (count iterations)
-0 "café" [ drop 1 + ] #each 4 = [ "PASS: #each café count" print ] [ "FAIL: #each café count" print ] if
-0 "日本語" [ drop 1 + ] #each 3 = [ "PASS: #each CJK count" print ] [ "FAIL: #each CJK count" print ] if
+0 "café" [ drop 1 + ] #each 4 = [ "PASS: #each café count" print-line ] [ "FAIL: #each café count" print-line ] if
+0 "日本語" [ drop 1 + ] #each 3 = [ "PASS: #each CJK count" print-line ] [ "FAIL: #each CJK count" print-line ] if
 
 \ Test #map with Unicode (check result length)
-"ab" [ drop "x" ] #map #len 2 = [ "PASS: #map ASCII" print ] [ "FAIL: #map ASCII" print ] if
-"日本" [ drop "y" ] #map #len 2 = [ "PASS: #map CJK length" print ] [ "FAIL: #map CJK length" print ] if
+"ab" [ drop "x" ] #map #len 2 = [ "PASS: #map ASCII" print-line ] [ "FAIL: #map ASCII" print-line ] if
+"日本" [ drop "y" ] #map #len 2 = [ "PASS: #map CJK length" print-line ] [ "FAIL: #map CJK length" print-line ] if
 
 \ Test #filter with Unicode
 \ Note: Now that #len returns codepoints, all single chars have len=1
 \ Filter out "a" keeping other characters
-"aéb" [ "a" = not ] #filter "éb" = [ "PASS: #filter Unicode" print ] [ "FAIL: #filter Unicode" print ] if
+"aéb" [ "a" = not ] #filter "éb" = [ "PASS: #filter Unicode" print-line ] [ "FAIL: #filter Unicode" print-line ] if
 
 \ Test #reduce with Unicode (concatenate)
-"ab" "" [ #append ] #reduce "ab" = [ "PASS: #reduce ASCII concat" print ] [ "FAIL: #reduce ASCII concat" print ] if
+"ab" "" [ #append ] #reduce "ab" = [ "PASS: #reduce ASCII concat" print-line ] [ "FAIL: #reduce ASCII concat" print-line ] if
 
 \ Test string concatenation preserves Unicode
-"café" " 日本" #append "café 日本" = [ "PASS: #append mixed Unicode" print ] [ "FAIL: #append mixed Unicode" print ] if
+"café" " 日本" #append "café 日本" = [ "PASS: #append mixed Unicode" print-line ] [ "FAIL: #append mixed Unicode" print-line ] if
 
 \ Test error cases with Unicode
-[ "café" 10 #nth ] [ drop "PASS: #nth out of bounds with Unicode" print ] recover
-[ "日本語" 5 #slice ] [ drop "PASS: #slice out of bounds with Unicode" print ] recover
+[ "café" 10 #nth ] [ drop "PASS: #nth out of bounds with Unicode" print-line ] recover
+[ "日本語" 5 #slice ] [ drop "PASS: #slice out of bounds with Unicode" print-line ] recover
 
-"All Unicode string tests complete!" print
+"All Unicode string tests complete!" print-line

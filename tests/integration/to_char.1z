@@ -30,18 +30,18 @@
 
 "Error cases" test-section
 [ -1 >char ]
-[ drop "PASS: negative codepoint rejected" print ]
+[ drop "PASS: negative codepoint rejected" print-line ]
 recover
 
 [ 0x110000 >char ]
-[ drop "PASS: codepoint > max rejected" print ]
+[ drop "PASS: codepoint > max rejected" print-line ]
 recover
 
 [ 0xD800 >char ]
-[ drop "PASS: surrogate codepoint rejected" print ]
+[ drop "PASS: surrogate codepoint rejected" print-line ]
 recover
 
-"All >char tests complete!" print
+"All >char tests complete!" print-line
 
 \ =============================================================================
 \ Tests for >codepoint primitive (string to codepoint conversion)
@@ -70,15 +70,15 @@ recover
 
 ">codepoint error cases" test-section
 [ "" >codepoint ]
-[ drop "PASS: empty string rejected" print ]
+[ drop "PASS: empty string rejected" print-line ]
 recover
 
 [ "ab" >codepoint ]
-[ drop "PASS: multi-char string rejected" print ]
+[ drop "PASS: multi-char string rejected" print-line ]
 recover
 
 [ "hello" >codepoint ]
-[ drop "PASS: 5-char string rejected" print ]
+[ drop "PASS: 5-char string rejected" print-line ]
 recover
 
-"All >codepoint tests complete!" print
+"All >codepoint tests complete!" print-line

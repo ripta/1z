@@ -99,10 +99,10 @@ B{ 1 2 3 } to-string "B{ 0x01 0x02 0x03 }" "byte array to-string" assert=
 B{ 255 } to-string "B{ 0xFF }" "hex format in to-string" assert=
 
 "Error cases" test-section
-[ B{ 1 } 5 #nth ] [ drop "PASS: index out of bounds error" print ] recover
-[ B{ } #first ] [ drop "PASS: first on empty byte array error" print ] recover
-[ B{ } #last ] [ drop "PASS: last on empty byte array error" print ] recover
+[ B{ 1 } 5 #nth ] [ drop "PASS: index out of bounds error" print-line ] recover
+[ B{ } #first ] [ drop "PASS: first on empty byte array error" print-line ] recover
+[ B{ } #last ] [ drop "PASS: last on empty byte array error" print-line ] recover
 \ Note: B{ 256 } and B{ -1 } cannot be tested with recover because
 \ B{ } is a parse-time word, so errors occur during parsing, not execution.
 
-"All byte array tests complete!" print
+"All byte array tests complete!" print-line
