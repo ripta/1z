@@ -113,6 +113,23 @@ Stack: [ <stream tests/fixtures/hello.txt read> ]
 Stack: [ ]
 PASS: buffering control
 Stack: [ ]
+=== Unix interop ===
+Stack: [ ]
+PASS: stdout fd is 1
+Stack: [ ]
+PASS: stderr fd is 2
+Stack: [ ]
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: file fd is positive
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+Stack: [ ]
+PASS: stream->fd
+Stack: [ ]
+Stack: [ <stream fd write> ]
+PASS: fd->stream creates stream
+Stack: [ ]
+PASS: fd->stream
+Stack: [ ]
 === Error cases ===
 Stack: [ ]
 Stack: [ [ "/nonexistent/path/file.txt" read: stream-open ] ]

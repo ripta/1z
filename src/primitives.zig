@@ -250,6 +250,8 @@ const primitives = [_]Primitive{
     .{ .name = "stream-seek-end", .stack_effect = "stream offset --", .func = nativeStreamSeekEnd },
     .{ .name = "buffering-mode", .stack_effect = "stream -- symbol", .func = nativeBufferingMode },
     .{ .name = "set-buffering-mode", .stack_effect = "stream symbol --", .func = nativeSetBufferingMode },
+    .{ .name = "stream->fd", .stack_effect = "stream -- int", .func = nativeStreamToFd },
+    .{ .name = "fd->stream", .stack_effect = "int mode -- stream", .func = nativeFdToStream },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -2720,6 +2722,52 @@ fn nativeSetBufferingMode(ctx: *Context) anyerror!void {
         return error.InvalidArgument;
 
     stream.buffering = mode;
+}
+
+// =============================================================================
+// Unix interop primitives
+// =============================================================================
+
+/// stream->fd ( stream -- int ) - Get file descriptor from stream (Unix only)
+fn nativeStreamToFd(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    const fd: i64 = @intCast(stream.file.handle);
+    try ctx.stack.push(.{ .integer = fd });
+}
+
+/// fd->stream ( int mode -- stream ) - Create stream from file descriptor (Unix only)
+fn nativeFdToStream(ctx: *Context) anyerror!void {
+    const mode_sym = try popSymbol(ctx);
+    const fd_val = try popInteger(ctx);
+
+    if (fd_val < 0) {
+        return error.InvalidArgument;
+    }
+
+    const mode: StreamMode = if (std.mem.eql(u8, mode_sym, "read"))
+        .read
+    else if (std.mem.eql(u8, mode_sym, "write"))
+        .write
+    else if (std.mem.eql(u8, mode_sym, "append"))
+        .append
+    else if (std.mem.eql(u8, mode_sym, "read-write"))
+        .read_write
+    else
+        return error.InvalidArgument;
+
+    const alloc = ctx.quotationAllocator();
+    const stream = alloc.create(Stream) catch return error.OutOfMemory;
+    stream.* = Stream{
+        .file = std.fs.File{ .handle = @intCast(fd_val) },
+        .mode = mode,
+        .name = "fd",
+    };
+    try ctx.stack.push(.{ .stream = stream });
 }
 
 // =============================================================================
