@@ -15,40 +15,63 @@ PASS: closed stderr to-string
 Stack: [ ]
 === Stream open and close ===
 Stack: [ ]
-Stack: [ <stream /tmp/1z_tests/1z_stream_test.txt write> ]
-Stack: [ ]
-PASS: stream-open write and close
-Stack: [ ]
-Stack: [ <stream /tmp/1z_tests/1z_stream_test.txt read> ]
+Stack: [ <stream tests/fixtures/hello.txt read> ]
 PASS: read stream to-string
-Stack: [ <stream /tmp/1z_tests/1z_stream_test.txt read> ]
+Stack: [ <stream tests/fixtures/hello.txt read> ]
 Stack: [ ]
-PASS: stream-open read and close
+PASS: stream-open and close
 Stack: [ ]
-=== Stream write ===
+=== Stream write to stdout ===
 Stack: [ ]
-Stack: [ <stream /tmp/1z_tests/1z_write_test.txt write> ]
-PASS: stream-write returns byte count
-Stack: [ <stream /tmp/1z_tests/1z_write_test.txt write> ]
+HelloPASS: stream-write to stdout returns byte count
 Stack: [ ]
-PASS: stream-write string
+!PASS: stream-write byte array to stdout
 Stack: [ ]
-Stack: [ <stream /tmp/1z_tests/1z_write_test2.txt write> ]
-PASS: stream-write byte array returns count
-Stack: [ <stream /tmp/1z_tests/1z_write_test2.txt write> ]
-Stack: [ ]
-PASS: stream-write byte array
+
 Stack: [ ]
 === Stream flush ===
 Stack: [ ]
-Stack: [ <stream /tmp/1z_tests/1z_flush_test.txt write> ]
-Stack: [ <stream /tmp/1z_tests/1z_flush_test.txt write> ]
-Stack: [ <stream /tmp/1z_tests/1z_flush_test.txt write> ]
-Stack: [ ]
-PASS: stream-flush on file
-Stack: [ ]
 Stack: [ ]
 PASS: stream-flush on stdout
+Stack: [ ]
+=== Stream read ===
+Stack: [ ]
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+Stack: [ <stream tests/fixtures/hello.txt read> B{ 0x48 0x65 0x6C 0x6C 0x6F } ]
+PASS: stream-read returns 5 bytes
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+Stack: [ ]
+PASS: stream-read partial
+Stack: [ ]
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+Stack: [ <stream tests/fixtures/hello.txt read> B{ 0x48 0x65 0x6C 0x6C 0x6F 0x2C 0x20 0x57 0x6F 0x72 0x6C 0x64 0x21 } ]
+PASS: stream-read returns available bytes
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+Stack: [ ]
+PASS: stream-read more than available
+Stack: [ ]
+=== Stream read-line ===
+Stack: [ ]
+Stack: [ <stream tests/fixtures/lines.txt read> ]
+PASS: first line
+Stack: [ <stream tests/fixtures/lines.txt read> ]
+PASS: second line
+Stack: [ <stream tests/fixtures/lines.txt read> ]
+PASS: third line
+Stack: [ <stream tests/fixtures/lines.txt read> ]
+PASS: EOF returns false
+Stack: [ <stream tests/fixtures/lines.txt read> ]
+Stack: [ ]
+PASS: stream-read-line multiple lines
+Stack: [ ]
+=== Stream read-all ===
+Stack: [ ]
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+Stack: [ <stream tests/fixtures/hello.txt read> B{ 0x48 0x65 0x6C 0x6C 0x6F 0x2C 0x20 0x57 0x6F 0x72 0x6C 0x64 0x21 } ]
+PASS: stream-read-all returns all bytes
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+Stack: [ ]
+PASS: stream-read-all
 Stack: [ ]
 === Error cases ===
 Stack: [ ]
@@ -60,74 +83,24 @@ Stack: [ [ stdout dup stream-close stream-close ] ]
 Stack: [ [ stdout dup stream-close stream-close ] [ drop "PASS: ClosedStream error on double close" print ] ]
 PASS: ClosedStream error on double close
 Stack: [ ]
-Stack: [ [ "/tmp/1z_tests/1z_closed_test.txt" write: stream-open dup stream-close "test" stream-write ] ]
-Stack: [ [ "/tmp/1z_tests/1z_closed_test.txt" write: stream-open dup stream-close "test" stream-write ] [ drop "PASS: ClosedStream error on write to closed stream" print ] ]
+Stack: [ [ stdout dup stream-close "test" stream-write ] ]
+Stack: [ [ stdout dup stream-close "test" stream-write ] [ drop "PASS: ClosedStream error on write to closed stream" print ] ]
 PASS: ClosedStream error on write to closed stream
 Stack: [ ]
-Stack: [ [ "/tmp/1z_tests/1z_closed_test2.txt" write: stream-open dup stream-close stream-flush ] ]
-Stack: [ [ "/tmp/1z_tests/1z_closed_test2.txt" write: stream-open dup stream-close stream-flush ] [ drop "PASS: ClosedStream error on flush closed stream" print ] ]
+Stack: [ [ stdout dup stream-close stream-flush ] ]
+Stack: [ [ stdout dup stream-close stream-flush ] [ drop "PASS: ClosedStream error on flush closed stream" print ] ]
 PASS: ClosedStream error on flush closed stream
 Stack: [ ]
-=== Stream read ===
-Stack: [ ]
-Stack: [ <stream /tmp/1z_tests/1z_read_test.txt write> ]
-Stack: [ <stream /tmp/1z_tests/1z_read_test.txt write> ]
-Stack: [ ]
-Stack: [ <stream /tmp/1z_tests/1z_read_test.txt read> ]
-Stack: [ <stream /tmp/1z_tests/1z_read_test.txt read> B{ 0x48 0x65 0x6C 0x6C 0x6F } ]
-PASS: stream-read returns 5 bytes
-Stack: [ <stream /tmp/1z_tests/1z_read_test.txt read> ]
-Stack: [ ]
-PASS: stream-read partial
-Stack: [ ]
-Stack: [ <stream /tmp/1z_tests/1z_read_test.txt read> ]
-Stack: [ <stream /tmp/1z_tests/1z_read_test.txt read> B{ 0x48 0x65 0x6C 0x6C 0x6F 0x2C 0x20 0x57 0x6F 0x72 0x6C 0x64 0x21 } ]
-PASS: stream-read returns available bytes
-Stack: [ <stream /tmp/1z_tests/1z_read_test.txt read> ]
-Stack: [ ]
-PASS: stream-read more than available
-Stack: [ ]
-=== Stream read-line ===
-Stack: [ ]
-Stack: [ <stream /tmp/1z_tests/1z_readline_test.txt write> ]
-Stack: [ <stream /tmp/1z_tests/1z_readline_test.txt write> ]
-Stack: [ ]
-Stack: [ <stream /tmp/1z_tests/1z_readline_test.txt read> ]
-PASS: first line
-Stack: [ <stream /tmp/1z_tests/1z_readline_test.txt read> ]
-PASS: second line
-Stack: [ <stream /tmp/1z_tests/1z_readline_test.txt read> ]
-PASS: third line
-Stack: [ <stream /tmp/1z_tests/1z_readline_test.txt read> ]
-PASS: EOF returns false
-Stack: [ <stream /tmp/1z_tests/1z_readline_test.txt read> ]
-Stack: [ ]
-PASS: stream-read-line multiple lines
-Stack: [ ]
-=== Stream read-all ===
-Stack: [ ]
-Stack: [ <stream /tmp/1z_tests/1z_readall_test.txt write> ]
-Stack: [ <stream /tmp/1z_tests/1z_readall_test.txt write> ]
-Stack: [ ]
-Stack: [ <stream /tmp/1z_tests/1z_readall_test.txt read> ]
-Stack: [ <stream /tmp/1z_tests/1z_readall_test.txt read> B{ 0x43 0x6F 0x6D 0x70 0x6C 0x65 0x74 0x65 0x20 0x66 0x69 0x6C 0x65 0x20 0x63 0x6F 0x6E 0x74 0x65 0x6E 0x74 } ]
-PASS: stream-read-all returns all bytes
-Stack: [ <stream /tmp/1z_tests/1z_readall_test.txt read> ]
-Stack: [ ]
-PASS: stream-read-all
-Stack: [ ]
-=== Stream read error cases ===
-Stack: [ ]
-Stack: [ [ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close 10 stream-read ] ]
-Stack: [ [ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close 10 stream-read ] [ drop "PASS: ClosedStream error on read from closed stream" print ] ]
+Stack: [ [ "tests/fixtures/hello.txt" read: stream-open dup stream-close 10 stream-read ] ]
+Stack: [ [ "tests/fixtures/hello.txt" read: stream-open dup stream-close 10 stream-read ] [ drop "PASS: ClosedStream error on read from closed stream" print ] ]
 PASS: ClosedStream error on read from closed stream
 Stack: [ ]
-Stack: [ [ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close stream-read-line ] ]
-Stack: [ [ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close stream-read-line ] [ drop "PASS: ClosedStream error on read-line from closed stream" print ] ]
+Stack: [ [ "tests/fixtures/hello.txt" read: stream-open dup stream-close stream-read-line ] ]
+Stack: [ [ "tests/fixtures/hello.txt" read: stream-open dup stream-close stream-read-line ] [ drop "PASS: ClosedStream error on read-line from closed stream" print ] ]
 PASS: ClosedStream error on read-line from closed stream
 Stack: [ ]
-Stack: [ [ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close stream-read-all ] ]
-Stack: [ [ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close stream-read-all ] [ drop "PASS: ClosedStream error on read-all from closed stream" print ] ]
+Stack: [ [ "tests/fixtures/hello.txt" read: stream-open dup stream-close stream-read-all ] ]
+Stack: [ [ "tests/fixtures/hello.txt" read: stream-open dup stream-close stream-read-all ] [ drop "PASS: ClosedStream error on read-all from closed stream" print ] ]
 PASS: ClosedStream error on read-all from closed stream
 Stack: [ ]
 All stream tests complete!

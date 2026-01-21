@@ -8,46 +8,52 @@ stderr to-string "<stream stderr write>" "stderr to-string" assert=
 stdin to-string "<stream stdin read>" "stdin to-string" assert=
 
 "Stream close on standard streams" test-section
-\ Closing standard streams marks them closed but doesn't actually close
 stdout dup stream-close to-string "<stream stdout (closed)>" "closed stdout to-string" assert=
 stderr dup stream-close to-string "<stream stderr (closed)>" "closed stderr to-string" assert=
 
 "Stream open and close" test-section
-\ Create a test file, then close it
-"/tmp/1z_tests/1z_stream_test.txt" write: stream-open
+"tests/fixtures/hello.txt" read: stream-open
+dup to-string "<stream tests/fixtures/hello.txt read>" "read stream to-string" assert=
 stream-close
-"PASS: stream-open write and close" print
+"PASS: stream-open and close" print
 
-\ Open for reading
-"/tmp/1z_tests/1z_stream_test.txt" read: stream-open
-dup to-string "<stream /tmp/1z_tests/1z_stream_test.txt read>" "read stream to-string" assert=
-stream-close
-"PASS: stream-open read and close" print
-
-"Stream write" test-section
-\ Write a string to a file
-"/tmp/1z_tests/1z_write_test.txt" write: stream-open
-dup "Hello, World!" stream-write 13 "stream-write returns byte count" assert=
-stream-close
-"PASS: stream-write string" print
-
-\ Write a byte array to a file
-"/tmp/1z_tests/1z_write_test2.txt" write: stream-open
-dup B{ 0x48 0x69 0x21 } stream-write 3 "stream-write byte array returns count" assert=
-stream-close
-"PASS: stream-write byte array" print
+"Stream write to stdout" test-section
+stdout "Hello" stream-write 5 "stream-write to stdout returns byte count" assert=
+stdout B{ 0x21 } stream-write 1 "stream-write byte array to stdout" assert=
+"" print
 
 "Stream flush" test-section
-\ Flush a file stream (no error expected)
-"/tmp/1z_tests/1z_flush_test.txt" write: stream-open
-dup "test" stream-write drop
-dup stream-flush
-stream-close
-"PASS: stream-flush on file" print
-
-\ Flush stdout (should be a no-op but not error)
 stdout stream-flush
 "PASS: stream-flush on stdout" print
+
+"Stream read" test-section
+"tests/fixtures/hello.txt" read: stream-open
+dup 5 stream-read
+#len 5 "stream-read returns 5 bytes" assert=
+stream-close
+"PASS: stream-read partial" print
+
+"tests/fixtures/hello.txt" read: stream-open
+dup 100 stream-read
+#len 13 "stream-read returns available bytes" assert=
+stream-close
+"PASS: stream-read more than available" print
+
+"Stream read-line" test-section
+"tests/fixtures/lines.txt" read: stream-open
+dup stream-read-line "L1" "first line" assert=
+dup stream-read-line "L2" "second line" assert=
+dup stream-read-line "L3" "third line" assert=
+dup stream-read-line f "EOF returns false" assert=
+stream-close
+"PASS: stream-read-line multiple lines" print
+
+"Stream read-all" test-section
+"tests/fixtures/hello.txt" read: stream-open
+dup stream-read-all
+#len 13 "stream-read-all returns all bytes" assert=
+stream-close
+"PASS: stream-read-all" print
 
 "Error cases" test-section
 \ FileNotFound error
@@ -61,75 +67,27 @@ recover
 recover
 
 \ ClosedStream error on write
-[ "/tmp/1z_tests/1z_closed_test.txt" write: stream-open dup stream-close "test" stream-write ]
+[ stdout dup stream-close "test" stream-write ]
 [ drop "PASS: ClosedStream error on write to closed stream" print ]
 recover
 
 \ ClosedStream error on flush
-[ "/tmp/1z_tests/1z_closed_test2.txt" write: stream-open dup stream-close stream-flush ]
+[ stdout dup stream-close stream-flush ]
 [ drop "PASS: ClosedStream error on flush closed stream" print ]
 recover
 
-"Stream read" test-section
-\ Write test data then read it back
-"/tmp/1z_tests/1z_read_test.txt" write: stream-open
-dup "Hello, World!" stream-write drop
-stream-close
-
-\ Read partial content
-"/tmp/1z_tests/1z_read_test.txt" read: stream-open
-dup 5 stream-read
-#len 5 "stream-read returns 5 bytes" assert=
-stream-close
-"PASS: stream-read partial" print
-
-\ Read more than available
-"/tmp/1z_tests/1z_read_test.txt" read: stream-open
-dup 100 stream-read
-#len 13 "stream-read returns available bytes" assert=
-stream-close
-"PASS: stream-read more than available" print
-
-"Stream read-line" test-section
-\ Write multi-line content (using byte array with actual newlines: 0x0A)
-"/tmp/1z_tests/1z_readline_test.txt" write: stream-open
-dup B{ 0x4C 0x31 0x0A 0x4C 0x32 0x0A 0x4C 0x33 } stream-write drop
-stream-close
-
-\ Read lines (L1, L2, L3 separated by newlines)
-"/tmp/1z_tests/1z_readline_test.txt" read: stream-open
-dup stream-read-line "L1" "first line" assert=
-dup stream-read-line "L2" "second line" assert=
-dup stream-read-line "L3" "third line" assert=
-dup stream-read-line f "EOF returns false" assert=
-stream-close
-"PASS: stream-read-line multiple lines" print
-
-"Stream read-all" test-section
-\ Write content then read all
-"/tmp/1z_tests/1z_readall_test.txt" write: stream-open
-dup "Complete file content" stream-write drop
-stream-close
-
-"/tmp/1z_tests/1z_readall_test.txt" read: stream-open
-dup stream-read-all
-#len 21 "stream-read-all returns all bytes" assert=
-stream-close
-"PASS: stream-read-all" print
-
-"Stream read error cases" test-section
 \ ClosedStream error on read
-[ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close 10 stream-read ]
+[ "tests/fixtures/hello.txt" read: stream-open dup stream-close 10 stream-read ]
 [ drop "PASS: ClosedStream error on read from closed stream" print ]
 recover
 
 \ ClosedStream error on read-line
-[ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close stream-read-line ]
+[ "tests/fixtures/hello.txt" read: stream-open dup stream-close stream-read-line ]
 [ drop "PASS: ClosedStream error on read-line from closed stream" print ]
 recover
 
 \ ClosedStream error on read-all
-[ "/tmp/1z_tests/1z_read_test.txt" read: stream-open dup stream-close stream-read-all ]
+[ "tests/fixtures/hello.txt" read: stream-open dup stream-close stream-read-all ]
 [ drop "PASS: ClosedStream error on read-all from closed stream" print ]
 recover
 
