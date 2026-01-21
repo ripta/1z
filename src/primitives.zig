@@ -2728,10 +2728,16 @@ fn nativeSetBufferingMode(ctx: *Context) anyerror!void {
 // Unix interop primitives
 // =============================================================================
 
+const builtin = @import("builtin");
+const native_os = builtin.os.tag;
+
 /// stream->fd ( stream -- int ) - Get file descriptor from stream (Unix only)
 fn nativeStreamToFd(ctx: *Context) anyerror!void {
-    const stream = try popStream(ctx);
+    if (native_os == .windows) {
+        return error.UnsupportedOperation;
+    }
 
+    const stream = try popStream(ctx);
     if (stream.closed) {
         return error.ClosedStream;
     }
@@ -2742,6 +2748,10 @@ fn nativeStreamToFd(ctx: *Context) anyerror!void {
 
 /// fd->stream ( int mode -- stream ) - Create stream from file descriptor (Unix only)
 fn nativeFdToStream(ctx: *Context) anyerror!void {
+    if (native_os == .windows) {
+        return error.UnsupportedOperation;
+    }
+
     const mode_sym = try popSymbol(ctx);
     const fd_val = try popInteger(ctx);
 
