@@ -98,6 +98,21 @@ Stack: [ [ stdout 0 stream-seek ] ]
 Stack: [ [ stdout 0 stream-seek ] [ drop "PASS: NotSeekable error on stdout stream-seek" print ] ]
 PASS: NotSeekable error on stdout stream-seek
 Stack: [ ]
+=== Buffering control ===
+Stack: [ ]
+PASS: stdout default buffering is line
+Stack: [ ]
+PASS: stderr default buffering is line
+Stack: [ ]
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: file default buffering is none
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: buffering mode changed to block
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+Stack: [ ]
+PASS: buffering control
+Stack: [ ]
 === Error cases ===
 Stack: [ ]
 Stack: [ [ "/nonexistent/path/file.txt" read: stream-open ] ]

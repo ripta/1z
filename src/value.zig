@@ -60,12 +60,28 @@ pub const StreamMode = enum {
     }
 };
 
+/// BufferingMode indicates how a stream is buffered.
+pub const BufferingMode = enum {
+    none,
+    line,
+    block,
+
+    pub fn toSymbol(self: BufferingMode) []const u8 {
+        return switch (self) {
+            .none => "none",
+            .line => "line",
+            .block => "block",
+        };
+    }
+};
+
 /// Stream wraps a file handle for I/O operations.
 pub const Stream = struct {
     file: std.fs.File,
     mode: StreamMode,
     closed: bool = false,
     name: []const u8, // For display: "stdout", "stderr", file path
+    buffering: BufferingMode = .none,
 };
 
 /// StackFrame represents a single frame in a stack trace.

@@ -76,6 +76,16 @@ recover
 [ drop "PASS: NotSeekable error on stdout stream-seek" print ]
 recover
 
+"Buffering control" test-section
+stdout buffering-mode line: "stdout default buffering is line" assert=
+stderr buffering-mode line: "stderr default buffering is line" assert=
+"tests/fixtures/hello.txt" read: stream-open
+dup buffering-mode none: "file default buffering is none" assert=
+dup block: set-buffering-mode
+dup buffering-mode block: "buffering mode changed to block" assert=
+stream-close
+"PASS: buffering control" print
+
 "Error cases" test-section
 \ FileNotFound error
 [ "/nonexistent/path/file.txt" read: stream-open ]

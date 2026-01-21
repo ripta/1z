@@ -13,6 +13,7 @@ const Set = value_mod.Set;
 const MutableMap = value_mod.MutableMap;
 const Stream = value_mod.Stream;
 const StreamMode = value_mod.StreamMode;
+const BufferingMode = value_mod.BufferingMode;
 const ErrorObject = value_mod.ErrorObject;
 const StackFrame = value_mod.StackFrame;
 
@@ -247,6 +248,8 @@ const primitives = [_]Primitive{
     .{ .name = "stream-tell", .stack_effect = "stream -- pos", .func = nativeStreamTell },
     .{ .name = "stream-seek", .stack_effect = "stream pos --", .func = nativeStreamSeek },
     .{ .name = "stream-seek-end", .stack_effect = "stream offset --", .func = nativeStreamSeekEnd },
+    .{ .name = "buffering-mode", .stack_effect = "stream -- symbol", .func = nativeBufferingMode },
+    .{ .name = "set-buffering-mode", .stack_effect = "stream symbol --", .func = nativeSetBufferingMode },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -2261,6 +2264,7 @@ fn nativeStdin(ctx: *Context) anyerror!void {
         .file = std.fs.File.stdin(),
         .mode = .read,
         .name = "stdin",
+        .buffering = .line,
     };
     try ctx.stack.push(.{ .stream = stream });
 }
@@ -2273,6 +2277,7 @@ fn nativeStdout(ctx: *Context) anyerror!void {
         .file = std.fs.File.stdout(),
         .mode = .write,
         .name = "stdout",
+        .buffering = .line,
     };
     try ctx.stack.push(.{ .stream = stream });
 }
@@ -2285,6 +2290,7 @@ fn nativeStderr(ctx: *Context) anyerror!void {
         .file = std.fs.File.stderr(),
         .mode = .write,
         .name = "stderr",
+        .buffering = .line,
     };
     try ctx.stack.push(.{ .stream = stream });
 }
@@ -2678,6 +2684,42 @@ fn nativeStreamSeekEnd(ctx: *Context) anyerror!void {
             else => error.IOError,
         };
     };
+}
+
+// =============================================================================
+// Buffering control primitives
+// =============================================================================
+
+/// buffering-mode ( stream -- symbol ) - Get stream buffering mode
+fn nativeBufferingMode(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    try ctx.stack.push(.{ .symbol = stream.buffering.toSymbol() });
+}
+
+/// set-buffering-mode ( stream symbol -- ) - Set stream buffering mode
+fn nativeSetBufferingMode(ctx: *Context) anyerror!void {
+    const mode_sym = try popSymbol(ctx);
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    const mode: BufferingMode = if (std.mem.eql(u8, mode_sym, "none"))
+        .none
+    else if (std.mem.eql(u8, mode_sym, "line"))
+        .line
+    else if (std.mem.eql(u8, mode_sym, "block"))
+        .block
+    else
+        return error.InvalidArgument;
+
+    stream.buffering = mode;
 }
 
 // =============================================================================
