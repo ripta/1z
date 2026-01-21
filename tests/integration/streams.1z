@@ -55,6 +55,27 @@ dup stream-read-all
 stream-close
 "PASS: stream-read-all" print
 
+"Stream positioning" test-section
+"tests/fixtures/hello.txt" read: stream-open
+dup stream-tell 0 "stream-tell at start" assert=
+dup 5 stream-read drop
+dup stream-tell 5 "stream-tell after read" assert=
+dup 0 stream-seek
+dup stream-tell 0 "stream-tell after seek to 0" assert=
+dup -5 stream-seek-end
+dup stream-tell 8 "stream-tell after seek-end -5" assert=
+stream-close
+"PASS: stream positioning" print
+
+\ NotSeekable error on stdout
+[ stdout stream-tell ]
+[ drop "PASS: NotSeekable error on stdout stream-tell" print ]
+recover
+
+[ stdout 0 stream-seek ]
+[ drop "PASS: NotSeekable error on stdout stream-seek" print ]
+recover
+
 "Error cases" test-section
 \ FileNotFound error
 [ "/nonexistent/path/file.txt" read: stream-open ]

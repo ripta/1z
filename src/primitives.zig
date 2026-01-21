@@ -244,6 +244,9 @@ const primitives = [_]Primitive{
     .{ .name = "stream-read", .stack_effect = "stream n -- bytes", .func = nativeStreamRead },
     .{ .name = "stream-read-line", .stack_effect = "stream -- str/f", .func = nativeStreamReadLine },
     .{ .name = "stream-read-all", .stack_effect = "stream -- bytes", .func = nativeStreamReadAll },
+    .{ .name = "stream-tell", .stack_effect = "stream -- pos", .func = nativeStreamTell },
+    .{ .name = "stream-seek", .stack_effect = "stream pos --", .func = nativeStreamSeek },
+    .{ .name = "stream-seek-end", .stack_effect = "stream offset --", .func = nativeStreamSeekEnd },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -2615,6 +2618,66 @@ fn nativeStreamReadAll(ctx: *Context) anyerror!void {
     }
 
     try ctx.stack.push(.{ .byte_array = ba });
+}
+
+// =============================================================================
+// Stream positioning primitives
+// =============================================================================
+
+/// stream-tell ( stream -- pos ) - Get current stream position
+fn nativeStreamTell(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    const pos = stream.file.getPos() catch |err| {
+        return switch (err) {
+            error.Unseekable => error.NotSeekable,
+            else => error.IOError,
+        };
+    };
+
+    try ctx.stack.push(.{ .integer = @intCast(pos) });
+}
+
+/// stream-seek ( stream pos -- ) - Seek to absolute position
+fn nativeStreamSeek(ctx: *Context) anyerror!void {
+    const pos = try popInteger(ctx);
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    if (pos < 0) {
+        return error.InvalidArgument;
+    }
+
+    stream.file.seekTo(@intCast(pos)) catch |err| {
+        return switch (err) {
+            error.Unseekable => error.NotSeekable,
+            else => error.IOError,
+        };
+    };
+}
+
+/// stream-seek-end ( stream offset -- ) - Seek relative to end of stream
+fn nativeStreamSeekEnd(ctx: *Context) anyerror!void {
+    const offset = try popInteger(ctx);
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    stream.file.seekFromEnd(offset) catch |err| {
+        return switch (err) {
+            error.Unseekable => error.NotSeekable,
+            else => error.IOError,
+        };
+    };
 }
 
 // =============================================================================

@@ -73,6 +73,31 @@ Stack: [ <stream tests/fixtures/hello.txt read> ]
 Stack: [ ]
 PASS: stream-read-all
 Stack: [ ]
+=== Stream positioning ===
+Stack: [ ]
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: stream-tell at start
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: stream-tell after read
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: stream-tell after seek to 0
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: stream-tell after seek-end -5
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+Stack: [ ]
+PASS: stream positioning
+Stack: [ ]
+Stack: [ [ stdout stream-tell ] ]
+Stack: [ [ stdout stream-tell ] [ drop "PASS: NotSeekable error on stdout stream-tell" print ] ]
+PASS: NotSeekable error on stdout stream-tell
+Stack: [ ]
+Stack: [ [ stdout 0 stream-seek ] ]
+Stack: [ [ stdout 0 stream-seek ] [ drop "PASS: NotSeekable error on stdout stream-seek" print ] ]
+PASS: NotSeekable error on stdout stream-seek
+Stack: [ ]
 === Error cases ===
 Stack: [ ]
 Stack: [ [ "/nonexistent/path/file.txt" read: stream-open ] ]
