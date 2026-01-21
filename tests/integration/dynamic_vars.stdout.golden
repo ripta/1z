@@ -1,0 +1,65 @@
+Stack: [ ]
+=== Parameter creation and get ===Stack: [ ]
+PASS: output-stream get returns stdoutStack: [ ]
+PASS: input-stream get returns stdinStack: [ ]
+PASS: basic parameter get
+Stack: [ ]
+=== Custom parameter definition ===Stack: [ ]
+Stack: [ ]
+PASS: test-param get returns defaultStack: [ ]
+PASS: custom parameter with numeric default
+Stack: [ ]
+=== Lazy default evaluation ===Stack: [ ]
+Stack: [ ]
+PASS: counter first getStack: [ ]
+PASS: counter second getStack: [ ]
+PASS: lazy default evaluation
+Stack: [ ]
+=== with-parameter rebinding ===Stack: [ ]
+Stack: [ ]
+PASS: before rebindStack: [ ]
+PASS: inside rebindStack: [ ]
+PASS: after rebind restoredStack: [ ]
+PASS: with-parameter rebinding
+Stack: [ ]
+=== Nested with-parameter ===Stack: [ ]
+Stack: [ ]
+PASS: outer defaultStack: [ ]
+PASS: first level bindingPASS: second level bindingPASS: first level restoredStack: [ ]
+PASS: outer restoredStack: [ ]
+PASS: nested with-parameter
+Stack: [ ]
+=== with-parameter restores on error ===Stack: [ ]
+Stack: [ ]
+PASS: before errorStack: [ ]
+PASS: inside before errorStack: [ ]
+PASS: restored after errorStack: [ ]
+PASS: with-parameter restores on error
+Stack: [ ]
+=== Stream redirection with with-output-stream ===Stack: [ ]
+Stack: [ <stream tests/fixtures/redirect-test.txt write> ]
+Stack: [ <stream tests/fixtures/redirect-test.txt write> ]
+Stack: [ ]
+Stack: [ <stream tests/fixtures/redirect-test.txt read> ]
+Stack: [ <stream tests/fixtures/redirect-test.txt read> "redirected output
+" ]
+Stack: [ "redirected output
+" ]
+PASS: stream redirection wrote correct contentStack: [ ]
+PASS: stream redirection with with-output-stream
+Stack: [ ]
+=== Parameter value display ===Stack: [ ]
+PASS: parameter to-stringStack: [ ]
+PASS: parameter value display
+Stack: [ ]
+=== Multiple parameters in same scope ===Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: multi-a defaultStack: [ ]
+PASS: multi-b defaultStack: [ ]
+PASS: multi-a reboundPASS: multi-b unchangedPASS: multi-a still reboundPASS: multi-b now reboundPASS: multi-b restoredStack: [ ]
+PASS: multi-a restoredStack: [ ]
+PASS: multiple parameters in same scope
+Stack: [ ]
+All dynamic variable tests complete!
+Stack: [ ]

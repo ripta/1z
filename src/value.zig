@@ -84,6 +84,14 @@ pub const Stream = struct {
     buffering: BufferingMode = .none,
 };
 
+/// Parameter represents a dynamically-scoped variable with a lazy default.
+/// The default quotation is evaluated each time the parameter is accessed
+/// without a binding in the current dynamic scope.
+pub const Parameter = struct {
+    name: []const u8,
+    default_quotation: Quotation, // Lazy default - evaluated on get if unbound
+};
+
 /// StackFrame represents a single frame in a stack trace.
 pub const StackFrame = struct {
     word_name: []const u8,
@@ -170,6 +178,7 @@ pub const Value = union(enum) {
     set: *Set,
     mutable_map: *MutableMap,
     stream: *Stream,
+    parameter: *Parameter,
     stack_effect: StackEffect,
     parse_time_marker: void, // Marker for parse-time word definitions
     error_value: ErrorObject,
@@ -254,6 +263,7 @@ pub const Value = union(enum) {
                     try writer.print("<stream {s} {s}>", .{ s.name, s.mode.toString() });
                 }
             },
+            .parameter => |p| try writer.print("<parameter:{s}>", .{p.name}),
             .stack_effect => |effect| try effect.write(writer),
             .parse_time_marker => try writer.writeAll("parse-time"),
             .error_value => |err| try err.write(writer),
@@ -334,6 +344,8 @@ pub const Value = union(enum) {
             },
             // Streams are equal if they refer to the same underlying file handle
             .stream => |a| a == other.stream,
+            // Parameters are equal if they refer to the same parameter object
+            .parameter => |a| a == other.parameter,
             .stack_effect => |a| a.eql(other.stack_effect),
             .parse_time_marker => true, // All parse_time_markers are equal
             .error_value => |a| a.eql(other.error_value),
@@ -417,6 +429,11 @@ pub const Value = union(enum) {
             // Streams hash by pointer identity (same as equality)
             .stream => |s| {
                 const ptr_val = @intFromPtr(s);
+                hasher.update(std.mem.asBytes(&ptr_val));
+            },
+            // Parameters hash by pointer identity (same as equality)
+            .parameter => |p| {
+                const ptr_val = @intFromPtr(p);
                 hasher.update(std.mem.asBytes(&ptr_val));
             },
             .stack_effect => |effect| {

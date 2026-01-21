@@ -19,6 +19,13 @@ S{: parse-time [ "}" parse-until make-set ] ;
 \ Mutable map literal syntax
 M{: parse-time [ "}" parse-until make-mutable-map ] ;
 
+\ Dynamic variables (parameters) syntax
+parameter: parse-time [ dup parse-quotation make-parameter ] ;
+
+\ Standard stream parameters
+output-stream: parameter [ stdout ] ;
+input-stream: parameter [ stdin ] ;
+
 \ Control flow
 when: ( ? quot -- ) [ [ ] if ] ;
 unless: ( ? quot -- ) [ [ ] swap if ] ;
@@ -69,15 +76,19 @@ or: ( ? ? -- ? ) [ [ drop t ] [ ] if ] ;
 \ I/O - stream-based primitives
 stream-write-string: ( stream str -- n ) [ >bytes stream-write ] ;
 
-print: ( str -- ) [ stdout swap stream-write-string drop ] ;
+\ Stream redirection combinators
+with-output-stream: ( stream quot -- ) [ output-stream swap with-parameter ] ;
+with-input-stream: ( stream quot -- ) [ input-stream swap with-parameter ] ;
+
+print: ( str -- ) [ output-stream get swap stream-write-string drop ] ;
 print-line: ( str -- ) [ print "\n" print flush ] ;
 
 emit: ( codepoint -- ) [ >char print ] ;
 nl: ( -- ) [ "\n" print ] ;
 bl: ( -- ) [ " " print ] ;
-flush: ( -- ) [ stdout stream-flush ] ;
+flush: ( -- ) [ output-stream get stream-flush ] ;
 
-read-line: ( -- str/f ) [ stdin stream-read-line ] ;
+read-line: ( -- str/f ) [ input-stream get stream-read-line ] ;
 
 .: ( a -- ) [ to-string print-line ] ;
 

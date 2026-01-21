@@ -14,6 +14,7 @@ const MutableMap = value_mod.MutableMap;
 const Stream = value_mod.Stream;
 const StreamMode = value_mod.StreamMode;
 const BufferingMode = value_mod.BufferingMode;
+const Parameter = value_mod.Parameter;
 const ErrorObject = value_mod.ErrorObject;
 const StackFrame = value_mod.StackFrame;
 
@@ -253,6 +254,12 @@ const primitives = [_]Primitive{
     .{ .name = "fd->stream", .stack_effect = "int mode -- stream", .func = nativeFdToStream },
     .{ .name = ">char", .stack_effect = "codepoint -- str", .func = nativeChr },
     .{ .name = ">codepoint", .stack_effect = "str -- codepoint", .func = nativeToCodepoint },
+    // Dynamic variables (parameters) - parse-time primitives
+    .{ .name = "parse-quotation", .stack_effect = "-- quotation", .func = nativeParseQuotation },
+    // Dynamic variables (parameters) - runtime primitives
+    .{ .name = "make-parameter", .stack_effect = "name: quot -- param", .func = nativeMakeParameter },
+    .{ .name = "get", .stack_effect = "param -- value", .func = nativeGet },
+    .{ .name = "with-parameter", .stack_effect = "value param quot --", .func = nativeWithParameter },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -386,12 +393,14 @@ fn nativeCall(ctx: *Context) anyerror!void {
     try ctx.executeQuotation(instrs);
 }
 
-/// ; ( name: quot -- ) or ( name: ( effect ) quot -- ) or ( name: parse-time quot -- ) - Define a new word
+/// ; ( name: quot -- ) or ( name: value -- ) or ( name: ( effect ) quot -- ) or ( name: parse-time quot -- ) - Define a new word
+/// Supports both quotation definitions (compound words) and value definitions (words that push a value)
 fn nativeSemicolon(ctx: *Context) anyerror!void {
-    const instrs = try popQuotation(ctx);
+    const top_val = try ctx.stack.pop();
 
     // Check for optional metadata (stack effect and/or parse-time marker)
     // Stack could be: symbol quot
+    //            or: symbol value
     //            or: symbol stack-effect quot
     //            or: symbol parse-time quot
     //            or: symbol parse-time stack-effect quot
@@ -416,14 +425,26 @@ fn nativeSemicolon(ctx: *Context) anyerror!void {
     }
 
     const name = try popSymbol(ctx);
+    const alloc = ctx.quotationAllocator();
     // Copy name to arena so it persists after input buffer is reused
-    const name_copy = try ctx.quotationAllocator().dupe(u8, name);
+    const name_copy = try alloc.dupe(u8, name);
+
+    // Handle different value types
+    const instructions = switch (top_val) {
+        .quotation => |quot| quot.instructions,
+        else => blk: {
+            // Value definition - create a word that pushes the value
+            const push_instr = try alloc.alloc(Instruction, 1);
+            push_instr[0] = .{ .op = .{ .push_literal = top_val }, .line = 0 };
+            break :blk push_instr;
+        },
+    };
 
     try ctx.dictionary.put(name_copy, WordDefinition{
         .name = name_copy,
         .parse_time = is_parse_time,
         .stack_effect = stack_effect_val,
-        .action = .{ .compound = instrs.instructions },
+        .action = .{ .compound = instructions },
     });
 }
 
@@ -2805,6 +2826,93 @@ fn nativeToCodepoint(ctx: *Context) anyerror!void {
 }
 
 // =============================================================================
+// Dynamic Variables (Parameters) - Parse-time primitives
+// =============================================================================
+
+/// parse-quotation ( -- quotation ) - Read the next [ ... ] block from the tokenizer
+/// Can only be called during parse-time execution (when tokenizer is available)
+fn nativeParseQuotation(ctx: *Context) anyerror!void {
+    const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
+
+    // Skip whitespace/comments until we find '['
+    while (tokenizer.next()) |tok| {
+        if (tok.kind == .comment or tok.kind == .newline) continue;
+
+        if (!std.mem.eql(u8, tok.text, "[")) {
+            // Expected '[' but got something else
+            return error.TypeError;
+        }
+
+        // Found '[', now parse the quotation body
+        const quot = parser.parseQuotation(ctx.quotationAllocator(), tokenizer, ctx) catch return error.OutOfMemory;
+        try ctx.stack.push(.{ .quotation = quot });
+        return;
+    }
+
+    // Unexpected end of input
+    return error.TypeError;
+}
+
+// =============================================================================
+// Dynamic Variables (Parameters) - Runtime primitives
+// =============================================================================
+
+/// make-parameter ( name: quot -- param ) - Create a parameter with the given name and default quotation
+fn nativeMakeParameter(ctx: *Context) anyerror!void {
+    const default_quot = try popQuotation(ctx);
+    const name = try popSymbol(ctx);
+
+    const alloc = ctx.quotationAllocator();
+    const param = alloc.create(Parameter) catch return error.OutOfMemory;
+    param.* = .{
+        .name = alloc.dupe(u8, name) catch return error.OutOfMemory,
+        .default_quotation = default_quot,
+    };
+
+    try ctx.stack.push(.{ .parameter = param });
+}
+
+/// get ( param -- value ) - Get the current value of a parameter
+/// Searches environment frames from top to bottom; if not found, evaluates default quotation
+fn nativeGet(ctx: *Context) anyerror!void {
+    const param_val = try ctx.stack.pop();
+    const param = switch (param_val) {
+        .parameter => |p| p,
+        else => return error.TypeError,
+    };
+
+    // Search frames from top (innermost) to bottom (outermost)
+    if (ctx.getParameterBinding(param.name)) |bound_value| {
+        try ctx.stack.push(bound_value);
+    } else {
+        // No binding found - evaluate default quotation
+        // The result is left on the stack by the quotation
+        try ctx.executeQuotation(param.default_quotation);
+    }
+}
+
+/// with-parameter ( value param quot -- ... ) - Execute quotation with parameter temporarily bound
+/// The parameter binding is restored even if the quotation throws an error
+fn nativeWithParameter(ctx: *Context) anyerror!void {
+    const body_quot = try popQuotation(ctx);
+    const param_val = try ctx.stack.pop();
+    const param = switch (param_val) {
+        .parameter => |p| p,
+        else => return error.TypeError,
+    };
+    const new_value = try ctx.stack.pop();
+
+    // Push new frame with binding
+    try ctx.pushParameterFrame();
+    try ctx.setParameterInTopFrame(param.name, new_value);
+
+    // Execute body with cleanup (pops frame even on error)
+    const result = ctx.executeQuotation(body_quot);
+    ctx.popParameterFrame();
+    try result;
+}
+
+// =============================================================================
 // Helper functions
 // =============================================================================
 
@@ -2812,7 +2920,7 @@ fn popInteger(ctx: *Context) !i64 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .integer => |i| i,
-        .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream => error.TypeError,
+        .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2822,7 +2930,7 @@ fn popBoolean(ctx: *Context) !bool {
     return switch (val) {
         .boolean => |b| b,
         .integer => |i| i != 0,
-        .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream => error.TypeError,
+        .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2831,7 +2939,7 @@ fn popQuotation(ctx: *Context) !Quotation {
     const val = try ctx.stack.pop();
     return switch (val) {
         .quotation => |q| q,
-        .integer, .boolean, .string, .symbol, .array, .hash, .vector, .byte_array, .set, .mutable_map, .stream => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2840,7 +2948,7 @@ fn popSymbol(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .symbol => |s| s,
-        .integer, .boolean, .string, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream => error.TypeError,
+        .integer, .boolean, .string, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2849,7 +2957,7 @@ fn popString(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .string => |s| s,
-        .integer, .boolean, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream => error.TypeError,
+        .integer, .boolean, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2858,7 +2966,7 @@ fn popStackEffect(ctx: *Context) !StackEffect {
     const val = try ctx.stack.pop();
     return switch (val) {
         .stack_effect => |se| se,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter => error.TypeError,
         .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2867,7 +2975,7 @@ fn popVector(ctx: *Context) !*Vector {
     const val = try ctx.stack.pop();
     return switch (val) {
         .vector => |v| v,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .byte_array, .set, .mutable_map, .stream => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .byte_array, .set, .mutable_map, .stream, .parameter => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2876,7 +2984,7 @@ fn popByteArray(ctx: *Context) !*ByteArray {
     const val = try ctx.stack.pop();
     return switch (val) {
         .byte_array => |b| b,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .set, .mutable_map, .stream => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .set, .mutable_map, .stream, .parameter => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2885,7 +2993,7 @@ fn popStream(ctx: *Context) !*Stream {
     const val = try ctx.stack.pop();
     return switch (val) {
         .stream => |s| s,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .parameter => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
