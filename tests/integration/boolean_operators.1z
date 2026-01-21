@@ -1,0 +1,44 @@
+\ Test boolean operators from prelude
+
+\ not ( ? -- ? ) - logical negation
+t not
+wipe
+
+f not
+wipe
+
+\ and ( ? ? -- ? ) - logical AND
+t t and
+wipe
+
+t f and
+wipe
+
+f t and
+wipe
+
+f f and
+wipe
+
+\ or ( ? ? -- ? ) - logical OR
+t t or
+wipe
+
+t f or
+wipe
+
+f t or
+wipe
+
+f f or
+wipe
+
+\ Combined boolean expressions
+t t and t or
+wipe
+
+f f or not
+wipe
+
+t f and not
+wipe
