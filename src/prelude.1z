@@ -69,6 +69,7 @@ or: ( ? ? -- ? ) [ [ drop t ] [ ] if ] ;
 \ I/O - stream-based primitives
 stream-write-string: ( stream str -- n ) [ >bytes stream-write ] ;
 
+print: ( str -- ) [ stdout swap stream-write-string drop ] ;
 print-line: ( str -- ) [ print "\n" print flush ] ;
 
 emit: ( codepoint -- ) [ >char print ] ;

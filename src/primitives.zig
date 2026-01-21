@@ -174,7 +174,6 @@ const primitives = [_]Primitive{
     .{ .name = ">", .stack_effect = "a b -- ?", .func = nativeGt },
     .{ .name = "if", .stack_effect = "? true-quot false-quot --", .func = nativeIf },
     // String manipulation
-    .{ .name = "print", .stack_effect = "str --", .func = nativePrint },
     .{ .name = "to-string", .stack_effect = "value -- string", .func = nativeToString },
     .{ .name = ">string", .stack_effect = "value -- string", .func = nativeAsString },
     .{ .name = ">bytes", .stack_effect = "string -- byte-array", .func = nativeToBytes },
@@ -542,22 +541,6 @@ fn nativeBytesToString(ctx: *Context) anyerror!void {
             const alloc = ctx.quotationAllocator();
             const result = alloc.dupe(u8, b.items) catch return error.OutOfMemory;
             try ctx.stack.push(.{ .string = result });
-        },
-        else => return error.TypeError,
-    }
-}
-
-/// print ( str -- ) - Print a string to stdout (unquoted, strings only)
-fn nativePrint(ctx: *Context) anyerror!void {
-    const val = try ctx.stack.pop();
-    switch (val) {
-        .string => |s| {
-            const stdout_file: std.fs.File = .stdout();
-            var stdout_buf: [4096]u8 = undefined;
-            var stdout = stdout_file.writer(&stdout_buf);
-            try stdout.interface.writeAll(s);
-            try stdout.interface.writeAll("\n");
-            try stdout.interface.flush();
         },
         else => return error.TypeError,
     }
@@ -3370,7 +3353,6 @@ test "register primitives" {
     try std.testing.expect(dict.get("call") != null);
     try std.testing.expect(dict.get(";") != null);
     try std.testing.expect(dict.get("if") != null);
-    try std.testing.expect(dict.get("print") != null);
     try std.testing.expect(dict.get("to-string") != null);
     try std.testing.expect(dict.get("recover") != null);
     try std.testing.expect(dict.get("cleanup") != null);
