@@ -252,6 +252,7 @@ const primitives = [_]Primitive{
     .{ .name = "set-buffering-mode", .stack_effect = "stream symbol --", .func = nativeSetBufferingMode },
     .{ .name = "stream->fd", .stack_effect = "stream -- int", .func = nativeStreamToFd },
     .{ .name = "fd->stream", .stack_effect = "int mode -- stream", .func = nativeFdToStream },
+    .{ .name = ">char", .stack_effect = "codepoint -- str", .func = nativeChr },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -2778,6 +2779,30 @@ fn nativeFdToStream(ctx: *Context) anyerror!void {
         .name = "fd",
     };
     try ctx.stack.push(.{ .stream = stream });
+}
+
+// =============================================================================
+// Character conversion primitives
+// =============================================================================
+
+/// >char ( codepoint -- str ) - Convert Unicode codepoint to single-character string
+fn nativeChr(ctx: *Context) anyerror!void {
+    const codepoint_val = try popInteger(ctx);
+    if (codepoint_val < 0 or codepoint_val > 0x10FFFF) {
+        return error.InvalidArgument;
+    }
+
+    const codepoint: u21 = @intCast(codepoint_val);
+    if (codepoint >= 0xD800 and codepoint <= 0xDFFF) {
+        return error.InvalidArgument;
+    }
+
+    const alloc = ctx.quotationAllocator();
+    var buf: [4]u8 = undefined;
+    const len = std.unicode.utf8Encode(codepoint, &buf) catch return error.InvalidArgument;
+
+    const str = alloc.dupe(u8, buf[0..len]) catch return error.OutOfMemory;
+    try ctx.stack.push(.{ .string = str });
 }
 
 // =============================================================================

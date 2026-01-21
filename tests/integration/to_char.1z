@@ -1,0 +1,44 @@
+\ Tests for >char primitive (codepoint to string conversion)
+
+"lib/testing.1z" load
+
+"Basic ASCII" test-section
+65 >char "A" ">char 65 = A" assert=
+97 >char "a" ">char 97 = a" assert=
+48 >char "0" ">char 48 = 0" assert=
+32 >char " " ">char 32 = space" assert=
+10 >char #len 1 ">char 10 = newline (1 codepoint)" assert=
+
+"Unicode characters" test-section
+\ #len counts codepoints, >bytes #len counts bytes
+0x00E9 >char #len 1 "e-acute is 1 codepoint" assert=
+0x00E9 >char >bytes #len 2 "e-acute is 2 bytes" assert=
+0x4E2D >char #len 1 "CJK is 1 codepoint" assert=
+0x4E2D >char >bytes #len 3 "CJK is 3 bytes" assert=
+0x1F600 >char #len 1 "emoji is 1 codepoint" assert=
+0x1F600 >char >bytes #len 4 "emoji is 4 bytes" assert=
+
+"Boundary values (byte counts)" test-section
+0 >char >bytes #len 1 ">char 0 = 1 byte" assert=
+127 >char >bytes #len 1 ">char 127 = 1 byte" assert=
+128 >char >bytes #len 2 ">char 128 = 2 bytes" assert=
+0x7FF >char >bytes #len 2 ">char 0x7FF = 2 bytes" assert=
+0x800 >char >bytes #len 3 ">char 0x800 = 3 bytes" assert=
+0xFFFF >char >bytes #len 3 ">char 0xFFFF = 3 bytes" assert=
+0x10000 >char >bytes #len 4 ">char 0x10000 = 4 bytes" assert=
+0x10FFFF >char >bytes #len 4 ">char max codepoint = 4 bytes" assert=
+
+"Error cases" test-section
+[ -1 >char ]
+[ drop "PASS: negative codepoint rejected" print ]
+recover
+
+[ 0x110000 >char ]
+[ drop "PASS: codepoint > max rejected" print ]
+recover
+
+[ 0xD800 >char ]
+[ drop "PASS: surrogate codepoint rejected" print ]
+recover
+
+"All >char tests complete!" print

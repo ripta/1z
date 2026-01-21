@@ -1,0 +1,61 @@
+Stack: [ ]
+=== Basic ASCII ===
+Stack: [ ]
+PASS: >char 65 = A
+Stack: [ ]
+PASS: >char 97 = a
+Stack: [ ]
+PASS: >char 48 = 0
+Stack: [ ]
+PASS: >char 32 = space
+Stack: [ ]
+PASS: >char 10 = newline (1 codepoint)
+Stack: [ ]
+=== Unicode characters ===
+Stack: [ ]
+PASS: e-acute is 1 codepoint
+Stack: [ ]
+PASS: e-acute is 2 bytes
+Stack: [ ]
+PASS: CJK is 1 codepoint
+Stack: [ ]
+PASS: CJK is 3 bytes
+Stack: [ ]
+PASS: emoji is 1 codepoint
+Stack: [ ]
+PASS: emoji is 4 bytes
+Stack: [ ]
+=== Boundary values (byte counts) ===
+Stack: [ ]
+PASS: >char 0 = 1 byte
+Stack: [ ]
+PASS: >char 127 = 1 byte
+Stack: [ ]
+PASS: >char 128 = 2 bytes
+Stack: [ ]
+PASS: >char 0x7FF = 2 bytes
+Stack: [ ]
+PASS: >char 0x800 = 3 bytes
+Stack: [ ]
+PASS: >char 0xFFFF = 3 bytes
+Stack: [ ]
+PASS: >char 0x10000 = 4 bytes
+Stack: [ ]
+PASS: >char max codepoint = 4 bytes
+Stack: [ ]
+=== Error cases ===
+Stack: [ ]
+Stack: [ [ -1 >char ] ]
+Stack: [ [ -1 >char ] [ drop "PASS: negative codepoint rejected" print ] ]
+PASS: negative codepoint rejected
+Stack: [ ]
+Stack: [ [ 1114112 >char ] ]
+Stack: [ [ 1114112 >char ] [ drop "PASS: codepoint > max rejected" print ] ]
+PASS: codepoint > max rejected
+Stack: [ ]
+Stack: [ [ 55296 >char ] ]
+Stack: [ [ 55296 >char ] [ drop "PASS: surrogate codepoint rejected" print ] ]
+PASS: surrogate codepoint rejected
+Stack: [ ]
+All >char tests complete!
+Stack: [ ]
