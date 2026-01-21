@@ -42,3 +42,43 @@ recover
 recover
 
 "All >char tests complete!" print
+
+\ =============================================================================
+\ Tests for >codepoint primitive (string to codepoint conversion)
+\ =============================================================================
+
+"Basic ASCII >codepoint" test-section
+"A" >codepoint 65 ">codepoint A = 65" assert=
+"a" >codepoint 97 ">codepoint a = 97" assert=
+"0" >codepoint 48 ">codepoint 0 = 48" assert=
+" " >codepoint 32 ">codepoint space = 32" assert=
+
+"Unicode >codepoint" test-section
+0x00E9 >char >codepoint 0x00E9 "e-acute roundtrip" assert=
+0x4E2D >char >codepoint 0x4E2D "CJK roundtrip" assert=
+0x1F600 >char >codepoint 0x1F600 "emoji roundtrip" assert=
+
+"Boundary values >codepoint" test-section
+0 >char >codepoint 0 "null char roundtrip" assert=
+127 >char >codepoint 127 "max ASCII roundtrip" assert=
+128 >char >codepoint 128 "first 2-byte roundtrip" assert=
+0x7FF >char >codepoint 0x7FF "max 2-byte roundtrip" assert=
+0x800 >char >codepoint 0x800 "first 3-byte roundtrip" assert=
+0xFFFF >char >codepoint 0xFFFF "max 3-byte roundtrip" assert=
+0x10000 >char >codepoint 0x10000 "first 4-byte roundtrip" assert=
+0x10FFFF >char >codepoint 0x10FFFF "max codepoint roundtrip" assert=
+
+">codepoint error cases" test-section
+[ "" >codepoint ]
+[ drop "PASS: empty string rejected" print ]
+recover
+
+[ "ab" >codepoint ]
+[ drop "PASS: multi-char string rejected" print ]
+recover
+
+[ "hello" >codepoint ]
+[ drop "PASS: 5-char string rejected" print ]
+recover
+
+"All >codepoint tests complete!" print

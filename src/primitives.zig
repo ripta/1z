@@ -253,6 +253,7 @@ const primitives = [_]Primitive{
     .{ .name = "stream->fd", .stack_effect = "stream -- int", .func = nativeStreamToFd },
     .{ .name = "fd->stream", .stack_effect = "int mode -- stream", .func = nativeFdToStream },
     .{ .name = ">char", .stack_effect = "codepoint -- str", .func = nativeChr },
+    .{ .name = ">codepoint", .stack_effect = "str -- codepoint", .func = nativeToCodepoint },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -2803,6 +2804,21 @@ fn nativeChr(ctx: *Context) anyerror!void {
 
     const str = alloc.dupe(u8, buf[0..len]) catch return error.OutOfMemory;
     try ctx.stack.push(.{ .string = str });
+}
+
+/// >codepoint ( str -- int ) - Convert single-character string to Unicode codepoint
+fn nativeToCodepoint(ctx: *Context) anyerror!void {
+    const str = try popString(ctx);
+    var iter = std.unicode.Utf8Iterator{ .bytes = str, .i = 0 };
+    const first_codepoint = iter.nextCodepoint() orelse {
+        return error.InvalidArgument;
+    };
+
+    if (iter.nextCodepoint() != null) {
+        return error.InvalidArgument;
+    }
+
+    try ctx.stack.push(.{ .integer = @intCast(first_codepoint) });
 }
 
 // =============================================================================
