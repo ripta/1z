@@ -28,124 +28,20 @@ const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const parser = @import("parser.zig");
 const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
 
-pub const InterpreterError = error{
-    // General error types
-    StackUnderflow,
-    TypeError,
-    NoTokenizerAvailable,
-    // Error handling types
-    RethrowError,
-    // Stack effect error types
-    StackEffectMismatch,
-    // Arithmetic error types
-    DivisionByZero,
-    IntegerOverflow,
-    // File error types
-    FileNotFound,
-    FileReadError,
-    // Hash table error types
-    InvalidHashSyntax,
-    // Sequence error types
-    IndexOutOfBounds,
-    EmptySequence,
-    KeyNotFound,
-    // I/O error types
-    IOError,
-    ClosedStream,
-    PermissionDenied,
-    NotSeekable,
-};
-
-/// Helper to create a stack effect from a raw string at runtime.
-/// Supports quotation annotations like "seq quot: ( elem -- elem' ) -- seq'"
-fn makeSimpleEffect(allocator: Allocator, raw: []const u8) !StackEffect {
-    var inputs: std.ArrayListUnmanaged(StackEffectParam) = .{};
-    errdefer inputs.deinit(allocator);
-    var outputs: std.ArrayListUnmanaged(StackEffectParam) = .{};
-    errdefer outputs.deinit(allocator);
-
-    var iter = std.mem.splitScalar(u8, raw, ' ');
-    var current_list = &inputs;
-    var pending_name: ?[]const u8 = null;
-
-    while (iter.next()) |token| {
-        if (token.len == 0) continue;
-
-        if (std.mem.eql(u8, token, "--")) {
-            // Flush pending parameter
-            if (pending_name) |name| {
-                try current_list.append(allocator, .{ .name = name });
-                pending_name = null;
-            }
-            current_list = &outputs;
-            continue;
-        }
-
-        if (std.mem.eql(u8, token, "(")) {
-            // Start of nested effect - parse until matching )
-            if (pending_name) |name| {
-                var nested_tokens: std.ArrayListUnmanaged([]const u8) = .{};
-                defer nested_tokens.deinit(allocator);
-                var depth: usize = 1;
-
-                while (iter.next()) |nested_token| {
-                    if (std.mem.eql(u8, nested_token, "(")) {
-                        depth += 1;
-                        try nested_tokens.append(allocator, nested_token);
-                    } else if (std.mem.eql(u8, nested_token, ")")) {
-                        depth -= 1;
-                        if (depth == 0) break;
-                        try nested_tokens.append(allocator, nested_token);
-                    } else {
-                        try nested_tokens.append(allocator, nested_token);
-                    }
-                }
-
-                // Join and recursively parse (don't free nested_str - arena will handle it)
-                const nested_str = try std.mem.join(allocator, " ", nested_tokens.items);
-                const nested_effect = try makeSimpleEffect(allocator, nested_str);
-                const nested_ptr = try allocator.create(StackEffect);
-                nested_ptr.* = nested_effect;
-
-                try current_list.append(allocator, .{
-                    .name = name,
-                    .quotation_effect = nested_ptr,
-                });
-                pending_name = null;
-            }
-            continue;
-        }
-
-        // Flush previous pending parameter
-        if (pending_name) |name| {
-            try current_list.append(allocator, .{ .name = name });
-        }
-
-        // Check if this token ends with : (annotation marker)
-        if (token.len > 1 and token[token.len - 1] == ':') {
-            pending_name = token[0 .. token.len - 1];
-        } else {
-            pending_name = token;
-        }
-    }
-
-    // Flush final pending parameter
-    if (pending_name) |name| {
-        try current_list.append(allocator, .{ .name = name });
-    }
-
-    return StackEffect{
-        .inputs = try inputs.toOwnedSlice(allocator),
-        .outputs = try outputs.toOwnedSlice(allocator),
-    };
-}
-
-const Primitive = struct {
-    name: []const u8,
-    stack_effect: ?[]const u8 = null,
-    func: NativeFn,
-    parse_time: bool = false,
-};
+// Import from extracted modules
+const primitives_mod = @import("primitives/mod.zig");
+pub const InterpreterError = primitives_mod.InterpreterError;
+const Primitive = primitives_mod.Primitive;
+const makeSimpleEffect = primitives_mod.makeSimpleEffect;
+const popInteger = primitives_mod.popInteger;
+const popBoolean = primitives_mod.popBoolean;
+const popQuotation = primitives_mod.popQuotation;
+const popSymbol = primitives_mod.popSymbol;
+const popString = primitives_mod.popString;
+const popStackEffect = primitives_mod.popStackEffect;
+const popVector = primitives_mod.popVector;
+const popByteArray = primitives_mod.popByteArray;
+const popStream = primitives_mod.popStream;
 
 const primitives = [_]Primitive{
     // Stack manipulation primitives
@@ -2910,92 +2806,6 @@ fn nativeWithParameter(ctx: *Context) anyerror!void {
     const result = ctx.executeQuotation(body_quot);
     ctx.popParameterFrame();
     try result;
-}
-
-// =============================================================================
-// Helper functions
-// =============================================================================
-
-fn popInteger(ctx: *Context) !i64 {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .integer => |i| i,
-        .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter => error.TypeError,
-        .stack_effect, .parse_time_marker, .error_value => error.TypeError,
-    };
-}
-
-fn popBoolean(ctx: *Context) !bool {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .boolean => |b| b,
-        .integer => |i| i != 0,
-        .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter => error.TypeError,
-        .stack_effect, .parse_time_marker, .error_value => error.TypeError,
-    };
-}
-
-fn popQuotation(ctx: *Context) !Quotation {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .quotation => |q| q,
-        .integer, .boolean, .string, .symbol, .array, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter => error.TypeError,
-        .stack_effect, .parse_time_marker, .error_value => error.TypeError,
-    };
-}
-
-fn popSymbol(ctx: *Context) ![]const u8 {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .symbol => |s| s,
-        .integer, .boolean, .string, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter => error.TypeError,
-        .stack_effect, .parse_time_marker, .error_value => error.TypeError,
-    };
-}
-
-fn popString(ctx: *Context) ![]const u8 {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .string => |s| s,
-        .integer, .boolean, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter => error.TypeError,
-        .stack_effect, .parse_time_marker, .error_value => error.TypeError,
-    };
-}
-
-fn popStackEffect(ctx: *Context) !StackEffect {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .stack_effect => |se| se,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter => error.TypeError,
-        .parse_time_marker, .error_value => error.TypeError,
-    };
-}
-
-fn popVector(ctx: *Context) !*Vector {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .vector => |v| v,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .byte_array, .set, .mutable_map, .stream, .parameter => error.TypeError,
-        .stack_effect, .parse_time_marker, .error_value => error.TypeError,
-    };
-}
-
-fn popByteArray(ctx: *Context) !*ByteArray {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .byte_array => |b| b,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .set, .mutable_map, .stream, .parameter => error.TypeError,
-        .stack_effect, .parse_time_marker, .error_value => error.TypeError,
-    };
-}
-
-fn popStream(ctx: *Context) !*Stream {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .stream => |s| s,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .parameter => error.TypeError,
-        .stack_effect, .parse_time_marker, .error_value => error.TypeError,
-    };
 }
 
 // =============================================================================
