@@ -43,6 +43,15 @@ const popVector = primitives_mod.popVector;
 const popByteArray = primitives_mod.popByteArray;
 const popStream = primitives_mod.popStream;
 
+const mapFileOpenError = primitives_mod.mapFileOpenError;
+const mapFileCreateError = primitives_mod.mapFileCreateError;
+const mapFileWriteError = primitives_mod.mapFileWriteError;
+const mapFileReadError = primitives_mod.mapFileReadError;
+const mapFileSyncError = primitives_mod.mapFileSyncError;
+const mapSeekError = primitives_mod.mapSeekError;
+const mapGetPosError = primitives_mod.mapGetPosError;
+const ensureStreamOpen = primitives_mod.ensureStreamOpen;
+
 const stack_mod = primitives_mod.stack;
 const nativeDup = stack_mod.nativeDup;
 const nativeDrop = stack_mod.nativeDrop;
@@ -72,6 +81,10 @@ const nativeIf = control_mod.nativeIf;
 const parse_time_mod = primitives_mod.parse_time;
 const nativeParseTime = parse_time_mod.nativeParseTime;
 const nativeParseUntil = parse_time_mod.nativeParseUntil;
+
+const utf8CodepointCount = primitives_mod.utf8CodepointCount;
+const utf8NthCodepoint = primitives_mod.utf8NthCodepoint;
+const utf8SliceByCodepoints = primitives_mod.utf8SliceByCodepoints;
 
 const remaining_primitives = [_]Primitive{
     // Error handling
@@ -713,59 +726,6 @@ fn nativeBenchmark(ctx: *Context) anyerror!void {
     hash.put(alloc, key5, .{ .integer = @intCast(local_stats.peak_stack_depth) }) catch return error.OutOfMemory;
 
     try ctx.stack.push(.{ .hash = hash });
-}
-
-// =============================================================================
-// UTF-8 Helpers
-// =============================================================================
-
-/// Get the byte slice for a codepoint at the given codepoint index.
-/// Assumes valid UTF-8 (strings are valid by construction).
-fn utf8NthCodepoint(s: []const u8, n: usize) ?[]const u8 {
-    const utf8 = std.unicode.Utf8View.initUnchecked(s);
-    var iter = utf8.iterator();
-    var idx: usize = 0;
-    while (iter.nextCodepointSlice()) |slice| {
-        if (idx == n) return slice;
-        idx += 1;
-    }
-    return null; // Index out of bounds
-}
-
-/// Get byte range for codepoint slice [start, end).
-/// Assumes valid UTF-8 (strings are valid by construction).
-fn utf8SliceByCodepoints(s: []const u8, start: usize, end: usize) ?struct { start_byte: usize, end_byte: usize } {
-    const utf8 = std.unicode.Utf8View.initUnchecked(s);
-    var iter = utf8.iterator();
-    var cp_idx: usize = 0;
-    var start_byte: usize = 0;
-    var byte_pos: usize = 0;
-
-    while (iter.nextCodepointSlice()) |slice| {
-        if (cp_idx == start) start_byte = byte_pos;
-        byte_pos += slice.len;
-        if (cp_idx + 1 == end) {
-            return .{ .start_byte = start_byte, .end_byte = byte_pos };
-        }
-        cp_idx += 1;
-    }
-    // Handle case where end == total codepoint count
-    if (cp_idx == end) {
-        return .{ .start_byte = start_byte, .end_byte = byte_pos };
-    }
-    return null; // Invalid range
-}
-
-/// Count codepoints in a UTF-8 string.
-/// Assumes valid UTF-8 (strings are valid by construction).
-fn utf8CodepointCount(s: []const u8) usize {
-    const utf8 = std.unicode.Utf8View.initUnchecked(s);
-    var iter = utf8.iterator();
-    var count: usize = 0;
-    while (iter.nextCodepointSlice()) |_| {
-        count += 1;
-    }
-    return count;
 }
 
 // =============================================================================
@@ -1806,33 +1766,20 @@ fn nativeStreamOpen(ctx: *Context) anyerror!void {
     // Open file based on mode
     const file = switch (mode) {
         .read => std.fs.cwd().openFile(path, .{ .mode = .read_only }) catch |err| {
-            return switch (err) {
-                error.FileNotFound => error.FileNotFound,
-                error.AccessDenied => error.PermissionDenied,
-                else => error.IOError,
-            };
+            return mapFileOpenError(err);
         },
         .write => std.fs.cwd().createFile(path, .{ .truncate = true }) catch |err| {
-            return switch (err) {
-                error.AccessDenied => error.PermissionDenied,
-                else => error.IOError,
-            };
+            return mapFileCreateError(err);
         },
         .append => blk: {
             const f = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch |open_err| {
                 // File doesn't exist, create it
                 if (open_err == error.FileNotFound) {
                     break :blk std.fs.cwd().createFile(path, .{}) catch |err| {
-                        return switch (err) {
-                            error.AccessDenied => error.PermissionDenied,
-                            else => error.IOError,
-                        };
+                        return mapFileCreateError(err);
                     };
                 }
-                return switch (open_err) {
-                    error.AccessDenied => error.PermissionDenied,
-                    else => error.IOError,
-                };
+                return mapFileOpenError(open_err);
             };
             // Seek to end for append mode
             f.seekFromEnd(0) catch return error.IOError;
@@ -1843,16 +1790,10 @@ fn nativeStreamOpen(ctx: *Context) anyerror!void {
                 // Try creating if doesn't exist
                 if (err == error.FileNotFound) {
                     break :blk std.fs.cwd().createFile(path, .{ .read = true }) catch |create_err| {
-                        return switch (create_err) {
-                            error.AccessDenied => error.PermissionDenied,
-                            else => error.IOError,
-                        };
+                        return mapFileCreateError(create_err);
                     };
                 }
-                return switch (err) {
-                    error.AccessDenied => error.PermissionDenied,
-                    else => error.IOError,
-                };
+                return mapFileOpenError(err);
             };
         },
     };
@@ -1871,10 +1812,7 @@ fn nativeStreamOpen(ctx: *Context) anyerror!void {
 /// stream-close ( stream -- ) - Close a stream
 fn nativeStreamClose(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
-
-    if (stream.closed) {
-        return error.ClosedStream;
-    }
+    try ensureStreamOpen(stream);
 
     // Don't actually close stdin/stdout/stderr
     if (std.mem.eql(u8, stream.name, "stdin") or
@@ -1897,10 +1835,7 @@ fn nativeStreamClose(ctx: *Context) anyerror!void {
 fn nativeStreamWrite(ctx: *Context) anyerror!void {
     const bytes_val = try ctx.stack.pop();
     const stream = try popStream(ctx);
-
-    if (stream.closed) {
-        return error.ClosedStream;
-    }
+    try ensureStreamOpen(stream);
 
     // Get bytes to write - accept byte arrays or strings
     const bytes: []const u8 = switch (bytes_val) {
@@ -1911,16 +1846,7 @@ fn nativeStreamWrite(ctx: *Context) anyerror!void {
 
     // Write to file
     const written = stream.file.write(bytes) catch |err| {
-        return switch (err) {
-            error.BrokenPipe => error.IOError,
-            error.ConnectionResetByPeer => error.IOError,
-            error.DiskQuota => error.IOError,
-            error.FileTooBig => error.IOError,
-            error.InputOutput => error.IOError,
-            error.NoSpaceLeft => error.IOError,
-            error.AccessDenied => error.PermissionDenied,
-            else => error.IOError,
-        };
+        return mapFileWriteError(err);
     };
 
     try ctx.stack.push(.{ .integer = @intCast(written) });
@@ -1929,10 +1855,7 @@ fn nativeStreamWrite(ctx: *Context) anyerror!void {
 /// stream-flush ( stream -- ) - Flush stream buffer
 fn nativeStreamFlush(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
-
-    if (stream.closed) {
-        return error.ClosedStream;
-    }
+    try ensureStreamOpen(stream);
 
     // Note: Zig's std.fs.File doesn't have a direct flush method for unbuffered I/O
     // For buffered streams, we'd need to sync. For now, use sync for file streams.
@@ -1942,11 +1865,7 @@ fn nativeStreamFlush(ctx: *Context) anyerror!void {
         !std.mem.eql(u8, stream.name, "stderr"))
     {
         stream.file.sync() catch |err| {
-            return switch (err) {
-                error.InputOutput => error.IOError,
-                error.AccessDenied => error.PermissionDenied,
-                else => error.IOError,
-            };
+            return mapFileSyncError(err);
         };
     }
 }
@@ -1959,10 +1878,7 @@ fn nativeStreamFlush(ctx: *Context) anyerror!void {
 fn nativeStreamRead(ctx: *Context) anyerror!void {
     const n = try popInteger(ctx);
     const stream = try popStream(ctx);
-
-    if (stream.closed) {
-        return error.ClosedStream;
-    }
+    try ensureStreamOpen(stream);
 
     if (n < 0) {
         return error.InvalidArgument;
@@ -1973,15 +1889,7 @@ fn nativeStreamRead(ctx: *Context) anyerror!void {
     defer alloc.free(buffer);
 
     const bytes_read = stream.file.read(buffer) catch |err| {
-        return switch (err) {
-            error.InputOutput => error.IOError,
-            error.AccessDenied => error.PermissionDenied,
-            error.BrokenPipe => error.IOError,
-            error.ConnectionResetByPeer => error.IOError,
-            error.ConnectionTimedOut => error.IOError,
-            error.NotOpenForReading => error.PermissionDenied,
-            else => error.IOError,
-        };
+        return mapFileReadError(err);
     };
 
     const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
@@ -1997,10 +1905,7 @@ fn nativeStreamRead(ctx: *Context) anyerror!void {
 /// stream-read-line ( stream -- str/f ) - Read line (no newline), f at EOF
 fn nativeStreamReadLine(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
-
-    if (stream.closed) {
-        return error.ClosedStream;
-    }
+    try ensureStreamOpen(stream);
 
     const alloc = ctx.quotationAllocator();
     var line_buf: std.ArrayListUnmanaged(u8) = .{};
@@ -2009,14 +1914,7 @@ fn nativeStreamReadLine(ctx: *Context) anyerror!void {
     while (true) {
         var byte_buf: [1]u8 = undefined;
         const bytes_read = stream.file.read(&byte_buf) catch |err| {
-            return switch (err) {
-                error.InputOutput => error.IOError,
-                error.AccessDenied => error.PermissionDenied,
-                error.BrokenPipe => error.IOError,
-                error.ConnectionResetByPeer => error.IOError,
-                error.NotOpenForReading => error.PermissionDenied,
-                else => error.IOError,
-            };
+            return mapFileReadError(err);
         };
 
         if (bytes_read == 0) {
@@ -2039,11 +1937,7 @@ fn nativeStreamReadLine(ctx: *Context) anyerror!void {
         if (byte == '\r') {
             var peek_buf: [1]u8 = undefined;
             const peek_read = stream.file.read(&peek_buf) catch |err| {
-                return switch (err) {
-                    error.InputOutput => error.IOError,
-                    error.AccessDenied => error.PermissionDenied,
-                    else => error.IOError,
-                };
+                return mapFileReadError(err);
             };
             if (peek_read > 0 and peek_buf[0] == '\n') {
                 break;
@@ -2068,10 +1962,7 @@ fn nativeStreamReadLine(ctx: *Context) anyerror!void {
 /// stream-read-all ( stream -- bytes ) - Read all remaining content
 fn nativeStreamReadAll(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
-
-    if (stream.closed) {
-        return error.ClosedStream;
-    }
+    try ensureStreamOpen(stream);
 
     const alloc = ctx.quotationAllocator();
 
@@ -2083,14 +1974,7 @@ fn nativeStreamReadAll(ctx: *Context) anyerror!void {
     var buffer: [4096]u8 = undefined;
     while (true) {
         const bytes_read = stream.file.read(&buffer) catch |err| {
-            return switch (err) {
-                error.InputOutput => error.IOError,
-                error.AccessDenied => error.PermissionDenied,
-                error.BrokenPipe => error.IOError,
-                error.ConnectionResetByPeer => error.IOError,
-                error.NotOpenForReading => error.PermissionDenied,
-                else => error.IOError,
-            };
+            return mapFileReadError(err);
         };
 
         // EOF?
@@ -2122,16 +2006,10 @@ fn nativeStreamReadAll(ctx: *Context) anyerror!void {
 /// stream-tell ( stream -- pos ) - Get current stream position
 fn nativeStreamTell(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
-
-    if (stream.closed) {
-        return error.ClosedStream;
-    }
+    try ensureStreamOpen(stream);
 
     const pos = stream.file.getPos() catch |err| {
-        return switch (err) {
-            error.Unseekable => error.NotSeekable,
-            else => error.IOError,
-        };
+        return mapGetPosError(err);
     };
 
     try ctx.stack.push(.{ .integer = @intCast(pos) });
@@ -2141,20 +2019,14 @@ fn nativeStreamTell(ctx: *Context) anyerror!void {
 fn nativeStreamSeek(ctx: *Context) anyerror!void {
     const pos = try popInteger(ctx);
     const stream = try popStream(ctx);
-
-    if (stream.closed) {
-        return error.ClosedStream;
-    }
+    try ensureStreamOpen(stream);
 
     if (pos < 0) {
         return error.InvalidArgument;
     }
 
     stream.file.seekTo(@intCast(pos)) catch |err| {
-        return switch (err) {
-            error.Unseekable => error.NotSeekable,
-            else => error.IOError,
-        };
+        return mapSeekError(err);
     };
 }
 
@@ -2162,16 +2034,10 @@ fn nativeStreamSeek(ctx: *Context) anyerror!void {
 fn nativeStreamSeekEnd(ctx: *Context) anyerror!void {
     const offset = try popInteger(ctx);
     const stream = try popStream(ctx);
-
-    if (stream.closed) {
-        return error.ClosedStream;
-    }
+    try ensureStreamOpen(stream);
 
     stream.file.seekFromEnd(offset) catch |err| {
-        return switch (err) {
-            error.Unseekable => error.NotSeekable,
-            else => error.IOError,
-        };
+        return mapSeekError(err);
     };
 }
 
@@ -2182,10 +2048,7 @@ fn nativeStreamSeekEnd(ctx: *Context) anyerror!void {
 /// buffering-mode ( stream -- symbol ) - Get stream buffering mode
 fn nativeBufferingMode(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
-
-    if (stream.closed) {
-        return error.ClosedStream;
-    }
+    try ensureStreamOpen(stream);
 
     try ctx.stack.push(.{ .symbol = stream.buffering.toSymbol() });
 }
@@ -2194,10 +2057,7 @@ fn nativeBufferingMode(ctx: *Context) anyerror!void {
 fn nativeSetBufferingMode(ctx: *Context) anyerror!void {
     const mode_sym = try popSymbol(ctx);
     const stream = try popStream(ctx);
-
-    if (stream.closed) {
-        return error.ClosedStream;
-    }
+    try ensureStreamOpen(stream);
 
     const mode: BufferingMode = if (std.mem.eql(u8, mode_sym, "none"))
         .none
@@ -2225,9 +2085,7 @@ fn nativeStreamToFd(ctx: *Context) anyerror!void {
     }
 
     const stream = try popStream(ctx);
-    if (stream.closed) {
-        return error.ClosedStream;
-    }
+    try ensureStreamOpen(stream);
 
     const fd: i64 = @intCast(stream.file.handle);
     try ctx.stack.push(.{ .integer = fd });
