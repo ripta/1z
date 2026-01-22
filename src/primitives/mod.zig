@@ -15,3 +15,19 @@ pub const popStackEffect = helpers.popStackEffect;
 pub const popVector = helpers.popVector;
 pub const popByteArray = helpers.popByteArray;
 pub const popStream = helpers.popStream;
+
+// Domain modules
+pub const stack = @import("stack.zig");
+pub const arithmetic = @import("arithmetic.zig");
+pub const control = @import("control.zig");
+pub const strings = @import("strings.zig");
+pub const misc = @import("misc.zig");
+pub const parse_time = @import("parse_time.zig");
+
+// Aggregated primitives from extracted modules
+pub const extracted_primitives = stack.primitives ++
+    arithmetic.primitives ++
+    control.primitives ++
+    strings.primitives ++
+    misc.primitives ++
+    parse_time.primitives;

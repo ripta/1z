@@ -28,10 +28,10 @@ const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const parser = @import("parser.zig");
 const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
 
-// Import from extracted modules
 const primitives_mod = @import("primitives/mod.zig");
 pub const InterpreterError = primitives_mod.InterpreterError;
 const Primitive = primitives_mod.Primitive;
+
 const makeSimpleEffect = primitives_mod.makeSimpleEffect;
 const popInteger = primitives_mod.popInteger;
 const popBoolean = primitives_mod.popBoolean;
@@ -43,49 +43,41 @@ const popVector = primitives_mod.popVector;
 const popByteArray = primitives_mod.popByteArray;
 const popStream = primitives_mod.popStream;
 
-const primitives = [_]Primitive{
-    // Stack manipulation primitives
-    .{ .name = "dup", .stack_effect = "a -- a a", .func = nativeDup },
-    .{ .name = "drop", .stack_effect = "a --", .func = nativeDrop },
-    .{ .name = "swap", .stack_effect = "a b -- b a", .func = nativeSwap },
-    .{ .name = "over", .stack_effect = "a b -- a b a", .func = nativeOver },
-    .{ .name = "dip", .stack_effect = "x quot -- x", .func = nativeDip },
-    .{ .name = "wipe", .stack_effect = "... --", .func = nativeWipe },
-    // Integer arithmetic primitives
-    .{ .name = "+", .stack_effect = "a b -- a+b", .func = nativeAdd },
-    .{ .name = "-", .stack_effect = "a b -- a-b", .func = nativeSub },
-    .{ .name = "*", .stack_effect = "a b -- a*b", .func = nativeMul },
-    .{ .name = "/", .stack_effect = "a b -- a/b", .func = nativeDiv },
-    .{ .name = "%", .stack_effect = "a b -- a%b", .func = nativeMod },
-    // Integer arithmetic with wraparound
-    .{ .name = "+%", .stack_effect = "a b -- a+b", .func = nativeAddWrap },
-    .{ .name = "-%", .stack_effect = "a b -- a-b", .func = nativeSubWrap },
-    .{ .name = "*%", .stack_effect = "a b -- a*b", .func = nativeMulWrap },
-    // Control flow, constants, and comparators
-    .{ .name = "call", .stack_effect = "quot --", .func = nativeCall },
-    .{ .name = ";", .stack_effect = "name quot --", .func = nativeSemicolon },
-    .{ .name = "t", .stack_effect = "-- t", .func = nativeTrue },
-    .{ .name = "f", .stack_effect = "-- f", .func = nativeFalse },
-    .{ .name = "=", .stack_effect = "a b -- ?", .func = nativeEq },
-    .{ .name = "<", .stack_effect = "a b -- ?", .func = nativeLt },
-    .{ .name = ">", .stack_effect = "a b -- ?", .func = nativeGt },
-    .{ .name = "if", .stack_effect = "? true-quot false-quot --", .func = nativeIf },
-    // String manipulation
-    .{ .name = "to-string", .stack_effect = "value -- string", .func = nativeToString },
-    .{ .name = ">string", .stack_effect = "value -- string", .func = nativeAsString },
-    .{ .name = ">bytes", .stack_effect = "string -- byte-array", .func = nativeToBytes },
-    .{ .name = "bytes>", .stack_effect = "byte-array -- string", .func = nativeBytesToString },
-    // Documentation
-    .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
+const stack_mod = primitives_mod.stack;
+const nativeDup = stack_mod.nativeDup;
+const nativeDrop = stack_mod.nativeDrop;
+const nativeSwap = stack_mod.nativeSwap;
+const nativeOver = stack_mod.nativeOver;
+const nativeDip = stack_mod.nativeDip;
+const nativeWipe = stack_mod.nativeWipe;
+
+const arithmetic_mod = primitives_mod.arithmetic;
+const nativeAdd = arithmetic_mod.nativeAdd;
+const nativeSub = arithmetic_mod.nativeSub;
+const nativeMul = arithmetic_mod.nativeMul;
+const nativeDiv = arithmetic_mod.nativeDiv;
+const nativeMod = arithmetic_mod.nativeMod;
+const nativeAddWrap = arithmetic_mod.nativeAddWrap;
+const nativeSubWrap = arithmetic_mod.nativeSubWrap;
+const nativeMulWrap = arithmetic_mod.nativeMulWrap;
+const nativeEq = arithmetic_mod.nativeEq;
+const nativeLt = arithmetic_mod.nativeLt;
+const nativeGt = arithmetic_mod.nativeGt;
+
+const control_mod = primitives_mod.control;
+const nativeCall = control_mod.nativeCall;
+const nativeSemicolon = control_mod.nativeSemicolon;
+const nativeIf = control_mod.nativeIf;
+
+const parse_time_mod = primitives_mod.parse_time;
+const nativeParseTime = parse_time_mod.nativeParseTime;
+const nativeParseUntil = parse_time_mod.nativeParseUntil;
+
+const remaining_primitives = [_]Primitive{
     // Error handling
     .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ) --", .func = nativeRecover },
     .{ .name = "cleanup", .stack_effect = "body-quot cleanup-quot --", .func = nativeCleanup },
     .{ .name = "rethrow", .stack_effect = "error --", .func = nativeRethrow },
-    // Library loading
-    .{ .name = "load", .stack_effect = "filename --", .func = nativeLoad },
-    // Parse-time primitives
-    .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTime },
-    .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .func = nativeParseUntil },
     // Data structure creation and manipulation
     .{ .name = "make-hash", .stack_effect = "quotation -- hash", .func = nativeMakeHash },
     .{ .name = "make-vector", .stack_effect = "quotation -- vector", .func = nativeMakeVector },
@@ -94,7 +86,6 @@ const primitives = [_]Primitive{
     .{ .name = "make-mutable-map", .stack_effect = "quotation -- mmap", .func = nativeMakeMutableMap },
     .{ .name = "@set!", .stack_effect = "mmap key value -- mmap", .func = nativeAtSetMut },
     .{ .name = "@remove!", .stack_effect = "mmap key -- mmap", .func = nativeAtRemoveMut },
-    .{ .name = "1array", .stack_effect = "elem -- array", .func = native1Array },
     // Functional programming primitives
     .{ .name = "curry", .stack_effect = "x quot -- quot'", .func = nativeCurry },
     .{ .name = "compose", .stack_effect = "quot1 quot2 -- quot'", .func = nativeCompose },
@@ -158,8 +149,11 @@ const primitives = [_]Primitive{
     .{ .name = "with-parameter", .stack_effect = "value param quot --", .func = nativeWithParameter },
 };
 
+// All primitives: extracted modules + remaining local ones
+const all_primitives = primitives_mod.extracted_primitives ++ remaining_primitives;
+
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
-    for (primitives) |p| {
+    for (all_primitives) |p| {
         const effect: ?StackEffect = if (p.stack_effect) |raw|
             try makeSimpleEffect(allocator, raw)
         else
@@ -175,320 +169,8 @@ pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
 }
 
 // =============================================================================
-// Primitive implementations
+// Primitive implementations (remaining - not yet extracted to modules)
 // =============================================================================
-
-/// dup ( a -- a a ) - Duplicate top of stack
-fn nativeDup(ctx: *Context) anyerror!void {
-    const val = try ctx.stack.peek();
-    try ctx.stack.push(val);
-}
-
-/// drop ( a -- ) - Remove top of stack
-fn nativeDrop(ctx: *Context) anyerror!void {
-    _ = try ctx.stack.pop();
-}
-
-/// swap ( a b -- b a ) - Swap top two items
-fn nativeSwap(ctx: *Context) anyerror!void {
-    const b = try ctx.stack.pop();
-    const a = try ctx.stack.pop();
-    try ctx.stack.push(b);
-    try ctx.stack.push(a);
-}
-
-/// over ( x y -- x y x ) - Copy second item to top
-fn nativeOver(ctx: *Context) anyerror!void {
-    const y = try ctx.stack.pop();
-    const x = try ctx.stack.peek();
-    try ctx.stack.push(y);
-    try ctx.stack.push(x);
-}
-
-/// dip ( x quot -- x ) - Execute quotation with x temporarily removed
-fn nativeDip(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
-    const x = try ctx.stack.pop();
-    try ctx.executeQuotation(quot);
-    try ctx.stack.push(x);
-}
-
-/// wipe ( ... -- ) - Clear the entire stack
-fn nativeWipe(ctx: *Context) anyerror!void {
-    ctx.stack.clear();
-}
-
-/// + ( a b -- a+b ) - Add two integers
-fn nativeAdd(ctx: *Context) anyerror!void {
-    const b = try popInteger(ctx);
-    const a = try popInteger(ctx);
-    const result = @addWithOverflow(a, b);
-    if (result[1] != 0) return error.IntegerOverflow;
-    try ctx.stack.push(.{ .integer = result[0] });
-}
-
-/// - ( a b -- a-b ) - Subtract: a minus b
-fn nativeSub(ctx: *Context) anyerror!void {
-    const b = try popInteger(ctx);
-    const a = try popInteger(ctx);
-    const result = @subWithOverflow(a, b);
-    if (result[1] != 0) return error.IntegerOverflow;
-    try ctx.stack.push(.{ .integer = result[0] });
-}
-
-/// * ( a b -- a*b ) - Multiply two integers
-fn nativeMul(ctx: *Context) anyerror!void {
-    const b = try popInteger(ctx);
-    const a = try popInteger(ctx);
-    const result = @mulWithOverflow(a, b);
-    if (result[1] != 0) return error.IntegerOverflow;
-    try ctx.stack.push(.{ .integer = result[0] });
-}
-
-/// / ( a b -- a/b ) - Integer division
-fn nativeDiv(ctx: *Context) anyerror!void {
-    const b = try popInteger(ctx);
-    const a = try popInteger(ctx);
-    if (b == 0) return error.DivisionByZero;
-    if (a == std.math.minInt(i64) and b == -1) return error.IntegerOverflow;
-    try ctx.stack.push(.{ .integer = @divTrunc(a, b) });
-}
-
-/// % ( a b -- a%b ) - Modulo (remainder)
-fn nativeMod(ctx: *Context) anyerror!void {
-    const b = try popInteger(ctx);
-    const a = try popInteger(ctx);
-    if (b == 0) return error.DivisionByZero;
-    try ctx.stack.push(.{ .integer = @mod(a, b) });
-}
-
-/// +% ( a b -- a+b ) - Add two integers with wraparound on overflow
-fn nativeAddWrap(ctx: *Context) anyerror!void {
-    const b = try popInteger(ctx);
-    const a = try popInteger(ctx);
-    try ctx.stack.push(.{ .integer = a +% b });
-}
-
-/// -% ( a b -- a-b ) - Subtract with wraparound on overflow
-fn nativeSubWrap(ctx: *Context) anyerror!void {
-    const b = try popInteger(ctx);
-    const a = try popInteger(ctx);
-    try ctx.stack.push(.{ .integer = a -% b });
-}
-
-/// *% ( a b -- a*b ) - Multiply with wraparound on overflow
-fn nativeMulWrap(ctx: *Context) anyerror!void {
-    const b = try popInteger(ctx);
-    const a = try popInteger(ctx);
-    try ctx.stack.push(.{ .integer = a *% b });
-}
-
-/// call ( quot -- ) - Execute a quotation
-fn nativeCall(ctx: *Context) anyerror!void {
-    const instrs = try popQuotation(ctx);
-    try ctx.executeQuotation(instrs);
-}
-
-/// ; ( name: quot -- ) or ( name: value -- ) or ( name: ( effect ) quot -- ) or ( name: parse-time quot -- ) - Define a new word
-/// Supports both quotation definitions (compound words) and value definitions (words that push a value)
-fn nativeSemicolon(ctx: *Context) anyerror!void {
-    const top_val = try ctx.stack.pop();
-
-    // Check for optional metadata (stack effect and/or parse-time marker)
-    // Stack could be: symbol quot
-    //            or: symbol value
-    //            or: symbol stack-effect quot
-    //            or: symbol parse-time quot
-    //            or: symbol parse-time stack-effect quot
-    var stack_effect_val: ?StackEffect = null;
-    var is_parse_time = false;
-
-    // Loop to collect metadata until we find the symbol
-    while (true) {
-        const next_val = try ctx.stack.peek();
-        switch (next_val) {
-            .stack_effect => |se| {
-                _ = try ctx.stack.pop();
-                stack_effect_val = se;
-            },
-            .parse_time_marker => {
-                _ = try ctx.stack.pop();
-                is_parse_time = true;
-            },
-            .symbol => break, // Found the name, stop
-            else => return error.TypeError, // Invalid definition syntax
-        }
-    }
-
-    const name = try popSymbol(ctx);
-    const alloc = ctx.quotationAllocator();
-    // Copy name to arena so it persists after input buffer is reused
-    const name_copy = try alloc.dupe(u8, name);
-
-    // Handle different value types
-    const instructions = switch (top_val) {
-        .quotation => |quot| quot.instructions,
-        else => blk: {
-            // Value definition - create a word that pushes the value
-            const push_instr = try alloc.alloc(Instruction, 1);
-            push_instr[0] = .{ .op = .{ .push_literal = top_val }, .line = 0 };
-            break :blk push_instr;
-        },
-    };
-
-    try ctx.dictionary.put(name_copy, WordDefinition{
-        .name = name_copy,
-        .parse_time = is_parse_time,
-        .stack_effect = stack_effect_val,
-        .action = .{ .compound = instructions },
-    });
-}
-
-fn nativeTrue(ctx: *Context) anyerror!void {
-    try ctx.stack.push(.{ .boolean = true });
-}
-
-fn nativeFalse(ctx: *Context) anyerror!void {
-    try ctx.stack.push(.{ .boolean = false });
-}
-
-/// = ( a b -- ? ) - Equality comparison
-fn nativeEq(ctx: *Context) anyerror!void {
-    const b = try ctx.stack.pop();
-    const a = try ctx.stack.pop();
-    const result = switch (a) {
-        .integer => |ai| switch (b) {
-            .integer => |bi| ai == bi,
-            else => false,
-        },
-        .boolean => |ab| switch (b) {
-            .boolean => |bb| ab == bb,
-            else => false,
-        },
-        .string => |as| switch (b) {
-            .string => |bs| std.mem.eql(u8, as, bs),
-            else => false,
-        },
-        .symbol => |as| switch (b) {
-            .symbol => |bs| std.mem.eql(u8, as, bs),
-            else => false,
-        },
-        .set => a.eql(b),
-        .array => a.eql(b),
-        .hash => a.eql(b),
-        .vector => a.eql(b),
-        .mutable_map => a.eql(b),
-        else => false,
-    };
-    try ctx.stack.push(.{ .boolean = result });
-}
-
-/// < ( a b -- ? ) - Less than
-fn nativeLt(ctx: *Context) anyerror!void {
-    const b = try popInteger(ctx);
-    const a = try popInteger(ctx);
-    try ctx.stack.push(.{ .boolean = a < b });
-}
-
-/// > ( a b -- ? ) - Greater than
-fn nativeGt(ctx: *Context) anyerror!void {
-    const b = try popInteger(ctx);
-    const a = try popInteger(ctx);
-    try ctx.stack.push(.{ .boolean = a > b });
-}
-
-/// if ( ? true-quot false-quot -- ) - Conditional execution
-fn nativeIf(ctx: *Context) anyerror!void {
-    const false_quot = try popQuotation(ctx);
-    const true_quot = try popQuotation(ctx);
-    const cond = try popBoolean(ctx);
-    try ctx.executeQuotation(if (cond) true_quot else false_quot);
-}
-
-/// to-string ( value -- string ) - Convert any value to its string representation,
-/// including quotes for strings
-fn nativeToString(ctx: *Context) anyerror!void {
-    const val = try ctx.stack.pop();
-    const alloc = ctx.quotationAllocator();
-    var buffer: std.ArrayListUnmanaged(u8) = .{};
-    try val.write(buffer.writer(alloc));
-    try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
-}
-
-/// >string ( value -- string ) - Convert value to string, strings pass through unquoted,
-/// in contrast to to-string
-fn nativeAsString(ctx: *Context) anyerror!void {
-    const val = try ctx.stack.pop();
-    switch (val) {
-        .string => |s| {
-            try ctx.stack.push(.{ .string = s });
-        },
-        else => {
-            const alloc = ctx.quotationAllocator();
-            var buffer: std.ArrayListUnmanaged(u8) = .{};
-            try val.write(buffer.writer(alloc));
-            try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
-        },
-    }
-}
-
-/// >bytes ( string -- byte-array ) - Convert string to byte array (UTF-8 encoded bytes)
-fn nativeToBytes(ctx: *Context) anyerror!void {
-    const val = try ctx.stack.pop();
-    switch (val) {
-        .string => |s| {
-            const alloc = ctx.quotationAllocator();
-            const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-            ba.* = ByteArray{};
-            ba.ensureTotalCapacity(alloc, s.len) catch return error.OutOfMemory;
-            for (s) |byte| {
-                ba.appendAssumeCapacity(byte);
-            }
-            try ctx.stack.push(.{ .byte_array = ba });
-        },
-        else => return error.TypeError,
-    }
-}
-
-/// bytes> ( byte-array -- string ) - Convert byte array to string (interprets as UTF-8)
-fn nativeBytesToString(ctx: *Context) anyerror!void {
-    const val = try ctx.stack.pop();
-    switch (val) {
-        .byte_array => |b| {
-            const alloc = ctx.quotationAllocator();
-            const result = alloc.dupe(u8, b.items) catch return error.OutOfMemory;
-            try ctx.stack.push(.{ .string = result });
-        },
-        else => return error.TypeError,
-    }
-}
-
-/// help ( symbol -- ) - Display help for a word
-fn nativeHelp(ctx: *Context) anyerror!void {
-    const name = try popSymbol(ctx);
-
-    const stdout_file: std.fs.File = .stdout();
-    var stdout_buf: [4096]u8 = undefined;
-    var stdout = stdout_file.writer(&stdout_buf);
-    const writer = &stdout.interface;
-
-    if (ctx.dictionary.get(name)) |word| {
-        try writer.print("{s}", .{word.name});
-        if (word.stack_effect) |effect| {
-            try writer.writeAll(" ");
-            try effect.write(writer);
-        }
-
-        switch (word.action) {
-            .native => try writer.writeAll(" \\native\n"),
-            .compound => try writer.writeAll(" [compound]\n"),
-        }
-    } else {
-        try writer.print("{s}: no such word\n", .{name});
-    }
-
-    try stdout.interface.flush();
-}
 
 /// recover ( try-quot recover-quot -- ) - Execute try quotation; if error,
 /// execute recover quotation with error on stack
@@ -571,92 +253,6 @@ fn nativeRethrow(ctx: *Context) anyerror!void {
         },
         else => return error.TypeError,
     }
-}
-
-/// load ( filename -- ) - Load and execute a 1z source file
-fn nativeLoad(ctx: *Context) anyerror!void {
-    const filename = try popString(ctx);
-
-    const file = std.fs.cwd().openFile(filename, .{}) catch {
-        return error.FileNotFound;
-    };
-    defer file.close();
-
-    var file_buf: [4096]u8 = undefined;
-    var reader = file.reader(&file_buf);
-
-    var processor: StatementProcessor = .{};
-
-    while (true) {
-        const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
-            error.EndOfStream => {
-                // Try to execute any remaining buffered content
-                switch (processor.flush(ctx.quotationAllocator(), ctx)) {
-                    .needs_more_input => {},
-                    .parse_error => |e| return e,
-                    .complete => |instrs| {
-                        if (instrs.len > 0) {
-                            try ctx.executeQuotation(.{ .instructions = instrs });
-                        }
-                    },
-                }
-                break;
-            },
-            else => return error.FileReadError,
-        };
-
-        switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
-            .needs_more_input => continue,
-            .parse_error => |err| return err,
-            .complete => |instrs| {
-                if (instrs.len > 0) {
-                    try ctx.executeQuotation(.{ .instructions = instrs });
-                }
-                processor.reset();
-            },
-        }
-    }
-}
-
-/// parse-time ( -- marker ) - Push parse-time marker onto stack
-/// When `;` sees this marker, it will set the word's parse_time flag
-fn nativeParseTime(ctx: *Context) anyerror!void {
-    try ctx.stack.push(.{ .parse_time_marker = {} });
-}
-
-/// parse-until ( delimiter -- quotation ) - Read tokens until delimiter, return as quotation
-/// This is a parse-time primitive that reads from the active tokenizer.
-fn nativeParseUntil(ctx: *Context) anyerror!void {
-    const delimiter = try popString(ctx);
-
-    // Get the tokenizer from parse-time context
-    const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
-
-    // Collect tokens until we hit the delimiter
-    var tokens: std.ArrayListUnmanaged([]const u8) = .{};
-    defer tokens.deinit(ctx.allocator);
-
-    while (tokenizer.next()) |tok| {
-        // Skip comments
-        if (tok.kind == .comment or tok.kind == .newline) continue;
-
-        if (std.mem.eql(u8, tok.text, delimiter)) {
-            break;
-        }
-        tokens.append(ctx.allocator, tok.text) catch return error.OutOfMemory;
-    }
-
-    // Join tokens into a single string and parse as a quotation body
-    const joined = std.mem.join(ctx.quotationAllocator(), " ", tokens.items) catch return error.OutOfMemory;
-
-    // Parse the tokens as a quotation body (without enclosing brackets)
-    // We add a closing bracket so parseQuotation can work correctly
-    const with_bracket = std.fmt.allocPrint(ctx.quotationAllocator(), "{s} ]", .{joined}) catch return error.OutOfMemory;
-
-    var inner_tokenizer = Tokenizer.init(with_bracket);
-    const instrs = parser.parseQuotation(ctx.quotationAllocator(), &inner_tokenizer, ctx) catch return error.OutOfMemory;
-
-    try ctx.stack.push(.{ .quotation = instrs });
 }
 
 /// make-hash ( quotation -- hash ) - Create a hash table from key: value pairs
@@ -1032,17 +628,6 @@ fn nativeAtDifference(ctx: *Context) anyerror!void {
     }
 
     try ctx.stack.push(.{ .set = new_set });
-}
-
-/// 1array ( elem -- array ) - Wrap element in single-element array
-fn native1Array(ctx: *Context) anyerror!void {
-    const elem = try ctx.stack.pop();
-    const alloc = ctx.quotationAllocator();
-
-    const arr = alloc.alloc(Value, 1) catch return error.OutOfMemory;
-    arr[0] = elem;
-
-    try ctx.stack.push(.{ .array = arr });
 }
 
 /// curry ( x quot -- quot' ) - Create new quotation with x prepended

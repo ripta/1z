@@ -1,0 +1,133 @@
+const std = @import("std");
+const Context = @import("../context.zig").Context;
+const helpers = @import("helpers.zig");
+const Primitive = @import("types.zig").Primitive;
+
+const popInteger = helpers.popInteger;
+
+pub const primitives = [_]Primitive{
+    // Basic arithmetic
+    .{ .name = "+", .stack_effect = "a b -- a+b", .func = nativeAdd },
+    .{ .name = "-", .stack_effect = "a b -- a-b", .func = nativeSub },
+    .{ .name = "*", .stack_effect = "a b -- a*b", .func = nativeMul },
+    .{ .name = "/", .stack_effect = "a b -- a/b", .func = nativeDiv },
+    .{ .name = "%", .stack_effect = "a b -- a%b", .func = nativeMod },
+    // Wraparound arithmetic
+    .{ .name = "+%", .stack_effect = "a b -- a+b", .func = nativeAddWrap },
+    .{ .name = "-%", .stack_effect = "a b -- a-b", .func = nativeSubWrap },
+    .{ .name = "*%", .stack_effect = "a b -- a*b", .func = nativeMulWrap },
+    // Comparators
+    .{ .name = "=", .stack_effect = "a b -- ?", .func = nativeEq },
+    .{ .name = "<", .stack_effect = "a b -- ?", .func = nativeLt },
+    .{ .name = ">", .stack_effect = "a b -- ?", .func = nativeGt },
+};
+
+/// + ( a b -- a+b ) - Add two integers
+pub fn nativeAdd(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    const result = @addWithOverflow(a, b);
+    if (result[1] != 0) return error.IntegerOverflow;
+    try ctx.stack.push(.{ .integer = result[0] });
+}
+
+/// - ( a b -- a-b ) - Subtract: a minus b
+pub fn nativeSub(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    const result = @subWithOverflow(a, b);
+    if (result[1] != 0) return error.IntegerOverflow;
+    try ctx.stack.push(.{ .integer = result[0] });
+}
+
+/// * ( a b -- a*b ) - Multiply two integers
+pub fn nativeMul(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    const result = @mulWithOverflow(a, b);
+    if (result[1] != 0) return error.IntegerOverflow;
+    try ctx.stack.push(.{ .integer = result[0] });
+}
+
+/// / ( a b -- a/b ) - Integer division
+pub fn nativeDiv(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    if (b == 0) return error.DivisionByZero;
+    if (a == std.math.minInt(i64) and b == -1) return error.IntegerOverflow;
+    try ctx.stack.push(.{ .integer = @divTrunc(a, b) });
+}
+
+/// % ( a b -- a%b ) - Modulo (remainder)
+pub fn nativeMod(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    if (b == 0) return error.DivisionByZero;
+    try ctx.stack.push(.{ .integer = @mod(a, b) });
+}
+
+/// +% ( a b -- a+b ) - Add two integers with wraparound on overflow
+pub fn nativeAddWrap(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    try ctx.stack.push(.{ .integer = a +% b });
+}
+
+/// -% ( a b -- a-b ) - Subtract with wraparound on overflow
+pub fn nativeSubWrap(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    try ctx.stack.push(.{ .integer = a -% b });
+}
+
+/// *% ( a b -- a*b ) - Multiply with wraparound on overflow
+pub fn nativeMulWrap(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    try ctx.stack.push(.{ .integer = a *% b });
+}
+
+/// = ( a b -- ? ) - Equality comparison
+pub fn nativeEq(ctx: *Context) anyerror!void {
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    const result = switch (a) {
+        .integer => |ai| switch (b) {
+            .integer => |bi| ai == bi,
+            else => false,
+        },
+        .boolean => |ab| switch (b) {
+            .boolean => |bb| ab == bb,
+            else => false,
+        },
+        .string => |as| switch (b) {
+            .string => |bs| std.mem.eql(u8, as, bs),
+            else => false,
+        },
+        .symbol => |as| switch (b) {
+            .symbol => |bs| std.mem.eql(u8, as, bs),
+            else => false,
+        },
+        .set => a.eql(b),
+        .array => a.eql(b),
+        .hash => a.eql(b),
+        .vector => a.eql(b),
+        .mutable_map => a.eql(b),
+        else => false,
+    };
+    try ctx.stack.push(.{ .boolean = result });
+}
+
+/// < ( a b -- ? ) - Less than
+pub fn nativeLt(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    try ctx.stack.push(.{ .boolean = a < b });
+}
+
+/// > ( a b -- ? ) - Greater than
+pub fn nativeGt(ctx: *Context) anyerror!void {
+    const b = try popInteger(ctx);
+    const a = try popInteger(ctx);
+    try ctx.stack.push(.{ .boolean = a > b });
+}
