@@ -52,6 +52,13 @@ const mapSeekError = primitives_mod.mapSeekError;
 const mapGetPosError = primitives_mod.mapGetPosError;
 const ensureStreamOpen = primitives_mod.ensureStreamOpen;
 
+const SequenceIterator = primitives_mod.SequenceIterator;
+const SequenceBuilder = primitives_mod.SequenceBuilder;
+const SequenceKind = primitives_mod.SequenceKind;
+const sequenceLength = primitives_mod.sequenceLength;
+const sequenceToValues = primitives_mod.sequence.sequenceToValues;
+const classifySequence = primitives_mod.classifySequence;
+
 const stack_mod = primitives_mod.stack;
 const nativeDup = stack_mod.nativeDup;
 const nativeDrop = stack_mod.nativeDrop;
@@ -735,15 +742,13 @@ fn nativeBenchmark(ctx: *Context) anyerror!void {
 /// #len ( seq -- n ) - Get sequence length (polymorphic on string, array, vector, byte-array)
 fn nativeLen(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
-    const len: i64 = switch (val) {
-        .string => |s| @intCast(utf8CodepointCount(s)),
-        .array => |a| @intCast(a.len),
-        .vector => |v| @intCast(v.items.len),
-        .byte_array => |b| @intCast(b.items.len),
-        .set => |s| @intCast(s.count()),
-        .mutable_map => |m| @intCast(m.count()),
-        else => return error.TypeError,
-    };
+    // Use sequence module for standard sequences, handle mutable_map separately
+    const len: i64 = if (sequenceLength(val)) |l|
+        @intCast(l)
+    else if (val == .mutable_map)
+        @intCast(val.mutable_map.count())
+    else
+        return error.TypeError;
     try ctx.stack.push(.{ .integer = len });
 }
 
@@ -780,56 +785,30 @@ fn nativeNth(ctx: *Context) anyerror!void {
 /// #first ( seq -- elem ) - Get first element (polymorphic on string, array, vector, byte-array)
 fn nativeFirst(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
 
-    switch (val) {
-        .string => |s| {
-            const cp_slice = utf8NthCodepoint(s, 0) orelse return error.EmptySequence;
-            const result = ctx.quotationAllocator().dupe(u8, cp_slice) catch return error.OutOfMemory;
-            try ctx.stack.push(.{ .string = result });
-        },
-        .array => |a| {
-            if (a.len == 0) return error.EmptySequence;
-            try ctx.stack.push(a[0]);
-        },
-        .vector => |v| {
-            if (v.items.len == 0) return error.EmptySequence;
-            try ctx.stack.push(v.items[0]);
-        },
-        .byte_array => |b| {
-            if (b.items.len == 0) return error.EmptySequence;
-            try ctx.stack.push(.{ .integer = b.items[0] });
-        },
-        else => return error.TypeError,
-    }
+    // Sets are not supported for positional access (unordered)
+    if (val == .set) return error.TypeError;
+
+    var iter = SequenceIterator.init(val, alloc) orelse return error.TypeError;
+    const first = try iter.next() orelse return error.EmptySequence;
+    try ctx.stack.push(first);
 }
 
 /// #last ( seq -- elem ) - Get last element (polymorphic on string, array, vector, byte-array)
 fn nativeLast(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
 
-    switch (val) {
-        .string => |s| {
-            const count = utf8CodepointCount(s);
-            if (count == 0) return error.EmptySequence;
-            // Safe to use .? since count > 0 means at least one codepoint exists
-            const cp_slice = utf8NthCodepoint(s, count - 1).?;
-            const result = ctx.quotationAllocator().dupe(u8, cp_slice) catch return error.OutOfMemory;
-            try ctx.stack.push(.{ .string = result });
-        },
-        .array => |a| {
-            if (a.len == 0) return error.EmptySequence;
-            try ctx.stack.push(a[a.len - 1]);
-        },
-        .vector => |v| {
-            if (v.items.len == 0) return error.EmptySequence;
-            try ctx.stack.push(v.items[v.items.len - 1]);
-        },
-        .byte_array => |b| {
-            if (b.items.len == 0) return error.EmptySequence;
-            try ctx.stack.push(.{ .integer = b.items[b.items.len - 1] });
-        },
-        else => return error.TypeError,
+    // Sets are not supported for positional access (unordered)
+    if (val == .set) return error.TypeError;
+
+    var iter = SequenceIterator.init(val, alloc) orelse return error.TypeError;
+    var last: ?Value = null;
+    while (try iter.next()) |elem| {
+        last = elem;
     }
+    try ctx.stack.push(last orelse return error.EmptySequence);
 }
 
 // =============================================================================
@@ -1056,227 +1035,63 @@ fn nativeAtValues(ctx: *Context) anyerror!void {
 fn nativeEach(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
 
-    switch (seq) {
-        .array => |arr| {
-            for (arr) |elem| {
-                try ctx.stack.push(elem);
-                try ctx.executeQuotation(quot);
-            }
-        },
-        .string => |s| {
-            const alloc = ctx.quotationAllocator();
-            const utf8 = std.unicode.Utf8View.initUnchecked(s);
-            var iter = utf8.iterator();
-            while (iter.nextCodepointSlice()) |cp_slice| {
-                const char_str = alloc.dupe(u8, cp_slice) catch return error.OutOfMemory;
-                try ctx.stack.push(.{ .string = char_str });
-                try ctx.executeQuotation(quot);
-            }
-        },
-        .vector => |v| {
-            for (v.items) |elem| {
-                try ctx.stack.push(elem);
-                try ctx.executeQuotation(quot);
-            }
-        },
-        .byte_array => |b| {
-            for (b.items) |byte| {
-                try ctx.stack.push(.{ .integer = byte });
-                try ctx.executeQuotation(quot);
-            }
-        },
-        .set => |s| {
-            for (s.keys()) |elem| {
-                try ctx.stack.push(elem);
-                try ctx.executeQuotation(quot);
-            }
-        },
-        else => return error.TypeError,
+    var iter = SequenceIterator.init(seq, alloc) orelse return error.TypeError;
+    while (try iter.next()) |elem| {
+        try ctx.stack.push(elem);
+        try ctx.executeQuotation(quot);
     }
 }
 
 /// #map ( seq quot -- seq' ) - Transform each element of sequence
+/// Note: string and byte_array map to array; others preserve type
 fn nativeMap(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
-
     const alloc = ctx.quotationAllocator();
 
-    switch (seq) {
-        .array => |arr| {
-            const result = alloc.alloc(Value, arr.len) catch return error.OutOfMemory;
-            for (arr, 0..) |elem, i| {
-                try ctx.stack.push(elem);
-                try ctx.executeQuotation(quot);
-                result[i] = try ctx.stack.pop();
-            }
-            try ctx.stack.push(.{ .array = result });
-        },
-        .string => |s| {
-            // Map over string produces array of results (could be strings or other values)
-            const cp_count = utf8CodepointCount(s);
-            const result = alloc.alloc(Value, cp_count) catch return error.OutOfMemory;
-            const utf8 = std.unicode.Utf8View.initUnchecked(s);
-            var iter = utf8.iterator();
-            var i: usize = 0;
-            while (iter.nextCodepointSlice()) |cp_slice| {
-                const char_str = alloc.dupe(u8, cp_slice) catch return error.OutOfMemory;
-                try ctx.stack.push(.{ .string = char_str });
-                try ctx.executeQuotation(quot);
-                result[i] = try ctx.stack.pop();
-                i += 1;
-            }
-            try ctx.stack.push(.{ .array = result });
-        },
-        .vector => |v| {
-            // Map over vector returns a new vector
-            const result_vec = alloc.create(Vector) catch return error.OutOfMemory;
-            result_vec.* = Vector{};
-            result_vec.ensureTotalCapacity(alloc, v.items.len) catch return error.OutOfMemory;
-            for (v.items) |elem| {
-                try ctx.stack.push(elem);
-                try ctx.executeQuotation(quot);
-                const mapped = try ctx.stack.pop();
-                result_vec.appendAssumeCapacity(mapped);
-            }
-            try ctx.stack.push(.{ .vector = result_vec });
-        },
-        .byte_array => |b| {
-            // Map over byte array returns an array of results (like strings)
-            const result = alloc.alloc(Value, b.items.len) catch return error.OutOfMemory;
-            for (b.items, 0..) |byte, i| {
-                try ctx.stack.push(.{ .integer = byte });
-                try ctx.executeQuotation(quot);
-                result[i] = try ctx.stack.pop();
-            }
-            try ctx.stack.push(.{ .array = result });
-        },
-        .set => |s| {
-            const result_set = alloc.create(Set) catch return error.OutOfMemory;
-            result_set.* = Set{};
-            for (s.keys()) |elem| {
-                try ctx.stack.push(elem);
-                try ctx.executeQuotation(quot);
-                const mapped = try ctx.stack.pop();
+    const input_kind = classifySequence(seq) orelse return error.TypeError;
+    // string and byte_array map to array; others preserve type
+    const output_kind: SequenceKind = switch (input_kind) {
+        .string, .byte_array => .array,
+        else => input_kind,
+    };
 
-                result_set.put(alloc, mapped, {}) catch return error.OutOfMemory;
-            }
+    const len = sequenceLength(seq) orelse return error.TypeError;
+    var iter = SequenceIterator.init(seq, alloc) orelse return error.TypeError;
+    var builder = try SequenceBuilder.initWithCapacity(output_kind, alloc, len);
 
-            try ctx.stack.push(.{ .set = result_set });
-        },
-        else => return error.TypeError,
+    while (try iter.next()) |elem| {
+        try ctx.stack.push(elem);
+        try ctx.executeQuotation(quot);
+        const mapped = try ctx.stack.pop();
+        try builder.append(mapped);
     }
+
+    try ctx.stack.push(try builder.toValue());
 }
 
 /// #filter ( seq quot -- seq' ) - Keep elements where quotation returns true
 fn nativeFilter(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
-
     const alloc = ctx.quotationAllocator();
 
-    switch (seq) {
-        .array => |arr| {
-            // First pass: count matching elements
-            var count: usize = 0;
-            for (arr) |elem| {
-                try ctx.stack.push(elem);
-                try ctx.executeQuotation(quot);
-                const predicate = try popBoolean(ctx);
-                if (predicate) count += 1;
-            }
+    const kind = classifySequence(seq) orelse return error.TypeError;
+    var iter = SequenceIterator.init(seq, alloc) orelse return error.TypeError;
+    var builder = try SequenceBuilder.init(kind, alloc);
 
-            // Second pass: collect matching elements
-            const result = alloc.alloc(Value, count) catch return error.OutOfMemory;
-            var idx: usize = 0;
-            for (arr) |elem| {
-                try ctx.stack.push(elem);
-                try ctx.executeQuotation(quot);
-                const predicate = try popBoolean(ctx);
-                if (predicate) {
-                    result[idx] = elem;
-                    idx += 1;
-                }
-            }
-            try ctx.stack.push(.{ .array = result });
-        },
-        .string => |s| {
-            // Filter over string produces filtered string (iterating by codepoint)
-            // First pass: count total byte length of matching codepoints
-            var total_bytes: usize = 0;
-            const utf8_1 = std.unicode.Utf8View.initUnchecked(s);
-            var iter_1 = utf8_1.iterator();
-            while (iter_1.nextCodepointSlice()) |cp_slice| {
-                const char_str = alloc.dupe(u8, cp_slice) catch return error.OutOfMemory;
-                try ctx.stack.push(.{ .string = char_str });
-                try ctx.executeQuotation(quot);
-                const predicate = try popBoolean(ctx);
-                if (predicate) total_bytes += cp_slice.len;
-            }
-
-            // Second pass: build result string
-            const result = alloc.alloc(u8, total_bytes) catch return error.OutOfMemory;
-            var write_pos: usize = 0;
-            const utf8_2 = std.unicode.Utf8View.initUnchecked(s);
-            var iter_2 = utf8_2.iterator();
-            while (iter_2.nextCodepointSlice()) |cp_slice| {
-                const char_str = alloc.dupe(u8, cp_slice) catch return error.OutOfMemory;
-                try ctx.stack.push(.{ .string = char_str });
-                try ctx.executeQuotation(quot);
-                const predicate = try popBoolean(ctx);
-                if (predicate) {
-                    @memcpy(result[write_pos..][0..cp_slice.len], cp_slice);
-                    write_pos += cp_slice.len;
-                }
-            }
-            try ctx.stack.push(.{ .string = result });
-        },
-        .vector => |v| {
-            // Filter over vector returns a new vector
-            // Use dynamic vector since we don't know final size
-            const result_vec = alloc.create(Vector) catch return error.OutOfMemory;
-            result_vec.* = Vector{};
-            for (v.items) |elem| {
-                try ctx.stack.push(elem);
-                try ctx.executeQuotation(quot);
-                const predicate = try popBoolean(ctx);
-                if (predicate) {
-                    result_vec.append(alloc, elem) catch return error.OutOfMemory;
-                }
-            }
-            try ctx.stack.push(.{ .vector = result_vec });
-        },
-        .byte_array => |b| {
-            // Filter over byte array returns a new byte array
-            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-            result_ba.* = ByteArray{};
-            for (b.items) |byte| {
-                try ctx.stack.push(.{ .integer = byte });
-                try ctx.executeQuotation(quot);
-                const predicate = try popBoolean(ctx);
-                if (predicate) {
-                    result_ba.append(alloc, byte) catch return error.OutOfMemory;
-                }
-            }
-            try ctx.stack.push(.{ .byte_array = result_ba });
-        },
-        .set => |s| {
-            // Filter over set returns a new set with matching elements
-            const result_set = alloc.create(Set) catch return error.OutOfMemory;
-            result_set.* = Set{};
-            for (s.keys()) |elem| {
-                try ctx.stack.push(elem);
-                try ctx.executeQuotation(quot);
-                const predicate = try popBoolean(ctx);
-                if (predicate) {
-                    result_set.put(alloc, elem, {}) catch return error.OutOfMemory;
-                }
-            }
-            try ctx.stack.push(.{ .set = result_set });
-        },
-        else => return error.TypeError,
+    while (try iter.next()) |elem| {
+        try ctx.stack.push(elem);
+        try ctx.executeQuotation(quot);
+        const predicate = try popBoolean(ctx);
+        if (predicate) {
+            try builder.append(elem);
+        }
     }
+
+    try ctx.stack.push(try builder.toValue());
 }
 
 /// #reduce ( seq init quot -- result ) - Fold sequence with accumulator
@@ -1284,59 +1099,16 @@ fn nativeReduce(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     var acc = try ctx.stack.pop(); // initial accumulator
     const seq = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
 
-    switch (seq) {
-        .array => |arr| {
-            for (arr) |elem| {
-                try ctx.stack.push(acc);
-                try ctx.stack.push(elem);
-                try ctx.executeQuotation(quot);
-                acc = try ctx.stack.pop();
-            }
-            try ctx.stack.push(acc);
-        },
-        .string => |s| {
-            const alloc = ctx.quotationAllocator();
-            const utf8 = std.unicode.Utf8View.initUnchecked(s);
-            var iter = utf8.iterator();
-            while (iter.nextCodepointSlice()) |cp_slice| {
-                const char_str = alloc.dupe(u8, cp_slice) catch return error.OutOfMemory;
-                try ctx.stack.push(acc);
-                try ctx.stack.push(.{ .string = char_str });
-                try ctx.executeQuotation(quot);
-                acc = try ctx.stack.pop();
-            }
-            try ctx.stack.push(acc);
-        },
-        .vector => |v| {
-            for (v.items) |elem| {
-                try ctx.stack.push(acc);
-                try ctx.stack.push(elem);
-                try ctx.executeQuotation(quot);
-                acc = try ctx.stack.pop();
-            }
-            try ctx.stack.push(acc);
-        },
-        .byte_array => |b| {
-            for (b.items) |byte| {
-                try ctx.stack.push(acc);
-                try ctx.stack.push(.{ .integer = byte });
-                try ctx.executeQuotation(quot);
-                acc = try ctx.stack.pop();
-            }
-            try ctx.stack.push(acc);
-        },
-        .set => |s| {
-            for (s.keys()) |elem| {
-                try ctx.stack.push(acc);
-                try ctx.stack.push(elem);
-                try ctx.executeQuotation(quot);
-                acc = try ctx.stack.pop();
-            }
-            try ctx.stack.push(acc);
-        },
-        else => return error.TypeError,
+    var iter = SequenceIterator.init(seq, alloc) orelse return error.TypeError;
+    while (try iter.next()) |elem| {
+        try ctx.stack.push(acc);
+        try ctx.stack.push(elem);
+        try ctx.executeQuotation(quot);
+        acc = try ctx.stack.pop();
     }
+    try ctx.stack.push(acc);
 }
 
 /// #slice ( seq start end -- subseq ) - Extract subsequence [start, end)
@@ -1501,60 +1273,6 @@ fn getSequenceItems(seq: Value) ?[]const Value {
         .array => |arr| arr,
         .vector => |vec| vec.items,
         else => null,
-    };
-}
-
-/// Helper to convert any sequence to an allocated slice of Values.
-/// - For strings: each codepoint becomes a Value.string
-/// - For byte arrays: each byte becomes a Value.integer
-/// - For arrays/vectors: returns a copy of the items
-fn sequenceToValues(seq: Value, alloc: Allocator) ![]const Value {
-    switch (seq) {
-        .array => |arr| {
-            const result = alloc.alloc(Value, arr.len) catch return error.OutOfMemory;
-            @memcpy(result, arr);
-            return result;
-        },
-        .vector => |vec| {
-            const result = alloc.alloc(Value, vec.items.len) catch return error.OutOfMemory;
-            @memcpy(result, vec.items);
-            return result;
-        },
-        .string => |s| {
-            const count = utf8CodepointCount(s);
-            const result = alloc.alloc(Value, count) catch return error.OutOfMemory;
-            const utf8 = std.unicode.Utf8View.initUnchecked(s);
-
-            var iter = utf8.iterator();
-            var i: usize = 0;
-            while (iter.nextCodepointSlice()) |cp_slice| {
-                const char_str = alloc.dupe(u8, cp_slice) catch return error.OutOfMemory;
-                result[i] = .{ .string = char_str };
-                i += 1;
-            }
-
-            return result;
-        },
-        .byte_array => |b| {
-            const result = alloc.alloc(Value, b.items.len) catch return error.OutOfMemory;
-            for (b.items, 0..) |byte, i| {
-                result[i] = .{ .integer = byte };
-            }
-
-            return result;
-        },
-        else => return error.TypeError,
-    }
-}
-
-/// Helper to get the length of any sequence
-fn sequenceLength(seq: Value) !usize {
-    return switch (seq) {
-        .array => |arr| arr.len,
-        .vector => |vec| vec.items.len,
-        .string => |s| utf8CodepointCount(s),
-        .byte_array => |b| b.items.len,
-        else => error.TypeError,
     };
 }
 
