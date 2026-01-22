@@ -1,0 +1,515 @@
+const std = @import("std");
+const builtin = @import("builtin");
+const native_os = builtin.os.tag;
+
+const Context = @import("../context.zig").Context;
+const value_mod = @import("../value.zig");
+const Value = value_mod.Value;
+const Stream = value_mod.Stream;
+const StreamMode = value_mod.StreamMode;
+const BufferingMode = value_mod.BufferingMode;
+const ByteArray = value_mod.ByteArray;
+
+const Primitive = @import("types.zig").Primitive;
+const helpers = @import("helpers.zig");
+const error_mapping = @import("error_mapping.zig");
+
+const popInteger = helpers.popInteger;
+const popSymbol = helpers.popSymbol;
+const popString = helpers.popString;
+const popStream = helpers.popStream;
+
+const mapFileOpenError = error_mapping.mapFileOpenError;
+const mapFileCreateError = error_mapping.mapFileCreateError;
+const mapFileWriteError = error_mapping.mapFileWriteError;
+const mapFileReadError = error_mapping.mapFileReadError;
+const mapFileSyncError = error_mapping.mapFileSyncError;
+const mapSeekError = error_mapping.mapSeekError;
+const mapGetPosError = error_mapping.mapGetPosError;
+const ensureStreamOpen = error_mapping.ensureStreamOpen;
+
+pub const primitives = [_]Primitive{
+    .{ .name = "stdin", .stack_effect = "-- stream", .func = nativeStdin },
+    .{ .name = "stdout", .stack_effect = "-- stream", .func = nativeStdout },
+    .{ .name = "stderr", .stack_effect = "-- stream", .func = nativeStderr },
+    .{ .name = "stream-open", .stack_effect = "path mode -- stream", .func = nativeStreamOpen },
+    .{ .name = "stream-close", .stack_effect = "stream --", .func = nativeStreamClose },
+    .{ .name = "stream-write", .stack_effect = "stream bytes -- n", .func = nativeStreamWrite },
+    .{ .name = "stream-flush", .stack_effect = "stream --", .func = nativeStreamFlush },
+    .{ .name = "stream-read", .stack_effect = "stream n -- bytes", .func = nativeStreamRead },
+    .{ .name = "stream-read-line", .stack_effect = "stream -- str/f", .func = nativeStreamReadLine },
+    .{ .name = "stream-read-all", .stack_effect = "stream -- bytes", .func = nativeStreamReadAll },
+    .{ .name = "stream-tell", .stack_effect = "stream -- pos", .func = nativeStreamTell },
+    .{ .name = "stream-seek", .stack_effect = "stream pos --", .func = nativeStreamSeek },
+    .{ .name = "stream-seek-end", .stack_effect = "stream offset --", .func = nativeStreamSeekEnd },
+    .{ .name = "buffering-mode", .stack_effect = "stream -- symbol", .func = nativeBufferingMode },
+    .{ .name = "set-buffering-mode", .stack_effect = "stream symbol --", .func = nativeSetBufferingMode },
+    .{ .name = "stream->fd", .stack_effect = "stream -- int", .func = nativeStreamToFd },
+    .{ .name = "fd->stream", .stack_effect = "int mode -- stream", .func = nativeFdToStream },
+    .{ .name = ">char", .stack_effect = "codepoint -- str", .func = nativeChr },
+    .{ .name = ">codepoint", .stack_effect = "str -- int", .func = nativeToCodepoint },
+};
+
+// =============================================================================
+// Standard streams
+// =============================================================================
+
+/// stdin ( -- stream ) - Push standard input stream
+pub fn nativeStdin(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const stream = alloc.create(Stream) catch return error.OutOfMemory;
+    stream.* = Stream{
+        .file = std.fs.File.stdin(),
+        .mode = .read,
+        .name = "stdin",
+        .buffering = .line,
+    };
+    try ctx.stack.push(.{ .stream = stream });
+}
+
+/// stdout ( -- stream ) - Push standard output stream
+pub fn nativeStdout(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const stream = alloc.create(Stream) catch return error.OutOfMemory;
+    stream.* = Stream{
+        .file = std.fs.File.stdout(),
+        .mode = .write,
+        .name = "stdout",
+        .buffering = .line,
+    };
+    try ctx.stack.push(.{ .stream = stream });
+}
+
+/// stderr ( -- stream ) - Push standard error stream
+pub fn nativeStderr(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const stream = alloc.create(Stream) catch return error.OutOfMemory;
+    stream.* = Stream{
+        .file = std.fs.File.stderr(),
+        .mode = .write,
+        .name = "stderr",
+        .buffering = .line,
+    };
+    try ctx.stack.push(.{ .stream = stream });
+}
+
+// =============================================================================
+// Stream open/close
+// =============================================================================
+
+/// stream-open ( path mode -- stream ) - Open a file stream
+/// Mode symbols: read: write: append: read-write:
+pub fn nativeStreamOpen(ctx: *Context) anyerror!void {
+    const mode_sym = try popSymbol(ctx);
+    const path = try popString(ctx);
+    const alloc = ctx.quotationAllocator();
+
+    // Parse mode symbol
+    const mode: StreamMode = if (std.mem.eql(u8, mode_sym, "read"))
+        .read
+    else if (std.mem.eql(u8, mode_sym, "write"))
+        .write
+    else if (std.mem.eql(u8, mode_sym, "append"))
+        .append
+    else if (std.mem.eql(u8, mode_sym, "read-write"))
+        .read_write
+    else
+        return error.TypeError;
+
+    // Open file based on mode
+    const file = switch (mode) {
+        .read => std.fs.cwd().openFile(path, .{ .mode = .read_only }) catch |err| {
+            return mapFileOpenError(err);
+        },
+        .write => std.fs.cwd().createFile(path, .{ .truncate = true }) catch |err| {
+            return mapFileCreateError(err);
+        },
+        .append => blk: {
+            const f = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch |open_err| {
+                // File doesn't exist, create it
+                if (open_err == error.FileNotFound) {
+                    break :blk std.fs.cwd().createFile(path, .{}) catch |err| {
+                        return mapFileCreateError(err);
+                    };
+                }
+                return mapFileOpenError(open_err);
+            };
+            // Seek to end for append mode
+            f.seekFromEnd(0) catch return error.IOError;
+            break :blk f;
+        },
+        .read_write => blk: {
+            break :blk std.fs.cwd().openFile(path, .{ .mode = .read_write }) catch |err| {
+                // Try creating if doesn't exist
+                if (err == error.FileNotFound) {
+                    break :blk std.fs.cwd().createFile(path, .{ .read = true }) catch |create_err| {
+                        return mapFileCreateError(create_err);
+                    };
+                }
+                return mapFileOpenError(err);
+            };
+        },
+    };
+
+    // Create stream object
+    const stream = alloc.create(Stream) catch return error.OutOfMemory;
+    const name_copy = alloc.dupe(u8, path) catch return error.OutOfMemory;
+    stream.* = Stream{
+        .file = file,
+        .mode = mode,
+        .name = name_copy,
+    };
+    try ctx.stack.push(.{ .stream = stream });
+}
+
+/// stream-close ( stream -- ) - Close a stream
+pub fn nativeStreamClose(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+    try ensureStreamOpen(stream);
+
+    // Don't actually close stdin/stdout/stderr
+    if (std.mem.eql(u8, stream.name, "stdin") or
+        std.mem.eql(u8, stream.name, "stdout") or
+        std.mem.eql(u8, stream.name, "stderr"))
+    {
+        stream.closed = true;
+        return;
+    }
+
+    stream.file.close();
+    stream.closed = true;
+}
+
+// =============================================================================
+// Stream writing primitives
+// =============================================================================
+
+/// stream-write ( stream bytes -- n ) - Write bytes to stream, return count written
+pub fn nativeStreamWrite(ctx: *Context) anyerror!void {
+    const bytes_val = try ctx.stack.pop();
+    const stream = try popStream(ctx);
+    try ensureStreamOpen(stream);
+
+    // Get bytes to write - accept byte arrays or strings
+    const bytes: []const u8 = switch (bytes_val) {
+        .byte_array => |ba| ba.items,
+        .string => |s| s,
+        else => return error.TypeError,
+    };
+
+    // Write to file
+    const written = stream.file.write(bytes) catch |err| {
+        return mapFileWriteError(err);
+    };
+
+    try ctx.stack.push(.{ .integer = @intCast(written) });
+}
+
+/// stream-flush ( stream -- ) - Flush stream buffer
+pub fn nativeStreamFlush(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+    try ensureStreamOpen(stream);
+
+    // Note: Zig's std.fs.File doesn't have a direct flush method for unbuffered I/O
+    // For buffered streams, we'd need to sync. For now, use sync for file streams.
+    // Standard streams (stdout/stderr) are typically line-buffered or unbuffered.
+    if (!std.mem.eql(u8, stream.name, "stdin") and
+        !std.mem.eql(u8, stream.name, "stdout") and
+        !std.mem.eql(u8, stream.name, "stderr"))
+    {
+        stream.file.sync() catch |err| {
+            return mapFileSyncError(err);
+        };
+    }
+}
+
+// =============================================================================
+// Stream reading primitives
+// =============================================================================
+
+/// stream-read ( stream n -- bytes ) - Read up to n bytes from stream
+pub fn nativeStreamRead(ctx: *Context) anyerror!void {
+    const n = try popInteger(ctx);
+    const stream = try popStream(ctx);
+    try ensureStreamOpen(stream);
+
+    if (n < 0) {
+        return error.InvalidArgument;
+    }
+
+    const alloc = ctx.quotationAllocator();
+    const buffer = alloc.alloc(u8, @intCast(n)) catch return error.OutOfMemory;
+    defer alloc.free(buffer);
+
+    const bytes_read = stream.file.read(buffer) catch |err| {
+        return mapFileReadError(err);
+    };
+
+    const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+    ba.* = ByteArray{};
+    ba.ensureTotalCapacity(alloc, bytes_read) catch return error.OutOfMemory;
+    for (buffer[0..bytes_read]) |byte| {
+        ba.appendAssumeCapacity(byte);
+    }
+
+    try ctx.stack.push(.{ .byte_array = ba });
+}
+
+/// stream-read-line ( stream -- str/f ) - Read line (no newline), f at EOF
+pub fn nativeStreamReadLine(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+    try ensureStreamOpen(stream);
+
+    const alloc = ctx.quotationAllocator();
+    var line_buf: std.ArrayListUnmanaged(u8) = .{};
+    defer line_buf.deinit(alloc);
+
+    while (true) {
+        var byte_buf: [1]u8 = undefined;
+        const bytes_read = stream.file.read(&byte_buf) catch |err| {
+            return mapFileReadError(err);
+        };
+
+        if (bytes_read == 0) {
+            // No data read at all, return false for EOF
+            if (line_buf.items.len == 0) {
+                try ctx.stack.push(.{ .boolean = false });
+                return;
+            }
+            // Return what we have; last line without newline
+            break;
+        }
+
+        const byte = byte_buf[0];
+        if (byte == '\n') {
+            // End of line, sans newline
+            break;
+        }
+
+        // Handle \r\n by skipping \r if followed by \n
+        if (byte == '\r') {
+            var peek_buf: [1]u8 = undefined;
+            const peek_read = stream.file.read(&peek_buf) catch |err| {
+                return mapFileReadError(err);
+            };
+            if (peek_read > 0 and peek_buf[0] == '\n') {
+                break;
+            }
+            line_buf.append(alloc, '\r') catch return error.OutOfMemory;
+            if (peek_read > 0) {
+                if (peek_buf[0] == '\n') {
+                    break;
+                }
+                line_buf.append(alloc, peek_buf[0]) catch return error.OutOfMemory;
+            }
+            continue;
+        }
+
+        line_buf.append(alloc, byte) catch return error.OutOfMemory;
+    }
+
+    const result = alloc.dupe(u8, line_buf.items) catch return error.OutOfMemory;
+    try ctx.stack.push(.{ .string = result });
+}
+
+/// stream-read-all ( stream -- bytes ) - Read all remaining content
+pub fn nativeStreamReadAll(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+    try ensureStreamOpen(stream);
+
+    const alloc = ctx.quotationAllocator();
+
+    // TODO(ripta): 10 MB seems reasonable, right?
+    const max_size: usize = 10 * 1024 * 1024;
+    var content: std.ArrayListUnmanaged(u8) = .{};
+    defer content.deinit(alloc);
+
+    var buffer: [4096]u8 = undefined;
+    while (true) {
+        const bytes_read = stream.file.read(&buffer) catch |err| {
+            return mapFileReadError(err);
+        };
+
+        // EOF?
+        if (bytes_read == 0) {
+            break;
+        }
+
+        if (content.items.len + bytes_read > max_size) {
+            return error.OutOfMemory;
+        }
+
+        content.appendSlice(alloc, buffer[0..bytes_read]) catch return error.OutOfMemory;
+    }
+
+    const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+    ba.* = ByteArray{};
+    ba.ensureTotalCapacity(alloc, content.items.len) catch return error.OutOfMemory;
+    for (content.items) |byte| {
+        ba.appendAssumeCapacity(byte);
+    }
+
+    try ctx.stack.push(.{ .byte_array = ba });
+}
+
+// =============================================================================
+// Stream positioning primitives
+// =============================================================================
+
+/// stream-tell ( stream -- pos ) - Get current stream position
+pub fn nativeStreamTell(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+    try ensureStreamOpen(stream);
+
+    const pos = stream.file.getPos() catch |err| {
+        return mapGetPosError(err);
+    };
+
+    try ctx.stack.push(.{ .integer = @intCast(pos) });
+}
+
+/// stream-seek ( stream pos -- ) - Seek to absolute position
+pub fn nativeStreamSeek(ctx: *Context) anyerror!void {
+    const pos = try popInteger(ctx);
+    const stream = try popStream(ctx);
+    try ensureStreamOpen(stream);
+
+    if (pos < 0) {
+        return error.InvalidArgument;
+    }
+
+    stream.file.seekTo(@intCast(pos)) catch |err| {
+        return mapSeekError(err);
+    };
+}
+
+/// stream-seek-end ( stream offset -- ) - Seek relative to end of stream
+pub fn nativeStreamSeekEnd(ctx: *Context) anyerror!void {
+    const offset = try popInteger(ctx);
+    const stream = try popStream(ctx);
+    try ensureStreamOpen(stream);
+
+    stream.file.seekFromEnd(offset) catch |err| {
+        return mapSeekError(err);
+    };
+}
+
+// =============================================================================
+// Buffering control primitives
+// =============================================================================
+
+/// buffering-mode ( stream -- symbol ) - Get stream buffering mode
+pub fn nativeBufferingMode(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+    try ensureStreamOpen(stream);
+
+    try ctx.stack.push(.{ .symbol = stream.buffering.toSymbol() });
+}
+
+/// set-buffering-mode ( stream symbol -- ) - Set stream buffering mode
+pub fn nativeSetBufferingMode(ctx: *Context) anyerror!void {
+    const mode_sym = try popSymbol(ctx);
+    const stream = try popStream(ctx);
+    try ensureStreamOpen(stream);
+
+    const mode: BufferingMode = if (std.mem.eql(u8, mode_sym, "none"))
+        .none
+    else if (std.mem.eql(u8, mode_sym, "line"))
+        .line
+    else if (std.mem.eql(u8, mode_sym, "block"))
+        .block
+    else
+        return error.InvalidArgument;
+
+    stream.buffering = mode;
+}
+
+// =============================================================================
+// Unix interop primitives
+// =============================================================================
+
+/// stream->fd ( stream -- int ) - Get file descriptor from stream (Unix only)
+pub fn nativeStreamToFd(ctx: *Context) anyerror!void {
+    if (native_os == .windows) {
+        return error.UnsupportedOperation;
+    }
+
+    const stream = try popStream(ctx);
+    try ensureStreamOpen(stream);
+
+    const fd: i64 = @intCast(stream.file.handle);
+    try ctx.stack.push(.{ .integer = fd });
+}
+
+/// fd->stream ( int mode -- stream ) - Create stream from file descriptor (Unix only)
+pub fn nativeFdToStream(ctx: *Context) anyerror!void {
+    if (native_os == .windows) {
+        return error.UnsupportedOperation;
+    }
+
+    const mode_sym = try popSymbol(ctx);
+    const fd_val = try popInteger(ctx);
+
+    if (fd_val < 0) {
+        return error.InvalidArgument;
+    }
+
+    const mode: StreamMode = if (std.mem.eql(u8, mode_sym, "read"))
+        .read
+    else if (std.mem.eql(u8, mode_sym, "write"))
+        .write
+    else if (std.mem.eql(u8, mode_sym, "append"))
+        .append
+    else if (std.mem.eql(u8, mode_sym, "read-write"))
+        .read_write
+    else
+        return error.InvalidArgument;
+
+    const alloc = ctx.quotationAllocator();
+    const stream = alloc.create(Stream) catch return error.OutOfMemory;
+    stream.* = Stream{
+        .file = std.fs.File{ .handle = @intCast(fd_val) },
+        .mode = mode,
+        .name = "fd",
+    };
+    try ctx.stack.push(.{ .stream = stream });
+}
+
+// =============================================================================
+// Character conversion primitives
+// =============================================================================
+
+/// >char ( codepoint -- str ) - Convert Unicode codepoint to single-character string
+pub fn nativeChr(ctx: *Context) anyerror!void {
+    const codepoint_val = try popInteger(ctx);
+    if (codepoint_val < 0 or codepoint_val > 0x10FFFF) {
+        return error.InvalidArgument;
+    }
+
+    const codepoint: u21 = @intCast(codepoint_val);
+    if (codepoint >= 0xD800 and codepoint <= 0xDFFF) {
+        return error.InvalidArgument;
+    }
+
+    const alloc = ctx.quotationAllocator();
+    var buf: [4]u8 = undefined;
+    const len = std.unicode.utf8Encode(codepoint, &buf) catch return error.InvalidArgument;
+
+    const str = alloc.dupe(u8, buf[0..len]) catch return error.OutOfMemory;
+    try ctx.stack.push(.{ .string = str });
+}
+
+/// >codepoint ( str -- int ) - Convert single-character string to Unicode codepoint
+pub fn nativeToCodepoint(ctx: *Context) anyerror!void {
+    const str = try popString(ctx);
+    var iter = std.unicode.Utf8Iterator{ .bytes = str, .i = 0 };
+    const first_codepoint = iter.nextCodepoint() orelse {
+        return error.InvalidArgument;
+    };
+
+    if (iter.nextCodepoint() != null) {
+        return error.InvalidArgument;
+    }
+
+    try ctx.stack.push(.{ .integer = @intCast(first_codepoint) });
+}

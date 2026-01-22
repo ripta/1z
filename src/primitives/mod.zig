@@ -16,13 +16,22 @@ pub const popVector = helpers.popVector;
 pub const popByteArray = helpers.popByteArray;
 pub const popStream = helpers.popStream;
 
-// Domain modules
 pub const stack = @import("stack.zig");
 pub const arithmetic = @import("arithmetic.zig");
 pub const control = @import("control.zig");
 pub const strings = @import("strings.zig");
 pub const misc = @import("misc.zig");
 pub const parse_time = @import("parse_time.zig");
+
+pub const errors = @import("errors.zig");
+pub const data_structures = @import("data_structures.zig");
+pub const functional = @import("functional.zig");
+pub const sequences = @import("sequences.zig");
+pub const sets = @import("sets.zig");
+pub const associative = @import("associative.zig");
+pub const mutations = @import("mutations.zig");
+pub const streams = @import("streams.zig");
+pub const dynamic_vars = @import("dynamic_vars.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -34,6 +43,7 @@ pub const utf8NthCodepoint = sequence.utf8NthCodepoint;
 pub const utf8SliceByCodepoints = sequence.utf8SliceByCodepoints;
 pub const sequenceLength = sequence.sequenceLength;
 pub const classifySequence = sequence.classifySequence;
+pub const sequenceToValues = sequence.sequenceToValues;
 
 // Error mapping
 pub const error_mapping = @import("error_mapping.zig");
@@ -52,4 +62,13 @@ pub const extracted_primitives = stack.primitives ++
     control.primitives ++
     strings.primitives ++
     misc.primitives ++
-    parse_time.primitives;
+    parse_time.primitives ++
+    errors.primitives ++
+    data_structures.primitives ++
+    functional.primitives ++
+    sequences.primitives ++
+    sets.primitives ++
+    associative.primitives ++
+    mutations.primitives ++
+    streams.primitives ++
+    dynamic_vars.primitives;
