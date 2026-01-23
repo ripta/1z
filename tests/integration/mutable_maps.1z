@@ -1,6 +1,6 @@
 \ Integration tests for mutable maps M{ }
 
-"lib/testing.1z" load
+"lib/testing.1z" use
 
 "Mutable map creation" test-section
 M{ } #len 0 "empty mutable map length" assert=

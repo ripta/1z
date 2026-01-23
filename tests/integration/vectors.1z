@@ -1,7 +1,7 @@
 \ Integration tests for mutable vectors V{ }
 
-"lib/testing.1z" load
-"lib/sequences.1z" load
+"lib/testing.1z" use
+"lib/sequences.1z" use
 
 "Vector creation" test-section
 V{ } #len 0 "empty vector length" assert=

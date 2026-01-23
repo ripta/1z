@@ -1,0 +1,47 @@
+\ Module system tests
+
+"lib/testing.1z" use
+
+\ === Module as value ===
+"Module as value" test-section
+
+"tests/integration/module_lib.1z" load
+\ Stack should have module on it
+dup to-string .
+
+\ === Import brings words into scope ===
+"Import brings words into scope" test-section
+
+import
+5 double .
+4 triple .
+3 squared .
+
+\ === Multiple imports ===
+"Multiple imports" test-section
+
+"tests/integration/module_lib.1z" use
+10 double .
+
+\ === Module without import ===
+"Module without import" test-section
+
+[
+    "tests/integration/load_lib.1z" load drop
+    \ add3 should NOT be visible here since we only loaded, not imported
+    5 add3
+] [ drop "add3 not visible - correct" . ] recover
+
+\ === Module stored in variable ===
+"Module stored in variable" test-section
+
+"tests/integration/module_lib.1z" load
+math: swap ;
+math import
+7 double .
+
+\ === use shorthand ===
+"use shorthand" test-section
+
+"tests/integration/module_lib.1z" use
+8 double .

@@ -1,0 +1,5 @@
+\ Test module - definitions for module system tests
+
+double: ( n -- n*2 ) [ 2 * ] ;
+triple: ( n -- n*3 ) [ 3 * ] ;
+squared: ( n -- n^2 ) [ dup * ] ;

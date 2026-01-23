@@ -1,2 +1,2 @@
-"tests/integration/load_lib.1z" load
+"tests/integration/load_lib.1z" use
 5 add3

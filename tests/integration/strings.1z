@@ -1,7 +1,7 @@
 \ Integration tests for #join
 
-"lib/testing.1z" load
-"lib/strings.1z" load
+"lib/testing.1z" use
+"lib/strings.1z" use
 
 "#join basic" test-section
 { "a" "b" "c" } ", " #join "a, b, c" "#join with comma" assert=

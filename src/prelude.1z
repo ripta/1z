@@ -97,6 +97,9 @@ read-line: ( -- str/f ) [ input-stream get stream-read-line ] ;
 
 .: ( a -- ) [ to-string print-line ] ;
 
+\ Module loading
+use: ( filename -- ) [ load import ] ;
+
 \ Loops
 times: ( n quot -- ) [
   over 0 >

@@ -1,0 +1,30 @@
+Stack: [ ]
+=== Module as value ===Stack: [ ]
+Stack: [ <module:tests/integration/module_lib.1z (3 words)> ]
+"<module:tests/integration/module_lib.1z (3 words)>"
+Stack: [ <module:tests/integration/module_lib.1z (3 words)> ]
+=== Import brings words into scope ===Stack: [ <module:tests/integration/module_lib.1z (3 words)> ]
+Stack: [ ]
+10
+Stack: [ ]
+12
+Stack: [ ]
+9
+Stack: [ ]
+=== Multiple imports ===Stack: [ ]
+Stack: [ ]
+20
+Stack: [ ]
+=== Module without import ===Stack: [ ]
+"add3 not visible - correct"
+Stack: [ 5 ]
+=== Module stored in variable ===Stack: [ 5 ]
+Stack: [ 5 <module:tests/integration/module_lib.1z (3 words)> ]
+Stack: [ 5 ]
+Stack: [ 5 ]
+14
+Stack: [ 5 ]
+=== use shorthand ===Stack: [ 5 ]
+Stack: [ 5 ]
+16
+Stack: [ 5 ]

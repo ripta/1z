@@ -2,17 +2,21 @@ const std = @import("std");
 const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
+const Module = value_mod.Module;
+const ModuleWord = value_mod.ModuleWord;
 const StatementProcessor = @import("../statement.zig").StatementProcessor;
 
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
+const WordDefinition = @import("../dictionary.zig").WordDefinition;
 
 const popSymbol = helpers.popSymbol;
 const popString = helpers.popString;
 
 pub const primitives = [_]Primitive{
     .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
-    .{ .name = "load", .stack_effect = "filename --", .func = nativeLoad },
+    .{ .name = "load", .stack_effect = "filename -- module", .func = nativeLoad },
+    .{ .name = "import", .stack_effect = "module --", .func = nativeImport },
     .{ .name = "1array", .stack_effect = "elem -- array", .func = native1Array },
 };
 
@@ -43,9 +47,10 @@ fn nativeHelp(ctx: *Context) anyerror!void {
     try stdout.interface.flush();
 }
 
-/// load ( filename -- ) - Load and execute a 1z source file
+/// load ( filename -- module ) - Load a 1z source file and return a module with its definitions
 fn nativeLoad(ctx: *Context) anyerror!void {
     const filename = try popString(ctx);
+    const alloc = ctx.quotationAllocator();
 
     const file = std.fs.cwd().openFile(filename, .{}) catch {
         return error.FileNotFound;
@@ -55,36 +60,103 @@ fn nativeLoad(ctx: *Context) anyerror!void {
     var file_buf: [4096]u8 = undefined;
     var reader = file.reader(&file_buf);
 
+    try ctx.pushLocalFrame();
+    errdefer ctx.popLocalFrame();
+
     var processor: StatementProcessor = .{};
 
     while (true) {
         const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
             error.EndOfStream => {
                 // Try to execute any remaining buffered content
-                switch (processor.flush(ctx.quotationAllocator(), ctx)) {
+                switch (processor.flush(alloc, ctx)) {
                     .needs_more_input => {},
-                    .parse_error => |e| return e,
+                    .parse_error => |e| {
+                        ctx.popLocalFrame();
+                        return e;
+                    },
                     .complete => |instrs| {
                         if (instrs.len > 0) {
-                            try ctx.executeQuotation(.{ .instructions = instrs });
+                            ctx.executeQuotation(.{ .instructions = instrs }) catch |e| {
+                                ctx.popLocalFrame();
+                                return e;
+                            };
                         }
                     },
                 }
                 break;
             },
-            else => return error.FileReadError,
+            else => {
+                ctx.popLocalFrame();
+                return error.FileReadError;
+            },
         };
 
-        switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
+        switch (processor.feedLine(alloc, line, ctx)) {
             .needs_more_input => continue,
-            .parse_error => |err| return err,
+            .parse_error => |err| {
+                ctx.popLocalFrame();
+                return err;
+            },
             .complete => |instrs| {
                 if (instrs.len > 0) {
-                    try ctx.executeQuotation(.{ .instructions = instrs });
+                    ctx.executeQuotation(.{ .instructions = instrs }) catch |e| {
+                        ctx.popLocalFrame();
+                        return e;
+                    };
                 }
                 processor.reset();
             },
         }
+    }
+
+    // Capture definitions from the frame before popping
+    const frame_index = ctx.local_frames.items.len - 1;
+    const frame = &ctx.local_frames.items[frame_index];
+
+    // Create module
+    const module = try alloc.create(Module);
+    module.* = .{
+        .name = try alloc.dupe(u8, filename),
+        .words = .{},
+    };
+
+    // Copy definitions from frame to module
+    var iter = frame.iterator();
+    while (iter.next()) |entry| {
+        const word_def = entry.value_ptr.*;
+        // Only capture compound words (user-defined), not natives
+        switch (word_def.action) {
+            .compound => |instrs| {
+                try module.words.put(alloc, entry.key_ptr.*, .{
+                    .stack_effect = word_def.stack_effect,
+                    .instructions = instrs,
+                });
+            },
+            .native => {}, // Skip native words (shouldn't happen in loaded files)
+        }
+    }
+
+    ctx.popLocalFrame();
+    try ctx.stack.push(.{ .module = module });
+}
+
+/// import ( module -- ) - Import all words from a module into the current scope
+fn nativeImport(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const module = switch (val) {
+        .module => |m| m,
+        else => return error.TypeError,
+    };
+
+    var iter = module.words.iterator();
+    while (iter.next()) |entry| {
+        const mod_word = entry.value_ptr.*;
+        try ctx.defineWord(entry.key_ptr.*, .{
+            .name = entry.key_ptr.*,
+            .stack_effect = mod_word.stack_effect,
+            .action = .{ .compound = mod_word.instructions },
+        });
     }
 }
 

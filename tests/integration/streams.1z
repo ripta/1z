@@ -1,6 +1,6 @@
 \ Integration tests for stream I/O primitives
 
-"lib/testing.1z" load
+"lib/testing.1z" use
 
 "Standard streams" test-section
 stdout to-string "<stream stdout write>" "stdout to-string" assert=
