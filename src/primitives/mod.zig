@@ -32,6 +32,7 @@ pub const associative = @import("associative.zig");
 pub const mutations = @import("mutations.zig");
 pub const streams = @import("streams.zig");
 pub const dynamic_vars = @import("dynamic_vars.zig");
+pub const modules = @import("modules.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -71,4 +72,5 @@ pub const extracted_primitives = stack.primitives ++
     associative.primitives ++
     mutations.primitives ++
     streams.primitives ++
-    dynamic_vars.primitives;
+    dynamic_vars.primitives ++
+    modules.primitives;

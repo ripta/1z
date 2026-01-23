@@ -1,5 +1,6 @@
 const std = @import("std");
 const StackEffect = @import("stack_effect.zig").StackEffect;
+const Module = @import("module.zig").Module;
 
 /// Instruction represents a single operation in a compiled quotation.
 pub const Instruction = struct {
@@ -181,6 +182,8 @@ pub const Value = union(enum) {
     parameter: *Parameter,
     stack_effect: StackEffect,
     parse_time_marker: void, // Marker for parse-time word definitions
+    exported_marker: void, // Marker for exported word definitions
+    module_ref: *Module, // Reference to a module (for aliasing)
     error_value: ErrorObject,
 
     pub fn write(self: Value, writer: anytype) anyerror!void {
@@ -266,6 +269,8 @@ pub const Value = union(enum) {
             .parameter => |p| try writer.print("<parameter:{s}>", .{p.name}),
             .stack_effect => |effect| try effect.write(writer),
             .parse_time_marker => try writer.writeAll("parse-time"),
+            .exported_marker => try writer.writeAll("exported"),
+            .module_ref => |m| try writer.print("<module:{s}>", .{m.name}),
             .error_value => |err| try err.write(writer),
         }
     }
@@ -348,6 +353,8 @@ pub const Value = union(enum) {
             .parameter => |a| a == other.parameter,
             .stack_effect => |a| a.eql(other.stack_effect),
             .parse_time_marker => true, // All parse_time_markers are equal
+            .exported_marker => true, // All exported_markers are equal
+            .module_ref => |a| a == other.module_ref,
             .error_value => |a| a.eql(other.error_value),
         };
     }
@@ -426,13 +433,13 @@ pub const Value = union(enum) {
                 }
                 hasher.update(std.mem.asBytes(&combined));
             },
-            // Streams hash by pointer identity (same as equality)
             .stream => |s| {
+                // Streams hash by pointer identity (same as equality)
                 const ptr_val = @intFromPtr(s);
                 hasher.update(std.mem.asBytes(&ptr_val));
             },
-            // Parameters hash by pointer identity (same as equality)
             .parameter => |p| {
+                // Parameters hash by pointer identity (same as equality)
                 const ptr_val = @intFromPtr(p);
                 hasher.update(std.mem.asBytes(&ptr_val));
             },
@@ -448,6 +455,15 @@ pub const Value = union(enum) {
             .parse_time_marker => {
                 // All parse_time_markers hash the same
                 hasher.update("parse_time_marker");
+            },
+            .exported_marker => {
+                // All exported_markers hash the same
+                hasher.update("exported_marker");
+            },
+            .module_ref => |m| {
+                // Modules hash by pointer identity (same as equality)
+                const ptr_val = @intFromPtr(m);
+                hasher.update(std.mem.asBytes(&ptr_val));
             },
             .error_value => |err| {
                 hasher.update(err.error_type);
