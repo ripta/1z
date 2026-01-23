@@ -49,15 +49,7 @@ times: ( n quot -- ) [
   if
 ] ;
 while: ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b ) [
-  -rot> 2dup call
-  [
-    drop -rot> 2dup
-    drop call
-    -rot>
-    while
-  ]
-  [ drop drop nip ]
-  if
+  swap do compose [ loop ] curry when
 ] ;
 do: ( pred body -- pred body ) [ dup 2dip ] ;
 loop: ( ... pred: ( ... -- ... ? ) -- ... ) [
