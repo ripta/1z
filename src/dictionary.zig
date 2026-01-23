@@ -7,20 +7,11 @@ const StackEffect = @import("stack_effect.zig").StackEffect;
 /// Native function signature: takes context, can return errors.
 pub const NativeFn = *const fn (ctx: *Context) anyerror!void;
 
-/// Visibility of a word within a module.
-pub const Visibility = enum {
-    /// Private words are only accessible within the module where they are defined.
-    private,
-    /// Public words can be accessed from other modules via use: or qualified names.
-    public,
-};
-
 /// Word definition: either a native function or compound quotation.
 pub const WordDefinition = struct {
     name: []const u8,
     parse_time: bool = false,
     stack_effect: ?StackEffect = null,
-    visibility: Visibility = .private,
     action: union(enum) {
         native: NativeFn,
         compound: []const Instruction,

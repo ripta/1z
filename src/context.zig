@@ -13,7 +13,6 @@ const parser = @import("parser.zig");
 const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
-const Module = @import("module.zig").Module;
 
 /// Embedded prelude source code
 const prelude_source = @embedFile("prelude.1z");
@@ -56,10 +55,6 @@ pub const Context = struct {
     parse_tokenizer: ?*Tokenizer = null,
     /// Optional benchmark stats (null when benchmarking is disabled)
     benchmark: ?*BenchmarkStats = null,
-    /// Current module for word definitions (null = global namespace)
-    current_module: ?*Module = null,
-    /// Registry of all modules by full path (e.g., "math", "math/rand")
-    module_registry: std.StringHashMapUnmanaged(*Module) = .{},
 
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
@@ -129,12 +124,6 @@ pub const Context = struct {
 
     /// Free all resources used by the context.
     pub fn deinit(self: *Context) void {
-        var mod_iter = self.module_registry.valueIterator();
-        while (mod_iter.next()) |mod| {
-            mod.*.deinit();
-        }
-        self.module_registry.deinit(self.allocator);
-
         for (self.parameter_env.items) |*frame| {
             frame.deinit(self.allocator);
         }
@@ -155,52 +144,6 @@ pub const Context = struct {
     pub fn clearExecutionDetails(self: *Context) void {
         self.error_details.clearRetainingCapacity();
         self.call_stack.clearRetainingCapacity();
-    }
-
-    /// Get or create a module by its full path, e.g., "math", "math/rand".
-    /// Creates parent modules if they don't exist.
-    pub fn getOrCreateModule(self: *Context, path: []const u8) !*Module {
-        if (self.module_registry.get(path)) |existing| {
-            return existing;
-        }
-
-        const alloc = self.arena.allocator();
-        const path_copy = try alloc.dupe(u8, path);
-
-        var parent: ?*Module = null;
-        if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash_pos| {
-            const parent_path = path[0..slash_pos];
-            parent = try self.getOrCreateModule(parent_path);
-        }
-
-        const mod = try Module.init(alloc, path_copy, parent);
-        try self.module_registry.put(self.allocator, path_copy, mod);
-
-        if (parent) |p| {
-            const segment = if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash_pos|
-                path[slash_pos + 1 ..]
-            else
-                path;
-            try p.submodules.put(alloc, segment, mod);
-        }
-
-        return mod;
-    }
-
-    /// Get a module by its full path (returns null if not found).
-    pub fn getModule(self: *const Context, path: []const u8) ?*Module {
-        return self.module_registry.get(path);
-    }
-
-    /// Look up a word, checking current module first (if any), then global dictionary.
-    pub fn lookupWord(self: *const Context, name: []const u8) ?@import("dictionary.zig").WordDefinition {
-        if (self.current_module) |mod| {
-            if (mod.getWord(name)) |word| {
-                return word;
-            }
-        }
-
-        return self.dictionary.get(name);
     }
 
     /// Get the current binding for a parameter by name.
