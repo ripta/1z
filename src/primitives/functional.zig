@@ -67,7 +67,7 @@ pub fn nativeBenchmark(ctx: *Context) anyerror!void {
 
     // Time and execute
     const start_time = std.time.nanoTimestamp();
-    const exec_result = ctx.executeQuotation(quot);
+    const exec_result = ctx.executeQuotationWithFrame(quot);
 
     const end_time = std.time.nanoTimestamp();
     const elapsed_ns = end_time - start_time;

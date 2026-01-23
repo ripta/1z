@@ -1,0 +1,49 @@
+\ Test quotation-local definitions
+
+\ 1. Basic local definition - should not leak out
+[
+    local-only: [ 42 ] ;
+    local-only .
+] call
+
+\ 2. Local definition shadowing global
+global-word: [ "global" print-line ] ;
+[
+    \ Before the shadowing, the global should be visible
+    global-word
+    \ After the shadowing but in the quotation, the shadowed is visible
+    global-word: [ "local" print-line ] ;
+    global-word
+] call
+\ After the quotation, the global should be restored
+global-word
+
+\ 3. Nested quotations with their own locals
+[
+    outer-local: [ "outer" print-line ] ;
+    [
+        inner-local: [ "inner" print-line ] ;
+        outer-local    \ can see outer-local
+        inner-local    \ can see inner-local
+    ] call
+    outer-local        \ outer-local still visible
+] call
+
+\ 4. Recursive function with local helper
+[
+    fact-helper: [
+        dup 1 <=
+        [ drop 1 ]
+        [ dup 1 - fact-helper * ]
+        if
+    ] ;
+    5 fact-helper .
+] call
+
+\ 5. Multiple locals in same quotation
+[
+    a: [ 1 ] ;
+    b: [ 2 ] ;
+    c: [ 3 ] ;
+    a b + c + .
+] call

@@ -23,7 +23,7 @@ pub fn nativeRecover(ctx: *Context) anyerror!void {
     const try_quot = try popQuotation(ctx);
 
     // Execute try quotation with error-catching
-    ctx.executeQuotation(try_quot) catch |err| {
+    ctx.executeQuotationWithFrame(try_quot) catch |err| {
         const alloc = ctx.quotationAllocator();
         var stack_trace: ?[]const StackFrame = null;
 
@@ -49,7 +49,7 @@ pub fn nativeRecover(ctx: *Context) anyerror!void {
 
         // Clear error details after capturing, and execute recovery
         ctx.clearExecutionDetails();
-        try ctx.executeQuotation(recover_quot);
+        try ctx.executeQuotationWithFrame(recover_quot);
         return;
     };
 }
@@ -61,11 +61,11 @@ pub fn nativeCleanup(ctx: *Context) anyerror!void {
     const body_quot = try popQuotation(ctx);
 
     // Execute body quotation, capturing any error
-    const body_result = ctx.executeQuotation(body_quot);
+    const body_result = ctx.executeQuotationWithFrame(body_quot);
 
     // Always execute cleanup quotation, even if body failed
     // If cleanup also fails, we ignore that error and prioritize the body error
-    ctx.executeQuotation(cleanup_quot) catch {
+    ctx.executeQuotationWithFrame(cleanup_quot) catch {
         // Cleanup error is suppressed; body error takes priority
     };
 

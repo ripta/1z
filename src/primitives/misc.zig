@@ -25,7 +25,7 @@ fn nativeHelp(ctx: *Context) anyerror!void {
     var stdout = stdout_file.writer(&stdout_buf);
     const writer = &stdout.interface;
 
-    if (ctx.dictionary.get(name)) |word| {
+    if (ctx.lookupWord(name)) |word| {
         try writer.print("{s}", .{word.name});
         if (word.stack_effect) |effect| {
             try writer.writeAll(" ");

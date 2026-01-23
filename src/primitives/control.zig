@@ -19,10 +19,10 @@ pub const primitives = [_]Primitive{
     .{ .name = "if", .stack_effect = "? true-quot false-quot --", .func = nativeIf },
 };
 
-/// call ( quot -- ) - Execute a quotation
+/// call ( quot -- ) - Execute a quotation with a new local frame for scoping
 pub fn nativeCall(ctx: *Context) anyerror!void {
     const instrs = try popQuotation(ctx);
-    try ctx.executeQuotation(instrs);
+    try ctx.executeQuotationWithFrame(instrs);
 }
 
 /// ; ( name: quot -- ) or ( name: value -- ) or ( name: ( effect ) quot -- ) or ( name: parse-time quot -- ) - Define a new word
@@ -72,7 +72,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
         },
     };
 
-    try ctx.dictionary.put(name_copy, WordDefinition{
+    try ctx.defineWord(name_copy, WordDefinition{
         .name = name_copy,
         .parse_time = is_parse_time,
         .stack_effect = stack_effect_val,
@@ -93,5 +93,5 @@ pub fn nativeIf(ctx: *Context) anyerror!void {
     const false_quot = try popQuotation(ctx);
     const true_quot = try popQuotation(ctx);
     const cond = try popBoolean(ctx);
-    try ctx.executeQuotation(if (cond) true_quot else false_quot);
+    try ctx.executeQuotationWithFrame(if (cond) true_quot else false_quot);
 }

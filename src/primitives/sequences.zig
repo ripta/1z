@@ -119,7 +119,7 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
     var iter = SequenceIterator.init(seq, alloc) orelse return error.TypeError;
     while (try iter.next()) |elem| {
         try ctx.stack.push(elem);
-        try ctx.executeQuotation(quot);
+        try ctx.executeQuotationWithFrame(quot);
     }
 }
 
@@ -143,7 +143,7 @@ pub fn nativeMap(ctx: *Context) anyerror!void {
 
     while (try iter.next()) |elem| {
         try ctx.stack.push(elem);
-        try ctx.executeQuotation(quot);
+        try ctx.executeQuotationWithFrame(quot);
         const mapped = try ctx.stack.pop();
         try builder.append(mapped);
     }
@@ -163,7 +163,7 @@ pub fn nativeFilter(ctx: *Context) anyerror!void {
 
     while (try iter.next()) |elem| {
         try ctx.stack.push(elem);
-        try ctx.executeQuotation(quot);
+        try ctx.executeQuotationWithFrame(quot);
         const predicate = try popBoolean(ctx);
         if (predicate) {
             try builder.append(elem);
@@ -184,7 +184,7 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
     while (try iter.next()) |elem| {
         try ctx.stack.push(acc);
         try ctx.stack.push(elem);
-        try ctx.executeQuotation(quot);
+        try ctx.executeQuotationWithFrame(quot);
         acc = try ctx.stack.pop();
     }
     try ctx.stack.push(acc);

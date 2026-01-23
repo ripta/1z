@@ -68,6 +68,11 @@ max: ( a1 a2 -- a ) [ [ > ] choose ] ;
 ++: ( a1 -- a2 ) [ 1 + ] ;
 0?: ( a -- ? ) [ 0 = ] ;
 
+\ Comparison operators
+<=: ( a b -- ? ) [ 2dup < [ 2drop t ] [ = ] if ] ;
+>=: ( a b -- ? ) [ 2dup > [ 2drop t ] [ = ] if ] ;
+/=: ( a b -- ? ) [ = not ] ;
+
 \ Boolean operators
 not: ( ? -- ? ) [ [ f ] [ t ] if ] ;
 and: ( ? ? -- ? ) [ [ ] [ drop f ] if ] ;
