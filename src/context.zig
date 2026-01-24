@@ -225,9 +225,9 @@ pub const Context = struct {
         }
     }
 
-    /// Look up a word by name. Searches local frames (innermost to outermost) then global dictionary.
+    /// Look up a word by name. Searches local frames from innermost
+    /// (top) to outermost (bottom), then global dictionary.
     pub fn lookupWord(self: *const Context, name: []const u8) ?WordDefinition {
-        // Search local frames from innermost (top) to outermost (bottom)
         var i = self.local_frames.items.len;
         while (i > 0) {
             i -= 1;
@@ -235,8 +235,53 @@ pub const Context = struct {
                 return def;
             }
         }
-        // Fall back to global dictionary
+
         return self.dictionary.get(name);
+    }
+
+    /// Check if a name is a qualified name (contains a dot).
+    fn isQualifiedName(name: []const u8) bool {
+        return std.mem.indexOfScalar(u8, name, '.') != null;
+    }
+
+    /// Execute a qualified name like "math.double".
+    /// Splits on the rightmost dot, executes the module word to get a module,
+    /// then looks up and executes the word in that module.
+    fn executeQualifiedName(self: *Context, name: []const u8, line: usize) anyerror!void {
+        const dot_index = std.mem.lastIndexOfScalar(u8, name, '.') orelse return ExecutionError.UnknownWord;
+
+        const module_path = name[0..dot_index];
+        const word_name = name[dot_index + 1 ..];
+        if (module_path.len == 0 or word_name.len == 0) {
+            return ExecutionError.UnknownWord;
+        }
+
+        if (self.lookupWord(module_path)) |module_word| {
+            self.pushCallFrame(module_path, line);
+            defer self.popCallFrame();
+
+            switch (module_word.action) {
+                .native => |func| try func(self),
+                .compound => |instrs| try self.executeInstructions(instrs),
+            }
+        } else {
+            return ExecutionError.UnknownWord;
+        }
+
+        const module_val = self.stack.pop() catch return ExecutionError.UnknownWord;
+        const module = switch (module_val) {
+            .module => |m| m,
+            else => return error.TypeError,
+        };
+
+        if (module.words.get(word_name)) |mod_word| {
+            self.pushCallFrame(name, line);
+            defer self.popCallFrame();
+
+            try self.executeInstructions(mod_word.instructions);
+        } else {
+            return ExecutionError.UnknownWord;
+        }
     }
 
     /// Push a call frame onto the call stack.
@@ -675,6 +720,19 @@ pub const Context = struct {
                             self.captureCallStackOnError(err);
                             self.popCallFrame();
                             return err;
+                        }
+                    } else if (isQualifiedName(name)) {
+                        // Try qualified name resolution, e.g., math.double
+                        self.executeQualifiedName(name, instr.line) catch |err| {
+                            self.pushCallFrame(name, instr.line);
+                            self.captureCallStackOnError(err);
+                            self.popCallFrame();
+                            return err;
+                        };
+
+                        // Benchmark: update stack depth after qualified word execution
+                        if (self.benchmark) |b| {
+                            b.updatePeakStackDepth(self.stack.depth());
                         }
                     } else {
                         // Unknown word - push frame, capture, pop, return error

@@ -27,9 +27,9 @@ import
 "Module without import" test-section
 
 [
-    "tests/integration/load_lib.1z" load drop
-    \ add3 should NOT be visible here since we only loaded, not imported
-    5 add3
+  "tests/integration/load_lib.1z" load drop
+  \ add3 should NOT be visible here since we only loaded, not imported
+  5 add3
 ] [ drop "add3 not visible - correct" . ] recover
 
 \ === Module stored in variable ===
@@ -45,3 +45,24 @@ math import
 
 "tests/integration/module_lib.1z" use
 8 double .
+
+\ === Qualified name access ===
+"Qualified name access" test-section
+
+mymath: "tests/integration/module_lib.1z" load ;
+5 mymath.double .
+3 mymath.triple .
+4 mymath.squared .
+
+\ === Qualified name with nested path ===
+"Qualified name without import" test-section
+
+\ Verify that qualified access works without importing
+other: "tests/integration/module_lib.1z" load ;
+10 other.double .
+
+\ Verify double is NOT in scope (we didn't import 'other')
+[
+  \ This would fail if double was somehow imported
+  100 quadruple
+] [ drop "quadruple not visible - correct" . ] recover

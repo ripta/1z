@@ -28,3 +28,17 @@ Stack: [ 5 ]
 Stack: [ 5 ]
 16
 Stack: [ 5 ]
+=== Qualified name access ===Stack: [ 5 ]
+Stack: [ 5 ]
+10
+Stack: [ 5 ]
+9
+Stack: [ 5 ]
+16
+Stack: [ 5 ]
+=== Qualified name without import ===Stack: [ 5 ]
+Stack: [ 5 ]
+20
+Stack: [ 5 ]
+"quadruple not visible - correct"
+Stack: [ 5 100 ]
