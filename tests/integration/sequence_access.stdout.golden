@@ -1,10 +1,17 @@
+Stack: [ ]
+=== #len on arrays ===
+Stack: [ ]
 PASS: array #len
 Stack: [ ]
 PASS: empty array #len
 Stack: [ ]
+=== #len on strings ===
+Stack: [ ]
 PASS: string #len
 Stack: [ ]
 PASS: empty string #len
+Stack: [ ]
+=== #nth on arrays ===
 Stack: [ ]
 PASS: array #nth first
 Stack: [ ]
@@ -12,27 +19,39 @@ PASS: array #nth middle
 Stack: [ ]
 PASS: array #nth last
 Stack: [ ]
+=== #nth on strings ===
+Stack: [ ]
 PASS: string #nth first
 Stack: [ ]
 PASS: string #nth middle
 Stack: [ ]
 PASS: string #nth last
 Stack: [ ]
+=== #first on arrays ===
+Stack: [ ]
 PASS: array #first
 Stack: [ ]
 PASS: single element array #first
+Stack: [ ]
+=== #first on strings ===
 Stack: [ ]
 PASS: string #first
 Stack: [ ]
 PASS: single char string #first
 Stack: [ ]
+=== #last on arrays ===
+Stack: [ ]
 PASS: array #last
 Stack: [ ]
 PASS: single element array #last
 Stack: [ ]
+=== #last on strings ===
+Stack: [ ]
 PASS: string #last
 Stack: [ ]
 PASS: single char string #last
+Stack: [ ]
+=== Error cases ===
 Stack: [ ]
 PASS: empty array #first error
 Stack: [ ]
@@ -45,6 +64,8 @@ Stack: [ ]
 PASS: array #nth out of bounds error
 Stack: [ ]
 PASS: array #nth negative index error
+Stack: [ ]
+=== Nested arrays ===
 Stack: [ ]
 PASS: nested array access
 Stack: [ ]

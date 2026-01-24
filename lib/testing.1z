@@ -38,15 +38,53 @@ assert-true: ( bool msg -- ) [ t swap assert= ] ;
 \ Assert boolean is false
 assert-false: ( bool msg -- ) [ f swap assert= ] ;
 
-\ Assert quotation throws an error (any error)
-\ Stack: quot msg --
+\ Parameter to store test message during assert-error execution
+__assert_msg__: parameter [ "" ] ;
+
+\ Drop values until TOS is :__START__: marker
+__drop_until_marker__: ( -- ) [
+  dup :__START__: = not
+  [ drop __drop_until_marker__ ]
+  when
+] ;
+
+\ Assert quotation throws an error (any error).
+\
+\ We save msg to parameter, execute test with start marker; after execution,
+\ recover and check if TOS is :__OK__: (success) or something else (error).
+\
+\ What a mess lol
 assert-error: ( quot msg -- ) [
-  swap        \ msg quot
-  [ drop f ]  \ If error caught, push f (means error occurred)
-  recover
-  \ Stack now: msg (f if error, or some other value if no error)
-  f =  \ Did we get f (meaning error occurred)?
-  swap assert-true
+  dup __assert_msg__ [              \ with-parameter msg
+    drop                            \ quot msg-param
+
+    :__START__:                     \ quot :__START__:
+    swap                            \ :__START__: quot
+
+    [ call :__OK__: ]               \ success: push OK marker
+    [ drop ]                        \ error: drop error, effect (1 -- 0)
+    recover
+
+    \ Stack after recover:
+    \   Success: :__START__: [results] :__OK__:
+    \   Error:   :__START__: [partial-effects]
+    dup :__OK__: =
+    [
+      \ SUCCESS - FAIL the test (quotation didn't error)
+      __drop_until_marker__
+      drop                          \ drop :__START__:
+      __assert_msg__ get
+      "FAIL (no error): " swap #append print-line
+    ]
+    [
+      \ ERROR - PASS the test
+      __drop_until_marker__
+      drop                          \ drop :__START__:
+      __assert_msg__ get
+      "PASS: " swap #append print-line
+    ]
+    if
+  ] with-parameter
 ] ;
 
 \ Print section header

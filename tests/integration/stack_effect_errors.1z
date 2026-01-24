@@ -1,44 +1,18 @@
 \ Stack effect validation error tests
-\ These tests verify that incorrect stack effects are caught
 
-\ Test 1: Wrong delta in quotation parameter with balanced row variables
-\ The effect says ( n -- n n ) but [ 2 * ] only produces one value (delta 0)
-double-wrong: ( n quot: ( n -- n n ) -- n n ) [
-  call
-] ;
+"lib/testing.1z" use
 
-test-double-wrong: ( -- ) [
-  [ 5 [ 2 * ] double-wrong ] ignore-errors
-  \ Clean up the leftover args (2 items: n, quot)
-  drop drop
-  "caught-double-wrong" .
-] ;
-test-double-wrong
+"Wrong delta in quotation parameter" test-section
+\ The effect says ( n -- n n ) but [ 2 * ] only produces one value
+double-wrong: ( n quot: ( n -- n n ) -- n n ) [ call ] ;
+[ 5 [ 2 * ] double-wrong ] "caught double-wrong effect error" assert-error
 
-\ Test 2: Wrong delta with concrete effect (no row variables)
+"Wrong delta with concrete effect" test-section
 \ The effect says ( a b -- c ) requiring delta -1, but [ drop drop ] has delta -2
-add-wrong: ( a b quot: ( a b -- c ) -- c ) [
-  call
-] ;
+add-wrong: ( a b quot: ( a b -- c ) -- c ) [ call ] ;
+[ 1 2 [ drop drop ] add-wrong ] "caught add-wrong effect error" assert-error
 
-test-add-wrong: ( -- ) [
-  [ 1 2 [ drop drop ] add-wrong ] ignore-errors
-  \ Clean up the leftover args (3 items: a, b, quot)
-  drop drop drop
-  "caught-add-wrong" .
-] ;
-test-add-wrong
-
-\ Test 3: Quotation that consumes too few values
+"Quotation consumes too few values" test-section
 \ Effect says ( a b -- ) requiring delta -2, but [ drop ] only has delta -1
-consume-wrong: ( a b quot: ( a b -- ) -- ) [
-  call
-] ;
-
-test-consume-wrong: ( -- ) [
-  [ 1 2 [ drop ] consume-wrong ] ignore-errors
-  \ Clean up the leftover args (3 items: a, b, quot)
-  drop drop drop
-  "caught-consume-wrong" .
-] ;
-test-consume-wrong
+consume-wrong: ( a b quot: ( a b -- ) -- ) [ call ] ;
+[ 1 2 [ drop ] consume-wrong ] "caught consume-wrong effect error" assert-error
