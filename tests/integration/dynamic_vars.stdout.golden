@@ -1,45 +1,61 @@
 Stack: [ ]
 === Parameter creation and get ===
 Stack: [ ]
-PASS: output-stream get returns stdoutStack: [ ]
-PASS: input-stream get returns stdinStack: [ ]
+PASS: output-stream get returns stdout
+Stack: [ ]
+PASS: input-stream get returns stdin
+Stack: [ ]
 PASS: basic parameter get
 Stack: [ ]
 === Custom parameter definition ===
 Stack: [ ]
 Stack: [ ]
-PASS: test-param get returns defaultStack: [ ]
+PASS: test-param get returns default
+Stack: [ ]
 PASS: custom parameter with numeric default
 Stack: [ ]
 === Lazy default evaluation ===
 Stack: [ ]
 Stack: [ ]
-PASS: counter first getStack: [ ]
-PASS: counter second getStack: [ ]
+PASS: counter first get
+Stack: [ ]
+PASS: counter second get
+Stack: [ ]
 PASS: lazy default evaluation
 Stack: [ ]
 === with-parameter rebinding ===
 Stack: [ ]
 Stack: [ ]
-PASS: before rebindStack: [ ]
-PASS: inside rebindStack: [ ]
-PASS: after rebind restoredStack: [ ]
+PASS: before rebind
+Stack: [ ]
+PASS: inside rebind
+Stack: [ ]
+PASS: after rebind restored
+Stack: [ ]
 PASS: with-parameter rebinding
 Stack: [ ]
 === Nested with-parameter ===
 Stack: [ ]
 Stack: [ ]
-PASS: outer defaultStack: [ ]
-PASS: first level bindingPASS: second level bindingPASS: first level restoredStack: [ ]
-PASS: outer restoredStack: [ ]
+PASS: outer default
+Stack: [ ]
+PASS: first level binding
+PASS: second level binding
+PASS: first level restored
+Stack: [ ]
+PASS: outer restored
+Stack: [ ]
 PASS: nested with-parameter
 Stack: [ ]
 === with-parameter restores on error ===
 Stack: [ ]
 Stack: [ ]
-PASS: before errorStack: [ ]
-PASS: inside before errorStack: [ ]
-PASS: restored after errorStack: [ ]
+PASS: before error
+Stack: [ ]
+PASS: inside before error
+Stack: [ ]
+PASS: restored after error
+Stack: [ ]
 PASS: with-parameter restores on error
 Stack: [ ]
 === Stream redirection with with-output-stream ===
@@ -52,22 +68,32 @@ Stack: [ <stream tests/fixtures/redirect-test.txt read> "redirected output
 " ]
 Stack: [ "redirected output
 " ]
-PASS: stream redirection wrote correct contentStack: [ ]
+PASS: stream redirection wrote correct content
+Stack: [ ]
 PASS: stream redirection with with-output-stream
 Stack: [ ]
 === Parameter value display ===
 Stack: [ ]
-PASS: parameter to-stringStack: [ ]
+PASS: parameter to-string
+Stack: [ ]
 PASS: parameter value display
 Stack: [ ]
 === Multiple parameters in same scope ===
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
-PASS: multi-a defaultStack: [ ]
-PASS: multi-b defaultStack: [ ]
-PASS: multi-a reboundPASS: multi-b unchangedPASS: multi-a still reboundPASS: multi-b now reboundPASS: multi-b restoredStack: [ ]
-PASS: multi-a restoredStack: [ ]
+PASS: multi-a default
+Stack: [ ]
+PASS: multi-b default
+Stack: [ ]
+PASS: multi-a rebound
+PASS: multi-b unchanged
+PASS: multi-a still rebound
+PASS: multi-b now rebound
+PASS: multi-b restored
+Stack: [ ]
+PASS: multi-a restored
+Stack: [ ]
 PASS: multiple parameters in same scope
 Stack: [ ]
 All dynamic variable tests complete!

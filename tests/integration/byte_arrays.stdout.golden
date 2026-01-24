@@ -1,100 +1,156 @@
 Stack: [ ]
 === Byte array creation ===
 Stack: [ ]
-PASS: empty byte array lengthStack: [ ]
-PASS: byte array lengthStack: [ ]
-PASS: hex byte array lengthStack: [ ]
-PASS: decimal byte array lengthStack: [ ]
+PASS: empty byte array length
+Stack: [ ]
+PASS: byte array length
+Stack: [ ]
+PASS: hex byte array length
+Stack: [ ]
+PASS: decimal byte array length
+Stack: [ ]
 === Byte array element access ===
 Stack: [ ]
-PASS: #nth first byteStack: [ ]
-PASS: #nth middle byteStack: [ ]
-PASS: #nth last byteStack: [ ]
-PASS: #nth hex firstStack: [ ]
-PASS: #nth hex lastStack: [ ]
-PASS: #firstStack: [ ]
-PASS: #lastStack: [ ]
+PASS: #nth first byte
+Stack: [ ]
+PASS: #nth middle byte
+Stack: [ ]
+PASS: #nth last byte
+Stack: [ ]
+PASS: #nth hex first
+Stack: [ ]
+PASS: #nth hex last
+Stack: [ ]
+PASS: #first
+Stack: [ ]
+PASS: #last
+Stack: [ ]
 === Byte array #slice ===
 Stack: [ ]
-PASS: #slice lengthStack: [ ]
-PASS: #slice first elementStack: [ ]
-PASS: #slice last elementStack: [ ]
+PASS: #slice length
+Stack: [ ]
+PASS: #slice first element
+Stack: [ ]
+PASS: #slice last element
+Stack: [ ]
 === Byte array #append ===
 Stack: [ ]
-PASS: #append lengthStack: [ ]
-PASS: #append firstStack: [ ]
-PASS: #append lastStack: [ ]
+PASS: #append length
+Stack: [ ]
+PASS: #append first
+Stack: [ ]
+PASS: #append last
+Stack: [ ]
 === Byte array #prepend ===
 Stack: [ ]
-PASS: #prepend lengthStack: [ ]
-PASS: #prepend firstStack: [ ]
-PASS: #prepend lastStack: [ ]
+PASS: #prepend length
+Stack: [ ]
+PASS: #prepend first
+Stack: [ ]
+PASS: #prepend last
+Stack: [ ]
 === Cross-sequence #append to byte array ===
 Stack: [ ]
-PASS: #append array to byte array lengthStack: [ ]
-PASS: #append array to byte array firstStack: [ ]
-PASS: #append array to byte array lastStack: [ ]
+PASS: #append array to byte array length
+Stack: [ ]
+PASS: #append array to byte array first
+Stack: [ ]
+PASS: #append array to byte array last
+Stack: [ ]
 === Cross-sequence #prepend to byte array ===
 Stack: [ ]
-PASS: #prepend array to byte array lengthStack: [ ]
-PASS: #prepend array to byte array firstStack: [ ]
-PASS: #prepend array to byte array lastStack: [ ]
+PASS: #prepend array to byte array length
+Stack: [ ]
+PASS: #prepend array to byte array first
+Stack: [ ]
+PASS: #prepend array to byte array last
+Stack: [ ]
 === Cross-sequence #append byte array to array ===
 Stack: [ ]
-PASS: #append byte array to array lengthStack: [ ]
-PASS: #append byte array to array elem 2Stack: [ ]
-PASS: #append byte array to array elem 3Stack: [ ]
+PASS: #append byte array to array length
+Stack: [ ]
+PASS: #append byte array to array elem 2
+Stack: [ ]
+PASS: #append byte array to array elem 3
+Stack: [ ]
 === Cross-sequence #append byte array to string ===
 Stack: [ ]
-PASS: #append byte array to stringStack: [ ]
-PASS: #append byte array to empty stringStack: [ ]
-PASS: #append empty byte array to stringStack: [ ]
+PASS: #append byte array to string
+Stack: [ ]
+PASS: #append byte array to empty string
+Stack: [ ]
+PASS: #append empty byte array to string
+Stack: [ ]
 === Cross-sequence #prepend byte array to string ===
 Stack: [ ]
-PASS: #prepend byte array to stringStack: [ ]
-PASS: #prepend byte array to empty stringStack: [ ]
+PASS: #prepend byte array to string
+Stack: [ ]
+PASS: #prepend byte array to empty string
+Stack: [ ]
 === Cross-sequence #append vector to string ===
 Stack: [ ]
-PASS: #append vector of integers to stringStack: [ ]
+PASS: #append vector of integers to string
+Stack: [ ]
 === Cross-sequence #append array to string ===
 Stack: [ ]
-PASS: #append array of integers to stringStack: [ ]
+PASS: #append array of integers to string
+Stack: [ ]
 === Cross-sequence #append string to byte array ===
 Stack: [ ]
-PASS: #append string to byte array lengthStack: [ ]
-PASS: #append string to byte array contentStack: [ ]
+PASS: #append string to byte array length
+Stack: [ ]
+PASS: #append string to byte array content
+Stack: [ ]
 === Cross-sequence #prepend string to byte array ===
 Stack: [ ]
-PASS: #prepend string to byte array lengthStack: [ ]
-PASS: #prepend string to byte array contentStack: [ ]
+PASS: #prepend string to byte array length
+Stack: [ ]
+PASS: #prepend string to byte array content
+Stack: [ ]
 === Byte array higher-order operations ===
 Stack: [ ]
-PASS: #map returns array, first elementStack: [ ]
-PASS: #map last elementStack: [ ]
-PASS: #filter count evensStack: [ ]
-PASS: #filter first evenStack: [ ]
-PASS: #reduce sumStack: [ ]
+PASS: #map returns array, first element
+Stack: [ ]
+PASS: #map last element
+Stack: [ ]
+PASS: #filter count evens
+Stack: [ ]
+PASS: #filter first even
+Stack: [ ]
+PASS: #reduce sum
+Stack: [ ]
 === Byte array #each ===
 Stack: [ ]
-PASS: #each accumulateStack: [ ]
+PASS: #each accumulate
+Stack: [ ]
 === String to bytes conversion ===
 Stack: [ ]
-PASS: >bytes lengthStack: [ ]
-PASS: >bytes first byte is 'h'Stack: [ ]
-PASS: >bytes last byte is 'o'Stack: [ ]
+PASS: >bytes length
+Stack: [ ]
+PASS: >bytes first byte is 'h'
+Stack: [ ]
+PASS: >bytes last byte is 'o'
+Stack: [ ]
 === Bytes to string conversion ===
 Stack: [ ]
-PASS: bytes> creates stringStack: [ ]
-PASS: bytes> hex to stringStack: [ ]
+PASS: bytes> creates string
+Stack: [ ]
+PASS: bytes> hex to string
+Stack: [ ]
 === Round-trip conversion ===
 Stack: [ ]
-PASS: string -> bytes -> stringStack: [ ]
-PASS: bytes -> string -> bytesStack: [ ]
+PASS: string -> bytes -> string
+Stack: [ ]
+PASS: bytes -> string -> bytes
+Stack: [ ]
 === Byte array to-string ===
 Stack: [ ]
-PASS: empty byte array to-stringStack: [ ]
-PASS: byte array to-stringStack: [ ]
-PASS: hex format in to-stringStack: [ ]
+PASS: empty byte array to-string
+Stack: [ ]
+PASS: byte array to-string
+Stack: [ ]
+PASS: hex format in to-string
+Stack: [ ]
 === Error cases ===
 Stack: [ ]
 PASS: index out of bounds error

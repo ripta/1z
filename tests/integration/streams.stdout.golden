@@ -1,24 +1,32 @@
 Stack: [ ]
 === Standard streams ===
 Stack: [ ]
-PASS: stdout to-stringStack: [ ]
-PASS: stderr to-stringStack: [ ]
-PASS: stdin to-stringStack: [ ]
+PASS: stdout to-string
+Stack: [ ]
+PASS: stderr to-string
+Stack: [ ]
+PASS: stdin to-string
+Stack: [ ]
 === Stream close on standard streams ===
 Stack: [ ]
-PASS: closed stdout to-stringStack: [ ]
-PASS: closed stderr to-stringStack: [ ]
+PASS: closed stdout to-string
+Stack: [ ]
+PASS: closed stderr to-string
+Stack: [ ]
 === Stream open and close ===
 Stack: [ ]
 Stack: [ <stream tests/fixtures/hello.txt read> ]
-PASS: read stream to-stringStack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: read stream to-string
+Stack: [ <stream tests/fixtures/hello.txt read> ]
 Stack: [ ]
 PASS: stream-open and close
 Stack: [ ]
 === Stream write to stdout ===
 Stack: [ ]
-HelloPASS: stream-write to stdout returns byte countStack: [ ]
-!PASS: stream-write byte array to stdoutStack: [ ]
+HelloPASS: stream-write to stdout returns byte count
+Stack: [ ]
+!PASS: stream-write byte array to stdout
+Stack: [ ]
 
 Stack: [ ]
 === Stream flush ===
@@ -30,23 +38,29 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ <stream tests/fixtures/hello.txt read> ]
 Stack: [ <stream tests/fixtures/hello.txt read> B{ 0x48 0x65 0x6C 0x6C 0x6F } ]
-PASS: stream-read returns 5 bytesStack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: stream-read returns 5 bytes
+Stack: [ <stream tests/fixtures/hello.txt read> ]
 Stack: [ ]
 PASS: stream-read partial
 Stack: [ ]
 Stack: [ <stream tests/fixtures/hello.txt read> ]
 Stack: [ <stream tests/fixtures/hello.txt read> B{ 0x48 0x65 0x6C 0x6C 0x6F 0x2C 0x20 0x57 0x6F 0x72 0x6C 0x64 0x21 } ]
-PASS: stream-read returns available bytesStack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: stream-read returns available bytes
+Stack: [ <stream tests/fixtures/hello.txt read> ]
 Stack: [ ]
 PASS: stream-read more than available
 Stack: [ ]
 === Stream read-line ===
 Stack: [ ]
 Stack: [ <stream tests/fixtures/lines.txt read> ]
-PASS: first lineStack: [ <stream tests/fixtures/lines.txt read> ]
-PASS: second lineStack: [ <stream tests/fixtures/lines.txt read> ]
-PASS: third lineStack: [ <stream tests/fixtures/lines.txt read> ]
-PASS: EOF returns falseStack: [ <stream tests/fixtures/lines.txt read> ]
+PASS: first line
+Stack: [ <stream tests/fixtures/lines.txt read> ]
+PASS: second line
+Stack: [ <stream tests/fixtures/lines.txt read> ]
+PASS: third line
+Stack: [ <stream tests/fixtures/lines.txt read> ]
+PASS: EOF returns false
+Stack: [ <stream tests/fixtures/lines.txt read> ]
 Stack: [ ]
 PASS: stream-read-line multiple lines
 Stack: [ ]
@@ -54,20 +68,25 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ <stream tests/fixtures/hello.txt read> ]
 Stack: [ <stream tests/fixtures/hello.txt read> B{ 0x48 0x65 0x6C 0x6C 0x6F 0x2C 0x20 0x57 0x6F 0x72 0x6C 0x64 0x21 } ]
-PASS: stream-read-all returns all bytesStack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: stream-read-all returns all bytes
+Stack: [ <stream tests/fixtures/hello.txt read> ]
 Stack: [ ]
 PASS: stream-read-all
 Stack: [ ]
 === Stream positioning ===
 Stack: [ ]
 Stack: [ <stream tests/fixtures/hello.txt read> ]
-PASS: stream-tell at startStack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: stream-tell at start
 Stack: [ <stream tests/fixtures/hello.txt read> ]
-PASS: stream-tell after readStack: [ <stream tests/fixtures/hello.txt read> ]
 Stack: [ <stream tests/fixtures/hello.txt read> ]
-PASS: stream-tell after seek to 0Stack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: stream-tell after read
 Stack: [ <stream tests/fixtures/hello.txt read> ]
-PASS: stream-tell after seek-end -5Stack: [ <stream tests/fixtures/hello.txt read> ]
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: stream-tell after seek to 0
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: stream-tell after seek-end -5
+Stack: [ <stream tests/fixtures/hello.txt read> ]
 Stack: [ ]
 PASS: stream positioning
 Stack: [ ]
@@ -81,26 +100,34 @@ PASS: NotSeekable error on stdout stream-seek
 Stack: [ ]
 === Buffering control ===
 Stack: [ ]
-PASS: stdout default buffering is lineStack: [ ]
-PASS: stderr default buffering is lineStack: [ ]
+PASS: stdout default buffering is line
+Stack: [ ]
+PASS: stderr default buffering is line
+Stack: [ ]
 Stack: [ <stream tests/fixtures/hello.txt read> ]
-PASS: file default buffering is noneStack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: file default buffering is none
 Stack: [ <stream tests/fixtures/hello.txt read> ]
-PASS: buffering mode changed to blockStack: [ <stream tests/fixtures/hello.txt read> ]
+Stack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: buffering mode changed to block
+Stack: [ <stream tests/fixtures/hello.txt read> ]
 Stack: [ ]
 PASS: buffering control
 Stack: [ ]
 === Unix interop ===
 Stack: [ ]
-PASS: stdout fd is 1Stack: [ ]
-PASS: stderr fd is 2Stack: [ ]
+PASS: stdout fd is 1
+Stack: [ ]
+PASS: stderr fd is 2
+Stack: [ ]
 Stack: [ <stream tests/fixtures/hello.txt read> ]
-PASS: file fd is positiveStack: [ <stream tests/fixtures/hello.txt read> ]
+PASS: file fd is positive
+Stack: [ <stream tests/fixtures/hello.txt read> ]
 Stack: [ ]
 PASS: stream->fd
 Stack: [ ]
 Stack: [ <stream fd write> ]
-PASS: fd->stream creates streamStack: [ ]
+PASS: fd->stream creates stream
+Stack: [ ]
 PASS: fd->stream
 Stack: [ ]
 === Error cases ===

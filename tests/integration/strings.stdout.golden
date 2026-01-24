@@ -2,22 +2,33 @@ Stack: [ ]
 Stack: [ ]
 === #join basic ===
 Stack: [ ]
-PASS: #join with commaStack: [ ]
-PASS: #join empty sepStack: [ ]
-PASS: #join empty arrayStack: [ ]
-PASS: #join single elementStack: [ ]
+PASS: #join with comma
+Stack: [ ]
+PASS: #join empty sep
+Stack: [ ]
+PASS: #join empty array
+Stack: [ ]
+PASS: #join single element
+Stack: [ ]
 === #join with non-strings ===
 Stack: [ ]
-PASS: #join integersStack: [ ]
+PASS: #join integers
+Stack: [ ]
 === #join mixed types ===
 Stack: [ ]
-PASS: #join string and intStack: [ ]
+PASS: #join string and int
+Stack: [ ]
 === repeat ===
 Stack: [ ]
-PASS: repeat 3 timesStack: [ ]
-PASS: repeat 1 timeStack: [ ]
-PASS: repeat 0 timesStack: [ ]
-PASS: repeat negativeStack: [ ]
-PASS: repeat empty stringStack: [ ]
+PASS: repeat 3 times
+Stack: [ ]
+PASS: repeat 1 time
+Stack: [ ]
+PASS: repeat 0 times
+Stack: [ ]
+PASS: repeat negative
+Stack: [ ]
+PASS: repeat empty string
+Stack: [ ]
 All string tests complete!
 Stack: [ ]
