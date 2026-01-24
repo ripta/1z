@@ -38,23 +38,22 @@ assert-true: ( bool msg -- ) [ t swap assert= ] ;
 \ Assert boolean is false
 assert-false: ( bool msg -- ) [ f swap assert= ] ;
 
-\ Parameter to store test message during assert-error execution
-__assert_msg__: parameter [ "" ] ;
-
-\ Drop values until TOS is :__START__: marker
-__drop_until_marker__: ( -- ) [
-  dup :__START__: = not
-  [ drop __drop_until_marker__ ]
-  when
-] ;
-
 \ Assert quotation throws an error (any error).
 \
 \ We save msg to parameter, execute test with start marker; after execution,
 \ recover and check if TOS is :__OK__: (success) or something else (error).
-\
-\ What a mess lol
 assert-error: ( quot msg -- ) [
+
+  \ Parameter to store test message during assert-error execution
+  __assert_msg__: parameter [ "" ] ;
+
+  \ Drop values until TOS is :__START__: marker
+  __drop_until_marker__: ( -- ) [
+    dup :__START__: = not
+    [ drop __drop_until_marker__ ]
+    when
+  ] ;
+
   dup __assert_msg__ [              \ with-parameter msg
     drop                            \ quot msg-param
 
