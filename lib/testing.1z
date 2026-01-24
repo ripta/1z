@@ -14,7 +14,7 @@ assert=: ( actual expected msg -- ) [
   2dup =  \ msg actual expected bool
   [
     2drop  \ msg
-    "PASS: " swap #append print
+    "PASS: " swap #append print-line
   ]
   [
     \ Build: "FAIL: {msg} (expected {expected}, got {actual})"
@@ -27,7 +27,7 @@ assert=: ( actual expected msg -- ) [
     #append                    \ msg "(expected {exp}), got {actual}"
     " " swap #append           \ msg " (expected {exp}), got {actual}"
     #append                    \ "{msg} (expected {exp}), got {actual}"
-    "FAIL: " swap #append print
+    "FAIL: " swap #append print-line
   ]
   if
 ] ;
@@ -50,4 +50,4 @@ assert-error: ( quot msg -- ) [
 ] ;
 
 \ Print section header
-test-section: ( msg -- ) [ "=== " swap #append " ===" #append print ] ;
+test-section: ( msg -- ) [ "=== " swap #append " ===" #append print-line ] ;

@@ -1,11 +1,13 @@
 Stack: [ ]
 Stack: [ ]
-=== #starts-with? ===Stack: [ ]
+=== #starts-with? ===
+Stack: [ ]
 PASS: #starts-with? trueStack: [ ]
 PASS: #starts-with? falseStack: [ ]
 PASS: #starts-with? arrayStack: [ ]
 PASS: #starts-with? emptyStack: [ ]
-=== #ends-with? ===Stack: [ ]
+=== #ends-with? ===
+Stack: [ ]
 PASS: #ends-with? trueStack: [ ]
 PASS: #ends-with? falseStack: [ ]
 PASS: #ends-with? arrayStack: [ ]

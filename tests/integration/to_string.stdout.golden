@@ -1,37 +1,48 @@
 Stack: [ ]
-=== to-string on integers ===Stack: [ ]
+=== to-string on integers ===
+Stack: [ ]
 PASS: integerStack: [ ]
 PASS: negative integerStack: [ ]
 PASS: zeroStack: [ ]
-=== to-string on booleans ===Stack: [ ]
+=== to-string on booleans ===
+Stack: [ ]
 PASS: trueStack: [ ]
 PASS: falseStack: [ ]
-=== to-string on strings ===Stack: [ ]
+=== to-string on strings ===
+Stack: [ ]
 PASS: string length includes quotesStack: [ ]
 PASS: empty string lengthStack: [ ]
-=== to-string on symbols ===Stack: [ ]
+=== to-string on symbols ===
+Stack: [ ]
 PASS: symbolStack: [ ]
-=== to-string on arrays ===Stack: [ ]
+=== to-string on arrays ===
+Stack: [ ]
 PASS: empty arrayStack: [ ]
 PASS: array of integersStack: [ ]
 PASS: array of strings lengthStack: [ ]
-=== to-string on quotations ===Stack: [ ]
+=== to-string on quotations ===
+Stack: [ ]
 PASS: quotationStack: [ ]
 PASS: empty quotationStack: [ ]
-=== to-string on nested structures ===Stack: [ ]
+=== to-string on nested structures ===
+Stack: [ ]
 PASS: nested arraysStack: [ ]
-=== dot word ===Stack: [ ]
+=== dot word ===
+Stack: [ ]
 42
 Stack: [ ]
 PASS: dot consumes valueStack: [ ]
-=== to-string with #append ===Stack: [ ]
+=== to-string with #append ===
+Stack: [ ]
 PASS: simple appendStack: [ ]
 PASS: chained appendStack: [ ]
-=== to-string on hash ===Stack: [ ]
+=== to-string on hash ===
+Stack: [ ]
 Stack: [ "H{ a: 1 }" ]
 PASS: hash prefixStack: [ "H{ a: 1 }" ]
 PASS: hash suffixStack: [ ]
-=== to-string preserves types ===Stack: [ ]
+=== to-string preserves types ===
+Stack: [ ]
 PASS: mixed arrayStack: [ ]
 All to-string tests complete!
 Stack: [ ]
