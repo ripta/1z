@@ -1,77 +1,36 @@
 \ Test arithmetic words from prelude
 
-\ -@ ( a -- -a ) - arithmetic negation
-42 -@
-wipe
+"lib/testing.1z" use
 
-\ -@ with negative number
--7 -@
-wipe
+"Negation (-@)" test-section
+42 -@ -42 "-@ positive" assert=
+-7 -@ 7 "-@ negative" assert=
+0 -@ 0 "-@ zero" assert=
 
-\ -@ with zero
-0 -@
-wipe
+"Absolute value (abs)" test-section
+42 abs 42 "abs positive" assert=
+-42 abs 42 "abs negative" assert=
+0 abs 0 "abs zero" assert=
 
-\ abs ( a -- b ) - absolute value of positive
-42 abs
-wipe
+"Minimum (min)" test-section
+3 5 min 3 "min first smaller" assert=
+5 3 min 3 "min second smaller" assert=
+7 7 min 7 "min equal" assert=
 
-\ abs with negative number
--42 abs
-wipe
+"Maximum (max)" test-section
+3 5 max 5 "max second larger" assert=
+5 3 max 5 "max first larger" assert=
+7 7 max 7 "max equal" assert=
 
-\ abs with zero
-0 abs
-wipe
+"Decrement (--)" test-section
+5 -- 4 "-- positive" assert=
+-3 -- -4 "-- negative" assert=
 
-\ min ( a1 a2 -- a ) - minimum of two values
-3 5 min
-wipe
+"Increment (++)" test-section
+5 ++ 6 "++ positive" assert=
+-3 ++ -2 "++ negative" assert=
 
-\ min with second smaller
-5 3 min
-wipe
-
-\ min with equal values
-7 7 min
-wipe
-
-\ max ( a1 a2 -- a ) - maximum of two values
-3 5 max
-wipe
-
-\ max with first larger
-5 3 max
-wipe
-
-\ max with equal values
-7 7 max
-wipe
-
-\ -- ( a1 -- a2 ) - decrement
-5 --
-wipe
-
-\ -- with negative
--3 --
-wipe
-
-\ ++ ( a1 -- a2 ) - increment
-5 ++
-wipe
-
-\ ++ with negative
--3 ++
-wipe
-
-\ 0? ( a -- ? ) - test if zero
-0 0?
-wipe
-
-\ 0? with non-zero
-5 0?
-wipe
-
-\ 0? with negative
--3 0?
-wipe
+"Zero test (0?)" test-section
+0 0? "0? zero" assert-true
+5 0? "0? positive" assert-false
+-3 0? "0? negative" assert-false

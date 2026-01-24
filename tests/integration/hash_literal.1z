@@ -1,10 +1,16 @@
 \ Test H{ hash literal syntax
 
-\ Simple hash literal
-H{ name: "Alice" age: 30 } .
+"lib/testing.1z" use
 
-\ Empty hash
-H{ } .
+"Hash literal syntax" test-section
+H{ name: "Alice" age: 30 } name: @get "Alice" "hash literal name value" assert=
+H{ name: "Alice" age: 30 } age: @get 30 "hash literal age value" assert=
 
-\ Hash with nested values
-H{ x: 1 y: 2 z: 3 } .
+"Empty hash" test-section
+H{ } @keys #len 0 "empty hash has no keys" assert=
+
+"Hash with multiple values" test-section
+H{ x: 1 y: 2 z: 3 } @keys #len 3 "hash with 3 keys" assert=
+H{ x: 1 y: 2 z: 3 } x: @get 1 "hash x value" assert=
+H{ x: 1 y: 2 z: 3 } y: @get 2 "hash y value" assert=
+H{ x: 1 y: 2 z: 3 } z: @get 3 "hash z value" assert=

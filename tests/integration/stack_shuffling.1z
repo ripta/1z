@@ -1,45 +1,34 @@
 \ Test stack-shuffling words from prelude
 
-\ nip ( a b -- b ) - removes second item
-1 2 nip
-wipe
+"lib/testing.1z" use
 
-\ keep ( x quot -- ... x ) - execute quot, preserve x
-5 [ dup + ] keep
-wipe
+"nip" test-section
+1 2 nip 2 "nip" assert=
 
-\ bi ( x p q -- ) - apply two quotations to one value
-5 [ dup + ] [ 1 + ] bi
-wipe
+"keep" test-section
+5 [ dup + ] keep 5 "keep preserves x" assert= 10 "keep result" assert=
 
-\ 2dup ( a b -- a b a b ) - duplicate top two items
-1 2 2dup
-wipe
+"bi" test-section
+5 [ dup + ] [ 1 + ] bi 6 "bi second quot" assert= 10 "bi first quot" assert=
 
-\ 2drop ( a b -- ) - drop top two items
-1 2 3 4 2drop
-wipe
+"2dup" test-section
+1 2 2dup 2 "2dup top" assert= 1 "2dup second" assert= 2 "2dup third" assert= 1 "2dup fourth" assert=
 
-\ <rot- ( a b c -- b c a ) - bring third item to top
-1 2 3 <rot-
-wipe
+"2drop" test-section
+1 2 3 4 2drop 2 "2drop top" assert= 1 "2drop second" assert=
 
-\ -rot> ( a b c -- c a b ) - send top item to third position
-1 2 3 -rot>
-wipe
+"<rot-" test-section
+1 2 3 <rot- 1 "<rot- top" assert= 3 "<rot- second" assert= 2 "<rot- third" assert=
 
-\ tuck ( a b -- b a b ) - copy top item below second
-1 2 tuck
-wipe
+"-rot>" test-section
+1 2 3 -rot> 2 "-rot> top" assert= 1 "-rot> second" assert= 3 "-rot> third" assert=
 
-\ choose ( a1 a2 quot -- a ) - apply quot to copies, select based on result
-3 5 [ < ] choose
-wipe
+"tuck" test-section
+1 2 tuck 2 "tuck top" assert= 1 "tuck second" assert= 2 "tuck third" assert=
 
-\ choose with false result
-5 3 [ < ] choose
-wipe
+"choose" test-section
+3 5 [ < ] choose 3 "choose true" assert=
+5 3 [ < ] choose 3 "choose false" assert=
 
-\ 2dip ( a b quot -- a b ) - execute quot under top two items
-1 2 3 [ dup + ] 2dip
-wipe
+"2dip" test-section
+1 2 3 [ dup + ] 2dip 3 "2dip top" assert= 2 "2dip second" assert= 2 "2dip third" assert=

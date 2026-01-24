@@ -1,44 +1,24 @@
 \ Test boolean operators from prelude
 
-\ not ( ? -- ? ) - logical negation
-t not
-wipe
+"lib/testing.1z" use
 
-f not
-wipe
+"Logical NOT" test-section
+t not "not t" assert-false
+f not "not f" assert-true
 
-\ and ( ? ? -- ? ) - logical AND
-t t and
-wipe
+"Logical AND" test-section
+t t and "t and t" assert-true
+t f and "t and f" assert-false
+f t and "f and t" assert-false
+f f and "f and f" assert-false
 
-t f and
-wipe
+"Logical OR" test-section
+t t or "t or t" assert-true
+t f or "t or f" assert-true
+f t or "f or t" assert-true
+f f or "f or f" assert-false
 
-f t and
-wipe
-
-f f and
-wipe
-
-\ or ( ? ? -- ? ) - logical OR
-t t or
-wipe
-
-t f or
-wipe
-
-f t or
-wipe
-
-f f or
-wipe
-
-\ Combined boolean expressions
-t t and t or
-wipe
-
-f f or not
-wipe
-
-t f and not
-wipe
+"Combined boolean expressions" test-section
+t t and t or "t and t or t" assert-true
+f f or not "not (f or f)" assert-true
+t f and not "not (t and f)" assert-true

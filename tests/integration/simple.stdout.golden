@@ -1,2 +1,7 @@
-Stack: [ 3 ]
-Stack: [ 3 7 ]
+Stack: [ ]
+=== Basic arithmetic ===
+Stack: [ ]
+PASS: addition
+Stack: [ ]
+PASS: subtraction
+Stack: [ ]

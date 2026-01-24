@@ -1,31 +1,27 @@
-Stack: [ { 2 4 6 } ]
+Stack: [ ]
+=== #map on arrays ===
+Stack: [ ]
 PASS: array #map first elem
-Stack: [ { 2 4 6 } ]
+Stack: [ ]
 PASS: array #map second elem
-Stack: [ { 2 4 6 } ]
+Stack: [ ]
 PASS: array #map third elem
-Stack: [ { 2 4 6 } ]
+Stack: [ ]
 PASS: array #map length
 Stack: [ ]
 PASS: empty array #map
 Stack: [ ]
-Stack: [ { 11 21 31 } ]
 PASS: array #map increment first
-Stack: [ { 11 21 31 } ]
-PASS: array #map increment second
-Stack: [ { 11 21 31 } ]
-PASS: array #map increment third
 Stack: [ ]
 PASS: single element #map
 Stack: [ ]
-Stack: [ { 2 4 6 } ]
+=== #filter on arrays ===
+Stack: [ ]
 PASS: array #filter length
-Stack: [ { 2 4 6 } ]
+Stack: [ ]
 PASS: array #filter first
-Stack: [ { 2 4 6 } ]
+Stack: [ ]
 PASS: array #filter second
-Stack: [ { 2 4 6 } ]
-PASS: array #filter third
 Stack: [ ]
 PASS: array #filter all pass
 Stack: [ ]
@@ -33,15 +29,15 @@ PASS: array #filter none pass
 Stack: [ ]
 PASS: empty array #filter
 Stack: [ ]
-Stack: [ { 1 2 4 } ]
 PASS: filter positive length
-Stack: [ { 1 2 4 } ]
-PASS: filter positive first
-Stack: [ { 1 2 4 } ]
+Stack: [ ]
+=== #filter on strings ===
 Stack: [ ]
 PASS: string #filter
 Stack: [ ]
 PASS: string #filter exclude
+Stack: [ ]
+=== #reduce on arrays ===
 Stack: [ ]
 PASS: array #reduce sum
 Stack: [ ]
@@ -51,42 +47,37 @@ PASS: empty array #reduce
 Stack: [ ]
 PASS: single element #reduce
 Stack: [ ]
+PASS: array #reduce count
+Stack: [ ]
+=== #reduce finding max/min ===
+Stack: [ ]
 Stack: [ ]
 PASS: array #reduce max
 Stack: [ ]
 Stack: [ ]
 PASS: array #reduce min
 Stack: [ ]
-PASS: array #reduce count
+=== #each ===
 Stack: [ ]
-Stack: [ 1 2 3 ]
-Stack: [ 1 2 3 ]
-PASS: array #each stack clean
+PASS: array #each accumulate
 Stack: [ ]
-Stack: [ 5 ]
-Stack: [ 5 ]
 PASS: empty array #each
 Stack: [ ]
-Stack: [ 10 ]
-Stack: [ 10 ]
-PASS: string #each stack clean
+PASS: string #each count
 Stack: [ ]
-Stack: [ { 6 8 10 } ]
+=== Combined operations ===
+Stack: [ ]
 PASS: map then filter length
-Stack: [ { 6 8 10 } ]
+Stack: [ ]
 PASS: map then filter first
-Stack: [ { 6 8 10 } ]
 Stack: [ ]
 PASS: filter then reduce
 Stack: [ ]
-Stack: [ { 1 2 3 } ]
 PASS: map identity first
-Stack: [ { 1 2 3 } ]
-PASS: map identity second
-Stack: [ { 1 2 3 } ]
-PASS: map identity third
 Stack: [ ]
 PASS: map filter reduce combo
+Stack: [ ]
+=== Sum of squares ===
 Stack: [ ]
 Stack: [ ]
 PASS: reduce sum of squares

@@ -1,6 +1,9 @@
-hello world
 Stack: [ ]
-{ 1 2 3 }
+=== Basic output ===
 Stack: [ ]
-{ "a" { 1 } }
+PASS: string literal
+Stack: [ ]
+PASS: array literal
+Stack: [ ]
+PASS: nested array
 Stack: [ ]

@@ -1,27 +1,23 @@
 \ Test quotation-level stack effect validation
 
-\ A quotation with a leading stack effect gets that effect attached
-\ and validated when executed
+"lib/testing.1z" use
 
-\ Correct effect: ( n -- n ) preserves one value
-1 [ ( n -- n ) dup drop ] call
-.
-5 [ ( n -- n ) dup drop ] call
-.
+"Correct stack effects" test-section
+1 [ ( n -- n ) dup drop ] call 1 "effect (n -- n)" assert=
+5 [ ( n -- n ) dup drop ] call 5 "effect (n -- n) with 5" assert=
 
-\ Incorrect effect should fail but be catchable with recover
-\ recover-quot has declared effect ( error -- ) so we must only consume the error
-5 [ ( n -- n ) dup ] [ drop "caught" . ] recover
+"Effect violation recovery" test-section
+\ When effect check fails after dup, stack has extra value
+5 [ ( n -- n ) dup ] [ drop "PASS: wrong effect caught" print-line ] recover
+\ Clean up: dup ran leaving 5 5, recover left one 5
+drop drop
 
-\ Effect ( -- ) means no inputs, no outputs
+"Empty effect" test-section
 [ ( -- ) ] call
-.
+t "effect (--) succeeds" assert-true
 
-\ Effect ( -- n ) means produces one value
-[ ( -- n ) 42 ] call
-.
+"Produce value effect" test-section
+[ ( -- n ) 42 ] call 42 "effect (-- n)" assert=
 
-\ Nested quotations each have their own effect validation
-10 [ ( n -- n n ) dup ] call
-.
-.
+"Duplicate effect" test-section
+10 [ ( n -- n n ) dup ] call 10 "effect (n -- n n) first" assert= 10 "effect (n -- n n) second" assert=

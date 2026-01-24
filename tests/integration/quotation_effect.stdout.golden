@@ -1,19 +1,26 @@
-Stack: [ 1 ]
-1
 Stack: [ ]
-Stack: [ 5 ]
-5
+=== Correct stack effects ===
 Stack: [ ]
-"caught"
+PASS: effect (n -- n)
+Stack: [ ]
+PASS: effect (n -- n) with 5
+Stack: [ ]
+=== Effect violation recovery ===
+Stack: [ ]
+PASS: wrong effect caught
 Stack: [ 5 5 ]
-Stack: [ 5 5 ]
-5
-Stack: [ 5 ]
-Stack: [ 5 42 ]
-42
-Stack: [ 5 ]
-Stack: [ 5 10 10 ]
-10
-Stack: [ 5 10 ]
-10
-Stack: [ 5 ]
+Stack: [ ]
+=== Empty effect ===
+Stack: [ ]
+Stack: [ ]
+PASS: effect (--) succeeds
+Stack: [ ]
+=== Produce value effect ===
+Stack: [ ]
+PASS: effect (-- n)
+Stack: [ ]
+=== Duplicate effect ===
+Stack: [ ]
+PASS: effect (n -- n n) first
+PASS: effect (n -- n n) second
+Stack: [ ]

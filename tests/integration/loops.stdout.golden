@@ -1,37 +1,21 @@
-Hello, World!
-Hello, World!
-Hello, World!
 Stack: [ ]
+=== times ===
 Stack: [ ]
-10
-9
-8
-7
-6
-5
-4
-3
-2
-1
-Stack: [ 0 ]
+tick
+tick
+tick
 Stack: [ ]
-3
-10
-6
-2
-9
-5
-1
-8
-4
-0
-7
-Stack: [ 3 ]
+PASS: times executes
 Stack: [ ]
-5
-4
-3
-2
-1
-Stack: [ 0 ]
+=== while ===
+Stack: [ ]
+PASS: while counts to zero
+Stack: [ ]
+=== loop ===
+Stack: [ ]
+PASS: loop until zero
+Stack: [ ]
+=== do while ===
+Stack: [ ]
+PASS: do while with 3
 Stack: [ ]

@@ -1,49 +1,48 @@
 \ Test quotation-local definitions
 
-\ 1. Basic local definition - should not leak out
+"lib/testing.1z" use
+
+"Basic local definition" test-section
 [
-    local-only: [ 42 ] ;
-    local-only .
+  local-only: [ 42 ] ;
+  local-only 42 "local def value" assert=
 ] call
 
-\ 2. Local definition shadowing global
-global-word: [ "global" print-line ] ;
+"Local shadowing global" test-section
+global-word: [ "global" ] ;
 [
-    \ Before the shadowing, the global should be visible
-    global-word
-    \ After the shadowing but in the quotation, the shadowed is visible
-    global-word: [ "local" print-line ] ;
-    global-word
+  global-word "global" "before shadow" assert=
+  global-word: [ "local" ] ;
+  global-word "local" "after shadow" assert=
 ] call
-\ After the quotation, the global should be restored
-global-word
+global-word "global" "after quotation" assert=
 
-\ 3. Nested quotations with their own locals
+"Nested quotations with locals" test-section
 [
-    outer-local: [ "outer" print-line ] ;
-    [
-        inner-local: [ "inner" print-line ] ;
-        outer-local    \ can see outer-local
-        inner-local    \ can see inner-local
-    ] call
-    outer-local        \ outer-local still visible
+  outer-local: [ "outer" ] ;
+  [
+    inner-local: [ "inner" ] ;
+    outer-local "outer" "outer visible in inner" assert=
+    inner-local "inner" "inner visible in inner" assert=
+  ] call
+  outer-local "outer" "outer still visible" assert=
 ] call
 
-\ 4. Recursive function with local helper
+"Recursive function with local helper" test-section
 [
-    fact-helper: [
-        dup 1 <=
-        [ drop 1 ]
-        [ dup 1 - fact-helper * ]
-        if
-    ] ;
-    5 fact-helper .
+  fact-helper: [
+    dup 1 <=
+    [ drop 1 ]
+    [ dup 1 - fact-helper * ]
+    if
+  ] ;
+  5 fact-helper 120 "local recursive factorial" assert=
 ] call
 
-\ 5. Multiple locals in same quotation
+"Multiple locals in same quotation" test-section
 [
-    a: [ 1 ] ;
-    b: [ 2 ] ;
-    c: [ 3 ] ;
-    a b + c + .
+  a: [ 1 ] ;
+  b: [ 2 ] ;
+  c: [ 3 ] ;
+  a b + c + 6 "multiple locals sum" assert=
 ] call

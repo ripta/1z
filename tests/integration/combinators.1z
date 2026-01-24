@@ -1,129 +1,57 @@
-\ Integration tests for Phase 4.7: Higher-Order Combinators
+\ Integration tests for Higher-Order Combinators
 \ Tests: #each, #map, #filter, #reduce
 
-\ #map tests
-\ -------------
+"lib/testing.1z" use
 
-\ Test #map on array - double each element
-{ 1 2 3 } [ 2 * ] #map
-dup 0 #nth 2 = [ "PASS: array #map first elem" print-line ] [ "FAIL: array #map first elem" print-line ] if
-dup 1 #nth 4 = [ "PASS: array #map second elem" print-line ] [ "FAIL: array #map second elem" print-line ] if
-dup 2 #nth 6 = [ "PASS: array #map third elem" print-line ] [ "FAIL: array #map third elem" print-line ] if
-#len 3 = [ "PASS: array #map length" print-line ] [ "FAIL: array #map length" print-line ] if
+"#map on arrays" test-section
+{ 1 2 3 } [ 2 * ] #map 0 #nth 2 "array #map first elem" assert=
+{ 1 2 3 } [ 2 * ] #map 1 #nth 4 "array #map second elem" assert=
+{ 1 2 3 } [ 2 * ] #map 2 #nth 6 "array #map third elem" assert=
+{ 1 2 3 } [ 2 * ] #map #len 3 "array #map length" assert=
+{ } [ 2 * ] #map #len 0 "empty array #map" assert=
+{ 10 20 30 } [ 1 + ] #map 0 #nth 11 "array #map increment first" assert=
+{ 5 } [ 3 * ] #map 0 #nth 15 "single element #map" assert=
 
-\ Test #map on empty array
-{ } [ 2 * ] #map #len 0 = [ "PASS: empty array #map" print-line ] [ "FAIL: empty array #map" print-line ] if
+"#filter on arrays" test-section
+{ 1 2 3 4 5 6 } [ 2 % 0 = ] #filter #len 3 "array #filter length" assert=
+{ 1 2 3 4 5 6 } [ 2 % 0 = ] #filter 0 #nth 2 "array #filter first" assert=
+{ 1 2 3 4 5 6 } [ 2 % 0 = ] #filter 1 #nth 4 "array #filter second" assert=
+{ 2 4 6 } [ 2 % 0 = ] #filter #len 3 "array #filter all pass" assert=
+{ 1 3 5 } [ 2 % 0 = ] #filter #len 0 "array #filter none pass" assert=
+{ } [ drop t ] #filter #len 0 "empty array #filter" assert=
+{ -1 0 1 2 -3 4 } [ 0 > ] #filter #len 3 "filter positive length" assert=
 
-\ Test #map with increment
-{ 10 20 30 } [ 1 + ] #map
-dup 0 #nth 11 = [ "PASS: array #map increment first" print-line ] [ "FAIL: array #map increment first" print-line ] if
-dup 1 #nth 21 = [ "PASS: array #map increment second" print-line ] [ "FAIL: array #map increment second" print-line ] if
-2 #nth 31 = [ "PASS: array #map increment third" print-line ] [ "FAIL: array #map increment third" print-line ] if
+"#filter on strings" test-section
+"abacada" [ "a" = ] #filter "aaaa" "string #filter" assert=
+"xyzxyz" [ "x" = not ] #filter "yzyz" "string #filter exclude" assert=
 
-\ Test #map on single element array
-{ 5 } [ 3 * ] #map 0 #nth 15 = [ "PASS: single element #map" print-line ] [ "FAIL: single element #map" print-line ] if
+"#reduce on arrays" test-section
+{ 1 2 3 4 5 } 0 [ + ] #reduce 15 "array #reduce sum" assert=
+{ 1 2 3 4 } 1 [ * ] #reduce 24 "array #reduce product" assert=
+{ } 42 [ + ] #reduce 42 "empty array #reduce" assert=
+{ 10 } 5 [ + ] #reduce 15 "single element #reduce" assert=
+{ 1 2 3 4 5 } 0 [ drop 1 + ] #reduce 5 "array #reduce count" assert=
 
-\ #filter tests
-\ -------------
-
-\ Test #filter on array - keep even numbers
-{ 1 2 3 4 5 6 } [ 2 % 0 = ] #filter
-dup #len 3 = [ "PASS: array #filter length" print-line ] [ "FAIL: array #filter length" print-line ] if
-dup 0 #nth 2 = [ "PASS: array #filter first" print-line ] [ "FAIL: array #filter first" print-line ] if
-dup 1 #nth 4 = [ "PASS: array #filter second" print-line ] [ "FAIL: array #filter second" print-line ] if
-2 #nth 6 = [ "PASS: array #filter third" print-line ] [ "FAIL: array #filter third" print-line ] if
-
-\ Test #filter with all passing
-{ 2 4 6 } [ 2 % 0 = ] #filter #len 3 = [ "PASS: array #filter all pass" print-line ] [ "FAIL: array #filter all pass" print-line ] if
-
-\ Test #filter with none passing
-{ 1 3 5 } [ 2 % 0 = ] #filter #len 0 = [ "PASS: array #filter none pass" print-line ] [ "FAIL: array #filter none pass" print-line ] if
-
-\ Test #filter on empty array
-{ } [ drop t ] #filter #len 0 = [ "PASS: empty array #filter" print-line ] [ "FAIL: empty array #filter" print-line ] if
-
-\ Test #filter keep positive
-{ -1 0 1 2 -3 4 } [ 0 > ] #filter
-dup #len 3 = [ "PASS: filter positive length" print-line ] [ "FAIL: filter positive length" print-line ] if
-dup 0 #nth 1 = [ "PASS: filter positive first" print-line ] [ "FAIL: filter positive first" print-line ] if
-drop
-
-\ Test #filter on string - keep 'a' characters
-"abacada" [ "a" = ] #filter "aaaa" = [ "PASS: string #filter" print-line ] [ "FAIL: string #filter" print-line ] if
-
-\ Test #filter on string - keep non-'x' characters
-"xyzxyz" [ "x" = not ] #filter "yzyz" = [ "PASS: string #filter exclude" print-line ] [ "FAIL: string #filter exclude" print-line ] if
-
-\ #reduce tests
-\ -------------
-
-\ Test #reduce on array - sum
-{ 1 2 3 4 5 } 0 [ + ] #reduce 15 = [ "PASS: array #reduce sum" print-line ] [ "FAIL: array #reduce sum" print-line ] if
-
-\ Test #reduce on array - product
-{ 1 2 3 4 } 1 [ * ] #reduce 24 = [ "PASS: array #reduce product" print-line ] [ "FAIL: array #reduce product" print-line ] if
-
-\ Test #reduce on empty array - returns initial value
-{ } 42 [ + ] #reduce 42 = [ "PASS: empty array #reduce" print-line ] [ "FAIL: empty array #reduce" print-line ] if
-
-\ Test #reduce on single element array
-{ 10 } 5 [ + ] #reduce 15 = [ "PASS: single element #reduce" print-line ] [ "FAIL: single element #reduce" print-line ] if
-
-\ Test #reduce finding max
+"#reduce finding max/min" test-section
 max: ( a b -- max ) [ over over > [ drop ] [ swap drop ] if ] ;
-{ 3 7 2 9 1 } 0 [ max ] #reduce 9 = [ "PASS: array #reduce max" print-line ] [ "FAIL: array #reduce max" print-line ] if
-
-\ Test #reduce finding min (starting with large value)
+{ 3 7 2 9 1 } 0 [ max ] #reduce 9 "array #reduce max" assert=
 min: ( a b -- min ) [ over over < [ drop ] [ swap drop ] if ] ;
-{ 3 7 2 9 1 } 999 [ min ] #reduce 1 = [ "PASS: array #reduce min" print-line ] [ "FAIL: array #reduce min" print-line ] if
+{ 3 7 2 9 1 } 999 [ min ] #reduce 1 "array #reduce min" assert=
 
-\ Test #reduce counting
-{ 1 2 3 4 5 } 0 [ drop 1 + ] #reduce 5 = [ "PASS: array #reduce count" print-line ] [ "FAIL: array #reduce count" print-line ] if
+"#each" test-section
+0 { 10 20 30 } [ + ] #each 60 "array #each accumulate" assert=
+5 { } [ + ] #each 5 "empty array #each" assert=
+0 "abc" [ drop 1 + ] #each 3 "string #each count" assert=
 
-\ #each tests
-\ -------------
+"Combined operations" test-section
+{ 1 2 3 4 5 } [ 2 * ] #map [ 5 > ] #filter #len 3 "map then filter length" assert=
+{ 1 2 3 4 5 } [ 2 * ] #map [ 5 > ] #filter 0 #nth 6 "map then filter first" assert=
+{ 1 2 3 4 5 6 } [ 2 % 0 = ] #filter 0 [ + ] #reduce 12 "filter then reduce" assert=
+{ 1 2 3 } [ ] #map 0 #nth 1 "map identity first" assert=
+{ 1 2 3 4 5 6 7 8 9 10 } [ 2 * ] #map [ 15 < ] #filter 0 [ + ] #reduce 56 "map filter reduce combo" assert=
 
-\ Test #each doesn't leave values on stack (verifies it consumes elements)
-1 2 3
-{ 10 20 30 } [ drop ] #each
-\ Stack should still have just 1 2 3
-+ + 6 = [ "PASS: array #each stack clean" print-line ] [ "FAIL: array #each stack clean" print-line ] if
-
-\ Test #each on empty array - no effect
-5
-{ } [ drop ] #each
-5 = [ "PASS: empty array #each" print-line ] [ "FAIL: empty array #each" print-line ] if
-
-\ Test #each on string
-10
-"abc" [ drop ] #each
-10 = [ "PASS: string #each stack clean" print-line ] [ "FAIL: string #each stack clean" print-line ] if
-
-\ Combined tests
-\ -------------
-
-\ map then filter: double all, keep those > 5
-{ 1 2 3 4 5 } [ 2 * ] #map [ 5 > ] #filter
-dup #len 3 = [ "PASS: map then filter length" print-line ] [ "FAIL: map then filter length" print-line ] if
-dup 0 #nth 6 = [ "PASS: map then filter first" print-line ] [ "FAIL: map then filter first" print-line ] if
-drop
-
-\ filter then reduce: keep evens, sum them
-{ 1 2 3 4 5 6 } [ 2 % 0 = ] #filter 0 [ + ] #reduce 12 = [ "PASS: filter then reduce" print-line ] [ "FAIL: filter then reduce" print-line ] if
-
-\ map with identity
-{ 1 2 3 } [ ] #map
-dup 0 #nth 1 = [ "PASS: map identity first" print-line ] [ "FAIL: map identity first" print-line ] if
-dup 1 #nth 2 = [ "PASS: map identity second" print-line ] [ "FAIL: map identity second" print-line ] if
-2 #nth 3 = [ "PASS: map identity third" print-line ] [ "FAIL: map identity third" print-line ] if
-
-\ Triple combo: map, filter, reduce
-\ Take 1-10, double them, keep those < 15, sum them
-{ 1 2 3 4 5 6 7 8 9 10 } [ 2 * ] #map [ 15 < ] #filter 0 [ + ] #reduce 56 = [ "PASS: map filter reduce combo" print-line ] [ "FAIL: map filter reduce combo" print-line ] if
-
-\ Reduce to build result (alternative to map for some cases)
-\ Sum of squares
+"Sum of squares" test-section
 square: ( n -- n^2 ) [ dup * ] ;
-{ 1 2 3 4 } 0 [ square + ] #reduce 30 = [ "PASS: reduce sum of squares" print-line ] [ "FAIL: reduce sum of squares" print-line ] if
+{ 1 2 3 4 } 0 [ square + ] #reduce 30 "reduce sum of squares" assert=
 
 "All combinator tests complete!" print-line

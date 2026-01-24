@@ -1,22 +1,57 @@
-Stack: [ 2 ]
 Stack: [ ]
-Stack: [ 10 5 ]
+=== nip ===
 Stack: [ ]
-Stack: [ 10 6 ]
+PASS: nip
 Stack: [ ]
-Stack: [ 1 2 1 2 ]
+=== keep ===
 Stack: [ ]
-Stack: [ 1 2 ]
+PASS: keep preserves x
+PASS: keep result
 Stack: [ ]
-Stack: [ 2 3 1 ]
+=== bi ===
 Stack: [ ]
-Stack: [ 3 1 2 ]
+PASS: bi second quot
+PASS: bi first quot
 Stack: [ ]
-Stack: [ 2 1 2 ]
+=== 2dup ===
 Stack: [ ]
-Stack: [ 3 ]
+PASS: 2dup top
+PASS: 2dup second
+PASS: 2dup third
+PASS: 2dup fourth
 Stack: [ ]
-Stack: [ 3 ]
+=== 2drop ===
 Stack: [ ]
-Stack: [ 2 2 3 ]
+PASS: 2drop top
+PASS: 2drop second
+Stack: [ ]
+=== <rot- ===
+Stack: [ ]
+PASS: <rot- top
+PASS: <rot- second
+PASS: <rot- third
+Stack: [ ]
+=== -rot> ===
+Stack: [ ]
+PASS: -rot> top
+PASS: -rot> second
+PASS: -rot> third
+Stack: [ ]
+=== tuck ===
+Stack: [ ]
+PASS: tuck top
+PASS: tuck second
+PASS: tuck third
+Stack: [ ]
+=== choose ===
+Stack: [ ]
+PASS: choose true
+Stack: [ ]
+PASS: choose false
+Stack: [ ]
+=== 2dip ===
+Stack: [ ]
+PASS: 2dip top
+PASS: 2dip second
+PASS: 2dip third
 Stack: [ ]

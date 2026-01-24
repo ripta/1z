@@ -1,16 +1,27 @@
-42
+Stack: [ ]
+=== Basic local definition ===
+Stack: [ ]
+PASS: local def value
+Stack: [ ]
+=== Local shadowing global ===
 Stack: [ ]
 Stack: [ ]
-global
-local
+PASS: before shadow
+PASS: after shadow
 Stack: [ ]
-global
+PASS: after quotation
 Stack: [ ]
-outer
-inner
-outer
+=== Nested quotations with locals ===
 Stack: [ ]
-120
+PASS: outer visible in inner
+PASS: inner visible in inner
+PASS: outer still visible
 Stack: [ ]
-6
+=== Recursive function with local helper ===
+Stack: [ ]
+PASS: local recursive factorial
+Stack: [ ]
+=== Multiple locals in same quotation ===
+Stack: [ ]
+PASS: multiple locals sum
 Stack: [ ]

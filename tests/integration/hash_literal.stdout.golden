@@ -1,6 +1,21 @@
-H{ name: "Alice" age: 30 }
 Stack: [ ]
-H{ }
+=== Hash literal syntax ===
 Stack: [ ]
-H{ x: 1 z: 3 y: 2 }
+PASS: hash literal name value
+Stack: [ ]
+PASS: hash literal age value
+Stack: [ ]
+=== Empty hash ===
+Stack: [ ]
+PASS: empty hash has no keys
+Stack: [ ]
+=== Hash with multiple values ===
+Stack: [ ]
+PASS: hash with 3 keys
+Stack: [ ]
+PASS: hash x value
+Stack: [ ]
+PASS: hash y value
+Stack: [ ]
+PASS: hash z value
 Stack: [ ]

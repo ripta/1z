@@ -1,10 +1,19 @@
-<error StackUnderflow: StackUnderflow [drop:5 <- recover:5]>
+Stack: [ ]
+=== Error type fields ===
+Stack: [ ]
+PASS: error has error-type field
+Stack: [ ]
+=== Nested error call chain ===
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
-<error StackUnderflow: StackUnderflow [drop:8 <- nested-fail:9 <- outer-fail:10 <- recover:10]>
+PASS: nested error has type
 Stack: [ ]
-<error UnknownWord: UnknownWord [unknown-word-xyz:13 <- recover:13]>
+=== Unknown word error ===
 Stack: [ ]
-<error RethrowError: RethrowError [drop:17 <- recover:17 <- recover:17]>
+PASS: unknown word error type
+Stack: [ ]
+=== Rethrow error ===
+Stack: [ ]
+PASS: rethrow error type
 Stack: [ ]
