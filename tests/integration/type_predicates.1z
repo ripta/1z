@@ -1,0 +1,75 @@
+\ Type predicates test suite
+
+"lib/testing.1z" use
+
+__error-store__: M{ } ;
+capture-error: ( quot -- ) [
+  [ call f ] [ __error-store__ error: <rot- @set! drop f ] recover drop
+] ;
+get-captured-error: ( -- error ) [ __error-store__ error: @get ] ;
+
+"type-of primitive" test-section
+
+\ Test type-of for basic types
+42 type-of integer: "type-of integer" assert=
+t type-of boolean: "type-of boolean t" assert=
+f type-of boolean: "type-of boolean f" assert=
+"hello" type-of string: "type-of string" assert=
+foo: type-of symbol: "type-of symbol" assert=
+{ 1 2 3 } type-of array: "type-of array" assert=
+[ 1 2 + ] type-of quotation: "type-of quotation" assert=
+H{ } type-of hash: "type-of hash" assert=
+V{ } type-of vector: "type-of vector" assert=
+B{ } type-of byte-array: "type-of byte-array" assert=
+S{ } type-of set: "type-of set" assert=
+M{ } type-of mutable-map: "type-of mutable-map" assert=
+stdout type-of stream: "type-of stream" assert=
+output-stream type-of parameter: "type-of parameter" assert=
+
+\ Test type-of error
+[ 1 0 / ] capture-error
+get-captured-error type-of error: "type-of error" assert=
+
+42 type-of type-of symbol: "type-of returns symbol" assert=
+
+"type predicates - true cases" test-section
+42 integer? "integer? true" assert-true
+t boolean? "boolean? true t" assert-true
+f boolean? "boolean? true f" assert-true
+"hello" string? "string? true" assert-true
+foo: symbol? "symbol? true" assert-true
+{ 1 2 3 } array? "array? true" assert-true
+[ 1 2 + ] quotation? "quotation? true" assert-true
+H{ } hash? "hash? true" assert-true
+V{ } vector? "vector? true" assert-true
+B{ } byte-array? "byte-array? true" assert-true
+S{ } set? "set? true" assert-true
+M{ } mutable-map? "mutable-map? true" assert-true
+stdout stream? "stream? true" assert-true
+output-stream parameter? "parameter? true" assert-true
+
+[ 1 0 / ] capture-error
+get-captured-error error? "error? true" assert-true
+
+"type predicates - false cases" test-section
+"42" integer? "integer? false for string" assert-false
+42 string? "string? false for integer" assert-false
+[ 1 2 ] array? "array? false for quotation" assert-false
+{ 1 2 } quotation? "quotation? false for array" assert-false
+M{ } hash? "hash? false for mutable-map" assert-false
+H{ } mutable-map? "mutable-map? false for hash" assert-false
+1 boolean? "boolean? false for integer" assert-false
+"foo" symbol? "symbol? false for string" assert-false
+"stdout" stream? "stream? false for string" assert-false
+
+"edge cases" test-section
+
+-42 type-of integer: "type-of negative integer" assert=
+
+{ } type-of array: "type-of empty array" assert=
+H{ } type-of hash: "type-of empty hash" assert=
+V{ } type-of vector: "type-of empty vector" assert=
+S{ } type-of set: "type-of empty set" assert=
+
+{ { 1 } { 2 } } type-of array: "type-of nested array" assert=
+{ 1 2 3 } #first type-of integer: "type-of array element" assert=
