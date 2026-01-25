@@ -50,3 +50,26 @@ Stack: [ 5 ]
 Stack: [ 5 ]
 "quadruple not visible - correct"
 Stack: [ 5 100 ]
+=== Module accessors @has? ===
+Stack: [ 5 100 ]
+Stack: [ 5 100 ]
+PASS: module @has? existing word
+Stack: [ 5 100 ]
+PASS: module @has? string key
+Stack: [ 5 100 ]
+PASS: module @has? missing word
+Stack: [ 5 100 ]
+PASS: module @has? missing string key
+Stack: [ 5 100 ]
+=== Module accessors @keys ===
+Stack: [ 5 100 ]
+PASS: module @keys count
+Stack: [ 5 100 ]
+=== Module accessors @get ===
+Stack: [ 5 100 ]
+PASS: module @get and call
+Stack: [ 5 100 ]
+PASS: module @get string key
+Stack: [ 5 100 ]
+PASS: @get on missing key errors
+Stack: [ 5 100 ]

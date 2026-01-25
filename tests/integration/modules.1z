@@ -66,3 +66,25 @@ other: "tests/integration/module_lib.1z" load ;
   \ This would fail if double was somehow imported
   100 quadruple
 ] [ drop "quadruple not visible - correct" . ] recover
+
+\ === Module accessors ===
+"Module accessors @has?" test-section
+
+testmod: "tests/integration/module_lib.1z" load ;
+testmod double: @has? t "module @has? existing word" assert=
+testmod "double" @has? t "module @has? string key" assert=
+testmod nonexistent: @has? f "module @has? missing word" assert=
+testmod "nonexistent" @has? f "module @has? missing string key" assert=
+
+"Module accessors @keys" test-section
+
+testmod @keys #len 3 "module @keys count" assert=
+
+"Module accessors @get" test-section
+
+\ Get word from module and execute it
+testmod double: @get 5 swap call 10 "module @get and call" assert=
+testmod "triple" @get 4 swap call 12 "module @get string key" assert=
+
+\ Error on missing key
+[ testmod missing: @get ] [ drop "PASS: @get on missing key errors" print-line ] recover

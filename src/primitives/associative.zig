@@ -4,6 +4,8 @@ const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const HashTable = value_mod.HashTable;
 const ErrorObject = value_mod.ErrorObject;
+const Module = value_mod.Module;
+const Quotation = value_mod.Quotation;
 
 const Primitive = @import("types.zig").Primitive;
 
@@ -27,7 +29,6 @@ fn getErrorField(ctx: *Context, err: ErrorObject, field_name: []const u8) !Value
         return .{ .string = err.message };
     } else if (std.mem.eql(u8, field_name, "stack-trace")) {
         if (err.stack_trace) |trace| {
-            // Convert stack trace to array of hashes
             const alloc = ctx.quotationAllocator();
             const frames = alloc.alloc(Value, trace.len) catch return error.OutOfMemory;
             for (trace, 0..) |frame, i| {
@@ -48,7 +49,8 @@ fn getErrorField(ctx: *Context, err: ErrorObject, field_name: []const u8) !Value
     }
 }
 
-/// @get ( assoc key -- value ) - Get value by key/field (polymorphic on hash, error)
+/// @get ( assoc key -- value ) - Get value by key/field
+/// Polymorphic on hash, mutable-map, error, module
 pub fn nativeAtGet(ctx: *Context) anyerror!void {
     const key = try ctx.stack.pop();
     const obj = try ctx.stack.pop();
@@ -74,11 +76,27 @@ pub fn nativeAtGet(ctx: *Context) anyerror!void {
             const val = try getErrorField(ctx, err, key_str);
             try ctx.stack.push(val);
         },
+        .module => |mod| {
+            if (mod.words.get(key_str)) |word| {
+                const alloc = ctx.quotationAllocator();
+                var quot = Quotation{ .instructions = word.instructions };
+                if (word.stack_effect) |effect| {
+                    const effect_ptr = alloc.create(@TypeOf(effect)) catch return error.OutOfMemory;
+                    effect_ptr.* = effect;
+                    quot.effect = effect_ptr;
+                }
+
+                try ctx.stack.push(.{ .quotation = quot });
+            } else {
+                return error.KeyNotFound;
+            }
+        },
         else => return error.TypeError,
     }
 }
 
-/// @has? ( assoc key -- ? ) - Check if key/field exists (polymorphic on hash, mmap, error)
+/// @has? ( assoc key -- ? ) - Check if key/field exists
+/// Polymorphic on hash, mmap, module, error
 pub fn nativeAtHas(ctx: *Context) anyerror!void {
     const key = try ctx.stack.pop();
     const obj = try ctx.stack.pop();
@@ -101,11 +119,16 @@ pub fn nativeAtHas(ctx: *Context) anyerror!void {
                 std.mem.eql(u8, key_str, "stack-trace");
             try ctx.stack.push(.{ .boolean = valid });
         },
+        .module => |mod| {
+            const exists = mod.words.get(key_str) != null;
+            try ctx.stack.push(.{ .boolean = exists });
+        },
         else => return error.TypeError,
     }
 }
 
-/// @set ( assoc key value -- assoc' ) - Set value, returns new hash (hash only)
+/// @set ( assoc key value -- assoc' ) - Set value, returns new hash
+/// Non-polymorphic, only works on hash tables
 pub fn nativeAtSet(ctx: *Context) anyerror!void {
     const new_value = try ctx.stack.pop();
     const key = try ctx.stack.pop();
@@ -116,8 +139,6 @@ pub fn nativeAtSet(ctx: *Context) anyerror!void {
     switch (obj) {
         .hash => |h| {
             const alloc = ctx.quotationAllocator();
-
-            // Create new hash table on heap
             const new_hash = alloc.create(HashTable) catch return error.OutOfMemory;
             new_hash.* = HashTable{};
 
@@ -134,15 +155,13 @@ pub fn nativeAtSet(ctx: *Context) anyerror!void {
 
             try ctx.stack.push(.{ .hash = new_hash });
         },
-        .error_value => {
-            // Error objects are immutable
-            return error.TypeError;
-        },
+        .error_value => return error.TypeError,
         else => return error.TypeError,
     }
 }
 
-/// @keys ( assoc -- array ) - Get all keys (polymorphic on hash, error)
+/// @keys ( assoc -- array ) - Get all keys
+/// Polymorphic on hash, error, module, mutable-map
 pub fn nativeAtKeys(ctx: *Context) anyerror!void {
     const obj = try ctx.stack.pop();
 
@@ -178,14 +197,25 @@ pub fn nativeAtKeys(ctx: *Context) anyerror!void {
             keys[2] = .{ .symbol = "stack-trace" };
             try ctx.stack.push(.{ .array = keys });
         },
+        .module => |mod| {
+            const alloc = ctx.quotationAllocator();
+            const keys = alloc.alloc(Value, mod.words.count()) catch return error.OutOfMemory;
+            var iter = mod.words.iterator();
+            var i: usize = 0;
+            while (iter.next()) |entry| {
+                keys[i] = .{ .symbol = entry.key_ptr.* };
+                i += 1;
+            }
+            try ctx.stack.push(.{ .array = keys });
+        },
         else => return error.TypeError,
     }
 }
 
-/// @values ( assoc -- array ) - Get all values (polymorphic on hash, mmap, error)
+/// @values ( assoc -- array ) - Get all values
+/// Polymorphic on hash, mutable-map, error
 pub fn nativeAtValues(ctx: *Context) anyerror!void {
     const obj = try ctx.stack.pop();
-
     switch (obj) {
         .hash => |h| {
             const alloc = ctx.quotationAllocator();
