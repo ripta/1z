@@ -1,6 +1,6 @@
 \ Test cleanup combinator
 
-"lib/testing.1z" use
+use "lib/testing.1z" ;
 
 "Cleanup runs on success" test-section
 [ 10 ] [ 20 ] cleanup 20 "cleanup result" assert= 10 "body result" assert=

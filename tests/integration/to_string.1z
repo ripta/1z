@@ -1,6 +1,6 @@
 \ Integration tests for to-string primitive and . (dot) word
 
-"lib/testing.1z" use
+use "lib/testing.1z" ;
 
 "to-string on integers" test-section
 42 to-string "42" "integer" assert=

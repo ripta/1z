@@ -1,6 +1,6 @@
 \ Test stack-shuffling words from prelude
 
-"lib/testing.1z" use
+use "lib/testing.1z" ;
 
 "nip" test-section
 1 2 nip 2 "nip" assert=

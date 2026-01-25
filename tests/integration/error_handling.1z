@@ -1,6 +1,6 @@
 \ Test error handling primitives
 
-"lib/testing.1z" use
+use "lib/testing.1z" ;
 
 "recover success" test-section
 \ Success case - try-quot succeeds, recover-quot not called

@@ -1,6 +1,6 @@
 \ Test quotation-local definitions
 
-"lib/testing.1z" use
+use "lib/testing.1z" ;
 
 "Basic local definition" test-section
 [

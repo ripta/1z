@@ -1,4 +1,3 @@
-Stack: [ ]
 === Module as value ===
 Stack: [ ]
 Stack: [ <module:tests/integration/module_lib.1z (3 words)> ]
@@ -15,7 +14,6 @@ Stack: [ ]
 Stack: [ ]
 === Multiple imports ===
 Stack: [ ]
-Stack: [ ]
 20
 Stack: [ ]
 === Module without import ===
@@ -31,7 +29,6 @@ Stack: [ ]
 14
 Stack: [ ]
 === use shorthand ===
-Stack: [ ]
 Stack: [ ]
 16
 Stack: [ ]
@@ -91,11 +88,9 @@ PASS: selective import multiple - triple
 Stack: [ ]
 === Selective use ===
 Stack: [ ]
-Stack: [ ]
 PASS: selective use squared
 Stack: [ ]
 === Selective use multiple ===
-Stack: [ ]
 Stack: [ ]
 PASS: selective use multiple - double
 Stack: [ ]

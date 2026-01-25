@@ -1,4 +1,3 @@
-Stack: [ ]
 === Basic ASCII ===
 Stack: [ ]
 PASS: >char 65 = A

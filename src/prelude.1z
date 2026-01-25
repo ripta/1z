@@ -115,11 +115,15 @@ read-line: ( -- str/f ) [ input-stream get stream-read-line ] ;
 .: ( a -- ) [ to-string print-line ] ;
 
 \ Module loading
-use: [
-    dup array?
-    [ swap load swap import ]
-    [ load import ]
-    if
+\   use "file.1z" ;
+\   use { word1: word2: } "file.1z" ;
+use: parse-time [
+  parse-literal
+  dup string?
+  [ load import ]
+  [ parse-literal load swap import ]
+  if
+  ";" parse-until drop
 ] ;
 
 \ Loops

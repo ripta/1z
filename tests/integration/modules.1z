@@ -1,6 +1,6 @@
 \ Module system tests
 
-"lib/testing.1z" use
+use "lib/testing.1z" ;
 
 \ === Module as value ===
 "Module as value" test-section
@@ -20,7 +20,7 @@ import
 \ === Multiple imports ===
 "Multiple imports" test-section
 
-"tests/integration/module_lib.1z" use
+use "tests/integration/module_lib.1z" ;
 10 double .
 
 \ === Module without import ===
@@ -44,7 +44,7 @@ math import
 \ === use shorthand ===
 "use shorthand" test-section
 
-"tests/integration/module_lib.1z" use
+use "tests/integration/module_lib.1z" ;
 8 double .
 
 \ === Qualified name access ===
@@ -107,12 +107,12 @@ selmod2 { double: triple: } import
 
 "Selective use" test-section
 
-"tests/integration/module_lib.1z" { squared: } use
+use { squared: } "tests/integration/module_lib.1z" ;
 4 squared 16 "selective use squared" assert=
 
 "Selective use multiple" test-section
 
-"tests/integration/module_lib.1z" { double: triple: } use
+use { double: triple: } "tests/integration/module_lib.1z" ;
 7 double 14 "selective use multiple - double" assert=
 2 triple 6 "selective use multiple - triple" assert=
 

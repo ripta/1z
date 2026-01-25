@@ -1,4 +1,3 @@
-Stack: [ ]
 === Standard streams ===
 Stack: [ ]
 PASS: stdout to-string
