@@ -42,6 +42,7 @@ const WordDefinition = @import("dictionary.zig").WordDefinition;
 pub const ErrorDetail = struct {
     error_type: []const u8,
     message: []const u8,
+    source: []const u8,
     line: usize,
     word_name: ?[]const u8,
 };
@@ -62,6 +63,8 @@ pub const Context = struct {
     parse_tokenizer: ?*Tokenizer = null,
     /// Optional benchmark stats (null when benchmarking is disabled)
     benchmark: ?*BenchmarkStats = null,
+    /// Current source file name for error reporting (defaults to "<repl>")
+    current_source: []const u8 = "<repl>",
 
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
@@ -394,6 +397,7 @@ pub const Context = struct {
                 self.error_details.append(self.allocator, .{
                     .error_type = "StackEffectMismatch",
                     .message = msg_copy,
+                    .source = self.current_source,
                     .line = 0,
                     .word_name = param_name,
                 }) catch {};
@@ -486,6 +490,7 @@ pub const Context = struct {
                 self.error_details.append(self.allocator, .{
                     .error_type = "StackEffectMismatch",
                     .message = msg_copy,
+                    .source = self.current_source,
                     .line = 0,
                     .word_name = param_name,
                 }) catch {};
@@ -508,6 +513,7 @@ pub const Context = struct {
                 self.error_details.append(self.allocator, .{
                     .error_type = "StackEffectMismatch",
                     .message = msg_copy,
+                    .source = self.current_source,
                     .line = 0,
                     .word_name = param_name,
                 }) catch {};
@@ -581,6 +587,7 @@ pub const Context = struct {
             self.error_details.append(self.allocator, .{
                 .error_type = @errorName(err),
                 .message = frame.word_name,
+                .source = self.current_source,
                 .line = frame.line,
                 .word_name = frame.word_name,
             }) catch {};
@@ -623,6 +630,7 @@ pub const Context = struct {
         self.error_details.append(self.allocator, .{
             .error_type = "StackEffectMismatch",
             .message = msg_copy,
+            .source = self.current_source,
             .line = line,
             .word_name = word_name,
         }) catch {};
@@ -782,6 +790,7 @@ pub const Context = struct {
         self.error_details.append(self.allocator, .{
             .error_type = "StackEffectMismatch",
             .message = msg_copy,
+            .source = self.current_source,
             .line = line,
             .word_name = "<quotation>",
         }) catch {};
@@ -898,6 +907,7 @@ test "clearExecutionDetails clears both call stack and error details" {
     ctx.error_details.append(ctx.allocator, .{
         .error_type = "TestError",
         .message = "test",
+        .source = "<test>",
         .line = 1,
         .word_name = "test",
     }) catch {};

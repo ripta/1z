@@ -1,4 +1,3 @@
-Error: error.UnknownWord
-  at line 2: bad-word
-  at line 3: failing-inner
-  at line 5: failing-outer
+tests/integration/error_nested.1z:2: error.UnknownWord at word 'bad-word'
+  called from tests/integration/error_nested.1z:3: failing-inner
+  called from tests/integration/error_nested.1z:5: failing-outer

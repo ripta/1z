@@ -98,6 +98,33 @@ pub fn makeSimpleEffect(allocator: Allocator, raw: []const u8) !StackEffect {
 }
 
 // =============================================================================
+// Type utilities
+// =============================================================================
+
+/// Get the type name of a value as a string
+pub fn valueTypeName(val: Value) []const u8 {
+    return switch (val) {
+        .integer => "integer",
+        .boolean => "boolean",
+        .string => "string",
+        .symbol => "symbol",
+        .array => "array",
+        .quotation => "quotation",
+        .hash => "hash",
+        .vector => "vector",
+        .byte_array => "byte-array",
+        .set => "set",
+        .mutable_map => "mutable-map",
+        .stream => "stream",
+        .parameter => "parameter",
+        .module => "module",
+        .stack_effect => "stack-effect",
+        .parse_time_marker => "parse-time",
+        .error_value => "error",
+    };
+}
+
+// =============================================================================
 // Type-safe poppers
 // =============================================================================
 
