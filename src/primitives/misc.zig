@@ -141,22 +141,38 @@ fn nativeLoad(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .module = module });
 }
 
-/// import ( module -- ) - Import all words from a module into the current scope
-fn nativeImport(ctx: *Context) anyerror!void {
-    const val = try ctx.stack.pop();
-    const module = switch (val) {
-        .module => |m| m,
-        else => return error.TypeError,
-    };
+fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord) !void {
+    try ctx.dictionary.put(name, .{
+        .name = name,
+        .stack_effect = mod_word.stack_effect,
+        .action = .{ .compound = mod_word.instructions },
+    });
+}
 
-    var iter = module.words.iterator();
-    while (iter.next()) |entry| {
-        const mod_word = entry.value_ptr.*;
-        try ctx.defineWord(entry.key_ptr.*, .{
-            .name = entry.key_ptr.*,
-            .stack_effect = mod_word.stack_effect,
-            .action = .{ .compound = mod_word.instructions },
-        });
+fn nativeImport(ctx: *Context) anyerror!void {
+    const top_val = try ctx.stack.pop();
+
+    switch (top_val) {
+        .array => |names| {
+            if (names.len == 0) return error.EmptyImport;
+
+            const module = try helpers.popModule(ctx);
+            for (names) |name_val| {
+                const name = switch (name_val) {
+                    .symbol, .string => |s| s,
+                    else => return error.TypeError,
+                };
+                const mod_word = module.words.get(name) orelse return error.KeyNotFound;
+                try importWord(ctx, name, mod_word);
+            }
+        },
+        .module => |module| {
+            var iter = module.words.iterator();
+            while (iter.next()) |entry| {
+                try importWord(ctx, entry.key_ptr.*, entry.value_ptr.*);
+            }
+        },
+        else => return error.TypeError,
     }
 }
 

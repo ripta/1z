@@ -22,54 +22,93 @@ Stack: [ ]
 Stack: [ ]
 "add3 not visible - correct"
 Stack: [ 5 ]
+Stack: [ ]
 === Module stored in variable ===
-Stack: [ 5 ]
-Stack: [ 5 <module:tests/integration/module_lib.1z (3 words)> ]
-Stack: [ 5 ]
-Stack: [ 5 ]
+Stack: [ ]
+Stack: [ <module:tests/integration/module_lib.1z (3 words)> ]
+Stack: [ ]
+Stack: [ ]
 14
-Stack: [ 5 ]
+Stack: [ ]
 === use shorthand ===
-Stack: [ 5 ]
-Stack: [ 5 ]
+Stack: [ ]
+Stack: [ ]
 16
-Stack: [ 5 ]
+Stack: [ ]
 === Qualified name access ===
-Stack: [ 5 ]
-Stack: [ 5 ]
+Stack: [ ]
+Stack: [ ]
 10
-Stack: [ 5 ]
+Stack: [ ]
 9
-Stack: [ 5 ]
+Stack: [ ]
 16
-Stack: [ 5 ]
+Stack: [ ]
 === Qualified name without import ===
-Stack: [ 5 ]
-Stack: [ 5 ]
+Stack: [ ]
+Stack: [ ]
 20
-Stack: [ 5 ]
+Stack: [ ]
 "quadruple not visible - correct"
-Stack: [ 5 100 ]
+Stack: [ 100 ]
+Stack: [ ]
 === Module accessors @has? ===
-Stack: [ 5 100 ]
-Stack: [ 5 100 ]
+Stack: [ ]
+Stack: [ ]
 PASS: module @has? existing word
-Stack: [ 5 100 ]
+Stack: [ ]
 PASS: module @has? string key
-Stack: [ 5 100 ]
+Stack: [ ]
 PASS: module @has? missing word
-Stack: [ 5 100 ]
+Stack: [ ]
 PASS: module @has? missing string key
-Stack: [ 5 100 ]
+Stack: [ ]
 === Module accessors @keys ===
-Stack: [ 5 100 ]
+Stack: [ ]
 PASS: module @keys count
-Stack: [ 5 100 ]
+Stack: [ ]
 === Module accessors @get ===
-Stack: [ 5 100 ]
+Stack: [ ]
 PASS: module @get and call
-Stack: [ 5 100 ]
+Stack: [ ]
 PASS: module @get string key
-Stack: [ 5 100 ]
+Stack: [ ]
 PASS: @get on missing key errors
-Stack: [ 5 100 ]
+Stack: [ ]
+=== Selective import ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: selective import double
+Stack: [ ]
+=== Selective import multiple ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: selective import multiple - double
+Stack: [ ]
+PASS: selective import multiple - triple
+Stack: [ ]
+=== Selective use ===
+Stack: [ ]
+Stack: [ ]
+PASS: selective use squared
+Stack: [ ]
+=== Selective use multiple ===
+Stack: [ ]
+Stack: [ ]
+PASS: selective use multiple - double
+Stack: [ ]
+PASS: selective use multiple - triple
+Stack: [ ]
+=== Selective import errors ===
+Stack: [ ]
+Stack: [ ]
+PASS: empty array error
+Stack: [ <module:tests/integration/module_lib.1z (3 words)> ]
+PASS: missing word error
+Stack: [ <module:tests/integration/module_lib.1z (3 words)> ]
+PASS: non-symbol error
+Stack: [ <module:tests/integration/module_lib.1z (3 words)> ]
+PASS: integer instead of module error
+Stack: [ <module:tests/integration/module_lib.1z (3 words)> ]

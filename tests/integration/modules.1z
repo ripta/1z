@@ -31,6 +31,7 @@ import
   \ add3 should NOT be visible here since we only loaded, not imported
   5 add3
 ] [ drop "add3 not visible - correct" . ] recover
+wipe
 
 \ === Module stored in variable ===
 "Module stored in variable" test-section
@@ -66,6 +67,7 @@ other: "tests/integration/module_lib.1z" load ;
   \ This would fail if double was somehow imported
   100 quadruple
 ] [ drop "quadruple not visible - correct" . ] recover
+wipe
 
 \ === Module accessors ===
 "Module accessors @has?" test-section
@@ -88,3 +90,43 @@ testmod "triple" @get 4 swap call 12 "module @get string key" assert=
 
 \ Error on missing key
 [ testmod missing: @get ] [ drop "PASS: @get on missing key errors" print-line ] recover
+
+\ === Selective import tests ===
+"Selective import" test-section
+
+selmod: "tests/integration/module_lib.1z" load ;
+selmod { double: } import
+5 double 10 "selective import double" assert=
+
+"Selective import multiple" test-section
+
+selmod2: "tests/integration/module_lib.1z" load ;
+selmod2 { double: triple: } import
+6 double 12 "selective import multiple - double" assert=
+3 triple 9 "selective import multiple - triple" assert=
+
+"Selective use" test-section
+
+"tests/integration/module_lib.1z" { squared: } use
+4 squared 16 "selective use squared" assert=
+
+"Selective use multiple" test-section
+
+"tests/integration/module_lib.1z" { double: triple: } use
+7 double 14 "selective use multiple - double" assert=
+2 triple 6 "selective use multiple - triple" assert=
+
+"Selective import errors" test-section
+
+\ Empty array
+errmod: "tests/integration/module_lib.1z" load ;
+[ errmod { } import ] [ error-type: @get "EmptyImport" "empty array error" assert= ] recover
+
+\ Non-existent word
+[ errmod { nonexistent: } import ] [ error-type: @get "KeyNotFound" "missing word error" assert= ] recover
+
+\ Non-symbol in array
+[ errmod { 123 } import ] [ error-type: @get "TypeError" "non-symbol error" assert= ] recover
+
+\ Integer instead of module
+[ 42 { double: } import ] [ error-type: @get "TypeError" "integer instead of module error" assert= ] recover

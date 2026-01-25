@@ -115,7 +115,12 @@ read-line: ( -- str/f ) [ input-stream get stream-read-line ] ;
 .: ( a -- ) [ to-string print-line ] ;
 
 \ Module loading
-use: ( filename -- ) [ load import ] ;
+use: [
+    dup array?
+    [ swap load swap import ]
+    [ load import ]
+    if
+] ;
 
 \ Loops
 times: ( n quot -- ) [
