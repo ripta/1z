@@ -1,0 +1,16 @@
+\ lib/conversions.1z - Numeric conversions
+
+\ Convert single-digit character string to integer
+\ "0" -> 0, "9" -> 9
+char>digit: ( str -- n ) [ >codepoint 48 - ] ;
+
+\ Check if single-char string is an ASCII digit
+digit?: ( str -- ? ) [
+  >codepoint dup 48 >= swap 57 <= and
+] ;
+
+\ Parse non-negative decimal integer from string
+\ "123" -> 123, "0" -> 0
+parse-integer: ( str -- n ) [
+  0 swap [ swap 10 * swap char>digit + ] #each
+] ;
