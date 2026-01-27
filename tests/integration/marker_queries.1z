@@ -35,6 +35,15 @@ mk3 "multi-marker-word" word-markers [ over = ] #filter swap drop #len 1 = t "mk
 "dup" word-markers #len 0 "native word has no markers" assert=
 "+" word-markers #len 0 "native + has no markers" assert=
 
+"native? predicate" test-section
+
+"dup" native? t "dup is native" assert=
+"+" native? t "+ is native" assert=
+"word-markers" native? t "word-markers is native" assert=
+"plain" native? f "user-defined word is not native" assert=
+"single-marker-word" native? f "marked user-defined word is not native" assert=
+[ "nonexistent" native? ] [ error-type: @get "WordNotFound" "native? on missing word" assert= ] recover
+
 "word-markers error handling" test-section
 
 \ Non-existent word

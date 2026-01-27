@@ -31,6 +31,20 @@ PASS: native word has no markers
 Stack: [ ]
 PASS: native + has no markers
 Stack: [ ]
+=== native? predicate ===
+Stack: [ ]
+PASS: dup is native
+Stack: [ ]
+PASS: + is native
+Stack: [ ]
+PASS: word-markers is native
+Stack: [ ]
+PASS: user-defined word is not native
+Stack: [ ]
+PASS: marked user-defined word is not native
+Stack: [ ]
+PASS: native? on missing word
+Stack: [ ]
 === word-markers error handling ===
 Stack: [ ]
 PASS: non-existent word error
