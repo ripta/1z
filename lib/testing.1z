@@ -6,6 +6,7 @@
 \   5 5 "five equals five" assert=
 \   t "condition is true" assert-true
 \   [ 1 0 / ] "division by zero" assert-error
+\   [ 1 0 / ] "DivisionByZero" "division by zero" assert-error-type
 
 \ Core assertion: check equality, print PASS/FAIL with values on failure
 \ Stack: actual expected msg --
@@ -83,6 +84,76 @@ assert-error: ( quot msg -- ) [
       "PASS: " swap #append print-line
     ]
     if
+  ] with-parameter
+] ;
+
+\ Assert quotation throws an error of a specific type.
+\
+\   [ 1 0 / ] "DivisionByZero" "division by zero" assert-error-type
+\
+\ Module-level parameters for assert-error-type, defined separately
+\ to avoid multiple parameter definitions in the same quotation scope
+\ (which triggers parse-time instruction reordering bugs).
+__aet_msg__: parameter [ "" ] ;
+__aet_expected__: parameter [ "" ] ;
+
+assert-error-type: ( quot expected-type msg -- ) [
+  __drop_until_marker__: ( -- ) [
+    dup :__START__: = not
+    [ drop __drop_until_marker__ ]
+    when
+  ] ;
+
+  dup __aet_msg__ [
+    drop                                \ quot expected-type
+    dup __aet_expected__ [
+      drop                              \ quot
+
+      :__START__:
+      swap
+
+      [ call :__OK__: ]
+      [
+        \ Recovery quotation: error on TOS, must consume it (1 -- 0).
+        \ Compare error type and print result here, while parameter
+        \ bindings are still in scope.
+        error-type: @get                \ actual-type
+        __aet_expected__ get            \ actual-type expected-type
+        2dup =
+        [
+          2drop
+          __aet_msg__ get
+          "PASS: " swap #append print-line
+        ]
+        [
+          \ Wrong error type
+          swap                          \ expected actual
+          to-string ", got " swap #append
+          swap to-string "(expected " swap #append
+          ")" #append #append
+          __aet_msg__ get
+          " " swap #append swap #append
+          "FAIL: " swap #append print-line
+        ]
+        if
+      ]
+      recover
+
+      dup :__OK__: =
+      [
+        \ SUCCESS - FAIL (quotation didn't error)
+        __drop_until_marker__
+        drop
+        __aet_msg__ get
+        "FAIL (no error): " swap #append print-line
+      ]
+      [
+        \ Error path already printed result; just clean up stack
+        __drop_until_marker__
+        drop
+      ]
+      if
+    ] with-parameter
   ] with-parameter
 ] ;
 
