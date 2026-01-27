@@ -1,0 +1,52 @@
+\ Integration tests for grid library
+
+use "lib/testing.1z" ;
+use "lib/grid.1z" ;
+
+\ Build marks sets using @adjoin (S{ } can't nest { } inside)
+marks-01: S{ } { 0 0 } @adjoin { 1 1 } @adjoin ;
+marks-diag: S{ } { 0 0 } @adjoin { 1 1 } @adjoin { 2 2 } @adjoin ;
+marks-row: S{ } { 0 0 } @adjoin { 2 0 } @adjoin ;
+marks-single: S{ } { 0 0 } @adjoin ;
+
+"Grid creation" test-section
+3 3 S{ } new-grid grid? t "new-grid creates grid instance" assert=
+3 3 S{ } new-grid width>> 3 "width accessor" assert=
+3 3 S{ } new-grid height>> 3 "height accessor" assert=
+3 3 S{ } new-grid marks>> S{ } "marks accessor (empty)" assert=
+3 3 S{ } new-grid mark-char>> "X" "default mark-char" assert=
+3 3 S{ } new-grid empty-char>> "." "default empty-char" assert=
+
+"marked?" test-section
+3 3 marks-01 new-grid 0 0 marked? t "marked coordinate" assert=
+3 3 marks-01 new-grid 1 1 marked? t "marked coordinate (1,1)" assert=
+3 3 marks-01 new-grid 2 2 marked? f "unmarked coordinate" assert=
+3 3 marks-01 new-grid 0 1 marked? f "unmarked coordinate (0,1)" assert=
+
+"row>string" test-section
+3 3 marks-row new-grid 0 row>string "X.X" "row with marks" assert=
+3 3 marks-row new-grid 1 row>string "..." "row without marks" assert=
+
+"grid>string" test-section
+\ Diagonal pattern
+3 3 marks-diag new-grid grid>string
+"X..\n.X.\n..X" "diagonal grid" assert=
+
+\ Empty grid
+3 3 S{ } new-grid grid>string
+"...\n...\n..." "empty grid" assert=
+
+"with-chars" test-section
+3 3 marks-01 new-grid "#" "-" with-chars
+dup mark-char>> "#" "with-chars mark-char" assert=
+dup empty-char>> "-" "with-chars empty-char" assert=
+grid>string "#--\n-#-\n---" "with-chars grid output" assert=
+
+"make-grid full constructor" test-section
+2 2 marks-single "O" "_" make-grid
+dup grid? t "make-grid creates grid" assert=
+dup mark-char>> "O" "make-grid mark-char" assert=
+dup empty-char>> "_" "make-grid empty-char" assert=
+grid>string "O_\n__" "make-grid grid output" assert=
+
+"All grid tests complete!" print-line

@@ -1,0 +1,68 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== Grid creation ===
+Stack: [ ]
+PASS: new-grid creates grid instance
+Stack: [ ]
+PASS: width accessor
+Stack: [ ]
+PASS: height accessor
+Stack: [ ]
+PASS: marks accessor (empty)
+Stack: [ ]
+PASS: default mark-char
+Stack: [ ]
+PASS: default empty-char
+Stack: [ ]
+=== marked? ===
+Stack: [ ]
+PASS: marked coordinate
+Stack: [ ]
+PASS: marked coordinate (1,1)
+Stack: [ ]
+PASS: unmarked coordinate
+Stack: [ ]
+PASS: unmarked coordinate (0,1)
+Stack: [ ]
+=== row>string ===
+Stack: [ ]
+PASS: row with marks
+Stack: [ ]
+PASS: row without marks
+Stack: [ ]
+=== grid>string ===
+Stack: [ ]
+Stack: [ "X..
+.X.
+..X" ]
+PASS: diagonal grid
+Stack: [ ]
+Stack: [ "...
+...
+..." ]
+PASS: empty grid
+Stack: [ ]
+=== with-chars ===
+Stack: [ ]
+Stack: [ grid{ width: 3 height: 3 marks: S{ { 0 0 } { 1 1 } } mark-char: "#" empty-char: "-" } ]
+PASS: with-chars mark-char
+Stack: [ grid{ width: 3 height: 3 marks: S{ { 0 0 } { 1 1 } } mark-char: "#" empty-char: "-" } ]
+PASS: with-chars empty-char
+Stack: [ grid{ width: 3 height: 3 marks: S{ { 0 0 } { 1 1 } } mark-char: "#" empty-char: "-" } ]
+PASS: with-chars grid output
+Stack: [ ]
+=== make-grid full constructor ===
+Stack: [ ]
+Stack: [ grid{ width: 2 height: 2 marks: S{ { 0 0 } } mark-char: "O" empty-char: "_" } ]
+PASS: make-grid creates grid
+Stack: [ grid{ width: 2 height: 2 marks: S{ { 0 0 } } mark-char: "O" empty-char: "_" } ]
+PASS: make-grid mark-char
+Stack: [ grid{ width: 2 height: 2 marks: S{ { 0 0 } } mark-char: "O" empty-char: "_" } ]
+PASS: make-grid empty-char
+Stack: [ grid{ width: 2 height: 2 marks: S{ { 0 0 } } mark-char: "O" empty-char: "_" } ]
+PASS: make-grid grid output
+Stack: [ ]
+All grid tests complete!
+Stack: [ ]
