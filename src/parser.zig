@@ -85,31 +85,16 @@ const WordDefinition = @import("dictionary.zig").WordDefinition;
 
 /// Execute a parse-time word during parsing:
 ///
-/// - Executes pending `push_literal` instructions (so parse-time word can access preceding literals)
-/// - Keeps `call_word` instructions in the compiled output
-/// - Runs the parse-time word
-/// - Captures all values above the pre-depth stack as `push_literal` instructions
+/// 1. Find trailing `push_literal` instructions after the last `call_word` barrier
+/// 2. Push only those trailing literals onto the data stack
+/// 3. Keep everything before the trail, including call_words and their operands, untouched
+/// 4. Run the parse-time word
+/// 5. Capture all values above the pre-depth stack as `push_literal` instructions
 ///
-/// LIMITATION: When call_word instructions precede a parse-time word, execution order is:
-///   Parse time: literals executed, parse-time word runs, results captured
-///   Runtime: call_words run, then captured literals are pushed
-///
-/// This reordering is safe for "literal-creating" parse-time words (H{, M{, V{, etc.) that
-/// simply produce a value to embed in the output. However, it can cause issues with
-/// "stack-interacting" patterns where the call_word's result needs to be in a specific
-/// position relative to the parse-time word's result at runtime.
-///
-/// Example of the issue:
-///
-///   foo: some-marker struct{ x y } ;
-///
-/// If some-marker is not parse-time, it becomes a call_word that runs AFTER struct{}'s
-/// descriptor is captured. The marker ends up below the symbol on the stack, so `;`
-/// never collects it. Solution: make marker words parse-time.
-///
-/// We need to take a snapshot of the stack depth before pending literals are executed, which
-/// ensures that values from pending literals that are preserved (or transformed) by the parse-time
-/// word are captured back as push_literals, instead of being left on the runtime stack.
+/// NOTE(ripta): The `call_word` acts as a barrier: the parse-time word can only reach back
+///              to literals that appear after the last `call_word` in the pending
+///              instruction stream. This prevents reordering when `push_literals` and
+///              `call_words` are interleaved.
 fn executeParseTimeWord(
     c: *Context,
     word: WordDefinition,
@@ -120,32 +105,40 @@ fn executeParseTimeWord(
 ) ParseError!void {
     const pre_depth = c.stack.depth();
 
-    var new_len: usize = 0;
-    for (instructions.items) |instr| {
-        switch (instr.op) {
-            .push_literal => |val| c.stack.push(val) catch return ParseError.OutOfMemory,
-            .call_word => {
-                instructions.items[new_len] = instr;
-                new_len += 1;
-            },
+    // 1. Find trailing `push_literal` instructions after the last `call_word` barrier
+    var tail_start = instructions.items.len;
+    while (tail_start > 0) {
+        switch (instructions.items[tail_start - 1].op) {
+            .push_literal => tail_start -= 1,
+            .call_word => break,
         }
     }
-    instructions.items.len = new_len;
+
+    // 2. Push only those trailing literals onto the data stack
+    for (instructions.items[tail_start..]) |instr| {
+        c.stack.push(instr.op.push_literal) catch return ParseError.OutOfMemory;
+    }
+
+    // 3. Keep everything before the trail, including call_words and their operands, untouched
+    instructions.items.len = tail_start;
 
     const old_tokenizer = c.parse_tokenizer;
     c.parse_tokenizer = tokenizer;
     defer c.parse_tokenizer = old_tokenizer;
 
+    // 4. Run the parse-time word
     switch (word.action) {
         .native => |func| func(c) catch return ParseError.ParseTimeExecutionError,
         .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch return ParseError.ParseTimeExecutionError,
     }
 
+    // 5. Capture all values above the pre-depth stack as `push_literal` instructions
     const post_depth = c.stack.depth();
     if (post_depth > pre_depth) {
         const num_results = post_depth - pre_depth;
         const base_idx = instructions.items.len;
         var i: usize = 0;
+
         while (i < num_results) : (i += 1) {
             const val = c.stack.pop() catch return ParseError.ParseTimeExecutionError;
             instructions.append(allocator, .{ .op = .{ .push_literal = val }, .line = line }) catch return ParseError.OutOfMemory;
@@ -678,4 +671,35 @@ test "parse-time word preserves preceding literals" {
     try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol);
     try std.testing.expectEqualStrings("foo", instrs[1].op.push_literal.symbol);
     try std.testing.expectEqualStrings("bar", instrs[2].op.call_word);
+}
+
+test "parse-time word preserves call_word barrier ordering" {
+    // Scenario: push_literal, call_word, push_literal, parse-time-word
+    // Example: `foo: some-word bar: test-dup`
+    // Expected: call_word barrier prevents foo: from being consumed by test-dup.
+    //
+    //   - foo: and some-word stay as instructions (push_literal + call_word)
+    //   - bar: is the only trailing literal, so test-dup duplicates it
+    //   - Result: [push_literal(foo:), call_word(some-word), push_literal(bar:), push_literal(bar:)]
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.quotationAllocator();
+    const dup_instrs = try alloc.alloc(Instruction, 1);
+    dup_instrs[0] = .{ .op = .{ .call_word = "dup" }, .line = 0 };
+
+    try ctx.dictionary.put("test-dup", .{
+        .name = "test-dup",
+        .parse_time = true,
+        .action = .{ .compound = dup_instrs },
+    });
+
+    var tokenizer = Tokenizer.init("foo: some-word bar: test-dup");
+    const instrs = try parseTopLevel(alloc, &tokenizer, &ctx);
+
+    try std.testing.expectEqual(@as(usize, 4), instrs.len);
+    try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("some-word", instrs[1].op.call_word);
+    try std.testing.expectEqualStrings("bar", instrs[2].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("bar", instrs[3].op.push_literal.symbol);
 }

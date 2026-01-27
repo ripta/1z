@@ -90,14 +90,10 @@ assert-error: ( quot msg -- ) [
 \ Assert quotation throws an error of a specific type.
 \
 \   [ 1 0 / ] "DivisionByZero" "division by zero" assert-error-type
-\
-\ Module-level parameters for assert-error-type, defined separately
-\ to avoid multiple parameter definitions in the same quotation scope
-\ (which triggers parse-time instruction reordering bugs).
-__aet_msg__: parameter [ "" ] ;
-__aet_expected__: parameter [ "" ] ;
-
 assert-error-type: ( quot expected-type msg -- ) [
+  __aet_msg__: parameter [ "" ] ;
+  __aet_expected__: parameter [ "" ] ;
+
   __drop_until_marker__: ( -- ) [
     dup :__START__: = not
     [ drop __drop_until_marker__ ]
