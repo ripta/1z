@@ -94,6 +94,7 @@ max: ( a1 a2 -- a ) [ [ > ] choose ] ;
 --: ( a1 -- a2 ) [ 1 - ] ;
 ++: ( a1 -- a2 ) [ 1 + ] ;
 0?: ( a -- ? ) [ 0 = ] ;
+rem: ( a b -- r ) [ tuck % over + swap % ] ;
 
 \ Comparison operators
 <=: ( a b -- ? ) [ 2dup < [ 2drop t ] [ = ] if ] ;
