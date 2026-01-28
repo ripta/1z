@@ -1,9 +1,13 @@
 const std = @import("std");
+const Value = @import("value.zig").Value;
+
+/// Output format for benchmark CLI reporting
+pub const BenchmarkOutput = enum { none, human, json };
 
 /// Configuration for benchmark mode
 pub const BenchmarkConfig = struct {
     enabled: bool = false,
-    json_output: bool = false,
+    output: BenchmarkOutput = .none,
 };
 
 /// Benchmark statistics collected during execution
@@ -77,7 +81,7 @@ pub const BenchmarkStats = struct {
     }
 
     /// Format time in human-readable form (ms or us)
-    fn formatTime(writer: anytype, ns: i128) !void {
+    pub fn formatTime(writer: anytype, ns: i128) !void {
         if (ns < 0) {
             try writer.writeAll("N/A");
             return;
@@ -99,7 +103,7 @@ pub const BenchmarkStats = struct {
     }
 
     /// Format bytes in human-readable form
-    fn formatBytes(writer: anytype, bytes: usize) !void {
+    pub fn formatBytes(writer: anytype, bytes: usize) !void {
         if (bytes >= 1_048_576) {
             const mb = bytes / 1_048_576;
             const frac = (bytes % 1_048_576) * 100 / 1_048_576;
@@ -114,7 +118,7 @@ pub const BenchmarkStats = struct {
     }
 
     /// Format number with thousands separators
-    fn formatNumber(writer: anytype, n: u64) !void {
+    pub fn formatNumber(writer: anytype, n: u64) !void {
         if (n == 0) {
             try writer.writeAll("0");
             return;
@@ -202,8 +206,27 @@ pub const BenchmarkStats = struct {
     }
 };
 
-/// An allocator wrapper that counts allocations and bytes for benchmarking.
-/// This adds minimal overhead: just incrementing counters on alloc/free.
+/// A single entry in a benchmark report.
+pub const BenchmarkReportEntry = struct {
+    label: []const u8,
+    results: *std.StringHashMapUnmanaged(Value),
+};
+
+/// A benchmark report collecting multiple benchmark entries for reporting later.
+pub const BenchmarkReport = struct {
+    entries: std.ArrayListUnmanaged(BenchmarkReportEntry) = .{},
+    allocator: std.mem.Allocator,
+
+    pub fn init(alloc: std.mem.Allocator) BenchmarkReport {
+        return .{ .allocator = alloc };
+    }
+
+    pub fn addEntry(self: *BenchmarkReport, label: []const u8, results: *std.StringHashMapUnmanaged(Value)) !void {
+        try self.entries.append(self.allocator, .{ .label = label, .results = results });
+    }
+};
+
+/// An allocator wrapper that counts allocations and bytes for benchmarking with minimal overhead.
 pub const CountingAllocator = struct {
     backing_allocator: std.mem.Allocator,
     stats: *BenchmarkStats,
@@ -245,12 +268,8 @@ pub const CountingAllocator = struct {
 
         const old_len = memory.len;
         const success = self.backing_allocator.rawResize(memory, alignment, new_len, ret_addr);
-        if (success) {
-            // Track the size change
-            if (new_len > old_len) {
-                self.stats.total_bytes += (new_len - old_len);
-            }
-            // Note: we don't decrement on shrink since we're tracking total allocated
+        if (success and new_len > old_len) {
+            self.stats.total_bytes += (new_len - old_len);
         }
         return success;
     }

@@ -5,47 +5,13 @@
 
 N: 5000 ;
 
-\ --- Construction benchmark ---
-
-"=== Construction (N=" print N >string print ") ===" print-line
-
-\ Array: 2 allocs per iteration (1array + #append)
-array-construct-ns:
-  [ N [ { } 1array "hello" 1array #append drop ] times ] benchmark
-  "elapsed_ns" @get
-;
-
-\ Struct: 1 alloc per iteration (make-split-acc)
 split-acc: struct{ lines current } ;
-
-struct-construct-ns:
-  [ N [ { } "hello" make-split-acc drop ] times ] benchmark
-  "elapsed_ns" @get
-;
-
-"Array construction:  " print array-construct-ns >string print " ns" print-line
-"Struct construction: " print struct-construct-ns >string print " ns" print-line
-
-\ --- Access benchmark ---
-
-"" print-line
-"=== Access (N=" print N >string print ") ===" print-line
-
-\ Pre-build one of each
 arr: { { } "hello" } ;
 acc: { } "hello" make-split-acc ;
 
-\ Array: positional #nth
-array-access-ns:
-  [ N [ arr 0 #nth drop arr 1 #nth drop ] times ] benchmark
-  "elapsed_ns" @get
-;
-
-\ Struct: named getters
-struct-access-ns:
-  [ N [ acc lines>> drop acc current>> drop ] times ] benchmark
-  "elapsed_ns" @get
-;
-
-"Array access:  " print array-access-ns >string print " ns" print-line
-"Struct access: " print struct-access-ns >string print " ns" print-line
+make-benchmark-report
+  "Array construction"  [ N [ { } 1array "hello" 1array #append drop ] times ] benchmark-run
+  "Struct construction" [ N [ { } "hello" make-split-acc drop ] times ] benchmark-run
+  "Array access"        [ N [ arr 0 #nth drop arr 1 #nth drop ] times ] benchmark-run
+  "Struct access"       [ N [ acc lines>> drop acc current>> drop ] times ] benchmark-run
+print-benchmark-report

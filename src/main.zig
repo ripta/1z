@@ -75,9 +75,12 @@ pub fn main() u8 {
             show_stack = true;
         } else if (std.mem.eql(u8, arg, "--benchmark") or std.mem.eql(u8, arg, "-b")) {
             bench_config.enabled = true;
-        } else if (std.mem.eql(u8, arg, "--benchmark-json")) {
+        } else if (std.mem.eql(u8, arg, "--benchmark=verbose")) {
             bench_config.enabled = true;
-            bench_config.json_output = true;
+            bench_config.output = .human;
+        } else if (std.mem.eql(u8, arg, "--benchmark=json")) {
+            bench_config.enabled = true;
+            bench_config.output = .json;
         } else {
             file_path = arg;
         }
@@ -122,21 +125,27 @@ pub fn main() u8 {
         break :blk @as(u8, 0);
     };
 
-    // Print benchmark results if enabled
+    // Stop benchmark timer if enabled
     if (bench_config.enabled) {
         bench_stats.stop();
+    }
 
-        const stdout_file: File = .stdout();
-        var stdout_buf: [8192]u8 = undefined;
-        var stdout = stdout_file.writer(&stdout_buf);
-        const writer = &stdout.interface;
+    if (bench_config.output != .none) {
+        var buf: [4096]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&buf);
+        const writer = stream.writer();
 
-        if (bench_config.json_output) {
-            bench_stats.formatJson(writer) catch {};
-        } else {
-            bench_stats.formatHuman(writer) catch {};
+        switch (bench_config.output) {
+            .human => bench_stats.formatHuman(writer) catch {},
+            .json => bench_stats.formatJson(writer) catch {},
+            .none => {},
         }
-        stdout.interface.flush() catch {};
+
+        const data = stream.getWritten();
+        var written: usize = 0;
+        while (written < data.len) {
+            written += std.posix.write(std.posix.STDOUT_FILENO, data[written..]) catch break;
+        }
     }
 
     return result;

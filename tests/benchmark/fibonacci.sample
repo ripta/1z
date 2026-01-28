@@ -1,18 +1,6 @@
-
-=== Benchmark Results ===
-Timing:
-  Prelude load:    580.000 us
-  User code:       40.627 ms
-  Total:           41.207 ms
-
-Instructions:
-  push_literal:    98,092
-  call_word:       159,366
-  Total:           257,458
-
-Stack:
-  Peak depth:      23
-
-Memory:
-  Allocations:     22
-  Total bytes:     140.60 KB
+Label             Elapsed   push_literal   call_word   Total Instrs   Peak Stack   Allocs     Bytes
+------------   ----------   ------------   ---------   ------------   ----------   ------   -------
+fib(15)          9.636 ms          7,892      12,823         20,715           18        7   4.48 KB
+fib(20)         79.073 ms         87,564     142,290        229,854           23        1   1.47 KB
+fib-iter(30)   173.000 us            160         285            445            6        1   2.69 KB
+fib-iter(40)   233.000 us            210         375            585            6        1   1.47 KB

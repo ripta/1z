@@ -1,9 +1,8 @@
-=== split-lines scaling ===
-Slow (5 lines, 205 chars): 1085000 ns
-Fast (5 lines, 205 chars): 706000 ns
-
-Slow (25 lines, 1025 chars): 5595000 ns
-Fast (25 lines, 1025 chars): 3632000 ns
-
-Slow (125 lines, 5125 chars): 28398000 ns
-Fast (125 lines, 5125 chars): 17684000 ns
+Label                Elapsed   push_literal   call_word   Total Instrs   Peak Stack   Allocs       Bytes
+----------------   ---------   ------------   ---------   ------------   ----------   ------   ---------
+Slow (5 lines)      1.591 ms          1,700       3,179          4,879            6        3     1.32 KB
+Fast (5 lines)      1.002 ms          1,772       2,286          4,058            6        0         0 B
+Slow (25 lines)     7.594 ms          8,440      15,799         24,239            6        3   418.52 KB
+Fast (25 lines)     4.664 ms          8,792      11,326         20,118            6        0         0 B
+Slow (125 lines)   31.727 ms         42,140      78,899        121,039            6        8     3.03 MB
+Fast (125 lines)   19.177 ms         43,892      56,526        100,418            6        0     5.24 KB

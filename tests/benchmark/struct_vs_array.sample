@@ -1,7 +1,6 @@
-=== Construction (N=5000) ===
-Array construction:  2551036000 ns
-Struct construction: 2359470000 ns
-
-=== Access (N=5000) ===
-Array access:  2900716000 ns
-Struct access: 3285431000 ns
+Label                     Elapsed   push_literal   call_word   Total Instrs   Peak Stack   Allocs       Bytes
+-------------------   -----------   ------------   ---------   ------------   ----------   ------   ---------
+Array construction    2557.661 ms         30,005      70,008        100,013            5       28     2.79 MB
+Struct construction   2339.220 ms         35,005      65,008        100,013            5        1   976.10 KB
+Array access          2877.336 ms         40,005      80,008        120,013            5        0         0 B
+Struct access         3234.906 ms         50,005      90,008        140,013            5        0         0 B

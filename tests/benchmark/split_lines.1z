@@ -12,36 +12,11 @@ make-test-string: ( nlines -- str ) [
   "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN\n" swap repeat
 ] ;
 
-\ --- Benchmark helpers ---
-
-bench-fast: ( str -- ns ) [
-  [ split-lines drop ] curry benchmark "elapsed_ns" @get
-] ;
-
-bench-slow: ( str -- ns ) [
-  [ split-lines-slow drop ] curry benchmark "elapsed_ns" @get
-] ;
-
-\ --- Benchmarks ---
-
-"=== split-lines scaling ===" print-line
-
-5 make-test-string
-"Slow (5 lines, " print dup #len >string print " chars): " print
-dup bench-slow >string print " ns" print-line
-"Fast (5 lines, " print dup #len >string print " chars): " print
-bench-fast >string print " ns" print-line
-"" print-line
-
-25 make-test-string
-"Slow (25 lines, " print dup #len >string print " chars): " print
-dup bench-slow >string print " ns" print-line
-"Fast (25 lines, " print dup #len >string print " chars): " print
-bench-fast >string print " ns" print-line
-"" print-line
-
-125 make-test-string
-"Slow (125 lines, " print dup #len >string print " chars): " print
-dup bench-slow >string print " ns" print-line
-"Fast (125 lines, " print dup #len >string print " chars): " print
-bench-fast >string print " ns" print-line
+make-benchmark-report
+  "Slow (5 lines)"   [ 5   make-test-string split-lines-slow drop ] benchmark-run
+  "Fast (5 lines)"   [ 5   make-test-string split-lines drop ] benchmark-run
+  "Slow (25 lines)"  [ 25  make-test-string split-lines-slow drop ] benchmark-run
+  "Fast (25 lines)"  [ 25  make-test-string split-lines drop ] benchmark-run
+  "Slow (125 lines)" [ 125 make-test-string split-lines-slow drop ] benchmark-run
+  "Fast (125 lines)" [ 125 make-test-string split-lines drop ] benchmark-run
+print-benchmark-report
