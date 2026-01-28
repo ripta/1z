@@ -28,6 +28,7 @@ pub const InterpreterError = error{
     NoTokenizerAvailable,
     InvalidHashSyntax,
     RethrowError,
+    StackEffectMismatch,
 };
 
 /// Helper to create a stack effect from a raw string at runtime.

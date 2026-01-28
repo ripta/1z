@@ -8,6 +8,7 @@ const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const primitives = @import("primitives.zig");
 const parser = @import("parser.zig");
 const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
+const StackEffect = @import("stack_effect.zig").StackEffect;
 
 /// Embedded prelude source code
 const prelude_source = @embedFile("prelude.1z");
@@ -137,6 +138,36 @@ pub const Context = struct {
         }
     }
 
+    /// Capture stack effect mismatch details for error reporting.
+    fn captureStackEffectMismatch(
+        self: *Context,
+        word_name: []const u8,
+        expected_delta: i64,
+        actual_delta: i64,
+    ) void {
+        // Only capture on first error
+        if (self.error_details.items.len > 0) return;
+
+        // Format message with expected vs actual
+        var buf: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "expected delta {d}, got {d}", .{ expected_delta, actual_delta }) catch "stack effect mismatch";
+
+        // Store the message (copy to arena so it outlives the buffer)
+        const msg_copy = self.arena.allocator().dupe(u8, msg) catch return;
+
+        const line = if (self.call_stack.items.len > 0)
+            self.call_stack.items[self.call_stack.items.len - 1].line
+        else
+            0;
+
+        self.error_details.append(self.allocator, .{
+            .error_type = "StackEffectMismatch",
+            .message = msg_copy,
+            .line = line,
+            .word_name = word_name,
+        }) catch {};
+    }
+
     /// Execute a quotation's instructions.
     pub fn executeQuotation(self: *Context, instructions: []const Instruction) anyerror!void {
         for (instructions) |instr| {
@@ -158,13 +189,37 @@ pub const Context = struct {
                     if (self.dictionary.get(name)) |word| {
                         // Push call frame before execution
                         self.pushCallFrame(name, instr.line);
+
+                        // Record depth before execution for stack effect validation
+                        const depth_before = self.stack.depth();
+
                         const result = switch (word.action) {
                             .native => |func| func(self),
                             .compound => |instrs| self.executeQuotation(instrs),
                         };
 
                         if (result) |_| {
-                            // Success - just pop frame
+                            // Validate stack effect if declared
+                            if (word.stack_effect) |effect| {
+                                const depth_after = self.stack.depth();
+                                const outputs_len: i64 = @intCast(effect.outputs.len);
+                                const after: i64 = @intCast(depth_after);
+
+                                // Validate: word must produce at least declared outputs
+                                // We allow consuming more than declared (for variable consumption)
+                                // and producing more than declared (for combinators calling quotations)
+                                // But the word must leave at least outputs_len items
+                                if (after < outputs_len) {
+                                    const inputs_len: i64 = @intCast(effect.inputs.len);
+                                    const before: i64 = @intCast(depth_before);
+                                    const expected_delta = outputs_len - inputs_len;
+                                    const actual_delta = after - before;
+                                    self.captureStackEffectMismatch(name, expected_delta, actual_delta);
+                                    self.popCallFrame();
+                                    return primitives.InterpreterError.StackEffectMismatch;
+                                }
+                            }
+
                             self.popCallFrame();
                             // Benchmark: update stack depth after word execution
                             if (self.benchmark) |b| {
@@ -311,4 +366,70 @@ test "clearExecutionDetails clears both call stack and error details" {
 
     try std.testing.expectEqual(@as(usize, 0), ctx.call_stack.items.len);
     try std.testing.expectEqual(@as(usize, 0), ctx.error_details.items.len);
+}
+
+test "stack effect validation passes for correct effect" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // dup has effect ( a -- a a ), which is correct
+    // Push 1, call dup, should have 2 items
+    const alloc = ctx.quotationAllocator();
+    const instrs = try alloc.alloc(Instruction, 2);
+    instrs[0] = .{ .op = .{ .push_literal = .{ .integer = 5 } }, .line = 1 };
+    instrs[1] = .{ .op = .{ .call_word = "dup" }, .line = 2 };
+
+    try ctx.executeQuotation(instrs);
+    try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+}
+
+test "stack effect validation fails when word produces fewer outputs than declared" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.quotationAllocator();
+    const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
+
+    // Create a word that claims to produce 2 outputs but actually produces 0
+    // Effect: ( -- a b ) but body is empty
+    const empty_instrs = try alloc.alloc(Instruction, 0);
+    const outputs = try alloc.alloc(StackEffectParam, 2);
+    outputs[0] = .{ .name = "a" };
+    outputs[1] = .{ .name = "b" };
+
+    try ctx.dictionary.put("bad-word", .{
+        .name = "bad-word",
+        .stack_effect = .{
+            .inputs = &[_]StackEffectParam{},
+            .outputs = outputs,
+        },
+        .action = .{ .compound = empty_instrs },
+    });
+
+    // Call bad-word - should fail because it claims 2 outputs but produces 0
+    const call_instrs = try alloc.alloc(Instruction, 1);
+    call_instrs[0] = .{ .op = .{ .call_word = "bad-word" }, .line = 1 };
+
+    const result = ctx.executeQuotation(call_instrs);
+    try std.testing.expectError(primitives.InterpreterError.StackEffectMismatch, result);
+}
+
+test "stack effect validation passes for combinator calling quotation" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // if ( ? true-quot false-quot -- ) calls a quotation
+    // The quotation can produce outputs, which is allowed
+    const alloc = ctx.quotationAllocator();
+    const instrs = try alloc.alloc(Instruction, 4);
+    instrs[0] = .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 };
+    instrs[1] = .{ .op = .{ .push_literal = .{ .quotation = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 },
+    } } }, .line = 2 };
+    instrs[2] = .{ .op = .{ .push_literal = .{ .quotation = &[_]Instruction{} } }, .line = 3 };
+    instrs[3] = .{ .op = .{ .call_word = "if" }, .line = 4 };
+
+    try ctx.executeQuotation(instrs);
+    // if consumed 3, quotation produced 1, so stack has 1
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
 }
