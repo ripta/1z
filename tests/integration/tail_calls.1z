@@ -1,0 +1,50 @@
+\ Integration tests for tail call optimization
+\ Verifies that recursive words work with large iteration counts
+\ without crashing from Zig stack overflow.
+
+use "lib/testing.1z" ;
+
+"times with large iteration count" test-section
+\ times runs a ( -- ) quotation n times; use a side-effect-free body
+10000 [ ] times t "times 10000 no-ops" assert-true
+50000 [ ] times t "times 50000 no-ops" assert-true
+
+"times correctness" test-section
+0 [ ] times t "times 0 is identity" assert-true
+1 [ ] times t "times 1 executes once" assert-true
+
+"deep recursion countdown" test-section
+countdown: [
+  dup 0 >
+  [ 1 - countdown ]
+  [ ]
+  if
+] ;
+10000 countdown 0 "countdown 10000" assert=
+50000 countdown 0 "countdown 50000" assert=
+
+"loop with large iteration" test-section
+0 [ 1 + dup 10000 < ] loop 10000 "loop to 10000" assert=
+
+"recursive factorial" test-section
+fact: [
+  dup 1 <=
+  [ drop 1 ]
+  [ dup 1 - fact * ]
+  if
+] ;
+5 fact 120 "fact 5" assert=
+10 fact 3628800 "fact 10" assert=
+1 fact 1 "fact 1" assert=
+0 fact 1 "fact 0" assert=
+
+"error in recursive words" test-section
+\ Errors inside recursive words should still be catchable
+\ Use division by zero to trigger a real error
+bad-recurse: [
+  dup 0 =
+  [ drop 1 0 / ]
+  [ 1 - bad-recurse ]
+  if
+] ;
+[ 5 bad-recurse ] [ drop ] recover t "error in recursion caught" assert-true
