@@ -1,6 +1,8 @@
 \ Fibonacci benchmark
 \ Tests recursive function calls and stack operations
 
+"lib/memo.1z" load import
+
 \ Naive recursive fibonacci (exponential time complexity)
 \ This is intentionally slow to stress test the interpreter
 fib: ( n -- fib(n) ) [
@@ -26,9 +28,24 @@ fib-iter: ( n -- fib(n) ) [
   if
 ] ;
 
+\ Memoized recursive fibonacci (linear time via caching)
+fib-memo: ( n -- fib(n) ) [
+  dup to-string memo?
+  [ swap drop ]
+  [
+    dup 2 < [ ] [
+      dup [ dup 1 - fib-memo swap 2 - fib-memo + ] dip
+      over over to-string swap memo!
+      drop
+    ] if
+  ] if
+] ;
+
 make-benchmark-report
   "fib(15)"      [ 15 fib drop ] benchmark-run
   "fib(20)"      [ 20 fib drop ] benchmark-run
   "fib-iter(30)" [ 30 fib-iter drop ] benchmark-run
   "fib-iter(40)" [ 40 fib-iter drop ] benchmark-run
+  "fib-memo(30)" [ [ 30 fib-memo drop ] with-memo ] benchmark-run
+  "fib-memo(40)" [ [ 40 fib-memo drop ] with-memo ] benchmark-run
 print-benchmark-report

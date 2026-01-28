@@ -1,0 +1,25 @@
+\ lib/memo.1z - Memoization helpers
+\
+\ See ./tests/benchmark/fibonacci.1z for an example usage.
+
+\ Parameter holding the current memo cache
+memo-cache: parameter [ M{ } ] ;
+
+\ Run a quotation with a fresh memo cache, after which the memo is discarded
+with-memo: [
+  [ M{ } memo-cache ] dip with-parameter
+] ;
+
+\ Look up a string key in the memo cache.
+\ Returns the cached value and t on hit, or just f on miss.
+memo?: ( key -- value t/f ) [
+  memo-cache get over @has?
+  [ memo-cache get swap @get t ]
+  [ drop f ]
+  if
+] ;
+
+\ Store a key-value pair in the memo cache.
+memo!: ( key value -- ) [
+  memo-cache get -rot> @set! drop
+] ;
