@@ -1,47 +1,56 @@
 \ lib/text.1z - Line-oriented text processing
 
-\ Accumulator for splitting lines
-split-acc: struct{ lines current } ;
+\ Accumulator for index-tracking split
+split-fast-acc: mutable struct{ src lines start pos } ;
 
-\ Reducer to split by newline
-split-nl: ( acc char -- acc' ) [
-  dup "\n" =
+\ Extract src[start..pos] as a string from acc, keeping acc on stack
+acc-slice: ( acc -- acc slice-str ) [
+  dup src>> swap
+  dup start>> swap
+  dup pos>> swap
+  [ #slice ] dip swap bytes>
+] ;
+
+\ Reducer step: on newline, slice and append; otherwise increment pos
+split-fast-step: ( acc byte -- acc' ) [
+  10 =
   [
-    \ Newline: flush current line into lines if non-empty
-    drop
-    dup current>>
+    \ Newline: slice src[start..pos], append to lines, advance start past pos
+    acc-slice
     dup #len 0 >
-    [
-      over lines>>               \ acc current lines
-      swap 1array #append       \ acc lines'
-      nip                       \ lines'
-      "" make-split-acc
-    ]
+    [ over lines>> swap 1array #append >>lines ]
     [ drop ]
     if
+    dup pos>> ++ >>start
+    dup start>> >>pos
   ]
   [
-    \ Other: append to current line, rebuild accumulator
-    over current>> swap #append  \ acc new-current
-    swap lines>>                 \ new-current lines
-    swap make-split-acc
+    \ Anything else: increment pos
+    dup pos>> ++ >>pos
   ]
   if
 ] ;
 
-\ Flush the last line from accumulator into lines array
-flush-last: ( acc -- lines ) [
-  dup current>>
-  dup #len 0 >
-  [ over lines>> swap 1array #append nip ]
-  [ drop lines>> ]
+\ Flush remaining bytes after last newline
+split-fast-flush: ( acc -- lines ) [
+  dup start>> over pos>> <
+  [
+    acc-slice
+    dup #len 0 >
+    [ over lines>> swap 1array #append nip ]
+    [ drop lines>> ]
+    if
+  ]
+  [ lines>> ]
   if
 ] ;
 
 \ Split a string into an array of non-empty lines
 split-lines: ( str -- lines ) [
-  { } "" make-split-acc [ split-nl ] #reduce
-  flush-last
+  >bytes
+  dup { } 0 0 make-split-fast-acc
+  [ split-fast-step ] #reduce
+  split-fast-flush
 ] ;
 
 \ Read a file and return its non-empty lines as an array
