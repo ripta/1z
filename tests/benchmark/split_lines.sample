@@ -1,0 +1,9 @@
+=== split-lines scaling ===
+Slow (5 lines, 205 chars): 1085000 ns
+Fast (5 lines, 205 chars): 706000 ns
+
+Slow (25 lines, 1025 chars): 5595000 ns
+Fast (25 lines, 1025 chars): 3632000 ns
+
+Slow (125 lines, 5125 chars): 28398000 ns
+Fast (125 lines, 5125 chars): 17684000 ns

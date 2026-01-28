@@ -1,0 +1,47 @@
+\ Benchmark: split-lines (index-tracking, O(n)) vs split-lines-slow (char-by-char, O(n^2))
+
+use "lib/strings.1z" ;
+use "lib/text_slow.1z" ;
+use "lib/text.1z" ;
+
+\ --- Test string generation ---
+
+\ Build a string with nlines lines, each 40 chars, separated by newlines.
+\ Uses repeat to build "line\n" * n, giving n lines of 40 chars each.
+make-test-string: ( nlines -- str ) [
+  "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN\n" swap repeat
+] ;
+
+\ --- Benchmark helpers ---
+
+bench-fast: ( str -- ns ) [
+  [ split-lines drop ] curry benchmark "elapsed_ns" @get
+] ;
+
+bench-slow: ( str -- ns ) [
+  [ split-lines-slow drop ] curry benchmark "elapsed_ns" @get
+] ;
+
+\ --- Benchmarks ---
+
+"=== split-lines scaling ===" print-line
+
+5 make-test-string
+"Slow (5 lines, " print dup #len >string print " chars): " print
+dup bench-slow >string print " ns" print-line
+"Fast (5 lines, " print dup #len >string print " chars): " print
+bench-fast >string print " ns" print-line
+"" print-line
+
+25 make-test-string
+"Slow (25 lines, " print dup #len >string print " chars): " print
+dup bench-slow >string print " ns" print-line
+"Fast (25 lines, " print dup #len >string print " chars): " print
+bench-fast >string print " ns" print-line
+"" print-line
+
+125 make-test-string
+"Slow (125 lines, " print dup #len >string print " chars): " print
+dup bench-slow >string print " ns" print-line
+"Fast (125 lines, " print dup #len >string print " chars): " print
+bench-fast >string print " ns" print-line

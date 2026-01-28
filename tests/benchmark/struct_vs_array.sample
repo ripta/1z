@@ -1,0 +1,7 @@
+=== Construction (N=5000) ===
+Array construction:  2551036000 ns
+Struct construction: 2359470000 ns
+
+=== Access (N=5000) ===
+Array access:  2900716000 ns
+Struct access: 3285431000 ns
