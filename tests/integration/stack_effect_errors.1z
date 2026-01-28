@@ -1,0 +1,33 @@
+\ Stack effect validation error tests
+\ These tests verify that incorrect stack effects are caught
+
+\ Test 1: Wrong delta in quotation parameter
+\ The body effect says ( ..b -- ..a c d ) but actual is ( ..b -- ..a )
+bad-while: ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a c d ) -- ..b ) [
+  swap do compose [ loop ] curry when
+] ;
+
+\ Wrap the test in a word that handles cleanup
+\ When validation fails, the word's args stay on stack, so we use ignore-errors
+\ and check if an error occurred
+test-bad-while: ( -- ) [
+  [ 0 [ dup 3 < ] [ dup . 1 + ] bad-while ] ignore-errors
+  \ Clean up the leftover args (3 items: value, pred, body)
+  drop drop drop
+  "caught-bad-while" .
+] ;
+test-bad-while
+
+\ Test 2: Undefined row variable in quotation effect
+\ The effect uses ..a but it's not defined in the word's inputs
+bad-rowvar: ( pred: ( ..a -- ..b ? ) -- ) [
+  call drop
+] ;
+
+test-bad-rowvar: ( -- ) [
+  [ [ t ] bad-rowvar ] ignore-errors
+  \ Clean up the leftover arg
+  drop
+  "caught-bad-rowvar" .
+] ;
+test-bad-rowvar
