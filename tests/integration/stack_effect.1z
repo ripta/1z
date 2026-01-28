@@ -1,2 +1,53 @@
-double: ( n -- n ) [ 2 + ] ;
-5 double
+\ Stack effect validation tests
+
+\ Basic stack effects - correct declarations
+double: ( n -- n ) [ 2 * ] ;
+5 double .
+
+square: ( n -- n ) [ dup * ] ;
+4 square .
+
+add3: ( a b c -- sum ) [ + + ] ;
+1 2 3 add3 .
+
+\ Stack effect with multiple outputs
+dup2: ( a -- a a ) [ dup ] ;
+7 dup2 + .
+
+\ Words that consume without producing
+consume2: ( a b -- ) [ drop drop ] ;
+1 2 consume2
+"consumed" .
+
+\ Words with quotation parameters - correct effects
+apply-twice: ( n quot: ( n -- n ) -- n ) [ dup dip call ] ;
+5 [ 1 + ] apply-twice .
+
+\ Using while with correct effect (tests row variable validation)
+count-up: ( start end -- ) [
+  [ 2dup > ] [ swap dup . 1 + swap ] while
+  2drop
+] ;
+0 3 count-up
+
+\ Using recover with correct quotation effects
+\ The recover-quot has effect ( error -- ), must only consume error
+error-handler: ( -- ) [
+  [ drop ] [ drop ] recover
+  "handled" .
+] ;
+error-handler
+
+\ Nested quotation effects through combinators
+transform: ( n f: ( n -- n ) g: ( n -- n ) -- n ) [ bi + ] ;
+5 [ 2 * ] [ 3 + ] transform .
+
+\ Stack effect with only row variables (passthrough)
+passthrough: ( ..a -- ..a ) [ ] ;
+1 2 3 passthrough
++ + .
+
+\ Effect validation with if
+max2: ( a b -- max ) [ 2dup > [ drop ] [ nip ] if ] ;
+3 7 max2 .
+9 4 max2 .

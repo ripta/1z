@@ -4,6 +4,7 @@ const File = std.fs.File;
 const context = @import("context.zig");
 const Context = context.Context;
 const ErrorDetail = context.ErrorDetail;
+const Quotation = @import("value.zig").Quotation;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 const formatter = @import("formatter.zig");
 const benchmark = @import("benchmark.zig");
@@ -22,10 +23,15 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
     const details = ctx.error_details.items;
     if (details.len > 0) {
         for (details) |detail| {
+            // Print location (line number and word name)
             if (detail.line > 0) {
                 writer.print("  at line {d}: {s}\n", .{ detail.line, detail.word_name orelse detail.message }) catch return;
             } else {
                 writer.print("  in: {s}\n", .{detail.word_name orelse detail.message}) catch return;
+            }
+            // Print additional message if different from word name
+            if (detail.word_name != null and !std.mem.eql(u8, detail.message, detail.word_name.?)) {
+                writer.print("  {s}\n", .{detail.message}) catch return;
             }
         }
     }
@@ -297,7 +303,7 @@ fn repl(ctx: *Context) void {
                 }
 
                 var had_error = false;
-                ctx.executeQuotation(instrs) catch |err| {
+                ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
                     printErrorDetails(ctx, writer, err);
                     had_error = true;
                 };
@@ -354,7 +360,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                         if (instrs.len > 0) {
                             // Adjust line numbers in instructions based on file position
                             adjustInstructionLines(instrs, processor.start_line);
-                            ctx.executeQuotation(instrs) catch |e| {
+                            ctx.executeQuotation(.{ .instructions = instrs }) catch |e| {
                                 printErrorDetails(ctx, err_writer, e);
                                 err_writer.flush() catch {};
                                 return 1;
@@ -391,7 +397,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                 if (instrs.len > 0) {
                     // Adjust line numbers in instructions based on file position
                     adjustInstructionLines(instrs, processor.start_line);
-                    ctx.executeQuotation(instrs) catch |err| {
+                    ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
                         printErrorDetails(ctx, err_writer, err);
                         err_writer.flush() catch {};
                         return 1;
@@ -421,7 +427,7 @@ fn adjustInstructionLines(instrs: []const @import("value.zig").Instruction, line
         switch (instr.op) {
             .push_literal => |val| {
                 switch (val) {
-                    .quotation => |nested| adjustInstructionLines(nested, line_offset),
+                    .quotation => |nested| adjustInstructionLines(nested.instructions, line_offset),
                     else => {},
                 }
             },

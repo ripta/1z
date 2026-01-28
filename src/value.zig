@@ -59,6 +59,34 @@ pub const ErrorObject = struct {
     }
 };
 
+fn instructionEql(a: Instruction, b: Instruction) bool {
+    const Tag = std.meta.Tag(Instruction.Op);
+    if (@as(Tag, a.op) != @as(Tag, b.op)) return false;
+    return switch (a.op) {
+        .push_literal => |va| va.eql(b.op.push_literal),
+        .call_word => |na| std.mem.eql(u8, na, b.op.call_word),
+    };
+}
+
+/// Quotation represents executable code with optional stack effect annotation.
+pub const Quotation = struct {
+    instructions: []const Instruction,
+    /// If non-null, the expected stack effect for this quotation.
+    /// Used for validation when the quotation is executed.
+    effect: ?*const StackEffect = null,
+
+    pub fn eql(self: Quotation, other: Quotation) bool {
+        if (self.instructions.len != other.instructions.len) return false;
+        for (self.instructions, other.instructions) |ai, bi| {
+            if (!instructionEql(ai, bi)) return false;
+        }
+        // Compare effects
+        if (self.effect == null and other.effect == null) return true;
+        if (self.effect == null or other.effect == null) return false;
+        return self.effect.?.eql(other.effect.?.*);
+    }
+};
+
 /// Value represents any value that can be stored on the stack.
 pub const Value = union(enum) {
     integer: i64,
@@ -66,7 +94,7 @@ pub const Value = union(enum) {
     string: []const u8,
     symbol: []const u8,
     array: []const Value,
-    quotation: []const Instruction,
+    quotation: Quotation,
     hash: *HashTable,
     stack_effect: StackEffect,
     parse_time_marker: void, // Marker for parse-time word definitions
@@ -86,9 +114,9 @@ pub const Value = union(enum) {
                 }
                 try writer.writeAll("}");
             },
-            .quotation => |instrs| {
+            .quotation => |quot| {
                 try writer.writeAll("[ ");
-                for (instrs) |instr| {
+                for (quot.instructions) |instr| {
                     switch (instr.op) {
                         .push_literal => |v| {
                             try v.write(writer);
@@ -137,14 +165,7 @@ pub const Value = union(enum) {
                 }
                 return true;
             },
-            .quotation => |a| {
-                const b = other.quotation;
-                if (a.len != b.len) return false;
-                for (a, b) |ai, bi| {
-                    if (!instructionEql(ai, bi)) return false;
-                }
-                return true;
-            },
+            .quotation => |a| a.eql(other.quotation),
             // TODO(ripta): This is currently tightly-coupled to the internal
             // representation of HashTable, despite H{ } being a non-native
             // implementation in the prelude.
@@ -167,15 +188,6 @@ pub const Value = union(enum) {
         };
     }
 };
-
-fn instructionEql(a: Instruction, b: Instruction) bool {
-    const Tag = std.meta.Tag(Instruction.Op);
-    if (@as(Tag, a.op) != @as(Tag, b.op)) return false;
-    return switch (a.op) {
-        .push_literal => |va| va.eql(b.op.push_literal),
-        .call_word => |na| std.mem.eql(u8, na, b.op.call_word),
-    };
-}
 
 // =============================================================================
 // Tests

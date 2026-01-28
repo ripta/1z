@@ -4,6 +4,8 @@ const Allocator = std.mem.Allocator;
 const Context = @import("context.zig").Context;
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
+const Quotation = value_mod.Quotation;
+const Instruction = value_mod.Instruction;
 const HashTable = value_mod.HashTable;
 const ErrorObject = value_mod.ErrorObject;
 const StackFrame = value_mod.StackFrame;
@@ -28,6 +30,7 @@ pub const InterpreterError = error{
     NoTokenizerAvailable,
     InvalidHashSyntax,
     RethrowError,
+    StackEffectMismatch,
 };
 
 /// Helper to create a stack effect from a raw string at runtime.
@@ -120,8 +123,6 @@ const Primitive = struct {
     func: NativeFn,
     parse_time: bool = false,
 };
-
-const Instruction = @import("value.zig").Instruction;
 
 const primitives = [_]Primitive{
     .{ .name = "dup", .stack_effect = "a -- a a", .func = nativeDup },
@@ -329,7 +330,7 @@ fn nativeSemicolon(ctx: *Context) anyerror!void {
         .name = name_copy,
         .parse_time = is_parse_time,
         .stack_effect = stack_effect_val,
-        .action = .{ .compound = instrs },
+        .action = .{ .compound = instrs.instructions },
     });
 }
 
@@ -446,6 +447,8 @@ fn nativeHelp(ctx: *Context) anyerror!void {
 /// recover ( try-quot recover-quot -- ) - Execute try quotation; if error,
 /// execute recover quotation with error on stack
 fn nativeRecover(ctx: *Context) anyerror!void {
+    // Note: Parameter effects are validated statically by validateParameterEffects
+    // before this function is called, so we just pop the quotations here.
     const recover_quot = try popQuotation(ctx);
     const try_quot = try popQuotation(ctx);
 
@@ -547,7 +550,7 @@ fn nativeLoad(ctx: *Context) anyerror!void {
                     .parse_error => |e| return e,
                     .complete => |instrs| {
                         if (instrs.len > 0) {
-                            try ctx.executeQuotation(instrs);
+                            try ctx.executeQuotation(.{ .instructions = instrs });
                         }
                     },
                 }
@@ -561,7 +564,7 @@ fn nativeLoad(ctx: *Context) anyerror!void {
             .parse_error => |err| return err,
             .complete => |instrs| {
                 if (instrs.len > 0) {
-                    try ctx.executeQuotation(instrs);
+                    try ctx.executeQuotation(.{ .instructions = instrs });
                 }
                 processor.reset();
             },
@@ -614,7 +617,8 @@ fn nativeParseUntil(ctx: *Context) anyerror!void {
 /// The quotation should contain alternating symbol keys and values.
 /// Example: [ name: "Alice" age: 30 ] make-hash
 fn nativeMakeHash(ctx: *Context) anyerror!void {
-    const instrs = try popQuotation(ctx);
+    const quot = try popQuotation(ctx);
+    const instrs = quot.instructions;
 
     // Create a new hash table
     const hash = ctx.quotationAllocator().create(HashTable) catch return error.OutOfMemory;
@@ -643,7 +647,7 @@ fn nativeMakeHash(ctx: *Context) anyerror!void {
             .call_word => blk: {
                 // Execute the remaining instructions to get the value
                 // TODO(ripta): figure out supporting beyond single-words
-                try ctx.executeQuotation(instrs[i .. i + 1]);
+                try ctx.executeQuotation(.{ .instructions = instrs[i .. i + 1] });
                 break :blk ctx.stack.pop() catch return error.InvalidHashSyntax;
             },
         };
@@ -665,15 +669,16 @@ fn nativeCurry(ctx: *Context) anyerror!void {
 
     // Allocate new instruction array: 1 (for push x) + original length
     const alloc = ctx.quotationAllocator();
-    const new_instrs = try alloc.alloc(Instruction, 1 + quot.len);
+    const new_instrs = try alloc.alloc(Instruction, 1 + quot.instructions.len);
 
     // First instruction: push the value x
     new_instrs[0] = .{ .op = .{ .push_literal = x }, .line = 0 };
 
     // Copy original quotation instructions
-    @memcpy(new_instrs[1..], quot);
+    @memcpy(new_instrs[1..], quot.instructions);
 
-    try ctx.stack.push(.{ .quotation = new_instrs });
+    // Curried quotation has no effect - effect validation happens at parameter attachment time
+    try ctx.stack.push(.{ .quotation = .{ .instructions = new_instrs, .effect = null } });
 }
 
 /// compose ( quot1 quot2 -- quot' ) - Concatenate two quotations
@@ -684,13 +689,14 @@ fn nativeCompose(ctx: *Context) anyerror!void {
 
     // Allocate new instruction array: quot1.len + quot2.len
     const alloc = ctx.quotationAllocator();
-    const new_instrs = try alloc.alloc(Instruction, quot1.len + quot2.len);
+    const new_instrs = try alloc.alloc(Instruction, quot1.instructions.len + quot2.instructions.len);
 
     // Copy quot1 then quot2
-    @memcpy(new_instrs[0..quot1.len], quot1);
-    @memcpy(new_instrs[quot1.len..], quot2);
+    @memcpy(new_instrs[0..quot1.instructions.len], quot1.instructions);
+    @memcpy(new_instrs[quot1.instructions.len..], quot2.instructions);
 
-    try ctx.stack.push(.{ .quotation = new_instrs });
+    // Composed quotation has no effect - effect validation happens at parameter attachment time
+    try ctx.stack.push(.{ .quotation = .{ .instructions = new_instrs, .effect = null } });
 }
 
 /// benchmark ( quot -- hash ) - Execute quotation and return benchmark stats
@@ -761,7 +767,7 @@ fn popBoolean(ctx: *Context) !bool {
     };
 }
 
-fn popQuotation(ctx: *Context) ![]const Instruction {
+fn popQuotation(ctx: *Context) !Quotation {
     const val = try ctx.stack.pop();
     return switch (val) {
         .quotation => |q| q,
@@ -866,7 +872,7 @@ test "dip executes quotation with top item hidden" {
     };
     try ctx.stack.push(.{ .integer = 10 });
     try ctx.stack.push(.{ .integer = 20 });
-    try ctx.stack.push(.{ .quotation = &quot });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &quot } });
     try nativeDip(&ctx);
 
     try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
@@ -883,7 +889,7 @@ test "dip with empty quotation" {
     const quot = [_]Instruction{};
     try ctx.stack.push(.{ .integer = 1 });
     try ctx.stack.push(.{ .integer = 2 });
-    try ctx.stack.push(.{ .quotation = &quot });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &quot } });
     try nativeDip(&ctx);
 
     try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
@@ -905,7 +911,7 @@ test "dip with quotation that pushes multiple values" {
         .{ .op = .{ .push_literal = .{ .integer = 3 } }, .line = 0 },
     };
     try ctx.stack.push(.{ .integer = 5 });
-    try ctx.stack.push(.{ .quotation = &quot });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &quot } });
     try nativeDip(&ctx);
 
     try std.testing.expectEqual(@as(usize, 4), ctx.stack.depth());
@@ -1127,7 +1133,7 @@ test "call executes quotation" {
         .{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 0 },
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
-    try ctx.stack.push(.{ .quotation = &instrs });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &instrs } });
     try nativeCall(&ctx);
 
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
@@ -1144,7 +1150,7 @@ test "semicolon defines word" {
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
     try ctx.stack.push(.{ .symbol = "add2" });
-    try ctx.stack.push(.{ .quotation = &instrs });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &instrs } });
     try nativeSemicolon(&ctx);
 
     try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
@@ -1167,7 +1173,7 @@ test "semicolon defines word with stack effect" {
         .inputs = &[_]StackEffectParam{.{ .name = "n" }},
         .outputs = &[_]StackEffectParam{.{ .name = "n" }},
     } });
-    try ctx.stack.push(.{ .quotation = &instrs });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &instrs } });
     try nativeSemicolon(&ctx);
 
     try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
@@ -1186,8 +1192,8 @@ test "if true branch" {
     const true_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 0 }};
     const false_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 0 }};
     try ctx.stack.push(.{ .boolean = true });
-    try ctx.stack.push(.{ .quotation = &true_quot });
-    try ctx.stack.push(.{ .quotation = &false_quot });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &true_quot } });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &false_quot } });
     try nativeIf(&ctx);
 
     try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).integer);
@@ -1201,8 +1207,8 @@ test "if false branch" {
     const true_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 0 }};
     const false_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 0 }};
     try ctx.stack.push(.{ .boolean = false });
-    try ctx.stack.push(.{ .quotation = &true_quot });
-    try ctx.stack.push(.{ .quotation = &false_quot });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &true_quot } });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &false_quot } });
     try nativeIf(&ctx);
 
     try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).integer);
@@ -1276,8 +1282,8 @@ test "recover catches error and executes recovery" {
         .{ .op = .{ .call_word = "drop" }, .line = 0 }, // Drop the error value
         .{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 },
     };
-    try ctx.stack.push(.{ .quotation = &try_quot });
-    try ctx.stack.push(.{ .quotation = &recover_quot });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &try_quot } });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &recover_quot } });
     try nativeRecover(&ctx);
 
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
@@ -1292,8 +1298,8 @@ test "recover succeeds without error" {
     // Try quotation succeeds
     const try_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 100 } }, .line = 0 }};
     const recover_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 }};
-    try ctx.stack.push(.{ .quotation = &try_quot });
-    try ctx.stack.push(.{ .quotation = &recover_quot });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &try_quot } });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &recover_quot } });
     try nativeRecover(&ctx);
 
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
@@ -1308,8 +1314,8 @@ test "recover pushes error value on failure" {
     // Try quotation fails, recovery just leaves error on stack
     const try_quot = [_]Instruction{.{ .op = .{ .call_word = "drop" }, .line = 0 }}; // Stack underflow
     const recover_quot = [_]Instruction{}; // Do nothing, leave error on stack
-    try ctx.stack.push(.{ .quotation = &try_quot });
-    try ctx.stack.push(.{ .quotation = &recover_quot });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &try_quot } });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &recover_quot } });
     try nativeRecover(&ctx);
 
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
@@ -1331,8 +1337,8 @@ test "cleanup runs on success" {
     // Body pushes 10, cleanup pushes 20
     const body_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 10 } }, .line = 0 }};
     const cleanup_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 20 } }, .line = 0 }};
-    try ctx.stack.push(.{ .quotation = &body_quot });
-    try ctx.stack.push(.{ .quotation = &cleanup_quot });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &body_quot } });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &cleanup_quot } });
     try nativeCleanup(&ctx);
 
     // Both should have run: stack has 10, then 20
@@ -1349,8 +1355,8 @@ test "cleanup runs on error and rethrows" {
     // Body fails (stack underflow), cleanup pushes 99
     const body_quot = [_]Instruction{.{ .op = .{ .call_word = "drop" }, .line = 0 }};
     const cleanup_quot = [_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 99 } }, .line = 0 }};
-    try ctx.stack.push(.{ .quotation = &body_quot });
-    try ctx.stack.push(.{ .quotation = &cleanup_quot });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &body_quot } });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &cleanup_quot } });
 
     // cleanup should rethrow the error
     const result = nativeCleanup(&ctx);
@@ -1369,8 +1375,8 @@ test "cleanup error is suppressed if body fails" {
     // Both body and cleanup fail
     const body_quot = [_]Instruction{.{ .op = .{ .call_word = "drop" }, .line = 0 }};
     const cleanup_quot = [_]Instruction{.{ .op = .{ .call_word = "drop" }, .line = 0 }};
-    try ctx.stack.push(.{ .quotation = &body_quot });
-    try ctx.stack.push(.{ .quotation = &cleanup_quot });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &body_quot } });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &cleanup_quot } });
 
     // Body error should be rethrown (cleanup error suppressed)
     const result = nativeCleanup(&ctx);
@@ -1459,7 +1465,7 @@ test "semicolon defines parse-time word when marker is present" {
     // Stack: symbol, parse-time marker, quotation
     try ctx.stack.push(.{ .symbol = "my-macro" });
     try ctx.stack.push(.{ .parse_time_marker = {} });
-    try ctx.stack.push(.{ .quotation = &instrs });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &instrs } });
     try nativeSemicolon(&ctx);
 
     try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
@@ -1478,7 +1484,7 @@ test "semicolon defines non-parse-time word by default" {
     };
     // Stack: symbol, quotation (no parse-time marker)
     try ctx.stack.push(.{ .symbol = "regular-word" });
-    try ctx.stack.push(.{ .quotation = &instrs });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &instrs } });
     try nativeSemicolon(&ctx);
 
     try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
@@ -1502,7 +1508,7 @@ test "semicolon defines parse-time word with stack effect" {
         .inputs = &[_]StackEffectParam{},
         .outputs = &[_]StackEffectParam{.{ .name = "x" }},
     } });
-    try ctx.stack.push(.{ .quotation = &instrs });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &instrs } });
     try nativeSemicolon(&ctx);
 
     try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
@@ -1536,10 +1542,10 @@ test "parse-until reads tokens until delimiter" {
 
     // The quotation should contain: push 1, push 2, call +
     const quot = val.quotation;
-    try std.testing.expectEqual(@as(usize, 3), quot.len);
-    try std.testing.expectEqual(@as(i64, 1), quot[0].op.push_literal.integer);
-    try std.testing.expectEqual(@as(i64, 2), quot[1].op.push_literal.integer);
-    try std.testing.expectEqualStrings("+", quot[2].op.call_word);
+    try std.testing.expectEqual(@as(usize, 3), quot.instructions.len);
+    try std.testing.expectEqual(@as(i64, 1), quot.instructions[0].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 2), quot.instructions[1].op.push_literal.integer);
+    try std.testing.expectEqualStrings("+", quot.instructions[2].op.call_word);
 }
 
 test "parse-until with empty content" {
@@ -1561,7 +1567,7 @@ test "parse-until with empty content" {
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     const val = try ctx.stack.pop();
     const quot = val.quotation;
-    try std.testing.expectEqual(@as(usize, 0), quot.len);
+    try std.testing.expectEqual(@as(usize, 0), quot.instructions.len);
 }
 
 test "parse-until fails without tokenizer" {
@@ -1589,7 +1595,7 @@ test "curry prepends value to quotation" {
     };
     try ctx.stack.push(.{ .integer = 3 }); // Will be on stack when curried quot runs
     try ctx.stack.push(.{ .integer = 5 }); // Value to curry
-    try ctx.stack.push(.{ .quotation = &quot });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &quot } });
     try nativeCurry(&ctx);
 
     // Now we have: 3 [ 5 + ]
@@ -1611,7 +1617,7 @@ test "curry with empty quotation" {
     // 42 [ ] curry call should leave 42 on stack
     const quot = [_]Instruction{};
     try ctx.stack.push(.{ .integer = 42 });
-    try ctx.stack.push(.{ .quotation = &quot });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &quot } });
     try nativeCurry(&ctx);
     try nativeCall(&ctx);
 
@@ -1634,8 +1640,8 @@ test "compose concatenates quotations" {
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
     try ctx.stack.push(.{ .integer = 5 });
-    try ctx.stack.push(.{ .quotation = &quot1 });
-    try ctx.stack.push(.{ .quotation = &quot2 });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &quot1 } });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &quot2 } });
     try nativeCompose(&ctx);
 
     // Now we have: 5 [ 2 * 3 + ]
@@ -1657,10 +1663,10 @@ test "compose with empty quotations" {
     // [ ] [ ] compose should give [ ]
     const quot1 = [_]Instruction{};
     const quot2 = [_]Instruction{};
-    try ctx.stack.push(.{ .quotation = &quot1 });
-    try ctx.stack.push(.{ .quotation = &quot2 });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &quot1 } });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &quot2 } });
     try nativeCompose(&ctx);
 
     const result = try ctx.stack.pop();
-    try std.testing.expectEqual(@as(usize, 0), result.quotation.len);
+    try std.testing.expectEqual(@as(usize, 0), result.quotation.instructions.len);
 }

@@ -1,20 +1,17 @@
 \ Test structured error objects with recover
+\ Note: recover-quot has declared effect ( error -- ) so must consume the error
 
 \ Simple error - print the error object showing stack trace
-[ drop ] [ ] recover
-.
+[ drop ] [ dup . drop ] recover
 
 \ Nested error - should show full call chain in stack trace
 nested-fail: [ drop ] ;
 outer-fail: [ nested-fail ] ;
-[ outer-fail ] [ ] recover
-.
+[ outer-fail ] [ dup . drop ] recover
 
 \ Unknown word error - different error type
-[ unknown-word-xyz ] [ ] recover
-.
+[ unknown-word-xyz ] [ dup . drop ] recover
 
 \ Rethrow - catch an error, then re-raise it
 \ The outer recover catches the rethrown error
-[ [ drop ] [ rethrow ] recover ] [ ] recover
-.
+[ [ drop ] [ rethrow ] recover ] [ dup . drop ] recover

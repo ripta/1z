@@ -1,14 +1,10 @@
-Stack: [ <error StackUnderflow: StackUnderflow [drop:4 <- recover:4]> ]
-<error StackUnderflow: StackUnderflow [drop:4 <- recover:4]>
+<error StackUnderflow: StackUnderflow [drop:5 <- recover:5]>
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
-Stack: [ <error StackUnderflow: StackUnderflow [drop:8 <- nested-fail:9 <- outer-fail:10 <- recover:10]> ]
 <error StackUnderflow: StackUnderflow [drop:8 <- nested-fail:9 <- outer-fail:10 <- recover:10]>
 Stack: [ ]
-Stack: [ <error UnknownWord: UnknownWord [unknown-word-xyz:14 <- recover:14]> ]
-<error UnknownWord: UnknownWord [unknown-word-xyz:14 <- recover:14]>
+<error UnknownWord: UnknownWord [unknown-word-xyz:13 <- recover:13]>
 Stack: [ ]
-Stack: [ <error RethrowError: RethrowError [drop:19 <- recover:19 <- recover:19]> ]
-<error RethrowError: RethrowError [drop:19 <- recover:19 <- recover:19]>
+<error RethrowError: RethrowError [drop:17 <- recover:17 <- recover:17]>
 Stack: [ ]
