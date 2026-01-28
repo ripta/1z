@@ -22,10 +22,15 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
     const details = ctx.error_details.items;
     if (details.len > 0) {
         for (details) |detail| {
+            // Print location (line number and word name)
             if (detail.line > 0) {
                 writer.print("  at line {d}: {s}\n", .{ detail.line, detail.word_name orelse detail.message }) catch return;
             } else {
                 writer.print("  in: {s}\n", .{detail.word_name orelse detail.message}) catch return;
+            }
+            // Print additional message if different from word name
+            if (detail.word_name != null and !std.mem.eql(u8, detail.message, detail.word_name.?)) {
+                writer.print("  {s}\n", .{detail.message}) catch return;
             }
         }
     }

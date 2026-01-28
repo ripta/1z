@@ -142,18 +142,29 @@ pub const Context = struct {
     fn captureStackEffectMismatch(
         self: *Context,
         word_name: []const u8,
-        expected_delta: i64,
-        actual_delta: i64,
+        effect: StackEffect,
+        actual_depth: usize,
     ) void {
         // Only capture on first error
         if (self.error_details.items.len > 0) return;
 
-        // Format message with expected vs actual
-        var buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "expected delta {d}, got {d}", .{ expected_delta, actual_delta }) catch "stack effect mismatch";
+        // Format the declared effect and explanation
+        var buf: [256]u8 = undefined;
+        var fbs = std.io.fixedBufferStream(&buf);
+        const writer = fbs.writer();
+
+        // Write declared effect
+        writer.writeAll("declared ") catch {};
+        effect.write(writer) catch {};
+
+        // Write explanation
+        writer.print(", requires {d} output(s) but stack has {d}", .{
+            effect.outputs.len,
+            actual_depth,
+        }) catch {};
 
         // Store the message (copy to arena so it outlives the buffer)
-        const msg_copy = self.arena.allocator().dupe(u8, msg) catch return;
+        const msg_copy = self.arena.allocator().dupe(u8, fbs.getWritten()) catch return;
 
         const line = if (self.call_stack.items.len > 0)
             self.call_stack.items[self.call_stack.items.len - 1].line
@@ -190,9 +201,6 @@ pub const Context = struct {
                         // Push call frame before execution
                         self.pushCallFrame(name, instr.line);
 
-                        // Record depth before execution for stack effect validation
-                        const depth_before = self.stack.depth();
-
                         const result = switch (word.action) {
                             .native => |func| func(self),
                             .compound => |instrs| self.executeQuotation(instrs),
@@ -202,19 +210,13 @@ pub const Context = struct {
                             // Validate stack effect if declared
                             if (word.stack_effect) |effect| {
                                 const depth_after = self.stack.depth();
-                                const outputs_len: i64 = @intCast(effect.outputs.len);
-                                const after: i64 = @intCast(depth_after);
 
                                 // Validate: word must produce at least declared outputs
                                 // We allow consuming more than declared (for variable consumption)
                                 // and producing more than declared (for combinators calling quotations)
                                 // But the word must leave at least outputs_len items
-                                if (after < outputs_len) {
-                                    const inputs_len: i64 = @intCast(effect.inputs.len);
-                                    const before: i64 = @intCast(depth_before);
-                                    const expected_delta = outputs_len - inputs_len;
-                                    const actual_delta = after - before;
-                                    self.captureStackEffectMismatch(name, expected_delta, actual_delta);
+                                if (depth_after < effect.outputs.len) {
+                                    self.captureStackEffectMismatch(name, effect, depth_after);
                                     self.popCallFrame();
                                     return primitives.InterpreterError.StackEffectMismatch;
                                 }
