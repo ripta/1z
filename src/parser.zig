@@ -6,8 +6,10 @@ const Tokenizer = tokenizer_mod.Tokenizer;
 const Token = tokenizer_mod.Token;
 const parseInteger = tokenizer_mod.parseInteger;
 const parseString = tokenizer_mod.parseString;
-const Value = @import("value.zig").Value;
-const Instruction = @import("value.zig").Instruction;
+const value_mod = @import("value.zig");
+const Value = value_mod.Value;
+const Instruction = value_mod.Instruction;
+const Quotation = value_mod.Quotation;
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
 const Context = @import("context.zig").Context;
@@ -88,7 +90,7 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
                         const pre_depth = c.stack.depth();
                         switch (word.action) {
                             .native => |func| func(c) catch return ParseError.ParseTimeExecutionError,
-                            .compound => |instrs| c.executeQuotation(instrs) catch return ParseError.ParseTimeExecutionError,
+                            .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch return ParseError.ParseTimeExecutionError,
                         }
                         // Capture any values pushed onto stack as push_literal instructions
                         const post_depth = c.stack.depth();
@@ -114,32 +116,52 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
 }
 
 /// Parse a quotation. If ctx is provided, parse-time words will be executed.
-pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) ParseError![]const Instruction {
+/// A leading stack effect `( ... )` becomes the quotation's declared effect.
+pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) ParseError!Quotation {
     var instructions: std.ArrayListUnmanaged(Instruction) = .{};
     errdefer instructions.deinit(allocator);
+
+    // Track if we should look for a leading stack effect
+    var is_first_token = true;
+    var quotation_effect: ?*const StackEffect = null;
 
     while (nextToken(tokenizer)) |tok| {
         const token = tok.text;
         const line = tok.line;
         if (std.mem.eql(u8, token, "[")) {
+            is_first_token = false;
             const nested = try parseQuotation(allocator, tokenizer, ctx);
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = nested } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "]")) {
-            return instructions.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
+            const instrs = instructions.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
+            return Quotation{ .instructions = instrs, .effect = quotation_effect };
         } else if (std.mem.eql(u8, token, "{")) {
+            is_first_token = false;
             const arr = try parseArray(allocator, tokenizer);
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .array = arr } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "(")) {
             const effect = try parseStackEffect(allocator, tokenizer);
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = line }) catch return ParseError.OutOfMemory;
+            if (is_first_token) {
+                // Leading stack effect becomes the quotation's declared effect
+                const effect_ptr = allocator.create(StackEffect) catch return ParseError.OutOfMemory;
+                effect_ptr.* = effect;
+                quotation_effect = effect_ptr;
+            } else {
+                // Non-leading stack effect is pushed as a value
+                instructions.append(allocator, .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = line }) catch return ParseError.OutOfMemory;
+            }
+            is_first_token = false;
         } else if (std.mem.eql(u8, token, ")")) {
             return ParseError.UnmatchedCloseParen;
         } else if (parseInteger(token)) |n| {
+            is_first_token = false;
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .integer = n } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
+            is_first_token = false;
             const s_copy = allocator.dupe(u8, s) catch return ParseError.OutOfMemory;
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (token.len > 1 and token[token.len - 1] == ':') {
+            is_first_token = false;
             const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .symbol = sym_copy } }, .line = line }) catch return ParseError.OutOfMemory;
         } else {
@@ -156,7 +178,7 @@ pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Contex
                         const pre_depth = c.stack.depth();
                         switch (word.action) {
                             .native => |func| func(c) catch return ParseError.ParseTimeExecutionError,
-                            .compound => |instrs| c.executeQuotation(instrs) catch return ParseError.ParseTimeExecutionError,
+                            .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch return ParseError.ParseTimeExecutionError,
                         }
                         // Capture any values pushed onto stack as push_literal instructions
                         const post_depth = c.stack.depth();
@@ -168,10 +190,12 @@ pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Contex
                                 instructions.append(allocator, .{ .op = .{ .push_literal = val }, .line = line }) catch return ParseError.OutOfMemory;
                             }
                         }
+                        is_first_token = false;
                         continue;
                     }
                 }
             }
+            is_first_token = false;
             // Regular word - compile as call_word
             const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
             instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line }) catch return ParseError.OutOfMemory;
@@ -291,12 +315,12 @@ test "parse simple quotation" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("1 2 + ]");
-    const instrs = try parseQuotation(arena.allocator(), &tokenizer, null);
+    const quot = try parseQuotation(arena.allocator(), &tokenizer, null);
 
-    try std.testing.expectEqual(@as(usize, 3), instrs.len);
-    try std.testing.expectEqual(@as(i64, 1), instrs[0].op.push_literal.integer);
-    try std.testing.expectEqual(@as(i64, 2), instrs[1].op.push_literal.integer);
-    try std.testing.expectEqualStrings("+", instrs[2].op.call_word);
+    try std.testing.expectEqual(@as(usize, 3), quot.instructions.len);
+    try std.testing.expectEqual(@as(i64, 1), quot.instructions[0].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 2), quot.instructions[1].op.push_literal.integer);
+    try std.testing.expectEqualStrings("+", quot.instructions[2].op.call_word);
 }
 
 test "parse nested quotation" {
@@ -304,12 +328,49 @@ test "parse nested quotation" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("[ 1 ] ]");
-    const instrs = try parseQuotation(arena.allocator(), &tokenizer, null);
+    const quot = try parseQuotation(arena.allocator(), &tokenizer, null);
 
-    try std.testing.expectEqual(@as(usize, 1), instrs.len);
-    const nested = instrs[0].op.push_literal.quotation;
-    try std.testing.expectEqual(@as(usize, 1), nested.len);
-    try std.testing.expectEqual(@as(i64, 1), nested[0].op.push_literal.integer);
+    try std.testing.expectEqual(@as(usize, 1), quot.instructions.len);
+    const nested = quot.instructions[0].op.push_literal.quotation;
+    try std.testing.expectEqual(@as(usize, 1), nested.instructions.len);
+    try std.testing.expectEqual(@as(i64, 1), nested.instructions[0].op.push_literal.integer);
+}
+
+test "parse quotation with leading stack effect" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("( n -- n ) dup ]");
+    const quot = try parseQuotation(arena.allocator(), &tokenizer, null);
+
+    // The quotation should have an effect attached
+    try std.testing.expect(quot.effect != null);
+    try std.testing.expectEqual(@as(usize, 1), quot.effect.?.inputs.len);
+    try std.testing.expectEqual(@as(usize, 1), quot.effect.?.outputs.len);
+    try std.testing.expectEqualStrings("n", quot.effect.?.inputs[0].name);
+    try std.testing.expectEqualStrings("n", quot.effect.?.outputs[0].name);
+
+    // The instructions should not include the stack effect
+    try std.testing.expectEqual(@as(usize, 1), quot.instructions.len);
+    try std.testing.expectEqualStrings("dup", quot.instructions[0].op.call_word);
+}
+
+test "parse quotation with non-leading stack effect" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // Stack effect after other content is pushed as a value
+    var tokenizer = Tokenizer.init("1 ( n -- n ) ]");
+    const quot = try parseQuotation(arena.allocator(), &tokenizer, null);
+
+    // No quotation-level effect
+    try std.testing.expect(quot.effect == null);
+
+    // The stack effect should be a push_literal instruction
+    try std.testing.expectEqual(@as(usize, 2), quot.instructions.len);
+    try std.testing.expectEqual(@as(i64, 1), quot.instructions[0].op.push_literal.integer);
+    const effect = quot.instructions[1].op.push_literal.stack_effect;
+    try std.testing.expectEqual(@as(usize, 1), effect.inputs.len);
 }
 
 test "unmatched open bracket" {
@@ -491,7 +552,7 @@ test "parse top level with stack effect" {
     try std.testing.expectEqual(@as(usize, 1), effect.outputs.len);
     try std.testing.expectEqualStrings("n", effect.inputs[0].name);
 
-    try std.testing.expectEqual(@as(usize, 1), instrs[2].op.push_literal.quotation.len);
+    try std.testing.expectEqual(@as(usize, 1), instrs[2].op.push_literal.quotation.instructions.len);
 }
 
 test "parse top level with comments" {

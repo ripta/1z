@@ -1,14 +1,21 @@
-[ 5 3 + ] [ drop 0 ] recover
+\ Note: recover-quot has declared effect ( error -- ) so it must only consume the error
+
+\ Success case - try-quot succeeds, recover-quot not called
+[ 5 3 + ] [ drop ] recover
 .
 
-[ drop ] [ drop 42 ] recover
-.
+\ Error case - try-quot fails, recover-quot consumes error
+[ drop ] [ drop ] recover
+42 .
 
+\ ignore-errors - error is suppressed
 [ drop ] ignore-errors
 "still running" .
 
+\ ignore-errors with success - value left on stack
 [ 100 ] ignore-errors
 .
 
-[ [ drop ] [ drop 1 ] recover ] [ drop 2 ] recover
-.
+\ Nested recover - both recover quotations consume errors
+[ [ drop ] [ drop ] recover ] [ drop ] recover
+1 .
