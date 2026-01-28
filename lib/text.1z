@@ -1,44 +1,46 @@
 \ lib/text.1z - Line-oriented text processing
 
+\ Accumulator for splitting lines
+split-acc: struct{ lines current } ;
+
 \ Reducer to split by newline
-\ acc: { lines-array  current-line-string }
 split-nl: ( acc char -- acc' ) [
   dup "\n" =
   [
     \ Newline: flush current line into lines if non-empty
     drop
-    dup 1 #nth
+    dup current>>
     dup #len 0 >
     [
-      over 0 #nth               \ acc current lines
+      over lines>>               \ acc current lines
       swap 1array #append       \ acc lines'
       nip                       \ lines'
-      1array "" 1array #append  \ { lines' "" }
+      "" make-split-acc
     ]
     [ drop ]
     if
   ]
   [
     \ Other: append to current line, rebuild accumulator
-    over 1 #nth swap #append     \ acc new-current
-    swap 0 #nth                  \ new-current lines
-    1array swap 1array #append   \ { lines new-current }
+    over current>> swap #append  \ acc new-current
+    swap lines>>                 \ new-current lines
+    swap make-split-acc
   ]
   if
 ] ;
 
 \ Flush the last line from accumulator into lines array
 flush-last: ( acc -- lines ) [
-  dup 1 #nth
+  dup current>>
   dup #len 0 >
-  [ over 0 #nth swap 1array #append nip ]
-  [ drop 0 #nth ]
+  [ over lines>> swap 1array #append nip ]
+  [ drop lines>> ]
   if
 ] ;
 
 \ Split a string into an array of non-empty lines
 split-lines: ( str -- lines ) [
-  { { } "" } [ split-nl ] #reduce
+  { } "" make-split-acc [ split-nl ] #reduce
   flush-last
 ] ;
 
