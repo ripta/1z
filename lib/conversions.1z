@@ -9,8 +9,17 @@ digit?: ( str -- ? ) [
   >codepoint dup 48 >= swap 57 <= and
 ] ;
 
-\ Parse non-negative decimal integer from string
-\ "123" -> 123, "0" -> 0
+\ Parse decimal integer from string
+\ "123" -> 123, "-42" -> -42, "0" -> 0
 parse-integer: ( str -- n ) [
-  0 swap [ swap 10 * swap char>digit + ] #each
+  dup #first "-" =
+  [
+    1 over #len #slice
+    0 swap [ swap 10 * swap char>digit + ] #each
+    -@
+  ]
+  [
+    0 swap [ swap 10 * swap char>digit + ] #each
+  ]
+  if
 ] ;

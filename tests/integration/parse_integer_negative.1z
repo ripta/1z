@@ -1,0 +1,16 @@
+\ Tests for parse-integer with negative numbers (lib/conversions.1z)
+
+use "lib/testing.1z" ;
+use "lib/conversions.1z" ;
+
+"parse-integer positive" test-section
+"123" parse-integer 123 "three digits" assert=
+"0" parse-integer 0 "zero" assert=
+"9" parse-integer 9 "single digit" assert=
+"1000000" parse-integer 1000000 "large number" assert=
+
+"parse-integer negative" test-section
+"-42" parse-integer -42 "negative" assert=
+"-1" parse-integer -1 "negative one" assert=
+"-0" parse-integer 0 "negative zero" assert=
+"-999999" parse-integer -999999 "large negative" assert=

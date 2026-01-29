@@ -1,0 +1,20 @@
+=== parse-integer positive ===
+Stack: [ ]
+PASS: three digits
+Stack: [ ]
+PASS: zero
+Stack: [ ]
+PASS: single digit
+Stack: [ ]
+PASS: large number
+Stack: [ ]
+=== parse-integer negative ===
+Stack: [ ]
+PASS: negative
+Stack: [ ]
+PASS: negative one
+Stack: [ ]
+PASS: negative zero
+Stack: [ ]
+PASS: large negative
+Stack: [ ]
