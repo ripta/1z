@@ -89,7 +89,19 @@ pub fn build(b: *std.Build) void {
         test_run.addFileArg(b.path(file_path));
 
         // Library file dependencies
-        test_run.addFileInput(b.path("lib/testing.1z"));
+        {
+            var lib_dir = b.build_root.handle.openDir("lib", .{ .iterate = true }) catch |err| {
+                std.debug.print("Warning: Could not open lib/: {}\n", .{err});
+                return;
+            };
+            defer lib_dir.close();
+            var lib_iter = lib_dir.iterate();
+            while (lib_iter.next() catch null) |lib_entry| {
+                if (lib_entry.kind != .file) continue;
+                if (!std.mem.endsWith(u8, lib_entry.name, ".1z")) continue;
+                test_run.addFileInput(b.path(b.fmt("lib/{s}", .{lib_entry.name})));
+            }
+        }
         test_run.addFileInput(b.path("src/prelude.1z"));
 
         // Check for stderr golden file (error tests)
@@ -129,8 +141,20 @@ pub fn build(b: *std.Build) void {
         update_run.addArg("--show-stack");
         update_run.addFileArg(b.path(file_path));
 
-        // Track library files as dependencies
-        update_run.addFileInput(b.path("lib/testing.1z"));
+        // Library file dependencies
+        {
+            var lib_dir2 = b.build_root.handle.openDir("lib", .{ .iterate = true }) catch |err| {
+                std.debug.print("Warning: Could not open lib/: {}\n", .{err});
+                return;
+            };
+            defer lib_dir2.close();
+            var lib_iter2 = lib_dir2.iterate();
+            while (lib_iter2.next() catch null) |lib_entry| {
+                if (lib_entry.kind != .file) continue;
+                if (!std.mem.endsWith(u8, lib_entry.name, ".1z")) continue;
+                update_run.addFileInput(b.path(b.fmt("lib/{s}", .{lib_entry.name})));
+            }
+        }
         update_run.addFileInput(b.path("src/prelude.1z"));
         update_files.addCopyFileToSource(update_run.captureStdOut(), stdout_golden_path);
 
