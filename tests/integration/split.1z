@@ -1,0 +1,28 @@
+\ Tests for string splitting (lib/strings.1z)
+
+use "lib/testing.1z" ;
+use "lib/strings.1z" ;
+
+"index-of" test-section
+"hello,world" "," index-of 5 "comma in middle" assert=
+"abcabc" "abc" index-of 0 "match at start" assert=
+"hello" "xyz" index-of -1 "no match" assert=
+"aaa" "a" index-of 0 "first occurrence" assert=
+"hello" "lo" index-of 3 "multi-char substring" assert=
+"abc" "abc" index-of 0 "exact match" assert=
+"ab" "abc" index-of -1 "sub longer than str" assert=
+"a::b::c" "::" index-of 1 "multi-char delimiter" assert=
+
+"split basics" test-section
+"a,b,c" "," split { "a" "b" "c" } "split by comma" assert=
+"hello" "," split { "hello" } "no delimiter found" assert=
+"a::b::c" "::" split { "a" "b" "c" } "multi-char delimiter" assert=
+
+"split edge cases" test-section
+"" "," split { "" } "empty string" assert=
+"a" "" split { "a" } "empty delimiter" assert=
+"a,,b" "," split { "a" "" "b" } "empty middle segment" assert=
+",a,b" "," split { "" "a" "b" } "leading delimiter" assert=
+"a,b," "," split { "a" "b" "" } "trailing delimiter" assert=
+"," "," split { "" "" } "only delimiter" assert=
+",," "," split { "" "" "" } "two delimiters" assert=

@@ -1,0 +1,42 @@
+=== index-of ===
+Stack: [ ]
+PASS: comma in middle
+Stack: [ ]
+PASS: match at start
+Stack: [ ]
+PASS: no match
+Stack: [ ]
+PASS: first occurrence
+Stack: [ ]
+PASS: multi-char substring
+Stack: [ ]
+PASS: exact match
+Stack: [ ]
+PASS: sub longer than str
+Stack: [ ]
+PASS: multi-char delimiter
+Stack: [ ]
+=== split basics ===
+Stack: [ ]
+PASS: split by comma
+Stack: [ ]
+PASS: no delimiter found
+Stack: [ ]
+PASS: multi-char delimiter
+Stack: [ ]
+=== split edge cases ===
+Stack: [ ]
+PASS: empty string
+Stack: [ ]
+PASS: empty delimiter
+Stack: [ ]
+PASS: empty middle segment
+Stack: [ ]
+PASS: leading delimiter
+Stack: [ ]
+PASS: trailing delimiter
+Stack: [ ]
+PASS: only delimiter
+Stack: [ ]
+PASS: two delimiters
+Stack: [ ]
