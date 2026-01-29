@@ -1,0 +1,11 @@
+\ Tests for range-inclusive (lib/ranges.1z)
+
+use "lib/testing.1z" ;
+use "lib/ranges.1z" ;
+
+"range-inclusive" test-section
+3 7 range-inclusive { 3 4 5 6 7 } "simple range" assert=
+5 5 range-inclusive { 5 } "single element" assert=
+0 3 range-inclusive { 0 1 2 3 } "from zero" assert=
+-2 2 range-inclusive { -2 -1 0 1 2 } "negative to positive" assert=
+5 3 range-inclusive { } "empty when start > end" assert=
