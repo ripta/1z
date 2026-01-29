@@ -18,5 +18,15 @@ PASS: #ends-with? array
 Stack: [ ]
 PASS: #ends-with? empty
 Stack: [ ]
+=== squeeze ===
+Stack: [ ]
+PASS: remove empties
+Stack: [ ]
+PASS: single empty
+Stack: [ ]
+PASS: no empties
+Stack: [ ]
+PASS: empty array
+Stack: [ ]
 All sequence tests complete!
 Stack: [ ]
