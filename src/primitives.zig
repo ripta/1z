@@ -172,6 +172,10 @@ const primitives = [_]Primitive{
     .{ .name = "@set!", .stack_effect = "assoc key value -- assoc'", .func = nativeAtSet },
     .{ .name = "@keys", .stack_effect = "assoc -- array", .func = nativeAtKeys },
     .{ .name = "@values", .stack_effect = "assoc -- array", .func = nativeAtValues },
+    .{ .name = "#each", .stack_effect = "seq quot: ( elem -- ) --", .func = nativeEach },
+    .{ .name = "#map", .stack_effect = "seq quot: ( elem -- elem' ) -- seq'", .func = nativeMap },
+    .{ .name = "#filter", .stack_effect = "seq quot: ( elem -- ? ) -- seq'", .func = nativeFilter },
+    .{ .name = "#reduce", .stack_effect = "seq init quot: ( acc elem -- acc' ) -- value", .func = nativeReduce },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -1013,6 +1017,166 @@ fn nativeAtValues(ctx: *Context) anyerror!void {
             values[1] = .{ .string = err.message };
             values[2] = try getErrorField(ctx, err, "stack-trace");
             try ctx.stack.push(.{ .array = values });
+        },
+        else => return error.TypeError,
+    }
+}
+
+// =============================================================================
+// Higher-Order Combinators
+// =============================================================================
+
+/// #each ( seq quot -- ) - Execute quotation for each element of sequence
+fn nativeEach(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    const seq = try ctx.stack.pop();
+
+    switch (seq) {
+        .array => |arr| {
+            for (arr) |elem| {
+                try ctx.stack.push(elem);
+                try ctx.executeQuotation(quot);
+            }
+        },
+        .string => |s| {
+            const alloc = ctx.quotationAllocator();
+            for (s) |c| {
+                // Create single-character string for each char
+                const char_slice = alloc.alloc(u8, 1) catch return error.OutOfMemory;
+                char_slice[0] = c;
+                try ctx.stack.push(.{ .string = char_slice });
+                try ctx.executeQuotation(quot);
+            }
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #map ( seq quot -- seq' ) - Transform each element of sequence
+fn nativeMap(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    const seq = try ctx.stack.pop();
+
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .array => |arr| {
+            const result = alloc.alloc(Value, arr.len) catch return error.OutOfMemory;
+            for (arr, 0..) |elem, i| {
+                try ctx.stack.push(elem);
+                try ctx.executeQuotation(quot);
+                result[i] = try ctx.stack.pop();
+            }
+            try ctx.stack.push(.{ .array = result });
+        },
+        .string => |s| {
+            // Map over string produces array of results (could be strings or other values)
+            const result = alloc.alloc(Value, s.len) catch return error.OutOfMemory;
+            for (s, 0..) |c, i| {
+                const char_slice = alloc.alloc(u8, 1) catch return error.OutOfMemory;
+                char_slice[0] = c;
+                try ctx.stack.push(.{ .string = char_slice });
+                try ctx.executeQuotation(quot);
+                result[i] = try ctx.stack.pop();
+            }
+            try ctx.stack.push(.{ .array = result });
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #filter ( seq quot -- seq' ) - Keep elements where quotation returns true
+fn nativeFilter(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    const seq = try ctx.stack.pop();
+
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .array => |arr| {
+            // First pass: count matching elements
+            var count: usize = 0;
+            for (arr) |elem| {
+                try ctx.stack.push(elem);
+                try ctx.executeQuotation(quot);
+                const predicate = try popBoolean(ctx);
+                if (predicate) count += 1;
+            }
+
+            // Second pass: collect matching elements
+            const result = alloc.alloc(Value, count) catch return error.OutOfMemory;
+            var idx: usize = 0;
+            for (arr) |elem| {
+                try ctx.stack.push(elem);
+                try ctx.executeQuotation(quot);
+                const predicate = try popBoolean(ctx);
+                if (predicate) {
+                    result[idx] = elem;
+                    idx += 1;
+                }
+            }
+            try ctx.stack.push(.{ .array = result });
+        },
+        .string => |s| {
+            // Filter over string produces filtered string
+            // First pass: count matching characters
+            var count: usize = 0;
+            for (s) |c| {
+                const char_slice = alloc.alloc(u8, 1) catch return error.OutOfMemory;
+                char_slice[0] = c;
+                try ctx.stack.push(.{ .string = char_slice });
+                try ctx.executeQuotation(quot);
+                const predicate = try popBoolean(ctx);
+                if (predicate) count += 1;
+            }
+
+            // Second pass: build result string
+            const result = alloc.alloc(u8, count) catch return error.OutOfMemory;
+            var idx: usize = 0;
+            for (s) |c| {
+                const char_slice = alloc.alloc(u8, 1) catch return error.OutOfMemory;
+                char_slice[0] = c;
+                try ctx.stack.push(.{ .string = char_slice });
+                try ctx.executeQuotation(quot);
+                const predicate = try popBoolean(ctx);
+                if (predicate) {
+                    result[idx] = c;
+                    idx += 1;
+                }
+            }
+            try ctx.stack.push(.{ .string = result });
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #reduce ( seq init quot -- value ) - Fold/accumulate sequence
+fn nativeReduce(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    var acc = try ctx.stack.pop(); // initial accumulator
+    const seq = try ctx.stack.pop();
+
+    switch (seq) {
+        .array => |arr| {
+            for (arr) |elem| {
+                try ctx.stack.push(acc);
+                try ctx.stack.push(elem);
+                try ctx.executeQuotation(quot);
+                acc = try ctx.stack.pop();
+            }
+            try ctx.stack.push(acc);
+        },
+        .string => |s| {
+            const alloc = ctx.quotationAllocator();
+            for (s) |c| {
+                const char_slice = alloc.alloc(u8, 1) catch return error.OutOfMemory;
+                char_slice[0] = c;
+                try ctx.stack.push(acc);
+                try ctx.stack.push(.{ .string = char_slice });
+                try ctx.executeQuotation(quot);
+                acc = try ctx.stack.pop();
+            }
+            try ctx.stack.push(acc);
         },
         else => return error.TypeError,
     }
