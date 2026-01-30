@@ -1,47 +1,68 @@
-PASS: to-string integer
 Stack: [ ]
-PASS: to-string negative integer
+=== to-string on integers ===
 Stack: [ ]
-PASS: to-string zero
+PASS: integer
 Stack: [ ]
-PASS: to-string true
+PASS: negative integer
 Stack: [ ]
-PASS: to-string false
+PASS: zero
 Stack: [ ]
-PASS: to-string string length
+=== to-string on booleans ===
 Stack: [ ]
-PASS: to-string empty string length
+PASS: true
 Stack: [ ]
-PASS: to-string symbol
+PASS: false
 Stack: [ ]
-PASS: to-string empty array
+=== to-string on strings ===
 Stack: [ ]
-PASS: to-string array
+PASS: string length includes quotes
 Stack: [ ]
-PASS: to-string array of strings
+PASS: empty string length
 Stack: [ ]
-PASS: to-string quotation
+=== to-string on symbols ===
 Stack: [ ]
-PASS: to-string empty quotation
+PASS: symbol
 Stack: [ ]
-PASS: to-string nested arrays
+=== to-string on arrays ===
+Stack: [ ]
+PASS: empty array
+Stack: [ ]
+PASS: array of integers
+Stack: [ ]
+PASS: array of strings length
+Stack: [ ]
+=== to-string on quotations ===
+Stack: [ ]
+PASS: quotation
+Stack: [ ]
+PASS: empty quotation
+Stack: [ ]
+=== to-string on nested structures ===
+Stack: [ ]
+PASS: nested arrays
+Stack: [ ]
+=== dot word ===
 Stack: [ ]
 42
 Stack: [ ]
-Stack: [ 99 ]
 PASS: dot consumes value
 Stack: [ ]
-PASS: to-string with concat
+=== to-string with #concat ===
 Stack: [ ]
-Stack: [ "Result: 100 items" ]
-PASS: to-string format chain
+PASS: simple concat
+Stack: [ ]
+PASS: chained concat
+Stack: [ ]
+=== to-string on hash ===
 Stack: [ ]
 Stack: [ "H{ a: 1 }" ]
-PASS: to-string hash prefix
+PASS: hash prefix
 Stack: [ "H{ a: 1 }" ]
-PASS: to-string hash suffix
+PASS: hash suffix
 Stack: [ ]
-PASS: to-string mixed types
+=== to-string preserves types ===
+Stack: [ ]
+PASS: mixed array
 Stack: [ ]
 All to-string tests complete!
 Stack: [ ]

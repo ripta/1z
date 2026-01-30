@@ -1,0 +1,58 @@
+\ lib/testing.1z - Test helper library for 1z
+\
+\ Usage:
+\   "lib/testing.1z" load
+\
+\   5 5 "five equals five" assert=
+\   t "condition is true" assert-true
+\   [ 1 0 / ] "division by zero" assert-error
+
+\ Core assertion: check equality, print PASS/FAIL with values on failure
+\ Stack: actual expected msg --
+assert=: ( actual expected msg -- )
+  [
+    -rot>                       \ msg actual expected
+    2dup =                      \ msg actual expected bool
+    [
+      2drop                     \ msg
+      "PASS: " swap #concat print
+    ]
+    [
+      \ Build: "FAIL: {msg} (expected {expected}, got {actual})"
+      to-string                 \ msg actual expected-str
+      swap to-string            \ msg expected-str actual-str
+      ", got " swap #concat     \ msg expected-str ", got {actual}"
+      swap                      \ msg ", got {actual}" expected-str
+      "(expected " swap #concat \ msg ", got {actual}" "(expected {exp}"
+      ")" #concat               \ msg ", got {actual}" "(expected {exp})"
+      #concat                   \ msg "(expected {exp}), got {actual}"
+      " " swap #concat          \ msg " (expected {exp}), got {actual}"
+      #concat                   \ "{msg} (expected {exp}), got {actual}"
+      "FAIL: " swap #concat print
+    ]
+    if
+  ] ;
+
+\ Assert boolean is true
+assert-true: ( bool msg -- )
+  [ t swap assert= ] ;
+
+\ Assert boolean is false
+assert-false: ( bool msg -- )
+  [ f swap assert= ] ;
+
+\ Assert quotation throws an error (any error)
+\ Stack: quot msg --
+assert-error: ( quot msg -- )
+  [
+    swap                    \ msg quot
+    [ drop f ]              \ If error caught, push f (means error occurred)
+    recover
+    \ Stack now: msg (f if error, or some other value if no error)
+    f =                     \ Did we get f (meaning error occurred)?
+    swap assert-true
+  ] ;
+
+\ Print section header
+test-section: ( msg -- )
+  [ "=== " swap #concat " ===" #concat print ] ;

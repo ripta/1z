@@ -1,54 +1,52 @@
 \ Integration tests for to-string primitive and . (dot) word
 
-\ Test to-string on integers
-42 to-string "42" = [ "PASS: to-string integer" print ] [ "FAIL: to-string integer" print ] if
--7 to-string "-7" = [ "PASS: to-string negative integer" print ] [ "FAIL: to-string negative integer" print ] if
-0 to-string "0" = [ "PASS: to-string zero" print ] [ "FAIL: to-string zero" print ] if
+"lib/testing.1z" load
 
-\ Test to-string on booleans
-t to-string "t" = [ "PASS: to-string true" print ] [ "FAIL: to-string true" print ] if
-f to-string "f" = [ "PASS: to-string false" print ] [ "FAIL: to-string false" print ] if
+"to-string on integers" test-section
+42 to-string "42" "integer" assert=
+-7 to-string "-7" "negative integer" assert=
+0 to-string "0" "zero" assert=
 
-\ Test to-string on strings - check length (includes quotes)
-"hello" to-string #len 7 = [ "PASS: to-string string length" print ] [ "FAIL: to-string string length" print ] if
-"" to-string #len 2 = [ "PASS: to-string empty string length" print ] [ "FAIL: to-string empty string length" print ] if
+"to-string on booleans" test-section
+t to-string "t" "true" assert=
+f to-string "f" "false" assert=
 
-\ Test to-string on symbols
-foo: to-string "foo:" = [ "PASS: to-string symbol" print ] [ "FAIL: to-string symbol" print ] if
+"to-string on strings" test-section
+\ Strings get quoted, so "hello" becomes "\"hello\"" (7 chars)
+"hello" to-string #len 7 "string length includes quotes" assert=
+"" to-string #len 2 "empty string length" assert=
 
-\ Test to-string on arrays
-{ } to-string "{ }" = [ "PASS: to-string empty array" print ] [ "FAIL: to-string empty array" print ] if
-{ 1 2 3 } to-string "{ 1 2 3 }" = [ "PASS: to-string array" print ] [ "FAIL: to-string array" print ] if
+"to-string on symbols" test-section
+foo: to-string "foo:" "symbol" assert=
 
-\ Test to-string on array of strings - check length: { "a" "b" } = 11 chars
-{ "a" "b" } to-string #len 11 = [ "PASS: to-string array of strings" print ] [ "FAIL: to-string array of strings" print ] if
+"to-string on arrays" test-section
+{ } to-string "{ }" "empty array" assert=
+{ 1 2 3 } to-string "{ 1 2 3 }" "array of integers" assert=
+{ "a" "b" } to-string #len 11 "array of strings length" assert=
 
-\ Test to-string on quotations
-[ 1 2 + ] to-string "[ 1 2 + ]" = [ "PASS: to-string quotation" print ] [ "FAIL: to-string quotation" print ] if
-[ ] to-string "[ ]" = [ "PASS: to-string empty quotation" print ] [ "FAIL: to-string empty quotation" print ] if
+"to-string on quotations" test-section
+[ 1 2 + ] to-string "[ 1 2 + ]" "quotation" assert=
+[ ] to-string "[ ]" "empty quotation" assert=
 
-\ Test to-string on nested structures
-{ { 1 } { 2 } } to-string "{ { 1 } { 2 } }" = [ "PASS: to-string nested arrays" print ] [ "FAIL: to-string nested arrays" print ] if
+"to-string on nested structures" test-section
+{ { 1 } { 2 } } to-string "{ { 1 } { 2 } }" "nested arrays" assert=
 
+"dot word" test-section
 \ Test . (dot) outputs to-string result and consumes value
 42 .
 \ Stack should be empty after . - verify by pushing and checking
-99
-99 = [ "PASS: dot consumes value" print ] [ "FAIL: dot consumes value" print ] if
+99 99 "dot consumes value" assert=
 
-\ Test that to-string result can be used with #concat
-"Value: " 42 to-string #concat "Value: 42" = [ "PASS: to-string with concat" print ] [ "FAIL: to-string with concat" print ] if
+"to-string with #concat" test-section
+"Value: " 42 to-string #concat "Value: 42" "simple concat" assert=
+"Result: " 100 to-string #concat " items" #concat "Result: 100 items" "chained concat" assert=
 
-\ Test building formatted output
-"Result: " 100 to-string #concat " items" #concat
-"Result: 100 items" = [ "PASS: to-string format chain" print ] [ "FAIL: to-string format chain" print ] if
-
-\ Test to-string on hash - check it starts with H{ and ends with }
+"to-string on hash" test-section
 H{ a: 1 } to-string
-dup 0 2 #slice "H{" = [ "PASS: to-string hash prefix" print ] [ "FAIL: to-string hash prefix" print ] if
-#last "}" = [ "PASS: to-string hash suffix" print ] [ "FAIL: to-string hash suffix" print ] if
+dup 0 2 #slice "H{" "hash prefix" assert=
+#last "}" "hash suffix" assert=
 
-\ Test to-string on mixed array - verify integer formatting
-{ 1 2 } to-string "{ 1 2 }" = [ "PASS: to-string mixed types" print ] [ "FAIL: to-string mixed types" print ] if
+"to-string preserves types" test-section
+{ 1 2 } to-string "{ 1 2 }" "mixed array" assert=
 
 "All to-string tests complete!" print
