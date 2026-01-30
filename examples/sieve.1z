@@ -1,0 +1,33 @@
+\ Sieve of Eratosthenes - check if a number is prime
+\ Usage: 1z examples/sieve.1z <number>
+
+use "lib/flags.1z" ;
+use "lib/ranges.1z" ;
+
+help: flag{ description: "Show help" short: "h" } ;
+number: required positional flag{ type: integer: description: "Number to check" } ;
+
+sieve: ( candidates -- primes ) [
+  dup #len 0 =
+  [ ]
+  [
+    dup #first
+    swap 1 over #len #slice
+    over [ % 0 /= ] curry #filter
+    sieve
+    swap 1array #prepend
+  ]
+  if
+] ;
+
+member?: ( array elem -- ? ) [
+  [ = ] curry #filter
+  #len 0 >
+] ;
+
+command-line-args "Check if a number is prime." parse-flags
+"number" @get
+dup 2 swap range-inclusive sieve
+swap member?
+[ "prime" ] [ "not prime" ] if
+print-line

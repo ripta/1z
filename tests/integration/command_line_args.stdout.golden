@@ -1,0 +1,6 @@
+=== command-line-args ===
+Stack: [ ]
+PASS: returns empty array when no program args
+Stack: [ ]
+All command-line-args tests complete!
+Stack: [ ]

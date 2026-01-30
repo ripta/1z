@@ -1,0 +1,302 @@
+\ lib/flags.1z - Declarative CLI flag parsing
+\
+\ Usage:
+\   use "lib/flags.1z" ;
+\   use "lib/conversions.1z" ;
+\
+\   help: flag{ description: "Show help" short: "h" } ;
+\   number: required positional flag{ type: integer: description: "Number to check" } ;
+\
+\   command-line-args "Check if a number is prime." parse-flags
+\   "number" @get ...
+
+use "lib/conversions.1z" ;
+use "lib/strings.1z" ;
+use "lib/sequences.1z" ;
+
+\ Markers
+required: marker ;
+positional: marker ;
+
+\ Shared state
+flag-registry: M{ } ;
+
+\ flag{
+\
+\ Defines a command-line flag.
+flag{: parse-time [
+  "}" parse-until make-hash
+  M{ type: struct-descriptor: }
+  swap fields: swap @set!
+  [ define-flag ] define: swap @set!
+] ;
+
+\ define-flag ( name fields markers -- )
+\
+\ Registers the flag in the global registry.
+define-flag: ( name fields markers -- ) [
+  flag-order: M{ n: 0 } ;
+
+  [ ] make-mutable-map
+  swap markers: swap @set!
+  swap descriptor: swap @set!
+
+  flag-order "n" @get
+  order: swap @set!
+
+  flag-registry -rot> @set! drop
+
+  flag-order "n" @get 1 +
+  flag-order swap n: swap @set! drop
+] ;
+
+\ parse-flags ( args description -- result-hash )
+\ Parses command-line arguments according to registered flags.
+parse-flags: [
+  sym-to-str: [ >string dup #len 1 - 0 swap #slice ] ;
+
+  is-positional-flag: ( name -- ? ) [
+    flag-registry swap @get
+    "markers" @get
+    positional [ = ] curry #filter #len 0 >
+  ] ;
+
+  positional-names: [
+    flag-registry @keys
+    [ is-positional-flag ] #filter
+  ] ;
+
+  find-flag-by-short: [
+    flag-registry @keys
+    f swap
+    [
+      dup flag-registry swap @get
+      "descriptor" @get
+      dup "short" @has?
+      [
+        "short" @get
+        [ [ over ] dip ] dip
+        =
+        [ nip ]
+        [ drop ]
+        if
+      ]
+      [
+        drop drop
+      ]
+      if
+    ] #each
+    nip
+  ] ;
+
+  print-flag-help: ( name -- ) [
+    dup flag-registry swap @get
+    dup "markers" @get
+    swap "descriptor" @get
+
+    swap positional [ = ] curry #filter #len 0 >
+    [
+      over sym-to-str
+      "  <" swap #append ">" #append
+      swap dup "description" @has?
+      [ "description" @get "  " swap #append #append ]
+      [ drop ]
+      if
+      nip
+    ]
+    [
+      over sym-to-str
+      "  --" swap #append
+      over dup "short" @has?
+      [
+        "short" @get
+        ", -" swap #append
+        #append
+      ]
+      [ drop ]
+      if
+      swap dup "description" @has?
+      [ "description" @get "  " swap #append #append ]
+      [ drop ]
+      if
+      nip
+    ]
+    if
+
+    stderr swap stream-write-string drop
+    stderr "\n" >bytes stream-write drop
+  ] ;
+
+  print-help: [
+    "Usage: " swap #append
+    stderr swap stream-write-string drop
+    stderr "\n" >bytes stream-write drop
+
+    flag-registry @keys
+    [ print-flag-help ] #each
+  ] ;
+
+  mth-src: parameter [ [ ] make-mutable-map ] ;
+  mth-copy-key: ( hash key -- hash' ) [
+    dup mth-src get swap @get
+    @set
+  ] ;
+  mmap-to-hash: [
+    dup mth-src [
+      @keys
+      H{ }
+      [ mth-copy-key ] #reduce
+    ] with-parameter
+  ] ;
+
+  process-named-flag: [
+    dup flag-registry swap @has?
+    [ pf-result get swap t swap @set! drop ]
+    [ drop ]
+    if
+  ] ;
+
+  process-short-flag: [
+    find-flag-by-short
+    dup f =
+    [ drop ]
+    [ pf-result get swap t swap @set! drop ]
+    if
+  ] ;
+
+  process-positional: [
+    positional-names
+    pf-pos-state "idx" @get
+    over #len over <=
+    [ 2drop drop ]
+    [
+      swap over #nth
+      nip
+      pf-result get -rot> swap @set! drop
+      pf-pos-state "idx" @get 1 +
+      pf-pos-state swap idx: swap @set! drop
+    ]
+    if
+  ] ;
+
+  process-arg: ( arg -- ) [
+    dup "--" #starts-with?
+    [
+      2 over #len #slice
+      process-named-flag
+    ]
+    [
+      dup "-" #starts-with?
+      [
+        1 over #len #slice
+        process-short-flag
+      ]
+      [
+        process-positional
+      ]
+      if
+    ]
+    if
+  ] ;
+
+  check-required: [
+    flag-registry @keys
+    [
+      dup flag-registry swap @get
+      "markers" @get
+      required [ = ] curry #filter #len 0 >
+      [
+        pf-result get over @has?
+        [ drop ]
+        [
+          "Error: missing required argument: " swap sym-to-str #append
+          stderr swap stream-write-string drop
+          stderr "\n" >bytes stream-write drop
+          pf-desc get print-help
+          1 sys-exit
+        ]
+        if
+      ]
+      [ drop ]
+      if
+    ] #each
+  ] ;
+
+  apply-conversions: [
+    pf-result get @keys
+    [
+      dup flag-registry swap @has?
+      [
+        dup flag-registry swap @get
+        "descriptor" @get
+        dup "type" @has?
+        [
+          "type" @get
+          dup integer: =
+          [
+            drop
+            dup pf-result get swap @get
+            parse-integer
+            swap
+            pf-result get -rot> swap @set! drop
+          ]
+          [ 2drop ]
+          if
+        ]
+        [ 2drop ]
+        if
+      ]
+      [ drop ]
+      if
+    ] #each
+  ] ;
+
+  set-defaults: [
+    flag-registry @keys
+    [
+      dup pf-result get swap @has?
+      [ drop ]
+      [
+        dup flag-registry swap @get
+        "markers" @get
+        positional [ = ] curry #filter #len 0 >
+        [ drop ]
+        [ pf-result get swap f @set! drop ]
+        if
+      ]
+      if
+    ] #each
+  ] ;
+
+  pf-result: parameter [ [ ] make-mutable-map ] ;
+  pf-desc: parameter [ "" ] ;
+  pf-pos-state: M{ idx: 0 } ;
+
+  \
+  \ === Main ===
+  \
+
+  pf-pos-state 0 idx: swap @set! drop
+
+  swap
+  [ ] make-mutable-map
+
+  pf-result [
+    swap pf-desc [
+
+      dup { "--help" } = over { "-h" } = or
+      [
+        drop pf-desc get print-help 0 sys-exit
+      ] when
+
+      [ process-arg ] #each
+
+      check-required
+      apply-conversions
+      set-defaults
+
+      pf-result get mmap-to-hash
+
+    ] with-parameter
+  ] with-parameter
+] ;
