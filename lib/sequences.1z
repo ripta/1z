@@ -1,0 +1,26 @@
+\ lib/sequences.1z - Sequence predicates and utilities
+
+\ Check if sequence starts with prefix
+#starts-with?: ( seq prefix -- ? ) [
+  over #len over #len <       \ seq prefix (seqlen < prefixlen)?
+  [ 2drop f ]                 \ prefix longer than seq -> false
+  [
+    dup #len                  \ seq prefix plen
+    swap                      \ seq plen prefix
+    [ 0 swap #slice ] dip     \ seq[0:plen] prefix
+    =
+  ] if
+] ;
+
+\ Check if sequence ends with suffix
+#ends-with?: ( seq suffix -- ? ) [
+  over #len over #len <       \ seq suffix (seqlen < suffixlen)?
+  [ 2drop f ]                 \ suffix longer than seq -> false
+  [
+    over #len                 \ seq suffix seqlen
+    over #len                 \ seq suffix seqlen sufflen
+    - swap                    \ seq start suffix
+    [ over #len #slice ] dip  \ seq[start:end] suffix
+    =
+  ] if
+] ;
