@@ -152,6 +152,7 @@ const primitives = [_]Primitive{
     .{ .name = "if", .stack_effect = "? true-quot false-quot --", .func = nativeIf },
     .{ .name = "print", .stack_effect = "str --", .func = nativePrint },
     .{ .name = "to-string", .stack_effect = "value -- string", .func = nativeToString },
+    .{ .name = ">string", .stack_effect = "value -- string", .func = nativeAsString },
     .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
     .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ) --", .func = nativeRecover },
     .{ .name = "cleanup", .stack_effect = "body-quot cleanup-quot --", .func = nativeCleanup },
@@ -410,13 +411,31 @@ fn nativeIf(ctx: *Context) anyerror!void {
     try ctx.executeQuotation(if (cond) true_quot else false_quot);
 }
 
-/// to-string ( value -- string ) - Convert any value to its string representation
+/// to-string ( value -- string ) - Convert any value to its string representation,
+/// including quotes for strings
 fn nativeToString(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
     var buffer: std.ArrayListUnmanaged(u8) = .{};
     try val.write(buffer.writer(alloc));
     try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
+}
+
+/// >string ( value -- string ) - Convert value to string, strings pass through unquoted,
+/// in contrast to to-string
+fn nativeAsString(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .string => |s| {
+            try ctx.stack.push(.{ .string = s });
+        },
+        else => {
+            const alloc = ctx.quotationAllocator();
+            var buffer: std.ArrayListUnmanaged(u8) = .{};
+            try val.write(buffer.writer(alloc));
+            try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
+        },
+    }
 }
 
 /// print ( str -- ) - Print a string to stdout (unquoted, strings only)
