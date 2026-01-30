@@ -176,6 +176,10 @@ const primitives = [_]Primitive{
     .{ .name = "#map", .stack_effect = "seq quot: ( elem -- elem' ) -- seq'", .func = nativeMap },
     .{ .name = "#filter", .stack_effect = "seq quot: ( elem -- ? ) -- seq'", .func = nativeFilter },
     .{ .name = "#reduce", .stack_effect = "seq init quot: ( acc elem -- acc' ) -- value", .func = nativeReduce },
+    .{ .name = "#concat", .stack_effect = "seq1 seq2 -- seq3", .func = nativeConcat },
+    .{ .name = "#slice", .stack_effect = "seq start end -- subseq", .func = nativeSlice },
+    .{ .name = "#append", .stack_effect = "array elem -- array'", .func = nativeAppend },
+    .{ .name = "#prepend", .stack_effect = "elem array -- array'", .func = nativePrepend },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -1177,6 +1181,110 @@ fn nativeReduce(ctx: *Context) anyerror!void {
                 acc = try ctx.stack.pop();
             }
             try ctx.stack.push(acc);
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #concat ( seq1 seq2 -- seq3 ) - Concatenate two sequences of same type
+fn nativeConcat(ctx: *Context) anyerror!void {
+    const seq2 = try ctx.stack.pop();
+    const seq1 = try ctx.stack.pop();
+
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq1) {
+        .array => |arr1| {
+            switch (seq2) {
+                .array => |arr2| {
+                    const result = alloc.alloc(Value, arr1.len + arr2.len) catch return error.OutOfMemory;
+                    @memcpy(result[0..arr1.len], arr1);
+                    @memcpy(result[arr1.len..], arr2);
+                    try ctx.stack.push(.{ .array = result });
+                },
+                else => return error.TypeError,
+            }
+        },
+        .string => |s1| {
+            switch (seq2) {
+                .string => |s2| {
+                    const result = alloc.alloc(u8, s1.len + s2.len) catch return error.OutOfMemory;
+                    @memcpy(result[0..s1.len], s1);
+                    @memcpy(result[s1.len..], s2);
+                    try ctx.stack.push(.{ .string = result });
+                },
+                else => return error.TypeError,
+            }
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #slice ( seq start end -- subseq ) - Extract subsequence [start, end)
+fn nativeSlice(ctx: *Context) anyerror!void {
+    const end_val = try popInteger(ctx);
+    const start_val = try popInteger(ctx);
+    const seq = try ctx.stack.pop();
+
+    if (start_val < 0) return error.IndexOutOfBounds;
+    if (end_val < 0) return error.IndexOutOfBounds;
+    if (start_val > end_val) return error.IndexOutOfBounds;
+
+    const start: usize = @intCast(start_val);
+    const end: usize = @intCast(end_val);
+
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .array => |arr| {
+            if (end > arr.len) return error.IndexOutOfBounds;
+            const slice_len = end - start;
+            const result = alloc.alloc(Value, slice_len) catch return error.OutOfMemory;
+            @memcpy(result, arr[start..end]);
+            try ctx.stack.push(.{ .array = result });
+        },
+        .string => |s| {
+            if (end > s.len) return error.IndexOutOfBounds;
+            const slice_len = end - start;
+            const result = alloc.alloc(u8, slice_len) catch return error.OutOfMemory;
+            @memcpy(result, s[start..end]);
+            try ctx.stack.push(.{ .string = result });
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #append ( array elem -- array' ) - Append element to array (returns new array)
+fn nativeAppend(ctx: *Context) anyerror!void {
+    const elem = try ctx.stack.pop();
+    const seq = try ctx.stack.pop();
+
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .array => |arr| {
+            const result = alloc.alloc(Value, arr.len + 1) catch return error.OutOfMemory;
+            @memcpy(result[0..arr.len], arr);
+            result[arr.len] = elem;
+            try ctx.stack.push(.{ .array = result });
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #prepend ( elem array -- array' ) - Prepend element to array (returns new array)
+fn nativePrepend(ctx: *Context) anyerror!void {
+    const seq = try ctx.stack.pop();
+    const elem = try ctx.stack.pop();
+
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .array => |arr| {
+            const result = alloc.alloc(Value, arr.len + 1) catch return error.OutOfMemory;
+            result[0] = elem;
+            @memcpy(result[1..], arr);
+            try ctx.stack.push(.{ .array = result });
         },
         else => return error.TypeError,
     }
