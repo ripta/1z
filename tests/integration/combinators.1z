@@ -1,0 +1,131 @@
+\ Integration tests for Phase 4.7: Higher-Order Combinators
+\ Tests: #each, #map, #filter, #reduce
+
+\ #map tests
+\ -------------
+
+\ Test #map on array - double each element
+{ 1 2 3 } [ 2 * ] #map
+dup 0 #nth 2 = [ "PASS: array #map first elem" print ] [ "FAIL: array #map first elem" print ] if
+dup 1 #nth 4 = [ "PASS: array #map second elem" print ] [ "FAIL: array #map second elem" print ] if
+dup 2 #nth 6 = [ "PASS: array #map third elem" print ] [ "FAIL: array #map third elem" print ] if
+#len 3 = [ "PASS: array #map length" print ] [ "FAIL: array #map length" print ] if
+
+\ Test #map on empty array
+{ } [ 2 * ] #map #len 0 = [ "PASS: empty array #map" print ] [ "FAIL: empty array #map" print ] if
+
+\ Test #map with increment
+{ 10 20 30 } [ 1 + ] #map
+dup 0 #nth 11 = [ "PASS: array #map increment first" print ] [ "FAIL: array #map increment first" print ] if
+dup 1 #nth 21 = [ "PASS: array #map increment second" print ] [ "FAIL: array #map increment second" print ] if
+2 #nth 31 = [ "PASS: array #map increment third" print ] [ "FAIL: array #map increment third" print ] if
+
+\ Test #map on single element array
+{ 5 } [ 3 * ] #map 0 #nth 15 = [ "PASS: single element #map" print ] [ "FAIL: single element #map" print ] if
+
+
+\ #filter tests
+\ -------------
+
+\ Test #filter on array - keep even numbers
+{ 1 2 3 4 5 6 } [ 2 % 0 = ] #filter
+dup #len 3 = [ "PASS: array #filter length" print ] [ "FAIL: array #filter length" print ] if
+dup 0 #nth 2 = [ "PASS: array #filter first" print ] [ "FAIL: array #filter first" print ] if
+dup 1 #nth 4 = [ "PASS: array #filter second" print ] [ "FAIL: array #filter second" print ] if
+2 #nth 6 = [ "PASS: array #filter third" print ] [ "FAIL: array #filter third" print ] if
+
+\ Test #filter with all passing
+{ 2 4 6 } [ 2 % 0 = ] #filter #len 3 = [ "PASS: array #filter all pass" print ] [ "FAIL: array #filter all pass" print ] if
+
+\ Test #filter with none passing
+{ 1 3 5 } [ 2 % 0 = ] #filter #len 0 = [ "PASS: array #filter none pass" print ] [ "FAIL: array #filter none pass" print ] if
+
+\ Test #filter on empty array
+{ } [ drop t ] #filter #len 0 = [ "PASS: empty array #filter" print ] [ "FAIL: empty array #filter" print ] if
+
+\ Test #filter keep positive
+{ -1 0 1 2 -3 4 } [ 0 > ] #filter
+dup #len 3 = [ "PASS: filter positive length" print ] [ "FAIL: filter positive length" print ] if
+dup 0 #nth 1 = [ "PASS: filter positive first" print ] [ "FAIL: filter positive first" print ] if
+drop
+
+\ Test #filter on string - keep 'a' characters
+"abacada" [ "a" = ] #filter "aaaa" = [ "PASS: string #filter" print ] [ "FAIL: string #filter" print ] if
+
+\ Test #filter on string - keep non-'x' characters
+"xyzxyz" [ "x" = not ] #filter "yzyz" = [ "PASS: string #filter exclude" print ] [ "FAIL: string #filter exclude" print ] if
+
+
+\ #reduce tests
+\ -------------
+
+\ Test #reduce on array - sum
+{ 1 2 3 4 5 } 0 [ + ] #reduce 15 = [ "PASS: array #reduce sum" print ] [ "FAIL: array #reduce sum" print ] if
+
+\ Test #reduce on array - product
+{ 1 2 3 4 } 1 [ * ] #reduce 24 = [ "PASS: array #reduce product" print ] [ "FAIL: array #reduce product" print ] if
+
+\ Test #reduce on empty array - returns initial value
+{ } 42 [ + ] #reduce 42 = [ "PASS: empty array #reduce" print ] [ "FAIL: empty array #reduce" print ] if
+
+\ Test #reduce on single element array
+{ 10 } 5 [ + ] #reduce 15 = [ "PASS: single element #reduce" print ] [ "FAIL: single element #reduce" print ] if
+
+\ Test #reduce finding max
+max: ( a b -- max ) [ over over > [ drop ] [ swap drop ] if ] ;
+{ 3 7 2 9 1 } 0 [ max ] #reduce 9 = [ "PASS: array #reduce max" print ] [ "FAIL: array #reduce max" print ] if
+
+\ Test #reduce finding min (starting with large value)
+min: ( a b -- min ) [ over over < [ drop ] [ swap drop ] if ] ;
+{ 3 7 2 9 1 } 999 [ min ] #reduce 1 = [ "PASS: array #reduce min" print ] [ "FAIL: array #reduce min" print ] if
+
+\ Test #reduce counting
+{ 1 2 3 4 5 } 0 [ drop 1 + ] #reduce 5 = [ "PASS: array #reduce count" print ] [ "FAIL: array #reduce count" print ] if
+
+\ #each tests
+\ -------------
+
+\ Test #each doesn't leave values on stack (verifies it consumes elements)
+1 2 3
+{ 10 20 30 } [ drop ] #each
+\ Stack should still have just 1 2 3
++ + 6 = [ "PASS: array #each stack clean" print ] [ "FAIL: array #each stack clean" print ] if
+
+\ Test #each on empty array - no effect
+5
+{ } [ drop ] #each
+5 = [ "PASS: empty array #each" print ] [ "FAIL: empty array #each" print ] if
+
+\ Test #each on string
+10
+"abc" [ drop ] #each
+10 = [ "PASS: string #each stack clean" print ] [ "FAIL: string #each stack clean" print ] if
+
+\ Combined tests
+\ -------------
+
+\ map then filter: double all, keep those > 5
+{ 1 2 3 4 5 } [ 2 * ] #map [ 5 > ] #filter
+dup #len 3 = [ "PASS: map then filter length" print ] [ "FAIL: map then filter length" print ] if
+dup 0 #nth 6 = [ "PASS: map then filter first" print ] [ "FAIL: map then filter first" print ] if
+drop
+
+\ filter then reduce: keep evens, sum them
+{ 1 2 3 4 5 6 } [ 2 % 0 = ] #filter 0 [ + ] #reduce 12 = [ "PASS: filter then reduce" print ] [ "FAIL: filter then reduce" print ] if
+
+\ map with identity
+{ 1 2 3 } [ ] #map
+dup 0 #nth 1 = [ "PASS: map identity first" print ] [ "FAIL: map identity first" print ] if
+dup 1 #nth 2 = [ "PASS: map identity second" print ] [ "FAIL: map identity second" print ] if
+2 #nth 3 = [ "PASS: map identity third" print ] [ "FAIL: map identity third" print ] if
+
+\ Triple combo: map, filter, reduce
+\ Take 1-10, double them, keep those < 15, sum them
+{ 1 2 3 4 5 6 7 8 9 10 } [ 2 * ] #map [ 15 < ] #filter 0 [ + ] #reduce 56 = [ "PASS: map filter reduce combo" print ] [ "FAIL: map filter reduce combo" print ] if
+
+\ Reduce to build result (alternative to map for some cases)
+\ Sum of squares
+square: ( n -- n^2 ) [ dup * ] ;
+{ 1 2 3 4 } 0 [ square + ] #reduce 30 = [ "PASS: reduce sum of squares" print ] [ "FAIL: reduce sum of squares" print ] if
+
+"All combinator tests complete!" print

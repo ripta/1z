@@ -1,0 +1,135 @@
+\ Integration tests for Phase 4.8: Additional Sequence Operations
+\ Tests: #concat, #slice, #append, #prepend
+
+\ ============================================================================
+\ #concat tests
+\ ============================================================================
+
+\ Test #concat on arrays
+{ 1 2 } { 3 4 } #concat
+dup #len 4 = [ "PASS: array #concat length" print ] [ "FAIL: array #concat length" print ] if
+dup 0 #nth 1 = [ "PASS: array #concat elem 0" print ] [ "FAIL: array #concat elem 0" print ] if
+dup 1 #nth 2 = [ "PASS: array #concat elem 1" print ] [ "FAIL: array #concat elem 1" print ] if
+dup 2 #nth 3 = [ "PASS: array #concat elem 2" print ] [ "FAIL: array #concat elem 2" print ] if
+3 #nth 4 = [ "PASS: array #concat elem 3" print ] [ "FAIL: array #concat elem 3" print ] if
+
+\ Test #concat with empty arrays
+{ 1 2 } { } #concat #len 2 = [ "PASS: array #concat with empty right" print ] [ "FAIL: array #concat with empty right" print ] if
+{ } { 3 4 } #concat #len 2 = [ "PASS: array #concat with empty left" print ] [ "FAIL: array #concat with empty left" print ] if
+{ } { } #concat #len 0 = [ "PASS: array #concat both empty" print ] [ "FAIL: array #concat both empty" print ] if
+
+\ Test #concat on strings
+"hello" " world" #concat "hello world" = [ "PASS: string #concat" print ] [ "FAIL: string #concat" print ] if
+"abc" "" #concat "abc" = [ "PASS: string #concat with empty right" print ] [ "FAIL: string #concat with empty right" print ] if
+"" "xyz" #concat "xyz" = [ "PASS: string #concat with empty left" print ] [ "FAIL: string #concat with empty left" print ] if
+"" "" #concat "" = [ "PASS: string #concat both empty" print ] [ "FAIL: string #concat both empty" print ] if
+
+\ Test #concat type mismatch error
+[ { 1 } "abc" #concat ] [ drop "PASS: #concat type mismatch error" print ] recover
+
+\ ============================================================================
+\ #slice tests
+\ ============================================================================
+
+\ Test #slice on arrays
+{ 10 20 30 40 50 } 1 4 #slice
+dup #len 3 = [ "PASS: array #slice length" print ] [ "FAIL: array #slice length" print ] if
+dup 0 #nth 20 = [ "PASS: array #slice elem 0" print ] [ "FAIL: array #slice elem 0" print ] if
+dup 1 #nth 30 = [ "PASS: array #slice elem 1" print ] [ "FAIL: array #slice elem 1" print ] if
+2 #nth 40 = [ "PASS: array #slice elem 2" print ] [ "FAIL: array #slice elem 2" print ] if
+
+\ Test #slice edge cases
+{ 1 2 3 } 0 3 #slice #len 3 = [ "PASS: array #slice full" print ] [ "FAIL: array #slice full" print ] if
+{ 1 2 3 } 0 0 #slice #len 0 = [ "PASS: array #slice empty (start=end)" print ] [ "FAIL: array #slice empty (start=end)" print ] if
+{ 1 2 3 } 1 1 #slice #len 0 = [ "PASS: array #slice empty middle" print ] [ "FAIL: array #slice empty middle" print ] if
+
+\ Test #slice on strings
+"hello world" 0 5 #slice "hello" = [ "PASS: string #slice first word" print ] [ "FAIL: string #slice first word" print ] if
+"hello world" 6 11 #slice "world" = [ "PASS: string #slice second word" print ] [ "FAIL: string #slice second word" print ] if
+"abcdef" 2 4 #slice "cd" = [ "PASS: string #slice middle" print ] [ "FAIL: string #slice middle" print ] if
+
+\ Test #slice error cases
+[ { 1 2 3 } 0 5 #slice ] [ drop "PASS: #slice end out of bounds error" print ] recover
+[ { 1 2 3 } -1 2 #slice ] [ drop "PASS: #slice negative start error" print ] recover
+[ { 1 2 3 } 2 1 #slice ] [ drop "PASS: #slice start > end error" print ] recover
+
+\ ============================================================================
+\ #append tests
+\ ============================================================================
+
+\ Test #append on array
+{ 1 2 3 } 4 #append
+dup #len 4 = [ "PASS: array #append length" print ] [ "FAIL: array #append length" print ] if
+dup 0 #nth 1 = [ "PASS: array #append elem 0" print ] [ "FAIL: array #append elem 0" print ] if
+dup 3 #nth 4 = [ "PASS: array #append elem 3" print ] [ "FAIL: array #append elem 3" print ] if
+drop
+
+\ Test #append to empty array
+{ } 42 #append
+dup #len 1 = [ "PASS: empty array #append length" print ] [ "FAIL: empty array #append length" print ] if
+0 #nth 42 = [ "PASS: empty array #append value" print ] [ "FAIL: empty array #append value" print ] if
+
+\ Test #append preserves original (immutability)
+original: [ { 1 2 } ] ;
+original 3 #append drop
+original #len 2 = [ "PASS: #append immutability" print ] [ "FAIL: #append immutability" print ] if
+
+\ Test #append with different value types
+{ 1 } "hello" #append 1 #nth "hello" = [ "PASS: array #append string" print ] [ "FAIL: array #append string" print ] if
+{ } { 1 2 } #append 0 #nth 0 #nth 1 = [ "PASS: array #append nested array" print ] [ "FAIL: array #append nested array" print ] if
+
+\ ============================================================================
+\ #prepend tests
+\ ============================================================================
+
+\ Test #prepend on array
+0 { 1 2 3 } #prepend
+dup #len 4 = [ "PASS: array #prepend length" print ] [ "FAIL: array #prepend length" print ] if
+dup 0 #nth 0 = [ "PASS: array #prepend elem 0" print ] [ "FAIL: array #prepend elem 0" print ] if
+dup 1 #nth 1 = [ "PASS: array #prepend elem 1" print ] [ "FAIL: array #prepend elem 1" print ] if
+3 #nth 3 = [ "PASS: array #prepend elem 3" print ] [ "FAIL: array #prepend elem 3" print ] if
+
+\ Test #prepend to empty array
+99 { } #prepend
+dup #len 1 = [ "PASS: empty array #prepend length" print ] [ "FAIL: empty array #prepend length" print ] if
+0 #nth 99 = [ "PASS: empty array #prepend value" print ] [ "FAIL: empty array #prepend value" print ] if
+
+\ Test #prepend preserves original (immutability)
+orig2: [ { 2 3 } ] ;
+1 orig2 #prepend drop
+orig2 #len 2 = [ "PASS: #prepend immutability" print ] [ "FAIL: #prepend immutability" print ] if
+
+\ ============================================================================
+\ Combined tests
+\ ============================================================================
+
+\ Build array using append
+{ } 1 #append 2 #append 3 #append
+dup #len 3 = [ "PASS: chained #append length" print ] [ "FAIL: chained #append length" print ] if
+dup 0 #nth 1 = [ "PASS: chained #append first" print ] [ "FAIL: chained #append first" print ] if
+2 #nth 3 = [ "PASS: chained #append last" print ] [ "FAIL: chained #append last" print ] if
+
+\ Build array using prepend (prepend adds to front, so prepend in reverse order to get 1,2,3)
+3 { } #prepend
+2 swap #prepend
+1 swap #prepend
+dup #len 3 = [ "PASS: chained #prepend length" print ] [ "FAIL: chained #prepend length" print ] if
+dup 0 #nth 1 = [ "PASS: chained #prepend first" print ] [ "FAIL: chained #prepend first" print ] if
+2 #nth 3 = [ "PASS: chained #prepend last" print ] [ "FAIL: chained #prepend last" print ] if
+
+\ Concat then slice
+{ 1 2 3 } { 4 5 6 } #concat 2 5 #slice
+dup #len 3 = [ "PASS: concat then slice length" print ] [ "FAIL: concat then slice length" print ] if
+dup 0 #nth 3 = [ "PASS: concat then slice first" print ] [ "FAIL: concat then slice first" print ] if
+2 #nth 5 = [ "PASS: concat then slice last" print ] [ "FAIL: concat then slice last" print ] if
+
+\ Slice then concat
+"hello world" 0 5 #slice " there" #concat "hello there" = [ "PASS: slice then concat" print ] [ "FAIL: slice then concat" print ] if
+
+\ Map then concat
+{ 1 2 } [ 10 * ] #map { 3 4 } [ 10 * ] #map #concat
+dup #len 4 = [ "PASS: map then concat length" print ] [ "FAIL: map then concat length" print ] if
+dup 0 #nth 10 = [ "PASS: map then concat first" print ] [ "FAIL: map then concat first" print ] if
+3 #nth 40 = [ "PASS: map then concat last" print ] [ "FAIL: map then concat last" print ] if
+
+"All additional sequence ops tests complete!" print

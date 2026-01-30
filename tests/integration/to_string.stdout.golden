@@ -1,0 +1,68 @@
+Stack: [ ]
+=== to-string on integers ===
+Stack: [ ]
+PASS: integer
+Stack: [ ]
+PASS: negative integer
+Stack: [ ]
+PASS: zero
+Stack: [ ]
+=== to-string on booleans ===
+Stack: [ ]
+PASS: true
+Stack: [ ]
+PASS: false
+Stack: [ ]
+=== to-string on strings ===
+Stack: [ ]
+PASS: string length includes quotes
+Stack: [ ]
+PASS: empty string length
+Stack: [ ]
+=== to-string on symbols ===
+Stack: [ ]
+PASS: symbol
+Stack: [ ]
+=== to-string on arrays ===
+Stack: [ ]
+PASS: empty array
+Stack: [ ]
+PASS: array of integers
+Stack: [ ]
+PASS: array of strings length
+Stack: [ ]
+=== to-string on quotations ===
+Stack: [ ]
+PASS: quotation
+Stack: [ ]
+PASS: empty quotation
+Stack: [ ]
+=== to-string on nested structures ===
+Stack: [ ]
+PASS: nested arrays
+Stack: [ ]
+=== dot word ===
+Stack: [ ]
+42
+Stack: [ ]
+PASS: dot consumes value
+Stack: [ ]
+=== to-string with #concat ===
+Stack: [ ]
+PASS: simple concat
+Stack: [ ]
+PASS: chained concat
+Stack: [ ]
+=== to-string on hash ===
+Stack: [ ]
+Stack: [ "H{ a: 1 }" ]
+PASS: hash prefix
+Stack: [ "H{ a: 1 }" ]
+PASS: hash suffix
+Stack: [ ]
+=== to-string preserves types ===
+Stack: [ ]
+PASS: mixed array
+Stack: [ ]
+All to-string tests complete!
+Stack: [ ]

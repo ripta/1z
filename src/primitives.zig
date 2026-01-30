@@ -31,6 +31,9 @@ pub const InterpreterError = error{
     InvalidHashSyntax,
     RethrowError,
     StackEffectMismatch,
+    IndexOutOfBounds,
+    EmptySequence,
+    KeyNotFound,
 };
 
 /// Helper to create a stack effect from a raw string at runtime.
@@ -148,7 +151,8 @@ const primitives = [_]Primitive{
     .{ .name = ">", .stack_effect = "a b -- ?", .func = nativeGt },
     .{ .name = "if", .stack_effect = "? true-quot false-quot --", .func = nativeIf },
     .{ .name = "print", .stack_effect = "str --", .func = nativePrint },
-    .{ .name = ".", .stack_effect = "a --", .func = nativeDot },
+    .{ .name = "to-string", .stack_effect = "value -- string", .func = nativeToString },
+    .{ .name = ">string", .stack_effect = "value -- string", .func = nativeAsString },
     .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
     .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ) --", .func = nativeRecover },
     .{ .name = "cleanup", .stack_effect = "body-quot cleanup-quot --", .func = nativeCleanup },
@@ -160,6 +164,23 @@ const primitives = [_]Primitive{
     .{ .name = "curry", .stack_effect = "x quot -- quot'", .func = nativeCurry },
     .{ .name = "compose", .stack_effect = "quot1 quot2 -- quot'", .func = nativeCompose },
     .{ .name = "benchmark", .stack_effect = "quot -- hash", .func = nativeBenchmark },
+    .{ .name = "#len", .stack_effect = "seq -- n", .func = nativeLen },
+    .{ .name = "#nth", .stack_effect = "seq n -- elem", .func = nativeNth },
+    .{ .name = "#first", .stack_effect = "seq -- elem", .func = nativeFirst },
+    .{ .name = "#last", .stack_effect = "seq -- elem", .func = nativeLast },
+    .{ .name = "@get", .stack_effect = "assoc key -- value", .func = nativeAtGet },
+    .{ .name = "@has?", .stack_effect = "assoc key -- ?", .func = nativeAtHas },
+    .{ .name = "@set!", .stack_effect = "assoc key value -- assoc'", .func = nativeAtSet },
+    .{ .name = "@keys", .stack_effect = "assoc -- array", .func = nativeAtKeys },
+    .{ .name = "@values", .stack_effect = "assoc -- array", .func = nativeAtValues },
+    .{ .name = "#each", .stack_effect = "seq quot: ( elem -- ) --", .func = nativeEach },
+    .{ .name = "#map", .stack_effect = "seq quot: ( elem -- elem' ) -- seq'", .func = nativeMap },
+    .{ .name = "#filter", .stack_effect = "seq quot: ( elem -- ? ) -- seq'", .func = nativeFilter },
+    .{ .name = "#reduce", .stack_effect = "seq init quot: ( acc elem -- acc' ) -- value", .func = nativeReduce },
+    .{ .name = "#concat", .stack_effect = "seq1 seq2 -- seq3", .func = nativeConcat },
+    .{ .name = "#slice", .stack_effect = "seq start end -- subseq", .func = nativeSlice },
+    .{ .name = "#append", .stack_effect = "array elem -- array'", .func = nativeAppend },
+    .{ .name = "#prepend", .stack_effect = "elem array -- array'", .func = nativePrepend },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -390,15 +411,31 @@ fn nativeIf(ctx: *Context) anyerror!void {
     try ctx.executeQuotation(if (cond) true_quot else false_quot);
 }
 
-/// . ( a -- ) - Print any value to stdout (with type formatting)
-fn nativeDot(ctx: *Context) anyerror!void {
+/// to-string ( value -- string ) - Convert any value to its string representation,
+/// including quotes for strings
+fn nativeToString(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
-    const stdout_file: std.fs.File = .stdout();
-    var stdout_buf: [4096]u8 = undefined;
-    var stdout = stdout_file.writer(&stdout_buf);
-    try val.write(&stdout.interface);
-    try stdout.interface.writeAll("\n");
-    try stdout.interface.flush();
+    const alloc = ctx.quotationAllocator();
+    var buffer: std.ArrayListUnmanaged(u8) = .{};
+    try val.write(buffer.writer(alloc));
+    try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
+}
+
+/// >string ( value -- string ) - Convert value to string, strings pass through unquoted,
+/// in contrast to to-string
+fn nativeAsString(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .string => |s| {
+            try ctx.stack.push(.{ .string = s });
+        },
+        else => {
+            const alloc = ctx.quotationAllocator();
+            var buffer: std.ArrayListUnmanaged(u8) = .{};
+            try val.write(buffer.writer(alloc));
+            try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
+        },
+    }
 }
 
 /// print ( str -- ) - Print a string to stdout (unquoted, strings only)
@@ -744,6 +781,530 @@ fn nativeBenchmark(ctx: *Context) anyerror!void {
     hash.put(alloc, key5, .{ .integer = @intCast(local_stats.peak_stack_depth) }) catch return error.OutOfMemory;
 
     try ctx.stack.push(.{ .hash = hash });
+}
+
+// =============================================================================
+// Sequence Accessors
+// =============================================================================
+
+/// #len ( seq -- n ) - Get sequence length (polymorphic on string, array)
+fn nativeLen(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const len: i64 = switch (val) {
+        .string => |s| @intCast(s.len),
+        .array => |a| @intCast(a.len),
+        else => return error.TypeError,
+    };
+    try ctx.stack.push(.{ .integer = len });
+}
+
+/// #nth ( seq n -- elem ) - Get element at index (polymorphic on string, array)
+fn nativeNth(ctx: *Context) anyerror!void {
+    const index = try popInteger(ctx);
+    const val = try ctx.stack.pop();
+
+    if (index < 0) return error.IndexOutOfBounds;
+    const idx: usize = @intCast(index);
+
+    switch (val) {
+        .string => |s| {
+            if (idx >= s.len) return error.IndexOutOfBounds;
+            // Return the character as a single-character string
+            const char_slice = ctx.quotationAllocator().alloc(u8, 1) catch return error.OutOfMemory;
+            char_slice[0] = s[idx];
+            try ctx.stack.push(.{ .string = char_slice });
+        },
+        .array => |a| {
+            if (idx >= a.len) return error.IndexOutOfBounds;
+            try ctx.stack.push(a[idx]);
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #first ( seq -- elem ) - Get first element (polymorphic on string, array)
+fn nativeFirst(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+
+    switch (val) {
+        .string => |s| {
+            if (s.len == 0) return error.EmptySequence;
+            const char_slice = ctx.quotationAllocator().alloc(u8, 1) catch return error.OutOfMemory;
+            char_slice[0] = s[0];
+            try ctx.stack.push(.{ .string = char_slice });
+        },
+        .array => |a| {
+            if (a.len == 0) return error.EmptySequence;
+            try ctx.stack.push(a[0]);
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #last ( seq -- elem ) - Get last element (polymorphic on string, array)
+fn nativeLast(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+
+    switch (val) {
+        .string => |s| {
+            if (s.len == 0) return error.EmptySequence;
+            const char_slice = ctx.quotationAllocator().alloc(u8, 1) catch return error.OutOfMemory;
+            char_slice[0] = s[s.len - 1];
+            try ctx.stack.push(.{ .string = char_slice });
+        },
+        .array => |a| {
+            if (a.len == 0) return error.EmptySequence;
+            try ctx.stack.push(a[a.len - 1]);
+        },
+        else => return error.TypeError,
+    }
+}
+
+// =============================================================================
+// Associative Accessors
+// =============================================================================
+
+/// Helper to extract key string from symbol or string value
+fn extractKeyString(val: Value) ![]const u8 {
+    return switch (val) {
+        .symbol => |s| s,
+        .string => |s| s,
+        else => error.TypeError,
+    };
+}
+
+/// Helper to get error object field value
+fn getErrorField(ctx: *Context, err: ErrorObject, field_name: []const u8) !Value {
+    if (std.mem.eql(u8, field_name, "error-type")) {
+        return .{ .string = err.error_type };
+    } else if (std.mem.eql(u8, field_name, "message")) {
+        return .{ .string = err.message };
+    } else if (std.mem.eql(u8, field_name, "stack-trace")) {
+        if (err.stack_trace) |trace| {
+            // Convert stack trace to array of hashes
+            const alloc = ctx.quotationAllocator();
+            const frames = alloc.alloc(Value, trace.len) catch return error.OutOfMemory;
+            for (trace, 0..) |frame, i| {
+                const frame_hash = alloc.create(HashTable) catch return error.OutOfMemory;
+                frame_hash.* = HashTable{};
+                const word_key = alloc.dupe(u8, "word") catch return error.OutOfMemory;
+                frame_hash.put(alloc, word_key, .{ .string = frame.word_name }) catch return error.OutOfMemory;
+                const line_key = alloc.dupe(u8, "line") catch return error.OutOfMemory;
+                frame_hash.put(alloc, line_key, .{ .integer = @intCast(frame.line) }) catch return error.OutOfMemory;
+                frames[i] = .{ .hash = frame_hash };
+            }
+            return .{ .array = frames };
+        } else {
+            return .{ .boolean = false }; // f for null
+        }
+    } else {
+        return error.KeyNotFound;
+    }
+}
+
+/// @get ( assoc key -- value ) - Get value by key/field (polymorphic on hash, error)
+fn nativeAtGet(ctx: *Context) anyerror!void {
+    const key = try ctx.stack.pop();
+    const obj = try ctx.stack.pop();
+
+    const key_str = try extractKeyString(key);
+
+    switch (obj) {
+        .hash => |h| {
+            if (h.get(key_str)) |val| {
+                try ctx.stack.push(val);
+            } else {
+                return error.KeyNotFound;
+            }
+        },
+        .error_value => |err| {
+            const val = try getErrorField(ctx, err, key_str);
+            try ctx.stack.push(val);
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// @has? ( assoc key -- ? ) - Check if key/field exists (polymorphic on hash, error)
+fn nativeAtHas(ctx: *Context) anyerror!void {
+    const key = try ctx.stack.pop();
+    const obj = try ctx.stack.pop();
+
+    const key_str = try extractKeyString(key);
+
+    switch (obj) {
+        .hash => |h| {
+            const exists = h.get(key_str) != null;
+            try ctx.stack.push(.{ .boolean = exists });
+        },
+        .error_value => {
+            // Check if field name is valid for errors
+            const valid = std.mem.eql(u8, key_str, "error-type") or
+                std.mem.eql(u8, key_str, "message") or
+                std.mem.eql(u8, key_str, "stack-trace");
+            try ctx.stack.push(.{ .boolean = valid });
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// @set! ( assoc key value -- assoc' ) - Set value, returns new hash (hash only)
+fn nativeAtSet(ctx: *Context) anyerror!void {
+    const new_value = try ctx.stack.pop();
+    const key = try ctx.stack.pop();
+    const obj = try ctx.stack.pop();
+
+    const key_str = try extractKeyString(key);
+
+    switch (obj) {
+        .hash => |h| {
+            const alloc = ctx.quotationAllocator();
+
+            // Create new hash table on heap
+            const new_hash = alloc.create(HashTable) catch return error.OutOfMemory;
+            new_hash.* = HashTable{};
+
+            // Clone the existing entries
+            var iter = h.iterator();
+            while (iter.next()) |entry| {
+                const key_copy = alloc.dupe(u8, entry.key_ptr.*) catch return error.OutOfMemory;
+                new_hash.put(alloc, key_copy, entry.value_ptr.*) catch return error.OutOfMemory;
+            }
+
+            // Add/update the new key-value pair
+            const new_key = alloc.dupe(u8, key_str) catch return error.OutOfMemory;
+            new_hash.put(alloc, new_key, new_value) catch return error.OutOfMemory;
+
+            try ctx.stack.push(.{ .hash = new_hash });
+        },
+        .error_value => {
+            // Error objects are immutable
+            return error.TypeError;
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// @keys ( assoc -- array ) - Get all keys (polymorphic on hash, error)
+fn nativeAtKeys(ctx: *Context) anyerror!void {
+    const obj = try ctx.stack.pop();
+
+    switch (obj) {
+        .hash => |h| {
+            const alloc = ctx.quotationAllocator();
+            const keys = alloc.alloc(Value, h.count()) catch return error.OutOfMemory;
+            var iter = h.iterator();
+            var i: usize = 0;
+            while (iter.next()) |entry| {
+                keys[i] = .{ .symbol = entry.key_ptr.* };
+                i += 1;
+            }
+            try ctx.stack.push(.{ .array = keys });
+        },
+        .error_value => {
+            // Error objects have fixed fields
+            const alloc = ctx.quotationAllocator();
+            const keys = alloc.alloc(Value, 3) catch return error.OutOfMemory;
+            keys[0] = .{ .symbol = "error-type" };
+            keys[1] = .{ .symbol = "message" };
+            keys[2] = .{ .symbol = "stack-trace" };
+            try ctx.stack.push(.{ .array = keys });
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// @values ( assoc -- array ) - Get all values (polymorphic on hash, error)
+fn nativeAtValues(ctx: *Context) anyerror!void {
+    const obj = try ctx.stack.pop();
+
+    switch (obj) {
+        .hash => |h| {
+            const alloc = ctx.quotationAllocator();
+            const values = alloc.alloc(Value, h.count()) catch return error.OutOfMemory;
+            var iter = h.iterator();
+            var i: usize = 0;
+            while (iter.next()) |entry| {
+                values[i] = entry.value_ptr.*;
+                i += 1;
+            }
+            try ctx.stack.push(.{ .array = values });
+        },
+        .error_value => |err| {
+            // Get all three error field values
+            const alloc = ctx.quotationAllocator();
+            const values = alloc.alloc(Value, 3) catch return error.OutOfMemory;
+            values[0] = .{ .string = err.error_type };
+            values[1] = .{ .string = err.message };
+            values[2] = try getErrorField(ctx, err, "stack-trace");
+            try ctx.stack.push(.{ .array = values });
+        },
+        else => return error.TypeError,
+    }
+}
+
+// =============================================================================
+// Higher-Order Combinators
+// =============================================================================
+
+/// #each ( seq quot -- ) - Execute quotation for each element of sequence
+fn nativeEach(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    const seq = try ctx.stack.pop();
+
+    switch (seq) {
+        .array => |arr| {
+            for (arr) |elem| {
+                try ctx.stack.push(elem);
+                try ctx.executeQuotation(quot);
+            }
+        },
+        .string => |s| {
+            const alloc = ctx.quotationAllocator();
+            for (s) |c| {
+                // Create single-character string for each char
+                const char_slice = alloc.alloc(u8, 1) catch return error.OutOfMemory;
+                char_slice[0] = c;
+                try ctx.stack.push(.{ .string = char_slice });
+                try ctx.executeQuotation(quot);
+            }
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #map ( seq quot -- seq' ) - Transform each element of sequence
+fn nativeMap(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    const seq = try ctx.stack.pop();
+
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .array => |arr| {
+            const result = alloc.alloc(Value, arr.len) catch return error.OutOfMemory;
+            for (arr, 0..) |elem, i| {
+                try ctx.stack.push(elem);
+                try ctx.executeQuotation(quot);
+                result[i] = try ctx.stack.pop();
+            }
+            try ctx.stack.push(.{ .array = result });
+        },
+        .string => |s| {
+            // Map over string produces array of results (could be strings or other values)
+            const result = alloc.alloc(Value, s.len) catch return error.OutOfMemory;
+            for (s, 0..) |c, i| {
+                const char_slice = alloc.alloc(u8, 1) catch return error.OutOfMemory;
+                char_slice[0] = c;
+                try ctx.stack.push(.{ .string = char_slice });
+                try ctx.executeQuotation(quot);
+                result[i] = try ctx.stack.pop();
+            }
+            try ctx.stack.push(.{ .array = result });
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #filter ( seq quot -- seq' ) - Keep elements where quotation returns true
+fn nativeFilter(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    const seq = try ctx.stack.pop();
+
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .array => |arr| {
+            // First pass: count matching elements
+            var count: usize = 0;
+            for (arr) |elem| {
+                try ctx.stack.push(elem);
+                try ctx.executeQuotation(quot);
+                const predicate = try popBoolean(ctx);
+                if (predicate) count += 1;
+            }
+
+            // Second pass: collect matching elements
+            const result = alloc.alloc(Value, count) catch return error.OutOfMemory;
+            var idx: usize = 0;
+            for (arr) |elem| {
+                try ctx.stack.push(elem);
+                try ctx.executeQuotation(quot);
+                const predicate = try popBoolean(ctx);
+                if (predicate) {
+                    result[idx] = elem;
+                    idx += 1;
+                }
+            }
+            try ctx.stack.push(.{ .array = result });
+        },
+        .string => |s| {
+            // Filter over string produces filtered string
+            // First pass: count matching characters
+            var count: usize = 0;
+            for (s) |c| {
+                const char_slice = alloc.alloc(u8, 1) catch return error.OutOfMemory;
+                char_slice[0] = c;
+                try ctx.stack.push(.{ .string = char_slice });
+                try ctx.executeQuotation(quot);
+                const predicate = try popBoolean(ctx);
+                if (predicate) count += 1;
+            }
+
+            // Second pass: build result string
+            const result = alloc.alloc(u8, count) catch return error.OutOfMemory;
+            var idx: usize = 0;
+            for (s) |c| {
+                const char_slice = alloc.alloc(u8, 1) catch return error.OutOfMemory;
+                char_slice[0] = c;
+                try ctx.stack.push(.{ .string = char_slice });
+                try ctx.executeQuotation(quot);
+                const predicate = try popBoolean(ctx);
+                if (predicate) {
+                    result[idx] = c;
+                    idx += 1;
+                }
+            }
+            try ctx.stack.push(.{ .string = result });
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #reduce ( seq init quot -- value ) - Fold/accumulate sequence
+fn nativeReduce(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    var acc = try ctx.stack.pop(); // initial accumulator
+    const seq = try ctx.stack.pop();
+
+    switch (seq) {
+        .array => |arr| {
+            for (arr) |elem| {
+                try ctx.stack.push(acc);
+                try ctx.stack.push(elem);
+                try ctx.executeQuotation(quot);
+                acc = try ctx.stack.pop();
+            }
+            try ctx.stack.push(acc);
+        },
+        .string => |s| {
+            const alloc = ctx.quotationAllocator();
+            for (s) |c| {
+                const char_slice = alloc.alloc(u8, 1) catch return error.OutOfMemory;
+                char_slice[0] = c;
+                try ctx.stack.push(acc);
+                try ctx.stack.push(.{ .string = char_slice });
+                try ctx.executeQuotation(quot);
+                acc = try ctx.stack.pop();
+            }
+            try ctx.stack.push(acc);
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #concat ( seq1 seq2 -- seq3 ) - Concatenate two sequences of same type
+fn nativeConcat(ctx: *Context) anyerror!void {
+    const seq2 = try ctx.stack.pop();
+    const seq1 = try ctx.stack.pop();
+
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq1) {
+        .array => |arr1| {
+            switch (seq2) {
+                .array => |arr2| {
+                    const result = alloc.alloc(Value, arr1.len + arr2.len) catch return error.OutOfMemory;
+                    @memcpy(result[0..arr1.len], arr1);
+                    @memcpy(result[arr1.len..], arr2);
+                    try ctx.stack.push(.{ .array = result });
+                },
+                else => return error.TypeError,
+            }
+        },
+        .string => |s1| {
+            switch (seq2) {
+                .string => |s2| {
+                    const result = alloc.alloc(u8, s1.len + s2.len) catch return error.OutOfMemory;
+                    @memcpy(result[0..s1.len], s1);
+                    @memcpy(result[s1.len..], s2);
+                    try ctx.stack.push(.{ .string = result });
+                },
+                else => return error.TypeError,
+            }
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #slice ( seq start end -- subseq ) - Extract subsequence [start, end)
+fn nativeSlice(ctx: *Context) anyerror!void {
+    const end_val = try popInteger(ctx);
+    const start_val = try popInteger(ctx);
+    const seq = try ctx.stack.pop();
+
+    if (start_val < 0) return error.IndexOutOfBounds;
+    if (end_val < 0) return error.IndexOutOfBounds;
+    if (start_val > end_val) return error.IndexOutOfBounds;
+
+    const start: usize = @intCast(start_val);
+    const end: usize = @intCast(end_val);
+
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .array => |arr| {
+            if (end > arr.len) return error.IndexOutOfBounds;
+            const slice_len = end - start;
+            const result = alloc.alloc(Value, slice_len) catch return error.OutOfMemory;
+            @memcpy(result, arr[start..end]);
+            try ctx.stack.push(.{ .array = result });
+        },
+        .string => |s| {
+            if (end > s.len) return error.IndexOutOfBounds;
+            const slice_len = end - start;
+            const result = alloc.alloc(u8, slice_len) catch return error.OutOfMemory;
+            @memcpy(result, s[start..end]);
+            try ctx.stack.push(.{ .string = result });
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #append ( array elem -- array' ) - Append element to array (returns new array)
+fn nativeAppend(ctx: *Context) anyerror!void {
+    const elem = try ctx.stack.pop();
+    const seq = try ctx.stack.pop();
+
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .array => |arr| {
+            const result = alloc.alloc(Value, arr.len + 1) catch return error.OutOfMemory;
+            @memcpy(result[0..arr.len], arr);
+            result[arr.len] = elem;
+            try ctx.stack.push(.{ .array = result });
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #prepend ( elem array -- array' ) - Prepend element to array (returns new array)
+fn nativePrepend(ctx: *Context) anyerror!void {
+    const seq = try ctx.stack.pop();
+    const elem = try ctx.stack.pop();
+
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .array => |arr| {
+            const result = alloc.alloc(Value, arr.len + 1) catch return error.OutOfMemory;
+            result[0] = elem;
+            @memcpy(result[1..], arr);
+            try ctx.stack.push(.{ .array = result });
+        },
+        else => return error.TypeError,
+    }
 }
 
 // =============================================================================
@@ -1263,7 +1824,7 @@ test "register primitives" {
     try std.testing.expect(dict.get(";") != null);
     try std.testing.expect(dict.get("if") != null);
     try std.testing.expect(dict.get("print") != null);
-    try std.testing.expect(dict.get(".") != null);
+    try std.testing.expect(dict.get("to-string") != null);
     try std.testing.expect(dict.get("recover") != null);
     try std.testing.expect(dict.get("cleanup") != null);
     try std.testing.expect(dict.get("rethrow") != null);

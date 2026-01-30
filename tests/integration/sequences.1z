@@ -1,0 +1,18 @@
+\ Integration tests for sequence predicates
+
+"lib/testing.1z" load
+"lib/sequences.1z" load
+
+"#starts-with?" test-section
+"hello" "hel" #starts-with? t "#starts-with? true" assert=
+"hello" "bye" #starts-with? f "#starts-with? false" assert=
+{ 1 2 3 } { 1 2 } #starts-with? t "#starts-with? array" assert=
+"" "" #starts-with? t "#starts-with? empty" assert=
+
+"#ends-with?" test-section
+"hello" "llo" #ends-with? t "#ends-with? true" assert=
+"hello" "bye" #ends-with? f "#ends-with? false" assert=
+{ 1 2 3 } { 2 3 } #ends-with? t "#ends-with? array" assert=
+"" "" #ends-with? t "#ends-with? empty" assert=
+
+"All sequence tests complete!" print

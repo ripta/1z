@@ -1,0 +1,127 @@
+Stack: [ { 1 2 3 4 } ]
+PASS: array #concat length
+Stack: [ { 1 2 3 4 } ]
+PASS: array #concat elem 0
+Stack: [ { 1 2 3 4 } ]
+PASS: array #concat elem 1
+Stack: [ { 1 2 3 4 } ]
+PASS: array #concat elem 2
+Stack: [ { 1 2 3 4 } ]
+PASS: array #concat elem 3
+Stack: [ ]
+PASS: array #concat with empty right
+Stack: [ ]
+PASS: array #concat with empty left
+Stack: [ ]
+PASS: array #concat both empty
+Stack: [ ]
+PASS: string #concat
+Stack: [ ]
+PASS: string #concat with empty right
+Stack: [ ]
+PASS: string #concat with empty left
+Stack: [ ]
+PASS: string #concat both empty
+Stack: [ ]
+PASS: #concat type mismatch error
+Stack: [ ]
+Stack: [ { 20 30 40 } ]
+PASS: array #slice length
+Stack: [ { 20 30 40 } ]
+PASS: array #slice elem 0
+Stack: [ { 20 30 40 } ]
+PASS: array #slice elem 1
+Stack: [ { 20 30 40 } ]
+PASS: array #slice elem 2
+Stack: [ ]
+PASS: array #slice full
+Stack: [ ]
+PASS: array #slice empty (start=end)
+Stack: [ ]
+PASS: array #slice empty middle
+Stack: [ ]
+PASS: string #slice first word
+Stack: [ ]
+PASS: string #slice second word
+Stack: [ ]
+PASS: string #slice middle
+Stack: [ ]
+PASS: #slice end out of bounds error
+Stack: [ ]
+PASS: #slice negative start error
+Stack: [ ]
+PASS: #slice start > end error
+Stack: [ ]
+Stack: [ { 1 2 3 4 } ]
+PASS: array #append length
+Stack: [ { 1 2 3 4 } ]
+PASS: array #append elem 0
+Stack: [ { 1 2 3 4 } ]
+PASS: array #append elem 3
+Stack: [ { 1 2 3 4 } ]
+Stack: [ ]
+Stack: [ { 42 } ]
+PASS: empty array #append length
+Stack: [ { 42 } ]
+PASS: empty array #append value
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: #append immutability
+Stack: [ ]
+PASS: array #append string
+Stack: [ ]
+PASS: array #append nested array
+Stack: [ ]
+Stack: [ { 0 1 2 3 } ]
+PASS: array #prepend length
+Stack: [ { 0 1 2 3 } ]
+PASS: array #prepend elem 0
+Stack: [ { 0 1 2 3 } ]
+PASS: array #prepend elem 1
+Stack: [ { 0 1 2 3 } ]
+PASS: array #prepend elem 3
+Stack: [ ]
+Stack: [ { 99 } ]
+PASS: empty array #prepend length
+Stack: [ { 99 } ]
+PASS: empty array #prepend value
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: #prepend immutability
+Stack: [ ]
+Stack: [ { 1 2 3 } ]
+PASS: chained #append length
+Stack: [ { 1 2 3 } ]
+PASS: chained #append first
+Stack: [ { 1 2 3 } ]
+PASS: chained #append last
+Stack: [ ]
+Stack: [ { 3 } ]
+Stack: [ { 2 3 } ]
+Stack: [ { 1 2 3 } ]
+PASS: chained #prepend length
+Stack: [ { 1 2 3 } ]
+PASS: chained #prepend first
+Stack: [ { 1 2 3 } ]
+PASS: chained #prepend last
+Stack: [ ]
+Stack: [ { 3 4 5 } ]
+PASS: concat then slice length
+Stack: [ { 3 4 5 } ]
+PASS: concat then slice first
+Stack: [ { 3 4 5 } ]
+PASS: concat then slice last
+Stack: [ ]
+PASS: slice then concat
+Stack: [ ]
+Stack: [ { 10 20 30 40 } ]
+PASS: map then concat length
+Stack: [ { 10 20 30 40 } ]
+PASS: map then concat first
+Stack: [ { 10 20 30 40 } ]
+PASS: map then concat last
+Stack: [ ]
+All additional sequence ops tests complete!
+Stack: [ ]

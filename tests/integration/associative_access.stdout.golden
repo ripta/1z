@@ -1,0 +1,56 @@
+PASS: hash @get with symbol
+Stack: [ ]
+PASS: hash @get with string
+Stack: [ ]
+PASS: hash @get integer value
+Stack: [ ]
+PASS: hash @get key not found error
+Stack: [ ]
+PASS: hash @has? true
+Stack: [ ]
+PASS: hash @has? string key true
+Stack: [ ]
+PASS: hash @has? false
+Stack: [ ]
+PASS: hash @set! add new key
+Stack: [ ]
+PASS: hash @set! update existing key
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: hash @set! immutability
+Stack: [ ]
+PASS: hash @keys count
+Stack: [ ]
+PASS: hash @values count
+Stack: [ ]
+PASS: error @get error-type
+Stack: [ ]
+PASS: error @get message
+Stack: [ ]
+PASS: error @has? error-type
+Stack: [ ]
+PASS: error @has? message
+Stack: [ ]
+PASS: error @has? stack-trace
+Stack: [ ]
+PASS: error @has? invalid field
+Stack: [ ]
+PASS: error @keys count
+Stack: [ ]
+PASS: error @values count
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: nested hash access
+Stack: [ ]
+PASS: nested hash access 2
+Stack: [ ]
+PASS: empty hash @keys
+Stack: [ ]
+PASS: empty hash @values
+Stack: [ ]
+PASS: chained @set!
+Stack: [ ]
+All associative accessor tests complete!
+Stack: [ ]

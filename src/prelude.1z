@@ -37,6 +37,9 @@ not: ( ? -- ? ) [ [ f ] [ t ] if ] ;
 and: ( ? ? -- ? ) [ [ ] [ drop f ] if ] ;
 or: ( ? ? -- ? ) [ [ drop t ] [ ] if ] ;
 
+\ I/O
+.: ( a -- ) [ to-string print ] ;
+
 \ Loops
 times: ( n quot -- ) [
   over 0 >
