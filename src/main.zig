@@ -11,6 +11,8 @@ const benchmark = @import("benchmark.zig");
 const BenchmarkStats = benchmark.BenchmarkStats;
 const BenchmarkConfig = benchmark.BenchmarkConfig;
 const CountingAllocator = benchmark.CountingAllocator;
+const memory_limit = @import("memory_limit.zig");
+const MemoryLimitAllocator = memory_limit.MemoryLimitAllocator;
 
 const build_options = @import("build_options");
 pub const version = build_options.version;
@@ -70,6 +72,8 @@ pub fn main() u8 {
     var show_stack = false;
     var file_path: ?[]const u8 = null;
     var bench_config = BenchmarkConfig{};
+    var max_memory_bytes: usize = 256 * 1024 * 1024;
+    var cli_set_max_memory = false;
 
     var program_args: std.ArrayListUnmanaged([]const u8) = .{};
     defer program_args.deinit(gpa_allocator);
@@ -88,17 +92,44 @@ pub fn main() u8 {
         } else if (std.mem.eql(u8, arg, "--benchmark=json")) {
             bench_config.enabled = true;
             bench_config.output = .json;
+        } else if (std.mem.startsWith(u8, arg, "--max-memory=")) {
+            const value = arg["--max-memory=".len..];
+            if (memory_limit.parseSize(value)) |bytes| {
+                max_memory_bytes = bytes;
+                cli_set_max_memory = true;
+            } else {
+                const stderr_file: File = .stderr();
+                var stderr_buf: [4096]u8 = undefined;
+                var stderr = stderr_file.writer(&stderr_buf);
+                stderr.interface.print("Error: invalid value for --max-memory: '{s}'\n", .{value}) catch {};
+                stderr.interface.flush() catch {};
+                return 1;
+            }
         } else {
             file_path = arg;
         }
     }
 
+    // Check environment variable if CLI flag was not set
+    if (!cli_set_max_memory) {
+        if (std.posix.getenv("ONEZ_MAX_MEMORY")) |env_val| {
+            if (memory_limit.parseSize(env_val)) |bytes| {
+                max_memory_bytes = bytes;
+            }
+            // Silently ignore invalid env var values
+        }
+    }
+
+    // Create memory limit allocator (wraps GPA, enforces cap)
+    var mem_limit = MemoryLimitAllocator.init(gpa_allocator, max_memory_bytes);
+    const mem_limit_allocator = mem_limit.allocator();
+
     // Create benchmark stats and counting allocator if benchmarking enabled
     var bench_stats = BenchmarkStats{};
-    var counting_allocator = CountingAllocator.init(gpa_allocator, &bench_stats);
+    var counting_allocator = CountingAllocator.init(mem_limit_allocator, &bench_stats);
 
-    // Use counting allocator when benchmarking, GPA directly otherwise
-    const allocator = if (bench_config.enabled) counting_allocator.allocator() else gpa_allocator;
+    // Use counting allocator when benchmarking, memory limit allocator otherwise
+    const allocator = if (bench_config.enabled) counting_allocator.allocator() else mem_limit_allocator;
 
     if (bench_config.enabled) {
         bench_stats.start();
@@ -520,4 +551,5 @@ test {
     _ = @import("statement.zig");
     _ = @import("formatter.zig");
     _ = @import("benchmark.zig");
+    _ = @import("memory_limit.zig");
 }
