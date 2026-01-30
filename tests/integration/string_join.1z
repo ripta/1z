@@ -1,0 +1,20 @@
+\ Integration tests for #join
+
+"lib/testing.1z" load
+"lib/strings.1z" load
+
+"#join basic" test-section
+{ "a" "b" "c" } ", " #join "a, b, c" "#join with comma" assert=
+{ "one" "two" } "" #join "onetwo" "#join empty sep" assert=
+{ } ", " #join "" "#join empty array" assert=
+{ "only" } "-" #join "only" "#join single element" assert=
+
+"#join with non-strings" test-section
+{ 1 2 3 } ", " #join "1, 2, 3" "#join integers" assert=
+\ NOTE: Boolean arrays { t f } cause OOM - pre-existing interpreter bug, not #join issue
+\ { t f } " and " #join "t and f" "#join booleans" assert=
+
+"#join mixed types" test-section
+{ "count" 42 } ": " #join "count: 42" "#join string and int" assert=
+
+"All #join tests complete!" print

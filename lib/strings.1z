@@ -1,0 +1,31 @@
+\ lib/strings.1z - String manipulation utilities
+
+\ Join array of values into string with separator
+\ Examples:
+\   { "a" "b" "c" } ", " #join  →  "a, b, c"
+\   { 1 2 3 } "-" #join         →  "1-2-3"
+\   { } ", " #join              →  ""
+\   { "only" } ", " #join       →  "only"
+
+#join: ( array sep -- string ) [
+  over #len 0 = [ 2drop "" ] [
+    over #len 1 = [ drop #first >string ] [
+
+      \ Main case: 2+ elements
+      \ Stack: array sep
+
+      swap dup #first >string swap    \ sep first-str array
+      1 over #len #slice              \ sep first-str rest
+      <rot-                           \ first-str rest sep
+
+      \ Build reduce quotation: [ >string sep swap #concat #concat ]
+      [ swap #concat #concat ] curry  \ first-str rest [ sep swap #concat #concat ]
+      [ >string ] swap compose        \ first-str rest quot
+
+      \ Arrange for #reduce: seq init quot
+      swap -rot>                      \ rest first-str quot
+      #reduce
+
+    ] if
+  ] if
+] ;
