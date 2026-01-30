@@ -1,0 +1,47 @@
+PASS: to-string integer
+Stack: [ ]
+PASS: to-string negative integer
+Stack: [ ]
+PASS: to-string zero
+Stack: [ ]
+PASS: to-string true
+Stack: [ ]
+PASS: to-string false
+Stack: [ ]
+PASS: to-string string length
+Stack: [ ]
+PASS: to-string empty string length
+Stack: [ ]
+PASS: to-string symbol
+Stack: [ ]
+PASS: to-string empty array
+Stack: [ ]
+PASS: to-string array
+Stack: [ ]
+PASS: to-string array of strings
+Stack: [ ]
+PASS: to-string quotation
+Stack: [ ]
+PASS: to-string empty quotation
+Stack: [ ]
+PASS: to-string nested arrays
+Stack: [ ]
+42
+Stack: [ ]
+Stack: [ 99 ]
+PASS: dot consumes value
+Stack: [ ]
+PASS: to-string with concat
+Stack: [ ]
+Stack: [ "Result: 100 items" ]
+PASS: to-string format chain
+Stack: [ ]
+Stack: [ "H{ a: 1 }" ]
+PASS: to-string hash prefix
+Stack: [ "H{ a: 1 }" ]
+PASS: to-string hash suffix
+Stack: [ ]
+PASS: to-string mixed types
+Stack: [ ]
+All to-string tests complete!
+Stack: [ ]

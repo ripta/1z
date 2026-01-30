@@ -151,7 +151,7 @@ const primitives = [_]Primitive{
     .{ .name = ">", .stack_effect = "a b -- ?", .func = nativeGt },
     .{ .name = "if", .stack_effect = "? true-quot false-quot --", .func = nativeIf },
     .{ .name = "print", .stack_effect = "str --", .func = nativePrint },
-    .{ .name = ".", .stack_effect = "a --", .func = nativeDot },
+    .{ .name = "to-string", .stack_effect = "value -- string", .func = nativeToString },
     .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
     .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ) --", .func = nativeRecover },
     .{ .name = "cleanup", .stack_effect = "body-quot cleanup-quot --", .func = nativeCleanup },
@@ -410,15 +410,13 @@ fn nativeIf(ctx: *Context) anyerror!void {
     try ctx.executeQuotation(if (cond) true_quot else false_quot);
 }
 
-/// . ( a -- ) - Print any value to stdout (with type formatting)
-fn nativeDot(ctx: *Context) anyerror!void {
+/// to-string ( value -- string ) - Convert any value to its string representation
+fn nativeToString(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
-    const stdout_file: std.fs.File = .stdout();
-    var stdout_buf: [4096]u8 = undefined;
-    var stdout = stdout_file.writer(&stdout_buf);
-    try val.write(&stdout.interface);
-    try stdout.interface.writeAll("\n");
-    try stdout.interface.flush();
+    const alloc = ctx.quotationAllocator();
+    var buffer: std.ArrayListUnmanaged(u8) = .{};
+    try val.write(buffer.writer(alloc));
+    try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
 }
 
 /// print ( str -- ) - Print a string to stdout (unquoted, strings only)
@@ -1807,7 +1805,7 @@ test "register primitives" {
     try std.testing.expect(dict.get(";") != null);
     try std.testing.expect(dict.get("if") != null);
     try std.testing.expect(dict.get("print") != null);
-    try std.testing.expect(dict.get(".") != null);
+    try std.testing.expect(dict.get("to-string") != null);
     try std.testing.expect(dict.get("recover") != null);
     try std.testing.expect(dict.get("cleanup") != null);
     try std.testing.expect(dict.get("rethrow") != null);
