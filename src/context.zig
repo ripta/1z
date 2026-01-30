@@ -67,8 +67,20 @@ pub const Context = struct {
     current_source: []const u8 = "<repl>",
     /// Tail call target for TCO — set by executeInstructions, consumed by executeQuotation
     tail_call_instructions: ?[]const Instruction = null,
+    /// Module whose deps frame should be pushed for the tail call target.
+    /// Set alongside tail_call_instructions when the tail-called word has a source_module.
+    tail_call_module: ?*const value_mod.Module = null,
     /// Program arguments passed after the file path on the command line
     program_args: []const []const u8 = &.{},
+    /// Target frame index for `import` to write definitions into.
+    /// Set by `load` to its local frame index so that `import` (which may run
+    /// inside combinator frames like `if`) writes to the load frame, not to
+    /// an ephemeral combinator frame. When null, `import` writes to the
+    /// global dictionary.
+    import_frame_index: ?usize = null,
+    /// Cache of loaded modules keyed by canonical file path.
+    /// Prevents redundant loading when multiple files `use` the same module.
+    module_cache: std.StringHashMapUnmanaged(*value_mod.Module) = .{},
 
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
@@ -149,6 +161,7 @@ pub const Context = struct {
         self.local_frames.deinit(self.allocator);
         self.call_stack.deinit(self.allocator);
         self.error_details.deinit(self.allocator);
+        self.module_cache.deinit(self.arena.allocator());
         self.arena.deinit();
         self.dictionary.deinit();
         self.stack.deinit();
@@ -222,11 +235,57 @@ pub const Context = struct {
         }
     }
 
-    /// Define a word in the current local frame if one exists, otherwise in global dictionary.
+    /// Push a local frame populated with a module's deps and words.
+    /// This makes the module's dependencies available for late-binding
+    /// resolution when executing the module's own words.
+    ///
+    /// The module's own words take precedence over its dependencies.
+    pub fn pushModuleDepsFrame(self: *Context, module: *const value_mod.Module) !void {
+        try self.pushLocalFrame();
+        const frame_idx = self.local_frames.items.len - 1;
+        var frame = &self.local_frames.items[frame_idx];
+
+        var dep_iter = module.deps.iterator();
+        while (dep_iter.next()) |entry| {
+            try frame.put(self.allocator, entry.key_ptr.*, .{
+                .name = entry.key_ptr.*,
+                .stack_effect = entry.value_ptr.*.stack_effect,
+                .markers = entry.value_ptr.*.markers,
+                .source_module = module,
+                .action = .{ .compound = entry.value_ptr.*.instructions },
+            });
+        }
+
+        var word_iter = module.words.iterator();
+        while (word_iter.next()) |entry| {
+            try frame.put(self.allocator, entry.key_ptr.*, .{
+                .name = entry.key_ptr.*,
+                .stack_effect = entry.value_ptr.*.stack_effect,
+                .markers = entry.value_ptr.*.markers,
+                .source_module = module,
+                .action = .{ .compound = entry.value_ptr.*.instructions },
+            });
+        }
+    }
+
+    /// Define a word in the current local frame if one exists, otherwise
+    /// in global dictionary.
     pub fn defineWord(self: *Context, name: []const u8, definition: WordDefinition) !void {
         if (self.local_frames.items.len > 0) {
             const top_index = self.local_frames.items.len - 1;
             try self.local_frames.items[top_index].put(self.allocator, name, definition);
+        } else {
+            try self.dictionary.put(name, definition);
+        }
+    }
+
+    /// Define a word via `import`. Writes to the load frame (tracked by
+    /// import_frame_index) when inside a `load` call, or to the global
+    /// dictionary otherwise. This prevents imported words from leaking
+    /// into the global namespace when loading modules.
+    pub fn defineImportedWord(self: *Context, name: []const u8, definition: WordDefinition) !void {
+        if (self.import_frame_index) |idx| {
+            try self.local_frames.items[idx].put(self.allocator, name, definition);
         } else {
             try self.dictionary.put(name, definition);
         }
@@ -284,6 +343,9 @@ pub const Context = struct {
         if (module.words.get(word_name)) |mod_word| {
             self.pushCallFrame(name, line);
             defer self.popCallFrame();
+
+            try self.pushModuleDepsFrame(module);
+            defer self.popLocalFrame();
 
             try self.executeInstructions(mod_word.instructions);
         } else {
@@ -645,13 +707,25 @@ pub const Context = struct {
     /// this function pops the dangling call frame and loops with new instructions.
     pub fn executeQuotation(self: *Context, quotation: Quotation) anyerror!void {
         var current_instructions = quotation.instructions;
+        var current_module: ?*const value_mod.Module = null;
 
         while (true) {
             // Record depth before execution for validation
             const depth_before = self.stack.depth();
             self.tail_call_instructions = null;
+            self.tail_call_module = null;
 
-            try self.executeInstructions(current_instructions);
+            // Push frame if this is a tail-called module word
+            if (current_module) |mod| {
+                try self.pushModuleDepsFrame(mod);
+            }
+
+            const exec_result = self.executeInstructions(current_instructions);
+            if (current_module != null) {
+                self.popLocalFrame();
+            }
+
+            try exec_result;
 
             // Tail call case: pop the call frame that was pushed by the tail-calling
             // `executeInstructions`, then loop around
@@ -659,6 +733,9 @@ pub const Context = struct {
                 self.popCallFrame();
                 current_instructions = tci;
                 self.tail_call_instructions = null;
+
+                current_module = self.tail_call_module;
+                self.tail_call_module = null;
                 continue;
             }
 
@@ -757,6 +834,7 @@ pub const Context = struct {
                                     // Tail call: flag instead of recurse
                                     // leaving the call frame on the stack; executeQuotation will pop it
                                     self.tail_call_instructions = instrs;
+                                    self.tail_call_module = word.source_module;
                                     return;
                                 },
                                 .native => |func| {
@@ -788,9 +866,22 @@ pub const Context = struct {
                             // Non-last instruction: execute normally.
                             // Compound words go through executeQuotation to get
                             // the TCO loop, so internal tail calls are consumed.
-                            const result = switch (word.action) {
-                                .native => |func| func(self),
-                                .compound => |instrs| self.executeQuotation(.{ .instructions = instrs }),
+                            const result = blk: {
+                                if (word.source_module) |mod| {
+                                    switch (word.action) {
+                                        .compound => |instrs| {
+                                            self.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
+                                            defer self.popLocalFrame();
+                                            break :blk self.executeQuotation(.{ .instructions = instrs });
+                                        },
+                                        .native => |func| break :blk func(self),
+                                    }
+                                } else {
+                                    break :blk switch (word.action) {
+                                        .native => |func| func(self),
+                                        .compound => |instrs| self.executeQuotation(.{ .instructions = instrs }),
+                                    };
+                                }
                             };
 
                             if (result) |_| {
@@ -803,11 +894,26 @@ pub const Context = struct {
                                 if (self.tail_call_instructions) |tci| {
                                     self.popCallFrame();
                                     self.tail_call_instructions = null;
+
+                                    const tci_module = self.tail_call_module;
+                                    self.tail_call_module = null;
+
+                                    if (tci_module) |mod| {
+                                        self.pushModuleDepsFrame(mod) catch |e| {
+                                            self.popCallFrame();
+                                            self.captureCallStackOnError(e);
+                                            return e;
+                                        };
+                                    }
+
                                     self.executeQuotation(.{ .instructions = tci }) catch |err2| {
+                                        if (tci_module != null) self.popLocalFrame();
                                         self.popCallFrame(); // pop our own frame
                                         self.captureCallStackOnError(err2);
                                         return err2;
                                     };
+
+                                    if (tci_module != null) self.popLocalFrame();
                                 }
 
                                 // Validate stack effect if declared

@@ -1,0 +1,2 @@
+\ Module A - defines from-a
+from-a: [ "from-a" ] ;

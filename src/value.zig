@@ -127,6 +127,10 @@ pub const ModuleWord = struct {
 pub const Module = struct {
     name: []const u8,
     words: std.StringHashMapUnmanaged(ModuleWord),
+    /// Dependencies: words imported from other modules during loading.
+    /// These are not part of the module's public API but are needed at
+    /// runtime by the module's own words (late binding resolution).
+    deps: std.StringHashMapUnmanaged(ModuleWord) = .{},
 };
 
 /// StackFrame represents a single frame in a stack trace.

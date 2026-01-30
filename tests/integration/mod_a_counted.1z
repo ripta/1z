@@ -1,0 +1,3 @@
+\ Module A with load message - tests load-once caching
+"mod_a_counted loaded" print-line
+counted-a: [ "counted-a" ] ;

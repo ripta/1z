@@ -51,10 +51,27 @@ fn nativeHelp(ctx: *Context) anyerror!void {
 }
 
 /// load ( filename -- module ) - Load a 1z source file and return a module with its definitions
+///
+/// Caches loaded modules by canonical file path to avoid redundant loads, so that
+/// multiple `load` calls for the same file return the same module instance.
 fn nativeLoad(ctx: *Context) anyerror!void {
-    const filename = try popString(ctx);
     const alloc = ctx.quotationAllocator();
 
+    const filename = try popString(ctx);
+    const canon = std.fs.cwd().realpathAlloc(alloc, filename) catch {
+        return nativeLoadImpl(ctx, filename, alloc, filename);
+    };
+
+    // XXX(ripta): Module cache hit - side-effects won't run again.
+    //             Is this okay? It better be.
+    if (ctx.module_cache.get(canon)) |cached_module| {
+        return try ctx.stack.push(.{ .module = cached_module });
+    }
+
+    return nativeLoadImpl(ctx, filename, alloc, canon);
+}
+
+fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator, canon: []const u8) anyerror!void {
     const file = std.fs.cwd().openFile(filename, .{}) catch {
         // Add error context for FileNotFound
         const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
@@ -79,8 +96,14 @@ fn nativeLoad(ctx: *Context) anyerror!void {
     try ctx.pushLocalFrame();
     errdefer ctx.popLocalFrame();
 
-    var processor: StatementProcessor = .{};
+    // XXX(ripta): Hack to set import target frame, which may execute inside
+    //             combinator frames like `if`, instead of global or ephemeral
+    //             frame. No rugrats for now.
+    const old_import_frame = ctx.import_frame_index;
+    ctx.import_frame_index = ctx.local_frames.items.len - 1;
+    defer ctx.import_frame_index = old_import_frame;
 
+    var processor: StatementProcessor = .{};
     while (true) {
         const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
             error.EndOfStream => {
@@ -144,29 +167,39 @@ fn nativeLoad(ctx: *Context) anyerror!void {
         // Only capture compound words (user-defined), not natives
         switch (word_def.action) {
             .compound => |instrs| {
-                try module.words.put(alloc, entry.key_ptr.*, .{
+                const mod_word = ModuleWord{
                     .stack_effect = word_def.stack_effect,
                     .instructions = instrs,
                     .markers = word_def.markers,
-                });
+                };
+                if (word_def.imported) {
+                    // Imported words go to deps (not part of public API,
+                    // but needed at runtime for late-binding resolution)
+                    try module.deps.put(alloc, entry.key_ptr.*, mod_word);
+                } else {
+                    try module.words.put(alloc, entry.key_ptr.*, mod_word);
+                }
             },
             .native => {}, // Skip native words (shouldn't happen in loaded files)
         }
     }
 
+    ctx.module_cache.put(alloc, canon, module) catch {};
     ctx.popLocalFrame();
     try ctx.stack.push(.{ .module = module });
 }
 
-fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord) !void {
+fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module: *const Module) !void {
     const has_parse_time = for (mod_word.markers) |mk| {
         if (markers_mod.isParseTimeMarker(mk)) break true;
     } else false;
-    try ctx.dictionary.put(name, .{
+    try ctx.defineImportedWord(name, .{
         .name = name,
         .parse_time = has_parse_time,
+        .imported = true,
         .stack_effect = mod_word.stack_effect,
         .markers = mod_word.markers,
+        .source_module = module,
         .action = .{ .compound = mod_word.instructions },
     });
 }
@@ -211,13 +244,18 @@ fn nativeImport(ctx: *Context) anyerror!void {
                     addImportError(ctx, "KeyNotFound", msg);
                     return error.KeyNotFound;
                 };
-                try importWord(ctx, name, mod_word);
+                try importWord(ctx, name, mod_word, module);
             }
         },
         .module => |module| {
+            // XXX(ripta): Consider better visibility control in the future? For
+            //             now, all non-dep words are considered public API.
+            //             Each imported word carries a source_module reference
+            //             so that late-bound references to deps can be resolved
+            //             at runtime.
             var iter = module.words.iterator();
             while (iter.next()) |entry| {
-                try importWord(ctx, entry.key_ptr.*, entry.value_ptr.*);
+                try importWord(ctx, entry.key_ptr.*, entry.value_ptr.*, module);
             }
         },
         else => {
