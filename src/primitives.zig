@@ -31,6 +31,8 @@ pub const InterpreterError = error{
     InvalidHashSyntax,
     RethrowError,
     StackEffectMismatch,
+    IndexOutOfBounds,
+    EmptySequence,
 };
 
 /// Helper to create a stack effect from a raw string at runtime.
@@ -160,6 +162,10 @@ const primitives = [_]Primitive{
     .{ .name = "curry", .stack_effect = "x quot -- quot'", .func = nativeCurry },
     .{ .name = "compose", .stack_effect = "quot1 quot2 -- quot'", .func = nativeCompose },
     .{ .name = "benchmark", .stack_effect = "quot -- hash", .func = nativeBenchmark },
+    .{ .name = "#len", .stack_effect = "seq -- n", .func = nativeLen },
+    .{ .name = "#nth", .stack_effect = "seq n -- elem", .func = nativeNth },
+    .{ .name = "#first", .stack_effect = "seq -- elem", .func = nativeFirst },
+    .{ .name = "#last", .stack_effect = "seq -- elem", .func = nativeLast },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -744,6 +750,83 @@ fn nativeBenchmark(ctx: *Context) anyerror!void {
     hash.put(alloc, key5, .{ .integer = @intCast(local_stats.peak_stack_depth) }) catch return error.OutOfMemory;
 
     try ctx.stack.push(.{ .hash = hash });
+}
+
+// =============================================================================
+// Sequence Accessors
+// =============================================================================
+
+/// #len ( seq -- n ) - Get sequence length (polymorphic on string, array)
+fn nativeLen(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const len: i64 = switch (val) {
+        .string => |s| @intCast(s.len),
+        .array => |a| @intCast(a.len),
+        else => return error.TypeError,
+    };
+    try ctx.stack.push(.{ .integer = len });
+}
+
+/// #nth ( seq n -- elem ) - Get element at index (polymorphic on string, array)
+fn nativeNth(ctx: *Context) anyerror!void {
+    const index = try popInteger(ctx);
+    const val = try ctx.stack.pop();
+
+    if (index < 0) return error.IndexOutOfBounds;
+    const idx: usize = @intCast(index);
+
+    switch (val) {
+        .string => |s| {
+            if (idx >= s.len) return error.IndexOutOfBounds;
+            // Return the character as a single-character string
+            const char_slice = ctx.quotationAllocator().alloc(u8, 1) catch return error.OutOfMemory;
+            char_slice[0] = s[idx];
+            try ctx.stack.push(.{ .string = char_slice });
+        },
+        .array => |a| {
+            if (idx >= a.len) return error.IndexOutOfBounds;
+            try ctx.stack.push(a[idx]);
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #first ( seq -- elem ) - Get first element (polymorphic on string, array)
+fn nativeFirst(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+
+    switch (val) {
+        .string => |s| {
+            if (s.len == 0) return error.EmptySequence;
+            const char_slice = ctx.quotationAllocator().alloc(u8, 1) catch return error.OutOfMemory;
+            char_slice[0] = s[0];
+            try ctx.stack.push(.{ .string = char_slice });
+        },
+        .array => |a| {
+            if (a.len == 0) return error.EmptySequence;
+            try ctx.stack.push(a[0]);
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// #last ( seq -- elem ) - Get last element (polymorphic on string, array)
+fn nativeLast(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+
+    switch (val) {
+        .string => |s| {
+            if (s.len == 0) return error.EmptySequence;
+            const char_slice = ctx.quotationAllocator().alloc(u8, 1) catch return error.OutOfMemory;
+            char_slice[0] = s[s.len - 1];
+            try ctx.stack.push(.{ .string = char_slice });
+        },
+        .array => |a| {
+            if (a.len == 0) return error.EmptySequence;
+            try ctx.stack.push(a[a.len - 1]);
+        },
+        else => return error.TypeError,
+    }
 }
 
 // =============================================================================
