@@ -1,0 +1,63 @@
+\ Integration tests for Phase 4.6: Associative Accessors
+\ Tests: @get, @has?, @set!, @keys, @values
+
+\ Test @get on hashes
+H{ name: "Alice" age: 30 } name: @get "Alice" = [ "PASS: hash @get with symbol" print ] [ "FAIL: hash @get with symbol" print ] if
+H{ name: "Alice" age: 30 } "name" @get "Alice" = [ "PASS: hash @get with string" print ] [ "FAIL: hash @get with string" print ] if
+H{ name: "Alice" age: 30 } age: @get 30 = [ "PASS: hash @get integer value" print ] [ "FAIL: hash @get integer value" print ] if
+
+\ Test @get error case
+[ H{ a: 1 } b: @get ] [ drop "PASS: hash @get key not found error" print ] recover
+
+\ Test @has? on hashes
+H{ name: "Alice" } name: @has? [ "PASS: hash @has? true" print ] [ "FAIL: hash @has? true" print ] if
+H{ name: "Alice" } "name" @has? [ "PASS: hash @has? string key true" print ] [ "FAIL: hash @has? string key true" print ] if
+H{ name: "Alice" } missing: @has? not [ "PASS: hash @has? false" print ] [ "FAIL: hash @has? false" print ] if
+
+\ Test @set! on hashes
+H{ a: 1 } b: 2 @set! b: @get 2 = [ "PASS: hash @set! add new key" print ] [ "FAIL: hash @set! add new key" print ] if
+H{ a: 1 } a: 99 @set! a: @get 99 = [ "PASS: hash @set! update existing key" print ] [ "FAIL: hash @set! update existing key" print ] if
+
+\ Test immutability of @set!
+original: [ H{ x: 1 } ] ;
+original y: 2 @set! drop
+original y: @has? not [ "PASS: hash @set! immutability" print ] [ "FAIL: hash @set! immutability" print ] if
+
+\ Test @keys on hashes
+H{ a: 1 b: 2 } @keys #len 2 = [ "PASS: hash @keys count" print ] [ "FAIL: hash @keys count" print ] if
+
+\ Test @values on hashes
+H{ a: 1 b: 2 } @values #len 2 = [ "PASS: hash @values count" print ] [ "FAIL: hash @values count" print ] if
+
+\ Test error object field access
+\ Create an error by triggering division by zero and catching it
+[ 1 0 / ] [ dup error-type: @get "DivisionByZero" = [ "PASS: error @get error-type" print ] [ "FAIL: error @get error-type" print ] if drop ] recover
+
+[ 1 0 / ] [ dup message: @get "DivisionByZero" = [ "PASS: error @get message" print ] [ "FAIL: error @get message" print ] if drop ] recover
+
+\ Test error @has?
+[ 1 0 / ] [ dup error-type: @has? [ "PASS: error @has? error-type" print ] [ "FAIL: error @has? error-type" print ] if drop ] recover
+[ 1 0 / ] [ dup message: @has? [ "PASS: error @has? message" print ] [ "FAIL: error @has? message" print ] if drop ] recover
+[ 1 0 / ] [ dup stack-trace: @has? [ "PASS: error @has? stack-trace" print ] [ "FAIL: error @has? stack-trace" print ] if drop ] recover
+[ 1 0 / ] [ dup invalid-field: @has? not [ "PASS: error @has? invalid field" print ] [ "FAIL: error @has? invalid field" print ] if drop ] recover
+
+\ Test error @keys
+[ 1 0 / ] [ dup @keys #len 3 = [ "PASS: error @keys count" print ] [ "FAIL: error @keys count" print ] if drop ] recover
+
+\ Test error @values
+[ 1 0 / ] [ dup @values #len 3 = [ "PASS: error @values count" print ] [ "FAIL: error @values count" print ] if drop ] recover
+
+\ Test nested hash access - build it programmatically
+inner: [ H{ host: "localhost" port: 8080 } ] ;
+outer: [ H{ } server: inner @set! ] ;
+outer server: @get host: @get "localhost" = [ "PASS: nested hash access" print ] [ "FAIL: nested hash access" print ] if
+outer server: @get port: @get 8080 = [ "PASS: nested hash access 2" print ] [ "FAIL: nested hash access 2" print ] if
+
+\ Test empty hash
+H{ } @keys #len 0 = [ "PASS: empty hash @keys" print ] [ "FAIL: empty hash @keys" print ] if
+H{ } @values #len 0 = [ "PASS: empty hash @values" print ] [ "FAIL: empty hash @values" print ] if
+
+\ Test chained @set!
+H{ } a: 1 @set! b: 2 @set! c: 3 @set! @keys #len 3 = [ "PASS: chained @set!" print ] [ "FAIL: chained @set!" print ] if
+
+"All associative accessor tests complete!" print
