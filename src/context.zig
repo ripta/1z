@@ -67,6 +67,8 @@ pub const Context = struct {
     current_source: []const u8 = "<repl>",
     /// Tail call target for TCO — set by executeInstructions, consumed by executeQuotation
     tail_call_instructions: ?[]const Instruction = null,
+    /// Program arguments passed after the file path on the command line
+    program_args: []const []const u8 = &.{},
 
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.

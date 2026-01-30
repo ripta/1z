@@ -70,8 +70,15 @@ pub fn main() u8 {
     var show_stack = false;
     var file_path: ?[]const u8 = null;
     var bench_config = BenchmarkConfig{};
+
+    var program_args: std.ArrayListUnmanaged([]const u8) = .{};
+    defer program_args.deinit(gpa_allocator);
+
+    // TODO(ripta): bit hacky arg parsing, improve later?
     for (args[1..]) |arg| {
-        if (std.mem.eql(u8, arg, "--show-stack")) {
+        if (file_path != null) {
+            program_args.append(gpa_allocator, arg) catch return 1;
+        } else if (std.mem.eql(u8, arg, "--show-stack")) {
             show_stack = true;
         } else if (std.mem.eql(u8, arg, "--benchmark") or std.mem.eql(u8, arg, "-b")) {
             bench_config.enabled = true;
@@ -97,20 +104,18 @@ pub fn main() u8 {
         bench_stats.start();
     }
 
-    // Initialize context (primitives only, no prelude yet)
+    // Initialize context with the program arguments
     var ctx = Context.init(allocator);
+    ctx.program_args = program_args.items;
     defer ctx.deinit();
 
-    // Attach benchmark to context if enabled
     if (bench_config.enabled) {
         ctx.benchmark = &bench_stats;
     }
 
-    // Load prelude (timed separately when benchmarking)
     ctx.loadPrelude() catch |err| {
         std.debug.panic("Failed to load prelude: {any}", .{err});
     };
-
     if (bench_config.enabled) {
         bench_stats.markPreludeEnd();
     }

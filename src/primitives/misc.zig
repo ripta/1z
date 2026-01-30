@@ -18,6 +18,8 @@ pub const primitives = [_]Primitive{
     .{ .name = "load", .stack_effect = "filename -- module", .func = nativeLoad },
     .{ .name = "import", .stack_effect = "module --", .func = nativeImport },
     .{ .name = "1array", .stack_effect = "elem -- array", .func = native1Array },
+    .{ .name = "command-line-args", .stack_effect = "-- args", .func = nativeCommandLineArgs },
+    .{ .name = "sys-exit", .stack_effect = "code --", .func = nativeSysExit },
 };
 
 /// help ( symbol -- ) - Display help for a word
@@ -220,6 +222,25 @@ fn nativeImport(ctx: *Context) anyerror!void {
             return error.TypeError;
         },
     }
+}
+
+/// command-line-args ( -- args ) - Push program arguments as an array of strings
+fn nativeCommandLineArgs(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const args = ctx.program_args;
+
+    const arr = alloc.alloc(Value, args.len) catch return error.OutOfMemory;
+    for (args, 0..) |arg, i| {
+        arr[i] = .{ .string = arg };
+    }
+
+    try ctx.stack.push(.{ .array = arr });
+}
+
+/// sys-exit ( code -- ) - Exit the process with the given exit code
+fn nativeSysExit(ctx: *Context) anyerror!void {
+    const code = try helpers.popInteger(ctx);
+    std.process.exit(@intCast(code));
 }
 
 /// 1array ( elem -- array ) - Wrap element in single-element array
