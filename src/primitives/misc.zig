@@ -6,6 +6,7 @@ const Module = value_mod.Module;
 const ModuleWord = value_mod.ModuleWord;
 const StatementProcessor = @import("../statement.zig").StatementProcessor;
 
+const markers_mod = @import("markers.zig");
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 const WordDefinition = @import("../dictionary.zig").WordDefinition;
@@ -158,8 +159,12 @@ fn nativeLoad(ctx: *Context) anyerror!void {
 }
 
 fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord) !void {
+    const has_parse_time = for (mod_word.markers) |mk| {
+        if (markers_mod.isParseTimeMarker(mk)) break true;
+    } else false;
     try ctx.dictionary.put(name, .{
         .name = name,
+        .parse_time = has_parse_time,
         .stack_effect = mod_word.stack_effect,
         .markers = mod_word.markers,
         .action = .{ .compound = mod_word.instructions },
