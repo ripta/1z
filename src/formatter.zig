@@ -139,9 +139,6 @@ pub const Formatter = struct {
 
                             // Before semicolon - remove newline
                             if (n.kind == .semicolon) break :blk 0;
-
-                            // Before closing bracket in single-line block - remove newline
-                            if (n.isClosing() and !self.isMultiLineBlock(i)) break :blk 0;
                         }
 
                         // After a comment: allow up to 1 blank line (preserve intentional separation)
@@ -184,8 +181,8 @@ pub const Formatter = struct {
                         // Allow up to 1 blank line to respect intentional separation
                         if (indent_level > 0 and self.isInMultiLineBlock(i)) break :blk @min(newline_count, 2);
 
-                        // Default: remove newlines (normalize)
-                        break :blk 0;
+                        // Default: preserve user's line breaks, compress multiple blank lines to one
+                        break :blk @min(newline_count, 2);
                     };
 
                     // Calculate how many more newlines to write (accounting for already written)
