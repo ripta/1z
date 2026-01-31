@@ -1,0 +1,18 @@
+\ Load path resolution tests
+
+use "testing" ;
+
+"Search mode finds stdlib modules" test-section
+1 1 "testing loaded via search mode" assert=
+
+"Path mode with .1z extension" test-section
+"load_lib.1z" load import
+5 add3 8 "path mode load with .1z" assert=
+
+"Nested loads resolve relative to their own file" test-section
+use "grid" ;
+3 3 S{ } new-grid grid? t "grid loaded (which loads ranges, strings, sequences)" assert=
+
+"add-load-path adds searchable directory" test-section
+use "ranges" ;
+0 5 range #len 5 "ranges available via stdlib" assert=

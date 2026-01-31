@@ -1,7 +1,7 @@
 \ Integration tests for Associative Accessors
 \ Tests: @get, @has?, @set, @keys, @values
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "@get on hashes" test-section
 H{ name: "Alice" age: 30 } name: @get "Alice" "hash @get with symbol" assert=

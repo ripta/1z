@@ -1,6 +1,6 @@
 \ Test arithmetic words from prelude
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "Negation (-@)" test-section
 42 -@ -42 "-@ positive" assert=

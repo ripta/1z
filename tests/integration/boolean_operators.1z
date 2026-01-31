@@ -1,6 +1,6 @@
 \ Test boolean operators from prelude
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "Logical NOT" test-section
 t not "not t" assert-false

@@ -1,6 +1,6 @@
 \ Type predicates test suite
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 __error-store__: M{ } ;
 capture-error: ( quot -- ) [

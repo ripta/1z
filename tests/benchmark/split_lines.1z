@@ -1,8 +1,8 @@
 \ Benchmark: split-lines (index-tracking, O(n)) vs split-lines-slow (char-by-char, O(n^2))
 
-use "lib/strings.1z" ;
-use "lib/text_slow.1z" ;
-use "lib/text.1z" ;
+use "strings" ;
+use "text_slow" ;
+use "text" ;
 
 \ --- Test string generation ---
 

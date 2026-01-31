@@ -1,6 +1,6 @@
 \ Test word-markers primitive for querying markers on word definitions
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "word-markers on unmarked words" test-section
 
@@ -54,7 +54,7 @@ mk3 "multi-marker-word" word-markers [ over = ] #filter swap drop #len 1 = t "mk
 
 "Markers preserved through module load" test-section
 
-testmod: "tests/integration/marker_lib.1z" load ;
+testmod: "marker_lib.1z" load ;
 
 \ Import to bring words into scope
 testmod import

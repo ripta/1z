@@ -1,0 +1,17 @@
+=== Search mode finds stdlib modules ===
+Stack: [ ]
+PASS: testing loaded via search mode
+Stack: [ ]
+=== Path mode with .1z extension ===
+Stack: [ ]
+Stack: [ ]
+PASS: path mode load with .1z
+Stack: [ ]
+=== Nested loads resolve relative to their own file ===
+Stack: [ ]
+PASS: grid loaded (which loads ranges, strings, sequences)
+Stack: [ ]
+=== add-load-path adds searchable directory ===
+Stack: [ ]
+PASS: ranges available via stdlib
+Stack: [ ]

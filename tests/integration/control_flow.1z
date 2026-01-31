@@ -1,6 +1,6 @@
 \ Test control flow words
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "if - true branch" test-section
 5 3 > [ 1 ] [ 0 ] if 1 "if true branch" assert=

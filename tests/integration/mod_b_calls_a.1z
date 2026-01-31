@@ -1,3 +1,3 @@
 \ Module B that calls A - tests that deps are available at runtime
-use "tests/integration/mod_a.1z" ;
+use "mod_a.1z" ;
 call-from-a: [ from-a ] ;

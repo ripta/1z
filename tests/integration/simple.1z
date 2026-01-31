@@ -1,6 +1,6 @@
 \ Test basic arithmetic operations
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "Basic arithmetic" test-section
 1 2 + 3 "addition" assert=

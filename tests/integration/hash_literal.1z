@@ -1,6 +1,6 @@
 \ Test H{ hash literal syntax
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "Hash literal syntax" test-section
 H{ name: "Alice" age: 30 } name: @get "Alice" "hash literal name value" assert=

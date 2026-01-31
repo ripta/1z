@@ -1,6 +1,6 @@
 \ Test marker value type and marker definitions
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "Marker identity semantics" test-section
 

@@ -2,7 +2,7 @@
 \ Verifies that recursive words work with large iteration counts
 \ without crashing from Zig stack overflow.
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "times with large iteration count" test-section
 \ times runs a ( -- ) quotation n times; use a side-effect-free body

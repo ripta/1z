@@ -1,7 +1,7 @@
 \ Test flag parsing library
 
-use "lib/testing.1z" ;
-use "lib/flags.1z" ;
+use "testing" ;
+use "flags" ;
 
 "flag parsing" test-section
 

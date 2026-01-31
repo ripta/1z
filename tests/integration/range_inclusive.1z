@@ -1,7 +1,7 @@
 \ Tests for range-inclusive (lib/ranges.1z)
 
-use "lib/testing.1z" ;
-use "lib/ranges.1z" ;
+use "testing" ;
+use "ranges" ;
 
 "range-inclusive" test-section
 3 7 range-inclusive { 3 4 5 6 7 } "simple range" assert=

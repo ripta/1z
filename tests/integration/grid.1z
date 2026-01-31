@@ -1,7 +1,7 @@
 \ Integration tests for grid library
 
-use "lib/testing.1z" ;
-use "lib/grid.1z" ;
+use "testing" ;
+use "grid" ;
 
 \ Build marks sets using @adjoin (S{ } can't nest { } inside)
 marks-01: S{ } { 0 0 } @adjoin { 1 1 } @adjoin ;

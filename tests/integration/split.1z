@@ -1,7 +1,7 @@
 \ Tests for string splitting (lib/strings.1z)
 
-use "lib/testing.1z" ;
-use "lib/strings.1z" ;
+use "testing" ;
+use "strings" ;
 
 "index-of" test-section
 "hello,world" "," index-of 5 "comma in middle" assert=

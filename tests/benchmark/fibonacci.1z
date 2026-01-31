@@ -1,7 +1,7 @@
 \ Fibonacci benchmark
 \ Tests recursive function calls and stack operations
 
-"lib/memo.1z" load import
+use "memo" ;
 
 \ Naive recursive fibonacci (exponential time complexity)
 \ This is intentionally slow to stress test the interpreter

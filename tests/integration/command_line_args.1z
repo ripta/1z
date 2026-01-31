@@ -1,6 +1,6 @@
 \ Test command-line-args primitive
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "command-line-args" test-section
 command-line-args { } "returns empty array when no program args" assert=

@@ -1,7 +1,7 @@
 \ Tests for parse-integer with negative numbers (lib/conversions.1z)
 
-use "lib/testing.1z" ;
-use "lib/conversions.1z" ;
+use "testing" ;
+use "conversions" ;
 
 "parse-integer positive" test-section
 "123" parse-integer 123 "three digits" assert=

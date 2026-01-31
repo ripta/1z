@@ -1,6 +1,6 @@
 \ Tests for >char primitive (codepoint to string conversion)
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "Basic ASCII" test-section
 65 >char "A" ">char 65 = A" assert=

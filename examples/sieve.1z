@@ -1,8 +1,8 @@
 \ Sieve of Eratosthenes - check if a number is prime
 \ Usage: 1z examples/sieve.1z <number>
 
-use "lib/flags.1z" ;
-use "lib/ranges.1z" ;
+use "flags" ;
+use "ranges" ;
 
 help: flag{ description: "Show help" short: "h" } ;
 number: required positional flag{ type: integer: description: "Number to check" } ;

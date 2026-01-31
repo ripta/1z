@@ -1,12 +1,12 @@
 \ Test: no transitive re-export and load-once caching
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 \ === No transitive re-export ===
 "No transitive re-export" test-section
 
 \ b.1z uses a.1z internally. Importing b should give us from-b but NOT from-a.
-use "tests/integration/mod_b.1z" ;
+use "mod_b.1z" ;
 
 from-b "from-b" "from-b is accessible" assert=
 
@@ -18,7 +18,7 @@ wipe
 "Direct import" test-section
 
 \ Explicitly importing a.1z makes from-a available
-use "tests/integration/mod_a.1z" ;
+use "mod_a.1z" ;
 from-a "from-a" "from-a available after direct import" assert=
 
 \ === Module deps for internal use ===
@@ -27,7 +27,7 @@ from-a "from-a" "from-a available after direct import" assert=
 \ b.1z internally calls from-a. Even though from-a is not re-exported,
 \ b.1z's own words that call from-a should still work because deps are
 \ imported at runtime.
-use "tests/integration/mod_b_calls_a.1z" ;
+use "mod_b_calls_a.1z" ;
 call-from-a "from-a" "b's internal use of a works" assert=
 
 \ === Load-once caching ===
@@ -35,13 +35,13 @@ call-from-a "from-a" "b's internal use of a works" assert=
 
 \ mod_a_counted.1z prints a message on load. Loading it twice should
 \ only print the message once.
-use "tests/integration/mod_a_counted.1z" ;
-use "tests/integration/mod_b_counted.1z" ;
+use "mod_a_counted.1z" ;
+use "mod_b_counted.1z" ;
 counted-a "counted-a" "first load works" assert=
 counted-b "counted-b" "second module works" assert=
 
 \ === Module @keys excludes deps ===
 "Module @keys excludes deps" test-section
 
-bmod: "tests/integration/mod_b.1z" load ;
+bmod: "mod_b.1z" load ;
 bmod @keys #len 1 "module only exports own words" assert=

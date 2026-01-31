@@ -1,2 +1,2 @@
-use "tests/integration/load_lib.1z" ;
+use "load_lib.1z" ;
 5 add3
