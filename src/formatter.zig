@@ -294,7 +294,9 @@ pub const Formatter = struct {
                         }
                         try self.writeIndent(writer, indent_level);
                         line_start = true;
-                    } else if (!line_start and !after_opening) {
+                    } else if (!line_start) {
+                        // Always write space before closing bracket in single-line mode
+                        // This ensures `[ ]` stays as `[ ]` not `[]`
                         try writer.writeAll(" ");
                     }
                     try writer.writeAll(tok.text);
