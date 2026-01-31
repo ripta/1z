@@ -14,16 +14,16 @@
       \ Main case: 2+ elements
       \ Stack: array sep
 
-      swap dup #first >string swap    \ sep first-str array
-      1 over #len #slice              \ sep first-str rest
-      <rot-                           \ first-str rest sep
+      swap dup #first >string swap  \ sep first-str array
+      1 over #len #slice            \ sep first-str rest
+      <rot-                         \ first-str rest sep
 
       \ Build reduce quotation: [ >string sep swap #concat #concat ]
       [ swap #concat #concat ] curry  \ first-str rest [ sep swap #concat #concat ]
       [ >string ] swap compose        \ first-str rest quot
 
       \ Arrange for #reduce: seq init quot
-      swap -rot>                      \ rest first-str quot
+      swap -rot>  \ rest first-str quot
       #reduce
 
     ] if
