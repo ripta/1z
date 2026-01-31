@@ -14,3 +14,9 @@ PASS: environ keys is array
 Stack: [ ]
 PASS: environ has at least one key
 Stack: [ ]
+=== @get-or with environ ===
+Stack: [ ]
+PASS: @get-or existing env var
+Stack: [ ]
+PASS: @get-or missing env var
+Stack: [ ]

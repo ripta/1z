@@ -15,6 +15,11 @@ M{ name: "Alice" age: 30 } age: @get 30 "mmap @get integer value" assert=
 "Mutable map @get error" test-section
 [ M{ a: 1 } b: @get ] [ drop "PASS: mmap @get key not found error" print-line ] recover
 
+"Mutable map @get-or" test-section
+M{ name: "Alice" } name: "default" @get-or "Alice" "mmap @get-or existing key" assert=
+M{ name: "Alice" } missing: "default" @get-or "default" "mmap @get-or missing key" assert=
+M{ } x: 42 @get-or 42 "mmap @get-or empty map" assert=
+
 "Mutable map @has?" test-section
 M{ name: "Alice" } name: @has? t "mmap @has? true" assert=
 M{ name: "Alice" } "name" @has? t "mmap @has? string key true" assert=

@@ -72,6 +72,12 @@ PASS: module @get string key
 Stack: [ ]
 PASS: @get on missing key errors
 Stack: [ ]
+=== Module @get-or ===
+Stack: [ ]
+PASS: module @get-or existing word
+Stack: [ ]
+PASS: module @get-or missing word
+Stack: [ ]
 === Selective import ===
 Stack: [ ]
 Stack: [ ]

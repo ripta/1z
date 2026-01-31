@@ -91,6 +91,10 @@ testmod "triple" @get 4 swap call 12 "module @get string key" assert=
 \ Error on missing key
 [ testmod missing: @get ] [ drop "PASS: @get on missing key errors" print-line ] recover
 
+"Module @get-or" test-section
+testmod double: "fallback" @get-or 5 swap call 10 "module @get-or existing word" assert=
+testmod missing: "fallback" @get-or "fallback" "module @get-or missing word" assert=
+
 \ === Selective import tests ===
 "Selective import" test-section
 

@@ -43,6 +43,16 @@ H{ a: 1 b: 2 } @values #len 2 "hash @values count" assert=
 [ 1 0 / ] [ dup @keys #len 3 = [ "PASS: error @keys count" print-line ] [ "FAIL: error @keys count" print-line ] if drop ] recover
 [ 1 0 / ] [ dup @values #len 3 = [ "PASS: error @values count" print-line ] [ "FAIL: error @values count" print-line ] if drop ] recover
 
+"@get-or on hashes" test-section
+H{ name: "Alice" age: 30 } name: "default" @get-or "Alice" "hash @get-or existing key" assert=
+H{ name: "Alice" age: 30 } missing: "default" @get-or "default" "hash @get-or missing key" assert=
+H{ a: 1 } a: 0 @get-or 1 "hash @get-or existing returns value" assert=
+H{ } x: 42 @get-or 42 "hash @get-or empty hash" assert=
+
+"@get-or on error objects" test-section
+[ 1 0 / ] [ dup error-type: "none" @get-or "DivisionByZero" "error @get-or existing field" assert= drop ] recover
+[ 1 0 / ] [ dup invalid-field: "fallback" @get-or "fallback" "error @get-or missing field" assert= drop ] recover
+
 "Nested hash access" test-section
 inner: [ H{ host: "localhost" port: 8080 } ] ;
 outer: [ H{ } server: inner @set ] ;
