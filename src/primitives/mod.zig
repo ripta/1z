@@ -39,6 +39,7 @@ pub const type_predicates = @import("type_predicates.zig");
 pub const markers = @import("markers.zig");
 pub const parse_time_marker = &markers.parse_time_marker;
 pub const structs = @import("structs.zig");
+pub const env = @import("env.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -81,4 +82,5 @@ pub const extracted_primitives = stack.primitives ++
     dynamic_vars.primitives ++
     type_predicates.primitives ++
     markers.primitives ++
-    structs.primitives;
+    structs.primitives ++
+    env.primitives;
