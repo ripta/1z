@@ -27,6 +27,8 @@ pub const BenchmarkStats = struct {
     // Memory stats (populated at end from GPA)
     total_allocations: usize = 0,
     total_bytes: usize = 0,
+    peak_live_bytes: usize = 0,
+    current_live_bytes: usize = 0,
 
     /// Start the benchmark timer
     pub fn start(self: *BenchmarkStats) void {
@@ -185,12 +187,15 @@ pub const BenchmarkStats = struct {
         try writer.writeAll("  Total bytes:     ");
         try formatBytes(writer, self.total_bytes);
         try writer.writeAll("\n");
+        try writer.writeAll("  Peak live:       ");
+        try formatBytes(writer, self.peak_live_bytes);
+        try writer.writeAll("\n");
     }
 
     /// Output benchmark results in JSON format
     pub fn formatJson(self: *const BenchmarkStats, writer: anytype) !void {
         try writer.print(
-            \\{{"timing":{{"prelude_ns":{d},"user_ns":{d},"total_ns":{d}}},"instructions":{{"push_literal":{d},"call_word":{d},"total":{d}}},"stack":{{"peak_depth":{d}}},"memory":{{"allocations":{d},"bytes":{d}}}}}
+            \\{{"timing":{{"prelude_ns":{d},"user_ns":{d},"total_ns":{d}}},"instructions":{{"push_literal":{d},"call_word":{d},"total":{d}}},"stack":{{"peak_depth":{d}}},"memory":{{"allocations":{d},"bytes":{d},"peak_live_bytes":{d}}}}}
         , .{
             @as(i64, @intCast(self.preludeTimeNs())),
             @as(i64, @intCast(self.userTimeNs())),
@@ -201,6 +206,7 @@ pub const BenchmarkStats = struct {
             self.peak_stack_depth,
             self.total_allocations,
             self.total_bytes,
+            self.peak_live_bytes,
         });
         try writer.writeAll("\n");
     }
@@ -259,6 +265,10 @@ pub const CountingAllocator = struct {
         if (result != null) {
             self.stats.total_allocations += 1;
             self.stats.total_bytes += len;
+            self.stats.current_live_bytes += len;
+            if (self.stats.current_live_bytes > self.stats.peak_live_bytes) {
+                self.stats.peak_live_bytes = self.stats.current_live_bytes;
+            }
         }
         return result;
     }
@@ -268,8 +278,17 @@ pub const CountingAllocator = struct {
 
         const old_len = memory.len;
         const success = self.backing_allocator.rawResize(memory, alignment, new_len, ret_addr);
-        if (success and new_len > old_len) {
-            self.stats.total_bytes += (new_len - old_len);
+        if (success) {
+            if (new_len > old_len) {
+                const delta = new_len - old_len;
+                self.stats.total_bytes += delta;
+                self.stats.current_live_bytes += delta;
+                if (self.stats.current_live_bytes > self.stats.peak_live_bytes) {
+                    self.stats.peak_live_bytes = self.stats.current_live_bytes;
+                }
+            } else if (new_len < old_len) {
+                self.stats.current_live_bytes -= (old_len - new_len);
+            }
         }
         return success;
     }
@@ -280,9 +299,15 @@ pub const CountingAllocator = struct {
         const old_len = memory.len;
         const result = self.backing_allocator.rawRemap(memory, alignment, new_len, ret_addr);
         if (result != null) {
-            // Track the size change
             if (new_len > old_len) {
-                self.stats.total_bytes += (new_len - old_len);
+                const delta = new_len - old_len;
+                self.stats.total_bytes += delta;
+                self.stats.current_live_bytes += delta;
+                if (self.stats.current_live_bytes > self.stats.peak_live_bytes) {
+                    self.stats.peak_live_bytes = self.stats.current_live_bytes;
+                }
+            } else if (new_len < old_len) {
+                self.stats.current_live_bytes -= (old_len - new_len);
             }
         }
         return result;
@@ -291,8 +316,7 @@ pub const CountingAllocator = struct {
     fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
 
-        // Just forward to backing allocator - we don't track frees
-        // since we're measuring total bytes allocated, not current usage
+        self.stats.current_live_bytes -= memory.len;
         self.backing_allocator.rawFree(memory, alignment, ret_addr);
     }
 };
@@ -358,6 +382,48 @@ test "formatNumber with separators" {
 
     try BenchmarkStats.formatNumber(writer, 1234567);
     try std.testing.expectEqualStrings("1,234,567", stream.getWritten());
+}
+
+test "CountingAllocator tracks peak live bytes" {
+    var stats = BenchmarkStats{};
+    var counting = CountingAllocator.init(std.testing.allocator, &stats);
+    const alloc = counting.allocator();
+
+    // Allocate 100 bytes -> live=100, peak=100
+    const mem1 = try alloc.alloc(u8, 100);
+    try std.testing.expectEqual(@as(usize, 100), stats.current_live_bytes);
+    try std.testing.expectEqual(@as(usize, 100), stats.peak_live_bytes);
+
+    // Allocate 200 more -> live=300, peak=300
+    const mem2 = try alloc.alloc(u8, 200);
+    try std.testing.expectEqual(@as(usize, 300), stats.current_live_bytes);
+    try std.testing.expectEqual(@as(usize, 300), stats.peak_live_bytes);
+
+    // Free first -> live=200, peak still 300
+    alloc.free(mem1);
+    try std.testing.expectEqual(@as(usize, 200), stats.current_live_bytes);
+    try std.testing.expectEqual(@as(usize, 300), stats.peak_live_bytes);
+
+    // Allocate 50 -> live=250, peak still 300
+    const mem3 = try alloc.alloc(u8, 50);
+    try std.testing.expectEqual(@as(usize, 250), stats.current_live_bytes);
+    try std.testing.expectEqual(@as(usize, 300), stats.peak_live_bytes);
+
+    // Allocate 100 -> live=350, peak=350 (new high)
+    const mem4 = try alloc.alloc(u8, 100);
+    try std.testing.expectEqual(@as(usize, 350), stats.current_live_bytes);
+    try std.testing.expectEqual(@as(usize, 350), stats.peak_live_bytes);
+
+    // Total bytes should be cumulative: 100+200+50+100 = 450
+    try std.testing.expectEqual(@as(usize, 450), stats.total_bytes);
+
+    alloc.free(mem2);
+    alloc.free(mem3);
+    alloc.free(mem4);
+
+    // After freeing all, live=0, peak unchanged
+    try std.testing.expectEqual(@as(usize, 0), stats.current_live_bytes);
+    try std.testing.expectEqual(@as(usize, 350), stats.peak_live_bytes);
 }
 
 test "formatBytes" {
