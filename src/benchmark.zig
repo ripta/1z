@@ -10,6 +10,24 @@ pub const BenchmarkConfig = struct {
     output: BenchmarkOutput = .none,
 };
 
+/// Per-word allocation profile entry
+pub const WordAllocProfile = struct {
+    calls: u64 = 0,
+    net_bytes: i64 = 0,
+};
+
+/// Entry for sorting allocation profile results
+const AllocProfileEntry = struct {
+    name: []const u8,
+    profile: WordAllocProfile,
+};
+
+fn allocProfileLessThan(_: void, a: AllocProfileEntry, b: AllocProfileEntry) bool {
+    const abs_a: i64 = if (a.profile.net_bytes >= 0) a.profile.net_bytes else -a.profile.net_bytes;
+    const abs_b: i64 = if (b.profile.net_bytes >= 0) b.profile.net_bytes else -b.profile.net_bytes;
+    return abs_a > abs_b;
+}
+
 /// Benchmark statistics collected during execution
 pub const BenchmarkStats = struct {
     // Timing (nanoseconds)
@@ -29,6 +47,11 @@ pub const BenchmarkStats = struct {
     total_bytes: usize = 0,
     peak_live_bytes: usize = 0,
     current_live_bytes: usize = 0,
+
+    // Per-word allocation profiling
+    word_alloc_profiles: std.StringHashMapUnmanaged(WordAllocProfile) = .{},
+    alloc_profile_stack: [1024]usize = [_]usize{0} ** 1024,
+    alloc_profile_depth: usize = 0,
 
     /// Start the benchmark timer
     pub fn start(self: *BenchmarkStats) void {
@@ -60,6 +83,36 @@ pub const BenchmarkStats = struct {
         if (depth > self.peak_stack_depth) {
             self.peak_stack_depth = depth;
         }
+    }
+
+    /// Push current_live_bytes snapshot for per-word allocation profiling
+    pub fn beginWordProfile(self: *BenchmarkStats) void {
+        if (self.alloc_profile_depth < self.alloc_profile_stack.len) {
+            self.alloc_profile_stack[self.alloc_profile_depth] = self.current_live_bytes;
+            self.alloc_profile_depth += 1;
+        }
+    }
+
+    /// Pop snapshot and accumulate delta into per-word profile
+    pub fn endWordProfile(self: *BenchmarkStats, alloc: std.mem.Allocator, name: []const u8) void {
+        if (self.alloc_profile_depth == 0) return;
+        self.alloc_profile_depth -= 1;
+        const snapshot = self.alloc_profile_stack[self.alloc_profile_depth];
+        const current: i64 = @intCast(self.current_live_bytes);
+        const prev: i64 = @intCast(snapshot);
+        const delta = current - prev;
+
+        const gop = self.word_alloc_profiles.getOrPut(alloc, name) catch return;
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{};
+        }
+        gop.value_ptr.calls += 1;
+        gop.value_ptr.net_bytes += delta;
+    }
+
+    /// Free per-word allocation profile hash map
+    pub fn deinit(self: *BenchmarkStats, alloc: std.mem.Allocator) void {
+        self.word_alloc_profiles.deinit(alloc);
     }
 
     /// Get total instruction count
@@ -117,6 +170,14 @@ pub const BenchmarkStats = struct {
         } else {
             try writer.print("{d} B", .{bytes});
         }
+    }
+
+    /// Format signed bytes in human-readable form (with +/- prefix)
+    pub fn formatSignedBytes(writer: anytype, bytes: i64) !void {
+        const sign: []const u8 = if (bytes >= 0) "+" else "-";
+        const abs: u64 = if (bytes >= 0) @intCast(bytes) else @intCast(-bytes);
+        try writer.writeAll(sign);
+        try formatBytes(writer, @intCast(abs));
     }
 
     /// Format number with thousands separators
@@ -190,12 +251,42 @@ pub const BenchmarkStats = struct {
         try writer.writeAll("  Peak live:       ");
         try formatBytes(writer, self.peak_live_bytes);
         try writer.writeAll("\n");
+
+        // Allocation profile section
+        if (self.word_alloc_profiles.count() > 0) {
+            try writer.writeAll("\nAllocation Profile (top 10 by net bytes):\n");
+
+            // Collect entries and sort by absolute net_bytes descending
+            const count = self.word_alloc_profiles.count();
+            var entries: [256]AllocProfileEntry = undefined;
+            const max_entries = @min(count, 256);
+            var i: usize = 0;
+            var iter = self.word_alloc_profiles.iterator();
+            while (iter.next()) |entry| {
+                if (i >= max_entries) break;
+                entries[i] = .{ .name = entry.key_ptr.*, .profile = entry.value_ptr.* };
+                i += 1;
+            }
+            const filled = entries[0..i];
+
+            // Sort by absolute net_bytes descending
+            std.mem.sort(AllocProfileEntry, filled, {}, allocProfileLessThan);
+
+            const display_count = @min(filled.len, 10);
+            for (filled[0..display_count]) |entry| {
+                try writer.print("  {s:<20} ", .{entry.name});
+                try formatSignedBytes(writer, entry.profile.net_bytes);
+                try writer.writeAll("  (");
+                try formatNumber(writer, entry.profile.calls);
+                try writer.writeAll(" calls)\n");
+            }
+        }
     }
 
     /// Output benchmark results in JSON format
     pub fn formatJson(self: *const BenchmarkStats, writer: anytype) !void {
         try writer.print(
-            \\{{"timing":{{"prelude_ns":{d},"user_ns":{d},"total_ns":{d}}},"instructions":{{"push_literal":{d},"call_word":{d},"total":{d}}},"stack":{{"peak_depth":{d}}},"memory":{{"allocations":{d},"bytes":{d},"peak_live_bytes":{d}}}}}
+            \\{{"timing":{{"prelude_ns":{d},"user_ns":{d},"total_ns":{d}}},"instructions":{{"push_literal":{d},"call_word":{d},"total":{d}}},"stack":{{"peak_depth":{d}}},"memory":{{"allocations":{d},"bytes":{d},"peak_live_bytes":{d}}},"alloc_profile":[
         , .{
             @as(i64, @intCast(self.preludeTimeNs())),
             @as(i64, @intCast(self.userTimeNs())),
@@ -208,7 +299,32 @@ pub const BenchmarkStats = struct {
             self.total_bytes,
             self.peak_live_bytes,
         });
-        try writer.writeAll("\n");
+
+        // Collect and sort allocation profile entries
+        if (self.word_alloc_profiles.count() > 0) {
+            var entries: [256]AllocProfileEntry = undefined;
+            const max_entries = @min(self.word_alloc_profiles.count(), 256);
+            var i: usize = 0;
+            var iter = self.word_alloc_profiles.iterator();
+            while (iter.next()) |entry| {
+                if (i >= max_entries) break;
+                entries[i] = .{ .name = entry.key_ptr.*, .profile = entry.value_ptr.* };
+                i += 1;
+            }
+            const filled = entries[0..i];
+
+            std.mem.sort(AllocProfileEntry, filled, {}, allocProfileLessThan);
+
+            const display_count = @min(filled.len, 10);
+            for (filled[0..display_count], 0..) |entry, idx| {
+                if (idx > 0) try writer.writeAll(",");
+                try writer.print(
+                    \\{{"word":"{s}","net_bytes":{d},"calls":{d}}}
+                , .{ entry.name, entry.profile.net_bytes, entry.profile.calls });
+            }
+        }
+
+        try writer.writeAll("]}\n");
     }
 };
 
@@ -445,5 +561,78 @@ test "formatBytes" {
         var stream = std.io.fixedBufferStream(&buf);
         try BenchmarkStats.formatBytes(stream.writer(), 1_048_576);
         try std.testing.expectEqualStrings("1.00 MB", stream.getWritten());
+    }
+}
+
+test "WordAllocProfile accumulates per-word stats" {
+    const alloc = std.testing.allocator;
+    var stats = BenchmarkStats{};
+    defer stats.deinit(alloc);
+
+    // Simulate: foo calls bar, each allocating some memory
+    // foo begins (live=0)
+    stats.current_live_bytes = 0;
+    stats.beginWordProfile();
+    try std.testing.expectEqual(@as(usize, 1), stats.alloc_profile_depth);
+
+    // foo allocates 100 bytes
+    stats.current_live_bytes = 100;
+
+    // bar begins (live=100)
+    stats.beginWordProfile();
+    try std.testing.expectEqual(@as(usize, 2), stats.alloc_profile_depth);
+
+    // bar allocates 50 bytes
+    stats.current_live_bytes = 150;
+
+    // bar ends: delta = 150 - 100 = +50
+    stats.endWordProfile(alloc, "bar");
+    try std.testing.expectEqual(@as(usize, 1), stats.alloc_profile_depth);
+
+    const bar_profile = stats.word_alloc_profiles.get("bar").?;
+    try std.testing.expectEqual(@as(u64, 1), bar_profile.calls);
+    try std.testing.expectEqual(@as(i64, 50), bar_profile.net_bytes);
+
+    // foo frees 30 bytes after bar returns
+    stats.current_live_bytes = 120;
+
+    // foo ends: delta = 120 - 0 = +120 (inclusive of bar's allocations)
+    stats.endWordProfile(alloc, "foo");
+    try std.testing.expectEqual(@as(usize, 0), stats.alloc_profile_depth);
+
+    const foo_profile = stats.word_alloc_profiles.get("foo").?;
+    try std.testing.expectEqual(@as(u64, 1), foo_profile.calls);
+    try std.testing.expectEqual(@as(i64, 120), foo_profile.net_bytes);
+
+    // Call bar again to test accumulation
+    stats.current_live_bytes = 200;
+    stats.beginWordProfile();
+    stats.current_live_bytes = 180; // bar frees 20 bytes this time
+    stats.endWordProfile(alloc, "bar");
+
+    const bar_profile2 = stats.word_alloc_profiles.get("bar").?;
+    try std.testing.expectEqual(@as(u64, 2), bar_profile2.calls);
+    try std.testing.expectEqual(@as(i64, 30), bar_profile2.net_bytes); // 50 + (-20)
+}
+
+test "formatSignedBytes" {
+    var buf: [64]u8 = undefined;
+
+    {
+        var stream = std.io.fixedBufferStream(&buf);
+        try BenchmarkStats.formatSignedBytes(stream.writer(), 2048);
+        try std.testing.expectEqualStrings("+2.00 KB", stream.getWritten());
+    }
+
+    {
+        var stream = std.io.fixedBufferStream(&buf);
+        try BenchmarkStats.formatSignedBytes(stream.writer(), -1_048_576);
+        try std.testing.expectEqualStrings("-1.00 MB", stream.getWritten());
+    }
+
+    {
+        var stream = std.io.fixedBufferStream(&buf);
+        try BenchmarkStats.formatSignedBytes(stream.writer(), 0);
+        try std.testing.expectEqualStrings("+0 B", stream.getWritten());
     }
 }

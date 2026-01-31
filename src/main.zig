@@ -211,8 +211,10 @@ pub fn main() u8 {
         bench_stats.stop();
     }
 
+    defer if (bench_config.enabled) bench_stats.deinit(allocator);
+
     if (bench_config.output != .none) {
-        var buf: [4096]u8 = undefined;
+        var buf: [8192]u8 = undefined;
         var stream = std.io.fixedBufferStream(&buf);
         const writer = stream.writer();
 

@@ -817,9 +817,10 @@ pub const Context = struct {
                     }
                 },
                 .call_word => |name| {
-                    // Benchmark: count call_word
+                    // Benchmark: count call_word and begin allocation profile
                     if (self.benchmark) |b| {
                         b.recordCallWord();
+                        b.beginWordProfile();
                     }
 
                     if (self.lookupWord(name)) |word| {
@@ -829,6 +830,7 @@ pub const Context = struct {
                         // Validate quotation parameters against declared effects
                         if (word.stack_effect) |effect| {
                             self.validateParameterEffects(&effect) catch |err| {
+                                if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                                 self.captureCallStackOnError(err);
                                 self.popCallFrame();
                                 return err;
@@ -840,6 +842,7 @@ pub const Context = struct {
                                 .compound => |instrs| {
                                     // Tail call: flag instead of recurse
                                     // leaving the call frame on the stack; executeQuotation will pop it
+                                    if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                                     self.tail_call_instructions = instrs;
                                     self.tail_call_module = word.source_module;
                                     return;
@@ -854,15 +857,18 @@ pub const Context = struct {
                                             const depth_after = self.stack.depth();
                                             if (depth_after < effect.outputs.len) {
                                                 self.captureStackEffectMismatch(name, effect, depth_after);
+                                                if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                                                 self.popCallFrame();
                                                 return primitives.InterpreterError.StackEffectMismatch;
                                             }
                                         }
-                                        self.popCallFrame();
                                         if (self.benchmark) |b| {
+                                            b.endWordProfile(self.allocator, name);
                                             b.updatePeakStackDepth(self.stack.depth());
                                         }
+                                        self.popCallFrame();
                                     } else |err| {
+                                        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                                         self.captureCallStackOnError(err);
                                         self.popCallFrame();
                                         return err;
@@ -897,7 +903,7 @@ pub const Context = struct {
                                 //              but we're not in tail position, consume it: pop the dangling
                                 //              call frame and execute the deferred instructions normally.
                                 //              This prevents invalid call stack frames from accumulating,
-                                //              eventually growing without bound. 😭
+                                //              eventually growing without bound.
                                 if (self.tail_call_instructions) |tci| {
                                     self.popCallFrame();
                                     self.tail_call_instructions = null;
@@ -907,6 +913,7 @@ pub const Context = struct {
 
                                     if (tci_module) |mod| {
                                         self.pushModuleDepsFrame(mod) catch |e| {
+                                            if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                                             self.popCallFrame();
                                             self.captureCallStackOnError(e);
                                             return e;
@@ -915,6 +922,7 @@ pub const Context = struct {
 
                                     self.executeQuotation(.{ .instructions = tci }) catch |err2| {
                                         if (tci_module != null) self.popLocalFrame();
+                                        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                                         self.popCallFrame(); // pop our own frame
                                         self.captureCallStackOnError(err2);
                                         return err2;
@@ -928,16 +936,19 @@ pub const Context = struct {
                                     const depth_after = self.stack.depth();
                                     if (depth_after < effect.outputs.len) {
                                         self.captureStackEffectMismatch(name, effect, depth_after);
+                                        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                                         self.popCallFrame();
                                         return primitives.InterpreterError.StackEffectMismatch;
                                     }
                                 }
 
-                                self.popCallFrame();
                                 if (self.benchmark) |b| {
+                                    b.endWordProfile(self.allocator, name);
                                     b.updatePeakStackDepth(self.stack.depth());
                                 }
+                                self.popCallFrame();
                             } else |err| {
+                                if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                                 self.captureCallStackOnError(err);
                                 self.popCallFrame();
                                 return err;
