@@ -1,0 +1,8 @@
+1 2 +  \ Correct comment placement
+3 4 *
+
+\ OK: Comment may be on separate line
+5 6 +
+
+17 18 +   \ OK: These two comments appear one after another, so
+18 190 +  \     we align the backslashes

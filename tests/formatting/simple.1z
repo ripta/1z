@@ -1,0 +1,7 @@
+\ OK: Splitting into multiple lines
+1 2 +
+3 4 *
++
+
+\ OK: Combining into one line
+1 2 + 3 4 * +

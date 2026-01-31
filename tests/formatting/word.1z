@@ -1,0 +1,25 @@
+\ OK: Word definition all in one
+add2: [ 2 + ] ;
+
+\ OK: Word definition header in one line, body in one line, footer in one line
+add3: [
+  3 +
+] ;
+
+\ WRONG: Word definition body opening on separate line
+add4:
+[
+  4 +
+] ;
+
+\ WRONG: Word definition body incorrectly indented
+add5: [
+      5 +
+] ;
+
+\ OK: Word definition body may be split into multiple lines if user so desires
+add6: [
+  3 +
+  4 +
+  1 -
+]
