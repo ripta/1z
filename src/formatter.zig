@@ -91,7 +91,8 @@ pub const Formatter = struct {
         var line_start = true;
         // Track if we just wrote an opening bracket
         var after_opening = false;
-        var pending_comment: ?[]const u8 = null;
+        var pending_comments: std.ArrayListUnmanaged([]const u8) = .{};
+        defer pending_comments.deinit(self.allocator);
         // Track if last content was a comment (no blank lines after)
         var after_comment = false;
         // Track if we're at the start of the file
@@ -143,8 +144,8 @@ pub const Formatter = struct {
                             if (n.isClosing() and !self.isMultiLineBlock(i)) break :blk 0;
                         }
 
-                        // After a comment: no blank lines allowed (max 1 newline total)
-                        if (after_comment) break :blk 1;
+                        // After a comment: allow up to 1 blank line (preserve intentional separation)
+                        if (after_comment) break :blk @min(newline_count, 2);
 
                         // At file start: allow up to 1 blank line (2 newlines)
                         if (at_file_start) break :blk 2;
@@ -170,6 +171,19 @@ pub const Formatter = struct {
                             if (p.kind == .semicolon) break :blk 2;
                         }
 
+                        // If there are pending comments, preserve the newline so they stay on their line
+                        // In multi-line blocks, also preserve blank lines
+                        if (pending_comments.items.len > 0) {
+                            if (indent_level > 0 and self.isInMultiLineBlock(i)) {
+                                break :blk @min(newline_count, 2);
+                            }
+                            break :blk 1;
+                        }
+
+                        // Inside a multi-line block, preserve newlines between statements
+                        // Allow up to 1 blank line to respect intentional separation
+                        if (indent_level > 0 and self.isInMultiLineBlock(i)) break :blk @min(newline_count, 2);
+
                         // Default: remove newlines (normalize)
                         break :blk 0;
                     };
@@ -180,11 +194,11 @@ pub const Formatter = struct {
 
                     if (to_write > 0) {
                         // Write pending comment first
-                        if (pending_comment) |comment| {
+                        for (pending_comments.items) |comment| {
                             try writer.writeAll("  ");
                             try writer.writeAll(comment);
-                            pending_comment = null;
                         }
+                        pending_comments.clearRetainingCapacity();
 
                         // Write the additional newlines
                         for (0..to_write) |_| {
@@ -209,7 +223,7 @@ pub const Formatter = struct {
                         line_start = false;
                         after_comment = true;
                     } else {
-                        pending_comment = tok.text;
+                        try pending_comments.append(self.allocator, tok.text);
                     }
                     newlines_written = 0;
                     i += 1;
@@ -249,7 +263,11 @@ pub const Formatter = struct {
                 .open_bracket, .open_brace => {
                     at_file_start = false;
                     after_comment = false;
-                    if (!line_start) try writer.writeAll(" ");
+                    if (line_start) {
+                        try self.writeIndent(writer, indent_level);
+                    } else {
+                        try writer.writeAll(" ");
+                    }
                     try writer.writeAll(tok.text);
                     indent_level += 1;
                     line_start = false;
@@ -264,14 +282,16 @@ pub const Formatter = struct {
 
                     // Check if we need to be on a new line
                     const needs_newline = self.isMultiLineBlock(i);
-                    if (needs_newline and !line_start) {
-                        // Write pending comment
-                        if (pending_comment) |comment| {
-                            try writer.writeAll("  ");
-                            try writer.writeAll(comment);
-                            pending_comment = null;
+                    if (needs_newline) {
+                        if (!line_start) {
+                            // Write pending comments before newline
+                            for (pending_comments.items) |comment| {
+                                try writer.writeAll("  ");
+                                try writer.writeAll(comment);
+                            }
+                            pending_comments.clearRetainingCapacity();
+                            try writer.writeAll("\n");
                         }
-                        try writer.writeAll("\n");
                         try self.writeIndent(writer, indent_level);
                         line_start = true;
                     } else if (!line_start and !after_opening) {
@@ -287,12 +307,12 @@ pub const Formatter = struct {
                     at_file_start = false;
                     after_comment = false;
                     try writer.writeAll(" ;");
-                    // After semicolon, write pending comment and newline
-                    if (pending_comment) |comment| {
+                    // After semicolon, write pending comments and newline
+                    for (pending_comments.items) |comment| {
                         try writer.writeAll("  ");
                         try writer.writeAll(comment);
-                        pending_comment = null;
                     }
+                    pending_comments.clearRetainingCapacity();
                     try writer.writeAll("\n");
                     line_start = true;
                     after_opening = false;
@@ -331,8 +351,8 @@ pub const Formatter = struct {
             i += 1;
         }
 
-        // Write any remaining pending comment
-        if (pending_comment) |comment| {
+        // Write any remaining pending comments
+        for (pending_comments.items) |comment| {
             try writer.writeAll("  ");
             try writer.writeAll(comment);
             line_start = false;
@@ -359,6 +379,42 @@ pub const Formatter = struct {
         for (0..level * self.indent_size) |_| {
             try writer.writeAll(" ");
         }
+    }
+
+    /// Determine if we are currently inside a multi-line block.
+    /// This looks for the enclosing opening bracket and checks if there's a newline after it.
+    fn isInMultiLineBlock(self: *Formatter, pos: usize) bool {
+        // Look backwards to find the most recent unclosed opening bracket
+        var depth: i32 = 0;
+        var j: usize = pos;
+
+        while (j > 0) {
+            j -= 1;
+            const t = self.tokens.items[j];
+
+            if (t.isClosing()) {
+                depth += 1;
+            } else if (t.isOpening()) {
+                if (depth == 0) {
+                    // Found the enclosing opening bracket
+                    // Check if there's a newline immediately after it
+                    var k = j + 1;
+                    while (k < pos) {
+                        if (self.tokens.items[k].kind == .newline) {
+                            return true;
+                        }
+                        // Stop at first non-newline, non-comment token
+                        if (self.tokens.items[k].kind != .comment) {
+                            break;
+                        }
+                        k += 1;
+                    }
+                    return false;
+                }
+                depth -= 1;
+            }
+        }
+        return false;
     }
 
     /// Determine if the block containing position i is multi-line.
@@ -525,12 +581,13 @@ test "format compresses multiple blank lines to one" {
     try std.testing.expectEqualStrings("double: [ 2 * ] ;\n\ntriple: [ 3 * ] ;\n", result);
 }
 
-test "format no blank line after comment" {
+test "format preserves blank line after comment" {
+    // Blank lines after comments are now preserved for readability
     const input = "\\ a comment\n\ndouble: [ 2 * ] ;";
     const result = try formatString(std.testing.allocator, input);
     defer std.testing.allocator.free(result);
 
-    try std.testing.expectEqualStrings("\\ a comment\ndouble: [ 2 * ] ;\n", result);
+    try std.testing.expectEqualStrings("\\ a comment\n\ndouble: [ 2 * ] ;\n", result);
 }
 
 test "format blank line before comment is ok" {
