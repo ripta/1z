@@ -8,6 +8,7 @@ const Quotation = @import("value.zig").Quotation;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 const formatter = @import("formatter.zig");
 const benchmark = @import("benchmark.zig");
+const LineEditor = @import("line_editor.zig").LineEditor;
 const BenchmarkStats = benchmark.BenchmarkStats;
 const BenchmarkConfig = benchmark.BenchmarkConfig;
 const CountingAllocator = benchmark.CountingAllocator;
@@ -388,17 +389,10 @@ fn formatDirectory(allocator: std.mem.Allocator, dir_path: []const u8, check_onl
 }
 
 fn repl(ctx: *Context, quiet: bool, max_memory_bytes: usize) void {
-    const stdin_file: File = .stdin();
     const stdout_file: File = .stdout();
-
-    var stdin_buf: [4096]u8 = undefined;
     var stdout_buf: [4096]u8 = undefined;
-
-    var stdin = stdin_file.reader(&stdin_buf);
     var stdout = stdout_file.writer(&stdout_buf);
-
     const writer = &stdout.interface;
-    const reader = &stdin.interface;
 
     if (!quiet) {
         const mem_str = MemoryLimitAllocator.formatBytesStatic(max_memory_bytes);
@@ -407,10 +401,81 @@ fn repl(ctx: *Context, quiet: bool, max_memory_bytes: usize) void {
         writer.flush() catch return;
     }
 
+    if (std.posix.isatty(std.posix.STDIN_FILENO)) {
+        replInteractive(ctx, writer);
+    } else {
+        replPiped(ctx, writer);
+    }
+}
+
+fn replInteractive(ctx: *Context, writer: anytype) void {
+    var editor = LineEditor.init() catch {
+        // Fall back to piped mode if terminal setup fails
+        replPiped(ctx, writer);
+        return;
+    };
+    defer editor.deinit();
+
     var processor: StatementProcessor = .{};
     var repl_line: usize = 0;
     while (true) {
-        // Show continuation prompt if accumulating, otherwise primary prompt
+        const prompt: []const u8 = if (processor.isAccumulating()) "+ " else "> ";
+
+        const maybe_line = editor.readLine(prompt) catch {
+            writer.writeAll("Error reading input\n") catch {};
+            writer.flush() catch {};
+            continue;
+        };
+
+        const line = maybe_line orelse {
+            writer.writeAll("Goodbye!\n") catch {};
+            writer.flush() catch {};
+            return;
+        };
+
+        repl_line += 1;
+        processor.trackLine(repl_line);
+
+        switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
+            .needs_more_input => continue,
+            .parse_error => |err| {
+                writer.print("Error: {any}\n", .{err}) catch {};
+                writer.flush() catch {};
+                processor.reset();
+            },
+            .complete => |instrs| {
+                if (instrs.len > 0) {
+                    adjustInstructionLines(instrs, processor.start_line);
+                }
+
+                var had_error = false;
+                ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
+                    printErrorDetails(ctx, writer, err);
+                    had_error = true;
+                };
+
+                if (!had_error) {
+                    writer.writeAll("Stack: ") catch {};
+                    ctx.stack.dump(writer) catch {};
+                    writer.writeAll("\n") catch {};
+                }
+
+                writer.flush() catch {};
+                processor.reset();
+            },
+        }
+    }
+}
+
+fn replPiped(ctx: *Context, writer: anytype) void {
+    const stdin_file: File = .stdin();
+    var stdin_buf: [4096]u8 = undefined;
+    var stdin = stdin_file.reader(&stdin_buf);
+    const reader = &stdin.interface;
+
+    var processor: StatementProcessor = .{};
+    var repl_line: usize = 0;
+    while (true) {
         if (processor.isAccumulating()) {
             writer.writeAll("+ ") catch return;
         } else {
@@ -617,4 +682,5 @@ test {
     _ = @import("formatter.zig");
     _ = @import("benchmark.zig");
     _ = @import("memory_limit.zig");
+    _ = @import("line_editor.zig");
 }
