@@ -460,7 +460,115 @@ pub fn formatString(allocator: Allocator, input: []const u8) ![]u8 {
 
     try formatter.format(output.writer(allocator));
 
-    return output.toOwnedSlice(allocator);
+    const formatted = try output.toOwnedSlice(allocator);
+    defer allocator.free(formatted);
+
+    // Post-process to align consecutive inline comments
+    return alignComments(allocator, formatted);
+}
+
+/// Align consecutive inline comments to the same column.
+/// Groups of consecutive lines with inline comments are aligned together.
+fn alignComments(allocator: Allocator, input: []const u8) ![]u8 {
+    var result: std.ArrayListUnmanaged(u8) = .{};
+    errdefer result.deinit(allocator);
+
+    // Split into lines
+    var lines: std.ArrayListUnmanaged([]const u8) = .{};
+    defer lines.deinit(allocator);
+
+    var line_start: usize = 0;
+    for (input, 0..) |c, i| {
+        if (c == '\n') {
+            try lines.append(allocator, input[line_start..i]);
+            line_start = i + 1;
+        }
+    }
+    // Handle last line without trailing newline
+    if (line_start < input.len) {
+        try lines.append(allocator, input[line_start..]);
+    }
+
+    // Process lines in groups
+    var i: usize = 0;
+    while (i < lines.items.len) {
+        // Find the end of a group of consecutive lines with inline comments
+        const group_start = i;
+        var group_end = i;
+        var max_code_len: usize = 0;
+
+        while (group_end < lines.items.len) {
+            const line = lines.items[group_end];
+            if (findInlineComment(line)) |comment_pos| {
+                // This line has an inline comment
+                // Code length is everything before "  \"
+                const code_len = if (comment_pos >= 2) comment_pos - 2 else 0;
+                max_code_len = @max(max_code_len, code_len);
+                group_end += 1;
+            } else {
+                // No inline comment - end of group
+                break;
+            }
+        }
+
+        if (group_end > group_start and max_code_len > 0) {
+            // We have a group of lines with inline comments - align them
+            for (lines.items[group_start..group_end]) |line| {
+                if (findInlineComment(line)) |comment_pos| {
+                    const code_end = if (comment_pos >= 2) comment_pos - 2 else 0;
+                    const code_part = std.mem.trimRight(u8, line[0..code_end], " ");
+                    const comment_part = line[comment_pos..];
+
+                    try result.appendSlice(allocator, code_part);
+                    // Pad to align comments
+                    const padding = if (max_code_len > code_part.len) max_code_len - code_part.len else 0;
+                    for (0..padding + 2) |_| {
+                        try result.append(allocator, ' ');
+                    }
+                    try result.appendSlice(allocator, comment_part);
+                    try result.append(allocator, '\n');
+                }
+            }
+            i = group_end;
+        } else {
+            // Single line or line without inline comment - output as-is
+            try result.appendSlice(allocator, lines.items[i]);
+            try result.append(allocator, '\n');
+            i += 1;
+        }
+    }
+
+    // Remove trailing newline if input didn't have one
+    if (result.items.len > 0 and input.len > 0 and input[input.len - 1] != '\n') {
+        _ = result.pop();
+    }
+
+    return result.toOwnedSlice(allocator);
+}
+
+/// Find the position of an inline comment in a line.
+/// Returns null if no inline comment (standalone comments or no comment).
+fn findInlineComment(line: []const u8) ?usize {
+    // An inline comment is "  \" preceded by non-whitespace content
+    // Standalone comments start with optional whitespace then "\"
+
+    // First, check if line has a comment at all
+    const comment_marker = std.mem.indexOf(u8, line, "\\");
+    if (comment_marker == null) return null;
+
+    const pos = comment_marker.?;
+
+    // Check if this is an inline comment (has code before it)
+    // Inline comments have "  \" pattern - two spaces before backslash
+    if (pos >= 2 and line[pos - 1] == ' ' and line[pos - 2] == ' ') {
+        // Check if there's actual code before the spaces
+        const before_spaces = std.mem.trimRight(u8, line[0 .. pos - 2], " ");
+        if (before_spaces.len > 0 and before_spaces[0] != '\\') {
+            return pos;
+        }
+    }
+
+    return null;
 }
 
 /// Format a file in-place.
