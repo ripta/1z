@@ -18,7 +18,7 @@ split-fast-step: ( acc byte -- acc' ) [
     \ Newline: slice src[start..pos], append to lines, advance start past pos
     acc-slice
     dup #len 0 >
-    [ over lines>> swap 1array #append >>lines ]
+    [ over lines>> swap 1array #append! >>lines ]
     [ drop ]
     if
     dup pos>> ++ >>start
@@ -37,7 +37,7 @@ split-fast-flush: ( acc -- lines ) [
   [
     acc-slice
     dup #len 0 >
-    [ over lines>> swap 1array #append nip ]
+    [ over lines>> swap 1array #append! nip ]
     [ drop lines>> ]
     if
   ]
@@ -48,7 +48,7 @@ split-fast-flush: ( acc -- lines ) [
 \ Split a string into an array of non-empty lines
 split-lines: ( str -- lines ) [
   >bytes
-  dup { } 0 0 make-split-fast-acc
+  dup V{ } 0 0 make-split-fast-acc
   [ split-fast-step ] #reduce
   split-fast-flush
 ] ;
