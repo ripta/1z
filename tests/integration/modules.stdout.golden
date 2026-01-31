@@ -60,6 +60,10 @@ PASS: module @has? missing word
 Stack: [ ]
 PASS: module @has? missing string key
 Stack: [ ]
+=== Module #len ===
+Stack: [ ]
+PASS: module #len
+Stack: [ ]
 === Module accessors @keys ===
 Stack: [ ]
 PASS: module @keys count

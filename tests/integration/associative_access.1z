@@ -59,6 +59,11 @@ outer: [ H{ } server: inner @set ] ;
 outer server: @get host: @get "localhost" "nested hash access" assert=
 outer server: @get port: @get 8080 "nested hash access 2" assert=
 
+"#len on hashes" test-section
+H{ a: 1 b: 2 c: 3 } #len 3 "hash #len" assert=
+H{ } #len 0 "empty hash #len" assert=
+H{ x: 1 } #len 1 "singleton hash #len" assert=
+
 "Empty hash operations" test-section
 H{ } @keys #len 0 "empty hash @keys" assert=
 H{ } @values #len 0 "empty hash @values" assert=

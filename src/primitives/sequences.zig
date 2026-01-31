@@ -41,11 +41,15 @@ pub const primitives = [_]Primitive{
 /// #len ( seq -- n ) - Get length of sequence (polymorphic on string, array, vector, byte-array, set)
 pub fn nativeLen(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
-    // Use sequence module for standard sequences, handle mutable_map separately
+    // Use sequence module for standard sequences, handle associative types separately
     const len: i64 = if (sequenceLength(val)) |l|
         @intCast(l)
+    else if (val == .hash)
+        @intCast(val.hash.count())
     else if (val == .mutable_map)
         @intCast(val.mutable_map.count())
+    else if (val == .module)
+        @intCast(val.module.words.count())
     else
         return error.TypeError;
     try ctx.stack.push(.{ .integer = len });

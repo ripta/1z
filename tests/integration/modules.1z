@@ -78,6 +78,9 @@ testmod "double" @has? t "module @has? string key" assert=
 testmod nonexistent: @has? f "module @has? missing word" assert=
 testmod "nonexistent" @has? f "module @has? missing string key" assert=
 
+"Module #len" test-section
+testmod #len 3 "module #len" assert=
+
 "Module accessors @keys" test-section
 
 testmod @keys #len 3 "module @keys count" assert=

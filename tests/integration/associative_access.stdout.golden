@@ -82,6 +82,14 @@ PASS: nested hash access
 Stack: [ ]
 PASS: nested hash access 2
 Stack: [ ]
+=== #len on hashes ===
+Stack: [ ]
+PASS: hash #len
+Stack: [ ]
+PASS: empty hash #len
+Stack: [ ]
+PASS: singleton hash #len
+Stack: [ ]
 === Empty hash operations ===
 Stack: [ ]
 PASS: empty hash @keys
