@@ -1,0 +1,38 @@
+=== sys-info primitive ===
+Stack: [ ]
+PASS: sys-info returns hash
+Stack: [ ]
+PASS: sys-info has os
+Stack: [ ]
+PASS: sys-info has arch
+Stack: [ ]
+PASS: sys-info has abi
+Stack: [ ]
+PASS: sys-info has endian
+Stack: [ ]
+PASS: sys-info has ptr-width
+Stack: [ ]
+PASS: sys-info has os-family
+Stack: [ ]
+PASS: os is a string
+Stack: [ ]
+PASS: arch is a string
+Stack: [ ]
+PASS: abi is a string
+Stack: [ ]
+PASS: endian is a string
+Stack: [ ]
+PASS: ptr-width is an integer
+Stack: [ ]
+PASS: os-family is a string
+Stack: [ ]
+PASS: sys-info has 6 keys
+Stack: [ ]
+Stack: [ t ]
+Stack: [ t f ]
+PASS: endian is little or big
+Stack: [ ]
+Stack: [ f ]
+Stack: [ f t ]
+PASS: ptr-width is 32 or 64
+Stack: [ ]
