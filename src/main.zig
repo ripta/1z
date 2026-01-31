@@ -70,6 +70,7 @@ pub fn main() u8 {
 
     // Parse flags
     var show_stack = false;
+    var quiet = false;
     var file_path: ?[]const u8 = null;
     var bench_config = BenchmarkConfig{};
     var max_memory_bytes: usize = 256 * 1024 * 1024;
@@ -89,6 +90,8 @@ pub fn main() u8 {
             program_args.append(gpa_allocator, arg) catch return 1;
         } else if (std.mem.eql(u8, arg, "--show-stack")) {
             show_stack = true;
+        } else if (std.mem.eql(u8, arg, "-q") or std.mem.eql(u8, arg, "--quiet")) {
+            quiet = true;
         } else if (std.mem.eql(u8, arg, "--benchmark") or std.mem.eql(u8, arg, "-b")) {
             bench_config.enabled = true;
         } else if (std.mem.eql(u8, arg, "--benchmark=verbose")) {
@@ -202,7 +205,7 @@ pub fn main() u8 {
     const result = if (file_path) |path|
         batch(&ctx, path, show_stack)
     else blk: {
-        repl(&ctx);
+        repl(&ctx, quiet, max_memory_bytes);
         break :blk @as(u8, 0);
     };
 
@@ -384,7 +387,7 @@ fn formatDirectory(allocator: std.mem.Allocator, dir_path: []const u8, check_onl
     return result;
 }
 
-fn repl(ctx: *Context) void {
+fn repl(ctx: *Context, quiet: bool, max_memory_bytes: usize) void {
     const stdin_file: File = .stdin();
     const stdout_file: File = .stdout();
 
@@ -397,9 +400,12 @@ fn repl(ctx: *Context) void {
     const writer = &stdout.interface;
     const reader = &stdin.interface;
 
-    writer.print("1z interpreter v{s}\n", .{version}) catch return;
-    writer.writeAll("Press ^D to quit\n\n") catch return;
-    writer.flush() catch return;
+    if (!quiet) {
+        const mem_str = MemoryLimitAllocator.formatBytesStatic(max_memory_bytes);
+        writer.print("1z interpreter v{s} ({s} max)\n", .{ version, mem_str }) catch return;
+        writer.writeAll("Press ^D to quit\n\n") catch return;
+        writer.flush() catch return;
+    }
 
     var processor: StatementProcessor = .{};
     var repl_line: usize = 0;
