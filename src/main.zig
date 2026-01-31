@@ -135,12 +135,15 @@ fn handleFmt(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const err_writer = &stderr.interface;
 
     var check_only = false;
+    var stdout_mode = false;
     var paths: std.ArrayListUnmanaged([]const u8) = .{};
     defer paths.deinit(allocator);
 
     for (args) |arg| {
         if (std.mem.eql(u8, arg, "--check")) {
             check_only = true;
+        } else if (std.mem.eql(u8, arg, "--stdout")) {
+            stdout_mode = true;
         } else {
             paths.append(allocator, arg) catch {
                 err_writer.writeAll("Error: out of memory\n") catch {};
@@ -151,10 +154,39 @@ fn handleFmt(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     }
 
     if (paths.items.len == 0) {
-        err_writer.writeAll("Usage: 1z fmt [--check] <file...>\n") catch {};
+        err_writer.writeAll("Usage: 1z fmt [--check] [--stdout] <file...>\n") catch {};
         err_writer.writeAll("       1z fmt [--check] .\n") catch {};
         err_writer.flush() catch {};
         return 1;
+    }
+
+    // --stdout mode: format files and print to stdout
+    if (stdout_mode) {
+        const stdout_file: File = .stdout();
+        var stdout_buf: [4096]u8 = undefined;
+        var stdout = stdout_file.writer(&stdout_buf);
+        const out_writer = &stdout.interface;
+
+        for (paths.items) |path| {
+            const content = std.fs.cwd().readFileAlloc(allocator, path, 10 * 1024 * 1024) catch |err| {
+                err_writer.print("Error reading '{s}': {any}\n", .{ path, err }) catch {};
+                err_writer.flush() catch {};
+                return 1;
+            };
+            defer allocator.free(content);
+
+            const formatted = formatter.formatString(allocator, content) catch |err| {
+                err_writer.print("Error formatting '{s}': {any}\n", .{ path, err }) catch {};
+                err_writer.flush() catch {};
+                return 1;
+            };
+            defer allocator.free(formatted);
+
+            out_writer.writeAll(formatted) catch {};
+        }
+
+        out_writer.flush() catch {};
+        return 0;
     }
 
     var any_changes = false;

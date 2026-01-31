@@ -606,55 +606,8 @@ pub fn checkFile(allocator: Allocator, path: []const u8) !bool {
 // =============================================================================
 // Tests
 // =============================================================================
-
-test "format simple definition" {
-    const input = "double: ( n -- n ) [ 2 * ] ;";
-    const result = try formatString(std.testing.allocator, input);
-    defer std.testing.allocator.free(result);
-
-    try std.testing.expectEqualStrings("double: ( n -- n ) [ 2 * ] ;\n", result);
-}
-
-test "format compress extra spaces" {
-    const input = "double:   (  n  --  n  )   [  2   *  ]   ;";
-    const result = try formatString(std.testing.allocator, input);
-    defer std.testing.allocator.free(result);
-
-    try std.testing.expectEqualStrings("double: ( n -- n ) [ 2 * ] ;\n", result);
-}
-
-test "format preserves comments" {
-    const input = "\\ This is a comment\n1 2 +";
-    const result = try formatString(std.testing.allocator, input);
-    defer std.testing.allocator.free(result);
-
-    try std.testing.expectEqualStrings("\\ This is a comment\n1 2 +\n", result);
-}
-
-test "format preserves multi-line structure" {
-    const input = "factorial: ( n -- n! ) [\n  dup 1 >\n  [ dup 1 - factorial * ]\n  [ drop 1 ]\n  if\n] ;";
-    const result = try formatString(std.testing.allocator, input);
-    defer std.testing.allocator.free(result);
-
-    try std.testing.expect(std.mem.indexOf(u8, result, "\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "] ;") != null);
-}
-
-test "format opening bracket on same line" {
-    const input = "square: ( n -- n )\n[ dup * ]\n;";
-    const result = try formatString(std.testing.allocator, input);
-    defer std.testing.allocator.free(result);
-
-    try std.testing.expectEqualStrings("square: ( n -- n ) [ dup * ] ;\n", result);
-}
-
-test "format array" {
-    const input = "{ 1 2 3 }";
-    const result = try formatString(std.testing.allocator, input);
-    defer std.testing.allocator.free(result);
-
-    try std.testing.expectEqualStrings("{ 1 2 3 }\n", result);
-}
+// Most formatter tests are in tests/formatting/ as golden file tests.
+// Run with: zig build fmt-test
 
 test "format empty input" {
     const input = "";
@@ -662,53 +615,4 @@ test "format empty input" {
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings("", result);
-}
-
-test "format inline comment" {
-    const input = "1 2 + \\ add numbers";
-    const result = try formatString(std.testing.allocator, input);
-    defer std.testing.allocator.free(result);
-
-    try std.testing.expectEqualStrings("1 2 +  \\ add numbers\n", result);
-}
-
-test "format preserves single blank line between statements" {
-    const input = "double: [ 2 * ] ;\n\ntriple: [ 3 * ] ;";
-    const result = try formatString(std.testing.allocator, input);
-    defer std.testing.allocator.free(result);
-
-    try std.testing.expectEqualStrings("double: [ 2 * ] ;\n\ntriple: [ 3 * ] ;\n", result);
-}
-
-test "format compresses multiple blank lines to one" {
-    const input = "double: [ 2 * ] ;\n\n\n\ntriple: [ 3 * ] ;";
-    const result = try formatString(std.testing.allocator, input);
-    defer std.testing.allocator.free(result);
-
-    try std.testing.expectEqualStrings("double: [ 2 * ] ;\n\ntriple: [ 3 * ] ;\n", result);
-}
-
-test "format preserves blank line after comment" {
-    // Blank lines after comments are now preserved for readability
-    const input = "\\ a comment\n\ndouble: [ 2 * ] ;";
-    const result = try formatString(std.testing.allocator, input);
-    defer std.testing.allocator.free(result);
-
-    try std.testing.expectEqualStrings("\\ a comment\n\ndouble: [ 2 * ] ;\n", result);
-}
-
-test "format blank line before comment is ok" {
-    const input = "double: [ 2 * ] ;\n\n\\ a comment\ntriple: [ 3 * ] ;";
-    const result = try formatString(std.testing.allocator, input);
-    defer std.testing.allocator.free(result);
-
-    try std.testing.expectEqualStrings("double: [ 2 * ] ;\n\n\\ a comment\ntriple: [ 3 * ] ;\n", result);
-}
-
-test "format no trailing blank lines" {
-    const input = "double: [ 2 * ] ;\n\n\n";
-    const result = try formatString(std.testing.allocator, input);
-    defer std.testing.allocator.free(result);
-
-    try std.testing.expectEqualStrings("double: [ 2 * ] ;\n", result);
 }

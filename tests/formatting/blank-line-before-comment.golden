@@ -1,0 +1,4 @@
+double: [ 2 * ] ;
+
+\ a comment
+triple: [ 3 * ] ;

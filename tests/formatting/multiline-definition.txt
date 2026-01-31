@@ -1,0 +1,6 @@
+factorial: ( n -- n! ) [
+  dup 1 >
+  [ dup 1 - factorial * ]
+  [ drop 1 ]
+  if
+] ;
