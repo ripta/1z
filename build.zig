@@ -135,4 +135,56 @@ pub fn build(b: *std.Build) void {
     }
 
     update_golden_step.dependOn(&update_files.step);
+
+    // Formatter tests
+    const fmt_test_step = b.step("fmt-test", "Run formatter tests");
+    const update_fmt_golden_step = b.step("update-fmt-golden", "Update golden files for formatter tests");
+    var update_fmt_files = b.addUpdateSourceFiles();
+
+    // Dynamically discover and run all .txt files in tests/formatting/
+    var fmt_test_dir = b.build_root.handle.openDir("tests/formatting", .{ .iterate = true }) catch |err| {
+        std.debug.print("Warning: Could not open tests/formatting: {}\n", .{err});
+        return;
+    };
+    defer fmt_test_dir.close();
+
+    var fmt_iter = fmt_test_dir.iterate();
+    while (fmt_iter.next() catch null) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".txt")) continue;
+
+        const name_without_ext = entry.name[0 .. entry.name.len - 4];
+        const input_path = b.fmt("tests/formatting/{s}", .{entry.name});
+        const golden_path = b.fmt("tests/formatting/{s}.golden", .{name_without_ext});
+
+        // Formatter test: run formatter and compare against golden file
+        const fmt_run = b.addRunArtifact(exe);
+        fmt_run.addArg("fmt");
+        fmt_run.addArg("--stdout");
+        fmt_run.addFileArg(b.path(input_path));
+
+        // Try to read golden file for comparison
+        if (fmt_test_dir.openFile(b.fmt("{s}.golden", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            const golden_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            // Track the golden file as a dependency
+            fmt_run.addFileInput(b.path(golden_path));
+            fmt_run.expectStdOutEqual(golden_content);
+        } else |_| {
+            std.debug.print("Warning: No golden file for {s}\n", .{entry.name});
+        }
+
+        fmt_run.expectStdErrEqual("");
+        fmt_run.expectExitCode(0);
+        fmt_test_step.dependOn(&fmt_run.step);
+
+        // Update golden: capture stdout and write to .golden file
+        const update_fmt_run = b.addRunArtifact(exe);
+        update_fmt_run.addArg("fmt");
+        update_fmt_run.addArg("--stdout");
+        update_fmt_run.addFileArg(b.path(input_path));
+        update_fmt_files.addCopyFileToSource(update_fmt_run.captureStdOut(), golden_path);
+    }
+
+    update_fmt_golden_step.dependOn(&update_fmt_files.step);
 }

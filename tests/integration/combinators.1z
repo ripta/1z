@@ -23,7 +23,6 @@ dup 1 #nth 21 = [ "PASS: array #map increment second" print ] [ "FAIL: array #ma
 \ Test #map on single element array
 { 5 } [ 3 * ] #map 0 #nth 15 = [ "PASS: single element #map" print ] [ "FAIL: single element #map" print ] if
 
-
 \ #filter tests
 \ -------------
 
@@ -54,7 +53,6 @@ drop
 
 \ Test #filter on string - keep non-'x' characters
 "xyzxyz" [ "x" = not ] #filter "yzyz" = [ "PASS: string #filter exclude" print ] [ "FAIL: string #filter exclude" print ] if
-
 
 \ #reduce tests
 \ -------------
