@@ -70,6 +70,12 @@ pub const Context = struct {
     /// Module whose deps frame should be pushed for the tail call target.
     /// Set alongside tail_call_instructions when the tail-called word has a source_module.
     tail_call_module: ?*const value_mod.Module = null,
+    /// Directory of the currently executing source file for relative path resolution
+    current_source_dir: ?[]const u8 = null,
+    /// User-configured load paths for search-mode module resolution
+    load_paths: std.ArrayListUnmanaged([]const u8) = .{},
+    /// Standard library path, which is resolved last
+    stdlib_path: ?[]const u8 = null,
     /// Program arguments passed after the file path on the command line
     program_args: []const []const u8 = &.{},
     /// Target frame index for `import` to write definitions into.
@@ -161,6 +167,7 @@ pub const Context = struct {
         self.local_frames.deinit(self.allocator);
         self.call_stack.deinit(self.allocator);
         self.error_details.deinit(self.allocator);
+        self.load_paths.deinit(self.allocator);
         self.module_cache.deinit(self.arena.allocator());
         self.arena.deinit();
         self.dictionary.deinit();

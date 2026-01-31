@@ -127,8 +127,11 @@ read-line: ( -- str/f ) [ input-stream get stream-read-line ] ;
 .: ( a -- ) [ to-string print-line ] ;
 
 \ Module loading
-\   use "file.1z" ;
-\   use { word1: word2: } "file.1z" ;
+\   from search path:  use "testing" ;
+\   by file path:      use "file.1z" ;
+\                      use "./file.1z" ;
+\                      use "path/to/file.1z" ;
+\   selective words:   use { word1: word2: } "file.1z" ;
 use: parse-time [
   parse-literal
   dup string?

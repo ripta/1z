@@ -1,8 +1,8 @@
 \ lib/grid.1z - Grid data structure and printing
 
-use "lib/ranges.1z" ;
-use "lib/strings.1z" ;
-use "lib/sequences.1z" ;
+use "ranges" ;
+use "strings" ;
+use "sequences" ;
 
 grid: struct{ width height marks mark-char empty-char } ;
 

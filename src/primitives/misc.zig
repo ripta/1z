@@ -21,6 +21,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "1array", .stack_effect = "elem -- array", .func = native1Array },
     .{ .name = "command-line-args", .stack_effect = "-- args", .func = nativeCommandLineArgs },
     .{ .name = "sys-exit", .stack_effect = "code --", .func = nativeSysExit },
+    .{ .name = "add-load-path", .stack_effect = "path --", .func = nativeAddLoadPath },
 };
 
 /// help ( symbol -- ) - Display help for a word
@@ -50,6 +51,58 @@ fn nativeHelp(ctx: *Context) anyerror!void {
     try stdout.interface.flush();
 }
 
+/// Check for if input refers to a file (contains '/' or ends with '.1z'),
+/// or if it is a bare name to search for in load paths.
+fn isPathMode(filename: []const u8) bool {
+    return std.mem.indexOfScalar(u8, filename, '/') != null or
+        std.mem.endsWith(u8, filename, ".1z");
+}
+
+/// Try to resolve a file in a given directory. Returns the absolute path if the file
+/// exists, or null otherwise.
+fn resolveInDir(alloc: std.mem.Allocator, dir: []const u8, name: []const u8) ?[]const u8 {
+    const joined = std.fs.path.join(alloc, &.{ dir, name }) catch return null;
+    defer alloc.free(joined);
+
+    const canonical = std.fs.cwd().realpathAlloc(alloc, joined) catch {
+        return null;
+    };
+    return canonical;
+}
+
+/// Resolve a load path according to path mode vs search mode rules.
+///
+/// Returns the resolved absolute path, or null if not found.
+/// Auto-append .1z, search configured paths only.
+/// Use path mode ("./foo.1z") for relative imports.
+fn resolveLoadPath(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator) ?[]const u8 {
+    if (isPathMode(filename)) {
+        if (std.fs.path.isAbsolute(filename)) {
+            return std.fs.cwd().realpathAlloc(alloc, filename) catch null;
+        }
+
+        const base_dir = ctx.current_source_dir orelse ".";
+        return resolveInDir(alloc, base_dir, filename);
+    }
+
+    const name_with_ext = std.fmt.allocPrint(alloc, "{s}.1z", .{filename}) catch return null;
+    defer alloc.free(name_with_ext);
+
+    for (ctx.load_paths.items) |lp| {
+        if (resolveInDir(alloc, lp, name_with_ext)) |resolved| {
+            return resolved;
+        }
+    }
+
+    if (ctx.stdlib_path) |sp| {
+        if (resolveInDir(alloc, sp, name_with_ext)) |resolved| {
+            return resolved;
+        }
+    }
+
+    return null;
+}
+
 /// load ( filename -- module ) - Load a 1z source file and return a module with its definitions
 ///
 /// Caches loaded modules by canonical file path to avoid redundant loads, so that
@@ -58,21 +111,30 @@ fn nativeLoad(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const filename = try popString(ctx);
-    const canon = std.fs.cwd().realpathAlloc(alloc, filename) catch {
-        return nativeLoadImpl(ctx, filename, alloc, filename);
+    const resolved = resolveLoadPath(ctx, filename, alloc) orelse {
+        const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
+        ctx.error_details.append(ctx.allocator, .{
+            .error_type = "FileNotFound",
+            .message = msg,
+            .source = ctx.current_source,
+            .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
+            .word_name = "load",
+        }) catch {};
+
+        return error.FileNotFound;
     };
 
     // XXX(ripta): Module cache hit - side-effects won't run again.
     //             Is this okay? It better be.
-    if (ctx.module_cache.get(canon)) |cached_module| {
+    if (ctx.module_cache.get(resolved)) |cached_module| {
         return try ctx.stack.push(.{ .module = cached_module });
     }
 
-    return nativeLoadImpl(ctx, filename, alloc, canon);
+    return nativeLoadImpl(ctx, filename, alloc, resolved);
 }
 
-fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator, canon: []const u8) anyerror!void {
-    const file = std.fs.cwd().openFile(filename, .{}) catch {
+fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator, resolved: []const u8) anyerror!void {
+    const file = std.fs.cwd().openFile(resolved, .{}) catch {
         // Add error context for FileNotFound
         const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
         ctx.error_details.append(ctx.allocator, .{
@@ -89,6 +151,11 @@ fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator,
     const old_source = ctx.current_source;
     ctx.current_source = filename;
     defer ctx.current_source = old_source;
+
+    // Save/restore current_source_dir around file execution
+    const old_source_dir = ctx.current_source_dir;
+    ctx.current_source_dir = std.fs.path.dirname(resolved);
+    defer ctx.current_source_dir = old_source_dir;
 
     var file_buf: [4096]u8 = undefined;
     var reader = file.reader(&file_buf);
@@ -184,7 +251,7 @@ fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator,
         }
     }
 
-    ctx.module_cache.put(alloc, canon, module) catch {};
+    ctx.module_cache.put(alloc, resolved, module) catch {};
     ctx.popLocalFrame();
     try ctx.stack.push(.{ .module = module });
 }
@@ -284,6 +351,13 @@ fn nativeCommandLineArgs(ctx: *Context) anyerror!void {
 fn nativeSysExit(ctx: *Context) anyerror!void {
     const code = try helpers.popInteger(ctx);
     std.process.exit(@intCast(code));
+}
+
+/// add-load-path ( path -- ) - Add a directory to the load path search list
+fn nativeAddLoadPath(ctx: *Context) anyerror!void {
+    const path = try popString(ctx);
+    const duped = ctx.quotationAllocator().dupe(u8, path) catch return error.OutOfMemory;
+    ctx.load_paths.append(ctx.allocator, duped) catch return error.OutOfMemory;
 }
 
 /// 1array ( elem -- array ) - Wrap element in single-element array

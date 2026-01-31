@@ -1,6 +1,6 @@
 \ lib/strings.1z - String manipulation utilities
 
-use "lib/sequences.1z" ;
+use "sequences" ;
 
 \ Find first index of substring in string, or -1 if not found
 \

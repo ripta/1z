@@ -23,6 +23,15 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    // zig-out/lib -> lib/
+    //
+    // TODO(ripta): A bit hacky, but otherwise the stdlib path has to be
+    //              specified manually on every invocation.
+    const symlink_step = b.addSystemCommand(&.{ "ln", "-sfn" });
+    symlink_step.addDirectoryArg(b.path("lib"));
+    symlink_step.addArg(b.fmt("{s}/lib", .{b.install_path}));
+    b.getInstallStep().dependOn(&symlink_step.step);
+
     // zig-out/docs
     const docs = b.addInstallDirectory(.{
         .source_dir = exe.getEmittedDocs(),
@@ -86,6 +95,7 @@ pub fn build(b: *std.Build) void {
         // Integration test: compare against golden file if it exists
         const test_run = b.addRunArtifact(exe);
         test_run.addArg("--show-stack");
+        test_run.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
         test_run.addFileArg(b.path(file_path));
 
         // Library file dependencies
@@ -139,6 +149,7 @@ pub fn build(b: *std.Build) void {
         // Update golden: capture stdout and write to .stdout.golden file
         const update_run = b.addRunArtifact(exe);
         update_run.addArg("--show-stack");
+        update_run.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
         update_run.addFileArg(b.path(file_path));
 
         // Library file dependencies

@@ -1,8 +1,8 @@
 \ lib/flags.1z - Declarative CLI flag parsing
 \
 \ Usage:
-\   use "lib/flags.1z" ;
-\   use "lib/conversions.1z" ;
+\   use flags ;
+\   use conversions ;
 \
 \   help: flag{ description: "Show help" short: "h" } ;
 \   number: required positional flag{ type: integer: description: "Number to check" } ;
@@ -10,9 +10,9 @@
 \   command-line-args "Check if a number is prime." parse-flags
 \   "number" @get ...
 
-use "lib/conversions.1z" ;
-use "lib/strings.1z" ;
-use "lib/sequences.1z" ;
+use "conversions" ;
+use "strings" ;
+use "sequences" ;
 
 \ Markers
 required: marker ;

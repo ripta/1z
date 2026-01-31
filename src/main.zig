@@ -78,6 +78,11 @@ pub fn main() u8 {
     var program_args: std.ArrayListUnmanaged([]const u8) = .{};
     defer program_args.deinit(gpa_allocator);
 
+    var cli_load_paths: std.ArrayListUnmanaged([]const u8) = .{};
+    defer cli_load_paths.deinit(gpa_allocator);
+
+    var cli_stdlib_path: ?[]const u8 = null;
+
     // TODO(ripta): bit hacky arg parsing, improve later?
     for (args[1..]) |arg| {
         if (file_path != null) {
@@ -105,6 +110,11 @@ pub fn main() u8 {
                 stderr.interface.flush() catch {};
                 return 1;
             }
+        } else if (std.mem.startsWith(u8, arg, "--load-path=")) {
+            const value = arg["--load-path=".len..];
+            cli_load_paths.append(gpa_allocator, value) catch return 1;
+        } else if (std.mem.startsWith(u8, arg, "--stdlib-path=")) {
+            cli_stdlib_path = arg["--stdlib-path=".len..];
         } else {
             file_path = arg;
         }
@@ -139,6 +149,41 @@ pub fn main() u8 {
     var ctx = Context.init(allocator);
     ctx.program_args = program_args.items;
     defer ctx.deinit();
+
+    // Configure load paths: CLI flags, then env var
+    for (cli_load_paths.items) |lp| {
+        const duped = ctx.quotationAllocator().dupe(u8, lp) catch return 1;
+        ctx.load_paths.append(ctx.allocator, duped) catch return 1;
+    }
+    if (std.posix.getenv("ONEZ_LOAD_PATH")) |env_val| {
+        var it = std.mem.splitScalar(u8, env_val, ':');
+        while (it.next()) |segment| {
+            if (segment.len > 0) {
+                const duped = ctx.quotationAllocator().dupe(u8, segment) catch return 1;
+                ctx.load_paths.append(ctx.allocator, duped) catch return 1;
+            }
+        }
+    }
+
+    // Configure stdlib path: CLI flag, then env var, then default relative to binary
+    if (cli_stdlib_path) |sp| {
+        ctx.stdlib_path = ctx.quotationAllocator().dupe(u8, sp) catch return 1;
+    } else if (std.posix.getenv("ONEZ_STDLIB")) |env_val| {
+        ctx.stdlib_path = ctx.quotationAllocator().dupe(u8, env_val) catch return 1;
+    } else {
+        // TODO(ripta): more robust way to find default stdlib path?
+        //              Defaults to <bin_dir>/../lib
+        var self_exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+        if (std.fs.selfExeDirPath(&self_exe_buf)) |exe_dir| {
+            const default_lib = std.fs.path.join(ctx.quotationAllocator(), &.{ exe_dir, "../lib" }) catch null;
+            if (default_lib) |lib_path| {
+                var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+                if (std.fs.cwd().realpath(lib_path, &real_buf)) |real| {
+                    ctx.stdlib_path = ctx.quotationAllocator().dupe(u8, real) catch null;
+                } else |_| {}
+            }
+        } else |_| {}
+    }
 
     if (bench_config.enabled) {
         ctx.benchmark = &bench_stats;
@@ -439,6 +484,18 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
         }
         break :blk file_path;
     } else |_| file_path;
+
+    // Set current_source_dir for relative path resolution in load/use
+    var abs_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (std.fs.cwd().realpath(file_path, &abs_buf)) |abs_path| {
+        if (std.fs.path.dirname(abs_path)) |dir| {
+            ctx.current_source_dir = ctx.quotationAllocator().dupe(u8, dir) catch null;
+        }
+    } else |_| {
+        if (std.fs.path.dirname(file_path)) |dir| {
+            ctx.current_source_dir = dir;
+        }
+    }
 
     var file_buf: [4096]u8 = undefined;
     var reader = file.reader(&file_buf);
