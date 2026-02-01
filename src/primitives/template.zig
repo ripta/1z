@@ -5,11 +5,17 @@ const value_mod = @import("../value.zig");
 const FormatSpec = value_mod.FormatSpec;
 const TemplateSegment = value_mod.TemplateSegment;
 
+const Value = value_mod.Value;
+const StructInstance = value_mod.StructInstance;
+const HashTable = value_mod.HashTable;
+const MutableMap = value_mod.MutableMap;
+
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 
 pub const primitives = [_]Primitive{
     .{ .name = "template", .stack_effect = "string -- template", .func = nativeTemplate },
+    .{ .name = "interpolate", .stack_effect = "source template -- string", .func = nativeInterpolate },
 };
 
 /// template ( string -- template ) - Parse format string into template value
@@ -19,6 +25,116 @@ fn nativeTemplate(ctx: *Context) anyerror!void {
 
     const segments = try parseTemplate(alloc, input);
     try ctx.stack.push(.{ .template = segments });
+}
+
+/// interpolate ( source template -- string ) - Apply template to source value
+fn nativeInterpolate(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const val = try ctx.stack.pop();
+    const segments = switch (val) {
+        .template => |t| t,
+        else => return error.TypeError,
+    };
+    const source = try ctx.stack.pop();
+
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    const writer = buf.writer(alloc);
+
+    for (segments) |seg| {
+        switch (seg) {
+            .literal => |text| {
+                writer.writeAll(text) catch return error.OutOfMemory;
+            },
+            .identity => |spec| {
+                const str = try valueToString(alloc, source);
+                try appendFormatted(writer, str, spec);
+            },
+            .named => |n| {
+                const field_val = try lookupNamed(source, n.name);
+                const str = try valueToString(alloc, field_val);
+                try appendFormatted(writer, str, n.spec);
+            },
+            .indexed => |idx| {
+                const elem = try lookupIndexed(source, idx.index);
+                const str = try valueToString(alloc, elem);
+                try appendFormatted(writer, str, idx.spec);
+            },
+        }
+    }
+
+    try ctx.stack.push(.{ .string = buf.toOwnedSlice(alloc) catch return error.OutOfMemory });
+}
+
+/// Convert a value to its unquoted string representation, like `>string`
+/// but without pushing to the stack.
+fn valueToString(alloc: Allocator, val: Value) ![]const u8 {
+    return switch (val) {
+        .string => |s| s,
+        else => {
+            var buffer: std.ArrayListUnmanaged(u8) = .{};
+            val.write(buffer.writer(alloc)) catch return error.OutOfMemory;
+            return buffer.toOwnedSlice(alloc) catch return error.OutOfMemory;
+        },
+    };
+}
+
+/// Look up a named field on a struct instance, hash, or mutable map.
+fn lookupNamed(source: Value, name: []const u8) !Value {
+    switch (source) {
+        .struct_instance => |si| {
+            for (si.struct_type.fields, 0..) |field, i| {
+                if (std.mem.eql(u8, field, name)) {
+                    return si.fields[i];
+                }
+            }
+            return error.KeyNotFound;
+        },
+        .hash => |h| {
+            return h.get(name) orelse return error.KeyNotFound;
+        },
+        .mutable_map => |m| {
+            return m.get(name) orelse return error.KeyNotFound;
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// Look up an indexed element on an array.
+fn lookupIndexed(source: Value, index: usize) !Value {
+    switch (source) {
+        .array => |arr| {
+            if (index >= arr.len) return error.IndexOutOfBounds;
+            return arr[index];
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// Append a string to the writer, applying format spec padding.
+fn appendFormatted(writer: anytype, str: []const u8, spec: FormatSpec) !void {
+    const width = spec.width orelse {
+        writer.writeAll(str) catch return error.OutOfMemory;
+        return;
+    };
+
+    if (str.len >= width) {
+        writer.writeAll(str) catch return error.OutOfMemory;
+        return;
+    }
+
+    const padding = width - str.len;
+    if (spec.align_left) {
+        writer.writeAll(str) catch return error.OutOfMemory;
+        for (0..padding) |_| {
+            writer.writeByte(spec.fill) catch return error.OutOfMemory;
+        }
+    } else {
+        for (0..padding) |_| {
+            writer.writeByte(spec.fill) catch return error.OutOfMemory;
+        }
+        writer.writeAll(str) catch return error.OutOfMemory;
+    }
 }
 
 /// Parse a format string into an array of template segments.
@@ -269,4 +385,90 @@ test "unmatched close brace is error" {
 test "unknown format spec key is error" {
     const result = parseTemplate(test_alloc, "{name:bogus=1}");
     try testing.expectError(error.TypeError, result);
+}
+
+test "valueToString passes strings through" {
+    const result = try valueToString(test_alloc, .{ .string = "hello" });
+    try testing.expectEqualStrings("hello", result);
+}
+
+test "valueToString converts integer" {
+    const result = try valueToString(test_alloc, .{ .integer = 42 });
+    defer test_alloc.free(result);
+    try testing.expectEqualStrings("42", result);
+}
+
+test "valueToString converts boolean" {
+    const result = try valueToString(test_alloc, .{ .boolean = true });
+    defer test_alloc.free(result);
+    try testing.expectEqualStrings("t", result);
+}
+
+test "lookupNamed on hash" {
+    var h = HashTable{};
+    defer h.deinit(test_alloc);
+    try h.put(test_alloc, "x", .{ .integer = 10 });
+    const val = try lookupNamed(.{ .hash = &h }, "x");
+    try testing.expectEqual(Value{ .integer = 10 }, val);
+}
+
+test "lookupNamed on hash missing key" {
+    var h = HashTable{};
+    defer h.deinit(test_alloc);
+    try h.put(test_alloc, "x", .{ .integer = 10 });
+    const result = lookupNamed(.{ .hash = &h }, "y");
+    try testing.expectError(error.KeyNotFound, result);
+}
+
+test "lookupNamed on array is TypeError" {
+    const arr = &[_]Value{.{ .integer = 1 }};
+    const result = lookupNamed(.{ .array = arr }, "x");
+    try testing.expectError(error.TypeError, result);
+}
+
+test "lookupIndexed on array" {
+    const arr = &[_]Value{ .{ .integer = 10 }, .{ .integer = 20 } };
+    const val = try lookupIndexed(.{ .array = arr }, 1);
+    try testing.expectEqual(Value{ .integer = 20 }, val);
+}
+
+test "lookupIndexed out of bounds" {
+    const arr = &[_]Value{.{ .integer = 10 }};
+    const result = lookupIndexed(.{ .array = arr }, 5);
+    try testing.expectError(error.IndexOutOfBounds, result);
+}
+
+test "lookupIndexed on hash is TypeError" {
+    var h = HashTable{};
+    defer h.deinit(test_alloc);
+    const result = lookupIndexed(.{ .hash = &h }, 0);
+    try testing.expectError(error.TypeError, result);
+}
+
+test "appendFormatted no spec" {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(test_alloc);
+    try appendFormatted(buf.writer(test_alloc), "hello", .{});
+    try testing.expectEqualStrings("hello", buf.items);
+}
+
+test "appendFormatted right-align with fill" {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(test_alloc);
+    try appendFormatted(buf.writer(test_alloc), "3", .{ .width = 4, .fill = '0' });
+    try testing.expectEqualStrings("0003", buf.items);
+}
+
+test "appendFormatted left-align with fill" {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(test_alloc);
+    try appendFormatted(buf.writer(test_alloc), "hi", .{ .width = 6, .fill = '.', .align_left = true });
+    try testing.expectEqualStrings("hi....", buf.items);
+}
+
+test "appendFormatted no padding when value exceeds width" {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(test_alloc);
+    try appendFormatted(buf.writer(test_alloc), "longstring", .{ .width = 3 });
+    try testing.expectEqualStrings("longstring", buf.items);
 }

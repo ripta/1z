@@ -1,0 +1,31 @@
+\ Tests for fmt and fmt-line convenience words
+
+use "testing" ;
+
+"fmt convenience word" test-section
+
+\ fmt with hash
+H{ item: "widget" qty: 5 }
+"Order: {qty}x {item}" fmt "Order: 5x widget" "fmt with hash" assert=
+
+\ fmt with identity placeholder
+42 "The answer is {}." fmt "The answer is 42." "fmt with identity" assert=
+
+\ fmt with array
+{ "Alice" "Bob" }
+"{0} and {1}" fmt "Alice and Bob" "fmt with array" assert=
+
+\ fmt with struct
+person: struct{ first last } ;
+"Bob" "Jones" make-person
+"Greetings, {first} {last}." fmt "Greetings, Bob Jones." "fmt with struct" assert=
+
+\ fmt with format specifiers
+H{ n: 7 }
+"{n:width=3,fill=0}" fmt "007" "fmt with format spec" assert=
+
+"fmt-line convenience word" test-section
+
+\ fmt-line outputs to stdout (prints without quotes, followed by newline)
+"Alice" "Smith" make-person
+"Hello, {first} {last}!" fmt-line

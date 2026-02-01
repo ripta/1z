@@ -159,3 +159,7 @@ do: ( pred body -- pred body ) [ dup 2dip ] ;
 loop: ( ... pred: ( ... -- ... ? ) -- ... ) [
   [ call ] keep [ loop ] curry when
 ] ;
+
+\ String formatting
+fmt: ( source string -- string ) [ template interpolate ] ;
+fmt-line: ( source string -- ) [ fmt print-line ] ;

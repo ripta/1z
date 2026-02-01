@@ -1,0 +1,22 @@
+=== fmt convenience word ===
+Stack: [ ]
+Stack: [ H{ item: "widget" qty: 5 } ]
+PASS: fmt with hash
+Stack: [ ]
+PASS: fmt with identity
+Stack: [ ]
+Stack: [ { "Alice" "Bob" } ]
+PASS: fmt with array
+Stack: [ ]
+Stack: [ ]
+Stack: [ person{ first: "Bob" last: "Jones" } ]
+PASS: fmt with struct
+Stack: [ ]
+Stack: [ H{ n: 7 } ]
+PASS: fmt with format spec
+Stack: [ ]
+=== fmt-line convenience word ===
+Stack: [ ]
+Stack: [ person{ first: "Alice" last: "Smith" } ]
+Hello, Alice Smith!
+Stack: [ ]

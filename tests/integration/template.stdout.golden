@@ -1,26 +1,87 @@
-T"Hello {name}!"
+=== template parsing ===
 Stack: [ ]
-T"Hello {name}!"
+PASS: type-of is template:
 Stack: [ ]
-T"{0} + {1}"
+PASS: identity template type
 Stack: [ ]
-T"value={}"
+PASS: empty template type
 Stack: [ ]
-T"hello world"
+PASS: literal-only template type
 Stack: [ ]
-T"\{literal\}"
+=== template parse errors ===
 Stack: [ ]
-T"{name:width=2,fill=0}"
+PASS: unmatched open brace
 Stack: [ ]
-template:
+PASS: unmatched close brace
 Stack: [ ]
-T""
+=== interpolate identity ===
 Stack: [ ]
-T"{city}, {state}"
+PASS: identity with integer
 Stack: [ ]
-T"{first}{last}"
+PASS: identity with string
 Stack: [ ]
-<error TypeError: TypeError [tests/integration/template.1z:37:template <- tests/integration/template.1z:37:recover]>
+PASS: identity with true
 Stack: [ ]
-<error TypeError: TypeError [tests/integration/template.1z:40:template <- tests/integration/template.1z:40:recover]>
+PASS: identity with false
+Stack: [ ]
+=== interpolate named (hash) ===
+Stack: [ ]
+Stack: [ H{ city: "Portland" state: "OR" } ]
+PASS: hash named lookup
+Stack: [ ]
+Stack: [ H{ x: 42 } ]
+PASS: hash single named
+Stack: [ ]
+=== interpolate indexed (array) ===
+Stack: [ ]
+Stack: [ { 10 20 30 } ]
+PASS: array indexed lookup
+Stack: [ ]
+Stack: [ { "hello" } ]
+PASS: array single indexed
+Stack: [ ]
+=== interpolate named (struct) ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ person{ first: "Alice" last: "Smith" } ]
+PASS: struct named lookup
+Stack: [ ]
+=== format specifiers ===
+Stack: [ ]
+Stack: [ H{ day: 9 month: 3 } ]
+PASS: zero-pad width
+Stack: [ ]
+Stack: [ H{ name: "hi" } ]
+PASS: left-align dot fill
+Stack: [ ]
+Stack: [ H{ x: 42 } ]
+PASS: right-align space fill
+Stack: [ ]
+Stack: [ H{ val: "hello" } ]
+PASS: width smaller than value
+Stack: [ ]
+PASS: identity with format spec
+Stack: [ ]
+=== interpolate error cases ===
+Stack: [ ]
+PASS: named on array
+Stack: [ ]
+PASS: indexed on hash
+Stack: [ ]
+PASS: missing key
+Stack: [ ]
+PASS: index out of bounds
+Stack: [ ]
+=== interpolate edge cases ===
+Stack: [ ]
+PASS: literal-only ignores source
+Stack: [ ]
+PASS: escaped braces in output
+Stack: [ ]
+PASS: empty template produces empty string
+Stack: [ ]
+Stack: [ H{ b: "Y" a: "X" } ]
+PASS: adjacent placeholders
+Stack: [ ]
+PASS: multiple identity placeholders
 Stack: [ ]
