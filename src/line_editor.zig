@@ -39,6 +39,7 @@ pub const LineEditor = struct {
     saved_buf: [4096]u8 = undefined,
     saved_len: usize = 0,
     dictionary: ?*Dictionary = null,
+    last_was_tab: bool = false,
 
     /// Initialize the LineEditor by saving the current terminal settings and switching to raw mode.
     pub fn init(allocator: std.mem.Allocator) !LineEditor {
@@ -156,6 +157,9 @@ pub const LineEditor = struct {
 
         while (true) {
             const key = readKey();
+            const is_tab = key == .tab;
+            defer self.last_was_tab = is_tab;
+
             switch (key) {
                 .char => |c| {
                     insertChar(self, c);
@@ -234,7 +238,11 @@ pub const LineEditor = struct {
                     self.refreshLine();
                 },
                 .tab => {
-                    self.tabComplete();
+                    if (self.last_was_tab) {
+                        self.showCompletions();
+                    } else {
+                        self.tabComplete();
+                    }
                     self.refreshLine();
                 },
                 .unknown => {},
@@ -371,6 +379,92 @@ pub const LineEditor = struct {
         }
 
         _ = std.posix.write(std.posix.STDOUT_FILENO, "\x07") catch {};
+    }
+
+    /// Display all matching completions below the current line on second consecutive Tab.
+    /// Matches are sorted alphabetically and displayed in columns; truncated to 20 entries.
+    fn showCompletions(self: *LineEditor) void {
+        const dict = self.dictionary orelse return;
+
+        var token_start = self.cursor;
+        while (token_start > 0 and self.buf[token_start - 1] != ' ') {
+            token_start -= 1;
+        }
+
+        const prefix = self.buf[token_start..self.cursor];
+        if (prefix.len == 0) return;
+
+        const max_collect = 256;
+        var matches_buf: [max_collect][]const u8 = undefined;
+        var match_count: usize = 0;
+
+        var iter = dict.entries.iterator();
+        while (iter.next()) |entry| {
+            const name = entry.key_ptr.*;
+            if (name.len >= prefix.len and std.mem.eql(u8, name[0..prefix.len], prefix)) {
+                if (match_count < max_collect) {
+                    matches_buf[match_count] = name;
+                    match_count += 1;
+                }
+            }
+        }
+
+        if (match_count == 0) return;
+
+        const matches = matches_buf[0..match_count];
+        std.mem.sort([]const u8, matches, {}, struct {
+            fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.order(u8, a, b) == .lt;
+            }
+        }.lessThan);
+
+        const term_width = getTerminalWidth();
+
+        var max_word_len: usize = 0;
+        const display_count = @min(match_count, 20);
+        for (matches[0..display_count]) |m| {
+            if (m.len > max_word_len) max_word_len = m.len;
+        }
+        const col_width = max_word_len + 2; // 2 spaces padding
+        const num_cols = @max(term_width / col_width, 1);
+
+        var out_buf: [8192]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&out_buf);
+        const writer = stream.writer();
+
+        writer.writeAll("\r\n") catch return;
+        for (matches[0..display_count], 0..) |m, i| {
+            writer.writeAll(m) catch return;
+            if ((i + 1) % num_cols == 0 or i + 1 == display_count) {
+                writer.writeAll("\r\n") catch return;
+            } else {
+                // Pad to column width
+                const padding = col_width - m.len;
+                var p: usize = 0;
+                while (p < padding) : (p += 1) {
+                    writer.writeAll(" ") catch return;
+                }
+            }
+        }
+
+        if (match_count > 20) {
+            std.fmt.format(writer, "... and {d} more\r\n", .{match_count - 20}) catch {};
+        }
+
+        const data = stream.getWritten();
+        _ = std.posix.write(std.posix.STDOUT_FILENO, data) catch {};
+    }
+
+    fn getTerminalWidth() usize {
+        if (!@hasDecl(std.posix.system, "winsize")) {
+            var ws: std.posix.system.winsize = undefined;
+            const rc = std.posix.system.ioctl(std.posix.STDOUT_FILENO, std.posix.system.T.IOCGWINSZ, @intFromPtr(&ws));
+            if (rc == 0 and ws.col > 0) {
+                return ws.col;
+            }
+        }
+
+        return 80;
     }
 
     /// Refresh the displayed line on screen.
