@@ -70,6 +70,60 @@ pub const LineEditor = struct {
         std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.original_termios) catch {};
     }
 
+    /// Resolve the history file path. Returns null if no path can be determined.
+    /// Up to the caller to free the returned slice.
+    ///
+    /// Prioritize $ONEZ_HISTFILE if set, otherwise $XDG_STATE_HOME/1z/history, and
+    /// lastly ~/.local/state/1z/history (the default).
+    pub fn resolveHistoryPath(self: *LineEditor) ?[]u8 {
+        if (std.posix.getenv("ONEZ_HISTFILE")) |path| {
+            return self.allocator.dupe(u8, path) catch null;
+        }
+
+        if (std.posix.getenv("XDG_STATE_HOME")) |xdg| {
+            return std.fs.path.join(self.allocator, &.{ xdg, "1z", "history" }) catch null;
+        }
+
+        const home = std.posix.getenv("HOME") orelse return null;
+        return std.fs.path.join(self.allocator, &.{ home, ".local", "state", "1z", "history" }) catch null;
+    }
+
+    /// Load history from a file. One entry per line. Silently ignores all errors.
+    pub fn loadHistory(self: *LineEditor, path: []const u8) void {
+        const file = std.fs.cwd().openFile(path, .{}) catch return;
+        defer file.close();
+
+        var read_buf: [4096]u8 = undefined;
+        var reader = file.reader(&read_buf);
+        while (true) {
+            const line = reader.interface.takeDelimiterInclusive('\n') catch return;
+            const trimmed = std.mem.trimRight(u8, line, "\r\n");
+            if (trimmed.len > 0) {
+                self.addHistory(trimmed);
+            }
+        }
+    }
+
+    /// Save history to a file. One entry per line. Creates parent directory if needed.
+    /// Silently ignores all errors.
+    pub fn saveHistory(self: *LineEditor, path: []const u8) void {
+        if (std.fs.path.dirname(path)) |dir| {
+            std.fs.cwd().makePath(dir) catch {};
+        }
+
+        const file = std.fs.cwd().createFile(path, .{}) catch return;
+        defer file.close();
+
+        var write_buf: [4096]u8 = undefined;
+        var writer = file.writer(&write_buf);
+        for (self.history.items) |entry| {
+            writer.interface.writeAll(entry) catch return;
+            writer.interface.writeAll("\n") catch return;
+        }
+
+        writer.interface.flush() catch {};
+    }
+
     /// Add a line to history. Skips empty lines and consecutive duplicates.
     pub fn addHistory(self: *LineEditor, line: []const u8) void {
         if (line.len == 0) return;

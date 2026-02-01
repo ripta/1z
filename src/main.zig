@@ -416,6 +416,13 @@ fn replInteractive(ctx: *Context, writer: anytype) void {
     };
     defer editor.deinit();
 
+    const history_path = editor.resolveHistoryPath();
+    defer if (history_path) |p| editor.allocator.free(p);
+
+    if (history_path) |path| {
+        editor.loadHistory(path);
+    }
+
     var processor: StatementProcessor = .{};
     var repl_line: usize = 0;
     while (true) {
@@ -428,6 +435,9 @@ fn replInteractive(ctx: *Context, writer: anytype) void {
         };
 
         const line = maybe_line orelse {
+            if (history_path) |path| {
+                editor.saveHistory(path);
+            }
             writer.writeAll("Goodbye!\n") catch {};
             writer.flush() catch {};
             return;
