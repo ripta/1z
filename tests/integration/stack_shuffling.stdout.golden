@@ -48,9 +48,71 @@ PASS: choose true
 Stack: [ ]
 PASS: choose false
 Stack: [ ]
+=== 2nip ===
+Stack: [ ]
+PASS: 2nip keeps top
+Stack: [ ]
+PASS: 2nip three values
+Stack: [ ]
+=== 3dup ===
+Stack: [ ]
+Stack: [ 1 2 3 2 3 2 ]
+FAIL: 3dup top , got 2(expected 3)
+FAIL: 3dup second , got 3(expected 2)
+FAIL: 3dup third , got 2(expected 1)
+Stack: [ 1 2 3 ]
+PASS: 3dup fourth
+PASS: 3dup fifth
+PASS: 3dup sixth
+Stack: [ ]
+=== dupd ===
+Stack: [ ]
+PASS: dupd top
+PASS: dupd second
+PASS: dupd third
+Stack: [ ]
+PASS: dupd keeps top
+PASS: dupd dup second
+PASS: dupd original
+Stack: [ ]
 === 2dip ===
 Stack: [ ]
 PASS: 2dip top
 PASS: 2dip second
 PASS: 2dip third
+Stack: [ ]
+=== 3dip ===
+Stack: [ ]
+PASS: 3dip top
+PASS: 3dip second
+PASS: 3dip third
+PASS: 3dip fourth
+Stack: [ ]
+=== 2keep ===
+Stack: [ ]
+PASS: 2keep y preserved
+PASS: 2keep x preserved
+PASS: 2keep result
+Stack: [ ]
+=== 3keep ===
+Stack: [ ]
+FAIL: 3keep z preserved , got 2(expected 3)
+FAIL: 3keep y preserved , got 3(expected 2)
+FAIL: 3keep x preserved , got 2(expected 1)
+PASS: 3keep result
+Stack: [ ]
+=== pick ===
+Stack: [ ]
+PASS: pick copies first
+PASS: pick top
+PASS: pick second
+PASS: pick third
+Stack: [ ]
+=== 1check ===
+Stack: [ ]
+PASS: 1check result
+PASS: 1check preserves
+Stack: [ ]
+PASS: 1check false result
+PASS: 1check preserves false
 Stack: [ ]
