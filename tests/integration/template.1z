@@ -1,0 +1,40 @@
+\ Template parsing tests
+
+\ Basic template parsing - named placeholder
+"Hello {name}!" template .
+
+\ Direct display of template
+"Hello {name}!" template .
+
+\ Indexed placeholder
+"{0} + {1}" template .
+
+\ Identity placeholder
+"value={}" template .
+
+\ Literal only (no placeholders)
+"hello world" template .
+
+\ Escaped braces (double backslash to get literal backslash in the string)
+"\\{literal\\}" template .
+
+\ Format spec with width
+"{name:width=2,fill=0}" template .
+
+\ Type checking
+"test {x}" template type-of .
+
+\ Empty template
+"" template .
+
+\ Multiple named placeholders
+"{city}, {state}" template .
+
+\ Adjacent placeholders
+"{first}{last}" template .
+
+\ Error: unmatched open brace
+[ "{oops" template ] [ . ] recover
+
+\ Error: unmatched close brace
+[ "oops}" template ] [ . ] recover

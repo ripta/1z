@@ -1,0 +1,26 @@
+T"Hello {name}!"
+Stack: [ ]
+T"Hello {name}!"
+Stack: [ ]
+T"{0} + {1}"
+Stack: [ ]
+T"value={}"
+Stack: [ ]
+T"hello world"
+Stack: [ ]
+T"\{literal\}"
+Stack: [ ]
+T"{name:width=2,fill=0}"
+Stack: [ ]
+template:
+Stack: [ ]
+T""
+Stack: [ ]
+T"{city}, {state}"
+Stack: [ ]
+T"{first}{last}"
+Stack: [ ]
+<error TypeError: TypeError [tests/integration/template.1z:37:template <- tests/integration/template.1z:37:recover]>
+Stack: [ ]
+<error TypeError: TypeError [tests/integration/template.1z:40:template <- tests/integration/template.1z:40:recover]>
+Stack: [ ]

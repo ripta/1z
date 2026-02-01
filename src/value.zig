@@ -107,6 +107,27 @@ pub const StructType = struct {
     fields: []const []const u8, // Field names in order (e.g., ["x", "y"])
 };
 
+/// FormatSpec controls padding/alignment when rendering a template placeholder.
+pub const FormatSpec = struct {
+    width: ?usize = null,
+    fill: u8 = ' ',
+    align_left: bool = false,
+};
+
+/// TemplateSegment is one piece of a parsed template: either literal text or a placeholder.
+pub const TemplateSegment = union(enum) {
+    literal: []const u8,
+    identity: FormatSpec,
+    named: struct {
+        name: []const u8,
+        spec: FormatSpec,
+    },
+    indexed: struct {
+        index: usize,
+        spec: FormatSpec,
+    },
+};
+
 /// StructInstance represents an instance of a struct type.
 /// Created by make-NAME or >NAME words.
 pub const StructInstance = struct {
@@ -178,6 +199,21 @@ pub const ErrorObject = struct {
     }
 };
 
+fn formatSpecEql(a: FormatSpec, b: FormatSpec) bool {
+    return a.width == b.width and a.fill == b.fill and a.align_left == b.align_left;
+}
+
+fn templateSegmentEql(a: TemplateSegment, b: TemplateSegment) bool {
+    const Tag = std.meta.Tag(TemplateSegment);
+    if (@as(Tag, a) != @as(Tag, b)) return false;
+    return switch (a) {
+        .literal => |text| std.mem.eql(u8, text, b.literal),
+        .identity => |spec| formatSpecEql(spec, b.identity),
+        .named => |n| std.mem.eql(u8, n.name, b.named.name) and formatSpecEql(n.spec, b.named.spec),
+        .indexed => |idx| idx.index == b.indexed.index and formatSpecEql(idx.spec, b.indexed.spec),
+    };
+}
+
 fn instructionEql(a: Instruction, b: Instruction) bool {
     const Tag = std.meta.Tag(Instruction.Op);
     if (@as(Tag, a.op) != @as(Tag, b.op)) return false;
@@ -206,6 +242,57 @@ pub const Quotation = struct {
     }
 };
 
+fn writeTemplateSegment(writer: anytype, seg: TemplateSegment) !void {
+    // XXX(ripta): omg, ew
+    switch (seg) {
+        .literal => |text| {
+            for (text) |ch| {
+                if (ch == '{' or ch == '}' or ch == '"' or ch == '\\') {
+                    try writer.writeByte('\\');
+                }
+                try writer.writeByte(ch);
+            }
+        },
+        .identity => |spec| {
+            try writer.writeByte('{');
+            try writeFormatSpec(writer, spec);
+            try writer.writeByte('}');
+        },
+        .named => |n| {
+            try writer.writeByte('{');
+            try writer.writeAll(n.name);
+            try writeFormatSpec(writer, n.spec);
+            try writer.writeByte('}');
+        },
+        .indexed => |idx| {
+            try writer.writeByte('{');
+            try writer.print("{d}", .{idx.index});
+            try writeFormatSpec(writer, idx.spec);
+            try writer.writeByte('}');
+        },
+    }
+}
+
+fn writeFormatSpec(writer: anytype, spec: FormatSpec) !void {
+    const has_spec = spec.width != null or spec.fill != ' ' or spec.align_left;
+    if (!has_spec) return;
+    try writer.writeByte(':');
+    var need_comma = false;
+    if (spec.width) |w| {
+        try writer.print("width={d}", .{w});
+        need_comma = true;
+    }
+    if (spec.fill != ' ') {
+        if (need_comma) try writer.writeByte(',');
+        try writer.print("fill={c}", .{spec.fill});
+        need_comma = true;
+    }
+    if (spec.align_left) {
+        if (need_comma) try writer.writeByte(',');
+        try writer.writeAll("align=left");
+    }
+}
+
 /// Value represents any value that can be stored on the stack.
 pub const Value = union(enum) {
     integer: i64,
@@ -225,6 +312,7 @@ pub const Value = union(enum) {
     marker: *Marker,
     struct_type: *StructType,
     struct_instance: *StructInstance,
+    template: []const TemplateSegment,
     benchmark_report: *BenchmarkReport,
     stack_effect: StackEffect,
     parse_time_marker: void, // Deprecated: parse-time word definitions; use marker instead
@@ -329,6 +417,13 @@ pub const Value = union(enum) {
                 }
                 try writer.writeAll("}");
             },
+            .template => |segments| {
+                try writer.writeAll("T\"");
+                for (segments) |seg| {
+                    try writeTemplateSegment(writer, seg);
+                }
+                try writer.writeByte('"');
+            },
             .benchmark_report => |br| {
                 try writer.print("<benchmark-report ({d} entries)>", .{br.entries.items.len});
             },
@@ -426,6 +521,15 @@ pub const Value = union(enum) {
                 if (a.struct_type != b.struct_type) return false;
                 for (a.fields, b.fields) |af, bf| {
                     if (!af.eql(bf)) return false;
+                }
+                return true;
+            },
+            .template => |a| {
+                const b = other.template;
+
+                if (a.len != b.len) return false;
+                for (a, b) |sa, sb| {
+                    if (!templateSegmentEql(sa, sb)) return false;
                 }
                 return true;
             },
@@ -543,6 +647,16 @@ pub const Value = union(enum) {
                 for (si.fields) |field| {
                     const field_hash = field.hashValue();
                     hasher.update(std.mem.asBytes(&field_hash));
+                }
+            },
+            .template => |segments| {
+                for (segments) |seg| {
+                    switch (seg) {
+                        .literal => |text| hasher.update(text),
+                        .identity => hasher.update("{}"),
+                        .named => |n| hasher.update(n.name),
+                        .indexed => |idx| hasher.update(std.mem.asBytes(&idx.index)),
+                    }
                 }
             },
             // Benchmark reports hash by pointer identity
