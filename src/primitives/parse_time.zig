@@ -1,6 +1,4 @@
-const std = @import("std");
 const Context = @import("../context.zig").Context;
-const Tokenizer = @import("../tokenizer.zig").Tokenizer;
 const parser = @import("../parser.zig");
 
 const helpers = @import("helpers.zig");
@@ -20,29 +18,8 @@ pub fn nativeParseUntil(ctx: *Context) anyerror!void {
     // Get the tokenizer from parse-time context
     const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
 
-    // Collect tokens until we hit the delimiter
-    var tokens: std.ArrayListUnmanaged([]const u8) = .{};
-    defer tokens.deinit(ctx.allocator);
+    // Delegate to the parser, which handles nested parse-time constructs naturally
+    const quot = parser.parseQuotationUntil(ctx.quotationAllocator(), tokenizer, ctx, delimiter) catch return error.OutOfMemory;
 
-    while (tokenizer.next()) |tok| {
-        // Skip comments
-        if (tok.kind == .comment or tok.kind == .newline) continue;
-
-        if (std.mem.eql(u8, tok.text, delimiter)) {
-            break;
-        }
-        tokens.append(ctx.allocator, tok.text) catch return error.OutOfMemory;
-    }
-
-    // Join tokens into a single string and parse as a quotation body
-    const joined = std.mem.join(ctx.quotationAllocator(), " ", tokens.items) catch return error.OutOfMemory;
-
-    // Parse the tokens as a quotation body (without enclosing brackets)
-    // We add a closing bracket so parseQuotation can work correctly
-    const with_bracket = std.fmt.allocPrint(ctx.quotationAllocator(), "{s} ]", .{joined}) catch return error.OutOfMemory;
-
-    var inner_tokenizer = Tokenizer.init(with_bracket);
-    const instrs = parser.parseQuotation(ctx.quotationAllocator(), &inner_tokenizer, ctx) catch return error.OutOfMemory;
-
-    try ctx.stack.push(.{ .quotation = instrs });
+    try ctx.stack.push(.{ .quotation = quot });
 }

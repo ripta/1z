@@ -1,0 +1,26 @@
+\ Integration tests for nested collections in parse-time constructs
+
+use "testing" ;
+
+"Hash with nested vector" test-section
+H{ foo: V{ 1 2 3 } } "foo" @get #len 3 "nested vector length" assert=
+H{ foo: V{ 1 2 3 } } "foo" @get #first 1 "nested vector first" assert=
+H{ foo: V{ 1 2 3 } } "foo" @get #last 3 "nested vector last" assert=
+
+"Hash with nested set" test-section
+H{ foo: S{ 1 2 3 } } "foo" @get #len 3 "nested set length" assert=
+
+"Hash with nested hash" test-section
+H{ foo: H{ bar: 42 } } "foo" @get "bar" @get 42 "nested hash value" assert=
+
+"Empty nested collections" test-section
+V{ } #len 0 "empty vector" assert=
+H{ } @keys #len 0 "empty hash" assert=
+
+"Mixed scalar and nested values" test-section
+H{ a: 1 b: V{ 2 3 } c: 4 } "a" @get 1 "scalar a" assert=
+H{ a: 1 b: V{ 2 3 } c: 4 } "b" @get #len 2 "nested vector b length" assert=
+H{ a: 1 b: V{ 2 3 } c: 4 } "b" @get #first 2 "nested vector b first" assert=
+H{ a: 1 b: V{ 2 3 } c: 4 } "c" @get 4 "scalar c" assert=
+
+"All nested collection tests complete!" print-line

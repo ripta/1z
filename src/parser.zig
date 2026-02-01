@@ -205,6 +205,11 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
 /// Parse a quotation. If ctx is provided, parse-time words will be executed.
 /// A leading stack effect `( ... )` becomes the quotation's declared effect.
 pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) ParseError!Quotation {
+    return parseQuotationUntil(allocator, tokenizer, ctx, "]");
+}
+
+/// Parse a quotation terminated by a caller-specified delimiter.
+pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context, close_delim: []const u8) ParseError!Quotation {
     var instructions: std.ArrayListUnmanaged(Instruction) = .{};
     errdefer instructions.deinit(allocator);
 
@@ -215,17 +220,21 @@ pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Contex
     while (nextToken(tokenizer)) |tok| {
         const token = tok.text;
         const line = tok.line;
-        if (std.mem.eql(u8, token, "[")) {
+        if (std.mem.eql(u8, token, close_delim)) {
+            const instrs = instructions.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
+            return Quotation{ .instructions = instrs, .effect = quotation_effect };
+        } else if (std.mem.eql(u8, token, "[")) {
             is_first_token = false;
             const nested = try parseQuotation(allocator, tokenizer, ctx);
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = nested } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "]")) {
-            const instrs = instructions.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
-            return Quotation{ .instructions = instrs, .effect = quotation_effect };
+            return ParseError.UnmatchedCloseBracket;
         } else if (std.mem.eql(u8, token, "{")) {
             is_first_token = false;
             const arr = try parseArray(allocator, tokenizer);
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .array = arr } }, .line = line }) catch return ParseError.OutOfMemory;
+        } else if (std.mem.eql(u8, token, "}")) {
+            return ParseError.UnmatchedCloseBrace;
         } else if (std.mem.eql(u8, token, "(")) {
             const effect = try parseStackEffect(allocator, tokenizer);
             if (is_first_token) {

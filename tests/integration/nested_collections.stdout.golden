@@ -1,0 +1,34 @@
+=== Hash with nested vector ===
+Stack: [ ]
+PASS: nested vector length
+Stack: [ ]
+PASS: nested vector first
+Stack: [ ]
+PASS: nested vector last
+Stack: [ ]
+=== Hash with nested set ===
+Stack: [ ]
+PASS: nested set length
+Stack: [ ]
+=== Hash with nested hash ===
+Stack: [ ]
+PASS: nested hash value
+Stack: [ ]
+=== Empty nested collections ===
+Stack: [ ]
+PASS: empty vector
+Stack: [ ]
+PASS: empty hash
+Stack: [ ]
+=== Mixed scalar and nested values ===
+Stack: [ ]
+PASS: scalar a
+Stack: [ ]
+PASS: nested vector b length
+Stack: [ ]
+PASS: nested vector b first
+Stack: [ ]
+PASS: scalar c
+Stack: [ ]
+All nested collection tests complete!
+Stack: [ ]
