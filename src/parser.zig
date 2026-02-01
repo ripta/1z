@@ -164,7 +164,7 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
         } else if (std.mem.eql(u8, token, "]")) {
             return ParseError.UnmatchedCloseBracket;
         } else if (std.mem.eql(u8, token, "{")) {
-            const arr = try parseArray(allocator, tokenizer);
+            const arr = try parseArray(allocator, tokenizer, ctx);
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .array = arr } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "}")) {
             return ParseError.UnmatchedCloseBrace;
@@ -231,7 +231,7 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
             return ParseError.UnmatchedCloseBracket;
         } else if (std.mem.eql(u8, token, "{")) {
             is_first_token = false;
-            const arr = try parseArray(allocator, tokenizer);
+            const arr = try parseArray(allocator, tokenizer, ctx);
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .array = arr } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "}")) {
             return ParseError.UnmatchedCloseBrace;
@@ -352,14 +352,55 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer) ParseError!
     return ParseError.UnmatchedOpenParen;
 }
 
-pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]const Value {
+/// Execute a parse-time word during array parsing. Simplified version of
+/// executeParseTimeWord that captures values directly instead of instructions.
+/// Collection parse-time words consume only from the tokenizer, so no
+/// trailing-literal barrier is needed.
+///
+/// TODO(ripta): Unify with executeParseTimeWord if we need parse-time words to consume
+///              preceding array elements. For now, they only consume from the tokenizer.
+///              See commit message that introduced this divergence for details.
+fn executeParseTimeWordForArray(
+    c: *Context,
+    word: WordDefinition,
+    tokenizer: *Tokenizer,
+    values: *std.ArrayListUnmanaged(Value),
+    allocator: Allocator,
+) ParseError!void {
+    const pre_depth = c.stack.depth();
+
+    const old_tokenizer = c.parse_tokenizer;
+    c.parse_tokenizer = tokenizer;
+    defer c.parse_tokenizer = old_tokenizer;
+
+    switch (word.action) {
+        .native => |func| func(c) catch return ParseError.ParseTimeExecutionError,
+        .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch return ParseError.ParseTimeExecutionError,
+    }
+
+    const post_depth = c.stack.depth();
+    if (post_depth > pre_depth) {
+        const num_results = post_depth - pre_depth;
+        const base_idx = values.items.len;
+        var i: usize = 0;
+
+        while (i < num_results) : (i += 1) {
+            const val = c.stack.pop() catch return ParseError.ParseTimeExecutionError;
+            values.append(allocator, val) catch return ParseError.OutOfMemory;
+        }
+
+        std.mem.reverse(Value, values.items[base_idx..]);
+    }
+}
+
+pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) ParseError![]const Value {
     var values: std.ArrayListUnmanaged(Value) = .{};
     errdefer values.deinit(allocator);
 
     while (nextToken(tokenizer)) |tok| {
         const token = tok.text;
         if (std.mem.eql(u8, token, "{")) {
-            const nested = try parseArray(allocator, tokenizer);
+            const nested = try parseArray(allocator, tokenizer, ctx);
             values.append(allocator, .{ .array = nested }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "}")) {
             return values.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
@@ -376,6 +417,14 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]cons
             const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
             values.append(allocator, .{ .symbol = sym_copy }) catch return ParseError.OutOfMemory;
         } else {
+            if (ctx) |c| {
+                if (c.dictionary.get(token)) |word| {
+                    if (word.parse_time) {
+                        try executeParseTimeWordForArray(c, word, tokenizer, &values, allocator);
+                        continue;
+                    }
+                }
+            }
             return ParseError.OutOfMemory;
         }
     }
@@ -458,7 +507,7 @@ test "unmatched open bracket" {
 
 test "parse simple array" {
     var tokenizer = Tokenizer.init("1 2 3 }");
-    const arr = try parseArray(std.testing.allocator, &tokenizer);
+    const arr = try parseArray(std.testing.allocator, &tokenizer, null);
     defer std.testing.allocator.free(arr);
 
     try std.testing.expectEqual(@as(usize, 3), arr.len);
@@ -469,7 +518,7 @@ test "parse simple array" {
 
 test "parse nested array" {
     var tokenizer = Tokenizer.init("{ 1 2 } }");
-    const arr = try parseArray(std.testing.allocator, &tokenizer);
+    const arr = try parseArray(std.testing.allocator, &tokenizer, null);
     defer std.testing.allocator.free(arr);
 
     try std.testing.expectEqual(@as(usize, 1), arr.len);
@@ -485,7 +534,7 @@ test "parse array with string" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("\"hello\" 42 }");
-    const arr = try parseArray(arena.allocator(), &tokenizer);
+    const arr = try parseArray(arena.allocator(), &tokenizer, null);
 
     try std.testing.expectEqual(@as(usize, 2), arr.len);
     try std.testing.expectEqualStrings("hello", arr[0].string);
@@ -494,7 +543,7 @@ test "parse array with string" {
 
 test "unmatched open brace" {
     var tokenizer = Tokenizer.init("1 2");
-    const result = parseArray(std.testing.allocator, &tokenizer);
+    const result = parseArray(std.testing.allocator, &tokenizer, null);
     try std.testing.expectError(ParseError.UnmatchedOpenBrace, result);
 }
 

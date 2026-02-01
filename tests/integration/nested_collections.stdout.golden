@@ -30,5 +30,35 @@ PASS: nested vector b first
 Stack: [ ]
 PASS: scalar c
 Stack: [ ]
+=== Parse-time words inside plain arrays ===
+Stack: [ ]
+PASS: vector then scalar array length
+Stack: [ ]
+PASS: vector inside array length
+Stack: [ ]
+PASS: scalar after vector
+Stack: [ ]
+PASS: scalar before vector
+Stack: [ ]
+PASS: vector after scalar length
+Stack: [ ]
+PASS: hash inside array
+Stack: [ ]
+PASS: set inside array
+Stack: [ ]
+PASS: byte-array inside array
+Stack: [ ]
+PASS: mutable-map inside array
+Stack: [ ]
+PASS: multiple parse-time in array
+Stack: [ ]
+PASS: first of multiple vectors
+Stack: [ ]
+PASS: last of multiple vectors
+Stack: [ ]
+PASS: mixed parse-time in array
+Stack: [ ]
+PASS: nested array containing vector
+Stack: [ ]
 All nested collection tests complete!
 Stack: [ ]

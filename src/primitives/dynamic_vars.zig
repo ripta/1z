@@ -58,7 +58,7 @@ pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
         const token = tok.text;
 
         if (std.mem.eql(u8, token, "{")) {
-            const arr = parser.parseArray(alloc, tokenizer) catch return error.OutOfMemory;
+            const arr = parser.parseArray(alloc, tokenizer, ctx) catch return error.OutOfMemory;
             try ctx.stack.push(.{ .array = arr });
             return;
         }
