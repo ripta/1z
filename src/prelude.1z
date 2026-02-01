@@ -85,6 +85,7 @@ bi: ( x quot1 quot2 -- ) [ [ keep ] dip call ] ;
 3dup: ( a b c -- a b c a b c ) [ over over over ] ;
 dupd: ( a b -- a a b ) [ over swap ] ;
 2drop: ( a b -- ) [ drop drop ] ;
+3drop: ( a b c -- ) [ 2drop drop ] ;
 2dip: ( a b quot -- a b ) [ swap [ dip ] dip ] ;
 3dip: ( a b c quot -- a b c ) [ swap [ 2dip ] dip ] ;
 <rot-: ( a b c -- b c a ) [ [ swap ] dip swap ] ;
