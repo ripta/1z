@@ -292,3 +292,81 @@ pub const LineEditor = struct {
         self.cursor = pos;
     }
 };
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+test "LineEditor buffer operations" {
+    var editor = LineEditor{
+        .original_termios = undefined,
+    };
+
+    // Insert characters
+    LineEditor.insertChar(&editor, 'h');
+    LineEditor.insertChar(&editor, 'e');
+    LineEditor.insertChar(&editor, 'l');
+    LineEditor.insertChar(&editor, 'l');
+    LineEditor.insertChar(&editor, 'o');
+
+    try std.testing.expectEqualStrings("hello", editor.buf[0..editor.len]);
+    try std.testing.expectEqual(@as(usize, 5), editor.cursor);
+
+    // Move cursor left and insert
+    editor.cursor = 2;
+    LineEditor.insertChar(&editor, 'X');
+    try std.testing.expectEqualStrings("heXllo", editor.buf[0..editor.len]);
+    try std.testing.expectEqual(@as(usize, 3), editor.cursor);
+
+    // Delete at cursor
+    LineEditor.deleteCharAt(&editor);
+    try std.testing.expectEqualStrings("heXlo", editor.buf[0..editor.len]);
+
+    // Delete before cursor (backspace)
+    LineEditor.deleteCharBefore(&editor);
+    try std.testing.expectEqualStrings("helo", editor.buf[0..editor.len]);
+    try std.testing.expectEqual(@as(usize, 2), editor.cursor);
+}
+
+test "LineEditor kill operations" {
+    var editor = LineEditor{
+        .original_termios = undefined,
+    };
+
+    // Set up "hello world"
+    const text = "hello world";
+    @memcpy(editor.buf[0..text.len], text);
+    editor.len = text.len;
+    editor.cursor = 5;
+
+    // Kill to end
+    editor.len = editor.cursor;
+    try std.testing.expectEqualStrings("hello", editor.buf[0..editor.len]);
+
+    // Reset
+    @memcpy(editor.buf[0..text.len], text);
+    editor.len = text.len;
+    editor.cursor = 5;
+
+    // Kill to start
+    LineEditor.killToStart(&editor);
+    try std.testing.expectEqualStrings(" world", editor.buf[0..editor.len]);
+    try std.testing.expectEqual(@as(usize, 0), editor.cursor);
+}
+
+test "LineEditor kill word backward" {
+    var editor = LineEditor{
+        .original_termios = undefined,
+    };
+
+    const text = "hello world foo";
+    @memcpy(editor.buf[0..text.len], text);
+    editor.len = text.len;
+    editor.cursor = text.len;
+
+    LineEditor.killWordBackward(&editor);
+    try std.testing.expectEqualStrings("hello world ", editor.buf[0..editor.len]);
+
+    LineEditor.killWordBackward(&editor);
+    try std.testing.expectEqualStrings("hello ", editor.buf[0..editor.len]);
+}
