@@ -1,4 +1,5 @@
 const std = @import("std");
+const Dictionary = @import("dictionary.zig").Dictionary;
 
 /// Key represents a parsed keyboard input event.
 pub const Key = union(enum) {
@@ -37,6 +38,7 @@ pub const LineEditor = struct {
     history_index: ?usize = null,
     saved_buf: [4096]u8 = undefined,
     saved_len: usize = 0,
+    dictionary: ?*Dictionary = null,
 
     /// Initialize the LineEditor by saving the current terminal settings and switching to raw mode.
     pub fn init(allocator: std.mem.Allocator) !LineEditor {
@@ -231,7 +233,10 @@ pub const LineEditor = struct {
                     self.historyDown();
                     self.refreshLine();
                 },
-                .tab => {},
+                .tab => {
+                    self.tabComplete();
+                    self.refreshLine();
+                },
                 .unknown => {},
             }
         }
@@ -276,6 +281,96 @@ pub const LineEditor = struct {
         @memcpy(self.buf[0..copy_len], entry[0..copy_len]);
         self.len = copy_len;
         self.cursor = copy_len;
+    }
+
+    /// Perform tab completion using the dictionary, if set.
+    /// Completes the word at the cursor position by looking for longest common prefix
+    /// among dictionary entries that start with the current token.
+    ///
+    /// - If no matches, rings bell.
+    /// - If one match, completes the word and adds a trailing space.
+    /// - If multiple matches, extends to longest common prefix, or rings bell if no extension.
+    fn tabComplete(self: *LineEditor) void {
+        const dict = self.dictionary orelse return;
+
+        var token_start = self.cursor;
+        while (token_start > 0 and self.buf[token_start - 1] != ' ') {
+            token_start -= 1;
+        }
+        const prefix = self.buf[token_start..self.cursor];
+        if (prefix.len == 0) return;
+
+        var match_count: usize = 0;
+        var first_match: ?[]const u8 = null;
+        var lcp_len: usize = 0;
+
+        var iter = dict.entries.iterator();
+        while (iter.next()) |entry| {
+            const name = entry.key_ptr.*;
+            if (name.len >= prefix.len and std.mem.eql(u8, name[0..prefix.len], prefix)) {
+                match_count += 1;
+                if (first_match == null) {
+                    first_match = name;
+                    lcp_len = name.len;
+                } else {
+                    const limit = @min(lcp_len, name.len);
+                    var i: usize = prefix.len;
+                    while (i < limit and first_match.?[i] == name[i]) {
+                        i += 1;
+                    }
+                    lcp_len = i;
+                }
+            }
+        }
+
+        if (match_count == 0) {
+            _ = std.posix.write(std.posix.STDOUT_FILENO, "\x07") catch {};
+            return;
+        }
+
+        if (match_count == 1) {
+            const word = first_match.?;
+            const suffix_with_space = word.len + 1;
+            const new_len = token_start + suffix_with_space + (self.len - self.cursor);
+            if (new_len > self.buf.len) return;
+
+            const after_cursor = self.len - self.cursor;
+            if (after_cursor > 0) {
+                std.mem.copyBackwards(
+                    u8,
+                    self.buf[token_start + suffix_with_space .. token_start + suffix_with_space + after_cursor],
+                    self.buf[self.cursor .. self.cursor + after_cursor],
+                );
+            }
+
+            @memcpy(self.buf[token_start .. token_start + word.len], word);
+            self.buf[token_start + word.len] = ' ';
+            self.len = new_len;
+            self.cursor = token_start + suffix_with_space;
+            return;
+        }
+
+        if (lcp_len > prefix.len) {
+            const extension = first_match.?[prefix.len..lcp_len];
+            const new_len = self.len + extension.len;
+            if (new_len > self.buf.len) return;
+
+            const after_cursor = self.len - self.cursor;
+            if (after_cursor > 0) {
+                std.mem.copyBackwards(
+                    u8,
+                    self.buf[self.cursor + extension.len .. self.cursor + extension.len + after_cursor],
+                    self.buf[self.cursor .. self.cursor + after_cursor],
+                );
+            }
+
+            @memcpy(self.buf[self.cursor .. self.cursor + extension.len], extension);
+            self.len = new_len;
+            self.cursor += extension.len;
+            return;
+        }
+
+        _ = std.posix.write(std.posix.STDOUT_FILENO, "\x07") catch {};
     }
 
     /// Refresh the displayed line on screen.

@@ -423,6 +423,8 @@ fn replInteractive(ctx: *Context, writer: anytype) void {
         editor.loadHistory(path);
     }
 
+    editor.dictionary = &ctx.dictionary;
+
     var processor: StatementProcessor = .{};
     var repl_line: usize = 0;
     while (true) {
