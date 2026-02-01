@@ -69,6 +69,11 @@ pub const StatementProcessor = struct {
         return self.stmt_len > 0;
     }
 
+    // Return the current accumulated statement text.
+    pub fn getStatement(self: *const StatementProcessor) []const u8 {
+        return self.stmt_buf[0..self.stmt_len];
+    }
+
     // Try to parse any remaining buffered content (for EOF handling).
     // If ctx is provided, parse-time words will be executed during parsing.
     pub fn flush(self: *StatementProcessor, allocator: Allocator, ctx: ?*Context) Result {

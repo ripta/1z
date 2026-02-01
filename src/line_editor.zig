@@ -23,16 +23,23 @@ pub const Key = union(enum) {
     unknown,
 };
 
+const max_history = 4096;
+
 /// LineEditor provides character-by-character line editing with raw terminal mode.
 pub const LineEditor = struct {
     original_termios: std.posix.termios,
+    allocator: std.mem.Allocator,
     buf: [4096]u8 = undefined,
     len: usize = 0,
     cursor: usize = 0,
     prompt: []const u8 = "> ",
+    history: std.ArrayListUnmanaged([]u8) = .{},
+    history_index: ?usize = null,
+    saved_buf: [4096]u8 = undefined,
+    saved_len: usize = 0,
 
     /// Initialize the LineEditor by saving the current terminal settings and switching to raw mode.
-    pub fn init() !LineEditor {
+    pub fn init(allocator: std.mem.Allocator) !LineEditor {
         const fd = std.posix.STDIN_FILENO;
         const original = try std.posix.tcgetattr(fd);
 
@@ -50,12 +57,37 @@ pub const LineEditor = struct {
         try std.posix.tcsetattr(fd, .FLUSH, raw);
         return .{
             .original_termios = original,
+            .allocator = allocator,
         };
     }
 
     /// Restore the original terminal settings.
     pub fn deinit(self: *LineEditor) void {
+        for (self.history.items) |entry| {
+            self.allocator.free(entry);
+        }
+        self.history.deinit(self.allocator);
         std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.original_termios) catch {};
+    }
+
+    /// Add a line to history. Skips empty lines and consecutive duplicates.
+    pub fn addHistory(self: *LineEditor, line: []const u8) void {
+        if (line.len == 0) return;
+
+        if (self.history.items.len > 0) {
+            const last = self.history.items[self.history.items.len - 1];
+            if (std.mem.eql(u8, last, line)) return;
+        }
+
+        if (self.history.items.len >= max_history) {
+            self.allocator.free(self.history.items[0]);
+            _ = self.history.orderedRemove(0);
+        }
+
+        const copy = self.allocator.dupe(u8, line) catch return;
+        self.history.append(self.allocator, copy) catch {
+            self.allocator.free(copy);
+        };
     }
 
     /// Read a complete line of input, returning null on EOF (Ctrl-D with empty buffer).
@@ -63,6 +95,7 @@ pub const LineEditor = struct {
         self.prompt = prompt;
         self.len = 0;
         self.cursor = 0;
+        self.history_index = null;
         self.refreshLine();
 
         while (true) {
@@ -136,10 +169,59 @@ pub const LineEditor = struct {
                     killWordBackward(self);
                     self.refreshLine();
                 },
-                .up, .down, .tab => {},
+                .up => {
+                    self.historyUp();
+                    self.refreshLine();
+                },
+                .down => {
+                    self.historyDown();
+                    self.refreshLine();
+                },
+                .tab => {},
                 .unknown => {},
             }
         }
+    }
+
+    fn historyUp(self: *LineEditor) void {
+        if (self.history.items.len == 0) return;
+
+        if (self.history_index) |idx| {
+            if (idx > 0) {
+                self.history_index = idx - 1;
+                self.loadHistoryEntry(idx - 1);
+            }
+            return;
+        }
+
+        @memcpy(self.saved_buf[0..self.len], self.buf[0..self.len]);
+        self.saved_len = self.len;
+        const new_idx = self.history.items.len - 1;
+        self.history_index = new_idx;
+        self.loadHistoryEntry(new_idx);
+    }
+
+    fn historyDown(self: *LineEditor) void {
+        if (self.history_index) |idx| {
+            if (idx + 1 < self.history.items.len) {
+                self.history_index = idx + 1;
+                self.loadHistoryEntry(idx + 1);
+                return;
+            }
+
+            self.history_index = null;
+            @memcpy(self.buf[0..self.saved_len], self.saved_buf[0..self.saved_len]);
+            self.len = self.saved_len;
+            self.cursor = self.len;
+        }
+    }
+
+    fn loadHistoryEntry(self: *LineEditor, idx: usize) void {
+        const entry = self.history.items[idx];
+        const copy_len = @min(entry.len, self.buf.len);
+        @memcpy(self.buf[0..copy_len], entry[0..copy_len]);
+        self.len = copy_len;
+        self.cursor = copy_len;
     }
 
     /// Refresh the displayed line on screen.
@@ -297,12 +379,16 @@ pub const LineEditor = struct {
 // Tests
 // =============================================================================
 
-test "LineEditor buffer operations" {
-    var editor = LineEditor{
+fn testEditor() LineEditor {
+    return .{
         .original_termios = undefined,
+        .allocator = std.testing.allocator,
     };
+}
 
-    // Insert characters
+test "LineEditor buffer operations" {
+    var editor = testEditor();
+
     LineEditor.insertChar(&editor, 'h');
     LineEditor.insertChar(&editor, 'e');
     LineEditor.insertChar(&editor, 'l');
@@ -329,11 +415,8 @@ test "LineEditor buffer operations" {
 }
 
 test "LineEditor kill operations" {
-    var editor = LineEditor{
-        .original_termios = undefined,
-    };
+    var editor = testEditor();
 
-    // Set up "hello world"
     const text = "hello world";
     @memcpy(editor.buf[0..text.len], text);
     editor.len = text.len;
@@ -355,9 +438,7 @@ test "LineEditor kill operations" {
 }
 
 test "LineEditor kill word backward" {
-    var editor = LineEditor{
-        .original_termios = undefined,
-    };
+    var editor = testEditor();
 
     const text = "hello world foo";
     @memcpy(editor.buf[0..text.len], text);
@@ -369,4 +450,81 @@ test "LineEditor kill word backward" {
 
     LineEditor.killWordBackward(&editor);
     try std.testing.expectEqualStrings("hello ", editor.buf[0..editor.len]);
+}
+
+test "LineEditor addHistory" {
+    var editor = testEditor();
+    defer editor.deinit();
+
+    editor.addHistory("first");
+    editor.addHistory("second");
+    editor.addHistory("third");
+
+    try std.testing.expectEqual(@as(usize, 3), editor.history.items.len);
+    try std.testing.expectEqualStrings("first", editor.history.items[0]);
+    try std.testing.expectEqualStrings("second", editor.history.items[1]);
+    try std.testing.expectEqualStrings("third", editor.history.items[2]);
+}
+
+test "LineEditor addHistory skips empty and duplicates" {
+    var editor = testEditor();
+    defer editor.deinit();
+
+    editor.addHistory("");
+    try std.testing.expectEqual(@as(usize, 0), editor.history.items.len);
+
+    editor.addHistory("hello");
+    editor.addHistory("hello");
+    try std.testing.expectEqual(@as(usize, 1), editor.history.items.len);
+
+    editor.addHistory("world");
+    editor.addHistory("hello");
+    try std.testing.expectEqual(@as(usize, 3), editor.history.items.len);
+}
+
+test "LineEditor history navigation" {
+    var editor = testEditor();
+    defer editor.deinit();
+
+    editor.addHistory("first");
+    editor.addHistory("second");
+    editor.addHistory("third");
+
+    // Set current line content
+    const current = "typing";
+    @memcpy(editor.buf[0..current.len], current);
+    editor.len = current.len;
+    editor.cursor = current.len;
+
+    // Up goes to most recent
+    LineEditor.historyUp(&editor);
+    try std.testing.expectEqualStrings("third", editor.buf[0..editor.len]);
+    try std.testing.expectEqual(@as(usize, 2), editor.history_index.?);
+
+    // Up again
+    LineEditor.historyUp(&editor);
+    try std.testing.expectEqualStrings("second", editor.buf[0..editor.len]);
+    try std.testing.expectEqual(@as(usize, 1), editor.history_index.?);
+
+    // Up again
+    LineEditor.historyUp(&editor);
+    try std.testing.expectEqualStrings("first", editor.buf[0..editor.len]);
+    try std.testing.expectEqual(@as(usize, 0), editor.history_index.?);
+
+    // Up at top stays at top
+    LineEditor.historyUp(&editor);
+    try std.testing.expectEqualStrings("first", editor.buf[0..editor.len]);
+    try std.testing.expectEqual(@as(usize, 0), editor.history_index.?);
+
+    // Down goes forward
+    LineEditor.historyDown(&editor);
+    try std.testing.expectEqualStrings("second", editor.buf[0..editor.len]);
+
+    LineEditor.historyDown(&editor);
+    try std.testing.expectEqualStrings("third", editor.buf[0..editor.len]);
+
+    // Down past end restores saved line
+    LineEditor.historyDown(&editor);
+    try std.testing.expectEqualStrings("typing", editor.buf[0..editor.len]);
+    try std.testing.expect(editor.history_index == null);
 }

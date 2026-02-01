@@ -409,7 +409,7 @@ fn repl(ctx: *Context, quiet: bool, max_memory_bytes: usize) void {
 }
 
 fn replInteractive(ctx: *Context, writer: anytype) void {
-    var editor = LineEditor.init() catch {
+    var editor = LineEditor.init(ctx.allocator) catch {
         // Fall back to piped mode if terminal setup fails
         replPiped(ctx, writer);
         return;
@@ -444,6 +444,12 @@ fn replInteractive(ctx: *Context, writer: anytype) void {
                 processor.reset();
             },
             .complete => |instrs| {
+                // Add the full statement to history
+                const stmt = processor.getStatement();
+                if (stmt.len > 0) {
+                    editor.addHistory(stmt);
+                }
+
                 if (instrs.len > 0) {
                     adjustInstructionLines(instrs, processor.start_line);
                 }
