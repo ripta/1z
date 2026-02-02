@@ -90,6 +90,9 @@ pub const Context = struct {
     module_cache: std.StringHashMapUnmanaged(*value_mod.Module) = .{},
     /// Stashed error object from user `throw`, consumed by `recover`.
     thrown_error: ?value_mod.ErrorObject = null,
+    /// Pending error message set by primitives before returning an error.
+    /// Used by captureCallStackOnError for the innermost frame's message.
+    pending_error_message: ?[]const u8 = null,
 
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
@@ -186,6 +189,7 @@ pub const Context = struct {
     pub fn clearExecutionDetails(self: *Context) void {
         self.error_details.clearRetainingCapacity();
         self.call_stack.clearRetainingCapacity();
+        self.pending_error_message = null;
     }
 
     /// Get the current binding for a parameter by name.
@@ -659,18 +663,25 @@ pub const Context = struct {
         const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
         const duped_name = self.arena.allocator().dupe(u8, kebab_name) catch @errorName(err);
 
+        // Consume any pending error message for the innermost frame
+        const pending_msg = self.pending_error_message;
+        self.pending_error_message = null;
+
         // Iterate call_stack in reverse (innermost first for display)
         var i = self.call_stack.items.len;
+        var is_innermost = true;
         while (i > 0) {
             i -= 1;
             const frame = self.call_stack.items[i];
+            const message = if (is_innermost and pending_msg != null) pending_msg.? else frame.word_name;
             self.error_details.append(self.allocator, .{
                 .error_type = duped_name,
-                .message = frame.word_name,
+                .message = message,
                 .source = self.current_source,
                 .line = frame.line,
                 .word_name = frame.word_name,
             }) catch {};
+            is_innermost = false;
         }
     }
 

@@ -8,6 +8,9 @@ const Module = value_mod.Module;
 const Quotation = value_mod.Quotation;
 
 const Primitive = @import("types.zig").Primitive;
+const helpers = @import("helpers.zig");
+const setErrorContext = helpers.setErrorContext;
+const valueTypeName = helpers.valueTypeName;
 
 // Re-use extractKeyString from data_structures
 const data_structures = @import("data_structures.zig");
@@ -52,6 +55,7 @@ fn getErrorField(ctx: *Context, err: ErrorObject, field_name: []const u8) !Value
             return .{ .boolean = false }; // f for null
         }
     } else {
+        setErrorContext(ctx, "key '{s}' not found in error", .{field_name});
         return error.KeyNotFound;
     }
 }
@@ -69,6 +73,7 @@ pub fn nativeAtGet(ctx: *Context) anyerror!void {
             if (h.get(key_str)) |val| {
                 try ctx.stack.push(val);
             } else {
+                setErrorContext(ctx, "key '{s}' not found in hash", .{key_str});
                 return error.KeyNotFound;
             }
         },
@@ -76,6 +81,7 @@ pub fn nativeAtGet(ctx: *Context) anyerror!void {
             if (m.get(key_str)) |val| {
                 try ctx.stack.push(val);
             } else {
+                setErrorContext(ctx, "key '{s}' not found in mutable-map", .{key_str});
                 return error.KeyNotFound;
             }
         },
@@ -95,10 +101,14 @@ pub fn nativeAtGet(ctx: *Context) anyerror!void {
 
                 try ctx.stack.push(.{ .quotation = quot });
             } else {
+                setErrorContext(ctx, "key '{s}' not found in module", .{key_str});
                 return error.KeyNotFound;
             }
         },
-        else => return error.TypeMismatch,
+        else => {
+            setErrorContext(ctx, "expected associative type, got {s}", .{valueTypeName(obj)});
+            return error.TypeMismatch;
+        },
     }
 }
 
@@ -150,7 +160,10 @@ fn nativeAtGetOr(ctx: *Context) anyerror!void {
                 try ctx.stack.push(default);
             }
         },
-        else => return error.TypeMismatch,
+        else => {
+            setErrorContext(ctx, "expected associative type, got {s}", .{valueTypeName(obj)});
+            return error.TypeMismatch;
+        },
     }
 }
 
@@ -183,7 +196,10 @@ pub fn nativeAtHas(ctx: *Context) anyerror!void {
             const exists = mod.words.get(key_str) != null;
             try ctx.stack.push(.{ .boolean = exists });
         },
-        else => return error.TypeMismatch,
+        else => {
+            setErrorContext(ctx, "expected associative type, got {s}", .{valueTypeName(obj)});
+            return error.TypeMismatch;
+        },
     }
 }
 
@@ -215,8 +231,14 @@ pub fn nativeAtSet(ctx: *Context) anyerror!void {
 
             try ctx.stack.push(.{ .hash = new_hash });
         },
-        .error_value => return error.TypeMismatch,
-        else => return error.TypeMismatch,
+        .error_value => {
+            setErrorContext(ctx, "cannot @set on error object", .{});
+            return error.TypeMismatch;
+        },
+        else => {
+            setErrorContext(ctx, "expected associative type, got {s}", .{valueTypeName(obj)});
+            return error.TypeMismatch;
+        },
     }
 }
 
@@ -269,7 +291,10 @@ pub fn nativeAtKeys(ctx: *Context) anyerror!void {
             }
             try ctx.stack.push(.{ .array = keys });
         },
-        else => return error.TypeMismatch,
+        else => {
+            setErrorContext(ctx, "expected associative type, got {s}", .{valueTypeName(obj)});
+            return error.TypeMismatch;
+        },
     }
 }
 
@@ -310,6 +335,9 @@ pub fn nativeAtValues(ctx: *Context) anyerror!void {
             values[3] = try getErrorField(ctx, err, "stack-trace");
             try ctx.stack.push(.{ .array = values });
         },
-        else => return error.TypeMismatch,
+        else => {
+            setErrorContext(ctx, "expected associative type, got {s}", .{valueTypeName(obj)});
+            return error.TypeMismatch;
+        },
     }
 }
