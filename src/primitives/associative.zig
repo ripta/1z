@@ -25,9 +25,15 @@ pub const primitives = [_]Primitive{
 /// Helper to get error object field value
 fn getErrorField(ctx: *Context, err: ErrorObject, field_name: []const u8) !Value {
     if (std.mem.eql(u8, field_name, "error-type")) {
-        return .{ .string = err.error_type };
+        return Value{ .symbol = err.error_type };
     } else if (std.mem.eql(u8, field_name, "message")) {
         return .{ .string = err.message };
+    } else if (std.mem.eql(u8, field_name, "data")) {
+        if (err.data) |data| {
+            return data.*;
+        } else {
+            return .{ .boolean = false }; // f for null
+        }
     } else if (std.mem.eql(u8, field_name, "stack-trace")) {
         if (err.stack_trace) |trace| {
             const alloc = ctx.quotationAllocator();
@@ -92,7 +98,7 @@ pub fn nativeAtGet(ctx: *Context) anyerror!void {
                 return error.KeyNotFound;
             }
         },
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     }
 }
 
@@ -144,7 +150,7 @@ fn nativeAtGetOr(ctx: *Context) anyerror!void {
                 try ctx.stack.push(default);
             }
         },
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     }
 }
 
@@ -169,6 +175,7 @@ pub fn nativeAtHas(ctx: *Context) anyerror!void {
             // Check if field name is valid for errors
             const valid = std.mem.eql(u8, key_str, "error-type") or
                 std.mem.eql(u8, key_str, "message") or
+                std.mem.eql(u8, key_str, "data") or
                 std.mem.eql(u8, key_str, "stack-trace");
             try ctx.stack.push(.{ .boolean = valid });
         },
@@ -176,7 +183,7 @@ pub fn nativeAtHas(ctx: *Context) anyerror!void {
             const exists = mod.words.get(key_str) != null;
             try ctx.stack.push(.{ .boolean = exists });
         },
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     }
 }
 
@@ -208,8 +215,8 @@ pub fn nativeAtSet(ctx: *Context) anyerror!void {
 
             try ctx.stack.push(.{ .hash = new_hash });
         },
-        .error_value => return error.TypeError,
-        else => return error.TypeError,
+        .error_value => return error.TypeMismatch,
+        else => return error.TypeMismatch,
     }
 }
 
@@ -244,10 +251,11 @@ pub fn nativeAtKeys(ctx: *Context) anyerror!void {
         .error_value => {
             // Error objects have fixed fields
             const alloc = ctx.quotationAllocator();
-            const keys = alloc.alloc(Value, 3) catch return error.OutOfMemory;
+            const keys = alloc.alloc(Value, 4) catch return error.OutOfMemory;
             keys[0] = .{ .symbol = "error-type" };
             keys[1] = .{ .symbol = "message" };
-            keys[2] = .{ .symbol = "stack-trace" };
+            keys[2] = .{ .symbol = "data" };
+            keys[3] = .{ .symbol = "stack-trace" };
             try ctx.stack.push(.{ .array = keys });
         },
         .module => |mod| {
@@ -261,7 +269,7 @@ pub fn nativeAtKeys(ctx: *Context) anyerror!void {
             }
             try ctx.stack.push(.{ .array = keys });
         },
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     }
 }
 
@@ -293,14 +301,15 @@ pub fn nativeAtValues(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .array = values });
         },
         .error_value => |err| {
-            // Get all three error field values
+            // Get all four error field values
             const alloc = ctx.quotationAllocator();
-            const values = alloc.alloc(Value, 3) catch return error.OutOfMemory;
-            values[0] = .{ .string = err.error_type };
+            const values = alloc.alloc(Value, 4) catch return error.OutOfMemory;
+            values[0] = Value{ .symbol = err.error_type };
             values[1] = .{ .string = err.message };
-            values[2] = try getErrorField(ctx, err, "stack-trace");
+            values[2] = if (err.data) |data| data.* else Value{ .boolean = false };
+            values[3] = try getErrorField(ctx, err, "stack-trace");
             try ctx.stack.push(.{ .array = values });
         },
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     }
 }

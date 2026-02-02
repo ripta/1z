@@ -140,8 +140,8 @@ pub fn popInteger(ctx: *Context) !i64 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .integer => |i| i,
-        .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeError,
-        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeMismatch,
+        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeMismatch,
     };
 }
 
@@ -150,8 +150,8 @@ pub fn popBoolean(ctx: *Context) !bool {
     return switch (val) {
         .boolean => |b| b,
         .integer => |i| i != 0,
-        .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeError,
-        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeMismatch,
+        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeMismatch,
     };
 }
 
@@ -159,8 +159,8 @@ pub fn popQuotation(ctx: *Context) !Quotation {
     const val = try ctx.stack.pop();
     return switch (val) {
         .quotation => |q| q,
-        .integer, .boolean, .string, .symbol, .array, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeError,
-        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeMismatch,
+        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeMismatch,
     };
 }
 
@@ -168,8 +168,8 @@ pub fn popSymbol(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .symbol => |s| s,
-        .integer, .boolean, .string, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeError,
-        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .string, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeMismatch,
+        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeMismatch,
     };
 }
 
@@ -177,8 +177,8 @@ pub fn popString(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .string => |s| s,
-        .integer, .boolean, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeError,
-        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeMismatch,
+        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeMismatch,
     };
 }
 
@@ -186,8 +186,8 @@ pub fn popStackEffect(ctx: *Context) !StackEffect {
     const val = try ctx.stack.pop();
     return switch (val) {
         .stack_effect => |se| se,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .struct_instance, .template, .benchmark_report => error.TypeError,
-        .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .struct_instance, .template, .benchmark_report => error.TypeMismatch,
+        .parse_time_marker, .error_value => error.TypeMismatch,
     };
 }
 
@@ -195,8 +195,8 @@ pub fn popVector(ctx: *Context) !*Vector {
     const val = try ctx.stack.pop();
     return switch (val) {
         .vector => |v| v,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeError,
-        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeMismatch,
+        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeMismatch,
     };
 }
 
@@ -204,8 +204,8 @@ pub fn popByteArray(ctx: *Context) !*ByteArray {
     const val = try ctx.stack.pop();
     return switch (val) {
         .byte_array => |b| b,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeError,
-        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeMismatch,
+        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeMismatch,
     };
 }
 
@@ -213,8 +213,8 @@ pub fn popStream(ctx: *Context) !*Stream {
     const val = try ctx.stack.pop();
     return switch (val) {
         .stream => |s| s,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeError,
-        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeMismatch,
+        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeMismatch,
     };
 }
 
@@ -222,8 +222,8 @@ pub fn popModule(ctx: *Context) !*Module {
     const val = try ctx.stack.pop();
     return switch (val) {
         .module => |m| m,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeError,
-        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .marker, .struct_type, .struct_instance, .benchmark_report => error.TypeMismatch,
+        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeMismatch,
     };
 }
 
@@ -231,8 +231,8 @@ pub fn popMarker(ctx: *Context) !*Marker {
     const val = try ctx.stack.pop();
     return switch (val) {
         .marker => |m| m,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .struct_type, .struct_instance, .benchmark_report => error.TypeError,
-        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .struct_type, .struct_instance, .benchmark_report => error.TypeMismatch,
+        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeMismatch,
     };
 }
 
@@ -240,8 +240,8 @@ pub fn popStructType(ctx: *Context) !*StructType {
     const val = try ctx.stack.pop();
     return switch (val) {
         .struct_type => |st| st,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_instance, .benchmark_report => error.TypeError,
-        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_instance, .benchmark_report => error.TypeMismatch,
+        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeMismatch,
     };
 }
 
@@ -249,7 +249,7 @@ pub fn popStructInstance(ctx: *Context) !*StructInstance {
     const val = try ctx.stack.pop();
     return switch (val) {
         .struct_instance => |si| si,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .benchmark_report => error.TypeError,
-        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter, .module, .marker, .struct_type, .benchmark_report => error.TypeMismatch,
+        .template, .stack_effect, .parse_time_marker, .error_value => error.TypeMismatch,
     };
 }

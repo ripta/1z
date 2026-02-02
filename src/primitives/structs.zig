@@ -55,14 +55,14 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     const markers_val = try ctx.stack.pop();
     const markers_array = switch (markers_val) {
         .array => |arr| arr,
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     };
 
     var markers_list = std.ArrayListUnmanaged(*Marker){};
     for (markers_array) |m| {
         switch (m) {
             .marker => |mk| try markers_list.append(alloc, mk),
-            else => return error.TypeError,
+            else => return error.TypeMismatch,
         }
     }
     const markers_slice = try markers_list.toOwnedSlice(alloc);
@@ -70,14 +70,14 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     const fields_val = try ctx.stack.pop();
     const fields_array = switch (fields_val) {
         .array => |arr| arr,
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     };
 
     var fields_list = std.ArrayListUnmanaged([]const u8){};
     for (fields_array) |f| {
         switch (f) {
             .symbol => |s| try fields_list.append(alloc, s),
-            else => return error.TypeError,
+            else => return error.TypeMismatch,
         }
     }
     const fields_slice = try fields_list.toOwnedSlice(alloc);
@@ -85,7 +85,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     const name_val = try ctx.stack.pop();
     const name = switch (name_val) {
         .symbol => |s| s,
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     };
 
     const struct_type = try alloc.create(StructType);
@@ -207,7 +207,7 @@ fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const Stru
                         const hash_val = try c.stack.pop();
                         const hash = switch (hash_val) {
                             .hash => |h| h,
-                            else => return error.TypeError,
+                            else => return error.TypeMismatch,
                         };
 
                         const a = c.quotationAllocator();
@@ -301,7 +301,7 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
 
                         // Type check
                         if (inst.struct_type != st) {
-                            return error.TypeError;
+                            return error.TypeMismatch;
                         }
 
                         try c.stack.push(inst.fields[idx]);
@@ -341,7 +341,7 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
 
                         // Type check
                         if (inst.struct_type != st) {
-                            return error.TypeError;
+                            return error.TypeMismatch;
                         }
 
                         // Mutate the field in place

@@ -114,7 +114,7 @@ pub fn nativeStreamOpen(ctx: *Context) anyerror!void {
     else if (std.mem.eql(u8, mode_sym, "read-write"))
         .read_write
     else
-        return error.TypeError;
+        return error.TypeMismatch;
 
     // Open file based on mode
     const file = switch (mode) {
@@ -135,7 +135,7 @@ pub fn nativeStreamOpen(ctx: *Context) anyerror!void {
                 return mapFileOpenError(open_err);
             };
             // Seek to end for append mode
-            f.seekFromEnd(0) catch return error.IOError;
+            f.seekFromEnd(0) catch return error.IOFailed;
             break :blk f;
         },
         .read_write => blk: {
@@ -194,7 +194,7 @@ pub fn nativeStreamWrite(ctx: *Context) anyerror!void {
     const bytes: []const u8 = switch (bytes_val) {
         .byte_array => |ba| ba.items,
         .string => |s| s,
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     };
 
     // Write to file

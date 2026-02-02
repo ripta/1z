@@ -127,13 +127,13 @@ use { double: triple: } "module_lib.1z" ;
 
 \ Empty array
 errmod: "module_lib.1z" load ;
-[ errmod { } import ] [ error-type: @get "EmptyImport" "empty array error" assert= ] recover
+[ errmod { } import ] [ error-type: @get empty-import: "empty array error" assert= ] recover
 
 \ Non-existent word
-[ errmod { nonexistent: } import ] [ error-type: @get "KeyNotFound" "missing word error" assert= ] recover
+[ errmod { nonexistent: } import ] [ error-type: @get EKeyNotFound "missing word error" assert= ] recover
 
 \ Non-symbol in array
-[ errmod { 123 } import ] [ error-type: @get "TypeError" "non-symbol error" assert= ] recover
+[ errmod { 123 } import ] [ error-type: @get ETypeMismatch "non-symbol error" assert= ] recover
 
 \ Integer instead of module
-[ 42 { double: } import ] [ error-type: @get "TypeError" "integer instead of module error" assert= ] recover
+[ 42 { double: } import ] [ error-type: @get ETypeMismatch "integer instead of module error" assert= ] recover

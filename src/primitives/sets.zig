@@ -21,7 +21,7 @@ pub fn nativeAtIn(ctx: *Context) anyerror!void {
 
     const set = switch (set_val) {
         .set => |s| s,
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     };
 
     try ctx.stack.push(.{ .boolean = set.contains(val) });
@@ -34,7 +34,7 @@ pub fn nativeAtAdjoin(ctx: *Context) anyerror!void {
 
     const old_set = switch (set_val) {
         .set => |s| s,
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     };
 
     if (old_set.contains(val)) {
@@ -62,7 +62,7 @@ pub fn nativeAtRemove(ctx: *Context) anyerror!void {
 
     const old_set = switch (set_val) {
         .set => |s| s,
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     };
 
     const alloc = ctx.quotationAllocator();
@@ -82,11 +82,11 @@ pub fn nativeAtUnion(ctx: *Context) anyerror!void {
 
     const set1 = switch (set1_val) {
         .set => |s| s,
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     };
     const set2 = switch (set2_val) {
         .set => |s| s,
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     };
 
     const alloc = ctx.quotationAllocator();
@@ -110,11 +110,11 @@ pub fn nativeAtIntersection(ctx: *Context) anyerror!void {
 
     const set1 = switch (set1_val) {
         .set => |s| s,
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     };
     const set2 = switch (set2_val) {
         .set => |s| s,
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     };
 
     const alloc = ctx.quotationAllocator();
@@ -139,11 +139,11 @@ pub fn nativeAtDifference(ctx: *Context) anyerror!void {
 
     const set1 = switch (set1_val) {
         .set => |s| s,
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     };
     const set2 = switch (set2_val) {
         .set => |s| s,
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     };
 
     const alloc = ctx.quotationAllocator();

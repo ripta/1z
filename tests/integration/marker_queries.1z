@@ -42,15 +42,15 @@ mk3 "multi-marker-word" word-markers [ over = ] #filter swap drop #len 1 = t "mk
 "word-markers" native? t "word-markers is native" assert=
 "plain" native? f "user-defined word is not native" assert=
 "single-marker-word" native? f "marked user-defined word is not native" assert=
-[ "nonexistent" native? ] "WordNotFound" "native? on missing word" assert-error-type
+[ "nonexistent" native? ] word-not-found: "native? on missing word" assert-error-type
 
 "word-markers error handling" test-section
 
 \ Non-existent word
-[ "nonexistent-word" word-markers ] "WordNotFound" "non-existent word error" assert-error-type
+[ "nonexistent-word" word-markers ] word-not-found: "non-existent word error" assert-error-type
 
 \ Wrong type
-[ 42 word-markers ] "TypeError" "integer as word name error" assert-error-type
+[ 42 word-markers ] ETypeMismatch "integer as word name error" assert-error-type
 
 "Markers preserved through module load" test-section
 

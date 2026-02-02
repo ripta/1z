@@ -68,20 +68,20 @@ fn nativeWordMarkers(ctx: *Context) anyerror!void {
             const type_name = helpers.valueTypeName(name_val);
             const msg = std.fmt.allocPrint(alloc, "expected symbol or string, got {s}", .{type_name}) catch "expected symbol or string";
             ctx.error_details.append(ctx.allocator, .{
-                .error_type = "TypeError",
+                .error_type = "type-mismatch",
                 .message = msg,
                 .source = ctx.current_source,
                 .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
                 .word_name = "word-markers",
             }) catch {};
-            return error.TypeError;
+            return error.TypeMismatch;
         },
     };
 
     const word_def = ctx.lookupWord(name) orelse {
         const msg = std.fmt.allocPrint(alloc, "word '{s}'", .{name}) catch "word '<unknown>'";
         ctx.error_details.append(ctx.allocator, .{
-            .error_type = "WordNotFound",
+            .error_type = "word-not-found",
             .message = msg,
             .source = ctx.current_source,
             .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
@@ -114,20 +114,20 @@ fn nativeIsNative(ctx: *Context) anyerror!void {
             const type_name = helpers.valueTypeName(name_val);
             const msg = std.fmt.allocPrint(alloc, "expected symbol or string, got {s}", .{type_name}) catch "expected symbol or string";
             ctx.error_details.append(ctx.allocator, .{
-                .error_type = "TypeError",
+                .error_type = "type-mismatch",
                 .message = msg,
                 .source = ctx.current_source,
                 .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
                 .word_name = "native?",
             }) catch {};
-            return error.TypeError;
+            return error.TypeMismatch;
         },
     };
 
     const word_def = ctx.lookupWord(name) orelse {
         const msg = std.fmt.allocPrint(alloc, "word '{s}'", .{name}) catch "word '<unknown>'";
         ctx.error_details.append(ctx.allocator, .{
-            .error_type = "WordNotFound",
+            .error_type = "word-not-found",
             .message = msg,
             .source = ctx.current_source,
             .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,

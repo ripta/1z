@@ -161,14 +161,20 @@ pub const StackFrame = struct {
     line: usize,
 };
 
-/// ErrorObject represents a structured error with type, message, and optional stack trace.
+/// ErrorObject represents a structured error with type, message, optional data, and optional stack trace.
 pub const ErrorObject = struct {
     error_type: []const u8,
     message: []const u8,
-    stack_trace: ?[]const StackFrame,
+    data: ?*const Value = null,
+    stack_trace: ?[]const StackFrame = null,
 
     pub fn write(self: ErrorObject, writer: anytype) !void {
         try writer.print("<error {s}: {s}", .{ self.error_type, self.message });
+        if (self.data) |data| {
+            try writer.writeAll(" data=");
+            try data.write(writer);
+        }
+
         if (self.stack_trace) |trace| {
             try writer.writeAll(" [");
             for (trace, 0..) |frame, i| {
@@ -183,6 +189,15 @@ pub const ErrorObject = struct {
     pub fn eql(self: ErrorObject, other: ErrorObject) bool {
         if (!std.mem.eql(u8, self.error_type, other.error_type)) return false;
         if (!std.mem.eql(u8, self.message, other.message)) return false;
+
+        // Compare data
+        if (self.data == null and other.data == null) {
+            // both null, ok
+        } else if (self.data != null and other.data != null) {
+            if (!self.data.?.eql(other.data.?.*)) return false;
+        } else {
+            return false;
+        }
 
         // Compare stack traces
         if (self.stack_trace == null and other.stack_trace == null) return true;
@@ -680,7 +695,12 @@ pub const Value = union(enum) {
             .error_value => |err| {
                 hasher.update(err.error_type);
                 hasher.update(err.message);
+                if (err.data) |data| {
+                    const data_hash = data.hashValue();
+                    hasher.update(std.mem.asBytes(&data_hash));
+                }
             },
+
         }
 
         return hasher.final();

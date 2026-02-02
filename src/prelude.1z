@@ -45,16 +45,18 @@ error?: ( val -- ? ) [ type-of error: = ] ;
 error-type?: ( error type -- error ? ) [ over error-type: @get = ] ;
 
 \ Error type constants
-EStackUnderflow: [ "StackUnderflow" ] ;
-ETypeError: [ "TypeError" ] ;
-EDivisionByZero: [ "DivisionByZero" ] ;
-EIntegerOverflow: [ "IntegerOverflow" ] ;
-EStackEffectMismatch: [ "StackEffectMismatch" ] ;
-EUnknownWord: [ "UnknownWord" ] ;
-EFileNotFound: [ "FileNotFound" ] ;
-EFileReadError: [ "FileReadError" ] ;
-ERethrowError: [ "RethrowError" ] ;
-EKeyNotFound: [ "KeyNotFound" ] ;
+EStackUnderflow: [ stack-underflow: ] ;
+ETypeMismatch: [ type-mismatch: ] ;
+EDivisionByZero: [ division-by-zero: ] ;
+EIntegerOverflow: [ integer-overflow: ] ;
+EStackEffectMismatch: [ stack-effect-mismatch: ] ;
+EUnknownWord: [ unknown-word: ] ;
+EFileNotFound: [ file-not-found: ] ;
+EFileReadFailed: [ file-read-failed: ] ;
+EUserRethrown: [ user-rethrown: ] ;
+EUserThrown: [ user-thrown: ] ;
+EKeyNotFound: [ key-not-found: ] ;
+EIOFailed: [ io-failed: ] ;
 
 \ Type predicates
 integer?: ( val -- ? ) [ type-of integer: = ] ;

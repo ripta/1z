@@ -114,7 +114,7 @@ fn nativeLoad(ctx: *Context) anyerror!void {
     const resolved = resolveLoadPath(ctx, filename, alloc) orelse {
         const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
         ctx.error_details.append(ctx.allocator, .{
-            .error_type = "FileNotFound",
+            .error_type = "file-not-found",
             .message = msg,
             .source = ctx.current_source,
             .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
@@ -138,7 +138,7 @@ fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator,
         // Add error context for FileNotFound
         const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
         ctx.error_details.append(ctx.allocator, .{
-            .error_type = "FileNotFound",
+            .error_type = "file-not-found",
             .message = msg,
             .source = ctx.current_source,
             .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
@@ -194,7 +194,7 @@ fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator,
             },
             else => {
                 ctx.popLocalFrame();
-                return error.FileReadError;
+                return error.FileReadFailed;
             },
         };
 
@@ -288,13 +288,13 @@ fn nativeImport(ctx: *Context) anyerror!void {
     switch (top_val) {
         .array => |names| {
             if (names.len == 0) {
-                addImportError(ctx, "EmptyImport", "cannot import empty array");
+                addImportError(ctx, "empty-import", "cannot import empty array");
                 return error.EmptyImport;
             }
 
             const module = helpers.popModule(ctx) catch {
-                addImportError(ctx, "TypeError", "expected module, got non-module");
-                return error.TypeError;
+                addImportError(ctx, "type-mismatch", "expected module, got non-module");
+                return error.TypeMismatch;
             };
             for (names) |name_val| {
                 const name = switch (name_val) {
@@ -302,13 +302,13 @@ fn nativeImport(ctx: *Context) anyerror!void {
                     else => {
                         const type_name = helpers.valueTypeName(name_val);
                         const msg = std.fmt.allocPrint(alloc, "expected symbol, got {s}", .{type_name}) catch "expected symbol";
-                        addImportError(ctx, "TypeError", msg);
-                        return error.TypeError;
+                        addImportError(ctx, "type-mismatch", msg);
+                        return error.TypeMismatch;
                     },
                 };
                 const mod_word = module.words.get(name) orelse {
                     const msg = std.fmt.allocPrint(alloc, "key '{s}'", .{name}) catch "key '<unknown>'";
-                    addImportError(ctx, "KeyNotFound", msg);
+                    addImportError(ctx, "key-not-found", msg);
                     return error.KeyNotFound;
                 };
                 try importWord(ctx, name, mod_word, module);
@@ -328,8 +328,8 @@ fn nativeImport(ctx: *Context) anyerror!void {
         else => {
             const type_name = helpers.valueTypeName(top_val);
             const msg = std.fmt.allocPrint(alloc, "expected module, got {s}", .{type_name}) catch "expected module";
-            addImportError(ctx, "TypeError", msg);
-            return error.TypeError;
+            addImportError(ctx, "type-mismatch", msg);
+            return error.TypeMismatch;
         },
     }
 }

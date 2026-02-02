@@ -13,6 +13,7 @@ const parser = @import("parser.zig");
 const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
+const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
 
 /// Embedded prelude source code
 const prelude_source = @embedFile("prelude.1z");
@@ -87,6 +88,8 @@ pub const Context = struct {
     /// Cache of loaded modules keyed by canonical file path.
     /// Prevents redundant loading when multiple files `use` the same module.
     module_cache: std.StringHashMapUnmanaged(*value_mod.Module) = .{},
+    /// Stashed error object from user `throw`, consumed by `recover`.
+    thrown_error: ?value_mod.ErrorObject = null,
 
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
@@ -344,7 +347,7 @@ pub const Context = struct {
         const module_val = self.stack.pop() catch return ExecutionError.UnknownWord;
         const module = switch (module_val) {
             .module => |m| m,
-            else => return error.TypeError,
+            else => return error.TypeMismatch,
         };
 
         if (module.words.get(word_name)) |mod_word| {
@@ -468,7 +471,7 @@ pub const Context = struct {
                 const msg_copy = self.arena.allocator().dupe(u8, msg) catch return primitives.InterpreterError.StackEffectMismatch;
 
                 self.error_details.append(self.allocator, .{
-                    .error_type = "StackEffectMismatch",
+                    .error_type = "stack-effect-mismatch",
                     .message = msg_copy,
                     .source = self.current_source,
                     .line = 0,
@@ -561,7 +564,7 @@ pub const Context = struct {
                 const msg_copy = self.arena.allocator().dupe(u8, msg) catch return primitives.InterpreterError.StackEffectMismatch;
 
                 self.error_details.append(self.allocator, .{
-                    .error_type = "StackEffectMismatch",
+                    .error_type = "stack-effect-mismatch",
                     .message = msg_copy,
                     .source = self.current_source,
                     .line = 0,
@@ -584,7 +587,7 @@ pub const Context = struct {
                 const msg_copy = self.arena.allocator().dupe(u8, msg) catch return primitives.InterpreterError.StackEffectMismatch;
 
                 self.error_details.append(self.allocator, .{
-                    .error_type = "StackEffectMismatch",
+                    .error_type = "stack-effect-mismatch",
                     .message = msg_copy,
                     .source = self.current_source,
                     .line = 0,
@@ -652,13 +655,17 @@ pub const Context = struct {
         // Only capture on first error
         if (self.error_details.items.len > 0) return;
 
+        var kebab_buf: [128]u8 = undefined;
+        const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
+        const duped_name = self.arena.allocator().dupe(u8, kebab_name) catch @errorName(err);
+
         // Iterate call_stack in reverse (innermost first for display)
         var i = self.call_stack.items.len;
         while (i > 0) {
             i -= 1;
             const frame = self.call_stack.items[i];
             self.error_details.append(self.allocator, .{
-                .error_type = @errorName(err),
+                .error_type = duped_name,
                 .message = frame.word_name,
                 .source = self.current_source,
                 .line = frame.line,
@@ -701,7 +708,7 @@ pub const Context = struct {
             0;
 
         self.error_details.append(self.allocator, .{
-            .error_type = "StackEffectMismatch",
+            .error_type = "stack-effect-mismatch",
             .message = msg_copy,
             .source = self.current_source,
             .line = line,
@@ -1013,7 +1020,7 @@ pub const Context = struct {
             0;
 
         self.error_details.append(self.allocator, .{
-            .error_type = "StackEffectMismatch",
+            .error_type = "stack-effect-mismatch",
             .message = msg_copy,
             .source = self.current_source,
             .line = line,
@@ -1135,7 +1142,7 @@ test "clearExecutionDetails clears both call stack and error details" {
     // Manually add some data to test clearing
     ctx.call_stack.append(ctx.allocator, .{ .word_name = "test", .line = 1 }) catch {};
     ctx.error_details.append(ctx.allocator, .{
-        .error_type = "TestError",
+        .error_type = "test-error",
         .message = "test",
         .source = "<test>",
         .line = 1,

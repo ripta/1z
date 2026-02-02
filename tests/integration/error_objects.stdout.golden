@@ -16,3 +16,7 @@ Stack: [ ]
 Stack: [ ]
 PASS: rethrow error type
 Stack: [ ]
+=== Error type contract: bare symbol ===
+Stack: [ ]
+PASS: bare symbol contract
+Stack: [ ]

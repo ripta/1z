@@ -51,7 +51,7 @@ pub fn nativeLen(ctx: *Context) anyerror!void {
     else if (val == .module)
         @intCast(val.module.words.count())
     else
-        return error.TypeError;
+        return error.TypeMismatch;
     try ctx.stack.push(.{ .integer = len });
 }
 
@@ -81,7 +81,7 @@ pub fn nativeNth(ctx: *Context) anyerror!void {
             if (idx >= b.items.len) return error.IndexOutOfBounds;
             try ctx.stack.push(.{ .integer = b.items[idx] });
         },
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     }
 }
 
@@ -91,9 +91,9 @@ pub fn nativeFirst(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     // Sets are not supported for positional access (unordered)
-    if (val == .set) return error.TypeError;
+    if (val == .set) return error.TypeMismatch;
 
-    var iter = SequenceIterator.init(val, alloc) orelse return error.TypeError;
+    var iter = SequenceIterator.init(val, alloc) orelse return error.TypeMismatch;
     const first = try iter.next() orelse return error.EmptySequence;
     try ctx.stack.push(first);
 }
@@ -104,9 +104,9 @@ pub fn nativeLast(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     // Sets are not supported for positional access (unordered)
-    if (val == .set) return error.TypeError;
+    if (val == .set) return error.TypeMismatch;
 
-    var iter = SequenceIterator.init(val, alloc) orelse return error.TypeError;
+    var iter = SequenceIterator.init(val, alloc) orelse return error.TypeMismatch;
     var last: ?Value = null;
     while (try iter.next()) |elem| {
         last = elem;
@@ -120,7 +120,7 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
 
-    var iter = SequenceIterator.init(seq, alloc) orelse return error.TypeError;
+    var iter = SequenceIterator.init(seq, alloc) orelse return error.TypeMismatch;
     while (try iter.next()) |elem| {
         try ctx.stack.push(elem);
         try ctx.executeQuotationWithFrame(quot);
@@ -134,15 +134,15 @@ pub fn nativeMap(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
 
-    const input_kind = classifySequence(seq) orelse return error.TypeError;
+    const input_kind = classifySequence(seq) orelse return error.TypeMismatch;
     // string and byte_array map to array; others preserve type
     const output_kind: SequenceKind = switch (input_kind) {
         .string, .byte_array => .array,
         else => input_kind,
     };
 
-    const len = sequenceLength(seq) orelse return error.TypeError;
-    var iter = SequenceIterator.init(seq, alloc) orelse return error.TypeError;
+    const len = sequenceLength(seq) orelse return error.TypeMismatch;
+    var iter = SequenceIterator.init(seq, alloc) orelse return error.TypeMismatch;
     var builder = try SequenceBuilder.initWithCapacity(output_kind, alloc, len);
 
     while (try iter.next()) |elem| {
@@ -161,8 +161,8 @@ pub fn nativeFilter(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
 
-    const kind = classifySequence(seq) orelse return error.TypeError;
-    var iter = SequenceIterator.init(seq, alloc) orelse return error.TypeError;
+    const kind = classifySequence(seq) orelse return error.TypeMismatch;
+    var iter = SequenceIterator.init(seq, alloc) orelse return error.TypeMismatch;
     var builder = try SequenceBuilder.init(kind, alloc);
 
     while (try iter.next()) |elem| {
@@ -184,7 +184,7 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
 
-    var iter = SequenceIterator.init(seq, alloc) orelse return error.TypeError;
+    var iter = SequenceIterator.init(seq, alloc) orelse return error.TypeMismatch;
     while (try iter.next()) |elem| {
         try ctx.stack.push(acc);
         try ctx.stack.push(elem);
@@ -244,7 +244,7 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
             }
             try ctx.stack.push(.{ .byte_array = result_ba });
         },
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     }
 }
 
@@ -289,7 +289,7 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
                         if (i < 0 or i > 255) return error.IntegerOverflow;
                         total_len += 1;
                     },
-                    else => return error.TypeError,
+                    else => return error.TypeMismatch,
                 }
             }
             const result = alloc.alloc(u8, total_len) catch return error.OutOfMemory;
@@ -322,7 +322,7 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
                         extra_len += 1;
                     },
                     .string => |s| extra_len += s.len,
-                    else => return error.TypeError,
+                    else => return error.TypeMismatch,
                 }
             }
             const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
@@ -346,7 +346,7 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
             }
             try ctx.stack.push(.{ .byte_array = result_ba });
         },
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     }
 }
 
@@ -405,7 +405,7 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
                         if (i < 0 or i > 255) return error.IntegerOverflow;
                         total_len += 1; // single byte
                     },
-                    else => return error.TypeError,
+                    else => return error.TypeMismatch,
                 }
             }
 
@@ -440,7 +440,7 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
                         extra_len += 1;
                     },
                     .string => |s| extra_len += s.len,
-                    else => return error.TypeError,
+                    else => return error.TypeMismatch,
                 }
             }
 
@@ -467,6 +467,6 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
 
             try ctx.stack.push(.{ .byte_array = result_ba });
         },
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     }
 }
