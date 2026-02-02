@@ -31,3 +31,7 @@
 #in-bounds?: ( index seq -- ? ) [
   dupd #len < [ 0 >= ] [ drop f ] if
 ] ;
+
+\ Sequence element operations
+#suffix: ( seq elem -- seq' ) [ 1array #append ] ;
+#prefix: ( elem seq -- seq' ) [ swap 1array #prepend ] ;

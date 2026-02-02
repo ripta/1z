@@ -18,8 +18,8 @@
       1 over #len #slice            \ sep first-str rest
       <rot-                         \ first-str rest sep
 
-      \ Build reduce quotation: [ >string sep swap #concat #concat ]
-      [ swap #concat #concat ] curry  \ first-str rest [ sep swap #concat #concat ]
+      \ Build reduce quotation: [ >string sep swap #append #append ]
+      [ swap #append #append ] curry  \ first-str rest [ sep swap #append #append ]
       [ >string ] swap compose        \ first-str rest quot
 
       \ Arrange for #reduce: seq init quot

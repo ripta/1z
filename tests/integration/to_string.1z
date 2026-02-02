@@ -37,9 +37,9 @@ foo: to-string "foo:" "symbol" assert=
 \ Stack should be empty after . - verify by pushing and checking
 99 99 "dot consumes value" assert=
 
-"to-string with #concat" test-section
-"Value: " 42 to-string #concat "Value: 42" "simple concat" assert=
-"Result: " 100 to-string #concat " items" #concat "Result: 100 items" "chained concat" assert=
+"to-string with #append" test-section
+"Value: " 42 to-string #append "Value: 42" "simple append" assert=
+"Result: " 100 to-string #append " items" #append "Result: 100 items" "chained append" assert=
 
 "to-string on hash" test-section
 H{ a: 1 } to-string
