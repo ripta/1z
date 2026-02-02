@@ -1,0 +1,37 @@
+=== cond basics ===
+Stack: [ ]
+Stack: [ 5 "positive" ]
+PASS: single branch match
+Stack: [ 5 ]
+Stack: [ 5 3 "positive" ]
+PASS: first branch wins
+Stack: [ 5 3 ]
+Stack: [ 5 3 0 "zero" ]
+PASS: second branch matches
+Stack: [ 5 3 0 ]
+=== cond with default ===
+Stack: [ 5 3 0 ]
+Stack: [ 5 3 0 "negative" ]
+PASS: default branch
+Stack: [ 5 3 0 ]
+Stack: [ 5 3 0 "always" ]
+PASS: default-only branch
+Stack: [ 5 3 0 ]
+=== cond error on no match ===
+Stack: [ 5 3 0 ]
+PASS: no match without default errors
+Stack: [ 5 3 0 ]
+=== cond preserves stack ===
+Stack: [ 5 3 0 ]
+Stack: [ 5 3 0 100 "found" ]
+PASS: cond result correct
+Stack: [ 5 3 0 100 ]
+PASS: stack preserved below
+Stack: [ 5 3 0 ]
+=== cond with multiple value types ===
+Stack: [ 5 3 0 ]
+Stack: [ 5 3 0 "hello" "greeting" ]
+PASS: string dispatch
+Stack: [ 5 3 0 "hello" ]
+All cond tests complete!
+Stack: [ 5 3 0 "hello" ]
