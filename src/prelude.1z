@@ -174,6 +174,22 @@ loop: ( ... pred: ( ... -- ... ? ) -- ... ) [
 ] ;
 
 \ Multi-way dispatch
+case: ( val branches -- ... ) [
+  dup #len 0 = [
+    drop no-matching-branch throw
+  ] [
+    dup #first dup quotation? [
+      nip call
+    ] [
+      dup #first 3 pick-n = [
+        #last nip nip call
+      ] [
+        drop
+        dup #len 1 swap #slice case
+      ] if
+    ] if
+  ] if
+] ;
 cond: ( branches -- ... ) [
   dup #len 0 = [
     drop { cond: } no-matching-branch throw
