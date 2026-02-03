@@ -115,4 +115,15 @@ wipe
 \ Test: binary still works
 10 20 compute 3000 "another binary dispatch" assert=
 
+"generic? predicate" test-section
+
+\ Define a generic word for this test
+test-generic: ( x -- x ) generic [ ] ;
+
+\ Test generic? on a generic word
+"test-generic" generic? t "generic? returns true for generic word" assert=
+
+\ Test generic? on a non-generic word
+"dup" generic? f "generic? returns false for non-generic word" assert=
+
 "all generic dispatch tests passed" test-section

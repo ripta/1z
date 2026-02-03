@@ -67,5 +67,12 @@ Stack: [ ]
 Stack: [ ]
 PASS: another binary dispatch
 Stack: [ ]
+=== generic? predicate ===
+Stack: [ ]
+Stack: [ ]
+PASS: generic? returns true for generic word
+Stack: [ ]
+PASS: generic? returns false for non-generic word
+Stack: [ ]
 === all generic dispatch tests passed ===
 Stack: [ ]
