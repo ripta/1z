@@ -10,6 +10,8 @@ pub const primitives = [_]Primitive{
     .{ .name = ">string", .stack_effect = "value -- string", .func = nativeAsString },
     .{ .name = ">bytes", .stack_effect = "string -- byte-array", .func = nativeToBytes },
     .{ .name = "bytes>", .stack_effect = "byte-array -- string", .func = nativeBytesToString },
+    .{ .name = "uppercase", .stack_effect = "str -- str", .func = nativeUppercase },
+    .{ .name = "lowercase", .stack_effect = "str -- str", .func = nativeLowercase },
 };
 
 /// to-string ( value -- string ) - Convert any value to its string representation,
@@ -64,6 +66,38 @@ fn nativeBytesToString(ctx: *Context) anyerror!void {
         .byte_array => |b| {
             const alloc = ctx.quotationAllocator();
             const result = alloc.dupe(u8, b.items) catch return error.OutOfMemory;
+            try ctx.stack.push(.{ .string = result });
+        },
+        else => return error.TypeMismatch,
+    }
+}
+
+/// uppercase ( str -- str ) - Convert ASCII letters to uppercase, non-ASCII bytes pass through
+fn nativeUppercase(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .string => |s| {
+            const alloc = ctx.quotationAllocator();
+            const result = alloc.alloc(u8, s.len) catch return error.OutOfMemory;
+            for (s, 0..) |c, i| {
+                result[i] = std.ascii.toUpper(c);
+            }
+            try ctx.stack.push(.{ .string = result });
+        },
+        else => return error.TypeMismatch,
+    }
+}
+
+/// lowercase ( str -- str ) - Convert ASCII letters to lowercase, non-ASCII bytes pass through
+fn nativeLowercase(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .string => |s| {
+            const alloc = ctx.quotationAllocator();
+            const result = alloc.alloc(u8, s.len) catch return error.OutOfMemory;
+            for (s, 0..) |c, i| {
+                result[i] = std.ascii.toLower(c);
+            }
             try ctx.stack.push(.{ .string = result });
         },
         else => return error.TypeMismatch,
