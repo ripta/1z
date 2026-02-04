@@ -1,4 +1,6 @@
+=== parse-until ===
+Stack: [ ]
 Stack: [ ]
 Stack: [ [ 1 2 3 ] ]
-6
+PASS: parse-until captures tokens
 Stack: [ ]

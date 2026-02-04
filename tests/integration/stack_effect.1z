@@ -1,53 +1,72 @@
 \ Stack effect validation tests
 
+use "testing" ;
+
+"basic stack effects" test-section
+
 \ Basic stack effects - correct declarations
 double: ( n -- n ) [ 2 * ] ;
-5 double .
+5 double 10 "double" assert=
 
 square: ( n -- n ) [ dup * ] ;
-4 square .
+4 square 16 "square" assert=
 
 add3: ( a b c -- sum ) [ + + ] ;
-1 2 3 add3 .
+1 2 3 add3 6 "add3" assert=
+
+"multiple outputs" test-section
 
 \ Stack effect with multiple outputs
 dup2: ( a -- a a ) [ dup ] ;
-7 dup2 + .
+7 dup2 + 14 "dup2" assert=
+
+"consuming words" test-section
 
 \ Words that consume without producing
 consume2: ( a b -- ) [ drop drop ] ;
 1 2 consume2
-"consumed" .
+t "consume2 no stack effect" assert-true
+
+"quotation parameters" test-section
 
 \ Words with quotation parameters - correct effects
 apply-twice: ( n quot: ( n -- n ) -- n ) [ dup dip call ] ;
-5 [ 1 + ] apply-twice .
+5 [ 1 + ] apply-twice 7 "apply-twice" assert=
+
+"while with row variables" test-section
 
 \ Using while with correct effect (tests row variable validation)
-count-up: ( start end -- ) [
-  [ 2dup > ] [ swap dup . 1 + swap ] while
-  2drop
+count-to-zero: ( n -- 0 ) [
+  [ dup 0 > ] [ 1 - ] while
 ] ;
-0 3 count-up
+5 count-to-zero 0 "count-to-zero" assert=
+
+"recover quotation effects" test-section
 
 \ Using recover with correct quotation effects
 \ The recover-quot has effect ( error -- ), must only consume error
-error-handler: ( -- ) [
+error-handler: ( -- result ) [
   [ drop ] [ drop ] recover
-  "handled" .
+  handled:
 ] ;
-error-handler
+error-handler handled: "error-handler" assert=
+
+"nested quotation effects" test-section
 
 \ Nested quotation effects through combinators
 transform: ( n f: ( n -- n ) g: ( n -- n ) -- n ) [ bi + ] ;
-5 [ 2 * ] [ 3 + ] transform .
+5 [ 2 * ] [ 3 + ] transform 18 "transform" assert=
+
+"row variable passthrough" test-section
 
 \ Stack effect with only row variables (passthrough)
 passthrough: ( ..a -- ..a ) [ ] ;
 1 2 3 passthrough
-+ + .
++ + 6 "passthrough" assert=
+
+"if with stack effect" test-section
 
 \ Effect validation with if
 max2: ( a b -- max ) [ 2dup > [ drop ] [ nip ] if ] ;
-3 7 max2 .
-9 4 max2 .
+3 7 max2 7 "max2 second larger" assert=
+9 4 max2 9 "max2 first larger" assert=

@@ -1,6 +1,10 @@
+=== boolean truthiness ===
+Stack: [ ]
 PASS: t is truthy
 Stack: [ ]
 PASS: f is falsy
+Stack: [ ]
+=== integer truthiness (all truthy, including 0) ===
 Stack: [ ]
 PASS: 0 is truthy
 Stack: [ ]
@@ -10,13 +14,19 @@ PASS: -1 is truthy
 Stack: [ ]
 PASS: 42 is truthy
 Stack: [ ]
+=== string truthiness (all truthy, including empty) ===
+Stack: [ ]
 PASS: empty string is truthy
 Stack: [ ]
 PASS: non-empty string is truthy
 Stack: [ ]
+=== array truthiness (all truthy, including empty) ===
+Stack: [ ]
 PASS: empty array is truthy
 Stack: [ ]
 PASS: non-empty array is truthy
+Stack: [ ]
+=== other types (all truthy) ===
 Stack: [ ]
 PASS: empty quotation is truthy
 Stack: [ ]
@@ -24,9 +34,9 @@ PASS: empty hash is truthy
 Stack: [ ]
 PASS: symbol is truthy
 Stack: [ ]
+=== practical use: index-of returning 0 vs f ===
 Stack: [ ]
+PASS: index 0 is truthy (found)
 Stack: [ ]
-PASS: index found
-Stack: [ ]
-PASS: correctly not found
+PASS: f is falsy (not found)
 Stack: [ ]

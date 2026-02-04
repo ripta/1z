@@ -1,18 +1,22 @@
 \ Test that parse-time words execute during parsing
 
+use "testing" ;
+
+"parse-time execution" test-section
+
 \ Define a parse-time word that pushes a value
 push42: parse-time [ 42 ] ;
 
 \ When we call push42, it should execute at parse-time
 \ and the 42 should be compiled as a literal, not at runtime
-push42 .
+push42 42 "parse-time literal" assert=
 
 \ Define another parse-time word that does computation
 computed: parse-time [ 10 20 + ] ;
 
 \ The result (30) should be computed at parse-time
-computed .
+computed 30 "parse-time computation" assert=
 
 \ Verify that regular words still work
 regular: [ 100 ] ;
-regular .
+regular 100 "regular word" assert=

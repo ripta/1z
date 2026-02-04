@@ -1,9 +1,11 @@
-Stack: [ ]
-42
-Stack: [ ]
-Stack: [ ]
-30
+=== parse-time execution ===
 Stack: [ ]
 Stack: [ ]
-100
+PASS: parse-time literal
+Stack: [ ]
+Stack: [ ]
+PASS: parse-time computation
+Stack: [ ]
+Stack: [ ]
+PASS: regular word
 Stack: [ ]

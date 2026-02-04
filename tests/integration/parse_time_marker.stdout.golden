@@ -1,9 +1,11 @@
-Stack: [ ]
-42
-Stack: [ ]
-Stack: [ ]
-100
+=== parse-time marker ===
 Stack: [ ]
 Stack: [ ]
-200
+PASS: regular word
+Stack: [ ]
+Stack: [ ]
+PASS: parse-time word
+Stack: [ ]
+Stack: [ ]
+PASS: parse-time with stack effect
 Stack: [ ]

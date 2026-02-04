@@ -1,156 +1,118 @@
 \ Test sequence predicates and utilities
 
-\ ============================================================================
-\ #empty?
-\ ============================================================================
+use "testing" ;
 
-\ Empty sequences
-{ } #empty? .
-"" #empty? .
-V{ } #empty? .
-B{ } #empty? .
+"#empty? - empty sequences" test-section
+{ } #empty? "#empty? array" assert-true
+"" #empty? "#empty? string" assert-true
+V{ } #empty? "#empty? vector" assert-true
+B{ } #empty? "#empty? byte-array" assert-true
 
-\ Non-empty sequences
-{ 1 } #empty? .
-"a" #empty? .
-V{ 1 } #empty? .
-B{ 1 } #empty? .
+"#empty? - non-empty sequences" test-section
+{ 1 } #empty? "#empty? array with element" assert-false
+"a" #empty? "#empty? string with char" assert-false
+V{ 1 } #empty? "#empty? vector with element" assert-false
+B{ 1 } #empty? "#empty? byte-array with byte" assert-false
 
-\ ============================================================================
-\ #starts-with?
-\ ============================================================================
+"#starts-with? - strings" test-section
+"hello" "he" #starts-with? "starts-with he" assert-true
+"hello" "lo" #starts-with? "not starts-with lo" assert-false
+"hello" "" #starts-with? "starts-with empty" assert-true
+"hello" "hello" #starts-with? "starts-with self" assert-true
+"hello" "hello world" #starts-with? "not starts-with longer" assert-false
 
-\ Strings
-"hello" "he" #starts-with? .
-"hello" "lo" #starts-with? .
-"hello" "" #starts-with? .
-"hello" "hello" #starts-with? .
-"hello" "hello world" #starts-with? .
+"#starts-with? - arrays" test-section
+{ 1 2 3 } { 1 2 } #starts-with? "array starts-with prefix" assert-true
+{ 1 2 3 } { 2 3 } #starts-with? "array not starts-with suffix" assert-false
+{ 1 2 3 } { } #starts-with? "array starts-with empty" assert-true
+{ 1 2 3 } { 1 2 3 } #starts-with? "array starts-with self" assert-true
+{ 1 2 3 } { 1 2 3 4 } #starts-with? "array not starts-with longer" assert-false
 
-\ Arrays
-{ 1 2 3 } { 1 2 } #starts-with? .
-{ 1 2 3 } { 2 3 } #starts-with? .
-{ 1 2 3 } { } #starts-with? .
-{ 1 2 3 } { 1 2 3 } #starts-with? .
-{ 1 2 3 } { 1 2 3 4 } #starts-with? .
+"#ends-with? - strings" test-section
+"hello" "lo" #ends-with? "ends-with lo" assert-true
+"hello" "he" #ends-with? "not ends-with he" assert-false
+"hello" "" #ends-with? "ends-with empty" assert-true
+"hello" "hello" #ends-with? "ends-with self" assert-true
+"hello" "ahello" #ends-with? "not ends-with longer" assert-false
 
-\ ============================================================================
-\ #ends-with?
-\ ============================================================================
+"#ends-with? - arrays" test-section
+{ 1 2 3 } { 2 3 } #ends-with? "array ends-with suffix" assert-true
+{ 1 2 3 } { 1 2 } #ends-with? "array not ends-with prefix" assert-false
+{ 1 2 3 } { } #ends-with? "array ends-with empty" assert-true
+{ 1 2 3 } { 1 2 3 } #ends-with? "array ends-with self" assert-true
+{ 1 2 3 } { 0 1 2 3 } #ends-with? "array not ends-with longer" assert-false
 
-\ Strings
-"hello" "lo" #ends-with? .
-"hello" "he" #ends-with? .
-"hello" "" #ends-with? .
-"hello" "hello" #ends-with? .
-"hello" "ahello" #ends-with? .
+"#in? - strings (substring)" test-section
+"hello" "ll" #in? "substring ll" assert-true
+"hello" "x" #in? "substring x not found" assert-false
+"hello" "" #in? "empty substring" assert-true
+"hello" "hello" #in? "full string" assert-true
 
-\ Arrays
-{ 1 2 3 } { 2 3 } #ends-with? .
-{ 1 2 3 } { 1 2 } #ends-with? .
-{ 1 2 3 } { } #ends-with? .
-{ 1 2 3 } { 1 2 3 } #ends-with? .
-{ 1 2 3 } { 0 1 2 3 } #ends-with? .
+"#in? - arrays (element)" test-section
+{ 1 2 3 } 2 #in? "element 2 found" assert-true
+{ 1 2 3 } 5 #in? "element 5 not found" assert-false
+{ "a" "b" "c" } "b" #in? "string element found" assert-true
+{ "a" "b" "c" } "d" #in? "string element not found" assert-false
 
-\ ============================================================================
-\ #in?
-\ ============================================================================
+"#in? - sets" test-section
+S{ 1 2 3 } 2 #in? "set contains 2" assert-true
+S{ 1 2 3 } 5 #in? "set not contains 5" assert-false
 
-\ Strings (substring)
-"hello" "ll" #in? .
-"hello" "x" #in? .
-"hello" "" #in? .
-"hello" "hello" #in? .
+"#in? - byte arrays" test-section
+B{ 65 66 67 } 66 #in? "byte 66 found" assert-true
+B{ 65 66 67 } 68 #in? "byte 68 not found" assert-false
 
-\ Arrays (element)
-{ 1 2 3 } 2 #in? .
-{ 1 2 3 } 5 #in? .
-{ "a" "b" "c" } "b" #in? .
-{ "a" "b" "c" } "d" #in? .
+"#index-of - strings" test-section
+"hello" "e" #index-of 1 "index-of e" assert=
+"hello" "ll" #index-of 2 "index-of ll" assert=
+"hello" "x" #index-of f "index-of x not found" assert=
+"hello" "o" #index-of 4 "index-of o" assert=
+"hello" "" #index-of 0 "index-of empty" assert=
 
-\ Sets
-S{ 1 2 3 } 2 #in? .
-S{ 1 2 3 } 5 #in? .
+"#index-of - arrays" test-section
+{ 10 20 30 } 20 #index-of 1 "index-of 20" assert=
+{ 10 20 30 } 50 #index-of f "index-of 50 not found" assert=
+{ "a" "b" "c" } "c" #index-of 2 "index-of c" assert=
+{ "a" "b" "c" } "d" #index-of f "index-of d not found" assert=
 
-\ Byte arrays
-B{ 65 66 67 } 66 #in? .
-B{ 65 66 67 } 68 #in? .
+"#index-of - byte arrays" test-section
+B{ 65 66 67 } 66 #index-of 1 "byte index-of 66" assert=
+B{ 65 66 67 } 68 #index-of f "byte index-of 68 not found" assert=
 
-\ ============================================================================
-\ #index-of
-\ ============================================================================
+"#take - strings" test-section
+"hello" 3 #take "hel" "take 3 from hello" assert=
+"hello" 0 #take "" "take 0" assert=
+"hello" 10 #take "hello" "take more than length" assert=
 
-\ Strings (returns codepoint index)
-"hello" "e" #index-of .
-"hello" "ll" #index-of .
-"hello" "x" #index-of .
-"hello" "o" #index-of .
-"hello" "" #index-of .
+"#take - arrays" test-section
+{ 1 2 3 4 5 } 3 #take { 1 2 3 } "take 3 from array" assert=
+{ 1 2 3 } 0 #take { } "take 0 from array" assert=
+{ 1 2 3 } 10 #take { 1 2 3 } "take more than length" assert=
 
-\ Arrays
-{ 10 20 30 } 20 #index-of .
-{ 10 20 30 } 50 #index-of .
-{ "a" "b" "c" } "c" #index-of .
-{ "a" "b" "c" } "d" #index-of .
+"#take - vectors" test-section
+V{ 1 2 3 4 5 } 2 #take V{ 1 2 } "take 2 from vector" assert=
 
-\ Byte arrays
-B{ 65 66 67 } 66 #index-of .
-B{ 65 66 67 } 68 #index-of .
+"#drop - strings" test-section
+"hello" 2 #drop "llo" "drop 2 from hello" assert=
+"hello" 0 #drop "hello" "drop 0" assert=
+"hello" 10 #drop "" "drop more than length" assert=
 
-\ ============================================================================
-\ #take
-\ ============================================================================
+"#drop - arrays" test-section
+{ 1 2 3 4 5 } 2 #drop { 3 4 5 } "drop 2 from array" assert=
+{ 1 2 3 } 0 #drop { 1 2 3 } "drop 0 from array" assert=
+{ 1 2 3 } 10 #drop { } "drop more than length" assert=
 
-\ Strings
-"hello" 3 #take .
-"hello" 0 #take .
-"hello" 10 #take .
+"#drop - vectors" test-section
+V{ 1 2 3 4 5 } 3 #drop V{ 4 5 } "drop 3 from vector" assert=
 
-\ Arrays
-{ 1 2 3 4 5 } 3 #take .
-{ 1 2 3 } 0 #take .
-{ 1 2 3 } 10 #take .
+"#index-of with truthiness (0 is truthy)" test-section
+{ "a" "b" "c" } "a" #index-of 0 "index 0 found" assert=
+{ "a" "b" "c" } "a" #index-of [ t ] [ f ] if "index 0 is truthy" assert-true
+{ "a" "b" "c" } "d" #index-of f "not found returns f" assert=
 
-\ Vectors
-V{ 1 2 3 4 5 } 2 #take .
-
-\ ============================================================================
-\ #drop
-\ ============================================================================
-
-\ Strings
-"hello" 2 #drop .
-"hello" 0 #drop .
-"hello" 10 #drop .
-
-\ Arrays
-{ 1 2 3 4 5 } 2 #drop .
-{ 1 2 3 } 0 #drop .
-{ 1 2 3 } 10 #drop .
-
-\ Vectors
-V{ 1 2 3 4 5 } 3 #drop .
-
-\ ============================================================================
-\ #index-of with new truthiness (0 is truthy)
-\ ============================================================================
-
-\ This test demonstrates that index 0 is distinguishable from "not found"
-\ Using dup since if consumes the condition
-{ "a" "b" "c" } "a" #index-of dup [ "found at index " swap to-string #append ] [ drop "not found" ] if print
-{ "a" "b" "c" } "d" #index-of dup [ "found at index " swap to-string #append ] [ drop "not found" ] if print
-
-\ ============================================================================
-\ UTF-8 handling
-\ ============================================================================
-
-\ #take and #drop with multi-byte characters
-"café" 3 #take .
-"café" 2 #drop .
-
-\ #starts-with? and #ends-with? with UTF-8
-"日本語" "日本" #starts-with? .
-"日本語" "語" #ends-with? .
-
-\ #index-of with UTF-8
-"café" "é" #index-of .
+"UTF-8 handling" test-section
+"café" 3 #take "caf" "take 3 from UTF-8" assert=
+"café" 2 #drop "fé" "drop 2 from UTF-8" assert=
+"日本語" "日本" #starts-with? "UTF-8 starts-with" assert-true
+"日本語" "語" #ends-with? "UTF-8 ends-with" assert-true
+"café" "é" #index-of 3 "UTF-8 index-of" assert=

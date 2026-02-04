@@ -1,10 +1,12 @@
-3
+=== comments in multiline quotations ===
 Stack: [ ]
-3
+PASS: comment mid-quotation
 Stack: [ ]
-[ ]
+PASS: comment on own line
 Stack: [ ]
-[ ]
+PASS: empty quotation
 Stack: [ ]
-3
+PASS: quotation with only comment
+Stack: [ ]
+PASS: multiple comments
 Stack: [ ]

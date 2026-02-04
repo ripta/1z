@@ -1,5 +1,9 @@
 \ Test parse-until primitive
 
+use "testing" ;
+
+"parse-until" test-section
+
 \ Define a parse-time word that uses parse-until
 capture-until-end: parse-time [ "END" parse-until ] ;
 
@@ -7,5 +11,5 @@ capture-until-end: parse-time [ "END" parse-until ] ;
 capture-until-end 1 2 3 END
 
 \ The result should be a quotation containing [ 1 2 3 ]
-\ Execute it and print the result
-call + + .
+\ Execute it and verify the result
+call + + 6 "parse-until captures tokens" assert=

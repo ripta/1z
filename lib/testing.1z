@@ -1,12 +1,22 @@
 \ lib/testing.1z - Test helper library for 1z
 \
 \ Usage:
-\   "lib/testing.1z" load
 \
+\   use "testing" ;
+\
+\   "test section name" test-section
 \   5 5 "five equals five" assert=
 \   t "condition is true" assert-true
+\   f "condition is false" assert-false
 \   [ 1 0 / ] "division by zero" assert-error
 \   [ 1 0 / ] division-by-zero: "division by zero" assert-error-type
+\
+\ Design tests using assert words over printing the output.
+\
+\   - Clear pass/fail output: "PASS: test name" or "FAIL: test name (expected X, got Y)"
+\   - Self-documenting: test intent is explicit in the assertion
+\   - Failure details: shows expected vs actual values on failure
+\   - Reduced golden file churn: no need to track exact output values
 
 \ Core assertion: check equality, print PASS/FAIL with values on failure
 \ Stack: actual expected msg --

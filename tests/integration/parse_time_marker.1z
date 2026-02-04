@@ -1,16 +1,18 @@
 \ Test that parse-time word pushes a marker
 \ and that ; can define words with both marker and stack effect
 
+use "testing" ;
+
+"parse-time marker" test-section
+
 \ Define a regular word (not parse-time)
 regular-word: [ 42 ] ;
-regular-word .
+regular-word 42 "regular word" assert=
 
 \ Define a parse-time word
-\ TODO(ripta): This test just verifies the syntax works, since nothing
-\              observable happens at runtime
 my-macro: parse-time [ 100 ] ;
-my-macro .
+my-macro 100 "parse-time word" assert=
 
 \ Define a parse-time word with stack effect
 another-macro: parse-time ( -- n ) [ 200 ] ;
-another-macro .
+another-macro 200 "parse-time with stack effect" assert=
