@@ -1,0 +1,32 @@
+PASS: t is truthy
+Stack: [ ]
+PASS: f is falsy
+Stack: [ ]
+PASS: 0 is truthy
+Stack: [ ]
+PASS: 1 is truthy
+Stack: [ ]
+PASS: -1 is truthy
+Stack: [ ]
+PASS: 42 is truthy
+Stack: [ ]
+PASS: empty string is truthy
+Stack: [ ]
+PASS: non-empty string is truthy
+Stack: [ ]
+PASS: empty array is truthy
+Stack: [ ]
+PASS: non-empty array is truthy
+Stack: [ ]
+PASS: empty quotation is truthy
+Stack: [ ]
+PASS: empty hash is truthy
+Stack: [ ]
+PASS: symbol is truthy
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: index found
+Stack: [ ]
+PASS: correctly not found
+Stack: [ ]

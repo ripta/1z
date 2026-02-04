@@ -212,15 +212,13 @@ pub fn popInteger(ctx: *Context) !i64 {
     };
 }
 
+/// Pop a boolean value.
+/// Only the explicit false value is false. All other values are true.
 pub fn popBoolean(ctx: *Context) !bool {
     const val = try ctx.stack.pop();
     return switch (val) {
         .boolean => |b| b,
-        .integer => |i| i != 0,
-        else => {
-            setTypeMismatchError(ctx, "boolean", val);
-            return error.TypeMismatch;
-        },
+        else => true,
     };
 }
 
