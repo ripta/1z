@@ -21,7 +21,7 @@ V{ } 42 #push! #first 42 "#push! on empty vector" assert=
 
 "Vector mutation with #pop!" test-section
 V{ 1 2 3 } #pop! 3 "#pop! returns last element" assert=
-V{ 1 2 3 } dup #pop! drop #len 2 "vector shortened after #pop!" assert=
+#len 2 "vector shortened after #pop!" assert=
 
 "Vector mutation with #append!" test-section
 V{ 1 2 } { 3 4 } #append! #len 4 "#append! extends vector" assert=

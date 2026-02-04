@@ -27,20 +27,32 @@ const utf8SliceByCodepoints = sequence.utf8SliceByCodepoints;
 
 pub const primitives = [_]Primitive{
     .{ .name = "#len", .stack_effect = "seq -- n", .func = nativeLen },
+    // Sequence element access
     .{ .name = "#nth", .stack_effect = "seq n -- elem", .func = nativeNth },
     .{ .name = "#first", .stack_effect = "seq -- elem", .func = nativeFirst },
     .{ .name = "#last", .stack_effect = "seq -- elem", .func = nativeLast },
+    // Sequence transformations
     .{ .name = "#each", .stack_effect = "seq quot: ( elem -- ) --", .func = nativeEach },
     .{ .name = "#map", .stack_effect = "seq quot: ( elem -- elem' ) -- seq'", .func = nativeMap },
     .{ .name = "#filter", .stack_effect = "seq quot: ( elem -- ? ) -- seq'", .func = nativeFilter },
     .{ .name = "#reduce", .stack_effect = "seq init quot: ( acc elem -- acc' ) -- value", .func = nativeReduce },
     .{ .name = "#slice", .stack_effect = "seq start end -- subseq", .func = nativeSlice },
+    // Sequence concatenation
     .{ .name = "#append", .stack_effect = "seq1 seq2 -- seq", .func = nativeAppend },
     .{ .name = "#append!", .stack_effect = "vec seq -- vec", .func = nativeAppendMut },
     .{ .name = "#prepend", .stack_effect = "seq1 seq2 -- seq", .func = nativePrepend },
+    // Sequence element addition/removal
+    .{ .name = "#push", .stack_effect = "seq elem -- seq'", .func = nativePush },
+    .{ .name = "#pop", .stack_effect = "seq -- seq' elem", .func = nativePop },
+    .{ .name = "#unshift", .stack_effect = "seq elem -- seq'", .func = nativeUnshift },
+    .{ .name = "#shift", .stack_effect = "seq -- seq' elem", .func = nativeShift },
+    .{ .name = "#push!", .stack_effect = "vec elem -- vec", .func = nativePushMut },
+    .{ .name = "#pop!", .stack_effect = "vec -- vec elem", .func = nativePopMut },
+    .{ .name = "#unshift!", .stack_effect = "vec elem -- vec", .func = nativeUnshiftMut },
+    .{ .name = "#shift!", .stack_effect = "vec -- vec elem", .func = nativeShiftMut },
 };
 
-/// #len ( seq -- n ) - Get length of sequence (polymorphic on string, array, vector, byte-array, set)
+/// #len ( seq -- n ) - Get length of sequence
 pub fn nativeLen(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     // Use sequence module for standard sequences, handle associative types separately
@@ -59,7 +71,7 @@ pub fn nativeLen(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .integer = len });
 }
 
-/// #nth ( seq n -- elem ) - Get element at index (polymorphic on string, array, vector, byte-array)
+/// #nth ( seq n -- elem ) - Get element at index
 pub fn nativeNth(ctx: *Context) anyerror!void {
     const index = try popInteger(ctx);
     const val = try ctx.stack.pop();
@@ -108,7 +120,7 @@ pub fn nativeNth(ctx: *Context) anyerror!void {
     }
 }
 
-/// #first ( seq -- elem ) - Get first element (polymorphic on string, array, vector, byte-array)
+/// #first ( seq -- elem ) - Get first element
 pub fn nativeFirst(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
@@ -130,7 +142,7 @@ pub fn nativeFirst(ctx: *Context) anyerror!void {
     try ctx.stack.push(first);
 }
 
-/// #last ( seq -- elem ) - Get last element (polymorphic on string, array, vector, byte-array)
+/// #last ( seq -- elem ) - Get last element
 pub fn nativeLast(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
@@ -172,7 +184,8 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
 }
 
 /// #map ( seq quot -- seq' ) - Transform each element of sequence
-/// Note: string and byte_array map to array; others preserve type
+///
+/// NOTE(ripta): string and byte_array map to array; others preserve type
 pub fn nativeMap(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
@@ -182,7 +195,6 @@ pub fn nativeMap(ctx: *Context) anyerror!void {
         setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
         return error.TypeMismatch;
     };
-    // string and byte_array map to array; others preserve type
     const output_kind: SequenceKind = switch (input_kind) {
         .string, .byte_array => .array,
         else => input_kind,
@@ -336,6 +348,7 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
 }
 
 /// #append ( seq1 seq2 -- seq ) - Concatenate seq2 to seq1, returns new sequence of type seq1
+///
 /// seq1 determines the result type. seq2 elements are converted/iterated into seq1's type.
 pub fn nativeAppend(ctx: *Context) anyerror!void {
     const seq2 = try ctx.stack.pop();
@@ -467,6 +480,7 @@ pub fn nativeAppendMut(ctx: *Context) anyerror!void {
 }
 
 /// #prepend ( seq1 seq2 -- seq ) - Prepend seq2's elements to seq1, returns new sequence of type seq1
+///
 /// Result contains seq2's elements followed by seq1's elements, with type of seq1.
 pub fn nativePrepend(ctx: *Context) anyerror!void {
     const seq2 = try ctx.stack.pop();
@@ -586,4 +600,324 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     }
+}
+
+/// #push ( seq elem -- seq' ) - Add element to end of sequence, returns new sequence of type seq
+fn nativePush(ctx: *Context) anyerror!void {
+    const elem = try ctx.stack.pop();
+    const seq = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .array => |arr| {
+            const result = alloc.alloc(Value, arr.len + 1) catch return error.OutOfMemory;
+            @memcpy(result[0..arr.len], arr);
+            result[arr.len] = elem;
+            try ctx.stack.push(.{ .array = result });
+        },
+        .vector => |vec| {
+            const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
+            new_vec.* = Vector{};
+            new_vec.ensureTotalCapacity(alloc, vec.items.len + 1) catch return error.OutOfMemory;
+            for (vec.items) |item| {
+                new_vec.appendAssumeCapacity(item);
+            }
+            new_vec.appendAssumeCapacity(elem);
+            try ctx.stack.push(.{ .vector = new_vec });
+        },
+        .string => |s| {
+            // Element must be a string
+            const elem_str = switch (elem) {
+                .string => |es| es,
+                else => {
+                    setErrorContext(ctx, "#push on string requires string element, got {s}", .{valueTypeName(elem)});
+                    return error.TypeMismatch;
+                },
+            };
+            const result = alloc.alloc(u8, s.len + elem_str.len) catch return error.OutOfMemory;
+            @memcpy(result[0..s.len], s);
+            @memcpy(result[s.len..], elem_str);
+            try ctx.stack.push(.{ .string = result });
+        },
+        .byte_array => |b| {
+            // Element must be an integer 0-255
+            const byte_val: u8 = switch (elem) {
+                .integer => |i| blk: {
+                    if (i < 0 or i > 255) {
+                        setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
+                        return error.IntegerOverflow;
+                    }
+                    break :blk @intCast(i);
+                },
+                else => {
+                    setErrorContext(ctx, "#push on byte-array requires integer element, got {s}", .{valueTypeName(elem)});
+                    return error.TypeMismatch;
+                },
+            };
+            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+            result_ba.* = ByteArray{};
+            result_ba.ensureTotalCapacity(alloc, b.items.len + 1) catch return error.OutOfMemory;
+            for (b.items) |byte| {
+                result_ba.appendAssumeCapacity(byte);
+            }
+            result_ba.appendAssumeCapacity(byte_val);
+            try ctx.stack.push(.{ .byte_array = result_ba });
+        },
+        else => {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// #pop ( seq -- seq' elem ) - Remove last element, return both sequence and element
+fn nativePop(ctx: *Context) anyerror!void {
+    const seq = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .array => |arr| {
+            if (arr.len == 0) {
+                setErrorContext(ctx, "cannot #pop from empty array", .{});
+                return error.EmptySequence;
+            }
+            const result = alloc.alloc(Value, arr.len - 1) catch return error.OutOfMemory;
+            @memcpy(result, arr[0 .. arr.len - 1]);
+            try ctx.stack.push(.{ .array = result });
+            try ctx.stack.push(arr[arr.len - 1]);
+        },
+        .vector => |vec| {
+            if (vec.items.len == 0) {
+                setErrorContext(ctx, "cannot #pop from empty vector", .{});
+                return error.EmptySequence;
+            }
+            const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
+            new_vec.* = Vector{};
+            new_vec.ensureTotalCapacity(alloc, vec.items.len - 1) catch return error.OutOfMemory;
+            for (vec.items[0 .. vec.items.len - 1]) |item| {
+                new_vec.appendAssumeCapacity(item);
+            }
+            try ctx.stack.push(.{ .vector = new_vec });
+            try ctx.stack.push(vec.items[vec.items.len - 1]);
+        },
+        .string => |s| {
+            const cp_count = std.unicode.utf8CountCodepoints(s) catch {
+                setErrorContext(ctx, "invalid UTF-8 in string", .{});
+                return error.InvalidUtf8;
+            };
+            if (cp_count == 0) {
+                setErrorContext(ctx, "cannot #pop from empty string", .{});
+                return error.EmptySequence;
+            }
+            const bounds = utf8SliceByCodepoints(s, cp_count - 1, cp_count) orelse {
+                setErrorContext(ctx, "internal error getting last codepoint", .{});
+                return error.InvalidUtf8;
+            };
+            const rest = alloc.dupe(u8, s[0..bounds.start_byte]) catch return error.OutOfMemory;
+            const last = alloc.dupe(u8, s[bounds.start_byte..bounds.end_byte]) catch return error.OutOfMemory;
+            try ctx.stack.push(.{ .string = rest });
+            try ctx.stack.push(.{ .string = last });
+        },
+        .byte_array => |b| {
+            if (b.items.len == 0) {
+                setErrorContext(ctx, "cannot #pop from empty byte-array", .{});
+                return error.EmptySequence;
+            }
+            const last_byte = b.items[b.items.len - 1];
+            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+            result_ba.* = ByteArray{};
+            result_ba.ensureTotalCapacity(alloc, b.items.len - 1) catch return error.OutOfMemory;
+            for (b.items[0 .. b.items.len - 1]) |byte| {
+                result_ba.appendAssumeCapacity(byte);
+            }
+            try ctx.stack.push(.{ .byte_array = result_ba });
+            try ctx.stack.push(.{ .integer = last_byte });
+        },
+        else => {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// #unshift ( seq elem -- seq' ) - Add element to start of sequence, returns new sequence of type seq
+fn nativeUnshift(ctx: *Context) anyerror!void {
+    const elem = try ctx.stack.pop();
+    const seq = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .array => |arr| {
+            const result = alloc.alloc(Value, arr.len + 1) catch return error.OutOfMemory;
+            result[0] = elem;
+            @memcpy(result[1..], arr);
+            try ctx.stack.push(.{ .array = result });
+        },
+        .vector => |vec| {
+            const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
+            new_vec.* = Vector{};
+            new_vec.ensureTotalCapacity(alloc, vec.items.len + 1) catch return error.OutOfMemory;
+            new_vec.appendAssumeCapacity(elem);
+            for (vec.items) |item| {
+                new_vec.appendAssumeCapacity(item);
+            }
+            try ctx.stack.push(.{ .vector = new_vec });
+        },
+        .string => |s| {
+            const elem_str = switch (elem) {
+                .string => |es| es,
+                else => {
+                    setErrorContext(ctx, "#unshift on string requires string element, got {s}", .{valueTypeName(elem)});
+                    return error.TypeMismatch;
+                },
+            };
+            const result = alloc.alloc(u8, elem_str.len + s.len) catch return error.OutOfMemory;
+            @memcpy(result[0..elem_str.len], elem_str);
+            @memcpy(result[elem_str.len..], s);
+            try ctx.stack.push(.{ .string = result });
+        },
+        .byte_array => |b| {
+            const byte_val: u8 = switch (elem) {
+                .integer => |i| blk: {
+                    if (i < 0 or i > 255) {
+                        setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
+                        return error.IntegerOverflow;
+                    }
+                    break :blk @intCast(i);
+                },
+                else => {
+                    setErrorContext(ctx, "#unshift on byte-array requires integer element, got {s}", .{valueTypeName(elem)});
+                    return error.TypeMismatch;
+                },
+            };
+            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+            result_ba.* = ByteArray{};
+            result_ba.ensureTotalCapacity(alloc, b.items.len + 1) catch return error.OutOfMemory;
+            result_ba.appendAssumeCapacity(byte_val);
+            for (b.items) |byte| {
+                result_ba.appendAssumeCapacity(byte);
+            }
+            try ctx.stack.push(.{ .byte_array = result_ba });
+        },
+        else => {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// #shift ( seq -- seq' elem ) - Remove first element, return both truncated sequence and element
+fn nativeShift(ctx: *Context) anyerror!void {
+    const seq = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .array => |arr| {
+            if (arr.len == 0) {
+                setErrorContext(ctx, "cannot #shift from empty array", .{});
+                return error.EmptySequence;
+            }
+            const result = alloc.alloc(Value, arr.len - 1) catch return error.OutOfMemory;
+            @memcpy(result, arr[1..]);
+            try ctx.stack.push(.{ .array = result });
+            try ctx.stack.push(arr[0]);
+        },
+        .vector => |vec| {
+            if (vec.items.len == 0) {
+                setErrorContext(ctx, "cannot #shift from empty vector", .{});
+                return error.EmptySequence;
+            }
+            const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
+            new_vec.* = Vector{};
+            new_vec.ensureTotalCapacity(alloc, vec.items.len - 1) catch return error.OutOfMemory;
+            for (vec.items[1..]) |item| {
+                new_vec.appendAssumeCapacity(item);
+            }
+            try ctx.stack.push(.{ .vector = new_vec });
+            try ctx.stack.push(vec.items[0]);
+        },
+        .string => |s| {
+            const cp_count = std.unicode.utf8CountCodepoints(s) catch {
+                setErrorContext(ctx, "invalid UTF-8 in string", .{});
+                return error.InvalidUtf8;
+            };
+            if (cp_count == 0) {
+                setErrorContext(ctx, "cannot #shift from empty string", .{});
+                return error.EmptySequence;
+            }
+            const bounds = utf8SliceByCodepoints(s, 0, 1) orelse {
+                setErrorContext(ctx, "internal error getting first codepoint", .{});
+                return error.InvalidUtf8;
+            };
+            const first = alloc.dupe(u8, s[0..bounds.end_byte]) catch return error.OutOfMemory;
+            const rest = alloc.dupe(u8, s[bounds.end_byte..]) catch return error.OutOfMemory;
+            try ctx.stack.push(.{ .string = rest });
+            try ctx.stack.push(.{ .string = first });
+        },
+        .byte_array => |b| {
+            if (b.items.len == 0) {
+                setErrorContext(ctx, "cannot #shift from empty byte-array", .{});
+                return error.EmptySequence;
+            }
+            const first_byte = b.items[0];
+            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+            result_ba.* = ByteArray{};
+            result_ba.ensureTotalCapacity(alloc, b.items.len - 1) catch return error.OutOfMemory;
+            for (b.items[1..]) |byte| {
+                result_ba.appendAssumeCapacity(byte);
+            }
+            try ctx.stack.push(.{ .byte_array = result_ba });
+            try ctx.stack.push(.{ .integer = first_byte });
+        },
+        else => {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// #push! ( vec elem -- vec ) - Mutate vec to add element to end
+fn nativePushMut(ctx: *Context) anyerror!void {
+    const elem = try ctx.stack.pop();
+    const vec = try popVector(ctx);
+    const alloc = ctx.quotationAllocator();
+
+    vec.append(alloc, elem) catch return error.OutOfMemory;
+    try ctx.stack.push(.{ .vector = vec });
+}
+
+/// #pop! ( vec -- vec elem ) - Mutate vec to remove last element from vector
+fn nativePopMut(ctx: *Context) anyerror!void {
+    const vec = try popVector(ctx);
+    if (vec.items.len == 0) {
+        setErrorContext(ctx, "cannot #pop! from empty vector", .{});
+        return error.EmptySequence;
+    }
+
+    const elem = vec.pop().?;
+    try ctx.stack.push(.{ .vector = vec });
+    try ctx.stack.push(elem);
+}
+
+/// #unshift! ( vec elem -- vec ) - Mutate vec to add element to start of vector
+fn nativeUnshiftMut(ctx: *Context) anyerror!void {
+    const elem = try ctx.stack.pop();
+    const vec = try popVector(ctx);
+    const alloc = ctx.quotationAllocator();
+
+    vec.insert(alloc, 0, elem) catch return error.OutOfMemory;
+    try ctx.stack.push(.{ .vector = vec });
+}
+
+/// #shift! ( vec -- vec elem ) - Mutate vec to remove first element
+fn nativeShiftMut(ctx: *Context) anyerror!void {
+    const vec = try popVector(ctx);
+    if (vec.items.len == 0) {
+        setErrorContext(ctx, "cannot #shift! from empty vector", .{});
+        return error.EmptySequence;
+    }
+
+    const elem = vec.orderedRemove(0);
+    try ctx.stack.push(.{ .vector = vec });
+    try ctx.stack.push(elem);
 }
