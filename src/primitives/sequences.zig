@@ -26,6 +26,7 @@ const utf8NthCodepoint = sequence.utf8NthCodepoint;
 const utf8SliceByCodepoints = sequence.utf8SliceByCodepoints;
 
 pub const primitives = [_]Primitive{
+    // Sequence length
     .{ .name = "#len", .stack_effect = "seq -- n", .func = nativeLen },
     // Sequence element access
     .{ .name = "#nth", .stack_effect = "seq n -- elem", .func = nativeNth },
@@ -37,6 +38,8 @@ pub const primitives = [_]Primitive{
     .{ .name = "#filter", .stack_effect = "seq quot: ( elem -- ? ) -- seq'", .func = nativeFilter },
     .{ .name = "#reduce", .stack_effect = "seq init quot: ( acc elem -- acc' ) -- value", .func = nativeReduce },
     .{ .name = "#slice", .stack_effect = "seq start end -- subseq", .func = nativeSlice },
+    .{ .name = "#take", .stack_effect = "seq n -- seq'", .func = nativeTake },
+    .{ .name = "#drop", .stack_effect = "seq n -- seq'", .func = nativeDrop },
     // Sequence concatenation
     .{ .name = "#append", .stack_effect = "seq1 seq2 -- seq", .func = nativeAppend },
     .{ .name = "#append!", .stack_effect = "vec seq -- vec", .func = nativeAppendMut },
@@ -50,6 +53,12 @@ pub const primitives = [_]Primitive{
     .{ .name = "#pop!", .stack_effect = "vec -- vec elem", .func = nativePopMut },
     .{ .name = "#unshift!", .stack_effect = "vec elem -- vec", .func = nativeUnshiftMut },
     .{ .name = "#shift!", .stack_effect = "vec -- vec elem", .func = nativeShiftMut },
+    // Sequence predicates
+    .{ .name = "#empty?", .stack_effect = "seq -- ?", .func = nativeEmpty },
+    .{ .name = "#starts-with?", .stack_effect = "seq prefix -- ?", .func = nativeStartsWith },
+    .{ .name = "#ends-with?", .stack_effect = "seq suffix -- ?", .func = nativeEndsWith },
+    .{ .name = "#in?", .stack_effect = "seq elem -- ?", .func = nativeIn },
+    .{ .name = "#index-of", .stack_effect = "seq elem -- n/f", .func = nativeIndexOf },
 };
 
 /// #len ( seq -- n ) - Get length of sequence
@@ -920,4 +929,431 @@ fn nativeShiftMut(ctx: *Context) anyerror!void {
     const elem = vec.orderedRemove(0);
     try ctx.stack.push(.{ .vector = vec });
     try ctx.stack.push(elem);
+}
+
+/// #empty? ( seq -- ? ) - Is sequence empty?
+fn nativeEmpty(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const len = sequenceLength(val) orelse {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
+        return error.TypeMismatch;
+    };
+    try ctx.stack.push(.{ .boolean = len == 0 });
+}
+
+/// #starts-with? ( seq prefix -- ? ) - Does seq start with prefix?
+fn nativeStartsWith(ctx: *Context) anyerror!void {
+    const prefix = try ctx.stack.pop();
+    const seq = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .string => |s| {
+            const prefix_str = switch (prefix) {
+                .string => |ps| ps,
+                else => {
+                    setErrorContext(ctx, "#starts-with? on string requires string prefix, got {s}", .{valueTypeName(prefix)});
+                    return error.TypeMismatch;
+                },
+            };
+            try ctx.stack.push(.{ .boolean = std.mem.startsWith(u8, s, prefix_str) });
+        },
+        .array => |arr| {
+            const prefix_items = try sequenceToValues(prefix, alloc);
+            if (prefix_items.len > arr.len) {
+                try ctx.stack.push(.{ .boolean = false });
+                return;
+            }
+            for (prefix_items, 0..) |p, i| {
+                if (!arr[i].eql(p)) {
+                    try ctx.stack.push(.{ .boolean = false });
+                    return;
+                }
+            }
+            try ctx.stack.push(.{ .boolean = true });
+        },
+        .vector => |vec| {
+            const prefix_items = try sequenceToValues(prefix, alloc);
+            if (prefix_items.len > vec.items.len) {
+                try ctx.stack.push(.{ .boolean = false });
+                return;
+            }
+            for (prefix_items, 0..) |p, i| {
+                if (!vec.items[i].eql(p)) {
+                    try ctx.stack.push(.{ .boolean = false });
+                    return;
+                }
+            }
+            try ctx.stack.push(.{ .boolean = true });
+        },
+        .byte_array => |b| {
+            const prefix_items = try sequenceToValues(prefix, alloc);
+            if (prefix_items.len > b.items.len) {
+                try ctx.stack.push(.{ .boolean = false });
+                return;
+            }
+            for (prefix_items, 0..) |p, i| {
+                if (p != .integer or p.integer < 0 or p.integer > 255) {
+                    setErrorContext(ctx, "#starts-with? on byte-array requires integer elements 0-255", .{});
+                    return error.TypeMismatch;
+                }
+                if (b.items[i] != @as(u8, @intCast(p.integer))) {
+                    try ctx.stack.push(.{ .boolean = false });
+                    return;
+                }
+            }
+            try ctx.stack.push(.{ .boolean = true });
+        },
+        else => {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// #ends-with? ( seq suffix -- ? ) - Does seq end with suffix?
+fn nativeEndsWith(ctx: *Context) anyerror!void {
+    const suffix = try ctx.stack.pop();
+    const seq = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .string => |s| {
+            const suffix_str = switch (suffix) {
+                .string => |ss| ss,
+                else => {
+                    setErrorContext(ctx, "#ends-with? on string requires string suffix, got {s}", .{valueTypeName(suffix)});
+                    return error.TypeMismatch;
+                },
+            };
+            try ctx.stack.push(.{ .boolean = std.mem.endsWith(u8, s, suffix_str) });
+        },
+        .array => |arr| {
+            const suffix_items = try sequenceToValues(suffix, alloc);
+            if (suffix_items.len > arr.len) {
+                try ctx.stack.push(.{ .boolean = false });
+                return;
+            }
+            const start = arr.len - suffix_items.len;
+            for (suffix_items, 0..) |s, i| {
+                if (!arr[start + i].eql(s)) {
+                    try ctx.stack.push(.{ .boolean = false });
+                    return;
+                }
+            }
+            try ctx.stack.push(.{ .boolean = true });
+        },
+        .vector => |vec| {
+            const suffix_items = try sequenceToValues(suffix, alloc);
+            if (suffix_items.len > vec.items.len) {
+                try ctx.stack.push(.{ .boolean = false });
+                return;
+            }
+            const start = vec.items.len - suffix_items.len;
+            for (suffix_items, 0..) |s, i| {
+                if (!vec.items[start + i].eql(s)) {
+                    try ctx.stack.push(.{ .boolean = false });
+                    return;
+                }
+            }
+            try ctx.stack.push(.{ .boolean = true });
+        },
+        .byte_array => |b| {
+            const suffix_items = try sequenceToValues(suffix, alloc);
+            if (suffix_items.len > b.items.len) {
+                try ctx.stack.push(.{ .boolean = false });
+                return;
+            }
+            const start = b.items.len - suffix_items.len;
+            for (suffix_items, 0..) |s, i| {
+                if (s != .integer or s.integer < 0 or s.integer > 255) {
+                    setErrorContext(ctx, "#ends-with? on byte-array requires integer elements 0-255", .{});
+                    return error.TypeMismatch;
+                }
+                if (b.items[start + i] != @as(u8, @intCast(s.integer))) {
+                    try ctx.stack.push(.{ .boolean = false });
+                    return;
+                }
+            }
+            try ctx.stack.push(.{ .boolean = true });
+        },
+        else => {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// #in? ( seq elem -- ? ) - Does seq contain element? (substring for strings)
+fn nativeIn(ctx: *Context) anyerror!void {
+    const elem = try ctx.stack.pop();
+    const seq = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .string => |s| {
+            const needle = switch (elem) {
+                .string => |es| es,
+                else => {
+                    setErrorContext(ctx, "#in? on string requires string element, got {s}", .{valueTypeName(elem)});
+                    return error.TypeMismatch;
+                },
+            };
+
+            const found = std.mem.indexOf(u8, s, needle) != null;
+            try ctx.stack.push(.{ .boolean = found });
+        },
+        .array => |arr| {
+            for (arr) |item| {
+                if (item.eql(elem)) {
+                    try ctx.stack.push(.{ .boolean = true });
+                    return;
+                }
+            }
+            try ctx.stack.push(.{ .boolean = false });
+        },
+        .vector => |vec| {
+            for (vec.items) |item| {
+                if (item.eql(elem)) {
+                    try ctx.stack.push(.{ .boolean = true });
+                    return;
+                }
+            }
+            try ctx.stack.push(.{ .boolean = false });
+        },
+        .byte_array => |b| {
+            const byte_val: u8 = switch (elem) {
+                .integer => |i| blk: {
+                    if (i < 0 or i > 255) {
+                        setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
+                        return error.IntegerOverflow;
+                    }
+                    break :blk @intCast(i);
+                },
+                else => {
+                    setErrorContext(ctx, "#in? on byte-array requires integer element, got {s}", .{valueTypeName(elem)});
+                    return error.TypeMismatch;
+                },
+            };
+            const found = std.mem.indexOfScalar(u8, b.items, byte_val) != null;
+            try ctx.stack.push(.{ .boolean = found });
+        },
+        .set => |set| {
+            const found = set.contains(elem);
+            try ctx.stack.push(.{ .boolean = found });
+        },
+        else => {
+            var iter = SequenceIterator.init(seq, alloc) orelse {
+                setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+                return error.TypeMismatch;
+            };
+
+            while (try iter.next()) |item| {
+                if (item.eql(elem)) {
+                    try ctx.stack.push(.{ .boolean = true });
+                    return;
+                }
+            }
+
+            try ctx.stack.push(.{ .boolean = false });
+        },
+    }
+}
+
+/// #index-of ( seq elem -- n/f ) - Index of element, or f if not found
+fn nativeIndexOf(ctx: *Context) anyerror!void {
+    const elem = try ctx.stack.pop();
+    const seq = try ctx.stack.pop();
+
+    switch (seq) {
+        .string => |s| {
+            const needle = switch (elem) {
+                .string => |es| es,
+                else => {
+                    setErrorContext(ctx, "#index-of on string requires string element, got {s}", .{valueTypeName(elem)});
+                    return error.TypeMismatch;
+                },
+            };
+            if (std.mem.indexOf(u8, s, needle)) |byte_idx| {
+                const cp_idx = sequence.utf8CodepointCount(s[0..byte_idx]);
+                try ctx.stack.push(.{ .integer = @intCast(cp_idx) });
+            } else {
+                try ctx.stack.push(.{ .boolean = false });
+            }
+        },
+        .array => |arr| {
+            for (arr, 0..) |item, idx| {
+                if (item.eql(elem)) {
+                    try ctx.stack.push(.{ .integer = @intCast(idx) });
+                    return;
+                }
+            }
+            try ctx.stack.push(.{ .boolean = false });
+        },
+        .vector => |vec| {
+            for (vec.items, 0..) |item, idx| {
+                if (item.eql(elem)) {
+                    try ctx.stack.push(.{ .integer = @intCast(idx) });
+                    return;
+                }
+            }
+            try ctx.stack.push(.{ .boolean = false });
+        },
+        .byte_array => |b| {
+            const byte_val: u8 = switch (elem) {
+                .integer => |i| blk: {
+                    if (i < 0 or i > 255) {
+                        setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
+                        return error.IntegerOverflow;
+                    }
+                    break :blk @intCast(i);
+                },
+                else => {
+                    setErrorContext(ctx, "#index-of on byte-array requires integer element, got {s}", .{valueTypeName(elem)});
+                    return error.TypeMismatch;
+                },
+            };
+            if (std.mem.indexOfScalar(u8, b.items, byte_val)) |idx| {
+                try ctx.stack.push(.{ .integer = @intCast(idx) });
+            } else {
+                try ctx.stack.push(.{ .boolean = false });
+            }
+        },
+        else => {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// #take ( seq n -- seq' ) - First n elements
+fn nativeTake(ctx: *Context) anyerror!void {
+    const n_val = try popInteger(ctx);
+    const seq = try ctx.stack.pop();
+
+    if (n_val < 0) {
+        setErrorContext(ctx, "negative count {d}", .{n_val});
+        return error.IndexOutOfBounds;
+    }
+    const n: usize = @intCast(n_val);
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .string => |s| {
+            const cp_count = sequence.utf8CodepointCount(s);
+            const take_count = @min(n, cp_count);
+            if (take_count == 0) {
+                try ctx.stack.push(.{ .string = "" });
+                return;
+            }
+            const bounds = utf8SliceByCodepoints(s, 0, take_count) orelse {
+                try ctx.stack.push(.{ .string = "" });
+                return;
+            };
+            const result = alloc.dupe(u8, s[0..bounds.end_byte]) catch return error.OutOfMemory;
+            try ctx.stack.push(.{ .string = result });
+        },
+        .array => |arr| {
+            const take_count = @min(n, arr.len);
+            const result = alloc.alloc(Value, take_count) catch return error.OutOfMemory;
+            @memcpy(result, arr[0..take_count]);
+            try ctx.stack.push(.{ .array = result });
+        },
+        .vector => |vec| {
+            const take_count = @min(n, vec.items.len);
+            const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
+            new_vec.* = Vector{};
+            new_vec.ensureTotalCapacity(alloc, take_count) catch return error.OutOfMemory;
+            for (vec.items[0..take_count]) |item| {
+                new_vec.appendAssumeCapacity(item);
+            }
+            try ctx.stack.push(.{ .vector = new_vec });
+        },
+        .byte_array => |b| {
+            const take_count = @min(n, b.items.len);
+            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+            result_ba.* = ByteArray{};
+            result_ba.ensureTotalCapacity(alloc, take_count) catch return error.OutOfMemory;
+            for (b.items[0..take_count]) |byte| {
+                result_ba.appendAssumeCapacity(byte);
+            }
+            try ctx.stack.push(.{ .byte_array = result_ba });
+        },
+        else => {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// #drop ( seq n -- seq' ) - All but first n elements
+fn nativeDrop(ctx: *Context) anyerror!void {
+    const n_val = try popInteger(ctx);
+    const seq = try ctx.stack.pop();
+
+    if (n_val < 0) {
+        setErrorContext(ctx, "negative count {d}", .{n_val});
+        return error.IndexOutOfBounds;
+    }
+    const n: usize = @intCast(n_val);
+    const alloc = ctx.quotationAllocator();
+
+    switch (seq) {
+        .string => |s| {
+            const cp_count = sequence.utf8CodepointCount(s);
+            if (n >= cp_count) {
+                try ctx.stack.push(.{ .string = "" });
+                return;
+            }
+            const bounds = utf8SliceByCodepoints(s, n, cp_count) orelse {
+                try ctx.stack.push(.{ .string = "" });
+                return;
+            };
+            const result = alloc.dupe(u8, s[bounds.start_byte..bounds.end_byte]) catch return error.OutOfMemory;
+            try ctx.stack.push(.{ .string = result });
+        },
+        .array => |arr| {
+            if (n >= arr.len) {
+                try ctx.stack.push(.{ .array = &[_]Value{} });
+                return;
+            }
+            const result = alloc.alloc(Value, arr.len - n) catch return error.OutOfMemory;
+            @memcpy(result, arr[n..]);
+            try ctx.stack.push(.{ .array = result });
+        },
+        .vector => |vec| {
+            if (n >= vec.items.len) {
+                const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
+                new_vec.* = Vector{};
+                try ctx.stack.push(.{ .vector = new_vec });
+                return;
+            }
+            const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
+            new_vec.* = Vector{};
+            new_vec.ensureTotalCapacity(alloc, vec.items.len - n) catch return error.OutOfMemory;
+            for (vec.items[n..]) |item| {
+                new_vec.appendAssumeCapacity(item);
+            }
+            try ctx.stack.push(.{ .vector = new_vec });
+        },
+        .byte_array => |b| {
+            if (n >= b.items.len) {
+                const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+                result_ba.* = ByteArray{};
+                try ctx.stack.push(.{ .byte_array = result_ba });
+                return;
+            }
+            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+            result_ba.* = ByteArray{};
+            result_ba.ensureTotalCapacity(alloc, b.items.len - n) catch return error.OutOfMemory;
+            for (b.items[n..]) |byte| {
+                result_ba.appendAssumeCapacity(byte);
+            }
+            try ctx.stack.push(.{ .byte_array = result_ba });
+        },
+        else => {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    }
 }
