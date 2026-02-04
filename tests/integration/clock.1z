@@ -1,0 +1,46 @@
+\ Clock primitive tests
+
+use "testing" ;
+
+"clock-realtime primitive" test-section
+
+\ Helper: test clock-realtime and return results without leaving values on stack
+test-clock-realtime-types: ( -- ) [
+  clock-realtime type-of integer: "clock-realtime nsec is integer" assert=
+  type-of integer: "clock-realtime sec is integer" assert=
+] ;
+
+test-clock-realtime-sec-reasonable: ( -- ) [
+  clock-realtime drop 1700000000 > t "clock-realtime sec is reasonable" assert=
+] ;
+
+test-clock-realtime-nsec-range: ( -- ) [
+  clock-realtime swap drop
+  dup 0 >= swap 999999999 <= and t "clock-realtime nsec in valid range" assert=
+] ;
+
+test-clock-realtime-types
+test-clock-realtime-sec-reasonable
+test-clock-realtime-nsec-range
+
+"clock-monotonic primitive" test-section
+
+test-clock-monotonic-types: ( -- ) [
+  clock-monotonic type-of integer: "clock-monotonic nsec is integer" assert=
+  type-of integer: "clock-monotonic sec is integer" assert=
+] ;
+
+test-clock-monotonic-nsec-range: ( -- ) [
+  clock-monotonic swap drop
+  dup 0 >= swap 999999999 <= and t "clock-monotonic nsec in valid range" assert=
+] ;
+
+test-clock-monotonic-increases: ( -- ) [
+  clock-monotonic swap 1000000000 * +
+  clock-monotonic swap 1000000000 * +
+  <= t "clock-monotonic increases" assert=
+] ;
+
+test-clock-monotonic-types
+test-clock-monotonic-nsec-range
+test-clock-monotonic-increases
