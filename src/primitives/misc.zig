@@ -22,6 +22,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "command-line-args", .stack_effect = "-- args", .func = nativeCommandLineArgs },
     .{ .name = "sys-exit", .stack_effect = "code --", .func = nativeSysExit },
     .{ .name = "add-load-path", .stack_effect = "path --", .func = nativeAddLoadPath },
+    .{ .name = "words", .stack_effect = "--", .func = nativeWords },
 };
 
 /// help ( symbol -- ) - Display help for a word
@@ -46,6 +47,70 @@ fn nativeHelp(ctx: *Context) anyerror!void {
         }
     } else {
         try writer.print("{s}: no such word\n", .{name});
+    }
+
+    try stdout.interface.flush();
+}
+
+/// words ( -- ) - Print all defined words in dictionary
+///
+/// TODO(ripta): Return an array of words instead?
+///              Paginate long output?
+///              Show local frame words?
+fn nativeWords(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const stdout_file: std.fs.File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writer(&stdout_buf);
+    const writer = &stdout.interface;
+
+    var native_names: std.ArrayListUnmanaged([]const u8) = .{};
+    var compound_names: std.ArrayListUnmanaged([]const u8) = .{};
+
+    var iter = ctx.dictionary.entries.iterator();
+    while (iter.next()) |entry| {
+        const word = entry.value_ptr.*;
+        switch (word.action) {
+            .native => try native_names.append(alloc, entry.key_ptr.*),
+            .compound => try compound_names.append(alloc, entry.key_ptr.*),
+        }
+    }
+
+    std.mem.sort([]const u8, native_names.items, {}, struct {
+        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.lessThan);
+
+    std.mem.sort([]const u8, compound_names.items, {}, struct {
+        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.lessThan);
+
+    try writer.writeAll("=== Native Primitives ===\n");
+    for (native_names.items) |name| {
+        if (ctx.dictionary.get(name)) |word| {
+            try writer.print("{s}", .{name});
+            if (word.stack_effect) |effect| {
+                try writer.writeAll(" ");
+                try effect.write(writer);
+            }
+            try writer.writeAll("\n");
+        }
+    }
+
+    try writer.writeAll("\n=== User-Defined Words ===\n");
+    for (compound_names.items) |name| {
+        if (ctx.dictionary.get(name)) |word| {
+            try writer.print("{s}", .{name});
+            if (word.stack_effect) |effect| {
+                try writer.writeAll(" ");
+                try effect.write(writer);
+            }
+            try writer.writeAll("\n");
+        }
     }
 
     try stdout.interface.flush();
