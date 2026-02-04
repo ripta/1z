@@ -1,0 +1,31 @@
+\ Integration test: multiline strings
+
+use "testing" ;
+
+\ Test 1: literal multiline string (actual newlines in source)
+"hello
+world" "hello\nworld" "literal multiline equals escaped" assert=
+
+\ Test 2: multiline string length counts characters including newline
+"a
+b" #len 3 "multiline length is 3 (a + newline + b)" assert=
+
+\ Test 3: can extract newline character
+"a
+b" 1 #nth "\n" "middle char is newline" assert=
+
+\ Test 4: multiple lines
+"line1
+line2
+line3" #len 17 "three lines length" assert=
+
+\ Test 5: empty lines preserved
+"a
+
+b" #len 4 "empty line preserved (a + newline + newline + b)" assert=
+
+\ Test 6: mixing literal and escaped in same program
+"foo
+bar" "foo\nbar" "mixed styles equal" assert=
+
+"multiline_strings: all tests passed" print

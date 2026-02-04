@@ -1,0 +1,13 @@
+PASS: literal multiline equals escaped
+Stack: [ ]
+PASS: multiline length is 3 (a + newline + b)
+Stack: [ ]
+PASS: middle char is newline
+Stack: [ ]
+PASS: three lines length
+Stack: [ ]
+PASS: empty line preserved (a + newline + newline + b)
+Stack: [ ]
+PASS: mixed styles equal
+Stack: [ ]
+multiline_strings: all tests passedStack: [ ]
