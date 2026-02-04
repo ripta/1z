@@ -20,6 +20,16 @@ const MemoryLimitAllocator = memory_limit.MemoryLimitAllocator;
 const build_options = @import("build_options");
 pub const version = build_options.version;
 
+/// Verbosity level for REPL output.
+const Verbosity = enum(u8) {
+    // Full output: banner, prompts, stack, goodbye
+    normal = 0,
+    // Quiet: no banner
+    quiet = 1,
+    // Silent: no banner, no prompts, no stack, and no goodbye
+    silent = 2,
+};
+
 /// Print error details from the context's error stack.
 /// Format: source:line: error.TYPE message at word 'WORD'
 fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
@@ -75,7 +85,7 @@ pub fn main() u8 {
 
     // Parse flags
     var show_stack = false;
-    var quiet = false;
+    var verbosity: Verbosity = .normal;
     var file_path: ?[]const u8 = null;
     var bench_config = BenchmarkConfig{};
     var max_memory_bytes: usize = 256 * 1024 * 1024;
@@ -98,8 +108,10 @@ pub fn main() u8 {
             program_args.append(gpa_allocator, arg) catch return 1;
         } else if (std.mem.eql(u8, arg, "--show-stack")) {
             show_stack = true;
+        } else if (std.mem.eql(u8, arg, "-qq") or std.mem.eql(u8, arg, "--silent")) {
+            verbosity = .silent;
         } else if (std.mem.eql(u8, arg, "-q") or std.mem.eql(u8, arg, "--quiet")) {
-            quiet = true;
+            verbosity = .quiet;
         } else if (std.mem.eql(u8, arg, "--benchmark") or std.mem.eql(u8, arg, "-b")) {
             bench_config.enabled = true;
         } else if (std.mem.eql(u8, arg, "--benchmark=verbose")) {
@@ -236,7 +248,7 @@ pub fn main() u8 {
     const result = if (file_path) |path|
         batch(&ctx, path, show_stack)
     else blk: {
-        repl(&ctx, quiet, max_memory_bytes);
+        repl(&ctx, verbosity, max_memory_bytes);
         break :blk @as(u8, 0);
     };
 
@@ -418,13 +430,13 @@ fn formatDirectory(allocator: std.mem.Allocator, dir_path: []const u8, check_onl
     return result;
 }
 
-fn repl(ctx: *Context, quiet: bool, max_memory_bytes: usize) void {
+fn repl(ctx: *Context, verbosity: Verbosity, max_memory_bytes: usize) void {
     const stdout_file: File = .stdout();
     var stdout_buf: [4096]u8 = undefined;
     var stdout = stdout_file.writer(&stdout_buf);
     const writer = &stdout.interface;
 
-    if (!quiet) {
+    if (verbosity == .normal) {
         const mem_str = MemoryLimitAllocator.formatBytesStatic(max_memory_bytes);
         writer.print("1z interpreter v{s} ({s} max)\n", .{ version, mem_str }) catch return;
         writer.writeAll("Press ^D to quit\n\n") catch return;
@@ -432,16 +444,16 @@ fn repl(ctx: *Context, quiet: bool, max_memory_bytes: usize) void {
     }
 
     if (std.posix.isatty(std.posix.STDIN_FILENO)) {
-        replInteractive(ctx, writer);
+        replInteractive(ctx, verbosity, writer);
     } else {
-        replPiped(ctx, writer);
+        replPiped(ctx, verbosity, writer);
     }
 }
 
-fn replInteractive(ctx: *Context, writer: anytype) void {
+fn replInteractive(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
     var editor = LineEditor.init(ctx.allocator) catch {
         // Fall back to piped mode if terminal setup fails
-        replPiped(ctx, writer);
+        replPiped(ctx, verbosity, writer);
         return;
     };
     defer editor.deinit();
@@ -458,7 +470,12 @@ fn replInteractive(ctx: *Context, writer: anytype) void {
     var processor: StatementProcessor = .{};
     var repl_line: usize = 0;
     while (true) {
-        const prompt: []const u8 = if (processor.isAccumulating()) "+ " else "> ";
+        const prompt: []const u8 = if (verbosity == .silent)
+            ""
+        else if (processor.isAccumulating())
+            "+ "
+        else
+            "> ";
 
         const maybe_line = editor.readLine(prompt) catch {
             writer.writeAll("Error reading input\n") catch {};
@@ -470,8 +487,10 @@ fn replInteractive(ctx: *Context, writer: anytype) void {
             if (history_path) |path| {
                 editor.saveHistory(path);
             }
-            writer.writeAll("Goodbye!\n") catch {};
-            writer.flush() catch {};
+            if (verbosity != .silent) {
+                writer.writeAll("Goodbye!\n") catch {};
+                writer.flush() catch {};
+            }
             return;
         };
 
@@ -503,7 +522,7 @@ fn replInteractive(ctx: *Context, writer: anytype) void {
                     had_error = true;
                 };
 
-                if (!had_error) {
+                if (!had_error and verbosity != .silent) {
                     writer.writeAll("Stack: ") catch {};
                     ctx.stack.dump(writer) catch {};
                     writer.writeAll("\n") catch {};
@@ -516,7 +535,7 @@ fn replInteractive(ctx: *Context, writer: anytype) void {
     }
 }
 
-fn replPiped(ctx: *Context, writer: anytype) void {
+fn replPiped(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
     const stdin_file: File = .stdin();
     var stdin_buf: [4096]u8 = undefined;
     var stdin = stdin_file.reader(&stdin_buf);
@@ -525,17 +544,21 @@ fn replPiped(ctx: *Context, writer: anytype) void {
     var processor: StatementProcessor = .{};
     var repl_line: usize = 0;
     while (true) {
-        if (processor.isAccumulating()) {
-            writer.writeAll("+ ") catch return;
-        } else {
-            writer.writeAll("> ") catch return;
+        if (verbosity != .silent) {
+            if (processor.isAccumulating()) {
+                writer.writeAll("+ ") catch return;
+            } else {
+                writer.writeAll("> ") catch return;
+            }
+            writer.flush() catch return;
         }
-        writer.flush() catch return;
 
         const line = reader.takeDelimiterInclusive('\n') catch |err| switch (err) {
             error.EndOfStream => {
-                writer.writeAll("\nGoodbye!\n") catch {};
-                writer.flush() catch {};
+                if (verbosity != .silent) {
+                    writer.writeAll("\nGoodbye!\n") catch {};
+                    writer.flush() catch {};
+                }
                 return;
             },
             else => {
@@ -567,7 +590,7 @@ fn replPiped(ctx: *Context, writer: anytype) void {
                     had_error = true;
                 };
 
-                if (!had_error) {
+                if (!had_error and verbosity != .silent) {
                     writer.writeAll("Stack: ") catch return;
                     ctx.stack.dump(writer) catch return;
                     writer.writeAll("\n") catch return;
