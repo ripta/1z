@@ -10,3 +10,17 @@ milliseconds: ( n -- duration ) [ 1000000 * >duration ] ;
 seconds:      ( n -- duration ) [ 1000000000 * >duration ] ;
 minutes:      ( n -- duration ) [ 60 * seconds ] ;
 hours:        ( n -- duration ) [ 60 * minutes ] ;
+
+\ Timestamp: virtual type backed by struct{ sec nsec }
+timestamp-inner: struct{ sec nsec } ;
+timestamp: virtual{ timestamp-inner } ;
+
+\ Constructor from sec/nsec components
+make-timestamp: ( sec nsec -- timestamp ) [ make-timestamp-inner >timestamp ] ;
+
+\ Accessors
+timestamp-sec:  ( timestamp -- sec )  [ timestamp> sec>> ] ;
+timestamp-nsec: ( timestamp -- nsec ) [ timestamp> nsec>> ] ;
+
+\ Create timestamp from current wall-clock time
+now: ( -- timestamp ) [ clock-realtime make-timestamp ] ;

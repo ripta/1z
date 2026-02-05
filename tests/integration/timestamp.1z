@@ -1,0 +1,32 @@
+\ Timestamp type tests
+
+use "testing" ;
+use "time" ;
+
+"timestamp virtual type" test-section
+
+\ Basic construction and type
+0 0 make-timestamp type-of timestamp: "type-of returns timestamp:" assert=
+0 0 make-timestamp timestamp? t "timestamp? on timestamp is true" assert=
+0 0 make-timestamp-inner timestamp? f "timestamp? on inner struct is false" assert=
+
+\ Accessors
+0 0 make-timestamp timestamp-sec 0 "timestamp-sec on epoch is 0" assert=
+0 0 make-timestamp timestamp-nsec 0 "timestamp-nsec on epoch is 0" assert=
+1234567890 123456789 make-timestamp timestamp-sec 1234567890 "timestamp-sec extracts sec" assert=
+1234567890 123456789 make-timestamp timestamp-nsec 123456789 "timestamp-nsec extracts nsec" assert=
+
+"now constructor" test-section
+
+\ now returns a timestamp
+test-now-type: ( -- ) [
+  now type-of timestamp: "now returns a timestamp" assert=
+] ;
+
+\ now returns reasonable sec value (> 1700000000 for 2024+)
+test-now-sec-reasonable: ( -- ) [
+  now timestamp-sec 1700000000 > t "now sec is reasonable" assert=
+] ;
+
+test-now-type
+test-now-sec-reasonable
