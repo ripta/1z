@@ -1,0 +1,3 @@
+\ Module that defines a virtual type for scoping tests
+
+meters: virtual{ integer } ;

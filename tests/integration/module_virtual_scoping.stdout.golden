@@ -1,0 +1,33 @@
+=== Virtual words appear in module word map ===
+Stack: [ ]
+Stack: [ ]
+PASS: module has >meters
+Stack: [ ]
+PASS: module has meters>
+Stack: [ ]
+PASS: module has meters?
+Stack: [ ]
+=== Virtual words not in global scope without import ===
+Stack: [ ]
+PASS: >meters not in global scope
+Stack: [ 42 ]
+=== Qualified access works for virtual words ===
+Stack: [ 42 ]
+PASS: qualified wrap and unwrap
+Stack: [ 42 ]
+PASS: qualified predicate true
+Stack: [ 42 ]
+PASS: qualified predicate false
+Stack: [ 42 ]
+=== Selective import works for virtual words ===
+Stack: [ 42 ]
+Stack: [ 42 ]
+Stack: [ 42 ]
+PASS: selective import wrap and unwrap
+Stack: [ 42 ]
+=== Full import works for virtual words ===
+Stack: [ 42 ]
+PASS: full import predicate
+Stack: [ 42 ]
+PASS: full import unwrap
+Stack: [ 42 ]

@@ -1,0 +1,41 @@
+=== Struct words appear in module word map ===
+Stack: [ ]
+Stack: [ ]
+PASS: module has make-point
+Stack: [ ]
+PASS: module has >point
+Stack: [ ]
+PASS: module has point?
+Stack: [ ]
+PASS: module has x>>
+Stack: [ ]
+PASS: module has y>>
+Stack: [ ]
+=== Struct words not in global scope without import ===
+Stack: [ ]
+PASS: make-point not in global scope
+Stack: [ 1 2 ]
+PASS: make-point still not in global scope
+Stack: [ 1 2 1 2 ]
+=== Qualified access works for struct words ===
+Stack: [ 1 2 1 2 ]
+PASS: qualified x>>
+Stack: [ 1 2 1 2 ]
+PASS: qualified y>>
+Stack: [ 1 2 1 2 ]
+PASS: qualified point?
+Stack: [ 1 2 1 2 ]
+PASS: qualified >point and x>>
+Stack: [ 1 2 1 2 ]
+=== Selective import works for struct words ===
+Stack: [ 1 2 1 2 ]
+Stack: [ 1 2 1 2 ]
+Stack: [ 1 2 1 2 ]
+PASS: selective import make-point and x>>
+Stack: [ 1 2 1 2 ]
+=== Full import works for struct words ===
+Stack: [ 1 2 1 2 ]
+PASS: full import y>>
+Stack: [ 1 2 1 2 ]
+PASS: full import >point and point?
+Stack: [ 1 2 1 2 ]

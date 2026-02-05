@@ -1,0 +1,36 @@
+\ Test that struct auto-generated words respect module scoping
+
+use "testing" ;
+
+"Struct words appear in module word map" test-section
+
+m: "module_struct_lib.1z" load ;
+m make-point: @has? t "module has make-point" assert=
+m >point: @has? t "module has >point" assert=
+m point?: @has? t "module has point?" assert=
+m x>>: @has? t "module has x>>" assert=
+m y>>: @has? t "module has y>>" assert=
+
+"Struct words not in global scope without import" test-section
+
+[ 1 2 make-point ] [ error-type: @get EUnknownWord "make-point not in global scope" assert= ] recover
+[ 1 2 make-point ] [ error-type: @get EUnknownWord "make-point still not in global scope" assert= ] recover
+
+"Qualified access works for struct words" test-section
+
+1 2 m.make-point m.x>> 1 "qualified x>>" assert=
+1 2 m.make-point m.y>> 2 "qualified y>>" assert=
+1 2 m.make-point m.point? t "qualified point?" assert=
+H{ x: 10 y: 20 } m.>point m.x>> 10 "qualified >point and x>>" assert=
+
+"Selective import works for struct words" test-section
+
+m2: "module_struct_lib.1z" load ;
+m2 { make-point: x>>: } import
+3 4 make-point x>> 3 "selective import make-point and x>>" assert=
+
+"Full import works for struct words" test-section
+
+use "module_struct_lib.1z" ;
+5 6 make-point y>> 6 "full import y>>" assert=
+H{ x: 7 y: 8 } >point point? t "full import >point and point?" assert=

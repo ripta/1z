@@ -114,7 +114,7 @@ fn defineWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, marker
     instrs[0] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "__virtual-wrap" }, .line = 0 };
 
-    try ctx.dictionary.put(name, .{
+    try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
         .action = .{ .compound = instrs },
@@ -152,7 +152,7 @@ fn defineUnwrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, mark
     instrs[0] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "__virtual-unwrap" }, .line = 0 };
 
-    try ctx.dictionary.put(name, .{
+    try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
         .action = .{ .compound = instrs },
@@ -197,7 +197,7 @@ fn definePredicate(ctx: *Context, name: []const u8, vtype: *const VirtualType, m
     instrs[0] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "__virtual-type?" }, .line = 0 };
 
-    try ctx.dictionary.put(name, .{
+    try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
         .action = .{ .compound = instrs },

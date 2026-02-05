@@ -164,7 +164,7 @@ fn defineConstructor(ctx: *Context, name: []const u8, struct_type: *const Struct
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "__make-struct-instance" }, .line = 0 };
 
-    try ctx.dictionary.put(name, .{
+    try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
         .action = .{ .compound = instrs },
@@ -195,7 +195,7 @@ fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const Stru
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "__hash-to-struct" }, .line = 0 };
 
-    try ctx.dictionary.put(name, .{
+    try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
         .action = .{ .compound = instrs },
@@ -249,7 +249,7 @@ fn defineTypePredicate(ctx: *Context, name: []const u8, struct_type: *const Stru
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "__struct-type?" }, .line = 0 };
 
-    try ctx.dictionary.put(name, .{
+    try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
         .action = .{ .compound = instrs },
@@ -288,7 +288,7 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
     instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(field_index) } }, .line = 0 };
     instrs[2] = .{ .op = .{ .call_word = "__struct-field-get" }, .line = 0 };
 
-    try ctx.dictionary.put(name, .{
+    try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
         .action = .{ .compound = instrs },
@@ -327,7 +327,7 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
     instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(field_index) } }, .line = 0 };
     instrs[2] = .{ .op = .{ .call_word = "__struct-field-set" }, .line = 0 };
 
-    try ctx.dictionary.put(name, .{
+    try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
         .action = .{ .compound = instrs },
