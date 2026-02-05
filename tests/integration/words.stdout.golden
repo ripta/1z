@@ -29,6 +29,7 @@ Stack: [ ]
 #unshift! ( vec elem -- vec )
 % ( a b -- a%b )
 (=) ( a b -- ? )
+(trampoline) ( *unsafe-fn-ptr* --  )
 * ( a b -- a*b )
 *% ( a b -- a*b )
 + ( a b -- a+b )

@@ -6,7 +6,6 @@ const Instruction = value_mod.Instruction;
 const StructType = value_mod.StructType;
 const StructInstance = value_mod.StructInstance;
 const Marker = value_mod.Marker;
-const WordDefinition = @import("../dictionary.zig").WordDefinition;
 const markers_mod = @import("markers.zig");
 
 const helpers = @import("helpers.zig");
@@ -129,232 +128,176 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     }
 }
 
+/// Trampoline helper ( field1 .. fieldN struct-type -- instance )
+fn makeStructInstanceHelper(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const st = try helpers.popStructType(ctx);
+    const num_fields = st.fields.len;
+
+    const field_values = try alloc.alloc(Value, num_fields);
+    var i: usize = num_fields;
+    while (i > 0) {
+        i -= 1;
+        field_values[i] = try ctx.stack.pop();
+    }
+
+    const instance = try alloc.create(StructInstance);
+    instance.* = .{
+        .struct_type = st,
+        .fields = field_values,
+    };
+
+    try ctx.stack.push(.{ .struct_instance = instance });
+}
+
+/// Trampoline helper ( hash struct-type -- instance )
+fn hashToStructHelper(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const st = try helpers.popStructType(ctx);
+
+    const hash_val = try ctx.stack.pop();
+    const hash = switch (hash_val) {
+        .hash => |h| h,
+        else => return error.TypeMismatch,
+    };
+
+    const field_values = try alloc.alloc(Value, st.fields.len);
+    for (st.fields, 0..) |field, i| {
+        if (hash.get(field)) |val| {
+            field_values[i] = val;
+        } else {
+            return error.MissingField;
+        }
+    }
+
+    const instance = try alloc.create(StructInstance);
+    instance.* = .{
+        .struct_type = st,
+        .fields = field_values,
+    };
+
+    try ctx.stack.push(.{ .struct_instance = instance });
+}
+
+/// Trampoline helper ( val struct-type -- ? )
+fn structTypePredicateHelper(ctx: *Context) anyerror!void {
+    const st = try helpers.popStructType(ctx);
+
+    const val = try ctx.stack.pop();
+    const is_instance = switch (val) {
+        .struct_instance => |si| si.struct_type == st,
+        else => false,
+    };
+
+    try ctx.stack.push(.{ .boolean = is_instance });
+}
+
+/// Trampoline helper ( instance struct-type field-index -- value )
+fn structFieldGetHelper(ctx: *Context) anyerror!void {
+    const idx: usize = @intCast(try helpers.popInteger(ctx));
+    const st = try helpers.popStructType(ctx);
+    const inst = try helpers.popStructInstance(ctx);
+
+    if (inst.struct_type != st) {
+        return error.TypeMismatch;
+    }
+
+    try ctx.stack.push(inst.fields[idx]);
+}
+
+/// Trampoline helper ( instance value struct-type field-index -- instance )
+fn structFieldSetHelper(ctx: *Context) anyerror!void {
+    const idx: usize = @intCast(try helpers.popInteger(ctx));
+    const st = try helpers.popStructType(ctx);
+    const new_val = try ctx.stack.pop();
+    const inst = try helpers.popStructInstance(ctx);
+
+    if (inst.struct_type != st) {
+        return error.TypeMismatch;
+    }
+
+    inst.fields[idx] = new_val;
+    try ctx.stack.push(.{ .struct_instance = inst });
+}
+
 /// make-NAME: ( field1 field2 ... -- instance ) - positional constructor
 fn defineConstructor(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    const NativeConstructor = struct {
-        fn make(c: *Context, st: *const StructType) !void {
-            const a = c.quotationAllocator();
-            const num_fields = st.fields.len;
-
-            // Pop field values in reverse order
-            const field_values = try a.alloc(Value, num_fields);
-            var i: usize = num_fields;
-            while (i > 0) {
-                i -= 1;
-                field_values[i] = try c.stack.pop();
-            }
-
-            // Create struct instance
-            const instance = try a.create(StructInstance);
-            instance.* = .{
-                .struct_type = st,
-                .fields = field_values,
-            };
-
-            try c.stack.push(.{ .struct_instance = instance });
-        }
-    };
-
-    // NOTE(ripta): Create a closure that captures struct_type; since Zig
-    //              doesn't have closures, we'll create instructions that push
-    //              the type and call a native "word".
-    const instrs = try alloc.alloc(Instruction, 2);
+    const instrs = try alloc.alloc(Instruction, 3);
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .call_word = "__make-struct-instance" }, .line = 0 };
+    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&makeStructInstanceHelper)) } }, .line = 0 };
+    instrs[2] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
 
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
         .action = .{ .compound = instrs },
     });
-
-    // Define the internal helper if not already defined
-    if (ctx.dictionary.get("__make-struct-instance") == null) {
-        try ctx.dictionary.put("__make-struct-instance", .{
-            .name = "__make-struct-instance",
-            .action = .{
-                .native = struct {
-                    fn helper(c: *Context) anyerror!void {
-                        const st = try helpers.popStructType(c);
-                        try NativeConstructor.make(c, st);
-                    }
-                }.helper,
-            },
-        });
-    }
 }
 
 // >NAME: ( hash -- instance ) - hash-to-struct converter
 fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    // NOTE(ripta): Create instructions that push the type and call the converter
-    const instrs = try alloc.alloc(Instruction, 2);
+    const instrs = try alloc.alloc(Instruction, 3);
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .call_word = "__hash-to-struct" }, .line = 0 };
+    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&hashToStructHelper)) } }, .line = 0 };
+    instrs[2] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
 
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
         .action = .{ .compound = instrs },
     });
-
-    if (ctx.dictionary.get("__hash-to-struct") == null) {
-        try ctx.dictionary.put("__hash-to-struct", .{
-            .name = "__hash-to-struct",
-            .action = .{
-                .native = struct {
-                    fn helper(c: *Context) anyerror!void {
-                        const st = try helpers.popStructType(c);
-
-                        const hash_val = try c.stack.pop();
-                        const hash = switch (hash_val) {
-                            .hash => |h| h,
-                            else => return error.TypeMismatch,
-                        };
-
-                        const a = c.quotationAllocator();
-                        const field_values = try a.alloc(Value, st.fields.len);
-
-                        for (st.fields, 0..) |field, i| {
-                            if (hash.get(field)) |val| {
-                                field_values[i] = val;
-                            } else {
-                                return error.MissingField;
-                            }
-                        }
-
-                        const instance = try a.create(StructInstance);
-                        instance.* = .{
-                            .struct_type = st,
-                            .fields = field_values,
-                        };
-
-                        try c.stack.push(.{ .struct_instance = instance });
-                    }
-                }.helper,
-            },
-        });
-    }
 }
 
 /// NAME?: ( val -- ? ) - type predicate
 fn defineTypePredicate(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    // NOTE(ripta): Create instructions that push the type and call the predicate
-    const instrs = try alloc.alloc(Instruction, 2);
+    const instrs = try alloc.alloc(Instruction, 3);
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .call_word = "__struct-type?" }, .line = 0 };
+    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&structTypePredicateHelper)) } }, .line = 0 };
+    instrs[2] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
 
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
         .action = .{ .compound = instrs },
     });
-
-    // Define the internal helper if not already defined
-    if (ctx.dictionary.get("__struct-type?") == null) {
-        try ctx.dictionary.put("__struct-type?", .{
-            .name = "__struct-type?",
-            .action = .{
-                .native = struct {
-                    fn helper(c: *Context) anyerror!void {
-                        const st = try helpers.popStructType(c);
-
-                        const val = try c.stack.pop();
-                        const is_instance = switch (val) {
-                            .struct_instance => |si| si.struct_type == st,
-                            else => false,
-                        };
-
-                        try c.stack.push(.{ .boolean = is_instance });
-                    }
-                }.helper,
-            },
-        });
-    }
 }
 
 /// FIELD>>: ( instance -- value ) - field getter
 fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    // NOTE(ripta): Create instructions that push the type, index, and call the getter
-    const instrs = try alloc.alloc(Instruction, 3);
+    const instrs = try alloc.alloc(Instruction, 4);
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(field_index) } }, .line = 0 };
-    instrs[2] = .{ .op = .{ .call_word = "__struct-field-get" }, .line = 0 };
+    instrs[2] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&structFieldGetHelper)) } }, .line = 0 };
+    instrs[3] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
 
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
         .action = .{ .compound = instrs },
     });
-
-    if (ctx.dictionary.get("__struct-field-get") == null) {
-        try ctx.dictionary.put("__struct-field-get", .{
-            .name = "__struct-field-get",
-            .action = .{
-                .native = struct {
-                    fn helper(c: *Context) anyerror!void {
-                        const idx: usize = @intCast(try helpers.popInteger(c));
-                        const st = try helpers.popStructType(c);
-                        const inst = try helpers.popStructInstance(c);
-
-                        // Type check
-                        if (inst.struct_type != st) {
-                            return error.TypeMismatch;
-                        }
-
-                        try c.stack.push(inst.fields[idx]);
-                    }
-                }.helper,
-            },
-        });
-    }
 }
 
 /// >>FIELD: ( instance value -- instance ) - field setter
 fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    // Create instructions that push the type, index, and call the setter
-    const instrs = try alloc.alloc(Instruction, 3);
+    const instrs = try alloc.alloc(Instruction, 4);
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(field_index) } }, .line = 0 };
-    instrs[2] = .{ .op = .{ .call_word = "__struct-field-set" }, .line = 0 };
+    instrs[2] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&structFieldSetHelper)) } }, .line = 0 };
+    instrs[3] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
 
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
         .action = .{ .compound = instrs },
     });
-
-    if (ctx.dictionary.get("__struct-field-set") == null) {
-        try ctx.dictionary.put("__struct-field-set", .{
-            .name = "__struct-field-set",
-            .action = .{
-                .native = struct {
-                    fn helper(c: *Context) anyerror!void {
-                        const idx: usize = @intCast(try helpers.popInteger(c));
-                        const st = try helpers.popStructType(c);
-                        const new_val = try c.stack.pop();
-                        const inst = try helpers.popStructInstance(c);
-
-                        // Type check
-                        if (inst.struct_type != st) {
-                            return error.TypeMismatch;
-                        }
-
-                        // Mutate the field in place
-                        inst.fields[idx] = new_val;
-                        try c.stack.push(.{ .struct_instance = inst });
-                    }
-                }.helper,
-            },
-        });
-    }
 }

@@ -24,6 +24,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "sys-exit", .stack_effect = "code --", .func = nativeSysExit },
     .{ .name = "add-load-path", .stack_effect = "path --", .func = nativeAddLoadPath },
     .{ .name = "words", .stack_effect = "--", .func = nativeWords },
+    .{ .name = "(trampoline)", .stack_effect = "*unsafe-fn-ptr* --", .func = nativeTrampoline },
 };
 
 /// help ( symbol -- ) - Display help for a word
@@ -461,6 +462,25 @@ fn nativeAddLoadPath(ctx: *Context) anyerror!void {
     const path = try popString(ctx);
     const duped = ctx.quotationAllocator().dupe(u8, path) catch return error.OutOfMemory;
     ctx.load_paths.append(ctx.allocator, duped) catch return error.OutOfMemory;
+}
+
+/// (trampoline) ( *unsafe-fn-ptr* -- ) - Call a native function via pointer
+///
+/// Bridge primitive: pops a function pointer (as integer) from the stack and calls it.
+/// Used by auto-generated struct/virtual words to invoke their backing native helpers.
+///
+/// WARNING: This is inherently unsafe! The function pointer must be valid and
+///          must conform to the expected signature (fn (*Context) anyerror!void), or
+///          else the runtime will likely crash. - This is an experiment.
+fn nativeTrampoline(ctx: *Context) anyerror!void {
+    const ptr_val = try helpers.popInteger(ctx);
+    if (ptr_val <= 0) {
+        ctx.pending_error_message = "(trampoline): null or negative function pointer";
+        return error.InvalidFunctionPointer;
+    }
+    const addr: usize = @intCast(ptr_val);
+    const func: *const fn (*Context) anyerror!void = @ptrFromInt(addr);
+    try func(ctx);
 }
 
 /// 1array ( elem -- array ) - Wrap element in single-element array
