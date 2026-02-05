@@ -1,0 +1,12 @@
+\ Time library - durations, timestamps, and formatting
+
+\ Duration: virtual type backed by integer (nanoseconds)
+duration: virtual{ integer } ;
+
+\ Convenience constructors for durations
+nanoseconds:  ( n -- duration ) [ >duration ] ;
+microseconds: ( n -- duration ) [ 1000 * >duration ] ;
+milliseconds: ( n -- duration ) [ 1000000 * >duration ] ;
+seconds:      ( n -- duration ) [ 1000000000 * >duration ] ;
+minutes:      ( n -- duration ) [ 60 * seconds ] ;
+hours:        ( n -- duration ) [ 60 * minutes ] ;

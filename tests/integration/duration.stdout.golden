@@ -1,0 +1,30 @@
+=== duration virtual type ===
+Stack: [ ]
+PASS: type-of returns duration:
+Stack: [ ]
+PASS: duration> unwraps correctly
+Stack: [ ]
+PASS: duration? on duration is true
+Stack: [ ]
+PASS: duration? on plain integer is false
+Stack: [ ]
+=== duration convenience constructors ===
+Stack: [ ]
+PASS: nanoseconds wraps directly
+Stack: [ ]
+PASS: 1 microsecond = 1000 nanoseconds
+Stack: [ ]
+PASS: 5 microseconds = 5000 nanoseconds
+Stack: [ ]
+PASS: 1 millisecond = 1000000 nanoseconds
+Stack: [ ]
+PASS: 1 second = 1000000000 nanoseconds
+Stack: [ ]
+PASS: 2 seconds = 2000000000 nanoseconds
+Stack: [ ]
+PASS: 1 minute = 60 seconds in nanoseconds
+Stack: [ ]
+PASS: 1 hour = 3600 seconds in nanoseconds
+Stack: [ ]
+PASS: 5 hours = 18000 seconds in nanoseconds
+Stack: [ ]

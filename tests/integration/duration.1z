@@ -1,0 +1,37 @@
+\ Duration type tests
+
+use "testing" ;
+use "time" ;
+
+"duration virtual type" test-section
+
+\ Basic wrapping and unwrapping
+1000000000 >duration type-of duration: "type-of returns duration:" assert=
+1000000000 >duration duration> 1000000000 "duration> unwraps correctly" assert=
+
+\ Predicate
+1000000000 >duration duration? t "duration? on duration is true" assert=
+1000000000 duration? f "duration? on plain integer is false" assert=
+
+"duration convenience constructors" test-section
+
+\ nanoseconds
+42 nanoseconds duration> 42 "nanoseconds wraps directly" assert=
+
+\ microseconds (1000 nanoseconds)
+1 microseconds duration> 1000 "1 microsecond = 1000 nanoseconds" assert=
+5 microseconds duration> 5000 "5 microseconds = 5000 nanoseconds" assert=
+
+\ milliseconds (1000000 nanoseconds)
+1 milliseconds duration> 1000000 "1 millisecond = 1000000 nanoseconds" assert=
+
+\ seconds (1000000000 nanoseconds)
+1 seconds duration> 1000000000 "1 second = 1000000000 nanoseconds" assert=
+2 seconds duration> 2000000000 "2 seconds = 2000000000 nanoseconds" assert=
+
+\ minutes (60 seconds)
+1 minutes duration> 60000000000 "1 minute = 60 seconds in nanoseconds" assert=
+
+\ hours (60 minutes)
+1 hours duration> 3600000000000 "1 hour = 3600 seconds in nanoseconds" assert=
+5 hours duration> 18000000000000 "5 hours = 18000 seconds in nanoseconds" assert=
