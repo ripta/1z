@@ -1,0 +1,112 @@
+=== timezone type basics ===
+Stack: [ ]
+PASS: utc type-of
+Stack: [ ]
+PASS: local type-of
+Stack: [ ]
+PASS: utc offset is 0
+Stack: [ ]
+PASS: utc name
+Stack: [ ]
+PASS: local name is empty
+Stack: [ ]
+PASS: utc is timezone?
+Stack: [ ]
+PASS: local is timezone?
+Stack: [ ]
+PASS: integer is not timezone?
+Stack: [ ]
+=== tz-decompose UTC ===
+Stack: [ ]
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: tz-decompose UTC epoch year
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: tz-decompose UTC epoch month-num
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: tz-decompose UTC epoch day
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: tz-decompose UTC epoch weekday
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: tz-decompose UTC epoch hour
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: tz-decompose UTC epoch min
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: tz-decompose UTC epoch sec
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: tz-decompose UTC tz
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+Stack: [ ]
+PASS: tz-decompose UTC modern tz-name
+Stack: [ ]
+=== tz-decompose fixed offset ===
+Stack: [ ]
+Stack: [ H{ hour: 5 nsec: 0 tz-name: "+05" ampm: "AM" weekday: "Thursday" hour24: 5 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 5 tz: "+0500" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0500" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: tz-decompose Etc/GMT-5 hour
+Stack: [ H{ hour: 5 nsec: 0 tz-name: "+05" ampm: "AM" weekday: "Thursday" hour24: 5 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 5 tz: "+0500" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0500" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: tz-decompose Etc/GMT-5 day
+Stack: [ H{ hour: 5 nsec: 0 tz-name: "+05" ampm: "AM" weekday: "Thursday" hour24: 5 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 5 tz: "+0500" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0500" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: tz-decompose Etc/GMT-5 tz-offset
+Stack: [ H{ hour: 5 nsec: 0 tz-name: "+05" ampm: "AM" weekday: "Thursday" hour24: 5 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 5 tz: "+0500" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0500" min: 0 posix-weekday: 4 msec: 0 } ]
+Stack: [ ]
+Stack: [ H{ hour: 16 nsec: 0 tz-name: "-08" ampm: "PM" weekday: "Wednesday" hour24: 16 weekday-short: "Wed" usec: 0 month-short: "Dec" month-name: "December" hour12: 4 tz: "-0800" yearday: 365 day: 31 month: "December" iso-week: 53 iso-weekday: 3 year: 1969 year-short: 69 sec: 0 month-num: 12 weekday-name: "Wednesday" tz-offset: "-0800" min: 0 posix-weekday: 3 msec: 0 } ]
+PASS: tz-decompose Etc/GMT+8 hour (wraps to prev day)
+Stack: [ H{ hour: 16 nsec: 0 tz-name: "-08" ampm: "PM" weekday: "Wednesday" hour24: 16 weekday-short: "Wed" usec: 0 month-short: "Dec" month-name: "December" hour12: 4 tz: "-0800" yearday: 365 day: 31 month: "December" iso-week: 53 iso-weekday: 3 year: 1969 year-short: 69 sec: 0 month-num: 12 weekday-name: "Wednesday" tz-offset: "-0800" min: 0 posix-weekday: 3 msec: 0 } ]
+PASS: tz-decompose Etc/GMT+8 day (prev day)
+Stack: [ H{ hour: 16 nsec: 0 tz-name: "-08" ampm: "PM" weekday: "Wednesday" hour24: 16 weekday-short: "Wed" usec: 0 month-short: "Dec" month-name: "December" hour12: 4 tz: "-0800" yearday: 365 day: 31 month: "December" iso-week: 53 iso-weekday: 3 year: 1969 year-short: 69 sec: 0 month-num: 12 weekday-name: "Wednesday" tz-offset: "-0800" min: 0 posix-weekday: 3 msec: 0 } ]
+PASS: tz-decompose Etc/GMT+8 month (Dec)
+Stack: [ H{ hour: 16 nsec: 0 tz-name: "-08" ampm: "PM" weekday: "Wednesday" hour24: 16 weekday-short: "Wed" usec: 0 month-short: "Dec" month-name: "December" hour12: 4 tz: "-0800" yearday: 365 day: 31 month: "December" iso-week: 53 iso-weekday: 3 year: 1969 year-short: 69 sec: 0 month-num: 12 weekday-name: "Wednesday" tz-offset: "-0800" min: 0 posix-weekday: 3 msec: 0 } ]
+PASS: tz-decompose Etc/GMT+8 year (1969)
+Stack: [ H{ hour: 16 nsec: 0 tz-name: "-08" ampm: "PM" weekday: "Wednesday" hour24: 16 weekday-short: "Wed" usec: 0 month-short: "Dec" month-name: "December" hour12: 4 tz: "-0800" yearday: 365 day: 31 month: "December" iso-week: 53 iso-weekday: 3 year: 1969 year-short: 69 sec: 0 month-num: 12 weekday-name: "Wednesday" tz-offset: "-0800" min: 0 posix-weekday: 3 msec: 0 } ]
+PASS: tz-decompose Etc/GMT+8 tz-offset
+Stack: [ H{ hour: 16 nsec: 0 tz-name: "-08" ampm: "PM" weekday: "Wednesday" hour24: 16 weekday-short: "Wed" usec: 0 month-short: "Dec" month-name: "December" hour12: 4 tz: "-0800" yearday: 365 day: 31 month: "December" iso-week: 53 iso-weekday: 3 year: 1969 year-short: 69 sec: 0 month-num: 12 weekday-name: "Wednesday" tz-offset: "-0800" min: 0 posix-weekday: 3 msec: 0 } ]
+Stack: [ ]
+=== UTC >time-parts-in matches >time-parts ===
+Stack: [ ]
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: >time-parts-in UTC epoch year
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: >time-parts-in UTC epoch month-num
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: >time-parts-in UTC epoch day
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: >time-parts-in UTC epoch weekday
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: >time-parts-in UTC epoch hour
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: >time-parts-in UTC tz
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+Stack: [ ]
+=== sub-second preservation ===
+Stack: [ ]
+Stack: [ H{ hour: 0 nsec: 123456789 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 123456 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 123 } ]
+PASS: >time-parts-in nsec preserved
+Stack: [ H{ hour: 0 nsec: 123456789 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 123456 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 123 } ]
+PASS: >time-parts-in usec derived
+Stack: [ H{ hour: 0 nsec: 123456789 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 123456 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 123 } ]
+PASS: >time-parts-in msec derived
+Stack: [ H{ hour: 0 nsec: 123456789 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 123456 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 123 } ]
+Stack: [ ]
+=== derived fields ===
+Stack: [ ]
+Stack: [ H{ hour: 14 nsec: 0 tz-name: "UTC" ampm: "PM" weekday: "Sunday" hour24: 14 weekday-short: "Sun" usec: 0 month-short: "Jun" month-name: "June" hour12: 2 tz: "+0000" yearday: 166 day: 15 month: "June" iso-week: 24 iso-weekday: 7 year: 2025 year-short: 25 sec: 45 month-num: 6 weekday-name: "Sunday" tz-offset: "+0000" min: 30 posix-weekday: 0 msec: 0 } ]
+PASS: 2025 year via >time-parts-in
+Stack: [ H{ hour: 14 nsec: 0 tz-name: "UTC" ampm: "PM" weekday: "Sunday" hour24: 14 weekday-short: "Sun" usec: 0 month-short: "Jun" month-name: "June" hour12: 2 tz: "+0000" yearday: 166 day: 15 month: "June" iso-week: 24 iso-weekday: 7 year: 2025 year-short: 25 sec: 45 month-num: 6 weekday-name: "Sunday" tz-offset: "+0000" min: 30 posix-weekday: 0 msec: 0 } ]
+PASS: 2025 month-num via >time-parts-in
+Stack: [ H{ hour: 14 nsec: 0 tz-name: "UTC" ampm: "PM" weekday: "Sunday" hour24: 14 weekday-short: "Sun" usec: 0 month-short: "Jun" month-name: "June" hour12: 2 tz: "+0000" yearday: 166 day: 15 month: "June" iso-week: 24 iso-weekday: 7 year: 2025 year-short: 25 sec: 45 month-num: 6 weekday-name: "Sunday" tz-offset: "+0000" min: 30 posix-weekday: 0 msec: 0 } ]
+PASS: 2025 day via >time-parts-in
+Stack: [ H{ hour: 14 nsec: 0 tz-name: "UTC" ampm: "PM" weekday: "Sunday" hour24: 14 weekday-short: "Sun" usec: 0 month-short: "Jun" month-name: "June" hour12: 2 tz: "+0000" yearday: 166 day: 15 month: "June" iso-week: 24 iso-weekday: 7 year: 2025 year-short: 25 sec: 45 month-num: 6 weekday-name: "Sunday" tz-offset: "+0000" min: 30 posix-weekday: 0 msec: 0 } ]
+PASS: 2025 hour via >time-parts-in
+Stack: [ H{ hour: 14 nsec: 0 tz-name: "UTC" ampm: "PM" weekday: "Sunday" hour24: 14 weekday-short: "Sun" usec: 0 month-short: "Jun" month-name: "June" hour12: 2 tz: "+0000" yearday: 166 day: 15 month: "June" iso-week: 24 iso-weekday: 7 year: 2025 year-short: 25 sec: 45 month-num: 6 weekday-name: "Sunday" tz-offset: "+0000" min: 30 posix-weekday: 0 msec: 0 } ]
+PASS: 2025 min via >time-parts-in
+Stack: [ H{ hour: 14 nsec: 0 tz-name: "UTC" ampm: "PM" weekday: "Sunday" hour24: 14 weekday-short: "Sun" usec: 0 month-short: "Jun" month-name: "June" hour12: 2 tz: "+0000" yearday: 166 day: 15 month: "June" iso-week: 24 iso-weekday: 7 year: 2025 year-short: 25 sec: 45 month-num: 6 weekday-name: "Sunday" tz-offset: "+0000" min: 30 posix-weekday: 0 msec: 0 } ]
+PASS: 2025 sec via >time-parts-in
+Stack: [ H{ hour: 14 nsec: 0 tz-name: "UTC" ampm: "PM" weekday: "Sunday" hour24: 14 weekday-short: "Sun" usec: 0 month-short: "Jun" month-name: "June" hour12: 2 tz: "+0000" yearday: 166 day: 15 month: "June" iso-week: 24 iso-weekday: 7 year: 2025 year-short: 25 sec: 45 month-num: 6 weekday-name: "Sunday" tz-offset: "+0000" min: 30 posix-weekday: 0 msec: 0 } ]
+PASS: 2025 ampm via >time-parts-in
+Stack: [ H{ hour: 14 nsec: 0 tz-name: "UTC" ampm: "PM" weekday: "Sunday" hour24: 14 weekday-short: "Sun" usec: 0 month-short: "Jun" month-name: "June" hour12: 2 tz: "+0000" yearday: 166 day: 15 month: "June" iso-week: 24 iso-weekday: 7 year: 2025 year-short: 25 sec: 45 month-num: 6 weekday-name: "Sunday" tz-offset: "+0000" min: 30 posix-weekday: 0 msec: 0 } ]
+PASS: 2025 hour12 via >time-parts-in
+Stack: [ H{ hour: 14 nsec: 0 tz-name: "UTC" ampm: "PM" weekday: "Sunday" hour24: 14 weekday-short: "Sun" usec: 0 month-short: "Jun" month-name: "June" hour12: 2 tz: "+0000" yearday: 166 day: 15 month: "June" iso-week: 24 iso-weekday: 7 year: 2025 year-short: 25 sec: 45 month-num: 6 weekday-name: "Sunday" tz-offset: "+0000" min: 30 posix-weekday: 0 msec: 0 } ]
+Stack: [ ]
+=== local timezone smoke test ===
+Stack: [ ]
+PASS: local year >= 2025
+Stack: [ ]

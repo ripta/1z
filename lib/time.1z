@@ -257,3 +257,30 @@ compute-iso-week: ( yearday iso-weekday -- iso-week ) [
   swap drop swap drop swap drop swap drop swap drop
   swap drop swap drop swap drop swap drop swap drop
 ] ;
+
+\ --- Timezone type ---
+
+tz-inner: struct{ offset-min name } ;
+timezone: virtual{ tz-inner } ;
+
+make-timezone: ( offset-min name -- timezone ) [ make-tz-inner >timezone ] ;
+
+timezone-offset: ( tz -- offset-min ) [ timezone> offset-min>> ] ;
+timezone-name:   ( tz -- name )       [ timezone> name>> ] ;
+
+utc: ( -- timezone ) [ 0 "UTC" make-timezone ] ;
+local: ( -- timezone ) [ 0 "" make-timezone ] ;
+
+\ --- >time-parts-in (timezone-aware decomposition) ---
+
+>time-parts-in: ( timestamp tz -- hash ) [
+  swap dup timestamp-nsec swap timestamp-sec
+  \ Stack: tz nsec sec
+  <rot- timezone-name
+  \ Stack: nsec sec tz-name
+  tz-decompose
+  \ Stack: nsec hash
+  over nsec: swap @set
+  over 1000 / usec: swap @set
+  swap 1000000 / msec: swap @set
+] ;
