@@ -35,3 +35,32 @@ now: ( -- timestamp ) [ clock-realtime make-timestamp ] ;
 <: method{ duration duration } [ swap duration> swap duration> < ] ;
 >: method{ duration duration } [ swap duration> swap duration> > ] ;
 =: method{ duration duration } [ swap duration> swap duration> = ] ;
+
+\ Helper: split nanoseconds into sec + nsec with consistent floored semantics
+ns>sec-nsec: ( ns -- sec nsec ) [
+  dup 1000000000 % swap over - 1000000000 / swap
+] ;
+
+timestamp+nanos: ( ts nanos -- timestamp ) [
+  over timestamp-sec -rot>
+  swap timestamp-nsec +
+  ns>sec-nsec [ + ] dip
+  make-timestamp
+] ;
+
+\ Timestamp + Duration = Timestamp
++: method{ timestamp duration } [ duration> timestamp+nanos ] ;
+
+\ Duration + Timestamp = Timestamp (commutative)
++: method{ duration timestamp } [ swap duration> timestamp+nanos ] ;
+
+\ Timestamp - Duration = Timestamp
+-: method{ timestamp duration } [ duration> 0 swap - timestamp+nanos ] ;
+
+\ Timestamp - Timestamp = Duration
+-: method{ timestamp timestamp } [ over timestamp-sec over timestamp-sec - -rot> swap timestamp-nsec swap timestamp-nsec - swap 1000000000 * + >duration ] ;
+
+\ Timestamp comparison
+<: method{ timestamp timestamp } [ over timestamp-sec over timestamp-sec 2dup = [ 2drop swap timestamp-nsec swap timestamp-nsec < ] [ < 2nip ] if ] ;
+>: method{ timestamp timestamp } [ over timestamp-sec over timestamp-sec 2dup = [ 2drop swap timestamp-nsec swap timestamp-nsec > ] [ > 2nip ] if ] ;
+=: method{ timestamp timestamp } [ over timestamp-sec over timestamp-sec = [ swap timestamp-nsec swap timestamp-nsec = ] [ 2drop f ] if ] ;
