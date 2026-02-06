@@ -1,0 +1,126 @@
+\ Integration tests for >time-parts (UTC decomposition)
+
+use "testing" ;
+use "time" ;
+
+\ === Epoch timestamp (1970-01-01 00:00:00 UTC) ===
+
+"epoch timestamp fields" test-section
+
+0 0 make-timestamp >time-parts
+
+dup year: @get 1970 "epoch year" assert=
+dup year-short: @get 70 "epoch year-short" assert=
+dup month-num: @get 1 "epoch month-num" assert=
+dup month: @get "January" "epoch month" assert=
+dup month-name: @get "January" "epoch month-name" assert=
+dup month-short: @get "Jan" "epoch month-short" assert=
+dup day: @get 1 "epoch day" assert=
+dup yearday: @get 1 "epoch yearday" assert=
+dup weekday: @get "Thursday" "epoch weekday" assert=
+dup weekday-name: @get "Thursday" "epoch weekday-name" assert=
+dup weekday-short: @get "Thu" "epoch weekday-short" assert=
+dup posix-weekday: @get 4 "epoch posix-weekday" assert=
+dup iso-weekday: @get 4 "epoch iso-weekday" assert=
+dup iso-week: @get 1 "epoch iso-week" assert=
+dup hour: @get 0 "epoch hour" assert=
+dup hour24: @get 0 "epoch hour24" assert=
+dup hour12: @get 12 "epoch hour12 (midnight=12)" assert=
+dup min: @get 0 "epoch min" assert=
+dup sec: @get 0 "epoch sec" assert=
+dup nsec: @get 0 "epoch nsec" assert=
+dup usec: @get 0 "epoch usec" assert=
+dup msec: @get 0 "epoch msec" assert=
+dup ampm: @get "AM" "epoch ampm" assert=
+dup tz: @get "+0000" "epoch tz" assert=
+dup tz-offset: @get "+0000" "epoch tz-offset" assert=
+dup tz-name: @get "UTC" "epoch tz-name" assert=
+drop
+
+\ === Known 2025 date: 2025-06-15 14:30:45 UTC (epoch 1749997845) ===
+
+"2025-06-15 14:30:45 UTC" test-section
+
+1749997845 0 make-timestamp >time-parts
+
+dup year: @get 2025 "2025 year" assert=
+dup month-num: @get 6 "2025 month-num" assert=
+dup month: @get "June" "2025 month" assert=
+dup day: @get 15 "2025 day" assert=
+dup weekday: @get "Sunday" "2025 weekday" assert=
+dup hour: @get 14 "2025 hour" assert=
+dup hour12: @get 2 "2025 hour12" assert=
+dup min: @get 30 "2025 min" assert=
+dup sec: @get 45 "2025 sec" assert=
+dup ampm: @get "PM" "2025 ampm" assert=
+drop
+
+\ === Pre-1970 date: 1969-12-31 23:59:59 UTC (epoch -1) ===
+
+"pre-1970 date" test-section
+
+-1 0 make-timestamp >time-parts
+
+dup year: @get 1969 "pre-1970 year" assert=
+dup month-num: @get 12 "pre-1970 month-num" assert=
+dup month: @get "December" "pre-1970 month" assert=
+dup day: @get 31 "pre-1970 day" assert=
+dup weekday: @get "Wednesday" "pre-1970 weekday" assert=
+dup hour: @get 23 "pre-1970 hour" assert=
+dup min: @get 59 "pre-1970 min" assert=
+dup sec: @get 59 "pre-1970 sec" assert=
+drop
+
+\ === Sub-second fields ===
+
+"sub-second fields" test-section
+
+0 123456789 make-timestamp >time-parts
+
+dup nsec: @get 123456789 "sub-second nsec" assert=
+dup usec: @get 123456 "sub-second usec" assert=
+dup msec: @get 123 "sub-second msec" assert=
+drop
+
+\ === Leap year: 2024-02-29 (epoch 1709164800) ===
+
+"leap year Feb 29" test-section
+
+1709164800 0 make-timestamp >time-parts
+
+dup year: @get 2024 "leap year" assert=
+dup month-num: @get 2 "leap month" assert=
+dup day: @get 29 "leap day" assert=
+dup yearday: @get 60 "leap yearday (Feb 29 = day 60)" assert=
+dup weekday: @get "Thursday" "leap weekday" assert=
+drop
+
+\ === Midnight/noon edge cases ===
+
+"midnight and noon" test-section
+
+\ Midnight: hour=0, hour12=12, ampm=AM
+0 0 make-timestamp >time-parts
+dup hour: @get 0 "midnight hour" assert=
+dup hour12: @get 12 "midnight hour12" assert=
+dup ampm: @get "AM" "midnight ampm" assert=
+drop
+
+\ Noon: hour=12, hour12=12, ampm=PM (epoch + 12 hours = 43200)
+43200 0 make-timestamp >time-parts
+dup hour: @get 12 "noon hour" assert=
+dup hour12: @get 12 "noon hour12" assert=
+dup ampm: @get "PM" "noon ampm" assert=
+drop
+
+\ 1 AM: hour=1, hour12=1
+3600 0 make-timestamp >time-parts
+dup hour12: @get 1 "1am hour12" assert=
+dup ampm: @get "AM" "1am ampm" assert=
+drop
+
+\ 1 PM: hour=13, hour12=1
+46800 0 make-timestamp >time-parts
+dup hour12: @get 1 "1pm hour12" assert=
+dup ampm: @get "PM" "1pm ampm" assert=
+drop
