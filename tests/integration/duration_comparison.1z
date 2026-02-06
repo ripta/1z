@@ -1,0 +1,30 @@
+\ Duration comparison tests
+
+use "testing" ;
+use "time" ;
+
+"duration < duration" test-section
+
+1 seconds 2 seconds < "1s < 2s" assert-true
+100 milliseconds 1 seconds < "100ms < 1s" assert-true
+2 seconds 1 seconds < f "2s < 1s is false" assert=
+1 seconds 1 seconds < f "1s < 1s is false" assert=
+
+"duration > duration" test-section
+
+2 seconds 1 seconds > "2s > 1s" assert-true
+1 hours 30 minutes > "1h > 30m" assert-true
+1 seconds 2 seconds > f "1s > 2s is false" assert=
+1 seconds 1 seconds > f "1s > 1s is false" assert=
+
+"duration = duration" test-section
+
+1 seconds 1 seconds = "1s = 1s" assert-true
+1000 milliseconds 1 seconds = "1000ms = 1s" assert-true
+1 seconds 2 seconds = f "1s = 2s is false" assert=
+60 seconds 1 minutes = "60s = 1m" assert-true
+
+"negative durations" test-section
+
+0 seconds 1 seconds < "0s < 1s" assert-true
+0 seconds 0 seconds = "0s = 0s" assert-true

@@ -1,0 +1,36 @@
+=== duration < duration ===
+Stack: [ ]
+PASS: 1s < 2s
+Stack: [ ]
+PASS: 100ms < 1s
+Stack: [ ]
+PASS: 2s < 1s is false
+Stack: [ ]
+PASS: 1s < 1s is false
+Stack: [ ]
+=== duration > duration ===
+Stack: [ ]
+PASS: 2s > 1s
+Stack: [ ]
+PASS: 1h > 30m
+Stack: [ ]
+PASS: 1s > 2s is false
+Stack: [ ]
+PASS: 1s > 1s is false
+Stack: [ ]
+=== duration = duration ===
+Stack: [ ]
+PASS: 1s = 1s
+Stack: [ ]
+PASS: 1000ms = 1s
+Stack: [ ]
+PASS: 1s = 2s is false
+Stack: [ ]
+PASS: 60s = 1m
+Stack: [ ]
+=== negative durations ===
+Stack: [ ]
+PASS: 0s < 1s
+Stack: [ ]
+PASS: 0s = 0s
+Stack: [ ]

@@ -25,8 +25,13 @@ timestamp-nsec: ( timestamp -- nsec ) [ timestamp> nsec>> ] ;
 \ Create timestamp from current wall-clock time
 now: ( -- timestamp ) [ clock-realtime make-timestamp ] ;
 
-\ Duration arithmetic (dispatch via polymorphism hooks)
+\ Duration arithmetic
 +: method{ duration duration } [ swap duration> swap duration> + >duration ] ;
 -: method{ duration duration } [ swap duration> swap duration> - >duration ] ;
 *: method{ duration integer } [ swap duration> swap * >duration ] ;
 *: method{ integer duration } [ duration> * >duration ] ;
+
+\ Duration comparison
+<: method{ duration duration } [ swap duration> swap duration> < ] ;
+>: method{ duration duration } [ swap duration> swap duration> > ] ;
+=: method{ duration duration } [ swap duration> swap duration> = ] ;
