@@ -21,6 +21,12 @@ pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
         try ctx.executeQuotation(.{ .instructions = entry.body });
         return true;
     }
+    if (ctx.parent_dispatch) |pd| {
+        if (pd.lookupBinary(word_name, a_name, b_name)) |entry| {
+            try ctx.executeQuotation(.{ .instructions = entry.body });
+            return true;
+        }
+    }
     return false;
 }
 
@@ -40,6 +46,12 @@ pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
     if (ctx.dispatch.lookupUnary(word_name, a_name)) |entry| {
         try ctx.executeQuotation(.{ .instructions = entry.body });
         return true;
+    }
+    if (ctx.parent_dispatch) |pd| {
+        if (pd.lookupUnary(word_name, a_name)) |entry| {
+            try ctx.executeQuotation(.{ .instructions = entry.body });
+            return true;
+        }
     }
     return false;
 }
@@ -62,6 +74,12 @@ pub fn tryDispatchGeneric(ctx: *Context, word_name: []const u8) !bool {
             try ctx.executeQuotation(.{ .instructions = entry.body });
             return true;
         }
+        if (ctx.parent_dispatch) |pd| {
+            if (pd.lookupBinary(word_name, a_name, b_name)) |entry| {
+                try ctx.executeQuotation(.{ .instructions = entry.body });
+                return true;
+            }
+        }
     }
 
     if (ctx.stack.depth() >= 1) {
@@ -70,6 +88,12 @@ pub fn tryDispatchGeneric(ctx: *Context, word_name: []const u8) !bool {
         if (ctx.dispatch.lookupUnary(word_name, a_name)) |entry| {
             try ctx.executeQuotation(.{ .instructions = entry.body });
             return true;
+        }
+        if (ctx.parent_dispatch) |pd| {
+            if (pd.lookupUnary(word_name, a_name)) |entry| {
+                try ctx.executeQuotation(.{ .instructions = entry.body });
+                return true;
+            }
         }
     }
 

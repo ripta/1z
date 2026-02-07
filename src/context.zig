@@ -8,6 +8,7 @@ const Instruction = value_mod.Instruction;
 const debugger_mod = @import("debugger/mod.zig");
 const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
 const DispatchTable = @import("dispatch.zig").DispatchTable;
+const Scheduler = @import("scheduler.zig").Scheduler;
 const Quotation = value_mod.Quotation;
 const Value = value_mod.Value;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
@@ -105,6 +106,14 @@ pub const Context = struct {
     debugger: ?*debugger_mod.Debugger = null,
     /// Dispatch table for user-defined operator/method dispatch.
     dispatch: DispatchTable,
+    /// Shared scheduler for green thread contexts. Null for the root context.
+    scheduler: ?*Scheduler = null,
+    /// Read-only fallback dictionary for task contexts. Points to the parent's
+    /// dictionary, which contains primitives, prelude, and user-defined words.
+    parent_dictionary: ?*const Dictionary = null,
+    /// Read-only fallback dispatch table for task contexts. Points to the
+    /// parent's table of registered methods.
+    parent_dispatch: ?*const DispatchTable = null,
 
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
@@ -136,6 +145,49 @@ pub const Context = struct {
         ctx.loadPrelude() catch |err| {
             std.debug.panic("Failed to load prelude: {any}", .{err});
         };
+        return ctx;
+    }
+
+    /// Create a lightweight Context for a spawned task. Primitives and the
+    /// prelude are not registered here; they are resolved at lookup time
+    /// through `parent_dictionary`. Per-task state like the stack, dictionary,
+    /// and arena are freshly allocated. The scheduler and parent dictionary
+    /// and dispatch table are inherited by pointer.
+    pub fn initForTask(
+        allocator: Allocator,
+        parent: *Context,
+        scheduler: *Scheduler,
+    ) !Context {
+        var ctx = Context{
+            .stack = Stack.init(allocator),
+            .dictionary = Dictionary.init(allocator),
+            .arena = std.heap.ArenaAllocator.init(allocator),
+            .allocator = allocator,
+            .call_stack = .{},
+            .error_details = .{},
+            .parameter_env = .{},
+            .local_frames = .{},
+            .dispatch = DispatchTable.init(allocator),
+            .scheduler = scheduler,
+            .parent_dictionary = &parent.dictionary,
+            .parent_dispatch = &parent.dispatch,
+            .current_source = parent.current_source,
+            .current_source_dir = parent.current_source_dir,
+            .load_paths = parent.load_paths,
+            .stdlib_path = parent.stdlib_path,
+            .program_args = parent.program_args,
+        };
+
+        // Snapshot the parent's dynamic variable bindings into the task context.
+        for (parent.parameter_env.items) |parent_frame| {
+            var cloned_frame = ParameterFrame{};
+            var iter = parent_frame.iterator();
+            while (iter.next()) |entry| {
+                try cloned_frame.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
+            }
+            try ctx.parameter_env.append(allocator, cloned_frame);
+        }
+
         return ctx;
     }
 
@@ -337,8 +389,10 @@ pub const Context = struct {
         }
     }
 
-    /// Look up a word by name. Searches local frames from innermost
-    /// (top) to outermost (bottom), then global dictionary.
+    /// Look up a word by name by searching in the following order:
+    /// 1. local frames from innermost (topmost) to outermost (bottommost);
+    /// 2. the global dictionary of the current context;
+    /// 3. the parent dictionary if this is a task context that inherits from a parent.
     pub fn lookupWord(self: *const Context, name: []const u8) ?WordDefinition {
         var i = self.local_frames.items.len;
         while (i > 0) {
@@ -348,7 +402,9 @@ pub const Context = struct {
             }
         }
 
-        return self.dictionary.get(name);
+        if (self.dictionary.get(name)) |def| return def;
+        if (self.parent_dictionary) |pd| return pd.get(name);
+        return null;
     }
 
     /// Check if a name is a qualified name (contains a dot).
