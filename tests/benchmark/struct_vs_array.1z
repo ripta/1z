@@ -3,15 +3,13 @@
 \ Demonstrates that struct construction/access is cheaper than
 \ array construction/access for record-like data.
 
-N: 5000 ;
-
 split-acc: struct{ lines current } ;
 arr: { { } "hello" } ;
 acc: { } "hello" make-split-acc ;
 
 make-benchmark-report
-  "Array construction"  [ N [ { } 1array "hello" 1array #append drop ] times ] benchmark-run
-  "Struct construction" [ N [ { } "hello" make-split-acc drop ] times ] benchmark-run
-  "Array access"        [ N [ arr 0 #nth drop arr 1 #nth drop ] times ] benchmark-run
-  "Struct access"       [ N [ acc lines>> drop acc current>> drop ] times ] benchmark-run
+  "Array construction"  5000 [ { } 1array "hello" 1array #append drop ] benchmark-n
+  "Struct construction" 5000 [ { } "hello" make-split-acc drop ] benchmark-n
+  "Array access"        5000 [ arr 0 #nth drop arr 1 #nth drop ] benchmark-n
+  "Struct access"       5000 [ acc lines>> drop acc current>> drop ] benchmark-n
 print-benchmark-report

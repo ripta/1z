@@ -62,6 +62,8 @@ Stack: [ ]
 @values ( assoc -- array )
 add-load-path ( path --  )
 benchmark ( quot -- hash )
+benchmark-auto ( report label quot -- report )
+benchmark-n ( report label n quot -- report )
 benchmark-run ( report label quot -- report )
 buffering-mode ( stream -- symbol )
 bytes> ( byte-array -- string )

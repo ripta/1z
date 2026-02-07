@@ -14,6 +14,7 @@ const Primitive = @import("types.zig").Primitive;
 
 const popQuotation = helpers.popQuotation;
 const popString = helpers.popString;
+const popInteger = helpers.popInteger;
 
 pub const primitives = [_]Primitive{
     .{ .name = "curry", .stack_effect = "x quot -- quot'", .func = nativeCurry },
@@ -21,6 +22,8 @@ pub const primitives = [_]Primitive{
     .{ .name = "benchmark", .stack_effect = "quot -- hash", .func = nativeBenchmark },
     .{ .name = "make-benchmark-report", .stack_effect = "-- report", .func = nativeMakeBenchmarkReport },
     .{ .name = "benchmark-run", .stack_effect = "report label quot -- report", .func = nativeBenchmarkRun },
+    .{ .name = "benchmark-n", .stack_effect = "report label n quot -- report", .func = nativeBenchmarkN },
+    .{ .name = "benchmark-auto", .stack_effect = "report label quot -- report", .func = nativeBenchmarkAuto },
     .{ .name = "print-benchmark-report", .func = nativePrintBenchmarkReport },
 };
 
@@ -65,8 +68,14 @@ pub fn nativeCompose(ctx: *Context) anyerror!void {
 /// Execute a quotation and return benchmark results as a hash.
 /// Shared core logic for `benchmark` and `benchmark-run`.
 fn executeBenchmark(ctx: *Context, quot: Quotation) !*HashTable {
+    return executeBenchmarkN(ctx, quot, 1);
+}
+
+/// Execute a quotation N times inside a single timing window.
+fn executeBenchmarkN(ctx: *Context, quot: Quotation, n: u64) !*HashTable {
     // Create temporary benchmark stats for this execution
     var local_stats = BenchmarkStats{};
+    defer local_stats.deinit(ctx.allocator);
 
     // Save and replace context benchmark pointer
     const saved_benchmark = ctx.benchmark;
@@ -80,7 +89,11 @@ fn executeBenchmark(ctx: *Context, quot: Quotation) !*HashTable {
 
     // Time and execute
     const start_time = std.time.nanoTimestamp();
-    const exec_result = ctx.executeQuotationWithFrame(quot);
+    var exec_result: anyerror!void = {};
+    for (0..n) |_| {
+        exec_result = ctx.executeQuotationWithFrame(quot);
+        if (exec_result) |_| {} else |_| break;
+    }
 
     const end_time = std.time.nanoTimestamp();
     const elapsed_ns = end_time - start_time;
@@ -120,6 +133,9 @@ fn executeBenchmark(ctx: *Context, quot: Quotation) !*HashTable {
     const key5 = alloc.dupe(u8, "peak_stack_depth") catch return error.OutOfMemory;
     hash.put(alloc, key5, .{ .integer = @intCast(local_stats.peak_stack_depth) }) catch return error.OutOfMemory;
 
+    const key_iter = alloc.dupe(u8, "iterations") catch return error.OutOfMemory;
+    hash.put(alloc, key_iter, .{ .integer = @intCast(n) }) catch return error.OutOfMemory;
+
     // Add allocation stats only when --benchmark is active
     if (alloc_delta) |delta| {
         const key6 = alloc.dupe(u8, "total_allocations") catch return error.OutOfMemory;
@@ -147,9 +163,10 @@ fn nativeMakeBenchmarkReport(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .benchmark_report = report });
 }
 
-/// benchmark-run ( report label quot -- report ) - Benchmark a quotation and add to report
+/// benchmark-run ( report label quot -- report ) - Benchmark a quotation once and add to report
 fn nativeBenchmarkRun(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
+
     const label = try popString(ctx);
     const val = try ctx.stack.pop();
     const report = switch (val) {
@@ -162,10 +179,69 @@ fn nativeBenchmarkRun(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .benchmark_report = report });
 }
 
+/// benchmark-n ( report label n quot -- report ) - Benchmark a quotation N times and add to report
+fn nativeBenchmarkN(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+
+    const n_raw = try popInteger(ctx);
+    if (n_raw < 1) return error.InvalidArgument;
+    const n: u64 = @intCast(n_raw);
+
+    const label = try popString(ctx);
+    const val = try ctx.stack.pop();
+    const report = switch (val) {
+        .benchmark_report => |r| r,
+        else => return error.TypeMismatch,
+    };
+
+    const hash = try executeBenchmarkN(ctx, quot, n);
+    try report.addEntry(label, hash);
+    try ctx.stack.push(.{ .benchmark_report = report });
+}
+
+/// benchmark-auto ( report label quot -- report ) - Auto-calibrate iterations targeting ~100ms
+fn nativeBenchmarkAuto(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    const label = try popString(ctx);
+    const val = try ctx.stack.pop();
+    const report = switch (val) {
+        .benchmark_report => |r| r,
+        else => return error.TypeMismatch,
+    };
+
+    const target_ns: u64 = 100_000_000; // 100ms
+    const max_iters: u64 = 1_000_000_000;
+
+    var n: u64 = 1;
+    var final_hash: ?*HashTable = null;
+
+    while (true) {
+        const hash = try executeBenchmarkN(ctx, quot, n);
+        const elapsed_ns: u64 = @intCast(getHashInt(hash, "elapsed_ns") orelse 0);
+
+        if (elapsed_ns >= target_ns or n >= max_iters) {
+            final_hash = hash;
+            break;
+        }
+
+        const scaled = if (elapsed_ns > 0)
+            @min(max_iters, @max(n * 2, n * target_ns / elapsed_ns))
+        else
+            @min(max_iters, n * 2);
+
+        n = if (scaled > n) scaled else n * 2;
+        if (n > max_iters) n = max_iters;
+    }
+
+    try report.addEntry(label, final_hash.?);
+    try ctx.stack.push(.{ .benchmark_report = report });
+}
+
 /// print-benchmark-report - Polymorphic:
 ///   ( report -- )      print all entries as table
 ///   ( label hash -- )  print single benchmark as one-row table
 fn nativePrintBenchmarkReport(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
     const val = try ctx.stack.pop();
 
     switch (val) {
@@ -180,7 +256,6 @@ fn nativePrintBenchmarkReport(ctx: *Context) anyerror!void {
                 else => return error.TypeMismatch,
             };
             // Create a temporary single-entry report
-            const alloc = ctx.quotationAllocator();
             var tmp_report = BenchmarkReport.init(alloc);
             try tmp_report.addEntry(label, hash);
             try printReportTable(ctx, &tmp_report);
@@ -221,22 +296,26 @@ fn printReportTable(_: *Context, report: *BenchmarkReport) !void {
     const entries = report.entries.items;
     if (entries.len == 0) return;
 
-    const has_allocs = if (entries.len > 0) entries[0].results.get("total_allocations") != null else false;
+    const has_allocs = entries[0].results.get("total_allocations") != null;
 
-    const base_col_count = 6;
-    const max_col_count = 8; // +2 for allocs/bytes
-    const col_count: usize = if (has_allocs) max_col_count else base_col_count;
+    // Columns: Name, Iters, Elapsed, Elapsed/iter, Instrs/iter, Peak Stack [, Allocs, Bytes]
+    const max_col_count = 8;
 
     var columns: [max_col_count]Column = undefined;
+    var col_count: usize = undefined;
+
     columns[0] = .{ .header = "Name", .width = 4 };
-    columns[1] = .{ .header = "Elapsed", .width = 7 };
-    columns[2] = .{ .header = "push_literal", .width = 12 };
-    columns[3] = .{ .header = "call_word", .width = 9 };
-    columns[4] = .{ .header = "Total Instrs", .width = 12 };
+    columns[1] = .{ .header = "Iters", .width = 5 };
+    columns[2] = .{ .header = "Elapsed", .width = 7 };
+    columns[3] = .{ .header = "Elapsed/iter", .width = 12 };
+    columns[4] = .{ .header = "Instrs/iter", .width = 11 };
     columns[5] = .{ .header = "Peak Stack", .width = 10 };
+    col_count = 6;
+
     if (has_allocs) {
         columns[6] = .{ .header = "Allocs", .width = 6 };
         columns[7] = .{ .header = "Bytes", .width = 5 };
+        col_count = 8;
     }
 
     const max_entries = 64;
@@ -254,38 +333,41 @@ fn printReportTable(_: *Context, report: *BenchmarkReport) !void {
         @memcpy(cell_bufs[row][0][0..label_len], entry.label[0..label_len]);
         cell_lens[row][0] = label_len;
 
+        // Iters
+        const iters = getHashInt(h, "iterations") orelse 1;
+        const iters_u: u64 = @intCast(if (iters < 1) 1 else iters);
+        const it_str = formatToBuffer(&cell_bufs[row][1], .number, iters_u);
+        cell_lens[row][1] = it_str.len;
+
         // Elapsed
         const elapsed_ns = getHashInt(h, "elapsed_ns") orelse 0;
-        const elapsed_str = formatToBuffer(&cell_bufs[row][1], .time, @as(i128, elapsed_ns));
-        cell_lens[row][1] = elapsed_str.len;
+        const elapsed_str = formatToBuffer(&cell_bufs[row][2], .time, @as(i128, elapsed_ns));
+        cell_lens[row][2] = elapsed_str.len;
 
-        // push_literal
-        const push_lit = getHashInt(h, "push_literal") orelse 0;
-        const pl_str = formatToBuffer(&cell_bufs[row][2], .number, push_lit);
-        cell_lens[row][2] = pl_str.len;
+        // Elapsed/iter
+        const elapsed_per_iter: i128 = if (iters_u > 0) @divTrunc(@as(i128, elapsed_ns), @as(i128, iters_u)) else @as(i128, elapsed_ns);
+        const epi_str = formatToBuffer(&cell_bufs[row][3], .time, elapsed_per_iter);
+        cell_lens[row][3] = epi_str.len;
 
-        // call_word
-        const call_w = getHashInt(h, "call_word") orelse 0;
-        const cw_str = formatToBuffer(&cell_bufs[row][3], .number, call_w);
-        cell_lens[row][3] = cw_str.len;
-
-        // total_instructions
+        // Instrs/iter
         const total_i = getHashInt(h, "total_instructions") orelse 0;
-        const ti_str = formatToBuffer(&cell_bufs[row][4], .number, total_i);
-        cell_lens[row][4] = ti_str.len;
+        const total_u: u64 = @intCast(if (total_i < 0) 0 else total_i);
+        const instrs_per_iter: u64 = if (iters_u > 0) total_u / iters_u else total_u;
+        const ipi_str = formatToBuffer(&cell_bufs[row][4], .number, instrs_per_iter);
+        cell_lens[row][4] = ipi_str.len;
 
-        // peak_stack_depth
+        // Peak Stack
         const peak = getHashInt(h, "peak_stack_depth") orelse 0;
         const pk_str = formatToBuffer(&cell_bufs[row][5], .number, peak);
         cell_lens[row][5] = pk_str.len;
 
         if (has_allocs) {
-            // total_allocations
+            // Total Allocs
             const allocs = getHashInt(h, "total_allocations") orelse 0;
             const al_str = formatToBuffer(&cell_bufs[row][6], .number, allocs);
             cell_lens[row][6] = al_str.len;
 
-            // total_bytes
+            // Total Bytes
             const bytes = getHashInt(h, "total_bytes") orelse 0;
             const by_str = formatToBuffer(&cell_bufs[row][7], .bytes, bytes);
             cell_lens[row][7] = by_str.len;
