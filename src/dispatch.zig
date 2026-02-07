@@ -38,6 +38,7 @@ pub fn dispatchTypeName(val: Value) []const u8 {
         .benchmark_report => "benchmark-report",
         .stack_effect => "stack-effect",
         .error_value => "error",
+        .task => "task",
     };
 }
 

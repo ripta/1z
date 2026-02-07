@@ -18,6 +18,7 @@ pub const popStream = helpers.popStream;
 pub const popMarker = helpers.popMarker;
 pub const popStructType = helpers.popStructType;
 pub const popStructInstance = helpers.popStructInstance;
+pub const popTask = helpers.popTask;
 
 pub const stack = @import("stack.zig");
 pub const arithmetic = @import("arithmetic.zig");
