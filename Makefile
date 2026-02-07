@@ -11,7 +11,9 @@ release: ## Build with optimizations
 run: build ## Build and run the 1z interpreter
 	./zig-out/bin/1z
 
-test: ## Run unit tests
+test: unit-test integration-test fmt-test ## Run all tests
+
+unit-test: ## Run unit tests
 	zig build test
 
 integration-test: ## Run integration tests
