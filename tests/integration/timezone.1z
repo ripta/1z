@@ -1,4 +1,4 @@
-\ Integration tests for timezone type, tz-decompose, >time-parts-in
+\ Integration tests for timezone type, tz-localtime, >time-parts-in
 
 use "testing" ;
 use "time" ;
@@ -16,41 +16,41 @@ utc timezone? "utc is timezone?" assert-true
 local timezone? "local is timezone?" assert-true
 42 timezone? "integer is not timezone?" assert-false
 
-\ === tz-decompose with UTC ===
+\ === tz-localtime with UTC ===
 
-"tz-decompose UTC" test-section
+"tz-localtime UTC" test-section
 
-0 "UTC" tz-decompose
-dup year: @get 1970 "tz-decompose UTC epoch year" assert=
-dup month-num: @get 1 "tz-decompose UTC epoch month-num" assert=
-dup day: @get 1 "tz-decompose UTC epoch day" assert=
-dup weekday: @get "Thursday" "tz-decompose UTC epoch weekday" assert=
-dup hour: @get 0 "tz-decompose UTC epoch hour" assert=
-dup min: @get 0 "tz-decompose UTC epoch min" assert=
-dup sec: @get 0 "tz-decompose UTC epoch sec" assert=
-dup tz: @get "+0000" "tz-decompose UTC tz" assert=
+0 "UTC" tz-localtime
+dup year>> 1970 "tz-localtime UTC epoch year" assert=
+dup month-num>> 1 "tz-localtime UTC epoch month-num" assert=
+dup day>> 1 "tz-localtime UTC epoch day" assert=
+dup posix-weekday>> 4 "tz-localtime UTC epoch posix-weekday (Thu=4)" assert=
+dup hour>> 0 "tz-localtime UTC epoch hour" assert=
+dup min>> 0 "tz-localtime UTC epoch min" assert=
+dup sec>> 0 "tz-localtime UTC epoch sec" assert=
+dup gmtoff>> 0 "tz-localtime UTC epoch gmtoff" assert=
 drop
 
-\ tz-name for a modern timestamp should be "UTC"
-1749997845 "UTC" tz-decompose tz-name: @get "UTC" "tz-decompose UTC modern tz-name" assert=
+\ tz-abbrev for a modern timestamp should be "UTC"
+1749997845 "UTC" tz-localtime tz-abbrev>> "UTC" "tz-localtime UTC modern tz-abbrev" assert=
 
-\ === tz-decompose with fixed-offset timezone (Etc/GMT-5 = UTC+5) ===
+\ === tz-localtime with fixed-offset timezone (Etc/GMT-5 = UTC+5) ===
 
-"tz-decompose fixed offset" test-section
+"tz-localtime fixed offset" test-section
 
-0 "Etc/GMT-5" tz-decompose
-dup hour: @get 5 "tz-decompose Etc/GMT-5 hour" assert=
-dup day: @get 1 "tz-decompose Etc/GMT-5 day" assert=
-dup tz-offset: @get "+0500" "tz-decompose Etc/GMT-5 tz-offset" assert=
+0 "Etc/GMT-5" tz-localtime
+dup hour>> 5 "tz-localtime Etc/GMT-5 hour" assert=
+dup day>> 1 "tz-localtime Etc/GMT-5 day" assert=
+dup gmtoff>> 18000 "tz-localtime Etc/GMT-5 gmtoff (18000s)" assert=
 drop
 
 \ Negative offset: Etc/GMT+8 = UTC-8
-0 "Etc/GMT+8" tz-decompose
-dup hour: @get 16 "tz-decompose Etc/GMT+8 hour (wraps to prev day)" assert=
-dup day: @get 31 "tz-decompose Etc/GMT+8 day (prev day)" assert=
-dup month-num: @get 12 "tz-decompose Etc/GMT+8 month (Dec)" assert=
-dup year: @get 1969 "tz-decompose Etc/GMT+8 year (1969)" assert=
-dup tz-offset: @get "-0800" "tz-decompose Etc/GMT+8 tz-offset" assert=
+0 "Etc/GMT+8" tz-localtime
+dup hour>> 16 "tz-localtime Etc/GMT+8 hour (wraps to prev day)" assert=
+dup day>> 31 "tz-localtime Etc/GMT+8 day (prev day)" assert=
+dup month-num>> 12 "tz-localtime Etc/GMT+8 month (Dec)" assert=
+dup year>> 1969 "tz-localtime Etc/GMT+8 year (1969)" assert=
+dup gmtoff>> -28800 "tz-localtime Etc/GMT+8 gmtoff (-28800s)" assert=
 drop
 
 \ === >time-parts-in with UTC matches >time-parts ===
@@ -89,6 +89,20 @@ dup min: @get 30 "2025 min via >time-parts-in" assert=
 dup sec: @get 45 "2025 sec via >time-parts-in" assert=
 dup ampm: @get "PM" "2025 ampm via >time-parts-in" assert=
 dup hour12: @get 2 "2025 hour12 via >time-parts-in" assert=
+drop
+
+\ === Fixed-offset derived fields via >time-parts-in ===
+
+"fixed-offset >time-parts-in" test-section
+
+0 0 make-timestamp 0 "Etc/GMT-5" make-timezone >time-parts-in
+dup tz: @get "+0500" ">time-parts-in Etc/GMT-5 tz" assert=
+dup tz-offset: @get "+0500" ">time-parts-in Etc/GMT-5 tz-offset" assert=
+drop
+
+0 0 make-timestamp 0 "Etc/GMT+8" make-timezone >time-parts-in
+dup tz: @get "-0800" ">time-parts-in Etc/GMT+8 tz" assert=
+dup tz-offset: @get "-0800" ">time-parts-in Etc/GMT+8 tz-offset" assert=
 drop
 
 \ === Local timezone smoke test ===

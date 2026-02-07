@@ -1,6 +1,6 @@
 \ Time library - durations, timestamps, and formatting
 
-\ Duration: virtual type backed by integer (nanoseconds)
+\ Duration: virtual type backed by integer nanoseconds
 duration: virtual{ integer } ;
 
 \ Convenience constructors for durations
@@ -11,16 +11,16 @@ seconds:      ( n -- duration ) [ 1000000000 * >duration ] ;
 minutes:      ( n -- duration ) [ 60 * seconds ] ;
 hours:        ( n -- duration ) [ 60 * minutes ] ;
 
-\ Timestamp: virtual type backed by struct{ sec nsec }
-timestamp-inner: struct{ sec nsec } ;
+\ Timestamp: virtual type backed by a hidden struct
+timestamp-inner: struct{ ts-sec ts-nsec } ;
 timestamp: virtual{ timestamp-inner } ;
 
 \ Constructor from sec/nsec components
 make-timestamp: ( sec nsec -- timestamp ) [ make-timestamp-inner >timestamp ] ;
 
 \ Accessors
-timestamp-sec:  ( timestamp -- sec )  [ timestamp> sec>> ] ;
-timestamp-nsec: ( timestamp -- nsec ) [ timestamp> nsec>> ] ;
+timestamp-sec:  ( timestamp -- sec )  [ timestamp> ts-sec>> ] ;
+timestamp-nsec: ( timestamp -- nsec ) [ timestamp> ts-nsec>> ] ;
 
 \ Create timestamp from current wall-clock time
 now: ( -- timestamp ) [ clock-realtime make-timestamp ] ;
@@ -83,179 +83,10 @@ weekday-names-short: ( -- array ) [
   { "Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat" }
 ] ;
 
-yearday-offsets: ( -- array ) [
-  { 0 31 59 90 120 151 181 212 243 273 304 334 }
-] ;
-
-\ --- Helper words ---
-
-\ Split epoch seconds into days + second-of-day
-sec>days-sod: ( sec -- days sod ) [
-  dup 86400 % swap over - 86400 / swap
-] ;
-
-\ Extract hour/min/sec from second-of-day
-sod>hms: ( sod -- hour min sec ) [
-  dup 3600 / swap 3600 %
-  dup 60 / swap 60 %
-] ;
-
-\ Standard Gregorian leap year test
-leap-year?: ( year -- ? ) [
-  dup 400 % 0 = [ drop t ] [
-    dup 100 % 0 = [ drop f ] [
-      4 % 0 =
-    ] if
-  ] if
-] ;
-
-\ Weekday from epoch days.
-\ Day 0 (1970-01-01) is Thursday, posix-weekday 4
-days>weekday: ( days -- posix-weekday ) [ 4 + 7 % ] ;
-
-\ Howard Hinnant's civil_from_days algorithm
-\ Converts epoch days to (year month day) where month is 1-12
-epoch-to-civil: ( days -- year month day ) [
-  \ z = days + 719468
-  719468 +
-
-  \ doe = z % 146097 (floored mod, >= 0)
-  dup 146097 %
-
-  \ era = (z - doe) / 146097
-  swap over - 146097 /
-
-  \ Stack: doe era
-  \ yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365
-  over dup 1460 / -
-  2 pick-n 36524 / +
-  2 pick-n 146096 / -
-  365 /
-
-  \ Stack: doe era yoe
-  \ y = yoe + era * 400
-  dup 2 pick-n 400 * +
-
-  \ Stack: doe era yoe y
-  \ doy = doe - (365*yoe + yoe/4 - yoe/100)
-  \ yoe is at depth 1
-  1 pick-n 365 *
-  2 pick-n 4 / +
-  2 pick-n 100 / -
-
-  \ Stack: doe era yoe y adj
-  \ doy = doe - adj; doe is at depth 4
-  4 pick-n swap -
-
-  \ Stack: doe era yoe y doy
-  \ Keep y and doy, discard doe era yoe below
-  [ 3drop ] 2dip
-
-  \ Stack: y doy
-  \ mp = (5*doy + 2) / 153
-  dup 5 * 2 + 153 /
-
-  \ Stack: y doy mp
-  \ d = doy - (153*mp + 2)/5 + 1
-  2dup 153 * 2 + 5 / - 1 +
-
-  \ Stack: y doy mp d
-  \ m = mp < 10 ? mp+3 : mp-9
-  swap dup 10 < [ 3 + ] [ 9 - ] if
-
-  \ Stack: y doy d m
-  \ if m <= 2 then y += 1
-  dup 2 <= [ [ [ 1 + ] dip ] 2dip ] [ ] if
-
-  \ Stack: y doy d m
-  \ Rearrange to (year month day): drop doy and reorder
-  \ y doy d m -> swap top two -> y doy m d -> [ nip ] dip -> y m d
-  swap [ nip ] dip
-] ;
-
-\ Compute day-of-year (1-based) from year, month (1-12), day (1-31)
-compute-yearday: ( year month day -- yearday ) [
-  over 1 - yearday-offsets swap #nth +
-  \ Stack: year month yearday-base
-  swap 3 >=
-  \ Stack: year yearday-base march-or-later?
-  [ swap leap-year? [ 1 + ] [ ] if ]
-  [ nip ]
-  if
-] ;
-
 \ Compute ISO week number (simplified: edge cases at year boundaries may be off)
 compute-iso-week: ( yearday iso-weekday -- iso-week ) [
   - 10 + 7 /
   dup 1 < [ drop 1 ] [ dup 53 > [ drop 53 ] [ ] if ] if
-] ;
-
-\ --- >time-parts (UTC decomposition) ---
-
->time-parts: ( timestamp -- hash ) [
-  dup timestamp-nsec swap timestamp-sec
-  \ Stack: nsec sec
-
-  \ Split sec into days + second-of-day
-  sec>days-sod
-  \ Stack: nsec days sod
-
-  \ Extract hour, min, sec from sod
-  sod>hms
-  \ Stack: nsec days hour min sec
-
-  \ Convert days to year, month, day + compute weekday
-  \ Stack: nsec days hour min sec
-  \ Need days (3rd down) for both epoch-to-civil and days>weekday
-  3 pick-n dup days>weekday swap epoch-to-civil
-  \ Stack: nsec days hour min sec pwd year month day
-
-  \ Compute yearday from year, month, day
-  3dup compute-yearday
-
-  \ Stack: nsec days hour min sec pwd year month day yearday
-  \ Now build the hash. Stack depth 0-9:
-  \ 9=nsec 8=days 7=hour 6=min 5=sec 4=pwd 3=year 2=month 1=day 0=yearday
-
-  \ Stack depths: 10=nsec 9=days 8=hour 7=min 6=sec 5=pwd 4=year 3=month 2=day 1=yearday 0=hash
-  \ Each "N pick-n KEY swap @set" is stack-neutral; depths stay constant.
-
-  H{ }
-
-  4 pick-n year: swap @set
-  4 pick-n 100 % year-short: swap @set
-  3 pick-n month-num: swap @set
-  3 pick-n 1 - month-names swap #nth month: swap @set
-  3 pick-n 1 - month-names swap #nth month-name: swap @set
-  3 pick-n 1 - month-names-short swap #nth month-short: swap @set
-  2 pick-n day: swap @set
-  1 pick-n yearday: swap @set
-  5 pick-n weekday-names swap #nth weekday: swap @set
-  5 pick-n weekday-names swap #nth weekday-name: swap @set
-  5 pick-n weekday-names-short swap #nth weekday-short: swap @set
-  5 pick-n posix-weekday: swap @set
-  5 pick-n dup 0 = [ drop 7 ] [ ] if iso-weekday: swap @set
-
-  \ iso-week: pick-n shifts depth +1 after first pick
-  1 pick-n 6 pick-n dup 0 = [ drop 7 ] [ ] if
-  compute-iso-week iso-week: swap @set
-
-  8 pick-n hour: swap @set
-  8 pick-n hour24: swap @set
-  8 pick-n 12 % dup 0 = [ drop 12 ] [ ] if hour12: swap @set
-  7 pick-n min: swap @set
-  6 pick-n sec: swap @set
-  10 pick-n nsec: swap @set
-  10 pick-n 1000 / usec: swap @set
-  10 pick-n 1000000 / msec: swap @set
-  8 pick-n 12 < [ "AM" ] [ "PM" ] if ampm: swap @set
-  tz: "+0000" @set
-  tz-offset: "+0000" @set
-  tz-name: "UTC" @set
-
-  \ Clean up: remove the 10 base values below the hash
-  swap drop swap drop swap drop swap drop swap drop
-  swap drop swap drop swap drop swap drop swap drop
 ] ;
 
 \ --- Timezone type ---
@@ -271,16 +102,99 @@ timezone-name:   ( tz -- name )       [ timezone> name>> ] ;
 utc: ( -- timezone ) [ 0 "UTC" make-timezone ] ;
 local: ( -- timezone ) [ 0 "" make-timezone ] ;
 
-\ --- >time-parts-in (timezone-aware decomposition) ---
+\ --- libc bridge struct and wrappers ---
+
+tm-result: struct{ year month-num day hour min sec posix-weekday yearday gmtoff tz-abbrev } ;
+
+tz-localtime: ( sec tz-name -- tm-result ) [ tz-decompose make-tm-result ] ;
+
+\ Format gmtoff (seconds east of UTC) as "+HHMM" or "-HHMM"
+format-tz-offset: ( gmtoff-sec -- string ) [
+  dup 0 < [ 0 swap - "-" ] [ "+" ] if swap
+  \ Stack: sign abs-gmtoff
+  60 / dup 60 / swap 60 %
+  \ Stack: sign hh mm
+  H{ }
+  \ Stack: sign hh mm hash
+  3 pick-n sign: swap @set
+  2 pick-n hour: swap @set
+  1 pick-n min: swap @set
+  \ Stack: sign hh mm hash
+  \ Clean up the 3 values below the hash
+  swap drop swap drop swap drop
+  "{sign}{hour:width=2,fill=0}{min:width=2,fill=0}" fmt
+] ;
+
+\ Build a time-parts hash from a tm-result and nsec value.
+\
+\ 2 pick-n always reaches tm-result, 1 pick-n always reaches nsec.
+\ @set is stack-neutral so depths stay constant.
+tm>time-parts: ( tm-result nsec -- hash ) [
+  H{ }
+
+  \ Year
+  2 pick-n year>> year: swap @set
+  2 pick-n year>> 100 % year-short: swap @set
+
+  \ Month (month-num is 1-12; arrays are 0-indexed)
+  2 pick-n month-num>> month-num: swap @set
+  2 pick-n month-num>> 1 - month-names swap #nth month: swap @set
+  2 pick-n month-num>> 1 - month-names swap #nth month-name: swap @set
+  2 pick-n month-num>> 1 - month-names-short swap #nth month-short: swap @set
+
+  \ Day
+  2 pick-n day>> day: swap @set
+  2 pick-n yearday>> yearday: swap @set
+
+  \ Weekday (posix-weekday 0=Sun; arrays 0-indexed)
+  2 pick-n posix-weekday>> weekday-names swap #nth weekday: swap @set
+  2 pick-n posix-weekday>> weekday-names swap #nth weekday-name: swap @set
+  2 pick-n posix-weekday>> weekday-names-short swap #nth weekday-short: swap @set
+  2 pick-n posix-weekday>> posix-weekday: swap @set
+  2 pick-n posix-weekday>> dup 0 = [ drop 7 ] [ ] if iso-weekday: swap @set
+
+  \ ISO week
+  2 pick-n yearday>>
+  3 pick-n posix-weekday>> dup 0 = [ drop 7 ] [ ] if
+  compute-iso-week iso-week: swap @set
+
+  \ Time
+  2 pick-n hour>> hour: swap @set
+  2 pick-n hour>> hour24: swap @set
+  2 pick-n hour>> 12 % dup 0 = [ drop 12 ] [ ] if hour12: swap @set
+  2 pick-n min>> min: swap @set
+  2 pick-n sec>> sec: swap @set
+
+  \ Sub-second (from nsec argument)
+  1 pick-n nsec: swap @set
+  1 pick-n 1000 / usec: swap @set
+  1 pick-n 1000000 / msec: swap @set
+
+  \ AM/PM
+  2 pick-n hour>> 12 < [ "AM" ] [ "PM" ] if ampm: swap @set
+
+  \ Timezone
+  2 pick-n gmtoff>> format-tz-offset tz: swap @set
+  2 pick-n gmtoff>> format-tz-offset tz-offset: swap @set
+  2 pick-n tz-abbrev>> tz-name: swap @set
+
+  \ Clean up tm-result and nsec from below hash
+  swap drop swap drop
+] ;
+
+\ --- >time-parts (UTC decomposition via libc) ---
+
+>time-parts: ( timestamp -- hash ) [
+  dup timestamp-nsec swap timestamp-sec
+  "UTC" tz-localtime swap
+  tm>time-parts
+] ;
+
+\ --- >time-parts-in (timezone-aware decomposition via libc) ---
 
 >time-parts-in: ( timestamp tz -- hash ) [
   swap dup timestamp-nsec swap timestamp-sec
-  \ Stack: tz nsec sec
   <rot- timezone-name
-  \ Stack: nsec sec tz-name
-  tz-decompose
-  \ Stack: nsec hash
-  over nsec: swap @set
-  over 1000 / usec: swap @set
-  swap 1000000 / msec: swap @set
+  tz-localtime swap
+  tm>time-parts
 ] ;
