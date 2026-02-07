@@ -198,3 +198,30 @@ tm>time-parts: ( tm-result nsec -- hash ) [
   tz-localtime swap
   tm>time-parts
 ] ;
+
+\ --- Formatting ---
+
+time-format: ( timestamp fmt-string -- string ) [
+  swap >time-parts swap fmt
+] ;
+
+time-format-in: ( timestamp tz fmt-string -- string ) [
+  -rot> >time-parts-in swap fmt
+] ;
+
+\ Format constants
+iso8601-fmt: const [ "{year}-{month-num:width=2,fill=0}-{day:width=2,fill=0}T{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0}{tz}" ] ;
+rfc2822-fmt: const [ "{weekday-short}, {day:width=2,fill=0} {month-short} {year} {hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0} {tz}" ] ;
+date-fmt: const [ "{year}-{month-num:width=2,fill=0}-{day:width=2,fill=0}" ] ;
+time-fmt: const [ "{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0}" ] ;
+
+\ --- Elapsed time measurement ---
+
+\ elapsed ( quot -- ...results duration )
+\ Runs quotation, measures wall time, pushes duration on top.
+\ Quotation results remain on stack below the duration.
+elapsed: [
+  clock-monotonic swap 1000000000 * +
+  [ call ] dip
+  clock-monotonic swap 1000000000 * + swap - >duration
+] ;
