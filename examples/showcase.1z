@@ -9,20 +9,15 @@
 "=== Basic Operations ===" print-line
 
 \ Push numbers onto the stack and perform arithmetic
-10 20 + .                                        \ prints 30
-
+10 20 + .  \ prints 30
 \ Subtraction
-100 42 - .                                       \ prints 58
-
+100 42 - .  \ prints 58
 \ The stack is LIFO (last in, first out)
-5 3 - .                                          \ 5 - 3 = 2
-
+5 3 - .  \ 5 - 3 = 2
 \ dup duplicates the top of the stack
-7 dup + .                                        \ 7 + 7 = 14
-
+7 dup + .  \ 7 + 7 = 14
 \ drop removes the top of the stack
-99 42 drop .                                     \ prints 99
-
+99 42 drop .  \ prints 99
 \ ------------------------------------------------------------
 \ 2. Defining Words (Functions)
 \ ------------------------------------------------------------
@@ -34,12 +29,10 @@
 \ The symbol ends with : and becomes the word's name
 
 double: [ dup + ] ;
-7 double .                                       \ prints 14
-
+7 double .  \ prints 14
 \ Triple a number
 triple: [ dup dup + + ] ;
-4 triple .                                       \ prints 12
-
+4 triple .  \ prints 12
 \ ------------------------------------------------------------
 \ 3. Stack Effects (Documentation)
 \ ------------------------------------------------------------
@@ -53,16 +46,13 @@ triple: [ dup dup + + ] ;
 inc: ( n -- n ) [ 1 + ] ;
 dec: ( n -- n ) [ 1 - ] ;
 
-5 inc .                                          \ prints 6
-5 dec .                                          \ prints 4
-
+5 inc .  \ prints 6
+5 dec .  \ prints 4
 \ Stack effects are stored and can be queried with help
 "Showing help for inc:" print-line
-inc: help                           \ shows: inc: ( n -- n )
-
+inc: help  \ shows: inc: ( n -- n )
 "Showing help for +:" print-line
-+: help                             \ shows: +: ( a b -- a+b )
-
++: help  \ shows: +: ( a b -- a+b )
 \ ------------------------------------------------------------
 \ 4. Booleans and Comparisons
 \ ------------------------------------------------------------
@@ -71,15 +61,13 @@ inc: help                           \ shows: inc: ( n -- n )
 "=== Booleans ===" print-line
 
 \ t and f are boolean literals
-t .                          \ prints t
-f .                          \ prints f
-
+t .  \ prints t
+f .  \ prints f
 \ Comparison operators return booleans
-5 3 > .                      \ prints t (5 > 3)
-5 10 > .                     \ prints f (5 is not > 10)
-5 5 = .                      \ prints t (equality)
-3 7 < .                      \ prints t (3 < 7)
-
+5 3 > .   \ prints t (5 > 3)
+5 10 > .  \ prints f (5 is not > 10)
+5 5 = .   \ prints t (equality)
+3 7 < .   \ prints t (3 < 7)
 \ ------------------------------------------------------------
 \ 5. Control Flow with Quotations
 \ ------------------------------------------------------------
@@ -91,19 +79,18 @@ f .                          \ prints f
 \ They are pushed onto the stack as values, not executed
 
 \ 'call' executes a quotation
-[ 1 2 + ] call .             \ prints 3
-
+[ 1 2 + ] call .  \ prints 3
 \ 'if' takes a condition and two quotations
 \ ( condition true-branch false-branch -- )
 5 3 >
-  [ "five is greater than three" print-line ]
-  [ "five is not greater" print-line ]
-  if
+[ "five is greater than three" print-line ]
+[ "five is not greater" print-line ]
+if
 
 10 20 <
-  [ "ten is less than twenty" print-line ]
-  [ "ten is not less" print-line ]
-  if
+[ "ten is less than twenty" print-line ]
+[ "ten is not less" print-line ]
+if
 
 \ 'when' executes only if condition is true
 t [ "this runs because condition is true" print-line ] when
@@ -112,17 +99,16 @@ t [ "this runs because condition is true" print-line ] when
 f [ "this runs because condition is false" print-line ] unless
 
 \ More complex conditionals
-check-sign: ( n -- )
-  [
-    dup 0 >
-      [ drop "positive" print-line ]
-      [ dup 0 <
-          [ drop "negative" print-line ]
-          [ drop "zero" print-line ]
-          if
-      ]
-      if
-  ] ;
+check-sign: ( n -- ) [
+  dup 0 >
+  [ drop "positive" print-line ]
+  [ dup 0 <
+    [ drop "negative" print-line ]
+    [ drop "zero" print-line ]
+    if
+  ]
+  if
+] ;
 
 5 check-sign
 0 5 - check-sign
@@ -195,7 +181,7 @@ greeting print-line
 [ drop ] [ drop "recovered!" print-line ] recover
 
 \ 'ignore-errors' suppresses any errors
-[ drop ] ignore-errors              \ silently continues
+[ drop ] ignore-errors  \ silently continues
 "Program continued after suppressed error" print-line
 
 \ Nested error handling
@@ -233,24 +219,23 @@ do-twice: ( quot -- ) [ dup call call ] ;
 
 \ Check if zero
 zero?: ( n -- ? ) [ 0 = ] ;
-"Is 0 zero?" print-line  0 zero? .       \ t
-"Is 5 zero?" print-line  5 zero? .       \ f
-
+"Is 0 zero?" print-line 0 zero? .  \ t
+"Is 5 zero?" print-line 5 zero? .  \ f
 \ Check if positive
 positive?: ( n -- ? ) [ 0 > ] ;
-"Is 5 positive?" print-line  5 positive? .
+"Is 5 positive?" print-line 5 positive? .
 
 \ Check if negative
 negative?: ( n -- ? ) [ 0 < ] ;
-"Is -3 negative?" print-line  0 3 - negative? .
+"Is -3 negative?" print-line 0 3 - negative? .
 
 \ Quadruple by composing double
 quadruple: ( n -- n ) [ double double ] ;
-"3 quadrupled:" print-line  3 quadruple .
+"3 quadrupled:" print-line 3 quadruple .
 
 \ Sum of three numbers
 sum3: ( a b c -- sum ) [ + + ] ;
-"1 + 2 + 3 =" print-line  1 2 3 sum3 .
+"1 + 2 + 3 =" print-line 1 2 3 sum3 .
 
 \ ------------------------------------------------------------
 \ 11. Data <=> Code

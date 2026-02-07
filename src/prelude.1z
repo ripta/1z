@@ -56,22 +56,22 @@ when: ( ? quot -- ) [ [ ] if ] ;
 unless: ( ? quot -- ) [ [ ] swap if ] ;
 
 \ Error-handling
-ignore-errors: ( quot -- ) [ [ drop ] recover ] ;
-error?: ( val -- ? ) [ type-of error: = ] ;
-error-type?: ( error type -- error ? ) [ over error-type: @get = ] ;
+ignore-errors: ( quot -- )               [ [ drop ] recover ] ;
+error?:        ( val -- ? )              [ type-of error: = ] ;
+error-type?:   ( error type -- error ? ) [ over error-type: @get = ] ;
 
 \ Error type constants
-EStackUnderflow: [ stack-underflow: ] ;
-ETypeMismatch: [ type-mismatch: ] ;
-EDivisionByZero: [ division-by-zero: ] ;
-EIntegerOverflow: [ integer-overflow: ] ;
+EStackUnderflow:      [ stack-underflow: ] ;
+ETypeMismatch:        [ type-mismatch: ] ;
+EDivisionByZero:      [ division-by-zero: ] ;
+EIntegerOverflow:     [ integer-overflow: ] ;
 EStackEffectMismatch: [ stack-effect-mismatch: ] ;
-EUnknownWord: [ unknown-word: ] ;
-EFileNotFound: [ file-not-found: ] ;
-EFileReadFailed: [ file-read-failed: ] ;
-EUserRethrown: [ user-rethrown: ] ;
-EUserThrown: [ user-thrown: ] ;
-EKeyNotFound: [ key-not-found: ] ;
+EUnknownWord:         [ unknown-word: ] ;
+EFileNotFound:        [ file-not-found: ] ;
+EFileReadFailed:      [ file-read-failed: ] ;
+EUserRethrown:        [ user-rethrown: ] ;
+EUserThrown:          [ user-thrown: ] ;
+EKeyNotFound:         [ key-not-found: ] ;
 EIOFailed: [ io-failed: ] ;
 ENoMatchingBranch: [ no-matching-branch: ] ;
 ECannotRedefineConst: [ cannot-redefine-const: ] ;
@@ -79,21 +79,21 @@ ECannotRedefineConst: [ cannot-redefine-const: ] ;
 no-matching-branch: ( data -- error ) [ "no matching branch" ENoMatchingBranch make-error ] ;
 
 \ Type predicates
-integer?: ( val -- ? ) [ type-of integer: = ] ;
-boolean?: ( val -- ? ) [ type-of boolean: = ] ;
-string?: ( val -- ? ) [ type-of string: = ] ;
-symbol?: ( val -- ? ) [ type-of symbol: = ] ;
-array?: ( val -- ? ) [ type-of array: = ] ;
-quotation?: ( val -- ? ) [ type-of quotation: = ] ;
-hash?: ( val -- ? ) [ type-of hash: = ] ;
-vector?: ( val -- ? ) [ type-of vector: = ] ;
+integer?:    ( val -- ? ) [ type-of integer: = ] ;
+boolean?:    ( val -- ? ) [ type-of boolean: = ] ;
+string?:     ( val -- ? ) [ type-of string: = ] ;
+symbol?:     ( val -- ? ) [ type-of symbol: = ] ;
+array?:      ( val -- ? ) [ type-of array: = ] ;
+quotation?:  ( val -- ? ) [ type-of quotation: = ] ;
+hash?:       ( val -- ? ) [ type-of hash: = ] ;
+vector?:     ( val -- ? ) [ type-of vector: = ] ;
 byte-array?: ( val -- ? ) [ type-of byte-array: = ] ;
 set?: ( val -- ? ) [ type-of set: = ] ;
 mutable-map?: ( val -- ? ) [ type-of mutable-map: = ] ;
-stream?: ( val -- ? ) [ type-of stream: = ] ;
-parameter?: ( val -- ? ) [ type-of parameter: = ] ;
-module?: ( val -- ? ) [ type-of module: = ] ;
-marker?: ( val -- ? ) [ type-of marker: = ] ;
+stream?:      ( val -- ? ) [ type-of stream: = ] ;
+parameter?:   ( val -- ? ) [ type-of parameter: = ] ;
+module?:      ( val -- ? ) [ type-of module: = ] ;
+marker?:      ( val -- ? ) [ type-of marker: = ] ;
 benchmark-report?: ( val -- ? ) [ type-of benchmark-report: = ] ;
 generic?: ( name -- ? ) [ word-markers [ generic = ] #any ] ;
 
@@ -111,35 +111,35 @@ generic?: ( name -- ? ) [ word-markers [ generic = ] #any ] ;
 ] ;
 
 \ Stack-shuffling
-nip: ( a b -- b ) [ swap drop ] ;
-2nip: ( a b c -- c ) [ swap drop swap drop ] ;
-keep: ( ..a x quot: ( ..a x -- ..b ) -- ..b x ) [ over [ call ] dip ] ;
-2keep: ( ..a x y quot: ( ..a x y -- ..b ) -- ..b x y ) [ [ 2dup ] dip 2dip ] ;
+nip:   ( a b -- b )                           [ swap drop ] ;
+2nip:  ( a b c -- c )                         [ swap drop swap drop ] ;
+keep:  ( ..a x quot: ( ..a x -- ..b )         -- ..b x ) [ over [ call ] dip ] ;
+2keep: ( ..a x y quot: ( ..a x y -- ..b )     -- ..b x y ) [ [ 2dup ] dip 2dip ] ;
 3keep: ( ..a x y z quot: ( ..a x y z -- ..b ) -- ..b x y z ) [ [ 3dup ] dip 3dip ] ;
-bi: ( x quot1 quot2 -- ) [ [ keep ] dip call ] ;
-2dup: ( a b -- a b a b ) [ over over ] ;
-3dup: ( a b c -- a b c a b c ) [ 2 pick-n 2 pick-n 2 pick-n ] ;
-dupd: ( a b -- a a b ) [ over swap ] ;
-2drop: ( a b -- ) [ drop drop ] ;
-3drop: ( a b c -- ) [ 2drop drop ] ;
-2dip: ( a b quot -- a b ) [ swap [ dip ] dip ] ;
-3dip: ( a b c quot -- a b c ) [ swap [ 2dip ] dip ] ;
-<rot-: ( a b c -- b c a ) [ [ swap ] dip swap ] ;
--rot>: ( a b c -- c a b ) [ swap [ swap ] dip ] ;
-tuck: ( a b -- b a b ) [ swap over ] ;
-choose: ( a1 a2 quot -- a ) [ [ over over ] dip call [ drop ] [ nip ] if ] ;
-pick: ( a b c -- a b c a ) [ [ over ] dip swap ] ;
-1check: ( a quot -- a ) [ keep swap ] ;
+bi:    ( x quot1 quot2 -- )                   [ [ keep ] dip call ] ;
+2dup:  ( a b -- a b a b )                     [ over over ] ;
+3dup:  ( a b c -- a b c a b c )               [ 2 pick-n 2 pick-n 2 pick-n ] ;
+dupd:  ( a b -- a a b )                       [ over swap ] ;
+2drop: ( a b -- )                             [ drop drop ] ;
+3drop: ( a b c -- )                           [ 2drop drop ] ;
+2dip:  ( a b quot -- a b )                    [ swap [ dip ] dip ] ;
+3dip:  ( a b c quot -- a b c )                [ swap [ 2dip ] dip ] ;
+<rot-: ( a b c -- b c a )                     [ [ swap ] dip swap ] ;
+-rot>: ( a b c -- c a b )                     [ swap [ swap ] dip ] ;
+tuck:  ( a b -- b a b )                       [ swap over ] ;
+choose: ( a1 a2 quot -- a )  [ [ over over ] dip call [ drop ] [ nip ] if ] ;
+pick:   ( a b c -- a b c a ) [ [ over ] dip swap ] ;
+1check: ( a quot -- a )      [ keep swap ] ;
 
 \ Arithmetic operators
--@: ( a -- -a ) [ 0 swap - ] ;
-abs: ( a -- b ) [ dup 0 < [ -@ ] when ] ;
+-@:  ( a -- -a )    [ 0 swap - ] ;
+abs: ( a -- b )     [ dup 0 < [ -@ ] when ] ;
 min: ( a1 a2 -- a ) [ [ < ] choose ] ;
 max: ( a1 a2 -- a ) [ [ > ] choose ] ;
---: ( a1 -- a2 ) [ 1 - ] ;
-++: ( a1 -- a2 ) [ 1 + ] ;
-0?: ( a -- ? ) [ 0 = ] ;
-rem: ( a b -- r ) [ tuck % over + swap % ] ;
+--:  ( a1 -- a2 )   [ 1 - ] ;
+++:  ( a1 -- a2 )   [ 1 + ] ;
+0?:  ( a -- ? )     [ 0 = ] ;
+rem: ( a b -- r )   [ tuck % over + swap % ] ;
 
 \ Comparison operators
 <=: ( a b -- ? ) [ 2dup < [ 2drop t ] [ = ] if ] ;
@@ -147,9 +147,9 @@ rem: ( a b -- r ) [ tuck % over + swap % ] ;
 /=: ( a b -- ? ) [ = not ] ;
 
 \ Boolean operators
-not: ( ? -- ? ) [ [ f ] [ t ] if ] ;
+not: ( ? -- ? )   [ [ f ] [ t ] if ] ;
 and: ( ? ? -- ? ) [ [ ] [ drop f ] if ] ;
-or: ( ? ? -- ? ) [ [ drop t ] [ ] if ] ;
+or:  ( ? ? -- ? ) [ [ drop t ] [ ] if ] ;
 xor: ( ? ? -- ? ) [ 2dup and not -rot> or and ] ;
 
 \ I/O - stream-based primitives
@@ -162,10 +162,10 @@ with-input-stream: ( stream quot -- ) [ input-stream swap with-parameter ] ;
 print: ( str -- ) [ output-stream get swap stream-write-string drop ] ;
 print-line: ( str -- ) [ print "\n" print flush ] ;
 
-emit: ( codepoint -- ) [ >char print ] ;
-nl: ( -- ) [ "\n" print ] ;
-bl: ( -- ) [ " " print ] ;
-flush: ( -- ) [ output-stream get stream-flush ] ;
+emit:  ( codepoint -- ) [ >char print ] ;
+nl:    ( -- )           [ "\n" print ] ;
+bl:    ( -- )           [ " " print ] ;
+flush: ( -- )           [ output-stream get stream-flush ] ;
 
 read-line: ( -- str/f ) [ input-stream get stream-read-line ] ;
 

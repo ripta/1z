@@ -15,7 +15,7 @@ new-grid: ( width height marks -- grid ) [
 with-chars: ( grid mark-char empty-char -- grid ) [
   ec: swap ;
   mc: swap ;
-  g: swap ;
+  g:  swap ;
   g width>> g height>> g marks>> mc ec make-grid
 ] ;
 

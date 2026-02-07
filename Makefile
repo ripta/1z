@@ -1,4 +1,6 @@
-.PHONY: all build release run test integration-test fmt-test update-golden update-fmt-golden clean help
+.PHONY: all build release run fmt test unit-test integration-test fmt-test update-golden update-fmt-golden clean help
+
+ONE_Z_FILES := $(shell find . -name '*.1z' -not -path './.zig-cache/*' -not -path './zig-out/*')
 
 all: build
 
@@ -10,6 +12,10 @@ release: ## Build with optimizations
 
 run: build ## Build and run the 1z interpreter
 	./zig-out/bin/1z
+
+fmt: build ## Format zig and 1z source files
+	zig fmt src/ build.zig
+	./zig-out/bin/1z fmt $(ONE_Z_FILES)
 
 test: unit-test integration-test fmt-test ## Run all tests
 

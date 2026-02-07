@@ -4,11 +4,11 @@
 duration: virtual{ integer } ;
 
 \ Convenience constructors for durations
-nanoseconds: ( n -- duration ) [ >duration ] ;
+nanoseconds:  ( n -- duration ) [ >duration ] ;
 microseconds: ( n -- duration ) [ 1000 * >duration ] ;
 milliseconds: ( n -- duration ) [ 1000000 * >duration ] ;
-seconds: ( n -- duration ) [ 1000000000 * >duration ] ;
-minutes: ( n -- duration ) [ 60 * seconds ] ;
+seconds:      ( n -- duration ) [ 1000000000 * >duration ] ;
+minutes:      ( n -- duration ) [ 60 * seconds ] ;
 hours: ( n -- duration ) [ 60 * minutes ] ;
 
 \ Timestamp: virtual type backed by a hidden struct
@@ -212,8 +212,8 @@ time-format-in: ( timestamp tz fmt-string -- string ) [
 \ Format constants
 iso8601-fmt: const [ "{year}-{month-num:width=2,fill=0}-{day:width=2,fill=0}T{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0}{tz}" ] ;
 rfc2822-fmt: const [ "{weekday-short}, {day:width=2,fill=0} {month-short} {year} {hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0} {tz}" ] ;
-date-fmt: const [ "{year}-{month-num:width=2,fill=0}-{day:width=2,fill=0}" ] ;
-time-fmt: const [ "{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0}" ] ;
+date-fmt:    const [ "{year}-{month-num:width=2,fill=0}-{day:width=2,fill=0}" ] ;
+time-fmt:    const [ "{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0}" ] ;
 
 \ --- Elapsed time measurement ---
 
