@@ -12,9 +12,9 @@ use "testing" ;
 
 \ First branch matches
 "red" {
-  { "red"   [ 255 0 0 ] }
+  { "red" [ 255 0 0 ] }
   { "green" [ 0 255 0 ] }
-  { "blue"  [ 0 0 255 ] }
+  { "blue" [ 0 0 255 ] }
 } case
 0 "red blue component" assert=
 0 "red green component" assert=
@@ -22,9 +22,9 @@ use "testing" ;
 
 \ Second branch matches
 "green" {
-  { "red"   [ 255 0 0 ] }
+  { "red" [ 255 0 0 ] }
   { "green" [ 0 255 0 ] }
-  { "blue"  [ 0 0 255 ] }
+  { "blue" [ 0 0 255 ] }
 } case
 0 "green blue component" assert=
 255 "green green component" assert=
@@ -32,9 +32,9 @@ use "testing" ;
 
 \ Third branch matches
 "blue" {
-  { "red"   [ 255 0 0 ] }
+  { "red" [ 255 0 0 ] }
   { "green" [ 0 255 0 ] }
-  { "blue"  [ 0 0 255 ] }
+  { "blue" [ 0 0 255 ] }
 } case
 255 "blue blue component" assert=
 0 "blue green component" assert=
@@ -44,7 +44,7 @@ use "testing" ;
 
 \ Default branch when no match
 "purple" {
-  { "red"   [ 255 0 0 ] }
+  { "red" [ 255 0 0 ] }
   { "green" [ 0 255 0 ] }
   [ drop "unknown" ]
 } case
@@ -70,7 +70,7 @@ use "testing" ;
 
 \ Works with symbol values
 read: {
-  { read:  [ "reading" ] }
+  { read: [ "reading" ] }
   { write: [ "writing" ] }
 } case
 "reading" "symbol dispatch" assert=
@@ -79,7 +79,7 @@ read: {
 
 \ Works with integer values
 42 {
-  { 0  [ "zero" ] }
+  { 0 [ "zero" ] }
   { 42 [ "answer" ] }
   [ drop "other" ]
 } case
@@ -89,8 +89,9 @@ read: {
 
 \ No matching branch and no default
 [ 99 {
-  { 1 [ "one" ] }
-  { 2 [ "two" ] }
-} case ] ENoMatchingBranch "no match without default errors" assert-error-type
+    { 1 [ "one" ] }
+    { 2 [ "two" ] }
+  } case
+] ENoMatchingBranch "no match without default errors" assert-error-type
 
 "All case tests complete!" print-line
