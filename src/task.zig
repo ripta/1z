@@ -21,6 +21,32 @@ const c = struct {
 pub const makecontext = c.makecontext;
 pub const swapcontext = c.swapcontext;
 
+/// Module-level variable to pass the task pointer to `taskEntryPoint`.
+/// Safe because scheduling is single-threaded cooperative: the scheduler
+/// sets this immediately before swapcontext, and the entry function reads
+/// and clears it before any yield point.
+pub var pending_entry_task: ?*Task = null;
+
+/// Entry function for task coroutines. Called via makecontext with no
+/// arguments; reads the task pointer from `pending_entry_task`.
+pub fn taskEntryPoint() callconv(.c) void {
+    const task = pending_entry_task.?;
+    pending_entry_task = null;
+
+    task.ctx.executeQuotation(task.quotation) catch {
+        task.status = .failed;
+        if (task.ctx.thrown_error) |thrown| {
+            task.error_obj = thrown;
+        }
+        return;
+    };
+
+    if (task.ctx.stack.depth() > 0) {
+        task.result = task.ctx.stack.pop() catch null;
+    }
+    task.status = .completed;
+}
+
 /// Status of a green thread task.
 pub const TaskStatus = enum {
     pending,
@@ -128,7 +154,7 @@ pub fn initTaskContext(task: *Task, entry_fn: *const fn () callconv(.c) void, sc
 
     task.uctx.mcontext = undefined;
     task.uctx.stack.sp = @ptrCast(stack_mem.ptr + page_size);
-    task.uctx.stack.len = stack_mem.len - page_size;
+    task.uctx.stack.size = @intCast(stack_mem.len - page_size);
     task.uctx.stack.flags = 0;
     task.uctx.link = scheduler_uctx;
 

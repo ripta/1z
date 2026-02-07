@@ -65,6 +65,18 @@ pub const Scheduler = struct {
         }
     }
 
+    /// Swap context back to the scheduler without reënqueuing the current task.
+    /// Used by nested `task-scope` to block the calling task until its scope completes.
+    ///
+    /// TODO(ripta): This is currently only used for task scopes, but it could
+    ///              also be used for a `yieldAndBlock` primitive that yields
+    ///              without reënqueuing.
+    pub fn suspendCurrentTask(self: *Scheduler) void {
+        if (self.current_task) |task| {
+            _ = task_mod.swapcontext(&task.uctx, &self.scheduler_uctx);
+        }
+    }
+
     /// Core scheduling loop. Dequeues tasks FIFO, resumes each via
     /// swapcontext, and handles completion/failure when tasks finish.
     /// Returns when the run queue is empty.
@@ -72,19 +84,19 @@ pub const Scheduler = struct {
         while (self.run_queue.items.len > 0) {
             const task = self.run_queue.orderedRemove(0);
             self.current_task = task;
+
+            // NOTE(ripta): Set `pending_entry_task` before swapcontext.
+            //              For new tasks, the entry function reads and clears it.
+            //              For resumed tasks, the variable is ignored and overwritten on the next iteration.
+            task_mod.pending_entry_task = task;
             task.status = .running;
 
-            // Resume the task; returns when task yields or finishes.
             _ = task_mod.swapcontext(&self.scheduler_uctx, &task.uctx);
-
             self.current_task = null;
-
             switch (task.status) {
                 .completed, .failed => {
                     self.handleTaskDone(task);
                 },
-                // Task yielded and is still running -- already re-enqueued
-                // by yieldCurrentTask.
                 .running, .pending, .cancelled => {},
             }
         }
