@@ -12,11 +12,11 @@ make-test-string: ( nlines -- str ) [
   "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN\n" swap repeat
 ] ;
 
-make-benchmark-report
-  "Slow (5 lines)"   [ 5   make-test-string split-lines-slow drop ] benchmark-run
-  "Fast (5 lines)"   [ 5   make-test-string split-lines drop ] benchmark-run
-  "Slow (25 lines)"  [ 25  make-test-string split-lines-slow drop ] benchmark-run
-  "Fast (25 lines)"  [ 25  make-test-string split-lines drop ] benchmark-run
+[
+  "Slow (5 lines)" [ 5 make-test-string split-lines-slow drop ] benchmark-run
+  "Fast (5 lines)" [ 5 make-test-string split-lines drop ] benchmark-run
+  "Slow (25 lines)" [ 25 make-test-string split-lines-slow drop ] benchmark-run
+  "Fast (25 lines)" [ 25 make-test-string split-lines drop ] benchmark-run
   "Slow (125 lines)" [ 125 make-test-string split-lines-slow drop ] benchmark-run
   "Fast (125 lines)" [ 125 make-test-string split-lines drop ] benchmark-run
-print-benchmark-report
+] run-benchmarks

@@ -241,3 +241,6 @@ cond: ( branches -- ... ) [
 \ String formatting
 fmt: ( source string -- string ) [ template interpolate ] ;
 fmt-line: ( source string -- ) [ fmt print-line ] ;
+
+\ Benchmarking
+run-benchmarks: ( quot -- ) [ make-benchmark-report swap call print-benchmark-report ] ;

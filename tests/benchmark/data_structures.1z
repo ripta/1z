@@ -5,7 +5,7 @@
 benchmark-section: ( msg -- ) [ "=== " swap #append " ===" #append print-line ] ;
 
 bench-struct: struct{ a b c } ;
-mut-struct:   mutable struct{ x y z } ;
+mut-struct: mutable struct{ x y z } ;
 
 \ Pre-built instances for access benchmarks
 pre-arr:  { 1 2 3 } ;
@@ -19,39 +19,39 @@ pre-ba:   B{ 1 2 3 } ;
 
 nl "[-- Construction --]" print-line
 
-make-benchmark-report
-  "Array"        5000 [ { 1 2 3 } drop ] benchmark-n
-  "Struct"       5000 [ 1 2 3 make-bench-struct drop ] benchmark-n
-  "Mut Struct"   5000 [ 1 2 3 make-mut-struct drop ] benchmark-n
-  "Hash"        5000 [ H{ a: 1 b: 2 c: 3 } drop ] benchmark-n
-  "Vector"      5000 [ V{ 1 2 3 } drop ] benchmark-n
+[
+  "Array" 5000 [ { 1 2 3 } drop ] benchmark-n
+  "Struct" 5000 [ 1 2 3 make-bench-struct drop ] benchmark-n
+  "Mut Struct" 5000 [ 1 2 3 make-mut-struct drop ] benchmark-n
+  "Hash" 5000 [ H{ a: 1 b: 2 c: 3 } drop ] benchmark-n
+  "Vector" 5000 [ V{ 1 2 3 } drop ] benchmark-n
   "Mutable Map" 5000 [ M{ a: 1 b: 2 c: 3 } drop ] benchmark-n
-  "Set"         5000 [ S{ 1 2 3 } drop ] benchmark-n
-  "Byte Array"  5000 [ B{ 1 2 3 } drop ] benchmark-n
-print-benchmark-report
+  "Set" 5000 [ S{ 1 2 3 } drop ] benchmark-n
+  "Byte Array" 5000 [ B{ 1 2 3 } drop ] benchmark-n
+] run-benchmarks
 
 nl "[-- Access --]" print-line
 
-make-benchmark-report
-  "Array       #nth"     5000 [ pre-arr 0 #nth drop pre-arr 2 #nth drop ] benchmark-n
-  "Struct      field>>"  5000 [ pre-s a>> drop pre-s c>> drop ] benchmark-n
-  "Mut Struct  field>>"  5000 [ pre-ms x>> drop pre-ms z>> drop ] benchmark-n
-  "Hash        @get"     5000 [ pre-hash a: @get drop pre-hash c: @get drop ] benchmark-n
-  "Vector      #nth"     5000 [ pre-vec 0 #nth drop pre-vec 2 #nth drop ] benchmark-n
-  "Mutable Map @get"     5000 [ pre-mmap a: @get drop pre-mmap c: @get drop ] benchmark-n
-  "Set         @in?"     5000 [ pre-set 1 @in? drop pre-set 3 @in? drop ] benchmark-n
-  "Byte Array  #nth"     5000 [ pre-ba 0 #nth drop pre-ba 2 #nth drop ] benchmark-n
-print-benchmark-report
+[
+  "Array       #nth" 5000 [ pre-arr 0 #nth drop pre-arr 2 #nth drop ] benchmark-n
+  "Struct      field>>" 5000 [ pre-s a>> drop pre-s c>> drop ] benchmark-n
+  "Mut Struct  field>>" 5000 [ pre-ms x>> drop pre-ms z>> drop ] benchmark-n
+  "Hash        @get" 5000 [ pre-hash a: @get drop pre-hash c: @get drop ] benchmark-n
+  "Vector      #nth" 5000 [ pre-vec 0 #nth drop pre-vec 2 #nth drop ] benchmark-n
+  "Mutable Map @get" 5000 [ pre-mmap a: @get drop pre-mmap c: @get drop ] benchmark-n
+  "Set         @in?" 5000 [ pre-set 1 @in? drop pre-set 3 @in? drop ] benchmark-n
+  "Byte Array  #nth" 5000 [ pre-ba 0 #nth drop pre-ba 2 #nth drop ] benchmark-n
+] run-benchmarks
 
 nl "[-- Mutation --]" print-line
 
-make-benchmark-report
-  "Array #append"        5000 [ pre-arr { 4 } #append drop ] benchmark-n
-  "Mut Struct >>field"   5000 [ pre-ms 99 >>x drop ] benchmark-n
-  "Hash @set (update)"   5000 [ pre-hash a: 99 @set drop ] benchmark-n
-  "Hash @set (insert)"   5000 [ pre-hash d: 4 @set drop ] benchmark-n
-  "Vector #push!"        5000 [ V{ 1 } 2 #push! drop ] benchmark-n
-  "Mutable Map @set!"    5000 [ pre-mmap a: 99 @set! drop ] benchmark-n
-  "Set @adjoin"          5000 [ pre-set 4 @adjoin drop ] benchmark-n
-  "Byte Array #append"   5000 [ pre-ba B{ 4 } #append drop ] benchmark-n
-print-benchmark-report
+[
+  "Array #append" 5000 [ pre-arr { 4 } #append drop ] benchmark-n
+  "Mut Struct >>field" 5000 [ pre-ms 99 >>x drop ] benchmark-n
+  "Hash @set (update)" 5000 [ pre-hash a: 99 @set drop ] benchmark-n
+  "Hash @set (insert)" 5000 [ pre-hash d: 4 @set drop ] benchmark-n
+  "Vector #push!" 5000 [ V{ 1 } 2 #push! drop ] benchmark-n
+  "Mutable Map @set!" 5000 [ pre-mmap a: 99 @set! drop ] benchmark-n
+  "Set @adjoin" 5000 [ pre-set 4 @adjoin drop ] benchmark-n
+  "Byte Array #append" 5000 [ pre-ba B{ 4 } #append drop ] benchmark-n
+] run-benchmarks
