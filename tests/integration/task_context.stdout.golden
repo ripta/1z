@@ -1,0 +1,19 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: task inherits outer dictionary
+Stack: [ ]
+PASS: task-local word not visible to sibling
+Stack: [ ]
+PASS: task sees parent dvar snapshot
+Stack: [ ]
+PASS: parent dvar unchanged after task modify
+Stack: [ ]
+PASS: independent stacks with yield
+Stack: [ ]
+PASS: per-task heap allocation works
+Stack: [ ]
