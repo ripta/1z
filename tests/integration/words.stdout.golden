@@ -61,6 +61,7 @@ Stack: [ ]
 @union ( set1 set2 -- set' )
 @values ( assoc -- array )
 add-load-path ( path --  )
+await ( task -- value )
 benchmark ( quot -- hash )
 benchmark-auto ( report label quot -- report )
 benchmark-n ( report label n quot -- report )

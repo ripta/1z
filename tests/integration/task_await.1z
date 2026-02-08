@@ -1,0 +1,77 @@
+use "testing" ;
+
+\ -- 1. Basic await: spawn a task that pushes an integer, await it --
+
+test-basic-await: ( -- ) [
+  [
+    [ 42 ] spawn
+    await 42 "await returns task result" assert=
+  ] task-scope
+] ;
+
+\ -- 2. Await string: heap-allocated value survives deep copy --
+
+test-await-string: ( -- ) [
+  [
+    [ "hello world" ] spawn
+    await "hello world" "await copies string across arenas" assert=
+  ] task-scope
+] ;
+
+\ -- 3. Await array: compound value survives deep copy --
+
+test-await-array: ( -- ) [
+  [
+    [ { 1 2 3 } ] spawn
+    await { 1 2 3 } "await copies array across arenas" assert=
+  ] task-scope
+] ;
+
+\ -- 4. Await hash: associative value survives deep copy --
+
+test-await-hash: ( -- ) [
+  [
+    [ H{ a: 1 b: 2 } ] spawn
+    await
+    a: @get 1 "await hash: key a" assert=
+  ] task-scope
+] ;
+
+\ -- 5. Await with no result: task pushes nothing, await returns f --
+
+test-await-no-result: ( -- ) [
+  [
+    [ ] spawn
+    await f "await with no result returns f" assert=
+  ] task-scope
+] ;
+
+\ -- 6. Await already-completed task: yield first so task finishes --
+
+test-await-already-completed: ( -- ) [
+  [
+    [ 99 ] spawn
+    yield
+    await 99 "await already-completed task" assert=
+  ] task-scope
+] ;
+
+\ -- 7. Await failed task: error propagates to caller --
+
+test-await-failed: ( -- ) [
+  [
+    [
+      [ "boom" throw ] spawn
+      yield
+      await
+    ] "await propagates task error" assert-error
+  ] task-scope
+] ;
+
+test-basic-await
+test-await-string
+test-await-array
+test-await-hash
+test-await-no-result
+test-await-already-completed
+test-await-failed
