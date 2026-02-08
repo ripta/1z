@@ -62,6 +62,7 @@ Stack: [ ]
 @values ( assoc -- array )
 add-load-path ( path --  )
 await ( task -- value )
+await-all ( array -- array )
 benchmark ( quot -- hash )
 benchmark-auto ( report label quot -- report )
 benchmark-n ( report label n quot -- report )

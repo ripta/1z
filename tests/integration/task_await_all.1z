@@ -1,0 +1,83 @@
+use "testing" ;
+
+\ -- 1. Basic await-all: spawn 3 tasks, collect results in order --
+
+test-basic-await-all: ( -- ) [
+  [
+    { }
+    [ 1 ] spawn #push
+    [ 2 ] spawn #push
+    [ 3 ] spawn #push
+    await-all { 1 2 3 } "await-all returns results in order" assert=
+  ] task-scope
+] ;
+
+\ -- 2. Empty array: await-all on empty array returns empty array --
+
+test-empty-array: ( -- ) [
+  [
+    { } await-all { } "await-all on empty array" assert=
+  ] task-scope
+] ;
+
+\ -- 3. Mixed completion: some tasks yield, results still ordered --
+
+test-mixed-completion: ( -- ) [
+  [
+    { }
+    [ yield yield 10 ] spawn #push
+    [ 20 ] spawn #push
+    [ yield 30 ] spawn #push
+    await-all { 10 20 30 } "await-all with mixed yields" assert=
+  ] task-scope
+] ;
+
+\ -- 4. No-result tasks: tasks that push nothing produce f --
+
+test-no-result: ( -- ) [
+  [
+    { }
+    [ ] spawn #push
+    [ 42 ] spawn #push
+    [ ] spawn #push
+    await-all
+    dup #len 3 "result array has 3 elements" assert=
+    dup 0 #nth f "first no-result task produces f" assert=
+    dup 1 #nth 42 "middle task produces 42" assert=
+    2 #nth f "last no-result task produces f" assert=
+  ] task-scope
+] ;
+
+\ -- 5. Error propagation: one task fails, await-all re-throws --
+
+test-error-propagation: ( -- ) [
+  [
+    [
+      { }
+      [ 1 ] spawn #push
+      [ f "boom" test-error: make-error throw ] spawn #push
+      [ 3 ] spawn #push
+      await-all
+    ] task-scope
+  ] test-error: "await-all propagates task error" assert-error-type
+] ;
+
+\ -- 6. First error wins: multiple failures, first in array order propagates --
+
+test-first-error-wins: ( -- ) [
+  [
+    [
+      { }
+      [ f "first" first-error: make-error throw ] spawn #push
+      [ f "second" second-error: make-error throw ] spawn #push
+      await-all
+    ] task-scope
+  ] first-error: "first error in array order propagates" assert-error-type
+] ;
+
+test-basic-await-all
+test-empty-array
+test-mixed-completion
+test-no-result
+test-error-propagation
+test-first-error-wins

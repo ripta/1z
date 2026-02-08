@@ -21,6 +21,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "spawn", .stack_effect = "quot -- task", .func = nativeSpawn },
     .{ .name = "yield", .stack_effect = "--", .func = nativeYield },
     .{ .name = "await", .stack_effect = "task -- value", .func = nativeAwait },
+    .{ .name = "await-all", .stack_effect = "array -- array", .func = nativeAwaitAll },
     .{ .name = "sleep", .stack_effect = "ms --", .func = nativeSleep },
 };
 
@@ -228,6 +229,103 @@ fn nativeAwait(ctx: *Context) anyerror!void {
     }
 
     return handleAwaitResult(ctx, task);
+}
+
+/// await-all ( array -- array )
+///
+/// Wait for all tasks in the array to complete and return an array of results
+/// in the same order. If any task failed or was cancelled, re-throw the first
+/// error, in array order, after all tasks have finished.
+fn nativeAwaitAll(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const tasks = switch (val) {
+        .array => |items| items,
+        else => {
+            helpers.setTypeMismatchError(ctx, "array", val);
+            return error.TypeMismatch;
+        },
+    };
+
+    for (tasks) |item| {
+        switch (item) {
+            .task => {},
+            else => {
+                helpers.setTypeMismatchError(ctx, "task", item);
+                return error.TypeMismatch;
+            },
+        }
+    }
+
+    if (tasks.len == 0) {
+        try ctx.stack.push(.{ .array = &.{} });
+        return;
+    }
+
+    const scheduler = ctx.scheduler orelse {
+        ctx.pending_error_message = "await-all must be called within a task-scope";
+        return error.InvalidState;
+    };
+
+    const current = scheduler.current_task orelse {
+        ctx.pending_error_message = "await-all must be called from a running task";
+        return error.InvalidState;
+    };
+
+    // Wait for each task to finish. Suspend the current task whenever a task
+    // is still pending or running; the scheduler's handleTaskDone will
+    // reënqueue when the awaited task completes.
+    for (tasks) |item| {
+        const task = item.task;
+        switch (task.status) {
+            .pending, .running => {
+                task.awaiting_task = current;
+                scheduler.suspendCurrentTask();
+            },
+            .completed, .failed, .cancelled => {},
+        }
+    }
+
+    for (tasks) |item| {
+        const task = item.task;
+        switch (task.status) {
+            .failed => {
+                if (task.error_obj) |err_obj| {
+                    ctx.thrown_error = err_obj;
+                } else {
+                    ctx.thrown_error = .{
+                        .error_type = "task-error",
+                        .message = "task failed without error details",
+                    };
+                }
+                return error.UserThrown;
+            },
+            .cancelled => {
+                ctx.thrown_error = .{
+                    .error_type = "task-cancelled",
+                    .message = "awaited task was cancelled",
+                };
+                return error.UserThrown;
+            },
+            .completed => {},
+            .pending, .running => unreachable,
+        }
+    }
+
+    const alloc = ctx.arena.allocator();
+    const results = try alloc.alloc(Value, tasks.len);
+    for (tasks, 0..) |item, i| {
+        const task = item.task;
+        if (task.result) |result| {
+            // XXX(ripta): Potentially expensive deep copy of each result. We have to do this
+            //             before checking for errors/cancellations in order to preserve the
+            //             correct error precedence. Unsure if there's a better way.
+            results[i] = try deepCopyValue(result, alloc);
+        } else {
+            results[i] = .{ .boolean = false };
+        }
+    }
+
+    try ctx.stack.push(.{ .array = results });
 }
 
 /// Extract the result from a finished task: deep-copy completed results into the
