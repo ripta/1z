@@ -19,6 +19,8 @@ const task_stack_size: usize = 64 * 1024;
 pub const primitives = [_]Primitive{
     .{ .name = "task-scope", .stack_effect = "quot --", .func = nativeTaskScope },
     .{ .name = "spawn", .stack_effect = "quot -- task", .func = nativeSpawn },
+    .{ .name = "spawn-named", .stack_effect = "quot name -- task", .func = nativeSpawnNamed },
+    .{ .name = "task-self", .stack_effect = "-- task", .func = nativeTaskSelf },
     .{ .name = "yield", .stack_effect = "--", .func = nativeYield },
     .{ .name = "await", .stack_effect = "task -- value", .func = nativeAwait },
     .{ .name = "await-all", .stack_effect = "array -- array", .func = nativeAwaitAll },
@@ -144,6 +146,51 @@ fn nativeSpawn(ctx: *Context) anyerror!void {
     try scheduler.enqueue(task);
 
     try ctx.stack.push(.{ .task = task });
+}
+
+/// spawn-named ( quot name -- task )
+///
+/// Like `spawn`, but assigns a string name to the task. The name is stored
+/// on the Task struct and displayed in task value representations.
+fn nativeSpawnNamed(ctx: *Context) anyerror!void {
+    const name = try helpers.popString(ctx);
+    const quot = try helpers.popQuotation(ctx);
+
+    const scheduler = ctx.scheduler orelse {
+        ctx.pending_error_message = "spawn-named must be called within a task-scope";
+        return error.InvalidState;
+    };
+
+    const current = scheduler.current_task orelse {
+        ctx.pending_error_message = "spawn-named must be called from a running task";
+        return error.InvalidState;
+    };
+
+    const scope = current.scope;
+    const task = try allocateTask(ctx, scheduler, scope, quot);
+    task.name = name;
+    try scope.addChild(task);
+    try scheduler.enqueue(task);
+
+    try ctx.stack.push(.{ .task = task });
+}
+
+/// task-self ( -- task )
+///
+/// Push the current task handle onto the stack. Must be called from within
+/// a running task inside a `task-scope`.
+fn nativeTaskSelf(ctx: *Context) anyerror!void {
+    const scheduler = ctx.scheduler orelse {
+        ctx.pending_error_message = "task-self must be called within a task-scope";
+        return error.InvalidState;
+    };
+
+    const current = scheduler.current_task orelse {
+        ctx.pending_error_message = "task-self must be called from a running task";
+        return error.InvalidState;
+    };
+
+    try ctx.stack.push(.{ .task = current });
 }
 
 /// yield ( -- )

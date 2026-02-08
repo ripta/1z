@@ -1,0 +1,12 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: spawn-named task returns result
+Stack: [ ]
+PASS: task-self returns a task value
+Stack: [ ]
+PASS: spawn-named handle equals task-self inside task
+Stack: [ ]
+PASS: task-self outside scope raises error
+Stack: [ ]

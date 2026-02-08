@@ -1,0 +1,39 @@
+use "testing" ;
+
+\ -- 1. Basic spawn-named: spawn a named task and await its result --
+
+test-basic-spawn-named: ( -- ) [
+  [
+    [ 42 ] "my-task" spawn-named
+    await 42 "spawn-named task returns result" assert=
+  ] task-scope
+] ;
+
+\ -- 2. task-self returns current task --
+
+test-task-self-type: ( -- ) [
+  [
+    [ task-self type-of ] spawn
+    await task: "task-self returns a task value" assert=
+  ] task-scope
+] ;
+
+\ -- 3. task-self identity: handle from spawn-named matches task-self inside --
+
+test-task-self-identity: ( -- ) [
+  [
+    [ task-self ] "identity-test" spawn-named
+    dup await = "spawn-named handle equals task-self inside task" assert-true
+  ] task-scope
+] ;
+
+\ -- 4. task-self outside task-scope errors --
+
+test-task-self-outside-scope: ( -- ) [
+  [ task-self ] invalid-state: "task-self outside scope raises error" assert-error-type
+] ;
+
+test-basic-spawn-named
+test-task-self-type
+test-task-self-identity
+test-task-self-outside-scope
