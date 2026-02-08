@@ -25,6 +25,8 @@ pub const primitives = [_]Primitive{
     .{ .name = "await", .stack_effect = "task -- value", .func = nativeAwait },
     .{ .name = "await-all", .stack_effect = "array -- array", .func = nativeAwaitAll },
     .{ .name = "sleep", .stack_effect = "ms --", .func = nativeSleep },
+    .{ .name = "cancel-task", .stack_effect = "task --", .func = nativeCancelTask },
+    .{ .name = "with-timeout", .stack_effect = "quot ms -- value", .func = nativeWithTimeout },
 };
 
 /// Allocate a Task and its Context on the heap, wire up the ucontext, and
@@ -247,6 +249,133 @@ fn nativeSleep(ctx: *Context) anyerror!void {
             return error.UserThrown;
         }
     }
+}
+
+/// with-timeout ( quot ms -- value )
+///
+/// Run a quotation with a timeout. Creates an isolated nested scope with two
+/// tasks: the main task running the user's quotation and a timer task that
+/// sleeps for `ms` milliseconds then triggers a timeout failure.
+///
+/// If the main task completes first, its result is pushed and the timer is cancelled.
+/// If the timer fires first, the main task is cancelled and a `timeout` error is thrown.
+fn nativeWithTimeout(ctx: *Context) anyerror!void {
+    const ms = try helpers.popInteger(ctx);
+    const quot = try helpers.popQuotation(ctx);
+
+    if (ms < 0) {
+        ctx.pending_error_message = "timeout duration must be non-negative";
+        return error.InvalidArgument;
+    }
+
+    const scheduler = ctx.scheduler orelse {
+        ctx.pending_error_message = "with-timeout must be called within a task-scope";
+        return error.InvalidState;
+    };
+
+    const current = scheduler.current_task orelse {
+        ctx.pending_error_message = "with-timeout must be called from a running task";
+        return error.InvalidState;
+    };
+
+    // NOTE(ripta): Nest a hidden scope so the timer's sibling cancellation doesn't affect
+    //              the caller's other tasks. Spawn the main task with the user's quotation.
+    var scope = TaskScope.init(ctx.allocator);
+    defer scope.deinit();
+
+    // NOTE(ripta): Do NOT set the task as the scope task so that sibling cancellation from the timer can reach it.
+    const main_task = try allocateTask(ctx, scheduler, &scope, quot);
+    try scope.addChild(main_task);
+    try scheduler.enqueue(main_task);
+
+    const alloc = ctx.arena.allocator();
+    const timer_instrs = try alloc.alloc(Instruction, 2);
+    timer_instrs[0] = .{ .op = .{ .push_literal = .{ .integer = ms } }, .line = 0 };
+    timer_instrs[1] = .{ .op = .{ .call_word = "sleep" }, .line = 0 };
+    const timer_quot: @import("../value.zig").Quotation = .{ .instructions = timer_instrs };
+
+    // spawn the timer task with a custom entry point that marks as failed with a timeout error after the sleep completes
+    const timer_task = try allocateTask(ctx, scheduler, &scope, timer_quot);
+    task_mod.initTaskContext(timer_task, &timerTaskEntryPoint, &scheduler.scheduler_uctx);
+    try scope.addChild(timer_task);
+    try scheduler.enqueue(timer_task);
+
+    // suspend the current task until the scope drains
+    scope.waiting_task = current;
+    scheduler.suspendCurrentTask();
+
+    // inspect main task status to determine outcome
+    switch (main_task.status) {
+        .completed => {
+            if (main_task.result) |result| {
+                const copied = try deepCopyValue(result, ctx.arena.allocator());
+                try ctx.stack.push(copied);
+            } else {
+                try ctx.stack.push(.{ .boolean = false });
+            }
+        },
+        .failed => {
+            if (main_task.error_obj) |err_obj| {
+                ctx.thrown_error = err_obj;
+            } else {
+                ctx.thrown_error = .{
+                    .error_type = "task-error",
+                    .message = "task failed without error details",
+                };
+            }
+            return error.UserThrown;
+        },
+        .cancelled => {
+            ctx.thrown_error = .{
+                .error_type = "timeout",
+                .message = "operation timed out",
+            };
+            return error.UserThrown;
+        },
+        .pending, .running => unreachable,
+    }
+}
+
+/// Entry function for the timer task coroutine used by `with-timeout`.
+/// Runs the timer quotation (which sleeps), then marks the task as failed
+/// with a timeout error. This failure triggers sibling cancellation of the
+/// main task in the isolated scope.
+fn timerTaskEntryPoint() callconv(.c) void {
+    const task = task_mod.pending_entry_task.?;
+    task_mod.pending_entry_task = null;
+
+    task.ctx.executeQuotation(task.quotation) catch {
+        // Sleep was cancelled or errored -- mark as failed with whatever error
+        task.status = .failed;
+        if (task.ctx.thrown_error) |thrown| {
+            task.error_obj = thrown;
+        }
+        return;
+    };
+
+    // Sleep completed normally, meaning the timeout fired before the main task
+    // finished. Mark the timer as failed with a timeout error to trigger sibling
+    // cancellation of the main task.
+    task.status = .failed;
+    task.error_obj = .{
+        .error_type = "timeout",
+        .message = "operation timed out",
+    };
+}
+
+/// cancel-task ( task -- )
+///
+/// Cancel a task. Sets the cancelled flag so the scheduler will skip or
+/// abort it on the next scheduling pass. Must be called within a `task-scope`.
+fn nativeCancelTask(ctx: *Context) anyerror!void {
+    const task = try helpers.popTask(ctx);
+
+    if (ctx.scheduler == null) {
+        ctx.pending_error_message = "cancel-task must be called within a task-scope";
+        return error.InvalidState;
+    }
+
+    task.cancelled = true;
 }
 
 /// await ( task -- value )

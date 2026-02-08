@@ -1,0 +1,83 @@
+use "testing" ;
+use "task" ;
+
+\ -- 1. spawn-n basic: spawn 3 copies, collect results --
+
+test-spawn-n-basic: ( -- ) [
+  [
+    [ 1 ] 3 spawn-n await-all { 1 1 1 } "spawn-n creates 3 tasks returning 1" assert=
+  ] task-scope
+] ;
+
+\ -- 2. spawn-n zero: spawning 0 copies returns empty array --
+
+test-spawn-n-zero: ( -- ) [
+  [
+    [ 1 ] 0 spawn-n #len 0 "spawn-n with 0 returns empty array" assert=
+  ] task-scope
+] ;
+
+\ -- 3. concurrent basic: run array of quotations, results in order --
+
+test-concurrent-basic: ( -- ) [
+  [
+    { [ 10 ] [ 20 ] [ 30 ] } concurrent
+    { 10 20 30 } "concurrent returns results in order" assert=
+  ] task-scope
+] ;
+
+\ -- 4. concurrent empty: empty array returns empty array --
+
+test-concurrent-empty: ( -- ) [
+  [
+    { } concurrent #len 0 "concurrent on empty array" assert=
+  ] task-scope
+] ;
+
+\ -- 5. cancel-task basic: cancel a sleeping task, scope completes --
+
+test-cancel-task: ( -- ) [
+  [
+    [ 100000 sleep ] spawn
+    dup cancel-task
+    drop
+  ] task-scope
+  t "cancel-task allows scope to complete" assert-true
+] ;
+
+\ -- 6. with-timeout success: task finishes before timeout --
+
+test-with-timeout-success: ( -- ) [
+  [
+    [ 42 ] 5000 with-timeout 42 "with-timeout returns result" assert=
+  ] task-scope
+] ;
+
+\ -- 7. with-timeout fires: sleep exceeds timeout --
+
+test-with-timeout-fires: ( -- ) [
+  [
+    [
+      [ 10000 sleep 1 ] 10 with-timeout
+    ] task-scope
+  ] timeout: "with-timeout throws timeout error" assert-error-type
+] ;
+
+\ -- 8. with-timeout propagates task error, not timeout --
+
+test-with-timeout-error: ( -- ) [
+  [
+    [
+      [ f "boom" test-err: make-error throw ] 5000 with-timeout
+    ] task-scope
+  ] test-err: "with-timeout propagates task error" assert-error-type
+] ;
+
+test-spawn-n-basic
+test-spawn-n-zero
+test-concurrent-basic
+test-concurrent-empty
+test-cancel-task
+test-with-timeout-success
+test-with-timeout-fires
+test-with-timeout-error

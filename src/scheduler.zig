@@ -182,6 +182,10 @@ pub const Scheduler = struct {
 
             if (self.sleep_queue.count() > 0) {
                 self.drainCancelledSleepers();
+
+                // draining coulda woken waiting tasks via handleTaskDone, so re-check the runqueue before sleeping
+                if (self.run_queue.items.len > 0) continue;
+
                 if (self.sleep_queue.peek()) |next| {
                     const now = monotonicNowNs();
                     const remaining_ns = next.wake_time - now;
