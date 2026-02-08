@@ -24,9 +24,9 @@ pub const primitives = [_]Primitive{
     .{ .name = "yield", .stack_effect = "--", .func = nativeYield },
     .{ .name = "await", .stack_effect = "task -- value", .func = nativeAwait },
     .{ .name = "await-all", .stack_effect = "array -- array", .func = nativeAwaitAll },
-    .{ .name = "sleep", .stack_effect = "ms --", .func = nativeSleep },
+    .{ .name = "sleep", .stack_effect = "duration --", .func = nativeSleep },
     .{ .name = "cancel-task", .stack_effect = "task --", .func = nativeCancelTask },
-    .{ .name = "with-timeout", .stack_effect = "quot ms -- value", .func = nativeWithTimeout },
+    .{ .name = "with-timeout", .stack_effect = "quot duration -- value", .func = nativeWithTimeout },
 };
 
 /// Allocate a Task and its Context on the heap, wire up the ucontext, and
@@ -220,14 +220,14 @@ fn nativeYield(ctx: *Context) anyerror!void {
     }
 }
 
-/// sleep ( ms -- )
+/// sleep ( duration -- )
 ///
-/// Suspend the current task for the given number of milliseconds. Must be
-/// called within a `task-scope`. Rejects negative values.
+/// Suspend the current task for the given duration. Must be called within a
+/// `task-scope`. Rejects negative values.
 fn nativeSleep(ctx: *Context) anyerror!void {
-    const ms = try helpers.popInteger(ctx);
+    const dur = try helpers.popDuration(ctx);
 
-    if (ms < 0) {
+    if (dur.ns < 0) {
         ctx.pending_error_message = "sleep duration must be non-negative";
         return error.InvalidArgument;
     }
@@ -237,8 +237,7 @@ fn nativeSleep(ctx: *Context) anyerror!void {
         return error.InvalidState;
     };
 
-    const duration_ns: i128 = @as(i128, ms) * std.time.ns_per_ms;
-    scheduler.sleepCurrentTask(duration_ns);
+    scheduler.sleepCurrentTask(dur.ns);
 
     if (scheduler.current_task) |current| {
         if (current.cancelled) {
@@ -251,19 +250,19 @@ fn nativeSleep(ctx: *Context) anyerror!void {
     }
 }
 
-/// with-timeout ( quot ms -- value )
+/// with-timeout ( quot duration -- value )
 ///
 /// Run a quotation with a timeout. Creates an isolated nested scope with two
 /// tasks: the main task running the user's quotation and a timer task that
-/// sleeps for `ms` milliseconds then triggers a timeout failure.
+/// sleeps for the given duration then triggers a timeout failure.
 ///
 /// If the main task completes first, its result is pushed and the timer is cancelled.
 /// If the timer fires first, the main task is cancelled and a `timeout` error is thrown.
 fn nativeWithTimeout(ctx: *Context) anyerror!void {
-    const ms = try helpers.popInteger(ctx);
+    const dur = try helpers.popDuration(ctx);
     const quot = try helpers.popQuotation(ctx);
 
-    if (ms < 0) {
+    if (dur.ns < 0) {
         ctx.pending_error_message = "timeout duration must be non-negative";
         return error.InvalidArgument;
     }
@@ -290,7 +289,7 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
 
     const alloc = ctx.arena.allocator();
     const timer_instrs = try alloc.alloc(Instruction, 2);
-    timer_instrs[0] = .{ .op = .{ .push_literal = .{ .integer = ms } }, .line = 0 };
+    timer_instrs[0] = .{ .op = .{ .push_literal = dur.val }, .line = 0 };
     timer_instrs[1] = .{ .op = .{ .call_word = "sleep" }, .line = 0 };
     const timer_quot: @import("../value.zig").Quotation = .{ .instructions = timer_instrs };
 

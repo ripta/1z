@@ -1,10 +1,11 @@
 use "testing" ;
+use "time" ;
 
 \ -- 1. Basic sleep: task sleeps 10ms then pushes 42, await returns 42 --
 
 test-basic-sleep: ( -- ) [
   [
-    [ 10 sleep 42 ] spawn
+    [ 10 milliseconds sleep 42 ] spawn
     await 42 "sleep then push returns correct result" assert=
   ] task-scope
 ] ;
@@ -13,7 +14,7 @@ test-basic-sleep: ( -- ) [
 
 test-sleep-zero: ( -- ) [
   [
-    [ 0 sleep 99 ] spawn
+    [ 0 milliseconds sleep 99 ] spawn
     await 99 "sleep 0 returns immediately" assert=
   ] task-scope
 ] ;
@@ -22,8 +23,8 @@ test-sleep-zero: ( -- ) [
 
 test-sleep-ordering: ( -- ) [
   [
-    [ 50 sleep longer: ] spawn
-    [ 10 sleep shorter: ] spawn
+    [ 50 milliseconds sleep longer: ] spawn
+    [ 10 milliseconds sleep shorter: ] spawn
     await shorter: "shorter sleep finishes first" assert=
     await longer: "longer sleep finishes second" assert=
   ] task-scope
@@ -34,16 +35,16 @@ test-sleep-ordering: ( -- ) [
 test-sleep-cancel: ( -- ) [
   [
     [
-      [ 5000 sleep ] spawn drop
+      [ 5000 milliseconds sleep ] spawn drop
       [ f "boom" test-error: make-error throw ] spawn drop
     ] task-scope
   ] test-error: "sleeping task cancelled when sibling fails" assert-error-type
 ] ;
 
-\ -- 5. Negative sleep: -1 sleep raises an error --
+\ -- 5. Negative sleep: -1 milliseconds sleep raises an error --
 
 test-negative-sleep: ( -- ) [
-  [ -1 sleep ] invalid-argument: "negative sleep raises error" assert-error-type
+  [ -1 milliseconds sleep ] invalid-argument: "negative sleep raises error" assert-error-type
 ] ;
 
 test-basic-sleep

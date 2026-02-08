@@ -356,3 +356,28 @@ pub fn popTask(ctx: *Context) !*Task {
         },
     };
 }
+
+/// Pop a duration value (tagged integer with inner_type "integer") and return
+/// the raw nanosecond count plus the original Value for re-use.
+pub fn popDuration(ctx: *Context) !struct { ns: i128, val: Value } {
+    const val = try ctx.stack.pop();
+    return switch (val) {
+        .tagged => |t| {
+            if (!std.mem.eql(u8, t.tag.inner_type, "integer")) {
+                setTypeMismatchError(ctx, "duration", val);
+                return error.TypeMismatch;
+            }
+            return switch (t.inner.*) {
+                .integer => |i| .{ .ns = @as(i128, i), .val = val },
+                else => {
+                    setTypeMismatchError(ctx, "duration", val);
+                    return error.TypeMismatch;
+                },
+            };
+        },
+        else => {
+            setTypeMismatchError(ctx, "duration", val);
+            return error.TypeMismatch;
+        },
+    };
+}
