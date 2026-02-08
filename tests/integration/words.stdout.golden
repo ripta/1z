@@ -117,6 +117,7 @@ print-benchmark-report
 recover ( try-quot recover-quot: ( error --  ) --  )
 rethrow ( error --  )
 set-buffering-mode ( stream symbol --  )
+sleep ( ms --  )
 spawn ( quot -- task )
 stderr (  -- stream )
 stdin (  -- stream )

@@ -5,6 +5,25 @@ const Task = task_mod.Task;
 const TaskStatus = task_mod.TaskStatus;
 const TaskScope = task_mod.TaskScope;
 
+/// Entry in the sleep queue: a task and its absolute monotonic wake time in nanoseconds.
+pub const SleepEntry = struct {
+    task: *Task,
+    wake_time: i128,
+};
+
+/// Min-heap ordered by wake_time so the earliest waker is dequeued first.
+pub const SleepQueue = std.PriorityQueue(SleepEntry, void, sleepEntryLessThan);
+
+fn sleepEntryLessThan(_: void, a: SleepEntry, b: SleepEntry) std.math.Order {
+    return std.math.order(a.wake_time, b.wake_time);
+}
+
+/// Read the monotonic clock and return the current time as a single i128 nanosecond value.
+pub fn monotonicNowNs() i128 {
+    const ts = std.posix.clock_gettime(.MONOTONIC) catch unreachable;
+    return @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
+}
+
 /// Cooperative scheduler with a FIFO run queue.
 ///
 /// Drives green thread execution by round-robin scheduling tasks. Each task
@@ -12,6 +31,7 @@ const TaskScope = task_mod.TaskScope;
 /// loop via swapcontext.
 pub const Scheduler = struct {
     run_queue: std.ArrayListUnmanaged(*Task),
+    sleep_queue: SleepQueue,
     current_task: ?*Task = null,
     scheduler_uctx: std.c.ucontext_t = undefined,
     next_task_id: u64 = 1,
@@ -22,6 +42,7 @@ pub const Scheduler = struct {
     pub fn init(allocator: Allocator) Scheduler {
         return .{
             .run_queue = .{},
+            .sleep_queue = SleepQueue.init(allocator, {}),
             .current_task = null,
             .next_task_id = 1,
             .allocator = allocator,
@@ -29,7 +50,7 @@ pub const Scheduler = struct {
         };
     }
 
-    /// Free the run queue and clean up finished task stacks and arenas.
+    /// Free resources under the scheduler.
     pub fn deinit(self: *Scheduler) void {
         for (self.finished_tasks.items) |t| {
             if (t.stack_mem) |mem| {
@@ -42,6 +63,7 @@ pub const Scheduler = struct {
         }
         self.finished_tasks.deinit(self.allocator);
         self.run_queue.deinit(self.allocator);
+        self.sleep_queue.deinit();
     }
 
     /// Append a task to the end of the run queue.
@@ -67,47 +89,113 @@ pub const Scheduler = struct {
 
     /// Swap context back to the scheduler without reënqueuing the current task.
     /// Used by nested `task-scope` to block the calling task until its scope completes.
-    ///
-    /// TODO(ripta): This is currently only used for task scopes, but it could
-    ///              also be used for a `yieldAndBlock` primitive that yields
-    ///              without reënqueuing.
     pub fn suspendCurrentTask(self: *Scheduler) void {
         if (self.current_task) |task| {
             _ = task_mod.swapcontext(&task.uctx, &self.scheduler_uctx);
         }
     }
 
-    /// Core scheduling loop. Dequeues tasks FIFO, resumes each via
-    /// swapcontext, and handles completion/failure when tasks finish.
-    /// Returns when the run queue is empty.
-    pub fn runLoop(self: *Scheduler) void {
-        while (self.run_queue.items.len > 0) {
-            const task = self.run_queue.orderedRemove(0);
-            self.current_task = task;
+    /// Suspend the current task until `duration_ns` nanoseconds have elapsed.
+    /// Inserts the task into the sleep queue and swaps back to the scheduler.
+    pub fn sleepCurrentTask(self: *Scheduler, duration_ns: i128) void {
+        if (self.current_task) |task| {
+            const wake_time = monotonicNowNs() + duration_ns;
 
-            // NOTE(ripta): Propagate cancellation flag  to the task state.
-            //              A sibling's failure may have caused it, which is why
-            //              it's still in the queue.
-            if (task.cancelled) {
-                task.status = .cancelled;
-                self.handleTaskDone(task);
+            self.sleep_queue.add(.{ .task = task, .wake_time = wake_time }) catch {};
+            _ = task_mod.swapcontext(&task.uctx, &self.scheduler_uctx);
+        }
+    }
+
+    /// Move all sleep queue entries whose wake time has passed into the run queue.
+    fn wakeExpiredSleepers(self: *Scheduler) void {
+        const now = monotonicNowNs();
+        while (self.sleep_queue.peek()) |entry| {
+            if (entry.wake_time > now) break;
+
+            const woken = self.sleep_queue.remove();
+            self.run_queue.append(self.allocator, woken.task) catch {};
+        }
+    }
+
+    /// Remove cancelled tasks from the sleep queue so we don't idle-block
+    /// waiting for a task that will be immediately discarded.
+    ///
+    /// Uses removeIndex which swaps the last element into the removed slot,
+    /// so the loop must not increment the index after removal.
+    fn drainCancelledSleepers(self: *Scheduler) void {
+        var i: usize = 0;
+        while (i < self.sleep_queue.count()) {
+            if (self.sleep_queue.items[i].task.cancelled) {
+                const entry = self.sleep_queue.items[i];
+                entry.task.status = .cancelled;
+                self.handleTaskDone(entry.task);
+                _ = self.sleep_queue.removeIndex(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// Core scheduling loop
+    ///
+    /// Happens in four phases, repeating until there are no more tasks to run or wait for:
+    ///
+    /// 1. Wake expired sleepers into the run queue.
+    /// 2. If run queue non-empty: dequeue one task, handle cancellation or
+    ///    resume via swapcontext, handle completion. Loop back to phase 1.
+    /// 3. If run queue empty but sleep queue non-empty: drain cancelled sleepers,
+    ///    then nanosleep until the next wake time. Loop back to phase 1.
+    /// 4. Both queues empty: break.
+    pub fn runLoop(self: *Scheduler) void {
+        while (true) {
+            self.wakeExpiredSleepers();
+
+            if (self.run_queue.items.len > 0) {
+                const task = self.run_queue.orderedRemove(0);
+                self.current_task = task;
+
+                // NOTE(ripta): Propagate cancellation flag to the task state.
+                //              A sibling's failure may have caused it, which is why
+                //              it's still in the queue.
+                if (task.cancelled) {
+                    task.status = .cancelled;
+                    self.handleTaskDone(task);
+                    continue;
+                }
+
+                // NOTE(ripta): Set `pending_entry_task` before swapcontext.
+                //              For new tasks, the entry function reads and clears it.
+                //              For resumed tasks, the variable is ignored and overwritten on the next iteration.
+                task_mod.pending_entry_task = task;
+                task.status = .running;
+
+                _ = task_mod.swapcontext(&self.scheduler_uctx, &task.uctx);
+                self.current_task = null;
+                switch (task.status) {
+                    .completed, .failed => {
+                        self.handleTaskDone(task);
+                    },
+                    .running, .pending, .cancelled => {},
+                }
                 continue;
             }
 
-            // NOTE(ripta): Set `pending_entry_task` before swapcontext.
-            //              For new tasks, the entry function reads and clears it.
-            //              For resumed tasks, the variable is ignored and overwritten on the next iteration.
-            task_mod.pending_entry_task = task;
-            task.status = .running;
-
-            _ = task_mod.swapcontext(&self.scheduler_uctx, &task.uctx);
-            self.current_task = null;
-            switch (task.status) {
-                .completed, .failed => {
-                    self.handleTaskDone(task);
-                },
-                .running, .pending, .cancelled => {},
+            if (self.sleep_queue.count() > 0) {
+                self.drainCancelledSleepers();
+                if (self.sleep_queue.peek()) |next| {
+                    const now = monotonicNowNs();
+                    const remaining_ns = next.wake_time - now;
+                    if (remaining_ns > 0) {
+                        const ns_u: u128 = @intCast(remaining_ns);
+                        const sec: u64 = @intCast(ns_u / std.time.ns_per_s);
+                        const nsec: u64 = @intCast(ns_u % std.time.ns_per_s);
+                        std.posix.nanosleep(sec, nsec);
+                    }
+                    continue;
+                }
             }
+
+            break;
         }
     }
 

@@ -21,6 +21,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "spawn", .stack_effect = "quot -- task", .func = nativeSpawn },
     .{ .name = "yield", .stack_effect = "--", .func = nativeYield },
     .{ .name = "await", .stack_effect = "task -- value", .func = nativeAwait },
+    .{ .name = "sleep", .stack_effect = "ms --", .func = nativeSleep },
 };
 
 /// Allocate a Task and its Context on the heap, wire up the ucontext, and
@@ -158,6 +159,37 @@ fn nativeYield(ctx: *Context) anyerror!void {
     // Check for cancellation after resuming back from yielding.
     //
     // TODO(ripta): Are there other cases when a task could get asynchronously cancelled?
+    if (scheduler.current_task) |current| {
+        if (current.cancelled) {
+            ctx.thrown_error = .{
+                .error_type = "task-cancelled",
+                .message = "task was cancelled",
+            };
+            return error.UserThrown;
+        }
+    }
+}
+
+/// sleep ( ms -- )
+///
+/// Suspend the current task for the given number of milliseconds. Must be
+/// called within a `task-scope`. Rejects negative values.
+fn nativeSleep(ctx: *Context) anyerror!void {
+    const ms = try helpers.popInteger(ctx);
+
+    if (ms < 0) {
+        ctx.pending_error_message = "sleep duration must be non-negative";
+        return error.InvalidArgument;
+    }
+
+    const scheduler = ctx.scheduler orelse {
+        ctx.pending_error_message = "sleep must be called within a task-scope";
+        return error.InvalidState;
+    };
+
+    const duration_ns: i128 = @as(i128, ms) * std.time.ns_per_ms;
+    scheduler.sleepCurrentTask(duration_ns);
+
     if (scheduler.current_task) |current| {
         if (current.cancelled) {
             ctx.thrown_error = .{
