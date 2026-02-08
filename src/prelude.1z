@@ -190,7 +190,7 @@ use: parse-time [
 times: ( n quot -- ) [
   over 0 >
   [
-    dup call
+    dup 2dip
     swap -- swap
     times
   ]
