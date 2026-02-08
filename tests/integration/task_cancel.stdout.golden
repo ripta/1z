@@ -1,0 +1,13 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: error in child propagates out of task-scope
+Stack: [ ]
+PASS: scope propagates original error when sibling cancelled
+Stack: [ ]
+PASS: first error propagates
+Stack: [ ]
+PASS: sibling completes when error is recovered
+PASS: recovered task returns result
+Stack: [ ]

@@ -78,6 +78,8 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
         defer scope.deinit();
 
         const scope_task = try allocateTask(ctx, scheduler, &scope, quot);
+        scope.scope_task = scope_task;
+
         try scope.addChild(scope_task);
         try scheduler.enqueue(scope_task);
 
@@ -104,6 +106,8 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     defer scope.deinit();
 
     const scope_task = try allocateTask(ctx, &scheduler, &scope, quot);
+    scope.scope_task = scope_task;
+
     try scope.addChild(scope_task);
     try scheduler.enqueue(scope_task);
 
@@ -150,6 +154,19 @@ fn nativeYield(ctx: *Context) anyerror!void {
     };
 
     scheduler.yieldCurrentTask();
+
+    // Check for cancellation after resuming back from yielding.
+    //
+    // TODO(ripta): Are there other cases when a task could get asynchronously cancelled?
+    if (scheduler.current_task) |current| {
+        if (current.cancelled) {
+            ctx.thrown_error = .{
+                .error_type = "task-cancelled",
+                .message = "task was cancelled",
+            };
+            return error.UserThrown;
+        }
+    }
 }
 
 /// await ( task -- value )

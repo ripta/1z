@@ -7,7 +7,9 @@ const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
 const debugger_mod = @import("debugger/mod.zig");
 const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
-const DispatchTable = @import("dispatch.zig").DispatchTable;
+const dispatch_mod = @import("dispatch.zig");
+const DispatchEntry = dispatch_mod.DispatchEntry;
+const DispatchTable = dispatch_mod.DispatchTable;
 const Scheduler = @import("scheduler.zig").Scheduler;
 const Quotation = value_mod.Quotation;
 const Value = value_mod.Value;
@@ -108,12 +110,11 @@ pub const Context = struct {
     dispatch: DispatchTable,
     /// Shared scheduler for green thread contexts. Null for the root context.
     scheduler: ?*Scheduler = null,
-    /// Read-only fallback dictionary for task contexts. Points to the parent's
-    /// dictionary, which contains primitives, prelude, and user-defined words.
-    parent_dictionary: ?*const Dictionary = null,
-    /// Read-only fallback dispatch table for task contexts. Points to the
-    /// parent's table of registered methods.
-    parent_dispatch: ?*const DispatchTable = null,
+    /// Parent context for dictionary and dispatch table lookup chaining.
+    /// Task contexts walk this chain to find words and methods defined in
+    /// ancestor scopes, up to the root context which holds primitives and
+    /// prelude words.
+    parent_context: ?*const Context = null,
 
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
@@ -150,9 +151,8 @@ pub const Context = struct {
 
     /// Create a lightweight Context for a spawned task. Primitives and the
     /// prelude are not registered here; they are resolved at lookup time
-    /// through `parent_dictionary`. Per-task state like the stack, dictionary,
-    /// and arena are freshly allocated. The scheduler and parent dictionary
-    /// and dispatch table are inherited by pointer.
+    /// by walking up the parent_context chain. Per-task state like the stack,
+    /// dictionary, and arena are freshly allocated.
     pub fn initForTask(
         allocator: Allocator,
         parent: *Context,
@@ -169,8 +169,8 @@ pub const Context = struct {
             .local_frames = .{},
             .dispatch = DispatchTable.init(allocator),
             .scheduler = scheduler,
-            .parent_dictionary = &parent.dictionary,
-            .parent_dispatch = &parent.dispatch,
+            .parent_context = parent,
+
             .current_source = parent.current_source,
             .current_source_dir = parent.current_source_dir,
             .load_paths = parent.load_paths,
@@ -403,7 +403,39 @@ pub const Context = struct {
         }
 
         if (self.dictionary.get(name)) |def| return def;
-        if (self.parent_dictionary) |pd| return pd.get(name);
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            if (ctx.dictionary.get(name)) |def| return def;
+            ancestor = ctx.parent_context;
+        }
+
+        return null;
+    }
+
+    /// Look up a binary dispatch entry by walking upthe parent context chain.
+    pub fn lookupBinaryDispatch(self: *const Context, word_name: []const u8, type_a: []const u8, type_b: []const u8) ?DispatchEntry {
+        if (self.dispatch.lookupBinary(word_name, type_a, type_b)) |entry| return entry;
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            if (ctx.dispatch.lookupBinary(word_name, type_a, type_b)) |entry| return entry;
+            ancestor = ctx.parent_context;
+        }
+
+        return null;
+    }
+
+    /// Look up a unary dispatch entry by walking u pthe parent context chain.
+    pub fn lookupUnaryDispatch(self: *const Context, word_name: []const u8, type_a: []const u8) ?DispatchEntry {
+        if (self.dispatch.lookupUnary(word_name, type_a)) |entry| return entry;
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            if (ctx.dispatch.lookupUnary(word_name, type_a)) |entry| return entry;
+            ancestor = ctx.parent_context;
+        }
+
         return null;
     }
 

@@ -61,11 +61,11 @@ test-await-already-completed: ( -- ) [
 test-await-failed: ( -- ) [
   [
     [
-      [ "boom" throw ] spawn
+      [ f "boom" test-error: make-error throw ] spawn
       yield
       await
-    ] "await propagates task error" assert-error
-  ] task-scope
+    ] task-scope
+  ] test-error: "await propagates task error" assert-error-type
 ] ;
 
 test-basic-await

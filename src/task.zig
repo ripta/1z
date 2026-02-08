@@ -76,6 +76,9 @@ pub const Task = struct {
 /// TaskScope tracks children and completion for structured concurrency.
 pub const TaskScope = struct {
     children: std.ArrayListUnmanaged(*Task),
+    /// The coordinator task that runs the task-scope body. Excluded from
+    /// sibling cancellation so it can observe child failures via await.
+    scope_task: ?*Task = null,
     /// Task that is waiting for the entire scope to complete.
     waiting_task: ?*Task = null,
     /// First child error, propagated to parent on scope exit.
@@ -85,6 +88,7 @@ pub const TaskScope = struct {
     pub fn init(allocator: Allocator) TaskScope {
         return .{
             .children = .{},
+            .scope_task = null,
             .waiting_task = null,
             .failed_error = null,
             .allocator = allocator,

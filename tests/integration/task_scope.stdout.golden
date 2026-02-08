@@ -5,7 +5,7 @@ Stack: [ ]
 Stack: [ ]
 PASS: empty task-scope completes
 Stack: [ ]
-PASS: spawn returns task value
+PASS: spawn returns task type
 Stack: [ ]
 PASS: spawned task runs
 Stack: [ ]

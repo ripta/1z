@@ -1,0 +1,52 @@
+use "testing" ;
+
+\ -- 1. Error cancels siblings: one task throws, scope propagates the error --
+
+test-error-cancels-siblings: ( -- ) [
+  [
+    [
+      [ f "boom" test-error: make-error throw ] spawn drop
+      [ yield ] spawn drop
+    ] task-scope
+  ] test-error: "error in child propagates out of task-scope" assert-error-type
+] ;
+
+\ -- 2. Cancelled task does not execute: spawned task yields, sibling throws, --
+\      scope propagates the original error, not the cancellation               --
+
+test-cancelled-no-execute: ( -- ) [
+  [
+    [
+      [ yield yield yield 999 ] spawn drop
+      [ f "fail" test-error: make-error throw ] spawn drop
+    ] task-scope
+  ] test-error: "scope propagates original error when sibling cancelled" assert-error-type
+] ;
+
+\ -- 3. First error wins: two tasks both fail, only the first error propagates --
+
+test-first-error-wins: ( -- ) [
+  [
+    [
+      [ f "first" first-error: make-error throw ] spawn drop
+      [ f "second" second-error: make-error throw ] spawn drop
+    ] task-scope
+  ] first-error: "first error propagates" assert-error-type
+] ;
+
+\ -- 4. Recover prevents cancellation: a task catches its own error, siblings --
+\      complete normally. The recovered task pushes 42 after recovering.        --
+
+test-recover-no-cancel: ( -- ) [
+  [
+    [ [ f "caught" test-error: make-error throw ] [ drop ] recover 42 ] spawn
+    [ 10 ] spawn
+    await 10 "sibling completes when error is recovered" assert=
+    await 42 "recovered task returns result" assert=
+  ] task-scope
+] ;
+
+test-error-cancels-siblings
+test-cancelled-no-execute
+test-first-error-wins
+test-recover-no-cancel

@@ -85,6 +85,15 @@ pub const Scheduler = struct {
             const task = self.run_queue.orderedRemove(0);
             self.current_task = task;
 
+            // NOTE(ripta): Propagate cancellation flag  to the task state.
+            //              A sibling's failure may have caused it, which is why
+            //              it's still in the queue.
+            if (task.cancelled) {
+                task.status = .cancelled;
+                self.handleTaskDone(task);
+                continue;
+            }
+
             // NOTE(ripta): Set `pending_entry_task` before swapcontext.
             //              For new tasks, the entry function reads and clears it.
             //              For resumed tasks, the variable is ignored and overwritten on the next iteration.
@@ -114,7 +123,31 @@ pub const Scheduler = struct {
         }
 
         if (task.status == .failed and task.scope.failed_error == null) {
-            task.scope.failed_error = task.error_obj;
+            task.scope.failed_error = task.error_obj orelse .{
+                .error_type = "task-error",
+                .message = "task failed without error details",
+            };
+
+            // NOTE(ripta): When a task fails, convey the cancellation to siblings in the  same scope.
+            //              This is a best-effort attempt to prevent siblings from doing more work after
+            //              a failure, but it doesn't guarantee that they won't do any more work since
+            //              they may have already been resumed and be running concurrently. The cancelled
+            //              flag is checked in the scheduler loop before resuming a task, but if a sibling
+            //              is already running then it may not observe the cancellation until it yields
+            //              back to the scheduler.
+            //
+            // XXX(ripta): Be sure to skip the scope task since it's the coordinator and needs to observe
+            //             the failure via await, but it may not be in the same scope if it's a nested scope.
+            for (task.scope.children.items) |sibling| {
+                if (sibling == task) continue;
+                if (sibling == task.scope.scope_task) continue;
+                switch (sibling.status) {
+                    .pending, .running => {
+                        sibling.cancelled = true;
+                    },
+                    .completed, .failed, .cancelled => {},
+                }
+            }
         }
 
         if (task.scope.allChildrenDone()) {
