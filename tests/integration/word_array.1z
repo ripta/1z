@@ -1,0 +1,25 @@
+\ Integration tests for W{ } word array syntax
+
+use "testing" ;
+
+"Basic W{ } produces string arrays" test-section
+W{ } #len 0 "empty W{} length" assert=
+W{ foo } #len 1 "single element length" assert=
+W{ foo bar baz } #len 3 "three element length" assert=
+
+"Elements are strings" test-section
+W{ hello } #first "hello" "single element value" assert=
+W{ foo bar baz } 0 #nth "foo" "first element" assert=
+W{ foo bar baz } 1 #nth "bar" "second element" assert=
+W{ foo bar baz } 2 #nth "baz" "third element" assert=
+
+"Elements preserve token text" test-section
+W{ abc-def } #first "abc-def" "hyphenated word" assert=
+W{ foo_bar } #first "foo_bar" "underscored word" assert=
+W{ 123 } #first "123" "numeric token is a string" assert=
+
+"Works with sequence operations" test-section
+W{ alpha beta gamma } [ #len ] #map { 5 4 5 } "map string lengths" assert=
+W{ cat dog } #first #len 3 "first element length" assert=
+W{ cat dog } "fox" #in? f "element not in array" assert=
+W{ cat dog } "cat" #in? t "element in array" assert=

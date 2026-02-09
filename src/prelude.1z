@@ -19,6 +19,9 @@ S{: parse-time [ "}" parse-until make-set ] ;
 \\ Mutable map literal syntax.
 M{: parse-time [ "}" parse-until make-mutable-map ] ;
 
+\\ Word array literal syntax. Tokenizes words as strings without requiring quotes.
+W{: parse-time [ "}" parse-tokens-until ] ;
+
 \\ Struct definition syntax.
 \   name: struct{ field1 field2 ... } ;
 struct{: parse-time [

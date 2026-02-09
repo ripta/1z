@@ -1,0 +1,36 @@
+=== Basic W{ } produces string arrays ===
+Stack: [ ]
+PASS: empty W{} length
+Stack: [ ]
+PASS: single element length
+Stack: [ ]
+PASS: three element length
+Stack: [ ]
+=== Elements are strings ===
+Stack: [ ]
+PASS: single element value
+Stack: [ ]
+PASS: first element
+Stack: [ ]
+PASS: second element
+Stack: [ ]
+PASS: third element
+Stack: [ ]
+=== Elements preserve token text ===
+Stack: [ ]
+PASS: hyphenated word
+Stack: [ ]
+PASS: underscored word
+Stack: [ ]
+PASS: numeric token is a string
+Stack: [ ]
+=== Works with sequence operations ===
+Stack: [ ]
+PASS: map string lengths
+Stack: [ ]
+PASS: first element length
+Stack: [ ]
+PASS: element not in array
+Stack: [ ]
+PASS: element in array
+Stack: [ ]
