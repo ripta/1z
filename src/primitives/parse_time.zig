@@ -16,7 +16,6 @@ pub const primitives = [_]Primitive{
     .{ .name = "parse-tokens-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, return as string array.", .func = nativeParseTokensUntil },
     .{ .name = "parse-values-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, executing parse-time words. Return as array.", .func = nativeParseValuesUntil },
     .{ .name = "parse-token", .stack_effect = "-- string", .doc = "Read one raw token from the tokenizer, skipping comments and whitespace.", .func = nativeParseToken },
-    .{ .name = "parse-quotation", .stack_effect = "-- quotation", .doc = "Read the next [ ... ] block from the tokenizer.", .func = nativeParseQuotation },
     .{ .name = "parse-literal", .stack_effect = "-- value", .doc = "Read the next literal value from the tokenizer.", .func = nativeParseLiteral },
 };
 
@@ -114,25 +113,6 @@ fn nativeParseToken(ctx: *Context) anyerror!void {
         return;
     }
     return error.ParseError;
-}
-
-/// parse-quotation ( -- quotation ) - Read the next [ ... ] block from the tokenizer
-fn nativeParseQuotation(ctx: *Context) anyerror!void {
-    const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
-
-    while (tokenizer.next()) |tok| {
-        if (isSkippable(tok.kind)) continue;
-
-        if (!std.mem.eql(u8, tok.text, "[")) {
-            return error.TypeMismatch;
-        }
-
-        const quot = parser.parseQuotation(ctx.quotationAllocator(), tokenizer, ctx) catch return error.OutOfMemory;
-        try ctx.stack.push(.{ .quotation = quot });
-        return;
-    }
-
-    return error.TypeMismatch;
 }
 
 /// parse-literal ( -- value ) - Read the next literal from the tokenizer

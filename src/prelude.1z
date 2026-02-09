@@ -4,6 +4,12 @@
 \\ Push an empty array.
 []: [ [] ] ;
 
+\\ Read the next quotation from the tokenizer.
+parse-quotation: (  -- quotation ) [
+  parse-literal dup type-of quotation: =
+  [ ] [ "expected quotation" throw ] if
+] ;
+
 \\ Hash literal syntax.
 H{: parse-time [ "}" parse-until make-hash ] ;
 
@@ -26,7 +32,7 @@ W{: parse-time [ "}" parse-tokens-until ] ;
 \   name: struct{ field1 field2 ... } ;
 struct{: parse-time [
   M{ type: struct-descriptor: }
-  fields: parse-struct-fields @set!
+  fields: "}" parse-tokens-until @set!
   define: [ define-struct ] @set!
 ] ;
 
@@ -34,7 +40,7 @@ struct{: parse-time [
 \   name: virtual{ inner-type } ;
 virtual{: parse-time [
   M{ type: virtual: }
-  inner-type: parse-virtual-inner @set!
+  inner-type: "}" parse-values-until @set!
   define: [ define-virtual ] @set!
 ] ;
 
