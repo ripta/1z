@@ -111,6 +111,8 @@ pub const VirtualType = struct {
     inner_type: []const u8,
     // Anonymous struct backing, if struct-backed
     anon_struct: ?*const StructType = null,
+    // Parent enum name for enum variants, e.g., "color" for "color:red"
+    enum_name: ?[]const u8 = null,
 };
 
 /// StructType represents the definition of a struct type.

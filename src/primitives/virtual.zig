@@ -256,7 +256,7 @@ fn defineUnwrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, mark
 }
 
 /// NAME?: ( value -- bool ) - type predicate for virtual type
-fn definePredicate(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
+pub fn definePredicate(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 3);

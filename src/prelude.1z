@@ -38,6 +38,14 @@ virtual{: parse-time [
   define: [ define-virtual ] @set!
 ] ;
 
+\\ Enum type definition syntax.
+\   name: enum{ variant1 variant2 ... } ;
+enum{: parse-time [
+  M{ type: enum-descriptor: }
+  variants: "}" parse-tokens-until @set!
+  define: [ define-enum ] @set!
+] ;
+
 \\ Method dispatch registration syntax.
 \   word: method{ type1 type2 } [ body ] ;
 method{: parse-time [

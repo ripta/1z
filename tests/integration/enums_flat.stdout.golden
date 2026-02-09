@@ -1,0 +1,78 @@
+=== flat enum constructors ===
+Stack: [ ]
+Stack: [ ]
+PASS: color:red type-of is color:red
+Stack: [ ]
+PASS: color:green type-of is color:green
+Stack: [ ]
+PASS: color:blue type-of is color:blue
+Stack: [ ]
+=== per-variant predicates ===
+Stack: [ ]
+PASS: color:red? on color:red is true
+Stack: [ ]
+PASS: color:green? on color:green is true
+Stack: [ ]
+PASS: color:blue? on color:blue is true
+Stack: [ ]
+PASS: color:green? on color:red is false
+Stack: [ ]
+PASS: color:blue? on color:red is false
+Stack: [ ]
+PASS: color:red? on color:green is false
+Stack: [ ]
+PASS: color:red? on integer is false
+Stack: [ ]
+PASS: color:red? on string is false
+Stack: [ ]
+=== aggregate predicate ===
+Stack: [ ]
+PASS: color? on color:red is true
+Stack: [ ]
+PASS: color? on color:green is true
+Stack: [ ]
+PASS: color? on color:blue is true
+Stack: [ ]
+PASS: color? on integer is false
+Stack: [ ]
+PASS: color? on string is false
+Stack: [ ]
+PASS: color? on bare symbol is false
+Stack: [ ]
+=== equality ===
+Stack: [ ]
+PASS: same variant is equal
+Stack: [ ]
+PASS: same variant green is equal
+Stack: [ ]
+PASS: different variants are not equal
+Stack: [ ]
+PASS: red vs blue not equal
+Stack: [ ]
+PASS: enum vs integer not equal
+Stack: [ ]
+PASS: enum vs bare symbol not equal
+Stack: [ ]
+=== display format ===
+Stack: [ ]
+PASS: color:red display format
+Stack: [ ]
+PASS: color:green display format
+Stack: [ ]
+PASS: color:blue display format
+Stack: [ ]
+=== independent enums ===
+Stack: [ ]
+Stack: [ ]
+PASS: suit:hearts? on hearts is true
+Stack: [ ]
+PASS: color:red? on suit:hearts is false
+Stack: [ ]
+PASS: suit:hearts? on color:red is false
+Stack: [ ]
+PASS: suit? on hearts is true
+Stack: [ ]
+PASS: color? on hearts is false
+Stack: [ ]
+PASS: suit? on red is false
+Stack: [ ]

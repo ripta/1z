@@ -1,0 +1,75 @@
+\ Test flat enum type definitions
+
+use "testing" ;
+
+"flat enum constructors" test-section
+
+color: enum{ red green blue } ;
+
+\ Constructors push tagged values
+color:red type-of color:red: "color:red type-of is color:red" assert=
+color:green type-of color:green: "color:green type-of is color:green" assert=
+color:blue type-of color:blue: "color:blue type-of is color:blue" assert=
+
+"per-variant predicates" test-section
+
+\ True for matching variant
+color:red color:red? t "color:red? on color:red is true" assert=
+color:green color:green? t "color:green? on color:green is true" assert=
+color:blue color:blue? t "color:blue? on color:blue is true" assert=
+
+\ False for different variant
+color:red color:green? f "color:green? on color:red is false" assert=
+color:red color:blue? f "color:blue? on color:red is false" assert=
+color:green color:red? f "color:red? on color:green is false" assert=
+
+\ False for non-enum values
+42 color:red? f "color:red? on integer is false" assert=
+"hello" color:red? f "color:red? on string is false" assert=
+
+"aggregate predicate" test-section
+
+\ True for any variant
+color:red color? t "color? on color:red is true" assert=
+color:green color? t "color? on color:green is true" assert=
+color:blue color? t "color? on color:blue is true" assert=
+
+\ False for non-enum values
+42 color? f "color? on integer is false" assert=
+"hello" color? f "color? on string is false" assert=
+red: color? f "color? on bare symbol is false" assert=
+
+"equality" test-section
+
+\ Same variant is equal
+color:red color:red = t "same variant is equal" assert=
+color:green color:green = t "same variant green is equal" assert=
+
+\ Different variants are not equal
+color:red color:green = f "different variants are not equal" assert=
+color:red color:blue = f "red vs blue not equal" assert=
+
+\ Not equal to plain values
+color:red 42 = f "enum vs integer not equal" assert=
+color:red red: = f "enum vs bare symbol not equal" assert=
+
+"display format" test-section
+
+color:red to-string "<color:red red:>" "color:red display format" assert=
+color:green to-string "<color:green green:>" "color:green display format" assert=
+color:blue to-string "<color:blue blue:>" "color:blue display format" assert=
+
+"independent enums" test-section
+
+\ Define a second enum
+suit: enum{ hearts diamonds clubs spades } ;
+
+\ Each enum is independent
+suit:hearts suit:hearts? t "suit:hearts? on hearts is true" assert=
+suit:hearts color:red? f "color:red? on suit:hearts is false" assert=
+color:red suit:hearts? f "suit:hearts? on color:red is false" assert=
+
+\ Aggregate predicates are independent
+suit:hearts suit? t "suit? on hearts is true" assert=
+suit:hearts color? f "color? on hearts is false" assert=
+color:red suit? f "suit? on red is false" assert=
