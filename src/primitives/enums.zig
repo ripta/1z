@@ -61,39 +61,90 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 
     var vtype_list = std.ArrayListUnmanaged(*const VirtualType){};
 
-    for (variants_array) |variant_val| {
-        const variant_sym = switch (variant_val) {
+    var i: usize = 0;
+    while (i < variants_array.len) {
+        const variant_val = variants_array[i];
+        const token = switch (variant_val) {
             .string => |s| s,
             else => return error.TypeMismatch,
         };
 
-        const full_name = try std.fmt.allocPrint(alloc, "{s}:{s}", .{ enum_name, variant_sym });
+        if (token.len > 0 and token[token.len - 1] == '(') {
+            // Data variant syntax: "VariantName(" ...field names... ")"
+            const variant_name = token[0 .. token.len - 1];
+            i += 1;
 
-        const vtype = try alloc.create(VirtualType);
-        vtype.* = .{
-            .name = full_name,
-            .inner_type = "symbol",
-            .enum_name = enum_name,
-        };
+            var field_count: usize = 0;
+            while (i < variants_array.len) {
+                const field_tok = switch (variants_array[i]) {
+                    .string => |s| s,
+                    else => return error.TypeMismatch,
+                };
+                i += 1;
+                if (std.mem.eql(u8, field_tok, ")")) break;
+                field_count += 1;
+            }
 
-        try vtype_list.append(alloc, vtype);
+            if (field_count == 0) {
+                helpers.setErrorContext(ctx, "data variant '{s}' must have at least one field", .{variant_name});
+                return error.ParseError;
+            }
 
-        // Constant constructor
-        const inner = try alloc.create(Value);
-        inner.* = .{ .symbol = variant_sym };
+            if (field_count > 1) {
+                helpers.setErrorContext(ctx, "multi-field data variants not yet supported (variant '{s}' has {d} fields)", .{ variant_name, field_count });
+                return error.ParseError;
+            }
 
-        const instrs = try alloc.alloc(Instruction, 1);
-        instrs[0] = .{ .op = .{ .push_literal = .{ .tagged = .{ .tag = vtype, .inner = inner } } }, .line = 0 };
+            const full_name = try std.fmt.allocPrint(alloc, "{s}:{s}", .{ enum_name, variant_name });
 
-        try ctx.defineWord(full_name, .{
-            .name = full_name,
-            .markers = markers_slice,
-            .action = .{ .compound = instrs },
-        });
+            const vtype = try alloc.create(VirtualType);
+            vtype.* = .{
+                .name = full_name,
+                .inner_type = "<data>",
+                .enum_name = enum_name,
+            };
 
-        // Per-variant predicate thru shared virtual type machinery
-        const pred_name = try std.fmt.allocPrint(alloc, "{s}:{s}?", .{ enum_name, variant_sym });
-        try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
+            try vtype_list.append(alloc, vtype);
+
+            const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
+            try virtual.defineWrap(ctx, wrap_name, vtype, markers_slice);
+
+            const unwrap_name = try std.fmt.allocPrint(alloc, "{s}>", .{full_name});
+            try virtual.defineUnwrap(ctx, unwrap_name, vtype, markers_slice);
+
+            const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{full_name});
+            try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
+        } else {
+            // Flat variant syntax: "VariantName"
+            const variant_sym = token;
+            const full_name = try std.fmt.allocPrint(alloc, "{s}:{s}", .{ enum_name, variant_sym });
+
+            const vtype = try alloc.create(VirtualType);
+            vtype.* = .{
+                .name = full_name,
+                .inner_type = "symbol",
+                .enum_name = enum_name,
+            };
+
+            try vtype_list.append(alloc, vtype);
+
+            const inner = try alloc.create(Value);
+            inner.* = .{ .symbol = variant_sym };
+
+            const instrs = try alloc.alloc(Instruction, 1);
+            instrs[0] = .{ .op = .{ .push_literal = .{ .tagged = .{ .tag = vtype, .inner = inner } } }, .line = 0 };
+
+            try ctx.defineWord(full_name, .{
+                .name = full_name,
+                .markers = markers_slice,
+                .action = .{ .compound = instrs },
+            });
+
+            const pred_name = try std.fmt.allocPrint(alloc, "{s}:{s}?", .{ enum_name, variant_sym });
+            try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
+
+            i += 1;
+        }
     }
 
     // Aggregate predicate

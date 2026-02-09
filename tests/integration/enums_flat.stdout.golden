@@ -76,3 +76,36 @@ PASS: color? on hearts is false
 Stack: [ ]
 PASS: suit? on red is false
 Stack: [ ]
+=== data-carrying variants ===
+Stack: [ ]
+Stack: [ ]
+PASS: wrap and unwrap circle
+Stack: [ ]
+PASS: type-of data variant is shape:circle
+Stack: [ ]
+PASS: shape:circle? on circle is true
+Stack: [ ]
+PASS: shape:circle? on point is false
+Stack: [ ]
+PASS: shape:circle? on integer is false
+Stack: [ ]
+PASS: shape? on circle is true
+Stack: [ ]
+PASS: shape? on point is true
+Stack: [ ]
+PASS: shape? on integer is false
+Stack: [ ]
+PASS: shape:point? on circle is false
+Stack: [ ]
+PASS: shape:circle? on point is false
+Stack: [ ]
+PASS: same circle values are equal
+Stack: [ ]
+PASS: different circle values are not equal
+Stack: [ ]
+PASS: circle display format
+Stack: [ ]
+PASS: flat variant type-of in mixed enum
+Stack: [ ]
+PASS: flat variant display in mixed enum
+Stack: [ ]

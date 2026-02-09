@@ -73,3 +73,38 @@ color:red suit:hearts? f "suit:hearts? on color:red is false" assert=
 suit:hearts suit? t "suit? on hearts is true" assert=
 suit:hearts color? f "color? on hearts is false" assert=
 color:red suit? f "suit? on red is false" assert=
+
+"data-carrying variants" test-section
+
+shape: enum{ circle( radius ) point } ;
+
+\ Wrap and unwrap
+42 >shape:circle shape:circle> 42 "wrap and unwrap circle" assert=
+
+\ type-of
+42 >shape:circle type-of shape:circle: "type-of data variant is shape:circle" assert=
+
+\ Per-variant predicate
+42 >shape:circle shape:circle? t "shape:circle? on circle is true" assert=
+shape:point shape:circle? f "shape:circle? on point is false" assert=
+42 shape:circle? f "shape:circle? on integer is false" assert=
+
+\ Aggregate predicate
+42 >shape:circle shape? t "shape? on circle is true" assert=
+shape:point shape? t "shape? on point is true" assert=
+42 shape? f "shape? on integer is false" assert=
+
+\ Cross-predicate: flat predicate on data variant and vice versa
+42 >shape:circle shape:point? f "shape:point? on circle is false" assert=
+shape:point shape:circle? f "shape:circle? on point is false" assert=
+
+\ Equality
+42 >shape:circle 42 >shape:circle = t "same circle values are equal" assert=
+42 >shape:circle 99 >shape:circle = f "different circle values are not equal" assert=
+
+\ Display format
+42 >shape:circle to-string "<shape:circle 42>" "circle display format" assert=
+
+\ Flat variant still works alongside data variant
+shape:point type-of shape:point: "flat variant type-of in mixed enum" assert=
+shape:point to-string "<shape:point point:>" "flat variant display in mixed enum" assert=

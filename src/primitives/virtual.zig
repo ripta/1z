@@ -224,7 +224,7 @@ fn virtualTypePredicateHelper(ctx: *Context) anyerror!void {
 }
 
 /// >NAME: ( value -- tagged ) - wrap a value as this virtual type
-fn defineWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
+pub fn defineWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 3);
@@ -240,7 +240,7 @@ fn defineWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, marker
 }
 
 /// NAME>: ( tagged -- value ) - unwrap a tagged value, validating the type
-fn defineUnwrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
+pub fn defineUnwrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 3);
