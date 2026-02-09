@@ -4,6 +4,8 @@ const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const Instruction = value_mod.Instruction;
 const VirtualType = value_mod.VirtualType;
+const StructType = value_mod.StructType;
+const StructInstance = value_mod.StructInstance;
 const Marker = value_mod.Marker;
 
 const helpers = @import("helpers.zig");
@@ -74,7 +76,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             const variant_name = token[0 .. token.len - 1];
             i += 1;
 
-            var field_count: usize = 0;
+            var fields_list = std.ArrayListUnmanaged([]const u8){};
             while (i < variants_array.len) {
                 const field_tok = switch (variants_array[i]) {
                     .string => |s| s,
@@ -82,35 +84,55 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
                 };
                 i += 1;
                 if (std.mem.eql(u8, field_tok, ")")) break;
-                field_count += 1;
+                try fields_list.append(alloc, try alloc.dupe(u8, field_tok));
             }
 
-            if (field_count == 0) {
+            if (fields_list.items.len == 0) {
                 helpers.setErrorContext(ctx, "data variant '{s}' must have at least one field", .{variant_name});
-                return error.ParseError;
-            }
-
-            if (field_count > 1) {
-                helpers.setErrorContext(ctx, "multi-field data variants not yet supported (variant '{s}' has {d} fields)", .{ variant_name, field_count });
                 return error.ParseError;
             }
 
             const full_name = try std.fmt.allocPrint(alloc, "{s}:{s}", .{ enum_name, variant_name });
 
             const vtype = try alloc.create(VirtualType);
-            vtype.* = .{
-                .name = full_name,
-                .inner_type = "<data>",
-                .enum_name = enum_name,
-            };
+            if (fields_list.items.len == 1) {
+                vtype.* = .{
+                    .name = full_name,
+                    .inner_type = "<data>",
+                    .enum_name = enum_name,
+                };
 
-            try vtype_list.append(alloc, vtype);
+                try vtype_list.append(alloc, vtype);
 
-            const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
-            try virtual.defineWrap(ctx, wrap_name, vtype, markers_slice);
+                const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
+                try virtual.defineWrap(ctx, wrap_name, vtype, markers_slice);
 
-            const unwrap_name = try std.fmt.allocPrint(alloc, "{s}>", .{full_name});
-            try virtual.defineUnwrap(ctx, unwrap_name, vtype, markers_slice);
+                const unwrap_name = try std.fmt.allocPrint(alloc, "{s}>", .{full_name});
+                try virtual.defineUnwrap(ctx, unwrap_name, vtype, markers_slice);
+            } else {
+                const fields_slice = try fields_list.toOwnedSlice(alloc);
+
+                const anon_struct = try alloc.create(StructType);
+                anon_struct.* = .{
+                    .name = full_name,
+                    .fields = fields_slice,
+                };
+
+                vtype.* = .{
+                    .name = full_name,
+                    .inner_type = full_name,
+                    .enum_name = enum_name,
+                    .anon_struct = anon_struct,
+                };
+
+                try vtype_list.append(alloc, vtype);
+
+                const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
+                try virtual.defineStructWrap(ctx, wrap_name, vtype, markers_slice);
+
+                const unwrap_name = try std.fmt.allocPrint(alloc, "{s}>", .{full_name});
+                try virtual.defineStructUnwrap(ctx, unwrap_name, vtype, markers_slice);
+            }
 
             const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{full_name});
             try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);

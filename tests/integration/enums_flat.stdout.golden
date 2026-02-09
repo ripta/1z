@@ -109,3 +109,43 @@ PASS: flat variant type-of in mixed enum
 Stack: [ ]
 PASS: flat variant display in mixed enum
 Stack: [ ]
+=== multi-field data variants ===
+Stack: [ ]
+Stack: [ ]
+PASS: rect unwrap height
+PASS: rect unwrap width
+Stack: [ ]
+PASS: type-of multi-field variant is geom:rect
+Stack: [ ]
+PASS: geom:rect? on rect is true
+Stack: [ ]
+PASS: geom:rect? on dot is false
+Stack: [ ]
+PASS: geom:rect? on integer is false
+Stack: [ ]
+PASS: geom? on rect is true
+Stack: [ ]
+PASS: geom? on dot is true
+Stack: [ ]
+PASS: geom? on integer is false
+Stack: [ ]
+PASS: tri unwrap c
+PASS: tri unwrap b
+PASS: tri unwrap a
+Stack: [ ]
+PASS: geom:tri? on tri is true
+Stack: [ ]
+PASS: geom? on tri is true
+Stack: [ ]
+PASS: geom:tri? on rect is false
+Stack: [ ]
+PASS: geom:rect? on tri is false
+Stack: [ ]
+PASS: same rect values are equal
+Stack: [ ]
+PASS: different rect values are not equal
+Stack: [ ]
+PASS: rect display format
+Stack: [ ]
+PASS: flat variant display in multi-field enum
+Stack: [ ]

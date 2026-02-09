@@ -332,7 +332,7 @@ fn virtualStructUnwrapHelper(ctx: *Context) anyerror!void {
 }
 
 /// >NAME: ( field1..fieldN -- tagged ) - struct-aware positional wrap
-fn defineStructWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
+pub fn defineStructWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 3);
@@ -348,7 +348,7 @@ fn defineStructWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, 
 }
 
 /// NAME>: ( tagged -- field1..fieldN ) - struct-aware destructuring unwrap
-fn defineStructUnwrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
+pub fn defineStructUnwrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 3);
