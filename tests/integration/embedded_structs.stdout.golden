@@ -1,0 +1,63 @@
+=== basic embedded struct ===
+Stack: [ ]
+Stack: [ ]
+PASS: type-of returns virtual type name
+Stack: [ ]
+PASS: point? on point is true
+Stack: [ ]
+PASS: point? on integer is false
+Stack: [ ]
+PASS: point? on string is false
+Stack: [ ]
+PASS: unwrap second field
+Stack: [ 10 ]
+PASS: unwrap first field
+Stack: [ ]
+=== display format ===
+Stack: [ ]
+PASS: display format
+Stack: [ ]
+=== equality ===
+Stack: [ ]
+PASS: same fields are equal
+Stack: [ ]
+PASS: different fields not equal
+Stack: [ ]
+PASS: point vs integer not equal
+Stack: [ ]
+=== zero-field embedded struct ===
+Stack: [ ]
+Stack: [ ]
+PASS: zero-field type-of
+Stack: [ ]
+PASS: zero-field predicate true
+Stack: [ ]
+PASS: zero-field round-trip equal
+Stack: [ ]
+PASS: zero-field values are equal
+Stack: [ ]
+=== multiple struct-backed virtual types ===
+Stack: [ ]
+Stack: [ ]
+PASS: color type-of
+Stack: [ ]
+PASS: color predicate true
+Stack: [ ]
+PASS: point is not a color
+Stack: [ ]
+PASS: color is not a point
+Stack: [ ]
+=== error cases ===
+Stack: [ ]
+PASS: unwrap wrong type errors
+Stack: [ ]
+PASS: unwrap plain value errors
+Stack: [ ]
+=== no leaked struct words ===
+Stack: [ ]
+PASS: make-point does not exist
+Stack: [ ]
+PASS: x>> does not exist
+Stack: [ ]
+PASS: y>> does not exist
+Stack: [ ]

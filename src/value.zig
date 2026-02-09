@@ -105,8 +105,12 @@ pub const Marker = struct {
 /// All instances of the same virtual type share a single VirtualType allocation,
 /// enabling pointer equality for type identity checks.
 pub const VirtualType = struct {
-    name: []const u8, // Type name (e.g., "duration")
-    inner_type: []const u8, // Expected inner type name (e.g., "integer")
+    // Type name, e.g., "duration"
+    name: []const u8,
+    // Expected inner type name, e.g., "integer"
+    inner_type: []const u8,
+    // Anonymous struct backing, if struct-backed
+    anon_struct: ?*const StructType = null,
 };
 
 /// StructType represents the definition of a struct type.
