@@ -1,0 +1,33 @@
+=== parse-token ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "hello" ]
+PASS: parse-token reads a single token
+Stack: [ ]
+Stack: [ "42" ]
+PASS: parse-token returns raw string even for numbers
+Stack: [ ]
+=== parse-values-until raw tokens ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ { "a" "b" "c" } ]
+PASS: parse-values-until collects three tokens
+Stack: [ ]
+Stack: [ { "a" "b" "c" } ]
+PASS: first token is a
+Stack: [ ]
+Stack: [ { "a" "b" "c" } ]
+PASS: third token is c
+Stack: [ ]
+=== parse-values-until with parse-time words ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ { M{ define: [ define-struct ] fields: { x: y: } type: struct-descriptor: } } ]
+PASS: struct{ produces one value
+Stack: [ ]
+Stack: [ { "hello" M{ define: [ define-struct ] fields: { x: y: } type: struct-descriptor: } } ]
+PASS: raw token + struct produces two values
+Stack: [ ]
+Stack: [ { "hello" M{ define: [ define-struct ] fields: { x: y: } type: struct-descriptor: } } ]
+PASS: first value is raw string
+Stack: [ ]
