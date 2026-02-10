@@ -184,6 +184,9 @@ yield (  --  )
 <= ( a b -- ? )
 <rot- ( a b c -- b c a )
 >= ( a b -- ? )
+>option:some
+>result:err
+>result:ok
 B{
 ECannotRedefineConst
 EDivisionByZero
@@ -243,6 +246,11 @@ nip ( a b -- b )
 nl (  --  )
 no-matching-branch ( data -- error )
 not ( ? -- ? )
+option:none
+option:none?
+option:some>
+option:some?
+option?
 or ( ? ? -- ? )
 output-stream
 parameter
@@ -254,6 +262,11 @@ print-line ( str --  )
 quotation? ( val -- ? )
 read-line (  -- str/f )
 rem ( a b -- r )
+result:err>
+result:err?
+result:ok>
+result:ok?
+result?
 run-benchmarks ( quot --  )
 set? ( val -- ? )
 stream-write-string ( stream str -- n )

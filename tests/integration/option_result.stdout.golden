@@ -1,0 +1,161 @@
+=== option type ===
+Stack: [ ]
+PASS: some? on some is true
+Stack: [ ]
+PASS: none? on some is false
+Stack: [ ]
+PASS: option? on some is true
+Stack: [ ]
+PASS: none? on none is true
+Stack: [ ]
+PASS: some? on none is false
+Stack: [ ]
+PASS: option? on none is true
+Stack: [ ]
+PASS: unwrap some yields value
+Stack: [ ]
+PASS: type-of some
+Stack: [ ]
+PASS: type-of none
+Stack: [ ]
+PASS: enum-of some
+Stack: [ ]
+PASS: enum-of none
+Stack: [ ]
+PASS: option variants
+Stack: [ ]
+PASS: same some values equal
+Stack: [ ]
+PASS: different some values not equal
+Stack: [ ]
+PASS: none equals none
+Stack: [ ]
+PASS: some not equal to none
+Stack: [ ]
+PASS: option? on integer is false
+Stack: [ ]
+PASS: option? on string is false
+Stack: [ ]
+=== result type ===
+Stack: [ ]
+PASS: ok? on ok is true
+Stack: [ ]
+PASS: err? on ok is false
+Stack: [ ]
+PASS: result? on ok is true
+Stack: [ ]
+PASS: err? on err is true
+Stack: [ ]
+PASS: ok? on err is false
+Stack: [ ]
+PASS: result? on err is true
+Stack: [ ]
+PASS: unwrap ok yields value
+Stack: [ ]
+PASS: unwrap err yields error
+Stack: [ ]
+PASS: type-of ok
+Stack: [ ]
+PASS: type-of err
+Stack: [ ]
+PASS: enum-of ok
+Stack: [ ]
+PASS: enum-of err
+Stack: [ ]
+PASS: result variants
+Stack: [ ]
+PASS: same ok values equal
+Stack: [ ]
+PASS: different ok values not equal
+Stack: [ ]
+PASS: result? on integer is false
+Stack: [ ]
+=== match on option ===
+Stack: [ ]
+PASS: match some
+Stack: [ ]
+PASS: match none
+Stack: [ ]
+=== match on result ===
+Stack: [ ]
+PASS: match ok
+Stack: [ ]
+PASS: match err
+Stack: [ ]
+=== option wrapping structs ===
+Stack: [ ]
+Stack: [ ]
+PASS: some? on struct-wrapped option
+Stack: [ ]
+PASS: unwrap struct from option, read field
+Stack: [ ]
+PASS: unwrap struct from option, read second field
+Stack: [ ]
+PASS: unwrap struct from result ok
+Stack: [ ]
+=== option wrapping virtual types ===
+Stack: [ ]
+Stack: [ ]
+PASS: some? on virtual-wrapped option
+Stack: [ ]
+PASS: unwrap virtual from option
+Stack: [ ]
+PASS: type-of virtual inside option
+Stack: [ ]
+PASS: unwrap virtual from result ok
+Stack: [ ]
+=== option wrapping embedded structs ===
+Stack: [ ]
+Stack: [ ]
+PASS: some? on embedded-struct-wrapped option
+Stack: [ ]
+PASS: unwrap embedded struct dy from option
+PASS: unwrap embedded struct dx from option
+Stack: [ ]
+PASS: type-of embedded struct inside option
+Stack: [ ]
+PASS: unwrap embedded struct from result ok dy
+PASS: unwrap embedded struct from result ok dx
+Stack: [ ]
+=== option wrapping enum variants ===
+Stack: [ ]
+Stack: [ ]
+PASS: some? on enum-wrapped option
+Stack: [ ]
+PASS: unwrap enum from option, predicate
+Stack: [ ]
+PASS: type-of enum inside option
+Stack: [ ]
+PASS: enum-of on unwrapped enum from option
+Stack: [ ]
+PASS: unwrap enum from result ok
+Stack: [ ]
+PASS: some? on none-wrapped option
+Stack: [ ]
+PASS: unwrap none from some
+Stack: [ ]
+PASS: some? on nested some
+Stack: [ ]
+PASS: inner some is some
+Stack: [ ]
+PASS: double unwrap nested some
+Stack: [ ]
+=== result wrapping enum variants ===
+Stack: [ ]
+Stack: [ ]
+PASS: ok? on data-enum-wrapped result
+Stack: [ ]
+PASS: unwrap data enum from result ok
+Stack: [ ]
+PASS: unwrap data enum payload from result ok
+Stack: [ ]
+PASS: err wrapping error is err
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== match on option with complex payloads ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: match some with struct payload
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: match some with virtual payload
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: match some with enum payload
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]

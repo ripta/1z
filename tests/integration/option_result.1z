@@ -1,0 +1,171 @@
+\ Test option and result enum types
+
+use "testing" ;
+
+"option type" test-section
+
+\ option:some wraps a value
+42 >option:some option:some? t "some? on some is true" assert=
+42 >option:some option:none? f "none? on some is false" assert=
+42 >option:some option? t "option? on some is true" assert=
+
+\ option:none is the empty variant
+option:none option:none? t "none? on none is true" assert=
+option:none option:some? f "some? on none is false" assert=
+option:none option? t "option? on none is true" assert=
+
+\ Unwrap some
+42 >option:some option:some> 42 "unwrap some yields value" assert=
+
+\ type-of
+42 >option:some type-of option:some: "type-of some" assert=
+option:none type-of option:none: "type-of none" assert=
+
+\ enum-of
+42 >option:some enum-of "option" "enum-of some" assert=
+option:none enum-of "option" "enum-of none" assert=
+
+\ enum-variants
+option: enum-variants { option:some: option:none: } "option variants" assert=
+
+\ Equality
+42 >option:some 42 >option:some = t "same some values equal" assert=
+42 >option:some 99 >option:some = f "different some values not equal" assert=
+option:none option:none = t "none equals none" assert=
+42 >option:some option:none = f "some not equal to none" assert=
+
+\ Non-option values
+42 option? f "option? on integer is false" assert=
+"hello" option? f "option? on string is false" assert=
+
+"result type" test-section
+
+\ result:ok wraps a value
+42 >result:ok result:ok? t "ok? on ok is true" assert=
+42 >result:ok result:err? f "err? on ok is false" assert=
+42 >result:ok result? t "result? on ok is true" assert=
+
+\ result:err wraps an error
+"oops" "test" EUserThrown make-error >result:err result:err? t "err? on err is true" assert=
+"oops" "test" EUserThrown make-error >result:err result:ok? f "ok? on err is false" assert=
+"oops" "test" EUserThrown make-error >result:err result? t "result? on err is true" assert=
+
+\ Unwrap ok
+42 >result:ok result:ok> 42 "unwrap ok yields value" assert=
+
+\ Unwrap err
+"oops" "test" EUserThrown make-error >result:err result:err> error? t "unwrap err yields error" assert=
+
+\ type-of
+42 >result:ok type-of result:ok: "type-of ok" assert=
+"oops" "test" EUserThrown make-error >result:err type-of result:err: "type-of err" assert=
+
+\ enum-of
+42 >result:ok enum-of "result" "enum-of ok" assert=
+"oops" "test" EUserThrown make-error >result:err enum-of "result" "enum-of err" assert=
+
+\ enum-variants
+result: enum-variants { result:ok: result:err: } "result variants" assert=
+
+\ Equality
+42 >result:ok 42 >result:ok = t "same ok values equal" assert=
+42 >result:ok 99 >result:ok = f "different ok values not equal" assert=
+
+\ Non-result values
+42 result? f "result? on integer is false" assert=
+
+"match on option" test-section
+
+42 >option:some {
+  option:some: [ 2 * ]
+  option:none: [ 0 ]
+} match 84 "match some" assert=
+
+option:none {
+  option:some: [ 2 * ]
+  option:none: [ 0 ]
+} match 0 "match none" assert=
+
+"match on result" test-section
+
+42 >result:ok {
+  result:ok:  [ 1 + ]
+  result:err: [ drop -1 ]
+} match 43 "match ok" assert=
+
+"oops" "test" EUserThrown make-error >result:err {
+  result:ok:  [ 1 + ]
+  result:err: [ drop -1 ]
+} match -1 "match err" assert=
+
+"option wrapping structs" test-section
+
+point: struct{ x y } ;
+10 20 make-point >option:some option:some? t "some? on struct-wrapped option" assert=
+10 20 make-point >option:some option:some> x>> 10 "unwrap struct from option, read field" assert=
+10 20 make-point >option:some option:some> y>> 20 "unwrap struct from option, read second field" assert=
+10 20 make-point >result:ok result:ok> x>> 10 "unwrap struct from result ok" assert=
+
+"option wrapping virtual types" test-section
+
+speed: virtual{ integer } ;
+42 >speed >option:some option:some? t "some? on virtual-wrapped option" assert=
+42 >speed >option:some option:some> speed> 42 "unwrap virtual from option" assert=
+42 >speed >option:some option:some> type-of speed: "type-of virtual inside option" assert=
+42 >speed >result:ok result:ok> speed> 42 "unwrap virtual from result ok" assert=
+
+"option wrapping embedded structs" test-section
+
+vec2: virtual{ struct{ dx dy } } ;
+3 4 >vec2 >option:some option:some? t "some? on embedded-struct-wrapped option" assert=
+3 4 >vec2 >option:some option:some> vec2> 4 "unwrap embedded struct dy from option" assert= 3 "unwrap embedded struct dx from option" assert=
+3 4 >vec2 >option:some option:some> type-of vec2: "type-of embedded struct inside option" assert=
+3 4 >vec2 >result:ok result:ok> vec2> 4 "unwrap embedded struct from result ok dy" assert= 3 "unwrap embedded struct from result ok dx" assert=
+
+"option wrapping enum variants" test-section
+
+color: enum{ red green blue } ;
+
+\ Flat enum variant inside option
+color:red >option:some option:some? t "some? on enum-wrapped option" assert=
+color:red >option:some option:some> color:red? t "unwrap enum from option, predicate" assert=
+color:red >option:some option:some> type-of color:red: "type-of enum inside option" assert=
+color:red >option:some option:some> enum-of "color" "enum-of on unwrapped enum from option" assert=
+color:green >result:ok result:ok> color:green? t "unwrap enum from result ok" assert=
+
+\ option:none inside option (nested option)
+option:none >option:some option:some? t "some? on none-wrapped option" assert=
+option:none >option:some option:some> option:none? t "unwrap none from some" assert=
+
+\ some inside option (nested some)
+42 >option:some >option:some option:some? t "some? on nested some" assert=
+42 >option:some >option:some option:some> option:some? t "inner some is some" assert=
+42 >option:some >option:some option:some> option:some> 42 "double unwrap nested some" assert=
+
+"result wrapping enum variants" test-section
+
+\ Data-carrying enum variant inside result
+shape: enum{ circle struct{ radius } dot } ;
+5 >shape:circle >result:ok result:ok? t "ok? on data-enum-wrapped result" assert=
+5 >shape:circle >result:ok result:ok> shape:circle? t "unwrap data enum from result ok" assert=
+5 >shape:circle >result:ok result:ok> shape:circle> 5 "unwrap data enum payload from result ok" assert=
+
+\ Enum inside result:err wrapped in an error object
+color:red >option:some "wrapped" "test" EUserThrown make-error >result:err result:err? t "err wrapping error is err" assert=
+
+"match on option with complex payloads" test-section
+
+10 20 make-point >option:some {
+  option:some: [ x>> ]
+  option:none: [ -1 ]
+} match 10 "match some with struct payload" assert=
+
+42 >speed >option:some {
+  option:some: [ speed> 2 * ]
+  option:none: [ 0 ]
+} match 84 "match some with virtual payload" assert=
+
+color:blue >option:some {
+  option:some: [ color:blue? ]
+  option:none: [ f ]
+} match t "match some with enum payload" assert=

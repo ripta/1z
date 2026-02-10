@@ -52,6 +52,12 @@ enum{: parse-time [
   define: [ define-enum ] @set!
 ] ;
 
+\ Standard sum types
+\\ Optional value: either `some` wrapping a value, or `none`.
+option: enum{ some struct{ value } none } ;
+\\ Fallible result: either `ok` wrapping a value, or `err` wrapping an error.
+result: enum{ ok struct{ value } err struct{ error } } ;
+
 \\ Method dispatch registration syntax.
 \   word: method{ type1 type2 } [ body ] ;
 method{: parse-time [
