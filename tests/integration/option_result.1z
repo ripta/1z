@@ -169,3 +169,34 @@ color:blue >option:some {
   option:some: [ color:blue? ]
   option:none: [ f ]
 } match t "match some with enum payload" assert=
+
+"unwrap-or on option" test-section
+
+42 >option:some 0 unwrap-or 42 "unwrap-or some returns inner value" assert=
+option:none 0 unwrap-or 0 "unwrap-or none returns default" assert=
+"hello" >option:some "fallback" unwrap-or "hello" "unwrap-or some with string" assert=
+option:none "fallback" unwrap-or "fallback" "unwrap-or none with string default" assert=
+
+"unwrap-or on result" test-section
+
+42 >result:ok 0 unwrap-or 42 "unwrap-or ok returns inner value" assert=
+"oops" "test" EUserThrown make-error >result:err 0 unwrap-or 0 "unwrap-or err returns default" assert=
+"hello" >result:ok "fallback" unwrap-or "hello" "unwrap-or ok with string" assert=
+"oops" "test" EUserThrown make-error >result:err "fallback" unwrap-or "fallback" "unwrap-or err with string default" assert=
+
+"unwrap-or-throw on option" test-section
+
+42 >option:some unwrap-or-throw 42 "unwrap-or-throw some returns value" assert=
+"hello" >option:some unwrap-or-throw "hello" "unwrap-or-throw some string" assert=
+
+\ Throws on none
+[ option:none unwrap-or-throw ] [ "unwrap called on none" assert-error ] recover
+
+"unwrap-or-throw on result" test-section
+
+42 >result:ok unwrap-or-throw 42 "unwrap-or-throw ok returns value" assert=
+"hello" >result:ok unwrap-or-throw "hello" "unwrap-or-throw ok string" assert=
+
+\ Rethrows the error inside err
+[ "oops" "test" EUserThrown make-error >result:err unwrap-or-throw ]
+[ error-type: @get user-thrown: "unwrap-or-throw err rethrows error" assert= ] recover

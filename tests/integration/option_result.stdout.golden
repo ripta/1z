@@ -159,3 +159,40 @@ PASS: match some with virtual payload
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
 PASS: match some with enum payload
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== unwrap-or on option ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or some returns inner value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or none returns default
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or some with string
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or none with string default
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== unwrap-or on result ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or ok returns inner value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or err returns default
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or ok with string
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or err with string default
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== unwrap-or-throw on option ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or-throw some returns value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or-throw some string
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap called on none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== unwrap-or-throw on result ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or-throw ok returns value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or-throw ok string
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> [ "oops" "test" EUserThrown make-error >result:err unwrap-or-throw ] ]
+PASS: unwrap-or-throw err rethrows error
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]

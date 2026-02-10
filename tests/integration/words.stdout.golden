@@ -277,6 +277,8 @@ symbol? ( val -- ? )
 times ( n quot --  )
 tuck ( a b -- b a b )
 unless ( ? quot --  )
+unwrap-or ( opt/res default -- value )
+unwrap-or-throw ( opt/res -- value )
 use
 vector? ( val -- ? )
 virtual{

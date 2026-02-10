@@ -332,10 +332,26 @@ cond: ( branches -- ... ) [
 ] ;
 
 \ String formatting
+
 \\ Format a string by interpolating values from a source using a template string.
 fmt: ( source string -- string ) [ template interpolate ] ;
+
 \\ Format and print a string followed by a newline.
 fmt-line: ( source string -- ) [ fmt print-line ] ;
 
+\ Benchmarking
+
 \\ Run a quotation as a benchmark suite and print the report.
 run-benchmarks: ( quot -- ) [ make-benchmark-report swap call print-benchmark-report ] ;
+
+\ Option/Result combinators
+
+\\ Extract the inner value from an option or result, or return the default.
+unwrap-or: generic ( opt/res default -- value ) [ "unwrap-or requires an option or result" throw ] ;
+unwrap-or: method{ option any } [ swap dup option:some? [ option:some> nip ] [ drop ] if ] ;
+unwrap-or: method{ result any } [ swap dup result:ok? [ result:ok> nip ] [ drop ] if ] ;
+
+\\ Extract the inner value, or throw on none/err.
+unwrap-or-throw: generic ( opt/res -- value ) [ "unwrap-or-throw requires an option or result" throw ] ;
+unwrap-or-throw: method{ option } [ dup option:some? [ option:some> ] [ drop "unwrap called on none" throw ] if ] ;
+unwrap-or-throw: method{ result } [ dup result:ok? [ result:ok> ] [ result:err> throw ] if ] ;
