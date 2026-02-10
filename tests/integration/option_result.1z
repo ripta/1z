@@ -283,3 +283,32 @@ option:none [ option:none ] ?or-else [ 7 >option:some ] ?or-else
 [ "?and-then requires an option or result" throw ] [ "?and-then requires an option or result" assert-error ] recover
 [ "?or-else requires an option or result" throw ] [ "?or-else requires an option or result" assert-error ] recover
 [ "?flatten requires an option or result" throw ] [ "?flatten requires an option or result" assert-error ] recover
+
+"try" test-section
+
+\ Successful quotation wraps in result:ok
+[ 42 ] try result:ok? t "try success is ok" assert=
+[ 42 ] try result:ok> 42 "try success value" assert=
+
+\ Throwing quotation wraps in result:err
+[ "oops" throw ] try result:err? t "try throw is err" assert=
+[ "oops" throw ] try result:err> error? t "try err contains error object" assert=
+
+\ Division by zero
+[ 10 0 / ] try result:err? t "try division by zero is err" assert=
+[ 10 2 / ] try result:ok> 5 "try successful division" assert=
+
+\ try with combinators
+[ 10 2 / ] try [ 1 + ] ?map result:ok> 6 "try then ?map ok" assert=
+[ 10 0 / ] try [ 1 + ] ?map result:err? t "try then ?map err passes through" assert=
+
+\ try chaining with ?and-then
+[ 42 ] try [ dup 0 > [ >result:ok ] [ drop "negative" throw ] if ] ?and-then
+  result:ok> 42 "try then ?and-then ok" assert=
+
+\ try with unwrap-or
+[ "oops" throw ] try 0 unwrap-or 0 "try err unwrap-or default" assert=
+[ 42 ] try 0 unwrap-or 42 "try ok unwrap-or value" assert=
+
+\ try with unwrap-or-throw re-throws
+[ [ "boom" throw ] try unwrap-or-throw ] [ "boom" assert-error ] recover

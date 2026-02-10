@@ -279,6 +279,7 @@ string? ( val -- ? )
 struct{
 symbol? ( val -- ? )
 times ( n quot --  )
+try ( quot -- result )
 tuck ( a b -- b a b )
 unless ( ? quot --  )
 unwrap-or ( opt/res default -- value )

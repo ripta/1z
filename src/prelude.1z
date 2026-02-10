@@ -375,3 +375,6 @@ unwrap-or-throw: method{ result } [ dup result:ok? [ result:ok> ] [ result:err> 
 ?flatten: generic ( nested -- opt/res ) [ "?flatten requires an option or result" throw ] ;
 ?flatten: method{ option } [ dup option:some? [ option:some> ] when ] ;
 ?flatten: method{ result } [ dup result:ok? [ result:ok> ] when ] ;
+
+\\ Call a quotation, wrapping success in result:ok and thrown errors in result:err.
+try: ( quot -- result ) [ [ call >result:ok ] [ >result:err ] recover ] ;

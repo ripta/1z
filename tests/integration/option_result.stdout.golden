@@ -296,3 +296,30 @@ PASS: ?or-else requires an option or result
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
 PASS: ?flatten requires an option or result
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== try ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try success is ok
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try success value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try throw is err
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try err contains error object
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try division by zero is err
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try successful division
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try then ?map ok
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try then ?map err passes through
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <result:ok result:ok{ value: 42 }> ]
+PASS: try then ?and-then ok
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try err unwrap-or default
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try ok unwrap-or value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: boom
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
