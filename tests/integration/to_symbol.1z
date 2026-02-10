@@ -17,14 +17,47 @@ foo: >string >symbol foo: "symbol>string>symbol roundtrip" assert=
 "bar" >symbol >string "bar" "string>symbol>string roundtrip" assert=
 
 ">symbol error cases" test-section
-[ "" >symbol ]
-[ drop "PASS: empty string rejected" print-line ]
-recover
+[ "" >symbol ] "empty string rejected" assert-error
+[ "hello world" >symbol ] "string with space rejected" assert-error
+[ 42 >symbol ] "integer rejected" assert-error
 
-[ "hello world" >symbol ]
-[ drop "PASS: string with space rejected" print-line ]
-recover
+">word from string" test-section
+greet: [ "hello" ] ;
+"greet" >word call "hello" ">word from string then call" assert=
 
-[ 42 >symbol ]
-[ drop "PASS: integer rejected" print-line ]
-recover
+">word from symbol" test-section
+greet: >word call "hello" ">word from symbol then call" assert=
+
+">word with native word" test-section
+1 2 "+" >word call 3 ">word with native +" assert=
+
+">word with nonexistent word" test-section
+[ "no-such-word" >word call ] "nonexistent word fails on call" assert-error
+
+">word sees quotation-local definitions" test-section
+[
+  my-local: 99 ;
+  "my-local" >word call 99 ">word resolves local in same frame" assert=
+] call
+
+">word sees outer local from nested call" test-section
+[
+  my-outer: 77 ;
+  [ "my-outer" >word call ] call 77 ">word resolves outer local from inner call" assert=
+] call
+
+">word cannot see locals after frame exits" test-section
+[
+  \ the inner call defines ephemeral, creates >word quotation, then its frame exits
+  \ the second call tries to execute it but ephemeral is no longer in scope
+  [ [ ephemeral: 42 ;
+      "ephemeral" >word ] call call ]
+  "local not visible after frame exit" assert-error
+] call
+
+">word resolves at call time not creation time" test-section
+[
+  "late-bind" >word
+  late-bind: 123 ;
+  call 123 ">word resolves word defined after >word" assert=
+] call

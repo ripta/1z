@@ -22,15 +22,42 @@ PASS: string>symbol>string roundtrip
 Stack: [ ]
 === >symbol error cases ===
 Stack: [ ]
-Stack: [ [ "" >symbol ] ]
-Stack: [ [ "" >symbol ] [ drop "PASS: empty string rejected" print-line ] ]
 PASS: empty string rejected
 Stack: [ ]
-Stack: [ [ "hello world" >symbol ] ]
-Stack: [ [ "hello world" >symbol ] [ drop "PASS: string with space rejected" print-line ] ]
 PASS: string with space rejected
 Stack: [ ]
-Stack: [ [ 42 >symbol ] ]
-Stack: [ [ 42 >symbol ] [ drop "PASS: integer rejected" print-line ] ]
 PASS: integer rejected
+Stack: [ ]
+=== >word from string ===
+Stack: [ ]
+Stack: [ ]
+PASS: >word from string then call
+Stack: [ ]
+=== >word from symbol ===
+Stack: [ ]
+PASS: >word from symbol then call
+Stack: [ ]
+=== >word with native word ===
+Stack: [ ]
+PASS: >word with native +
+Stack: [ ]
+=== >word with nonexistent word ===
+Stack: [ ]
+PASS: nonexistent word fails on call
+Stack: [ ]
+=== >word sees quotation-local definitions ===
+Stack: [ ]
+PASS: >word resolves local in same frame
+Stack: [ ]
+=== >word sees outer local from nested call ===
+Stack: [ ]
+PASS: >word resolves outer local from inner call
+Stack: [ ]
+=== >word cannot see locals after frame exits ===
+Stack: [ ]
+PASS: local not visible after frame exit
+Stack: [ ]
+=== >word resolves at call time not creation time ===
+Stack: [ ]
+PASS: >word resolves word defined after >word
 Stack: [ ]
