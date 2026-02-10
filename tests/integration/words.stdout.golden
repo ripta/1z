@@ -187,6 +187,10 @@ yield (  --  )
 >option:some
 >result:err
 >result:ok
+?and-then ( opt/res quot -- opt/res )
+?flatten ( nested -- opt/res )
+?map ( opt/res quot -- opt/res )
+?or-else ( opt/res quot -- opt/res )
 B{
 ECannotRedefineConst
 EDivisionByZero

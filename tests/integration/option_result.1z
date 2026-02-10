@@ -200,3 +200,86 @@ option:none "fallback" unwrap-or "fallback" "unwrap-or none with string default"
 \ Rethrows the error inside err
 [ "oops" "test" EUserThrown make-error >result:err unwrap-or-throw ]
 [ error-type: @get user-thrown: "unwrap-or-throw err rethrows error" assert= ] recover
+
+"?map on option" test-section
+
+42 >option:some [ 2 * ] ?map option:some? t "?map some is still some" assert=
+42 >option:some [ 2 * ] ?map option:some> 84 "?map some applies quot" assert=
+option:none [ 2 * ] ?map option:none? t "?map none passes through" assert=
+"hello" >option:some [ " world" #append ] ?map option:some> "hello world" "?map some with string" assert=
+
+"?map on result" test-section
+
+42 >result:ok [ 1 + ] ?map result:ok? t "?map ok is still ok" assert=
+42 >result:ok [ 1 + ] ?map result:ok> 43 "?map ok applies quot" assert=
+"oops" "test" EUserThrown make-error >result:err [ 1 + ] ?map result:err? t "?map err passes through" assert=
+
+"?and-then on option" test-section
+
+42 >option:some [ dup 0 > [ >option:some ] [ drop option:none ] if ] ?and-then
+  option:some> 42 "?and-then some with positive" assert=
+-1 >option:some [ dup 0 > [ >option:some ] [ drop option:none ] if ] ?and-then
+  option:none? t "?and-then some producing none" assert=
+option:none [ >option:some ] ?and-then
+  option:none? t "?and-then none passes through" assert=
+
+"?and-then on result" test-section
+
+42 >result:ok [ dup 0 > [ >result:ok ] [ drop "negative" "test" EUserThrown make-error >result:err ] if ] ?and-then
+  result:ok> 42 "?and-then ok with valid value" assert=
+-1 >result:ok [ dup 0 > [ >result:ok ] [ drop "negative" "test" EUserThrown make-error >result:err ] if ] ?and-then
+  result:err? t "?and-then ok producing err" assert=
+"oops" "test" EUserThrown make-error >result:err [ >result:ok ] ?and-then
+  result:err? t "?and-then err passes through" assert=
+
+"?or-else on option" test-section
+
+42 >option:some [ 99 >option:some ] ?or-else
+  option:some> 42 "?or-else some passes through" assert=
+option:none [ 99 >option:some ] ?or-else
+  option:some> 99 "?or-else none calls quot" assert=
+option:none [ option:none ] ?or-else
+  option:none? t "?or-else none producing none" assert=
+
+"?or-else on result" test-section
+
+42 >result:ok [ 0 >result:ok ] ?or-else
+  result:ok> 42 "?or-else ok passes through" assert=
+"oops" "test" EUserThrown make-error >result:err [ 0 >result:ok ] ?or-else
+  result:ok> 0 "?or-else err calls quot" assert=
+"oops" "test" EUserThrown make-error >result:err [ "fallback" "test" EUserThrown make-error >result:err ] ?or-else
+  result:err? t "?or-else err producing err" assert=
+
+"?flatten on option" test-section
+
+42 >option:some >option:some ?flatten
+  option:some> 42 "?flatten some(some(x)) to some(x)" assert=
+option:none >option:some ?flatten
+  option:none? t "?flatten some(none) to none" assert=
+option:none ?flatten
+  option:none? t "?flatten none stays none" assert=
+
+"?flatten on result" test-section
+
+42 >result:ok >result:ok ?flatten
+  result:ok> 42 "?flatten ok(ok(x)) to ok(x)" assert=
+"oops" "test" EUserThrown make-error >result:err >result:ok ?flatten
+  result:err? t "?flatten ok(err(e)) to err(e)" assert=
+"oops" "test" EUserThrown make-error >result:err ?flatten
+  result:err? t "?flatten err stays err" assert=
+
+"chaining combinators" test-section
+
+\ ?map then ?and-then
+42 >option:some [ 2 * ] ?map [ dup 100 < [ >option:some ] [ drop option:none ] if ] ?and-then
+  option:some> 84 "?map then ?and-then" assert=
+
+\ ?or-else as fallback chain
+option:none [ option:none ] ?or-else [ 7 >option:some ] ?or-else
+  option:some> 7 "chained ?or-else" assert=
+
+\ generic error messages
+[ "?map requires an option or result" throw ] [ "?map requires an option or result" assert-error ] recover
+[ "?and-then requires an option or result" throw ] [ "?and-then requires an option or result" assert-error ] recover
+[ "?or-else requires an option or result" throw ] [ "?or-else requires an option or result" assert-error ] recover
+[ "?flatten requires an option or result" throw ] [ "?flatten requires an option or result" assert-error ] recover
