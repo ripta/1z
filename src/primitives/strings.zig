@@ -7,7 +7,8 @@ const Primitive = @import("types.zig").Primitive;
 
 pub const primitives = [_]Primitive{
     .{ .name = "to-string", .stack_effect = "value -- string", .doc = "Convert any value to its string representation, including quotes for strings.", .func = nativeToString },
-    .{ .name = ">string", .stack_effect = "value -- string", .doc = "Convert value to string, strings pass through unquoted.", .func = nativeAsString },
+    .{ .name = ">string", .stack_effect = "value -- string", .doc = "Convert value to string, strings and symbols pass through as plain strings.", .func = nativeAsString },
+    .{ .name = ">symbol", .stack_effect = "string -- symbol", .doc = "Convert string to symbol. The string must be a valid token: non-empty, no whitespace, no leading quote.", .func = nativeToSymbol },
     .{ .name = ">bytes", .stack_effect = "string -- byte-array", .doc = "Convert string to byte array (UTF-8 encoded bytes).", .func = nativeToBytes },
     .{ .name = "bytes>", .stack_effect = "byte-array -- string", .doc = "Convert byte array to string (interprets as UTF-8).", .func = nativeBytesToString },
     .{ .name = "uppercase", .stack_effect = "str -- str", .doc = "Convert ASCII letters to uppercase, non-ASCII bytes pass through.", .func = nativeUppercase },
@@ -32,12 +33,31 @@ fn nativeAsString(ctx: *Context) anyerror!void {
         .string => |s| {
             try ctx.stack.push(.{ .string = s });
         },
+        .symbol => |s| {
+            try ctx.stack.push(.{ .string = s });
+        },
         else => {
             const alloc = ctx.quotationAllocator();
             var buffer: std.ArrayListUnmanaged(u8) = .{};
             try val.write(buffer.writer(alloc));
             try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
         },
+    }
+}
+
+/// >symbol ( string -- symbol ) - Convert string to symbol
+fn nativeToSymbol(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .string => |s| {
+            if (s.len == 0) return error.InvalidArgument;
+            if (s[0] == '"') return error.InvalidArgument;
+            for (s) |c| {
+                if (c == ' ' or c == '\t' or c == '\n' or c == '\r') return error.InvalidArgument;
+            }
+            try ctx.stack.push(.{ .symbol = s });
+        },
+        else => return error.TypeMismatch,
     }
 }
 

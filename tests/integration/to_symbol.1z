@@ -1,0 +1,30 @@
+\ Tests for >symbol and symbol >string conversion
+
+use "testing" ;
+
+"string to symbol" test-section
+"foo" >symbol foo: ">symbol creates matching symbol" assert=
+"hello-world" >symbol hello-world: ">symbol with hyphens" assert=
+"+" >symbol +: ">symbol with operator char" assert=
+"123" >symbol 123: ">symbol with digits" assert=
+
+"symbol to string" test-section
+foo: >string "foo" "symbol >string strips colon" assert=
+hello-world: >string "hello-world" "symbol >string with hyphens" assert=
+
+"roundtrip" test-section
+foo: >string >symbol foo: "symbol>string>symbol roundtrip" assert=
+"bar" >symbol >string "bar" "string>symbol>string roundtrip" assert=
+
+">symbol error cases" test-section
+[ "" >symbol ]
+[ drop "PASS: empty string rejected" print-line ]
+recover
+
+[ "hello world" >symbol ]
+[ drop "PASS: string with space rejected" print-line ]
+recover
+
+[ 42 >symbol ]
+[ drop "PASS: integer rejected" print-line ]
+recover

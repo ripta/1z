@@ -1,0 +1,36 @@
+=== string to symbol ===
+Stack: [ ]
+PASS: >symbol creates matching symbol
+Stack: [ ]
+PASS: >symbol with hyphens
+Stack: [ ]
+PASS: >symbol with operator char
+Stack: [ ]
+PASS: >symbol with digits
+Stack: [ ]
+=== symbol to string ===
+Stack: [ ]
+PASS: symbol >string strips colon
+Stack: [ ]
+PASS: symbol >string with hyphens
+Stack: [ ]
+=== roundtrip ===
+Stack: [ ]
+PASS: symbol>string>symbol roundtrip
+Stack: [ ]
+PASS: string>symbol>string roundtrip
+Stack: [ ]
+=== >symbol error cases ===
+Stack: [ ]
+Stack: [ [ "" >symbol ] ]
+Stack: [ [ "" >symbol ] [ drop "PASS: empty string rejected" print-line ] ]
+PASS: empty string rejected
+Stack: [ ]
+Stack: [ [ "hello world" >symbol ] ]
+Stack: [ [ "hello world" >symbol ] [ drop "PASS: string with space rejected" print-line ] ]
+PASS: string with space rejected
+Stack: [ ]
+Stack: [ [ 42 >symbol ] ]
+Stack: [ [ 42 >symbol ] [ drop "PASS: integer rejected" print-line ] ]
+PASS: integer rejected
+Stack: [ ]

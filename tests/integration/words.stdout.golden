@@ -46,6 +46,7 @@ Stack: [ ]
 >char ( codepoint -- str )
 >codepoint ( str -- int )
 >string ( value -- string )
+>symbol ( string -- symbol )
 @adjoin ( set value -- set' )
 @difference ( set1 set2 -- set' )
 @get ( assoc key -- value )
