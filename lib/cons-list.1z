@@ -137,3 +137,6 @@ list-filter: ( cons-list quot -- cons-list' ) [
     cons-list:nil: [ drop nil ]
   } match
 ] ;
+
+\ Iterator protocol integration
+>iterator: method{ cons-list } [ cons-list>array >iterator ] ;

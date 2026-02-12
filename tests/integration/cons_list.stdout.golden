@@ -208,3 +208,46 @@ Stack: [ ]
 Stack: [ { 1 2 3 } ]
 PASS: filter all
 Stack: [ ]
+=== >iterator on nil ===
+Stack: [ ]
+PASS: >iterator nil collects to empty array
+Stack: [ ]
+=== >iterator on cons-list ===
+Stack: [ ]
+Stack: [ { 1 2 3 } ]
+PASS: >iterator collects elements in order
+Stack: [ ]
+=== >iterator with #map ===
+Stack: [ ]
+Stack: [ { 10 20 30 } ]
+PASS: lazy map over cons-list iterator
+Stack: [ ]
+=== >iterator with #filter ===
+Stack: [ ]
+Stack: [ { 4 5 } ]
+PASS: lazy filter over cons-list iterator
+Stack: [ ]
+=== >iterator with #reduce ===
+Stack: [ ]
+Stack: [ 6 ]
+PASS: reduce cons-list iterator
+Stack: [ ]
+=== >iterator with chained adapters ===
+Stack: [ ]
+Stack: [ <iterator array 0/5> ]
+Stack: [ { 6 8 10 } ]
+PASS: map then filter on cons-list iterator
+Stack: [ ]
+=== >iterator with #count ===
+Stack: [ ]
+Stack: [ 5 ]
+PASS: count elements via iterator
+Stack: [ ]
+=== >iterator with #take and #drop ===
+Stack: [ ]
+Stack: [ { 1 2 3 } ]
+PASS: take 3 from cons-list iterator
+Stack: [ ]
+Stack: [ { 3 4 5 } ]
+PASS: drop 2 from cons-list iterator
+Stack: [ ]
