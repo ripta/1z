@@ -599,14 +599,27 @@ pub const Context = struct {
 
         if (inferred_delta) |actual_delta| {
             if (actual_delta != expected_delta) {
-                // Capture error details
-                var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "parameter '{s}' has effect ({d} -- {d}) but quotation produces delta {d}", .{
-                    param_name,
-                    expected_concrete_inputs,
-                    expected_concrete_outputs,
-                    actual_delta,
-                }) catch "stack effect mismatch";
+                var effect_buf: [128]u8 = undefined;
+                var effect_fbs = std.io.fixedBufferStream(&effect_buf);
+                expected_effect.write(effect_fbs.writer()) catch {};
+                const effect_str = effect_fbs.getWritten();
+
+                const diff = actual_delta - expected_delta;
+                var buf: [512]u8 = undefined;
+                const msg = if (diff > 0)
+                    std.fmt.bufPrint(&buf, "parameter '{s}' expects {s} but quotation leaves {d} extra value{s} on the stack", .{
+                        param_name,
+                        effect_str,
+                        diff,
+                        if (diff == 1) @as([]const u8, "") else "s",
+                    }) catch "stack effect mismatch"
+                else
+                    std.fmt.bufPrint(&buf, "parameter '{s}' expects {s} but quotation consumes {d} extra value{s} from the stack", .{
+                        param_name,
+                        effect_str,
+                        -diff,
+                        if (diff == -1) @as([]const u8, "") else "s",
+                    }) catch "stack effect mismatch";
 
                 const msg_copy = self.arena.allocator().dupe(u8, msg) catch return primitives.InterpreterError.StackEffectMismatch;
 

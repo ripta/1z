@@ -1,0 +1,13 @@
+\ Test that stack-effect-mismatch errors produce clear messages
+
+use "testing" ;
+
+"stack effect mismatch errors" test-section
+
+\ Quotation declared with too many inputs
+too-many: ( x quot: ( a b c -- d ) -- x ) [ drop ] ;
+[ 0 [ + ] too-many ] "too many inputs detected" assert-error
+
+\ Quotation declared with too few inputs
+too-few: ( x quot: ( a -- b ) -- x ) [ drop ] ;
+[ 0 [ + ] too-few ] "too few inputs detected" assert-error
