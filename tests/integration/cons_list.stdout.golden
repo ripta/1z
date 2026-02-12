@@ -155,6 +155,31 @@ PASS: fold collects head to tail
 Stack: [ ]
 PASS: fold product
 Stack: [ ]
+=== list-foldl ===
+Stack: [ ]
+PASS: foldl on nil returns init
+Stack: [ ]
+PASS: foldl sum
+Stack: [ ]
+PASS: foldl subtract
+Stack: [ ]
+Stack: [ { 1 2 3 } ]
+PASS: foldl collects head to tail
+Stack: [ ]
+=== list-foldr ===
+Stack: [ ]
+PASS: foldr on nil returns init
+Stack: [ ]
+PASS: foldr sum
+Stack: [ ]
+PASS: foldr subtract
+Stack: [ ]
+Stack: [ { 3 2 1 } ]
+PASS: foldr collects tail to head
+Stack: [ ]
+Stack: [ { 1 2 3 } ]
+PASS: foldr cons rebuilds list
+Stack: [ ]
 === list-map ===
 Stack: [ ]
 PASS: map on nil is nil

@@ -102,6 +102,22 @@ nil 0 [ + ] list-fold 0 "fold on nil returns init" assert=
 { 1 2 3 } "fold collects head to tail" assert=
 { 1 2 3 4 } >cons-list 1 [ * ] list-fold 24 "fold product" assert=
 
+"list-foldl" test-section
+nil 0 [ + ] list-foldl 0 "foldl on nil returns init" assert=
+{ 1 2 3 } >cons-list 0 [ + ] list-foldl 6 "foldl sum" assert=
+{ 1 2 3 } >cons-list 0 [ - ] list-foldl -6 "foldl subtract" assert=
+{ 1 2 3 } >cons-list { } [ #push ] list-foldl
+{ 1 2 3 } "foldl collects head to tail" assert=
+
+"list-foldr" test-section
+nil 0 [ + ] list-foldr 0 "foldr on nil returns init" assert=
+{ 1 2 3 } >cons-list 0 [ + ] list-foldr 6 "foldr sum" assert=
+{ 1 2 3 } >cons-list 0 [ - ] list-foldr 2 "foldr subtract" assert=
+{ 1 2 3 } >cons-list { } [ swap #push ] list-foldr
+{ 3 2 1 } "foldr collects tail to head" assert=
+{ 1 2 3 } >cons-list nil [ cons ] list-foldr cons-list>array
+{ 1 2 3 } "foldr cons rebuilds list" assert=
+
 "list-map" test-section
 nil [ 1 + ] list-map nil? t "map on nil is nil" assert=
 { 1 2 3 } >cons-list [ 2 * ] list-map cons-list>array

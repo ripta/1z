@@ -90,15 +90,29 @@ list-each: ( cons-list quot -- ) [
 ] ;
 
 \ Fold from left, head to tail.
-list-fold: ( cons-list acc quot -- acc' ) [
+list-foldl: ( cons-list acc quot: ( acc elem -- acc' ) -- acc' ) [
   <rot-
   {
     cons-list:cons: [
-      [ swap dup [ call ] dip ] dip -rot> list-fold
+      [ swap dup [ call ] dip ] dip -rot> list-foldl
     ]
     cons-list:nil: [ drop ]
   } match
 ] ;
+list-fold: ( cons-list acc quot: ( acc elem -- acc' ) -- acc' ) [ list-foldl ] ;
+
+\ Fold from right, tail to head. Not tail-recursive, O(n) stack frames.
+list-foldr: ( cons-list init quot: ( elem acc -- acc' ) -- result ) [
+  <rot-
+  {
+    cons-list:cons: [
+      3 pick-n 3 pick-n list-foldr
+      <rot- call swap drop
+    ]
+    cons-list:nil: [ drop ]
+  } match
+] ;
+
 
 \ Map over elements, producing a new list.
 list-map: ( cons-list quot -- cons-list' ) [
