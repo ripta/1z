@@ -86,3 +86,37 @@ nil { 3 4 } >cons-list list-append cons-list>array
 { 1 2 3 4 } "append two lists" assert=
 { 1 } >cons-list { 2 } >cons-list list-append cons-list>array
 { 1 2 } "append single element lists" assert=
+
+"list-each" test-section
+{ } >cons-list 0 swap [ + ] list-each 0 "each on nil sums nothing" assert=
+{ 10 } >cons-list 0 swap [ + ] list-each 10 "each on single" assert=
+{ 1 2 3 } >cons-list 0 swap [ + ] list-each 6 "each sums elements" assert=
+{ 1 2 3 } >cons-list { } swap [ #push ] list-each
+{ 1 2 3 } "each visits head to tail" assert=
+
+"list-fold" test-section
+nil 0 [ + ] list-fold 0 "fold on nil returns init" assert=
+{ 1 2 3 } >cons-list 0 [ + ] list-fold 6 "fold sum" assert=
+{ 1 2 3 } >cons-list 10 [ + ] list-fold 16 "fold sum with init" assert=
+{ 1 2 3 } >cons-list { } [ #push ] list-fold
+{ 1 2 3 } "fold collects head to tail" assert=
+{ 1 2 3 4 } >cons-list 1 [ * ] list-fold 24 "fold product" assert=
+
+"list-map" test-section
+nil [ 1 + ] list-map nil? t "map on nil is nil" assert=
+{ 1 2 3 } >cons-list [ 2 * ] list-map cons-list>array
+{ 2 4 6 } "map doubles" assert=
+{ 1 2 3 } >cons-list [ 10 + ] list-map cons-list>array
+{ 11 12 13 } "map adds ten" assert=
+{ 1 } >cons-list [ 100 * ] list-map cons-list>array
+{ 100 } "map single element" assert=
+
+"list-filter" test-section
+nil [ drop t ] list-filter nil? t "filter on nil is nil" assert=
+{ 1 2 3 4 5 } >cons-list [ 3 > ] list-filter cons-list>array
+{ 4 5 } "filter greater than 3" assert=
+{ 1 2 3 4 5 } >cons-list [ 2 % 0 = ] list-filter cons-list>array
+{ 2 4 } "filter even numbers" assert=
+{ 1 2 3 } >cons-list [ drop f ] list-filter nil? t "filter none" assert=
+{ 1 2 3 } >cons-list [ drop t ] list-filter cons-list>array
+{ 1 2 3 } "filter all" assert=

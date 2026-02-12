@@ -78,3 +78,48 @@ list-append: ( cons-list-a cons-list-b -- cons-list' ) [
     cons-list:nil: [ ]
   } match
 ] ;
+
+\ Call quot for each element, head to tail.
+list-each: ( cons-list quot -- ) [
+  swap {
+    cons-list:cons: [
+      [ swap dup [ call ] dip ] dip swap list-each
+    ]
+    cons-list:nil: [ drop ]
+  } match
+] ;
+
+\ Fold from left, head to tail.
+list-fold: ( cons-list acc quot -- acc' ) [
+  <rot-
+  {
+    cons-list:cons: [
+      [ swap dup [ call ] dip ] dip -rot> list-fold
+    ]
+    cons-list:nil: [ drop ]
+  } match
+] ;
+
+\ Map over elements, producing a new list.
+list-map: ( cons-list quot -- cons-list' ) [
+  swap {
+    cons-list:cons: [
+      over 3 pick-n call
+      -rot> swap drop
+      swap [ swap list-map ] dip swap cons
+    ]
+    cons-list:nil: [ drop nil ]
+  } match
+] ;
+
+\ Keep elements where quot returns true.
+list-filter: ( cons-list quot -- cons-list' ) [
+  swap {
+    cons-list:cons: [
+      over 3 pick-n call
+      [ swap [ swap list-filter ] dip swap cons ]
+      [ swap drop swap list-filter ] if
+    ]
+    cons-list:nil: [ drop nil ]
+  } match
+] ;

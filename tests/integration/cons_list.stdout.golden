@@ -131,3 +131,55 @@ Stack: [ ]
 Stack: [ { 1 2 } ]
 PASS: append single element lists
 Stack: [ ]
+=== list-each ===
+Stack: [ ]
+PASS: each on nil sums nothing
+Stack: [ ]
+PASS: each on single
+Stack: [ ]
+PASS: each sums elements
+Stack: [ ]
+Stack: [ { 1 2 3 } ]
+PASS: each visits head to tail
+Stack: [ ]
+=== list-fold ===
+Stack: [ ]
+PASS: fold on nil returns init
+Stack: [ ]
+PASS: fold sum
+Stack: [ ]
+PASS: fold sum with init
+Stack: [ ]
+Stack: [ { 1 2 3 } ]
+PASS: fold collects head to tail
+Stack: [ ]
+PASS: fold product
+Stack: [ ]
+=== list-map ===
+Stack: [ ]
+PASS: map on nil is nil
+Stack: [ ]
+Stack: [ { 2 4 6 } ]
+PASS: map doubles
+Stack: [ ]
+Stack: [ { 11 12 13 } ]
+PASS: map adds ten
+Stack: [ ]
+Stack: [ { 100 } ]
+PASS: map single element
+Stack: [ ]
+=== list-filter ===
+Stack: [ ]
+PASS: filter on nil is nil
+Stack: [ ]
+Stack: [ { 4 5 } ]
+PASS: filter greater than 3
+Stack: [ ]
+Stack: [ { 2 4 } ]
+PASS: filter even numbers
+Stack: [ ]
+PASS: filter none
+Stack: [ ]
+Stack: [ { 1 2 3 } ]
+PASS: filter all
+Stack: [ ]
