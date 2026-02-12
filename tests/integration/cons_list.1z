@@ -1,0 +1,54 @@
+\ Integration tests for cons-list, an immutable linked list
+
+use "testing" ;
+use "cons-list" ;
+
+"nil constructor" test-section
+nil nil? t "nil is nil" assert=
+nil cons? f "nil is not cons" assert=
+
+"cons constructor" test-section
+1 nil cons cons? t "cons is cons" assert=
+1 nil cons nil? f "cons is not nil" assert=
+
+"head accessor" test-section
+1 nil cons head 1 "head of single element" assert=
+1 2 nil cons cons head 1 "head of two elements" assert=
+"hello" nil cons head "hello" "head with string" assert=
+
+"tail accessor" test-section
+1 nil cons tail nil? t "tail of single element is nil" assert=
+1 2 nil cons cons tail head 2 "tail gives rest of list" assert=
+1 2 3 nil cons cons cons tail tail head 3 "nested tail" assert=
+
+"head and tail errors" test-section
+[ nil head ] "head of nil" assert-error
+[ nil tail ] "tail of nil" assert-error
+
+">cons-list from array" test-section
+{ } >cons-list nil? t "empty array becomes nil" assert=
+{ 42 } >cons-list head 42 "single element array head" assert=
+{ 42 } >cons-list tail nil? t "single element array tail is nil" assert=
+{ 1 2 3 } >cons-list head 1 "first element preserved" assert=
+{ 1 2 3 } >cons-list tail head 2 "second element preserved" assert=
+{ 1 2 3 } >cons-list tail tail head 3 "third element preserved" assert=
+{ 1 2 3 } >cons-list tail tail tail nil? t "end of list is nil" assert=
+
+"cons-list>array" test-section
+nil cons-list>array { } "nil to array" assert=
+1 nil cons cons-list>array { 1 } "single element to array" assert=
+1 2 3 nil cons cons cons cons-list>array { 1 2 3 } "three elements to array" assert=
+
+"round-trip array -> cons-list -> array" test-section
+{ 1 2 3 } >cons-list cons-list>array { 1 2 3 } "round-trip preserves elements" assert=
+{ } >cons-list cons-list>array { } "round-trip empty" assert=
+{ 42 } >cons-list cons-list>array { 42 } "round-trip single" assert=
+{ "a" "b" "c" } >cons-list cons-list>array { "a" "b" "c" } "round-trip strings" assert=
+
+"nested cons-lists" test-section
+{ 1 2 } >cons-list nil cons cons-list>array 0 #nth cons-list>array
+{ 1 2 } "nested list in list" assert=
+
+"cons builds in correct order" test-section
+3 nil cons 2 swap cons 1 swap cons
+cons-list>array { 1 2 3 } "cons builds list front-to-back" assert=

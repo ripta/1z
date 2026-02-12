@@ -1,0 +1,46 @@
+\ lib/cons-list.1z - Immutable cons-cell linked lists
+
+use "sequences" ;
+
+cons-list: enum{
+  cons struct{ head tail }
+  nil
+} ;
+
+\ Short aliases for constructors and predicates
+cons:  ( head tail -- cons-list ) [ >cons-list:cons ] ;
+nil:   ( -- cons-list )           [ cons-list:nil ] ;
+cons?: ( value -- bool )          [ cons-list:cons? ] ;
+nil?:  ( value -- bool )          [ cons-list:nil? ] ;
+
+\ Accessors
+head: ( cons-list -- value ) [
+  {
+    cons-list:cons: [ drop ]
+    cons-list:nil: [ "head of empty list" throw ]
+  } match
+] ;
+
+tail: ( cons-list -- cons-list ) [
+  {
+    cons-list:cons: [ swap drop ]
+    cons-list:nil: [ "tail of empty list" throw ]
+  } match
+] ;
+
+\ Convert cons-list to array
+cons-list>array: ( cons-list -- array ) [
+  {
+    cons-list:cons: [ cons-list>array #prefix ]
+    cons-list:nil: [ { } ]
+  } match
+] ;
+
+\ Convert array to cons-list (preserving element order)
+>cons-list: ( array -- cons-list ) [
+  dup #len 0 = [ drop nil ] [
+    dup #first swap
+    1 over #len #slice
+    >cons-list cons
+  ] if
+] ;

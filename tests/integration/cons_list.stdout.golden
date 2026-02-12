@@ -1,0 +1,78 @@
+=== nil constructor ===
+Stack: [ ]
+PASS: nil is nil
+Stack: [ ]
+PASS: nil is not cons
+Stack: [ ]
+=== cons constructor ===
+Stack: [ ]
+PASS: cons is cons
+Stack: [ ]
+PASS: cons is not nil
+Stack: [ ]
+=== head accessor ===
+Stack: [ ]
+PASS: head of single element
+Stack: [ ]
+PASS: head of two elements
+Stack: [ ]
+PASS: head with string
+Stack: [ ]
+=== tail accessor ===
+Stack: [ ]
+PASS: tail of single element is nil
+Stack: [ ]
+PASS: tail gives rest of list
+Stack: [ ]
+PASS: nested tail
+Stack: [ ]
+=== head and tail errors ===
+Stack: [ ]
+PASS: head of nil
+Stack: [ ]
+PASS: tail of nil
+Stack: [ ]
+=== >cons-list from array ===
+Stack: [ ]
+PASS: empty array becomes nil
+Stack: [ ]
+PASS: single element array head
+Stack: [ ]
+PASS: single element array tail is nil
+Stack: [ ]
+PASS: first element preserved
+Stack: [ ]
+PASS: second element preserved
+Stack: [ ]
+PASS: third element preserved
+Stack: [ ]
+PASS: end of list is nil
+Stack: [ ]
+=== cons-list>array ===
+Stack: [ ]
+PASS: nil to array
+Stack: [ ]
+PASS: single element to array
+Stack: [ ]
+PASS: three elements to array
+Stack: [ ]
+=== round-trip array -> cons-list -> array ===
+Stack: [ ]
+PASS: round-trip preserves elements
+Stack: [ ]
+PASS: round-trip empty
+Stack: [ ]
+PASS: round-trip single
+Stack: [ ]
+PASS: round-trip strings
+Stack: [ ]
+=== nested cons-lists ===
+Stack: [ ]
+Stack: [ { 1 2 } ]
+PASS: nested list in list
+Stack: [ ]
+=== cons builds in correct order ===
+Stack: [ ]
+Stack: [ <cons-list:cons cons-list:cons{ head: 1 tail: <cons-list:cons cons-list:cons{ head: 2 tail: <cons-list:cons cons-list:cons{ head: 3 tail: <cons-list:nil nil:> }> }> }> ]
+PASS: cons builds list front-to-back
+Stack: [ ]
