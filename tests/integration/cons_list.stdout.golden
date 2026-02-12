@@ -76,3 +76,58 @@ Stack: [ ]
 Stack: [ <cons-list:cons cons-list:cons{ head: 1 tail: <cons-list:cons cons-list:cons{ head: 2 tail: <cons-list:cons cons-list:cons{ head: 3 tail: <cons-list:nil nil:> }> }> }> ]
 PASS: cons builds list front-to-back
 Stack: [ ]
+=== list-len ===
+Stack: [ ]
+PASS: len of nil
+Stack: [ ]
+PASS: len of single
+Stack: [ ]
+PASS: len of three
+Stack: [ ]
+PASS: len of five
+Stack: [ ]
+=== list-reverse ===
+Stack: [ ]
+PASS: reverse nil is nil
+Stack: [ ]
+PASS: reverse single is cons
+Stack: [ ]
+PASS: reverse single head
+Stack: [ ]
+PASS: reverse single
+Stack: [ ]
+PASS: reverse three
+Stack: [ ]
+Stack: [ { 1 2 3 } ]
+PASS: double reverse is identity
+Stack: [ ]
+=== list-nth ===
+Stack: [ ]
+PASS: nth 0
+Stack: [ ]
+PASS: nth 1
+Stack: [ ]
+PASS: nth 2
+Stack: [ ]
+PASS: nth out of bounds
+Stack: [ ]
+PASS: nth negative
+Stack: [ ]
+PASS: nth on nil
+Stack: [ ]
+=== list-append ===
+Stack: [ ]
+PASS: append nil nil
+Stack: [ ]
+Stack: [ { 1 2 } ]
+PASS: append list nil
+Stack: [ ]
+Stack: [ { 3 4 } ]
+PASS: append nil list
+Stack: [ ]
+Stack: [ { 1 2 3 4 } ]
+PASS: append two lists
+Stack: [ ]
+Stack: [ { 1 2 } ]
+PASS: append single element lists
+Stack: [ ]

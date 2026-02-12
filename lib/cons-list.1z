@@ -44,3 +44,37 @@ cons-list>array: ( cons-list -- array ) [
     >cons-list cons
   ] if
 ] ;
+
+\ Length of a list, O(n).
+list-len: ( cons-list -- n ) [
+  0 swap
+  [ dup cons? ] [ tail swap 1 + swap ] while
+  drop
+] ;
+
+\ Reverse a list, O(n).
+list-reverse: ( cons-list -- cons-list ) [
+  list-reverse-acc: ( acc list -- cons-list ) [
+    {
+      cons-list:cons: [ [ swap cons ] dip list-reverse-acc ]
+      cons-list:nil: [ ]
+    } match
+  ] ;
+
+  nil swap list-reverse-acc
+] ;
+
+\ Nth element, O(n). Throws if out of bounds.
+list-nth: ( cons-list n -- value ) [
+  over nil? [ 2drop "list index out of bounds" throw ] [
+    dup 0 = [ drop head ] [ 1 - swap tail swap list-nth ] if
+  ] if
+] ;
+
+\ Append two lists, O(n) in the first list.
+list-append: ( cons-list-a cons-list-b -- cons-list' ) [
+  swap {
+    cons-list:cons: [ <rot- list-append cons ]
+    cons-list:nil: [ ]
+  } match
+] ;
