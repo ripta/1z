@@ -4,11 +4,6 @@ use "time" ;
 
 rate-limiter: mutable struct{ tokens burst interval last-refill } ;
 
-\ Get monotonic clock as raw nanoseconds.
-monotonic-nanos: ( -- nanos ) [
-  clock-monotonic swap 1000000000 * +
-] ;
-
 \ Create a rate limiter.
 \ interval is a duration between token additions; burst is the max token count.
 <rate-limiter>: ( interval burst -- limiter ) [

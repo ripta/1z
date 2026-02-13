@@ -218,11 +218,16 @@ time-fmt:    const [ "{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fi
 
 \ --- Elapsed time measurement ---
 
+\ Get monotonic clock as raw nanoseconds.
+monotonic-nanos: ( -- nanos ) [
+  clock-monotonic swap 1000000000 * +
+] ;
+
 \ elapsed ( quot -- ...results duration )
 \ Runs quotation, measures wall time, pushes duration on top.
 \ Quotation results remain on stack below the duration.
 elapsed: [
-  clock-monotonic swap 1000000000 * +
+  monotonic-nanos
   [ call ] dip
-  clock-monotonic swap 1000000000 * + swap - >duration
+  monotonic-nanos swap - >duration
 ] ;
