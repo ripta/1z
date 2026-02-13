@@ -1,14 +1,22 @@
-=== per-second interval ===
+=== duration division ===
 Stack: [ ]
-PASS: 10 per-second = 100ms in nanos
+PASS: 10s / 5 = 2s
 Stack: [ ]
-PASS: 1 per-second = 1s in nanos
+PASS: 1s / 4 = 250ms
 Stack: [ ]
-=== per-minute interval ===
+PASS: 1s / 1000 = 1ms
 Stack: [ ]
-PASS: 60 per-minute = 1s in nanos
+=== per-second computes interval ===
 Stack: [ ]
-PASS: 6 per-minute = 10s in nanos
+PASS: 10 per-second = 100ms
+Stack: [ ]
+PASS: 1 per-second = 1s
+Stack: [ ]
+=== per-minute computes interval ===
+Stack: [ ]
+PASS: 60 per-minute = 1s
+Stack: [ ]
+PASS: 6 per-minute = 10s
 Stack: [ ]
 === rate-limiter construction ===
 Stack: [ ]
@@ -27,6 +35,20 @@ Stack: [ ]
 Stack: [ ]
 PASS: try-acquire fails when empty
 Stack: [ ]
+=== refill replenishes tokens after sleep ===
+Stack: [ ]
+PASS: tokens exhausted before sleep
+PASS: tokens refilled after sleep
+Stack: [ ]
+PASS: refill replenishes tokens after sleep
+Stack: [ ]
+=== refill caps at burst ===
+Stack: [ ]
+PASS: tokens exhausted
+PASS: refill capped at burst
+Stack: [ ]
+PASS: refill caps at burst
+Stack: [ ]
 === blocking acquire waits for refill ===
 Stack: [ ]
 Stack: [ ]
@@ -36,4 +58,9 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 PASS: multiple blocking acquires
+Stack: [ ]
+=== acquire under load ===
+Stack: [ ]
+Stack: [ ]
+PASS: acquire under load
 Stack: [ ]
