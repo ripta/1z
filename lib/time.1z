@@ -30,6 +30,7 @@ now: ( -- timestamp ) [ clock-realtime make-timestamp ] ;
 -: method{ duration duration } [ swap duration> swap duration> - >duration ] ;
 *: method{ duration integer } [ swap duration> swap * >duration ] ;
 *: method{ integer duration } [ duration> * >duration ] ;
+/: method{ duration integer } [ swap duration> swap / >duration ] ;
 
 \ Duration comparison
 <: method{ duration duration } [ swap duration> swap duration> < ] ;

@@ -1,0 +1,70 @@
+\ lib/rate-limit.1z - Token bucket rate limiter
+
+use "time" ;
+
+rate-limiter: mutable struct{ tokens burst interval last-refill } ;
+
+\ Get monotonic clock as raw nanoseconds.
+monotonic-nanos: ( -- nanos ) [
+  clock-monotonic swap 1000000000 * +
+] ;
+
+\ Create a rate limiter.
+\ interval is a duration between token additions; burst is the max token count.
+<rate-limiter>: ( interval burst -- limiter ) [
+  dup                          \ interval burst burst
+  <rot- duration>              \ burst burst interval-nanos
+  monotonic-nanos              \ burst burst interval-nanos last-refill
+  make-rate-limiter            \ tokens=burst burst=burst interval last-refill
+] ;
+
+\ Convenience: compute interval from a per-second rate.
+per-second: ( n -- duration ) [ 1 seconds swap / ] ;
+
+\ Convenience: compute interval from a per-minute rate.
+per-minute: ( n -- duration ) [ 1 minutes swap / ] ;
+
+\ Refill tokens based on elapsed time.
+refill: ( limiter -- limiter ) [
+  dup last-refill>>                    \ limiter last-refill
+  monotonic-nanos swap -               \ limiter elapsed
+  over interval>>                      \ limiter elapsed interval
+  dup 0 = [ 2drop ] [
+    /                                  \ limiter new-tokens
+    dup 0 > [
+      over tokens>> +                 \ limiter raw-tokens
+      over burst>> min                \ limiter capped-tokens
+      >>tokens                        \ limiter
+      monotonic-nanos >>last-refill   \ limiter
+    ] [
+      drop
+    ] if
+  ] if
+] ;
+
+\\ Blocking acquire: yields until a token is available.
+\\ Must be called inside task-scope.
+acquire: generic ( resource -- ) [ "acquire not implemented for this type" throw ] ;
+
+acquire: method{ rate-limiter } [
+  refill
+  dup tokens>> 0 > [
+    dup tokens>> 1 - >>tokens drop
+  ] [
+    dup interval>> >duration sleep
+    acquire
+  ] if
+] ;
+
+\\ Non-blocking acquire: returns an option.
+try-acquire: generic ( resource -- option ) [ "try-acquire not implemented for this type" throw ] ;
+
+try-acquire: method{ rate-limiter } [
+  refill
+  dup tokens>> 0 > [
+    dup tokens>> 1 - >>tokens drop
+    t >option:some
+  ] [
+    drop option:none
+  ] if
+] ;
