@@ -1,0 +1,97 @@
+=== split-host-port basic ===
+Stack: [ ]
+PASS: port from host:port
+Stack: [ "127.0.0.1" ]
+PASS: host from host:port
+Stack: [ ]
+PASS: port 443
+Stack: [ "0.0.0.0" ]
+PASS: host 0.0.0.0
+Stack: [ ]
+PASS: port from localhost
+Stack: [ "localhost" ]
+PASS: host localhost
+Stack: [ ]
+=== split-host-port error cases ===
+Stack: [ ]
+PASS: missing port error
+Stack: [ ]
+=== addr construction ===
+Stack: [ ]
+Stack: [ <addr:tcp addr:tcp{ host: "127.0.0.1" port: 8080 }> ]
+PASS: addr:tcp? predicate
+Stack: [ <addr:tcp addr:tcp{ host: "127.0.0.1" port: 8080 }> ]
+PASS: not addr:udp?
+Stack: [ <addr:tcp addr:tcp{ host: "127.0.0.1" port: 8080 }> ]
+Stack: [ ]
+Stack: [ <addr:unix addr:unix{ path: "/tmp/test.sock" }> ]
+PASS: addr:unix? predicate
+Stack: [ <addr:unix addr:unix{ path: "/tmp/test.sock" }> ]
+Stack: [ ]
+=== resolve on IP address ===
+Stack: [ ]
+Stack: [ { <addr:tcp addr:tcp{ host: "127.0.0.1" port: 8080 }> } ]
+PASS: resolve returns 1 address for IP
+Stack: [ { <addr:tcp addr:tcp{ host: "127.0.0.1" port: 8080 }> } ]
+PASS: resolved addr is addr:tcp
+Stack: [ ]
+=== socket lifecycle ===
+Stack: [ ]
+Stack: [ <addr:tcp addr:tcp{ host: "127.0.0.1" port: 0 }> ]
+Stack: [ <addr:tcp addr:tcp{ host: "127.0.0.1" port: 0 }> 4 ]
+PASS: socket returns positive fd
+Stack: [ <addr:tcp addr:tcp{ host: "127.0.0.1" port: 0 }> 4 ]
+Stack: [ 4 <addr:tcp addr:tcp{ host: "127.0.0.1" port: 0 }> ]
+Stack: [ 4 ]
+Stack: [ 4 ]
+Stack: [ ]
+PASS: socket lifecycle (create, bind, listen, close)
+Stack: [ ]
+=== fd-close ===
+Stack: [ ]
+Stack: [ 4 ]
+PASS: socket fd is positive
+Stack: [ 4 ]
+Stack: [ ]
+PASS: fd-close
+Stack: [ ]
+=== tcp-listen and tcp-close ===
+Stack: [ ]
+Stack: [ <tcp-server tcp-server{ fd: 4 bound-addr: <addr:tcp addr:tcp{ host: "127.0.0.1" port: 0 }> }> ]
+PASS: tcp-listen returns tcp-server
+Stack: [ <tcp-server tcp-server{ fd: 4 bound-addr: <addr:tcp addr:tcp{ host: "127.0.0.1" port: 0 }> }> ]
+Stack: [ ]
+PASS: tcp-listen and tcp-close
+Stack: [ ]
+=== connect and accept ===
+Stack: [ ]
+Stack: [ ]
+PASS: connect and accept
+Stack: [ ]
+=== echo server ===
+Stack: [ ]
+PASS: echoed 5 bytes
+Stack: [ ]
+PASS: echo server
+Stack: [ ]
+=== server-config defaults ===
+Stack: [ ]
+Stack: [ server-config{ host: "0.0.0.0" port: 0 backlog: 128 handler: [ drop ] on-error: [ drop ] } ]
+PASS: default host
+Stack: [ server-config{ host: "0.0.0.0" port: 0 backlog: 128 handler: [ drop ] on-error: [ drop ] } ]
+PASS: default port
+Stack: [ server-config{ host: "0.0.0.0" port: 0 backlog: 128 handler: [ drop ] on-error: [ drop ] } ]
+PASS: default backlog
+Stack: [ server-config{ host: "0.0.0.0" port: 0 backlog: 128 handler: [ drop ] on-error: [ drop ] } ]
+Stack: [ ]
+PASS: server-config defaults
+Stack: [ ]
+=== start-server ===
+Stack: [ ]
+Stack: [ server-config{ host: "127.0.0.1" port: 39284 backlog: 128 handler: [ drop ] on-error: [ drop ] } ]
+Stack: [ <tcp-server tcp-server{ fd: 4 bound-addr: <addr:tcp addr:tcp{ host: "127.0.0.1" port: 39284 }> }> ]
+PASS: start-server returns tcp-server
+Stack: [ <tcp-server tcp-server{ fd: 4 bound-addr: <addr:tcp addr:tcp{ host: "127.0.0.1" port: 39284 }> }> ]
+Stack: [ ]
+PASS: start-server
+Stack: [ ]

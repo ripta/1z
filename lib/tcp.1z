@@ -1,0 +1,36 @@
+\ lib/tcp.1z - Mid-level TCP words
+
+use "net" ;
+
+tcp-server: virtual{ struct{ fd bound-addr } } ;
+
+\ Create a listening TCP server socket.
+\ Resolves the address, creates a socket, binds, and starts listening.
+tcp-listen: ( addr backlog -- tcp-server ) [
+  swap resolve #first           \ backlog resolved-addr
+  dup socket                    \ backlog resolved-addr fd
+  dup 2 pick-n bind             \ backlog resolved-addr fd
+  -rot>                         \ fd backlog resolved-addr
+  [ over swap listen ] dip      \ fd resolved-addr
+  >tcp-server
+] ;
+
+\ Connect to a remote TCP address and return a read-write stream.
+tcp-connect: ( addr -- stream ) [
+  resolve #first
+  dup socket
+  dup <rot- connect
+  fd>stream
+] ;
+
+\ Accept a connection on a listening tcp-server.
+\ Returns the client stream and the peer address.
+tcp-accept: ( tcp-server -- stream addr ) [
+  tcp-server> drop accept
+  [ fd>stream ] dip
+] ;
+
+\ Close a tcp-server's listening socket.
+tcp-close: ( tcp-server -- ) [
+  tcp-server> drop fd-close
+] ;

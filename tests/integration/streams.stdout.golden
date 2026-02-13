@@ -122,12 +122,12 @@ Stack: [ <stream tests/fixtures/hello.txt read> ]
 PASS: file fd is positive
 Stack: [ <stream tests/fixtures/hello.txt read> ]
 Stack: [ ]
-PASS: stream->fd
+PASS: stream>fd
 Stack: [ ]
-Stack: [ <stream fd write> ]
-PASS: fd->stream creates stream
+Stack: [ <stream fd read-write> ]
+PASS: fd>stream creates stream
 Stack: [ ]
-PASS: fd->stream
+PASS: fd>stream
 Stack: [ ]
 === Error cases ===
 Stack: [ ]

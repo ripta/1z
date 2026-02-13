@@ -88,19 +88,19 @@ stream-close
 
 "Unix interop" test-section
 \ Get fd from stdout (fd 1)
-stdout stream->fd 1 "stdout fd is 1" assert=
+stdout stream>fd 1 "stdout fd is 1" assert=
 \ Get fd from stderr (fd 2)
-stderr stream->fd 2 "stderr fd is 2" assert=
+stderr stream>fd 2 "stderr fd is 2" assert=
 \ Get fd from file stream
 "tests/fixtures/hello.txt" read: stream-open
-dup stream->fd 0 > t "file fd is positive" assert=
+dup stream>fd 0 > t "file fd is positive" assert=
 stream-close
-"PASS: stream->fd" print-line
+"PASS: stream>fd" print-line
 
 \ Create stream from fd (wrap stdout fd as a stream)
-1 write: fd->stream
-to-string "<stream fd write>" "fd->stream creates stream" assert=
-"PASS: fd->stream" print-line
+1 fd>stream
+to-string "<stream fd read-write>" "fd>stream creates stream" assert=
+"PASS: fd>stream" print-line
 
 "Error cases" test-section
 \ FileNotFound error

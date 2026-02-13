@@ -1,0 +1,37 @@
+\ lib/server.1z - TCP server framework
+
+use "tcp" ;
+
+server-config: mutable struct{ host port backlog handler on-error } ;
+
+\ Create a default server config.
+<server-config>: ( -- config ) [
+  "0.0.0.0" 0 128 [ drop ] [ drop ] make-server-config
+] ;
+
+\ Start a server from a config. Returns the tcp-server handle.
+\ The server binds and listens but does not start accepting connections.
+start-server: ( config -- tcp-server ) [
+  dup host>> over port>> >addr:tcp
+  swap backlog>>
+  tcp-listen
+] ;
+
+\ Run a server forever: start, then loop accepting connections.
+\ Each connection spawns a task that runs the handler with the stream.
+\ Must be called inside task-scope.
+serve-forever: ( config -- ) [
+  dup handler>> swap
+  dup on-error>> swap
+  start-server
+  serve-loop
+] ;
+
+\ Internal: repeatedly accept connections and spawn handler tasks.
+serve-loop: ( handler on-error tcp-server -- ) [
+  dup tcp-accept drop                    \ handler on-error tcp-server stream
+  3 pick-n curry                         \ handler on-error tcp-server [stream handler...]
+  2 pick-n [ recover ] curry curry       \ handler on-error tcp-server [[stream handler...] on-error recover]
+  spawn drop                            \ handler on-error tcp-server
+  serve-loop
+] ;

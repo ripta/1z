@@ -1,0 +1,34 @@
+\ lib/net.1z - Network address types and utilities
+
+use "strings" ;
+use "conversions" ;
+
+addr: enum{
+  tcp struct{ host port }
+  udp struct{ host port }
+  unix struct{ path }
+} ;
+
+\ Split a "host:port" string on the last colon, parse port as integer.
+\ Handles IPv6 addresses in brackets: "[::1]:8080" -> "::1" 8080
+split-host-port: ( str -- host port ) [
+  dup #first "[" = [
+    \ Bracketed host: "[host]:port"
+    "]:" index-of dup -1 = [
+      drop "invalid address: missing ]:port" throw
+    ] [
+      \ str idx -- idx points at "]"
+      2dup 2 + over #len #slice parse-integer  \ str idx port
+      [ 1 swap #slice ] dip                    \ host port
+    ] if
+  ] [
+    \ Plain host:port -- split on ":" and rejoin all but last
+    ":" split
+    dup #len 1 = [ drop "invalid address: missing port" throw ] [
+      dup #last parse-integer swap            \ port parts
+      0 over #len 1 - #slice                  \ port host-parts
+      ":" #join                               \ port host
+      swap                                    \ host port
+    ] if
+  ] if
+] ;
