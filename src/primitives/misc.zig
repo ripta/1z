@@ -485,6 +485,11 @@ fn nativeTrampoline(ctx: *Context) anyerror!void {
         return error.InvalidFunctionPointer;
     }
     const addr: usize = @intCast(ptr_val);
+    const alignment = @alignOf(fn (*Context) anyerror!void);
+    if (addr % alignment != 0) {
+        ctx.pending_error_message = "(trampoline): function pointer is not properly aligned";
+        return error.InvalidFunctionPointer;
+    }
     const func: *const fn (*Context) anyerror!void = @ptrFromInt(addr);
     try func(ctx);
 }
