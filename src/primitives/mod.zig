@@ -52,6 +52,7 @@ pub const channels = @import("channels.zig");
 pub const iterators = @import("iterators.zig");
 pub const protocols = @import("protocols.zig");
 pub const sockets = @import("sockets.zig");
+pub const introspect = @import("introspect.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -104,4 +105,5 @@ pub const extracted_primitives = stack.primitives ++
     channels.primitives ++
     iterators.primitives ++
     protocols.primitives ++
-    sockets.primitives;
+    sockets.primitives ++
+    introspect.primitives;

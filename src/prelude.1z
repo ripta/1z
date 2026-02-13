@@ -416,9 +416,12 @@ acquire: generic ( resource -- ) [ "acquire not implemented for this type" throw
 try-acquire: generic ( resource -- option ) [ "try-acquire not implemented for this type" throw ] ;
 
 \ Introspection struct types
+
 \\ Parsed stack effect with input and output parameter lists.
 stack-effect: struct{ inputs outputs } ;
 \\ Source location: file path, line number, and column number.
 source-loc: struct{ file line column } ;
 \\ Structured word information for runtime introspection.
 word-info: struct{ name stack-effect markers native? body source-loc module } ;
+\\ Safe variant of >word that returns an option instead of throwing.
+>word?: ( symbol -- option ) [ [ >word >option:some ] [ drop option:none ] recover ] ;

@@ -52,9 +52,10 @@ Stack: [ ]
 >char ( codepoint -- str )
 >codepoint ( str -- int )
 >iterator ( seq -- iterator )
+>quotation ( name -- quotation )
 >string ( value -- string )
 >symbol ( string -- symbol )
->word ( name -- quotation )
+>word ( symbol -- word-info )
 @adjoin ( set value -- set' )
 @difference ( set1 set2 -- set' )
 @get ( assoc key -- value )
@@ -216,6 +217,7 @@ yield (  --  )
 >source-loc
 >stack-effect
 >word-info
+>word? ( symbol -- option )
 ?and-then ( opt/res quot -- opt/res )
 ?flatten ( nested -- opt/res )
 ?map ( opt/res quot -- opt/res )

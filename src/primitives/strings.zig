@@ -10,7 +10,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "to-string", .stack_effect = "value -- string", .doc = "Convert any value to its string representation, including quotes for strings.", .func = nativeToString },
     .{ .name = ">string", .stack_effect = "value -- string", .doc = "Convert value to string, strings and symbols pass through as plain strings.", .func = nativeAsString },
     .{ .name = ">symbol", .stack_effect = "string -- symbol", .doc = "Convert string to symbol. The string must be a valid token: non-empty, no whitespace, no leading quote.", .func = nativeToSymbol },
-    .{ .name = ">word", .stack_effect = "name -- quotation", .doc = "Convert a string or symbol name to a quotation that calls that word. Does not check if the word exists.", .func = nativeToWord },
+    .{ .name = ">quotation", .stack_effect = "name -- quotation", .doc = "Convert a string or symbol name to a quotation that calls that word. Does not check if the word exists.", .func = nativeToQuotation },
     .{ .name = ">bytes", .stack_effect = "string -- byte-array", .doc = "Convert string to byte array (UTF-8 encoded bytes).", .func = nativeToBytes },
     .{ .name = "bytes>", .stack_effect = "byte-array -- string", .doc = "Convert byte array to string (interprets as UTF-8).", .func = nativeBytesToString },
     .{ .name = "uppercase", .stack_effect = "str -- str", .doc = "Convert ASCII letters to uppercase, non-ASCII bytes pass through.", .func = nativeUppercase },
@@ -63,8 +63,14 @@ fn nativeToSymbol(ctx: *Context) anyerror!void {
     }
 }
 
-/// >word ( name -- quotation ) - Convert a string or symbol name to a quotation that calls that word
-fn nativeToWord(ctx: *Context) anyerror!void {
+/// >quotation ( name -- quotation ) - Convert a string or symbol name to a quotation that calls that word
+///
+/// This does not check if the word exists, so it can be used to construct quotations
+/// that call words that haven't been defined yet.
+///
+/// The resulting quotation will contain a single _instruction_: `call_word` with the given name.
+/// The quotation itself can be executed using `call`.
+fn nativeToQuotation(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const val = try ctx.stack.pop();

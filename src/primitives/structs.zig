@@ -279,3 +279,21 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
         .action = .{ .compound = instrs },
     });
 }
+
+pub fn getStructTypeFromMaker(ctx: *const Context, maker_name: []const u8) ?*const StructType {
+    const word = ctx.lookupWord(maker_name) orelse return null;
+    const instrs = switch (word.action) {
+        .compound => |c| c,
+        .native => return null,
+    };
+
+    if (instrs.len == 0) return null;
+
+    return switch (instrs[0].op) {
+        .push_literal => |v| switch (v) {
+            .struct_type => |st| st,
+            else => null,
+        },
+        else => null,
+    };
+}
