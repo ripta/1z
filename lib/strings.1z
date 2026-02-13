@@ -2,28 +2,6 @@
 
 use "sequences" ;
 
-\ Find first index of substring in string, or -1 if not found
-\
-\ Examples:
-\   "hello,world" "," index-of  →  5
-\   "abcabc" "abc" index-of     →  0
-\   "hello" "xyz" index-of      →  -1
-index-of: ( str sub -- idx ) [
-  2dup #starts-with?
-  [ 2drop 0 ]
-  [
-    over #len over #len <=
-    [ 2drop -1 ]
-    [
-      swap 1 over #len #slice swap
-      index-of
-      dup -1 = [ ] [ ++ ] if
-    ]
-    if
-  ]
-  if
-] ;
-
 \ Split string by delimiter (any string), keeping empty segments
 \ Examples:
 \   "a,b,c" "," split        →  { "a" "b" "c" }
@@ -51,7 +29,7 @@ split: ( str delim -- array ) [
     dup #len 0 =
     [ drop 1array ]
     [
-      2dup index-of dup -1 =
+      2dup #index-of dup not
       [ drop drop 1array ]
       [
         \ str delim idx -- move delim to bottom

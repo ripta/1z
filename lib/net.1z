@@ -14,7 +14,7 @@ addr: enum{
 split-host-port: ( str -- host port ) [
   dup #first "[" = [
     \ Bracketed host: "[host]:port"
-    "]:" index-of dup -1 = [
+    "]:" #index-of dup not [
       drop "invalid address: missing ]:port" throw
     ] [
       \ str idx -- idx points at "]"
