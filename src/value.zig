@@ -8,6 +8,7 @@ const Iterator = @import("iterator.zig").Iterator;
 pub const Instruction = struct {
     op: Op,
     line: usize, // 1-based line number from source
+    column: usize = 0, // 1-based column number from source
 
     pub const Op = union(enum) {
         push_literal: Value,

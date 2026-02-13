@@ -414,3 +414,11 @@ acquire: generic ( resource -- ) [ "acquire not implemented for this type" throw
 \\ Non-blocking acquire: attempts to consume a token without blocking.
 \\ Returns option:some on success, option:none if unavailable.
 try-acquire: generic ( resource -- option ) [ "try-acquire not implemented for this type" throw ] ;
+
+\ Introspection struct types
+\\ Parsed stack effect with input and output parameter lists.
+stack-effect: struct{ inputs outputs } ;
+\\ Source location: file path, line number, and column number.
+source-loc: struct{ file line column } ;
+\\ Structured word information for runtime introspection.
+word-info: struct{ name stack-effect markers native? body source-loc module } ;

@@ -213,6 +213,9 @@ yield (  --  )
 >option:some
 >result:err
 >result:ok
+>source-loc
+>stack-effect
+>word-info
 ?and-then ( opt/res quot -- opt/res )
 ?flatten ( nested -- opt/res )
 ?map ( opt/res quot -- opt/res )
@@ -246,10 +249,12 @@ array? ( val -- ? )
 benchmark-report? ( val -- ? )
 bi ( x quot1 quot2 --  )
 bl (  --  )
+body>>
 boolean? ( val -- ? )
 byte-array? ( val -- ? )
 case ( val branches -- ... )
 choose ( a1 a2 quot -- a )
+column>>
 cond ( branches -- ... )
 do ( pred body -- pred body )
 dupd ( a b -- a a b )
@@ -257,6 +262,7 @@ emit ( codepoint --  )
 enum{
 error-type? ( error type -- error ? )
 error? ( val -- ? )
+file>>
 flush (  --  )
 fmt ( source string -- string )
 fmt-line ( source string --  )
@@ -264,17 +270,26 @@ generic? ( name -- ? )
 hash? ( val -- ? )
 ignore-errors ( quot --  )
 input-stream
+inputs>>
 integer? ( val -- ? )
 iterator? ( val -- ? )
 keep ( ..a x quot: ( ..a x -- ..b ) -- ..b x )
+line>>
 loop ( ... pred: ( ... -- ... ? ) -- ... )
+make-source-loc
+make-stack-effect
+make-word-info
 marker? ( val -- ? )
+markers>>
 max ( a1 a2 -- a )
 method{
 min ( a1 a2 -- a )
+module>>
 module? ( val -- ? )
 mutable-map? ( val -- ? )
 my-test-word
+name>>
+native?>>
 nip ( a b -- b )
 nl (  --  )
 no-matching-branch ( data -- error )
@@ -286,6 +301,7 @@ option:some?
 option?
 or ( ? ? -- ? )
 output-stream
+outputs>>
 parameter
 parameter? ( val -- ? )
 parse-quotation (  -- quotation )
@@ -304,6 +320,10 @@ result:ok?
 result?
 run-benchmarks ( quot --  )
 set? ( val -- ? )
+source-loc>>
+source-loc?
+stack-effect>>
+stack-effect?
 stream-write-string ( stream str -- n )
 stream? ( val -- ? )
 string? ( val -- ? )
@@ -323,5 +343,6 @@ when ( ? quot --  )
 while ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b )
 with-input-stream ( stream quot --  )
 with-output-stream ( stream quot --  )
+word-info?
 xor ( ? ? -- ? )
 Stack: [ ]

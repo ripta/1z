@@ -27,6 +27,8 @@ pub const WordDefinition = struct {
     source_file: ?[]const u8 = null,
     /// Source line where this word was defined, or 0 if unknown.
     source_line: usize = 0,
+    /// Source column where this word was defined, or 0 if unknown.
+    source_column: usize = 0,
     /// Module this word was imported from. When set, executing this word
     /// pushes the module's deps as a local frame so that late-bound
     /// references to the module's dependencies resolve correctly.

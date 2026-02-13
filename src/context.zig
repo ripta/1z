@@ -35,6 +35,7 @@ pub const ExecutionError = error{
 pub const CallFrame = struct {
     word_name: []const u8,
     line: usize,
+    column: usize = 0,
 };
 
 /// ParameterFrame holds parameter bindings for dynamic scoping.
@@ -366,10 +367,11 @@ pub const Context = struct {
         var def = definition;
         if (def.source_file == null) {
             def.source_file = self.current_source;
-            def.source_line = if (self.call_stack.items.len > 0)
-                self.call_stack.items[self.call_stack.items.len - 1].line
-            else
-                0;
+            if (self.call_stack.items.len > 0) {
+                const frame = self.call_stack.items[self.call_stack.items.len - 1];
+                def.source_line = frame.line;
+                def.source_column = frame.column;
+            }
         }
 
         if (self.local_frames.items.len > 0) {
@@ -405,10 +407,11 @@ pub const Context = struct {
         var def = definition;
         if (def.source_file == null) {
             def.source_file = self.current_source;
-            def.source_line = if (self.call_stack.items.len > 0)
-                self.call_stack.items[self.call_stack.items.len - 1].line
-            else
-                0;
+            if (self.call_stack.items.len > 0) {
+                const frame = self.call_stack.items[self.call_stack.items.len - 1];
+                def.source_line = frame.line;
+                def.source_column = frame.column;
+            }
         }
 
         if (self.import_frame_index) |idx| {
@@ -489,7 +492,7 @@ pub const Context = struct {
     /// Execute a qualified name like "math.double".
     /// Splits on the rightmost dot, executes the module word to get a module,
     /// then looks up and executes the word in that module.
-    fn executeQualifiedName(self: *Context, name: []const u8, line: usize) anyerror!void {
+    fn executeQualifiedName(self: *Context, name: []const u8, line: usize, column: usize) anyerror!void {
         const dot_index = std.mem.lastIndexOfScalar(u8, name, '.') orelse return ExecutionError.UnknownWord;
 
         const module_path = name[0..dot_index];
@@ -499,7 +502,7 @@ pub const Context = struct {
         }
 
         if (self.lookupWord(module_path)) |module_word| {
-            self.pushCallFrame(module_path, line);
+            self.pushCallFrame(module_path, line, column);
             defer self.popCallFrame();
 
             switch (module_word.action) {
@@ -517,7 +520,7 @@ pub const Context = struct {
         };
 
         if (module.words.get(word_name)) |mod_word| {
-            self.pushCallFrame(name, line);
+            self.pushCallFrame(name, line, column);
             defer self.popCallFrame();
 
             try self.pushModuleDepsFrame(module);
@@ -530,10 +533,11 @@ pub const Context = struct {
     }
 
     /// Push a call frame onto the call stack.
-    fn pushCallFrame(self: *Context, word_name: []const u8, line: usize) void {
+    fn pushCallFrame(self: *Context, word_name: []const u8, line: usize, column: usize) void {
         self.call_stack.append(self.allocator, .{
             .word_name = word_name,
             .line = line,
+            .column = column,
         }) catch {};
     }
 
@@ -1028,7 +1032,7 @@ pub const Context = struct {
 
                     if (self.lookupWord(name)) |word| {
                         // Push call frame before execution
-                        self.pushCallFrame(name, instr.line);
+                        self.pushCallFrame(name, instr.line, instr.column);
 
                         // Validate quotation parameters against declared effects
                         if (word.stack_effect) |effect| {
@@ -1199,8 +1203,8 @@ pub const Context = struct {
                         }
                     } else if (isQualifiedName(name)) {
                         // Try qualified name resolution, e.g., math.double
-                        self.executeQualifiedName(name, instr.line) catch |err| {
-                            self.pushCallFrame(name, instr.line);
+                        self.executeQualifiedName(name, instr.line, instr.column) catch |err| {
+                            self.pushCallFrame(name, instr.line, instr.column);
                             self.captureCallStackOnError(err);
                             self.popCallFrame();
                             return err;
@@ -1212,7 +1216,7 @@ pub const Context = struct {
                         }
                     } else {
                         // Unknown word - push frame, capture, pop, return error
-                        self.pushCallFrame(name, instr.line);
+                        self.pushCallFrame(name, instr.line, instr.column);
                         self.captureCallStackOnError(ExecutionError.UnknownWord);
                         self.popCallFrame();
                         return ExecutionError.UnknownWord;
