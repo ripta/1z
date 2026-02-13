@@ -37,10 +37,6 @@ refill: ( limiter -- limiter ) [
   ] if
 ] ;
 
-\\ Blocking acquire: yields until a token is available.
-\\ Must be called inside task-scope.
-acquire: generic ( resource -- ) [ "acquire not implemented for this type" throw ] ;
-
 acquire: method{ rate-limiter } [
   refill
   dup tokens>> 0 > [
@@ -50,9 +46,6 @@ acquire: method{ rate-limiter } [
     acquire
   ] if
 ] ;
-
-\\ Non-blocking acquire: returns an option.
-try-acquire: generic ( resource -- option ) [ "try-acquire not implemented for this type" throw ] ;
 
 try-acquire: method{ rate-limiter } [
   refill
