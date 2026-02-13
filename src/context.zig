@@ -363,11 +363,20 @@ pub const Context = struct {
             }
         }
 
+        var def = definition;
+        if (def.source_file == null) {
+            def.source_file = self.current_source;
+            def.source_line = if (self.call_stack.items.len > 0)
+                self.call_stack.items[self.call_stack.items.len - 1].line
+            else
+                0;
+        }
+
         if (self.local_frames.items.len > 0) {
             const top_index = self.local_frames.items.len - 1;
-            try self.local_frames.items[top_index].put(self.allocator, name, definition);
+            try self.local_frames.items[top_index].put(self.allocator, name, def);
         } else {
-            try self.dictionary.put(name, definition);
+            try self.dictionary.put(name, def);
         }
     }
 
@@ -393,10 +402,19 @@ pub const Context = struct {
             }
         }
 
+        var def = definition;
+        if (def.source_file == null) {
+            def.source_file = self.current_source;
+            def.source_line = if (self.call_stack.items.len > 0)
+                self.call_stack.items[self.call_stack.items.len - 1].line
+            else
+                0;
+        }
+
         if (self.import_frame_index) |idx| {
-            try self.local_frames.items[idx].put(self.allocator, name, definition);
+            try self.local_frames.items[idx].put(self.allocator, name, def);
         } else {
-            try self.dictionary.put(name, definition);
+            try self.dictionary.put(name, def);
         }
     }
 
