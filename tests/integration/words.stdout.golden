@@ -72,6 +72,7 @@ Stack: [ ]
 @values ( assoc -- array )
 accept ( fd -- fd addr )
 add-load-path ( path --  )
+all-words (  -- array )
 await ( task -- value )
 await-all ( array -- array )
 benchmark ( quot -- hash )

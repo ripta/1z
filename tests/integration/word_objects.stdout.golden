@@ -69,3 +69,16 @@ Stack: [ ]
 Stack: [ ]
 PASS: >word module is f for non-module word
 Stack: [ ]
+=== all-words returns an array ===
+Stack: [ ]
+PASS: all-words returns an array
+Stack: [ ]
+=== all-words contains known words ===
+Stack: [ ]
+Stack: [ 1 ]
+PASS: all-words contains dup exactly once
+Stack: [ ]
+=== all-words entries are word-info structs ===
+Stack: [ ]
+PASS: all-words entries have string names
+Stack: [ ]

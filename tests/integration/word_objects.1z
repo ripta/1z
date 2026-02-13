@@ -50,3 +50,13 @@ no-effect-word: >word
 
 ">word module field" test-section
 dup: >word module>> f ">word module is f for non-module word" assert=
+
+"all-words returns an array" test-section
+all-words array? t "all-words returns an array" assert=
+
+"all-words contains known words" test-section
+all-words >iterator [ name>> "dup" = ] #filter #count
+  1 "all-words contains dup exactly once" assert=
+
+"all-words entries are word-info structs" test-section
+all-words #first name>> string? t "all-words entries have string names" assert=
