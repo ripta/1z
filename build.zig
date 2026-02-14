@@ -262,12 +262,6 @@ pub fn build(b: *std.Build) void {
         if (has_stderr_golden) {
             const stderr_golden_path = b.fmt("tests/integration/{s}.stderr.golden", .{name_without_ext});
             update_files.addCopyFileToSource(update_run.captureStdErr(), stderr_golden_path);
-        } else {
-            // NOTE(ripta): Add a dummy expectStdErrEqual("") so both update-golden and integration-test
-            //              steps have identical pipes. Without this, the child process inherits a different
-            //              number of FDs, which shifts the value returned by `socket` calls, causing
-            //              consistently-different outputs. Not the proudest of this hack, but it works for now.
-            update_run.expectStdErrEqual("");
         }
     }
 
