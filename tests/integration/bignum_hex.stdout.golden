@@ -1,0 +1,26 @@
+=== Hex bignum literal ===
+Stack: [ ]
+PASS: hex overflow is bignum
+Stack: [ ]
+PASS: hex bignum value
+Stack: [ ]
+PASS: 2^64 is bignum
+Stack: [ ]
+PASS: 2^64 value
+Stack: [ ]
+=== Negative hex bignum ===
+Stack: [ ]
+PASS: neg hex bignum type
+Stack: [ ]
+PASS: neg hex bignum value
+Stack: [ ]
+=== Hex fixnum still works ===
+Stack: [ ]
+PASS: small hex is fixnum
+Stack: [ ]
+PASS: small hex value
+Stack: [ ]
+PASS: negative hex is fixnum
+Stack: [ ]
+PASS: negative hex value
+Stack: [ ]
