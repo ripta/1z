@@ -44,4 +44,10 @@ use "strings" ;
 "unicode preservation" test-section
 "  cafe\u0301  " trim "cafe\u0301" "trim preserves combining accent" assert=
 
+"string #slice empty range" test-section
+"hello" 0 0 #slice "" "string slice 0 0" assert=
+"hello" 2 2 #slice "" "string slice middle empty" assert=
+"hello" 5 5 #slice "" "string slice end empty" assert=
+" " 1 1 #slice "" "string slice single-char end" assert=
+
 "All string utility tests complete!" print-line

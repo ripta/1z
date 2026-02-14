@@ -29,9 +29,20 @@ pub fn utf8SliceByCodepoints(s: []const u8, start: usize, end: usize) ?struct { 
     const utf8 = std.unicode.Utf8View.initUnchecked(s);
     var iter = utf8.iterator();
     var cp_idx: usize = 0;
-    var start_byte: usize = 0;
     var byte_pos: usize = 0;
 
+    if (start == end) {
+        while (iter.nextCodepointSlice()) |slice| {
+            if (cp_idx == start) return .{ .start_byte = byte_pos, .end_byte = byte_pos };
+            byte_pos += slice.len;
+            cp_idx += 1;
+        }
+
+        if (cp_idx == start) return .{ .start_byte = byte_pos, .end_byte = byte_pos };
+        return null;
+    }
+
+    var start_byte: usize = 0;
     while (iter.nextCodepointSlice()) |slice| {
         if (cp_idx == start) start_byte = byte_pos;
         byte_pos += slice.len;
@@ -40,11 +51,13 @@ pub fn utf8SliceByCodepoints(s: []const u8, start: usize, end: usize) ?struct { 
         }
         cp_idx += 1;
     }
-    // Handle case where end == total codepoint count
+
     if (cp_idx == end) {
         return .{ .start_byte = start_byte, .end_byte = byte_pos };
     }
-    return null; // Invalid range
+
+    // Invalid range
+    return null;
 }
 
 /// Count codepoints in a UTF-8 string.

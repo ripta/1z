@@ -68,5 +68,15 @@ Stack: [ ]
 Stack: [ ]
 PASS: trim preserves combining accent
 Stack: [ ]
+=== string #slice empty range ===
+Stack: [ ]
+PASS: string slice 0 0
+Stack: [ ]
+PASS: string slice middle empty
+Stack: [ ]
+PASS: string slice end empty
+Stack: [ ]
+PASS: string slice single-char end
+Stack: [ ]
 All string utility tests complete!
 Stack: [ ]
