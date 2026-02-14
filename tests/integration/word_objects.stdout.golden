@@ -82,3 +82,15 @@ Stack: [ ]
 Stack: [ ]
 PASS: all-words entries have string names
 Stack: [ ]
+=== stack-effect >string with inputs and outputs ===
+Stack: [ ]
+PASS: stack-effect >string for dup
+Stack: [ ]
+=== stack-effect >string with single input and output ===
+Stack: [ ]
+PASS: stack-effect >string for compound word
+Stack: [ ]
+=== stack-effect >string with no inputs ===
+Stack: [ ]
+PASS: stack-effect >string for all-words
+Stack: [ ]

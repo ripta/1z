@@ -419,9 +419,22 @@ try-acquire: generic ( resource -- option ) [ "try-acquire not implemented for t
 
 \\ Parsed stack effect with input and output parameter lists.
 stack-effect: struct{ inputs outputs } ;
+\\ Format a stack-effect struct as "( inputs -- outputs )".
+>string: method{ stack-effect } [
+  dup inputs>> ""
+  [ >string #append " " #append ]
+  #reduce swap outputs>> ""
+  [ >string #append " " #append ]
+  #reduce swap
+  "( " swap #append "-- " #append swap #append ")"
+  #append
+] ;
+
 \\ Source location: file path, line number, and column number.
 source-loc: struct{ file line column } ;
+
 \\ Structured word information for runtime introspection.
 word-info: struct{ name stack-effect markers native? body source-loc module } ;
+
 \\ Safe variant of native.>word that returns an option instead of throwing.
 >word?: ( symbol -- option ) [ [ native.>word >option:some ] [ drop option:none ] recover ] ;
