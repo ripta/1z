@@ -132,15 +132,29 @@ pub fn build(b: *std.Build) void {
             }
         } else |_| {}
 
+        // Check if flags opt out of --show-stack
+        var show_stack = true;
+        if (flags_lines) |fl| {
+            var flag_check = std.mem.splitScalar(u8, fl, '\n');
+            while (flag_check.next()) |flag| {
+                const trimmed = std.mem.trim(u8, flag, " \t\r");
+                if (std.mem.eql(u8, trimmed, "--no-show-stack")) {
+                    show_stack = false;
+                }
+            }
+        }
+
         // Integration test: compare against golden file if it exists
         const test_run = b.addRunArtifact(exe);
-        test_run.addArg("--show-stack");
+        if (show_stack) {
+            test_run.addArg("--show-stack");
+        }
         test_run.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
         if (flags_lines) |fl| {
             var flag_iter = std.mem.splitScalar(u8, fl, '\n');
             while (flag_iter.next()) |flag| {
                 const trimmed_flag = std.mem.trim(u8, flag, " \t\r");
-                if (trimmed_flag.len > 0) {
+                if (trimmed_flag.len > 0 and !std.mem.eql(u8, trimmed_flag, "--no-show-stack")) {
                     test_run.addArg(trimmed_flag);
                 }
             }
@@ -202,13 +216,15 @@ pub fn build(b: *std.Build) void {
 
         // Update golden: capture stdout and write to .stdout.golden file
         const update_run = b.addRunArtifact(exe);
-        update_run.addArg("--show-stack");
+        if (show_stack) {
+            update_run.addArg("--show-stack");
+        }
         update_run.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
         if (flags_lines) |fl| {
             var flag_iter2 = std.mem.splitScalar(u8, fl, '\n');
             while (flag_iter2.next()) |flag| {
                 const trimmed_flag = std.mem.trim(u8, flag, " \t\r");
-                if (trimmed_flag.len > 0) {
+                if (trimmed_flag.len > 0 and !std.mem.eql(u8, trimmed_flag, "--no-show-stack")) {
                     update_run.addArg(trimmed_flag);
                 }
             }
