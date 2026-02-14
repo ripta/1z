@@ -1,0 +1,47 @@
+\ Integration tests for whitespace?, ltrim, rtrim, trim
+
+use "testing" ;
+use "strings" ;
+
+"whitespace? true cases" test-section
+" " whitespace? "space is whitespace" assert-true
+"\t" whitespace? "tab is whitespace" assert-true
+"\n" whitespace? "newline is whitespace" assert-true
+"\r" whitespace? "CR is whitespace" assert-true
+
+"whitespace? false cases" test-section
+"a" whitespace? "letter is not whitespace" assert-false
+"0" whitespace? "digit is not whitespace" assert-false
+"." whitespace? "period is not whitespace" assert-false
+
+"ltrim" test-section
+"  hello" ltrim "hello" "ltrim leading spaces" assert=
+"\thello" ltrim "hello" "ltrim leading tab" assert=
+" \t\nhello" ltrim "hello" "ltrim mixed whitespace" assert=
+"hello" ltrim "hello" "ltrim no whitespace" assert=
+"   " ltrim "" "ltrim all whitespace" assert=
+"" ltrim "" "ltrim empty string" assert=
+"hello   " ltrim "hello   " "ltrim preserves trailing" assert=
+
+"rtrim" test-section
+"hello  " rtrim "hello" "rtrim trailing spaces" assert=
+"hello\t" rtrim "hello" "rtrim trailing tab" assert=
+"hello\n\t " rtrim "hello" "rtrim mixed whitespace" assert=
+"hello" rtrim "hello" "rtrim no whitespace" assert=
+"   " rtrim "" "rtrim all whitespace" assert=
+"" rtrim "" "rtrim empty string" assert=
+"   hello" rtrim "   hello" "rtrim preserves leading" assert=
+
+"trim" test-section
+"  hello  " trim "hello" "trim both sides" assert=
+"  hello" trim "hello" "trim left only" assert=
+"hello  " trim "hello" "trim right only" assert=
+"hello" trim "hello" "trim no whitespace" assert=
+"   " trim "" "trim all whitespace" assert=
+"" trim "" "trim empty string" assert=
+"\t hello \n" trim "hello" "trim mixed whitespace both sides" assert=
+
+"unicode preservation" test-section
+"  cafe\u0301  " trim "cafe\u0301" "trim preserves combining accent" assert=
+
+"All string utility tests complete!" print-line
