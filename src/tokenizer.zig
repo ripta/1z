@@ -175,6 +175,22 @@ pub fn parseInteger(token: []const u8) ?i64 {
     return std.fmt.parseInt(i64, token, 10) catch null;
 }
 
+/// Parse a bignum from a token when parseInteger fails (overflow).
+/// Only attempts decimal integers; hex bignums are deferred to a later milestone.
+pub fn parseBigNum(allocator: std.mem.Allocator, token: []const u8) ?std.math.big.int.Managed {
+    const body = if (token.len > 0 and token[0] == '-') token[1..] else token;
+    if (body.len == 0) return null;
+    for (body) |ch| {
+        if (ch < '0' or ch > '9') return null;
+    }
+    var big = std.math.big.int.Managed.init(allocator) catch return null;
+    big.setString(10, token) catch {
+        big.deinit();
+        return null;
+    };
+    return big;
+}
+
 /// Parse a float from a token. Returns null if not a valid float literal.
 /// Accepts decimal (3.14), scientific (1.5e10), and negative (-3.14) forms.
 /// Rejects hex prefixes, nan/inf literals, and tokens missing digits on either

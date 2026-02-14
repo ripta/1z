@@ -139,6 +139,10 @@ pub fn nativeEq(ctx: *Context) anyerror!void {
     } else if (a == .float and b == .fixnum) {
         const bf: f64 = @floatFromInt(b.fixnum);
         try ctx.stack.push(.{ .boolean = a.float == bf });
+    } else if (a == .fixnum and b == .bignum) {
+        try ctx.stack.push(.{ .boolean = b.bignum.toConst().orderAgainstScalar(a.fixnum) == .eq });
+    } else if (a == .bignum and b == .fixnum) {
+        try ctx.stack.push(.{ .boolean = a.bignum.toConst().orderAgainstScalar(b.fixnum) == .eq });
     } else {
         try ctx.stack.push(.{ .boolean = a.eql(b) });
     }
@@ -162,6 +166,7 @@ pub fn nativeLt(ctx: *Context) anyerror!void {
         .fixnum => |av| switch (b) {
             .fixnum => |bv| try ctx.stack.push(.{ .boolean = av < bv }),
             .float => |bv| try ctx.stack.push(.{ .boolean = @as(f64, @floatFromInt(av)) < bv }),
+            .bignum => |bv| try ctx.stack.push(.{ .boolean = bv.toConst().orderAgainstScalar(av) == .gt }),
             else => {
                 helpers.setTypeMismatchError(ctx, "number", b);
                 return error.TypeMismatch;
@@ -170,6 +175,14 @@ pub fn nativeLt(ctx: *Context) anyerror!void {
         .float => |av| switch (b) {
             .float => |bv| try ctx.stack.push(.{ .boolean = av < bv }),
             .fixnum => |bv| try ctx.stack.push(.{ .boolean = av < @as(f64, @floatFromInt(bv)) }),
+            else => {
+                helpers.setTypeMismatchError(ctx, "number", b);
+                return error.TypeMismatch;
+            },
+        },
+        .bignum => |av| switch (b) {
+            .bignum => |bv| try ctx.stack.push(.{ .boolean = av.toConst().order(bv.toConst()) == .lt }),
+            .fixnum => |bv| try ctx.stack.push(.{ .boolean = av.toConst().orderAgainstScalar(bv) == .lt }),
             else => {
                 helpers.setTypeMismatchError(ctx, "number", b);
                 return error.TypeMismatch;
@@ -241,6 +254,7 @@ pub fn nativeGt(ctx: *Context) anyerror!void {
         .fixnum => |av| switch (b) {
             .fixnum => |bv| try ctx.stack.push(.{ .boolean = av > bv }),
             .float => |bv| try ctx.stack.push(.{ .boolean = @as(f64, @floatFromInt(av)) > bv }),
+            .bignum => |bv| try ctx.stack.push(.{ .boolean = bv.toConst().orderAgainstScalar(av) == .lt }),
             else => {
                 helpers.setTypeMismatchError(ctx, "number", b);
                 return error.TypeMismatch;
@@ -249,6 +263,14 @@ pub fn nativeGt(ctx: *Context) anyerror!void {
         .float => |av| switch (b) {
             .float => |bv| try ctx.stack.push(.{ .boolean = av > bv }),
             .fixnum => |bv| try ctx.stack.push(.{ .boolean = av > @as(f64, @floatFromInt(bv)) }),
+            else => {
+                helpers.setTypeMismatchError(ctx, "number", b);
+                return error.TypeMismatch;
+            },
+        },
+        .bignum => |av| switch (b) {
+            .bignum => |bv| try ctx.stack.push(.{ .boolean = av.toConst().order(bv.toConst()) == .gt }),
+            .fixnum => |bv| try ctx.stack.push(.{ .boolean = av.toConst().orderAgainstScalar(bv) == .gt }),
             else => {
                 helpers.setTypeMismatchError(ctx, "number", b);
                 return error.TypeMismatch;

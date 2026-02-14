@@ -110,6 +110,7 @@ pub fn valueTypeName(val: Value) []const u8 {
     return switch (val) {
         .fixnum => "fixnum",
         .float => "float",
+        .bignum => "bignum",
         .boolean => "boolean",
         .string => "string",
         .symbol => "symbol",
@@ -144,6 +145,8 @@ pub fn valueTypeName(val: Value) []const u8 {
 pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]const u8 {
     return switch (val) {
         .fixnum => |i| std.fmt.allocPrint(allocator, "{d}", .{i}),
+        .bignum => |b| b.toConst().toStringAlloc(allocator, 10, .lower) catch
+            allocator.dupe(u8, "<bignum>"),
         .float => |f| blk: {
             if (std.math.isNan(f)) break :blk allocator.dupe(u8, "nan");
             if (std.math.isInf(f)) {

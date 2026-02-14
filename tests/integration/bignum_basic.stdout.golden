@@ -1,0 +1,46 @@
+=== Bignum literal type ===
+Stack: [ ]
+PASS: bignum literal type-of
+Stack: [ ]
+PASS: negative bignum literal type-of
+Stack: [ ]
+=== Bignum display ===
+Stack: [ ]
+PASS: bignum to-string
+Stack: [ ]
+PASS: negative bignum to-string
+Stack: [ ]
+=== Bignum equality ===
+Stack: [ ]
+PASS: bignum = bignum (same)
+Stack: [ ]
+PASS: bignum = bignum (diff)
+Stack: [ ]
+=== Cross-type equality ===
+Stack: [ ]
+PASS: fixnum = bignum
+Stack: [ ]
+PASS: bignum = fixnum
+Stack: [ ]
+=== Cross-type comparison ===
+Stack: [ ]
+PASS: fixnum < bignum
+Stack: [ ]
+PASS: bignum < fixnum
+Stack: [ ]
+PASS: fixnum > bignum
+Stack: [ ]
+PASS: bignum > fixnum
+Stack: [ ]
+=== Bignum comparison ===
+Stack: [ ]
+PASS: bignum < bignum
+Stack: [ ]
+PASS: bignum > bignum
+Stack: [ ]
+=== Negative bignum comparison ===
+Stack: [ ]
+PASS: negative bignum < fixnum
+Stack: [ ]
+PASS: neg bignum > neg bignum
+Stack: [ ]

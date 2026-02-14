@@ -554,6 +554,7 @@ const DeepCopyError = Allocator.Error;
 pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
     return switch (val) {
         .fixnum, .float, .boolean => val,
+        .bignum => |b| .{ .bignum = b.cloneWithDifferentAllocator(alloc) catch return error.OutOfMemory },
 
         .string => |s| .{ .string = try alloc.dupe(u8, s) },
         .symbol => |s| .{ .symbol = try alloc.dupe(u8, s) },

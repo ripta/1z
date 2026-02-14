@@ -11,6 +11,7 @@ fn nativeTypeOf(ctx: *Context) anyerror!void {
     const type_name: []const u8 = switch (val) {
         .fixnum => "fixnum",
         .float => "float",
+        .bignum => "bignum",
         .boolean => "boolean",
         .string => "string",
         .symbol => "symbol",
