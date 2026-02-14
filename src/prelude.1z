@@ -136,6 +136,7 @@ marker?:      ( val -- ? ) [ type-of marker: = ] ;
 benchmark-report?: ( val -- ? ) [ type-of benchmark-report: = ] ;
 iterator?: ( val -- ? ) [ type-of iterator: = ] ;
 float?: ( val -- ? ) [ type-of float: = ] ;
+bignum?: ( val -- ? ) [ type-of bignum: = ] ;
 
 \\ Push IEEE 754 NaN (not a number).
 nan: ( -- f ) [ 0.0 0.0 / ] ;

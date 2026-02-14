@@ -341,6 +341,15 @@ fn nativeToFloat(ctx: *Context) anyerror!void {
     switch (val) {
         .fixnum => |i| try ctx.stack.push(.{ .float = @floatFromInt(i) }),
         .float => try ctx.stack.push(val),
+        .bignum => |b| {
+            const alloc = ctx.arena.allocator();
+            const str = try b.toConst().toStringAlloc(alloc, 10, .lower);
+            const f = std.fmt.parseFloat(f64, str) catch {
+                helpers.setErrorContext(ctx, ">float: cannot convert bignum to float", .{});
+                return error.TypeMismatch;
+            };
+            try ctx.stack.push(.{ .float = f });
+        },
         .string => |s| {
             const f = std.fmt.parseFloat(f64, s) catch {
                 helpers.setErrorContext(ctx, ">float: cannot parse \"{s}\" as float", .{s});
@@ -349,7 +358,7 @@ fn nativeToFloat(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .float = f });
         },
         else => {
-            helpers.setTypeMismatchError(ctx, "fixnum, float, or string", val);
+            helpers.setTypeMismatchError(ctx, "fixnum, bignum, float, or string", val);
             return error.TypeMismatch;
         },
     }

@@ -1,0 +1,31 @@
+use "testing" ;
+
+"bignum? predicate" test-section
+99999999999999999999 bignum? "bignum is bignum?" assert-true
+42 bignum? "fixnum is not bignum?" assert-false
+3.14 bignum? "float is not bignum?" assert-false
+"hello" bignum? "string is not bignum?" assert-false
+
+">float bignum" test-section
+99999999999999999999 >float type-of float: "big >float type" assert=
+0 99999999999999999999 >float 9.999999999999998e19 - abs 1e5 < "big >float value" assert-true
+-99999999999999999999 >float type-of float: "neg big >float type" assert=
+0 -99999999999999999999 >float -9.999999999999998e19 - abs 1e5 < "neg big >float value" assert-true
+
+">string-base fixnum" test-section
+255 16 >string-base "ff" "255 base 16" assert=
+255 2 >string-base "11111111" "255 base 2" assert=
+255 8 >string-base "377" "255 base 8" assert=
+42 10 >string-base "42" "42 base 10" assert=
+-255 16 >string-base "-ff" "neg 255 base 16" assert=
+35 36 >string-base "z" "35 base 36" assert=
+0 16 >string-base "0" "0 base 16" assert=
+
+">string-base bignum" test-section
+0x10000000000000000 16 >string-base "10000000000000000" "2^64 hex" assert=
+99999999999999999999 10 >string-base "99999999999999999999" "big base 10" assert=
+
+">string-base errors" test-section
+[ 42 1 >string-base ] "InvalidArgument" assert-error
+[ 42 37 >string-base ] "InvalidArgument" assert-error
+[ 3.14 16 >string-base ] "TypeMismatch" assert-error
