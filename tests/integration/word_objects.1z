@@ -51,6 +51,14 @@ stack-effect>> f "native.>word stack-effect is f when none declared" assert=
 "native.>word module field" test-section
 dup: native.>word module>> f "native.>word module is f for non-module word" assert=
 
+"native.>word doc field" test-section
+dup: native.>word doc>> string? t "native.>word doc is a string for documented word" assert=
+no-effect-word: native.>word doc>> f "native.>word doc is f for undocumented word" assert=
+
+"native.>word methods field" test-section
+dup: native.>word methods>> array? t "native.>word methods is an array" assert=
+unwrap-or: native.>word methods>> #len 0 > t "generic word has methods" assert=
+
 "all-words returns an array" test-section
 all-words array? t "all-words returns an array" assert=
 
@@ -69,3 +77,37 @@ my-test-word: native.>word stack-effect>> >string "( x -- y )" "stack-effect >st
 
 "stack-effect >string with no inputs" test-section
 all-words: native.>word stack-effect>> >string "( -- array )" "stack-effect >string for all-words" assert=
+
+\ Library word tests
+use "introspect" ;
+
+"words-matching finds words" test-section
+"dup" words-matching >iterator [ name>> "dup" = ] #filter #count
+1 "words-matching finds dup" assert=
+
+"words-matching returns empty for no match" test-section
+"zzz-nonexistent-zzz" words-matching #len
+0 "words-matching returns empty for no match" assert=
+
+"words-with-arity finds unary words" test-section
+1 words-with-arity >iterator [ name>> "dup" = ] #filter #count
+1 "words-with-arity finds dup (1 input)" assert=
+
+"words-with-arity 0 finds nullary words" test-section
+0 words-with-arity >iterator [ name>> "all-words" = ] #filter #count
+1 "words-with-arity finds all-words (0 inputs)" assert=
+
+"word-source returns some for known word" test-section
+my-test-word: word-source option:some? t "word-source returns some for compound word" assert=
+
+"word-source returns none for unknown word" test-section
+nonexistent-xyz: word-source option:none? t "word-source returns none for unknown" assert=
+
+"word-source returns none for native word" test-section
+dup: word-source unwrap-or-throw f "word-source returns f source-loc for native" assert=
+
+"words-with-marker finds parse-time words" test-section
+parse-time: words-with-marker #len 0 > t "words-with-marker finds parse-time words" assert=
+
+"format-word-info includes name" test-section
+dup: native.>word format-word-info "dup" #in? t "format-word-info includes word name" assert=

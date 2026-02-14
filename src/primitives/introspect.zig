@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Context = @import("../context.zig").Context;
+const dispatch_mod = @import("../dispatch.zig");
 const WordDefinition = @import("../dictionary.zig").WordDefinition;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
@@ -54,7 +55,7 @@ fn lookupStructTypes(ctx: *const Context) !StructTypes {
     };
 }
 
-fn buildWordInfo(alloc: Allocator, sts: StructTypes, name: []const u8, word: WordDefinition) !Value {
+fn buildWordInfo(alloc: Allocator, ctx: *const Context, sts: StructTypes, name: []const u8, word: WordDefinition) !Value {
     const effect_val: Value = if (word.stack_effect) |effect| blk: {
         const inputs_arr = try alloc.alloc(Value, effect.inputs.len);
         for (effect.inputs, 0..) |param, i| {
@@ -72,6 +73,11 @@ fn buildWordInfo(alloc: Allocator, sts: StructTypes, name: []const u8, word: Wor
         break :blk .{ .struct_instance = se_instance };
     } else .{ .boolean = false };
 
+    const doc_val: Value = if (word.doc) |d|
+        .{ .string = d }
+    else
+        .{ .boolean = false };
+
     const markers_arr = try alloc.alloc(Value, word.markers.len);
     for (word.markers, 0..) |mk, i| {
         markers_arr[i] = .{ .marker = mk };
@@ -86,6 +92,21 @@ fn buildWordInfo(alloc: Allocator, sts: StructTypes, name: []const u8, word: Wor
         .compound => |instrs| .{ .quotation = .{ .instructions = instrs } },
         .native => .{ .boolean = false },
     };
+
+    const dispatch_keys = try ctx.dispatch.keysForWord(name, alloc);
+    const methods_arr = try alloc.alloc(Value, dispatch_keys.len);
+    for (dispatch_keys, 0..) |key, i| {
+        if (std.mem.eql(u8, key.type_b, dispatch_mod.unary_sentinel)) {
+            const types = try alloc.alloc(Value, 1);
+            types[0] = .{ .string = key.type_a };
+            methods_arr[i] = .{ .array = types };
+        } else {
+            const types = try alloc.alloc(Value, 2);
+            types[0] = .{ .string = key.type_a };
+            types[1] = .{ .string = key.type_b };
+            methods_arr[i] = .{ .array = types };
+        }
+    }
 
     const source_loc_val: Value = if (word.source_file) |file| blk: {
         const sl_fields = try alloc.alloc(Value, 3);
@@ -102,14 +123,17 @@ fn buildWordInfo(alloc: Allocator, sts: StructTypes, name: []const u8, word: Wor
     else
         .{ .boolean = false };
 
-    const wi_fields = try alloc.alloc(Value, 7);
+    // Fields: name stack-effect doc markers native? body methods source-loc module
+    const wi_fields = try alloc.alloc(Value, 9);
     wi_fields[0] = .{ .string = name };
     wi_fields[1] = effect_val;
-    wi_fields[2] = .{ .array = markers_arr };
-    wi_fields[3] = .{ .boolean = is_native };
-    wi_fields[4] = body_val;
-    wi_fields[5] = source_loc_val;
-    wi_fields[6] = module_val;
+    wi_fields[2] = doc_val;
+    wi_fields[3] = .{ .array = markers_arr };
+    wi_fields[4] = .{ .boolean = is_native };
+    wi_fields[5] = body_val;
+    wi_fields[6] = .{ .array = methods_arr };
+    wi_fields[7] = source_loc_val;
+    wi_fields[8] = module_val;
     const wi_instance = try alloc.create(StructInstance);
     wi_instance.* = .{ .struct_type = sts.word_info, .fields = wi_fields };
 
@@ -136,7 +160,7 @@ fn nativeToWord(ctx: *Context) anyerror!void {
     };
 
     const sts = try lookupStructTypes(ctx);
-    try ctx.stack.push(try buildWordInfo(alloc, sts, name, word));
+    try ctx.stack.push(try buildWordInfo(alloc, ctx, sts, name, word));
 }
 
 /// all-words ( -- array ) - Return an array of word-info structs for every word in the dictionary
@@ -147,7 +171,7 @@ fn nativeAllWords(ctx: *Context) anyerror!void {
     var results: std.ArrayListUnmanaged(Value) = .{};
     var iter = ctx.dictionary.entries.iterator();
     while (iter.next()) |entry| {
-        try results.append(alloc, try buildWordInfo(alloc, sts, entry.key_ptr.*, entry.value_ptr.*));
+        try results.append(alloc, try buildWordInfo(alloc, ctx, sts, entry.key_ptr.*, entry.value_ptr.*));
     }
 
     try ctx.stack.push(.{ .array = results.items });

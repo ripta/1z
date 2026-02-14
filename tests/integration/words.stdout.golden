@@ -259,6 +259,7 @@ choose ( a1 a2 quot -- a )
 column>>
 cond ( branches -- ... )
 do ( pred body -- pred body )
+doc>>
 dupd ( a b -- a a b )
 emit ( codepoint --  )
 enum{
@@ -284,6 +285,7 @@ make-word-info
 marker? ( val -- ? )
 markers>>
 max ( a1 a2 -- a )
+methods>>
 method{
 min ( a1 a2 -- a )
 module>>

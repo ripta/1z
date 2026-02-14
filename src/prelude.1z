@@ -434,7 +434,7 @@ stack-effect: struct{ inputs outputs } ;
 source-loc: struct{ file line column } ;
 
 \\ Structured word information for runtime introspection.
-word-info: struct{ name stack-effect markers native? body source-loc module } ;
+word-info: struct{ name stack-effect doc markers native? body methods source-loc module } ;
 
 \\ Safe variant of native.>word that returns an option instead of throwing.
 >word?: ( symbol -- option ) [ [ native.>word >option:some ] [ drop option:none ] recover ] ;
