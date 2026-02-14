@@ -78,5 +78,33 @@ PASS: string slice end empty
 Stack: [ ]
 PASS: string slice single-char end
 Stack: [ ]
+=== split-once? found ===
+Stack: [ ]
+Stack: [ { "hello" "world" } ]
+PASS: split-once? before
+Stack: [ { "hello" "world" } ]
+PASS: split-once? after
+Stack: [ ]
+Stack: [ { "a" "b::c" } ]
+PASS: split-once? multi-char delim before
+Stack: [ { "a" "b::c" } ]
+PASS: split-once? multi-char delim after
+Stack: [ ]
+Stack: [ { "" "hello" } ]
+PASS: split-once? delim at start before
+Stack: [ { "" "hello" } ]
+PASS: split-once? delim at start after
+Stack: [ ]
+Stack: [ { "hello" "" } ]
+PASS: split-once? delim at end before
+Stack: [ { "hello" "" } ]
+PASS: split-once? delim at end after
+Stack: [ ]
+=== split-once? not found ===
+Stack: [ ]
+PASS: split-once? no match is none
+Stack: [ ]
+PASS: split-once? empty string is none
+Stack: [ ]
 All string utility tests complete!
 Stack: [ ]

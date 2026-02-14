@@ -50,4 +50,25 @@ use "strings" ;
 "hello" 5 5 #slice "" "string slice end empty" assert=
 " " 1 1 #slice "" "string slice single-char end" assert=
 
+"split-once? found" test-section
+"hello,world" "," split-once? unwrap-or-throw
+dup #first "hello" "split-once? before" assert=
+#last "world" "split-once? after" assert=
+
+"a::b::c" "::" split-once? unwrap-or-throw
+dup #first "a" "split-once? multi-char delim before" assert=
+#last "b::c" "split-once? multi-char delim after" assert=
+
+",hello" "," split-once? unwrap-or-throw
+dup #first "" "split-once? delim at start before" assert=
+#last "hello" "split-once? delim at start after" assert=
+
+"hello," "," split-once? unwrap-or-throw
+dup #first "hello" "split-once? delim at end before" assert=
+#last "" "split-once? delim at end after" assert=
+
+"split-once? not found" test-section
+"hello" "," split-once? option:none? "split-once? no match is none" assert-true
+"" "," split-once? option:none? "split-once? empty string is none" assert-true
+
 "All string utility tests complete!" print-line

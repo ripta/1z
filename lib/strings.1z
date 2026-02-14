@@ -132,3 +132,19 @@ rtrim: ( str -- str ) [
 
 \\ Remove leading and trailing ASCII whitespace.
 trim: ( str -- str ) [ ltrim rtrim ] ;
+
+\\ Split on first occurrence of delimiter. Returns some of { before after } or none.
+split-once?: ( str delim -- option ) [
+  2dup #index-of dup not
+  [ 3drop option:none ]
+  [
+    -rot> #len <rot-     \ str dlen idx
+    2 pick-n over #take  \ str dlen idx before
+    [ + ] dip            \ str after-start before
+    [ #drop ] dip        \ after before
+    swap
+    [ 1array ] dip 1array #append
+    >option:some
+  ]
+  if
+] ;
