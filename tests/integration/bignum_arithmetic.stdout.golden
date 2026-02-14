@@ -1,0 +1,114 @@
+=== Fixnum overflow promotion (+) ===
+Stack: [ ]
+PASS: max_i64 + 1 promotes
+Stack: [ ]
+PASS: min_i64 + -1 promotes
+Stack: [ ]
+=== Fixnum overflow promotion (-) ===
+Stack: [ ]
+PASS: min_i64 - 1 promotes
+Stack: [ ]
+PASS: max_i64 - -1 promotes
+Stack: [ ]
+=== Fixnum overflow promotion (*) ===
+Stack: [ ]
+PASS: max_i64 * 2 promotes
+Stack: [ ]
+PASS: min_i64 * 2 promotes
+Stack: [ ]
+=== Overflow promotion values ===
+Stack: [ ]
+PASS: max_i64 + 1 value
+Stack: [ ]
+PASS: min_i64 - 1 value
+Stack: [ ]
+PASS: max_i64 * 2 value
+Stack: [ ]
+=== Non-overflowing fixnum stays fixnum ===
+Stack: [ ]
+PASS: small add stays fixnum
+Stack: [ ]
+PASS: small sub stays fixnum
+Stack: [ ]
+PASS: small mul stays fixnum
+Stack: [ ]
+=== Bignum + bignum ===
+Stack: [ ]
+PASS: big + 1
+Stack: [ ]
+PASS: big + big
+Stack: [ ]
+PASS: 1 + big
+Stack: [ ]
+=== Bignum - bignum ===
+Stack: [ ]
+PASS: big - 1
+Stack: [ ]
+PASS: big - big
+Stack: [ ]
+=== Bignum * bignum ===
+Stack: [ ]
+PASS: big * 2
+Stack: [ ]
+PASS: 2 * big
+Stack: [ ]
+PASS: big * big
+Stack: [ ]
+=== Auto-demotion ===
+Stack: [ ]
+PASS: big that shrinks back
+Stack: [ ]
+PASS: demoted value
+Stack: [ ]
+PASS: sub demotes to zero
+Stack: [ ]
+PASS: demoted zero
+Stack: [ ]
+=== Bignum division ===
+Stack: [ ]
+PASS: big / 3
+Stack: [ ]
+PASS: neg big / 3
+Stack: [ ]
+PASS: big / big = 1
+Stack: [ ]
+PASS: big / slightly-less = 1
+Stack: [ ]
+=== Bignum modulo ===
+Stack: [ ]
+PASS: big % 7
+Stack: [ ]
+PASS: big % big
+Stack: [ ]
+=== Division special cases ===
+Stack: [ ]
+PASS: min_i64 / -1 promotes
+Stack: [ ]
+PASS: min_i64 / -1 value
+Stack: [ ]
+=== Division by zero ===
+Stack: [ ]
+PASS: DivisionByZero
+Stack: [ ]
+PASS: DivisionByZero
+Stack: [ ]
+=== Abs with bignum ===
+Stack: [ ]
+PASS: abs neg bignum
+Stack: [ ]
+PASS: abs pos bignum
+Stack: [ ]
+PASS: abs min_i64 promotes
+Stack: [ ]
+PASS: abs min_i64 value
+Stack: [ ]
+=== Mixed float still works ===
+Stack: [ ]
+PASS: fixnum + float = float
+Stack: [ ]
+PASS: float + fixnum = float
+Stack: [ ]
+PASS: fixnum * float = float
+Stack: [ ]
+PASS: float / fixnum = float
+Stack: [ ]

@@ -183,7 +183,9 @@ PASS: abs zero float
 Stack: [ ]
 PASS: abs negative zero float
 Stack: [ ]
-=== abs overflow ===
+=== abs min_i64 promotes to bignum ===
 Stack: [ ]
-PASS: FixnumOverflow
+PASS: abs min_i64 value
+Stack: [ ]
+PASS: abs min_i64 type
 Stack: [ ]

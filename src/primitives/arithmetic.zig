@@ -1,6 +1,9 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const Context = @import("../context.zig").Context;
-const Value = @import("../value.zig").Value;
+const value_mod = @import("../value.zig");
+const Value = value_mod.Value;
+const BigIntManaged = value_mod.BigIntManaged;
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 const dispatch_helpers = @import("dispatch_helpers.zig");
@@ -10,17 +13,61 @@ const popNumber = helpers.popNumber;
 const Number = helpers.Number;
 const toFloats = helpers.toFloats;
 
+/// Return fixnum if the bignum fits in i64, otherwise bignum.
+fn demoteBignum(big: BigIntManaged) Value {
+    if (big.fits(i64)) {
+        return .{ .fixnum = big.toInt(i64) catch unreachable };
+    }
+    return .{ .bignum = big };
+}
+
+/// Promote a fixnum to a Managed bignum. Bignums are cloned so the result
+/// always owns its own memory.
+fn ensureBignum(alloc: Allocator, val: Value) !BigIntManaged {
+    return if (val == .bignum) try val.bignum.clone() else try BigIntManaged.initSet(alloc, val.fixnum);
+}
+
+/// Convert a Value (fixnum or float) to a Number for the float promotion path.
+fn popNumVal(val: Value) Number {
+    return if (val == .float) .{ .float = val.float } else .{ .fixnum = val.fixnum };
+}
+
 pub const primitives = [_]Primitive{
     // Basic arithmetic
-    .{ .name = "+", .stack_effect = "a b -- a+b", .doc = "Add two numbers. Promotes to float if either operand is a float.", .func = nativeAdd },
-    .{ .name = "-", .stack_effect = "a b -- a-b", .doc = "Subtract: a minus b. Promotes to float if either operand is a float.", .func = nativeSub },
-    .{ .name = "*", .stack_effect = "a b -- a*b", .doc = "Multiply two numbers. Promotes to float if either operand is a float.", .func = nativeMul },
-    .{ .name = "/", .stack_effect = "a b -- a/b", .doc = "Divide: a divided by b. Integer division for fixnums (throws on zero); IEEE 754 division for floats.", .func = nativeDiv },
-    .{ .name = "%", .stack_effect = "a b -- a%b", .doc = "Modulo for fixnums; fmod for floats. Promotes to float if either operand is a float.", .func = nativeMod },
-    // Wraparound arithmetic
+    .{
+        .name = "+",
+        .stack_effect = "a b -- a+b",
+        .doc = "Add two numbers. Promotes to bignum on fixnum overflow, or to float if either operand is a float.",
+        .func = nativeAdd,
+    },
+    .{
+        .name = "-",
+        .stack_effect = "a b -- a-b",
+        .doc = "Subtract: a minus b. Promotes to bignum on fixnum overflow, or to float if either operand is a float.",
+        .func = nativeSub,
+    },
+    .{
+        .name = "*",
+        .stack_effect = "a b -- a*b",
+        .doc = "Multiply two numbers. Promotes to bignum on fixnum overflow, or to float if either operand is a float.",
+        .func = nativeMul,
+    },
+    .{
+        .name = "/",
+        .stack_effect = "a b -- a/b",
+        .doc = "Divide: a divided by b. Integer division for fixnums (throws on zero); IEEE 754 division for floats.",
+        .func = nativeDiv,
+    },
+    .{
+        .name = "%",
+        .stack_effect = "a b -- a%b",
+        .doc = "Modulo for fixnums and floats. Promotes to float if either operand is a float.",
+        .func = nativeMod,
+    },
+    // Wraparound fixnum (i64) arithmetic
     .{ .name = "+%", .stack_effect = "a b -- a+b", .doc = "Add two fixnums with wraparound on overflow.", .func = nativeAddWrap },
-    .{ .name = "-%", .stack_effect = "a b -- a-b", .doc = "Subtract with wraparound on overflow.", .func = nativeSubWrap },
-    .{ .name = "*%", .stack_effect = "a b -- a*b", .doc = "Multiply with wraparound on overflow.", .func = nativeMulWrap },
+    .{ .name = "-%", .stack_effect = "a b -- a-b", .doc = "Subtract two fixnums (a minus b) with wraparound on overflow.", .func = nativeSubWrap },
+    .{ .name = "*%", .stack_effect = "a b -- a*b", .doc = "Multiply two fixnums with wraparound on overflow.", .func = nativeMulWrap },
     // Conversions
     .{ .name = ">float", .stack_effect = "x -- f", .doc = "Convert fixnum or string to float. Floats pass through. Throws on failure.", .func = nativeToFloat },
     .{ .name = ">integer", .stack_effect = "f -- n", .doc = "Convert float to fixnum, truncating toward zero. Fixnums pass through. Throws on NaN or infinity.", .func = nativeToInteger },
@@ -36,74 +83,178 @@ pub const primitives = [_]Primitive{
 /// + ( a b -- a+b ) - Add two numbers
 pub fn nativeAdd(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "+")) return;
-    const b = try popNumber(ctx);
-    const a = try popNumber(ctx);
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
     if (a == .fixnum and b == .fixnum) {
         const result = @addWithOverflow(a.fixnum, b.fixnum);
-        if (result[1] != 0) return error.FixnumOverflow;
-        try ctx.stack.push(.{ .fixnum = result[0] });
-    } else {
-        const fs = toFloats(a, b);
+        if (result[1] != 0) {
+            const alloc = ctx.arena.allocator();
+            var ba = try BigIntManaged.initSet(alloc, a.fixnum);
+            var bb = try BigIntManaged.initSet(alloc, b.fixnum);
+            try ba.add(&ba, &bb);
+            bb.deinit();
+            try ctx.stack.push(demoteBignum(ba));
+        } else {
+            try ctx.stack.push(.{ .fixnum = result[0] });
+        }
+    } else if ((a == .bignum or a == .fixnum) and (b == .bignum or b == .fixnum)) {
+        const alloc = ctx.arena.allocator();
+        var ba = try ensureBignum(alloc, a);
+        var bb = try ensureBignum(alloc, b);
+        try ba.add(&ba, &bb);
+        bb.deinit();
+        try ctx.stack.push(demoteBignum(ba));
+    } else if ((a == .fixnum or a == .float) and (b == .fixnum or b == .float)) {
+        const fs = toFloats(popNumVal(a), popNumVal(b));
         try ctx.stack.push(.{ .float = fs[0] + fs[1] });
+    } else {
+        helpers.setTypeMismatchError(ctx, "number", if (a != .fixnum and a != .float and a != .bignum) a else b);
+        return error.TypeMismatch;
     }
 }
 
 /// - ( a b -- a-b ) - Subtract: a minus b
 pub fn nativeSub(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "-")) return;
-    const b = try popNumber(ctx);
-    const a = try popNumber(ctx);
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
     if (a == .fixnum and b == .fixnum) {
         const result = @subWithOverflow(a.fixnum, b.fixnum);
-        if (result[1] != 0) return error.FixnumOverflow;
-        try ctx.stack.push(.{ .fixnum = result[0] });
-    } else {
-        const fs = toFloats(a, b);
+        if (result[1] != 0) {
+            const alloc = ctx.arena.allocator();
+            var ba = try BigIntManaged.initSet(alloc, a.fixnum);
+            var bb = try BigIntManaged.initSet(alloc, b.fixnum);
+            try ba.sub(&ba, &bb);
+            bb.deinit();
+            try ctx.stack.push(demoteBignum(ba));
+        } else {
+            try ctx.stack.push(.{ .fixnum = result[0] });
+        }
+    } else if ((a == .bignum or a == .fixnum) and (b == .bignum or b == .fixnum)) {
+        const alloc = ctx.arena.allocator();
+        var ba = try ensureBignum(alloc, a);
+        var bb = try ensureBignum(alloc, b);
+        try ba.sub(&ba, &bb);
+        bb.deinit();
+        try ctx.stack.push(demoteBignum(ba));
+    } else if ((a == .fixnum or a == .float) and (b == .fixnum or b == .float)) {
+        const fs = toFloats(popNumVal(a), popNumVal(b));
         try ctx.stack.push(.{ .float = fs[0] - fs[1] });
+    } else {
+        helpers.setTypeMismatchError(ctx, "number", if (a != .fixnum and a != .float and a != .bignum) a else b);
+        return error.TypeMismatch;
     }
 }
 
 /// * ( a b -- a*b ) - Multiply two numbers
 pub fn nativeMul(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "*")) return;
-    const b = try popNumber(ctx);
-    const a = try popNumber(ctx);
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
     if (a == .fixnum and b == .fixnum) {
         const result = @mulWithOverflow(a.fixnum, b.fixnum);
-        if (result[1] != 0) return error.FixnumOverflow;
-        try ctx.stack.push(.{ .fixnum = result[0] });
-    } else {
-        const fs = toFloats(a, b);
+        if (result[1] != 0) {
+            const alloc = ctx.arena.allocator();
+            var ba = try BigIntManaged.initSet(alloc, a.fixnum);
+            var bb = try BigIntManaged.initSet(alloc, b.fixnum);
+            try ba.mul(&ba, &bb);
+            bb.deinit();
+            try ctx.stack.push(demoteBignum(ba));
+        } else {
+            try ctx.stack.push(.{ .fixnum = result[0] });
+        }
+    } else if ((a == .bignum or a == .fixnum) and (b == .bignum or b == .fixnum)) {
+        const alloc = ctx.arena.allocator();
+        var ba = try ensureBignum(alloc, a);
+        var bb = try ensureBignum(alloc, b);
+        try ba.mul(&ba, &bb);
+        bb.deinit();
+        try ctx.stack.push(demoteBignum(ba));
+    } else if ((a == .fixnum or a == .float) and (b == .fixnum or b == .float)) {
+        const fs = toFloats(popNumVal(a), popNumVal(b));
         try ctx.stack.push(.{ .float = fs[0] * fs[1] });
+    } else {
+        helpers.setTypeMismatchError(ctx, "number", if (a != .fixnum and a != .float and a != .bignum) a else b);
+        return error.TypeMismatch;
     }
 }
 
 /// / ( a b -- a/b ) - Division
 pub fn nativeDiv(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "/")) return;
-    const b = try popNumber(ctx);
-    const a = try popNumber(ctx);
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
     if (a == .fixnum and b == .fixnum) {
         if (b.fixnum == 0) return error.DivisionByZero;
-        if (a.fixnum == std.math.minInt(i64) and b.fixnum == -1) return error.FixnumOverflow;
-        try ctx.stack.push(.{ .fixnum = @divTrunc(a.fixnum, b.fixnum) });
-    } else {
-        const fs = toFloats(a, b);
+        if (a.fixnum == std.math.minInt(i64) and b.fixnum == -1) {
+            const alloc = ctx.arena.allocator();
+            var ba = try BigIntManaged.initSet(alloc, a.fixnum);
+            var bb = try BigIntManaged.initSet(alloc, b.fixnum);
+            var q = try BigIntManaged.init(alloc);
+            var r = try BigIntManaged.init(alloc);
+            try q.divTrunc(&r, &ba, &bb);
+            ba.deinit();
+            bb.deinit();
+            r.deinit();
+            try ctx.stack.push(demoteBignum(q));
+        } else {
+            try ctx.stack.push(.{ .fixnum = @divTrunc(a.fixnum, b.fixnum) });
+        }
+    } else if ((a == .bignum or a == .fixnum) and (b == .bignum or b == .fixnum)) {
+        const alloc = ctx.arena.allocator();
+        var ba = try ensureBignum(alloc, a);
+        var bb = try ensureBignum(alloc, b);
+        if (bb.eqlZero()) {
+            ba.deinit();
+            bb.deinit();
+            return error.DivisionByZero;
+        }
+        var q = try BigIntManaged.init(alloc);
+        var r = try BigIntManaged.init(alloc);
+        try q.divTrunc(&r, &ba, &bb);
+        ba.deinit();
+        bb.deinit();
+        r.deinit();
+        try ctx.stack.push(demoteBignum(q));
+    } else if ((a == .fixnum or a == .float) and (b == .fixnum or b == .float)) {
+        const fs = toFloats(popNumVal(a), popNumVal(b));
         try ctx.stack.push(.{ .float = fs[0] / fs[1] });
+    } else {
+        helpers.setTypeMismatchError(ctx, "number", if (a != .fixnum and a != .float and a != .bignum) a else b);
+        return error.TypeMismatch;
     }
 }
 
 /// % ( a b -- a%b ) - Modulo / fmod
 pub fn nativeMod(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "%")) return;
-    const b = try popNumber(ctx);
-    const a = try popNumber(ctx);
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
     if (a == .fixnum and b == .fixnum) {
         if (b.fixnum == 0) return error.DivisionByZero;
         try ctx.stack.push(.{ .fixnum = @mod(a.fixnum, b.fixnum) });
-    } else {
-        const fs = toFloats(a, b);
+    } else if ((a == .bignum or a == .fixnum) and (b == .bignum or b == .fixnum)) {
+        const alloc = ctx.arena.allocator();
+        var ba = try ensureBignum(alloc, a);
+        var bb = try ensureBignum(alloc, b);
+        if (bb.eqlZero()) {
+            ba.deinit();
+            bb.deinit();
+            return error.DivisionByZero;
+        }
+        var q = try BigIntManaged.init(alloc);
+        var r = try BigIntManaged.init(alloc);
+        try q.divFloor(&r, &ba, &bb);
+        ba.deinit();
+        bb.deinit();
+        q.deinit();
+        try ctx.stack.push(demoteBignum(r));
+    } else if ((a == .fixnum or a == .float) and (b == .fixnum or b == .float)) {
+        const fs = toFloats(popNumVal(a), popNumVal(b));
         try ctx.stack.push(.{ .float = @rem(fs[0], fs[1]) });
+    } else {
+        helpers.setTypeMismatchError(ctx, "number", if (a != .fixnum and a != .float and a != .bignum) a else b);
+        return error.TypeMismatch;
     }
 }
 
@@ -283,14 +434,24 @@ pub fn nativeGt(ctx: *Context) anyerror!void {
     }
 }
 
-/// abs ( n -- n ) - Absolute value for fixnums and floats
+/// abs ( n -- n ) - Absolute value for fixnums, bignums, and floats
 fn nativeAbs(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, "abs")) return;
     const val = try ctx.stack.pop();
     switch (val) {
         .fixnum => |i| {
-            if (i == std.math.minInt(i64)) return error.FixnumOverflow;
-            try ctx.stack.push(.{ .fixnum = if (i < 0) -i else i });
+            if (i == std.math.minInt(i64)) {
+                var big = try BigIntManaged.initSet(ctx.arena.allocator(), i);
+                big.abs();
+                try ctx.stack.push(demoteBignum(big));
+            } else {
+                try ctx.stack.push(.{ .fixnum = if (i < 0) -i else i });
+            }
+        },
+        .bignum => |b| {
+            var big = try b.clone();
+            big.abs();
+            try ctx.stack.push(demoteBignum(big));
         },
         .float => |f| {
             try ctx.stack.push(.{ .float = @abs(f) });
