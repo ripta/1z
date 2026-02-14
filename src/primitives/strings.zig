@@ -5,6 +5,7 @@ const ByteArray = value_mod.ByteArray;
 const Instruction = value_mod.Instruction;
 
 const Primitive = @import("types.zig").Primitive;
+const dispatch_helpers = @import("dispatch_helpers.zig");
 
 pub const primitives = [_]Primitive{
     .{ .name = "to-string", .stack_effect = "value -- string", .doc = "Convert any value to its string representation, including quotes for strings.", .func = nativeToString },
@@ -30,6 +31,8 @@ fn nativeToString(ctx: *Context) anyerror!void {
 /// >string ( value -- string ) - Convert value to string, strings pass through unquoted,
 /// in contrast to to-string
 fn nativeAsString(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ">string")) return;
+
     const val = try ctx.stack.pop();
     switch (val) {
         .string => |s| {
