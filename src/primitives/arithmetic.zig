@@ -12,23 +12,11 @@ const popFixnum = helpers.popFixnum;
 const popNumber = helpers.popNumber;
 const Number = helpers.Number;
 const toFloats = helpers.toFloats;
-
-/// Return fixnum if the bignum fits in i64, otherwise bignum.
-fn demoteBignum(big: BigIntManaged) Value {
-    if (big.fits(i64)) {
-        return .{ .fixnum = big.toInt(i64) catch unreachable };
-    }
-    return .{ .bignum = big };
-}
-
-/// Promote a fixnum to a Managed bignum. Bignums are cloned so the result
-/// always owns its own memory.
-fn ensureBignum(alloc: Allocator, val: Value) !BigIntManaged {
-    return if (val == .bignum) try val.bignum.clone() else try BigIntManaged.initSet(alloc, val.fixnum);
-}
+const demoteBignum = helpers.demoteBignum;
+const ensureBignum = helpers.ensureBignum;
 
 /// Convert a Value (fixnum or float) to a Number for the float promotion path.
-fn popNumVal(val: Value) Number {
+pub fn popNumVal(val: Value) Number {
     return if (val == .float) .{ .float = val.float } else .{ .fixnum = val.fixnum };
 }
 

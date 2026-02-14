@@ -1,0 +1,104 @@
+=== bitand fixnum ===
+Stack: [ ]
+PASS: ff & 0f
+Stack: [ ]
+PASS: -1 & ff
+Stack: [ ]
+PASS: 0 & ff
+Stack: [ ]
+=== bitor fixnum ===
+Stack: [ ]
+PASS: f0 | 0f
+Stack: [ ]
+PASS: 0 | 0
+Stack: [ ]
+=== bitxor fixnum ===
+Stack: [ ]
+PASS: ff ^ 0f
+Stack: [ ]
+PASS: ff ^ ff
+Stack: [ ]
+=== bitnot fixnum ===
+Stack: [ ]
+PASS: ~0 = -1
+Stack: [ ]
+PASS: ~-1 = 0
+Stack: [ ]
+PASS: ~1 = -2
+Stack: [ ]
+PASS: ~42 = -43
+Stack: [ ]
+=== bitand bignum ===
+Stack: [ ]
+PASS: big & big = big
+Stack: [ ]
+PASS: big hex & 0xFF
+Stack: [ ]
+=== bitor bignum ===
+Stack: [ ]
+PASS: big | 0 = big
+Stack: [ ]
+=== bitxor bignum ===
+Stack: [ ]
+PASS: big ^ big = 0
+Stack: [ ]
+=== bitnot bignum ===
+Stack: [ ]
+PASS: ~big
+Stack: [ ]
+PASS: ~neg-big
+Stack: [ ]
+=== shift-left ===
+Stack: [ ]
+PASS: 1 << 0
+Stack: [ ]
+PASS: 1 << 10
+Stack: [ ]
+PASS: 1 << 63 is bignum
+Stack: [ ]
+PASS: 1 << 63 value
+Stack: [ ]
+PASS: 1 << 64 promotes
+Stack: [ ]
+PASS: 1 << 64 value
+Stack: [ ]
+=== shift-right fixnum ===
+Stack: [ ]
+PASS: 1024 >> 10
+Stack: [ ]
+PASS: -1 >> 1 (arithmetic)
+Stack: [ ]
+PASS: -8 >> 1 (arithmetic)
+Stack: [ ]
+=== shift-right bignum ===
+Stack: [ ]
+PASS: big >> 1
+Stack: [ ]
+=== ushift-right fixnum ===
+Stack: [ ]
+PASS: -1 >>> 1 (logical)
+Stack: [ ]
+PASS: -8 >>> 1 (logical)
+Stack: [ ]
+PASS: 1024 >>> 10
+Stack: [ ]
+=== ushift-right rejects bignum ===
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
+=== shift combined ===
+Stack: [ ]
+PASS: shift positive = left
+Stack: [ ]
+PASS: shift negative = right
+Stack: [ ]
+=== shift-left bignum ===
+Stack: [ ]
+PASS: big << 1
+Stack: [ ]
+=== auto-demotion from shift ===
+Stack: [ ]
+PASS: shift up then down demotes
+Stack: [ ]
+PASS: shift up then down = 1
+Stack: [ ]

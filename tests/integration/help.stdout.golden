@@ -3,5 +3,5 @@ double ( n -- n ) \compound
 Stack: [ ]
 + ( a b -- a+b ) \native
 
-Add two numbers. Promotes to bignum on fixnum overflow, to float if either operand is a float.
+Add two numbers. Promotes to bignum on fixnum overflow, or to float if either operand is a float.
 Stack: [ ]

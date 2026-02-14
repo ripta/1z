@@ -1,0 +1,69 @@
+use "testing" ;
+
+"bitand fixnum" test-section
+0xFF 0x0F bitand 0x0F "ff & 0f" assert=
+-1 0xFF bitand 0xFF "-1 & ff" assert=
+0 0xFF bitand 0 "0 & ff" assert=
+
+"bitor fixnum" test-section
+0xF0 0x0F bitor 0xFF "f0 | 0f" assert=
+0 0 bitor 0 "0 | 0" assert=
+
+"bitxor fixnum" test-section
+0xFF 0x0F bitxor 0xF0 "ff ^ 0f" assert=
+0xFF 0xFF bitxor 0 "ff ^ ff" assert=
+
+"bitnot fixnum" test-section
+0 bitnot -1 "~0 = -1" assert=
+-1 bitnot 0 "~-1 = 0" assert=
+1 bitnot -2 "~1 = -2" assert=
+42 bitnot -43 "~42 = -43" assert=
+
+"bitand bignum" test-section
+99999999999999999999 99999999999999999999 bitand 99999999999999999999 "big & big = big" assert=
+0x1FFFFFFFFFFFFFFFF 0xFF bitand 0xFF "big hex & 0xFF" assert=
+
+"bitor bignum" test-section
+99999999999999999999 0 bitor 99999999999999999999 "big | 0 = big" assert=
+
+"bitxor bignum" test-section
+99999999999999999999 99999999999999999999 bitxor 0 "big ^ big = 0" assert=
+
+"bitnot bignum" test-section
+99999999999999999999 bitnot to-string "-100000000000000000000" "~big" assert=
+-99999999999999999999 bitnot to-string "99999999999999999998" "~neg-big" assert=
+
+"shift-left" test-section
+1 0 shift-left 1 "1 << 0" assert=
+1 10 shift-left 1024 "1 << 10" assert=
+1 63 shift-left type-of bignum: "1 << 63 is bignum" assert=
+1 63 shift-left to-string "9223372036854775808" "1 << 63 value" assert=
+1 64 shift-left type-of bignum: "1 << 64 promotes" assert=
+1 64 shift-left to-string "18446744073709551616" "1 << 64 value" assert=
+
+"shift-right fixnum" test-section
+1024 10 shift-right 1 "1024 >> 10" assert=
+-1 1 shift-right -1 "-1 >> 1 (arithmetic)" assert=
+-8 1 shift-right -4 "-8 >> 1 (arithmetic)" assert=
+
+"shift-right bignum" test-section
+99999999999999999999 1 shift-right to-string "49999999999999999999" "big >> 1" assert=
+
+"ushift-right fixnum" test-section
+-1 1 ushift-right to-string "9223372036854775807" "-1 >>> 1 (logical)" assert=
+-8 1 ushift-right to-string "9223372036854775804" "-8 >>> 1 (logical)" assert=
+1024 10 ushift-right 1 "1024 >>> 10" assert=
+
+"ushift-right rejects bignum" test-section
+[ 99999999999999999999 1 ushift-right ] "TypeMismatch" assert-error
+
+"shift combined" test-section
+1 10 shift 1024 "shift positive = left" assert=
+1024 -10 shift 1 "shift negative = right" assert=
+
+"shift-left bignum" test-section
+99999999999999999999 1 shift-left to-string "199999999999999999998" "big << 1" assert=
+
+"auto-demotion from shift" test-section
+1 64 shift-left 64 shift-right type-of fixnum: "shift up then down demotes" assert=
+1 64 shift-left 64 shift-right 1 "shift up then down = 1" assert=
