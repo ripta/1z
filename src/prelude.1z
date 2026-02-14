@@ -224,9 +224,6 @@ max: ( a1 a2 -- a ) [ [ > ] choose ] ;
 ++: ( a1 -- a2 ) [ 1 + ] ;
 \\ Test whether a value equals zero.
 0?: ( a -- ? ) [ 0 = ] ;
-\\ Non-negative remainder, always in `[0, b)`.
-rem: ( a b -- r ) [ tuck % over + swap % ] ;
-
 \ Comparison operators
 \\ Less than or equal.
 <=: ( a b -- ? ) [ 2dup < [ 2drop t ] [ = ] if ] ;

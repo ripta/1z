@@ -52,6 +52,10 @@ pub const primitives = [_]Primitive{
         .doc = "Modulo for fixnums and floats. Promotes to float if either operand is a float.",
         .func = nativeMod,
     },
+    // Integer-only truncating division and remainder
+    .{ .name = "div", .stack_effect = "a b -- q", .doc = "Truncating integer division toward zero. Integer-only.", .func = nativeTruncDiv },
+    .{ .name = "rem", .stack_effect = "a b -- r", .doc = "Truncating integer remainder. Satisfies a = (a div b) * b + (a rem b). Integer-only.", .func = nativeTruncRem },
+    .{ .name = "gcd", .stack_effect = "a b -- gcd", .doc = "Greatest common divisor via Euclidean algorithm. Always non-negative. gcd(0,0) = 0. Integer-only.", .func = nativeGcd },
     // Wraparound fixnum (i64) arithmetic
     .{ .name = "+%", .stack_effect = "a b -- a+b", .doc = "Add two fixnums with wraparound on overflow.", .func = nativeAddWrap },
     .{ .name = "-%", .stack_effect = "a b -- a-b", .doc = "Subtract two fixnums (a minus b) with wraparound on overflow.", .func = nativeSubWrap },
@@ -457,5 +461,131 @@ fn nativeAbs(ctx: *Context) anyerror!void {
             helpers.setTypeMismatchError(ctx, "number", val);
             return error.TypeMismatch;
         },
+    }
+}
+
+/// div ( a b -- q ) - Truncating integer division toward zero
+fn nativeTruncDiv(ctx: *Context) anyerror!void {
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    if (a == .fixnum and b == .fixnum) {
+        if (b.fixnum == 0) return error.DivisionByZero;
+        if (a.fixnum == std.math.minInt(i64) and b.fixnum == -1) {
+            const alloc = ctx.arena.allocator();
+            var ba = try BigIntManaged.initSet(alloc, a.fixnum);
+            var bb = try BigIntManaged.initSet(alloc, b.fixnum);
+            var q = try BigIntManaged.init(alloc);
+            var r = try BigIntManaged.init(alloc);
+            try q.divTrunc(&r, &ba, &bb);
+            ba.deinit();
+            bb.deinit();
+            r.deinit();
+            try ctx.stack.push(demoteBignum(q));
+        } else {
+            try ctx.stack.push(.{ .fixnum = @divTrunc(a.fixnum, b.fixnum) });
+        }
+    } else if ((a == .bignum or a == .fixnum) and (b == .bignum or b == .fixnum)) {
+        const alloc = ctx.arena.allocator();
+        var ba = try ensureBignum(alloc, a);
+        var bb = try ensureBignum(alloc, b);
+        if (bb.eqlZero()) {
+            ba.deinit();
+            bb.deinit();
+            return error.DivisionByZero;
+        }
+        var q = try BigIntManaged.init(alloc);
+        var r = try BigIntManaged.init(alloc);
+        try q.divTrunc(&r, &ba, &bb);
+        ba.deinit();
+        bb.deinit();
+        r.deinit();
+        try ctx.stack.push(demoteBignum(q));
+    } else {
+        helpers.setTypeMismatchError(ctx, "fixnum or bignum", if (a != .fixnum and a != .bignum) a else b);
+        return error.TypeMismatch;
+    }
+}
+
+/// rem ( a b -- r ) - Truncating integer remainder
+fn nativeTruncRem(ctx: *Context) anyerror!void {
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    if (a == .fixnum and b == .fixnum) {
+        if (b.fixnum == 0) return error.DivisionByZero;
+        try ctx.stack.push(.{ .fixnum = @rem(a.fixnum, b.fixnum) });
+    } else if ((a == .bignum or a == .fixnum) and (b == .bignum or b == .fixnum)) {
+        const alloc = ctx.arena.allocator();
+        var ba = try ensureBignum(alloc, a);
+        var bb = try ensureBignum(alloc, b);
+        if (bb.eqlZero()) {
+            ba.deinit();
+            bb.deinit();
+            return error.DivisionByZero;
+        }
+        var q = try BigIntManaged.init(alloc);
+        var r = try BigIntManaged.init(alloc);
+        try q.divTrunc(&r, &ba, &bb);
+        ba.deinit();
+        bb.deinit();
+        q.deinit();
+        try ctx.stack.push(demoteBignum(r));
+    } else {
+        helpers.setTypeMismatchError(ctx, "fixnum or bignum", if (a != .fixnum and a != .bignum) a else b);
+        return error.TypeMismatch;
+    }
+}
+
+/// gcd ( a b -- gcd ) - Greatest common divisor, always non-negative
+fn nativeGcd(ctx: *Context) anyerror!void {
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    if (a == .fixnum and b == .fixnum) {
+        const av = a.fixnum;
+        const bv = b.fixnum;
+        if (av == 0 and bv == 0) {
+            try ctx.stack.push(.{ .fixnum = 0 });
+        } else if (av == std.math.minInt(i64) or bv == std.math.minInt(i64)) {
+            const alloc = ctx.arena.allocator();
+            var ba = try BigIntManaged.initSet(alloc, av);
+            ba.abs();
+            var bb = try BigIntManaged.initSet(alloc, bv);
+            bb.abs();
+            var result = try BigIntManaged.init(alloc);
+            try result.gcd(&ba, &bb);
+            ba.deinit();
+            bb.deinit();
+            try ctx.stack.push(demoteBignum(result));
+        } else {
+            const abs_a: u64 = @intCast(if (av < 0) -av else av);
+            const abs_b: u64 = @intCast(if (bv < 0) -bv else bv);
+            if (abs_a == 0) {
+                try ctx.stack.push(.{ .fixnum = @intCast(abs_b) });
+            } else if (abs_b == 0) {
+                try ctx.stack.push(.{ .fixnum = @intCast(abs_a) });
+            } else {
+                const g = std.math.gcd(abs_a, abs_b);
+                try ctx.stack.push(.{ .fixnum = @intCast(g) });
+            }
+        }
+    } else if ((a == .bignum or a == .fixnum) and (b == .bignum or b == .fixnum)) {
+        const alloc = ctx.arena.allocator();
+        var ba = try ensureBignum(alloc, a);
+        ba.abs();
+        var bb = try ensureBignum(alloc, b);
+        bb.abs();
+        if (ba.eqlZero() and bb.eqlZero()) {
+            ba.deinit();
+            bb.deinit();
+            try ctx.stack.push(.{ .fixnum = 0 });
+        } else {
+            var result = try BigIntManaged.init(alloc);
+            try result.gcd(&ba, &bb);
+            ba.deinit();
+            bb.deinit();
+            try ctx.stack.push(demoteBignum(result));
+        }
+    } else {
+        helpers.setTypeMismatchError(ctx, "fixnum or bignum", if (a != .fixnum and a != .bignum) a else b);
+        return error.TypeMismatch;
     }
 }
