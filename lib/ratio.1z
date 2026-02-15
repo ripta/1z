@@ -1,0 +1,31 @@
+\ lib/ratio.1z - Exact rational arithmetic
+
+ratio: virtual{ struct{ numer denom } } ;
+
+\ Accessors: unwrap the virtual type, then extract by position
+\ Virtual structs don't export these by default
+numer>>: ( ratio -- n ) [ ratio> drop ] ;
+denom>>: ( ratio -- d ) [ ratio> nip ] ;
+
+\ Normalizing constructor: reduces to lowest terms, enforces positive
+\ denominator, demotes to integer when denominator is 1.
+make-ratio: ( numer denom -- ratio-or-int ) [
+  dup 0 = [ "DivisionByZero" throw ] when
+  2dup gcd
+  tuck
+  div
+  -rot>
+  div
+  swap
+  dup 0 <
+  [ [ 0 swap - ] dip 0 swap - ] when
+  dup 1 =
+  [ drop ]
+  [ >ratio ]
+  if
+] ;
+
+>string: method{ ratio } [
+  dup numer>> >string "/" #append
+  swap denom>> >string #append
+] ;

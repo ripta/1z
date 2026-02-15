@@ -1,0 +1,53 @@
+=== ratio: type ===
+Stack: [ ]
+PASS: 5/3 is ratio
+Stack: [ ]
+PASS: type-of is ratio:
+Stack: [ ]
+=== ratio: normalization ===
+Stack: [ ]
+PASS: 10/6 normalizes to 5/3
+Stack: [ ]
+PASS: -10/6 -> -5/3
+Stack: [ ]
+PASS: 10/-6 -> -5/3
+Stack: [ ]
+PASS: -10/-6 -> 5/3
+Stack: [ ]
+=== ratio: demotion ===
+Stack: [ ]
+PASS: 6/3 demotes to 2
+Stack: [ ]
+PASS: 6/3 is fixnum
+Stack: [ ]
+PASS: 0/5 demotes to 0
+Stack: [ ]
+=== ratio: unwrap ===
+Stack: [ ]
+PASS: numer is 5
+PASS: denom is 3
+Stack: [ ]
+=== ratio: accessors ===
+Stack: [ ]
+PASS: numer>> is 5
+Stack: [ ]
+PASS: denom>> is 3
+Stack: [ ]
+=== ratio: >string ===
+Stack: [ ]
+PASS: >string
+Stack: [ ]
+PASS: >string negative
+Stack: [ ]
+=== ratio: zero denominator ===
+Stack: [ ]
+PASS: DivisionByZero
+Stack: [ ]
+=== ratio: bignum components ===
+Stack: [ ]
+PASS: bignum ratio
+Stack: [ ]
+PASS: bignum numer
+Stack: [ ]
+PASS: bignum denom
+Stack: [ ]
