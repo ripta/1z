@@ -1,0 +1,15 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: nested scope children cancelled
+Stack: [ ]
+PASS: cancel task blocked on channel receive
+Stack: [ ]
+PASS: cancel task blocked on channel send
+Stack: [ ]
+PASS: cancel task blocked on select
+Stack: [ ]
+PASS: await on cancelled task throws
+Stack: [ ]

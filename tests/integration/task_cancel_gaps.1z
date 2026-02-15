@@ -1,0 +1,80 @@
+use "testing" ;
+use "time" ;
+
+\ -- 1. Nested scope cancellation: outer cancels a task running its own
+\      inner task-scope with sleeping children. Scope completes without
+\      hanging, proving inner children were also cancelled.
+
+test-nested-scope-cancellation: ( -- ) [
+  [
+    [
+      [
+        [ 100000 milliseconds sleep ] spawn drop
+        [ 100000 milliseconds sleep ] spawn drop
+      ] task-scope
+    ] spawn
+    10 milliseconds sleep
+    dup cancel-task
+    drop
+  ] task-scope
+  t "nested scope children cancelled" assert-true
+] ;
+
+\ -- 2. Channel-blocked receive cancelled: a task blocked on receive with
+\      no sender is cancelled. Scope completes.
+
+test-cancel-channel-receive: ( -- ) [
+  [
+    <channel>
+    [ receive drop ] curry spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+  ] task-scope
+  t "cancel task blocked on channel receive" assert-true
+] ;
+
+\ -- 3. Channel-blocked send cancelled: a task blocked on send to an
+\      unbuffered channel with no receiver is cancelled.
+
+test-cancel-channel-send: ( -- ) [
+  [
+    <channel>
+    [ 42 swap send ] curry spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+  ] task-scope
+  t "cancel task blocked on channel send" assert-true
+] ;
+
+\ -- 4. Select-blocked task cancelled: a task blocked in select on two
+\      channels is cancelled.
+
+test-cancel-select: ( -- ) [
+  [
+    <channel> <channel>
+    [ { } swap #push ] dip #push
+    [ select drop drop ] curry spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+  ] task-scope
+  t "cancel task blocked on select" assert-true
+] ;
+
+\ -- 5. Await on already-cancelled task: cancel a task then await it.
+\      Verify it throws task-cancelled:.
+
+test-await-cancelled-task: ( -- ) [
+  [
+    [
+      [ 100000 milliseconds sleep ] spawn
+      dup cancel-task
+      await
+    ] task-scope
+  ] task-cancelled: "await on cancelled task throws" assert-error-type
+] ;
+
+test-nested-scope-cancellation
+test-cancel-channel-receive
+test-cancel-channel-send
+test-cancel-select
+test-await-cancelled-task
