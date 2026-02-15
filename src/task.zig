@@ -71,6 +71,7 @@ pub const Task = struct {
     cancelled: bool = false,
     blocked_on_channel: ?*anyopaque = null,
     blocked_on_io_fd: ?std.posix.fd_t = null,
+    blocked_on_scope: ?*TaskScope = null,
     /// Set by a sender when it delivers a value directly to this receiver's
     /// stack. The receiver checks and clears this on resume so it can
     /// distinguish a value handoff from a close-channel wake.

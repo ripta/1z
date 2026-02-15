@@ -90,8 +90,11 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
         try scope.addChild(scope_task);
         try scheduler.enqueue(scope_task);
 
-        scope.waiting_task = scheduler.current_task;
+        const current = scheduler.current_task.?;
+        scope.waiting_task = current;
+        current.blocked_on_scope = &scope;
         scheduler.suspendCurrentTask();
+        current.blocked_on_scope = null;
         if (scope.failed_error) |err_obj| {
             ctx.thrown_error = err_obj;
             return error.UserThrown;
@@ -302,7 +305,9 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
 
     // suspend the current task until the scope drains
     scope.waiting_task = current;
+    current.blocked_on_scope = &scope;
     scheduler.suspendCurrentTask();
+    current.blocked_on_scope = null;
 
     // inspect main task status to determine outcome
     switch (main_task.status) {
@@ -375,15 +380,7 @@ fn nativeCancelTask(ctx: *Context) anyerror!void {
         return error.InvalidState;
     };
 
-    task.cancelled = true;
-
-    if (task.blocked_on_io_fd) |fd| {
-        if (scheduler.io_wait_map.fetchRemove(fd)) |kv| {
-            scheduler.multiplexer.unregister(fd, kv.value.event) catch {};
-        }
-        task.blocked_on_io_fd = null;
-        scheduler.run_queue.append(scheduler.allocator, task) catch {};
-    }
+    scheduler.cancelTask(task);
 }
 
 /// await ( task -- value )
