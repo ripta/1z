@@ -86,3 +86,45 @@ make-ratio: ( numer denom -- ratio-or-int ) [
   -rot> numer>> swap denom>> *
   >
 ] ;
+
+\ --- Mixed integer/ratio arithmetic ---
+
++: method{ ratio fixnum } [ 1 >ratio + ] ;
++: method{ fixnum ratio } [ swap 1 >ratio swap + ] ;
++: method{ ratio bignum } [ 1 >ratio + ] ;
++: method{ bignum ratio } [ swap 1 >ratio swap + ] ;
+
+-: method{ ratio fixnum } [ 1 >ratio - ] ;
+-: method{ fixnum ratio } [ swap 1 >ratio swap - ] ;
+-: method{ ratio bignum } [ 1 >ratio - ] ;
+-: method{ bignum ratio } [ swap 1 >ratio swap - ] ;
+
+*: method{ ratio fixnum } [ 1 >ratio * ] ;
+*: method{ fixnum ratio } [ swap 1 >ratio swap * ] ;
+*: method{ ratio bignum } [ 1 >ratio * ] ;
+*: method{ bignum ratio } [ swap 1 >ratio swap * ] ;
+
+/: method{ ratio fixnum } [ 1 >ratio / ] ;
+/: method{ fixnum ratio } [ swap 1 >ratio swap / ] ;
+/: method{ ratio bignum } [ 1 >ratio / ] ;
+/: method{ bignum ratio } [ swap 1 >ratio swap / ] ;
+
+%: method{ ratio fixnum } [ 1 >ratio % ] ;
+%: method{ fixnum ratio } [ swap 1 >ratio swap % ] ;
+%: method{ ratio bignum } [ 1 >ratio % ] ;
+%: method{ bignum ratio } [ swap 1 >ratio swap % ] ;
+
+=: method{ ratio fixnum } [ 1 >ratio = ] ;
+=: method{ fixnum ratio } [ swap 1 >ratio swap = ] ;
+=: method{ ratio bignum } [ 1 >ratio = ] ;
+=: method{ bignum ratio } [ swap 1 >ratio swap = ] ;
+
+<: method{ ratio fixnum } [ 1 >ratio < ] ;
+<: method{ fixnum ratio } [ swap 1 >ratio swap < ] ;
+<: method{ ratio bignum } [ 1 >ratio < ] ;
+<: method{ bignum ratio } [ swap 1 >ratio swap < ] ;
+
+>: method{ ratio fixnum } [ 1 >ratio > ] ;
+>: method{ fixnum ratio } [ swap 1 >ratio swap > ] ;
+>: method{ ratio bignum } [ 1 >ratio > ] ;
+>: method{ bignum ratio } [ swap 1 >ratio swap > ] ;
