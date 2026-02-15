@@ -221,6 +221,14 @@ pub const Scheduler = struct {
                 //              it's still in the queue.
                 if (task.cancelled) {
                     task.status = .cancelled;
+                    // The coroutine frame won't resume, so any deferred scope
+                    // cleanup inside nativeTaskScope or nativeWithTimeout won't
+                    // run. Free the children array here while the scope pointer
+                    // is still valid (the task's stack memory hasn't been freed).
+                    if (task.blocked_on_scope) |scope| {
+                        scope.deinit();
+                        task.blocked_on_scope = null;
+                    }
                     self.handleTaskDone(task);
                     continue;
                 }
