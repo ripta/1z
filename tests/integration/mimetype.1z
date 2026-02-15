@@ -1,0 +1,25 @@
+use "testing" ;
+use "mimetype" ;
+
+"mimetype: known extensions" test-section
+".html" for-extension "text/html; charset=utf-8" "html" assert=
+".htm" for-extension "text/html; charset=utf-8" "htm" assert=
+".css" for-extension "text/css; charset=utf-8" "css" assert=
+".js" for-extension "application/javascript; charset=utf-8" "js" assert=
+".json" for-extension "application/json; charset=utf-8" "json" assert=
+".txt" for-extension "text/plain; charset=utf-8" "txt" assert=
+".xml" for-extension "application/xml; charset=utf-8" "xml" assert=
+".png" for-extension "image/png" "png" assert=
+".jpg" for-extension "image/jpeg" "jpg" assert=
+".jpeg" for-extension "image/jpeg" "jpeg" assert=
+".gif" for-extension "image/gif" "gif" assert=
+".svg" for-extension "image/svg+xml" "svg" assert=
+".ico" for-extension "image/x-icon" "ico" assert=
+".woff" for-extension "font/woff" "woff" assert=
+".woff2" for-extension "font/woff2" "woff2" assert=
+".pdf" for-extension "application/pdf" "pdf" assert=
+
+"mimetype: unknown extensions" test-section
+".xyz" for-extension "application/octet-stream" "unknown ext" assert=
+".tar" for-extension "application/octet-stream" "tar" assert=
+"" for-extension "application/octet-stream" "empty string" assert=
