@@ -1,6 +1,7 @@
 \ lib/http.1z - HTTP/1.0 library
 
 use "strings" ;
+use "server" ;
 
 EMalformedRequest: [ malformed-request: ] ;
 
@@ -111,4 +112,13 @@ method-not-allowed: ( -- response ) [
 \\ Construct an error response with text/plain body.
 error-response: ( status reason message -- response ) [
   "text/plain; charset=utf-8" swap <response>
+] ;
+
+\\ Start an HTTP server.
+\\ The handler receives the client stream and parsed request.
+\\ Blocks forever; creates its own task-scope.
+serve: ( host port handler -- ) [
+  [ swap dup read-request <rot- call ] curry
+  <server-config> swap >>handler swap >>port swap >>host
+  [ serve-forever ] curry task-scope
 ] ;

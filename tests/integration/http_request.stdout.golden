@@ -140,3 +140,24 @@ PASS: empty body connection
 Stack: [ <stream pipe(rd) read> ]
 PASS: empty body content-length
 Stack: [ ]
+=== serve: handler wrapping via TCP ===
+Stack: [ ]
+PASS: serve handler status
+PASS: serve handler blank
+PASS: serve handler body
+Stack: [ ]
+=== serve: handler receives parsed POST request ===
+Stack: [ ]
+PASS: POST handler status
+PASS: POST handler blank
+PASS: POST handler body is method
+Stack: [ ]
+=== serve: config construction ===
+Stack: [ ]
+Stack: [ "127.0.0.1" 9999 [ drop drop ] ]
+Stack: [ "127.0.0.1" 9999 [ [ drop drop ] swap dup read-request <rot- call ] ]
+Stack: [ server-config{ host: "127.0.0.1" port: 9999 backlog: 128 handler: [ [ drop drop ] swap dup read-request <rot- call ] on-error: [ drop ] } ]
+PASS: serve config host
+Stack: [ server-config{ host: "127.0.0.1" port: 9999 backlog: 128 handler: [ [ drop drop ] swap dup read-request <rot- call ] on-error: [ drop ] } ]
+PASS: serve config port
+Stack: [ ]

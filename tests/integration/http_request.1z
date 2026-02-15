@@ -1,5 +1,8 @@
 use "testing" ;
 use "http" ;
+use "net" ;
+use "tcp" ;
+use "server" ;
 
 "read-request: simple GET" test-section
 <pipe> dup "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
@@ -102,3 +105,56 @@ stream-close
 dup stream-read-line "HTTP/1.1 200 OK" "empty body status" assert=
 dup stream-read-line "Connection: close" "empty body connection" assert=
 stream-read-line "Content-Length: 0" "empty body content-length" assert=
+
+"serve: handler wrapping via TCP" test-section
+[
+  "127.0.0.1" 39285 make-addr:tcp 128 tcp-listen
+
+  dup [
+    tcp-accept drop
+    dup read-request
+    path>> "text/plain; charset=utf-8" ok
+    over -rot> send-response
+    stream-close
+  ] curry spawn
+
+  "127.0.0.1" 39285 make-addr:tcp tcp-connect
+  dup "GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "serve handler status" assert=
+  dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+  dup stream-read-line "" "serve handler blank" assert=
+  stream-read-line "/hello" "serve handler body" assert=
+
+  await drop
+  tcp-close
+] task-scope
+
+"serve: handler receives parsed POST request" test-section
+[
+  "127.0.0.1" 39286 make-addr:tcp 128 tcp-listen
+
+  dup [
+    tcp-accept drop
+    dup read-request
+    method>> "text/plain; charset=utf-8" ok
+    over -rot> send-response
+    stream-close
+  ] curry spawn
+
+  "127.0.0.1" 39286 make-addr:tcp tcp-connect
+  dup "POST /submit HTTP/1.0\r\nHost: test\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "POST handler status" assert=
+  dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+  dup stream-read-line "" "POST handler blank" assert=
+  stream-read-line "POST" "POST handler body is method" assert=
+
+  await drop
+  tcp-close
+] task-scope
+
+"serve: config construction" test-section
+"127.0.0.1" 9999 [ drop drop ]
+[ swap dup read-request <rot- call ] curry
+<server-config> swap >>handler swap >>port swap >>host
+dup host>> "127.0.0.1" "serve config host" assert=
+port>> 9999 "serve config port" assert=
