@@ -1,5 +1,7 @@
 \ Test for words primitive - dictionary introspection
 
+use "introspect" ;
+
 \ Define a user word for testing
 my-test-word: 42 ;
 

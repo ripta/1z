@@ -1,33 +1,33 @@
-H{ [parse-time] \compound
-
 Hash literal syntax.
-Stack: [ ]
-struct{ [parse-time] \compound
+H{ [<marker:parse-time>] \compound
 
+Stack: [ ]
 Struct definition syntax.
-Stack: [ ]
-virtual{ [parse-time] \compound
+struct{ [<marker:parse-time>] \compound
 
+Stack: [ ]
 Virtual type definition syntax.
-Stack: [ ]
-method{ [parse-time] \compound
+virtual{ [<marker:parse-time>] \compound
 
+Stack: [ ]
 Method dispatch registration syntax.
-Stack: [ ]
-parameter [parse-time] \compound
+method{ [<marker:parse-time>] \compound
 
+Stack: [ ]
 Dynamic variable definition syntax.
-Stack: [ ]
-use [parse-time] \compound
+parameter [<marker:parse-time>] \compound
 
+Stack: [ ]
 Load and import a module by name or file path.
 Optionally restrict imported words with a set of symbols.
+use [<marker:parse-time>] \compound
+
 Stack: [ ]
+The current output stream, defaulting to `stdout`.
 output-stream \compound
 
-The current output stream, defaulting to `stdout`.
 Stack: [ ]
+The current input stream, defaulting to `stdin`.
 input-stream \compound
 
-The current input stream, defaulting to `stdin`.
 Stack: [ ]

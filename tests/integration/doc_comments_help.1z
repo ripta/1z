@@ -1,3 +1,5 @@
+use "introspect" ;
+
 \\ Add two numbers.
 add2: ( a b -- sum ) [ + ] ;
 add2: help

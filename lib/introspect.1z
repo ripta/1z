@@ -25,10 +25,10 @@ format-word-info: ( wi -- str ) [
 
 \ Display help for a word, matching the output of the native help primitive
 help: ( symbol -- ) [
-  dup >word? {
-    option:some: [ nip format-word-info print flush ]
-    option:none: [ to-string ": no such word\n" #append print flush ]
-  } match
+  dup >word? dup option:some?
+  [ option:some> nip format-word-info ]
+  [ drop to-string ": no such word\n" #append ]
+  if print flush
 ] ;
 
 \ Find words whose markers include the given marker name.
@@ -58,4 +58,26 @@ words-matching: ( str -- array ) [
 \ Get the source location of a word as an option
 word-source: ( symbol -- option ) [
   >word? [ source-loc>> ] ?map
+] ;
+
+\ Format a single word line as "name stack-effect\n"
+format-word-line: ( wi -- ) [
+  dup name>> print
+  stack-effect>> dup f = [ drop ] [ " " print >string print ] if
+  "\n" print
+] ;
+
+\ Print all defined words in the dictionary, grouped by native vs user-defined
+words: ( -- ) [
+  all-words [ name>> ] #sort-by
+
+  "=== Native Primitives ===\n" print
+  dup >iterator [ native?>> ] #filter #collect
+  >iterator [ format-word-line ] #each
+
+  "\n=== User-Defined Words ===\n" print
+  >iterator [ native?>> not ] #filter #collect
+  >iterator [ format-word-line ] #each
+
+  flush
 ] ;

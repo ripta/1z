@@ -9,157 +9,18 @@ const StatementProcessor = @import("../statement.zig").StatementProcessor;
 const markers_mod = @import("markers.zig");
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
-const WordDefinition = @import("../dictionary.zig").WordDefinition;
-const dispatch_mod = @import("../dispatch.zig");
 
-const popSymbol = helpers.popSymbol;
 const popString = helpers.popString;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "help", .stack_effect = "name --", .doc = "Display help for a word.", .func = nativeHelp },
     .{ .name = "load", .stack_effect = "filename -- module", .doc = "Load a 1z source file and return a module with its definitions.", .func = nativeLoad },
     .{ .name = "import", .stack_effect = "module --", .doc = "Bring module words into the current scope.", .func = nativeImport },
     .{ .name = "1array", .stack_effect = "elem -- array", .doc = "Wrap element in a single-element array.", .func = native1Array },
     .{ .name = "command-line-args", .stack_effect = "-- args", .doc = "Push program arguments as an array of strings.", .func = nativeCommandLineArgs },
     .{ .name = "sys-exit", .stack_effect = "code --", .doc = "Exit the process with the given exit code.", .func = nativeSysExit },
     .{ .name = "add-load-path", .stack_effect = "path --", .doc = "Add a directory to the load path search list.", .func = nativeAddLoadPath },
-    .{ .name = "words", .stack_effect = "--", .doc = "Print all defined words in dictionary.", .func = nativeWords },
     .{ .name = "(trampoline)", .stack_effect = "*unsafe-fn-ptr* --", .doc = "Call a native function via pointer. Internal use only.", .func = nativeTrampoline },
 };
-
-/// help ( symbol -- ) - Display help for a word
-fn nativeHelp(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
-    const name = try popSymbol(ctx);
-
-    const stdout_file: std.fs.File = .stdout();
-    var stdout_buf: [4096]u8 = undefined;
-    var stdout = stdout_file.writer(&stdout_buf);
-    const writer = &stdout.interface;
-
-    if (ctx.lookupWord(name)) |word| {
-        try writer.print("{s}", .{word.name});
-        if (word.stack_effect) |effect| {
-            try writer.writeAll(" ");
-            try effect.write(writer);
-        }
-
-        if (word.markers.len > 0) {
-            try writer.writeAll(" [");
-            for (word.markers, 0..) |mk, i| {
-                if (i > 0) try writer.writeAll(", ");
-                try writer.print("{s}", .{mk.name});
-            }
-            try writer.writeAll("]");
-        }
-
-        switch (word.action) {
-            .native => try writer.writeAll(" \\native"),
-            .compound => try writer.writeAll(" \\compound"),
-        }
-
-        try writer.writeAll("\n");
-
-        if (word.doc) |doc| {
-            try writer.writeAll("\n");
-            try writer.print("{s}\n", .{doc});
-        }
-
-        const has_generic = for (word.markers) |mk| {
-            if (markers_mod.isGenericMarker(mk)) break true;
-        } else false;
-
-        const dispatch_keys = ctx.dispatch.keysForWord(name, alloc) catch &.{};
-        if (dispatch_keys.len > 0 and (has_generic or word.action == .native)) {
-            for (dispatch_keys) |key| {
-                try writer.writeAll("  method{ ");
-                if (std.mem.eql(u8, key.type_a, dispatch_mod.any_sentinel)) {
-                    try writer.writeAll("any");
-                } else {
-                    try writer.print("{s}", .{key.type_a});
-                }
-
-                if (!std.mem.eql(u8, key.type_b, dispatch_mod.unary_sentinel)) {
-                    try writer.writeAll(" ");
-                    if (std.mem.eql(u8, key.type_b, dispatch_mod.any_sentinel)) {
-                        try writer.writeAll("any");
-                    } else {
-                        try writer.print("{s}", .{key.type_b});
-                    }
-                }
-                try writer.writeAll(" }\n");
-            }
-        }
-    } else {
-        try writer.print("{s}: no such word\n", .{name});
-    }
-
-    try stdout.interface.flush();
-}
-
-/// words ( -- ) - Print all defined words in dictionary
-///
-/// TODO(ripta): Return an array of words instead?
-///              Paginate long output?
-///              Show local frame words?
-fn nativeWords(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
-
-    const stdout_file: std.fs.File = .stdout();
-    var stdout_buf: [4096]u8 = undefined;
-    var stdout = stdout_file.writer(&stdout_buf);
-    const writer = &stdout.interface;
-
-    var native_names: std.ArrayListUnmanaged([]const u8) = .{};
-    var compound_names: std.ArrayListUnmanaged([]const u8) = .{};
-
-    var iter = ctx.dictionary.entries.iterator();
-    while (iter.next()) |entry| {
-        const word = entry.value_ptr.*;
-        switch (word.action) {
-            .native => try native_names.append(alloc, entry.key_ptr.*),
-            .compound => try compound_names.append(alloc, entry.key_ptr.*),
-        }
-    }
-
-    std.mem.sort([]const u8, native_names.items, {}, struct {
-        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.order(u8, a, b) == .lt;
-        }
-    }.lessThan);
-
-    std.mem.sort([]const u8, compound_names.items, {}, struct {
-        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.order(u8, a, b) == .lt;
-        }
-    }.lessThan);
-
-    try writer.writeAll("=== Native Primitives ===\n");
-    for (native_names.items) |name| {
-        if (ctx.dictionary.get(name)) |word| {
-            try writer.print("{s}", .{name});
-            if (word.stack_effect) |effect| {
-                try writer.writeAll(" ");
-                try effect.write(writer);
-            }
-            try writer.writeAll("\n");
-        }
-    }
-
-    try writer.writeAll("\n=== User-Defined Words ===\n");
-    for (compound_names.items) |name| {
-        if (ctx.dictionary.get(name)) |word| {
-            try writer.print("{s}", .{name});
-            if (word.stack_effect) |effect| {
-                try writer.writeAll(" ");
-                try effect.write(writer);
-            }
-            try writer.writeAll("\n");
-        }
-    }
-
-    try stdout.interface.flush();
-}
 
 /// Check for if input refers to a file (contains '/' or ends with '.1z'),
 /// or if it is a bare name to search for in load paths.
