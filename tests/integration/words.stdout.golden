@@ -228,6 +228,7 @@ yield ( -- )
 <= ( a b -- ? )
 <rot- ( a b c -- b c a )
 >= ( a b -- ? )
+>hash
 >option:some
 >result:err
 >result:ok
@@ -309,6 +310,9 @@ iterator? ( val -- ? )
 keep ( ..a x quot -- ..b x )
 line>>
 loop ( ... pred -- ... )
+make-option:some
+make-result:err
+make-result:ok
 make-source-loc
 make-stack-effect
 make-word-info
@@ -337,6 +341,7 @@ odd? ( n -- ? )
 option:none
 option:none?
 option:some>
+option:some>hash
 option:some?
 option?
 or ( ? ? -- ? )
@@ -354,15 +359,19 @@ quotation? ( val -- ? )
 read-line ( -- str/f )
 receive? ( ch -- option )
 result:err>
+result:err>hash
 result:err?
 result:ok>
+result:ok>hash
 result:ok?
 result?
 run-benchmarks ( quot -- )
 set? ( val -- ? )
 source-loc>>
+source-loc>hash
 source-loc?
 stack-effect>>
+stack-effect>hash
 stack-effect?
 stream-write-string ( stream str -- n )
 stream? ( val -- ? )
@@ -374,6 +383,12 @@ try ( quot -- result )
 try-acquire ( resource -- option )
 tuck ( a b -- b a b )
 unless ( ? quot -- )
+unmake-option:some
+unmake-result:err
+unmake-result:ok
+unmake-source-loc
+unmake-stack-effect
+unmake-word-info
 unwrap-or ( opt/res default -- value )
 unwrap-or-throw ( opt/res -- value )
 use
@@ -383,6 +398,7 @@ when ( ? quot -- )
 while ( ..a pred body -- ..b )
 with-input-stream ( stream quot -- )
 with-output-stream ( stream quot -- )
+word-info>hash
 word-info?
 word-source ( symbol -- option )
 words ( -- )

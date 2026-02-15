@@ -55,7 +55,7 @@ PASS: unwrap plain value errors
 Stack: [ ]
 === no leaked struct words ===
 Stack: [ ]
-PASS: make-point does not exist
+PASS: make-point creates point instance
 Stack: [ ]
 PASS: x>> does not exist
 Stack: [ ]

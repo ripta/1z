@@ -69,7 +69,8 @@ color: virtual{ struct{ r g b } } ;
 
 "no leaked struct words" test-section
 
-\ make-point, x>>, y>> should not exist
-[ make-point ] "make-point does not exist" assert-error
+\ make-point now exists as a constructor for struct-backed virtuals
+10 20 make-point point? t "make-point creates point instance" assert=
+\ x>>, y>> should not exist
 [ x>> ] "x>> does not exist" assert-error
 [ y>> ] "y>> does not exist" assert-error
