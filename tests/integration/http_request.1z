@@ -41,3 +41,64 @@ headers>> @keys #len 0 "no headers count" assert=
 
 "read-request: malformed request line throws EMalformedRequest" test-section
 [ <pipe> dup "GET /\r\n\r\n" stream-write drop stream-close read-request ] malformed-request: "too few parts" assert-error-type
+
+"reason-for: known status code" test-section
+200 reason-for "OK" "200 reason" assert=
+404 reason-for "Not Found" "404 reason" assert=
+500 reason-for "Internal Server Error" "500 reason" assert=
+
+"reason-for: unknown status code" test-section
+999 reason-for "Unknown" "unknown reason" assert=
+
+"send-response: simple 200" test-section
+<pipe> dup
+200 "OK" "text/plain; charset=utf-8" "hello" <response>
+send-response
+stream-close
+dup stream-read-line "HTTP/1.1 200 OK" "status line" assert=
+dup stream-read-line "Connection: close" "connection header" assert=
+dup stream-read-line "Content-Length: 5" "content-length" assert=
+dup stream-read-line "content-type: text/plain; charset=utf-8" "content-type header" assert=
+dup stream-read-line "" "blank line" assert=
+stream-read-line "hello" "body" assert=
+
+"ok: convenience constructor" test-section
+<pipe> dup
+"world" "text/html; charset=utf-8" ok send-response
+stream-close
+dup stream-read-line "HTTP/1.1 200 OK" "ok status line" assert=
+dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+dup stream-read-line "" "ok blank line" assert=
+stream-read-line "world" "ok body" assert=
+
+"not-found: convenience constructor" test-section
+<pipe> dup
+not-found send-response
+stream-close
+dup stream-read-line "HTTP/1.1 404 Not Found" "404 status line" assert=
+dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+dup stream-read-line "" "404 blank line" assert=
+stream-read-line "404 Not Found" "404 body" assert=
+
+"method-not-allowed: convenience constructor" test-section
+<pipe> dup
+method-not-allowed send-response
+stream-close
+stream-read-line "HTTP/1.1 405 Method Not Allowed" "405 status line" assert=
+
+"error-response: convenience constructor" test-section
+<pipe> dup
+500 "Internal Server Error" "something broke" error-response send-response
+stream-close
+dup stream-read-line "HTTP/1.1 500 Internal Server Error" "500 status line" assert=
+dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+dup stream-read-line "" "500 blank line" assert=
+stream-read-line "something broke" "500 body" assert=
+
+"send-response: empty body" test-section
+<pipe> dup
+200 "OK" "text/plain" "" <response> send-response
+stream-close
+dup stream-read-line "HTTP/1.1 200 OK" "empty body status" assert=
+dup stream-read-line "Connection: close" "empty body connection" assert=
+stream-read-line "Content-Length: 0" "empty body content-length" assert=

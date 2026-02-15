@@ -37,3 +37,78 @@ read-request: ( stream -- request ) [
   make-request
   swap drop
 ] ;
+
+response: struct{ status reason headers body } ;
+
+status-reasons: H{
+  "100" "Continue" "101" "Switching Protocols"
+  "200" "OK" "201" "Created" "202" "Accepted" "204" "No Content" "206" "Partial Content"
+  "301" "Moved Permanently" "302" "Found" "304" "Not Modified" "307" "Temporary Redirect" "308" "Permanent Redirect"
+  "400" "Bad Request" "401" "Unauthorized" "403" "Forbidden" "404" "Not Found"
+  "405" "Method Not Allowed" "406" "Not Acceptable" "408" "Request Timeout" "409" "Conflict"
+  "410" "Gone" "413" "Content Too Large" "415" "Unsupported Media Type" "422" "Unprocessable Content" "429" "Too Many Requests"
+  "500" "Internal Server Error" "501" "Not Implemented" "502" "Bad Gateway" "503" "Service Unavailable" "504" "Gateway Timeout"
+} ;
+
+\\ Look up the reason phrase for an HTTP status code.
+reason-for: ( status -- reason ) [
+  >string status-reasons swap 2dup @has?
+  [ @get ] [ 2drop "Unknown" ] if
+] ;
+
+\\ Format response headers hash as HTTP header lines.
+format-response-headers: ( headers -- string ) [
+  dup @keys "" format-headers-loop
+] ;
+
+format-headers-loop: ( headers keys accum -- string ) [
+  over #empty?
+  [ nip nip ]
+  [
+    over #first
+    3 pick-n over @get
+    swap >string ": " #append swap #append "\r\n" #append
+    #append
+    swap 1 #drop swap
+    format-headers-loop
+  ] if
+] ;
+
+\\ Write a complete HTTP response to a stream.
+\\ Builds the full response as a single string and writes it in one call.
+send-response: ( stream response -- ) [
+  "HTTP/1.1 " over status>> >string #append
+  " " #append over reason>> #append "\r\n" #append
+  "Connection: close\r\n" #append
+  "Content-Length: " #append over body>> #len >string #append "\r\n" #append
+  over headers>> format-response-headers #append
+  "\r\n" #append
+  swap body>> #append
+  stream-write drop
+] ;
+
+\\ Construct an HTTP response with a single Content-Type header.
+<response>: ( status reason content-type body -- response ) [
+  [ H{ } swap "content-type" swap @set ] dip
+  make-response
+] ;
+
+\\ Construct a 200 OK response.
+ok: ( body content-type -- response ) [
+  swap [ 200 dup reason-for ] 2dip <response>
+] ;
+
+\\ Construct a 404 Not Found response.
+not-found: ( -- response ) [
+  404 dup reason-for "text/plain; charset=utf-8" "404 Not Found" <response>
+] ;
+
+\\ Construct a 405 Method Not Allowed response.
+method-not-allowed: ( -- response ) [
+  405 dup reason-for "text/plain; charset=utf-8" "405 Method Not Allowed" <response>
+] ;
+
+\\ Construct an error response with text/plain body.
+error-response: ( status reason message -- response ) [
+  "text/plain; charset=utf-8" swap <response>
+] ;

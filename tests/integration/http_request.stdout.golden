@@ -56,3 +56,87 @@ Stack: [ ]
 Stack: [ ]
 PASS: too few parts
 Stack: [ ]
+=== reason-for: known status code ===
+Stack: [ ]
+PASS: 200 reason
+Stack: [ ]
+PASS: 404 reason
+Stack: [ ]
+PASS: 500 reason
+Stack: [ ]
+=== reason-for: unknown status code ===
+Stack: [ ]
+PASS: unknown reason
+Stack: [ ]
+=== send-response: simple 200 ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> response{ status: 200 reason: "OK" headers: H{ content-type: "text/plain; charset=utf-8" } body: "hello" } ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: status line
+Stack: [ <stream pipe(rd) read> ]
+PASS: connection header
+Stack: [ <stream pipe(rd) read> ]
+PASS: content-length
+Stack: [ <stream pipe(rd) read> ]
+PASS: content-type header
+Stack: [ <stream pipe(rd) read> ]
+PASS: blank line
+Stack: [ <stream pipe(rd) read> ]
+PASS: body
+Stack: [ ]
+=== ok: convenience constructor ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: ok status line
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: ok blank line
+Stack: [ <stream pipe(rd) read> ]
+PASS: ok body
+Stack: [ ]
+=== not-found: convenience constructor ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: 404 status line
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: 404 blank line
+Stack: [ <stream pipe(rd) read> ]
+PASS: 404 body
+Stack: [ ]
+=== method-not-allowed: convenience constructor ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: 405 status line
+Stack: [ ]
+=== error-response: convenience constructor ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: 500 status line
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: 500 blank line
+Stack: [ <stream pipe(rd) read> ]
+PASS: 500 body
+Stack: [ ]
+=== send-response: empty body ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: empty body status
+Stack: [ <stream pipe(rd) read> ]
+PASS: empty body connection
+Stack: [ <stream pipe(rd) read> ]
+PASS: empty body content-length
+Stack: [ ]
