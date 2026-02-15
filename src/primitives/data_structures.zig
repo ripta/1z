@@ -25,11 +25,14 @@ pub const primitives = [_]Primitive{
 };
 
 /// Helper to extract string from symbol or string value
-pub fn extractKeyString(val: Value) ![]const u8 {
+pub fn extractKeyString(ctx: *Context, val: Value) ![]const u8 {
     return switch (val) {
         .symbol => |s| s,
         .string => |s| s,
-        else => error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol or string", val);
+            return error.TypeMismatch;
+        },
     };
 }
 
@@ -136,7 +139,10 @@ pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
                 if (int < 0 or int > 255) return error.FixnumOverflow;
                 ba.append(alloc, @intCast(int)) catch return error.OutOfMemory;
             },
-            else => return error.TypeMismatch,
+            else => {
+                helpers.setTypeMismatchError(ctx, "fixnum", val);
+                return error.TypeMismatch;
+            },
         }
     }
 
@@ -223,7 +229,7 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
     const key = try ctx.stack.pop();
     const obj = try ctx.stack.pop();
 
-    const key_str = try extractKeyString(key);
+    const key_str = try extractKeyString(ctx, key);
 
     switch (obj) {
         .mutable_map => |m| {
@@ -241,7 +247,10 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
 
             try ctx.stack.push(.{ .mutable_map = m });
         },
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "mutable-map", obj);
+            return error.TypeMismatch;
+        },
     }
 }
 
@@ -250,13 +259,16 @@ pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
     const key = try ctx.stack.pop();
     const obj = try ctx.stack.pop();
 
-    const key_str = try extractKeyString(key);
+    const key_str = try extractKeyString(ctx, key);
 
     switch (obj) {
         .mutable_map => |m| {
             _ = m.remove(key_str);
             try ctx.stack.push(.{ .mutable_map = m });
         },
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "mutable-map", obj);
+            return error.TypeMismatch;
+        },
     }
 }

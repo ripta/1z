@@ -30,7 +30,10 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
     const markers_val = try ctx.stack.pop();
     const markers_array = switch (markers_val) {
         .array => |arr| arr,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "array", markers_val);
+            return error.TypeMismatch;
+        },
     };
 
     var allow_overwrite = false;
@@ -48,13 +51,19 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
     const desc_val = try ctx.stack.pop();
     const desc_map: *MutableMap = switch (desc_val) {
         .mutable_map => |m| m,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "mutable-map", desc_val);
+            return error.TypeMismatch;
+        },
     };
 
     const types_val = desc_map.get("types") orelse return error.MissingField;
     const types_array = switch (types_val) {
         .array => |arr| arr,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "array", types_val);
+            return error.TypeMismatch;
+        },
     };
 
     if (types_array.len == 0) {
@@ -69,13 +78,19 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
     const body_val = desc_map.get("body") orelse return error.MissingField;
     const body = switch (body_val) {
         .quotation => |q| q,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "quotation", body_val);
+            return error.TypeMismatch;
+        },
     };
 
     const name_val = try ctx.stack.pop();
     const word_name = switch (name_val) {
         .symbol => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol", name_val);
+            return error.TypeMismatch;
+        },
     };
 
     const word_def = ctx.lookupWord(word_name) orelse {
@@ -107,14 +122,20 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
 
     const type_a_str = switch (types_array[0]) {
         .string => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "string", types_array[0]);
+            return error.TypeMismatch;
+        },
     };
     type_a = if (std.mem.eql(u8, type_a_str, "any")) any_sentinel else type_a_str;
 
     if (types_array.len == 2) {
         const type_b_str = switch (types_array[1]) {
             .string => |s| s,
-            else => return error.TypeMismatch,
+            else => {
+                helpers.setTypeMismatchError(ctx, "string", types_array[1]);
+                return error.TypeMismatch;
+            },
         };
         type_b = if (std.mem.eql(u8, type_b_str, "any")) any_sentinel else type_b_str;
     }

@@ -871,9 +871,23 @@ pub const Context = struct {
         // Only capture on first error
         if (self.error_details.items.len > 0) return;
 
-        var kebab_buf: [128]u8 = undefined;
-        const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
-        const duped_name = self.arena.allocator().dupe(u8, kebab_name) catch @errorName(err);
+        // For user-thrown errors, use the ErrorObject's type and message
+        // instead of the generic "user-thrown" Zig error name.
+        const error_type: []const u8 = blk: {
+            if (err == error.UserThrown) {
+                if (self.thrown_error) |thrown| break :blk thrown.error_type;
+            }
+            var kebab_buf: [128]u8 = undefined;
+            const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
+            break :blk self.arena.allocator().dupe(u8, kebab_name) catch @errorName(err);
+        };
+
+        const thrown_msg: ?[]const u8 = blk: {
+            if (err == error.UserThrown) {
+                if (self.thrown_error) |thrown| break :blk thrown.message;
+            }
+            break :blk null;
+        };
 
         // Consume any pending error message for the innermost frame
         const pending_msg = self.pending_error_message;
@@ -885,9 +899,14 @@ pub const Context = struct {
         while (i > 0) {
             i -= 1;
             const frame = self.call_stack.items[i];
-            const message = if (is_innermost and pending_msg != null) pending_msg.? else frame.word_name;
+            const message = if (is_innermost and thrown_msg != null)
+                thrown_msg.?
+            else if (is_innermost and pending_msg != null)
+                pending_msg.?
+            else
+                frame.word_name;
             self.error_details.append(self.allocator, .{
-                .error_type = duped_name,
+                .error_type = error_type,
                 .message = message,
                 .source = self.current_source,
                 .line = frame.line,

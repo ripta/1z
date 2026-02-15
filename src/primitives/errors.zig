@@ -213,7 +213,10 @@ pub fn nativeRethrow(ctx: *Context) anyerror!void {
             }
             return error.UserRethrown;
         },
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "error", val);
+            return error.TypeMismatch;
+        },
     }
 }
 
@@ -230,14 +233,23 @@ fn nativeMakeError(ctx: *Context) anyerror!void {
     const error_type = switch (type_val) {
         .string => |s| s,
         .symbol => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "string or symbol", type_val);
+            return error.TypeMismatch;
+        },
     };
 
     // Extract message from string or f (false = no message)
     const message = switch (message_val) {
         .string => |s| s,
-        .boolean => |b| if (!b) error_type else return error.TypeMismatch,
-        else => return error.TypeMismatch,
+        .boolean => |b| if (!b) error_type else {
+            helpers.setTypeMismatchError(ctx, "string or f", message_val);
+            return error.TypeMismatch;
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "string or f", message_val);
+            return error.TypeMismatch;
+        },
     };
 
     // Data can be any value; f means no data
@@ -274,6 +286,9 @@ fn nativeThrow(ctx: *Context) anyerror!void {
             ctx.thrown_error = err_obj;
             return error.UserThrown;
         },
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "error", val);
+            return error.TypeMismatch;
+        },
     }
 }

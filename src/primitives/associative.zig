@@ -66,7 +66,7 @@ pub fn nativeAtGet(ctx: *Context) anyerror!void {
     const key = try ctx.stack.pop();
     const obj = try ctx.stack.pop();
 
-    const key_str = try extractKeyString(key);
+    const key_str = try extractKeyString(ctx, key);
 
     switch (obj) {
         .hash => |h| {
@@ -125,7 +125,7 @@ fn nativeAtGetOr(ctx: *Context) anyerror!void {
     const key = try ctx.stack.pop();
     const obj = try ctx.stack.pop();
 
-    const key_str = try extractKeyString(key);
+    const key_str = try extractKeyString(ctx, key);
 
     switch (obj) {
         .hash => |h| {
@@ -186,7 +186,7 @@ pub fn nativeAtHas(ctx: *Context) anyerror!void {
     const key = try ctx.stack.pop();
     const obj = try ctx.stack.pop();
 
-    const key_str = try extractKeyString(key);
+    const key_str = try extractKeyString(ctx, key);
 
     switch (obj) {
         .hash => |h| {
@@ -223,7 +223,7 @@ pub fn nativeAtSet(ctx: *Context) anyerror!void {
     const key = try ctx.stack.pop();
     const obj = try ctx.stack.pop();
 
-    const key_str = try extractKeyString(key);
+    const key_str = try extractKeyString(ctx, key);
 
     switch (obj) {
         .hash => |h| {

@@ -171,7 +171,10 @@ fn nativeBenchmarkRun(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const report = switch (val) {
         .benchmark_report => |r| r,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "benchmark-report", val);
+            return error.TypeMismatch;
+        },
     };
 
     const hash = try executeBenchmark(ctx, quot);
@@ -191,7 +194,10 @@ fn nativeBenchmarkN(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const report = switch (val) {
         .benchmark_report => |r| r,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "benchmark-report", val);
+            return error.TypeMismatch;
+        },
     };
 
     const hash = try executeBenchmarkN(ctx, quot, n);
@@ -206,7 +212,10 @@ fn nativeBenchmarkAuto(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const report = switch (val) {
         .benchmark_report => |r| r,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "benchmark-report", val);
+            return error.TypeMismatch;
+        },
     };
 
     const target_ns: u64 = 100_000_000; // 100ms
@@ -253,14 +262,20 @@ fn nativePrintBenchmarkReport(ctx: *Context) anyerror!void {
             const label_val = try ctx.stack.pop();
             const label = switch (label_val) {
                 .string => |s| s,
-                else => return error.TypeMismatch,
+                else => {
+                    helpers.setTypeMismatchError(ctx, "string", label_val);
+                    return error.TypeMismatch;
+                },
             };
             // Create a temporary single-entry report
             var tmp_report = BenchmarkReport.init(alloc);
             try tmp_report.addEntry(label, hash);
             try printReportTable(ctx, &tmp_report);
         },
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "benchmark-report or hash", val);
+            return error.TypeMismatch;
+        },
     }
 }
 
