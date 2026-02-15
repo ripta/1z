@@ -1,0 +1,60 @@
+=== inexact fixnum division produces ratio ===
+Stack: [ ]
+PASS: 7/2 is ratio
+Stack: [ ]
+PASS: 7/2 display
+Stack: [ ]
+PASS: 5/3 display
+Stack: [ ]
+PASS: -7/2 display
+Stack: [ ]
+PASS: 7/-2 normalizes sign
+Stack: [ ]
+=== exact fixnum division still produces integer ===
+Stack: [ ]
+PASS: 6/2 = 3
+Stack: [ ]
+PASS: 6/2 is fixnum
+Stack: [ ]
+PASS: -6/2 = -3
+Stack: [ ]
+PASS: 0/5 = 0
+Stack: [ ]
+=== ratio round-trip preserves precision ===
+Stack: [ ]
+PASS: 1/3 * 3 = 1
+Stack: [ ]
+PASS: 2/7 * 7 = 2
+Stack: [ ]
+=== inexact bignum division produces ratio ===
+Stack: [ ]
+PASS: big/big is ratio
+Stack: [ ]
+PASS: big/3 is ratio
+Stack: [ ]
+=== exact bignum division still produces integer ===
+Stack: [ ]
+PASS: big/3 exact is bignum
+Stack: [ ]
+PASS: big/3 exact value
+Stack: [ ]
+=== division by zero unchanged ===
+Stack: [ ]
+PASS: DivisionByZero
+Stack: [ ]
+PASS: DivisionByZero
+Stack: [ ]
+=== minInt / -1 still promotes to bignum ===
+Stack: [ ]
+PASS: minInt/-1 is bignum
+Stack: [ ]
+PASS: minInt/-1 value
+Stack: [ ]
+=== float division unchanged ===
+Stack: [ ]
+PASS: float / float
+Stack: [ ]
+PASS: fixnum / float
+Stack: [ ]
+PASS: float / fixnum
+Stack: [ ]

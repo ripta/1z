@@ -47,7 +47,7 @@ range-inclusive: ( start end -- range ) [ range= ] ;
 #len: method{ range } [
   range>
   [ "#len: infinite range has no length" throw ] when
-  -rot> swap - over + over dup 0 > [ drop 1 ] [ drop -1 ] if - swap /
+  -rot> swap - over + over dup 0 > [ drop 1 ] [ drop -1 ] if - swap div
   dup 0 < [ drop 0 ] when
 ] ;
 

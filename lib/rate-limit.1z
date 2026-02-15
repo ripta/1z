@@ -25,7 +25,7 @@ refill: ( limiter -- limiter ) [
   monotonic-nanos swap -  \ limiter elapsed
   over interval>>         \ limiter elapsed interval
   dup 0 = [ 2drop ] [
-    /  \ limiter new-tokens
+    div  \ limiter new-tokens
     dup 0 > [
       over tokens>> +                \ limiter raw-tokens
       over burst>> min               \ limiter capped-tokens
