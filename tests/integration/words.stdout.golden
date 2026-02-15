@@ -248,6 +248,8 @@ EFileNotFound
 EFileReadFailed
 EFixnumOverflow
 EIOFailed
+EIndexOutOfBounds
+EInvalidArgument
 EKeyNotFound
 ENoMatchingBranch
 ENotComparable

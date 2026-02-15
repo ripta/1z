@@ -7,7 +7,7 @@
 \\ Read the next quotation from the tokenizer.
 parse-quotation: ( -- quotation ) [
   parse-literal dup type-of quotation: =
-  [ ] [ "expected quotation" throw ] if
+  [ ] [ f "expected quotation" ETypeMismatch make-error throw ] if
 ] ;
 
 \\ Hash literal syntax.
@@ -117,7 +117,9 @@ ENotComparable:       [ not-comparable: ] ;
 EIOFailed: [ io-failed: ] ;
 ENoMatchingBranch: [ no-matching-branch: ] ;
 ECannotRedefineConst: [ cannot-redefine-const: ] ;
-EUnexpectedEOF: [ unexpected-eof: ] ;
+EUnexpectedEOF:       [ unexpected-eof: ] ;
+EIndexOutOfBounds:    [ index-out-of-bounds: ] ;
+EInvalidArgument:     [ invalid-argument: ] ;
 \ TODO(ripta): the pattern is a bit repetitive and odd; maybe a parse-time?
 \\ Construct and throw a no-matching-branch error with the given data.
 no-matching-branch: ( data -- error ) [ "no matching branch" ENoMatchingBranch make-error ] ;
@@ -171,17 +173,27 @@ generic?: ( name -- ? ) [ word-markers [ generic = ] #any ] ;
 \ Short-circuiting sequence predicates
 \\ Test whether any element satisfies the predicate. Short-circuits.
 #any: ( seq quot -- ? ) [
-  [ swap [ over call [ found: throw ] when ] #each drop f ]
-  [ 2drop t ]
-  recover
+  any-loop: ( iter quot -- ? ) [
+    over #next?
+    dup option:some? [
+      option:some> over call
+      [ 2drop t ] [ any-loop ] if
+    ] [ drop 2drop f ] if
+  ] ;
+  swap >iterator swap any-loop
 ] ;
 \\ Test whether no element satisfies the predicate.
 #none: ( seq quot -- ? ) [ #any not ] ;
 \\ Test whether all elements satisfy the predicate. Short-circuits.
 #all: ( seq quot -- ? ) [
-  [ swap [ over call not [ fail: throw ] when ] #each drop t ]
-  [ 2drop f ]
-  recover
+  all-loop: ( iter quot -- ? ) [
+    over #next?
+    dup option:some? [
+      option:some> over call
+      [ all-loop ] [ 2drop f ] if
+    ] [ drop 2drop t ] if
+  ] ;
+  swap >iterator swap all-loop
 ] ;
 
 \ Stack-shuffling
@@ -245,9 +257,9 @@ positive?: ( x -- ? ) [ 0 > ] ;
 \\ Test whether a numeric value is strictly negative.
 negative?: ( x -- ? ) [ 0 < ] ;
 \\ Test whether an integer is even.
-even?: ( n -- ? ) [ dup integer? [ 2 % 0 = ] [ "even? requires an integer" throw ] if ] ;
+even?: ( n -- ? ) [ dup integer? [ 2 % 0 = ] [ f "even? requires an integer" ETypeMismatch make-error throw ] if ] ;
 \\ Test whether an integer is odd.
-odd?: ( n -- ? ) [ dup integer? [ 2 % 0 = not ] [ "odd? requires an integer" throw ] if ] ;
+odd?: ( n -- ? ) [ dup integer? [ 2 % 0 = not ] [ f "odd? requires an integer" ETypeMismatch make-error throw ] if ] ;
 \ Comparison operators
 \\ Less than or equal.
 <=: ( a b -- ? ) [ 2dup < [ 2drop t ] [ = ] if ] ;
@@ -391,32 +403,32 @@ run-benchmarks: ( quot -- ) [ make-benchmark-report swap call print-benchmark-re
 \ Option/Result combinators
 
 \\ Extract the inner value from an option or result, or return the default.
-unwrap-or: generic ( opt/res default -- value ) [ "unwrap-or requires an option or result" throw ] ;
+unwrap-or: generic ( opt/res default -- value ) [ f "unwrap-or requires an option or result" ETypeMismatch make-error throw ] ;
 unwrap-or: method{ option any } [ swap dup option:some? [ option:some> nip ] [ drop ] if ] ;
 unwrap-or: method{ result any } [ swap dup result:ok? [ unmake-result:ok nip ] [ drop ] if ] ;
 
 \\ Extract the inner value, or throw on none/err.
-unwrap-or-throw: generic ( opt/res -- value ) [ "unwrap-or-throw requires an option or result" throw ] ;
-unwrap-or-throw: method{ option } [ dup option:some? [ option:some> ] [ drop "unwrap called on none" throw ] if ] ;
+unwrap-or-throw: generic ( opt/res -- value ) [ f "unwrap-or-throw requires an option or result" ETypeMismatch make-error throw ] ;
+unwrap-or-throw: method{ option } [ dup option:some? [ option:some> ] [ drop f "unwrap called on none" ETypeMismatch make-error throw ] if ] ;
 unwrap-or-throw: method{ result } [ dup result:ok? [ unmake-result:ok ] [ unmake-result:err throw ] if ] ;
 
 \\ Apply quot to the inner value if some/ok, wrapping the result in some/ok. Pass through none/err unchanged.
-?map: generic ( opt/res quot -- opt/res ) [ "?map requires an option or result" throw ] ;
+?map: generic ( opt/res quot -- opt/res ) [ f "?map requires an option or result" ETypeMismatch make-error throw ] ;
 ?map: method{ option quotation } [ swap dup option:some? [ option:some> swap call >option:some ] [ nip ] if ] ;
 ?map: method{ result quotation } [ swap dup result:ok? [ unmake-result:ok swap call >result:ok ] [ nip ] if ] ;
 
 \\ Apply quot to the inner value if some/ok; quot must itself return an option/result. Pass through none/err unchanged.
-?and-then: generic ( opt/res quot -- opt/res ) [ "?and-then requires an option or result" throw ] ;
+?and-then: generic ( opt/res quot -- opt/res ) [ f "?and-then requires an option or result" ETypeMismatch make-error throw ] ;
 ?and-then: method{ option quotation } [ swap dup option:some? [ option:some> swap call ] [ nip ] if ] ;
 ?and-then: method{ result quotation } [ swap dup result:ok? [ unmake-result:ok swap call ] [ nip ] if ] ;
 
 \\ If none/err, call quot to produce a replacement option/result. If some/ok, pass through unchanged.
-?or-else: generic ( opt/res quot -- opt/res ) [ "?or-else requires an option or result" throw ] ;
+?or-else: generic ( opt/res quot -- opt/res ) [ f "?or-else requires an option or result" ETypeMismatch make-error throw ] ;
 ?or-else: method{ option quotation } [ swap dup option:some? [ nip ] [ drop call ] if ] ;
 ?or-else: method{ result quotation } [ swap dup result:ok? [ nip ] [ drop call ] if ] ;
 
 \\ Unwrap one layer of nesting: some(some(x)) becomes some(x), some(none) becomes none. Same for result.
-?flatten: generic ( nested -- opt/res ) [ "?flatten requires an option or result" throw ] ;
+?flatten: generic ( nested -- opt/res ) [ f "?flatten requires an option or result" ETypeMismatch make-error throw ] ;
 ?flatten: method{ option } [ dup option:some? [ option:some> ] when ] ;
 ?flatten: method{ result } [ dup result:ok? [ unmake-result:ok ] when ] ;
 
@@ -444,11 +456,11 @@ receive?: ( ch -- option ) [ [ receive >option:some ] [ drop option:none ] recov
 \\ Blocking acquire: consumes a token or permit from the resource.
 \\ Yields to the scheduler until a token is available.
 \\ Must be called inside task-scope.
-acquire: generic ( resource -- ) [ "acquire not implemented for this type" throw ] ;
+acquire: generic ( resource -- ) [ f "acquire not implemented for this type" ETypeMismatch make-error throw ] ;
 
 \\ Non-blocking acquire: attempts to consume a token without blocking.
 \\ Returns option:some on success, option:none if unavailable.
-try-acquire: generic ( resource -- option ) [ "try-acquire not implemented for this type" throw ] ;
+try-acquire: generic ( resource -- option ) [ f "try-acquire not implemented for this type" ETypeMismatch make-error throw ] ;
 
 \ Introspection struct types
 

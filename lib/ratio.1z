@@ -1,5 +1,7 @@
 \ lib/ratio.1z - Exact rational arithmetic
 
+EInexactConversion: [ inexact-conversion: ] ;
+
 ratio: virtual{ struct{ numer denom } } ;
 
 \ Accessors: unwrap the virtual type, then extract by position
@@ -10,7 +12,7 @@ denom>>: ( ratio -- d ) [ unmake-ratio nip ] ;
 \ Normalizing constructor: reduces to lowest terms, enforces positive
 \ denominator, demotes to integer when denominator is 1.
 normalize-ratio: ( numer denom -- ratio-or-int ) [
-  dup 0 = [ "DivisionByZero" throw ] when
+  dup 0 = [ f "division by zero" EDivisionByZero make-error throw ] when
   2dup gcd
   tuck
   div
@@ -191,6 +193,6 @@ float>ratio: ( f -- ratio-or-int ) [
 >float(exact): ( x -- f ) [
   dup float?
   [ ]
-  [ dup >float dup float>ratio <rot- = not [ "EInexactConversion" throw ] when ]
+  [ dup >float dup float>ratio <rot- = not [ f "inexact conversion" EInexactConversion make-error throw ] when ]
   if
 ] ;

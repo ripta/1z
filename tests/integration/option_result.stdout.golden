@@ -185,7 +185,7 @@ PASS: unwrap-or-throw some returns value
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
 PASS: unwrap-or-throw some string
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
-PASS: unwrap called on none
+PASS: unwrap-or-throw none throws type-mismatch
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
 === unwrap-or-throw on result ===
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
@@ -288,13 +288,13 @@ Stack: [ <option:some option:some{ value: <color:red red:> }> ]
 Stack: [ <option:some option:some{ value: <color:red red:> }> <option:some option:some{ value: 7 }> ]
 PASS: chained ?or-else
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
-PASS: ?map requires an option or result
+PASS: ?map on non-option/result throws type-mismatch
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
-PASS: ?and-then requires an option or result
+PASS: ?and-then on non-option/result throws type-mismatch
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
-PASS: ?or-else requires an option or result
+PASS: ?or-else on non-option/result throws type-mismatch
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
-PASS: ?flatten requires an option or result
+PASS: ?flatten on non-option/result throws type-mismatch
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
 === try ===
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
@@ -321,7 +321,7 @@ PASS: try err unwrap-or default
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
 PASS: try ok unwrap-or value
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
-PASS: boom
+PASS: try unwrap-or-throw rethrows
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
 === @get? ===
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
