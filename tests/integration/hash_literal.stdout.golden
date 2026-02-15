@@ -18,3 +18,25 @@ PASS: hash y value
 Stack: [ ]
 PASS: hash z value
 Stack: [ ]
+=== Hash with string keys ===
+Stack: [ ]
+PASS: string key name
+Stack: [ ]
+PASS: string key age
+Stack: [ ]
+PASS: dotted string key
+Stack: [ ]
+PASS: string key count
+Stack: [ ]
+=== Hash with mixed symbol and string keys ===
+Stack: [ ]
+PASS: mixed keys symbol
+Stack: [ ]
+PASS: mixed keys string
+Stack: [ ]
+=== Mutable map with string keys ===
+Stack: [ ]
+PASS: mmap string key x
+Stack: [ ]
+PASS: mmap string key y
+Stack: [ ]
