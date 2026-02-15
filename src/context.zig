@@ -448,6 +448,11 @@ pub const Context = struct {
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
+            var j = ctx.local_frames.items.len;
+            while (j > 0) {
+                j -= 1;
+                if (ctx.local_frames.items[j].get(name)) |def| return def;
+            }
             if (ctx.dictionary.get(name)) |def| return def;
             ancestor = ctx.parent_context;
         }
