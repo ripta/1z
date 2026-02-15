@@ -55,8 +55,11 @@ enum{: parse-time [
 \ Standard sum types
 \\ Optional value: either `some` wrapping a value, or `none`.
 option: enum{ some struct{ value } none } ;
+option:some>: ( option -- value ) [ unmake-option:some ] ;
 \\ Fallible result: either `ok` wrapping a value, or `err` wrapping an error.
 result: enum{ ok struct{ value } err struct{ error } } ;
+result:ok>: ( result -- value ) [ unmake-result:ok ] ;
+result:err>: ( result -- error ) [ unmake-result:err ] ;
 
 \\ Method dispatch registration syntax.
 \   word: method{ type1 type2 } [ body ] ;
@@ -389,22 +392,22 @@ run-benchmarks: ( quot -- ) [ make-benchmark-report swap call print-benchmark-re
 \\ Extract the inner value from an option or result, or return the default.
 unwrap-or: generic ( opt/res default -- value ) [ "unwrap-or requires an option or result" throw ] ;
 unwrap-or: method{ option any } [ swap dup option:some? [ option:some> nip ] [ drop ] if ] ;
-unwrap-or: method{ result any } [ swap dup result:ok? [ result:ok> nip ] [ drop ] if ] ;
+unwrap-or: method{ result any } [ swap dup result:ok? [ unmake-result:ok nip ] [ drop ] if ] ;
 
 \\ Extract the inner value, or throw on none/err.
 unwrap-or-throw: generic ( opt/res -- value ) [ "unwrap-or-throw requires an option or result" throw ] ;
 unwrap-or-throw: method{ option } [ dup option:some? [ option:some> ] [ drop "unwrap called on none" throw ] if ] ;
-unwrap-or-throw: method{ result } [ dup result:ok? [ result:ok> ] [ result:err> throw ] if ] ;
+unwrap-or-throw: method{ result } [ dup result:ok? [ unmake-result:ok ] [ unmake-result:err throw ] if ] ;
 
 \\ Apply quot to the inner value if some/ok, wrapping the result in some/ok. Pass through none/err unchanged.
 ?map: generic ( opt/res quot -- opt/res ) [ "?map requires an option or result" throw ] ;
 ?map: method{ option quotation } [ swap dup option:some? [ option:some> swap call >option:some ] [ nip ] if ] ;
-?map: method{ result quotation } [ swap dup result:ok? [ result:ok> swap call >result:ok ] [ nip ] if ] ;
+?map: method{ result quotation } [ swap dup result:ok? [ unmake-result:ok swap call >result:ok ] [ nip ] if ] ;
 
 \\ Apply quot to the inner value if some/ok; quot must itself return an option/result. Pass through none/err unchanged.
 ?and-then: generic ( opt/res quot -- opt/res ) [ "?and-then requires an option or result" throw ] ;
 ?and-then: method{ option quotation } [ swap dup option:some? [ option:some> swap call ] [ nip ] if ] ;
-?and-then: method{ result quotation } [ swap dup result:ok? [ result:ok> swap call ] [ nip ] if ] ;
+?and-then: method{ result quotation } [ swap dup result:ok? [ unmake-result:ok swap call ] [ nip ] if ] ;
 
 \\ If none/err, call quot to produce a replacement option/result. If some/ok, pass through unchanged.
 ?or-else: generic ( opt/res quot -- opt/res ) [ "?or-else requires an option or result" throw ] ;
@@ -414,7 +417,7 @@ unwrap-or-throw: method{ result } [ dup result:ok? [ result:ok> ] [ result:err> 
 \\ Unwrap one layer of nesting: some(some(x)) becomes some(x), some(none) becomes none. Same for result.
 ?flatten: generic ( nested -- opt/res ) [ "?flatten requires an option or result" throw ] ;
 ?flatten: method{ option } [ dup option:some? [ option:some> ] when ] ;
-?flatten: method{ result } [ dup result:ok? [ result:ok> ] when ] ;
+?flatten: method{ result } [ dup result:ok? [ unmake-result:ok ] when ] ;
 
 \\ Call a quotation, wrapping success in result:ok and thrown errors in result:err.
 try: ( quot -- result ) [ [ call >result:ok ] [ >result:err ] recover ] ;

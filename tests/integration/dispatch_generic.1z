@@ -31,7 +31,7 @@ f describe "no" "method dispatches for boolean false" assert=
 duration: virtual{ fixnum } ;
 
 \ Register a method for the virtual type
-describe: method{ duration } [ duration> to-string " ns" #append ] ;
+describe: method{ duration } [ unmake-duration to-string " ns" #append ] ;
 
 \ Test: virtual type uses its registered method
 100 >duration describe "100 ns" "method dispatches for duration" assert=

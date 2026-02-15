@@ -340,7 +340,7 @@ number? ( val -- ? )
 odd? ( n -- ? )
 option:none
 option:none?
-option:some>
+option:some> ( option -- value )
 option:some>hash
 option:some?
 option?
@@ -358,10 +358,10 @@ protocol{
 quotation? ( val -- ? )
 read-line ( -- str/f )
 receive? ( ch -- option )
-result:err>
+result:err> ( result -- error )
 result:err>hash
 result:err?
-result:ok>
+result:ok> ( result -- value )
 result:ok>hash
 result:ok?
 result?

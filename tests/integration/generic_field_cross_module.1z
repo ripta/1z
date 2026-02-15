@@ -34,9 +34,9 @@ vt: virtual{ struct{ y z } } ;
 
 \ y>> and z>> should not be accessible on the virtual type
 \ because virtual types use positional destructuring, not field accessors
-[ 10 20 >vt y>> ] "y>> does not work on embedded struct virtual" assert-error
-[ 10 20 >vt z>> ] "z>> does not work on embedded struct virtual" assert-error
+[ 10 20 make-vt y>> ] "y>> does not work on embedded struct virtual" assert-error
+[ 10 20 make-vt z>> ] "z>> does not work on embedded struct virtual" assert-error
 
-\ The virtual type itself works via positional wrap/unwrap
-10 20 >vt vt> 20 "virtual unwrap second field" assert=
-10 "virtual unwrap first field" assert=
+\ The virtual type itself works via positional/hash wrap and unmake
+10 20 make-vt unmake-vt 20 "virtual unmake second field" assert=
+10 "virtual unmake first field" assert=

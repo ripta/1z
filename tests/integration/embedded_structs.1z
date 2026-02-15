@@ -7,69 +7,84 @@ use "testing" ;
 \ Define a struct-backed virtual type
 point: virtual{ struct{ x y } } ;
 
-\ Positional wrap + type-of
-10 20 >point type-of point: "type-of returns virtual type name" assert=
+\ Hash-based wrap + type-of
+H{ x: 10 y: 20 } >point type-of point: "type-of returns virtual type name" assert=
 
 \ Predicate
-10 20 >point point? t "point? on point is true" assert=
+H{ x: 10 y: 20 } >point point? t "point? on point is true" assert=
 42 point? f "point? on integer is false" assert=
 "hello" point? f "point? on string is false" assert=
 
+\ Positional wrap via make-point
+10 20 make-point point? t "make-point creates point" assert=
+
 \ Destructuring unwrap pushes all fields in order
-10 20 >point point> 20 "unwrap second field" assert=
-10 "unwrap first field" assert=
+10 20 make-point unmake-point 20 "unmake-point second field" assert=
+10 "unmake-point first field" assert=
 
 "display format" test-section
 
 \ Display format: <point point{ x: 10 y: 20 }>
-10 20 >point to-string "<point point{ x: 10 y: 20 }>" "display format" assert=
+10 20 make-point to-string "<point point{ x: 10 y: 20 }>" "display format" assert=
 
 "equality" test-section
 
 \ Same fields equal
-10 20 >point 10 20 >point = t "same fields are equal" assert=
+10 20 make-point 10 20 make-point = t "same fields are equal" assert=
 
 \ Different fields not equal
-10 20 >point 10 30 >point = f "different fields not equal" assert=
+10 20 make-point 10 30 make-point = f "different fields not equal" assert=
 
 \ Tagged vs plain value not equal
-10 20 >point 42 = f "point vs integer not equal" assert=
+10 20 make-point 42 = f "point vs integer not equal" assert=
 
 "zero-field embedded struct" test-section
 
 \ Unit type with no fields
 unit: virtual{ struct{ } } ;
 
->unit type-of unit: "zero-field type-of" assert=
->unit unit? t "zero-field predicate true" assert=
+H{ } >unit type-of unit: "zero-field type-of" assert=
+H{ } >unit unit? t "zero-field predicate true" assert=
 
 \ Unwrap pushes nothing, re-wrap should produce an equal value
->unit unit> >unit >unit = t "zero-field round-trip equal" assert=
+make-unit unmake-unit make-unit make-unit = t "zero-field round-trip equal" assert=
 
 \ Two unit values are equal
->unit >unit = t "zero-field values are equal" assert=
+make-unit make-unit = t "zero-field values are equal" assert=
 
 "multiple struct-backed virtual types" test-section
 
 \ Second distinct struct-backed virtual type
 color: virtual{ struct{ r g b } } ;
 
-255 128 0 >color type-of color: "color type-of" assert=
-255 128 0 >color color? t "color predicate true" assert=
-10 20 >point color? f "point is not a color" assert=
-255 128 0 >color point? f "color is not a point" assert=
+255 128 0 make-color type-of color: "color type-of" assert=
+255 128 0 make-color color? t "color predicate true" assert=
+10 20 make-point color? f "point is not a color" assert=
+255 128 0 make-color point? f "color is not a point" assert=
 
 "error cases" test-section
 
 \ Unwrap wrong virtual type
-[ 255 128 0 >color point> ] "unwrap wrong type errors" assert-error
+[ 255 128 0 make-color unmake-point ] "unwrap wrong type errors" assert-error
 
 \ Unwrap plain value
-[ 42 point> ] "unwrap plain value errors" assert-error
+[ 42 unmake-point ] "unwrap plain value errors" assert-error
+
+"hash-based >point" test-section
+
+\ >point accepts a hash
+H{ x: 10 y: 20 } >point unmake-point 20 ">point hash wrap y field" assert=
+10 ">point hash wrap x field" assert=
+
+\ >point rejects missing fields
+[ H{ x: 10 } >point ] ">point missing field errors" assert-error
+
+\ >point rejects extra fields
+[ H{ x: 10 y: 20 z: 30 } >point ] ">point extra field errors" assert-error
 
 "no leaked struct words" test-section
 
-\ make-point now exists as a constructor for struct-backed virtuals
+\ make-point exists as a positional constructor
 10 20 make-point point? t "make-point creates point instance" assert=
 \ x>>, y>> should not exist
 [ x>> ] "x>> does not exist" assert-error

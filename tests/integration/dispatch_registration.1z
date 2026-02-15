@@ -9,26 +9,26 @@ duration: virtual{ fixnum } ;
 
 \ Test 2: Register a method on a native operator (should succeed silently)
 \ Native operators don't require the generic marker
-+: method{ duration duration } [ swap duration> swap duration> + >duration ] ;
++: method{ duration duration } [ swap unmake-duration swap unmake-duration + >duration ] ;
 "registered + method for duration duration" .
 
 \ Test 3: Register a unary method
-to-string: method{ duration } [ duration> to-string " ns" #append ] ;
+to-string: method{ duration } [ unmake-duration to-string " ns" #append ] ;
 "registered to-string method for duration" .
 
 \ Test 4: Register method with mutable for overwrite
-+: mutable method{ duration duration } [ swap duration> swap duration> + >duration ] ;
++: mutable method{ duration duration } [ swap unmake-duration swap unmake-duration + >duration ] ;
 "re-registered + method with mutable" .
 
 \ Test 5: Define a generic word and register a method for it
 serialize: ( val -- str ) generic [ to-string ] ;
 "defined generic word serialize" .
 
-serialize: method{ duration } [ duration> to-string " nanoseconds" #append ] ;
+serialize: method{ duration } [ unmake-duration to-string " nanoseconds" #append ] ;
 "registered serialize method for duration" .
 
 \ Test 6: Test the any wildcard in registration
--: method{ duration any } [ swap duration> swap - >duration ] ;
+-: method{ duration any } [ swap unmake-duration swap - >duration ] ;
 "registered - method with any wildcard" .
 
 "all registration tests passed" test-section

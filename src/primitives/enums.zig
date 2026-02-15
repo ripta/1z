@@ -143,15 +143,21 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 
             try vtype_list.append(alloc, vtype);
 
-            const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
-            try virtual.defineStructWrap(ctx, wrap_name, vtype, markers_slice);
+            if (fields_slice.len > 1) {
+                // Multi-field: >NAME is hash-based
+                const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
+                try virtual.defineStructHashWrap(ctx, wrap_name, vtype, markers_slice);
+            } else {
+                // Single-field: >NAME stays positional
+                const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
+                try virtual.defineStructWrap(ctx, wrap_name, vtype, markers_slice);
+            }
 
+            // make-NAME: positional wrap
             const make_name = try std.fmt.allocPrint(alloc, "make-{s}", .{full_name});
             try virtual.defineStructWrap(ctx, make_name, vtype, markers_slice);
 
-            const unwrap_name = try std.fmt.allocPrint(alloc, "{s}>", .{full_name});
-            try virtual.defineStructUnwrap(ctx, unwrap_name, vtype, markers_slice);
-
+            // unmake-NAME: destructuring unwrap
             const unmake_name = try std.fmt.allocPrint(alloc, "unmake-{s}", .{full_name});
             try virtual.defineStructUnwrap(ctx, unmake_name, vtype, markers_slice);
 

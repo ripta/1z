@@ -27,8 +27,6 @@ PASS: unmake-speed unwraps
 Stack: [ ]
 PASS: >speed still works
 Stack: [ ]
-PASS: speed> still works
-Stack: [ ]
 === struct-backed virtual: make, unmake, >hash ===
 Stack: [ ]
 Stack: [ ]
@@ -49,9 +47,9 @@ PASS: >hash dispatch on vec2 vx
 Stack: [ ]
 PASS: >hash dispatch on vec2 vy
 Stack: [ ]
-PASS: >vec2 still works
+PASS: >vec2 accepts hash
 Stack: [ ]
-PASS: vec2> second field still works
+PASS: >vec2 hash wrap second field
 Stack: [ 10 ]
 Stack: [ ]
 === enum data-carrying variants: make, unmake, >hash ===
@@ -80,9 +78,10 @@ PASS: >hash dispatch on rect w
 Stack: [ ]
 PASS: >shape:circle still works
 Stack: [ ]
-PASS: shape:circle> still works
+PASS: >shape:rect accepts hash
 Stack: [ ]
-PASS: >shape:rect still works
+PASS: >shape:rect hash wrap h field
+Stack: [ 3 ]
 Stack: [ ]
 === >hash works across different types ===
 Stack: [ ]

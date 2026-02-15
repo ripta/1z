@@ -12,7 +12,7 @@ server-config: mutable struct{ host port backlog handler on-error } ;
 \ Start a server from a config. Returns the tcp-server handle.
 \ The server binds and listens but does not start accepting connections.
 start-server: ( config -- tcp-server ) [
-  dup host>> over port>> >addr:tcp
+  dup host>> over port>> make-addr:tcp
   swap backlog>>
   tcp-listen
 ] ;

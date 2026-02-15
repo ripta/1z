@@ -6,18 +6,18 @@ semaphore: virtual{ struct{ ch } } ;
 <semaphore>: ( n -- sem ) [
   dup <buffered-channel>
   swap [ dup t swap send ] times
-  >semaphore
+  make-semaphore
 ] ;
 
 acquire: method{ semaphore } [
-  semaphore> receive drop
+  unmake-semaphore receive drop
 ] ;
 
 try-acquire: method{ semaphore } [
-  semaphore> try-receive [ >option:some ] [ drop option:none ] if
+  unmake-semaphore try-receive [ >option:some ] [ drop option:none ] if
 ] ;
 
 \\ Release a permit back to the semaphore.
 release: ( sem -- ) [
-  semaphore> t swap send
+  unmake-semaphore t swap send
 ] ;

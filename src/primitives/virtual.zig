@@ -28,6 +28,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "virtual-struct-wrap", .func = virtualStructWrapHelper },
     .{ .name = "virtual-struct-unwrap", .func = virtualStructUnwrapHelper },
     .{ .name = "virtual-struct-to-hash", .func = virtualStructToHashHelper },
+    .{ .name = "virtual-struct-hash-wrap", .func = virtualStructHashWrapHelper },
 };
 
 /// define-virtual ( name: descriptor markers -- ) - Define a virtual type and its accessor words
@@ -88,19 +89,14 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
                 .inner_type = inner_type,
             };
 
-            // >NAME: ( value -- tagged ) - wrap
+            // >NAME / make-NAME: ( value -- tagged ) - wrap
             const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{name});
             try defineWrap(ctx, wrap_name, vtype, markers_slice);
 
-            // make-NAME: ( value -- tagged ) - wrap (new naming convention)
             const make_name = try std.fmt.allocPrint(alloc, "make-{s}", .{name});
             try defineWrap(ctx, make_name, vtype, markers_slice);
 
-            // NAME>: ( tagged -- value ) - unwrap
-            const unwrap_name = try std.fmt.allocPrint(alloc, "{s}>", .{name});
-            try defineUnwrap(ctx, unwrap_name, vtype, markers_slice);
-
-            // unmake-NAME: ( tagged -- value ) - unwrap (new naming convention)
+            // unmake-NAME: ( tagged -- value ) - unwrap
             const unmake_name = try std.fmt.allocPrint(alloc, "unmake-{s}", .{name});
             try defineUnwrap(ctx, unmake_name, vtype, markers_slice);
 
@@ -143,15 +139,15 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
                 .anon_struct = anon_struct,
             };
 
+            // >NAME: ( hash -- tagged ) - hash-based wrap
             const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{name});
-            try defineStructWrap(ctx, wrap_name, vtype, markers_slice);
+            try defineStructHashWrap(ctx, wrap_name, vtype, markers_slice);
 
+            // make-NAME: ( field1..fieldN -- tagged ) - positional wrap
             const make_name = try std.fmt.allocPrint(alloc, "make-{s}", .{name});
             try defineStructWrap(ctx, make_name, vtype, markers_slice);
 
-            const unwrap_name = try std.fmt.allocPrint(alloc, "{s}>", .{name});
-            try defineStructUnwrap(ctx, unwrap_name, vtype, markers_slice);
-
+            // unmake-NAME: ( tagged -- field1..fieldN ) - destructuring unwrap
             const unmake_name = try std.fmt.allocPrint(alloc, "unmake-{s}", .{name});
             try defineStructUnwrap(ctx, unmake_name, vtype, markers_slice);
 
@@ -370,6 +366,71 @@ fn virtualStructToHashHelper(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     }
+}
+
+/// Trampoline helper ( hash vtype-ptr -- tagged )
+///
+/// Takes a hash and a VirtualType pointer, validates that the hash has every
+/// field required by the anonymous struct (and no extras), reads field values
+/// from the hash in field order, and constructs a tagged struct instance.
+fn virtualStructHashWrapHelper(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const ptr_val = try helpers.popFixnum(ctx);
+    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+
+    const st = vt.anon_struct orelse {
+        helpers.setErrorContext(ctx, "{s} is not a struct-backed virtual type", .{vt.name});
+        return error.TypeMismatch;
+    };
+
+    const val = try ctx.stack.pop();
+    const hash = switch (val) {
+        .hash => |h| h,
+        else => {
+            helpers.setErrorContext(ctx, ">{s} expects a hash, got {s}", .{ vt.name, helpers.valueTypeName(val) });
+            return error.TypeMismatch;
+        },
+    };
+
+    if (hash.count() != st.fields.len) {
+        helpers.setErrorContext(ctx, ">{s} expects {d} fields, got {d}", .{ vt.name, st.fields.len, hash.count() });
+        return error.TypeMismatch;
+    }
+
+    const field_values = try alloc.alloc(Value, st.fields.len);
+    for (st.fields, 0..) |field, i| {
+        field_values[i] = hash.get(field) orelse {
+            helpers.setErrorContext(ctx, ">{s} missing field '{s}'", .{ vt.name, field });
+            return error.MissingField;
+        };
+    }
+
+    const instance = try alloc.create(StructInstance);
+    instance.* = .{
+        .struct_type = st,
+        .fields = field_values,
+    };
+
+    const inner = try alloc.create(Value);
+    inner.* = .{ .struct_instance = instance };
+
+    try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
+}
+
+/// >NAME: ( hash -- tagged ) - hash-based wrap for struct-backed virtuals
+pub fn defineStructHashWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
+    const alloc = ctx.quotationAllocator();
+
+    const instrs = try alloc.alloc(Instruction, 2);
+    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+    instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-hash-wrap" }, .line = 0 };
+
+    try ctx.defineWord(name, .{
+        .name = name,
+        .markers = markers,
+        .action = .{ .compound = instrs },
+    });
 }
 
 /// >NAME: ( field1..fieldN -- tagged ) - struct-aware positional wrap

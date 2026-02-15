@@ -78,9 +78,9 @@ ml-shape: enum{
 } ;
 
 42 >ml-shape:circle ml-shape:circle? t "multiline enum data variant predicate" assert=
-42 >ml-shape:circle ml-shape:circle> 42 "multiline enum unwrap circle" assert=
-10 20 >ml-shape:rect ml-shape:rect? t "multiline enum multi-field variant" assert=
-10 20 >ml-shape:rect ml-shape:rect> 20 "multiline rect unwrap height" assert= 10 "multiline rect unwrap width" assert=
+42 >ml-shape:circle unmake-ml-shape:circle 42 "multiline enum unwrap circle" assert=
+10 20 make-ml-shape:rect ml-shape:rect? t "multiline enum multi-field variant" assert=
+10 20 make-ml-shape:rect unmake-ml-shape:rect 20 "multiline rect unwrap height" assert= 10 "multiline rect unwrap width" assert=
 ml-shape:point ml-shape? t "multiline enum flat variant in mixed enum" assert=
 
 "multiline virtual{ simple" test-section
@@ -90,7 +90,7 @@ ml-meter: virtual{
 } ;
 
 100 >ml-meter ml-meter? t "multiline virtual predicate" assert=
-100 >ml-meter ml-meter> 100 "multiline virtual unwrap" assert=
+100 >ml-meter unmake-ml-meter 100 "multiline virtual unwrap" assert=
 
 "multiline virtual{ embedded struct" test-section
 
@@ -101,9 +101,9 @@ ml-vec2: virtual{
   }
 } ;
 
-3 4 >ml-vec2 type-of ml-vec2: "multiline virtual struct type-of" assert=
-3 4 >ml-vec2 ml-vec2? t "multiline virtual struct predicate" assert=
-3 4 >ml-vec2 ml-vec2> 4 "multiline virtual struct unwrap y" assert= 3 "multiline virtual struct unwrap x" assert=
+3 4 make-ml-vec2 type-of ml-vec2: "multiline virtual struct type-of" assert=
+3 4 make-ml-vec2 ml-vec2? t "multiline virtual struct predicate" assert=
+3 4 make-ml-vec2 unmake-ml-vec2 4 "multiline virtual struct unwrap y" assert= 3 "multiline virtual struct unwrap x" assert=
 
 "multiline method{" test-section
 

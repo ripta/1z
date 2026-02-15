@@ -7,13 +7,13 @@ use "ratio" ;
 3.14 integer? "float is not integer" assert-false
 "hello" integer? "string is not integer" assert-false
 t integer? "boolean is not integer" assert-false
-1 2 make-ratio integer? "ratio is not integer" assert-false
+1 2 normalize-ratio integer? "ratio is not integer" assert-false
 
 "number?" test-section
 42 number? "fixnum is number" assert-true
 99999999999999999999 number? "bignum is number" assert-true
 3.14 number? "float is number" assert-true
-1 2 make-ratio number? "ratio is number" assert-true
+1 2 normalize-ratio number? "ratio is number" assert-true
 "hello" number? "string is not number" assert-false
 t number? "boolean is not number" assert-false
 some: number? "symbol is not number" assert-false
@@ -21,7 +21,7 @@ some: number? "symbol is not number" assert-false
 "exact?" test-section
 42 exact? "fixnum is exact" assert-true
 99999999999999999999 exact? "bignum is exact" assert-true
-1 2 make-ratio exact? "ratio is exact" assert-true
+1 2 normalize-ratio exact? "ratio is exact" assert-true
 3.14 exact? "float is not exact" assert-false
 "hello" exact? "string is not exact" assert-false
 
@@ -29,7 +29,7 @@ some: number? "symbol is not number" assert-false
 3.14 inexact? "float is inexact" assert-true
 42 inexact? "fixnum is not inexact" assert-false
 99999999999999999999 inexact? "bignum is not inexact" assert-false
-1 2 make-ratio inexact? "ratio is not inexact" assert-false
+1 2 normalize-ratio inexact? "ratio is not inexact" assert-false
 "hello" inexact? "string is not inexact" assert-false
 
 "zero?" test-section
@@ -39,8 +39,8 @@ some: number? "symbol is not number" assert-false
 0.0 zero? "float zero" assert-true
 -0.0 zero? "negative float zero" assert-true
 3.14 zero? "nonzero float" assert-false
-0 1 make-ratio zero? "zero ratio" assert-true
-1 2 make-ratio zero? "nonzero ratio" assert-false
+0 1 normalize-ratio zero? "zero ratio" assert-true
+1 2 normalize-ratio zero? "nonzero ratio" assert-false
 "hello" zero? "string returns false" assert-false
 
 "positive?" test-section
@@ -50,9 +50,9 @@ some: number? "symbol is not number" assert-false
 3.14 positive? "positive float" assert-true
 0.0 positive? "zero float" assert-false
 -2.5 positive? "negative float" assert-false
-1 2 make-ratio positive? "positive ratio" assert-true
-0 1 make-ratio positive? "zero ratio" assert-false
--1 2 make-ratio positive? "negative ratio" assert-false
+1 2 normalize-ratio positive? "positive ratio" assert-true
+0 1 normalize-ratio positive? "zero ratio" assert-false
+-1 2 normalize-ratio positive? "negative ratio" assert-false
 
 "negative?" test-section
 -1 negative? "negative fixnum" assert-true
@@ -61,9 +61,9 @@ some: number? "symbol is not number" assert-false
 -2.5 negative? "negative float" assert-true
 0.0 negative? "zero float" assert-false
 3.14 negative? "positive float" assert-false
--1 2 make-ratio negative? "negative ratio" assert-true
-0 1 make-ratio negative? "zero ratio" assert-false
-1 2 make-ratio negative? "positive ratio" assert-false
+-1 2 normalize-ratio negative? "negative ratio" assert-true
+0 1 normalize-ratio negative? "zero ratio" assert-false
+1 2 normalize-ratio negative? "positive ratio" assert-false
 
 "even?" test-section
 0 even? "zero is even" assert-true
@@ -74,7 +74,7 @@ some: number? "symbol is not number" assert-false
 99999999999999999998 even? "even bignum" assert-true
 99999999999999999999 even? "odd bignum" assert-false
 [ 3.14 even? ] "even? requires an integer" assert-error
-[ 1 2 make-ratio even? ] "even? requires an integer" assert-error
+[ 1 2 normalize-ratio even? ] "even? requires an integer" assert-error
 
 "odd?" test-section
 1 odd? "odd fixnum" assert-true
@@ -84,4 +84,4 @@ some: number? "symbol is not number" assert-false
 99999999999999999999 odd? "odd bignum" assert-true
 99999999999999999998 odd? "even bignum" assert-false
 [ 3.14 odd? ] "odd? requires an integer" assert-error
-[ 1 2 make-ratio odd? ] "odd? requires an integer" assert-error
+[ 1 2 normalize-ratio odd? ] "odd? requires an integer" assert-error

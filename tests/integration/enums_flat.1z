@@ -82,7 +82,7 @@ shape: enum{
 } ;
 
 \ Wrap and unwrap
-42 >shape:circle shape:circle> 42 "wrap and unwrap circle" assert=
+42 >shape:circle unmake-shape:circle 42 "wrap and unwrap circle" assert=
 
 \ type-of
 42 >shape:circle type-of shape:circle: "type-of data variant is shape:circle" assert=
@@ -121,36 +121,36 @@ geom: enum{
 } ;
 
 \ Wrap and unwrap multi-field variant
-10 20 >geom:rect geom:rect> 20 "rect unwrap height" assert= 10 "rect unwrap width" assert=
+10 20 make-geom:rect unmake-geom:rect 20 "rect unwrap height" assert= 10 "rect unwrap width" assert=
 
 \ type-of
-10 20 >geom:rect type-of geom:rect: "type-of multi-field variant is geom:rect" assert=
+10 20 make-geom:rect type-of geom:rect: "type-of multi-field variant is geom:rect" assert=
 
 \ Per-variant predicate
-10 20 >geom:rect geom:rect? t "geom:rect? on rect is true" assert=
+10 20 make-geom:rect geom:rect? t "geom:rect? on rect is true" assert=
 geom:dot geom:rect? f "geom:rect? on dot is false" assert=
 42 geom:rect? f "geom:rect? on integer is false" assert=
 
 \ Aggregate predicate
-10 20 >geom:rect geom? t "geom? on rect is true" assert=
+10 20 make-geom:rect geom? t "geom? on rect is true" assert=
 geom:dot geom? t "geom? on dot is true" assert=
 42 geom? f "geom? on integer is false" assert=
 
 \ Three-field variant
-3 4 5 >geom:tri geom:tri> 5 "tri unwrap c" assert= 4 "tri unwrap b" assert= 3 "tri unwrap a" assert=
-3 4 5 >geom:tri geom:tri? t "geom:tri? on tri is true" assert=
-3 4 5 >geom:tri geom? t "geom? on tri is true" assert=
+3 4 5 make-geom:tri unmake-geom:tri 5 "tri unwrap c" assert= 4 "tri unwrap b" assert= 3 "tri unwrap a" assert=
+3 4 5 make-geom:tri geom:tri? t "geom:tri? on tri is true" assert=
+3 4 5 make-geom:tri geom? t "geom? on tri is true" assert=
 
 \ Cross-predicate between multi-field variants
-10 20 >geom:rect geom:tri? f "geom:tri? on rect is false" assert=
-3 4 5 >geom:tri geom:rect? f "geom:rect? on tri is false" assert=
+10 20 make-geom:rect geom:tri? f "geom:tri? on rect is false" assert=
+3 4 5 make-geom:tri geom:rect? f "geom:rect? on tri is false" assert=
 
 \ Equality
-10 20 >geom:rect 10 20 >geom:rect = t "same rect values are equal" assert=
-10 20 >geom:rect 10 99 >geom:rect = f "different rect values are not equal" assert=
+10 20 make-geom:rect 10 20 make-geom:rect = t "same rect values are equal" assert=
+10 20 make-geom:rect 10 99 make-geom:rect = f "different rect values are not equal" assert=
 
 \ Display format
-10 20 >geom:rect to-string "<geom:rect geom:rect{ width: 10 height: 20 }>" "rect display format" assert=
+10 20 make-geom:rect to-string "<geom:rect geom:rect{ width: 10 height: 20 }>" "rect display format" assert=
 geom:dot to-string "<geom:dot dot:>" "flat variant display in multi-field enum" assert=
 
 "enum-of" test-section
@@ -220,13 +220,13 @@ shape:point {
 "match multi-field data variant" test-section
 
 \ Multi-field unwrap pushes all fields
-10 20 >geom:rect {
+10 20 make-geom:rect {
   geom:rect: [ + ]
   geom:tri: [ + + ]
   geom:dot: [ 0 ]
 } match 30 "match unwraps multi-field variant" assert=
 
-3 4 5 >geom:tri {
+3 4 5 make-geom:tri {
   geom:rect: [ + ]
   geom:tri: [ + + ]
   geom:dot: [ 0 ]

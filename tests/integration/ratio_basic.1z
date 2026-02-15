@@ -2,35 +2,35 @@ use "ratio" ;
 use "testing" ;
 
 "ratio: type" test-section
-5 3 make-ratio ratio? "5/3 is ratio" assert-true
-5 3 make-ratio type-of ratio: "type-of is ratio:" assert=
+5 3 normalize-ratio ratio? "5/3 is ratio" assert-true
+5 3 normalize-ratio type-of ratio: "type-of is ratio:" assert=
 
 "ratio: normalization" test-section
-10 6 make-ratio >string "5/3" "10/6 normalizes to 5/3" assert=
--10 6 make-ratio >string "-5/3" "-10/6 -> -5/3" assert=
-10 -6 make-ratio >string "-5/3" "10/-6 -> -5/3" assert=
--10 -6 make-ratio >string "5/3" "-10/-6 -> 5/3" assert=
+10 6 normalize-ratio >string "5/3" "10/6 normalizes to 5/3" assert=
+-10 6 normalize-ratio >string "-5/3" "-10/6 -> -5/3" assert=
+10 -6 normalize-ratio >string "-5/3" "10/-6 -> -5/3" assert=
+-10 -6 normalize-ratio >string "5/3" "-10/-6 -> 5/3" assert=
 
 "ratio: demotion" test-section
-6 3 make-ratio 2 "6/3 demotes to 2" assert=
-6 3 make-ratio fixnum? "6/3 is fixnum" assert-true
-0 5 make-ratio 0 "0/5 demotes to 0" assert=
+6 3 normalize-ratio 2 "6/3 demotes to 2" assert=
+6 3 normalize-ratio fixnum? "6/3 is fixnum" assert-true
+0 5 normalize-ratio 0 "0/5 demotes to 0" assert=
 
 "ratio: unwrap" test-section
-5 3 make-ratio ratio> swap 5 "numer is 5" assert= 3 "denom is 3" assert=
+5 3 normalize-ratio unmake-ratio swap 5 "numer is 5" assert= 3 "denom is 3" assert=
 
 "ratio: accessors" test-section
-5 3 make-ratio numer>> 5 "numer>> is 5" assert=
-5 3 make-ratio denom>> 3 "denom>> is 3" assert=
+5 3 normalize-ratio numer>> 5 "numer>> is 5" assert=
+5 3 normalize-ratio denom>> 3 "denom>> is 3" assert=
 
 "ratio: >string" test-section
-5 3 make-ratio >string "5/3" ">string" assert=
--7 4 make-ratio >string "-7/4" ">string negative" assert=
+5 3 normalize-ratio >string "5/3" ">string" assert=
+-7 4 normalize-ratio >string "-7/4" ">string negative" assert=
 
 "ratio: zero denominator" test-section
-[ 5 0 make-ratio ] "DivisionByZero" assert-error
+[ 5 0 normalize-ratio ] "DivisionByZero" assert-error
 
 "ratio: bignum components" test-section
-99999999999999999999 7 make-ratio ratio? "bignum ratio" assert-true
-99999999999999999999 7 make-ratio numer>> 99999999999999999999 "bignum numer" assert=
-99999999999999999999 7 make-ratio denom>> 7 "bignum denom" assert=
+99999999999999999999 7 normalize-ratio ratio? "bignum ratio" assert-true
+99999999999999999999 7 normalize-ratio numer>> 99999999999999999999 "bignum numer" assert=
+99999999999999999999 7 normalize-ratio denom>> 7 "bignum denom" assert=

@@ -32,9 +32,8 @@ speed: virtual{ fixnum } ;
 \ unmake-NAME unwraps
 42 make-speed unmake-speed 42 "unmake-speed unwraps" assert=
 
-\ old words still work
+\ >NAME still works for simple virtuals
 42 >speed speed? t ">speed still works" assert=
-42 >speed speed> 42 "speed> still works" assert=
 
 "struct-backed virtual: make, unmake, >hash" test-section
 
@@ -58,9 +57,9 @@ drop
 10 20 make-vec2 >hash vx: @get 10 ">hash dispatch on vec2 vx" assert=
 10 20 make-vec2 >hash vy: @get 20 ">hash dispatch on vec2 vy" assert=
 
-\ old words still work
-10 20 >vec2 vec2? t ">vec2 still works" assert=
-10 20 >vec2 vec2> 20 "vec2> second field still works" assert=
+\ >vec2 now accepts a hash
+H{ vx: 10 vy: 20 } >vec2 vec2? t ">vec2 accepts hash" assert=
+H{ vx: 10 vy: 20 } >vec2 unmake-vec2 20 ">vec2 hash wrap second field" assert=
 drop
 
 "enum data-carrying variants: make, unmake, >hash" test-section
@@ -87,10 +86,13 @@ drop
 5 make-shape:circle >hash radius: @get 5 ">hash dispatch on circle" assert=
 3 4 make-shape:rect >hash w: @get 3 ">hash dispatch on rect w" assert=
 
-\ old words still work
+\ >NAME still works for single-field variants (positional)
 5 >shape:circle shape:circle? t ">shape:circle still works" assert=
-5 >shape:circle shape:circle> 5 "shape:circle> still works" assert=
-3 4 >shape:rect shape:rect? t ">shape:rect still works" assert=
+
+\ >NAME is hash-based for multi-field variants
+H{ w: 3 h: 4 } >shape:rect shape:rect? t ">shape:rect accepts hash" assert=
+H{ w: 3 h: 4 } >shape:rect unmake-shape:rect 4 ">shape:rect hash wrap h field" assert=
+drop
 
 ">hash works across different types" test-section
 

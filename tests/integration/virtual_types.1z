@@ -22,7 +22,7 @@ duration: virtual{ fixnum } ;
 42 >duration to-string "<duration 42>" "display format is <name inner>" assert=
 
 \ Test unwrapping
-42 >duration duration> 42 "duration> unwraps to inner value" assert=
+42 >duration unmake-duration 42 "unmake-duration unwraps to inner value" assert=
 
 \ Test equality
 42 >duration 42 >duration = t "same tag same inner are equal" assert=
@@ -40,8 +40,8 @@ positive-duration: virtual{ duration } ;
 42 >duration >positive-duration duration? f "nested does not match inner type predicate" assert=
 
 \ Test nested unwrapping
-42 >duration >positive-duration positive-duration> type-of duration: "unwrap nested reveals duration" assert=
-42 >duration >positive-duration positive-duration> duration> 42 "double unwrap reveals integer" assert=
+42 >duration >positive-duration unmake-positive-duration type-of duration: "unwrap nested reveals duration" assert=
+42 >duration >positive-duration unmake-positive-duration unmake-duration 42 "double unwrap reveals integer" assert=
 
 \ Test nested display
 42 >duration >positive-duration to-string "<positive-duration <duration 42>>" "nested display format" assert=
@@ -49,10 +49,10 @@ positive-duration: virtual{ duration } ;
 "error cases" test-section
 
 \ Test unwrapping wrong type
-[ 42 positive-duration> ] "unwrap wrong type errors" assert-error
+[ 42 unmake-positive-duration ] "unwrap wrong type errors" assert-error
 
 \ Test unwrapping a non-tagged value
-[ 42 duration> ] "unwrap plain value errors" assert-error
+[ 42 unmake-duration ] "unwrap plain value errors" assert-error
 
 "multiple virtual types" test-section
 
