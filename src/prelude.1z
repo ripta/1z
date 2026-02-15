@@ -117,6 +117,7 @@ ENotComparable:       [ not-comparable: ] ;
 EIOFailed: [ io-failed: ] ;
 ENoMatchingBranch: [ no-matching-branch: ] ;
 ECannotRedefineConst: [ cannot-redefine-const: ] ;
+EUnexpectedEOF: [ unexpected-eof: ] ;
 \ TODO(ripta): the pattern is a bit repetitive and odd; maybe a parse-time?
 \\ Construct and throw a no-matching-branch error with the given data.
 no-matching-branch: ( data -- error ) [ "no matching branch" ENoMatchingBranch make-error ] ;

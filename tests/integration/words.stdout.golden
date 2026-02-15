@@ -254,6 +254,7 @@ ENotComparable
 EStackEffectMismatch
 EStackUnderflow
 ETypeMismatch
+EUnexpectedEOF
 EUnknownWord
 EUserRethrown
 EUserThrown

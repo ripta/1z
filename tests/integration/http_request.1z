@@ -1,0 +1,43 @@
+use "testing" ;
+use "http" ;
+
+"read-request: simple GET" test-section
+<pipe> dup "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+stream-close
+read-request
+dup method>> "GET" "method" assert=
+dup path>> "/" "path" assert=
+dup version>> "HTTP/1.1" "version" assert=
+headers>> "host" @get "localhost" "host header" assert=
+
+"read-request: multiple headers" test-section
+<pipe> dup "GET /index.html HTTP/1.1\r\nHost: example.com\r\nContent-Type: text/html\r\nX-Custom: hello world\r\n\r\n" stream-write drop
+stream-close
+read-request
+dup method>> "GET" "method" assert=
+dup path>> "/index.html" "path" assert=
+dup headers>> "host" @get "example.com" "host header" assert=
+dup headers>> "content-type" @get "text/html" "content-type lowercase" assert=
+headers>> "x-custom" @get "hello world" "custom header" assert=
+
+"read-request: POST method" test-section
+<pipe> dup "POST /submit HTTP/1.0\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n" stream-write drop
+stream-close
+read-request
+dup method>> "POST" "POST method" assert=
+dup path>> "/submit" "POST path" assert=
+dup version>> "HTTP/1.0" "POST version" assert=
+headers>> "content-length" @get "0" "content-length header" assert=
+
+"read-request: no headers" test-section
+<pipe> dup "GET / HTTP/1.1\r\n\r\n" stream-write drop
+stream-close
+read-request
+dup method>> "GET" "no-headers method" assert=
+headers>> @keys #len 0 "no headers count" assert=
+
+"read-request: EOF throws EUnexpectedEOF" test-section
+[ <pipe> stream-close read-request ] unexpected-eof: "EOF on empty stream" assert-error-type
+
+"read-request: malformed request line throws EMalformedRequest" test-section
+[ <pipe> dup "GET /\r\n\r\n" stream-write drop stream-close read-request ] malformed-request: "too few parts" assert-error-type

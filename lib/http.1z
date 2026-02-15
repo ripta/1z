@@ -1,0 +1,39 @@
+\ lib/http.1z - HTTP/1.0 library
+
+use "strings" ;
+
+EMalformedRequest: [ malformed-request: ] ;
+
+request: struct{ method path version headers } ;
+
+\\ Parse header lines from a stream into a hash with lowercased keys.
+read-headers: ( stream -- headers ) [
+  H{ } read-headers-loop
+] ;
+
+read-headers-loop: ( stream headers -- headers ) [
+  over stream-read-line
+  dup f = [ drop swap drop ] [
+    dup #empty? [ drop swap drop ] [
+      ":" split-once? unwrap-or-throw
+      dup #first lowercase swap #last trim
+      @set
+      read-headers-loop
+    ] if
+  ] if
+] ;
+
+\\ Read and parse an HTTP request line and headers from a stream.
+\\ Returns a request struct with method, path, version, and headers hash.
+read-request: ( stream -- request ) [
+  dup stream-read-line
+  dup f = [ f "unexpected EOF reading request line" EUnexpectedEOF make-error throw ] when
+  " " split
+  dup #len 3 < [ dup " " #join "malformed request line" EMalformedRequest make-error throw ] when
+  dup #first swap
+  dup 1 #nth swap
+  2 #nth
+  3 pick-n read-headers
+  make-request
+  swap drop
+] ;
