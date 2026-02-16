@@ -1,5 +1,6 @@
 \ lib/server.1z - TCP server framework
 
+use "net" ;
 use "tcp" ;
 
 server-config: mutable struct{ host port backlog handler on-error } ;
