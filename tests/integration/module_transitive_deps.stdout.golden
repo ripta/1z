@@ -1,0 +1,8 @@
+=== transitive deps: normalize via direct import ===
+Stack: [ ]
+PASS: normalize direct
+Stack: [ ]
+=== transitive deps: normalize via http module ===
+Stack: [ ]
+PASS: normalize via path
+Stack: [ ]

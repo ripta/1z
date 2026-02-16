@@ -17,3 +17,45 @@ use "time" ;
 
   cancel-task
 ] task-scope
+
+"serve-static: serves index.html at root" test-section
+[
+  [
+    "127.0.0.1" 39411 "tests/integration/http_static_root" serve-static
+  ] spawn
+  100 milliseconds sleep
+
+  "127.0.0.1" 39411 make-addr:tcp tcp-connect
+  dup "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  stream-read-line "HTTP/1.1 200 OK" "index status" assert=
+
+  cancel-task
+] task-scope
+
+"serve-static: serves css file" test-section
+[
+  [
+    "127.0.0.1" 39412 "tests/integration/http_static_root" serve-static
+  ] spawn
+  100 milliseconds sleep
+
+  "127.0.0.1" 39412 make-addr:tcp tcp-connect
+  dup "GET /style.css HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  stream-read-line "HTTP/1.1 200 OK" "css status" assert=
+
+  cancel-task
+] task-scope
+
+"serve-static: directory traversal blocked" test-section
+[
+  [
+    "127.0.0.1" 39413 "tests/integration/http_static_root" serve-static
+  ] spawn
+  100 milliseconds sleep
+
+  "127.0.0.1" 39413 make-addr:tcp tcp-connect
+  dup "GET /../../../etc/passwd HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  stream-read-line "HTTP/1.1 404 Not Found" "traversal blocked" assert=
+
+  cancel-task
+] task-scope

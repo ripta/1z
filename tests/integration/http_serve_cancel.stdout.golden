@@ -1,0 +1,4 @@
+=== serve-forever with cancel ===
+Stack: [ ]
+PASS: echoed 5 bytes
+Stack: [ ]

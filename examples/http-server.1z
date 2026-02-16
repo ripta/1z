@@ -7,14 +7,14 @@ use "time" ;
 "Serving on localhost:18081" print-line
 
 <router>
-  "/time" [ drop now iso8601-fmt format "text/plain" ok ] route
-  "/healthz" [ drop "ok" "text/plain" ok ] route
-  "/" [
-    path>> "/" =
-    [ "/\n/time\n/healthz" "text/plain" ok ]
-    [ not-found ]
-    if
-  ] route
+"/time" [ drop now iso8601-fmt format "text/plain" ok ] route
+"/healthz" [ drop "ok" "text/plain" ok ] route
+"/" [
+  path>> "/" =
+  [ "/\n/time\n/healthz" "text/plain" ok ]
+  [ not-found ]
+  if
+] route
 build
 
 [ swap dup -rot> dup read-request <rot- call stream-close ] curry

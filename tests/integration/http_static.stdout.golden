@@ -1,0 +1,16 @@
+=== serve-static: missing file returns 404 ===
+Stack: [ ]
+PASS: missing status
+Stack: [ ]
+=== serve-static: serves index.html at root ===
+Stack: [ ]
+PASS: index status
+Stack: [ ]
+=== serve-static: serves css file ===
+Stack: [ ]
+PASS: css status
+Stack: [ ]
+=== serve-static: directory traversal blocked ===
+Stack: [ ]
+PASS: traversal blocked
+Stack: [ ]

@@ -1,0 +1,10 @@
+use "testing" ;
+use "http" ;
+use "path" ;
+use "time" ;
+
+"task normalize" test-section
+[
+  [ "/a/../b" normalize ] spawn await
+  "/b" "task normalize" assert=
+] task-scope
