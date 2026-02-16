@@ -120,6 +120,7 @@ ECannotRedefineConst: [ cannot-redefine-const: ] ;
 EUnexpectedEOF:       [ unexpected-eof: ] ;
 EIndexOutOfBounds:    [ index-out-of-bounds: ] ;
 EInvalidArgument:     [ invalid-argument: ] ;
+EUseAfterClose:       [ use-after-close: ] ;
 
 \ TODO(ripta): the pattern is a bit repetitive and odd; maybe a parse-time?
 \\ Construct and throw a no-matching-branch error with the given data.

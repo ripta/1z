@@ -16,6 +16,7 @@ pub const popStackEffect = helpers.popStackEffect;
 pub const popVector = helpers.popVector;
 pub const popByteArray = helpers.popByteArray;
 pub const popStream = helpers.popStream;
+pub const popResource = helpers.popResource;
 pub const popMarker = helpers.popMarker;
 pub const popStructType = helpers.popStructType;
 pub const popStructInstance = helpers.popStructInstance;
@@ -56,6 +57,7 @@ pub const sockets = @import("sockets.zig");
 pub const introspect = @import("introspect.zig");
 pub const math = @import("math.zig");
 pub const bitwise = @import("bitwise.zig");
+pub const resources = @import("resources.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -79,6 +81,7 @@ pub const mapFileSyncError = error_mapping.mapFileSyncError;
 pub const mapSeekError = error_mapping.mapSeekError;
 pub const mapGetPosError = error_mapping.mapGetPosError;
 pub const ensureStreamOpen = error_mapping.ensureStreamOpen;
+pub const ensureResourceOpen = error_mapping.ensureResourceOpen;
 
 // Aggregated primitives from extracted modules
 pub const extracted_primitives = stack.primitives ++
@@ -110,7 +113,8 @@ pub const extracted_primitives = stack.primitives ++
     protocols.primitives ++
     sockets.primitives ++
     introspect.primitives ++
-    bitwise.primitives;
+    bitwise.primitives ++
+    resources.primitives;
 
 // Aggregated registry entries for the native virtual module
 pub const extracted_registry_entries = structs.registry_entries ++

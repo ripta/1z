@@ -23,6 +23,7 @@ fn nativeTypeOf(ctx: *Context) anyerror!void {
         .set => "set",
         .mutable_map => "mutable-map",
         .stream => "stream",
+        .resource => |r| r.type_name,
         .parameter => "parameter",
         .module => "module",
         .marker => "marker",

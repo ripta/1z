@@ -1,0 +1,47 @@
+Stack: [ "<resource:test-db>" ]
+Stack: [ "<resource:test-db>" "<resource:test-db>" ]
+Stack: [ "<resource:test-db>" "<resource:test-db>" "display open resource" ]
+PASS: display open resource
+Stack: [ ]
+Stack: [ "<resource:test-db (closed)>" ]
+Stack: [ "<resource:test-db (closed)>" "<resource:test-db (closed)>" ]
+Stack: [ "<resource:test-db (closed)>" "<resource:test-db (closed)>" "display closed resource" ]
+PASS: display closed resource
+Stack: [ ]
+Stack: [ t ]
+Stack: [ t "resource equals itself" ]
+PASS: resource equals itself
+Stack: [ ]
+Stack: [ <resource:test-db> ]
+Stack: [ <resource:test-db> <resource:test-db> ]
+Stack: [ t ]
+Stack: [ t "different resources not equal" ]
+PASS: different resources not equal
+Stack: [ ]
+Stack: [ sqlite-db: ]
+Stack: [ sqlite-db: sqlite-db: ]
+Stack: [ sqlite-db: sqlite-db: "type-of resource" ]
+PASS: type-of resource
+Stack: [ ]
+Stack: [ t ]
+Stack: [ t "resource? true for resource" ]
+PASS: resource? true for resource
+Stack: [ ]
+Stack: [ f ]
+Stack: [ f "resource? false for fixnum" ]
+PASS: resource? false for fixnum
+Stack: [ ]
+Stack: [ f ]
+Stack: [ f "resource? false for string" ]
+PASS: resource? false for string
+Stack: [ ]
+Stack: [ "<resource:test-db (closed)>" ]
+Stack: [ "<resource:test-db (closed)>" "<resource:test-db (closed)>" ]
+Stack: [ "<resource:test-db (closed)>" "<resource:test-db (closed)>" "resource-close works" ]
+PASS: resource-close works
+Stack: [ ]
+Stack: [ "<resource:test-db (closed)>" ]
+Stack: [ "<resource:test-db (closed)>" "<resource:test-db (closed)>" ]
+Stack: [ "<resource:test-db (closed)>" "<resource:test-db (closed)>" "double close is no-op" ]
+PASS: double close is no-op
+Stack: [ ]

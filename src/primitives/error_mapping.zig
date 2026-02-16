@@ -90,6 +90,15 @@ pub fn ensureStreamOpen(stream: *const Stream) InterpreterError!void {
     }
 }
 
+const Resource = @import("../value.zig").Resource;
+
+/// Check that a resource is open, returning UseAfterClose error if closed.
+pub fn ensureResourceOpen(resource: *const Resource) InterpreterError!void {
+    if (resource.closed) {
+        return error.UseAfterClose;
+    }
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -114,4 +123,14 @@ test "mapFileReadError" {
 test "mapSeekError" {
     try std.testing.expectEqual(error.NotSeekable, mapSeekError(error.Unseekable));
     try std.testing.expectEqual(error.IOFailed, mapSeekError(error.SystemResources));
+}
+
+test "ensureResourceOpen returns UseAfterClose when closed" {
+    const r = Resource{ .type_name = "test", .closed = true };
+    try std.testing.expectError(error.UseAfterClose, ensureResourceOpen(&r));
+}
+
+test "ensureResourceOpen passes when open" {
+    const r = Resource{ .type_name = "test", .closed = false };
+    try ensureResourceOpen(&r);
 }

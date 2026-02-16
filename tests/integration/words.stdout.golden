@@ -48,6 +48,7 @@ Stack: [ ]
 <buffered-channel> ( n -- ch )
 <channel> ( -- ch )
 <pipe> ( -- rd wr )
+<test-resource> ( name -- resource )
 = ( a b -- ? )
 > ( a b -- ? )
 >bytes ( string -- byte-array )
@@ -154,6 +155,8 @@ receive ( ch -- val )
 recover ( try-quot recover-quot -- )
 rem ( a b -- r )
 resolve ( addr -- addrs )
+resource-close ( resource -- )
+resource? ( val -- bool )
 rethrow ( error -- )
 select ( array -- val ch )
 send ( val ch -- )
@@ -258,6 +261,7 @@ EStackUnderflow
 ETypeMismatch
 EUnexpectedEOF
 EUnknownWord
+EUseAfterClose
 EUserRethrown
 EUserThrown
 H{

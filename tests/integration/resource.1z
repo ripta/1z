@@ -1,0 +1,57 @@
+use "testing" ;
+
+\\ Display: open resource shows <resource:TYPE>
+"test-db" <test-resource> to-string
+"<resource:test-db>"
+"display open resource"
+assert=
+
+\\ Display: closed resource shows <resource:TYPE (closed)>
+"test-db" <test-resource> dup resource-close to-string
+"<resource:test-db (closed)>"
+"display closed resource"
+assert=
+
+\\ Equality: same resource equals itself
+"test-db" <test-resource> dup =
+"resource equals itself"
+assert-true
+
+\\ Equality: different resources with same type name are not equal
+"test-db" <test-resource>
+"test-db" <test-resource>
+= not
+"different resources not equal"
+assert-true
+
+\\ type-of: returns the type_name as a symbol
+"sqlite-db" <test-resource> type-of
+sqlite-db:
+"type-of resource"
+assert=
+
+\\ resource?: true for resources
+"test-db" <test-resource> resource?
+"resource? true for resource"
+assert-true
+
+\\ resource?: false for other types
+42 resource?
+"resource? false for fixnum"
+assert-false
+
+"hello" resource?
+"resource? false for string"
+assert-false
+
+\\ resource-close: closes successfully
+"test-db" <test-resource> dup resource-close to-string
+"<resource:test-db (closed)>"
+"resource-close works"
+assert=
+
+\\ resource-close: double-close is a no-op
+"test-db" <test-resource> dup resource-close dup resource-close to-string
+"<resource:test-db (closed)>"
+"double close is no-op"
+assert=

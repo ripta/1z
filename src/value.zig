@@ -92,6 +92,16 @@ pub const Stream = struct {
     nonblocking_set: bool = false,
 };
 
+/// Resource wraps an opaque C pointer for FFI interop.
+/// All instances of the same resource type share a type_name string.
+/// The ptr is nulled on close as defense-in-depth alongside the closed flag.
+pub const Resource = struct {
+    type_name: []const u8,
+    ptr: ?*anyopaque = null,
+    closed: bool = false,
+    close_fn: ?*const fn (*anyopaque) void = null,
+};
+
 /// Parameter represents a dynamically-scoped variable with a lazy default.
 /// The default quotation is evaluated each time the parameter is accessed
 /// without a binding in the current dynamic scope.
@@ -352,6 +362,7 @@ pub const Value = union(enum) {
     set: *Set,
     mutable_map: *MutableMap,
     stream: *Stream,
+    resource: *Resource,
     parameter: *Parameter,
     module: *Module,
     marker: *Marker,
@@ -464,6 +475,13 @@ pub const Value = union(enum) {
                     try writer.print("<stream {s} (closed)>", .{s.name});
                 } else {
                     try writer.print("<stream {s} {s}>", .{ s.name, s.mode.toString() });
+                }
+            },
+            .resource => |r| {
+                if (r.closed) {
+                    try writer.print("<resource:{s} (closed)>", .{r.type_name});
+                } else {
+                    try writer.print("<resource:{s}>", .{r.type_name});
                 }
             },
             .parameter => |p| try writer.print("<parameter:{s}>", .{p.name}),
@@ -608,6 +626,11 @@ pub const Value = union(enum) {
             },
             // Streams are equal if they refer to the same underlying file handle
             .stream => |a| a == other.stream,
+            // Resources are equal if same type name and same pointer
+            .resource => |a| {
+                const b = other.resource;
+                return std.mem.eql(u8, a.type_name, b.type_name) and a.ptr == b.ptr;
+            },
             // Parameters are equal if they refer to the same parameter object
             .parameter => |a| a == other.parameter,
             // Modules are equal if they refer to the same module object
@@ -740,6 +763,12 @@ pub const Value = union(enum) {
             // Streams hash by pointer identity (same as equality)
             .stream => |s| {
                 const ptr_val = @intFromPtr(s);
+                hasher.update(std.mem.asBytes(&ptr_val));
+            },
+            // Resources hash by type name and pointer address
+            .resource => |r| {
+                hasher.update(r.type_name);
+                const ptr_val = @intFromPtr(r.ptr);
                 hasher.update(std.mem.asBytes(&ptr_val));
             },
             // Parameters hash by pointer identity (same as equality)
@@ -1087,4 +1116,59 @@ test "cross-type inequality" {
     try std.testing.expect(!int_val.eql(str_val));
     try std.testing.expect(!str_val.eql(sym_val));
     try std.testing.expect(!arr_val.eql(int_val));
+}
+
+test "resource format open" {
+    var r = Resource{ .type_name = "sqlite-db" };
+    const val = Value{ .resource = &r };
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try val.write(fbs.writer());
+    try std.testing.expectEqualStrings("<resource:sqlite-db>", fbs.getWritten());
+}
+
+test "resource format closed" {
+    var r = Resource{ .type_name = "sqlite-db", .closed = true };
+    const val = Value{ .resource = &r };
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try val.write(fbs.writer());
+    try std.testing.expectEqualStrings("<resource:sqlite-db (closed)>", fbs.getWritten());
+}
+
+test "resource equality same type and ptr" {
+    var sentinel: u8 = 0;
+    var r1 = Resource{ .type_name = "test", .ptr = @ptrCast(&sentinel) };
+    var r2 = Resource{ .type_name = "test", .ptr = @ptrCast(&sentinel) };
+    const val1 = Value{ .resource = &r1 };
+    const val2 = Value{ .resource = &r2 };
+    try std.testing.expect(val1.eql(val2));
+}
+
+test "resource inequality different ptr" {
+    var s1: u8 = 0;
+    var s2: u8 = 0;
+    var r1 = Resource{ .type_name = "test", .ptr = @ptrCast(&s1) };
+    var r2 = Resource{ .type_name = "test", .ptr = @ptrCast(&s2) };
+    const val1 = Value{ .resource = &r1 };
+    const val2 = Value{ .resource = &r2 };
+    try std.testing.expect(!val1.eql(val2));
+}
+
+test "resource inequality different type name" {
+    var sentinel: u8 = 0;
+    var r1 = Resource{ .type_name = "type-a", .ptr = @ptrCast(&sentinel) };
+    var r2 = Resource{ .type_name = "type-b", .ptr = @ptrCast(&sentinel) };
+    const val1 = Value{ .resource = &r1 };
+    const val2 = Value{ .resource = &r2 };
+    try std.testing.expect(!val1.eql(val2));
+}
+
+test "resource hash consistent with equality" {
+    var sentinel: u8 = 0;
+    var r1 = Resource{ .type_name = "test", .ptr = @ptrCast(&sentinel) };
+    var r2 = Resource{ .type_name = "test", .ptr = @ptrCast(&sentinel) };
+    const val1 = Value{ .resource = &r1 };
+    const val2 = Value{ .resource = &r2 };
+    try std.testing.expectEqual(val1.hashValue(), val2.hashValue());
 }

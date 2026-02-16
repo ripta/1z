@@ -31,6 +31,8 @@ pub const InterpreterError = error{
     ClosedStream,
     PermissionDenied,
     NotSeekable,
+    // Resource error types
+    UseAfterClose,
 };
 
 pub const Primitive = struct {
