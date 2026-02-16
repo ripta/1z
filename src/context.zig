@@ -93,6 +93,11 @@ pub const Context = struct {
     /// an ephemeral combinator frame. When null, `import` writes to the
     /// global dictionary.
     import_frame_index: ?usize = null,
+    /// True while a `load` call is executing. Blocking primitives (yield,
+    /// sleep, await, await-all, send, receive, select) check this flag and
+    /// throw an error to prevent yielding mid-load, which would expose
+    /// half-defined module frames to other tasks via ancestor traversal.
+    in_module_load: bool = false,
     /// Cache of loaded modules keyed by canonical file path.
     /// Prevents redundant loading when multiple files `use` the same module.
     module_cache: std.StringHashMapUnmanaged(*value_mod.Module) = .{},

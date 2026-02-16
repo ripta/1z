@@ -141,6 +141,10 @@ fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator,
     ctx.import_frame_index = ctx.local_frames.items.len - 1;
     defer ctx.import_frame_index = old_import_frame;
 
+    const was_in_module_load = ctx.in_module_load;
+    ctx.in_module_load = true;
+    defer ctx.in_module_load = was_in_module_load;
+
     var processor: StatementProcessor = .{};
     while (true) {
         const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {

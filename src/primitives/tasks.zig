@@ -203,6 +203,11 @@ fn nativeTaskSelf(ctx: *Context) anyerror!void {
 ///
 /// Voluntarily yields the current task, allowing other tasks to run.
 fn nativeYield(ctx: *Context) anyerror!void {
+    if (ctx.in_module_load) {
+        ctx.pending_error_message = "yield cannot be called during module loading";
+        return error.InvalidState;
+    }
+
     const scheduler = ctx.scheduler orelse {
         ctx.pending_error_message = "yield must be called within a task-scope";
         return error.InvalidState;
@@ -229,6 +234,11 @@ fn nativeYield(ctx: *Context) anyerror!void {
 /// Suspend the current task for the given duration. Must be called within a
 /// `task-scope`. Rejects negative values.
 fn nativeSleep(ctx: *Context) anyerror!void {
+    if (ctx.in_module_load) {
+        ctx.pending_error_message = "sleep cannot be called during module loading";
+        return error.InvalidState;
+    }
+
     const dur = try helpers.popDuration(ctx);
 
     if (dur.ns < 0) {
@@ -389,6 +399,11 @@ fn nativeCancelTask(ctx: *Context) anyerror!void {
 /// pushes `f`. If the task failed, re-throws its error. If the task is still
 /// running, suspends the caller until the task finishes.
 fn nativeAwait(ctx: *Context) anyerror!void {
+    if (ctx.in_module_load) {
+        ctx.pending_error_message = "await cannot be called during module loading";
+        return error.InvalidState;
+    }
+
     const task = try helpers.popTask(ctx);
 
     const scheduler = ctx.scheduler orelse {
@@ -418,6 +433,11 @@ fn nativeAwait(ctx: *Context) anyerror!void {
 /// in the same order. If any task failed or was cancelled, re-throw the first
 /// error, in array order, after all tasks have finished.
 fn nativeAwaitAll(ctx: *Context) anyerror!void {
+    if (ctx.in_module_load) {
+        ctx.pending_error_message = "await-all cannot be called during module loading";
+        return error.InvalidState;
+    }
+
     const val = try ctx.stack.pop();
     const tasks = switch (val) {
         .array => |items| items,
