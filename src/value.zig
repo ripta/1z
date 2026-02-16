@@ -161,6 +161,7 @@ pub const StructInstance = struct {
 pub const ModuleWord = struct {
     stack_effect: ?StackEffect = null,
     markers: []const *Marker = &.{},
+    source_module: ?*const Module = null,
     action: union(enum) {
         compound: []const Instruction,
         native: NativeFn,

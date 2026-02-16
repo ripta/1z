@@ -198,27 +198,26 @@ fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator,
         .words = .{},
     };
 
-    // Copy definitions from frame to module
+    // Copy definitions from frame to module.
+    // Both compound and native words are captured. Native words occur in
+    // loaded files when struct/virtual/enum definitions generate native
+    // accessors and constructors via the native function registry.
     var iter = frame.iterator();
     while (iter.next()) |entry| {
         const word_def = entry.value_ptr.*;
-        // Only capture compound words (user-defined), not natives
-        switch (word_def.action) {
-            .compound => |instrs| {
-                const mod_word = ModuleWord{
-                    .stack_effect = word_def.stack_effect,
-                    .markers = word_def.markers,
-                    .action = .{ .compound = instrs },
-                };
-                if (word_def.imported) {
-                    // Imported words go to deps (not part of public API,
-                    // but needed at runtime for late-binding resolution)
-                    try module.deps.put(alloc, entry.key_ptr.*, mod_word);
-                } else {
-                    try module.words.put(alloc, entry.key_ptr.*, mod_word);
-                }
+        const mod_word: value_mod.ModuleWord = .{
+            .stack_effect = word_def.stack_effect,
+            .markers = word_def.markers,
+            .source_module = if (word_def.imported) word_def.source_module else null,
+            .action = switch (word_def.action) {
+                .compound => |instrs| .{ .compound = instrs },
+                .native => |func| .{ .native = func },
             },
-            .native => {}, // Skip native words (shouldn't happen in loaded files)
+        };
+        if (word_def.imported) {
+            try module.deps.put(alloc, entry.key_ptr.*, mod_word);
+        } else {
+            try module.words.put(alloc, entry.key_ptr.*, mod_word);
         }
     }
 

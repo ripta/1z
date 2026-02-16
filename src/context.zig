@@ -339,7 +339,7 @@ pub const Context = struct {
                 .name = entry.key_ptr.*,
                 .stack_effect = entry.value_ptr.*.stack_effect,
                 .markers = entry.value_ptr.*.markers,
-                .source_module = module,
+                .source_module = entry.value_ptr.*.source_module orelse module,
                 .action = switch (entry.value_ptr.*.action) {
                     .compound => |instrs| .{ .compound = instrs },
                     .native => |func| .{ .native = func },
@@ -397,19 +397,41 @@ pub const Context = struct {
     /// dictionary otherwise. This prevents imported words from leaking
     /// into the global namespace when loading modules.
     pub fn defineImportedWord(self: *Context, name: []const u8, definition: WordDefinition) !void {
-        if (self.lookupWord(name)) |existing| {
-            // NOTE(ripta): Reïmporting from the same module is a no-op. The module cache
-            //              ensures the same module object is reused, so pointer equality
-            //              is sufficient to detect around subsequent imports.
-            if (existing.imported and existing.source_module != null and definition.source_module != null) {
-                if (existing.source_module == definition.source_module) {
-                    return;
+        // Check only the target frame for dedup, not the full lookup chain.
+        // The full lookupWord traverses parent frames, which would suppress
+        // imports that the current module needs captured in its own frame
+        // for later deps resolution.
+        const target_frame = if (self.import_frame_index) |idx|
+            &self.local_frames.items[idx]
+        else
+            null;
+
+        if (target_frame) |tf| {
+            if (tf.get(name)) |existing| {
+                if (existing.imported and existing.source_module != null and definition.source_module != null) {
+                    if (existing.source_module == definition.source_module) {
+                        return;
+                    }
+                }
+                for (existing.markers) |mk| {
+                    if (markers_mod.isConstMarker(mk)) {
+                        self.pending_error_message = "cannot redefine const word";
+                        return error.CannotRedefineConst;
+                    }
                 }
             }
-            for (existing.markers) |mk| {
-                if (markers_mod.isConstMarker(mk)) {
-                    self.pending_error_message = "cannot redefine const word";
-                    return error.CannotRedefineConst;
+        } else {
+            if (self.dictionary.get(name)) |existing| {
+                if (existing.imported and existing.source_module != null and definition.source_module != null) {
+                    if (existing.source_module == definition.source_module) {
+                        return;
+                    }
+                }
+                for (existing.markers) |mk| {
+                    if (markers_mod.isConstMarker(mk)) {
+                        self.pending_error_message = "cannot redefine const word";
+                        return error.CannotRedefineConst;
+                    }
                 }
             }
         }
