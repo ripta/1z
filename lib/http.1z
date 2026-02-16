@@ -116,9 +116,10 @@ error-response: ( status reason message -- response ) [
 
 \\ Start an HTTP server.
 \\ The handler receives the client stream and parsed request.
+\\ The stream is closed automatically after the handler returns.
 \\ Blocks forever; creates its own task-scope.
 serve: ( host port handler -- ) [
-  [ swap dup read-request <rot- call ] curry
+  [ swap dup -rot> dup read-request <rot- call stream-close ] curry
   <server-config> swap >>handler swap >>port swap >>host
   [ serve-forever ] curry task-scope
 ] ;

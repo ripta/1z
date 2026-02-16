@@ -155,9 +155,21 @@ Stack: [ ]
 === serve: config construction ===
 Stack: [ ]
 Stack: [ "127.0.0.1" 9999 [ drop drop ] ]
-Stack: [ "127.0.0.1" 9999 [ [ drop drop ] swap dup read-request <rot- call ] ]
-Stack: [ server-config{ host: "127.0.0.1" port: 9999 backlog: 128 handler: [ [ drop drop ] swap dup read-request <rot- call ] on-error: [ drop ] } ]
+Stack: [ "127.0.0.1" 9999 [ [ drop drop ] swap dup -rot> dup read-request <rot- call stream-close ] ]
+Stack: [ server-config{ host: "127.0.0.1" port: 9999 backlog: 128 handler: [ [ drop drop ] swap dup -rot> dup read-request <rot- call stream-close ] on-error: [ drop ] } ]
 PASS: serve config host
-Stack: [ server-config{ host: "127.0.0.1" port: 9999 backlog: 128 handler: [ [ drop drop ] swap dup read-request <rot- call ] on-error: [ drop ] } ]
+Stack: [ server-config{ host: "127.0.0.1" port: 9999 backlog: 128 handler: [ [ drop drop ] swap dup -rot> dup read-request <rot- call stream-close ] on-error: [ drop ] } ]
 PASS: serve config port
+Stack: [ ]
+=== serve: end-to-end GET ===
+Stack: [ ]
+PASS: serve e2e status
+PASS: serve e2e blank
+PASS: serve e2e body
+Stack: [ ]
+=== serve: server continues after malformed request ===
+Stack: [ ]
+PASS: serve recovery status
+PASS: serve recovery blank
+PASS: serve recovery body
 Stack: [ ]

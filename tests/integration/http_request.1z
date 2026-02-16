@@ -3,6 +3,7 @@ use "http" ;
 use "net" ;
 use "tcp" ;
 use "server" ;
+use "time" ;
 
 "read-request: simple GET" test-section
 <pipe> dup "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
@@ -154,7 +155,45 @@ stream-read-line "Content-Length: 0" "empty body content-length" assert=
 
 "serve: config construction" test-section
 "127.0.0.1" 9999 [ drop drop ]
-[ swap dup read-request <rot- call ] curry
+[ swap dup -rot> dup read-request <rot- call stream-close ] curry
 <server-config> swap >>handler swap >>port swap >>host
 dup host>> "127.0.0.1" "serve config host" assert=
 port>> 9999 "serve config port" assert=
+
+"serve: end-to-end GET" test-section
+[
+  [
+    "127.0.0.1" 39290 [
+      path>> "text/plain; charset=utf-8" ok send-response
+    ] serve
+  ] spawn
+  10 milliseconds sleep
+  "127.0.0.1" 39290 make-addr:tcp tcp-connect
+  dup "GET /test-path HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "serve e2e status" assert=
+  dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+  dup stream-read-line "" "serve e2e blank" assert=
+  stream-read-line "/test-path" "serve e2e body" assert=
+  cancel-task
+] task-scope
+
+"serve: server continues after malformed request" test-section
+[
+  [
+    "127.0.0.1" 39291 [
+      path>> "text/plain; charset=utf-8" ok send-response
+    ] serve
+  ] spawn
+  10 milliseconds sleep
+  "127.0.0.1" 39291 make-addr:tcp tcp-connect
+  dup "GARBAGE\r\n\r\n" stream-write drop
+  stream-close
+  10 milliseconds sleep
+  "127.0.0.1" 39291 make-addr:tcp tcp-connect
+  dup "GET /recovered HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "serve recovery status" assert=
+  dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+  dup stream-read-line "" "serve recovery blank" assert=
+  stream-read-line "/recovered" "serve recovery body" assert=
+  cancel-task
+] task-scope
