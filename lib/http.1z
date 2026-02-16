@@ -130,8 +130,10 @@ serve: ( host port handler -- ) [
 \\ Normalizes the path, appends index.html for directory paths,
 \\ resolves the file from the document root, and sends the response.
 static-file-handler: ( stream request doc-root -- ) [
-  swap path>> normalize
-  dup "/" #ends-with? [ "index.html" #append ] when
+  swap path>>
+  dup "/" #ends-with?
+  swap normalize
+  swap [ dup "/" #ends-with? not [ "/" #append ] when "index.html" #append ] when
   dup "/" #starts-with? [ 1 #drop ] when
   path-join
   dup extension for-extension swap

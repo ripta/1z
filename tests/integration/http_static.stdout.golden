@@ -10,6 +10,10 @@ Stack: [ ]
 Stack: [ ]
 PASS: css status
 Stack: [ ]
+=== serve-static: serves index.html for trailing-slash directory ===
+Stack: [ ]
+PASS: subdir index status
+Stack: [ ]
 === serve-static: directory traversal blocked ===
 Stack: [ ]
 PASS: traversal blocked

@@ -46,6 +46,20 @@ use "time" ;
   cancel-task
 ] task-scope
 
+"serve-static: serves index.html for trailing-slash directory" test-section
+[
+  [
+    "127.0.0.1" 39414 "tests/integration/http_static_root" serve-static
+  ] spawn
+  100 milliseconds sleep
+
+  "127.0.0.1" 39414 make-addr:tcp tcp-connect
+  dup "GET /subdir/ HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  stream-read-line "HTTP/1.1 200 OK" "subdir index status" assert=
+
+  cancel-task
+] task-scope
+
 "serve-static: directory traversal blocked" test-section
 [
   [
