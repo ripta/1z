@@ -1,0 +1,49 @@
+=== basic prefix matching ===
+Stack: [ ]
+Stack: [ { { "/foo/bar" "bar-handler" } { "/foo" "foo-handler" } { "/" "default" } } ]
+Stack: [ <prefix-table { { "/foo/bar" "bar-handler" } { "/foo" "foo-handler" } { "/" "default" } }> ]
+PASS: longest prefix /foo/bar matches
+Stack: [ <prefix-table { { "/foo/bar" "bar-handler" } { "/foo" "foo-handler" } { "/" "default" } }> ]
+PASS: longest prefix /foo matches
+Stack: [ <prefix-table { { "/foo/bar" "bar-handler" } { "/foo" "foo-handler" } { "/" "default" } }> ]
+PASS: fallback to /
+Stack: [ <prefix-table { { "/foo/bar" "bar-handler" } { "/foo" "foo-handler" } { "/" "default" } }> ]
+PASS: exact root match
+Stack: [ <prefix-table { { "/foo/bar" "bar-handler" } { "/foo" "foo-handler" } { "/" "default" } }> ]
+PASS: exact match /foo/bar
+Stack: [ ]
+=== prefix-match? returns option ===
+Stack: [ ]
+Stack: [ <prefix-table { { "/api" "api-handler" } }> ]
+PASS: match returns some
+Stack: [ <prefix-table { { "/api" "api-handler" } }> ]
+PASS: no match returns none
+Stack: [ ]
+=== no match throws ===
+Stack: [ ]
+Stack: [ <prefix-table { { "/api" "api-handler" } }> ]
+PASS: no match throws error
+Stack: [ ]
+=== insertion order does not matter ===
+Stack: [ ]
+Stack: [ { { "/a" "short" } { "/a/b/c" "long" } { "/a/b" "medium" } } ]
+Stack: [ <prefix-table { { "/a/b/c" "long" } { "/a/b" "medium" } { "/a" "short" } }> ]
+PASS: longest match regardless of insertion order
+Stack: [ <prefix-table { { "/a/b/c" "long" } { "/a/b" "medium" } { "/a" "short" } }> ]
+PASS: medium match regardless of insertion order
+Stack: [ <prefix-table { { "/a/b/c" "long" } { "/a/b" "medium" } { "/a" "short" } }> ]
+PASS: short match regardless of insertion order
+Stack: [ ]
+=== empty table ===
+Stack: [ ]
+Stack: [ <prefix-table { }> ]
+PASS: empty table throws
+Stack: [ ]
+=== iterator input to constructor ===
+Stack: [ ]
+Stack: [ { { "/x" "x-val" } { "/x/y" "xy-val" } } ]
+Stack: [ <prefix-table { { "/x/y" "xy-val" } { "/x" "x-val" } }> ]
+PASS: works with iterator input
+Stack: [ ]
+All prefix-match tests complete!
+Stack: [ ]
