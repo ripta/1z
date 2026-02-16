@@ -467,6 +467,13 @@ fn replInteractive(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
 
     editor.dictionary = &ctx.dictionary;
 
+    ctx.pushLocalFrame() catch return;
+    defer ctx.popLocalFrame();
+
+    const old_import_frame = ctx.import_frame_index;
+    ctx.import_frame_index = ctx.local_frames.items.len - 1;
+    defer ctx.import_frame_index = old_import_frame;
+
     var processor: StatementProcessor = .{};
     defer processor.deinit();
     var repl_line: usize = 0;
@@ -541,6 +548,13 @@ fn replPiped(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
     var stdin_buf: [4096]u8 = undefined;
     var stdin = stdin_file.reader(&stdin_buf);
     const reader = &stdin.interface;
+
+    ctx.pushLocalFrame() catch return;
+    defer ctx.popLocalFrame();
+
+    const old_import_frame = ctx.import_frame_index;
+    ctx.import_frame_index = ctx.local_frames.items.len - 1;
+    defer ctx.import_frame_index = old_import_frame;
 
     var processor: StatementProcessor = .{};
     defer processor.deinit();
@@ -647,6 +661,13 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
 
     var file_buf: [4096]u8 = undefined;
     var reader = file.reader(&file_buf);
+
+    ctx.pushLocalFrame() catch return 1;
+    defer ctx.popLocalFrame();
+
+    const old_import_frame = ctx.import_frame_index;
+    ctx.import_frame_index = ctx.local_frames.items.len - 1;
+    defer ctx.import_frame_index = old_import_frame;
 
     var processor: StatementProcessor = .{};
     defer processor.deinit();

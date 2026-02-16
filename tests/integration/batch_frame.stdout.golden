@@ -1,0 +1,17 @@
+PASS: prelude + visible
+Stack: [ ]
+PASS: prelude swap visible
+Stack: [ ]
+PASS: prelude fixnum? visible
+Stack: [ ]
+Stack: [ ]
+PASS: user word in batch frame
+Stack: [ ]
+PASS: imported all-words works
+Stack: [ ]
+Stack: [ t ]
+PASS: user word visible in all-words
+Stack: [ ]
+Stack: [ t ]
+PASS: prelude words visible in all-words
+Stack: [ ]

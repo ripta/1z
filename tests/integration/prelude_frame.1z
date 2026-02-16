@@ -23,6 +23,6 @@ my-prelude-test-word 99 = "user word visible" assert-true
 use "introspect" ;
 all-words array? "all-words returns array" assert-true
 all-words >iterator [ name>> "dup" = ] #filter #count 1 =
-  "all-words includes prelude words" assert-true
+"all-words includes prelude words" assert-true
 all-words >iterator [ name>> "my-prelude-test-word" = ] #filter #count 1 =
-  "all-words includes user words" assert-true
+"all-words includes user words" assert-true
