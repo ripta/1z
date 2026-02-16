@@ -11,6 +11,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    root_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
+    root_module.addIncludePath(b.path("ext/toy"));
 
     // Set version as a build option
     const options = b.addOptions();
@@ -62,6 +64,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    test_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
+    test_module.addIncludePath(b.path("ext/toy"));
     test_module.addOptions("build_options", options);
 
     const lib_unit_tests = b.addTest(.{

@@ -1,0 +1,62 @@
+Stack: [ 7 ]
+Stack: [ 7 7 ]
+Stack: [ 7 7 "toy-add positive" ]
+PASS: toy-add positive
+Stack: [ ]
+Stack: [ -7 ]
+Stack: [ -7 -7 ]
+Stack: [ -7 -7 "toy-add negative" ]
+PASS: toy-add negative
+Stack: [ ]
+Stack: [ 5 ]
+Stack: [ 5 5 ]
+Stack: [ 5 5 "toy-strlen non-empty" ]
+PASS: toy-strlen non-empty
+Stack: [ ]
+Stack: [ 0 ]
+Stack: [ 0 0 ]
+Stack: [ 0 0 "toy-strlen empty" ]
+PASS: toy-strlen empty
+Stack: [ ]
+Stack: [ "Hello, world!" ]
+Stack: [ "Hello, world!" "Hello, world!" ]
+Stack: [ "Hello, world!" "Hello, world!" "toy-greeting" ]
+PASS: toy-greeting
+Stack: [ ]
+Stack: [ 10 ]
+Stack: [ 10 10 ]
+Stack: [ 10 10 "toy-checksum" ]
+PASS: toy-checksum
+Stack: [ ]
+Stack: [ B{ 0x2A 0x2A 0x2A } ]
+Stack: [ B{ 0x2A 0x2A 0x2A } B{ 0x2A 0x2A 0x2A } ]
+Stack: [ B{ 0x2A 0x2A 0x2A } B{ 0x2A 0x2A 0x2A } "toy-fill" ]
+PASS: toy-fill
+Stack: [ ]
+Stack: [ toy-counter: ]
+Stack: [ toy-counter: toy-counter: ]
+Stack: [ toy-counter: toy-counter: "toy-open type" ]
+PASS: toy-open type
+Stack: [ ]
+Stack: [ <resource:toy-counter> 0 ]
+Stack: [ <resource:toy-counter> 0 0 ]
+Stack: [ <resource:toy-counter> 0 0 "toy-read initial" ]
+PASS: toy-read initial
+Stack: [ <resource:toy-counter> ]
+Stack: [ ]
+Stack: [ <resource:toy-counter> ]
+Stack: [ <resource:toy-counter> ]
+Stack: [ <resource:toy-counter> ]
+Stack: [ <resource:toy-counter> ]
+Stack: [ <resource:toy-counter> 3 ]
+Stack: [ <resource:toy-counter> 3 3 ]
+Stack: [ <resource:toy-counter> 3 3 "toy-read after 3 increments" ]
+PASS: toy-read after 3 increments
+Stack: [ <resource:toy-counter> ]
+Stack: [ ]
+Stack: [ [ native.toy-open dup resource-close native.toy-read ] ]
+PASS: use-after-close on toy-read
+Stack: [ ]
+Stack: [ [ native.toy-open dup resource-close native.toy-increment ] ]
+PASS: use-after-close on toy-increment
+Stack: [ ]

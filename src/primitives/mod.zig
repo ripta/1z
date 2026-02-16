@@ -58,6 +58,7 @@ pub const introspect = @import("introspect.zig");
 pub const math = @import("math.zig");
 pub const bitwise = @import("bitwise.zig");
 pub const resources = @import("resources.zig");
+pub const ffi_toy = @import("../ffi/toy.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -123,4 +124,5 @@ pub const extracted_registry_entries = structs.registry_entries ++
     protocols.registry_entries ++
     introspect.registry_entries ++
     arithmetic.registry_entries ++
-    math.registry_entries;
+    math.registry_entries ++
+    ffi_toy.registry_entries;
