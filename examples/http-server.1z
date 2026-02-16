@@ -1,0 +1,13 @@
+\ Minimal serve-forever test
+use "http" ;
+use "server" ;
+use "time" ;
+
+"Serving on localhost:18081" print-line
+[
+  <server-config>
+  "127.0.0.1" >>host
+  18081 >>port
+  [ dup read-request path>> "text/plain" ok over -rot> send-response stream-close ] >>handler
+  serve-forever
+] task-scope
