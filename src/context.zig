@@ -205,6 +205,11 @@ pub const Context = struct {
         const StatementProcessor = @import("statement.zig").StatementProcessor;
         var processor: StatementProcessor = .{};
 
+        // Push an initial frame so that the prelude definitions land in a local
+        // frame instead of the global dictionary
+        try self.pushLocalFrame();
+        self.import_frame_index = self.local_frames.items.len - 1;
+
         // Split prelude into lines and process incrementally
         var lines = std.mem.splitScalar(u8, prelude_source, '\n');
         while (lines.next()) |line| {

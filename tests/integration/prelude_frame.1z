@@ -1,0 +1,28 @@
+\ Test that prelude definitions live in a local frame (not the global dictionary)
+\ and are visible through normal word lookup.
+
+use "testing" ;
+
+\ Prelude words are accessible
+1 dup 2 = "prelude dup accessible" assert-false
+1 2 drop 1 = "prelude drop accessible" assert-true
+1 2 swap drop 2 = "prelude swap accessible" assert-true
+
+\ Type predicates from prelude are visible
+42 fixnum? "prelude fixnum? accessible" assert-true
+"hello" string? "prelude string? accessible" assert-true
+
+\ Hash literals work (uses H{ parse-time word from prelude)
+H{ x: 1 y: 2 } @keys #len 2 = "prelude H{ accessible" assert-true
+
+\ User definitions work alongside prelude words
+my-prelude-test-word: 99 ;
+my-prelude-test-word 99 = "user word visible" assert-true
+
+\ Imported module words work
+use "introspect" ;
+all-words array? "all-words returns array" assert-true
+all-words >iterator [ name>> "dup" = ] #filter #count 1 =
+  "all-words includes prelude words" assert-true
+all-words >iterator [ name>> "my-prelude-test-word" = ] #filter #count 1 =
+  "all-words includes user words" assert-true
