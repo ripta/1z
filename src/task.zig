@@ -38,6 +38,12 @@ pub fn taskEntryPoint() callconv(.c) void {
         task.status = .failed;
         if (task.ctx.thrown_error) |thrown| {
             task.error_obj = thrown;
+        } else if (task.ctx.error_details.items.len > 0) {
+            const detail = task.ctx.error_details.items[0];
+            task.error_obj = .{
+                .error_type = detail.error_type,
+                .message = detail.message,
+            };
         }
         return;
     };
