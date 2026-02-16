@@ -402,46 +402,27 @@ pub const Context = struct {
         }
     }
 
-    /// Define a word via `import`. Writes to the load frame (tracked by
-    /// import_frame_index) when inside a `load` call, or to the global
-    /// dictionary otherwise. This prevents imported words from leaking
-    /// into the global namespace when loading modules.
+    /// Define a word via `import`. Writes to the import frame tracked by
+    /// `import_frame_index`, which is always set in every execution context,
+    /// i.e., prelude, batch, REPL, module load.
     pub fn defineImportedWord(self: *Context, name: []const u8, definition: WordDefinition) !void {
         // Check only the target frame for dedup, not the full lookup chain.
         // The full lookupWord traverses parent frames, which would suppress
         // imports that the current module needs captured in its own frame
         // for later deps resolution.
-        const target_frame = if (self.import_frame_index) |idx|
-            &self.local_frames.items[idx]
-        else
-            null;
+        const idx = self.import_frame_index orelse unreachable;
+        const target_frame = &self.local_frames.items[idx];
 
-        if (target_frame) |tf| {
-            if (tf.get(name)) |existing| {
-                if (existing.imported and existing.source_module != null and definition.source_module != null) {
-                    if (existing.source_module == definition.source_module) {
-                        return;
-                    }
-                }
-                for (existing.markers) |mk| {
-                    if (markers_mod.isConstMarker(mk)) {
-                        self.pending_error_message = "cannot redefine const word";
-                        return error.CannotRedefineConst;
-                    }
+        if (target_frame.get(name)) |existing| {
+            if (existing.imported and existing.source_module != null and definition.source_module != null) {
+                if (existing.source_module == definition.source_module) {
+                    return;
                 }
             }
-        } else {
-            if (self.dictionary.get(name)) |existing| {
-                if (existing.imported and existing.source_module != null and definition.source_module != null) {
-                    if (existing.source_module == definition.source_module) {
-                        return;
-                    }
-                }
-                for (existing.markers) |mk| {
-                    if (markers_mod.isConstMarker(mk)) {
-                        self.pending_error_message = "cannot redefine const word";
-                        return error.CannotRedefineConst;
-                    }
+            for (existing.markers) |mk| {
+                if (markers_mod.isConstMarker(mk)) {
+                    self.pending_error_message = "cannot redefine const word";
+                    return error.CannotRedefineConst;
                 }
             }
         }
@@ -456,11 +437,7 @@ pub const Context = struct {
             }
         }
 
-        if (self.import_frame_index) |idx| {
-            try self.local_frames.items[idx].put(self.allocator, name, def);
-        } else {
-            try self.dictionary.put(name, def);
-        }
+        try target_frame.put(self.allocator, name, def);
     }
 
     /// Look up a word by name by searching in the following order:
