@@ -1,6 +1,8 @@
 \ lib/http.1z - HTTP/1.0 library
 
 use "strings" ;
+use "path" ;
+use "mimetype" ;
 use "server" ;
 
 EMalformedRequest: [ malformed-request: ] ;
@@ -122,4 +124,27 @@ serve: ( host port handler -- ) [
   [ swap dup -rot> dup read-request <rot- call stream-close ] curry
   <server-config> swap >>handler swap >>port swap >>host
   [ serve-forever ] curry task-scope
+] ;
+
+\\ Serve a single static file request.
+\\ Normalizes the path, appends index.html for directory paths,
+\\ resolves the file from the document root, and sends the response.
+static-file-handler: ( stream request doc-root -- ) [
+  swap path>> normalize
+  dup "/" #ends-with? [ "index.html" #append ] when
+  dup "/" #starts-with? [ 1 #drop ] when
+  path-join
+  dup extension for-extension swap
+  [ read: stream-open dup stream-read-all swap stream-close ] try
+  dup result:ok?
+  [ unwrap-or-throw swap ok send-response ]
+  [ drop drop not-found send-response ]
+  if
+] ;
+
+\\ Start an HTTP server that serves static files from a directory.
+\\ Normalizes request paths to prevent directory traversal.
+\\ Serves index.html for paths ending in /.
+serve-static: ( host port doc-root -- ) [
+  [ static-file-handler ] curry serve
 ] ;

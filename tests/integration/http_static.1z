@@ -1,0 +1,19 @@
+use "testing" ;
+use "http" ;
+use "net" ;
+use "tcp" ;
+use "time" ;
+
+"serve-static: missing file returns 404" test-section
+[
+  [
+    "127.0.0.1" 39410 "tests/integration/http_static_root" serve-static
+  ] spawn
+  100 milliseconds sleep
+
+  "127.0.0.1" 39410 make-addr:tcp tcp-connect
+  dup "GET /nope.txt HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  stream-read-line "HTTP/1.1 404 Not Found" "missing status" assert=
+
+  cancel-task
+] task-scope
