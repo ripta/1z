@@ -1,0 +1,16 @@
+=== Module load guards ===
+Stack: [ ]
+PASS: yield blocked during module load
+Stack: [ ]
+PASS: sleep blocked during module load
+Stack: [ ]
+PASS: await blocked during module load
+Stack: [ ]
+PASS: await-all blocked during module load
+Stack: [ ]
+PASS: send blocked during module load
+Stack: [ ]
+PASS: receive blocked during module load
+Stack: [ ]
+PASS: select blocked during module load
+Stack: [ ]
