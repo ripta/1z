@@ -1,0 +1,67 @@
+use "testing" ;
+use "router" ;
+use "http" ;
+
+\\ Helper: create a GET request for a path.
+make-get: ( path -- request ) [
+  "GET" swap "HTTP/1.1" H{ } make-request
+] ;
+
+\\ Helper: dispatch a GET request through a handler and return the status line.
+check-status: ( handler path -- status-line ) [
+  make-get <pipe> swap [ swap <rot- call ] dip
+  stream-read-line
+] ;
+
+"exact match hit" test-section
+<router>
+"/health" [ drop "ok" "text/plain" ok ] route
+build
+"/health" check-status "HTTP/1.1 200 OK" "exact hit" assert=
+
+"exact match miss" test-section
+<router>
+"/health" [ drop "ok" "text/plain" ok ] route
+build
+"/healthcare" check-status "HTTP/1.1 404 Not Found" "exact miss" assert=
+
+"prefix match hit" test-section
+<router>
+"/api/" [ drop "api" "text/plain" ok ] route
+build
+dup "/api/users" check-status "HTTP/1.1 200 OK" "prefix sub-path" assert=
+"/api/" check-status "HTTP/1.1 200 OK" "prefix exact" assert=
+
+"prefix match miss" test-section
+<router>
+"/api/" [ drop "api" "text/plain" ok ] route
+build
+"/other" check-status "HTTP/1.1 404 Not Found" "prefix miss" assert=
+
+"catch-all with /" test-section
+<router>
+"/" [ drop "root" "text/plain" ok ] route
+build
+dup "/anything" check-status "HTTP/1.1 200 OK" "catch-all" assert=
+"/" check-status "HTTP/1.1 200 OK" "root" assert=
+
+"longest prefix wins" test-section
+<router>
+"/" [ drop 200 "OK" "text/plain" "root" <response> ] route
+"/api/" [ drop 201 "Created" "text/plain" "api" <response> ] route
+build
+dup "/api/users" check-status "HTTP/1.1 201 Created" "api over root" assert=
+"/other" check-status "HTTP/1.1 200 OK" "root fallback" assert=
+
+"exact over prefix" test-section
+<router>
+"/api/" [ drop 200 "OK" "text/plain" "api-prefix" <response> ] route
+"/api/special" [ drop 201 "Created" "text/plain" "api-special" <response> ] route
+build
+dup "/api/special" check-status "HTTP/1.1 201 Created" "exact wins" assert=
+dup "/api/other" check-status "HTTP/1.1 200 OK" "prefix for non-exact" assert=
+"/api/special/sub" check-status "HTTP/1.1 200 OK" "prefix for sub-path" assert=
+
+"empty router" test-section
+<router> build
+"/anything" check-status "HTTP/1.1 404 Not Found" "empty router" assert=
