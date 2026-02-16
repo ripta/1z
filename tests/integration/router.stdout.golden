@@ -66,3 +66,13 @@ Stack: [ ]
 Stack: [ [ [ H{ } <prefix-table { }> <rot- find-handler ] route-dispatch ] ]
 PASS: empty router
 Stack: [ ]
+=== router over TCP: exact, prefix, and 404 ===
+Stack: [ ]
+PASS: tcp exact status
+PASS: tcp exact blank
+PASS: tcp exact body
+PASS: tcp prefix status
+PASS: tcp prefix blank
+PASS: tcp prefix body
+PASS: tcp 404 status
+Stack: [ ]

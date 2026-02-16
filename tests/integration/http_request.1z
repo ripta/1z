@@ -197,3 +197,71 @@ port>> 9999 "serve config port" assert=
   stream-read-line "/recovered" "serve recovery body" assert=
   cancel-task
 ] task-scope
+
+"serve: concurrent connections" test-section
+[
+  [
+    "127.0.0.1" 39292 [
+      path>> "text/plain; charset=utf-8" ok send-response
+    ] serve
+  ] spawn
+  10 milliseconds sleep
+
+  [
+    "127.0.0.1" 39292 make-addr:tcp tcp-connect
+    dup "GET /alpha HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+    dup stream-read-line drop
+    dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+    dup stream-read-line drop
+    stream-read-line
+  ] spawn
+  [
+    "127.0.0.1" 39292 make-addr:tcp tcp-connect
+    dup "GET /beta HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+    dup stream-read-line drop
+    dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+    dup stream-read-line drop
+    stream-read-line
+  ] spawn
+  [
+    "127.0.0.1" 39292 make-addr:tcp tcp-connect
+    dup "GET /gamma HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+    dup stream-read-line drop
+    dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+    dup stream-read-line drop
+    stream-read-line
+  ] spawn
+
+  await "/gamma" "concurrent gamma" assert=
+  await "/beta" "concurrent beta" assert=
+  await "/alpha" "concurrent alpha" assert=
+
+  cancel-task
+] task-scope
+
+"serve: handler exception recovery" test-section
+[
+  [
+    "127.0.0.1" 39293 [
+      dup path>> "/crash" =
+      [ drop "deliberate error" throw ]
+      [ path>> "text/plain; charset=utf-8" ok send-response ]
+      if
+    ] serve
+  ] spawn
+  10 milliseconds sleep
+
+  "127.0.0.1" 39293 make-addr:tcp tcp-connect
+  dup "GET /crash HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  stream-close
+  10 milliseconds sleep
+
+  "127.0.0.1" 39293 make-addr:tcp tcp-connect
+  dup "GET /ok HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "after-crash status" assert=
+  dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+  dup stream-read-line "" "after-crash blank" assert=
+  stream-read-line "/ok" "after-crash body" assert=
+
+  cancel-task
+] task-scope

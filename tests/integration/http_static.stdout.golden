@@ -2,13 +2,19 @@
 Stack: [ ]
 PASS: missing status
 Stack: [ ]
-=== serve-static: serves index.html at root ===
+=== serve-static: serves index.html at root with correct headers and body ===
 Stack: [ ]
 PASS: index status
+PASS: index content-type
+PASS: index content-length
+PASS: index body
 Stack: [ ]
-=== serve-static: serves css file ===
+=== serve-static: serves css file with correct headers and body ===
 Stack: [ ]
 PASS: css status
+PASS: css content-type
+PASS: css content-length
+PASS: css body
 Stack: [ ]
 === serve-static: serves index.html for trailing-slash directory ===
 Stack: [ ]
@@ -17,4 +23,11 @@ Stack: [ ]
 === serve-static: directory traversal blocked ===
 Stack: [ ]
 PASS: traversal blocked
+Stack: [ ]
+=== serve-static: no-extension file gets application/octet-stream ===
+Stack: [ ]
+PASS: noext status
+PASS: noext content-type
+PASS: noext content-length
+PASS: noext body
 Stack: [ ]
