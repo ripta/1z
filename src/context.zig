@@ -964,6 +964,7 @@ pub const Context = struct {
     pub fn executeQuotation(self: *Context, quotation: Quotation) anyerror!void {
         var current_instructions = quotation.instructions;
         var current_module: ?*const value_mod.Module = null;
+        var owns_frame = false;
 
         while (true) {
             // Record depth before execution for validation
@@ -971,17 +972,20 @@ pub const Context = struct {
             self.tail_call_instructions = null;
             self.tail_call_module = null;
 
-            // Push frame if this is a tail-called module word
-            if (current_module) |mod| {
-                try self.pushModuleDepsFrame(mod);
+            // Push module deps frame on first entry into a module context. On
+            // subsequent iterations, the frame persists so that runtime-defined
+            // local words, e.g. a recursive helper inside a module word, remain
+            // visible across tail calls.
+            if (current_module != null and !owns_frame) {
+                try self.pushModuleDepsFrame(current_module.?);
+                owns_frame = true;
             }
 
             const exec_result = self.executeInstructions(current_instructions);
-            if (current_module != null) {
-                self.popLocalFrame();
-            }
-
-            try exec_result;
+            exec_result catch |err| {
+                if (owns_frame) self.popLocalFrame();
+                return err;
+            };
 
             // Tail call case: pop the call frame that was pushed by the tail-calling
             // `executeInstructions`, then loop around
@@ -990,9 +994,23 @@ pub const Context = struct {
                 current_instructions = tci;
                 self.tail_call_instructions = null;
 
-                current_module = self.tail_call_module;
+                const new_module = self.tail_call_module;
                 self.tail_call_module = null;
+
+                if (new_module) |new_mod| {
+                    if (owns_frame and current_module.? != new_mod) {
+                        self.popLocalFrame();
+                        owns_frame = false;
+                    }
+                    current_module = new_mod;
+                }
                 continue;
+            }
+
+            // Normal terminatio:n pop frame before validation
+            if (owns_frame) {
+                self.popLocalFrame();
+                owns_frame = false;
             }
 
             // Non-tail call: validate quotation's stack effect
