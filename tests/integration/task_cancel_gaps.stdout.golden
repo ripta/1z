@@ -3,6 +3,11 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: nested scope children cancelled
 Stack: [ ]
 PASS: cancel task blocked on channel receive
@@ -12,4 +17,14 @@ Stack: [ ]
 PASS: cancel task blocked on select
 Stack: [ ]
 PASS: await on cancelled task throws
+Stack: [ ]
+PASS: 3-level nested scope cancellation
+Stack: [ ]
+PASS: cancel task blocked inside with-timeout
+Stack: [ ]
+PASS: sibling failure cancels nested scope
+Stack: [ ]
+PASS: mixed blocking states in nested scope cancelled
+Stack: [ ]
+PASS: with-timeout cancels nested task-scope children
 Stack: [ ]
