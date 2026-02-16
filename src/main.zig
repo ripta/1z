@@ -474,6 +474,8 @@ fn replInteractive(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
     ctx.import_frame_index = ctx.local_frames.items.len - 1;
     defer ctx.import_frame_index = old_import_frame;
 
+    autoloadReplModules(ctx);
+
     var processor: StatementProcessor = .{};
     defer processor.deinit();
     var repl_line: usize = 0;
@@ -543,6 +545,21 @@ fn replInteractive(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
     }
 }
 
+fn autoloadReplModules(ctx: *Context) void {
+    var processor: StatementProcessor = .{};
+    defer processor.deinit();
+
+    switch (processor.feedLine(ctx.quotationAllocator(), "use \"introspect\" ;", ctx)) {
+        .complete => |instrs| {
+            ctx.executeQuotation(.{ .instructions = instrs }) catch {};
+            processor.reset();
+        },
+        .needs_more_input, .parse_error => {
+            processor.reset();
+        },
+    }
+}
+
 fn replPiped(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
     const stdin_file: File = .stdin();
     var stdin_buf: [4096]u8 = undefined;
@@ -555,6 +572,8 @@ fn replPiped(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
     const old_import_frame = ctx.import_frame_index;
     ctx.import_frame_index = ctx.local_frames.items.len - 1;
     defer ctx.import_frame_index = old_import_frame;
+
+    autoloadReplModules(ctx);
 
     var processor: StatementProcessor = .{};
     defer processor.deinit();
