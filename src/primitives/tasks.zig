@@ -14,7 +14,7 @@ const ErrorObject = value_mod.ErrorObject;
 const StackEffect = @import("../stack_effect.zig").StackEffect;
 const StackEffectParam = @import("../stack_effect.zig").StackEffectParam;
 
-const task_stack_size: usize = 64 * 1024;
+const task_stack_size: usize = 512 * 1024;
 
 pub const primitives = [_]Primitive{
     .{ .name = "task-scope", .stack_effect = "quot --", .doc = "Run quotation in a structured concurrency scope.", .func = nativeTaskScope },
