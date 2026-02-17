@@ -93,3 +93,35 @@ ssize_t toy_isize_negate(ssize_t x) {
 uint64_t toy_u64_max(void) {
     return UINT64_MAX;
 }
+
+void toy_divmod(int a, int b, int *quotient, int *remainder) {
+    *quotient = a / b;
+    *remainder = a % b;
+}
+
+int toy_add_with_carry(int a, int b, int *result) {
+    *result = a + b;
+    return (*result < a) ? 1 : 0;
+}
+
+void toy_sincos_approx(double x, double *sin_out, double *cos_out) {
+    *sin_out = x - (x * x * x) / 6.0;
+    *cos_out = 1.0 - (x * x) / 2.0;
+}
+
+void toy_classify(int x, bool *is_positive, bool *is_zero) {
+    *is_positive = x > 0;
+    *is_zero = x == 0;
+}
+
+void toy_widen_add(int a, int b, int64_t *wide_sum) {
+    *wide_sum = (int64_t)a + (int64_t)b;
+}
+
+void toy_double_u8(uint8_t input, uint8_t *doubled) {
+    *doubled = input * 2;
+}
+
+void toy_f32_out(float a, float b, float *sum) {
+    *sum = a + b;
+}

@@ -24,6 +24,7 @@ pub const FfiTypeTag = enum {
 pub const FfiType = struct {
     tag: FfiTypeTag,
     ptr_name: ?[]const u8 = null,
+    is_out: bool = false,
 };
 
 pub const FfiSignature = struct {
@@ -35,7 +36,7 @@ pub const ParseError = error{
     UnknownFfiType,
 };
 
-pub fn parseTypeToken(token: []const u8) ParseError!FfiType {
+fn parseBaseType(token: []const u8) ParseError!FfiType {
     if (std.mem.eql(u8, token, "i8")) return .{ .tag = .i8 };
     if (std.mem.eql(u8, token, "i16")) return .{ .tag = .i16 };
     if (std.mem.eql(u8, token, "i32")) return .{ .tag = .i32 };
@@ -62,6 +63,21 @@ pub fn parseTypeToken(token: []const u8) ParseError!FfiType {
     }
 
     return error.UnknownFfiType;
+}
+
+pub fn parseTypeToken(token: []const u8) ParseError!FfiType {
+    if (std.mem.startsWith(u8, token, "out-")) {
+        const base_token = token["out-".len..];
+        if (std.mem.startsWith(u8, base_token, "out-")) return error.UnknownFfiType;
+        var ffi_type = try parseBaseType(base_token);
+        switch (ffi_type.tag) {
+            .void_type, .cstring, .cstring_retained, .cstring_owned, .ptr => return error.UnknownFfiType,
+            else => {},
+        }
+        ffi_type.is_out = true;
+        return ffi_type;
+    }
+    return parseBaseType(token);
 }
 
 test "parseTypeToken basic types" {
@@ -98,4 +114,48 @@ test "parseTypeToken ptr: empty name" {
 test "parseTypeToken unknown" {
     try std.testing.expectError(error.UnknownFfiType, parseTypeToken("banana"));
     try std.testing.expectError(error.UnknownFfiType, parseTypeToken("int"));
+}
+
+test "parseTypeToken out-param types" {
+    const out_i32 = try parseTypeToken("out-i32");
+    try std.testing.expectEqual(FfiTypeTag.i32, out_i32.tag);
+    try std.testing.expect(out_i32.is_out);
+
+    const out_i64 = try parseTypeToken("out-i64");
+    try std.testing.expectEqual(FfiTypeTag.i64, out_i64.tag);
+    try std.testing.expect(out_i64.is_out);
+
+    const out_f64 = try parseTypeToken("out-f64");
+    try std.testing.expectEqual(FfiTypeTag.f64, out_f64.tag);
+    try std.testing.expect(out_f64.is_out);
+
+    const out_bool = try parseTypeToken("out-bool");
+    try std.testing.expectEqual(FfiTypeTag.bool_type, out_bool.tag);
+    try std.testing.expect(out_bool.is_out);
+
+    const out_u8 = try parseTypeToken("out-u8");
+    try std.testing.expectEqual(FfiTypeTag.u8, out_u8.tag);
+    try std.testing.expect(out_u8.is_out);
+
+    const out_f32 = try parseTypeToken("out-f32");
+    try std.testing.expectEqual(FfiTypeTag.f32, out_f32.tag);
+    try std.testing.expect(out_f32.is_out);
+
+    const out_usize = try parseTypeToken("out-usize");
+    try std.testing.expectEqual(FfiTypeTag.usize_type, out_usize.tag);
+    try std.testing.expect(out_usize.is_out);
+}
+
+test "parseTypeToken non-out params have is_out false" {
+    const i32_type = try parseTypeToken("i32");
+    try std.testing.expect(!i32_type.is_out);
+}
+
+test "parseTypeToken out-param rejected for invalid bases" {
+    try std.testing.expectError(error.UnknownFfiType, parseTypeToken("out-void"));
+    try std.testing.expectError(error.UnknownFfiType, parseTypeToken("out-cstring"));
+    try std.testing.expectError(error.UnknownFfiType, parseTypeToken("out-cstring-retained"));
+    try std.testing.expectError(error.UnknownFfiType, parseTypeToken("out-cstring-owned"));
+    try std.testing.expectError(error.UnknownFfiType, parseTypeToken("out-ptr"));
+    try std.testing.expectError(error.UnknownFfiType, parseTypeToken("out-out-i32"));
 }

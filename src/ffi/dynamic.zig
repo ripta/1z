@@ -204,6 +204,10 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
         helpers.setErrorContext(ctx, "unknown FFI type: {s}", .{return_type_str});
         return error.FFITypeMismatch;
     };
+    if (return_type.is_out) {
+        helpers.setErrorContext(ctx, "out-parameter annotation is not valid for return type", .{});
+        return error.FFITypeMismatch;
+    }
 
     // Store final signature
     const sig = try alloc.create(FfiSignature);
@@ -289,28 +293,45 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
     };
 
     const nargs = sig.param_types.len;
-    if (ctx.stack.depth() < nargs) {
-        helpers.setErrorContext(ctx, "ffi-call expected {d} arguments, got {d}", .{ nargs, ctx.stack.depth() });
+
+    // Count non-out params to know how many values to pop from the stack
+    var n_stack_args: usize = 0;
+    for (sig.param_types) |pt| {
+        if (!pt.is_out) n_stack_args += 1;
+    }
+
+    if (ctx.stack.depth() < n_stack_args) {
+        helpers.setErrorContext(ctx, "ffi-call expected {d} arguments, got {d}", .{ n_stack_args, ctx.stack.depth() });
         return error.FFICallFailed;
     }
 
-    // NOTE: pop arguments from the stack, with the convention that rightmost
-    //       (top-of-stack) is the last C param
-    var arg_vals = try alloc.alloc(Value, nargs);
-    var i: usize = nargs;
-    while (i > 0) {
-        i -= 1;
-        arg_vals[i] = try ctx.stack.pop();
+    // Pop only non-out arguments from the stack (rightmost = top-of-stack = last C param)
+    var arg_vals = try alloc.alloc(Value, n_stack_args);
+    var pop_i: usize = n_stack_args;
+    while (pop_i > 0) {
+        pop_i -= 1;
+        arg_vals[pop_i] = try ctx.stack.pop();
     }
 
     var arg_types = try alloc.alloc([*c]c_ffi.ffi_type, nargs);
     var arg_slots = try alloc.alloc(ArgSlot, nargs);
     var arg_ptrs = try alloc.alloc(?*anyopaque, nargs);
+    var out_ptr_slots = try alloc.alloc(?*anyopaque, nargs);
 
+    var stack_arg_idx: usize = 0;
     for (sig.param_types, 0..) |param_type, pi| {
-        arg_types[pi] = ffiTypeToLibffi(param_type.tag);
-        arg_slots[pi] = try marshalArg(ctx, param_type, arg_vals[pi], pi);
-        arg_ptrs[pi] = @ptrCast(&arg_slots[pi]);
+        if (param_type.is_out) {
+            arg_slots[pi] = std.mem.zeroes(ArgSlot);
+            out_ptr_slots[pi] = @ptrCast(&arg_slots[pi]);
+            arg_types[pi] = &c_ffi.ffi_type_pointer;
+            arg_ptrs[pi] = @ptrCast(&out_ptr_slots[pi]);
+        } else {
+            arg_types[pi] = ffiTypeToLibffi(param_type.tag);
+            arg_slots[pi] = try marshalArg(ctx, param_type, arg_vals[stack_arg_idx], stack_arg_idx);
+            arg_ptrs[pi] = @ptrCast(&arg_slots[pi]);
+            out_ptr_slots[pi] = null;
+            stack_arg_idx += 1;
+        }
     }
 
     var cif: c_ffi.ffi_cif = undefined;
@@ -336,6 +357,14 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
         if (nargs > 0) arg_ptrs.ptr else null,
     );
 
+    // Push out-param values in parameter order (first out-param deepest)
+    for (sig.param_types, 0..) |param_type, pi| {
+        if (param_type.is_out) {
+            try marshalOutParam(ctx, param_type, &arg_slots[pi]);
+        }
+    }
+
+    // Return value goes on top
     try marshalReturn(ctx, sig.return_type, &ret_storage);
 }
 
@@ -620,6 +649,44 @@ fn marshalReturn(ctx: *Context, return_type: FfiType, ret: *const ReturnStorage)
             try ctx.stack.push(.{ .resource = r });
         },
         .void_type => {},
+    }
+}
+
+/// Read a value from an out-parameter ArgSlot and push it onto the stack.
+fn marshalOutParam(ctx: *Context, param_type: FfiType, slot: *const ArgSlot) !void {
+    switch (param_type.tag) {
+        .i8 => try ctx.stack.push(.{ .fixnum = @intCast(slot.i8_val) }),
+        .i16 => try ctx.stack.push(.{ .fixnum = @intCast(slot.i16_val) }),
+        .i32 => try ctx.stack.push(.{ .fixnum = @intCast(slot.i32_val) }),
+        .i64 => try ctx.stack.push(.{ .fixnum = slot.i64_val }),
+        .u8 => try ctx.stack.push(.{ .fixnum = @intCast(slot.u8_val) }),
+        .u16 => try ctx.stack.push(.{ .fixnum = @intCast(slot.u16_val) }),
+        .u32 => try ctx.stack.push(.{ .fixnum = @intCast(slot.u32_val) }),
+        .u64 => {
+            const val = slot.u64_val;
+            if (val > std.math.maxInt(i64)) {
+                const alloc = ctx.arena.allocator();
+                const big = try BigIntManaged.initSet(alloc, val);
+                try ctx.stack.push(helpers.demoteBignum(big));
+            } else {
+                try ctx.stack.push(.{ .fixnum = @intCast(val) });
+            }
+        },
+        .usize_type => {
+            const val = slot.usize_val;
+            if (val > std.math.maxInt(i64)) {
+                const alloc = ctx.arena.allocator();
+                const big = try BigIntManaged.initSet(alloc, val);
+                try ctx.stack.push(helpers.demoteBignum(big));
+            } else {
+                try ctx.stack.push(.{ .fixnum = @intCast(val) });
+            }
+        },
+        .isize_type => try ctx.stack.push(.{ .fixnum = @intCast(slot.isize_val) }),
+        .f32 => try ctx.stack.push(.{ .float = @floatCast(slot.f32_val) }),
+        .f64 => try ctx.stack.push(.{ .float = slot.f64_val }),
+        .bool_type => try ctx.stack.push(.{ .boolean = slot.bool_val != 0 }),
+        .void_type, .cstring, .cstring_retained, .cstring_owned, .ptr => unreachable,
     }
 }
 

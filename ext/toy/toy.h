@@ -28,4 +28,12 @@ size_t toy_usize_identity(size_t x);
 ssize_t toy_isize_negate(ssize_t x);
 uint64_t toy_u64_max(void);
 
+void toy_divmod(int a, int b, int *quotient, int *remainder);
+int toy_add_with_carry(int a, int b, int *result);
+void toy_sincos_approx(double x, double *sin_out, double *cos_out);
+void toy_classify(int x, bool *is_positive, bool *is_zero);
+void toy_widen_add(int a, int b, int64_t *wide_sum);
+void toy_double_u8(uint8_t input, uint8_t *doubled);
+void toy_f32_out(float a, float b, float *sum);
+
 #endif
