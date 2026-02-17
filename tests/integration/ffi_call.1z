@@ -1,0 +1,55 @@
+use "testing" ;
+use "ffi" ;
+
+\\ Helper to get the shared library path for the toy library.
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy.dylib" #append
+] ;
+
+toy-lib-path lib-open
+
+\\ toy_add(3, 4) = 7
+dup "toy_add" lib-symbol ffi{ i32 i32 -> i32 } bind-sig
+3 4 2 pick-n ffi-call
+7 "toy_add(3, 4) = 7" assert=
+drop
+
+\\ toy_strlen("hello") = 5
+dup "toy_strlen" lib-symbol ffi{ cstring -> i32 } bind-sig
+"hello" 1 pick-n ffi-call
+5 "toy_strlen(hello) = 5" assert=
+drop
+
+\\ toy_greeting("world") = "Hello, world!"
+dup "toy_greeting" lib-symbol ffi{ cstring -> cstring-owned } bind-sig
+"world" 1 pick-n ffi-call
+"Hello, world!" "toy_greeting(world)" assert=
+drop
+
+\\ toy_checksum(B{ 1 2 3 4 }, 4) = 10
+dup "toy_checksum" lib-symbol ffi{ ptr i32 -> i32 } bind-sig
+B{ 1 2 3 4 } bytes>ffi-ptr+len 2 pick-n ffi-call
+10 "toy_checksum(B{ 1 2 3 4 }, 4) = 10" assert=
+drop
+
+\\ define reusable word for toy_checksum
+toy-checksum: ( dylib byte-array -- checksum ) [
+  __sym: ( dylib -- ffi-fn ) [ "toy_checksum" ffi{ ptr i32 -> i32 } bound-symbol ] ;
+
+  bytes>ffi-ptr+len
+  2 pick-n __sym ffi-call
+] ;
+
+dup B{ 1 2 3 4 } toy-checksum
+10 "toy_checksum(B{ 1 2 3 4 }) = 10" assert=
+
+dup B{ 1 2 3 4 5 } toy-checksum
+15 "toy_checksum(B{ 1 2 3 4 5 }) = 15" assert=
+
+dup B{ 1 2 3 4 5 6 } toy-checksum
+21 "toy_checksum(B{ 1 2 3 4 5 6 }) = 21" assert=
+
+dup B{ 5 6 7 8 9 10 11 } toy-checksum
+56 "toy_checksum(B{ 5 6 7 8 9 10 11 }) = 56" assert=
+
+resource-close

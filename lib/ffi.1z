@@ -35,8 +35,23 @@ ffi{: parse-time [
 \\ Open a shared library by path or short name.
 lib-open: ( path-or-name -- dylib ) [ native.lib-open ] ;
 
-\\ Look up a symbol in a shared library.
+\\ Look up a symbol in a shared library. Use bound-symbol for a one-shot lookup+bind.
 lib-symbol: ( dylib name -- ffi-fn ) [ native.lib-symbol ] ;
 
-\\ Attach an FFI signature to an ffi-fn resource.
+\\ Attach an FFI signature to an ffi-fn resource. Use bound-symbol for a one-shot lookup+bind.
 bind-sig: ( ffi-fn sig -- ffi-fn ) [ native.bind-sig ] ;
+
+\\ Convenience wrapper to look up a symbol and bind a signature in one step.
+bound-symbol: ( dylib name sig -- ffi-fn ) [
+  -rot> lib-symbol
+  swap bind-sig
+] ;
+
+\\ Call a foreign function via libffi.
+\\ Arguments are consumed from the stack based on the bound signature.
+ffi-call: ( ..args ffi-fn -- result ) [ native.ffi-call ] ;
+
+\\ Extract the raw buffer pointer and length from a byte array.
+\\ The resource wraps the byte array's internal buffer; it becomes
+\\ dangling if the byte array is resized or freed.
+bytes>ffi-ptr+len: ( byte-array -- resource fixnum ) [ native.bytes-raw-ptr ] ;
