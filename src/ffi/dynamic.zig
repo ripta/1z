@@ -218,12 +218,19 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
 /// Map an FfiTypeTag to the corresponding libffi type descriptor.
 fn ffiTypeToLibffi(tag: FfiTypeTag) [*c]c_ffi.ffi_type {
     return switch (tag) {
+        .i8 => &c_ffi.ffi_type_sint8,
+        .i16 => &c_ffi.ffi_type_sint16,
         .i32 => &c_ffi.ffi_type_sint32,
         .i64 => &c_ffi.ffi_type_sint64,
         .u8 => &c_ffi.ffi_type_uint8,
+        .u16 => &c_ffi.ffi_type_uint16,
         .u32 => &c_ffi.ffi_type_uint32,
         .u64 => &c_ffi.ffi_type_uint64,
+        .f32 => &c_ffi.ffi_type_float,
         .f64 => &c_ffi.ffi_type_double,
+        .usize_type => if (@sizeOf(usize) == 8) &c_ffi.ffi_type_uint64 else &c_ffi.ffi_type_uint32,
+        .isize_type => if (@sizeOf(isize) == 8) &c_ffi.ffi_type_sint64 else &c_ffi.ffi_type_sint32,
+        .bool_type => &c_ffi.ffi_type_uint8,
         .cstring, .cstring_retained, .cstring_owned => &c_ffi.ffi_type_pointer,
         .ptr => &c_ffi.ffi_type_pointer,
         .void_type => &c_ffi.ffi_type_void,
@@ -233,12 +240,19 @@ fn ffiTypeToLibffi(tag: FfiTypeTag) [*c]c_ffi.ffi_type {
 /// Storage for a single marshaled FFI argument. Each variant holds a value
 /// that can be referenced by pointer for the libffi avalue array.
 const ArgSlot = extern union {
-    u8_val: u8,
+    i8_val: i8,
+    i16_val: i16,
     i32_val: i32,
     i64_val: i64,
+    u8_val: u8,
+    u16_val: u16,
     u32_val: u32,
     u64_val: u64,
+    f32_val: f32,
     f64_val: f64,
+    usize_val: usize,
+    isize_val: isize,
+    bool_val: u8,
     ptr_val: ?*anyopaque,
 };
 
@@ -327,6 +341,7 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
 const ReturnStorage = extern union {
     as_u64: u64,
     as_i64: i64,
+    as_f32: f32,
     as_f64: f64,
     as_ptr: ?*anyopaque,
 };
@@ -335,12 +350,33 @@ const ReturnStorage = extern union {
 fn marshalArg(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) !ArgSlot {
     const alloc = ctx.arena.allocator();
     switch (param_type.tag) {
+        .i8 => {
+            const fixnum = switch (val) {
+                .fixnum => |v| v,
+                else => return argTypeMismatch(ctx, "fixnum for i8", val, arg_index),
+            };
+            return .{ .i8_val = @intCast(fixnum) };
+        },
+        .i16 => {
+            const fixnum = switch (val) {
+                .fixnum => |v| v,
+                else => return argTypeMismatch(ctx, "fixnum for i16", val, arg_index),
+            };
+            return .{ .i16_val = @intCast(fixnum) };
+        },
         .u8 => {
             const fixnum = switch (val) {
                 .fixnum => |v| v,
                 else => return argTypeMismatch(ctx, "fixnum for u8", val, arg_index),
             };
             return .{ .u8_val = @intCast(fixnum) };
+        },
+        .u16 => {
+            const fixnum = switch (val) {
+                .fixnum => |v| v,
+                else => return argTypeMismatch(ctx, "fixnum for u16", val, arg_index),
+            };
+            return .{ .u16_val = @intCast(fixnum) };
         },
         .i32 => {
             const fixnum = switch (val) {
@@ -370,12 +406,40 @@ fn marshalArg(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) 
             };
             return .{ .u64_val = @intCast(fixnum) };
         },
+        .usize_type => {
+            const fixnum = switch (val) {
+                .fixnum => |v| v,
+                else => return argTypeMismatch(ctx, "fixnum for usize", val, arg_index),
+            };
+            return .{ .usize_val = @intCast(fixnum) };
+        },
+        .isize_type => {
+            const fixnum = switch (val) {
+                .fixnum => |v| v,
+                else => return argTypeMismatch(ctx, "fixnum for isize", val, arg_index),
+            };
+            return .{ .isize_val = @intCast(fixnum) };
+        },
+        .f32 => {
+            const float = switch (val) {
+                .float => |v| v,
+                else => return argTypeMismatch(ctx, "float for f32", val, arg_index),
+            };
+            return .{ .f32_val = @floatCast(float) };
+        },
         .f64 => {
             const float = switch (val) {
                 .float => |v| v,
                 else => return argTypeMismatch(ctx, "float for f64", val, arg_index),
             };
             return .{ .f64_val = float };
+        },
+        .bool_type => {
+            const b = switch (val) {
+                .boolean => |v| v,
+                else => return argTypeMismatch(ctx, "boolean for bool", val, arg_index),
+            };
+            return .{ .bool_val = if (b) 1 else 0 };
         },
         .cstring, .cstring_retained => {
             const str = switch (val) {
@@ -420,8 +484,20 @@ fn argTypeMismatch(ctx: *Context, expected: []const u8, val: Value, arg_index: u
 fn marshalReturn(ctx: *Context, return_type: FfiType, ret: *const ReturnStorage) !void {
     const alloc = ctx.arena.allocator();
     switch (return_type.tag) {
+        .i8 => {
+            const val: i8 = @truncate(@as(i64, @bitCast(ret.as_i64)));
+            try ctx.stack.push(.{ .fixnum = @intCast(val) });
+        },
+        .i16 => {
+            const val: i16 = @truncate(@as(i64, @bitCast(ret.as_i64)));
+            try ctx.stack.push(.{ .fixnum = @intCast(val) });
+        },
         .u8 => {
             const val: u8 = @truncate(ret.as_u64);
+            try ctx.stack.push(.{ .fixnum = @intCast(val) });
+        },
+        .u16 => {
+            const val: u16 = @truncate(ret.as_u64);
             try ctx.stack.push(.{ .fixnum = @intCast(val) });
         },
         .i32 => {
@@ -438,8 +514,23 @@ fn marshalReturn(ctx: *Context, return_type: FfiType, ret: *const ReturnStorage)
         .u64 => {
             try ctx.stack.push(.{ .fixnum = @intCast(ret.as_u64) });
         },
+        .usize_type => {
+            const val: usize = @truncate(ret.as_u64);
+            try ctx.stack.push(.{ .fixnum = @intCast(val) });
+        },
+        .isize_type => {
+            const val: isize = @truncate(@as(i64, @bitCast(ret.as_i64)));
+            try ctx.stack.push(.{ .fixnum = @intCast(val) });
+        },
+        .f32 => {
+            try ctx.stack.push(.{ .float = @floatCast(ret.as_f32) });
+        },
         .f64 => {
             try ctx.stack.push(.{ .float = ret.as_f64 });
+        },
+        .bool_type => {
+            const val: u8 = @truncate(ret.as_u64);
+            try ctx.stack.push(.{ .boolean = val != 0 });
         },
         .cstring => {
             const cptr: [*c]const u8 = @ptrCast(ret.as_ptr);
@@ -488,6 +579,7 @@ fn marshalReturn(ctx: *Context, return_type: FfiType, ret: *const ReturnStorage)
 }
 
 /// bytes-raw-ptr ( byte-array -- resource fixnum )
+///
 /// Extracts the raw buffer pointer and length from a byte array.
 /// The resource wraps the internal buffer pointer; it becomes dangling
 /// if the byte array is resized or freed.

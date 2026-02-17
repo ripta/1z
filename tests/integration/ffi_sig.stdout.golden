@@ -50,6 +50,27 @@ Stack: [ ]
 Stack: [ ffi-sig{ params: { "cstring-owned" } return-type: "void" } ]
 PASS: cstring-owned token
 Stack: [ ]
+Stack: [ ffi-sig{ params: { "i8" } return-type: "void" } ]
+PASS: i8 token
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "i16" } return-type: "void" } ]
+PASS: i16 token
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "u16" } return-type: "void" } ]
+PASS: u16 token
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "usize" } return-type: "void" } ]
+PASS: usize token
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "isize" } return-type: "void" } ]
+PASS: isize token
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "f32" } return-type: "void" } ]
+PASS: f32 token
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "bool" } return-type: "void" } ]
+PASS: bool token
+Stack: [ ]
 Stack: [ ffi-sig{ params: { "ptr:my-thing" } return-type: "void" } ]
 PASS: ptr:name preserved
 Stack: [ ]

@@ -75,6 +75,34 @@ params>> { "cstring-retained" } "cstring-retained token" assert=
 ffi{ cstring-owned -> void }
 params>> { "cstring-owned" } "cstring-owned token" assert=
 
+\\ i8 type token
+ffi{ i8 -> void }
+params>> { "i8" } "i8 token" assert=
+
+\\ i16 type token
+ffi{ i16 -> void }
+params>> { "i16" } "i16 token" assert=
+
+\\ u16 type token
+ffi{ u16 -> void }
+params>> { "u16" } "u16 token" assert=
+
+\\ usize type token
+ffi{ usize -> void }
+params>> { "usize" } "usize token" assert=
+
+\\ isize type token
+ffi{ isize -> void }
+params>> { "isize" } "isize token" assert=
+
+\\ f32 type token
+ffi{ f32 -> void }
+params>> { "f32" } "f32 token" assert=
+
+\\ bool type token
+ffi{ bool -> void }
+params>> { "bool" } "bool token" assert=
+
 \\ ptr:name annotation preserved as string
 ffi{ ptr:my-thing -> void }
 params>> #first "ptr:my-thing" "ptr:name preserved" assert=

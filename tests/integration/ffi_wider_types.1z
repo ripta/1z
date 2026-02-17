@@ -1,0 +1,101 @@
+use "testing" ;
+use "ffi" ;
+
+\\ Helper to get the shared library path for the toy library.
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy.dylib" #append
+] ;
+
+toy-lib-path lib-open
+
+\\ toy_negate_i8(42) = -42
+dup "toy_negate_i8" lib-symbol ffi{ i8 -> i8 } bind-sig
+42 1 pick-n ffi-call
+-42 "toy_negate_i8(42) = -42" assert=
+drop
+
+\\ toy_negate_i8(-1) = 1
+dup "toy_negate_i8" lib-symbol ffi{ i8 -> i8 } bind-sig
+-1 1 pick-n ffi-call
+1 "toy_negate_i8(-1) = 1" assert=
+drop
+
+\\ toy_add_i16(1000, 2000) = 3000
+dup "toy_add_i16" lib-symbol ffi{ i16 i16 -> i16 } bind-sig
+1000 2000 2 pick-n ffi-call
+3000 "toy_add_i16(1000, 2000) = 3000" assert=
+drop
+
+\\ toy_add_i16(-100, 50) = -50
+dup "toy_add_i16" lib-symbol ffi{ i16 i16 -> i16 } bind-sig
+-100 50 2 pick-n ffi-call
+-50 "toy_add_i16(-100, 50) = -50" assert=
+drop
+
+\\ toy_add_u16(40000, 10000) = 50000
+dup "toy_add_u16" lib-symbol ffi{ u16 u16 -> u16 } bind-sig
+40000 10000 2 pick-n ffi-call
+50000 "toy_add_u16(40000, 10000) = 50000" assert=
+drop
+
+\\ toy_float_add(1.5, 2.25) = 3.75
+dup "toy_float_add" lib-symbol ffi{ f32 f32 -> f32 } bind-sig
+1.5 2.25 2 pick-n ffi-call
+3.75 "toy_float_add(1.5, 2.25) = 3.75" assert=
+drop
+
+\\ toy_is_positive(5) = t
+dup "toy_is_positive" lib-symbol ffi{ i32 -> bool } bind-sig
+5 1 pick-n ffi-call
+t "toy_is_positive(5) = t" assert=
+drop
+
+\\ toy_is_positive(-3) = f
+dup "toy_is_positive" lib-symbol ffi{ i32 -> bool } bind-sig
+-3 1 pick-n ffi-call
+f "toy_is_positive(-3) = f" assert=
+drop
+
+\\ toy_is_positive(0) = f
+dup "toy_is_positive" lib-symbol ffi{ i32 -> bool } bind-sig
+0 1 pick-n ffi-call
+f "toy_is_positive(0) = f" assert=
+drop
+
+\\ toy_bool_to_int(t) = 1
+dup "toy_bool_to_int" lib-symbol ffi{ bool -> i32 } bind-sig
+t 1 pick-n ffi-call
+1 "toy_bool_to_int(t) = 1" assert=
+drop
+
+\\ toy_bool_to_int(f) = 0
+dup "toy_bool_to_int" lib-symbol ffi{ bool -> i32 } bind-sig
+f 1 pick-n ffi-call
+0 "toy_bool_to_int(f) = 0" assert=
+drop
+
+\\ toy_usize_identity(12345) = 12345
+dup "toy_usize_identity" lib-symbol ffi{ usize -> usize } bind-sig
+12345 1 pick-n ffi-call
+12345 "toy_usize_identity(12345) = 12345" assert=
+drop
+
+\\ toy_usize_identity(0) = 0
+dup "toy_usize_identity" lib-symbol ffi{ usize -> usize } bind-sig
+0 1 pick-n ffi-call
+0 "toy_usize_identity(0) = 0" assert=
+drop
+
+\\ toy_isize_negate(42) = -42
+dup "toy_isize_negate" lib-symbol ffi{ isize -> isize } bind-sig
+42 1 pick-n ffi-call
+-42 "toy_isize_negate(42) = -42" assert=
+drop
+
+\\ toy_isize_negate(-100) = 100
+dup "toy_isize_negate" lib-symbol ffi{ isize -> isize } bind-sig
+-100 1 pick-n ffi-call
+100 "toy_isize_negate(-100) = 100" assert=
+drop
+
+resource-close
