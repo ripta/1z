@@ -96,11 +96,21 @@ pub const Stream = struct {
 /// Resource wraps an opaque C pointer for FFI interop.
 /// All instances of the same resource type share a type_name string.
 /// The ptr is nulled on close as defense-in-depth alongside the closed flag.
+pub const FfiCloseFn = struct {
+    fn_ptr: *anyopaque,
+};
+
+pub const CloseFn = union(enum) {
+    none,
+    native: *const fn (*anyopaque) void,
+    ffi: *const FfiCloseFn,
+};
+
 pub const Resource = struct {
     type_name: []const u8,
     ptr: ?*anyopaque = null,
     closed: bool = false,
-    close_fn: ?*const fn (*anyopaque) void = null,
+    close_fn: CloseFn = .none,
     ffi_signature: ?*const FfiSignature = null,
 };
 

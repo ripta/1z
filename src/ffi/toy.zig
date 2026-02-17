@@ -70,7 +70,7 @@ fn nativeToyOpen(ctx: *Context) anyerror!void {
         .type_name = "toy-counter",
         .ptr = @ptrCast(cptr),
         .closed = false,
-        .close_fn = toyCloseFn,
+        .close_fn = .{ .native = toyCloseFn },
     };
     try ctx.stack.push(.{ .resource = r });
 }

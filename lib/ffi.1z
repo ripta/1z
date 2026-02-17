@@ -51,6 +51,11 @@ bound-symbol: ( dylib name sig -- ffi-fn ) [
 \\ Arguments are consumed from the stack based on the bound signature.
 ffi-call: ( ..args ffi-fn -- result ) [ native.ffi-call ] ;
 
+\\ Bind an FFI close function to a resource.
+\\ The ffi-fn must have signature ( ptr -> void ).
+\\ When resource-close is called, the bound function is invoked via libffi.
+bind-close: ( resource ffi-fn -- ) [ native.bind-close ] ;
+
 \\ Extract the raw buffer pointer and length from a byte array.
 \\ The resource wraps the byte array's internal buffer; it becomes
 \\ dangling if the byte array is resized or freed.

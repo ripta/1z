@@ -3,6 +3,7 @@ const std = @import("std");
 pub const FfiTypeTag = enum {
     i32,
     i64,
+    u8,
     u32,
     u64,
     f64,
@@ -30,6 +31,7 @@ pub const ParseError = error{
 pub fn parseTypeToken(token: []const u8) ParseError!FfiType {
     if (std.mem.eql(u8, token, "i32")) return .{ .tag = .i32 };
     if (std.mem.eql(u8, token, "i64")) return .{ .tag = .i64 };
+    if (std.mem.eql(u8, token, "u8")) return .{ .tag = .u8 };
     if (std.mem.eql(u8, token, "u32")) return .{ .tag = .u32 };
     if (std.mem.eql(u8, token, "u64")) return .{ .tag = .u64 };
     if (std.mem.eql(u8, token, "f64")) return .{ .tag = .f64 };
@@ -51,6 +53,7 @@ pub fn parseTypeToken(token: []const u8) ParseError!FfiType {
 test "parseTypeToken basic types" {
     try std.testing.expectEqual(FfiTypeTag.i32, (try parseTypeToken("i32")).tag);
     try std.testing.expectEqual(FfiTypeTag.i64, (try parseTypeToken("i64")).tag);
+    try std.testing.expectEqual(FfiTypeTag.u8, (try parseTypeToken("u8")).tag);
     try std.testing.expectEqual(FfiTypeTag.u32, (try parseTypeToken("u32")).tag);
     try std.testing.expectEqual(FfiTypeTag.u64, (try parseTypeToken("u64")).tag);
     try std.testing.expectEqual(FfiTypeTag.f64, (try parseTypeToken("f64")).tag);

@@ -1,0 +1,100 @@
+use "testing" ;
+use "ffi" ;
+
+\\ Helper to get the shared library path for the toy library.
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy.dylib" #append
+] ;
+
+toy-lib-path lib-open
+
+\\ --- Full resource lifecycle: open, increment, read, bind-close, close ---
+
+dup "toy_open" lib-symbol ffi{ -> ptr:toy-counter } bind-sig swap
+dup "toy_increment" lib-symbol ffi{ ptr:toy-counter -> void } bind-sig swap
+dup "toy_read" lib-symbol ffi{ ptr:toy-counter -> i32 } bind-sig swap
+dup "toy_close" lib-symbol ffi{ ptr -> void } bind-sig swap
+\\ Stack: fn-open fn-inc fn-read fn-close dylib
+
+\\ Open a counter via dynamic FFI
+4 pick-n ffi-call
+\\ Stack: fn-open fn-inc fn-read fn-close dylib counter
+
+\\ Bind the close function to the counter resource
+dup 3 pick-n bind-close
+
+\\ Increment three times
+dup 5 pick-n ffi-call
+dup 5 pick-n ffi-call
+dup 5 pick-n ffi-call
+
+\\ Read the counter value
+dup 4 pick-n ffi-call
+3 "toy counter after 3 increments" assert=
+
+\\ Close via resource-close, which invokes toy_close through libffi
+resource-close
+
+\\ Clean up ffi-fn handles, leave dylib on stack
+\\ Stack: fn-open fn-inc fn-read fn-close dylib
+swap drop swap drop swap drop swap drop
+\\ Stack: dylib
+
+\\ Verify use-after-close: open, bind-close, close, then try to read
+[
+  toy-lib-path lib-open
+  dup "toy_open" ffi{ -> ptr:toy-counter } bound-symbol ffi-call
+  \\ Stack: dylib2 counter
+  over "toy_close" ffi{ ptr -> void } bound-symbol
+  \\ Stack: dylib2 counter fn-close
+  over swap bind-close
+  \\ Stack: dylib2 counter
+  dup resource-close
+  \\ Stack: dylib2 counter(closed)
+  swap "toy_read" ffi{ ptr:toy-counter -> i32 } bound-symbol
+  \\ Stack: counter fn-read
+  ffi-call
+]
+use-after-close: "use-after-close after resource-close via bind-close" assert-error-type
+
+\\ --- u8 support: toy_fill via dynamic FFI ---
+
+dup "toy_fill" lib-symbol ffi{ ptr i32 u8 -> void } bind-sig
+\\ Stack: dylib fn-fill
+
+B{ 0 0 0 0 0 } dup bytes>ffi-ptr+len
+\\ Stack: dylib fn-fill ba resource len
+
+42 4 pick-n ffi-call
+\\ ffi-call pops fn-fill, then 3 args: resource len 42 -> toy_fill(buf, len, 42)
+\\ Stack: dylib fn-fill ba
+
+\\ Verify the byte array was filled with 42
+dup 0 #nth 42 "byte 0 filled with 42" assert=
+dup 1 #nth 42 "byte 1 filled with 42" assert=
+dup 2 #nth 42 "byte 2 filled with 42" assert=
+dup 3 #nth 42 "byte 3 filled with 42" assert=
+dup 4 #nth 42 "byte 4 filled with 42" assert=
+drop drop
+\\ Stack: dylib
+
+\\ --- bind-close error: non-resource ---
+[ 42 "not-a-resource" native.bind-close ]
+type-mismatch: "bind-close on non-resource throws type-mismatch" assert-error-type
+
+\\ --- bind-close error: ffi-fn without signature ---
+[
+  toy-lib-path lib-open "toy_close" native.lib-symbol
+  "test" <test-resource> swap native.bind-close
+]
+ffi-call-failed: "bind-close without sig throws ffi-call-failed" assert-error-type
+
+\\ --- bind-close error: wrong signature shape ---
+[
+  toy-lib-path lib-open "toy_add" native.lib-symbol
+  ffi{ i32 i32 -> i32 } native.bind-sig
+  "test" <test-resource> swap native.bind-close
+]
+ffi-type-mismatch: "bind-close with wrong sig throws ffi-type-mismatch" assert-error-type
+
+resource-close

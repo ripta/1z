@@ -10,6 +10,7 @@ const RegistryEntry = @import("../primitives/types.zig").RegistryEntry;
 const FfiTypeTag = signature.FfiTypeTag;
 const Value = @import("../value.zig").Value;
 const Resource = @import("../value.zig").Resource;
+const FfiCloseFn = @import("../value.zig").FfiCloseFn;
 const ByteArray = @import("../value.zig").ByteArray;
 const signature = @import("signature.zig");
 const FfiType = signature.FfiType;
@@ -19,6 +20,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "lib-open", .func = nativeLibOpen },
     .{ .name = "lib-symbol", .func = nativeLibSymbol },
     .{ .name = "bind-sig", .func = nativeBindSig },
+    .{ .name = "bind-close", .func = nativeBindClose },
     .{ .name = "ffi-call", .func = nativeFfiCall },
     .{ .name = "bytes-raw-ptr", .func = nativeBytesRawPtr },
 };
@@ -76,7 +78,7 @@ fn nativeLibOpen(ctx: *Context) anyerror!void {
         .type_name = "dylib",
         .ptr = @ptrCast(dynlib_ptr),
         .closed = false,
-        .close_fn = dylibCloseFn,
+        .close_fn = .{ .native = dylibCloseFn },
     };
     try ctx.stack.push(.{ .resource = r });
 }
@@ -113,7 +115,7 @@ fn nativeLibSymbol(ctx: *Context) anyerror!void {
         .type_name = "ffi-fn",
         .ptr = sym,
         .closed = false,
-        .close_fn = null,
+        .close_fn = .none,
     };
     try ctx.stack.push(.{ .resource = r });
 }
@@ -218,6 +220,7 @@ fn ffiTypeToLibffi(tag: FfiTypeTag) [*c]c_ffi.ffi_type {
     return switch (tag) {
         .i32 => &c_ffi.ffi_type_sint32,
         .i64 => &c_ffi.ffi_type_sint64,
+        .u8 => &c_ffi.ffi_type_uint8,
         .u32 => &c_ffi.ffi_type_uint32,
         .u64 => &c_ffi.ffi_type_uint64,
         .f64 => &c_ffi.ffi_type_double,
@@ -230,6 +233,7 @@ fn ffiTypeToLibffi(tag: FfiTypeTag) [*c]c_ffi.ffi_type {
 /// Storage for a single marshaled FFI argument. Each variant holds a value
 /// that can be referenced by pointer for the libffi avalue array.
 const ArgSlot = extern union {
+    u8_val: u8,
     i32_val: i32,
     i64_val: i64,
     u32_val: u32,
@@ -331,6 +335,13 @@ const ReturnStorage = extern union {
 fn marshalArg(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) !ArgSlot {
     const alloc = ctx.arena.allocator();
     switch (param_type.tag) {
+        .u8 => {
+            const fixnum = switch (val) {
+                .fixnum => |v| v,
+                else => return argTypeMismatch(ctx, "fixnum for u8", val, arg_index),
+            };
+            return .{ .u8_val = @intCast(fixnum) };
+        },
         .i32 => {
             const fixnum = switch (val) {
                 .fixnum => |v| v,
@@ -409,6 +420,10 @@ fn argTypeMismatch(ctx: *Context, expected: []const u8, val: Value, arg_index: u
 fn marshalReturn(ctx: *Context, return_type: FfiType, ret: *const ReturnStorage) !void {
     const alloc = ctx.arena.allocator();
     switch (return_type.tag) {
+        .u8 => {
+            const val: u8 = @truncate(ret.as_u64);
+            try ctx.stack.push(.{ .fixnum = @intCast(val) });
+        },
         .i32 => {
             const val: i32 = @truncate(@as(i64, @bitCast(ret.as_i64)));
             try ctx.stack.push(.{ .fixnum = @intCast(val) });
@@ -464,7 +479,7 @@ fn marshalReturn(ctx: *Context, return_type: FfiType, ret: *const ReturnStorage)
                 .type_name = type_name,
                 .ptr = ret.as_ptr,
                 .closed = false,
-                .close_fn = null,
+                .close_fn = .none,
             };
             try ctx.stack.push(.{ .resource = r });
         },
@@ -486,9 +501,64 @@ fn nativeBytesRawPtr(ctx: *Context) anyerror!void {
         .type_name = "ffi-bytes",
         .ptr = @ptrCast(ba.items.ptr),
         .closed = false,
-        .close_fn = null,
+        .close_fn = .none,
     };
 
     try ctx.stack.push(.{ .resource = r });
     try ctx.stack.push(.{ .fixnum = @intCast(ba.items.len) });
+}
+
+/// Call a foreign close function via libffi with the signature (ptr -> void).
+pub fn ffiCloseCall(ffi_close: *const FfiCloseFn, ptr: *anyopaque) void {
+    var arg_slot = ArgSlot{ .ptr_val = ptr };
+    var arg_ptr: ?*anyopaque = @ptrCast(&arg_slot);
+    var arg_type: [*c]c_ffi.ffi_type = &c_ffi.ffi_type_pointer;
+    var cif: c_ffi.ffi_cif = undefined;
+    _ = c_ffi.ffi_prep_cif(&cif, c_ffi.FFI_DEFAULT_ABI, 1, &c_ffi.ffi_type_void, @ptrCast(&arg_type));
+    const fn_ptr: ?*const fn () callconv(.c) void = @ptrCast(@alignCast(ffi_close.fn_ptr));
+    c_ffi.ffi_call(&cif, fn_ptr, null, @ptrCast(&arg_ptr));
+}
+
+/// bind-close ( resource ffi-fn -- ) - Bind an FFI close function to a resource.
+fn nativeBindClose(ctx: *Context) anyerror!void {
+    const alloc = ctx.arena.allocator();
+
+    const ffi_fn_val = try ctx.stack.pop();
+    const resource_val = try ctx.stack.pop();
+
+    const resource = switch (resource_val) {
+        .resource => |r| r,
+        else => {
+            helpers.setTypeMismatchError(ctx, "resource", resource_val);
+            return error.TypeMismatch;
+        },
+    };
+    try error_mapping.ensureResourceOpen(resource);
+
+    const ffi_fn = switch (ffi_fn_val) {
+        .resource => |r| r,
+        else => {
+            helpers.setTypeMismatchError(ctx, "ffi-fn resource", ffi_fn_val);
+            return error.TypeMismatch;
+        },
+    };
+    try error_mapping.ensureResourceOpen(ffi_fn);
+    if (!std.mem.eql(u8, ffi_fn.type_name, "ffi-fn")) {
+        helpers.setTypeMismatchError(ctx, "ffi-fn resource", ffi_fn_val);
+        return error.TypeMismatch;
+    }
+
+    const sig = ffi_fn.ffi_signature orelse {
+        helpers.setErrorContext(ctx, "ffi-fn has no bound signature (use bind-sig first)", .{});
+        return error.FFICallFailed;
+    };
+
+    if (sig.param_types.len != 1 or sig.param_types[0].tag != .ptr or sig.return_type.tag != .void_type) {
+        helpers.setErrorContext(ctx, "bind-close requires signature ( ptr -> void )", .{});
+        return error.FFITypeMismatch;
+    }
+
+    const ffi_close = try alloc.create(FfiCloseFn);
+    ffi_close.* = .{ .fn_ptr = ffi_fn.ptr.? };
+    resource.close_fn = .{ .ffi = ffi_close };
 }

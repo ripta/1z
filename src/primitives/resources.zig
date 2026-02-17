@@ -4,6 +4,7 @@ const Value = value_mod.Value;
 const Resource = value_mod.Resource;
 const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
+const dynamic = @import("../ffi/dynamic.zig");
 
 pub const primitives = [_]Primitive{
     .{ .name = "resource-close", .stack_effect = "resource --", .doc = "Close a resource. Double-close is a no-op.", .func = nativeResourceClose },
@@ -15,9 +16,11 @@ pub const primitives = [_]Primitive{
 fn nativeResourceClose(ctx: *Context) anyerror!void {
     const r = try helpers.popResource(ctx);
     if (r.closed) return;
-    if (r.close_fn) |close_fn| {
-        if (r.ptr) |ptr| {
-            close_fn(ptr);
+    if (r.ptr) |ptr| {
+        switch (r.close_fn) {
+            .none => {},
+            .native => |close_fn| close_fn(ptr),
+            .ffi => |ffi_close| dynamic.ffiCloseCall(ffi_close, ptr),
         }
     }
     r.ptr = null;
@@ -39,7 +42,7 @@ fn nativeTestResource(ctx: *Context) anyerror!void {
         .type_name = name,
         .ptr = @ptrCast(r),
         .closed = false,
-        .close_fn = null,
+        .close_fn = .none,
     };
     try ctx.stack.push(.{ .resource = r });
 }
