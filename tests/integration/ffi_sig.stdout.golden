@@ -1,0 +1,76 @@
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "i32" "i32" } return-type: "i32" } ]
+PASS: ffi{ produces ffi-sig
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "i32" "i32" } return-type: "i32" } ]
+PASS: params field
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "i32" "i32" } return-type: "i32" } ]
+PASS: return-type field
+Stack: [ ]
+Stack: [ ffi-sig{ params: { } return-type: "ptr:toy-counter" } ]
+PASS: no params
+Stack: [ ]
+Stack: [ ffi-sig{ params: { } return-type: "ptr:toy-counter" } ]
+PASS: ptr:name return type
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "ptr" } return-type: "void" } ]
+PASS: void return params
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "ptr" } return-type: "void" } ]
+PASS: explicit void return
+Stack: [ ]
+Stack: [ ffi-sig{ params: { } return-type: "void" } ]
+PASS: empty sig params
+Stack: [ ]
+Stack: [ ffi-sig{ params: { } return-type: "void" } ]
+PASS: no arrow defaults to void
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "cstring" } return-type: "cstring" } ]
+PASS: cstring param
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "cstring" } return-type: "cstring" } ]
+PASS: cstring return
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "i64" } return-type: "void" } ]
+PASS: i64 token
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "u32" } return-type: "void" } ]
+PASS: u32 token
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "u64" } return-type: "void" } ]
+PASS: u64 token
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "f64" } return-type: "void" } ]
+PASS: f64 token
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "cstring-retained" } return-type: "void" } ]
+PASS: cstring-retained token
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "cstring-owned" } return-type: "void" } ]
+PASS: cstring-owned token
+Stack: [ ]
+Stack: [ ffi-sig{ params: { "ptr:my-thing" } return-type: "void" } ]
+PASS: ptr:name preserved
+Stack: [ ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+PASS: bind-sig returns ffi-fn
+Stack: [ <resource:dylib> ]
+Stack: [ ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+PASS: bind-sig returns resource
+Stack: [ <resource:dylib> ]
+Stack: [ ]
+Stack: [ [ toy-lib-path lib-open dup ffi-sig{ params: { "i32" } return-type: "i32" } bind-sig swap resource-close ] ]
+PASS: bind-sig rejects non-ffi-fn
+Stack: [ ]
+Stack: [ [ toy-lib-path lib-open dup "toy_add" lib-symbol dup resource-close ffi-sig{ params: { "i32" "i32" } return-type: "i32" } bind-sig swap resource-close ] ]
+PASS: bind-sig rejects closed ffi-fn
+Stack: [ ]
+Stack: [ [ toy-lib-path lib-open dup "toy_add" lib-symbol { "banana" } "i32" make-ffi-sig bind-sig swap resource-close ] ]
+PASS: bind-sig rejects unknown type
+Stack: [ ]

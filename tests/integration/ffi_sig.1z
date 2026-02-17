@@ -1,0 +1,125 @@
+use "testing" ;
+use "ffi" ;
+
+\\ Helper to get the shared library path for the toy library.
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy.dylib" #append
+] ;
+
+\ -- ffi{ produces an ffi-sig struct --
+
+\\ ffi{ with params and return type
+ffi{ i32 i32 -> i32 }
+type-of ffi-sig: "ffi{ produces ffi-sig" assert=
+
+\\ ffi{ params field access
+ffi{ i32 i32 -> i32 }
+params>> { "i32" "i32" } "params field" assert=
+
+\\ ffi{ return-type field access
+ffi{ i32 i32 -> i32 }
+return-type>> "i32" "return-type field" assert=
+
+\\ ffi{ with no params
+ffi{ -> ptr:toy-counter }
+params>> { } "no params" assert=
+
+\\ ffi{ return type with ptr annotation
+ffi{ -> ptr:toy-counter }
+return-type>> "ptr:toy-counter" "ptr:name return type" assert=
+
+\\ ffi{ with void return
+ffi{ ptr -> void }
+params>> { "ptr" } "void return params" assert=
+
+ffi{ ptr -> void }
+return-type>> "void" "explicit void return" assert=
+
+\\ ffi{ with no arrow defaults to void
+ffi{ }
+params>> { } "empty sig params" assert=
+
+ffi{ }
+return-type>> "void" "no arrow defaults to void" assert=
+
+\\ ffi{ with cstring types
+ffi{ cstring -> cstring }
+params>> { "cstring" } "cstring param" assert=
+
+ffi{ cstring -> cstring }
+return-type>> "cstring" "cstring return" assert=
+
+\ -- All type tokens recognized --
+
+\\ i64 type token
+ffi{ i64 -> void }
+params>> { "i64" } "i64 token" assert=
+
+\\ u32 type token
+ffi{ u32 -> void }
+params>> { "u32" } "u32 token" assert=
+
+\\ u64 type token
+ffi{ u64 -> void }
+params>> { "u64" } "u64 token" assert=
+
+\\ f64 type token
+ffi{ f64 -> void }
+params>> { "f64" } "f64 token" assert=
+
+\\ cstring-retained type token
+ffi{ cstring-retained -> void }
+params>> { "cstring-retained" } "cstring-retained token" assert=
+
+\\ cstring-owned type token
+ffi{ cstring-owned -> void }
+params>> { "cstring-owned" } "cstring-owned token" assert=
+
+\\ ptr:name annotation preserved as string
+ffi{ ptr:my-thing -> void }
+params>> #first "ptr:my-thing" "ptr:name preserved" assert=
+
+\ -- bind-sig tests --
+
+\\ bind-sig attaches signature to ffi-fn
+toy-lib-path lib-open
+dup "toy_add" lib-symbol
+ffi{ i32 i32 -> i32 } bind-sig
+type-of ffi-fn: "bind-sig returns ffi-fn" assert=
+resource-close
+
+\\ bind-sig returns the same resource
+toy-lib-path lib-open
+dup "toy_add" lib-symbol
+ffi{ i32 i32 -> i32 } bind-sig
+resource? t "bind-sig returns resource" assert=
+resource-close
+
+\ -- bind-sig error cases --
+
+\\ bind-sig rejects non-ffi-fn resource (dylib)
+[
+  toy-lib-path lib-open
+  dup ffi{ i32 -> i32 } bind-sig
+  swap resource-close
+]
+type-mismatch: "bind-sig rejects non-ffi-fn" assert-error-type
+
+\\ bind-sig rejects closed ffi-fn
+[
+  toy-lib-path lib-open
+  dup "toy_add" lib-symbol
+  dup resource-close
+  ffi{ i32 i32 -> i32 } bind-sig
+  swap resource-close
+]
+use-after-close: "bind-sig rejects closed ffi-fn" assert-error-type
+
+\\ bind-sig rejects unknown type token
+[
+  toy-lib-path lib-open
+  dup "toy_add" lib-symbol
+  { "banana" } "i32" make-ffi-sig bind-sig
+  swap resource-close
+]
+ffi-type-mismatch: "bind-sig rejects unknown type" assert-error-type

@@ -4,6 +4,7 @@ const BenchmarkReport = @import("benchmark.zig").BenchmarkReport;
 const Task = @import("task.zig").Task;
 const Iterator = @import("iterator.zig").Iterator;
 const NativeFn = @import("dictionary.zig").NativeFn;
+const FfiSignature = @import("ffi/signature.zig").FfiSignature;
 
 pub const BigIntManaged = std.math.big.int.Managed;
 
@@ -100,6 +101,7 @@ pub const Resource = struct {
     ptr: ?*anyopaque = null,
     closed: bool = false,
     close_fn: ?*const fn (*anyopaque) void = null,
+    ffi_signature: ?*const FfiSignature = null,
 };
 
 /// Parameter represents a dynamically-scoped variable with a lazy default.

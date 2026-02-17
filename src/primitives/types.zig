@@ -36,6 +36,7 @@ pub const InterpreterError = error{
     // FFI error types
     FFILibraryNotFound,
     FFISymbolNotFound,
+    FFITypeMismatch,
 };
 
 pub const Primitive = struct {

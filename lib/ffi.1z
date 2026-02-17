@@ -1,0 +1,42 @@
+\ lib/ffi.1z - FFI signature descriptor and convenience wrappers
+
+ffi-sig: struct{ params return-type } ;
+
+\\ Parse-time word for FFI signature descriptors.
+\\ ffi{ i32 i32 -> i32 } produces an ffi-sig with params { "i32" "i32" } and return-type "i32".
+\\ If no -> is present, return type defaults to "void".
+ffi{: parse-time [
+  (read-ffi-params): ( accum -- params return-type ) [
+    peek-token
+    dup "->" = [
+      drop parse-token drop
+      peek-token
+      dup "}" = [
+        drop parse-token drop
+        "void"
+      ] [
+        drop parse-token
+        parse-token drop
+      ] if
+    ] [
+      dup "}" = [
+        drop parse-token drop
+        "void"
+      ] [
+        drop parse-token
+        1array #append (read-ffi-params)
+      ] if
+    ] if
+  ] ;
+
+  { } (read-ffi-params) make-ffi-sig
+] ;
+
+\\ Open a shared library by path or short name.
+lib-open: ( path-or-name -- dylib ) [ native.lib-open ] ;
+
+\\ Look up a symbol in a shared library.
+lib-symbol: ( dylib name -- ffi-fn ) [ native.lib-symbol ] ;
+
+\\ Attach an FFI signature to an ffi-fn resource.
+bind-sig: ( ffi-fn sig -- ffi-fn ) [ native.bind-sig ] ;
