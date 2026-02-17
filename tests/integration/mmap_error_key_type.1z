@@ -1,0 +1,2 @@
+\ Test that mutable map syntax errors report the invalid key type.
+M{ t "foo" }

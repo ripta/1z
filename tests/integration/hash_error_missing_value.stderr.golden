@@ -1,0 +1,1 @@
+tests/integration/hash_error_missing_value.1z:2: error 'invalid-hash-syntax' missing value after key 'name'

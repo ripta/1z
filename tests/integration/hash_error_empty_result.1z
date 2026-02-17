@@ -1,0 +1,3 @@
+\ Test that hash syntax errors report when a value word produces no result.
+noop: [ ] ;
+H{ name: noop }
