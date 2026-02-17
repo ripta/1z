@@ -13,6 +13,7 @@ pub fn build(b: *std.Build) void {
     });
     root_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
     root_module.addIncludePath(b.path("ext/toy"));
+    root_module.linkSystemLibrary("ffi", .{});
 
     // Set version as a build option
     const options = b.addOptions();
@@ -66,6 +67,7 @@ pub fn build(b: *std.Build) void {
     });
     test_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
     test_module.addIncludePath(b.path("ext/toy"));
+    test_module.linkSystemLibrary("ffi", .{});
     test_module.addOptions("build_options", options);
 
     const lib_unit_tests = b.addTest(.{
@@ -76,9 +78,27 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
 
+    // Shared library build for dynamic FFI tests
+    const toy_shared_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    toy_shared_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
+    toy_shared_module.addIncludePath(b.path("ext/toy"));
+    const toy_shared = b.addLibrary(.{
+        .name = "toy",
+        .root_module = toy_shared_module,
+        .linkage = .dynamic,
+    });
+    const install_toy_shared = b.addInstallArtifact(toy_shared, .{
+        .dest_dir = .{ .override = .{ .custom = "ext" } },
+    });
+
     // Integration tests
     const integration_test_step = b.step("integration-test", "Run integration tests");
     integration_test_step.dependOn(&run_lib_unit_tests.step);
+    integration_test_step.dependOn(&install_toy_shared.step);
 
     // Update golden files step
     const update_golden_step = b.step("update-golden", "Update golden files for integration tests");

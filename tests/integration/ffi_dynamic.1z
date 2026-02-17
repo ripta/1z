@@ -1,0 +1,61 @@
+use "testing" ;
+
+\\ Helper to get the shared library path relative to the build root.
+\\ The stdlib-path flag gives us the project root's lib/ directory,
+\\ so we derive the project root from environ PWD and append zig-out/ext/.
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy.dylib" #append
+] ;
+
+\\ lib-open: load toy shared library from explicit path
+toy-lib-path native.lib-open
+type-of dylib: "lib-open returns dylib resource" assert=
+
+\\ lib-open: resource? returns true for dylib
+toy-lib-path native.lib-open
+resource? t "dylib is a resource" assert=
+
+\\ lib-symbol: look up toy_add
+toy-lib-path native.lib-open
+dup "toy_add" native.lib-symbol
+type-of ffi-fn: "lib-symbol returns ffi-fn resource" assert=
+resource-close
+
+\\ lib-symbol: look up multiple symbols
+toy-lib-path native.lib-open
+dup "toy_strlen" native.lib-symbol resource? t "toy_strlen is resource" assert=
+dup "toy_greeting" native.lib-symbol resource? t "toy_greeting is resource" assert=
+dup "toy_checksum" native.lib-symbol resource? t "toy_checksum is resource" assert=
+dup "toy_open" native.lib-symbol resource? t "toy_open is resource" assert=
+resource-close
+
+\\ lib-symbol: ffi-fn resource? returns true
+toy-lib-path native.lib-open
+dup "toy_add" native.lib-symbol
+resource? t "ffi-fn is a resource" assert=
+resource-close
+
+\\ resource-close: closed dylib displays (closed)
+toy-lib-path native.lib-open
+dup resource-close
+to-string "<resource:dylib (closed)>" "closed dylib display" assert=
+
+\\ lib-open: invalid path throws ffi-library-not-found
+[ "/nonexistent/path/libfake.dylib" native.lib-open ]
+ffi-library-not-found: "invalid path throws ffi-library-not-found" assert-error-type
+
+\\ lib-symbol: invalid symbol throws ffi-symbol-not-found
+[
+  toy-lib-path native.lib-open
+  dup "nonexistent_symbol_xyz" native.lib-symbol
+  swap resource-close
+]
+ffi-symbol-not-found: "invalid symbol throws ffi-symbol-not-found" assert-error-type
+
+\\ lib-symbol: use after close throws use-after-close
+[
+  toy-lib-path native.lib-open
+  dup resource-close
+  "toy_add" native.lib-symbol
+]
+use-after-close: "symbol lookup after close throws use-after-close" assert-error-type

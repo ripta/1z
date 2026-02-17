@@ -33,6 +33,9 @@ pub const InterpreterError = error{
     NotSeekable,
     // Resource error types
     UseAfterClose,
+    // FFI error types
+    FFILibraryNotFound,
+    FFISymbolNotFound,
 };
 
 pub const Primitive = struct {
