@@ -1,0 +1,51 @@
+=== peek-token basics ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "hello" ]
+PASS: peek-token returns the next token as a string
+Stack: [ ]
+Stack: [ ]
+Stack: [ "world" "world" ]
+PASS: parse-token after peek returns the same token
+Stack: [ "world" ]
+PASS: peek-token saw the token first
+Stack: [ ]
+=== peek-token idempotence ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "foo" "foo" ]
+PASS: second peek returns same token
+Stack: [ "foo" ]
+PASS: first peek returns same token
+Stack: [ ]
+=== peek-token with parse-literal ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "42" 42 ]
+PASS: parse-literal after peek parses the integer
+Stack: [ "42" ]
+PASS: peek-token saw the raw string
+Stack: [ ]
+=== peek-token with delimiter check ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ 99 ]
+PASS: peek saw non-delimiter, parse-literal consumed the value
+Stack: [ ]
+Stack: [ "stopped" ]
+PASS: peek saw STOP and consumed it
+Stack: [ ]
+=== peek-token with parse-until ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "1" [ 1 2 3 ] ]
+PASS: parse-until collected values after peek
+Stack: [ "1" ]
+PASS: peek-token saw the first token
+Stack: [ ]
+=== peek-token skips comments ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "real-token" ]
+PASS: peek-token skips comments
+Stack: [ ]

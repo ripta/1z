@@ -1,0 +1,75 @@
+\ Test peek-token primitive
+
+use "testing" ;
+
+"peek-token basics" test-section
+
+\ peek-token returns the next token without consuming it
+peek-next: parse-time [ peek-token ] ;
+
+peek-next hello
+"hello" "peek-token returns the next token as a string" assert=
+
+\ The peeked token is still available for parse-token
+peek-then-consume: parse-time [ peek-token parse-token ] ;
+
+peek-then-consume world
+"world" "parse-token after peek returns the same token" assert=
+"world" "peek-token saw the token first" assert=
+
+"peek-token idempotence" test-section
+
+\ Multiple peeks without consuming return the same token
+double-peek: parse-time [ peek-token peek-token ] ;
+
+double-peek foo
+"foo" "second peek returns same token" assert=
+"foo" "first peek returns same token" assert=
+
+"peek-token with parse-literal" test-section
+
+\ peek-token followed by parse-literal: peek sees the raw string,
+\ parse-literal consumes and parses the value
+peek-then-literal: parse-time [ peek-token parse-literal ] ;
+
+peek-then-literal 42
+42 "parse-literal after peek parses the integer" assert=
+"42" "peek-token saw the raw string" assert=
+
+"peek-token with delimiter check" test-section
+
+\ Use peek-token to decide whether to consume or stop
+peek-or-stop: parse-time [
+  peek-token "STOP" =
+  [ parse-token drop "stopped" ]
+  [ parse-literal ] if
+] ;
+
+peek-or-stop 99
+99 "peek saw non-delimiter, parse-literal consumed the value" assert=
+
+peek-or-stop STOP
+"stopped" "peek saw STOP and consumed it" assert=
+
+"peek-token with parse-until" test-section
+
+\ peek-token does not interfere with parse-until consuming subsequent tokens
+peek-then-parse-until: parse-time [
+  peek-token
+  "END" parse-until
+] ;
+
+peek-then-parse-until 1 2 3 END
+call + + 6 "parse-until collected values after peek" assert=
+"1" "peek-token saw the first token" assert=
+
+"peek-token skips comments" test-section
+
+\ peek-token should skip over comments like parse-token does
+peek-after-comment: parse-time [
+  peek-token
+] ;
+
+peek-after-comment  \ this is a comment
+real-token
+"real-token" "peek-token skips comments" assert=

@@ -149,6 +149,7 @@ parse-token ( -- string )
 parse-tokens-until ( delimiter -- array )
 parse-until ( delimiter -- quotation )
 parse-values-until ( delimiter -- array )
+peek-token ( -- string )
 pick-n ( n -- val )
 print-benchmark-report
 receive ( ch -- val )

@@ -40,6 +40,7 @@ pub const Tokenizer = struct {
     line_start: usize = 0, // byte offset of the current line's start
     preserve_newlines: bool,
     parser_coroutine: ?*ParserCoroutine = null,
+    peeked: ?Token = null,
 
     pub fn init(input: []const u8) Tokenizer {
         return .{
@@ -150,6 +151,10 @@ pub const Tokenizer = struct {
     /// exhausted instead of returning null. Returns null only on true
     /// EOF (no coroutine, or coroutine flush with no new input).
     pub fn nextOrYield(self: *Tokenizer) ?Token {
+        if (self.peeked) |tok| {
+            self.peeked = null;
+            return tok;
+        }
         while (true) {
             if (self.next()) |tok| return tok;
             const co = self.parser_coroutine orelse return null;
@@ -647,4 +652,34 @@ test "parseFloat rejects non-float tokens" {
 test "parseFloat rejects hex" {
     try std.testing.expectEqual(null, parseFloat("0xDEAD"));
     try std.testing.expectEqual(null, parseFloat("0xFF"));
+}
+
+test "peeked token is returned by nextOrYield" {
+    var t = Tokenizer.init("a b c");
+    const tok_a = t.next().?;
+    try std.testing.expectEqualStrings("a", tok_a.text);
+
+    // Manually set peeked; nextOrYield should return it instead of scanning
+    t.peeked = tok_a;
+    const peeked = t.nextOrYield().?;
+    try std.testing.expectEqualStrings("a", peeked.text);
+
+    // After consuming peeked, nextOrYield resumes normal scanning
+    try std.testing.expectEqual(@as(?Token, null), t.peeked);
+    const tok_b = t.nextOrYield().?;
+    try std.testing.expectEqualStrings("b", tok_b.text);
+}
+
+test "peeked token cleared after nextOrYield consumes it" {
+    var t = Tokenizer.init("x y");
+    const tok_x = t.nextOrYield().?;
+    t.peeked = tok_x;
+
+    // First nextOrYield returns peeked and clears it
+    _ = t.nextOrYield();
+    try std.testing.expectEqual(@as(?Token, null), t.peeked);
+
+    // Second nextOrYield scans normally
+    const tok_y = t.nextOrYield().?;
+    try std.testing.expectEqualStrings("y", tok_y.text);
 }
