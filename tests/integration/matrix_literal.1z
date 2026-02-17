@@ -1,0 +1,86 @@
+\ Test matrix{ literal syntax
+
+use "testing" ;
+use "matrix" ;
+
+"matrix{ basic" test-section
+
+matrix{ 1 2 ; 3 4 }
+#len 2 "matrix has two rows" assert=
+
+matrix{ 1 2 ; 3 4 }
+#first #first 1 "element [0][0] is 1" assert=
+
+matrix{ 1 2 ; 3 4 }
+#first 1 #nth 2 "element [0][1] is 2" assert=
+
+matrix{ 1 2 ; 3 4 }
+1 #nth #first 3 "element [1][0] is 3" assert=
+
+matrix{ 1 2 ; 3 4 }
+1 #nth 1 #nth 4 "element [1][1] is 4" assert=
+
+"matrix{ single row" test-section
+
+matrix{ 10 20 30 }
+#len 1 "single row matrix has one row" assert=
+
+matrix{ 10 20 30 }
+#first #len 3 "single row has three elements" assert=
+
+"matrix{ empty" test-section
+
+matrix{ }
+#len 1 "empty matrix has one row" assert=
+
+matrix{ }
+#first #len 0 "the single row is empty" assert=
+
+"matrix{ trailing semicolon" test-section
+
+matrix{ 1 2 ; }
+#len 2 "trailing semicolon produces two rows" assert=
+
+matrix{ 1 2 ; }
+1 #nth #len 0 "trailing semicolon row is empty" assert=
+
+"matrix{ empty rows" test-section
+
+matrix{ 1 ; ; 2 }
+#len 3 "double semicolon produces three rows" assert=
+
+matrix{ 1 ; ; 2 }
+1 #nth #len 0 "middle row is empty" assert=
+
+matrix{ 1 ; ; 2 }
+#first #first 1 "first row has 1" assert=
+
+matrix{ 1 ; ; 2 }
+2 #nth #first 2 "third row has 2" assert=
+
+"matrix{ mixed value types" test-section
+
+matrix{ "a" "b" ; 1 2 }
+#first #first "a" "string values work" assert=
+
+matrix{ "a" "b" ; 1 2 }
+1 #nth #first 1 "mixed string and integer rows" assert=
+
+"matrix{ nested arrays" test-section
+
+matrix{ { 1 2 } { 3 4 } ; { 5 6 } { 7 8 } }
+#first #first #first 1 "nested arrays work" assert=
+
+matrix{ { 1 2 } { 3 4 } ; { 5 6 } { 7 8 } }
+1 #nth 1 #nth #first 7 "nested array in second row" assert=
+
+"matrix{ 3x3" test-section
+
+matrix{ 1 2 3 ; 4 5 6 ; 7 8 9 }
+#len 3 "3x3 matrix has three rows" assert=
+
+matrix{ 1 2 3 ; 4 5 6 ; 7 8 9 }
+1 #nth 1 #nth 5 "center element of 3x3 is 5" assert=
+
+matrix{ 1 2 3 ; 4 5 6 ; 7 8 9 }
+2 #nth 2 #nth 9 "bottom-right element is 9" assert=
