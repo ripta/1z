@@ -1,0 +1,102 @@
+use "testing" ;
+use "ffi" ;
+
+\\ Helper to get the shared library path for the toy library.
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy.dylib" #append
+] ;
+
+toy-lib-path lib-open
+
+\\ --- Overflow/underflow errors ---
+
+\\ i8 overflow: 128 exceeds i8 max (127)
+dup "toy_negate_i8" lib-symbol ffi{ i8 -> i8 } bind-sig
+[ 128 1 pick-n ffi-call ] "ffi-range-error" assert-error
+drop
+
+\\ i8 underflow: -129 below i8 min (-128)
+dup "toy_negate_i8" lib-symbol ffi{ i8 -> i8 } bind-sig
+[ -129 1 pick-n ffi-call ] "ffi-range-error" assert-error
+drop
+
+\\ i16 overflow: 32768 exceeds i16 max (32767)
+dup "toy_add_i16" lib-symbol ffi{ i16 i16 -> i16 } bind-sig
+[ 32768 0 2 pick-n ffi-call ] "ffi-range-error" assert-error
+drop
+
+\\ u16 overflow: 65536 exceeds u16 max (65535)
+dup "toy_add_u16" lib-symbol ffi{ u16 u16 -> u16 } bind-sig
+[ 65536 0 2 pick-n ffi-call ] "ffi-range-error" assert-error
+drop
+
+\\ u16 underflow: -1 is negative
+dup "toy_add_u16" lib-symbol ffi{ u16 u16 -> u16 } bind-sig
+[ -1 0 2 pick-n ffi-call ] "ffi-range-error" assert-error
+drop
+
+\\ u8 overflow: 256 exceeds u8 max (255)
+dup "toy_negate_i8" lib-symbol ffi{ u8 -> i8 } bind-sig
+[ 256 1 pick-n ffi-call ] "ffi-range-error" assert-error
+drop
+
+\\ u8 underflow: -1 is negative
+dup "toy_negate_i8" lib-symbol ffi{ u8 -> i8 } bind-sig
+[ -1 1 pick-n ffi-call ] "ffi-range-error" assert-error
+drop
+
+\\ i32 overflow: 2147483648 exceeds i32 max (2147483647)
+dup "toy_is_positive" lib-symbol ffi{ i32 -> bool } bind-sig
+[ 2147483648 1 pick-n ffi-call ] "ffi-range-error" assert-error
+drop
+
+\\ u32 underflow: -1 is negative
+dup "toy_add" lib-symbol ffi{ u32 u32 -> u32 } bind-sig
+[ -1 0 2 pick-n ffi-call ] "ffi-range-error" assert-error
+drop
+
+\\ u64 underflow: -1 is negative
+dup "toy_usize_identity" lib-symbol ffi{ u64 -> u64 } bind-sig
+[ -1 1 pick-n ffi-call ] "ffi-range-error" assert-error
+drop
+
+\\ usize underflow: -1 is negative
+dup "toy_usize_identity" lib-symbol ffi{ usize -> usize } bind-sig
+[ -1 1 pick-n ffi-call ] "ffi-range-error" assert-error
+drop
+
+\\ --- Boundary values that succeed ---
+
+\\ i8 at min/max boundaries
+dup "toy_negate_i8" lib-symbol ffi{ i8 -> i8 } bind-sig
+-128 1 pick-n ffi-call
+\\ -128 negated wraps in i8 to -128 due to two's complement
+drop drop
+
+dup "toy_negate_i8" lib-symbol ffi{ i8 -> i8 } bind-sig
+127 1 pick-n ffi-call
+-127 "toy_negate_i8(127) = -127" assert=
+drop
+
+\\ u8 at 0 and 255
+dup "toy_add" lib-symbol ffi{ u8 u8 -> i32 } bind-sig
+0 255 2 pick-n ffi-call
+255 "toy_add(u8:0, u8:255) = 255" assert=
+drop
+
+\\ usize at 0
+dup "toy_usize_identity" lib-symbol ffi{ usize -> usize } bind-sig
+0 1 pick-n ffi-call
+0 "toy_usize_identity(0) = 0" assert=
+drop
+
+\\ --- Return-path bignum promotion ---
+
+\\ toy_u64_max returns UINT64_MAX which exceeds i64 max
+dup "toy_u64_max" lib-symbol ffi{ -> u64 } bind-sig
+0 pick-n ffi-call
+dup bignum? t "toy_u64_max returns a bignum" assert=
+18446744073709551615 "toy_u64_max = UINT64_MAX" assert=
+drop
+
+resource-close

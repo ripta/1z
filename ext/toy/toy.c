@@ -89,3 +89,7 @@ size_t toy_usize_identity(size_t x) {
 ssize_t toy_isize_negate(ssize_t x) {
     return -x;
 }
+
+uint64_t toy_u64_max(void) {
+    return UINT64_MAX;
+}

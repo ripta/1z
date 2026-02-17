@@ -9,6 +9,7 @@ const error_mapping = @import("../primitives/error_mapping.zig");
 const RegistryEntry = @import("../primitives/types.zig").RegistryEntry;
 const FfiTypeTag = signature.FfiTypeTag;
 const Value = @import("../value.zig").Value;
+const BigIntManaged = @import("../value.zig").BigIntManaged;
 const Resource = @import("../value.zig").Resource;
 const FfiCloseFn = @import("../value.zig").FfiCloseFn;
 const ByteArray = @import("../value.zig").ByteArray;
@@ -355,6 +356,7 @@ fn marshalArg(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) 
                 .fixnum => |v| v,
                 else => return argTypeMismatch(ctx, "fixnum for i8", val, arg_index),
             };
+            try checkIntRange(ctx, fixnum, i8, "i8", arg_index);
             return .{ .i8_val = @intCast(fixnum) };
         },
         .i16 => {
@@ -362,6 +364,7 @@ fn marshalArg(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) 
                 .fixnum => |v| v,
                 else => return argTypeMismatch(ctx, "fixnum for i16", val, arg_index),
             };
+            try checkIntRange(ctx, fixnum, i16, "i16", arg_index);
             return .{ .i16_val = @intCast(fixnum) };
         },
         .u8 => {
@@ -369,6 +372,7 @@ fn marshalArg(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) 
                 .fixnum => |v| v,
                 else => return argTypeMismatch(ctx, "fixnum for u8", val, arg_index),
             };
+            try checkIntRange(ctx, fixnum, u8, "u8", arg_index);
             return .{ .u8_val = @intCast(fixnum) };
         },
         .u16 => {
@@ -376,6 +380,7 @@ fn marshalArg(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) 
                 .fixnum => |v| v,
                 else => return argTypeMismatch(ctx, "fixnum for u16", val, arg_index),
             };
+            try checkIntRange(ctx, fixnum, u16, "u16", arg_index);
             return .{ .u16_val = @intCast(fixnum) };
         },
         .i32 => {
@@ -383,6 +388,7 @@ fn marshalArg(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) 
                 .fixnum => |v| v,
                 else => return argTypeMismatch(ctx, "fixnum for i32", val, arg_index),
             };
+            try checkIntRange(ctx, fixnum, i32, "i32", arg_index);
             return .{ .i32_val = @intCast(fixnum) };
         },
         .i64 => {
@@ -397,6 +403,7 @@ fn marshalArg(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) 
                 .fixnum => |v| v,
                 else => return argTypeMismatch(ctx, "fixnum for u32", val, arg_index),
             };
+            try checkIntRange(ctx, fixnum, u32, "u32", arg_index);
             return .{ .u32_val = @intCast(fixnum) };
         },
         .u64 => {
@@ -404,6 +411,7 @@ fn marshalArg(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) 
                 .fixnum => |v| v,
                 else => return argTypeMismatch(ctx, "fixnum for u64", val, arg_index),
             };
+            try checkNonNegative(ctx, fixnum, "u64", arg_index);
             return .{ .u64_val = @intCast(fixnum) };
         },
         .usize_type => {
@@ -411,6 +419,11 @@ fn marshalArg(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) 
                 .fixnum => |v| v,
                 else => return argTypeMismatch(ctx, "fixnum for usize", val, arg_index),
             };
+            if (@sizeOf(usize) == 8) {
+                try checkNonNegative(ctx, fixnum, "usize", arg_index);
+            } else {
+                try checkIntRange(ctx, fixnum, u32, "usize", arg_index);
+            }
             return .{ .usize_val = @intCast(fixnum) };
         },
         .isize_type => {
@@ -418,6 +431,9 @@ fn marshalArg(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) 
                 .fixnum => |v| v,
                 else => return argTypeMismatch(ctx, "fixnum for isize", val, arg_index),
             };
+            if (@sizeOf(isize) != 8) {
+                try checkIntRange(ctx, fixnum, i32, "isize", arg_index);
+            }
             return .{ .isize_val = @intCast(fixnum) };
         },
         .f32 => {
@@ -480,6 +496,25 @@ fn argTypeMismatch(ctx: *Context, expected: []const u8, val: Value, arg_index: u
     return error.FFITypeMismatch;
 }
 
+fn checkIntRange(ctx: *Context, fixnum: i64, comptime T: type, type_name: []const u8, arg_index: usize) !void {
+    if (fixnum < std.math.minInt(T) or fixnum > std.math.maxInt(T)) {
+        helpers.setErrorContext(ctx, "argument {d}: value {d} out of range for {s} ({d}..{d})", .{
+            arg_index + 1,                fixnum,                       type_name,
+            @as(i64, std.math.minInt(T)), @as(i64, std.math.maxInt(T)),
+        });
+        return error.FFIRangeError;
+    }
+}
+
+fn checkNonNegative(ctx: *Context, fixnum: i64, type_name: []const u8, arg_index: usize) !void {
+    if (fixnum < 0) {
+        helpers.setErrorContext(ctx, "argument {d}: value {d} out of range for {s} (must be non-negative)", .{
+            arg_index + 1, fixnum, type_name,
+        });
+        return error.FFIRangeError;
+    }
+}
+
 /// Marshal a C return value back to a 1z Value and push it onto the stack.
 fn marshalReturn(ctx: *Context, return_type: FfiType, ret: *const ReturnStorage) !void {
     const alloc = ctx.arena.allocator();
@@ -512,11 +547,21 @@ fn marshalReturn(ctx: *Context, return_type: FfiType, ret: *const ReturnStorage)
             try ctx.stack.push(.{ .fixnum = @intCast(val) });
         },
         .u64 => {
-            try ctx.stack.push(.{ .fixnum = @intCast(ret.as_u64) });
+            if (ret.as_u64 > std.math.maxInt(i64)) {
+                const big = try BigIntManaged.initSet(alloc, ret.as_u64);
+                try ctx.stack.push(helpers.demoteBignum(big));
+            } else {
+                try ctx.stack.push(.{ .fixnum = @intCast(ret.as_u64) });
+            }
         },
         .usize_type => {
             const val: usize = @truncate(ret.as_u64);
-            try ctx.stack.push(.{ .fixnum = @intCast(val) });
+            if (val > std.math.maxInt(i64)) {
+                const big = try BigIntManaged.initSet(alloc, val);
+                try ctx.stack.push(helpers.demoteBignum(big));
+            } else {
+                try ctx.stack.push(.{ .fixnum = @intCast(val) });
+            }
         },
         .isize_type => {
             const val: isize = @truncate(@as(i64, @bitCast(ret.as_i64)));

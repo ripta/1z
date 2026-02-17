@@ -26,5 +26,6 @@ bool toy_is_positive(int x);
 int toy_bool_to_int(bool b);
 size_t toy_usize_identity(size_t x);
 ssize_t toy_isize_negate(ssize_t x);
+uint64_t toy_u64_max(void);
 
 #endif
