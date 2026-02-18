@@ -1,0 +1,24 @@
+Stack: [ ]
+Stack: [ ]
+=== range ===
+Stack: [ ]
+PASS: range 0 to 5
+Stack: [ ]
+PASS: range 1 to 4
+Stack: [ ]
+PASS: range empty (start = end)
+Stack: [ ]
+PASS: range empty (start > end)
+Stack: [ ]
+PASS: range negative to positive
+Stack: [ ]
+=== iota ===
+Stack: [ ]
+PASS: iota 5
+Stack: [ ]
+PASS: iota 0
+Stack: [ ]
+PASS: iota 1
+Stack: [ ]
+All range tests complete!
+Stack: [ ]

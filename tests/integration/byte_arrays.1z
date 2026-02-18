@@ -1,0 +1,108 @@
+\ Integration tests for byte arrays B{ }
+
+"lib/testing.1z" load
+
+"Byte array creation" test-section
+B{ } #len 0 "empty byte array length" assert=
+B{ 1 2 3 } #len 3 "byte array length" assert=
+B{ 0xFF 0x00 0x42 } #len 3 "hex byte array length" assert=
+B{ 255 0 66 } #len 3 "decimal byte array length" assert=
+
+"Byte array element access" test-section
+B{ 10 20 30 } 0 #nth 10 "#nth first byte" assert=
+B{ 10 20 30 } 1 #nth 20 "#nth middle byte" assert=
+B{ 10 20 30 } 2 #nth 30 "#nth last byte" assert=
+B{ 0xFF 0x00 0x42 } 0 #nth 255 "#nth hex first" assert=
+B{ 0xFF 0x00 0x42 } 2 #nth 66 "#nth hex last" assert=
+B{ 10 20 30 } #first 10 "#first" assert=
+B{ 10 20 30 } #last 30 "#last" assert=
+
+"Byte array #slice" test-section
+B{ 1 2 3 4 5 } 1 3 #slice #len 2 "#slice length" assert=
+B{ 1 2 3 4 5 } 1 3 #slice #first 2 "#slice first element" assert=
+B{ 1 2 3 4 5 } 1 3 #slice #last 3 "#slice last element" assert=
+
+"Byte array #append" test-section
+B{ 1 2 } B{ 3 4 } #append #len 4 "#append length" assert=
+B{ 1 2 } B{ 3 4 } #append #first 1 "#append first" assert=
+B{ 1 2 } B{ 3 4 } #append #last 4 "#append last" assert=
+
+"Byte array #prepend" test-section
+B{ 3 4 } B{ 1 2 } #prepend #len 4 "#prepend length" assert=
+B{ 3 4 } B{ 1 2 } #prepend #first 1 "#prepend first" assert=
+B{ 3 4 } B{ 1 2 } #prepend #last 4 "#prepend last" assert=
+
+"Cross-sequence #append to byte array" test-section
+B{ 1 2 } { 3 4 } #append #len 4 "#append array to byte array length" assert=
+B{ 1 2 } { 3 4 } #append #first 1 "#append array to byte array first" assert=
+B{ 1 2 } { 3 4 } #append #last 4 "#append array to byte array last" assert=
+
+"Cross-sequence #prepend to byte array" test-section
+B{ 3 4 } { 1 2 } #prepend #len 4 "#prepend array to byte array length" assert=
+B{ 3 4 } { 1 2 } #prepend #first 1 "#prepend array to byte array first" assert=
+B{ 3 4 } { 1 2 } #prepend #last 4 "#prepend array to byte array last" assert=
+
+"Cross-sequence #append byte array to array" test-section
+{ 1 2 } B{ 3 4 } #append #len 4 "#append byte array to array length" assert=
+{ 1 2 } B{ 3 4 } #append 2 #nth 3 "#append byte array to array elem 2" assert=
+{ 1 2 } B{ 3 4 } #append 3 #nth 4 "#append byte array to array elem 3" assert=
+
+"Cross-sequence #append byte array to string" test-section
+"a" B{ 66 67 } #append "aBC" "#append byte array to string" assert=
+"" B{ 72 105 } #append "Hi" "#append byte array to empty string" assert=
+"x" B{ } #append "x" "#append empty byte array to string" assert=
+
+"Cross-sequence #prepend byte array to string" test-section
+"c" B{ 65 66 } #prepend "ABc" "#prepend byte array to string" assert=
+"" B{ 72 105 } #prepend "Hi" "#prepend byte array to empty string" assert=
+
+"Cross-sequence #append vector to string" test-section
+"a" V{ 66 67 } #append "aBC" "#append vector of integers to string" assert=
+
+"Cross-sequence #append array to string" test-section
+"a" { 66 67 } #append "aBC" "#append array of integers to string" assert=
+
+"Cross-sequence #append string to byte array" test-section
+B{ 65 } "BC" #append #len 3 "#append string to byte array length" assert=
+B{ 65 } "BC" #append bytes> "ABC" "#append string to byte array content" assert=
+
+"Cross-sequence #prepend string to byte array" test-section
+B{ 67 } "AB" #prepend #len 3 "#prepend string to byte array length" assert=
+B{ 67 } "AB" #prepend bytes> "ABC" "#prepend string to byte array content" assert=
+
+"Byte array higher-order operations" test-section
+B{ 1 2 3 } [ 2 * ] #map #first 2 "#map returns array, first element" assert=
+B{ 1 2 3 } [ 2 * ] #map #last 6 "#map last element" assert=
+B{ 1 2 3 4 5 } [ 2 % 0 = ] #filter #len 2 "#filter count evens" assert=
+B{ 1 2 3 4 5 } [ 2 % 0 = ] #filter #first 2 "#filter first even" assert=
+B{ 1 2 3 } 0 [ + ] #reduce 6 "#reduce sum" assert=
+
+"Byte array #each" test-section
+0 B{ 1 2 3 } [ + ] #each 6 "#each accumulate" assert=
+
+"String to bytes conversion" test-section
+"hello" >bytes #len 5 ">bytes length" assert=
+"hello" >bytes #first 104 ">bytes first byte is 'h'" assert=
+"hello" >bytes #last 111 ">bytes last byte is 'o'" assert=
+
+"Bytes to string conversion" test-section
+B{ 104 101 108 108 111 } bytes> "hello" "bytes> creates string" assert=
+B{ 0x48 0x69 } bytes> "Hi" "bytes> hex to string" assert=
+
+"Round-trip conversion" test-section
+"test" >bytes bytes> "test" "string -> bytes -> string" assert=
+B{ 65 66 67 } bytes> >bytes #first 65 "bytes -> string -> bytes" assert=
+
+"Byte array to-string" test-section
+B{ } to-string "B{ }" "empty byte array to-string" assert=
+B{ 1 2 3 } to-string "B{ 0x01 0x02 0x03 }" "byte array to-string" assert=
+B{ 255 } to-string "B{ 0xFF }" "hex format in to-string" assert=
+
+"Error cases" test-section
+[ B{ 1 } 5 #nth ] [ drop "PASS: index out of bounds error" print ] recover
+[ B{ } #first ] [ drop "PASS: first on empty byte array error" print ] recover
+[ B{ } #last ] [ drop "PASS: last on empty byte array error" print ] recover
+\ Note: B{ 256 } and B{ -1 } cannot be tested with recover because
+\ B{ } is a parse-time word, so errors occur during parsing, not execution.
+
+"All byte array tests complete!" print

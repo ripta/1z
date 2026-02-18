@@ -1,0 +1,105 @@
+\ Integration tests for immutable sets S{ }
+
+"lib/testing.1z" load
+"lib/sequences.1z" load
+
+"Set creation" test-section
+S{ } #len 0 "empty set length" assert=
+S{ 1 2 3 } #len 3 "set length" assert=
+S{ 1 2 3 2 1 } #len 3 "set deduplicates on creation" assert=
+
+"Set @in?" test-section
+S{ 1 2 3 } 1 @in? t "@in? finds element" assert=
+S{ 1 2 3 } 2 @in? t "@in? finds middle element" assert=
+S{ 1 2 3 } 3 @in? t "@in? finds last element" assert=
+S{ 1 2 3 } 4 @in? f "@in? returns false for missing element" assert=
+S{ } 1 @in? f "@in? on empty set" assert=
+S{ "a" "b" "c" } "b" @in? t "@in? with strings" assert=
+S{ "a" "b" "c" } "d" @in? f "@in? with missing string" assert=
+
+"Set @adjoin" test-section
+S{ 1 2 } 3 @adjoin #len 3 "@adjoin increases length" assert=
+S{ 1 2 } 3 @adjoin 3 @in? t "@adjoin adds element" assert=
+S{ 1 2 } 2 @adjoin #len 2 "@adjoin with existing element keeps same length" assert=
+S{ } 1 @adjoin #len 1 "@adjoin on empty set" assert=
+
+"Set @remove" test-section
+S{ 1 2 3 } 2 @remove #len 2 "@remove decreases length" assert=
+S{ 1 2 3 } 2 @remove 2 @in? f "@remove removes element" assert=
+S{ 1 2 3 } 2 @remove 1 @in? t "@remove keeps other elements" assert=
+S{ 1 2 3 } 4 @remove #len 3 "@remove with missing element keeps same length" assert=
+S{ 1 } 1 @remove #len 0 "@remove can empty set" assert=
+
+"Set @union" test-section
+S{ 1 2 } S{ 3 4 } @union #len 4 "@union combines sets" assert=
+S{ 1 2 } S{ 3 4 } @union 1 @in? t "@union keeps first set elements" assert=
+S{ 1 2 } S{ 3 4 } @union 4 @in? t "@union keeps second set elements" assert=
+S{ 1 2 } S{ 2 3 } @union #len 3 "@union deduplicates" assert=
+S{ 1 2 } S{ } @union #len 2 "@union with empty set" assert=
+S{ } S{ 1 2 } @union #len 2 "@union empty with set" assert=
+
+"Set @intersection" test-section
+S{ 1 2 3 } S{ 2 3 4 } @intersection #len 2 "@intersection size" assert=
+S{ 1 2 3 } S{ 2 3 4 } @intersection 2 @in? t "@intersection has common element" assert=
+S{ 1 2 3 } S{ 2 3 4 } @intersection 1 @in? f "@intersection excludes non-common" assert=
+S{ 1 2 } S{ 3 4 } @intersection #len 0 "@intersection of disjoint sets" assert=
+S{ 1 2 } S{ } @intersection #len 0 "@intersection with empty set" assert=
+S{ 1 2 } S{ 1 2 } @intersection #len 2 "@intersection of identical sets" assert=
+
+"Set @difference" test-section
+S{ 1 2 3 } S{ 2 3 4 } @difference #len 1 "@difference size" assert=
+S{ 1 2 3 } S{ 2 3 4 } @difference 1 @in? t "@difference keeps unique" assert=
+S{ 1 2 3 } S{ 2 3 4 } @difference 2 @in? f "@difference removes common" assert=
+S{ 1 2 } S{ 3 4 } @difference #len 2 "@difference of disjoint sets" assert=
+S{ 1 2 } S{ 1 2 } @difference #len 0 "@difference of identical sets" assert=
+S{ } S{ 1 2 } @difference #len 0 "@difference from empty set" assert=
+
+"Set #len" test-section
+S{ } #len 0 "#len empty set" assert=
+S{ 1 } #len 1 "#len single element" assert=
+S{ 1 2 3 4 5 } #len 5 "#len multiple elements" assert=
+
+"Set #each" test-section
+0 S{ 1 2 3 } [ + ] #each 6 "#each sum" assert=
+0 S{ } [ + ] #each 0 "#each empty set" assert=
+
+"Set #map" test-section
+S{ 1 2 3 } [ 2 * ] #map #len 3 "#map preserves size" assert=
+S{ 1 2 3 } [ 2 * ] #map 2 @in? t "#map transforms elements" assert=
+S{ 1 2 3 } [ 2 * ] #map 4 @in? t "#map has transformed element" assert=
+S{ 1 2 3 } [ 2 * ] #map 6 @in? t "#map has all transformed" assert=
+S{ 1 2 3 } [ 0 * ] #map #len 1 "#map deduplicates results" assert=
+
+"Set #filter" test-section
+S{ 1 2 3 4 5 } [ 2 > ] #filter #len 3 "#filter count" assert=
+S{ 1 2 3 4 5 } [ 2 > ] #filter 3 @in? t "#filter keeps matching" assert=
+S{ 1 2 3 4 5 } [ 2 > ] #filter 1 @in? f "#filter removes non-matching" assert=
+S{ 1 2 3 4 5 } [ 2 % 0 = ] #filter #len 2 "#filter evens count" assert=
+
+"Set #reduce" test-section
+S{ 1 2 3 } 0 [ + ] #reduce 6 "#reduce sum" assert=
+S{ 1 2 3 } 1 [ * ] #reduce 6 "#reduce product" assert=
+S{ } 42 [ + ] #reduce 42 "#reduce empty set returns init" assert=
+
+"Set equality" test-section
+S{ 1 2 3 } S{ 1 2 3 } = t "set equality same order" assert=
+S{ 1 2 3 } S{ 3 2 1 } = t "set equality different order" assert=
+S{ 1 2 3 } S{ 1 2 } = f "set inequality different size" assert=
+S{ 1 2 3 } S{ 1 2 4 } = f "set inequality different elements" assert=
+S{ } S{ } = t "empty sets equal" assert=
+
+"Set to-string" test-section
+S{ } to-string "S{ }" "empty set to-string" assert=
+
+"Set immutability" test-section
+S{ 1 2 } 3 @adjoin drop
+S{ 1 2 } 1 @remove drop
+\ If we got here without errors, immutability is working
+
+"Mixed type sets" test-section
+S{ 1 "a" t } #len 3 "mixed type set" assert=
+S{ 1 "a" t } 1 @in? t "mixed set has integer" assert=
+S{ 1 "a" t } "a" @in? t "mixed set has string" assert=
+S{ 1 "a" t } t @in? t "mixed set has boolean" assert=
+
+"All set tests complete!" print

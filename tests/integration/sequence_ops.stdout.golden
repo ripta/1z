@@ -1,29 +1,62 @@
+Stack: [ ]
+Stack: [ ]
 Stack: [ { 1 2 3 4 } ]
-PASS: array #concat length
+PASS: array #append length
 Stack: [ { 1 2 3 4 } ]
-PASS: array #concat elem 0
+PASS: array #append elem 0
 Stack: [ { 1 2 3 4 } ]
-PASS: array #concat elem 1
+PASS: array #append elem 1
 Stack: [ { 1 2 3 4 } ]
-PASS: array #concat elem 2
+PASS: array #append elem 2
 Stack: [ { 1 2 3 4 } ]
-PASS: array #concat elem 3
+PASS: array #append elem 3
 Stack: [ ]
-PASS: array #concat with empty right
+PASS: array #append with empty right
 Stack: [ ]
-PASS: array #concat with empty left
+PASS: array #append with empty left
 Stack: [ ]
-PASS: array #concat both empty
+PASS: array #append both empty
 Stack: [ ]
-PASS: string #concat
+PASS: string #append
 Stack: [ ]
-PASS: string #concat with empty right
+PASS: string #append with empty right
 Stack: [ ]
-PASS: string #concat with empty left
+PASS: string #append with empty left
 Stack: [ ]
-PASS: string #concat both empty
+PASS: string #append both empty
 Stack: [ ]
-PASS: #concat type mismatch error
+Stack: [ { 1 "a" "b" "c" } ]
+PASS: array #append string length
+Stack: [ { 1 "a" "b" "c" } ]
+PASS: array #append string elem 0
+Stack: [ { 1 "a" "b" "c" } ]
+PASS: array #append string elem 1
+Stack: [ { 1 "a" "b" "c" } ]
+PASS: array #append string elem 3
+Stack: [ ]
+Stack: [ { 1 2 3 } ]
+PASS: array #append byte-array length
+Stack: [ { 1 2 3 } ]
+PASS: array #append byte-array elem 1
+Stack: [ { 1 2 3 } ]
+PASS: array #append byte-array elem 2
+Stack: [ ]
+Stack: [ { 1 2 3 4 } ]
+PASS: array #prepend length
+Stack: [ { 1 2 3 4 } ]
+PASS: array #prepend elem 0
+Stack: [ { 1 2 3 4 } ]
+PASS: array #prepend elem 1
+Stack: [ { 1 2 3 4 } ]
+PASS: array #prepend elem 2
+Stack: [ { 1 2 3 4 } ]
+PASS: array #prepend elem 3
+Stack: [ ]
+PASS: array #prepend with empty right
+Stack: [ ]
+PASS: array #prepend with empty left
+Stack: [ ]
+PASS: string #prepend
 Stack: [ ]
 Stack: [ { 20 30 40 } ]
 PASS: array #slice length
@@ -53,75 +86,75 @@ Stack: [ ]
 PASS: #slice start > end error
 Stack: [ ]
 Stack: [ { 1 2 3 4 } ]
-PASS: array #append length
+PASS: array #suffix length
 Stack: [ { 1 2 3 4 } ]
-PASS: array #append elem 0
+PASS: array #suffix elem 0
 Stack: [ { 1 2 3 4 } ]
-PASS: array #append elem 3
+PASS: array #suffix elem 3
 Stack: [ { 1 2 3 4 } ]
 Stack: [ ]
 Stack: [ { 42 } ]
-PASS: empty array #append length
+PASS: empty array #suffix length
 Stack: [ { 42 } ]
-PASS: empty array #append value
+PASS: empty array #suffix value
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
-PASS: #append immutability
+PASS: #suffix immutability
 Stack: [ ]
-PASS: array #append string
+PASS: array #suffix string
 Stack: [ ]
-PASS: array #append nested array
+PASS: array #suffix nested array
 Stack: [ ]
 Stack: [ { 0 1 2 3 } ]
-PASS: array #prepend length
+PASS: array #prefix length
 Stack: [ { 0 1 2 3 } ]
-PASS: array #prepend elem 0
+PASS: array #prefix elem 0
 Stack: [ { 0 1 2 3 } ]
-PASS: array #prepend elem 1
+PASS: array #prefix elem 1
 Stack: [ { 0 1 2 3 } ]
-PASS: array #prepend elem 3
+PASS: array #prefix elem 3
 Stack: [ ]
 Stack: [ { 99 } ]
-PASS: empty array #prepend length
+PASS: empty array #prefix length
 Stack: [ { 99 } ]
-PASS: empty array #prepend value
+PASS: empty array #prefix value
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
-PASS: #prepend immutability
+PASS: #prefix immutability
 Stack: [ ]
 Stack: [ { 1 2 3 } ]
-PASS: chained #append length
+PASS: chained #suffix length
 Stack: [ { 1 2 3 } ]
-PASS: chained #append first
+PASS: chained #suffix first
 Stack: [ { 1 2 3 } ]
-PASS: chained #append last
+PASS: chained #suffix last
 Stack: [ ]
 Stack: [ { 3 } ]
 Stack: [ { 2 3 } ]
 Stack: [ { 1 2 3 } ]
-PASS: chained #prepend length
+PASS: chained #prefix length
 Stack: [ { 1 2 3 } ]
-PASS: chained #prepend first
+PASS: chained #prefix first
 Stack: [ { 1 2 3 } ]
-PASS: chained #prepend last
+PASS: chained #prefix last
 Stack: [ ]
 Stack: [ { 3 4 5 } ]
-PASS: concat then slice length
+PASS: append then slice length
 Stack: [ { 3 4 5 } ]
-PASS: concat then slice first
+PASS: append then slice first
 Stack: [ { 3 4 5 } ]
-PASS: concat then slice last
+PASS: append then slice last
 Stack: [ ]
-PASS: slice then concat
+PASS: slice then append
 Stack: [ ]
 Stack: [ { 10 20 30 40 } ]
-PASS: map then concat length
+PASS: map then append length
 Stack: [ { 10 20 30 40 } ]
-PASS: map then concat first
+PASS: map then append first
 Stack: [ { 10 20 30 40 } ]
-PASS: map then concat last
+PASS: map then append last
 Stack: [ ]
 All additional sequence ops tests complete!
 Stack: [ ]

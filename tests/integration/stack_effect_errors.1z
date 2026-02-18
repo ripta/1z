@@ -1,33 +1,44 @@
 \ Stack effect validation error tests
 \ These tests verify that incorrect stack effects are caught
 
-\ Test 1: Wrong delta in quotation parameter
-\ The body effect says ( ..b -- ..a c d ) but actual is ( ..b -- ..a )
-bad-while: ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a c d ) -- ..b ) [
-  swap do compose [ loop ] curry when
+\ Test 1: Wrong delta in quotation parameter with balanced row variables
+\ The effect says ( n -- n n ) but [ 2 * ] only produces one value (delta 0)
+double-wrong: ( n quot: ( n -- n n ) -- n n ) [
+  call
 ] ;
 
-\ Wrap the test in a word that handles cleanup
-\ When validation fails, the word's args stay on stack, so we use ignore-errors
-\ and check if an error occurred
-test-bad-while: ( -- ) [
-  [ 0 [ dup 3 < ] [ dup . 1 + ] bad-while ] ignore-errors
-  \ Clean up the leftover args (3 items: value, pred, body)
+test-double-wrong: ( -- ) [
+  [ 5 [ 2 * ] double-wrong ] ignore-errors
+  \ Clean up the leftover args (2 items: n, quot)
+  drop drop
+  "caught-double-wrong" .
+] ;
+test-double-wrong
+
+\ Test 2: Wrong delta with concrete effect (no row variables)
+\ The effect says ( a b -- c ) requiring delta -1, but [ drop drop ] has delta -2
+add-wrong: ( a b quot: ( a b -- c ) -- c ) [
+  call
+] ;
+
+test-add-wrong: ( -- ) [
+  [ 1 2 [ drop drop ] add-wrong ] ignore-errors
+  \ Clean up the leftover args (3 items: a, b, quot)
   drop drop drop
-  "caught-bad-while" .
+  "caught-add-wrong" .
 ] ;
-test-bad-while
+test-add-wrong
 
-\ Test 2: Undefined row variable in quotation effect
-\ The effect uses ..a but it's not defined in the word's inputs
-bad-rowvar: ( pred: ( ..a -- ..b ? ) -- ) [
-  call drop
+\ Test 3: Quotation that consumes too few values
+\ Effect says ( a b -- ) requiring delta -2, but [ drop ] only has delta -1
+consume-wrong: ( a b quot: ( a b -- ) -- ) [
+  call
 ] ;
 
-test-bad-rowvar: ( -- ) [
-  [ [ t ] bad-rowvar ] ignore-errors
-  \ Clean up the leftover arg
-  drop
-  "caught-bad-rowvar" .
+test-consume-wrong: ( -- ) [
+  [ 1 2 [ drop ] consume-wrong ] ignore-errors
+  \ Clean up the leftover args (3 items: a, b, quot)
+  drop drop drop
+  "caught-consume-wrong" .
 ] ;
-test-bad-rowvar
+test-consume-wrong

@@ -1,0 +1,18 @@
+\ Integration tests for ranges
+
+"lib/testing.1z" load
+"lib/ranges.1z" load
+
+"range" test-section
+0 5 range { 0 1 2 3 4 } "range 0 to 5" assert=
+1 4 range { 1 2 3 } "range 1 to 4" assert=
+5 5 range { } "range empty (start = end)" assert=
+5 3 range { } "range empty (start > end)" assert=
+-2 2 range { -2 -1 0 1 } "range negative to positive" assert=
+
+"iota" test-section
+5 iota { 0 1 2 3 4 } "iota 5" assert=
+0 iota { } "iota 0" assert=
+1 iota { 0 } "iota 1" assert=
+
+"All range tests complete!" print

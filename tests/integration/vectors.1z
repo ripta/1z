@@ -1,0 +1,67 @@
+\ Integration tests for mutable vectors V{ }
+
+"lib/testing.1z" load
+"lib/sequences.1z" load
+
+"Vector creation" test-section
+V{ } #len 0 "empty vector length" assert=
+V{ 1 2 3 } #len 3 "vector length" assert=
+
+"Vector element access" test-section
+V{ 10 20 30 } 0 #nth 10 "#nth first element" assert=
+V{ 10 20 30 } 1 #nth 20 "#nth middle element" assert=
+V{ 10 20 30 } 2 #nth 30 "#nth last element" assert=
+V{ 10 20 30 } #first 10 "#first" assert=
+V{ 10 20 30 } #last 30 "#last" assert=
+
+"Vector mutation with #push!" test-section
+V{ 1 2 } 3 #push! #len 3 "#push! increases length" assert=
+V{ 1 2 } 3 #push! #last 3 "#push! adds element at end" assert=
+V{ } 42 #push! #first 42 "#push! on empty vector" assert=
+
+"Vector mutation with #pop!" test-section
+V{ 1 2 3 } #pop! 3 "#pop! returns last element" assert=
+V{ 1 2 3 } dup #pop! drop #len 2 "vector shortened after #pop!" assert=
+
+"Vector mutation with #append!" test-section
+V{ 1 2 } { 3 4 } #append! #len 4 "#append! extends vector" assert=
+V{ 1 } { 2 3 } #append! #last 3 "#append! adds elements at end" assert=
+V{ } { 1 2 } #append! #first 1 "#append! on empty vector" assert=
+V{ 1 } V{ 2 3 } #append! #len 3 "#append! with vector arg" assert=
+
+"Immutable ops return new vectors" test-section
+V{ 1 2 } V{ 3 4 } #append #len 4 "#append returns new vector" assert=
+V{ 3 4 } V{ 1 2 } #prepend #len 4 "#prepend returns new vector" assert=
+
+"Vector #slice returns vector" test-section
+V{ 1 2 3 4 5 } 1 3 #slice #len 2 "#slice length" assert=
+V{ 1 2 3 4 5 } 1 3 #slice #first 2 "#slice first element" assert=
+V{ 1 2 3 4 5 } 1 3 #slice #last 3 "#slice last element" assert=
+
+"Vector higher-order operations" test-section
+V{ 1 2 3 } [ 2 * ] #map #first 2 "#map first element" assert=
+V{ 1 2 3 } [ 2 * ] #map #last 6 "#map last element" assert=
+V{ 1 2 3 4 5 } [ 2 % 0 = ] #filter #len 2 "#filter count evens" assert=
+V{ 1 2 3 4 5 } [ 2 % 0 = ] #filter #first 2 "#filter first even" assert=
+V{ 1 2 3 } 0 [ + ] #reduce 6 "#reduce sum" assert=
+
+"Vector #each" test-section
+0 V{ 1 2 3 } [ + ] #each 6 "#each accumulate" assert=
+
+"#suffix and #prefix on vectors" test-section
+V{ 1 2 } 3 #suffix #len 3 "#suffix length" assert=
+V{ 1 2 } 3 #suffix #last 3 "#suffix element" assert=
+0 V{ 1 2 } #prefix #len 3 "#prefix length" assert=
+0 V{ 1 2 } #prefix #first 0 "#prefix element" assert=
+
+"Vector to-string" test-section
+V{ } to-string "V{ }" "empty vector to-string" assert=
+V{ 1 2 3 } to-string "V{ 1 2 3 }" "vector to-string" assert=
+
+"Error cases" test-section
+[ V{ } #pop! ] [ drop "PASS: pop from empty vector error" print ] recover
+[ V{ 1 } 5 #nth ] [ drop "PASS: index out of bounds error" print ] recover
+[ V{ } #first ] [ drop "PASS: first on empty vector error" print ] recover
+[ V{ } #last ] [ drop "PASS: last on empty vector error" print ] recover
+
+"All vector tests complete!" print

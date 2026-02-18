@@ -47,11 +47,11 @@ Stack: [ ]
 Stack: [ ]
 PASS: dot consumes value
 Stack: [ ]
-=== to-string with #concat ===
+=== to-string with #append ===
 Stack: [ ]
-PASS: simple concat
+PASS: simple append
 Stack: [ ]
-PASS: chained concat
+PASS: chained append
 Stack: [ ]
 === to-string on hash ===
 Stack: [ ]

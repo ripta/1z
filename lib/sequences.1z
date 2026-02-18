@@ -11,6 +11,7 @@
     =
   ] if
 ] ;
+#head?: [ #starts-with? ] ;
 
 \ Check if sequence ends with suffix
 #ends-with?: ( seq suffix -- ? ) [
@@ -24,3 +25,13 @@
     =
   ] if
 ] ;
+#tail?: [ #ends-with? ] ;
+
+\ Check if index is within bounds of sequence
+#in-bounds?: ( index seq -- ? ) [
+  dupd #len < [ 0 >= ] [ drop f ] if
+] ;
+
+\ Sequence element operations
+#suffix: ( seq elem -- seq' ) [ 1array #append ] ;
+#prefix: ( elem seq -- seq' ) [ swap 1array #prepend ] ;

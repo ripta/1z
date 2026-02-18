@@ -1,0 +1,26 @@
+\ lib/ranges.1z - Ranging over integers
+
+\ Helper for range: ( arr counter limit -- arr )
+range-loop: [
+  2dup <
+  [
+    [ swap over 1array #append swap ++ ] dip
+    range-loop
+  ]
+  [ 2drop ]
+  if
+] ;
+
+\ Generate range [start, end)
+range: ( start end -- array ) [
+  2dup <
+  [
+    { } -rot>      \ arr start end
+    range-loop     \ arr
+  ]
+  [ 2drop { } ]
+  if
+] ;
+
+\ Shorthand: generate [0, n)
+iota: ( n -- array ) [ 0 swap range ] ;
