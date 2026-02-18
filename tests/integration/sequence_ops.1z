@@ -1,4 +1,4 @@
-\ Integration tests for Phase 4.8: Additional Sequence Operations
+\ Integration tests for sequence operations
 \ Tests: #concat, #slice, #append, #prepend
 
 \ ============================================================================
