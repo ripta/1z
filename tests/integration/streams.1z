@@ -1,0 +1,141 @@
+\ Integration tests for stream I/O primitives
+
+"lib/testing.1z" load
+
+"Standard streams" test-section
+stdout to-string "<stream stdout write>" "stdout to-string" assert=
+stderr to-string "<stream stderr write>" "stderr to-string" assert=
+stdin to-string "<stream stdin read>" "stdin to-string" assert=
+
+"Stream close on standard streams" test-section
+stdout dup stream-close to-string "<stream stdout (closed)>" "closed stdout to-string" assert=
+stderr dup stream-close to-string "<stream stderr (closed)>" "closed stderr to-string" assert=
+
+"Stream open and close" test-section
+"tests/fixtures/hello.txt" read: stream-open
+dup to-string "<stream tests/fixtures/hello.txt read>" "read stream to-string" assert=
+stream-close
+"PASS: stream-open and close" print
+
+"Stream write to stdout" test-section
+stdout "Hello" stream-write 5 "stream-write to stdout returns byte count" assert=
+stdout B{ 0x21 } stream-write 1 "stream-write byte array to stdout" assert=
+"" print
+
+"Stream flush" test-section
+stdout stream-flush
+"PASS: stream-flush on stdout" print
+
+"Stream read" test-section
+"tests/fixtures/hello.txt" read: stream-open
+dup 5 stream-read
+#len 5 "stream-read returns 5 bytes" assert=
+stream-close
+"PASS: stream-read partial" print
+
+"tests/fixtures/hello.txt" read: stream-open
+dup 100 stream-read
+#len 13 "stream-read returns available bytes" assert=
+stream-close
+"PASS: stream-read more than available" print
+
+"Stream read-line" test-section
+"tests/fixtures/lines.txt" read: stream-open
+dup stream-read-line "L1" "first line" assert=
+dup stream-read-line "L2" "second line" assert=
+dup stream-read-line "L3" "third line" assert=
+dup stream-read-line f "EOF returns false" assert=
+stream-close
+"PASS: stream-read-line multiple lines" print
+
+"Stream read-all" test-section
+"tests/fixtures/hello.txt" read: stream-open
+dup stream-read-all
+#len 13 "stream-read-all returns all bytes" assert=
+stream-close
+"PASS: stream-read-all" print
+
+"Stream positioning" test-section
+"tests/fixtures/hello.txt" read: stream-open
+dup stream-tell 0 "stream-tell at start" assert=
+dup 5 stream-read drop
+dup stream-tell 5 "stream-tell after read" assert=
+dup 0 stream-seek
+dup stream-tell 0 "stream-tell after seek to 0" assert=
+dup -5 stream-seek-end
+dup stream-tell 8 "stream-tell after seek-end -5" assert=
+stream-close
+"PASS: stream positioning" print
+
+\ NotSeekable error on stdout
+[ stdout stream-tell ]
+[ drop "PASS: NotSeekable error on stdout stream-tell" print ]
+recover
+
+[ stdout 0 stream-seek ]
+[ drop "PASS: NotSeekable error on stdout stream-seek" print ]
+recover
+
+"Buffering control" test-section
+stdout buffering-mode line: "stdout default buffering is line" assert=
+stderr buffering-mode line: "stderr default buffering is line" assert=
+"tests/fixtures/hello.txt" read: stream-open
+dup buffering-mode none: "file default buffering is none" assert=
+dup block: set-buffering-mode
+dup buffering-mode block: "buffering mode changed to block" assert=
+stream-close
+"PASS: buffering control" print
+
+"Unix interop" test-section
+\ Get fd from stdout (fd 1)
+stdout stream->fd 1 "stdout fd is 1" assert=
+\ Get fd from stderr (fd 2)
+stderr stream->fd 2 "stderr fd is 2" assert=
+\ Get fd from file stream
+"tests/fixtures/hello.txt" read: stream-open
+dup stream->fd 0 > t "file fd is positive" assert=
+stream-close
+"PASS: stream->fd" print
+
+\ Create stream from fd (wrap stdout fd as a stream)
+1 write: fd->stream
+to-string "<stream fd write>" "fd->stream creates stream" assert=
+"PASS: fd->stream" print
+
+"Error cases" test-section
+\ FileNotFound error
+[ "/nonexistent/path/file.txt" read: stream-open ]
+[ drop "PASS: FileNotFound error for nonexistent file" print ]
+recover
+
+\ ClosedStream error on close
+[ stdout dup stream-close stream-close ]
+[ drop "PASS: ClosedStream error on double close" print ]
+recover
+
+\ ClosedStream error on write
+[ stdout dup stream-close "test" stream-write ]
+[ drop "PASS: ClosedStream error on write to closed stream" print ]
+recover
+
+\ ClosedStream error on flush
+[ stdout dup stream-close stream-flush ]
+[ drop "PASS: ClosedStream error on flush closed stream" print ]
+recover
+
+\ ClosedStream error on read
+[ "tests/fixtures/hello.txt" read: stream-open dup stream-close 10 stream-read ]
+[ drop "PASS: ClosedStream error on read from closed stream" print ]
+recover
+
+\ ClosedStream error on read-line
+[ "tests/fixtures/hello.txt" read: stream-open dup stream-close stream-read-line ]
+[ drop "PASS: ClosedStream error on read-line from closed stream" print ]
+recover
+
+\ ClosedStream error on read-all
+[ "tests/fixtures/hello.txt" read: stream-open dup stream-close stream-read-all ]
+[ drop "PASS: ClosedStream error on read-all from closed stream" print ]
+recover
+
+"All stream tests complete!" print

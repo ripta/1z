@@ -11,6 +11,9 @@ const Vector = value_mod.Vector;
 const ByteArray = value_mod.ByteArray;
 const Set = value_mod.Set;
 const MutableMap = value_mod.MutableMap;
+const Stream = value_mod.Stream;
+const StreamMode = value_mod.StreamMode;
+const BufferingMode = value_mod.BufferingMode;
 const ErrorObject = value_mod.ErrorObject;
 const StackFrame = value_mod.StackFrame;
 
@@ -25,19 +28,31 @@ const parser = @import("parser.zig");
 const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
 
 pub const InterpreterError = error{
+    // General error types
     StackUnderflow,
     TypeError,
+    NoTokenizerAvailable,
+    // Error handling types
+    RethrowError,
+    // Stack effect error types
+    StackEffectMismatch,
+    // Arithmetic error types
     DivisionByZero,
     IntegerOverflow,
+    // File error types
     FileNotFound,
     FileReadError,
-    NoTokenizerAvailable,
+    // Hash table error types
     InvalidHashSyntax,
-    RethrowError,
-    StackEffectMismatch,
+    // Sequence error types
     IndexOutOfBounds,
     EmptySequence,
     KeyNotFound,
+    // I/O error types
+    IOError,
+    ClosedStream,
+    PermissionDenied,
+    NotSeekable,
 };
 
 /// Helper to create a stack effect from a raw string at runtime.
@@ -132,20 +147,24 @@ const Primitive = struct {
 };
 
 const primitives = [_]Primitive{
+    // Stack manipulation primitives
     .{ .name = "dup", .stack_effect = "a -- a a", .func = nativeDup },
     .{ .name = "drop", .stack_effect = "a --", .func = nativeDrop },
     .{ .name = "swap", .stack_effect = "a b -- b a", .func = nativeSwap },
     .{ .name = "over", .stack_effect = "a b -- a b a", .func = nativeOver },
     .{ .name = "dip", .stack_effect = "x quot -- x", .func = nativeDip },
     .{ .name = "wipe", .stack_effect = "... --", .func = nativeWipe },
+    // Integer arithmetic primitives
     .{ .name = "+", .stack_effect = "a b -- a+b", .func = nativeAdd },
     .{ .name = "-", .stack_effect = "a b -- a-b", .func = nativeSub },
     .{ .name = "*", .stack_effect = "a b -- a*b", .func = nativeMul },
     .{ .name = "/", .stack_effect = "a b -- a/b", .func = nativeDiv },
     .{ .name = "%", .stack_effect = "a b -- a%b", .func = nativeMod },
+    // Integer arithmetic with wraparound
     .{ .name = "+%", .stack_effect = "a b -- a+b", .func = nativeAddWrap },
     .{ .name = "-%", .stack_effect = "a b -- a-b", .func = nativeSubWrap },
     .{ .name = "*%", .stack_effect = "a b -- a*b", .func = nativeMulWrap },
+    // Control flow, constants, and comparators
     .{ .name = "call", .stack_effect = "quot --", .func = nativeCall },
     .{ .name = ";", .stack_effect = "name quot --", .func = nativeSemicolon },
     .{ .name = "t", .stack_effect = "-- t", .func = nativeTrue },
@@ -154,18 +173,24 @@ const primitives = [_]Primitive{
     .{ .name = "<", .stack_effect = "a b -- ?", .func = nativeLt },
     .{ .name = ">", .stack_effect = "a b -- ?", .func = nativeGt },
     .{ .name = "if", .stack_effect = "? true-quot false-quot --", .func = nativeIf },
+    // String manipulation
     .{ .name = "print", .stack_effect = "str --", .func = nativePrint },
     .{ .name = "to-string", .stack_effect = "value -- string", .func = nativeToString },
     .{ .name = ">string", .stack_effect = "value -- string", .func = nativeAsString },
     .{ .name = ">bytes", .stack_effect = "string -- byte-array", .func = nativeToBytes },
     .{ .name = "bytes>", .stack_effect = "byte-array -- string", .func = nativeBytesToString },
+    // Documentation
     .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
+    // Error handling
     .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ) --", .func = nativeRecover },
     .{ .name = "cleanup", .stack_effect = "body-quot cleanup-quot --", .func = nativeCleanup },
     .{ .name = "rethrow", .stack_effect = "error --", .func = nativeRethrow },
+    // Library loading
     .{ .name = "load", .stack_effect = "filename --", .func = nativeLoad },
+    // Parse-time primitives
     .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTime },
     .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .func = nativeParseUntil },
+    // Data structure creation and manipulation
     .{ .name = "make-hash", .stack_effect = "quotation -- hash", .func = nativeMakeHash },
     .{ .name = "make-vector", .stack_effect = "quotation -- vector", .func = nativeMakeVector },
     .{ .name = "make-byte-array", .stack_effect = "quotation -- byte-array", .func = nativeMakeByteArray },
@@ -174,18 +199,23 @@ const primitives = [_]Primitive{
     .{ .name = "@set!", .stack_effect = "mmap key value -- mmap", .func = nativeAtSetMut },
     .{ .name = "@remove!", .stack_effect = "mmap key -- mmap", .func = nativeAtRemoveMut },
     .{ .name = "1array", .stack_effect = "elem -- array", .func = native1Array },
+    // Functional programming primitives
     .{ .name = "curry", .stack_effect = "x quot -- quot'", .func = nativeCurry },
     .{ .name = "compose", .stack_effect = "quot1 quot2 -- quot'", .func = nativeCompose },
+    // Benchmarking
     .{ .name = "benchmark", .stack_effect = "quot -- hash", .func = nativeBenchmark },
+    // Sequence queries
     .{ .name = "#len", .stack_effect = "seq -- n", .func = nativeLen },
     .{ .name = "#nth", .stack_effect = "seq n -- elem", .func = nativeNth },
     .{ .name = "#first", .stack_effect = "seq -- elem", .func = nativeFirst },
     .{ .name = "#last", .stack_effect = "seq -- elem", .func = nativeLast },
+    // Associative operations
     .{ .name = "@get", .stack_effect = "assoc key -- value", .func = nativeAtGet },
     .{ .name = "@has?", .stack_effect = "assoc key -- ?", .func = nativeAtHas },
     .{ .name = "@set", .stack_effect = "assoc key value -- assoc'", .func = nativeAtSet },
     .{ .name = "@keys", .stack_effect = "assoc -- array", .func = nativeAtKeys },
     .{ .name = "@values", .stack_effect = "assoc -- array", .func = nativeAtValues },
+    // Sequence operations
     .{ .name = "#each", .stack_effect = "seq quot: ( elem -- ) --", .func = nativeEach },
     .{ .name = "#map", .stack_effect = "seq quot: ( elem -- elem' ) -- seq'", .func = nativeMap },
     .{ .name = "#filter", .stack_effect = "seq quot: ( elem -- ? ) -- seq'", .func = nativeFilter },
@@ -194,14 +224,36 @@ const primitives = [_]Primitive{
     .{ .name = "#append", .stack_effect = "seq1 seq2 -- seq", .func = nativeAppend },
     .{ .name = "#append!", .stack_effect = "vec seq -- vec", .func = nativeAppendMut },
     .{ .name = "#prepend", .stack_effect = "seq1 seq2 -- seq", .func = nativePrepend },
+    // Mutable vector operations
     .{ .name = "#push!", .stack_effect = "vec elem -- vec", .func = nativePushMut },
     .{ .name = "#pop!", .stack_effect = "vec -- elem", .func = nativePopMut },
+    // Set operations
     .{ .name = "@in?", .stack_effect = "set value -- ?", .func = nativeAtIn },
     .{ .name = "@adjoin", .stack_effect = "set value -- set'", .func = nativeAtAdjoin },
     .{ .name = "@remove", .stack_effect = "set value -- set'", .func = nativeAtRemove },
     .{ .name = "@union", .stack_effect = "set1 set2 -- set'", .func = nativeAtUnion },
     .{ .name = "@intersection", .stack_effect = "set1 set2 -- set'", .func = nativeAtIntersection },
     .{ .name = "@difference", .stack_effect = "set1 set2 -- set'", .func = nativeAtDifference },
+    // Stream I/O primitives
+    .{ .name = "stdin", .stack_effect = "-- stream", .func = nativeStdin },
+    .{ .name = "stdout", .stack_effect = "-- stream", .func = nativeStdout },
+    .{ .name = "stderr", .stack_effect = "-- stream", .func = nativeStderr },
+    .{ .name = "stream-open", .stack_effect = "path mode -- stream", .func = nativeStreamOpen },
+    .{ .name = "stream-close", .stack_effect = "stream --", .func = nativeStreamClose },
+    .{ .name = "stream-write", .stack_effect = "stream bytes -- n", .func = nativeStreamWrite },
+    .{ .name = "stream-flush", .stack_effect = "stream --", .func = nativeStreamFlush },
+    .{ .name = "stream-read", .stack_effect = "stream n -- bytes", .func = nativeStreamRead },
+    .{ .name = "stream-read-line", .stack_effect = "stream -- str/f", .func = nativeStreamReadLine },
+    .{ .name = "stream-read-all", .stack_effect = "stream -- bytes", .func = nativeStreamReadAll },
+    .{ .name = "stream-tell", .stack_effect = "stream -- pos", .func = nativeStreamTell },
+    .{ .name = "stream-seek", .stack_effect = "stream pos --", .func = nativeStreamSeek },
+    .{ .name = "stream-seek-end", .stack_effect = "stream offset --", .func = nativeStreamSeekEnd },
+    .{ .name = "buffering-mode", .stack_effect = "stream -- symbol", .func = nativeBufferingMode },
+    .{ .name = "set-buffering-mode", .stack_effect = "stream symbol --", .func = nativeSetBufferingMode },
+    .{ .name = "stream->fd", .stack_effect = "stream -- int", .func = nativeStreamToFd },
+    .{ .name = "fd->stream", .stack_effect = "int mode -- stream", .func = nativeFdToStream },
+    .{ .name = ">char", .stack_effect = "codepoint -- str", .func = nativeChr },
+    .{ .name = ">codepoint", .stack_effect = "str -- codepoint", .func = nativeToCodepoint },
 };
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
@@ -2205,6 +2257,571 @@ fn nativePopMut(ctx: *Context) anyerror!void {
 }
 
 // =============================================================================
+// Stream I/O primitives
+// =============================================================================
+
+/// stdin ( -- stream ) - Push standard input stream
+fn nativeStdin(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const stream = alloc.create(Stream) catch return error.OutOfMemory;
+    stream.* = Stream{
+        .file = std.fs.File.stdin(),
+        .mode = .read,
+        .name = "stdin",
+        .buffering = .line,
+    };
+    try ctx.stack.push(.{ .stream = stream });
+}
+
+/// stdout ( -- stream ) - Push standard output stream
+fn nativeStdout(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const stream = alloc.create(Stream) catch return error.OutOfMemory;
+    stream.* = Stream{
+        .file = std.fs.File.stdout(),
+        .mode = .write,
+        .name = "stdout",
+        .buffering = .line,
+    };
+    try ctx.stack.push(.{ .stream = stream });
+}
+
+/// stderr ( -- stream ) - Push standard error stream
+fn nativeStderr(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const stream = alloc.create(Stream) catch return error.OutOfMemory;
+    stream.* = Stream{
+        .file = std.fs.File.stderr(),
+        .mode = .write,
+        .name = "stderr",
+        .buffering = .line,
+    };
+    try ctx.stack.push(.{ .stream = stream });
+}
+
+/// stream-open ( path mode -- stream ) - Open a file stream
+/// Mode symbols: read: write: append: read-write:
+fn nativeStreamOpen(ctx: *Context) anyerror!void {
+    const mode_sym = try popSymbol(ctx);
+    const path = try popString(ctx);
+    const alloc = ctx.quotationAllocator();
+
+    // Parse mode symbol
+    const mode: StreamMode = if (std.mem.eql(u8, mode_sym, "read"))
+        .read
+    else if (std.mem.eql(u8, mode_sym, "write"))
+        .write
+    else if (std.mem.eql(u8, mode_sym, "append"))
+        .append
+    else if (std.mem.eql(u8, mode_sym, "read-write"))
+        .read_write
+    else
+        return error.TypeError;
+
+    // Open file based on mode
+    const file = switch (mode) {
+        .read => std.fs.cwd().openFile(path, .{ .mode = .read_only }) catch |err| {
+            return switch (err) {
+                error.FileNotFound => error.FileNotFound,
+                error.AccessDenied => error.PermissionDenied,
+                else => error.IOError,
+            };
+        },
+        .write => std.fs.cwd().createFile(path, .{ .truncate = true }) catch |err| {
+            return switch (err) {
+                error.AccessDenied => error.PermissionDenied,
+                else => error.IOError,
+            };
+        },
+        .append => blk: {
+            const f = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch |open_err| {
+                // File doesn't exist, create it
+                if (open_err == error.FileNotFound) {
+                    break :blk std.fs.cwd().createFile(path, .{}) catch |err| {
+                        return switch (err) {
+                            error.AccessDenied => error.PermissionDenied,
+                            else => error.IOError,
+                        };
+                    };
+                }
+                return switch (open_err) {
+                    error.AccessDenied => error.PermissionDenied,
+                    else => error.IOError,
+                };
+            };
+            // Seek to end for append mode
+            f.seekFromEnd(0) catch return error.IOError;
+            break :blk f;
+        },
+        .read_write => blk: {
+            break :blk std.fs.cwd().openFile(path, .{ .mode = .read_write }) catch |err| {
+                // Try creating if doesn't exist
+                if (err == error.FileNotFound) {
+                    break :blk std.fs.cwd().createFile(path, .{ .read = true }) catch |create_err| {
+                        return switch (create_err) {
+                            error.AccessDenied => error.PermissionDenied,
+                            else => error.IOError,
+                        };
+                    };
+                }
+                return switch (err) {
+                    error.AccessDenied => error.PermissionDenied,
+                    else => error.IOError,
+                };
+            };
+        },
+    };
+
+    // Create stream object
+    const stream = alloc.create(Stream) catch return error.OutOfMemory;
+    const name_copy = alloc.dupe(u8, path) catch return error.OutOfMemory;
+    stream.* = Stream{
+        .file = file,
+        .mode = mode,
+        .name = name_copy,
+    };
+    try ctx.stack.push(.{ .stream = stream });
+}
+
+/// stream-close ( stream -- ) - Close a stream
+fn nativeStreamClose(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    // Don't actually close stdin/stdout/stderr
+    if (std.mem.eql(u8, stream.name, "stdin") or
+        std.mem.eql(u8, stream.name, "stdout") or
+        std.mem.eql(u8, stream.name, "stderr"))
+    {
+        stream.closed = true;
+        return;
+    }
+
+    stream.file.close();
+    stream.closed = true;
+}
+
+// =============================================================================
+// Stream writing primitives
+// =============================================================================
+
+/// stream-write ( stream bytes -- n ) - Write bytes to stream, return count written
+fn nativeStreamWrite(ctx: *Context) anyerror!void {
+    const bytes_val = try ctx.stack.pop();
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    // Get bytes to write - accept byte arrays or strings
+    const bytes: []const u8 = switch (bytes_val) {
+        .byte_array => |ba| ba.items,
+        .string => |s| s,
+        else => return error.TypeError,
+    };
+
+    // Write to file
+    const written = stream.file.write(bytes) catch |err| {
+        return switch (err) {
+            error.BrokenPipe => error.IOError,
+            error.ConnectionResetByPeer => error.IOError,
+            error.DiskQuota => error.IOError,
+            error.FileTooBig => error.IOError,
+            error.InputOutput => error.IOError,
+            error.NoSpaceLeft => error.IOError,
+            error.AccessDenied => error.PermissionDenied,
+            else => error.IOError,
+        };
+    };
+
+    try ctx.stack.push(.{ .integer = @intCast(written) });
+}
+
+/// stream-flush ( stream -- ) - Flush stream buffer
+fn nativeStreamFlush(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    // Note: Zig's std.fs.File doesn't have a direct flush method for unbuffered I/O
+    // For buffered streams, we'd need to sync. For now, use sync for file streams.
+    // Standard streams (stdout/stderr) are typically line-buffered or unbuffered.
+    if (!std.mem.eql(u8, stream.name, "stdin") and
+        !std.mem.eql(u8, stream.name, "stdout") and
+        !std.mem.eql(u8, stream.name, "stderr"))
+    {
+        stream.file.sync() catch |err| {
+            return switch (err) {
+                error.InputOutput => error.IOError,
+                error.AccessDenied => error.PermissionDenied,
+                else => error.IOError,
+            };
+        };
+    }
+}
+
+// =============================================================================
+// Stream reading primitives
+// =============================================================================
+
+/// stream-read ( stream n -- bytes ) - Read up to n bytes from stream
+fn nativeStreamRead(ctx: *Context) anyerror!void {
+    const n = try popInteger(ctx);
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    if (n < 0) {
+        return error.InvalidArgument;
+    }
+
+    const alloc = ctx.quotationAllocator();
+    const buffer = alloc.alloc(u8, @intCast(n)) catch return error.OutOfMemory;
+    defer alloc.free(buffer);
+
+    const bytes_read = stream.file.read(buffer) catch |err| {
+        return switch (err) {
+            error.InputOutput => error.IOError,
+            error.AccessDenied => error.PermissionDenied,
+            error.BrokenPipe => error.IOError,
+            error.ConnectionResetByPeer => error.IOError,
+            error.ConnectionTimedOut => error.IOError,
+            error.NotOpenForReading => error.PermissionDenied,
+            else => error.IOError,
+        };
+    };
+
+    const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+    ba.* = ByteArray{};
+    ba.ensureTotalCapacity(alloc, bytes_read) catch return error.OutOfMemory;
+    for (buffer[0..bytes_read]) |byte| {
+        ba.appendAssumeCapacity(byte);
+    }
+
+    try ctx.stack.push(.{ .byte_array = ba });
+}
+
+/// stream-read-line ( stream -- str/f ) - Read line (no newline), f at EOF
+fn nativeStreamReadLine(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    const alloc = ctx.quotationAllocator();
+    var line_buf: std.ArrayListUnmanaged(u8) = .{};
+    defer line_buf.deinit(alloc);
+
+    while (true) {
+        var byte_buf: [1]u8 = undefined;
+        const bytes_read = stream.file.read(&byte_buf) catch |err| {
+            return switch (err) {
+                error.InputOutput => error.IOError,
+                error.AccessDenied => error.PermissionDenied,
+                error.BrokenPipe => error.IOError,
+                error.ConnectionResetByPeer => error.IOError,
+                error.NotOpenForReading => error.PermissionDenied,
+                else => error.IOError,
+            };
+        };
+
+        if (bytes_read == 0) {
+            // No data read at all, return false for EOF
+            if (line_buf.items.len == 0) {
+                try ctx.stack.push(.{ .boolean = false });
+                return;
+            }
+            // Return what we have; last line without newline
+            break;
+        }
+
+        const byte = byte_buf[0];
+        if (byte == '\n') {
+            // End of line, sans newline
+            break;
+        }
+
+        // Handle \r\n by skipping \r if followed by \n
+        if (byte == '\r') {
+            var peek_buf: [1]u8 = undefined;
+            const peek_read = stream.file.read(&peek_buf) catch |err| {
+                return switch (err) {
+                    error.InputOutput => error.IOError,
+                    error.AccessDenied => error.PermissionDenied,
+                    else => error.IOError,
+                };
+            };
+            if (peek_read > 0 and peek_buf[0] == '\n') {
+                break;
+            }
+            line_buf.append(alloc, '\r') catch return error.OutOfMemory;
+            if (peek_read > 0) {
+                if (peek_buf[0] == '\n') {
+                    break;
+                }
+                line_buf.append(alloc, peek_buf[0]) catch return error.OutOfMemory;
+            }
+            continue;
+        }
+
+        line_buf.append(alloc, byte) catch return error.OutOfMemory;
+    }
+
+    const result = alloc.dupe(u8, line_buf.items) catch return error.OutOfMemory;
+    try ctx.stack.push(.{ .string = result });
+}
+
+/// stream-read-all ( stream -- bytes ) - Read all remaining content
+fn nativeStreamReadAll(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    const alloc = ctx.quotationAllocator();
+
+    // TODO(ripta): 10 MB seems reasonable, right?
+    const max_size: usize = 10 * 1024 * 1024;
+    var content: std.ArrayListUnmanaged(u8) = .{};
+    defer content.deinit(alloc);
+
+    var buffer: [4096]u8 = undefined;
+    while (true) {
+        const bytes_read = stream.file.read(&buffer) catch |err| {
+            return switch (err) {
+                error.InputOutput => error.IOError,
+                error.AccessDenied => error.PermissionDenied,
+                error.BrokenPipe => error.IOError,
+                error.ConnectionResetByPeer => error.IOError,
+                error.NotOpenForReading => error.PermissionDenied,
+                else => error.IOError,
+            };
+        };
+
+        // EOF?
+        if (bytes_read == 0) {
+            break;
+        }
+
+        if (content.items.len + bytes_read > max_size) {
+            return error.OutOfMemory;
+        }
+
+        content.appendSlice(alloc, buffer[0..bytes_read]) catch return error.OutOfMemory;
+    }
+
+    const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+    ba.* = ByteArray{};
+    ba.ensureTotalCapacity(alloc, content.items.len) catch return error.OutOfMemory;
+    for (content.items) |byte| {
+        ba.appendAssumeCapacity(byte);
+    }
+
+    try ctx.stack.push(.{ .byte_array = ba });
+}
+
+// =============================================================================
+// Stream positioning primitives
+// =============================================================================
+
+/// stream-tell ( stream -- pos ) - Get current stream position
+fn nativeStreamTell(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    const pos = stream.file.getPos() catch |err| {
+        return switch (err) {
+            error.Unseekable => error.NotSeekable,
+            else => error.IOError,
+        };
+    };
+
+    try ctx.stack.push(.{ .integer = @intCast(pos) });
+}
+
+/// stream-seek ( stream pos -- ) - Seek to absolute position
+fn nativeStreamSeek(ctx: *Context) anyerror!void {
+    const pos = try popInteger(ctx);
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    if (pos < 0) {
+        return error.InvalidArgument;
+    }
+
+    stream.file.seekTo(@intCast(pos)) catch |err| {
+        return switch (err) {
+            error.Unseekable => error.NotSeekable,
+            else => error.IOError,
+        };
+    };
+}
+
+/// stream-seek-end ( stream offset -- ) - Seek relative to end of stream
+fn nativeStreamSeekEnd(ctx: *Context) anyerror!void {
+    const offset = try popInteger(ctx);
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    stream.file.seekFromEnd(offset) catch |err| {
+        return switch (err) {
+            error.Unseekable => error.NotSeekable,
+            else => error.IOError,
+        };
+    };
+}
+
+// =============================================================================
+// Buffering control primitives
+// =============================================================================
+
+/// buffering-mode ( stream -- symbol ) - Get stream buffering mode
+fn nativeBufferingMode(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    try ctx.stack.push(.{ .symbol = stream.buffering.toSymbol() });
+}
+
+/// set-buffering-mode ( stream symbol -- ) - Set stream buffering mode
+fn nativeSetBufferingMode(ctx: *Context) anyerror!void {
+    const mode_sym = try popSymbol(ctx);
+    const stream = try popStream(ctx);
+
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    const mode: BufferingMode = if (std.mem.eql(u8, mode_sym, "none"))
+        .none
+    else if (std.mem.eql(u8, mode_sym, "line"))
+        .line
+    else if (std.mem.eql(u8, mode_sym, "block"))
+        .block
+    else
+        return error.InvalidArgument;
+
+    stream.buffering = mode;
+}
+
+// =============================================================================
+// Unix interop primitives
+// =============================================================================
+
+const builtin = @import("builtin");
+const native_os = builtin.os.tag;
+
+/// stream->fd ( stream -- int ) - Get file descriptor from stream (Unix only)
+fn nativeStreamToFd(ctx: *Context) anyerror!void {
+    if (native_os == .windows) {
+        return error.UnsupportedOperation;
+    }
+
+    const stream = try popStream(ctx);
+    if (stream.closed) {
+        return error.ClosedStream;
+    }
+
+    const fd: i64 = @intCast(stream.file.handle);
+    try ctx.stack.push(.{ .integer = fd });
+}
+
+/// fd->stream ( int mode -- stream ) - Create stream from file descriptor (Unix only)
+fn nativeFdToStream(ctx: *Context) anyerror!void {
+    if (native_os == .windows) {
+        return error.UnsupportedOperation;
+    }
+
+    const mode_sym = try popSymbol(ctx);
+    const fd_val = try popInteger(ctx);
+
+    if (fd_val < 0) {
+        return error.InvalidArgument;
+    }
+
+    const mode: StreamMode = if (std.mem.eql(u8, mode_sym, "read"))
+        .read
+    else if (std.mem.eql(u8, mode_sym, "write"))
+        .write
+    else if (std.mem.eql(u8, mode_sym, "append"))
+        .append
+    else if (std.mem.eql(u8, mode_sym, "read-write"))
+        .read_write
+    else
+        return error.InvalidArgument;
+
+    const alloc = ctx.quotationAllocator();
+    const stream = alloc.create(Stream) catch return error.OutOfMemory;
+    stream.* = Stream{
+        .file = std.fs.File{ .handle = @intCast(fd_val) },
+        .mode = mode,
+        .name = "fd",
+    };
+    try ctx.stack.push(.{ .stream = stream });
+}
+
+// =============================================================================
+// Character conversion primitives
+// =============================================================================
+
+/// >char ( codepoint -- str ) - Convert Unicode codepoint to single-character string
+fn nativeChr(ctx: *Context) anyerror!void {
+    const codepoint_val = try popInteger(ctx);
+    if (codepoint_val < 0 or codepoint_val > 0x10FFFF) {
+        return error.InvalidArgument;
+    }
+
+    const codepoint: u21 = @intCast(codepoint_val);
+    if (codepoint >= 0xD800 and codepoint <= 0xDFFF) {
+        return error.InvalidArgument;
+    }
+
+    const alloc = ctx.quotationAllocator();
+    var buf: [4]u8 = undefined;
+    const len = std.unicode.utf8Encode(codepoint, &buf) catch return error.InvalidArgument;
+
+    const str = alloc.dupe(u8, buf[0..len]) catch return error.OutOfMemory;
+    try ctx.stack.push(.{ .string = str });
+}
+
+/// >codepoint ( str -- int ) - Convert single-character string to Unicode codepoint
+fn nativeToCodepoint(ctx: *Context) anyerror!void {
+    const str = try popString(ctx);
+    var iter = std.unicode.Utf8Iterator{ .bytes = str, .i = 0 };
+    const first_codepoint = iter.nextCodepoint() orelse {
+        return error.InvalidArgument;
+    };
+
+    if (iter.nextCodepoint() != null) {
+        return error.InvalidArgument;
+    }
+
+    try ctx.stack.push(.{ .integer = @intCast(first_codepoint) });
+}
+
+// =============================================================================
 // Helper functions
 // =============================================================================
 
@@ -2212,7 +2829,7 @@ fn popInteger(ctx: *Context) !i64 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .integer => |i| i,
-        .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map => error.TypeError,
+        .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2222,7 +2839,7 @@ fn popBoolean(ctx: *Context) !bool {
     return switch (val) {
         .boolean => |b| b,
         .integer => |i| i != 0,
-        .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map => error.TypeError,
+        .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2231,7 +2848,7 @@ fn popQuotation(ctx: *Context) !Quotation {
     const val = try ctx.stack.pop();
     return switch (val) {
         .quotation => |q| q,
-        .integer, .boolean, .string, .symbol, .array, .hash, .vector, .byte_array, .set, .mutable_map => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .hash, .vector, .byte_array, .set, .mutable_map, .stream => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2240,7 +2857,7 @@ fn popSymbol(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .symbol => |s| s,
-        .integer, .boolean, .string, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map => error.TypeError,
+        .integer, .boolean, .string, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2249,7 +2866,7 @@ fn popString(ctx: *Context) ![]const u8 {
     const val = try ctx.stack.pop();
     return switch (val) {
         .string => |s| s,
-        .integer, .boolean, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map => error.TypeError,
+        .integer, .boolean, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2258,7 +2875,7 @@ fn popStackEffect(ctx: *Context) !StackEffect {
     const val = try ctx.stack.pop();
     return switch (val) {
         .stack_effect => |se| se,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream => error.TypeError,
         .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2267,7 +2884,7 @@ fn popVector(ctx: *Context) !*Vector {
     const val = try ctx.stack.pop();
     return switch (val) {
         .vector => |v| v,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .byte_array, .set, .mutable_map => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .byte_array, .set, .mutable_map, .stream => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }
@@ -2276,7 +2893,16 @@ fn popByteArray(ctx: *Context) !*ByteArray {
     const val = try ctx.stack.pop();
     return switch (val) {
         .byte_array => |b| b,
-        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .set, .mutable_map => error.TypeError,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .set, .mutable_map, .stream => error.TypeError,
+        .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+    };
+}
+
+fn popStream(ctx: *Context) !*Stream {
+    const val = try ctx.stack.pop();
+    return switch (val) {
+        .stream => |s| s,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }

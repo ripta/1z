@@ -6,13 +6,51 @@ const Tokenizer = tokenizer_mod.Tokenizer;
 const Token = tokenizer_mod.Token;
 const parseInteger = tokenizer_mod.parseInteger;
 const parseString = tokenizer_mod.parseString;
+
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const Instruction = value_mod.Instruction;
 const Quotation = value_mod.Quotation;
+
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
+
 const Context = @import("context.zig").Context;
+
+/// Process escape sequences in a string and allocate the result; supports
+/// Zig-compatible escape sequences: \n, \r, \t, \\, \", \', \xHH, \u{HHHH}
+fn processEscapes(allocator: Allocator, input: []const u8) ![]u8 {
+    const result = try allocator.alloc(u8, input.len);
+    var out_idx: usize = 0;
+
+    var i: usize = 0;
+    while (i < input.len) {
+        if (input[i] == '\\') {
+            const parsed = std.zig.string_literal.parseEscapeSequence(input, &i);
+            switch (parsed) {
+                .success => |codepoint| {
+                    var buf: [4]u8 = undefined;
+                    const len = std.unicode.utf8Encode(codepoint, &buf) catch 1;
+                    @memcpy(result[out_idx..][0..len], buf[0..len]);
+                    out_idx += len;
+                },
+                .failure => {
+                    // Invalid escape - keep backslash
+                    result[out_idx] = input[i];
+                    out_idx += 1;
+                    i += 1;
+                },
+            }
+            continue;
+        }
+
+        result[out_idx] = input[i];
+        out_idx += 1;
+        i += 1;
+    }
+
+    return allocator.realloc(result, out_idx);
+}
 
 /// Get the next non-comment, non-newline token from the tokenizer.
 fn nextToken(tokenizer: *Tokenizer) ?Token {
@@ -71,7 +109,7 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
         } else if (parseInteger(token)) |n| {
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .integer = n } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
-            const s_copy = allocator.dupe(u8, s) catch return ParseError.OutOfMemory;
+            const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (token.len > 1 and token[token.len - 1] == ':') {
             const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
@@ -158,7 +196,7 @@ pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Contex
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .integer = n } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
             is_first_token = false;
-            const s_copy = allocator.dupe(u8, s) catch return ParseError.OutOfMemory;
+            const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line }) catch return ParseError.OutOfMemory;
         } else if (token.len > 1 and token[token.len - 1] == ':') {
             is_first_token = false;
@@ -293,7 +331,7 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer) ParseError![]cons
         } else if (parseInteger(token)) |n| {
             values.append(allocator, .{ .integer = n }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
-            const s_copy = allocator.dupe(u8, s) catch return ParseError.OutOfMemory;
+            const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
             values.append(allocator, .{ .string = s_copy }) catch return ParseError.OutOfMemory;
         } else if (token.len > 1 and token[token.len - 1] == ':') {
             const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;

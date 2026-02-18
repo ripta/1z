@@ -79,10 +79,10 @@ pub const Tokenizer = struct {
         // Line comment: `\ ` followed by space/tab, or `\` at end-of-line/input
         if (self.input[self.pos] == '\\' and
             (self.pos + 1 >= self.input.len or
-            self.input[self.pos + 1] == ' ' or
-            self.input[self.pos + 1] == '\t' or
-            self.input[self.pos + 1] == '\n' or
-            self.input[self.pos + 1] == '\r'))
+                self.input[self.pos + 1] == ' ' or
+                self.input[self.pos + 1] == '\t' or
+                self.input[self.pos + 1] == '\n' or
+                self.input[self.pos + 1] == '\r'))
         {
             // Consume until end of line or end of input
             while (self.pos < self.input.len and self.input[self.pos] != '\n') {

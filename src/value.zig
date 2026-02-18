@@ -43,6 +43,47 @@ pub const Set = std.ArrayHashMapUnmanaged(Value, void, ValueContext, true);
 /// MutableMap type for M{ } literals - mutable key-value store.
 pub const MutableMap = std.StringHashMapUnmanaged(Value);
 
+/// StreamMode indicates how a stream was opened.
+pub const StreamMode = enum {
+    read,
+    write,
+    append,
+    read_write,
+
+    pub fn toString(self: StreamMode) []const u8 {
+        return switch (self) {
+            .read => "read",
+            .write => "write",
+            .append => "append",
+            .read_write => "read-write",
+        };
+    }
+};
+
+/// BufferingMode indicates how a stream is buffered.
+pub const BufferingMode = enum {
+    none,
+    line,
+    block,
+
+    pub fn toSymbol(self: BufferingMode) []const u8 {
+        return switch (self) {
+            .none => "none",
+            .line => "line",
+            .block => "block",
+        };
+    }
+};
+
+/// Stream wraps a file handle for I/O operations.
+pub const Stream = struct {
+    file: std.fs.File,
+    mode: StreamMode,
+    closed: bool = false,
+    name: []const u8, // For display: "stdout", "stderr", file path
+    buffering: BufferingMode = .none,
+};
+
 /// StackFrame represents a single frame in a stack trace.
 pub const StackFrame = struct {
     word_name: []const u8,
@@ -128,6 +169,7 @@ pub const Value = union(enum) {
     byte_array: *ByteArray,
     set: *Set,
     mutable_map: *MutableMap,
+    stream: *Stream,
     stack_effect: StackEffect,
     parse_time_marker: void, // Marker for parse-time word definitions
     error_value: ErrorObject,
@@ -204,6 +246,13 @@ pub const Value = union(enum) {
                     try writer.writeAll(" ");
                 }
                 try writer.writeAll("}");
+            },
+            .stream => |s| {
+                if (s.closed) {
+                    try writer.print("<stream {s} (closed)>", .{s.name});
+                } else {
+                    try writer.print("<stream {s} {s}>", .{ s.name, s.mode.toString() });
+                }
             },
             .stack_effect => |effect| try effect.write(writer),
             .parse_time_marker => try writer.writeAll("parse-time"),
@@ -283,6 +332,8 @@ pub const Value = union(enum) {
                 }
                 return true;
             },
+            // Streams are equal if they refer to the same underlying file handle
+            .stream => |a| a == other.stream,
             .stack_effect => |a| a.eql(other.stack_effect),
             .parse_time_marker => true, // All parse_time_markers are equal
             .error_value => |a| a.eql(other.error_value),
@@ -362,6 +413,11 @@ pub const Value = union(enum) {
                     combined ^= pair_hasher.final();
                 }
                 hasher.update(std.mem.asBytes(&combined));
+            },
+            // Streams hash by pointer identity (same as equality)
+            .stream => |s| {
+                const ptr_val = @intFromPtr(s);
+                hasher.update(std.mem.asBytes(&ptr_val));
             },
             .stack_effect => |effect| {
                 for (effect.inputs) |param| {

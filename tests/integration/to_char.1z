@@ -1,0 +1,84 @@
+\ Tests for >char primitive (codepoint to string conversion)
+
+"lib/testing.1z" load
+
+"Basic ASCII" test-section
+65 >char "A" ">char 65 = A" assert=
+97 >char "a" ">char 97 = a" assert=
+48 >char "0" ">char 48 = 0" assert=
+32 >char " " ">char 32 = space" assert=
+10 >char #len 1 ">char 10 = newline (1 codepoint)" assert=
+
+"Unicode characters" test-section
+\ #len counts codepoints, >bytes #len counts bytes
+0x00E9 >char #len 1 "e-acute is 1 codepoint" assert=
+0x00E9 >char >bytes #len 2 "e-acute is 2 bytes" assert=
+0x4E2D >char #len 1 "CJK is 1 codepoint" assert=
+0x4E2D >char >bytes #len 3 "CJK is 3 bytes" assert=
+0x1F600 >char #len 1 "emoji is 1 codepoint" assert=
+0x1F600 >char >bytes #len 4 "emoji is 4 bytes" assert=
+
+"Boundary values (byte counts)" test-section
+0 >char >bytes #len 1 ">char 0 = 1 byte" assert=
+127 >char >bytes #len 1 ">char 127 = 1 byte" assert=
+128 >char >bytes #len 2 ">char 128 = 2 bytes" assert=
+0x7FF >char >bytes #len 2 ">char 0x7FF = 2 bytes" assert=
+0x800 >char >bytes #len 3 ">char 0x800 = 3 bytes" assert=
+0xFFFF >char >bytes #len 3 ">char 0xFFFF = 3 bytes" assert=
+0x10000 >char >bytes #len 4 ">char 0x10000 = 4 bytes" assert=
+0x10FFFF >char >bytes #len 4 ">char max codepoint = 4 bytes" assert=
+
+"Error cases" test-section
+[ -1 >char ]
+[ drop "PASS: negative codepoint rejected" print ]
+recover
+
+[ 0x110000 >char ]
+[ drop "PASS: codepoint > max rejected" print ]
+recover
+
+[ 0xD800 >char ]
+[ drop "PASS: surrogate codepoint rejected" print ]
+recover
+
+"All >char tests complete!" print
+
+\ =============================================================================
+\ Tests for >codepoint primitive (string to codepoint conversion)
+\ =============================================================================
+
+"Basic ASCII >codepoint" test-section
+"A" >codepoint 65 ">codepoint A = 65" assert=
+"a" >codepoint 97 ">codepoint a = 97" assert=
+"0" >codepoint 48 ">codepoint 0 = 48" assert=
+" " >codepoint 32 ">codepoint space = 32" assert=
+
+"Unicode >codepoint" test-section
+0x00E9 >char >codepoint 0x00E9 "e-acute roundtrip" assert=
+0x4E2D >char >codepoint 0x4E2D "CJK roundtrip" assert=
+0x1F600 >char >codepoint 0x1F600 "emoji roundtrip" assert=
+
+"Boundary values >codepoint" test-section
+0 >char >codepoint 0 "null char roundtrip" assert=
+127 >char >codepoint 127 "max ASCII roundtrip" assert=
+128 >char >codepoint 128 "first 2-byte roundtrip" assert=
+0x7FF >char >codepoint 0x7FF "max 2-byte roundtrip" assert=
+0x800 >char >codepoint 0x800 "first 3-byte roundtrip" assert=
+0xFFFF >char >codepoint 0xFFFF "max 3-byte roundtrip" assert=
+0x10000 >char >codepoint 0x10000 "first 4-byte roundtrip" assert=
+0x10FFFF >char >codepoint 0x10FFFF "max codepoint roundtrip" assert=
+
+">codepoint error cases" test-section
+[ "" >codepoint ]
+[ drop "PASS: empty string rejected" print ]
+recover
+
+[ "ab" >codepoint ]
+[ drop "PASS: multi-char string rejected" print ]
+recover
+
+[ "hello" >codepoint ]
+[ drop "PASS: 5-char string rejected" print ]
+recover
+
+"All >codepoint tests complete!" print
