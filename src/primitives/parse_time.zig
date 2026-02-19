@@ -178,6 +178,20 @@ fn nativeParseLiteral(ctx: *Context) anyerror!void {
             return;
         }
 
+        if (ctx.lookupWord(token)) |word| {
+            if (word.parse_time) {
+                const pre_depth = ctx.stack.depth();
+                switch (word.action) {
+                    .native => |func| try func(ctx),
+                    .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
+                }
+                const post_depth = ctx.stack.depth();
+                if (post_depth > pre_depth) return;
+                helpers.setErrorContext(ctx, "parse-literal: parse-time word '{s}' did not produce a value", .{token});
+                return error.TypeMismatch;
+            }
+        }
+
         helpers.setErrorContext(ctx, "parse-literal: not a recognized literal: {s}", .{token});
         return error.TypeMismatch;
     }
