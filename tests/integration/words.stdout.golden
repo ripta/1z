@@ -57,6 +57,7 @@ Stack: [ ]
 >float ( x -- f )
 >integer ( f -- n )
 >iterator ( seq -- iterator )
+>module ( name hashtable -- module )
 >quotation ( name -- quotation )
 >string ( value -- string )
 >string-base ( n base -- str )

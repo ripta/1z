@@ -15,12 +15,54 @@ const popString = helpers.popString;
 pub const primitives = [_]Primitive{
     .{ .name = "load", .stack_effect = "filename -- module", .doc = "Load a 1z source file and return a module with its definitions.", .func = nativeLoad },
     .{ .name = "import", .stack_effect = "module --", .doc = "Bring module words into the current scope.", .func = nativeImport },
+    .{ .name = ">module", .stack_effect = "name hashtable -- module", .doc = "Convert a name string and a hashtable of quotations into a module value suitable for import.", .func = nativeToModule },
     .{ .name = "1array", .stack_effect = "elem -- array", .doc = "Wrap element in a single-element array.", .func = native1Array },
     .{ .name = "command-line-args", .stack_effect = "-- args", .doc = "Push program arguments as an array of strings.", .func = nativeCommandLineArgs },
     .{ .name = "sys-exit", .stack_effect = "code --", .doc = "Exit the process with the given exit code.", .func = nativeSysExit },
     .{ .name = "add-load-path", .stack_effect = "path --", .doc = "Add a directory to the load path search list.", .func = nativeAddLoadPath },
     .{ .name = "(trampoline)", .stack_effect = "*unsafe-fn-ptr* --", .doc = "Call a native function via pointer. Internal use only.", .func = nativeTrampoline },
 };
+
+fn nativeToModule(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const ht_val = try ctx.stack.pop();
+    const name = try popString(ctx);
+
+    const entries: *std.StringHashMapUnmanaged(Value) = switch (ht_val) {
+        .hash => |h| h,
+        .mutable_map => |m| m,
+        else => {
+            helpers.setTypeMismatchError(ctx, "hashtable", ht_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const module = try alloc.create(Module);
+    module.* = .{
+        .name = try alloc.dupe(u8, name),
+        .words = .{},
+    };
+
+    var iter = entries.iterator();
+    while (iter.next()) |entry| {
+        const val = entry.value_ptr.*;
+        const quot = switch (val) {
+            .quotation => |q| q,
+            else => {
+                const type_name = helpers.valueTypeName(val);
+                const msg = std.fmt.allocPrint(alloc, ">module: value for key '{s}' must be a quotation, got {s}", .{ entry.key_ptr.*, type_name }) catch ">module: value must be a quotation";
+                ctx.pending_error_message = msg;
+                return error.TypeMismatch;
+            },
+        };
+        try module.words.put(alloc, entry.key_ptr.*, .{
+            .stack_effect = if (quot.effect) |eff| eff.* else null,
+            .action = .{ .compound = quot.instructions },
+        });
+    }
+
+    try ctx.stack.push(.{ .module = module });
+}
 
 /// Check for if input refers to a file (contains '/' or ends with '.1z'),
 /// or if it is a bare name to search for in load paths.
