@@ -229,15 +229,32 @@ pub fn setTypeMismatchError(ctx: *Context, expected: []const u8, val: Value) voi
 // Type-safe poppers
 // =============================================================================
 
-pub fn popFixnum(ctx: *Context) !i64 {
+/// Generic type-safe pop: extract a single union variant or report a type mismatch.
+pub fn popAs(comptime tag: std.meta.Tag(Value), ctx: *Context) !std.meta.TagPayload(Value, tag) {
     const val = try ctx.stack.pop();
-    return switch (val) {
-        .fixnum => |i| i,
+    switch (val) {
+        tag => |payload| return payload,
         else => {
-            setTypeMismatchError(ctx, "fixnum", val);
+            setTypeMismatchError(ctx, comptime tagDisplayName(tag), val);
             return error.TypeMismatch;
         },
-    };
+    }
+}
+
+fn tagDisplayName(comptime tag: std.meta.Tag(Value)) []const u8 {
+    comptime {
+        const name = @tagName(tag);
+        var buf: [name.len]u8 = undefined;
+        for (name, 0..) |c, i| {
+            buf[i] = if (c == '_') '-' else c;
+        }
+        const final = buf;
+        return &final;
+    }
+}
+
+pub fn popFixnum(ctx: *Context) !i64 {
+    return popAs(.fixnum, ctx);
 }
 
 /// Pop a boolean value.
@@ -251,157 +268,59 @@ pub fn popBoolean(ctx: *Context) !bool {
 }
 
 pub fn popQuotation(ctx: *Context) !Quotation {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .quotation => |q| q,
-        else => {
-            setTypeMismatchError(ctx, "quotation", val);
-            return error.TypeMismatch;
-        },
-    };
+    return popAs(.quotation, ctx);
 }
 
 pub fn popSymbol(ctx: *Context) ![]const u8 {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .symbol => |s| s,
-        else => {
-            setTypeMismatchError(ctx, "symbol", val);
-            return error.TypeMismatch;
-        },
-    };
+    return popAs(.symbol, ctx);
 }
 
 pub fn popString(ctx: *Context) ![]const u8 {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .string => |s| s,
-        else => {
-            setTypeMismatchError(ctx, "string", val);
-            return error.TypeMismatch;
-        },
-    };
+    return popAs(.string, ctx);
 }
 
 pub fn popStackEffect(ctx: *Context) !StackEffect {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .stack_effect => |se| se,
-        else => {
-            setTypeMismatchError(ctx, "stack-effect", val);
-            return error.TypeMismatch;
-        },
-    };
+    return popAs(.stack_effect, ctx);
 }
 
 pub fn popVector(ctx: *Context) !*Vector {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .vector => |v| v,
-        else => {
-            setTypeMismatchError(ctx, "vector", val);
-            return error.TypeMismatch;
-        },
-    };
+    return popAs(.vector, ctx);
 }
 
 pub fn popByteArray(ctx: *Context) !*ByteArray {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .byte_array => |b| b,
-        else => {
-            setTypeMismatchError(ctx, "byte-array", val);
-            return error.TypeMismatch;
-        },
-    };
+    return popAs(.byte_array, ctx);
 }
 
 pub fn popStream(ctx: *Context) !*Stream {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .stream => |s| s,
-        else => {
-            setTypeMismatchError(ctx, "stream", val);
-            return error.TypeMismatch;
-        },
-    };
+    return popAs(.stream, ctx);
 }
 
 pub fn popResource(ctx: *Context) !*value_mod.Resource {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .resource => |r| r,
-        else => {
-            setTypeMismatchError(ctx, "resource", val);
-            return error.TypeMismatch;
-        },
-    };
+    return popAs(.resource, ctx);
 }
 
 pub fn popModule(ctx: *Context) !*Module {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .module => |m| m,
-        else => {
-            setTypeMismatchError(ctx, "module", val);
-            return error.TypeMismatch;
-        },
-    };
+    return popAs(.module, ctx);
 }
 
 pub fn popMarker(ctx: *Context) !*Marker {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .marker => |m| m,
-        else => {
-            setTypeMismatchError(ctx, "marker", val);
-            return error.TypeMismatch;
-        },
-    };
+    return popAs(.marker, ctx);
 }
 
 pub fn popStructType(ctx: *Context) !*StructType {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .struct_type => |st| st,
-        else => {
-            setTypeMismatchError(ctx, "struct-type", val);
-            return error.TypeMismatch;
-        },
-    };
+    return popAs(.struct_type, ctx);
 }
 
 pub fn popStructInstance(ctx: *Context) !*StructInstance {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .struct_instance => |si| si,
-        else => {
-            setTypeMismatchError(ctx, "struct-instance", val);
-            return error.TypeMismatch;
-        },
-    };
+    return popAs(.struct_instance, ctx);
 }
 
 pub fn popTask(ctx: *Context) !*Task {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .task => |t| t,
-        else => {
-            setTypeMismatchError(ctx, "task", val);
-            return error.TypeMismatch;
-        },
-    };
+    return popAs(.task, ctx);
 }
 
 pub fn popChannel(ctx: *Context) !*@import("../channel.zig").Channel {
-    const val = try ctx.stack.pop();
-    return switch (val) {
-        .channel => |ch| ch,
-        else => {
-            setTypeMismatchError(ctx, "channel", val);
-            return error.TypeMismatch;
-        },
-    };
+    return popAs(.channel, ctx);
 }
 
 // =============================================================================
