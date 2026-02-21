@@ -10,10 +10,7 @@ pub const any_sentinel = "*";
 /// Sentinel for unary dispatch (no second operand).
 pub const unary_sentinel = "";
 
-/// Returns the dispatch type name for a value.
-///
-/// TODO(ripta): Combine with `nativeTypeOf`? This mirrors it so dispatch names
-///              are consistent with `type-of`.
+/// Returns the dispatch type name for a value. Also used by `type-of`.
 pub fn dispatchTypeName(val: Value) []const u8 {
     return switch (val) {
         .tagged => |t| t.tag.name,
