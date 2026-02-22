@@ -56,7 +56,6 @@ Stack: [ ]
 >codepoint ( str -- int )
 >float ( x -- f )
 >integer ( f -- n )
->iterator ( seq -- iterator )
 >module ( name hashtable -- module )
 >quotation ( name -- quotation )
 >string ( value -- string )
@@ -232,6 +231,7 @@ yield ( -- )
 <rot- ( a b c -- b c a )
 >= ( a b -- ? )
 >hash
+>iterator ( seq-or-quot -- iterator )
 >option:some
 >result:err
 >result:ok

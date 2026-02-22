@@ -1,0 +1,94 @@
+\ Integration tests for callback iterators (quotation-based generators)
+
+use "testing" ;
+
+\ Helper: counter generator yielding 1, 2, 3 then stopping.
+\ Uses make-mutable-map at runtime to ensure each call gets a fresh state.
+counter-gen: ( -- quot ) [
+  [ n: 0 ] make-mutable-map
+  [
+    dup n: @get 1 +
+    dup 3 > [
+      2drop option:none
+    ] [
+      swap over n: swap @set! drop
+      >option:some
+    ] if
+  ] curry
+] ;
+
+\ Helper: infinite naturals generator (1, 2, 3, ...).
+naturals-gen: ( -- quot ) [
+  [ n: 0 ] make-mutable-map
+  [
+    dup n: @get 1 +
+    swap over n: swap @set! drop
+    >option:some
+  ] curry
+] ;
+
+"Basic callback iterator" test-section
+
+counter-gen >iterator #collect { 1 2 3 } "counter generator collects to array" assert=
+
+"Exhaustion behavior" test-section
+
+counter-gen >iterator
+dup #next? option:some? "first next? is some" assert-true
+dup #next? option:some? "second next? is some" assert-true
+dup #next? option:some? "third next? is some" assert-true
+dup #next? option:none? "fourth next? is none" assert-true
+#next? option:none? "fifth next? is still none" assert-true
+
+"#next? option values" test-section
+
+counter-gen >iterator
+dup #next? option:some> 1 "first value is 1" assert=
+dup #next? option:some> 2 "second value is 2" assert=
+dup #next? option:some> 3 "third value is 3" assert=
+#next? option:none? "after exhaustion returns none" assert-true
+
+"#each on callback iterator" test-section
+
+0 counter-gen >iterator [ + ] #each 6 "each sums callback iter values" assert=
+
+"#map on callback iterator" test-section
+
+counter-gen >iterator [ 10 * ] #map #collect { 10 20 30 } "map over callback iter" assert=
+
+"#filter on callback iterator" test-section
+
+counter-gen >iterator [ 2 > ] #filter #collect { 3 } "filter callback iter" assert=
+
+"#take on infinite callback iterator" test-section
+
+naturals-gen >iterator 5 #take #collect { 1 2 3 4 5 } "take 5 from infinite generator" assert=
+
+"#drop on callback iterator" test-section
+
+naturals-gen >iterator 3 #drop 4 #take #collect { 4 5 6 7 } "drop 3 then take 4 from infinite" assert=
+
+"#count on callback iterator" test-section
+
+counter-gen >iterator #count 3 "count callback iter elements" assert=
+
+"#reduce on callback iterator" test-section
+
+counter-gen >iterator 0 [ + ] #reduce 6 "reduce callback iter" assert=
+
+"Empty callback iterator" test-section
+
+[ option:none ] >iterator #collect { } "empty generator collects to empty array" assert=
+[ option:none ] >iterator #count 0 "empty generator count is 0" assert=
+[ option:none ] >iterator #next? option:none? "empty generator next? is none" assert-true
+
+"Sequence >iterator still works" test-section
+
+V{ 1 2 3 } >iterator #collect { 1 2 3 } "vector round-trips through >iterator" assert=
+{ 4 5 6 } >iterator #collect { 4 5 6 } "array round-trips through >iterator" assert=
+"abc" >iterator #collect { "a" "b" "c" } "string round-trips through >iterator" assert=
+
+"Range >iterator still works" test-section
+
+use "ranges" ;
+1 5 range >iterator #collect { 1 2 3 4 } "range round-trips through >iterator" assert=

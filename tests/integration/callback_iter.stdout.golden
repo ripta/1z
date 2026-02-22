@@ -1,0 +1,78 @@
+Stack: [ ]
+Stack: [ ]
+=== Basic callback iterator ===
+Stack: [ ]
+PASS: counter generator collects to array
+Stack: [ ]
+=== Exhaustion behavior ===
+Stack: [ ]
+Stack: [ <iterator callback callback> ]
+PASS: first next? is some
+Stack: [ <iterator callback callback> ]
+PASS: second next? is some
+Stack: [ <iterator callback callback> ]
+PASS: third next? is some
+Stack: [ <iterator callback callback> ]
+PASS: fourth next? is none
+Stack: [ <iterator callback callback> ]
+PASS: fifth next? is still none
+Stack: [ ]
+=== #next? option values ===
+Stack: [ ]
+Stack: [ <iterator callback callback> ]
+PASS: first value is 1
+Stack: [ <iterator callback callback> ]
+PASS: second value is 2
+Stack: [ <iterator callback callback> ]
+PASS: third value is 3
+Stack: [ <iterator callback callback> ]
+PASS: after exhaustion returns none
+Stack: [ ]
+=== #each on callback iterator ===
+Stack: [ ]
+PASS: each sums callback iter values
+Stack: [ ]
+=== #map on callback iterator ===
+Stack: [ ]
+PASS: map over callback iter
+Stack: [ ]
+=== #filter on callback iterator ===
+Stack: [ ]
+PASS: filter callback iter
+Stack: [ ]
+=== #take on infinite callback iterator ===
+Stack: [ ]
+PASS: take 5 from infinite generator
+Stack: [ ]
+=== #drop on callback iterator ===
+Stack: [ ]
+PASS: drop 3 then take 4 from infinite
+Stack: [ ]
+=== #count on callback iterator ===
+Stack: [ ]
+PASS: count callback iter elements
+Stack: [ ]
+=== #reduce on callback iterator ===
+Stack: [ ]
+PASS: reduce callback iter
+Stack: [ ]
+=== Empty callback iterator ===
+Stack: [ ]
+PASS: empty generator collects to empty array
+Stack: [ ]
+PASS: empty generator count is 0
+Stack: [ ]
+PASS: empty generator next? is none
+Stack: [ ]
+=== Sequence >iterator still works ===
+Stack: [ ]
+PASS: vector round-trips through >iterator
+Stack: [ ]
+PASS: array round-trips through >iterator
+Stack: [ ]
+PASS: string round-trips through >iterator
+Stack: [ ]
+=== Range >iterator still works ===
+Stack: [ ]
+PASS: range round-trips through >iterator
+Stack: [ ]
