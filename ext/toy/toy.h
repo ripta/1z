@@ -36,6 +36,8 @@ void toy_widen_add(int a, int b, int64_t *wide_sum);
 void toy_double_u8(uint8_t input, uint8_t *doubled);
 void toy_f32_out(float a, float b, float *sum);
 
+int toy_double_inout(int *val);
+
 int toy_apply2(int a, int b, int (*fn)(int, int));
 void toy_sort_ints(int *arr, int len, int (*cmp)(const void *, const void *));
 

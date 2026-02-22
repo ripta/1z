@@ -126,6 +126,12 @@ void toy_f32_out(float a, float b, float *sum) {
     *sum = a + b;
 }
 
+int toy_double_inout(int *val) {
+    int original = *val;
+    *val = original * 2;
+    return original;
+}
+
 int toy_apply2(int a, int b, int (*fn)(int, int)) {
     return fn(a, b);
 }

@@ -206,7 +206,7 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
         helpers.setErrorContext(ctx, "unknown FFI type: {s}", .{return_type_str});
         return error.FFITypeMismatch;
     };
-    if (return_type.is_out) {
+    if (return_type.is_out() or return_type.is_inout()) {
         helpers.setErrorContext(ctx, "out-parameter annotation is not valid for return type", .{});
         return error.FFITypeMismatch;
     }
@@ -299,7 +299,7 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
     // Count non-out params to know how many values to pop from the stack
     var n_stack_args: usize = 0;
     for (sig.param_types) |pt| {
-        if (!pt.is_out) n_stack_args += 1;
+        if (!pt.is_out()) n_stack_args += 1;
     }
 
     if (ctx.stack.depth() < n_stack_args) {
@@ -322,11 +322,17 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
 
     var stack_arg_idx: usize = 0;
     for (sig.param_types, 0..) |param_type, pi| {
-        if (param_type.is_out) {
+        if (param_type.is_out()) {
             arg_slots[pi] = std.mem.zeroes(ArgSlot);
             out_ptr_slots[pi] = @ptrCast(&arg_slots[pi]);
             arg_types[pi] = &c_ffi.ffi_type_pointer;
             arg_ptrs[pi] = @ptrCast(&out_ptr_slots[pi]);
+        } else if (param_type.is_inout()) {
+            arg_slots[pi] = try marshalArg(ctx, param_type, arg_vals[stack_arg_idx], stack_arg_idx);
+            out_ptr_slots[pi] = @ptrCast(&arg_slots[pi]);
+            arg_types[pi] = &c_ffi.ffi_type_pointer;
+            arg_ptrs[pi] = @ptrCast(&out_ptr_slots[pi]);
+            stack_arg_idx += 1;
         } else {
             arg_types[pi] = ffiTypeToLibffi(param_type.tag);
             arg_slots[pi] = try marshalArg(ctx, param_type, arg_vals[stack_arg_idx], stack_arg_idx);
@@ -368,9 +374,9 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
         return err;
     }
 
-    // Push out-param values in parameter order (first out-param deepest)
+    // Push out-param and inout-param values in parameter order (first deepest)
     for (sig.param_types, 0..) |param_type, pi| {
-        if (param_type.is_out) {
+        if (param_type.is_out() or param_type.is_inout()) {
             try marshalOutParam(ctx, param_type, &arg_slots[pi]);
         }
     }
@@ -929,7 +935,7 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
             helpers.setErrorContext(ctx, "void is not valid as a parameter type", .{});
             return error.FFITypeMismatch;
         }
-        if (param_types[i].is_out) {
+        if (param_types[i].is_out() or param_types[i].is_inout()) {
             helpers.setErrorContext(ctx, "out-parameters are not valid in callback signatures", .{});
             return error.FFITypeMismatch;
         }

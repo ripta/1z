@@ -21,10 +21,24 @@ pub const FfiTypeTag = enum {
     void_type,
 };
 
+pub const ParamMode = enum {
+    normal,
+    out,
+    inout,
+};
+
 pub const FfiType = struct {
     tag: FfiTypeTag,
     ptr_name: ?[]const u8 = null,
-    is_out: bool = false,
+    mode: ParamMode = .normal,
+
+    pub fn is_out(self: FfiType) bool {
+        return self.mode == .out;
+    }
+
+    pub fn is_inout(self: FfiType) bool {
+        return self.mode == .inout;
+    }
 };
 
 pub const FfiSignature = struct {
@@ -66,17 +80,36 @@ fn parseBaseType(token: []const u8) ParseError!FfiType {
 }
 
 pub fn parseTypeToken(token: []const u8) ParseError!FfiType {
-    if (std.mem.startsWith(u8, token, "out-")) {
-        const base_token = token["out-".len..];
+    if (std.mem.startsWith(u8, token, "inout-")) {
+        const base_token = token["inout-".len..];
+        if (std.mem.startsWith(u8, base_token, "inout-")) return error.UnknownFfiType;
         if (std.mem.startsWith(u8, base_token, "out-")) return error.UnknownFfiType;
+
         var ffi_type = try parseBaseType(base_token);
         switch (ffi_type.tag) {
             .void_type, .cstring, .cstring_retained, .cstring_owned, .ptr => return error.UnknownFfiType,
             else => {},
         }
-        ffi_type.is_out = true;
+
+        ffi_type.mode = .inout;
         return ffi_type;
     }
+
+    if (std.mem.startsWith(u8, token, "out-")) {
+        const base_token = token["out-".len..];
+        if (std.mem.startsWith(u8, base_token, "inout-")) return error.UnknownFfiType;
+        if (std.mem.startsWith(u8, base_token, "out-")) return error.UnknownFfiType;
+
+        var ffi_type = try parseBaseType(base_token);
+        switch (ffi_type.tag) {
+            .void_type, .cstring, .cstring_retained, .cstring_owned, .ptr => return error.UnknownFfiType,
+            else => {},
+        }
+
+        ffi_type.mode = .out;
+        return ffi_type;
+    }
+
     return parseBaseType(token);
 }
 
@@ -119,36 +152,36 @@ test "parseTypeToken unknown" {
 test "parseTypeToken out-param types" {
     const out_i32 = try parseTypeToken("out-i32");
     try std.testing.expectEqual(FfiTypeTag.i32, out_i32.tag);
-    try std.testing.expect(out_i32.is_out);
+    try std.testing.expect(out_i32.is_out());
 
     const out_i64 = try parseTypeToken("out-i64");
     try std.testing.expectEqual(FfiTypeTag.i64, out_i64.tag);
-    try std.testing.expect(out_i64.is_out);
+    try std.testing.expect(out_i64.is_out());
 
     const out_f64 = try parseTypeToken("out-f64");
     try std.testing.expectEqual(FfiTypeTag.f64, out_f64.tag);
-    try std.testing.expect(out_f64.is_out);
+    try std.testing.expect(out_f64.is_out());
 
     const out_bool = try parseTypeToken("out-bool");
     try std.testing.expectEqual(FfiTypeTag.bool_type, out_bool.tag);
-    try std.testing.expect(out_bool.is_out);
+    try std.testing.expect(out_bool.is_out());
 
     const out_u8 = try parseTypeToken("out-u8");
     try std.testing.expectEqual(FfiTypeTag.u8, out_u8.tag);
-    try std.testing.expect(out_u8.is_out);
+    try std.testing.expect(out_u8.is_out());
 
     const out_f32 = try parseTypeToken("out-f32");
     try std.testing.expectEqual(FfiTypeTag.f32, out_f32.tag);
-    try std.testing.expect(out_f32.is_out);
+    try std.testing.expect(out_f32.is_out());
 
     const out_usize = try parseTypeToken("out-usize");
     try std.testing.expectEqual(FfiTypeTag.usize_type, out_usize.tag);
-    try std.testing.expect(out_usize.is_out);
+    try std.testing.expect(out_usize.is_out());
 }
 
 test "parseTypeToken non-out params have is_out false" {
     const i32_type = try parseTypeToken("i32");
-    try std.testing.expect(!i32_type.is_out);
+    try std.testing.expect(!i32_type.is_out());
 }
 
 test "parseTypeToken out-param rejected for invalid bases" {
@@ -158,4 +191,54 @@ test "parseTypeToken out-param rejected for invalid bases" {
     try std.testing.expectError(error.UnknownFfiType, parseTypeToken("out-cstring-owned"));
     try std.testing.expectError(error.UnknownFfiType, parseTypeToken("out-ptr"));
     try std.testing.expectError(error.UnknownFfiType, parseTypeToken("out-out-i32"));
+    try std.testing.expectError(error.UnknownFfiType, parseTypeToken("out-inout-i32"));
+}
+
+test "parseTypeToken inout-param types" {
+    const inout_i32 = try parseTypeToken("inout-i32");
+    try std.testing.expectEqual(FfiTypeTag.i32, inout_i32.tag);
+    try std.testing.expect(inout_i32.is_inout());
+    try std.testing.expect(!inout_i32.is_out());
+
+    const inout_i64 = try parseTypeToken("inout-i64");
+    try std.testing.expectEqual(FfiTypeTag.i64, inout_i64.tag);
+    try std.testing.expect(inout_i64.is_inout());
+
+    const inout_f64 = try parseTypeToken("inout-f64");
+    try std.testing.expectEqual(FfiTypeTag.f64, inout_f64.tag);
+    try std.testing.expect(inout_f64.is_inout());
+
+    const inout_u8 = try parseTypeToken("inout-u8");
+    try std.testing.expectEqual(FfiTypeTag.u8, inout_u8.tag);
+    try std.testing.expect(inout_u8.is_inout());
+
+    const inout_f32 = try parseTypeToken("inout-f32");
+    try std.testing.expectEqual(FfiTypeTag.f32, inout_f32.tag);
+    try std.testing.expect(inout_f32.is_inout());
+
+    const inout_bool = try parseTypeToken("inout-bool");
+    try std.testing.expectEqual(FfiTypeTag.bool_type, inout_bool.tag);
+    try std.testing.expect(inout_bool.is_inout());
+
+    const inout_usize = try parseTypeToken("inout-usize");
+    try std.testing.expectEqual(FfiTypeTag.usize_type, inout_usize.tag);
+    try std.testing.expect(inout_usize.is_inout());
+}
+
+test "parseTypeToken inout-param rejected for invalid bases" {
+    try std.testing.expectError(error.UnknownFfiType, parseTypeToken("inout-void"));
+    try std.testing.expectError(error.UnknownFfiType, parseTypeToken("inout-cstring"));
+    try std.testing.expectError(error.UnknownFfiType, parseTypeToken("inout-cstring-retained"));
+    try std.testing.expectError(error.UnknownFfiType, parseTypeToken("inout-cstring-owned"));
+    try std.testing.expectError(error.UnknownFfiType, parseTypeToken("inout-ptr"));
+    try std.testing.expectError(error.UnknownFfiType, parseTypeToken("inout-inout-i32"));
+    try std.testing.expectError(error.UnknownFfiType, parseTypeToken("inout-out-i32"));
+}
+
+test "parseTypeToken non-inout params have is_inout false" {
+    const i32_type = try parseTypeToken("i32");
+    try std.testing.expect(!i32_type.is_inout());
+
+    const out_i32 = try parseTypeToken("out-i32");
+    try std.testing.expect(!out_i32.is_inout());
 }
