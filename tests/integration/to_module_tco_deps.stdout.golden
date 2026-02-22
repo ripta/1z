@@ -1,0 +1,17 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== >module tail-call resolves imported deps ===
+Stack: [ ]
+PASS: tail-call trim via >module
+Stack: [ ]
+PASS: tail-call uppercase via >module
+Stack: [ ]
+PASS: direct call trim via >module
+Stack: [ ]
+PASS: direct call uppercase via >module
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: qualified tail-call via >module
+Stack: [ ]
