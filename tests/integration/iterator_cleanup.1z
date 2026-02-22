@@ -73,3 +73,97 @@ dup [ cleaned: t @set! drop ] curry
 >iterator(with-cleanup)
 #next? option:none? "first #next? returns none" assert-true
 cleaned: @get "cleanup ran on empty iterator" assert-true
+
+"close-iterator on callback" test-section
+
+[ cleaned: f ] make-mutable-map
+dup [ cleaned: t @set! drop ] curry
+counter5-gen swap
+>iterator(with-cleanup)
+dup close-iterator
+#next? option:none? "iterator exhausted after close" assert-true
+cleaned: @get "cleanup ran via close-iterator" assert-true
+
+"close-iterator propagates through #map" test-section
+
+[ cleaned: f ] make-mutable-map
+dup [ cleaned: t @set! drop ] curry
+counter5-gen swap
+>iterator(with-cleanup)
+[ 2 * ] #map
+close-iterator
+cleaned: @get "cleanup ran through #map" assert-true
+
+"close-iterator propagates through #filter" test-section
+
+[ cleaned: f ] make-mutable-map
+dup [ cleaned: t @set! drop ] curry
+counter5-gen swap
+>iterator(with-cleanup)
+[ 2 > ] #filter
+close-iterator
+cleaned: @get "cleanup ran through #filter" assert-true
+
+"close-iterator propagates through #take" test-section
+
+[ cleaned: f ] make-mutable-map
+dup [ cleaned: t @set! drop ] curry
+counter5-gen swap
+>iterator(with-cleanup)
+2 #take
+close-iterator
+cleaned: @get "cleanup ran through #take" assert-true
+
+"close-iterator propagates through #drop" test-section
+
+[ cleaned: f ] make-mutable-map
+dup [ cleaned: t @set! drop ] curry
+counter5-gen swap
+>iterator(with-cleanup)
+1 #drop
+close-iterator
+cleaned: @get "cleanup ran through #drop" assert-true
+
+"close-iterator propagates through nested adapters" test-section
+
+[ cleaned: f ] make-mutable-map
+dup [ cleaned: t @set! drop ] curry
+counter5-gen swap
+>iterator(with-cleanup)
+[ 2 * ] #map 2 #take
+close-iterator
+cleaned: @get "cleanup ran through nested adapters" assert-true
+
+"close-iterator idempotency" test-section
+
+[ count: 0 ] make-mutable-map
+dup [ dup count: @get 1 + count: swap @set! drop ] curry
+counter3-gen swap
+>iterator(with-cleanup)
+dup close-iterator
+close-iterator
+count: @get 1 "close-iterator cleanup ran exactly once" assert=
+
+"close-iterator on array iterator" test-section
+
+{ 1 2 3 } >iterator
+close-iterator
+
+"with-iterator normal exit" test-section
+
+[ cleaned: f ] make-mutable-map
+dup [ cleaned: t @set! drop ] curry
+counter5-gen swap
+>iterator(with-cleanup)
+[ 2 #take #collect ] with-iterator
+{ 1 2 } "with-iterator consumed partial" assert=
+cleaned: @get "with-iterator cleanup ran on normal exit" assert-true
+
+"with-iterator error exit" test-section
+
+[ cleaned: f ] make-mutable-map
+dup [ cleaned: t @set! drop ] curry
+counter5-gen swap
+>iterator(with-cleanup)
+[ [ #next drop "boom" throw ] with-iterator ] [ drop ] recover
+cleaned: @get "with-iterator cleanup ran on error exit" assert-true

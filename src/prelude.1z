@@ -519,6 +519,14 @@ receive?: ( ch -- option ) [ [ receive >option:some ] [ drop option:none ] recov
 \\ Advance an iterator, returning some(value) or none if exhausted.
 #next?: ( iter -- option ) [ [ #next >option:some ] [ drop option:none ] recover ] ;
 
+\\ Close an iterator, running its cleanup quotation if present.
+\\ Propagates through adapter chains (#map, #filter, #take, #drop).
+\\ No-op on iterators without cleanup. Idempotent.
+close-iterator: ( iterator -- ) [ native.close-iterator ] ;
+
+\\ Execute a quotation with an iterator, guaranteeing close-iterator on exit.
+with-iterator: ( iterator quot -- ... ) [ over [ close-iterator ] curry cleanup ] ;
+
 \\ Blocking acquire: consumes a token or permit from the resource.
 \\ Yields to the scheduler until a token is available.
 \\ Must be called inside task-scope.

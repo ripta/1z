@@ -29,6 +29,25 @@ pub const Iterator = struct {
         };
     }
 
+    pub fn close(self: *Iterator, ctx: *Context) anyerror!void {
+        switch (self.kind) {
+            .map => |it| try it.inner.close(ctx),
+            .filter => |it| try it.inner.close(ctx),
+            .take => |it| try it.inner.close(ctx),
+            .drop => |it| try it.inner.close(ctx),
+            .callback => |*it| {
+                if (it.cleanup_quotation) |cq| {
+                    if (!it.cleanup_ran) {
+                        it.cleanup_ran = true;
+                        it.exhausted = true;
+                        try ctx.executeQuotationWithFrame(cq);
+                    }
+                }
+            },
+            .array, .range => {},
+        }
+    }
+
     pub fn kindName(self: *const Iterator) []const u8 {
         return switch (self.kind) {
             .array => "array",

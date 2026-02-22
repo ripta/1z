@@ -51,3 +51,98 @@ PASS: first #next? returns none
 Stack: [ M{ cleaned: t } ]
 PASS: cleanup ran on empty iterator
 Stack: [ ]
+=== close-iterator on callback ===
+Stack: [ ]
+Stack: [ M{ cleaned: f } ]
+Stack: [ M{ cleaned: f } [ M{ cleaned: f } cleaned: t @set! drop ] ]
+Stack: [ M{ cleaned: f } [ M{ n: 0 } dup n: @get 1 + dup 5 > [ 2drop option:none ] [ swap over n: swap @set! drop >option:some ] if ] [ M{ cleaned: f } cleaned: t @set! drop ] ]
+Stack: [ M{ cleaned: f } <iterator callback callback> ]
+Stack: [ M{ cleaned: t } <iterator callback callback> ]
+PASS: iterator exhausted after close
+Stack: [ M{ cleaned: t } ]
+PASS: cleanup ran via close-iterator
+Stack: [ ]
+=== close-iterator propagates through #map ===
+Stack: [ ]
+Stack: [ M{ cleaned: f } ]
+Stack: [ M{ cleaned: f } [ M{ cleaned: f } cleaned: t @set! drop ] ]
+Stack: [ M{ cleaned: f } [ M{ n: 0 } dup n: @get 1 + dup 5 > [ 2drop option:none ] [ swap over n: swap @set! drop >option:some ] if ] [ M{ cleaned: f } cleaned: t @set! drop ] ]
+Stack: [ M{ cleaned: f } <iterator callback callback> ]
+Stack: [ M{ cleaned: f } <iterator map map(callback)> ]
+Stack: [ M{ cleaned: t } ]
+PASS: cleanup ran through #map
+Stack: [ ]
+=== close-iterator propagates through #filter ===
+Stack: [ ]
+Stack: [ M{ cleaned: f } ]
+Stack: [ M{ cleaned: f } [ M{ cleaned: f } cleaned: t @set! drop ] ]
+Stack: [ M{ cleaned: f } [ M{ n: 0 } dup n: @get 1 + dup 5 > [ 2drop option:none ] [ swap over n: swap @set! drop >option:some ] if ] [ M{ cleaned: f } cleaned: t @set! drop ] ]
+Stack: [ M{ cleaned: f } <iterator callback callback> ]
+Stack: [ M{ cleaned: f } <iterator filter filter(callback)> ]
+Stack: [ M{ cleaned: t } ]
+PASS: cleanup ran through #filter
+Stack: [ ]
+=== close-iterator propagates through #take ===
+Stack: [ ]
+Stack: [ M{ cleaned: f } ]
+Stack: [ M{ cleaned: f } [ M{ cleaned: f } cleaned: t @set! drop ] ]
+Stack: [ M{ cleaned: f } [ M{ n: 0 } dup n: @get 1 + dup 5 > [ 2drop option:none ] [ swap over n: swap @set! drop >option:some ] if ] [ M{ cleaned: f } cleaned: t @set! drop ] ]
+Stack: [ M{ cleaned: f } <iterator callback callback> ]
+Stack: [ M{ cleaned: f } <iterator take take(2, callback)> ]
+Stack: [ M{ cleaned: t } ]
+PASS: cleanup ran through #take
+Stack: [ ]
+=== close-iterator propagates through #drop ===
+Stack: [ ]
+Stack: [ M{ cleaned: f } ]
+Stack: [ M{ cleaned: f } [ M{ cleaned: f } cleaned: t @set! drop ] ]
+Stack: [ M{ cleaned: f } [ M{ n: 0 } dup n: @get 1 + dup 5 > [ 2drop option:none ] [ swap over n: swap @set! drop >option:some ] if ] [ M{ cleaned: f } cleaned: t @set! drop ] ]
+Stack: [ M{ cleaned: f } <iterator callback callback> ]
+Stack: [ M{ cleaned: f } <iterator drop drop(callback)> ]
+Stack: [ M{ cleaned: t } ]
+PASS: cleanup ran through #drop
+Stack: [ ]
+=== close-iterator propagates through nested adapters ===
+Stack: [ ]
+Stack: [ M{ cleaned: f } ]
+Stack: [ M{ cleaned: f } [ M{ cleaned: f } cleaned: t @set! drop ] ]
+Stack: [ M{ cleaned: f } [ M{ n: 0 } dup n: @get 1 + dup 5 > [ 2drop option:none ] [ swap over n: swap @set! drop >option:some ] if ] [ M{ cleaned: f } cleaned: t @set! drop ] ]
+Stack: [ M{ cleaned: f } <iterator callback callback> ]
+Stack: [ M{ cleaned: f } <iterator take take(2, map(callback))> ]
+Stack: [ M{ cleaned: t } ]
+PASS: cleanup ran through nested adapters
+Stack: [ ]
+=== close-iterator idempotency ===
+Stack: [ ]
+Stack: [ M{ count: 0 } ]
+Stack: [ M{ count: 0 } [ M{ count: 0 } dup count: @get 1 + count: swap @set! drop ] ]
+Stack: [ M{ count: 0 } [ M{ n: 0 } dup n: @get 1 + dup 3 > [ 2drop option:none ] [ swap over n: swap @set! drop >option:some ] if ] [ M{ count: 0 } dup count: @get 1 + count: swap @set! drop ] ]
+Stack: [ M{ count: 0 } <iterator callback callback> ]
+Stack: [ M{ count: 1 } <iterator callback callback> ]
+Stack: [ M{ count: 1 } ]
+PASS: close-iterator cleanup ran exactly once
+Stack: [ ]
+=== close-iterator on array iterator ===
+Stack: [ ]
+Stack: [ <iterator array 0/3> ]
+Stack: [ ]
+=== with-iterator normal exit ===
+Stack: [ ]
+Stack: [ M{ cleaned: f } ]
+Stack: [ M{ cleaned: f } [ M{ cleaned: f } cleaned: t @set! drop ] ]
+Stack: [ M{ cleaned: f } [ M{ n: 0 } dup n: @get 1 + dup 5 > [ 2drop option:none ] [ swap over n: swap @set! drop >option:some ] if ] [ M{ cleaned: f } cleaned: t @set! drop ] ]
+Stack: [ M{ cleaned: f } <iterator callback callback> ]
+Stack: [ M{ cleaned: t } { 1 2 } ]
+PASS: with-iterator consumed partial
+Stack: [ M{ cleaned: t } ]
+PASS: with-iterator cleanup ran on normal exit
+Stack: [ ]
+=== with-iterator error exit ===
+Stack: [ ]
+Stack: [ M{ cleaned: f } ]
+Stack: [ M{ cleaned: f } [ M{ cleaned: f } cleaned: t @set! drop ] ]
+Stack: [ M{ cleaned: f } [ M{ n: 0 } dup n: @get 1 + dup 5 > [ 2drop option:none ] [ swap over n: swap @set! drop >option:some ] if ] [ M{ cleaned: f } cleaned: t @set! drop ] ]
+Stack: [ M{ cleaned: f } <iterator callback callback> ]
+Stack: [ M{ cleaned: t } ]
+PASS: with-iterator cleanup ran on error exit
+Stack: [ ]

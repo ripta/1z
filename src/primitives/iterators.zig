@@ -15,6 +15,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = ">iterator", .func = nativeToIterator },
     .{ .name = "make-callback-iter", .func = nativeMakeCallbackIter },
     .{ .name = "make-callback-iter-with-cleanup", .func = nativeMakeCallbackIterWithCleanup },
+    .{ .name = "close-iterator", .func = nativeCloseIterator },
 };
 
 pub const primitives = [_]Primitive{
@@ -200,4 +201,18 @@ fn nativeMakeCallbackIterWithCleanup(ctx: *Context) anyerror!void {
         .cleanup_ran = false,
     } } };
     try ctx.stack.push(.{ .iterator = iter });
+}
+
+/// close-iterator ( iterator -- )
+fn nativeCloseIterator(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .iterator => |iter| {
+            try iter.close(ctx);
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "iterator", val);
+            return error.TypeMismatch;
+        },
+    }
 }
