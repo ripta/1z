@@ -41,6 +41,10 @@ int toy_double_inout(int *val);
 int toy_open_out(toy_counter **out);
 int toy_close_status(toy_counter *c);
 
+void toy_version_out(const char **out);
+void toy_greet_out(const char *name, char **out);
+void toy_null_string_out(const char **out);
+
 int toy_apply2(int a, int b, int (*fn)(int, int));
 void toy_sort_ints(int *arr, int len, int (*cmp)(const void *, const void *));
 

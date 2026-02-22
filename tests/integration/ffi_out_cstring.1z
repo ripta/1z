@@ -1,0 +1,85 @@
+use "testing" ;
+use "ffi" ;
+
+\\ Helper to get the shared library path for the toy library.
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy.dylib" #append
+] ;
+
+toy-lib-path lib-open
+
+\\ --- out-cstring: static string via out-parameter ---
+
+dup "toy_version_out" lib-symbol ffi{ out-cstring -> void } bind-sig swap
+\\ Stack: fn-version dylib
+
+1 pick-n ffi-call
+"toy-1.0" "out-cstring returns static string" assert=
+\\ Stack: fn-version dylib
+
+\\ --- out-cstring-retained: same semantics as out-cstring ---
+
+dup "toy_version_out" lib-symbol ffi{ out-cstring-retained -> void } bind-sig swap
+\\ Stack: fn-version fn-version-retained dylib
+
+1 pick-n ffi-call
+"toy-1.0" "out-cstring-retained returns static string" assert=
+\\ Stack: fn-version fn-version-retained dylib
+
+swap drop swap drop
+\\ Stack: dylib
+
+\\ --- out-cstring-owned: malloc'd string freed after copy ---
+
+dup "toy_greet_out" lib-symbol ffi{ cstring out-cstring-owned -> void } bind-sig swap
+\\ Stack: fn-greet dylib
+
+"world" 2 pick-n ffi-call
+"Hello, world!" "out-cstring-owned returns greeting" assert=
+\\ Stack: fn-greet dylib
+
+"1z" 2 pick-n ffi-call
+"Hello, 1z!" "out-cstring-owned with different name" assert=
+\\ Stack: fn-greet dylib
+
+swap drop
+\\ Stack: dylib
+
+\\ --- Null handling: all three variants push empty string for NULL ---
+
+dup "toy_null_string_out" lib-symbol ffi{ out-cstring -> void } bind-sig swap
+\\ Stack: fn-null dylib
+
+1 pick-n ffi-call
+"" "out-cstring null returns empty string" assert=
+
+swap drop
+\\ Stack: dylib
+
+dup "toy_null_string_out" lib-symbol ffi{ out-cstring-retained -> void } bind-sig swap
+
+1 pick-n ffi-call
+"" "out-cstring-retained null returns empty string" assert=
+
+swap drop
+\\ Stack: dylib
+
+dup "toy_null_string_out" lib-symbol ffi{ out-cstring-owned -> void } bind-sig swap
+
+1 pick-n ffi-call
+"" "out-cstring-owned null returns empty string" assert=
+
+swap drop
+\\ Stack: dylib
+
+\\ --- Error: out-cstring as return type is rejected ---
+
+[
+  toy-lib-path lib-open
+  dup "toy_version_out" lib-symbol
+  ffi{ ptr -> out-cstring } bind-sig
+  drop swap resource-close
+]
+ffi-type-mismatch: "out-cstring as return type rejected" assert-error-type
+
+resource-close

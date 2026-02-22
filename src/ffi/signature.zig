@@ -102,7 +102,7 @@ pub fn parseTypeToken(token: []const u8) ParseError!FfiType {
 
         var ffi_type = try parseBaseType(base_token);
         switch (ffi_type.tag) {
-            .void_type, .cstring, .cstring_retained, .cstring_owned => return error.UnknownFfiType,
+            .void_type => return error.UnknownFfiType,
             else => {},
         }
 
@@ -186,11 +186,22 @@ test "parseTypeToken non-out params have is_out false" {
 
 test "parseTypeToken out-param rejected for invalid bases" {
     try std.testing.expectError(error.UnknownFfiType, parseTypeToken("out-void"));
-    try std.testing.expectError(error.UnknownFfiType, parseTypeToken("out-cstring"));
-    try std.testing.expectError(error.UnknownFfiType, parseTypeToken("out-cstring-retained"));
-    try std.testing.expectError(error.UnknownFfiType, parseTypeToken("out-cstring-owned"));
     try std.testing.expectError(error.UnknownFfiType, parseTypeToken("out-out-i32"));
     try std.testing.expectError(error.UnknownFfiType, parseTypeToken("out-inout-i32"));
+}
+
+test "parseTypeToken out-cstring types" {
+    const out_cstring = try parseTypeToken("out-cstring");
+    try std.testing.expectEqual(FfiTypeTag.cstring, out_cstring.tag);
+    try std.testing.expect(out_cstring.is_out());
+
+    const out_cstring_retained = try parseTypeToken("out-cstring-retained");
+    try std.testing.expectEqual(FfiTypeTag.cstring_retained, out_cstring_retained.tag);
+    try std.testing.expect(out_cstring_retained.is_out());
+
+    const out_cstring_owned = try parseTypeToken("out-cstring-owned");
+    try std.testing.expectEqual(FfiTypeTag.cstring_owned, out_cstring_owned.tag);
+    try std.testing.expect(out_cstring_owned.is_out());
 }
 
 test "parseTypeToken out-ptr" {

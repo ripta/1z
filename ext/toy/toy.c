@@ -144,6 +144,20 @@ int toy_close_status(toy_counter *c) {
     return 0;
 }
 
+void toy_version_out(const char **out) {
+    *out = "toy-1.0";
+}
+
+void toy_greet_out(const char *name, char **out) {
+    int len = snprintf(NULL, 0, "Hello, %s!", name);
+    *out = malloc(len + 1);
+    if (*out) snprintf(*out, len + 1, "Hello, %s!", name);
+}
+
+void toy_null_string_out(const char **out) {
+    *out = NULL;
+}
+
 int toy_apply2(int a, int b, int (*fn)(int, int)) {
     return fn(a, b);
 }

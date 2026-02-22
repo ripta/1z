@@ -649,7 +649,28 @@ fn marshalOutParam(ctx: *Context, param_type: FfiType, slot: *const ArgSlot) !vo
             };
             try ctx.stack.push(.{ .resource = r });
         },
-        .void_type, .cstring, .cstring_retained, .cstring_owned => unreachable,
+        .cstring, .cstring_retained => {
+            const cptr: [*c]const u8 = @ptrCast(slot.ptr_val);
+            if (cptr == null) {
+                try ctx.stack.push(.{ .string = "" });
+            } else {
+                const span = std.mem.span(cptr);
+                const str = try alloc.dupe(u8, span);
+                try ctx.stack.push(.{ .string = str });
+            }
+        },
+        .cstring_owned => {
+            const cptr: [*c]u8 = @ptrCast(slot.ptr_val);
+            if (cptr == null) {
+                try ctx.stack.push(.{ .string = "" });
+            } else {
+                const span = std.mem.span(cptr);
+                const str = try alloc.dupe(u8, span);
+                std.c.free(cptr);
+                try ctx.stack.push(.{ .string = str });
+            }
+        },
+        .void_type => unreachable,
     }
 }
 
