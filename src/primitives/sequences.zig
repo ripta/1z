@@ -5,7 +5,9 @@ const Value = value_mod.Value;
 const Vector = value_mod.Vector;
 const ByteArray = value_mod.ByteArray;
 
-const Primitive = @import("types.zig").Primitive;
+const types_mod = @import("types.zig");
+const Primitive = types_mod.Primitive;
+const RegistryEntry = types_mod.RegistryEntry;
 const helpers = @import("helpers.zig");
 const dispatch_helpers = @import("dispatch_helpers.zig");
 const sequence = @import("sequence.zig");
@@ -15,6 +17,7 @@ const popFixnum = helpers.popFixnum;
 const popBoolean = helpers.popBoolean;
 const popQuotation = helpers.popQuotation;
 const popVector = helpers.popVector;
+const popByteArray = helpers.popByteArray;
 const setErrorContext = helpers.setErrorContext;
 const valueTypeName = helpers.valueTypeName;
 
@@ -1560,6 +1563,107 @@ fn nativeDrop(ctx: *Context) anyerror!void {
         },
         else => {
             setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    }
+}
+
+pub const registry_entries = [_]RegistryEntry{
+    .{ .name = "shrink!", .func = nativeShrinkMut },
+    .{ .name = "grow!", .func = nativeGrowMut },
+};
+
+/// shrink! ( seq n -- seq ) - Truncate a mutable sequence to n elements.
+///
+/// Polymorphic on byte-array and vector.
+fn nativeShrinkMut(ctx: *Context) anyerror!void {
+    const n_val = try popFixnum(ctx);
+    const seq = try ctx.stack.pop();
+
+    if (n_val < 0) {
+        setErrorContext(ctx, "shrink! count must be non-negative, got {d}", .{n_val});
+        return error.IndexOutOfBounds;
+    }
+    const n: usize = @intCast(n_val);
+
+    switch (seq) {
+        .byte_array => |ba| {
+            if (n > ba.items.len) {
+                setErrorContext(ctx, "shrink! count {d} exceeds byte-array length {d}", .{ n_val, ba.items.len });
+                return error.IndexOutOfBounds;
+            }
+            ba.items.len = n;
+            try ctx.stack.push(.{ .byte_array = ba });
+        },
+        .vector => |vec| {
+            if (n > vec.items.len) {
+                setErrorContext(ctx, "shrink! count {d} exceeds vector length {d}", .{ n_val, vec.items.len });
+                return error.IndexOutOfBounds;
+            }
+            vec.items.len = n;
+            try ctx.stack.push(.{ .vector = vec });
+        },
+        else => {
+            setErrorContext(ctx, "shrink! expected byte-array or vector, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// grow! ( seq n fill -- seq ) - Extend a mutable sequence to n elements, filling new slots.
+///
+/// Polymorphic on byte-array and vector.
+fn nativeGrowMut(ctx: *Context) anyerror!void {
+    const fill = try ctx.stack.pop();
+    const n_val = try popFixnum(ctx);
+    const seq = try ctx.stack.pop();
+
+    if (n_val < 0) {
+        setErrorContext(ctx, "grow! count must be non-negative, got {d}", .{n_val});
+        return error.IndexOutOfBounds;
+    }
+    const n: usize = @intCast(n_val);
+
+    switch (seq) {
+        .byte_array => |ba| {
+            if (n < ba.items.len) {
+                setErrorContext(ctx, "grow! count {d} is less than byte-array length {d}", .{ n_val, ba.items.len });
+                return error.IndexOutOfBounds;
+            }
+            const fill_byte: u8 = switch (fill) {
+                .fixnum => |i| blk: {
+                    if (i < 0 or i > 255) {
+                        setErrorContext(ctx, "grow! fill byte {d} out of range 0-255", .{i});
+                        return error.FixnumOverflow;
+                    }
+                    break :blk @intCast(i);
+                },
+                else => {
+                    setErrorContext(ctx, "grow! on byte-array requires fixnum fill, got {s}", .{valueTypeName(fill)});
+                    return error.TypeMismatch;
+                },
+            };
+            const alloc = ctx.quotationAllocator();
+            const old_len = ba.items.len;
+            ba.ensureTotalCapacity(alloc, n) catch return error.OutOfMemory;
+            ba.items.len = n;
+            @memset(ba.items[old_len..n], fill_byte);
+            try ctx.stack.push(.{ .byte_array = ba });
+        },
+        .vector => |vec| {
+            if (n < vec.items.len) {
+                setErrorContext(ctx, "grow! count {d} is less than vector length {d}", .{ n_val, vec.items.len });
+                return error.IndexOutOfBounds;
+            }
+            const alloc = ctx.quotationAllocator();
+            const old_len = vec.items.len;
+            vec.ensureTotalCapacity(alloc, n) catch return error.OutOfMemory;
+            vec.items.len = n;
+            @memset(vec.items[old_len..n], fill);
+            try ctx.stack.push(.{ .vector = vec });
+        },
+        else => {
+            setErrorContext(ctx, "grow! expected byte-array or vector, got {s}", .{valueTypeName(seq)});
             return error.TypeMismatch;
         },
     }

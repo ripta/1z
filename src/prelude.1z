@@ -203,6 +203,14 @@ finite?: ( x -- ? ) [ dup float? [ dup nan? not swap infinite? not and ] [ drop 
 \\ Test whether a named word has the `generic` marker.
 generic?: ( name -- ? ) [ word-markers [ generic = ] #any ] ;
 
+\ Mutable sequence resize
+\\ Create an n-byte zeroed buffer.
+bytes-alloc: ( n -- byte-array ) [ B{ } swap 0x00 native.grow! ] ;
+\\ Resize byte array in place, truncating or zero-filling as needed.
+bytes-resize!: ( byte-array n -- byte-array ) [ over #len over < [ 0x00 native.grow! ] [ native.shrink! ] if ] ;
+\\ Resize a mutable sequence in place with an explicit fill value for growth.
+resize!: ( seq n fill -- seq ) [ -rot> over #len over < [ [ swap ] dip swap native.grow! ] [ [ swap drop ] dip native.shrink! ] if ] ;
+
 \ Short-circuiting sequence predicates
 \\ Test whether any element satisfies the predicate. Short-circuits.
 #any: ( seq quot -- ? ) [

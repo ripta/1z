@@ -281,6 +281,8 @@ bl ( -- )
 body>>
 boolean? ( val -- ? )
 byte-array? ( val -- ? )
+bytes-alloc ( n -- byte-array )
+bytes-resize! ( byte-array n -- byte-array )
 case ( val branches -- ... )
 choose ( a1 a2 quot -- a )
 cmp ( a b -- ordering )
@@ -378,6 +380,7 @@ protocol{
 quotation? ( val -- ? )
 read-line ( -- str/f )
 receive? ( ch -- option )
+resize! ( seq n fill -- seq )
 result:err> ( result -- error )
 result:err>hash
 result:err?

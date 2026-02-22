@@ -1,0 +1,66 @@
+\ Integration tests for shrink!, grow!, bytes-alloc, bytes-resize!, resize!
+
+use "testing" ;
+
+"shrink! on byte-array" test-section
+B{ 1 2 3 4 5 } 3 native.shrink! #len 3 "shrink! reduces length" assert=
+B{ 1 2 3 4 5 } 3 native.shrink! 0 #nth 1 "shrink! preserves first" assert=
+B{ 1 2 3 4 5 } 3 native.shrink! 2 #nth 3 "shrink! preserves third" assert=
+B{ 1 2 3 } 0 native.shrink! #len 0 "shrink! to zero" assert=
+B{ 1 2 3 } 3 native.shrink! #len 3 "shrink! to same length is no-op" assert=
+
+"shrink! on vector" test-section
+V{ 10 20 30 40 } 2 native.shrink! #len 2 "shrink! reduces vector length" assert=
+V{ 10 20 30 40 } 2 native.shrink! 0 #nth 10 "shrink! preserves vector first" assert=
+V{ 10 20 30 40 } 2 native.shrink! 1 #nth 20 "shrink! preserves vector second" assert=
+V{ 10 20 } 0 native.shrink! #len 0 "shrink! vector to zero" assert=
+
+"shrink! error cases" test-section
+[ B{ 1 2 } 5 native.shrink! ] "shrink! n > byte-array length" assert-error
+[ V{ 1 } 3 native.shrink! ] "shrink! n > vector length" assert-error
+[ B{ 1 2 } -1 native.shrink! ] "shrink! negative n on byte-array" assert-error
+[ V{ 1 2 } -1 native.shrink! ] "shrink! negative n on vector" assert-error
+
+"grow! on byte-array" test-section
+B{ 1 2 } 5 0x00 native.grow! #len 5 "grow! increases byte-array length" assert=
+B{ 1 2 } 5 0x00 native.grow! 0 #nth 1 "grow! preserves first byte" assert=
+B{ 1 2 } 5 0x00 native.grow! 1 #nth 2 "grow! preserves second byte" assert=
+B{ 1 2 } 5 0x00 native.grow! 2 #nth 0 "grow! fills with zero" assert=
+B{ 1 2 } 5 0x00 native.grow! 4 #nth 0 "grow! fills last with zero" assert=
+B{ 1 2 } 5 0xff native.grow! 3 #nth 255 "grow! fills with 0xff" assert=
+B{ 1 2 } 2 0x00 native.grow! #len 2 "grow! to same length is no-op" assert=
+
+"grow! on vector" test-section
+V{ 10 20 } 4 0 native.grow! #len 4 "grow! increases vector length" assert=
+V{ 10 20 } 4 0 native.grow! 0 #nth 10 "grow! preserves vector first" assert=
+V{ 10 20 } 4 0 native.grow! 2 #nth 0 "grow! fills vector with zero" assert=
+V{ 10 20 } 4 "x" native.grow! 3 #nth "x" "grow! fills vector with any value" assert=
+
+"grow! error cases" test-section
+[ B{ 1 2 3 } 1 0x00 native.grow! ] "grow! n < byte-array length" assert-error
+[ V{ 1 2 3 } 1 0 native.grow! ] "grow! n < vector length" assert-error
+[ B{ 1 2 } -1 0x00 native.grow! ] "grow! negative n on byte-array" assert-error
+[ B{ 1 } 5 256 native.grow! ] "grow! byte fill out of range" assert-error
+[ B{ 1 } 5 -1 native.grow! ] "grow! negative byte fill" assert-error
+
+"bytes-alloc" test-section
+0 bytes-alloc #len 0 "bytes-alloc 0" assert=
+5 bytes-alloc #len 5 "bytes-alloc 5 length" assert=
+5 bytes-alloc 0 #nth 0 "bytes-alloc fills with zero" assert=
+5 bytes-alloc 4 #nth 0 "bytes-alloc fills last with zero" assert=
+
+"bytes-resize!" test-section
+B{ 1 2 3 } 5 bytes-resize! #len 5 "bytes-resize! grow" assert=
+B{ 1 2 3 } 5 bytes-resize! 0 #nth 1 "bytes-resize! grow preserves data" assert=
+B{ 1 2 3 } 5 bytes-resize! 3 #nth 0 "bytes-resize! grow zero-fills" assert=
+B{ 1 2 3 4 5 } 2 bytes-resize! #len 2 "bytes-resize! shrink" assert=
+B{ 1 2 3 4 5 } 2 bytes-resize! 0 #nth 1 "bytes-resize! shrink preserves data" assert=
+B{ 1 2 3 } 3 bytes-resize! #len 3 "bytes-resize! same size" assert=
+
+"resize!" test-section
+V{ 1 2 } 4 99 resize! #len 4 "resize! grow vector" assert=
+V{ 1 2 } 4 99 resize! 2 #nth 99 "resize! fill value" assert=
+V{ 1 2 3 4 } 2 0 resize! #len 2 "resize! shrink vector" assert=
+B{ 1 2 } 4 0x42 resize! #len 4 "resize! grow byte-array" assert=
+B{ 1 2 } 4 0x42 resize! 3 #nth 66 "resize! byte-array fill value" assert=
+B{ 1 2 3 4 } 2 0x00 resize! #len 2 "resize! shrink byte-array" assert=
