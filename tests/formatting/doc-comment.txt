@@ -1,0 +1,4 @@
+\\ This is a doc comment
+double: ( n -- n ) [ 2 * ] ;
+
+code here  \\ inline doc comment
