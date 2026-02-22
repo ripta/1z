@@ -38,6 +38,9 @@ void toy_f32_out(float a, float b, float *sum);
 
 int toy_double_inout(int *val);
 
+int toy_open_out(toy_counter **out);
+int toy_close_status(toy_counter *c);
+
 int toy_apply2(int a, int b, int (*fn)(int, int));
 void toy_sort_ints(int *arr, int len, int (*cmp)(const void *, const void *));
 

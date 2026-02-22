@@ -132,6 +132,18 @@ int toy_double_inout(int *val) {
     return original;
 }
 
+int toy_open_out(toy_counter **out) {
+    *out = malloc(sizeof(toy_counter));
+    if (!*out) return -1;
+    (*out)->value = 0;
+    return 0;
+}
+
+int toy_close_status(toy_counter *c) {
+    free(c);
+    return 0;
+}
+
 int toy_apply2(int a, int b, int (*fn)(int, int)) {
     return fn(a, b);
 }

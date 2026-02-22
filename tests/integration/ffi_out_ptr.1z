@@ -1,0 +1,138 @@
+use "testing" ;
+use "ffi" ;
+
+\\ Helper to get the shared library path for the toy library.
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy.dylib" #append
+] ;
+
+toy-lib-path lib-open
+
+\\ --- out-ptr basic: toy_open_out returns status and writes a pointer ---
+
+dup "toy_open_out" lib-symbol ffi{ out-ptr -> i32 } bind-sig swap
+dup "toy_read" lib-symbol ffi{ ptr -> i32 } bind-sig swap
+dup "toy_increment" lib-symbol ffi{ ptr -> void } bind-sig swap
+dup "toy_close" lib-symbol ffi{ ptr -> void } bind-sig swap
+\\ Stack: fn-open fn-read fn-inc fn-close dylib
+
+\\ Open via out-ptr (no stack args, out-ptr + return pushed)
+4 pick-n ffi-call
+0 "toy_open_out status" assert=
+\\ Stack: fn-open fn-read fn-inc fn-close dylib counter
+
+\\ The out-param should be a resource
+dup resource? t "out-ptr produces a resource" assert=
+
+\\ Read the initial value
+dup 5 pick-n ffi-call
+0 "counter initial value via out-ptr" assert=
+
+\\ Increment and read
+dup 4 pick-n ffi-call
+dup 5 pick-n ffi-call
+1 "counter after increment via out-ptr" assert=
+
+\\ Close the counter manually
+2 pick-n ffi-call
+\\ Stack: fn-open fn-read fn-inc fn-close dylib
+
+swap drop swap drop swap drop swap drop
+\\ Stack: dylib
+
+\\ --- out-ptr:NAME: named pointer type ---
+
+dup "toy_open_out" lib-symbol ffi{ out-ptr:toy-counter -> i32 } bind-sig swap
+dup "toy_read" lib-symbol ffi{ ptr:toy-counter -> i32 } bind-sig swap
+dup "toy_close" lib-symbol ffi{ ptr -> void } bind-sig swap
+\\ Stack: fn-open fn-read fn-close dylib
+
+\\ Open via out-ptr:toy-counter
+3 pick-n ffi-call
+0 "toy_open_out named status" assert=
+\\ Stack: fn-open fn-read fn-close dylib counter
+
+\\ Read the value through toy_read which expects ptr:toy-counter
+dup 4 pick-n ffi-call
+0 "counter initial via out-ptr:toy-counter" assert=
+
+\\ Close
+2 pick-n ffi-call
+\\ Stack: fn-open fn-read fn-close dylib
+
+swap drop swap drop swap drop
+\\ Stack: dylib
+
+\\ --- bind-close with non-void return type ---
+
+dup "toy_open_out" lib-symbol ffi{ out-ptr:toy-counter -> i32 } bind-sig swap
+dup "toy_increment" lib-symbol ffi{ ptr:toy-counter -> void } bind-sig swap
+dup "toy_read" lib-symbol ffi{ ptr:toy-counter -> i32 } bind-sig swap
+dup "toy_close_status" lib-symbol ffi{ ptr -> i32 } bind-sig swap
+\\ Stack: fn-open fn-inc fn-read fn-close-status dylib
+
+\\ Open
+4 pick-n ffi-call
+0 "open for bind-close test" assert=
+\\ Stack: fn-open fn-inc fn-read fn-close-status dylib counter
+
+\\ Bind the int-returning close function
+dup 3 pick-n bind-close
+
+\\ Increment twice
+dup 5 pick-n ffi-call
+dup 5 pick-n ffi-call
+
+\\ Read
+dup 4 pick-n ffi-call
+2 "counter before close" assert=
+
+\\ Close via resource-close (invokes toy_close_status, return value discarded)
+resource-close
+\\ Stack: fn-open fn-inc fn-read fn-close-status dylib
+
+swap drop swap drop swap drop swap drop
+\\ Stack: dylib
+
+\\ --- Full lifecycle: open out-ptr, increment, read, bind-close non-void, close ---
+
+dup "toy_open_out" lib-symbol ffi{ out-ptr:toy-counter -> i32 } bind-sig swap
+dup "toy_increment" lib-symbol ffi{ ptr:toy-counter -> void } bind-sig swap
+dup "toy_read" lib-symbol ffi{ ptr:toy-counter -> i32 } bind-sig swap
+dup "toy_close_status" lib-symbol ffi{ ptr -> i32 } bind-sig swap
+\\ Stack: fn-open fn-inc fn-read fn-close dylib
+
+4 pick-n ffi-call
+0 "full lifecycle open status" assert=
+\\ Stack: fn-open fn-inc fn-read fn-close dylib counter
+
+\\ Bind close
+dup 3 pick-n bind-close
+
+\\ Increment three times
+dup 5 pick-n ffi-call
+dup 5 pick-n ffi-call
+dup 5 pick-n ffi-call
+
+\\ Read
+dup 4 pick-n ffi-call
+3 "full lifecycle counter" assert=
+
+\\ Close
+resource-close
+\\ Stack: fn-open fn-inc fn-read fn-close dylib
+
+swap drop swap drop swap drop swap drop
+\\ Stack: dylib
+
+\\ --- Error: out-ptr as return type is rejected ---
+
+[
+  toy-lib-path lib-open
+  dup "toy_open_out" lib-symbol
+  ffi{ ptr -> out-ptr } bind-sig
+  drop swap resource-close
+]
+ffi-type-mismatch: "out-ptr as return type rejected" assert-error-type
+
+resource-close

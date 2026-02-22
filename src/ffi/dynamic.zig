@@ -628,6 +628,7 @@ fn marshalReturn(ctx: *Context, return_type: FfiType, ret: *const ReturnStorage)
 
 /// Read a value from an out-parameter ArgSlot and push it onto the stack.
 fn marshalOutParam(ctx: *Context, param_type: FfiType, slot: *const ArgSlot) !void {
+    const alloc = ctx.arena.allocator();
     switch (param_type.tag) {
         inline .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64, .usize_type, .isize_type => |tag| {
             const T = ffiTagToZigType(tag);
@@ -637,7 +638,18 @@ fn marshalOutParam(ctx: *Context, param_type: FfiType, slot: *const ArgSlot) !vo
         .f32 => try ctx.stack.push(.{ .float = @floatCast(slot.f32_val) }),
         .f64 => try ctx.stack.push(.{ .float = slot.f64_val }),
         .bool_type => try ctx.stack.push(.{ .boolean = slot.bool_val != 0 }),
-        .void_type, .cstring, .cstring_retained, .cstring_owned, .ptr => unreachable,
+        .ptr => {
+            const type_name = param_type.ptr_name orelse "ffi-ptr";
+            const r = try alloc.create(Resource);
+            r.* = .{
+                .type_name = type_name,
+                .ptr = slot.ptr_val,
+                .closed = false,
+                .close_fn = .none,
+            };
+            try ctx.stack.push(.{ .resource = r });
+        },
+        .void_type, .cstring, .cstring_retained, .cstring_owned => unreachable,
     }
 }
 
@@ -708,8 +720,8 @@ fn nativeBindClose(ctx: *Context) anyerror!void {
         return error.FFICallFailed;
     };
 
-    if (sig.param_types.len != 1 or sig.param_types[0].tag != .ptr or sig.return_type.tag != .void_type) {
-        helpers.setErrorContext(ctx, "bind-close requires signature ( ptr -> void )", .{});
+    if (sig.param_types.len != 1 or sig.param_types[0].tag != .ptr) {
+        helpers.setErrorContext(ctx, "bind-close requires signature with exactly one ptr parameter", .{});
         return error.FFITypeMismatch;
     }
 
