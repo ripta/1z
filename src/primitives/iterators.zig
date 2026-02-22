@@ -14,6 +14,7 @@ const sequence = @import("sequence.zig");
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = ">iterator", .func = nativeToIterator },
     .{ .name = "make-callback-iter", .func = nativeMakeCallbackIter },
+    .{ .name = "make-callback-iter-with-cleanup", .func = nativeMakeCallbackIterWithCleanup },
 };
 
 pub const primitives = [_]Primitive{
@@ -166,6 +167,37 @@ fn nativeMakeCallbackIter(ctx: *Context) anyerror!void {
     iter.* = .{ .kind = .{ .callback = .{
         .quotation = quotation,
         .exhausted = false,
+        .cleanup_quotation = null,
+        .cleanup_ran = false,
+    } } };
+    try ctx.stack.push(.{ .iterator = iter });
+}
+
+/// make-callback-iter-with-cleanup ( step-quot cleanup-quot -- iterator )
+fn nativeMakeCallbackIterWithCleanup(ctx: *Context) anyerror!void {
+    const cleanup_val = try ctx.stack.pop();
+    const step_val = try ctx.stack.pop();
+    const cleanup_quotation = switch (cleanup_val) {
+        .quotation => |q| q,
+        else => {
+            helpers.setTypeMismatchError(ctx, "quotation", cleanup_val);
+            return error.TypeMismatch;
+        },
+    };
+    const step_quotation = switch (step_val) {
+        .quotation => |q| q,
+        else => {
+            helpers.setTypeMismatchError(ctx, "quotation", step_val);
+            return error.TypeMismatch;
+        },
+    };
+    const alloc = ctx.quotationAllocator();
+    const iter = try alloc.create(Iterator);
+    iter.* = .{ .kind = .{ .callback = .{
+        .quotation = step_quotation,
+        .exhausted = false,
+        .cleanup_quotation = cleanup_quotation,
+        .cleanup_ran = false,
     } } };
     try ctx.stack.push(.{ .iterator = iter });
 }

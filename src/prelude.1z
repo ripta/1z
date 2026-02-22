@@ -507,6 +507,15 @@ receive?: ( ch -- option ) [ [ receive >option:some ] [ drop option:none ] recov
   ] if
 ] ;
 
+\\ Create an iterator with a cleanup quotation. The step quotation returns option values;
+\\ the cleanup quotation runs automatically when the callback iterator is naturally exhausted.
+>iterator(with-cleanup): ( step-quot cleanup-quot -- iterator ) [
+  swap
+  [ call dup option:some? [ option:some> t ] [ drop f ] if ] curry
+  swap
+  native.make-callback-iter-with-cleanup
+] ;
+
 \\ Advance an iterator, returning some(value) or none if exhausted.
 #next?: ( iter -- option ) [ [ #next >option:some ] [ drop option:none ] recover ] ;
 

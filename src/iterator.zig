@@ -165,6 +165,8 @@ pub const DropIter = struct {
 pub const CallbackIter = struct {
     quotation: Quotation,
     exhausted: bool,
+    cleanup_quotation: ?Quotation,
+    cleanup_ran: bool,
 
     pub fn next(self: *CallbackIter, ctx: *Context) anyerror!?Value {
         if (self.exhausted) return null;
@@ -175,6 +177,12 @@ pub const CallbackIter = struct {
             return try ctx.stack.pop();
         } else {
             self.exhausted = true;
+            if (self.cleanup_quotation) |cq| {
+                if (!self.cleanup_ran) {
+                    self.cleanup_ran = true;
+                    try ctx.executeQuotationWithFrame(cq);
+                }
+            }
             return null;
         }
     }

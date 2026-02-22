@@ -232,6 +232,7 @@ yield ( -- )
 >= ( a b -- ? )
 >hash
 >iterator ( seq-or-quot -- iterator )
+>iterator(with-cleanup) ( step-quot cleanup-quot -- iterator )
 >option:some
 >result:err
 >result:ok
