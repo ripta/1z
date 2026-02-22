@@ -1,0 +1,82 @@
+Stack: [ ]
+=== open and close in-memory database ===
+Stack: [ ]
+Stack: [ <resource:sqlite3> 0 ]
+PASS: open rc
+Stack: [ <resource:sqlite3> ]
+Stack: [ 0 ]
+PASS: close rc
+Stack: [ ]
+=== DDL and DML via exec ===
+Stack: [ ]
+PASS: open
+Stack: [ <resource:sqlite3> ]
+Stack: [ <resource:sqlite3> 0 ]
+PASS: create table
+Stack: [ <resource:sqlite3> ]
+Stack: [ <resource:sqlite3> 0 ]
+PASS: insert via exec
+Stack: [ <resource:sqlite3> ]
+Stack: [ ]
+=== prepare, bind, step, and column reading ===
+Stack: [ ]
+PASS: open
+Stack: [ <resource:sqlite3> ]
+Stack: [ <resource:sqlite3> 0 ]
+PASS: create table
+Stack: [ <resource:sqlite3> ]
+PASS: prepare insert
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> ]
+PASS: bind int64
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> ]
+PASS: bind text
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> ]
+PASS: bind double
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> ]
+PASS: step insert done
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> ]
+Stack: [ <resource:sqlite3> ]
+PASS: prepare select
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> ]
+PASS: step select row
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> ]
+PASS: column int64 id
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> ]
+PASS: column text name
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> ]
+PASS: column double value
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> ]
+PASS: step select done
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> ]
+Stack: [ <resource:sqlite3> ]
+Stack: [ ]
+=== NULL binding and column type detection ===
+Stack: [ ]
+PASS: open
+Stack: [ <resource:sqlite3> ]
+PASS: create t2
+Stack: [ <resource:sqlite3> ]
+PASS: prepare null insert
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> ]
+PASS: bind null
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> ]
+PASS: step null insert
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> ]
+Stack: [ <resource:sqlite3> ]
+PASS: prepare null select
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> ]
+PASS: step null select
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> ]
+PASS: column type is SQLITE_NULL
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> ]
+Stack: [ <resource:sqlite3> ]
+Stack: [ ]
+=== prepare invalid SQL returns error ===
+Stack: [ ]
+PASS: open
+Stack: [ <resource:sqlite3> ]
+Stack: [ <resource:sqlite3> <resource:sqlite3-stmt> 1 ]
+Stack: [ <resource:sqlite3> 1 ]
+PASS: non-zero error code
+Stack: [ <resource:sqlite3> ]
+Stack: [ ]

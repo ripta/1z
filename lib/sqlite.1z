@@ -1,0 +1,57 @@
+\ lib/sqlite.1z - SQLite database via dynamic FFI
+
+use "ffi" ;
+
+\\ Bind sqlite3 functions via dynamic FFI against system libsqlite3.
+"sqlite3" lib-open ffi-def{
+  __open: "sqlite3_open" ffi{ cstring out-ptr:sqlite3 -> i32 }
+  __close-v2: "sqlite3_close_v2" ffi{ ptr -> i32 }
+  __prepare-v2: "sqlite3_prepare_v2" ffi{ ptr cstring i32 out-ptr:sqlite3-stmt isize -> i32 }
+  __finalize: "sqlite3_finalize" ffi{ ptr -> i32 }
+  __step: "sqlite3_step" ffi{ ptr -> i32 }
+  __reset: "sqlite3_reset" ffi{ ptr -> i32 }
+  __exec: "sqlite3_exec" ffi{ ptr cstring isize isize isize -> i32 }
+  __errmsg: "sqlite3_errmsg" ffi{ ptr -> cstring }
+  __column-count: "sqlite3_column_count" ffi{ ptr -> i32 }
+  __column-name: "sqlite3_column_name" ffi{ ptr i32 -> cstring }
+  __column-type: "sqlite3_column_type" ffi{ ptr i32 -> i32 }
+  __column-int64: "sqlite3_column_int64" ffi{ ptr i32 -> i64 }
+  __column-double: "sqlite3_column_double" ffi{ ptr i32 -> f64 }
+  __column-text: "sqlite3_column_text" ffi{ ptr i32 -> cstring }
+  __column-blob: "sqlite3_column_blob" ffi{ ptr i32 -> ptr }
+  __column-bytes: "sqlite3_column_bytes" ffi{ ptr i32 -> i32 }
+  __bind-int64: "sqlite3_bind_int64" ffi{ ptr i32 i64 -> i32 }
+  __bind-double: "sqlite3_bind_double" ffi{ ptr i32 f64 -> i32 }
+  __bind-text: "sqlite3_bind_text" ffi{ ptr i32 cstring i32 isize -> i32 }
+  __bind-blob: "sqlite3_bind_blob" ffi{ ptr i32 ptr i32 isize -> i32 }
+  __bind-null: "sqlite3_bind_null" ffi{ ptr i32 -> i32 }
+} call "sqlite-raw" swap >module import
+
+\ Forwarding words use `t drop` after the call to prevent tail-call
+\ optimization, which would pop this module's deps frame before the
+\ ffi-def quotation runs and tries to resolve `ffi-call`.
+(open):       [ __open t drop ] ;
+(close-v2):   [ __close-v2 t drop ] ;
+(prepare-v2): [ __prepare-v2 t drop ] ;
+(finalize):   [ __finalize t drop ] ;
+(step):       [ __step t drop ] ;
+(reset):      [ __reset t drop ] ;
+(exec):       [ __exec t drop ] ;
+(errmsg):     [ __errmsg t drop ] ;
+(column-count):  [ __column-count t drop ] ;
+(column-name):   [ __column-name t drop ] ;
+(column-type):   [ __column-type t drop ] ;
+(column-int64):  [ __column-int64 t drop ] ;
+(column-double): [ __column-double t drop ] ;
+(column-text):   [ __column-text t drop ] ;
+(column-blob):   [ __column-blob t drop ] ;
+(column-bytes):  [ __column-bytes t drop ] ;
+(bind-int64):    [ __bind-int64 t drop ] ;
+(bind-double):   [ __bind-double t drop ] ;
+(bind-text):     [ __bind-text t drop ] ;
+(bind-blob):     [ __bind-blob t drop ] ;
+(bind-null):     [ __bind-null t drop ] ;
+
+SQLITE_OK:   0 ;
+SQLITE_ROW:  100 ;
+SQLITE_DONE: 101 ;
