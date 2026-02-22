@@ -466,9 +466,7 @@ pub fn formatString(allocator: Allocator, input: []const u8) ![]u8 {
     // Post-process to align consecutive inline comments and single-line definitions
     const with_comments = try alignComments(allocator, formatted);
     defer allocator.free(with_comments);
-    const with_defs = try alignDefinitions(allocator, with_comments);
-    defer allocator.free(with_defs);
-    return alignBlockEntries(allocator, with_defs);
+    return alignSymbolLines(allocator, with_comments);
 }
 
 /// Align consecutive inline comments to the same column.
@@ -479,21 +477,8 @@ fn alignComments(allocator: Allocator, input: []const u8) ![]u8 {
     var result: std.ArrayListUnmanaged(u8) = .{};
     errdefer result.deinit(allocator);
 
-    // Split into lines
-    var lines: std.ArrayListUnmanaged([]const u8) = .{};
+    var lines = try splitIntoLines(allocator, input);
     defer lines.deinit(allocator);
-
-    var line_start: usize = 0;
-    for (input, 0..) |c, i| {
-        if (c == '\n') {
-            try lines.append(allocator, input[line_start..i]);
-            line_start = i + 1;
-        }
-    }
-    // Handle last line without trailing newline
-    if (line_start < input.len) {
-        try lines.append(allocator, input[line_start..]);
-    }
 
     // Process lines in groups
     var i: usize = 0;
@@ -537,9 +522,7 @@ fn alignComments(allocator: Allocator, input: []const u8) ![]u8 {
             }
             i = group_end;
         } else {
-            // Single line or line without inline comment - output as-is
-            try result.appendSlice(allocator, lines.items[i]);
-            try result.append(allocator, '\n');
+            try emitRawLines(allocator, &result, lines.items[i .. i + 1]);
             i += 1;
         }
     }
@@ -577,98 +560,10 @@ fn findInlineComment(line: []const u8) ?usize {
     return null;
 }
 
-/// Parsed representation of a single-line definition for alignment purposes.
-const DefinitionLine = struct {
-    indent: []const u8,
-    name: []const u8,
-    has_stack_effect: bool,
-    stack_effect: []const u8,
-    body: []const u8,
-    trailing_comment: ?[]const u8,
-};
-
-/// Parse a line as a single-line definition.
-/// Returns null if the line is not a single-line definition.
-///
-/// Logic:
-/// - Ignore leading indentation for matching, but preserve it in the result
-/// - Must end with " ;" possibly followed by an inline comment
-/// - First token must be a symbol
-/// - If there's a stack effect, it must be immediately after the name and properly closed
-/// - The body must have content (can't be empty after name and optional stack effect)
-///
-/// XXX(ripta): Not a fan of reparsing lines here. Find better ways in the future.
-fn parseDefinitionLine(line: []const u8) ?DefinitionLine {
-    const trimmed_right = std.mem.trimRight(u8, line, " \t");
-
-    var trailing_comment: ?[]const u8 = null;
-    var def_end: usize = undefined;
-
-    if (findInlineComment(trimmed_right)) |comment_pos| {
-        // XXX: Line has an inline comment, so the definition part is before it
-        const before_comment = std.mem.trimRight(u8, trimmed_right[0 .. comment_pos - 2], " ");
-        if (before_comment.len < 2 or !std.mem.endsWith(u8, before_comment, " ;")) return null;
-        def_end = before_comment.len - 2;
-        trailing_comment = trimmed_right[comment_pos..];
-    } else {
-        if (!std.mem.endsWith(u8, trimmed_right, " ;")) return null;
-        def_end = trimmed_right.len - 2;
-    }
-
-    const stripped = std.mem.trimLeft(u8, line, " ");
-    const indent_len = line.len - stripped.len;
-    if (indent_len >= def_end) return null;
-    const indent = line[0..indent_len];
-
-    const content = std.mem.trimRight(u8, line[indent_len..def_end], " ");
-
-    const first_space = std.mem.indexOf(u8, content, " ") orelse return null;
-    const first_word = content[0..first_space];
-    if (first_word.len < 2 or first_word[first_word.len - 1] != ':') return null;
-
-    // Don't align multi-line definitions
-    // A definition must have content after the name
-    const after_name = std.mem.trimLeft(u8, content[first_space..], " ");
-    if (after_name.len == 0) return null;
-
-    // Check if there's a stack effect
-    if (after_name[0] == '(') {
-        const close_paren = std.mem.indexOf(u8, after_name, " )") orelse return null;
-        const stack_effect = after_name[0 .. close_paren + 2];
-        const body = std.mem.trimLeft(u8, after_name[close_paren + 2 ..], " ");
-        if (body.len == 0) return null;
-
-        return .{
-            .indent = indent,
-            .name = first_word,
-            .has_stack_effect = true,
-            .stack_effect = stack_effect,
-            .body = body,
-            .trailing_comment = trailing_comment,
-        };
-    }
-
-    return .{
-        .indent = indent,
-        .name = first_word,
-        .has_stack_effect = false,
-        .stack_effect = "",
-        .body = after_name,
-        .trailing_comment = trailing_comment,
-    };
-}
-
-/// Align consecutive single-line definitions so their stack effects and bodies
-/// line up vertically. Groups of 3 or more like-structured definitions are
-/// aligned together. A divergence limit prevents excessive padding.
-///
-/// XXX(ripta): Not a fan of reparsing lines here. Find better ways in the future.
-fn alignDefinitions(allocator: Allocator, input: []const u8) ![]u8 {
-    var result: std.ArrayListUnmanaged(u8) = .{};
-    errdefer result.deinit(allocator);
-
+/// Split input into lines, separated by newline characters.
+fn splitIntoLines(allocator: Allocator, input: []const u8) !std.ArrayListUnmanaged([]const u8) {
     var lines: std.ArrayListUnmanaged([]const u8) = .{};
-    defer lines.deinit(allocator);
+    errdefer lines.deinit(allocator);
 
     var line_start: usize = 0;
     for (input, 0..) |c, idx| {
@@ -681,30 +576,186 @@ fn alignDefinitions(allocator: Allocator, input: []const u8) ![]u8 {
         try lines.append(allocator, input[line_start..]);
     }
 
-    var parsed = try std.ArrayListUnmanaged(?DefinitionLine).initCapacity(allocator, lines.items.len);
+    return lines;
+}
+
+/// Emit lines as-is into the result buffer, each followed by a newline.
+fn emitRawLines(allocator: Allocator, result: *std.ArrayListUnmanaged(u8), lines: []const []const u8) !void {
+    for (lines) |line| {
+        try result.appendSlice(allocator, line);
+        try result.append(allocator, '\n');
+    }
+}
+
+/// Find the end index of a divergence-limited subgroup starting at `start`.
+/// Lines in the subgroup have name lengths whose padding does not exceed
+/// min(shortest_name_len, 15).
+fn findSubgroupEnd(parsed: []const ?AlignableLine, start: usize) usize {
+    var subgroup_end = start + 1;
+    var max_name_len = parsed[start].?.name.len;
+    var min_name_len = parsed[start].?.name.len;
+
+    while (subgroup_end < parsed.len) {
+        const candidate_len = parsed[subgroup_end].?.name.len;
+        const new_max = @max(max_name_len, candidate_len);
+        const new_min = @min(min_name_len, candidate_len);
+
+        const padding_needed = new_max - new_min;
+        const limit = @min(new_min, 15);
+        if (padding_needed > limit) break;
+
+        max_name_len = new_max;
+        min_name_len = new_min;
+        subgroup_end += 1;
+    }
+
+    return subgroup_end;
+}
+
+/// Parsed representation of an alignable symbol line (definition or block entry).
+const AlignableLine = struct {
+    indent: []const u8,
+    name: []const u8,
+    has_stack_effect: bool,
+    stack_effect: []const u8,
+    body: []const u8,
+    suffix: []const u8,
+    trailing_comment: ?[]const u8,
+};
+
+/// Parse a line as an alignable symbol line.
+/// Returns null if the line is not alignable.
+///
+/// Unindented lines must end with " ;" and may have a stack effect after the
+/// name. Indented lines have no stack effect parsing; body includes everything
+/// after the name (including " ;" if present), and suffix is empty.
+///
+/// XXX(ripta): Not a fan of reparsing lines here. Find better ways in the future.
+fn parseAlignableLine(line: []const u8) ?AlignableLine {
+    const trimmed_right = std.mem.trimRight(u8, line, " \t");
+    const stripped = std.mem.trimLeft(u8, line, " ");
+    const indent_len = line.len - stripped.len;
+    const indent = line[0..indent_len];
+
+    const first_space = std.mem.indexOf(u8, stripped, " ") orelse return null;
+    const first_word = stripped[0..first_space];
+    if (first_word.len < 2 or first_word[first_word.len - 1] != ':') return null;
+
+    const after_name = std.mem.trimLeft(u8, stripped[first_space..], " ");
+    if (after_name.len == 0) return null;
+
+    if (indent_len == 0) {
+        var trailing_comment: ?[]const u8 = null;
+        var def_end: usize = undefined;
+
+        if (findInlineComment(trimmed_right)) |comment_pos| {
+            const before_comment = std.mem.trimRight(u8, trimmed_right[0 .. comment_pos - 2], " ");
+            if (before_comment.len < 2 or !std.mem.endsWith(u8, before_comment, " ;")) return null;
+            def_end = before_comment.len - 2;
+            trailing_comment = trimmed_right[comment_pos..];
+        } else {
+            if (!std.mem.endsWith(u8, trimmed_right, " ;")) return null;
+            def_end = trimmed_right.len - 2;
+        }
+
+        if (def_end == 0) return null;
+        const content = std.mem.trimRight(u8, line[0..def_end], " ");
+
+        const content_first_space = std.mem.indexOf(u8, content, " ") orelse return null;
+        const content_after_name = std.mem.trimLeft(u8, content[content_first_space..], " ");
+        if (content_after_name.len == 0) return null;
+
+        if (content_after_name[0] == '(') {
+            const close_paren = std.mem.indexOf(u8, content_after_name, " )") orelse return null;
+            const stack_effect = content_after_name[0 .. close_paren + 2];
+            const body = std.mem.trimLeft(u8, content_after_name[close_paren + 2 ..], " ");
+            if (body.len == 0) return null;
+
+            return .{
+                .indent = indent,
+                .name = first_word,
+                .has_stack_effect = true,
+                .stack_effect = stack_effect,
+                .body = body,
+                .suffix = " ;",
+                .trailing_comment = trailing_comment,
+            };
+        }
+
+        return .{
+            .indent = indent,
+            .name = first_word,
+            .has_stack_effect = false,
+            .stack_effect = "",
+            .body = content_after_name,
+            .suffix = " ;",
+            .trailing_comment = trailing_comment,
+        };
+    }
+
+    // Indented: block entry, no stack effect, body is everything after name
+    var trailing_comment: ?[]const u8 = null;
+    var value: []const u8 = undefined;
+
+    if (findInlineComment(trimmed_right)) |comment_pos| {
+        const before_comment = std.mem.trimRight(u8, trimmed_right[0 .. comment_pos - 2], " ");
+        value = std.mem.trimLeft(u8, before_comment[indent_len + first_word.len ..], " ");
+        trailing_comment = trimmed_right[comment_pos..];
+    } else {
+        value = std.mem.trimRight(u8, after_name, " \t");
+    }
+
+    if (value.len == 0) return null;
+
+    return .{
+        .indent = indent,
+        .name = first_word,
+        .has_stack_effect = false,
+        .stack_effect = "",
+        .body = value,
+        .suffix = "",
+        .trailing_comment = trailing_comment,
+    };
+}
+
+/// Align consecutive symbol lines (definitions and block entries) so their
+/// bodies line up vertically. Groups of 3 or more like-structured lines at
+/// the same indent level are aligned together. Stack effect alignment is
+/// reserved for unindented (top-level) definitions.
+///
+/// XXX(ripta): Not a fan of reparsing lines here. Find better ways in the future.
+fn alignSymbolLines(allocator: Allocator, input: []const u8) ![]u8 {
+    var result: std.ArrayListUnmanaged(u8) = .{};
+    errdefer result.deinit(allocator);
+
+    var lines = try splitIntoLines(allocator, input);
+    defer lines.deinit(allocator);
+
+    var parsed = try std.ArrayListUnmanaged(?AlignableLine).initCapacity(allocator, lines.items.len);
     defer parsed.deinit(allocator);
     for (lines.items) |line| {
-        parsed.appendAssumeCapacity(parseDefinitionLine(line));
+        parsed.appendAssumeCapacity(parseAlignableLine(line));
     }
 
     var i: usize = 0;
     while (i < lines.items.len) {
-        // Try to find a group of consecutive definition lines
         if (parsed.items[i] == null) {
-            try result.appendSlice(allocator, lines.items[i]);
-            try result.append(allocator, '\n');
+            try emitRawLines(allocator, &result, lines.items[i .. i + 1]);
             i += 1;
             continue;
         }
 
-        // Found a definition; scan for the end of the group
+        // Find end of consecutive parsed lines at the same indent level
         const group_start = i;
+        const group_indent = parsed.items[i].?.indent;
         var group_end = i;
-        while (group_end < lines.items.len and parsed.items[group_end] != null) {
+        while (group_end < lines.items.len) {
+            const p = parsed.items[group_end] orelse break;
+            if (!std.mem.eql(u8, p.indent, group_indent)) break;
             group_end += 1;
         }
 
-        // Split group into sub-runs of like-structured definitions
+        // Split group into sub-runs by has_stack_effect
         var run_start = group_start;
         while (run_start < group_end) {
             const run_has_effect = parsed.items[run_start].?.has_stack_effect;
@@ -715,14 +766,19 @@ fn alignDefinitions(allocator: Allocator, input: []const u8) ![]u8 {
 
             const run_len = run_end - run_start;
             if (run_len >= 3) {
-                // Apply divergence limit subgrouping and alignment
-                try alignDefinitionRun(allocator, &result, parsed.items[run_start..run_end], lines.items[run_start..run_end]);
-            } else {
-                // Too few; output as-is
-                for (lines.items[run_start..run_end]) |line| {
-                    try result.appendSlice(allocator, line);
-                    try result.append(allocator, '\n');
+                var subgroup_start = run_start;
+                while (subgroup_start < run_end) {
+                    const subgroup_end = findSubgroupEnd(parsed.items[subgroup_start..run_end], 0) + subgroup_start;
+                    const subgroup_len = subgroup_end - subgroup_start;
+                    if (subgroup_len >= 3) {
+                        try emitAlignedLines(allocator, &result, parsed.items[subgroup_start..subgroup_end]);
+                    } else {
+                        try emitRawLines(allocator, &result, lines.items[subgroup_start..subgroup_end]);
+                    }
+                    subgroup_start = subgroup_end;
                 }
+            } else {
+                try emitRawLines(allocator, &result, lines.items[run_start..run_end]);
             }
 
             run_start = run_end;
@@ -738,304 +794,51 @@ fn alignDefinitions(allocator: Allocator, input: []const u8) ![]u8 {
     return result.toOwnedSlice(allocator);
 }
 
-/// Align a run of like-structured definitions, applying divergence-limit
-/// subgrouping as needed.
-fn alignDefinitionRun(
+/// Emit a subgroup of alignable lines with aligned columns.
+fn emitAlignedLines(
     allocator: Allocator,
     result: *std.ArrayListUnmanaged(u8),
-    defs: []const ?DefinitionLine,
-    raw_lines: []const []const u8,
-) !void {
-    // XXX: Apply divergence limit subgrouping with greedy scan? Keep track of subgroup, flush when adding next would violate any existing member's padding limit
-    var subgroup_start: usize = 0;
-    while (subgroup_start < defs.len) {
-        var subgroup_end = subgroup_start + 1;
-        var max_name_len = defs[subgroup_start].?.name.len;
-        var min_name_len = defs[subgroup_start].?.name.len;
-
-        while (subgroup_end < defs.len) {
-            const candidate_len = defs[subgroup_end].?.name.len;
-            const new_max = @max(max_name_len, candidate_len);
-            const new_min = @min(min_name_len, candidate_len);
-
-            // Check if adding this candidate would violate any member's limit
-            // For any member, padding must not exceed min(this_name_len, 15)
-            const padding_needed = new_max - new_min;
-            const limit = @min(new_min, 15);
-            if (padding_needed > limit) {
-                break;
-            }
-
-            max_name_len = new_max;
-            min_name_len = new_min;
-            subgroup_end += 1;
-        }
-
-        const subgroup_len = subgroup_end - subgroup_start;
-        if (subgroup_len >= 3) {
-            try emitAlignedSubgroup(allocator, result, defs[subgroup_start..subgroup_end]);
-        } else {
-            for (raw_lines[subgroup_start..subgroup_end]) |line| {
-                try result.appendSlice(allocator, line);
-                try result.append(allocator, '\n');
-            }
-        }
-
-        subgroup_start = subgroup_end;
-    }
-}
-
-/// Emit a subgroup of definitions with aligned columns.
-///
-/// Logic:
-/// - col 1: name, padded to max name length in subgroup
-/// - col 2 (if stack effects): stack effect, padded to max effect length in subgroup
-/// - col 3: body
-fn emitAlignedSubgroup(
-    allocator: Allocator,
-    result: *std.ArrayListUnmanaged(u8),
-    defs: []const ?DefinitionLine,
+    lines: []const ?AlignableLine,
 ) !void {
     var max_name_len: usize = 0;
-    for (defs) |maybe_def| {
-        const def = maybe_def.?;
-        max_name_len = @max(max_name_len, def.name.len);
+    for (lines) |maybe_line| {
+        max_name_len = @max(max_name_len, maybe_line.?.name.len);
     }
 
-    const has_stack_effect = defs[0].?.has_stack_effect;
-
+    const has_stack_effect = lines[0].?.has_stack_effect;
     var max_effect_len: usize = 0;
     if (has_stack_effect) {
-        for (defs) |maybe_def| {
-            const def = maybe_def.?;
-            max_effect_len = @max(max_effect_len, def.stack_effect.len);
+        for (lines) |maybe_line| {
+            max_effect_len = @max(max_effect_len, maybe_line.?.stack_effect.len);
         }
     }
 
-    for (defs) |maybe_def| {
-        const def = maybe_def.?;
+    for (lines) |maybe_line| {
+        const line = maybe_line.?;
 
-        try result.appendSlice(allocator, def.indent);
-        try result.appendSlice(allocator, def.name);
+        try result.appendSlice(allocator, line.indent);
+        try result.appendSlice(allocator, line.name);
 
-        const name_padding = max_name_len - def.name.len;
+        const name_padding = max_name_len - line.name.len;
         for (0..name_padding) |_| {
             try result.append(allocator, ' ');
         }
 
         if (has_stack_effect) {
             try result.append(allocator, ' ');
-            try result.appendSlice(allocator, def.stack_effect);
+            try result.appendSlice(allocator, line.stack_effect);
 
-            const effect_padding = max_effect_len - def.stack_effect.len;
+            const effect_padding = max_effect_len - line.stack_effect.len;
             for (0..effect_padding) |_| {
                 try result.append(allocator, ' ');
             }
         }
 
         try result.append(allocator, ' ');
-        try result.appendSlice(allocator, def.body);
-        try result.appendSlice(allocator, " ;");
+        try result.appendSlice(allocator, line.body);
+        try result.appendSlice(allocator, line.suffix);
 
-        if (def.trailing_comment) |comment| {
-            try result.appendSlice(allocator, "  ");
-            try result.appendSlice(allocator, comment);
-        }
-
-        try result.append(allocator, '\n');
-    }
-}
-
-/// Parsed representation of a block entry line (indented symbol inside a block)
-/// for alignment purposes.
-const BlockEntryLine = struct {
-    indent: []const u8,
-    name: []const u8,
-    value: []const u8,
-    trailing_comment: ?[]const u8,
-};
-
-/// Parse a line as a block entry (indented symbol with value, not a definition).
-/// Returns null if the line is not a block entry.
-fn parseBlockEntryLine(line: []const u8) ?BlockEntryLine {
-    // Must not be a definition line (those end with " ;")
-    if (parseDefinitionLine(line) != null) return null;
-
-    const stripped = std.mem.trimLeft(u8, line, " ");
-    const indent_len = line.len - stripped.len;
-
-    // Must be indented (inside a block)
-    if (indent_len == 0) return null;
-    const indent = line[0..indent_len];
-
-    // First token must be a symbol (ends with ':')
-    const first_space = std.mem.indexOf(u8, stripped, " ") orelse return null;
-    const first_word = stripped[0..first_space];
-    if (first_word.len < 2 or first_word[first_word.len - 1] != ':') return null;
-
-    // Must have content after the symbol
-    const after_name = std.mem.trimLeft(u8, stripped[first_space..], " ");
-    if (after_name.len == 0) return null;
-
-    // Check for trailing comment
-    var trailing_comment: ?[]const u8 = null;
-    var value: []const u8 = undefined;
-
-    const trimmed_right = std.mem.trimRight(u8, line, " \t");
-    if (findInlineComment(trimmed_right)) |comment_pos| {
-        const before_comment = std.mem.trimRight(u8, trimmed_right[0 .. comment_pos - 2], " ");
-        value = before_comment[indent_len + first_word.len ..];
-        value = std.mem.trimLeft(u8, value, " ");
-        trailing_comment = trimmed_right[comment_pos..];
-    } else {
-        value = std.mem.trimRight(u8, after_name, " \t");
-    }
-
-    if (value.len == 0) return null;
-
-    return .{
-        .indent = indent,
-        .name = first_word,
-        .value = value,
-        .trailing_comment = trailing_comment,
-    };
-}
-
-/// Align consecutive block entry lines so their values line up vertically.
-/// Uses the same grouping and divergence-limit logic as alignDefinitions.
-fn alignBlockEntries(allocator: Allocator, input: []const u8) ![]u8 {
-    var result: std.ArrayListUnmanaged(u8) = .{};
-    errdefer result.deinit(allocator);
-
-    var lines: std.ArrayListUnmanaged([]const u8) = .{};
-    defer lines.deinit(allocator);
-
-    var line_start: usize = 0;
-    for (input, 0..) |c, idx| {
-        if (c == '\n') {
-            try lines.append(allocator, input[line_start..idx]);
-            line_start = idx + 1;
-        }
-    }
-    if (line_start < input.len) {
-        try lines.append(allocator, input[line_start..]);
-    }
-
-    var parsed = try std.ArrayListUnmanaged(?BlockEntryLine).initCapacity(allocator, lines.items.len);
-    defer parsed.deinit(allocator);
-    for (lines.items) |line| {
-        parsed.appendAssumeCapacity(parseBlockEntryLine(line));
-    }
-
-    var i: usize = 0;
-    while (i < lines.items.len) {
-        if (parsed.items[i] == null) {
-            try result.appendSlice(allocator, lines.items[i]);
-            try result.append(allocator, '\n');
-            i += 1;
-            continue;
-        }
-
-        // Found a block entry; scan for consecutive entries at the same indent
-        const group_start = i;
-        const group_indent = parsed.items[i].?.indent;
-        var group_end = i;
-        while (group_end < lines.items.len) {
-            const p = parsed.items[group_end] orelse break;
-            if (!std.mem.eql(u8, p.indent, group_indent)) break;
-            group_end += 1;
-        }
-
-        const group_len = group_end - group_start;
-        if (group_len >= 3) {
-            try alignBlockEntryRun(allocator, &result, parsed.items[group_start..group_end], lines.items[group_start..group_end]);
-        } else {
-            for (lines.items[group_start..group_end]) |line| {
-                try result.appendSlice(allocator, line);
-                try result.append(allocator, '\n');
-            }
-        }
-
-        i = group_end;
-    }
-
-    if (result.items.len > 0 and input.len > 0 and input[input.len - 1] != '\n') {
-        _ = result.pop();
-    }
-
-    return result.toOwnedSlice(allocator);
-}
-
-/// Align a run of block entry lines, applying divergence-limit subgrouping.
-fn alignBlockEntryRun(
-    allocator: Allocator,
-    result: *std.ArrayListUnmanaged(u8),
-    entries: []const ?BlockEntryLine,
-    raw_lines: []const []const u8,
-) !void {
-    var subgroup_start: usize = 0;
-    while (subgroup_start < entries.len) {
-        var subgroup_end = subgroup_start + 1;
-        var max_name_len = entries[subgroup_start].?.name.len;
-        var min_name_len = entries[subgroup_start].?.name.len;
-
-        while (subgroup_end < entries.len) {
-            const candidate_len = entries[subgroup_end].?.name.len;
-            const new_max = @max(max_name_len, candidate_len);
-            const new_min = @min(min_name_len, candidate_len);
-
-            const padding_needed = new_max - new_min;
-            const limit = @min(new_min, 15);
-            if (padding_needed > limit) {
-                break;
-            }
-
-            max_name_len = new_max;
-            min_name_len = new_min;
-            subgroup_end += 1;
-        }
-
-        const subgroup_len = subgroup_end - subgroup_start;
-        if (subgroup_len >= 3) {
-            try emitAlignedBlockEntrySubgroup(allocator, result, entries[subgroup_start..subgroup_end]);
-        } else {
-            for (raw_lines[subgroup_start..subgroup_end]) |line| {
-                try result.appendSlice(allocator, line);
-                try result.append(allocator, '\n');
-            }
-        }
-
-        subgroup_start = subgroup_end;
-    }
-}
-
-/// Emit a subgroup of block entries with aligned columns.
-fn emitAlignedBlockEntrySubgroup(
-    allocator: Allocator,
-    result: *std.ArrayListUnmanaged(u8),
-    entries: []const ?BlockEntryLine,
-) !void {
-    var max_name_len: usize = 0;
-    for (entries) |maybe_entry| {
-        const entry = maybe_entry.?;
-        max_name_len = @max(max_name_len, entry.name.len);
-    }
-
-    for (entries) |maybe_entry| {
-        const entry = maybe_entry.?;
-
-        try result.appendSlice(allocator, entry.indent);
-        try result.appendSlice(allocator, entry.name);
-
-        const name_padding = max_name_len - entry.name.len;
-        for (0..name_padding) |_| {
-            try result.append(allocator, ' ');
-        }
-
-        try result.append(allocator, ' ');
-        try result.appendSlice(allocator, entry.value);
-
-        if (entry.trailing_comment) |comment| {
+        if (line.trailing_comment) |comment| {
             try result.appendSlice(allocator, "  ");
             try result.appendSlice(allocator, comment);
         }
