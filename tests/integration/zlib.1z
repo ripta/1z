@@ -1,0 +1,28 @@
+\ Integration tests for zlib compression library
+
+use "testing" ;
+use "zlib" ;
+
+"compress and uncompress round-trip" test-section
+B{ 72 101 108 108 111 32 87 111 114 108 100 }  \ "Hello World"
+dup compress
+dup #len 0 > "compressed is non-empty" assert-true
+uncompress
+"round-trip produces original" assert=
+
+"compress-level" test-section
+B{ 1 2 3 4 5 6 7 8 9 10 1 2 3 4 5 6 7 8 9 10 }
+dup dup
+1 compress-level uncompress 2 pick-n "level 1 round-trip" assert=
+swap 9 compress-level uncompress swap "level 9 round-trip" assert=
+
+"uncompress-sized with exact size" test-section
+B{ 72 101 108 108 111 32 87 111 114 108 100 }  \ "Hello World"
+dup dup compress swap #len uncompress-sized
+"uncompress-sized round-trip" assert=
+
+"empty byte array" test-section
+B{ } compress uncompress B{ } "empty round-trip" assert=
+
+"error on corrupt data" test-section
+[ B{ 0 1 2 3 4 5 } uncompress ] "corrupt data throws error" assert-error

@@ -1569,9 +1569,29 @@ fn nativeDrop(ctx: *Context) anyerror!void {
 }
 
 pub const registry_entries = [_]RegistryEntry{
+    .{ .name = "bytes-alloc", .func = nativeBytesAlloc },
     .{ .name = "shrink!", .func = nativeShrinkMut },
     .{ .name = "grow!", .func = nativeGrowMut },
 };
+
+/// bytes-alloc ( n -- byte-array ) - Create a fresh zero-filled byte array of size n.
+fn nativeBytesAlloc(ctx: *Context) anyerror!void {
+    const n_val = try popFixnum(ctx);
+    if (n_val < 0) {
+        setErrorContext(ctx, "bytes-alloc size must be non-negative, got {d}", .{n_val});
+        return error.IndexOutOfBounds;
+    }
+    const n: usize = @intCast(n_val);
+    const alloc = ctx.quotationAllocator();
+    const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+    ba.* = ByteArray{};
+    if (n > 0) {
+        ba.ensureTotalCapacity(alloc, n) catch return error.OutOfMemory;
+        ba.items.len = n;
+        @memset(ba.items[0..n], 0);
+    }
+    try ctx.stack.push(.{ .byte_array = ba });
+}
 
 /// shrink! ( seq n -- seq ) - Truncate a mutable sequence to n elements.
 ///

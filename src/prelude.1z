@@ -205,7 +205,7 @@ generic?: ( name -- ? ) [ word-markers [ generic = ] #any ] ;
 
 \ Mutable sequence resize
 \\ Create an n-byte zeroed buffer.
-bytes-alloc: ( n -- byte-array ) [ B{ } swap 0x00 native.grow! ] ;
+bytes-alloc: ( n -- byte-array ) [ native.bytes-alloc ] ;
 \\ Resize byte array in place, truncating or zero-filling as needed.
 bytes-resize!: ( byte-array n -- byte-array ) [ over #len over < [ 0x00 native.grow! ] [ native.shrink! ] if ] ;
 \\ Resize a mutable sequence in place with an explicit fill value for growth.
