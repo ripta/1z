@@ -1,8 +1,3 @@
-\ lib/sqlite.1z - SQLite database via dynamic FFI
-
-use "ffi" ;
-
-\\ Bind sqlite3 functions via dynamic FFI against system libsqlite3.
 "sqlite3" lib-open ffi-def{
   __open:       "sqlite3_open" ffi{ cstring out-ptr:sqlite3 -> i32 }
   __close-v2:   "sqlite3_close_v2" ffi{ ptr -> i32 }
@@ -26,29 +21,3 @@ use "ffi" ;
   __bind-blob:     "sqlite3_bind_blob" ffi{ ptr i32 ptr i32 isize -> i32 }
   __bind-null:     "sqlite3_bind_null" ffi{ ptr i32 -> i32 }
 } call "sqlite-raw" swap >module import
-
-(open):       [ __open ] ;
-(close-v2):   [ __close-v2 ] ;
-(prepare-v2): [ __prepare-v2 ] ;
-(finalize):   [ __finalize ] ;
-(step):       [ __step ] ;
-(reset):      [ __reset ] ;
-(exec):       [ __exec ] ;
-(errmsg):     [ __errmsg ] ;
-(column-count):  [ __column-count ] ;
-(column-name):   [ __column-name ] ;
-(column-type):   [ __column-type ] ;
-(column-int64):  [ __column-int64 ] ;
-(column-double): [ __column-double ] ;
-(column-text):   [ __column-text ] ;
-(column-blob):   [ __column-blob ] ;
-(column-bytes):  [ __column-bytes ] ;
-(bind-int64):    [ __bind-int64 ] ;
-(bind-double):   [ __bind-double ] ;
-(bind-text):     [ __bind-text ] ;
-(bind-blob):     [ __bind-blob ] ;
-(bind-null):     [ __bind-null ] ;
-
-SQLITE_OK:   0 ;
-SQLITE_ROW:  100 ;
-SQLITE_DONE: 101 ;

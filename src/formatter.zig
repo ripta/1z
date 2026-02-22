@@ -466,7 +466,9 @@ pub fn formatString(allocator: Allocator, input: []const u8) ![]u8 {
     // Post-process to align consecutive inline comments and single-line definitions
     const with_comments = try alignComments(allocator, formatted);
     defer allocator.free(with_comments);
-    return alignDefinitions(allocator, with_comments);
+    const with_defs = try alignDefinitions(allocator, with_comments);
+    defer allocator.free(with_defs);
+    return alignBlockEntries(allocator, with_defs);
 }
 
 /// Align consecutive inline comments to the same column.
@@ -836,6 +838,204 @@ fn emitAlignedSubgroup(
         try result.appendSlice(allocator, " ;");
 
         if (def.trailing_comment) |comment| {
+            try result.appendSlice(allocator, "  ");
+            try result.appendSlice(allocator, comment);
+        }
+
+        try result.append(allocator, '\n');
+    }
+}
+
+/// Parsed representation of a block entry line (indented symbol inside a block)
+/// for alignment purposes.
+const BlockEntryLine = struct {
+    indent: []const u8,
+    name: []const u8,
+    value: []const u8,
+    trailing_comment: ?[]const u8,
+};
+
+/// Parse a line as a block entry (indented symbol with value, not a definition).
+/// Returns null if the line is not a block entry.
+fn parseBlockEntryLine(line: []const u8) ?BlockEntryLine {
+    // Must not be a definition line (those end with " ;")
+    if (parseDefinitionLine(line) != null) return null;
+
+    const stripped = std.mem.trimLeft(u8, line, " ");
+    const indent_len = line.len - stripped.len;
+
+    // Must be indented (inside a block)
+    if (indent_len == 0) return null;
+    const indent = line[0..indent_len];
+
+    // First token must be a symbol (ends with ':')
+    const first_space = std.mem.indexOf(u8, stripped, " ") orelse return null;
+    const first_word = stripped[0..first_space];
+    if (first_word.len < 2 or first_word[first_word.len - 1] != ':') return null;
+
+    // Must have content after the symbol
+    const after_name = std.mem.trimLeft(u8, stripped[first_space..], " ");
+    if (after_name.len == 0) return null;
+
+    // Check for trailing comment
+    var trailing_comment: ?[]const u8 = null;
+    var value: []const u8 = undefined;
+
+    const trimmed_right = std.mem.trimRight(u8, line, " \t");
+    if (findInlineComment(trimmed_right)) |comment_pos| {
+        const before_comment = std.mem.trimRight(u8, trimmed_right[0 .. comment_pos - 2], " ");
+        value = before_comment[indent_len + first_word.len ..];
+        value = std.mem.trimLeft(u8, value, " ");
+        trailing_comment = trimmed_right[comment_pos..];
+    } else {
+        value = std.mem.trimRight(u8, after_name, " \t");
+    }
+
+    if (value.len == 0) return null;
+
+    return .{
+        .indent = indent,
+        .name = first_word,
+        .value = value,
+        .trailing_comment = trailing_comment,
+    };
+}
+
+/// Align consecutive block entry lines so their values line up vertically.
+/// Uses the same grouping and divergence-limit logic as alignDefinitions.
+fn alignBlockEntries(allocator: Allocator, input: []const u8) ![]u8 {
+    var result: std.ArrayListUnmanaged(u8) = .{};
+    errdefer result.deinit(allocator);
+
+    var lines: std.ArrayListUnmanaged([]const u8) = .{};
+    defer lines.deinit(allocator);
+
+    var line_start: usize = 0;
+    for (input, 0..) |c, idx| {
+        if (c == '\n') {
+            try lines.append(allocator, input[line_start..idx]);
+            line_start = idx + 1;
+        }
+    }
+    if (line_start < input.len) {
+        try lines.append(allocator, input[line_start..]);
+    }
+
+    var parsed = try std.ArrayListUnmanaged(?BlockEntryLine).initCapacity(allocator, lines.items.len);
+    defer parsed.deinit(allocator);
+    for (lines.items) |line| {
+        parsed.appendAssumeCapacity(parseBlockEntryLine(line));
+    }
+
+    var i: usize = 0;
+    while (i < lines.items.len) {
+        if (parsed.items[i] == null) {
+            try result.appendSlice(allocator, lines.items[i]);
+            try result.append(allocator, '\n');
+            i += 1;
+            continue;
+        }
+
+        // Found a block entry; scan for consecutive entries at the same indent
+        const group_start = i;
+        const group_indent = parsed.items[i].?.indent;
+        var group_end = i;
+        while (group_end < lines.items.len) {
+            const p = parsed.items[group_end] orelse break;
+            if (!std.mem.eql(u8, p.indent, group_indent)) break;
+            group_end += 1;
+        }
+
+        const group_len = group_end - group_start;
+        if (group_len >= 3) {
+            try alignBlockEntryRun(allocator, &result, parsed.items[group_start..group_end], lines.items[group_start..group_end]);
+        } else {
+            for (lines.items[group_start..group_end]) |line| {
+                try result.appendSlice(allocator, line);
+                try result.append(allocator, '\n');
+            }
+        }
+
+        i = group_end;
+    }
+
+    if (result.items.len > 0 and input.len > 0 and input[input.len - 1] != '\n') {
+        _ = result.pop();
+    }
+
+    return result.toOwnedSlice(allocator);
+}
+
+/// Align a run of block entry lines, applying divergence-limit subgrouping.
+fn alignBlockEntryRun(
+    allocator: Allocator,
+    result: *std.ArrayListUnmanaged(u8),
+    entries: []const ?BlockEntryLine,
+    raw_lines: []const []const u8,
+) !void {
+    var subgroup_start: usize = 0;
+    while (subgroup_start < entries.len) {
+        var subgroup_end = subgroup_start + 1;
+        var max_name_len = entries[subgroup_start].?.name.len;
+        var min_name_len = entries[subgroup_start].?.name.len;
+
+        while (subgroup_end < entries.len) {
+            const candidate_len = entries[subgroup_end].?.name.len;
+            const new_max = @max(max_name_len, candidate_len);
+            const new_min = @min(min_name_len, candidate_len);
+
+            const padding_needed = new_max - new_min;
+            const limit = @min(new_min, 15);
+            if (padding_needed > limit) {
+                break;
+            }
+
+            max_name_len = new_max;
+            min_name_len = new_min;
+            subgroup_end += 1;
+        }
+
+        const subgroup_len = subgroup_end - subgroup_start;
+        if (subgroup_len >= 3) {
+            try emitAlignedBlockEntrySubgroup(allocator, result, entries[subgroup_start..subgroup_end]);
+        } else {
+            for (raw_lines[subgroup_start..subgroup_end]) |line| {
+                try result.appendSlice(allocator, line);
+                try result.append(allocator, '\n');
+            }
+        }
+
+        subgroup_start = subgroup_end;
+    }
+}
+
+/// Emit a subgroup of block entries with aligned columns.
+fn emitAlignedBlockEntrySubgroup(
+    allocator: Allocator,
+    result: *std.ArrayListUnmanaged(u8),
+    entries: []const ?BlockEntryLine,
+) !void {
+    var max_name_len: usize = 0;
+    for (entries) |maybe_entry| {
+        const entry = maybe_entry.?;
+        max_name_len = @max(max_name_len, entry.name.len);
+    }
+
+    for (entries) |maybe_entry| {
+        const entry = maybe_entry.?;
+
+        try result.appendSlice(allocator, entry.indent);
+        try result.appendSlice(allocator, entry.name);
+
+        const name_padding = max_name_len - entry.name.len;
+        for (0..name_padding) |_| {
+            try result.append(allocator, ' ');
+        }
+
+        try result.append(allocator, ' ');
+        try result.appendSlice(allocator, entry.value);
+
+        if (entry.trailing_comment) |comment| {
             try result.appendSlice(allocator, "  ");
             try result.appendSlice(allocator, comment);
         }

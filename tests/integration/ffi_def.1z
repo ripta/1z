@@ -15,8 +15,8 @@ toy-lib-path: ( -- path ) [
 "ffi-def{ basic calls" test-section
 
 toy-lib-path lib-open ffi-def{
-  toy-add: "toy_add" ffi{ i32 i32 -> i32 }
-  toy-strlen: "toy_strlen" ffi{ cstring -> i32 }
+  toy-add:      "toy_add" ffi{ i32 i32 -> i32 }
+  toy-strlen:   "toy_strlen" ffi{ cstring -> i32 }
   toy-greeting: "toy_greeting" ffi{ cstring -> cstring-owned }
 } call "toy" swap >module import
 
@@ -29,9 +29,9 @@ toy-lib-path lib-open ffi-def{
 
 toy-lib-path lib-open
 dup ffi-def{
-  toy-open: "toy_open" ffi{ -> ptr:toy-counter }
+  toy-open:      "toy_open" ffi{ -> ptr:toy-counter }
   toy-increment: "toy_increment" ffi{ ptr:toy-counter -> void }
-  toy-read: "toy_read" ffi{ ptr:toy-counter -> i32 }
+  toy-read:      "toy_read" ffi{ ptr:toy-counter -> i32 }
 } call "toy-counter" swap >module import
 
 \\ Look up close function for counter resources
