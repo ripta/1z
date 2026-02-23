@@ -1,0 +1,5 @@
+\ error_context.1z - Test that error output includes stack effect context
+\ Trigger a type mismatch on + to verify the stack effect line appears in stderr.
+
+caller: [ 1 "not-a-number" + ] ;
+caller

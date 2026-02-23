@@ -1,0 +1,2 @@
+tests/integration/error_context.1z:4: error 'type-mismatch' expected number, got string "not-a-number" at word '+'
+  stack effect: ( a b -- a+b )

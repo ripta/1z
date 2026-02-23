@@ -52,6 +52,13 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
         }
         writer.writeAll("\n") catch return;
 
+        if (detail.stack_effect_str) |se| {
+            writer.print("  stack effect: {s}\n", .{se}) catch return;
+        }
+        if (detail.hint) |hint| {
+            writer.print("  hint: {s}\n", .{hint}) catch return;
+        }
+
         // Print remaining call stack (caller chain)
         if (details.len > 1) {
             for (details[1..]) |frame| {
