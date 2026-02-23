@@ -25,6 +25,7 @@ use "ffi" ;
   __bind-text:     "sqlite3_bind_text" ffi{ ptr i32 cstring i32 isize -> i32 }
   __bind-blob:     "sqlite3_bind_blob" ffi{ ptr i32 ptr i32 isize -> i32 }
   __bind-null:     "sqlite3_bind_null" ffi{ ptr i32 -> i32 }
+  __db-handle:     "sqlite3_db_handle" ffi{ ptr -> ptr }
 } call "sqlite-raw" swap >module import
 
 (open):       [ __open ] ;
@@ -48,7 +49,208 @@ use "ffi" ;
 (bind-text):     [ __bind-text ] ;
 (bind-blob):     [ __bind-blob ] ;
 (bind-null):     [ __bind-null ] ;
+(db-handle):     [ __db-handle ] ;
 
 SQLITE_OK:   0 ;
 SQLITE_ROW:  100 ;
 SQLITE_DONE: 101 ;
+
+\ Error handling
+ESqliteError: [ sqlite-error: ] ;
+
+\\ Check that a return code is SQLITE_OK; throw ESqliteError with errmsg otherwise.
+(check-ok): ( rc db -- ) [
+  over SQLITE_OK = [ 2drop ] [
+    (errmsg) ESqliteError make-error throw
+  ] if
+] ;
+
+\\ Check return code using the parent db handle extracted from a prepared statement.
+(check-ok-stmt): ( rc stmt -- ) [ (db-handle) (check-ok) ] ;
+
+\ Resource management
+
+\\ Open a SQLite database, returning a resource. Throws ESqliteError on failure.
+open: ( path -- resource ) [
+  (open)
+  \\ Stack: resource rc
+  dup SQLITE_OK = [ drop ] [
+    \\ sqlite3_open allocates a handle even on error; close it before throwing
+    swap dup (errmsg) swap resource-close
+    ESqliteError make-error throw
+  ] if
+] ;
+
+\\ Open a database for the duration of a quotation, closing it on exit.
+with-db: ( path quot -- ... ) [ [ open ] dip over [ resource-close ] curry cleanup ] ;
+
+\\ Prepare a statement for the duration of a quotation, finalizing it on exit.
+with-stmt: ( db sql quot -- ... ) [
+  [ -1 0 (prepare-v2) over (check-ok-stmt) ] dip
+  over [ resource-close ] curry cleanup
+] ;
+
+\ Polymorphic parameter binding
+
+\\ Bind a value to a prepared statement parameter by index (1-based).
+\\ Dispatches on the value's type: fixnum, float, string, byte-array, or option:none.
+bind: ( stmt i value -- ) [
+  2 pick-n
+  -rot> (bind-dispatch) swap (check-ok-stmt)
+] ;
+
+\\ Dispatch the appropriate bind call based on value type. Returns rc.
+(bind-dispatch): ( stmt i value -- rc ) [
+  dup option:none? [
+    drop (bind-null)
+  ] [
+    dup type-of {
+      { fixnum: [ (bind-int64) ] }
+      { float: [ (bind-double) ] }
+      { string: [ -1 -1 (bind-text) ] }
+      { byte-array: [ bytes>ffi-ptr+len -1 (bind-blob) ] }
+      [ "fixnum, float, string, byte-array, or option:none" throw-type-error ]
+    } case
+  ] if
+] ;
+
+\ Column reading
+
+\\ Read a single column value from the current row, dispatching on column type.
+(read-column): ( stmt i -- value ) [
+  2dup (column-type) {
+    { 1 [ (column-int64) ] }
+    { 2 [ (column-double) ] }
+    { 3 [ (column-text) ] }
+    { 4 [ 2dup (column-bytes) -rot> (column-blob) swap ffi-ptr+len>bytes ] }
+    { 5 [ 2drop option:none ] }
+  } case
+] ;
+
+\\ Read the current row as a hash keyed by column name. NULL columns are omitted.
+(read-row-hash): ( stmt -- hash ) [
+  dup (column-count) 0 H{ } (read-hash-loop)
+] ;
+
+\\ Loop: ( stmt count i hash -- hash )
+(read-hash-loop): [
+  over 3 pick-n < [
+    3 pick-n 2 pick-n (read-hash-col)
+    swap ++ swap (read-hash-loop)
+  ] [
+    nip nip nip
+  ] if
+] ;
+
+\\ Read one column into a hash, skipping NULLs.
+(read-hash-col): ( hash stmt i -- hash ) [
+  2dup (column-type) 5 = [
+    2drop
+  ] [
+    2dup (column-name) -rot> (read-column)
+    @set
+  ] if
+] ;
+
+\\ Read the current row as an array. NULL columns become option:none, others option:some.
+(read-row-array): ( stmt -- array ) [
+  dup (column-count) 0 { } (read-array-loop)
+] ;
+
+\\ Loop: ( stmt count i array -- array )
+(read-array-loop): [
+  over 3 pick-n < [
+    3 pick-n 2 pick-n (read-array-col)
+    swap ++ swap (read-array-loop)
+  ] [
+    nip nip nip
+  ] if
+] ;
+
+\\ Read one column into an array.
+(read-array-col): ( array stmt i -- array ) [
+  (read-column)
+  dup option:none? [ ] [ >option:some ] if
+  1array #append
+] ;
+
+\ Step words
+
+\\ Step a prepared statement and return the current row as an option hash.
+\\ Returns option:some with a hash on SQLITE_ROW, option:none on SQLITE_DONE.
+step-hash: ( stmt -- option ) [
+  dup (step) dup SQLITE_ROW = [
+    drop (read-row-hash) >option:some
+  ] [
+    dup SQLITE_DONE = [
+      2drop option:none
+    ] [
+      swap (check-ok-stmt)
+    ] if
+  ] if
+] ;
+
+\\ Step a prepared statement and return the current row as an option array.
+\\ Returns option:some with an array on SQLITE_ROW, option:none on SQLITE_DONE.
+step-array: ( stmt -- option ) [
+  dup (step) dup SQLITE_ROW = [
+    drop (read-row-array) >option:some
+  ] [
+    dup SQLITE_DONE = [
+      2drop option:none
+    ] [
+      swap (check-ok-stmt)
+    ] if
+  ] if
+] ;
+
+\ Batch execution
+
+\\ Bind an array of parameters to a prepared statement with 1-based indexing.
+(bind-params): ( stmt params -- ) [
+  dup #len 1 swap (bind-loop) 2drop
+] ;
+
+\\ Loop: ( stmt params i limit -- stmt params )
+\\ i goes from 1 to limit (inclusive). Binds params[i-1] at 1-based index i.
+(bind-loop): [
+  2dup > [
+    2drop
+  ] [
+    over 3 pick-n over -- #nth
+    5 pick-n -rot> bind
+    swap ++ swap (bind-loop)
+  ] if
+] ;
+
+\\ Execute a SQL statement with parameters, discarding all results.
+\\ Use for INSERT, UPDATE, DELETE, and DDL statements.
+execute: ( db sql params -- ) [
+  [ over swap (bind-params) (step-until-done) ] curry
+  with-stmt
+] ;
+
+\\ Step until SQLITE_DONE, discarding all rows.
+(step-until-done): ( stmt -- ) [
+  dup (step) dup SQLITE_DONE = [
+    2drop
+  ] [
+    dup SQLITE_ROW = [
+      drop (step-until-done)
+    ] [
+      swap (check-ok-stmt)
+    ] if
+  ] if
+] ;
+
+\ Transaction support
+
+\\ Execute a quotation inside a transaction. Commits on success, rolls back on error.
+\\ The quotation receives db on the stack.
+with-transaction: ( db quot -- ... ) [
+  over dup "BEGIN" 0 0 0 (exec) swap (check-ok)
+  over [ dup "COMMIT" 0 0 0 (exec) swap (check-ok) ] curry
+  compose
+  over [ dup "ROLLBACK" 0 0 0 (exec) swap (check-ok) throw ] curry
+  recover
+] ;
