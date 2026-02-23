@@ -24,4 +24,4 @@
 "test" -1 repeat "" "repeat negative" assert=
 "" 5 repeat "" "repeat empty string" assert=
 
-"All string tests complete!" print
+"All string tests complete!" print-line

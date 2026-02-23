@@ -1,24 +1,14 @@
 Stack: [ ]
 Stack: [ ]
-=== range ===
-Stack: [ ]
-PASS: range 0 to 5
-Stack: [ ]
-PASS: range 1 to 4
-Stack: [ ]
-PASS: range empty (start = end)
-Stack: [ ]
-PASS: range empty (start > end)
-Stack: [ ]
-PASS: range negative to positive
-Stack: [ ]
-=== iota ===
-Stack: [ ]
-PASS: iota 5
-Stack: [ ]
-PASS: iota 0
-Stack: [ ]
-PASS: iota 1
-Stack: [ ]
+=== range ===Stack: [ ]
+PASS: range 0 to 5Stack: [ ]
+PASS: range 1 to 4Stack: [ ]
+PASS: range empty (start = end)Stack: [ ]
+PASS: range empty (start > end)Stack: [ ]
+PASS: range negative to positiveStack: [ ]
+=== iota ===Stack: [ ]
+PASS: iota 5Stack: [ ]
+PASS: iota 0Stack: [ ]
+PASS: iota 1Stack: [ ]
 All range tests complete!
 Stack: [ ]

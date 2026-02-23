@@ -1,7 +1,7 @@
 \ Test loop words from prelude
 
 \ times ( n quot -- ) - Repeats the following word n times
-3 [ "Hello, World!" print ] times
+3 [ "Hello, World!" print-line ] times
 wipe
 
 \ while ( pred body -- ) - Repeats body while pred is true

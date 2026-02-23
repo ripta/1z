@@ -13,7 +13,7 @@ M{ name: "Alice" age: 30 } "name" @get "Alice" "mmap @get with string" assert=
 M{ name: "Alice" age: 30 } age: @get 30 "mmap @get integer value" assert=
 
 "Mutable map @get error" test-section
-[ M{ a: 1 } b: @get ] [ drop "PASS: mmap @get key not found error" print ] recover
+[ M{ a: 1 } b: @get ] [ drop "PASS: mmap @get key not found error" print-line ] recover
 
 "Mutable map @has?" test-section
 M{ name: "Alice" } name: @has? t "mmap @has? true" assert=
@@ -61,9 +61,9 @@ M{ } a: 1 @set! b: 2 @set! c: 3 @set! a: @get 1 "chained @set! first key" assert
 M{ } a: 1 @set! b: 2 @set! c: 3 @set! c: @get 3 "chained @set! last key" assert=
 
 "Error: @set on mutable map should fail" test-section
-[ M{ a: 1 } b: 2 @set ] [ drop "PASS: @set on mutable map error" print ] recover
+[ M{ a: 1 } b: 2 @set ] [ drop "PASS: @set on mutable map error" print-line ] recover
 
 "Mutable map vs immutable hash" test-section
 M{ a: 1 } H{ a: 1 } = f "mutable map not equal to hash" assert=
 
-"All mutable map tests complete!" print
+"All mutable map tests complete!" print-line

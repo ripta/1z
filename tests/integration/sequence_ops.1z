@@ -10,35 +10,35 @@
 
 \ Test #append on arrays (same as old #concat behavior)
 { 1 2 } { 3 4 } #append
-dup #len 4 = [ "PASS: array #append length" print ] [ "FAIL: array #append length" print ] if
-dup 0 #nth 1 = [ "PASS: array #append elem 0" print ] [ "FAIL: array #append elem 0" print ] if
-dup 1 #nth 2 = [ "PASS: array #append elem 1" print ] [ "FAIL: array #append elem 1" print ] if
-dup 2 #nth 3 = [ "PASS: array #append elem 2" print ] [ "FAIL: array #append elem 2" print ] if
-3 #nth 4 = [ "PASS: array #append elem 3" print ] [ "FAIL: array #append elem 3" print ] if
+dup #len 4 = [ "PASS: array #append length" print-line ] [ "FAIL: array #append length" print-line ] if
+dup 0 #nth 1 = [ "PASS: array #append elem 0" print-line ] [ "FAIL: array #append elem 0" print-line ] if
+dup 1 #nth 2 = [ "PASS: array #append elem 1" print-line ] [ "FAIL: array #append elem 1" print-line ] if
+dup 2 #nth 3 = [ "PASS: array #append elem 2" print-line ] [ "FAIL: array #append elem 2" print-line ] if
+3 #nth 4 = [ "PASS: array #append elem 3" print-line ] [ "FAIL: array #append elem 3" print-line ] if
 
 \ Test #append with empty arrays
-{ 1 2 } { } #append #len 2 = [ "PASS: array #append with empty right" print ] [ "FAIL: array #append with empty right" print ] if
-{ } { 3 4 } #append #len 2 = [ "PASS: array #append with empty left" print ] [ "FAIL: array #append with empty left" print ] if
-{ } { } #append #len 0 = [ "PASS: array #append both empty" print ] [ "FAIL: array #append both empty" print ] if
+{ 1 2 } { } #append #len 2 = [ "PASS: array #append with empty right" print-line ] [ "FAIL: array #append with empty right" print-line ] if
+{ } { 3 4 } #append #len 2 = [ "PASS: array #append with empty left" print-line ] [ "FAIL: array #append with empty left" print-line ] if
+{ } { } #append #len 0 = [ "PASS: array #append both empty" print-line ] [ "FAIL: array #append both empty" print-line ] if
 
 \ Test #append on strings
-"hello" " world" #append "hello world" = [ "PASS: string #append" print ] [ "FAIL: string #append" print ] if
-"abc" "" #append "abc" = [ "PASS: string #append with empty right" print ] [ "FAIL: string #append with empty right" print ] if
-"" "xyz" #append "xyz" = [ "PASS: string #append with empty left" print ] [ "FAIL: string #append with empty left" print ] if
-"" "" #append "" = [ "PASS: string #append both empty" print ] [ "FAIL: string #append both empty" print ] if
+"hello" " world" #append "hello world" = [ "PASS: string #append" print-line ] [ "FAIL: string #append" print-line ] if
+"abc" "" #append "abc" = [ "PASS: string #append with empty right" print-line ] [ "FAIL: string #append with empty right" print-line ] if
+"" "xyz" #append "xyz" = [ "PASS: string #append with empty left" print-line ] [ "FAIL: string #append with empty left" print-line ] if
+"" "" #append "" = [ "PASS: string #append both empty" print-line ] [ "FAIL: string #append both empty" print-line ] if
 
 \ Test cross-sequence #append (array + string -> array of chars)
 { 1 } "abc" #append
-dup #len 4 = [ "PASS: array #append string length" print ] [ "FAIL: array #append string length" print ] if
-dup 0 #nth 1 = [ "PASS: array #append string elem 0" print ] [ "FAIL: array #append string elem 0" print ] if
-dup 1 #nth "a" = [ "PASS: array #append string elem 1" print ] [ "FAIL: array #append string elem 1" print ] if
-3 #nth "c" = [ "PASS: array #append string elem 3" print ] [ "FAIL: array #append string elem 3" print ] if
+dup #len 4 = [ "PASS: array #append string length" print-line ] [ "FAIL: array #append string length" print-line ] if
+dup 0 #nth 1 = [ "PASS: array #append string elem 0" print-line ] [ "FAIL: array #append string elem 0" print-line ] if
+dup 1 #nth "a" = [ "PASS: array #append string elem 1" print-line ] [ "FAIL: array #append string elem 1" print-line ] if
+3 #nth "c" = [ "PASS: array #append string elem 3" print-line ] [ "FAIL: array #append string elem 3" print-line ] if
 
 \ Test cross-sequence #append (array + byte array -> array of integers)
 { 1 } B{ 2 3 } #append
-dup #len 3 = [ "PASS: array #append byte-array length" print ] [ "FAIL: array #append byte-array length" print ] if
-dup 1 #nth 2 = [ "PASS: array #append byte-array elem 1" print ] [ "FAIL: array #append byte-array elem 1" print ] if
-2 #nth 3 = [ "PASS: array #append byte-array elem 2" print ] [ "FAIL: array #append byte-array elem 2" print ] if
+dup #len 3 = [ "PASS: array #append byte-array length" print-line ] [ "FAIL: array #append byte-array length" print-line ] if
+dup 1 #nth 2 = [ "PASS: array #append byte-array elem 1" print-line ] [ "FAIL: array #append byte-array elem 1" print-line ] if
+2 #nth 3 = [ "PASS: array #append byte-array elem 2" print-line ] [ "FAIL: array #append byte-array elem 2" print-line ] if
 
 \ ============================================================================
 \ #prepend tests (sequence + sequence)
@@ -46,18 +46,18 @@ dup 1 #nth 2 = [ "PASS: array #append byte-array elem 1" print ] [ "FAIL: array 
 
 \ Test #prepend on arrays - prepends seq2 elements to seq1
 { 3 4 } { 1 2 } #prepend
-dup #len 4 = [ "PASS: array #prepend length" print ] [ "FAIL: array #prepend length" print ] if
-dup 0 #nth 1 = [ "PASS: array #prepend elem 0" print ] [ "FAIL: array #prepend elem 0" print ] if
-dup 1 #nth 2 = [ "PASS: array #prepend elem 1" print ] [ "FAIL: array #prepend elem 1" print ] if
-dup 2 #nth 3 = [ "PASS: array #prepend elem 2" print ] [ "FAIL: array #prepend elem 2" print ] if
-3 #nth 4 = [ "PASS: array #prepend elem 3" print ] [ "FAIL: array #prepend elem 3" print ] if
+dup #len 4 = [ "PASS: array #prepend length" print-line ] [ "FAIL: array #prepend length" print-line ] if
+dup 0 #nth 1 = [ "PASS: array #prepend elem 0" print-line ] [ "FAIL: array #prepend elem 0" print-line ] if
+dup 1 #nth 2 = [ "PASS: array #prepend elem 1" print-line ] [ "FAIL: array #prepend elem 1" print-line ] if
+dup 2 #nth 3 = [ "PASS: array #prepend elem 2" print-line ] [ "FAIL: array #prepend elem 2" print-line ] if
+3 #nth 4 = [ "PASS: array #prepend elem 3" print-line ] [ "FAIL: array #prepend elem 3" print-line ] if
 
 \ Test #prepend with empty arrays
-{ 1 2 } { } #prepend #len 2 = [ "PASS: array #prepend with empty right" print ] [ "FAIL: array #prepend with empty right" print ] if
-{ } { 3 4 } #prepend #len 2 = [ "PASS: array #prepend with empty left" print ] [ "FAIL: array #prepend with empty left" print ] if
+{ 1 2 } { } #prepend #len 2 = [ "PASS: array #prepend with empty right" print-line ] [ "FAIL: array #prepend with empty right" print-line ] if
+{ } { 3 4 } #prepend #len 2 = [ "PASS: array #prepend with empty left" print-line ] [ "FAIL: array #prepend with empty left" print-line ] if
 
 \ Test #prepend on strings
-"world" "hello " #prepend "hello world" = [ "PASS: string #prepend" print ] [ "FAIL: string #prepend" print ] if
+"world" "hello " #prepend "hello world" = [ "PASS: string #prepend" print-line ] [ "FAIL: string #prepend" print-line ] if
 
 \ ============================================================================
 \ #slice tests
@@ -65,25 +65,25 @@ dup 2 #nth 3 = [ "PASS: array #prepend elem 2" print ] [ "FAIL: array #prepend e
 
 \ Test #slice on arrays
 { 10 20 30 40 50 } 1 4 #slice
-dup #len 3 = [ "PASS: array #slice length" print ] [ "FAIL: array #slice length" print ] if
-dup 0 #nth 20 = [ "PASS: array #slice elem 0" print ] [ "FAIL: array #slice elem 0" print ] if
-dup 1 #nth 30 = [ "PASS: array #slice elem 1" print ] [ "FAIL: array #slice elem 1" print ] if
-2 #nth 40 = [ "PASS: array #slice elem 2" print ] [ "FAIL: array #slice elem 2" print ] if
+dup #len 3 = [ "PASS: array #slice length" print-line ] [ "FAIL: array #slice length" print-line ] if
+dup 0 #nth 20 = [ "PASS: array #slice elem 0" print-line ] [ "FAIL: array #slice elem 0" print-line ] if
+dup 1 #nth 30 = [ "PASS: array #slice elem 1" print-line ] [ "FAIL: array #slice elem 1" print-line ] if
+2 #nth 40 = [ "PASS: array #slice elem 2" print-line ] [ "FAIL: array #slice elem 2" print-line ] if
 
 \ Test #slice edge cases
-{ 1 2 3 } 0 3 #slice #len 3 = [ "PASS: array #slice full" print ] [ "FAIL: array #slice full" print ] if
-{ 1 2 3 } 0 0 #slice #len 0 = [ "PASS: array #slice empty (start=end)" print ] [ "FAIL: array #slice empty (start=end)" print ] if
-{ 1 2 3 } 1 1 #slice #len 0 = [ "PASS: array #slice empty middle" print ] [ "FAIL: array #slice empty middle" print ] if
+{ 1 2 3 } 0 3 #slice #len 3 = [ "PASS: array #slice full" print-line ] [ "FAIL: array #slice full" print-line ] if
+{ 1 2 3 } 0 0 #slice #len 0 = [ "PASS: array #slice empty (start=end)" print-line ] [ "FAIL: array #slice empty (start=end)" print-line ] if
+{ 1 2 3 } 1 1 #slice #len 0 = [ "PASS: array #slice empty middle" print-line ] [ "FAIL: array #slice empty middle" print-line ] if
 
 \ Test #slice on strings
-"hello world" 0 5 #slice "hello" = [ "PASS: string #slice first word" print ] [ "FAIL: string #slice first word" print ] if
-"hello world" 6 11 #slice "world" = [ "PASS: string #slice second word" print ] [ "FAIL: string #slice second word" print ] if
-"abcdef" 2 4 #slice "cd" = [ "PASS: string #slice middle" print ] [ "FAIL: string #slice middle" print ] if
+"hello world" 0 5 #slice "hello" = [ "PASS: string #slice first word" print-line ] [ "FAIL: string #slice first word" print-line ] if
+"hello world" 6 11 #slice "world" = [ "PASS: string #slice second word" print-line ] [ "FAIL: string #slice second word" print-line ] if
+"abcdef" 2 4 #slice "cd" = [ "PASS: string #slice middle" print-line ] [ "FAIL: string #slice middle" print-line ] if
 
 \ Test #slice error cases
-[ { 1 2 3 } 0 5 #slice ] [ drop "PASS: #slice end out of bounds error" print ] recover
-[ { 1 2 3 } -1 2 #slice ] [ drop "PASS: #slice negative start error" print ] recover
-[ { 1 2 3 } 2 1 #slice ] [ drop "PASS: #slice start > end error" print ] recover
+[ { 1 2 3 } 0 5 #slice ] [ drop "PASS: #slice end out of bounds error" print-line ] recover
+[ { 1 2 3 } -1 2 #slice ] [ drop "PASS: #slice negative start error" print-line ] recover
+[ { 1 2 3 } 2 1 #slice ] [ drop "PASS: #slice start > end error" print-line ] recover
 
 \ ============================================================================
 \ #suffix tests (sequence + element)
@@ -91,24 +91,24 @@ dup 1 #nth 30 = [ "PASS: array #slice elem 1" print ] [ "FAIL: array #slice elem
 
 \ Test #suffix on array
 { 1 2 3 } 4 #suffix
-dup #len 4 = [ "PASS: array #suffix length" print ] [ "FAIL: array #suffix length" print ] if
-dup 0 #nth 1 = [ "PASS: array #suffix elem 0" print ] [ "FAIL: array #suffix elem 0" print ] if
-dup 3 #nth 4 = [ "PASS: array #suffix elem 3" print ] [ "FAIL: array #suffix elem 3" print ] if
+dup #len 4 = [ "PASS: array #suffix length" print-line ] [ "FAIL: array #suffix length" print-line ] if
+dup 0 #nth 1 = [ "PASS: array #suffix elem 0" print-line ] [ "FAIL: array #suffix elem 0" print-line ] if
+dup 3 #nth 4 = [ "PASS: array #suffix elem 3" print-line ] [ "FAIL: array #suffix elem 3" print-line ] if
 drop
 
 \ Test #suffix to empty array
 { } 42 #suffix
-dup #len 1 = [ "PASS: empty array #suffix length" print ] [ "FAIL: empty array #suffix length" print ] if
-0 #nth 42 = [ "PASS: empty array #suffix value" print ] [ "FAIL: empty array #suffix value" print ] if
+dup #len 1 = [ "PASS: empty array #suffix length" print-line ] [ "FAIL: empty array #suffix length" print-line ] if
+0 #nth 42 = [ "PASS: empty array #suffix value" print-line ] [ "FAIL: empty array #suffix value" print-line ] if
 
 \ Test #suffix preserves original (immutability)
 original: [ { 1 2 } ] ;
 original 3 #suffix drop
-original #len 2 = [ "PASS: #suffix immutability" print ] [ "FAIL: #suffix immutability" print ] if
+original #len 2 = [ "PASS: #suffix immutability" print-line ] [ "FAIL: #suffix immutability" print-line ] if
 
 \ Test #suffix with different value types
-{ 1 } "hello" #suffix 1 #nth "hello" = [ "PASS: array #suffix string" print ] [ "FAIL: array #suffix string" print ] if
-{ } { 1 2 } #suffix 0 #nth 0 #nth 1 = [ "PASS: array #suffix nested array" print ] [ "FAIL: array #suffix nested array" print ] if
+{ 1 } "hello" #suffix 1 #nth "hello" = [ "PASS: array #suffix string" print-line ] [ "FAIL: array #suffix string" print-line ] if
+{ } { 1 2 } #suffix 0 #nth 0 #nth 1 = [ "PASS: array #suffix nested array" print-line ] [ "FAIL: array #suffix nested array" print-line ] if
 
 \ ============================================================================
 \ #prefix tests (element + sequence)
@@ -116,20 +116,20 @@ original #len 2 = [ "PASS: #suffix immutability" print ] [ "FAIL: #suffix immuta
 
 \ Test #prefix on array
 0 { 1 2 3 } #prefix
-dup #len 4 = [ "PASS: array #prefix length" print ] [ "FAIL: array #prefix length" print ] if
-dup 0 #nth 0 = [ "PASS: array #prefix elem 0" print ] [ "FAIL: array #prefix elem 0" print ] if
-dup 1 #nth 1 = [ "PASS: array #prefix elem 1" print ] [ "FAIL: array #prefix elem 1" print ] if
-3 #nth 3 = [ "PASS: array #prefix elem 3" print ] [ "FAIL: array #prefix elem 3" print ] if
+dup #len 4 = [ "PASS: array #prefix length" print-line ] [ "FAIL: array #prefix length" print-line ] if
+dup 0 #nth 0 = [ "PASS: array #prefix elem 0" print-line ] [ "FAIL: array #prefix elem 0" print-line ] if
+dup 1 #nth 1 = [ "PASS: array #prefix elem 1" print-line ] [ "FAIL: array #prefix elem 1" print-line ] if
+3 #nth 3 = [ "PASS: array #prefix elem 3" print-line ] [ "FAIL: array #prefix elem 3" print-line ] if
 
 \ Test #prefix to empty array
 99 { } #prefix
-dup #len 1 = [ "PASS: empty array #prefix length" print ] [ "FAIL: empty array #prefix length" print ] if
-0 #nth 99 = [ "PASS: empty array #prefix value" print ] [ "FAIL: empty array #prefix value" print ] if
+dup #len 1 = [ "PASS: empty array #prefix length" print-line ] [ "FAIL: empty array #prefix length" print-line ] if
+0 #nth 99 = [ "PASS: empty array #prefix value" print-line ] [ "FAIL: empty array #prefix value" print-line ] if
 
 \ Test #prefix preserves original (immutability)
 orig2: [ { 2 3 } ] ;
 1 orig2 #prefix drop
-orig2 #len 2 = [ "PASS: #prefix immutability" print ] [ "FAIL: #prefix immutability" print ] if
+orig2 #len 2 = [ "PASS: #prefix immutability" print-line ] [ "FAIL: #prefix immutability" print-line ] if
 
 \ ============================================================================
 \ Combined tests
@@ -137,31 +137,31 @@ orig2 #len 2 = [ "PASS: #prefix immutability" print ] [ "FAIL: #prefix immutabil
 
 \ Build array using suffix
 { } 1 #suffix 2 #suffix 3 #suffix
-dup #len 3 = [ "PASS: chained #suffix length" print ] [ "FAIL: chained #suffix length" print ] if
-dup 0 #nth 1 = [ "PASS: chained #suffix first" print ] [ "FAIL: chained #suffix first" print ] if
-2 #nth 3 = [ "PASS: chained #suffix last" print ] [ "FAIL: chained #suffix last" print ] if
+dup #len 3 = [ "PASS: chained #suffix length" print-line ] [ "FAIL: chained #suffix length" print-line ] if
+dup 0 #nth 1 = [ "PASS: chained #suffix first" print-line ] [ "FAIL: chained #suffix first" print-line ] if
+2 #nth 3 = [ "PASS: chained #suffix last" print-line ] [ "FAIL: chained #suffix last" print-line ] if
 
 \ Build array using prefix (prefix adds to front, so prefix in reverse order to get 1,2,3)
 3 { } #prefix
 2 swap #prefix
 1 swap #prefix
-dup #len 3 = [ "PASS: chained #prefix length" print ] [ "FAIL: chained #prefix length" print ] if
-dup 0 #nth 1 = [ "PASS: chained #prefix first" print ] [ "FAIL: chained #prefix first" print ] if
-2 #nth 3 = [ "PASS: chained #prefix last" print ] [ "FAIL: chained #prefix last" print ] if
+dup #len 3 = [ "PASS: chained #prefix length" print-line ] [ "FAIL: chained #prefix length" print-line ] if
+dup 0 #nth 1 = [ "PASS: chained #prefix first" print-line ] [ "FAIL: chained #prefix first" print-line ] if
+2 #nth 3 = [ "PASS: chained #prefix last" print-line ] [ "FAIL: chained #prefix last" print-line ] if
 
 \ Append then slice
 { 1 2 3 } { 4 5 6 } #append 2 5 #slice
-dup #len 3 = [ "PASS: append then slice length" print ] [ "FAIL: append then slice length" print ] if
-dup 0 #nth 3 = [ "PASS: append then slice first" print ] [ "FAIL: append then slice first" print ] if
-2 #nth 5 = [ "PASS: append then slice last" print ] [ "FAIL: append then slice last" print ] if
+dup #len 3 = [ "PASS: append then slice length" print-line ] [ "FAIL: append then slice length" print-line ] if
+dup 0 #nth 3 = [ "PASS: append then slice first" print-line ] [ "FAIL: append then slice first" print-line ] if
+2 #nth 5 = [ "PASS: append then slice last" print-line ] [ "FAIL: append then slice last" print-line ] if
 
 \ Slice then append
-"hello world" 0 5 #slice " there" #append "hello there" = [ "PASS: slice then append" print ] [ "FAIL: slice then append" print ] if
+"hello world" 0 5 #slice " there" #append "hello there" = [ "PASS: slice then append" print-line ] [ "FAIL: slice then append" print-line ] if
 
 \ Map then append
 { 1 2 } [ 10 * ] #map { 3 4 } [ 10 * ] #map #append
-dup #len 4 = [ "PASS: map then append length" print ] [ "FAIL: map then append length" print ] if
-dup 0 #nth 10 = [ "PASS: map then append first" print ] [ "FAIL: map then append first" print ] if
-3 #nth 40 = [ "PASS: map then append last" print ] [ "FAIL: map then append last" print ] if
+dup #len 4 = [ "PASS: map then append length" print-line ] [ "FAIL: map then append length" print-line ] if
+dup 0 #nth 10 = [ "PASS: map then append first" print-line ] [ "FAIL: map then append first" print-line ] if
+3 #nth 40 = [ "PASS: map then append last" print-line ] [ "FAIL: map then append last" print-line ] if
 
-"All additional sequence ops tests complete!" print
+"All additional sequence ops tests complete!" print-line

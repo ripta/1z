@@ -6,6 +6,7 @@ const Dictionary = @import("dictionary.zig").Dictionary;
 const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
 const Quotation = value_mod.Quotation;
+const Value = value_mod.Value;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const primitives = @import("primitives.zig");
 const parser = @import("parser.zig");
@@ -28,6 +29,10 @@ pub const CallFrame = struct {
     line: usize,
 };
 
+/// ParameterFrame holds parameter bindings for dynamic scoping.
+/// Each frame is a mapping from parameter name to its bound value.
+pub const ParameterFrame = std.StringHashMapUnmanaged(Value);
+
 /// ErrorDetail captures information about an error for debugging purposes.
 pub const ErrorDetail = struct {
     error_type: []const u8,
@@ -44,6 +49,8 @@ pub const Context = struct {
     allocator: Allocator,
     call_stack: std.ArrayListUnmanaged(CallFrame),
     error_details: std.ArrayListUnmanaged(ErrorDetail),
+    /// Parameter environment frames for dynamic scoping
+    parameter_env: std.ArrayListUnmanaged(ParameterFrame),
     /// Tokenizer for parse-time word access (set during parsing, null otherwise)
     parse_tokenizer: ?*Tokenizer = null,
     /// Optional benchmark stats (null when benchmarking is disabled)
@@ -59,6 +66,7 @@ pub const Context = struct {
             .allocator = allocator,
             .call_stack = .{},
             .error_details = .{},
+            .parameter_env = .{},
             .parse_tokenizer = null,
             .benchmark = null,
         };
@@ -80,14 +88,46 @@ pub const Context = struct {
     }
 
     /// Load the embedded prelude source.
+    /// Processes definitions incrementally so that parse-time words defined
+    /// earlier in the prelude are available when parsing later definitions.
     pub fn loadPrelude(self: *Context) !void {
-        var tokenizer = Tokenizer.init(prelude_source);
-        const instrs = try parser.parseTopLevel(self.arena.allocator(), &tokenizer, self);
-        try self.executeQuotation(.{ .instructions = instrs });
+        const StatementProcessor = @import("statement.zig").StatementProcessor;
+        var processor: StatementProcessor = .{};
+
+        // Split prelude into lines and process incrementally
+        var lines = std.mem.splitScalar(u8, prelude_source, '\n');
+        while (lines.next()) |line| {
+            const result = processor.feedLine(self.arena.allocator(), line, self);
+            switch (result) {
+                .needs_more_input => continue,
+                .complete => |instrs| {
+                    if (instrs.len > 0) {
+                        try self.executeQuotation(.{ .instructions = instrs });
+                    }
+                    processor.reset();
+                },
+                .parse_error => |err| return err,
+            }
+        }
+
+        // Flush any remaining buffered content
+        switch (processor.flush(self.arena.allocator(), self)) {
+            .complete => |instrs| {
+                if (instrs.len > 0) {
+                    try self.executeQuotation(.{ .instructions = instrs });
+                }
+            },
+            .parse_error => |err| return err,
+            .needs_more_input => {},
+        }
     }
 
     /// Free all resources used by the context.
     pub fn deinit(self: *Context) void {
+        for (self.parameter_env.items) |*frame| {
+            frame.deinit(self.allocator);
+        }
+        self.parameter_env.deinit(self.allocator);
         self.call_stack.deinit(self.allocator);
         self.error_details.deinit(self.allocator);
         self.arena.deinit();
@@ -104,6 +144,45 @@ pub const Context = struct {
     pub fn clearExecutionDetails(self: *Context) void {
         self.error_details.clearRetainingCapacity();
         self.call_stack.clearRetainingCapacity();
+    }
+
+    /// Get the current binding for a parameter by name.
+    /// Searches frames from top (innermost) to bottom (outermost).
+    /// Returns null if the parameter is not bound in any frame.
+    pub fn getParameterBinding(self: *Context, name: []const u8) ?Value {
+        // Search from top (innermost) to bottom (outermost)
+        var i = self.parameter_env.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.parameter_env.items[i].get(name)) |value| {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    /// Push a new empty parameter frame onto the environment stack.
+    pub fn pushParameterFrame(self: *Context) !void {
+        try self.parameter_env.append(self.allocator, ParameterFrame{});
+    }
+
+    /// Pop the top parameter frame from the environment stack.
+    pub fn popParameterFrame(self: *Context) void {
+        if (self.parameter_env.items.len > 0) {
+            const last_idx = self.parameter_env.items.len - 1;
+            self.parameter_env.items[last_idx].deinit(self.allocator);
+            self.parameter_env.items.len -= 1;
+        }
+    }
+
+    /// Bind a parameter name to a value in the top frame.
+    /// Assumes there is at least one frame on the stack.
+    pub fn setParameterInTopFrame(self: *Context, name: []const u8, value: Value) !void {
+        if (self.parameter_env.items.len == 0) {
+            return error.OutOfMemory; // Should never happen if pushParameterFrame was called
+        }
+        const top_index = self.parameter_env.items.len - 1;
+        try self.parameter_env.items[top_index].put(self.allocator, name, value);
     }
 
     /// Push a call frame onto the call stack.
@@ -603,7 +682,6 @@ test "stack operations through context" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const Value = @import("value.zig").Value;
     try ctx.stack.push(Value{ .integer = 42 });
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
 

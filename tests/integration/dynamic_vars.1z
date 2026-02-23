@@ -1,0 +1,92 @@
+\ Integration tests for dynamic variables (parameters)
+
+"lib/testing.1z" load
+
+"Parameter creation and get" test-section
+\ Test that output-stream parameter returns stdout by default
+output-stream get to-string "<stream stdout write>" "output-stream get returns stdout" assert=
+input-stream get to-string "<stream stdin read>" "input-stream get returns stdin" assert=
+"PASS: basic parameter get" print-line
+
+"Custom parameter definition" test-section
+\ Define a test parameter with a numeric default
+test-param: parameter [ 42 ] ;
+test-param get 42 "test-param get returns default" assert=
+"PASS: custom parameter with numeric default" print-line
+
+"Lazy default evaluation" test-section
+\ Define a parameter with a side-effecting default
+\ The default quotation should be evaluated each time if no binding
+counter: parameter [ 100 ] ;
+counter get 100 "counter first get" assert=
+counter get 100 "counter second get" assert=
+"PASS: lazy default evaluation" print-line
+
+"with-parameter rebinding" test-section
+\ Test temporary rebinding
+rebind-test: parameter [ 100 ] ;
+rebind-test get 100 "before rebind" assert=
+999 rebind-test [ rebind-test get 999 "inside rebind" assert= ] with-parameter
+rebind-test get 100 "after rebind restored" assert=
+"PASS: with-parameter rebinding" print-line
+
+"Nested with-parameter" test-section
+nested: parameter [ 1 ] ;
+nested get 1 "outer default" assert=
+10 nested [
+    nested get 10 "first level binding" assert=
+    20 nested [
+        nested get 20 "second level binding" assert=
+    ] with-parameter
+    nested get 10 "first level restored" assert=
+] with-parameter
+nested get 1 "outer restored" assert=
+"PASS: nested with-parameter" print-line
+
+"with-parameter restores on error" test-section
+error-test: parameter [ 0 ] ;
+error-test get 0 "before error" assert=
+[
+    999 error-test [
+        error-test get 999 "inside before error" assert=
+        drop \ Force a stack underflow error
+    ] with-parameter
+] [ drop ] recover
+error-test get 0 "restored after error" assert=
+"PASS: with-parameter restores on error" print-line
+
+"Stream redirection with with-output-stream" test-section
+\ Create a temp file and redirect output to it
+"tests/fixtures/redirect-test.txt" write: stream-open
+dup [ "redirected output" print-line ] with-output-stream
+stream-close
+
+\ Read back and verify
+"tests/fixtures/redirect-test.txt" read: stream-open
+dup stream-read-all bytes>
+swap stream-close
+"redirected output\n" "stream redirection wrote correct content" assert=
+"PASS: stream redirection with with-output-stream" print-line
+
+"Parameter value display" test-section
+test-param to-string "<parameter:test-param>" "parameter to-string" assert=
+"PASS: parameter value display" print-line
+
+"Multiple parameters in same scope" test-section
+multi-a: parameter [ 1 ] ;
+multi-b: parameter [ 2 ] ;
+multi-a get 1 "multi-a default" assert=
+multi-b get 2 "multi-b default" assert=
+10 multi-a [
+    multi-a get 10 "multi-a rebound" assert=
+    multi-b get 2 "multi-b unchanged" assert=
+    20 multi-b [
+        multi-a get 10 "multi-a still rebound" assert=
+        multi-b get 20 "multi-b now rebound" assert=
+    ] with-parameter
+    multi-b get 2 "multi-b restored" assert=
+] with-parameter
+multi-a get 1 "multi-a restored" assert=
+"PASS: multiple parameters in same scope" print-line
+
+"All dynamic variable tests complete!" print-line

@@ -2,49 +2,49 @@
 \ Tests: #len, #nth, #first, #last
 
 \ Test #len on arrays
-{ 1 2 3 } #len 3 = [ "PASS: array #len" print ] [ "FAIL: array #len" print ] if
-{ } #len 0 = [ "PASS: empty array #len" print ] [ "FAIL: empty array #len" print ] if
+{ 1 2 3 } #len 3 = [ "PASS: array #len" print-line ] [ "FAIL: array #len" print-line ] if
+{ } #len 0 = [ "PASS: empty array #len" print-line ] [ "FAIL: empty array #len" print-line ] if
 
 \ Test #len on strings
-"hello" #len 5 = [ "PASS: string #len" print ] [ "FAIL: string #len" print ] if
-"" #len 0 = [ "PASS: empty string #len" print ] [ "FAIL: empty string #len" print ] if
+"hello" #len 5 = [ "PASS: string #len" print-line ] [ "FAIL: string #len" print-line ] if
+"" #len 0 = [ "PASS: empty string #len" print-line ] [ "FAIL: empty string #len" print-line ] if
 
 \ Test #nth on arrays (0-indexed)
-{ 10 20 30 } 0 #nth 10 = [ "PASS: array #nth first" print ] [ "FAIL: array #nth first" print ] if
-{ 10 20 30 } 1 #nth 20 = [ "PASS: array #nth middle" print ] [ "FAIL: array #nth middle" print ] if
-{ 10 20 30 } 2 #nth 30 = [ "PASS: array #nth last" print ] [ "FAIL: array #nth last" print ] if
+{ 10 20 30 } 0 #nth 10 = [ "PASS: array #nth first" print-line ] [ "FAIL: array #nth first" print-line ] if
+{ 10 20 30 } 1 #nth 20 = [ "PASS: array #nth middle" print-line ] [ "FAIL: array #nth middle" print-line ] if
+{ 10 20 30 } 2 #nth 30 = [ "PASS: array #nth last" print-line ] [ "FAIL: array #nth last" print-line ] if
 
 \ Test #nth on strings
-"abc" 0 #nth "a" = [ "PASS: string #nth first" print ] [ "FAIL: string #nth first" print ] if
-"abc" 1 #nth "b" = [ "PASS: string #nth middle" print ] [ "FAIL: string #nth middle" print ] if
-"abc" 2 #nth "c" = [ "PASS: string #nth last" print ] [ "FAIL: string #nth last" print ] if
+"abc" 0 #nth "a" = [ "PASS: string #nth first" print-line ] [ "FAIL: string #nth first" print-line ] if
+"abc" 1 #nth "b" = [ "PASS: string #nth middle" print-line ] [ "FAIL: string #nth middle" print-line ] if
+"abc" 2 #nth "c" = [ "PASS: string #nth last" print-line ] [ "FAIL: string #nth last" print-line ] if
 
 \ Test #first on arrays
-{ 1 2 3 } #first 1 = [ "PASS: array #first" print ] [ "FAIL: array #first" print ] if
-{ 42 } #first 42 = [ "PASS: single element array #first" print ] [ "FAIL: single element array #first" print ] if
+{ 1 2 3 } #first 1 = [ "PASS: array #first" print-line ] [ "FAIL: array #first" print-line ] if
+{ 42 } #first 42 = [ "PASS: single element array #first" print-line ] [ "FAIL: single element array #first" print-line ] if
 
 \ Test #first on strings
-"hello" #first "h" = [ "PASS: string #first" print ] [ "FAIL: string #first" print ] if
-"x" #first "x" = [ "PASS: single char string #first" print ] [ "FAIL: single char string #first" print ] if
+"hello" #first "h" = [ "PASS: string #first" print-line ] [ "FAIL: string #first" print-line ] if
+"x" #first "x" = [ "PASS: single char string #first" print-line ] [ "FAIL: single char string #first" print-line ] if
 
 \ Test #last on arrays
-{ 1 2 3 } #last 3 = [ "PASS: array #last" print ] [ "FAIL: array #last" print ] if
-{ 42 } #last 42 = [ "PASS: single element array #last" print ] [ "FAIL: single element array #last" print ] if
+{ 1 2 3 } #last 3 = [ "PASS: array #last" print-line ] [ "FAIL: array #last" print-line ] if
+{ 42 } #last 42 = [ "PASS: single element array #last" print-line ] [ "FAIL: single element array #last" print-line ] if
 
 \ Test #last on strings
-"hello" #last "o" = [ "PASS: string #last" print ] [ "FAIL: string #last" print ] if
-"x" #last "x" = [ "PASS: single char string #last" print ] [ "FAIL: single char string #last" print ] if
+"hello" #last "o" = [ "PASS: string #last" print-line ] [ "FAIL: string #last" print-line ] if
+"x" #last "x" = [ "PASS: single char string #last" print-line ] [ "FAIL: single char string #last" print-line ] if
 
 \ Test error cases with recover
-[ { } #first ] [ drop "PASS: empty array #first error" print ] recover
-[ { } #last ] [ drop "PASS: empty array #last error" print ] recover
-[ "" #first ] [ drop "PASS: empty string #first error" print ] recover
-[ "" #last ] [ drop "PASS: empty string #last error" print ] recover
-[ { 1 2 3 } 10 #nth ] [ drop "PASS: array #nth out of bounds error" print ] recover
-[ { 1 2 3 } -1 #nth ] [ drop "PASS: array #nth negative index error" print ] recover
+[ { } #first ] [ drop "PASS: empty array #first error" print-line ] recover
+[ { } #last ] [ drop "PASS: empty array #last error" print-line ] recover
+[ "" #first ] [ drop "PASS: empty string #first error" print-line ] recover
+[ "" #last ] [ drop "PASS: empty string #last error" print-line ] recover
+[ { 1 2 3 } 10 #nth ] [ drop "PASS: array #nth out of bounds error" print-line ] recover
+[ { 1 2 3 } -1 #nth ] [ drop "PASS: array #nth negative index error" print-line ] recover
 
 \ Test nested arrays
-{ { 1 2 } { 3 4 } } 0 #nth #first 1 = [ "PASS: nested array access" print ] [ "FAIL: nested array access" print ] if
-{ { 1 2 } { 3 4 } } 1 #nth #last 4 = [ "PASS: nested array access 2" print ] [ "FAIL: nested array access 2" print ] if
+{ { 1 2 } { 3 4 } } 0 #nth #first 1 = [ "PASS: nested array access" print-line ] [ "FAIL: nested array access" print-line ] if
+{ { 1 2 } { 3 4 } } 1 #nth #last 4 = [ "PASS: nested array access 2" print-line ] [ "FAIL: nested array access 2" print-line ] if
 
-"All sequence accessor tests complete!" print
+"All sequence accessor tests complete!" print-line

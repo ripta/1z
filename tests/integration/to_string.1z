@@ -49,4 +49,4 @@ dup 0 2 #slice "H{" "hash prefix" assert=
 "to-string preserves types" test-section
 { 1 2 } to-string "{ 1 2 }" "mixed array" assert=
 
-"All to-string tests complete!" print
+"All to-string tests complete!" print-line

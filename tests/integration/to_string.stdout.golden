@@ -1,68 +1,37 @@
 Stack: [ ]
-=== to-string on integers ===
-Stack: [ ]
-PASS: integer
-Stack: [ ]
-PASS: negative integer
-Stack: [ ]
-PASS: zero
-Stack: [ ]
-=== to-string on booleans ===
-Stack: [ ]
-PASS: true
-Stack: [ ]
-PASS: false
-Stack: [ ]
-=== to-string on strings ===
-Stack: [ ]
-PASS: string length includes quotes
-Stack: [ ]
-PASS: empty string length
-Stack: [ ]
-=== to-string on symbols ===
-Stack: [ ]
-PASS: symbol
-Stack: [ ]
-=== to-string on arrays ===
-Stack: [ ]
-PASS: empty array
-Stack: [ ]
-PASS: array of integers
-Stack: [ ]
-PASS: array of strings length
-Stack: [ ]
-=== to-string on quotations ===
-Stack: [ ]
-PASS: quotation
-Stack: [ ]
-PASS: empty quotation
-Stack: [ ]
-=== to-string on nested structures ===
-Stack: [ ]
-PASS: nested arrays
-Stack: [ ]
-=== dot word ===
-Stack: [ ]
+=== to-string on integers ===Stack: [ ]
+PASS: integerStack: [ ]
+PASS: negative integerStack: [ ]
+PASS: zeroStack: [ ]
+=== to-string on booleans ===Stack: [ ]
+PASS: trueStack: [ ]
+PASS: falseStack: [ ]
+=== to-string on strings ===Stack: [ ]
+PASS: string length includes quotesStack: [ ]
+PASS: empty string lengthStack: [ ]
+=== to-string on symbols ===Stack: [ ]
+PASS: symbolStack: [ ]
+=== to-string on arrays ===Stack: [ ]
+PASS: empty arrayStack: [ ]
+PASS: array of integersStack: [ ]
+PASS: array of strings lengthStack: [ ]
+=== to-string on quotations ===Stack: [ ]
+PASS: quotationStack: [ ]
+PASS: empty quotationStack: [ ]
+=== to-string on nested structures ===Stack: [ ]
+PASS: nested arraysStack: [ ]
+=== dot word ===Stack: [ ]
 42
 Stack: [ ]
-PASS: dot consumes value
-Stack: [ ]
-=== to-string with #append ===
-Stack: [ ]
-PASS: simple append
-Stack: [ ]
-PASS: chained append
-Stack: [ ]
-=== to-string on hash ===
-Stack: [ ]
+PASS: dot consumes valueStack: [ ]
+=== to-string with #append ===Stack: [ ]
+PASS: simple appendStack: [ ]
+PASS: chained appendStack: [ ]
+=== to-string on hash ===Stack: [ ]
 Stack: [ "H{ a: 1 }" ]
-PASS: hash prefix
-Stack: [ "H{ a: 1 }" ]
-PASS: hash suffix
-Stack: [ ]
-=== to-string preserves types ===
-Stack: [ ]
-PASS: mixed array
-Stack: [ ]
+PASS: hash prefixStack: [ "H{ a: 1 }" ]
+PASS: hash suffixStack: [ ]
+=== to-string preserves types ===Stack: [ ]
+PASS: mixed arrayStack: [ ]
 All to-string tests complete!
 Stack: [ ]

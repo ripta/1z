@@ -81,6 +81,55 @@ pub fn isIncompleteError(err: anyerror) bool {
     return err == error.UnmatchedOpenBracket or err == error.UnmatchedOpenBrace;
 }
 
+const WordDefinition = @import("dictionary.zig").WordDefinition;
+
+/// Execute a parse-time word during parsing:
+///
+/// - Executes pending push_literal instructions (so parse-time word can access preceding literals)
+/// - Keeps call_word instructions in the compiled output
+/// - Runs the parse-time word
+/// - Captures any results as push_literal instructions
+fn executeParseTimeWord(
+    c: *Context,
+    word: WordDefinition,
+    tokenizer: *Tokenizer,
+    instructions: *std.ArrayListUnmanaged(Instruction),
+    allocator: Allocator,
+    line: usize,
+) ParseError!void {
+    var new_len: usize = 0;
+    for (instructions.items) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| c.stack.push(val) catch return ParseError.OutOfMemory,
+            .call_word => {
+                instructions.items[new_len] = instr;
+                new_len += 1;
+            },
+        }
+    }
+    instructions.items.len = new_len;
+
+    const old_tokenizer = c.parse_tokenizer;
+    c.parse_tokenizer = tokenizer;
+    defer c.parse_tokenizer = old_tokenizer;
+
+    const pre_depth = c.stack.depth();
+    switch (word.action) {
+        .native => |func| func(c) catch return ParseError.ParseTimeExecutionError,
+        .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch return ParseError.ParseTimeExecutionError,
+    }
+
+    const post_depth = c.stack.depth();
+    if (post_depth > pre_depth) {
+        const num_results = post_depth - pre_depth;
+        var i: usize = 0;
+        while (i < num_results) : (i += 1) {
+            const val = c.stack.pop() catch return ParseError.ParseTimeExecutionError;
+            instructions.append(allocator, .{ .op = .{ .push_literal = val }, .line = line }) catch return ParseError.OutOfMemory;
+        }
+    }
+}
+
 /// Parse a top-level sequence of instructions. This is the entry point for
 /// parsing, and handles continuation lines (multiline statements).
 /// If ctx is provided, parse-time words will be executed during parsing.
@@ -119,27 +168,7 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
             if (ctx) |c| {
                 if (c.dictionary.get(token)) |word| {
                     if (word.parse_time) {
-                        // Set tokenizer for parse-time word access
-                        const old_tokenizer = c.parse_tokenizer;
-                        c.parse_tokenizer = tokenizer;
-                        defer c.parse_tokenizer = old_tokenizer;
-
-                        // Execute parse-time word immediately
-                        const pre_depth = c.stack.depth();
-                        switch (word.action) {
-                            .native => |func| func(c) catch return ParseError.ParseTimeExecutionError,
-                            .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch return ParseError.ParseTimeExecutionError,
-                        }
-                        // Capture any values pushed onto stack as push_literal instructions
-                        const post_depth = c.stack.depth();
-                        if (post_depth > pre_depth) {
-                            const num_results = post_depth - pre_depth;
-                            var i: usize = 0;
-                            while (i < num_results) : (i += 1) {
-                                const val = c.stack.pop() catch return ParseError.ParseTimeExecutionError;
-                                instructions.append(allocator, .{ .op = .{ .push_literal = val }, .line = line }) catch return ParseError.OutOfMemory;
-                            }
-                        }
+                        try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line);
                         continue;
                     }
                 }
@@ -207,27 +236,7 @@ pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Contex
             if (ctx) |c| {
                 if (c.dictionary.get(token)) |word| {
                     if (word.parse_time) {
-                        // Set tokenizer for parse-time word access
-                        const old_tokenizer = c.parse_tokenizer;
-                        c.parse_tokenizer = tokenizer;
-                        defer c.parse_tokenizer = old_tokenizer;
-
-                        // Execute parse-time word immediately
-                        const pre_depth = c.stack.depth();
-                        switch (word.action) {
-                            .native => |func| func(c) catch return ParseError.ParseTimeExecutionError,
-                            .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch return ParseError.ParseTimeExecutionError,
-                        }
-                        // Capture any values pushed onto stack as push_literal instructions
-                        const post_depth = c.stack.depth();
-                        if (post_depth > pre_depth) {
-                            const num_results = post_depth - pre_depth;
-                            var i: usize = 0;
-                            while (i < num_results) : (i += 1) {
-                                const val = c.stack.pop() catch return ParseError.ParseTimeExecutionError;
-                                instructions.append(allocator, .{ .op = .{ .push_literal = val }, .line = line }) catch return ParseError.OutOfMemory;
-                            }
-                        }
+                        try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line);
                         is_first_token = false;
                         continue;
                     }

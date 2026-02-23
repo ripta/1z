@@ -15,4 +15,4 @@
 0 iota { } "iota 0" assert=
 1 iota { 0 } "iota 1" assert=
 
-"All range tests complete!" print
+"All range tests complete!" print-line

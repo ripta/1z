@@ -59,9 +59,9 @@ V{ } to-string "V{ }" "empty vector to-string" assert=
 V{ 1 2 3 } to-string "V{ 1 2 3 }" "vector to-string" assert=
 
 "Error cases" test-section
-[ V{ } #pop! ] [ drop "PASS: pop from empty vector error" print ] recover
-[ V{ 1 } 5 #nth ] [ drop "PASS: index out of bounds error" print ] recover
-[ V{ } #first ] [ drop "PASS: first on empty vector error" print ] recover
-[ V{ } #last ] [ drop "PASS: last on empty vector error" print ] recover
+[ V{ } #pop! ] [ drop "PASS: pop from empty vector error" print-line ] recover
+[ V{ 1 } 5 #nth ] [ drop "PASS: index out of bounds error" print-line ] recover
+[ V{ } #first ] [ drop "PASS: first on empty vector error" print-line ] recover
+[ V{ } #last ] [ drop "PASS: last on empty vector error" print-line ] recover
 
-"All vector tests complete!" print
+"All vector tests complete!" print-line

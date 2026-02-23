@@ -15,4 +15,4 @@
 { 1 2 3 } { 2 3 } #ends-with? t "#ends-with? array" assert=
 "" "" #ends-with? t "#ends-with? empty" assert=
 
-"All sequence tests complete!" print
+"All sequence tests complete!" print-line

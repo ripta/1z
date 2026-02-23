@@ -4,17 +4,17 @@
 colors: [ { "red" "green" "blue" } ] ;
 
 \ This intermediate operation would corrupt the strings if they were slices
-"Some intermediate text here:" print
+"Some intermediate text here:" print-line
 
 \ Access the array - strings should not be corrupted
 colors .
 
 \ Test with symbols in arrays too (same bug)
 point: [ { x: y: } ] ;
-"Another intermediate:" print
+"Another intermediate:" print-line
 point .
 
 \ Nested arrays with strings
 nested: [ { { "hello" "world" } { "foo" "bar" } } ] ;
-"More intermediate text:" print
+"More intermediate text:" print-line
 nested .
