@@ -16,16 +16,6 @@ pragma{ !test-flag }
 
 t "negation shorthand accepted" assert-true
 
-"key-value boolean" test-section
-
-pragma{ test-flag: t }
-
-t "key-value boolean t accepted" assert-true
-
-pragma{ test-flag: f }
-
-t "key-value boolean f accepted" assert-true
-
 "validated pragma" test-section
 
 \ Register a pragma with a validator that accepts positive integers

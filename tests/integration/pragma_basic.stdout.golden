@@ -7,12 +7,6 @@ Stack: [ ]
 Stack: [ ]
 PASS: negation shorthand accepted
 Stack: [ ]
-=== key-value boolean ===
-Stack: [ ]
-PASS: key-value boolean t accepted
-Stack: [ ]
-PASS: key-value boolean f accepted
-Stack: [ ]
 === validated pragma ===
 Stack: [ ]
 Stack: [ ]

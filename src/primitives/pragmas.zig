@@ -8,8 +8,6 @@ const Value = value_mod.Value;
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 const parse_time_mod = @import("parse_time.zig");
-const tokenizer_mod = @import("../tokenizer.zig");
-const Token = tokenizer_mod.Token;
 
 const popString = helpers.popString;
 
@@ -43,111 +41,96 @@ fn nativeRegisterPragma(ctx: *Context) anyerror!void {
     try ctx.pragma_registry.put(ctx.allocator, duped_name, registration);
 }
 
-fn isSkippable(kind: Token.Kind) bool {
-    return kind == .comment or kind == .doc_comment or kind == .newline;
-}
-
-/// pragma{ ... } - Parse-time word for setting pragma values
+/// pragma{ ... } - Parse-time word for setting pragma values.
+/// Delegates tokenization to parse-values-until, then walks the resulting array.
 fn nativePragmaBlock(ctx: *Context) anyerror!void {
-    const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
     const alloc = ctx.quotationAllocator();
 
-    while (tokenizer.nextOrYield()) |tok| {
-        if (isSkippable(tok.kind)) continue;
+    try ctx.stack.push(.{ .string = "}" });
+    try parse_time_mod.nativeParseValuesUntil(ctx);
+    const arr_val = try ctx.stack.pop();
+    const items = switch (arr_val) {
+        .array => |a| a,
+        else => return error.TypeMismatch,
+    };
 
-        const token = tok.text;
+    var i: usize = 0;
+    while (i < items.len) : (i += 1) {
+        const item = items[i];
 
-        if (std.mem.eql(u8, token, "}")) break;
+        switch (item) {
+            .symbol => |sym| {
+                const pragma_name = sym;
+                const reg = ctx.lookupPragmaRegistration(pragma_name) orelse {
+                    return throwPragmaError(ctx, alloc, "unknown-pragma", pragma_name);
+                };
 
-        if (token.len > 1 and token[token.len - 1] == ':') {
-            const pragma_name = token[0 .. token.len - 1];
-            const reg = ctx.lookupPragmaRegistration(pragma_name) orelse {
-                return throwPragmaError(ctx, alloc, "unknown-pragma", pragma_name);
-            };
+                if (i + 1 >= items.len) {
+                    const msg = std.fmt.allocPrint(alloc, "pragma '{s}': expected a value", .{pragma_name}) catch "expected a value";
+                    return throwPragmaError(ctx, alloc, "pragma-error", msg);
+                }
+                i += 1;
+                const value = items[i];
 
-            const value = try parsePragmaValue(ctx, tokenizer, alloc);
-            if (reg.validator) |validator| {
-                try ctx.stack.push(value);
-                try ctx.executeQuotation(validator);
+                if (reg.validator) |validator| {
+                    try ctx.stack.push(value);
+                    try ctx.executeQuotation(validator);
 
-                const ok = try helpers.popBoolean(ctx);
-                if (ok) {
-                    const validated = try ctx.stack.pop();
-                    try ctx.setPragma(pragma_name, validated);
-                } else {
-                    const err_val = try ctx.stack.pop();
-                    const err_msg = switch (err_val) {
-                        .string => |s| s,
-                        else => "validation failed",
-                    };
-                    return throwPragmaError(ctx, alloc, "pragma-error", err_msg);
+                    const ok = try helpers.popBoolean(ctx);
+                    if (ok) {
+                        const validated = try ctx.stack.pop();
+                        try ctx.setPragma(pragma_name, validated);
+                    } else {
+                        const err_val = try ctx.stack.pop();
+                        const err_msg = switch (err_val) {
+                            .string => |s| s,
+                            else => "validation failed",
+                        };
+                        return throwPragmaError(ctx, alloc, "pragma-error", err_msg);
+                    }
+                    continue;
                 }
 
-                continue;
-            }
+                switch (value) {
+                    .boolean => try ctx.setPragma(pragma_name, value),
+                    else => {
+                        const msg = std.fmt.allocPrint(alloc, "pragma '{s}' accepts only boolean values", .{pragma_name}) catch "pragma accepts only boolean values";
+                        return throwPragmaError(ctx, alloc, "pragma-error", msg);
+                    },
+                }
+            },
+            .string => |s| {
+                if (s.len > 1 and s[0] == '!') {
+                    const pragma_name = s[1..];
+                    const reg = ctx.lookupPragmaRegistration(pragma_name) orelse {
+                        return throwPragmaError(ctx, alloc, "unknown-pragma", pragma_name);
+                    };
 
-            switch (value) {
-                .boolean => try ctx.setPragma(pragma_name, value),
-                else => {
-                    const msg = std.fmt.allocPrint(alloc, "pragma '{s}' accepts only boolean values", .{pragma_name}) catch "pragma accepts only boolean values";
-                    return throwPragmaError(ctx, alloc, "pragma-error", msg);
-                },
-            }
+                    if (reg.validator != null) {
+                        const msg = std.fmt.allocPrint(alloc, "pragma '{s}' requires a value, cannot use ! shorthand", .{pragma_name}) catch "cannot use ! on validated pragma";
+                        return throwPragmaError(ctx, alloc, "pragma-error", msg);
+                    }
 
-            continue;
-        }
+                    try ctx.setPragma(pragma_name, .{ .boolean = false });
+                } else {
+                    const pragma_name = s;
+                    const reg = ctx.lookupPragmaRegistration(pragma_name) orelse {
+                        return throwPragmaError(ctx, alloc, "unknown-pragma", pragma_name);
+                    };
 
-        // Negation shorthand: "!key"
-        if (token.len > 1 and token[0] == '!') {
-            const pragma_name = token[1..];
-            const reg = ctx.lookupPragmaRegistration(pragma_name) orelse {
-                return throwPragmaError(ctx, alloc, "unknown-pragma", pragma_name);
-            };
+                    if (reg.validator != null) {
+                        const msg = std.fmt.allocPrint(alloc, "pragma '{s}' requires a value, cannot use boolean shorthand", .{pragma_name}) catch "cannot use boolean shorthand on validated pragma";
+                        return throwPragmaError(ctx, alloc, "pragma-error", msg);
+                    }
 
-            if (reg.validator != null) {
-                const msg = std.fmt.allocPrint(alloc, "pragma '{s}' requires a value, cannot use ! shorthand", .{pragma_name}) catch "cannot use ! on validated pragma";
-                return throwPragmaError(ctx, alloc, "pragma-error", msg);
-            }
-
-            try ctx.setPragma(pragma_name, .{ .boolean = false });
-            continue;
-        }
-
-        // Boolean shorthand: bare "key"
-        {
-            const pragma_name = token;
-            const reg = ctx.lookupPragmaRegistration(pragma_name) orelse {
-                return throwPragmaError(ctx, alloc, "unknown-pragma", pragma_name);
-            };
-
-            if (reg.validator != null) {
-                const msg = std.fmt.allocPrint(alloc, "pragma '{s}' requires a value, cannot use boolean shorthand", .{pragma_name}) catch "cannot use boolean shorthand on validated pragma";
-                return throwPragmaError(ctx, alloc, "pragma-error", msg);
-            }
-
-            try ctx.setPragma(pragma_name, .{ .boolean = true });
+                    try ctx.setPragma(pragma_name, .{ .boolean = true });
+                }
+            },
+            else => {
+                return throwPragmaError(ctx, alloc, "pragma-error", "unexpected value in pragma block");
+            },
         }
     }
-}
-
-/// Read the next pragma value token. Handles `t`/`f` as boolean literals
-/// directly since they are words in 1z, not literal tokens that
-/// `parse-literal` can handle. All other values delegate to `parse-literal`.
-fn parsePragmaValue(ctx: *Context, tokenizer: *tokenizer_mod.Tokenizer, alloc: std.mem.Allocator) !Value {
-    _ = alloc;
-    while (tokenizer.nextOrYield()) |val_tok| {
-        if (isSkippable(val_tok.kind)) continue;
-
-        if (std.mem.eql(u8, val_tok.text, "t")) return .{ .boolean = true };
-        if (std.mem.eql(u8, val_tok.text, "f")) return .{ .boolean = false };
-
-        // Put the token back and let parse-literal handle it
-        tokenizer.peeked = val_tok;
-        try parse_time_mod.nativeParseLiteral(ctx);
-        return try ctx.stack.pop();
-    }
-    helpers.setErrorContext(ctx, "pragma: expected value after ':'", .{});
-    return error.ParseError;
 }
 
 /// Set up a thrown error and return UserThrown for clean parse-time error display.
