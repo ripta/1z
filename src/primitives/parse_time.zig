@@ -131,7 +131,7 @@ fn nativePeekToken(ctx: *Context) anyerror!void {
 }
 
 /// parse-literal ( -- value ) - Read the next literal from the tokenizer
-fn nativeParseLiteral(ctx: *Context) anyerror!void {
+pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
     const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
     const alloc = ctx.quotationAllocator();
     while (tokenizer.nextOrYield()) |tok| {

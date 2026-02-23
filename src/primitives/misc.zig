@@ -210,6 +210,9 @@ fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator,
     try ctx.pushLocalFrame();
     errdefer ctx.popLocalFrame();
 
+    try ctx.pushPragmaFrame();
+    errdefer ctx.popPragmaFrame();
+
     // XXX(ripta): Hack to set import target frame, which may execute inside
     //             combinator frames like `if`, instead of global or ephemeral
     //             frame. No rugrats for now.
@@ -295,6 +298,7 @@ fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator,
     }
 
     ctx.module_cache.put(alloc, resolved, module) catch {};
+    ctx.popPragmaFrame();
     ctx.popLocalFrame();
     try ctx.stack.push(.{ .module = module });
 }

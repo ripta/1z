@@ -49,6 +49,17 @@ pub const ParameterFrame = std.StringHashMapUnmanaged(Value);
 pub const LocalFrame = std.StringHashMapUnmanaged(WordDefinition);
 const WordDefinition = @import("dictionary.zig").WordDefinition;
 
+/// PragmaRegistration holds metadata for a registered pragma key.
+/// If validator is null, the pragma accepts only boolean values.
+/// If validator is a quotation, it is called with the value on the stack
+/// and must return a result:ok or result:err.
+pub const PragmaRegistration = struct {
+    validator: ?value_mod.Quotation,
+};
+
+/// PragmaFrame holds pragma values for the current file scope.
+pub const PragmaFrame = std.StringHashMapUnmanaged(Value);
+
 /// ErrorDetail captures information about an error for debugging purposes.
 pub const ErrorDetail = struct {
     error_type: []const u8,
@@ -147,6 +158,10 @@ pub const Context = struct {
     scheduler: ?*Scheduler = null,
     /// Enum registry mapping enum names to their variant VirtualType pointers.
     enum_registry: std.StringHashMapUnmanaged([]const *const value_mod.VirtualType) = .{},
+    /// Registry of known pragma keys and their validation rules.
+    pragma_registry: std.StringHashMapUnmanaged(PragmaRegistration) = .{},
+    /// Stack of pragma frames for file-scoped pragma values.
+    pragma_frames: std.ArrayListUnmanaged(PragmaFrame) = .{},
     /// Parent context for dictionary and dispatch table lookup chaining.
     /// Task contexts walk this chain to find words and methods defined in
     /// ancestor scopes, up to the root context which holds primitives and
@@ -246,6 +261,10 @@ pub const Context = struct {
         try self.pushLocalFrame();
         self.import_frame_index = self.local_frames.items.len - 1;
 
+        // Push the base pragma frame and register built-in pragmas
+        try self.pushPragmaFrame();
+        try self.pragma_registry.put(self.allocator, "require-doc", .{ .validator = null });
+
         // Split prelude into lines and process incrementally
         var lines = std.mem.splitScalar(u8, prelude_source, '\n');
         while (lines.next()) |line| {
@@ -288,6 +307,11 @@ pub const Context = struct {
         self.error_details.deinit(self.allocator);
         self.load_paths.deinit(self.allocator);
         self.module_cache.deinit(self.arena.allocator());
+        for (self.pragma_frames.items) |*frame| {
+            frame.deinit(self.allocator);
+        }
+        self.pragma_frames.deinit(self.allocator);
+        self.pragma_registry.deinit(self.allocator);
         self.enum_registry.deinit(self.allocator);
         self.dispatch.deinit();
         self.arena.deinit();
@@ -407,6 +431,70 @@ pub const Context = struct {
             var tw = trace_mod.TraceWriter.init();
             trace_mod.traceModuleDepsPush(&tw, module.name, &module.words, &module.deps, 5);
         }
+    }
+
+    // =========================================================================
+    // Pragma frame methods (file-scoped pragma values)
+    // =========================================================================
+
+    /// Push a new empty pragma frame onto the frame stack.
+    pub fn pushPragmaFrame(self: *Context) !void {
+        try self.pragma_frames.append(self.allocator, PragmaFrame{});
+    }
+
+    /// Pop the top pragma frame from the frame stack.
+    pub fn popPragmaFrame(self: *Context) void {
+        if (self.pragma_frames.items.len > 0) {
+            const last_idx = self.pragma_frames.items.len - 1;
+            self.pragma_frames.items[last_idx].deinit(self.allocator);
+            self.pragma_frames.items.len -= 1;
+        }
+    }
+
+    /// Set a pragma value in the top frame.
+    pub fn setPragma(self: *Context, name: []const u8, value: Value) !void {
+        if (self.pragma_frames.items.len == 0) return error.OutOfMemory;
+        const top_index = self.pragma_frames.items.len - 1;
+        try self.pragma_frames.items[top_index].put(self.allocator, name, value);
+    }
+
+    /// Get the current value of a pragma, searching frames top-to-bottom
+    /// and then walking the parent context chain.
+    pub fn getPragma(self: *const Context, name: []const u8) ?Value {
+        var i = self.pragma_frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.pragma_frames.items[i].get(name)) |value| {
+                return value;
+            }
+        }
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            var j = ctx.pragma_frames.items.len;
+            while (j > 0) {
+                j -= 1;
+                if (ctx.pragma_frames.items[j].get(name)) |value| {
+                    return value;
+                }
+            }
+            ancestor = ctx.parent_context;
+        }
+
+        return null;
+    }
+
+    /// Look up a pragma registration by name, walking the parent context chain.
+    pub fn lookupPragmaRegistration(self: *const Context, name: []const u8) ?PragmaRegistration {
+        if (self.pragma_registry.get(name)) |reg| return reg;
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            if (ctx.pragma_registry.get(name)) |reg| return reg;
+            ancestor = ctx.parent_context;
+        }
+
+        return null;
     }
 
     /// Define a word in the current local frame if one exists, otherwise

@@ -1,0 +1,3 @@
+\ Test that ! prefix on a validated pragma produces a parse-time error
+"level" [ dup fixnum? [ >result:ok ] [ drop "must be a fixnum" >result:err ] if ] register-pragma
+pragma{ !level }

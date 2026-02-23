@@ -1,0 +1,32 @@
+=== boolean shorthand ===
+Stack: [ ]
+Stack: [ ]
+PASS: boolean shorthand accepted
+Stack: [ ]
+=== negation shorthand ===
+Stack: [ ]
+PASS: negation shorthand accepted
+Stack: [ ]
+=== key-value boolean ===
+Stack: [ ]
+PASS: key-value boolean t accepted
+Stack: [ ]
+PASS: key-value boolean f accepted
+Stack: [ ]
+=== validated pragma ===
+Stack: [ ]
+Stack: [ ]
+PASS: validated pragma accepted
+Stack: [ ]
+=== multiple keys in one block ===
+Stack: [ ]
+PASS: multiple keys accepted
+Stack: [ ]
+=== multiline pragma block ===
+Stack: [ ]
+PASS: multiline block accepted
+Stack: [ ]
+=== built-in require-doc ===
+Stack: [ ]
+PASS: built-in require-doc accepted
+Stack: [ ]
