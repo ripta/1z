@@ -1,0 +1,3 @@
+tests/integration/*.stdout.golden  linguist-generated
+tests/integration/*.stderr.golden  linguist-generated
+tests/formatting/*.golden          linguist-generated
