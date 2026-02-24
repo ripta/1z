@@ -22,3 +22,13 @@ PASS: non-parse-time word returns debug after caller sets x-debug
 Stack: [ ]
 PASS: non-parse-time word returns release after caller negates x-debug
 Stack: [ ]
+=== parse-time token consumption controlled by pragma ===
+Stack: [ ]
+Stack: [ "before" ]
+PASS: debug-note with x-debug off consumed and discarded token
+Stack: [ ]
+Stack: [ "before" "here" ]
+PASS: debug-note with x-debug on kept the token value
+Stack: [ "before" ]
+PASS: stack preserved under debug-note result
+Stack: [ ]

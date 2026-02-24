@@ -29,3 +29,16 @@ pragma{ x-debug }
 debug-mode-rt "debug" "non-parse-time word returns debug after caller sets x-debug" assert=
 pragma{ !x-debug }
 debug-mode-rt "release" "non-parse-time word returns release after caller negates x-debug" assert=
+
+"parse-time token consumption controlled by pragma" test-section
+
+\ With x-debug off, debug-note consumes the next token but discards it
+pragma{ !x-debug }
+"before" debug-note "gone"
+"before" "debug-note with x-debug off consumed and discarded token" assert=
+
+\ With x-debug on, debug-note consumes the next token and keeps it
+pragma{ x-debug }
+"before" debug-note "here"
+"here" "debug-note with x-debug on kept the token value" assert=
+"before" "stack preserved under debug-note result" assert=
