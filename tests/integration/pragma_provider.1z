@@ -11,3 +11,6 @@ debug-mode: parse-time [ "x-debug" pragma? [ "debug" ] [ "release" ] if ] ;
 
 \ Parse-time word that reads x-level and pushes the option
 current-level: parse-time [ "x-level" pragma-get ] ;
+
+\ Non-parse-time variant of debug-mode
+debug-mode-rt: [ "x-debug" pragma? [ "debug" ] [ "release" ] if ] ;

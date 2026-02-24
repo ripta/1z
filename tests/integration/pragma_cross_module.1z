@@ -22,3 +22,10 @@ current-level option:some> 3 "current-level returns caller's x-level value" asse
 
 pragma{ !x-debug }
 debug-mode "release" "debug-mode returns release after caller negates x-debug" assert=
+
+"non-parse-time word also sees caller pragmas" test-section
+
+pragma{ x-debug }
+debug-mode-rt "debug" "non-parse-time word returns debug after caller sets x-debug" assert=
+pragma{ !x-debug }
+debug-mode-rt "release" "non-parse-time word returns release after caller negates x-debug" assert=

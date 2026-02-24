@@ -16,3 +16,9 @@ Stack: [ ]
 Stack: [ ]
 PASS: debug-mode returns release after caller negates x-debug
 Stack: [ ]
+=== non-parse-time word also sees caller pragmas ===
+Stack: [ ]
+PASS: non-parse-time word returns debug after caller sets x-debug
+Stack: [ ]
+PASS: non-parse-time word returns release after caller negates x-debug
+Stack: [ ]
