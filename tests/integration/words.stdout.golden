@@ -260,6 +260,7 @@ EIOFailed
 EIndexOutOfBounds
 EInvalidArgument
 EKeyNotFound
+EMissingDocComment
 ENoMatchingBranch
 ENotComparable
 EStackEffectMismatch

@@ -109,24 +109,50 @@ fn nativePragmaBlock(ctx: *Context) anyerror!void {
                         return throwPragmaError(ctx, alloc, "unknown-pragma", pragma_name);
                     };
 
-                    if (reg.validator != null) {
-                        const msg = std.fmt.allocPrint(alloc, "pragma '{s}' requires a value, cannot use ! shorthand", .{pragma_name}) catch "cannot use ! on validated pragma";
-                        return throwPragmaError(ctx, alloc, "pragma-error", msg);
-                    }
+                    if (reg.validator) |validator| {
+                        try ctx.stack.push(.{ .boolean = false });
+                        try ctx.executeQuotation(validator);
 
-                    try ctx.setPragma(pragma_name, .{ .boolean = false });
+                        const ok = try helpers.popBoolean(ctx);
+                        if (ok) {
+                            const validated = try ctx.stack.pop();
+                            try ctx.setPragma(pragma_name, validated);
+                        } else {
+                            const err_val = try ctx.stack.pop();
+                            const err_msg = switch (err_val) {
+                                .string => |es| es,
+                                else => "validation failed",
+                            };
+                            return throwPragmaError(ctx, alloc, "pragma-error", err_msg);
+                        }
+                    } else {
+                        try ctx.setPragma(pragma_name, .{ .boolean = false });
+                    }
                 } else {
                     const pragma_name = s;
                     const reg = ctx.lookupPragmaRegistration(pragma_name) orelse {
                         return throwPragmaError(ctx, alloc, "unknown-pragma", pragma_name);
                     };
 
-                    if (reg.validator != null) {
-                        const msg = std.fmt.allocPrint(alloc, "pragma '{s}' requires a value, cannot use boolean shorthand", .{pragma_name}) catch "cannot use boolean shorthand on validated pragma";
-                        return throwPragmaError(ctx, alloc, "pragma-error", msg);
-                    }
+                    if (reg.validator) |validator| {
+                        try ctx.stack.push(.{ .boolean = true });
+                        try ctx.executeQuotation(validator);
 
-                    try ctx.setPragma(pragma_name, .{ .boolean = true });
+                        const ok = try helpers.popBoolean(ctx);
+                        if (ok) {
+                            const validated = try ctx.stack.pop();
+                            try ctx.setPragma(pragma_name, validated);
+                        } else {
+                            const err_val = try ctx.stack.pop();
+                            const err_msg = switch (err_val) {
+                                .string => |es| es,
+                                else => "validation failed",
+                            };
+                            return throwPragmaError(ctx, alloc, "pragma-error", err_msg);
+                        }
+                    } else {
+                        try ctx.setPragma(pragma_name, .{ .boolean = true });
+                    }
                 }
             },
             else => {

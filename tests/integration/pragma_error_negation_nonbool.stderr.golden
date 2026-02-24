@@ -1,1 +1,1 @@
-tests/integration/pragma_error_negation_nonbool.1z:3: error 'pragma-error' pragma 'level' requires a value, cannot use ! shorthand
+tests/integration/pragma_error_negation_nonbool.1z:3: error 'pragma-error' must be a fixnum

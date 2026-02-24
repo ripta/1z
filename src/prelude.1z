@@ -143,6 +143,7 @@ EUnexpectedEOF:       [ unexpected-eof: ] ;
 EIndexOutOfBounds:    [ index-out-of-bounds: ] ;
 EInvalidArgument:     [ invalid-argument: ] ;
 EUseAfterClose:       [ use-after-close: ] ;
+EMissingDocComment:   [ missing-doc-comment: ] ;
 
 \ TODO(ripta): the pattern is a bit repetitive and odd; maybe a parse-time?
 \\ Construct and throw a no-matching-branch error with the given data.
@@ -588,3 +589,16 @@ all-words: ( -- array ) [ native.all-words [ (raw>word-info) ] #map #collect ] ;
 
 \\ Return the value of a pragma as an option.
 pragma-get: ( name -- option ) [ pragma-get-raw [ >option:some ] [ option:none ] if ] ;
+
+\ Register the built-in require-doc pragma with a multi-level validator.
+\ Accepts booleans (t -> "standard", f -> "relaxed") and the level strings
+\ "relaxed", "standard", "strict", "pedantic".
+"require-doc" [
+  dup boolean? [
+    [ "standard" ] [ "relaxed" ] if t
+  ] [
+    dup "relaxed" = over "standard" = or over "strict" = or over "pedantic" = or [ t ] [
+      drop "require-doc: expected t, f, or one of relaxed, standard, strict, pedantic" f
+    ] if
+  ] if
+] register-pragma

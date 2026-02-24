@@ -1,0 +1,50 @@
+\ Test require-doc pragma at various enforcement levels
+
+use "testing" ;
+
+"standard level: documented word passes" test-section
+
+pragma{ require-doc }
+
+\\ A documented word.
+documented-word: [ 42 ] ;
+
+documented-word 42 "documented word returns 42" assert=
+
+"standard level: parse-time word without doc passes" test-section
+
+undocumented-pt: parse-time [ 99 ] ;
+
+undocumented-pt 99 "parse-time word without doc at standard level" assert=
+
+"toggling off allows undocumented words" test-section
+
+pragma{ !require-doc }
+
+undocumented-word: [ 7 ] ;
+
+undocumented-word 7 "undocumented word after disabling" assert=
+
+"strict level: documented parse-time word passes" test-section
+
+pragma{ require-doc: "strict" }
+
+\\ A documented parse-time word.
+documented-pt: parse-time [ 88 ] ;
+
+documented-pt 88 "documented parse-time word at strict" assert=
+
+"strict level: documented type descriptor passes" test-section
+
+\\ A documented struct type.
+my-point: struct{ x y } ;
+
+1 2 make-my-point my-point? t "struct with doc at strict level" assert=
+
+"relaxed level: no enforcement" test-section
+
+pragma{ require-doc: "relaxed" }
+
+relaxed-word: [ 5 ] ;
+
+relaxed-word 5 "undocumented word at relaxed level" assert=

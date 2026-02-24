@@ -261,9 +261,8 @@ pub const Context = struct {
         try self.pushLocalFrame();
         self.import_frame_index = self.local_frames.items.len - 1;
 
-        // Push the base pragma frame and register built-in pragmas
+        // Push the base pragma frame for file-scoped pragmas
         try self.pushPragmaFrame();
-        try self.pragma_registry.put(self.allocator, "require-doc", .{ .validator = null });
 
         // Split prelude into lines and process incrementally
         var lines = std.mem.splitScalar(u8, prelude_source, '\n');
