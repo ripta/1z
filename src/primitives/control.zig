@@ -44,29 +44,35 @@ fn getDescriptorMap(val: Value) ?*value_mod.MutableMap {
     };
 }
 
+/// Bit flags for require-doc enforcement. The prelude validator maps level
+/// names to a bitmask of these flags; Zig only checks the relevant bit.
+const require_doc_normal: i64 = 1; // bit 0
+const require_doc_parse_time: i64 = 2; // bit 1
+const require_doc_type_descriptor: i64 = 4; // bit 2
+const require_doc_marker: i64 = 8; // bit 3
+
 /// Check the require-doc pragma and throw missing-doc-comment if a
-/// doc-comment is required but absent.
+/// doc-comment is required but absent. The pragma value is an integer
+/// bitmask set by the prelude validator.
 fn enforceRequireDoc(ctx: *Context, name: []const u8, has_doc: bool, is_parse_time: bool, is_type_descriptor: bool, is_marker: bool) anyerror!void {
     if (has_doc) return;
 
     const pragma_val = ctx.getPragma("require-doc") orelse return;
-    const level = switch (pragma_val) {
-        .string => |s| s,
+    const mask = switch (pragma_val) {
+        .fixnum => |n| n,
         else => return,
     };
 
-    const enforce = if (std.mem.eql(u8, level, "relaxed"))
-        false
-    else if (std.mem.eql(u8, level, "standard"))
-        !is_parse_time and !is_type_descriptor and !is_marker
-    else if (std.mem.eql(u8, level, "strict"))
-        !is_marker
-    else if (std.mem.eql(u8, level, "pedantic"))
-        true
+    const bit = if (is_marker)
+        require_doc_marker
+    else if (is_type_descriptor)
+        require_doc_type_descriptor
+    else if (is_parse_time)
+        require_doc_parse_time
     else
-        false;
+        require_doc_normal;
 
-    if (!enforce) return;
+    if (mask & bit == 0) return;
 
     const alloc = ctx.quotationAllocator();
     ctx.thrown_error = .{
