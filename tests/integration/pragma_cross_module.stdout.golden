@@ -32,3 +32,10 @@ PASS: debug-note with x-debug on kept the token value
 Stack: [ "before" ]
 PASS: stack preserved under debug-note result
 Stack: [ ]
+=== debug-log prints at parse time when x-debug is on ===
+Stack: [ ]
+FAIL: debug: loading phase 1
+PASS: reached after debug-log with debug on
+Stack: [ ]
+PASS: reached after debug-log with debug off
+Stack: [ ]

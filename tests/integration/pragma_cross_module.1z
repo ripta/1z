@@ -42,3 +42,15 @@ pragma{ x-debug }
 "before" debug-note "here"
 "here" "debug-note with x-debug on kept the token value" assert=
 "before" "stack preserved under debug-note result" assert=
+
+"debug-log prints at parse time when x-debug is on" test-section
+
+\ With x-debug on, debug-log prints the message during parsing
+pragma{ x-debug }
+debug-log "PASS: debug: loading phase 1"
+t "reached after debug-log with debug on" assert-true
+
+\ With x-debug off, debug-log silently consumes the message
+pragma{ !x-debug }
+debug-log "FAIL: this should not appear"
+t "reached after debug-log with debug off" assert-true

@@ -19,3 +19,8 @@ debug-mode-rt: [ "x-debug" pragma? [ "debug" ] [ "release" ] if ] ;
 \ When x-debug is on, reads the next literal and keeps it on the stack.
 \ When x-debug is off, reads and discards it.
 debug-note: parse-time [ parse-literal "x-debug" pragma? [ ] [ drop ] if ] ;
+
+\ Parse-time word that reads and prints a message during loading when
+\ x-debug is on. When x-debug is off, consumes and discards the message
+\ silently. Either way, no runtime instructions are emitted.
+debug-log: parse-time [ parse-literal "x-debug" pragma? [ print-line ] [ drop ] if ] ;
