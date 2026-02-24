@@ -50,11 +50,14 @@ pub const LocalFrame = std.StringHashMapUnmanaged(WordDefinition);
 const WordDefinition = @import("dictionary.zig").WordDefinition;
 
 /// PragmaRegistration holds metadata for a registered pragma key.
-/// If validator is null, the pragma accepts only boolean values.
+/// If both validators are null, the pragma accepts only boolean values.
 /// If validator is a quotation, it is called with the value on the stack
-/// and must return a result:ok or result:err.
+/// and must push validated_value t (success) or error_msg f (failure).
+/// If native_validator is set, it is called instead of the quotation validator
+/// with the same protocol.
 pub const PragmaRegistration = struct {
-    validator: ?value_mod.Quotation,
+    validator: ?value_mod.Quotation = null,
+    native_validator: ?*const fn (*Context) anyerror!void = null,
 };
 
 /// PragmaFrame holds pragma values for the current file scope.
@@ -263,6 +266,13 @@ pub const Context = struct {
 
         // Push the base pragma frame for file-scoped pragmas
         try self.pushPragmaFrame();
+
+        // Register require-doc pragma with a native validator so enforcement
+        // does not depend on prelude definitions.
+        const control = @import("primitives/control.zig");
+        try self.pragma_registry.put(self.allocator, "require-doc", .{
+            .native_validator = &control.nativeRequireDocValidator,
+        });
 
         // Split prelude into lines and process incrementally
         var lines = std.mem.splitScalar(u8, prelude_source, '\n');

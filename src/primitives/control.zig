@@ -51,9 +51,47 @@ const require_doc_parse_time: i64 = 2; // bit 1
 const require_doc_type_descriptor: i64 = 4; // bit 2
 const require_doc_marker: i64 = 8; // bit 3
 
+/// Native validator for the require-doc pragma. Maps level names to the
+/// bitmask consumed by enforceRequireDoc. Follows the same protocol as
+/// quotation validators: push validated_value t on success, or error_msg f
+/// on failure.
+pub fn nativeRequireDocValidator(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .boolean => |b| {
+            try ctx.stack.push(.{ .fixnum = if (b) require_doc_normal else 0 });
+            try ctx.stack.push(.{ .boolean = true });
+        },
+        .string => |s| {
+            const level: ?i64 = if (std.mem.eql(u8, s, "relaxed"))
+                0
+            else if (std.mem.eql(u8, s, "standard"))
+                require_doc_normal
+            else if (std.mem.eql(u8, s, "strict"))
+                require_doc_normal | require_doc_parse_time | require_doc_type_descriptor
+            else if (std.mem.eql(u8, s, "pedantic"))
+                require_doc_normal | require_doc_parse_time | require_doc_type_descriptor | require_doc_marker
+            else
+                null;
+
+            if (level) |l| {
+                try ctx.stack.push(.{ .fixnum = l });
+                try ctx.stack.push(.{ .boolean = true });
+            } else {
+                try ctx.stack.push(.{ .string = "require-doc: expected t, f, or one of relaxed, standard, strict, pedantic" });
+                try ctx.stack.push(.{ .boolean = false });
+            }
+        },
+        else => {
+            try ctx.stack.push(.{ .string = "require-doc: expected t, f, or one of relaxed, standard, strict, pedantic" });
+            try ctx.stack.push(.{ .boolean = false });
+        },
+    }
+}
+
 /// Check the require-doc pragma and throw missing-doc-comment if a
 /// doc-comment is required but absent. The pragma value is an integer
-/// bitmask set by the prelude validator.
+/// bitmask set by the native validator.
 fn enforceRequireDoc(ctx: *Context, name: []const u8, has_doc: bool, is_parse_time: bool, is_type_descriptor: bool, is_marker: bool) anyerror!void {
     if (has_doc) return;
 

@@ -589,23 +589,3 @@ all-words: ( -- array ) [ native.all-words [ (raw>word-info) ] #map #collect ] ;
 
 \\ Return the value of a pragma as an option.
 pragma-get: ( name -- option ) [ pragma-get-raw [ >option:some ] [ option:none ] if ] ;
-
-\ Register the require-doc pragma with a multi-level validator.
-\ The validator maps level names to a bitmask consumed by the Zig enforcement in `nativeSemicolon`.
-\ Bit 0 = normal words,
-\     1 = parse-time words,
-\     2 = type descriptors,
-\     3 = markers.
-"require-doc" [
-  dup boolean? [
-    [ 1 ] [ 0 ] if t
-  ] [
-    {
-      { "relaxed" [ 0 t ] }
-      { "standard" [ 1 t ] }
-      { "strict" [ 7 t ] }
-      { "pedantic" [ 15 t ] }
-      [ drop "require-doc: expected t, f, or one of relaxed, standard, strict, pedantic" f ]
-    } case
-  ] if
-] register-pragma

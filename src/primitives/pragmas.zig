@@ -75,22 +75,9 @@ fn nativePragmaBlock(ctx: *Context) anyerror!void {
                 i += 1;
                 const value = items[i];
 
-                if (reg.validator) |validator| {
+                if (hasValidator(reg)) {
                     try ctx.stack.push(value);
-                    try ctx.executeQuotation(validator);
-
-                    const ok = try helpers.popBoolean(ctx);
-                    if (ok) {
-                        const validated = try ctx.stack.pop();
-                        try ctx.setPragma(pragma_name, validated);
-                    } else {
-                        const err_val = try ctx.stack.pop();
-                        const err_msg = switch (err_val) {
-                            .string => |s| s,
-                            else => "validation failed",
-                        };
-                        return throwPragmaError(ctx, alloc, "pragma-error", err_msg);
-                    }
+                    try runValidator(ctx, alloc, reg, pragma_name);
                     continue;
                 }
 
@@ -109,22 +96,9 @@ fn nativePragmaBlock(ctx: *Context) anyerror!void {
                         return throwPragmaError(ctx, alloc, "unknown-pragma", pragma_name);
                     };
 
-                    if (reg.validator) |validator| {
+                    if (hasValidator(reg)) {
                         try ctx.stack.push(.{ .boolean = false });
-                        try ctx.executeQuotation(validator);
-
-                        const ok = try helpers.popBoolean(ctx);
-                        if (ok) {
-                            const validated = try ctx.stack.pop();
-                            try ctx.setPragma(pragma_name, validated);
-                        } else {
-                            const err_val = try ctx.stack.pop();
-                            const err_msg = switch (err_val) {
-                                .string => |es| es,
-                                else => "validation failed",
-                            };
-                            return throwPragmaError(ctx, alloc, "pragma-error", err_msg);
-                        }
+                        try runValidator(ctx, alloc, reg, pragma_name);
                     } else {
                         try ctx.setPragma(pragma_name, .{ .boolean = false });
                     }
@@ -134,22 +108,9 @@ fn nativePragmaBlock(ctx: *Context) anyerror!void {
                         return throwPragmaError(ctx, alloc, "unknown-pragma", pragma_name);
                     };
 
-                    if (reg.validator) |validator| {
+                    if (hasValidator(reg)) {
                         try ctx.stack.push(.{ .boolean = true });
-                        try ctx.executeQuotation(validator);
-
-                        const ok = try helpers.popBoolean(ctx);
-                        if (ok) {
-                            const validated = try ctx.stack.pop();
-                            try ctx.setPragma(pragma_name, validated);
-                        } else {
-                            const err_val = try ctx.stack.pop();
-                            const err_msg = switch (err_val) {
-                                .string => |es| es,
-                                else => "validation failed",
-                            };
-                            return throwPragmaError(ctx, alloc, "pragma-error", err_msg);
-                        }
+                        try runValidator(ctx, alloc, reg, pragma_name);
                     } else {
                         try ctx.setPragma(pragma_name, .{ .boolean = true });
                     }
@@ -234,6 +195,35 @@ fn nativePragmaGetRaw(ctx: *Context) anyerror!void {
     } else {
         try ctx.stack.push(.{ .boolean = false });
     }
+}
+
+/// Run a quotation or native validator, then handle the result.
+/// The value to validate must already be on the stack.
+/// On success, sets the pragma. On failure, throws a pragma error.
+fn runValidator(ctx: *Context, alloc: std.mem.Allocator, reg: PragmaRegistration, pragma_name: []const u8) anyerror!void {
+    if (reg.native_validator) |native_fn| {
+        try native_fn(ctx);
+    } else if (reg.validator) |validator| {
+        try ctx.executeQuotation(validator);
+    } else unreachable;
+
+    const ok = try helpers.popBoolean(ctx);
+    if (ok) {
+        const validated = try ctx.stack.pop();
+        try ctx.setPragma(pragma_name, validated);
+    } else {
+        const err_val = try ctx.stack.pop();
+        const err_msg = switch (err_val) {
+            .string => |s| s,
+            else => "validation failed",
+        };
+        return throwPragmaError(ctx, alloc, "pragma-error", err_msg);
+    }
+}
+
+/// Return true if the registration has any validator (quotation or native).
+fn hasValidator(reg: PragmaRegistration) bool {
+    return reg.validator != null or reg.native_validator != null;
 }
 
 /// Set up a thrown error and return UserThrown for clean parse-time error display.
