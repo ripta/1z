@@ -1,6 +1,6 @@
 \ Integration tests for byte arrays B{ }
 
-"lib/testing.1z" load
+"lib/testing.1z" use
 
 "Byte array creation" test-section
 B{ } #len 0 "empty byte array length" assert=

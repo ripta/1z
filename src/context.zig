@@ -33,6 +33,11 @@ pub const CallFrame = struct {
 /// Each frame is a mapping from parameter name to its bound value.
 pub const ParameterFrame = std.StringHashMapUnmanaged(Value);
 
+/// LocalFrame holds word definitions for lexical scoping within quotations.
+/// Each frame is a mapping from word name to its definition.
+pub const LocalFrame = std.StringHashMapUnmanaged(WordDefinition);
+const WordDefinition = @import("dictionary.zig").WordDefinition;
+
 /// ErrorDetail captures information about an error for debugging purposes.
 pub const ErrorDetail = struct {
     error_type: []const u8,
@@ -51,6 +56,8 @@ pub const Context = struct {
     error_details: std.ArrayListUnmanaged(ErrorDetail),
     /// Parameter environment frames for dynamic scoping
     parameter_env: std.ArrayListUnmanaged(ParameterFrame),
+    /// Local definition frames for lexical scoping within quotations
+    local_frames: std.ArrayListUnmanaged(LocalFrame),
     /// Tokenizer for parse-time word access (set during parsing, null otherwise)
     parse_tokenizer: ?*Tokenizer = null,
     /// Optional benchmark stats (null when benchmarking is disabled)
@@ -67,6 +74,7 @@ pub const Context = struct {
             .call_stack = .{},
             .error_details = .{},
             .parameter_env = .{},
+            .local_frames = .{},
             .parse_tokenizer = null,
             .benchmark = null,
         };
@@ -128,6 +136,10 @@ pub const Context = struct {
             frame.deinit(self.allocator);
         }
         self.parameter_env.deinit(self.allocator);
+        for (self.local_frames.items) |*frame| {
+            frame.deinit(self.allocator);
+        }
+        self.local_frames.deinit(self.allocator);
         self.call_stack.deinit(self.allocator);
         self.error_details.deinit(self.allocator);
         self.arena.deinit();
@@ -185,6 +197,93 @@ pub const Context = struct {
         try self.parameter_env.items[top_index].put(self.allocator, name, value);
     }
 
+    // =========================================================================
+    // Local frame methods (lexical scoping for quotation-local definitions)
+    // =========================================================================
+
+    /// Push a new empty local frame onto the frame stack.
+    pub fn pushLocalFrame(self: *Context) !void {
+        try self.local_frames.append(self.allocator, LocalFrame{});
+    }
+
+    /// Pop the top local frame from the frame stack.
+    pub fn popLocalFrame(self: *Context) void {
+        if (self.local_frames.items.len > 0) {
+            const last_idx = self.local_frames.items.len - 1;
+            self.local_frames.items[last_idx].deinit(self.allocator);
+            self.local_frames.items.len -= 1;
+        }
+    }
+
+    /// Define a word in the current local frame if one exists, otherwise in global dictionary.
+    pub fn defineWord(self: *Context, name: []const u8, definition: WordDefinition) !void {
+        if (self.local_frames.items.len > 0) {
+            const top_index = self.local_frames.items.len - 1;
+            try self.local_frames.items[top_index].put(self.allocator, name, definition);
+        } else {
+            try self.dictionary.put(name, definition);
+        }
+    }
+
+    /// Look up a word by name. Searches local frames from innermost
+    /// (top) to outermost (bottom), then global dictionary.
+    pub fn lookupWord(self: *const Context, name: []const u8) ?WordDefinition {
+        var i = self.local_frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.local_frames.items[i].get(name)) |def| {
+                return def;
+            }
+        }
+
+        return self.dictionary.get(name);
+    }
+
+    /// Check if a name is a qualified name (contains a dot).
+    fn isQualifiedName(name: []const u8) bool {
+        return std.mem.indexOfScalar(u8, name, '.') != null;
+    }
+
+    /// Execute a qualified name like "math.double".
+    /// Splits on the rightmost dot, executes the module word to get a module,
+    /// then looks up and executes the word in that module.
+    fn executeQualifiedName(self: *Context, name: []const u8, line: usize) anyerror!void {
+        const dot_index = std.mem.lastIndexOfScalar(u8, name, '.') orelse return ExecutionError.UnknownWord;
+
+        const module_path = name[0..dot_index];
+        const word_name = name[dot_index + 1 ..];
+        if (module_path.len == 0 or word_name.len == 0) {
+            return ExecutionError.UnknownWord;
+        }
+
+        if (self.lookupWord(module_path)) |module_word| {
+            self.pushCallFrame(module_path, line);
+            defer self.popCallFrame();
+
+            switch (module_word.action) {
+                .native => |func| try func(self),
+                .compound => |instrs| try self.executeInstructions(instrs),
+            }
+        } else {
+            return ExecutionError.UnknownWord;
+        }
+
+        const module_val = self.stack.pop() catch return ExecutionError.UnknownWord;
+        const module = switch (module_val) {
+            .module => |m| m,
+            else => return error.TypeError,
+        };
+
+        if (module.words.get(word_name)) |mod_word| {
+            self.pushCallFrame(name, line);
+            defer self.popCallFrame();
+
+            try self.executeInstructions(mod_word.instructions);
+        } else {
+            return ExecutionError.UnknownWord;
+        }
+    }
+
     /// Push a call frame onto the call stack.
     fn pushCallFrame(self: *Context, word_name: []const u8, line: usize) void {
         self.call_stack.append(self.allocator, .{
@@ -216,7 +315,7 @@ pub const Context = struct {
                     _ = val;
                 },
                 .call_word => |name| {
-                    if (self.dictionary.get(name)) |word| {
+                    if (self.lookupWord(name)) |word| {
                         if (word.stack_effect) |word_effect| {
                             // Count only concrete parameters (skip row variables)
                             var concrete_inputs: i64 = 0;
@@ -550,6 +649,15 @@ pub const Context = struct {
         }
     }
 
+    /// Execute a quotation with a new local frame for lexical scoping.
+    /// This is what `call` uses - top-level definitions go to global, quotation-local stay local.
+    pub fn executeQuotationWithFrame(self: *Context, quotation: Quotation) anyerror!void {
+        try self.pushLocalFrame();
+        defer self.popLocalFrame();
+
+        try self.executeQuotation(quotation);
+    }
+
     /// Execute raw instructions (internal helper, no effect validation).
     fn executeInstructions(self: *Context, instructions: []const Instruction) anyerror!void {
         for (instructions) |instr| {
@@ -568,7 +676,7 @@ pub const Context = struct {
                         b.recordCallWord();
                     }
 
-                    if (self.dictionary.get(name)) |word| {
+                    if (self.lookupWord(name)) |word| {
                         // Push call frame before execution
                         self.pushCallFrame(name, instr.line);
 
@@ -612,6 +720,19 @@ pub const Context = struct {
                             self.captureCallStackOnError(err);
                             self.popCallFrame();
                             return err;
+                        }
+                    } else if (isQualifiedName(name)) {
+                        // Try qualified name resolution, e.g., math.double
+                        self.executeQualifiedName(name, instr.line) catch |err| {
+                            self.pushCallFrame(name, instr.line);
+                            self.captureCallStackOnError(err);
+                            self.popCallFrame();
+                            return err;
+                        };
+
+                        // Benchmark: update stack depth after qualified word execution
+                        if (self.benchmark) |b| {
+                            b.updatePeakStackDepth(self.stack.depth());
                         }
                     } else {
                         // Unknown word - push frame, capture, pop, return error

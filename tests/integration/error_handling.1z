@@ -1,21 +1,23 @@
-\ Note: recover-quot has declared effect ( error -- ) so it must only consume the error
+\ Test error handling primitives
 
+"lib/testing.1z" use
+
+"recover success" test-section
 \ Success case - try-quot succeeds, recover-quot not called
-[ 5 3 + ] [ drop ] recover
-.
+[ 5 3 + ] [ drop ] recover 8 "recover success value" assert=
 
+"recover error" test-section
 \ Error case - try-quot fails, recover-quot consumes error
-[ drop ] [ drop ] recover
-42 .
+[ drop ] [ drop "PASS: recover catches error" print-line ] recover
 
-\ ignore-errors - error is suppressed
+"ignore-errors" test-section
+\ Error suppressed, execution continues
 [ drop ] ignore-errors
-"still running" .
+t "ignore-errors continues after error" assert-true
 
-\ ignore-errors with success - value left on stack
-[ 100 ] ignore-errors
-.
+\ Success case with ignore-errors
+[ 100 ] ignore-errors 100 "ignore-errors success value" assert=
 
-\ Nested recover - both recover quotations consume errors
-[ [ drop ] [ drop ] recover ] [ drop ] recover
-1 .
+"Nested recover" test-section
+\ Inner recover handles error, outer recover not triggered
+[ [ drop ] [ drop "PASS: inner recover catches" print-line ] recover ] [ drop "outer" print-line ] recover

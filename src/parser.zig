@@ -85,10 +85,14 @@ const WordDefinition = @import("dictionary.zig").WordDefinition;
 
 /// Execute a parse-time word during parsing:
 ///
-/// - Executes pending push_literal instructions (so parse-time word can access preceding literals)
-/// - Keeps call_word instructions in the compiled output
+/// - Executes pending `push_literal` instructions (so parse-time word can access preceding literals)
+/// - Keeps `call_word` instructions in the compiled output
 /// - Runs the parse-time word
-/// - Captures any results as push_literal instructions
+/// - Captures all values above the pre-depth stack as `push_literal` instructions
+///
+/// We need to take a snapshot of the stack depth before pending literals are executed, which
+/// ensures that values from pending literals that are preserved (or transformed) by the parse-time
+/// word are captured back as push_literals, instead of being left on the runtime stack.
 fn executeParseTimeWord(
     c: *Context,
     word: WordDefinition,
@@ -97,6 +101,8 @@ fn executeParseTimeWord(
     allocator: Allocator,
     line: usize,
 ) ParseError!void {
+    const pre_depth = c.stack.depth();
+
     var new_len: usize = 0;
     for (instructions.items) |instr| {
         switch (instr.op) {
@@ -113,7 +119,6 @@ fn executeParseTimeWord(
     c.parse_tokenizer = tokenizer;
     defer c.parse_tokenizer = old_tokenizer;
 
-    const pre_depth = c.stack.depth();
     switch (word.action) {
         .native => |func| func(c) catch return ParseError.ParseTimeExecutionError,
         .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch return ParseError.ParseTimeExecutionError,
@@ -122,11 +127,14 @@ fn executeParseTimeWord(
     const post_depth = c.stack.depth();
     if (post_depth > pre_depth) {
         const num_results = post_depth - pre_depth;
+        const base_idx = instructions.items.len;
         var i: usize = 0;
         while (i < num_results) : (i += 1) {
             const val = c.stack.pop() catch return ParseError.ParseTimeExecutionError;
             instructions.append(allocator, .{ .op = .{ .push_literal = val }, .line = line }) catch return ParseError.OutOfMemory;
         }
+
+        std.mem.reverse(Instruction, instructions.items[base_idx..]);
     }
 }
 
@@ -627,4 +635,27 @@ test "parse with inline comment" {
     try std.testing.expectEqual(@as(i64, 1), instrs[0].op.push_literal.integer);
     try std.testing.expectEqual(@as(i64, 2), instrs[1].op.push_literal.integer);
     try std.testing.expectEqualStrings("+", instrs[2].op.call_word);
+}
+
+test "parse-time word preserves preceding literals" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.quotationAllocator();
+    const dup_instrs = try alloc.alloc(Instruction, 1);
+    dup_instrs[0] = .{ .op = .{ .call_word = "dup" }, .line = 0 };
+
+    try ctx.dictionary.put("test-dup", .{
+        .name = "test-dup",
+        .parse_time = true,
+        .action = .{ .compound = dup_instrs },
+    });
+
+    var tokenizer = Tokenizer.init("foo: test-dup bar");
+    const instrs = try parseTopLevel(alloc, &tokenizer, &ctx);
+
+    try std.testing.expectEqual(@as(usize, 3), instrs.len);
+    try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("foo", instrs[1].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("bar", instrs[2].op.call_word);
 }

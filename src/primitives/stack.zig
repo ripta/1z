@@ -44,7 +44,7 @@ pub fn nativeOver(ctx: *Context) anyerror!void {
 pub fn nativeDip(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const x = try ctx.stack.pop();
-    try ctx.executeQuotation(quot);
+    try ctx.executeQuotationWithFrame(quot);
     try ctx.stack.push(x);
 }
 

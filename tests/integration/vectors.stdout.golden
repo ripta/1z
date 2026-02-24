@@ -1,50 +1,95 @@
 Stack: [ ]
 Stack: [ ]
-=== Vector creation ===Stack: [ ]
-PASS: empty vector lengthStack: [ ]
-PASS: vector lengthStack: [ ]
-=== Vector element access ===Stack: [ ]
-PASS: #nth first elementStack: [ ]
-PASS: #nth middle elementStack: [ ]
-PASS: #nth last elementStack: [ ]
-PASS: #firstStack: [ ]
-PASS: #lastStack: [ ]
-=== Vector mutation with #push! ===Stack: [ ]
-PASS: #push! increases lengthStack: [ ]
-PASS: #push! adds element at endStack: [ ]
-PASS: #push! on empty vectorStack: [ ]
-=== Vector mutation with #pop! ===Stack: [ ]
-PASS: #pop! returns last elementStack: [ ]
-PASS: vector shortened after #pop!Stack: [ ]
-=== Vector mutation with #append! ===Stack: [ ]
-PASS: #append! extends vectorStack: [ ]
-PASS: #append! adds elements at endStack: [ ]
-PASS: #append! on empty vectorStack: [ ]
-PASS: #append! with vector argStack: [ ]
-=== Immutable ops return new vectors ===Stack: [ ]
-PASS: #append returns new vectorStack: [ ]
-PASS: #prepend returns new vectorStack: [ ]
-=== Vector #slice returns vector ===Stack: [ ]
-PASS: #slice lengthStack: [ ]
-PASS: #slice first elementStack: [ ]
-PASS: #slice last elementStack: [ ]
-=== Vector higher-order operations ===Stack: [ ]
-PASS: #map first elementStack: [ ]
-PASS: #map last elementStack: [ ]
-PASS: #filter count evensStack: [ ]
-PASS: #filter first evenStack: [ ]
-PASS: #reduce sumStack: [ ]
-=== Vector #each ===Stack: [ ]
-PASS: #each accumulateStack: [ ]
-=== #suffix and #prefix on vectors ===Stack: [ ]
-PASS: #suffix lengthStack: [ ]
-PASS: #suffix elementStack: [ ]
-PASS: #prefix lengthStack: [ ]
-PASS: #prefix elementStack: [ ]
-=== Vector to-string ===Stack: [ ]
-PASS: empty vector to-stringStack: [ ]
-PASS: vector to-stringStack: [ ]
-=== Error cases ===Stack: [ ]
+=== Vector creation ===
+Stack: [ ]
+PASS: empty vector length
+Stack: [ ]
+PASS: vector length
+Stack: [ ]
+=== Vector element access ===
+Stack: [ ]
+PASS: #nth first element
+Stack: [ ]
+PASS: #nth middle element
+Stack: [ ]
+PASS: #nth last element
+Stack: [ ]
+PASS: #first
+Stack: [ ]
+PASS: #last
+Stack: [ ]
+=== Vector mutation with #push! ===
+Stack: [ ]
+PASS: #push! increases length
+Stack: [ ]
+PASS: #push! adds element at end
+Stack: [ ]
+PASS: #push! on empty vector
+Stack: [ ]
+=== Vector mutation with #pop! ===
+Stack: [ ]
+PASS: #pop! returns last element
+Stack: [ ]
+PASS: vector shortened after #pop!
+Stack: [ ]
+=== Vector mutation with #append! ===
+Stack: [ ]
+PASS: #append! extends vector
+Stack: [ ]
+PASS: #append! adds elements at end
+Stack: [ ]
+PASS: #append! on empty vector
+Stack: [ ]
+PASS: #append! with vector arg
+Stack: [ ]
+=== Immutable ops return new vectors ===
+Stack: [ ]
+PASS: #append returns new vector
+Stack: [ ]
+PASS: #prepend returns new vector
+Stack: [ ]
+=== Vector #slice returns vector ===
+Stack: [ ]
+PASS: #slice length
+Stack: [ ]
+PASS: #slice first element
+Stack: [ ]
+PASS: #slice last element
+Stack: [ ]
+=== Vector higher-order operations ===
+Stack: [ ]
+PASS: #map first element
+Stack: [ ]
+PASS: #map last element
+Stack: [ ]
+PASS: #filter count evens
+Stack: [ ]
+PASS: #filter first even
+Stack: [ ]
+PASS: #reduce sum
+Stack: [ ]
+=== Vector #each ===
+Stack: [ ]
+PASS: #each accumulate
+Stack: [ ]
+=== #suffix and #prefix on vectors ===
+Stack: [ ]
+PASS: #suffix length
+Stack: [ ]
+PASS: #suffix element
+Stack: [ ]
+PASS: #prefix length
+Stack: [ ]
+PASS: #prefix element
+Stack: [ ]
+=== Vector to-string ===
+Stack: [ ]
+PASS: empty vector to-string
+Stack: [ ]
+PASS: vector to-string
+Stack: [ ]
+=== Error cases ===
+Stack: [ ]
 PASS: pop from empty vector error
 Stack: [ ]
 PASS: index out of bounds error

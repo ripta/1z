@@ -1,0 +1,48 @@
+\ Test quotation-local definitions
+
+"lib/testing.1z" use
+
+"Basic local definition" test-section
+[
+  local-only: [ 42 ] ;
+  local-only 42 "local def value" assert=
+] call
+
+"Local shadowing global" test-section
+global-word: [ "global" ] ;
+[
+  global-word "global" "before shadow" assert=
+  global-word: [ "local" ] ;
+  global-word "local" "after shadow" assert=
+] call
+global-word "global" "after quotation" assert=
+
+"Nested quotations with locals" test-section
+[
+  outer-local: [ "outer" ] ;
+  [
+    inner-local: [ "inner" ] ;
+    outer-local "outer" "outer visible in inner" assert=
+    inner-local "inner" "inner visible in inner" assert=
+  ] call
+  outer-local "outer" "outer still visible" assert=
+] call
+
+"Recursive function with local helper" test-section
+[
+  fact-helper: [
+    dup 1 <=
+    [ drop 1 ]
+    [ dup 1 - fact-helper * ]
+    if
+  ] ;
+  5 fact-helper 120 "local recursive factorial" assert=
+] call
+
+"Multiple locals in same quotation" test-section
+[
+  a: [ 1 ] ;
+  b: [ 2 ] ;
+  c: [ 3 ] ;
+  a b + c + 6 "multiple locals sum" assert=
+] call

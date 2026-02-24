@@ -1,11 +1,11 @@
 \ Test cleanup combinator
 
-\ Cleanup runs on success - both body and cleanup execute
-[ 10 ] [ 20 ] cleanup
-.
-.
+"lib/testing.1z" use
 
-\ Cleanup runs on error - cleanup executes, then error propagates
-\ Use recover to catch the rethrown error (recover-quot must consume error)
+"Cleanup runs on success" test-section
+[ 10 ] [ 20 ] cleanup 20 "cleanup result" assert= 10 "body result" assert=
+
+"Cleanup runs on error" test-section
+\ cleanup executes, then error propagates
 [ [ drop ] [ 99 ] cleanup ] [ drop ] recover
-.
+99 "cleanup executed before error" assert=

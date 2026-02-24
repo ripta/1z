@@ -1,3 +1,19 @@
 Stack: [ ]
+=== if - true branch ===
 Stack: [ ]
+PASS: if true branch
+Stack: [ ]
+PASS: if false branch
+Stack: [ ]
+=== when - conditional execution ===
+Stack: [ ]
+PASS: when true
+Stack: [ ]
+PASS: when false (no exec)
+Stack: [ ]
+=== unless - inverse conditional ===
+Stack: [ ]
+PASS: unless false
+Stack: [ ]
+PASS: unless true (no exec)
 Stack: [ ]

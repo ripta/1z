@@ -1,15 +1,20 @@
-Stack: [ 8 ]
-8
+Stack: [ ]
+=== recover success ===
+Stack: [ ]
+PASS: recover success value
+Stack: [ ]
+=== recover error ===
+Stack: [ ]
+PASS: recover catches error
+Stack: [ ]
+=== ignore-errors ===
 Stack: [ ]
 Stack: [ ]
-42
+PASS: ignore-errors continues after error
 Stack: [ ]
+PASS: ignore-errors success value
 Stack: [ ]
-"still running"
+=== Nested recover ===
 Stack: [ ]
-Stack: [ 100 ]
-100
-Stack: [ ]
-Stack: [ ]
-1
+PASS: inner recover catches
 Stack: [ ]

@@ -1,63 +1,59 @@
-\ Integration tests for Phase 4.6: Associative Accessors
+\ Integration tests for Associative Accessors
 \ Tests: @get, @has?, @set, @keys, @values
 
-\ Test @get on hashes
-H{ name: "Alice" age: 30 } name: @get "Alice" = [ "PASS: hash @get with symbol" print-line ] [ "FAIL: hash @get with symbol" print-line ] if
-H{ name: "Alice" age: 30 } "name" @get "Alice" = [ "PASS: hash @get with string" print-line ] [ "FAIL: hash @get with string" print-line ] if
-H{ name: "Alice" age: 30 } age: @get 30 = [ "PASS: hash @get integer value" print-line ] [ "FAIL: hash @get integer value" print-line ] if
+"lib/testing.1z" use
 
-\ Test @get error case
-[ H{ a: 1 } b: @get ] [ drop "PASS: hash @get key not found error" print-line ] recover
+"@get on hashes" test-section
+H{ name: "Alice" age: 30 } name: @get "Alice" "hash @get with symbol" assert=
+H{ name: "Alice" age: 30 } "name" @get "Alice" "hash @get with string" assert=
+H{ name: "Alice" age: 30 } age: @get 30 "hash @get integer value" assert=
+[ H{ a: 1 } b: @get ] "hash @get key not found error" assert-error
 
-\ Test @has? on hashes
-H{ name: "Alice" } name: @has? [ "PASS: hash @has? true" print-line ] [ "FAIL: hash @has? true" print-line ] if
-H{ name: "Alice" } "name" @has? [ "PASS: hash @has? string key true" print-line ] [ "FAIL: hash @has? string key true" print-line ] if
-H{ name: "Alice" } missing: @has? not [ "PASS: hash @has? false" print-line ] [ "FAIL: hash @has? false" print-line ] if
+"@has? on hashes" test-section
+H{ name: "Alice" } name: @has? "hash @has? true" assert-true
+H{ name: "Alice" } "name" @has? "hash @has? string key true" assert-true
+H{ name: "Alice" } missing: @has? "hash @has? false" assert-false
 
-\ Test @set on hashes
-H{ a: 1 } b: 2 @set b: @get 2 = [ "PASS: hash @set add new key" print-line ] [ "FAIL: hash @set add new key" print-line ] if
-H{ a: 1 } a: 99 @set a: @get 99 = [ "PASS: hash @set update existing key" print-line ] [ "FAIL: hash @set update existing key" print-line ] if
+"@set on hashes" test-section
+H{ a: 1 } b: 2 @set b: @get 2 "hash @set add new key" assert=
+H{ a: 1 } a: 99 @set a: @get 99 "hash @set update existing key" assert=
 
-\ Test immutability of @set
+"@set immutability" test-section
 original: [ H{ x: 1 } ] ;
 original y: 2 @set drop
-original y: @has? not [ "PASS: hash @set immutability" print-line ] [ "FAIL: hash @set immutability" print-line ] if
+original y: @has? "hash @set immutability" assert-false
 
-\ Test @keys on hashes
-H{ a: 1 b: 2 } @keys #len 2 = [ "PASS: hash @keys count" print-line ] [ "FAIL: hash @keys count" print-line ] if
+"@keys on hashes" test-section
+H{ a: 1 b: 2 } @keys #len 2 "hash @keys count" assert=
 
-\ Test @values on hashes
-H{ a: 1 b: 2 } @values #len 2 = [ "PASS: hash @values count" print-line ] [ "FAIL: hash @values count" print-line ] if
+"@values on hashes" test-section
+H{ a: 1 b: 2 } @values #len 2 "hash @values count" assert=
 
-\ Test error object field access
-\ Create an error by triggering division by zero and catching it
+"Error object field access" test-section
 [ 1 0 / ] [ dup error-type: @get "DivisionByZero" = [ "PASS: error @get error-type" print-line ] [ "FAIL: error @get error-type" print-line ] if drop ] recover
-
 [ 1 0 / ] [ dup message: @get "DivisionByZero" = [ "PASS: error @get message" print-line ] [ "FAIL: error @get message" print-line ] if drop ] recover
 
-\ Test error @has?
+"Error @has?" test-section
 [ 1 0 / ] [ dup error-type: @has? [ "PASS: error @has? error-type" print-line ] [ "FAIL: error @has? error-type" print-line ] if drop ] recover
 [ 1 0 / ] [ dup message: @has? [ "PASS: error @has? message" print-line ] [ "FAIL: error @has? message" print-line ] if drop ] recover
 [ 1 0 / ] [ dup stack-trace: @has? [ "PASS: error @has? stack-trace" print-line ] [ "FAIL: error @has? stack-trace" print-line ] if drop ] recover
 [ 1 0 / ] [ dup invalid-field: @has? not [ "PASS: error @has? invalid field" print-line ] [ "FAIL: error @has? invalid field" print-line ] if drop ] recover
 
-\ Test error @keys
+"Error @keys and @values" test-section
 [ 1 0 / ] [ dup @keys #len 3 = [ "PASS: error @keys count" print-line ] [ "FAIL: error @keys count" print-line ] if drop ] recover
-
-\ Test error @values
 [ 1 0 / ] [ dup @values #len 3 = [ "PASS: error @values count" print-line ] [ "FAIL: error @values count" print-line ] if drop ] recover
 
-\ Test nested hash access - build it programmatically
+"Nested hash access" test-section
 inner: [ H{ host: "localhost" port: 8080 } ] ;
 outer: [ H{ } server: inner @set ] ;
-outer server: @get host: @get "localhost" = [ "PASS: nested hash access" print-line ] [ "FAIL: nested hash access" print-line ] if
-outer server: @get port: @get 8080 = [ "PASS: nested hash access 2" print-line ] [ "FAIL: nested hash access 2" print-line ] if
+outer server: @get host: @get "localhost" "nested hash access" assert=
+outer server: @get port: @get 8080 "nested hash access 2" assert=
 
-\ Test empty hash
-H{ } @keys #len 0 = [ "PASS: empty hash @keys" print-line ] [ "FAIL: empty hash @keys" print-line ] if
-H{ } @values #len 0 = [ "PASS: empty hash @values" print-line ] [ "FAIL: empty hash @values" print-line ] if
+"Empty hash operations" test-section
+H{ } @keys #len 0 "empty hash @keys" assert=
+H{ } @values #len 0 "empty hash @values" assert=
 
-\ Test chained @set
-H{ } a: 1 @set b: 2 @set c: 3 @set @keys #len 3 = [ "PASS: chained @set" print-line ] [ "FAIL: chained @set" print-line ] if
+"Chained @set" test-section
+H{ } a: 1 @set b: 2 @set c: 3 @set @keys #len 3 "chained @set" assert=
 
 "All associative accessor tests complete!" print-line

@@ -1,3 +1,15 @@
-5 3 > [ 1 ] [ 0 ] if drop
-t [ 42 ] when drop
-f [ 99 ] unless drop
+\ Test control flow words
+
+"lib/testing.1z" use
+
+"if - true branch" test-section
+5 3 > [ 1 ] [ 0 ] if 1 "if true branch" assert=
+3 5 > [ 1 ] [ 0 ] if 0 "if false branch" assert=
+
+"when - conditional execution" test-section
+t [ 42 ] when 42 "when true" assert=
+0 f [ drop 99 ] when 0 "when false (no exec)" assert=
+
+"unless - inverse conditional" test-section
+f [ 42 ] unless 42 "unless false" assert=
+0 t [ drop 99 ] unless 0 "unless true (no exec)" assert=

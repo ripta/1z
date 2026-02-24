@@ -99,7 +99,7 @@ pub fn nativeWithParameter(ctx: *Context) anyerror!void {
     try ctx.setParameterInTopFrame(param.name, new_value);
 
     // Execute body with cleanup (pops frame even on error)
-    const result = ctx.executeQuotation(body_quot);
+    const result = ctx.executeQuotationWithFrame(body_quot);
     ctx.popParameterFrame();
     try result;
 }

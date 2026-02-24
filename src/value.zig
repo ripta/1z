@@ -92,6 +92,20 @@ pub const Parameter = struct {
     default_quotation: Quotation, // Lazy default - evaluated on get if unbound
 };
 
+/// ModuleWord represents a word definition captured from a loaded file.
+/// This is a simplified version of WordDefinition that only stores compound words.
+pub const ModuleWord = struct {
+    stack_effect: ?StackEffect = null,
+    instructions: []const Instruction,
+};
+
+/// Module represents a collection of word definitions loaded from a file.
+/// Created by `load` and used for qualified name access (e.g., math.double).
+pub const Module = struct {
+    name: []const u8,
+    words: std.StringHashMapUnmanaged(ModuleWord),
+};
+
 /// StackFrame represents a single frame in a stack trace.
 pub const StackFrame = struct {
     word_name: []const u8,
@@ -179,6 +193,7 @@ pub const Value = union(enum) {
     mutable_map: *MutableMap,
     stream: *Stream,
     parameter: *Parameter,
+    module: *Module,
     stack_effect: StackEffect,
     parse_time_marker: void, // Marker for parse-time word definitions
     error_value: ErrorObject,
@@ -264,6 +279,7 @@ pub const Value = union(enum) {
                 }
             },
             .parameter => |p| try writer.print("<parameter:{s}>", .{p.name}),
+            .module => |m| try writer.print("<module:{s} ({d} words)>", .{ m.name, m.words.count() }),
             .stack_effect => |effect| try effect.write(writer),
             .parse_time_marker => try writer.writeAll("parse-time"),
             .error_value => |err| try err.write(writer),
@@ -346,6 +362,8 @@ pub const Value = union(enum) {
             .stream => |a| a == other.stream,
             // Parameters are equal if they refer to the same parameter object
             .parameter => |a| a == other.parameter,
+            // Modules are equal if they refer to the same module object
+            .module => |a| a == other.module,
             .stack_effect => |a| a.eql(other.stack_effect),
             .parse_time_marker => true, // All parse_time_markers are equal
             .error_value => |a| a.eql(other.error_value),
@@ -434,6 +452,11 @@ pub const Value = union(enum) {
             // Parameters hash by pointer identity (same as equality)
             .parameter => |p| {
                 const ptr_val = @intFromPtr(p);
+                hasher.update(std.mem.asBytes(&ptr_val));
+            },
+            // Modules hash by pointer identity (same as equality)
+            .module => |m| {
+                const ptr_val = @intFromPtr(m);
                 hasher.update(std.mem.asBytes(&ptr_val));
             },
             .stack_effect => |effect| {

@@ -1,2 +1,7 @@
-1 2 +
-10 3 -
+\ Test basic arithmetic operations
+
+"lib/testing.1z" use
+
+"Basic arithmetic" test-section
+1 2 + 3 "addition" assert=
+10 3 - 7 "subtraction" assert=

@@ -1,26 +1,35 @@
-Stack: [ f ]
 Stack: [ ]
-Stack: [ t ]
+=== Logical NOT ===
 Stack: [ ]
-Stack: [ t ]
+PASS: not t
 Stack: [ ]
-Stack: [ f ]
+PASS: not f
 Stack: [ ]
-Stack: [ f ]
+=== Logical AND ===
 Stack: [ ]
-Stack: [ f ]
+PASS: t and t
 Stack: [ ]
-Stack: [ t ]
+PASS: t and f
 Stack: [ ]
-Stack: [ t ]
+PASS: f and t
 Stack: [ ]
-Stack: [ t ]
+PASS: f and f
 Stack: [ ]
-Stack: [ f ]
+=== Logical OR ===
 Stack: [ ]
-Stack: [ t ]
+PASS: t or t
 Stack: [ ]
-Stack: [ t ]
+PASS: t or f
 Stack: [ ]
-Stack: [ t ]
+PASS: f or t
+Stack: [ ]
+PASS: f or f
+Stack: [ ]
+=== Combined boolean expressions ===
+Stack: [ ]
+PASS: t and t or t
+Stack: [ ]
+PASS: not (f or f)
+Stack: [ ]
+PASS: not (t and f)
 Stack: [ ]

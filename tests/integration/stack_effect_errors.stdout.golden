@@ -1,12 +1,16 @@
 Stack: [ ]
-Stack: [ ]
-"caught-double-wrong"
-Stack: [ ]
+=== Wrong delta in quotation parameter ===
 Stack: [ ]
 Stack: [ ]
-"caught-add-wrong"
+PASS: caught double-wrong effect error
+Stack: [ ]
+=== Wrong delta with concrete effect ===
 Stack: [ ]
 Stack: [ ]
+PASS: caught add-wrong effect error
 Stack: [ ]
-"caught-consume-wrong"
+=== Quotation consumes too few values ===
+Stack: [ ]
+Stack: [ ]
+PASS: caught consume-wrong effect error
 Stack: [ ]

@@ -1,6 +1,6 @@
 \ Integration tests for dynamic variables (parameters)
 
-"lib/testing.1z" load
+"lib/testing.1z" use
 
 "Parameter creation and get" test-section
 \ Test that output-stream parameter returns stdout by default
@@ -34,11 +34,11 @@ rebind-test get 100 "after rebind restored" assert=
 nested: parameter [ 1 ] ;
 nested get 1 "outer default" assert=
 10 nested [
-    nested get 10 "first level binding" assert=
-    20 nested [
-        nested get 20 "second level binding" assert=
-    ] with-parameter
-    nested get 10 "first level restored" assert=
+  nested get 10 "first level binding" assert=
+  20 nested [
+    nested get 20 "second level binding" assert=
+  ] with-parameter
+  nested get 10 "first level restored" assert=
 ] with-parameter
 nested get 1 "outer restored" assert=
 "PASS: nested with-parameter" print-line
@@ -47,10 +47,10 @@ nested get 1 "outer restored" assert=
 error-test: parameter [ 0 ] ;
 error-test get 0 "before error" assert=
 [
-    999 error-test [
-        error-test get 999 "inside before error" assert=
-        drop \ Force a stack underflow error
-    ] with-parameter
+  999 error-test [
+    error-test get 999 "inside before error" assert=
+    drop  \ Force a stack underflow error
+  ] with-parameter
 ] [ drop ] recover
 error-test get 0 "restored after error" assert=
 "PASS: with-parameter restores on error" print-line
@@ -78,13 +78,13 @@ multi-b: parameter [ 2 ] ;
 multi-a get 1 "multi-a default" assert=
 multi-b get 2 "multi-b default" assert=
 10 multi-a [
-    multi-a get 10 "multi-a rebound" assert=
-    multi-b get 2 "multi-b unchanged" assert=
-    20 multi-b [
-        multi-a get 10 "multi-a still rebound" assert=
-        multi-b get 20 "multi-b now rebound" assert=
-    ] with-parameter
-    multi-b get 2 "multi-b restored" assert=
+  multi-a get 10 "multi-a rebound" assert=
+  multi-b get 2 "multi-b unchanged" assert=
+  20 multi-b [
+    multi-a get 10 "multi-a still rebound" assert=
+    multi-b get 20 "multi-b now rebound" assert=
+  ] with-parameter
+  multi-b get 2 "multi-b restored" assert=
 ] with-parameter
 multi-a get 1 "multi-a restored" assert=
 "PASS: multiple parameters in same scope" print-line

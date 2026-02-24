@@ -1,7 +1,7 @@
 \ Integration tests for sequence predicates
 
-"lib/testing.1z" load
-"lib/sequences.1z" load
+"lib/testing.1z" use
+"lib/sequences.1z" use
 
 "#starts-with?" test-section
 "hello" "hel" #starts-with? t "#starts-with? true" assert=

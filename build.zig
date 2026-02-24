@@ -88,6 +88,10 @@ pub fn build(b: *std.Build) void {
         test_run.addArg("--show-stack");
         test_run.addFileArg(b.path(file_path));
 
+        // Library file dependencies
+        test_run.addFileInput(b.path("lib/testing.1z"));
+        test_run.addFileInput(b.path("src/prelude.1z"));
+
         // Check for stderr golden file (error tests)
         var has_stderr_golden = false;
         const stderr_golden_name = b.fmt("{s}.stderr.golden", .{name_without_ext});
@@ -124,6 +128,10 @@ pub fn build(b: *std.Build) void {
         const update_run = b.addRunArtifact(exe);
         update_run.addArg("--show-stack");
         update_run.addFileArg(b.path(file_path));
+
+        // Track library files as dependencies
+        update_run.addFileInput(b.path("lib/testing.1z"));
+        update_run.addFileInput(b.path("src/prelude.1z"));
         update_files.addCopyFileToSource(update_run.captureStdOut(), stdout_golden_path);
 
         // For error tests, allow exit code 1 and capture stderr

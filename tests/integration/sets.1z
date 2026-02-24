@@ -1,7 +1,7 @@
 \ Integration tests for immutable sets S{ }
 
-"lib/testing.1z" load
-"lib/sequences.1z" load
+"lib/testing.1z" use
+"lib/sequences.1z" use
 
 "Set creation" test-section
 S{ } #len 0 "empty set length" assert=

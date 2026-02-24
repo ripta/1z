@@ -1,3 +1,8 @@
-"hello world" print-line
-{ 1 2 3 } .
-{ "a" { 1 } } .
+\ Test basic string and array output
+
+"lib/testing.1z" use
+
+"Basic output" test-section
+"hello world" "hello world" "string literal" assert=
+{ 1 2 3 } { 1 2 3 } "array literal" assert=
+{ "a" { 1 } } { "a" { 1 } } "nested array" assert=

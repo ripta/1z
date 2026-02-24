@@ -1,8 +1,11 @@
-Stack: [ 10 20 ]
-20
-Stack: [ 10 ]
-10
+Stack: [ ]
+=== Cleanup runs on success ===
+Stack: [ ]
+PASS: cleanup result
+PASS: body result
+Stack: [ ]
+=== Cleanup runs on error ===
 Stack: [ ]
 Stack: [ 99 ]
-99
+PASS: cleanup executed before error
 Stack: [ ]

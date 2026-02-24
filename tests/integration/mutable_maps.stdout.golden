@@ -1,54 +1,101 @@
 Stack: [ ]
-=== Mutable map creation ===Stack: [ ]
-PASS: empty mutable map lengthStack: [ ]
-PASS: mutable map lengthStack: [ ]
-PASS: mutable map with three entriesStack: [ ]
-=== Mutable map @get ===Stack: [ ]
-PASS: mmap @get with symbolStack: [ ]
-PASS: mmap @get with stringStack: [ ]
-PASS: mmap @get integer valueStack: [ ]
-=== Mutable map @get error ===Stack: [ ]
+=== Mutable map creation ===
+Stack: [ ]
+PASS: empty mutable map length
+Stack: [ ]
+PASS: mutable map length
+Stack: [ ]
+PASS: mutable map with three entries
+Stack: [ ]
+=== Mutable map @get ===
+Stack: [ ]
+PASS: mmap @get with symbol
+Stack: [ ]
+PASS: mmap @get with string
+Stack: [ ]
+PASS: mmap @get integer value
+Stack: [ ]
+=== Mutable map @get error ===
+Stack: [ ]
 PASS: mmap @get key not found error
 Stack: [ ]
-=== Mutable map @has? ===Stack: [ ]
-PASS: mmap @has? trueStack: [ ]
-PASS: mmap @has? string key trueStack: [ ]
-PASS: mmap @has? falseStack: [ ]
-PASS: mmap @has? empty mapStack: [ ]
-=== Mutable map @set! adds new key ===Stack: [ ]
-PASS: @set! adds new keyStack: [ ]
-PASS: @set! value accessibleStack: [ ]
-=== Mutable map @set! updates existing key ===Stack: [ ]
-PASS: @set! updates existing keyStack: [ ]
-PASS: @set! update keeps same lengthStack: [ ]
-=== Mutable map @set! actually mutates ===Stack: [ ]
-PASS: @set! preserves original keyStack: [ ]
-=== Mutable map @remove! ===Stack: [ ]
-PASS: @remove! decreases lengthStack: [ ]
-PASS: @remove! removes keyStack: [ ]
-PASS: @remove! keeps other keysStack: [ ]
-PASS: @remove! missing key is no-opStack: [ ]
-PASS: @remove! can empty mapStack: [ ]
-=== Mutable map @keys ===Stack: [ ]
-PASS: mmap @keys countStack: [ ]
-=== Mutable map @values ===Stack: [ ]
-PASS: mmap @values countStack: [ ]
-=== Mutable map to-string ===Stack: [ ]
-PASS: empty mmap to-stringStack: [ ]
-=== Mutable map equality ===Stack: [ ]
-PASS: mmap equality sameStack: [ ]
-PASS: mmap equality different orderStack: [ ]
-PASS: mmap inequality different valueStack: [ ]
-PASS: mmap inequality different keyStack: [ ]
-PASS: empty mmaps equalStack: [ ]
-=== Chained @set! ===Stack: [ ]
-PASS: chained @set!Stack: [ ]
-PASS: chained @set! first keyStack: [ ]
-PASS: chained @set! last keyStack: [ ]
-=== Error: @set on mutable map should fail ===Stack: [ ]
+=== Mutable map @has? ===
+Stack: [ ]
+PASS: mmap @has? true
+Stack: [ ]
+PASS: mmap @has? string key true
+Stack: [ ]
+PASS: mmap @has? false
+Stack: [ ]
+PASS: mmap @has? empty map
+Stack: [ ]
+=== Mutable map @set! adds new key ===
+Stack: [ ]
+PASS: @set! adds new key
+Stack: [ ]
+PASS: @set! value accessible
+Stack: [ ]
+=== Mutable map @set! updates existing key ===
+Stack: [ ]
+PASS: @set! updates existing key
+Stack: [ ]
+PASS: @set! update keeps same length
+Stack: [ ]
+=== Mutable map @set! actually mutates ===
+Stack: [ ]
+PASS: @set! preserves original key
+Stack: [ ]
+=== Mutable map @remove! ===
+Stack: [ ]
+PASS: @remove! decreases length
+Stack: [ ]
+PASS: @remove! removes key
+Stack: [ ]
+PASS: @remove! keeps other keys
+Stack: [ ]
+PASS: @remove! missing key is no-op
+Stack: [ ]
+PASS: @remove! can empty map
+Stack: [ ]
+=== Mutable map @keys ===
+Stack: [ ]
+PASS: mmap @keys count
+Stack: [ ]
+=== Mutable map @values ===
+Stack: [ ]
+PASS: mmap @values count
+Stack: [ ]
+=== Mutable map to-string ===
+Stack: [ ]
+PASS: empty mmap to-string
+Stack: [ ]
+=== Mutable map equality ===
+Stack: [ ]
+PASS: mmap equality same
+Stack: [ ]
+PASS: mmap equality different order
+Stack: [ ]
+PASS: mmap inequality different value
+Stack: [ ]
+PASS: mmap inequality different key
+Stack: [ ]
+PASS: empty mmaps equal
+Stack: [ ]
+=== Chained @set! ===
+Stack: [ ]
+PASS: chained @set!
+Stack: [ ]
+PASS: chained @set! first key
+Stack: [ ]
+PASS: chained @set! last key
+Stack: [ ]
+=== Error: @set on mutable map should fail ===
+Stack: [ ]
 PASS: @set on mutable map error
 Stack: [ ]
-=== Mutable map vs immutable hash ===Stack: [ ]
-PASS: mutable map not equal to hashStack: [ ]
+=== Mutable map vs immutable hash ===
+Stack: [ ]
+PASS: mutable map not equal to hash
+Stack: [ ]
 All mutable map tests complete!
 Stack: [ ]

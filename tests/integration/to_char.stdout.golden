@@ -1,27 +1,50 @@
 Stack: [ ]
-=== Basic ASCII ===Stack: [ ]
-PASS: >char 65 = AStack: [ ]
-PASS: >char 97 = aStack: [ ]
-PASS: >char 48 = 0Stack: [ ]
-PASS: >char 32 = spaceStack: [ ]
-PASS: >char 10 = newline (1 codepoint)Stack: [ ]
-=== Unicode characters ===Stack: [ ]
-PASS: e-acute is 1 codepointStack: [ ]
-PASS: e-acute is 2 bytesStack: [ ]
-PASS: CJK is 1 codepointStack: [ ]
-PASS: CJK is 3 bytesStack: [ ]
-PASS: emoji is 1 codepointStack: [ ]
-PASS: emoji is 4 bytesStack: [ ]
-=== Boundary values (byte counts) ===Stack: [ ]
-PASS: >char 0 = 1 byteStack: [ ]
-PASS: >char 127 = 1 byteStack: [ ]
-PASS: >char 128 = 2 bytesStack: [ ]
-PASS: >char 0x7FF = 2 bytesStack: [ ]
-PASS: >char 0x800 = 3 bytesStack: [ ]
-PASS: >char 0xFFFF = 3 bytesStack: [ ]
-PASS: >char 0x10000 = 4 bytesStack: [ ]
-PASS: >char max codepoint = 4 bytesStack: [ ]
-=== Error cases ===Stack: [ ]
+=== Basic ASCII ===
+Stack: [ ]
+PASS: >char 65 = A
+Stack: [ ]
+PASS: >char 97 = a
+Stack: [ ]
+PASS: >char 48 = 0
+Stack: [ ]
+PASS: >char 32 = space
+Stack: [ ]
+PASS: >char 10 = newline (1 codepoint)
+Stack: [ ]
+=== Unicode characters ===
+Stack: [ ]
+PASS: e-acute is 1 codepoint
+Stack: [ ]
+PASS: e-acute is 2 bytes
+Stack: [ ]
+PASS: CJK is 1 codepoint
+Stack: [ ]
+PASS: CJK is 3 bytes
+Stack: [ ]
+PASS: emoji is 1 codepoint
+Stack: [ ]
+PASS: emoji is 4 bytes
+Stack: [ ]
+=== Boundary values (byte counts) ===
+Stack: [ ]
+PASS: >char 0 = 1 byte
+Stack: [ ]
+PASS: >char 127 = 1 byte
+Stack: [ ]
+PASS: >char 128 = 2 bytes
+Stack: [ ]
+PASS: >char 0x7FF = 2 bytes
+Stack: [ ]
+PASS: >char 0x800 = 3 bytes
+Stack: [ ]
+PASS: >char 0xFFFF = 3 bytes
+Stack: [ ]
+PASS: >char 0x10000 = 4 bytes
+Stack: [ ]
+PASS: >char max codepoint = 4 bytes
+Stack: [ ]
+=== Error cases ===
+Stack: [ ]
 Stack: [ [ -1 >char ] ]
 Stack: [ [ -1 >char ] [ drop "PASS: negative codepoint rejected" print-line ] ]
 PASS: negative codepoint rejected
@@ -36,25 +59,44 @@ PASS: surrogate codepoint rejected
 Stack: [ ]
 All >char tests complete!
 Stack: [ ]
-=== Basic ASCII >codepoint ===Stack: [ ]
-PASS: >codepoint A = 65Stack: [ ]
-PASS: >codepoint a = 97Stack: [ ]
-PASS: >codepoint 0 = 48Stack: [ ]
-PASS: >codepoint space = 32Stack: [ ]
-=== Unicode >codepoint ===Stack: [ ]
-PASS: e-acute roundtripStack: [ ]
-PASS: CJK roundtripStack: [ ]
-PASS: emoji roundtripStack: [ ]
-=== Boundary values >codepoint ===Stack: [ ]
-PASS: null char roundtripStack: [ ]
-PASS: max ASCII roundtripStack: [ ]
-PASS: first 2-byte roundtripStack: [ ]
-PASS: max 2-byte roundtripStack: [ ]
-PASS: first 3-byte roundtripStack: [ ]
-PASS: max 3-byte roundtripStack: [ ]
-PASS: first 4-byte roundtripStack: [ ]
-PASS: max codepoint roundtripStack: [ ]
-=== >codepoint error cases ===Stack: [ ]
+=== Basic ASCII >codepoint ===
+Stack: [ ]
+PASS: >codepoint A = 65
+Stack: [ ]
+PASS: >codepoint a = 97
+Stack: [ ]
+PASS: >codepoint 0 = 48
+Stack: [ ]
+PASS: >codepoint space = 32
+Stack: [ ]
+=== Unicode >codepoint ===
+Stack: [ ]
+PASS: e-acute roundtrip
+Stack: [ ]
+PASS: CJK roundtrip
+Stack: [ ]
+PASS: emoji roundtrip
+Stack: [ ]
+=== Boundary values >codepoint ===
+Stack: [ ]
+PASS: null char roundtrip
+Stack: [ ]
+PASS: max ASCII roundtrip
+Stack: [ ]
+PASS: first 2-byte roundtrip
+Stack: [ ]
+PASS: max 2-byte roundtrip
+Stack: [ ]
+PASS: first 3-byte roundtrip
+Stack: [ ]
+PASS: max 3-byte roundtrip
+Stack: [ ]
+PASS: first 4-byte roundtrip
+Stack: [ ]
+PASS: max codepoint roundtrip
+Stack: [ ]
+=== >codepoint error cases ===
+Stack: [ ]
 Stack: [ [ "" >codepoint ] ]
 Stack: [ [ "" >codepoint ] [ drop "PASS: empty string rejected" print-line ] ]
 PASS: empty string rejected

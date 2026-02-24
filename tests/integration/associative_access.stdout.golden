@@ -1,3 +1,6 @@
+Stack: [ ]
+=== @get on hashes ===
+Stack: [ ]
 PASS: hash @get with symbol
 Stack: [ ]
 PASS: hash @get with string
@@ -6,27 +9,41 @@ PASS: hash @get integer value
 Stack: [ ]
 PASS: hash @get key not found error
 Stack: [ ]
+=== @has? on hashes ===
+Stack: [ ]
 PASS: hash @has? true
 Stack: [ ]
 PASS: hash @has? string key true
 Stack: [ ]
 PASS: hash @has? false
 Stack: [ ]
+=== @set on hashes ===
+Stack: [ ]
 PASS: hash @set add new key
 Stack: [ ]
 PASS: hash @set update existing key
+Stack: [ ]
+=== @set immutability ===
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 PASS: hash @set immutability
 Stack: [ ]
+=== @keys on hashes ===
+Stack: [ ]
 PASS: hash @keys count
 Stack: [ ]
+=== @values on hashes ===
+Stack: [ ]
 PASS: hash @values count
+Stack: [ ]
+=== Error object field access ===
 Stack: [ ]
 PASS: error @get error-type
 Stack: [ ]
 PASS: error @get message
+Stack: [ ]
+=== Error @has? ===
 Stack: [ ]
 PASS: error @has? error-type
 Stack: [ ]
@@ -36,9 +53,13 @@ PASS: error @has? stack-trace
 Stack: [ ]
 PASS: error @has? invalid field
 Stack: [ ]
+=== Error @keys and @values ===
+Stack: [ ]
 PASS: error @keys count
 Stack: [ ]
 PASS: error @values count
+Stack: [ ]
+=== Nested hash access ===
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
@@ -46,9 +67,13 @@ PASS: nested hash access
 Stack: [ ]
 PASS: nested hash access 2
 Stack: [ ]
+=== Empty hash operations ===
+Stack: [ ]
 PASS: empty hash @keys
 Stack: [ ]
 PASS: empty hash @values
+Stack: [ ]
+=== Chained @set ===
 Stack: [ ]
 PASS: chained @set
 Stack: [ ]

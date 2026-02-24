@@ -1,38 +1,53 @@
-Stack: [ -42 ]
 Stack: [ ]
-Stack: [ 7 ]
+=== Negation (-@) ===
 Stack: [ ]
-Stack: [ 0 ]
+PASS: -@ positive
 Stack: [ ]
-Stack: [ 42 ]
+PASS: -@ negative
 Stack: [ ]
-Stack: [ 42 ]
+PASS: -@ zero
 Stack: [ ]
-Stack: [ 0 ]
+=== Absolute value (abs) ===
 Stack: [ ]
-Stack: [ 3 ]
+PASS: abs positive
 Stack: [ ]
-Stack: [ 3 ]
+PASS: abs negative
 Stack: [ ]
-Stack: [ 7 ]
+PASS: abs zero
 Stack: [ ]
-Stack: [ 5 ]
+=== Minimum (min) ===
 Stack: [ ]
-Stack: [ 5 ]
+PASS: min first smaller
 Stack: [ ]
-Stack: [ 7 ]
+PASS: min second smaller
 Stack: [ ]
-Stack: [ 4 ]
+PASS: min equal
 Stack: [ ]
-Stack: [ -4 ]
+=== Maximum (max) ===
 Stack: [ ]
-Stack: [ 6 ]
+PASS: max second larger
 Stack: [ ]
-Stack: [ -2 ]
+PASS: max first larger
 Stack: [ ]
-Stack: [ t ]
+PASS: max equal
 Stack: [ ]
-Stack: [ f ]
+=== Decrement (--) ===
 Stack: [ ]
-Stack: [ f ]
+PASS: -- positive
+Stack: [ ]
+PASS: -- negative
+Stack: [ ]
+=== Increment (++) ===
+Stack: [ ]
+PASS: ++ positive
+Stack: [ ]
+PASS: ++ negative
+Stack: [ ]
+=== Zero test (0?) ===
+Stack: [ ]
+PASS: 0? zero
+Stack: [ ]
+PASS: 0? positive
+Stack: [ ]
+PASS: 0? negative
 Stack: [ ]
