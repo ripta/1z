@@ -1,0 +1,2 @@
+\ Test that pragma-def{ errors when a symbol is followed by a non-quotation
+pragma-def{ bad-key: 42 }

@@ -14,6 +14,9 @@ const popString = helpers.popString;
 pub const primitives = [_]Primitive{
     .{ .name = "register-pragma", .stack_effect = "name validator --", .doc = "Register a pragma key with an optional validator quotation. Pass f for boolean-only pragmas.", .func = nativeRegisterPragma },
     .{ .name = "pragma{", .parse_time = true, .stack_effect = "--", .doc = "Set pragma values for the current file scope.", .func = nativePragmaBlock },
+    .{ .name = "pragma-def{", .parse_time = true, .stack_effect = "--", .doc = "Register multiple pragma keys. Bare names are boolean; name: [quot] registers a validated pragma.", .func = nativePragmaDefBlock },
+    .{ .name = "pragma?", .stack_effect = "name -- ?", .doc = "Query whether the named pragma is set and truthy.", .func = nativePragmaQuery },
+    .{ .name = "pragma-get-raw", .doc = "Raw pragma lookup. Pushes value and t if set, or just f if unset.", .func = nativePragmaGetRaw },
 };
 
 /// register-pragma ( name validator -- ) - Register a pragma key
@@ -130,6 +133,80 @@ fn nativePragmaBlock(ctx: *Context) anyerror!void {
                 return throwPragmaError(ctx, alloc, "pragma-error", "unexpected value in pragma block");
             },
         }
+    }
+}
+
+/// pragma-def{ ... } - Parse-time batch registration of pragma keys.
+/// Bare string names register boolean pragmas; symbol names followed by a
+/// quotation register validated pragmas.
+fn nativePragmaDefBlock(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    try ctx.stack.push(.{ .string = "}" });
+    try parse_time_mod.nativeParseValuesUntil(ctx);
+    const arr_val = try ctx.stack.pop();
+    const items = switch (arr_val) {
+        .array => |a| a,
+        else => return error.TypeMismatch,
+    };
+
+    var i: usize = 0;
+    while (i < items.len) : (i += 1) {
+        const item = items[i];
+
+        switch (item) {
+            .string => |name| {
+                const duped_name = try alloc.dupe(u8, name);
+                try ctx.pragma_registry.put(ctx.allocator, duped_name, .{ .validator = null });
+            },
+            .symbol => |name| {
+                if (i + 1 >= items.len) {
+                    const msg = std.fmt.allocPrint(alloc, "pragma-def: '{s}' requires a validator quotation", .{name}) catch "missing validator";
+                    return throwPragmaError(ctx, alloc, "pragma-error", msg);
+                }
+                i += 1;
+                const next = items[i];
+                switch (next) {
+                    .quotation => |q| {
+                        const duped_name = try alloc.dupe(u8, name);
+                        try ctx.pragma_registry.put(ctx.allocator, duped_name, .{ .validator = q });
+                    },
+                    else => {
+                        const msg = std.fmt.allocPrint(alloc, "pragma-def: '{s}' validator must be a quotation", .{name}) catch "expected quotation";
+                        return throwPragmaError(ctx, alloc, "pragma-error", msg);
+                    },
+                }
+            },
+            else => {
+                return throwPragmaError(ctx, alloc, "pragma-error", "pragma-def: expected a name (string) or key: (symbol)");
+            },
+        }
+    }
+}
+
+/// pragma? ( name -- ? ) - Query whether the named pragma is set and truthy.
+fn nativePragmaQuery(ctx: *Context) anyerror!void {
+    const name = try popString(ctx);
+    const value = ctx.getPragma(name);
+    if (value) |v| {
+        switch (v) {
+            .boolean => |b| try ctx.stack.push(.{ .boolean = b }),
+            else => try ctx.stack.push(.{ .boolean = true }),
+        }
+    } else {
+        try ctx.stack.push(.{ .boolean = false });
+    }
+}
+
+/// pragma-get-raw ( name -- value t | f ) - Raw pragma lookup for the prelude wrapper.
+fn nativePragmaGetRaw(ctx: *Context) anyerror!void {
+    const name = try popString(ctx);
+    const value = ctx.getPragma(name);
+    if (value) |v| {
+        try ctx.stack.push(v);
+        try ctx.stack.push(.{ .boolean = true });
+    } else {
+        try ctx.stack.push(.{ .boolean = false });
     }
 }
 

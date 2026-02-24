@@ -585,3 +585,6 @@ all-words: ( -- array ) [ native.all-words [ (raw>word-info) ] #map #collect ] ;
 
 \\ Safe variant of >word-info that returns an option instead of throwing.
 >word?: ( symbol -- option ) [ [ >word-info >option:some ] [ drop option:none ] recover ] ;
+
+\\ Return the value of a pragma as an option.
+pragma-get: ( name -- option ) [ pragma-get-raw [ >option:some ] [ option:none ] if ] ;

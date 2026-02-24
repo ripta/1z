@@ -1,0 +1,24 @@
+\ Test that parse-time words in a library see the caller's pragma values
+
+use "testing" ;
+use "pragma_provider.1z" ;
+
+"library query before caller sets pragma" test-section
+
+debug-mode "release" "debug-mode returns release before pragma is set" assert=
+current-level option:none? t "current-level returns none before pragma is set" assert=
+
+"library query after caller sets boolean pragma" test-section
+
+pragma{ x-debug }
+debug-mode "debug" "debug-mode returns debug after caller sets x-debug" assert=
+
+"library query after caller sets validated pragma" test-section
+
+pragma{ x-level: 3 }
+current-level option:some> 3 "current-level returns caller's x-level value" assert=
+
+"library query after caller negates pragma" test-section
+
+pragma{ !x-debug }
+debug-mode "release" "debug-mode returns release after caller negates x-debug" assert=

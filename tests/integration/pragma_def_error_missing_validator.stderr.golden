@@ -1,0 +1,1 @@
+tests/integration/pragma_def_error_missing_validator.1z:2: error 'pragma-error' pragma-def: 'trailing-key' requires a validator quotation

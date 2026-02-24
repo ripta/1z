@@ -1,0 +1,1 @@
+tests/integration/pragma_def_error_not_quotation.1z:2: error 'pragma-error' pragma-def: 'bad-key' validator must be a quotation

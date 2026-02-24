@@ -1,0 +1,13 @@
+\ Library that registers pragmas and defines parse-time words that query them
+
+\ Define pragmas with validation
+pragma-def{
+  x-debug
+  x-level: [ dup fixnum? [ t ] [ drop "must be fixnum" f ] if ]
+}
+
+\ Parse-time word that checks x-debug and pushes a string based on it
+debug-mode: parse-time [ "x-debug" pragma? [ "debug" ] [ "release" ] if ] ;
+
+\ Parse-time word that reads x-level and pushes the option
+current-level: parse-time [ "x-level" pragma-get ] ;

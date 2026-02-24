@@ -1,0 +1,2 @@
+\ Test that pragma-def{ errors when a symbol is the last item
+pragma-def{ trailing-key: }

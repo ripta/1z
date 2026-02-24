@@ -1,0 +1,12 @@
+=== boolean registration ===
+Stack: [ ]
+PASS: boolean pragma via pragma-def{ accepted
+Stack: [ ]
+=== validated registration ===
+Stack: [ ]
+PASS: validated pragma via pragma-def{ accepted
+Stack: [ ]
+=== mixed boolean and validated ===
+Stack: [ ]
+PASS: mixed pragma-def{ accepted
+Stack: [ ]

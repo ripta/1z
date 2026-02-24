@@ -1,0 +1,18 @@
+=== library query before caller sets pragma ===
+Stack: [ ]
+PASS: debug-mode returns release before pragma is set
+Stack: [ ]
+PASS: current-level returns none before pragma is set
+Stack: [ ]
+=== library query after caller sets boolean pragma ===
+Stack: [ ]
+PASS: debug-mode returns debug after caller sets x-debug
+Stack: [ ]
+=== library query after caller sets validated pragma ===
+Stack: [ ]
+PASS: current-level returns caller's x-level value
+Stack: [ ]
+=== library query after caller negates pragma ===
+Stack: [ ]
+PASS: debug-mode returns release after caller negates x-debug
+Stack: [ ]

@@ -149,6 +149,9 @@ parse-until ( delimiter -- quotation )
 parse-values-until ( delimiter -- array )
 peek-token ( -- string )
 pick-n ( n -- val )
+pragma-def{ ( -- )
+pragma-get-raw
+pragma? ( name -- ? )
 pragma{ ( -- )
 print-benchmark-report
 receive ( ch -- val )
@@ -379,6 +382,7 @@ parameter? ( val -- ? )
 parse-quotation ( -- quotation )
 pick ( a b c -- a b c a )
 positive? ( x -- ? )
+pragma-get ( name -- option )
 print ( str -- )
 print-line ( str -- )
 protocol{
