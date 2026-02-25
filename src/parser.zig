@@ -90,6 +90,23 @@ const WordDefinition = @import("dictionary.zig").WordDefinition;
 /// - Runs the parse-time word
 /// - Captures all values above the pre-depth stack as `push_literal` instructions
 ///
+/// LIMITATION: When call_word instructions precede a parse-time word, execution order is:
+///   Parse time: literals executed, parse-time word runs, results captured
+///   Runtime: call_words run, then captured literals are pushed
+///
+/// This reordering is safe for "literal-creating" parse-time words (H{, M{, V{, etc.) that
+/// simply produce a value to embed in the output. However, it can cause issues with
+/// "stack-interacting" patterns where the call_word's result needs to be in a specific
+/// position relative to the parse-time word's result at runtime.
+///
+/// Example of the issue:
+///
+///   foo: some-marker struct{ x y } ;
+///
+/// If some-marker is not parse-time, it becomes a call_word that runs AFTER struct{}'s
+/// descriptor is captured. The marker ends up below the symbol on the stack, so `;`
+/// never collects it. Solution: make marker words parse-time.
+///
 /// We need to take a snapshot of the stack depth before pending literals are executed, which
 /// ensures that values from pending literals that are preserved (or transformed) by the parse-time
 /// word are captured back as push_literals, instead of being left on the runtime stack.

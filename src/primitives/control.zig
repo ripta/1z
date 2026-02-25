@@ -96,10 +96,13 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
             //              but probably acceptable for now.
             marker.name = name_copy;
 
+            // User-defined markers are automatically parse-time so they work
+            // correctly with parse-time constructs like struct{}.
             const push_instr = try alloc.alloc(Instruction, 1);
             push_instr[0] = .{ .op = .{ .push_literal = top_val }, .line = 0 };
             try ctx.defineWord(name_copy, WordDefinition{
                 .name = name_copy,
+                .parse_time = true,
                 .action = .{ .compound = push_instr },
             });
         },

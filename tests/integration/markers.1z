@@ -59,3 +59,11 @@ double-next 21 42 "parse-time word has tokenizer access" assert=
 \ Define a parse-time word that reads a quotation
 wrap-quot: parse-time [ parse-quotation ] ;
 wrap-quot [ 5 ] call 5 "parse-time can read quotations" assert=
+
+"User-defined markers with struct{}" test-section
+
+\ User-defined markers are automatically parse-time, so they work with struct{}
+my-struct-marker: marker ;
+test-struct: my-struct-marker struct{ val } ;
+100 make-test-struct test-struct? t "user marker with struct works" assert=
+100 make-test-struct val>> 100 "struct created correctly" assert=
