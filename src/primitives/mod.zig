@@ -16,6 +16,8 @@ pub const popVector = helpers.popVector;
 pub const popByteArray = helpers.popByteArray;
 pub const popStream = helpers.popStream;
 pub const popMarker = helpers.popMarker;
+pub const popStructType = helpers.popStructType;
+pub const popStructInstance = helpers.popStructInstance;
 
 pub const stack = @import("stack.zig");
 pub const arithmetic = @import("arithmetic.zig");
@@ -36,6 +38,7 @@ pub const dynamic_vars = @import("dynamic_vars.zig");
 pub const type_predicates = @import("type_predicates.zig");
 pub const markers = @import("markers.zig");
 pub const parse_time_marker = &markers.parse_time_marker;
+pub const structs = @import("structs.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -77,4 +80,5 @@ pub const extracted_primitives = stack.primitives ++
     streams.primitives ++
     dynamic_vars.primitives ++
     type_predicates.primitives ++
-    markers.primitives;
+    markers.primitives ++
+    structs.primitives;

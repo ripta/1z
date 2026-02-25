@@ -1,0 +1,21 @@
+=== struct{ } syntax ===
+Stack: [ ]
+Stack: [ ]
+PASS: make-point creates point instance
+Stack: [ point{ x: 1 y: 2 } ]
+PASS: x>> gets x field
+Stack: [ point{ x: 1 y: 2 } ]
+PASS: y>> gets y field
+Stack: [ point{ x: 1 y: 2 } ]
+PASS: >point converts hash
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } ]
+PASS: >point x value
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } ]
+PASS: type-of returns struct name
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } ]
+PASS: same fields are equal
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } ]
+PASS: different fields not equal
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } ]
+PASS: struct to-string
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } ]

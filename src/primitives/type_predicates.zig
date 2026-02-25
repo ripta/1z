@@ -24,6 +24,8 @@ fn nativeTypeOf(ctx: *Context) anyerror!void {
         .parameter => "parameter",
         .module => "module",
         .marker => "marker",
+        .struct_type => "struct-type",
+        .struct_instance => |si| si.struct_type.name,
         .stack_effect => "stack-effect",
         .parse_time_marker => "parse-time",
         .error_value => "error",

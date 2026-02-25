@@ -52,3 +52,11 @@ Stack: [ ]
 Stack: [ ]
 PASS: word with marker and stack effect
 Stack: [ ]
+=== Parse-time word execution bug fixes ===
+Stack: [ ]
+Stack: [ ]
+PASS: parse-time word has tokenizer access
+Stack: [ ]
+Stack: [ ]
+PASS: parse-time can read quotations
+Stack: [ ]

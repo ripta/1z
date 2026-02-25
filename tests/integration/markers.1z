@@ -49,3 +49,13 @@ multi-marker-word 99 "word with multiple markers" assert=
 my-marker2: marker ;
 word-with-effect: my-marker2 ( -- n ) [ 77 ] ;
 word-with-effect 77 "word with marker and stack effect" assert=
+
+"Parse-time word execution bug fixes" test-section
+
+\ Define a parse-time word that reads next literal and doubles it
+double-next: parse-time [ parse-literal 2 * ] ;
+double-next 21 42 "parse-time word has tokenizer access" assert=
+
+\ Define a parse-time word that reads a quotation
+wrap-quot: parse-time [ parse-quotation ] ;
+wrap-quot [ 5 ] call 5 "parse-time can read quotations" assert=

@@ -99,6 +99,20 @@ pub const Marker = struct {
     name: []const u8, // Empty for anonymous, actual name when defined with ;
 };
 
+/// StructType represents the definition of a struct type.
+/// Created by `struct{ field1 field2 ... }` syntax.
+pub const StructType = struct {
+    name: []const u8, // Type name (e.g., "point")
+    fields: []const []const u8, // Field names in order (e.g., ["x", "y"])
+};
+
+/// StructInstance represents an instance of a struct type.
+/// Created by make-NAME or >NAME words.
+pub const StructInstance = struct {
+    struct_type: *const StructType, // Reference to the type definition
+    fields: []Value, // Field values in order (mutable for setter support)
+};
+
 /// ModuleWord represents a word definition captured from a loaded file.
 /// This is a simplified version of WordDefinition that only stores compound words.
 pub const ModuleWord = struct {
@@ -203,6 +217,8 @@ pub const Value = union(enum) {
     parameter: *Parameter,
     module: *Module,
     marker: *Marker,
+    struct_type: *StructType,
+    struct_instance: *StructInstance,
     stack_effect: StackEffect,
     parse_time_marker: void, // Deprecated: parse-time word definitions; use marker instead
     error_value: ErrorObject,
@@ -296,6 +312,16 @@ pub const Value = union(enum) {
                     try writer.print("<marker:{s}>", .{mk.name});
                 }
             },
+            .struct_type => |st| try writer.print("<struct-type:{s}>", .{st.name}),
+            .struct_instance => |si| {
+                try writer.print("{s}{{ ", .{si.struct_type.name});
+                for (si.struct_type.fields, 0..) |field, i| {
+                    try writer.print("{s}: ", .{field});
+                    try si.fields[i].write(writer);
+                    try writer.writeAll(" ");
+                }
+                try writer.writeAll("}");
+            },
             .stack_effect => |effect| try effect.write(writer),
             .parse_time_marker => try writer.writeAll("parse-time"),
             .error_value => |err| try err.write(writer),
@@ -382,6 +408,17 @@ pub const Value = union(enum) {
             .module => |a| a == other.module,
             // Markers are equal if they refer to the same marker object
             .marker => |a| a == other.marker,
+            // Struct types are equal if they refer to the same type object
+            .struct_type => |a| a == other.struct_type,
+            // Struct instances are equal if same type and all fields equal
+            .struct_instance => |a| {
+                const b = other.struct_instance;
+                if (a.struct_type != b.struct_type) return false;
+                for (a.fields, b.fields) |af, bf| {
+                    if (!af.eql(bf)) return false;
+                }
+                return true;
+            },
             .stack_effect => |a| a.eql(other.stack_effect),
             .parse_time_marker => true, // All parse_time_markers are equal
             .error_value => |a| a.eql(other.error_value),
@@ -481,6 +518,20 @@ pub const Value = union(enum) {
             .marker => |mk| {
                 const ptr_val = @intFromPtr(mk);
                 hasher.update(std.mem.asBytes(&ptr_val));
+            },
+            // Struct types hash by pointer identity (same as equality)
+            .struct_type => |st| {
+                const ptr_val = @intFromPtr(st);
+                hasher.update(std.mem.asBytes(&ptr_val));
+            },
+            // Struct instances hash by type pointer and field values
+            .struct_instance => |si| {
+                const ptr_val = @intFromPtr(si.struct_type);
+                hasher.update(std.mem.asBytes(&ptr_val));
+                for (si.fields) |field| {
+                    const field_hash = field.hashValue();
+                    hasher.update(std.mem.asBytes(&field_hash));
+                }
             },
             .stack_effect => |effect| {
                 for (effect.inputs) |param| {
