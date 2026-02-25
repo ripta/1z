@@ -23,6 +23,7 @@ fn nativeTypeOf(ctx: *Context) anyerror!void {
         .stream => "stream",
         .parameter => "parameter",
         .module => "module",
+        .marker => "marker",
         .stack_effect => "stack-effect",
         .parse_time_marker => "parse-time",
         .error_value => "error",

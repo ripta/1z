@@ -62,6 +62,7 @@ mutable-map?: ( val -- ? ) [ type-of mutable-map: = ] ;
 stream?: ( val -- ? ) [ type-of stream: = ] ;
 parameter?: ( val -- ? ) [ type-of parameter: = ] ;
 module?: ( val -- ? ) [ type-of module: = ] ;
+marker?: ( val -- ? ) [ type-of marker: = ] ;
 
 \ Stack-shuffling
 nip: ( a b -- b ) [ swap drop ] ;
