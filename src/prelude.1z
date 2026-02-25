@@ -19,6 +19,15 @@ S{: parse-time [ "}" parse-until make-set ] ;
 \ Mutable map literal syntax
 M{: parse-time [ "}" parse-until make-mutable-map ] ;
 
+\ Struct definition syntax, produces a struct descriptor
+struct{: parse-time [
+  parse-struct-fields           \ -- ...fields
+  M{ type: struct-descriptor: } \ -- ...fields mmap
+  swap                          \ -- mmap fields-array
+  fields: swap @set!            \ -- mmap (with fields set)
+  [ define-struct ] define: swap @set!  \ -- mmap (with define set)
+] ;
+
 \ Dynamic variables (parameters) syntax
 parameter: parse-time [ dup parse-quotation make-parameter ] ;
 
@@ -62,6 +71,7 @@ mutable-map?: ( val -- ? ) [ type-of mutable-map: = ] ;
 stream?: ( val -- ? ) [ type-of stream: = ] ;
 parameter?: ( val -- ? ) [ type-of parameter: = ] ;
 module?: ( val -- ? ) [ type-of module: = ] ;
+marker?: ( val -- ? ) [ type-of marker: = ] ;
 
 \ Stack-shuffling
 nip: ( a b -- b ) [ swap drop ] ;

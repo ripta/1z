@@ -144,6 +144,7 @@ fn nativeLoad(ctx: *Context) anyerror!void {
                 try module.words.put(alloc, entry.key_ptr.*, .{
                     .stack_effect = word_def.stack_effect,
                     .instructions = instrs,
+                    .markers = word_def.markers,
                 });
             },
             .native => {}, // Skip native words (shouldn't happen in loaded files)
@@ -158,6 +159,7 @@ fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord) !void {
     try ctx.dictionary.put(name, .{
         .name = name,
         .stack_effect = mod_word.stack_effect,
+        .markers = mod_word.markers,
         .action = .{ .compound = mod_word.instructions },
     });
 }

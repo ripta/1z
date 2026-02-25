@@ -92,11 +92,33 @@ pub const Parameter = struct {
     default_quotation: Quotation, // Lazy default - evaluated on get if unbound
 };
 
+/// Marker represents a named marker for attaching metadata to definitions.
+/// Markers are pure metadata values that can be attached to word definitions.
+/// Anonymous markers (created by `marker` word) have empty name until defined.
+pub const Marker = struct {
+    name: []const u8, // Empty for anonymous, actual name when defined with ;
+};
+
+/// StructType represents the definition of a struct type.
+/// Created by `struct{ field1 field2 ... }` syntax.
+pub const StructType = struct {
+    name: []const u8, // Type name (e.g., "point")
+    fields: []const []const u8, // Field names in order (e.g., ["x", "y"])
+};
+
+/// StructInstance represents an instance of a struct type.
+/// Created by make-NAME or >NAME words.
+pub const StructInstance = struct {
+    struct_type: *const StructType, // Reference to the type definition
+    fields: []Value, // Field values in order (mutable for setter support)
+};
+
 /// ModuleWord represents a word definition captured from a loaded file.
 /// This is a simplified version of WordDefinition that only stores compound words.
 pub const ModuleWord = struct {
     stack_effect: ?StackEffect = null,
     instructions: []const Instruction,
+    markers: []const *Marker = &.{},
 };
 
 /// Module represents a collection of word definitions loaded from a file.
@@ -195,8 +217,11 @@ pub const Value = union(enum) {
     stream: *Stream,
     parameter: *Parameter,
     module: *Module,
+    marker: *Marker,
+    struct_type: *StructType,
+    struct_instance: *StructInstance,
     stack_effect: StackEffect,
-    parse_time_marker: void, // Marker for parse-time word definitions
+    parse_time_marker: void, // Deprecated: parse-time word definitions; use marker instead
     error_value: ErrorObject,
 
     pub fn write(self: Value, writer: anytype) anyerror!void {
@@ -281,6 +306,23 @@ pub const Value = union(enum) {
             },
             .parameter => |p| try writer.print("<parameter:{s}>", .{p.name}),
             .module => |m| try writer.print("<module:{s} ({d} words)>", .{ m.name, m.words.count() }),
+            .marker => |mk| {
+                if (mk.name.len == 0) {
+                    try writer.writeAll("<marker>");
+                } else {
+                    try writer.print("<marker:{s}>", .{mk.name});
+                }
+            },
+            .struct_type => |st| try writer.print("<struct-type:{s}>", .{st.name}),
+            .struct_instance => |si| {
+                try writer.print("{s}{{ ", .{si.struct_type.name});
+                for (si.struct_type.fields, 0..) |field, i| {
+                    try writer.print("{s}: ", .{field});
+                    try si.fields[i].write(writer);
+                    try writer.writeAll(" ");
+                }
+                try writer.writeAll("}");
+            },
             .stack_effect => |effect| try effect.write(writer),
             .parse_time_marker => try writer.writeAll("parse-time"),
             .error_value => |err| try err.write(writer),
@@ -365,6 +407,19 @@ pub const Value = union(enum) {
             .parameter => |a| a == other.parameter,
             // Modules are equal if they refer to the same module object
             .module => |a| a == other.module,
+            // Markers are equal if they refer to the same marker object
+            .marker => |a| a == other.marker,
+            // Struct types are equal if they refer to the same type object
+            .struct_type => |a| a == other.struct_type,
+            // Struct instances are equal if same type and all fields equal
+            .struct_instance => |a| {
+                const b = other.struct_instance;
+                if (a.struct_type != b.struct_type) return false;
+                for (a.fields, b.fields) |af, bf| {
+                    if (!af.eql(bf)) return false;
+                }
+                return true;
+            },
             .stack_effect => |a| a.eql(other.stack_effect),
             .parse_time_marker => true, // All parse_time_markers are equal
             .error_value => |a| a.eql(other.error_value),
@@ -460,6 +515,25 @@ pub const Value = union(enum) {
                 const ptr_val = @intFromPtr(m);
                 hasher.update(std.mem.asBytes(&ptr_val));
             },
+            // Markers hash by pointer identity (same as equality)
+            .marker => |mk| {
+                const ptr_val = @intFromPtr(mk);
+                hasher.update(std.mem.asBytes(&ptr_val));
+            },
+            // Struct types hash by pointer identity (same as equality)
+            .struct_type => |st| {
+                const ptr_val = @intFromPtr(st);
+                hasher.update(std.mem.asBytes(&ptr_val));
+            },
+            // Struct instances hash by type pointer and field values
+            .struct_instance => |si| {
+                const ptr_val = @intFromPtr(si.struct_type);
+                hasher.update(std.mem.asBytes(&ptr_val));
+                for (si.fields) |field| {
+                    const field_hash = field.hashValue();
+                    hasher.update(std.mem.asBytes(&field_hash));
+                }
+            },
             .stack_effect => |effect| {
                 for (effect.inputs) |param| {
                     hasher.update(param.name);
@@ -554,4 +628,126 @@ test "stack effect not equal to other types" {
 
     try std.testing.expect(!effect.eql(str));
     try std.testing.expect(!effect.eql(sym));
+}
+
+test "marker format" {
+    var anon = Marker{ .name = "" };
+    var named = Marker{ .name = "test-marker" };
+
+    const anon_marker = Value{ .marker = &anon };
+    const named_marker = Value{ .marker = &named };
+
+    var buf: [32]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    try anon_marker.write(fbs.writer());
+    try std.testing.expectEqualStrings("<marker>", fbs.getWritten());
+
+    fbs.reset();
+
+    try named_marker.write(fbs.writer());
+    try std.testing.expectEqualStrings("<marker:test-marker>", fbs.getWritten());
+}
+
+test "marker equality" {
+    var m1 = Marker{ .name = "marker" };
+    var m2 = Marker{ .name = "marker" };
+
+    const marker1 = &m1;
+    const marker2 = &m2;
+    const marker3 = marker1;
+
+    const val1 = Value{ .marker = marker1 };
+    const val2 = Value{ .marker = marker2 };
+    const val3 = Value{ .marker = marker3 };
+
+    try std.testing.expect(!val1.eql(val2));
+    try std.testing.expect(val1.eql(val3));
+}
+
+test "boolean equality" {
+    const t1 = Value{ .boolean = true };
+    const t2 = Value{ .boolean = true };
+    const f1 = Value{ .boolean = false };
+
+    try std.testing.expect(t1.eql(t2));
+    try std.testing.expect(!t1.eql(f1));
+}
+
+test "string equality" {
+    const a = Value{ .string = "hello" };
+    const b = Value{ .string = "hello" };
+    const c = Value{ .string = "world" };
+
+    try std.testing.expect(a.eql(b));
+    try std.testing.expect(!a.eql(c));
+}
+
+test "symbol equality" {
+    const a = Value{ .symbol = "foo" };
+    const b = Value{ .symbol = "foo" };
+    const c = Value{ .symbol = "bar" };
+
+    try std.testing.expect(a.eql(b));
+    try std.testing.expect(!a.eql(c));
+}
+
+test "array equality" {
+    const arr1 = &[_]Value{ .{ .integer = 1 }, .{ .integer = 2 } };
+    const arr2 = &[_]Value{ .{ .integer = 1 }, .{ .integer = 2 } };
+    const arr3 = &[_]Value{ .{ .integer = 1 }, .{ .integer = 3 } };
+    const arr4 = &[_]Value{.{ .integer = 1 }};
+
+    const a = Value{ .array = arr1 };
+    const b = Value{ .array = arr2 };
+    const c = Value{ .array = arr3 };
+    const d = Value{ .array = arr4 };
+
+    try std.testing.expect(a.eql(b));
+    try std.testing.expect(!a.eql(c));
+    try std.testing.expect(!a.eql(d));
+}
+
+test "quotation equality" {
+    const instrs1 = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 1 },
+        .{ .op = .{ .call_word = "+" }, .line = 1 },
+    };
+    const instrs2 = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 1 },
+        .{ .op = .{ .call_word = "+" }, .line = 1 },
+    };
+    const instrs3 = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 1 },
+    };
+
+    const a = Value{ .quotation = .{ .instructions = instrs1 } };
+    const b = Value{ .quotation = .{ .instructions = instrs2 } };
+    const c = Value{ .quotation = .{ .instructions = instrs3 } };
+
+    try std.testing.expect(a.eql(b));
+    try std.testing.expect(!a.eql(c));
+}
+
+test "cross-type inequality" {
+    const int_val = Value{ .integer = 42 };
+    const bool_val = Value{ .boolean = true };
+    const str_val = Value{ .string = "42" };
+    const sym_val = Value{ .symbol = "42" };
+    const arr_val = Value{ .array = &[_]Value{} };
+
+    // Different types are never equal
+    try std.testing.expect(!int_val.eql(bool_val));
+    try std.testing.expect(!int_val.eql(str_val));
+    try std.testing.expect(!str_val.eql(sym_val));
+    try std.testing.expect(!arr_val.eql(int_val));
+}
+
+test "parse_time_marker equality" {
+    const a = Value{ .parse_time_marker = {} };
+    const b = Value{ .parse_time_marker = {} };
+    const c = Value{ .integer = 0 };
+
+    try std.testing.expect(a.eql(b));
+    try std.testing.expect(!a.eql(c));
 }

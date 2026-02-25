@@ -1,0 +1,58 @@
+\ Test struct type definitions
+
+use "lib/testing.1z" ;
+
+"struct{ } syntax" test-section
+
+\ Test struct{ } syntax
+point: struct{ x y } ;
+
+\ Test constructor
+1 2 make-point dup point? t "make-point creates point instance" assert=
+
+\ Test getters
+1 2 make-point x>> 1 "x>> gets x field" assert=
+1 2 make-point y>> 2 "y>> gets y field" assert=
+
+\ Test hash conversion
+H{ x: 10 y: 20 } >point dup point? t ">point converts hash" assert=
+H{ x: 10 y: 20 } >point x>> 10 ">point x value" assert=
+
+\ Test type-of
+1 2 make-point type-of point: "type-of returns struct name" assert=
+
+\ Test struct instance equality
+1 2 make-point 1 2 make-point = t "same fields are equal" assert=
+1 2 make-point 1 3 make-point = f "different fields not equal" assert=
+
+\ Test struct instance printing
+1 2 make-point to-string "point{ x: 1 y: 2 }" "struct to-string" assert=
+
+"mutable struct{ } syntax" test-section
+
+\ Test mutable struct (using different field names to avoid overwriting point's accessors)
+mpoint: mutable struct{ mx my } ;
+
+\ Test mutable constructor
+10 20 make-mpoint dup mpoint? t "make-mpoint creates mpoint instance" assert=
+
+\ Test mutable getters
+10 20 make-mpoint mx>> 10 "mutable mx>> gets mx field" assert=
+10 20 make-mpoint my>> 20 "mutable my>> gets my field" assert=
+
+\ Test setters exist and work
+10 20 make-mpoint 99 >>mx mx>> 99 ">>mx sets mx field" assert=
+10 20 make-mpoint 88 >>my my>> 88 ">>my sets my field" assert=
+
+\ Test setter returns instance (for chaining)
+10 20 make-mpoint 99 >>mx mpoint? t ">>mx returns instance" assert=
+
+\ Test chained setters
+10 20 make-mpoint 1 >>mx 2 >>my dup mx>> 1 "chained >>mx" assert=
+10 20 make-mpoint 1 >>mx 2 >>my dup my>> 2 "chained >>my" assert=
+
+\ Test that mutation is in-place
+10 20 make-mpoint dup 99 >>mx drop mx>> 99 "mutation affects original" assert=
+
+\ Test immutable struct still works (getters not overwritten)
+1 2 make-point x>> 1 "immutable point still works" assert=

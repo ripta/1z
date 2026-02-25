@@ -1,0 +1,66 @@
+\ Test word-markers primitive for querying markers on word definitions
+
+use "lib/testing.1z" ;
+
+"word-markers on unmarked words" test-section
+
+plain: [ 1 ] ;
+"plain" word-markers #len 0 "unmarked word has no markers" assert=
+
+"word-markers on words with markers" test-section
+
+test-marker: marker ;
+single-marker-word: test-marker [ 10 ] ;
+"single-marker-word" word-markers #len 1 "single marker count" assert=
+test-marker "single-marker-word" word-markers #first = t "marker identity preserved" assert=
+
+"word-markers with multiple markers" test-section
+
+mk1: marker ;
+mk2: marker ;
+mk3: marker ;
+multi-marker-word: mk1 mk2 mk3 [ 20 ] ;
+"multi-marker-word" word-markers #len 3 "multiple marker count" assert=
+
+\ Check all markers are present (order may vary)
+\ Use [ over = ] so the reference marker survives each filter iteration;
+\ put parse-time marker first to avoid instruction reordering.
+mk1 "multi-marker-word" word-markers [ over = ] #filter swap drop #len 1 = t "mk1 in markers" assert=
+mk2 "multi-marker-word" word-markers [ over = ] #filter swap drop #len 1 = t "mk2 in markers" assert=
+mk3 "multi-marker-word" word-markers [ over = ] #filter swap drop #len 1 = t "mk3 in markers" assert=
+
+"word-markers on native words" test-section
+
+\ Native words should have no markers
+"dup" word-markers #len 0 "native word has no markers" assert=
+"+" word-markers #len 0 "native + has no markers" assert=
+
+"word-markers error handling" test-section
+
+\ Non-existent word
+[ "nonexistent-word" word-markers ] [ error-type: @get "WordNotFound" "non-existent word error" assert= ] recover
+
+\ Wrong type
+[ 42 word-markers ] [ error-type: @get "TypeError" "integer as word name error" assert= ] recover
+
+"Markers preserved through module load" test-section
+
+testmod: "tests/integration/marker_lib.1z" load ;
+
+\ Import to bring words into scope
+testmod import
+
+\ After import, check markers are preserved
+"plain-word" word-markers #len 0 "imported plain word has no markers" assert=
+"single-marked" word-markers #len 1 "imported single-marked has one marker" assert=
+"multi-marked" word-markers #len 2 "imported multi-marked has two markers" assert=
+
+"Marker identity through module" test-section
+
+\ The markers on imported words should be the same marker objects
+\ from the module (identity preserved)
+my-lib-marker my-lib-marker = t "marker identity in module scope" assert=
+my-lib-marker "single-marked" word-markers #first = t "marker identity preserved through import" assert=
+
+\ Check that multi-marked has my-lib-marker among its markers
+my-lib-marker "multi-marked" word-markers [ over = ] #filter swap drop #len 1 = t "my-lib-marker in multi-marked" assert=

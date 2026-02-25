@@ -91,31 +91,7 @@ pub fn nativeMulWrap(ctx: *Context) anyerror!void {
 pub fn nativeEq(ctx: *Context) anyerror!void {
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
-    const result = switch (a) {
-        .integer => |ai| switch (b) {
-            .integer => |bi| ai == bi,
-            else => false,
-        },
-        .boolean => |ab| switch (b) {
-            .boolean => |bb| ab == bb,
-            else => false,
-        },
-        .string => |as| switch (b) {
-            .string => |bs| std.mem.eql(u8, as, bs),
-            else => false,
-        },
-        .symbol => |as| switch (b) {
-            .symbol => |bs| std.mem.eql(u8, as, bs),
-            else => false,
-        },
-        .set => a.eql(b),
-        .array => a.eql(b),
-        .hash => a.eql(b),
-        .vector => a.eql(b),
-        .mutable_map => a.eql(b),
-        else => false,
-    };
-    try ctx.stack.push(.{ .boolean = result });
+    try ctx.stack.push(.{ .boolean = a.eql(b) });
 }
 
 /// < ( a b -- ? ) - Less than

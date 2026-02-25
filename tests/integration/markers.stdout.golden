@@ -1,0 +1,70 @@
+=== Marker identity semantics ===
+Stack: [ ]
+PASS: different markers are not equal
+Stack: [ ]
+PASS: same marker is equal to itself
+Stack: [ ]
+=== Defining named markers ===
+Stack: [ ]
+Stack: [ ]
+PASS: marker? predicate
+Stack: [ ]
+PASS: type-of returns marker:
+Stack: [ ]
+PASS: named marker to-string
+Stack: [ ]
+=== Marker identity after naming ===
+Stack: [ ]
+PASS: same named marker equals itself
+Stack: [ ]
+PASS: named marker doesn't equal anonymous
+Stack: [ ]
+=== Two different named markers ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: different named markers not equal
+Stack: [ ]
+=== Parse-time marker ===
+Stack: [ ]
+PASS: parse-time is a marker
+Stack: [ ]
+PASS: parse-time marker string
+Stack: [ ]
+PASS: parse-time marker identity
+Stack: [ ]
+=== Attaching markers to definitions ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: word with custom marker
+Stack: [ ]
+=== Multiple markers on a definition ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: word with multiple markers
+Stack: [ ]
+=== Marker with stack effect ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: word with marker and stack effect
+Stack: [ ]
+=== Parse-time word execution bug fixes ===
+Stack: [ ]
+Stack: [ ]
+PASS: parse-time word has tokenizer access
+Stack: [ ]
+Stack: [ ]
+PASS: parse-time can read quotations
+Stack: [ ]
+=== User-defined markers with struct{} ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: user marker with struct works
+Stack: [ ]
+PASS: struct created correctly
+Stack: [ ]
