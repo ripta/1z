@@ -1,8 +1,8 @@
 \ Integration tests for sequence operations
 \ Tests: #append, #prepend, #slice, #suffix, #prefix
 
-"lib/testing.1z" use
-"lib/sequences.1z" use
+use "lib/testing.1z" ;
+use "lib/sequences.1z" ;
 
 \ ============================================================================
 \ #append tests (sequence + sequence)

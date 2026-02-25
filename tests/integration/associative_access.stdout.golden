@@ -1,4 +1,3 @@
-Stack: [ ]
 === @get on hashes ===
 Stack: [ ]
 PASS: hash @get with symbol

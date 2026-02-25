@@ -53,9 +53,22 @@ fn nativeLoad(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const file = std.fs.cwd().openFile(filename, .{}) catch {
+        // Add error context for FileNotFound
+        const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
+        ctx.error_details.append(ctx.allocator, .{
+            .error_type = "FileNotFound",
+            .message = msg,
+            .source = ctx.current_source,
+            .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
+            .word_name = "load",
+        }) catch {};
         return error.FileNotFound;
     };
     defer file.close();
+
+    const old_source = ctx.current_source;
+    ctx.current_source = filename;
+    defer ctx.current_source = old_source;
 
     var file_buf: [4096]u8 = undefined;
     var reader = file.reader(&file_buf);
@@ -141,22 +154,69 @@ fn nativeLoad(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .module = module });
 }
 
-/// import ( module -- ) - Import all words from a module into the current scope
-fn nativeImport(ctx: *Context) anyerror!void {
-    const val = try ctx.stack.pop();
-    const module = switch (val) {
-        .module => |m| m,
-        else => return error.TypeError,
-    };
+fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord) !void {
+    try ctx.dictionary.put(name, .{
+        .name = name,
+        .stack_effect = mod_word.stack_effect,
+        .action = .{ .compound = mod_word.instructions },
+    });
+}
 
-    var iter = module.words.iterator();
-    while (iter.next()) |entry| {
-        const mod_word = entry.value_ptr.*;
-        try ctx.defineWord(entry.key_ptr.*, .{
-            .name = entry.key_ptr.*,
-            .stack_effect = mod_word.stack_effect,
-            .action = .{ .compound = mod_word.instructions },
-        });
+fn addImportError(ctx: *Context, error_type: []const u8, message: []const u8) void {
+    ctx.error_details.append(ctx.allocator, .{
+        .error_type = error_type,
+        .message = message,
+        .source = ctx.current_source,
+        .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
+        .word_name = "import",
+    }) catch {};
+}
+
+fn nativeImport(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const top_val = try ctx.stack.pop();
+
+    switch (top_val) {
+        .array => |names| {
+            if (names.len == 0) {
+                addImportError(ctx, "EmptyImport", "cannot import empty array");
+                return error.EmptyImport;
+            }
+
+            const module = helpers.popModule(ctx) catch {
+                addImportError(ctx, "TypeError", "expected module, got non-module");
+                return error.TypeError;
+            };
+            for (names) |name_val| {
+                const name = switch (name_val) {
+                    .symbol, .string => |s| s,
+                    else => {
+                        const type_name = helpers.valueTypeName(name_val);
+                        const msg = std.fmt.allocPrint(alloc, "expected symbol, got {s}", .{type_name}) catch "expected symbol";
+                        addImportError(ctx, "TypeError", msg);
+                        return error.TypeError;
+                    },
+                };
+                const mod_word = module.words.get(name) orelse {
+                    const msg = std.fmt.allocPrint(alloc, "key '{s}'", .{name}) catch "key '<unknown>'";
+                    addImportError(ctx, "KeyNotFound", msg);
+                    return error.KeyNotFound;
+                };
+                try importWord(ctx, name, mod_word);
+            }
+        },
+        .module => |module| {
+            var iter = module.words.iterator();
+            while (iter.next()) |entry| {
+                try importWord(ctx, entry.key_ptr.*, entry.value_ptr.*);
+            }
+        },
+        else => {
+            const type_name = helpers.valueTypeName(top_val);
+            const msg = std.fmt.allocPrint(alloc, "expected module, got {s}", .{type_name}) catch "expected module";
+            addImportError(ctx, "TypeError", msg);
+            return error.TypeError;
+        },
     }
 }
 

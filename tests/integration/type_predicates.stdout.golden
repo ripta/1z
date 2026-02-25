@@ -1,0 +1,107 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== type-of primitive ===
+Stack: [ ]
+PASS: type-of integer
+Stack: [ ]
+PASS: type-of boolean t
+Stack: [ ]
+PASS: type-of boolean f
+Stack: [ ]
+PASS: type-of string
+Stack: [ ]
+PASS: type-of symbol
+Stack: [ ]
+PASS: type-of array
+Stack: [ ]
+PASS: type-of quotation
+Stack: [ ]
+PASS: type-of hash
+Stack: [ ]
+PASS: type-of vector
+Stack: [ ]
+PASS: type-of byte-array
+Stack: [ ]
+PASS: type-of set
+Stack: [ ]
+PASS: type-of mutable-map
+Stack: [ ]
+PASS: type-of stream
+Stack: [ ]
+PASS: type-of parameter
+Stack: [ ]
+Stack: [ ]
+PASS: type-of error
+Stack: [ ]
+PASS: type-of returns symbol
+Stack: [ ]
+=== type predicates - true cases ===
+Stack: [ ]
+PASS: integer? true
+Stack: [ ]
+PASS: boolean? true t
+Stack: [ ]
+PASS: boolean? true f
+Stack: [ ]
+PASS: string? true
+Stack: [ ]
+PASS: symbol? true
+Stack: [ ]
+PASS: array? true
+Stack: [ ]
+PASS: quotation? true
+Stack: [ ]
+PASS: hash? true
+Stack: [ ]
+PASS: vector? true
+Stack: [ ]
+PASS: byte-array? true
+Stack: [ ]
+PASS: set? true
+Stack: [ ]
+PASS: mutable-map? true
+Stack: [ ]
+PASS: stream? true
+Stack: [ ]
+PASS: parameter? true
+Stack: [ ]
+Stack: [ ]
+PASS: error? true
+Stack: [ ]
+=== type predicates - false cases ===
+Stack: [ ]
+PASS: integer? false for string
+Stack: [ ]
+PASS: string? false for integer
+Stack: [ ]
+PASS: array? false for quotation
+Stack: [ ]
+PASS: quotation? false for array
+Stack: [ ]
+PASS: hash? false for mutable-map
+Stack: [ ]
+PASS: mutable-map? false for hash
+Stack: [ ]
+PASS: boolean? false for integer
+Stack: [ ]
+PASS: symbol? false for string
+Stack: [ ]
+PASS: stream? false for string
+Stack: [ ]
+=== edge cases ===
+Stack: [ ]
+PASS: type-of negative integer
+Stack: [ ]
+PASS: type-of empty array
+Stack: [ ]
+PASS: type-of empty hash
+Stack: [ ]
+PASS: type-of empty vector
+Stack: [ ]
+PASS: type-of empty set
+Stack: [ ]
+PASS: type-of nested array
+Stack: [ ]
+PASS: type-of array element
+Stack: [ ]

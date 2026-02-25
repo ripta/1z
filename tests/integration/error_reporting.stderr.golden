@@ -1,2 +1,1 @@
-Error: error.UnknownWord
-  at line 6: unknown-word-here
+tests/integration/error_reporting.1z:6: error.UnknownWord at word 'unknown-word-here'

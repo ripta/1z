@@ -1,4 +1,3 @@
-Stack: [ ]
 === Correct stack effects ===
 Stack: [ ]
 PASS: effect (n -- n)

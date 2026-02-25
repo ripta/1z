@@ -1,6 +1,6 @@
 \ Module system tests
 
-"lib/testing.1z" use
+use "lib/testing.1z" ;
 
 \ === Module as value ===
 "Module as value" test-section
@@ -20,7 +20,7 @@ import
 \ === Multiple imports ===
 "Multiple imports" test-section
 
-"tests/integration/module_lib.1z" use
+use "tests/integration/module_lib.1z" ;
 10 double .
 
 \ === Module without import ===
@@ -31,6 +31,7 @@ import
   \ add3 should NOT be visible here since we only loaded, not imported
   5 add3
 ] [ drop "add3 not visible - correct" . ] recover
+wipe
 
 \ === Module stored in variable ===
 "Module stored in variable" test-section
@@ -43,7 +44,7 @@ math import
 \ === use shorthand ===
 "use shorthand" test-section
 
-"tests/integration/module_lib.1z" use
+use "tests/integration/module_lib.1z" ;
 8 double .
 
 \ === Qualified name access ===
@@ -66,3 +67,66 @@ other: "tests/integration/module_lib.1z" load ;
   \ This would fail if double was somehow imported
   100 quadruple
 ] [ drop "quadruple not visible - correct" . ] recover
+wipe
+
+\ === Module accessors ===
+"Module accessors @has?" test-section
+
+testmod: "tests/integration/module_lib.1z" load ;
+testmod double: @has? t "module @has? existing word" assert=
+testmod "double" @has? t "module @has? string key" assert=
+testmod nonexistent: @has? f "module @has? missing word" assert=
+testmod "nonexistent" @has? f "module @has? missing string key" assert=
+
+"Module accessors @keys" test-section
+
+testmod @keys #len 3 "module @keys count" assert=
+
+"Module accessors @get" test-section
+
+\ Get word from module and execute it
+testmod double: @get 5 swap call 10 "module @get and call" assert=
+testmod "triple" @get 4 swap call 12 "module @get string key" assert=
+
+\ Error on missing key
+[ testmod missing: @get ] [ drop "PASS: @get on missing key errors" print-line ] recover
+
+\ === Selective import tests ===
+"Selective import" test-section
+
+selmod: "tests/integration/module_lib.1z" load ;
+selmod { double: } import
+5 double 10 "selective import double" assert=
+
+"Selective import multiple" test-section
+
+selmod2: "tests/integration/module_lib.1z" load ;
+selmod2 { double: triple: } import
+6 double 12 "selective import multiple - double" assert=
+3 triple 9 "selective import multiple - triple" assert=
+
+"Selective use" test-section
+
+use { squared: } "tests/integration/module_lib.1z" ;
+4 squared 16 "selective use squared" assert=
+
+"Selective use multiple" test-section
+
+use { double: triple: } "tests/integration/module_lib.1z" ;
+7 double 14 "selective use multiple - double" assert=
+2 triple 6 "selective use multiple - triple" assert=
+
+"Selective import errors" test-section
+
+\ Empty array
+errmod: "tests/integration/module_lib.1z" load ;
+[ errmod { } import ] [ error-type: @get "EmptyImport" "empty array error" assert= ] recover
+
+\ Non-existent word
+[ errmod { nonexistent: } import ] [ error-type: @get "KeyNotFound" "missing word error" assert= ] recover
+
+\ Non-symbol in array
+[ errmod { 123 } import ] [ error-type: @get "TypeError" "non-symbol error" assert= ] recover
+
+\ Integer instead of module
+[ 42 { double: } import ] [ error-type: @get "TypeError" "integer instead of module error" assert= ] recover

@@ -19,7 +19,7 @@ const Context = @import("context.zig").Context;
 
 /// Process escape sequences in a string and allocate the result; supports
 /// Zig-compatible escape sequences: \n, \r, \t, \\, \", \', \xHH, \u{HHHH}
-fn processEscapes(allocator: Allocator, input: []const u8) ![]u8 {
+pub fn processEscapes(allocator: Allocator, input: []const u8) ![]u8 {
     const result = try allocator.alloc(u8, input.len);
     var out_idx: usize = 0;
 

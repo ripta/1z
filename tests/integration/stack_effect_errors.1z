@@ -1,6 +1,6 @@
 \ Stack effect validation error tests
 
-"lib/testing.1z" use
+use "lib/testing.1z" ;
 
 "Wrong delta in quotation parameter" test-section
 \ The effect says ( n -- n n ) but [ 2 * ] only produces one value

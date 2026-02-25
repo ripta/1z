@@ -1,4 +1,3 @@
-Stack: [ ]
 === Parameter creation and get ===
 Stack: [ ]
 PASS: output-stream get returns stdout

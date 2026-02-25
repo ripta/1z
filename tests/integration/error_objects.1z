@@ -1,6 +1,6 @@
 \ Test structured error objects with recover
 
-"lib/testing.1z" use
+use "lib/testing.1z" ;
 
 "Error type fields" test-section
 [ drop ] [ dup error-type: @get "StackUnderflow" = [ "PASS: error has error-type field" print-line ] [ "FAIL" print-line ] if drop ] recover

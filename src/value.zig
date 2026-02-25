@@ -109,6 +109,7 @@ pub const Module = struct {
 /// StackFrame represents a single frame in a stack trace.
 pub const StackFrame = struct {
     word_name: []const u8,
+    source: []const u8,
     line: usize,
 };
 
@@ -124,7 +125,7 @@ pub const ErrorObject = struct {
             try writer.writeAll(" [");
             for (trace, 0..) |frame, i| {
                 if (i > 0) try writer.writeAll(" <- ");
-                try writer.print("{s}:{d}", .{ frame.word_name, frame.line });
+                try writer.print("{s}:{d}:{s}", .{ frame.source, frame.line, frame.word_name });
             }
             try writer.writeAll("]");
         }

@@ -1,8 +1,10 @@
 const std = @import("std");
 const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
+const Value = value_mod.Value;
 const Parameter = value_mod.Parameter;
 const parser = @import("../parser.zig");
+const tokenizer_mod = @import("../tokenizer.zig");
 
 const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
@@ -12,6 +14,7 @@ const popSymbol = helpers.popSymbol;
 
 pub const primitives = [_]Primitive{
     .{ .name = "parse-quotation", .stack_effect = "-- quotation", .func = nativeParseQuotation },
+    .{ .name = "parse-literal", .stack_effect = "-- value", .func = nativeParseLiteral },
     .{ .name = "make-parameter", .stack_effect = "name: quot -- param", .func = nativeMakeParameter },
     .{ .name = "get", .stack_effect = "param -- value", .func = nativeGet },
     .{ .name = "with-parameter", .stack_effect = "value param quot --", .func = nativeWithParameter },
@@ -42,6 +45,50 @@ pub fn nativeParseQuotation(ctx: *Context) anyerror!void {
     }
 
     // Unexpected end of input
+    return error.TypeError;
+}
+
+/// parse-literal ( -- value ) - Read the next literal from the tokenizer
+pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
+    const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
+    const alloc = ctx.quotationAllocator();
+    while (tokenizer.next()) |tok| {
+        if (tok.kind == .comment or tok.kind == .newline) continue;
+
+        const token = tok.text;
+
+        if (std.mem.eql(u8, token, "{")) {
+            const arr = parser.parseArray(alloc, tokenizer) catch return error.OutOfMemory;
+            try ctx.stack.push(.{ .array = arr });
+            return;
+        }
+
+        if (std.mem.eql(u8, token, "[")) {
+            const quot = parser.parseQuotation(alloc, tokenizer, ctx) catch return error.OutOfMemory;
+            try ctx.stack.push(.{ .quotation = quot });
+            return;
+        }
+
+        if (tokenizer_mod.parseString(token)) |s| {
+            const s_copy = parser.processEscapes(alloc, s) catch return error.OutOfMemory;
+            try ctx.stack.push(.{ .string = s_copy });
+            return;
+        }
+
+        if (token.len > 1 and token[token.len - 1] == ':') {
+            const sym_copy = alloc.dupe(u8, token[0 .. token.len - 1]) catch return error.OutOfMemory;
+            try ctx.stack.push(.{ .symbol = sym_copy });
+            return;
+        }
+
+        if (tokenizer_mod.parseInteger(token)) |n| {
+            try ctx.stack.push(.{ .integer = n });
+            return;
+        }
+
+        return error.TypeError;
+    }
+
     return error.TypeError;
 }
 

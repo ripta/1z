@@ -1,6 +1,6 @@
 \ Test basic string and array output
 
-"lib/testing.1z" use
+use "lib/testing.1z" ;
 
 "Basic output" test-section
 "hello world" "hello world" "string literal" assert=

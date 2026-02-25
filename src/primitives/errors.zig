@@ -33,6 +33,7 @@ pub fn nativeRecover(ctx: *Context) anyerror!void {
                 for (ctx.error_details.items, 0..) |detail, i| {
                     f[i] = .{
                         .word_name = detail.word_name orelse detail.message,
+                        .source = detail.source,
                         .line = detail.line,
                     };
                 }
@@ -86,6 +87,7 @@ pub fn nativeRethrow(ctx: *Context) anyerror!void {
                     ctx.error_details.append(ctx.allocator, .{
                         .error_type = err_obj.error_type,
                         .message = err_obj.message,
+                        .source = frame.source,
                         .line = frame.line,
                         .word_name = frame.word_name,
                     }) catch {};

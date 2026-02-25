@@ -16,24 +16,38 @@ const build_options = @import("build_options");
 pub const version = build_options.version;
 
 /// Print error details from the context's error stack.
+/// Format: source:line: error.TYPE message at word 'WORD'
 fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
-    writer.print("Error: {any}\n", .{err}) catch return;
-
-    // Print error details in reverse order (most recent first is the innermost error)
     const details = ctx.error_details.items;
     if (details.len > 0) {
-        for (details) |detail| {
-            // Print location (line number and word name)
-            if (detail.line > 0) {
-                writer.print("  at line {d}: {s}\n", .{ detail.line, detail.word_name orelse detail.message }) catch return;
-            } else {
-                writer.print("  in: {s}\n", .{detail.word_name orelse detail.message}) catch return;
-            }
-            // Print additional message if different from word name
-            if (detail.word_name != null and !std.mem.eql(u8, detail.message, detail.word_name.?)) {
-                writer.print("  {s}\n", .{detail.message}) catch return;
+        // Print first detail (innermost error location) in single-line format
+        const detail = details[0];
+        writer.print("{s}:{d}: error.{s}", .{ detail.source, detail.line, detail.error_type }) catch return;
+
+        // Print message if different from word name
+        if (detail.word_name != null and !std.mem.eql(u8, detail.message, detail.word_name.?)) {
+            writer.print(" {s}", .{detail.message}) catch return;
+        }
+
+        // Print word name
+        if (detail.word_name) |word_name| {
+            writer.print(" at word '{s}'", .{word_name}) catch return;
+        }
+        writer.writeAll("\n") catch return;
+
+        // Print remaining call stack (caller chain)
+        if (details.len > 1) {
+            for (details[1..]) |frame| {
+                writer.print("  called from {s}:{d}: {s}\n", .{
+                    frame.source,
+                    frame.line,
+                    frame.word_name orelse frame.message,
+                }) catch return;
             }
         }
+    } else {
+        // Fallback if no details captured
+        writer.print("error.{s}\n", .{@errorName(err)}) catch return;
     }
     ctx.clearExecutionDetails();
 }
@@ -371,6 +385,15 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
         return 1;
     };
     defer file.close();
+
+    // Set source filename for error reporting
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    ctx.current_source = if (std.fs.cwd().realpath(".", &cwd_buf)) |cwd_path| blk: {
+        if (std.mem.startsWith(u8, file_path, cwd_path) and file_path.len > cwd_path.len and file_path[cwd_path.len] == '/') {
+            break :blk file_path[cwd_path.len + 1 ..];
+        }
+        break :blk file_path;
+    } else |_| file_path;
 
     var file_buf: [4096]u8 = undefined;
     var reader = file.reader(&file_buf);

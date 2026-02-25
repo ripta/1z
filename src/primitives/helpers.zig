@@ -8,6 +8,7 @@ const Quotation = value_mod.Quotation;
 const Vector = value_mod.Vector;
 const ByteArray = value_mod.ByteArray;
 const Stream = value_mod.Stream;
+const Module = value_mod.Module;
 
 const StackEffect = @import("../stack_effect.zig").StackEffect;
 const StackEffectParam = @import("../stack_effect.zig").StackEffectParam;
@@ -97,6 +98,33 @@ pub fn makeSimpleEffect(allocator: Allocator, raw: []const u8) !StackEffect {
 }
 
 // =============================================================================
+// Type utilities
+// =============================================================================
+
+/// Get the type name of a value as a string
+pub fn valueTypeName(val: Value) []const u8 {
+    return switch (val) {
+        .integer => "integer",
+        .boolean => "boolean",
+        .string => "string",
+        .symbol => "symbol",
+        .array => "array",
+        .quotation => "quotation",
+        .hash => "hash",
+        .vector => "vector",
+        .byte_array => "byte-array",
+        .set => "set",
+        .mutable_map => "mutable-map",
+        .stream => "stream",
+        .parameter => "parameter",
+        .module => "module",
+        .stack_effect => "stack-effect",
+        .parse_time_marker => "parse-time",
+        .error_value => "error",
+    };
+}
+
+// =============================================================================
 // Type-safe poppers
 // =============================================================================
 
@@ -178,6 +206,15 @@ pub fn popStream(ctx: *Context) !*Stream {
     return switch (val) {
         .stream => |s| s,
         .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .parameter, .module => error.TypeError,
+        .stack_effect, .parse_time_marker, .error_value => error.TypeError,
+    };
+}
+
+pub fn popModule(ctx: *Context) !*Module {
+    const val = try ctx.stack.pop();
+    return switch (val) {
+        .module => |m| m,
+        .integer, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .stream, .parameter => error.TypeError,
         .stack_effect, .parse_time_marker, .error_value => error.TypeError,
     };
 }

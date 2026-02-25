@@ -32,6 +32,7 @@ unless: ( ? quot -- ) [ [ ] swap if ] ;
 
 \ Error-handling
 ignore-errors: ( quot -- ) [ [ drop ] recover ] ;
+error?: ( val -- ? ) [ type-of error: = ] ;
 error-type?: ( error type -- error ? ) [ over error-type: @get = ] ;
 
 \ Error type constants
@@ -45,6 +46,22 @@ EFileNotFound: [ "FileNotFound" ] ;
 EFileReadError: [ "FileReadError" ] ;
 ERethrowError: [ "RethrowError" ] ;
 EKeyNotFound: [ "KeyNotFound" ] ;
+
+\ Type predicates
+integer?: ( val -- ? ) [ type-of integer: = ] ;
+boolean?: ( val -- ? ) [ type-of boolean: = ] ;
+string?: ( val -- ? ) [ type-of string: = ] ;
+symbol?: ( val -- ? ) [ type-of symbol: = ] ;
+array?: ( val -- ? ) [ type-of array: = ] ;
+quotation?: ( val -- ? ) [ type-of quotation: = ] ;
+hash?: ( val -- ? ) [ type-of hash: = ] ;
+vector?: ( val -- ? ) [ type-of vector: = ] ;
+byte-array?: ( val -- ? ) [ type-of byte-array: = ] ;
+set?: ( val -- ? ) [ type-of set: = ] ;
+mutable-map?: ( val -- ? ) [ type-of mutable-map: = ] ;
+stream?: ( val -- ? ) [ type-of stream: = ] ;
+parameter?: ( val -- ? ) [ type-of parameter: = ] ;
+module?: ( val -- ? ) [ type-of module: = ] ;
 
 \ Stack-shuffling
 nip: ( a b -- b ) [ swap drop ] ;
@@ -98,7 +115,16 @@ read-line: ( -- str/f ) [ input-stream get stream-read-line ] ;
 .: ( a -- ) [ to-string print-line ] ;
 
 \ Module loading
-use: ( filename -- ) [ load import ] ;
+\   use "file.1z" ;
+\   use { word1: word2: } "file.1z" ;
+use: parse-time [
+  parse-literal
+  dup string?
+  [ load import ]
+  [ parse-literal load swap import ]
+  if
+  ";" parse-until drop
+] ;
 
 \ Loops
 times: ( n quot -- ) [
