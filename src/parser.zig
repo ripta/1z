@@ -168,11 +168,8 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
         } else if (parseString(token)) |s| {
             const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line }) catch return ParseError.OutOfMemory;
-        } else if (token.len > 1 and token[token.len - 1] == ':') {
-            const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .symbol = sym_copy } }, .line = line }) catch return ParseError.OutOfMemory;
         } else {
-            // Check if this is a parse-time word (only if context provided)
+            // Check if this is a parse-time word
             if (ctx) |c| {
                 if (c.dictionary.get(token)) |word| {
                     if (word.parse_time) {
@@ -181,9 +178,14 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
                     }
                 }
             }
-            // Regular word - compile as call_word
-            const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
-            instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line }) catch return ParseError.OutOfMemory;
+
+            if (token.len > 1 and token[token.len - 1] == ':') {
+                const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
+                instructions.append(allocator, .{ .op = .{ .push_literal = .{ .symbol = sym_copy } }, .line = line }) catch return ParseError.OutOfMemory;
+            } else {
+                const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
+                instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line }) catch return ParseError.OutOfMemory;
+            }
         }
     }
 
@@ -235,12 +237,8 @@ pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Contex
             is_first_token = false;
             const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line }) catch return ParseError.OutOfMemory;
-        } else if (token.len > 1 and token[token.len - 1] == ':') {
-            is_first_token = false;
-            const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .symbol = sym_copy } }, .line = line }) catch return ParseError.OutOfMemory;
         } else {
-            // Check if this is a parse-time word (only if context provided)
+            // Check if this is a parse-time word
             if (ctx) |c| {
                 if (c.dictionary.get(token)) |word| {
                     if (word.parse_time) {
@@ -250,10 +248,15 @@ pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Contex
                     }
                 }
             }
+
             is_first_token = false;
-            // Regular word - compile as call_word
-            const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
-            instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line }) catch return ParseError.OutOfMemory;
+            if (token.len > 1 and token[token.len - 1] == ':') {
+                const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
+                instructions.append(allocator, .{ .op = .{ .push_literal = .{ .symbol = sym_copy } }, .line = line }) catch return ParseError.OutOfMemory;
+            } else {
+                const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
+                instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line }) catch return ParseError.OutOfMemory;
+            }
         }
     }
 
