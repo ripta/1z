@@ -35,6 +35,7 @@ pub const streams = @import("streams.zig");
 pub const dynamic_vars = @import("dynamic_vars.zig");
 pub const type_predicates = @import("type_predicates.zig");
 pub const markers = @import("markers.zig");
+pub const parse_time_marker = &markers.parse_time_marker;
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");

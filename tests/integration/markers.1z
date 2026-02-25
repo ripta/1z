@@ -1,0 +1,51 @@
+\ Test marker value type and marker definitions
+
+use "lib/testing.1z" ;
+
+"Marker identity semantics" test-section
+
+marker marker = f "different markers are not equal" assert=
+marker dup = t "same marker is equal to itself" assert=
+
+"Defining named markers" test-section
+
+test-marker: marker ;
+test-marker marker? t "marker? predicate" assert=
+test-marker type-of marker: "type-of returns marker:" assert=
+test-marker to-string "<marker:test-marker>" "named marker to-string" assert=
+
+"Marker identity after naming" test-section
+
+test-marker test-marker = t "same named marker equals itself" assert=
+test-marker marker = f "named marker doesn't equal anonymous" assert=
+
+"Two different named markers" test-section
+
+marker-a: marker ;
+marker-b: marker ;
+marker-a marker-b = f "different named markers not equal" assert=
+
+"Parse-time marker" test-section
+
+parse-time marker? t "parse-time is a marker" assert=
+parse-time to-string "<marker:parse-time>" "parse-time marker string" assert=
+parse-time parse-time = t "parse-time marker identity" assert=
+
+"Attaching markers to definitions" test-section
+
+custom-marker: marker ;
+my-word: custom-marker [ 42 ] ;
+my-word 42 "word with custom marker" assert=
+
+"Multiple markers on a definition" test-section
+
+marker1: marker ;
+marker2: marker ;
+multi-marker-word: marker1 marker2 [ 99 ] ;
+multi-marker-word 99 "word with multiple markers" assert=
+
+"Marker with stack effect" test-section
+
+my-marker2: marker ;
+word-with-effect: my-marker2 ( -- n ) [ 77 ] ;
+word-with-effect 77 "word with marker and stack effect" assert=

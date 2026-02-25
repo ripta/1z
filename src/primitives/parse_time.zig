@@ -9,15 +9,8 @@ const Primitive = @import("types.zig").Primitive;
 const popString = helpers.popString;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTime },
     .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .func = nativeParseUntil },
 };
-
-/// parse-time ( -- marker ) - Push parse-time marker onto stack
-/// When `;` sees this marker, it will set the word's parse_time flag
-pub fn nativeParseTime(ctx: *Context) anyerror!void {
-    try ctx.stack.push(.{ .parse_time_marker = {} });
-}
 
 /// parse-until ( delimiter -- quotation ) - Read tokens until delimiter, return as quotation
 /// This is a parse-time primitive that reads from the active tokenizer.
