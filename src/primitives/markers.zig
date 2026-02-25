@@ -1,7 +1,10 @@
+const std = @import("std");
 const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
 const Marker = value_mod.Marker;
+const Value = value_mod.Value;
 
+const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 
 /// Well-known marker for parse-time word definitions.
@@ -16,6 +19,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "marker", .stack_effect = "-- marker", .func = nativeMarker },
     .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTimeMarker, .parse_time = true },
     .{ .name = "mutable", .stack_effect = "-- marker", .func = nativeMutableMarker, .parse_time = true },
+    .{ .name = "word-markers", .stack_effect = "name -- markers", .func = nativeWordMarkers },
 };
 
 /// marker ( -- marker ) - Create an anonymous marker value
@@ -47,4 +51,49 @@ pub fn isMutableMarker(mk: *const Marker) bool {
 /// Check if a marker is the well-known parse-time marker
 pub fn isParseTimeMarker(mk: *const Marker) bool {
     return mk == &parse_time_marker;
+}
+
+/// word-markers ( name -- markers ) - Get the markers attached to a word definition
+///
+/// Returns an array of marker values. Returns empty array if word has no markers.
+/// Raises WordNotFound if the word doesn't exist.
+fn nativeWordMarkers(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const name_val = try ctx.stack.pop();
+    const name = switch (name_val) {
+        .symbol, .string => |s| s,
+        else => {
+            const type_name = helpers.valueTypeName(name_val);
+            const msg = std.fmt.allocPrint(alloc, "expected symbol or string, got {s}", .{type_name}) catch "expected symbol or string";
+            ctx.error_details.append(ctx.allocator, .{
+                .error_type = "TypeError",
+                .message = msg,
+                .source = ctx.current_source,
+                .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
+                .word_name = "word-markers",
+            }) catch {};
+            return error.TypeError;
+        },
+    };
+
+    const word_def = ctx.lookupWord(name) orelse {
+        const msg = std.fmt.allocPrint(alloc, "word '{s}'", .{name}) catch "word '<unknown>'";
+        ctx.error_details.append(ctx.allocator, .{
+            .error_type = "WordNotFound",
+            .message = msg,
+            .source = ctx.current_source,
+            .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
+            .word_name = "word-markers",
+        }) catch {};
+        return error.WordNotFound;
+    };
+
+    const markers = word_def.markers;
+    const result = try alloc.alloc(Value, markers.len);
+    for (markers, 0..) |mk, i| {
+        result[i] = .{ .marker = @constCast(mk) };
+    }
+
+    try ctx.stack.push(.{ .array = result });
 }

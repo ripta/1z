@@ -118,6 +118,7 @@ pub const StructInstance = struct {
 pub const ModuleWord = struct {
     stack_effect: ?StackEffect = null,
     instructions: []const Instruction,
+    markers: []const *Marker = &.{},
 };
 
 /// Module represents a collection of word definitions loaded from a file.
