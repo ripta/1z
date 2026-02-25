@@ -7,6 +7,7 @@ const StructType = value_mod.StructType;
 const StructInstance = value_mod.StructInstance;
 const Marker = value_mod.Marker;
 const WordDefinition = @import("../dictionary.zig").WordDefinition;
+const markers_mod = @import("markers.zig");
 
 const helpers = @import("helpers.zig");
 
@@ -109,6 +110,17 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     for (fields_slice, 0..) |field, i| {
         const getter_name = try std.fmt.allocPrint(alloc, "{s}>>", .{field});
         try defineFieldGetter(ctx, getter_name, struct_type, i, markers_slice);
+    }
+
+    // >>FIELD: ( instance value -- instance ) - field setter (only if mutable)
+    const has_mutable = for (markers_slice) |mk| {
+        if (markers_mod.isMutableMarker(mk)) break true;
+    } else false;
+    if (has_mutable) {
+        for (fields_slice, 0..) |field, i| {
+            const setter_name = try std.fmt.allocPrint(alloc, ">>{s}", .{field});
+            try defineFieldSetter(ctx, setter_name, struct_type, i, markers_slice);
+        }
     }
 }
 
@@ -293,6 +305,48 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
                         }
 
                         try c.stack.push(inst.fields[idx]);
+                    }
+                }.helper,
+            },
+        });
+    }
+}
+
+/// >>FIELD: ( instance value -- instance ) - field setter
+fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, markers: []const *Marker) !void {
+    const alloc = ctx.quotationAllocator();
+
+    // Create instructions that push the type, index, and call the setter
+    const instrs = try alloc.alloc(Instruction, 3);
+    instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
+    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(field_index) } }, .line = 0 };
+    instrs[2] = .{ .op = .{ .call_word = "__struct-field-set" }, .line = 0 };
+
+    try ctx.dictionary.put(name, .{
+        .name = name,
+        .markers = markers,
+        .action = .{ .compound = instrs },
+    });
+
+    if (ctx.dictionary.get("__struct-field-set") == null) {
+        try ctx.dictionary.put("__struct-field-set", .{
+            .name = "__struct-field-set",
+            .action = .{
+                .native = struct {
+                    fn helper(c: *Context) anyerror!void {
+                        const idx: usize = @intCast(try helpers.popInteger(c));
+                        const st = try helpers.popStructType(c);
+                        const new_val = try c.stack.pop();
+                        const inst = try helpers.popStructInstance(c);
+
+                        // Type check
+                        if (inst.struct_type != st) {
+                            return error.TypeError;
+                        }
+
+                        // Mutate the field in place
+                        inst.fields[idx] = new_val;
+                        try c.stack.push(.{ .struct_instance = inst });
                     }
                 }.helper,
             },

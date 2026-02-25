@@ -8,9 +8,14 @@ const Primitive = @import("types.zig").Primitive;
 /// This is a compile-time constant with identity semantics.
 pub const parse_time_marker: Marker = .{ .name = "parse-time" };
 
+/// Well-known marker for mutable struct definitions.
+/// When present on a struct, setters (>>field) are generated in addition to getters.
+pub const mutable_marker: Marker = .{ .name = "mutable" };
+
 pub const primitives = [_]Primitive{
     .{ .name = "marker", .stack_effect = "-- marker", .func = nativeMarker },
     .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTimeMarker, .parse_time = true },
+    .{ .name = "mutable", .stack_effect = "-- marker", .func = nativeMutableMarker, .parse_time = true },
 };
 
 /// marker ( -- marker ) - Create an anonymous marker value
@@ -26,4 +31,20 @@ pub fn nativeMarker(ctx: *Context) anyerror!void {
 /// This marker indicates that a word should be executed at parse time.
 pub fn nativeParseTimeMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&parse_time_marker) });
+}
+
+/// mutable ( -- marker ) - Push the well-known mutable marker
+/// This marker indicates that a struct should generate setters in addition to getters.
+pub fn nativeMutableMarker(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .marker = @constCast(&mutable_marker) });
+}
+
+/// Check if a marker is the well-known mutable marker
+pub fn isMutableMarker(mk: *const Marker) bool {
+    return mk == &mutable_marker;
+}
+
+/// Check if a marker is the well-known parse-time marker
+pub fn isParseTimeMarker(mk: *const Marker) bool {
+    return mk == &parse_time_marker;
 }

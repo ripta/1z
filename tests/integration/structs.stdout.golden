@@ -19,3 +19,26 @@ PASS: different fields not equal
 Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } ]
 PASS: struct to-string
 Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } ]
+=== mutable struct{ } syntax ===
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } ]
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } ]
+PASS: make-mpoint creates mpoint instance
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } mpoint{ mx: 10 my: 20 } ]
+PASS: mutable mx>> gets mx field
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } mpoint{ mx: 10 my: 20 } ]
+PASS: mutable my>> gets my field
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } mpoint{ mx: 10 my: 20 } ]
+PASS: >>mx sets mx field
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } mpoint{ mx: 10 my: 20 } ]
+PASS: >>my sets my field
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } mpoint{ mx: 10 my: 20 } ]
+PASS: >>mx returns instance
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } mpoint{ mx: 10 my: 20 } ]
+PASS: chained >>mx
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } mpoint{ mx: 10 my: 20 } mpoint{ mx: 1 my: 2 } ]
+PASS: chained >>my
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } mpoint{ mx: 10 my: 20 } mpoint{ mx: 1 my: 2 } mpoint{ mx: 1 my: 2 } ]
+PASS: mutation affects original
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } mpoint{ mx: 10 my: 20 } mpoint{ mx: 1 my: 2 } mpoint{ mx: 1 my: 2 } ]
+PASS: immutable point still works
+Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } mpoint{ mx: 10 my: 20 } mpoint{ mx: 1 my: 2 } mpoint{ mx: 1 my: 2 } ]
