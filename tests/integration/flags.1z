@@ -1,0 +1,15 @@
+\ Test flag parsing library
+
+use "testing" ;
+use "flags" ;
+
+"flag parsing" test-section
+
+help: flag{ description: "Show help" short: "h" } ;
+name: required positional flag{ type: string: description: "Your name" } ;
+
+{ "Alice" } "Test program" parse-flags
+dup "name" @get "Alice" "positional arg parsed" assert=
+"help" @get f "help defaults to false" assert=
+
+"All flags tests complete!" print-line

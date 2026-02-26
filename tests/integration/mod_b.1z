@@ -1,0 +1,3 @@
+\ Module B - uses A, defines from-b
+use "mod_a.1z" ;
+from-b: [ "from-b" ] ;

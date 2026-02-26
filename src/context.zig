@@ -65,6 +65,28 @@ pub const Context = struct {
     benchmark: ?*BenchmarkStats = null,
     /// Current source file name for error reporting (defaults to "<repl>")
     current_source: []const u8 = "<repl>",
+    /// Tail call target for TCO — set by executeInstructions, consumed by executeQuotation
+    tail_call_instructions: ?[]const Instruction = null,
+    /// Module whose deps frame should be pushed for the tail call target.
+    /// Set alongside tail_call_instructions when the tail-called word has a source_module.
+    tail_call_module: ?*const value_mod.Module = null,
+    /// Directory of the currently executing source file for relative path resolution
+    current_source_dir: ?[]const u8 = null,
+    /// User-configured load paths for search-mode module resolution
+    load_paths: std.ArrayListUnmanaged([]const u8) = .{},
+    /// Standard library path, which is resolved last
+    stdlib_path: ?[]const u8 = null,
+    /// Program arguments passed after the file path on the command line
+    program_args: []const []const u8 = &.{},
+    /// Target frame index for `import` to write definitions into.
+    /// Set by `load` to its local frame index so that `import` (which may run
+    /// inside combinator frames like `if`) writes to the load frame, not to
+    /// an ephemeral combinator frame. When null, `import` writes to the
+    /// global dictionary.
+    import_frame_index: ?usize = null,
+    /// Cache of loaded modules keyed by canonical file path.
+    /// Prevents redundant loading when multiple files `use` the same module.
+    module_cache: std.StringHashMapUnmanaged(*value_mod.Module) = .{},
 
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
@@ -145,6 +167,8 @@ pub const Context = struct {
         self.local_frames.deinit(self.allocator);
         self.call_stack.deinit(self.allocator);
         self.error_details.deinit(self.allocator);
+        self.load_paths.deinit(self.allocator);
+        self.module_cache.deinit(self.arena.allocator());
         self.arena.deinit();
         self.dictionary.deinit();
         self.stack.deinit();
@@ -218,11 +242,57 @@ pub const Context = struct {
         }
     }
 
-    /// Define a word in the current local frame if one exists, otherwise in global dictionary.
+    /// Push a local frame populated with a module's deps and words.
+    /// This makes the module's dependencies available for late-binding
+    /// resolution when executing the module's own words.
+    ///
+    /// The module's own words take precedence over its dependencies.
+    pub fn pushModuleDepsFrame(self: *Context, module: *const value_mod.Module) !void {
+        try self.pushLocalFrame();
+        const frame_idx = self.local_frames.items.len - 1;
+        var frame = &self.local_frames.items[frame_idx];
+
+        var dep_iter = module.deps.iterator();
+        while (dep_iter.next()) |entry| {
+            try frame.put(self.allocator, entry.key_ptr.*, .{
+                .name = entry.key_ptr.*,
+                .stack_effect = entry.value_ptr.*.stack_effect,
+                .markers = entry.value_ptr.*.markers,
+                .source_module = module,
+                .action = .{ .compound = entry.value_ptr.*.instructions },
+            });
+        }
+
+        var word_iter = module.words.iterator();
+        while (word_iter.next()) |entry| {
+            try frame.put(self.allocator, entry.key_ptr.*, .{
+                .name = entry.key_ptr.*,
+                .stack_effect = entry.value_ptr.*.stack_effect,
+                .markers = entry.value_ptr.*.markers,
+                .source_module = module,
+                .action = .{ .compound = entry.value_ptr.*.instructions },
+            });
+        }
+    }
+
+    /// Define a word in the current local frame if one exists, otherwise
+    /// in global dictionary.
     pub fn defineWord(self: *Context, name: []const u8, definition: WordDefinition) !void {
         if (self.local_frames.items.len > 0) {
             const top_index = self.local_frames.items.len - 1;
             try self.local_frames.items[top_index].put(self.allocator, name, definition);
+        } else {
+            try self.dictionary.put(name, definition);
+        }
+    }
+
+    /// Define a word via `import`. Writes to the load frame (tracked by
+    /// import_frame_index) when inside a `load` call, or to the global
+    /// dictionary otherwise. This prevents imported words from leaking
+    /// into the global namespace when loading modules.
+    pub fn defineImportedWord(self: *Context, name: []const u8, definition: WordDefinition) !void {
+        if (self.import_frame_index) |idx| {
+            try self.local_frames.items[idx].put(self.allocator, name, definition);
         } else {
             try self.dictionary.put(name, definition);
         }
@@ -280,6 +350,9 @@ pub const Context = struct {
         if (module.words.get(word_name)) |mod_word| {
             self.pushCallFrame(name, line);
             defer self.popCallFrame();
+
+            try self.pushModuleDepsFrame(module);
+            defer self.popLocalFrame();
 
             try self.executeInstructions(mod_word.instructions);
         } else {
@@ -637,14 +710,83 @@ pub const Context = struct {
     }
 
     /// Execute a quotation's instructions with optional effect validation.
+    /// Contains the TCO loop: when executeInstructions signals a tail call,
+    /// this function pops the dangling call frame and loops with new instructions.
     pub fn executeQuotation(self: *Context, quotation: Quotation) anyerror!void {
-        // Record depth before execution for validation
-        const depth_before = self.stack.depth();
+        var current_instructions = quotation.instructions;
+        var current_module: ?*const value_mod.Module = null;
 
-        // Execute instructions
+        while (true) {
+            // Record depth before execution for validation
+            const depth_before = self.stack.depth();
+            self.tail_call_instructions = null;
+            self.tail_call_module = null;
+
+            // Push frame if this is a tail-called module word
+            if (current_module) |mod| {
+                try self.pushModuleDepsFrame(mod);
+            }
+
+            const exec_result = self.executeInstructions(current_instructions);
+            if (current_module != null) {
+                self.popLocalFrame();
+            }
+
+            try exec_result;
+
+            // Tail call case: pop the call frame that was pushed by the tail-calling
+            // `executeInstructions`, then loop around
+            if (self.tail_call_instructions) |tci| {
+                self.popCallFrame();
+                current_instructions = tci;
+                self.tail_call_instructions = null;
+
+                current_module = self.tail_call_module;
+                self.tail_call_module = null;
+                continue;
+            }
+
+            // Non-tail call: validate quotation's stack effect
+            if (quotation.effect) |effect| {
+                const depth_after = self.stack.depth();
+                const expected_delta: i64 = @as(i64, @intCast(effect.outputs.len)) - @as(i64, @intCast(effect.inputs.len));
+                const actual_delta: i64 = @as(i64, @intCast(depth_after)) - @as(i64, @intCast(depth_before));
+
+                if (expected_delta != actual_delta) {
+                    self.captureQuotationEffectMismatch(effect.*, expected_delta, actual_delta);
+                    return primitives.InterpreterError.StackEffectMismatch;
+                }
+            }
+            break;
+        }
+    }
+
+    /// Execute a quotation with a new local frame for *lexical* scoping.
+    pub fn executeQuotationWithFrame(self: *Context, quotation: Quotation) anyerror!void {
+        try self.pushLocalFrame();
+        defer self.popLocalFrame();
+
+        // TODO(ripta): I think executeQuotation is *always* necessary to get TCO loop?
+        try self.executeQuotation(quotation);
+    }
+
+    /// Execute a quotation with a local frame but WITHOUT the TCO loop.
+    ///
+    /// Tail call "flag" propagates upward to the caller's executeQuotation loop.
+    /// Used only by `if` so that tail calls in conditional branches propagate
+    /// through to the enclosing word's TCO loop (e.g., times -> if -> times).
+    pub fn executeQuotationInline(self: *Context, quotation: Quotation) anyerror!void {
+        try self.pushLocalFrame();
+        defer self.popLocalFrame();
+
+        const depth_before = self.stack.depth();
         try self.executeInstructions(quotation.instructions);
 
-        // Validate quotation's stack effect if declared
+        // If tail call is pending, skip the stack-effect validation and propagate upward
+        if (self.tail_call_instructions != null) {
+            return;
+        }
+
         if (quotation.effect) |effect| {
             const depth_after = self.stack.depth();
             const expected_delta: i64 = @as(i64, @intCast(effect.outputs.len)) - @as(i64, @intCast(effect.inputs.len));
@@ -657,18 +799,14 @@ pub const Context = struct {
         }
     }
 
-    /// Execute a quotation with a new local frame for lexical scoping.
-    /// This is what `call` uses - top-level definitions go to global, quotation-local stay local.
-    pub fn executeQuotationWithFrame(self: *Context, quotation: Quotation) anyerror!void {
-        try self.pushLocalFrame();
-        defer self.popLocalFrame();
-
-        try self.executeQuotation(quotation);
-    }
-
-    /// Execute raw instructions (internal helper, no effect validation).
+    /// Execute raw instructions without stack-effect validation.
+    ///
+    /// Supports tail call optimization: i.e., when the last instruction is a
+    /// compound `call_word`, sets `tail_call_instructions` instead of recursing.
     fn executeInstructions(self: *Context, instructions: []const Instruction) anyerror!void {
-        for (instructions) |instr| {
+        for (instructions, 0..) |instr, idx| {
+            const is_last = (idx == instructions.len - 1);
+
             switch (instr.op) {
                 .push_literal => |val| {
                     try self.stack.push(val);
@@ -679,9 +817,10 @@ pub const Context = struct {
                     }
                 },
                 .call_word => |name| {
-                    // Benchmark: count call_word
+                    // Benchmark: count call_word and begin allocation profile
                     if (self.benchmark) |b| {
                         b.recordCallWord();
+                        b.beginWordProfile();
                     }
 
                     if (self.lookupWord(name)) |word| {
@@ -691,43 +830,129 @@ pub const Context = struct {
                         // Validate quotation parameters against declared effects
                         if (word.stack_effect) |effect| {
                             self.validateParameterEffects(&effect) catch |err| {
+                                if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                                 self.captureCallStackOnError(err);
                                 self.popCallFrame();
                                 return err;
                             };
                         }
 
-                        const result = switch (word.action) {
-                            .native => |func| func(self),
-                            .compound => |instrs| self.executeInstructions(instrs),
-                        };
-
-                        if (result) |_| {
-                            // Validate stack effect if declared
-                            if (word.stack_effect) |effect| {
-                                const depth_after = self.stack.depth();
-
-                                // Validate: word must produce at least declared outputs
-                                // We allow consuming more than declared (for variable consumption)
-                                // and producing more than declared (for combinators calling quotations)
-                                // But the word must leave at least outputs_len items
-                                if (depth_after < effect.outputs.len) {
-                                    self.captureStackEffectMismatch(name, effect, depth_after);
-                                    self.popCallFrame();
-                                    return primitives.InterpreterError.StackEffectMismatch;
+                        if (is_last) {
+                            switch (word.action) {
+                                .compound => |instrs| {
+                                    // Tail call: flag instead of recurse
+                                    // leaving the call frame on the stack; executeQuotation will pop it
+                                    if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+                                    self.tail_call_instructions = instrs;
+                                    self.tail_call_module = word.source_module;
+                                    return;
+                                },
+                                .native => |func| {
+                                    // Native in tail position: execute normally, then
+                                    // let any tail_call_instructions set inside propagate
+                                    self.tail_call_instructions = null;
+                                    const result = func(self);
+                                    if (result) |_| {
+                                        if (word.stack_effect) |effect| {
+                                            const depth_after = self.stack.depth();
+                                            if (depth_after < effect.outputs.len) {
+                                                self.captureStackEffectMismatch(name, effect, depth_after);
+                                                if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+                                                self.popCallFrame();
+                                                return primitives.InterpreterError.StackEffectMismatch;
+                                            }
+                                        }
+                                        if (self.benchmark) |b| {
+                                            b.endWordProfile(self.allocator, name);
+                                            b.updatePeakStackDepth(self.stack.depth());
+                                        }
+                                        self.popCallFrame();
+                                    } else |err| {
+                                        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+                                        self.captureCallStackOnError(err);
+                                        self.popCallFrame();
+                                        return err;
+                                    }
+                                },
+                            }
+                        } else {
+                            // Non-last instruction: execute normally.
+                            // Compound words go through executeQuotation to get
+                            // the TCO loop, so internal tail calls are consumed.
+                            const result = blk: {
+                                if (word.source_module) |mod| {
+                                    switch (word.action) {
+                                        .compound => |instrs| {
+                                            self.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
+                                            defer self.popLocalFrame();
+                                            break :blk self.executeQuotation(.{ .instructions = instrs });
+                                        },
+                                        .native => |func| break :blk func(self),
+                                    }
+                                } else {
+                                    break :blk switch (word.action) {
+                                        .native => |func| func(self),
+                                        .compound => |instrs| self.executeQuotation(.{ .instructions = instrs }),
+                                    };
                                 }
-                            }
+                            };
 
-                            self.popCallFrame();
-                            // Benchmark: update stack depth after word execution
-                            if (self.benchmark) |b| {
-                                b.updatePeakStackDepth(self.stack.depth());
+                            if (result) |_| {
+                                // NOTE(ripta): Special-handling - when a native word (e.g., `if`)
+                                //              propagated a tail call flag via executeQuotationInline,
+                                //              but we're not in tail position, consume it: pop the dangling
+                                //              call frame and execute the deferred instructions normally.
+                                //              This prevents invalid call stack frames from accumulating,
+                                //              eventually growing without bound.
+                                if (self.tail_call_instructions) |tci| {
+                                    self.popCallFrame();
+                                    self.tail_call_instructions = null;
+
+                                    const tci_module = self.tail_call_module;
+                                    self.tail_call_module = null;
+
+                                    if (tci_module) |mod| {
+                                        self.pushModuleDepsFrame(mod) catch |e| {
+                                            if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+                                            self.popCallFrame();
+                                            self.captureCallStackOnError(e);
+                                            return e;
+                                        };
+                                    }
+
+                                    self.executeQuotation(.{ .instructions = tci }) catch |err2| {
+                                        if (tci_module != null) self.popLocalFrame();
+                                        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+                                        self.popCallFrame(); // pop our own frame
+                                        self.captureCallStackOnError(err2);
+                                        return err2;
+                                    };
+
+                                    if (tci_module != null) self.popLocalFrame();
+                                }
+
+                                // Validate stack effect if declared
+                                if (word.stack_effect) |effect| {
+                                    const depth_after = self.stack.depth();
+                                    if (depth_after < effect.outputs.len) {
+                                        self.captureStackEffectMismatch(name, effect, depth_after);
+                                        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+                                        self.popCallFrame();
+                                        return primitives.InterpreterError.StackEffectMismatch;
+                                    }
+                                }
+
+                                if (self.benchmark) |b| {
+                                    b.endWordProfile(self.allocator, name);
+                                    b.updatePeakStackDepth(self.stack.depth());
+                                }
+                                self.popCallFrame();
+                            } else |err| {
+                                if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+                                self.captureCallStackOnError(err);
+                                self.popCallFrame();
+                                return err;
                             }
-                        } else |err| {
-                            // Error - capture call stack (before popping), then pop
-                            self.captureCallStackOnError(err);
-                            self.popCallFrame();
-                            return err;
                         }
                     } else if (isQualifiedName(name)) {
                         // Try qualified name resolution, e.g., math.double
@@ -839,18 +1064,21 @@ test "call stack captured on error, calling an unknown word" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    // Create a word that calls an unknown word
+    // Create a word that calls an unknown word, with a non-tail-call
+    // structure so TCO doesn't eliminate intermediate frames.
     const alloc = ctx.quotationAllocator();
-    const inner_instrs = try alloc.alloc(Instruction, 1);
+    const inner_instrs = try alloc.alloc(Instruction, 2);
     inner_instrs[0] = .{ .op = .{ .call_word = "nonexistent" }, .line = 10 };
+    inner_instrs[1] = .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 10 };
 
     try ctx.dictionary.put("inner", .{
         .name = "inner",
         .action = .{ .compound = inner_instrs },
     });
 
-    const outer_instrs = try alloc.alloc(Instruction, 1);
+    const outer_instrs = try alloc.alloc(Instruction, 2);
     outer_instrs[0] = .{ .op = .{ .call_word = "inner" }, .line = 20 };
+    outer_instrs[1] = .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 20 };
 
     try ctx.dictionary.put("outer", .{
         .name = "outer",
@@ -858,8 +1086,10 @@ test "call stack captured on error, calling an unknown word" {
     });
 
     // Execute outer -> inner -> nonexistent (error)
-    const top_instrs = try alloc.alloc(Instruction, 1);
+    // Add a trailing push so call_word("outer") is not in tail position
+    const top_instrs = try alloc.alloc(Instruction, 2);
     top_instrs[0] = .{ .op = .{ .call_word = "outer" }, .line = 30 };
+    top_instrs[1] = .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 30 };
 
     const result = ctx.executeQuotation(.{ .instructions = top_instrs });
     try std.testing.expectError(ExecutionError.UnknownWord, result);
@@ -958,9 +1188,11 @@ test "stack effect validation fails when word produces fewer outputs than declar
         .action = .{ .compound = empty_instrs },
     });
 
-    // Call bad-word - should fail because it claims 2 outputs but produces 0
-    const call_instrs = try alloc.alloc(Instruction, 1);
+    // Call bad-word then push a value so bad-word is NOT in tail position
+    // (tail position skips post-validation as a known TCO limitation)
+    const call_instrs = try alloc.alloc(Instruction, 2);
     call_instrs[0] = .{ .op = .{ .call_word = "bad-word" }, .line = 1 };
+    call_instrs[1] = .{ .op = .{ .push_literal = .{ .integer = 0 } }, .line = 2 };
 
     const result = ctx.executeQuotation(.{ .instructions = call_instrs });
     try std.testing.expectError(primitives.InterpreterError.StackEffectMismatch, result);

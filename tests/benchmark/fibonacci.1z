@@ -1,6 +1,8 @@
 \ Fibonacci benchmark
 \ Tests recursive function calls and stack operations
 
+use "memo" ;
+
 \ Naive recursive fibonacci (exponential time complexity)
 \ This is intentionally slow to stress test the interpreter
 fib: ( n -- fib(n) ) [
@@ -26,20 +28,24 @@ fib-iter: ( n -- fib(n) ) [
   if
 ] ;
 
-\ Print fibonacci sequence using naive recursive version
-"Recursive fibonacci (fib):" print
-0 fib . 1 fib . 2 fib . 3 fib . 4 fib . 5 fib .
-6 fib . 7 fib . 8 fib . 9 fib . 10 fib .
+\ Memoized recursive fibonacci (linear time via caching)
+fib-memo: ( n -- fib(n) ) [
+  dup to-string memo?
+  [ swap drop ]
+  [
+    dup 2 < [ ] [
+      dup [ dup 1 - fib-memo swap 2 - fib-memo + ] dip
+      over over to-string swap memo!
+      drop
+    ] if
+  ] if
+] ;
 
-\ Print larger values
-"fib(15) =" print 15 fib .
-"fib(20) =" print 20 fib .
-
-\ Print fibonacci sequence using iterative version
-"Iterative fibonacci (fib-iter):" print
-0 fib-iter . 1 fib-iter . 2 fib-iter . 3 fib-iter . 4 fib-iter . 5 fib-iter .
-6 fib-iter . 7 fib-iter . 8 fib-iter . 9 fib-iter . 10 fib-iter .
-
-\ Larger values with iterative (much faster)
-"fib-iter(30) =" print 30 fib-iter .
-"fib-iter(40) =" print 40 fib-iter .
+make-benchmark-report
+  "fib(15)"      [ 15 fib drop ] benchmark-run
+  "fib(20)"      [ 20 fib drop ] benchmark-run
+  "fib-iter(30)" [ 30 fib-iter drop ] benchmark-run
+  "fib-iter(40)" [ 40 fib-iter drop ] benchmark-run
+  "fib-memo(30)" [ [ 30 fib-memo drop ] with-memo ] benchmark-run
+  "fib-memo(40)" [ [ 40 fib-memo drop ] with-memo ] benchmark-run
+print-benchmark-report

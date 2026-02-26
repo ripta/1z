@@ -1,7 +1,7 @@
 \ Integration tests for sequence predicates
 
-use "lib/testing.1z" ;
-use "lib/sequences.1z" ;
+use "testing" ;
+use "sequences" ;
 
 "#starts-with?" test-section
 "hello" "hel" #starts-with? t "#starts-with? true" assert=
@@ -14,5 +14,11 @@ use "lib/sequences.1z" ;
 "hello" "bye" #ends-with? f "#ends-with? false" assert=
 { 1 2 3 } { 2 3 } #ends-with? t "#ends-with? array" assert=
 "" "" #ends-with? t "#ends-with? empty" assert=
+
+"squeeze" test-section
+{ "a" "" "b" "" "c" } #squeeze { "a" "b" "c" } "remove empties" assert=
+{ "" } #squeeze { } "single empty" assert=
+{ "a" "b" } #squeeze { "a" "b" } "no empties" assert=
+{ } #squeeze { } "empty array" assert=
 
 "All sequence tests complete!" print-line

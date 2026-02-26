@@ -1,10 +1,10 @@
 === Module as value ===
 Stack: [ ]
-Stack: [ <module:tests/integration/module_lib.1z (3 words)> ]
-"<module:tests/integration/module_lib.1z (3 words)>"
-Stack: [ <module:tests/integration/module_lib.1z (3 words)> ]
+Stack: [ <module:module_lib.1z (3 words)> ]
+"<module:module_lib.1z (3 words)>"
+Stack: [ <module:module_lib.1z (3 words)> ]
 === Import brings words into scope ===
-Stack: [ <module:tests/integration/module_lib.1z (3 words)> ]
+Stack: [ <module:module_lib.1z (3 words)> ]
 Stack: [ ]
 10
 Stack: [ ]
@@ -23,7 +23,7 @@ Stack: [ 5 ]
 Stack: [ ]
 === Module stored in variable ===
 Stack: [ ]
-Stack: [ <module:tests/integration/module_lib.1z (3 words)> ]
+Stack: [ <module:module_lib.1z (3 words)> ]
 Stack: [ ]
 Stack: [ ]
 14
@@ -100,10 +100,10 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 PASS: empty array error
-Stack: [ <module:tests/integration/module_lib.1z (3 words)> ]
+Stack: [ <module:module_lib.1z (3 words)> ]
 PASS: missing word error
-Stack: [ <module:tests/integration/module_lib.1z (3 words)> ]
+Stack: [ <module:module_lib.1z (3 words)> ]
 PASS: non-symbol error
-Stack: [ <module:tests/integration/module_lib.1z (3 words)> ]
+Stack: [ <module:module_lib.1z (3 words)> ]
 PASS: integer instead of module error
-Stack: [ <module:tests/integration/module_lib.1z (3 words)> ]
+Stack: [ <module:module_lib.1z (3 words)> ]

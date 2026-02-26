@@ -1,7 +1,7 @@
 \ Integration tests for Unicode string operations
 \ Tests that string operations work on codepoints, not bytes
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "#len with Unicode" test-section
 "hello" #len 5 "ASCII #len" assert=

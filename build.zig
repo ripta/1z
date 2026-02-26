@@ -21,7 +21,18 @@ pub fn build(b: *std.Build) void {
         .name = "1z",
         .root_module = root_module,
     });
-    b.installArtifact(exe);
+    const install_exe = b.addInstallArtifact(exe, .{});
+    b.getInstallStep().dependOn(&install_exe.step);
+
+    // zig-out/lib -> lib/
+    //
+    // TODO(ripta): A bit hacky, but otherwise the stdlib path has to be
+    //              specified manually on every invocation.
+    const symlink_step = b.addSystemCommand(&.{ "ln", "-sfn" });
+    symlink_step.addDirectoryArg(b.path("lib"));
+    symlink_step.addArg(b.fmt("{s}/lib", .{b.install_path}));
+    symlink_step.step.dependOn(&install_exe.step);
+    b.getInstallStep().dependOn(&symlink_step.step);
 
     // zig-out/docs
     const docs = b.addInstallDirectory(.{
@@ -86,10 +97,23 @@ pub fn build(b: *std.Build) void {
         // Integration test: compare against golden file if it exists
         const test_run = b.addRunArtifact(exe);
         test_run.addArg("--show-stack");
+        test_run.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
         test_run.addFileArg(b.path(file_path));
 
         // Library file dependencies
-        test_run.addFileInput(b.path("lib/testing.1z"));
+        {
+            var lib_dir = b.build_root.handle.openDir("lib", .{ .iterate = true }) catch |err| {
+                std.debug.print("Warning: Could not open lib/: {}\n", .{err});
+                return;
+            };
+            defer lib_dir.close();
+            var lib_iter = lib_dir.iterate();
+            while (lib_iter.next() catch null) |lib_entry| {
+                if (lib_entry.kind != .file) continue;
+                if (!std.mem.endsWith(u8, lib_entry.name, ".1z")) continue;
+                test_run.addFileInput(b.path(b.fmt("lib/{s}", .{lib_entry.name})));
+            }
+        }
         test_run.addFileInput(b.path("src/prelude.1z"));
 
         // Check for stderr golden file (error tests)
@@ -127,10 +151,23 @@ pub fn build(b: *std.Build) void {
         // Update golden: capture stdout and write to .stdout.golden file
         const update_run = b.addRunArtifact(exe);
         update_run.addArg("--show-stack");
+        update_run.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
         update_run.addFileArg(b.path(file_path));
 
-        // Track library files as dependencies
-        update_run.addFileInput(b.path("lib/testing.1z"));
+        // Library file dependencies
+        {
+            var lib_dir2 = b.build_root.handle.openDir("lib", .{ .iterate = true }) catch |err| {
+                std.debug.print("Warning: Could not open lib/: {}\n", .{err});
+                return;
+            };
+            defer lib_dir2.close();
+            var lib_iter2 = lib_dir2.iterate();
+            while (lib_iter2.next() catch null) |lib_entry| {
+                if (lib_entry.kind != .file) continue;
+                if (!std.mem.endsWith(u8, lib_entry.name, ".1z")) continue;
+                update_run.addFileInput(b.path(b.fmt("lib/{s}", .{lib_entry.name})));
+            }
+        }
         update_run.addFileInput(b.path("src/prelude.1z"));
         update_files.addCopyFileToSource(update_run.captureStdOut(), stdout_golden_path);
 

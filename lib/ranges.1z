@@ -11,7 +11,7 @@ range-loop: [
   if
 ] ;
 
-\ Generate range [start, end)
+\ Generate exclusive range [start, end)
 range: ( start end -- array ) [
   2dup <
   [
@@ -22,5 +22,8 @@ range: ( start end -- array ) [
   if
 ] ;
 
-\ Shorthand: generate [0, n)
+\ Generate exclusive range [0, n)
 iota: ( n -- array ) [ 0 swap range ] ;
+
+\ Generate inclusive range [start, end]
+range-inclusive: ( start end -- array ) [ ++ range ] ;

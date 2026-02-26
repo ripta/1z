@@ -1,0 +1,8 @@
+\ Test command-line-args primitive
+
+use "testing" ;
+
+"command-line-args" test-section
+command-line-args { } "returns empty array when no program args" assert=
+
+"All command-line-args tests complete!" print-line

@@ -1,6 +1,6 @@
 \ Test quotation-level stack effect validation
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "Correct stack effects" test-section
 1 [ ( n -- n ) dup drop ] call 1 "effect (n -- n)" assert=

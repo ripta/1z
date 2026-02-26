@@ -11,10 +11,22 @@ pub const NativeFn = *const fn (ctx: *Context) anyerror!void;
 
 /// Word definition: either a native function or compound quotation.
 pub const WordDefinition = struct {
+    /// The word itself.
     name: []const u8,
+    /// Whether this word is a parse-time word.
     parse_time: bool = false,
+    /// Whether this word was imported from another module.
+    imported: bool = false,
+    /// Stack effect annotation for this word, if any.
     stack_effect: ?StackEffect = null,
+    /// Markers associated with this word.
     markers: []const *Marker = &.{},
+    /// Module this word was imported from. When set, executing this word
+    /// pushes the module's deps as a local frame so that late-bound
+    /// references to the module's dependencies resolve correctly.
+    source_module: ?*const value_mod.Module = null,
+    /// The action performed by this word: either a native function or a
+    /// compound quotation. Unfortunate naming.
     action: union(enum) {
         native: NativeFn,
         compound: []const Instruction,

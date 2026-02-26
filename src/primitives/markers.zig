@@ -20,6 +20,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTimeMarker, .parse_time = true },
     .{ .name = "mutable", .stack_effect = "-- marker", .func = nativeMutableMarker, .parse_time = true },
     .{ .name = "word-markers", .stack_effect = "name -- markers", .func = nativeWordMarkers },
+    .{ .name = "native?", .stack_effect = "name -- ?", .func = nativeIsNative },
 };
 
 /// marker ( -- marker ) - Create an anonymous marker value
@@ -96,4 +97,48 @@ fn nativeWordMarkers(ctx: *Context) anyerror!void {
     }
 
     try ctx.stack.push(.{ .array = result });
+}
+
+/// native? ( name -- ? ) - Check if a word is implemented as a native primitive
+///
+/// Returns true if the word exists and is a native implementation, false if
+/// it exists but is a compound (user-defined) word.
+/// Raises WordNotFound if the word doesn't exist.
+fn nativeIsNative(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const name_val = try ctx.stack.pop();
+    const name = switch (name_val) {
+        .symbol, .string => |s| s,
+        else => {
+            const type_name = helpers.valueTypeName(name_val);
+            const msg = std.fmt.allocPrint(alloc, "expected symbol or string, got {s}", .{type_name}) catch "expected symbol or string";
+            ctx.error_details.append(ctx.allocator, .{
+                .error_type = "TypeError",
+                .message = msg,
+                .source = ctx.current_source,
+                .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
+                .word_name = "native?",
+            }) catch {};
+            return error.TypeError;
+        },
+    };
+
+    const word_def = ctx.lookupWord(name) orelse {
+        const msg = std.fmt.allocPrint(alloc, "word '{s}'", .{name}) catch "word '<unknown>'";
+        ctx.error_details.append(ctx.allocator, .{
+            .error_type = "WordNotFound",
+            .message = msg,
+            .source = ctx.current_source,
+            .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
+            .word_name = "native?",
+        }) catch {};
+        return error.WordNotFound;
+    };
+
+    const is_native = switch (word_def.action) {
+        .native => true,
+        .compound => false,
+    };
+    try ctx.stack.push(.{ .boolean = is_native });
 }

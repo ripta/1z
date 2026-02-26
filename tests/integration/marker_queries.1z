@@ -1,6 +1,6 @@
 \ Test word-markers primitive for querying markers on word definitions
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "word-markers on unmarked words" test-section
 
@@ -35,17 +35,26 @@ mk3 "multi-marker-word" word-markers [ over = ] #filter swap drop #len 1 = t "mk
 "dup" word-markers #len 0 "native word has no markers" assert=
 "+" word-markers #len 0 "native + has no markers" assert=
 
+"native? predicate" test-section
+
+"dup" native? t "dup is native" assert=
+"+" native? t "+ is native" assert=
+"word-markers" native? t "word-markers is native" assert=
+"plain" native? f "user-defined word is not native" assert=
+"single-marker-word" native? f "marked user-defined word is not native" assert=
+[ "nonexistent" native? ] "WordNotFound" "native? on missing word" assert-error-type
+
 "word-markers error handling" test-section
 
 \ Non-existent word
-[ "nonexistent-word" word-markers ] [ error-type: @get "WordNotFound" "non-existent word error" assert= ] recover
+[ "nonexistent-word" word-markers ] "WordNotFound" "non-existent word error" assert-error-type
 
 \ Wrong type
-[ 42 word-markers ] [ error-type: @get "TypeError" "integer as word name error" assert= ] recover
+[ 42 word-markers ] "TypeError" "integer as word name error" assert-error-type
 
 "Markers preserved through module load" test-section
 
-testmod: "tests/integration/marker_lib.1z" load ;
+testmod: "marker_lib.1z" load ;
 
 \ Import to bring words into scope
 testmod import

@@ -11,6 +11,8 @@ const benchmark = @import("benchmark.zig");
 const BenchmarkStats = benchmark.BenchmarkStats;
 const BenchmarkConfig = benchmark.BenchmarkConfig;
 const CountingAllocator = benchmark.CountingAllocator;
+const memory_limit = @import("memory_limit.zig");
+const MemoryLimitAllocator = memory_limit.MemoryLimitAllocator;
 
 const build_options = @import("build_options");
 pub const version = build_options.version;
@@ -70,44 +72,126 @@ pub fn main() u8 {
     var show_stack = false;
     var file_path: ?[]const u8 = null;
     var bench_config = BenchmarkConfig{};
+    var max_memory_bytes: usize = 256 * 1024 * 1024;
+    var cli_set_max_memory = false;
+
+    var program_args: std.ArrayListUnmanaged([]const u8) = .{};
+    defer program_args.deinit(gpa_allocator);
+
+    var cli_load_paths: std.ArrayListUnmanaged([]const u8) = .{};
+    defer cli_load_paths.deinit(gpa_allocator);
+
+    var cli_stdlib_path: ?[]const u8 = null;
+
+    // TODO(ripta): bit hacky arg parsing, improve later?
     for (args[1..]) |arg| {
-        if (std.mem.eql(u8, arg, "--show-stack")) {
+        if (file_path != null) {
+            program_args.append(gpa_allocator, arg) catch return 1;
+        } else if (std.mem.eql(u8, arg, "--show-stack")) {
             show_stack = true;
         } else if (std.mem.eql(u8, arg, "--benchmark") or std.mem.eql(u8, arg, "-b")) {
             bench_config.enabled = true;
-        } else if (std.mem.eql(u8, arg, "--benchmark-json")) {
+        } else if (std.mem.eql(u8, arg, "--benchmark=verbose")) {
             bench_config.enabled = true;
-            bench_config.json_output = true;
+            bench_config.output = .human;
+        } else if (std.mem.eql(u8, arg, "--benchmark=json")) {
+            bench_config.enabled = true;
+            bench_config.output = .json;
+        } else if (std.mem.startsWith(u8, arg, "--max-memory=")) {
+            const value = arg["--max-memory=".len..];
+            if (memory_limit.parseSize(value)) |bytes| {
+                max_memory_bytes = bytes;
+                cli_set_max_memory = true;
+            } else {
+                const stderr_file: File = .stderr();
+                var stderr_buf: [4096]u8 = undefined;
+                var stderr = stderr_file.writer(&stderr_buf);
+                stderr.interface.print("Error: invalid value for --max-memory: '{s}'\n", .{value}) catch {};
+                stderr.interface.flush() catch {};
+                return 1;
+            }
+        } else if (std.mem.startsWith(u8, arg, "--load-path=")) {
+            const value = arg["--load-path=".len..];
+            cli_load_paths.append(gpa_allocator, value) catch return 1;
+        } else if (std.mem.startsWith(u8, arg, "--stdlib-path=")) {
+            cli_stdlib_path = arg["--stdlib-path=".len..];
         } else {
             file_path = arg;
         }
     }
 
+    // Check environment variable if CLI flag was not set
+    if (!cli_set_max_memory) {
+        if (std.posix.getenv("ONEZ_MAX_MEMORY")) |env_val| {
+            if (memory_limit.parseSize(env_val)) |bytes| {
+                max_memory_bytes = bytes;
+            }
+            // Silently ignore invalid env var values
+        }
+    }
+
+    // Create memory limit allocator (wraps GPA, enforces cap)
+    var mem_limit = MemoryLimitAllocator.init(gpa_allocator, max_memory_bytes);
+    const mem_limit_allocator = mem_limit.allocator();
+
     // Create benchmark stats and counting allocator if benchmarking enabled
     var bench_stats = BenchmarkStats{};
-    var counting_allocator = CountingAllocator.init(gpa_allocator, &bench_stats);
+    var counting_allocator = CountingAllocator.init(mem_limit_allocator, &bench_stats);
 
-    // Use counting allocator when benchmarking, GPA directly otherwise
-    const allocator = if (bench_config.enabled) counting_allocator.allocator() else gpa_allocator;
+    // Use counting allocator when benchmarking, memory limit allocator otherwise
+    const allocator = if (bench_config.enabled) counting_allocator.allocator() else mem_limit_allocator;
 
     if (bench_config.enabled) {
         bench_stats.start();
     }
 
-    // Initialize context (primitives only, no prelude yet)
+    // Initialize context with the program arguments
     var ctx = Context.init(allocator);
+    ctx.program_args = program_args.items;
     defer ctx.deinit();
 
-    // Attach benchmark to context if enabled
+    // Configure load paths: CLI flags, then env var
+    for (cli_load_paths.items) |lp| {
+        const duped = ctx.quotationAllocator().dupe(u8, lp) catch return 1;
+        ctx.load_paths.append(ctx.allocator, duped) catch return 1;
+    }
+    if (std.posix.getenv("ONEZ_LOAD_PATH")) |env_val| {
+        var it = std.mem.splitScalar(u8, env_val, ':');
+        while (it.next()) |segment| {
+            if (segment.len > 0) {
+                const duped = ctx.quotationAllocator().dupe(u8, segment) catch return 1;
+                ctx.load_paths.append(ctx.allocator, duped) catch return 1;
+            }
+        }
+    }
+
+    // Configure stdlib path: CLI flag, then env var, then default relative to binary
+    if (cli_stdlib_path) |sp| {
+        ctx.stdlib_path = ctx.quotationAllocator().dupe(u8, sp) catch return 1;
+    } else if (std.posix.getenv("ONEZ_STDLIB")) |env_val| {
+        ctx.stdlib_path = ctx.quotationAllocator().dupe(u8, env_val) catch return 1;
+    } else {
+        // TODO(ripta): more robust way to find default stdlib path?
+        //              Defaults to <bin_dir>/../lib
+        var self_exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+        if (std.fs.selfExeDirPath(&self_exe_buf)) |exe_dir| {
+            const default_lib = std.fs.path.join(ctx.quotationAllocator(), &.{ exe_dir, "../lib" }) catch null;
+            if (default_lib) |lib_path| {
+                var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+                if (std.fs.cwd().realpath(lib_path, &real_buf)) |real| {
+                    ctx.stdlib_path = ctx.quotationAllocator().dupe(u8, real) catch null;
+                } else |_| {}
+            }
+        } else |_| {}
+    }
+
     if (bench_config.enabled) {
         ctx.benchmark = &bench_stats;
     }
 
-    // Load prelude (timed separately when benchmarking)
     ctx.loadPrelude() catch |err| {
         std.debug.panic("Failed to load prelude: {any}", .{err});
     };
-
     if (bench_config.enabled) {
         bench_stats.markPreludeEnd();
     }
@@ -122,21 +206,29 @@ pub fn main() u8 {
         break :blk @as(u8, 0);
     };
 
-    // Print benchmark results if enabled
+    // Stop benchmark timer if enabled
     if (bench_config.enabled) {
         bench_stats.stop();
+    }
 
-        const stdout_file: File = .stdout();
-        var stdout_buf: [8192]u8 = undefined;
-        var stdout = stdout_file.writer(&stdout_buf);
-        const writer = &stdout.interface;
+    defer if (bench_config.enabled) bench_stats.deinit(allocator);
 
-        if (bench_config.json_output) {
-            bench_stats.formatJson(writer) catch {};
-        } else {
-            bench_stats.formatHuman(writer) catch {};
+    if (bench_config.output != .none) {
+        var buf: [8192]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&buf);
+        const writer = stream.writer();
+
+        switch (bench_config.output) {
+            .human => bench_stats.formatHuman(writer) catch {},
+            .json => bench_stats.formatJson(writer) catch {},
+            .none => {},
         }
-        stdout.interface.flush() catch {};
+
+        const data = stream.getWritten();
+        var written: usize = 0;
+        while (written < data.len) {
+            written += std.posix.write(std.posix.STDOUT_FILENO, data[written..]) catch break;
+        }
     }
 
     return result;
@@ -395,6 +487,18 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
         break :blk file_path;
     } else |_| file_path;
 
+    // Set current_source_dir for relative path resolution in load/use
+    var abs_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (std.fs.cwd().realpath(file_path, &abs_buf)) |abs_path| {
+        if (std.fs.path.dirname(abs_path)) |dir| {
+            ctx.current_source_dir = ctx.quotationAllocator().dupe(u8, dir) catch null;
+        }
+    } else |_| {
+        if (std.fs.path.dirname(file_path)) |dir| {
+            ctx.current_source_dir = dir;
+        }
+    }
+
     var file_buf: [4096]u8 = undefined;
     var reader = file.reader(&file_buf);
 
@@ -506,4 +610,5 @@ test {
     _ = @import("statement.zig");
     _ = @import("formatter.zig");
     _ = @import("benchmark.zig");
+    _ = @import("memory_limit.zig");
 }

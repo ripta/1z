@@ -1,0 +1,52 @@
+\ lib/grid.1z - Grid data structure and printing
+
+use "ranges" ;
+use "strings" ;
+use "sequences" ;
+
+grid: struct{ width height marks mark-char empty-char } ;
+
+\ Convenience constructor with default characters
+new-grid: ( width height marks -- grid ) [
+  "X" "." make-grid
+] ;
+
+\ Set custom characters (returns new grid)
+with-chars: ( grid mark-char empty-char -- grid ) [
+  ec: swap ;
+  mc: swap ;
+  g: swap ;
+  g width>> g height>> g marks>> mc ec make-grid
+] ;
+
+\ Check if coordinate is marked
+marked?: ( grid x y -- ? ) [
+  swap { } swap #suffix swap #suffix
+  swap marks>> swap @in?
+] ;
+
+\ Convert row to string
+row>string: ( grid y -- str ) [
+  row-y: swap ;
+  row-g: swap ;
+  row-g width>> iota
+  [
+    col-x: swap ;
+    row-g col-x row-y marked?
+    [ row-g mark-char>> ] [ row-g empty-char>> ] if
+  ] #map
+  "" #join
+] ;
+
+\ Convert grid to string (for testing)
+grid>string: ( grid -- str ) [
+  dup g: swap ;
+  height>> iota
+  [ g swap row>string ] #map
+  "\n" #join
+] ;
+
+\ Print entire grid
+print-grid: ( grid -- ) [
+  grid>string print-line
+] ;

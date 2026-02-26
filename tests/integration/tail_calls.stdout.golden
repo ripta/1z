@@ -1,0 +1,39 @@
+=== times with large iteration count ===
+Stack: [ ]
+PASS: times 10000 no-ops
+Stack: [ ]
+PASS: times 50000 no-ops
+Stack: [ ]
+=== times correctness ===
+Stack: [ ]
+PASS: times 0 is identity
+Stack: [ ]
+PASS: times 1 executes once
+Stack: [ ]
+=== deep recursion countdown ===
+Stack: [ ]
+Stack: [ ]
+PASS: countdown 10000
+Stack: [ ]
+PASS: countdown 50000
+Stack: [ ]
+=== loop with large iteration ===
+Stack: [ ]
+PASS: loop to 10000
+Stack: [ ]
+=== recursive factorial ===
+Stack: [ ]
+Stack: [ ]
+PASS: fact 5
+Stack: [ ]
+PASS: fact 10
+Stack: [ ]
+PASS: fact 1
+Stack: [ ]
+PASS: fact 0
+Stack: [ ]
+=== error in recursive words ===
+Stack: [ ]
+Stack: [ ]
+PASS: error in recursion caught
+Stack: [ ]

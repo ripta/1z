@@ -6,7 +6,7 @@
 \ 1. Basic Stack Operations and Arithmetic
 \ ------------------------------------------------------------
 
-"=== Basic Operations ===" print
+"=== Basic Operations ===" print-line
 
 \ Push numbers onto the stack and perform arithmetic
 10 20 + .                                        \ prints 30
@@ -27,8 +27,8 @@
 \ 2. Defining Words (Functions)
 \ ------------------------------------------------------------
 
-"" print
-"=== Word Definitions ===" print
+"" print-line
+"=== Word Definitions ===" print-line
 
 \ Words are defined using symbol: [ body ] ;
 \ The symbol ends with : and becomes the word's name
@@ -44,8 +44,8 @@ triple: [ dup dup + + ] ;
 \ 3. Stack Effects (Documentation)
 \ ------------------------------------------------------------
 
-"" print
-"=== Stack Effects ===" print
+"" print-line
+"=== Stack Effects ===" print-line
 
 \ Stack effects document how a word transforms the stack
 \ Format: ( inputs -- outputs )
@@ -57,18 +57,18 @@ dec: ( n -- n ) [ 1 - ] ;
 5 dec .                                          \ prints 4
 
 \ Stack effects are stored and can be queried with help
-"Showing help for inc:" print
+"Showing help for inc:" print-line
 inc: help                           \ shows: inc: ( n -- n )
 
-"Showing help for +:" print
+"Showing help for +:" print-line
 +: help                             \ shows: +: ( a b -- a+b )
 
 \ ------------------------------------------------------------
 \ 4. Booleans and Comparisons
 \ ------------------------------------------------------------
 
-"" print
-"=== Booleans ===" print
+"" print-line
+"=== Booleans ===" print-line
 
 \ t and f are boolean literals
 t .                          \ prints t
@@ -84,8 +84,8 @@ f .                          \ prints f
 \ 5. Control Flow with Quotations
 \ ------------------------------------------------------------
 
-"" print
-"=== Control Flow ===" print
+"" print-line
+"=== Control Flow ===" print-line
 
 \ Quotations are code blocks: [ ... ]
 \ They are pushed onto the stack as values, not executed
@@ -96,29 +96,29 @@ f .                          \ prints f
 \ 'if' takes a condition and two quotations
 \ ( condition true-branch false-branch -- )
 5 3 >
-  [ "five is greater than three" print ]
-  [ "five is not greater" print ]
+  [ "five is greater than three" print-line ]
+  [ "five is not greater" print-line ]
   if
 
 10 20 <
-  [ "ten is less than twenty" print ]
-  [ "ten is not less" print ]
+  [ "ten is less than twenty" print-line ]
+  [ "ten is not less" print-line ]
   if
 
 \ 'when' executes only if condition is true
-t [ "this runs because condition is true" print ] when
+t [ "this runs because condition is true" print-line ] when
 
 \ 'unless' executes only if condition is false
-f [ "this runs because condition is false" print ] unless
+f [ "this runs because condition is false" print-line ] unless
 
 \ More complex conditionals
 check-sign: ( n -- )
   [
     dup 0 >
-      [ drop "positive" print ]
+      [ drop "positive" print-line ]
       [ dup 0 <
-          [ drop "negative" print ]
-          [ drop "zero" print ]
+          [ drop "negative" print-line ]
+          [ drop "zero" print-line ]
           if
       ]
       if
@@ -132,39 +132,39 @@ check-sign: ( n -- )
 \ 6. Strings
 \ ------------------------------------------------------------
 
-"" print
-"=== Strings ===" print
+"" print-line
+"=== Strings ===" print-line
 
 \ String literals use double quotes
-"Hello, 1Z!" print
+"Hello, 1Z!" print-line
 
 \ Strings are values and can be stored in word definitions
 greeting: [ "Welcome to the showcase!" ] ;
-greeting print
+greeting print-line
 
 \ Strings can contain multiple words
-"Strings can have spaces and punctuation!" print
+"Strings can have spaces and punctuation!" print-line
 
 \ ------------------------------------------------------------
 \ 7. Arrays (Immutable Sequences)
 \ ------------------------------------------------------------
 
-"" print
-"=== Arrays ===" print
+"" print-line
+"=== Arrays ===" print-line
 
 \ Arrays use curly braces: { ... }
-"A simple array:" print
+"A simple array:" print-line
 { 1 2 3 } .
 
-"Another array:" print
+"Another array:" print-line
 { 10 20 30 40 50 } .
 
 \ Nested arrays of numbers
-"Nested arrays (matrix):" print
+"Nested arrays (matrix):" print-line
 { { 1 2 } { 3 4 } } .
 
 \ Multi-line arrays work too
-"Multi-line array:" print
+"Multi-line array:" print-line
 {
   100
   200
@@ -172,128 +172,129 @@ greeting print
 } .
 
 \ Array with strings
-"String array:" print
+"String array:" print-line
 { "apple" "banana" "cherry" } .
 
 \ ------------------------------------------------------------
 \ 8. Error Handling with Combinators
 \ ------------------------------------------------------------
 
-"" print
-"=== Error Handling ===" print
+"" print-line
+"=== Error Handling ===" print-line
 
 \ 'recover' catches errors: ( try-quot recover-quot -- )
 \ If try-quot fails, recover-quot runs with error on stack
+\ recover-quot has effect ( error -- ), consuming the error
 
 \ This succeeds normally
-"Successful operation:" print
-[ 5 3 + ] [ drop 0 ] recover .      \ prints 8
+"Successful operation:" print-line
+[ 5 3 + . ] [ drop "error" print-line ] recover
 
 \ This would fail (stack underflow), so recovery runs
-"Recovered from error:" print
-[ drop ] [ drop 42 ] recover .      \ prints 42
+"Recovered from error:" print-line
+[ drop ] [ drop "recovered!" print-line ] recover
 
 \ 'ignore-errors' suppresses any errors
 [ drop ] ignore-errors              \ silently continues
-"Program continued after suppressed error" print
+"Program continued after suppressed error" print-line
 
 \ Nested error handling
-"Nested recovery (inner recovers to 1):" print
-[ [ drop ] [ drop 1 ] recover ] [ drop 2 ] recover .
+"Nested recovery (inner recovers):" print-line
+[ [ drop ] [ drop "inner" print-line ] recover ] [ drop "outer" print-line ] recover
 
 \ ------------------------------------------------------------
 \ 9. Higher-Order Programming
 \ ------------------------------------------------------------
 
-"" print
-"=== Higher-Order Programming ===" print
+"" print-line
+"=== Higher-Order Programming ===" print-line
 
 \ Quotations enable functional programming patterns
 
 \ Execute a quotation twice
 do-twice: ( quot -- ) [ dup call call ] ;
 
-"Calling print twice:" print
-[ "hello" print ] do-twice
+"Calling print-line twice:" print-line
+[ "hello" print-line ] do-twice
 
 \ Quotations capture operations
-"Executing a math quotation:" print
+"Executing a math quotation:" print-line
 [ 3 4 + ] call .
 
-"Another quotation example:" print
+"Another quotation example:" print-line
 [ 10 20 + 5 - ] call .
 
 \ ------------------------------------------------------------
 \ 10. Abstractions
 \ ------------------------------------------------------------
 
-"" print
-"=== Abstractions ===" print
+"" print-line
+"=== Abstractions ===" print-line
 
 \ Check if zero
 zero?: ( n -- ? ) [ 0 = ] ;
-"Is 0 zero?" print  0 zero? .       \ t
-"Is 5 zero?" print  5 zero? .       \ f
+"Is 0 zero?" print-line  0 zero? .       \ t
+"Is 5 zero?" print-line  5 zero? .       \ f
 
 \ Check if positive
 positive?: ( n -- ? ) [ 0 > ] ;
-"Is 5 positive?" print  5 positive? .
+"Is 5 positive?" print-line  5 positive? .
 
 \ Check if negative
 negative?: ( n -- ? ) [ 0 < ] ;
-"Is -3 negative?" print  0 3 - negative? .
+"Is -3 negative?" print-line  0 3 - negative? .
 
 \ Quadruple by composing double
 quadruple: ( n -- n ) [ double double ] ;
-"3 quadrupled:" print  3 quadruple .
+"3 quadrupled:" print-line  3 quadruple .
 
 \ Sum of three numbers
 sum3: ( a b c -- sum ) [ + + ] ;
-"1 + 2 + 3 =" print  1 2 3 sum3 .
+"1 + 2 + 3 =" print-line  1 2 3 sum3 .
 
 \ ------------------------------------------------------------
 \ 11. Data <=> Code
 \ ------------------------------------------------------------
 
-"" print
-"=== Data <=> Code ===" print
+"" print-line
+"=== Data <=> Code ===" print-line
 
 \ Define data templates
 point: [ { 10 20 } ] ;
-"A point:" print
+"A point:" print-line
 point .
 
 \ Arrays of numbers as data
 coords: [ { 100 200 300 } ] ;
-"Coordinates:" print
+"Coordinates:" print-line
 coords .
 
 \ Arrays of strings as data
 colors: [ { "red" "green" "blue" } ] ;
-"Colors:" print
+"Colors:" print-line
 colors .
 
 \ ------------------------------------------------------------
 \ 12. Mini Calculator Demo
 \ ------------------------------------------------------------
 
-"" print
-"=== Calculator Demo ===" print
+"" print-line
+"=== Calculator Demo ===" print-line
 
-calc-add: ( a b -- ) [ + "Result:" print . ] ;
-calc-sub: ( a b -- ) [ - "Result:" print . ] ;
+calc-add: ( a b -- ) [ + "Result:" print-line . ] ;
+calc-sub: ( a b -- ) [ - "Result:" print-line . ] ;
 
-"5 + 3:" print
+"5 + 3:" print-line
 5 3 calc-add
 
-"10 - 4:" print
+"10 - 4:" print-line
 10 4 calc-sub
 
-"7 doubled:" print
-7 double "Result:" print .
+"7 doubled:" print-line
+7 double "Result:" print-line .
 
-"3 quadrupled:" print
-3 quadruple "Result:" print .
+"3 quadrupled:" print-line
+3 quadruple "Result:" print-line .
 
 \ ------------------------------------------------------------
 \ Complete!

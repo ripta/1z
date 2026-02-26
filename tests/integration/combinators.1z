@@ -1,7 +1,7 @@
 \ Integration tests for Higher-Order Combinators
 \ Tests: #each, #map, #filter, #reduce
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "#map on arrays" test-section
 { 1 2 3 } [ 2 * ] #map 0 #nth 2 "array #map first elem" assert=

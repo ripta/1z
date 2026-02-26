@@ -149,7 +149,6 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     else => return error.TypeError,
                 };
                 try ctx.executeQuotationWithFrame(define_quot);
-
             } else {
                 // Fall back to normal word definition
                 var stack_effect_val: ?StackEffect = null;
@@ -214,9 +213,12 @@ pub fn nativeFalse(ctx: *Context) anyerror!void {
 }
 
 /// if ( ? true-quot false-quot -- ) - Conditional execution
+///
+/// Uses executeQuotationInline so tail calls in branches propagate to the
+/// enclosing word's TCO loop (e.g., times -> if -> [... times] tail-calls).
 pub fn nativeIf(ctx: *Context) anyerror!void {
     const false_quot = try popQuotation(ctx);
     const true_quot = try popQuotation(ctx);
     const cond = try popBoolean(ctx);
-    try ctx.executeQuotationWithFrame(if (cond) true_quot else false_quot);
+    try ctx.executeQuotationInline(if (cond) true_quot else false_quot);
 }

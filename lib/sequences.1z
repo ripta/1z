@@ -35,3 +35,12 @@
 \ Sequence element operations
 #suffix: ( seq elem -- seq' ) [ 1array #append ] ;
 #prefix: ( elem seq -- seq' ) [ swap 1array #prepend ] ;
+
+\ Remove empty elements from a sequence
+\
+\ Examples:
+\   { "a" "" "b" "" "c" } #squeeze  →  { "a" "b" "c" }
+\   { "" } #squeeze                 →  { }
+#squeeze: ( array -- array ) [
+  [ #len 0 > ] #filter
+] ;

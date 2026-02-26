@@ -1,6 +1,6 @@
 \ Test loop words from prelude
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "times" test-section
 \ times executes quotation N times (quotation should have effect --)

@@ -1,0 +1,11 @@
+=== flag parsing ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ H{ name: "Alice" help: f } ]
+PASS: positional arg parsed
+Stack: [ H{ name: "Alice" help: f } ]
+PASS: help defaults to false
+Stack: [ ]
+All flags tests complete!
+Stack: [ ]

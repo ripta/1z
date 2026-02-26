@@ -1,0 +1,22 @@
+\ Benchmark: split-lines (index-tracking, O(n)) vs split-lines-slow (char-by-char, O(n^2))
+
+use "strings" ;
+use "text_slow" ;
+use "text" ;
+
+\ --- Test string generation ---
+
+\ Build a string with nlines lines, each 40 chars, separated by newlines.
+\ Uses repeat to build "line\n" * n, giving n lines of 40 chars each.
+make-test-string: ( nlines -- str ) [
+  "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN\n" swap repeat
+] ;
+
+make-benchmark-report
+  "Slow (5 lines)"   [ 5   make-test-string split-lines-slow drop ] benchmark-run
+  "Fast (5 lines)"   [ 5   make-test-string split-lines drop ] benchmark-run
+  "Slow (25 lines)"  [ 25  make-test-string split-lines-slow drop ] benchmark-run
+  "Fast (25 lines)"  [ 25  make-test-string split-lines drop ] benchmark-run
+  "Slow (125 lines)" [ 125 make-test-string split-lines-slow drop ] benchmark-run
+  "Fast (125 lines)" [ 125 make-test-string split-lines drop ] benchmark-run
+print-benchmark-report

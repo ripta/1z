@@ -1,0 +1,47 @@
+\ lib/text_slow.1z - Line-oriented text processing (char-by-char, O(n^2))
+\
+\ This is the original split-lines implementation kept for showing off benchmarking.
+
+\ Accumulator for splitting lines
+slow-acc: struct{ slow-lines slow-current } ;
+
+\ Reducer to split by newline
+slow-split-nl: ( acc char -- acc' ) [
+  dup "\n" =
+  [
+    \ Newline: flush current line into lines if non-empty
+    drop
+    dup slow-current>>
+    dup #len 0 >
+    [
+      over slow-lines>>          \ acc current lines
+      swap 1array #append       \ acc lines'
+      nip                       \ lines'
+      "" make-slow-acc
+    ]
+    [ drop ]
+    if
+  ]
+  [
+    \ Anything else: append to current line, rebuild accumulator
+    over slow-current>> swap #append  \ acc new-current
+    swap slow-lines>>                 \ new-current lines
+    swap make-slow-acc
+  ]
+  if
+] ;
+
+\ Flush the last line from accumulator into lines array
+slow-flush-last: ( acc -- lines ) [
+  dup slow-current>>
+  dup #len 0 >
+  [ over slow-lines>> swap 1array #append nip ]
+  [ drop slow-lines>> ]
+  if
+] ;
+
+\ Split a string into an array of non-empty lines (O(n^2) char-by-char)
+split-lines-slow: ( str -- lines ) [
+  { } "" make-slow-acc [ slow-split-nl ] #reduce
+  slow-flush-last
+] ;

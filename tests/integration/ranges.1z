@@ -1,7 +1,7 @@
 \ Integration tests for ranges
 
-use "lib/testing.1z" ;
-use "lib/ranges.1z" ;
+use "testing" ;
+use "ranges" ;
 
 "range" test-section
 0 5 range { 0 1 2 3 4 } "range 0 to 5" assert=

@@ -1,0 +1,12 @@
+=== range-inclusive ===
+Stack: [ ]
+PASS: simple range
+Stack: [ ]
+PASS: single element
+Stack: [ ]
+PASS: from zero
+Stack: [ ]
+PASS: negative to positive
+Stack: [ ]
+PASS: empty when start > end
+Stack: [ ]

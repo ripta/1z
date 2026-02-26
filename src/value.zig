@@ -1,5 +1,6 @@
 const std = @import("std");
 const StackEffect = @import("stack_effect.zig").StackEffect;
+const BenchmarkReport = @import("benchmark.zig").BenchmarkReport;
 
 /// Instruction represents a single operation in a compiled quotation.
 pub const Instruction = struct {
@@ -126,6 +127,10 @@ pub const ModuleWord = struct {
 pub const Module = struct {
     name: []const u8,
     words: std.StringHashMapUnmanaged(ModuleWord),
+    /// Dependencies: words imported from other modules during loading.
+    /// These are not part of the module's public API but are needed at
+    /// runtime by the module's own words (late binding resolution).
+    deps: std.StringHashMapUnmanaged(ModuleWord) = .{},
 };
 
 /// StackFrame represents a single frame in a stack trace.
@@ -220,6 +225,7 @@ pub const Value = union(enum) {
     marker: *Marker,
     struct_type: *StructType,
     struct_instance: *StructInstance,
+    benchmark_report: *BenchmarkReport,
     stack_effect: StackEffect,
     parse_time_marker: void, // Deprecated: parse-time word definitions; use marker instead
     error_value: ErrorObject,
@@ -323,6 +329,9 @@ pub const Value = union(enum) {
                 }
                 try writer.writeAll("}");
             },
+            .benchmark_report => |br| {
+                try writer.print("<benchmark-report ({d} entries)>", .{br.entries.items.len});
+            },
             .stack_effect => |effect| try effect.write(writer),
             .parse_time_marker => try writer.writeAll("parse-time"),
             .error_value => |err| try err.write(writer),
@@ -420,6 +429,8 @@ pub const Value = union(enum) {
                 }
                 return true;
             },
+            // Benchmark reports are equal if they refer to the same object
+            .benchmark_report => |a| a == other.benchmark_report,
             .stack_effect => |a| a.eql(other.stack_effect),
             .parse_time_marker => true, // All parse_time_markers are equal
             .error_value => |a| a.eql(other.error_value),
@@ -533,6 +544,11 @@ pub const Value = union(enum) {
                     const field_hash = field.hashValue();
                     hasher.update(std.mem.asBytes(&field_hash));
                 }
+            },
+            // Benchmark reports hash by pointer identity
+            .benchmark_report => |br| {
+                const ptr_val = @intFromPtr(br);
+                hasher.update(std.mem.asBytes(&ptr_val));
             },
             .stack_effect => |effect| {
                 for (effect.inputs) |param| {

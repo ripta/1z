@@ -1,6 +1,6 @@
 \ Test struct type definitions
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "struct{ } syntax" test-section
 

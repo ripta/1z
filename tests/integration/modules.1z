@@ -1,11 +1,11 @@
 \ Module system tests
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 \ === Module as value ===
 "Module as value" test-section
 
-"tests/integration/module_lib.1z" load
+"module_lib.1z" load
 \ Stack should have module on it
 dup to-string .
 
@@ -20,14 +20,14 @@ import
 \ === Multiple imports ===
 "Multiple imports" test-section
 
-use "tests/integration/module_lib.1z" ;
+use "module_lib.1z" ;
 10 double .
 
 \ === Module without import ===
 "Module without import" test-section
 
 [
-  "tests/integration/load_lib.1z" load drop
+  "load_lib.1z" load drop
   \ add3 should NOT be visible here since we only loaded, not imported
   5 add3
 ] [ drop "add3 not visible - correct" . ] recover
@@ -36,7 +36,7 @@ wipe
 \ === Module stored in variable ===
 "Module stored in variable" test-section
 
-"tests/integration/module_lib.1z" load
+"module_lib.1z" load
 math: swap ;
 math import
 7 double .
@@ -44,13 +44,13 @@ math import
 \ === use shorthand ===
 "use shorthand" test-section
 
-use "tests/integration/module_lib.1z" ;
+use "module_lib.1z" ;
 8 double .
 
 \ === Qualified name access ===
 "Qualified name access" test-section
 
-mymath: "tests/integration/module_lib.1z" load ;
+mymath: "module_lib.1z" load ;
 5 mymath.double .
 3 mymath.triple .
 4 mymath.squared .
@@ -59,7 +59,7 @@ mymath: "tests/integration/module_lib.1z" load ;
 "Qualified name without import" test-section
 
 \ Verify that qualified access works without importing
-other: "tests/integration/module_lib.1z" load ;
+other: "module_lib.1z" load ;
 10 other.double .
 
 \ Verify double is NOT in scope (we didn't import 'other')
@@ -72,7 +72,7 @@ wipe
 \ === Module accessors ===
 "Module accessors @has?" test-section
 
-testmod: "tests/integration/module_lib.1z" load ;
+testmod: "module_lib.1z" load ;
 testmod double: @has? t "module @has? existing word" assert=
 testmod "double" @has? t "module @has? string key" assert=
 testmod nonexistent: @has? f "module @has? missing word" assert=
@@ -94,32 +94,32 @@ testmod "triple" @get 4 swap call 12 "module @get string key" assert=
 \ === Selective import tests ===
 "Selective import" test-section
 
-selmod: "tests/integration/module_lib.1z" load ;
+selmod: "module_lib.1z" load ;
 selmod { double: } import
 5 double 10 "selective import double" assert=
 
 "Selective import multiple" test-section
 
-selmod2: "tests/integration/module_lib.1z" load ;
+selmod2: "module_lib.1z" load ;
 selmod2 { double: triple: } import
 6 double 12 "selective import multiple - double" assert=
 3 triple 9 "selective import multiple - triple" assert=
 
 "Selective use" test-section
 
-use { squared: } "tests/integration/module_lib.1z" ;
+use { squared: } "module_lib.1z" ;
 4 squared 16 "selective use squared" assert=
 
 "Selective use multiple" test-section
 
-use { double: triple: } "tests/integration/module_lib.1z" ;
+use { double: triple: } "module_lib.1z" ;
 7 double 14 "selective use multiple - double" assert=
 2 triple 6 "selective use multiple - triple" assert=
 
 "Selective import errors" test-section
 
 \ Empty array
-errmod: "tests/integration/module_lib.1z" load ;
+errmod: "module_lib.1z" load ;
 [ errmod { } import ] [ error-type: @get "EmptyImport" "empty array error" assert= ] recover
 
 \ Non-existent word

@@ -1,0 +1,27 @@
+=== No transitive re-export ===
+Stack: [ ]
+PASS: from-b is accessible
+Stack: [ ]
+from-a not visible - correct
+Stack: [ ]
+Stack: [ ]
+=== Direct import ===
+Stack: [ ]
+PASS: from-a available after direct import
+Stack: [ ]
+=== Module deps for internal use ===
+Stack: [ ]
+PASS: b's internal use of a works
+Stack: [ ]
+=== Load-once caching ===
+Stack: [ ]
+mod_a_counted loaded
+PASS: first load works
+Stack: [ ]
+PASS: second module works
+Stack: [ ]
+=== Module @keys excludes deps ===
+Stack: [ ]
+Stack: [ ]
+PASS: module only exports own words
+Stack: [ ]

@@ -1,7 +1,7 @@
 \ Integration tests for Sequence Accessors
 \ Tests: #len, #nth, #first, #last
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "#len on arrays" test-section
 { 1 2 3 } #len 3 "array #len" assert=

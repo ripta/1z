@@ -1,6 +1,6 @@
 \ Integration tests for dynamic variables (parameters)
 
-use "lib/testing.1z" ;
+use "testing" ;
 
 "Parameter creation and get" test-section
 \ Test that output-stream parameter returns stdout by default
