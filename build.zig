@@ -21,7 +21,8 @@ pub fn build(b: *std.Build) void {
         .name = "1z",
         .root_module = root_module,
     });
-    b.installArtifact(exe);
+    const install_exe = b.addInstallArtifact(exe, .{});
+    b.getInstallStep().dependOn(&install_exe.step);
 
     // zig-out/lib -> lib/
     //
@@ -30,6 +31,7 @@ pub fn build(b: *std.Build) void {
     const symlink_step = b.addSystemCommand(&.{ "ln", "-sfn" });
     symlink_step.addDirectoryArg(b.path("lib"));
     symlink_step.addArg(b.fmt("{s}/lib", .{b.install_path}));
+    symlink_step.step.dependOn(&install_exe.step);
     b.getInstallStep().dependOn(&symlink_step.step);
 
     // zig-out/docs
