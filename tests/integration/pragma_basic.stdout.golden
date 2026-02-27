@@ -26,5 +26,7 @@ PASS: built-in require-doc accepted
 Stack: [ ]
 === expression values ===
 Stack: [ ]
-PASS: expression value accepted
+PASS: expression value computes to 3
+Stack: [ ]
+PASS: expression 10 2 * computes to 20
 Stack: [ ]

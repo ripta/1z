@@ -63,3 +63,43 @@ PASS: resolve-literal returns false for operator
 Stack: [ "+" ]
 PASS: resolve-literal returns + unchanged
 Stack: [ ]
+=== resolve-literal quoted string ===
+Stack: [ ]
+Stack: [ ""abc"" ]
+Stack: [ "abc" t ]
+PASS: resolve-literal recognizes quoted string
+Stack: [ "abc" ]
+PASS: resolve-literal returns unquoted string content
+Stack: [ ]
+=== resolve-literal additional edge cases ===
+Stack: [ ]
+Stack: [ "" f ]
+PASS: resolve-literal returns false for empty string
+Stack: [ "" ]
+PASS: resolve-literal returns empty string unchanged
+Stack: [ ]
+Stack: [ ":" f ]
+PASS: resolve-literal returns false for bare colon
+Stack: [ ":" ]
+PASS: resolve-literal returns bare colon unchanged
+Stack: [ ]
+Stack: [ 100000.0 t ]
+PASS: resolve-literal recognizes float with exponent
+Stack: [ 100000.0 ]
+PASS: resolve-literal returns float with exponent
+Stack: [ ]
+Stack: [ -999999999999999999999 t ]
+PASS: resolve-literal recognizes negative bignum
+Stack: [ -999999999999999999999 ]
+PASS: resolve-literal returns negative bignum
+Stack: [ ]
+Stack: [ 0.001 t ]
+PASS: resolve-literal recognizes small float
+Stack: [ 0.001 ]
+PASS: resolve-literal returns small float
+Stack: [ ]
+Stack: [ multi-word: t ]
+PASS: resolve-literal recognizes hyphenated trailing-colon symbol
+Stack: [ multi-word: ]
+PASS: resolve-literal returns hyphenated symbol
+Stack: [ ]
