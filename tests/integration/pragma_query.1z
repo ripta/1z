@@ -12,13 +12,13 @@ pragma-def{ qflag qlevel: [ dup fixnum? [ t ] [ drop "must be fixnum" f ] if ] }
 
 "pragma? after set true" test-section
 
-pragma{ qflag }
-"qflag" pragma? t "pragma? returns t after pragma{ flag }" assert=
+pragma{ qflag: t }
+"qflag" pragma? t "pragma? returns t after pragma{ qflag: t }" assert=
 
-"pragma? after negation" test-section
+"pragma? after set false" test-section
 
-pragma{ !qflag }
-"qflag" pragma? f "pragma? returns f after pragma{ !flag }" assert=
+pragma{ qflag: f }
+"qflag" pragma? f "pragma? returns f after pragma{ qflag: f }" assert=
 
 "pragma-get before set" test-section
 

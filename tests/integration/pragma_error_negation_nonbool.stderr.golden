@@ -1,1 +1,0 @@
-tests/integration/pragma_error_negation_nonbool.1z:3: error 'pragma-error' must be a fixnum

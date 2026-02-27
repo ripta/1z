@@ -10,35 +10,35 @@ current-level option:none? t "current-level returns none before pragma is set" a
 
 "library query after caller sets boolean pragma" test-section
 
-pragma{ x-debug }
-debug-mode "debug" "debug-mode returns debug after caller sets x-debug" assert=
+pragma{ x-debug: t }
+debug-mode "debug" "debug-mode returns debug after caller sets x-debug: t" assert=
 
 "library query after caller sets validated pragma" test-section
 
 pragma{ x-level: 3 }
 current-level option:some> 3 "current-level returns caller's x-level value" assert=
 
-"library query after caller negates pragma" test-section
+"library query after caller sets pragma to false" test-section
 
-pragma{ !x-debug }
-debug-mode "release" "debug-mode returns release after caller negates x-debug" assert=
+pragma{ x-debug: f }
+debug-mode "release" "debug-mode returns release after caller sets x-debug: f" assert=
 
 "non-parse-time word also sees caller pragmas" test-section
 
-pragma{ x-debug }
-debug-mode-rt "debug" "non-parse-time word returns debug after caller sets x-debug" assert=
-pragma{ !x-debug }
-debug-mode-rt "release" "non-parse-time word returns release after caller negates x-debug" assert=
+pragma{ x-debug: t }
+debug-mode-rt "debug" "non-parse-time word returns debug after caller sets x-debug: t" assert=
+pragma{ x-debug: f }
+debug-mode-rt "release" "non-parse-time word returns release after caller sets x-debug: f" assert=
 
 "parse-time token consumption controlled by pragma" test-section
 
 \ With x-debug off, debug-note consumes the next token but discards it
-pragma{ !x-debug }
+pragma{ x-debug: f }
 "before" debug-note "gone"
 "before" "debug-note with x-debug off consumed and discarded token" assert=
 
 \ With x-debug on, debug-note consumes the next token and keeps it
-pragma{ x-debug }
+pragma{ x-debug: t }
 "before" debug-note "here"
 "here" "debug-note with x-debug on kept the token value" assert=
 "before" "stack preserved under debug-note result" assert=
@@ -46,11 +46,11 @@ pragma{ x-debug }
 "debug-log prints at parse time when x-debug is on" test-section
 
 \ With x-debug on, debug-log prints the message during parsing
-pragma{ x-debug }
+pragma{ x-debug: t }
 debug-log "PASS: debug: loading phase 1"
 t "reached after debug-log with debug on" assert-true
 
 \ With x-debug off, debug-log silently consumes the message
-pragma{ !x-debug }
+pragma{ x-debug: f }
 debug-log "FAIL: this should not appear"
 t "reached after debug-log with debug off" assert-true

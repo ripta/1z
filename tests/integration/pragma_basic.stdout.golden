@@ -1,11 +1,11 @@
-=== boolean shorthand ===
+=== explicit boolean true ===
 Stack: [ ]
 Stack: [ ]
-PASS: boolean shorthand accepted
+PASS: explicit boolean true accepted
 Stack: [ ]
-=== negation shorthand ===
+=== explicit boolean false ===
 Stack: [ ]
-PASS: negation shorthand accepted
+PASS: explicit boolean false accepted
 Stack: [ ]
 === validated pragma ===
 Stack: [ ]
@@ -23,4 +23,8 @@ Stack: [ ]
 === built-in require-doc ===
 Stack: [ ]
 PASS: built-in require-doc accepted
+Stack: [ ]
+=== expression values ===
+Stack: [ ]
+PASS: expression value accepted
 Stack: [ ]

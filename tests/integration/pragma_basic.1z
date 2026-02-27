@@ -2,19 +2,19 @@
 
 use "testing" ;
 
-"boolean shorthand" test-section
+"explicit boolean true" test-section
 
-\ Register a boolean pragma and set it via shorthand
+\ Register a boolean pragma and set it
 "test-flag" f register-pragma
-pragma{ test-flag }
+pragma{ test-flag: t }
 
-t "boolean shorthand accepted" assert-true
+t "explicit boolean true accepted" assert-true
 
-"negation shorthand" test-section
+"explicit boolean false" test-section
 
-pragma{ !test-flag }
+pragma{ test-flag: f }
 
-t "negation shorthand accepted" assert-true
+t "explicit boolean false accepted" assert-true
 
 "validated pragma" test-section
 
@@ -27,23 +27,30 @@ t "validated pragma accepted" assert-true
 
 "multiple keys in one block" test-section
 
-pragma{ test-flag !test-flag }
+pragma{ test-flag: t warn-level: 5 }
 
 t "multiple keys accepted" assert-true
 
 "multiline pragma block" test-section
 
 pragma{
-  test-flag
-  !test-flag
+  test-flag: t
+  warn-level: 7
 }
 
 t "multiline block accepted" assert-true
 
 "built-in require-doc" test-section
 
-\ require-doc is pre-registered as a boolean pragma
-pragma{ require-doc }
-pragma{ !require-doc }
+\ require-doc is pre-registered as a validated pragma
+pragma{ require-doc: t }
+pragma{ require-doc: f }
 
 t "built-in require-doc accepted" assert-true
+
+"expression values" test-section
+
+\ With parse-until, values can be arbitrary expressions
+pragma{ warn-level: 1 2 + }
+
+t "expression value accepted" assert-true

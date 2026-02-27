@@ -6,11 +6,11 @@ PASS: pragma? returns f before pragma is set
 Stack: [ ]
 === pragma? after set true ===
 Stack: [ ]
-PASS: pragma? returns t after pragma{ flag }
+PASS: pragma? returns t after pragma{ qflag: t }
 Stack: [ ]
-=== pragma? after negation ===
+=== pragma? after set false ===
 Stack: [ ]
-PASS: pragma? returns f after pragma{ !flag }
+PASS: pragma? returns f after pragma{ qflag: f }
 Stack: [ ]
 === pragma-get before set ===
 Stack: [ ]
