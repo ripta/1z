@@ -160,6 +160,16 @@ pub fn build(b: *std.Build) void {
             }
         } else |_| {}
 
+        // Check for .env file for per-test environment variables
+        const env_path = b.fmt("tests/integration/{s}.env", .{name_without_ext});
+        var has_env = false;
+        var env_lines: ?[]const u8 = null;
+        if (test_dir.openFile(b.fmt("{s}.env", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            env_lines = file.readToEndAlloc(b.allocator, 1024 * 1024) catch null;
+            has_env = true;
+        } else |_| {}
+
         // Check if flags opt out of --show-stack
         var show_stack = true;
         if (flags_lines) |fl| {
@@ -191,6 +201,18 @@ pub fn build(b: *std.Build) void {
                 }
             }
         }
+        if (env_lines) |el| {
+            var env_iter = std.mem.splitScalar(u8, el, '\n');
+            while (env_iter.next()) |line| {
+                const trimmed_line = std.mem.trim(u8, line, " \t\r");
+                if (trimmed_line.len == 0) continue;
+                if (std.mem.indexOfScalar(u8, trimmed_line, '=')) |eq_pos| {
+                    const key = trimmed_line[0..eq_pos];
+                    const value = trimmed_line[eq_pos + 1 ..];
+                    test_run.setEnvironmentVariable(key, value);
+                }
+            }
+        }
         test_run.addFileArg(b.path(file_path));
         if (has_stdin) {
             test_run.setStdIn(.{ .bytes = stdin_content });
@@ -214,6 +236,7 @@ pub fn build(b: *std.Build) void {
         if (has_stdin) test_run.addFileInput(b.path(stdin_path));
         if (has_flags) test_run.addFileInput(b.path(flags_path));
         if (has_exitcode) test_run.addFileInput(b.path(exitcode_path));
+        if (has_env) test_run.addFileInput(b.path(env_path));
 
         // Check for stderr golden file
         var has_stderr_golden = false;
@@ -305,6 +328,18 @@ pub fn build(b: *std.Build) void {
                 }
             }
         }
+        if (env_lines) |el| {
+            var env_iter2 = std.mem.splitScalar(u8, el, '\n');
+            while (env_iter2.next()) |line| {
+                const trimmed_line = std.mem.trim(u8, line, " \t\r");
+                if (trimmed_line.len == 0) continue;
+                if (std.mem.indexOfScalar(u8, trimmed_line, '=')) |eq_pos| {
+                    const key = trimmed_line[0..eq_pos];
+                    const value = trimmed_line[eq_pos + 1 ..];
+                    update_run.setEnvironmentVariable(key, value);
+                }
+            }
+        }
         update_run.addFileArg(b.path(file_path));
         if (has_stdin) {
             update_run.setStdIn(.{ .bytes = stdin_content });
@@ -328,6 +363,7 @@ pub fn build(b: *std.Build) void {
         if (has_stdin) update_run.addFileInput(b.path(stdin_path));
         if (has_flags) update_run.addFileInput(b.path(flags_path));
         if (has_exitcode) update_run.addFileInput(b.path(exitcode_path));
+        if (has_env) update_run.addFileInput(b.path(env_path));
         update_files.addCopyFileToSource(update_run.captureStdOut(), stdout_golden_path);
 
         // Set expected exit code and capture stderr for golden update
@@ -335,7 +371,7 @@ pub fn build(b: *std.Build) void {
         if (update_exit_code != 0) {
             update_run.expectExitCode(update_exit_code);
         }
-        if (has_stderr_golden) {
+        if (has_stderr_golden or update_exit_code != 0) {
             update_files.addCopyFileToSource(update_run.captureStdErr(), stderr_golden_path);
         }
     }
