@@ -1,0 +1,26 @@
+\ environ tests
+
+use "testing" ;
+
+"environ primitive" test-section
+
+\ environ returns a hash
+environ type-of hash: "environ returns hash" assert=
+
+\ HOME env var exists and is a string
+environ "HOME" @has? t "environ has HOME" assert=
+environ "HOME" @get type-of string: "HOME is a string" assert=
+
+\ Missing env var is not present
+environ "ONEZ_DEFINITELY_NOT_SET_12345" @has? f "missing var not present" assert=
+
+\ Missing env var throws KeyNotFound
+[ environ "ONEZ_DEFINITELY_NOT_SET_12345" @get ] "KeyNotFound" "missing var throws KeyNotFound" assert-error-type
+
+\ @keys returns an array of strings
+environ @keys type-of array: "environ keys is array" assert=
+environ @keys #len 0 > t "environ has at least one key" assert=
+
+"@get-or with environ" test-section
+environ "HOME" "/fallback" @get-or environ "HOME" @get "@get-or existing env var" assert=
+environ "ONEZ_DEFINITELY_NOT_SET_12345" "/fallback" @get-or "/fallback" "@get-or missing env var" assert=

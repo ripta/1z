@@ -15,6 +15,7 @@ const extractKeyString = data_structures.extractKeyString;
 
 pub const primitives = [_]Primitive{
     .{ .name = "@get", .stack_effect = "assoc key -- value", .func = nativeAtGet },
+    .{ .name = "@get-or", .stack_effect = "assoc key default -- value", .func = nativeAtGetOr },
     .{ .name = "@has?", .stack_effect = "assoc key -- ?", .func = nativeAtHas },
     .{ .name = "@set", .stack_effect = "assoc key value -- assoc'", .func = nativeAtSet },
     .{ .name = "@keys", .stack_effect = "assoc -- array", .func = nativeAtKeys },
@@ -89,6 +90,58 @@ pub fn nativeAtGet(ctx: *Context) anyerror!void {
                 try ctx.stack.push(.{ .quotation = quot });
             } else {
                 return error.KeyNotFound;
+            }
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// @get-or ( assoc key default -- value ) - Get value by key, or default if missing
+/// Polymorphic on hash, mutable-map, error, module
+fn nativeAtGetOr(ctx: *Context) anyerror!void {
+    const default = try ctx.stack.pop();
+    const key = try ctx.stack.pop();
+    const obj = try ctx.stack.pop();
+
+    const key_str = try extractKeyString(key);
+
+    switch (obj) {
+        .hash => |h| {
+            if (h.get(key_str)) |val| {
+                try ctx.stack.push(val);
+            } else {
+                try ctx.stack.push(default);
+            }
+        },
+        .mutable_map => |m| {
+            if (m.get(key_str)) |val| {
+                try ctx.stack.push(val);
+            } else {
+                try ctx.stack.push(default);
+            }
+        },
+        .error_value => |err| {
+            const val = getErrorField(ctx, err, key_str) catch |e| {
+                if (e == error.KeyNotFound) {
+                    try ctx.stack.push(default);
+                    return;
+                }
+                return e;
+            };
+            try ctx.stack.push(val);
+        },
+        .module => |mod| {
+            if (mod.words.get(key_str)) |word| {
+                const alloc = ctx.quotationAllocator();
+                var quot = Quotation{ .instructions = word.instructions };
+                if (word.stack_effect) |effect| {
+                    const effect_ptr = alloc.create(@TypeOf(effect)) catch return error.OutOfMemory;
+                    effect_ptr.* = effect;
+                    quot.effect = effect_ptr;
+                }
+                try ctx.stack.push(.{ .quotation = quot });
+            } else {
+                try ctx.stack.push(default);
             }
         },
         else => return error.TypeError,

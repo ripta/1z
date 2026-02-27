@@ -18,6 +18,14 @@ Stack: [ ]
 Stack: [ ]
 PASS: mmap @get key not found error
 Stack: [ ]
+=== Mutable map @get-or ===
+Stack: [ ]
+PASS: mmap @get-or existing key
+Stack: [ ]
+PASS: mmap @get-or missing key
+Stack: [ ]
+PASS: mmap @get-or empty map
+Stack: [ ]
 === Mutable map @has? ===
 Stack: [ ]
 PASS: mmap @has? true

@@ -58,6 +58,22 @@ PASS: error @keys count
 Stack: [ ]
 PASS: error @values count
 Stack: [ ]
+=== @get-or on hashes ===
+Stack: [ ]
+PASS: hash @get-or existing key
+Stack: [ ]
+PASS: hash @get-or missing key
+Stack: [ ]
+PASS: hash @get-or existing returns value
+Stack: [ ]
+PASS: hash @get-or empty hash
+Stack: [ ]
+=== @get-or on error objects ===
+Stack: [ ]
+PASS: error @get-or existing field
+Stack: [ ]
+PASS: error @get-or missing field
+Stack: [ ]
 === Nested hash access ===
 Stack: [ ]
 Stack: [ ]
@@ -65,6 +81,14 @@ Stack: [ ]
 PASS: nested hash access
 Stack: [ ]
 PASS: nested hash access 2
+Stack: [ ]
+=== #len on hashes ===
+Stack: [ ]
+PASS: hash #len
+Stack: [ ]
+PASS: empty hash #len
+Stack: [ ]
+PASS: singleton hash #len
 Stack: [ ]
 === Empty hash operations ===
 Stack: [ ]
