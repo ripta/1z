@@ -14,6 +14,17 @@ C{ 1.0 2.0 } imaginary-part 2.0 "C{ } imaginary-part" assert=
 C{ 1 2 } real-part 1.0 "C{ int } real promotes to float" assert=
 C{ 1 2 } imaginary-part 2.0 "C{ int } imag promotes to float" assert=
 
+"complex: C{ with expressions" test-section
+C{ 1 2 + 0 } real-part 3.0 "C{ expr } real evaluates" assert=
+C{ 1 2 + 0 } imaginary-part 0.0 "C{ expr } imag is literal" assert=
+C{ 0 3 4 + } real-part 0.0 "C{ 0 expr } real is literal" assert=
+C{ 0 3 4 + } imaginary-part 7.0 "C{ 0 expr } imag evaluates" assert=
+
+"complex: C{ with word references" test-section
+tau: [ 6.28318 ] ;
+C{ tau 2 / tau } real-part 3.14159 "C{ word expr } real" assert=
+C{ tau 2 / tau } imaginary-part 6.28318 "C{ word expr } imag" assert=
+
 "complex: accessors" test-section
 3.0 4.0 make-complex real-part 3.0 "real-part" assert=
 3.0 4.0 make-complex imaginary-part 4.0 "imaginary-part" assert=
