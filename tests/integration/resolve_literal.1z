@@ -55,3 +55,37 @@ foo: swap "resolve-literal returns symbol value" assert=
 "+" resolve-literal
 "resolve-literal returns false for operator" assert-false
 "+" "resolve-literal returns + unchanged" assert=
+
+"resolve-literal quoted string" test-section
+
+\ Build the 5-character string: "abc" (with literal quote characters)
+34 >char "abc" #append 34 >char #append
+resolve-literal
+"resolve-literal recognizes quoted string" assert-true
+"abc" "resolve-literal returns unquoted string content" assert=
+
+"resolve-literal additional edge cases" test-section
+
+"" resolve-literal
+"resolve-literal returns false for empty string" assert-false
+"" "resolve-literal returns empty string unchanged" assert=
+
+":" resolve-literal
+"resolve-literal returns false for bare colon" assert-false
+":" "resolve-literal returns bare colon unchanged" assert=
+
+"1e5" resolve-literal
+"resolve-literal recognizes float with exponent" assert-true
+1e5 "resolve-literal returns float with exponent" assert=
+
+"-999999999999999999999" resolve-literal
+"resolve-literal recognizes negative bignum" assert-true
+-999999999999999999999 "resolve-literal returns negative bignum" assert=
+
+"1.0e-3" resolve-literal
+"resolve-literal recognizes small float" assert-true
+0.001 "resolve-literal returns small float" assert=
+
+"multi-word:" resolve-literal
+"resolve-literal recognizes hyphenated trailing-colon symbol" assert-true
+multi-word: swap "resolve-literal returns hyphenated symbol" assert=

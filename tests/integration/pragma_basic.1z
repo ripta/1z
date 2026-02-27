@@ -53,4 +53,8 @@ t "built-in require-doc accepted" assert-true
 \ With parse-until, values can be arbitrary expressions
 pragma{ warn-level: 1 2 + }
 
-t "expression value accepted" assert-true
+"warn-level" pragma-get option:some> 3 "expression value computes to 3" assert=
+
+pragma{ warn-level: 10 2 * }
+
+"warn-level" pragma-get option:some> 20 "expression 10 2 * computes to 20" assert=
