@@ -1,0 +1,57 @@
+\ Test resolve-literal primitive
+
+use "testing" ;
+
+"resolve-literal fixnum" test-section
+
+"42" resolve-literal
+"resolve-literal recognizes fixnum" assert-true
+42 "resolve-literal returns fixnum value" assert=
+
+"-7" resolve-literal
+"resolve-literal recognizes negative fixnum" assert-true
+-7 "resolve-literal returns negative fixnum" assert=
+
+"0" resolve-literal
+"resolve-literal recognizes zero" assert-true
+0 "resolve-literal returns zero" assert=
+
+"resolve-literal bignum" test-section
+
+"999999999999999999999" resolve-literal
+"resolve-literal recognizes bignum" assert-true
+999999999999999999999 "resolve-literal returns bignum value" assert=
+
+"resolve-literal float" test-section
+
+"3.14" resolve-literal
+"resolve-literal recognizes float" assert-true
+3.14 "resolve-literal returns float value" assert=
+
+"-0.5" resolve-literal
+"resolve-literal recognizes negative float" assert-true
+-0.5 "resolve-literal returns negative float" assert=
+
+"resolve-literal trailing-colon symbol" test-section
+
+"foo:" resolve-literal
+"resolve-literal recognizes trailing-colon symbol" assert-true
+foo: swap "resolve-literal returns symbol value" assert=
+
+"resolve-literal failure cases" test-section
+
+"not-a-literal" resolve-literal
+"resolve-literal returns false for non-literals" assert-false
+"not-a-literal" "resolve-literal returns original string on failure" assert=
+
+"{" resolve-literal
+"resolve-literal returns false for structure opener" assert-false
+"{" "resolve-literal returns { unchanged" assert=
+
+"[" resolve-literal
+"resolve-literal returns false for quotation opener" assert-false
+"[" "resolve-literal returns [ unchanged" assert=
+
+"+" resolve-literal
+"resolve-literal returns false for operator" assert-false
+"+" "resolve-literal returns + unchanged" assert=

@@ -18,6 +18,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "parse-token", .stack_effect = "-- string", .doc = "Read one raw token from the tokenizer, skipping comments and whitespace.", .func = nativeParseToken },
     .{ .name = "peek-token", .stack_effect = "-- string", .doc = "Return the next token without consuming it. Repeated calls return the same token until parse-token or another consuming primitive advances past it.", .func = nativePeekToken },
     .{ .name = "parse-literal", .stack_effect = "-- value", .doc = "Read the next literal value from the tokenizer.", .func = nativeParseLiteral },
+    .{ .name = "resolve-literal", .stack_effect = "string -- value ?", .doc = "Resolve a string as a scalar literal.", .func = nativeResolveLiteral },
 };
 
 fn isSkippable(kind: Token.Kind) bool {
@@ -82,10 +83,43 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
     return .{ .array = result };
 }
 
+/// Resolve a token string as a scalar literal value. Returns null if the token
+/// is not a recognized scalar form. Checks in order: fixnum, bignum, float,
+/// quoted string (with escape processing), trailing-colon symbol.
+fn resolveScalarLiteral(alloc: std.mem.Allocator, arena_alloc: std.mem.Allocator, token: []const u8) std.mem.Allocator.Error!?Value {
+    if (tokenizer_mod.parseInteger(token)) |n| {
+        return .{ .fixnum = n };
+    }
+
+    if (tokenizer_mod.parseBigNum(arena_alloc, token)) |big| {
+        return .{ .bignum = big };
+    }
+
+    if (tokenizer_mod.parseFloat(token)) |f| {
+        return .{ .float = f };
+    }
+
+    if (tokenizer_mod.parseString(token)) |s| {
+        const s_copy = try parser.processEscapes(alloc, s);
+        return .{ .string = s_copy };
+    }
+
+    if (token.len > 1 and token[token.len - 1] == ':') {
+        const sym_copy = try alloc.dupe(u8, token[0 .. token.len - 1]);
+        return .{ .symbol = sym_copy };
+    }
+
+    return null;
+}
+
 /// Try to resolve a token as a literal value. Returns NotALiteral if the token
 /// is not a recognized literal form, allowing the caller to fall through.
 fn tryResolveLiteral(ctx: *Context, alloc: std.mem.Allocator, tokenizer: *tokenizer_mod.Tokenizer, tok: Token) !Value {
     const token = tok.text;
+
+    if (try resolveScalarLiteral(alloc, ctx.arena.allocator(), token)) |val| {
+        return val;
+    }
 
     if (std.mem.eql(u8, token, "{")) {
         const arr = parser.parseArray(alloc, tokenizer, ctx, tok.line) catch return error.OutOfMemory;
@@ -95,28 +129,6 @@ fn tryResolveLiteral(ctx: *Context, alloc: std.mem.Allocator, tokenizer: *tokeni
     if (std.mem.eql(u8, token, "[")) {
         const quot = parser.parseQuotation(alloc, tokenizer, ctx, tok.line) catch return error.OutOfMemory;
         return .{ .quotation = quot };
-    }
-
-    if (tokenizer_mod.parseString(token)) |s| {
-        const s_copy = parser.processEscapes(alloc, s) catch return error.OutOfMemory;
-        return .{ .string = s_copy };
-    }
-
-    if (token.len > 1 and token[token.len - 1] == ':') {
-        const sym_copy = alloc.dupe(u8, token[0 .. token.len - 1]) catch return error.OutOfMemory;
-        return .{ .symbol = sym_copy };
-    }
-
-    if (tokenizer_mod.parseInteger(token)) |n| {
-        return .{ .fixnum = n };
-    }
-
-    if (tokenizer_mod.parseBigNum(ctx.arena.allocator(), token)) |big| {
-        return .{ .bignum = big };
-    }
-
-    if (tokenizer_mod.parseFloat(token)) |f| {
-        return .{ .float = f };
     }
 
     return error.NotALiteral;
@@ -178,7 +190,22 @@ fn nativePeekToken(ctx: *Context) anyerror!void {
     return error.ParseError;
 }
 
-/// parse-literal ( -- value ) - Read the next literal from the tokenizer
+/// resolve-literal ( string -- value true | string false )
+fn nativeResolveLiteral(ctx: *Context) anyerror!void {
+    const token = try popString(ctx);
+    const alloc = ctx.quotationAllocator();
+
+    if (try resolveScalarLiteral(alloc, ctx.arena.allocator(), token)) |val| {
+        try ctx.stack.push(val);
+        try ctx.stack.push(.{ .boolean = true });
+    } else {
+        try ctx.stack.push(.{ .string = token });
+        try ctx.stack.push(.{ .boolean = false });
+    }
+}
+
+/// parse-literal ( -- value ) - Read the next literal from the tokenizer.
+/// Three layers: scalar literals, structure openers, parse-time word execution.
 pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
     const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
     const alloc = ctx.quotationAllocator();
@@ -186,6 +213,11 @@ pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
         if (isSkippable(tok.kind)) continue;
 
         const token = tok.text;
+
+        if (try resolveScalarLiteral(alloc, ctx.arena.allocator(), token)) |val| {
+            try ctx.stack.push(val);
+            return;
+        }
 
         if (std.mem.eql(u8, token, "{")) {
             const arr = parser.parseArray(alloc, tokenizer, ctx, tok.line) catch return error.OutOfMemory;
@@ -196,33 +228,6 @@ pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
         if (std.mem.eql(u8, token, "[")) {
             const quot = parser.parseQuotation(alloc, tokenizer, ctx, tok.line) catch return error.OutOfMemory;
             try ctx.stack.push(.{ .quotation = quot });
-            return;
-        }
-
-        if (tokenizer_mod.parseString(token)) |s| {
-            const s_copy = parser.processEscapes(alloc, s) catch return error.OutOfMemory;
-            try ctx.stack.push(.{ .string = s_copy });
-            return;
-        }
-
-        if (token.len > 1 and token[token.len - 1] == ':') {
-            const sym_copy = alloc.dupe(u8, token[0 .. token.len - 1]) catch return error.OutOfMemory;
-            try ctx.stack.push(.{ .symbol = sym_copy });
-            return;
-        }
-
-        if (tokenizer_mod.parseInteger(token)) |n| {
-            try ctx.stack.push(.{ .fixnum = n });
-            return;
-        }
-
-        if (tokenizer_mod.parseBigNum(ctx.arena.allocator(), token)) |big| {
-            try ctx.stack.push(.{ .bignum = big });
-            return;
-        }
-
-        if (tokenizer_mod.parseFloat(token)) |f| {
-            try ctx.stack.push(.{ .float = f });
             return;
         }
 
