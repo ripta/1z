@@ -6,21 +6,21 @@ PASS: current-level returns none before pragma is set
 Stack: [ ]
 === library query after caller sets boolean pragma ===
 Stack: [ ]
-PASS: debug-mode returns debug after caller sets x-debug
+PASS: debug-mode returns debug after caller sets x-debug: t
 Stack: [ ]
 === library query after caller sets validated pragma ===
 Stack: [ ]
 PASS: current-level returns caller's x-level value
 Stack: [ ]
-=== library query after caller negates pragma ===
+=== library query after caller sets pragma to false ===
 Stack: [ ]
-PASS: debug-mode returns release after caller negates x-debug
+PASS: debug-mode returns release after caller sets x-debug: f
 Stack: [ ]
 === non-parse-time word also sees caller pragmas ===
 Stack: [ ]
-PASS: non-parse-time word returns debug after caller sets x-debug
+PASS: non-parse-time word returns debug after caller sets x-debug: t
 Stack: [ ]
-PASS: non-parse-time word returns release after caller negates x-debug
+PASS: non-parse-time word returns release after caller sets x-debug: f
 Stack: [ ]
 === parse-time token consumption controlled by pragma ===
 Stack: [ ]

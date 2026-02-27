@@ -45,79 +45,64 @@ fn nativeRegisterPragma(ctx: *Context) anyerror!void {
 }
 
 /// pragma{ ... } - Parse-time word for setting pragma values.
-/// Delegates tokenization to parse-values-until, then walks the resulting array.
+/// Uses parse-until to get a quotation, executes it, then processes
+/// the resulting stack values as symbol-value pairs.
 fn nativePragmaBlock(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     try ctx.stack.push(.{ .string = "}" });
-    try parse_time_mod.nativeParseValuesUntil(ctx);
-    const arr_val = try ctx.stack.pop();
-    const items = switch (arr_val) {
-        .array => |a| a,
+    try parse_time_mod.nativeParseUntil(ctx);
+    const quot_val = try ctx.stack.pop();
+    const quot = switch (quot_val) {
+        .quotation => |q| q,
         else => return error.TypeMismatch,
     };
 
-    var i: usize = 0;
-    while (i < items.len) : (i += 1) {
-        const item = items[i];
+    const depth_before = ctx.stack.depth();
+    try ctx.executeQuotation(quot);
+    const depth_after = ctx.stack.depth();
 
-        switch (item) {
-            .symbol => |sym| {
-                const pragma_name = sym;
-                const reg = ctx.lookupPragmaRegistration(pragma_name) orelse {
-                    return throwPragmaError(ctx, alloc, "unknown-pragma", pragma_name);
-                };
+    if (depth_after < depth_before) {
+        return throwPragmaError(ctx, alloc, "pragma-error", "pragma block consumed stack values");
+    }
 
-                if (i + 1 >= items.len) {
-                    const msg = std.fmt.allocPrint(alloc, "pragma '{s}': expected a value", .{pragma_name}) catch "expected a value";
-                    return throwPragmaError(ctx, alloc, "pragma-error", msg);
-                }
-                i += 1;
-                const value = items[i];
+    const count = depth_after - depth_before;
+    if (count % 2 != 0) {
+        return throwPragmaError(ctx, alloc, "pragma-error", "pragma block must contain key: value pairs");
+    }
 
-                if (hasValidator(reg)) {
-                    try ctx.stack.push(value);
-                    try runValidator(ctx, alloc, reg, pragma_name);
-                    continue;
-                }
+    var items = try alloc.alloc(Value, count);
+    var i: usize = count;
+    while (i > 0) {
+        i -= 1;
+        items[i] = try ctx.stack.pop();
+    }
 
-                switch (value) {
-                    .boolean => try ctx.setPragma(pragma_name, value),
-                    else => {
-                        const msg = std.fmt.allocPrint(alloc, "pragma '{s}' accepts only boolean values", .{pragma_name}) catch "pragma accepts only boolean values";
-                        return throwPragmaError(ctx, alloc, "pragma-error", msg);
-                    },
-                }
-            },
-            .string => |s| {
-                if (s.len > 1 and s[0] == '!') {
-                    const pragma_name = s[1..];
-                    const reg = ctx.lookupPragmaRegistration(pragma_name) orelse {
-                        return throwPragmaError(ctx, alloc, "unknown-pragma", pragma_name);
-                    };
+    var j: usize = 0;
+    while (j < count) : (j += 2) {
+        const key = items[j];
+        const value = items[j + 1];
 
-                    if (hasValidator(reg)) {
-                        try ctx.stack.push(.{ .boolean = false });
-                        try runValidator(ctx, alloc, reg, pragma_name);
-                    } else {
-                        try ctx.setPragma(pragma_name, .{ .boolean = false });
-                    }
-                } else {
-                    const pragma_name = s;
-                    const reg = ctx.lookupPragmaRegistration(pragma_name) orelse {
-                        return throwPragmaError(ctx, alloc, "unknown-pragma", pragma_name);
-                    };
+        const pragma_name = switch (key) {
+            .symbol => |s| s,
+            else => return throwPragmaError(ctx, alloc, "pragma-error", "pragma key must be a symbol (key: value)"),
+        };
 
-                    if (hasValidator(reg)) {
-                        try ctx.stack.push(.{ .boolean = true });
-                        try runValidator(ctx, alloc, reg, pragma_name);
-                    } else {
-                        try ctx.setPragma(pragma_name, .{ .boolean = true });
-                    }
-                }
-            },
+        const reg = ctx.lookupPragmaRegistration(pragma_name) orelse {
+            return throwPragmaError(ctx, alloc, "unknown-pragma", pragma_name);
+        };
+
+        if (hasValidator(reg)) {
+            try ctx.stack.push(value);
+            try runValidator(ctx, alloc, reg, pragma_name);
+            continue;
+        }
+
+        switch (value) {
+            .boolean => try ctx.setPragma(pragma_name, value),
             else => {
-                return throwPragmaError(ctx, alloc, "pragma-error", "unexpected value in pragma block");
+                const msg = std.fmt.allocPrint(alloc, "pragma '{s}' accepts only boolean values", .{pragma_name}) catch "pragma accepts only boolean values";
+                return throwPragmaError(ctx, alloc, "pragma-error", msg);
             },
         }
     }

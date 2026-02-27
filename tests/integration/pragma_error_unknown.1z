@@ -1,2 +1,2 @@
 \ Test that using an unregistered pragma produces a parse-time error
-pragma{ nonexistent }
+pragma{ nonexistent: t }

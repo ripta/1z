@@ -5,7 +5,7 @@ use "testing" ;
 "boolean registration" test-section
 
 pragma-def{ my-flag }
-pragma{ my-flag }
+pragma{ my-flag: t }
 
 t "boolean pragma via pragma-def{ accepted" assert-true
 
@@ -23,6 +23,6 @@ pragma-def{
   another-level: [ dup fixnum? [ t ] [ drop "must be fixnum" f ] if ]
 }
 
-pragma{ another-flag another-level: 10 }
+pragma{ another-flag: t another-level: 10 }
 
 t "mixed pragma-def{ accepted" assert-true

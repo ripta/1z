@@ -4,7 +4,7 @@ use "testing" ;
 
 "standard level: documented word passes" test-section
 
-pragma{ require-doc }
+pragma{ require-doc: t }
 
 \\ A documented word.
 documented-word: [ 42 ] ;
@@ -19,7 +19,7 @@ undocumented-pt 99 "parse-time word without doc at standard level" assert=
 
 "toggling off allows undocumented words" test-section
 
-pragma{ !require-doc }
+pragma{ require-doc: f }
 
 undocumented-word: [ 7 ] ;
 
