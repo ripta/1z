@@ -205,6 +205,7 @@ fn nativeResolveLiteral(ctx: *Context) anyerror!void {
 }
 
 /// parse-literal ( -- value ) - Read the next literal from the tokenizer.
+///
 /// Three layers: scalar literals, structure openers, parse-time word execution.
 pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
     const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;

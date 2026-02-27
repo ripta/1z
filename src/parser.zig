@@ -265,6 +265,44 @@ fn joinDocLines(allocator: Allocator, lines: []const []const u8) ParseError![]co
     return result;
 }
 
+/// Classification result for a token examined as a scalar literal.
+const ClassifyResult = union(enum) {
+    /// Token resolved to a scalar value (fixnum, bignum, float, string, or symbol).
+    value: Value,
+    /// Token starts with `"` but is not a complete string literal.
+    unmatched_quote,
+    /// Token is not a scalar literal.
+    unrecognized,
+};
+
+/// Classify a token as a scalar literal value. Returns `.value` for fixnum,
+/// bignum, float, quoted string, or trailing-colon symbol. Returns
+/// `.unmatched_quote` for a bare open-quote token. Returns `.unrecognized`
+/// for anything else.
+fn classifyLiteral(allocator: Allocator, token: []const u8) Allocator.Error!ClassifyResult {
+    if (parseInteger(token)) |n| {
+        return .{ .value = .{ .fixnum = n } };
+    }
+    if (parseBigNum(allocator, token)) |big| {
+        return .{ .value = .{ .bignum = big } };
+    }
+    if (parseFloat(token)) |f| {
+        return .{ .value = .{ .float = f } };
+    }
+    if (parseString(token)) |s| {
+        const s_copy = try processEscapes(allocator, s);
+        return .{ .value = .{ .string = s_copy } };
+    }
+    if (token.len > 0 and token[0] == '"') {
+        return .unmatched_quote;
+    }
+    if (token.len > 1 and token[token.len - 1] == ':') {
+        const sym_copy = try allocator.dupe(u8, token[0 .. token.len - 1]);
+        return .{ .value = .{ .symbol = sym_copy } };
+    }
+    return .unrecognized;
+}
+
 /// Parse a top-level sequence of instructions. This is the entry point for
 /// parsing, and handles continuation lines (multiline statements).
 /// If ctx is provided, parse-time words will be executed during parsing.
@@ -304,46 +342,39 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, ")")) {
             return ParseError.UnmatchedCloseParen;
-        } else if (parseInteger(token)) |n| {
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .fixnum = n } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
-        } else if (parseBigNum(allocator, token)) |big| {
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .bignum = big } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
-        } else if (parseFloat(token)) |f| {
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .float = f } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
-        } else if (parseString(token)) |s| {
-            const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
-        } else if (token.len > 0 and token[0] == '"') {
-            setUnmatchedDiagnostics(ctx, "UnmatchedOpenQuote", line);
-            return ParseError.UnmatchedOpenQuote;
         } else {
-            // Check if this is a parse-time word
-            if (ctx) |c| {
-                if (c.lookupWord(token)) |word| {
-                    if (word.parse_time) {
-                        try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line);
-
-                        if (has_pending_docs) {
-                            doc_lines.clearRetainingCapacity();
-                            doc_first_line = 0;
-                        }
-
-                        continue;
+            const classified = classifyLiteral(allocator, token) catch return ParseError.OutOfMemory;
+            switch (classified) {
+                .value => |val| {
+                    instructions.append(allocator, .{ .op = .{ .push_literal = val }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                    if (val == .symbol and has_pending_docs) {
+                        const doc_text = try joinDocLines(allocator, doc_lines.items);
+                        instructions.append(allocator, .{ .op = .{ .push_literal = .{ .doc_string = doc_text } }, .line = pending_doc_line }) catch return ParseError.OutOfMemory;
                     }
-                }
-            }
+                },
+                .unmatched_quote => {
+                    setUnmatchedDiagnostics(ctx, "UnmatchedOpenQuote", line);
+                    return ParseError.UnmatchedOpenQuote;
+                },
+                .unrecognized => {
+                    if (ctx) |c| {
+                        if (c.lookupWord(token)) |word| {
+                            if (word.parse_time) {
+                                try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line);
 
-            if (token.len > 1 and token[token.len - 1] == ':') {
-                const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
-                instructions.append(allocator, .{ .op = .{ .push_literal = .{ .symbol = sym_copy } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                                if (has_pending_docs) {
+                                    doc_lines.clearRetainingCapacity();
+                                    doc_first_line = 0;
+                                }
 
-                if (has_pending_docs) {
-                    const doc_text = try joinDocLines(allocator, doc_lines.items);
-                    instructions.append(allocator, .{ .op = .{ .push_literal = .{ .doc_string = doc_text } }, .line = pending_doc_line }) catch return ParseError.OutOfMemory;
-                }
-            } else {
-                const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
-                instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                                continue;
+                            }
+                        }
+                    }
+
+                    const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
+                    instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                },
             }
         }
 
@@ -417,51 +448,41 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
             is_first_token = false;
         } else if (std.mem.eql(u8, token, ")")) {
             return ParseError.UnmatchedCloseParen;
-        } else if (parseInteger(token)) |n| {
-            is_first_token = false;
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .fixnum = n } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
-        } else if (parseBigNum(allocator, token)) |big| {
-            is_first_token = false;
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .bignum = big } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
-        } else if (parseFloat(token)) |f| {
-            is_first_token = false;
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .float = f } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
-        } else if (parseString(token)) |s| {
-            is_first_token = false;
-            const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
-        } else if (token.len > 0 and token[0] == '"') {
-            setUnmatchedDiagnostics(ctx, "UnmatchedOpenQuote", line);
-            return ParseError.UnmatchedOpenQuote;
         } else {
-            // Check if this is a parse-time word
-            if (ctx) |c| {
-                if (c.lookupWord(token)) |word| {
-                    if (word.parse_time) {
-                        try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line);
-                        is_first_token = false;
-
-                        if (has_pending_docs) {
-                            doc_lines.clearRetainingCapacity();
-                            doc_first_line = 0;
-                        }
-                        continue;
+            const classified = classifyLiteral(allocator, token) catch return ParseError.OutOfMemory;
+            switch (classified) {
+                .value => |val| {
+                    is_first_token = false;
+                    instructions.append(allocator, .{ .op = .{ .push_literal = val }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                    if (val == .symbol and has_pending_docs) {
+                        const doc_text = try joinDocLines(allocator, doc_lines.items);
+                        instructions.append(allocator, .{ .op = .{ .push_literal = .{ .doc_string = doc_text } }, .line = pending_doc_line }) catch return ParseError.OutOfMemory;
                     }
-                }
-            }
+                },
+                .unmatched_quote => {
+                    setUnmatchedDiagnostics(ctx, "UnmatchedOpenQuote", line);
+                    return ParseError.UnmatchedOpenQuote;
+                },
+                .unrecognized => {
+                    if (ctx) |c| {
+                        if (c.lookupWord(token)) |word| {
+                            if (word.parse_time) {
+                                try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line);
+                                is_first_token = false;
 
-            is_first_token = false;
-            if (token.len > 1 and token[token.len - 1] == ':') {
-                const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
-                instructions.append(allocator, .{ .op = .{ .push_literal = .{ .symbol = sym_copy } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                                if (has_pending_docs) {
+                                    doc_lines.clearRetainingCapacity();
+                                    doc_first_line = 0;
+                                }
+                                continue;
+                            }
+                        }
+                    }
 
-                if (has_pending_docs) {
-                    const doc_text = try joinDocLines(allocator, doc_lines.items);
-                    instructions.append(allocator, .{ .op = .{ .push_literal = .{ .doc_string = doc_text } }, .line = pending_doc_line }) catch return ParseError.OutOfMemory;
-                }
-            } else {
-                const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
-                instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                    is_first_token = false;
+                    const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
+                    instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                },
             }
         }
 
@@ -606,35 +627,32 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context, o
             // Quotations inside arrays don't execute parse-time words (arrays are data)
             const quot = try parseQuotation(allocator, tokenizer, null, tok.line);
             values.append(allocator, .{ .quotation = quot }) catch return ParseError.OutOfMemory;
-        } else if (parseInteger(token)) |n| {
-            values.append(allocator, .{ .fixnum = n }) catch return ParseError.OutOfMemory;
-        } else if (parseBigNum(allocator, token)) |big| {
-            values.append(allocator, .{ .bignum = big }) catch return ParseError.OutOfMemory;
-        } else if (parseFloat(token)) |f| {
-            values.append(allocator, .{ .float = f }) catch return ParseError.OutOfMemory;
-        } else if (parseString(token)) |s| {
-            const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
-            values.append(allocator, .{ .string = s_copy }) catch return ParseError.OutOfMemory;
-        } else if (token.len > 0 and token[0] == '"') {
-            setUnmatchedDiagnostics(ctx, "UnmatchedOpenQuote", tok.line);
-            return ParseError.UnmatchedOpenQuote;
-        } else if (token.len > 1 and token[token.len - 1] == ':') {
-            const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
-            values.append(allocator, .{ .symbol = sym_copy }) catch return ParseError.OutOfMemory;
         } else {
-            if (ctx) |c| {
-                if (c.lookupWord(token)) |word| {
-                    if (word.parse_time) {
-                        try executeParseTimeWordForArray(c, word, tokenizer, &values, allocator);
-                        continue;
+            const classified = classifyLiteral(allocator, token) catch return ParseError.OutOfMemory;
+            switch (classified) {
+                .value => |val| {
+                    values.append(allocator, val) catch return ParseError.OutOfMemory;
+                },
+                .unmatched_quote => {
+                    setUnmatchedDiagnostics(ctx, "UnmatchedOpenQuote", tok.line);
+                    return ParseError.UnmatchedOpenQuote;
+                },
+                .unrecognized => {
+                    if (ctx) |c| {
+                        if (c.lookupWord(token)) |word| {
+                            if (word.parse_time) {
+                                try executeParseTimeWordForArray(c, word, tokenizer, &values, allocator);
+                                continue;
+                            }
+                        }
+                        c.parse_diagnostics = .{
+                            .error_type = "InvalidArrayElement",
+                            .message = std.fmt.allocPrint(allocator, "'{s}' is not a literal value", .{token}) catch null,
+                        };
                     }
-                }
-                c.parse_diagnostics = .{
-                    .error_type = "InvalidArrayElement",
-                    .message = std.fmt.allocPrint(allocator, "'{s}' is not a literal value", .{token}) catch null,
-                };
+                    return ParseError.InvalidArrayElement;
+                },
             }
-            return ParseError.InvalidArrayElement;
         }
     }
 
