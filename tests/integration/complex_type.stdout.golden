@@ -18,6 +18,23 @@ PASS: C{ int } real promotes to float
 Stack: [ ]
 PASS: C{ int } imag promotes to float
 Stack: [ ]
+=== complex: C{ with expressions ===
+Stack: [ ]
+PASS: C{ expr } real evaluates
+Stack: [ ]
+PASS: C{ expr } imag is literal
+Stack: [ ]
+PASS: C{ 0 expr } real is literal
+Stack: [ ]
+PASS: C{ 0 expr } imag evaluates
+Stack: [ ]
+=== complex: C{ with word references ===
+Stack: [ ]
+Stack: [ ]
+PASS: C{ word expr } real
+Stack: [ ]
+PASS: C{ word expr } imag
+Stack: [ ]
 === complex: accessors ===
 Stack: [ ]
 PASS: real-part

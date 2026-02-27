@@ -9,7 +9,7 @@ real-part: ( c -- f ) [ unmake-complex drop ] ;
 imaginary-part: ( c -- f ) [ unmake-complex nip ] ;
 
 \\ Complex literal syntax. Promotes components to float.
-C{: parse-time [ "}" parse-values-until dup 0 #nth >float swap 1 #nth >float make-complex ] ;
+C{: parse-time [ "}" parse-until call >float swap >float swap make-complex ] ;
 
 number?: method{ complex } [ drop t ] ;
 inexact?: method{ complex } [ drop t ] ;
