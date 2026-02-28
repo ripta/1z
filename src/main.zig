@@ -8,6 +8,7 @@ const Quotation = @import("value.zig").Quotation;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 const formatter = @import("formatter.zig");
 const benchmark = @import("benchmark.zig");
+const LineEditor = @import("line_editor.zig").LineEditor;
 const BenchmarkStats = benchmark.BenchmarkStats;
 const BenchmarkConfig = benchmark.BenchmarkConfig;
 const CountingAllocator = benchmark.CountingAllocator;
@@ -70,6 +71,7 @@ pub fn main() u8 {
 
     // Parse flags
     var show_stack = false;
+    var quiet = false;
     var file_path: ?[]const u8 = null;
     var bench_config = BenchmarkConfig{};
     var max_memory_bytes: usize = 256 * 1024 * 1024;
@@ -89,6 +91,8 @@ pub fn main() u8 {
             program_args.append(gpa_allocator, arg) catch return 1;
         } else if (std.mem.eql(u8, arg, "--show-stack")) {
             show_stack = true;
+        } else if (std.mem.eql(u8, arg, "-q") or std.mem.eql(u8, arg, "--quiet")) {
+            quiet = true;
         } else if (std.mem.eql(u8, arg, "--benchmark") or std.mem.eql(u8, arg, "-b")) {
             bench_config.enabled = true;
         } else if (std.mem.eql(u8, arg, "--benchmark=verbose")) {
@@ -202,7 +206,7 @@ pub fn main() u8 {
     const result = if (file_path) |path|
         batch(&ctx, path, show_stack)
     else blk: {
-        repl(&ctx);
+        repl(&ctx, quiet, max_memory_bytes);
         break :blk @as(u8, 0);
     };
 
@@ -384,27 +388,112 @@ fn formatDirectory(allocator: std.mem.Allocator, dir_path: []const u8, check_onl
     return result;
 }
 
-fn repl(ctx: *Context) void {
-    const stdin_file: File = .stdin();
+fn repl(ctx: *Context, quiet: bool, max_memory_bytes: usize) void {
     const stdout_file: File = .stdout();
-
-    var stdin_buf: [4096]u8 = undefined;
     var stdout_buf: [4096]u8 = undefined;
-
-    var stdin = stdin_file.reader(&stdin_buf);
     var stdout = stdout_file.writer(&stdout_buf);
-
     const writer = &stdout.interface;
-    const reader = &stdin.interface;
 
-    writer.print("1z interpreter v{s}\n", .{version}) catch return;
-    writer.writeAll("Press ^D to quit\n\n") catch return;
-    writer.flush() catch return;
+    if (!quiet) {
+        const mem_str = MemoryLimitAllocator.formatBytesStatic(max_memory_bytes);
+        writer.print("1z interpreter v{s} ({s} max)\n", .{ version, mem_str }) catch return;
+        writer.writeAll("Press ^D to quit\n\n") catch return;
+        writer.flush() catch return;
+    }
+
+    if (std.posix.isatty(std.posix.STDIN_FILENO)) {
+        replInteractive(ctx, writer);
+    } else {
+        replPiped(ctx, writer);
+    }
+}
+
+fn replInteractive(ctx: *Context, writer: anytype) void {
+    var editor = LineEditor.init(ctx.allocator) catch {
+        // Fall back to piped mode if terminal setup fails
+        replPiped(ctx, writer);
+        return;
+    };
+    defer editor.deinit();
+
+    const history_path = editor.resolveHistoryPath();
+    defer if (history_path) |p| editor.allocator.free(p);
+
+    if (history_path) |path| {
+        editor.loadHistory(path);
+    }
+
+    editor.dictionary = &ctx.dictionary;
 
     var processor: StatementProcessor = .{};
     var repl_line: usize = 0;
     while (true) {
-        // Show continuation prompt if accumulating, otherwise primary prompt
+        const prompt: []const u8 = if (processor.isAccumulating()) "+ " else "> ";
+
+        const maybe_line = editor.readLine(prompt) catch {
+            writer.writeAll("Error reading input\n") catch {};
+            writer.flush() catch {};
+            continue;
+        };
+
+        const line = maybe_line orelse {
+            if (history_path) |path| {
+                editor.saveHistory(path);
+            }
+            writer.writeAll("Goodbye!\n") catch {};
+            writer.flush() catch {};
+            return;
+        };
+
+        repl_line += 1;
+        processor.trackLine(repl_line);
+
+        switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
+            .needs_more_input => continue,
+            .parse_error => |err| {
+                writer.print("Error: {any}\n", .{err}) catch {};
+                writer.flush() catch {};
+                processor.reset();
+            },
+            .complete => |instrs| {
+                // Add the full statement to history
+                const stmt = processor.getStatement();
+                if (stmt.len > 0) {
+                    editor.addHistory(stmt);
+                }
+
+                if (instrs.len > 0) {
+                    adjustInstructionLines(instrs, processor.start_line);
+                }
+
+                var had_error = false;
+                ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
+                    printErrorDetails(ctx, writer, err);
+                    had_error = true;
+                };
+
+                if (!had_error) {
+                    writer.writeAll("Stack: ") catch {};
+                    ctx.stack.dump(writer) catch {};
+                    writer.writeAll("\n") catch {};
+                }
+
+                writer.flush() catch {};
+                processor.reset();
+            },
+        }
+    }
+}
+
+fn replPiped(ctx: *Context, writer: anytype) void {
+    const stdin_file: File = .stdin();
+    var stdin_buf: [4096]u8 = undefined;
+    var stdin = stdin_file.reader(&stdin_buf);
+    const reader = &stdin.interface;
+
+    var processor: StatementProcessor = .{};
+    var repl_line: usize = 0;
+    while (true) {
         if (processor.isAccumulating()) {
             writer.writeAll("+ ") catch return;
         } else {
@@ -611,4 +700,5 @@ test {
     _ = @import("formatter.zig");
     _ = @import("benchmark.zig");
     _ = @import("memory_limit.zig");
+    _ = @import("line_editor.zig");
 }

@@ -110,7 +110,7 @@ pub const MemoryLimitAllocator = struct {
         std.process.exit(1);
     }
 
-    fn formatBytesStatic(bytes: usize) []const u8 {
+    pub fn formatBytesStatic(bytes: usize) []const u8 {
         const Static = struct {
             var format_buf: [64]u8 = undefined;
         };
