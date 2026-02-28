@@ -456,8 +456,8 @@ pub const LineEditor = struct {
     }
 
     fn getTerminalWidth() usize {
-        if (!@hasDecl(std.posix.system, "winsize")) {
-            var ws: std.posix.system.winsize = undefined;
+        if (@hasDecl(std.posix, "winsize")) {
+            var ws: std.posix.winsize = undefined;
             const rc = std.posix.system.ioctl(std.posix.STDOUT_FILENO, std.posix.system.T.IOCGWINSZ, @intFromPtr(&ws));
             if (rc == 0 and ws.col > 0) {
                 return ws.col;
