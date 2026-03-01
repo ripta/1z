@@ -22,6 +22,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "sys-exit", .stack_effect = "code --", .doc = "Exit the process with the given exit code.", .func = nativeSysExit },
     .{ .name = "add-load-path", .stack_effect = "path --", .doc = "Add a directory to the load path search list.", .func = nativeAddLoadPath },
     .{ .name = "(trampoline)", .stack_effect = "*unsafe-fn-ptr* --", .doc = "Call a native function via pointer. Internal use only.", .func = nativeTrampoline },
+    .{ .name = "eval-string", .stack_effect = "string --", .doc = "Execute a string as 1z code in the caller's scope.", .func = nativeEvalString },
 };
 
 fn nativeToModule(ctx: *Context) anyerror!void {
@@ -460,4 +461,41 @@ fn native1Array(ctx: *Context) anyerror!void {
     arr[0] = elem;
 
     try ctx.stack.push(.{ .array = arr });
+}
+
+/// eval-string ( string -- ) - Execute a string as 1z code in the caller's scope
+fn nativeEvalString(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const code = try popString(ctx);
+
+    var processor: StatementProcessor = .{};
+    defer processor.deinit();
+
+    var start: usize = 0;
+    while (start < code.len) {
+        const end = std.mem.indexOfScalarPos(u8, code, start, '\n') orelse code.len;
+        const line = code[start..end];
+        start = end + 1;
+
+        switch (processor.feedLine(alloc, line, ctx)) {
+            .needs_more_input => continue,
+            .parse_error => |err| return err,
+            .complete => |instrs| {
+                if (instrs.len > 0) {
+                    try ctx.executeQuotation(.{ .instructions = instrs });
+                }
+                processor.reset();
+            },
+        }
+    }
+
+    switch (processor.flush(alloc, ctx)) {
+        .needs_more_input => {},
+        .parse_error => |err| return err,
+        .complete => |instrs| {
+            if (instrs.len > 0) {
+                try ctx.executeQuotation(.{ .instructions = instrs });
+            }
+        },
+    }
 }

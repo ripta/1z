@@ -1,0 +1,14 @@
+Stack: [ 3 ]
+PASS: eval-string: basic arithmetic
+Stack: [ ]
+Stack: [ ]
+PASS: eval-string: definitions persist
+Stack: [ ]
+Stack: [ ]
+PASS: eval-string: multi-line definitions
+Stack: [ ]
+PASS: error
+Stack: [ ]
+Stack: [ ]
+PASS: eval-string: parse-time struct
+Stack: [ ]
