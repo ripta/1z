@@ -1,0 +1,74 @@
+\ Strict use (import conflict detection) tests
+
+use "testing" ;
+
+\ === Full import conflict detection ===
+"Full import of two modules with overlapping word names errors" test-section
+
+use "strict_use_mod_a.1z" ;
+\ Test that importing a module with conflicting names throws import-conflict
+[ "strict_use_mod_b.1z" load @keys assert-no-shadow ]
+[ error-type: @get EImportConflict "conflicting full import throws import-conflict" assert= ] recover
+
+\ === shadow-ok suppresses the error ===
+"shadow-ok suppresses import conflict on full import" test-section
+
+use "strict_use_mod_b.1z" shadow-ok ;
+greet "hello from B" "shadow-ok full import uses later module" assert=
+
+\ === Selective import conflict detection ===
+"Selective import of conflicting word errors" test-section
+
+[ { greet: } assert-no-shadow ]
+[ error-type: @get EImportConflict "conflicting selective import throws import-conflict" assert= ] recover
+
+\ === Selective import with shadow-ok ===
+"shadow-ok suppresses selective import conflict" test-section
+
+use { greet: } "strict_use_mod_a.1z" shadow-ok ;
+greet "hello from A" "shadow-ok selective import works" assert=
+
+\ === Non-conflicting selective import works ===
+"Importing a non-conflicting subset does not error" test-section
+
+use { sub: } "strict_use_mod_c.1z" ;
+5 3 sub 2 "non-conflicting selective import works" assert=
+
+\ === Chain imports do not cause false positives ===
+"Library-internal chain imports work without cascading errors" test-section
+
+use "strings" ;
+"a,b,c" "," split #len 3 "chain import via strings works" assert=
+
+\ === Prelude word shadowing is allowed ===
+\ Importing a module that exports a word with the same name as a prelude word
+\ should not trigger import-conflict because prelude words are in frame 0,
+\ not in the current import frame.
+"Importing a word with the same name as a prelude word succeeds" test-section
+
+use "strict_use_mod_prelude_shadow.1z" ;
+nip "custom nip" "prelude word shadowing allowed" assert=
+
+\ === Input validation on use tail tokens ===
+"(validate-use-tail) accepts shadow-ok marker" test-section
+
+{ shadow-ok } (validate-use-tail) t "(validate-use-tail) accepts shadow-ok" assert=
+
+"(validate-use-tail) returns f for empty array" test-section
+
+{ } (validate-use-tail) f "(validate-use-tail) returns f for empty" assert=
+
+"(validate-use-tail) rejects a string token" test-section
+
+[ { "blah" } (validate-use-tail) ]
+[ error-type: @get EInvalidArgument "(validate-use-tail) rejects string" assert= ] recover
+
+"(validate-use-tail) rejects a number literal" test-section
+
+[ { 42 } (validate-use-tail) ]
+[ error-type: @get EInvalidArgument "(validate-use-tail) rejects number" assert= ] recover
+
+"(validate-use-tail) rejects a different marker" test-section
+
+[ { const } (validate-use-tail) ]
+[ error-type: @get EInvalidArgument "(validate-use-tail) rejects wrong marker" assert= ] recover

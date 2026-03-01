@@ -364,15 +364,70 @@ read-line: ( -- str/f ) [ input-stream get stream-read-line ] ;
 \                      use "./file.1z" ;
 \                      use "path/to/file.1z" ;
 \   selective words:   use { word1: word2: } "file.1z" ;
+\   allow shadowing:   use "file.1z" shadow-ok ;
+
+EImportConflict: [ import-conflict: ] ;
+
+\\ Check that none of the given names shadow words in the current import frame.
+\\ Throws an `import-conflict` error if any name is already locally defined.
+assert-no-shadow: ( names -- ) [
+  { } swap
+  [ dup native.locally-defined? [ 1array #append ] [ drop ] if ] #each
+  dup #empty?
+  [ drop ]
+  [
+    "" swap
+    [
+      >string
+      dup native.word-source dup
+      [ inspect swap " (from " #append swap #append ")" #append ]
+      [ drop ]
+      if
+      swap dup #empty? [ swap #append ] [ ", " #append swap #append ] if
+    ] #each
+    "use would shadow existing words: " swap #append
+    f swap EImportConflict make-error throw
+  ]
+  if
+] ;
+
+\\ Validate the tail tokens of a `use` invocation.
+\\ Each value must be the well-known `shadow-ok` marker; throws on any unrecognized value.
+\\ Returns `t` if `shadow-ok` was present, `f` if no tail tokens.
+(validate-use-tail): ( values -- ? ) [
+  dup #empty?
+  [ drop f ]
+  [
+    [
+      dup shadow-ok = not
+      [ inspect "unrecognized token in use: " swap #append f swap EInvalidArgument make-error throw ]
+      when
+      drop
+    ] #each
+    t
+  ]
+  if
+] ;
+
 \\ Load and import a module by name or file path.
 \\ Optionally restrict imported words with a set of symbols.
+\\ Insert `shadow-ok` before `;` to suppress the shadow check.
 use: parse-time [
   parse-literal
   dup string?
-  [ load import ]
-  [ parse-literal load swap import ]
+  [
+    load
+    ";" parse-values-until (validate-use-tail) not
+    [ dup @keys assert-no-shadow ] when
+    import
+  ]
+  [
+    parse-literal load swap
+    ";" parse-values-until (validate-use-tail) not
+    [ dup assert-no-shadow ] when
+    import
+  ]
   if
-  ";" parse-until drop
 ] ;
 
 \ Loops

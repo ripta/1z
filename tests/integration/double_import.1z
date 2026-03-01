@@ -2,7 +2,7 @@
 
 use "testing" ;
 use "time" ;
-use "time" ;
+use "time" shadow-ok ;
 
 t "double-import-no-crash" assert-true
 1 seconds 1 seconds + unmake-duration 2000000000 "duration-arithmetic-after-double-import" assert=

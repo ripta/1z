@@ -170,6 +170,7 @@ rethrow ( error -- )
 select ( array -- val ch )
 send ( val ch -- )
 set-buffering-mode ( stream symbol -- )
+shadow-ok ( -- marker )
 shift ( n count -- n' )
 shift-left ( n count -- n' )
 shift-right ( n count -- n' )
@@ -220,6 +221,7 @@ yield ( -- )
 #nth? ( seq n -- option )
 #resize! ( seq n fill -- seq )
 (raw>word-info)
+(validate-use-tail) ( values -- ? )
 ++ ( a1 -- a2 )
 -- ( a1 -- a2 )
 -@ ( a -- -a )
@@ -267,6 +269,7 @@ EFileNotFound
 EFileReadFailed
 EFixnumOverflow
 EIOFailed
+EImportConflict
 EIndexOutOfBounds
 EInvalidArgument
 EKeyNotFound
@@ -291,6 +294,7 @@ acquire ( resource -- )
 all-words ( -- array )
 and ( ? ? -- ? )
 array? ( val -- ? )
+assert-no-shadow ( names -- )
 benchmark-report? ( val -- ? )
 bi ( ..a x p q -- ..b ..c )
 bignum? ( val -- ? )
