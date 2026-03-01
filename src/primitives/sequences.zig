@@ -10,6 +10,7 @@ const Primitive = types_mod.Primitive;
 const RegistryEntry = types_mod.RegistryEntry;
 const helpers = @import("helpers.zig");
 const dispatch_helpers = @import("dispatch_helpers.zig");
+const dispatch_mod = @import("../dispatch.zig");
 const sequence = @import("sequence.zig");
 const Iterator = @import("../iterator.zig").Iterator;
 
@@ -243,6 +244,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "#pop", .stack_effect = "seq -- seq' elem", .doc = "Remove last element, return both sequence and element.", .func = nativePop },
     .{ .name = "#unshift", .stack_effect = "seq elem -- seq'", .doc = "Add element to start of sequence, returns new sequence.", .func = nativeUnshift },
     .{ .name = "#shift", .stack_effect = "seq -- seq' elem", .doc = "Remove first element, return both truncated sequence and element.", .func = nativeShift },
+    .{ .name = "#nth!", .stack_effect = "seq n value -- seq", .doc = "Set element at index in mutable sequence.", .func = nativeNthMut },
     .{ .name = "#push!", .stack_effect = "vec elem -- vec", .doc = "Mutably add element to end of vector.", .func = nativePushMut },
     .{ .name = "#pop!", .stack_effect = "vec -- vec elem", .doc = "Mutably remove last element from vector.", .func = nativePopMut },
     .{ .name = "#unshift!", .stack_effect = "vec elem -- vec", .doc = "Mutably add element to start of vector.", .func = nativeUnshiftMut },
@@ -320,6 +322,77 @@ pub fn nativeNth(ctx: *Context) anyerror!void {
         },
         else => {
             setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// #nth! ( seq n value -- seq ) - Set element at index in mutable sequence
+fn nativeNthMut(ctx: *Context) anyerror!void {
+    // Dispatch for custom types: seq is at position 2 (below n and value)
+    if (ctx.stack.depth() >= 3) {
+        const seq_peek = try ctx.stack.peekN(2);
+        if (dispatch_mod.isUserType(seq_peek)) {
+            const a_type = dispatch_mod.dispatchTypeName(seq_peek);
+            if (ctx.lookupUnaryDispatch("#nth!", a_type)) |entry| {
+                try ctx.executeQuotation(.{ .instructions = entry.body });
+                return;
+            }
+            if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
+                if (ctx.lookupUnaryDispatch("#nth!", ae)) |entry| {
+                    try ctx.executeQuotation(.{ .instructions = entry.body });
+                    return;
+                }
+            }
+        }
+    }
+
+    const value = try ctx.stack.pop();
+    const index = try popFixnum(ctx);
+    const seq = try ctx.stack.pop();
+
+    if (index < 0) {
+        setErrorContext(ctx, "negative index {d}", .{index});
+        return error.IndexOutOfBounds;
+    }
+    const idx: usize = @intCast(index);
+
+    switch (seq) {
+        .vector => |v| {
+            if (idx >= v.items.len) {
+                setErrorContext(ctx, "index {d} out of bounds for vector of length {d}", .{ idx, v.items.len });
+                return error.IndexOutOfBounds;
+            }
+            v.items[idx] = value;
+            try ctx.stack.push(.{ .vector = v });
+        },
+        .byte_array => |b| {
+            if (idx >= b.items.len) {
+                setErrorContext(ctx, "index {d} out of bounds for byte-array of length {d}", .{ idx, b.items.len });
+                return error.IndexOutOfBounds;
+            }
+            const byte_val: u8 = switch (value) {
+                .fixnum => |i| blk: {
+                    if (i < 0 or i > 255) {
+                        setErrorContext(ctx, "#nth! byte value {d} out of range 0-255", .{i});
+                        return error.FixnumOverflow;
+                    }
+                    break :blk @intCast(i);
+                },
+                else => {
+                    setErrorContext(ctx, "#nth! on byte-array requires fixnum value 0-255, got {s}", .{valueTypeName(value)});
+                    return error.TypeMismatch;
+                },
+            };
+            b.items[idx] = byte_val;
+            try ctx.stack.push(.{ .byte_array = b });
+        },
+        .array, .string => {
+            setErrorContext(ctx, "cannot mutate immutable {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+        else => {
+            setErrorContext(ctx, "expected mutable sequence, got {s}", .{valueTypeName(seq)});
             return error.TypeMismatch;
         },
     }

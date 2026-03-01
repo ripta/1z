@@ -17,6 +17,7 @@ Stack: [ ]
 #map ( seq quot -- seq' )
 #next ( iterator -- value )
 #nth ( seq n -- elem )
+#nth! ( seq n value -- seq )
 #pop ( seq -- seq' elem )
 #pop! ( vec -- vec elem )
 #prepend ( seq1 seq2 -- seq )
