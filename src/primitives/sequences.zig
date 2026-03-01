@@ -1643,8 +1643,8 @@ fn nativeDrop(ctx: *Context) anyerror!void {
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "bytes-alloc", .func = nativeBytesAlloc },
-    .{ .name = "shrink!", .func = nativeShrinkMut },
-    .{ .name = "grow!", .func = nativeGrowMut },
+    .{ .name = "#shrink!", .func = nativeShrinkMut },
+    .{ .name = "#grow!", .func = nativeGrowMut },
 };
 
 /// bytes-alloc ( n -- byte-array ) - Create a fresh zero-filled byte array of size n.
@@ -1666,7 +1666,7 @@ fn nativeBytesAlloc(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .byte_array = ba });
 }
 
-/// shrink! ( seq n -- seq ) - Truncate a mutable sequence to n elements.
+/// #shrink! ( seq n -- seq ) - Truncate a mutable sequence to n elements.
 ///
 /// Polymorphic on byte-array and vector.
 fn nativeShrinkMut(ctx: *Context) anyerror!void {
@@ -1674,7 +1674,7 @@ fn nativeShrinkMut(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
 
     if (n_val < 0) {
-        setErrorContext(ctx, "shrink! count must be non-negative, got {d}", .{n_val});
+        setErrorContext(ctx, "#shrink! count must be non-negative, got {d}", .{n_val});
         return error.IndexOutOfBounds;
     }
     const n: usize = @intCast(n_val);
@@ -1682,7 +1682,7 @@ fn nativeShrinkMut(ctx: *Context) anyerror!void {
     switch (seq) {
         .byte_array => |ba| {
             if (n > ba.items.len) {
-                setErrorContext(ctx, "shrink! count {d} exceeds byte-array length {d}", .{ n_val, ba.items.len });
+                setErrorContext(ctx, "#shrink! count {d} exceeds byte-array length {d}", .{ n_val, ba.items.len });
                 return error.IndexOutOfBounds;
             }
             ba.items.len = n;
@@ -1690,20 +1690,20 @@ fn nativeShrinkMut(ctx: *Context) anyerror!void {
         },
         .vector => |vec| {
             if (n > vec.items.len) {
-                setErrorContext(ctx, "shrink! count {d} exceeds vector length {d}", .{ n_val, vec.items.len });
+                setErrorContext(ctx, "#shrink! count {d} exceeds vector length {d}", .{ n_val, vec.items.len });
                 return error.IndexOutOfBounds;
             }
             vec.items.len = n;
             try ctx.stack.push(.{ .vector = vec });
         },
         else => {
-            setErrorContext(ctx, "shrink! expected byte-array or vector, got {s}", .{valueTypeName(seq)});
+            setErrorContext(ctx, "#shrink! expected byte-array or vector, got {s}", .{valueTypeName(seq)});
             return error.TypeMismatch;
         },
     }
 }
 
-/// grow! ( seq n fill -- seq ) - Extend a mutable sequence to n elements, filling new slots.
+/// #grow! ( seq n fill -- seq ) - Extend a mutable sequence to n elements, filling new slots.
 ///
 /// Polymorphic on byte-array and vector.
 fn nativeGrowMut(ctx: *Context) anyerror!void {
@@ -1712,7 +1712,7 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
 
     if (n_val < 0) {
-        setErrorContext(ctx, "grow! count must be non-negative, got {d}", .{n_val});
+        setErrorContext(ctx, "#grow! count must be non-negative, got {d}", .{n_val});
         return error.IndexOutOfBounds;
     }
     const n: usize = @intCast(n_val);
@@ -1720,19 +1720,19 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
     switch (seq) {
         .byte_array => |ba| {
             if (n < ba.items.len) {
-                setErrorContext(ctx, "grow! count {d} is less than byte-array length {d}", .{ n_val, ba.items.len });
+                setErrorContext(ctx, "#grow! count {d} is less than byte-array length {d}", .{ n_val, ba.items.len });
                 return error.IndexOutOfBounds;
             }
             const fill_byte: u8 = switch (fill) {
                 .fixnum => |i| blk: {
                     if (i < 0 or i > 255) {
-                        setErrorContext(ctx, "grow! fill byte {d} out of range 0-255", .{i});
+                        setErrorContext(ctx, "#grow! fill byte {d} out of range 0-255", .{i});
                         return error.FixnumOverflow;
                     }
                     break :blk @intCast(i);
                 },
                 else => {
-                    setErrorContext(ctx, "grow! on byte-array requires fixnum fill, got {s}", .{valueTypeName(fill)});
+                    setErrorContext(ctx, "#grow! on byte-array requires fixnum fill, got {s}", .{valueTypeName(fill)});
                     return error.TypeMismatch;
                 },
             };
@@ -1745,7 +1745,7 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
         },
         .vector => |vec| {
             if (n < vec.items.len) {
-                setErrorContext(ctx, "grow! count {d} is less than vector length {d}", .{ n_val, vec.items.len });
+                setErrorContext(ctx, "#grow! count {d} is less than vector length {d}", .{ n_val, vec.items.len });
                 return error.IndexOutOfBounds;
             }
             const alloc = ctx.quotationAllocator();
@@ -1756,7 +1756,7 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .vector = vec });
         },
         else => {
-            setErrorContext(ctx, "grow! expected byte-array or vector, got {s}", .{valueTypeName(seq)});
+            setErrorContext(ctx, "#grow! expected byte-array or vector, got {s}", .{valueTypeName(seq)});
             return error.TypeMismatch;
         },
     }

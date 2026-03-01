@@ -208,9 +208,9 @@ generic?: ( name -- ? ) [ word-markers [ generic = ] #any ] ;
 \\ Create an n-byte zeroed buffer.
 bytes-alloc: ( n -- byte-array ) [ native.bytes-alloc ] ;
 \\ Resize byte array in place, truncating or zero-filling as needed.
-bytes-resize!: ( byte-array n -- byte-array ) [ over #len over < [ 0x00 native.grow! ] [ native.shrink! ] if ] ;
+bytes-resize!: ( byte-array n -- byte-array ) [ over #len over < [ 0x00 native.#grow! ] [ native.#shrink! ] if ] ;
 \\ Resize a mutable sequence in place with an explicit fill value for growth.
-resize!: ( seq n fill -- seq ) [ -rot> over #len over < [ [ swap ] dip swap native.grow! ] [ [ swap drop ] dip native.shrink! ] if ] ;
+#resize!: ( seq n fill -- seq ) [ -rot> over #len over < [ [ swap ] dip swap native.#grow! ] [ [ swap drop ] dip native.#shrink! ] if ] ;
 
 \ Short-circuiting sequence predicates
 \\ Test whether any element satisfies the predicate. Short-circuits.

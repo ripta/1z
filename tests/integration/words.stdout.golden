@@ -217,6 +217,7 @@ yield ( -- )
 #next? ( iter -- option )
 #none ( seq quot -- ? )
 #nth? ( seq n -- option )
+#resize! ( seq n fill -- seq )
 (raw>word-info)
 ++ ( a1 -- a2 )
 -- ( a1 -- a2 )
@@ -414,7 +415,6 @@ provenance?
 quotation? ( val -- ? )
 read-line ( -- str/f )
 receive? ( ch -- option )
-resize! ( seq n fill -- seq )
 result:err> ( result -- error )
 result:err>hash
 result:err?

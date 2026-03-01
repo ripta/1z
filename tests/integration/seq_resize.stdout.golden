@@ -1,72 +1,72 @@
-=== shrink! on byte-array ===
+=== #shrink! on byte-array ===
 Stack: [ ]
-PASS: shrink! reduces length
+PASS: #shrink! reduces length
 Stack: [ ]
-PASS: shrink! preserves first
+PASS: #shrink! preserves first
 Stack: [ ]
-PASS: shrink! preserves third
+PASS: #shrink! preserves third
 Stack: [ ]
-PASS: shrink! to zero
+PASS: #shrink! to zero
 Stack: [ ]
-PASS: shrink! to same length is no-op
+PASS: #shrink! to same length is no-op
 Stack: [ ]
-=== shrink! on vector ===
+=== #shrink! on vector ===
 Stack: [ ]
-PASS: shrink! reduces vector length
+PASS: #shrink! reduces vector length
 Stack: [ ]
-PASS: shrink! preserves vector first
+PASS: #shrink! preserves vector first
 Stack: [ ]
-PASS: shrink! preserves vector second
+PASS: #shrink! preserves vector second
 Stack: [ ]
-PASS: shrink! vector to zero
+PASS: #shrink! vector to zero
 Stack: [ ]
-=== shrink! error cases ===
+=== #shrink! error cases ===
 Stack: [ ]
-PASS: shrink! n > byte-array length
+PASS: #shrink! n > byte-array length
 Stack: [ ]
-PASS: shrink! n > vector length
+PASS: #shrink! n > vector length
 Stack: [ ]
-PASS: shrink! negative n on byte-array
+PASS: #shrink! negative n on byte-array
 Stack: [ ]
-PASS: shrink! negative n on vector
+PASS: #shrink! negative n on vector
 Stack: [ ]
-=== grow! on byte-array ===
+=== #grow! on byte-array ===
 Stack: [ ]
-PASS: grow! increases byte-array length
+PASS: #grow! increases byte-array length
 Stack: [ ]
-PASS: grow! preserves first byte
+PASS: #grow! preserves first byte
 Stack: [ ]
-PASS: grow! preserves second byte
+PASS: #grow! preserves second byte
 Stack: [ ]
-PASS: grow! fills with zero
+PASS: #grow! fills with zero
 Stack: [ ]
-PASS: grow! fills last with zero
+PASS: #grow! fills last with zero
 Stack: [ ]
-PASS: grow! fills with 0xff
+PASS: #grow! fills with 0xff
 Stack: [ ]
-PASS: grow! to same length is no-op
+PASS: #grow! to same length is no-op
 Stack: [ ]
-=== grow! on vector ===
+=== #grow! on vector ===
 Stack: [ ]
-PASS: grow! increases vector length
+PASS: #grow! increases vector length
 Stack: [ ]
-PASS: grow! preserves vector first
+PASS: #grow! preserves vector first
 Stack: [ ]
-PASS: grow! fills vector with zero
+PASS: #grow! fills vector with zero
 Stack: [ ]
-PASS: grow! fills vector with any value
+PASS: #grow! fills vector with any value
 Stack: [ ]
-=== grow! error cases ===
+=== #grow! error cases ===
 Stack: [ ]
-PASS: grow! n < byte-array length
+PASS: #grow! n < byte-array length
 Stack: [ ]
-PASS: grow! n < vector length
+PASS: #grow! n < vector length
 Stack: [ ]
-PASS: grow! negative n on byte-array
+PASS: #grow! negative n on byte-array
 Stack: [ ]
-PASS: grow! byte fill out of range
+PASS: #grow! byte fill out of range
 Stack: [ ]
-PASS: grow! negative byte fill
+PASS: #grow! negative byte fill
 Stack: [ ]
 === bytes-alloc ===
 Stack: [ ]
@@ -92,17 +92,17 @@ PASS: bytes-resize! shrink preserves data
 Stack: [ ]
 PASS: bytes-resize! same size
 Stack: [ ]
-=== resize! ===
+=== #resize! ===
 Stack: [ ]
-PASS: resize! grow vector
+PASS: #resize! grow vector
 Stack: [ ]
-PASS: resize! fill value
+PASS: #resize! fill value
 Stack: [ ]
-PASS: resize! shrink vector
+PASS: #resize! shrink vector
 Stack: [ ]
-PASS: resize! grow byte-array
+PASS: #resize! grow byte-array
 Stack: [ ]
-PASS: resize! byte-array fill value
+PASS: #resize! byte-array fill value
 Stack: [ ]
-PASS: resize! shrink byte-array
+PASS: #resize! shrink byte-array
 Stack: [ ]
