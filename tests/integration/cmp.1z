@@ -116,17 +116,17 @@ t "weight satisfies comparable" assert-true
   ordering:lt: [ "less" ]
   ordering:eq: [ "equal" ]
   ordering:gt: [ "greater" ]
-} match
+} unchecked-match
 "less" "match on cmp result" assert=
 5 5 cmp {
   ordering:lt: [ "less" ]
   ordering:eq: [ "equal" ]
   ordering:gt: [ "greater" ]
-} match
+} unchecked-match
 "equal" "match eq branch" assert=
 7 3 cmp {
   ordering:lt: [ "less" ]
   ordering:eq: [ "equal" ]
   ordering:gt: [ "greater" ]
-} match
+} unchecked-match
 "greater" "match gt branch" assert=

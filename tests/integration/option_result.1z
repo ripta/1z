@@ -79,24 +79,24 @@ result: enum-variants { result:ok: result:err: } "result variants" assert=
 42 >option:some {
   option:some: [ 2 * ]
   option:none: [ 0 ]
-} match 84 "match some" assert=
+} unchecked-match 84 "match some" assert=
 
 option:none {
   option:some: [ 2 * ]
   option:none: [ 0 ]
-} match 0 "match none" assert=
+} unchecked-match 0 "match none" assert=
 
 "match on result" test-section
 
 42 >result:ok {
   result:ok: [ 1 + ]
   result:err: [ drop -1 ]
-} match 43 "match ok" assert=
+} unchecked-match 43 "match ok" assert=
 
 "oops" "test" EUserThrown make-error >result:err {
   result:ok: [ 1 + ]
   result:err: [ drop -1 ]
-} match -1 "match err" assert=
+} unchecked-match -1 "match err" assert=
 
 "option wrapping structs" test-section
 
@@ -158,17 +158,17 @@ color:red >option:some "wrapped" "test" EUserThrown make-error >result:err resul
 10 20 make-point >option:some {
   option:some: [ x>> ]
   option:none: [ -1 ]
-} match 10 "match some with struct payload" assert=
+} unchecked-match 10 "match some with struct payload" assert=
 
 42 >speed >option:some {
   option:some: [ unmake-speed 2 * ]
   option:none: [ 0 ]
-} match 84 "match some with virtual payload" assert=
+} unchecked-match 84 "match some with virtual payload" assert=
 
 color:blue >option:some {
   option:some: [ color:blue? ]
   option:none: [ f ]
-} match t "match some with enum payload" assert=
+} unchecked-match t "match some with enum payload" assert=
 
 "unwrap-or on option" test-section
 
