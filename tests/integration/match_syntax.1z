@@ -1,0 +1,89 @@
+\ Test parse-time validated match{ syntax
+
+use "testing" ;
+
+color: enum{ red green blue } ;
+
+"match{ flat enum dispatch" test-section
+
+color:red match{
+  color:red:   [ "R" ]
+  color:green: [ "G" ]
+  color:blue:  [ "B" ]
+} "R" "match{ selects correct flat variant" assert=
+
+color:green match{
+  color:red:   [ "R" ]
+  color:green: [ "G" ]
+  color:blue:  [ "B" ]
+} "G" "match{ selects green" assert=
+
+color:blue match{
+  color:red:   [ "R" ]
+  color:green: [ "G" ]
+  color:blue:  [ "B" ]
+} "B" "match{ selects blue" assert=
+
+"match{ data-carrying variant" test-section
+
+shape: enum{
+  circle struct{ radius }
+  point
+} ;
+
+42 >shape:circle match{
+  shape:circle: [ 2 * ]
+  shape:point: [ 0 ]
+} 84 "match{ unwraps data variant" assert=
+
+shape:point match{
+  shape:circle: [ 2 * ]
+  shape:point: [ 99 ]
+} 99 "match{ flat variant in mixed enum" assert=
+
+"match{ with _ default on flat variant" test-section
+
+color:red match{
+  color:red: [ "red" ]
+  _ [ drop "other" ]
+} "red" "match{ default: named branch wins" assert=
+
+color:green match{
+  color:red: [ "red" ]
+  _ [ drop "other" ]
+} "other" "match{ default: _ catches non-matched" assert=
+
+"match{ with _ default on data-carrying variant" test-section
+
+42 >shape:circle match{
+  shape:point: [ 99 ]
+  _ [ drop "fallback" ]
+} "fallback" "match{ default: _ receives raw tagged value" assert=
+
+42 >shape:circle match{
+  shape:circle: [ 2 * ]
+  _ [ drop "fallback" ]
+} 84 "match{ default: named branch still unwraps" assert=
+
+"match{ inside word definition" test-section
+
+describe-color: ( color -- str ) [
+  match{
+    color:red:   [ "red" ]
+    color:green: [ "green" ]
+    color:blue:  [ "blue" ]
+  }
+] ;
+
+color:red describe-color "red" "match{ inside word def" assert=
+color:blue describe-color "blue" "match{ inside word def blue" assert=
+
+"match{ multiline layout" test-section
+
+color:green
+match{
+  color:red:   [ "R" ]
+  color:green: [ "G" ]
+  color:blue:  [ "B" ]
+}
+"G" "match{ multiline layout works" assert=

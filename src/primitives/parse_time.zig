@@ -19,6 +19,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "peek-token", .stack_effect = "-- string", .doc = "Return the next token without consuming it. Repeated calls return the same token until parse-token or another consuming primitive advances past it.", .func = nativePeekToken },
     .{ .name = "parse-literal", .stack_effect = "-- value", .doc = "Read the next literal value from the tokenizer.", .func = nativeParseLiteral },
     .{ .name = "resolve-literal", .stack_effect = "string -- value ?", .doc = "Resolve a string as a scalar literal.", .func = nativeResolveLiteral },
+    .{ .name = "emit-call", .stack_effect = "symbol --", .doc = "Request a call_word emission for the named word after the current parse-time word completes.", .func = nativeEmitCall },
 };
 
 fn isSkippable(kind: Token.Kind) bool {
@@ -202,6 +203,22 @@ fn nativeResolveLiteral(ctx: *Context) anyerror!void {
         try ctx.stack.push(.{ .string = token });
         try ctx.stack.push(.{ .boolean = false });
     }
+}
+
+/// emit-call ( symbol -- ) - Request a call_word emission after parse-time word completes.
+fn nativeEmitCall(ctx: *Context) anyerror!void {
+    if (ctx.parse_tokenizer == null) {
+        helpers.setErrorContext(ctx, "emit-call can only be used during parse time", .{});
+        return error.ParseError;
+    }
+    const name = switch (try ctx.stack.pop()) {
+        .symbol => |s| s,
+        else => |v| {
+            helpers.setTypeMismatchError(ctx, "symbol", v);
+            return error.TypeMismatch;
+        },
+    };
+    try ctx.parse_time_deferred_calls.append(ctx.allocator, name);
 }
 
 /// parse-literal ( -- value ) - Read the next literal from the tokenizer.

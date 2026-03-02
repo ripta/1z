@@ -1,0 +1,16 @@
+=== single emit-call ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: emit-call invokes the named word
+Stack: [ ]
+=== multiple emit-call invocations ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: multiple emit-call: double then add1
+Stack: [ ]
+=== emit-call outside parse time ===
+Stack: [ ]
+PASS: parse time
+Stack: [ helper-add1: ]

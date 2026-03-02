@@ -25,6 +25,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "enum-of", .stack_effect = "val -- str/f", .doc = "Return the parent enum name for an enum variant value, or f if not an enum variant.", .func = nativeEnumOf },
     .{ .name = "enum-variants", .stack_effect = "symbol -- array", .doc = "Return an array of variant name symbols for the named enum.", .func = nativeEnumVariants },
     .{ .name = "match", .stack_effect = "val branches -- ...", .doc = "Exhaustive dispatch on enum variants. Branches are alternating symbol-quotation pairs. Auto-unwraps data-carrying variants.", .func = nativeMatch, .markers = &.{@constCast(&markers_mod.branch_combinator_marker)} },
+    .{ .name = "validate-match-block", .stack_effect = "array -- array", .doc = "Validate match branches against the enum registry at parse time.", .func = nativeValidateMatchBlock },
 };
 
 pub const registry_entries = [_]RegistryEntry{
@@ -374,22 +375,28 @@ fn nativeMatch(ctx: *Context) anyerror!void {
     };
 
     const alloc = ctx.quotationAllocator();
-    const n_branches = branches.len / 2;
-
-    if (n_branches != vtypes.len) {
-        helpers.setErrorContext(ctx, "match has {d} branches but enum '{s}' has {d} variants", .{ n_branches, enum_name, vtypes.len });
-        return error.ParseError;
-    }
 
     var matched_body: ?value_mod.Quotation = null;
+    var default_body: ?value_mod.Quotation = null;
     var seen = std.StringHashMapUnmanaged(void){};
+    var has_default = false;
 
     var i: usize = 0;
     while (i < branches.len) : (i += 2) {
-        const key = switch (branches[i]) {
+        const key_val = branches[i];
+        const is_default = switch (key_val) {
+            .symbol => |s| std.mem.eql(u8, s, "_"),
+            .string => |s| std.mem.eql(u8, s, "_"),
+            else => false,
+        };
+        const key = switch (key_val) {
             .symbol => |s| s,
+            .string => |s| if (std.mem.eql(u8, s, "_")) s else {
+                helpers.setErrorContext(ctx, "match branch key must be a symbol, got string", .{});
+                return error.TypeMismatch;
+            },
             else => {
-                helpers.setErrorContext(ctx, "match branch key must be a symbol, got {s}", .{helpers.valueTypeName(branches[i])});
+                helpers.setErrorContext(ctx, "match branch key must be a symbol, got {s}", .{helpers.valueTypeName(key_val)});
                 return error.TypeMismatch;
             },
         };
@@ -400,6 +407,16 @@ fn nativeMatch(ctx: *Context) anyerror!void {
                 return error.TypeMismatch;
             },
         };
+
+        if (is_default) {
+            if (has_default) {
+                helpers.setErrorContext(ctx, "duplicate default '_' branch in match", .{});
+                return error.ParseError;
+            }
+            has_default = true;
+            default_body = body;
+            continue;
+        }
 
         var valid = false;
         for (vtypes) |vt| {
@@ -424,27 +441,186 @@ fn nativeMatch(ctx: *Context) anyerror!void {
         }
     }
 
-    // Exhaustiveness check
-    for (vtypes) |vt| {
-        if (!seen.contains(vt.name)) {
-            helpers.setErrorContext(ctx, "missing match branch for variant '{s}'", .{vt.name});
+    // Exhaustiveness check: all variants must be covered unless a default exists
+    if (!has_default) {
+        for (vtypes) |vt| {
+            if (!seen.contains(vt.name)) {
+                helpers.setErrorContext(ctx, "missing match branch for variant '{s}'", .{vt.name});
+                return error.ParseError;
+            }
+        }
+    }
+
+    if (matched_body) |body| {
+        // For data-carrying variants, unwrap the struct fields onto the stack
+        if (tag.tag.anon_struct != null) {
+            switch (tag.inner.*) {
+                .struct_instance => |si| {
+                    for (si.fields) |field_val| {
+                        try ctx.stack.push(field_val);
+                    }
+                },
+                else => {},
+            }
+        }
+        try ctx.executeQuotation(body);
+    } else if (default_body) |body| {
+        // Default branch receives the raw tagged value, not unwrapped
+        try ctx.stack.push(val);
+        try ctx.executeQuotation(body);
+    } else {
+        unreachable;
+    }
+}
+
+const EnumInfo = struct {
+    name: []const u8,
+    variants: []const *const VirtualType,
+};
+
+/// Look up which enum a variant belongs to by searching the enum registry.
+fn lookupVariantEnum(ctx: *const Context, variant_name: []const u8) ?EnumInfo {
+    const registries = [_]struct { ctx: *const Context }{.{ .ctx = ctx }};
+    _ = registries;
+
+    var search_ctx: ?*const Context = ctx;
+    while (search_ctx) |c| {
+        var it = c.enum_registry.iterator();
+        while (it.next()) |entry| {
+            for (entry.value_ptr.*) |vt| {
+                if (std.mem.eql(u8, vt.name, variant_name)) {
+                    return .{ .name = entry.key_ptr.*, .variants = entry.value_ptr.* };
+                }
+            }
+        }
+        search_ctx = c.parent_context;
+    }
+    return null;
+}
+
+/// validate-match-block ( array -- array )
+///
+/// Validates the alternating symbol/quotation array from parse-values-until
+/// against the enum registry. Discovers the enum from the first variant,
+/// checks all variants belong to the same enum, checks for duplicates,
+/// and checks exhaustiveness.
+fn nativeValidateMatchBlock(ctx: *Context) anyerror!void {
+    const arr_val = try ctx.stack.pop();
+    const arr = switch (arr_val) {
+        .array => |a| a,
+        else => {
+            helpers.setTypeMismatchError(ctx, "array", arr_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    if (arr.len == 0) {
+        helpers.setErrorContext(ctx, "match: empty branch block", .{});
+        return error.ParseError;
+    }
+
+    if (arr.len % 2 != 0) {
+        helpers.setErrorContext(ctx, "match: branches must be symbol-quotation pairs (got odd count {d})", .{arr.len});
+        return error.ParseError;
+    }
+
+    const alloc = ctx.quotationAllocator();
+    var seen = std.StringHashMapUnmanaged(void){};
+    var has_default = false;
+    var enum_info: ?EnumInfo = null;
+
+    var i: usize = 0;
+    while (i < arr.len) : (i += 2) {
+        // Key: symbol (variant name) or string "_" for default
+        const key_val = arr[i];
+        const is_default = switch (key_val) {
+            .symbol => |s| std.mem.eql(u8, s, "_"),
+            .string => |s| std.mem.eql(u8, s, "_"),
+            else => false,
+        };
+        const key = switch (key_val) {
+            .symbol => |s| s,
+            .string => |s| s,
+            else => {
+                helpers.setErrorContext(ctx, "match: expected symbol or quotation, got {s}", .{helpers.valueTypeName(key_val)});
+                return error.TypeMismatch;
+            },
+        };
+
+        // Body: quotation
+        const body_val = arr[i + 1];
+        switch (body_val) {
+            .quotation => {},
+            else => {
+                helpers.setErrorContext(ctx, "match: expected symbol or quotation, got {s}", .{helpers.valueTypeName(body_val)});
+                return error.TypeMismatch;
+            },
+        }
+
+        if (is_default) {
+            if (has_default) {
+                helpers.setErrorContext(ctx, "match: duplicate branch for '_'", .{});
+                return error.ParseError;
+            }
+            has_default = true;
+            continue;
+        }
+
+        // Discover enum from first named variant
+        if (enum_info == null) {
+            enum_info = lookupVariantEnum(ctx, key) orelse {
+                helpers.setErrorContext(ctx, "match: variant '{s}' is not a known enum variant", .{key});
+                return error.NameError;
+            };
+        } else {
+            // Verify this variant belongs to the same enum
+            const info = enum_info.?;
+            var found = false;
+            for (info.variants) |vt| {
+                if (std.mem.eql(u8, vt.name, key)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                helpers.setErrorContext(ctx, "match: '{s}' is not a variant of enum '{s}'", .{ key, info.name });
+                return error.NameError;
+            }
+        }
+
+        if (seen.contains(key)) {
+            helpers.setErrorContext(ctx, "match: duplicate branch for '{s}'", .{key});
             return error.ParseError;
         }
+        try seen.put(alloc, key, {});
     }
 
-    const body = matched_body orelse unreachable;
-
-    // For data-carrying variants, unwrap the struct fields onto the stack
-    if (tag.tag.anon_struct != null) {
-        switch (tag.inner.*) {
-            .struct_instance => |si| {
-                for (si.fields) |field_val| {
-                    try ctx.stack.push(field_val);
+    // Exhaustiveness check
+    if (enum_info) |info| {
+        if (!has_default) {
+            var missing = std.ArrayListUnmanaged([]const u8){};
+            for (info.variants) |vt| {
+                if (!seen.contains(vt.name)) {
+                    try missing.append(alloc, vt.name);
                 }
-            },
-            else => {},
+            }
+            if (missing.items.len > 0) {
+                var msg = std.ArrayListUnmanaged(u8){};
+                try msg.appendSlice(alloc, "match: non-exhaustive for enum '");
+                try msg.appendSlice(alloc, info.name);
+                try msg.appendSlice(alloc, "', missing: ");
+                for (missing.items, 0..) |name, j| {
+                    if (j > 0) try msg.appendSlice(alloc, ", ");
+                    try msg.appendSlice(alloc, name);
+                }
+                ctx.pending_error_message = msg.items;
+                return error.ParseError;
+            }
         }
+    } else if (!has_default) {
+        helpers.setErrorContext(ctx, "match: no named variants and no default branch", .{});
+        return error.ParseError;
     }
 
-    try ctx.executeQuotation(body);
+    try ctx.stack.push(arr_val);
 }

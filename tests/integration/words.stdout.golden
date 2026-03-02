@@ -112,6 +112,7 @@ dip ( ..a x quot -- ..b x )
 div ( a b -- q )
 drop ( a -- )
 dup ( a -- a a )
+emit-call ( symbol -- )
 enum-of ( val -- str/f )
 enum-variants ( symbol -- array )
 environ ( -- hash )
@@ -205,6 +206,7 @@ type-of ( val -- symbol )
 tz-decompose ( sec tz-name -- year month-num day hour min sec wday yday gmtoff tz-abbrev )
 uppercase ( str -- str )
 ushift-right ( n count -- n' )
+validate-match-block ( array -- array )
 wipe ( ... -- )
 with-parameter ( value param quot -- )
 with-timeout ( quot duration -- value )
@@ -366,6 +368,7 @@ make-stack-effect
 make-word-info
 marker? ( val -- ? )
 markers>>
+match{
 max ( a1 a2 -- a )
 method-info>hash
 method-info?
