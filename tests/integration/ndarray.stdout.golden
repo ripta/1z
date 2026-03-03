@@ -1,0 +1,54 @@
+=== ndarray construction ===
+Stack: [ ]
+PASS: make 1D ndarray
+Stack: [ ]
+PASS: make 2D ndarray
+Stack: [ ]
+PASS: make 3D ndarray
+Stack: [ ]
+=== ndarray shape and rank ===
+Stack: [ ]
+PASS: 1D shape
+Stack: [ ]
+PASS: 2D shape
+Stack: [ ]
+PASS: 2D rank
+Stack: [ ]
+PASS: 1D rank
+Stack: [ ]
+PASS: 3D rank
+Stack: [ ]
+=== ndarray element type detection ===
+Stack: [ ]
+PASS: fixnum element-type
+Stack: [ ]
+PASS: float element-type
+Stack: [ ]
+=== ndarray homogeneity validation ===
+Stack: [ ]
+PASS: mixed types rejected
+Stack: [ ]
+=== ndarray? predicate ===
+Stack: [ ]
+PASS: ndarray? on ndarray
+Stack: [ ]
+PASS: ndarray? on array
+Stack: [ ]
+PASS: ndarray? on fixnum
+Stack: [ ]
+=== ndarray reshape ===
+Stack: [ ]
+PASS: reshape 2x3 to 3x2
+Stack: [ ]
+PASS: reshape 2x3 to flat
+Stack: [ ]
+PASS: reshape flat to 2x3
+Stack: [ ]
+PASS: reshape size mismatch
+Stack: [ ]
+=== ndarray construction validation ===
+Stack: [ ]
+PASS: data/shape mismatch
+Stack: [ ]
+PASS: empty shape rejected
+Stack: [ ]

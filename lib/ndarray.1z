@@ -1,0 +1,66 @@
+\ lib/ndarray.1z - N-dimensional arrays
+
+ndarray: virtual{ struct{ data shape strides element-type } } ;
+
+shape-product: ( shape -- n ) [ 1 [ * ] #reduce ] ;
+
+row-major-strides: ( shape -- strides ) [
+  dup shape-product
+  [ ] make-vector swap
+  <rot- >iterator [
+    div dup <rot- swap #push! swap
+  ] #each
+  drop
+] ;
+
+contiguous?: ( shape strides -- bool ) [
+  swap row-major-strides =
+] ;
+
+ndarray: ( data shape -- ndarray ) [
+  dup #len 0 = [ f "shape must be non-empty" EInvalidArgument make-error throw ] when
+  dup [ dup fixnum? [ 0 > ] [ drop f ] if ] #filter #collect #len over #len =
+  not [ f "shape elements must be positive fixnums" EInvalidArgument make-error throw ] when
+
+  over #len over shape-product =
+  not [ f "data length does not match shape product" EInvalidArgument make-error throw ] when
+
+  swap [ ] make-vector swap #append! swap
+
+  over 0 #nth type-of
+  \ stack: data-vec shape elem-type
+
+  2 pick-n >iterator [
+    type-of
+    over = not
+    [ f "all elements must have the same type" EInvalidArgument make-error throw ] when
+  ] #each
+  \ stack: data-vec shape elem-type
+
+  over row-major-strides swap
+  make-ndarray
+] ;
+
+shape: ( ndarray -- array ) [ unmake-ndarray drop drop nip ] ;
+rank: ( ndarray -- n ) [ shape #len ] ;
+element-type: ( ndarray -- sym )     [ unmake-ndarray nip nip nip ] ;
+data>>:       ( ndarray -- vec )     [ unmake-ndarray drop drop drop ] ;
+strides>>:    ( ndarray -- strides ) [ unmake-ndarray drop nip nip ] ;
+
+reshape: ( ndarray new-shape -- ndarray ) [
+  over shape shape-product over shape-product =
+  not [ f "reshape: total element count must match" EInvalidArgument make-error throw ] when
+
+  swap dup shape over strides>> contiguous?
+  not [ f "reshape: non-contiguous ndarray not yet supported" EInvalidArgument make-error throw ] when
+
+  dup data>> swap element-type
+  \ stack: new-shape data-vec elem-type
+  <rot-
+  \ stack: data-vec elem-type new-shape
+  dup row-major-strides
+  \ stack: data-vec elem-type new-shape new-strides
+  <rot-
+  \ stack: data-vec new-shape new-strides elem-type
+  make-ndarray
+] ;

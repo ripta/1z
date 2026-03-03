@@ -1,0 +1,43 @@
+use "testing" ;
+use "ndarray" ;
+
+"ndarray construction" test-section
+
+{ 1 2 3 } { 3 } ndarray ndarray? t "make 1D ndarray" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray ndarray? t "make 2D ndarray" assert=
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray ndarray? t "make 3D ndarray" assert=
+
+"ndarray shape and rank" test-section
+
+{ 1 2 3 } { 3 } ndarray shape { 3 } "1D shape" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray shape { 2 3 } "2D shape" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray rank 2 "2D rank" assert=
+{ 1 2 3 } { 3 } ndarray rank 1 "1D rank" assert=
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray rank 3 "3D rank" assert=
+
+"ndarray element type detection" test-section
+
+{ 1 2 3 } { 3 } ndarray element-type fixnum: "fixnum element-type" assert=
+{ 1.0 2.0 3.0 } { 3 } ndarray element-type float: "float element-type" assert=
+
+"ndarray homogeneity validation" test-section
+
+[ { 1 2.0 3 } { 3 } ndarray ] "mixed types rejected" assert-error
+
+"ndarray? predicate" test-section
+
+{ 1 2 3 } { 3 } ndarray ndarray? t "ndarray? on ndarray" assert=
+{ 1 2 3 } ndarray? f "ndarray? on array" assert=
+42 ndarray? f "ndarray? on fixnum" assert=
+
+"ndarray reshape" test-section
+
+{ 1 2 3 4 5 6 } { 2 3 } ndarray { 3 2 } reshape shape { 3 2 } "reshape 2x3 to 3x2" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray { 6 } reshape shape { 6 } "reshape 2x3 to flat" assert=
+{ 1 2 3 4 5 6 } { 6 } ndarray { 2 3 } reshape shape { 2 3 } "reshape flat to 2x3" assert=
+[ { 1 2 3 4 5 6 } { 2 3 } ndarray { 4 } reshape ] "reshape size mismatch" assert-error
+
+"ndarray construction validation" test-section
+
+[ { 1 2 3 } { 2 } ndarray ] "data/shape mismatch" assert-error
+[ { 1 2 3 } { } ndarray ] "empty shape rejected" assert-error
