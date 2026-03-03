@@ -111,3 +111,148 @@ ref3d: ( ndarray i j k -- val ) [
   not [ f "ref3d requires rank-3 ndarray" EInvalidArgument make-error throw ] when
   { } 3 pick-n #push 2 pick-n #push over #push nip nip nip ref
 ] ;
+
+\ Element-wise arithmetic support
+
+EShapeMismatch: [ shape-mismatch: ] ;
+
+assert-shapes=: ( ndarray ndarray -- ) [
+  over shape over shape =
+  not [
+    over shape inspect " vs " #append
+    swap shape inspect #append
+    EShapeMismatch make-error throw
+  ] [ 2drop ] if
+] ;
+
+vec>ndarray: ( result-vec result-shape -- ndarray ) [
+  dup row-major-strides
+  2 pick-n 0 #nth type-of
+  make-ndarray
+] ;
+
+scalar-op: ( ndarray scalar quot -- ndarray ) [
+  curry
+  \ stack: ndarray quot'
+  swap dup shape swap data>> >iterator
+  \ stack: quot' result-shape data-iter
+  <rot-
+  \ stack: result-shape data-iter quot'
+  #map #collect
+  \ stack: result-shape result-arr
+  [ ] make-vector swap #append!
+  \ stack: result-shape result-vec
+  swap vec>ndarray
+] ;
+
+\ Element-wise ndarray+ndarray iteration using #each on data-a.
+\ The body increments i and accesses data-b[i], applies the operation,
+\ and pushes the result into result-vec.
+
+element-wise+: ( ndarray ndarray -- ndarray ) [
+  2dup assert-shapes=
+  over shape -rot> data>> swap data>> swap
+  \ stack: result-shape data-a data-b
+  [ ] make-vector 0
+  \ stack: result-shape data-a data-b result-vec i
+  3 pick-n >iterator [
+    \ stack: result-shape data-a data-b result-vec i elem-a
+    over 4 pick-n swap #nth +
+    2 pick-n swap #push! drop
+    ++
+  ] #each
+  drop nip nip
+  \ stack: result-shape result-vec
+  swap vec>ndarray
+] ;
+
+element-wise-: ( ndarray ndarray -- ndarray ) [
+  2dup assert-shapes=
+  over shape -rot> data>> swap data>> swap
+  \ stack: result-shape data-a data-b
+  [ ] make-vector 0
+  3 pick-n >iterator [
+    over 4 pick-n swap #nth -
+    2 pick-n swap #push! drop
+    ++
+  ] #each
+  drop nip nip
+  swap vec>ndarray
+] ;
+
+element-wise*: ( ndarray ndarray -- ndarray ) [
+  2dup assert-shapes=
+  over shape -rot> data>> swap data>> swap
+  [ ] make-vector 0
+  3 pick-n >iterator [
+    over 4 pick-n swap #nth *
+    2 pick-n swap #push! drop
+    ++
+  ] #each
+  drop nip nip
+  swap vec>ndarray
+] ;
+
+element-wise/: ( ndarray ndarray -- ndarray ) [
+  2dup assert-shapes=
+  over shape -rot> data>> swap data>> swap
+  [ ] make-vector 0
+  3 pick-n >iterator [
+    over 4 pick-n swap #nth /
+    2 pick-n swap #push! drop
+    ++
+  ] #each
+  drop nip nip
+  swap vec>ndarray
+] ;
+
+\ ndarray + ndarray element-wise arithmetic
+
++: method{ ndarray ndarray } [ element-wise+ ] ;
+-: method{ ndarray ndarray } [ element-wise- ] ;
+*: method{ ndarray ndarray } [ element-wise* ] ;
+/: method{ ndarray ndarray } [ element-wise/ ] ;
+
+\ ndarray + scalar (right-hand)
+
++: method{ ndarray fixnum } [ [ + ] scalar-op ] ;
+-: method{ ndarray fixnum } [ [ - ] scalar-op ] ;
+*: method{ ndarray fixnum } [ [ * ] scalar-op ] ;
+/: method{ ndarray fixnum } [ [ / ] scalar-op ] ;
+
++: method{ ndarray float } [ [ + ] scalar-op ] ;
+-: method{ ndarray float } [ [ - ] scalar-op ] ;
+*: method{ ndarray float } [ [ * ] scalar-op ] ;
+/: method{ ndarray float } [ [ / ] scalar-op ] ;
+
++: method{ ndarray bignum } [ [ + ] scalar-op ] ;
+-: method{ ndarray bignum } [ [ - ] scalar-op ] ;
+*: method{ ndarray bignum } [ [ * ] scalar-op ] ;
+/: method{ ndarray bignum } [ [ / ] scalar-op ] ;
+
++: method{ ndarray ratio } [ [ + ] scalar-op ] ;
+-: method{ ndarray ratio } [ [ - ] scalar-op ] ;
+*: method{ ndarray ratio } [ [ * ] scalar-op ] ;
+/: method{ ndarray ratio } [ [ / ] scalar-op ] ;
+
+\ scalar + ndarray (left-hand)
+
++: method{ fixnum ndarray } [ swap [ + ] scalar-op ] ;
+-: method{ fixnum ndarray } [ swap [ swap - ] scalar-op ] ;
+*: method{ fixnum ndarray } [ swap [ * ] scalar-op ] ;
+/: method{ fixnum ndarray } [ swap [ swap / ] scalar-op ] ;
+
++: method{ float ndarray } [ swap [ + ] scalar-op ] ;
+-: method{ float ndarray } [ swap [ swap - ] scalar-op ] ;
+*: method{ float ndarray } [ swap [ * ] scalar-op ] ;
+/: method{ float ndarray } [ swap [ swap / ] scalar-op ] ;
+
++: method{ bignum ndarray } [ swap [ + ] scalar-op ] ;
+-: method{ bignum ndarray } [ swap [ swap - ] scalar-op ] ;
+*: method{ bignum ndarray } [ swap [ * ] scalar-op ] ;
+/: method{ bignum ndarray } [ swap [ swap / ] scalar-op ] ;
+
++: method{ ratio ndarray } [ swap [ + ] scalar-op ] ;
+-: method{ ratio ndarray } [ swap [ swap - ] scalar-op ] ;
+*: method{ ratio ndarray } [ swap [ * ] scalar-op ] ;
+/: method{ ratio ndarray } [ swap [ swap / ] scalar-op ] ;

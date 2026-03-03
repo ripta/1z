@@ -110,3 +110,104 @@ PASS: ref3d (1,2,1)
 Stack: [ ]
 PASS: ref3d on 2D
 Stack: [ ]
+=== ndarray + ndarray element-wise ===
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 5 7 9 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: 1D add elem 0
+Stack: [ <ndarray ndarray{ data: V{ 5 7 9 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: 1D add elem 1
+Stack: [ <ndarray ndarray{ data: V{ 5 7 9 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: 1D add elem 2
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 11 22 33 44 } shape: { 2 2 } strides: V{ 2 1 } element-type: fixnum: }> ]
+PASS: 2D add elem 0
+Stack: [ <ndarray ndarray{ data: V{ 11 22 33 44 } shape: { 2 2 } strides: V{ 2 1 } element-type: fixnum: }> ]
+PASS: 2D add elem 3
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 9 18 27 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: 1D sub elem 0
+Stack: [ <ndarray ndarray{ data: V{ 9 18 27 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: 1D sub elem 2
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 10 18 28 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: 1D mul elem 0
+Stack: [ <ndarray ndarray{ data: V{ 10 18 28 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: 1D mul elem 2
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 5 4 3 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: 1D div elem 0
+Stack: [ <ndarray ndarray{ data: V{ 5 4 3 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: 1D div elem 2
+Stack: [ ]
+=== ndarray + scalar (right-hand) ===
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 11 12 13 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: add fixnum scalar elem 0
+Stack: [ <ndarray ndarray{ data: V{ 11 12 13 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: add fixnum scalar elem 2
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 0.5 1.0 1.5 } shape: { 3 } strides: V{ 1 } element-type: float: }> ]
+PASS: mul float scalar elem 0
+Stack: [ <ndarray ndarray{ data: V{ 0.5 1.0 1.5 } shape: { 3 } strides: V{ 1 } element-type: float: }> ]
+PASS: mul float scalar elem 2
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 7 17 27 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: sub fixnum scalar elem 0
+Stack: [ <ndarray ndarray{ data: V{ 7 17 27 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: sub fixnum scalar elem 2
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 5 10 15 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: div fixnum scalar elem 0
+Stack: [ <ndarray ndarray{ data: V{ 5 10 15 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: div fixnum scalar elem 2
+Stack: [ ]
+=== scalar + ndarray (left-hand) ===
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 11 12 13 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: fixnum + ndarray elem 0
+Stack: [ <ndarray ndarray{ data: V{ 11 12 13 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: fixnum + ndarray elem 2
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 10 20 30 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: fixnum * ndarray elem 0
+Stack: [ <ndarray ndarray{ data: V{ 10 20 30 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: fixnum * ndarray elem 2
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 9 8 7 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: fixnum - ndarray elem 0
+Stack: [ <ndarray ndarray{ data: V{ 9 8 7 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: fixnum - ndarray elem 2
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 50 20 10 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: fixnum / ndarray elem 0
+Stack: [ <ndarray ndarray{ data: V{ 50 20 10 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: fixnum / ndarray elem 2
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 3.0 4.0 6.0 } shape: { 3 } strides: V{ 1 } element-type: float: }> ]
+PASS: float + ndarray elem 0
+Stack: [ ]
+=== ndarray shape mismatch ===
+Stack: [ ]
+PASS: add shape mismatch
+Stack: [ ]
+PASS: sub shape mismatch
+Stack: [ ]
+=== ndarray arithmetic shape preservation ===
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 2 4 6 8 10 12 } shape: { 2 3 } strides: V{ 3 1 } element-type: fixnum: }> ]
+PASS: ndarray+ndarray preserves shape
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 2 3 4 5 6 7 } shape: { 2 3 } strides: V{ 3 1 } element-type: fixnum: }> ]
+PASS: ndarray+scalar preserves shape
+Stack: [ ]
+=== ndarray arithmetic element type detection ===
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 5 7 9 } shape: { 3 } strides: V{ 1 } element-type: fixnum: }> ]
+PASS: fixnum+fixnum -> fixnum
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 5.0 7.0 9.0 } shape: { 3 } strides: V{ 1 } element-type: float: }> ]
+PASS: float+float -> float
+Stack: [ ]
+Stack: [ <ndarray ndarray{ data: V{ 2.0 3.0 4.0 } shape: { 3 } strides: V{ 1 } element-type: float: }> ]
+PASS: fixnum ndarray + float scalar -> float
+Stack: [ ]

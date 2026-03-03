@@ -80,3 +80,89 @@ use "ndarray" ;
 { 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray 0 0 0 ref3d 1 "ref3d (0,0,0)" assert=
 { 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray 1 2 1 ref3d 12 "ref3d (1,2,1)" assert=
 [ { 1 2 3 4 5 6 } { 2 3 } ndarray 0 0 0 ref3d ] "ref3d on 2D" assert-error
+
+"ndarray + ndarray element-wise" test-section
+
+{ 1 2 3 } { 3 } ndarray { 4 5 6 } { 3 } ndarray +
+dup 0 #nth 5 "1D add elem 0" assert=
+dup 1 #nth 7 "1D add elem 1" assert=
+2 #nth 9 "1D add elem 2" assert=
+
+{ 1 2 3 4 } { 2 2 } ndarray { 10 20 30 40 } { 2 2 } ndarray +
+dup 0 #nth 11 "2D add elem 0" assert=
+3 #nth 44 "2D add elem 3" assert=
+
+{ 10 20 30 } { 3 } ndarray { 1 2 3 } { 3 } ndarray -
+dup 0 #nth 9 "1D sub elem 0" assert=
+2 #nth 27 "1D sub elem 2" assert=
+
+{ 2 3 4 } { 3 } ndarray { 5 6 7 } { 3 } ndarray *
+dup 0 #nth 10 "1D mul elem 0" assert=
+2 #nth 28 "1D mul elem 2" assert=
+
+{ 10 20 30 } { 3 } ndarray { 2 5 10 } { 3 } ndarray /
+dup 0 #nth 5 "1D div elem 0" assert=
+2 #nth 3 "1D div elem 2" assert=
+
+"ndarray + scalar (right-hand)" test-section
+
+{ 1 2 3 } { 3 } ndarray 10 +
+dup 0 #nth 11 "add fixnum scalar elem 0" assert=
+2 #nth 13 "add fixnum scalar elem 2" assert=
+
+{ 1.0 2.0 3.0 } { 3 } ndarray 0.5 *
+dup 0 #nth 0.5 "mul float scalar elem 0" assert=
+2 #nth 1.5 "mul float scalar elem 2" assert=
+
+{ 10 20 30 } { 3 } ndarray 3 -
+dup 0 #nth 7 "sub fixnum scalar elem 0" assert=
+2 #nth 27 "sub fixnum scalar elem 2" assert=
+
+{ 10 20 30 } { 3 } ndarray 2 /
+dup 0 #nth 5 "div fixnum scalar elem 0" assert=
+2 #nth 15 "div fixnum scalar elem 2" assert=
+
+"scalar + ndarray (left-hand)" test-section
+
+10 { 1 2 3 } { 3 } ndarray +
+dup 0 #nth 11 "fixnum + ndarray elem 0" assert=
+2 #nth 13 "fixnum + ndarray elem 2" assert=
+
+10 { 1 2 3 } { 3 } ndarray *
+dup 0 #nth 10 "fixnum * ndarray elem 0" assert=
+2 #nth 30 "fixnum * ndarray elem 2" assert=
+
+10 { 1 2 3 } { 3 } ndarray -
+dup 0 #nth 9 "fixnum - ndarray elem 0" assert=
+2 #nth 7 "fixnum - ndarray elem 2" assert=
+
+100 { 2 5 10 } { 3 } ndarray /
+dup 0 #nth 50 "fixnum / ndarray elem 0" assert=
+2 #nth 10 "fixnum / ndarray elem 2" assert=
+
+2.0 { 1.0 2.0 4.0 } { 3 } ndarray +
+0 #nth 3.0 "float + ndarray elem 0" assert=
+
+"ndarray shape mismatch" test-section
+
+[ { 1 2 3 } { 3 } ndarray { 1 2 } { 2 } ndarray + ] "add shape mismatch" assert-error
+[ { 1 2 3 } { 3 } ndarray { 1 2 3 4 5 6 } { 2 3 } ndarray - ] "sub shape mismatch" assert-error
+
+"ndarray arithmetic shape preservation" test-section
+
+{ 1 2 3 4 5 6 } { 2 3 } ndarray { 1 2 3 4 5 6 } { 2 3 } ndarray +
+shape { 2 3 } "ndarray+ndarray preserves shape" assert=
+
+{ 1 2 3 4 5 6 } { 2 3 } ndarray 1 +
+shape { 2 3 } "ndarray+scalar preserves shape" assert=
+
+"ndarray arithmetic element type detection" test-section
+
+{ 1 2 3 } { 3 } ndarray { 4 5 6 } { 3 } ndarray +
+element-type fixnum: "fixnum+fixnum -> fixnum" assert=
+
+{ 1.0 2.0 3.0 } { 3 } ndarray { 4.0 5.0 6.0 } { 3 } ndarray +
+element-type float: "float+float -> float" assert=
+
+{ 1 2 3 } { 3 } ndarray 1.0 +
+element-type float: "fixnum ndarray + float scalar -> float" assert=
