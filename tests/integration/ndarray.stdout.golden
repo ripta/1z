@@ -52,3 +52,61 @@ PASS: data/shape mismatch
 Stack: [ ]
 PASS: empty shape rejected
 Stack: [ ]
+=== ndarray #len ===
+Stack: [ ]
+PASS: 1D #len
+Stack: [ ]
+PASS: 2D #len
+Stack: [ ]
+PASS: 3D #len
+Stack: [ ]
+=== ndarray #nth ===
+Stack: [ ]
+PASS: 1D #nth first
+Stack: [ ]
+PASS: 1D #nth last
+Stack: [ ]
+PASS: 2D #nth first
+Stack: [ ]
+PASS: 2D #nth last
+Stack: [ ]
+PASS: #nth negative index
+Stack: [ ]
+PASS: #nth index == #len
+Stack: [ ]
+=== ndarray ref ===
+Stack: [ ]
+PASS: 1D ref first
+Stack: [ ]
+PASS: 1D ref last
+Stack: [ ]
+PASS: 2D ref (0,0)
+Stack: [ ]
+PASS: 2D ref (1,2)
+Stack: [ ]
+PASS: 3D ref first
+Stack: [ ]
+PASS: 3D ref last
+Stack: [ ]
+PASS: ref wrong index length
+Stack: [ ]
+PASS: ref negative index
+Stack: [ ]
+PASS: ref out of bounds
+Stack: [ ]
+=== ndarray ref2d ===
+Stack: [ ]
+PASS: ref2d (0,0)
+Stack: [ ]
+PASS: ref2d (1,2)
+Stack: [ ]
+PASS: ref2d on 1D
+Stack: [ ]
+=== ndarray ref3d ===
+Stack: [ ]
+PASS: ref3d (0,0,0)
+Stack: [ ]
+PASS: ref3d (1,2,1)
+Stack: [ ]
+PASS: ref3d on 2D
+Stack: [ ]

@@ -41,3 +41,42 @@ use "ndarray" ;
 
 [ { 1 2 3 } { 2 } ndarray ] "data/shape mismatch" assert-error
 [ { 1 2 3 } { } ndarray ] "empty shape rejected" assert-error
+
+"ndarray #len" test-section
+
+{ 1 2 3 } { 3 } ndarray #len 3 "1D #len" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray #len 6 "2D #len" assert=
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray #len 12 "3D #len" assert=
+
+"ndarray #nth" test-section
+
+{ 10 20 30 } { 3 } ndarray 0 #nth 10 "1D #nth first" assert=
+{ 10 20 30 } { 3 } ndarray 2 #nth 30 "1D #nth last" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray 0 #nth 1 "2D #nth first" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray 5 #nth 6 "2D #nth last" assert=
+[ { 1 2 3 } { 3 } ndarray -1 #nth ] "#nth negative index" assert-error
+[ { 1 2 3 } { 3 } ndarray 3 #nth ] "#nth index == #len" assert-error
+
+"ndarray ref" test-section
+
+{ 10 20 30 } { 3 } ndarray { 0 } ref 10 "1D ref first" assert=
+{ 10 20 30 } { 3 } ndarray { 2 } ref 30 "1D ref last" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray { 0 0 } ref 1 "2D ref (0,0)" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray { 1 2 } ref 6 "2D ref (1,2)" assert=
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray { 0 0 0 } ref 1 "3D ref first" assert=
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray { 1 2 1 } ref 12 "3D ref last" assert=
+[ { 1 2 3 } { 3 } ndarray { 0 0 } ref ] "ref wrong index length" assert-error
+[ { 1 2 3 4 5 6 } { 2 3 } ndarray { -1 0 } ref ] "ref negative index" assert-error
+[ { 1 2 3 4 5 6 } { 2 3 } ndarray { 2 0 } ref ] "ref out of bounds" assert-error
+
+"ndarray ref2d" test-section
+
+{ 1 2 3 4 5 6 } { 2 3 } ndarray 0 0 ref2d 1 "ref2d (0,0)" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray 1 2 ref2d 6 "ref2d (1,2)" assert=
+[ { 1 2 3 } { 3 } ndarray 0 0 ref2d ] "ref2d on 1D" assert-error
+
+"ndarray ref3d" test-section
+
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray 0 0 0 ref3d 1 "ref3d (0,0,0)" assert=
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray 1 2 1 ref3d 12 "ref3d (1,2,1)" assert=
+[ { 1 2 3 4 5 6 } { 2 3 } ndarray 0 0 0 ref3d ] "ref3d on 2D" assert-error

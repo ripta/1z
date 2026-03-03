@@ -64,3 +64,50 @@ reshape: ( ndarray new-shape -- ndarray ) [
   \ stack: data-vec new-shape new-strides elem-type
   make-ndarray
 ] ;
+
+#len: method{ ndarray } [
+  shape shape-product
+] ;
+
+#nth: method{ ndarray fixnum } [
+  dup 0 < [ f "index out of bounds" EIndexOutOfBounds make-error throw ] when
+  over #len over <= [ f "index out of bounds" EIndexOutOfBounds make-error throw ] when
+  swap data>> swap #nth
+] ;
+
+ref: ( ndarray index-array -- val ) [
+  over rank over #len =
+  not [ f "index array length must equal rank" EInvalidArgument make-error throw ] when
+
+  over shape 2 pick-n strides>>
+  \ stack: ndarray idx-arr shape strides
+  0 0
+  \ stack: ndarray idx-arr shape strides offset dim
+  [ dup 5 pick-n #len < ] [
+    dup 5 pick-n swap #nth
+    \ stack: ndarray idx-arr shape strides offset dim idx-val
+    dup 0 < [ f "negative index" EIndexOutOfBounds make-error throw ] when
+    over 5 pick-n swap #nth
+    \ stack: ndarray idx-arr shape strides offset dim idx-val shape-dim
+    over swap >= [ f "index out of bounds" EIndexOutOfBounds make-error throw ] when
+    \ stack: ndarray idx-arr shape strides offset dim idx-val
+    over 4 pick-n swap #nth *
+    \ stack: ndarray idx-arr shape strides offset dim product
+    <rot- + swap
+    \ stack: ndarray idx-arr shape strides offset' dim
+    ++
+  ] while
+  drop nip nip nip swap data>> swap #nth
+] ;
+
+ref2d: ( ndarray i j -- val ) [
+  2 pick-n rank 2 =
+  not [ f "ref2d requires rank-2 ndarray" EInvalidArgument make-error throw ] when
+  { } 2 pick-n #push over #push nip nip ref
+] ;
+
+ref3d: ( ndarray i j k -- val ) [
+  3 pick-n rank 3 =
+  not [ f "ref3d requires rank-3 ndarray" EInvalidArgument make-error throw ] when
+  { } 3 pick-n #push 2 pick-n #push over #push nip nip nip ref
+] ;
