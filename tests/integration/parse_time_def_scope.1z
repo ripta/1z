@@ -43,3 +43,18 @@ scoped-counter 7 "second invocation" assert=
 outside-helper: [ 55 ] ;
 uses-outside: parse-time [ outside-helper ] ;
 uses-outside 55 "external helper visible inside parse-time body" assert=
+
+\ 7. Module-internal parse-time helpers do not leak into module exports
+"parse-time helpers do not leak into module exports" test-section
+
+"ffi" load @keys [ "(read-ffi-params)" = ] #any
+f "ffi module does not export (read-ffi-params)" assert=
+
+"ffi" load @keys [ "(read-ffi-def)" = ] #any
+f "ffi module does not export (read-ffi-def)" assert=
+
+"matrix" load @keys [ "(read-matrix-row)" = ] #any
+f "matrix module does not export (read-matrix-row)" assert=
+
+"matrix" load @keys [ "(read-matrix)" = ] #any
+f "matrix module does not export (read-matrix)" assert=

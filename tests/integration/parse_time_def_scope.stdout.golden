@@ -27,3 +27,17 @@ Stack: [ ]
 Stack: [ ]
 PASS: external helper visible inside parse-time body
 Stack: [ ]
+=== parse-time helpers do not leak into module exports ===
+Stack: [ ]
+Stack: [ f ]
+PASS: ffi module does not export (read-ffi-params)
+Stack: [ ]
+Stack: [ f ]
+PASS: ffi module does not export (read-ffi-def)
+Stack: [ ]
+Stack: [ f ]
+PASS: matrix module does not export (read-matrix-row)
+Stack: [ ]
+Stack: [ f ]
+PASS: matrix module does not export (read-matrix)
+Stack: [ ]
