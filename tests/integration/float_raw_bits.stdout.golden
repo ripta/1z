@@ -1,0 +1,50 @@
+=== float-raw-bits known bit patterns ===
+Stack: [ ]
+PASS: 1.0 raw bits
+Stack: [ ]
+PASS: 0.0 raw bits
+Stack: [ ]
+=== float-raw-bits round-trip positive floats ===
+Stack: [ ]
+PASS: 1.0 round-trips
+Stack: [ ]
+PASS: 0.0 round-trips
+Stack: [ ]
+PASS: 3.14 round-trips
+Stack: [ ]
+=== float-raw-bits round-trip negative floats ===
+Stack: [ ]
+PASS: -1.0 round-trips
+Stack: [ ]
+=== float-raw-bits negative zero ===
+Stack: [ ]
+Stack: [ 9223372036854775808 ]
+Stack: [ 9223372036854775808 0 ]
+PASS: -0.0 has different bit pattern from 0.0
+Stack: [ ]
+Stack: [ 9223372036854775808 ]
+Stack: [ 9223372036854775808 9223372036854775808 ]
+PASS: -0.0 round-trips
+Stack: [ ]
+=== float-raw-bits infinity ===
+Stack: [ ]
+Stack: [ inf ]
+Stack: [ inf inf ]
+PASS: inf round-trips
+Stack: [ ]
+Stack: [ -inf ]
+Stack: [ -inf -inf ]
+PASS: -inf round-trips
+Stack: [ ]
+=== float-raw-bits nan ===
+Stack: [ ]
+Stack: [ 9221120237041090560 ]
+Stack: [ 9221120237041090560 9221120237041090560 ]
+PASS: nan bit pattern preserved
+Stack: [ ]
+=== raw-bits-float error cases ===
+Stack: [ ]
+PASS: negative fixnum errors
+Stack: [ ]
+PASS: fixnum rejected by float-raw-bits
+Stack: [ ]
