@@ -112,6 +112,378 @@ ref3d: ( ndarray i j k -- val ) [
   { } 3 pick-n #push 2 pick-n #push over #push nip nip nip ref
 ] ;
 
+\ Logical-order element access for non-contiguous arrays.
+\ Converts a flat logical index to a physical offset via shape and strides,
+\ iterating dimensions from last to first.
+
+logical-nth: ( ndarray logical-idx -- val ) [
+  \ Uses a mutable 2-element vector to hold loop state = V{ remaining, offset }
+  \ so the while loop only needs ndarray and d on the real stack.
+  [ ] make-vector over #push! 0 #push! nip
+  \ stack: ndarray(1) state(0)
+  over rank
+  \ stack: ndarray(2) state(1) d(0)
+  [ dup 0 > ] [
+ --
+    \ stack: ndarray(2) state(1) d(0)
+    2 pick-n shape over #nth
+    \ stack: ndarray(3) state(2) d(1) shape-d(0)
+    3 pick-n strides>> 2 pick-n #nth
+    \ stack: ndarray(4) state(3) d(2) shape-d(1) stride-d(0)
+
+    3 pick-n 0 #nth
+    \ stack: ndarray(5) state(4) d(3) shape-d(2) stride-d(1) remaining(0)
+    dup 3 pick-n %
+    \ stack: ndarray(6) state(5) d(4) shape-d(3) stride-d(2) remaining(1) coord(0)
+
+    \ state[1] += coord * stride-d
+    dup 3 pick-n *
+    \ stack (8): ndarray(7) state(6) d(5) shape-d(4) stride-d(3) remaining(2) coord(1) coord*stride(0)
+    6 pick-n 1 #nth +
+    \ stack (8): ndarray(7) state(6) d(5) shape-d(4) stride-d(3) remaining(2) coord(1) new-offset(0)
+    6 pick-n 1 <rot- #nth! drop
+    \ stack (7): ndarray(6) state(5) d(4) shape-d(3) stride-d(2) remaining(1) coord(0)
+
+    \ state[0] = remaining div shape-d
+    drop swap drop swap div
+    \ stack: ndarray(3) state(2) d(1) new-remaining(0)
+    2 pick-n 0 <rot- #nth! drop
+    \ stack: ndarray(2) state(1) d(0)
+  ] while
+  drop
+  1 #nth swap data>> swap #nth
+] ;
+
+\ Array operations
+
+transpose: ( ndarray -- ndarray ) [
+  dup data>> swap dup shape swap dup strides>> swap element-type
+  \ stack: data shape strides elem-type
+  -rot>
+  \ stack: data elem-type shape strides
+  [ ] make-vector [ ] make-vector
+  \ stack: data elem-type shape strides rev-shape rev-strides
+  3 pick-n #len --
+  \ stack: data elem-type shape strides rev-shape rev-strides i
+  [ dup 0 >= ] [
+    dup 5 pick-n swap #nth 3 pick-n swap #push! drop
+    dup 4 pick-n swap #nth 2 pick-n swap #push! drop
+ --
+  ] while
+  drop <rot- drop <rot- drop
+  \ stack: data elem-type rev-shape-vec rev-strides-vec
+  >iterator #collect swap >iterator #collect swap
+  \ stack: data elem-type rev-shape rev-strides
+  <rot-
+  make-ndarray
+] ;
+
+map: ( ndarray quot -- ndarray ) [
+  over shape
+  \ stack: ndarray quot result-shape
+  [ ] make-vector
+  3 pick-n #len
+  \ stack: ndarray(4) quot(3) result-shape(2) result-vec(1) total(0)
+  0
+  \ stack: ndarray(5) quot(4) result-shape(3) result-vec(2) total(1) i(0)
+  [ 2dup > ] [
+    dup 6 pick-n swap logical-nth
+    \ stack: ndarray(6) quot(5) result-shape(4) result-vec(3) total(2) i(1) elem(0)
+    5 pick-n call
+    \ stack: ndarray(6) quot(5) result-shape(4) result-vec(3) total(2) i(1) mapped(0)
+    3 pick-n swap #push! drop
+    ++
+  ] while
+  drop drop <rot- drop <rot- drop
+  \ stack: result-shape result-vec
+  swap vec>ndarray
+] ;
+
+reduce: ( ndarray quot -- val ) [
+  over [ ] map data>> >iterator #collect
+  dup 0 #nth swap 1 #drop
+  \ stack: ndarray(3) quot(2) init(1) rest(0)
+  swap <rot- #reduce nip
+] ;
+
+\ Decode a flat index into coordinate array given a shape.
+decode-coords: ( flat-idx shape -- coords ) [
+  \ state = V{ remaining }; rev-coords collects coords in reverse order
+  [ ] make-vector 2 pick-n #push! <rot- drop
+  \ stack: shape(1) state(0) = V{flat-idx}
+  [ ] make-vector 2 pick-n #len
+  \ stack: shape(3) state(2) rev-coords(1) rank(0)
+  [ dup 0 > ] [
+ --
+    \ stack: shape(3) state(2) rev-coords(1) d(0)
+    3 pick-n over #nth
+    \ stack: shape(4) state(3) rev-coords(2) d(1) dim-size(0)
+    3 pick-n 0 #nth
+    \ stack: shape(5) state(4) rev-coords(3) d(2) dim-size(1) remaining(0)
+    dup 2 pick-n %
+    \ stack (7): shape(6) state(5) rev-coords(4) d(3) dim-size(2) remaining(1) coord(0)
+    4 pick-n swap #push! drop
+    \ stack (6): shape(5) state(4) rev-coords(3) d(2) dim-size(1) remaining(0)
+    swap div
+    \ stack (5): shape(4) state(3) rev-coords(2) d(1) new-remaining(0)
+    3 pick-n 0 <rot- #nth! drop
+    \ stack (4): shape(3) state(2) rev-coords(1) d(0)
+  ] while
+  drop nip nip
+  \ stack: rev-coords
+
+  \ Reverse rev-coords into an immutable array
+  { } over #len --
+  \ stack: rev-coords(2) result(1) i(0)
+  [ dup 0 >= ] [
+    2 pick-n over #nth swap -rot> #push swap
+ --
+  ] while
+  drop nip
+] ;
+
+\ Insert a value at position `pos` in an array, returning a new array.
+array-insert: ( array pos val -- array' ) [
+  [ ] make-vector
+  3 pick-n #len ++ 0
+  \ stack: src(5) pos(4) val(3) result-vec(2) new-len(1) i(0)
+  [ 2dup > ] [
+    dup 5 pick-n =
+    [
+      3 pick-n 3 pick-n swap #push! drop
+    ] [
+      dup 5 pick-n >
+      [
+        dup -- 6 pick-n swap #nth 3 pick-n swap #push! drop
+      ] [
+        dup 6 pick-n swap #nth 3 pick-n swap #push! drop
+      ] if
+    ] if
+    ++
+  ] while
+  drop drop
+  >iterator #collect
+  nip nip nip
+] ;
+
+\ Collect elements along an axis for a given result coordinate.
+\ For each k in [0, axis-dim), builds a full source coordinate by inserting k
+\ at the axis position, then reads the element via ref.
+axis-slice: ( ndarray axis coords axis-dim -- array ) [
+  [ ] make-vector swap 0
+  \ stack: ndarray(5) axis(4) coords(3) slice-vec(2) axis-dim(1) k(0)
+  [ 2dup > ] [
+    dup 4 pick-n swap 6 pick-n swap array-insert
+    \ array-insert ( coords axis k -- src-coords )
+    6 pick-n swap ref
+    3 pick-n swap #push! drop
+    ++
+  ] while
+  drop drop nip nip nip
+  >iterator #collect
+] ;
+
+reduce-axis: ( ndarray axis quot -- ndarray ) [
+  2 pick-n rank 2 pick-n <=
+  [ f "axis out of bounds" EInvalidArgument make-error throw ] when
+
+  2 pick-n shape
+  \ stack: ndarray(3) axis(2) quot(1) src-shape(0)
+
+  \ Build result-shape by removing the axis dimension
+  [ ] make-vector 0
+  \ stack: ndarray(5) axis(4) quot(3) src-shape(2) result-shape-vec(1) d(0)
+  [ dup 3 pick-n #len < ] [
+    dup 5 pick-n =
+    [ ++ ] [
+      dup 3 pick-n swap #nth
+      2 pick-n swap #push! drop
+      ++
+    ] if
+  ] while
+  drop
+  >iterator #collect
+  \ stack: ndarray(3) axis(2) quot(1) src-shape(0) result-shape
+
+  over 4 pick-n #nth
+  \ stack: ndarray(4) axis(3) quot(2) src-shape(1) result-shape(0) axis-dim
+
+  [ ] make-vector 2 pick-n shape-product 0
+  \ stack: ndarray(8) axis(7) quot(6) src-shape(5) result-shape(4) axis-dim(3) result-data(2) result-total(1) ri(0)
+
+  [ 2dup > ] [
+    dup 5 pick-n decode-coords
+    \ 5 pick-n from dup'd ri: 0=ri-dup,1=ri,2=result-total,3=result-data,
+    \ 4=axis-dim,5=result-shape. Gets result-shape. Correct for decode-coords.
+    \ stack (10): ndarray(9) axis(8) quot(7) src-shape(6) result-shape(5)
+    \             axis-dim(4) result-data(3) result-total(2) ri(1) coords(0)
+
+    9 pick-n 9 pick-n 2 pick-n 7 pick-n axis-slice
+    \ axis-slice ( ndarray axis coords axis-dim -- array )
+    \ stack (11): ... result-total(3) ri(2) coords(1) slice-arr(0)
+
+    dup 0 #nth swap 1 #drop
+    \ stack (12): ... ri(3) coords(2) init(1) rest(0)
+    swap 9 pick-n #reduce
+    \ stack (11): ... ri(2) coords(1) reduced-val(0)
+
+    4 pick-n swap #push! drop
+    drop
+    ++
+  ] while
+  drop drop
+  \ stack: ndarray(6) axis(5) quot(4) src-shape(3) result-shape(2) axis-dim(1) result-data(0)
+  nip swap
+  \ stack: ndarray(5) axis(4) quot(3) src-shape(2) result-data(1) result-shape(0)
+  <rot- drop <rot- drop <rot- drop <rot- drop
+  \ stack: result-data(1) result-shape(0)
+  vec>ndarray
+] ;
+
+\ matmul-2d: core 2D*2D matrix multiply using ref2d.
+\ result[i,j] = sum_k( a[i,k] * b[k,j] )
+\ Uses a mutable state vector to keep the stack shallow:
+\ state = V{ i, j, k, acc } (indices 0-3)
+matmul-2d: ( ndarray ndarray -- ndarray ) [
+  over shape 0 #nth over shape 1 #nth
+  3 pick-n shape 1 #nth
+  \ stack: a(4) b(3) M(2) N(1) K(0)
+
+  [ ] make-vector
+  \ stack: a(5) b(4) M(3) N(2) K(1) result-vec(0)
+
+  \ state = V{ i=0, j=0, k=0, acc=0 }
+  [ ] make-vector 0 #push! 0 #push! 0 #push! 0 #push!
+  \ stack: a(6) b(5) M(4) N(3) K(2) result-vec(1) state(0)
+
+  \ Outer loop: i from 0 to M-1
+  [ dup 0 #nth 5 pick-n < ] [
+    \ Inner loop: j from 0 to N-1
+    dup 1 0 #nth! drop
+    [ dup 1 #nth 4 pick-n < ] [
+      \ Innermost loop: k from 0 to K-1, accumulating dot product
+      dup 2 0 #nth! drop
+      dup 3 0 #nth! drop
+      [ dup 2 #nth 3 pick-n < ] [
+        \ a[i,k]: state[0]=i, state[2]=k
+        6 pick-n over 0 #nth 2 pick-n 2 #nth ref2d
+        \ b[k,j]: state[2]=k, state[1]=j
+        6 pick-n 2 pick-n 2 #nth 3 pick-n 1 #nth ref2d
+        *
+        \ acc += product
+        over 3 #nth +
+        over 3 <rot- #nth! drop
+        \ k++
+        dup 2 #nth ++ over 2 <rot- #nth! drop
+      ] while
+      \ Push acc to result-vec
+      dup 3 #nth 2 pick-n swap #push! drop
+      \ j++
+      dup 1 #nth ++ over 1 <rot- #nth! drop
+    ] while
+    \ i++
+    dup 0 #nth ++ over 0 <rot- #nth! drop
+  ] while
+  drop
+  \ stack: a(5) b(4) M(3) N(2) K(1) result-vec(0)
+  nip
+  \ stack: a(4) b(3) M(2) N(1) result-vec(0)
+  { } 3 pick-n #push 2 pick-n #push
+  \ stack: a(5) b(4) M(3) N(2) result-vec(1) { M N }(0)
+  vec>ndarray
+  \ stack: a(4) b(3) M(2) N(1) ndarray(0)
+  nip nip nip nip
+] ;
+
+matmul: ( ndarray ndarray -- ) [
+  over rank over rank
+  \ stack: a(3) b(2) rank-a(1) rank-b(0)
+
+  \ Case: 1D * 1D -> dot product (scalar result)
+  2dup 1 = swap 1 = and [
+    2drop
+    over #len over #len =
+    not [ f "matmul: inner dimensions must match" EInvalidArgument make-error throw ] when
+    * [ + ] reduce
+  ] [
+    \ Case: 2D * 2D -> matrix multiply
+    2dup 2 = swap 2 = and [
+      2drop
+      over shape 1 #nth over shape 0 #nth =
+      not [ f "matmul: inner dimensions must match" EInvalidArgument make-error throw ] when
+      matmul-2d
+    ] [
+      \ Case: 1D * 2D -> treat 1D as row vector {1,K}
+      2dup 2 = swap 1 = and [
+        2drop
+        over #len over shape 0 #nth =
+        not [ f "matmul: inner dimensions must match" EInvalidArgument make-error throw ] when
+        \ stack: a(1) b(0)
+        swap dup #len { 1 } swap #push reshape swap
+        \ stack: a-2d(1) b(0)
+        matmul-2d
+        \ result shape is {1, N}; reshape to {N}
+        dup shape 1 #nth { } swap #push reshape
+      ] [
+        \ Case: 2D * 1D -> treat 1D as column vector {K,1}
+        2dup 1 = swap 2 = and [
+          2drop
+          over shape 1 #nth over #len =
+          not [ f "matmul: inner dimensions must match" EInvalidArgument make-error throw ] when
+          \ stack: a(1) b(0)
+          dup #len { } swap #push 1 #push reshape
+          \ stack: a(1) b-2d(0)
+          matmul-2d
+          \ result shape is {M, 1}; reshape to {M}
+          dup shape 0 #nth { } swap #push reshape
+        ] [
+          2drop
+          f "matmul: ranks must be 1 or 2" EInvalidArgument make-error throw
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+outer: ( ndarray ndarray -- ndarray ) [
+  over rank 1 =
+  not [ f "outer: first argument must be rank-1" EInvalidArgument make-error throw ] when
+  dup rank 1 =
+  not [ f "outer: second argument must be rank-1" EInvalidArgument make-error throw ] when
+
+  over #len over #len
+  \ stack: a(3) b(2) M(1) N(0)
+  [ ] make-vector <rot-
+  \ stack: a(4) b(3) N(2) result-vec(1) M(0)
+  0
+  \ stack: a(5) b(4) N(3) result-vec(2) M(1) i(0)
+  [ 2dup > ] [
+    dup 6 pick-n swap logical-nth
+    \ stack (7): a(6) b(5) N(4) result-vec(3) M(2) i(1) a-val(0)
+    4 pick-n 0
+    \ stack (9): a(8) b(7) N(6) result-vec(5) M(4) i(3) a-val(2) N(1) j(0)
+    [ 2dup > ] [
+      dup 8 pick-n swap logical-nth
+      \ after dup (10): a(9) b(8) ... a-val(3) N(2) j(1) j(0)
+      \ 8 pick-n = b. swap logical-nth = b[j]
+      \ stack (10): a(9) b(8) N(7) result-vec(6) M(5) i(4) a-val(3) N(2) j(1) b-val(0)
+      3 pick-n *
+      \ stack (10): ... j(1) a-val*b-val(0)
+      6 pick-n swap #push! drop
+      ++
+    ] while
+    drop drop drop
+    ++
+  ] while
+  drop
+  \ stack: a(4) b(3) N(2) result-vec(1) M(0)
+  { } swap #push
+  \ stack: a(4) b(3) N(2) result-vec(1) { M }(0)
+  <rot- #push
+  \ stack: a(3) b(2) result-vec(1) { M N }(0)
+  vec>ndarray nip nip
+] ;
+
 \ Element-wise arithmetic support
 
 EShapeMismatch: [ shape-mismatch: ] ;
