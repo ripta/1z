@@ -1,0 +1,50 @@
+use "testing" ;
+use "math" ;
+
+"bits virtual type" test-section
+4607182418800017408 make-bits bits? t "make-bits produces bits?" assert=
+
+"float>bits / bits>float round-trip" test-section
+1.0 float>bits bits>float 1.0 "1.0 round-trip" assert=
+-1.0 float>bits bits>float -1.0 "-1.0 round-trip" assert=
+0.0 float>bits bits>float 0.0 "0.0 round-trip" assert=
+
+"bits hex formatting" test-section
+1.0 float>bits >string "0x3FF0000000000000" "1.0 hex" assert=
+0.0 float>bits >string "0x0000000000000000" "0.0 hex" assert=
+-1.0 float>bits >string "0xBFF0000000000000" "-1.0 hex" assert=
+
+"bitwise ops on bits" test-section
+1.0 float>bits 0.0 float>bits bitor unmake-bits
+1.0 float>bits unmake-bits "1.0 | 0.0" assert=
+1.0 float>bits 1.0 float>bits bitand unmake-bits
+1.0 float>bits unmake-bits "1.0 & 1.0" assert=
+1.0 float>bits 1.0 float>bits bitxor unmake-bits
+0.0 float>bits unmake-bits "1.0 ^ 1.0" assert=
+
+"next-float basics" test-section
+1.0 next-float 1.0 > t "next-float > original" assert=
+1.0 next-float 1.0 - 0.0 > t "machine epsilon > 0" assert=
+
+"next-float / prev-float round-trip" test-section
+1.0 next-float prev-float 1.0 "next then prev = original" assert=
+
+"next-float NaN pass-through" test-section
+nan next-float nan? t "nan next-float is nan" assert=
+
+"next-float infinity saturation" test-section
+inf next-float inf = t "inf next-float = inf" assert=
+-inf next-float -inf = f "-inf next-float != -inf" assert=
+
+"prev-float infinity saturation" test-section
+inf prev-float inf = f "inf prev-float != inf" assert=
+-inf prev-float -inf = t "-inf prev-float = -inf" assert=
+
+"next-float / prev-float zero edges" test-section
+0.0 next-float 0.0 > t "0.0 next-float > 0" assert=
+0.0 prev-float 0.0 < t "0.0 prev-float < 0" assert=
+
+"float-ulp" test-section
+1.0 float-ulp 0.0 > t "ulp of 1.0 > 0" assert=
+0.0 float-ulp 0.0 next-float "ulp of 0.0 = smallest subnormal" assert=
+[ inf float-ulp ] "inf float-ulp errors" assert-error

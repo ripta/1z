@@ -1,0 +1,71 @@
+=== bits virtual type ===
+Stack: [ ]
+PASS: make-bits produces bits?
+Stack: [ ]
+=== float>bits / bits>float round-trip ===
+Stack: [ ]
+PASS: 1.0 round-trip
+Stack: [ ]
+PASS: -1.0 round-trip
+Stack: [ ]
+PASS: 0.0 round-trip
+Stack: [ ]
+=== bits hex formatting ===
+Stack: [ ]
+PASS: 1.0 hex
+Stack: [ ]
+PASS: 0.0 hex
+Stack: [ ]
+PASS: -1.0 hex
+Stack: [ ]
+=== bitwise ops on bits ===
+Stack: [ ]
+Stack: [ 4607182418800017408 ]
+PASS: 1.0 | 0.0
+Stack: [ ]
+Stack: [ 4607182418800017408 ]
+PASS: 1.0 & 1.0
+Stack: [ ]
+Stack: [ 0 ]
+PASS: 1.0 ^ 1.0
+Stack: [ ]
+=== next-float basics ===
+Stack: [ ]
+PASS: next-float > original
+Stack: [ ]
+PASS: machine epsilon > 0
+Stack: [ ]
+=== next-float / prev-float round-trip ===
+Stack: [ ]
+PASS: next then prev = original
+Stack: [ ]
+=== next-float NaN pass-through ===
+Stack: [ ]
+PASS: nan next-float is nan
+Stack: [ ]
+=== next-float infinity saturation ===
+Stack: [ ]
+PASS: inf next-float = inf
+Stack: [ ]
+PASS: -inf next-float != -inf
+Stack: [ ]
+=== prev-float infinity saturation ===
+Stack: [ ]
+PASS: inf prev-float != inf
+Stack: [ ]
+PASS: -inf prev-float = -inf
+Stack: [ ]
+=== next-float / prev-float zero edges ===
+Stack: [ ]
+PASS: 0.0 next-float > 0
+Stack: [ ]
+PASS: 0.0 prev-float < 0
+Stack: [ ]
+=== float-ulp ===
+Stack: [ ]
+PASS: ulp of 1.0 > 0
+Stack: [ ]
+PASS: ulp of 0.0 = smallest subnormal
+Stack: [ ]
+PASS: inf float-ulp errors
+Stack: [ ]
