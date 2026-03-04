@@ -67,3 +67,35 @@ use "testing" ;
 "auto-demotion from shift" test-section
 1 64 shift-left 64 shift-right type-of fixnum: "shift up then down demotes" assert=
 1 64 shift-left 64 shift-right 1 "shift up then down = 1" assert=
+
+"bitwise dispatch on virtual types" test-section
+
+\ Define a virtual type wrapping a fixnum
+bits-test: virtual{ fixnum } ;
+
+\ Register bitwise methods
+bitand:      method{ bits-test bits-test } [ swap unmake-bits-test swap unmake-bits-test bitand >bits-test ] ;
+bitor:       method{ bits-test bits-test } [ swap unmake-bits-test swap unmake-bits-test bitor >bits-test ] ;
+bitxor:      method{ bits-test bits-test } [ swap unmake-bits-test swap unmake-bits-test bitxor >bits-test ] ;
+bitnot:      method{ bits-test } [ unmake-bits-test bitnot >bits-test ] ;
+shift-left:  method{ bits-test fixnum } [ swap unmake-bits-test swap shift-left >bits-test ] ;
+shift-right: method{ bits-test fixnum } [ swap unmake-bits-test swap shift-right >bits-test ] ;
+ushift-right: method{ bits-test fixnum } [ swap unmake-bits-test swap ushift-right >bits-test ] ;
+shift: method{ bits-test fixnum } [ swap unmake-bits-test swap shift >bits-test ] ;
+
+0xFF >bits-test 0x0F >bits-test bitand unmake-bits-test 0x0F "dispatch bitand" assert=
+0xF0 >bits-test 0x0F >bits-test bitor unmake-bits-test 0xFF "dispatch bitor" assert=
+0xFF >bits-test 0x0F >bits-test bitxor unmake-bits-test 0xF0 "dispatch bitxor" assert=
+0 >bits-test bitnot unmake-bits-test -1 "dispatch bitnot" assert=
+1 >bits-test 10 shift-left unmake-bits-test 1024 "dispatch shift-left" assert=
+1024 >bits-test 10 shift-right unmake-bits-test 1 "dispatch shift-right" assert=
+-1 >bits-test 1 ushift-right unmake-bits-test 9223372036854775807 "dispatch ushift-right" assert=
+1 >bits-test 10 shift unmake-bits-test 1024 "dispatch shift" assert=
+
+"native bitwise fallback" test-section
+0xFF 0x0F bitand 0x0F "native bitand still works" assert=
+0xF0 0x0F bitor 0xFF "native bitor still works" assert=
+0xFF 0x0F bitxor 0xF0 "native bitxor still works" assert=
+0 bitnot -1 "native bitnot still works" assert=
+1 10 shift-left 1024 "native shift-left still works" assert=
+1024 10 shift-right 1 "native shift-right still works" assert=

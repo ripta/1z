@@ -102,3 +102,44 @@ PASS: shift up then down demotes
 Stack: [ ]
 PASS: shift up then down = 1
 Stack: [ ]
+=== bitwise dispatch on virtual types ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: dispatch bitand
+Stack: [ ]
+PASS: dispatch bitor
+Stack: [ ]
+PASS: dispatch bitxor
+Stack: [ ]
+PASS: dispatch bitnot
+Stack: [ ]
+PASS: dispatch shift-left
+Stack: [ ]
+PASS: dispatch shift-right
+Stack: [ ]
+PASS: dispatch ushift-right
+Stack: [ ]
+PASS: dispatch shift
+Stack: [ ]
+=== native bitwise fallback ===
+Stack: [ ]
+PASS: native bitand still works
+Stack: [ ]
+PASS: native bitor still works
+Stack: [ ]
+PASS: native bitxor still works
+Stack: [ ]
+PASS: native bitnot still works
+Stack: [ ]
+PASS: native shift-left still works
+Stack: [ ]
+PASS: native shift-right still works
+Stack: [ ]
