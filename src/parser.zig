@@ -201,7 +201,7 @@ fn executeParseTimeWord(
     // 4. Run the parse-time word
     switch (word.action) {
         .native => |func| func(c) catch |err| return handleParseTimeError(c, err),
-        .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
+        .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
     }
 
     // 5. Capture all values above the pre-depth stack as `push_literal` instructions
@@ -600,7 +600,7 @@ fn executeParseTimeWordForArray(
 
     switch (word.action) {
         .native => |func| func(c) catch |err| return handleParseTimeError(c, err),
-        .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
+        .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
     }
 
     const post_depth = c.stack.depth();

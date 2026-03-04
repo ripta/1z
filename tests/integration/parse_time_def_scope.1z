@@ -1,0 +1,45 @@
+\ Test that definitions inside parse-time word bodies are scoped
+\ and do not leak into the enclosing scope.
+
+use "testing" ;
+
+"parse-time definition scoping" test-section
+
+\ 1. Internal helper does not leak out of parse-time body
+leaky-test: parse-time [
+  leaky-helper: [ 99 ] ;
+  leaky-helper
+] ;
+leaky-test 99 "parse-time body can use its own helper" assert=
+[ leaky-helper ] unknown-word: "internal helper not visible outside" assert-error-type
+
+\ 2. Parse-time word that pushes computed values still works
+computed-val: parse-time [ 3 4 * ] ;
+computed-val 12 "parse-time computed value" assert=
+
+\ 3. parse-token still works inside a parse-time body
+grab-one: parse-time [ parse-token ] ;
+grab-one hello
+"hello" "parse-token works in scoped body" assert=
+
+\ 4. Recursive helper inside parse-time body
+grab-two: parse-time [
+  grab-next: [ parse-token ] ;
+  grab-next grab-next
+] ;
+grab-two alpha beta
+"beta" "recursive helper second token" assert=
+"alpha" "recursive helper first token" assert=
+
+\ 5. Repeated invocations each get their own scoped frame
+scoped-counter: parse-time [
+  sc-helper: [ 7 ] ;
+  sc-helper
+] ;
+scoped-counter 7 "first invocation" assert=
+scoped-counter 7 "second invocation" assert=
+
+\ 6. External helper defined outside remains visible inside parse-time body
+outside-helper: [ 55 ] ;
+uses-outside: parse-time [ outside-helper ] ;
+uses-outside 55 "external helper visible inside parse-time body" assert=
