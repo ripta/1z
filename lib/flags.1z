@@ -15,8 +15,8 @@ use "strings" ;
 use "sequences" ;
 
 \ Markers
-required: marker ;
-positional: marker ;
+required: define-marker ;
+positional: define-marker ;
 
 \ Shared state
 flag-registry: M{ } ;
@@ -136,7 +136,7 @@ parse-flags: [
     [ print-flag-help ] #each
   ] ;
 
-  mth-src: parameter [ [ ] make-mutable-map ] ;
+  mth-src: define-parameter [ [ ] make-mutable-map ] ;
   mth-copy-key: ( hash key -- hash' ) [
     dup mth-src get swap @get
     @set
@@ -268,8 +268,8 @@ parse-flags: [
     ] #each
   ] ;
 
-  pf-result:    parameter [ [ ] make-mutable-map ] ;
-  pf-desc:      parameter [ "" ] ;
+  pf-result:    define-parameter [ [ ] make-mutable-map ] ;
+  pf-desc:      define-parameter [ "" ] ;
   pf-pos-state: M{ idx: 0 } ;
 
   \

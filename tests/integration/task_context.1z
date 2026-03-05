@@ -29,7 +29,7 @@ test-local-def-no-leak: ( -- ) [
 
 \ -- 3. Dynamic variable snapshot isolation --
 
-test-dvar-snapshot: parameter [ 0 ] ;
+test-dvar-snapshot: define-parameter [ 0 ] ;
 
 test-dvar-isolation: ( -- ) [
   10 test-dvar-snapshot [

@@ -1,6 +1,6 @@
 \ Test module with marked words - for marker query tests
 
-my-lib-marker: marker ;
+my-lib-marker: define-marker ;
 
 \ Word with no markers
 plain-word: [ 42 ] ;
@@ -9,5 +9,5 @@ plain-word: [ 42 ] ;
 single-marked: my-lib-marker [ 100 ] ;
 
 \ Word with multiple markers
-another-marker: marker ;
+another-marker: define-marker ;
 multi-marked: my-lib-marker another-marker [ 200 ] ;

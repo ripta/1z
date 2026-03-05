@@ -62,6 +62,7 @@ Stack: [ ]
 >string ( value -- string )
 >string-base ( n base -- str )
 >symbol ( string -- symbol )
+>template ( string -- template )
 @adjoin ( set value -- set' )
 @difference ( set1 set2 -- set' )
 @get ( assoc key -- value )
@@ -104,6 +105,7 @@ compose ( quot1 quot2 -- quot' )
 const ( -- marker )
 curry ( x quot -- quot' )
 define-enum ( name descriptor markers -- )
+define-marker ( -- marker )
 define-method ( name descriptor markers -- )
 define-protocol ( name descriptor markers -- )
 define-struct ( name descriptor markers -- )
@@ -140,7 +142,6 @@ make-parameter ( name quot -- param )
 make-range-iter ( start end step infinite? -- iterator )
 make-set ( quotation -- set )
 make-vector ( quotation -- vector )
-marker ( -- marker )
 multiplexer-stats ( -- hash )
 mutable ( -- marker )
 native? ( name -- ? )
@@ -198,7 +199,6 @@ sys-info ( -- hash )
 t ( -- t )
 task-scope ( quot -- )
 task-self ( -- task )
-template ( string -- template )
 throw ( error -- )
 try-receive ( ch -- val/f ? )
 type-of ( val -- symbol )
@@ -255,7 +255,7 @@ yield ( -- )
 >result:err
 >result:ok
 >source-loc
->stack-effect
+>stack-effect-info
 >word-info ( symbol -- word-info )
 >word? ( symbol -- option )
 ?and-then ( opt/res quot -- opt/res )
@@ -313,6 +313,7 @@ cmp ( a b -- ordering )
 column>>
 comparable
 cond ( branches -- ... )
+define-parameter
 dispatch-provenance>hash
 dispatch-provenance?
 do ( pred body -- pred body )
@@ -363,7 +364,7 @@ make-provenance
 make-result:err
 make-result:ok
 make-source-loc
-make-stack-effect
+make-stack-effect-info
 make-word-info
 marker? ( val -- ? )
 markers>>
@@ -406,7 +407,6 @@ ordering:lt?
 ordering?
 output-stream
 outputs>>
-parameter
 parameter? ( val -- ? )
 parent>>
 parse-quotation ( -- quotation )
@@ -435,9 +435,9 @@ set? ( val -- ? )
 source-loc>>
 source-loc>hash
 source-loc?
+stack-effect-info>hash
+stack-effect-info?
 stack-effect>>
-stack-effect>hash
-stack-effect?
 stream-write-string ( stream str -- n )
 stream? ( val -- ? )
 string? ( val -- ? )
@@ -458,7 +458,7 @@ unmake-provenance
 unmake-result:err
 unmake-result:ok
 unmake-source-loc
-unmake-stack-effect
+unmake-stack-effect-info
 unmake-word-info
 until ( ..a pred body -- ..b )
 unwrap-or ( opt/res default -- value )

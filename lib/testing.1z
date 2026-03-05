@@ -56,7 +56,7 @@ assert-false: ( bool msg -- ) [ f swap assert= ] ;
 assert-error: ( quot msg -- ) [
 
   \ Parameter to store test message during assert-error execution
-  __assert_msg__: parameter [ "" ] ;
+  __assert_msg__: define-parameter [ "" ] ;
 
   \ Drop values until TOS is :__START__: marker
   __drop_until_marker__: ( -- ) [
@@ -101,8 +101,8 @@ assert-error: ( quot msg -- ) [
 \
 \   [ 1 0 / ] division-by-zero: "division by zero" assert-error-type
 assert-error-type: ( quot expected-type msg -- ) [
-  __aet_msg__: parameter [ "" ] ;
-  __aet_expected__: parameter [ "" ] ;
+  __aet_msg__: define-parameter [ "" ] ;
+  __aet_expected__: define-parameter [ "" ] ;
 
   __drop_until_marker__: ( -- ) [
     dup :__START__: = not

@@ -14,9 +14,7 @@ Method dispatch registration syntax.
 method{ [<marker:parse-time>] \compound
 
 Stack: [ ]
-Dynamic variable definition syntax.
-parameter [<marker:parse-time>] \compound
-
+parameter:: no such word
 Stack: [ ]
 Load and import a module by name or file path.
 Optionally restrict imported words with a set of symbols.
