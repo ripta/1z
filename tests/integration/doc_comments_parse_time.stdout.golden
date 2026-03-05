@@ -14,7 +14,7 @@ Method dispatch registration syntax.
 method{ [<marker:parse-time>] \compound
 
 Stack: [ ]
-parameter:: no such word
+parameter [<marker:const>, <marker:parse-time>] \compound
 Stack: [ ]
 Load and import a module by name or file path.
 Optionally restrict imported words with a set of symbols.

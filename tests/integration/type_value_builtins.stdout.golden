@@ -1,0 +1,90 @@
+=== Type values exist and inspect correctly ===
+Stack: [ ]
+PASS: fixnum type value
+Stack: [ ]
+PASS: bignum type value
+Stack: [ ]
+PASS: float type value
+Stack: [ ]
+PASS: boolean type value
+Stack: [ ]
+PASS: string type value
+Stack: [ ]
+PASS: symbol type value
+Stack: [ ]
+PASS: array type value
+Stack: [ ]
+PASS: quotation type value
+Stack: [ ]
+PASS: hash type value
+Stack: [ ]
+PASS: vector type value
+Stack: [ ]
+PASS: byte-array type value
+Stack: [ ]
+PASS: set type value
+Stack: [ ]
+PASS: mutable-map type value
+Stack: [ ]
+PASS: stream type value
+Stack: [ ]
+PASS: resource type value
+Stack: [ ]
+PASS: parameter type value
+Stack: [ ]
+PASS: module type value
+Stack: [ ]
+PASS: marker type value
+Stack: [ ]
+PASS: struct-type type value
+Stack: [ ]
+PASS: struct-instance type value
+Stack: [ ]
+PASS: tagged type value
+Stack: [ ]
+PASS: template type value
+Stack: [ ]
+PASS: stack-effect type value
+Stack: [ ]
+PASS: error type value
+Stack: [ ]
+PASS: task type value
+Stack: [ ]
+PASS: channel type value
+Stack: [ ]
+PASS: iterator type value
+Stack: [ ]
+PASS: doc-string type value
+Stack: [ ]
+=== Type values are const ===
+Stack: [ ]
+PASS: fixnum is const
+Stack: [ ]
+PASS: boolean is const
+Stack: [ ]
+PASS: string is const
+Stack: [ ]
+=== Renamed words still work ===
+Stack: [ ]
+PASS: >template still works
+Stack: [ ]
+Stack: [ ]
+PASS: define-marker still works
+Stack: [ ]
+Stack: [ ]
+PASS: define-parameter still works
+Stack: [ ]
+PASS: stack-effect-info struct exists
+Stack: [ ]
+=== Type predicates still work ===
+Stack: [ ]
+PASS: fixnum? still works
+Stack: [ ]
+PASS: string? still works
+Stack: [ ]
+PASS: boolean? still works
+Stack: [ ]
+PASS: array? still works
+Stack: [ ]
+PASS: hash? still works
+Stack: [ ]

@@ -25,6 +25,36 @@ S{: parse-time [ "}" parse-until make-set ] ;
 \\ Mutable map literal syntax.
 M{: parse-time [ "}" parse-until make-mutable-map ] ;
 
+\ Built-in type values
+fixnum:    M{ type: builtin-type: } native.define-builtin-type ;
+bignum:    M{ type: builtin-type: } native.define-builtin-type ;
+float:     M{ type: builtin-type: } native.define-builtin-type ;
+boolean:   M{ type: builtin-type: } native.define-builtin-type ;
+string:    M{ type: builtin-type: } native.define-builtin-type ;
+symbol:    M{ type: builtin-type: } native.define-builtin-type ;
+array:     M{ type: builtin-type: } native.define-builtin-type ;
+quotation: M{ type: builtin-type: } native.define-builtin-type ;
+hash:      M{ type: builtin-type: } native.define-builtin-type ;
+vector:    M{ type: builtin-type: } native.define-builtin-type ;
+byte-array: M{ type: builtin-type: } native.define-builtin-type ;
+set: M{ type: builtin-type: } native.define-builtin-type ;
+mutable-map: M{ type: builtin-type: } native.define-builtin-type ;
+stream:      M{ type: builtin-type: } native.define-builtin-type ;
+resource:    M{ type: builtin-type: } native.define-builtin-type ;
+parameter:   M{ type: builtin-type: } native.define-builtin-type ;
+module:      M{ type: builtin-type: } native.define-builtin-type ;
+marker:      M{ type: builtin-type: } native.define-builtin-type ;
+struct-type: M{ type: builtin-type: } native.define-builtin-type ;
+struct-instance: M{ type: builtin-type: } native.define-builtin-type ;
+tagged:       M{ type: builtin-type: } native.define-builtin-type ;
+template:     M{ type: builtin-type: } native.define-builtin-type ;
+stack-effect: M{ type: builtin-type: } native.define-builtin-type ;
+error:    M{ type: builtin-type: } native.define-builtin-type ;
+task:     M{ type: builtin-type: } native.define-builtin-type ;
+channel:  M{ type: builtin-type: } native.define-builtin-type ;
+iterator: M{ type: builtin-type: } native.define-builtin-type ;
+doc-string: M{ type: builtin-type: } native.define-builtin-type ;
+
 \\ Word array literal syntax. Tokenizes words as strings without requiring quotes.
 W{: parse-time [ "}" parse-tokens-until ] ;
 
@@ -642,11 +672,11 @@ word-info: struct{ name stack-effect doc markers native? body methods source-loc
 
 \\ Convert a raw 9-element array from native.>word into a word-info struct.
 (raw>word-info): [
-  >stack-effect-info:  [ dup f = [ ] [ dup #first swap #last make-stack-effect-info ] if ] ;
-  >source-loc:    [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-source-loc nip ] if ] ;
-  >provenance:    [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-provenance nip ] if ] ;
-  >dispatch-prov: [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth 3 pick-n 3 #nth make-dispatch-provenance nip ] if ] ;
-  >method-info:   [ dup 0 #nth swap 1 #nth >dispatch-prov make-method-info ] ;
+  >stack-effect-info: [ dup f = [ ] [ dup #first swap #last make-stack-effect-info ] if ] ;
+  >source-loc:        [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-source-loc nip ] if ] ;
+  >provenance:        [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-provenance nip ] if ] ;
+  >dispatch-prov:     [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth 3 pick-n 3 #nth make-dispatch-provenance nip ] if ] ;
+  >method-info:       [ dup 0 #nth swap 1 #nth >dispatch-prov make-method-info ] ;
   dup 0 #nth
   over 1 #nth >stack-effect-info
   2 pick-n 2 #nth
