@@ -673,7 +673,7 @@ pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
         .doc_string => |s| .{ .doc_string = try alloc.dupe(u8, s) },
 
         // NOTE(ripta): Reference types not owned by the task arena so it's safe to share without copying
-        .stream, .parameter, .module, .marker, .struct_type, .benchmark_report, .task, .channel, .iterator, .resource => val,
+        .stream, .parameter, .module, .marker, .struct_type, .benchmark_report, .task, .channel, .iterator, .resource, .type_val => val,
     };
 }
 

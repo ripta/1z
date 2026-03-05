@@ -171,6 +171,13 @@ pub const TemplateSegment = union(enum) {
     },
 };
 
+/// TypeValue represents a first-class type value that can be pushed onto the stack.
+/// Created when type names are used as words.
+pub const TypeValue = struct {
+    name: []const u8,
+    descriptor: ?*MutableMap,
+};
+
 /// StructInstance represents an instance of a struct type.
 /// Created by make-NAME or >NAME words.
 pub const StructInstance = struct {
@@ -389,6 +396,7 @@ pub const Value = union(enum) {
     channel: *@import("channel.zig").Channel,
     iterator: *Iterator,
     doc_string: []const u8,
+    type_val: *TypeValue,
 
     pub fn write(self: Value, writer: anytype) anyerror!void {
         switch (self) {
@@ -559,6 +567,7 @@ pub const Value = union(enum) {
                 try writer.writeAll(">");
             },
             .doc_string => |s| try writer.print("<doc-string \"{s}\">", .{s}),
+            .type_val => |tv| try writer.print("<type:{s}>", .{tv.name}),
         }
     }
 
@@ -682,6 +691,7 @@ pub const Value = union(enum) {
             .channel => |a| a == other.channel,
             .iterator => |a| a == other.iterator,
             .doc_string => |a| std.mem.eql(u8, a, other.doc_string),
+            .type_val => |a| a == other.type_val,
         };
     }
 
@@ -865,6 +875,10 @@ pub const Value = union(enum) {
                 hasher.update(std.mem.asBytes(&ptr_val));
             },
             .doc_string => |s| hasher.update(s),
+            .type_val => |tv| {
+                const ptr_val = @intFromPtr(tv);
+                hasher.update(std.mem.asBytes(&ptr_val));
+            },
         }
 
         return hasher.final();
