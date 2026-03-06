@@ -151,22 +151,29 @@ fn nativeToWord(ctx: *Context) anyerror!void {
     try ctx.stack.push(try buildWordInfo(alloc, ctx, name, word));
 }
 
-/// type-descriptor ( symbol -- mutable-map ) - Look up a type descriptor by name
+/// type-descriptor ( symbol|type -- mutable-map ) - Look up a type descriptor by name or type value
 fn nativeTypeDescriptor(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
-    const name = switch (val) {
-        .symbol => |s| s,
-        .string => |s| s,
+    switch (val) {
+        .type_val => |tv| {
+            const desc = tv.descriptor orelse {
+                helpers.setErrorContext(ctx, "no type descriptor for '{s}'", .{tv.name});
+                return error.NameError;
+            };
+            try ctx.stack.push(.{ .mutable_map = desc });
+        },
+        .symbol, .string => |name| {
+            const desc = ctx.lookupTypeDescriptor(name) orelse {
+                helpers.setErrorContext(ctx, "no type descriptor for '{s}'", .{name});
+                return error.NameError;
+            };
+            try ctx.stack.push(.{ .mutable_map = desc });
+        },
         else => {
-            helpers.setTypeMismatchError(ctx, "symbol", val);
+            helpers.setTypeMismatchError(ctx, "symbol or type", val);
             return error.TypeMismatch;
         },
-    };
-    const desc = ctx.lookupTypeDescriptor(name) orelse {
-        helpers.setErrorContext(ctx, "no type descriptor for '{s}'", .{name});
-        return error.NameError;
-    };
-    try ctx.stack.push(.{ .mutable_map = desc });
+    }
 }
 
 /// locally-defined? ( name -- bool ) - Check if a word is defined in the import frame.

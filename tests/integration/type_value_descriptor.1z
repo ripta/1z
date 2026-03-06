@@ -1,0 +1,24 @@
+\ Tests for type-descriptor accepting type values
+
+use "testing" ;
+
+"Symbol path still works" test-section
+
+"fixnum" native.type-descriptor mutable-map? t "symbol returns mutable-map" assert=
+"string" native.type-descriptor mutable-map? t "string returns mutable-map" assert=
+
+"Type value path works" test-section
+
+fixnum native.type-descriptor mutable-map? t "type value returns mutable-map" assert=
+string native.type-descriptor mutable-map? t "string type value returns mutable-map" assert=
+
+"Both paths return the same descriptor" test-section
+
+fixnum native.type-descriptor "fixnum" native.type-descriptor = t "fixnum descriptors match" assert=
+string native.type-descriptor "string" native.type-descriptor = t "string descriptors match" assert=
+boolean native.type-descriptor "boolean" native.type-descriptor = t "boolean descriptors match" assert=
+array native.type-descriptor "array" native.type-descriptor = t "array descriptors match" assert=
+
+"Type mismatch error" test-section
+
+[ 42 native.type-descriptor ] type-mismatch: "fixnum value is not a type" assert-error-type
