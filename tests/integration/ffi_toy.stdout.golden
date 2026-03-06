@@ -33,9 +33,9 @@ Stack: [ B{ 0x2A 0x2A 0x2A } B{ 0x2A 0x2A 0x2A } ]
 Stack: [ B{ 0x2A 0x2A 0x2A } B{ 0x2A 0x2A 0x2A } "toy-fill" ]
 PASS: toy-fill
 Stack: [ ]
-Stack: [ toy-counter: ]
-Stack: [ toy-counter: toy-counter: ]
-Stack: [ toy-counter: toy-counter: "toy-open type" ]
+Stack: [ "toy-counter" ]
+Stack: [ "toy-counter" "toy-counter" ]
+Stack: [ "toy-counter" "toy-counter" "toy-open type" ]
 PASS: toy-open type
 Stack: [ ]
 Stack: [ <resource:toy-counter> 0 ]

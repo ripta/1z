@@ -1,0 +1,62 @@
+=== === type-of built-in types === ===
+Stack: [ ]
+PASS: fixnum type-of
+Stack: [ ]
+PASS: string type-of
+Stack: [ ]
+PASS: boolean type-of
+Stack: [ ]
+PASS: float type-of
+Stack: [ ]
+PASS: symbol type-of
+Stack: [ ]
+PASS: array type-of
+Stack: [ ]
+PASS: quotation type-of
+Stack: [ ]
+PASS: hash type-of
+Stack: [ ]
+PASS: vector type-of
+Stack: [ ]
+=== === type-of virtual/enum types === ===
+Stack: [ ]
+PASS: option:none type-name
+Stack: [ ]
+PASS: option:some type-name
+Stack: [ ]
+=== === type-name === ===
+Stack: [ ]
+PASS: fixnum type-name
+Stack: [ ]
+PASS: string type-name
+Stack: [ ]
+PASS: boolean type-name
+Stack: [ ]
+PASS: float type-name
+Stack: [ ]
+=== === type-of on type values === ===
+Stack: [ ]
+PASS: type-of type value is type
+Stack: [ ]
+PASS: type value type-name
+Stack: [ ]
+=== === type predicates === ===
+Stack: [ ]
+PASS: fixnum?
+Stack: [ ]
+PASS: string?
+Stack: [ ]
+PASS: boolean?
+Stack: [ ]
+PASS: 42 not string?
+Stack: [ ]
+PASS: float?
+Stack: [ ]
+PASS: 42 not float?
+Stack: [ ]
+=== === type identity === ===
+Stack: [ ]
+PASS: same type-of for same type
+Stack: [ ]
+PASS: different type-of for different types
+Stack: [ ]

@@ -11,7 +11,7 @@ greet(loud) "HELLO!" "greet(loud) returns HELLO!" assert=
 
 "variant word syntax: symbol literals" test-section
 
-greet(loud): type-of symbol: "greet(loud): is a symbol" assert=
+greet(loud): type-of symbol "greet(loud): is a symbol" assert=
 greet(loud): >string "greet(loud)" "greet(loud): symbol string" assert=
 
 "variant word syntax: >word introspection" test-section

@@ -15,7 +15,7 @@ toy-lib-path: ( -- path ) [
 
 \\ ffi{ with params and return type
 ffi{ i32 i32 -> i32 }
-type-of ffi-sig: "ffi{ produces ffi-sig" assert=
+type-name "ffi-sig" "ffi{ produces ffi-sig" assert=
 
 \\ ffi{ params field access
 ffi{ i32 i32 -> i32 }
@@ -118,7 +118,7 @@ params>> #first "ptr:my-thing" "ptr:name preserved" assert=
 toy-lib-path lib-open
 dup "toy_add" lib-symbol
 ffi{ i32 i32 -> i32 } bind-sig
-type-of ffi-fn: "bind-sig returns ffi-fn" assert=
+type-name "ffi-fn" "bind-sig returns ffi-fn" assert=
 resource-close
 
 \\ bind-sig returns the same resource

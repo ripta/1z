@@ -22,9 +22,9 @@ use "testing" ;
 5.5 2 % 1.5 "float fmod fixnum" assert=
 
 "Result type is float when mixed" test-section
-1 1.0 + type-of float: "fixnum + float => float type" assert=
-1.0 1 + type-of float: "float + fixnum => float type" assert=
-2.0 1.0 * type-of float: "float * float => float type" assert=
+1 1.0 + type-of float "fixnum + float => float type" assert=
+1.0 1 + type-of float "float + fixnum => float type" assert=
+2.0 1.0 * type-of float "float * float => float type" assert=
 
 "Fixnum arithmetic unchanged" test-section
 3 4 + 7 "fixnum + fixnum" assert=
@@ -32,12 +32,12 @@ use "testing" ;
 3 4 * 12 "fixnum * fixnum" assert=
 7 2 / 3 "fixnum / fixnum" assert=
 7 3 % 1 "fixnum % fixnum" assert=
-3 4 + type-of fixnum: "fixnum + fixnum => fixnum type" assert=
+3 4 + type-of fixnum "fixnum + fixnum => fixnum type" assert=
 
 "IEEE 754 division" test-section
-1.0 0.0 / type-of float: "1.0 / 0.0 is float" assert=
--1.0 0.0 / type-of float: "-1.0 / 0.0 is float" assert=
-0.0 0.0 / type-of float: "0.0 / 0.0 is float" assert=
+1.0 0.0 / type-of float "1.0 / 0.0 is float" assert=
+-1.0 0.0 / type-of float "-1.0 / 0.0 is float" assert=
+0.0 0.0 / type-of float "0.0 / 0.0 is float" assert=
 
 "Integer division by zero still throws" test-section
 [ 1 0 / ] "DivisionByZero" assert-error

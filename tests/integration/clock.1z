@@ -6,8 +6,8 @@ use "testing" ;
 
 \ Helper: test clock-realtime and return results without leaving values on stack
 test-clock-realtime-types: ( -- ) [
-  clock-realtime type-of fixnum: "clock-realtime nsec is integer" assert=
-  type-of fixnum: "clock-realtime sec is integer" assert=
+  clock-realtime type-of fixnum "clock-realtime nsec is integer" assert=
+  type-of fixnum "clock-realtime sec is integer" assert=
 ] ;
 
 test-clock-realtime-sec-reasonable: ( -- ) [
@@ -26,8 +26,8 @@ test-clock-realtime-nsec-range
 "clock-monotonic primitive" test-section
 
 test-clock-monotonic-types: ( -- ) [
-  clock-monotonic type-of fixnum: "clock-monotonic nsec is integer" assert=
-  type-of fixnum: "clock-monotonic sec is integer" assert=
+  clock-monotonic type-of fixnum "clock-monotonic nsec is integer" assert=
+  type-of fixnum "clock-monotonic sec is integer" assert=
 ] ;
 
 test-clock-monotonic-nsec-range: ( -- ) [

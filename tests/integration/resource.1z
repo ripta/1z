@@ -24,9 +24,9 @@ assert-true
 "different resources not equal"
 assert-true
 
-\\ type-of: returns the type_name as a symbol
-"sqlite-db" <test-resource> type-of
-sqlite-db:
+\\ type-of: returns a type value with the resource type name
+"sqlite-db" <test-resource> type-name
+"sqlite-db"
 "type-of resource"
 assert=
 

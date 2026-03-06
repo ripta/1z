@@ -201,7 +201,7 @@ task-scope ( quot -- )
 task-self ( -- task )
 throw ( error -- )
 try-receive ( ch -- val/f ? )
-type-of ( val -- symbol )
+type-of ( val -- type )
 tz-decompose ( sec tz-name -- year month-num day hour min sec wday yday gmtoff tz-abbrev )
 unchecked-match ( val branches -- ... )
 uppercase ( str -- str )
@@ -476,6 +476,8 @@ tri ( ..a x p q r -- ..b ..c ..d )
 try ( quot -- result )
 try-acquire ( resource -- option )
 tuck ( a b -- b a b )
+type
+type-name ( val -- string )
 types>>
 unless ( ? quot -- )
 unmake-dispatch-provenance

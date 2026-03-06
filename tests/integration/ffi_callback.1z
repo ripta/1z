@@ -15,7 +15,7 @@ toy-lib-path lib-open
 
 [ + ] ffi{ i32 i32 -> i32 } ffi-callback
 dup resource? t "ffi-callback is a resource" assert=
-dup type-of ffi-callback: "ffi-callback type-of" assert=
+dup type-name "ffi-callback" "ffi-callback type-of" assert=
 resource-close
 
 \\ --- Basic callback: addition ---

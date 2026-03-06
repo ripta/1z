@@ -6,7 +6,7 @@ use "time" ;
 "timestamp virtual type" test-section
 
 \ Basic construction and type
-0 0 make-timestamp type-of timestamp: "type-of returns timestamp:" assert=
+0 0 make-timestamp type-name "timestamp" "type-of returns timestamp:" assert=
 0 0 make-timestamp timestamp? t "timestamp? on timestamp is true" assert=
 0 0 make-timestamp-inner timestamp? f "timestamp? on inner struct is false" assert=
 
@@ -20,7 +20,7 @@ use "time" ;
 
 \ now returns a timestamp
 test-now-type: ( -- ) [
-  now type-of timestamp: "now returns a timestamp" assert=
+  now type-name "timestamp" "now returns a timestamp" assert=
 ] ;
 
 \ now returns reasonable sec value (> 1700000000 for 2024+)

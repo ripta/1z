@@ -36,9 +36,9 @@ use "testing" ;
 "shift-left" test-section
 1 0 shift-left 1 "1 << 0" assert=
 1 10 shift-left 1024 "1 << 10" assert=
-1 63 shift-left type-of bignum: "1 << 63 is bignum" assert=
+1 63 shift-left type-of bignum "1 << 63 is bignum" assert=
 1 63 shift-left inspect "9223372036854775808" "1 << 63 value" assert=
-1 64 shift-left type-of bignum: "1 << 64 promotes" assert=
+1 64 shift-left type-of bignum "1 << 64 promotes" assert=
 1 64 shift-left inspect "18446744073709551616" "1 << 64 value" assert=
 
 "shift-right fixnum" test-section
@@ -65,7 +65,7 @@ use "testing" ;
 99999999999999999999 1 shift-left inspect "199999999999999999998" "big << 1" assert=
 
 "auto-demotion from shift" test-section
-1 64 shift-left 64 shift-right type-of fixnum: "shift up then down demotes" assert=
+1 64 shift-left 64 shift-right type-of fixnum "shift up then down demotes" assert=
 1 64 shift-left 64 shift-right 1 "shift up then down = 1" assert=
 
 "bitwise dispatch on virtual types" test-section

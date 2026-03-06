@@ -12,7 +12,7 @@ use "testing" ;
 -7 -2 div 3 "-7 div -2" assert=
 
 "div: min_i64 / -1 overflow promotes to bignum" test-section
--9223372036854775808 -1 div type-of bignum: "min_i64 div -1 type" assert=
+-9223372036854775808 -1 div type-of bignum "min_i64 div -1 type" assert=
 -9223372036854775808 -1 div inspect "9223372036854775808" "min_i64 div -1 value" assert=
 
 "div: division by zero" test-section

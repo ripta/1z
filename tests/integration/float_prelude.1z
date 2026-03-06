@@ -10,12 +10,12 @@ use "testing" ;
 t float? not "boolean is not float" assert-true
 
 "nan constant" test-section
-nan type-of float: "nan is float type" assert=
+nan type-of float "nan is float type" assert=
 nan nan = not "nan != nan (IEEE 754)" assert-true
 
 "inf and -inf constants" test-section
-inf type-of float: "inf is float type" assert=
--inf type-of float: "-inf is float type" assert=
+inf type-of float "inf is float type" assert=
+-inf type-of float "-inf is float type" assert=
 inf -inf = not "inf != -inf" assert-true
 inf 0.0 > "inf > 0.0" assert-true
 -inf 0.0 < "-inf < 0.0" assert-true
@@ -49,7 +49,7 @@ inf finite? not "inf is not finite" assert-true
 42 >float 42.0 "42 >float" assert=
 0 >float 0.0 "0 >float" assert=
 -7 >float -7.0 "-7 >float" assert=
-42 >float type-of float: ">float produces float type" assert=
+42 >float type-of float ">float produces float type" assert=
 
 ">float from string" test-section
 "3.14" >float 3.14 ">float from decimal string" assert=
@@ -72,7 +72,7 @@ inf finite? not "inf is not finite" assert-true
 -0.0 >integer 0 "-0.0 to 0" assert=
 0.9 >integer 0 "0.9 truncated to 0" assert=
 -0.9 >integer 0 "-0.9 truncated to 0" assert=
-3.7 >integer type-of fixnum: ">integer produces fixnum type" assert=
+3.7 >integer type-of fixnum ">integer produces fixnum type" assert=
 
 ">integer from fixnum (no-op)" test-section
 42 >integer 42 ">integer from fixnum passthrough" assert=

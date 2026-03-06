@@ -3,15 +3,15 @@
 use "testing" ;
 
 "Type checks" test-section
-3.14 type-of float: "decimal type-of" assert=
--3.14 type-of float: "negative decimal type-of" assert=
-1.5e10 type-of float: "scientific type-of" assert=
-1e10 type-of float: "scientific without decimal type-of" assert=
+3.14 type-of float "decimal type-of" assert=
+-3.14 type-of float "negative decimal type-of" assert=
+1.5e10 type-of float "scientific type-of" assert=
+1e10 type-of float "scientific without decimal type-of" assert=
 
 "Integers remain fixnums" test-section
-42 type-of fixnum: "integer stays fixnum" assert=
--7 type-of fixnum: "negative integer stays fixnum" assert=
-0 type-of fixnum: "zero stays fixnum" assert=
+42 type-of fixnum "integer stays fixnum" assert=
+-7 type-of fixnum "negative integer stays fixnum" assert=
+0 type-of fixnum "zero stays fixnum" assert=
 
 "Decimal literals" test-section
 3.14 3.14 "decimal equality" assert=

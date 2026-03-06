@@ -6,7 +6,7 @@ use "time" ;
 "duration virtual type" test-section
 
 \ Basic wrapping and unwrapping
-1000000000 >duration type-of duration: "type-of returns duration:" assert=
+1000000000 >duration type-name "duration" "type-of returns duration:" assert=
 1000000000 >duration unmake-duration 1000000000 "unmake-duration unwraps correctly" assert=
 
 \ Predicate

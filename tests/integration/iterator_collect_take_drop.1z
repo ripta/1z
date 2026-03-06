@@ -65,7 +65,7 @@ test-count-type-error: ( -- ) [
 
 test-take-returns-iterator: ( -- ) [
   { 1 2 3 4 5 } >iterator 3 #take
-  type-of iterator: "take returns iterator" assert=
+  type-of iterator "take returns iterator" assert=
 ] ;
 
 test-take-limits-elements: ( -- ) [
@@ -92,7 +92,7 @@ test-take-with-map: ( -- ) [
 
 test-drop-returns-iterator: ( -- ) [
   { 1 2 3 4 5 } >iterator 2 #drop
-  type-of iterator: "drop returns iterator" assert=
+  type-of iterator "drop returns iterator" assert=
 ] ;
 
 test-drop-skips-elements: ( -- ) [

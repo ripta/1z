@@ -18,8 +18,8 @@ option:none option? t "option? on none is true" assert=
 42 >option:some option:some> 42 "unwrap some yields value" assert=
 
 \ type-of
-42 >option:some type-of option:some: "type-of some" assert=
-option:none type-of option:none: "type-of none" assert=
+42 >option:some type-name "option:some" "type-of some" assert=
+option:none type-name "option:none" "type-of none" assert=
 
 \ enum-of
 42 >option:some enum-of "option" "enum-of some" assert=
@@ -57,8 +57,8 @@ option:none option:none = t "none equals none" assert=
 "oops" "test" EUserThrown make-error >result:err unmake-result:err error? t "unwrap err yields error" assert=
 
 \ type-of
-42 >result:ok type-of result:ok: "type-of ok" assert=
-"oops" "test" EUserThrown make-error >result:err type-of result:err: "type-of err" assert=
+42 >result:ok type-name "result:ok" "type-of ok" assert=
+"oops" "test" EUserThrown make-error >result:err type-name "result:err" "type-of err" assert=
 
 \ enum-of
 42 >result:ok enum-of "result" "enum-of ok" assert=
@@ -111,7 +111,7 @@ point: struct{ x y } ;
 speed: virtual{ fixnum } ;
 42 >speed >option:some option:some? t "some? on virtual-wrapped option" assert=
 42 >speed >option:some option:some> unmake-speed 42 "unwrap virtual from option" assert=
-42 >speed >option:some option:some> type-of speed: "type-of virtual inside option" assert=
+42 >speed >option:some option:some> type-name "speed" "type-of virtual inside option" assert=
 42 >speed >result:ok unmake-result:ok unmake-speed 42 "unwrap virtual from result ok" assert=
 
 "option wrapping embedded structs" test-section
@@ -119,7 +119,7 @@ speed: virtual{ fixnum } ;
 vec2: virtual{ struct{ dx dy } } ;
 3 4 make-vec2 >option:some option:some? t "some? on embedded-struct-wrapped option" assert=
 3 4 make-vec2 >option:some option:some> unmake-vec2 4 "unwrap embedded struct dy from option" assert= 3 "unwrap embedded struct dx from option" assert=
-3 4 make-vec2 >option:some option:some> type-of vec2: "type-of embedded struct inside option" assert=
+3 4 make-vec2 >option:some option:some> type-name "vec2" "type-of embedded struct inside option" assert=
 3 4 make-vec2 >result:ok unmake-result:ok unmake-vec2 4 "unwrap embedded struct from result ok dy" assert= 3 "unwrap embedded struct from result ok dx" assert=
 
 "option wrapping enum variants" test-section
@@ -129,7 +129,7 @@ color: enum{ red green blue } ;
 \ Flat enum variant inside option
 color:red >option:some option:some? t "some? on enum-wrapped option" assert=
 color:red >option:some option:some> color:red? t "unwrap enum from option, predicate" assert=
-color:red >option:some option:some> type-of color:red: "type-of enum inside option" assert=
+color:red >option:some option:some> type-name "color:red" "type-of enum inside option" assert=
 color:red >option:some option:some> enum-of "color" "enum-of on unwrapped enum from option" assert=
 color:green >result:ok unmake-result:ok color:green? t "unwrap enum from result ok" assert=
 

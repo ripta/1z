@@ -27,7 +27,7 @@ speed: virtual{ fixnum } ;
 
 \ make-NAME wraps
 42 make-speed speed? t "make-speed creates speed" assert=
-42 make-speed type-of speed: "make-speed type-of" assert=
+42 make-speed type-name "speed" "make-speed type-of" assert=
 
 \ unmake-NAME unwraps
 42 make-speed unmake-speed 42 "unmake-speed unwraps" assert=
@@ -41,7 +41,7 @@ vec2: virtual{ struct{ vx vy } } ;
 
 \ make-NAME wraps positionally
 10 20 make-vec2 vec2? t "make-vec2 creates vec2" assert=
-10 20 make-vec2 type-of vec2: "make-vec2 type-of" assert=
+10 20 make-vec2 type-name "vec2" "make-vec2 type-of" assert=
 
 \ unmake-NAME destructures
 10 20 make-vec2 unmake-vec2 20 "unmake-vec2 second field" assert=

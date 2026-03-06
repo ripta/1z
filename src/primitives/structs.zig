@@ -111,6 +111,11 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
         .fields = fields_slice,
     };
 
+    // Create a TypeValue for type-of lookups
+    const tv = try alloc.create(value_mod.TypeValue);
+    tv.* = .{ .name = name, .descriptor = null };
+    struct_type.type_val = tv;
+
     // make-NAME: ( field1 field2 ... -- instance ) - positional constructor
     const make_name = try std.fmt.allocPrint(alloc, "make-{s}", .{name});
     try defineConstructor(ctx, make_name, struct_type, markers_slice);
@@ -174,6 +179,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     const gw_slice = try generated_words.toOwnedSlice(alloc);
     try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
     try ctx.type_descriptors.put(ctx.allocator, name, desc_map);
+    struct_type.type_val.?.descriptor = desc_map;
 }
 
 /// Trampoline helper ( field1 .. fieldN struct-type -- instance )

@@ -14,7 +14,7 @@ toy-lib-path: ( -- path ) [
 
 \\ lib-open: load toy shared library from explicit path
 toy-lib-path native.lib-open
-type-of dylib: "lib-open returns dylib resource" assert=
+type-name "dylib" "lib-open returns dylib resource" assert=
 
 \\ lib-open: resource? returns true for dylib
 toy-lib-path native.lib-open
@@ -23,7 +23,7 @@ resource? t "dylib is a resource" assert=
 \\ lib-symbol: look up toy_add
 toy-lib-path native.lib-open
 dup "toy_add" native.lib-symbol
-type-of ffi-fn: "lib-symbol returns ffi-fn resource" assert=
+type-name "ffi-fn" "lib-symbol returns ffi-fn resource" assert=
 resource-close
 
 \\ lib-symbol: look up multiple symbols

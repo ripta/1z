@@ -29,7 +29,7 @@ use "time" ;
 
 "result type preserved" test-section
 
-1 seconds 2 seconds + type-of duration: "addition result is duration" assert=
-5 seconds 2 seconds - type-of duration: "subtraction result is duration" assert=
-2 seconds 3 * type-of duration: "multiplication result is duration" assert=
-3 2 seconds * type-of duration: "commutative multiplication result is duration" assert=
+1 seconds 2 seconds + type-name "duration" "addition result is duration" assert=
+5 seconds 2 seconds - type-name "duration" "subtraction result is duration" assert=
+2 seconds 3 * type-name "duration" "multiplication result is duration" assert=
+3 2 seconds * type-name "duration" "commutative multiplication result is duration" assert=

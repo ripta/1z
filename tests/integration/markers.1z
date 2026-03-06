@@ -11,7 +11,7 @@ define-marker dup = t "same marker is equal to itself" assert=
 
 test-marker: define-marker ;
 test-marker marker? t "marker? predicate" assert=
-test-marker type-of marker: "type-of returns marker:" assert=
+test-marker type-of marker "type-of returns marker:" assert=
 test-marker inspect "<marker:test-marker>" "named marker inspect" assert=
 
 "Marker identity after naming" test-section

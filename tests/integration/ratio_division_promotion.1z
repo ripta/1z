@@ -10,7 +10,7 @@ use "testing" ;
 
 "exact fixnum division still produces integer" test-section
 6 2 / 3 "6/2 = 3" assert=
-6 2 / type-of fixnum: "6/2 is fixnum" assert=
+6 2 / type-of fixnum "6/2 is fixnum" assert=
 -6 2 / -3 "-6/2 = -3" assert=
 0 5 / 0 "0/5 = 0" assert=
 
@@ -23,12 +23,12 @@ use "testing" ;
 100000000000000000000 3 / ratio? "big/3 is ratio" assert-true
 
 "exact bignum division still produces integer" test-section
-99999999999999999999 3 / type-of bignum: "big/3 exact is bignum" assert=
+99999999999999999999 3 / type-of bignum "big/3 exact is bignum" assert=
 99999999999999999999 3 / >string "33333333333333333333" "big/3 exact value" assert=
 
 "division by zero unchanged" test-section
 [ 0 0 / ] "DivisionByZero" assert-error
 
 "minInt / -1 still promotes to bignum" test-section
--9223372036854775808 -1 / type-of bignum: "minInt/-1 is bignum" assert=
+-9223372036854775808 -1 / type-of bignum "minInt/-1 is bignum" assert=
 -9223372036854775808 -1 / >string "9223372036854775808" "minInt/-1 value" assert=

@@ -828,20 +828,20 @@ gather: ( ndarray indices -- ndarray ) [
 inspect: method{ ndarray } [
   dup rank 1 = [
     \ 1D: ndarray{float}(3): 1.0 2.0 3.0
-    "ndarray{" over element-type >string #append "}(" #append
+    "ndarray{" over element-type native.type-name #append "}(" #append
     over #len inspect #append "): " #append
     swap (inspect-elements) " " (join) #append
   ] [
     dup rank 2 = [
       \ 2D: aligned grid with header
       dup shape (format-shape) " ndarray{" #append
-      over element-type >string #append "}:\n" #append
+      over element-type native.type-name #append "}:\n" #append
       swap dup (inspect-elements) swap shape 1 #nth
       (format-2d-grid) #append
     ] [
       \ 3D+: labeled slices over leading dimensions
       dup shape (format-shape) " ndarray{" #append
-      over element-type >string #append "}:" #append
+      over element-type native.type-name #append "}:" #append
       \ stack: ndarray(1) header(0)
       swap dup (inspect-elements) swap shape
       \ stack: header(3) str-arr(2) shape(1)

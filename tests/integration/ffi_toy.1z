@@ -43,8 +43,8 @@ B{ 42 42 42 }
 assert=
 
 \\ toy-open: returns a resource with type toy-counter
-native.toy-open type-of
-toy-counter:
+native.toy-open type-name
+"toy-counter"
 "toy-open type"
 assert=
 

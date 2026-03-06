@@ -7,8 +7,8 @@ use "time" ;
 
 "timezone type basics" test-section
 
-utc type-of timezone: "utc type-of" assert=
-local type-of timezone: "local type-of" assert=
+utc type-name "timezone" "utc type-of" assert=
+local type-name "timezone" "local type-of" assert=
 utc timezone-offset 0 "utc offset is 0" assert=
 utc timezone-name "UTC" "utc name" assert=
 local timezone-name "" "local name is empty" assert=

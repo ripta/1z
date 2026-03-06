@@ -2,11 +2,11 @@
 \ This file is embedded and loaded automatically during initialization.
 
 \\ Push an empty array.
-[]: [ [] ] ;
+[]: [ [ ] ] ;
 
 \\ Read the next quotation from the tokenizer.
 parse-quotation: ( -- quotation ) [
-  parse-literal dup type-of quotation: =
+  parse-literal dup type-of quotation =
   [ ] [ "quotation" throw-type-error ] if
 ] ;
 
@@ -54,6 +54,7 @@ task:     M{ type: builtin-type: } native.define-builtin-type ;
 channel:  M{ type: builtin-type: } native.define-builtin-type ;
 iterator: M{ type: builtin-type: } native.define-builtin-type ;
 doc-string: M{ type: builtin-type: } native.define-builtin-type ;
+type: M{ type: builtin-type: } native.define-builtin-type ;
 
 \\ Word array literal syntax. Tokenizes words as strings without requiring quotes.
 W{: parse-time [ "}" parse-tokens-until ] ;
@@ -154,7 +155,7 @@ unless: branch-combinator ( ? quot -- ) [ [ ] swap if ] ;
 \\ Execute a quotation, silently discarding any error.
 ignore-errors: ( quot -- ) [ [ drop ] recover ] ;
 \\ Test whether a value is an error object.
-error?: ( val -- ? ) [ type-of error: = ] ;
+error?: ( val -- ? ) [ type-of error = ] ;
 \\ Test whether an error matches a given error type symbol.
 \\ Leaves the error on the stack for further inspection.
 error-type?: ( error type -- error ? ) [ over error-type: @get = ] ;
@@ -185,9 +186,12 @@ EMissingDocComment:   [ missing-doc-comment: ] ;
 \\ Construct and throw a no-matching-branch error with the given data.
 no-matching-branch: ( data -- error ) [ "no matching branch" ENoMatchingBranch make-error ] ;
 
+\\ Extract the type name of a value as a string.
+type-name: ( val -- string ) [ type-of native.type-name ] ;
+
 \\ Throw a type-mismatch error with expected/got/value context.
 throw-type-error: ( value expected-str -- * ) [
-  over type-of >string
+  over type-name
   M{ } swap got: swap @set! swap expected: swap @set! swap value: swap @set!
   dup expected: @get over got: @get
   swap "expected " swap #append ", got " #append swap #append
@@ -195,25 +199,25 @@ throw-type-error: ( value expected-str -- * ) [
 ] ;
 
 \ Type predicates
-fixnum?:     ( val -- ? ) [ type-of fixnum: = ] ;
-boolean?:    ( val -- ? ) [ type-of boolean: = ] ;
-string?:     ( val -- ? ) [ type-of string: = ] ;
-symbol?:     ( val -- ? ) [ type-of symbol: = ] ;
-array?:      ( val -- ? ) [ type-of array: = ] ;
-quotation?:  ( val -- ? ) [ type-of quotation: = ] ;
-hash?:       ( val -- ? ) [ type-of hash: = ] ;
-vector?:     ( val -- ? ) [ type-of vector: = ] ;
-byte-array?: ( val -- ? ) [ type-of byte-array: = ] ;
-set?: ( val -- ? ) [ type-of set: = ] ;
-mutable-map?: ( val -- ? ) [ type-of mutable-map: = ] ;
-stream?:      ( val -- ? ) [ type-of stream: = ] ;
-parameter?:   ( val -- ? ) [ type-of parameter: = ] ;
-module?:      ( val -- ? ) [ type-of module: = ] ;
-marker?:      ( val -- ? ) [ type-of marker: = ] ;
-benchmark-report?: ( val -- ? ) [ type-of benchmark-report: = ] ;
-iterator?: ( val -- ? ) [ type-of iterator: = ] ;
-float?: ( val -- ? ) [ type-of float: = ] ;
-bignum?: ( val -- ? ) [ type-of bignum: = ] ;
+fixnum?:     ( val -- ? ) [ type-of fixnum = ] ;
+boolean?:    ( val -- ? ) [ type-of boolean = ] ;
+string?:     ( val -- ? ) [ type-of string = ] ;
+symbol?:     ( val -- ? ) [ type-of symbol = ] ;
+array?:      ( val -- ? ) [ type-of array = ] ;
+quotation?:  ( val -- ? ) [ type-of quotation = ] ;
+hash?:       ( val -- ? ) [ type-of hash = ] ;
+vector?:     ( val -- ? ) [ type-of vector = ] ;
+byte-array?: ( val -- ? ) [ type-of byte-array = ] ;
+set?: ( val -- ? ) [ type-of set = ] ;
+mutable-map?: ( val -- ? ) [ type-of mutable-map = ] ;
+stream?:      ( val -- ? ) [ type-of stream = ] ;
+parameter?:   ( val -- ? ) [ type-of parameter = ] ;
+module?:      ( val -- ? ) [ type-of module = ] ;
+marker?:      ( val -- ? ) [ type-of marker = ] ;
+benchmark-report?: ( val -- ? ) [ type-of benchmark-report = ] ;
+iterator?: ( val -- ? ) [ type-of iterator = ] ;
+float?: ( val -- ? ) [ type-of float = ] ;
+bignum?: ( val -- ? ) [ type-of bignum = ] ;
 
 \\ True for any integer type: fixnum or bignum.
 integer?: ( val -- ? ) [ dup fixnum? swap bignum? or ] ;

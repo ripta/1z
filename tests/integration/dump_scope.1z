@@ -1,7 +1,7 @@
 use "testing" ;
 
 \ Verify native.scope-frames returns an array with at least one entry
-native.scope-frames dup type-of array: "scope-frames returns array" assert=
+native.scope-frames dup type-of array "scope-frames returns array" assert=
 #len 0 > "scope-frames has entries" assert-true
 
 \ Verify first entry is a hash with expected keys

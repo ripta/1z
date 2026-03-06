@@ -110,6 +110,11 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
                 .inner_type = inner_type,
             };
 
+            // Create a TypeValue for type-of lookups
+            const tv = try alloc.create(value_mod.TypeValue);
+            tv.* = .{ .name = name, .descriptor = null };
+            vtype.type_val = tv;
+
             // >NAME / make-NAME: ( value -- tagged ) - wrap
             const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{name});
             try defineWrap(ctx, wrap_name, vtype, markers_slice);
@@ -133,6 +138,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             const gw_slice = try generated_words.toOwnedSlice(alloc);
             try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
             try ctx.type_descriptors.put(ctx.allocator, name, desc_map);
+            vtype.type_val.?.descriptor = desc_map;
         },
         .mutable_map => |struct_desc| {
             const fields_val = struct_desc.get("fields") orelse return error.MissingField;
@@ -175,6 +181,11 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
                 .anon_struct = anon_struct,
             };
 
+            // Create a TypeValue for type-of lookups
+            const tv = try alloc.create(value_mod.TypeValue);
+            tv.* = .{ .name = name, .descriptor = null };
+            vtype.type_val = tv;
+
             // >NAME: ( hash -- tagged ) - hash-based wrap
             const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{name});
             try defineStructHashWrap(ctx, wrap_name, vtype, markers_slice);
@@ -207,6 +218,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             const gw_slice = try generated_words.toOwnedSlice(alloc);
             try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
             try ctx.type_descriptors.put(ctx.allocator, name, desc_map);
+            vtype.type_val.?.descriptor = desc_map;
         },
         else => {
             helpers.setErrorContext(ctx, "virtual{{ inner type must be a string or struct descriptor, got {s}", .{helpers.valueTypeName(inner_type_val)});

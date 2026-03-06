@@ -34,7 +34,7 @@ use "time" ;
 
 "result type preserved" test-section
 
-10 0 make-timestamp 1 seconds + type-of timestamp: "ts + dur is timestamp" assert=
-1 seconds 10 0 make-timestamp + type-of timestamp: "dur + ts is timestamp" assert=
-10 0 make-timestamp 1 seconds - type-of timestamp: "ts - dur is timestamp" assert=
-10 0 make-timestamp 5 0 make-timestamp - type-of duration: "ts - ts is duration" assert=
+10 0 make-timestamp 1 seconds + type-name "timestamp" "ts + dur is timestamp" assert=
+1 seconds 10 0 make-timestamp + type-name "timestamp" "dur + ts is timestamp" assert=
+10 0 make-timestamp 1 seconds - type-name "timestamp" "ts - dur is timestamp" assert=
+10 0 make-timestamp 5 0 make-timestamp - type-name "duration" "ts - ts is duration" assert=

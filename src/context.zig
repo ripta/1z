@@ -174,6 +174,12 @@ pub const Context = struct {
     enum_registry: std.StringHashMapUnmanaged([]const *const value_mod.VirtualType) = .{},
     /// Type descriptor registry mapping type names to their descriptor maps.
     type_descriptors: std.StringHashMapUnmanaged(*value_mod.MutableMap) = .{},
+    /// Mapping from type name to registered TypeValue for built-in types.
+    /// Populated by `define-builtin-type`; used by `type-of` for lookup.
+    builtin_type_values: std.StringHashMapUnmanaged(*value_mod.TypeValue) = .{},
+    /// Cache of TypeValues for resource types, keyed by resource type name.
+    /// Lazily populated by `type-of` when encountering a resource.
+    resource_type_values: std.StringHashMapUnmanaged(*value_mod.TypeValue) = .{},
     /// Registry of known pragma keys and their validation rules.
     pragma_registry: std.StringHashMapUnmanaged(PragmaRegistration) = .{},
     /// Stack of pragma frames for file-scoped pragma values.
@@ -356,6 +362,8 @@ pub const Context = struct {
         self.parse_time_deferred_calls.deinit(self.allocator);
         self.enum_registry.deinit(self.allocator);
         self.type_descriptors.deinit(self.allocator);
+        self.builtin_type_values.deinit(self.allocator);
+        self.resource_type_values.deinit(self.allocator);
         self.dispatch.deinit();
         self.arena.deinit();
         self.dictionary.deinit();
@@ -777,6 +785,32 @@ pub const Context = struct {
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
             if (ctx.type_descriptors.get(name)) |desc| return desc;
+            ancestor = ctx.parent_context;
+        }
+
+        return null;
+    }
+
+    /// Look up a built-in type value by type name, walking the parent context chain.
+    pub fn lookupBuiltinTypeValue(self: *const Context, name: []const u8) ?*value_mod.TypeValue {
+        if (self.builtin_type_values.get(name)) |tv| return tv;
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            if (ctx.builtin_type_values.get(name)) |tv| return tv;
+            ancestor = ctx.parent_context;
+        }
+
+        return null;
+    }
+
+    /// Look up a resource type value by type name, walking the parent context chain.
+    pub fn lookupResourceTypeValue(self: *const Context, name: []const u8) ?*value_mod.TypeValue {
+        if (self.resource_type_values.get(name)) |tv| return tv;
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            if (ctx.resource_type_values.get(name)) |tv| return tv;
             ancestor = ctx.parent_context;
         }
 

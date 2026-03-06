@@ -1,8 +1,8 @@
 use "testing" ;
 
 "Bignum literal type" test-section
-99999999999999999999 type-of bignum: "bignum literal type-of" assert=
--99999999999999999999 type-of bignum: "negative bignum literal type-of" assert=
+99999999999999999999 type-of bignum "bignum literal type-of" assert=
+-99999999999999999999 type-of bignum "negative bignum literal type-of" assert=
 
 "Bignum display" test-section
 99999999999999999999 inspect "99999999999999999999" "bignum inspect" assert=

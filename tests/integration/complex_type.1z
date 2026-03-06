@@ -3,7 +3,7 @@ use "complex" ;
 
 "complex: construction" test-section
 1.0 2.0 make-complex complex? "complex? true" assert-true
-1.0 2.0 make-complex type-of complex: "type-of is complex" assert=
+1.0 2.0 make-complex type-name "complex" "type-of is complex" assert=
 
 "complex: C{ literal" test-section
 C{ 1.0 2.0 } complex? "C{ } creates complex" assert-true

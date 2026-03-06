@@ -9,6 +9,7 @@ const markers_mod = @import("markers.zig");
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "define-builtin-type", .func = nativeDefineBuiltinType },
+    .{ .name = "type-name", .func = nativeTypeName },
 };
 
 /// define-builtin-type ( descriptor -- marker marker type ) - Create a type value from a descriptor,
@@ -40,7 +41,24 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
 
     try ctx.type_descriptors.put(ctx.allocator, name, descriptor);
 
+    // Register in the built-in type value mapping table for type-of lookups
+    try ctx.builtin_type_values.put(ctx.allocator, name, tv);
+
     try ctx.stack.push(.{ .marker = @constCast(&markers_mod.parse_time_marker) });
     try ctx.stack.push(.{ .marker = @constCast(&markers_mod.const_marker) });
     try ctx.stack.push(.{ .type_val = tv });
+}
+
+/// native.type-name ( type -- string ) - Extract the name string from a type value.
+fn nativeTypeName(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .type_val => |tv| {
+            try ctx.stack.push(.{ .string = tv.name });
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "type", val);
+            return error.TypeMismatch;
+        },
+    }
 }

@@ -72,7 +72,7 @@ test-sibling-failure-cancels-io: ( -- ) [
 test-multiplexer-stats: ( -- ) [
   [
     multiplexer-stats
-    type-of hash: "multiplexer-stats returns hash" assert=
+    type-of hash "multiplexer-stats returns hash" assert=
   ] task-scope
 ] ;
 

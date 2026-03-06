@@ -30,7 +30,7 @@ duration: virtual{ fixnum } ;
 100 >duration 7 % unmake-duration 2 "% dispatches for duration integer" assert=
 
 \ Verify result is still a duration
-42 >duration 10 >duration + type-of duration: "result type is duration" assert=
+42 >duration 10 >duration + type-name "duration" "result type is duration" assert=
 
 "comparison dispatch" test-section
 

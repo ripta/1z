@@ -172,6 +172,11 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
                 .anon_struct = anon_struct,
             };
 
+            // Create a TypeValue for type-of lookups
+            const tv = try alloc.create(value_mod.TypeValue);
+            tv.* = .{ .name = full_name, .descriptor = null };
+            vtype.type_val = tv;
+
             try vtype_list.append(alloc, vtype);
 
             const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
@@ -216,6 +221,11 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
                 .inner_type = "symbol",
                 .enum_name = enum_name,
             };
+
+            // Create a TypeValue for type-of lookups
+            const tv = try alloc.create(value_mod.TypeValue);
+            tv.* = .{ .name = full_name, .descriptor = null };
+            vtype.type_val = tv;
 
             try vtype_list.append(alloc, vtype);
 

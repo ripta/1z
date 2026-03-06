@@ -52,7 +52,7 @@ ml-point: struct{
 
 1 2 make-ml-point x>> 1 "multiline struct x field" assert=
 1 2 make-ml-point y>> 2 "multiline struct y field" assert=
-1 2 make-ml-point type-of ml-point: "multiline struct type-of" assert=
+1 2 make-ml-point type-name "ml-point" "multiline struct type-of" assert=
 
 "multiline enum{ flat" test-section
 
@@ -101,7 +101,7 @@ ml-vec2: virtual{
   }
 } ;
 
-3 4 make-ml-vec2 type-of ml-vec2: "multiline virtual struct type-of" assert=
+3 4 make-ml-vec2 type-name "ml-vec2" "multiline virtual struct type-of" assert=
 3 4 make-ml-vec2 ml-vec2? t "multiline virtual struct predicate" assert=
 3 4 make-ml-vec2 unmake-ml-vec2 4 "multiline virtual struct unwrap y" assert= 3 "multiline virtual struct unwrap x" assert=
 

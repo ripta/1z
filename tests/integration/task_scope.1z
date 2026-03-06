@@ -8,7 +8,7 @@ test-empty-scope: ( -- ) [
 test-spawn-returns-task: ( -- ) [
   [
     [ ] spawn
-    type-of task: "spawn returns task type" assert=
+    type-of task "spawn returns task type" assert=
   ] task-scope
 ] ;
 

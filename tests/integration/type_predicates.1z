@@ -11,26 +11,26 @@ get-captured-error: ( -- error ) [ __error-store__ error: @get ] ;
 "type-of primitive" test-section
 
 \ Test type-of for basic types
-42 type-of fixnum: "type-of integer" assert=
-t type-of boolean: "type-of boolean t" assert=
-f type-of boolean: "type-of boolean f" assert=
-"hello" type-of string: "type-of string" assert=
-foo: type-of symbol: "type-of symbol" assert=
-{ 1 2 3 } type-of array: "type-of array" assert=
-[ 1 2 + ] type-of quotation: "type-of quotation" assert=
-H{ } type-of hash: "type-of hash" assert=
-V{ } type-of vector: "type-of vector" assert=
-B{ } type-of byte-array: "type-of byte-array" assert=
-S{ } type-of set: "type-of set" assert=
-M{ } type-of mutable-map: "type-of mutable-map" assert=
-stdout type-of stream: "type-of stream" assert=
-output-stream type-of parameter: "type-of parameter" assert=
+42 type-of fixnum "type-of integer" assert=
+t type-of boolean "type-of boolean t" assert=
+f type-of boolean "type-of boolean f" assert=
+"hello" type-of string "type-of string" assert=
+foo: type-of symbol "type-of symbol" assert=
+{ 1 2 3 } type-of array "type-of array" assert=
+[ 1 2 + ] type-of quotation "type-of quotation" assert=
+H{ } type-of hash "type-of hash" assert=
+V{ } type-of vector "type-of vector" assert=
+B{ } type-of byte-array "type-of byte-array" assert=
+S{ } type-of set "type-of set" assert=
+M{ } type-of mutable-map "type-of mutable-map" assert=
+stdout type-of stream "type-of stream" assert=
+output-stream type-of parameter "type-of parameter" assert=
 
 \ Test type-of error
 [ 1 0 / ] capture-error
-get-captured-error type-of error: "type-of error" assert=
+get-captured-error type-of error "type-of error" assert=
 
-42 type-of type-of symbol: "type-of returns symbol" assert=
+42 type-of type-of type "type-of returns type value" assert=
 
 "type predicates - true cases" test-section
 42 fixnum? "fixnum? true" assert-true
@@ -64,12 +64,12 @@ H{ } mutable-map? "mutable-map? false for hash" assert-false
 
 "edge cases" test-section
 
--42 type-of fixnum: "type-of negative integer" assert=
+-42 type-of fixnum "type-of negative integer" assert=
 
-{ } type-of array: "type-of empty array" assert=
-H{ } type-of hash: "type-of empty hash" assert=
-V{ } type-of vector: "type-of empty vector" assert=
-S{ } type-of set: "type-of empty set" assert=
+{ } type-of array "type-of empty array" assert=
+H{ } type-of hash "type-of empty hash" assert=
+V{ } type-of vector "type-of empty vector" assert=
+S{ } type-of set "type-of empty set" assert=
 
-{ { 1 } { 2 } } type-of array: "type-of nested array" assert=
-{ 1 2 3 } #first type-of fixnum: "type-of array element" assert=
+{ { 1 } { 2 } } type-of array "type-of nested array" assert=
+{ 1 2 3 } #first type-of fixnum "type-of array element" assert=

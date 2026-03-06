@@ -4,7 +4,7 @@ use "testing" ;
 
 test-iterator-type: ( -- ) [
   { 1 2 3 } >iterator type-of
-  iterator: "type-of returns iterator" assert=
+  iterator "type-of returns iterator" assert=
 ] ;
 
 \ -- 2. #next returns each element in order --
