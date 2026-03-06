@@ -1,0 +1,32 @@
+=== Native: existing property returns true ===
+Stack: [ ]
+PASS: fixnum has 'type' property
+Stack: [ ]
+PASS: string has 'type' property
+Stack: [ ]
+=== Native: non-existent property returns false ===
+Stack: [ ]
+PASS: fixnum lacks 'nonexistent' property
+Stack: [ ]
+PASS: string lacks 'foo' property
+Stack: [ ]
+=== Native: accepts string property names ===
+Stack: [ ]
+PASS: string property name works
+Stack: [ ]
+PASS: string property name returns false
+Stack: [ ]
+=== Native: type mismatch for non-type value ===
+Stack: [ ]
+PASS: fixnum value is not a type
+Stack: [ ]
+=== Prelude wrapper accepts any value ===
+Stack: [ ]
+PASS: prelude: fixnum value has 'type' property
+Stack: [ ]
+PASS: prelude: string value has 'type' property
+Stack: [ ]
+PASS: prelude: fixnum value lacks 'nonexistent' property
+Stack: [ ]
+PASS: prelude: string property name works
+Stack: [ ]

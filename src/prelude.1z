@@ -189,6 +189,9 @@ no-matching-branch: ( data -- error ) [ "no matching branch" ENoMatchingBranch m
 \\ Extract the type name of a value as a string.
 type-name: ( val -- string ) [ type-of native.type-name ] ;
 
+\\ Check whether a value's type descriptor contains a given property key.
+type-has-property?: ( val property -- ? ) [ swap type-of swap native.type-has-property? ] ;
+
 \\ Throw a type-mismatch error with expected/got/value context.
 throw-type-error: ( value expected-str -- * ) [
   over type-name

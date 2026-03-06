@@ -1,0 +1,29 @@
+\ Tests for type-has-property?
+
+use "testing" ;
+
+"Native: existing property returns true" test-section
+
+fixnum type: native.type-has-property? t "fixnum has 'type' property" assert=
+string type: native.type-has-property? t "string has 'type' property" assert=
+
+"Native: non-existent property returns false" test-section
+
+fixnum nonexistent: native.type-has-property? f "fixnum lacks 'nonexistent' property" assert=
+string foo: native.type-has-property? f "string lacks 'foo' property" assert=
+
+"Native: accepts string property names" test-section
+
+fixnum "type" native.type-has-property? t "string property name works" assert=
+fixnum "nonexistent" native.type-has-property? f "string property name returns false" assert=
+
+"Native: type mismatch for non-type value" test-section
+
+[ 42 type: native.type-has-property? ] type-mismatch: "fixnum value is not a type" assert-error-type
+
+"Prelude wrapper accepts any value" test-section
+
+42 type: type-has-property? t "prelude: fixnum value has 'type' property" assert=
+"hello" type: type-has-property? t "prelude: string value has 'type' property" assert=
+42 nonexistent: type-has-property? f "prelude: fixnum value lacks 'nonexistent' property" assert=
+42 "type" type-has-property? t "prelude: string property name works" assert=

@@ -477,6 +477,7 @@ try ( quot -- result )
 try-acquire ( resource -- option )
 tuck ( a b -- b a b )
 type
+type-has-property? ( val property -- ? )
 type-name ( val -- string )
 types>>
 unless ( ? quot -- )
