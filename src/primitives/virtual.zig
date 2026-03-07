@@ -66,15 +66,23 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
     }
     const markers_slice = try markers_list.toOwnedSlice(alloc);
 
-    // Extract inner-type from descriptor map
+    // Extract inner-type from descriptor map.
+    // Clone the map so each virtual type gets its own descriptor,
+    // since parse-time literals like M{ } are shared across invocations.
     const desc_val = try ctx.stack.pop();
-    const desc_map: *MutableMap = switch (desc_val) {
+    const src_map: *MutableMap = switch (desc_val) {
         .mutable_map => |m| m,
         else => {
             helpers.setTypeMismatchError(ctx, "mutable_map", desc_val);
             return error.TypeMismatch;
         },
     };
+    const desc_map = try alloc.create(MutableMap);
+    desc_map.* = MutableMap{};
+    var src_iter = src_map.iterator();
+    while (src_iter.next()) |entry| {
+        try desc_map.put(alloc, entry.key_ptr.*, entry.value_ptr.*);
+    }
     const inner_type_raw = desc_map.get("inner-type") orelse return error.MissingField;
     const inner_type_val = switch (inner_type_raw) {
         .array => |arr| blk: {
