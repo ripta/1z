@@ -139,8 +139,8 @@ pub const VirtualType = struct {
     inner_type: []const u8,
     // Anonymous struct backing, if struct-backed
     anon_struct: ?*const StructType = null,
-    // Parent enum name for enum variants, e.g., "color" for "color:red"
-    enum_name: ?[]const u8 = null,
+    // Parent enum type for enum variants, e.g., the "color" TypeValue for "color:red"
+    parent_type: ?*const TypeValue = null,
     // First-class type value for this virtual type, set during type registration
     type_val: ?*TypeValue = null,
 };

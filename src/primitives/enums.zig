@@ -189,7 +189,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             vtype.* = .{
                 .name = full_name,
                 .inner_type = full_name,
-                .enum_name = enum_name,
+                .parent_type = enum_tv,
                 .anon_struct = anon_struct,
             };
 
@@ -240,7 +240,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             vtype.* = .{
                 .name = full_name,
                 .inner_type = "symbol",
-                .enum_name = enum_name,
+                .parent_type = enum_tv,
             };
 
             // Create a TypeValue for type-of lookups
@@ -275,10 +275,8 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 
     // Aggregate predicate
     const agg_pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{enum_name});
-    const enum_name_str = try alloc.dupe(u8, enum_name);
-
     const agg_instrs = try alloc.alloc(Instruction, 2);
-    agg_instrs[0] = .{ .op = .{ .push_literal = .{ .string = enum_name_str } }, .line = 0 };
+    agg_instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = enum_tv } }, .line = 0 };
     agg_instrs[1] = .{ .op = .{ .call_word = "native.enum-aggregate-predicate" }, .line = 0 };
 
     try ctx.defineWord(agg_pred_name, .{
@@ -300,23 +298,23 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     try ctx.enum_registry.put(ctx.allocator, enum_name, vtypes_slice);
 }
 
-/// Trampoline helper ( value enum-name-string -- bool )
+/// Trampoline helper ( value enum-type-val -- bool )
 ///
-/// Checks whether the value is a tagged virtual type whose enum_name matches
-/// the given enum name string.
+/// Checks whether the value is a tagged virtual type whose parent_type matches
+/// the given enum TypeValue pointer.
 fn enumAggregatePredicateHelper(ctx: *Context) anyerror!void {
-    const name_val = try ctx.stack.pop();
-    const enum_name = switch (name_val) {
-        .string => |s| s,
+    const tv_val = try ctx.stack.pop();
+    const enum_tv_ptr = switch (tv_val) {
+        .type_val => |tv| tv,
         else => {
-            helpers.setTypeMismatchError(ctx, "string", name_val);
+            helpers.setTypeMismatchError(ctx, "type", tv_val);
             return error.TypeMismatch;
         },
     };
 
     const val = try ctx.stack.pop();
     const is_match = switch (val) {
-        .tagged => |t| if (t.tag.enum_name) |en| std.mem.eql(u8, en, enum_name) else false,
+        .tagged => |t| t.tag.parent_type == enum_tv_ptr,
         else => false,
     };
 
@@ -331,8 +329,8 @@ fn nativeEnumOf(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
         .tagged => |t| {
-            if (t.tag.enum_name) |en| {
-                try ctx.stack.push(.{ .string = en });
+            if (t.tag.parent_type) |pt| {
+                try ctx.stack.push(.{ .string = pt.name });
                 return;
             }
         },
@@ -393,7 +391,7 @@ fn nativeMatch(ctx: *Context) anyerror!void {
         },
     };
 
-    const enum_name = tag.tag.enum_name orelse {
+    const parent_tv = tag.tag.parent_type orelse {
         helpers.setErrorContext(ctx, "match requires an enum variant, got virtual type '{s}'", .{tag.tag.name});
         return error.TypeMismatch;
     };
@@ -403,8 +401,8 @@ fn nativeMatch(ctx: *Context) anyerror!void {
         return error.ParseError;
     }
 
-    const vtypes = ctx.lookupEnumVariants(enum_name) orelse {
-        helpers.setErrorContext(ctx, "unknown enum '{s}'", .{enum_name});
+    const vtypes = ctx.lookupEnumVariants(parent_tv.name) orelse {
+        helpers.setErrorContext(ctx, "unknown enum '{s}'", .{parent_tv.name});
         return error.NameError;
     };
 
@@ -460,7 +458,7 @@ fn nativeMatch(ctx: *Context) anyerror!void {
             }
         }
         if (!valid) {
-            helpers.setErrorContext(ctx, "'{s}' is not a variant of enum '{s}'", .{ key, enum_name });
+            helpers.setErrorContext(ctx, "'{s}' is not a variant of enum '{s}'", .{ key, parent_tv.name });
             return error.NameError;
         }
 

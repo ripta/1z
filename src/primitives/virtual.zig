@@ -328,8 +328,8 @@ fn virtualTypePredicateHelper(ctx: *Context) anyerror!void {
 
 fn vtypeProvenance(vtype: *const VirtualType, role: []const u8) WordProvenance {
     return .{
-        .generator = if (vtype.enum_name != null) "enum" else "virtual",
-        .parent = if (vtype.enum_name) |en| en else vtype.name,
+        .generator = if (vtype.parent_type != null) "enum" else "virtual",
+        .parent = if (vtype.parent_type) |pt| pt.name else vtype.name,
         .role = role,
     };
 }
