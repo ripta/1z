@@ -42,7 +42,6 @@ pub const registry_entries = [_]RegistryEntry{
 /// When inner-type is a type value, creates a simple virtual type wrapping that type.
 /// When inner-type is a mutable map (struct descriptor from `struct{`), creates a
 /// struct-backed virtual type with positional wrap and destructuring unwrap.
-/// A string inner-type indicates an unknown word (typo) and is rejected.
 fn nativeDefineVirtual(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -262,10 +261,6 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
             try ctx.type_descriptors.put(ctx.allocator, name, frozen_desc);
             vtype.type_val.?.descriptor = frozen_desc;
-        },
-        .string => |s| {
-            helpers.setErrorContext(ctx, "virtual{{ inner type '{s}' is not a known type", .{s});
-            return error.TypeMismatch;
         },
         else => {
             helpers.setErrorContext(ctx, "virtual{{ inner type must be a type value or struct descriptor, got {s}", .{helpers.valueTypeName(inner_type_val)});

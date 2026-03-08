@@ -1,0 +1,3 @@
+\ Fixture: triggers a parse-time error from parse-types-until on unknown token
+grab-typos: parse-time [ "END" parse-types-until ] ;
+grab-typos no-such-type END

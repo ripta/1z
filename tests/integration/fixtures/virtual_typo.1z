@@ -1,0 +1,2 @@
+\ Fixture: triggers a parse-time error from parse-types-until in virtual{
+no-such-type-test: virtual{ no-such-type } ;

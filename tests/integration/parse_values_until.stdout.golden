@@ -31,3 +31,14 @@ Stack: [ ]
 Stack: [ { "hello" M{ define: [ define-struct ] fields: { "x" "y" } type: struct-descriptor: } } ]
 PASS: first value is raw string
 Stack: [ ]
+=== parse-types-until ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ { <type:fixnum> } ]
+PASS: parse-types-until collects one type
+Stack: [ ]
+Stack: [ { <type:fixnum> } ]
+PASS: parse-types-until returns type value
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]

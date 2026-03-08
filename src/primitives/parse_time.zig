@@ -15,6 +15,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .doc = "Read tokens until delimiter, return as quotation.", .func = nativeParseUntil },
     .{ .name = "parse-tokens-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, return as string array.", .func = nativeParseTokensUntil },
     .{ .name = "parse-values-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, executing parse-time words. Return as array.", .func = nativeParseValuesUntil },
+    .{ .name = "parse-types-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, executing parse-time words. Unknown tokens are errors.", .func = nativeParseTypesUntil },
     .{ .name = "parse-token", .stack_effect = "-- string", .doc = "Read one raw token from the tokenizer, skipping comments and whitespace.", .func = nativeParseToken },
     .{ .name = "peek-token", .stack_effect = "-- string", .doc = "Return the next token without consuming it. Repeated calls return the same token until parse-token or another consuming primitive advances past it.", .func = nativePeekToken },
     .{ .name = "parse-literal", .stack_effect = "-- value", .doc = "Read the next literal value from the tokenizer.", .func = nativeParseLiteral },
@@ -26,7 +27,7 @@ fn isSkippable(kind: Token.Kind) bool {
     return kind == .comment or kind == .doc_comment or kind == .newline;
 }
 
-const ParseMode = enum { raw, evaluate_parse_time };
+const ParseMode = enum { raw, evaluate_parse_time, evaluate_parse_time_strict };
 
 fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !Value {
     const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
@@ -43,7 +44,7 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
             break;
         }
 
-        if (mode == .evaluate_parse_time) {
+        if (mode == .evaluate_parse_time or mode == .evaluate_parse_time_strict) {
             if (tryResolveLiteral(ctx, alloc, tokenizer, tok)) |val| {
                 try tokens.append(alloc, val);
                 continue;
@@ -74,6 +75,11 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
                     continue;
                 }
             }
+        }
+
+        if (mode == .evaluate_parse_time_strict) {
+            helpers.setErrorContext(ctx, "'{s}' is not a known type", .{token});
+            return error.TypeMismatch;
         }
 
         const token_copy = try alloc.dupe(u8, token);
@@ -161,6 +167,14 @@ pub fn nativeParseTokensUntil(ctx: *Context) anyerror!void {
 pub fn nativeParseValuesUntil(ctx: *Context) anyerror!void {
     const delimiter = try popString(ctx);
     const result = try parseTokensUntilCore(ctx, delimiter, .evaluate_parse_time);
+    try ctx.stack.push(result);
+}
+
+/// parse-types-until ( delimiter -- array ) - Read tokens until delimiter, executing parse-time words.
+/// Unknown tokens are errors.
+fn nativeParseTypesUntil(ctx: *Context) anyerror!void {
+    const delimiter = try popString(ctx);
+    const result = try parseTokensUntilCore(ctx, delimiter, .evaluate_parse_time_strict);
     try ctx.stack.push(result);
 }
 
