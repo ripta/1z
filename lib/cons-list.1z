@@ -2,9 +2,10 @@
 
 use "sequences" ;
 
+cons-cell: struct{ head tail } ;
 cons-list: enum{
-  cons struct{ head tail }
-  nil
+  cons: cons-cell
+  nil: unit
 } ;
 
 \ Short aliases for constructors and predicates

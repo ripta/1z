@@ -5,4 +5,4 @@ point: struct{ x y } ;
 
 make-point: [ >point ] ;
 
-color: enum{ red green blue } ;
+color: enum{ red: unit green: unit blue: unit } ;

@@ -2,7 +2,7 @@
 
 use "testing" ;
 
-color: enum{ red green blue } ;
+color: enum{ red: unit green: unit blue: unit } ;
 
 "match{ unknown variant" test-section
 
@@ -18,7 +18,7 @@ color: enum{ red green blue } ;
 
 "match{ wrong enum variant" test-section
 
-suit: enum{ hearts diamonds clubs spades } ;
+suit: enum{ hearts: unit diamonds: unit clubs: unit spades: unit } ;
 
 \ Variant from different enum caught at parse time
 [ eval-string "color:red match{ color:red: [ 1 ] color:green: [ 2 ] suit:hearts: [ 3 ] }" ]

@@ -64,7 +64,9 @@ drop
 
 "enum data-carrying variants: make, unmake, >hash" test-section
 
-shape: enum{ circle struct{ radius } rect struct{ w h } dot } ;
+circle-data: struct{ radius } ;
+rect-data:   struct{ w h } ;
+shape:       enum{ circle: circle-data rect: rect-data dot: unit } ;
 
 \ Single-field variant: make/unmake
 5 make-shape:circle shape:circle? t "make-shape:circle creates circle" assert=

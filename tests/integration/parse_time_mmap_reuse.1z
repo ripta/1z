@@ -13,9 +13,10 @@ use "testing" ;
 
 "struct{ mutable map reuse" test-section
 
-\ Two struct{ calls inside the same enum's parse-values-until.
-\ If the M{} literal is shared, both descriptors end up with tri's fields.
-geom: enum{ rect struct{ width height } tri struct{ a b c } dot } ;
+\ Two pre-defined structs referenced by the enum.
+rect-dims: struct{ width height } ;
+tri-dims:  struct{ a b c } ;
+geom:      enum{ rect: rect-dims tri: tri-dims dot: unit } ;
 
 \ rect should have 2 fields (width, height), not 3 (a, b, c)
 10 20 make-geom:rect unmake-geom:rect
@@ -29,7 +30,7 @@ geom: enum{ rect struct{ width height } tri struct{ a b c } dot } ;
 3 "tri unwrap a" assert=
 
 \ Display format reflects correct fields
-10 20 make-geom:rect inspect "<geom:rect geom:rect{ width: 10 height: 20 }>"
+10 20 make-geom:rect inspect "<geom:rect rect-dims{ width: 10 height: 20 }>"
 "rect display" assert=
-3 4 5 make-geom:tri inspect "<geom:tri geom:tri{ a: 3 b: 4 c: 5 }>"
+3 4 5 make-geom:tri inspect "<geom:tri tri-dims{ a: 3 b: 4 c: 5 }>"
 "tri display" assert=

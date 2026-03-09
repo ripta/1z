@@ -10,6 +10,7 @@ const Marker = value_mod.Marker;
 
 const helpers = @import("helpers.zig");
 const markers_mod = @import("markers.zig");
+const structs = @import("structs.zig");
 const virtual = @import("virtual.zig");
 
 const types_mod = @import("types.zig");
@@ -115,127 +116,43 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     var vtype_list = std.ArrayListUnmanaged(*const VirtualType){};
     var generated_words = std.ArrayListUnmanaged(Value){};
 
+    if (variants_array.len % 2 != 0) {
+        helpers.setErrorContext(ctx, "enum variants must be name: type pairs (got odd count {d})", .{variants_array.len});
+        return error.ParseError;
+    }
+
+    const unit_tv = ctx.lookupBuiltinTypeValue("unit");
+
     var i: usize = 0;
-    while (i < variants_array.len) {
-        const variant_val = variants_array[i];
-        const variant_sym = switch (variant_val) {
-            .string => |s| s,
+    while (i < variants_array.len) : (i += 2) {
+        const variant_name_val = variants_array[i];
+        const raw_name = switch (variant_name_val) {
             .symbol => |s| s,
             else => {
-                helpers.setTypeMismatchError(ctx, "string or symbol", variant_val);
+                helpers.setTypeMismatchError(ctx, "symbol", variant_name_val);
                 return error.TypeMismatch;
             },
         };
 
-        const has_struct_desc = if (i + 1 < variants_array.len)
-            switch (variants_array[i + 1]) {
-                .mutable_map => true,
-                else => false,
-            }
+        // Strip trailing colon to get the variant name
+        const variant_sym = if (raw_name.len > 1 and raw_name[raw_name.len - 1] == ':')
+            raw_name[0 .. raw_name.len - 1]
         else
-            false;
+            raw_name;
 
-        if (has_struct_desc) {
-            const struct_desc = switch (variants_array[i + 1]) {
-                .mutable_map => |m| m,
-                else => unreachable,
-            };
-            i += 2;
+        const type_val = variants_array[i + 1];
+        const tv = switch (type_val) {
+            .type_val => |t| t,
+            else => {
+                helpers.setTypeMismatchError(ctx, "type", type_val);
+                return error.TypeMismatch;
+            },
+        };
 
-            const fields_val = struct_desc.get("fields") orelse {
-                helpers.setErrorContext(ctx, "struct descriptor missing fields key", .{});
-                return error.MissingField;
-            };
-            const fields_array = switch (fields_val) {
-                .array => |arr| arr,
-                else => {
-                    helpers.setTypeMismatchError(ctx, "array", fields_val);
-                    return error.TypeMismatch;
-                },
-            };
+        const full_name = try std.fmt.allocPrint(alloc, "{s}:{s}", .{ enum_name, variant_sym });
 
-            if (fields_array.len == 0) {
-                helpers.setErrorContext(ctx, "data variant '{s}' must have at least one field", .{variant_sym});
-                return error.ParseError;
-            }
-
-            var fields_list = std.ArrayListUnmanaged([]const u8){};
-            for (fields_array) |f| {
-                const raw = switch (f) {
-                    .string => |s| s,
-                    .symbol => |s| s,
-                    else => {
-                        helpers.setTypeMismatchError(ctx, "string or symbol", f);
-                        return error.TypeMismatch;
-                    },
-                };
-                const field_name = if (raw.len > 1 and raw[raw.len - 1] == ':')
-                    raw[0 .. raw.len - 1]
-                else
-                    raw;
-                try fields_list.append(alloc, try alloc.dupe(u8, field_name));
-            }
-            const fields_slice = try fields_list.toOwnedSlice(alloc);
-
-            const full_name = try std.fmt.allocPrint(alloc, "{s}:{s}", .{ enum_name, variant_sym });
-
-            const anon_struct = try alloc.create(StructType);
-            anon_struct.* = .{
-                .name = full_name,
-                .fields = fields_slice,
-            };
-
-            const vtype = try alloc.create(VirtualType);
-            vtype.* = .{
-                .name = full_name,
-                .inner_type = full_name,
-                .parent_type = enum_tv,
-                .anon_struct = anon_struct,
-            };
-
-            // Create a TypeValue for type-of lookups
-            const tv = try alloc.create(value_mod.TypeValue);
-            tv.* = .{ .name = full_name, .descriptor = null };
-            vtype.type_val = tv;
-
-            try vtype_list.append(alloc, vtype);
-
-            const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
-            if (fields_slice.len > 1) {
-                // Multi-field: >NAME is hash-based
-                try virtual.defineStructHashWrap(ctx, wrap_name, vtype, markers_slice);
-            } else {
-                // Single-field: >NAME stays positional
-                try virtual.defineStructWrap(ctx, wrap_name, vtype, markers_slice);
-            }
-
-            // make-NAME: positional wrap
-            const make_name = try std.fmt.allocPrint(alloc, "make-{s}", .{full_name});
-            try virtual.defineStructWrap(ctx, make_name, vtype, markers_slice);
-
-            // unmake-NAME: destructuring unwrap
-            const unmake_name = try std.fmt.allocPrint(alloc, "unmake-{s}", .{full_name});
-            try virtual.defineStructUnwrap(ctx, unmake_name, vtype, markers_slice);
-
-            const to_hash_name = try std.fmt.allocPrint(alloc, "{s}>hash", .{full_name});
-            try virtual.defineVirtualToHash(ctx, to_hash_name, vtype, markers_slice);
-
-            const hash_instrs = try alloc.alloc(Instruction, 2);
-            hash_instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
-            hash_instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-to-hash" }, .line = 0 };
-            try virtual.registerHashDispatch(ctx, full_name, hash_instrs);
-
-            const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{full_name});
-            try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
-
-            try generated_words.append(alloc, .{ .string = wrap_name });
-            try generated_words.append(alloc, .{ .string = make_name });
-            try generated_words.append(alloc, .{ .string = unmake_name });
-            try generated_words.append(alloc, .{ .string = to_hash_name });
-            try generated_words.append(alloc, .{ .string = pred_name });
-        } else {
-            const full_name = try std.fmt.allocPrint(alloc, "{s}:{s}", .{ enum_name, variant_sym });
-
+        if (unit_tv != null and tv == unit_tv.?) {
+            // Flat variant: inner value is a symbol
             const vtype = try alloc.create(VirtualType);
             vtype.* = .{
                 .name = full_name,
@@ -243,10 +160,9 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
                 .parent_type = enum_tv,
             };
 
-            // Create a TypeValue for type-of lookups
-            const tv = try alloc.create(value_mod.TypeValue);
-            tv.* = .{ .name = full_name, .descriptor = null };
-            vtype.type_val = tv;
+            const variant_tv = try alloc.create(value_mod.TypeValue);
+            variant_tv.* = .{ .name = full_name, .descriptor = null };
+            vtype.type_val = variant_tv;
 
             try vtype_list.append(alloc, vtype);
 
@@ -268,8 +184,57 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 
             try generated_words.append(alloc, .{ .string = full_name });
             try generated_words.append(alloc, .{ .string = pred_name });
+        } else {
+            // Data-carrying variant: look up the pre-defined StructType
+            const maker_name = try std.fmt.allocPrint(alloc, "make-{s}", .{tv.name});
+            const struct_type = structs.getStructTypeFromMaker(ctx, maker_name) orelse {
+                helpers.setErrorContext(ctx, "enum variant type must be unit or a struct type, got '{s}'", .{tv.name});
+                return error.TypeMismatch;
+            };
 
-            i += 1;
+            const vtype = try alloc.create(VirtualType);
+            vtype.* = .{
+                .name = full_name,
+                .inner_type = full_name,
+                .parent_type = enum_tv,
+                .anon_struct = struct_type,
+            };
+
+            const variant_tv = try alloc.create(value_mod.TypeValue);
+            variant_tv.* = .{ .name = full_name, .descriptor = null };
+            vtype.type_val = variant_tv;
+
+            try vtype_list.append(alloc, vtype);
+
+            const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
+            if (struct_type.fields.len > 1) {
+                try virtual.defineStructHashWrap(ctx, wrap_name, vtype, markers_slice);
+            } else {
+                try virtual.defineStructWrap(ctx, wrap_name, vtype, markers_slice);
+            }
+
+            const make_name_word = try std.fmt.allocPrint(alloc, "make-{s}", .{full_name});
+            try virtual.defineStructWrap(ctx, make_name_word, vtype, markers_slice);
+
+            const unmake_name = try std.fmt.allocPrint(alloc, "unmake-{s}", .{full_name});
+            try virtual.defineStructUnwrap(ctx, unmake_name, vtype, markers_slice);
+
+            const to_hash_name = try std.fmt.allocPrint(alloc, "{s}>hash", .{full_name});
+            try virtual.defineVirtualToHash(ctx, to_hash_name, vtype, markers_slice);
+
+            const hash_instrs = try alloc.alloc(Instruction, 2);
+            hash_instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+            hash_instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-to-hash" }, .line = 0 };
+            try virtual.registerHashDispatch(ctx, full_name, hash_instrs);
+
+            const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{full_name});
+            try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
+
+            try generated_words.append(alloc, .{ .string = wrap_name });
+            try generated_words.append(alloc, .{ .string = make_name_word });
+            try generated_words.append(alloc, .{ .string = unmake_name });
+            try generated_words.append(alloc, .{ .string = to_hash_name });
+            try generated_words.append(alloc, .{ .string = pred_name });
         }
     }
 

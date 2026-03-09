@@ -10,6 +10,7 @@ Stack: [ ]
 === match{ data-carrying variant ===
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
 PASS: match{ unwraps data variant
 Stack: [ ]
 PASS: match{ flat variant in mixed enum

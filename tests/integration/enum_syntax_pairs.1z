@@ -1,0 +1,67 @@
+\ Test enum{ name: type pair syntax
+
+use "testing" ;
+
+"flat enum with unit variants" test-section
+
+direction: enum{ north: unit south: unit east: unit west: unit } ;
+
+direction:north direction:north? t "flat variant predicate" assert=
+direction:south direction? t "flat variant aggregate predicate" assert=
+direction:north direction:south = f "different flat variants not equal" assert=
+
+"data-carrying enum with pre-defined struct" test-section
+
+point-data: struct{ x y } ;
+wrapper: enum{ value: point-data empty: unit } ;
+
+1 2 make-wrapper:value wrapper:value? t "data variant predicate" assert=
+1 2 make-wrapper:value unmake-wrapper:value 2 "data variant unwrap y" assert= 1 "data variant unwrap x" assert=
+wrapper:empty wrapper:empty? t "flat variant in mixed enum" assert=
+1 2 make-wrapper:value wrapper? t "data variant aggregate predicate" assert=
+wrapper:empty wrapper? t "flat variant aggregate predicate" assert=
+
+"mixed enum" test-section
+
+payload: struct{ val } ;
+status: enum{ ok: payload pending: unit failed: unit } ;
+
+42 >status:ok status:ok? t "data variant ok predicate" assert=
+42 >status:ok unmake-status:ok 42 "unwrap ok val" assert=
+status:pending status:pending? t "flat variant pending predicate" assert=
+status:failed status? t "flat variant aggregate predicate" assert=
+
+"type sharing" test-section
+
+shared-data: struct{ label } ;
+labeled: enum{ a: shared-data b: shared-data c: unit } ;
+
+"hello" >labeled:a labeled:a? t "first shared-type variant predicate" assert=
+"world" >labeled:b labeled:b? t "second shared-type variant predicate" assert=
+"hello" >labeled:a unmake-labeled:a "hello" "first shared-type unwrap" assert=
+"world" >labeled:b unmake-labeled:b "world" "second shared-type unwrap" assert=
+labeled:c labeled:c? t "flat variant in type-sharing enum" assert=
+
+"match on new-syntax enum" test-section
+
+42 >status:ok match{
+  status:ok:      [ 2 * ]
+  status:pending: [ 0 ]
+  status:failed:  [ -1 ]
+} 84 "match unwraps data variant" assert=
+
+status:pending match{
+  status:ok:      [ 2 * ]
+  status:pending: [ 0 ]
+  status:failed:  [ -1 ]
+} 0 "match flat variant" assert=
+
+"error: odd-length array" test-section
+
+[ eval-string "odd-test: enum{ a: unit b: } ;" ]
+[ "odd count" assert-error ] recover
+
+"error: non-type in type position" test-section
+
+[ eval-string "bad-test: enum{ a: 42 } ;" ]
+[ "type" assert-error ] recover

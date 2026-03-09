@@ -57,9 +57,9 @@ ml-point: struct{
 "multiline enum{ flat" test-section
 
 ml-color: enum{
-  red
-  green
-  blue
+  red:   unit
+  green: unit
+  blue:  unit
 } ;
 
 ml-color:red ml-color:red? t "multiline flat enum variant predicate" assert=
@@ -68,13 +68,12 @@ ml-color:red ml-color:green = f "multiline flat enum variants not equal" assert=
 
 "multiline enum{ data-carrying" test-section
 
+ml-circle-data: struct{ radius } ;
+ml-rect-data: struct{ width height } ;
 ml-shape: enum{
-  circle struct{ radius }
-  rect struct{
-    width
-    height
-  }
-  point
+  circle: ml-circle-data
+  rect:   ml-rect-data
+  point:  unit
 } ;
 
 42 >ml-shape:circle ml-shape:circle? t "multiline enum data variant predicate" assert=

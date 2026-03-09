@@ -39,6 +39,8 @@ Stack: [ ]
 === multiline enum{ data-carrying ===
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: multiline enum data variant predicate
 Stack: [ ]
 PASS: multiline enum unwrap circle

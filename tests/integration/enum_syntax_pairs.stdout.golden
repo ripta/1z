@@ -1,0 +1,66 @@
+=== flat enum with unit variants ===
+Stack: [ ]
+Stack: [ ]
+PASS: flat variant predicate
+Stack: [ ]
+PASS: flat variant aggregate predicate
+Stack: [ ]
+PASS: different flat variants not equal
+Stack: [ ]
+=== data-carrying enum with pre-defined struct ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: data variant predicate
+Stack: [ ]
+PASS: data variant unwrap y
+PASS: data variant unwrap x
+Stack: [ ]
+PASS: flat variant in mixed enum
+Stack: [ ]
+PASS: data variant aggregate predicate
+Stack: [ ]
+PASS: flat variant aggregate predicate
+Stack: [ ]
+=== mixed enum ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: data variant ok predicate
+Stack: [ ]
+PASS: unwrap ok val
+Stack: [ ]
+PASS: flat variant pending predicate
+Stack: [ ]
+PASS: flat variant aggregate predicate
+Stack: [ ]
+=== type sharing ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: first shared-type variant predicate
+Stack: [ ]
+PASS: second shared-type variant predicate
+Stack: [ ]
+PASS: first shared-type unwrap
+Stack: [ ]
+PASS: second shared-type unwrap
+Stack: [ ]
+PASS: flat variant in type-sharing enum
+Stack: [ ]
+=== match on new-syntax enum ===
+Stack: [ ]
+PASS: match unwraps data variant
+Stack: [ ]
+PASS: match flat variant
+Stack: [ ]
+=== error: odd-length array ===
+Stack: [ ]
+Stack: [ [ eval-string "odd-test: enum{ a: unit b: } ;" ] ]
+PASS: odd count
+Stack: [ ]
+=== error: non-type in type position ===
+Stack: [ ]
+Stack: [ [ eval-string "bad-test: enum{ a: 42 } ;" ] ]
+PASS: type
+Stack: [ ]

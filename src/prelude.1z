@@ -84,7 +84,7 @@ virtual{: parse-time [
 ] ;
 
 \\ Enum type definition syntax.
-\   name: enum{ variant1 variant2 ... } ;
+\   name: enum{ variant1: type1 variant2: type2 ... } ;
 enum{: parse-time [
   M{ type: enum-descriptor: }
   variants: "}" parse-values-until @set!
@@ -98,16 +98,22 @@ match{: parse-time [
 ] ;
 
 \ Standard sum types
+\\ Backing struct for option:some.
+option-payload: struct{ value } ;
 \\ Optional value: either `some` wrapping a value, or `none`.
-option: enum{ some struct{ value } none } ;
+option: enum{ some: option-payload none: unit } ;
 option:some>: ( option -- value ) [ unmake-option:some ] ;
+\\ Backing struct for result:ok.
+result-value: struct{ value } ;
+\\ Backing struct for result:err.
+result-error: struct{ error } ;
 \\ Fallible result: either `ok` wrapping a value, or `err` wrapping an error.
-result: enum{ ok struct{ value } err struct{ error } } ;
+result: enum{ ok: result-value err: result-error } ;
 result:ok>: ( result -- value ) [ unmake-result:ok ] ;
 result:err>: ( result -- error ) [ unmake-result:err ] ;
 
 \\ Three-way comparison result: less-than, equal, or greater-than.
-ordering: enum{ lt eq gt } ;
+ordering: enum{ lt: unit eq: unit gt: unit } ;
 
 \\ Three-way comparison. Returns an ordering enum variant.
 cmp: generic ( a b -- ordering ) [
@@ -421,9 +427,10 @@ EImportConflict: [ import-conflict: ] ;
 
 \\ Check that none of the given names shadow words in the current import frame.
 \\ Throws an `import-conflict` error if any name is already locally defined.
+\\ Generic words are exempt: multiple modules may contribute dispatch methods.
 assert-no-shadow: ( names -- ) [
   { } swap
-  [ dup native.locally-defined? [ 1array #append ] [ drop ] if ] #each
+  [ dup native.locally-defined? [ dup generic? [ drop ] [ 1array #append ] if ] [ drop ] if ] #each
   dup #empty?
   [ drop ]
   [

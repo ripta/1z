@@ -4,7 +4,7 @@ use "testing" ;
 
 "flat enum constructors" test-section
 
-color: enum{ red green blue } ;
+color: enum{ red: unit green: unit blue: unit } ;
 
 \ Constructors push tagged values
 color:red type-name "color:red" "color:red type-of is color:red" assert=
@@ -62,7 +62,7 @@ color:blue inspect "<color:blue blue:>" "color:blue display format" assert=
 "independent enums" test-section
 
 \ Define a second enum
-suit: enum{ hearts diamonds clubs spades } ;
+suit: enum{ hearts: unit diamonds: unit clubs: unit spades: unit } ;
 
 \ Each enum is independent
 suit:hearts suit:hearts? t "suit:hearts? on hearts is true" assert=
@@ -76,9 +76,10 @@ color:red suit? f "suit? on red is false" assert=
 
 "data-carrying variants" test-section
 
+circle-data: struct{ radius } ;
 shape: enum{
-  circle struct{ radius }
-  point
+  circle: circle-data
+  point: unit
 } ;
 
 \ Wrap and unwrap
@@ -106,7 +107,7 @@ shape:point shape:circle? f "shape:circle? on point is false" assert=
 42 >shape:circle 99 >shape:circle = f "different circle values are not equal" assert=
 
 \ Display format
-42 >shape:circle inspect "<shape:circle shape:circle{ radius: 42 }>" "circle display format" assert=
+42 >shape:circle inspect "<shape:circle circle-data{ radius: 42 }>" "circle display format" assert=
 
 \ Flat variant still works alongside data variant
 shape:point type-name "shape:point" "flat variant type-of in mixed enum" assert=
@@ -114,10 +115,12 @@ shape:point inspect "<shape:point point:>" "flat variant display in mixed enum" 
 
 "multi-field data variants" test-section
 
+rect-dims: struct{ width height } ;
+tri-dims: struct{ a b c } ;
 geom: enum{
-  rect struct{ width height }
-  tri struct{ a b c }
-  dot
+  rect: rect-dims
+  tri:  tri-dims
+  dot:  unit
 } ;
 
 \ Wrap and unwrap multi-field variant
@@ -150,7 +153,7 @@ geom:dot geom? t "geom? on dot is true" assert=
 10 20 make-geom:rect 10 99 make-geom:rect = f "different rect values are not equal" assert=
 
 \ Display format
-10 20 make-geom:rect inspect "<geom:rect geom:rect{ width: 10 height: 20 }>" "rect display format" assert=
+10 20 make-geom:rect inspect "<geom:rect rect-dims{ width: 10 height: 20 }>" "rect display format" assert=
 geom:dot inspect "<geom:dot dot:>" "flat variant display in multi-field enum" assert=
 
 "enum-of" test-section

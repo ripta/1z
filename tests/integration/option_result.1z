@@ -124,7 +124,7 @@ vec2: virtual{ struct{ dx dy } } ;
 
 "option wrapping enum variants" test-section
 
-color: enum{ red green blue } ;
+color: enum{ red: unit green: unit blue: unit } ;
 
 \ Flat enum variant inside option
 color:red >option:some option:some? t "some? on enum-wrapped option" assert=
@@ -145,7 +145,8 @@ option:none >option:some option:some> option:none? t "unwrap none from some" ass
 "result wrapping enum variants" test-section
 
 \ Data-carrying enum variant inside result
-shape: enum{ circle struct{ radius } dot } ;
+circle-data: struct{ radius } ;
+shape: enum{ circle: circle-data dot: unit } ;
 5 >shape:circle >result:ok result:ok? t "ok? on data-enum-wrapped result" assert=
 5 >shape:circle >result:ok unmake-result:ok shape:circle? t "unwrap data enum from result ok" assert=
 5 >shape:circle >result:ok unmake-result:ok unmake-shape:circle 5 "unwrap data enum payload from result ok" assert=

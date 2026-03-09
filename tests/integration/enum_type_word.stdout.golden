@@ -10,6 +10,7 @@ Stack: [ ]
 === data-carrying enum type word ===
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
 PASS: shape is a type value
 Stack: [ ]
 PASS: type-name of data-carrying enum type

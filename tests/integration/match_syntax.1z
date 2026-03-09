@@ -2,7 +2,7 @@
 
 use "testing" ;
 
-color: enum{ red green blue } ;
+color: enum{ red: unit green: unit blue: unit } ;
 
 "match{ flat enum dispatch" test-section
 
@@ -26,9 +26,10 @@ color:blue match{
 
 "match{ data-carrying variant" test-section
 
+circle-data: struct{ radius } ;
 shape: enum{
-  circle struct{ radius }
-  point
+  circle: circle-data
+  point: unit
 } ;
 
 42 >shape:circle match{

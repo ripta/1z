@@ -1,6 +1,8 @@
 === struct{ mutable map reuse ===
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 Stack: [ 10 20 ]
 PASS: rect unwrap height
 Stack: [ 10 ]
@@ -13,9 +15,9 @@ PASS: tri unwrap b
 Stack: [ 3 ]
 PASS: tri unwrap a
 Stack: [ ]
-Stack: [ "<geom:rect geom:rect{ width: 10 height: 20 }>" "<geom:rect geom:rect{ width: 10 height: 20 }>" ]
+Stack: [ "<geom:rect rect-dims{ width: 10 height: 20 }>" "<geom:rect rect-dims{ width: 10 height: 20 }>" ]
 PASS: rect display
 Stack: [ ]
-Stack: [ "<geom:tri geom:tri{ a: 3 b: 4 c: 5 }>" "<geom:tri geom:tri{ a: 3 b: 4 c: 5 }>" ]
+Stack: [ "<geom:tri tri-dims{ a: 3 b: 4 c: 5 }>" "<geom:tri tri-dims{ a: 3 b: 4 c: 5 }>" ]
 PASS: tri display
 Stack: [ ]

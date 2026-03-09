@@ -40,17 +40,17 @@ H{ x: 10 y: 20 } >point point? t "point? on point is true" assert=
 
 "zero-field embedded struct" test-section
 
-\ Unit type with no fields
-unit: virtual{ struct{ } } ;
+\ Zero-field virtual type with no fields
+void: virtual{ struct{ } } ;
 
-H{ } >unit type-name "unit" "zero-field type-of" assert=
-H{ } >unit unit? t "zero-field predicate true" assert=
+H{ } >void type-name "void" "zero-field type-of" assert=
+H{ } >void void? t "zero-field predicate true" assert=
 
 \ Unwrap pushes nothing, re-wrap should produce an equal value
-make-unit unmake-unit make-unit make-unit = t "zero-field round-trip equal" assert=
+make-void unmake-void make-void make-void = t "zero-field round-trip equal" assert=
 
-\ Two unit values are equal
-make-unit make-unit = t "zero-field values are equal" assert=
+\ Two void values are equal
+make-void make-void = t "zero-field values are equal" assert=
 
 "multiple struct-backed virtual types" test-section
 

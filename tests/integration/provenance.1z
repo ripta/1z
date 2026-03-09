@@ -55,7 +55,7 @@ dup parent>> "prov-meter" "virtual predicate parent" assert=
 role>> "predicate" "virtual predicate role" assert=
 
 "enum provenance on flat variant constructor" test-section
-prov-color: enum{ red green blue } ;
+prov-color: enum{ red: unit green: unit blue: unit } ;
 prov-color:red: >word-info provenance>>
 dup generator>> "enum" "enum variant-constructor generator" assert=
 dup parent>> "prov-color" "enum variant-constructor parent" assert=
@@ -94,7 +94,9 @@ dup parent>> "prov-vec2" "struct-backed virtual hash-wrap parent" assert=
 role>> "hash-wrap" "struct-backed virtual hash-wrap role" assert=
 
 "data-carrying enum variant provenance" test-section
-prov-shape: enum{ circle struct{ radius } rectangle struct{ width height } } ;
+prov-circle-data: struct{ radius } ;
+prov-rect-data:   struct{ width height } ;
+prov-shape:       enum{ circle: prov-circle-data rectangle: prov-rect-data } ;
 make-prov-shape:circle: >word-info provenance>>
 dup generator>> "enum" "data enum constructor generator" assert=
 dup parent>> "prov-shape" "data enum constructor parent" assert=
@@ -163,14 +165,15 @@ dup "gw-vec>hash" #in? t "sbv generated-words includes >hash" assert=
 "gw-vec?" #in? t "sbv generated-words includes predicate" assert=
 
 "flat enum generated-words" test-section
-gw-dir: enum{ north south east west } ;
+gw-dir: enum{ north: unit south: unit east: unit west: unit } ;
 gw-dir: generated-words
 dup "gw-dir:north" #in? t "enum generated-words includes variant constructor" assert=
 dup "gw-dir:south?" #in? t "enum generated-words includes variant predicate" assert=
 "gw-dir?" #in? t "enum generated-words includes aggregate predicate" assert=
 
 "data-carrying enum generated-words" test-section
-gw-shape: enum{ circle struct{ radius } dot } ;
+gw-circle-data: struct{ radius } ;
+gw-shape: enum{ circle: gw-circle-data dot: unit } ;
 gw-shape: generated-words
 dup ">gw-shape:circle" #in? t "data enum generated-words includes wrap" assert=
 dup "make-gw-shape:circle" #in? t "data enum generated-words includes make-" assert=

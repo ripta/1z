@@ -254,8 +254,11 @@ yield ( -- )
 >iterator ( seq-or-quot -- iterator )
 >iterator(with-cleanup) ( step-quot cleanup-quot -- iterator )
 >method-info
+>option-payload
 >option:some
 >provenance
+>result-error
+>result-value
 >result:err
 >result:ok
 >source-loc
@@ -337,6 +340,7 @@ eprint-line ( str -- )
 error
 error-stream
 error-type? ( error type -- error ? )
+error>>
 error? ( val -- ? )
 even? ( n -- ? )
 exact? ( val -- ? )
@@ -375,8 +379,11 @@ line>>
 loop ( ... pred -- ... )
 make-dispatch-provenance
 make-method-info
+make-option-payload
 make-option:some
 make-provenance
+make-result-error
+make-result-value
 make-result:err
 make-result:ok
 make-source-loc
@@ -412,6 +419,9 @@ not ( ? -- ? )
 number? ( val -- ? )
 odd? ( n -- ? )
 option
+option-payload
+option-payload>hash
+option-payload?
 option:none
 option:none?
 option:some> ( option -- value )
@@ -449,6 +459,12 @@ read-line ( -- str/f )
 receive? ( ch -- option )
 resource
 result
+result-error
+result-error>hash
+result-error?
+result-value
+result-value>hash
+result-value?
 result:err> ( result -- error )
 result:err>hash
 result:err?
@@ -492,11 +508,15 @@ type
 type-has-property? ( val property -- ? )
 type-name ( val -- string )
 types>>
+unit
 unless ( ? quot -- )
 unmake-dispatch-provenance
 unmake-method-info
+unmake-option-payload
 unmake-option:some
 unmake-provenance
+unmake-result-error
+unmake-result-value
 unmake-result:err
 unmake-result:ok
 unmake-source-loc
@@ -506,6 +526,7 @@ until ( ..a pred body -- ..b )
 unwrap-or ( opt/res default -- value )
 unwrap-or-throw ( opt/res -- value )
 use
+value>>
 vector
 vector? ( val -- ? )
 virtual{

@@ -73,7 +73,7 @@ PASS: nested list in list
 Stack: [ ]
 === cons builds in correct order ===
 Stack: [ ]
-Stack: [ <cons-list:cons cons-list:cons{ head: 1 tail: <cons-list:cons cons-list:cons{ head: 2 tail: <cons-list:cons cons-list:cons{ head: 3 tail: <cons-list:nil nil:> }> }> }> ]
+Stack: [ <cons-list:cons cons-cell{ head: 1 tail: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 3 tail: <cons-list:nil nil:> }> }> }> ]
 PASS: cons builds list front-to-back
 Stack: [ ]
 === list-len ===

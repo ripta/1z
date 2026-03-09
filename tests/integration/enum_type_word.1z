@@ -2,7 +2,7 @@ use "testing" ;
 
 "enum type word basics" test-section
 
-color: enum{ red green blue } ;
+color: enum{ red: unit green: unit blue: unit } ;
 
 \ type word pushes a type value
 color type-of type = "color is a type value" assert-true
@@ -16,9 +16,10 @@ color native.type-name "color" "type-name of enum type" assert=
 
 "data-carrying enum type word" test-section
 
+circle-data: struct{ radius } ;
 shape: enum{
-  circle struct{ radius }
-  point
+  circle: circle-data
+  point: unit
 } ;
 
 \ type word pushes a type value
@@ -35,5 +36,5 @@ m.direction type-of type = "qualified direction is a type value" assert-true
 
 "enum type word is parse-time" test-section
 
-suit: enum{ hearts diamonds clubs spades } ;
+suit: enum{ hearts: unit diamonds: unit clubs: unit spades: unit } ;
 { suit } #first type-of type = "type word executes at parse time" assert-true

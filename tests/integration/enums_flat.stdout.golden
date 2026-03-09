@@ -79,6 +79,7 @@ Stack: [ ]
 === data-carrying variants ===
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
 PASS: wrap and unwrap circle
 Stack: [ ]
 PASS: type-of data variant is shape:circle
@@ -110,6 +111,8 @@ Stack: [ ]
 PASS: flat variant display in mixed enum
 Stack: [ ]
 === multi-field data variants ===
+Stack: [ ]
+Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 PASS: rect unwrap height

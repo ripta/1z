@@ -3,10 +3,12 @@
 use "strings" ;
 use "conversions" ;
 
+host-port: struct{ host port } ;
+unix-addr: struct{ socket-path } ;
 addr: enum{
-  tcp struct{ host port }
-  udp struct{ host port }
-  unix struct{ path }
+  tcp:  host-port
+  udp:  host-port
+  unix: unix-addr
 } ;
 
 \ Split a "host:port" string on the last colon, parse port as integer.

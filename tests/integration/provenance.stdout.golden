@@ -133,6 +133,8 @@ Stack: [ ]
 === data-carrying enum variant provenance ===
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 Stack: [ provenance{ generator: "enum" parent: "prov-shape" role: "constructor" } ]
 PASS: data enum constructor generator
 Stack: [ provenance{ generator: "enum" parent: "prov-shape" role: "constructor" } ]
@@ -245,6 +247,7 @@ Stack: [ { "gw-dir:north" "gw-dir:north?" "gw-dir:south" "gw-dir:south?" "gw-dir
 PASS: enum generated-words includes aggregate predicate
 Stack: [ ]
 === data-carrying enum generated-words ===
+Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ { ">gw-shape:circle" "make-gw-shape:circle" "unmake-gw-shape:circle" "gw-shape:circle>hash" "gw-shape:circle?" "gw-shape:dot" "gw-shape:dot?" "gw-shape?" "gw-shape" } ]

@@ -1,0 +1,10 @@
+PASS: unit is a type value
+Stack: [ ]
+PASS: unit /= fixnum
+Stack: [ ]
+PASS: unit /= boolean
+Stack: [ ]
+PASS: unit /= string
+Stack: [ ]
+PASS: unit has builtin-type: descriptor
+Stack: [ ]

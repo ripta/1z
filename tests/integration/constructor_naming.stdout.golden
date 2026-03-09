@@ -55,6 +55,8 @@ Stack: [ ]
 === enum data-carrying variants: make, unmake, >hash ===
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: make-shape:circle creates circle
 Stack: [ ]
 PASS: unmake-shape:circle unwraps radius
