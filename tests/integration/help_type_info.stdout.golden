@@ -1,0 +1,338 @@
+=== struct type info ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "ht-point ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: struct
+  fields: x y
+  generated-words: ht-point make-ht-point >ht-point unmake-ht-point ht-point>hash ht-point? x>> y>>
+" ]
+PASS: struct has type info header
+Stack: [ "ht-point ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: struct
+  fields: x y
+  generated-words: ht-point make-ht-point >ht-point unmake-ht-point ht-point>hash ht-point? x>> y>>
+" ]
+PASS: struct shows kind
+Stack: [ "ht-point ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: struct
+  fields: x y
+  generated-words: ht-point make-ht-point >ht-point unmake-ht-point ht-point>hash ht-point? x>> y>>
+" ]
+PASS: struct shows fields
+Stack: [ "ht-point ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: struct
+  fields: x y
+  generated-words: ht-point make-ht-point >ht-point unmake-ht-point ht-point>hash ht-point? x>> y>>
+" ]
+PASS: struct shows generated-words
+Stack: [ "ht-point ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: struct
+  fields: x y
+  generated-words: ht-point make-ht-point >ht-point unmake-ht-point ht-point>hash ht-point? x>> y>>
+" ]
+PASS: struct generated-words includes constructor
+Stack: [ "ht-point ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: struct
+  fields: x y
+  generated-words: ht-point make-ht-point >ht-point unmake-ht-point ht-point>hash ht-point? x>> y>>
+" ]
+Stack: [ ]
+=== virtual type info (simple wrap) ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "ht-meter ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: virtual
+  wraps: fixnum
+  generated-words: ht-meter >ht-meter make-ht-meter unmake-ht-meter ht-meter?
+" ]
+PASS: simple virtual has type info header
+Stack: [ "ht-meter ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: virtual
+  wraps: fixnum
+  generated-words: ht-meter >ht-meter make-ht-meter unmake-ht-meter ht-meter?
+" ]
+PASS: simple virtual shows kind
+Stack: [ "ht-meter ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: virtual
+  wraps: fixnum
+  generated-words: ht-meter >ht-meter make-ht-meter unmake-ht-meter ht-meter?
+" ]
+PASS: simple virtual shows wraps
+Stack: [ "ht-meter ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: virtual
+  wraps: fixnum
+  generated-words: ht-meter >ht-meter make-ht-meter unmake-ht-meter ht-meter?
+" ]
+PASS: simple virtual shows generated-words
+Stack: [ "ht-meter ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: virtual
+  wraps: fixnum
+  generated-words: ht-meter >ht-meter make-ht-meter unmake-ht-meter ht-meter?
+" ]
+Stack: [ ]
+=== virtual type info (struct-backed) ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "ht-vec ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: virtual
+  fields: vx vy
+  generated-words: ht-vec >ht-vec make-ht-vec unmake-ht-vec ht-vec>hash ht-vec?
+" ]
+PASS: struct-backed virtual has type info header
+Stack: [ "ht-vec ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: virtual
+  fields: vx vy
+  generated-words: ht-vec >ht-vec make-ht-vec unmake-ht-vec ht-vec>hash ht-vec?
+" ]
+PASS: struct-backed virtual shows kind
+Stack: [ "ht-vec ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: virtual
+  fields: vx vy
+  generated-words: ht-vec >ht-vec make-ht-vec unmake-ht-vec ht-vec>hash ht-vec?
+" ]
+PASS: struct-backed virtual shows fields
+Stack: [ "ht-vec ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: virtual
+  fields: vx vy
+  generated-words: ht-vec >ht-vec make-ht-vec unmake-ht-vec ht-vec>hash ht-vec?
+" ]
+PASS: struct-backed virtual shows generated-words
+Stack: [ "ht-vec ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: virtual
+  fields: vx vy
+  generated-words: ht-vec >ht-vec make-ht-vec unmake-ht-vec ht-vec>hash ht-vec?
+" ]
+Stack: [ ]
+=== enum type info (flat) ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "ht-color ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: enum
+  variants:
+    red:   unit
+    green: unit
+    blue:  unit
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+" ]
+PASS: enum has type info header
+Stack: [ "ht-color ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: enum
+  variants:
+    red:   unit
+    green: unit
+    blue:  unit
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+" ]
+PASS: enum shows kind
+Stack: [ "ht-color ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: enum
+  variants:
+    red:   unit
+    green: unit
+    blue:  unit
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+" ]
+PASS: enum shows variants header
+Stack: [ "ht-color ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: enum
+  variants:
+    red:   unit
+    green: unit
+    blue:  unit
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+" ]
+PASS: enum shows red variant
+Stack: [ "ht-color ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: enum
+  variants:
+    red:   unit
+    green: unit
+    blue:  unit
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+" ]
+PASS: enum shows green variant
+Stack: [ "ht-color ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: enum
+  variants:
+    red:   unit
+    green: unit
+    blue:  unit
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+" ]
+PASS: enum shows blue variant
+Stack: [ "ht-color ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: enum
+  variants:
+    red:   unit
+    green: unit
+    blue:  unit
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+" ]
+PASS: enum shows unit type
+Stack: [ "ht-color ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: enum
+  variants:
+    red:   unit
+    green: unit
+    blue:  unit
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+" ]
+PASS: enum shows generated-words
+Stack: [ "ht-color ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: enum
+  variants:
+    red:   unit
+    green: unit
+    blue:  unit
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+" ]
+Stack: [ ]
+=== enum type info (data-carrying) ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ "ht-shape ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: enum
+  variants:
+    circle: ht-circle-data
+    dot:    unit
+  generated-words: >ht-shape:circle make-ht-shape:circle unmake-ht-shape:circle ht-shape:circle> ht-shape:circle>hash ht-shape:circle? ht-shape:dot ht-shape:dot? ht-shape? ht-shape
+" ]
+PASS: data enum shows kind
+Stack: [ "ht-shape ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: enum
+  variants:
+    circle: ht-circle-data
+    dot:    unit
+  generated-words: >ht-shape:circle make-ht-shape:circle unmake-ht-shape:circle ht-shape:circle> ht-shape:circle>hash ht-shape:circle? ht-shape:dot ht-shape:dot? ht-shape? ht-shape
+" ]
+PASS: data enum shows circle variant
+Stack: [ "ht-shape ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: enum
+  variants:
+    circle: ht-circle-data
+    dot:    unit
+  generated-words: >ht-shape:circle make-ht-shape:circle unmake-ht-shape:circle ht-shape:circle> ht-shape:circle>hash ht-shape:circle? ht-shape:dot ht-shape:dot? ht-shape? ht-shape
+" ]
+PASS: data enum shows struct type
+Stack: [ "ht-shape ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: enum
+  variants:
+    circle: ht-circle-data
+    dot:    unit
+  generated-words: >ht-shape:circle make-ht-shape:circle unmake-ht-shape:circle ht-shape:circle> ht-shape:circle>hash ht-shape:circle? ht-shape:dot ht-shape:dot? ht-shape? ht-shape
+" ]
+PASS: data enum shows dot variant
+Stack: [ "ht-shape ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
+type info:
+  kind: enum
+  variants:
+    circle: ht-circle-data
+    dot:    unit
+  generated-words: >ht-shape:circle make-ht-shape:circle unmake-ht-shape:circle ht-shape:circle> ht-shape:circle>hash ht-shape:circle? ht-shape:dot ht-shape:dot? ht-shape? ht-shape
+" ]
+Stack: [ ]
+=== builtin type info (with metadata) ===
+Stack: [ ]
+Stack: [ "fixnum [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+type info:
+  kind: builtin-type
+  integer: t
+  exact: t
+  numeric: t
+" ]
+PASS: fixnum has type info header
+Stack: [ "fixnum [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+type info:
+  kind: builtin-type
+  integer: t
+  exact: t
+  numeric: t
+" ]
+PASS: fixnum shows kind
+Stack: [ "fixnum [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+type info:
+  kind: builtin-type
+  integer: t
+  exact: t
+  numeric: t
+" ]
+PASS: fixnum shows numeric
+Stack: [ "fixnum [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+type info:
+  kind: builtin-type
+  integer: t
+  exact: t
+  numeric: t
+" ]
+PASS: fixnum shows exact
+Stack: [ "fixnum [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+type info:
+  kind: builtin-type
+  integer: t
+  exact: t
+  numeric: t
+" ]
+PASS: fixnum shows integer
+Stack: [ "fixnum [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+type info:
+  kind: builtin-type
+  integer: t
+  exact: t
+  numeric: t
+" ]
+Stack: [ ]
+=== builtin type info (without metadata) ===
+Stack: [ ]
+Stack: [ "boolean [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+type info:
+  kind: builtin-type
+" ]
+PASS: boolean has type info header
+Stack: [ "boolean [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+type info:
+  kind: builtin-type
+" ]
+PASS: boolean shows kind
+Stack: [ "boolean [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+type info:
+  kind: builtin-type
+" ]
+Stack: [ ]
+=== non-typed word has no type info ===
+Stack: [ ]
+Stack: [ "Duplicate top of stack.
+dup ( a -- a a ) \native
+
+" ]
+PASS: dup has no type info
+Stack: [ ]

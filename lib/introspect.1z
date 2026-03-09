@@ -7,8 +7,115 @@ format-method: ( method-info -- str ) [
   types>> "  method{ " swap " " #join #append " }" #append
 ] ;
 
+\ Pad string to width with trailing spaces
+pad-right: ( str width -- str ) [
+  over #len - dup 0 > [ " " swap repeat #append ] [ drop ] if
+] ;
+
+\ Find max variant name length in alternating name/type array
+variant-max-name-len-acc: ( max variants -- max ) [
+  dup #len 0 =
+  [ drop ]
+  [
+    dup #first >string #len
+    -rot> 2 #drop
+    [ max ] dip
+    variant-max-name-len-acc
+  ]
+  if
+] ;
+
+variant-max-name-len: ( variants -- n ) [
+  0 swap variant-max-name-len-acc
+] ;
+
+\ Format one variant line: "    name:PADDING typename\n"
+format-one-variant: ( max-name-len name tname -- line ) [
+  -rot>
+  ":" #append
+  swap 2 + pad-right
+  "    " swap #append
+  swap #append "\n" #append
+] ;
+
+\ Format all variant lines with column-aligned type names
+format-variant-lines: ( variants max-name-len -- str ) [
+  over #len 0 =
+  [ 2drop "" ]
+  [
+    over #first >string
+    2 pick-n 1 #nth native.type-name
+    2 pick-n -rot>
+    format-one-variant
+    -rot> swap 2 #drop swap
+    format-variant-lines
+    #append
+  ]
+  if
+] ;
+
+format-builtin-type-info: ( desc -- str ) [
+  dup @keys >iterator
+  [ dup type: = swap define: = or not ] #filter #collect
+  swap
+  [ over >string "  " swap #append ": " #append -rot> swap @get >string #append "\n" #append ] curry
+  swap >iterator swap #map #collect
+  "" #join
+  "type info:\n  kind: builtin-type\n" swap #append
+] ;
+
+format-struct-type-info: ( desc -- str ) [
+  "type info:\n  kind: struct\n  fields: "
+  over "fields" @get " " #join #append "\n" #append
+  "  generated-words: " #append
+  swap "generated-words" @get " " #join #append "\n" #append
+] ;
+
+format-virtual-type-info: ( desc -- str ) [
+  "type info:\n  kind: virtual\n"
+  over "inner-type" @get #first type-of type =
+  [
+    "  wraps: " #append
+    over "inner-type" @get #first native.type-name #append "\n" #append
+  ]
+  [
+    "  fields: " #append
+    over "inner-type" @get #first "fields" @get " " #join #append "\n" #append
+  ]
+  if
+  "  generated-words: " #append
+  swap "generated-words" @get " " #join #append "\n" #append
+] ;
+
+format-enum-type-info: ( desc -- str ) [
+  "type info:\n  kind: enum\n  variants:\n"
+  over "variants" @get
+  dup variant-max-name-len
+  format-variant-lines #append
+  "  generated-words: " #append
+  swap "generated-words" @get " " #join #append "\n" #append
+] ;
+
+format-type-info: ( wi -- str ) [
+  dup markers>> [ typed = ] #any
+  [
+    name>> native.type-descriptor
+    dup "type" @get
+    dup struct-descriptor: = [ drop format-struct-type-info ] [
+      dup virtual: = [ drop format-virtual-type-info ] [
+        dup enum-descriptor: = [ drop format-enum-type-info ] [
+          builtin-type: = [ format-builtin-type-info ] [ drop "" ] if
+        ] if
+      ] if
+    ] if
+  ]
+  [ drop "" ]
+  if
+] ;
+
 \ Format word-info as a multi-line help string matching the native help output
 format-word-info: ( wi -- str ) [
+  dup
   dup name>>
   over stack-effect>> dup f = [ drop ] [ " " swap >string #append #append ] if
   over markers>> dup #len 0 = [ drop ] [
@@ -21,6 +128,7 @@ format-word-info: ( wi -- str ) [
     >iterator [ format-method ] #map #collect "\n" #join
     #append "\n" #append
   ] if
+  swap format-type-info #append
 ] ;
 
 \ Display help for a word, matching the output of the native help primitive
