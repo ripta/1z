@@ -42,6 +42,25 @@ PASS: unwrap wrong type errors
 Stack: [ ]
 PASS: unwrap plain value errors
 Stack: [ ]
+=== wrap type validation ===
+Stack: [ ]
+PASS: wrap string as fixnum-backed type errors
+Stack: [ ]
+PASS: wrap array as fixnum-backed type errors
+Stack: [ ]
+PASS: wrap boolean as fixnum-backed type errors
+Stack: [ ]
+PASS: bignum wraps as fixnum-backed type
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: wrong struct type rejected
+Stack: [ ]
+PASS: correct struct type wraps
+Stack: [ ]
+PASS: plain fixnum rejected for virtual inner type
+Stack: [ ]
 === multiple virtual types ===
 Stack: [ ]
 Stack: [ ]

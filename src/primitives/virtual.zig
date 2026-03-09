@@ -282,6 +282,16 @@ fn virtualWrapHelper(ctx: *Context) anyerror!void {
 
     const val = try ctx.stack.pop();
 
+    const actual_type: []const u8 = switch (val) {
+        .struct_instance => |si| si.struct_type.name,
+        .bignum => if (std.mem.eql(u8, vt.inner_type, "fixnum")) "fixnum" else "bignum",
+        else => helpers.valueTypeName(val),
+    };
+    if (!std.mem.eql(u8, actual_type, vt.inner_type)) {
+        helpers.setErrorContext(ctx, ">{s} expects {s}, got {s}", .{ vt.name, vt.inner_type, actual_type });
+        return error.TypeMismatch;
+    }
+
     const inner = try alloc.create(Value);
     inner.* = val;
 

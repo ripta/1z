@@ -54,6 +54,26 @@ positive-duration: virtual{ duration } ;
 \ Test unwrapping a non-tagged value
 [ 42 unmake-duration ] "unwrap plain value errors" assert-error
 
+"wrap type validation" test-section
+
+\ Wrong primitive type rejected
+[ "hello" >duration ] "wrap string as fixnum-backed type errors" assert-error
+[ { 1 2 3 } >duration ] "wrap array as fixnum-backed type errors" assert-error
+[ t >duration ] "wrap boolean as fixnum-backed type errors" assert-error
+
+\ Bignum accepted for fixnum inner_type
+999999999999999999999 >duration duration? t "bignum wraps as fixnum-backed type" assert=
+
+\ Struct-backed inner type validation
+inner-a: struct{ x } ;
+inner-b: struct{ y } ;
+vt-a: virtual{ inner-a } ;
+[ 1 make-inner-b >vt-a ] "wrong struct type rejected" assert-error
+1 make-inner-a >vt-a vt-a? t "correct struct type wraps" assert=
+
+\ Nested virtual type validation
+[ 42 >positive-duration ] "plain fixnum rejected for virtual inner type" assert-error
+
 "multiple virtual types" test-section
 
 \ Define another virtual type backed by integer
