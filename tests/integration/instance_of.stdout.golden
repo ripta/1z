@@ -1,0 +1,66 @@
+=== built-in types ===
+Stack: [ ]
+PASS: fixnum instance-of? fixnum
+Stack: [ ]
+PASS: string instance-of? string
+Stack: [ ]
+PASS: boolean instance-of? boolean
+Stack: [ ]
+PASS: float instance-of? float
+Stack: [ ]
+PASS: symbol instance-of? symbol
+Stack: [ ]
+PASS: array instance-of? array
+Stack: [ ]
+PASS: quotation instance-of? quotation
+Stack: [ ]
+PASS: hash instance-of? hash
+Stack: [ ]
+=== built-in negative ===
+Stack: [ ]
+PASS: fixnum not instance-of? string
+Stack: [ ]
+PASS: string not instance-of? fixnum
+Stack: [ ]
+PASS: boolean not instance-of? fixnum
+Stack: [ ]
+=== enum variant exact match ===
+Stack: [ ]
+PASS: ordering:lt instance-of? ordering:lt type
+Stack: [ ]
+PASS: ordering:gt instance-of? ordering:gt type
+Stack: [ ]
+PASS: ordering:eq instance-of? ordering:eq type
+Stack: [ ]
+=== enum variant parent fallback ===
+Stack: [ ]
+PASS: ordering:lt instance-of? ordering
+Stack: [ ]
+PASS: ordering:gt instance-of? ordering
+Stack: [ ]
+PASS: ordering:eq instance-of? ordering
+Stack: [ ]
+=== enum variant wrong parent ===
+Stack: [ ]
+PASS: ordering:lt not instance-of? option
+Stack: [ ]
+PASS: option:none not instance-of? ordering
+Stack: [ ]
+=== virtual type ===
+Stack: [ ]
+Stack: [ ]
+PASS: virtual instance-of? its type
+Stack: [ ]
+PASS: virtual not instance-of? inner type
+Stack: [ ]
+=== struct type ===
+Stack: [ ]
+Stack: [ ]
+PASS: struct instance-of? its type
+Stack: [ ]
+PASS: struct not instance-of? fixnum
+Stack: [ ]
+=== type mismatch ===
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
