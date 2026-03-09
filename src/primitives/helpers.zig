@@ -408,6 +408,30 @@ pub fn ensureBignum(alloc: Allocator, val: Value) !BigIntManaged {
     return if (val == .bignum) try val.bignum.clone() else try BigIntManaged.initSet(alloc, val.fixnum);
 }
 
+/// Build a stack effect string for a constructor: "field1 field2 ... -- output_name"
+pub fn buildConstructorEffectStr(allocator: Allocator, fields: []const []const u8, output_name: []const u8) ![]const u8 {
+    var parts = std.ArrayListUnmanaged([]const u8){};
+    defer parts.deinit(allocator);
+    for (fields) |f| {
+        try parts.append(allocator, f);
+    }
+    try parts.append(allocator, "--");
+    try parts.append(allocator, output_name);
+    return std.mem.join(allocator, " ", parts.items);
+}
+
+/// Build a stack effect string for a destructor: "input_name -- field1 field2 ..."
+pub fn buildDestructorEffectStr(allocator: Allocator, fields: []const []const u8, input_name: []const u8) ![]const u8 {
+    var parts = std.ArrayListUnmanaged([]const u8){};
+    defer parts.deinit(allocator);
+    try parts.append(allocator, input_name);
+    try parts.append(allocator, "--");
+    for (fields) |f| {
+        try parts.append(allocator, f);
+    }
+    return std.mem.join(allocator, " ", parts.items);
+}
+
 /// Check if the current task has a pending cancellation and inject the
 /// `task-cancelled` error. Called at resume points: after yield, sleep,
 /// channel ops, I/O suspend, scope suspend. Cancelled tasks should unwind

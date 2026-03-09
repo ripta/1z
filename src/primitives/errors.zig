@@ -92,7 +92,7 @@ pub fn pascalToKebabRuntime(name: []const u8, buf: []u8) []const u8 {
 }
 
 pub const primitives = [_]Primitive{
-    .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ) --", .doc = "Execute try quotation; if error, run recover quotation with error on stack.", .func = nativeRecover },
+    .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ..a ) --", .doc = "Execute try quotation; if error, run recover quotation with error on stack.", .func = nativeRecover },
     .{ .name = "cleanup", .stack_effect = "body-quot cleanup-quot --", .doc = "Execute body, always run cleanup, then re-throw any error from body.", .func = nativeCleanup },
     .{ .name = "rethrow", .stack_effect = "error --", .doc = "Re-raise an error value as an actual error.", .func = nativeRethrow },
     .{ .name = "make-error", .stack_effect = "data message type -- error", .doc = "Construct an error object from data, message, and type.", .func = nativeMakeError },

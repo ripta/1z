@@ -247,20 +247,20 @@ yield ( -- )
 <= ( a b -- ? )
 <rot- ( a b c -- b c a )
 >= ( a b -- ? )
->dispatch-provenance
->hash
+>dispatch-provenance ( hash -- dispatch-provenance )
+>hash ( val -- hash )
 >iterator ( seq-or-quot -- iterator )
 >iterator(with-cleanup) ( step-quot cleanup-quot -- iterator )
->method-info
->option-payload
->option:some
->provenance
->result-error
->result-value
->result:err
->result:ok
->source-loc
->stack-effect-info
+>method-info ( hash -- method-info )
+>option-payload ( hash -- option-payload )
+>option:some ( value -- option:some )
+>provenance ( hash -- provenance )
+>result-error ( hash -- result-error )
+>result-value ( hash -- result-value )
+>result:err ( error -- result:err )
+>result:ok ( value -- result:ok )
+>source-loc ( hash -- source-loc )
+>stack-effect-info ( hash -- stack-effect-info )
 >word-info ( symbol -- word-info )
 >word? ( symbol -- option )
 ?and-then ( opt/res quot -- opt/res )
@@ -307,7 +307,7 @@ bi ( ..a x p q -- ..b ..c )
 bignum
 bignum? ( val -- ? )
 bl ( -- )
-body>>
+body>> ( instance -- value )
 boolean
 boolean? ( val -- ? )
 byte-array
@@ -320,17 +320,17 @@ choose ( a1 a2 quot -- a )
 cleave ( x quots -- )
 close-iterator ( iterator -- )
 cmp ( a b -- ordering )
-column>>
+column>> ( instance -- value )
 comparable
 cond ( branches -- ... )
 define-parameter
 defined? ( name -- bool )
-dispatch-provenance
-dispatch-provenance>hash
-dispatch-provenance?
+dispatch-provenance ( -- type )
+dispatch-provenance>hash ( dispatch-provenance -- hash )
+dispatch-provenance? ( val -- ? )
 do ( pred body -- pred body )
 doc-string
-doc>>
+doc>> ( instance -- value )
 dupd ( a b -- a a b )
 emit ( codepoint -- )
 enum{
@@ -339,13 +339,13 @@ eprint-line ( str -- )
 error
 error-stream
 error-type? ( error type -- error ? )
-error>>
+error>> ( instance -- value )
 error? ( val -- ? )
 even? ( n -- ? )
 exact? ( val -- ? )
 ffi-ptr+len>bytes ( resource n -- byte-array )
-field>>
-file>>
+field>> ( instance -- value )
+file>> ( instance -- value )
 finite? ( x -- ? )
 fixnum
 fixnum? ( val -- ? )
@@ -359,7 +359,7 @@ format-word-info ( wi -- str )
 format-word-line ( wi -- )
 generated-by ( symbol -- provenance/f )
 generated-words ( symbol -- array )
-generator>>
+generator>> ( instance -- value )
 generic? ( name -- ? )
 hash
 hash? ( val -- ? )
@@ -369,48 +369,48 @@ inexact? ( val -- ? )
 inf ( -- f )
 infinite? ( x -- ? )
 input-stream
-inputs>>
+inputs>> ( instance -- value )
 integer? ( val -- ? )
 iterator
 iterator? ( val -- ? )
 keep ( ..a x quot -- ..b x )
-line>>
+line>> ( instance -- value )
 loop ( ... pred -- ... )
-make-dispatch-provenance
-make-method-info
-make-option-payload
-make-option:some
-make-provenance
-make-result-error
-make-result-value
-make-result:err
-make-result:ok
-make-source-loc
-make-stack-effect-info
-make-word-info
+make-dispatch-provenance ( generator parent role field -- dispatch-provenance )
+make-method-info ( types provenance -- method-info )
+make-option-payload ( value -- option-payload )
+make-option:some ( value -- option:some )
+make-provenance ( generator parent role -- provenance )
+make-result-error ( error -- result-error )
+make-result-value ( value -- result-value )
+make-result:err ( error -- result:err )
+make-result:ok ( value -- result:ok )
+make-source-loc ( file line column -- source-loc )
+make-stack-effect-info ( inputs outputs -- stack-effect-info )
+make-word-info ( name stack-effect doc markers native? body methods source-loc module provenance -- word-info )
 marker
 marker? ( val -- ? )
-markers>>
+markers>> ( instance -- value )
 match{
 max ( a1 a2 -- a )
-method-info
-method-info>hash
-method-info?
-methods>>
+method-info ( -- type )
+method-info>hash ( method-info -- hash )
+method-info? ( val -- ? )
+methods>> ( instance -- value )
 method{
 min ( a1 a2 -- a )
 module
-module>>
+module>> ( instance -- value )
 module? ( val -- ? )
 mutable-map
 mutable-map? ( val -- ? )
 my-test-word
-name>>
+name>> ( instance -- value )
 nan ( -- f )
 nan? ( x -- ? )
 native
 native? ( name -- ? )
-native?>>
+native?>> ( instance -- value )
 negative? ( x -- ? )
 nip ( a b -- b )
 nl ( -- )
@@ -418,30 +418,30 @@ no-matching-branch ( data -- error )
 not ( ? -- ? )
 number? ( val -- ? )
 odd? ( n -- ? )
-option
-option-payload
-option-payload>hash
-option-payload?
-option:none
-option:none?
-option:some>
-option:some>hash
-option:some?
-option?
+option ( -- type )
+option-payload ( -- type )
+option-payload>hash ( option-payload -- hash )
+option-payload? ( val -- ? )
+option:none ( -- option:none )
+option:none? ( val -- ? )
+option:some> ( option:some -- value )
+option:some>hash ( option:some -- hash )
+option:some? ( val -- ? )
+option? ( val -- ? )
 or ( ? ? -- ? )
-ordering
-ordering:eq
-ordering:eq?
-ordering:gt
-ordering:gt?
-ordering:lt
-ordering:lt?
-ordering?
+ordering ( -- type )
+ordering:eq ( -- ordering:eq )
+ordering:eq? ( val -- ? )
+ordering:gt ( -- ordering:gt )
+ordering:gt? ( val -- ? )
+ordering:lt ( -- ordering:lt )
+ordering:lt? ( val -- ? )
+ordering? ( val -- ? )
 output-stream
-outputs>>
+outputs>> ( instance -- value )
 parameter
 parameter? ( val -- ? )
-parent>>
+parent>> ( instance -- value )
 parse-quotation ( -- quotation )
 pick ( a b c -- a b c a )
 positive? ( x -- ? )
@@ -449,42 +449,42 @@ pragma-get ( name -- option )
 print ( str -- )
 print-line ( str -- )
 protocol{
-provenance
-provenance>>
-provenance>hash
-provenance?
+provenance ( -- type )
+provenance>> ( instance -- value )
+provenance>hash ( provenance -- hash )
+provenance? ( val -- ? )
 quotation
 quotation? ( val -- ? )
 read-line ( -- str/f )
 receive? ( ch -- option )
 resource
-result
-result-error
-result-error>hash
-result-error?
-result-value
-result-value>hash
-result-value?
-result:err>
-result:err>hash
-result:err?
-result:ok>
-result:ok>hash
-result:ok?
-result?
-role>>
+result ( -- type )
+result-error ( -- type )
+result-error>hash ( result-error -- hash )
+result-error? ( val -- ? )
+result-value ( -- type )
+result-value>hash ( result-value -- hash )
+result-value? ( val -- ? )
+result:err> ( result:err -- error )
+result:err>hash ( result:err -- hash )
+result:err? ( val -- ? )
+result:ok> ( result:ok -- value )
+result:ok>hash ( result:ok -- hash )
+result:ok? ( val -- ? )
+result? ( val -- ? )
+role>> ( instance -- value )
 run-benchmarks ( quot -- )
 set
 set? ( val -- ? )
-source-loc
-source-loc>>
-source-loc>hash
-source-loc?
+source-loc ( -- type )
+source-loc>> ( instance -- value )
+source-loc>hash ( source-loc -- hash )
+source-loc? ( val -- ? )
 stack-effect
-stack-effect-info
-stack-effect-info>hash
-stack-effect-info?
-stack-effect>>
+stack-effect-info ( -- type )
+stack-effect-info>hash ( stack-effect-info -- hash )
+stack-effect-info? ( val -- ? )
+stack-effect>> ( instance -- value )
 stream
 stream-write-string ( stream str -- n )
 stream? ( val -- ? )
@@ -507,26 +507,26 @@ tuck ( a b -- b a b )
 type
 type-has-property? ( val property -- ? )
 type-name ( val -- string )
-types>>
+types>> ( instance -- value )
 unit
 unless ( ? quot -- )
-unmake-dispatch-provenance
-unmake-method-info
-unmake-option-payload
-unmake-option:some
-unmake-provenance
-unmake-result-error
-unmake-result-value
-unmake-result:err
-unmake-result:ok
-unmake-source-loc
-unmake-stack-effect-info
-unmake-word-info
+unmake-dispatch-provenance ( dispatch-provenance -- generator parent role field )
+unmake-method-info ( method-info -- types provenance )
+unmake-option-payload ( option-payload -- value )
+unmake-option:some ( option:some -- value )
+unmake-provenance ( provenance -- generator parent role )
+unmake-result-error ( result-error -- error )
+unmake-result-value ( result-value -- value )
+unmake-result:err ( result:err -- error )
+unmake-result:ok ( result:ok -- value )
+unmake-source-loc ( source-loc -- file line column )
+unmake-stack-effect-info ( stack-effect-info -- inputs outputs )
+unmake-word-info ( word-info -- name stack-effect doc markers native? body methods source-loc module provenance )
 until ( ..a pred body -- ..b )
 unwrap-or ( opt/res default -- value )
 unwrap-or-throw ( opt/res -- value )
 use
-value>>
+value>> ( instance -- value )
 vector
 vector? ( val -- ? )
 virtual{
@@ -535,9 +535,9 @@ while ( ..a pred body -- ..b )
 with-input-stream ( stream quot -- )
 with-iterator ( iterator quot -- ... )
 with-output-stream ( stream quot -- )
-word-info
-word-info>hash
-word-info?
+word-info ( -- type )
+word-info>hash ( word-info -- hash )
+word-info? ( val -- ? )
 word-markers ( name -- markers )
 word-source ( symbol -- option )
 words ( -- )

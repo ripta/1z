@@ -947,6 +947,11 @@ pub const Context = struct {
                 .call_word => |name| {
                     if (self.lookupWord(name)) |word| {
                         if (word.stack_effect) |word_effect| {
+                            if (!word_effect.hasBalancedRowVariables()) {
+                                // Unbalanced row variables mean the delta
+                                // depends on runtime row sizes; can't infer.
+                                return null;
+                            }
                             delta += word_effect.concreteDelta();
                         } else {
                             // Word has no declared effect, can't infer
@@ -1035,11 +1040,12 @@ pub const Context = struct {
         return false;
     }
 
-    /// Validate that all row variables in a quotation effect are defined in the word's effect.
+    /// Validate that all row variables in a quotation effect are defined in the
+    /// word's effect or in the quotation's own effect.
     fn validateRowVariables(self: *Context, quot_effect: *const StackEffect, word_effect: *const StackEffect, param_name: []const u8) !void {
         // Check all row variables in quotation effect inputs
         for (quot_effect.inputs) |param| {
-            if (param.is_row_variable and !isRowVariableDefined(param.name, word_effect)) {
+            if (param.is_row_variable and !isRowVariableDefined(param.name, word_effect) and !isRowVariableDefined(param.name, quot_effect)) {
                 var buf: [256]u8 = undefined;
                 const msg = std.fmt.bufPrint(&buf, "parameter '{s}' uses undefined row variable '{s}'", .{
                     param_name,
@@ -1062,7 +1068,7 @@ pub const Context = struct {
 
         // Check all row variables in quotation effect outputs
         for (quot_effect.outputs) |param| {
-            if (param.is_row_variable and !isRowVariableDefined(param.name, word_effect)) {
+            if (param.is_row_variable and !isRowVariableDefined(param.name, word_effect) and !isRowVariableDefined(param.name, quot_effect)) {
                 var buf: [256]u8 = undefined;
                 const msg = std.fmt.bufPrint(&buf, "parameter '{s}' uses undefined row variable '{s}'", .{
                     param_name,

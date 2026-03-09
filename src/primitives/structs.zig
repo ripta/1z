@@ -128,6 +128,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     try ctx.defineWord(name, .{
         .name = name,
         .parse_time = true,
+        .stack_effect = try helpers.makeSimpleEffect(alloc, "-- type"),
         .markers = type_markers,
         .provenance = .{ .generator = "struct", .parent = name, .role = "type" },
         .action = .{ .compound = type_instrs },
@@ -342,8 +343,10 @@ fn defineConstructor(ctx: *Context, name: []const u8, struct_type: *const Struct
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.make-struct-instance" }, .line = 0 };
 
+    const effect_str = try helpers.buildConstructorEffectStr(alloc, struct_type.fields, struct_type.name);
     try ctx.defineWord(name, .{
         .name = name,
+        .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
         .markers = markers,
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "constructor" },
         .action = .{ .compound = instrs },
@@ -358,8 +361,10 @@ fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const Stru
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.hash-to-struct" }, .line = 0 };
 
+    const effect_str = try std.fmt.allocPrint(alloc, "hash -- {s}", .{struct_type.name});
     try ctx.defineWord(name, .{
         .name = name,
+        .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
         .markers = markers,
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "hash-converter" },
         .action = .{ .compound = instrs },
@@ -374,8 +379,10 @@ fn defineDestructor(ctx: *Context, name: []const u8, struct_type: *const StructT
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.struct-instance-destructure" }, .line = 0 };
 
+    const effect_str = try helpers.buildDestructorEffectStr(alloc, struct_type.fields, struct_type.name);
     try ctx.defineWord(name, .{
         .name = name,
+        .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
         .markers = markers,
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "destructor" },
         .action = .{ .compound = instrs },
@@ -390,8 +397,10 @@ fn defineToHash(ctx: *Context, name: []const u8, struct_type: *const StructType,
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.struct-instance-to-hash" }, .line = 0 };
 
+    const effect_str = try std.fmt.allocPrint(alloc, "{s} -- hash", .{struct_type.name});
     try ctx.defineWord(name, .{
         .name = name,
+        .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
         .markers = markers,
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "to-hash" },
         .action = .{ .compound = instrs },
@@ -408,6 +417,7 @@ fn defineTypePredicate(ctx: *Context, name: []const u8, struct_type: *const Stru
 
     try ctx.defineWord(name, .{
         .name = name,
+        .stack_effect = try helpers.makeSimpleEffect(alloc, "val -- ?"),
         .markers = markers,
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "predicate" },
         .action = .{ .compound = instrs },
@@ -436,6 +446,7 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
 
         try ctx.defineWord(name, .{
             .name = name,
+            .stack_effect = try helpers.makeSimpleEffect(alloc, "instance -- value"),
             .markers = generic_markers,
             .action = .{ .compound = &.{} },
         });
@@ -477,6 +488,7 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
 
         try ctx.defineWord(name, .{
             .name = name,
+            .stack_effect = try helpers.makeSimpleEffect(alloc, "instance value -- instance"),
             .markers = generic_markers,
             .action = .{ .compound = &.{} },
         });
