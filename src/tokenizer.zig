@@ -124,7 +124,11 @@ pub const Tokenizer = struct {
         if (self.input[self.pos] == '"') {
             self.pos += 1; // skip opening quote
             while (self.pos < self.input.len and self.input[self.pos] != '"') {
-                self.pos += 1;
+                if (self.input[self.pos] == '\\' and self.pos + 1 < self.input.len) {
+                    self.pos += 2;
+                } else {
+                    self.pos += 1;
+                }
             }
             if (self.pos < self.input.len) {
                 self.pos += 1; // skip closing quote

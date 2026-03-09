@@ -48,3 +48,12 @@ use "strings" ;
 
 use "strict_use_mod_prelude_shadow.1z" ;
 nip "custom nip" "prelude word shadowing allowed" assert=
+
+\ === use tail-token validation ===
+"use tail-token validation via eval-string" test-section
+
+"use \"testing\" shadow-ok ;" eval-string
+
+[ "use \"testing\" bad-token ;" eval-string ] "use with invalid tail token" assert-error
+
+[ "use \"testing\" 42 ;" eval-string ] "use with literal tail token" assert-error

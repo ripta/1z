@@ -28,3 +28,10 @@ Stack: [ ]
 Stack: [ ]
 PASS: prelude word shadowing allowed
 Stack: [ ]
+=== use tail-token validation via eval-string ===
+Stack: [ ]
+Stack: [ ]
+PASS: use with invalid tail token
+Stack: [ ]
+PASS: use with literal tail token
+Stack: [ ]

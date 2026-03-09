@@ -1,0 +1,13 @@
+use "testing" ;
+
+"hello \"world\"" "hello \"world\"" "string with escaped quotes" assert=
+
+"a\"b\"c" "a\"b\"c" "multiple escaped quotes" assert=
+
+"\"hello\"" "\"hello\"" "escaped quotes at start and end" assert=
+
+"\"" "\"" "string with only an escaped quote" assert=
+
+"\\\"" "\\\"" "escaped backslash before quote" assert=
+
+"tab\there\n" "tab\there\n" "mixed escape sequences" assert=

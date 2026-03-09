@@ -1,0 +1,12 @@
+PASS: string with escaped quotes
+Stack: [ ]
+PASS: multiple escaped quotes
+Stack: [ ]
+PASS: escaped quotes at start and end
+Stack: [ ]
+PASS: string with only an escaped quote
+Stack: [ ]
+PASS: escaped backslash before quote
+Stack: [ ]
+PASS: mixed escape sequences
+Stack: [ ]

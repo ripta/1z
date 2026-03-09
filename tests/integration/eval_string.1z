@@ -19,3 +19,12 @@ bar baz + 30 "eval-string: multi-line definitions" assert=
 \ Parse-time words work inside eval-string
 "point: struct{ x y } ;" eval-string
 1 2 make-point point? "eval-string: parse-time struct" assert-true
+
+\ String literals inside eval-string
+"msg: [ \"hello\" ] ;" eval-string
+msg "hello" "eval-string: word returning string literal" assert=
+
+"\"hello world\" \"hello world\" =" eval-string
+"eval-string: string comparison" assert-true
+
+"use \"testing\" shadow-ok ;" eval-string

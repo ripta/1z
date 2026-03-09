@@ -67,7 +67,7 @@ positive-duration: virtual{ duration } ;
 \ Struct-backed inner type validation
 inner-a: struct{ x } ;
 inner-b: struct{ y } ;
-vt-a: virtual{ inner-a } ;
+vt-a:    virtual{ inner-a } ;
 [ 1 make-inner-b >vt-a ] "wrong struct type rejected" assert-error
 1 make-inner-a >vt-a vt-a? t "correct struct type wraps" assert=
 
