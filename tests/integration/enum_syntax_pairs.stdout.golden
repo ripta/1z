@@ -16,6 +16,14 @@ Stack: [ ]
 PASS: data variant unwrap y
 PASS: data variant unwrap x
 Stack: [ ]
+PASS: destructor unwrap y
+PASS: destructor unwrap x
+Stack: [ ]
+PASS: positional >wrap multi-field
+Stack: [ ]
+PASS: positional >wrap then destruct y
+PASS: positional >wrap then destruct x
+Stack: [ ]
 PASS: flat variant in mixed enum
 Stack: [ ]
 PASS: data variant aggregate predicate
@@ -29,6 +37,8 @@ Stack: [ ]
 PASS: data variant ok predicate
 Stack: [ ]
 PASS: unwrap ok val
+Stack: [ ]
+PASS: destructor ok val
 Stack: [ ]
 PASS: flat variant pending predicate
 Stack: [ ]

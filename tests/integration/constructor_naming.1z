@@ -88,12 +88,10 @@ drop
 5 make-shape:circle >hash radius: @get 5 ">hash dispatch on circle" assert=
 3 4 make-shape:rect >hash w: @get 3 ">hash dispatch on rect w" assert=
 
-\ >NAME still works for single-field variants (positional)
-5 >shape:circle shape:circle? t ">shape:circle still works" assert=
-
-\ >NAME is hash-based for multi-field variants
-H{ w: 3 h: 4 } >shape:rect shape:rect? t ">shape:rect accepts hash" assert=
-H{ w: 3 h: 4 } >shape:rect unmake-shape:rect 4 ">shape:rect hash wrap h field" assert=
+\ >NAME is always positional
+5 >shape:circle shape:circle? t ">shape:circle works" assert=
+3 4 >shape:rect shape:rect? t ">shape:rect works positionally" assert=
+3 4 >shape:rect unmake-shape:rect 4 ">shape:rect positional h field" assert=
 drop
 
 ">hash works across different types" test-section

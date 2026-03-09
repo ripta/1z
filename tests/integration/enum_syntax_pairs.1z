@@ -17,6 +17,9 @@ wrapper: enum{ value: point-data empty: unit } ;
 
 1 2 make-wrapper:value wrapper:value? t "data variant predicate" assert=
 1 2 make-wrapper:value unmake-wrapper:value 2 "data variant unwrap y" assert= 1 "data variant unwrap x" assert=
+1 2 make-wrapper:value wrapper:value> 2 "destructor unwrap y" assert= 1 "destructor unwrap x" assert=
+1 2 >wrapper:value wrapper:value? t "positional >wrap multi-field" assert=
+1 2 >wrapper:value wrapper:value> 2 "positional >wrap then destruct y" assert= 1 "positional >wrap then destruct x" assert=
 wrapper:empty wrapper:empty? t "flat variant in mixed enum" assert=
 1 2 make-wrapper:value wrapper? t "data variant aggregate predicate" assert=
 wrapper:empty wrapper? t "flat variant aggregate predicate" assert=
@@ -28,6 +31,7 @@ status: enum{ ok: payload pending: unit failed: unit } ;
 
 42 >status:ok status:ok? t "data variant ok predicate" assert=
 42 >status:ok unmake-status:ok 42 "unwrap ok val" assert=
+42 >status:ok status:ok> 42 "destructor ok val" assert=
 status:pending status:pending? t "flat variant pending predicate" assert=
 status:failed status? t "flat variant aggregate predicate" assert=
 

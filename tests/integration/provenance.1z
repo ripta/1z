@@ -180,6 +180,7 @@ dup "make-gw-shape:circle" #in? t "data enum generated-words includes make-" ass
 dup "unmake-gw-shape:circle" #in? t "data enum generated-words includes unmake-" assert=
 dup "gw-shape:circle>hash" #in? t "data enum generated-words includes >hash" assert=
 dup "gw-shape:circle?" #in? t "data enum generated-words includes variant pred" assert=
+dup "gw-shape:circle>" #in? t "data enum generated-words includes destructor" assert=
 dup "gw-shape:dot" #in? t "data enum generated-words includes flat variant" assert=
 "gw-shape?" #in? t "data enum generated-words includes aggregate pred" assert=
 

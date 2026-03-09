@@ -102,15 +102,12 @@ match{: parse-time [
 option-payload: struct{ value } ;
 \\ Optional value: either `some` wrapping a value, or `none`.
 option: enum{ some: option-payload none: unit } ;
-option:some>: ( option -- value ) [ unmake-option:some ] ;
 \\ Backing struct for result:ok.
 result-value: struct{ value } ;
 \\ Backing struct for result:err.
 result-error: struct{ error } ;
 \\ Fallible result: either `ok` wrapping a value, or `err` wrapping an error.
 result: enum{ ok: result-value err: result-error } ;
-result:ok>: ( result -- value ) [ unmake-result:ok ] ;
-result:err>: ( result -- error ) [ unmake-result:err ] ;
 
 \\ Three-way comparison result: less-than, equal, or greater-than.
 ordering: enum{ lt: unit eq: unit gt: unit } ;

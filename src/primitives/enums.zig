@@ -207,17 +207,16 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             try vtype_list.append(alloc, vtype);
 
             const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
-            if (struct_type.fields.len > 1) {
-                try virtual.defineStructHashWrap(ctx, wrap_name, vtype, markers_slice);
-            } else {
-                try virtual.defineStructWrap(ctx, wrap_name, vtype, markers_slice);
-            }
+            try virtual.defineStructWrap(ctx, wrap_name, vtype, markers_slice);
 
             const make_name_word = try std.fmt.allocPrint(alloc, "make-{s}", .{full_name});
             try virtual.defineStructWrap(ctx, make_name_word, vtype, markers_slice);
 
             const unmake_name = try std.fmt.allocPrint(alloc, "unmake-{s}", .{full_name});
             try virtual.defineStructUnwrap(ctx, unmake_name, vtype, markers_slice);
+
+            const destruct_name = try std.fmt.allocPrint(alloc, "{s}>", .{full_name});
+            try virtual.defineStructUnwrap(ctx, destruct_name, vtype, markers_slice);
 
             const to_hash_name = try std.fmt.allocPrint(alloc, "{s}>hash", .{full_name});
             try virtual.defineVirtualToHash(ctx, to_hash_name, vtype, markers_slice);
@@ -233,6 +232,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             try generated_words.append(alloc, .{ .string = wrap_name });
             try generated_words.append(alloc, .{ .string = make_name_word });
             try generated_words.append(alloc, .{ .string = unmake_name });
+            try generated_words.append(alloc, .{ .string = destruct_name });
             try generated_words.append(alloc, .{ .string = to_hash_name });
             try generated_words.append(alloc, .{ .string = pred_name });
         }

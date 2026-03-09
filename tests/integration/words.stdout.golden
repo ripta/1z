@@ -424,7 +424,7 @@ option-payload>hash
 option-payload?
 option:none
 option:none?
-option:some> ( option -- value )
+option:some>
 option:some>hash
 option:some?
 option?
@@ -465,10 +465,10 @@ result-error?
 result-value
 result-value>hash
 result-value?
-result:err> ( result -- error )
+result:err>
 result:err>hash
 result:err?
-result:ok> ( result -- value )
+result:ok>
 result:ok>hash
 result:ok?
 result?

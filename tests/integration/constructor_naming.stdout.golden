@@ -78,11 +78,11 @@ PASS: >hash dispatch on circle
 Stack: [ ]
 PASS: >hash dispatch on rect w
 Stack: [ ]
-PASS: >shape:circle still works
+PASS: >shape:circle works
 Stack: [ ]
-PASS: >shape:rect accepts hash
+PASS: >shape:rect works positionally
 Stack: [ ]
-PASS: >shape:rect hash wrap h field
+PASS: >shape:rect positional h field
 Stack: [ 3 ]
 Stack: [ ]
 === >hash works across different types ===
