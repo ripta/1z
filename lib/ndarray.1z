@@ -1,5 +1,7 @@
 \ lib/ndarray.1z - N-dimensional arrays
 
+use "ratio" ;
+
 ndarray: virtual{ struct{ data shape strides element-type } } ;
 
 shape-product: ( shape -- n ) [ 1 [ * ] #reduce ] ;

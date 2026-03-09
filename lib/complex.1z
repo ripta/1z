@@ -1,5 +1,7 @@
 \ lib/complex.1z - Complex numbers
 
+use "ratio" ;
+
 complex: H{ numeric: t } virtual{ struct{ real imag } } ;
 
 \\ Extract the real component of a complex number.
