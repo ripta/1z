@@ -8,11 +8,14 @@ const WordProvenance = dictionary_mod.WordProvenance;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const HashTable = value_mod.HashTable;
+const Module = value_mod.Module;
+const ModuleWord = value_mod.ModuleWord;
 
 const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
 const RegistryEntry = types_mod.RegistryEntry;
 
+const markers_mod = @import("markers.zig");
 const helpers = @import("helpers.zig");
 
 pub const primitives = [_]Primitive{};
@@ -20,6 +23,7 @@ pub const primitives = [_]Primitive{};
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = ">word", .func = nativeToWord },
     .{ .name = "all-words", .func = nativeAllWords },
+    .{ .name = "current-scope", .func = nativeCurrentScope },
     .{ .name = "defined?", .func = nativeDefined },
     .{ .name = "locally-defined?", .func = nativeLocallyDefined },
     .{ .name = "scope-frames", .func = nativeScopeFrames },
@@ -129,7 +133,109 @@ fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: 
     return .{ .array = wi_fields };
 }
 
-/// >word ( symbol -- array ) - Look up a word by symbol name and return a raw 9-element array
+fn moduleWordToWordDef(name: []const u8, mw: ModuleWord) WordDefinition {
+    return .{
+        .name = name,
+        .stack_effect = mw.stack_effect,
+        .markers = mw.markers,
+        .source_module = mw.source_module,
+        .doc = mw.doc,
+        .source_file = mw.source_file,
+        .source_line = mw.source_line,
+        .source_column = mw.source_column,
+        .provenance = mw.provenance,
+        .action = switch (mw.action) {
+            .compound => |instrs| .{ .compound = instrs },
+            .native => |f| .{ .native = f },
+        },
+    };
+}
+
+fn wordDefToModuleWord(def: WordDefinition) ModuleWord {
+    return .{
+        .stack_effect = def.stack_effect,
+        .markers = def.markers,
+        .source_module = def.source_module,
+        .doc = def.doc,
+        .source_file = def.source_file,
+        .source_line = def.source_line,
+        .source_column = def.source_column,
+        .provenance = def.provenance,
+        .action = switch (def.action) {
+            .compound => |instrs| .{ .compound = instrs },
+            .native => |f| .{ .native = f },
+        },
+    };
+}
+
+/// current-scope ( -- module ) - Snapshot all user-visible words into a Module value.
+fn nativeCurrentScope(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const module = try alloc.create(Module);
+    module.* = .{
+        .name = "<scope>",
+        .words = .{},
+        .importable = false,
+    };
+
+    var seen: std.StringHashMapUnmanaged(void) = .{};
+
+    const frame_cap = if (ctx.import_frame_index) |idx| idx + 1 else 0;
+    var i = frame_cap;
+    while (i > 0) {
+        i -= 1;
+        var iter = ctx.local_frames.items[i].iterator();
+        while (iter.next()) |entry| {
+            const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
+            if (!gop.found_existing) {
+                try module.words.put(alloc, entry.key_ptr.*, wordDefToModuleWord(entry.value_ptr.*));
+            }
+        }
+    }
+
+    {
+        var iter = ctx.dictionary.entries.iterator();
+        while (iter.next()) |entry| {
+            const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
+            if (!gop.found_existing) {
+                try module.words.put(alloc, entry.key_ptr.*, wordDefToModuleWord(entry.value_ptr.*));
+            }
+        }
+    }
+
+    var ancestor = ctx.parent_context;
+    while (ancestor) |anc| {
+        const anc_cap = if (anc.import_frame_index) |idx| idx + 1 else 0;
+        var j = anc_cap;
+        while (j > 0) {
+            j -= 1;
+            var iter = anc.local_frames.items[j].iterator();
+            while (iter.next()) |entry| {
+                const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
+                if (!gop.found_existing) {
+                    try module.words.put(alloc, entry.key_ptr.*, wordDefToModuleWord(entry.value_ptr.*));
+                }
+            }
+        }
+
+        {
+            var iter = anc.dictionary.entries.iterator();
+            while (iter.next()) |entry| {
+                const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
+                if (!gop.found_existing) {
+                    try module.words.put(alloc, entry.key_ptr.*, wordDefToModuleWord(entry.value_ptr.*));
+                }
+            }
+        }
+
+        ancestor = anc.parent_context;
+    }
+
+    try ctx.stack.push(.{ .module = module });
+}
+
+/// >word ( module symbol -- array ) - Look up a word in a module and return a raw 10-element array
 fn nativeToWord(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -143,11 +249,21 @@ fn nativeToWord(ctx: *Context) anyerror!void {
         },
     };
 
-    const word = ctx.lookupUserVisibleWord(name) orelse {
+    const mod_val = try ctx.stack.pop();
+    const module = switch (mod_val) {
+        .module => |m| m,
+        else => {
+            helpers.setTypeMismatchError(ctx, "module", mod_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const mod_word = module.words.get(name) orelse {
         helpers.setErrorContext(ctx, "word not found: {s}", .{name});
         return error.NameError;
     };
 
+    const word = moduleWordToWordDef(name, mod_word);
     try ctx.stack.push(try buildWordInfo(alloc, ctx, name, word));
 }
 
@@ -197,7 +313,7 @@ fn nativeLocallyDefined(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .boolean = found });
 }
 
-/// defined? ( name -- bool ) - Check if a word is visible in any scope.
+/// defined? ( module name -- bool ) - Check if a word exists in a module.
 fn nativeDefined(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const name = switch (val) {
@@ -209,10 +325,19 @@ fn nativeDefined(ctx: *Context) anyerror!void {
         },
     };
 
-    try ctx.stack.push(.{ .boolean = ctx.lookupWord(name) != null });
+    const mod_val = try ctx.stack.pop();
+    const module = switch (mod_val) {
+        .module => |m| m,
+        else => {
+            helpers.setTypeMismatchError(ctx, "module", mod_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    try ctx.stack.push(.{ .boolean = module.words.get(name) != null });
 }
 
-/// word-source ( name -- module/f ) - Return the source module for a word, or f.
+/// word-source ( module name -- module/f ) - Return the source module for a word, or f.
 fn nativeWordSource(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const name = switch (val) {
@@ -224,7 +349,16 @@ fn nativeWordSource(ctx: *Context) anyerror!void {
         },
     };
 
-    if (ctx.lookupWord(name)) |word| {
+    const mod_val = try ctx.stack.pop();
+    const module = switch (mod_val) {
+        .module => |m| m,
+        else => {
+            helpers.setTypeMismatchError(ctx, "module", mod_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    if (module.words.get(name)) |word| {
         if (word.source_module) |mod| {
             try ctx.stack.push(.{ .module = @constCast(mod) });
             return;

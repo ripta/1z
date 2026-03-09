@@ -1,0 +1,19 @@
+\ Test that generic words from different modules merge on import
+\ instead of triggering an import conflict.
+
+use "testing" ;
+
+"generic merge across modules" test-section
+
+\ Both net and http define struct types with a `path` field,
+\ generating `path>>` as a generic word in each module.
+\ Importing both must succeed without shadow errors.
+use "net" ;
+use "http" ;
+
+\ Verify both getters dispatch correctly
+"/sock" make-unix-addr
+path>> "/sock" "unix-addr path>> dispatches" assert=
+
+"GET" "/index" "HTTP/1.1" H{ } make-request
+path>> "/index" "request path>> dispatches" assert=

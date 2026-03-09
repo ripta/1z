@@ -146,7 +146,6 @@ make-set ( quotation -- set )
 make-vector ( quotation -- vector )
 multiplexer-stats ( -- hash )
 mutable ( -- marker )
-native? ( name -- ? )
 over ( a b -- a b a )
 parse-literal ( -- value )
 parse-time ( -- marker )
@@ -214,7 +213,6 @@ validate-match-block ( array -- array )
 wipe ( ... -- )
 with-parameter ( value param quot -- )
 with-timeout ( quot duration -- value )
-word-markers ( name -- markers )
 yield ( -- )
 
 === User-Defined Words ===
@@ -303,7 +301,7 @@ all-words ( -- array )
 and ( ? ? -- ? )
 array
 array? ( val -- ? )
-assert-no-shadow ( names -- )
+assert-no-shadow ( module names -- )
 benchmark-report? ( val -- ? )
 bi ( ..a x p q -- ..b ..c )
 bignum
@@ -326,6 +324,7 @@ column>>
 comparable
 cond ( branches -- ... )
 define-parameter
+defined? ( name -- bool )
 dispatch-provenance
 dispatch-provenance>hash
 dispatch-provenance?
@@ -410,6 +409,7 @@ name>>
 nan ( -- f )
 nan? ( x -- ? )
 native
+native? ( name -- ? )
 native?>>
 negative? ( x -- ? )
 nip ( a b -- b )
@@ -538,6 +538,7 @@ with-output-stream ( stream quot -- )
 word-info
 word-info>hash
 word-info?
+word-markers ( name -- markers )
 word-source ( symbol -- option )
 words ( -- )
 words-matching ( str -- array )

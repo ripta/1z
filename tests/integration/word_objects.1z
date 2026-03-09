@@ -3,7 +3,7 @@
 use "testing" ;
 
 "native.>word returns raw array for native word" test-section
-dup: native.>word
+native.current-scope dup: native.>word
 dup array? t "native.>word returns an array" assert=
 dup #len 10 "native.>word array has 10 elements" assert=
 dup 0 #nth "dup" "native.>word raw array name" assert=
@@ -15,7 +15,7 @@ dup 4 #nth t "native.>word raw array native? is t" assert=
 
 "native.>word returns raw array for compound word" test-section
 my-test-word: ( x -- y ) [ 1 + ] ;
-my-test-word: native.>word
+native.current-scope my-test-word: native.>word
 dup array? t "native.>word returns array for compound word" assert=
 dup 0 #nth "my-test-word" "native.>word raw array name for compound word" assert=
 dup 4 #nth f "native.>word raw array native? is f for compound word" assert=
@@ -45,10 +45,10 @@ line>> 0 > t ">word-info source-loc line is positive" assert=
 markers>> #len 0 >= t ">word-info markers is an array" assert=
 
 "native.>word on nonexistent word throws" test-section
-[ nonexistent-xyz: native.>word ] "NameError" assert-error
+[ native.current-scope nonexistent-xyz: native.>word ] "NameError" assert-error
 
 "native.>word from string" test-section
-"dup" native.>word 0 #nth "dup" "native.>word accepts string input" assert=
+native.current-scope "dup" native.>word 0 #nth "dup" "native.>word accepts string input" assert=
 
 ">word? returns some for known word" test-section
 dup: >word? option:some? t ">word? returns some for known word" assert=
@@ -97,13 +97,13 @@ my-test-word: >word-info stack-effect>> >string "( x -- y )" "stack-effect >stri
 >word?: >word-info stack-effect>> f = f "prelude >word? has non-null stack-effect" assert=
 
 "native.>word raw array for >word-info has stack effect" test-section
->word-info: native.>word 1 #nth f = f "native.>word raw se for >word-info is not f" assert=
+native.current-scope >word-info: native.>word 1 #nth f = f "native.>word raw se for >word-info is not f" assert=
 
 "native.>word raw array for all-words has stack effect" test-section
-all-words: native.>word 1 #nth f = f "native.>word raw se for all-words is not f" assert=
+native.current-scope all-words: native.>word 1 #nth f = f "native.>word raw se for all-words is not f" assert=
 
 "native.>word raw array for >word? has stack effect" test-section
->word?: native.>word 1 #nth f = f "native.>word raw se for >word? is not f" assert=
+native.current-scope >word?: native.>word 1 #nth f = f "native.>word raw se for >word? is not f" assert=
 
 "stack-effect >string with no inputs" test-section
 all-words: >word-info stack-effect>> >string "( -- array )" "stack-effect >string for all-words" assert=

@@ -5,7 +5,9 @@ const Marker = value_mod.Marker;
 const Value = value_mod.Value;
 
 const helpers = @import("helpers.zig");
-const Primitive = @import("types.zig").Primitive;
+const types_mod = @import("types.zig");
+const Primitive = types_mod.Primitive;
+const RegistryEntry = types_mod.RegistryEntry;
 
 /// Well-known marker for parse-time word definitions.
 /// This is a compile-time constant with identity semantics.
@@ -59,8 +61,11 @@ pub const primitives = [_]Primitive{
     .{ .name = "shadow-ok", .stack_effect = "-- marker", .doc = "Push the well-known shadow-ok marker. Suppresses the import conflict check on `use`.", .func = nativeShadowOkMarker, .parse_time = true },
     .{ .name = "typed", .stack_effect = "-- marker", .doc = "Push the well-known typed marker.", .func = nativeTypedMarker, .parse_time = true },
     .{ .name = "any", .stack_effect = "-- marker", .doc = "Push the well-known any marker for method dispatch wildcards.", .func = nativeAnyMarker, .parse_time = true, .markers = &.{@constCast(&const_marker)} },
-    .{ .name = "word-markers", .stack_effect = "name -- markers", .doc = "Get the markers attached to a word definition.", .func = nativeWordMarkers },
-    .{ .name = "native?", .stack_effect = "name -- ?", .doc = "Check if a word is implemented as a native primitive.", .func = nativeIsNative },
+};
+
+pub const registry_entries = [_]RegistryEntry{
+    .{ .name = "word-markers", .func = nativeWordMarkers },
+    .{ .name = "native?", .func = nativeIsNative },
 };
 
 /// marker ( -- marker ) - Create an anonymous marker value
@@ -166,7 +171,7 @@ pub fn isAnyMarker(mk: *const Marker) bool {
     return mk == &any_marker;
 }
 
-/// word-markers ( name -- markers ) - Get the markers attached to a word definition
+/// word-markers ( module name -- markers ) - Get the markers attached to a word in a module
 ///
 /// Returns an array of marker values. Returns empty array if word has no markers.
 /// Raises WordNotFound if the word doesn't exist.
@@ -190,7 +195,16 @@ fn nativeWordMarkers(ctx: *Context) anyerror!void {
         },
     };
 
-    const word_def = ctx.lookupWord(name) orelse {
+    const mod_val = try ctx.stack.pop();
+    const module = switch (mod_val) {
+        .module => |m| m,
+        else => {
+            helpers.setTypeMismatchError(ctx, "module", mod_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const mod_word = module.words.get(name) orelse {
         const msg = std.fmt.allocPrint(alloc, "word '{s}'", .{name}) catch "word '<unknown>'";
         ctx.error_details.append(ctx.allocator, .{
             .error_type = "word-not-found",
@@ -202,16 +216,16 @@ fn nativeWordMarkers(ctx: *Context) anyerror!void {
         return error.WordNotFound;
     };
 
-    const markers = word_def.markers;
-    const result = try alloc.alloc(Value, markers.len);
-    for (markers, 0..) |mk, i| {
+    const word_markers = mod_word.markers;
+    const result = try alloc.alloc(Value, word_markers.len);
+    for (word_markers, 0..) |mk, i| {
         result[i] = .{ .marker = @constCast(mk) };
     }
 
     try ctx.stack.push(.{ .array = result });
 }
 
-/// native? ( name -- ? ) - Check if a word is implemented as a native primitive
+/// native? ( module name -- ? ) - Check if a word in a module is a native primitive
 ///
 /// Returns true if the word exists and is a native implementation, false if
 /// it exists but is a compound (user-defined) word.
@@ -236,7 +250,16 @@ fn nativeIsNative(ctx: *Context) anyerror!void {
         },
     };
 
-    const word_def = ctx.lookupWord(name) orelse {
+    const mod_val = try ctx.stack.pop();
+    const module = switch (mod_val) {
+        .module => |m| m,
+        else => {
+            helpers.setTypeMismatchError(ctx, "module", mod_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const mod_word = module.words.get(name) orelse {
         const msg = std.fmt.allocPrint(alloc, "word '{s}'", .{name}) catch "word '<unknown>'";
         ctx.error_details.append(ctx.allocator, .{
             .error_type = "word-not-found",
@@ -248,7 +271,7 @@ fn nativeIsNative(ctx: *Context) anyerror!void {
         return error.WordNotFound;
     };
 
-    const is_native = switch (word_def.action) {
+    const is_native = switch (mod_word.action) {
         .native => true,
         .compound => false,
     };

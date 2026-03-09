@@ -39,7 +39,7 @@ multi-marker-word: mk1 mk2 mk3 [ 20 ] ;
 
 "dup" native? t "dup is native" assert=
 "+" native? t "+ is native" assert=
-"word-markers" native? t "word-markers is native" assert=
+"word-markers" native? f "word-markers is a prelude wrapper" assert=
 "plain" native? f "user-defined word is not native" assert=
 "single-marker-word" native? f "marked user-defined word is not native" assert=
 [ "nonexistent" native? ] word-not-found: "native? on missing word" assert-error-type

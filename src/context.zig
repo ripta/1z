@@ -595,6 +595,17 @@ pub const Context = struct {
                     return;
                 }
             }
+
+            const existing_generic = for (existing.markers) |mk| {
+                if (markers_mod.isGenericMarker(mk)) break true;
+            } else false;
+            const incoming_generic = for (definition.markers) |mk| {
+                if (markers_mod.isGenericMarker(mk)) break true;
+            } else false;
+            if (existing_generic and incoming_generic) {
+                return;
+            }
+
             for (existing.markers) |mk| {
                 if (markers_mod.isConstMarker(mk)) {
                     self.pending_error_message = "cannot redefine const word";

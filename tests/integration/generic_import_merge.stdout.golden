@@ -1,0 +1,8 @@
+=== generic merge across modules ===
+Stack: [ ]
+Stack: [ unix-addr{ path: "/sock" } ]
+PASS: unix-addr path>> dispatches
+Stack: [ ]
+Stack: [ request{ method: "GET" path: "/index" version: "HTTP/1.1" headers: H{ } } ]
+PASS: request path>> dispatches
+Stack: [ ]

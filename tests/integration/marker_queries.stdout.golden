@@ -37,7 +37,7 @@ PASS: dup is native
 Stack: [ ]
 PASS: + is native
 Stack: [ ]
-PASS: word-markers is native
+PASS: word-markers is a prelude wrapper
 Stack: [ ]
 PASS: user-defined word is not native
 Stack: [ ]

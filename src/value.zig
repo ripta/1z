@@ -3,7 +3,9 @@ const StackEffect = @import("stack_effect.zig").StackEffect;
 const BenchmarkReport = @import("benchmark.zig").BenchmarkReport;
 const Task = @import("task.zig").Task;
 const Iterator = @import("iterator.zig").Iterator;
-const NativeFn = @import("dictionary.zig").NativeFn;
+const dictionary_mod = @import("dictionary.zig");
+const NativeFn = dictionary_mod.NativeFn;
+const WordProvenance = dictionary_mod.WordProvenance;
 const FfiSignature = @import("ffi/signature.zig").FfiSignature;
 
 pub const BigIntManaged = std.math.big.int.Managed;
@@ -217,6 +219,11 @@ pub const ModuleWord = struct {
     stack_effect: ?StackEffect = null,
     markers: []const *Marker = &.{},
     source_module: ?*const Module = null,
+    doc: ?[]const u8 = null,
+    source_file: ?[]const u8 = null,
+    source_line: usize = 0,
+    source_column: usize = 0,
+    provenance: ?WordProvenance = null,
     action: union(enum) {
         compound: []const Instruction,
         native: NativeFn,

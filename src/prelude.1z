@@ -258,6 +258,12 @@ nan?: ( x -- ? ) [ dup float? [ dup = not ] [ drop f ] if ] ;
 infinite?: ( x -- ? ) [ dup inf = swap -inf = or ] ;
 \\ True if x is a finite float: not NaN and not infinite.
 finite?: ( x -- ? ) [ dup float? [ dup nan? not swap infinite? not and ] [ drop f ] if ] ;
+\\ Get the markers attached to a word definition.
+word-markers: ( name -- markers ) [ native.current-scope swap native.word-markers ] ;
+\\ Check if a word is visible in any scope.
+defined?: ( name -- bool ) [ native.current-scope swap native.defined? ] ;
+\\ Check if a word is implemented as a native primitive.
+native?: ( name -- ? ) [ native.current-scope swap native.native? ] ;
 \\ Test whether a named word has the `generic` marker.
 generic?: ( name -- ? ) [ word-markers [ generic = ] #any ] ;
 
@@ -427,17 +433,28 @@ EImportConflict: [ import-conflict: ] ;
 
 \\ Check that none of the given names shadow words in the current import frame.
 \\ Throws an `import-conflict` error if any name is already locally defined.
-\\ Generic words are exempt: multiple modules may contribute dispatch methods.
-assert-no-shadow: ( names -- ) [
+\\ Generic words are exempt when both sides are generic: multiple modules may
+\\ contribute dispatch methods for the same word.
+assert-no-shadow: ( module names -- ) [
   { } swap
-  [ dup native.locally-defined? [ dup generic? [ drop ] [ 1array #append ] if ] [ drop ] if ] #each
+  [
+    dup native.locally-defined?
+    [
+      dup generic?
+      [ 2 pick-n over native.word-markers [ generic = ] #any [ drop ] [ 1array #append ] if ]
+      [ 1array #append ]
+      if
+    ]
+    [ drop ]
+    if
+  ] #each
   dup #empty?
-  [ drop ]
+  [ drop drop ]
   [
     "" swap
     [
       >string
-      dup native.word-source dup
+      dup native.current-scope swap native.word-source dup
       [ inspect swap " (from " #append swap #append ")" #append ]
       [ drop ]
       if
@@ -473,13 +490,13 @@ use: parse-time [
   [
     load
     ";" parse-values-until (validate-use-tail) not
-    [ dup @keys assert-no-shadow ] when
+    [ dup dup @keys assert-no-shadow ] when
     import
   ]
   [
     parse-literal load swap
     ";" parse-values-until (validate-use-tail) not
-    [ dup assert-no-shadow ] when
+    [ over over assert-no-shadow ] when
     import
   ]
   if
@@ -713,7 +730,7 @@ word-info: struct{ name stack-effect doc markers native? body methods source-loc
 ] ;
 
 \\ Look up a word by symbol and return a word-info struct.
->word-info: ( symbol -- word-info ) [ native.>word (raw>word-info) ] ;
+>word-info: ( symbol -- word-info ) [ native.current-scope swap native.>word (raw>word-info) ] ;
 
 \\ Return an array of word-info structs for every word in the dictionary.
 all-words: ( -- array ) [ native.all-words [ (raw>word-info) ] #map #collect ] ;

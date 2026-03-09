@@ -4,7 +4,7 @@ use "strings" ;
 use "conversions" ;
 
 host-port: struct{ host port } ;
-unix-addr: struct{ socket-path } ;
+unix-addr: struct{ path } ;
 addr: enum{
   tcp:  host-port
   udp:  host-port
