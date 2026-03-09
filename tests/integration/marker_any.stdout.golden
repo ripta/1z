@@ -1,0 +1,18 @@
+=== any pushes a marker ===
+Stack: [ ]
+PASS: any is a marker
+Stack: [ ]
+PASS: type-of any is marker:
+Stack: [ ]
+PASS: any marker inspect
+Stack: [ ]
+=== any has identity semantics ===
+Stack: [ ]
+PASS: any equals itself
+Stack: [ ]
+PASS: any does not equal anonymous marker
+Stack: [ ]
+=== any cannot be redefined ===
+Stack: [ ]
+PASS: CannotRedefineConst
+Stack: [ ]

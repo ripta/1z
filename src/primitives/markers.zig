@@ -45,6 +45,9 @@ pub const shadow_ok_marker: Marker = .{ .name = "shadow-ok" };
 /// Called "typed" rather than "type" to avoid conflicting with the `type` built-in type value word.
 pub const typed_marker: Marker = .{ .name = "typed" };
 
+/// Dispatch wildcard for `method{`, not a type -- no value has type `any`.
+pub const any_marker: Marker = .{ .name = "any" };
+
 pub const primitives = [_]Primitive{
     .{ .name = "define-marker", .stack_effect = "-- marker", .doc = "Create an anonymous marker value.", .func = nativeMarker },
     .{ .name = "parse-time", .stack_effect = "-- marker", .doc = "Push the well-known parse-time marker.", .func = nativeParseTimeMarker, .parse_time = true },
@@ -55,6 +58,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "loop-combinator", .stack_effect = "-- marker", .doc = "Push the well-known loop-combinator marker.", .func = nativeLoopCombinatorMarker, .parse_time = true },
     .{ .name = "shadow-ok", .stack_effect = "-- marker", .doc = "Push the well-known shadow-ok marker. Suppresses the import conflict check on `use`.", .func = nativeShadowOkMarker, .parse_time = true },
     .{ .name = "typed", .stack_effect = "-- marker", .doc = "Push the well-known typed marker.", .func = nativeTypedMarker, .parse_time = true },
+    .{ .name = "any", .stack_effect = "-- marker", .doc = "Push the well-known any marker for method dispatch wildcards.", .func = nativeAnyMarker, .parse_time = true, .markers = &.{@constCast(&const_marker)} },
     .{ .name = "word-markers", .stack_effect = "name -- markers", .doc = "Get the markers attached to a word definition.", .func = nativeWordMarkers },
     .{ .name = "native?", .stack_effect = "name -- ?", .doc = "Check if a word is implemented as a native primitive.", .func = nativeIsNative },
 };
@@ -112,6 +116,11 @@ pub fn nativeTypedMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&typed_marker) });
 }
 
+/// any ( -- marker ) - Push the well-known any marker
+pub fn nativeAnyMarker(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .marker = @constCast(&any_marker) });
+}
+
 /// Check if a marker is the well-known mutable marker
 pub fn isMutableMarker(mk: *const Marker) bool {
     return mk == &mutable_marker;
@@ -150,6 +159,11 @@ pub fn isShadowOkMarker(mk: *const Marker) bool {
 /// Check if a marker is the well-known typed marker
 pub fn isTypedMarker(mk: *const Marker) bool {
     return mk == &typed_marker;
+}
+
+/// Check if a marker is the well-known any marker
+pub fn isAnyMarker(mk: *const Marker) bool {
+    return mk == &any_marker;
 }
 
 /// word-markers ( name -- markers ) - Get the markers attached to a word definition

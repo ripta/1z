@@ -79,6 +79,7 @@ Stack: [ ]
 @values ( assoc -- array )
 abs ( n -- n )
 add-load-path ( path -- )
+any ( -- marker )
 await ( task -- value )
 await-all ( array -- array )
 benchmark ( quot -- hash )

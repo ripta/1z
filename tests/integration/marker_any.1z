@@ -1,0 +1,19 @@
+\ Test the well-known `any` marker
+
+use "testing" ;
+
+"any pushes a marker" test-section
+
+any marker? t "any is a marker" assert=
+any type-of marker "type-of any is marker:" assert=
+any inspect "<marker:any>" "any marker inspect" assert=
+
+"any has identity semantics" test-section
+
+any any = t "any equals itself" assert=
+any define-marker = f "any does not equal anonymous marker" assert=
+
+"any cannot be redefined" test-section
+
+[ any: [ 42 ] ;
+] "CannotRedefineConst" assert-error
