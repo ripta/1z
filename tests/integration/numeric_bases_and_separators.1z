@@ -1,0 +1,70 @@
+\ Test numeric bases (octal, binary) and underscore digit separators
+
+use "testing" ;
+
+"octal literals" test-section
+
+0o777 511 "0o777 = 511" assert=
+0o644 420 "0o644 = 420" assert=
+-0o10 -8 "-0o10 = -8" assert=
+0O777 511 "0O777 = 511" assert=
+
+"binary literals" test-section
+
+0b11111111 255 "0b11111111 = 255" assert=
+0b0101_0001 81 "0b0101_0001 = 81" assert=
+-0b1010 -10 "-0b1010 = -10" assert=
+0B101 5 "0B101 = 5" assert=
+
+"decimal underscore separators" test-section
+
+1_000_000 1000000 "1_000_000 = 1000000" assert=
+-1_000 -1000 "-1_000 = -1000" assert=
+
+"hex underscore separators" test-section
+
+0xFF_FF 65535 "0xFF_FF = 65535" assert=
+0x_FF 255 "0x_FF = 255" assert=
+
+"octal underscore separators" test-section
+
+0o7_777 4095 "0o7_777 = 4095" assert=
+0o_777 511 "0o_777 = 511" assert=
+
+"binary underscore separators" test-section
+
+0b1111_0000 240 "0b1111_0000 = 240" assert=
+0b_0101 5 "0b_0101 = 5" assert=
+
+"float underscore separators" test-section
+
+1_000.000_5 1000.0005 "1_000.000_5 = 1000.0005" assert=
+-1_000.5 -1000.5 "-1_000.5 = -1000.5" assert=
+
+"resolve-literal with bases and separators" test-section
+
+"0o777" resolve-literal
+"resolve-literal recognizes octal" assert-true
+511 "resolve-literal returns octal value" assert=
+
+"0b1010" resolve-literal
+"resolve-literal recognizes binary" assert-true
+10 "resolve-literal returns binary value" assert=
+
+"1_000" resolve-literal
+"resolve-literal recognizes decimal with underscores" assert-true
+1000 "resolve-literal returns value with underscores stripped" assert=
+
+"resolve-literal rejection cases" test-section
+
+"_100" resolve-literal
+"resolve-literal rejects leading underscore" assert-false
+"_100" "resolve-literal returns leading underscore unchanged" assert=
+
+"100_" resolve-literal
+"resolve-literal rejects trailing underscore" assert-false
+"100_" "resolve-literal returns trailing underscore unchanged" assert=
+
+"1__000" resolve-literal
+"resolve-literal rejects consecutive underscores" assert-false
+"1__000" "resolve-literal returns consecutive underscores unchanged" assert=

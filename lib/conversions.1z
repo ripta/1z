@@ -9,17 +9,13 @@ digit?: ( str -- ? ) [
   >codepoint dup 48 >= swap 57 <= and
 ] ;
 
-\ Parse decimal integer from string
-\ "123" -> 123, "-42" -> -42, "0" -> 0
+\ Parse integer from string, supporting all bases and separators
+\ "123" -> 123, "-42" -> -42, "0xFF" -> 255, "0o777" -> 511, "0b101" -> 5
 parse-integer: ( str -- n ) [
-  dup #first "-" =
-  [
-    1 over #len #slice
-    0 swap [ swap 10 * swap char>digit + ] #each
-    -@
+  resolve-literal
+  [ dup type-of dup fixnum = swap bignum = or
+    [ "not an integer" throw ] unless
   ]
-  [
-    0 swap [ swap 10 * swap char>digit + ] #each
-  ]
+  [ "invalid integer" throw ]
   if
 ] ;

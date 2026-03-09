@@ -170,51 +170,136 @@ pub const Tokenizer = struct {
     }
 };
 
-/// Parse an integer from a token. Returns null if not a valid integer.
-/// Supports hex literals with 0x or 0X prefix, including negative hex (-0xFF).
-pub fn parseInteger(token: []const u8) ?i64 {
-    const is_negative = token.len > 0 and token[0] == '-';
-    const after_sign = if (is_negative) token[1..] else token;
-    if (after_sign.len > 2 and after_sign[0] == '0' and (after_sign[1] == 'x' or after_sign[1] == 'X')) {
-        const magnitude = std.fmt.parseInt(i64, after_sign[2..], 16) catch return null;
-        if (is_negative) {
-            if (magnitude == 0) return 0;
-            return std.math.negate(magnitude) catch null;
+/// Validate underscore placement in a numeric token body (after optional sign).
+/// Rejects leading underscore, trailing underscore, and consecutive underscores.
+fn validateUnderscores(body: []const u8) bool {
+    if (body.len == 0) return true;
+    if (body[0] == '_') return false;
+    if (body[body.len - 1] == '_') return false;
+    var prev_underscore = false;
+    for (body) |ch| {
+        if (ch == '_') {
+            if (prev_underscore) return false;
+            prev_underscore = true;
+        } else {
+            prev_underscore = false;
         }
-        return magnitude;
     }
-    return std.fmt.parseInt(i64, token, 10) catch null;
+    return true;
+}
+
+/// Strip underscores from input into a fixed buffer.
+/// Returns the original slice if no underscores are present (zero-cost common path).
+/// Returns null if the input exceeds the buffer or the result would be empty.
+fn stripUnderscores(input: []const u8, buf: *[256]u8) ?[]const u8 {
+    if (std.mem.indexOfScalar(u8, input, '_') == null) return input;
+    var i: usize = 0;
+    for (input) |ch| {
+        if (ch != '_') {
+            if (i >= buf.len) return null;
+            buf[i] = ch;
+            i += 1;
+        }
+    }
+    if (i == 0) return null;
+    return buf[0..i];
+}
+
+/// Parse an integer from a token. Returns null if not a valid integer.
+/// Supports hex (0x/0X), octal (0o/0O), and binary (0b/0B) prefixes,
+/// including negatives and underscore digit separators.
+pub fn parseInteger(token: []const u8) ?i64 {
+    if (token.len == 0) return null;
+    const is_negative = token[0] == '-';
+    const after_sign = if (is_negative) token[1..] else token;
+    if (after_sign.len == 0) return null;
+    if (!validateUnderscores(after_sign)) return null;
+
+    var buf: [256]u8 = undefined;
+
+    if (after_sign.len > 2 and after_sign[0] == '0') {
+        const prefix_char = after_sign[1];
+        const base: u8 = if (prefix_char == 'x' or prefix_char == 'X')
+            16
+        else if (prefix_char == 'o' or prefix_char == 'O')
+            8
+        else if (prefix_char == 'b' or prefix_char == 'B')
+            2
+        else
+            0;
+
+        if (base != 0) {
+            const digits = after_sign[2..];
+            if (digits.len == 0) return null;
+            const stripped = stripUnderscores(digits, &buf) orelse return null;
+            const magnitude = std.fmt.parseInt(i64, stripped, base) catch return null;
+            if (is_negative) {
+                if (magnitude == 0) return 0;
+                return std.math.negate(magnitude) catch null;
+            }
+            return magnitude;
+        }
+    }
+
+    const stripped = stripUnderscores(token, &buf) orelse return null;
+    return std.fmt.parseInt(i64, stripped, 10) catch null;
 }
 
 /// Parse a bignum from a token when parseInteger fails (overflow).
-/// Supports both decimal and hex (0x/0X prefix) integers, including negatives.
+/// Supports decimal, hex (0x/0X), octal (0o/0O), and binary (0b/0B) prefixes,
+/// including negatives and underscore digit separators.
 pub fn parseBigNum(allocator: std.mem.Allocator, token: []const u8) ?std.math.big.int.Managed {
-    const is_negative = token.len > 0 and token[0] == '-';
+    if (token.len == 0) return null;
+    const is_negative = token[0] == '-';
     const after_sign = if (is_negative) token[1..] else token;
-    const is_hex = after_sign.len > 2 and after_sign[0] == '0' and
-        (after_sign[1] == 'x' or after_sign[1] == 'X');
+    if (after_sign.len == 0) return null;
+    if (!validateUnderscores(after_sign)) return null;
 
-    if (is_hex) {
-        const digits = after_sign[2..];
-        if (digits.len == 0) return null;
-        for (digits) |ch| {
-            if (!std.ascii.isHex(ch)) return null;
+    var buf: [256]u8 = undefined;
+
+    if (after_sign.len > 2 and after_sign[0] == '0') {
+        const prefix_char = after_sign[1];
+        const base: u8 = if (prefix_char == 'x' or prefix_char == 'X')
+            16
+        else if (prefix_char == 'o' or prefix_char == 'O')
+            8
+        else if (prefix_char == 'b' or prefix_char == 'B')
+            2
+        else
+            0;
+
+        if (base != 0) {
+            const digits = after_sign[2..];
+            if (digits.len == 0) return null;
+            for (digits) |ch| {
+                if (ch == '_') continue;
+                const valid = switch (base) {
+                    16 => std.ascii.isHex(ch),
+                    8 => ch >= '0' and ch <= '7',
+                    2 => ch == '0' or ch == '1',
+                    else => false,
+                };
+                if (!valid) return null;
+            }
+            const stripped = stripUnderscores(digits, &buf) orelse return null;
+            var big = std.math.big.int.Managed.init(allocator) catch return null;
+            big.setString(base, stripped) catch {
+                big.deinit();
+                return null;
+            };
+            if (is_negative) big.negate();
+            return big;
         }
-        var big = std.math.big.int.Managed.init(allocator) catch return null;
-        big.setString(16, digits) catch {
-            big.deinit();
-            return null;
-        };
-        if (is_negative) big.negate();
-        return big;
     }
 
     if (after_sign.len == 0) return null;
     for (after_sign) |ch| {
+        if (ch == '_') continue;
         if (ch < '0' or ch > '9') return null;
     }
+    const stripped_token = stripUnderscores(token, &buf) orelse return null;
     var big = std.math.big.int.Managed.init(allocator) catch return null;
-    big.setString(10, token) catch {
+    big.setString(10, stripped_token) catch {
         big.deinit();
         return null;
     };
@@ -223,22 +308,29 @@ pub fn parseBigNum(allocator: std.mem.Allocator, token: []const u8) ?std.math.bi
 
 /// Parse a float from a token. Returns null if not a valid float literal.
 /// Accepts decimal (3.14), scientific (1.5e10), and negative (-3.14) forms.
+/// Supports underscore digit separators (1_000.000_5).
 /// Rejects hex prefixes, nan/inf literals, and tokens missing digits on either
 /// side of the decimal point.
 pub fn parseFloat(token: []const u8) ?f64 {
     if (token.len == 0) return null;
 
-    const has_dot = std.mem.indexOfScalar(u8, token, '.') != null;
-    const has_exp = std.mem.indexOfScalar(u8, token, 'e') != null or std.mem.indexOfScalar(u8, token, 'E') != null;
+    const body = if (token[0] == '-') token[1..] else token;
+    if (!validateUnderscores(body)) return null;
+
+    var buf: [256]u8 = undefined;
+    const stripped = stripUnderscores(token, &buf) orelse return null;
+
+    const has_dot = std.mem.indexOfScalar(u8, stripped, '.') != null;
+    const has_exp = std.mem.indexOfScalar(u8, stripped, 'e') != null or std.mem.indexOfScalar(u8, stripped, 'E') != null;
     if (!has_dot and !has_exp) return null;
 
-    const body = if (token[0] == '-') token[1..] else token;
-    if (body.len > 2 and body[0] == '0' and (body[1] == 'x' or body[1] == 'X')) return null;
+    const stripped_body = if (stripped[0] == '-') stripped[1..] else stripped;
+    if (stripped_body.len > 2 and stripped_body[0] == '0' and (stripped_body[1] == 'x' or stripped_body[1] == 'X')) return null;
 
     if (has_dot) {
-        if (std.mem.indexOfScalar(u8, token, '.')) |dot_idx| {
-            const before_dot = if (token[0] == '-') token[1..dot_idx] else token[0..dot_idx];
-            const after_dot = token[dot_idx + 1 ..];
+        if (std.mem.indexOfScalar(u8, stripped, '.')) |dot_idx| {
+            const before_dot = if (stripped[0] == '-') stripped[1..dot_idx] else stripped[0..dot_idx];
+            const after_dot = stripped[dot_idx + 1 ..];
             if (before_dot.len == 0) return null;
 
             const after_digits = if (std.mem.indexOfAny(u8, after_dot, "eE")) |ei| after_dot[0..ei] else after_dot;
@@ -247,11 +339,11 @@ pub fn parseFloat(token: []const u8) ?f64 {
     }
 
     // NOTE(ripta): nan / inf will be preludes instead of  literals
-    if (std.mem.eql(u8, body, "nan")) return null;
-    if (std.mem.eql(u8, body, "inf")) return null;
-    if (std.mem.eql(u8, body, "infinity")) return null;
+    if (std.mem.eql(u8, stripped_body, "nan")) return null;
+    if (std.mem.eql(u8, stripped_body, "inf")) return null;
+    if (std.mem.eql(u8, stripped_body, "infinity")) return null;
 
-    return std.fmt.parseFloat(f64, token) catch null;
+    return std.fmt.parseFloat(f64, stripped) catch null;
 }
 
 /// Parse a string literal from a token. Returns the content without quotes,
@@ -682,4 +774,75 @@ test "peeked token cleared after nextOrYield consumes it" {
     // Second nextOrYield scans normally
     const tok_y = t.nextOrYield().?;
     try std.testing.expectEqualStrings("y", tok_y.text);
+}
+
+test "parseInteger octal" {
+    try std.testing.expectEqual(@as(i64, 511), parseInteger("0o777").?);
+    try std.testing.expectEqual(@as(i64, 420), parseInteger("0o644").?);
+    try std.testing.expectEqual(@as(i64, 8), parseInteger("0o10").?);
+    try std.testing.expectEqual(@as(i64, 511), parseInteger("0O777").?);
+    try std.testing.expectEqual(@as(i64, -8), parseInteger("-0o10").?);
+}
+
+test "parseInteger binary" {
+    try std.testing.expectEqual(@as(i64, 255), parseInteger("0b11111111").?);
+    try std.testing.expectEqual(@as(i64, 5), parseInteger("0b101").?);
+    try std.testing.expectEqual(@as(i64, 5), parseInteger("0B101").?);
+    try std.testing.expectEqual(@as(i64, -10), parseInteger("-0b1010").?);
+}
+
+test "parseInteger with underscores" {
+    try std.testing.expectEqual(@as(i64, 1000000), parseInteger("1_000_000").?);
+    try std.testing.expectEqual(@as(i64, -1000000), parseInteger("-1_000_000").?);
+    try std.testing.expectEqual(@as(i64, 65535), parseInteger("0xFF_FF").?);
+    try std.testing.expectEqual(@as(i64, 255), parseInteger("0x_FF").?);
+    try std.testing.expectEqual(@as(i64, 81), parseInteger("0b0101_0001").?);
+    try std.testing.expectEqual(@as(i64, 5), parseInteger("0b_0101").?);
+    try std.testing.expectEqual(@as(i64, 4095), parseInteger("0o7_777").?);
+    try std.testing.expectEqual(@as(i64, 511), parseInteger("0o_777").?);
+}
+
+test "parseInteger rejects invalid underscores" {
+    try std.testing.expectEqual(null, parseInteger("_100"));
+    try std.testing.expectEqual(null, parseInteger("100_"));
+    try std.testing.expectEqual(null, parseInteger("1__000"));
+    try std.testing.expectEqual(null, parseInteger("0x_"));
+    try std.testing.expectEqual(null, parseInteger("-_100"));
+}
+
+test "parseInteger rejects invalid prefixed literals" {
+    try std.testing.expectEqual(null, parseInteger("0o"));
+    try std.testing.expectEqual(null, parseInteger("0b"));
+    try std.testing.expectEqual(null, parseInteger("0o89"));
+    try std.testing.expectEqual(null, parseInteger("0b23"));
+}
+
+test "parseFloat with underscores" {
+    try std.testing.expectEqual(@as(f64, 1000.0005), parseFloat("1_000.000_5").?);
+    try std.testing.expectEqual(@as(f64, 1000000.0), parseFloat("1_000_000.0").?);
+    try std.testing.expectEqual(@as(f64, -1000.5), parseFloat("-1_000.5").?);
+    try std.testing.expectEqual(@as(f64, 1.5e10), parseFloat("1.5e1_0").?);
+}
+
+test "parseFloat rejects invalid underscores" {
+    try std.testing.expectEqual(null, parseFloat("_100.0"));
+    try std.testing.expectEqual(null, parseFloat("100.0_"));
+    try std.testing.expectEqual(null, parseFloat("1__000.0"));
+}
+
+test "validateUnderscores" {
+    try std.testing.expect(validateUnderscores("123"));
+    try std.testing.expect(validateUnderscores("1_000"));
+    try std.testing.expect(validateUnderscores("0x_FF"));
+    try std.testing.expect(!validateUnderscores("_100"));
+    try std.testing.expect(!validateUnderscores("100_"));
+    try std.testing.expect(!validateUnderscores("1__0"));
+}
+
+test "stripUnderscores" {
+    var buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings("123", stripUnderscores("123", &buf).?);
+    try std.testing.expectEqualStrings("1000", stripUnderscores("1_000", &buf).?);
+    try std.testing.expectEqualStrings("FF", stripUnderscores("F_F", &buf).?);
+    try std.testing.expectEqual(null, stripUnderscores("_", &buf));
 }

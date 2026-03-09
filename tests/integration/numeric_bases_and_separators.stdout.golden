@@ -1,0 +1,84 @@
+=== octal literals ===
+Stack: [ ]
+PASS: 0o777 = 511
+Stack: [ ]
+PASS: 0o644 = 420
+Stack: [ ]
+PASS: -0o10 = -8
+Stack: [ ]
+PASS: 0O777 = 511
+Stack: [ ]
+=== binary literals ===
+Stack: [ ]
+PASS: 0b11111111 = 255
+Stack: [ ]
+PASS: 0b0101_0001 = 81
+Stack: [ ]
+PASS: -0b1010 = -10
+Stack: [ ]
+PASS: 0B101 = 5
+Stack: [ ]
+=== decimal underscore separators ===
+Stack: [ ]
+PASS: 1_000_000 = 1000000
+Stack: [ ]
+PASS: -1_000 = -1000
+Stack: [ ]
+=== hex underscore separators ===
+Stack: [ ]
+PASS: 0xFF_FF = 65535
+Stack: [ ]
+PASS: 0x_FF = 255
+Stack: [ ]
+=== octal underscore separators ===
+Stack: [ ]
+PASS: 0o7_777 = 4095
+Stack: [ ]
+PASS: 0o_777 = 511
+Stack: [ ]
+=== binary underscore separators ===
+Stack: [ ]
+PASS: 0b1111_0000 = 240
+Stack: [ ]
+PASS: 0b_0101 = 5
+Stack: [ ]
+=== float underscore separators ===
+Stack: [ ]
+PASS: 1_000.000_5 = 1000.0005
+Stack: [ ]
+PASS: -1_000.5 = -1000.5
+Stack: [ ]
+=== resolve-literal with bases and separators ===
+Stack: [ ]
+Stack: [ 511 t ]
+PASS: resolve-literal recognizes octal
+Stack: [ 511 ]
+PASS: resolve-literal returns octal value
+Stack: [ ]
+Stack: [ 10 t ]
+PASS: resolve-literal recognizes binary
+Stack: [ 10 ]
+PASS: resolve-literal returns binary value
+Stack: [ ]
+Stack: [ 1000 t ]
+PASS: resolve-literal recognizes decimal with underscores
+Stack: [ 1000 ]
+PASS: resolve-literal returns value with underscores stripped
+Stack: [ ]
+=== resolve-literal rejection cases ===
+Stack: [ ]
+Stack: [ "_100" f ]
+PASS: resolve-literal rejects leading underscore
+Stack: [ "_100" ]
+PASS: resolve-literal returns leading underscore unchanged
+Stack: [ ]
+Stack: [ "100_" f ]
+PASS: resolve-literal rejects trailing underscore
+Stack: [ "100_" ]
+PASS: resolve-literal returns trailing underscore unchanged
+Stack: [ ]
+Stack: [ "1__000" f ]
+PASS: resolve-literal rejects consecutive underscores
+Stack: [ "1__000" ]
+PASS: resolve-literal returns consecutive underscores unchanged
+Stack: [ ]
