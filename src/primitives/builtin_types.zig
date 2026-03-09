@@ -13,8 +13,8 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "type-name", .func = nativeTypeName },
 };
 
-/// define-builtin-type ( descriptor -- marker marker type ) - Create a type value from a descriptor,
-/// deriving the name from the word-name symbol already on the stack. Pushes parse-time and const
+/// define-builtin-type ( descriptor -- marker marker marker type ) - Create a type value from a descriptor,
+/// deriving the name from the word-name symbol already on the stack. Pushes parse-time, const, and typed
 /// markers so `;` sees them automatically.
 fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
@@ -47,6 +47,7 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
 
     try ctx.stack.push(.{ .marker = @constCast(&markers_mod.parse_time_marker) });
     try ctx.stack.push(.{ .marker = @constCast(&markers_mod.const_marker) });
+    try ctx.stack.push(.{ .marker = @constCast(&markers_mod.typed_marker) });
     try ctx.stack.push(.{ .type_val = tv });
 }
 
