@@ -423,6 +423,7 @@ pub const Value = union(enum) {
     iterator: *Iterator,
     doc_string: []const u8,
     type_val: *TypeValue,
+    unit: void,
 
     pub fn write(self: Value, writer: anytype) anyerror!void {
         switch (self) {
@@ -594,6 +595,7 @@ pub const Value = union(enum) {
             },
             .doc_string => |s| try writer.print("<doc-string \"{s}\">", .{s}),
             .type_val => |tv| try writer.print("<type:{s}>", .{tv.name}),
+            .unit => try writer.writeAll("unit"),
         }
     }
 
@@ -718,6 +720,7 @@ pub const Value = union(enum) {
             .iterator => |a| a == other.iterator,
             .doc_string => |a| std.mem.eql(u8, a, other.doc_string),
             .type_val => |a| a == other.type_val,
+            .unit => true,
         };
     }
 
@@ -905,6 +908,7 @@ pub const Value = union(enum) {
                 const ptr_val = @intFromPtr(tv);
                 hasher.update(std.mem.asBytes(&ptr_val));
             },
+            .unit => {},
         }
 
         return hasher.final();

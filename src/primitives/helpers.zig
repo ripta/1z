@@ -141,6 +141,7 @@ pub fn valueTypeName(val: Value) []const u8 {
         .iterator => "iterator",
         .doc_string => "doc-string",
         .type_val => "type",
+        .unit => "unit",
     };
 }
 
@@ -203,6 +204,7 @@ pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]con
         .iterator => allocator.dupe(u8, "<iterator>"),
         .doc_string => |s| std.fmt.allocPrint(allocator, "<doc-string \"{s}\">", .{s}),
         .type_val => |tv| std.fmt.allocPrint(allocator, "<type:{s}>", .{tv.name}),
+        .unit => allocator.dupe(u8, "unit"),
     };
 }
 

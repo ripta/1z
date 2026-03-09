@@ -1,0 +1,12 @@
+use "testing" ;
+
+\ unit pushes a TypeValue
+unit type-of type = "unit is a type value" assert-true
+
+\ unit is not equal to other type values
+unit fixnum /= "unit /= fixnum" assert-true
+unit boolean /= "unit /= boolean" assert-true
+unit string /= "unit /= string" assert-true
+
+\ unit type descriptor has builtin-type: key
+unit native.type-descriptor type: @get builtin-type: = "unit has builtin-type: descriptor" assert-true
