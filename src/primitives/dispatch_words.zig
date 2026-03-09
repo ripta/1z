@@ -24,7 +24,7 @@ pub const primitives = [_]Primitive{
 /// Validates the word exists and has appropriate markers, then registers.
 ///
 /// The descriptor is a mutable-map with:
-/// - types: array of 1-2 type name strings (use "any" for wildcard)
+/// - types: array of 1-2 type specifiers (TypeValues, the `any` marker, or string fallback)
 /// - body: quotation to execute when dispatched
 fn nativeDefineMethod(ctx: *Context) anyerror!void {
     const markers_val = try ctx.stack.pop();
@@ -138,24 +138,10 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
     var type_a: []const u8 = undefined;
     var type_b: []const u8 = unary_sentinel;
 
-    const type_a_str = switch (types_array[0]) {
-        .string => |s| s,
-        else => {
-            helpers.setTypeMismatchError(ctx, "string", types_array[0]);
-            return error.TypeMismatch;
-        },
-    };
-    type_a = if (std.mem.eql(u8, type_a_str, "any")) any_sentinel else type_a_str;
+    type_a = try extractTypeName(ctx, types_array[0]);
 
     if (types_array.len == 2) {
-        const type_b_str = switch (types_array[1]) {
-            .string => |s| s,
-            else => {
-                helpers.setTypeMismatchError(ctx, "string", types_array[1]);
-                return error.TypeMismatch;
-            },
-        };
-        type_b = if (std.mem.eql(u8, type_b_str, "any")) any_sentinel else type_b_str;
+        type_b = try extractTypeName(ctx, types_array[1]);
     }
 
     const key = DispatchKey{
@@ -173,5 +159,21 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
             return error.DuplicateMethod;
         }
         return err;
+    };
+}
+
+fn extractTypeName(ctx: *Context, val: value_mod.Value) ![]const u8 {
+    return switch (val) {
+        .type_val => |tv| tv.name,
+        .marker => |mk| {
+            if (markers_mod.isAnyMarker(mk)) return any_sentinel;
+            helpers.setErrorContext(ctx, "invalid marker in method type position; only `any` is allowed", .{});
+            return error.InvalidArgument;
+        },
+        .string => |s| s,
+        else => {
+            helpers.setTypeMismatchError(ctx, "type, `any` marker, or string", val);
+            return error.TypeMismatch;
+        },
     };
 }
