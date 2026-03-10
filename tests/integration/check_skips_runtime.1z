@@ -1,5 +1,5 @@
 \ Definitions should still execute in check mode
-double: [ 2 * ] ;
+double: ( x -- y ) [ 2 * ] ;
 
 \ This runtime code would crash, but --check skips it
 1 0 /

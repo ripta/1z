@@ -921,7 +921,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
             return 1;
         };
 
-        var severity_override: effect_inference.Severity = .err;
+        var severity_override: ?effect_inference.Severity = null;
         var suppressed = false;
         if (ctx.getPragma("suppress-checks")) |pragma_val| {
             switch (pragma_val) {
@@ -936,7 +936,17 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
             }
         }
 
-        var engine = effect_inference.InferenceEngine.init(&ctx.dictionary, &ctx.dispatch, ctx.local_frames.items, ctx.quotationAllocator(), severity_override, suppressed);
+        var suppress_undeclared = false;
+        if (ctx.getPragma("suppress-undeclared")) |pragma_val| {
+            switch (pragma_val) {
+                .boolean => |b| {
+                    suppress_undeclared = b;
+                },
+                else => {},
+            }
+        }
+
+        var engine = effect_inference.InferenceEngine.init(&ctx.dictionary, &ctx.dispatch, ctx.local_frames.items, ctx.quotationAllocator(), severity_override, suppressed, suppress_undeclared);
         defer engine.deinit();
         engine.analyzeAll(ctx.current_source) catch |err| {
             err_writer.print("Error during effect inference: {any}\n", .{err}) catch {};

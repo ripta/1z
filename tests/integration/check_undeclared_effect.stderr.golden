@@ -1,0 +1,1 @@
+tests/integration/check_undeclared_effect.1z:2: warning: foo: word has no declared stack effect

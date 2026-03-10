@@ -1,0 +1,4 @@
+\ suppress-undeclared pragma suppresses the undeclared-effect warning
+pragma{ suppress-undeclared: t }
+
+foo: [ 1 2 + ] ;

@@ -3,6 +3,6 @@ use "testing" ;
 
 point: struct{ x y } ;
 
-make-point: [ >point ] ;
+make-point: ( x y -- point ) [ >point ] ;
 
 color: enum{ red: unit green: unit blue: unit } ;

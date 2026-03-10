@@ -1,5 +1,6 @@
 \ Test that --check gracefully handles recursive words without declared stack effects
 \ (no crash, no false positive)
+pragma{ suppress-undeclared: t }
 
 \ Recursive word with no stack effect -- should produce no diagnostic
 count-down: [ dup 0 > [ 1 - count-down ] when ] ;

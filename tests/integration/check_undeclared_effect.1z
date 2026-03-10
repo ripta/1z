@@ -1,0 +1,2 @@
+\ Word without declared stack effect should produce a warning
+foo: [ 1 2 + ] ;
