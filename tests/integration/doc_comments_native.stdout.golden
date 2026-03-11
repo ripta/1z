@@ -5,13 +5,13 @@ Stack: [ ]
 Add two numbers. Promotes to bignum on fixnum overflow, or to float if either operand is a float.
 + ( a b -- a+b ) \native
 
+  method{ bignum fixnum }
+  method{ bignum bignum }
+  method{ fixnum fixnum }
   method{ fixnum bignum }
   method{ float float }
   method{ fixnum float }
-  method{ bignum fixnum }
-  method{ bignum bignum }
   method{ float bignum }
-  method{ fixnum fixnum }
   method{ bignum float }
   method{ float fixnum }
 Stack: [ ]
@@ -22,6 +22,14 @@ Stack: [ ]
 Get length of sequence. O(1) and non-destructive; does not work on iterators (use #count instead).
 #len ( seq -- n ) \native
 
+  method{ array }
+  method{ vector }
+  method{ hash }
+  method{ byte-array }
+  method{ string }
+  method{ set }
+  method{ module }
+  method{ mutable-map }
 Stack: [ ]
 Execute try quotation; if error, run recover quotation with error on stack.
 recover ( try-quot recover-quot -- ) \native

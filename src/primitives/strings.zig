@@ -8,6 +8,71 @@ const Instruction = value_mod.Instruction;
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 const dispatch_helpers = @import("dispatch_helpers.zig");
+const dispatch_mod = @import("../dispatch.zig");
+const DispatchTable = dispatch_mod.DispatchTable;
+const unary_sentinel = dispatch_mod.unary_sentinel;
+
+// =============================================================================
+// Native dispatch entry functions
+// =============================================================================
+
+fn nativeInspectGeneric(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+    var buffer: std.ArrayListUnmanaged(u8) = .{};
+    try val.write(buffer.writer(alloc));
+    try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
+}
+
+fn nativeAsStringGeneric(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+    var buffer: std.ArrayListUnmanaged(u8) = .{};
+    try val.write(buffer.writer(alloc));
+    try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
+}
+
+fn nativeAsStringPassthrough(ctx: *Context) anyerror!void {
+    _ = ctx;
+}
+
+fn nativeAsStringSymbol(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    try ctx.stack.push(.{ .string = val.symbol });
+}
+
+// =============================================================================
+// Registration of all native dispatch entries
+// =============================================================================
+
+pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
+    const inspect_types = [_][]const u8{
+        "fixnum",          "float",        "bignum",
+        "boolean",         "string",       "symbol",
+        "array",           "quotation",    "hash",
+        "vector",          "byte-array",   "set",
+        "mutable-map",     "stream",       "parameter",
+        "module",          "marker",       "struct-type",
+        "template",        "benchmark-report",
+        "stack-effect",    "error",        "task",
+        "channel",         "iterator",     "doc-string",
+        "type",            "unit",
+    };
+
+    for (inspect_types) |t| {
+        try dispatch.registerNative("inspect", t, unary_sentinel, nativeInspectGeneric);
+    }
+
+    for (inspect_types) |t| {
+        if (std.mem.eql(u8, t, "string")) {
+            try dispatch.registerNative(">string", t, unary_sentinel, nativeAsStringPassthrough);
+        } else if (std.mem.eql(u8, t, "symbol")) {
+            try dispatch.registerNative(">string", t, unary_sentinel, nativeAsStringSymbol);
+        } else {
+            try dispatch.registerNative(">string", t, unary_sentinel, nativeAsStringGeneric);
+        }
+    }
+}
 
 pub const primitives = [_]Primitive{
     .{ .name = "inspect", .stack_effect = "value -- string", .doc = "Convert any value to its debug string representation, including quotes for strings.", .func = nativeInspect },
@@ -24,7 +89,7 @@ pub const primitives = [_]Primitive{
 /// inspect ( value -- string ) - Convert any value to its debug string representation,
 /// including quotes for strings
 fn nativeInspect(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, "inspect")) return;
+    if (try dispatch_helpers.tryDispatchUnaryAny(ctx, "inspect")) return;
 
     const val = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
@@ -36,23 +101,13 @@ fn nativeInspect(ctx: *Context) anyerror!void {
 /// >string ( value -- string ) - Convert value to string, strings pass through unquoted,
 /// in contrast to inspect
 fn nativeAsString(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, ">string")) return;
+    if (try dispatch_helpers.tryDispatchUnaryAny(ctx, ">string")) return;
 
     const val = try ctx.stack.pop();
-    switch (val) {
-        .string => |s| {
-            try ctx.stack.push(.{ .string = s });
-        },
-        .symbol => |s| {
-            try ctx.stack.push(.{ .string = s });
-        },
-        else => {
-            const alloc = ctx.quotationAllocator();
-            var buffer: std.ArrayListUnmanaged(u8) = .{};
-            try val.write(buffer.writer(alloc));
-            try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
-        },
-    }
+    const alloc = ctx.quotationAllocator();
+    var buffer: std.ArrayListUnmanaged(u8) = .{};
+    try val.write(buffer.writer(alloc));
+    try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
 }
 
 /// >symbol ( string -- symbol ) - Convert string to symbol

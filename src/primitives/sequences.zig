@@ -11,6 +11,8 @@ const RegistryEntry = types_mod.RegistryEntry;
 const helpers = @import("helpers.zig");
 const dispatch_helpers = @import("dispatch_helpers.zig");
 const dispatch_mod = @import("../dispatch.zig");
+const DispatchTable = dispatch_mod.DispatchTable;
+const unary_sentinel = dispatch_mod.unary_sentinel;
 const sequence = @import("sequence.zig");
 const Iterator = @import("../iterator.zig").Iterator;
 
@@ -211,7 +213,241 @@ const sequenceLength = sequence.sequenceLength;
 const classifySequence = sequence.classifySequence;
 const sequenceToValues = sequence.sequenceToValues;
 const utf8NthCodepoint = sequence.utf8NthCodepoint;
+const utf8CodepointCount = sequence.utf8CodepointCount;
 const utf8SliceByCodepoints = sequence.utf8SliceByCodepoints;
+
+// =============================================================================
+// Native dispatch entry functions
+// =============================================================================
+
+fn nativeLenString(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    try ctx.stack.push(.{ .fixnum = @intCast(utf8CodepointCount(val.string)) });
+}
+
+fn nativeLenArray(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    try ctx.stack.push(.{ .fixnum = @intCast(val.array.len) });
+}
+
+fn nativeLenVector(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    try ctx.stack.push(.{ .fixnum = @intCast(val.vector.items.len) });
+}
+
+fn nativeLenByteArray(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    try ctx.stack.push(.{ .fixnum = @intCast(val.byte_array.items.len) });
+}
+
+fn nativeLenSet(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    try ctx.stack.push(.{ .fixnum = @intCast(val.set.count()) });
+}
+
+fn nativeLenHash(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    try ctx.stack.push(.{ .fixnum = @intCast(val.hash.count()) });
+}
+
+fn nativeLenMutableMap(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    try ctx.stack.push(.{ .fixnum = @intCast(val.mutable_map.count()) });
+}
+
+fn nativeLenModule(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    try ctx.stack.push(.{ .fixnum = @intCast(val.module.words.count()) });
+}
+
+fn nativeNthString(ctx: *Context) anyerror!void {
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    const index = b.fixnum;
+    if (index < 0) {
+        setErrorContext(ctx, "negative index {d}", .{index});
+        return error.IndexOutOfBounds;
+    }
+    const idx: usize = @intCast(index);
+    const s = a.string;
+    const cp_slice = utf8NthCodepoint(s, idx) orelse {
+        const slen = std.unicode.utf8CountCodepoints(s) catch s.len;
+        setErrorContext(ctx, "index {d} out of bounds for string of length {d}", .{ idx, slen });
+        return error.IndexOutOfBounds;
+    };
+    const result = ctx.quotationAllocator().dupe(u8, cp_slice) catch return error.OutOfMemory;
+    try ctx.stack.push(.{ .string = result });
+}
+
+fn nativeNthArray(ctx: *Context) anyerror!void {
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    const index = b.fixnum;
+    if (index < 0) {
+        setErrorContext(ctx, "negative index {d}", .{index});
+        return error.IndexOutOfBounds;
+    }
+    const idx: usize = @intCast(index);
+    const arr = a.array;
+    if (idx >= arr.len) {
+        setErrorContext(ctx, "index {d} out of bounds for array of length {d}", .{ idx, arr.len });
+        return error.IndexOutOfBounds;
+    }
+    try ctx.stack.push(arr[idx]);
+}
+
+fn nativeNthVector(ctx: *Context) anyerror!void {
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    const index = b.fixnum;
+    if (index < 0) {
+        setErrorContext(ctx, "negative index {d}", .{index});
+        return error.IndexOutOfBounds;
+    }
+    const idx: usize = @intCast(index);
+    const v = a.vector;
+    if (idx >= v.items.len) {
+        setErrorContext(ctx, "index {d} out of bounds for vector of length {d}", .{ idx, v.items.len });
+        return error.IndexOutOfBounds;
+    }
+    try ctx.stack.push(v.items[idx]);
+}
+
+fn nativeNthByteArray(ctx: *Context) anyerror!void {
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    const index = b.fixnum;
+    if (index < 0) {
+        setErrorContext(ctx, "negative index {d}", .{index});
+        return error.IndexOutOfBounds;
+    }
+    const idx: usize = @intCast(index);
+    const ba = a.byte_array;
+    if (idx >= ba.items.len) {
+        setErrorContext(ctx, "index {d} out of bounds for byte-array of length {d}", .{ idx, ba.items.len });
+        return error.IndexOutOfBounds;
+    }
+    try ctx.stack.push(.{ .fixnum = ba.items[idx] });
+}
+
+fn nativeFirstString(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+    var iter = SequenceIterator.init(val, alloc) orelse unreachable;
+    const first = try iter.next() orelse {
+        setErrorContext(ctx, "empty string", .{});
+        return error.EmptySequence;
+    };
+    try ctx.stack.push(first);
+}
+
+fn nativeFirstArray(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const a = val.array;
+    if (a.len == 0) {
+        setErrorContext(ctx, "empty array", .{});
+        return error.EmptySequence;
+    }
+    try ctx.stack.push(a[0]);
+}
+
+fn nativeFirstVector(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const v = val.vector;
+    if (v.items.len == 0) {
+        setErrorContext(ctx, "empty vector", .{});
+        return error.EmptySequence;
+    }
+    try ctx.stack.push(v.items[0]);
+}
+
+fn nativeFirstByteArray(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const b = val.byte_array;
+    if (b.items.len == 0) {
+        setErrorContext(ctx, "empty byte-array", .{});
+        return error.EmptySequence;
+    }
+    try ctx.stack.push(.{ .fixnum = b.items[0] });
+}
+
+fn nativeLastString(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+    var iter = SequenceIterator.init(val, alloc) orelse unreachable;
+    var last: ?Value = null;
+    while (try iter.next()) |elem| {
+        last = elem;
+    }
+    try ctx.stack.push(last orelse {
+        setErrorContext(ctx, "empty string", .{});
+        return error.EmptySequence;
+    });
+}
+
+fn nativeLastArray(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const a = val.array;
+    if (a.len == 0) {
+        setErrorContext(ctx, "empty array", .{});
+        return error.EmptySequence;
+    }
+    try ctx.stack.push(a[a.len - 1]);
+}
+
+fn nativeLastVector(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const v = val.vector;
+    if (v.items.len == 0) {
+        setErrorContext(ctx, "empty vector", .{});
+        return error.EmptySequence;
+    }
+    try ctx.stack.push(v.items[v.items.len - 1]);
+}
+
+fn nativeLastByteArray(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const b = val.byte_array;
+    if (b.items.len == 0) {
+        setErrorContext(ctx, "empty byte-array", .{});
+        return error.EmptySequence;
+    }
+    try ctx.stack.push(.{ .fixnum = b.items[b.items.len - 1] });
+}
+
+// =============================================================================
+// Registration of all native dispatch entries
+// =============================================================================
+
+pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
+    // #len : 8 unary entries
+    try dispatch.registerNative("#len", "string", unary_sentinel, nativeLenString);
+    try dispatch.registerNative("#len", "array", unary_sentinel, nativeLenArray);
+    try dispatch.registerNative("#len", "vector", unary_sentinel, nativeLenVector);
+    try dispatch.registerNative("#len", "byte-array", unary_sentinel, nativeLenByteArray);
+    try dispatch.registerNative("#len", "set", unary_sentinel, nativeLenSet);
+    try dispatch.registerNative("#len", "hash", unary_sentinel, nativeLenHash);
+    try dispatch.registerNative("#len", "mutable-map", unary_sentinel, nativeLenMutableMap);
+    try dispatch.registerNative("#len", "module", unary_sentinel, nativeLenModule);
+
+    // #nth : 4 binary entries (all with type_b = fixnum)
+    try dispatch.registerNative("#nth", "string", "fixnum", nativeNthString);
+    try dispatch.registerNative("#nth", "array", "fixnum", nativeNthArray);
+    try dispatch.registerNative("#nth", "vector", "fixnum", nativeNthVector);
+    try dispatch.registerNative("#nth", "byte-array", "fixnum", nativeNthByteArray);
+
+    // #first : 4 unary entries
+    try dispatch.registerNative("#first", "string", unary_sentinel, nativeFirstString);
+    try dispatch.registerNative("#first", "array", unary_sentinel, nativeFirstArray);
+    try dispatch.registerNative("#first", "vector", unary_sentinel, nativeFirstVector);
+    try dispatch.registerNative("#first", "byte-array", unary_sentinel, nativeFirstByteArray);
+
+    // #last : 4 unary entries
+    try dispatch.registerNative("#last", "string", unary_sentinel, nativeLastString);
+    try dispatch.registerNative("#last", "array", unary_sentinel, nativeLastArray);
+    try dispatch.registerNative("#last", "vector", unary_sentinel, nativeLastVector);
+    try dispatch.registerNative("#last", "byte-array", unary_sentinel, nativeLastByteArray);
+}
 
 pub const primitives = [_]Primitive{
     // Sequence length
@@ -259,72 +495,20 @@ pub const primitives = [_]Primitive{
 
 /// #len ( seq -- n ) - Get length of sequence
 pub fn nativeLen(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, "#len")) return;
+    if (try dispatch_helpers.tryDispatchUnaryAny(ctx, "#len")) return;
     const val = try ctx.stack.pop();
-    // Use sequence module for standard sequences, handle associative types separately
-    const len: i64 = if (sequenceLength(val)) |l|
-        @intCast(l)
-    else if (val == .hash)
-        @intCast(val.hash.count())
-    else if (val == .mutable_map)
-        @intCast(val.mutable_map.count())
-    else if (val == .module)
-        @intCast(val.module.words.count())
-    else {
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
-        return error.TypeMismatch;
-    };
-    try ctx.stack.push(.{ .fixnum = len });
+    setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
+    return error.TypeMismatch;
 }
 
 /// #nth ( seq n -- elem ) - Get element at index
 pub fn nativeNth(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "#nth")) return;
-    const index = try popFixnum(ctx);
-    const val = try ctx.stack.pop();
-
-    if (index < 0) {
-        setErrorContext(ctx, "negative index {d}", .{index});
-        return error.IndexOutOfBounds;
-    }
-    const idx: usize = @intCast(index);
-
-    switch (val) {
-        .string => |s| {
-            const cp_slice = utf8NthCodepoint(s, idx) orelse {
-                const slen = std.unicode.utf8CountCodepoints(s) catch s.len;
-                setErrorContext(ctx, "index {d} out of bounds for string of length {d}", .{ idx, slen });
-                return error.IndexOutOfBounds;
-            };
-            const result = ctx.quotationAllocator().dupe(u8, cp_slice) catch return error.OutOfMemory;
-            try ctx.stack.push(.{ .string = result });
-        },
-        .array => |a| {
-            if (idx >= a.len) {
-                setErrorContext(ctx, "index {d} out of bounds for array of length {d}", .{ idx, a.len });
-                return error.IndexOutOfBounds;
-            }
-            try ctx.stack.push(a[idx]);
-        },
-        .vector => |v| {
-            if (idx >= v.items.len) {
-                setErrorContext(ctx, "index {d} out of bounds for vector of length {d}", .{ idx, v.items.len });
-                return error.IndexOutOfBounds;
-            }
-            try ctx.stack.push(v.items[idx]);
-        },
-        .byte_array => |b| {
-            if (idx >= b.items.len) {
-                setErrorContext(ctx, "index {d} out of bounds for byte-array of length {d}", .{ idx, b.items.len });
-                return error.IndexOutOfBounds;
-            }
-            try ctx.stack.push(.{ .fixnum = b.items[idx] });
-        },
-        else => {
-            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
-            return error.TypeMismatch;
-        },
-    }
+    if (try dispatch_helpers.tryDispatchBinaryAny(ctx, "#nth")) return;
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    _ = b;
+    setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(a)});
+    return error.TypeMismatch;
 }
 
 /// #nth! ( seq n value -- seq ) - Set element at index in mutable sequence
@@ -400,51 +584,26 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
 
 /// #first ( seq -- elem ) - Get first element
 pub fn nativeFirst(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, "#first")) return;
+    if (try dispatch_helpers.tryDispatchUnaryAny(ctx, "#first")) return;
     const val = try ctx.stack.pop();
-    const alloc = ctx.quotationAllocator();
-
-    // Sets are not supported for positional access (unordered)
     if (val == .set) {
         setErrorContext(ctx, "sets do not support positional access", .{});
-        return error.TypeMismatch;
-    }
-
-    var iter = SequenceIterator.init(val, alloc) orelse {
+    } else {
         setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
-        return error.TypeMismatch;
-    };
-    const first = try iter.next() orelse {
-        setErrorContext(ctx, "empty {s}", .{valueTypeName(val)});
-        return error.EmptySequence;
-    };
-    try ctx.stack.push(first);
+    }
+    return error.TypeMismatch;
 }
 
 /// #last ( seq -- elem ) - Get last element
 pub fn nativeLast(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, "#last")) return;
+    if (try dispatch_helpers.tryDispatchUnaryAny(ctx, "#last")) return;
     const val = try ctx.stack.pop();
-    const alloc = ctx.quotationAllocator();
-
-    // Sets are not supported for positional access (unordered)
     if (val == .set) {
         setErrorContext(ctx, "sets do not support positional access", .{});
-        return error.TypeMismatch;
-    }
-
-    var iter = SequenceIterator.init(val, alloc) orelse {
+    } else {
         setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
-        return error.TypeMismatch;
-    };
-    var last: ?Value = null;
-    while (try iter.next()) |elem| {
-        last = elem;
     }
-    try ctx.stack.push(last orelse {
-        setErrorContext(ctx, "empty {s}", .{valueTypeName(val)});
-        return error.EmptySequence;
-    });
+    return error.TypeMismatch;
 }
 
 /// #each ( seq quot -- ) - Execute quotation for each element of sequence

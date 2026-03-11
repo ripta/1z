@@ -1,0 +1,65 @@
+use "testing" ;
+
+"#len on various types" test-section
+"hello" #len 5 "#len string" assert=
+{ 1 2 3 } #len 3 "#len array" assert=
+V{ 10 20 } #len 2 "#len vector" assert=
+B{ 1 2 3 4 } #len 4 "#len byte-array" assert=
+H{ a: 1 b: 2 } #len 2 "#len hash" assert=
+S{ 1 2 3 } #len 3 "#len set" assert=
+M{ } #len 0 "#len mutable-map" assert=
+
+"#len on UTF-8 string" test-section
+"café" #len 4 "#len multibyte string" assert=
+
+"#nth on sequences" test-section
+"hello" 1 #nth "e" "#nth string" assert=
+{ 10 20 30 } 2 #nth 30 "#nth array" assert=
+V{ 5 6 7 } 0 #nth 5 "#nth vector" assert=
+B{ 65 66 67 } 1 #nth 66 "#nth byte-array" assert=
+
+"#nth bounds error" test-section
+[ { 1 2 } 5 #nth ] try result:err? t "#nth out of bounds errors" assert=
+
+"#nth negative index error" test-section
+[ { 1 2 } -1 #nth ] try result:err? t "#nth negative index errors" assert=
+
+"#first on sequences" test-section
+"abc" #first "a" "#first string" assert=
+{ 10 20 30 } #first 10 "#first array" assert=
+V{ 5 6 7 } #first 5 "#first vector" assert=
+B{ 65 66 67 } #first 65 "#first byte-array" assert=
+
+"#last on sequences" test-section
+"abc" #last "c" "#last string" assert=
+{ 10 20 30 } #last 30 "#last array" assert=
+V{ 5 6 7 } #last 7 "#last vector" assert=
+B{ 65 66 67 } #last 67 "#last byte-array" assert=
+
+"#first/#last empty sequence error" test-section
+[ { } #first ] try result:err? t "#first empty array errors" assert=
+[ { } #last ] try result:err? t "#last empty array errors" assert=
+
+"#first/#last set rejection" test-section
+[ S{ 1 2 3 } #first ] try result:err? t "#first on set errors" assert=
+[ S{ 1 2 3 } #last ] try result:err? t "#last on set errors" assert=
+
+"inspect" test-section
+42 inspect "42" "inspect fixnum" assert=
+"hi" inspect "\"hi\"" "inspect string" assert=
+{ 1 2 } inspect "{ 1 2 }" "inspect array" assert=
+t inspect "t" "inspect boolean" assert=
+
+">string" test-section
+"hello" >string "hello" ">string passthrough" assert=
+hello: >string "hello" ">string symbol" assert=
+42 >string "42" ">string fixnum" assert=
+3.14 >string "3.14" ">string float" assert=
+
+"dispatch introspection" test-section
+#len: >word-info methods>> #len 0 > t "#len has dispatch entries" assert=
+#len: >word-info methods>> #first provenance>> generator>> "native" "#len native provenance" assert=
+
+"user override of native dispatch" test-section
+#len: method{ string } [ drop 999 ] ;
+"hello" #len 999 "user override of string #len" assert=

@@ -38,6 +38,8 @@ pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
 pub fn registerNativeDispatch(dispatch: *@import("dispatch.zig").DispatchTable) !void {
     try @import("primitives/arithmetic.zig").registerNativeDispatch(dispatch);
     try @import("primitives/bitwise.zig").registerNativeDispatch(dispatch);
+    try @import("primitives/sequences.zig").registerNativeDispatch(dispatch);
+    try @import("primitives/strings.zig").registerNativeDispatch(dispatch);
 }
 
 pub fn createNativeModule(dict: *Dictionary, allocator: Allocator) !void {

@@ -1,0 +1,101 @@
+=== #len on various types ===
+Stack: [ ]
+PASS: #len string
+Stack: [ ]
+PASS: #len array
+Stack: [ ]
+PASS: #len vector
+Stack: [ ]
+PASS: #len byte-array
+Stack: [ ]
+PASS: #len hash
+Stack: [ ]
+PASS: #len set
+Stack: [ ]
+PASS: #len mutable-map
+Stack: [ ]
+=== #len on UTF-8 string ===
+Stack: [ ]
+PASS: #len multibyte string
+Stack: [ ]
+=== #nth on sequences ===
+Stack: [ ]
+PASS: #nth string
+Stack: [ ]
+PASS: #nth array
+Stack: [ ]
+PASS: #nth vector
+Stack: [ ]
+PASS: #nth byte-array
+Stack: [ ]
+=== #nth bounds error ===
+Stack: [ ]
+PASS: #nth out of bounds errors
+Stack: [ ]
+=== #nth negative index error ===
+Stack: [ ]
+PASS: #nth negative index errors
+Stack: [ ]
+=== #first on sequences ===
+Stack: [ ]
+PASS: #first string
+Stack: [ ]
+PASS: #first array
+Stack: [ ]
+PASS: #first vector
+Stack: [ ]
+PASS: #first byte-array
+Stack: [ ]
+=== #last on sequences ===
+Stack: [ ]
+PASS: #last string
+Stack: [ ]
+PASS: #last array
+Stack: [ ]
+PASS: #last vector
+Stack: [ ]
+PASS: #last byte-array
+Stack: [ ]
+=== #first/#last empty sequence error ===
+Stack: [ ]
+PASS: #first empty array errors
+Stack: [ ]
+PASS: #last empty array errors
+Stack: [ ]
+=== #first/#last set rejection ===
+Stack: [ ]
+PASS: #first on set errors
+Stack: [ ]
+PASS: #last on set errors
+Stack: [ ]
+=== inspect ===
+Stack: [ ]
+PASS: inspect fixnum
+Stack: [ ]
+PASS: inspect string
+Stack: [ ]
+PASS: inspect array
+Stack: [ ]
+PASS: inspect boolean
+Stack: [ ]
+=== >string ===
+Stack: [ ]
+PASS: >string passthrough
+Stack: [ ]
+PASS: >string symbol
+Stack: [ ]
+PASS: >string fixnum
+Stack: [ ]
+PASS: >string float
+Stack: [ ]
+=== dispatch introspection ===
+Stack: [ ]
+PASS: #len has dispatch entries
+Stack: [ ]
+PASS: #len native provenance
+Stack: [ ]
+=== user override of native dispatch ===
+Stack: [ ]
+Stack: [ ]
+PASS: user override of string #len
+Stack: [ ]
