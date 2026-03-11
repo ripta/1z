@@ -150,7 +150,7 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
         .type_b = type_b,
     };
     const entry = DispatchEntry{
-        .body = body.instructions,
+        .body = .{ .quotation = body.instructions },
     };
 
     ctx.dispatch.register(key, entry, allow_overwrite) catch |err| {

@@ -50,7 +50,10 @@ fn buildEntry(word_name: []const u8, word_def: *const WordDefinition, dispatch_t
                 const dispatch_entries = try dispatch_table.entriesForWord(word_name, allocator);
                 defer allocator.free(dispatch_entries);
                 for (dispatch_entries) |pair| {
-                    try collectCallees(pair.entry.body, &callee_set, &has_opaque, allocator);
+                    switch (pair.entry.body) {
+                        .quotation => |instrs| try collectCallees(instrs, &callee_set, &has_opaque, allocator),
+                        .native_fn => {},
+                    }
                 }
             }
 
@@ -253,7 +256,7 @@ test "generic word includes dispatch entry callees" {
     };
     try dispatch.register(
         .{ .word_name = "my-generic", .type_a = "duration", .type_b = "" },
-        .{ .body = dispatch_body },
+        .{ .body = .{ .quotation = dispatch_body } },
         false,
     );
 

@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const Instruction = value_mod.Instruction;
+const NativeFn = @import("dictionary.zig").NativeFn;
 
 /// Sentinel for "any type" in dispatch keys.
 pub const any_sentinel = "*";
@@ -101,9 +102,16 @@ pub const DispatchProvenance = struct {
     field: []const u8,
 };
 
+/// Tagged union for dispatch entry bodies: either a user-defined quotation
+/// or a native function pointer.
+pub const DispatchBody = union(enum) {
+    quotation: []const Instruction,
+    native_fn: NativeFn,
+};
+
 /// A registered method body for a dispatch entry.
 pub const DispatchEntry = struct {
-    body: []const Instruction,
+    body: DispatchBody,
     provenance: ?DispatchProvenance = null,
 };
 
@@ -251,13 +259,13 @@ test "register and lookupBinary exact match" {
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 0 }};
     try table.register(
         .{ .word_name = "+", .type_a = "duration", .type_b = "duration" },
-        .{ .body = body },
+        .{ .body = .{ .quotation = body } },
         false,
     );
 
     const result = table.lookupBinary("+", "duration", "duration");
     try std.testing.expect(result != null);
-    try std.testing.expectEqual(@as(usize, 1), result.?.body.len);
+    try std.testing.expectEqual(@as(usize, 1), result.?.body.quotation.len);
 }
 
 test "lookupBinary returns null when no match" {
@@ -280,40 +288,40 @@ test "lookupBinary wildcard precedence" {
     // Register in reverse precedence order to ensure lookup logic is correct
     try table.register(
         .{ .word_name = "+", .type_a = any_sentinel, .type_b = any_sentinel },
-        .{ .body = wild_both_body },
+        .{ .body = .{ .quotation = wild_both_body } },
         false,
     );
     try table.register(
         .{ .word_name = "+", .type_a = any_sentinel, .type_b = "fixnum" },
-        .{ .body = wild_a_body },
+        .{ .body = .{ .quotation = wild_a_body } },
         false,
     );
     try table.register(
         .{ .word_name = "+", .type_a = "duration", .type_b = any_sentinel },
-        .{ .body = wild_b_body },
+        .{ .body = .{ .quotation = wild_b_body } },
         false,
     );
     try table.register(
         .{ .word_name = "+", .type_a = "duration", .type_b = "duration" },
-        .{ .body = exact_body },
+        .{ .body = .{ .quotation = exact_body } },
         false,
     );
 
     // Exact match should win
     const r1 = table.lookupBinary("+", "duration", "duration").?;
-    try std.testing.expectEqual(@as(i64, 1), r1.body[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 1), r1.body.quotation[0].op.push_literal.fixnum);
 
     // Wildcard on second: (duration, fixnum) matches (duration, *)
     const r2 = table.lookupBinary("+", "duration", "fixnum").?;
-    try std.testing.expectEqual(@as(i64, 2), r2.body[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 2), r2.body.quotation[0].op.push_literal.fixnum);
 
     // Wildcard on first: (string, fixnum) matches (*, fixnum)
     const r3 = table.lookupBinary("+", "string", "fixnum").?;
-    try std.testing.expectEqual(@as(i64, 3), r3.body[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 3), r3.body.quotation[0].op.push_literal.fixnum);
 
     // Both wildcards: (string, string) matches (*, *)
     const r4 = table.lookupBinary("+", "string", "string").?;
-    try std.testing.expectEqual(@as(i64, 4), r4.body[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 4), r4.body.quotation[0].op.push_literal.fixnum);
 }
 
 test "lookupUnary exact and wildcard" {
@@ -325,22 +333,22 @@ test "lookupUnary exact and wildcard" {
 
     try table.register(
         .{ .word_name = "serialize", .type_a = "duration", .type_b = unary_sentinel },
-        .{ .body = exact_body },
+        .{ .body = .{ .quotation = exact_body } },
         false,
     );
     try table.register(
         .{ .word_name = "serialize", .type_a = any_sentinel, .type_b = unary_sentinel },
-        .{ .body = wild_body },
+        .{ .body = .{ .quotation = wild_body } },
         false,
     );
 
     // Exact match
     const r1 = table.lookupUnary("serialize", "duration").?;
-    try std.testing.expectEqual(@as(i64, 10), r1.body[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 10), r1.body.quotation[0].op.push_literal.fixnum);
 
     // Wildcard fallback
     const r2 = table.lookupUnary("serialize", "point").?;
-    try std.testing.expectEqual(@as(i64, 20), r2.body[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 20), r2.body.quotation[0].op.push_literal.fixnum);
 
     // No match for different word
     try std.testing.expect(table.lookupUnary("other-word", "duration") == null);
@@ -353,13 +361,13 @@ test "register duplicate key errors without allow_overwrite" {
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
     try table.register(
         .{ .word_name = "+", .type_a = "duration", .type_b = "duration" },
-        .{ .body = body },
+        .{ .body = .{ .quotation = body } },
         false,
     );
 
     const result = table.register(
         .{ .word_name = "+", .type_a = "duration", .type_b = "duration" },
-        .{ .body = body },
+        .{ .body = .{ .quotation = body } },
         false,
     );
     try std.testing.expectError(error.DuplicateMethod, result);
@@ -374,16 +382,16 @@ test "register duplicate key succeeds with allow_overwrite" {
 
     try table.register(
         .{ .word_name = "+", .type_a = "duration", .type_b = "duration" },
-        .{ .body = body1 },
+        .{ .body = .{ .quotation = body1 } },
         false,
     );
     try table.register(
         .{ .word_name = "+", .type_a = "duration", .type_b = "duration" },
-        .{ .body = body2 },
+        .{ .body = .{ .quotation = body2 } },
         true,
     );
 
     // Shoulda gotten the overwritten body
     const result = table.lookupBinary("+", "duration", "duration").?;
-    try std.testing.expectEqual(@as(i64, 2), result.body[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 2), result.body.quotation[0].op.push_literal.fixnum);
 }

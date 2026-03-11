@@ -457,7 +457,7 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
         .type_a = struct_type.name,
         .type_b = dispatch_mod.unary_sentinel,
     }, .{
-        .body = instrs,
+        .body = .{ .quotation = instrs },
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "getter", .field = field },
     }, true);
 }
@@ -499,7 +499,7 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
         .type_a = struct_type.name,
         .type_b = dispatch_mod.any_sentinel,
     }, .{
-        .body = instrs,
+        .body = .{ .quotation = instrs },
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "setter", .field = field },
     }, true);
 }

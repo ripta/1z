@@ -570,7 +570,11 @@ pub const InferenceEngine = struct {
         defer self.allocator.free(dispatch_entries);
 
         for (dispatch_entries) |pair| {
-            const entry_result = try self.inferInstructions(pair.entry.body, caller);
+            const entry_instrs = switch (pair.entry.body) {
+                .quotation => |instrs| instrs,
+                .native_fn => continue,
+            };
+            const entry_result = try self.inferInstructions(entry_instrs, caller);
             if (base_result == .known and entry_result == .known) {
                 if (base_result.known != entry_result.known) {
                     try self.emitDiagnostic(.{
@@ -1095,7 +1099,7 @@ test "generic word with agreeing dispatch entries" {
 
     try dispatch.register(
         .{ .word_name = "my-generic", .type_a = "duration", .type_b = "" },
-        .{ .body = dispatch_body },
+        .{ .body = .{ .quotation = dispatch_body } },
         false,
     );
 
@@ -1131,7 +1135,7 @@ test "generic word with disagreeing dispatch entries emits diagnostic" {
 
     try dispatch.register(
         .{ .word_name = "my-generic", .type_a = "duration", .type_b = "" },
-        .{ .body = dispatch_body },
+        .{ .body = .{ .quotation = dispatch_body } },
         false,
     );
 

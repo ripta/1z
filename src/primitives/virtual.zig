@@ -656,5 +656,5 @@ pub fn registerHashDispatch(ctx: *Context, type_name: []const u8, instrs: []cons
         .word_name = ">hash",
         .type_a = type_name,
         .type_b = dispatch_mod.unary_sentinel,
-    }, .{ .body = instrs }, true);
+    }, .{ .body = .{ .quotation = instrs } }, true);
 }

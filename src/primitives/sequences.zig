@@ -335,12 +335,12 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
         if (dispatch_mod.isUserType(seq_peek)) {
             const a_type = dispatch_mod.dispatchTypeName(seq_peek);
             if (ctx.lookupUnaryDispatch("#nth!", a_type)) |entry| {
-                try ctx.executeQuotation(.{ .instructions = entry.body });
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
                 return;
             }
             if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
                 if (ctx.lookupUnaryDispatch("#nth!", ae)) |entry| {
-                    try ctx.executeQuotation(.{ .instructions = entry.body });
+                    try dispatch_helpers.executeDispatchBody(ctx, entry.body);
                     return;
                 }
             }

@@ -3,6 +3,14 @@ const Context = @import("../context.zig").Context;
 const dispatch_mod = @import("../dispatch.zig");
 const Value = @import("../value.zig").Value;
 
+/// Execute a dispatch entry body, handling both quotation and native_fn variants.
+pub fn executeDispatchBody(ctx: *Context, body: dispatch_mod.DispatchBody) !void {
+    switch (body) {
+        .quotation => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
+        .native_fn => |func| try func(ctx),
+    }
+}
+
 /// Look up a binary dispatch entry, trying enum-level fallback.
 ///
 /// Precedence:
@@ -71,7 +79,7 @@ pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
     if (!dispatch_mod.isUserType(a) and !dispatch_mod.isUserType(b)) return false;
 
     if (lookupBinaryWithFallback(ctx, word_name, a, b)) |entry| {
-        try ctx.executeQuotation(.{ .instructions = entry.body });
+        try executeDispatchBody(ctx, entry.body);
         return true;
     }
 
@@ -91,7 +99,7 @@ pub fn tryDispatchBinaryAny(ctx: *Context, word_name: []const u8) !bool {
     const b = try ctx.stack.peek();
 
     if (lookupBinaryWithFallback(ctx, word_name, a, b)) |entry| {
-        try ctx.executeQuotation(.{ .instructions = entry.body });
+        try executeDispatchBody(ctx, entry.body);
         return true;
     }
 
@@ -114,7 +122,7 @@ pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
     if (!dispatch_mod.isUserType(a)) return false;
 
     if (lookupUnaryWithFallback(ctx, word_name, a)) |entry| {
-        try ctx.executeQuotation(.{ .instructions = entry.body });
+        try executeDispatchBody(ctx, entry.body);
         return true;
     }
     return false;
@@ -137,7 +145,7 @@ pub fn tryDispatchBinaryViaCmp(ctx: *Context, comptime op: enum { eq, lt, gt }) 
     if (!dispatch_mod.isUserType(a) and !dispatch_mod.isUserType(b)) return false;
 
     if (lookupBinaryWithFallback(ctx, "cmp", a, b)) |entry| {
-        try ctx.executeQuotation(.{ .instructions = entry.body });
+        try executeDispatchBody(ctx, entry.body);
         const result = try ctx.stack.pop();
         const boolean = switch (result) {
             .fixnum => |cmp_val| switch (op) {
@@ -179,7 +187,7 @@ pub fn tryDispatchGeneric(ctx: *Context, word_name: []const u8) !bool {
         const a = try ctx.stack.peekN(1);
         const b = try ctx.stack.peek();
         if (lookupBinaryWithFallback(ctx, word_name, a, b)) |entry| {
-            try ctx.executeQuotation(.{ .instructions = entry.body });
+            try executeDispatchBody(ctx, entry.body);
             return true;
         }
     }
@@ -187,7 +195,7 @@ pub fn tryDispatchGeneric(ctx: *Context, word_name: []const u8) !bool {
     if (ctx.stack.depth() >= 1) {
         const a = try ctx.stack.peek();
         if (lookupUnaryWithFallback(ctx, word_name, a)) |entry| {
-            try ctx.executeQuotation(.{ .instructions = entry.body });
+            try executeDispatchBody(ctx, entry.body);
             return true;
         }
     }
@@ -271,7 +279,7 @@ test "tryDispatchGeneric dispatches unary method for native type" {
     };
     try ctx.dispatch.register(
         .{ .word_name = "serialize", .type_a = "fixnum", .type_b = dispatch_mod.unary_sentinel },
-        .{ .body = body },
+        .{ .body = .{ .quotation = body } },
         false,
     );
 
@@ -300,12 +308,12 @@ test "tryDispatchGeneric tries binary before unary" {
 
     try ctx.dispatch.register(
         .{ .word_name = "combine", .type_a = "fixnum", .type_b = "fixnum" },
-        .{ .body = binary_body },
+        .{ .body = .{ .quotation = binary_body } },
         false,
     );
     try ctx.dispatch.register(
         .{ .word_name = "combine", .type_a = "fixnum", .type_b = dispatch_mod.unary_sentinel },
-        .{ .body = unary_body },
+        .{ .body = .{ .quotation = unary_body } },
         false,
     );
 
