@@ -230,6 +230,10 @@ pub const Context = struct {
             std.debug.panic("Failed to create native module: {any}", .{err});
         };
 
+        primitives.registerNativeDispatch(&ctx.dispatch) catch |err| {
+            std.debug.panic("Failed to register native dispatch: {any}", .{err});
+        };
+
         return ctx;
     }
 

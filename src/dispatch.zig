@@ -195,6 +195,24 @@ pub const DispatchTable = struct {
         entry: DispatchEntry,
     };
 
+    /// Register a native function dispatch entry with "native" provenance.
+    pub fn registerNative(
+        self: *DispatchTable,
+        word_name: []const u8,
+        type_a: []const u8,
+        type_b: []const u8,
+        func: NativeFn,
+    ) !void {
+        try self.register(
+            .{ .word_name = word_name, .type_a = type_a, .type_b = type_b },
+            .{
+                .body = .{ .native_fn = func },
+                .provenance = .{ .generator = "native", .parent = "", .role = "", .field = "" },
+            },
+            false,
+        );
+    }
+
     /// Collect all dispatch keys and entries registered for a given word name.
     /// Caller owns the returned slice.
     pub fn entriesForWord(self: *const DispatchTable, word_name: []const u8, alloc: Allocator) ![]KeyEntryPair {
@@ -212,6 +230,8 @@ pub const DispatchTable = struct {
 // =============================================================================
 // Tests
 // =============================================================================
+
+fn dummyNativeFn(_: *@import("context.zig").Context) anyerror!void {}
 
 test "dispatchTypeName returns correct name for native types" {
     try std.testing.expectEqualStrings("fixnum", dispatchTypeName(.{ .fixnum = 42 }));
@@ -394,4 +414,36 @@ test "register duplicate key succeeds with allow_overwrite" {
     // Shoulda gotten the overwritten body
     const result = table.lookupBinary("+", "duration", "duration").?;
     try std.testing.expectEqual(@as(i64, 2), result.body.quotation[0].op.push_literal.fixnum);
+}
+
+test "registerNative creates retrievable entry with native_fn body" {
+    var table = DispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    try table.registerNative("+", "fixnum", "fixnum", dummyNativeFn);
+
+    const result = table.lookupBinary("+", "fixnum", "fixnum");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.?.body == .native_fn);
+    try std.testing.expectEqualStrings("native", result.?.provenance.?.generator);
+}
+
+test "registerNative unary entry is retrievable via lookupUnary" {
+    var table = DispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    try table.registerNative("abs", "fixnum", unary_sentinel, dummyNativeFn);
+
+    const result = table.lookupUnary("abs", "fixnum");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.?.body == .native_fn);
+}
+
+test "registerNative duplicate returns DuplicateMethod" {
+    var table = DispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    try table.registerNative("+", "fixnum", "fixnum", dummyNativeFn);
+    const result = table.registerNative("+", "fixnum", "fixnum", dummyNativeFn);
+    try std.testing.expectError(error.DuplicateMethod, result);
 }

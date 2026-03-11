@@ -35,6 +35,10 @@ pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
     }
 }
 
+pub fn registerNativeDispatch(dispatch: *@import("dispatch.zig").DispatchTable) !void {
+    _ = dispatch;
+}
+
 pub fn createNativeModule(dict: *Dictionary, allocator: Allocator) !void {
     const module = try allocator.create(Module);
     module.* = .{
