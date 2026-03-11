@@ -68,3 +68,30 @@ pragma{ arity-mismatch: "error" }
   err2: ( a -- b ) [ 1 + ] ;
   err2: ( a b -- c ) [ + ] ;
 ] EArityMismatch "default preserves arity mismatch error" assert-error-type
+
+"invalid pragma value rejected" test-section
+
+[ "pragma{ arity-mismatch: \"ignore\" }" eval-string
+] "invalid pragma value is rejected" assert-error
+
+[ "pragma{ arity-mismatch: 42 }" eval-string
+] "non-string pragma value is rejected" assert-error
+
+"warning mode uses new definition" test-section
+
+pragma{ arity-mismatch: "warning" }
+wfn: ( a -- b ) [ 1 + ] ;
+wfn: ( a b -- c ) [ * ] ;
+3 4 wfn 12 "warning mode uses the new definition body" assert=
+pragma{ arity-mismatch: "error" }
+
+"warning then back to error" test-section
+
+pragma{ arity-mismatch: "warning" }
+toggle1: ( a -- b ) [ 1 + ] ;
+toggle1: ( a b -- c ) [ + ] ;
+pragma{ arity-mismatch: "error" }
+[
+  toggle2: ( a -- b ) [ 1 + ] ;
+  toggle2: ( a b -- c ) [ + ] ;
+] EArityMismatch "error after warning restores hard error" assert-error-type

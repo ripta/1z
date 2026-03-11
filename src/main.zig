@@ -555,6 +555,8 @@ fn formatDirectory(allocator: std.mem.Allocator, dir_path: []const u8, check_onl
 }
 
 fn repl(ctx: *Context, verbosity: Verbosity, max_memory_bytes: usize) void {
+    ctx.setPragma("arity-mismatch", .{ .string = "warning" }) catch {};
+
     const stdout_file: File = .stdout();
     var stdout_buf: [4096]u8 = undefined;
     var stdout = stdout_file.writer(&stdout_buf);

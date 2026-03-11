@@ -1,3 +1,5 @@
 warning: redefinition of 'witha' drops stack effect declaration
 warning: redefinition of 'withb' adds stack effect declaration not present on original
 warning: arity mismatch on redefinition of 'warn1' (was 1 -> 1, now 2 -> 1)
+warning: arity mismatch on redefinition of 'wfn' (was 1 -> 1, now 2 -> 1)
+warning: arity mismatch on redefinition of 'toggle1' (was 1 -> 1, now 2 -> 1)

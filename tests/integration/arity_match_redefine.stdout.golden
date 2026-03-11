@@ -50,3 +50,21 @@ Stack: [ ]
 Stack: [ ]
 PASS: default preserves arity mismatch error
 Stack: [ ]
+=== invalid pragma value rejected ===
+Stack: [ ]
+PASS: invalid pragma value is rejected
+Stack: [ ]
+PASS: non-string pragma value is rejected
+Stack: [ ]
+=== warning mode uses new definition ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: warning mode uses the new definition body
+Stack: [ ]
+=== warning then back to error ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: error after warning restores hard error
+Stack: [ ]
