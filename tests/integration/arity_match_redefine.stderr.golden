@@ -1,0 +1,2 @@
+warning: redefinition of 'witha' drops stack effect declaration
+warning: redefinition of 'withb' adds stack effect declaration not present on original

@@ -1,0 +1,38 @@
+=== both match - same concrete arity ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: redefine with matching arity succeeds
+Stack: [ ]
+=== input count mismatch ===
+Stack: [ ]
+PASS: input arity mismatch is error
+Stack: [ ]
+=== output count mismatch ===
+Stack: [ ]
+PASS: output arity mismatch is error
+Stack: [ ]
+=== neither has effect ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: redefine bare words succeeds
+Stack: [ ]
+=== old has effect, new does not - asymmetry warning ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: asymmetry old-has new-lacks still works
+Stack: [ ]
+=== new has effect, old does not - asymmetry warning ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: asymmetry old-lacks new-has still works
+Stack: [ ]
+=== row variables ignored in concrete arity ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: row variable redefinition with same concrete arity succeeds
+Stack: [ ]

@@ -562,6 +562,35 @@ pub const Context = struct {
             }
         }
 
+        const same_scope_existing = if (self.local_frames.items.len > 0)
+            self.local_frames.items[self.local_frames.items.len - 1].get(name)
+        else
+            self.dictionary.get(name);
+        if (same_scope_existing) |existing| {
+            // XXX(ripta): Skip arity check for auto-generated words, e.g., `virtual{`, `struct{`,
+            //             since users legitly override generated constructors
+            if (existing.provenance == null) {
+                if (existing.stack_effect) |old_effect| {
+                    if (definition.stack_effect) |new_effect| {
+                        if (old_effect.concreteInputCount() != new_effect.concreteInputCount() or
+                            old_effect.concreteOutputCount() != new_effect.concreteOutputCount())
+                        {
+                            self.pending_error_message = std.fmt.allocPrint(self.arena.allocator(), "arity mismatch on redefinition of '{s}' (was {d} -> {d}, now {d} -> {d})", .{ name, old_effect.concreteInputCount(), old_effect.concreteOutputCount(), new_effect.concreteInputCount(), new_effect.concreteOutputCount() }) catch "arity mismatch on redefinition";
+                            return error.ArityMismatch;
+                        }
+                    } else {
+                        var tw = trace_mod.TraceWriter.init();
+                        tw.print("warning: redefinition of '{s}' drops stack effect declaration\n", .{name});
+                    }
+                } else {
+                    if (definition.stack_effect != null) {
+                        var tw = trace_mod.TraceWriter.init();
+                        tw.print("warning: redefinition of '{s}' adds stack effect declaration not present on original\n", .{name});
+                    }
+                }
+            }
+        }
+
         var def = definition;
         if (def.source_file == null) {
             def.source_file = self.current_source;

@@ -269,6 +269,7 @@ yield ( -- )
 ?or-else ( opt/res quot -- opt/res )
 @get? ( assoc key -- option )
 B{
+EArityMismatch
 ECannotRedefineConst
 EDivisionByZero
 EFileNotFound

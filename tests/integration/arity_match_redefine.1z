@@ -1,0 +1,47 @@
+\ Tests for arity checking on word redefinition
+
+use "testing" ;
+
+"both match - same concrete arity" test-section
+
+foo: ( a b -- c ) [ + ] ;
+foo: ( x y -- z ) [ + ] ;
+3 4 foo 7 "redefine with matching arity succeeds" assert=
+
+"input count mismatch" test-section
+
+[
+  bar: ( a -- b ) [ 1 + ] ;
+  bar: ( a b -- c ) [ + ] ;
+] EArityMismatch "input arity mismatch is error" assert-error-type
+
+"output count mismatch" test-section
+
+[
+  baz: ( a -- b ) [ 1 + ] ;
+  baz: ( a -- b c ) [ dup ] ;
+] EArityMismatch "output arity mismatch is error" assert-error-type
+
+"neither has effect" test-section
+
+qux: [ 42 ] ;
+qux: [ 99 ] ;
+qux 99 "redefine bare words succeeds" assert=
+
+"old has effect, new does not - asymmetry warning" test-section
+
+witha: ( a -- b ) [ 1 + ] ;
+witha: [ 1 + ] ;
+5 witha 6 "asymmetry old-has new-lacks still works" assert=
+
+"new has effect, old does not - asymmetry warning" test-section
+
+withb: [ 1 + ] ;
+withb: ( a -- b ) [ 1 + ] ;
+5 withb 6 "asymmetry old-lacks new-has still works" assert=
+
+"row variables ignored in concrete arity" test-section
+
+rowfn: ( ..a x -- ..a y ) [ 1 + ] ;
+rowfn: ( x -- y ) [ 1 + ] ;
+5 rowfn 6 "row variable redefinition with same concrete arity succeeds" assert=

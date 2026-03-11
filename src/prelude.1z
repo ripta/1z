@@ -187,6 +187,7 @@ ENotComparable:       [ not-comparable: ] ;
 EIOFailed: [ io-failed: ] ;
 ENoMatchingBranch: [ no-matching-branch: ] ;
 ECannotRedefineConst: [ cannot-redefine-const: ] ;
+EArityMismatch:       [ arity-mismatch: ] ;
 EUnexpectedEOF:       [ unexpected-eof: ] ;
 EIndexOutOfBounds:    [ index-out-of-bounds: ] ;
 EInvalidArgument:     [ invalid-argument: ] ;
