@@ -313,6 +313,10 @@ pub const Context = struct {
 
         try self.pragma_registry.put(self.allocator, "suppress-undeclared", .{});
 
+        try self.pragma_registry.put(self.allocator, "arity-mismatch", .{
+            .native_validator = &control.nativeArityMismatchValidator,
+        });
+
         // Split prelude into lines and process incrementally
         const source = external_source orelse prelude_source;
         var lines = std.mem.splitScalar(u8, source, '\n');
@@ -575,8 +579,19 @@ pub const Context = struct {
                         if (old_effect.concreteInputCount() != new_effect.concreteInputCount() or
                             old_effect.concreteOutputCount() != new_effect.concreteOutputCount())
                         {
-                            self.pending_error_message = std.fmt.allocPrint(self.arena.allocator(), "arity mismatch on redefinition of '{s}' (was {d} -> {d}, now {d} -> {d})", .{ name, old_effect.concreteInputCount(), old_effect.concreteOutputCount(), new_effect.concreteInputCount(), new_effect.concreteOutputCount() }) catch "arity mismatch on redefinition";
-                            return error.ArityMismatch;
+                            const msg = std.fmt.allocPrint(self.arena.allocator(), "arity mismatch on redefinition of '{s}' (was {d} -> {d}, now {d} -> {d})", .{ name, old_effect.concreteInputCount(), old_effect.concreteOutputCount(), new_effect.concreteInputCount(), new_effect.concreteOutputCount() }) catch "arity mismatch on redefinition";
+                            const pragma_val = self.getPragma("arity-mismatch");
+                            const is_warning = if (pragma_val) |pv| switch (pv) {
+                                .string => |s| std.mem.eql(u8, s, "warning"),
+                                else => false,
+                            } else false;
+                            if (is_warning) {
+                                var tw = trace_mod.TraceWriter.init();
+                                tw.print("warning: {s}\n", .{msg});
+                            } else {
+                                self.pending_error_message = msg;
+                                return error.ArityMismatch;
+                            }
                         }
                     } else {
                         var tw = trace_mod.TraceWriter.init();

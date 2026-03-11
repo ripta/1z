@@ -36,3 +36,17 @@ Stack: [ ]
 Stack: [ ]
 PASS: row variable redefinition with same concrete arity succeeds
 Stack: [ ]
+=== pragma warning downgrades arity mismatch ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: warning pragma allows mismatched redefinition
+Stack: [ ]
+=== pragma error preserves hard error ===
+Stack: [ ]
+PASS: error pragma preserves arity mismatch error
+Stack: [ ]
+=== default (no pragma) preserves hard error ===
+Stack: [ ]
+PASS: default preserves arity mismatch error
+Stack: [ ]

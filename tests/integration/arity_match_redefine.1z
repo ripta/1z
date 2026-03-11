@@ -45,3 +45,26 @@ withb: ( a -- b ) [ 1 + ] ;
 rowfn: ( ..a x -- ..a y ) [ 1 + ] ;
 rowfn: ( x -- y ) [ 1 + ] ;
 5 rowfn 6 "row variable redefinition with same concrete arity succeeds" assert=
+
+"pragma warning downgrades arity mismatch" test-section
+
+pragma{ arity-mismatch: "warning" }
+warn1: ( a -- b ) [ 1 + ] ;
+warn1: ( a b -- c ) [ + ] ;
+3 4 warn1 7 "warning pragma allows mismatched redefinition" assert=
+pragma{ arity-mismatch: "error" }
+
+"pragma error preserves hard error" test-section
+
+pragma{ arity-mismatch: "error" }
+[
+  err1: ( a -- b ) [ 1 + ] ;
+  err1: ( a b -- c ) [ + ] ;
+] EArityMismatch "error pragma preserves arity mismatch error" assert-error-type
+
+"default (no pragma) preserves hard error" test-section
+
+[
+  err2: ( a -- b ) [ 1 + ] ;
+  err2: ( a b -- c ) [ + ] ;
+] EArityMismatch "default preserves arity mismatch error" assert-error-type

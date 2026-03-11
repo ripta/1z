@@ -56,6 +56,25 @@ const require_doc_parse_time: i64 = 2; // bit 1
 const require_doc_type_descriptor: i64 = 4; // bit 2
 const require_doc_marker: i64 = 8; // bit 3
 
+pub fn nativeArityMismatchValidator(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .string => |s| {
+            if (std.mem.eql(u8, s, "error") or std.mem.eql(u8, s, "warning")) {
+                try ctx.stack.push(.{ .string = s });
+                try ctx.stack.push(.{ .boolean = true });
+            } else {
+                try ctx.stack.push(.{ .string = "arity-mismatch: expected \"error\" or \"warning\"" });
+                try ctx.stack.push(.{ .boolean = false });
+            }
+        },
+        else => {
+            try ctx.stack.push(.{ .string = "arity-mismatch: expected \"error\" or \"warning\"" });
+            try ctx.stack.push(.{ .boolean = false });
+        },
+    }
+}
+
 /// Native validator for the require-doc pragma. Maps level names to the
 /// bitmask consumed by enforceRequireDoc. Follows the same protocol as
 /// quotation validators: push validated_value t on success, or error_msg f
