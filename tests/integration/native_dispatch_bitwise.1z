@@ -1,0 +1,55 @@
+use "testing" ;
+
+"basic bitwise ops (fixnum x fixnum)" test-section
+7 3 bitand 3 "7 bitand 3" assert=
+5 3 bitor 7 "5 bitor 3" assert=
+7 3 bitxor 4 "7 bitxor 3" assert=
+0 bitnot -1 "bitnot 0" assert=
+-1 bitnot 0 "bitnot -1" assert=
+42 bitnot -43 "bitnot 42" assert=
+
+"bignum bitwise ops" test-section
+9223372036854775808 3 bitand 0 "bignum bitand fixnum" assert=
+9223372036854775808 1 bitor 9223372036854775809 "bignum bitor fixnum" assert=
+3 9223372036854775808 bitxor 9223372036854775811 "fixnum bitxor bignum" assert=
+9223372036854775808 bitnot -9223372036854775809 "bitnot bignum" assert=
+
+"shift-left" test-section
+1 4 shift-left 16 "1 shift-left 4" assert=
+-1 3 shift-left -8 "-1 shift-left 3" assert=
+1 63 shift-left 9223372036854775808 "shift-left promotes to bignum" assert=
+
+"shift-right" test-section
+16 2 shift-right 4 "16 shift-right 2" assert=
+-8 2 shift-right -2 "-8 shift-right 2 (sign-extending)" assert=
+1 64 shift-right 0 "shift-right by 64 clamps to 0" assert=
+-1 64 shift-right -1 "negative shift-right by 64 clamps to -1" assert=
+
+"ushift-right" test-section
+16 2 ushift-right 4 "16 ushift-right 2" assert=
+-1 1 ushift-right 9223372036854775807 "-1 ushift-right 1 (zero-fill)" assert=
+1 64 ushift-right 0 "ushift-right by 64 clamps to 0" assert=
+
+"shift (signed count)" test-section
+1 4 shift 16 "shift with positive count = left shift" assert=
+16 -2 shift 4 "shift with negative count = right shift" assert=
+
+"bignum shift" test-section
+9223372036854775808 1 shift-left 18446744073709551616 "bignum shift-left" assert=
+18446744073709551616 1 shift-right 9223372036854775808 "bignum shift-right" assert=
+9223372036854775808 -1 shift 4611686018427387904 "bignum shift negative" assert=
+
+"native dispatch introspection" test-section
+bitand: >word-info methods>> #len 0 > t "bitand has dispatch entries" assert=
+
+"native provenance visible" test-section
+bitand: >word-info methods>>
+#first provenance>> generator>> "native" "native provenance generator" assert=
+
+"user override of native dispatch" test-section
+bitand: method{ fixnum fixnum } [ drop drop 999 ] ;
+7 3 bitand 999 "user override of fixnum bitand fixnum" assert=
+
+"error on non-integer operands" test-section
+[ "hello" 3 bitand ] try result:err? t "string bitand fixnum errors" assert=
+[ 3.0 bitnot ] try result:err? t "float bitnot errors" assert=

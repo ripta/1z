@@ -1,0 +1,84 @@
+=== basic bitwise ops (fixnum x fixnum) ===
+Stack: [ ]
+PASS: 7 bitand 3
+Stack: [ ]
+PASS: 5 bitor 3
+Stack: [ ]
+PASS: 7 bitxor 3
+Stack: [ ]
+PASS: bitnot 0
+Stack: [ ]
+PASS: bitnot -1
+Stack: [ ]
+PASS: bitnot 42
+Stack: [ ]
+=== bignum bitwise ops ===
+Stack: [ ]
+PASS: bignum bitand fixnum
+Stack: [ ]
+PASS: bignum bitor fixnum
+Stack: [ ]
+PASS: fixnum bitxor bignum
+Stack: [ ]
+PASS: bitnot bignum
+Stack: [ ]
+=== shift-left ===
+Stack: [ ]
+PASS: 1 shift-left 4
+Stack: [ ]
+PASS: -1 shift-left 3
+Stack: [ ]
+PASS: shift-left promotes to bignum
+Stack: [ ]
+=== shift-right ===
+Stack: [ ]
+PASS: 16 shift-right 2
+Stack: [ ]
+PASS: -8 shift-right 2 (sign-extending)
+Stack: [ ]
+PASS: shift-right by 64 clamps to 0
+Stack: [ ]
+PASS: negative shift-right by 64 clamps to -1
+Stack: [ ]
+=== ushift-right ===
+Stack: [ ]
+PASS: 16 ushift-right 2
+Stack: [ ]
+PASS: -1 ushift-right 1 (zero-fill)
+Stack: [ ]
+PASS: ushift-right by 64 clamps to 0
+Stack: [ ]
+=== shift (signed count) ===
+Stack: [ ]
+PASS: shift with positive count = left shift
+Stack: [ ]
+PASS: shift with negative count = right shift
+Stack: [ ]
+=== bignum shift ===
+Stack: [ ]
+PASS: bignum shift-left
+Stack: [ ]
+PASS: bignum shift-right
+Stack: [ ]
+PASS: bignum shift negative
+Stack: [ ]
+=== native dispatch introspection ===
+Stack: [ ]
+PASS: bitand has dispatch entries
+Stack: [ ]
+=== native provenance visible ===
+Stack: [ ]
+Stack: [ { method-info{ types: { "bignum" "fixnum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } method-info{ types: { "fixnum" "fixnum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } method-info{ types: { "bignum" "bignum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } method-info{ types: { "fixnum" "bignum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } } ]
+PASS: native provenance generator
+Stack: [ ]
+=== user override of native dispatch ===
+Stack: [ ]
+Stack: [ ]
+PASS: user override of fixnum bitand fixnum
+Stack: [ ]
+=== error on non-integer operands ===
+Stack: [ ]
+PASS: string bitand fixnum errors
+Stack: [ ]
+PASS: float bitnot errors
+Stack: [ ]
