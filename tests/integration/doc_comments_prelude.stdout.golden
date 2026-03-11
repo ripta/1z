@@ -17,6 +17,9 @@ Stack: [ ]
 Absolute value. Works on fixnums and floats.
 abs ( n -- n ) \native
 
+  method{ bignum }
+  method{ float }
+  method{ fixnum }
 Stack: [ ]
 Less than or equal.
 <= ( a b -- ? ) \compound

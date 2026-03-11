@@ -5,6 +5,15 @@ Stack: [ ]
 Add two numbers. Promotes to bignum on fixnum overflow, or to float if either operand is a float.
 + ( a b -- a+b ) \native
 
+  method{ fixnum bignum }
+  method{ float float }
+  method{ fixnum float }
+  method{ bignum fixnum }
+  method{ bignum bignum }
+  method{ float bignum }
+  method{ fixnum fixnum }
+  method{ bignum float }
+  method{ float fixnum }
 Stack: [ ]
 Conditional execution.
 if ( ..a ? true-quot false-quot -- ..b ) [<marker:branch-combinator>] \native

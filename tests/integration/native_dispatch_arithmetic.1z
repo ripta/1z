@@ -1,0 +1,64 @@
+use "testing" ;
+
+"basic arithmetic via dispatch" test-section
+3 4 + 7 "fixnum + fixnum" assert=
+10 3 - 7 "fixnum - fixnum" assert=
+6 7 * 42 "fixnum * fixnum" assert=
+10 3 / 3 "fixnum / fixnum" assert=
+10 3 % 1 "fixnum % fixnum" assert=
+
+"mixed-type arithmetic" test-section
+3 4.0 + 7.0 "fixnum + float" assert=
+4.0 3 + 7.0 "float + fixnum" assert=
+2.5 3.5 + 6.0 "float + float" assert=
+10.0 3 / 10.0 3.0 / "float / fixnum matches float / float" assert=
+
+"bignum overflow promotion" test-section
+9223372036854775807 1 + 9223372036854775808 "fixnum overflow promotes to bignum" assert=
+-9223372036854775808 1 - -9223372036854775809 "fixnum underflow promotes to bignum" assert=
+
+"equality cross-type" test-section
+3 3.0 = t "fixnum = float" assert=
+3.0 3 = t "float = fixnum" assert=
+3 4.0 = f "fixnum != float" assert=
+42 42 = t "same-type fixnum equality" assert=
+"hello" "hello" = t "same-type string equality" assert=
+
+"comparison operators" test-section
+3 5 < t "3 < 5" assert=
+5 3 < f "5 not < 3" assert=
+5 3 > t "5 > 3" assert=
+3 5 > f "3 not > 5" assert=
+3.0 5 < t "float < fixnum" assert=
+3 5.0 < t "fixnum < float" assert=
+
+"abs" test-section
+-5 abs 5 "abs negative fixnum" assert=
+5 abs 5 "abs positive fixnum" assert=
+-3.5 abs 3.5 "abs negative float" assert=
+
+">float conversion" test-section
+42 >float 42.0 ">float fixnum" assert=
+3.14 >float 3.14 ">float passthrough" assert=
+"2.5" >float 2.5 ">float string" assert=
+
+">integer conversion" test-section
+3.7 >integer 3 ">integer truncates" assert=
+42 >integer 42 ">integer fixnum passthrough" assert=
+
+"native dispatch introspection" test-section
++: >word-info methods>> #len 0 > t "plus has dispatch entries" assert=
+
+"native provenance visible" test-section
++: >word-info methods>>
+#first provenance>> generator>> "native" "native provenance generator" assert=
+
+"user override of native dispatch" test-section
++: method{ fixnum fixnum } [ drop drop 999 ] ;
+1 2 + 999 "user override of fixnum+fixnum" assert=
+
+"error on non-numeric +" test-section
+[ "hello" 3 + ] try result:err? t "string + fixnum errors" assert=
+
+"division by zero preserved" test-section
+[ 1 0 / ] try result:err? t "division by zero errors" assert=

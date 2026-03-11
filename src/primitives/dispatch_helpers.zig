@@ -174,6 +174,24 @@ pub fn tryDispatchBinaryViaCmp(ctx: *Context, comptime op: enum { eq, lt, gt }) 
     return false;
 }
 
+/// Like tryDispatchUnary, but without the isUserType guard.
+///
+/// Needed when a native operator has dispatch methods registered for native
+/// types (e.g., `abs` with fixnum/bignum/float entries registered at startup).
+/// Most operators should continue using tryDispatchUnary; only operators that
+/// need native-type dispatch should use this variant.
+pub fn tryDispatchUnaryAny(ctx: *Context, word_name: []const u8) !bool {
+    if (ctx.stack.depth() < 1) return false;
+
+    const a = try ctx.stack.peek();
+
+    if (lookupUnaryWithFallback(ctx, word_name, a)) |entry| {
+        try executeDispatchBody(ctx, entry.body);
+        return true;
+    }
+    return false;
+}
+
 /// Try to dispatch a generic word via the dispatch table.
 ///
 /// Unlike the tryDispatchBinary / tryDispatchUnary versions used by native ops,

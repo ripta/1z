@@ -1,0 +1,98 @@
+=== basic arithmetic via dispatch ===
+Stack: [ ]
+PASS: fixnum + fixnum
+Stack: [ ]
+PASS: fixnum - fixnum
+Stack: [ ]
+PASS: fixnum * fixnum
+Stack: [ ]
+PASS: fixnum / fixnum
+Stack: [ ]
+PASS: fixnum % fixnum
+Stack: [ ]
+=== mixed-type arithmetic ===
+Stack: [ ]
+PASS: fixnum + float
+Stack: [ ]
+PASS: float + fixnum
+Stack: [ ]
+PASS: float + float
+Stack: [ ]
+PASS: float / fixnum matches float / float
+Stack: [ ]
+=== bignum overflow promotion ===
+Stack: [ ]
+PASS: fixnum overflow promotes to bignum
+Stack: [ ]
+PASS: fixnum underflow promotes to bignum
+Stack: [ ]
+=== equality cross-type ===
+Stack: [ ]
+PASS: fixnum = float
+Stack: [ ]
+PASS: float = fixnum
+Stack: [ ]
+PASS: fixnum != float
+Stack: [ ]
+PASS: same-type fixnum equality
+Stack: [ ]
+PASS: same-type string equality
+Stack: [ ]
+=== comparison operators ===
+Stack: [ ]
+PASS: 3 < 5
+Stack: [ ]
+PASS: 5 not < 3
+Stack: [ ]
+PASS: 5 > 3
+Stack: [ ]
+PASS: 3 not > 5
+Stack: [ ]
+PASS: float < fixnum
+Stack: [ ]
+PASS: fixnum < float
+Stack: [ ]
+=== abs ===
+Stack: [ ]
+PASS: abs negative fixnum
+Stack: [ ]
+PASS: abs positive fixnum
+Stack: [ ]
+PASS: abs negative float
+Stack: [ ]
+=== >float conversion ===
+Stack: [ ]
+PASS: >float fixnum
+Stack: [ ]
+PASS: >float passthrough
+Stack: [ ]
+PASS: >float string
+Stack: [ ]
+=== >integer conversion ===
+Stack: [ ]
+PASS: >integer truncates
+Stack: [ ]
+PASS: >integer fixnum passthrough
+Stack: [ ]
+=== native dispatch introspection ===
+Stack: [ ]
+PASS: plus has dispatch entries
+Stack: [ ]
+=== native provenance visible ===
+Stack: [ ]
+Stack: [ { method-info{ types: { "fixnum" "bignum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } method-info{ types: { "float" "float" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } method-info{ types: { "fixnum" "float" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } method-info{ types: { "bignum" "fixnum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } method-info{ types: { "bignum" "bignum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } method-info{ types: { "float" "bignum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } method-info{ types: { "fixnum" "fixnum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } method-info{ types: { "bignum" "float" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } method-info{ types: { "float" "fixnum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } } ]
+PASS: native provenance generator
+Stack: [ ]
+=== user override of native dispatch ===
+Stack: [ ]
+Stack: [ ]
+PASS: user override of fixnum+fixnum
+Stack: [ ]
+=== error on non-numeric + ===
+Stack: [ ]
+PASS: string + fixnum errors
+Stack: [ ]
+=== division by zero preserved ===
+Stack: [ ]
+PASS: division by zero errors
+Stack: [ ]
