@@ -495,7 +495,7 @@ pub const primitives = [_]Primitive{
 
 /// #len ( seq -- n ) - Get length of sequence
 pub fn nativeLen(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryAny(ctx, "#len")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, "#len")) return;
     const val = try ctx.stack.pop();
     setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
     return error.TypeMismatch;
@@ -503,7 +503,7 @@ pub fn nativeLen(ctx: *Context) anyerror!void {
 
 /// #nth ( seq n -- elem ) - Get element at index
 pub fn nativeNth(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryAny(ctx, "#nth")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "#nth")) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     _ = b;
@@ -516,17 +516,15 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
     // Dispatch for custom types: seq is at position 2 (below n and value)
     if (ctx.stack.depth() >= 3) {
         const seq_peek = try ctx.stack.peekN(2);
-        if (dispatch_mod.isUserType(seq_peek)) {
-            const a_type = dispatch_mod.dispatchTypeName(seq_peek);
-            if (ctx.lookupUnaryDispatch("#nth!", a_type)) |entry| {
+        const a_type = dispatch_mod.dispatchTypeName(seq_peek);
+        if (ctx.lookupUnaryDispatch("#nth!", a_type)) |entry| {
+            try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+            return;
+        }
+        if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
+            if (ctx.lookupUnaryDispatch("#nth!", ae)) |entry| {
                 try dispatch_helpers.executeDispatchBody(ctx, entry.body);
                 return;
-            }
-            if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
-                if (ctx.lookupUnaryDispatch("#nth!", ae)) |entry| {
-                    try dispatch_helpers.executeDispatchBody(ctx, entry.body);
-                    return;
-                }
             }
         }
     }
@@ -584,7 +582,7 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
 
 /// #first ( seq -- elem ) - Get first element
 pub fn nativeFirst(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryAny(ctx, "#first")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, "#first")) return;
     const val = try ctx.stack.pop();
     if (val == .set) {
         setErrorContext(ctx, "sets do not support positional access", .{});
@@ -596,7 +594,7 @@ pub fn nativeFirst(ctx: *Context) anyerror!void {
 
 /// #last ( seq -- elem ) - Get last element
 pub fn nativeLast(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryAny(ctx, "#last")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, "#last")) return;
     const val = try ctx.stack.pop();
     if (val == .set) {
         setErrorContext(ctx, "sets do not support positional access", .{});

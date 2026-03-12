@@ -568,7 +568,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
 // =============================================================================
 
 pub fn nativeAdd(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryAny(ctx, "+")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "+")) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
@@ -577,7 +577,7 @@ pub fn nativeAdd(ctx: *Context) anyerror!void {
 }
 
 pub fn nativeSub(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryAny(ctx, "-")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "-")) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
@@ -586,7 +586,7 @@ pub fn nativeSub(ctx: *Context) anyerror!void {
 }
 
 pub fn nativeMul(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryAny(ctx, "*")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "*")) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
@@ -596,7 +596,7 @@ pub fn nativeMul(ctx: *Context) anyerror!void {
 
 /// / ( a b -- a/b ) - Division
 pub fn nativeDiv(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryAny(ctx, "/")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "/")) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
@@ -606,7 +606,7 @@ pub fn nativeDiv(ctx: *Context) anyerror!void {
 
 /// % ( a b -- a%b ) - Modulo / fmod
 pub fn nativeMod(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryAny(ctx, "%")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "%")) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
@@ -636,7 +636,7 @@ pub fn nativeMulWrap(ctx: *Context) anyerror!void {
 
 /// = ( a b -- ? ) - Equality comparison
 pub fn nativeEq(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryAny(ctx, "=")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "=")) return;
     if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .eq)) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
@@ -654,7 +654,7 @@ pub fn nativeInnerEq(ctx: *Context) anyerror!void {
 
 /// < ( a b -- ? ) - Less than
 pub fn nativeLt(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryAny(ctx, "<")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "<")) return;
     if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .lt)) return;
     _ = try ctx.stack.pop();
     const a = try ctx.stack.pop();
@@ -664,7 +664,7 @@ pub fn nativeLt(ctx: *Context) anyerror!void {
 
 /// > ( a b -- ? ) - Greater than
 pub fn nativeGt(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryAny(ctx, ">")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ">")) return;
     if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .gt)) return;
     _ = try ctx.stack.pop();
     const a = try ctx.stack.pop();
@@ -674,7 +674,7 @@ pub fn nativeGt(ctx: *Context) anyerror!void {
 
 /// >float ( x -- f ) - Convert fixnum or string to float
 fn nativeToFloat(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryAny(ctx, ">float")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ">float")) return;
     const val = try ctx.stack.pop();
     helpers.setTypeMismatchError(ctx, "fixnum, bignum, float, or string", val);
     return error.TypeMismatch;
@@ -682,7 +682,7 @@ fn nativeToFloat(ctx: *Context) anyerror!void {
 
 /// >integer ( f -- n ) - Float to fixnum, truncate toward zero
 fn nativeToInteger(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryAny(ctx, ">integer")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ">integer")) return;
     const val = try ctx.stack.pop();
     helpers.setTypeMismatchError(ctx, "float or fixnum", val);
     return error.TypeMismatch;
@@ -730,7 +730,7 @@ fn nativeFloatParts(ctx: *Context) anyerror!void {
 
 /// abs ( n -- n ) - Absolute value for fixnums, bignums, and floats
 fn nativeAbs(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryAny(ctx, "abs")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, "abs")) return;
     const val = try ctx.stack.pop();
     helpers.setTypeMismatchError(ctx, "number", val);
     return error.TypeMismatch;

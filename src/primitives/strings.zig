@@ -47,16 +47,16 @@ fn nativeAsStringSymbol(ctx: *Context) anyerror!void {
 
 pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
     const inspect_types = [_][]const u8{
-        "fixnum",          "float",        "bignum",
-        "boolean",         "string",       "symbol",
-        "array",           "quotation",    "hash",
-        "vector",          "byte-array",   "set",
-        "mutable-map",     "stream",       "parameter",
-        "module",          "marker",       "struct-type",
-        "template",        "benchmark-report",
-        "stack-effect",    "error",        "task",
-        "channel",         "iterator",     "doc-string",
-        "type",            "unit",
+        "fixnum",      "float",            "bignum",
+        "boolean",     "string",           "symbol",
+        "array",       "quotation",        "hash",
+        "vector",      "byte-array",       "set",
+        "mutable-map", "stream",           "parameter",
+        "module",      "marker",           "struct-type",
+        "template",    "benchmark-report", "stack-effect",
+        "error",       "task",             "channel",
+        "iterator",    "doc-string",       "type",
+        "unit",
     };
 
     for (inspect_types) |t| {
@@ -89,7 +89,7 @@ pub const primitives = [_]Primitive{
 /// inspect ( value -- string ) - Convert any value to its debug string representation,
 /// including quotes for strings
 fn nativeInspect(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryAny(ctx, "inspect")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, "inspect")) return;
 
     const val = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
@@ -101,7 +101,7 @@ fn nativeInspect(ctx: *Context) anyerror!void {
 /// >string ( value -- string ) - Convert value to string, strings pass through unquoted,
 /// in contrast to inspect
 fn nativeAsString(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryAny(ctx, ">string")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ">string")) return;
 
     const val = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();

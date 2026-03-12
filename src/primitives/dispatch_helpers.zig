@@ -59,40 +59,18 @@ fn lookupUnaryWithFallback(ctx: *Context, word_name: []const u8, a: Value) ?disp
 
 /// Try to dispatch a binary operation via the dispatch table.
 ///
-/// Peeks at the top two stack values, checks if either is a user type
-/// (tagged or struct_instance), and if so, looks up a registered method.
+/// Peeks at the top two stack values and looks up a registered method.
 /// If found, executes the method body; operands remain on stack for the
 /// body to consume. Returns true if dispatched, false if not.
 ///
-/// Each native that supports user-type dispatch must call this function
-/// explicitly. Only type-switching natives that branch on operand types
-/// (arithmetic, comparison, inspect, sequence ops, etc.) should opt in.
+/// Each native that supports dispatch must call this function explicitly.
+/// Only type-switching natives that branch on operand types (arithmetic,
+/// comparison, inspect, sequence ops, etc.) should opt in.
 ///
 /// Type-agnostic natives (dup, drop, swap, etc.) must not dispatch.
 ///
 /// See also notes in the implementation of `nativeDefineMethod`.
 pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
-    if (ctx.stack.depth() < 2) return false;
-
-    const a = try ctx.stack.peekN(1);
-    const b = try ctx.stack.peek();
-    if (!dispatch_mod.isUserType(a) and !dispatch_mod.isUserType(b)) return false;
-
-    if (lookupBinaryWithFallback(ctx, word_name, a, b)) |entry| {
-        try executeDispatchBody(ctx, entry.body);
-        return true;
-    }
-
-    return false;
-}
-
-/// Like tryDispatchBinary, but without the isUserType guard.
-///
-/// Needed when a native operator has dispatch methods registered for native
-/// type pairs (e.g., `/` with fixnum/fixnum methods registered by the ratio
-/// library). Most operators should continue using tryDispatchBinary; only
-/// operators that need native-to-native dispatch should use this variant.
-pub fn tryDispatchBinaryAny(ctx: *Context, word_name: []const u8) !bool {
     if (ctx.stack.depth() < 2) return false;
 
     const a = try ctx.stack.peekN(1);
@@ -108,18 +86,16 @@ pub fn tryDispatchBinaryAny(ctx: *Context, word_name: []const u8) !bool {
 
 /// Try to dispatch a unary operation via the dispatch table.
 ///
-/// Peeks at the top stack value, checks if it's a user type (tagged or
-/// struct_instance), and if so, looks up a registered method. If found,
+/// Peeks at the top stack value and looks up a registered method. If found,
 /// executes the method body; operand remains on stack. Returns true if
 /// dispatched, false if not.
 ///
 /// Same opt-in rules as tryDispatchBinary: each native that supports
-/// user-type dispatch must call this explicitly.
+/// dispatch must call this explicitly.
 pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
     if (ctx.stack.depth() < 1) return false;
 
     const a = try ctx.stack.peek();
-    if (!dispatch_mod.isUserType(a)) return false;
 
     if (lookupUnaryWithFallback(ctx, word_name, a)) |entry| {
         try executeDispatchBody(ctx, entry.body);
@@ -142,8 +118,6 @@ pub fn tryDispatchBinaryViaCmp(ctx: *Context, comptime op: enum { eq, lt, gt }) 
 
     const a = try ctx.stack.peekN(1);
     const b = try ctx.stack.peek();
-    if (!dispatch_mod.isUserType(a) and !dispatch_mod.isUserType(b)) return false;
-
     if (lookupBinaryWithFallback(ctx, "cmp", a, b)) |entry| {
         try executeDispatchBody(ctx, entry.body);
         const result = try ctx.stack.pop();
@@ -171,24 +145,6 @@ pub fn tryDispatchBinaryViaCmp(ctx: *Context, comptime op: enum { eq, lt, gt }) 
         return true;
     }
 
-    return false;
-}
-
-/// Like tryDispatchUnary, but without the isUserType guard.
-///
-/// Needed when a native operator has dispatch methods registered for native
-/// types (e.g., `abs` with fixnum/bignum/float entries registered at startup).
-/// Most operators should continue using tryDispatchUnary; only operators that
-/// need native-type dispatch should use this variant.
-pub fn tryDispatchUnaryAny(ctx: *Context, word_name: []const u8) !bool {
-    if (ctx.stack.depth() < 1) return false;
-
-    const a = try ctx.stack.peek();
-
-    if (lookupUnaryWithFallback(ctx, word_name, a)) |entry| {
-        try executeDispatchBody(ctx, entry.body);
-        return true;
-    }
     return false;
 }
 
@@ -233,14 +189,14 @@ test "tryDispatchBinary returns false with empty stack" {
     try std.testing.expect(!result);
 }
 
-test "tryDispatchBinary returns false with only native types" {
+test "tryDispatchBinary returns false when no method registered" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
     try ctx.stack.push(.{ .fixnum = 1 });
     try ctx.stack.push(.{ .fixnum = 2 });
 
-    const result = try tryDispatchBinary(&ctx, "+");
+    const result = try tryDispatchBinary(&ctx, "no-such-word");
     try std.testing.expect(!result);
 
     try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
@@ -254,7 +210,7 @@ test "tryDispatchUnary returns false with empty stack" {
     try std.testing.expect(!result);
 }
 
-test "tryDispatchUnary returns false with native type" {
+test "tryDispatchUnary returns false when no method registered" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 

@@ -57,16 +57,6 @@ pub fn dispatchEnumName(val: Value) ?[]const u8 {
     };
 }
 
-/// Returns true for `.tagged` and `.struct_instance`.
-/// The types that trigger dispatch lookups. Native ops only attempt dispatch when
-/// at least one operand satisfies this.
-pub fn isUserType(val: Value) bool {
-    return switch (val) {
-        .tagged, .struct_instance, .resource => true,
-        else => false,
-    };
-}
-
 /// Key for dispatch table lookups: (word_name, type_a, type_b).
 /// For unary dispatch, type_b is `unary_sentinel`.
 pub const DispatchKey = struct {
@@ -252,24 +242,6 @@ test "dispatchTypeName returns struct type name for struct instances" {
     const st = value_mod.StructType{ .name = "point", .fields = &.{ "x", "y" } };
     var si = value_mod.StructInstance{ .struct_type = &st, .fields = &.{} };
     try std.testing.expectEqualStrings("point", dispatchTypeName(.{ .struct_instance = &si }));
-}
-
-test "isUserType returns true for tagged and struct_instance" {
-    const vt = value_mod.VirtualType{ .name = "duration", .inner_type = "fixnum" };
-    const inner = Value{ .fixnum = 42 };
-    const tagged = Value{ .tagged = .{ .tag = &vt, .inner = &inner } };
-    try std.testing.expect(isUserType(tagged));
-
-    const st = value_mod.StructType{ .name = "point", .fields = &.{ "x", "y" } };
-    var si = value_mod.StructInstance{ .struct_type = &st, .fields = &.{} };
-    try std.testing.expect(isUserType(.{ .struct_instance = &si }));
-}
-
-test "isUserType returns false for native types" {
-    try std.testing.expect(!isUserType(.{ .fixnum = 42 }));
-    try std.testing.expect(!isUserType(.{ .boolean = true }));
-    try std.testing.expect(!isUserType(.{ .string = "hello" }));
-    try std.testing.expect(!isUserType(.{ .symbol = "foo" }));
 }
 
 test "register and lookupBinary exact match" {

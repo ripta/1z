@@ -1,0 +1,19 @@
+use "testing" ;
+
+"override + for fixnum+fixnum" test-section
++: method{ fixnum fixnum } [ drop drop 999 ] ;
+3 4 + 999 "custom + runs instead of native" assert=
+
+"non-overridden arithmetic still works" test-section
+3.0 4.0 + 7.0 "float + float still native" assert=
+10 3 - 7 "fixnum - fixnum still native" assert=
+
+"override inspect for string" test-section
+inspect: method{ string } [ drop "custom-inspect" ] ;
+"hello" inspect "custom-inspect" "custom inspect for string" assert=
+42 inspect "42" "fixnum inspect still native" assert=
+
+"override #len for array" test-section
+#len: method{ array } [ drop -1 ] ;
+{ 1 2 3 } #len -1 "custom #len for array" assert=
+"hello" #len 5 "string #len still native" assert=

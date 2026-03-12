@@ -1,0 +1,25 @@
+=== override + for fixnum+fixnum ===
+Stack: [ ]
+Stack: [ ]
+PASS: custom + runs instead of native
+Stack: [ ]
+=== non-overridden arithmetic still works ===
+Stack: [ ]
+PASS: float + float still native
+Stack: [ ]
+PASS: fixnum - fixnum still native
+Stack: [ ]
+=== override inspect for string ===
+Stack: [ ]
+Stack: [ ]
+PASS: custom inspect for string
+Stack: [ ]
+PASS: fixnum inspect still native
+Stack: [ ]
+=== override #len for array ===
+Stack: [ ]
+Stack: [ ]
+PASS: custom #len for array
+Stack: [ ]
+PASS: string #len still native
+Stack: [ ]
