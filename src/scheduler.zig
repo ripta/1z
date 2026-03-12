@@ -37,6 +37,13 @@ pub fn monotonicNowNs() i128 {
     return @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
 }
 
+pub const ClockMode = union(enum) {
+    /// Use the system monotonic clock for real timestamps.
+    real,
+    /// Use a manually-advanced nanosecond counter for deterministic testing.
+    fake: i128,
+};
+
 /// Cooperative scheduler with a FIFO run queue.
 ///
 /// Drives green thread execution by round-robin scheduling tasks. Each task
@@ -63,6 +70,8 @@ pub const Scheduler = struct {
     deadlock_detect_ns: ?i128 = null,
     /// Monotonic timestamp of the last progress event (task done, sleeper woken, I/O ready).
     last_progress_ns: i128 = 0,
+    /// Clock mode.
+    clock: ClockMode = .real,
 
     pub fn init(allocator: Allocator) !Scheduler {
         return .{
@@ -76,7 +85,21 @@ pub const Scheduler = struct {
         };
     }
 
-    /// Free resources under the scheduler.
+    pub fn nowNs(self: *const Scheduler) i128 {
+        return switch (self.clock) {
+            .real => monotonicNowNs(),
+            .fake => |t| t,
+        };
+    }
+
+    pub fn advanceClock(self: *Scheduler, delta_ns: i128) void {
+        switch (self.clock) {
+            .fake => |*t| t.* += delta_ns,
+            .real => unreachable,
+        }
+        _ = self.wakeExpiredSleepers();
+    }
+
     pub fn deinit(self: *Scheduler) void {
         for (self.finished_tasks.items) |t| {
             if (t.stack_mem) |mem| {
@@ -138,7 +161,7 @@ pub const Scheduler = struct {
     /// Inserts the task into the sleep queue and swaps back to the scheduler.
     pub fn sleepCurrentTask(self: *Scheduler, duration_ns: i128) void {
         if (self.current_task) |task| {
-            const wake_time = monotonicNowNs() + duration_ns;
+            const wake_time = self.nowNs() + duration_ns;
 
             self.sleep_queue.add(.{ .task = task, .wake_time = wake_time }) catch {};
             _ = task_mod.swapcontext(&task.uctx, &self.scheduler_uctx);
@@ -148,7 +171,7 @@ pub const Scheduler = struct {
     /// Move all sleep queue entries whose wake time has passed into the run queue.
     /// Returns true when at least one sleeper was woken.
     fn wakeExpiredSleepers(self: *Scheduler) bool {
-        const now = monotonicNowNs();
+        const now = self.nowNs();
         var woke_any = false;
         while (self.sleep_queue.peek()) |entry| {
             if (entry.wake_time > now) break;
@@ -275,7 +298,7 @@ pub const Scheduler = struct {
 
             var timeout: ?i128 = if (has_sleepers) blk: {
                 const next = self.sleep_queue.peek().?;
-                const now = monotonicNowNs();
+                const now = self.nowNs();
                 const remaining = next.wake_time - now;
                 break :blk if (remaining > 0) remaining else @as(i128, 0);
             } else null;
@@ -285,6 +308,10 @@ pub const Scheduler = struct {
                 const stall_remaining = threshold - (now - self.last_progress_ns);
                 const stall_timeout: i128 = if (stall_remaining > 0) stall_remaining else 0;
                 timeout = if (timeout) |t| @min(t, stall_timeout) else stall_timeout;
+            }
+
+            if (self.clock == .fake) {
+                timeout = 0;
             }
 
             const ready = self.multiplexer.poll(timeout) catch &.{};
@@ -421,7 +448,7 @@ pub const Scheduler = struct {
     fn sleepRemaining(self: *const Scheduler, task: *const Task) ?i128 {
         for (self.sleep_queue.items[0..self.sleep_queue.count()]) |entry| {
             if (entry.task == task) {
-                const now = monotonicNowNs();
+                const now = self.nowNs();
                 const remaining = entry.wake_time - now;
 
                 return if (remaining > 0) remaining else 0;
@@ -563,4 +590,21 @@ test "runLoop exits immediately with empty queue and should not hang or crash" {
     defer sched.deinit();
 
     sched.runLoop();
+}
+
+test "nowNs returns fake value" {
+    var sched = try Scheduler.init(std.testing.allocator);
+    defer sched.deinit();
+
+    sched.clock = .{ .fake = 42_000_000_000 };
+    try std.testing.expectEqual(@as(i128, 42_000_000_000), sched.nowNs());
+}
+
+test "advanceClock advances fake time" {
+    var sched = try Scheduler.init(std.testing.allocator);
+    defer sched.deinit();
+
+    sched.clock = .{ .fake = 1_000_000_000 };
+    sched.advanceClock(500_000_000);
+    try std.testing.expectEqual(@as(i128, 1_500_000_000), sched.nowNs());
 }

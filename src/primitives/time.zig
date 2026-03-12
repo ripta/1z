@@ -6,6 +6,7 @@ const popString = helpers.popString;
 const setErrorContext = helpers.setErrorContext;
 
 const Primitive = @import("types.zig").Primitive;
+const Scheduler = @import("../scheduler.zig").Scheduler;
 
 pub const primitives = [_]Primitive{
     .{ .name = "clock-realtime", .stack_effect = "-- sec nsec", .doc = "Current wall-clock time (UTC) since Unix epoch.", .func = nativeClockRealtime },
@@ -28,6 +29,19 @@ fn nativeClockRealtime(ctx: *Context) anyerror!void {
 
 /// clock-monotonic ( -- sec nsec ) - Monotonic clock for measuring durations
 fn nativeClockMonotonic(ctx: *Context) anyerror!void {
+    if (ctx.scheduler) |sched| {
+        switch (sched.clock) {
+            .fake => |ns| {
+                const sec = @divFloor(ns, std.time.ns_per_s);
+                const nsec = @mod(ns, std.time.ns_per_s);
+                try ctx.stack.push(.{ .fixnum = @intCast(sec) });
+                try ctx.stack.push(.{ .fixnum = @intCast(nsec) });
+                return;
+            },
+            .real => {},
+        }
+    }
+
     const ts = std.posix.clock_gettime(.MONOTONIC) catch |err| {
         return switch (err) {
             error.UnsupportedClock => error.InvalidType,
