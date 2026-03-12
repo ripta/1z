@@ -1,0 +1,47 @@
+use "testing" ;
+
+"native dispatch access - arithmetic" test-section
+3 4 native.dispatch+ 7 "basic addition" assert=
+10 3 native.dispatch- 7 "subtraction" assert=
+6 7 native.dispatch* 42 "multiplication" assert=
+15 3 native.dispatch/ 5 "division" assert=
+17 5 native.dispatch% 2 "modulo" assert=
+3 4.0 native.dispatch+ 7.0 "cross-type addition" assert=
+
+"native dispatch access - comparison" test-section
+3 5 native.dispatch< "less than" assert-true
+5 3 native.dispatch> "greater than" assert-true
+
+"native dispatch access - unary arithmetic" test-section
+-42 native.dispatchabs 42 "abs" assert=
+42 native.dispatch>float 42.0 ">float" assert=
+3.14 native.dispatch>integer 3 ">integer" assert=
+
+"native dispatch access - bitwise" test-section
+0xff 0x0f native.dispatchbitand 0x0f "bitand" assert=
+0xf0 0x0f native.dispatchbitor 0xff "bitor" assert=
+0xff 0x0f native.dispatchbitxor 0xf0 "bitxor" assert=
+0 native.dispatchbitnot -1 "bitnot" assert=
+1 4 native.dispatchshift-left 16 "shift-left" assert=
+16 4 native.dispatchshift-right 1 "shift-right" assert=
+1 4 native.dispatchshift 16 "shift positive" assert=
+16 -4 native.dispatchshift 1 "shift negative" assert=
+
+"native dispatch access - sequences" test-section
+{ 1 2 3 } native.dispatch#len 3 "#len" assert=
+{ 10 20 30 } native.dispatch#first 10 "#first" assert=
+{ 10 20 30 } native.dispatch#last 30 "#last" assert=
+{ 10 20 30 } 1 native.dispatch#nth 20 "#nth" assert=
+
+"native dispatch access - strings" test-section
+42 native.dispatchinspect "42" "inspect" assert=
+42 native.dispatch>string "42" ">string" assert=
+
+"native dispatch access after override" test-section
++: method{ fixnum fixnum } [ drop drop 999 ] ;
+3 4 + 999 "overridden + returns 999" assert=
+3 4 native.dispatch+ 7 "native.dispatch+ still returns 7" assert=
+
+"native dispatch wrapping pattern" test-section
+inspect: method{ fixnum } [ native.dispatchinspect "!" #append ] ;
+42 inspect "42!" "wrapping inspect adds !" assert=

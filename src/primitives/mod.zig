@@ -62,6 +62,7 @@ pub const resources = @import("resources.zig");
 pub const ffi_toy = @import("../ffi/toy.zig");
 pub const ffi_dynamic = @import("../ffi/dynamic.zig");
 pub const pragmas = @import("pragmas.zig");
+pub const native_dispatch_access = @import("native_dispatch_access.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -134,4 +135,5 @@ pub const extracted_registry_entries = structs.registry_entries ++
     sockets.registry_entries ++
     iterators.registry_entries ++
     ffi_toy.registry_entries ++
-    ffi_dynamic.registry_entries;
+    ffi_dynamic.registry_entries ++
+    native_dispatch_access.registry_entries;

@@ -826,6 +826,34 @@ pub const Context = struct {
         return null;
     }
 
+    /// Look up a binary dispatch entry in the native-only shadow table,
+    /// walking the parent context chain.
+    pub fn lookupNativeBinaryDispatch(self: *const Context, word_name: []const u8, type_a: []const u8, type_b: []const u8) ?DispatchEntry {
+        if (self.dispatch.lookupNativeBinary(word_name, type_a, type_b)) |entry| return entry;
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            if (ctx.dispatch.lookupNativeBinary(word_name, type_a, type_b)) |entry| return entry;
+            ancestor = ctx.parent_context;
+        }
+
+        return null;
+    }
+
+    /// Look up a unary dispatch entry in the native-only shadow table,
+    /// walking the parent context chain.
+    pub fn lookupNativeUnaryDispatch(self: *const Context, word_name: []const u8, type_a: []const u8) ?DispatchEntry {
+        if (self.dispatch.lookupNativeUnary(word_name, type_a)) |entry| return entry;
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            if (ctx.dispatch.lookupNativeUnary(word_name, type_a)) |entry| return entry;
+            ancestor = ctx.parent_context;
+        }
+
+        return null;
+    }
+
     /// Look up enum variant types by enum name, walking the parent context chain.
     pub fn lookupEnumVariants(self: *const Context, enum_name: []const u8) ?[]const *const value_mod.VirtualType {
         if (self.enum_registry.get(enum_name)) |variants| return variants;

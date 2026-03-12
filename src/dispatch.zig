@@ -108,17 +108,20 @@ pub const DispatchEntry = struct {
 /// Dispatch table mapping (word_name, type_a, type_b) to method bodies.
 pub const DispatchTable = struct {
     entries: std.HashMapUnmanaged(DispatchKey, DispatchEntry, DispatchKeyContext, 80),
+    native_entries: std.HashMapUnmanaged(DispatchKey, DispatchEntry, DispatchKeyContext, 80),
     allocator: Allocator,
 
     pub fn init(allocator: Allocator) DispatchTable {
         return .{
             .entries = .{},
+            .native_entries = .{},
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *DispatchTable) void {
         self.entries.deinit(self.allocator);
+        self.native_entries.deinit(self.allocator);
     }
 
     /// Register a method. Returns error.DuplicateMethod if the key exists
@@ -193,14 +196,41 @@ pub const DispatchTable = struct {
         type_b: []const u8,
         func: NativeFn,
     ) !void {
-        try self.register(
-            .{ .word_name = word_name, .type_a = type_a, .type_b = type_b },
-            .{
-                .body = .{ .native_fn = func },
-                .provenance = .{ .generator = "native", .parent = "", .role = "", .field = "" },
-            },
-            false,
-        );
+        const key = DispatchKey{ .word_name = word_name, .type_a = type_a, .type_b = type_b };
+        const entry = DispatchEntry{
+            .body = .{ .native_fn = func },
+            .provenance = .{ .generator = "native", .parent = "", .role = "", .field = "" },
+        };
+        try self.register(key, entry, false);
+        try self.native_entries.put(self.allocator, key, entry);
+    }
+
+    /// Look up a binary dispatch entry in the native-only shadow table.
+    pub fn lookupNativeBinary(self: *const DispatchTable, word_name: []const u8, type_a: []const u8, type_b: []const u8) ?DispatchEntry {
+        if (self.native_entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = type_b })) |entry| {
+            return entry;
+        }
+        if (self.native_entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = any_sentinel })) |entry| {
+            return entry;
+        }
+        if (self.native_entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = type_b })) |entry| {
+            return entry;
+        }
+        if (self.native_entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = any_sentinel })) |entry| {
+            return entry;
+        }
+        return null;
+    }
+
+    /// Look up a unary dispatch entry in the native-only shadow table.
+    pub fn lookupNativeUnary(self: *const DispatchTable, word_name: []const u8, type_a: []const u8) ?DispatchEntry {
+        if (self.native_entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = unary_sentinel })) |entry| {
+            return entry;
+        }
+        if (self.native_entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = unary_sentinel })) |entry| {
+            return entry;
+        }
+        return null;
     }
 
     /// Collect all dispatch keys and entries registered for a given word name.

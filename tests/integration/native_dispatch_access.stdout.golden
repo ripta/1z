@@ -1,0 +1,74 @@
+=== native dispatch access - arithmetic ===
+Stack: [ ]
+PASS: basic addition
+Stack: [ ]
+PASS: subtraction
+Stack: [ ]
+PASS: multiplication
+Stack: [ ]
+PASS: division
+Stack: [ ]
+PASS: modulo
+Stack: [ ]
+PASS: cross-type addition
+Stack: [ ]
+=== native dispatch access - comparison ===
+Stack: [ ]
+PASS: less than
+Stack: [ ]
+PASS: greater than
+Stack: [ ]
+=== native dispatch access - unary arithmetic ===
+Stack: [ ]
+PASS: abs
+Stack: [ ]
+PASS: >float
+Stack: [ ]
+PASS: >integer
+Stack: [ ]
+=== native dispatch access - bitwise ===
+Stack: [ ]
+PASS: bitand
+Stack: [ ]
+PASS: bitor
+Stack: [ ]
+PASS: bitxor
+Stack: [ ]
+PASS: bitnot
+Stack: [ ]
+PASS: shift-left
+Stack: [ ]
+PASS: shift-right
+Stack: [ ]
+PASS: shift positive
+Stack: [ ]
+PASS: shift negative
+Stack: [ ]
+=== native dispatch access - sequences ===
+Stack: [ ]
+PASS: #len
+Stack: [ ]
+PASS: #first
+Stack: [ ]
+PASS: #last
+Stack: [ ]
+PASS: #nth
+Stack: [ ]
+=== native dispatch access - strings ===
+Stack: [ ]
+PASS: inspect
+Stack: [ ]
+PASS: >string
+Stack: [ ]
+=== native dispatch access after override ===
+Stack: [ ]
+Stack: [ ]
+PASS: overridden + returns 999
+Stack: [ ]
+PASS: native.dispatch+ still returns 7
+Stack: [ ]
+=== native dispatch wrapping pattern ===
+Stack: [ ]
+Stack: [ ]
+PASS: wrapping inspect adds !
+Stack: [ ]
