@@ -1,0 +1,3 @@
+\ Module A-compound: defines a helper and a word that calls it
+helper: [ "helped" ] ;
+compound-a: [ helper "-compound" #append ] ;

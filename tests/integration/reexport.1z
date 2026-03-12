@@ -1,0 +1,10 @@
+use "testing" ;
+
+"reexport: basic reexport" test-section
+use "mod_b_reexport.1z" ;
+from-a "from-a" "reexported word from A is accessible" assert=
+from-b-re "from-b-re" "B's own word is accessible" assert=
+
+"reexport: compound word resolves deps" test-section
+use "mod_b_reexport_compound.1z" ;
+compound-a "helped-compound" "reexported compound word resolves its deps" assert=

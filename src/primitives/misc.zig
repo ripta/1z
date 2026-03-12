@@ -23,6 +23,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "add-load-path", .stack_effect = "path --", .doc = "Add a directory to the load path search list.", .func = nativeAddLoadPath },
     .{ .name = "(trampoline)", .stack_effect = "*unsafe-fn-ptr* --", .doc = "Call a native function via pointer. Internal use only.", .func = nativeTrampoline },
     .{ .name = "eval-string", .stack_effect = "string --", .doc = "Execute a string as 1z code in the caller's scope.", .func = nativeEvalString },
+    .{ .name = "export", .stack_effect = "name --", .doc = "Promote an imported word to a public definition in the current scope.", .func = nativeExport },
 };
 
 fn nativeToModule(ctx: *Context) anyerror!void {
@@ -276,7 +277,7 @@ fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator,
         const mod_word: value_mod.ModuleWord = .{
             .stack_effect = word_def.stack_effect,
             .markers = word_def.markers,
-            .source_module = if (word_def.imported) word_def.source_module else null,
+            .source_module = word_def.source_module,
             .action = switch (word_def.action) {
                 .compound => |instrs| .{ .compound = instrs },
                 .native => |func| .{ .native = func },
@@ -397,6 +398,34 @@ fn nativeImport(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     }
+}
+
+fn nativeExport(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const name = switch (try ctx.stack.pop()) {
+        .symbol, .string => |s| s,
+        else => |v| {
+            helpers.setTypeMismatchError(ctx, "string or symbol", v);
+            return error.TypeMismatch;
+        },
+    };
+
+    const idx = ctx.import_frame_index orelse unreachable;
+    const frame = &ctx.local_frames.items[idx];
+
+    const entry = frame.getPtr(name) orelse {
+        const msg = std.fmt.allocPrint(alloc, "key '{s}'", .{name}) catch "key '<unknown>'";
+        ctx.error_details.append(ctx.allocator, .{
+            .error_type = "key-not-found",
+            .message = msg,
+            .source = ctx.current_source,
+            .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
+            .word_name = "export",
+        }) catch {};
+        return error.KeyNotFound;
+    };
+
+    entry.imported = false;
 }
 
 /// command-line-args ( -- args ) - Push program arguments as an array of strings

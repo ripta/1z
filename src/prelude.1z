@@ -500,6 +500,12 @@ use: parse-time [
   if
 ] ;
 
+\\ Reexport all words from a module as public definitions.
+reexport: ( module -- ) [
+  dup @keys swap import
+  [ export ] #each
+] ;
+
 \ Loops
 \\ Execute a quotation `n` times.
 times: loop-combinator ( n quot -- ) [

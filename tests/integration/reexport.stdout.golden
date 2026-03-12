@@ -1,0 +1,10 @@
+=== reexport: basic reexport ===
+Stack: [ ]
+PASS: reexported word from A is accessible
+Stack: [ ]
+PASS: B's own word is accessible
+Stack: [ ]
+=== reexport: compound word resolves deps ===
+Stack: [ ]
+PASS: reexported compound word resolves its deps
+Stack: [ ]

@@ -480,7 +480,7 @@ pub const Context = struct {
                 .name = entry.key_ptr.*,
                 .stack_effect = entry.value_ptr.*.stack_effect,
                 .markers = entry.value_ptr.*.markers,
-                .source_module = module,
+                .source_module = entry.value_ptr.*.source_module orelse module,
                 .action = switch (entry.value_ptr.*.action) {
                     .compound => |instrs| .{ .compound = instrs },
                     .native => |func| .{ .native = func },

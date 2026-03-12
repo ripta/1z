@@ -1,0 +1,3 @@
+\ Module B-reexport-compound: reexports A-compound
+\ The reexported compound-a must resolve its dep on helper
+"mod_a_compound.1z" load reexport
