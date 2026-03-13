@@ -1,0 +1,5 @@
+\ Test that declared-delta fallback prevents cascade warnings
+
+inner: ( a -- b ) [ some-unknown-word ] ;
+
+outer: ( a -- b ) [ inner ] ;

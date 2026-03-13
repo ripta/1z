@@ -1,0 +1,3 @@
+\ Test that calling an unknown non-polymorphic callee emits a warning
+
+do-something: ( a -- b ) [ some-unknown-word ] ;

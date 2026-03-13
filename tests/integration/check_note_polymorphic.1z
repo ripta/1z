@@ -1,0 +1,3 @@
+\ Test that calling a polymorphic callee emits a note, not a warning
+
+wrap-it: ( a -- b ) [ native.make-struct-instance ] ;

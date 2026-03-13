@@ -1,0 +1,1 @@
+tests/integration/check_warn_unknown_callee.1z:3: warning: do-something: cannot verify do-something: callee some-unknown-word has unknown effect

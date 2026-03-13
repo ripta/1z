@@ -1,0 +1,7 @@
+\ Test that suppress-checks: "all" suppresses both notes and warnings
+
+pragma{ suppress-checks: "all" }
+
+wrap-it: ( a -- b ) [ native.make-struct-instance ] ;
+
+do-something: ( a -- b ) [ some-unknown-word ] ;

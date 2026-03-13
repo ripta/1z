@@ -1,0 +1,1 @@
+tests/integration/check_cascade_prevention.1z:3: warning: inner: cannot verify inner: callee some-unknown-word has unknown effect

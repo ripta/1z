@@ -1,0 +1,1 @@
+tests/integration/check_note_polymorphic.1z:3: note: wrap-it: callee native.make-struct-instance is polymorphic; effect trusted from declaration
