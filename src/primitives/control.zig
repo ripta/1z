@@ -221,7 +221,7 @@ fn enforceRequireDoc(ctx: *Context, name: []const u8, has_doc: bool, is_parse_ti
 }
 
 pub const primitives = [_]Primitive{
-    .{ .name = "call", .stack_effect = "..a quot: ( ..a -- ..b ) -- ..b", .doc = "Execute a quotation.", .func = nativeCall },
+    .{ .name = "call", .stack_effect = "..a quot: ( ..a -- ..b ) -- ..b", .doc = "Execute a quotation.", .func = nativeCall, .effect_transparent = true },
     .{ .name = ";", .stack_effect = "name quot --", .doc = "Define a new word.", .func = nativeSemicolon },
     .{ .name = "t", .stack_effect = "-- t", .doc = "Push true.", .func = nativeTrue },
     .{ .name = "f", .stack_effect = "-- f", .doc = "Push false.", .func = nativeFalse },

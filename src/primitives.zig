@@ -27,6 +27,7 @@ pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
         try dict.put(p.name, WordDefinition{
             .name = p.name,
             .parse_time = p.parse_time,
+            .effect_transparent = p.effect_transparent,
             .stack_effect = effect,
             .markers = p.markers,
             .doc = p.doc,

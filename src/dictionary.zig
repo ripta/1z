@@ -26,6 +26,9 @@ pub const WordDefinition = struct {
     imported: bool = false,
     /// Stack effect annotation for this word, if any.
     stack_effect: ?StackEffect = null,
+    /// Whether this word is effect-transparent, meaning its stack effect
+    /// depends on a quotation argument rather than being fixed.
+    effect_transparent: bool = false,
     /// Markers associated with this word.
     markers: []const *Marker = &.{},
     // Documentation string for this word, if any.
