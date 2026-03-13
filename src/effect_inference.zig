@@ -51,6 +51,7 @@ pub const InferenceResult = union(enum) {
 pub const Severity = enum {
     err,
     warning,
+    note,
 };
 
 pub const Diagnostic = struct {
@@ -78,6 +79,10 @@ pub const InferenceEngine = struct {
     suppressed: bool,
     suppress_undeclared: bool,
     checked_source: ?[]const u8,
+
+    // Set by inferInstructions when it returns .unknown
+    last_unknown_callee: ?[]const u8 = null,
+    last_unknown_is_polymorphic: bool = false,
 
     pub fn init(
         dictionary: *const Dictionary,
@@ -156,6 +161,28 @@ pub const InferenceEngine = struct {
         return self.dictionary.get(name);
     }
 
+    fn resolveQualifiedName(self: *const InferenceEngine, name: []const u8) ?value_mod.ModuleWord {
+        const dot_index = std.mem.lastIndexOfScalar(u8, name, '.') orelse return null;
+        const module_path = name[0..dot_index];
+        const word_name = name[dot_index + 1 ..];
+        if (module_path.len == 0 or word_name.len == 0) return null;
+
+        const module_word_def = self.lookupWord(module_path) orelse return null;
+        const instrs = switch (module_word_def.action) {
+            .compound => |i| i,
+            .native => return null,
+        };
+        if (instrs.len != 1) return null;
+        const module_ptr = switch (instrs[0].op) {
+            .push_literal => |val| switch (val) {
+                .module => |m| m,
+                else => return null,
+            },
+            else => return null,
+        };
+        return module_ptr.words.get(word_name);
+    }
+
     fn inferWord(self: *InferenceEngine, name: []const u8) Allocator.Error!InferenceResult {
         if (self.cache.get(name)) |cached| return cached;
 
@@ -200,18 +227,57 @@ pub const InferenceEngine = struct {
 
                 if (word_def.stack_effect) |eff| {
                     if (computeDeclaredDelta(eff)) |declared| {
-                        if (inferred == .known and declared.known != inferred.known) {
-                            try self.emitDiagnostic(.{
-                                .word_name = name,
-                                .source_file = word_def.source_file,
-                                .source_line = word_def.source_line,
-                                .severity = .err,
-                                .message = try std.fmt.allocPrint(
-                                    self.allocator,
-                                    "declared stack effect delta is {d}, but inferred delta is {d}",
-                                    .{ declared.known, inferred.known },
-                                ),
-                            });
+                        switch (inferred) {
+                            .known => |inferred_delta| {
+                                if (declared.known != inferred_delta) {
+                                    try self.emitDiagnostic(.{
+                                        .word_name = name,
+                                        .source_file = word_def.source_file,
+                                        .source_line = word_def.source_line,
+                                        .severity = .err,
+                                        .message = try std.fmt.allocPrint(
+                                            self.allocator,
+                                            "declared stack effect delta is {d}, but inferred delta is {d}",
+                                            .{ declared.known, inferred_delta },
+                                        ),
+                                    });
+                                }
+                            },
+                            .unknown => {
+                                if (self.last_unknown_callee) |callee_name| {
+                                    if (self.isInCheckedSource(word_def.source_file) and word_def.source_module == null) {
+                                        if (self.last_unknown_is_polymorphic) {
+                                            if (word_def.provenance == null) {
+                                                try self.emitDiagnostic(.{
+                                                    .word_name = name,
+                                                    .source_file = word_def.source_file,
+                                                    .source_line = word_def.source_line,
+                                                    .severity = .note,
+                                                    .message = try std.fmt.allocPrint(
+                                                        self.allocator,
+                                                        "callee {s} is polymorphic; effect trusted from declaration",
+                                                        .{callee_name},
+                                                    ),
+                                                });
+                                            }
+                                        } else {
+                                            try self.emitDiagnostic(.{
+                                                .word_name = name,
+                                                .source_file = word_def.source_file,
+                                                .source_line = word_def.source_line,
+                                                .severity = .warning,
+                                                .message = try std.fmt.allocPrint(
+                                                    self.allocator,
+                                                    "cannot verify {s}: callee {s} has unknown effect",
+                                                    .{ name, callee_name },
+                                                ),
+                                            });
+                                        }
+                                    }
+                                }
+                                try self.cache.put(self.allocator, name, declared);
+                                return declared;
+                            },
                         }
                     }
                 } else if (!self.suppress_undeclared and self.isInCheckedSource(word_def.source_file)) {
@@ -235,6 +301,8 @@ pub const InferenceEngine = struct {
     }
 
     fn inferInstructions(self: *InferenceEngine, instructions: []const Instruction, caller: CallerInfo) Allocator.Error!InferenceResult {
+        self.last_unknown_callee = null;
+        self.last_unknown_is_polymorphic = false;
         var delta: i64 = 0;
         var stack_model: std.ArrayListUnmanaged(StackEntry) = .{};
         defer stack_model.deinit(self.allocator);
@@ -251,6 +319,27 @@ pub const InferenceEngine = struct {
                 .call_word => |name| {
                     const word_def = self.lookupWord(name);
                     if (word_def == null) {
+                        if (std.mem.indexOfScalar(u8, name, '.') != null) {
+                            if (self.resolveQualifiedName(name)) |mod_word| {
+                                if (mod_word.polymorphic) {
+                                    self.last_unknown_callee = name;
+                                    self.last_unknown_is_polymorphic = true;
+                                    return .unknown;
+                                }
+                                if (mod_word.stack_effect) |eff| {
+                                    if (computeDeclaredDelta(eff)) |result| {
+                                        delta += result.known;
+                                        try adjustStackModel(&stack_model, result.known, self.allocator);
+                                        continue;
+                                    }
+                                }
+                                self.last_unknown_callee = name;
+                                self.last_unknown_is_polymorphic = false;
+                                return .unknown;
+                            }
+                        }
+                        self.last_unknown_callee = name;
+                        self.last_unknown_is_polymorphic = false;
                         return .unknown;
                     }
                     const wd = word_def.?;
@@ -1636,5 +1725,244 @@ test "row-poly keep with non-literal quotation falls through" {
     // Falls through to inferWord which returns unknown for row-poly keep
     const result = try engine.inferWord("test-word");
     try testing.expectEqual(InferenceResult.unknown, result);
+    try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
+}
+
+// =============================================================================
+// Qualified name resolution and declared-delta fallback tests
+// =============================================================================
+
+fn makeTestModule(allocator: Allocator) !*value_mod.Module {
+    const mod = try allocator.create(value_mod.Module);
+    mod.* = .{
+        .name = "testmod",
+        .words = .{},
+    };
+    return mod;
+}
+
+test "qualified name resolves to known delta" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    const mod = try makeTestModule(testing.allocator);
+    defer testing.allocator.destroy(mod);
+    defer mod.words.deinit(testing.allocator);
+
+    const dummy: @import("dictionary.zig").NativeFn = struct {
+        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    }.f;
+
+    try mod.words.put(testing.allocator, "double", .{
+        .stack_effect = .{
+            .inputs = &.{.{ .name = "n" }},
+            .outputs = &.{.{ .name = "n" }},
+        },
+        .action = .{ .native = dummy },
+    });
+
+    const mod_instrs: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .module = mod } }),
+    };
+
+    try dict.put("math", .{
+        .name = "math",
+        .action = .{ .compound = mod_instrs },
+    });
+
+    const body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .fixnum = 5 } }),
+        makeInstr(.{ .call_word = "math.double" }),
+    };
+
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .stack_effect = .{
+            .inputs = &.{},
+            .outputs = &.{.{ .name = "n" }},
+        },
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    defer engine.deinit();
+
+    const result = try engine.inferWord("test-word");
+    try testing.expectEqual(InferenceResult{ .known = 1 }, result);
+    try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
+}
+
+test "polymorphic qualified name falls back to declared delta with note" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    const mod = try makeTestModule(testing.allocator);
+    defer testing.allocator.destroy(mod);
+    defer mod.words.deinit(testing.allocator);
+
+    const dummy: @import("dictionary.zig").NativeFn = struct {
+        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    }.f;
+
+    try mod.words.put(testing.allocator, "poly-word", .{
+        .polymorphic = true,
+        .stack_effect = .{
+            .inputs = &.{.{ .name = "a" }},
+            .outputs = &.{.{ .name = "b" }},
+        },
+        .action = .{ .native = dummy },
+    });
+
+    const mod_instrs: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .module = mod } }),
+    };
+
+    try dict.put("mymod", .{
+        .name = "mymod",
+        .action = .{ .compound = mod_instrs },
+    });
+
+    const body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
+        makeInstr(.{ .call_word = "mymod.poly-word" }),
+    };
+
+    try dict.put("caller", .{
+        .name = "caller",
+        .source_file = "test.1z",
+        .stack_effect = .{
+            .inputs = &.{},
+            .outputs = &.{.{ .name = "x" }},
+        },
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    engine.checked_source = "test.1z";
+    defer engine.deinit();
+
+    const result = try engine.inferWord("caller");
+    try testing.expectEqual(InferenceResult{ .known = 1 }, result);
+    try testing.expectEqual(@as(usize, 1), engine.diagnostics.items.len);
+    try testing.expectEqual(Severity.note, engine.diagnostics.items[0].severity);
+}
+
+test "declared-delta fallback prevents cascade" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    // Word A calls an unknown callee, but has a declared effect
+    const body_a: []const Instruction = &.{
+        makeInstr(.{ .call_word = "nonexistent" }),
+    };
+
+    try dict.put("word-a", .{
+        .name = "word-a",
+        .source_file = "test.1z",
+        .stack_effect = .{
+            .inputs = &.{.{ .name = "x" }},
+            .outputs = &.{.{ .name = "y" }},
+        },
+        .action = .{ .compound = body_a },
+    });
+
+    // Word B calls word-a
+    const body_b: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
+        makeInstr(.{ .call_word = "word-a" }),
+    };
+
+    try dict.put("word-b", .{
+        .name = "word-b",
+        .source_file = "test.1z",
+        .stack_effect = .{
+            .inputs = &.{},
+            .outputs = &.{.{ .name = "r" }},
+        },
+        .action = .{ .compound = body_b },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    engine.checked_source = "test.1z";
+    defer engine.deinit();
+
+    const result_b = try engine.inferWord("word-b");
+    try testing.expectEqual(InferenceResult{ .known = 1 }, result_b);
+
+    // Only word-a should emit a warning; word-b sees word-a's declared delta
+    var warning_count: usize = 0;
+    for (engine.diagnostics.items) |d| {
+        if (d.severity == .warning) warning_count += 1;
+    }
+    try testing.expectEqual(@as(usize, 1), warning_count);
+}
+
+test "generated word calling polymorphic callee is silent" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    const mod = try makeTestModule(testing.allocator);
+    defer testing.allocator.destroy(mod);
+    defer mod.words.deinit(testing.allocator);
+
+    const dummy: @import("dictionary.zig").NativeFn = struct {
+        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    }.f;
+
+    try mod.words.put(testing.allocator, "poly-word", .{
+        .polymorphic = true,
+        .stack_effect = .{
+            .inputs = &.{.{ .name = "a" }},
+            .outputs = &.{.{ .name = "b" }},
+        },
+        .action = .{ .native = dummy },
+    });
+
+    const mod_instrs: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .module = mod } }),
+    };
+
+    try dict.put("mymod", .{
+        .name = "mymod",
+        .action = .{ .compound = mod_instrs },
+    });
+
+    const body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
+        makeInstr(.{ .call_word = "mymod.poly-word" }),
+    };
+
+    const provenance = @import("dictionary.zig").WordProvenance{
+        .generator = "struct{",
+        .parent = "test-type",
+        .role = "accessor",
+    };
+
+    try dict.put("generated-caller", .{
+        .name = "generated-caller",
+        .source_file = "test.1z",
+        .provenance = provenance,
+        .stack_effect = .{
+            .inputs = &.{},
+            .outputs = &.{.{ .name = "x" }},
+        },
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    engine.checked_source = "test.1z";
+    defer engine.deinit();
+
+    const result = try engine.inferWord("generated-caller");
+    try testing.expectEqual(InferenceResult{ .known = 1 }, result);
     try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
 }
