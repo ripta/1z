@@ -188,6 +188,9 @@ pub const Context = struct {
     /// at the top level. All other runtime statements are skipped. Parse-time
     /// words still execute during parsing.
     check_mode: bool = false,
+    /// When true, disables both definition-time non-tail-recursion analysis
+    /// and the runtime marker consistency check.
+    allow_all_recursion: bool = false,
     /// Parent context for dictionary and dispatch table lookup chaining.
     /// Task contexts walk this chain to find words and methods defined in
     /// ancestor scopes, up to the root context which holds primitives and
@@ -1588,6 +1591,23 @@ pub const Context = struct {
                                 if (word.action.compound.len == 0) {
                                     self.pending_error_message = "no method found for given argument types";
                                     return self.wordErrorCleanup(name, error.TypeError);
+                                }
+                            }
+
+                            if (!self.allow_all_recursion) {
+                                const has_non_tco = for (word.markers) |mk| {
+                                    if (mk == &markers_mod.recursive_non_tco_marker) break true;
+                                } else false;
+
+                                if (has_non_tco) {
+                                    const has_stack_recursive = for (word.markers) |mk| {
+                                        if (markers_mod.isStackRecursiveMarker(mk)) break true;
+                                    } else false;
+
+                                    if (!has_stack_recursive) {
+                                        self.pending_error_message = "word has recursive-non-tco marker but lacks stack-recursive marker";
+                                        return self.wordErrorCleanup(name, error.NonTailRecursion);
+                                    }
                                 }
                             }
                         }

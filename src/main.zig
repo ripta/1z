@@ -138,6 +138,7 @@ pub fn main() u8 {
     var deadlock_detect_ns: ?i128 = null;
     var test_timeout_ns: ?u64 = null;
     var check_mode = false;
+    var allow_all_recursion = false;
 
     // TODO(ripta): bit hacky arg parsing, improve later?
     for (args[1..]) |arg| {
@@ -233,6 +234,8 @@ pub fn main() u8 {
             test_timeout_ns = secs * std.time.ns_per_s;
         } else if (std.mem.eql(u8, arg, "--check")) {
             check_mode = true;
+        } else if (std.mem.eql(u8, arg, "--allow-all-recursion")) {
+            allow_all_recursion = true;
         } else {
             file_path = arg;
         }
@@ -328,6 +331,7 @@ pub fn main() u8 {
         std.debug.panic("Failed to load prelude: {any}", .{err});
     };
     ctx.check_mode = check_mode;
+    ctx.allow_all_recursion = allow_all_recursion;
     if (bench_config.enabled) {
         bench_stats.markPreludeEnd();
     }

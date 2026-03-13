@@ -1,0 +1,5 @@
+=== allow-all-recursion flag ===
+Stack: [ ]
+Stack: [ ]
+PASS: allowed word defined with no markers
+Stack: [ ]

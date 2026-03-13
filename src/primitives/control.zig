@@ -394,7 +394,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
 
                 var markers_slice = try alloc.dupe(*Marker, collected_markers.items);
 
-                if (containsNonTailSelfCall(ctx, instructions, name_copy)) {
+                if (!ctx.allow_all_recursion and containsNonTailSelfCall(ctx, instructions, name_copy)) {
                     const has_stack_recursive = for (collected_markers.items) |mk| {
                         if (markers_mod.isStackRecursiveMarker(mk)) break true;
                     } else false;

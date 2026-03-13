@@ -1,0 +1,11 @@
+\ Test that --allow-all-recursion disables definition-time recursion analysis
+use "testing" ;
+
+"allow-all-recursion flag" test-section
+
+\ A non-tail self-call without stack-recursive normally errors, but
+\ --allow-all-recursion lets it through.
+allowed: [ allowed 1 + ] ;
+
+\ Verify the word was defined with no markers (no analysis ran)
+"allowed" word-markers #len 0 "allowed word defined with no markers" assert=
