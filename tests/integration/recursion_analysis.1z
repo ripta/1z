@@ -1,0 +1,38 @@
+\ Test definition-time self-call analysis
+use "testing" ;
+
+"non-tail self-call errors" test-section
+
+\ 1. Non-tail self-call without marker is an error
+[ bad: [ bad 1 + ] ;
+] ENonTailRecursion "non-tail self-call errors" assert-error-type
+
+"stack-recursive marker" test-section
+
+\ 2. stack-recursive marker allows non-tail self-call and adds recursive-non-tco
+ok: stack-recursive [ ok 1 + ] ;
+"ok" word-markers [ >string "<marker:recursive-non-tco>" = ] #any
+t "stack-recursive adds recursive-non-tco" assert=
+
+"tail via branch combinator" test-section
+
+\ 3. Tail self-call through when (branch-combinator) is fine
+tail: [ dup 0 > [ 1 - tail ] when ] ;
+
+\ 4. Tail self-call through if (branch-combinator) is fine
+tail-if: [ dup 0 > [ 1 - tail-if ] [ drop ] if ] ;
+
+\ 5. Nested branch: when inside an if branch
+nested: [ dup 0 > [ dup 1 > [ 1 - nested ] when ] [ drop ] if ] ;
+
+"non-tail inside branch arm" test-section
+
+\ 6. Non-tail self-call inside a branch arm is an error
+[ bad2: [ dup 0 > [ bad2 1 + ] [ drop ] if ] ;
+] ENonTailRecursion "non-tail inside branch arm" assert-error-type
+
+"no self-call" test-section
+
+\ 7. No self-call at all works normally
+plain: [ 1 2 + ] ;
+3 plain = t "plain word works" assert=

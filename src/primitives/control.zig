@@ -49,6 +49,82 @@ fn getDescriptorMap(val: Value) ?*value_mod.MutableMap {
     };
 }
 
+/// Check if a word is a branch combinator by looking up its definition and
+/// checking for the branch-combinator marker.
+fn isBranchCombinator(ctx: *const Context, name: []const u8) bool {
+    const word = ctx.lookupWord(name) orelse return false;
+    for (word.markers) |mk| {
+        if (markers_mod.isBranchCombinatorMarker(mk)) return true;
+    }
+    return false;
+}
+
+/// Return true if `name` appears as a `call_word` anywhere in the instruction
+/// array, including inside nested quotation literals.
+fn containsSelfCallAnywhere(instructions: []const Instruction, name: []const u8) bool {
+    for (instructions) |instr| {
+        switch (instr.op) {
+            .call_word => |w| {
+                if (std.mem.eql(u8, w, name)) return true;
+            },
+            .push_literal => |val| {
+                switch (val) {
+                    .quotation => |q| {
+                        if (containsSelfCallAnywhere(q.instructions, name)) return true;
+                    },
+                    else => {},
+                }
+            },
+        }
+    }
+    return false;
+}
+
+/// Return true if `name` appears in a non-tail self-call position within the
+/// instruction array. Tail position propagates into quotation arguments of
+/// branch combinators.
+fn containsNonTailSelfCall(ctx: *const Context, instructions: []const Instruction, name: []const u8) bool {
+    if (instructions.len == 0) return false;
+
+    const last_idx = instructions.len - 1;
+    const last_is_branch = switch (instructions[last_idx].op) {
+        .call_word => |w| isBranchCombinator(ctx, w),
+        else => false,
+    };
+
+    for (instructions, 0..) |instr, i| {
+        const is_last = (i == last_idx);
+        switch (instr.op) {
+            .call_word => |w| {
+                if (std.mem.eql(u8, w, name)) {
+                    if (!is_last) return true;
+                    // Last instruction: tail self-call, not an error
+                }
+            },
+            .push_literal => |val| {
+                switch (val) {
+                    .quotation => |q| {
+                        if (is_last) {
+                            // Last instruction is a quotation literal not followed
+                            // by a branch combinator; any self-call inside is non-tail.
+                            if (containsSelfCallAnywhere(q.instructions, name)) return true;
+                        } else if (last_is_branch) {
+                            // Quotation arg to a branch combinator: tail position
+                            // propagates into it.
+                            if (containsNonTailSelfCall(ctx, q.instructions, name)) return true;
+                        } else {
+                            // Not a branch combinator arg; any self-call is non-tail.
+                            if (containsSelfCallAnywhere(q.instructions, name)) return true;
+                        }
+                    },
+                    else => {},
+                }
+            },
+        }
+    }
+    return false;
+}
+
 /// Bit flags for require-doc enforcement. The prelude validator maps level
 /// names to a bitmask of these flags; Zig only checks the relevant bit.
 const require_doc_normal: i64 = 1; // bit 0
@@ -316,7 +392,24 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     },
                 };
 
-                const markers_slice = try alloc.dupe(*Marker, collected_markers.items);
+                var markers_slice = try alloc.dupe(*Marker, collected_markers.items);
+
+                if (containsNonTailSelfCall(ctx, instructions, name_copy)) {
+                    const has_stack_recursive = for (collected_markers.items) |mk| {
+                        if (markers_mod.isStackRecursiveMarker(mk)) break true;
+                    } else false;
+
+                    if (has_stack_recursive) {
+                        const extended = try alloc.alloc(*Marker, markers_slice.len + 1);
+                        @memcpy(extended[0..markers_slice.len], markers_slice);
+                        extended[markers_slice.len] = @constCast(&markers_mod.recursive_non_tco_marker);
+                        markers_slice = extended;
+                    } else {
+                        helpers.setErrorContext(ctx, "word '{s}' contains a non-tail self-call", .{name_copy});
+                        helpers.setErrorHint(ctx, "add the 'stack-recursive' marker if intentional");
+                        return error.NonTailRecursion;
+                    }
+                }
 
                 try ctx.defineWord(name_copy, WordDefinition{
                     .name = name_copy,

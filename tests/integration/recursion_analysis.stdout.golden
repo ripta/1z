@@ -1,0 +1,24 @@
+=== non-tail self-call errors ===
+Stack: [ ]
+PASS: non-tail self-call errors
+Stack: [ ]
+=== stack-recursive marker ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ t ]
+PASS: stack-recursive adds recursive-non-tco
+Stack: [ ]
+=== tail via branch combinator ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== non-tail inside branch arm ===
+Stack: [ ]
+PASS: non-tail inside branch arm
+Stack: [ ]
+=== no self-call ===
+Stack: [ ]
+Stack: [ ]
+PASS: plain word works
+Stack: [ ]

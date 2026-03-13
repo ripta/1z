@@ -38,7 +38,7 @@ cons-list>array: ( cons-list -- array ) [
 ] ;
 
 \ Convert array to cons-list (preserving element order)
->cons-list: ( array -- cons-list ) [
+>cons-list: stack-recursive ( array -- cons-list ) [
   dup #len 0 = [ drop nil ] [
     dup #first swap
     1 over #len #slice

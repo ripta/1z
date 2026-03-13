@@ -27,7 +27,7 @@ countdown: [
 0 [ 1 + dup 10000 < ] loop 10000 "loop to 10000" assert=
 
 "recursive factorial" test-section
-fact: [
+fact: stack-recursive [
   dup 1 <=
   [ drop 1 ]
   [ dup 1 - fact * ]

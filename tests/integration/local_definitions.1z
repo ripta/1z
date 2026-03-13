@@ -30,7 +30,7 @@ global-word "global" "after quotation" assert=
 
 "Recursive function with local helper" test-section
 [
-  fact-helper: [
+  fact-helper: stack-recursive [
     dup 1 <=
     [ drop 1 ]
     [ dup 1 - fact-helper * ]

@@ -9,7 +9,7 @@ use "sequences" ;
 \   "hello" "," split         →  { "hello" }
 \   "" "," split              →  { "" }
 \   "a::b::c" "::" split      →  { "a" "b" "c" }
-split: ( str delim -- array ) [
+split: stack-recursive ( str delim -- array ) [
   \ Compute rest of string after a delimiter match
   split-rest: ( delim str idx -- delim rest ) [
     [ swap dup #len ] dip

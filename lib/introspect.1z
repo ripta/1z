@@ -39,7 +39,7 @@ format-one-variant: ( max-name-len name tname -- line ) [
 ] ;
 
 \ Format all variant lines with column-aligned type names
-format-variant-lines: ( variants max-name-len -- str ) [
+format-variant-lines: stack-recursive ( variants max-name-len -- str ) [
   over #len 0 =
   [ 2drop "" ]
   [
