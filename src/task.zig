@@ -109,6 +109,7 @@ pub const Task = struct {
     /// distinguish a value handoff from a close-channel wake.
     value_delivered: bool = false,
     quotation: Quotation,
+    peak_stack_usage: usize = 0,
     /// Task that is waiting for this task to complete (via await).
     awaiting_task: ?*Task = null,
 };

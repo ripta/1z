@@ -72,6 +72,7 @@ pub const Scheduler = struct {
     last_progress_ns: i128 = 0,
     /// Clock mode.
     clock: ClockMode = .real,
+    peak_task_stack_usage: usize = 0,
 
     pub fn init(allocator: Allocator) !Scheduler {
         return .{
@@ -559,6 +560,9 @@ pub const Scheduler = struct {
             }
         }
 
+        if (task.peak_stack_usage > self.peak_task_stack_usage) {
+            self.peak_task_stack_usage = task.peak_stack_usage;
+        }
         self.finished_tasks.append(self.allocator, task) catch {};
     }
 };

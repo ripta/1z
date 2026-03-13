@@ -1,0 +1,17 @@
+use "testing" ;
+
+\ task-stack-peak returns a positive value inside a task
+test-peak-in-task: ( -- ) [
+  [
+    [ task-stack-peak 0 > "task-stack-peak > 0 inside task" assert-true ] spawn
+    await drop
+  ] task-scope
+] ;
+
+\ task-stack-peak outside a task context throws an error
+test-peak-outside-task: ( -- ) [
+  [ task-stack-peak ] invalid-state: "task-stack-peak outside task throws" assert-error-type
+] ;
+
+test-peak-in-task
+test-peak-outside-task

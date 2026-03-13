@@ -1,0 +1,6 @@
+Stack: [ ]
+Stack: [ ]
+PASS: task-stack-peak > 0 inside task
+Stack: [ ]
+PASS: task-stack-peak outside task throws
+Stack: [ ]

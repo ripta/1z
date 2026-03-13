@@ -37,6 +37,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "with-timeout", .stack_effect = "quot duration -- value", .doc = "Run a quotation with a timeout duration.", .func = nativeWithTimeout },
     .{ .name = "multiplexer-stats", .stack_effect = "-- hash", .doc = "Return a hash of I/O multiplexer statistics. Requires an active task-scope.", .func = nativeMultiplexerStats },
     .{ .name = "cancelled?", .stack_effect = "-- bool", .doc = "Push t if the current task has a pending cancellation, f otherwise.", .func = nativeCancelledQuery },
+    .{ .name = "task-stack-peak", .stack_effect = "-- n", .doc = "Return the current task's peak native stack usage in bytes.", .func = nativeTaskStackPeak },
 };
 
 /// Allocate a Task and its Context on the heap, wire up the ucontext, and
@@ -143,6 +144,13 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     try scheduler.enqueue(scope_task);
 
     scheduler.runLoop();
+
+    if (ctx.benchmark) |bench| {
+        if (scheduler.peak_task_stack_usage > bench.peak_task_stack_usage) {
+            bench.peak_task_stack_usage = scheduler.peak_task_stack_usage;
+        }
+    }
+
     if (scope.failed_error) |err_obj| {
         ctx.thrown_error = err_obj;
         return error.UserThrown;
@@ -775,6 +783,18 @@ fn nativeCancelledQuery(ctx: *Context) anyerror!void {
     else
         false;
     try ctx.stack.push(.{ .boolean = cancelled });
+}
+
+fn nativeTaskStackPeak(ctx: *Context) anyerror!void {
+    const sched = ctx.scheduler orelse {
+        ctx.pending_error_message = "task-stack-peak requires a task context";
+        return error.InvalidState;
+    };
+    const task = sched.current_task orelse {
+        ctx.pending_error_message = "task-stack-peak requires a task context";
+        return error.InvalidState;
+    };
+    try ctx.stack.push(.{ .fixnum = @intCast(task.peak_stack_usage) });
 }
 
 /// fake-clock ( -- )

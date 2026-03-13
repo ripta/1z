@@ -41,6 +41,7 @@ pub const BenchmarkStats = struct {
 
     // Stack metrics
     peak_stack_depth: usize = 0,
+    peak_task_stack_usage: usize = 0,
 
     // Memory stats (populated at end from GPA)
     total_allocations: usize = 0,
@@ -239,6 +240,9 @@ pub const BenchmarkStats = struct {
         try writer.writeAll("  Peak depth:      ");
         try writer.print("{d}", .{self.peak_stack_depth});
         try writer.writeAll("\n");
+        try writer.writeAll("  Task stack peak: ");
+        try formatBytes(writer, self.peak_task_stack_usage);
+        try writer.writeAll("\n");
 
         // Memory section
         try writer.writeAll("\nMemory:\n");
@@ -286,7 +290,7 @@ pub const BenchmarkStats = struct {
     /// Output benchmark results in JSON format
     pub fn formatJson(self: *const BenchmarkStats, writer: anytype) !void {
         try writer.print(
-            \\{{"timing":{{"prelude_ns":{d},"user_ns":{d},"total_ns":{d}}},"instructions":{{"push_literal":{d},"call_word":{d},"total":{d}}},"stack":{{"peak_depth":{d}}},"memory":{{"allocations":{d},"bytes":{d},"peak_live_bytes":{d}}},"alloc_profile":[
+            \\{{"timing":{{"prelude_ns":{d},"user_ns":{d},"total_ns":{d}}},"instructions":{{"push_literal":{d},"call_word":{d},"total":{d}}},"stack":{{"peak_depth":{d},"peak_task_stack_usage":{d}}},"memory":{{"allocations":{d},"bytes":{d},"peak_live_bytes":{d}}},"alloc_profile":[
         , .{
             @as(i64, @intCast(self.preludeTimeNs())),
             @as(i64, @intCast(self.userTimeNs())),
@@ -295,6 +299,7 @@ pub const BenchmarkStats = struct {
             self.call_word_count,
             self.totalInstructions(),
             self.peak_stack_depth,
+            self.peak_task_stack_usage,
             self.total_allocations,
             self.total_bytes,
             self.peak_live_bytes,

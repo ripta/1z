@@ -1634,6 +1634,14 @@ pub const Context = struct {
                         } else {
                             if (self.stack_limit != 0) {
                                 const sp = @frameAddress();
+                                const usage = self.stack_high -| sp;
+                                if (self.scheduler) |sched| {
+                                    if (sched.current_task) |task| {
+                                        if (usage > task.peak_stack_usage) {
+                                            task.peak_stack_usage = usage;
+                                        }
+                                    }
+                                }
                                 if (sp <= self.stack_limit) {
                                     const used = self.stack_high -| sp;
                                     const total = self.stack_high -| self.stack_limit +| (32 * 1024);
