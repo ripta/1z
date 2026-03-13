@@ -1,0 +1,10 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: deep recursion in task throws stack-overflow
+Stack: [ ]
+PASS: recover catches stack-overflow
+Stack: [ ]
+PASS: scheduler survives after overflow
+Stack: [ ]

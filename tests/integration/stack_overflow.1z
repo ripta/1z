@@ -1,0 +1,38 @@
+use "testing" ;
+
+\ -- 1. Deep recursion in a task throws stack-overflow --
+
+recurse-forever: [ recurse-forever 1 drop ] ;
+
+test-task-stack-overflow: ( -- ) [
+  [
+    [
+      [ recurse-forever ] spawn drop
+    ] task-scope
+  ] stack-overflow: "deep recursion in task throws stack-overflow" assert-error-type
+] ;
+
+\ -- 2. Recover catches stack-overflow in task-scope --
+
+test-recover-catches-overflow: ( -- ) [
+  [
+    [
+      [ recurse-forever ] spawn drop
+    ] task-scope
+  ] [ error-type: @get ] recover
+  stack-overflow: "recover catches stack-overflow" assert=
+] ;
+
+\ -- 3. Scheduler survives after one task overflows --
+
+test-scheduler-survives: ( -- ) [
+  [
+    [ recurse-forever ] spawn drop
+    [ 42 drop ] spawn drop
+  ] [ drop ] recover
+  t "scheduler survives after overflow" assert-true
+] ;
+
+test-task-stack-overflow
+test-recover-catches-overflow
+test-scheduler-survives

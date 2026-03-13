@@ -69,6 +69,10 @@ fn allocateTask(
         .quotation = quotation,
     };
 
+    const reserve: usize = 32 * 1024;
+    task_ctx.stack_high = @intFromPtr(stack_mem.ptr) + stack_mem.len;
+    task_ctx.stack_limit = @intFromPtr(stack_mem.ptr) + reserve;
+
     task_mod.initTaskContext(task, &task_mod.taskEntryPoint, &scheduler.scheduler_uctx);
     try scheduler.all_tasks.append(ctx.allocator, task);
     return task;

@@ -191,6 +191,8 @@ pub const Context = struct {
     /// When true, disables both definition-time non-tail-recursion analysis
     /// and the runtime marker consistency check.
     allow_all_recursion: bool = false,
+    stack_limit: usize = 0,
+    stack_high: usize = 0,
     /// Parent context for dictionary and dispatch table lookup chaining.
     /// Task contexts walk this chain to find words and methods defined in
     /// ancestor scopes, up to the root context which holds primitives and
@@ -1630,6 +1632,20 @@ pub const Context = struct {
                                 },
                             }
                         } else {
+                            if (self.stack_limit != 0) {
+                                const sp = @frameAddress();
+                                if (sp <= self.stack_limit) {
+                                    const used = self.stack_high -| sp;
+                                    const total = self.stack_high -| self.stack_limit +| (32 * 1024);
+                                    self.pending_error_message = std.fmt.allocPrint(
+                                        self.arena.allocator(),
+                                        "stack overflow: {} of {} bytes used",
+                                        .{ used, total },
+                                    ) catch "stack overflow";
+                                    return self.wordErrorCleanup(name, error.StackOverflow);
+                                }
+                            }
+
                             const result = blk: {
                                 if (word.source_module) |mod| {
                                     switch (word.action) {

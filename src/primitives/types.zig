@@ -41,6 +41,7 @@ pub const InterpreterError = error{
     FFIRangeError,
     // Recursion error types
     NonTailRecursion,
+    StackOverflow,
 };
 
 const Marker = @import("../value.zig").Marker;
