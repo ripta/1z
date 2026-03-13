@@ -182,6 +182,7 @@ sleep ( duration -- )
 socket ( addr -- fd )
 spawn ( quot -- task )
 spawn-named ( quot name -- task )
+stack-recursive ( -- marker )
 stderr ( -- stream )
 stdin ( -- stream )
 stdout ( -- stream )
@@ -283,6 +284,7 @@ EInvalidArgument
 EKeyNotFound
 EMissingDocComment
 ENoMatchingBranch
+ENonTailRecursion
 ENotComparable
 EStackEffectMismatch
 EStackUnderflow

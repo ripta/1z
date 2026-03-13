@@ -39,6 +39,8 @@ pub const InterpreterError = error{
     FFITypeMismatch,
     FFICallFailed,
     FFIRangeError,
+    // Recursion error types
+    NonTailRecursion,
 };
 
 const Marker = @import("../value.zig").Marker;

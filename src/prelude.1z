@@ -193,6 +193,7 @@ EIndexOutOfBounds:    [ index-out-of-bounds: ] ;
 EInvalidArgument:     [ invalid-argument: ] ;
 EUseAfterClose:       [ use-after-close: ] ;
 EMissingDocComment:   [ missing-doc-comment: ] ;
+ENonTailRecursion:    [ non-tail-recursion: ] ;
 
 \ TODO(ripta): the pattern is a bit repetitive and odd; maybe a parse-time?
 \\ Construct and throw a no-matching-branch error with the given data.
