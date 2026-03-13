@@ -217,6 +217,7 @@ pub const StructInstance = struct {
 /// or registered in a virtual module.
 pub const ModuleWord = struct {
     stack_effect: ?StackEffect = null,
+    polymorphic: bool = false,
     markers: []const *Marker = &.{},
     source_module: ?*const Module = null,
     doc: ?[]const u8 = null,

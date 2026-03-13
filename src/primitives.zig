@@ -51,8 +51,14 @@ pub fn createNativeModule(dict: *Dictionary, allocator: Allocator) !void {
     };
 
     for (all_registry_entries) |entry| {
+        const effect: ?StackEffect = if (entry.stack_effect) |raw|
+            try makeSimpleEffect(allocator, raw)
+        else
+            null;
         try module.words.put(allocator, entry.name, .{
             .action = .{ .native = entry.func },
+            .stack_effect = effect,
+            .polymorphic = entry.polymorphic,
         });
     }
 

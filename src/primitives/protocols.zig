@@ -16,7 +16,7 @@ pub const primitives = [_]Primitive{
 };
 
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = "protocol-check", .func = protocolCheckHelper },
+    .{ .name = "protocol-check", .func = protocolCheckHelper, .stack_effect = "type-name methods protocol-name --" },
 };
 
 /// define-protocol ( name: descriptor markers -- )

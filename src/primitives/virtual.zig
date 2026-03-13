@@ -26,13 +26,13 @@ pub const primitives = [_]Primitive{
 };
 
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = "virtual-wrap", .func = virtualWrapHelper },
-    .{ .name = "virtual-unwrap", .func = virtualUnwrapHelper },
-    .{ .name = "virtual-type-predicate", .func = virtualTypePredicateHelper },
-    .{ .name = "virtual-struct-wrap", .func = virtualStructWrapHelper },
-    .{ .name = "virtual-struct-unwrap", .func = virtualStructUnwrapHelper },
-    .{ .name = "virtual-struct-to-hash", .func = virtualStructToHashHelper },
-    .{ .name = "virtual-struct-hash-wrap", .func = virtualStructHashWrapHelper },
+    .{ .name = "virtual-wrap", .func = virtualWrapHelper, .stack_effect = "value vtype-ptr -- tagged" },
+    .{ .name = "virtual-unwrap", .func = virtualUnwrapHelper, .stack_effect = "tagged vtype-ptr -- value" },
+    .{ .name = "virtual-type-predicate", .func = virtualTypePredicateHelper, .stack_effect = "value vtype-ptr -- ?" },
+    .{ .name = "virtual-struct-wrap", .func = virtualStructWrapHelper, .polymorphic = true },
+    .{ .name = "virtual-struct-unwrap", .func = virtualStructUnwrapHelper, .polymorphic = true },
+    .{ .name = "virtual-struct-to-hash", .func = virtualStructToHashHelper, .stack_effect = "tagged vtype-ptr -- hash" },
+    .{ .name = "virtual-struct-hash-wrap", .func = virtualStructHashWrapHelper, .stack_effect = "hash vtype-ptr -- tagged" },
 };
 
 /// define-virtual ( name: descriptor markers -- ) - Define a virtual type and its accessor words

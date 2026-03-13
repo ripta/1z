@@ -30,7 +30,7 @@ pub const primitives = [_]Primitive{
 };
 
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = "enum-aggregate-predicate", .func = enumAggregatePredicateHelper },
+    .{ .name = "enum-aggregate-predicate", .func = enumAggregatePredicateHelper, .stack_effect = "val enum-type-val -- ?" },
 };
 
 /// define-enum ( name: descriptor markers -- )

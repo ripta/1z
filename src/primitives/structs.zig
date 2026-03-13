@@ -25,13 +25,13 @@ pub const primitives = [_]Primitive{
 };
 
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = "make-struct-instance", .func = makeStructInstanceHelper },
-    .{ .name = "hash-to-struct", .func = hashToStructHelper },
-    .{ .name = "struct-type-predicate", .func = structTypePredicateHelper },
-    .{ .name = "struct-field-get", .func = structFieldGetHelper },
-    .{ .name = "struct-field-set", .func = structFieldSetHelper },
-    .{ .name = "struct-instance-destructure", .func = structInstanceDestructureHelper },
-    .{ .name = "struct-instance-to-hash", .func = structInstanceToHashHelper },
+    .{ .name = "make-struct-instance", .func = makeStructInstanceHelper, .polymorphic = true },
+    .{ .name = "hash-to-struct", .func = hashToStructHelper, .stack_effect = "hash vtype-ptr -- instance" },
+    .{ .name = "struct-type-predicate", .func = structTypePredicateHelper, .stack_effect = "val vtype-ptr -- ?" },
+    .{ .name = "struct-field-get", .func = structFieldGetHelper, .stack_effect = "instance vtype-ptr field-index -- value" },
+    .{ .name = "struct-field-set", .func = structFieldSetHelper, .stack_effect = "instance new-val vtype-ptr field-index -- instance" },
+    .{ .name = "struct-instance-destructure", .func = structInstanceDestructureHelper, .polymorphic = true },
+    .{ .name = "struct-instance-to-hash", .func = structInstanceToHashHelper, .stack_effect = "instance vtype-ptr -- hash" },
 };
 
 /// define-struct ( name: descriptor markers -- ) - Define a struct type and its accessor words

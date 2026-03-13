@@ -58,4 +58,6 @@ pub const Primitive = struct {
 pub const RegistryEntry = struct {
     name: []const u8,
     func: NativeFn,
+    stack_effect: ?[]const u8 = null,
+    polymorphic: bool = false,
 };
