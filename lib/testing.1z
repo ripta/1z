@@ -165,3 +165,9 @@ assert-error-type: ( quot expected-type msg -- ) [
 
 \ Print section header
 test-section: ( msg -- ) [ "=== " swap #append " ===" #append print-line ] ;
+
+\ Activate fake clock in the current task-scope
+fake-clock: ( -- ) [ native.fake-clock ] ;
+
+\ Advance the fake clock by the given duration
+advance-clock: ( duration -- ) [ native.advance-clock ] ;

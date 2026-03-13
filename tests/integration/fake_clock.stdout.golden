@@ -1,0 +1,23 @@
+=== sleep test with fake clock ===
+Stack: [ ]
+PASS: sleep completes after advancing clock
+Stack: [ ]
+=== rate limiter with fake clock ===
+Stack: [ ]
+PASS: first acquire succeeds
+PASS: second acquire fails (no tokens)
+PASS: acquire succeeds after clock advance
+Stack: [ ]
+=== clock-monotonic reads fake time ===
+Stack: [ ]
+PASS: fake clock starts at 0
+PASS: fake clock reads 500ms
+Stack: [ ]
+=== advance-clock without fake-clock errors ===
+Stack: [ ]
+PASS: advance-clock without fake-clock
+Stack: [ ]
+=== fake-clock outside task-scope errors ===
+Stack: [ ]
+PASS: fake-clock outside task-scope
+Stack: [ ]

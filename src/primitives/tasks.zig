@@ -17,6 +17,13 @@ const StackEffectParam = @import("../stack_effect.zig").StackEffectParam;
 
 const task_stack_size: usize = 512 * 1024;
 
+const RegistryEntry = @import("types.zig").RegistryEntry;
+
+pub const registry_entries = [_]RegistryEntry{
+    .{ .name = "fake-clock", .func = nativeFakeClock },
+    .{ .name = "advance-clock", .func = nativeAdvanceClock },
+};
+
 pub const primitives = [_]Primitive{
     .{ .name = "task-scope", .stack_effect = "quot --", .doc = "Run quotation in a structured concurrency scope.", .func = nativeTaskScope },
     .{ .name = "spawn", .stack_effect = "quot -- task", .doc = "Spawn a new task from a quotation.", .func = nativeSpawn },
@@ -764,6 +771,39 @@ fn nativeCancelledQuery(ctx: *Context) anyerror!void {
     else
         false;
     try ctx.stack.push(.{ .boolean = cancelled });
+}
+
+/// fake-clock ( -- )
+///
+/// Switch the scheduler's clock to fake mode, starting at time 0.
+/// Must be called within a task-scope.
+fn nativeFakeClock(ctx: *Context) anyerror!void {
+    const scheduler = ctx.scheduler orelse {
+        ctx.pending_error_message = "fake-clock requires task-scope";
+        return error.InvalidState;
+    };
+    scheduler.clock = .{ .fake = 0 };
+}
+
+/// advance-clock ( duration -- )
+///
+/// Advance the fake clock by the given duration. Errors if the clock
+/// is not in fake mode.
+fn nativeAdvanceClock(ctx: *Context) anyerror!void {
+    const dur = try helpers.popDuration(ctx);
+
+    const scheduler = ctx.scheduler orelse {
+        ctx.pending_error_message = "advance-clock requires task-scope";
+        return error.InvalidState;
+    };
+
+    switch (scheduler.clock) {
+        .fake => scheduler.advanceClock(dur.ns),
+        .real => {
+            ctx.pending_error_message = "clock is not in fake mode";
+            return error.InvalidState;
+        },
+    }
 }
 
 /// multiplexer-stats ( -- hash )

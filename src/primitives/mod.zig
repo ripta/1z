@@ -136,4 +136,5 @@ pub const extracted_registry_entries = structs.registry_entries ++
     iterators.registry_entries ++
     ffi_toy.registry_entries ++
     ffi_dynamic.registry_entries ++
-    native_dispatch_access.registry_entries;
+    native_dispatch_access.registry_entries ++
+    tasks.registry_entries;

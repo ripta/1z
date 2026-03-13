@@ -1,0 +1,45 @@
+\ Integration tests for fake-clock and advance-clock
+
+use "testing" ;
+use "time" ;
+use "rate-limit" ;
+
+"sleep test with fake clock" test-section
+[
+  fake-clock
+  1 <buffered-channel>
+  dup [ 1 seconds sleep 42 swap send ] curry spawn drop
+  yield  \ let spawned task run and enter sleep
+  1 seconds advance-clock
+  yield  \ let woken task run and send
+  receive
+  42 "sleep completes after advancing clock" assert=
+] task-scope
+
+"rate limiter with fake clock" test-section
+[
+  fake-clock
+  1 per-second 1 <rate-limiter>
+  dup try-acquire option:some? t "first acquire succeeds" assert=
+  dup try-acquire option:none? t "second acquire fails (no tokens)" assert=
+  1 seconds advance-clock
+  dup refill
+  dup try-acquire option:some? t "acquire succeeds after clock advance" assert=
+  drop
+] task-scope
+
+"clock-monotonic reads fake time" test-section
+[
+  fake-clock
+  monotonic-nanos 0 "fake clock starts at 0" assert=
+  500 milliseconds advance-clock
+  monotonic-nanos 500000000 "fake clock reads 500ms" assert=
+] task-scope
+
+"advance-clock without fake-clock errors" test-section
+[
+  [ 1 seconds advance-clock ] "advance-clock without fake-clock" assert-error
+] task-scope
+
+"fake-clock outside task-scope errors" test-section
+[ fake-clock ] "fake-clock outside task-scope" assert-error
