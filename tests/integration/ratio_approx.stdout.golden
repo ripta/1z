@@ -25,3 +25,69 @@ Stack: [ ]
 Stack: [ "314159265358979323846" ]
 PASS: pi first 21 digits
 Stack: [ ]
+=== sqrt2-approx: float precision ===
+Stack: [ ]
+PASS: sqrt2-approx matches sqrt(2)
+Stack: [ ]
+=== sqrt2-approx: type ===
+Stack: [ ]
+PASS: sqrt2-approx returns ratio
+Stack: [ ]
+=== sqrt2-approx: 30-digit precision ===
+Stack: [ ]
+Stack: [ "141421356237309504880" ]
+PASS: sqrt2 first 21 digits
+Stack: [ ]
+=== sqrt5-approx: float precision ===
+Stack: [ ]
+PASS: sqrt5-approx matches sqrt(5)
+Stack: [ ]
+=== sqrt5-approx: type ===
+Stack: [ ]
+PASS: sqrt5-approx returns ratio
+Stack: [ ]
+=== sqrt5-approx: 30-digit precision ===
+Stack: [ ]
+Stack: [ "223606797749978969640" ]
+PASS: sqrt5 first 21 digits
+Stack: [ ]
+=== phi-approx: float precision ===
+Stack: [ ]
+PASS: phi-approx matches phi
+Stack: [ ]
+=== phi-approx: type ===
+Stack: [ ]
+PASS: phi-approx returns ratio
+Stack: [ ]
+=== phi-approx: 30-digit precision ===
+Stack: [ ]
+Stack: [ "161803398874989484820" ]
+PASS: phi first 21 digits
+Stack: [ ]
+=== ln2-approx: float precision ===
+Stack: [ ]
+PASS: ln2-approx matches ln(2)
+Stack: [ ]
+=== ln2-approx: type ===
+Stack: [ ]
+PASS: ln2-approx returns ratio
+Stack: [ ]
+=== ln2-approx: 30-digit precision ===
+Stack: [ ]
+Stack: [ "693147180559945309417" ]
+PASS: ln2 first 21 digits
+Stack: [ ]
+=== ln10-approx: float precision ===
+Stack: [ ]
+Stack: [ t ]
+PASS: ln10-approx matches ln(10) within 1 ULP
+Stack: [ ]
+=== ln10-approx: type ===
+Stack: [ ]
+PASS: ln10-approx returns ratio
+Stack: [ ]
+=== ln10-approx: 30-digit precision ===
+Stack: [ ]
+Stack: [ "230258509299404568401" ]
+PASS: ln10 first 21 digits
+Stack: [ ]

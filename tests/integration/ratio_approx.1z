@@ -21,3 +21,54 @@ math: "math" load ;
 "pi-approx: 30-digit precision" test-section
 30 pi-approx 100000000000000000000 * >integer >string
 0 21 #slice "314159265358979323846" "pi first 21 digits" assert=
+
+"sqrt2-approx: float precision" test-section
+20 sqrt2-approx ratio>float 2.0 math.sqrt "sqrt2-approx matches sqrt(2)" assert=
+
+"sqrt2-approx: type" test-section
+15 sqrt2-approx ratio? "sqrt2-approx returns ratio" assert-true
+
+"sqrt2-approx: 30-digit precision" test-section
+30 sqrt2-approx 100000000000000000000 * >integer >string
+0 21 #slice "141421356237309504880" "sqrt2 first 21 digits" assert=
+
+"sqrt5-approx: float precision" test-section
+20 sqrt5-approx ratio>float 5.0 math.sqrt "sqrt5-approx matches sqrt(5)" assert=
+
+"sqrt5-approx: type" test-section
+15 sqrt5-approx ratio? "sqrt5-approx returns ratio" assert-true
+
+"sqrt5-approx: 30-digit precision" test-section
+30 sqrt5-approx 100000000000000000000 * >integer >string
+0 21 #slice "223606797749978969640" "sqrt5 first 21 digits" assert=
+
+"phi-approx: float precision" test-section
+20 phi-approx ratio>float 5.0 math.sqrt 1.0 + 2.0 / "phi-approx matches phi" assert=
+
+"phi-approx: type" test-section
+15 phi-approx ratio? "phi-approx returns ratio" assert-true
+
+"phi-approx: 30-digit precision" test-section
+30 phi-approx 100000000000000000000 * >integer >string
+0 21 #slice "161803398874989484820" "phi first 21 digits" assert=
+
+"ln2-approx: float precision" test-section
+20 ln2-approx ratio>float 2.0 math.log "ln2-approx matches ln(2)" assert=
+
+"ln2-approx: type" test-section
+15 ln2-approx ratio? "ln2-approx returns ratio" assert-true
+
+"ln2-approx: 30-digit precision" test-section
+30 ln2-approx 1000000000000000000000 * >integer >string
+0 21 #slice "693147180559945309417" "ln2 first 21 digits" assert=
+
+"ln10-approx: float precision" test-section
+15 ln10-approx ratio>float 10.0 math.log - -0.0000000000000005 >
+"ln10-approx matches ln(10) within 1 ULP" assert-true
+
+"ln10-approx: type" test-section
+15 ln10-approx ratio? "ln10-approx returns ratio" assert-true
+
+"ln10-approx: 30-digit precision" test-section
+30 ln10-approx 100000000000000000000 * >integer >string
+0 21 #slice "230258509299404568401" "ln10 first 21 digits" assert=

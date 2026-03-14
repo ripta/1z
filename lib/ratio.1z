@@ -257,3 +257,77 @@ pi-approx: ( n -- ratio ) [
   1 239 normalize-ratio <rot- (arctan-ratio) 4 *
   -
 ] ;
+
+\\ Compute arctanh(x) as a rational, where x is a ratio and terms is the
+\\ number of series terms. Uses Horner evaluation of the series
+\\ arctanh(x) = x * (1 + x^2/3 + x^4/5 + ...).
+\\ Same structure as (arctan-ratio) but all additions, no alternating signs.
+\\ Loop stack layout: x x^2 result k
+(arctanh-ratio): ( x terms -- ratio ) [
+  over dup *
+  swap
+  dup 1 - 2 * 1 + 1 swap normalize-ratio
+  swap 1 -
+  [ dup 0 >= ]
+  [
+    swap 2 pick-n *
+    over 2 * 1 + 1 swap normalize-ratio
+    swap + swap 1 -
+  ]
+  while
+  drop nip *
+] ;
+
+(ln-terms): ( n -- terms ) [ 10 * 3 div dup 10 < [ drop 10 ] when ] ;
+
+\\ Generic Newton-Raphson square root: compute sqrt(S) as a rational
+\\ to n decimal digits. Quadratic convergence needs ~ceil(log2(3.32*n))
+\\ iterations. Uses x_{n+1} = (x_n + S/x_n) / 2. Initial guess is 1.
+\\ Compute ceil(log2(4*n)) by repeated halving, minimum 5.
+(sqrt-iters): ( n -- iters ) [
+  4 * 1 swap
+  [ dup 1 > ] [ swap 1 + swap 2 div ] while
+  drop
+  dup 5 < [ drop 5 ] when
+] ;
+
+\\ Loop stack layout: S x iters
+(sqrt-approx): ( S n -- ratio ) [
+  (sqrt-iters)
+  1 swap
+  [ dup 0 > ]
+  [
+    -rot>
+    2dup / + 2 /
+    <rot-
+    1 -
+  ]
+  while
+  drop nip
+] ;
+
+\\ Compute sqrt(2) as a rational to n decimal digits of precision.
+sqrt2-approx: ( n -- ratio ) [ 2 swap (sqrt-approx) ] ;
+
+\\ Compute sqrt(5) as a rational to n decimal digits of precision.
+sqrt5-approx: ( n -- ratio ) [ 5 swap (sqrt-approx) ] ;
+
+\\ Compute the golden ratio (1 + sqrt(5)) / 2 as a rational
+\\ to n decimal digits of precision.
+phi-approx: ( n -- ratio ) [ sqrt5-approx 1 + 2 / ] ;
+
+\\ Compute ln(2) as a rational to n decimal digits of precision.
+\\ Uses the identity ln(2) = 2 * arctanh(1/3).
+ln2-approx: ( n -- ratio ) [
+  (ln-terms)
+  1 3 normalize-ratio swap (arctanh-ratio) 2 *
+] ;
+
+\\ Compute ln(10) as a rational to n decimal digits of precision.
+\\ Uses the identity ln(10) = 2 * ln(2) + 2 * arctanh(3/7).
+ln10-approx: ( n -- ratio ) [
+  dup ln2-approx 2 *
+  swap (ln-terms)
+  3 7 normalize-ratio swap (arctanh-ratio) 2 *
+  +
+] ;
