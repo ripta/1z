@@ -1,0 +1,27 @@
+=== row variable inference through while ===
+Stack: [ ]
+Stack: [ ]
+PASS: while loop
+Stack: [ ]
+Stack: [ ]
+PASS: weird while extra
+PASS: weird while val
+Stack: [ ]
+=== row variable inference through if ===
+Stack: [ ]
+Stack: [ ]
+PASS: if below threshold
+Stack: [ ]
+PASS: if above threshold
+Stack: [ ]
+=== when with intentional no-op false branch ===
+Stack: [ ]
+Stack: [ ]
+PASS: when true
+Stack: [ ]
+PASS: when false
+Stack: [ ]
+=== row var validation catches mismatches ===
+Stack: [ ]
+PASS: while body leaves extra value
+Stack: [ ]

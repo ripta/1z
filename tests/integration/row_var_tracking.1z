@@ -1,0 +1,35 @@
+\ Test row variable tracking through words with unbalanced row vars
+
+use "testing" ;
+
+"row variable inference through while" test-section
+
+\ while with simple pred/body validates correctly
+uses-while: ( n -- n ) [ [ dup 10 < ] [ 1 + ] while ] ;
+0 uses-while 10 "while loop" assert=
+
+\ Row vars differing in size: pred pushes extra, body drops it
+weird-while: ( n -- n n ) [ [ dup dup 10 < ] [ drop 1 + ] while ] ;
+0 weird-while 10 "weird while extra" assert= 10 "weird while val" assert=
+
+"row variable inference through if" test-section
+
+\ if with matched branches
+choose: ( n -- n ) [ dup 5 > [ 1 + ] [ 1 - ] if ] ;
+3 choose 2 "if below threshold" assert=
+7 choose 8 "if above threshold" assert=
+
+"when with intentional no-op false branch" test-section
+
+\ when uses [ ] as false branch; constraint conflict is handled gracefully
+maybe-inc: ( n ? -- n ) [ [ 1 + ] when ] ;
+5 t maybe-inc 6 "when true" assert=
+5 f maybe-inc 5 "when false" assert=
+
+"row var validation catches mismatches" test-section
+
+\ Body delta inconsistent with pred delta:
+\ pred pushes 1 value (delta=+1), which means ..b - ..a = 0
+\ body pushes 1 value (delta=+1), which means ..a - ..b = +1, i.e., ..b - ..a = -1
+\ These conflict, so the body should fail validation
+[ 0 [ dup 10 < ] [ dup 1 + ] while ] "while body leaves extra value" assert-error

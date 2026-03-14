@@ -1014,9 +1014,52 @@ pub const Context = struct {
 
     const MAX_INFERENCE_DEPTH = 8;
 
+    const RowVarBinding = struct {
+        name: []const u8,
+    };
+
+    const RowVarConstraint = struct {
+        row_a: []const u8,
+        row_b: []const u8,
+        diff: i64,
+    };
+
+    const RowVarEnv = struct {
+        constraints: [8]RowVarConstraint = undefined,
+        len: usize = 0,
+
+        /// Record a constraint that row_b - row_a = diff.
+        /// Returns false if it conflicts with an existing constraint.
+        fn record(self: *RowVarEnv, a: []const u8, b: []const u8, diff: i64) bool {
+            if (self.lookup(a, b)) |existing| {
+                return existing == diff;
+            }
+            if (self.len < 8) {
+                self.constraints[self.len] = .{ .row_a = a, .row_b = b, .diff = diff };
+                self.len += 1;
+            }
+            return true;
+        }
+
+        /// Look up the size difference between two row vars (b - a).
+        fn lookup(self: *const RowVarEnv, a: []const u8, b: []const u8) ?i64 {
+            for (self.constraints[0..self.len]) |c| {
+                if (std.mem.eql(u8, c.row_a, a) and std.mem.eql(u8, c.row_b, b)) {
+                    return c.diff;
+                }
+                if (std.mem.eql(u8, c.row_a, b) and std.mem.eql(u8, c.row_b, a)) {
+                    return -c.diff;
+                }
+            }
+
+            return null;
+        }
+    };
+
     const SlotType = union(enum) {
         known: *const StackEffect,
         inferred_delta: i64,
+        row_var: RowVarBinding,
         unknown,
     };
 
@@ -1093,11 +1136,17 @@ pub const Context = struct {
                             }
                         } else if (word.stack_effect) |word_effect| {
                             if (!word_effect.hasBalancedRowVariables()) {
-                                return null;
+                                if (self.resolveUnbalancedDelta(word_effect, &shadow)) |resolved_delta| {
+                                    delta += resolved_delta;
+                                    self.adjustShadowStack(&shadow, resolved_delta);
+                                } else {
+                                    return null;
+                                }
+                            } else {
+                                const word_delta = word_effect.concreteDelta();
+                                delta += word_delta;
+                                self.adjustShadowStack(&shadow, word_delta);
                             }
-                            const word_delta = word_effect.concreteDelta();
-                            delta += word_delta;
-                            self.adjustShadowStack(&shadow, word_delta);
                         } else {
                             return null;
                         }
@@ -1143,6 +1192,7 @@ pub const Context = struct {
         const quot_delta: i64 = switch (slot) {
             .known => |eff| eff.concreteDelta(),
             .inferred_delta => |d| d,
+            .row_var => return null,
             .unknown => return null,
         };
 
@@ -1152,6 +1202,71 @@ pub const Context = struct {
             .delta = -ci + co + quot_delta,
             .quot_delta = quot_delta,
         };
+    }
+
+    /// Resolve the stack delta of a word with unbalanced row variables by
+    /// examining the shadow stack for known quotation arguments and computing
+    /// row variable constraints from their inferred deltas.
+    fn resolveUnbalancedDelta(self: *Context, word_effect: StackEffect, shadow: *const std.ArrayListUnmanaged(SlotType)) ?i64 {
+        _ = self;
+        const concrete_inputs = word_effect.concreteInputCount();
+
+        var row_env = RowVarEnv{};
+
+        var concrete_idx: usize = 0;
+        for (word_effect.inputs) |param| {
+            if (param.is_row_variable) continue;
+
+            if (param.quotation_effect) |quot_effect| {
+                const offset_from_tos = concrete_inputs - 1 - concrete_idx;
+                if (offset_from_tos < shadow.items.len) {
+                    const slot = shadow.items[shadow.items.len - 1 - offset_from_tos];
+                    const inferred_delta: i64 = switch (slot) {
+                        .known => |eff| eff.concreteDelta(),
+                        .inferred_delta => |d| d,
+                        .row_var, .unknown => {
+                            concrete_idx += 1;
+                            continue;
+                        },
+                    };
+
+                    const input_rvs = quot_effect.inputRowVariableNames();
+                    const output_rvs = quot_effect.outputRowVariableNames();
+                    const quot_concrete_delta = quot_effect.concreteDelta();
+
+                    if (input_rvs.len == 1 and output_rvs.len == 1) {
+                        const diff = inferred_delta - quot_concrete_delta;
+                        if (!row_env.record(input_rvs.items[0], output_rvs.items[0], diff)) {
+                            return null;
+                        }
+                    } else if (input_rvs.len == 1 and output_rvs.len == 0) {
+                        // Input-only row var without output counterpart; cannot resolve
+                        concrete_idx += 1;
+                        continue;
+                    } else if (input_rvs.len == 0 and output_rvs.len == 1) {
+                        concrete_idx += 1;
+                        continue;
+                    }
+                }
+            }
+
+            concrete_idx += 1;
+        }
+
+        const input_rvs = word_effect.inputRowVariableNames();
+        const output_rvs = word_effect.outputRowVariableNames();
+
+        if (input_rvs.len == 1 and output_rvs.len == 1) {
+            if (row_env.lookup(input_rvs.items[0], output_rvs.items[0])) |rv_diff| {
+                return word_effect.concreteDelta() + rv_diff;
+            }
+        } else if (input_rvs.len == 0 and output_rvs.len == 0) {
+            // No row vars in the word's own effect; the quotation constraints
+            // were checked for consistency, and concrete delta is sufficient
+            return word_effect.concreteDelta();
+        }
+
+        return null;
     }
 
     fn adjustShadowStack(self: *Context, shadow: *std.ArrayListUnmanaged(SlotType), delta: i64) void {
@@ -1296,15 +1411,28 @@ pub const Context = struct {
 
     /// Validate a quotation against an expected effect by inferring its delta.
     /// Returns an error if the quotation doesn't match the expected effect.
-    fn validateQuotationEffect(self: *Context, quot: Quotation, expected_effect: *const StackEffect, param_name: []const u8, enclosing_effect: ?*const StackEffect) !void {
-        // If the effect has unbalanced row variables (row vars that appear only in
-        // inputs or only in outputs), we can't determine a fixed expected delta.
-        // Skip validation in this case since the effect is polymorphic.
-        if (!expected_effect.hasBalancedRowVariables()) {
+    /// When a RowVarEnv is provided, it is used to compute the expected delta
+    /// for effects with unbalanced row variables.
+    fn validateQuotationEffect(self: *Context, quot: Quotation, expected_effect: *const StackEffect, param_name: []const u8, enclosing_effect: ?*const StackEffect, row_env: ?*const RowVarEnv) !void {
+        var expected_delta: i64 = undefined;
+
+        if (expected_effect.hasBalancedRowVariables()) {
+            expected_delta = expected_effect.concreteDelta();
+        } else if (row_env) |env| {
+            const input_rvs = expected_effect.inputRowVariableNames();
+            const output_rvs = expected_effect.outputRowVariableNames();
+            if (input_rvs.len == 1 and output_rvs.len == 1) {
+                if (env.lookup(input_rvs.items[0], output_rvs.items[0])) |rv_diff| {
+                    expected_delta = expected_effect.concreteDelta() + rv_diff;
+                } else {
+                    return;
+                }
+            } else {
+                return;
+            }
+        } else {
             return;
         }
-
-        const expected_delta = expected_effect.concreteDelta();
 
         // Infer actual delta from quotation instructions
         const inferred_delta = self.inferQuotationDelta(quot, enclosing_effect);
@@ -1426,6 +1554,44 @@ pub const Context = struct {
 
         if (concrete_params == 0 or self.stack.depth() < concrete_params) return;
 
+        // Build row variable constraints from quotation parameters that have
+        // unbalanced row variables. This lets us validate consistency between
+        // related quotation parameters like while's pred and body.
+        //
+        // XXX(ripta): Ew, so much nesting.
+        var row_env = RowVarEnv{};
+        var row_env_valid = true;
+        {
+            var ci: usize = 0;
+            for (effect.inputs) |param| {
+                if (param.is_row_variable) continue;
+                if (param.quotation_effect) |expected_effect| {
+                    if (!expected_effect.hasBalancedRowVariables()) {
+                        const offset_from_top = concrete_params - 1 - ci;
+                        const stack_index = self.stack.depth() - 1 - offset_from_top;
+                        if (self.stack.items.items[stack_index] == .quotation) {
+                            const quot = self.stack.items.items[stack_index].quotation;
+                            if (self.inferQuotationDelta(quot, effect)) |inferred_delta| {
+                                const input_rvs = expected_effect.inputRowVariableNames();
+                                const output_rvs = expected_effect.outputRowVariableNames();
+                                if (input_rvs.len == 1 and output_rvs.len == 1) {
+                                    const diff = inferred_delta - expected_effect.concreteDelta();
+                                    if (!row_env.record(input_rvs.items[0], output_rvs.items[0], diff)) {
+                                        // Conflict means we can't determine the correct
+                                        // row var relationship, so skip validation for all
+                                        // unbalanced params. This handles valid patterns like
+                                        // `when` where one branch is intentionally a no-op.
+                                        row_env_valid = false;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                ci += 1;
+            }
+        }
+
         // Validate quotation effects on stack
         // The top concrete_params items on the stack are the parameters
         // Stack layout: [...other values] [param_0] [param_1] ... [param_n-1]
@@ -1446,7 +1612,9 @@ pub const Context = struct {
                 const stack_index = self.stack.depth() - 1 - offset_from_top;
                 if (self.stack.items.items[stack_index] == .quotation) {
                     const quot = self.stack.items.items[stack_index].quotation;
-                    try self.validateQuotationEffect(quot, expected_effect, param.name, effect);
+                    const env: ?*const RowVarEnv = if (row_env_valid and row_env.len > 0) &row_env else null;
+
+                    try self.validateQuotationEffect(quot, expected_effect, param.name, effect, env);
                 }
             }
 
@@ -2165,14 +2333,16 @@ test "stack effect validation passes for combinator calling quotation" {
     defer ctx.deinit();
 
     // if ( ? true-quot false-quot -- ) calls a quotation
-    // The quotation can produce outputs, which is allowed
+    // Both branches must have matching deltas for row var validation
     const alloc = ctx.quotationAllocator();
     const instrs = try alloc.alloc(Instruction, 4);
     instrs[0] = .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 };
     instrs[1] = .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &[_]Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 0 },
     } } } }, .line = 2 };
-    instrs[2] = .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &[_]Instruction{} } } }, .line = 3 };
+    instrs[2] = .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 0 },
+    } } } }, .line = 3 };
     instrs[3] = .{ .op = .{ .call_word = "if" }, .line = 4 };
 
     try ctx.executeQuotation(.{ .instructions = instrs });
