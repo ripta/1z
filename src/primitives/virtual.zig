@@ -38,6 +38,9 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "virtual-struct-to-hash", .func = virtualStructToHashHelper, .stack_effect = "tagged vtype-ptr -- hash" },
     .{ .name = "virtual-struct-hash-wrap", .func = virtualStructHashWrapHelper, .stack_effect = "hash vtype-ptr -- tagged" },
     .{ .name = "virtual-parameterized-wrap", .func = virtualParameterizedWrapHelper, .stack_effect = "value vtype-ptr -- tagged" },
+    .{ .name = "typed-validate-and-promote", .func = typedValidateAndPromote, .stack_effect = "value vtype-ptr -- promoted-value" },
+    .{ .name = "typed-validate-seq-elements", .func = typedValidateSeqElements, .stack_effect = "seq vtype-ptr -- seq" },
+    .{ .name = "typed-nth-mut-dispatch", .func = typedNthMutDispatch, .stack_effect = "typed-vec n elem vtype-ptr -- typed-vec" },
 };
 
 /// define-virtual ( name: descriptor markers -- ) - Define a virtual type and its accessor words
@@ -656,6 +659,154 @@ fn tryPromoteElement(alloc: Allocator, elem: Value, expected: []const u8) ?Value
     return null;
 }
 
+/// Validate a single value against a parameterized type's element type,
+/// with numeric tower promotion. ( value vtype-ptr -- promoted-value )
+fn typedValidateAndPromote(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const ptr_val = try helpers.popFixnum(ctx);
+    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+
+    const val = try ctx.stack.pop();
+
+    const params = vt.type_params orelse {
+        try ctx.stack.push(val);
+        return;
+    };
+    if (params.len == 0) {
+        try ctx.stack.push(val);
+        return;
+    }
+
+    const expected = params[0].name;
+    const actual = dispatch_mod.dispatchTypeName(val);
+    if (std.mem.eql(u8, actual, expected)) {
+        try ctx.stack.push(val);
+        return;
+    }
+
+    if (tryPromoteElement(alloc, val, expected)) |promoted| {
+        try ctx.stack.push(promoted);
+        return;
+    }
+
+    helpers.setErrorContext(ctx, "{s} element has type {s}, expected {s}", .{ vt.name, actual, expected });
+    return error.TypeMismatch;
+}
+
+/// Validate all elements of a sequence against a parameterized type's
+/// element type, with numeric tower promotion. ( seq vtype-ptr -- seq )
+fn typedValidateSeqElements(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const ptr_val = try helpers.popFixnum(ctx);
+    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+
+    const seq = try ctx.stack.pop();
+
+    const params = vt.type_params orelse {
+        try ctx.stack.push(seq);
+        return;
+    };
+    if (params.len == 0) {
+        try ctx.stack.push(seq);
+        return;
+    }
+
+    const expected = params[0].name;
+    const items: []const Value = switch (seq) {
+        .array => |arr| arr,
+        .vector => |v| v.items,
+        else => {
+            try ctx.stack.push(seq);
+            return;
+        },
+    };
+
+    var promoted_items: ?std.ArrayListUnmanaged(Value) = null;
+    for (items, 0..) |elem, i| {
+        const actual = dispatch_mod.dispatchTypeName(elem);
+        if (!std.mem.eql(u8, actual, expected)) {
+            if (tryPromoteElement(alloc, elem, expected)) |promoted| {
+                if (promoted_items == null) {
+                    promoted_items = std.ArrayListUnmanaged(Value){};
+                    promoted_items.?.ensureTotalCapacity(alloc, items.len) catch return error.OutOfMemory;
+                    promoted_items.?.appendSlice(alloc, items[0..i]) catch return error.OutOfMemory;
+                }
+                promoted_items.?.append(alloc, promoted) catch return error.OutOfMemory;
+            } else {
+                helpers.setErrorContext(ctx, "{s} element at index {d} has type {s}, expected {s}", .{ vt.name, i, actual, expected });
+                return error.TypeMismatch;
+            }
+        } else if (promoted_items) |*pi| {
+            pi.append(alloc, elem) catch return error.OutOfMemory;
+        }
+    }
+
+    if (promoted_items) |pi| {
+        switch (seq) {
+            .array => try ctx.stack.push(.{ .array = pi.items }),
+            .vector => |v| {
+                v.items = pi.items;
+                try ctx.stack.push(.{ .vector = v });
+            },
+            else => try ctx.stack.push(seq),
+        }
+    } else {
+        try ctx.stack.push(seq);
+    }
+}
+
+/// Native dispatch helper for #nth! on typed vectors.
+/// Stack: typed-vec n elem vtype-ptr -- typed-vec
+///
+/// Validates and promotes elem, unwraps the typed vector, delegates to
+/// the raw #nth!, then rewraps.
+fn typedNthMutDispatch(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const ptr_val = try helpers.popFixnum(ctx);
+    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+
+    var elem = try ctx.stack.pop();
+    const n = try ctx.stack.pop();
+    const typed_vec = try ctx.stack.pop();
+
+    // Validate and promote element
+    if (vt.type_params) |params| {
+        if (params.len > 0) {
+            const expected = params[0].name;
+            const actual = dispatch_mod.dispatchTypeName(elem);
+            if (!std.mem.eql(u8, actual, expected)) {
+                if (tryPromoteElement(alloc, elem, expected)) |promoted| {
+                    elem = promoted;
+                } else {
+                    helpers.setErrorContext(ctx, "{s} element has type {s}, expected {s}", .{ vt.name, actual, expected });
+                    return error.TypeMismatch;
+                }
+            }
+        }
+    }
+
+    // Unwrap tagged vec to raw vec, push raw-vec n elem for #nth!
+    try ctx.stack.push(typed_vec.tagged.inner.*);
+    try ctx.stack.push(n);
+    try ctx.stack.push(elem);
+
+    // Delegate to the raw #nth!
+    const nth_mut_word = ctx.lookupWord("#nth!") orelse return error.WordNotFound;
+    switch (nth_mut_word.action) {
+        .native => |func| try func(ctx),
+        .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
+    }
+
+    // Rewrap: pop raw vec, wrap as tagged, push
+    const result_vec = try ctx.stack.pop();
+    const inner = try alloc.create(Value);
+    inner.* = result_vec;
+    try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
+}
+
 /// Trampoline helper ( value vtype-ptr -- tagged )
 ///
 /// Like virtualWrapHelper but additionally validates that array elements
@@ -830,12 +981,118 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     try generated_words.append(alloc, .{ .string = make_name });
     try generated_words.append(alloc, .{ .string = unmake_name });
     try generated_words.append(alloc, .{ .string = pred_name });
+
+    // Register vector mutation dispatch entries when base type is vector
+    if (std.mem.eql(u8, base_tv.name, "vector")) {
+        try registerVectorMutationDispatches(ctx, alloc, name, vtype, &generated_words);
+    }
+
     const gw_slice = try generated_words.toOwnedSlice(alloc);
     try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
 
     const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
     try ctx.type_descriptors.put(ctx.allocator, name, frozen_desc);
     vtype.type_val.?.descriptor = frozen_desc;
+}
+
+/// Register dispatch entries for vector mutation ops on a parameterized vector type.
+/// Each entry validates/promotes elements before delegating to the base vector op.
+fn registerVectorMutationDispatches(
+    ctx: *Context,
+    alloc: Allocator,
+    type_name: []const u8,
+    vtype: *const VirtualType,
+    generated_words: *std.ArrayListUnmanaged(Value),
+) !void {
+    const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(vtype)) };
+
+    // Element-adding ops: #push!, #unshift!
+    // Stack: typed-vec elem
+    // Body: validate+promote elem, swap, unwrap vec, swap, base-op, rewrap
+    const adding_ops = [_][]const u8{ "#push!", "#unshift!" };
+    for (adding_ops) |op_name| {
+        const instrs = try alloc.alloc(Instruction, 9);
+        instrs[0] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
+        instrs[1] = .{ .op = .{ .call_word = "native.typed-validate-and-promote" }, .line = 0 };
+        instrs[2] = .{ .op = .{ .call_word = "swap" }, .line = 0 };
+        instrs[3] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
+        instrs[4] = .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 0 };
+        instrs[5] = .{ .op = .{ .call_word = "swap" }, .line = 0 };
+        instrs[6] = .{ .op = .{ .call_word = op_name }, .line = 0 };
+        instrs[7] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
+        instrs[8] = .{ .op = .{ .call_word = "native.virtual-wrap" }, .line = 0 };
+
+        try ctx.dispatch.register(.{
+            .word_name = op_name,
+            .type_a = type_name,
+            .type_b = dispatch_mod.unary_sentinel,
+        }, .{ .body = .{ .quotation = instrs } }, true);
+
+        try generated_words.append(alloc, .{ .string = op_name });
+    }
+
+    // Element-removing ops: #pop!, #shift!
+    // Stack: typed-vec
+    // Body: unwrap vec, base-op (leaves vec elem), swap, rewrap, swap
+    const removing_ops = [_][]const u8{ "#pop!", "#shift!" };
+    for (removing_ops) |op_name| {
+        const instrs = try alloc.alloc(Instruction, 7);
+        instrs[0] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
+        instrs[1] = .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 0 };
+        instrs[2] = .{ .op = .{ .call_word = op_name }, .line = 0 };
+        instrs[3] = .{ .op = .{ .call_word = "swap" }, .line = 0 };
+        instrs[4] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
+        instrs[5] = .{ .op = .{ .call_word = "native.virtual-wrap" }, .line = 0 };
+        instrs[6] = .{ .op = .{ .call_word = "swap" }, .line = 0 };
+
+        try ctx.dispatch.register(.{
+            .word_name = op_name,
+            .type_a = type_name,
+            .type_b = dispatch_mod.unary_sentinel,
+        }, .{ .body = .{ .quotation = instrs } }, true);
+
+        try generated_words.append(alloc, .{ .string = op_name });
+    }
+
+    // #nth! -- Stack: typed-vec n elem
+    // Body: push vtype-ptr, call native helper that handles the full
+    // validate+unwrap+delegate+rewrap sequence
+    {
+        const instrs = try alloc.alloc(Instruction, 2);
+        instrs[0] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
+        instrs[1] = .{ .op = .{ .call_word = "native.typed-nth-mut-dispatch" }, .line = 0 };
+
+        try ctx.dispatch.register(.{
+            .word_name = "#nth!",
+            .type_a = type_name,
+            .type_b = dispatch_mod.unary_sentinel,
+        }, .{ .body = .{ .quotation = instrs } }, true);
+
+        try generated_words.append(alloc, .{ .string = "#nth!" });
+    }
+
+    // #append! -- Stack: typed-vec seq
+    // Body: validate seq elements, swap, unwrap, swap, base-op, rewrap
+    {
+        const instrs = try alloc.alloc(Instruction, 9);
+        instrs[0] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
+        instrs[1] = .{ .op = .{ .call_word = "native.typed-validate-seq-elements" }, .line = 0 };
+        instrs[2] = .{ .op = .{ .call_word = "swap" }, .line = 0 };
+        instrs[3] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
+        instrs[4] = .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 0 };
+        instrs[5] = .{ .op = .{ .call_word = "swap" }, .line = 0 };
+        instrs[6] = .{ .op = .{ .call_word = "#append!" }, .line = 0 };
+        instrs[7] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
+        instrs[8] = .{ .op = .{ .call_word = "native.virtual-wrap" }, .line = 0 };
+
+        try ctx.dispatch.register(.{
+            .word_name = "#append!",
+            .type_a = type_name,
+            .type_b = dispatch_mod.unary_sentinel,
+        }, .{ .body = .{ .quotation = instrs } }, true);
+
+        try generated_words.append(alloc, .{ .string = "#append!" });
+    }
 }
 
 /// Register a >hash dispatch entry for a type name, creating the generic `>hash` word if it doesn't exist yet.

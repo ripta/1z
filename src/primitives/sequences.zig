@@ -517,7 +517,7 @@ pub fn nativeNth(ctx: *Context) anyerror!void {
 
 /// #nth! ( seq n value -- seq ) - Set element at index in mutable sequence
 fn nativeNthMut(ctx: *Context) anyerror!void {
-    // Dispatch for custom types: seq is at position 2 (below n and value)
+    // dispatch: seq is at position 2, below n and value
     if (ctx.stack.depth() >= 3) {
         const seq_peek = try ctx.stack.peekN(2);
         const a_type = dispatch_mod.dispatchTypeName(seq_peek);
@@ -916,6 +916,30 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
 
 /// #append! ( vec seq -- vec ) - Mutably append sequence elements to vector
 pub fn nativeAppendMut(ctx: *Context) anyerror!void {
+    // dispatch: vec is at position 1, below seq
+    if (ctx.stack.depth() >= 2) {
+        const seq_peek = try ctx.stack.peekN(1);
+        const a_type = dispatch_mod.dispatchTypeName(seq_peek);
+        if (ctx.lookupUnaryDispatch("#append!", a_type)) |entry| {
+            try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+            return;
+        }
+        if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
+            if (ctx.lookupUnaryDispatch("#append!", ae)) |entry| {
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+        if (dispatch_mod.dispatchBaseTypeName(seq_peek)) |bt| {
+            if (ctx.lookupUnaryDispatch("#append!", bt)) |entry| {
+                const len = ctx.stack.items.items.len;
+                ctx.stack.items.items[len - 2] = seq_peek.tagged.inner.*;
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+    }
+
     const seq = try ctx.stack.pop();
     const vec = try popVector(ctx);
     const alloc = ctx.quotationAllocator();
@@ -1327,6 +1351,30 @@ fn nativeShift(ctx: *Context) anyerror!void {
 
 /// #push! ( vec elem -- vec ) - Mutate vec to add element to end
 fn nativePushMut(ctx: *Context) anyerror!void {
+    // dispatch: vec is at position 1, below elem
+    if (ctx.stack.depth() >= 2) {
+        const seq_peek = try ctx.stack.peekN(1);
+        const a_type = dispatch_mod.dispatchTypeName(seq_peek);
+        if (ctx.lookupUnaryDispatch("#push!", a_type)) |entry| {
+            try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+            return;
+        }
+        if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
+            if (ctx.lookupUnaryDispatch("#push!", ae)) |entry| {
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+        if (dispatch_mod.dispatchBaseTypeName(seq_peek)) |bt| {
+            if (ctx.lookupUnaryDispatch("#push!", bt)) |entry| {
+                const len = ctx.stack.items.items.len;
+                ctx.stack.items.items[len - 2] = seq_peek.tagged.inner.*;
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+    }
+
     const elem = try ctx.stack.pop();
     const vec = try popVector(ctx);
     const alloc = ctx.quotationAllocator();
@@ -1337,6 +1385,30 @@ fn nativePushMut(ctx: *Context) anyerror!void {
 
 /// #pop! ( vec -- vec elem ) - Mutate vec to remove last element from vector
 fn nativePopMut(ctx: *Context) anyerror!void {
+    // dispatch: vec is at position 0
+    if (ctx.stack.depth() >= 1) {
+        const seq_peek = try ctx.stack.peek();
+        const a_type = dispatch_mod.dispatchTypeName(seq_peek);
+        if (ctx.lookupUnaryDispatch("#pop!", a_type)) |entry| {
+            try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+            return;
+        }
+        if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
+            if (ctx.lookupUnaryDispatch("#pop!", ae)) |entry| {
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+        if (dispatch_mod.dispatchBaseTypeName(seq_peek)) |bt| {
+            if (ctx.lookupUnaryDispatch("#pop!", bt)) |entry| {
+                const len = ctx.stack.items.items.len;
+                ctx.stack.items.items[len - 1] = seq_peek.tagged.inner.*;
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+    }
+
     const vec = try popVector(ctx);
     if (vec.items.len == 0) {
         setErrorContext(ctx, "cannot #pop! from empty vector", .{});
@@ -1350,6 +1422,30 @@ fn nativePopMut(ctx: *Context) anyerror!void {
 
 /// #unshift! ( vec elem -- vec ) - Mutate vec to add element to start of vector
 fn nativeUnshiftMut(ctx: *Context) anyerror!void {
+    // dispatch: vec is at position 1, below elem
+    if (ctx.stack.depth() >= 2) {
+        const seq_peek = try ctx.stack.peekN(1);
+        const a_type = dispatch_mod.dispatchTypeName(seq_peek);
+        if (ctx.lookupUnaryDispatch("#unshift!", a_type)) |entry| {
+            try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+            return;
+        }
+        if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
+            if (ctx.lookupUnaryDispatch("#unshift!", ae)) |entry| {
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+        if (dispatch_mod.dispatchBaseTypeName(seq_peek)) |bt| {
+            if (ctx.lookupUnaryDispatch("#unshift!", bt)) |entry| {
+                const len = ctx.stack.items.items.len;
+                ctx.stack.items.items[len - 2] = seq_peek.tagged.inner.*;
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+    }
+
     const elem = try ctx.stack.pop();
     const vec = try popVector(ctx);
     const alloc = ctx.quotationAllocator();
@@ -1360,6 +1456,30 @@ fn nativeUnshiftMut(ctx: *Context) anyerror!void {
 
 /// #shift! ( vec -- vec elem ) - Mutate vec to remove first element
 fn nativeShiftMut(ctx: *Context) anyerror!void {
+    // dispatch: vec is at position 0
+    if (ctx.stack.depth() >= 1) {
+        const seq_peek = try ctx.stack.peek();
+        const a_type = dispatch_mod.dispatchTypeName(seq_peek);
+        if (ctx.lookupUnaryDispatch("#shift!", a_type)) |entry| {
+            try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+            return;
+        }
+        if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
+            if (ctx.lookupUnaryDispatch("#shift!", ae)) |entry| {
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+        if (dispatch_mod.dispatchBaseTypeName(seq_peek)) |bt| {
+            if (ctx.lookupUnaryDispatch("#shift!", bt)) |entry| {
+                const len = ctx.stack.items.items.len;
+                ctx.stack.items.items[len - 1] = seq_peek.tagged.inner.*;
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+    }
+
     const vec = try popVector(ctx);
     if (vec.items.len == 0) {
         setErrorContext(ctx, "cannot #shift! from empty vector", .{});

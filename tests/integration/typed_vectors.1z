@@ -1,0 +1,105 @@
+\ Test typed vector mutation dispatch
+
+use "testing" ;
+
+"define vector(fixnum)" test-section
+
+\ Define parameterized vector type
+vector(fixnum): vector fixnum define-parameterized-type
+
+\ Basic construction
+V{ 1 2 3 } >vector(fixnum)
+type-name "vector(fixnum)" "type-of returns parameterized type name" assert=
+
+\ Predicate
+V{ 1 2 3 } >vector(fixnum) vector(fixnum)? t "vector(fixnum)? on typed vector is true" assert=
+V{ 1 2 3 } vector(fixnum)? f "vector(fixnum)? on plain vector is false" assert=
+
+"#push! on typed vector" test-section
+
+\ #push! with valid element
+V{ 1 2 } >vector(fixnum) 3 #push!
+type-name "vector(fixnum)" "#push! preserves typed wrapper" assert=
+
+V{ 1 2 } >vector(fixnum) 3 #push! unmake-vector(fixnum) #len
+3 "#push! adds element" assert=
+
+\ #push! with wrong type (error)
+[ V{ 1 2 } >vector(fixnum) "hello" #push! ] "error" assert-error
+
+"#pop! on typed vector" test-section
+
+\ #pop! returns element and preserves typed wrapper
+V{ 10 20 30 } >vector(fixnum) #pop!
+30 "#pop! returns last element" assert=
+type-name "vector(fixnum)" "#pop! preserves typed wrapper" assert=
+
+V{ 10 20 30 } >vector(fixnum) #pop! drop unmake-vector(fixnum) #len
+2 "#pop! removes element" assert=
+
+"#unshift! on typed vector" test-section
+
+\ #unshift! with valid element
+V{ 2 3 } >vector(fixnum) 1 #unshift!
+type-name "vector(fixnum)" "#unshift! preserves typed wrapper" assert=
+
+V{ 2 3 } >vector(fixnum) 1 #unshift! unmake-vector(fixnum) 0 #nth
+1 "#unshift! adds element at start" assert=
+
+\ #unshift! with wrong type (error)
+[ V{ 1 2 } >vector(fixnum) "hello" #unshift! ] "error" assert-error
+
+"#shift! on typed vector" test-section
+
+\ #shift! returns element and preserves typed wrapper
+V{ 10 20 30 } >vector(fixnum) #shift!
+10 "#shift! returns first element" assert=
+type-name "vector(fixnum)" "#shift! preserves typed wrapper" assert=
+
+"#nth! on typed vector" test-section
+
+\ #nth! with valid element
+V{ 10 20 30 } >vector(fixnum) 1 99 #nth!
+type-name "vector(fixnum)" "#nth! preserves typed wrapper" assert=
+
+V{ 10 20 30 } >vector(fixnum) 1 99 #nth! unmake-vector(fixnum) 1 #nth
+99 "#nth! sets element at index" assert=
+
+\ #nth! with wrong type (error)
+[ V{ 10 20 30 } >vector(fixnum) 1 "hello" #nth! ] "error" assert-error
+
+"#append! on typed vector" test-section
+
+\ #append! with valid sequence
+V{ 1 2 } >vector(fixnum) { 3 4 } #append!
+type-name "vector(fixnum)" "#append! preserves typed wrapper" assert=
+
+V{ 1 2 } >vector(fixnum) { 3 4 } #append! unmake-vector(fixnum) #len
+4 "#append! adds all elements" assert=
+
+\ #append! with wrong types (error)
+[ V{ 1 2 } >vector(fixnum) { "a" "b" } #append! ] "error" assert-error
+
+"numeric promotion in typed vectors" test-section
+
+\ Define vector(float) for promotion tests
+vector(float): vector float define-parameterized-type
+
+\ #push! promotes fixnum to float
+V{ 1.0 2.0 } >vector(float) 3 #push!
+type-name "vector(float)" "#push! with promotion preserves type" assert=
+
+\ #append! promotes fixnums to float
+V{ 1.0 } >vector(float) { 2 3 } #append!
+type-name "vector(float)" "#append! with promotion preserves type" assert=
+
+"read-only ops via base_type fallback" test-section
+
+\ #len on typed vector
+V{ 1 2 3 } >vector(fixnum) #len 3 "#len on typed vector" assert=
+
+\ #nth on typed vector
+V{ 10 20 30 } >vector(fixnum) 1 #nth 20 "#nth on typed vector" assert=
+
+\ #each on typed vector
+0 V{ 1 2 3 } >vector(fixnum) [ + ] #each 6 "#each on typed vector" assert=

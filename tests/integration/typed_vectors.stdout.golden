@@ -1,0 +1,84 @@
+=== define vector(fixnum) ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <vector(fixnum) V{ 1 2 3 }> ]
+PASS: type-of returns parameterized type name
+Stack: [ ]
+PASS: vector(fixnum)? on typed vector is true
+Stack: [ ]
+PASS: vector(fixnum)? on plain vector is false
+Stack: [ ]
+=== #push! on typed vector ===
+Stack: [ ]
+Stack: [ <vector(fixnum) V{ 1 2 3 }> ]
+PASS: #push! preserves typed wrapper
+Stack: [ ]
+Stack: [ 3 ]
+PASS: #push! adds element
+Stack: [ ]
+PASS: error
+Stack: [ ]
+=== #pop! on typed vector ===
+Stack: [ ]
+Stack: [ <vector(fixnum) V{ 10 20 }> 30 ]
+PASS: #pop! returns last element
+Stack: [ <vector(fixnum) V{ 10 20 }> ]
+PASS: #pop! preserves typed wrapper
+Stack: [ ]
+Stack: [ 2 ]
+PASS: #pop! removes element
+Stack: [ ]
+=== #unshift! on typed vector ===
+Stack: [ ]
+Stack: [ <vector(fixnum) V{ 1 2 3 }> ]
+PASS: #unshift! preserves typed wrapper
+Stack: [ ]
+Stack: [ 1 ]
+PASS: #unshift! adds element at start
+Stack: [ ]
+PASS: error
+Stack: [ ]
+=== #shift! on typed vector ===
+Stack: [ ]
+Stack: [ <vector(fixnum) V{ 20 30 }> 10 ]
+PASS: #shift! returns first element
+Stack: [ <vector(fixnum) V{ 20 30 }> ]
+PASS: #shift! preserves typed wrapper
+Stack: [ ]
+=== #nth! on typed vector ===
+Stack: [ ]
+Stack: [ <vector(fixnum) V{ 10 99 30 }> ]
+PASS: #nth! preserves typed wrapper
+Stack: [ ]
+Stack: [ 99 ]
+PASS: #nth! sets element at index
+Stack: [ ]
+PASS: error
+Stack: [ ]
+=== #append! on typed vector ===
+Stack: [ ]
+Stack: [ <vector(fixnum) V{ 1 2 3 4 }> ]
+PASS: #append! preserves typed wrapper
+Stack: [ ]
+Stack: [ 4 ]
+PASS: #append! adds all elements
+Stack: [ ]
+PASS: error
+Stack: [ ]
+=== numeric promotion in typed vectors ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <vector(float) V{ 1.0 2.0 3.0 }> ]
+PASS: #push! with promotion preserves type
+Stack: [ ]
+Stack: [ <vector(float) V{ 1.0 2.0 3.0 }> ]
+PASS: #append! with promotion preserves type
+Stack: [ ]
+=== read-only ops via base_type fallback ===
+Stack: [ ]
+PASS: #len on typed vector
+Stack: [ ]
+PASS: #nth on typed vector
+Stack: [ ]
+PASS: #each on typed vector
+Stack: [ ]
