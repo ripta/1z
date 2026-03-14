@@ -9,6 +9,9 @@ const StructInstance = value_mod.StructInstance;
 const Marker = value_mod.Marker;
 const MutableMap = value_mod.MutableMap;
 
+const BigIntManaged = value_mod.BigIntManaged;
+const Allocator = std.mem.Allocator;
+
 const helpers = @import("helpers.zig");
 const markers_mod = @import("markers.zig");
 const dispatch_mod = @import("../dispatch.zig");
@@ -631,6 +634,28 @@ pub fn defineVirtualToHash(ctx: *Context, name: []const u8, vtype: *const Virtua
     });
 }
 
+/// Attempt numeric tower promotion of a single element to the expected type.
+/// Returns the promoted value, or null if promotion is not possible.
+fn tryPromoteElement(alloc: Allocator, elem: Value, expected: []const u8) ?Value {
+    if (std.mem.eql(u8, expected, "float")) {
+        return switch (elem) {
+            .fixnum => |i| .{ .float = @floatFromInt(i) },
+            .bignum => |b| .{ .float = blk: {
+                const str = b.toConst().toStringAlloc(alloc, 10, .lower) catch break :blk std.math.nan(f64);
+                break :blk std.fmt.parseFloat(f64, str) catch std.math.nan(f64);
+            } },
+            else => null,
+        };
+    }
+    if (std.mem.eql(u8, expected, "bignum")) {
+        return switch (elem) {
+            .fixnum => |i| .{ .bignum = BigIntManaged.initSet(alloc, i) catch return null },
+            else => null,
+        };
+    }
+    return null;
+}
+
 /// Trampoline helper ( value vtype-ptr -- tagged )
 ///
 /// Like virtualWrapHelper but additionally validates that array elements
@@ -641,7 +666,7 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
     const ptr_val = try helpers.popFixnum(ctx);
     const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
 
-    const val = try ctx.stack.pop();
+    var val = try ctx.stack.pop();
 
     const actual_type: []const u8 = switch (val) {
         .struct_instance => |si| si.struct_type.name,
@@ -658,12 +683,26 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
             const expected_elem_type = params[0].name;
             switch (val) {
                 .array => |arr| {
+                    var promoted_arr: ?[]Value = null;
                     for (arr, 0..) |elem, i| {
                         const elem_type = dispatch_mod.dispatchTypeName(elem);
                         if (!std.mem.eql(u8, elem_type, expected_elem_type)) {
-                            helpers.setErrorContext(ctx, ">{s} element at index {d} has type {s}, expected {s}", .{ vt.name, i, elem_type, expected_elem_type });
-                            return error.TypeMismatch;
+                            if (tryPromoteElement(alloc, elem, expected_elem_type)) |promoted| {
+                                if (promoted_arr == null) {
+                                    promoted_arr = try alloc.alloc(Value, arr.len);
+                                    @memcpy(promoted_arr.?[0..i], arr[0..i]);
+                                }
+                                promoted_arr.?[i] = promoted;
+                            } else {
+                                helpers.setErrorContext(ctx, ">{s} element at index {d} has type {s}, expected {s}", .{ vt.name, i, elem_type, expected_elem_type });
+                                return error.TypeMismatch;
+                            }
+                        } else if (promoted_arr) |pa| {
+                            pa[i] = elem;
                         }
+                    }
+                    if (promoted_arr) |pa| {
+                        val = .{ .array = pa };
                     }
                 },
                 else => {},

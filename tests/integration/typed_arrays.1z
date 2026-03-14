@@ -69,6 +69,38 @@ type-name "fixnum-array" "custom parameterized type name works" assert=
 \ array(fixnum) is NOT instance-of fixnum
 { 1 2 3 } >array(fixnum) fixnum instance-of? f "typed array is not instance-of element type" assert=
 
+"numeric tower promotion" test-section
+
+\ Define array(float) and array(bignum) for promotion tests
+array(float): array float define-parameterized-type
+array(bignum): array bignum define-parameterized-type
+
+\ fixnum -> float promotion
+{ 1 2 3 } >array(float)
+type-name "array(float)" "fixnum elements promote to array(float)" assert=
+
+\ mixed fixnum/float -> float promotion
+{ 1 2.0 3 } >array(float)
+type-name "array(float)" "mixed fixnum/float promote to array(float)" assert=
+
+\ promoted elements have correct type
+{ 1 2 3 } >array(float) unmake-array(float) 0 #nth type-name
+"float" "promoted fixnum element becomes float" assert=
+
+\ fixnum -> bignum promotion
+{ 1 2 3 } >array(bignum)
+type-name "array(bignum)" "fixnum elements promote to array(bignum)" assert=
+
+\ promoted bignum element has correct type
+{ 1 2 3 } >array(bignum) unmake-array(bignum) 0 #nth type-name
+"bignum" "promoted fixnum element becomes bignum" assert=
+
+\ float -> bignum is NOT upward promotion (should fail)
+[ { 1 2.0 3 } >array(bignum) ] "error" assert-error
+
+\ string -> float is not in the numeric tower (should fail)
+[ { "a" "b" } >array(float) ] "error" assert-error
+
 "nested parameterized types" test-section
 
 \ Nested parameterized types

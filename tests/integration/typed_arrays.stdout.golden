@@ -50,6 +50,29 @@ PASS: typed array is instance-of base type
 Stack: [ ]
 PASS: typed array is not instance-of element type
 Stack: [ ]
+=== numeric tower promotion ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ <array(float) { 1.0 2.0 3.0 }> ]
+PASS: fixnum elements promote to array(float)
+Stack: [ ]
+Stack: [ <array(float) { 1.0 2.0 3.0 }> ]
+PASS: mixed fixnum/float promote to array(float)
+Stack: [ ]
+Stack: [ "float" ]
+PASS: promoted fixnum element becomes float
+Stack: [ ]
+Stack: [ <array(bignum) { 1 2 3 }> ]
+PASS: fixnum elements promote to array(bignum)
+Stack: [ ]
+Stack: [ "bignum" ]
+PASS: promoted fixnum element becomes bignum
+Stack: [ ]
+PASS: error
+Stack: [ ]
+PASS: error
+Stack: [ ]
 === nested parameterized types ===
 Stack: [ ]
 Stack: [ ]
