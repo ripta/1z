@@ -1,0 +1,25 @@
+=== shadow stack inference through call ===
+Stack: [ ]
+Stack: [ ]
+PASS: direct call
+Stack: [ ]
+PASS: nested call
+Stack: [ ]
+=== shadow stack inference through dip ===
+Stack: [ ]
+Stack: [ ]
+PASS: dip result y
+PASS: dip result x
+Stack: [ ]
+=== mismatch detection through transparent words ===
+Stack: [ ]
+Stack: [ ]
+PASS: mismatch through call
+Stack: [ ]
+PASS: extra value through call
+Stack: [ ]
+=== depth limit graceful fallback ===
+Stack: [ ]
+Stack: [ ]
+PASS: deep nesting
+Stack: [ ]

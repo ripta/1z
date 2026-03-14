@@ -1012,36 +1012,68 @@ pub const Context = struct {
         }
     }
 
+    const MAX_INFERENCE_DEPTH = 8;
+
+    const SlotType = union(enum) {
+        known: *const StackEffect,
+        inferred_delta: i64,
+        unknown,
+    };
+
     /// Infer a quotation's stack delta by statically analyzing its instructions.
     /// Returns null if the delta cannot be determined (e.g., unknown words, control flow).
     fn inferQuotationDelta(self: *Context, quot: Quotation) ?i64 {
+        return self.inferQuotationDeltaImpl(quot, 0);
+    }
+
+    fn inferQuotationDeltaImpl(self: *Context, quot: Quotation, depth: u32) ?i64 {
+        if (depth >= MAX_INFERENCE_DEPTH) return null;
+
         var delta: i64 = 0;
+        var shadow = std.ArrayListUnmanaged(SlotType){};
+        defer shadow.deinit(self.allocator);
 
         for (quot.instructions) |instr| {
             switch (instr.op) {
                 .push_literal => |val| {
-                    // Pushing a value increases stack by 1
                     delta += 1;
 
-                    // If it's a quotation, we can't know its effect without calling it
-                    // But we're just counting the push, not its execution
-                    _ = val;
+                    const slot: SlotType = switch (val) {
+                        .quotation => |q| blk: {
+                            if (q.effect) |eff| {
+                                break :blk .{ .known = eff };
+                            }
+                            if (self.inferQuotationDeltaImpl(q, depth + 1)) |d| {
+                                break :blk .{ .inferred_delta = d };
+                            }
+                            break :blk .unknown;
+                        },
+                        else => .unknown,
+                    };
+                    shadow.append(self.allocator, slot) catch {
+                        shadow.clearRetainingCapacity();
+                    };
                 },
                 .call_word => |name| {
                     if (self.lookupWord(name)) |word| {
-                        if (word.stack_effect) |word_effect| {
-                            if (!word_effect.hasBalancedRowVariables()) {
-                                // Unbalanced row variables mean the delta
-                                // depends on runtime row sizes; can't infer.
+                        if (word.effect_transparent) {
+                            if (self.resolveTransparentDelta(word, &shadow)) |resolved_delta| {
+                                delta += resolved_delta;
+                                self.adjustShadowStack(&shadow, resolved_delta);
+                            } else {
                                 return null;
                             }
-                            delta += word_effect.concreteDelta();
+                        } else if (word.stack_effect) |word_effect| {
+                            if (!word_effect.hasBalancedRowVariables()) {
+                                return null;
+                            }
+                            const word_delta = word_effect.concreteDelta();
+                            delta += word_delta;
+                            self.adjustShadowStack(&shadow, word_delta);
                         } else {
-                            // Word has no declared effect, can't infer
                             return null;
                         }
                     } else {
-                        // Unknown word
                         return null;
                     }
                 },
@@ -1049,6 +1081,57 @@ pub const Context = struct {
         }
 
         return delta;
+    }
+
+    fn resolveTransparentDelta(self: *Context, word: WordDefinition, shadow: *const std.ArrayListUnmanaged(SlotType)) ?i64 {
+        _ = self;
+        const effect = word.stack_effect orelse return null;
+
+        const concrete_inputs = effect.concreteInputCount();
+        const concrete_outputs = effect.concreteOutputCount();
+
+        var quot_concrete_idx: ?usize = null;
+        var concrete_idx: usize = 0;
+        for (effect.inputs) |param| {
+            if (param.is_row_variable) continue;
+            if (param.quotation_effect != null) {
+                quot_concrete_idx = concrete_idx;
+                break;
+            }
+            concrete_idx += 1;
+        }
+
+        const qi = quot_concrete_idx orelse return null;
+
+        // quotation param is at position (concrete_inputs - 1 - qi)
+        const offset_from_tos = concrete_inputs - 1 - qi;
+        if (offset_from_tos >= shadow.items.len) return null;
+
+        const slot = shadow.items[shadow.items.len - 1 - offset_from_tos];
+        const quot_delta: i64 = switch (slot) {
+            .known => |eff| eff.concreteDelta(),
+            .inferred_delta => |d| d,
+            .unknown => return null,
+        };
+
+        const ci: i64 = @intCast(concrete_inputs);
+        const co: i64 = @intCast(concrete_outputs);
+        return -ci + co + quot_delta;
+    }
+
+    fn adjustShadowStack(self: *Context, shadow: *std.ArrayListUnmanaged(SlotType), delta: i64) void {
+        if (delta < 0) {
+            const to_remove: usize = @intCast(@min(-delta, @as(i64, @intCast(shadow.items.len))));
+            shadow.shrinkRetainingCapacity(shadow.items.len - to_remove);
+        } else if (delta > 0) {
+            const to_add: usize = @intCast(delta);
+            for (0..to_add) |_| {
+                shadow.append(self.allocator, .unknown) catch {
+                    shadow.clearRetainingCapacity();
+                    return;
+                };
+            }
+        }
     }
 
     /// Validate a quotation against an expected effect by inferring its delta.
@@ -1104,12 +1187,6 @@ pub const Context = struct {
             }
         }
         // If we can't infer the delta, don't error - allow dynamic validation
-    }
-
-    /// Check if an effect has row variables that appear only in inputs or only in outputs.
-    /// Such effects are polymorphic and their delta cannot be determined statically.
-    fn hasUnbalancedRowVariables(effect: *const StackEffect) bool {
-        return !effect.hasBalancedRowVariables();
     }
 
     /// Check if a row variable name is defined in a word's effect (inputs or outputs).

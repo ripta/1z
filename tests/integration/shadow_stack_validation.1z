@@ -1,0 +1,31 @@
+\ Test shadow stack inference through effect-transparent words
+
+use "testing" ;
+
+"shadow stack inference through call" test-section
+
+apply: ( x quot: ( a -- b ) -- b ) [ call ] ;
+
+\ Direct quotation validates correctly
+10 [ 1 + ] apply 11 "direct call" assert=
+
+\ Nested call: [ [ 1 + ] call ] has same delta as [ 1 + ]
+10 [ [ 1 + ] call ] apply 11 "nested call" assert=
+
+"shadow stack inference through dip" test-section
+
+apply2: ( x y quot: ( a -- b ) -- b y ) [ dip ] ;
+
+10 20 [ 1 + ] apply2 20 "dip result y" assert= 11 "dip result x" assert=
+
+"mismatch detection through transparent words" test-section
+
+run-effect: ( quot: ( -- ) -- ) [ call ] ;
+[ [ 42 ] run-effect ] "mismatch through call" assert-error
+
+[ 10 [ drop 1 2 ] apply ] "extra value through call" assert-error
+
+"depth limit graceful fallback" test-section
+
+deep-apply: ( x quot: ( a -- b ) -- b ) [ call ] ;
+10 [ [ [ [ [ [ [ [ [ 1 + ] call ] call ] call ] call ] call ] call ] call ] call ] deep-apply 11 "deep nesting" assert=
