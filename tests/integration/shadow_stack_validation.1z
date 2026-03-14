@@ -57,3 +57,17 @@ over-call 6 "over call result" assert= drop
 
 \ dup a value before dip
 10 dup [ 1 + ] dip + 21 "dup dip pattern" assert=
+
+"dip save/restore shadow slots" test-section
+
+\ Quotation preserved through dip then called
+dip-then-call: ( -- x x ) [ 5 [ 1 + ] [ dup ] dip call ] ;
+dip-then-call 6 "dip then call result" assert= 5 "dip then call dup'd value" assert=
+
+\ Quotation preserved with zero quot_delta
+dip-zero-delta: ( -- x ) [ 5 [ 2 * ] [ 3 + ] dip call ] ;
+dip-zero-delta 16 "dip zero delta then call" assert=
+
+\ dip with negative quot_delta
+dip-drop: ( -- x ) [ 10 20 [ drop ] dip ] ;
+dip-drop 20 "dip with drop" assert=

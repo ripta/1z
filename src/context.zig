@@ -1072,9 +1072,11 @@ pub const Context = struct {
                     }
                     if (self.lookupWord(name)) |word| {
                         if (word.effect_transparent) {
-                            if (self.resolveTransparentDelta(word, &shadow)) |resolved_delta| {
-                                delta += resolved_delta;
-                                self.adjustShadowStack(&shadow, resolved_delta);
+                            if (self.resolveTransparentDelta(word, &shadow)) |resolved| {
+                                delta += resolved.delta;
+                                if (word.stack_effect) |word_effect| {
+                                    self.adjustShadowForTransparent(&shadow, word_effect, resolved.quot_delta);
+                                }
                             } else {
                                 return null;
                             }
@@ -1098,7 +1100,12 @@ pub const Context = struct {
         return delta;
     }
 
-    fn resolveTransparentDelta(self: *Context, word: WordDefinition, shadow: *const std.ArrayListUnmanaged(SlotType)) ?i64 {
+    const TransparentResolution = struct {
+        delta: i64,
+        quot_delta: i64,
+    };
+
+    fn resolveTransparentDelta(self: *Context, word: WordDefinition, shadow: *const std.ArrayListUnmanaged(SlotType)) ?TransparentResolution {
         _ = self;
         const effect = word.stack_effect orelse return null;
 
@@ -1118,7 +1125,6 @@ pub const Context = struct {
 
         const qi = quot_concrete_idx orelse return null;
 
-        // quotation param is at position (concrete_inputs - 1 - qi)
         const offset_from_tos = concrete_inputs - 1 - qi;
         if (offset_from_tos >= shadow.items.len) return null;
 
@@ -1131,7 +1137,10 @@ pub const Context = struct {
 
         const ci: i64 = @intCast(concrete_inputs);
         const co: i64 = @intCast(concrete_outputs);
-        return -ci + co + quot_delta;
+        return .{
+            .delta = -ci + co + quot_delta,
+            .quot_delta = quot_delta,
+        };
     }
 
     fn adjustShadowStack(self: *Context, shadow: *std.ArrayListUnmanaged(SlotType), delta: i64) void {
@@ -1146,6 +1155,64 @@ pub const Context = struct {
                     return;
                 };
             }
+        }
+    }
+
+    fn adjustShadowForTransparent(self: *Context, shadow: *std.ArrayListUnmanaged(SlotType), effect: StackEffect, quot_delta: i64) void {
+        const StackEffectMod = @import("stack_effect.zig");
+        const concrete_inputs = effect.concreteInputCount();
+        const concrete_outputs = effect.concreteOutputCount();
+        const pass_throughs = StackEffectMod.passThroughParams(effect);
+
+        if (pass_throughs.len == 0) {
+            const total_delta = -@as(i64, @intCast(concrete_inputs)) + @as(i64, @intCast(concrete_outputs)) + quot_delta;
+            self.adjustShadowStack(shadow, total_delta);
+            return;
+        }
+
+        var saved: [8]SlotType = undefined;
+        for (pass_throughs.slice()) |pt| {
+            const pos = shadow.items.len -| (concrete_inputs - pt.input_concrete_idx);
+            if (pos < shadow.items.len) {
+                saved[pt.input_concrete_idx] = shadow.items[pos];
+            } else {
+                saved[pt.input_concrete_idx] = .unknown;
+            }
+        }
+
+        const to_pop = @min(concrete_inputs, shadow.items.len);
+        shadow.shrinkRetainingCapacity(shadow.items.len - to_pop);
+
+        if (quot_delta < 0) {
+            const to_remove: usize = @intCast(@min(-quot_delta, @as(i64, @intCast(shadow.items.len))));
+            shadow.shrinkRetainingCapacity(shadow.items.len - to_remove);
+        } else if (quot_delta > 0) {
+            const to_add: usize = @intCast(quot_delta);
+            for (0..to_add) |_| {
+                shadow.append(self.allocator, .unknown) catch {
+                    shadow.clearRetainingCapacity();
+                    return;
+                };
+            }
+        }
+
+        var out_idx: usize = 0;
+        for (effect.outputs) |out_param| {
+            if (out_param.is_row_variable) continue;
+
+            var slot: SlotType = .unknown;
+            for (pass_throughs.slice()) |pt| {
+                if (pt.output_concrete_idx == out_idx) {
+                    slot = saved[pt.input_concrete_idx];
+                    break;
+                }
+            }
+
+            shadow.append(self.allocator, slot) catch {
+                shadow.clearRetainingCapacity();
+                return;
+            };
+            out_idx += 1;
         }
     }
 

@@ -45,3 +45,15 @@ Stack: [ ]
 Stack: [ ]
 PASS: dup dip pattern
 Stack: [ ]
+=== dip save/restore shadow slots ===
+Stack: [ ]
+Stack: [ ]
+PASS: dip then call result
+PASS: dip then call dup'd value
+Stack: [ ]
+Stack: [ ]
+PASS: dip zero delta then call
+Stack: [ ]
+Stack: [ ]
+PASS: dip with drop
+Stack: [ ]

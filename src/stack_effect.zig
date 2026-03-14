@@ -152,6 +152,61 @@ pub const StackEffect = struct {
     }
 };
 
+pub const PassThroughPair = struct {
+    input_concrete_idx: usize,
+    output_concrete_idx: usize,
+};
+
+pub const PassThroughResult = struct {
+    items: [8]PassThroughPair = undefined,
+    len: usize = 0,
+
+    pub fn slice(self: *const PassThroughResult) []const PassThroughPair {
+        return self.items[0..self.len];
+    }
+
+    fn append(self: *PassThroughResult, pair: PassThroughPair) void {
+        if (self.len < 8) {
+            self.items[self.len] = pair;
+            self.len += 1;
+        }
+    }
+};
+
+/// Identify pass-through parameters: concrete, non-quotation input params
+/// whose name also appears as a concrete, non-quotation output param.
+/// Returns pairs of (input_concrete_idx, output_concrete_idx).
+pub fn passThroughParams(effect: StackEffect) PassThroughResult {
+    var result = PassThroughResult{};
+
+    var in_idx: usize = 0;
+    for (effect.inputs) |in_param| {
+        if (in_param.is_row_variable) continue;
+        if (in_param.quotation_effect != null) {
+            in_idx += 1;
+            continue;
+        }
+
+        var out_idx: usize = 0;
+        for (effect.outputs) |out_param| {
+            if (out_param.is_row_variable) continue;
+            if (out_param.quotation_effect != null) {
+                out_idx += 1;
+                continue;
+            }
+            if (std.mem.eql(u8, in_param.name, out_param.name)) {
+                result.append(.{ .input_concrete_idx = in_idx, .output_concrete_idx = out_idx });
+                break;
+            }
+            out_idx += 1;
+        }
+
+        in_idx += 1;
+    }
+
+    return result;
+}
+
 /// Check if a parameter name is a row variable (starts with "..")
 pub fn isRowVariable(name: []const u8) bool {
     return name.len >= 2 and name[0] == '.' and name[1] == '.';
@@ -372,4 +427,44 @@ test "hasAnyRowVariable using struct field" {
         .outputs = &[_]StackEffectParam{.{ .name = "y" }},
     };
     try std.testing.expect(!hasAnyRowVariable(without_row));
+}
+
+test "passThroughParams for call (no pass-throughs)" {
+    // call: ( ..a quot -- ..b )
+    const call_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "quot", .quotation_effect = &StackEffect{
+                .inputs = &[_]StackEffectParam{.{ .name = "a" }},
+                .outputs = &[_]StackEffectParam{.{ .name = "b" }},
+            } },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "..b", .is_row_variable = true },
+        },
+    };
+    const result = passThroughParams(call_effect);
+    try std.testing.expectEqual(@as(usize, 0), result.len);
+}
+
+test "passThroughParams for dip (one pass-through)" {
+    // dip: ( ..a x quot -- ..b x )
+    const dip_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "x" },
+            .{ .name = "quot", .quotation_effect = &StackEffect{
+                .inputs = &[_]StackEffectParam{.{ .name = "a" }},
+                .outputs = &[_]StackEffectParam{.{ .name = "b" }},
+            } },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "..b", .is_row_variable = true },
+            .{ .name = "x" },
+        },
+    };
+    const result = passThroughParams(dip_effect);
+    try std.testing.expectEqual(@as(usize, 1), result.len);
+    try std.testing.expectEqual(@as(usize, 0), result.slice()[0].input_concrete_idx);
+    try std.testing.expectEqual(@as(usize, 0), result.slice()[0].output_concrete_idx);
 }
