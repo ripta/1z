@@ -26,13 +26,16 @@ const valueTypeName = helpers.valueTypeName;
 
 const Allocator = std.mem.Allocator;
 
+const unwrapBaseType = dispatch_mod.unwrapBaseType;
+
 /// Convert a sequence value to an ArrayIter. Returns null if the value is not
 /// a recognized sequence type. For arrays, wraps directly; for other types
 /// (string, vector, byte-array, set), materializes to a values array first.
 fn seqToArrayIter(seq: Value, alloc: Allocator) !?*Iterator {
-    const items: []const Value = switch (seq) {
+    const s = unwrapBaseType(seq);
+    const items: []const Value = switch (s) {
         .array => |arr| arr,
-        .string, .vector, .byte_array, .set => try sequenceToValues(seq, alloc),
+        .string, .vector, .byte_array, .set => try sequenceToValues(s, alloc),
         else => return null,
     };
     const iter = try alloc.create(Iterator);
@@ -43,7 +46,8 @@ fn seqToArrayIter(seq: Value, alloc: Allocator) !?*Iterator {
 const arithmetic = @import("arithmetic.zig");
 
 /// Materialize any iterable to a mutable []Value for in-place sorting.
-fn collectToMutableArray(seq: Value, ctx: *Context, alloc: Allocator) ![]Value {
+fn collectToMutableArray(in_seq: Value, ctx: *Context, alloc: Allocator) ![]Value {
+    const seq = unwrapBaseType(in_seq);
     switch (seq) {
         .array => |arr| {
             const result = alloc.alloc(Value, arr.len) catch return error.OutOfMemory;
@@ -527,6 +531,14 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
                 return;
             }
         }
+        if (dispatch_mod.dispatchBaseTypeName(seq_peek)) |bt| {
+            if (ctx.lookupUnaryDispatch("#nth!", bt)) |entry| {
+                const len = ctx.stack.items.items.len;
+                ctx.stack.items.items[len - 3] = seq_peek.tagged.inner.*;
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
     }
 
     const value = try ctx.stack.pop();
@@ -607,8 +619,9 @@ pub fn nativeLast(ctx: *Context) anyerror!void {
 /// #each ( seq quot -- ) - Execute quotation for each element of sequence
 pub fn nativeEach(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
-    const seq = try ctx.stack.pop();
+    const raw_seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
+    const seq = unwrapBaseType(raw_seq);
 
     if (seq == .iterator) {
         while (try seq.iterator.next(ctx)) |elem| {
@@ -619,7 +632,7 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
     }
 
     var iter = SequenceIterator.init(seq, alloc) orelse {
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(raw_seq)});
         return error.TypeMismatch;
     };
     while (try iter.next()) |elem| {
@@ -676,8 +689,9 @@ pub fn nativeFilter(ctx: *Context) anyerror!void {
 pub fn nativeReduce(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     var acc = try ctx.stack.pop(); // initial accumulator
-    const seq = try ctx.stack.pop();
+    const raw_seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
+    const seq = unwrapBaseType(raw_seq);
 
     if (seq == .iterator) {
         while (try seq.iterator.next(ctx)) |elem| {

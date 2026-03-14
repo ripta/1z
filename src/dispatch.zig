@@ -57,6 +57,26 @@ pub fn dispatchEnumName(val: Value) ?[]const u8 {
     };
 }
 
+/// Returns the base type name for a parameterized tagged value,
+/// or null for everything else.
+pub fn dispatchBaseTypeName(val: Value) ?[]const u8 {
+    return switch (val) {
+        .tagged => |t| if (t.tag.base_type) |bt| bt.name else null,
+        else => null,
+    };
+}
+
+/// If a value is a tagged parameterized type with a base_type, unwrap to
+/// the inner value so operations can work on the raw container.
+pub fn unwrapBaseType(val: Value) Value {
+    if (val == .tagged) {
+        if (val.tagged.tag.base_type != null) {
+            return val.tagged.inner.*;
+        }
+    }
+    return val;
+}
+
 /// Key for dispatch table lookups: (word_name, type_a, type_b).
 /// For unary dispatch, type_b is `unary_sentinel`.
 pub const DispatchKey = struct {

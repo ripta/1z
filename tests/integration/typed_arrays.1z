@@ -37,6 +37,38 @@ fixnum-array: array fixnum define-parameterized-type
 { 10 20 } >fixnum-array
 type-name "fixnum-array" "custom parameterized type name works" assert=
 
+"sequence ops on typed arrays" test-section
+
+\ #len on typed array
+{ 1 2 3 } >array(fixnum) #len 3 "#len on typed array" assert=
+
+\ #nth on typed array
+{ 10 20 30 } >array(fixnum) 1 #nth 20 "#nth on typed array" assert=
+
+\ #first / #last on typed array
+{ 10 20 30 } >array(fixnum) #first 10 "#first on typed array" assert=
+{ 10 20 30 } >array(fixnum) #last 30 "#last on typed array" assert=
+
+\ #each on typed array
+0 { 1 2 3 } >array(fixnum) [ + ] #each 6 "#each on typed array" assert=
+
+\ #map on typed array returns plain array
+{ 1 2 3 } >array(fixnum) [ 10 * ] #map #collect { 10 20 30 } "#map on typed array" assert=
+
+\ #filter on typed array returns plain array
+{ 1 2 3 4 5 } >array(fixnum) [ 3 > ] #filter #collect { 4 5 } "#filter on typed array" assert=
+
+\ >iterator on typed array
+{ 10 20 } >array(fixnum) >iterator #collect { 10 20 } ">iterator on typed array" assert=
+
+"instance-of? with base type" test-section
+
+\ array(fixnum) is instance-of array
+{ 1 2 3 } >array(fixnum) array instance-of? t "typed array is instance-of base type" assert=
+
+\ array(fixnum) is NOT instance-of fixnum
+{ 1 2 3 } >array(fixnum) fixnum instance-of? f "typed array is not instance-of element type" assert=
+
 "nested parameterized types" test-section
 
 \ Nested parameterized types

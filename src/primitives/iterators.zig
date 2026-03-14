@@ -10,6 +10,7 @@ const Iterator = iter_mod.Iterator;
 const CallbackIter = iter_mod.CallbackIter;
 const RangeIter = iter_mod.RangeIter;
 const sequence = @import("sequence.zig");
+const unwrapBaseType = @import("../dispatch.zig").unwrapBaseType;
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = ">iterator", .func = nativeToIterator },
@@ -37,13 +38,14 @@ pub const primitives = [_]Primitive{
 
 /// >iterator ( seq -- iterator )
 fn nativeToIterator(ctx: *Context) anyerror!void {
-    const val = try ctx.stack.pop();
+    const raw_val = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
+    const val = unwrapBaseType(raw_val);
     const items: []const Value = switch (val) {
         .array => |arr| arr,
         .string, .vector, .byte_array, .set => sequence.sequenceToValues(val, alloc) catch return error.OutOfMemory,
         else => {
-            helpers.setTypeMismatchError(ctx, "sequence", val);
+            helpers.setTypeMismatchError(ctx, "sequence", raw_val);
             return error.TypeMismatch;
         },
     };

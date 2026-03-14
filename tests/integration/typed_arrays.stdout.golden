@@ -26,6 +26,30 @@ Stack: [ ]
 Stack: [ <fixnum-array { 10 20 }> ]
 PASS: custom parameterized type name works
 Stack: [ ]
+=== sequence ops on typed arrays ===
+Stack: [ ]
+PASS: #len on typed array
+Stack: [ ]
+PASS: #nth on typed array
+Stack: [ ]
+PASS: #first on typed array
+Stack: [ ]
+PASS: #last on typed array
+Stack: [ ]
+PASS: #each on typed array
+Stack: [ ]
+PASS: #map on typed array
+Stack: [ ]
+PASS: #filter on typed array
+Stack: [ ]
+PASS: >iterator on typed array
+Stack: [ ]
+=== instance-of? with base type ===
+Stack: [ ]
+PASS: typed array is instance-of base type
+Stack: [ ]
+PASS: typed array is not instance-of element type
+Stack: [ ]
 === nested parameterized types ===
 Stack: [ ]
 Stack: [ ]

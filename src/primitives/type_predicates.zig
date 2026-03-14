@@ -98,6 +98,12 @@ fn nativeInstanceOf(ctx: *Context) anyerror!void {
                 return;
             }
         }
+        if (val.tagged.tag.base_type) |bt| {
+            if (bt == tv) {
+                try ctx.stack.push(.{ .boolean = true });
+                return;
+            }
+        }
     }
 
     try ctx.stack.push(.{ .boolean = false });

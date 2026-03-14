@@ -11,6 +11,23 @@ pub fn executeDispatchBody(ctx: *Context, body: dispatch_mod.DispatchBody) !void
     }
 }
 
+/// Auto-unwrap the top stack operand from a tagged value to its inner value.
+fn autoUnwrapTopOperand(ctx: *Context) !void {
+    const val = try ctx.stack.pop();
+    try ctx.stack.push(val.tagged.inner.*);
+}
+
+/// Auto-unwrap binary operands on the stack. The top of stack is b (peek),
+/// the next is a (peekN(1)). Pop both, push back unwrapped versions in order.
+fn autoUnwrapBinaryOperands(ctx: *Context, unwrap_a: bool, unwrap_b: bool) !void {
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    const new_a = if (unwrap_a) a.tagged.inner.* else a;
+    const new_b = if (unwrap_b) b.tagged.inner.* else b;
+    try ctx.stack.push(new_a);
+    try ctx.stack.push(new_b);
+}
+
 /// Look up a binary dispatch entry, trying enum-level fallback.
 ///
 /// Precedence:
@@ -18,23 +35,43 @@ pub fn executeDispatchBody(ctx: *Context, body: dispatch_mod.DispatchBody) !void
 /// 2. a's enum name with b's variant name
 /// 3. a's variant name with b's enum name
 /// 4. Both enum names
-fn lookupBinaryWithFallback(ctx: *Context, word_name: []const u8, a: Value, b: Value) ?dispatch_mod.DispatchEntry {
+const AutoUnwrap = struct {
+    entry: dispatch_mod.DispatchEntry,
+    unwrap_a: bool,
+    unwrap_b: bool,
+};
+
+fn lookupBinaryWithFallback(ctx: *Context, word_name: []const u8, a: Value, b: Value) ?AutoUnwrap {
     const a_type = dispatch_mod.dispatchTypeName(a);
     const b_type = dispatch_mod.dispatchTypeName(b);
-    if (ctx.lookupBinaryDispatch(word_name, a_type, b_type)) |entry| return entry;
+    if (ctx.lookupBinaryDispatch(word_name, a_type, b_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
 
     const a_enum = dispatch_mod.dispatchEnumName(a);
     const b_enum = dispatch_mod.dispatchEnumName(b);
     if (a_enum) |ae| {
-        if (ctx.lookupBinaryDispatch(word_name, ae, b_type)) |entry| return entry;
+        if (ctx.lookupBinaryDispatch(word_name, ae, b_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
     }
     if (b_enum) |be| {
-        if (ctx.lookupBinaryDispatch(word_name, a_type, be)) |entry| return entry;
+        if (ctx.lookupBinaryDispatch(word_name, a_type, be)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
     }
 
     if (a_enum) |ae| {
         if (b_enum) |be| {
-            if (ctx.lookupBinaryDispatch(word_name, ae, be)) |entry| return entry;
+            if (ctx.lookupBinaryDispatch(word_name, ae, be)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+        }
+    }
+
+    const a_base = dispatch_mod.dispatchBaseTypeName(a);
+    const b_base = dispatch_mod.dispatchBaseTypeName(b);
+    if (a_base) |ab| {
+        if (ctx.lookupBinaryDispatch(word_name, ab, b_type)) |entry| return .{ .entry = entry, .unwrap_a = true, .unwrap_b = false };
+    }
+    if (b_base) |bb| {
+        if (ctx.lookupBinaryDispatch(word_name, a_type, bb)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = true };
+    }
+    if (a_base) |ab| {
+        if (b_base) |bb| {
+            if (ctx.lookupBinaryDispatch(word_name, ab, bb)) |entry| return .{ .entry = entry, .unwrap_a = true, .unwrap_b = true };
         }
     }
 
@@ -46,12 +83,16 @@ fn lookupBinaryWithFallback(ctx: *Context, word_name: []const u8, a: Value, b: V
 /// Precedence:
 /// 1. Exact variant type name (includes wildcard expansion)
 /// 2. Enum name fallback
-fn lookupUnaryWithFallback(ctx: *Context, word_name: []const u8, a: Value) ?dispatch_mod.DispatchEntry {
+fn lookupUnaryWithFallback(ctx: *Context, word_name: []const u8, a: Value) ?AutoUnwrap {
     const a_type = dispatch_mod.dispatchTypeName(a);
-    if (ctx.lookupUnaryDispatch(word_name, a_type)) |entry| return entry;
+    if (ctx.lookupUnaryDispatch(word_name, a_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
 
     if (dispatch_mod.dispatchEnumName(a)) |ae| {
-        if (ctx.lookupUnaryDispatch(word_name, ae)) |entry| return entry;
+        if (ctx.lookupUnaryDispatch(word_name, ae)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+    }
+
+    if (dispatch_mod.dispatchBaseTypeName(a)) |ab| {
+        if (ctx.lookupUnaryDispatch(word_name, ab)) |entry| return .{ .entry = entry, .unwrap_a = true, .unwrap_b = false };
     }
 
     return null;
@@ -76,8 +117,11 @@ pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
     const a = try ctx.stack.peekN(1);
     const b = try ctx.stack.peek();
 
-    if (lookupBinaryWithFallback(ctx, word_name, a, b)) |entry| {
-        try executeDispatchBody(ctx, entry.body);
+    if (lookupBinaryWithFallback(ctx, word_name, a, b)) |result| {
+        if (result.unwrap_a or result.unwrap_b) {
+            try autoUnwrapBinaryOperands(ctx, result.unwrap_a, result.unwrap_b);
+        }
+        try executeDispatchBody(ctx, result.entry.body);
         return true;
     }
 
@@ -97,8 +141,11 @@ pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
 
     const a = try ctx.stack.peek();
 
-    if (lookupUnaryWithFallback(ctx, word_name, a)) |entry| {
-        try executeDispatchBody(ctx, entry.body);
+    if (lookupUnaryWithFallback(ctx, word_name, a)) |result| {
+        if (result.unwrap_a) {
+            try autoUnwrapTopOperand(ctx);
+        }
+        try executeDispatchBody(ctx, result.entry.body);
         return true;
     }
     return false;
@@ -118,10 +165,13 @@ pub fn tryDispatchBinaryViaCmp(ctx: *Context, comptime op: enum { eq, lt, gt }) 
 
     const a = try ctx.stack.peekN(1);
     const b = try ctx.stack.peek();
-    if (lookupBinaryWithFallback(ctx, "cmp", a, b)) |entry| {
-        try executeDispatchBody(ctx, entry.body);
-        const result = try ctx.stack.pop();
-        const boolean = switch (result) {
+    if (lookupBinaryWithFallback(ctx, "cmp", a, b)) |result| {
+        if (result.unwrap_a or result.unwrap_b) {
+            try autoUnwrapBinaryOperands(ctx, result.unwrap_a, result.unwrap_b);
+        }
+        try executeDispatchBody(ctx, result.entry.body);
+        const cmp_result = try ctx.stack.pop();
+        const boolean = switch (cmp_result) {
             .fixnum => |cmp_val| switch (op) {
                 .eq => cmp_val == 0,
                 .lt => cmp_val < 0,
@@ -160,16 +210,22 @@ pub fn tryDispatchGeneric(ctx: *Context, word_name: []const u8) !bool {
     if (ctx.stack.depth() >= 2) {
         const a = try ctx.stack.peekN(1);
         const b = try ctx.stack.peek();
-        if (lookupBinaryWithFallback(ctx, word_name, a, b)) |entry| {
-            try executeDispatchBody(ctx, entry.body);
+        if (lookupBinaryWithFallback(ctx, word_name, a, b)) |result| {
+            if (result.unwrap_a or result.unwrap_b) {
+                try autoUnwrapBinaryOperands(ctx, result.unwrap_a, result.unwrap_b);
+            }
+            try executeDispatchBody(ctx, result.entry.body);
             return true;
         }
     }
 
     if (ctx.stack.depth() >= 1) {
         const a = try ctx.stack.peek();
-        if (lookupUnaryWithFallback(ctx, word_name, a)) |entry| {
-            try executeDispatchBody(ctx, entry.body);
+        if (lookupUnaryWithFallback(ctx, word_name, a)) |result| {
+            if (result.unwrap_a) {
+                try autoUnwrapTopOperand(ctx);
+            }
+            try executeDispatchBody(ctx, result.entry.body);
             return true;
         }
     }
