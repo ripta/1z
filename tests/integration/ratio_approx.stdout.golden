@@ -1,0 +1,27 @@
+Stack: [ ]
+=== e-approx: float precision ===
+Stack: [ ]
+PASS: e-approx at 15 digits matches math.e
+Stack: [ ]
+=== e-approx: type ===
+Stack: [ ]
+PASS: e-approx returns ratio
+Stack: [ ]
+=== e-approx: 30-digit precision ===
+Stack: [ ]
+Stack: [ "271828182845904523536" ]
+PASS: e first 21 digits
+Stack: [ ]
+=== pi-approx: float precision ===
+Stack: [ ]
+PASS: pi-approx at 15 digits matches math.pi
+Stack: [ ]
+=== pi-approx: type ===
+Stack: [ ]
+PASS: pi-approx returns ratio
+Stack: [ ]
+=== pi-approx: 30-digit precision ===
+Stack: [ ]
+Stack: [ "314159265358979323846" ]
+PASS: pi first 21 digits
+Stack: [ ]

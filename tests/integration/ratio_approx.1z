@@ -1,0 +1,23 @@
+use "ratio" ;
+use "testing" ;
+math: "math" load ;
+
+"e-approx: float precision" test-section
+15 e-approx ratio>float math.e "e-approx at 15 digits matches math.e" assert=
+
+"e-approx: type" test-section
+15 e-approx ratio? "e-approx returns ratio" assert-true
+
+"e-approx: 30-digit precision" test-section
+30 e-approx 100000000000000000000 * >integer >string
+0 21 #slice "271828182845904523536" "e first 21 digits" assert=
+
+"pi-approx: float precision" test-section
+15 pi-approx ratio>float math.pi "pi-approx at 15 digits matches math.pi" assert=
+
+"pi-approx: type" test-section
+15 pi-approx ratio? "pi-approx returns ratio" assert-true
+
+"pi-approx: 30-digit precision" test-section
+30 pi-approx 100000000000000000000 * >integer >string
+0 21 #slice "314159265358979323846" "pi first 21 digits" assert=

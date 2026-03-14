@@ -211,3 +211,49 @@ float>ratio: ( f -- ratio-or-int ) [
   [ dup >float dup float>ratio <rot- = not [ f "inexact conversion" EInexactConversion make-error throw ] when ]
   if
 ] ;
+
+\ --- Rational precision constants ---
+
+(e-terms): ( n -- terms ) [ 10 * 3 div dup 10 < [ drop 10 ] when ] ;
+
+\\ Compute e as a rational to n decimal digits of precision.
+\\ Uses the Taylor series in Horner form: starting from k=N down to 1,
+\\ result = 1 + result/k.
+e-approx: ( n -- ratio ) [
+  (e-terms)
+  1 swap
+  [ dup 0 > ]
+  [ dup -rot> / 1 + swap 1 - ]
+  while
+  drop
+] ;
+
+(pi-terms): ( n -- terms ) [ dup 10 < [ drop 10 ] when ] ;
+
+\\ Compute arctan(x) as a rational, where x is a ratio and terms is the
+\\ number of series terms. Uses Horner evaluation of the series
+\\ arctan(x) = x * (1 - x^2/3 + x^4/5 - ...).
+\\ Loop stack layout: x x^2 result k
+(arctan-ratio): ( x terms -- ratio ) [
+  over dup *
+  swap
+  dup 1 - 2 * 1 + 1 swap normalize-ratio
+  swap 1 -
+  [ dup 0 >= ]
+  [
+    swap 2 pick-n *
+    over 2 * 1 + 1 swap normalize-ratio
+    swap - swap 1 -
+  ]
+  while
+  drop nip *
+] ;
+
+\\ Compute pi as a rational to n decimal digits of precision.
+\\ Uses Machin's formula: pi = 16*arctan(1/5) - 4*arctan(1/239).
+pi-approx: ( n -- ratio ) [
+  (pi-terms)
+  1 5 normalize-ratio over (arctan-ratio) 16 *
+  1 239 normalize-ratio <rot- (arctan-ratio) 4 *
+  -
+] ;
