@@ -495,6 +495,8 @@ pub const primitives = [_]Primitive{
     .{ .name = "#ends-with?", .stack_effect = "seq suffix -- ?", .doc = "Test if sequence ends with suffix.", .func = nativeEndsWith },
     .{ .name = "#in?", .stack_effect = "seq elem -- ?", .doc = "Test if sequence contains element (substring test for strings).", .func = nativeIn },
     .{ .name = "#index-of", .stack_effect = "seq elem -- n/f", .doc = "Find index of element, or f if not found.", .func = nativeIndexOf },
+    // Freeze
+    .{ .name = "freeze", .stack_effect = "vector -- array", .doc = "Convert a vector to an array (copy semantics).", .func = nativeFreeze },
 };
 
 /// #len ( seq -- n ) - Get length of sequence
@@ -2048,6 +2050,24 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
         },
         else => {
             setErrorContext(ctx, "#grow! expected byte-array or vector, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// freeze ( vector -- array ) - Convert a vector to an array (copy semantics)
+fn nativeFreeze(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchUnary(ctx, "freeze")) return;
+
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .vector => |vec| {
+            const alloc = ctx.quotationAllocator();
+            const items = try alloc.dupe(Value, vec.items);
+            try ctx.stack.push(.{ .array = items });
+        },
+        else => {
+            setErrorContext(ctx, "freeze expected vector, got {s}", .{valueTypeName(val)});
             return error.TypeMismatch;
         },
     }

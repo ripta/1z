@@ -43,6 +43,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "typed-nth-mut-dispatch", .func = typedNthMutDispatch, .stack_effect = "typed-vec n elem vtype-ptr -- typed-vec" },
     .{ .name = "typed-at-set-mut-dispatch", .func = typedAtSetMutDispatch, .stack_effect = "typed-mmap key value vtype-ptr -- typed-mmap" },
     .{ .name = "typed-at-remove-mut-dispatch", .func = typedAtRemoveMutDispatch, .stack_effect = "typed-mmap key vtype-ptr -- typed-mmap" },
+    .{ .name = "typed-freeze-dispatch", .func = typedFreezeDispatch, .stack_effect = "typed-vec vtype-ptr -- typed-array" },
 };
 
 /// define-virtual ( name: descriptor markers -- ) - Define a virtual type and its accessor words
@@ -885,6 +886,51 @@ fn typedAtRemoveMutDispatch(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
 }
 
+/// Native dispatch helper for freeze on typed vectors.
+/// Unwraps the typed vector, dupes items to create a raw array, then wraps
+/// as the corresponding typed array.
+fn typedFreezeDispatch(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const ptr_val = try helpers.popFixnum(ctx);
+    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+
+    const typed_vec = try ctx.stack.pop();
+
+    // Unwrap tagged vec to raw vec
+    const raw_vec = typed_vec.tagged.inner.*;
+    const vec = switch (raw_vec) {
+        .vector => |v| v,
+        else => {
+            helpers.setErrorContext(ctx, "freeze expected vector inside {s}, got {s}", .{ vt.name, helpers.valueTypeName(raw_vec) });
+            return error.TypeMismatch;
+        },
+    };
+
+    // Dupe items to create raw array
+    const items = try alloc.dupe(Value, vec.items);
+
+    // Construct target type name: "array(" ++ elem_type ++ ")"
+    const params = vt.type_params orelse {
+        helpers.setErrorContext(ctx, "freeze: {s} has no type parameters", .{vt.name});
+        return error.TypeMismatch;
+    };
+    const elem_type_name = params[0].name;
+    const target_wrap_name = try std.fmt.allocPrint(alloc, ">array({s})", .{elem_type_name});
+
+    const wrap_word = ctx.lookupWord(target_wrap_name) orelse {
+        helpers.setErrorContext(ctx, "freeze: no typed array defined for element type {s} (need to define array({s}))", .{ elem_type_name, elem_type_name });
+        return error.WordNotFound;
+    };
+
+    // Push raw array and execute the wrap word
+    try ctx.stack.push(.{ .array = items });
+    switch (wrap_word.action) {
+        .native => |func| try func(ctx),
+        .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
+    }
+}
+
 /// Trampoline helper ( value vtype-ptr -- tagged )
 ///
 /// Like virtualWrapHelper but additionally validates that array elements
@@ -1174,6 +1220,21 @@ fn registerVectorMutationDispatches(
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = "#append!" });
+    }
+
+    // freeze ( typed-vec -- typed-array )
+    {
+        const instrs = try alloc.alloc(Instruction, 2);
+        instrs[0] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
+        instrs[1] = .{ .op = .{ .call_word = "native.typed-freeze-dispatch" }, .line = 0 };
+
+        try ctx.dispatch.register(.{
+            .word_name = "freeze",
+            .type_a = type_name,
+            .type_b = dispatch_mod.unary_sentinel,
+        }, .{ .body = .{ .quotation = instrs } }, true);
+
+        try generated_words.append(alloc, .{ .string = "freeze" });
     }
 }
 

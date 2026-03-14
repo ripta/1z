@@ -82,3 +82,37 @@ PASS: #nth on typed vector
 Stack: [ ]
 PASS: #each on typed vector
 Stack: [ ]
+=== freeze plain vector ===
+Stack: [ ]
+PASS: plain freeze produces array
+Stack: [ ]
+=== freeze typed vector ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <array(fixnum) { 1 2 3 }> ]
+PASS: freeze produces typed array
+Stack: [ ]
+Stack: [ { 1 2 3 } ]
+PASS: freeze preserves elements
+Stack: [ ]
+Stack: [ <array(fixnum) { }> ]
+PASS: freeze empty typed vector
+Stack: [ ]
+Stack: [ { } ]
+PASS: freeze empty typed vector elements
+Stack: [ ]
+Stack: [ ]
+Stack: [ <array(float) { 1.0 2.0 3.0 }> ]
+PASS: freeze vector(float) to array(float)
+Stack: [ ]
+=== freeze copy semantics ===
+Stack: [ ]
+Stack: [ <vector(fixnum) V{ 10 20 30 }> ]
+Stack: [ <vector(fixnum) V{ 10 20 30 }> ]
+PASS: original vector unchanged after freeze
+Stack: [ ]
+=== freeze error: no target typed array ===
+Stack: [ ]
+Stack: [ ]
+PASS: error
+Stack: [ ]

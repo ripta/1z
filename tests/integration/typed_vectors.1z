@@ -103,3 +103,45 @@ V{ 10 20 30 } >vector(fixnum) 1 #nth 20 "#nth on typed vector" assert=
 
 \ #each on typed vector
 0 V{ 1 2 3 } >vector(fixnum) [ + ] #each 6 "#each on typed vector" assert=
+
+"freeze plain vector" test-section
+
+V{ 1 2 3 } freeze { 1 2 3 } "plain freeze produces array" assert=
+
+"freeze typed vector" test-section
+
+\ Define array(fixnum) for freeze target
+array(fixnum): array fixnum define-parameterized-type
+
+V{ 1 2 3 } >vector(fixnum) freeze
+type-name "array(fixnum)" "freeze produces typed array" assert=
+
+V{ 1 2 3 } >vector(fixnum) freeze unmake-array(fixnum)
+{ 1 2 3 } "freeze preserves elements" assert=
+
+\ Empty typed vector freeze
+V{ } >vector(fixnum) freeze
+type-name "array(fixnum)" "freeze empty typed vector" assert=
+
+V{ } >vector(fixnum) freeze unmake-array(fixnum)
+{ } "freeze empty typed vector elements" assert=
+
+\ Define array(float) for float freeze
+array(float): array float define-parameterized-type
+
+V{ 1.0 2.0 3.0 } >vector(float) freeze
+type-name "array(float)" "freeze vector(float) to array(float)" assert=
+
+"freeze copy semantics" test-section
+
+\ Original vector unchanged after freeze
+V{ 10 20 30 } >vector(fixnum)
+dup freeze drop
+unmake-vector(fixnum) #len 3 "original vector unchanged after freeze" assert=
+
+"freeze error: no target typed array" test-section
+
+\ Define vector(string) but not array(string)
+vector(string): vector string define-parameterized-type
+
+[ V{ "a" "b" } >vector(string) freeze ] "error" assert-error
