@@ -154,8 +154,11 @@ pub const Marker = struct {
 /// `parent_type` is unrelated to value containment. A nested array like
 /// `{ { 1 } }` has type `array`, not `array(array(fixnum))`. The type
 /// system does not currently track inner element types at the value level.
-/// It is also unrelated to generic or parameterized types, which do not exist
-/// in the type system.
+///
+/// Parameterized virtual types use `base_type` to record what base type they
+/// wrap (e.g., array) and `type_params` to record element constraints (e.g.,
+/// fixnum). The validating wrap word checks each element against type_params
+/// during construction.
 pub const VirtualType = struct {
     // Type name, e.g., "duration"
     name: []const u8,
@@ -165,6 +168,10 @@ pub const VirtualType = struct {
     anon_struct: ?*const StructType = null,
     // Parent enum type for enum variants, e.g., the "color" TypeValue for "color:red"
     parent_type: ?*const TypeValue = null,
+    // Base type for parameterized types, e.g., the "array" TypeValue for "array(fixnum)"
+    base_type: ?*const TypeValue = null,
+    // Type parameters for parameterized types, e.g., [fixnum] for "array(fixnum)"
+    type_params: ?[]*const TypeValue = null,
     // First-class type value for this virtual type, set during type registration
     type_val: ?*TypeValue = null,
 };

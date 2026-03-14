@@ -23,6 +23,7 @@ const WordDefinition = dictionary_mod.WordDefinition;
 
 pub const primitives = [_]Primitive{
     .{ .name = "define-virtual", .stack_effect = "name: descriptor markers --", .doc = "Define a virtual type and its accessor words.", .func = nativeDefineVirtual },
+    .{ .name = "define-parameterized-type", .stack_effect = "name: base-type element-type --", .doc = "Define a parameterized virtual type with element validation.", .func = nativeDefineParameterizedType },
 };
 
 pub const registry_entries = [_]RegistryEntry{
@@ -33,6 +34,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "virtual-struct-unwrap", .func = virtualStructUnwrapHelper, .polymorphic = true },
     .{ .name = "virtual-struct-to-hash", .func = virtualStructToHashHelper, .stack_effect = "tagged vtype-ptr -- hash" },
     .{ .name = "virtual-struct-hash-wrap", .func = virtualStructHashWrapHelper, .stack_effect = "hash vtype-ptr -- tagged" },
+    .{ .name = "virtual-parameterized-wrap", .func = virtualParameterizedWrapHelper, .stack_effect = "value vtype-ptr -- tagged" },
 };
 
 /// define-virtual ( name: descriptor markers -- ) - Define a virtual type and its accessor words
@@ -627,6 +629,174 @@ pub fn defineVirtualToHash(ctx: *Context, name: []const u8, vtype: *const Virtua
         .provenance = vtypeProvenance(vtype, "to-hash"),
         .action = .{ .compound = instrs },
     });
+}
+
+/// Trampoline helper ( value vtype-ptr -- tagged )
+///
+/// Like virtualWrapHelper but additionally validates that array elements
+/// match the parameterized type's type_params[0].
+fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const ptr_val = try helpers.popFixnum(ctx);
+    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+
+    const val = try ctx.stack.pop();
+
+    const actual_type: []const u8 = switch (val) {
+        .struct_instance => |si| si.struct_type.name,
+        .bignum => if (std.mem.eql(u8, vt.inner_type, "fixnum")) "fixnum" else "bignum",
+        else => helpers.valueTypeName(val),
+    };
+    if (!std.mem.eql(u8, actual_type, vt.inner_type)) {
+        helpers.setErrorContext(ctx, ">{s} expects {s}, got {s}", .{ vt.name, vt.inner_type, actual_type });
+        return error.TypeMismatch;
+    }
+
+    if (vt.type_params) |params| {
+        if (params.len > 0) {
+            const expected_elem_type = params[0].name;
+            switch (val) {
+                .array => |arr| {
+                    for (arr, 0..) |elem, i| {
+                        const elem_type = dispatch_mod.dispatchTypeName(elem);
+                        if (!std.mem.eql(u8, elem_type, expected_elem_type)) {
+                            helpers.setErrorContext(ctx, ">{s} element at index {d} has type {s}, expected {s}", .{ vt.name, i, elem_type, expected_elem_type });
+                            return error.TypeMismatch;
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    const inner = try alloc.create(Value);
+    inner.* = val;
+
+    try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
+}
+
+/// >NAME: ( value -- tagged ) - validating wrap for parameterized types
+pub fn defineParameterizedWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
+    const alloc = ctx.quotationAllocator();
+
+    const instrs = try alloc.alloc(Instruction, 2);
+    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+    instrs[1] = .{ .op = .{ .call_word = "native.virtual-parameterized-wrap" }, .line = 0 };
+
+    const effect_str = try std.fmt.allocPrint(alloc, "value -- {s}", .{vtype.name});
+    try ctx.defineWord(name, .{
+        .name = name,
+        .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
+        .markers = markers,
+        .provenance = vtypeProvenance(vtype, "wrap"),
+        .action = .{ .compound = instrs },
+    });
+}
+
+/// define-parameterized-type ( name: base-type element-type -- )
+///
+/// Defines a parameterized virtual type. The >name word validates that all
+/// elements of the inner value match the element type. The make-name word
+/// skips element validation.
+fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const elem_type_val = try ctx.stack.pop();
+    const elem_tv = switch (elem_type_val) {
+        .type_val => |tv| tv,
+        else => {
+            helpers.setTypeMismatchError(ctx, "type", elem_type_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const base_type_val = try ctx.stack.pop();
+    const base_tv = switch (base_type_val) {
+        .type_val => |tv| tv,
+        else => {
+            helpers.setTypeMismatchError(ctx, "type", base_type_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const name_val = try ctx.stack.pop();
+    const name = switch (name_val) {
+        .symbol => |s| s,
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol", name_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const type_params = try alloc.alloc(*const value_mod.TypeValue, 1);
+    type_params[0] = elem_tv;
+
+    const vtype = try alloc.create(VirtualType);
+    vtype.* = .{
+        .name = name,
+        .inner_type = base_tv.name,
+        .base_type = base_tv,
+        .type_params = type_params,
+    };
+
+    const tv = try alloc.create(value_mod.TypeValue);
+    tv.* = .{ .name = name, .descriptor = null };
+    vtype.type_val = tv;
+
+    // NAME: ( -- type ) - parse-time const pushing TypeValue
+    const type_markers = try alloc.alloc(*Marker, 3);
+    type_markers[0] = @constCast(&markers_mod.parse_time_marker);
+    type_markers[1] = @constCast(&markers_mod.const_marker);
+    type_markers[2] = @constCast(&markers_mod.typed_marker);
+
+    const type_instrs = try alloc.alloc(Instruction, 1);
+    type_instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0 };
+
+    try ctx.defineWord(name, .{
+        .name = name,
+        .parse_time = true,
+        .stack_effect = try helpers.makeSimpleEffect(alloc, "-- type"),
+        .markers = type_markers,
+        .provenance = .{ .generator = "virtual", .parent = name, .role = "type" },
+        .action = .{ .compound = type_instrs },
+    });
+
+    // >NAME: ( value -- tagged ) - validating wrap with element checking
+    const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{name});
+    try defineParameterizedWrap(ctx, wrap_name, vtype, &.{});
+
+    // make-NAME: ( value -- tagged ) - raw wrap, no element validation
+    const make_name = try std.fmt.allocPrint(alloc, "make-{s}", .{name});
+    try defineWrap(ctx, make_name, vtype, &.{});
+
+    // unmake-NAME: ( tagged -- value ) - unwrap
+    const unmake_name = try std.fmt.allocPrint(alloc, "unmake-{s}", .{name});
+    try defineUnwrap(ctx, unmake_name, vtype, &.{});
+
+    // NAME?: ( value -- bool ) - predicate
+    const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{name});
+    try definePredicate(ctx, pred_name, vtype, &.{});
+
+    // Register type descriptor
+    const desc_map = try alloc.create(MutableMap);
+    desc_map.* = MutableMap{};
+    try desc_map.put(alloc, "inner-type", .{ .type_val = base_tv });
+    try desc_map.put(alloc, "element-type", .{ .type_val = elem_tv });
+
+    var generated_words = std.ArrayListUnmanaged(Value){};
+    try generated_words.append(alloc, .{ .string = name });
+    try generated_words.append(alloc, .{ .string = wrap_name });
+    try generated_words.append(alloc, .{ .string = make_name });
+    try generated_words.append(alloc, .{ .string = unmake_name });
+    try generated_words.append(alloc, .{ .string = pred_name });
+    const gw_slice = try generated_words.toOwnedSlice(alloc);
+    try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
+
+    const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
+    try ctx.type_descriptors.put(ctx.allocator, name, frozen_desc);
+    vtype.type_val.?.descriptor = frozen_desc;
 }
 
 /// Register a >hash dispatch entry for a type name, creating the generic `>hash` word if it doesn't exist yet.

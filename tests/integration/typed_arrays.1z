@@ -1,0 +1,45 @@
+\ Test parameterized virtual types
+
+use "testing" ;
+
+"define-parameterized-type" test-section
+
+\ Define a parameterized type: array(fixnum)
+array(fixnum): array fixnum define-parameterized-type
+
+\ Basic construction
+{ 1 2 3 } >array(fixnum)
+type-name "array(fixnum)" "type-of returns parameterized type name" assert=
+
+\ Predicate
+{ 1 2 3 } >array(fixnum) array(fixnum)? t "array(fixnum)? on typed array is true" assert=
+{ 1 2 3 } array(fixnum)? f "array(fixnum)? on plain array is false" assert=
+42 array(fixnum)? f "array(fixnum)? on fixnum is false" assert=
+
+\ Unwrap
+{ 1 2 3 } >array(fixnum) unmake-array(fixnum) { 1 2 3 } "unmake-array(fixnum) unwraps to raw array" assert=
+
+\ Element validation rejects mixed types
+[ { 1 "hello" 3 } >array(fixnum) ] "error" assert-error
+
+\ Empty array succeeds (vacuous truth)
+{ } >array(fixnum)
+type-name "array(fixnum)" "empty array wraps as typed array" assert=
+
+\ make-array(fixnum) bypasses element validation
+{ 1 "hello" 3 } make-array(fixnum)
+type-name "array(fixnum)" "make- bypasses element validation" assert=
+
+"custom naming" test-section
+
+\ Custom naming works
+fixnum-array: array fixnum define-parameterized-type
+{ 10 20 } >fixnum-array
+type-name "fixnum-array" "custom parameterized type name works" assert=
+
+"nested parameterized types" test-section
+
+\ Nested parameterized types
+array(array(fixnum)): array array(fixnum) define-parameterized-type
+{ { 1 2 } { 3 4 } } [ >array(fixnum) ] #map #collect >array(array(fixnum))
+type-name "array(array(fixnum))" "nested parameterized types work" assert=
