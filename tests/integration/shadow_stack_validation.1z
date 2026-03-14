@@ -71,3 +71,20 @@ dip-zero-delta 16 "dip zero delta then call" assert=
 \ dip with negative quot_delta
 dip-drop: ( -- x ) [ 10 20 [ drop ] dip ] ;
 dip-drop 20 "dip with drop" assert=
+
+"parameter seeding of shadow stack" test-section
+
+\ Two quotation params where body uses dip call
+\ Seeding enables inference: q1 and q2 are both known from the enclosing effect
+double-apply: ( x q1: ( a -- b ) q2: ( b -- c ) -- c ) [ dip call ] ;
+10 [ 1 + ] [ 2 * ] double-apply 21 "seeded dip call" assert=
+
+\ swap call relying on seeded neighbor quotation
+swap-apply: ( q: ( a -- b ) x -- b ) [ swap call ] ;
+[ 1 + ] 10 swap-apply 11 "seeded swap call" assert=
+
+"seeded mismatch detection" test-section
+
+\ Delta mismatch caught instead of silently skipped
+bad-double: ( x q1: ( a -- b ) q2: ( b -- c ) -- c ) [ dip call ] ;
+[ 10 [ 1 + ] [ drop 1 2 ] bad-double ] "seeded mismatch through dip call" assert-error

@@ -57,3 +57,16 @@ Stack: [ ]
 Stack: [ ]
 PASS: dip with drop
 Stack: [ ]
+=== parameter seeding of shadow stack ===
+Stack: [ ]
+Stack: [ ]
+PASS: seeded dip call
+Stack: [ ]
+Stack: [ ]
+PASS: seeded swap call
+Stack: [ ]
+=== seeded mismatch detection ===
+Stack: [ ]
+Stack: [ ]
+PASS: seeded mismatch through dip call
+Stack: [ ]

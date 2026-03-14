@@ -1022,16 +1022,27 @@ pub const Context = struct {
 
     /// Infer a quotation's stack delta by statically analyzing its instructions.
     /// Returns null if the delta cannot be determined (e.g., unknown words, control flow).
-    fn inferQuotationDelta(self: *Context, quot: Quotation) ?i64 {
-        return self.inferQuotationDeltaImpl(quot, 0);
+    fn inferQuotationDelta(self: *Context, quot: Quotation, enclosing_effect: ?*const StackEffect) ?i64 {
+        return self.inferQuotationDeltaImpl(quot, 0, enclosing_effect);
     }
 
-    fn inferQuotationDeltaImpl(self: *Context, quot: Quotation, depth: u32) ?i64 {
+    fn inferQuotationDeltaImpl(self: *Context, quot: Quotation, depth: u32, enclosing_effect: ?*const StackEffect) ?i64 {
         if (depth >= MAX_INFERENCE_DEPTH) return null;
 
         var delta: i64 = 0;
         var shadow = std.ArrayListUnmanaged(SlotType){};
         defer shadow.deinit(self.allocator);
+
+        if (enclosing_effect) |eff| {
+            for (eff.inputs) |param| {
+                if (param.is_row_variable) continue;
+                const slot: SlotType = if (param.quotation_effect) |qe|
+                    .{ .known = qe }
+                else
+                    .unknown;
+                shadow.append(self.allocator, slot) catch {};
+            }
+        }
 
         for (quot.instructions) |instr| {
             switch (instr.op) {
@@ -1043,7 +1054,7 @@ pub const Context = struct {
                             if (q.effect) |eff| {
                                 break :blk .{ .known = eff };
                             }
-                            if (self.inferQuotationDeltaImpl(q, depth + 1)) |d| {
+                            if (self.inferQuotationDeltaImpl(q, depth + 1, null)) |d| {
                                 break :blk .{ .inferred_delta = d };
                             }
                             break :blk .unknown;
@@ -1285,7 +1296,7 @@ pub const Context = struct {
 
     /// Validate a quotation against an expected effect by inferring its delta.
     /// Returns an error if the quotation doesn't match the expected effect.
-    fn validateQuotationEffect(self: *Context, quot: Quotation, expected_effect: *const StackEffect, param_name: []const u8) !void {
+    fn validateQuotationEffect(self: *Context, quot: Quotation, expected_effect: *const StackEffect, param_name: []const u8, enclosing_effect: ?*const StackEffect) !void {
         // If the effect has unbalanced row variables (row vars that appear only in
         // inputs or only in outputs), we can't determine a fixed expected delta.
         // Skip validation in this case since the effect is polymorphic.
@@ -1296,7 +1307,7 @@ pub const Context = struct {
         const expected_delta = expected_effect.concreteDelta();
 
         // Infer actual delta from quotation instructions
-        const inferred_delta = self.inferQuotationDelta(quot);
+        const inferred_delta = self.inferQuotationDelta(quot, enclosing_effect);
 
         if (inferred_delta) |actual_delta| {
             if (actual_delta != expected_delta) {
@@ -1435,7 +1446,7 @@ pub const Context = struct {
                 const stack_index = self.stack.depth() - 1 - offset_from_top;
                 if (self.stack.items.items[stack_index] == .quotation) {
                     const quot = self.stack.items.items[stack_index].quotation;
-                    try self.validateQuotationEffect(quot, expected_effect, param.name);
+                    try self.validateQuotationEffect(quot, expected_effect, param.name, effect);
                 }
             }
 
