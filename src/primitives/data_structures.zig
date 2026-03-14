@@ -10,6 +10,8 @@ const Set = value_mod.Set;
 const MutableMap = value_mod.MutableMap;
 
 const helpers = @import("helpers.zig");
+const dispatch_helpers = @import("dispatch_helpers.zig");
+const dispatch_mod = @import("../dispatch.zig");
 const Primitive = @import("types.zig").Primitive;
 
 const popQuotation = helpers.popQuotation;
@@ -252,6 +254,30 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
 
 /// @set! ( mmap key value -- mmap ) - Set value in mutable map, mutate in place
 pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
+    // dispatch: mmap is at position 2 (below key and value)
+    if (ctx.stack.depth() >= 3) {
+        const mmap_peek = try ctx.stack.peekN(2);
+        const a_type = dispatch_mod.dispatchTypeName(mmap_peek);
+        if (ctx.lookupUnaryDispatch("@set!", a_type)) |entry| {
+            try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+            return;
+        }
+        if (dispatch_mod.dispatchEnumName(mmap_peek)) |ae| {
+            if (ctx.lookupUnaryDispatch("@set!", ae)) |entry| {
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+        if (dispatch_mod.dispatchBaseTypeName(mmap_peek)) |bt| {
+            if (ctx.lookupUnaryDispatch("@set!", bt)) |entry| {
+                const len = ctx.stack.items.items.len;
+                ctx.stack.items.items[len - 3] = mmap_peek.tagged.inner.*;
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+    }
+
     const new_value = try ctx.stack.pop();
     const key = try ctx.stack.pop();
     const obj = try ctx.stack.pop();
@@ -283,6 +309,30 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
 
 /// @remove! ( mmap key -- mmap ) - Remove key from mutable map, mutate in place
 pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
+    // dispatch: mmap is at position 1 (below key)
+    if (ctx.stack.depth() >= 2) {
+        const mmap_peek = try ctx.stack.peekN(1);
+        const a_type = dispatch_mod.dispatchTypeName(mmap_peek);
+        if (ctx.lookupUnaryDispatch("@remove!", a_type)) |entry| {
+            try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+            return;
+        }
+        if (dispatch_mod.dispatchEnumName(mmap_peek)) |ae| {
+            if (ctx.lookupUnaryDispatch("@remove!", ae)) |entry| {
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+        if (dispatch_mod.dispatchBaseTypeName(mmap_peek)) |bt| {
+            if (ctx.lookupUnaryDispatch("@remove!", bt)) |entry| {
+                const len = ctx.stack.items.items.len;
+                ctx.stack.items.items[len - 2] = mmap_peek.tagged.inner.*;
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+    }
+
     const key = try ctx.stack.pop();
     const obj = try ctx.stack.pop();
 

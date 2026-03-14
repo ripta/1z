@@ -1,0 +1,52 @@
+=== define mutable-map(fixnum) ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <mutable-map(fixnum) M{ x: 1 y: 2 }> ]
+PASS: type-of returns parameterized type name
+Stack: [ ]
+PASS: mutable-map(fixnum)? on typed mmap is true
+Stack: [ ]
+PASS: mutable-map(fixnum)? on plain mmap is false
+Stack: [ ]
+=== @set! on typed mutable-map ===
+Stack: [ ]
+Stack: [ <mutable-map(fixnum) M{ x: 1 y: 2 }> ]
+PASS: @set! preserves typed wrapper
+Stack: [ ]
+Stack: [ 2 ]
+PASS: @set! adds value
+Stack: [ ]
+PASS: error
+Stack: [ ]
+=== @set! with numeric promotion ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <mutable-map(float) M{ x: 1.0 y: 2.0 }> ]
+PASS: @set! with promotion preserves type
+Stack: [ ]
+=== @remove! on typed mutable-map ===
+Stack: [ ]
+Stack: [ <mutable-map(fixnum) M{ y: 2 }> ]
+PASS: @remove! preserves typed wrapper
+Stack: [ ]
+Stack: [ f ]
+PASS: @remove! removes the key
+Stack: [ ]
+=== read-only ops via base_type fallback ===
+Stack: [ ]
+PASS: @get on typed mmap
+Stack: [ ]
+PASS: @has? on typed mmap
+Stack: [ ]
+PASS: @keys on typed mmap
+Stack: [ ]
+PASS: @values on typed mmap
+Stack: [ ]
+=== multiple mutations preserve type ===
+Stack: [ ]
+Stack: [ <mutable-map(fixnum) M{ b: 2 a: 1 c: 3 }> ]
+PASS: chained @set! preserves type
+Stack: [ ]
+Stack: [ <mutable-map(fixnum) M{ x: 1 z: 3 }> ]
+PASS: @set! then @remove! preserves type
+Stack: [ ]

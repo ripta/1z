@@ -7,6 +7,7 @@ const ErrorObject = value_mod.ErrorObject;
 const Module = value_mod.Module;
 const Quotation = value_mod.Quotation;
 
+const dispatch_mod = @import("../dispatch.zig");
 const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
 const setErrorContext = helpers.setErrorContext;
@@ -64,7 +65,8 @@ fn getErrorField(ctx: *Context, err: ErrorObject, field_name: []const u8) !Value
 /// Polymorphic on hash, mutable-map, error, module
 pub fn nativeAtGet(ctx: *Context) anyerror!void {
     const key = try ctx.stack.pop();
-    const obj = try ctx.stack.pop();
+    var obj = try ctx.stack.pop();
+    obj = dispatch_mod.unwrapBaseType(obj);
 
     const key_str = try extractKeyString(ctx, key);
 
@@ -123,7 +125,8 @@ pub fn nativeAtGet(ctx: *Context) anyerror!void {
 fn nativeAtGetOr(ctx: *Context) anyerror!void {
     const default = try ctx.stack.pop();
     const key = try ctx.stack.pop();
-    const obj = try ctx.stack.pop();
+    var obj = try ctx.stack.pop();
+    obj = dispatch_mod.unwrapBaseType(obj);
 
     const key_str = try extractKeyString(ctx, key);
 
@@ -184,7 +187,8 @@ fn nativeAtGetOr(ctx: *Context) anyerror!void {
 /// Polymorphic on hash, mmap, module, error
 pub fn nativeAtHas(ctx: *Context) anyerror!void {
     const key = try ctx.stack.pop();
-    const obj = try ctx.stack.pop();
+    var obj = try ctx.stack.pop();
+    obj = dispatch_mod.unwrapBaseType(obj);
 
     const key_str = try extractKeyString(ctx, key);
 
@@ -258,7 +262,8 @@ pub fn nativeAtSet(ctx: *Context) anyerror!void {
 /// @keys ( assoc -- array ) - Get all keys
 /// Polymorphic on hash, error, module, mutable-map
 pub fn nativeAtKeys(ctx: *Context) anyerror!void {
-    const obj = try ctx.stack.pop();
+    var obj = try ctx.stack.pop();
+    obj = dispatch_mod.unwrapBaseType(obj);
 
     switch (obj) {
         .hash => |h| {
@@ -314,7 +319,8 @@ pub fn nativeAtKeys(ctx: *Context) anyerror!void {
 /// @values ( assoc -- array ) - Get all values
 /// Polymorphic on hash, mutable-map, error
 pub fn nativeAtValues(ctx: *Context) anyerror!void {
-    const obj = try ctx.stack.pop();
+    var obj = try ctx.stack.pop();
+    obj = dispatch_mod.unwrapBaseType(obj);
     switch (obj) {
         .hash => |h| {
             const alloc = ctx.quotationAllocator();

@@ -1,0 +1,70 @@
+\ Test typed mutable-map mutation dispatch
+
+use "testing" ;
+
+"define mutable-map(fixnum)" test-section
+
+\ Define parameterized mutable-map type
+mutable-map(fixnum): mutable-map fixnum define-parameterized-type
+
+\ Basic construction
+M{ x: 1 y: 2 } >mutable-map(fixnum)
+type-name "mutable-map(fixnum)" "type-of returns parameterized type name" assert=
+
+\ Predicate
+M{ x: 1 } >mutable-map(fixnum) mutable-map(fixnum)? t "mutable-map(fixnum)? on typed mmap is true" assert=
+M{ x: 1 } mutable-map(fixnum)? f "mutable-map(fixnum)? on plain mmap is false" assert=
+
+"@set! on typed mutable-map" test-section
+
+\ @set! with valid element
+M{ x: 1 } >mutable-map(fixnum) y: 2 @set!
+type-name "mutable-map(fixnum)" "@set! preserves typed wrapper" assert=
+
+M{ x: 1 } >mutable-map(fixnum) y: 2 @set! unmake-mutable-map(fixnum) y: @get
+2 "@set! adds value" assert=
+
+\ @set! with wrong type (error)
+[ M{ x: 1 } >mutable-map(fixnum) y: "hello" @set! ] "error" assert-error
+
+"@set! with numeric promotion" test-section
+
+\ Define mutable-map(float) for promotion tests
+mutable-map(float): mutable-map float define-parameterized-type
+
+\ @set! promotes fixnum to float
+M{ x: 1.0 } >mutable-map(float) y: 2 @set!
+type-name "mutable-map(float)" "@set! with promotion preserves type" assert=
+
+"@remove! on typed mutable-map" test-section
+
+\ @remove! preserves typed wrapper
+M{ x: 1 y: 2 } >mutable-map(fixnum) x: @remove!
+type-name "mutable-map(fixnum)" "@remove! preserves typed wrapper" assert=
+
+M{ x: 1 y: 2 } >mutable-map(fixnum) x: @remove! unmake-mutable-map(fixnum) x: @has?
+f "@remove! removes the key" assert=
+
+"read-only ops via base_type fallback" test-section
+
+\ @get on typed mutable-map
+M{ x: 42 } >mutable-map(fixnum) x: @get 42 "@get on typed mmap" assert=
+
+\ @has? on typed mutable-map
+M{ x: 1 } >mutable-map(fixnum) x: @has? t "@has? on typed mmap" assert=
+
+\ @keys on typed mutable-map
+M{ x: 1 } >mutable-map(fixnum) @keys #len 1 "@keys on typed mmap" assert=
+
+\ @values on typed mutable-map
+M{ x: 42 } >mutable-map(fixnum) @values #len 1 "@values on typed mmap" assert=
+
+"multiple mutations preserve type" test-section
+
+\ Chain multiple @set! calls
+M{ } >mutable-map(fixnum) a: 1 @set! b: 2 @set! c: 3 @set!
+type-name "mutable-map(fixnum)" "chained @set! preserves type" assert=
+
+\ @set! then @remove!
+M{ x: 1 y: 2 } >mutable-map(fixnum) z: 3 @set! y: @remove!
+type-name "mutable-map(fixnum)" "@set! then @remove! preserves type" assert=

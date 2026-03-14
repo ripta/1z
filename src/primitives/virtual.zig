@@ -41,6 +41,8 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "typed-validate-and-promote", .func = typedValidateAndPromote, .stack_effect = "value vtype-ptr -- promoted-value" },
     .{ .name = "typed-validate-seq-elements", .func = typedValidateSeqElements, .stack_effect = "seq vtype-ptr -- seq" },
     .{ .name = "typed-nth-mut-dispatch", .func = typedNthMutDispatch, .stack_effect = "typed-vec n elem vtype-ptr -- typed-vec" },
+    .{ .name = "typed-at-set-mut-dispatch", .func = typedAtSetMutDispatch, .stack_effect = "typed-mmap key value vtype-ptr -- typed-mmap" },
+    .{ .name = "typed-at-remove-mut-dispatch", .func = typedAtRemoveMutDispatch, .stack_effect = "typed-mmap key vtype-ptr -- typed-mmap" },
 };
 
 /// define-virtual ( name: descriptor markers -- ) - Define a virtual type and its accessor words
@@ -807,6 +809,82 @@ fn typedNthMutDispatch(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
 }
 
+/// Native dispatch helper for @set! on typed mutable maps.
+/// Validates+promotes the value, unwraps the typed mmap, delegates to base @set!, rewraps.
+fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const ptr_val = try helpers.popFixnum(ctx);
+    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+
+    var new_value = try ctx.stack.pop();
+    const key = try ctx.stack.pop();
+    const typed_mmap = try ctx.stack.pop();
+
+    // Validate and promote value
+    if (vt.type_params) |params| {
+        if (params.len > 0) {
+            const expected = params[0].name;
+            const actual = dispatch_mod.dispatchTypeName(new_value);
+            if (!std.mem.eql(u8, actual, expected)) {
+                if (tryPromoteElement(alloc, new_value, expected)) |promoted| {
+                    new_value = promoted;
+                } else {
+                    helpers.setErrorContext(ctx, "{s} element has type {s}, expected {s}", .{ vt.name, actual, expected });
+                    return error.TypeMismatch;
+                }
+            }
+        }
+    }
+
+    // Unwrap typed mmap to raw mmap, push raw-mmap key value for @set!
+    try ctx.stack.push(typed_mmap.tagged.inner.*);
+    try ctx.stack.push(key);
+    try ctx.stack.push(new_value);
+
+    // Delegate to the raw @set!
+    const at_set_word = ctx.lookupWord("@set!") orelse return error.WordNotFound;
+    switch (at_set_word.action) {
+        .native => |func| try func(ctx),
+        .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
+    }
+
+    // Rewrap: pop raw mmap, wrap as tagged, push
+    const result_mmap = try ctx.stack.pop();
+    const inner = try alloc.create(Value);
+    inner.* = result_mmap;
+    try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
+}
+
+/// Native dispatch helper for @remove! on typed mutable maps.
+/// Unwraps the typed mmap, delegates to base @remove!, rewraps.
+fn typedAtRemoveMutDispatch(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const ptr_val = try helpers.popFixnum(ctx);
+    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+
+    const key = try ctx.stack.pop();
+    const typed_mmap = try ctx.stack.pop();
+
+    // Unwrap typed mmap to raw mmap, push raw-mmap key for @remove!
+    try ctx.stack.push(typed_mmap.tagged.inner.*);
+    try ctx.stack.push(key);
+
+    // Delegate to the raw @remove!
+    const at_remove_word = ctx.lookupWord("@remove!") orelse return error.WordNotFound;
+    switch (at_remove_word.action) {
+        .native => |func| try func(ctx),
+        .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
+    }
+
+    // Rewrap: pop raw mmap, wrap as tagged, push
+    const result_mmap = try ctx.stack.pop();
+    const inner = try alloc.create(Value);
+    inner.* = result_mmap;
+    try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
+}
+
 /// Trampoline helper ( value vtype-ptr -- tagged )
 ///
 /// Like virtualWrapHelper but additionally validates that array elements
@@ -987,6 +1065,10 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
         try registerVectorMutationDispatches(ctx, alloc, name, vtype, &generated_words);
     }
 
+    if (std.mem.eql(u8, base_tv.name, "mutable-map")) {
+        try registerMutableMapMutationDispatches(ctx, alloc, name, vtype, &generated_words);
+    }
+
     const gw_slice = try generated_words.toOwnedSlice(alloc);
     try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
 
@@ -1092,6 +1174,48 @@ fn registerVectorMutationDispatches(
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = "#append!" });
+    }
+}
+
+/// Register dispatch entries for mutable-map mutation ops on a parameterized mutable-map type.
+/// Each entry delegates to a native helper that handles validate+unwrap+delegate+rewrap.
+fn registerMutableMapMutationDispatches(
+    ctx: *Context,
+    alloc: Allocator,
+    type_name: []const u8,
+    vtype: *const VirtualType,
+    generated_words: *std.ArrayListUnmanaged(Value),
+) !void {
+    const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(vtype)) };
+
+    // @set! ( typed-mmap key value -- typed-mmap )
+    {
+        const instrs = try alloc.alloc(Instruction, 2);
+        instrs[0] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
+        instrs[1] = .{ .op = .{ .call_word = "native.typed-at-set-mut-dispatch" }, .line = 0 };
+
+        try ctx.dispatch.register(.{
+            .word_name = "@set!",
+            .type_a = type_name,
+            .type_b = dispatch_mod.unary_sentinel,
+        }, .{ .body = .{ .quotation = instrs } }, true);
+
+        try generated_words.append(alloc, .{ .string = "@set!" });
+    }
+
+    // @remove! ( typed-mmap key -- typed-mmap )
+    {
+        const instrs = try alloc.alloc(Instruction, 2);
+        instrs[0] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
+        instrs[1] = .{ .op = .{ .call_word = "native.typed-at-remove-mut-dispatch" }, .line = 0 };
+
+        try ctx.dispatch.register(.{
+            .word_name = "@remove!",
+            .type_a = type_name,
+            .type_b = dispatch_mod.unary_sentinel,
+        }, .{ .body = .{ .quotation = instrs } }, true);
+
+        try generated_words.append(alloc, .{ .string = "@remove!" });
     }
 }
 
