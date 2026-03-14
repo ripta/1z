@@ -1055,6 +1055,21 @@ pub const Context = struct {
                     };
                 },
                 .call_word => |name| {
+                    if (matchShuffleWord(name)) |shuffle| {
+                        if (self.lookupWord(name)) |word| {
+                            if (word.stack_effect) |word_effect| {
+                                const word_delta = word_effect.concreteDelta();
+                                if (applyShuffleShadow(&shadow, self.allocator, shuffle)) {
+                                    delta += word_delta;
+                                    continue;
+                                }
+                                delta += word_delta;
+                                self.adjustShadowStack(&shadow, word_delta);
+                                continue;
+                            }
+                        }
+                        return null;
+                    }
                     if (self.lookupWord(name)) |word| {
                         if (word.effect_transparent) {
                             if (self.resolveTransparentDelta(word, &shadow)) |resolved_delta| {
@@ -1132,6 +1147,73 @@ pub const Context = struct {
                 };
             }
         }
+    }
+
+    const ShuffleOp = enum {
+        swap,
+        dup_,
+        drop_,
+        over,
+        rot,
+        neg_rot,
+    };
+
+    fn matchShuffleWord(name: []const u8) ?ShuffleOp {
+        const map = .{
+            .{ "swap", ShuffleOp.swap },
+            .{ "dup", ShuffleOp.dup_ },
+            .{ "drop", ShuffleOp.drop_ },
+            .{ "over", ShuffleOp.over },
+            .{ "<rot-", ShuffleOp.rot },
+            .{ "-rot>", ShuffleOp.neg_rot },
+        };
+        inline for (map) |entry| {
+            if (std.mem.eql(u8, name, entry[0])) return entry[1];
+        }
+        return null;
+    }
+
+    fn applyShuffleShadow(shadow: *std.ArrayListUnmanaged(SlotType), allocator: Allocator, op: ShuffleOp) bool {
+        const len = shadow.items.len;
+        switch (op) {
+            .swap => {
+                if (len < 2) return false;
+                const tmp = shadow.items[len - 1];
+                shadow.items[len - 1] = shadow.items[len - 2];
+                shadow.items[len - 2] = tmp;
+            },
+            .dup_ => {
+                if (len < 1) return false;
+                const top = shadow.items[len - 1];
+                shadow.append(allocator, top) catch return false;
+            },
+            .drop_ => {
+                if (len < 1) return false;
+                shadow.shrinkRetainingCapacity(len - 1);
+            },
+            .over => {
+                if (len < 2) return false;
+                const second = shadow.items[len - 2];
+                shadow.append(allocator, second) catch return false;
+            },
+            .rot => {
+                // a b c -- b c a
+                if (len < 3) return false;
+                const a = shadow.items[len - 3];
+                shadow.items[len - 3] = shadow.items[len - 2];
+                shadow.items[len - 2] = shadow.items[len - 1];
+                shadow.items[len - 1] = a;
+            },
+            .neg_rot => {
+                // a b c -- c a b
+                if (len < 3) return false;
+                const c = shadow.items[len - 1];
+                shadow.items[len - 1] = shadow.items[len - 2];
+                shadow.items[len - 2] = shadow.items[len - 3];
+                shadow.items[len - 3] = c;
+            },
+        }
+        return true;
     }
 
     /// Validate a quotation against an expected effect by inferring its delta.

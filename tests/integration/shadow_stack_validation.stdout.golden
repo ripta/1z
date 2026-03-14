@@ -23,3 +23,25 @@ Stack: [ ]
 Stack: [ ]
 PASS: deep nesting
 Stack: [ ]
+=== shadow stack through swap ===
+Stack: [ ]
+Stack: [ ]
+PASS: swap then call
+Stack: [ ]
+Stack: [ ]
+PASS: multiple swaps then call
+Stack: [ ]
+=== shadow stack through drop ===
+Stack: [ ]
+Stack: [ ]
+PASS: drop then call
+Stack: [ ]
+=== shadow stack through over ===
+Stack: [ ]
+Stack: [ ]
+PASS: over call result
+Stack: [ ]
+=== shadow stack through dip with dup ===
+Stack: [ ]
+PASS: dup dip pattern
+Stack: [ ]

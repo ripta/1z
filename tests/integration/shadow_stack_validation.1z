@@ -29,3 +29,31 @@ run-effect: ( quot: ( -- ) -- ) [ call ] ;
 
 deep-apply: ( x quot: ( a -- b ) -- b ) [ call ] ;
 10 [ [ [ [ [ [ [ [ [ 1 + ] call ] call ] call ] call ] call ] call ] call ] call ] deep-apply 11 "deep nesting" assert=
+
+"shadow stack through swap" test-section
+
+\ Quotation pushed, swapped past a value, then called
+\ Inner body: [ 1 + ] 5 swap call -- pushes quot, pushes 5, swaps so quot is on top, calls
+swap-call: ( -- x ) [ [ 1 + ] 5 swap call ] ;
+swap-call 6 "swap then call" assert=
+
+\ Multiple swaps to verify correct slot tracking
+swap2-call: ( -- x ) [ [ 2 + ] 10 swap swap swap call ] ;
+swap2-call 12 "multiple swaps then call" assert=
+
+"shadow stack through drop" test-section
+
+\ Extra unknown dropped, quotation still tracked
+drop-call: ( -- x ) [ [ 1 + ] 42 drop 5 swap call ] ;
+drop-call 6 "drop then call" assert=
+
+"shadow stack through over" test-section
+
+\ over copies a known quotation slot to top, call resolves it
+over-call: ( -- x x ) [ [ 1 + ] 5 over call ] ;
+over-call 6 "over call result" assert= drop
+
+"shadow stack through dip with dup" test-section
+
+\ dup a value before dip
+10 dup [ 1 + ] dip + 21 "dup dip pattern" assert=
