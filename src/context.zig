@@ -18,6 +18,7 @@ const DispatchEntry = dispatch_mod.DispatchEntry;
 const DispatchTable = dispatch_mod.DispatchTable;
 
 const JitDispatchTable = @import("jit_dispatch.zig").JitDispatchTable;
+const ir_codegen = @import("ir_codegen.zig");
 const Scheduler = @import("scheduler.zig").Scheduler;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const primitives = @import("primitives.zig");
@@ -1984,6 +1985,14 @@ pub const Context = struct {
                             self.pushCallFrame(name, instr.line, instr.column);
                             self.pending_error_message = "parse-time-only word cannot be called at runtime";
                             return self.wordErrorCleanup(name, error.ParseError);
+                        }
+
+                        // Try JIT-compiled dispatch before interpreter path
+                        if (word.word_id) |wid| {
+                            if (ir_codegen.executeCompiled(self, wid) == .ok) {
+                                if (self.benchmark) |bm| bm.endWordProfile(self.allocator, name);
+                                continue;
+                            }
                         }
 
                         self.pushCallFrame(name, instr.line, instr.column);

@@ -1,0 +1,72 @@
+=== compile! basic arithmetic ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: double 5
+Stack: [ ]
+PASS: double -3
+Stack: [ ]
+PASS: double 0
+Stack: [ ]
+=== compile! multi-op ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: calc 7
+Stack: [ ]
+PASS: calc 0
+Stack: [ ]
+=== compile! two inputs ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: add2 17 25
+Stack: [ ]
+=== compile! overflow fallback ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: big-add 0 no overflow
+Stack: [ ]
+PASS: big-add 1 overflows to bignum
+Stack: [ ]
+=== compile! division by zero fallback ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: div by zero falls back to interpreter
+Stack: [ ]
+=== compile! subtraction ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: sub 10 3
+Stack: [ ]
+=== compile! division ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: half 10
+Stack: [ ]
+=== compile! remainder ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: rem 7 3
+Stack: [ ]
+PASS: rem -7 3
+Stack: [ ]
+=== compile! euclidean modulo ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: mod 7 3
+Stack: [ ]
+PASS: mod -7 3
+Stack: [ ]
+=== compile! multiplication ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: triple 5
+Stack: [ ]

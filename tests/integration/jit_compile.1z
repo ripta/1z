@@ -1,0 +1,67 @@
+use "testing" ;
+
+"compile! basic arithmetic" test-section
+
+double: ( n -- n ) [ 2 * ] ;
+double: compile!
+5 double 10 "double 5" assert=
+-3 double -6 "double -3" assert=
+0 double 0 "double 0" assert=
+
+"compile! multi-op" test-section
+
+calc: ( n -- n ) [ 3 + 4 * ] ;
+calc: compile!
+7 calc 40 "calc 7" assert=
+0 calc 12 "calc 0" assert=
+
+"compile! two inputs" test-section
+
+add2: ( a b -- c ) [ + ] ;
+add2: compile!
+17 25 add2 42 "add2 17 25" assert=
+
+"compile! overflow fallback" test-section
+
+big-add: ( n -- n ) [ 9223372036854775807 + ] ;
+big-add: compile!
+0 big-add 9223372036854775807 "big-add 0 no overflow" assert=
+1 big-add 9223372036854775808 "big-add 1 overflows to bignum" assert=
+
+"compile! division by zero fallback" test-section
+
+div2: ( a b -- c ) [ / ] ;
+div2: compile!
+[ 10 0 div2 ] "div by zero falls back to interpreter" assert-error
+
+"compile! subtraction" test-section
+
+sub-word: ( a b -- c ) [ - ] ;
+sub-word: compile!
+10 3 sub-word 7 "sub 10 3" assert=
+
+"compile! division" test-section
+
+half: ( n -- n ) [ 2 / ] ;
+half: compile!
+10 half 5 "half 10" assert=
+
+"compile! remainder" test-section
+
+remainder: ( a b -- c ) [ rem ] ;
+remainder: compile!
+7 3 remainder 1 "rem 7 3" assert=
+-7 3 remainder -1 "rem -7 3" assert=
+
+"compile! euclidean modulo" test-section
+
+modulo: ( a b -- c ) [ % ] ;
+modulo: compile!
+7 3 modulo 1 "mod 7 3" assert=
+-7 3 modulo 2 "mod -7 3" assert=
+
+"compile! multiplication" test-section
+
+triple: ( n -- n ) [ 3 * ] ;
+triple: compile!
+5 triple 15 "triple 5" assert=

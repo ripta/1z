@@ -6,6 +6,8 @@ pub const JitEntry = struct {
     code_ptr: ?*const anyopaque,
     jit_buf: ?JitBuffer,
     word_name: []const u8,
+    input_count: u8,
+    output_count: u8,
 };
 
 pub const JitDispatchTable = struct {
@@ -29,12 +31,14 @@ pub const JitDispatchTable = struct {
     }
 
     /// Allocate a new word ID and return it. Entry starts with null code_ptr.
-    pub fn assignId(self: *JitDispatchTable, word_name: []const u8) !u32 {
+    pub fn assignId(self: *JitDispatchTable, word_name: []const u8, input_count: u8, output_count: u8) !u32 {
         const id: u32 = @intCast(self.entries.items.len);
         try self.entries.append(self.allocator, .{
             .code_ptr = null,
             .jit_buf = null,
             .word_name = word_name,
+            .input_count = input_count,
+            .output_count = output_count,
         });
         return id;
     }
@@ -73,9 +77,9 @@ test "assignId returns sequential IDs starting from 0" {
     var table = JitDispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    const id0 = try table.assignId("foo");
-    const id1 = try table.assignId("bar");
-    const id2 = try table.assignId("baz");
+    const id0 = try table.assignId("foo", 1, 1);
+    const id1 = try table.assignId("bar", 1, 1);
+    const id2 = try table.assignId("baz", 1, 1);
 
     try std.testing.expectEqual(@as(u32, 0), id0);
     try std.testing.expectEqual(@as(u32, 1), id1);
@@ -86,7 +90,7 @@ test "get returns null code_ptr for newly assigned ID" {
     var table = JitDispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    const id = try table.assignId("foo");
+    const id = try table.assignId("foo", 1, 1);
     const entry = table.get(id);
 
     try std.testing.expect(entry != null);
@@ -107,7 +111,7 @@ test "update sets code_ptr and jit_buf" {
     var table = JitDispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    const id = try table.assignId("foo");
+    const id = try table.assignId("foo", 1, 1);
 
     // Simulate a compiled code pointer (use a stack variable address for testing)
     var dummy: u8 = 0;
@@ -125,7 +129,7 @@ test "invalidate clears code_ptr and jit_buf" {
     var table = JitDispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    const id = try table.assignId("foo");
+    const id = try table.assignId("foo", 1, 1);
 
     var dummy: u8 = 0;
     const fake_ptr: *const anyopaque = &dummy;
@@ -143,8 +147,8 @@ test "multiple IDs coexist independently" {
     var table = JitDispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    const id0 = try table.assignId("alpha");
-    const id1 = try table.assignId("beta");
+    const id0 = try table.assignId("alpha", 1, 1);
+    const id1 = try table.assignId("beta", 2, 1);
 
     var dummy0: u8 = 0;
     const ptr0: *const anyopaque = &dummy0;

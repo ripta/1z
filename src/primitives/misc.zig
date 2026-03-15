@@ -24,6 +24,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "(trampoline)", .stack_effect = "*unsafe-fn-ptr* --", .doc = "Call a native function via pointer. Internal use only.", .func = nativeTrampoline },
     .{ .name = "eval-string", .stack_effect = "string --", .doc = "Execute a string as 1z code in the caller's scope.", .func = nativeEvalString },
     .{ .name = "export", .stack_effect = "name --", .doc = "Promote an imported word to a public definition in the current scope.", .func = nativeExport },
+    .{ .name = "compile!", .stack_effect = "sym --", .doc = "JIT-compile a word for integer arithmetic. Throws if the word is not found or not compilable.", .func = nativeCompile },
 };
 
 fn nativeToModule(ctx: *Context) anyerror!void {
@@ -490,6 +491,49 @@ fn native1Array(ctx: *Context) anyerror!void {
     arr[0] = elem;
 
     try ctx.stack.push(.{ .array = arr });
+}
+
+/// compile! ( sym -- ) - JIT-compile a word for integer arithmetic
+fn nativeCompile(ctx: *Context) anyerror!void {
+    const ir_codegen = @import("../ir_codegen.zig");
+
+    const sym = try helpers.popSymbol(ctx);
+    const word = ctx.lookupWord(sym) orelse {
+        ctx.pending_error_message = "compile!: word not found";
+        return error.UnknownWord;
+    };
+
+    const instrs = switch (word.action) {
+        .compound => |i| i,
+        .native => {
+            ctx.pending_error_message = "compile!: cannot compile native word";
+            return error.TypeMismatch;
+        },
+    };
+
+    const effect = word.stack_effect orelse {
+        ctx.pending_error_message = "compile!: word has no stack effect annotation";
+        return error.TypeMismatch;
+    };
+
+    const input_count: u8 = @intCast(effect.inputs.len);
+    const output_count: u8 = @intCast(effect.outputs.len);
+
+    const compiled = ir_codegen.compileWord(instrs, input_count, output_count) catch {
+        ctx.pending_error_message = "compile!: word is not compilable (must use only fixnum literals and integer arithmetic)";
+        return error.TypeMismatch;
+    };
+
+    const word_id = ctx.jit_dispatch.assignId(sym, input_count, output_count) catch {
+        compiled.jit_buf.deinit();
+        return error.OutOfMemory;
+    };
+    ctx.jit_dispatch.update(word_id, compiled.code_ptr, compiled.jit_buf);
+
+    // Store word_id on the dictionary entry
+    if (ctx.dictionary.entries.getPtr(sym)) |entry| {
+        entry.word_id = word_id;
+    }
 }
 
 /// eval-string ( string -- ) - Execute a string as 1z code in the caller's scope
