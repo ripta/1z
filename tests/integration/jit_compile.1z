@@ -164,3 +164,63 @@ add-word: compile!
 "compile! bail to interpreter: string arithmetic error" test-section
 
 [ "hello" 1 add-word ] "string + fixnum errors" assert-error
+
+"compile! comparison: =" test-section
+
+jit-eq: ( a b -- ? ) [ = ] ;
+jit-eq: compile!
+5 5 jit-eq t "5 = 5" assert=
+3 5 jit-eq f "3 = 5" assert=
+
+"compile! comparison: <" test-section
+
+jit-lt: ( a b -- ? ) [ < ] ;
+jit-lt: compile!
+3 5 jit-lt t "3 < 5" assert=
+5 3 jit-lt f "5 < 3" assert=
+5 5 jit-lt f "5 < 5" assert=
+
+"compile! comparison: >" test-section
+
+jit-gt: ( a b -- ? ) [ > ] ;
+jit-gt: compile!
+5 3 jit-gt t "5 > 3" assert=
+3 5 jit-gt f "3 > 5" assert=
+5 5 jit-gt f "5 > 5" assert=
+
+"compile! basic if: true branch" test-section
+
+jit-if-t: ( -- n ) [ t [ 10 ] [ 20 ] if ] ;
+jit-if-t: compile!
+jit-if-t 10 "if true -> 10" assert=
+
+"compile! basic if: false branch" test-section
+
+jit-if-f: ( -- n ) [ f [ 10 ] [ 20 ] if ] ;
+jit-if-f: compile!
+jit-if-f 20 "if false -> 20" assert=
+
+"compile! comparison + if" test-section
+
+jit-cmp-if: ( a b -- n ) [ > [ 10 ] [ 20 ] if ] ;
+jit-cmp-if: compile!
+5 3 jit-cmp-if 10 "5 > 3 if -> 10" assert=
+3 5 jit-cmp-if 20 "3 > 5 if -> 20" assert=
+
+"compile! arithmetic in branches" test-section
+
+jit-arith-if: ( a b -- n ) [ > [ 5 3 + ] [ 5 3 - ] if ] ;
+jit-arith-if: compile!
+5 3 jit-arith-if 8 "true branch: 5 + 3" assert=
+3 5 jit-arith-if 2 "false branch: 5 - 3" assert=
+
+"compile! nested if" test-section
+
+jit-nested-if: ( a b -- n ) [ > [ 100 ] [ 3 2 = [ 200 ] [ 300 ] if ] if ] ;
+jit-nested-if: compile!
+5 3 jit-nested-if 100 "outer true" assert=
+3 5 jit-nested-if 300 "outer false, inner false" assert=
+
+"compile! bail to interpreter: non-fixnum comparison" test-section
+
+1.5 2.5 jit-eq f "float comparison falls back" assert=

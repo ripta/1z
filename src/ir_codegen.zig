@@ -23,6 +23,7 @@ pub const CompiledWord = struct {
 
 const supported_binary_ops = [_][]const u8{ "+", "-", "*", "/", "div", "rem", "%" };
 const supported_unary_ops = [_][]const u8{"abs"};
+const supported_comparison_ops = [_][]const u8{ "=", "<", ">" };
 
 fn isSupportedOp(name: []const u8) bool {
     for (supported_binary_ops) |op| {
@@ -31,11 +32,23 @@ fn isSupportedOp(name: []const u8) bool {
     for (supported_unary_ops) |op| {
         if (std.mem.eql(u8, name, op)) return true;
     }
+    for (supported_comparison_ops) |op| {
+        if (std.mem.eql(u8, name, op)) return true;
+    }
+    if (std.mem.eql(u8, name, "if")) return true;
+    if (std.mem.eql(u8, name, "t") or std.mem.eql(u8, name, "f")) return true;
     return false;
 }
 
 fn isBinaryOp(name: []const u8) bool {
     for (supported_binary_ops) |op| {
+        if (std.mem.eql(u8, name, op)) return true;
+    }
+    return false;
+}
+
+fn isComparisonOp(name: []const u8) bool {
+    for (supported_comparison_ops) |op| {
         if (std.mem.eql(u8, name, op)) return true;
     }
     return false;
@@ -327,14 +340,348 @@ fn emitSwapSlots(ctx: *c.ir_ctx, base_addr: c.ir_ref, slot_a: usize, slot_b: usi
     }
 }
 
-/// Symbolic stack entry: either a raw i64 payload usable in arithmetic,
-/// or an opaque Value already written to the physical stack at a known slot.
+/// Symbolic stack entry: tracks the IR representation of each value on the
+/// abstract compilation stack.
 const StackEntry = union(enum) {
+    /// Unboxed fixnum payload, usable directly in arithmetic and comparisons.
     i64_ref: c.ir_ref,
+    /// IR boolean from a comparison op or `t`/`f` literal, boxed to a boolean
+    /// Value at finalization.
+    bool_ref: c.ir_ref,
+    /// Captured instruction slice from a quotation literal. Never reaches
+    /// finalization -- consumed by `if` at compile time.
+    quotation_body: []const Instruction,
+    /// Opaque Value written to physical stack slot N. This is used for types
+    /// that can't be represented as IR scalars, i.e., anything other than
+    /// fixnum / boolean.
     raw_at_slot: usize,
 };
 
+/// Shared compilation state threaded through instruction compilation.
+const CompileState = struct {
+    ctx: *c.ir_ctx,
+    base_addr: c.ir_ref,
+    tag_offset_const: c.ir_ref,
+    payload_offset_const: c.ir_ref,
+    fixnum_tag_const: c.ir_ref,
+    boolean_tag_const: c.ir_ref,
+    bail_status: c.ir_ref,
+};
+
+/// Extract the IR ref for an i64 value, or NotCompilable if it's not an i64_ref.
+fn requireI64(entry: StackEntry) IrCodegenError!c.ir_ref {
+    return switch (entry) {
+        .i64_ref => |ref| ref,
+        else => IrCodegenError.NotCompilable,
+    };
+}
+
+/// Compile a sequence of instructions, updating the abstract stack.
+/// Used both for top-level word bodies and for inlined quotation bodies.
+fn compileInstructions(
+    state: *CompileState,
+    instructions: []const Instruction,
+    stack: *[64]StackEntry,
+    sp: *usize,
+) IrCodegenError!void {
+    const ctx = state.ctx;
+    const base_addr = state.base_addr;
+    const bail_status = state.bail_status;
+
+    for (instructions) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| {
+                if (val == .fixnum) {
+                    stack[sp.*] = .{ .i64_ref = c.ir_const_i64(ctx, val.fixnum) };
+                    sp.* += 1;
+                } else if (val == .quotation) {
+                    stack[sp.*] = .{ .quotation_body = val.quotation.instructions };
+                    sp.* += 1;
+                } else if (val == .boolean) {
+                    stack[sp.*] = .{ .bool_ref = c.ir_const_bool(ctx, val.boolean) };
+                    sp.* += 1;
+                } else {
+                    const sp_byte_offset = c.ir_const_addr(ctx, sp.* * ValueLayout.value_size);
+                    const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, sp_byte_offset);
+                    emitPushValue(ctx, &val, dest_addr);
+                    stack[sp.*] = .{ .raw_at_slot = sp.* };
+                    sp.* += 1;
+                }
+            },
+            .call_word => |name| {
+                if (std.mem.eql(u8, name, "dup")) {
+                    if (sp.* < 1) return IrCodegenError.StackUnderflow;
+                    switch (stack[sp.* - 1]) {
+                        .i64_ref => |ref| {
+                            stack[sp.*] = .{ .i64_ref = ref };
+                        },
+                        .bool_ref => |ref| {
+                            stack[sp.*] = .{ .bool_ref = ref };
+                        },
+                        .quotation_body => |body| {
+                            stack[sp.*] = .{ .quotation_body = body };
+                        },
+                        .raw_at_slot => |s| {
+                            emitCopySlot(ctx, base_addr, s, sp.*);
+                            stack[sp.*] = .{ .raw_at_slot = sp.* };
+                        },
+                    }
+                    sp.* += 1;
+                } else if (std.mem.eql(u8, name, "drop")) {
+                    if (sp.* < 1) return IrCodegenError.StackUnderflow;
+                    sp.* -= 1;
+                } else if (std.mem.eql(u8, name, "swap")) {
+                    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+                    const top = stack[sp.* - 1];
+                    const second = stack[sp.* - 2];
+                    const top_is_physical = (top == .raw_at_slot);
+                    const second_is_physical = (second == .raw_at_slot);
+                    if (top_is_physical and second_is_physical) {
+                        emitSwapSlots(ctx, base_addr, top.raw_at_slot, second.raw_at_slot);
+                        stack[sp.* - 2] = .{ .raw_at_slot = second.raw_at_slot };
+                        stack[sp.* - 1] = .{ .raw_at_slot = top.raw_at_slot };
+                    } else if (top_is_physical) {
+                        emitCopySlot(ctx, base_addr, top.raw_at_slot, sp.* - 2);
+                        stack[sp.* - 2] = .{ .raw_at_slot = sp.* - 2 };
+                        stack[sp.* - 1] = second;
+                    } else if (second_is_physical) {
+                        emitCopySlot(ctx, base_addr, second.raw_at_slot, sp.* - 1);
+                        stack[sp.* - 2] = top;
+                        stack[sp.* - 1] = .{ .raw_at_slot = sp.* - 1 };
+                    } else {
+                        stack[sp.* - 2] = top;
+                        stack[sp.* - 1] = second;
+                    }
+                } else if (std.mem.eql(u8, name, "over")) {
+                    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+                    switch (stack[sp.* - 2]) {
+                        .i64_ref => |ref| {
+                            stack[sp.*] = .{ .i64_ref = ref };
+                        },
+                        .bool_ref => |ref| {
+                            stack[sp.*] = .{ .bool_ref = ref };
+                        },
+                        .quotation_body => |body| {
+                            stack[sp.*] = .{ .quotation_body = body };
+                        },
+                        .raw_at_slot => |s| {
+                            emitCopySlot(ctx, base_addr, s, sp.*);
+                            stack[sp.*] = .{ .raw_at_slot = sp.* };
+                        },
+                    }
+                    sp.* += 1;
+                } else if (std.mem.eql(u8, name, "t")) {
+                    stack[sp.*] = .{ .bool_ref = c.ir_const_bool(ctx, true) };
+                    sp.* += 1;
+                } else if (std.mem.eql(u8, name, "f")) {
+                    stack[sp.*] = .{ .bool_ref = c.ir_const_bool(ctx, false) };
+                    sp.* += 1;
+                } else if (std.mem.eql(u8, name, "abs")) {
+                    if (sp.* < 1) return IrCodegenError.StackUnderflow;
+                    sp.* -= 1;
+                    const a = try requireI64(stack[sp.*]);
+
+                    const min_val = c.ir_const_i64(ctx, std.math.minInt(i64));
+                    const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a, min_val);
+                    const if_min = c._ir_IF(ctx, is_min);
+                    c._ir_IF_TRUE_cold(ctx, if_min);
+                    c._ir_RETURN(ctx, bail_status);
+                    c._ir_IF_FALSE(ctx, if_min);
+
+                    const zero = c.ir_const_i64(ctx, 0);
+                    const is_neg = c.ir_fold2(ctx, c.IR_OPT(c.IR_LT, c.IR_BOOL), a, zero);
+                    const neg_a = c.ir_fold1(ctx, c.IR_OPT(c.IR_NEG, c.IR_I64), a);
+                    const if_neg = c._ir_IF(ctx, is_neg);
+                    c._ir_IF_TRUE(ctx, if_neg);
+                    const end_true = c._ir_END(ctx);
+                    c._ir_IF_FALSE(ctx, if_neg);
+                    const end_false = c._ir_END(ctx);
+                    c._ir_MERGE_2(ctx, end_true, end_false);
+                    const result = c._ir_PHI_2(ctx, c.IR_I64, neg_a, a);
+                    stack[sp.*] = .{ .i64_ref = result };
+                    sp.* += 1;
+                } else if (isComparisonOp(name)) {
+                    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+                    sp.* -= 2;
+                    const a = try requireI64(stack[sp.*]);
+                    const b = try requireI64(stack[sp.* + 1]);
+
+                    const ir_op: c_uint = if (std.mem.eql(u8, name, "="))
+                        c.IR_EQ
+                    else if (std.mem.eql(u8, name, "<"))
+                        c.IR_LT
+                    else
+                        c.IR_GT;
+
+                    const result = c.ir_fold2(ctx, c.IR_OPT(ir_op, c.IR_BOOL), a, b);
+                    stack[sp.*] = .{ .bool_ref = result };
+                    sp.* += 1;
+                } else if (std.mem.eql(u8, name, "if")) {
+                    // 1z truthiness: only `f` (boolean false) is falsy; every
+                    // other value is truthy. The three condition entry types
+                    // each need a different IR emission strategy:
+                    //
+                    //   bool_ref    -- use the IR bool directly as the branch condition
+                    //   i64_ref     -- always truthy, so emit only the true branch
+                    //   raw_at_slot -- load tag+payload from memory to compute is_truthy at runtime
+                    //
+                    // Both branches must produce the same stack depth; results
+                    // are merged with PHI nodes after the MERGE point.
+                    if (sp.* < 3) return IrCodegenError.StackUnderflow;
+                    sp.* -= 3;
+
+                    const cond_entry = stack[sp.*];
+                    const true_body = switch (stack[sp.* + 1]) {
+                        .quotation_body => |body| body,
+                        else => return IrCodegenError.NotCompilable,
+                    };
+                    const false_body = switch (stack[sp.* + 2]) {
+                        .quotation_body => |body| body,
+                        else => return IrCodegenError.NotCompilable,
+                    };
+
+                    // Determine the IR bool for the condition
+                    const cond_ref = switch (cond_entry) {
+                        .bool_ref => |ref| ref,
+                        .i64_ref => {
+                            // Non-boolean values are always truthy in 1z.
+                            // Compile both branches to validate stack effects
+                            // match, but only emit the true branch.
+                            var false_stack = stack.*;
+                            var false_sp = sp.*;
+                            try compileInstructions(state, false_body, &false_stack, &false_sp);
+                            try compileInstructions(state, true_body, stack, sp);
+                            if (false_sp != sp.*) return IrCodegenError.StackShapeMismatch;
+                            continue;
+                        },
+                        .raw_at_slot => |s| blk: {
+                            // Trufiness check for an opaque Value in memory.
+                            // Steps: load the tag word, check if it equals the
+                            // boolean tag, load the payload byte, then compute:
+                            //
+                            //   is_falsy = (tag == boolean) AND (payload == false)
+                            //
+                            // Negate using EQ(is_falsy, false) because the IR
+                            // library has no dedicated boolean NOT operation.
+                            const slot_byte_offset = c.ir_const_addr(ctx, s * ValueLayout.value_size);
+                            const slot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                            const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), slot_addr, state.tag_offset_const);
+                            const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
+                            const is_bool_tag = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_val, state.boolean_tag_const);
+
+                            const payload_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), slot_addr, state.payload_offset_const);
+                            const payload_val = c._ir_LOAD(ctx, c.IR_BOOL, payload_addr);
+                            // is_falsy = tag is boolean AND payload is false (i.e., payload == 0)
+                            const false_const = c.ir_const_bool(ctx, false);
+                            const is_false_payload = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), payload_val, false_const);
+                            const is_falsy = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_bool_tag, is_false_payload);
+                            // is_truthy = not is_falsy (negate by comparing with false)
+                            break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), is_falsy, false_const);
+                        },
+                        .quotation_body => return IrCodegenError.NotCompilable,
+                    };
+
+                    // Save stack state for the false branch
+                    const saved_sp = sp.*;
+                    var saved_stack = stack.*;
+
+                    // Emit true branch
+                    const if_ref = c._ir_IF(ctx, cond_ref);
+                    c._ir_IF_TRUE(ctx, if_ref);
+                    try compileInstructions(state, true_body, stack, sp);
+                    const end_true = c._ir_END(ctx);
+
+                    // Emit false branch
+                    c._ir_IF_FALSE(ctx, if_ref);
+                    var false_sp = saved_sp;
+                    try compileInstructions(state, false_body, &saved_stack, &false_sp);
+                    const end_false = c._ir_END(ctx);
+
+                    c._ir_MERGE_2(ctx, end_true, end_false);
+
+                    if (sp.* != false_sp) return IrCodegenError.StackShapeMismatch;
+
+                    // Merge stack entries with PHI nodes
+                    for (saved_sp..sp.*) |i| {
+                        const true_entry = stack[i];
+                        const false_entry = saved_stack[i];
+                        stack[i] = try mergeEntries(ctx, true_entry, false_entry, i, base_addr);
+                    }
+                } else if (isBinaryOp(name)) {
+                    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+                    sp.* -= 2;
+                    const a = try requireI64(stack[sp.*]);
+                    const b = try requireI64(stack[sp.* + 1]);
+
+                    if (std.mem.eql(u8, name, "+")) {
+                        stack[sp.*] = .{ .i64_ref = emitOverflowCheckedBinary(ctx, c.IR_ADD_OV, a, b, bail_status) };
+                        sp.* += 1;
+                    } else if (std.mem.eql(u8, name, "-")) {
+                        stack[sp.*] = .{ .i64_ref = emitOverflowCheckedBinary(ctx, c.IR_SUB_OV, a, b, bail_status) };
+                        sp.* += 1;
+                    } else if (std.mem.eql(u8, name, "*")) {
+                        stack[sp.*] = .{ .i64_ref = emitOverflowCheckedBinary(ctx, c.IR_MUL_OV, a, b, bail_status) };
+                        sp.* += 1;
+                    } else if (std.mem.eql(u8, name, "/") or std.mem.eql(u8, name, "div")) {
+                        stack[sp.*] = .{ .i64_ref = emitDivision(ctx, a, b, bail_status) };
+                        sp.* += 1;
+                    } else if (std.mem.eql(u8, name, "rem")) {
+                        stack[sp.*] = .{ .i64_ref = emitRemainder(ctx, a, b, bail_status) };
+                        sp.* += 1;
+                    } else if (std.mem.eql(u8, name, "%")) {
+                        stack[sp.*] = .{ .i64_ref = emitEuclideanMod(ctx, a, b, bail_status) };
+                        sp.* += 1;
+                    }
+                } else {
+                    return IrCodegenError.NotCompilable;
+                }
+            },
+        }
+    }
+}
+
+/// Merge two stack entries from the true and false branches of an if.
+/// After an ir MERGE of two branches, a PHI node selects which branch's
+/// value to use based on which path was actually taken at runtime.
+/// For raw_at_slot merging is limited to same-slot cases: if both branches
+/// wrote to the same physical slot, no copy is needed since the taken branch
+/// already placed its value there.
+fn mergeEntries(
+    ctx: *c.ir_ctx,
+    true_entry: StackEntry,
+    false_entry: StackEntry,
+    slot: usize,
+    base_addr: c.ir_ref,
+) IrCodegenError!StackEntry {
+    switch (true_entry) {
+        .i64_ref => |true_ref| switch (false_entry) {
+            .i64_ref => |false_ref| return .{ .i64_ref = c._ir_PHI_2(ctx, c.IR_I64, true_ref, false_ref) },
+            else => return IrCodegenError.NotCompilable,
+        },
+        .bool_ref => |true_ref| switch (false_entry) {
+            .bool_ref => |false_ref| return .{ .bool_ref = c._ir_PHI_2(ctx, c.IR_BOOL, true_ref, false_ref) },
+            else => return IrCodegenError.NotCompilable,
+        },
+        .raw_at_slot => |true_slot| switch (false_entry) {
+            .raw_at_slot => |false_slot| {
+                if (true_slot == slot and false_slot == slot) {
+                    return .{ .raw_at_slot = slot };
+                }
+                // Both wrote to physical slots but at different positions;
+                // the last write from the taken branch is at the correct
+                // location since only one branch executes. However, we
+                // can't statically know which, so copy to canonical slot.
+                _ = base_addr;
+                return IrCodegenError.NotCompilable;
+            },
+            else => return IrCodegenError.NotCompilable,
+        },
+        .quotation_body => return IrCodegenError.NotCompilable,
+    }
+}
+
 /// The compiled function signature: operates directly on the per-task stack.
+///
 ///   items_ptr: base of the Value array
 ///   sp:        pointer to current stack depth (read and written)
 ///   capacity:  current array capacity for bounds checking
@@ -398,6 +745,7 @@ pub fn compileWord(
     const tag_offset_const = c.ir_const_addr(&ctx, ValueLayout.tag_offset);
     const payload_offset_const = c.ir_const_addr(&ctx, ValueLayout.payload_offset);
     const fixnum_tag_const = emitTagConst(&ctx, .fixnum);
+    const boolean_tag_const = emitTagConst(&ctx, .boolean);
 
     // Precompute the base address for output writes:
     // base_addr = items_ptr + (sp_val - input_count) * value_size
@@ -426,148 +774,27 @@ pub fn compileWord(
         sp += 1;
     }
 
-    // Process each instruction
-    for (instructions) |instr| {
-        switch (instr.op) {
-            .push_literal => |val| {
-                if (val == .fixnum) {
-                    stack[sp] = .{ .i64_ref = c.ir_const_i64(&ctx, val.fixnum) };
-                    sp += 1;
-                } else {
-                    // Write the full Value bytes to the destination stack slot
-                    const sp_byte_offset = c.ir_const_addr(&ctx, sp * ValueLayout.value_size);
-                    const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, sp_byte_offset);
-                    emitPushValue(&ctx, &val, dest_addr);
-                    stack[sp] = .{ .raw_at_slot = sp };
-                    sp += 1;
-                }
-            },
-            .call_word => |name| {
-                if (std.mem.eql(u8, name, "dup")) {
-                    if (sp < 1) return IrCodegenError.StackUnderflow;
-                    switch (stack[sp - 1]) {
-                        .i64_ref => |ref| {
-                            stack[sp] = .{ .i64_ref = ref };
-                        },
-                        .raw_at_slot => |s| {
-                            emitCopySlot(&ctx, base_addr, s, sp);
-                            stack[sp] = .{ .raw_at_slot = sp };
-                        },
-                    }
-                    sp += 1;
-                } else if (std.mem.eql(u8, name, "drop")) {
-                    if (sp < 1) return IrCodegenError.StackUnderflow;
-                    sp -= 1;
-                } else if (std.mem.eql(u8, name, "swap")) {
-                    if (sp < 2) return IrCodegenError.StackUnderflow;
-                    const top = stack[sp - 1];
-                    const second = stack[sp - 2];
-                    switch (top) {
-                        .i64_ref => {
-                            switch (second) {
-                                .i64_ref => {
-                                    stack[sp - 2] = top;
-                                    stack[sp - 1] = second;
-                                },
-                                .raw_at_slot => |s| {
-                                    emitCopySlot(&ctx, base_addr, s, sp - 1);
-                                    stack[sp - 2] = top;
-                                    stack[sp - 1] = .{ .raw_at_slot = sp - 1 };
-                                },
-                            }
-                        },
-                        .raw_at_slot => {
-                            switch (second) {
-                                .i64_ref => {
-                                    emitCopySlot(&ctx, base_addr, top.raw_at_slot, sp - 2);
-                                    stack[sp - 2] = .{ .raw_at_slot = sp - 2 };
-                                    stack[sp - 1] = second;
-                                },
-                                .raw_at_slot => {
-                                    emitSwapSlots(&ctx, base_addr, top.raw_at_slot, second.raw_at_slot);
-                                    stack[sp - 2] = .{ .raw_at_slot = second.raw_at_slot };
-                                    stack[sp - 1] = .{ .raw_at_slot = top.raw_at_slot };
-                                },
-                            }
-                        },
-                    }
-                } else if (std.mem.eql(u8, name, "over")) {
-                    if (sp < 2) return IrCodegenError.StackUnderflow;
-                    switch (stack[sp - 2]) {
-                        .i64_ref => |ref| {
-                            stack[sp] = .{ .i64_ref = ref };
-                        },
-                        .raw_at_slot => |s| {
-                            emitCopySlot(&ctx, base_addr, s, sp);
-                            stack[sp] = .{ .raw_at_slot = sp };
-                        },
-                    }
-                    sp += 1;
-                } else if (std.mem.eql(u8, name, "abs")) {
-                    if (sp < 1) return IrCodegenError.StackUnderflow;
-                    sp -= 1;
-                    const a = switch (stack[sp]) {
-                        .i64_ref => |ref| ref,
-                        .raw_at_slot => return IrCodegenError.NotCompilable,
-                    };
+    var state = CompileState{
+        .ctx = &ctx,
+        .base_addr = base_addr,
+        .tag_offset_const = tag_offset_const,
+        .payload_offset_const = payload_offset_const,
+        .fixnum_tag_const = fixnum_tag_const,
+        .boolean_tag_const = boolean_tag_const,
+        .bail_status = bail_status,
+    };
 
-                    const min_val = c.ir_const_i64(&ctx, std.math.minInt(i64));
-                    const is_min = c.ir_fold2(&ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a, min_val);
-                    const if_min = c._ir_IF(&ctx, is_min);
-                    c._ir_IF_TRUE_cold(&ctx, if_min);
-                    c._ir_RETURN(&ctx, bail_status);
-                    c._ir_IF_FALSE(&ctx, if_min);
-
-                    const zero = c.ir_const_i64(&ctx, 0);
-                    const is_neg = c.ir_fold2(&ctx, c.IR_OPT(c.IR_LT, c.IR_BOOL), a, zero);
-                    const neg_a = c.ir_fold1(&ctx, c.IR_OPT(c.IR_NEG, c.IR_I64), a);
-                    const if_neg = c._ir_IF(&ctx, is_neg);
-                    c._ir_IF_TRUE(&ctx, if_neg);
-                    const end_true = c._ir_END(&ctx);
-                    c._ir_IF_FALSE(&ctx, if_neg);
-                    const end_false = c._ir_END(&ctx);
-                    c._ir_MERGE_2(&ctx, end_true, end_false);
-                    const result = c._ir_PHI_2(&ctx, c.IR_I64, neg_a, a);
-                    stack[sp] = .{ .i64_ref = result };
-                    sp += 1;
-                } else {
-                    if (sp < 2) return IrCodegenError.StackUnderflow;
-                    sp -= 2;
-                    const a = switch (stack[sp]) {
-                        .i64_ref => |ref| ref,
-                        .raw_at_slot => return IrCodegenError.NotCompilable,
-                    };
-                    const b = switch (stack[sp + 1]) {
-                        .i64_ref => |ref| ref,
-                        .raw_at_slot => return IrCodegenError.NotCompilable,
-                    };
-
-                    if (std.mem.eql(u8, name, "+")) {
-                        stack[sp] = .{ .i64_ref = emitOverflowCheckedBinary(&ctx, c.IR_ADD_OV, a, b, bail_status) };
-                        sp += 1;
-                    } else if (std.mem.eql(u8, name, "-")) {
-                        stack[sp] = .{ .i64_ref = emitOverflowCheckedBinary(&ctx, c.IR_SUB_OV, a, b, bail_status) };
-                        sp += 1;
-                    } else if (std.mem.eql(u8, name, "*")) {
-                        stack[sp] = .{ .i64_ref = emitOverflowCheckedBinary(&ctx, c.IR_MUL_OV, a, b, bail_status) };
-                        sp += 1;
-                    } else if (std.mem.eql(u8, name, "/") or std.mem.eql(u8, name, "div")) {
-                        stack[sp] = .{ .i64_ref = emitDivision(&ctx, a, b, bail_status) };
-                        sp += 1;
-                    } else if (std.mem.eql(u8, name, "rem")) {
-                        stack[sp] = .{ .i64_ref = emitRemainder(&ctx, a, b, bail_status) };
-                        sp += 1;
-                    } else if (std.mem.eql(u8, name, "%")) {
-                        stack[sp] = .{ .i64_ref = emitEuclideanMod(&ctx, a, b, bail_status) };
-                        sp += 1;
-                    }
-                }
-            },
-        }
-    }
+    try compileInstructions(&state, instructions, &stack, &sp);
 
     if (sp != output_count) return IrCodegenError.StackShapeMismatch;
 
+    // Finalize each symbolic stack entry into a physical Value on the stack.
+    //   i64_ref       -- box with fixnum tag and write to the output slot
+    //   bool_ref      -- box with boolean tag and write to the output slot
+    //   raw_at_slot   -- already a physical Value; copy only if the slot
+    //                    index differs from the output position
+    //   quotation_body -- should have been consumed by `if`; reaching here
+    //                     means an unconsumed quotation, which is an error
     for (0..sp) |i| {
         switch (stack[i]) {
             .i64_ref => |ref| {
@@ -575,8 +802,13 @@ pub fn compileWord(
                 const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
                 emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, fixnum_tag_const, ref);
             },
+            .bool_ref => |ref| {
+                const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
+                const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, boolean_tag_const, ref);
+            },
+            .quotation_body => return IrCodegenError.NotCompilable,
             .raw_at_slot => |s| {
-                // If the raw value isn't already at its final position, copy it
                 if (s != i) {
                     emitCopySlot(&ctx, base_addr, s, i);
                 }
@@ -1198,4 +1430,236 @@ test "compile non-fixnum literal swap" {
     try testing.expect(std.mem.eql(u8, "bbb", values[0].string));
     try testing.expect(values[1] == .string);
     try testing.expect(std.mem.eql(u8, "aaa", values[1].string));
+}
+
+test "compile = comparison" {
+    const instrs = makeInstructions(.{"="});
+    const result = try compileWord(&instrs, 2, 1);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+
+    values[0] = .{ .fixnum = 5 };
+    values[1] = .{ .fixnum = 5 };
+    sp = 2;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .boolean);
+    try testing.expectEqual(true, values[0].boolean);
+
+    values[0] = .{ .fixnum = 3 };
+    values[1] = .{ .fixnum = 5 };
+    sp = 2;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .boolean);
+    try testing.expectEqual(false, values[0].boolean);
+}
+
+test "compile < comparison" {
+    const instrs = makeInstructions(.{"<"});
+    const result = try compileWord(&instrs, 2, 1);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+
+    values[0] = .{ .fixnum = 3 };
+    values[1] = .{ .fixnum = 5 };
+    sp = 2;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expect(values[0] == .boolean);
+    try testing.expectEqual(true, values[0].boolean);
+
+    values[0] = .{ .fixnum = 5 };
+    values[1] = .{ .fixnum = 3 };
+    sp = 2;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expect(values[0] == .boolean);
+    try testing.expectEqual(false, values[0].boolean);
+}
+
+test "compile > comparison" {
+    const instrs = makeInstructions(.{">"});
+    const result = try compileWord(&instrs, 2, 1);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+
+    values[0] = .{ .fixnum = 5 };
+    values[1] = .{ .fixnum = 3 };
+    sp = 2;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expect(values[0] == .boolean);
+    try testing.expectEqual(true, values[0].boolean);
+
+    values[0] = .{ .fixnum = 3 };
+    values[1] = .{ .fixnum = 5 };
+    sp = 2;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expect(values[0] == .boolean);
+    try testing.expectEqual(false, values[0].boolean);
+}
+
+test "compile comparison on non-fixnum bails" {
+    const instrs = makeInstructions(.{"="});
+    const result = try compileWord(&instrs, 2, 1);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values = [_]Value{ .{ .string = "hello" }, .{ .fixnum = 5 } };
+    var sp: usize = 2;
+    try testing.expectEqual(@as(i32, 1), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 2), sp);
+}
+
+test "compile if with bool condition" {
+    const true_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 10 } }, .line = 1 },
+    };
+    const false_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 20 } }, .line = 1 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = true_body } } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
+        .{ .op = .{ .call_word = "if" }, .line = 4 },
+    };
+    const result = try compileWord(&instrs, 0, 1);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 10), values[0].fixnum);
+}
+
+test "compile if with false condition" {
+    const true_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 10 } }, .line = 1 },
+    };
+    const false_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 20 } }, .line = 1 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .boolean = false } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = true_body } } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
+        .{ .op = .{ .call_word = "if" }, .line = 4 },
+    };
+    const result = try compileWord(&instrs, 0, 1);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 20), values[0].fixnum);
+}
+
+test "compile comparison + if" {
+    const true_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 10 } }, .line = 1 },
+    };
+    const false_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 20 } }, .line = 1 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .call_word = ">" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = true_body } } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
+        .{ .op = .{ .call_word = "if" }, .line = 4 },
+    };
+    const result = try compileWord(&instrs, 2, 1);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+
+    values[0] = .{ .fixnum = 5 };
+    values[1] = .{ .fixnum = 3 };
+    sp = 2;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expectEqual(@as(i64, 10), values[0].fixnum);
+
+    values[0] = .{ .fixnum = 3 };
+    values[1] = .{ .fixnum = 5 };
+    sp = 2;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expectEqual(@as(i64, 20), values[0].fixnum);
+}
+
+test "compile if with arithmetic in branches" {
+    const true_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 5 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 2 },
+        .{ .op = .{ .call_word = "+" }, .line = 3 },
+    };
+    const false_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 5 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 2 },
+        .{ .op = .{ .call_word = "-" }, .line = 3 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = true_body } } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
+        .{ .op = .{ .call_word = "if" }, .line = 4 },
+    };
+    const result = try compileWord(&instrs, 0, 1);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expectEqual(@as(i64, 8), values[0].fixnum);
+}
+
+test "compile if with stack shape mismatch fails" {
+    const true_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 10 } }, .line = 1 },
+    };
+    const false_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 20 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 30 } }, .line = 2 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = true_body } } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
+        .{ .op = .{ .call_word = "if" }, .line = 4 },
+    };
+    try testing.expectError(IrCodegenError.StackShapeMismatch, compileWord(&instrs, 0, 1));
+}
+
+test "compile if with non-compilable body fails" {
+    const true_body = &[_]Instruction{
+        .{ .op = .{ .call_word = "print" }, .line = 1 },
+    };
+    const false_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 20 } }, .line = 1 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = true_body } } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
+        .{ .op = .{ .call_word = "if" }, .line = 4 },
+    };
+    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 0, 1));
 }

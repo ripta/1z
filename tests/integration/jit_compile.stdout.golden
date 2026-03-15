@@ -176,3 +176,71 @@ Stack: [ ]
 Stack: [ ]
 PASS: string + fixnum errors
 Stack: [ ]
+=== compile! comparison: = ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: 5 = 5
+Stack: [ ]
+PASS: 3 = 5
+Stack: [ ]
+=== compile! comparison: < ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: 3 < 5
+Stack: [ ]
+PASS: 5 < 3
+Stack: [ ]
+PASS: 5 < 5
+Stack: [ ]
+=== compile! comparison: > ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: 5 > 3
+Stack: [ ]
+PASS: 3 > 5
+Stack: [ ]
+PASS: 5 > 5
+Stack: [ ]
+=== compile! basic if: true branch ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: if true -> 10
+Stack: [ ]
+=== compile! basic if: false branch ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: if false -> 20
+Stack: [ ]
+=== compile! comparison + if ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: 5 > 3 if -> 10
+Stack: [ ]
+PASS: 3 > 5 if -> 20
+Stack: [ ]
+=== compile! arithmetic in branches ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: true branch: 5 + 3
+Stack: [ ]
+PASS: false branch: 5 - 3
+Stack: [ ]
+=== compile! nested if ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: outer true
+Stack: [ ]
+PASS: outer false, inner false
+Stack: [ ]
+=== compile! bail to interpreter: non-fixnum comparison ===
+Stack: [ ]
+PASS: float comparison falls back
+Stack: [ ]
