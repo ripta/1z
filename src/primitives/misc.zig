@@ -531,7 +531,7 @@ fn nativeCompile(ctx: *Context) anyerror!void {
         bm.recordJitCompile(after_ns - before_ns);
     }
 
-    const word_id = ctx.jit_dispatch.assignId(sym, input_count, output_count) catch {
+    const word_id = ctx.jit_dispatch.assignId(sym) catch {
         compiled.jit_buf.deinit();
         return error.OutOfMemory;
     };
