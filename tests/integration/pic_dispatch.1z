@@ -19,7 +19,7 @@ add: method{ weight weight } [ unmake-weight swap unmake-weight + >weight ] ;
 \ Different types (PIC miss, re-populate)
 5 >weight 8 >weight add unmake-weight 13 "binary dispatch weight" assert=
 
-\ Back to first type (PIC miss again, monomorphic can only cache one)
+\ Back to first type (polymorphic cache should hold both)
 1 >duration 2 >duration add unmake-duration 3 "binary dispatch duration again" assert=
 
 \ Unary generic dispatch
@@ -40,3 +40,44 @@ show: method{ weight } [ unmake-weight inspect "w" #append ] ;
 
 \ Previous methods still work after new registration
 42 show "42" "unary dispatch fixnum after new method" assert=
+
+\ ---------------------------------------------------------------
+\ Polymorphic cache: 4 distinct type pairs at the same call site
+\ ---------------------------------------------------------------
+
+height: virtual{ fixnum } ;
+speed: virtual{ fixnum } ;
+
+add: method{ height height } [ unmake-height swap unmake-height + >height ] ;
+add: method{ speed speed } [ unmake-speed swap unmake-speed + >speed ] ;
+
+\ Call add with 4 different type pairs (fills PIC to capacity)
+1 >duration 2 >duration add unmake-duration 3 "poly: duration+duration" assert=
+3 >weight 4 >weight add unmake-weight 7 "poly: weight+weight" assert=
+5 >height 6 >height add unmake-height 11 "poly: height+height" assert=
+7 >speed 8 >speed add unmake-speed 15 "poly: speed+speed" assert=
+
+\ Repeat all four -- should all hit the polymorphic cache
+10 >duration 20 >duration add unmake-duration 30 "poly repeat: duration" assert=
+10 >weight 20 >weight add unmake-weight 30 "poly repeat: weight" assert=
+10 >height 20 >height add unmake-height 30 "poly repeat: height" assert=
+10 >speed 20 >speed add unmake-speed 30 "poly repeat: speed" assert=
+
+\ ---------------------------------------------------------------
+\ Megamorphic fallback: 5th distinct type pair exceeds PIC capacity
+\ ---------------------------------------------------------------
+
+area: virtual{ fixnum } ;
+add: method{ area area } [ unmake-area swap unmake-area + >area ] ;
+
+\ 5th type pair triggers megamorphic
+9 >area 1 >area add unmake-area 10 "mega: area+area" assert=
+
+\ All previous type pairs still dispatch correctly via slow path
+2 >duration 3 >duration add unmake-duration 5 "mega fallback: duration" assert=
+2 >weight 3 >weight add unmake-weight 5 "mega fallback: weight" assert=
+2 >height 3 >height add unmake-height 5 "mega fallback: height" assert=
+2 >speed 3 >speed add unmake-speed 5 "mega fallback: speed" assert=
+
+\ Repeat the 5th type pair
+4 >area 6 >area add unmake-area 10 "mega repeat: area" assert=

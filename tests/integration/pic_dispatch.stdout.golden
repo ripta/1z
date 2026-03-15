@@ -27,3 +27,37 @@ PASS: unary dispatch after new method
 Stack: [ ]
 PASS: unary dispatch fixnum after new method
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: poly: duration+duration
+Stack: [ ]
+PASS: poly: weight+weight
+Stack: [ ]
+PASS: poly: height+height
+Stack: [ ]
+PASS: poly: speed+speed
+Stack: [ ]
+PASS: poly repeat: duration
+Stack: [ ]
+PASS: poly repeat: weight
+Stack: [ ]
+PASS: poly repeat: height
+Stack: [ ]
+PASS: poly repeat: speed
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: mega: area+area
+Stack: [ ]
+PASS: mega fallback: duration
+Stack: [ ]
+PASS: mega fallback: weight
+Stack: [ ]
+PASS: mega fallback: height
+Stack: [ ]
+PASS: mega fallback: speed
+Stack: [ ]
+PASS: mega repeat: area
+Stack: [ ]

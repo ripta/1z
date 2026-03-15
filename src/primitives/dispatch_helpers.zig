@@ -1,7 +1,8 @@
 const std = @import("std");
 const Context = @import("../context.zig").Context;
 const dispatch_mod = @import("../dispatch.zig");
-const MonomorphicCache = @import("../pic.zig").MonomorphicCache;
+const pic_mod = @import("../pic.zig");
+const PolymorphicCache = pic_mod.PolymorphicCache;
 const Value = @import("../value.zig").Value;
 
 /// Execute a dispatch entry body, handling both quotation and native_fn variants.
@@ -211,36 +212,42 @@ pub fn tryDispatchGeneric(ctx: *Context, word_name: []const u8) !bool {
     return tryDispatchGenericWithPic(ctx, word_name, null);
 }
 
-/// Try to dispatch a generic word, with optional PIC cache entry.
+/// Try to dispatch a generic word, with optional polymorphic inline cache.
 ///
-/// When `pic_entry` is non-null and the cache is valid with a matching
-/// generation, a pointer-based type check is performed to skip the full
+/// When `pic` is non-null and the cache generation matches, a
+/// pointer-based type check scans the cached entries to skip the full
 /// hash table lookup. On cache miss the full lookup proceeds and the
-/// cache is updated.
-pub fn tryDispatchGenericWithPic(ctx: *Context, word_name: []const u8, pic_entry: ?*MonomorphicCache) !bool {
-    if (pic_entry) |cache| {
-        if (cache.valid and cache.generation == ctx.dispatch.generation) {
-            if (ctx.stack.depth() >= 2) {
-                const a = try ctx.stack.peekN(1);
-                const b = try ctx.stack.peek();
-                const a_type = dispatch_mod.dispatchTypeName(a);
-                const b_type = dispatch_mod.dispatchTypeName(b);
-                if (a_type.ptr == cache.type_a.ptr and b_type.ptr == cache.type_b.ptr) {
-                    if (cache.unwrap_a or cache.unwrap_b) {
-                        try autoUnwrapBinaryOperands(ctx, cache.unwrap_a, cache.unwrap_b);
+/// result is inserted into the cache. When the cache overflows
+/// (more than `max_pic_entries` distinct type pairs), it transitions
+/// to a sticky megamorphic state that permanently bypasses caching.
+pub fn tryDispatchGenericWithPic(ctx: *Context, word_name: []const u8, pic: ?*PolymorphicCache) !bool {
+    if (pic) |cache| {
+        if (!cache.megamorphic) {
+            if (cache.count > 0 and cache.generation != ctx.dispatch.generation) {
+                cache.count = 0;
+            } else if (cache.count > 0) {
+                if (ctx.stack.depth() >= 2) {
+                    const a = try ctx.stack.peekN(1);
+                    const b = try ctx.stack.peek();
+                    const a_type = dispatch_mod.dispatchTypeName(a);
+                    const b_type = dispatch_mod.dispatchTypeName(b);
+                    if (cache.lookup(a_type, b_type)) |entry| {
+                        if (entry.unwrap_a or entry.unwrap_b) {
+                            try autoUnwrapBinaryOperands(ctx, entry.unwrap_a, entry.unwrap_b);
+                        }
+                        try executeDispatchBody(ctx, entry.entry.body);
+                        return true;
                     }
-                    try executeDispatchBody(ctx, cache.entry.body);
-                    return true;
-                }
-            } else if (ctx.stack.depth() >= 1) {
-                const a = try ctx.stack.peek();
-                const a_type = dispatch_mod.dispatchTypeName(a);
-                if (a_type.ptr == cache.type_a.ptr and cache.type_b.len == 0) {
-                    if (cache.unwrap_a) {
-                        try autoUnwrapTopOperand(ctx);
+                } else if (ctx.stack.depth() >= 1) {
+                    const a = try ctx.stack.peek();
+                    const a_type = dispatch_mod.dispatchTypeName(a);
+                    if (cache.lookup(a_type, "")) |entry| {
+                        if (entry.unwrap_a) {
+                            try autoUnwrapTopOperand(ctx);
+                        }
+                        try executeDispatchBody(ctx, entry.entry.body);
+                        return true;
                     }
-                    try executeDispatchBody(ctx, cache.entry.body);
-                    return true;
                 }
             }
         }
@@ -250,18 +257,19 @@ pub fn tryDispatchGenericWithPic(ctx: *Context, word_name: []const u8, pic_entry
         const a = try ctx.stack.peekN(1);
         const b = try ctx.stack.peek();
         if (lookupBinaryWithFallback(ctx, word_name, a, b)) |result| {
-            if (pic_entry) |cache| {
-                const a_type = dispatch_mod.dispatchTypeName(a);
-                const b_type = dispatch_mod.dispatchTypeName(b);
-                cache.* = .{
-                    .type_a = a_type,
-                    .type_b = b_type,
-                    .entry = result.entry,
-                    .unwrap_a = result.unwrap_a,
-                    .unwrap_b = result.unwrap_b,
-                    .generation = ctx.dispatch.generation,
-                    .valid = true,
-                };
+            if (pic) |cache| {
+                if (!cache.megamorphic) {
+                    const a_type = dispatch_mod.dispatchTypeName(a);
+                    const b_type = dispatch_mod.dispatchTypeName(b);
+                    cache.insert(.{
+                        .type_a = a_type,
+                        .type_b = b_type,
+                        .entry = result.entry,
+                        .unwrap_a = result.unwrap_a,
+                        .unwrap_b = result.unwrap_b,
+                    });
+                    cache.generation = ctx.dispatch.generation;
+                }
             }
             if (result.unwrap_a or result.unwrap_b) {
                 try autoUnwrapBinaryOperands(ctx, result.unwrap_a, result.unwrap_b);
@@ -274,17 +282,18 @@ pub fn tryDispatchGenericWithPic(ctx: *Context, word_name: []const u8, pic_entry
     if (ctx.stack.depth() >= 1) {
         const a = try ctx.stack.peek();
         if (lookupUnaryWithFallback(ctx, word_name, a)) |result| {
-            if (pic_entry) |cache| {
-                const a_type = dispatch_mod.dispatchTypeName(a);
-                cache.* = .{
-                    .type_a = a_type,
-                    .type_b = "",
-                    .entry = result.entry,
-                    .unwrap_a = result.unwrap_a,
-                    .unwrap_b = false,
-                    .generation = ctx.dispatch.generation,
-                    .valid = true,
-                };
+            if (pic) |cache| {
+                if (!cache.megamorphic) {
+                    const a_type = dispatch_mod.dispatchTypeName(a);
+                    cache.insert(.{
+                        .type_a = a_type,
+                        .type_b = "",
+                        .entry = result.entry,
+                        .unwrap_a = result.unwrap_a,
+                        .unwrap_b = false,
+                    });
+                    cache.generation = ctx.dispatch.generation;
+                }
             }
             if (result.unwrap_a) {
                 try autoUnwrapTopOperand(ctx);
@@ -437,7 +446,7 @@ test "tryDispatchGenericWithPic populates cache on miss" {
         false,
     );
 
-    var cache = MonomorphicCache{};
+    var cache = PolymorphicCache{};
 
     try ctx.stack.push(.{ .fixnum = 3 });
     try ctx.stack.push(.{ .fixnum = 4 });
@@ -447,9 +456,9 @@ test "tryDispatchGenericWithPic populates cache on miss" {
     try std.testing.expectEqual(@as(i64, 7), (try ctx.stack.pop()).fixnum);
 
     // Cache should now be populated
-    try std.testing.expect(cache.valid);
-    try std.testing.expectEqualStrings("fixnum", cache.type_a);
-    try std.testing.expectEqualStrings("fixnum", cache.type_b);
+    try std.testing.expectEqual(@as(u8, 1), cache.count);
+    try std.testing.expectEqualStrings("fixnum", cache.entries[0].type_a);
+    try std.testing.expectEqualStrings("fixnum", cache.entries[0].type_b);
     try std.testing.expectEqual(ctx.dispatch.generation, cache.generation);
 }
 
@@ -466,7 +475,7 @@ test "tryDispatchGenericWithPic hits cache on matching types" {
         false,
     );
 
-    var cache = MonomorphicCache{};
+    var cache = PolymorphicCache{};
 
     // First call: populates cache
     try ctx.stack.push(.{ .fixnum = 1 });
@@ -495,7 +504,7 @@ test "tryDispatchGenericWithPic invalidates on generation change" {
         false,
     );
 
-    var cache = MonomorphicCache{};
+    var cache = PolymorphicCache{};
 
     // Populate cache
     try ctx.stack.push(.{ .fixnum = 1 });
@@ -562,7 +571,7 @@ test "tryDispatchGenericWithPic caches unary dispatch" {
         false,
     );
 
-    var cache = MonomorphicCache{};
+    var cache = PolymorphicCache{};
 
     try ctx.stack.push(.{ .fixnum = 42 });
     const result = try tryDispatchGenericWithPic(&ctx, "show", &cache);
@@ -570,7 +579,7 @@ test "tryDispatchGenericWithPic caches unary dispatch" {
     try std.testing.expectEqualStrings("42", (try ctx.stack.pop()).string);
 
     // Cache should record unary dispatch (type_b is empty)
-    try std.testing.expect(cache.valid);
-    try std.testing.expectEqualStrings("fixnum", cache.type_a);
-    try std.testing.expectEqual(@as(usize, 0), cache.type_b.len);
+    try std.testing.expectEqual(@as(u8, 1), cache.count);
+    try std.testing.expectEqualStrings("fixnum", cache.entries[0].type_a);
+    try std.testing.expectEqual(@as(usize, 0), cache.entries[0].type_b.len);
 }
