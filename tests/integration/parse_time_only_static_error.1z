@@ -1,0 +1,6 @@
+\ Static enforcement: parse-time-only word rejected in non-parse-time definition body
+
+my-pto: parse-time-only [ 42 ] ;
+
+\ This should fail: using a parse-time-only word in a non-parse-time quotation
+bad-word: [ my-pto ] ;

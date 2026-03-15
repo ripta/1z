@@ -1,0 +1,11 @@
+\ emit-call enforcement: cannot emit-call a parse-time-only word
+
+my-pto-ec: parse-time-only [ 42 ] ;
+
+\ This parse-time word tries to emit-call the PTO word
+bad-emitter: parse-time [
+  my-pto-ec: emit-call
+] ;
+
+\ Using bad-emitter triggers the parse-time execution and the error
+result: bad-emitter ;

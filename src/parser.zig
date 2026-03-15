@@ -19,6 +19,8 @@ const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
 
 const Context = @import("context.zig").Context;
+const markers_mod = @import("primitives/markers.zig");
+const Marker = value_mod.Marker;
 
 /// Process escape sequences in a string and allocate the result; supports
 /// Zig-compatible escape sequences: \n, \r, \t, \\, \", \', \xHH, \u{HHHH}
@@ -150,6 +152,28 @@ fn handleParseTimeError(c: *Context, err: anyerror) ParseError {
 ///              to literals that appear after the last `call_word` in the pending
 ///              instruction stream. This prevents reordering when `push_literals` and
 ///              `call_words` are interleaved.
+/// Scan backwards through pending instructions for a parse-time or
+/// parse-time-only marker literal, stopping at call_word barriers.
+fn hasParseTimeMarkerInTrail(instructions: []const Instruction) bool {
+    var i = instructions.len;
+    while (i > 0) {
+        i -= 1;
+        switch (instructions[i].op) {
+            .push_literal => |val| {
+                switch (val) {
+                    .marker => |mk| {
+                        if (mk == &markers_mod.parse_time_marker or
+                            mk == &markers_mod.parse_time_only_marker) return true;
+                    },
+                    else => {},
+                }
+            },
+            .call_word => break,
+        }
+    }
+    return false;
+}
+
 fn executeParseTimeWord(
     c: *Context,
     word: WordDefinition,
@@ -335,8 +359,21 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
         const line = tok.line;
         const column = tok.column;
         if (std.mem.eql(u8, token, "[")) {
-            const quotation = try parseQuotation(allocator, tokenizer, ctx, line);
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = quotation } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+            if (ctx) |c| {
+                if (hasParseTimeMarkerInTrail(instructions.items)) {
+                    const old = c.parsing_parse_time_def;
+                    c.parsing_parse_time_def = true;
+                    const quotation = try parseQuotation(allocator, tokenizer, ctx, line);
+                    c.parsing_parse_time_def = old;
+                    instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = quotation } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                } else {
+                    const quotation = try parseQuotation(allocator, tokenizer, ctx, line);
+                    instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = quotation } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                }
+            } else {
+                const quotation = try parseQuotation(allocator, tokenizer, ctx, line);
+                instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = quotation } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+            }
         } else if (std.mem.eql(u8, token, "]")) {
             return ParseError.UnmatchedCloseBracket;
         } else if (std.mem.eql(u8, token, "{")) {
@@ -431,8 +468,21 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
             return Quotation{ .instructions = instrs, .effect = quotation_effect };
         } else if (std.mem.eql(u8, token, "[")) {
             is_first_token = false;
-            const nested = try parseQuotation(allocator, tokenizer, ctx, line);
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = nested } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+            if (ctx) |c| {
+                if (hasParseTimeMarkerInTrail(instructions.items)) {
+                    const old = c.parsing_parse_time_def;
+                    c.parsing_parse_time_def = true;
+                    const nested = try parseQuotation(allocator, tokenizer, ctx, line);
+                    c.parsing_parse_time_def = old;
+                    instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = nested } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                } else {
+                    const nested = try parseQuotation(allocator, tokenizer, ctx, line);
+                    instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = nested } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                }
+            } else {
+                const nested = try parseQuotation(allocator, tokenizer, ctx, line);
+                instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = nested } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+            }
         } else if (std.mem.eql(u8, token, "]")) {
             return ParseError.UnmatchedCloseBracket;
         } else if (std.mem.eql(u8, token, "{")) {
@@ -474,6 +524,13 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
                     if (ctx) |c| {
                         if (c.lookupWord(token)) |word| {
                             if (word.parse_time) {
+                                if (word.parse_time_only and !c.parsing_parse_time_def and c.parse_tokenizer == null) {
+                                    c.parse_diagnostics = .{
+                                        .error_type = "ParseTimeOnly",
+                                        .message = std.fmt.allocPrint(allocator, "'{s}' can only be used in parse-time definitions", .{token}) catch null,
+                                    };
+                                    return ParseError.ParseTimeExecutionError;
+                                }
                                 try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line);
                                 is_first_token = false;
 
@@ -649,6 +706,13 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context, o
                     if (ctx) |c| {
                         if (c.lookupWord(token)) |word| {
                             if (word.parse_time) {
+                                if (word.parse_time_only and !c.parsing_parse_time_def and c.parse_tokenizer == null) {
+                                    c.parse_diagnostics = .{
+                                        .error_type = "ParseTimeOnly",
+                                        .message = std.fmt.allocPrint(allocator, "'{s}' can only be used in parse-time definitions", .{token}) catch null,
+                                    };
+                                    return ParseError.ParseTimeExecutionError;
+                                }
                                 try executeParseTimeWordForArray(c, word, tokenizer, &values, allocator);
                                 continue;
                             }

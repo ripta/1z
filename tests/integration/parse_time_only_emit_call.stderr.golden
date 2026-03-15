@@ -1,0 +1,1 @@
+tests/integration/parse_time_only_emit_call.1z:11: error 'parse-error' cannot emit-call parse-time-only word 'my-pto-ec'

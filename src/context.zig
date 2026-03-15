@@ -137,6 +137,10 @@ pub const Context = struct {
     /// throw an error to prevent yielding mid-load, which would expose
     /// half-defined module frames to other tasks via ancestor traversal.
     in_module_load: bool = false,
+    /// True while parsing a definition body that has a parse-time or
+    /// parse-time-only marker. Used by the parser to allow parse-time-only
+    /// words inside parse-time definitions.
+    parsing_parse_time_def: bool = false,
     /// Cache of loaded modules keyed by canonical file path.
     /// Prevents redundant loading when multiple files `use` the same module.
     module_cache: std.StringHashMapUnmanaged(*value_mod.Module) = .{},
@@ -1970,6 +1974,12 @@ pub const Context = struct {
                     }
 
                     if (self.lookupWord(name)) |word| {
+                        if (word.parse_time_only and self.parse_tokenizer == null) {
+                            self.pushCallFrame(name, instr.line, instr.column);
+                            self.pending_error_message = "parse-time-only word cannot be called at runtime";
+                            return self.wordErrorCleanup(name, error.ParseError);
+                        }
+
                         self.pushCallFrame(name, instr.line, instr.column);
                         self.traceWordExecution(name, instr);
 

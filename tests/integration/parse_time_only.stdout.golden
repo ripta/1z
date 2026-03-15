@@ -14,3 +14,20 @@ Stack: [ ]
 Stack: [ ]
 PASS: both-markers word executed at parse time
 Stack: [ ]
+=== parse-time-only transitive use ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: match{ works in non-parse-time definition
+Stack: [ ]
+PASS: match{ second branch
+Stack: [ ]
+PASS: match{ third branch
+Stack: [ ]
+=== parse-time-only in parse-time definition ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: parse-time-only word in parse-time def works
+Stack: [ ]

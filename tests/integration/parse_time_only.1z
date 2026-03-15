@@ -23,3 +23,27 @@ my-both-word: >word-info markers>> #len 2 "both-markers word has 2 markers" asse
 \ Both-markers word also executes at parse time
 both-result: my-both-word ;
 both-result 99 "both-markers word executed at parse time" assert=
+
+"parse-time-only transitive use" test-section
+
+\ match{ is a parse-time word that internally uses parse-time-only primitives
+\ (parse-values-until, emit-call). It should still work in non-parse-time definitions.
+pto-color: enum{ red: unit green: unit blue: unit } ;
+match-test: [
+  match{
+    pto-color:red:   [ "R" ]
+    pto-color:green: [ "G" ]
+    pto-color:blue:  [ "B" ]
+  }
+] ;
+pto-color:red match-test "R" "match{ works in non-parse-time definition" assert=
+pto-color:green match-test "G" "match{ second branch" assert=
+pto-color:blue match-test "B" "match{ third branch" assert=
+
+"parse-time-only in parse-time definition" test-section
+
+\ A parse-time-only word used inside another parse-time definition is valid
+pto-inner:        parse-time-only [ 77 ] ;
+pto-outer:        parse-time [ pto-inner ] ;
+pto-outer-result: pto-outer ;
+pto-outer-result 77 "parse-time-only word in parse-time def works" assert=

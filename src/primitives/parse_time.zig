@@ -232,6 +232,14 @@ fn nativeEmitCall(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     };
+
+    if (ctx.lookupWord(name)) |word| {
+        if (word.parse_time_only) {
+            helpers.setErrorContext(ctx, "cannot emit-call parse-time-only word '{s}'", .{name});
+            return error.ParseError;
+        }
+    }
+
     try ctx.parse_time_deferred_calls.append(ctx.allocator, name);
 }
 
