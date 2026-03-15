@@ -70,3 +70,40 @@ Stack: [ ]
 Stack: [ ]
 PASS: triple 5
 Stack: [ ]
+=== compile! dup with arithmetic ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: square 5
+Stack: [ ]
+PASS: square -3
+Stack: [ ]
+PASS: square 0
+Stack: [ ]
+=== compile! drop ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: drop-top 10 20
+Stack: [ ]
+=== compile! swap with arithmetic ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: rev-sub 3 10
+Stack: [ ]
+=== compile! over with arithmetic ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ 3 13 ]
+PASS: over-add sum
+Stack: [ 3 ]
+PASS: over-add a preserved
+Stack: [ ]
+=== compile! nip pattern ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: nip 3 10
+Stack: [ ]

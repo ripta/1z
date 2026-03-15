@@ -65,3 +65,37 @@ modulo: compile!
 triple: ( n -- n ) [ 3 * ] ;
 triple: compile!
 5 triple 15 "triple 5" assert=
+
+"compile! dup with arithmetic" test-section
+
+square: ( n -- n ) [ dup * ] ;
+square: compile!
+5 square 25 "square 5" assert=
+-3 square 9 "square -3" assert=
+0 square 0 "square 0" assert=
+
+"compile! drop" test-section
+
+drop-top: ( a b -- a ) [ drop ] ;
+drop-top: compile!
+10 20 drop-top 10 "drop-top 10 20" assert=
+
+"compile! swap with arithmetic" test-section
+
+rev-sub: ( a b -- c ) [ swap - ] ;
+rev-sub: compile!
+3 10 rev-sub 7 "rev-sub 3 10" assert=
+
+"compile! over with arithmetic" test-section
+
+over-add: ( a b -- c d ) [ over + ] ;
+over-add: compile!
+3 10 over-add
+13 "over-add sum" assert=
+3 "over-add a preserved" assert=
+
+"compile! nip pattern" test-section
+
+nip: ( a b -- b ) [ swap drop ] ;
+nip: compile!
+3 10 nip 10 "nip 3 10" assert=

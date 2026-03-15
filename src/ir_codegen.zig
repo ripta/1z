@@ -41,6 +41,15 @@ fn isBinaryOp(name: []const u8) bool {
     return false;
 }
 
+const supported_stack_ops = [_][]const u8{ "dup", "drop", "swap", "over" };
+
+fn isStackOp(name: []const u8) bool {
+    for (supported_stack_ops) |op| {
+        if (std.mem.eql(u8, name, op)) return true;
+    }
+    return false;
+}
+
 /// Layout of Value for use in generated IR code, determined at runtime
 /// since Zig unions don't expose field offsets at comptime.
 const ValueLayout = struct {
@@ -251,11 +260,78 @@ fn emitPushValue(ctx: *c.ir_ctx, val: *const Value, dest_addr: c.ir_ref) void {
     }
 }
 
+/// Copy a full Value's raw bytes between two physical stack slots.
+fn emitCopySlot(ctx: *c.ir_ctx, base_addr: c.ir_ref, src_slot: usize, dest_slot: usize) void {
+    const num_words = ValueLayout.value_size / 8;
+    var i: usize = 0;
+    while (i < num_words) : (i += 1) {
+        const offset = i * 8;
+        const src_off = src_slot * ValueLayout.value_size + offset;
+        const dest_off = dest_slot * ValueLayout.value_size + offset;
+        const src_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, src_off));
+        const word_val = c._ir_LOAD(ctx, c.IR_U64, src_addr);
+        const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, dest_off));
+        c._ir_STORE(ctx, dest_addr, word_val);
+    }
+    var offset = num_words * 8;
+    while (offset < ValueLayout.value_size) : (offset += 1) {
+        const src_off = src_slot * ValueLayout.value_size + offset;
+        const dest_off = dest_slot * ValueLayout.value_size + offset;
+        const src_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, src_off));
+        const byte_val = c._ir_LOAD(ctx, c.IR_U8, src_addr);
+        const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, dest_off));
+        c._ir_STORE(ctx, dest_addr, byte_val);
+    }
+}
+
+/// Swap two physical stack slots by loading all words first, then storing.
+fn emitSwapSlots(ctx: *c.ir_ctx, base_addr: c.ir_ref, slot_a: usize, slot_b: usize) void {
+    const num_words = ValueLayout.value_size / 8;
+    var a_words: [8]c.ir_ref = undefined;
+    var b_words: [8]c.ir_ref = undefined;
+    std.debug.assert(num_words <= a_words.len);
+
+    var i: usize = 0;
+    while (i < num_words) : (i += 1) {
+        const offset = i * 8;
+        const a_off = slot_a * ValueLayout.value_size + offset;
+        const b_off = slot_b * ValueLayout.value_size + offset;
+        const a_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, a_off));
+        const b_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, b_off));
+        a_words[i] = c._ir_LOAD(ctx, c.IR_U64, a_addr);
+        b_words[i] = c._ir_LOAD(ctx, c.IR_U64, b_addr);
+    }
+
+    i = 0;
+    while (i < num_words) : (i += 1) {
+        const offset = i * 8;
+        const a_off = slot_a * ValueLayout.value_size + offset;
+        const b_off = slot_b * ValueLayout.value_size + offset;
+        const a_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, a_off));
+        const b_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, b_off));
+        c._ir_STORE(ctx, a_addr, b_words[i]);
+        c._ir_STORE(ctx, b_addr, a_words[i]);
+    }
+
+    // Handle trailing bytes (if value_size is not a multiple of 8)
+    var offset = num_words * 8;
+    while (offset < ValueLayout.value_size) : (offset += 1) {
+        const a_off = slot_a * ValueLayout.value_size + offset;
+        const b_off = slot_b * ValueLayout.value_size + offset;
+        const a_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, a_off));
+        const b_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, b_off));
+        const a_byte = c._ir_LOAD(ctx, c.IR_U8, a_addr);
+        const b_byte = c._ir_LOAD(ctx, c.IR_U8, b_addr);
+        c._ir_STORE(ctx, a_addr, b_byte);
+        c._ir_STORE(ctx, b_addr, a_byte);
+    }
+}
+
 /// Symbolic stack entry: either a raw i64 payload usable in arithmetic,
-/// or an opaque Value already written to the physical stack.
+/// or an opaque Value already written to the physical stack at a known slot.
 const StackEntry = union(enum) {
     i64_ref: c.ir_ref,
-    raw_value,
+    raw_at_slot: usize,
 };
 
 /// The compiled function signature: operates directly on the per-task stack.
@@ -276,7 +352,6 @@ pub fn compileWord(
 ) IrCodegenError!CompiledWord {
     ValueLayout.ensureInit();
 
-    if (output_count != 1) return IrCodegenError.NotCompilable;
     if (input_count > 8) return IrCodegenError.NotCompilable;
 
     // Validate compilability: only supported call_words are checked here.
@@ -285,7 +360,7 @@ pub fn compileWord(
         switch (instr.op) {
             .push_literal => {},
             .call_word => |name| {
-                if (!isSupportedOp(name)) return IrCodegenError.NotCompilable;
+                if (!isSupportedOp(name) and !isStackOp(name)) return IrCodegenError.NotCompilable;
             },
         }
     }
@@ -363,17 +438,77 @@ pub fn compileWord(
                     const sp_byte_offset = c.ir_const_addr(&ctx, sp * ValueLayout.value_size);
                     const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, sp_byte_offset);
                     emitPushValue(&ctx, &val, dest_addr);
-                    stack[sp] = .raw_value;
+                    stack[sp] = .{ .raw_at_slot = sp };
                     sp += 1;
                 }
             },
             .call_word => |name| {
-                if (std.mem.eql(u8, name, "abs")) {
+                if (std.mem.eql(u8, name, "dup")) {
+                    if (sp < 1) return IrCodegenError.StackUnderflow;
+                    switch (stack[sp - 1]) {
+                        .i64_ref => |ref| {
+                            stack[sp] = .{ .i64_ref = ref };
+                        },
+                        .raw_at_slot => |s| {
+                            emitCopySlot(&ctx, base_addr, s, sp);
+                            stack[sp] = .{ .raw_at_slot = sp };
+                        },
+                    }
+                    sp += 1;
+                } else if (std.mem.eql(u8, name, "drop")) {
+                    if (sp < 1) return IrCodegenError.StackUnderflow;
+                    sp -= 1;
+                } else if (std.mem.eql(u8, name, "swap")) {
+                    if (sp < 2) return IrCodegenError.StackUnderflow;
+                    const top = stack[sp - 1];
+                    const second = stack[sp - 2];
+                    switch (top) {
+                        .i64_ref => {
+                            switch (second) {
+                                .i64_ref => {
+                                    stack[sp - 2] = top;
+                                    stack[sp - 1] = second;
+                                },
+                                .raw_at_slot => |s| {
+                                    emitCopySlot(&ctx, base_addr, s, sp - 1);
+                                    stack[sp - 2] = top;
+                                    stack[sp - 1] = .{ .raw_at_slot = sp - 1 };
+                                },
+                            }
+                        },
+                        .raw_at_slot => {
+                            switch (second) {
+                                .i64_ref => {
+                                    emitCopySlot(&ctx, base_addr, top.raw_at_slot, sp - 2);
+                                    stack[sp - 2] = .{ .raw_at_slot = sp - 2 };
+                                    stack[sp - 1] = second;
+                                },
+                                .raw_at_slot => {
+                                    emitSwapSlots(&ctx, base_addr, top.raw_at_slot, second.raw_at_slot);
+                                    stack[sp - 2] = .{ .raw_at_slot = second.raw_at_slot };
+                                    stack[sp - 1] = .{ .raw_at_slot = top.raw_at_slot };
+                                },
+                            }
+                        },
+                    }
+                } else if (std.mem.eql(u8, name, "over")) {
+                    if (sp < 2) return IrCodegenError.StackUnderflow;
+                    switch (stack[sp - 2]) {
+                        .i64_ref => |ref| {
+                            stack[sp] = .{ .i64_ref = ref };
+                        },
+                        .raw_at_slot => |s| {
+                            emitCopySlot(&ctx, base_addr, s, sp);
+                            stack[sp] = .{ .raw_at_slot = sp };
+                        },
+                    }
+                    sp += 1;
+                } else if (std.mem.eql(u8, name, "abs")) {
                     if (sp < 1) return IrCodegenError.StackUnderflow;
                     sp -= 1;
                     const a = switch (stack[sp]) {
                         .i64_ref => |ref| ref,
-                        .raw_value => return IrCodegenError.NotCompilable,
+                        .raw_at_slot => return IrCodegenError.NotCompilable,
                     };
 
                     const min_val = c.ir_const_i64(&ctx, std.math.minInt(i64));
@@ -400,11 +535,11 @@ pub fn compileWord(
                     sp -= 2;
                     const a = switch (stack[sp]) {
                         .i64_ref => |ref| ref,
-                        .raw_value => return IrCodegenError.NotCompilable,
+                        .raw_at_slot => return IrCodegenError.NotCompilable,
                     };
                     const b = switch (stack[sp + 1]) {
                         .i64_ref => |ref| ref,
-                        .raw_value => return IrCodegenError.NotCompilable,
+                        .raw_at_slot => return IrCodegenError.NotCompilable,
                     };
 
                     if (std.mem.eql(u8, name, "+")) {
@@ -431,17 +566,22 @@ pub fn compileWord(
         }
     }
 
-    // Final stack should have exactly 1 value
-    if (sp != 1) return IrCodegenError.StackShapeMismatch;
+    if (sp != output_count) return IrCodegenError.StackShapeMismatch;
 
-    switch (stack[0]) {
-        .i64_ref => |result_ref| {
-            // Box the i64 result as a fixnum Value at base_addr
-            emitBoxPayload(&ctx, base_addr, tag_offset_const, payload_offset_const, fixnum_tag_const, result_ref);
-        },
-        .raw_value => {
-            // The Value was already written to base_addr by emitPushValue
-        },
+    for (0..sp) |i| {
+        switch (stack[i]) {
+            .i64_ref => |ref| {
+                const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
+                const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, fixnum_tag_const, ref);
+            },
+            .raw_at_slot => |s| {
+                // If the raw value isn't already at its final position, copy it
+                if (s != i) {
+                    emitCopySlot(&ctx, base_addr, s, i);
+                }
+            },
+        }
     }
 
     // Update sp: new_sp = sp_val - input_count + output_count
@@ -892,9 +1032,19 @@ test "reject non-compilable: unsupported word" {
     try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 1, 1));
 }
 
-test "reject output_count != 1" {
-    const instrs = makeInstructions(.{@as(i64, 1)});
-    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 0, 2));
+test "compile with output_count 2" {
+    const instrs = makeInstructions(.{ @as(i64, 10), @as(i64, 20) });
+    const result = try compileWord(&instrs, 0, 2);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    const status = callCompiledValues(func, &values, &sp);
+    try testing.expectEqual(@as(i32, 0), status);
+    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expectEqual(@as(i64, 10), values[0].fixnum);
+    try testing.expectEqual(@as(i64, 20), values[1].fixnum);
 }
 
 test "rem with div-by-zero guard" {
@@ -909,4 +1059,143 @@ test "rem with div-by-zero guard" {
     try testing.expectEqual(@as(i32, 0), callCompiled(func, &.{ -7, 3 }, &out));
     try testing.expectEqual(@as(i64, -1), out);
     try testing.expectEqual(@as(i32, 1), callCompiled(func, &.{ 7, 0 }, &out));
+}
+
+test "compile dup on fixnum" {
+    const instrs = makeInstructions(.{"dup"});
+    const result = try compileWord(&instrs, 1, 2);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    values[0] = .{ .fixnum = 7 };
+    var sp: usize = 1;
+    const status = callCompiledValues(func, &values, &sp);
+    try testing.expectEqual(@as(i32, 0), status);
+    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expectEqual(@as(i64, 7), values[0].fixnum);
+    try testing.expectEqual(@as(i64, 7), values[1].fixnum);
+}
+
+test "compile drop on fixnum" {
+    const instrs = makeInstructions(.{"drop"});
+    const result = try compileWord(&instrs, 2, 1);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values = [_]Value{ .{ .fixnum = 10 }, .{ .fixnum = 20 } };
+    var sp: usize = 2;
+    const status = callCompiledValues(func, &values, &sp);
+    try testing.expectEqual(@as(i32, 0), status);
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expectEqual(@as(i64, 10), values[0].fixnum);
+}
+
+test "compile swap on fixnums" {
+    const instrs = makeInstructions(.{"swap"});
+    const result = try compileWord(&instrs, 2, 2);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values = [_]Value{ .{ .fixnum = 10 }, .{ .fixnum = 20 } };
+    var sp: usize = 2;
+    const status = callCompiledValues(func, &values, &sp);
+    try testing.expectEqual(@as(i32, 0), status);
+    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expectEqual(@as(i64, 20), values[0].fixnum);
+    try testing.expectEqual(@as(i64, 10), values[1].fixnum);
+}
+
+test "compile over on fixnums" {
+    const instrs = makeInstructions(.{"over"});
+    const result = try compileWord(&instrs, 2, 3);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    values[0] = .{ .fixnum = 10 };
+    values[1] = .{ .fixnum = 20 };
+    var sp: usize = 2;
+    const status = callCompiledValues(func, &values, &sp);
+    try testing.expectEqual(@as(i32, 0), status);
+    try testing.expectEqual(@as(usize, 3), sp);
+    try testing.expectEqual(@as(i64, 10), values[0].fixnum);
+    try testing.expectEqual(@as(i64, 20), values[1].fixnum);
+    try testing.expectEqual(@as(i64, 10), values[2].fixnum);
+}
+
+test "compile dup * (square)" {
+    const instrs = makeInstructions(.{ "dup", "*" });
+    const result = try compileWord(&instrs, 1, 1);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var out: i64 = undefined;
+    try testing.expectEqual(@as(i32, 0), callCompiled(func, &.{5}, &out));
+    try testing.expectEqual(@as(i64, 25), out);
+    try testing.expectEqual(@as(i32, 0), callCompiled(func, &.{-3}, &out));
+    try testing.expectEqual(@as(i64, 9), out);
+}
+
+test "compile swap - (reverse subtract)" {
+    const instrs = makeInstructions(.{ "swap", "-" });
+    const result = try compileWord(&instrs, 2, 1);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var out: i64 = undefined;
+    try testing.expectEqual(@as(i32, 0), callCompiled(func, &.{ 3, 10 }, &out));
+    try testing.expectEqual(@as(i64, 7), out);
+}
+
+test "compile swap drop (nip)" {
+    const instrs = makeInstructions(.{ "swap", "drop" });
+    const result = try compileWord(&instrs, 2, 1);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var out: i64 = undefined;
+    try testing.expectEqual(@as(i32, 0), callCompiled(func, &.{ 3, 10 }, &out));
+    try testing.expectEqual(@as(i64, 10), out);
+}
+
+test "compile non-fixnum literal dup" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .string = "hello" } }, .line = 1 },
+        .{ .op = .{ .call_word = "dup" }, .line = 2 },
+    };
+    const result = try compileWord(&instrs, 0, 2);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    const status = callCompiledValues(func, &values, &sp);
+    try testing.expectEqual(@as(i32, 0), status);
+    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expect(values[0] == .string);
+    try testing.expect(std.mem.eql(u8, "hello", values[0].string));
+    try testing.expect(values[1] == .string);
+    try testing.expect(std.mem.eql(u8, "hello", values[1].string));
+}
+
+test "compile non-fixnum literal swap" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .string = "aaa" } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .string = "bbb" } }, .line = 2 },
+        .{ .op = .{ .call_word = "swap" }, .line = 3 },
+    };
+    const result = try compileWord(&instrs, 0, 2);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    const status = callCompiledValues(func, &values, &sp);
+    try testing.expectEqual(@as(i32, 0), status);
+    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expect(values[0] == .string);
+    try testing.expect(std.mem.eql(u8, "bbb", values[0].string));
+    try testing.expect(values[1] == .string);
+    try testing.expect(std.mem.eql(u8, "aaa", values[1].string));
 }
