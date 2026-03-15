@@ -1865,6 +1865,10 @@ int ir_mem_flush(void *ptr, size_t size)
 }
 #else
 
+#if defined(__APPLE__) && defined(__aarch64__)
+#include <pthread.h>
+#endif
+
 #if defined(__linux__) && defined(__x86_64__) && defined(PKEY_DISABLE_WRITE)
 # define HAVE_PKEY_MPROTECT 1
 #endif
@@ -1885,6 +1889,14 @@ static int ir_pkey = 0;
 
 void *ir_mem_mmap(size_t size)
 {
+#if defined(__APPLE__) && defined(__aarch64__)
+	void *ret = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT, -1, 0);
+	if (ret == MAP_FAILED) {
+		return NULL;
+	}
+	pthread_jit_write_protect_np(0);
+	return ret;
+#else
 #ifdef HAVE_PKEY_MPROTECT
 	if (!ir_pkey && pkey_mprotect) {
 		int key = pkey_alloc(0, PKEY_DISABLE_WRITE);
@@ -1916,6 +1928,7 @@ void *ir_mem_mmap(size_t size)
 		ret = NULL;
 	}
 	return ret;
+#endif
 }
 
 int ir_mem_unmap(void *ptr, size_t size)
@@ -1932,6 +1945,10 @@ int ir_mem_unmap(void *ptr, size_t size)
 
 int ir_mem_protect(void *ptr, size_t size)
 {
+#if defined(__APPLE__) && defined(__aarch64__)
+	pthread_jit_write_protect_np(1);
+	return 1;
+#else
 #ifdef HAVE_PKEY_MPROTECT
 	if (ir_pkey > 0) {
 		if (pkey_set(ir_pkey, PKEY_DISABLE_WRITE)) {
@@ -1950,10 +1967,15 @@ int ir_mem_protect(void *ptr, size_t size)
 		return 0;
 	}
 	return 1;
+#endif
 }
 
 int ir_mem_unprotect(void *ptr, size_t size)
 {
+#if defined(__APPLE__) && defined(__aarch64__)
+	pthread_jit_write_protect_np(0);
+	return 1;
+#else
 #ifdef HAVE_PKEY_MPROTECT
 	if (ir_pkey > 0) {
 		if (pkey_set(ir_pkey, PKEY_DISABLE_EXECUTE)) {
@@ -1972,6 +1994,7 @@ int ir_mem_unprotect(void *ptr, size_t size)
 		return 0;
 	}
 	return 1;
+#endif
 }
 
 int ir_mem_flush(void *ptr, size_t size)

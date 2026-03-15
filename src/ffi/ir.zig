@@ -11,10 +11,18 @@ pub const IrError = error{
     CompilationFailed,
 };
 
+pub const JitBuffer = struct {
+    code: *anyopaque,
+    size: usize,
+
+    pub fn deinit(self: JitBuffer) void {
+        ir.ir_discard_code(self.code, self.size);
+    }
+};
+
 /// Compiles a trivial function that adds two i64 values and returns the result.
-/// The returned function pointer is independently allocated and must be freed
-/// with ir.ir_discard_code when no longer needed.
-pub fn compileAdd() IrError!struct { func: *const fn (i64, i64) callconv(.C) i64, code: *anyopaque, size: usize } {
+/// The returned JitBuffer owns the compiled code and must be cleaned up via deinit.
+pub fn compileAdd() IrError!struct { func: *const fn (i64, i64) callconv(.C) i64, buf: JitBuffer } {
     var ctx: c.ir_ctx = undefined;
     c.ir_init(&ctx, c.IR_FUNCTION | c.IR_OPT_FOLDING, c.IR_CONSTS_LIMIT_MIN, c.IR_INSNS_LIMIT_MIN);
     defer c.ir_free(&ctx);
@@ -30,8 +38,7 @@ pub fn compileAdd() IrError!struct { func: *const fn (i64, i64) callconv(.C) i64
     if (code) |ptr| {
         return .{
             .func = @ptrCast(@alignCast(ptr)),
-            .code = ptr,
-            .size = size,
+            .buf = .{ .code = ptr, .size = size },
         };
     }
     return IrError.CompilationFailed;
@@ -39,7 +46,7 @@ pub fn compileAdd() IrError!struct { func: *const fn (i64, i64) callconv(.C) i64
 
 test "compile and execute trivial add via ir" {
     const result = try compileAdd();
-    defer c.ir_discard_code(result.code, result.size);
+    defer result.buf.deinit();
 
     const add = result.func;
     try std.testing.expectEqual(@as(i64, 42), add(17, 25));
