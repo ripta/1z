@@ -29,7 +29,7 @@ Stack: [ ]
 Stack: [ ]
 PASS: native word has no markers
 Stack: [ ]
-PASS: native + has no markers
+PASS: native + has generic marker
 Stack: [ ]
 === native? predicate ===
 Stack: [ ]

@@ -11,6 +11,7 @@ const dispatch_helpers = @import("dispatch_helpers.zig");
 const dispatch_mod = @import("../dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
 const unary_sentinel = dispatch_mod.unary_sentinel;
+const markers_mod = @import("markers.zig");
 
 // =============================================================================
 // Native dispatch entry functions
@@ -75,8 +76,8 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
 }
 
 pub const primitives = [_]Primitive{
-    .{ .name = "inspect", .stack_effect = "value -- string", .doc = "Convert any value to its debug string representation, including quotes for strings.", .func = nativeInspect },
-    .{ .name = ">string", .stack_effect = "value -- string", .doc = "Convert value to string, strings and symbols pass through as plain strings.", .func = nativeAsString },
+    .{ .name = "inspect", .stack_effect = "value -- string", .doc = "Convert any value to its debug string representation, including quotes for strings.", .func = nativeInspect, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = ">string", .stack_effect = "value -- string", .doc = "Convert value to string, strings and symbols pass through as plain strings.", .func = nativeAsString, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = ">symbol", .stack_effect = "string -- symbol", .doc = "Convert string to symbol. The string must be a valid token: non-empty, no whitespace, no leading quote.", .func = nativeToSymbol },
     .{ .name = ">quotation", .stack_effect = "name -- quotation", .doc = "Convert a string or symbol name to a quotation that calls that word. Does not check if the word exists.", .func = nativeToQuotation },
     .{ .name = ">bytes", .stack_effect = "string -- byte-array", .doc = "Convert string to byte array (UTF-8 encoded bytes).", .func = nativeToBytes },

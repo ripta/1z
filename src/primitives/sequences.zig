@@ -13,6 +13,7 @@ const dispatch_helpers = @import("dispatch_helpers.zig");
 const dispatch_mod = @import("../dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
 const unary_sentinel = dispatch_mod.unary_sentinel;
+const markers_mod = @import("markers.zig");
 const sequence = @import("sequence.zig");
 const Iterator = @import("../iterator.zig").Iterator;
 
@@ -460,11 +461,12 @@ pub const primitives = [_]Primitive{
         .stack_effect = "seq -- n",
         .doc = "Get length of sequence. O(1) and non-destructive; does not work on iterators (use #count instead).",
         .func = nativeLen,
+        .markers = &.{@constCast(&markers_mod.generic_marker)},
     },
     // Sequence element access
-    .{ .name = "#nth", .stack_effect = "seq n -- elem", .doc = "Get element at index.", .func = nativeNth },
-    .{ .name = "#first", .stack_effect = "seq -- elem", .doc = "Get first element of sequence.", .func = nativeFirst },
-    .{ .name = "#last", .stack_effect = "seq -- elem", .doc = "Get last element of sequence.", .func = nativeLast },
+    .{ .name = "#nth", .stack_effect = "seq n -- elem", .doc = "Get element at index.", .func = nativeNth, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = "#first", .stack_effect = "seq -- elem", .doc = "Get first element of sequence.", .func = nativeFirst, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = "#last", .stack_effect = "seq -- elem", .doc = "Get last element of sequence.", .func = nativeLast, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     // Sequence transformations
     .{ .name = "#each", .stack_effect = "seq quot: ( elem -- ) --", .doc = "Execute quotation for each element of sequence.", .func = nativeEach },
     .{ .name = "#map", .stack_effect = "seq quot: ( elem -- elem' ) -- seq'", .doc = "Transform each element of sequence using quotation.", .func = nativeMap },
@@ -496,7 +498,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "#in?", .stack_effect = "seq elem -- ?", .doc = "Test if sequence contains element (substring test for strings).", .func = nativeIn },
     .{ .name = "#index-of", .stack_effect = "seq elem -- n/f", .doc = "Find index of element, or f if not found.", .func = nativeIndexOf },
     // Freeze
-    .{ .name = "freeze", .stack_effect = "vector -- array", .doc = "Convert a vector to an array (copy semantics).", .func = nativeFreeze },
+    .{ .name = "freeze", .stack_effect = "vector -- array", .doc = "Convert a vector to an array (copy semantics).", .func = nativeFreeze, .markers = &.{@constCast(&markers_mod.generic_marker)} },
 };
 
 /// #len ( seq -- n ) - Get length of sequence

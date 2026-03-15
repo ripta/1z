@@ -11,6 +11,7 @@ const dispatch_helpers = @import("dispatch_helpers.zig");
 const dispatch_mod = @import("../dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
 const unary_sentinel = dispatch_mod.unary_sentinel;
+const markers_mod = @import("markers.zig");
 
 const popFixnum = helpers.popFixnum;
 const popNumber = helpers.popNumber;
@@ -48,30 +49,35 @@ pub const primitives = [_]Primitive{
         .stack_effect = "a b -- a+b",
         .doc = "Add two numbers. Promotes to bignum on fixnum overflow, or to float if either operand is a float.",
         .func = nativeAdd,
+        .markers = &.{@constCast(&markers_mod.generic_marker)},
     },
     .{
         .name = "-",
         .stack_effect = "a b -- a-b",
         .doc = "Subtract: a minus b. Promotes to bignum on fixnum overflow, or to float if either operand is a float.",
         .func = nativeSub,
+        .markers = &.{@constCast(&markers_mod.generic_marker)},
     },
     .{
         .name = "*",
         .stack_effect = "a b -- a*b",
         .doc = "Multiply two numbers. Promotes to bignum on fixnum overflow, or to float if either operand is a float.",
         .func = nativeMul,
+        .markers = &.{@constCast(&markers_mod.generic_marker)},
     },
     .{
         .name = "/",
         .stack_effect = "a b -- a/b",
         .doc = "Divide: a divided by b. Truncating integer division; ratio library registers dispatch methods for inexact promotion. IEEE 754 division for floats.",
         .func = nativeDiv,
+        .markers = &.{@constCast(&markers_mod.generic_marker)},
     },
     .{
         .name = "%",
         .stack_effect = "a b -- a%b",
         .doc = "Modulo for fixnums and floats. Promotes to float if either operand is a float.",
         .func = nativeMod,
+        .markers = &.{@constCast(&markers_mod.generic_marker)},
     },
     // Integer-only truncating division and remainder
     .{ .name = "div", .stack_effect = "a b -- q", .doc = "Truncating integer division toward zero. Integer-only.", .func = nativeTruncDiv },
@@ -82,16 +88,16 @@ pub const primitives = [_]Primitive{
     .{ .name = "-%", .stack_effect = "a b -- a-b", .doc = "Subtract two fixnums (a minus b) with wraparound on overflow.", .func = nativeSubWrap },
     .{ .name = "*%", .stack_effect = "a b -- a*b", .doc = "Multiply two fixnums with wraparound on overflow.", .func = nativeMulWrap },
     // Conversions
-    .{ .name = ">float", .stack_effect = "x -- f", .doc = "Convert fixnum or string to float. Floats pass through. Throws on failure.", .func = nativeToFloat },
-    .{ .name = ">integer", .stack_effect = "f -- n", .doc = "Convert float to fixnum, truncating toward zero. Fixnums pass through. Throws on NaN or infinity.", .func = nativeToInteger },
+    .{ .name = ">float", .stack_effect = "x -- f", .doc = "Convert fixnum or string to float. Floats pass through. Throws on failure.", .func = nativeToFloat, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = ">integer", .stack_effect = "f -- n", .doc = "Convert float to fixnum, truncating toward zero. Fixnums pass through. Throws on NaN or infinity.", .func = nativeToInteger, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = "float-parts", .stack_effect = "f -- mantissa exponent sign", .doc = "Decompose an IEEE 754 double into mantissa, exponent, and sign. value = sign * mantissa * 2^exponent. Throws on NaN or infinity.", .func = nativeFloatParts },
     // Unary
-    .{ .name = "abs", .stack_effect = "n -- n", .doc = "Absolute value. Works on fixnums and floats.", .func = nativeAbs },
+    .{ .name = "abs", .stack_effect = "n -- n", .doc = "Absolute value. Works on fixnums and floats.", .func = nativeAbs, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     // Comparators
-    .{ .name = "=", .stack_effect = "a b -- ?", .doc = "Equality comparison.", .func = nativeEq },
+    .{ .name = "=", .stack_effect = "a b -- ?", .doc = "Equality comparison.", .func = nativeEq, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = "(=)", .stack_effect = "a b -- ?", .doc = "Inner equality: unwraps one layer of tagged values, then compares.", .func = nativeInnerEq },
-    .{ .name = "<", .stack_effect = "a b -- ?", .doc = "Less than.", .func = nativeLt },
-    .{ .name = ">", .stack_effect = "a b -- ?", .doc = "Greater than.", .func = nativeGt },
+    .{ .name = "<", .stack_effect = "a b -- ?", .doc = "Less than.", .func = nativeLt, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = ">", .stack_effect = "a b -- ?", .doc = "Greater than.", .func = nativeGt, .markers = &.{@constCast(&markers_mod.generic_marker)} },
 };
 
 // =============================================================================

@@ -2,7 +2,7 @@ Stack: [ ]
 double ( n -- n ) \compound
 Stack: [ ]
 Add two numbers. Promotes to bignum on fixnum overflow, or to float if either operand is a float.
-+ ( a b -- a+b ) \native
++ ( a b -- a+b ) [<marker:generic>] \native
 
   method{ bignum fixnum }
   method{ bignum bignum }

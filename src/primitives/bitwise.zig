@@ -10,19 +10,20 @@ const dispatch_helpers = @import("dispatch_helpers.zig");
 const dispatch_mod = @import("../dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
 const unary_sentinel = dispatch_mod.unary_sentinel;
+const markers_mod = @import("markers.zig");
 
 const demoteBignum = helpers.demoteBignum;
 const ensureBignum = helpers.ensureBignum;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "bitand", .stack_effect = "a b -- a&b", .doc = "Bitwise AND. Works on fixnums and bignums with two's complement semantics.", .func = nativeBitand },
-    .{ .name = "bitor", .stack_effect = "a b -- a|b", .doc = "Bitwise OR. Works on fixnums and bignums with two's complement semantics.", .func = nativeBitor },
-    .{ .name = "bitxor", .stack_effect = "a b -- a^b", .doc = "Bitwise XOR. Works on fixnums and bignums with two's complement semantics.", .func = nativeBitxor },
-    .{ .name = "bitnot", .stack_effect = "a -- ~a", .doc = "Bitwise NOT (two's complement): ~x = -(x+1). Works on fixnums and bignums.", .func = nativeBitnot },
-    .{ .name = "shift-left", .stack_effect = "n count -- n'", .doc = "Left shift by count bits. Count must be a non-negative fixnum. Promotes to bignum on overflow.", .func = nativeShiftLeft },
-    .{ .name = "shift-right", .stack_effect = "n count -- n'", .doc = "Arithmetic (sign-extending) right shift by count bits. Count must be a non-negative fixnum.", .func = nativeShiftRight },
-    .{ .name = "ushift-right", .stack_effect = "n count -- n'", .doc = "Logical (zero-filling) right shift. Fixnum-only; throws on bignum.", .func = nativeUshiftRight },
-    .{ .name = "shift", .stack_effect = "n count -- n'", .doc = "Shift: positive count = left shift, negative count = arithmetic right shift.", .func = nativeShift },
+    .{ .name = "bitand", .stack_effect = "a b -- a&b", .doc = "Bitwise AND. Works on fixnums and bignums with two's complement semantics.", .func = nativeBitand, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = "bitor", .stack_effect = "a b -- a|b", .doc = "Bitwise OR. Works on fixnums and bignums with two's complement semantics.", .func = nativeBitor, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = "bitxor", .stack_effect = "a b -- a^b", .doc = "Bitwise XOR. Works on fixnums and bignums with two's complement semantics.", .func = nativeBitxor, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = "bitnot", .stack_effect = "a -- ~a", .doc = "Bitwise NOT (two's complement): ~x = -(x+1). Works on fixnums and bignums.", .func = nativeBitnot, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = "shift-left", .stack_effect = "n count -- n'", .doc = "Left shift by count bits. Count must be a non-negative fixnum. Promotes to bignum on overflow.", .func = nativeShiftLeft, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = "shift-right", .stack_effect = "n count -- n'", .doc = "Arithmetic (sign-extending) right shift by count bits. Count must be a non-negative fixnum.", .func = nativeShiftRight, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = "ushift-right", .stack_effect = "n count -- n'", .doc = "Logical (zero-filling) right shift. Fixnum-only; throws on bignum.", .func = nativeUshiftRight, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = "shift", .stack_effect = "n count -- n'", .doc = "Shift: positive count = left shift, negative count = arithmetic right shift.", .func = nativeShift, .markers = &.{@constCast(&markers_mod.generic_marker)} },
 };
 
 // =============================================================================

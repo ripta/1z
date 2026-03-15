@@ -3,7 +3,7 @@ dup ( a -- a a ) \native
 
 Stack: [ ]
 Add two numbers. Promotes to bignum on fixnum overflow, or to float if either operand is a float.
-+ ( a b -- a+b ) \native
++ ( a b -- a+b ) [<marker:generic>] \native
 
   method{ bignum fixnum }
   method{ bignum bignum }
@@ -20,7 +20,7 @@ if ( ..a ? true-quot false-quot -- ..b ) [<marker:branch-combinator>] \native
 
 Stack: [ ]
 Get length of sequence. O(1) and non-destructive; does not work on iterators (use #count instead).
-#len ( seq -- n ) \native
+#len ( seq -- n ) [<marker:generic>] \native
 
   method{ array }
   method{ vector }

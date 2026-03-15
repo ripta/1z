@@ -15,7 +15,7 @@ nip ( a b -- b ) \compound
 
 Stack: [ ]
 Absolute value. Works on fixnums and floats.
-abs ( n -- n ) \native
+abs ( n -- n ) [<marker:generic>] \native
 
   method{ float }
   method{ bignum }

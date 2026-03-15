@@ -31,9 +31,10 @@ multi-marker-word: mk1 mk2 mk3 [ 20 ] ;
 
 "word-markers on native words" test-section
 
-\ Native words should have no markers
+\ Non-dispatching native words should have no markers
 "dup" word-markers #len 0 "native word has no markers" assert=
-"+" word-markers #len 0 "native + has no markers" assert=
+\ Dispatching native words carry the generic marker
+"+" word-markers #len 1 "native + has generic marker" assert=
 
 "native? predicate" test-section
 
