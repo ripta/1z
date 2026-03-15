@@ -22,6 +22,8 @@ pub const WordDefinition = struct {
     name: []const u8,
     /// Whether this word is a parse-time word.
     parse_time: bool = false,
+    /// Whether this word can only be called during parse time.
+    parse_time_only: bool = false,
     /// Whether this word was imported from another module.
     imported: bool = false,
     /// Stack effect annotation for this word, if any.

@@ -52,6 +52,7 @@ pub const Primitive = struct {
     doc: ?[]const u8 = null,
     func: NativeFn,
     parse_time: bool = false,
+    parse_time_only: bool = false,
     effect_transparent: bool = false,
     markers: []const *Marker = &.{},
 };

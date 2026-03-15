@@ -1,0 +1,25 @@
+\ Test parse-time-only marker and implication semantics
+
+use "testing" ;
+
+"parse-time-only marker" test-section
+
+\ The parse-time-only marker is pushable
+parse-time-only marker? "parse-time-only is a marker" assert-true
+
+\ A word with parse-time-only gets the marker attached
+my-pto-word: parse-time-only [ 42 ] ;
+my-pto-word: >word-info markers>> #len 1 "parse-time-only word has 1 marker" assert=
+
+\ parse-time-only implies parse-time: the word executes at parse time
+\ (if it weren't parse-time, we couldn't use it in a word definition context)
+pto-result: my-pto-word ;
+pto-result 42 "parse-time-only word executed at parse time" assert=
+
+\ A word with both parse-time and parse-time-only works (redundant but valid)
+my-both-word: parse-time parse-time-only [ 99 ] ;
+my-both-word: >word-info markers>> #len 2 "both-markers word has 2 markers" assert=
+
+\ Both-markers word also executes at parse time
+both-result: my-both-word ;
+both-result 99 "both-markers word executed at parse time" assert=

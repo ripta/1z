@@ -379,7 +379,11 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     if (mk == @as(*const Marker, &markers_mod.parse_time_marker)) break true;
                 } else false;
 
-                try enforceRequireDoc(ctx, name, doc_val != null, has_parse_time, false, false);
+                const has_parse_time_only = for (collected_markers.items) |mk| {
+                    if (mk == @as(*const Marker, &markers_mod.parse_time_only_marker)) break true;
+                } else false;
+
+                try enforceRequireDoc(ctx, name, doc_val != null, has_parse_time or has_parse_time_only, false, false);
 
                 const name_copy = try alloc.dupe(u8, name);
 
@@ -413,7 +417,8 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
 
                 try ctx.defineWord(name_copy, WordDefinition{
                     .name = name_copy,
-                    .parse_time = has_parse_time,
+                    .parse_time = has_parse_time or has_parse_time_only,
+                    .parse_time_only = has_parse_time_only,
                     .stack_effect = stack_effect_val,
                     .markers = markers_slice,
                     .doc = doc_val,

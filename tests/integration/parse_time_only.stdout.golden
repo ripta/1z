@@ -1,0 +1,16 @@
+=== parse-time-only marker ===
+Stack: [ ]
+PASS: parse-time-only is a marker
+Stack: [ ]
+Stack: [ ]
+PASS: parse-time-only word has 1 marker
+Stack: [ ]
+Stack: [ ]
+PASS: parse-time-only word executed at parse time
+Stack: [ ]
+Stack: [ ]
+PASS: both-markers word has 2 markers
+Stack: [ ]
+Stack: [ ]
+PASS: both-markers word executed at parse time
+Stack: [ ]
