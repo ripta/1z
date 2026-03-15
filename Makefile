@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test unit-test integration-test fmt-test update-golden update-fmt-golden clean help
+.PHONY: all build release run fmt test unit-test integration-test fmt-test update-golden update-fmt-golden benchmark clean help
 
 SHELL := /bin/bash
 
@@ -36,6 +36,11 @@ update-golden: ## Update integration test golden files
 
 update-fmt-golden: ## Update formatter test golden files
 	timeout $(TIMEOUT) zig build update-fmt-golden
+
+BENCHMARK_FILES := $(wildcard tests/benchmark/*.1z)
+
+benchmark: build ## Run benchmarks
+	@for f in $(BENCHMARK_FILES); do echo "--- $$f ---"; ./zig-out/bin/1z "$$f"; echo; done
 
 clean: ## Remove build artifacts
 	rm -rf zig-out .zig-cache

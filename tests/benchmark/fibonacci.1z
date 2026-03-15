@@ -5,7 +5,7 @@ use "memo" ;
 
 \ Naive recursive fibonacci (exponential time complexity)
 \ This is intentionally slow to stress test the interpreter
-fib: ( n -- fib(n) ) [
+fib: stack-recursive ( n -- fib(n) ) [
   dup 2 < [ ] [
     dup 1 - fib swap 2 - fib +
   ]
@@ -29,7 +29,7 @@ fib-iter: ( n -- fib(n) ) [
 ] ;
 
 \ Memoized recursive fibonacci (linear time via caching)
-fib-memo: ( n -- fib(n) ) [
+fib-memo: stack-recursive ( n -- fib(n) ) [
   dup inspect memo?
   [ swap drop ]
   [
