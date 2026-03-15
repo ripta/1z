@@ -81,3 +81,50 @@ add: method{ area area } [ unmake-area swap unmake-area + >area ] ;
 
 \ Repeat the 5th type pair
 4 >area 6 >area add unmake-area 10 "mega repeat: area" assert=
+
+\ ---------------------------------------------------------------
+\ Native arithmetic PIC: +, -, *, / on fixnums
+\ ---------------------------------------------------------------
+
+\ Repeated native + on fixnums (PIC populates then hits)
+3 4 + 7 "native + fixnum" assert=
+10 20 + 30 "native + fixnum repeat" assert=
+
+\ Mixed native types: fixnum + float
+3 4.0 + 7.0 "native + fixnum+float" assert=
+3.0 4 + 7.0 "native + float+fixnum" assert=
+
+\ Other arithmetic operators
+10 3 - 7 "native - fixnum" assert=
+5 6 * 30 "native * fixnum" assert=
+20 4 / 5 "native / fixnum" assert=
+
+\ Repeated to exercise PIC hits
+10 3 - 7 "native - fixnum repeat" assert=
+5 6 * 30 "native * fixnum repeat" assert=
+
+\ ---------------------------------------------------------------
+\ Native comparison PIC: =, <, >
+\ ---------------------------------------------------------------
+
+3 3 = t "native = fixnum" assert=
+3 4 = f "native = fixnum neq" assert=
+3 4 < t "native < fixnum" assert=
+4 3 > t "native > fixnum" assert=
+
+\ Repeated comparisons (PIC hits)
+5 5 = t "native = fixnum repeat" assert=
+1 2 < t "native < fixnum repeat" assert=
+9 1 > t "native > fixnum repeat" assert=
+
+\ Mixed type comparisons
+3 3.0 = t "native = fixnum+float" assert=
+3 4.0 < t "native < fixnum+float" assert=
+4.0 3 > t "native > float+fixnum" assert=
+
+\ ---------------------------------------------------------------
+\ User-defined dispatch still works after native PIC entries cached
+\ ---------------------------------------------------------------
+
+1 >duration 2 >duration add unmake-duration 3 "user dispatch after native PIC" assert=
+5 >weight 8 >weight add unmake-weight 13 "user dispatch weight after native PIC" assert=

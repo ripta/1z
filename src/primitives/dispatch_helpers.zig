@@ -119,7 +119,39 @@ pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
     const a = try ctx.stack.peekN(1);
     const b = try ctx.stack.peek();
 
+    if (ctx.current_pic_entry) |cache| {
+        if (!cache.megamorphic) {
+            if (cache.count > 0 and cache.generation != ctx.dispatch.generation) {
+                cache.count = 0;
+            } else if (cache.count > 0) {
+                const a_type = dispatch_mod.dispatchTypeName(a);
+                const b_type = dispatch_mod.dispatchTypeName(b);
+                if (cache.lookup(a_type, b_type)) |entry| {
+                    if (entry.unwrap_a or entry.unwrap_b) {
+                        try autoUnwrapBinaryOperands(ctx, entry.unwrap_a, entry.unwrap_b);
+                    }
+                    try executeDispatchBody(ctx, entry.entry.body);
+                    return true;
+                }
+            }
+        }
+    }
+
     if (lookupBinaryWithFallback(ctx, word_name, a, b)) |result| {
+        if (ctx.current_pic_entry) |cache| {
+            if (!cache.megamorphic) {
+                const a_type = dispatch_mod.dispatchTypeName(a);
+                const b_type = dispatch_mod.dispatchTypeName(b);
+                cache.insert(.{
+                    .type_a = a_type,
+                    .type_b = b_type,
+                    .entry = result.entry,
+                    .unwrap_a = result.unwrap_a,
+                    .unwrap_b = result.unwrap_b,
+                });
+                cache.generation = ctx.dispatch.generation;
+            }
+        }
         if (result.unwrap_a or result.unwrap_b) {
             try autoUnwrapBinaryOperands(ctx, result.unwrap_a, result.unwrap_b);
         }
@@ -143,7 +175,37 @@ pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
 
     const a = try ctx.stack.peek();
 
+    if (ctx.current_pic_entry) |cache| {
+        if (!cache.megamorphic) {
+            if (cache.count > 0 and cache.generation != ctx.dispatch.generation) {
+                cache.count = 0;
+            } else if (cache.count > 0) {
+                const a_type = dispatch_mod.dispatchTypeName(a);
+                if (cache.lookup(a_type, "")) |entry| {
+                    if (entry.unwrap_a) {
+                        try autoUnwrapTopOperand(ctx);
+                    }
+                    try executeDispatchBody(ctx, entry.entry.body);
+                    return true;
+                }
+            }
+        }
+    }
+
     if (lookupUnaryWithFallback(ctx, word_name, a)) |result| {
+        if (ctx.current_pic_entry) |cache| {
+            if (!cache.megamorphic) {
+                const a_type = dispatch_mod.dispatchTypeName(a);
+                cache.insert(.{
+                    .type_a = a_type,
+                    .type_b = "",
+                    .entry = result.entry,
+                    .unwrap_a = result.unwrap_a,
+                    .unwrap_b = false,
+                });
+                cache.generation = ctx.dispatch.generation;
+            }
+        }
         if (result.unwrap_a) {
             try autoUnwrapTopOperand(ctx);
         }

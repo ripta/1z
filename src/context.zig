@@ -17,7 +17,9 @@ const dispatch_mod = @import("dispatch.zig");
 const DispatchEntry = dispatch_mod.DispatchEntry;
 const DispatchTable = dispatch_mod.DispatchTable;
 
-const PicTable = @import("pic.zig").PicTable;
+const pic_mod = @import("pic.zig");
+const PicTable = pic_mod.PicTable;
+const PolymorphicCache = pic_mod.PolymorphicCache;
 const JitDispatchTable = @import("jit_dispatch.zig").JitDispatchTable;
 const ir_codegen = @import("ir_codegen.zig");
 const Scheduler = @import("scheduler.zig").Scheduler;
@@ -180,6 +182,9 @@ pub const Context = struct {
     /// PIC cache mapping instruction slice pointers to their PIC tables.
     /// Lazily populated on first generic dispatch through a compound word body.
     pic_cache: std.AutoHashMapUnmanaged(usize, *PicTable) = .{},
+    /// PIC entry for the current instruction, threaded through so native
+    /// operators (arithmetic, comparison) can use it without signature changes.
+    current_pic_entry: ?*PolymorphicCache = null,
     /// Shared scheduler for green thread contexts. Null for the root context.
     scheduler: ?*Scheduler = null,
     /// Enum registry mapping enum names to their variant VirtualType pointers.
@@ -2095,6 +2100,8 @@ pub const Context = struct {
                                 },
                                 .native => |func| {
                                     self.tail_call_instructions = null;
+                                    self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
+                                    defer self.current_pic_entry = null;
                                     if (func(self)) |_| {
                                         try self.wordSuccessCleanup(name, word.stack_effect);
                                     } else |err| {
@@ -2126,6 +2133,11 @@ pub const Context = struct {
                             }
 
                             const callee_pic = if (word.action == .compound) self.getOrAllocPicTable(word.action.compound) else null;
+
+                            if (word.action == .native) {
+                                self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
+                            }
+                            defer self.current_pic_entry = null;
 
                             const result = blk: {
                                 if (word.source_module) |mod| {

@@ -61,3 +61,45 @@ PASS: mega fallback: speed
 Stack: [ ]
 PASS: mega repeat: area
 Stack: [ ]
+PASS: native + fixnum
+Stack: [ ]
+PASS: native + fixnum repeat
+Stack: [ ]
+PASS: native + fixnum+float
+Stack: [ ]
+PASS: native + float+fixnum
+Stack: [ ]
+PASS: native - fixnum
+Stack: [ ]
+PASS: native * fixnum
+Stack: [ ]
+PASS: native / fixnum
+Stack: [ ]
+PASS: native - fixnum repeat
+Stack: [ ]
+PASS: native * fixnum repeat
+Stack: [ ]
+PASS: native = fixnum
+Stack: [ ]
+PASS: native = fixnum neq
+Stack: [ ]
+PASS: native < fixnum
+Stack: [ ]
+PASS: native > fixnum
+Stack: [ ]
+PASS: native = fixnum repeat
+Stack: [ ]
+PASS: native < fixnum repeat
+Stack: [ ]
+PASS: native > fixnum repeat
+Stack: [ ]
+PASS: native = fixnum+float
+Stack: [ ]
+PASS: native < fixnum+float
+Stack: [ ]
+PASS: native > float+fixnum
+Stack: [ ]
+PASS: user dispatch after native PIC
+Stack: [ ]
+PASS: user dispatch weight after native PIC
+Stack: [ ]
