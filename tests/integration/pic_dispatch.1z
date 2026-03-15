@@ -1,0 +1,42 @@
+\ PIC dispatch: verify that polymorphic inline caching
+\ does not change the observable behavior of generic dispatch.
+
+use "testing" ;
+
+duration: virtual{ fixnum } ;
+weight: virtual{ fixnum } ;
+
+add: generic [ ] ;
+add: method{ duration duration } [ unmake-duration swap unmake-duration + >duration ] ;
+add: method{ weight weight } [ unmake-weight swap unmake-weight + >weight ] ;
+
+\ Binary dispatch on user types (PIC populates on first call)
+3 >duration 4 >duration add unmake-duration 7 "binary dispatch duration" assert=
+
+\ Same types again (PIC should hit)
+10 >duration 20 >duration add unmake-duration 30 "binary dispatch duration repeat" assert=
+
+\ Different types (PIC miss, re-populate)
+5 >weight 8 >weight add unmake-weight 13 "binary dispatch weight" assert=
+
+\ Back to first type (PIC miss again, monomorphic can only cache one)
+1 >duration 2 >duration add unmake-duration 3 "binary dispatch duration again" assert=
+
+\ Unary generic dispatch
+show: generic [ ] ;
+show: method{ fixnum } [ inspect ] ;
+show: method{ duration } [ unmake-duration inspect "d" #append ] ;
+
+42 show "42" "unary dispatch fixnum" assert=
+7 >duration show "7d" "unary dispatch duration" assert=
+
+\ Repeated unary dispatch
+100 show "100" "unary dispatch fixnum repeat" assert=
+99 >duration show "99d" "unary dispatch duration repeat" assert=
+
+\ Method registration after PIC is populated (generation bump invalidates cache)
+show: method{ weight } [ unmake-weight inspect "w" #append ] ;
+5 >weight show "5w" "unary dispatch after new method" assert=
+
+\ Previous methods still work after new registration
+42 show "42" "unary dispatch fixnum after new method" assert=

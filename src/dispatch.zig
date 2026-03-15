@@ -130,6 +130,8 @@ pub const DispatchTable = struct {
     entries: std.HashMapUnmanaged(DispatchKey, DispatchEntry, DispatchKeyContext, 80),
     native_entries: std.HashMapUnmanaged(DispatchKey, DispatchEntry, DispatchKeyContext, 80),
     allocator: Allocator,
+    /// Incremented on every method registration, used for PIC invalidation.
+    generation: u32 = 0,
 
     pub fn init(allocator: Allocator) DispatchTable {
         return .{
@@ -152,6 +154,7 @@ pub const DispatchTable = struct {
             return error.DuplicateMethod;
         }
         gop.value_ptr.* = entry;
+        self.generation +%= 1;
     }
 
     /// Look up a binary dispatch entry. Tries in precedence order:
@@ -468,4 +471,26 @@ test "registerNative duplicate returns DuplicateMethod" {
     try table.registerNative("+", "fixnum", "fixnum", dummyNativeFn);
     const result = table.registerNative("+", "fixnum", "fixnum", dummyNativeFn);
     try std.testing.expectError(error.DuplicateMethod, result);
+}
+
+test "register increments generation counter" {
+    var table = DispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    try std.testing.expectEqual(@as(u32, 0), table.generation);
+
+    const body = &[_]value_mod.Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
+    try table.register(
+        .{ .word_name = "+", .type_a = "fixnum", .type_b = "fixnum" },
+        .{ .body = .{ .quotation = body } },
+        false,
+    );
+    try std.testing.expectEqual(@as(u32, 1), table.generation);
+
+    try table.register(
+        .{ .word_name = "+", .type_a = "fixnum", .type_b = "fixnum" },
+        .{ .body = .{ .quotation = body } },
+        true,
+    );
+    try std.testing.expectEqual(@as(u32, 2), table.generation);
 }

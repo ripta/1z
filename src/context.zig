@@ -17,6 +17,7 @@ const dispatch_mod = @import("dispatch.zig");
 const DispatchEntry = dispatch_mod.DispatchEntry;
 const DispatchTable = dispatch_mod.DispatchTable;
 
+const PicTable = @import("pic.zig").PicTable;
 const JitDispatchTable = @import("jit_dispatch.zig").JitDispatchTable;
 const ir_codegen = @import("ir_codegen.zig");
 const Scheduler = @import("scheduler.zig").Scheduler;
@@ -176,6 +177,9 @@ pub const Context = struct {
     dispatch: DispatchTable,
     /// JIT dispatch table mapping word IDs to compiled code pointers.
     jit_dispatch: JitDispatchTable,
+    /// PIC cache mapping instruction slice pointers to their PIC tables.
+    /// Lazily populated on first generic dispatch through a compound word body.
+    pic_cache: std.AutoHashMapUnmanaged(usize, *PicTable) = .{},
     /// Shared scheduler for green thread contexts. Null for the root context.
     scheduler: ?*Scheduler = null,
     /// Enum registry mapping enum names to their variant VirtualType pointers.
@@ -391,6 +395,12 @@ pub const Context = struct {
         self.resource_type_values.deinit(self.allocator);
         self.dispatch.deinit();
         self.jit_dispatch.deinit();
+        var pic_iter = self.pic_cache.iterator();
+        while (pic_iter.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.pic_cache.deinit(self.allocator);
         self.arena.deinit();
         self.dictionary.deinit();
         self.stack.deinit();
@@ -722,6 +732,27 @@ pub const Context = struct {
         return null;
     }
 
+    /// Get or lazily allocate a PIC table for an instruction slice.
+    /// The instruction slice pointer serves as a stable identity key,
+    /// since compound word bodies are arena-allocated and never move.
+    fn getOrAllocPicTable(self: *Context, instrs: []const Instruction) ?*PicTable {
+        if (instrs.len == 0) return null;
+        const key = @intFromPtr(instrs.ptr);
+        if (self.pic_cache.get(key)) |pt| return pt;
+
+        const pt = self.allocator.create(PicTable) catch return null;
+        pt.* = PicTable.init(self.allocator, instrs.len) catch {
+            self.allocator.destroy(pt);
+            return null;
+        };
+        self.pic_cache.put(self.allocator, key, pt) catch {
+            pt.deinit();
+            self.allocator.destroy(pt);
+            return null;
+        };
+        return pt;
+    }
+
     /// Determine where a word was found during lookup, mirroring the
     /// search order of `lookupWord`. Used only when trace_resolve is active.
     fn lookupWordSource(self: *const Context, name: []const u8) trace_mod.ResolveSource {
@@ -945,7 +976,7 @@ pub const Context = struct {
 
             switch (module_word.action) {
                 .native => |func| try func(self),
-                .compound => |instrs| try self.executeInstructions(instrs),
+                .compound => |instrs| try self.executeInstructions(instrs, null),
             }
         } else {
             return ExecutionError.UnknownWord;
@@ -994,7 +1025,7 @@ pub const Context = struct {
                         }
                     }
 
-                    try self.executeInstructions(instrs);
+                    try self.executeInstructions(instrs, null);
                 },
                 .native => |func| try func(self),
             }
@@ -1749,7 +1780,13 @@ pub const Context = struct {
     /// Contains the TCO loop: when executeInstructions signals a tail call,
     /// this function pops the dangling call frame and loops with new instructions.
     pub fn executeQuotation(self: *Context, quotation: Quotation) anyerror!void {
+        return self.executeQuotationWithPic(quotation, null);
+    }
+
+    /// Execute a quotation with an optional PIC table for inline caching.
+    fn executeQuotationWithPic(self: *Context, quotation: Quotation, pic_table: ?*PicTable) anyerror!void {
         var current_instructions = quotation.instructions;
+        var current_pic = pic_table;
         var current_module: ?*const value_mod.Module = null;
         var owns_frame = false;
 
@@ -1768,7 +1805,7 @@ pub const Context = struct {
                 owns_frame = true;
             }
 
-            const exec_result = self.executeInstructions(current_instructions);
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
             exec_result catch |err| {
                 if (owns_frame) {
                     if (self.trace.trace_modules) {
@@ -1788,6 +1825,9 @@ pub const Context = struct {
                 self.popCallFrame();
                 current_instructions = tci;
                 self.tail_call_instructions = null;
+                // PIC table is per-word-body; on tail call to a different word,
+                // the PIC table no longer applies.
+                current_pic = null;
 
                 const new_module = self.tail_call_module;
                 self.tail_call_module = null;
@@ -1852,7 +1892,7 @@ pub const Context = struct {
         defer self.popLocalFrame();
 
         const depth_before = self.stack.depth();
-        try self.executeInstructions(quotation.instructions);
+        try self.executeInstructions(quotation.instructions, null);
 
         // If tail call is pending, skip the stack-effect validation and propagate upward
         if (self.tail_call_instructions != null) {
@@ -1956,7 +1996,7 @@ pub const Context = struct {
     ///
     /// Supports tail call optimization: i.e., when the last instruction is a
     /// compound `call_word`, sets `tail_call_instructions` instead of recursing.
-    fn executeInstructions(self: *Context, instructions: []const Instruction) anyerror!void {
+    fn executeInstructions(self: *Context, instructions: []const Instruction, pic_table: ?*PicTable) anyerror!void {
         for (instructions, 0..) |instr, idx| {
             if (self.debugger) |dbg| {
                 if (try dbg.shouldPause(instr, self)) {
@@ -2012,7 +2052,8 @@ pub const Context = struct {
                             };
 
                             if (has_generic) {
-                                const dispatched = dispatch_helpers.tryDispatchGeneric(self, name) catch |err|
+                                const pic_entry = if (pic_table) |pt| pt.get(idx) else null;
+                                const dispatched = dispatch_helpers.tryDispatchGenericWithPic(self, name, pic_entry) catch |err|
                                     return self.wordErrorCleanup(name, err);
 
                                 if (dispatched) {
@@ -2084,20 +2125,22 @@ pub const Context = struct {
                                 }
                             }
 
+                            const callee_pic = if (word.action == .compound) self.getOrAllocPicTable(word.action.compound) else null;
+
                             const result = blk: {
                                 if (word.source_module) |mod| {
                                     switch (word.action) {
                                         .compound => |instrs| {
                                             self.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
                                             defer self.popModuleDepsFrameTraced(mod);
-                                            break :blk self.executeQuotation(.{ .instructions = instrs });
+                                            break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic);
                                         },
                                         .native => |func| break :blk func(self),
                                     }
                                 } else {
                                     break :blk switch (word.action) {
                                         .native => |func| func(self),
-                                        .compound => |instrs| self.executeQuotation(.{ .instructions = instrs }),
+                                        .compound => |instrs| self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic),
                                     };
                                 }
                             };

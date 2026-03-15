@@ -1,6 +1,7 @@
 const std = @import("std");
 const Context = @import("../context.zig").Context;
 const dispatch_mod = @import("../dispatch.zig");
+const MonomorphicCache = @import("../pic.zig").MonomorphicCache;
 const Value = @import("../value.zig").Value;
 
 /// Execute a dispatch entry body, handling both quotation and native_fn variants.
@@ -207,10 +208,61 @@ pub fn tryDispatchBinaryViaCmp(ctx: *Context, comptime op: enum { eq, lt, gt }) 
 /// Tries binary dispatch first (if stack depth >= 2), then unary.
 /// Returns true if dispatched, false if not.
 pub fn tryDispatchGeneric(ctx: *Context, word_name: []const u8) !bool {
+    return tryDispatchGenericWithPic(ctx, word_name, null);
+}
+
+/// Try to dispatch a generic word, with optional PIC cache entry.
+///
+/// When `pic_entry` is non-null and the cache is valid with a matching
+/// generation, a pointer-based type check is performed to skip the full
+/// hash table lookup. On cache miss the full lookup proceeds and the
+/// cache is updated.
+pub fn tryDispatchGenericWithPic(ctx: *Context, word_name: []const u8, pic_entry: ?*MonomorphicCache) !bool {
+    if (pic_entry) |cache| {
+        if (cache.valid and cache.generation == ctx.dispatch.generation) {
+            if (ctx.stack.depth() >= 2) {
+                const a = try ctx.stack.peekN(1);
+                const b = try ctx.stack.peek();
+                const a_type = dispatch_mod.dispatchTypeName(a);
+                const b_type = dispatch_mod.dispatchTypeName(b);
+                if (a_type.ptr == cache.type_a.ptr and b_type.ptr == cache.type_b.ptr) {
+                    if (cache.unwrap_a or cache.unwrap_b) {
+                        try autoUnwrapBinaryOperands(ctx, cache.unwrap_a, cache.unwrap_b);
+                    }
+                    try executeDispatchBody(ctx, cache.entry.body);
+                    return true;
+                }
+            } else if (ctx.stack.depth() >= 1) {
+                const a = try ctx.stack.peek();
+                const a_type = dispatch_mod.dispatchTypeName(a);
+                if (a_type.ptr == cache.type_a.ptr and cache.type_b.len == 0) {
+                    if (cache.unwrap_a) {
+                        try autoUnwrapTopOperand(ctx);
+                    }
+                    try executeDispatchBody(ctx, cache.entry.body);
+                    return true;
+                }
+            }
+        }
+    }
+
     if (ctx.stack.depth() >= 2) {
         const a = try ctx.stack.peekN(1);
         const b = try ctx.stack.peek();
         if (lookupBinaryWithFallback(ctx, word_name, a, b)) |result| {
+            if (pic_entry) |cache| {
+                const a_type = dispatch_mod.dispatchTypeName(a);
+                const b_type = dispatch_mod.dispatchTypeName(b);
+                cache.* = .{
+                    .type_a = a_type,
+                    .type_b = b_type,
+                    .entry = result.entry,
+                    .unwrap_a = result.unwrap_a,
+                    .unwrap_b = result.unwrap_b,
+                    .generation = ctx.dispatch.generation,
+                    .valid = true,
+                };
+            }
             if (result.unwrap_a or result.unwrap_b) {
                 try autoUnwrapBinaryOperands(ctx, result.unwrap_a, result.unwrap_b);
             }
@@ -222,6 +274,18 @@ pub fn tryDispatchGeneric(ctx: *Context, word_name: []const u8) !bool {
     if (ctx.stack.depth() >= 1) {
         const a = try ctx.stack.peek();
         if (lookupUnaryWithFallback(ctx, word_name, a)) |result| {
+            if (pic_entry) |cache| {
+                const a_type = dispatch_mod.dispatchTypeName(a);
+                cache.* = .{
+                    .type_a = a_type,
+                    .type_b = "",
+                    .entry = result.entry,
+                    .unwrap_a = result.unwrap_a,
+                    .unwrap_b = false,
+                    .generation = ctx.dispatch.generation,
+                    .valid = true,
+                };
+            }
             if (result.unwrap_a) {
                 try autoUnwrapTopOperand(ctx);
             }
@@ -358,4 +422,155 @@ test "tryDispatchGeneric tries binary before unary" {
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     const top = try ctx.stack.pop();
     try std.testing.expectEqual(@as(i64, 42), top.fixnum);
+}
+
+test "tryDispatchGenericWithPic populates cache on miss" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const body = &[_]@import("../value.zig").Instruction{
+        .{ .op = .{ .call_word = "+" }, .line = 0 },
+    };
+    try ctx.dispatch.register(
+        .{ .word_name = "add", .type_a = "fixnum", .type_b = "fixnum" },
+        .{ .body = .{ .quotation = body } },
+        false,
+    );
+
+    var cache = MonomorphicCache{};
+
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try ctx.stack.push(.{ .fixnum = 4 });
+
+    const result = try tryDispatchGenericWithPic(&ctx, "add", &cache);
+    try std.testing.expect(result);
+    try std.testing.expectEqual(@as(i64, 7), (try ctx.stack.pop()).fixnum);
+
+    // Cache should now be populated
+    try std.testing.expect(cache.valid);
+    try std.testing.expectEqualStrings("fixnum", cache.type_a);
+    try std.testing.expectEqualStrings("fixnum", cache.type_b);
+    try std.testing.expectEqual(ctx.dispatch.generation, cache.generation);
+}
+
+test "tryDispatchGenericWithPic hits cache on matching types" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const body = &[_]@import("../value.zig").Instruction{
+        .{ .op = .{ .call_word = "+" }, .line = 0 },
+    };
+    try ctx.dispatch.register(
+        .{ .word_name = "add", .type_a = "fixnum", .type_b = "fixnum" },
+        .{ .body = .{ .quotation = body } },
+        false,
+    );
+
+    var cache = MonomorphicCache{};
+
+    // First call: populates cache
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(.{ .fixnum = 2 });
+    _ = try tryDispatchGenericWithPic(&ctx, "add", &cache);
+    _ = try ctx.stack.pop();
+
+    // Second call: should hit cache (same types)
+    try ctx.stack.push(.{ .fixnum = 10 });
+    try ctx.stack.push(.{ .fixnum = 20 });
+    const result = try tryDispatchGenericWithPic(&ctx, "add", &cache);
+    try std.testing.expect(result);
+    try std.testing.expectEqual(@as(i64, 30), (try ctx.stack.pop()).fixnum);
+}
+
+test "tryDispatchGenericWithPic invalidates on generation change" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const body = &[_]@import("../value.zig").Instruction{
+        .{ .op = .{ .call_word = "+" }, .line = 0 },
+    };
+    try ctx.dispatch.register(
+        .{ .word_name = "add", .type_a = "fixnum", .type_b = "fixnum" },
+        .{ .body = .{ .quotation = body } },
+        false,
+    );
+
+    var cache = MonomorphicCache{};
+
+    // Populate cache
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(.{ .fixnum = 2 });
+    _ = try tryDispatchGenericWithPic(&ctx, "add", &cache);
+    _ = try ctx.stack.pop();
+
+    const gen_before = cache.generation;
+
+    // Register a new method, bumping generation
+    const body2 = &[_]@import("../value.zig").Instruction{
+        .{ .op = .{ .call_word = "inspect" }, .line = 0 },
+    };
+    try ctx.dispatch.register(
+        .{ .word_name = "show", .type_a = "fixnum", .type_b = dispatch_mod.unary_sentinel },
+        .{ .body = .{ .quotation = body2 } },
+        false,
+    );
+
+    try std.testing.expect(ctx.dispatch.generation > gen_before);
+
+    // Cache should be stale: generation no longer matches
+    try ctx.stack.push(.{ .fixnum = 5 });
+    try ctx.stack.push(.{ .fixnum = 6 });
+    const result = try tryDispatchGenericWithPic(&ctx, "add", &cache);
+    try std.testing.expect(result);
+    try std.testing.expectEqual(@as(i64, 11), (try ctx.stack.pop()).fixnum);
+
+    // Cache should be re-populated with new generation
+    try std.testing.expectEqual(ctx.dispatch.generation, cache.generation);
+}
+
+test "tryDispatchGenericWithPic with null pic_entry falls back to full lookup" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const body = &[_]@import("../value.zig").Instruction{
+        .{ .op = .{ .call_word = "+" }, .line = 0 },
+    };
+    try ctx.dispatch.register(
+        .{ .word_name = "add", .type_a = "fixnum", .type_b = "fixnum" },
+        .{ .body = .{ .quotation = body } },
+        false,
+    );
+
+    try ctx.stack.push(.{ .fixnum = 10 });
+    try ctx.stack.push(.{ .fixnum = 20 });
+
+    const result = try tryDispatchGenericWithPic(&ctx, "add", null);
+    try std.testing.expect(result);
+    try std.testing.expectEqual(@as(i64, 30), (try ctx.stack.pop()).fixnum);
+}
+
+test "tryDispatchGenericWithPic caches unary dispatch" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const body = &[_]@import("../value.zig").Instruction{
+        .{ .op = .{ .call_word = "inspect" }, .line = 0 },
+    };
+    try ctx.dispatch.register(
+        .{ .word_name = "show", .type_a = "fixnum", .type_b = dispatch_mod.unary_sentinel },
+        .{ .body = .{ .quotation = body } },
+        false,
+    );
+
+    var cache = MonomorphicCache{};
+
+    try ctx.stack.push(.{ .fixnum = 42 });
+    const result = try tryDispatchGenericWithPic(&ctx, "show", &cache);
+    try std.testing.expect(result);
+    try std.testing.expectEqualStrings("42", (try ctx.stack.pop()).string);
+
+    // Cache should record unary dispatch (type_b is empty)
+    try std.testing.expect(cache.valid);
+    try std.testing.expectEqualStrings("fixnum", cache.type_a);
+    try std.testing.expectEqual(@as(usize, 0), cache.type_b.len);
 }

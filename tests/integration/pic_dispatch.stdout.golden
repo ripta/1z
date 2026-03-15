@@ -1,0 +1,29 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: binary dispatch duration
+Stack: [ ]
+PASS: binary dispatch duration repeat
+Stack: [ ]
+PASS: binary dispatch weight
+Stack: [ ]
+PASS: binary dispatch duration again
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: unary dispatch fixnum
+Stack: [ ]
+PASS: unary dispatch duration
+Stack: [ ]
+PASS: unary dispatch fixnum repeat
+Stack: [ ]
+PASS: unary dispatch duration repeat
+Stack: [ ]
+Stack: [ ]
+PASS: unary dispatch after new method
+Stack: [ ]
+PASS: unary dispatch fixnum after new method
+Stack: [ ]
