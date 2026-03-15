@@ -49,6 +49,10 @@ pub const BenchmarkStats = struct {
     peak_live_bytes: usize = 0,
     current_live_bytes: usize = 0,
 
+    // JIT compilation metrics
+    jit_compile_time_ns: i128 = 0,
+    jit_words_compiled: u64 = 0,
+
     // Per-word allocation profiling
     word_alloc_profiles: std.StringHashMapUnmanaged(WordAllocProfile) = .{},
     alloc_profile_stack: [1024]usize = [_]usize{0} ** 1024,
@@ -84,6 +88,12 @@ pub const BenchmarkStats = struct {
         if (depth > self.peak_stack_depth) {
             self.peak_stack_depth = depth;
         }
+    }
+
+    /// Record a successful JIT compilation
+    pub fn recordJitCompile(self: *BenchmarkStats, elapsed_ns: i128) void {
+        self.jit_compile_time_ns += elapsed_ns;
+        self.jit_words_compiled += 1;
     }
 
     /// Push current_live_bytes snapshot for per-word allocation profiling
@@ -244,6 +254,17 @@ pub const BenchmarkStats = struct {
         try formatBytes(writer, self.peak_task_stack_usage);
         try writer.writeAll("\n");
 
+        // JIT Compilation section
+        if (self.jit_words_compiled > 0) {
+            try writer.writeAll("\nJIT Compilation:\n");
+            try writer.writeAll("  Words compiled:  ");
+            try formatNumber(writer, self.jit_words_compiled);
+            try writer.writeAll("\n");
+            try writer.writeAll("  Compile time:    ");
+            try formatTime(writer, self.jit_compile_time_ns);
+            try writer.writeAll("\n");
+        }
+
         // Memory section
         try writer.writeAll("\nMemory:\n");
         try writer.writeAll("  Allocations:     ");
@@ -290,7 +311,7 @@ pub const BenchmarkStats = struct {
     /// Output benchmark results in JSON format
     pub fn formatJson(self: *const BenchmarkStats, writer: anytype) !void {
         try writer.print(
-            \\{{"timing":{{"prelude_ns":{d},"user_ns":{d},"total_ns":{d}}},"instructions":{{"push_literal":{d},"call_word":{d},"total":{d}}},"stack":{{"peak_depth":{d},"peak_task_stack_usage":{d}}},"memory":{{"allocations":{d},"bytes":{d},"peak_live_bytes":{d}}},"alloc_profile":[
+            \\{{"timing":{{"prelude_ns":{d},"user_ns":{d},"total_ns":{d}}},"instructions":{{"push_literal":{d},"call_word":{d},"total":{d}}},"stack":{{"peak_depth":{d},"peak_task_stack_usage":{d}}},"jit":{{"words_compiled":{d},"compile_time_ns":{d}}},"memory":{{"allocations":{d},"bytes":{d},"peak_live_bytes":{d}}},"alloc_profile":[
         , .{
             @as(i64, @intCast(self.preludeTimeNs())),
             @as(i64, @intCast(self.userTimeNs())),
@@ -300,6 +321,8 @@ pub const BenchmarkStats = struct {
             self.totalInstructions(),
             self.peak_stack_depth,
             self.peak_task_stack_usage,
+            self.jit_words_compiled,
+            @as(i64, @intCast(self.jit_compile_time_ns)),
             self.total_allocations,
             self.total_bytes,
             self.peak_live_bytes,

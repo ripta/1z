@@ -519,10 +519,17 @@ fn nativeCompile(ctx: *Context) anyerror!void {
     const input_count: u8 = @intCast(effect.inputs.len);
     const output_count: u8 = @intCast(effect.outputs.len);
 
+    const before_ns = if (ctx.benchmark != null) std.time.nanoTimestamp() else 0;
+
     const compiled = ir_codegen.compileWord(instrs, input_count, output_count) catch {
         ctx.pending_error_message = "compile!: word is not compilable (must use only fixnum literals and integer arithmetic)";
         return error.TypeMismatch;
     };
+
+    if (ctx.benchmark) |bm| {
+        const after_ns = std.time.nanoTimestamp();
+        bm.recordJitCompile(after_ns - before_ns);
+    }
 
     const word_id = ctx.jit_dispatch.assignId(sym, input_count, output_count) catch {
         compiled.jit_buf.deinit();
