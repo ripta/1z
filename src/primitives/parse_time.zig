@@ -12,15 +12,15 @@ const Primitive = @import("types.zig").Primitive;
 const popString = helpers.popString;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .doc = "Read tokens until delimiter, return as quotation.", .func = nativeParseUntil },
-    .{ .name = "parse-tokens-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, return as string array.", .func = nativeParseTokensUntil },
-    .{ .name = "parse-values-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, executing parse-time words. Return as array.", .func = nativeParseValuesUntil },
-    .{ .name = "parse-types-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, executing parse-time words. Unknown tokens are errors.", .func = nativeParseTypesUntil },
-    .{ .name = "parse-token", .stack_effect = "-- string", .doc = "Read one raw token from the tokenizer, skipping comments and whitespace.", .func = nativeParseToken },
-    .{ .name = "peek-token", .stack_effect = "-- string", .doc = "Return the next token without consuming it. Repeated calls return the same token until parse-token or another consuming primitive advances past it.", .func = nativePeekToken },
-    .{ .name = "parse-literal", .stack_effect = "-- value", .doc = "Read the next literal value from the tokenizer.", .func = nativeParseLiteral },
+    .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .doc = "Read tokens until delimiter, return as quotation.", .func = nativeParseUntil, .parse_time_only = true },
+    .{ .name = "parse-tokens-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, return as string array.", .func = nativeParseTokensUntil, .parse_time_only = true },
+    .{ .name = "parse-values-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, executing parse-time words. Return as array.", .func = nativeParseValuesUntil, .parse_time_only = true },
+    .{ .name = "parse-types-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, executing parse-time words. Unknown tokens are errors.", .func = nativeParseTypesUntil, .parse_time_only = true },
+    .{ .name = "parse-token", .stack_effect = "-- string", .doc = "Read one raw token from the tokenizer, skipping comments and whitespace.", .func = nativeParseToken, .parse_time_only = true },
+    .{ .name = "peek-token", .stack_effect = "-- string", .doc = "Return the next token without consuming it. Repeated calls return the same token until parse-token or another consuming primitive advances past it.", .func = nativePeekToken, .parse_time_only = true },
+    .{ .name = "parse-literal", .stack_effect = "-- value", .doc = "Read the next literal value from the tokenizer.", .func = nativeParseLiteral, .parse_time_only = true },
     .{ .name = "resolve-literal", .stack_effect = "string -- value ?", .doc = "Resolve a string as a scalar literal.", .func = nativeResolveLiteral },
-    .{ .name = "emit-call", .stack_effect = "symbol --", .doc = "Request a call_word emission for the named word after the current parse-time word completes.", .func = nativeEmitCall },
+    .{ .name = "emit-call", .stack_effect = "symbol --", .doc = "Request a call_word emission for the named word after the current parse-time word completes.", .func = nativeEmitCall, .parse_time_only = true },
 };
 
 fn isSkippable(kind: Token.Kind) bool {
@@ -30,7 +30,7 @@ fn isSkippable(kind: Token.Kind) bool {
 const ParseMode = enum { raw, evaluate_parse_time, evaluate_parse_time_strict };
 
 fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !Value {
-    const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
+    const tokenizer = ctx.parse_tokenizer.?;
     const alloc = ctx.quotationAllocator();
 
     var tokens = std.ArrayListUnmanaged(Value){};
@@ -146,7 +146,7 @@ fn tryResolveLiteral(ctx: *Context, alloc: std.mem.Allocator, tokenizer: *tokeni
 pub fn nativeParseUntil(ctx: *Context) anyerror!void {
     const delimiter = try popString(ctx);
 
-    const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
+    const tokenizer = ctx.parse_tokenizer.?;
 
     const quot = parser.parseQuotationUntil(ctx.quotationAllocator(), tokenizer, ctx, delimiter, 0) catch return error.OutOfMemory;
 
@@ -180,7 +180,7 @@ fn nativeParseTypesUntil(ctx: *Context) anyerror!void {
 
 /// parse-token ( -- string ) - Read one raw token from the tokenizer
 fn nativeParseToken(ctx: *Context) anyerror!void {
-    const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
+    const tokenizer = ctx.parse_tokenizer.?;
     const alloc = ctx.quotationAllocator();
     while (tokenizer.nextOrYield()) |tok| {
         if (isSkippable(tok.kind)) continue;
@@ -193,7 +193,7 @@ fn nativeParseToken(ctx: *Context) anyerror!void {
 
 /// peek-token ( -- string ) - Return the next token without consuming it
 fn nativePeekToken(ctx: *Context) anyerror!void {
-    const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
+    const tokenizer = ctx.parse_tokenizer.?;
     const alloc = ctx.quotationAllocator();
     while (tokenizer.nextOrYield()) |tok| {
         if (isSkippable(tok.kind)) continue;
@@ -221,10 +221,6 @@ fn nativeResolveLiteral(ctx: *Context) anyerror!void {
 
 /// emit-call ( symbol -- ) - Request a call_word emission after parse-time word completes.
 fn nativeEmitCall(ctx: *Context) anyerror!void {
-    if (ctx.parse_tokenizer == null) {
-        helpers.setErrorContext(ctx, "emit-call can only be used during parse time", .{});
-        return error.ParseError;
-    }
     const name = switch (try ctx.stack.pop()) {
         .symbol => |s| s,
         else => |v| {
@@ -247,7 +243,7 @@ fn nativeEmitCall(ctx: *Context) anyerror!void {
 ///
 /// Three layers: scalar literals, structure openers, parse-time word execution.
 pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
-    const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
+    const tokenizer = ctx.parse_tokenizer.?;
     const alloc = ctx.quotationAllocator();
     while (tokenizer.nextOrYield()) |tok| {
         if (isSkippable(tok.kind)) continue;

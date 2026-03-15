@@ -47,3 +47,28 @@ pto-inner:        parse-time-only [ 77 ] ;
 pto-outer:        parse-time [ pto-inner ] ;
 pto-outer-result: pto-outer ;
 pto-outer-result 77 "parse-time-only word in parse-time def works" assert=
+
+"native parse-time-only primitives in parse-time definitions" test-section
+
+\ parse-token works inside a parse-time definition
+grab-next: parse-time [ parse-token ] ;
+grab-next-result: grab-next hello ;
+grab-next-result "hello" "parse-token in parse-time def" assert=
+
+\ peek-token works inside a parse-time definition
+peek-next: parse-time [ peek-token ] ;
+peek-next-result: peek-next peeked ;
+peek-next-result "peeked" "peek-token in parse-time def" assert=
+
+\ parse-literal works inside a parse-time definition
+grab-lit: parse-time [ parse-literal ] ;
+grab-lit-result: grab-lit 42 ;
+grab-lit-result 42 "parse-literal in parse-time def" assert=
+
+\ parse-tokens-until works inside a parse-time definition
+grab-toks: parse-time [ "}" parse-tokens-until ] ;
+grab-toks-result: grab-toks a b c } ;
+grab-toks-result #len 3 "parse-tokens-until in parse-time def" assert=
+
+\ emit-call works inside a parse-time definition (used by match{, etc.)
+\ Already tested transitively via match{ above

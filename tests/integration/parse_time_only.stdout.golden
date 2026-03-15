@@ -31,3 +31,21 @@ Stack: [ ]
 Stack: [ ]
 PASS: parse-time-only word in parse-time def works
 Stack: [ ]
+=== native parse-time-only primitives in parse-time definitions ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: parse-token in parse-time def
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: peek-token in parse-time def
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: parse-literal in parse-time def
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: parse-tokens-until in parse-time def
+Stack: [ ]
