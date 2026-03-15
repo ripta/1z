@@ -53,3 +53,63 @@ test "compile and execute trivial add via ir" {
     try std.testing.expectEqual(@as(i64, 0), add(-5, 5));
     try std.testing.expectEqual(@as(i64, -10), add(-3, -7));
 }
+
+test "multiple independent compilations coexist" {
+    const r1 = try compileAdd();
+    defer r1.buf.deinit();
+    const r2 = try compileAdd();
+    defer r2.buf.deinit();
+
+    // Both compiled functions work independently
+    try std.testing.expectEqual(@as(i64, 10), r1.func(3, 7));
+    try std.testing.expectEqual(@as(i64, 20), r2.func(8, 12));
+
+    // Cross-verify they don't interfere
+    try std.testing.expectEqual(@as(i64, 100), r1.func(50, 50));
+    try std.testing.expectEqual(@as(i64, -1), r2.func(0, -1));
+}
+
+test "cleanup and reuse lifecycle" {
+    // First cycle: compile, execute, discard
+    {
+        const r = try compileAdd();
+        try std.testing.expectEqual(@as(i64, 5), r.func(2, 3));
+        r.buf.deinit();
+    }
+
+    // Second cycle: compile again, proving the lifecycle is repeatable
+    {
+        const r = try compileAdd();
+        defer r.buf.deinit();
+        try std.testing.expectEqual(@as(i64, 7), r.func(3, 4));
+    }
+
+    // Third cycle: one more round to confirm stability
+    {
+        const r = try compileAdd();
+        defer r.buf.deinit();
+        try std.testing.expectEqual(@as(i64, -1), r.func(1, -2));
+    }
+}
+
+test "i64 boundary values" {
+    const r = try compileAdd();
+    defer r.buf.deinit();
+    const add = r.func;
+
+    const max = std.math.maxInt(i64);
+    const min = std.math.minInt(i64);
+
+    // max + 0 and min + 0
+    try std.testing.expectEqual(max, add(max, 0));
+    try std.testing.expectEqual(min, add(min, 0));
+
+    // Overflow wraps: max + 1 wraps to min (two's complement)
+    try std.testing.expectEqual(min, add(max, 1));
+
+    // Underflow wraps: min - 1 wraps to max
+    try std.testing.expectEqual(max, add(min, -1));
+
+    // max + max wraps to -2
+    try std.testing.expectEqual(@as(i64, -2), add(max, max));
+}
