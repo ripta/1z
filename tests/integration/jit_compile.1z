@@ -99,3 +99,68 @@ over-add: compile!
 nip: ( a b -- b ) [ swap drop ] ;
 nip: compile!
 3 10 nip 10 "nip 3 10" assert=
+
+"compile! non-fixnum literal round-trip: float" test-section
+
+jit-float: ( -- n ) [ 3.14 ] ;
+jit-float: compile!
+jit-float 3.14 "float literal 3.14" assert=
+
+"compile! non-fixnum literal round-trip: string" test-section
+
+jit-str: ( -- s ) [ "hello" ] ;
+jit-str: compile!
+jit-str "hello" "string literal hello" assert=
+
+"compile! non-fixnum literal round-trip: symbol" test-section
+
+jit-sym: ( -- s ) [ foo: ] ;
+jit-sym: compile!
+jit-sym foo: "symbol literal foo" assert=
+
+"compile! non-fixnum literal round-trip: array" test-section
+
+jit-arr: ( -- a ) [ { 1 2 3 } ] ;
+jit-arr: compile!
+jit-arr { 1 2 3 } "array literal { 1 2 3 }" assert=
+
+"compile! dup on non-fixnum" test-section
+
+dup-str: ( -- s s ) [ "world" dup ] ;
+dup-str: compile!
+dup-str
+"world" "dup string top" assert=
+"world" "dup string second" assert=
+
+"compile! drop on non-fixnum" test-section
+
+drop-str: ( -- n ) [ 42 "discard" drop ] ;
+drop-str: compile!
+drop-str 42 "drop string leaves fixnum" assert=
+
+"compile! swap on mixed types" test-section
+
+swap-mixed: ( -- n s ) [ 99 "text" swap ] ;
+swap-mixed: compile!
+swap-mixed
+99 "swap mixed: fixnum on top" assert=
+"text" "swap mixed: string second" assert=
+
+"compile! over on mixed types" test-section
+
+over-mixed: ( -- s n s ) [ "base" 7 over ] ;
+over-mixed: compile!
+over-mixed
+"base" "over mixed: string copied to top" assert=
+7 "over mixed: fixnum in middle" assert=
+"base" "over mixed: original string at bottom" assert=
+
+"compile! bail to interpreter: float arithmetic" test-section
+
+add-word: ( a b -- c ) [ + ] ;
+add-word: compile!
+1.5 2.5 add-word 4.0 "float add via interpreter fallback" assert=
+
+"compile! bail to interpreter: string arithmetic error" test-section
+
+[ "hello" 1 add-word ] "string + fixnum errors" assert-error

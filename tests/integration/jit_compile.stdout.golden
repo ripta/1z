@@ -107,3 +107,72 @@ Stack: [ ]
 Stack: [ ]
 PASS: nip 3 10
 Stack: [ ]
+=== compile! non-fixnum literal round-trip: float ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: float literal 3.14
+Stack: [ ]
+=== compile! non-fixnum literal round-trip: string ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: string literal hello
+Stack: [ ]
+=== compile! non-fixnum literal round-trip: symbol ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: symbol literal foo
+Stack: [ ]
+=== compile! non-fixnum literal round-trip: array ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: array literal { 1 2 3 }
+Stack: [ ]
+=== compile! dup on non-fixnum ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ "world" "world" ]
+PASS: dup string top
+Stack: [ "world" ]
+PASS: dup string second
+Stack: [ ]
+=== compile! drop on non-fixnum ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: drop string leaves fixnum
+Stack: [ ]
+=== compile! swap on mixed types ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ "text" 99 ]
+PASS: swap mixed: fixnum on top
+Stack: [ "text" ]
+PASS: swap mixed: string second
+Stack: [ ]
+=== compile! over on mixed types ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ "base" 7 "base" ]
+PASS: over mixed: string copied to top
+Stack: [ "base" 7 ]
+PASS: over mixed: fixnum in middle
+Stack: [ "base" ]
+PASS: over mixed: original string at bottom
+Stack: [ ]
+=== compile! bail to interpreter: float arithmetic ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: float add via interpreter fallback
+Stack: [ ]
+=== compile! bail to interpreter: string arithmetic error ===
+Stack: [ ]
+PASS: string + fixnum errors
+Stack: [ ]
