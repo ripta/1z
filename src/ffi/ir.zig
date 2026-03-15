@@ -16,13 +16,13 @@ pub const JitBuffer = struct {
     size: usize,
 
     pub fn deinit(self: JitBuffer) void {
-        ir.ir_discard_code(self.code, self.size);
+        _ = ir.ir_mem_unmap(self.code, self.size);
     }
 };
 
 /// Compiles a trivial function that adds two i64 values and returns the result.
 /// The returned JitBuffer owns the compiled code and must be cleaned up via deinit.
-pub fn compileAdd() IrError!struct { func: *const fn (i64, i64) callconv(.C) i64, buf: JitBuffer } {
+pub fn compileAdd() IrError!struct { func: *const fn (i64, i64) callconv(.c) i64, buf: JitBuffer } {
     var ctx: c.ir_ctx = undefined;
     c.ir_init(&ctx, c.IR_FUNCTION | c.IR_OPT_FOLDING, c.IR_CONSTS_LIMIT_MIN, c.IR_INSNS_LIMIT_MIN);
     defer c.ir_free(&ctx);

@@ -47,6 +47,8 @@ pub const WordDefinition = struct {
     source_module: ?*const value_mod.Module = null,
     /// Provenance metadata for generated words, or null for hand-written words.
     provenance: ?WordProvenance = null,
+    /// JIT dispatch table ID, assigned when this word is registered for JIT compilation.
+    word_id: ?u32 = null,
     /// The action performed by this word: either a native function or a
     /// compound quotation. Unfortunate naming.
     action: union(enum) {

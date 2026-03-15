@@ -17,6 +17,7 @@ const dispatch_mod = @import("dispatch.zig");
 const DispatchEntry = dispatch_mod.DispatchEntry;
 const DispatchTable = dispatch_mod.DispatchTable;
 
+const JitDispatchTable = @import("jit_dispatch.zig").JitDispatchTable;
 const Scheduler = @import("scheduler.zig").Scheduler;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const primitives = @import("primitives.zig");
@@ -172,6 +173,8 @@ pub const Context = struct {
     deadlock_detect_ns: ?i128 = null,
     /// Dispatch table for user-defined operator/method dispatch.
     dispatch: DispatchTable,
+    /// JIT dispatch table mapping word IDs to compiled code pointers.
+    jit_dispatch: JitDispatchTable,
     /// Shared scheduler for green thread contexts. Null for the root context.
     scheduler: ?*Scheduler = null,
     /// Enum registry mapping enum names to their variant VirtualType pointers.
@@ -229,6 +232,7 @@ pub const Context = struct {
             .parse_tokenizer = null,
             .benchmark = null,
             .dispatch = DispatchTable.init(allocator),
+            .jit_dispatch = JitDispatchTable.init(allocator),
         };
 
         primitives.registerPrimitives(&ctx.dictionary, ctx.arena.allocator()) catch |err| {
@@ -274,6 +278,7 @@ pub const Context = struct {
             .parameter_env = .{},
             .local_frames = .{},
             .dispatch = DispatchTable.init(allocator),
+            .jit_dispatch = JitDispatchTable.init(allocator),
             .scheduler = scheduler,
             .parent_context = parent,
 
@@ -384,6 +389,7 @@ pub const Context = struct {
         self.builtin_type_values.deinit(self.allocator);
         self.resource_type_values.deinit(self.allocator);
         self.dispatch.deinit();
+        self.jit_dispatch.deinit();
         self.arena.deinit();
         self.dictionary.deinit();
         self.stack.deinit();
