@@ -472,7 +472,7 @@ test "reject non-compilable: unsupported word" {
 }
 
 test "reject output_count != 1" {
-    const instrs = makeInstructions(.{ @as(i64, 1) });
+    const instrs = makeInstructions(.{@as(i64, 1)});
     try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 0, 2));
 }
 

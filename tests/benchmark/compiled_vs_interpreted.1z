@@ -1,0 +1,89 @@
+\ Benchmark: compiled vs interpreted arithmetic
+\
+\ Compares JIT-compiled words against their interpreted equivalents
+\ for arithmetic-heavy workloads.
+
+\ Interpreted words (suffix -i)
+simple-arith-i: ( n -- n )   [ 3 + 4 * 2 - ] ;
+chain-arith-i:  ( n -- n )   [ 1 + 2 * 3 + 4 * 5 - 6 + ] ;
+binary-add-i:   ( a b -- c ) [ + ] ;
+binary-mul-i:   ( a b -- c ) [ * ] ;
+div-mod-i:      ( a b -- c ) [ / ] ;
+rem-i:       ( a b -- c ) [ rem ] ;
+mod-i:       ( a b -- c ) [ % ] ;
+abs-chain-i: ( n -- n )   [ abs 3 + abs 2 * abs ] ;
+
+\ Compiled words (suffix -c) with identical bodies
+simple-arith-c: ( n -- n )   [ 3 + 4 * 2 - ] ;
+chain-arith-c:  ( n -- n )   [ 1 + 2 * 3 + 4 * 5 - 6 + ] ;
+binary-add-c:   ( a b -- c ) [ + ] ;
+binary-mul-c:   ( a b -- c ) [ * ] ;
+div-mod-c:      ( a b -- c ) [ / ] ;
+rem-c:       ( a b -- c ) [ rem ] ;
+mod-c:       ( a b -- c ) [ % ] ;
+abs-chain-c: ( n -- n )   [ abs 3 + abs 2 * abs ] ;
+
+simple-arith-c: compile!
+chain-arith-c: compile!
+binary-add-c: compile!
+binary-mul-c: compile!
+div-mod-c: compile!
+rem-c: compile!
+mod-c: compile!
+abs-chain-c: compile!
+
+"[-- Simple arithmetic: 3 + 4 * 2 - --]" print-line
+
+[
+  "simple-arith (interp)" 10000 [ 7 simple-arith-i drop ] benchmark-n
+  "simple-arith (compiled)" 10000 [ 7 simple-arith-c drop ] benchmark-n
+] run-benchmarks
+
+nl "[-- Long chain: 1 + 2 * 3 + 4 * 5 - 6 + --]" print-line
+
+[
+  "chain-arith (interp)" 10000 [ 10 chain-arith-i drop ] benchmark-n
+  "chain-arith (compiled)" 10000 [ 10 chain-arith-c drop ] benchmark-n
+] run-benchmarks
+
+nl "[-- Binary add --]" print-line
+
+[
+  "add (interp)" 10000 [ 17 25 binary-add-i drop ] benchmark-n
+  "add (compiled)" 10000 [ 17 25 binary-add-c drop ] benchmark-n
+] run-benchmarks
+
+nl "[-- Binary multiply --]" print-line
+
+[
+  "mul (interp)" 10000 [ 6 7 binary-mul-i drop ] benchmark-n
+  "mul (compiled)" 10000 [ 6 7 binary-mul-c drop ] benchmark-n
+] run-benchmarks
+
+nl "[-- Division --]" print-line
+
+[
+  "div (interp)" 10000 [ 100 7 div-mod-i drop ] benchmark-n
+  "div (compiled)" 10000 [ 100 7 div-mod-c drop ] benchmark-n
+] run-benchmarks
+
+nl "[-- Remainder --]" print-line
+
+[
+  "rem (interp)" 10000 [ 100 7 rem-i drop ] benchmark-n
+  "rem (compiled)" 10000 [ 100 7 rem-c drop ] benchmark-n
+] run-benchmarks
+
+nl "[-- Euclidean modulo --]" print-line
+
+[
+  "mod (interp)" 10000 [ -7 3 mod-i drop ] benchmark-n
+  "mod (compiled)" 10000 [ -7 3 mod-c drop ] benchmark-n
+] run-benchmarks
+
+nl "[-- Abs chain: abs 3 + abs 2 * abs --]" print-line
+
+[
+  "abs-chain (interp)" 10000 [ -5 abs-chain-i drop ] benchmark-n
+  "abs-chain (compiled)" 10000 [ -5 abs-chain-c drop ] benchmark-n
+] run-benchmarks
