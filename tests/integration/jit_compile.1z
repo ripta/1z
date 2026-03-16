@@ -259,3 +259,143 @@ jit-apply: compile!
 "compile! dynamic quotation bail for non-quotation" test-section
 
 [ 42 jit-apply ] "non-quotation call errors" assert-error
+
+"compile! times: zero iterations" test-section
+
+jit-times-zero: ( -- n ) [ 0 0 [ 1 + ] times ] ;
+jit-times-zero: compile!
+jit-times-zero 0 "times 0 iterations" assert=
+
+"compile! times: one iteration" test-section
+
+jit-times-one: ( -- n ) [ 0 1 [ 1 + ] times ] ;
+jit-times-one: compile!
+jit-times-one 1 "times 1 iteration" assert=
+
+"compile! times: five iterations" test-section
+
+jit-times-five: ( -- n ) [ 0 5 [ 1 + ] times ] ;
+jit-times-five: compile!
+jit-times-five 5 "times 5 iterations" assert=
+
+"compile! times: accumulator with arithmetic" test-section
+
+jit-times-accum: ( -- n ) [ 0 4 [ 3 + ] times ] ;
+jit-times-accum: compile!
+jit-times-accum 12 "times 4 x add 3" assert=
+
+"compile! loop: counter-based exit" test-section
+
+jit-loop: ( -- n ) [ 0 [ 1 + dup 5 < ] loop ] ;
+jit-loop: compile!
+jit-loop 5 "loop until >= 5" assert=
+
+"compile! while: pred and body" test-section
+
+jit-while: ( -- n ) [ 0 [ dup 10 < ] [ 1 + ] while ] ;
+jit-while: compile!
+jit-while 10 "while < 10" assert=
+
+"compile! until: pred and body" test-section
+
+jit-until: ( -- n ) [ 0 [ dup 7 = ] [ 1 + ] until ] ;
+jit-until: compile!
+jit-until 7 "until = 7" assert=
+
+"compile! nested times" test-section
+
+jit-nested-times: ( -- n ) [ 0 3 [ 2 [ 1 + ] times ] times ] ;
+jit-nested-times: compile!
+jit-nested-times 6 "3 x 2 nested times" assert=
+
+"compile! loop: immediate exit" test-section
+
+jit-loop-imm: ( -- n ) [ 42 [ f ] loop ] ;
+jit-loop-imm: compile!
+jit-loop-imm 42 "loop immediate false" assert=
+
+\\ --- Interpreter vs Compiled match tests ---
+\\ Each test defines a word, runs it interpreted, compiles it, runs it
+\\ compiled, and asserts both results are equal.
+
+"match: if/else with truthy non-boolean values" test-section
+
+if-truthy: ( x -- n ) [ [ 1 ] [ 0 ] if ] ;
+42 if-truthy
+if-truthy: compile!
+42 if-truthy
+"if-truthy fixnum 42" assert=
+
+if-truthy2: ( x -- n ) [ [ 1 ] [ 0 ] if ] ;
+"hello" if-truthy2
+if-truthy2: compile!
+"hello" if-truthy2
+"if-truthy string" assert=
+
+if-truthy3: ( x -- n ) [ [ 1 ] [ 0 ] if ] ;
+0 if-truthy3
+if-truthy3: compile!
+0 if-truthy3
+"if-truthy zero" assert=
+
+"match: if/else stack preservation" test-section
+
+if-stack: ( a b -- x y ) [ > [ 10 20 ] [ 30 40 ] if ] ;
+5 3 if-stack { } swap #push swap #push
+if-stack: compile!
+5 3 if-stack { } swap #push swap #push
+"if-stack true branch" assert=
+
+if-stack2: ( a b -- x y ) [ > [ 10 20 ] [ 30 40 ] if ] ;
+3 5 if-stack2 { } swap #push swap #push
+if-stack2: compile!
+3 5 if-stack2 { } swap #push swap #push
+"if-stack false branch" assert=
+
+"match: quotation call with stack effects" test-section
+
+call-multi: ( -- a b c ) [ [ 1 2 3 ] call ] ;
+call-multi { } swap #push swap #push swap #push
+call-multi: compile!
+call-multi { } swap #push swap #push swap #push
+"call-multi ordering" assert=
+
+"match: times loop with complex body" test-section
+
+times-complex: ( -- n ) [ 1 5 [ dup swap * 1 + ] times ] ;
+times-complex
+times-complex: compile!
+times-complex
+"times-complex match" assert=
+
+"match: while loop with multi-element stack" test-section
+
+while-two: ( -- a b ) [ 0 0 [ over 3 < ] [ swap 1 + swap 2 + ] while ] ;
+while-two { } swap #push swap #push
+while-two: compile!
+while-two { } swap #push swap #push
+"while-two match" assert=
+
+"match: until + if interaction" test-section
+
+until-if: ( -- n ) [ 0 [ dup 10 > ] [ dup 2 % 0 = [ 3 + ] [ 1 + ] if ] until ] ;
+until-if
+until-if: compile!
+until-if
+"until-if match" assert=
+
+"match: nested while in times" test-section
+
+while-in-times: ( -- n ) [ 0 3 [ 1 [ dup 4 < ] [ 1 + ] while + ] times ] ;
+while-in-times
+while-in-times: compile!
+while-in-times
+"while-in-times match" assert=
+
+"match: times with quotation call in body" test-section
+
+times-call: ( -- n ) [ 0 3 [ [ 2 * 1 + ] call ] times ] ;
+times-call
+times-call: compile!
+times-call
+"times-call match" assert=

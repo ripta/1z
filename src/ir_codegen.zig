@@ -38,6 +38,7 @@ fn isSupportedOp(name: []const u8) bool {
     if (std.mem.eql(u8, name, "if")) return true;
     if (std.mem.eql(u8, name, "call")) return true;
     if (std.mem.eql(u8, name, "t") or std.mem.eql(u8, name, "f")) return true;
+    if (isLoopOp(name)) return true;
     return false;
 }
 
@@ -59,6 +60,15 @@ const supported_stack_ops = [_][]const u8{ "dup", "drop", "swap", "over" };
 
 fn isStackOp(name: []const u8) bool {
     for (supported_stack_ops) |op| {
+        if (std.mem.eql(u8, name, op)) return true;
+    }
+    return false;
+}
+
+const supported_loop_ops = [_][]const u8{ "times", "loop", "while", "until" };
+
+fn isLoopOp(name: []const u8) bool {
+    for (supported_loop_ops) |op| {
         if (std.mem.eql(u8, name, op)) return true;
     }
     return false;
@@ -442,6 +452,81 @@ fn flushToPhysicalStack(state: *CompileState, stack: *[64]StackEntry, sp: usize)
     }
 }
 
+/// Compute the IR truthiness boolean for a stack entry.
+/// 1z truthiness: only `f` (boolean false) is falsy.
+fn emitTruthiness(state: *CompileState, entry: StackEntry, base_addr: c.ir_ref) IrCodegenError!c.ir_ref {
+    const ctx = state.ctx;
+    return switch (entry) {
+        .bool_ref => |ref| ref,
+        .i64_ref => c.ir_const_bool(ctx, true),
+        .raw_at_slot => |s| blk: {
+            const slot_byte_offset = c.ir_const_addr(ctx, s * ValueLayout.value_size);
+            const slot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+            const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), slot_addr, state.tag_offset_const);
+            const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
+            const is_bool_tag = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_val, state.boolean_tag_const);
+
+            const payload_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), slot_addr, state.payload_offset_const);
+            const payload_val = c._ir_LOAD(ctx, c.IR_BOOL, payload_addr);
+            const false_const = c.ir_const_bool(ctx, false);
+            const is_false_payload = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), payload_val, false_const);
+            const is_falsy = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_bool_tag, is_false_payload);
+            break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), is_falsy, false_const);
+        },
+        .quotation_body => IrCodegenError.NotCompilable,
+    };
+}
+
+/// Emit an indirect call to a quotation Value stored at physical stack slot.
+/// Performs tag check, code_ptr null check, flushes stack, and calls.
+fn emitIndirectQuotCall(
+    state: *CompileState,
+    stack: *[64]StackEntry,
+    sp: *usize,
+    slot: usize,
+) IrCodegenError!void {
+    const ctx = state.ctx;
+    const base_addr = state.base_addr;
+
+    const slot_byte_offset = c.ir_const_addr(ctx, slot * ValueLayout.value_size);
+    const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+
+    // Check tag is quotation
+    const quotation_tag_const = emitTagConst(ctx, .quotation);
+    emitTagCheck(ctx, elem_addr, quotation_tag_const, state.tag_offset_const, state.bail_status);
+
+    // Load code_ptr
+    const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
+    const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, code_ptr_off);
+    const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
+
+    // Null-check code_ptr
+    const null_addr = c.ir_const_addr(ctx, 0);
+    const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
+    const if_null = c._ir_IF(ctx, is_null);
+    c._ir_IF_TRUE_cold(ctx, if_null);
+    c._ir_RETURN(ctx, state.bail_status);
+    c._ir_IF_FALSE(ctx, if_null);
+
+    // Flush and update sp
+    flushToPhysicalStack(state, stack, sp.*);
+    const sp_const = c.ir_const_addr(ctx, sp.*);
+    const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
+    c._ir_STORE(ctx, state.sp_ptr, new_sp);
+
+    // Indirect call
+    const call_result = c._ir_CALL_3(ctx, c.IR_I32, code_ptr_val, state.items_ptr, state.sp_ptr, state.capacity_param);
+
+    const zero_status = c.ir_const_i32(ctx, 0);
+    const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
+    const if_bail = c._ir_IF(ctx, call_failed);
+    c._ir_IF_TRUE_cold(ctx, if_bail);
+    c._ir_RETURN(ctx, state.bail_status);
+    c._ir_IF_FALSE(ctx, if_bail);
+
+    state.dynamic_call_emitted = true;
+}
+
 /// Compile a sequence of instructions, updating the abstract stack.
 /// Used both for top-level word bodies and for inlined quotation bodies.
 fn compileInstructions(
@@ -728,6 +813,287 @@ fn compileInstructions(
                             state.dynamic_call_emitted = true;
                         },
                         .i64_ref, .bool_ref => return IrCodegenError.NotCompilable,
+                    }
+                } else if (std.mem.eql(u8, name, "times")) {
+                    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+                    sp.* -= 2;
+                    const n_entry = stack[sp.*];
+                    const quot_entry = stack[sp.* + 1];
+
+                    const initial_n = try requireI64(n_entry, state);
+
+                    // Flush user stack to physical memory before the loop
+                    flushToPhysicalStack(state, stack, sp.*);
+
+                    // Write sp to memory so indirect calls can see it
+                    const pre_loop_sp_const = c.ir_const_addr(ctx, sp.*);
+                    const pre_loop_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, pre_loop_sp_const);
+                    c._ir_STORE(ctx, state.sp_ptr, pre_loop_sp);
+
+                    // Zero-iteration check: n > 0
+                    const zero = c.ir_const_i64(ctx, 0);
+                    const gt_zero = c.ir_fold2(ctx, c.IR_OPT(c.IR_GT, c.IR_BOOL), initial_n, zero);
+                    const if_skip = c._ir_IF(ctx, gt_zero);
+
+                    c._ir_IF_FALSE(ctx, if_skip);
+                    const skip_end = c._ir_END(ctx);
+
+                    c._ir_IF_TRUE(ctx, if_skip);
+                    const entry_end = c._ir_END(ctx);
+
+                    const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
+                    const counter_phi = c._ir_PHI_2(ctx, c.IR_I64, initial_n, c.IR_UNUSED);
+
+                    switch (quot_entry) {
+                        .quotation_body => |body| {
+                            // Reset stack entries to raw_at_slot for body
+                            const pre_body_sp = sp.*;
+                            for (0..sp.*) |i| {
+                                stack[i] = .{ .raw_at_slot = i };
+                            }
+                            try compileInstructions(state, body, stack, sp);
+                            if (sp.* != pre_body_sp) return IrCodegenError.StackShapeMismatch;
+                            // Flush body results back
+                            flushToPhysicalStack(state, stack, sp.*);
+                        },
+                        .raw_at_slot => |s| {
+                            try emitIndirectQuotCall(state, stack, sp, s);
+                        },
+                        else => return IrCodegenError.NotCompilable,
+                    }
+
+                    // Reset stack entries after body
+                    for (0..sp.*) |i| {
+                        stack[i] = .{ .raw_at_slot = i };
+                    }
+
+                    // Decrement counter
+                    const one = c.ir_const_i64(ctx, 1);
+                    const new_counter = c.ir_fold2(ctx, c.IR_OPT(c.IR_SUB, c.IR_I64), counter_phi, one);
+                    c._ir_PHI_SET_OP(ctx, counter_phi, 2, new_counter);
+
+                    // Continue if new_counter > 0
+                    const continue_cond = c.ir_fold2(ctx, c.IR_OPT(c.IR_GT, c.IR_BOOL), new_counter, zero);
+                    const if_continue = c._ir_IF(ctx, continue_cond);
+                    c._ir_IF_TRUE(ctx, if_continue);
+                    const loop_end = c._ir_LOOP_END(ctx);
+                    c.ir_set_op2(ctx, loop_ref, loop_end);
+
+                    c._ir_IF_FALSE(ctx, if_continue);
+                    const exit_end = c._ir_END(ctx);
+
+                    c._ir_MERGE_2(ctx, skip_end, exit_end);
+
+                    // After loop, reload sp from memory if dynamic calls were made
+                    if (state.dynamic_call_emitted) {
+                        // sp may have been modified by indirect calls; leave it
+                        // for the dynamic_call_emitted finalization path
+                    }
+                } else if (std.mem.eql(u8, name, "loop")) {
+                    if (sp.* < 1) return IrCodegenError.StackUnderflow;
+                    sp.* -= 1;
+                    const pred_entry = stack[sp.*];
+
+                    // Flush user stack to physical memory before the loop
+                    flushToPhysicalStack(state, stack, sp.*);
+
+                    const pre_loop_sp_const = c.ir_const_addr(ctx, sp.*);
+                    const pre_loop_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, pre_loop_sp_const);
+                    c._ir_STORE(ctx, state.sp_ptr, pre_loop_sp);
+
+                    const entry_end = c._ir_END(ctx);
+                    const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
+
+                    // Execute predicate body
+                    const pre_body_sp = sp.*;
+                    switch (pred_entry) {
+                        .quotation_body => |body| {
+                            for (0..sp.*) |i| {
+                                stack[i] = .{ .raw_at_slot = i };
+                            }
+                            try compileInstructions(state, body, stack, sp);
+                        },
+                        .raw_at_slot => |s| {
+                            try emitIndirectQuotCall(state, stack, sp, s);
+                            for (0..sp.*) |i| {
+                                stack[i] = .{ .raw_at_slot = i };
+                            }
+                        },
+                        else => return IrCodegenError.NotCompilable,
+                    }
+
+                    // Pred should push a boolean on top
+                    if (sp.* < pre_body_sp + 1) return IrCodegenError.StackShapeMismatch;
+                    sp.* -= 1;
+                    const cond_entry = stack[sp.*];
+                    if (sp.* != pre_body_sp) return IrCodegenError.StackShapeMismatch;
+
+                    const continue_cond = try emitTruthiness(state, cond_entry, base_addr);
+
+                    flushToPhysicalStack(state, stack, sp.*);
+                    for (0..sp.*) |i| {
+                        stack[i] = .{ .raw_at_slot = i };
+                    }
+
+                    const if_continue = c._ir_IF(ctx, continue_cond);
+                    c._ir_IF_TRUE(ctx, if_continue);
+                    const loop_end = c._ir_LOOP_END(ctx);
+                    c.ir_set_op2(ctx, loop_ref, loop_end);
+
+                    c._ir_IF_FALSE(ctx, if_continue);
+                } else if (std.mem.eql(u8, name, "while")) {
+                    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+                    sp.* -= 2;
+                    const pred_entry = stack[sp.*];
+                    const body_entry = stack[sp.* + 1];
+
+                    // Flush user stack to physical memory before the loop
+                    flushToPhysicalStack(state, stack, sp.*);
+
+                    const pre_loop_sp_const = c.ir_const_addr(ctx, sp.*);
+                    const pre_loop_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, pre_loop_sp_const);
+                    c._ir_STORE(ctx, state.sp_ptr, pre_loop_sp);
+
+                    const entry_end = c._ir_END(ctx);
+                    const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
+
+                    // Execute predicate
+                    const pre_body_sp = sp.*;
+                    switch (pred_entry) {
+                        .quotation_body => |body| {
+                            for (0..sp.*) |i| {
+                                stack[i] = .{ .raw_at_slot = i };
+                            }
+                            try compileInstructions(state, body, stack, sp);
+                        },
+                        .raw_at_slot => |s| {
+                            try emitIndirectQuotCall(state, stack, sp, s);
+                            for (0..sp.*) |i| {
+                                stack[i] = .{ .raw_at_slot = i };
+                            }
+                        },
+                        else => return IrCodegenError.NotCompilable,
+                    }
+
+                    // Pred should push a boolean on top
+                    if (sp.* < pre_body_sp + 1) return IrCodegenError.StackShapeMismatch;
+                    sp.* -= 1;
+                    const cond_entry = stack[sp.*];
+                    if (sp.* != pre_body_sp) return IrCodegenError.StackShapeMismatch;
+
+                    const continue_cond = try emitTruthiness(state, cond_entry, base_addr);
+
+                    flushToPhysicalStack(state, stack, sp.*);
+
+                    const if_continue = c._ir_IF(ctx, continue_cond);
+
+                    c._ir_IF_TRUE(ctx, if_continue);
+
+                    // Execute body
+                    switch (body_entry) {
+                        .quotation_body => |body| {
+                            for (0..sp.*) |i| {
+                                stack[i] = .{ .raw_at_slot = i };
+                            }
+                            const body_pre_sp = sp.*;
+                            try compileInstructions(state, body, stack, sp);
+                            if (sp.* != body_pre_sp) return IrCodegenError.StackShapeMismatch;
+                            flushToPhysicalStack(state, stack, sp.*);
+                        },
+                        .raw_at_slot => |s| {
+                            try emitIndirectQuotCall(state, stack, sp, s);
+                        },
+                        else => return IrCodegenError.NotCompilable,
+                    }
+
+                    for (0..sp.*) |i| {
+                        stack[i] = .{ .raw_at_slot = i };
+                    }
+
+                    const loop_end = c._ir_LOOP_END(ctx);
+                    c.ir_set_op2(ctx, loop_ref, loop_end);
+
+                    c._ir_IF_FALSE(ctx, if_continue);
+                    for (0..sp.*) |i| {
+                        stack[i] = .{ .raw_at_slot = i };
+                    }
+                } else if (std.mem.eql(u8, name, "until")) {
+                    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+                    sp.* -= 2;
+                    const pred_entry = stack[sp.*];
+                    const body_entry = stack[sp.* + 1];
+
+                    // Flush user stack to physical memory before the loop
+                    flushToPhysicalStack(state, stack, sp.*);
+
+                    const pre_loop_sp_const = c.ir_const_addr(ctx, sp.*);
+                    const pre_loop_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, pre_loop_sp_const);
+                    c._ir_STORE(ctx, state.sp_ptr, pre_loop_sp);
+
+                    const entry_end = c._ir_END(ctx);
+                    const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
+
+                    // Execute predicate
+                    const pre_body_sp = sp.*;
+                    switch (pred_entry) {
+                        .quotation_body => |body| {
+                            for (0..sp.*) |i| {
+                                stack[i] = .{ .raw_at_slot = i };
+                            }
+                            try compileInstructions(state, body, stack, sp);
+                        },
+                        .raw_at_slot => |s| {
+                            try emitIndirectQuotCall(state, stack, sp, s);
+                            for (0..sp.*) |i| {
+                                stack[i] = .{ .raw_at_slot = i };
+                            }
+                        },
+                        else => return IrCodegenError.NotCompilable,
+                    }
+
+                    // Pred should push a boolean on top
+                    if (sp.* < pre_body_sp + 1) return IrCodegenError.StackShapeMismatch;
+                    sp.* -= 1;
+                    const cond_entry = stack[sp.*];
+                    if (sp.* != pre_body_sp) return IrCodegenError.StackShapeMismatch;
+
+                    // until = while with negated condition
+                    const truthy = try emitTruthiness(state, cond_entry, base_addr);
+                    const continue_cond = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), truthy, c.ir_const_bool(ctx, false));
+
+                    flushToPhysicalStack(state, stack, sp.*);
+
+                    const if_continue = c._ir_IF(ctx, continue_cond);
+
+                    c._ir_IF_TRUE(ctx, if_continue);
+
+                    // Execute body
+                    switch (body_entry) {
+                        .quotation_body => |body| {
+                            for (0..sp.*) |i| {
+                                stack[i] = .{ .raw_at_slot = i };
+                            }
+                            const body_pre_sp = sp.*;
+                            try compileInstructions(state, body, stack, sp);
+                            if (sp.* != body_pre_sp) return IrCodegenError.StackShapeMismatch;
+                            flushToPhysicalStack(state, stack, sp.*);
+                        },
+                        .raw_at_slot => |s| {
+                            try emitIndirectQuotCall(state, stack, sp, s);
+                        },
+                        else => return IrCodegenError.NotCompilable,
+                    }
+
+                    for (0..sp.*) |i| {
+                        stack[i] = .{ .raw_at_slot = i };
+                    }
+
+                    const loop_end = c._ir_LOOP_END(ctx);
+                    c.ir_set_op2(ctx, loop_ref, loop_end);
+
+                    c._ir_IF_FALSE(ctx, if_continue);
+                    for (0..sp.*) |i| {
+                        stack[i] = .{ .raw_at_slot = i };
                     }
                 } else if (isBinaryOp(name)) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;

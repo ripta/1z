@@ -280,3 +280,139 @@ Stack: [ ]
 Stack: [ ]
 PASS: non-quotation call errors
 Stack: [ ]
+=== compile! times: zero iterations ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: times 0 iterations
+Stack: [ ]
+=== compile! times: one iteration ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: times 1 iteration
+Stack: [ ]
+=== compile! times: five iterations ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: times 5 iterations
+Stack: [ ]
+=== compile! times: accumulator with arithmetic ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: times 4 x add 3
+Stack: [ ]
+=== compile! loop: counter-based exit ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: loop until >= 5
+Stack: [ ]
+=== compile! while: pred and body ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: while < 10
+Stack: [ ]
+=== compile! until: pred and body ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: until = 7
+Stack: [ ]
+=== compile! nested times ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: 3 x 2 nested times
+Stack: [ ]
+=== compile! loop: immediate exit ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: loop immediate false
+Stack: [ ]
+=== match: if/else with truthy non-boolean values ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ 1 ]
+Stack: [ 1 ]
+Stack: [ 1 1 ]
+PASS: if-truthy fixnum 42
+Stack: [ ]
+Stack: [ ]
+Stack: [ 1 ]
+Stack: [ 1 ]
+Stack: [ 1 1 ]
+PASS: if-truthy string
+Stack: [ ]
+Stack: [ ]
+Stack: [ 1 ]
+Stack: [ 1 ]
+Stack: [ 1 1 ]
+PASS: if-truthy zero
+Stack: [ ]
+=== match: if/else stack preservation ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ { 20 10 } ]
+Stack: [ { 20 10 } ]
+Stack: [ { 20 10 } { 20 10 } ]
+PASS: if-stack true branch
+Stack: [ ]
+Stack: [ ]
+Stack: [ { 40 30 } ]
+Stack: [ { 40 30 } ]
+Stack: [ { 40 30 } { 40 30 } ]
+PASS: if-stack false branch
+Stack: [ ]
+=== match: quotation call with stack effects ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ { 3 2 1 } ]
+Stack: [ { 3 2 1 } ]
+Stack: [ { 3 2 1 } { 3 2 1 } ]
+PASS: call-multi ordering
+Stack: [ ]
+=== match: times loop with complex body ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ 458330 ]
+Stack: [ 458330 ]
+Stack: [ 458330 458330 ]
+PASS: times-complex match
+Stack: [ ]
+=== match: while loop with multi-element stack ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ { 6 3 } ]
+Stack: [ { 6 3 } ]
+Stack: [ { 6 3 } { 6 3 } ]
+PASS: while-two match
+Stack: [ ]
+=== match: until + if interaction ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ 11 ]
+Stack: [ 11 ]
+Stack: [ 11 11 ]
+PASS: until-if match
+Stack: [ ]
+=== match: nested while in times ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ 12 ]
+Stack: [ 12 ]
+Stack: [ 12 12 ]
+PASS: while-in-times match
+Stack: [ ]
+=== match: times with quotation call in body ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ 7 ]
+Stack: [ 7 ]
+Stack: [ 7 7 ]
+PASS: times-call match
+Stack: [ ]
