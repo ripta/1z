@@ -1,0 +1,78 @@
+=== cross-file: compile local caller of imported word ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: local caller of imported jit-add5
+Stack: [ ]
+=== cross-file: compile imported word then call ===
+Stack: [ ]
+Stack: [ ]
+PASS: compiled imported jit-mul3
+Stack: [ ]
+=== cross-file: chain through imported words ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: chain: (2+5)*3 = 21
+Stack: [ ]
+=== cross-file: compile caller before compiling imported callee ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: caller before callee compiled
+Stack: [ ]
+Stack: [ ]
+PASS: caller after callee compiled
+Stack: [ ]
+=== redefine imported word invalidates compiled caller ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: before redefine
+Stack: [ ]
+Stack: [ ]
+PASS: after redefine, caller picks up new definition
+Stack: [ ]
+=== redefine + recompile ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: after redefine and recompile both
+Stack: [ ]
+=== multiple callers of imported word all invalidated ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: mcaller-a before
+Stack: [ ]
+PASS: mcaller-b before
+Stack: [ ]
+Stack: [ ]
+PASS: mcaller-a after redefine
+Stack: [ ]
+PASS: mcaller-b after redefine
+Stack: [ ]
+=== imported word in loop body under JIT ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: imported word in times loop
+Stack: [ ]
+=== imported word in if branch under JIT ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: imported word in true branch
+Stack: [ ]
+PASS: imported word in false branch (not taken)
+Stack: [ ]

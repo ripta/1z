@@ -1,0 +1,81 @@
+use "testing" ;
+use "jit_module_lib.1z" ;
+
+\ === Cross-file compiled calls ===
+
+"cross-file: compile local caller of imported word" test-section
+
+local-add5: ( n -- n ) [ jit-add5 ] ;
+local-add5: compile!
+10 local-add5 15 "local caller of imported jit-add5" assert=
+
+"cross-file: compile imported word then call" test-section
+
+jit-mul3: compile!
+7 jit-mul3 21 "compiled imported jit-mul3" assert=
+
+"cross-file: chain through imported words" test-section
+
+jit-chain: compile!
+local-chain: ( n -- n ) [ jit-chain ] ;
+local-chain: compile!
+2 local-chain 21 "chain: (2+5)*3 = 21" assert=
+
+"cross-file: compile caller before compiling imported callee" test-section
+
+early-caller: ( n -- n ) [ jit-add5 ] ;
+early-caller: compile!
+\ jit-add5 may or may not be compiled yet; caller bails to interpreter if needed
+4 early-caller 9 "caller before callee compiled" assert=
+jit-add5: compile!
+4 early-caller 9 "caller after callee compiled" assert=
+
+\ === Redefinition of imported words ===
+
+"redefine imported word invalidates compiled caller" test-section
+
+rd-caller: ( n -- n ) [ jit-add5 ] ;
+rd-caller: compile!
+10 rd-caller 15 "before redefine" assert=
+jit-add5: ( n -- n ) [ 50 + ] ;
+10 rd-caller 60 "after redefine, caller picks up new definition" assert=
+
+"redefine + recompile" test-section
+
+jit-add5: ( n -- n ) [ 7 + ] ;
+jit-add5: compile!
+rd-caller: compile!
+10 rd-caller 17 "after redefine and recompile both" assert=
+
+"multiple callers of imported word all invalidated" test-section
+
+jit-add5: ( n -- n ) [ 5 + ] ;
+jit-add5: compile!
+mcaller-a: ( n -- n ) [ jit-add5 ] ;
+mcaller-a: compile!
+mcaller-b: ( n -- n ) [ jit-add5 1 + ] ;
+mcaller-b: compile!
+10 mcaller-a 15 "mcaller-a before" assert=
+10 mcaller-b 16 "mcaller-b before" assert=
+jit-add5: ( n -- n ) [ 100 + ] ;
+10 mcaller-a 110 "mcaller-a after redefine" assert=
+10 mcaller-b 111 "mcaller-b after redefine" assert=
+
+\ === Edge cases ===
+
+"imported word in loop body under JIT" test-section
+
+jit-add5: ( n -- n ) [ 5 + ] ;
+jit-add5: compile!
+loop-caller: ( -- n ) [ 0 4 [ jit-add5 ] times ] ;
+loop-caller: compile!
+loop-caller 20 "imported word in times loop" assert=
+
+"imported word in if branch under JIT" test-section
+
+jit-add5: ( n -- n ) [ 5 + ] ;
+jit-add5: compile!
+if-caller: ( n -- n ) [ dup 0 > [ jit-add5 ] [ drop 0 ] if ] ;
+if-caller: compile!
+10 if-caller 15 "imported word in true branch" assert=
+-1 if-caller 0 "imported word in false branch (not taken)" assert=

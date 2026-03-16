@@ -1,0 +1,5 @@
+\ Helper module for JIT cross-module integration tests
+
+jit-add5:  ( n -- n ) [ 5 + ] ;
+jit-mul3:  ( n -- n ) [ 3 * ] ;
+jit-chain: ( n -- n ) [ jit-add5 jit-mul3 ] ;
