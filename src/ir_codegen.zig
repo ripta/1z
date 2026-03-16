@@ -43,6 +43,7 @@ fn isSupportedOp(name: []const u8) bool {
     if (std.mem.eql(u8, name, "call")) return true;
     if (std.mem.eql(u8, name, "t") or std.mem.eql(u8, name, "f")) return true;
     if (isLoopOp(name)) return true;
+    if (isErrorHandlingOp(name)) return true;
     return false;
 }
 
@@ -76,6 +77,10 @@ fn isLoopOp(name: []const u8) bool {
         if (std.mem.eql(u8, name, op)) return true;
     }
     return false;
+}
+
+fn isErrorHandlingOp(name: []const u8) bool {
+    return std.mem.eql(u8, name, "recover") or std.mem.eql(u8, name, "cleanup");
 }
 
 /// Layout of Value for use in generated IR code, determined at runtime
@@ -453,6 +458,9 @@ const CompileState = struct {
     resolver: ?WordResolver = null,
     jit_ctx_ptr: c.ir_ref = c.IR_UNUSED,
     safepoint_fn: c.ir_ref = c.IR_UNUSED,
+    recover_fn: c.ir_ref = c.IR_UNUSED,
+    cleanup_fn: c.ir_ref = c.IR_UNUSED,
+    error_propagate_status: c.ir_ref = c.IR_UNUSED,
 };
 
 /// Extract or emit an i64 IR ref from a stack entry. For raw_at_slot entries,
@@ -1175,6 +1183,53 @@ fn compileInstructions(
                         stack[sp.*] = .{ .i64_ref = emitEuclideanMod(ctx, a, b, bail_status) };
                         sp.* += 1;
                     }
+                } else if (isErrorHandlingOp(name)) {
+                    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+
+                    // Materialize any quotation_body entries as raw Values on
+                    // the physical stack. flushToPhysicalStack skips these
+                    // since they're normally consumed by `if`/`call`, but
+                    // recover/cleanup need them as proper Values for the
+                    // interpreter callback to pop.
+                    for (0..sp.*) |qi| {
+                        switch (stack[qi]) {
+                            .quotation_body => |body| {
+                                const qval = Value{ .quotation = .{ .instructions = body, .code_ptr = null } };
+                                const slot_byte_offset = c.ir_const_addr(ctx, qi * ValueLayout.value_size);
+                                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                                emitPushValue(ctx, &qval, dest_addr);
+                                stack[qi] = .{ .raw_at_slot = qi };
+                            },
+                            else => {},
+                        }
+                    }
+
+                    flushToPhysicalStack(state, stack, sp.*);
+                    const sp_const = c.ir_const_addr(ctx, sp.*);
+                    const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
+                    c._ir_STORE(ctx, state.sp_ptr, new_sp);
+
+                    JitContextLayout.ensureInit();
+                    const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+                    const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+                    const ctx_val = c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
+
+                    const callback_fn = if (std.mem.eql(u8, name, "recover"))
+                        state.recover_fn
+                    else
+                        state.cleanup_fn;
+
+                    const call_result = c._ir_CALL_1(ctx, c.IR_I32, callback_fn, ctx_val);
+
+                    const zero_status = c.ir_const_i32(ctx, 0);
+                    const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
+                    const if_bail = c._ir_IF(ctx, call_failed);
+                    c._ir_IF_TRUE_cold(ctx, if_bail);
+                    c._ir_RETURN(ctx, call_result);
+                    c._ir_IF_FALSE(ctx, if_bail);
+
+                    sp.* -= 2;
+                    state.dynamic_call_emitted = true;
                 } else {
                     // Unrecognized word: try dispatch table call if a resolver is available
                     const res = state.resolver orelse return IrCodegenError.NotCompilable;
@@ -1310,25 +1365,29 @@ fn preScanInstructions(
     resolver: ?WordResolver,
     needs_dispatch: *bool,
     needs_safepoint: *bool,
+    needs_error_handling: *bool,
+    in_quotation: bool,
 ) IrCodegenError!void {
     for (instructions) |instr| {
         switch (instr.op) {
             .push_literal => |val| {
                 if (val == .quotation) {
-                    try preScanInstructions(val.quotation.instructions, resolver, needs_dispatch, needs_safepoint);
+                    try preScanInstructions(val.quotation.instructions, resolver, needs_dispatch, needs_safepoint, needs_error_handling, true);
                 }
             },
             .call_word => |name| {
                 if (isLoopOp(name)) {
                     needs_safepoint.* = true;
+                } else if (isErrorHandlingOp(name)) {
+                    needs_error_handling.* = true;
                 } else if (!isSupportedOp(name) and !isStackOp(name)) {
                     if (resolver) |res| {
                         if (res.resolve(name, res.user_data)) |_| {
                             needs_dispatch.* = true;
-                        } else {
+                        } else if (!in_quotation) {
                             return IrCodegenError.NotCompilable;
                         }
-                    } else {
+                    } else if (!in_quotation) {
                         return IrCodegenError.NotCompilable;
                     }
                 }
@@ -1355,7 +1414,8 @@ pub fn compileWord(
     // or contains loops (which need safepoints).
     var needs_dispatch = false;
     var needs_safepoint = false;
-    try preScanInstructions(instructions, resolver, &needs_dispatch, &needs_safepoint);
+    var needs_error_handling = false;
+    try preScanInstructions(instructions, resolver, &needs_dispatch, &needs_safepoint, &needs_error_handling, false);
 
     var ctx: c.ir_ctx = undefined;
     c.ir_init(&ctx, c.IR_FUNCTION | c.IR_OPT_FOLDING, c.IR_CONSTS_LIMIT_MIN, c.IR_INSNS_LIMIT_MIN);
@@ -1389,8 +1449,22 @@ pub fn compileWord(
     else
         c.IR_UNUSED;
 
+    // Bake error handling callback pointers if recover/cleanup are used.
+    const recover_fn = if (needs_error_handling)
+        c.ir_const_addr(&ctx, @intFromPtr(&jitRecover))
+    else
+        c.IR_UNUSED;
+    const cleanup_fn = if (needs_error_handling)
+        c.ir_const_addr(&ctx, @intFromPtr(&jitCleanup))
+    else
+        c.IR_UNUSED;
+
     const bail_status = c.ir_const_i32(&ctx, 1);
     const ok_status = c.ir_const_i32(&ctx, 0);
+    const error_propagate_status = if (needs_error_handling)
+        c.ir_const_i32(&ctx, 2)
+    else
+        c.IR_UNUSED;
 
     // Load current stack depth
     const sp_val = c._ir_LOAD(&ctx, c.IR_ADDR, sp_ptr);
@@ -1447,6 +1521,9 @@ pub fn compileWord(
         .resolver = resolver,
         .jit_ctx_ptr = jit_ctx_ptr,
         .safepoint_fn = safepoint_fn,
+        .recover_fn = recover_fn,
+        .cleanup_fn = cleanup_fn,
+        .error_propagate_status = error_propagate_status,
     };
 
     try compileInstructions(&state, instructions, &stack, &sp);
@@ -1639,8 +1716,30 @@ fn jitSafepoint(ctx_raw: usize) callconv(.c) void {
     }
 }
 
+const errors_mod = @import("primitives/errors.zig");
+
+fn jitRecover(ctx_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    errors_mod.nativeRecover(ctx) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return 0;
+}
+
+fn jitCleanup(ctx_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    errors_mod.nativeCleanup(ctx) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return 0;
+}
+
 /// Result of attempting compiled execution.
-pub const ExecResult = enum { ok, bail };
+pub const ExecResult = enum { ok, bail, error_propagate };
 
 /// Execute a JIT-compiled word. The compiled function operates directly on
 /// the per-task Value stack: it reads inputs, checks fixnum tags, performs
@@ -1660,7 +1759,11 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     };
     const status = func(&jit_ctx);
 
-    return if (status == 0) .ok else .bail;
+    return switch (status) {
+        0 => .ok,
+        2 => .error_propagate,
+        else => .bail,
+    };
 }
 
 // =============================================================================

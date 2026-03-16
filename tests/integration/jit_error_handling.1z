@@ -1,0 +1,62 @@
+use "testing" ;
+
+"compiled recover with no error" test-section
+
+safe-recover: ( -- n ) [ [ 42 ] [ drop 0 ] recover ] ;
+safe-recover: compile!
+safe-recover 42 "body succeeds, recover-quot not called" assert=
+
+"compiled recover catches division by zero" test-section
+
+risky-recover: ( -- n ) [ [ 1 0 / ] [ drop -1 ] recover ] ;
+risky-recover: compile!
+risky-recover -1 "error caught, recover-quot runs" assert=
+
+"compiled recover captures error type" test-section
+
+recover-type: ( -- s ) [ [ 1 0 / ] [ "error-type" @get ] recover ] ;
+recover-type: compile!
+recover-type division-by-zero: "error type captured" assert=
+
+"compiled cleanup on success" test-section
+
+cleanup-ok: ( -- n n ) [ [ 1 ] [ 2 ] cleanup ] ;
+cleanup-ok: compile!
+cleanup-ok 2 "cleanup ran" assert=
+1 "body result" assert=
+
+"compiled cleanup on error propagates" test-section
+
+cleanup-err: ( -- n ) [ [ [ 1 0 / ] [ drop ] cleanup ] [ drop -1 ] recover ] ;
+cleanup-err: compile!
+cleanup-err -1 "error propagated through cleanup" assert=
+
+"compiled cleanup + recover composition" test-section
+
+cleanup-recover: ( -- n ) [
+  [ [ 1 0 / ] [ drop 20 ] cleanup ]
+  [ drop -1 ]
+  recover
+] ;
+cleanup-recover: compile!
+cleanup-recover -1 "recover caught error from cleanup body" assert=
+
+"compiled vs interpreter parity for recover" test-section
+
+parity-recover-compiled: ( -- n ) [ [ 100 ] [ drop 0 ] recover ] ;
+parity-recover-compiled: compile!
+
+parity-recover-interp: ( -- n ) [ [ 100 ] [ drop 0 ] recover ] ;
+
+parity-recover-compiled
+parity-recover-interp
+"compiled and interpreter recover match on success" assert=
+
+parity-err-compiled: ( -- n ) [ [ 1 0 / ] [ drop -1 ] recover ] ;
+parity-err-compiled: compile!
+
+parity-err-interp: ( -- n ) [ [ 1 0 / ] [ drop -1 ] recover ] ;
+
+parity-err-compiled
+parity-err-interp
+"compiled and interpreter recover match on error" assert=

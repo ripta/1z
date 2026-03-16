@@ -1,0 +1,54 @@
+=== compiled recover with no error ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: body succeeds, recover-quot not called
+Stack: [ ]
+=== compiled recover catches division by zero ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: error caught, recover-quot runs
+Stack: [ ]
+=== compiled recover captures error type ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: error type captured
+Stack: [ ]
+=== compiled cleanup on success ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: cleanup ran
+Stack: [ 1 ]
+PASS: body result
+Stack: [ ]
+=== compiled cleanup on error propagates ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: error propagated through cleanup
+Stack: [ ]
+=== compiled cleanup + recover composition ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: recover caught error from cleanup body
+Stack: [ ]
+=== compiled vs interpreter parity for recover ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ 100 ]
+Stack: [ 100 100 ]
+PASS: compiled and interpreter recover match on success
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ -1 ]
+Stack: [ -1 -1 ]
+PASS: compiled and interpreter recover match on error
+Stack: [ ]

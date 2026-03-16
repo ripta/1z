@@ -179,6 +179,10 @@ pub const Context = struct {
     dispatch: DispatchTable,
     /// JIT dispatch table mapping word IDs to compiled code pointers.
     jit_dispatch: JitDispatchTable,
+    /// Pending error from a JIT error-handling callback (recover/cleanup).
+    /// Set by the callback when it returns error_propagate status, consumed
+    /// by the interpreter dispatch loop.
+    jit_pending_error: ?anyerror = null,
     /// PIC cache mapping instruction slice pointers to their PIC tables.
     /// Lazily populated on first generic dispatch through a compound word body.
     pic_cache: std.AutoHashMapUnmanaged(usize, *PicTable) = .{},
@@ -2040,9 +2044,17 @@ pub const Context = struct {
 
                         // Try JIT-compiled dispatch before interpreter path
                         if (word.word_id) |wid| {
-                            if (ir_codegen.executeCompiled(self, wid) == .ok) {
-                                if (self.benchmark) |bm| bm.endWordProfile(self.allocator, name);
-                                continue;
+                            switch (ir_codegen.executeCompiled(self, wid)) {
+                                .ok => {
+                                    if (self.benchmark) |bm| bm.endWordProfile(self.allocator, name);
+                                    continue;
+                                },
+                                .error_propagate => {
+                                    const err = self.jit_pending_error orelse error.UserThrown;
+                                    self.jit_pending_error = null;
+                                    return err;
+                                },
+                                .bail => {},
                             }
                         }
 
