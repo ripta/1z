@@ -790,23 +790,24 @@ fn compileInstructions(
                     const if_ref = c._ir_IF(ctx, cond_ref);
                     c._ir_IF_TRUE(ctx, if_ref);
                     try compileInstructions(state, true_body, stack, sp);
+                    flushToPhysicalStack(state, stack, sp.*);
                     const end_true = c._ir_END(ctx);
 
                     // Emit false branch
                     c._ir_IF_FALSE(ctx, if_ref);
                     var false_sp = saved_sp;
                     try compileInstructions(state, false_body, &saved_stack, &false_sp);
+                    flushToPhysicalStack(state, &saved_stack, false_sp);
                     const end_false = c._ir_END(ctx);
 
                     c._ir_MERGE_2(ctx, end_true, end_false);
 
                     if (sp.* != false_sp) return IrCodegenError.StackShapeMismatch;
 
-                    // Merge stack entries with PHI nodes
-                    for (saved_sp..sp.*) |i| {
-                        const true_entry = stack[i];
-                        const false_entry = saved_stack[i];
-                        stack[i] = try mergeEntries(ctx, true_entry, false_entry, i, base_addr);
+                    // Both branches flushed to physical memory, so all
+                    // entries are raw_at_slot after the merge.
+                    for (0..sp.*) |i| {
+                        stack[i] = .{ .raw_at_slot = i };
                     }
                 } else if (std.mem.eql(u8, name, "call")) {
                     if (sp.* < 1) return IrCodegenError.StackUnderflow;
@@ -1550,15 +1551,8 @@ fn emitEuclideanMod(
     const rem_nonzero = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), rem_val, zero);
     const needs_adjust = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), rem_nonzero, signs_differ);
 
-    const if_adjust = c._ir_IF(ctx, needs_adjust);
-    c._ir_IF_TRUE(ctx, if_adjust);
     const adjusted = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_I64), rem_val, b);
-    const end_true = c._ir_END(ctx);
-    c._ir_IF_FALSE(ctx, if_adjust);
-    const end_false = c._ir_END(ctx);
-    c._ir_MERGE_2(ctx, end_true, end_false);
-
-    return c._ir_PHI_2(ctx, c.IR_I64, adjusted, rem_val);
+    return c.ir_fold3(ctx, c.IR_OPT(c.IR_COND, c.IR_I64), needs_adjust, adjusted, rem_val);
 }
 
 // =============================================================================
