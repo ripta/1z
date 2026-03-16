@@ -571,13 +571,16 @@ fn nativeCompile(ctx: *Context) anyerror!void {
         bm.recordJitCompile(after_ns - before_ns);
     }
 
-    const word_id = ctx.jit_dispatch.assignId(sym) catch {
-        compiled.jit_buf.deinit();
-        return error.OutOfMemory;
-    };
-    ctx.jit_dispatch.update(word_id, compiled.code_ptr, compiled.jit_buf);
-
-    propagateWordId(ctx, sym, word_id);
+    if (word.word_id) |existing_id| {
+        ctx.jit_dispatch.update(existing_id, compiled.code_ptr, compiled.jit_buf);
+    } else {
+        const new_id = ctx.jit_dispatch.assignId(sym) catch {
+            compiled.jit_buf.deinit();
+            return error.OutOfMemory;
+        };
+        ctx.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf);
+        propagateWordId(ctx, sym, new_id);
+    }
 }
 
 /// Write word_id to whichever scope lookupWord would find the word in:

@@ -641,6 +641,12 @@ pub const Context = struct {
             }
         }
 
+        if (same_scope_existing) |existing| {
+            if (existing.word_id) |wid| {
+                self.jit_dispatch.invalidate(wid);
+            }
+        }
+
         var def = definition;
         if (def.source_file == null) {
             def.source_file = self.current_source;

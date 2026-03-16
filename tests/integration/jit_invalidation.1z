@@ -1,0 +1,59 @@
+use "testing" ;
+
+"redefine invalidates compiled caller" test-section
+
+helper-a: ( n -- n ) [ 10 + ] ;
+helper-a: compile!
+caller-a: ( n -- n ) [ helper-a ] ;
+caller-a: compile!
+5 caller-a 15 "before redefine" assert=
+helper-a: ( n -- n ) [ 20 + ] ;
+5 caller-a 25 "after redefine, caller bails to interpreter" assert=
+
+"recompile after redefine" test-section
+
+helper-b: ( n -- n ) [ 3 * ] ;
+helper-b: compile!
+caller-b: ( n -- n ) [ helper-b ] ;
+caller-b: compile!
+4 caller-b 12 "before redefine" assert=
+helper-b: ( n -- n ) [ 5 * ] ;
+helper-b: compile!
+caller-b: compile!
+4 caller-b 20 "after redefine and recompile" assert=
+
+"recompile without redefine reuses word_id" test-section
+
+helper-c: ( n -- n ) [ 7 + ] ;
+helper-c: compile!
+caller-c: ( n -- n ) [ helper-c ] ;
+caller-c: compile!
+3 caller-c 10 "first compile" assert=
+helper-c: compile!
+3 caller-c 10 "after recompile, callers still work" assert=
+
+"chain invalidation: A calls B calls C" test-section
+
+chain-c: ( n -- n ) [ 1 + ] ;
+chain-c: compile!
+chain-b: ( n -- n ) [ chain-c ] ;
+chain-b: compile!
+chain-a: ( n -- n ) [ chain-b ] ;
+chain-a: compile!
+0 chain-a 1 "chain before redefine" assert=
+chain-c: ( n -- n ) [ 100 + ] ;
+0 chain-a 100 "chain after redefine C, A and B cascade-bail" assert=
+
+"multiple callers of same word" test-section
+
+shared: ( n -- n ) [ 2 * ] ;
+shared: compile!
+caller-x: ( n -- n ) [ shared ] ;
+caller-x: compile!
+caller-y: ( n -- n ) [ shared 1 + ] ;
+caller-y: compile!
+5 caller-x 10 "caller-x before" assert=
+5 caller-y 11 "caller-y before" assert=
+shared: ( n -- n ) [ 3 * ] ;
+5 caller-x 15 "caller-x after redefine" assert=
+5 caller-y 16 "caller-y after redefine" assert=

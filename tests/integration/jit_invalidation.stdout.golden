@@ -1,0 +1,65 @@
+=== redefine invalidates compiled caller ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: before redefine
+Stack: [ ]
+Stack: [ ]
+PASS: after redefine, caller bails to interpreter
+Stack: [ ]
+=== recompile after redefine ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: before redefine
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: after redefine and recompile
+Stack: [ ]
+=== recompile without redefine reuses word_id ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: first compile
+Stack: [ ]
+Stack: [ ]
+PASS: after recompile, callers still work
+Stack: [ ]
+=== chain invalidation: A calls B calls C ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: chain before redefine
+Stack: [ ]
+Stack: [ ]
+PASS: chain after redefine C, A and B cascade-bail
+Stack: [ ]
+=== multiple callers of same word ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: caller-x before
+Stack: [ ]
+PASS: caller-y before
+Stack: [ ]
+Stack: [ ]
+PASS: caller-x after redefine
+Stack: [ ]
+PASS: caller-y after redefine
+Stack: [ ]
