@@ -1,0 +1,38 @@
+=== compiled loop without task-scope ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: single-threaded compiled loop works
+Stack: [ ]
+=== nested compiled loops ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: nested compiled loops complete
+Stack: [ 0 ]
+=== compiled loop yields to other tasks ===
+Stack: [ 0 ]
+Stack: [ 0 ]
+Stack: [ 0 ]
+PASS: compiled loop task completed
+PASS: yielding task completed
+Stack: [ 0 ]
+=== compiled times loop yields ===
+Stack: [ 0 ]
+Stack: [ 0 ]
+Stack: [ 0 ]
+PASS: times loop task completed
+PASS: yielding task completed during times
+Stack: [ 0 ]
+=== compiled while loop ===
+Stack: [ 0 ]
+Stack: [ 0 ]
+Stack: [ 0 ]
+PASS: while loop counted down
+Stack: [ 0 ]
+=== compiled until loop ===
+Stack: [ 0 ]
+Stack: [ 0 ]
+Stack: [ 0 ]
+PASS: until loop counted down
+Stack: [ 0 ]

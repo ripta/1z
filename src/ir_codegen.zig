@@ -451,6 +451,8 @@ const CompileState = struct {
     dynamic_call_emitted: bool = false,
     dispatch_ptr: c.ir_ref = c.IR_UNUSED,
     resolver: ?WordResolver = null,
+    jit_ctx_ptr: c.ir_ref = c.IR_UNUSED,
+    safepoint_fn: c.ir_ref = c.IR_UNUSED,
 };
 
 /// Extract or emit an i64 IR ref from a stack entry. For raw_at_slot entries,
@@ -562,8 +564,8 @@ fn emitIndirectQuotCall(
     const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
     c._ir_STORE(ctx, state.sp_ptr, new_sp);
 
-    // Indirect call
-    const call_result = c._ir_CALL_3(ctx, c.IR_I32, code_ptr_val, state.items_ptr, state.sp_ptr, state.capacity_param);
+    // Indirect call via jit_ctx_ptr
+    const call_result = c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
 
     const zero_status = c.ir_const_i32(ctx, 0);
     const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
@@ -847,8 +849,8 @@ fn compileInstructions(
                             const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, new_sp_const);
                             c._ir_STORE(ctx, state.sp_ptr, new_sp);
 
-                            // Indirect call
-                            const call_result = c._ir_CALL_3(ctx, c.IR_I32, code_ptr_val, state.items_ptr, state.sp_ptr, state.capacity_param);
+                            // Indirect call via jit_ctx_ptr
+                            const call_result = c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
 
                             // If call failed, bail (callee may have modified sp,
                             // but the interpreter will re-execute the whole word)
@@ -925,6 +927,7 @@ fn compileInstructions(
                     const continue_cond = c.ir_fold2(ctx, c.IR_OPT(c.IR_GT, c.IR_BOOL), new_counter, zero);
                     const if_continue = c._ir_IF(ctx, continue_cond);
                     c._ir_IF_TRUE(ctx, if_continue);
+                    emitSafepointCall(state);
                     const loop_end = c._ir_LOOP_END(ctx);
                     c.ir_set_op2(ctx, loop_ref, loop_end);
 
@@ -986,6 +989,7 @@ fn compileInstructions(
 
                     const if_continue = c._ir_IF(ctx, continue_cond);
                     c._ir_IF_TRUE(ctx, if_continue);
+                    emitSafepointCall(state);
                     const loop_end = c._ir_LOOP_END(ctx);
                     c.ir_set_op2(ctx, loop_ref, loop_end);
 
@@ -1059,6 +1063,7 @@ fn compileInstructions(
                         stack[i] = .{ .raw_at_slot = i };
                     }
 
+                    emitSafepointCall(state);
                     const loop_end = c._ir_LOOP_END(ctx);
                     c.ir_set_op2(ctx, loop_ref, loop_end);
 
@@ -1137,6 +1142,7 @@ fn compileInstructions(
                         stack[i] = .{ .raw_at_slot = i };
                     }
 
+                    emitSafepointCall(state);
                     const loop_end = c._ir_LOOP_END(ctx);
                     c.ir_set_op2(ctx, loop_ref, loop_end);
 
@@ -1204,8 +1210,8 @@ fn compileInstructions(
                     c._ir_RETURN(ctx, bail_status);
                     c._ir_IF_FALSE(ctx, if_null);
 
-                    // Call the callee with 3 args (same as all compiled words)
-                    const call_result = c._ir_CALL_3(ctx, c.IR_I32, callee_code_ptr, state.items_ptr, state.sp_ptr, state.capacity_param);
+                    // Call the callee via jit_ctx_ptr
+                    const call_result = c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr);
 
                     const zero_status = c.ir_const_i32(ctx, 0);
                     const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
@@ -1265,26 +1271,57 @@ fn mergeEntries(
     }
 }
 
-/// The compiled function signature. All compiled words use this 3-parameter
-/// calling convention. Cross-word dispatch uses a baked-in constant for the
-/// dispatch table pointer rather than a 4th parameter.
-pub const CompiledFn = *const fn ([*]Value, *usize, usize) callconv(.c) i32;
+/// Bundle of all inputs needed by a compiled function. Passed as a single
+/// pointer to avoid the aarch64 IR backend miscompilation with 4+ parameters.
+/// Uses extern struct for C-compatible layout with predictable field offsets.
+pub const JitContext = extern struct {
+    items_ptr: [*]Value,
+    sp_ptr: *usize,
+    capacity: usize,
+    ctx: *anyopaque,
+};
 
-/// Recursively scan instructions and quotation bodies for dispatch calls.
+/// Layout offsets for JitContext fields, discovered at runtime.
+const JitContextLayout = struct {
+    var sp_ptr_offset: usize = 0;
+    var capacity_offset: usize = 0;
+    var ctx_offset: usize = 0;
+    var initialized: bool = false;
+
+    fn ensureInit() void {
+        if (initialized) return;
+
+        var dummy: JitContext = undefined;
+        const base: usize = @intFromPtr(&dummy);
+        sp_ptr_offset = @intFromPtr(&dummy.sp_ptr) - base;
+        capacity_offset = @intFromPtr(&dummy.capacity) - base;
+        ctx_offset = @intFromPtr(&dummy.ctx) - base;
+        initialized = true;
+    }
+};
+
+/// The compiled function signature: takes a single JitContext pointer.
+pub const CompiledFn = *const fn (*JitContext) callconv(.c) i32;
+
+/// Recursively scan instructions and quotation bodies for dispatch calls
+/// and loop ops.
 fn preScanInstructions(
     instructions: []const Instruction,
     resolver: ?WordResolver,
     needs_dispatch: *bool,
+    needs_safepoint: *bool,
 ) IrCodegenError!void {
     for (instructions) |instr| {
         switch (instr.op) {
             .push_literal => |val| {
                 if (val == .quotation) {
-                    try preScanInstructions(val.quotation.instructions, resolver, needs_dispatch);
+                    try preScanInstructions(val.quotation.instructions, resolver, needs_dispatch, needs_safepoint);
                 }
             },
             .call_word => |name| {
-                if (!isSupportedOp(name) and !isStackOp(name)) {
+                if (isLoopOp(name)) {
+                    needs_safepoint.* = true;
+                } else if (!isSupportedOp(name) and !isStackOp(name)) {
                     if (resolver) |res| {
                         if (res.resolve(name, res.user_data)) |_| {
                             needs_dispatch.* = true;
@@ -1314,10 +1351,11 @@ pub fn compileWord(
 
     if (input_count > 8) return IrCodegenError.NotCompilable;
 
-    // Pre-scan: check if any call_word needs dispatch table resolution.
-    // Recurses into quotation literal bodies since they get inlined.
+    // Pre-scan: check if any call_word needs dispatch table resolution
+    // or contains loops (which need safepoints).
     var needs_dispatch = false;
-    try preScanInstructions(instructions, resolver, &needs_dispatch);
+    var needs_safepoint = false;
+    try preScanInstructions(instructions, resolver, &needs_dispatch, &needs_safepoint);
 
     var ctx: c.ir_ctx = undefined;
     c.ir_init(&ctx, c.IR_FUNCTION | c.IR_OPT_FOLDING, c.IR_CONSTS_LIMIT_MIN, c.IR_INSNS_LIMIT_MIN);
@@ -1325,16 +1363,29 @@ pub fn compileWord(
 
     c._ir_START(&ctx);
 
-    // Parameters: items_ptr, sp_ptr, capacity (always 3 params)
-    const items_ptr = c._ir_PARAM(&ctx, c.IR_ADDR, "items_ptr", 1);
-    const sp_ptr = c._ir_PARAM(&ctx, c.IR_ADDR, "sp_ptr", 2);
-    const capacity_param = c._ir_PARAM(&ctx, c.IR_ADDR, "capacity", 3);
+    JitContextLayout.ensureInit();
+
+    // Single parameter: pointer to JitContext struct
+    const jit_ctx_ptr = c._ir_PARAM(&ctx, c.IR_ADDR, "jit_ctx", 1);
+
+    // Load fields from the JitContext struct
+    const items_ptr = c._ir_LOAD(&ctx, c.IR_ADDR, jit_ctx_ptr);
+    const sp_ptr_off = c.ir_const_addr(&ctx, JitContextLayout.sp_ptr_offset);
+    const sp_ptr_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), jit_ctx_ptr, sp_ptr_off);
+    const sp_ptr = c._ir_LOAD(&ctx, c.IR_ADDR, sp_ptr_addr);
+    const cap_off = c.ir_const_addr(&ctx, JitContextLayout.capacity_offset);
+    const cap_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), jit_ctx_ptr, cap_off);
+    const capacity_param = c._ir_LOAD(&ctx, c.IR_ADDR, cap_addr);
 
     // Bake dispatch table pointer as a constant if dispatch calls are needed.
-    // This avoids using a 4th parameter which triggers aarch64 IR backend
-    // miscompilation with complex control flow.
     const dispatch_ptr = if (needs_dispatch)
         c.ir_const_addr(&ctx, @intFromPtr(resolver.?.dispatch_table_ptr))
+    else
+        c.IR_UNUSED;
+
+    // Bake safepoint function pointer as a constant if loops are present.
+    const safepoint_fn = if (needs_safepoint)
+        c.ir_const_addr(&ctx, @intFromPtr(&jitSafepoint))
     else
         c.IR_UNUSED;
 
@@ -1394,6 +1445,8 @@ pub fn compileWord(
         .value_size_const = value_size_const,
         .dispatch_ptr = dispatch_ptr,
         .resolver = resolver,
+        .jit_ctx_ptr = jit_ctx_ptr,
+        .safepoint_fn = safepoint_fn,
     };
 
     try compileInstructions(&state, instructions, &stack, &sp);
@@ -1556,10 +1609,35 @@ fn emitEuclideanMod(
 }
 
 // =============================================================================
+// Safepoint
+// =============================================================================
+
+/// Emit a safepoint call at the current IR position. Loads the ctx field
+/// from the JitContext struct and calls jitSafepoint.
+fn emitSafepointCall(state: *CompileState) void {
+    if (state.safepoint_fn == c.IR_UNUSED) return;
+    JitContextLayout.ensureInit();
+    const ctx_off = c.ir_const_addr(state.ctx, JitContextLayout.ctx_offset);
+    const ctx_addr = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+    const ctx_val = c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
+    _ = c._ir_CALL_1(state.ctx, c.IR_VOID, state.safepoint_fn, ctx_val);
+}
+
+// =============================================================================
 // Trampoline
 // =============================================================================
 
 const Context = @import("context.zig").Context;
+const Scheduler = @import("scheduler.zig").Scheduler;
+
+fn jitSafepoint(ctx_raw: usize) callconv(.c) void {
+    if (ctx_raw == 0) return;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const scheduler: *Scheduler = ctx.scheduler orelse return;
+    if (scheduler.run_queue.items.len > 0) {
+        scheduler.yieldCurrentTask();
+    }
+}
 
 /// Result of attempting compiled execution.
 pub const ExecResult = enum { ok, bail };
@@ -1574,11 +1652,13 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     const code_ptr = entry.code_ptr orelse return .bail;
 
     const func: CompiledFn = @ptrCast(@alignCast(code_ptr));
-    const status = func(
-        ctx.stack.items.items.ptr,
-        &ctx.stack.items.items.len,
-        ctx.stack.items.capacity,
-    );
+    var jit_ctx = JitContext{
+        .items_ptr = ctx.stack.items.items.ptr,
+        .sp_ptr = &ctx.stack.items.items.len,
+        .capacity = ctx.stack.items.capacity,
+        .ctx = ctx,
+    };
+    const status = func(&jit_ctx);
 
     return if (status == 0) .ok else .bail;
 }
@@ -1612,7 +1692,13 @@ fn callCompiled(func: CompiledFn, inputs: []const i64, result: *i64) i32 {
         values[i] = .{ .fixnum = v };
     }
     var sp: usize = inputs.len;
-    const status = func(&values, &sp, values.len);
+    var jit_ctx = JitContext{
+        .items_ptr = &values,
+        .sp_ptr = &sp,
+        .capacity = values.len,
+        .ctx = @ptrFromInt(@as(usize, 1)),
+    };
+    const status = func(&jit_ctx);
     if (status == 0 and sp > 0) {
         result.* = values[sp - 1].fixnum;
     }
@@ -1621,7 +1707,13 @@ fn callCompiled(func: CompiledFn, inputs: []const i64, result: *i64) i32 {
 
 /// Helper to call a compiled function with raw Value stack for non-fixnum tests.
 fn callCompiledValues(func: CompiledFn, values: []Value, sp: *usize) i32 {
-    return func(values.ptr, sp, values.len);
+    var jit_ctx = JitContext{
+        .items_ptr = values.ptr,
+        .sp_ptr = sp,
+        .capacity = values.len,
+        .ctx = @ptrFromInt(@as(usize, 1)),
+    };
+    return func(&jit_ctx);
 }
 
 test "compile double: 2 *" {

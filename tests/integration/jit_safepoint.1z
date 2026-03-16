@@ -1,0 +1,64 @@
+use "testing" ;
+
+"compiled loop without task-scope" test-section
+
+single-loop: ( n -- n ) [ [ 1 - dup 0 > ] loop ] ;
+single-loop: compile!
+
+10 single-loop 0 "single-threaded compiled loop works" assert=
+
+"nested compiled loops" test-section
+
+outer-loop: ( n -- n ) [
+  [ dup [ 1 - dup 0 > ] loop drop 1 - dup 0 > ] loop
+] ;
+outer-loop: compile!
+
+5 outer-loop 0 "nested compiled loops complete" assert=
+
+"compiled loop yields to other tasks" test-section
+
+\ The spawned task yields 3 times then completes. The compiled loop runs
+\ 10000 iterations. Both are spawned -- neither runs the main thread.
+\ If safepoints work, the scheduler interleaves them and both complete.
+\ Without safepoints the loop would monopolize its timeslice.
+
+compiled-busy-loop: ( n -- n ) [ [ 1 - dup 0 > ] loop ] ;
+compiled-busy-loop: compile!
+
+[
+  [ yield yield yield 42 ] spawn
+  [ 10000 compiled-busy-loop drop 99 ] spawn
+  await 99 "compiled loop task completed" assert=
+  await 42 "yielding task completed" assert=
+] task-scope
+
+"compiled times loop yields" test-section
+
+times-noop: ( n -- ) [ [ ] times ] ;
+times-noop: compile!
+
+[
+  [ yield yield 88 ] spawn
+  [ 10000 times-noop 77 ] spawn
+  await 77 "times loop task completed" assert=
+  await 88 "yielding task completed during times" assert=
+] task-scope
+
+"compiled while loop" test-section
+
+while-loop: ( n -- n ) [
+  [ dup 0 > ] [ 1 - ] while
+] ;
+while-loop: compile!
+
+10 while-loop 0 "while loop counted down" assert=
+
+"compiled until loop" test-section
+
+until-loop: ( n -- n ) [
+  [ 1 - dup 0 < ] [ ] until
+] ;
+until-loop: compile!
+
+10 until-loop -1 "until loop counted down" assert=
