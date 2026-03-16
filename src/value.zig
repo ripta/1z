@@ -342,6 +342,9 @@ pub const Quotation = struct {
     /// If non-null, the expected stack effect for this quotation.
     /// Used for validation when the quotation is executed.
     effect: ?*const StackEffect = null,
+    /// If non-null, a JIT-compiled native code pointer for this quotation's body.
+    /// Used by the JIT compiler for indirect calls via `call`.
+    code_ptr: ?*const anyopaque = null,
 
     pub fn eql(self: Quotation, other: Quotation) bool {
         if (self.instructions.len != other.instructions.len) return false;

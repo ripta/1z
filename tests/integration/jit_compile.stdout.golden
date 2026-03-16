@@ -244,3 +244,39 @@ Stack: [ ]
 Stack: [ ]
 PASS: float comparison falls back
 Stack: [ ]
+=== compile! literal quotation call ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: call literal quot
+Stack: [ ]
+=== compile! quotation with arithmetic ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: call quot with arith
+Stack: [ ]
+=== compile! nested quotation calls ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: nested call
+Stack: [ ]
+=== compile! call + if interaction ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: call then if true
+Stack: [ ]
+PASS: call then if false
+Stack: [ ]
+=== compile! dynamic quotation call from argument ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: dynamic call
+Stack: [ ]
+=== compile! dynamic quotation bail for non-quotation ===
+Stack: [ ]
+PASS: non-quotation call errors
+Stack: [ ]

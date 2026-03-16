@@ -224,3 +224,38 @@ jit-nested-if: compile!
 "compile! bail to interpreter: non-fixnum comparison" test-section
 
 1.5 2.5 jit-eq f "float comparison falls back" assert=
+
+"compile! literal quotation call" test-section
+
+jit-call-lit: ( -- n ) [ [ 42 ] call ] ;
+jit-call-lit: compile!
+jit-call-lit 42 "call literal quot" assert=
+
+"compile! quotation with arithmetic" test-section
+
+jit-call-arith: ( n -- n ) [ [ 2 * ] call ] ;
+jit-call-arith: compile!
+5 jit-call-arith 10 "call quot with arith" assert=
+
+"compile! nested quotation calls" test-section
+
+jit-nested-call: ( -- n ) [ [ [ 7 ] call ] call ] ;
+jit-nested-call: compile!
+jit-nested-call 7 "nested call" assert=
+
+"compile! call + if interaction" test-section
+
+jit-call-if: ( n -- n ) [ [ 0 > ] call [ 1 ] [ -1 ] if ] ;
+jit-call-if: compile!
+5 jit-call-if 1 "call then if true" assert=
+-3 jit-call-if -1 "call then if false" assert=
+
+"compile! dynamic quotation call from argument" test-section
+
+jit-apply: ( n quot -- n ) [ call ] ;
+jit-apply: compile!
+5 [ 3 + ] jit-apply 8 "dynamic call" assert=
+
+"compile! dynamic quotation bail for non-quotation" test-section
+
+[ 42 jit-apply ] "non-quotation call errors" assert-error

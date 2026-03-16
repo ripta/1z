@@ -36,6 +36,7 @@ fn isSupportedOp(name: []const u8) bool {
         if (std.mem.eql(u8, name, op)) return true;
     }
     if (std.mem.eql(u8, name, "if")) return true;
+    if (std.mem.eql(u8, name, "call")) return true;
     if (std.mem.eql(u8, name, "t") or std.mem.eql(u8, name, "f")) return true;
     return false;
 }
@@ -70,6 +71,7 @@ const ValueLayout = struct {
     const value_size: usize = @sizeOf(Value);
     const tag_size: usize = @sizeOf(TagType);
     const fixnum_tag: u8 = @intFromEnum(@as(TagType, .fixnum));
+    const quotation_tag: u8 = @intFromEnum(@as(TagType, .quotation));
 
     const ir_tag_type: c_uint = switch (tag_size) {
         1 => c.IR_U8,
@@ -105,6 +107,7 @@ const ValueLayout = struct {
     var payload_offset: usize = 0;
     var tag_offset: usize = 0;
     var slice_len_offset: usize = 0;
+    var quotation_code_ptr_offset: usize = 0;
     var initialized: bool = false;
 
     fn ensureInit() void {
@@ -145,6 +148,22 @@ const ValueLayout = struct {
         const sv_bytes: [*]const u8 = @ptrCast(&sv);
         const len_at_offset: *align(1) const usize = @ptrCast(sv_bytes + slice_len_offset);
         std.debug.assert(len_at_offset.* == 5);
+
+        // Discover the code_ptr offset within a quotation Value by writing
+        // a sentinel pointer and scanning for it.
+        const sentinel: *const anyopaque = @ptrFromInt(0xDEAD_BEEF_CAFE_F00D);
+        var qv: Value = .{ .quotation = .{ .instructions = &.{}, .code_ptr = sentinel } };
+        const qv_bytes: [*]const u8 = @ptrCast(&qv);
+        var found_code_ptr = false;
+        for (0..@sizeOf(Value) - @sizeOf(usize) + 1) |offset| {
+            const ptr_at: *align(1) const usize = @ptrCast(qv_bytes + offset);
+            if (ptr_at.* == @intFromPtr(sentinel)) {
+                quotation_code_ptr_offset = offset;
+                found_code_ptr = true;
+                break;
+            }
+        }
+        std.debug.assert(found_code_ptr);
 
         initialized = true;
     }
@@ -366,14 +385,61 @@ const CompileState = struct {
     fixnum_tag_const: c.ir_ref,
     boolean_tag_const: c.ir_ref,
     bail_status: c.ir_ref,
+    ok_status: c.ir_ref,
+    items_ptr: c.ir_ref,
+    sp_ptr: c.ir_ref,
+    capacity_param: c.ir_ref,
+    sp_val: c.ir_ref,
+    base_idx: c.ir_ref,
+    value_size_const: c.ir_ref,
+    dynamic_call_emitted: bool = false,
 };
 
-/// Extract the IR ref for an i64 value, or NotCompilable if it's not an i64_ref.
-fn requireI64(entry: StackEntry) IrCodegenError!c.ir_ref {
+/// Extract or emit an i64 IR ref from a stack entry. For raw_at_slot entries,
+/// emits a fixnum tag check and unboxes the payload; bails if the tag doesn't match.
+fn requireI64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
     return switch (entry) {
         .i64_ref => |ref| ref,
+        .raw_at_slot => |s| {
+            const ctx = state.ctx;
+            const slot_byte_offset = c.ir_const_addr(ctx, s * ValueLayout.value_size);
+            const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, slot_byte_offset);
+            emitTagCheck(ctx, elem_addr, state.fixnum_tag_const, state.tag_offset_const, state.bail_status);
+            return emitUnboxI64(ctx, elem_addr, state.payload_offset_const);
+        },
         else => IrCodegenError.NotCompilable,
     };
+}
+
+/// Write all pending symbolic stack entries to their physical memory slots.
+/// After this, every entry is materialized in the Value array at base_addr.
+fn flushToPhysicalStack(state: *CompileState, stack: *[64]StackEntry, sp: usize) void {
+    const ctx = state.ctx;
+    const base_addr = state.base_addr;
+
+    for (0..sp) |i| {
+        switch (stack[i]) {
+            .i64_ref => |ref| {
+                const slot_byte_offset = c.ir_const_addr(ctx, i * ValueLayout.value_size);
+                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, ref);
+                stack[i] = .{ .raw_at_slot = i };
+            },
+            .bool_ref => |ref| {
+                const slot_byte_offset = c.ir_const_addr(ctx, i * ValueLayout.value_size);
+                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.boolean_tag_const, ref);
+                stack[i] = .{ .raw_at_slot = i };
+            },
+            .quotation_body => {},
+            .raw_at_slot => |s| {
+                if (s != i) {
+                    emitCopySlot(ctx, base_addr, s, i);
+                    stack[i] = .{ .raw_at_slot = i };
+                }
+            },
+        }
+    }
 }
 
 /// Compile a sequence of instructions, updating the abstract stack.
@@ -389,6 +455,8 @@ fn compileInstructions(
     const bail_status = state.bail_status;
 
     for (instructions) |instr| {
+        if (state.dynamic_call_emitted) return IrCodegenError.NotCompilable;
+
         switch (instr.op) {
             .push_literal => |val| {
                 if (val == .fixnum) {
@@ -479,7 +547,7 @@ fn compileInstructions(
                 } else if (std.mem.eql(u8, name, "abs")) {
                     if (sp.* < 1) return IrCodegenError.StackUnderflow;
                     sp.* -= 1;
-                    const a = try requireI64(stack[sp.*]);
+                    const a = try requireI64(stack[sp.*], state);
 
                     const min_val = c.ir_const_i64(ctx, std.math.minInt(i64));
                     const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a, min_val);
@@ -503,8 +571,8 @@ fn compileInstructions(
                 } else if (isComparisonOp(name)) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     sp.* -= 2;
-                    const a = try requireI64(stack[sp.*]);
-                    const b = try requireI64(stack[sp.* + 1]);
+                    const a = try requireI64(stack[sp.*], state);
+                    const b = try requireI64(stack[sp.* + 1], state);
 
                     const ir_op: c_uint = if (std.mem.eql(u8, name, "="))
                         c.IR_EQ
@@ -607,11 +675,65 @@ fn compileInstructions(
                         const false_entry = saved_stack[i];
                         stack[i] = try mergeEntries(ctx, true_entry, false_entry, i, base_addr);
                     }
+                } else if (std.mem.eql(u8, name, "call")) {
+                    if (sp.* < 1) return IrCodegenError.StackUnderflow;
+                    sp.* -= 1;
+                    const entry = stack[sp.*];
+                    switch (entry) {
+                        .quotation_body => |body| {
+                            try compileInstructions(state, body, stack, sp);
+                        },
+                        .raw_at_slot => |s| {
+                            // Bail-safe checks first (no side effects on the physical stack)
+                            const slot_byte_offset = c.ir_const_addr(ctx, s * ValueLayout.value_size);
+                            const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+
+                            // Check tag is quotation
+                            const quotation_tag_const = emitTagConst(ctx, .quotation);
+                            emitTagCheck(ctx, elem_addr, quotation_tag_const, state.tag_offset_const, bail_status);
+
+                            // Load code_ptr from the quotation's payload
+                            const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
+                            const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, code_ptr_off);
+                            const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
+
+                            // Null-check code_ptr (bail if quotation wasn't compiled)
+                            const null_addr = c.ir_const_addr(ctx, 0);
+                            const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
+                            const if_null = c._ir_IF(ctx, is_null);
+                            c._ir_IF_TRUE_cold(ctx, if_null);
+                            c._ir_RETURN(ctx, bail_status);
+                            c._ir_IF_FALSE(ctx, if_null);
+
+                            // All checks passed. Now commit side effects:
+                            // flush pending values and update sp before the indirect call.
+                            flushToPhysicalStack(state, stack, sp.*);
+
+                            const new_sp_const = c.ir_const_addr(ctx, sp.*);
+                            const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, new_sp_const);
+                            c._ir_STORE(ctx, state.sp_ptr, new_sp);
+
+                            // Indirect call: code_ptr(items_ptr, sp_ptr, capacity)
+                            const call_result = c._ir_CALL_3(ctx, c.IR_I32, code_ptr_val, state.items_ptr, state.sp_ptr, state.capacity_param);
+
+                            // If call failed, bail (callee may have modified sp,
+                            // but the interpreter will re-execute the whole word)
+                            const zero_status = c.ir_const_i32(ctx, 0);
+                            const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
+                            const if_bail = c._ir_IF(ctx, call_failed);
+                            c._ir_IF_TRUE_cold(ctx, if_bail);
+                            c._ir_RETURN(ctx, bail_status);
+                            c._ir_IF_FALSE(ctx, if_bail);
+
+                            state.dynamic_call_emitted = true;
+                        },
+                        .i64_ref, .bool_ref => return IrCodegenError.NotCompilable,
+                    }
                 } else if (isBinaryOp(name)) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     sp.* -= 2;
-                    const a = try requireI64(stack[sp.*]);
-                    const b = try requireI64(stack[sp.* + 1]);
+                    const a = try requireI64(stack[sp.*], state);
+                    const b = try requireI64(stack[sp.* + 1], state);
 
                     if (std.mem.eql(u8, name, "+")) {
                         stack[sp.*] = .{ .i64_ref = emitOverflowCheckedBinary(ctx, c.IR_ADD_OV, a, b, bail_status) };
@@ -722,7 +844,6 @@ pub fn compileWord(
     const items_ptr = c._ir_PARAM(&ctx, c.IR_ADDR, "items_ptr", 1);
     const sp_ptr = c._ir_PARAM(&ctx, c.IR_ADDR, "sp_ptr", 2);
     const capacity_param = c._ir_PARAM(&ctx, c.IR_ADDR, "capacity", 3);
-    _ = capacity_param;
 
     const bail_status = c.ir_const_i32(&ctx, 1);
     const ok_status = c.ir_const_i32(&ctx, 0);
@@ -754,23 +875,12 @@ pub fn compileWord(
     const base_byte_offset = c.ir_fold2(&ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), base_idx, value_size_const);
     const base_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), items_ptr, base_byte_offset);
 
-    // Check all fixnum tags on inputs before any writes
-    var elem_addrs: [8]c.ir_ref = undefined;
-    for (0..input_count) |i| {
-        const n_const = c.ir_const_addr(&ctx, input_count - i);
-        const idx = c.ir_fold2(&ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), sp_val, n_const);
-        const byte_offset = c.ir_fold2(&ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), idx, value_size_const);
-        const elem_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), items_ptr, byte_offset);
-        elem_addrs[i] = elem_addr;
-
-        emitTagCheck(&ctx, elem_addr, fixnum_tag_const, tag_offset_const, bail_status);
-    }
-
-    // Load i64 payloads from inputs onto symbolic stack
+    // Initialize inputs as raw_at_slot entries. Tag checking and unboxing
+    // happen lazily at use sites (e.g., when arithmetic needs a fixnum).
     var stack: [64]StackEntry = undefined;
     var sp: usize = 0;
-    for (0..input_count) |i| {
-        stack[sp] = .{ .i64_ref = emitUnboxI64(&ctx, elem_addrs[i], payload_offset_const) };
+    for (0..input_count) |_| {
+        stack[sp] = .{ .raw_at_slot = sp };
         sp += 1;
     }
 
@@ -782,53 +892,66 @@ pub fn compileWord(
         .fixnum_tag_const = fixnum_tag_const,
         .boolean_tag_const = boolean_tag_const,
         .bail_status = bail_status,
+        .ok_status = ok_status,
+        .items_ptr = items_ptr,
+        .sp_ptr = sp_ptr,
+        .capacity_param = capacity_param,
+        .sp_val = sp_val,
+        .base_idx = base_idx,
+        .value_size_const = value_size_const,
     };
 
     try compileInstructions(&state, instructions, &stack, &sp);
 
-    if (sp != output_count) return IrCodegenError.StackShapeMismatch;
+    if (state.dynamic_call_emitted) {
+        // The callee updated sp_ptr and the physical stack directly.
+        // Just return success.
+        c._ir_RETURN(&ctx, ok_status);
+    } else {
+        if (sp != output_count) return IrCodegenError.StackShapeMismatch;
 
-    // Finalize each symbolic stack entry into a physical Value on the stack.
-    //   i64_ref       -- box with fixnum tag and write to the output slot
-    //   bool_ref      -- box with boolean tag and write to the output slot
-    //   raw_at_slot   -- already a physical Value; copy only if the slot
-    //                    index differs from the output position
-    //   quotation_body -- should have been consumed by `if`; reaching here
-    //                     means an unconsumed quotation, which is an error
-    for (0..sp) |i| {
-        switch (stack[i]) {
-            .i64_ref => |ref| {
-                const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
-                const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, fixnum_tag_const, ref);
-            },
-            .bool_ref => |ref| {
-                const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
-                const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, boolean_tag_const, ref);
-            },
-            .quotation_body => return IrCodegenError.NotCompilable,
-            .raw_at_slot => |s| {
-                if (s != i) {
-                    emitCopySlot(&ctx, base_addr, s, i);
-                }
-            },
+        // Finalize each symbolic stack entry into a physical Value on the stack.
+        //   i64_ref       -- box with fixnum tag and write to the output slot
+        //   bool_ref      -- box with boolean tag and write to the output slot
+        //   raw_at_slot   -- already a physical Value; copy only if the slot
+        //                    index differs from the output position
+        //   quotation_body -- should have been consumed by `if` or `call`;
+        //                     reaching here means an unconsumed quotation
+        for (0..sp) |i| {
+            switch (stack[i]) {
+                .i64_ref => |ref| {
+                    const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
+                    const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                    emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, fixnum_tag_const, ref);
+                },
+                .bool_ref => |ref| {
+                    const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
+                    const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                    emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, boolean_tag_const, ref);
+                },
+                .quotation_body => return IrCodegenError.NotCompilable,
+                .raw_at_slot => |s| {
+                    if (s != i) {
+                        emitCopySlot(&ctx, base_addr, s, i);
+                    }
+                },
+            }
         }
-    }
 
-    // Update sp: new_sp = sp_val - input_count + output_count
-    if (input_count > output_count) {
-        const sp_delta = c.ir_const_addr(&ctx, input_count - output_count);
-        const new_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), sp_val, sp_delta);
-        c._ir_STORE(&ctx, sp_ptr, new_sp);
-    } else if (input_count < output_count) {
-        const sp_delta = c.ir_const_addr(&ctx, output_count - input_count);
-        const new_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), sp_val, sp_delta);
-        c._ir_STORE(&ctx, sp_ptr, new_sp);
-    }
-    // else input_count == output_count: sp unchanged
+        // Update sp: new_sp = sp_val - input_count + output_count
+        if (input_count > output_count) {
+            const sp_delta = c.ir_const_addr(&ctx, input_count - output_count);
+            const new_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), sp_val, sp_delta);
+            c._ir_STORE(&ctx, sp_ptr, new_sp);
+        } else if (input_count < output_count) {
+            const sp_delta = c.ir_const_addr(&ctx, output_count - input_count);
+            const new_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), sp_val, sp_delta);
+            c._ir_STORE(&ctx, sp_ptr, new_sp);
+        }
+        // else input_count == output_count: sp unchanged
 
-    c._ir_RETURN(&ctx, ok_status);
+        c._ir_RETURN(&ctx, ok_status);
+    }
 
     // JIT compile
     var size: usize = 0;
@@ -1206,12 +1329,21 @@ test "compile unit literal" {
     try testing.expect(values[0] == .unit);
 }
 
-test "arithmetic on opaque operand is not compilable" {
+test "arithmetic on opaque operand bails at runtime" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .string = "hello" } }, .line = 1 },
         .{ .op = .{ .call_word = "+" }, .line = 2 },
     };
-    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 1, 1));
+    const result = try compileWord(&instrs, 1, 1);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    values[0] = .{ .fixnum = 1 };
+    var sp: usize = 1;
+    const status = callCompiledValues(func, &values, &sp);
+    try testing.expectEqual(@as(i32, 1), status);
+    try testing.expectEqual(@as(usize, 1), sp);
 }
 
 test "bail on float input to arithmetic" {
