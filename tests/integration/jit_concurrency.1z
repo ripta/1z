@@ -1,0 +1,102 @@
+use "testing" ;
+
+"compiled tasks have independent stacks" test-section
+
+\ Two tasks run the same compiled word with different inputs.
+\ Each must return its own correct result.
+
+shared-double: ( n -- n ) [ 2 * ] ;
+shared-double: compile!
+
+[
+  [ 7 shared-double ] spawn
+  [ 13 shared-double ] spawn
+  await 26 "task B got 13*2" assert=
+  await 14 "task A got 7*2" assert=
+] task-scope
+
+"two different compiled words in parallel tasks" test-section
+
+jit-square: ( n -- n ) [ dup * ] ;
+jit-square: compile!
+jit-add3: ( n -- n ) [ 3 + ] ;
+jit-add3: compile!
+
+[
+  [ 6 jit-square ] spawn
+  [ 10 jit-add3 ] spawn
+  await 13 "task B: 10+3" assert=
+  await 36 "task A: 6*6" assert=
+] task-scope
+
+"compiled loop accumulation correct across yields" test-section
+
+\ Each task sums 1..n via a compiled loop. The triangular number for n
+\ is n*(n+1)/2: tri(100)=5050, tri(200)=20100.
+
+tri-sum: ( n -- n ) [
+  0 swap [ swap over + swap 1 - dup 0 > ] loop drop
+] ;
+tri-sum: compile!
+
+[
+  [ 100 tri-sum ] spawn
+  [ 200 tri-sum ] spawn
+  await 20100 "tri(200) correct across yields" assert=
+  await 5050 "tri(100) correct across yields" assert=
+] task-scope
+
+"compiled cross-module call in parallel tasks" test-section
+
+cm-inc: ( n -- n ) [ 1 + ] ;
+cm-inc: compile!
+cm-double-inc: ( n -- n ) [ cm-inc cm-inc ] ;
+cm-double-inc: compile!
+
+[
+  [ 10 cm-double-inc ] spawn
+  [ 50 cm-double-inc ] spawn
+  await 52 "task B: 50+2 via cross-module" assert=
+  await 12 "task A: 10+2 via cross-module" assert=
+] task-scope
+
+"compiled task error does not corrupt sibling" test-section
+
+\ One task divides by zero (errors), recovers, and returns a sentinel.
+\ The sibling runs compiled code successfully and returns its result.
+
+jit-div: ( a b -- c ) [ / ] ;
+jit-div: compile!
+
+[
+  [ [ 10 0 jit-div ] [ drop -1 ] recover ] spawn
+  [ 5 shared-double ] spawn
+  await 10 "sibling completed correctly" assert=
+  await -1 "erroring task recovered with sentinel" assert=
+] task-scope
+
+"compiled word with dynamic variable reads" test-section
+
+\ Dynamic variable reads bail to the interpreter, but the per-task context
+\ pointer must still be correct for each task. Here compiled arithmetic
+\ runs alongside uncompiled param reads in the same task.
+
+jit-param: define-parameter [ 0 ] ;
+
+42 jit-param [
+  [
+    [ jit-param get dup shared-double + ] spawn
+    await 126 "task sees param=42, double=84, sum=126" assert=
+  ] task-scope
+] with-parameter
+
+99 jit-param [
+  [
+    [ jit-param get dup shared-double + ] spawn
+    100 jit-param [
+      [ jit-param get dup shared-double + ] spawn
+      await 300 "inner task: param=100, double=200, sum=300" assert=
+    ] with-parameter
+    await 297 "outer task: param=99, double=198, sum=297" assert=
+  ] task-scope
+] with-parameter

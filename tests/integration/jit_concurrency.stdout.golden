@@ -1,0 +1,47 @@
+=== compiled tasks have independent stacks ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: task B got 13*2
+PASS: task A got 7*2
+Stack: [ ]
+=== two different compiled words in parallel tasks ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: task B: 10+3
+PASS: task A: 6*6
+Stack: [ ]
+=== compiled loop accumulation correct across yields ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: tri(200) correct across yields
+PASS: tri(100) correct across yields
+Stack: [ ]
+=== compiled cross-module call in parallel tasks ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: task B: 50+2 via cross-module
+PASS: task A: 10+2 via cross-module
+Stack: [ ]
+=== compiled task error does not corrupt sibling ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: sibling completed correctly
+PASS: erroring task recovered with sentinel
+Stack: [ ]
+=== compiled word with dynamic variable reads ===
+Stack: [ ]
+Stack: [ ]
+PASS: task sees param=42, double=84, sum=126
+Stack: [ ]
+PASS: inner task: param=100, double=200, sum=300
+PASS: outer task: param=99, double=198, sum=297
+Stack: [ ]
