@@ -1,0 +1,75 @@
+=== cross-module: same-scope compiled call ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: caller invokes compiled helper
+Stack: [ ]
+=== cross-module: chain of compiled calls ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: chained compiled calls
+Stack: [ ]
+=== cross-module: compiled caller with arithmetic + dispatch ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: double-inc 5
+Stack: [ ]
+=== cross-module: bail to interpreter when callee not compiled ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: bail to interpreter for uncompiled callee
+Stack: [ ]
+=== cross-module: compile callee after caller ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: caller bails, interpreter runs callee
+Stack: [ ]
+Stack: [ ]
+PASS: after compiling callee, still correct
+Stack: [ ]
+=== cross-module: compiled word calls compiled word with multiple args ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: cross-call with two args
+Stack: [ ]
+=== cross-module: compiled word mixes local ops with dispatch ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: square-plus-one 5
+Stack: [ ]
+=== cross-module: dispatch in loop body ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: bump in times loop
+Stack: [ ]
+=== cross-module: dispatch in if branch ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: abs-jit positive
+Stack: [ ]
+PASS: abs-jit negative
+Stack: [ ]

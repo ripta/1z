@@ -5,7 +5,7 @@ SHELL := /bin/bash
 ONE_Z_FILES := $(shell find . -name '*.1z' -not -path './.zig-cache/*' -not -path './zig-out/*')
 TIMEOUT := 30
 
-all: build
+all: build test
 
 build: ## Build the project (default)
 	( time zig build )

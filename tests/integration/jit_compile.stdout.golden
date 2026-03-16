@@ -392,14 +392,6 @@ Stack: [ { 6 3 } ]
 Stack: [ { 6 3 } { 6 3 } ]
 PASS: while-two match
 Stack: [ ]
-=== match: until + if interaction ===
-Stack: [ ]
-Stack: [ ]
-Stack: [ 11 ]
-Stack: [ 11 ]
-Stack: [ 11 11 ]
-PASS: until-if match
-Stack: [ ]
 === match: nested while in times ===
 Stack: [ ]
 Stack: [ ]

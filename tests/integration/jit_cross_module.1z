@@ -1,0 +1,74 @@
+use "testing" ;
+
+"cross-module: same-scope compiled call" test-section
+
+helper-add3: ( n -- n ) [ 3 + ] ;
+helper-add3: compile!
+caller-add3: ( n -- n ) [ helper-add3 ] ;
+caller-add3: compile!
+10 caller-add3 13 "caller invokes compiled helper" assert=
+
+"cross-module: chain of compiled calls" test-section
+
+step1: ( n -- n ) [ 1 + ] ;
+step1: compile!
+step2: ( n -- n ) [ step1 step1 ] ;
+step2: compile!
+0 step2 2 "chained compiled calls" assert=
+
+"cross-module: compiled caller with arithmetic + dispatch" test-section
+
+inc: ( n -- n ) [ 1 + ] ;
+inc: compile!
+double-inc: ( n -- n ) [ inc inc ] ;
+double-inc: compile!
+5 double-inc 7 "double-inc 5" assert=
+
+"cross-module: bail to interpreter when callee not compiled" test-section
+
+interp-helper: ( n -- n ) [ 5 + ] ;
+caller-interp: ( n -- n ) [ interp-helper ] ;
+caller-interp: compile!
+10 caller-interp 15 "bail to interpreter for uncompiled callee" assert=
+
+"cross-module: compile callee after caller" test-section
+
+late-helper: ( n -- n ) [ 10 * ] ;
+late-caller: ( n -- n ) [ late-helper ] ;
+late-caller: compile!
+3 late-caller 30 "caller bails, interpreter runs callee" assert=
+late-helper: compile!
+3 late-caller 30 "after compiling callee, still correct" assert=
+
+"cross-module: compiled word calls compiled word with multiple args" test-section
+
+add-helper: ( a b -- c ) [ + ] ;
+add-helper: compile!
+add-caller: ( a b -- c ) [ add-helper ] ;
+add-caller: compile!
+17 25 add-caller 42 "cross-call with two args" assert=
+
+"cross-module: compiled word mixes local ops with dispatch" test-section
+
+xsquare: ( n -- n ) [ dup * ] ;
+xsquare: compile!
+xsquare-plus-one: ( n -- n ) [ xsquare 1 + ] ;
+xsquare-plus-one: compile!
+5 xsquare-plus-one 26 "square-plus-one 5" assert=
+
+"cross-module: dispatch in loop body" test-section
+
+bump: ( n -- n ) [ 1 + ] ;
+bump: compile!
+bump-times: ( -- n ) [ 0 5 [ bump ] times ] ;
+bump-times: compile!
+bump-times 5 "bump in times loop" assert=
+
+"cross-module: dispatch in if branch" test-section
+
+xnegate: ( n -- n ) [ 0 swap - ] ;
+xnegate: compile!
+abs-jit: ( n -- n ) [ dup 0 > [ ] [ xnegate ] if ] ;
+abs-jit: compile!
+5 abs-jit 5 "abs-jit positive" assert=
+-3 abs-jit 3 "abs-jit negative" assert=

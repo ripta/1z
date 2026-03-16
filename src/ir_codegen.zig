@@ -9,6 +9,10 @@ const ir_mod = @import("ffi/ir.zig");
 const JitBuffer = ir_mod.JitBuffer;
 const c = ir_mod.ir;
 
+const jit_dispatch_mod = @import("jit_dispatch.zig");
+const JitDispatchTable = jit_dispatch_mod.JitDispatchTable;
+const JitEntry = jit_dispatch_mod.JitEntry;
+
 pub const IrCodegenError = error{
     NotCompilable,
     CompilationFailed,
@@ -174,6 +178,48 @@ const ValueLayout = struct {
             }
         }
         std.debug.assert(found_code_ptr);
+
+        initialized = true;
+    }
+};
+
+/// Result of resolving a word name to a dispatch table entry.
+pub const ResolvedWord = struct {
+    word_id: u32,
+    input_count: u8,
+    output_count: u8,
+};
+
+/// Callback interface for resolving word names to dispatch table IDs.
+/// Used during compilation to map `call_word` names to JIT dispatch entries.
+pub const WordResolver = struct {
+    resolve: *const fn ([]const u8, *anyopaque) ?ResolvedWord,
+    user_data: *anyopaque,
+    /// Stable pointer to the JitDispatchTable, baked into generated code as a constant.
+    dispatch_table_ptr: *const anyopaque,
+};
+
+/// Layout of JitDispatchTable and JitEntry for generated IR code.
+const DispatchLayout = struct {
+    var items_ptr_offset: usize = 0;
+    var entry_size: usize = 0;
+    var code_ptr_offset: usize = 0;
+    var initialized: bool = false;
+
+    fn ensureInit() void {
+        if (initialized) return;
+
+        var table = JitDispatchTable.init(std.heap.page_allocator);
+        const table_base: usize = @intFromPtr(&table);
+        const items_ptr_addr: usize = @intFromPtr(&table.entries.items.ptr);
+        items_ptr_offset = items_ptr_addr - table_base;
+
+        entry_size = @sizeOf(JitEntry);
+
+        var dummy_entry = JitEntry{ .code_ptr = null, .jit_buf = null, .word_name = "" };
+        const entry_base: usize = @intFromPtr(&dummy_entry);
+        const code_ptr_addr: usize = @intFromPtr(&dummy_entry.code_ptr);
+        code_ptr_offset = code_ptr_addr - entry_base;
 
         initialized = true;
     }
@@ -403,6 +449,8 @@ const CompileState = struct {
     base_idx: c.ir_ref,
     value_size_const: c.ir_ref,
     dynamic_call_emitted: bool = false,
+    dispatch_ptr: c.ir_ref = c.IR_UNUSED,
+    resolver: ?WordResolver = null,
 };
 
 /// Extract or emit an i64 IR ref from a stack entry. For raw_at_slot entries,
@@ -798,7 +846,7 @@ fn compileInstructions(
                             const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, new_sp_const);
                             c._ir_STORE(ctx, state.sp_ptr, new_sp);
 
-                            // Indirect call: code_ptr(items_ptr, sp_ptr, capacity)
+                            // Indirect call
                             const call_result = c._ir_CALL_3(ctx, c.IR_I32, code_ptr_val, state.items_ptr, state.sp_ptr, state.capacity_param);
 
                             // If call failed, bail (callee may have modified sp,
@@ -1121,7 +1169,55 @@ fn compileInstructions(
                         sp.* += 1;
                     }
                 } else {
-                    return IrCodegenError.NotCompilable;
+                    // Unrecognized word: try dispatch table call if a resolver is available
+                    const res = state.resolver orelse return IrCodegenError.NotCompilable;
+                    const resolved = res.resolve(name, res.user_data) orelse return IrCodegenError.NotCompilable;
+
+                    DispatchLayout.ensureInit();
+
+                    // Validate the callee's stack effect against our abstract stack
+                    if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
+
+                    // Flush virtual stack and update sp in memory
+                    flushToPhysicalStack(state, stack, sp.*);
+                    const sp_const = c.ir_const_addr(ctx, sp.*);
+                    const new_sp_before = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
+                    c._ir_STORE(ctx, state.sp_ptr, new_sp_before);
+
+                    // Load entries.items.ptr from the dispatch table
+                    const dispatch_ptr = state.dispatch_ptr;
+                    const items_ptr_off = c.ir_const_addr(ctx, DispatchLayout.items_ptr_offset);
+                    const entries_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dispatch_ptr, items_ptr_off);
+                    const entries_ptr = c._ir_LOAD(ctx, c.IR_ADDR, entries_ptr_addr);
+
+                    // Index into entries array: entries_ptr + word_id * entry_size + code_ptr_offset
+                    const entry_byte_off = c.ir_const_addr(ctx, resolved.word_id * DispatchLayout.entry_size + DispatchLayout.code_ptr_offset);
+                    const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), entries_ptr, entry_byte_off);
+                    const callee_code_ptr = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
+
+                    // Null-check code_ptr: bail if callee not compiled
+                    const null_addr = c.ir_const_addr(ctx, 0);
+                    const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), callee_code_ptr, null_addr);
+                    const if_null = c._ir_IF(ctx, is_null);
+                    c._ir_IF_TRUE_cold(ctx, if_null);
+                    c._ir_RETURN(ctx, bail_status);
+                    c._ir_IF_FALSE(ctx, if_null);
+
+                    // Call the callee with 3 args (same as all compiled words)
+                    const call_result = c._ir_CALL_3(ctx, c.IR_I32, callee_code_ptr, state.items_ptr, state.sp_ptr, state.capacity_param);
+
+                    const zero_status = c.ir_const_i32(ctx, 0);
+                    const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
+                    const if_bail = c._ir_IF(ctx, call_failed);
+                    c._ir_IF_TRUE_cold(ctx, if_bail);
+                    c._ir_RETURN(ctx, bail_status);
+                    c._ir_IF_FALSE(ctx, if_bail);
+
+                    // Adjust abstract stack based on callee's known stack effect
+                    sp.* = sp.* - resolved.input_count + resolved.output_count;
+                    for (0..sp.*) |i| {
+                        stack[i] = .{ .raw_at_slot = i };
+                    }
                 }
             },
         }
@@ -1168,13 +1264,40 @@ fn mergeEntries(
     }
 }
 
-/// The compiled function signature: operates directly on the per-task stack.
-///
-///   items_ptr: base of the Value array
-///   sp:        pointer to current stack depth (read and written)
-///   capacity:  current array capacity for bounds checking
-///   returns:   0 = success, 1 = bail (stack unchanged)
+/// The compiled function signature. All compiled words use this 3-parameter
+/// calling convention. Cross-word dispatch uses a baked-in constant for the
+/// dispatch table pointer rather than a 4th parameter.
 pub const CompiledFn = *const fn ([*]Value, *usize, usize) callconv(.c) i32;
+
+/// Recursively scan instructions and quotation bodies for dispatch calls.
+fn preScanInstructions(
+    instructions: []const Instruction,
+    resolver: ?WordResolver,
+    needs_dispatch: *bool,
+) IrCodegenError!void {
+    for (instructions) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| {
+                if (val == .quotation) {
+                    try preScanInstructions(val.quotation.instructions, resolver, needs_dispatch);
+                }
+            },
+            .call_word => |name| {
+                if (!isSupportedOp(name) and !isStackOp(name)) {
+                    if (resolver) |res| {
+                        if (res.resolve(name, res.user_data)) |_| {
+                            needs_dispatch.* = true;
+                        } else {
+                            return IrCodegenError.NotCompilable;
+                        }
+                    } else {
+                        return IrCodegenError.NotCompilable;
+                    }
+                }
+            },
+        }
+    }
+}
 
 /// Compile a word's instruction sequence into native code via the ir JIT.
 /// The compiled function operates directly on the per-task Value stack.
@@ -1184,21 +1307,16 @@ pub fn compileWord(
     instructions: []const Instruction,
     input_count: u8,
     output_count: u8,
+    resolver: ?WordResolver,
 ) IrCodegenError!CompiledWord {
     ValueLayout.ensureInit();
 
     if (input_count > 8) return IrCodegenError.NotCompilable;
 
-    // Validate compilability: only supported call_words are checked here.
-    // Any Value variant is accepted for push_literal.
-    for (instructions) |instr| {
-        switch (instr.op) {
-            .push_literal => {},
-            .call_word => |name| {
-                if (!isSupportedOp(name) and !isStackOp(name)) return IrCodegenError.NotCompilable;
-            },
-        }
-    }
+    // Pre-scan: check if any call_word needs dispatch table resolution.
+    // Recurses into quotation literal bodies since they get inlined.
+    var needs_dispatch = false;
+    try preScanInstructions(instructions, resolver, &needs_dispatch);
 
     var ctx: c.ir_ctx = undefined;
     c.ir_init(&ctx, c.IR_FUNCTION | c.IR_OPT_FOLDING, c.IR_CONSTS_LIMIT_MIN, c.IR_INSNS_LIMIT_MIN);
@@ -1206,10 +1324,18 @@ pub fn compileWord(
 
     c._ir_START(&ctx);
 
-    // Parameters: items_ptr, sp_ptr, capacity
+    // Parameters: items_ptr, sp_ptr, capacity (always 3 params)
     const items_ptr = c._ir_PARAM(&ctx, c.IR_ADDR, "items_ptr", 1);
     const sp_ptr = c._ir_PARAM(&ctx, c.IR_ADDR, "sp_ptr", 2);
     const capacity_param = c._ir_PARAM(&ctx, c.IR_ADDR, "capacity", 3);
+
+    // Bake dispatch table pointer as a constant if dispatch calls are needed.
+    // This avoids using a 4th parameter which triggers aarch64 IR backend
+    // miscompilation with complex control flow.
+    const dispatch_ptr = if (needs_dispatch)
+        c.ir_const_addr(&ctx, @intFromPtr(resolver.?.dispatch_table_ptr))
+    else
+        c.IR_UNUSED;
 
     const bail_status = c.ir_const_i32(&ctx, 1);
     const ok_status = c.ir_const_i32(&ctx, 0);
@@ -1265,6 +1391,8 @@ pub fn compileWord(
         .sp_val = sp_val,
         .base_idx = base_idx,
         .value_size_const = value_size_const,
+        .dispatch_ptr = dispatch_ptr,
+        .resolver = resolver,
     };
 
     try compileInstructions(&state, instructions, &stack, &sp);
@@ -1438,7 +1566,6 @@ fn emitEuclideanMod(
 // =============================================================================
 
 const Context = @import("context.zig").Context;
-const JitDispatchTable = @import("jit_dispatch.zig").JitDispatchTable;
 
 /// Result of attempting compiled execution.
 pub const ExecResult = enum { ok, bail };
@@ -1505,7 +1632,7 @@ fn callCompiledValues(func: CompiledFn, values: []Value, sp: *usize) i32 {
 
 test "compile double: 2 *" {
     const instrs = makeInstructions(.{ @as(i64, 2), "*" });
-    const result = try compileWord(&instrs, 1, 1);
+    const result = try compileWord(&instrs, 1, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1518,7 +1645,7 @@ test "compile double: 2 *" {
 
 test "compile (a+3)*4" {
     const instrs = makeInstructions(.{ @as(i64, 3), "+", @as(i64, 4), "*" });
-    const result = try compileWord(&instrs, 1, 1);
+    const result = try compileWord(&instrs, 1, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1529,7 +1656,7 @@ test "compile (a+3)*4" {
 
 test "compile a+b with two inputs" {
     const instrs = makeInstructions(.{"+"});
-    const result = try compileWord(&instrs, 2, 1);
+    const result = try compileWord(&instrs, 2, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1540,7 +1667,7 @@ test "compile a+b with two inputs" {
 
 test "overflow bails out" {
     const instrs = makeInstructions(.{ std.math.maxInt(i64), "+" });
-    const result = try compileWord(&instrs, 1, 1);
+    const result = try compileWord(&instrs, 1, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1552,7 +1679,7 @@ test "overflow bails out" {
 
 test "overflow preserves sp" {
     const instrs = makeInstructions(.{ std.math.maxInt(i64), "+" });
-    const result = try compileWord(&instrs, 1, 1);
+    const result = try compileWord(&instrs, 1, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1565,7 +1692,7 @@ test "overflow preserves sp" {
 
 test "division by zero bails out" {
     const instrs = makeInstructions(.{"/"});
-    const result = try compileWord(&instrs, 2, 1);
+    const result = try compileWord(&instrs, 2, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1577,7 +1704,7 @@ test "division by zero bails out" {
 
 test "division minInt/-1 bails out" {
     const instrs = makeInstructions(.{"/"});
-    const result = try compileWord(&instrs, 2, 1);
+    const result = try compileWord(&instrs, 2, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1587,7 +1714,7 @@ test "division minInt/-1 bails out" {
 
 test "bail on non-fixnum input" {
     const instrs = makeInstructions(.{ @as(i64, 1), "+" });
-    const result = try compileWord(&instrs, 1, 1);
+    const result = try compileWord(&instrs, 1, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1600,7 +1727,7 @@ test "bail on non-fixnum input" {
 
 test "bail on stack underflow" {
     const instrs = makeInstructions(.{"+"});
-    const result = try compileWord(&instrs, 2, 1);
+    const result = try compileWord(&instrs, 2, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1615,7 +1742,7 @@ test "compile string literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .string = "hello" } }, .line = 1 },
     };
-    const result = try compileWord(&instrs, 0, 1);
+    const result = try compileWord(&instrs, 0, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1632,7 +1759,7 @@ test "compile float literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .float = 3.14 } }, .line = 1 },
     };
-    const result = try compileWord(&instrs, 0, 1);
+    const result = try compileWord(&instrs, 0, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1649,7 +1776,7 @@ test "compile boolean literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 },
     };
-    const result = try compileWord(&instrs, 0, 1);
+    const result = try compileWord(&instrs, 0, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1666,7 +1793,7 @@ test "compile symbol literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .symbol = "foo" } }, .line = 1 },
     };
-    const result = try compileWord(&instrs, 0, 1);
+    const result = try compileWord(&instrs, 0, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1683,7 +1810,7 @@ test "compile unit literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .unit }, .line = 1 },
     };
-    const result = try compileWord(&instrs, 0, 1);
+    const result = try compileWord(&instrs, 0, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1700,7 +1827,7 @@ test "arithmetic on opaque operand bails at runtime" {
         .{ .op = .{ .push_literal = .{ .string = "hello" } }, .line = 1 },
         .{ .op = .{ .call_word = "+" }, .line = 2 },
     };
-    const result = try compileWord(&instrs, 1, 1);
+    const result = try compileWord(&instrs, 1, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1714,7 +1841,7 @@ test "arithmetic on opaque operand bails at runtime" {
 
 test "bail on float input to arithmetic" {
     const instrs = makeInstructions(.{ @as(i64, 1), "+" });
-    const result = try compileWord(&instrs, 1, 1);
+    const result = try compileWord(&instrs, 1, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1727,7 +1854,7 @@ test "bail on float input to arithmetic" {
 
 test "bail on boolean input to arithmetic" {
     const instrs = makeInstructions(.{ @as(i64, 1), "+" });
-    const result = try compileWord(&instrs, 1, 1);
+    const result = try compileWord(&instrs, 1, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1742,7 +1869,7 @@ test "fixnum literal still works after refactor" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 1 },
     };
-    const result = try compileWord(&instrs, 0, 1);
+    const result = try compileWord(&instrs, 0, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1759,12 +1886,12 @@ test "reject non-compilable: unsupported word" {
     const instrs = [_]Instruction{
         .{ .op = .{ .call_word = "print" }, .line = 1 },
     };
-    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 1, 1));
+    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 1, 1, null));
 }
 
 test "compile with output_count 2" {
     const instrs = makeInstructions(.{ @as(i64, 10), @as(i64, 20) });
-    const result = try compileWord(&instrs, 0, 2);
+    const result = try compileWord(&instrs, 0, 2, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1779,7 +1906,7 @@ test "compile with output_count 2" {
 
 test "rem with div-by-zero guard" {
     const instrs = makeInstructions(.{"rem"});
-    const result = try compileWord(&instrs, 2, 1);
+    const result = try compileWord(&instrs, 2, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1793,7 +1920,7 @@ test "rem with div-by-zero guard" {
 
 test "compile dup on fixnum" {
     const instrs = makeInstructions(.{"dup"});
-    const result = try compileWord(&instrs, 1, 2);
+    const result = try compileWord(&instrs, 1, 2, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1809,7 +1936,7 @@ test "compile dup on fixnum" {
 
 test "compile drop on fixnum" {
     const instrs = makeInstructions(.{"drop"});
-    const result = try compileWord(&instrs, 2, 1);
+    const result = try compileWord(&instrs, 2, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1823,7 +1950,7 @@ test "compile drop on fixnum" {
 
 test "compile swap on fixnums" {
     const instrs = makeInstructions(.{"swap"});
-    const result = try compileWord(&instrs, 2, 2);
+    const result = try compileWord(&instrs, 2, 2, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1838,7 +1965,7 @@ test "compile swap on fixnums" {
 
 test "compile over on fixnums" {
     const instrs = makeInstructions(.{"over"});
-    const result = try compileWord(&instrs, 2, 3);
+    const result = try compileWord(&instrs, 2, 3, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1856,7 +1983,7 @@ test "compile over on fixnums" {
 
 test "compile dup * (square)" {
     const instrs = makeInstructions(.{ "dup", "*" });
-    const result = try compileWord(&instrs, 1, 1);
+    const result = try compileWord(&instrs, 1, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1869,7 +1996,7 @@ test "compile dup * (square)" {
 
 test "compile swap - (reverse subtract)" {
     const instrs = makeInstructions(.{ "swap", "-" });
-    const result = try compileWord(&instrs, 2, 1);
+    const result = try compileWord(&instrs, 2, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1880,7 +2007,7 @@ test "compile swap - (reverse subtract)" {
 
 test "compile swap drop (nip)" {
     const instrs = makeInstructions(.{ "swap", "drop" });
-    const result = try compileWord(&instrs, 2, 1);
+    const result = try compileWord(&instrs, 2, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1894,7 +2021,7 @@ test "compile non-fixnum literal dup" {
         .{ .op = .{ .push_literal = .{ .string = "hello" } }, .line = 1 },
         .{ .op = .{ .call_word = "dup" }, .line = 2 },
     };
-    const result = try compileWord(&instrs, 0, 2);
+    const result = try compileWord(&instrs, 0, 2, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1915,7 +2042,7 @@ test "compile non-fixnum literal swap" {
         .{ .op = .{ .push_literal = .{ .string = "bbb" } }, .line = 2 },
         .{ .op = .{ .call_word = "swap" }, .line = 3 },
     };
-    const result = try compileWord(&instrs, 0, 2);
+    const result = try compileWord(&instrs, 0, 2, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1932,7 +2059,7 @@ test "compile non-fixnum literal swap" {
 
 test "compile = comparison" {
     const instrs = makeInstructions(.{"="});
-    const result = try compileWord(&instrs, 2, 1);
+    const result = try compileWord(&instrs, 2, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1958,7 +2085,7 @@ test "compile = comparison" {
 
 test "compile < comparison" {
     const instrs = makeInstructions(.{"<"});
-    const result = try compileWord(&instrs, 2, 1);
+    const result = try compileWord(&instrs, 2, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -1982,7 +2109,7 @@ test "compile < comparison" {
 
 test "compile > comparison" {
     const instrs = makeInstructions(.{">"});
-    const result = try compileWord(&instrs, 2, 1);
+    const result = try compileWord(&instrs, 2, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -2006,7 +2133,7 @@ test "compile > comparison" {
 
 test "compile comparison on non-fixnum bails" {
     const instrs = makeInstructions(.{"="});
-    const result = try compileWord(&instrs, 2, 1);
+    const result = try compileWord(&instrs, 2, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -2029,7 +2156,7 @@ test "compile if with bool condition" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 0, 1);
+    const result = try compileWord(&instrs, 0, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -2054,7 +2181,7 @@ test "compile if with false condition" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 0, 1);
+    const result = try compileWord(&instrs, 0, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -2079,7 +2206,7 @@ test "compile comparison + if" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 2, 1);
+    const result = try compileWord(&instrs, 2, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -2118,7 +2245,7 @@ test "compile if with arithmetic in branches" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 0, 1);
+    const result = try compileWord(&instrs, 0, 1, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -2143,7 +2270,7 @@ test "compile if with stack shape mismatch fails" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    try testing.expectError(IrCodegenError.StackShapeMismatch, compileWord(&instrs, 0, 1));
+    try testing.expectError(IrCodegenError.StackShapeMismatch, compileWord(&instrs, 0, 1, null));
 }
 
 test "compile if with non-compilable body fails" {
@@ -2159,5 +2286,5 @@ test "compile if with non-compilable body fails" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 0, 1));
+    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 0, 1, null));
 }

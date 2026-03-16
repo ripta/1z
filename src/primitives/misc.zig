@@ -493,6 +493,36 @@ fn native1Array(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .array = arr });
 }
 
+const ResolverState = struct {
+    context: *Context,
+};
+
+fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?@import("../ir_codegen.zig").ResolvedWord {
+    const ir_codegen = @import("../ir_codegen.zig");
+    const state: *ResolverState = @ptrCast(@alignCast(user_data));
+    const ctx = state.context;
+    const callee = ctx.lookupWord(name) orelse return null;
+
+    switch (callee.action) {
+        .compound => {},
+        .native => return null,
+    }
+
+    const effect = callee.stack_effect orelse return null;
+
+    const word_id = if (callee.word_id) |id| id else blk: {
+        const id = ctx.jit_dispatch.assignId(name) catch return null;
+        propagateWordId(ctx, name, id);
+        break :blk id;
+    };
+
+    return ir_codegen.ResolvedWord{
+        .word_id = word_id,
+        .input_count = @intCast(effect.inputs.len),
+        .output_count = @intCast(effect.outputs.len),
+    };
+}
+
 /// compile! ( sym -- ) - JIT-compile a word for integer arithmetic
 fn nativeCompile(ctx: *Context) anyerror!void {
     const ir_codegen = @import("../ir_codegen.zig");
@@ -521,7 +551,17 @@ fn nativeCompile(ctx: *Context) anyerror!void {
 
     const before_ns = if (ctx.benchmark != null) std.time.nanoTimestamp() else 0;
 
-    const compiled = ir_codegen.compileWord(instrs, input_count, output_count) catch {
+    // Build a resolver that maps word names to dispatch table IDs.
+    // This does lazy word_id assignment: if the callee exists and has
+    // a compound body, it gets a dispatch table slot (even if not yet compiled).
+    var resolver_ctx = ResolverState{ .context = ctx };
+    const resolver = ir_codegen.WordResolver{
+        .resolve = &resolveWordForDispatch,
+        .user_data = @ptrCast(&resolver_ctx),
+        .dispatch_table_ptr = @ptrCast(&ctx.jit_dispatch),
+    };
+
+    const compiled = ir_codegen.compileWord(instrs, input_count, output_count, resolver) catch {
         ctx.pending_error_message = "compile!: word is not compilable (must use only fixnum literals and integer arithmetic)";
         return error.TypeMismatch;
     };
@@ -537,8 +577,21 @@ fn nativeCompile(ctx: *Context) anyerror!void {
     };
     ctx.jit_dispatch.update(word_id, compiled.code_ptr, compiled.jit_buf);
 
-    // Store word_id on the dictionary entry
-    if (ctx.dictionary.entries.getPtr(sym)) |entry| {
+    propagateWordId(ctx, sym, word_id);
+}
+
+/// Write word_id to whichever scope lookupWord would find the word in:
+/// local frames (innermost first), then dictionary.
+fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
+    var i = ctx.local_frames.items.len;
+    while (i > 0) {
+        i -= 1;
+        if (ctx.local_frames.items[i].getPtr(name)) |entry| {
+            entry.word_id = word_id;
+            return;
+        }
+    }
+    if (ctx.dictionary.entries.getPtr(name)) |entry| {
         entry.word_id = word_id;
     }
 }
