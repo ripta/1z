@@ -571,20 +571,35 @@ fn nativeCompile(ctx: *Context) anyerror!void {
         bm.recordJitCompile(after_ns - before_ns);
     }
 
-    if (word.word_id) |existing_id| {
-        ctx.jit_dispatch.update(existing_id, compiled.code_ptr, compiled.jit_buf);
-    } else {
+    const final_id = if (word.word_id) |existing_id| blk: {
+        if (ctx.jit_dispatch.get(existing_id) != null) {
+            ctx.jit_dispatch.update(existing_id, compiled.code_ptr, compiled.jit_buf);
+            break :blk existing_id;
+        }
         const new_id = ctx.jit_dispatch.assignId(sym) catch {
             compiled.jit_buf.deinit();
             return error.OutOfMemory;
         };
         ctx.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf);
         propagateWordId(ctx, sym, new_id);
+        break :blk new_id;
+    } else blk: {
+        const new_id = ctx.jit_dispatch.assignId(sym) catch {
+            compiled.jit_buf.deinit();
+            return error.OutOfMemory;
+        };
+        ctx.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf);
+        propagateWordId(ctx, sym, new_id);
+        break :blk new_id;
+    };
+    if (ctx.trace.trace_jit) {
+        var tw = trace_mod.TraceWriter.init();
+        trace_mod.traceJitCompile(&tw, sym, final_id);
     }
 }
 
 /// Write word_id to whichever scope lookupWord would find the word in:
-/// local frames (innermost first), then dictionary.
+/// local frames (innermost first), then dictionary, then parent contexts.
 fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
     var i = ctx.local_frames.items.len;
     while (i > 0) {
@@ -596,6 +611,23 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
     }
     if (ctx.dictionary.entries.getPtr(name)) |entry| {
         entry.word_id = word_id;
+        return;
+    }
+    var ancestor = ctx.parent_context;
+    while (ancestor) |anc| {
+        var j = anc.local_frames.items.len;
+        while (j > 0) {
+            j -= 1;
+            if (anc.local_frames.items[j].getPtr(name)) |entry| {
+                entry.word_id = word_id;
+                return;
+            }
+        }
+        if (anc.dictionary.entries.getPtr(name)) |entry| {
+            entry.word_id = word_id;
+            return;
+        }
+        ancestor = anc.parent_context;
     }
 }
 

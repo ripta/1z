@@ -1,0 +1,26 @@
+=== compiled infinite loop is cancelled ===
+Stack: [ ]
+Stack: [ ]
+PASS: compiled loop cancelled
+Stack: [ ]
+=== cleanup runs during compiled cancellation ===
+Stack: [ ]
+Stack: [ V{ } ]
+Stack: [ V{ } V{ } ]
+Stack: [ V{ } [ V{ } dup [ 99 #push! drop ] curry [ [ spin-forever: compile! spin-forever ] swap cleanup ] curry spawn 20 milliseconds sleep dup cancel-task drop yield yield drop ] ]
+Stack: [ V{ 99 } ]
+PASS: cleanup ran on cancelled compiled loop
+Stack: [ ]
+=== cleanup shielding works during compiled cancellation ===
+Stack: [ ]
+Stack: [ V{ } ]
+Stack: [ V{ } V{ } ]
+Stack: [ V{ } [ V{ } dup [ 1 milliseconds sleep 42 #push! drop ] curry [ [ spin-forever: compile! spin-forever ] swap cleanup ] curry spawn 20 milliseconds sleep dup cancel-task drop yield yield yield drop ] ]
+Stack: [ V{ 42 } ]
+PASS: shielded cleanup handler completed
+Stack: [ ]
+=== compiled vs interpreter cancellation parity ===
+Stack: [ ]
+Stack: [ ]
+PASS: interpreter loop cancelled
+Stack: [ ]

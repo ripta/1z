@@ -1272,7 +1272,7 @@ fn compileInstructions(
                     const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
                     const if_bail = c._ir_IF(ctx, call_failed);
                     c._ir_IF_TRUE_cold(ctx, if_bail);
-                    c._ir_RETURN(ctx, bail_status);
+                    c._ir_RETURN(ctx, call_result);
                     c._ir_IF_FALSE(ctx, if_bail);
 
                     // Adjust abstract stack based on callee's known stack effect
@@ -1461,7 +1461,7 @@ pub fn compileWord(
 
     const bail_status = c.ir_const_i32(&ctx, 1);
     const ok_status = c.ir_const_i32(&ctx, 0);
-    const error_propagate_status = if (needs_error_handling)
+    const error_propagate_status = if (needs_error_handling or needs_safepoint)
         c.ir_const_i32(&ctx, 2)
     else
         c.IR_UNUSED;
@@ -1697,7 +1697,14 @@ fn emitSafepointCall(state: *CompileState) void {
     const ctx_off = c.ir_const_addr(state.ctx, JitContextLayout.ctx_offset);
     const ctx_addr = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
     const ctx_val = c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
-    _ = c._ir_CALL_1(state.ctx, c.IR_VOID, state.safepoint_fn, ctx_val);
+    const call_result = c._ir_CALL_1(state.ctx, c.IR_I32, state.safepoint_fn, ctx_val);
+
+    const zero_status = c.ir_const_i32(state.ctx, 0);
+    const call_failed = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
+    const if_bail = c._ir_IF(state.ctx, call_failed);
+    c._ir_IF_TRUE_cold(state.ctx, if_bail);
+    c._ir_RETURN(state.ctx, state.error_propagate_status);
+    c._ir_IF_FALSE(state.ctx, if_bail);
 }
 
 // =============================================================================
@@ -1707,13 +1714,31 @@ fn emitSafepointCall(state: *CompileState) void {
 const Context = @import("context.zig").Context;
 const Scheduler = @import("scheduler.zig").Scheduler;
 
-fn jitSafepoint(ctx_raw: usize) callconv(.c) void {
-    if (ctx_raw == 0) return;
+const helpers = @import("primitives/helpers.zig");
+
+fn jitSafepoint(ctx_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 0;
     const ctx: *Context = @ptrFromInt(ctx_raw);
-    const scheduler: *Scheduler = ctx.scheduler orelse return;
-    if (scheduler.run_queue.items.len > 0) {
+    const scheduler: *Scheduler = ctx.scheduler orelse return 0;
+    const should_yield = scheduler.run_queue.items.len > 0 or scheduler.sleep_queue.count() > 0;
+    if (should_yield) {
         scheduler.yieldCurrentTask();
     }
+    helpers.checkCancellation(ctx) catch |err| {
+        if (ctx.trace.trace_jit) {
+            const trace_mod = @import("trace.zig");
+            var tw = trace_mod.TraceWriter.init();
+            trace_mod.traceJitSafepoint(&tw, should_yield, true);
+        }
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    if (ctx.trace.trace_jit) {
+        const trace_mod = @import("trace.zig");
+        var tw = trace_mod.TraceWriter.init();
+        trace_mod.traceJitSafepoint(&tw, should_yield, false);
+    }
+    return 0;
 }
 
 const errors_mod = @import("primitives/errors.zig");

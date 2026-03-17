@@ -1,0 +1,85 @@
+use "testing" ;
+use "time" ;
+
+"compiled infinite loop is cancelled" test-section
+
+\ A compiled infinite loop should be cancellable. The safepoint at the
+\ loop back-edge checks for cancellation and unwinds the task.
+\ compile! must run inside the task so the dispatch table is available.
+
+spin-forever: ( -- ) [ [ t ] [ ] while ] ;
+
+[
+  [
+    [
+      spin-forever: compile!
+      spin-forever
+    ] spawn
+    20 milliseconds sleep
+    dup cancel-task
+    await
+  ] task-scope
+] task-cancelled: "compiled loop cancelled" assert-error-type
+
+"cleanup runs during compiled cancellation" test-section
+
+\ A cleanup handler around a compiled loop must execute when the task
+\ is cancelled, just as it would around interpreter code.
+
+V{ }
+dup
+[
+  dup [ 99 #push! drop ] curry
+  [
+    [
+      spin-forever: compile!
+      spin-forever
+    ] swap cleanup
+  ] curry
+  spawn
+  20 milliseconds sleep
+  dup cancel-task drop
+  yield yield
+  drop
+] curry
+task-scope
+#len 1 "cleanup ran on cancelled compiled loop" assert=
+
+"cleanup shielding works during compiled cancellation" test-section
+
+\ The cleanup handler can sleep without being re-cancelled.
+
+V{ }
+dup
+[
+  dup [ 1 milliseconds sleep 42 #push! drop ] curry
+  [
+    [
+      spin-forever: compile!
+      spin-forever
+    ] swap cleanup
+  ] curry
+  spawn
+  20 milliseconds sleep
+  dup cancel-task drop
+  yield yield yield
+  drop
+] curry
+task-scope
+#len 1 "shielded cleanup handler completed" assert=
+
+"compiled vs interpreter cancellation parity" test-section
+
+\ Both compiled and interpreted infinite loops should produce the
+\ same task-cancelled error when cancelled.
+
+spin-forever-interp: ( -- ) [ [ t ] [ yield ] while ] ;
+
+[
+  [
+    [ spin-forever-interp ] spawn
+    20 milliseconds sleep
+    dup cancel-task
+    await
+  ] task-scope
+] task-cancelled: "interpreter loop cancelled" assert-error-type
