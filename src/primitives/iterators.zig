@@ -37,7 +37,7 @@ pub const primitives = [_]Primitive{
 };
 
 /// >iterator ( seq -- iterator )
-fn nativeToIterator(ctx: *Context) anyerror!void {
+pub fn nativeToIterator(ctx: *Context) anyerror!void {
     const raw_val = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
     const val = unwrapBaseType(raw_val);
@@ -55,7 +55,7 @@ fn nativeToIterator(ctx: *Context) anyerror!void {
 }
 
 /// #next ( iterator -- value )
-fn nativeNext(ctx: *Context) anyerror!void {
+pub fn nativeNext(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
         .iterator => |iter| {
@@ -77,7 +77,7 @@ fn nativeNext(ctx: *Context) anyerror!void {
 }
 
 /// #collect ( iterator -- array )
-fn nativeCollect(ctx: *Context) anyerror!void {
+pub fn nativeCollect(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
         .iterator => |iter| {
@@ -97,7 +97,7 @@ fn nativeCollect(ctx: *Context) anyerror!void {
 }
 
 /// #count ( iterator -- n )
-fn nativeCount(ctx: *Context) anyerror!void {
+pub fn nativeCount(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
         .iterator => |iter| {
@@ -206,7 +206,7 @@ fn nativeMakeCallbackIterWithCleanup(ctx: *Context) anyerror!void {
 }
 
 /// close-iterator ( iterator -- )
-fn nativeCloseIterator(ctx: *Context) anyerror!void {
+pub fn nativeCloseIterator(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
         .iterator => |iter| {

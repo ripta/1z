@@ -1,0 +1,143 @@
+use "testing" ;
+
+"compiled >iterator then #next" test-section
+
+compiled-next: ( arr -- val ) [ >iterator #next ] ;
+compiled-next: compile!
+{ 10 20 30 } compiled-next 10 "compiled #next returns first element" assert=
+
+"compiled >iterator then #collect" test-section
+
+compiled-collect: ( arr -- arr' ) [ >iterator #collect ] ;
+compiled-collect: compile!
+{ 1 2 3 } compiled-collect { 1 2 3 } "compiled #collect round-trips array" assert=
+
+"compiled >iterator then #count" test-section
+
+compiled-count: ( arr -- n ) [ >iterator #count ] ;
+compiled-count: compile!
+{ 10 20 30 40 } compiled-count 4 "compiled #count returns element count" assert=
+
+"compiled >iterator then close-iterator" test-section
+
+compiled-close: ( arr -- ) [ >iterator close-iterator ] ;
+compiled-close: compile!
+{ 1 2 3 } compiled-close
+t "compiled close-iterator runs without error" assert-true
+
+"compiled #take" test-section
+
+compiled-take: ( arr n -- arr' ) [ #take ] ;
+compiled-take: compile!
+{ 10 20 30 40 50 } 3 compiled-take { 10 20 30 } "compiled #take returns first n" assert=
+
+"compiled #drop" test-section
+
+compiled-drop: ( arr n -- arr' ) [ #drop ] ;
+compiled-drop: compile!
+{ 10 20 30 40 50 } 2 compiled-drop { 30 40 50 } "compiled #drop skips first n" assert=
+
+"compiled #each" test-section
+
+compiled-each: ( arr quot -- ) [ #each ] ;
+compiled-each: compile!
+0 { 1 2 3 } [ + ] compiled-each
+6 "compiled #each iterates all elements" assert=
+
+"compiled #map" test-section
+
+compiled-map: ( arr quot -- arr' ) [ #map ] ;
+compiled-map: compile!
+{ 1 2 3 } [ 10 * ] compiled-map #collect
+{ 10 20 30 } "compiled #map transforms elements" assert=
+
+"compiled #filter" test-section
+
+compiled-filter: ( arr quot -- arr' ) [ #filter ] ;
+compiled-filter: compile!
+{ 1 2 3 4 5 6 } [ 2 % 0 = ] compiled-filter #collect
+{ 2 4 6 } "compiled #filter keeps matching elements" assert=
+
+"compiled #reduce" test-section
+
+compiled-reduce: ( arr init quot -- val ) [ #reduce ] ;
+compiled-reduce: compile!
+{ 1 2 3 4 } 0 [ + ] compiled-reduce
+10 "compiled #reduce folds elements" assert=
+
+"compiled vs interpreter parity for >iterator #next" test-section
+
+parity-next-c: ( arr -- val ) [ >iterator #next ] ;
+parity-next-c: compile!
+parity-next-i: ( arr -- val ) [ >iterator #next ] ;
+{ 42 99 } parity-next-c
+{ 42 99 } parity-next-i
+"compiled and interpreter >iterator #next match" assert=
+
+"compiled vs interpreter parity for #collect" test-section
+
+parity-collect-c: ( arr -- arr' ) [ >iterator #collect ] ;
+parity-collect-c: compile!
+parity-collect-i: ( arr -- arr' ) [ >iterator #collect ] ;
+{ 5 10 15 } parity-collect-c
+{ 5 10 15 } parity-collect-i
+"compiled and interpreter >iterator #collect match" assert=
+
+"compiled vs interpreter parity for #count" test-section
+
+parity-count-c: ( arr -- n ) [ >iterator #count ] ;
+parity-count-c: compile!
+parity-count-i: ( arr -- n ) [ >iterator #count ] ;
+{ 1 2 3 4 5 } parity-count-c
+{ 1 2 3 4 5 } parity-count-i
+"compiled and interpreter #count match" assert=
+
+"compiled vs interpreter parity for #take" test-section
+
+parity-take-c: ( arr n -- arr' ) [ #take ] ;
+parity-take-c: compile!
+parity-take-i: ( arr n -- arr' ) [ #take ] ;
+{ 10 20 30 40 } 2 parity-take-c
+{ 10 20 30 40 } 2 parity-take-i
+"compiled and interpreter #take match" assert=
+
+"compiled vs interpreter parity for #drop" test-section
+
+parity-drop-c: ( arr n -- arr' ) [ #drop ] ;
+parity-drop-c: compile!
+parity-drop-i: ( arr n -- arr' ) [ #drop ] ;
+{ 10 20 30 40 } 2 parity-drop-c
+{ 10 20 30 40 } 2 parity-drop-i
+"compiled and interpreter #drop match" assert=
+
+"compiled vs interpreter parity for #each" test-section
+
+0 { 1 2 3 } [ + ] compiled-each
+0 { 1 2 3 } [ + ] #each
+"compiled and interpreter #each match" assert=
+
+"compiled vs interpreter parity for #map" test-section
+
+{ 2 4 6 } [ 3 * ] compiled-map #collect
+{ 2 4 6 } [ 3 * ] #map #collect
+"compiled and interpreter #map match" assert=
+
+"compiled vs interpreter parity for #filter" test-section
+
+{ 1 2 3 4 5 } [ 3 > ] compiled-filter #collect
+{ 1 2 3 4 5 } [ 3 > ] #filter #collect
+"compiled and interpreter #filter match" assert=
+
+"compiled vs interpreter parity for #reduce" test-section
+
+{ 10 20 30 } 0 [ + ] compiled-reduce
+{ 10 20 30 } 0 [ + ] #reduce
+"compiled and interpreter #reduce match" assert=
+
+"error propagation from compiled #next on empty iterator" test-section
+
+compiled-next-one: ( iter -- val ) [ #next ] ;
+compiled-next-one: compile!
+[
+  { } >iterator compiled-next-one
+] [ "error-type" @get iterator-exhausted: "compiled #next error on empty iterator" assert= ] recover

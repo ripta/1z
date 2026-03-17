@@ -45,6 +45,7 @@ fn isSupportedOp(name: []const u8) bool {
     if (isLoopOp(name)) return true;
     if (isErrorHandlingOp(name)) return true;
     if (isDynamicVarOp(name)) return true;
+    if (isIteratorOp(name)) return true;
     return false;
 }
 
@@ -86,6 +87,61 @@ fn isErrorHandlingOp(name: []const u8) bool {
 
 fn isDynamicVarOp(name: []const u8) bool {
     return std.mem.eql(u8, name, "get") or std.mem.eql(u8, name, "with-parameter");
+}
+
+const IteratorOpcode = enum(u8) {
+    to_iterator = 0,
+    next = 1,
+    collect = 2,
+    count = 3,
+    close_iterator = 4,
+    take = 5,
+    drop = 6,
+    each = 7,
+    map = 8,
+    filter = 9,
+    reduce = 10,
+};
+
+fn isIteratorOp(name: []const u8) bool {
+    return iteratorOpcodeFromName(name) != null;
+}
+
+fn iteratorOpcodeFromName(name: []const u8) ?IteratorOpcode {
+    if (std.mem.eql(u8, name, ">iterator")) return .to_iterator;
+    if (std.mem.eql(u8, name, "#next")) return .next;
+    if (std.mem.eql(u8, name, "#collect")) return .collect;
+    if (std.mem.eql(u8, name, "#count")) return .count;
+    if (std.mem.eql(u8, name, "close-iterator")) return .close_iterator;
+    if (std.mem.eql(u8, name, "#take")) return .take;
+    if (std.mem.eql(u8, name, "#drop")) return .drop;
+    if (std.mem.eql(u8, name, "#each")) return .each;
+    if (std.mem.eql(u8, name, "#map")) return .map;
+    if (std.mem.eql(u8, name, "#filter")) return .filter;
+    if (std.mem.eql(u8, name, "#reduce")) return .reduce;
+    return null;
+}
+
+const IteratorEffects = struct {
+    inputs: usize,
+    outputs: usize,
+    dynamic: bool,
+};
+
+fn iteratorEffects(opcode: IteratorOpcode) IteratorEffects {
+    return switch (opcode) {
+        .to_iterator => .{ .inputs = 1, .outputs = 1, .dynamic = false },
+        .next => .{ .inputs = 1, .outputs = 1, .dynamic = false },
+        .collect => .{ .inputs = 1, .outputs = 1, .dynamic = false },
+        .count => .{ .inputs = 1, .outputs = 1, .dynamic = false },
+        .close_iterator => .{ .inputs = 1, .outputs = 0, .dynamic = false },
+        .take => .{ .inputs = 2, .outputs = 1, .dynamic = false },
+        .drop => .{ .inputs = 2, .outputs = 1, .dynamic = false },
+        .each => .{ .inputs = 2, .outputs = 0, .dynamic = true },
+        .map => .{ .inputs = 2, .outputs = 1, .dynamic = true },
+        .filter => .{ .inputs = 2, .outputs = 1, .dynamic = true },
+        .reduce => .{ .inputs = 3, .outputs = 1, .dynamic = true },
+    };
 }
 
 /// Layout of Value for use in generated IR code, determined at runtime
@@ -467,6 +523,7 @@ const CompileState = struct {
     cleanup_fn: c.ir_ref = c.IR_UNUSED,
     get_fn: c.ir_ref = c.IR_UNUSED,
     with_parameter_fn: c.ir_ref = c.IR_UNUSED,
+    iterator_fn: c.ir_ref = c.IR_UNUSED,
     error_propagate_status: c.ir_ref = c.IR_UNUSED,
 };
 
@@ -1286,6 +1343,54 @@ fn compileInstructions(
                         sp.* -= 3;
                         state.dynamic_call_emitted = true;
                     }
+                } else if (isIteratorOp(name)) {
+                    const opcode = iteratorOpcodeFromName(name).?;
+                    const effects = iteratorEffects(opcode);
+                    if (sp.* < effects.inputs) return IrCodegenError.StackUnderflow;
+
+                    // Materialize quotation_body entries as real Values
+                    for (0..sp.*) |qi| {
+                        switch (stack[qi]) {
+                            .quotation_body => |body| {
+                                const qval = Value{ .quotation = .{ .instructions = body, .code_ptr = null } };
+                                const slot_byte_offset = c.ir_const_addr(ctx, qi * ValueLayout.value_size);
+                                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                                emitPushValue(ctx, &qval, dest_addr);
+                                stack[qi] = .{ .raw_at_slot = qi };
+                            },
+                            else => {},
+                        }
+                    }
+
+                    flushToPhysicalStack(state, stack, sp.*);
+                    const sp_const = c.ir_const_addr(ctx, sp.*);
+                    const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
+                    c._ir_STORE(ctx, state.sp_ptr, new_sp);
+
+                    JitContextLayout.ensureInit();
+                    const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+                    const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+                    const ctx_val = c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
+
+                    const opcode_const = c.ir_const_addr(ctx, @intFromEnum(opcode));
+                    const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.iterator_fn, ctx_val, opcode_const);
+
+                    const zero_status = c.ir_const_i32(ctx, 0);
+                    const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
+                    const if_bail = c._ir_IF(ctx, call_failed);
+                    c._ir_IF_TRUE_cold(ctx, if_bail);
+                    c._ir_RETURN(ctx, call_result);
+                    c._ir_IF_FALSE(ctx, if_bail);
+
+                    if (effects.dynamic) {
+                        sp.* -= effects.inputs;
+                        state.dynamic_call_emitted = true;
+                    } else {
+                        sp.* = sp.* - effects.inputs + effects.outputs;
+                        for (0..sp.*) |i| {
+                            stack[i] = .{ .raw_at_slot = i };
+                        }
+                    }
                 } else {
                     // Unrecognized word: try dispatch table call if a resolver is available
                     const res = state.resolver orelse return IrCodegenError.NotCompilable;
@@ -1423,13 +1528,14 @@ fn preScanInstructions(
     needs_safepoint: *bool,
     needs_error_handling: *bool,
     needs_dynamic_vars: *bool,
+    needs_iterators: *bool,
     in_quotation: bool,
 ) IrCodegenError!void {
     for (instructions) |instr| {
         switch (instr.op) {
             .push_literal => |val| {
                 if (val == .quotation) {
-                    try preScanInstructions(val.quotation.instructions, resolver, needs_dispatch, needs_safepoint, needs_error_handling, needs_dynamic_vars, true);
+                    try preScanInstructions(val.quotation.instructions, resolver, needs_dispatch, needs_safepoint, needs_error_handling, needs_dynamic_vars, needs_iterators, true);
                 }
             },
             .call_word => |name| {
@@ -1439,6 +1545,8 @@ fn preScanInstructions(
                     needs_error_handling.* = true;
                 } else if (isDynamicVarOp(name)) {
                     needs_dynamic_vars.* = true;
+                } else if (isIteratorOp(name)) {
+                    needs_iterators.* = true;
                 } else if (!isSupportedOp(name) and !isStackOp(name)) {
                     if (resolver) |res| {
                         if (res.resolve(name, res.user_data)) |_| {
@@ -1475,7 +1583,8 @@ pub fn compileWord(
     var needs_safepoint = false;
     var needs_error_handling = false;
     var needs_dynamic_vars = false;
-    try preScanInstructions(instructions, resolver, &needs_dispatch, &needs_safepoint, &needs_error_handling, &needs_dynamic_vars, false);
+    var needs_iterators = false;
+    try preScanInstructions(instructions, resolver, &needs_dispatch, &needs_safepoint, &needs_error_handling, &needs_dynamic_vars, &needs_iterators, false);
 
     var ctx: c.ir_ctx = undefined;
     c.ir_init(&ctx, c.IR_FUNCTION | c.IR_OPT_FOLDING, c.IR_CONSTS_LIMIT_MIN, c.IR_INSNS_LIMIT_MIN);
@@ -1528,9 +1637,14 @@ pub fn compileWord(
     else
         c.IR_UNUSED;
 
+    const iterator_fn = if (needs_iterators)
+        c.ir_const_addr(&ctx, @intFromPtr(&jitIteratorOp))
+    else
+        c.IR_UNUSED;
+
     const bail_status = c.ir_const_i32(&ctx, 1);
     const ok_status = c.ir_const_i32(&ctx, 0);
-    const error_propagate_status = if (needs_error_handling or needs_safepoint or needs_dynamic_vars)
+    const error_propagate_status = if (needs_error_handling or needs_safepoint or needs_dynamic_vars or needs_iterators)
         c.ir_const_i32(&ctx, 2)
     else
         c.IR_UNUSED;
@@ -1594,6 +1708,7 @@ pub fn compileWord(
         .cleanup_fn = cleanup_fn,
         .get_fn = get_fn,
         .with_parameter_fn = with_parameter_fn,
+        .iterator_fn = iterator_fn,
         .error_propagate_status = error_propagate_status,
     };
 
@@ -1850,6 +1965,33 @@ fn jitCleanup(ctx_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     errors_mod.nativeCleanup(ctx) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return 0;
+}
+
+const iterators_mod = @import("primitives/iterators.zig");
+const sequences_mod = @import("primitives/sequences.zig");
+
+fn jitIteratorOp(ctx_raw: usize, opcode_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const opcode = std.meta.intToEnum(IteratorOpcode, opcode_raw) catch return 1;
+    const func: *const fn (*Context) anyerror!void = switch (opcode) {
+        .to_iterator => &iterators_mod.nativeToIterator,
+        .next => &iterators_mod.nativeNext,
+        .collect => &iterators_mod.nativeCollect,
+        .count => &iterators_mod.nativeCount,
+        .close_iterator => &iterators_mod.nativeCloseIterator,
+        .take => &sequences_mod.nativeTake,
+        .drop => &sequences_mod.nativeDrop,
+        .each => &sequences_mod.nativeEach,
+        .map => &sequences_mod.nativeMap,
+        .filter => &sequences_mod.nativeFilter,
+        .reduce => &sequences_mod.nativeReduce,
+    };
+    func(ctx) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
     };

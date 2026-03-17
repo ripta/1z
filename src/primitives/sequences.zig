@@ -1791,7 +1791,7 @@ fn nativeIndexOf(ctx: *Context) anyerror!void {
 }
 
 /// #take ( seq n -- seq' ) - First n elements
-fn nativeTake(ctx: *Context) anyerror!void {
+pub fn nativeTake(ctx: *Context) anyerror!void {
     const n_val = try popFixnum(ctx);
     const seq = try ctx.stack.pop();
 
@@ -1858,7 +1858,7 @@ fn nativeTake(ctx: *Context) anyerror!void {
 }
 
 /// #drop ( seq n -- seq' ) - All but first n elements
-fn nativeDrop(ctx: *Context) anyerror!void {
+pub fn nativeDrop(ctx: *Context) anyerror!void {
     const n_val = try popFixnum(ctx);
     const seq = try ctx.stack.pop();
 

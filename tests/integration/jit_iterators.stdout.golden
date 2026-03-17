@@ -1,0 +1,140 @@
+=== compiled >iterator then #next ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: compiled #next returns first element
+Stack: [ ]
+=== compiled >iterator then #collect ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: compiled #collect round-trips array
+Stack: [ ]
+=== compiled >iterator then #count ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: compiled #count returns element count
+Stack: [ ]
+=== compiled >iterator then close-iterator ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: compiled close-iterator runs without error
+Stack: [ ]
+=== compiled #take ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: compiled #take returns first n
+Stack: [ ]
+=== compiled #drop ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: compiled #drop skips first n
+Stack: [ ]
+=== compiled #each ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ 6 ]
+PASS: compiled #each iterates all elements
+Stack: [ ]
+=== compiled #map ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ { 10 20 30 } ]
+PASS: compiled #map transforms elements
+Stack: [ ]
+=== compiled #filter ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ { 2 4 6 } ]
+PASS: compiled #filter keeps matching elements
+Stack: [ ]
+=== compiled #reduce ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ 10 ]
+PASS: compiled #reduce folds elements
+Stack: [ ]
+=== compiled vs interpreter parity for >iterator #next ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ 42 ]
+Stack: [ 42 42 ]
+PASS: compiled and interpreter >iterator #next match
+Stack: [ ]
+=== compiled vs interpreter parity for #collect ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ { 5 10 15 } ]
+Stack: [ { 5 10 15 } { 5 10 15 } ]
+PASS: compiled and interpreter >iterator #collect match
+Stack: [ ]
+=== compiled vs interpreter parity for #count ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ 5 ]
+Stack: [ 5 5 ]
+PASS: compiled and interpreter #count match
+Stack: [ ]
+=== compiled vs interpreter parity for #take ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ { 10 20 } ]
+Stack: [ { 10 20 } { 10 20 } ]
+PASS: compiled and interpreter #take match
+Stack: [ ]
+=== compiled vs interpreter parity for #drop ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ { 30 40 } ]
+Stack: [ { 30 40 } { 30 40 } ]
+PASS: compiled and interpreter #drop match
+Stack: [ ]
+=== compiled vs interpreter parity for #each ===
+Stack: [ ]
+Stack: [ 6 ]
+Stack: [ 6 6 ]
+PASS: compiled and interpreter #each match
+Stack: [ ]
+=== compiled vs interpreter parity for #map ===
+Stack: [ ]
+Stack: [ { 6 12 18 } ]
+Stack: [ { 6 12 18 } { 6 12 18 } ]
+PASS: compiled and interpreter #map match
+Stack: [ ]
+=== compiled vs interpreter parity for #filter ===
+Stack: [ ]
+Stack: [ { 4 5 } ]
+Stack: [ { 4 5 } { 4 5 } ]
+PASS: compiled and interpreter #filter match
+Stack: [ ]
+=== compiled vs interpreter parity for #reduce ===
+Stack: [ ]
+Stack: [ 60 ]
+Stack: [ 60 60 ]
+PASS: compiled and interpreter #reduce match
+Stack: [ ]
+=== error propagation from compiled #next on empty iterator ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: compiled #next error on empty iterator
+Stack: [ ]
