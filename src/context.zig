@@ -2044,7 +2044,12 @@ pub const Context = struct {
 
                         // Try JIT-compiled dispatch before interpreter path
                         if (word.word_id) |wid| {
-                            switch (ir_codegen.executeCompiled(self, wid)) {
+                            const jit_result = ir_codegen.executeCompiled(self, wid);
+                            if (self.trace.trace_jit) {
+                                var tw = trace_mod.TraceWriter.init();
+                                trace_mod.traceJitDispatch(&tw, name, wid, jit_result != .bail);
+                            }
+                            switch (jit_result) {
                                 .ok => {
                                     if (self.benchmark) |bm| bm.endWordProfile(self.allocator, name);
                                     continue;

@@ -15,10 +15,11 @@ pub const TraceConfig = struct {
     trace_resolve: bool = false,
     trace_resolve_pattern: ?[]const u8 = null,
     trace_modules: bool = false,
+    trace_jit: bool = false,
     dump_scope: ?[]const u8 = null,
 
     pub fn isEnabled(self: TraceConfig) bool {
-        return self.trace_words or self.trace_resolve or self.trace_modules or self.dump_scope != null;
+        return self.trace_words or self.trace_resolve or self.trace_modules or self.trace_jit or self.dump_scope != null;
     }
 };
 
@@ -318,6 +319,43 @@ pub fn traceDumpScopeFrame(tw: *TraceWriter, prefix: []const u8, index: usize, c
 /// Emit a dictionary line in a scope dump.
 pub fn traceDumpScopeDict(tw: *TraceWriter, prefix: []const u8, count: usize) void {
     tw.print("  {s}global-dict: {d} words\n", .{ prefix, count });
+}
+
+/// Emit a JIT compile line for `--trace-jit`.
+pub fn traceJitCompile(trace_writer: *TraceWriter, name: []const u8, word_id: u32) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    w.print("JIT compile {s} (wid={d})\n", .{ name, word_id }) catch return;
+    trace_writer.writeAll(fbs.getWritten());
+}
+
+/// Emit a JIT dispatch line for `--trace-jit`.
+pub fn traceJitDispatch(trace_writer: *TraceWriter, name: []const u8, word_id: u32, hit: bool) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    const status = if (hit) "hit" else "miss";
+    w.print("JIT dispatch {s} (wid={d}) -> {s}\n", .{ name, word_id, status }) catch return;
+    trace_writer.writeAll(fbs.getWritten());
+}
+
+/// Emit a JIT safepoint line for `--trace-jit`.
+pub fn traceJitSafepoint(trace_writer: *TraceWriter, yielded: bool, cancelled: bool) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    if (cancelled) {
+        w.writeAll("JIT safepoint -> cancelled\n") catch return;
+    } else if (yielded) {
+        w.writeAll("JIT safepoint -> yielded\n") catch return;
+    } else {
+        w.writeAll("JIT safepoint -> no-op\n") catch return;
+    }
+    trace_writer.writeAll(fbs.getWritten());
 }
 
 /// Returns true if `name` matches the given comma-separated pattern.

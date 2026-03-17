@@ -199,6 +199,8 @@ pub fn main() u8 {
             trace_config.trace_resolve_pattern = arg["--trace-resolve=".len..];
         } else if (std.mem.eql(u8, arg, "--trace-modules")) {
             trace_config.trace_modules = true;
+        } else if (std.mem.eql(u8, arg, "--trace-jit")) {
+            trace_config.trace_jit = true;
         } else if (std.mem.startsWith(u8, arg, "--dump-scope=")) {
             trace_config.dump_scope = arg["--dump-scope=".len..];
         } else if (std.mem.eql(u8, arg, "--deadlock-detect")) {
