@@ -1,0 +1,63 @@
+=== compiled get with default value ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: get returns default from compiled code
+Stack: [ ]
+=== compiled get with active binding ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ 99 ]
+PASS: get sees active binding from compiled code
+Stack: [ ]
+=== compiled with-parameter executes body ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ 77 ]
+PASS: with-parameter body runs in compiled code
+Stack: [ ]
+PASS: binding reverted after compiled with-parameter
+Stack: [ ]
+=== compiled nested with-parameter ===
+Stack: [ ]
+Stack: [ ]
+PASS: inner binding active
+PASS: outer binding restored after inner
+Stack: [ ]
+PASS: default restored after nested compiled with-parameter
+Stack: [ ]
+=== compiled with-parameter restores on error ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: binding reverted after error in compiled with-parameter body
+Stack: [ ]
+=== compiled get followed by arithmetic ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: get followed by arithmetic in compiled code
+Stack: [ ]
+=== compiled vs interpreter parity for get ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ 123 ]
+Stack: [ 123 123 ]
+PASS: compiled and interpreter get match
+Stack: [ ]
+=== compiled vs interpreter parity for with-parameter ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ 50 ]
+Stack: [ 50 50 ]
+PASS: compiled and interpreter with-parameter match
+Stack: [ ]

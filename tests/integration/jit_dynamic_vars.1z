@@ -1,0 +1,67 @@
+use "testing" ;
+
+"compiled get with default value" test-section
+
+get-param: define-parameter [ 42 ] ;
+compiled-get: ( param -- n ) [ get ] ;
+compiled-get: compile!
+get-param compiled-get 42 "get returns default from compiled code" assert=
+
+"compiled get with active binding" test-section
+
+bound-param: define-parameter [ 0 ] ;
+compiled-get-bound: ( param -- n ) [ get ] ;
+compiled-get-bound: compile!
+99 bound-param [ bound-param compiled-get-bound ] with-parameter
+99 "get sees active binding from compiled code" assert=
+
+"compiled with-parameter executes body" test-section
+
+wp-param: define-parameter [ 10 ] ;
+compiled-wp: ( value param quot -- ) [ with-parameter ] ;
+compiled-wp: compile!
+77 wp-param [ wp-param get ] compiled-wp
+77 "with-parameter body runs in compiled code" assert=
+wp-param get 10 "binding reverted after compiled with-parameter" assert=
+
+"compiled nested with-parameter" test-section
+
+nest-param: define-parameter [ 1 ] ;
+10 nest-param [
+  20 nest-param [ nest-param get ] compiled-wp
+  20 "inner binding active" assert=
+  nest-param get 10 "outer binding restored after inner" assert=
+] compiled-wp
+nest-param get 1 "default restored after nested compiled with-parameter" assert=
+
+"compiled with-parameter restores on error" test-section
+
+err-param: define-parameter [ 0 ] ;
+[
+  999 err-param [ 1 0 / ] compiled-wp
+] [ drop ] recover
+err-param get 0 "binding reverted after error in compiled with-parameter body" assert=
+
+"compiled get followed by arithmetic" test-section
+
+arith-param: define-parameter [ 10 ] ;
+get-and-add: ( param -- n ) [ get 5 + ] ;
+get-and-add: compile!
+arith-param get-and-add 15 "get followed by arithmetic in compiled code" assert=
+
+"compiled vs interpreter parity for get" test-section
+
+parity-param: define-parameter [ 123 ] ;
+parity-compiled: ( param -- n ) [ get ] ;
+parity-compiled: compile!
+parity-interp: ( param -- n ) [ get ] ;
+parity-param parity-compiled
+parity-param parity-interp
+"compiled and interpreter get match" assert=
+
+"compiled vs interpreter parity for with-parameter" test-section
+
+parity-wp-param: define-parameter [ 0 ] ;
+50 parity-wp-param [ parity-wp-param get ] compiled-wp
+50 parity-wp-param [ parity-wp-param get ] with-parameter
+"compiled and interpreter with-parameter match" assert=
