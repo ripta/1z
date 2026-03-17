@@ -1,0 +1,18 @@
+use "testing" ;
+
+"compiled self-recursive countdown" test-section
+countdown: ( n -- n ) [ dup 0 > [ 1 - countdown ] [ ] if ] ;
+countdown: compile!
+10 countdown 0 "countdown 10" assert=
+100 countdown 0 "countdown 100" assert=
+10000 countdown 0 "countdown 10000 (deep)" assert=
+
+"compiled self-recursive factorial with accumulator" test-section
+fact-acc: ( n acc -- acc ) [ over 1 > [ over * swap 1 - swap fact-acc ] [ swap drop ] if ] ;
+fact-acc: compile!
+5 1 fact-acc 120 "fact-acc 5" assert=
+10 1 fact-acc 3628800 "fact-acc 10" assert=
+
+"compiled TCO matches interpreter" test-section
+countdown-interp: ( n -- n ) [ dup 0 > [ 1 - countdown-interp ] [ ] if ] ;
+1000 countdown 1000 countdown-interp = "compiled matches interpreted" assert-true

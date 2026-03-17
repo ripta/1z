@@ -1,0 +1,23 @@
+=== compiled self-recursive countdown ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: countdown 10
+Stack: [ ]
+PASS: countdown 100
+Stack: [ ]
+PASS: countdown 10000 (deep)
+Stack: [ ]
+=== compiled self-recursive factorial with accumulator ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: fact-acc 5
+Stack: [ ]
+PASS: fact-acc 10
+Stack: [ ]
+=== compiled TCO matches interpreter ===
+Stack: [ ]
+Stack: [ ]
+PASS: compiled matches interpreted
+Stack: [ ]

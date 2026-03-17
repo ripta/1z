@@ -561,7 +561,7 @@ fn nativeCompile(ctx: *Context) anyerror!void {
         .dispatch_table_ptr = @ptrCast(&ctx.jit_dispatch),
     };
 
-    const compiled = ir_codegen.compileWord(instrs, input_count, output_count, resolver) catch {
+    const compiled = ir_codegen.compileWord(instrs, input_count, output_count, resolver, sym) catch {
         ctx.pending_error_message = "compile!: word is not compilable (must use only fixnum literals and integer arithmetic)";
         return error.TypeMismatch;
     };
