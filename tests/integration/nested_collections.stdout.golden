@@ -1,0 +1,64 @@
+=== Hash with nested vector ===
+Stack: [ ]
+PASS: nested vector length
+Stack: [ ]
+PASS: nested vector first
+Stack: [ ]
+PASS: nested vector last
+Stack: [ ]
+=== Hash with nested set ===
+Stack: [ ]
+PASS: nested set length
+Stack: [ ]
+=== Hash with nested hash ===
+Stack: [ ]
+PASS: nested hash value
+Stack: [ ]
+=== Empty nested collections ===
+Stack: [ ]
+PASS: empty vector
+Stack: [ ]
+PASS: empty hash
+Stack: [ ]
+=== Mixed scalar and nested values ===
+Stack: [ ]
+PASS: scalar a
+Stack: [ ]
+PASS: nested vector b length
+Stack: [ ]
+PASS: nested vector b first
+Stack: [ ]
+PASS: scalar c
+Stack: [ ]
+=== Parse-time words inside plain arrays ===
+Stack: [ ]
+PASS: vector then scalar array length
+Stack: [ ]
+PASS: vector inside array length
+Stack: [ ]
+PASS: scalar after vector
+Stack: [ ]
+PASS: scalar before vector
+Stack: [ ]
+PASS: vector after scalar length
+Stack: [ ]
+PASS: hash inside array
+Stack: [ ]
+PASS: set inside array
+Stack: [ ]
+PASS: byte-array inside array
+Stack: [ ]
+PASS: mutable-map inside array
+Stack: [ ]
+PASS: multiple parse-time in array
+Stack: [ ]
+PASS: first of multiple vectors
+Stack: [ ]
+PASS: last of multiple vectors
+Stack: [ ]
+PASS: mixed parse-time in array
+Stack: [ ]
+PASS: nested array containing vector
+Stack: [ ]
+All nested collection tests complete!
+Stack: [ ]

@@ -1,0 +1,50 @@
+\ Integration tests for nested collections in parse-time constructs
+
+use "testing" ;
+
+"Hash with nested vector" test-section
+H{ foo: V{ 1 2 3 } } "foo" @get #len 3 "nested vector length" assert=
+H{ foo: V{ 1 2 3 } } "foo" @get #first 1 "nested vector first" assert=
+H{ foo: V{ 1 2 3 } } "foo" @get #last 3 "nested vector last" assert=
+
+"Hash with nested set" test-section
+H{ foo: S{ 1 2 3 } } "foo" @get #len 3 "nested set length" assert=
+
+"Hash with nested hash" test-section
+H{ foo: H{ bar: 42 } } "foo" @get "bar" @get 42 "nested hash value" assert=
+
+"Empty nested collections" test-section
+V{ } #len 0 "empty vector" assert=
+H{ } @keys #len 0 "empty hash" assert=
+
+"Mixed scalar and nested values" test-section
+H{ a: 1 b: V{ 2 3 } c: 4 } "a" @get 1 "scalar a" assert=
+H{ a: 1 b: V{ 2 3 } c: 4 } "b" @get #len 2 "nested vector b length" assert=
+H{ a: 1 b: V{ 2 3 } c: 4 } "b" @get #first 2 "nested vector b first" assert=
+H{ a: 1 b: V{ 2 3 } c: 4 } "c" @get 4 "scalar c" assert=
+
+"Parse-time words inside plain arrays" test-section
+{ V{ 1 2 } 3 } #len 2 "vector then scalar array length" assert=
+{ V{ 1 2 } 3 } #first #len 2 "vector inside array length" assert=
+{ V{ 1 2 } 3 } #last 3 "scalar after vector" assert=
+
+{ 1 V{ 2 3 } } #first 1 "scalar before vector" assert=
+{ 1 V{ 2 3 } } #last #len 2 "vector after scalar length" assert=
+
+{ H{ x: 1 } } #first "x" @get 1 "hash inside array" assert=
+
+{ S{ 1 2 3 } } #first #len 3 "set inside array" assert=
+
+{ B{ 1 2 3 } } #first #len 3 "byte-array inside array" assert=
+
+{ M{ x: 1 } } #first "x" @get 1 "mutable-map inside array" assert=
+
+{ V{ 1 } V{ 2 } } #len 2 "multiple parse-time in array" assert=
+{ V{ 1 } V{ 2 } } #first #first 1 "first of multiple vectors" assert=
+{ V{ 1 } V{ 2 } } #last #first 2 "last of multiple vectors" assert=
+
+{ V{ 1 } H{ x: 2 } V{ 3 } } #len 3 "mixed parse-time in array" assert=
+
+{ { V{ 1 2 } } } #first #first #len 2 "nested array containing vector" assert=
+
+"All nested collection tests complete!" print-line
