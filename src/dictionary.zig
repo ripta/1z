@@ -80,6 +80,10 @@ pub const Dictionary = struct {
     pub fn get(self: *const Dictionary, name: []const u8) ?WordDefinition {
         return self.entries.get(name);
     }
+
+    pub fn getPtr(self: *const Dictionary, name: []const u8) ?*WordDefinition {
+        return self.entries.getPtr(name);
+    }
 };
 
 // =============================================================================

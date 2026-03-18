@@ -497,12 +497,27 @@ const ResolverState = struct {
     context: *Context,
 };
 
+fn hasQuotationParams(effect: @import("../stack_effect.zig").StackEffect) bool {
+    for (effect.inputs) |param| {
+        if (param.quotation_effect != null) return true;
+    }
+    return false;
+}
+
 fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?@import("../ir_codegen.zig").ResolvedWord {
     const ir_codegen = @import("../ir_codegen.zig");
     const stack_effect_mod = @import("../stack_effect.zig");
     const state: *ResolverState = @ptrCast(@alignCast(user_data));
     const ctx = state.context;
     const callee = ctx.lookupWord(name) orelse return null;
+
+    const effect_ptr: ?usize = if (callee.stack_effect) |eff| blk: {
+        if (hasQuotationParams(eff)) {
+            const ptr = ctx.lookupWordStackEffectPtr(name) orelse break :blk @as(?usize, null);
+            break :blk @intFromPtr(ptr);
+        }
+        break :blk null;
+    } else null;
 
     switch (callee.action) {
         .compound => {},
@@ -514,6 +529,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?@import("../
                 .input_count = @intCast(effect.inputs.len),
                 .output_count = @intCast(effect.outputs.len),
                 .native_fn_ptr = @intFromPtr(func),
+                .stack_effect_ptr = effect_ptr,
             };
         },
     }
@@ -530,6 +546,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?@import("../
         .word_id = word_id,
         .input_count = @intCast(effect.inputs.len),
         .output_count = @intCast(effect.outputs.len),
+        .stack_effect_ptr = effect_ptr,
     };
 }
 
@@ -571,7 +588,7 @@ fn nativeCompile(ctx: *Context) anyerror!void {
         .dispatch_table_ptr = @ptrCast(&ctx.jit_dispatch),
     };
 
-    const compiled = ir_codegen.compileWord(instrs, input_count, output_count, resolver, sym) catch {
+    const compiled = ir_codegen.compileWord(instrs, input_count, output_count, resolver, sym, ctx) catch {
         ctx.pending_error_message = "compile!: word is not compilable (must use only fixnum literals and integer arithmetic)";
         return error.TypeMismatch;
     };

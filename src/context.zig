@@ -747,6 +747,43 @@ pub const Context = struct {
         return null;
     }
 
+    /// Look up a word and return a stable pointer to its stack effect field.
+    /// Used by the JIT compiler to bake effect pointers as compile-time constants.
+    pub fn lookupWordStackEffectPtr(self: *const Context, name: []const u8) ?*const StackEffect {
+        var i = self.local_frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.local_frames.items[i].getPtr(name)) |def| {
+                if (def.stack_effect) |*eff| return eff;
+                return null;
+            }
+        }
+
+        if (self.dictionary.getPtr(name)) |def| {
+            if (def.stack_effect) |*eff| return eff;
+            return null;
+        }
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            var j = ctx.local_frames.items.len;
+            while (j > 0) {
+                j -= 1;
+                if (ctx.local_frames.items[j].getPtr(name)) |def| {
+                    if (def.stack_effect) |*eff| return eff;
+                    return null;
+                }
+            }
+            if (ctx.dictionary.getPtr(name)) |def| {
+                if (def.stack_effect) |*eff| return eff;
+                return null;
+            }
+            ancestor = ctx.parent_context;
+        }
+
+        return null;
+    }
+
     /// Get or lazily allocate a PIC table for an instruction slice.
     /// The instruction slice pointer serves as a stable identity key,
     /// since compound word bodies are arena-allocated and never move.
@@ -1599,7 +1636,7 @@ pub const Context = struct {
     /// Uses static analysis to infer the quotation's stack delta and compares
     /// against the expected effect from the parameter annotation.
     /// Also validates that row variables in quotation effects are defined in the word's effect.
-    fn validateParameterEffects(self: *Context, effect: *const StackEffect) !void {
+    pub fn validateParameterEffects(self: *Context, effect: *const StackEffect) !void {
         // First, validate that all row variables in quotation effects are defined
         for (effect.inputs) |param| {
             if (param.quotation_effect) |quot_effect| {

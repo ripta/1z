@@ -398,3 +398,24 @@ times-call
 times-call: compile!
 times-call
 "times-call match" assert=
+
+"compile! #each with correct quotation" test-section
+
+jit-each-ok: ( arr quot -- ) [ #each ] ;
+jit-each-ok: compile!
+0 { 1 2 3 } [ + ] jit-each-ok
+6 "jit #each correct quot sums" assert=
+
+"compile! #each with wrong-arity quotation errors" test-section
+
+jit-each-bad: ( arr quot -- ) [ #each ] ;
+jit-each-bad: compile!
+[ { 1 2 3 } [ ] jit-each-bad ] "jit #each wrong arity quot" assert-error
+
+"compile! #each wrong-arity error matches interpreter" test-section
+
+jit-each-match: ( arr quot -- ) [ #each ] ;
+[ { 1 } [ ] jit-each-match ]
+jit-each-match: compile!
+[ { 1 } [ ] jit-each-match ]
+"jit #each error matches interpreter" assert=

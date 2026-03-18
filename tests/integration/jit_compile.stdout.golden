@@ -416,3 +416,24 @@ Stack: [ 7 ]
 Stack: [ 7 7 ]
 PASS: times-call match
 Stack: [ ]
+=== compile! #each with correct quotation ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ 6 ]
+PASS: jit #each correct quot sums
+Stack: [ ]
+=== compile! #each with wrong-arity quotation errors ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: jit #each wrong arity quot
+Stack: [ ]
+=== compile! #each wrong-arity error matches interpreter ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ [ { 1 } [ ] jit-each-match ] ]
+Stack: [ [ { 1 } [ ] jit-each-match ] ]
+Stack: [ [ { 1 } [ ] jit-each-match ] [ { 1 } [ ] jit-each-match ] ]
+PASS: jit #each error matches interpreter
+Stack: [ ]
