@@ -1,0 +1,67 @@
+use "testing" ;
+
+"compiled bitwise ops via native callback" test-section
+
+compiled-bitand: ( a b -- n ) [ bitand ] ;
+compiled-bitand: compile!
+0xff 0x0f compiled-bitand 0x0f "bitand" assert=
+
+compiled-bitor: ( a b -- n ) [ bitor ] ;
+compiled-bitor: compile!
+0xf0 0x0f compiled-bitor 0xff "bitor" assert=
+
+compiled-bitxor: ( a b -- n ) [ bitxor ] ;
+compiled-bitxor: compile!
+0xff 0x0f compiled-bitxor 0xf0 "bitxor" assert=
+
+compiled-bitnot: ( n -- n ) [ bitnot ] ;
+compiled-bitnot: compile!
+0 compiled-bitnot -1 "bitnot of 0" assert=
+
+"compiled #len" test-section
+
+compiled-len: ( seq -- n ) [ #len ] ;
+compiled-len: compile!
+{ 1 2 3 } compiled-len 3 "#len on array" assert=
+"hello" compiled-len 5 "#len on string" assert=
+
+"compiled type-of" test-section
+
+compiled-type-of: ( x -- type ) [ type-of ] ;
+compiled-type-of: compile!
+42 compiled-type-of fixnum "type-of fixnum" assert=
+"hi" compiled-type-of string "type-of string" assert=
+
+"mixed native + arithmetic in one compiled word" test-section
+
+len-plus-one: ( seq -- n ) [ #len 1 + ] ;
+len-plus-one: compile!
+{ 10 20 30 } len-plus-one 4 "#len then add in compiled code" assert=
+
+"compiled shift ops" test-section
+
+compiled-shl: ( n count -- n ) [ shift-left ] ;
+compiled-shl: compile!
+1 4 compiled-shl 16 "shift-left" assert=
+
+compiled-shr: ( n count -- n ) [ shift-right ] ;
+compiled-shr: compile!
+16 4 compiled-shr 1 "shift-right" assert=
+
+"compiled vs interpreter parity" test-section
+
+interp-len: ( seq -- n ) [ #len ] ;
+{ 1 2 } compiled-len
+{ 1 2 } interp-len
+"compiled and interpreter #len match" assert=
+
+interp-bitand: ( a b -- n ) [ bitand ] ;
+0xff 0x0f compiled-bitand
+0xff 0x0f interp-bitand
+"compiled and interpreter bitand match" assert=
+
+"multiple native calls in one word" test-section
+
+len-of-both: ( a b -- n ) [ #len swap #len + ] ;
+len-of-both: compile!
+{ 1 2 } { 3 4 5 } len-of-both 5 "two #len calls plus add" assert=

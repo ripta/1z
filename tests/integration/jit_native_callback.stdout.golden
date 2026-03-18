@@ -1,0 +1,68 @@
+=== compiled bitwise ops via native callback ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: bitand
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: bitor
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: bitxor
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: bitnot of 0
+Stack: [ ]
+=== compiled #len ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: #len on array
+Stack: [ ]
+PASS: #len on string
+Stack: [ ]
+=== compiled type-of ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: type-of fixnum
+Stack: [ ]
+PASS: type-of string
+Stack: [ ]
+=== mixed native + arithmetic in one compiled word ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: #len then add in compiled code
+Stack: [ ]
+=== compiled shift ops ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: shift-left
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: shift-right
+Stack: [ ]
+=== compiled vs interpreter parity ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ 2 ]
+Stack: [ 2 2 ]
+PASS: compiled and interpreter #len match
+Stack: [ ]
+Stack: [ ]
+Stack: [ 15 ]
+Stack: [ 15 15 ]
+PASS: compiled and interpreter bitand match
+Stack: [ ]
+=== multiple native calls in one word ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: two #len calls plus add
+Stack: [ ]

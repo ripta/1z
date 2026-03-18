@@ -499,13 +499,23 @@ const ResolverState = struct {
 
 fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?@import("../ir_codegen.zig").ResolvedWord {
     const ir_codegen = @import("../ir_codegen.zig");
+    const stack_effect_mod = @import("../stack_effect.zig");
     const state: *ResolverState = @ptrCast(@alignCast(user_data));
     const ctx = state.context;
     const callee = ctx.lookupWord(name) orelse return null;
 
     switch (callee.action) {
         .compound => {},
-        .native => return null,
+        .native => |func| {
+            const effect = callee.stack_effect orelse return null;
+            if (stack_effect_mod.hasAnyRowVariable(effect)) return null;
+            return ir_codegen.ResolvedWord{
+                .word_id = 0,
+                .input_count = @intCast(effect.inputs.len),
+                .output_count = @intCast(effect.outputs.len),
+                .native_fn_ptr = @intFromPtr(func),
+            };
+        },
     }
 
     const effect = callee.stack_effect orelse return null;

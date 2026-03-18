@@ -254,6 +254,7 @@ pub const ResolvedWord = struct {
     word_id: u32,
     input_count: u8,
     output_count: u8,
+    native_fn_ptr: ?usize = null,
 };
 
 /// Callback interface for resolving word names to dispatch table IDs.
@@ -524,6 +525,7 @@ const CompileState = struct {
     get_fn: c.ir_ref = c.IR_UNUSED,
     with_parameter_fn: c.ir_ref = c.IR_UNUSED,
     iterator_fn: c.ir_ref = c.IR_UNUSED,
+    native_call_fn: c.ir_ref = c.IR_UNUSED,
     error_propagate_status: c.ir_ref = c.IR_UNUSED,
     self_name: ?[]const u8 = null,
     loop_begin_ref: c.ir_ref = c.IR_UNUSED,
@@ -1476,50 +1478,94 @@ fn compileInstructions(
                     const res = state.resolver orelse return IrCodegenError.NotCompilable;
                     const resolved = res.resolve(name, res.user_data) orelse return IrCodegenError.NotCompilable;
 
-                    DispatchLayout.ensureInit();
+                    if (resolved.native_fn_ptr) |fn_ptr| {
+                        // Generic native word callback
+                        if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
 
-                    // Validate the callee's stack effect against our abstract stack
-                    if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
+                        // Materialize quotation_body entries as real Values
+                        for (0..sp.*) |qi| {
+                            switch (stack[qi]) {
+                                .quotation_body => |body| {
+                                    const qval = Value{ .quotation = .{ .instructions = body, .code_ptr = null } };
+                                    const slot_byte_offset = c.ir_const_addr(ctx, qi * ValueLayout.value_size);
+                                    const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                                    emitPushValue(ctx, &qval, dest_addr);
+                                    stack[qi] = .{ .raw_at_slot = qi };
+                                },
+                                else => {},
+                            }
+                        }
 
-                    // Flush virtual stack and update sp in memory
-                    flushToPhysicalStack(state, stack, sp.*);
-                    const sp_const = c.ir_const_addr(ctx, sp.*);
-                    const new_sp_before = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
-                    c._ir_STORE(ctx, state.sp_ptr, new_sp_before);
+                        flushToPhysicalStack(state, stack, sp.*);
+                        const sp_const = c.ir_const_addr(ctx, sp.*);
+                        const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
+                        c._ir_STORE(ctx, state.sp_ptr, new_sp);
 
-                    // Load entries.items.ptr from the dispatch table
-                    const dispatch_ptr = state.dispatch_ptr;
-                    const items_ptr_off = c.ir_const_addr(ctx, DispatchLayout.items_ptr_offset);
-                    const entries_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dispatch_ptr, items_ptr_off);
-                    const entries_ptr = c._ir_LOAD(ctx, c.IR_ADDR, entries_ptr_addr);
+                        JitContextLayout.ensureInit();
+                        const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+                        const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+                        const ctx_val = c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
 
-                    // Index into entries array: entries_ptr + word_id * entry_size + code_ptr_offset
-                    const entry_byte_off = c.ir_const_addr(ctx, resolved.word_id * DispatchLayout.entry_size + DispatchLayout.code_ptr_offset);
-                    const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), entries_ptr, entry_byte_off);
-                    const callee_code_ptr = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
+                        const fn_ptr_const = c.ir_const_addr(ctx, fn_ptr);
+                        const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.native_call_fn, ctx_val, fn_ptr_const);
 
-                    // Null-check code_ptr: bail if callee not compiled
-                    const null_addr = c.ir_const_addr(ctx, 0);
-                    const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), callee_code_ptr, null_addr);
-                    const if_null = c._ir_IF(ctx, is_null);
-                    c._ir_IF_TRUE_cold(ctx, if_null);
-                    c._ir_RETURN(ctx, bail_status);
-                    c._ir_IF_FALSE(ctx, if_null);
+                        const zero_status = c.ir_const_i32(ctx, 0);
+                        const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
+                        const if_bail = c._ir_IF(ctx, call_failed);
+                        c._ir_IF_TRUE_cold(ctx, if_bail);
+                        c._ir_RETURN(ctx, call_result);
+                        c._ir_IF_FALSE(ctx, if_bail);
 
-                    // Call the callee via jit_ctx_ptr
-                    const call_result = c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr);
+                        // Adjust abstract stack by declared effect
+                        sp.* = sp.* - resolved.input_count + resolved.output_count;
+                        for (0..sp.*) |i| {
+                            stack[i] = .{ .raw_at_slot = i };
+                        }
+                    } else {
+                        // Compound word: dispatch table indirect call
+                        DispatchLayout.ensureInit();
 
-                    const zero_status = c.ir_const_i32(ctx, 0);
-                    const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
-                    const if_bail = c._ir_IF(ctx, call_failed);
-                    c._ir_IF_TRUE_cold(ctx, if_bail);
-                    c._ir_RETURN(ctx, call_result);
-                    c._ir_IF_FALSE(ctx, if_bail);
+                        if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
 
-                    // Adjust abstract stack based on callee's known stack effect
-                    sp.* = sp.* - resolved.input_count + resolved.output_count;
-                    for (0..sp.*) |i| {
-                        stack[i] = .{ .raw_at_slot = i };
+                        flushToPhysicalStack(state, stack, sp.*);
+                        const sp_const = c.ir_const_addr(ctx, sp.*);
+                        const new_sp_before = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
+                        c._ir_STORE(ctx, state.sp_ptr, new_sp_before);
+
+                        // Load entries.items.ptr from the dispatch table
+                        const dispatch_ptr = state.dispatch_ptr;
+                        const items_ptr_off = c.ir_const_addr(ctx, DispatchLayout.items_ptr_offset);
+                        const entries_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dispatch_ptr, items_ptr_off);
+                        const entries_ptr = c._ir_LOAD(ctx, c.IR_ADDR, entries_ptr_addr);
+
+                        // Index into entries array: entries_ptr + word_id * entry_size + code_ptr_offset
+                        const entry_byte_off = c.ir_const_addr(ctx, resolved.word_id * DispatchLayout.entry_size + DispatchLayout.code_ptr_offset);
+                        const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), entries_ptr, entry_byte_off);
+                        const callee_code_ptr = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
+
+                        // Null-check code_ptr: bail if callee not compiled
+                        const null_addr = c.ir_const_addr(ctx, 0);
+                        const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), callee_code_ptr, null_addr);
+                        const if_null = c._ir_IF(ctx, is_null);
+                        c._ir_IF_TRUE_cold(ctx, if_null);
+                        c._ir_RETURN(ctx, bail_status);
+                        c._ir_IF_FALSE(ctx, if_null);
+
+                        // Call the callee via jit_ctx_ptr
+                        const call_result = c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr);
+
+                        const zero_status = c.ir_const_i32(ctx, 0);
+                        const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
+                        const if_bail = c._ir_IF(ctx, call_failed);
+                        c._ir_IF_TRUE_cold(ctx, if_bail);
+                        c._ir_RETURN(ctx, call_result);
+                        c._ir_IF_FALSE(ctx, if_bail);
+
+                        // Adjust abstract stack based on callee's known stack effect
+                        sp.* = sp.* - resolved.input_count + resolved.output_count;
+                        for (0..sp.*) |i| {
+                            stack[i] = .{ .raw_at_slot = i };
+                        }
                     }
                 }
             },
@@ -1639,13 +1685,14 @@ fn preScanInstructions(
     needs_error_handling: *bool,
     needs_dynamic_vars: *bool,
     needs_iterators: *bool,
+    needs_native_call: *bool,
     in_quotation: bool,
 ) IrCodegenError!void {
     for (instructions) |instr| {
         switch (instr.op) {
             .push_literal => |val| {
                 if (val == .quotation) {
-                    try preScanInstructions(val.quotation.instructions, resolver, needs_dispatch, needs_safepoint, needs_error_handling, needs_dynamic_vars, needs_iterators, true);
+                    try preScanInstructions(val.quotation.instructions, resolver, needs_dispatch, needs_safepoint, needs_error_handling, needs_dynamic_vars, needs_iterators, needs_native_call, true);
                 }
             },
             .call_word => |name| {
@@ -1659,8 +1706,12 @@ fn preScanInstructions(
                     needs_iterators.* = true;
                 } else if (!isSupportedOp(name) and !isStackOp(name)) {
                     if (resolver) |res| {
-                        if (res.resolve(name, res.user_data)) |_| {
-                            needs_dispatch.* = true;
+                        if (res.resolve(name, res.user_data)) |resolved| {
+                            if (resolved.native_fn_ptr != null) {
+                                needs_native_call.* = true;
+                            } else {
+                                needs_dispatch.* = true;
+                            }
                         } else if (!in_quotation) {
                             return IrCodegenError.NotCompilable;
                         }
@@ -1695,7 +1746,8 @@ pub fn compileWord(
     var needs_error_handling = false;
     var needs_dynamic_vars = false;
     var needs_iterators = false;
-    try preScanInstructions(instructions, resolver, &needs_dispatch, &needs_safepoint, &needs_error_handling, &needs_dynamic_vars, &needs_iterators, false);
+    var needs_native_call = false;
+    try preScanInstructions(instructions, resolver, &needs_dispatch, &needs_safepoint, &needs_error_handling, &needs_dynamic_vars, &needs_iterators, &needs_native_call, false);
 
     var ctx: c.ir_ctx = undefined;
     c.ir_init(&ctx, c.IR_FUNCTION | c.IR_OPT_FOLDING, c.IR_CONSTS_LIMIT_MIN, c.IR_INSNS_LIMIT_MIN);
@@ -1753,9 +1805,14 @@ pub fn compileWord(
     else
         c.IR_UNUSED;
 
+    const native_call_fn = if (needs_native_call)
+        c.ir_const_addr(&ctx, @intFromPtr(&jitNativeCall))
+    else
+        c.IR_UNUSED;
+
     const bail_status = c.ir_const_i32(&ctx, 1);
     const ok_status = c.ir_const_i32(&ctx, 0);
-    const error_propagate_status = if (needs_error_handling or needs_safepoint or needs_dynamic_vars or needs_iterators)
+    const error_propagate_status = if (needs_error_handling or needs_safepoint or needs_dynamic_vars or needs_iterators or needs_native_call)
         c.ir_const_i32(&ctx, 2)
     else
         c.IR_UNUSED;
@@ -1820,6 +1877,7 @@ pub fn compileWord(
         .get_fn = get_fn,
         .with_parameter_fn = with_parameter_fn,
         .iterator_fn = iterator_fn,
+        .native_call_fn = native_call_fn,
         .error_propagate_status = error_propagate_status,
     };
 
@@ -2122,6 +2180,17 @@ fn jitIteratorOp(ctx_raw: usize, opcode_raw: usize) callconv(.c) i32 {
         .filter => &sequences_mod.nativeFilter,
         .reduce => &sequences_mod.nativeReduce,
     };
+    func(ctx) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return 0;
+}
+
+fn jitNativeCall(ctx_raw: usize, fn_ptr_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const func: *const fn (*Context) anyerror!void = @ptrFromInt(fn_ptr_raw);
     func(ctx) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
