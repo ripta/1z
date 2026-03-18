@@ -1,0 +1,111 @@
+\ Template value type and interpolation tests
+
+use "testing" ;
+
+"template parsing" test-section
+
+\ type-of returns template:
+"test {x}" template type-of template: "type-of is template:" assert=
+"{}" template type-of template: "identity template type" assert=
+"" template type-of template: "empty template type" assert=
+"literal" template type-of template: "literal-only template type" assert=
+
+"template parse errors" test-section
+
+\ Unmatched open brace
+[ "{oops" template ] "unmatched open brace" assert-error
+
+\ Unmatched close brace
+[ "oops}" template ] "unmatched close brace" assert-error
+
+"interpolate identity" test-section
+
+\ Identity with integer
+42 "The answer is {}." template interpolate "The answer is 42." "identity with integer" assert=
+
+\ Identity with string
+"world" "Hello {}!" template interpolate "Hello world!" "identity with string" assert=
+
+\ Identity with boolean
+t "{}" template interpolate "t" "identity with true" assert=
+f "{}" template interpolate "f" "identity with false" assert=
+
+"interpolate named (hash)" test-section
+
+\ Named placeholders with hash
+H{ city: "Portland" state: "OR" }
+"{city}, {state}" template interpolate "Portland, OR" "hash named lookup" assert=
+
+\ Single named placeholder
+H{ x: 42 }
+"{x}" template interpolate "42" "hash single named" assert=
+
+"interpolate indexed (array)" test-section
+
+\ Indexed placeholders with array
+{ 10 20 30 }
+"{0} + {1} = {2}" template interpolate "10 + 20 = 30" "array indexed lookup" assert=
+
+\ Single indexed placeholder
+{ "hello" }
+"{0}" template interpolate "hello" "array single indexed" assert=
+
+"interpolate named (struct)" test-section
+
+\ Named placeholders with struct
+person: struct{ first last } ;
+"Alice" "Smith" make-person
+"Hello {first} {last}!" template interpolate "Hello Alice Smith!" "struct named lookup" assert=
+
+"format specifiers" test-section
+
+\ Zero-pad width
+H{ month: 3 day: 9 }
+"{month:width=2,fill=0}-{day:width=2,fill=0}" template interpolate "03-09" "zero-pad width" assert=
+
+\ Left-align with dot fill
+H{ name: "hi" }
+"{name:width=8,fill=.,align=left}" template interpolate "hi......" "left-align dot fill" assert=
+
+\ Right-align (default) with space fill
+H{ x: 42 }
+"{x:width=5}" template interpolate "   42" "right-align space fill" assert=
+
+\ Width smaller than value (no truncation)
+H{ val: "hello" }
+"{val:width=3}" template interpolate "hello" "width smaller than value" assert=
+
+\ Identity with format spec
+42 "{:width=5,fill=0}" template interpolate "00042" "identity with format spec" assert=
+
+"interpolate error cases" test-section
+
+\ Named placeholder on array source
+[ { 1 2 } "{name}" template interpolate ] "TypeError" "named on array" assert-error-type
+
+\ Indexed placeholder on hash source
+[ H{ x: 1 } "{0}" template interpolate ] "TypeError" "indexed on hash" assert-error-type
+
+\ Missing key on hash
+[ H{ x: 1 } "{y}" template interpolate ] "KeyNotFound" "missing key" assert-error-type
+
+\ Index out of bounds on array
+[ { 1 } "{5}" template interpolate ] "IndexOutOfBounds" "index out of bounds" assert-error-type
+
+"interpolate edge cases" test-section
+
+\ Literal-only template with source (source ignored)
+42 "no placeholders here" template interpolate "no placeholders here" "literal-only ignores source" assert=
+
+\ Escaped braces produce literal braces in output
+H{ x: 1 } "\\{x\\} = {x}" template interpolate "{x} = 1" "escaped braces in output" assert=
+
+\ Empty template produces empty string
+42 "" template interpolate "" "empty template produces empty string" assert=
+
+\ Adjacent placeholders with no literal between them
+H{ a: "X" b: "Y" }
+"{a}{b}" template interpolate "XY" "adjacent placeholders" assert=
+
+\ Multiple identity placeholders
+"hi" "{} and {}" template interpolate "hi and hi" "multiple identity placeholders" assert=

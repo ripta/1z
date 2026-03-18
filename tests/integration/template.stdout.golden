@@ -1,0 +1,87 @@
+=== template parsing ===
+Stack: [ ]
+PASS: type-of is template:
+Stack: [ ]
+PASS: identity template type
+Stack: [ ]
+PASS: empty template type
+Stack: [ ]
+PASS: literal-only template type
+Stack: [ ]
+=== template parse errors ===
+Stack: [ ]
+PASS: unmatched open brace
+Stack: [ ]
+PASS: unmatched close brace
+Stack: [ ]
+=== interpolate identity ===
+Stack: [ ]
+PASS: identity with integer
+Stack: [ ]
+PASS: identity with string
+Stack: [ ]
+PASS: identity with true
+Stack: [ ]
+PASS: identity with false
+Stack: [ ]
+=== interpolate named (hash) ===
+Stack: [ ]
+Stack: [ H{ city: "Portland" state: "OR" } ]
+PASS: hash named lookup
+Stack: [ ]
+Stack: [ H{ x: 42 } ]
+PASS: hash single named
+Stack: [ ]
+=== interpolate indexed (array) ===
+Stack: [ ]
+Stack: [ { 10 20 30 } ]
+PASS: array indexed lookup
+Stack: [ ]
+Stack: [ { "hello" } ]
+PASS: array single indexed
+Stack: [ ]
+=== interpolate named (struct) ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ person{ first: "Alice" last: "Smith" } ]
+PASS: struct named lookup
+Stack: [ ]
+=== format specifiers ===
+Stack: [ ]
+Stack: [ H{ day: 9 month: 3 } ]
+PASS: zero-pad width
+Stack: [ ]
+Stack: [ H{ name: "hi" } ]
+PASS: left-align dot fill
+Stack: [ ]
+Stack: [ H{ x: 42 } ]
+PASS: right-align space fill
+Stack: [ ]
+Stack: [ H{ val: "hello" } ]
+PASS: width smaller than value
+Stack: [ ]
+PASS: identity with format spec
+Stack: [ ]
+=== interpolate error cases ===
+Stack: [ ]
+PASS: named on array
+Stack: [ ]
+PASS: indexed on hash
+Stack: [ ]
+PASS: missing key
+Stack: [ ]
+PASS: index out of bounds
+Stack: [ ]
+=== interpolate edge cases ===
+Stack: [ ]
+PASS: literal-only ignores source
+Stack: [ ]
+PASS: escaped braces in output
+Stack: [ ]
+PASS: empty template produces empty string
+Stack: [ ]
+Stack: [ H{ b: "Y" a: "X" } ]
+PASS: adjacent placeholders
+Stack: [ ]
+PASS: multiple identity placeholders
+Stack: [ ]
