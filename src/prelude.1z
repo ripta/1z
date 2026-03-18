@@ -76,16 +76,24 @@ benchmark-report?: ( val -- ? ) [ type-of benchmark-report: = ] ;
 
 \ Stack-shuffling
 nip: ( a b -- b ) [ swap drop ] ;
+2nip: ( a b c -- c ) [ swap drop swap drop ] ;
 keep: ( ..a x quot: ( ..a x -- ..b ) -- ..b x ) [ over [ call ] dip ] ;
+2keep: ( ..a x y quot: ( ..a x y -- ..b ) -- ..b x y ) [ [ 2dup ] dip 2dip ] ;
+3keep: ( ..a x y z quot: ( ..a x y z -- ..b ) -- ..b x y z ) [ [ 3dup ] dip 3dip ] ;
 bi: ( x quot1 quot2 -- ) [ [ keep ] dip call ] ;
 2dup: ( a b -- a b a b ) [ over over ] ;
+3dup: ( a b c -- a b c a b c ) [ over over over ] ;
 dupd: ( a b -- a a b ) [ over swap ] ;
 2drop: ( a b -- ) [ drop drop ] ;
+3drop: ( a b c -- ) [ 2drop drop ] ;
 2dip: ( a b quot -- a b ) [ swap [ dip ] dip ] ;
+3dip: ( a b c quot -- a b c ) [ swap [ 2dip ] dip ] ;
 <rot-: ( a b c -- b c a ) [ [ swap ] dip swap ] ;
 -rot>: ( a b c -- c a b ) [ swap [ swap ] dip ] ;
 tuck: ( a b -- b a b ) [ swap over ] ;
 choose: ( a1 a2 quot -- a ) [ [ over over ] dip call [ drop ] [ nip ] if ] ;
+pick: ( a b c -- a b c a ) [ [ over ] dip swap ] ;
+1check: ( a quot -- a ) [ keep swap ] ;
 
 \ Arithmetic operators
 -@: ( a -- -a ) [ 0 swap - ] ;

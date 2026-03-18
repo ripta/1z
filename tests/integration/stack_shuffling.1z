@@ -30,5 +30,34 @@ use "testing" ;
 3 5 [ < ] choose 3 "choose true" assert=
 5 3 [ < ] choose 3 "choose false" assert=
 
+"2nip" test-section
+1 2 3 2nip 3 "2nip keeps top" assert=
+10 20 30 2nip 30 "2nip three values" assert=
+
+"3dup" test-section
+1 2 3 3dup
+3 "3dup top" assert= 2 "3dup second" assert= 1 "3dup third" assert=
+3 "3dup fourth" assert= 2 "3dup fifth" assert= 1 "3dup sixth" assert=
+
+"dupd" test-section
+1 2 dupd 2 "dupd top" assert= 1 "dupd second" assert= 1 "dupd third" assert=
+10 20 dupd 20 "dupd keeps top" assert= 10 "dupd dup second" assert= 10 "dupd original" assert=
+
 "2dip" test-section
 1 2 3 [ dup + ] 2dip 3 "2dip top" assert= 2 "2dip second" assert= 2 "2dip third" assert=
+
+"3dip" test-section
+1 2 3 4 [ dup + ] 3dip 4 "3dip top" assert= 3 "3dip second" assert= 2 "3dip third" assert= 2 "3dip fourth" assert=
+
+"2keep" test-section
+1 2 [ + ] 2keep 2 "2keep y preserved" assert= 1 "2keep x preserved" assert= 3 "2keep result" assert=
+
+"3keep" test-section
+1 2 3 [ + + ] 3keep 3 "3keep z preserved" assert= 2 "3keep y preserved" assert= 1 "3keep x preserved" assert= 6 "3keep result" assert=
+
+"pick" test-section
+1 2 3 pick 1 "pick copies first" assert= 3 "pick top" assert= 2 "pick second" assert= 1 "pick third" assert=
+
+"1check" test-section
+5 [ 3 > ] 1check t "1check result" assert= 5 "1check preserves" assert=
+2 [ 3 > ] 1check f "1check false result" assert= 2 "1check preserves false" assert=

@@ -11,6 +11,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "over", .stack_effect = "a b -- a b a", .func = nativeOver },
     .{ .name = "dip", .stack_effect = "x quot -- x", .func = nativeDip },
     .{ .name = "wipe", .stack_effect = "... --", .func = nativeWipe },
+    .{ .name = "pick-n", .stack_effect = "n -- val", .func = nativePickN },
 };
 
 /// dup ( a -- a a ) - Duplicate top of stack
@@ -51,4 +52,22 @@ pub fn nativeDip(ctx: *Context) anyerror!void {
 /// wipe ( ... -- ) - Clear the entire stack
 pub fn nativeWipe(ctx: *Context) anyerror!void {
     ctx.stack.clear();
+}
+
+/// pick-n ( n -- val ) - Copy the item at stack depth n (0-indexed from top, before n itself)
+///
+/// There are equivalencies to other stack operations:
+/// - dup: 0 pick-n
+/// - over: 1 pick-n
+/// - pick: 2 pick-n
+fn nativePickN(ctx: *Context) anyerror!void {
+    const n = try helpers.popInteger(ctx);
+    if (n < 0) return error.StackUnderflow;
+
+    const depth: usize = @intCast(n);
+    const stack_len = ctx.stack.items.items.len;
+    if (depth >= stack_len) return error.StackUnderflow;
+
+    const val = ctx.stack.items.items[stack_len - 1 - depth];
+    try ctx.stack.push(val);
 }

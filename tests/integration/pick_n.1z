@@ -1,0 +1,43 @@
+\ Tests for pick-n native primitive and 3drop prelude word
+
+use "testing" ;
+
+"pick-n basics" test-section
+
+\ 0 pick-n is equivalent to dup
+10 0 pick-n 10 "0 pick-n is dup" assert=
+drop
+
+\ 1 pick-n is equivalent to over
+10 20 1 pick-n 10 "1 pick-n is over" assert=
+drop drop
+
+\ 2 pick-n copies the third item
+10 20 30 2 pick-n 10 "2 pick-n copies third item" assert=
+drop drop drop
+
+\ Works with different value types
+"hello" 42 t 2 pick-n "hello" "pick-n works with strings" assert=
+drop drop drop
+
+\ Large depth
+1 2 3 4 5 4 pick-n 1 "pick-n at depth 4" assert=
+drop drop drop drop drop
+
+"pick-n errors" test-section
+
+\ Negative index
+[ 10 -1 pick-n ] "negative index errors" assert-error
+
+\ Index too large
+[ 10 20 5 pick-n ] "index beyond stack depth errors" assert-error
+
+"3drop" test-section
+
+1 2 3 4 5 3drop
+dup 2 "3drop leaves correct top" assert=
+drop
+dup 1 "3drop leaves correct second" assert=
+drop
+
+"All pick-n tests complete!" print-line
