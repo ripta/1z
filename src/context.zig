@@ -1054,7 +1054,7 @@ pub const Context = struct {
     }
 
     /// Push a call frame onto the call stack.
-    fn pushCallFrame(self: *Context, word_name: []const u8, line: usize, column: usize) void {
+    pub fn pushCallFrame(self: *Context, word_name: []const u8, line: usize, column: usize) void {
         self.call_stack.append(self.allocator, .{
             .word_name = word_name,
             .line = line,
@@ -1799,7 +1799,7 @@ pub const Context = struct {
     }
 
     /// Execute a quotation with an optional PIC table for inline caching.
-    fn executeQuotationWithPic(self: *Context, quotation: Quotation, pic_table: ?*PicTable) anyerror!void {
+    pub fn executeQuotationWithPic(self: *Context, quotation: Quotation, pic_table: ?*PicTable) anyerror!void {
         var current_instructions = quotation.instructions;
         var current_pic = pic_table;
         var current_module: ?*const value_mod.Module = null;
@@ -1928,7 +1928,7 @@ pub const Context = struct {
 
     /// End benchmark profiling, capture the call stack, pop the call frame,
     /// and propagate the error.
-    fn wordErrorCleanup(self: *Context, name: []const u8, err: anyerror) anyerror {
+    pub fn wordErrorCleanup(self: *Context, name: []const u8, err: anyerror) anyerror {
         if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
         self.captureCallStackOnError(err);
         self.popCallFrame();
@@ -1937,7 +1937,7 @@ pub const Context = struct {
 
     /// Validate the stack effect (if declared), end benchmark profiling with
     /// peak-depth update, and pop the call frame.
-    fn wordSuccessCleanup(self: *Context, name: []const u8, stack_effect: ?StackEffect) !void {
+    pub fn wordSuccessCleanup(self: *Context, name: []const u8, stack_effect: ?StackEffect) !void {
         if (stack_effect) |effect| {
             const depth_after = self.stack.depth();
             if (depth_after < effect.concreteOutputCount()) {
@@ -1956,7 +1956,7 @@ pub const Context = struct {
 
     /// Pop a module deps local frame, emitting a trace log when module
     /// tracing is enabled.
-    fn popModuleDepsFrameTraced(self: *Context, mod: *const value_mod.Module) void {
+    pub fn popModuleDepsFrameTraced(self: *Context, mod: *const value_mod.Module) void {
         if (self.trace.trace_modules) {
             var tw = trace_mod.TraceWriter.init();
             trace_mod.traceModuleDepsPop(&tw, mod.name);
@@ -1985,7 +1985,7 @@ pub const Context = struct {
     /// via executeQuotationInline, consume it: pop the dangling call frame
     /// and execute the deferred instructions normally. This prevents invalid
     /// call stack frames from accumulating without bound.
-    fn consumePropagatedTailCall(self: *Context, name: []const u8) anyerror!void {
+    pub fn consumePropagatedTailCall(self: *Context, name: []const u8) anyerror!void {
         const tci = self.tail_call_instructions orelse return;
         self.popCallFrame();
         self.tail_call_instructions = null;

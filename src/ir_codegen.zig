@@ -526,6 +526,7 @@ const CompileState = struct {
     with_parameter_fn: c.ir_ref = c.IR_UNUSED,
     iterator_fn: c.ir_ref = c.IR_UNUSED,
     native_call_fn: c.ir_ref = c.IR_UNUSED,
+    interpreted_call_fn: c.ir_ref = c.IR_UNUSED,
     error_propagate_status: c.ir_ref = c.IR_UNUSED,
     self_name: ?[]const u8 = null,
     loop_begin_ref: c.ir_ref = c.IR_UNUSED,
@@ -1543,23 +1544,43 @@ fn compileInstructions(
                         const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), entries_ptr, entry_byte_off);
                         const callee_code_ptr = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
 
-                        // Null-check code_ptr: bail if callee not compiled
+                        // Null-check code_ptr: fallback to interpreter if callee not compiled
                         const null_addr = c.ir_const_addr(ctx, 0);
                         const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), callee_code_ptr, null_addr);
                         const if_null = c._ir_IF(ctx, is_null);
+
+                        // Cold path: callee not compiled, call interpreter fallback
                         c._ir_IF_TRUE_cold(ctx, if_null);
-                        c._ir_RETURN(ctx, bail_status);
+                        {
+                            JitContextLayout.ensureInit();
+                            const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+                            const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+                            const ctx_val = c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
+                            const word_id_const = c.ir_const_addr(ctx, resolved.word_id);
+                            const fb_result = c._ir_CALL_2(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const);
+                            const fb_zero = c.ir_const_i32(ctx, 0);
+                            const fb_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), fb_result, fb_zero);
+                            const if_fb_err = c._ir_IF(ctx, fb_failed);
+                            c._ir_IF_TRUE_cold(ctx, if_fb_err);
+                            c._ir_RETURN(ctx, state.error_propagate_status);
+                            c._ir_IF_FALSE(ctx, if_fb_err);
+                        }
+                        const end_fallback = c._ir_END(ctx);
+
+                        // Hot path: callee is compiled, call directly
                         c._ir_IF_FALSE(ctx, if_null);
+                        {
+                            const call_result = c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr);
+                            const zero_status = c.ir_const_i32(ctx, 0);
+                            const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
+                            const if_bail = c._ir_IF(ctx, call_failed);
+                            c._ir_IF_TRUE_cold(ctx, if_bail);
+                            c._ir_RETURN(ctx, call_result);
+                            c._ir_IF_FALSE(ctx, if_bail);
+                        }
+                        const end_compiled = c._ir_END(ctx);
 
-                        // Call the callee via jit_ctx_ptr
-                        const call_result = c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr);
-
-                        const zero_status = c.ir_const_i32(ctx, 0);
-                        const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
-                        const if_bail = c._ir_IF(ctx, call_failed);
-                        c._ir_IF_TRUE_cold(ctx, if_bail);
-                        c._ir_RETURN(ctx, call_result);
-                        c._ir_IF_FALSE(ctx, if_bail);
+                        c._ir_MERGE_2(ctx, end_fallback, end_compiled);
 
                         // Adjust abstract stack based on callee's known stack effect
                         sp.* = sp.* - resolved.input_count + resolved.output_count;
@@ -1810,9 +1831,14 @@ pub fn compileWord(
     else
         c.IR_UNUSED;
 
+    const interpreted_call_fn = if (needs_dispatch)
+        c.ir_const_addr(&ctx, @intFromPtr(&jitInterpretedCall))
+    else
+        c.IR_UNUSED;
+
     const bail_status = c.ir_const_i32(&ctx, 1);
     const ok_status = c.ir_const_i32(&ctx, 0);
-    const error_propagate_status = if (needs_error_handling or needs_safepoint or needs_dynamic_vars or needs_iterators or needs_native_call)
+    const error_propagate_status = if (needs_error_handling or needs_safepoint or needs_dynamic_vars or needs_iterators or needs_native_call or needs_dispatch)
         c.ir_const_i32(&ctx, 2)
     else
         c.IR_UNUSED;
@@ -1878,6 +1904,7 @@ pub fn compileWord(
         .with_parameter_fn = with_parameter_fn,
         .iterator_fn = iterator_fn,
         .native_call_fn = native_call_fn,
+        .interpreted_call_fn = interpreted_call_fn,
         .error_propagate_status = error_propagate_status,
     };
 
@@ -2196,6 +2223,78 @@ fn jitNativeCall(ctx_raw: usize, fn_ptr_raw: usize) callconv(.c) i32 {
         return 2;
     };
     return 0;
+}
+
+fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const word_id: u32 = @intCast(word_id_raw);
+    const entry = ctx.jit_dispatch.get(word_id) orelse return 1;
+    const word_name = entry.word_name;
+    const word = ctx.lookupWord(word_name) orelse return 1;
+
+    ctx.pushCallFrame(word_name, 0, 0);
+
+    const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
+    const markers_mod = @import("primitives/markers.zig");
+
+    if (word.action == .compound) {
+        const has_generic = for (word.markers) |mk| {
+            if (markers_mod.isGenericMarker(mk)) break true;
+        } else false;
+
+        if (has_generic) {
+            const dispatched = dispatch_helpers.tryDispatchGenericWithPic(ctx, word_name, null) catch |err| {
+                ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                return 2;
+            };
+            if (dispatched) {
+                ctx.wordSuccessCleanup(word_name, null) catch |err| {
+                    ctx.jit_pending_error = err;
+                    return 2;
+                };
+                return 0;
+            }
+            if (word.action.compound.len == 0) {
+                ctx.pending_error_message = "no method found for given argument types";
+                ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, error.TypeError);
+                return 2;
+            }
+        }
+    }
+
+    const result = blk: {
+        if (word.source_module) |mod| {
+            switch (word.action) {
+                .compound => |instrs| {
+                    ctx.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
+                    defer ctx.popModuleDepsFrameTraced(mod);
+                    break :blk ctx.executeQuotationWithPic(.{ .instructions = instrs }, null);
+                },
+                .native => |func| break :blk func(ctx),
+            }
+        } else {
+            break :blk switch (word.action) {
+                .native => |func| func(ctx),
+                .compound => |instrs| ctx.executeQuotationWithPic(.{ .instructions = instrs }, null),
+            };
+        }
+    };
+
+    if (result) |_| {
+        ctx.consumePropagatedTailCall(word_name) catch |err| {
+            ctx.jit_pending_error = err;
+            return 2;
+        };
+        ctx.wordSuccessCleanup(word_name, word.stack_effect) catch |err| {
+            ctx.jit_pending_error = err;
+            return 2;
+        };
+        return 0;
+    } else |err| {
+        ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+        return 2;
+    }
 }
 
 /// Result of attempting compiled execution.

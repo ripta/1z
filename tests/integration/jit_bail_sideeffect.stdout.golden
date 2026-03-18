@@ -1,0 +1,35 @@
+=== interpreter fallback: side effects run exactly once ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: side effect should run exactly once
+Stack: [ ]
+=== interpreter fallback: error propagation from uncompiled callee ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ type-mismatch: ]
+PASS: error propagation from uncompiled callee
+Stack: [ ]
+=== interpreter fallback: return value from uncompiled callee ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: compiled caller + uncompiled callee
+Stack: [ ]
+=== interpreter fallback: multiple uncompiled calls ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: inc-counter2 should run exactly twice
+Stack: [ ]
