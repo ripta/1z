@@ -557,6 +557,36 @@ fn requireI64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
     };
 }
 
+/// Materialize any quotation_body entries as raw Values on the physical stack.
+/// flushToPhysicalStack skips quotation_body since it's normally consumed by
+/// `if`/`call`, but callback-based ops need them as proper Values for the
+/// interpreter to pop.
+fn materializeQuotations(state: *CompileState, stack: *[64]StackEntry, sp: usize) void {
+    const ctx = state.ctx;
+    const base_addr = state.base_addr;
+    for (0..sp) |qi| {
+        switch (stack[qi]) {
+            .quotation_body => |body| {
+                const qval = Value{ .quotation = .{ .instructions = body, .code_ptr = null } };
+                const slot_byte_offset = c.ir_const_addr(ctx, qi * ValueLayout.value_size);
+                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                emitPushValue(ctx, &qval, dest_addr);
+                stack[qi] = .{ .raw_at_slot = qi };
+            },
+            else => {},
+        }
+    }
+}
+
+/// Reset all stack entries from 0..sp to raw_at_slot identity (slot i = i).
+/// Used after operations that flush to physical memory, ensuring the abstract
+/// stack mirrors the physical layout.
+fn resetStackToPhysical(stack: *[64]StackEntry, sp: usize) void {
+    for (0..sp) |i| {
+        stack[i] = .{ .raw_at_slot = i };
+    }
+}
+
 /// Write all pending symbolic stack entries to their physical memory slots.
 /// After this, every entry is materialized in the Value array at base_addr.
 fn flushToPhysicalStack(state: *CompileState, stack: *[64]StackEntry, sp: usize) void {
@@ -661,6 +691,85 @@ fn emitIndirectQuotCall(
     c._ir_IF_FALSE(ctx, if_bail);
 
     state.dynamic_call_emitted = true;
+}
+
+/// Compile a while/until loop: pred and body quotations with an optional
+/// condition negation for `until` semantics.
+fn compilePredBodyLoop(
+    state: *CompileState,
+    stack: *[64]StackEntry,
+    sp: *usize,
+    pred_entry: StackEntry,
+    body_entry: StackEntry,
+    negate_cond: bool,
+) IrCodegenError!void {
+    const ctx = state.ctx;
+    const base_addr = state.base_addr;
+
+    flushToPhysicalStack(state, stack, sp.*);
+
+    const pre_loop_sp_const = c.ir_const_addr(ctx, sp.*);
+    const pre_loop_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, pre_loop_sp_const);
+    c._ir_STORE(ctx, state.sp_ptr, pre_loop_sp);
+
+    const entry_end = c._ir_END(ctx);
+    const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
+
+    // Execute predicate
+    const pre_body_sp = sp.*;
+    switch (pred_entry) {
+        .quotation_body => |body| {
+            resetStackToPhysical(stack, sp.*);
+            try compileInstructions(state, body, stack, sp);
+        },
+        .raw_at_slot => |s| {
+            try emitIndirectQuotCall(state, stack, sp, s);
+            resetStackToPhysical(stack, sp.*);
+        },
+        else => return IrCodegenError.NotCompilable,
+    }
+
+    // Pred should push a boolean on top
+    if (sp.* < pre_body_sp + 1) return IrCodegenError.StackShapeMismatch;
+    sp.* -= 1;
+    const cond_entry = stack[sp.*];
+    if (sp.* != pre_body_sp) return IrCodegenError.StackShapeMismatch;
+
+    const truthy = try emitTruthiness(state, cond_entry, base_addr);
+    const continue_cond = if (negate_cond)
+        c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), truthy, c.ir_const_bool(ctx, false))
+    else
+        truthy;
+
+    flushToPhysicalStack(state, stack, sp.*);
+
+    const if_continue = c._ir_IF(ctx, continue_cond);
+
+    c._ir_IF_TRUE(ctx, if_continue);
+
+    // Execute body
+    switch (body_entry) {
+        .quotation_body => |body| {
+            resetStackToPhysical(stack, sp.*);
+            const body_pre_sp = sp.*;
+            try compileInstructions(state, body, stack, sp);
+            if (sp.* != body_pre_sp) return IrCodegenError.StackShapeMismatch;
+            flushToPhysicalStack(state, stack, sp.*);
+        },
+        .raw_at_slot => |s| {
+            try emitIndirectQuotCall(state, stack, sp, s);
+        },
+        else => return IrCodegenError.NotCompilable,
+    }
+
+    resetStackToPhysical(stack, sp.*);
+
+    emitSafepointCall(state);
+    const loop_end = c._ir_LOOP_END(ctx);
+    c.ir_set_op2(ctx, loop_ref, loop_end);
+
+    c._ir_IF_FALSE(ctx, if_continue);
+    resetStackToPhysical(stack, sp.*);
 }
 
 /// Compile a sequence of instructions, updating the abstract stack.
@@ -905,16 +1014,12 @@ fn compileInstructions(
                         flushToPhysicalStack(state, &saved_stack, false_sp);
                         sp.* = false_sp;
                         stack.* = saved_stack;
-                        for (0..sp.*) |i| {
-                            stack[i] = .{ .raw_at_slot = i };
-                        }
+                        resetStackToPhysical(stack, sp.*);
                         state.diverged = saved_diverged;
                     } else if (false_diverged) {
                         // Only true path continues. No END or MERGE needed.
                         flushToPhysicalStack(state, stack, sp.*);
-                        for (0..sp.*) |i| {
-                            stack[i] = .{ .raw_at_slot = i };
-                        }
+                        resetStackToPhysical(stack, sp.*);
                         state.diverged = saved_diverged;
                     } else {
                         // Neither diverged: normal merge
@@ -922,9 +1027,7 @@ fn compileInstructions(
                         const end_false = c._ir_END(ctx);
                         c._ir_MERGE_2(ctx, end_true, end_false);
                         if (sp.* != false_sp) return IrCodegenError.StackShapeMismatch;
-                        for (0..sp.*) |i| {
-                            stack[i] = .{ .raw_at_slot = i };
-                        }
+                        resetStackToPhysical(stack, sp.*);
                         state.diverged = saved_diverged;
                         state.loop_end_set = saved_loop_end_set;
                     }
@@ -1016,9 +1119,7 @@ fn compileInstructions(
                         .quotation_body => |body| {
                             // Reset stack entries to raw_at_slot for body
                             const pre_body_sp = sp.*;
-                            for (0..sp.*) |i| {
-                                stack[i] = .{ .raw_at_slot = i };
-                            }
+                            resetStackToPhysical(stack, sp.*);
                             try compileInstructions(state, body, stack, sp);
                             if (sp.* != pre_body_sp) return IrCodegenError.StackShapeMismatch;
                             // Flush body results back
@@ -1031,9 +1132,7 @@ fn compileInstructions(
                     }
 
                     // Reset stack entries after body
-                    for (0..sp.*) |i| {
-                        stack[i] = .{ .raw_at_slot = i };
-                    }
+                    resetStackToPhysical(stack, sp.*);
 
                     // Decrement counter
                     const one = c.ir_const_i64(ctx, 1);
@@ -1077,16 +1176,12 @@ fn compileInstructions(
                     const pre_body_sp = sp.*;
                     switch (pred_entry) {
                         .quotation_body => |body| {
-                            for (0..sp.*) |i| {
-                                stack[i] = .{ .raw_at_slot = i };
-                            }
+                            resetStackToPhysical(stack, sp.*);
                             try compileInstructions(state, body, stack, sp);
                         },
                         .raw_at_slot => |s| {
                             try emitIndirectQuotCall(state, stack, sp, s);
-                            for (0..sp.*) |i| {
-                                stack[i] = .{ .raw_at_slot = i };
-                            }
+                            resetStackToPhysical(stack, sp.*);
                         },
                         else => return IrCodegenError.NotCompilable,
                     }
@@ -1100,9 +1195,7 @@ fn compileInstructions(
                     const continue_cond = try emitTruthiness(state, cond_entry, base_addr);
 
                     flushToPhysicalStack(state, stack, sp.*);
-                    for (0..sp.*) |i| {
-                        stack[i] = .{ .raw_at_slot = i };
-                    }
+                    resetStackToPhysical(stack, sp.*);
 
                     const if_continue = c._ir_IF(ctx, continue_cond);
                     c._ir_IF_TRUE(ctx, if_continue);
@@ -1111,162 +1204,12 @@ fn compileInstructions(
                     c.ir_set_op2(ctx, loop_ref, loop_end);
 
                     c._ir_IF_FALSE(ctx, if_continue);
-                } else if (std.mem.eql(u8, name, "while")) {
+                } else if (std.mem.eql(u8, name, "while") or std.mem.eql(u8, name, "until")) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     sp.* -= 2;
                     const pred_entry = stack[sp.*];
                     const body_entry = stack[sp.* + 1];
-
-                    // Flush user stack to physical memory before the loop
-                    flushToPhysicalStack(state, stack, sp.*);
-
-                    const pre_loop_sp_const = c.ir_const_addr(ctx, sp.*);
-                    const pre_loop_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, pre_loop_sp_const);
-                    c._ir_STORE(ctx, state.sp_ptr, pre_loop_sp);
-
-                    const entry_end = c._ir_END(ctx);
-                    const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
-
-                    // Execute predicate
-                    const pre_body_sp = sp.*;
-                    switch (pred_entry) {
-                        .quotation_body => |body| {
-                            for (0..sp.*) |i| {
-                                stack[i] = .{ .raw_at_slot = i };
-                            }
-                            try compileInstructions(state, body, stack, sp);
-                        },
-                        .raw_at_slot => |s| {
-                            try emitIndirectQuotCall(state, stack, sp, s);
-                            for (0..sp.*) |i| {
-                                stack[i] = .{ .raw_at_slot = i };
-                            }
-                        },
-                        else => return IrCodegenError.NotCompilable,
-                    }
-
-                    // Pred should push a boolean on top
-                    if (sp.* < pre_body_sp + 1) return IrCodegenError.StackShapeMismatch;
-                    sp.* -= 1;
-                    const cond_entry = stack[sp.*];
-                    if (sp.* != pre_body_sp) return IrCodegenError.StackShapeMismatch;
-
-                    const continue_cond = try emitTruthiness(state, cond_entry, base_addr);
-
-                    flushToPhysicalStack(state, stack, sp.*);
-
-                    const if_continue = c._ir_IF(ctx, continue_cond);
-
-                    c._ir_IF_TRUE(ctx, if_continue);
-
-                    // Execute body
-                    switch (body_entry) {
-                        .quotation_body => |body| {
-                            for (0..sp.*) |i| {
-                                stack[i] = .{ .raw_at_slot = i };
-                            }
-                            const body_pre_sp = sp.*;
-                            try compileInstructions(state, body, stack, sp);
-                            if (sp.* != body_pre_sp) return IrCodegenError.StackShapeMismatch;
-                            flushToPhysicalStack(state, stack, sp.*);
-                        },
-                        .raw_at_slot => |s| {
-                            try emitIndirectQuotCall(state, stack, sp, s);
-                        },
-                        else => return IrCodegenError.NotCompilable,
-                    }
-
-                    for (0..sp.*) |i| {
-                        stack[i] = .{ .raw_at_slot = i };
-                    }
-
-                    emitSafepointCall(state);
-                    const loop_end = c._ir_LOOP_END(ctx);
-                    c.ir_set_op2(ctx, loop_ref, loop_end);
-
-                    c._ir_IF_FALSE(ctx, if_continue);
-                    for (0..sp.*) |i| {
-                        stack[i] = .{ .raw_at_slot = i };
-                    }
-                } else if (std.mem.eql(u8, name, "until")) {
-                    if (sp.* < 2) return IrCodegenError.StackUnderflow;
-                    sp.* -= 2;
-                    const pred_entry = stack[sp.*];
-                    const body_entry = stack[sp.* + 1];
-
-                    // Flush user stack to physical memory before the loop
-                    flushToPhysicalStack(state, stack, sp.*);
-
-                    const pre_loop_sp_const = c.ir_const_addr(ctx, sp.*);
-                    const pre_loop_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, pre_loop_sp_const);
-                    c._ir_STORE(ctx, state.sp_ptr, pre_loop_sp);
-
-                    const entry_end = c._ir_END(ctx);
-                    const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
-
-                    // Execute predicate
-                    const pre_body_sp = sp.*;
-                    switch (pred_entry) {
-                        .quotation_body => |body| {
-                            for (0..sp.*) |i| {
-                                stack[i] = .{ .raw_at_slot = i };
-                            }
-                            try compileInstructions(state, body, stack, sp);
-                        },
-                        .raw_at_slot => |s| {
-                            try emitIndirectQuotCall(state, stack, sp, s);
-                            for (0..sp.*) |i| {
-                                stack[i] = .{ .raw_at_slot = i };
-                            }
-                        },
-                        else => return IrCodegenError.NotCompilable,
-                    }
-
-                    // Pred should push a boolean on top
-                    if (sp.* < pre_body_sp + 1) return IrCodegenError.StackShapeMismatch;
-                    sp.* -= 1;
-                    const cond_entry = stack[sp.*];
-                    if (sp.* != pre_body_sp) return IrCodegenError.StackShapeMismatch;
-
-                    // until = while with negated condition
-                    const truthy = try emitTruthiness(state, cond_entry, base_addr);
-                    const continue_cond = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), truthy, c.ir_const_bool(ctx, false));
-
-                    flushToPhysicalStack(state, stack, sp.*);
-
-                    const if_continue = c._ir_IF(ctx, continue_cond);
-
-                    c._ir_IF_TRUE(ctx, if_continue);
-
-                    // Execute body
-                    switch (body_entry) {
-                        .quotation_body => |body| {
-                            for (0..sp.*) |i| {
-                                stack[i] = .{ .raw_at_slot = i };
-                            }
-                            const body_pre_sp = sp.*;
-                            try compileInstructions(state, body, stack, sp);
-                            if (sp.* != body_pre_sp) return IrCodegenError.StackShapeMismatch;
-                            flushToPhysicalStack(state, stack, sp.*);
-                        },
-                        .raw_at_slot => |s| {
-                            try emitIndirectQuotCall(state, stack, sp, s);
-                        },
-                        else => return IrCodegenError.NotCompilable,
-                    }
-
-                    for (0..sp.*) |i| {
-                        stack[i] = .{ .raw_at_slot = i };
-                    }
-
-                    emitSafepointCall(state);
-                    const loop_end = c._ir_LOOP_END(ctx);
-                    c.ir_set_op2(ctx, loop_ref, loop_end);
-
-                    c._ir_IF_FALSE(ctx, if_continue);
-                    for (0..sp.*) |i| {
-                        stack[i] = .{ .raw_at_slot = i };
-                    }
+                    try compilePredBodyLoop(state, stack, sp, pred_entry, body_entry, std.mem.eql(u8, name, "until"));
                 } else if (isBinaryOp(name)) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     sp.* -= 2;
@@ -1295,33 +1238,9 @@ fn compileInstructions(
                 } else if (isErrorHandlingOp(name)) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
 
-                    // Materialize any quotation_body entries as raw Values on
-                    // the physical stack. flushToPhysicalStack skips these
-                    // since they're normally consumed by `if`/`call`, but
-                    // recover/cleanup need them as proper Values for the
-                    // interpreter callback to pop.
-                    for (0..sp.*) |qi| {
-                        switch (stack[qi]) {
-                            .quotation_body => |body| {
-                                const qval = Value{ .quotation = .{ .instructions = body, .code_ptr = null } };
-                                const slot_byte_offset = c.ir_const_addr(ctx, qi * ValueLayout.value_size);
-                                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                                emitPushValue(ctx, &qval, dest_addr);
-                                stack[qi] = .{ .raw_at_slot = qi };
-                            },
-                            else => {},
-                        }
-                    }
-
+                    materializeQuotations(state, stack, sp.*);
                     flushToPhysicalStack(state, stack, sp.*);
-                    const sp_const = c.ir_const_addr(ctx, sp.*);
-                    const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
-                    c._ir_STORE(ctx, state.sp_ptr, new_sp);
-
-                    JitContextLayout.ensureInit();
-                    const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
-                    const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
-                    const ctx_val = c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
+                    const ctx_val = emitCallbackPreamble(state, sp.*);
 
                     const callback_fn = if (std.mem.eql(u8, name, "recover"))
                         state.recover_fn
@@ -1329,13 +1248,7 @@ fn compileInstructions(
                         state.cleanup_fn;
 
                     const call_result = c._ir_CALL_1(ctx, c.IR_I32, callback_fn, ctx_val);
-
-                    const zero_status = c.ir_const_i32(ctx, 0);
-                    const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
-                    const if_bail = c._ir_IF(ctx, call_failed);
-                    c._ir_IF_TRUE_cold(ctx, if_bail);
-                    c._ir_RETURN(ctx, call_result);
-                    c._ir_IF_FALSE(ctx, if_bail);
+                    emitCallbackPostCheck(state, call_result, call_result);
 
                     sp.* -= 2;
                     state.dynamic_call_emitted = true;
@@ -1344,45 +1257,17 @@ fn compileInstructions(
                     const required: usize = if (is_get) 1 else 3;
                     if (sp.* < required) return IrCodegenError.StackUnderflow;
 
-                    // Materialize quotation_body entries as real Values
-                    for (0..sp.*) |qi| {
-                        switch (stack[qi]) {
-                            .quotation_body => |body| {
-                                const qval = Value{ .quotation = .{ .instructions = body, .code_ptr = null } };
-                                const slot_byte_offset = c.ir_const_addr(ctx, qi * ValueLayout.value_size);
-                                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                                emitPushValue(ctx, &qval, dest_addr);
-                                stack[qi] = .{ .raw_at_slot = qi };
-                            },
-                            else => {},
-                        }
-                    }
-
+                    materializeQuotations(state, stack, sp.*);
                     flushToPhysicalStack(state, stack, sp.*);
-                    const sp_const = c.ir_const_addr(ctx, sp.*);
-                    const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
-                    c._ir_STORE(ctx, state.sp_ptr, new_sp);
-
-                    JitContextLayout.ensureInit();
-                    const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
-                    const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
-                    const ctx_val = c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
+                    const ctx_val = emitCallbackPreamble(state, sp.*);
 
                     const callback_fn = if (is_get) state.get_fn else state.with_parameter_fn;
                     const call_result = c._ir_CALL_1(ctx, c.IR_I32, callback_fn, ctx_val);
-
-                    const zero_status = c.ir_const_i32(ctx, 0);
-                    const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
-                    const if_bail = c._ir_IF(ctx, call_failed);
-                    c._ir_IF_TRUE_cold(ctx, if_bail);
-                    c._ir_RETURN(ctx, call_result);
-                    c._ir_IF_FALSE(ctx, if_bail);
+                    emitCallbackPostCheck(state, call_result, call_result);
 
                     if (is_get) {
                         // get: pops 1 param, pushes 1 value (net 0)
-                        for (0..sp.*) |i| {
-                            stack[i] = .{ .raw_at_slot = i };
-                        }
+                        resetStackToPhysical(stack, sp.*);
                     } else {
                         // with-parameter: body quotation has unknown stack effects
                         sp.* -= 3;
@@ -1393,24 +1278,9 @@ fn compileInstructions(
                     const effects = iteratorEffects(opcode);
                     if (sp.* < effects.inputs) return IrCodegenError.StackUnderflow;
 
-                    // Materialize quotation_body entries as real Values
-                    for (0..sp.*) |qi| {
-                        switch (stack[qi]) {
-                            .quotation_body => |body| {
-                                const qval = Value{ .quotation = .{ .instructions = body, .code_ptr = null } };
-                                const slot_byte_offset = c.ir_const_addr(ctx, qi * ValueLayout.value_size);
-                                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                                emitPushValue(ctx, &qval, dest_addr);
-                                stack[qi] = .{ .raw_at_slot = qi };
-                            },
-                            else => {},
-                        }
-                    }
-
+                    materializeQuotations(state, stack, sp.*);
                     flushToPhysicalStack(state, stack, sp.*);
-                    const sp_const = c.ir_const_addr(ctx, sp.*);
-                    const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
-                    c._ir_STORE(ctx, state.sp_ptr, new_sp);
+                    const ctx_val = emitCallbackPreamble(state, sp.*);
 
                     if (effects.dynamic) {
                         if (state.interp_ctx) |ictx| {
@@ -1420,29 +1290,16 @@ fn compileInstructions(
                         }
                     }
 
-                    JitContextLayout.ensureInit();
-                    const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
-                    const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
-                    const ctx_val = c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
-
                     const opcode_const = c.ir_const_addr(ctx, @intFromEnum(opcode));
                     const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.iterator_fn, ctx_val, opcode_const);
-
-                    const zero_status = c.ir_const_i32(ctx, 0);
-                    const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
-                    const if_bail = c._ir_IF(ctx, call_failed);
-                    c._ir_IF_TRUE_cold(ctx, if_bail);
-                    c._ir_RETURN(ctx, call_result);
-                    c._ir_IF_FALSE(ctx, if_bail);
+                    emitCallbackPostCheck(state, call_result, call_result);
 
                     if (effects.dynamic) {
                         sp.* -= effects.inputs;
                         state.dynamic_call_emitted = true;
                     } else {
                         sp.* = sp.* - effects.inputs + effects.outputs;
-                        for (0..sp.*) |i| {
-                            stack[i] = .{ .raw_at_slot = i };
-                        }
+                        resetStackToPhysical(stack, sp.*);
                     }
                 } else if (
                 // oh, yuck
@@ -1485,9 +1342,7 @@ fn compileInstructions(
                     // Reset abstract stack for code after this point
                     // (unreachable, but keeps state consistent)
                     sp.* = ic;
-                    for (0..sp.*) |i| {
-                        stack[i] = .{ .raw_at_slot = i };
-                    }
+                    resetStackToPhysical(stack, sp.*);
                 } else {
                     // Unrecognized word: try dispatch table call if a resolver is available
                     const res = state.resolver orelse return IrCodegenError.NotCompilable;
@@ -1497,49 +1352,21 @@ fn compileInstructions(
                         // Generic native word callback
                         if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
 
-                        // Materialize quotation_body entries as real Values
-                        for (0..sp.*) |qi| {
-                            switch (stack[qi]) {
-                                .quotation_body => |body| {
-                                    const qval = Value{ .quotation = .{ .instructions = body, .code_ptr = null } };
-                                    const slot_byte_offset = c.ir_const_addr(ctx, qi * ValueLayout.value_size);
-                                    const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                                    emitPushValue(ctx, &qval, dest_addr);
-                                    stack[qi] = .{ .raw_at_slot = qi };
-                                },
-                                else => {},
-                            }
-                        }
-
+                        materializeQuotations(state, stack, sp.*);
                         flushToPhysicalStack(state, stack, sp.*);
-                        const sp_const = c.ir_const_addr(ctx, sp.*);
-                        const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
-                        c._ir_STORE(ctx, state.sp_ptr, new_sp);
+                        const ctx_val = emitCallbackPreamble(state, sp.*);
 
                         if (resolved.stack_effect_ptr) |eff_ptr| {
                             emitParamValidation(state, eff_ptr);
                         }
 
-                        JitContextLayout.ensureInit();
-                        const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
-                        const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
-                        const ctx_val = c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
-
                         const fn_ptr_const = c.ir_const_addr(ctx, fn_ptr);
                         const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.native_call_fn, ctx_val, fn_ptr_const);
-
-                        const zero_status = c.ir_const_i32(ctx, 0);
-                        const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
-                        const if_bail = c._ir_IF(ctx, call_failed);
-                        c._ir_IF_TRUE_cold(ctx, if_bail);
-                        c._ir_RETURN(ctx, call_result);
-                        c._ir_IF_FALSE(ctx, if_bail);
+                        emitCallbackPostCheck(state, call_result, call_result);
 
                         // Adjust abstract stack by declared effect
                         sp.* = sp.* - resolved.input_count + resolved.output_count;
-                        for (0..sp.*) |i| {
-                            stack[i] = .{ .raw_at_slot = i };
-                        }
+                        resetStackToPhysical(stack, sp.*);
                     } else {
                         // Compound word: dispatch table indirect call
                         DispatchLayout.ensureInit();
@@ -1547,9 +1374,7 @@ fn compileInstructions(
                         if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
 
                         flushToPhysicalStack(state, stack, sp.*);
-                        const sp_const = c.ir_const_addr(ctx, sp.*);
-                        const new_sp_before = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
-                        c._ir_STORE(ctx, state.sp_ptr, new_sp_before);
+                        _ = emitCallbackPreamble(state, sp.*);
 
                         if (resolved.stack_effect_ptr) |eff_ptr| {
                             emitParamValidation(state, eff_ptr);
@@ -1580,12 +1405,7 @@ fn compileInstructions(
                             const ctx_val = c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
                             const word_id_const = c.ir_const_addr(ctx, resolved.word_id);
                             const fb_result = c._ir_CALL_2(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const);
-                            const fb_zero = c.ir_const_i32(ctx, 0);
-                            const fb_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), fb_result, fb_zero);
-                            const if_fb_err = c._ir_IF(ctx, fb_failed);
-                            c._ir_IF_TRUE_cold(ctx, if_fb_err);
-                            c._ir_RETURN(ctx, state.error_propagate_status);
-                            c._ir_IF_FALSE(ctx, if_fb_err);
+                            emitCallbackPostCheck(state, fb_result, state.error_propagate_status);
                         }
                         const end_fallback = c._ir_END(ctx);
 
@@ -1593,12 +1413,7 @@ fn compileInstructions(
                         c._ir_IF_FALSE(ctx, if_null);
                         {
                             const call_result = c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr);
-                            const zero_status = c.ir_const_i32(ctx, 0);
-                            const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
-                            const if_bail = c._ir_IF(ctx, call_failed);
-                            c._ir_IF_TRUE_cold(ctx, if_bail);
-                            c._ir_RETURN(ctx, call_result);
-                            c._ir_IF_FALSE(ctx, if_bail);
+                            emitCallbackPostCheck(state, call_result, call_result);
                         }
                         const end_compiled = c._ir_END(ctx);
 
@@ -1606,9 +1421,7 @@ fn compileInstructions(
 
                         // Adjust abstract stack based on callee's known stack effect
                         sp.* = sp.* - resolved.input_count + resolved.output_count;
-                        for (0..sp.*) |i| {
-                            stack[i] = .{ .raw_at_slot = i };
-                        }
+                        resetStackToPhysical(stack, sp.*);
                     }
                 }
             },
@@ -1718,50 +1531,61 @@ fn hasSelfTailCall(instructions: []const Instruction, self_name: []const u8) boo
     }
 }
 
+const PreScanFlags = struct {
+    needs_dispatch: bool = false,
+    needs_safepoint: bool = false,
+    needs_error_handling: bool = false,
+    needs_dynamic_vars: bool = false,
+    needs_iterators: bool = false,
+    needs_native_call: bool = false,
+    needs_param_validation: bool = false,
+
+    fn needsErrorPropagation(self: PreScanFlags) bool {
+        return self.needs_error_handling or self.needs_safepoint or
+            self.needs_dynamic_vars or self.needs_iterators or
+            self.needs_native_call or self.needs_dispatch or
+            self.needs_param_validation;
+    }
+};
+
 /// Recursively scan instructions and quotation bodies for dispatch calls
 /// and loop ops.
 fn preScanInstructions(
     instructions: []const Instruction,
     resolver: ?WordResolver,
-    needs_dispatch: *bool,
-    needs_safepoint: *bool,
-    needs_error_handling: *bool,
-    needs_dynamic_vars: *bool,
-    needs_iterators: *bool,
-    needs_native_call: *bool,
-    needs_param_validation: *bool,
+    flags: *PreScanFlags,
     in_quotation: bool,
 ) IrCodegenError!void {
     for (instructions) |instr| {
         switch (instr.op) {
             .push_literal => |val| {
                 if (val == .quotation) {
-                    try preScanInstructions(val.quotation.instructions, resolver, needs_dispatch, needs_safepoint, needs_error_handling, needs_dynamic_vars, needs_iterators, needs_native_call, needs_param_validation, true);
+                    try preScanInstructions(val.quotation.instructions, resolver, flags, true);
                 }
             },
             .call_word => |name| {
                 if (isLoopOp(name)) {
-                    needs_safepoint.* = true;
+                    flags.needs_safepoint = true;
                 } else if (isErrorHandlingOp(name)) {
-                    needs_error_handling.* = true;
+                    flags.needs_error_handling = true;
                 } else if (isDynamicVarOp(name)) {
-                    needs_dynamic_vars.* = true;
+                    flags.needs_dynamic_vars = true;
                 } else if (isIteratorOp(name)) {
-                    needs_iterators.* = true;
+                    flags.needs_iterators = true;
                     const opcode = iteratorOpcodeFromName(name).?;
                     if (iteratorEffects(opcode).dynamic) {
-                        needs_param_validation.* = true;
+                        flags.needs_param_validation = true;
                     }
                 } else if (!isSupportedOp(name) and !isStackOp(name)) {
                     if (resolver) |res| {
                         if (res.resolve(name, res.user_data)) |resolved| {
                             if (resolved.native_fn_ptr != null) {
-                                needs_native_call.* = true;
+                                flags.needs_native_call = true;
                             } else {
-                                needs_dispatch.* = true;
+                                flags.needs_dispatch = true;
                             }
                             if (resolved.stack_effect_ptr != null) {
-                                needs_param_validation.* = true;
+                                flags.needs_param_validation = true;
                             }
                         } else if (!in_quotation) {
                             return IrCodegenError.NotCompilable;
@@ -1793,14 +1617,8 @@ pub fn compileWord(
 
     // Pre-scan: check if any call_word needs dispatch table resolution
     // or contains loops (which need safepoints).
-    var needs_dispatch = false;
-    var needs_safepoint = false;
-    var needs_error_handling = false;
-    var needs_dynamic_vars = false;
-    var needs_iterators = false;
-    var needs_native_call = false;
-    var needs_param_validation = false;
-    try preScanInstructions(instructions, resolver, &needs_dispatch, &needs_safepoint, &needs_error_handling, &needs_dynamic_vars, &needs_iterators, &needs_native_call, &needs_param_validation, false);
+    var scan_flags = PreScanFlags{};
+    try preScanInstructions(instructions, resolver, &scan_flags, false);
 
     var ctx: c.ir_ctx = undefined;
     c.ir_init(&ctx, c.IR_FUNCTION | c.IR_OPT_FOLDING, c.IR_CONSTS_LIMIT_MIN, c.IR_INSNS_LIMIT_MIN);
@@ -1823,59 +1641,59 @@ pub fn compileWord(
     const capacity_param = c._ir_LOAD(&ctx, c.IR_ADDR, cap_addr);
 
     // Bake dispatch table pointer as a constant if dispatch calls are needed.
-    const dispatch_ptr = if (needs_dispatch)
+    const dispatch_ptr = if (scan_flags.needs_dispatch)
         c.ir_const_addr(&ctx, @intFromPtr(resolver.?.dispatch_table_ptr))
     else
         c.IR_UNUSED;
 
     // Bake safepoint function pointer as a constant if loops are present.
-    const safepoint_fn = if (needs_safepoint)
+    const safepoint_fn = if (scan_flags.needs_safepoint)
         c.ir_const_addr(&ctx, @intFromPtr(&jitSafepoint))
     else
         c.IR_UNUSED;
 
     // Bake error handling callback pointers if recover/cleanup are used.
-    const recover_fn = if (needs_error_handling)
+    const recover_fn = if (scan_flags.needs_error_handling)
         c.ir_const_addr(&ctx, @intFromPtr(&jitRecover))
     else
         c.IR_UNUSED;
-    const cleanup_fn = if (needs_error_handling)
+    const cleanup_fn = if (scan_flags.needs_error_handling)
         c.ir_const_addr(&ctx, @intFromPtr(&jitCleanup))
     else
         c.IR_UNUSED;
 
-    const get_fn = if (needs_dynamic_vars)
+    const get_fn = if (scan_flags.needs_dynamic_vars)
         c.ir_const_addr(&ctx, @intFromPtr(&jitGet))
     else
         c.IR_UNUSED;
-    const with_parameter_fn = if (needs_dynamic_vars)
+    const with_parameter_fn = if (scan_flags.needs_dynamic_vars)
         c.ir_const_addr(&ctx, @intFromPtr(&jitWithParameter))
     else
         c.IR_UNUSED;
 
-    const iterator_fn = if (needs_iterators)
+    const iterator_fn = if (scan_flags.needs_iterators)
         c.ir_const_addr(&ctx, @intFromPtr(&jitIteratorOp))
     else
         c.IR_UNUSED;
 
-    const native_call_fn = if (needs_native_call)
+    const native_call_fn = if (scan_flags.needs_native_call)
         c.ir_const_addr(&ctx, @intFromPtr(&jitNativeCall))
     else
         c.IR_UNUSED;
 
-    const interpreted_call_fn = if (needs_dispatch)
+    const interpreted_call_fn = if (scan_flags.needs_dispatch)
         c.ir_const_addr(&ctx, @intFromPtr(&jitInterpretedCall))
     else
         c.IR_UNUSED;
 
-    const validate_params_fn = if (needs_param_validation)
+    const validate_params_fn = if (scan_flags.needs_param_validation)
         c.ir_const_addr(&ctx, @intFromPtr(&jitValidateParamEffects))
     else
         c.IR_UNUSED;
 
     const bail_status = c.ir_const_i32(&ctx, 1);
     const ok_status = c.ir_const_i32(&ctx, 0);
-    const error_propagate_status = if (needs_error_handling or needs_safepoint or needs_dynamic_vars or needs_iterators or needs_native_call or needs_dispatch or needs_param_validation)
+    const error_propagate_status = if (scan_flags.needsErrorPropagation())
         c.ir_const_i32(&ctx, 2)
     else
         c.IR_UNUSED;
@@ -1955,7 +1773,7 @@ pub fn compileWord(
             state.loop_begin_ref = c._ir_LOOP_BEGIN(&ctx, entry_end);
             state.self_name = sn;
             state.input_count = input_count;
-            needs_safepoint = true;
+            scan_flags.needs_safepoint = true;
             if (state.safepoint_fn == c.IR_UNUSED) {
                 state.safepoint_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitSafepoint));
                 state.error_propagate_status = c.ir_const_i32(&ctx, 2);
@@ -2130,6 +1948,33 @@ fn emitEuclideanMod(
 // Safepoint
 // =============================================================================
 
+/// Store the current sp to memory and load the interpreter Context pointer
+/// from the JitContext struct. This is the standard preamble before calling
+/// any interpreter callback from compiled code.
+fn emitCallbackPreamble(state: *CompileState, sp: usize) c.ir_ref {
+    const ctx = state.ctx;
+    const sp_const = c.ir_const_addr(ctx, sp);
+    const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
+    c._ir_STORE(ctx, state.sp_ptr, new_sp);
+
+    JitContextLayout.ensureInit();
+    const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+    const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+    return c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
+}
+
+/// Check if a callback returned non-zero and bail with the callback's return
+/// code if so. Used after interpreter callbacks from compiled code.
+fn emitCallbackPostCheck(state: *CompileState, call_result: c.ir_ref, return_status: c.ir_ref) void {
+    const ctx = state.ctx;
+    const zero_status = c.ir_const_i32(ctx, 0);
+    const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
+    const if_bail = c._ir_IF(ctx, call_failed);
+    c._ir_IF_TRUE_cold(ctx, if_bail);
+    c._ir_RETURN(ctx, return_status);
+    c._ir_IF_FALSE(ctx, if_bail);
+}
+
 /// Emit a safepoint call at the current IR position. Loads the ctx field
 /// from the JitContext struct and calls jitSafepoint.
 fn emitSafepointCall(state: *CompileState) void {
@@ -2139,13 +1984,7 @@ fn emitSafepointCall(state: *CompileState) void {
     const ctx_addr = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
     const ctx_val = c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
     const call_result = c._ir_CALL_1(state.ctx, c.IR_I32, state.safepoint_fn, ctx_val);
-
-    const zero_status = c.ir_const_i32(state.ctx, 0);
-    const call_failed = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
-    const if_bail = c._ir_IF(state.ctx, call_failed);
-    c._ir_IF_TRUE_cold(state.ctx, if_bail);
-    c._ir_RETURN(state.ctx, state.error_propagate_status);
-    c._ir_IF_FALSE(state.ctx, if_bail);
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status);
 }
 
 /// Emit a parameter effect validation call at the current IR position.
@@ -2159,13 +1998,7 @@ fn emitParamValidation(state: *CompileState, effect_ptr: usize) void {
     const ctx_val = c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
     const effect_const = c.ir_const_addr(state.ctx, effect_ptr);
     const call_result = c._ir_CALL_2(state.ctx, c.IR_I32, state.validate_params_fn, ctx_val, effect_const);
-
-    const zero_status = c.ir_const_i32(state.ctx, 0);
-    const call_failed = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
-    const if_bail = c._ir_IF(state.ctx, call_failed);
-    c._ir_IF_TRUE_cold(state.ctx, if_bail);
-    c._ir_RETURN(state.ctx, state.error_propagate_status);
-    c._ir_IF_FALSE(state.ctx, if_bail);
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status);
 }
 
 // =============================================================================
