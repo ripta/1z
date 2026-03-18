@@ -1,0 +1,126 @@
+use "testing" ;
+
+"TCO + dynamic variables: compiled get after TCO recursion" test-section
+
+tco-dv-param: define-parameter [ 1 ] ;
+compiled-get-param: ( param -- n ) [ get ] ;
+compiled-get-param: compile!
+
+tco-add-acc: ( n acc -- acc ) [
+  over 0 > [
+    over + swap 1 - swap tco-add-acc
+  ] [
+    swap drop
+  ] if
+] ;
+tco-add-acc: compile!
+
+5 tco-dv-param [
+  10 0 tco-add-acc
+  tco-dv-param compiled-get-param +
+] with-parameter
+60 "TCO result combined with dynamic var read" assert=
+
+"TCO + dynamic variables: interpreter parity" test-section
+
+tco-add-acc-i: ( n acc -- acc ) [
+  over 0 > [
+    over + swap 1 - swap tco-add-acc-i
+  ] [
+    swap drop
+  ] if
+] ;
+5 tco-dv-param [
+  10 0 tco-add-acc
+  tco-dv-param compiled-get-param +
+] with-parameter
+5 tco-dv-param [
+  10 0 tco-add-acc-i
+  tco-dv-param get +
+] with-parameter
+"TCO+dynvar compiled matches interpreter" assert=
+
+"iterators + dynamic variables: #each with parameter" test-section
+
+iter-dv-param: define-parameter [ 0 ] ;
+compiled-each-dv: ( arr quot -- ) [ #each ] ;
+compiled-each-dv: compile!
+compiled-get-iter: ( param -- n ) [ get ] ;
+compiled-get-iter: compile!
+100 iter-dv-param [
+  0 { 1 2 3 } [ + iter-dv-param compiled-get-iter + ] compiled-each-dv
+] with-parameter
+306 "iterator callback reads dynamic var via compiled get" assert=
+
+"iterators + dynamic variables: #reduce with parameter" test-section
+
+compiled-reduce-dv: ( arr init quot -- val ) [ #reduce ] ;
+compiled-reduce-dv: compile!
+10 iter-dv-param [
+  { 1 2 3 } 0 [ + iter-dv-param compiled-get-iter + ] compiled-reduce-dv
+] with-parameter
+36 "reduce callback reads dynamic var" assert=
+
+"iterators + dynamic variables: interpreter parity" test-section
+
+100 iter-dv-param [
+  0 { 1 2 3 } [ + iter-dv-param compiled-get-iter + ] compiled-each-dv
+] with-parameter
+100 iter-dv-param [
+  0 { 1 2 3 } [ + iter-dv-param get + ] #each
+] with-parameter
+"iter+dynvar compiled matches interpreter" assert=
+
+"TCO + iterators: compiled collect uses TCO result" test-section
+
+compiled-collect-it: ( arr -- arr' ) [ >iterator #collect ] ;
+compiled-collect-it: compile!
+5 0 tco-add-acc
+{ 1 2 3 4 } compiled-collect-it #len +
+15 4 + 19 "TCO value combined with iterator result" assert=
+
+"TCO + iterators: interpreter parity" test-section
+
+5 0 tco-add-acc
+{ 1 2 3 4 } compiled-collect-it #len +
+5 0 tco-add-acc-i
+{ 1 2 3 4 } >iterator #collect #len +
+"TCO+iterator compiled matches interpreter" assert=
+
+"all three: compiled with-parameter + reduce + get + TCO" test-section
+
+all-param: define-parameter [ 1 ] ;
+compiled-wp-all: ( val param quot -- ) [ with-parameter ] ;
+compiled-wp-all: compile!
+compiled-get-all: ( param -- n ) [ get ] ;
+compiled-get-all: compile!
+compiled-reduce-all: ( arr init quot -- val ) [ #reduce ] ;
+compiled-reduce-all: compile!
+
+10 all-param [
+  { 2 4 6 } 0 [ + all-param compiled-get-all + ] compiled-reduce-all
+] compiled-wp-all
+42 "compiled wp + reduce + get" assert=
+
+"all three: TCO + iterator + dynamic variable" test-section
+
+10 all-param [
+  5 0 tco-add-acc
+  { 1 2 3 } 0 [ + all-param compiled-get-all + ] compiled-reduce-all
+  +
+] compiled-wp-all
+51 "TCO + iterator + dynvar combined" assert=
+
+"all three: interpreter parity" test-section
+
+10 all-param [
+  5 0 tco-add-acc
+  { 1 2 3 } 0 [ + all-param compiled-get-all + ] compiled-reduce-all
+  +
+] compiled-wp-all
+10 all-param [
+  5 0 tco-add-acc-i
+  { 1 2 3 } 0 [ + all-param get + ] #reduce
+  +
+] with-parameter
+"all three compiled matches interpreter" assert=

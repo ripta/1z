@@ -1,0 +1,79 @@
+=== TCO + dynamic variables: compiled get after TCO recursion ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ 60 ]
+PASS: TCO result combined with dynamic var read
+Stack: [ ]
+=== TCO + dynamic variables: interpreter parity ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ 60 ]
+Stack: [ 60 60 ]
+PASS: TCO+dynvar compiled matches interpreter
+Stack: [ ]
+=== iterators + dynamic variables: #each with parameter ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ 306 ]
+PASS: iterator callback reads dynamic var via compiled get
+Stack: [ ]
+=== iterators + dynamic variables: #reduce with parameter ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ 36 ]
+PASS: reduce callback reads dynamic var
+Stack: [ ]
+=== iterators + dynamic variables: interpreter parity ===
+Stack: [ ]
+Stack: [ 306 ]
+Stack: [ 306 306 ]
+PASS: iter+dynvar compiled matches interpreter
+Stack: [ ]
+=== TCO + iterators: compiled collect uses TCO result ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ 15 ]
+Stack: [ 19 ]
+PASS: TCO value combined with iterator result
+Stack: [ 19 ]
+=== TCO + iterators: interpreter parity ===
+Stack: [ 19 ]
+Stack: [ 19 15 ]
+Stack: [ 19 19 ]
+Stack: [ 19 19 15 ]
+Stack: [ 19 19 19 ]
+PASS: TCO+iterator compiled matches interpreter
+Stack: [ 19 ]
+=== all three: compiled with-parameter + reduce + get + TCO ===
+Stack: [ 19 ]
+Stack: [ 19 ]
+Stack: [ 19 ]
+Stack: [ 19 ]
+Stack: [ 19 ]
+Stack: [ 19 ]
+Stack: [ 19 ]
+Stack: [ 19 ]
+Stack: [ 19 42 ]
+PASS: compiled wp + reduce + get
+Stack: [ 19 ]
+=== all three: TCO + iterator + dynamic variable ===
+Stack: [ 19 ]
+Stack: [ 19 51 ]
+PASS: TCO + iterator + dynvar combined
+Stack: [ 19 ]
+=== all three: interpreter parity ===
+Stack: [ 19 ]
+Stack: [ 19 51 ]
+Stack: [ 19 51 51 ]
+PASS: all three compiled matches interpreter
+Stack: [ 19 ]

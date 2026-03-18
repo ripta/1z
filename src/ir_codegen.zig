@@ -1428,12 +1428,12 @@ fn compileInstructions(
                         }
                     }
                 } else if (
-                    // oh, yuck
-                    state.self_name != null and
+                // oh, yuck
+                state.self_name != null and
                     state.loop_begin_ref != c.IR_UNUSED and
                     idx == instructions.len - 1 and
-                    std.mem.eql(u8, name, state.self_name.?)
-                ) {
+                    std.mem.eql(u8, name, state.self_name.?))
+                {
                     // Self-recursive tail call: emit back-edge to LOOP_BEGIN
                     const ic = state.input_count;
                     if (sp.* < ic) return IrCodegenError.StackUnderflow;
