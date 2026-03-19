@@ -1,0 +1,111 @@
+=== quotation>effect? returns some for annotated quotation ===
+Stack: [ ]
+Stack: [ <option:some option-payload{ value: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "c" row-variable?: f nested-effect: f } } } }> ]
+PASS: quotation>effect? returns some
+Stack: [ <option:some option-payload{ value: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "c" row-variable?: f nested-effect: f } } } }> ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "c" row-variable?: f nested-effect: f } } } ]
+PASS: unwrapped value is stack-effect-info
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "c" row-variable?: f nested-effect: f } } } ]
+PASS: effect-inputs returns 2
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "c" row-variable?: f nested-effect: f } } } ]
+PASS: effect-outputs returns 1
+Stack: [ ]
+=== quotation>effect? returns none for unannotated quotation ===
+Stack: [ ]
+Stack: [ <option:none none:> ]
+PASS: quotation>effect? returns none
+Stack: [ ]
+=== effect-compose: outputs match inputs exactly ===
+Stack: [ ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } } stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+PASS: compose exact: inputs = 1
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+PASS: compose exact: outputs = 1
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+PASS: compose exact: input name from e1
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+PASS: compose exact: output name from e2
+Stack: [ ]
+=== effect-compose: excess outputs carried forward ===
+Stack: [ ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } stack-effect-param{ name: "c" row-variable?: f nested-effect: f } stack-effect-param{ name: "d" row-variable?: f nested-effect: f } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } stack-effect-param{ name: "c" row-variable?: f nested-effect: f } stack-effect-param{ name: "d" row-variable?: f nested-effect: f } } } stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } stack-effect-param{ name: "c" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+PASS: compose excess out: inputs = 1
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } stack-effect-param{ name: "c" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+PASS: compose excess out: outputs = 3
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } stack-effect-param{ name: "c" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+PASS: compose excess out: first output from e1
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } stack-effect-param{ name: "c" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+PASS: compose excess out: second output from e1
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } stack-effect-param{ name: "c" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+PASS: compose excess out: third output from e2
+Stack: [ ]
+=== effect-compose: excess inputs prepended ===
+Stack: [ ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } } stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } stack-effect-param{ name: "z" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "w" row-variable?: f nested-effect: f } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "x" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "w" row-variable?: f nested-effect: f } } } ]
+PASS: compose excess in: inputs = 3
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "x" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "w" row-variable?: f nested-effect: f } } } ]
+PASS: compose excess in: outputs = 1
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "x" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "w" row-variable?: f nested-effect: f } } } ]
+PASS: compose excess in: first input from e1
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "x" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "w" row-variable?: f nested-effect: f } } } ]
+PASS: compose excess in: second input from e2
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "x" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "w" row-variable?: f nested-effect: f } } } ]
+PASS: compose excess in: third input from e2
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "x" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "w" row-variable?: f nested-effect: f } } } ]
+PASS: compose excess in: output from e2
+Stack: [ ]
+=== effect-compose: zero-input second effect ===
+Stack: [ ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } stack-effect-param{ name: "c" row-variable?: f nested-effect: f } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } stack-effect-param{ name: "c" row-variable?: f nested-effect: f } } } stack-effect-info{ inputs: { } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } stack-effect-param{ name: "c" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+PASS: compose zero-in: inputs = 1
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } stack-effect-param{ name: "c" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+PASS: compose zero-in: outputs = 3
+Stack: [ ]
+=== effect-compose: zero-output first effect ===
+Stack: [ ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } outputs: { } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } outputs: { } } stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f } stack-effect-param{ name: "x" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+PASS: compose zero-out: inputs = 3
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f } stack-effect-param{ name: "x" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+PASS: compose zero-out: outputs = 1
+Stack: [ ]
+=== effect-diff: matching effects return false ===
+Stack: [ ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "c" row-variable?: f nested-effect: f } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "c" row-variable?: f nested-effect: f } } } stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "c" row-variable?: f nested-effect: f } } } ]
+PASS: matching effects return false
+Stack: [ ]
+=== effect-diff: mismatched effects return string ===
+Stack: [ ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } } stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "z" row-variable?: f nested-effect: f } } } ]
+Stack: [ "expected ( a -- b ), got ( x y -- z )" ]
+PASS: mismatched effects return non-false
+Stack: [ "expected ( a -- b ), got ( x y -- z )" ]
+PASS: mismatch result is a string
+Stack: [ "expected ( a -- b ), got ( x y -- z )" ]
+Stack: [ ]
+=== assert-effect: passing case ===
+Stack: [ ]
+Stack: [ [ + ] ]
+Stack: [ [ + ] stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "c" row-variable?: f nested-effect: f } } } ]
+PASS: assert-effect pass
+Stack: [ ]
+=== assert-effect: failing case detected via effect-diff ===
+Stack: [ ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } } stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "z" row-variable?: f nested-effect: f } } } ]
+Stack: [ "expected ( a -- b ), got ( x y -- z )" ]
+PASS: mismatched effects produce non-false diff
+Stack: [ "expected ( a -- b ), got ( x y -- z )" ]
+PASS: diff result is a string
+Stack: [ ]

@@ -742,10 +742,10 @@ word-info: struct{ name stack-effect doc markers native? body methods source-loc
       make-stack-effect-info
     ] if
   ] ;
-  >source-loc:        [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-source-loc nip ] if ] ;
-  >provenance:        [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-provenance nip ] if ] ;
-  >dispatch-prov:     [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth 3 pick-n 3 #nth make-dispatch-provenance nip ] if ] ;
-  >method-info:       [ dup 0 #nth swap 1 #nth >dispatch-prov make-method-info ] ;
+  >source-loc:    [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-source-loc nip ] if ] ;
+  >provenance:    [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-provenance nip ] if ] ;
+  >dispatch-prov: [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth 3 pick-n 3 #nth make-dispatch-provenance nip ] if ] ;
+  >method-info:   [ dup 0 #nth swap 1 #nth >dispatch-prov make-method-info ] ;
   dup 0 #nth
   over 1 #nth >stack-effect-info
   2 pick-n 2 #nth

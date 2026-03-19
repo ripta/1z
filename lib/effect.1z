@@ -1,0 +1,103 @@
+\ lib/effect.1z - Stack effect value utilities
+
+\ Convert a raw 3-element param array to a stack-effect-param struct.
+\ Recursively converts nested effects.
+(raw>param): ( raw -- param ) [
+  dup 0 #nth
+  over 1 #nth
+  2 pick-n 2 #nth (raw>effect)
+  make-stack-effect-param nip
+] ;
+
+\ Convert a raw 2-element effect array to a stack-effect-info struct.
+\ Returns false unchanged if the input is false.
+(raw>effect): ( raw -- effect ) [
+  dup f = [ ] [
+    dup #first [ (raw>param) ] #map #collect
+    swap #last [ (raw>param) ] #map #collect
+    make-stack-effect-info
+  ] if
+] ;
+
+\\ Extract a quotation's declared stack effect as an option.
+\\ Returns option:some wrapping a stack-effect-info if the quotation has a
+\\ declared effect, or option:none otherwise.
+quotation>effect?: ( quot -- option ) [
+  native.quotation>effect
+  dup f = [ drop option:none ] [ (raw>effect) >option:some ] if
+] ;
+
+\\ Return the number of input parameters in a stack effect.
+effect-inputs: ( effect -- n ) [ inputs>> #len ] ;
+
+\\ Return the number of output parameters in a stack effect.
+effect-outputs: ( effect -- n ) [ outputs>> #len ] ;
+
+\\ Compose two stack effects sequentially.
+\\ The result represents applying effect1 then effect2. If effect1 produces
+\\ more outputs than effect2 consumes, the unconsumed outputs are prepended
+\\ to effect2's outputs. If effect2 needs more inputs than effect1 provides,
+\\ the excess inputs are appended to effect1's inputs.
+effect-compose: ( effect1 effect2 -- effect3 ) [
+  over outputs>> #len
+  over inputs>> #len
+  2dup >=
+  [
+    \ out1 >= in2: result inputs = e1 inputs,
+    \ result outputs = first (out1-in2) of e1 outputs ++ e2 outputs
+    -                              \ e1 e2 keep
+    2 pick-n outputs>> over #take  \ e1 e2 keep kept-out
+    nip                            \ e1 e2 kept-out
+    over outputs>> #append         \ e1 e2 result-out
+    [ drop inputs>> ] dip          \ e1-in result-out
+    make-stack-effect-info
+  ]
+  [
+    \ out1 < in2: result inputs = e1 inputs ++ first (in2-out1) of e2 inputs,
+    \ result outputs = e2 outputs
+    swap -                    \ e1 e2 excess
+    over inputs>> over #take  \ e1 e2 excess excess-in
+    nip                       \ e1 e2 excess-in
+    <rot- inputs>>            \ e2 excess-in e1-in
+    swap #append              \ e2 combined-in
+    swap outputs>>            \ combined-in e2-out
+    make-stack-effect-info
+  ]
+  if
+] ;
+
+\\ Compare two effects and return false if they match, or a descriptive
+\\ mismatch string if they differ. Comparison uses inner equality via (=).
+effect-diff: ( effect1 effect2 -- string|false ) [
+  2dup (=)
+  [
+    2drop f
+  ]
+  [
+    >string swap >string
+    "expected " swap #append ", got " #append swap #append
+  ]
+  if
+] ;
+
+\\ Assert that a quotation's declared stack effect matches the expected effect.
+\\ Prints PASS/FAIL in the style of lib/testing.1z assert=.
+assert-effect: ( quot expected-effect msg -- ) [
+  -rot>  \ msg quot expected
+  swap native.quotation>effect
+  (raw>effect)  \ msg expected actual
+  2dup (=)
+  [
+    2drop  \ msg
+    "PASS: " swap #append print-line
+  ]
+  [
+    inspect swap inspect  \ msg actual-str expected-str
+    "(expected " swap #append ", got " #append
+    swap #append ")" #append  \ msg detail
+    " " swap #append          \ msg " detail"
+    #append                   \ "msg detail"
+    "FAIL: " swap #append print-line
+  ]
+  if
+] ;
