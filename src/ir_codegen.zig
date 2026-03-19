@@ -93,7 +93,6 @@ fn isDynamicVarOp(name: []const u8) bool {
 }
 
 const IteratorOpcode = enum(u8) {
-    to_iterator = 0,
     next = 1,
     collect = 2,
     count = 3,
@@ -111,7 +110,9 @@ fn isIteratorOp(name: []const u8) bool {
 }
 
 fn iteratorOpcodeFromName(name: []const u8) ?IteratorOpcode {
-    if (std.mem.eql(u8, name, ">iterator")) return .to_iterator;
+    // >iterator is a generic compound word in the prelude, not a pure
+    // native. Calling nativeToIterator directly would bypass generic
+    // dispatch, breaking user-defined >iterator methods on virtual types.
     if (std.mem.eql(u8, name, "#next")) return .next;
     if (std.mem.eql(u8, name, "#collect")) return .collect;
     if (std.mem.eql(u8, name, "#count")) return .count;
@@ -133,7 +134,6 @@ const IteratorEffects = struct {
 
 fn iteratorEffects(opcode: IteratorOpcode) IteratorEffects {
     return switch (opcode) {
-        .to_iterator => .{ .inputs = 1, .outputs = 1, .dynamic = false },
         .next => .{ .inputs = 1, .outputs = 1, .dynamic = false },
         .collect => .{ .inputs = 1, .outputs = 1, .dynamic = false },
         .count => .{ .inputs = 1, .outputs = 1, .dynamic = false },
@@ -593,6 +593,7 @@ fn flushToPhysicalStack(state: *CompileState, stack: *[64]StackEntry, sp: usize)
     const ctx = state.ctx;
     const base_addr = state.base_addr;
 
+    // First pass: handle non-raw entries and detect swap patterns.
     for (0..sp) |i| {
         switch (stack[i]) {
             .i64_ref => |ref| {
@@ -608,12 +609,27 @@ fn flushToPhysicalStack(state: *CompileState, stack: *[64]StackEntry, sp: usize)
                 stack[i] = .{ .raw_at_slot = i };
             },
             .quotation_body => {},
+            .raw_at_slot => {},
+        }
+    }
+
+    // Second pass: resolve raw_at_slot entries, using swap for cross-references.
+    for (0..sp) |i| {
+        switch (stack[i]) {
             .raw_at_slot => |s| {
                 if (s != i) {
-                    emitCopySlot(ctx, base_addr, s, i);
-                    stack[i] = .{ .raw_at_slot = i };
+                    // Check for swap pattern: stack[i] -> s and stack[s] -> i
+                    if (s < sp and stack[s] == .raw_at_slot and stack[s].raw_at_slot == i) {
+                        emitSwapSlots(ctx, base_addr, i, s);
+                        stack[i] = .{ .raw_at_slot = i };
+                        stack[s] = .{ .raw_at_slot = s };
+                    } else {
+                        emitCopySlot(ctx, base_addr, s, i);
+                        stack[i] = .{ .raw_at_slot = i };
+                    }
                 }
             },
+            else => {},
         }
     }
 }
@@ -832,24 +848,10 @@ fn compileInstructions(
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     const top = stack[sp.* - 1];
                     const second = stack[sp.* - 2];
-                    const top_is_physical = (top == .raw_at_slot);
-                    const second_is_physical = (second == .raw_at_slot);
-                    if (top_is_physical and second_is_physical) {
-                        emitSwapSlots(ctx, base_addr, top.raw_at_slot, second.raw_at_slot);
-                        stack[sp.* - 2] = .{ .raw_at_slot = second.raw_at_slot };
-                        stack[sp.* - 1] = .{ .raw_at_slot = top.raw_at_slot };
-                    } else if (top_is_physical) {
-                        emitCopySlot(ctx, base_addr, top.raw_at_slot, sp.* - 2);
-                        stack[sp.* - 2] = .{ .raw_at_slot = sp.* - 2 };
-                        stack[sp.* - 1] = second;
-                    } else if (second_is_physical) {
-                        emitCopySlot(ctx, base_addr, second.raw_at_slot, sp.* - 1);
-                        stack[sp.* - 2] = top;
-                        stack[sp.* - 1] = .{ .raw_at_slot = sp.* - 1 };
-                    } else {
-                        stack[sp.* - 2] = top;
-                        stack[sp.* - 1] = second;
-                    }
+                    // Track swap abstractly without physical modification.
+                    // flushToPhysicalStack resolves cross-references later.
+                    stack[sp.* - 2] = top;
+                    stack[sp.* - 1] = second;
                 } else if (std.mem.eql(u8, name, "over")) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     switch (stack[sp.* - 2]) {
@@ -1040,7 +1042,6 @@ fn compileInstructions(
                             try compileInstructions(state, body, stack, sp);
                         },
                         .raw_at_slot => |s| {
-                            // Bail-safe checks first (no side effects on the physical stack)
                             const slot_byte_offset = c.ir_const_addr(ctx, s * ValueLayout.value_size);
                             const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
 
@@ -1053,33 +1054,41 @@ fn compileInstructions(
                             const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, code_ptr_off);
                             const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
 
-                            // Null-check code_ptr (bail if quotation wasn't compiled)
+                            // Null-check code_ptr: fallback to interpreter if quotation not compiled
                             const null_addr = c.ir_const_addr(ctx, 0);
                             const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
                             const if_null = c._ir_IF(ctx, is_null);
+
+                            // Cold path: quotation not compiled, call interpreter fallback
                             c._ir_IF_TRUE_cold(ctx, if_null);
-                            c._ir_RETURN(ctx, bail_status);
+                            {
+                                // Flush stack with the quotation included at TOS for
+                                // the interpreter's native call handler.
+                                sp.* += 1;
+                                flushToPhysicalStack(state, stack, sp.*);
+                                const ctx_val = emitCallbackPreamble(state, sp.*);
+                                sp.* -= 1;
+                                const call_quot_fn = c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
+                                const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
+                                emitCallbackPostCheck(state, fb_result, state.error_propagate_status);
+                            }
+                            const end_fallback = c._ir_END(ctx);
+
+                            // Hot path: quotation is compiled, call directly
                             c._ir_IF_FALSE(ctx, if_null);
+                            {
+                                flushToPhysicalStack(state, stack, sp.*);
 
-                            // All checks passed. Now commit side effects:
-                            // flush pending values and update sp before the indirect call.
-                            flushToPhysicalStack(state, stack, sp.*);
+                                const new_sp_const = c.ir_const_addr(ctx, sp.*);
+                                const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, new_sp_const);
+                                c._ir_STORE(ctx, state.sp_ptr, new_sp);
 
-                            const new_sp_const = c.ir_const_addr(ctx, sp.*);
-                            const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, new_sp_const);
-                            c._ir_STORE(ctx, state.sp_ptr, new_sp);
+                                const call_result = c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
+                                emitCallbackPostCheck(state, call_result, call_result);
+                            }
+                            const end_compiled = c._ir_END(ctx);
 
-                            // Indirect call via jit_ctx_ptr
-                            const call_result = c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-
-                            // If call failed, bail (callee may have modified sp,
-                            // but the interpreter will re-execute the whole word)
-                            const zero_status = c.ir_const_i32(ctx, 0);
-                            const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
-                            const if_bail = c._ir_IF(ctx, call_failed);
-                            c._ir_IF_TRUE_cold(ctx, if_bail);
-                            c._ir_RETURN(ctx, bail_status);
-                            c._ir_IF_FALSE(ctx, if_bail);
+                            c._ir_MERGE_2(ctx, end_fallback, end_compiled);
 
                             state.dynamic_call_emitted = true;
                         },
@@ -1373,6 +1382,7 @@ fn compileInstructions(
 
                         if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
 
+                        materializeQuotations(state, stack, sp.*);
                         flushToPhysicalStack(state, stack, sp.*);
                         _ = emitCallbackPreamble(state, sp.*);
 
@@ -1693,10 +1703,7 @@ pub fn compileWord(
 
     const bail_status = c.ir_const_i32(&ctx, 1);
     const ok_status = c.ir_const_i32(&ctx, 0);
-    const error_propagate_status = if (scan_flags.needsErrorPropagation())
-        c.ir_const_i32(&ctx, 2)
-    else
-        c.IR_UNUSED;
+    const error_propagate_status = c.ir_const_i32(&ctx, 2);
 
     // Load current stack depth
     const sp_val = c._ir_LOAD(&ctx, c.IR_ADDR, sp_ptr);
@@ -1816,13 +1823,22 @@ pub fn compileWord(
                 .quotation_body => return IrCodegenError.NotCompilable,
                 .raw_at_slot => |s| {
                     if (s != i) {
-                        emitCopySlot(&ctx, base_addr, s, i);
+                        // Check for swap pattern: stack[i] -> s and stack[s] -> i
+                        if (s < sp and stack[s] == .raw_at_slot and stack[s].raw_at_slot == i) {
+                            emitSwapSlots(&ctx, base_addr, i, s);
+                            stack[s] = .{ .raw_at_slot = s };
+                        } else {
+                            emitCopySlot(&ctx, base_addr, s, i);
+                        }
                     }
                 },
             }
         }
 
         // Update sp: new_sp = sp_val - input_count + output_count
+        // Always store back to sp_ptr because intermediate callbacks
+        // (compound word dispatch, iterator ops, native calls) may have
+        // written to sp_ptr during execution.
         if (input_count > output_count) {
             const sp_delta = c.ir_const_addr(&ctx, input_count - output_count);
             const new_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), sp_val, sp_delta);
@@ -1831,8 +1847,9 @@ pub fn compileWord(
             const sp_delta = c.ir_const_addr(&ctx, output_count - input_count);
             const new_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), sp_val, sp_delta);
             c._ir_STORE(&ctx, sp_ptr, new_sp);
+        } else {
+            c._ir_STORE(&ctx, sp_ptr, sp_val);
         }
-        // else input_count == output_count: sp unchanged
 
         c._ir_RETURN(&ctx, ok_status);
     }
@@ -2097,7 +2114,6 @@ fn jitIteratorOp(ctx_raw: usize, opcode_raw: usize) callconv(.c) i32 {
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const opcode = std.meta.intToEnum(IteratorOpcode, opcode_raw) catch return 1;
     const func: *const fn (*Context) anyerror!void = switch (opcode) {
-        .to_iterator => &iterators_mod.nativeToIterator,
         .next => &iterators_mod.nativeNext,
         .collect => &iterators_mod.nativeCollect,
         .count => &iterators_mod.nativeCount,
@@ -2121,6 +2137,17 @@ fn jitNativeCall(ctx_raw: usize, fn_ptr_raw: usize) callconv(.c) i32 {
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const func: *const fn (*Context) anyerror!void = @ptrFromInt(fn_ptr_raw);
     func(ctx) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return 0;
+}
+
+fn jitCallQuotation(ctx_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const control = @import("primitives/control.zig");
+    control.nativeCall(ctx) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
     };
@@ -2219,6 +2246,7 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     const code_ptr = entry.code_ptr orelse return .bail;
 
     const func: CompiledFn = @ptrCast(@alignCast(code_ptr));
+    const saved_sp = ctx.stack.items.items.len;
     var jit_ctx = JitContext{
         .items_ptr = ctx.stack.items.items.ptr,
         .sp_ptr = &ctx.stack.items.items.len,
@@ -2230,7 +2258,10 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     return switch (status) {
         0 => .ok,
         2 => .error_propagate,
-        else => .bail,
+        else => blk: {
+            ctx.stack.items.items.len = saved_sp;
+            break :blk .bail;
+        },
     };
 }
 

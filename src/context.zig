@@ -219,6 +219,10 @@ pub const Context = struct {
     /// ancestor scopes, up to the root context which holds primitives and
     /// prelude words.
     parent_context: ?*const Context = null,
+    /// When true, every word defined via defineWord is automatically
+    /// JIT-compiled. Compilation failures are silently ignored and the
+    /// word falls back to the interpreter. Set via the -Djit-all build option.
+    compile_all: bool = false,
 
     /// Returns true when the instruction sequence ends with a call to `;`,
     /// which means it is a word definition and should be executed even in
@@ -666,6 +670,68 @@ pub const Context = struct {
             try self.local_frames.items[top_index].put(self.allocator, name, def);
         } else {
             try self.dictionary.put(name, def);
+        }
+
+        if (self.compile_all) {
+            self.tryAutoCompile(name, def);
+        }
+    }
+
+    /// Attempt JIT compilation of a newly defined word. Silently ignores
+    /// all errors so the word falls back to the interpreter.
+    fn tryAutoCompile(self: *Context, name: []const u8, def: WordDefinition) void {
+        const instrs = switch (def.action) {
+            .compound => |i| i,
+            .native => return,
+        };
+
+        const effect = def.stack_effect orelse return;
+
+        for (def.markers) |mk| {
+            if (markers_mod.isParseTimeOnlyMarker(mk)) return;
+            if (markers_mod.isParseTimeMarker(mk)) return;
+            if (markers_mod.isGenericMarker(mk)) return;
+        }
+
+        if (stack_effect_mod.hasAnyRowVariable(effect)) return;
+
+        const input_count: u8 = @intCast(effect.inputs.len);
+        const output_count: u8 = @intCast(effect.outputs.len);
+
+        var resolver_ctx = ResolverState{ .context = self };
+        const resolver = ir_codegen.WordResolver{
+            .resolve = &resolveWordForDispatch,
+            .user_data = @ptrCast(&resolver_ctx),
+            .dispatch_table_ptr = @ptrCast(&self.jit_dispatch),
+        };
+
+        const compiled = ir_codegen.compileWord(instrs, input_count, output_count, resolver, name, self) catch return;
+
+        const final_id = if (def.word_id) |existing_id| blk: {
+            if (self.jit_dispatch.get(existing_id) != null) {
+                self.jit_dispatch.update(existing_id, compiled.code_ptr, compiled.jit_buf);
+                break :blk existing_id;
+            }
+            const new_id = self.jit_dispatch.assignId(name) catch {
+                compiled.jit_buf.deinit();
+                return;
+            };
+            self.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf);
+            propagateWordId(self, name, new_id);
+            break :blk new_id;
+        } else blk: {
+            const new_id = self.jit_dispatch.assignId(name) catch {
+                compiled.jit_buf.deinit();
+                return;
+            };
+            self.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf);
+            propagateWordId(self, name, new_id);
+            break :blk new_id;
+        };
+
+        if (self.trace.trace_jit) {
+            var tw = trace_mod.TraceWriter.init();
+            trace_mod.traceJitCompile(&tw, name, final_id);
         }
     }
 
@@ -2081,6 +2147,12 @@ pub const Context = struct {
 
                         // Try JIT-compiled dispatch before interpreter path
                         if (word.word_id) |wid| {
+                            if (word.stack_effect) |effect| {
+                                self.validateParameterEffects(&effect) catch |err| {
+                                    self.pushCallFrame(name, instr.line, instr.column);
+                                    return self.wordErrorCleanup(name, err);
+                                };
+                            }
                             const jit_result = ir_codegen.executeCompiled(self, wid);
                             if (self.trace.trace_jit) {
                                 var tw = trace_mod.TraceWriter.init();
@@ -2291,6 +2363,80 @@ pub const Context = struct {
         }) catch {};
     }
 };
+
+// =============================================================================
+// JIT auto-compile helpers (used by Context.tryAutoCompile)
+// =============================================================================
+
+const ResolverState = struct {
+    context: *Context,
+};
+
+fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.ResolvedWord {
+    const state: *ResolverState = @ptrCast(@alignCast(user_data));
+    const ctx = state.context;
+    const callee = ctx.lookupWord(name) orelse return null;
+
+    switch (callee.action) {
+        .compound => {},
+        .native => |func| {
+            const effect = callee.stack_effect orelse return null;
+            if (stack_effect_mod.hasAnyRowVariable(effect)) return null;
+            return ir_codegen.ResolvedWord{
+                .word_id = 0,
+                .input_count = @intCast(effect.inputs.len),
+                .output_count = @intCast(effect.outputs.len),
+                .native_fn_ptr = @intFromPtr(func),
+            };
+        },
+    }
+
+    const effect = callee.stack_effect orelse return null;
+    if (stack_effect_mod.hasAnyRowVariable(effect)) return null;
+
+    const word_id = if (callee.word_id) |id| id else blk: {
+        const id = ctx.jit_dispatch.assignId(name) catch return null;
+        propagateWordId(ctx, name, id);
+        break :blk id;
+    };
+
+    return ir_codegen.ResolvedWord{
+        .word_id = word_id,
+        .input_count = @intCast(effect.inputs.len),
+        .output_count = @intCast(effect.outputs.len),
+    };
+}
+
+fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
+    var i = ctx.local_frames.items.len;
+    while (i > 0) {
+        i -= 1;
+        if (ctx.local_frames.items[i].getPtr(name)) |entry| {
+            entry.word_id = word_id;
+            return;
+        }
+    }
+    if (ctx.dictionary.entries.getPtr(name)) |entry| {
+        entry.word_id = word_id;
+        return;
+    }
+    var ancestor = ctx.parent_context;
+    while (ancestor) |anc| {
+        var j = anc.local_frames.items.len;
+        while (j > 0) {
+            j -= 1;
+            if (anc.local_frames.items[j].getPtr(name)) |entry| {
+                entry.word_id = word_id;
+                return;
+            }
+        }
+        if (anc.dictionary.entries.getPtr(name)) |entry| {
+            entry.word_id = word_id;
+            return;
+        }
+        ancestor = anc.parent_context;
+    }
+}
 
 // =============================================================================
 // Tests

@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test unit-test integration-test fmt-test update-golden update-fmt-golden benchmark clean help
+.PHONY: all build release run fmt test unit-test integration-test jit-test fmt-test update-golden update-fmt-golden benchmark clean help
 
 SHELL := /bin/bash
 
@@ -27,6 +27,12 @@ unit-test: ## Run unit tests
 
 integration-test: ## Run integration tests
 	( time timeout $(TIMEOUT) zig build integration-test )
+
+jit-build: ## Build only the 1z-jit binary
+	zig build jit-build
+
+jit-test: ## Run integration tests with JIT auto-compilation
+	timeout $(TIMEOUT) zig build jit-integration-test
 
 fmt-test: ## Run formatter tests
 	( time timeout $(TIMEOUT) zig build fmt-test )

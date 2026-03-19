@@ -9,30 +9,30 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 PASS: nested compiled loops complete
-Stack: [ 0 ]
+Stack: [ ]
 === compiled loop yields to other tasks ===
-Stack: [ 0 ]
-Stack: [ 0 ]
-Stack: [ 0 ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: compiled loop task completed
 PASS: yielding task completed
-Stack: [ 0 ]
+Stack: [ ]
 === compiled times loop yields ===
-Stack: [ 0 ]
-Stack: [ 0 ]
-Stack: [ 0 ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: times loop task completed
 PASS: yielding task completed during times
-Stack: [ 0 ]
+Stack: [ ]
 === compiled while loop ===
-Stack: [ 0 ]
-Stack: [ 0 ]
-Stack: [ 0 ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: while loop counted down
-Stack: [ 0 ]
+Stack: [ ]
 === compiled until loop ===
-Stack: [ 0 ]
-Stack: [ 0 ]
-Stack: [ 0 ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: until loop counted down
-Stack: [ 0 ]
+Stack: [ ]

@@ -332,6 +332,7 @@ pub fn main() u8 {
     ctx.loadPrelude(external_prelude) catch |err| {
         std.debug.panic("Failed to load prelude: {any}", .{err});
     };
+    ctx.compile_all = build_options.jit_all;
     ctx.check_mode = check_mode;
     ctx.allow_all_recursion = allow_all_recursion;
     if (bench_config.enabled) {
