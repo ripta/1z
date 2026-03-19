@@ -11,6 +11,8 @@ const HashTable = value_mod.HashTable;
 const Module = value_mod.Module;
 const ModuleWord = value_mod.ModuleWord;
 
+const StackEffect = @import("../stack_effect.zig").StackEffect;
+
 const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
 const RegistryEntry = types_mod.RegistryEntry;
@@ -29,23 +31,42 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "scope-frames", .func = nativeScopeFrames },
     .{ .name = "type-descriptor", .func = nativeTypeDescriptor },
     .{ .name = "word-source", .func = nativeWordSource },
+    .{ .name = "quotation>effect", .func = nativeQuotationToEffect },
 };
 
+const StackEffectParam = @import("../stack_effect.zig").StackEffectParam;
+
+fn buildStackEffectParamValue(alloc: Allocator, param: StackEffectParam) Allocator.Error!Value {
+    const fields = try alloc.alloc(Value, 3);
+    fields[0] = .{ .string = param.name };
+    fields[1] = .{ .boolean = param.is_row_variable };
+    fields[2] = if (param.quotation_effect) |nested|
+        try buildStackEffectValue(alloc, nested)
+    else
+        .{ .boolean = false };
+    return .{ .array = fields };
+}
+
+fn buildStackEffectValue(alloc: Allocator, effect: *const StackEffect) Allocator.Error!Value {
+    const inputs_arr = try alloc.alloc(Value, effect.inputs.len);
+    for (effect.inputs, 0..) |param, i| {
+        inputs_arr[i] = try buildStackEffectParamValue(alloc, param);
+    }
+    const outputs_arr = try alloc.alloc(Value, effect.outputs.len);
+    for (effect.outputs, 0..) |param, i| {
+        outputs_arr[i] = try buildStackEffectParamValue(alloc, param);
+    }
+    const se_fields = try alloc.alloc(Value, 2);
+    se_fields[0] = .{ .array = inputs_arr };
+    se_fields[1] = .{ .array = outputs_arr };
+    return .{ .array = se_fields };
+}
+
 fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: WordDefinition) !Value {
-    const effect_val: Value = if (word.stack_effect) |effect| blk: {
-        const inputs_arr = try alloc.alloc(Value, effect.inputs.len);
-        for (effect.inputs, 0..) |param, i| {
-            inputs_arr[i] = .{ .string = param.name };
-        }
-        const outputs_arr = try alloc.alloc(Value, effect.outputs.len);
-        for (effect.outputs, 0..) |param, i| {
-            outputs_arr[i] = .{ .string = param.name };
-        }
-        const se_fields = try alloc.alloc(Value, 2);
-        se_fields[0] = .{ .array = inputs_arr };
-        se_fields[1] = .{ .array = outputs_arr };
-        break :blk .{ .array = se_fields };
-    } else .{ .boolean = false };
+    const effect_val: Value = if (word.stack_effect) |effect|
+        try buildStackEffectValue(alloc, &effect)
+    else
+        .{ .boolean = false };
 
     const doc_val: Value = if (word.doc) |d|
         .{ .string = d }
@@ -498,5 +519,24 @@ fn collectFrameWords(
         if (!gop.found_existing) {
             try results.append(alloc, try buildWordInfo(alloc, lookup_ctx, entry.key_ptr.*, entry.value_ptr.*));
         }
+    }
+}
+
+/// quotation>effect ( quot -- effect-or-false ) - Extract the stack effect from a quotation.
+fn nativeQuotationToEffect(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const val = try ctx.stack.pop();
+    const quot = switch (val) {
+        .quotation => |q| q,
+        else => {
+            helpers.setTypeMismatchError(ctx, "quotation", val);
+            return error.TypeMismatch;
+        },
+    };
+
+    if (quot.effect) |effect| {
+        try ctx.stack.push(try buildStackEffectValue(alloc, effect));
+    } else {
+        try ctx.stack.push(.{ .boolean = false });
     }
 }

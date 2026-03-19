@@ -687,6 +687,18 @@ try-acquire: generic ( resource -- option ) [ "acquirable resource" throw-type-e
 
 \ Introspection struct types
 
+\\ A single parameter in a stack effect declaration.
+stack-effect-param: struct{ name row-variable? nested-effect } ;
+
+\\ Format a stack-effect-param as a string for display.
+>string: method{ stack-effect-param } [
+  dup nested-effect>> dup f = [
+    drop name>>
+  ] [
+    >string swap name>> ": " #append swap #append
+  ] if
+] ;
+
 \\ Parsed stack effect with input and output parameter lists.
 stack-effect-info: struct{ inputs outputs } ;
 \\ Format a stack-effect-info struct as "( inputs -- outputs )".
@@ -715,9 +727,21 @@ method-info: struct{ types provenance } ;
 \\ Structured word information for runtime introspection.
 word-info: struct{ name stack-effect doc markers native? body methods source-loc module provenance } ;
 
-\\ Convert a raw 9-element array from native.>word into a word-info struct.
+\\ Convert a raw 10-element array from native.>word into a word-info struct.
 (raw>word-info): [
-  >stack-effect-info: [ dup f = [ ] [ dup #first swap #last make-stack-effect-info ] if ] ;
+  >param: [
+    dup 0 #nth
+    over 1 #nth
+    2 pick-n 2 #nth >stack-effect-info
+    make-stack-effect-param nip
+  ] ;
+  >stack-effect-info: [
+    dup f = [ ] [
+      dup #first [ >param ] #map #collect
+      swap #last [ >param ] #map #collect
+      make-stack-effect-info
+    ] if
+  ] ;
   >source-loc:        [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-source-loc nip ] if ] ;
   >provenance:        [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-provenance nip ] if ] ;
   >dispatch-prov:     [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth 3 pick-n 3 #nth make-dispatch-provenance nip ] if ] ;

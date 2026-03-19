@@ -1,110 +1,110 @@
 === struct generated word effects ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { } outputs: { "type" } } ]
+Stack: [ stack-effect-info{ inputs: { } outputs: { stack-effect-param{ name: "type" row-variable?: f nested-effect: f } } } ]
 PASS: struct type word has no inputs
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { } outputs: { "type" } } ]
+Stack: [ stack-effect-info{ inputs: { } outputs: { stack-effect-param{ name: "type" row-variable?: f nested-effect: f } } } ]
 PASS: struct type word outputs type
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { "x" "y" } outputs: { "point" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "point" row-variable?: f nested-effect: f } } } ]
 PASS: make-point inputs are field names
-Stack: [ stack-effect-info{ inputs: { "x" "y" } outputs: { "point" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "point" row-variable?: f nested-effect: f } } } ]
 PASS: make-point output is type name
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { "hash" } outputs: { "point" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "hash" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "point" row-variable?: f nested-effect: f } } } ]
 PASS: >point inputs hash
-Stack: [ stack-effect-info{ inputs: { "hash" } outputs: { "point" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "hash" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "point" row-variable?: f nested-effect: f } } } ]
 PASS: >point output is type name
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { "point" } outputs: { "x" "y" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "point" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
 PASS: unmake-point input is type name
-Stack: [ stack-effect-info{ inputs: { "point" } outputs: { "x" "y" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "point" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
 PASS: unmake-point outputs are field names
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { "point" } outputs: { "hash" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "point" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "hash" row-variable?: f nested-effect: f } } } ]
 PASS: point>hash input is type name
-Stack: [ stack-effect-info{ inputs: { "point" } outputs: { "hash" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "point" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "hash" row-variable?: f nested-effect: f } } } ]
 PASS: point>hash output is hash
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { "val" } outputs: { "?" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "val" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "?" row-variable?: f nested-effect: f } } } ]
 PASS: point? input is val
-Stack: [ stack-effect-info{ inputs: { "val" } outputs: { "?" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "val" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "?" row-variable?: f nested-effect: f } } } ]
 PASS: point? output is ?
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { "instance" } outputs: { "value" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "value" row-variable?: f nested-effect: f } } } ]
 PASS: x>> input is instance
-Stack: [ stack-effect-info{ inputs: { "instance" } outputs: { "value" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "value" row-variable?: f nested-effect: f } } } ]
 PASS: x>> output is value
 Stack: [ ]
 === virtual simple generated word effects ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { } outputs: { "type" } } ]
+Stack: [ stack-effect-info{ inputs: { } outputs: { stack-effect-param{ name: "type" row-variable?: f nested-effect: f } } } ]
 PASS: virtual type word outputs type
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { "value" } outputs: { "posint" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "value" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "posint" row-variable?: f nested-effect: f } } } ]
 PASS: >posint input is value
-Stack: [ stack-effect-info{ inputs: { "value" } outputs: { "posint" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "value" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "posint" row-variable?: f nested-effect: f } } } ]
 PASS: >posint output is type name
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { "posint" } outputs: { "value" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "posint" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "value" row-variable?: f nested-effect: f } } } ]
 PASS: unmake-posint input is type name
-Stack: [ stack-effect-info{ inputs: { "posint" } outputs: { "value" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "posint" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "value" row-variable?: f nested-effect: f } } } ]
 PASS: unmake-posint output is value
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { "val" } outputs: { "?" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "val" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "?" row-variable?: f nested-effect: f } } } ]
 PASS: posint? input is val
-Stack: [ stack-effect-info{ inputs: { "val" } outputs: { "?" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "val" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "?" row-variable?: f nested-effect: f } } } ]
 PASS: posint? output is ?
 Stack: [ ]
 === virtual struct-backed generated word effects ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { } outputs: { "type" } } ]
+Stack: [ stack-effect-info{ inputs: { } outputs: { stack-effect-param{ name: "type" row-variable?: f nested-effect: f } } } ]
 PASS: virtual struct type word outputs type
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { "hash" } outputs: { "color" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "hash" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "color" row-variable?: f nested-effect: f } } } ]
 PASS: >color input is hash
-Stack: [ stack-effect-info{ inputs: { "hash" } outputs: { "color" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "hash" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "color" row-variable?: f nested-effect: f } } } ]
 PASS: >color output is type name
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { "r" "g" "b" } outputs: { "color" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "r" row-variable?: f nested-effect: f } stack-effect-param{ name: "g" row-variable?: f nested-effect: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "color" row-variable?: f nested-effect: f } } } ]
 PASS: make-color inputs are field names
-Stack: [ stack-effect-info{ inputs: { "r" "g" "b" } outputs: { "color" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "r" row-variable?: f nested-effect: f } stack-effect-param{ name: "g" row-variable?: f nested-effect: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "color" row-variable?: f nested-effect: f } } } ]
 PASS: make-color output is type name
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { "color" } outputs: { "r" "g" "b" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "color" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "r" row-variable?: f nested-effect: f } stack-effect-param{ name: "g" row-variable?: f nested-effect: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } } ]
 PASS: unmake-color input is type name
-Stack: [ stack-effect-info{ inputs: { "color" } outputs: { "r" "g" "b" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "color" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "r" row-variable?: f nested-effect: f } stack-effect-param{ name: "g" row-variable?: f nested-effect: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f } } } ]
 PASS: unmake-color outputs are field names
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { "color" } outputs: { "hash" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "color" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "hash" row-variable?: f nested-effect: f } } } ]
 PASS: color>hash input is type name
-Stack: [ stack-effect-info{ inputs: { "color" } outputs: { "hash" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "color" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "hash" row-variable?: f nested-effect: f } } } ]
 PASS: color>hash output is hash
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { "val" } outputs: { "?" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "val" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "?" row-variable?: f nested-effect: f } } } ]
 PASS: color? input is val
-Stack: [ stack-effect-info{ inputs: { "val" } outputs: { "?" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "val" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "?" row-variable?: f nested-effect: f } } } ]
 PASS: color? output is ?
 Stack: [ ]
 === enum generated word effects ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { } outputs: { "type" } } ]
+Stack: [ stack-effect-info{ inputs: { } outputs: { stack-effect-param{ name: "type" row-variable?: f nested-effect: f } } } ]
 PASS: enum type word outputs type
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { } outputs: { "shape:circle" } } ]
+Stack: [ stack-effect-info{ inputs: { } outputs: { stack-effect-param{ name: "shape:circle" row-variable?: f nested-effect: f } } } ]
 PASS: shape:circle has no inputs
-Stack: [ stack-effect-info{ inputs: { } outputs: { "shape:circle" } } ]
+Stack: [ stack-effect-info{ inputs: { } outputs: { stack-effect-param{ name: "shape:circle" row-variable?: f nested-effect: f } } } ]
 PASS: shape:circle output is variant name
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { } outputs: { "shape:square" } } ]
+Stack: [ stack-effect-info{ inputs: { } outputs: { stack-effect-param{ name: "shape:square" row-variable?: f nested-effect: f } } } ]
 PASS: shape:square output is variant name
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { "val" } outputs: { "?" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "val" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "?" row-variable?: f nested-effect: f } } } ]
 PASS: shape? input is val
-Stack: [ stack-effect-info{ inputs: { "val" } outputs: { "?" } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "val" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "?" row-variable?: f nested-effect: f } } } ]
 PASS: shape? output is ?
 Stack: [ ]

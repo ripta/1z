@@ -16,7 +16,7 @@ Add two numbers. Promotes to bignum on fixnum overflow, or to float if either op
   method{ float fixnum }
 Stack: [ ]
 Conditional execution.
-if ( ..a ? true-quot false-quot -- ..b ) [<marker:branch-combinator>] \native
+if ( ..a ? true-quot: ( ..a -- ..b ) false-quot: ( ..a -- ..b ) -- ..b ) [<marker:branch-combinator>] \native
 
 Stack: [ ]
 Get length of sequence. O(1) and non-destructive; does not work on iterators (use #count instead).
@@ -32,7 +32,7 @@ Get length of sequence. O(1) and non-destructive; does not work on iterators (us
   method{ mutable-map }
 Stack: [ ]
 Execute try quotation; if error, run recover quotation with error on stack.
-recover ( try-quot recover-quot -- ) \native
+recover ( try-quot recover-quot: ( error -- ..a ) -- ) \native
 
 Stack: [ ]
 Open a file stream with mode (read:, write:, append:, read-write:).

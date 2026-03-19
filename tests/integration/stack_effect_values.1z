@@ -1,0 +1,58 @@
+\ Tests for stack effect values: quotation>effect and enriched stack-effect-param
+
+use "testing" ;
+
+"quotation>effect returns effect for annotated quotation" test-section
+[ ( a b -- c ) + ] native.quotation>effect
+dup f = f "quotation>effect returns non-false for annotated quotation" assert=
+dup array? t "quotation>effect returns an array" assert=
+dup #first #len 2 "quotation>effect inputs has 2 params" assert=
+#last #len 1 "quotation>effect outputs has 1 param" assert=
+
+"quotation>effect returns false for unannotated quotation" test-section
+[ 1 + ] native.quotation>effect
+f "quotation>effect returns false for unannotated quotation" assert=
+
+"quotation>effect raw param is 3-element array" test-section
+[ ( x -- y ) 1 + ] native.quotation>effect
+#first #first
+dup 0 #nth "x" "raw param name is x" assert=
+dup 1 #nth f "raw param is not a row variable" assert=
+2 #nth f "raw param has no nested effect" assert=
+
+"quotation>effect with row variable" test-section
+[ ( ..a x -- ..a y ) 1 + ] native.quotation>effect
+#first #first
+dup 0 #nth "..a" "row variable name is ..a" assert=
+1 #nth t "row variable flag is true" assert=
+
+"quotation>effect with nested quotation effect" test-section
+[ ( ..a seq quot: ( x -- y ) -- ..a seq ) #map ] native.quotation>effect
+#first
+dup 2 #nth dup 0 #nth "quot" "nested param name is quot" assert=
+dup 1 #nth f "nested param is not a row variable" assert=
+2 #nth dup f = f "nested param has a nested effect" assert=
+dup array? t "nested effect is an array" assert=
+dup #first #len 1 "nested effect has 1 input" assert=
+#last #len 1 "nested effect has 1 output" assert=
+drop
+
+">word-info works end-to-end with enriched params" test-section
+dup: >word-info
+dup stack-effect>> inputs>> #first
+dup stack-effect-param? t "input param is a stack-effect-param struct" assert=
+dup name>> "a" "input param name is a" assert=
+dup row-variable?>> f "input param is not a row variable" assert=
+nested-effect>> f "input param has no nested effect" assert=
+stack-effect>> >string "( a -- a a )" "stack-effect >string still works" assert=
+
+"stack-effect-param >string for simple param" test-section
+"x" f f make-stack-effect-param >string
+"x" "simple param >string" assert=
+
+"stack-effect-param >string with nested effect" test-section
+"x" f f make-stack-effect-param V{ } swap #push
+"y" f f make-stack-effect-param V{ } swap #push
+make-stack-effect-info
+"quot" f 2 pick-n make-stack-effect-param nip >string
+"quot: ( x -- y )" "nested param >string" assert=

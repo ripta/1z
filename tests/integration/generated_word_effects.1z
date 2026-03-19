@@ -12,31 +12,31 @@ point: >word-info stack-effect>>
 inputs>> #len 0 "struct type word has no inputs" assert=
 
 point: >word-info stack-effect>>
-outputs>> { "type" } "struct type word outputs type" assert=
+outputs>> [ name>> ] #map #collect { "type" } "struct type word outputs type" assert=
 
 make-point: >word-info stack-effect>>
-dup inputs>> { "x" "y" } "make-point inputs are field names" assert=
-outputs>> { "point" } "make-point output is type name" assert=
+dup inputs>> [ name>> ] #map #collect { "x" "y" } "make-point inputs are field names" assert=
+outputs>> [ name>> ] #map #collect { "point" } "make-point output is type name" assert=
 
 >point: >word-info stack-effect>>
-dup inputs>> { "hash" } ">point inputs hash" assert=
-outputs>> { "point" } ">point output is type name" assert=
+dup inputs>> [ name>> ] #map #collect { "hash" } ">point inputs hash" assert=
+outputs>> [ name>> ] #map #collect { "point" } ">point output is type name" assert=
 
 unmake-point: >word-info stack-effect>>
-dup inputs>> { "point" } "unmake-point input is type name" assert=
-outputs>> { "x" "y" } "unmake-point outputs are field names" assert=
+dup inputs>> [ name>> ] #map #collect { "point" } "unmake-point input is type name" assert=
+outputs>> [ name>> ] #map #collect { "x" "y" } "unmake-point outputs are field names" assert=
 
 point>hash: >word-info stack-effect>>
-dup inputs>> { "point" } "point>hash input is type name" assert=
-outputs>> { "hash" } "point>hash output is hash" assert=
+dup inputs>> [ name>> ] #map #collect { "point" } "point>hash input is type name" assert=
+outputs>> [ name>> ] #map #collect { "hash" } "point>hash output is hash" assert=
 
 point?: >word-info stack-effect>>
-dup inputs>> { "val" } "point? input is val" assert=
-outputs>> { "?" } "point? output is ?" assert=
+dup inputs>> [ name>> ] #map #collect { "val" } "point? input is val" assert=
+outputs>> [ name>> ] #map #collect { "?" } "point? output is ?" assert=
 
 x>>: >word-info stack-effect>>
-dup inputs>> { "instance" } "x>> input is instance" assert=
-outputs>> { "value" } "x>> output is value" assert=
+dup inputs>> [ name>> ] #map #collect { "instance" } "x>> input is instance" assert=
+outputs>> [ name>> ] #map #collect { "value" } "x>> output is value" assert=
 
 \ -- virtual (simple) --
 
@@ -45,19 +45,19 @@ outputs>> { "value" } "x>> output is value" assert=
 posint: virtual{ fixnum } ;
 
 posint: >word-info stack-effect>>
-outputs>> { "type" } "virtual type word outputs type" assert=
+outputs>> [ name>> ] #map #collect { "type" } "virtual type word outputs type" assert=
 
 >posint: >word-info stack-effect>>
-dup inputs>> { "value" } ">posint input is value" assert=
-outputs>> { "posint" } ">posint output is type name" assert=
+dup inputs>> [ name>> ] #map #collect { "value" } ">posint input is value" assert=
+outputs>> [ name>> ] #map #collect { "posint" } ">posint output is type name" assert=
 
 unmake-posint: >word-info stack-effect>>
-dup inputs>> { "posint" } "unmake-posint input is type name" assert=
-outputs>> { "value" } "unmake-posint output is value" assert=
+dup inputs>> [ name>> ] #map #collect { "posint" } "unmake-posint input is type name" assert=
+outputs>> [ name>> ] #map #collect { "value" } "unmake-posint output is value" assert=
 
 posint?: >word-info stack-effect>>
-dup inputs>> { "val" } "posint? input is val" assert=
-outputs>> { "?" } "posint? output is ?" assert=
+dup inputs>> [ name>> ] #map #collect { "val" } "posint? input is val" assert=
+outputs>> [ name>> ] #map #collect { "?" } "posint? output is ?" assert=
 
 \ -- virtual (struct-backed) --
 
@@ -66,27 +66,27 @@ outputs>> { "?" } "posint? output is ?" assert=
 color: virtual{ struct{ r g b } } ;
 
 color: >word-info stack-effect>>
-outputs>> { "type" } "virtual struct type word outputs type" assert=
+outputs>> [ name>> ] #map #collect { "type" } "virtual struct type word outputs type" assert=
 
 >color: >word-info stack-effect>>
-dup inputs>> { "hash" } ">color input is hash" assert=
-outputs>> { "color" } ">color output is type name" assert=
+dup inputs>> [ name>> ] #map #collect { "hash" } ">color input is hash" assert=
+outputs>> [ name>> ] #map #collect { "color" } ">color output is type name" assert=
 
 make-color: >word-info stack-effect>>
-dup inputs>> { "r" "g" "b" } "make-color inputs are field names" assert=
-outputs>> { "color" } "make-color output is type name" assert=
+dup inputs>> [ name>> ] #map #collect { "r" "g" "b" } "make-color inputs are field names" assert=
+outputs>> [ name>> ] #map #collect { "color" } "make-color output is type name" assert=
 
 unmake-color: >word-info stack-effect>>
-dup inputs>> { "color" } "unmake-color input is type name" assert=
-outputs>> { "r" "g" "b" } "unmake-color outputs are field names" assert=
+dup inputs>> [ name>> ] #map #collect { "color" } "unmake-color input is type name" assert=
+outputs>> [ name>> ] #map #collect { "r" "g" "b" } "unmake-color outputs are field names" assert=
 
 color>hash: >word-info stack-effect>>
-dup inputs>> { "color" } "color>hash input is type name" assert=
-outputs>> { "hash" } "color>hash output is hash" assert=
+dup inputs>> [ name>> ] #map #collect { "color" } "color>hash input is type name" assert=
+outputs>> [ name>> ] #map #collect { "hash" } "color>hash output is hash" assert=
 
 color?: >word-info stack-effect>>
-dup inputs>> { "val" } "color? input is val" assert=
-outputs>> { "?" } "color? output is ?" assert=
+dup inputs>> [ name>> ] #map #collect { "val" } "color? input is val" assert=
+outputs>> [ name>> ] #map #collect { "?" } "color? output is ?" assert=
 
 \ -- enum --
 
@@ -98,15 +98,15 @@ shape: enum{
 } ;
 
 shape: >word-info stack-effect>>
-outputs>> { "type" } "enum type word outputs type" assert=
+outputs>> [ name>> ] #map #collect { "type" } "enum type word outputs type" assert=
 
 shape:circle: >word-info stack-effect>>
 dup inputs>> #len 0 "shape:circle has no inputs" assert=
-outputs>> { "shape:circle" } "shape:circle output is variant name" assert=
+outputs>> [ name>> ] #map #collect { "shape:circle" } "shape:circle output is variant name" assert=
 
 shape:square: >word-info stack-effect>>
-outputs>> { "shape:square" } "shape:square output is variant name" assert=
+outputs>> [ name>> ] #map #collect { "shape:square" } "shape:square output is variant name" assert=
 
 shape?: >word-info stack-effect>>
-dup inputs>> { "val" } "shape? input is val" assert=
-outputs>> { "?" } "shape? output is ?" assert=
+dup inputs>> [ name>> ] #map #collect { "val" } "shape? input is val" assert=
+outputs>> [ name>> ] #map #collect { "?" } "shape? output is ?" assert=
