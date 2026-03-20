@@ -43,3 +43,9 @@ type-annotation>> fixnum "type annotation is fixnum" assert=
 with-effect: ( a b -- c ) [ + ] ;
 with-effect: >word-info stack-effect>> >string
 "( a b -- c )" "effect >string" assert=
+
+"effect without following [ is rejected by ;" test-section
+[ "bad-const: ( n -- n ) 42 ;" eval-string ] "orphan effect rejected" assert-error
+
+"effect separated from [ by call_word is rejected" test-section
+[ "bad-sep: ( n -- n ) dup [ 1 + ] ;" eval-string ] "separated effect rejected" assert-error

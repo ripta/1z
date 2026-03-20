@@ -53,3 +53,11 @@ Stack: [ ]
 Stack: [ "( a b -- c )" ]
 PASS: effect >string
 Stack: [ ]
+=== effect without following [ is rejected by ; ===
+Stack: [ ]
+PASS: orphan effect rejected
+Stack: [ ]
+=== effect separated from [ by call_word is rejected ===
+Stack: [ ]
+PASS: separated effect rejected
+Stack: [ ]
