@@ -39,6 +39,31 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: iterable protocol validates when >iterator is implemented
 Stack: [ ]
 PASS: user-defined >iterator dispatches and produces working iterator
@@ -67,4 +92,17 @@ Stack: [ ]
 PASS: typed protocol fails for missing cross-type method
 Stack: [ ]
 PASS: bare symbol backward compat validates
+Stack: [ ]
+PASS: cross-type arithmetic protocol validates with any
+Stack: [ ]
+PASS: protocol with any in first position validates
+Stack: [ ]
+PASS: any wildcard with no registration throws
+Stack: [ ]
+PASS: partial any-typed methods throws for missing method
+Stack: [ ]
+PASS: error type is protocol-error
+PASS: error message contains type name
+PASS: error message contains method name
+PASS: error message contains protocol name
 Stack: [ ]

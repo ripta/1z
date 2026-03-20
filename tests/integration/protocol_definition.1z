@@ -157,6 +157,96 @@ test-bare-backward-compat: ( -- ) [
   t "bare symbol backward compat validates" assert-true
 ] ;
 
+\ -- Cross-type arithmetic protocol (positive) --
+
+cross-arith: protocol{
+  add: ( a: self b: any -- result )
+  mul: ( a: self b: any -- result )
+} ;
+
+ca-val: virtual{ fixnum } ;
+
+mul: generic ( a b -- c ) [ drop ] ;
+
+add: method{ ca-val fixnum } [
+  swap unmake-ca-val + >ca-val
+] ;
+
+mul: method{ ca-val fixnum } [
+  swap unmake-ca-val * >ca-val
+] ;
+
+test-cross-arith-validates: ( -- ) [
+  ca-val: cross-arith
+  t "cross-type arithmetic protocol validates with any" assert-true
+] ;
+
+\ -- any in first position (positive) --
+
+left-any-proto: protocol{ combine: ( a: any b: self -- result ) } ;
+
+combine: generic ( a b -- c ) [ drop ] ;
+
+la-val: virtual{ fixnum } ;
+
+combine: method{ fixnum la-val } [
+  unmake-la-val + >la-val
+] ;
+
+test-left-any-validates: ( -- ) [
+  la-val: left-any-proto
+  t "protocol with any in first position validates" assert-true
+] ;
+
+\ -- any wildcard with no matching registration (negative) --
+
+any-missing-proto: protocol{ transform: ( a: self b: any -- result ) } ;
+
+transform: generic ( a b -- c ) [ drop ] ;
+
+am-val: virtual{ fixnum } ;
+
+test-any-no-registration: ( -- ) [
+  [ am-val: any-missing-proto ] "any wildcard with no registration throws" assert-error
+] ;
+
+\ -- Multiple any-typed methods, partial registration (negative) --
+
+multi-any-proto: protocol{
+  op-a: ( a: self b: any -- result )
+  op-b: ( a: self b: any -- result )
+} ;
+
+op-a: generic ( a b -- c ) [ drop ] ;
+op-b: generic ( a b -- c ) [ drop ] ;
+
+ma-val: virtual{ fixnum } ;
+
+op-a: method{ ma-val fixnum } [
+  swap unmake-ma-val + >ma-val
+] ;
+
+test-partial-any-methods: ( -- ) [
+  [ ma-val: multi-any-proto ] "partial any-typed methods throws for missing method" assert-error
+] ;
+
+\ -- Error message content for cross-type failure --
+
+err-proto: protocol{ missing-op: ( a: self b: any -- result ) } ;
+
+missing-op: generic ( a b -- c ) [ drop ] ;
+
+err-val: virtual{ fixnum } ;
+
+test-error-message-content: ( -- ) [
+  [ err-val: err-proto ] [ ] recover
+  dup "error-type" @get protocol-error: "error type is protocol-error" assert=
+  "message" @get
+  dup "err-val" #in? "error message contains type name" assert-true
+  dup "missing-op" #in? "error message contains method name" assert-true
+  "err-proto" #in? "error message contains protocol name" assert-true
+] ;
+
 \ -- Run all tests --
 
 test-iterable-validates
@@ -173,3 +263,8 @@ test-typed-self-any
 test-mixed-protocol
 test-typed-protocol-failure
 test-bare-backward-compat
+test-cross-arith-validates
+test-left-any-validates
+test-any-no-registration
+test-partial-any-methods
+test-error-message-content
