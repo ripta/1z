@@ -1,0 +1,6 @@
+\ Test that unknown output types are silently skipped with no false positive
+pragma{ suppress-undeclared: t }
+
+unknown-output: ( -- x ) [ 42 ] ;
+use-fixnum: ( n: fixnum -- m ) [ 1 + ] ;
+chain: ( -- ) [ unknown-output use-fixnum drop ] ;

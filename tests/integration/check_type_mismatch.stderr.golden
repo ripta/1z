@@ -1,0 +1,1 @@
+tests/integration/check_type_mismatch.1z:4: err: bad-caller: type mismatch: typed-add expects fixnum for parameter 'n', but got string

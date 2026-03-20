@@ -1,0 +1,6 @@
+\ Test that pragma type-check: "off" suppresses static type errors
+pragma{ type-check: "off" }
+pragma{ suppress-undeclared: t }
+
+typed-add: ( n: fixnum -- m ) [ 1 + ] ;
+bad-caller: ( -- ) [ "hello" typed-add drop ] ;

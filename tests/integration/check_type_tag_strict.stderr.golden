@@ -1,0 +1,1 @@
+tests/integration/check_type_tag_strict.1z:6: err: bad-chain: type mismatch: use-fixnum expects fixnum for parameter 'n', but got string

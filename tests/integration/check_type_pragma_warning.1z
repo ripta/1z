@@ -1,0 +1,6 @@
+\ Test that pragma type-check: "warning" downgrades type errors to warnings
+pragma{ type-check: "warning" }
+pragma{ suppress-undeclared: t }
+
+typed-add: ( n: fixnum -- m ) [ 1 + ] ;
+bad-caller: ( -- ) [ "hello" typed-add drop ] ;

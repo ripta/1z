@@ -1,0 +1,4 @@
+\ Test that --check detects type mismatch: string passed to fixnum-annotated param
+
+typed-add: ( n: fixnum -- m ) [ 1 + ] ;
+bad-caller: ( -- ) [ "hello" typed-add drop ] ;
