@@ -136,15 +136,15 @@ method{: parse-time [
 ] ;
 
 \\ Protocol definition syntax. Defines a word that validates a type implements all listed methods.
-\   protocol-name: protocol{ method1 method2 } ;
+\   protocol-name: protocol{ method1: method2: } ;
 protocol{: parse-time [
   M{ }
-  methods: "}" parse-tokens-until @set!
+  methods: "}" parse-values-until @set!
   define: [ define-protocol ] @set!
 ] ;
 
 \\ Protocol for types that support three-way comparison via cmp.
-comparable: protocol{ cmp } ;
+comparable: protocol{ cmp: } ;
 
 \\ Dynamic variable definition syntax.
 define-parameter: parse-time [ dup parse-quotation make-parameter ] ;

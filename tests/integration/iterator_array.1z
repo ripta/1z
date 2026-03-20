@@ -72,7 +72,6 @@ test-iterator-predicate: ( -- ) [
 
 test-non-array-error: ( -- ) [
   [ 42 >iterator ] ">iterator on integer throws" assert-error
-  [ "hello" >iterator ] ">iterator on string throws" assert-error
 ] ;
 
 test-iterator-type

@@ -22,6 +22,23 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: iterable protocol validates when >iterator is implemented
 Stack: [ ]
 PASS: user-defined >iterator dispatches and produces working iterator
@@ -40,4 +57,14 @@ Stack: [ ]
 PASS: missing method throws protocol-error
 Stack: [ ]
 PASS: protocol-error has correct error type
+Stack: [ ]
+PASS: typed protocol with self in both positions validates
+Stack: [ ]
+PASS: typed protocol with self and any validates
+Stack: [ ]
+PASS: mixed bare + typed methods in one protocol validates
+Stack: [ ]
+PASS: typed protocol fails for missing cross-type method
+Stack: [ ]
+PASS: bare symbol backward compat validates
 Stack: [ ]

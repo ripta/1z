@@ -62,6 +62,17 @@ pub const recursive_non_tco_marker: Marker = .{ .name = "recursive-non-tco" };
 /// Dispatch wildcard for `method{`, not a type -- no value has type `any`.
 pub const any_marker: Marker = .{ .name = "any" };
 
+/// Protocol self-type marker for type signatures.
+pub const self_marker: Marker = .{ .name = "self" };
+
+/// Sentinel TypeValue for `self` in type annotations.
+/// Used to represent the implementing type. When this type appears at runtime, a concrete type is not known yet.
+pub const self_type_sentinel: value_mod.TypeValue = .{ .name = "self", .descriptor = null };
+
+/// Sentinel TypeValue for `any` in type annotations.
+/// Used to represent any type during a dynamic method dispatch.
+pub const any_type_sentinel: value_mod.TypeValue = .{ .name = "any", .descriptor = null };
+
 pub const primitives = [_]Primitive{
     .{ .name = "define-marker", .stack_effect = "-- marker", .doc = "Create an anonymous marker value.", .func = nativeMarker },
     .{ .name = "parse-time", .stack_effect = "-- marker", .doc = "Push the well-known parse-time marker.", .func = nativeParseTimeMarker, .parse_time = true },
@@ -75,6 +86,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "typed", .stack_effect = "-- marker", .doc = "Push the well-known typed marker.", .func = nativeTypedMarker, .parse_time = true },
     .{ .name = "stack-recursive", .stack_effect = "-- marker", .doc = "Push the well-known stack-recursive marker.", .func = nativeStackRecursiveMarker, .parse_time = true },
     .{ .name = "any", .stack_effect = "-- marker", .doc = "Push the well-known any marker for method dispatch wildcards.", .func = nativeAnyMarker, .parse_time = true, .markers = &.{@constCast(&const_marker)} },
+    .{ .name = "self", .stack_effect = "-- marker", .doc = "Push the well-known self marker for protocol type annotations.", .func = nativeSelfMarker, .parse_time = true, .markers = &.{@constCast(&const_marker)} },
 };
 
 pub const registry_entries = [_]RegistryEntry{
@@ -150,6 +162,11 @@ pub fn nativeAnyMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&any_marker) });
 }
 
+/// self ( -- marker ) - Push the well-known self marker for protocol type annotations
+pub fn nativeSelfMarker(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .marker = @constCast(&self_marker) });
+}
+
 /// Check if a marker is the well-known mutable marker
 pub fn isMutableMarker(mk: *const Marker) bool {
     return mk == &mutable_marker;
@@ -198,6 +215,11 @@ pub fn isTypedMarker(mk: *const Marker) bool {
 /// Check if a marker is the well-known any marker
 pub fn isAnyMarker(mk: *const Marker) bool {
     return mk == &any_marker;
+}
+
+/// Check if a marker is the well-known self marker
+pub fn isSelfMarker(mk: *const Marker) bool {
+    return mk == &self_marker;
 }
 
 /// Check if a marker is the well-known stack-recursive marker

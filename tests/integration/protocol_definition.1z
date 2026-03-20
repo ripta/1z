@@ -2,7 +2,7 @@ use "testing" ;
 
 \ -- Iterable protocol --
 
-iterable: protocol{ >iterator } ;
+iterable: protocol{ >iterator: } ;
 
 \ Define a simple wrapper type and implement >iterator for it
 my-list: virtual{ array } ;
@@ -18,7 +18,7 @@ test-iterable-validates: ( -- ) [
 
 \ -- Custom protocol with multiple methods --
 
-shapeful: protocol{ perimeter area } ;
+shapeful: protocol{ perimeter: area: } ;
 
 circle: virtual{ fixnum } ;
 
@@ -47,7 +47,7 @@ test-shapeful-methods-work: ( -- ) [
 
 \ -- Single-method protocol --
 
-printable: protocol{ inspect } ;
+printable: protocol{ inspect: } ;
 
 my-label: virtual{ string } ;
 
@@ -64,7 +64,7 @@ test-single-method-validates: ( -- ) [
 
 \ -- Validation failure --
 
-showable: protocol{ show } ;
+showable: protocol{ show: } ;
 
 my-thing: virtual{ fixnum } ;
 
@@ -93,6 +93,70 @@ test-iterable-each: ( -- ) [
   6 "user-defined >iterator works with #reduce" assert=
 ] ;
 
+\ -- Typed protocol with self in both positions (same-type) --
+
+self-addable: protocol{ add: ( a: self b: self -- result ) } ;
+
+my-num: virtual{ fixnum } ;
+
+add: generic ( a b -- c ) [ drop ] ;
+
+add: method{ my-num my-num } [
+  unmake-my-num swap unmake-my-num + >my-num
+] ;
+
+test-typed-self-both: ( -- ) [
+  my-num: self-addable
+  t "typed protocol with self in both positions validates" assert-true
+] ;
+
+\ -- Typed protocol with self and any (cross-type) --
+
+scalable: protocol{ scale: ( a: self b: any -- result ) } ;
+
+scale: generic ( a b -- c ) [ drop ] ;
+
+scale: method{ my-num fixnum } [
+  swap unmake-my-num * >my-num
+] ;
+
+test-typed-self-any: ( -- ) [
+  my-num: scalable
+  t "typed protocol with self and any validates" assert-true
+] ;
+
+\ -- Mixed bare + typed methods in one protocol --
+
+inspect: method{ my-num } [
+  unmake-my-num inspect
+] ;
+
+mixed-proto: protocol{ inspect: add: ( a: self b: self -- result ) } ;
+
+test-mixed-protocol: ( -- ) [
+  my-num: mixed-proto
+  t "mixed bare + typed methods in one protocol validates" assert-true
+] ;
+
+\ -- Validation failure for typed protocol (missing cross-type registration) --
+
+cross-scalable: protocol{ scale: ( a: self b: fixnum -- result ) } ;
+
+my-other: virtual{ fixnum } ;
+
+test-typed-protocol-failure: ( -- ) [
+  [ my-other: cross-scalable ] "typed protocol fails for missing cross-type method" assert-error
+] ;
+
+\ -- Backward compat: bare symbol still checks unary/same-type-binary --
+
+bare-proto: protocol{ inspect: } ;
+
+test-bare-backward-compat: ( -- ) [
+  my-label: bare-proto
+  t "bare symbol backward compat validates" assert-true
+] ;
+
 \ -- Run all tests --
 
 test-iterable-validates
@@ -104,3 +168,8 @@ test-shapeful-methods-work
 test-single-method-validates
 test-protocol-failure-throws
 test-protocol-failure-error-type
+test-typed-self-both
+test-typed-self-any
+test-mixed-protocol
+test-typed-protocol-failure
+test-bare-backward-compat
