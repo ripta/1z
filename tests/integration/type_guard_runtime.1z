@@ -1,0 +1,56 @@
+\ Tests for runtime type guards on word entry
+
+use "testing" ;
+
+"basic pass: fixnum annotation accepts fixnum" test-section
+typed-add: ( n: fixnum -- m ) [ 1 + ] ;
+42 typed-add 43 "fixnum accepted" assert=
+
+"basic fail: fixnum annotation rejects string" test-section
+[ "hello" typed-add ] "string rejected by fixnum annotation" assert-error
+
+"tag-strict: virtual type wrapping fixnum does not satisfy fixnum" test-section
+weight: virtual{ fixnum } ;
+100 >weight
+[ typed-add ] "virtual wrapping fixnum rejected" assert-error
+drop
+
+"enum variant matches parent type" test-section
+color: enum{ red: unit green: unit blue: unit } ;
+check-color: ( c: color -- c ) [ ] ;
+color:red check-color color:red "variant accepted by parent type" assert=
+
+"virtual type annotation: correct virtual passes" test-section
+check-weight: ( w: weight -- w ) [ ] ;
+100 >weight check-weight unmake-weight 100 "correct virtual accepted" assert=
+
+"virtual type annotation: unwrapped inner value fails" test-section
+[ 100 check-weight ] "unwrapped fixnum rejected by weight annotation" assert-error
+
+"pragma off: wrong type does not error" test-section
+noop-typed: ( n: fixnum -- n ) [ ] ;
+pragma{ type-check: "off" }
+"hello" noop-typed drop
+
+"pragma warning: wrong type warns but does not error" test-section
+pragma{ type-check: "warning" }
+noop-typed2: ( n: fixnum -- n ) [ ] ;
+"hello" noop-typed2 drop
+
+"multiple annotated params" test-section
+pragma{ type-check: "error" }
+two-typed: ( a: fixnum b: string -- ) [ drop drop ] ;
+42 "hello" two-typed
+[ "hello" "world" two-typed ] "first param type mismatch" assert-error
+[ 42 99 two-typed ] "second param type mismatch" assert-error
+
+"mixed annotated and unannotated" test-section
+mixed: ( a x: fixnum -- ) [ drop drop ] ;
+"anything" 42 mixed
+t 42 mixed
+[ "anything" "hello" mixed ] "annotated param rejects wrong type" assert-error
+
+"row variables with annotations" test-section
+row-typed: ( ..a x: fixnum -- ..a ) [ drop ] ;
+"keep" 42 row-typed "keep" "row var preserved" assert=
+[ "keep" "hello" row-typed ] "annotation on concrete param still checked" assert-error

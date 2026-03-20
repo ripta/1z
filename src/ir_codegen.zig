@@ -2106,6 +2106,10 @@ fn jitValidateParamEffects(ctx_raw: usize, effect_ptr_raw: usize) callconv(.c) i
         ctx.jit_pending_error = err;
         return 2;
     };
+    ctx.validateTypeAnnotations(effect) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
     return 0;
 }
 
@@ -2166,6 +2170,10 @@ fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize) callconv(.c) i32 {
 
     if (word.stack_effect) |effect| {
         ctx.validateParameterEffects(&effect) catch |err| {
+            ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+            return 2;
+        };
+        ctx.validateTypeAnnotations(&effect) catch |err| {
             ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
             return 2;
         };

@@ -1,0 +1,61 @@
+=== basic pass: fixnum annotation accepts fixnum ===
+Stack: [ ]
+Stack: [ ]
+PASS: fixnum accepted
+Stack: [ ]
+=== basic fail: fixnum annotation rejects string ===
+Stack: [ ]
+PASS: string rejected by fixnum annotation
+Stack: [ ]
+=== tag-strict: virtual type wrapping fixnum does not satisfy fixnum ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <weight 100> ]
+PASS: virtual wrapping fixnum rejected
+Stack: [ <weight 100> ]
+Stack: [ ]
+=== enum variant matches parent type ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: variant accepted by parent type
+Stack: [ ]
+=== virtual type annotation: correct virtual passes ===
+Stack: [ ]
+Stack: [ ]
+PASS: correct virtual accepted
+Stack: [ ]
+=== virtual type annotation: unwrapped inner value fails ===
+Stack: [ ]
+PASS: unwrapped fixnum rejected by weight annotation
+Stack: [ ]
+=== pragma off: wrong type does not error ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== pragma warning: wrong type warns but does not error ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== multiple annotated params ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: first param type mismatch
+Stack: [ ]
+PASS: second param type mismatch
+Stack: [ ]
+=== mixed annotated and unannotated ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: annotated param rejects wrong type
+Stack: [ ]
+=== row variables with annotations ===
+Stack: [ ]
+Stack: [ ]
+PASS: row var preserved
+Stack: [ ]
+PASS: annotation on concrete param still checked
+Stack: [ ]

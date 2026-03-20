@@ -353,6 +353,10 @@ pub const Context = struct {
             .native_validator = &control.nativeArityMismatchValidator,
         });
 
+        try self.pragma_registry.put(self.allocator, "type-check", .{
+            .native_validator = &control.nativeTypeCheckValidator,
+        });
+
         // Split prelude into lines and process incrementally
         const source = external_source orelse prelude_source;
         var lines = std.mem.splitScalar(u8, source, '\n');
@@ -1782,6 +1786,74 @@ pub const Context = struct {
         }
     }
 
+    /// Validate type annotations on stack effect input parameters.
+    /// For each annotated input, check that the actual stack value's type
+    /// matches the declared TypeValue via pointer identity.
+    pub fn validateTypeAnnotations(self: *Context, effect: *const StackEffect) !void {
+        // Check pragma for opt-out
+        if (self.getPragma("type-check")) |pv| {
+            if (pv == .string and std.mem.eql(u8, pv.string, "off")) return;
+        }
+
+        const concrete_params = effect.concreteInputCount();
+        if (concrete_params == 0 or self.stack.depth() < concrete_params) return;
+
+        var concrete_index: usize = 0;
+        for (effect.inputs) |param| {
+            if (param.is_row_variable) continue;
+            defer concrete_index += 1;
+
+            const expected_tv = param.type_annotation orelse continue;
+
+            const offset_from_top = concrete_params - 1 - concrete_index;
+            const stack_index = self.stack.depth() - 1 - offset_from_top;
+            const val = self.stack.items.items[stack_index];
+
+            const val_tv: ?*const value_mod.TypeValue = blk: {
+                if (val == .tagged) break :blk val.tagged.tag.type_val;
+                if (val == .struct_instance) break :blk val.struct_instance.struct_type.type_val;
+                if (val == .resource) break :blk self.lookupResourceTypeValue(val.resource.type_name);
+                break :blk self.lookupBuiltinTypeValue(dispatch_mod.dispatchTypeName(val));
+            };
+
+            // Skip check if type values aren't registered yet, e.g., bootstrapping phase
+            if (val_tv == null) continue;
+
+            // Regular types: direct pointer match
+            if (val_tv.? == expected_tv) continue;
+
+            // Tagged values: check parent_type for parameterized types and base_type for enum variant matching
+            //
+            // TODO(ripta): This is a tad ad-hoc, but it allows us to support common patterns like `list of int` parameters,
+            //              and enum variants without requiring explicit type annotations on the tagged value itself.
+            if (val == .tagged) {
+                if (val.tagged.tag.parent_type) |pt| {
+                    if (pt == expected_tv) continue;
+                }
+                if (val.tagged.tag.base_type) |bt| {
+                    if (bt == expected_tv) continue;
+                }
+            }
+
+            // Type mismatch
+            const actual_name = if (val_tv) |vt| vt.name else "unknown";
+            const msg = std.fmt.allocPrint(self.arena.allocator(), "type mismatch for parameter '{s}': expected {s}, got {s}", .{ param.name, expected_tv.name, actual_name }) catch "type mismatch";
+
+            const is_warning = if (self.getPragma("type-check")) |pv2| switch (pv2) {
+                .string => |s| std.mem.eql(u8, s, "warning"),
+                else => false,
+            } else false;
+
+            if (is_warning) {
+                var tw = trace_mod.TraceWriter.init();
+                tw.print("warning: {s}\n", .{msg});
+            } else {
+                self.pending_error_message = msg;
+                return error.TypeError;
+            }
+        }
+    }
+
     /// Capture the current call stack to error_details.
     /// Only captures if error_details is empty (first error).
     fn captureCallStackOnError(self: *Context, err: anyerror) void {
@@ -2152,6 +2224,10 @@ pub const Context = struct {
                                     self.pushCallFrame(name, instr.line, instr.column);
                                     return self.wordErrorCleanup(name, err);
                                 };
+                                self.validateTypeAnnotations(&effect) catch |err| {
+                                    self.pushCallFrame(name, instr.line, instr.column);
+                                    return self.wordErrorCleanup(name, err);
+                                };
                             }
                             const jit_result = ir_codegen.executeCompiled(self, wid);
                             if (self.trace.trace_jit) {
@@ -2177,6 +2253,8 @@ pub const Context = struct {
 
                         if (word.stack_effect) |effect| {
                             self.validateParameterEffects(&effect) catch |err|
+                                return self.wordErrorCleanup(name, err);
+                            self.validateTypeAnnotations(&effect) catch |err|
                                 return self.wordErrorCleanup(name, err);
                         }
 

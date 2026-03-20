@@ -1,0 +1,1 @@
+warning: type mismatch for parameter 'n': expected fixnum, got string
