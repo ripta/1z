@@ -1,0 +1,4 @@
+\ Test that polymorphic (generic) words use base effect for callsite arity check
+
+\ + is generic with base effect ( a b -- c ), needs 2 inputs
+under-generic: ( a -- c ) [ + ] ;

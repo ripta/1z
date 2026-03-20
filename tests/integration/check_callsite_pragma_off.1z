@@ -1,0 +1,7 @@
+\ Test that callsite-arity-mismatch pragma "off" suppresses diagnostics
+
+pragma{ callsite-arity-mismatch: "off" }
+
+\ Same underflow that would normally be an error
+under1: ( a -- c ) [ + ] ;
+under2: ( -- ) [ drop ] ;

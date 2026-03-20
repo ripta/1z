@@ -1,0 +1,5 @@
+tests/integration/check_callsite_underflow.1z:13: warning: no-effect: word has no declared stack effect
+tests/integration/check_callsite_underflow.1z:10: err: under2: call to 'drop' requires 1 value(s) but only 0 available
+tests/integration/check_callsite_underflow.1z:10: err: under2: declared stack effect delta is 0, but inferred delta is -1
+tests/integration/check_callsite_underflow.1z:4: err: under1: call to '+' requires 2 value(s) but only 1 available
+tests/integration/check_callsite_underflow.1z:4: err: under1: declared stack effect delta is 0, but inferred delta is -1

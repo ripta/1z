@@ -1,0 +1,5 @@
+\ Test that callsite-arity-mismatch pragma "warning" downgrades to warning
+
+pragma{ callsite-arity-mismatch: "warning" }
+
+under1: ( a -- c ) [ + ] ;

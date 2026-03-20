@@ -1,0 +1,2 @@
+tests/integration/check_callsite_pragma_warning.1z:5: warning: under1: call to '+' requires 2 value(s) but only 1 available
+tests/integration/check_callsite_pragma_warning.1z:5: err: under1: declared stack effect delta is 0, but inferred delta is -1

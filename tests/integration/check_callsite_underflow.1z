@@ -1,0 +1,17 @@
+\ Test that --check detects callsite arity underflow
+
+\ Caller provides 1 value but + needs 2
+under1: ( a -- c ) [ + ] ;
+
+\ Caller provides 2 values, sufficient for +
+ok1: ( a b -- c ) [ + ] ;
+
+\ Caller provides 0 values but drop needs 1
+under2: ( -- ) [ drop ] ;
+
+\ Caller has no declared effect -- should be skipped
+no-effect: [ drop ] ;
+
+\ Callee has row variables -- should be skipped
+row-callee: ( ..a x -- ..a ) [ drop ] ;
+calls-row: ( a -- ) [ row-callee ] ;

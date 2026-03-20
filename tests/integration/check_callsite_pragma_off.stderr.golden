@@ -1,0 +1,2 @@
+tests/integration/check_callsite_pragma_off.1z:7: err: under2: declared stack effect delta is 0, but inferred delta is -1
+tests/integration/check_callsite_pragma_off.1z:6: err: under1: declared stack effect delta is 0, but inferred delta is -1
