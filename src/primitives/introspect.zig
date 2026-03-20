@@ -37,11 +37,15 @@ pub const registry_entries = [_]RegistryEntry{
 const StackEffectParam = @import("../stack_effect.zig").StackEffectParam;
 
 fn buildStackEffectParamValue(alloc: Allocator, param: StackEffectParam) Allocator.Error!Value {
-    const fields = try alloc.alloc(Value, 3);
+    const fields = try alloc.alloc(Value, 4);
     fields[0] = .{ .string = param.name };
     fields[1] = .{ .boolean = param.is_row_variable };
     fields[2] = if (param.quotation_effect) |nested|
         try buildStackEffectValue(alloc, nested)
+    else
+        .{ .boolean = false };
+    fields[3] = if (param.type_annotation) |ta|
+        Value{ .string = ta }
     else
         .{ .boolean = false };
     return .{ .array = fields };

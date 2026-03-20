@@ -688,12 +688,17 @@ try-acquire: generic ( resource -- option ) [ "acquirable resource" throw-type-e
 \ Introspection struct types
 
 \\ A single parameter in a stack effect declaration.
-stack-effect-param: struct{ name row-variable? nested-effect } ;
+stack-effect-param: struct{ name row-variable? nested-effect type-annotation } ;
 
 \\ Format a stack-effect-param as a string for display.
 >string: method{ stack-effect-param } [
   dup nested-effect>> dup f = [
-    drop name>>
+    drop
+    dup type-annotation>> dup f = [
+      drop name>>
+    ] [
+      swap name>> ": " #append swap #append
+    ] if
   ] [
     >string swap name>> ": " #append swap #append
   ] if
@@ -733,6 +738,7 @@ word-info: struct{ name stack-effect doc markers native? body methods source-loc
     dup 0 #nth
     over 1 #nth
     2 pick-n 2 #nth >stack-effect-info
+    3 pick-n 3 #nth
     make-stack-effect-param nip
   ] ;
   >stack-effect-info: [

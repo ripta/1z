@@ -573,6 +573,7 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Cont
 
     var current_list = &inputs;
     var pending_param_name: ?[]const u8 = null;
+    var pending_is_annotated: bool = false;
 
     while (nextTokenOrYield(tokenizer)) |tok| {
         if (tok.kind == .doc_comment) continue;
@@ -592,11 +593,16 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Cont
                 };
                 current_list.append(allocator, param) catch return ParseError.OutOfMemory;
                 pending_param_name = null;
+                pending_is_annotated = false;
             } else {
                 // Unexpected ( without a parameter name
                 return ParseError.OutOfMemory;
             }
         } else if (std.mem.eql(u8, token, ")")) {
+            if (pending_is_annotated) {
+                // Annotation colon without a type following
+                return ParseError.OutOfMemory;
+            }
             // Flush any pending parameter
             if (pending_param_name) |name| {
                 current_list.append(allocator, .{ .name = name, .is_row_variable = stack_effect_mod.isRowVariable(name) }) catch return ParseError.OutOfMemory;
@@ -607,26 +613,41 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Cont
                 .outputs = outputs.toOwnedSlice(allocator) catch return ParseError.OutOfMemory,
             };
         } else if (std.mem.eql(u8, token, "--")) {
+            if (pending_is_annotated) {
+                // Annotation colon without a type following
+                return ParseError.OutOfMemory;
+            }
             // Flush pending parameter before switching
             if (pending_param_name) |name| {
                 current_list.append(allocator, .{ .name = name, .is_row_variable = stack_effect_mod.isRowVariable(name) }) catch return ParseError.OutOfMemory;
                 pending_param_name = null;
             }
             current_list = &outputs;
+        } else if (pending_param_name) |name| {
+            if (pending_is_annotated) {
+                const type_name = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
+                current_list.append(allocator, .{
+                    .name = name,
+                    .type_annotation = type_name,
+                    .is_row_variable = stack_effect_mod.isRowVariable(name),
+                }) catch return ParseError.OutOfMemory;
+                pending_param_name = null;
+                pending_is_annotated = false;
+            } else if (token.len > 0 and token[token.len - 1] == ':') {
+                current_list.append(allocator, .{ .name = name, .is_row_variable = stack_effect_mod.isRowVariable(name) }) catch return ParseError.OutOfMemory;
+                pending_param_name = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
+                pending_is_annotated = true;
+            } else {
+                current_list.append(allocator, .{ .name = name, .is_row_variable = stack_effect_mod.isRowVariable(name) }) catch return ParseError.OutOfMemory;
+                pending_param_name = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
+                pending_is_annotated = false;
+            }
         } else if (token.len > 0 and token[token.len - 1] == ':') {
-            // Flush previous pending parameter (if any)
-            if (pending_param_name) |name| {
-                current_list.append(allocator, .{ .name = name, .is_row_variable = stack_effect_mod.isRowVariable(name) }) catch return ParseError.OutOfMemory;
-            }
-            // This is a parameter name with annotation (strip the colon)
             pending_param_name = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
+            pending_is_annotated = true;
         } else {
-            // Flush previous pending parameter (if any)
-            if (pending_param_name) |name| {
-                current_list.append(allocator, .{ .name = name, .is_row_variable = stack_effect_mod.isRowVariable(name) }) catch return ParseError.OutOfMemory;
-            }
-            // Regular parameter name
             pending_param_name = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
+            pending_is_annotated = false;
         }
     }
 

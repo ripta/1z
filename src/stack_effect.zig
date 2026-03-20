@@ -8,6 +8,9 @@ pub const StackEffectParam = struct {
     quotation_effect: ?*const StackEffect = null,
     /// True if name starts with ".." (a row variable like ..a, ..b)
     is_row_variable: bool = false,
+    /// If non-null, this parameter has a type annotation (e.g., "fixnum", "array(fixnum)").
+    /// Mutually exclusive with quotation_effect.
+    type_annotation: ?[]const u8 = null,
 
     /// Write parameter to writer.
     pub fn write(self: StackEffectParam, writer: anytype) anyerror!void {
@@ -15,12 +18,26 @@ pub const StackEffectParam = struct {
         if (self.quotation_effect) |effect| {
             try writer.writeAll(": ");
             try effect.write(writer);
+        } else if (self.type_annotation) |type_name| {
+            try writer.writeAll(": ");
+            try writer.writeAll(type_name);
         }
     }
 
     pub fn eql(self: StackEffectParam, other: StackEffectParam) bool {
         if (!std.mem.eql(u8, self.name, other.name)) return false;
         if (self.is_row_variable != other.is_row_variable) return false;
+
+        const self_ta = self.type_annotation;
+        const other_ta = other.type_annotation;
+        if (self_ta == null and other_ta == null) {
+            // fall through to quotation_effect comparison
+        } else if (self_ta != null and other_ta != null) {
+            if (!std.mem.eql(u8, self_ta.?, other_ta.?)) return false;
+        } else {
+            return false;
+        }
+
         if (self.quotation_effect == null and other.quotation_effect == null) return true;
         if (self.quotation_effect == null or other.quotation_effect == null) return false;
         return self.quotation_effect.?.eql(other.quotation_effect.?.*);
@@ -467,4 +484,50 @@ test "passThroughParams for dip (one pass-through)" {
     try std.testing.expectEqual(@as(usize, 1), result.len);
     try std.testing.expectEqual(@as(usize, 0), result.slice()[0].input_concrete_idx);
     try std.testing.expectEqual(@as(usize, 0), result.slice()[0].output_concrete_idx);
+}
+
+test "type_annotation write format" {
+    const param = StackEffectParam{ .name = "n", .type_annotation = "fixnum" };
+
+    var buf: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try param.write(fbs.writer());
+    try std.testing.expectEqualStrings("n: fixnum", fbs.getWritten());
+}
+
+test "type_annotation in full stack effect" {
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "n", .type_annotation = "fixnum" },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "m", .type_annotation = "fixnum" },
+        },
+    };
+
+    var buf: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try effect.write(fbs.writer());
+    try std.testing.expectEqualStrings("( n: fixnum -- m: fixnum )", fbs.getWritten());
+}
+
+test "type_annotation equality" {
+    const a = StackEffectParam{ .name = "n", .type_annotation = "fixnum" };
+    const b = StackEffectParam{ .name = "n", .type_annotation = "fixnum" };
+    const c = StackEffectParam{ .name = "n", .type_annotation = "string" };
+    const d = StackEffectParam{ .name = "n" };
+
+    try std.testing.expect(a.eql(b));
+    try std.testing.expect(!a.eql(c));
+    try std.testing.expect(!a.eql(d));
+    try std.testing.expect(!d.eql(a));
+}
+
+test "type_annotation parameterized type" {
+    const param = StackEffectParam{ .name = "arr", .type_annotation = "array(fixnum)" };
+
+    var buf: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try param.write(fbs.writer());
+    try std.testing.expectEqualStrings("arr: array(fixnum)", fbs.getWritten());
 }

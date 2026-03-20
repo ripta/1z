@@ -1,12 +1,12 @@
 === quotation>effect returns effect for annotated quotation ===
 Stack: [ ]
-Stack: [ { { { "a" f f } { "b" f f } } { { "c" f f } } } ]
+Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } ]
 PASS: quotation>effect returns non-false for annotated quotation
-Stack: [ { { { "a" f f } { "b" f f } } { { "c" f f } } } ]
+Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } ]
 PASS: quotation>effect returns an array
-Stack: [ { { { "a" f f } { "b" f f } } { { "c" f f } } } ]
+Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } ]
 PASS: quotation>effect inputs has 2 params
-Stack: [ { { { "a" f f } { "b" f f } } { { "c" f f } } } ]
+Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } ]
 PASS: quotation>effect outputs has 1 param
 Stack: [ ]
 === quotation>effect returns false for unannotated quotation ===
@@ -14,53 +14,55 @@ Stack: [ ]
 Stack: [ f ]
 PASS: quotation>effect returns false for unannotated quotation
 Stack: [ ]
-=== quotation>effect raw param is 3-element array ===
+=== quotation>effect raw param is 4-element array ===
 Stack: [ ]
-Stack: [ { { { "x" f f } } { { "y" f f } } } ]
-Stack: [ { "x" f f } ]
+Stack: [ { { { "x" f f f } } { { "y" f f f } } } ]
+Stack: [ { "x" f f f } ]
 PASS: raw param name is x
-Stack: [ { "x" f f } ]
+Stack: [ { "x" f f f } ]
 PASS: raw param is not a row variable
-Stack: [ { "x" f f } ]
+Stack: [ { "x" f f f } ]
 PASS: raw param has no nested effect
+Stack: [ { "x" f f f } ]
+PASS: raw param has no type annotation
 Stack: [ ]
 === quotation>effect with row variable ===
 Stack: [ ]
-Stack: [ { { { "..a" t f } { "x" f f } } { { "..a" t f } { "y" f f } } } ]
-Stack: [ { "..a" t f } ]
+Stack: [ { { { "..a" t f f } { "x" f f f } } { { "..a" t f f } { "y" f f f } } } ]
+Stack: [ { "..a" t f f } ]
 PASS: row variable name is ..a
-Stack: [ { "..a" t f } ]
+Stack: [ { "..a" t f f } ]
 PASS: row variable flag is true
 Stack: [ ]
 === quotation>effect with nested quotation effect ===
 Stack: [ ]
-Stack: [ { { { "..a" t f } { "seq" f f } { "quot" f { { { "x" f f } } { { "y" f f } } } } } { { "..a" t f } { "seq" f f } } } ]
-Stack: [ { { "..a" t f } { "seq" f f } { "quot" f { { { "x" f f } } { { "y" f f } } } } } ]
+Stack: [ { { { "..a" t f f } { "seq" f f f } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } { { "..a" t f f } { "seq" f f f } } } ]
+Stack: [ { { "..a" t f f } { "seq" f f f } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } ]
 PASS: nested param name is quot
-Stack: [ { { "..a" t f } { "seq" f f } { "quot" f { { { "x" f f } } { { "y" f f } } } } } { "quot" f { { { "x" f f } } { { "y" f f } } } } ]
+Stack: [ { { "..a" t f f } { "seq" f f f } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } ]
 PASS: nested param is not a row variable
-Stack: [ { { "..a" t f } { "seq" f f } { "quot" f { { { "x" f f } } { { "y" f f } } } } } { "quot" f { { { "x" f f } } { { "y" f f } } } } ]
+Stack: [ { { "..a" t f f } { "seq" f f f } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } ]
 PASS: nested param has a nested effect
-Stack: [ { { "..a" t f } { "seq" f f } { "quot" f { { { "x" f f } } { { "y" f f } } } } } { { { "x" f f } } { { "y" f f } } } ]
+Stack: [ { { "..a" t f f } { "seq" f f f } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } { { { "x" f f f } } { { "y" f f f } } } ]
 PASS: nested effect is an array
-Stack: [ { { "..a" t f } { "seq" f f } { "quot" f { { { "x" f f } } { { "y" f f } } } } } { { { "x" f f } } { { "y" f f } } } ]
+Stack: [ { { "..a" t f f } { "seq" f f f } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } { { { "x" f f f } } { { "y" f f f } } } ]
 PASS: nested effect has 1 input
-Stack: [ { { "..a" t f } { "seq" f f } { "quot" f { { { "x" f f } } { { "y" f f } } } } } { { { "x" f f } } { { "y" f f } } } ]
+Stack: [ { { "..a" t f f } { "seq" f f f } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } { { { "x" f f f } } { { "y" f f f } } } ]
 PASS: nested effect has 1 output
-Stack: [ { { "..a" t f } { "seq" f f } { "quot" f { { { "x" f f } } { { "y" f f } } } } } ]
+Stack: [ { { "..a" t f f } { "seq" f f f } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } ]
 Stack: [ ]
 === >word-info works end-to-end with enriched params ===
 Stack: [ ]
-Stack: [ word-info{ name: "dup" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } } doc: "Duplicate top of stack." markers: { } native?: t body: f methods: { } source-loc: f module: f provenance: f } ]
-Stack: [ word-info{ name: "dup" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } } doc: "Duplicate top of stack." markers: { } native?: t body: f methods: { } source-loc: f module: f provenance: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f } ]
+Stack: [ word-info{ name: "dup" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } } doc: "Duplicate top of stack." markers: { } native?: t body: f methods: { } source-loc: f module: f provenance: f } ]
+Stack: [ word-info{ name: "dup" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } } doc: "Duplicate top of stack." markers: { } native?: t body: f methods: { } source-loc: f module: f provenance: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } ]
 PASS: input param is a stack-effect-param struct
-Stack: [ word-info{ name: "dup" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } } doc: "Duplicate top of stack." markers: { } native?: t body: f methods: { } source-loc: f module: f provenance: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f } ]
+Stack: [ word-info{ name: "dup" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } } doc: "Duplicate top of stack." markers: { } native?: t body: f methods: { } source-loc: f module: f provenance: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } ]
 PASS: input param name is a
-Stack: [ word-info{ name: "dup" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } } doc: "Duplicate top of stack." markers: { } native?: t body: f methods: { } source-loc: f module: f provenance: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f } ]
+Stack: [ word-info{ name: "dup" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } } doc: "Duplicate top of stack." markers: { } native?: t body: f methods: { } source-loc: f module: f provenance: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } ]
 PASS: input param is not a row variable
-Stack: [ word-info{ name: "dup" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } } doc: "Duplicate top of stack." markers: { } native?: t body: f methods: { } source-loc: f module: f provenance: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f } ]
+Stack: [ word-info{ name: "dup" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } } doc: "Duplicate top of stack." markers: { } native?: t body: f methods: { } source-loc: f module: f provenance: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } ]
 PASS: input param has no nested effect
-Stack: [ word-info{ name: "dup" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } outputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f } } } doc: "Duplicate top of stack." markers: { } native?: t body: f methods: { } source-loc: f module: f provenance: f } ]
+Stack: [ word-info{ name: "dup" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } } doc: "Duplicate top of stack." markers: { } native?: t body: f methods: { } source-loc: f module: f provenance: f } ]
 PASS: stack-effect >string still works
 Stack: [ ]
 === stack-effect-param >string for simple param ===
@@ -70,9 +72,9 @@ PASS: simple param >string
 Stack: [ ]
 === stack-effect-param >string with nested effect ===
 Stack: [ ]
-Stack: [ V{ stack-effect-param{ name: "x" row-variable?: f nested-effect: f } } ]
-Stack: [ V{ stack-effect-param{ name: "x" row-variable?: f nested-effect: f } } V{ stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } ]
-Stack: [ stack-effect-info{ inputs: V{ stack-effect-param{ name: "x" row-variable?: f nested-effect: f } } outputs: V{ stack-effect-param{ name: "y" row-variable?: f nested-effect: f } } } ]
+Stack: [ V{ stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } ]
+Stack: [ V{ stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } V{ stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } ]
+Stack: [ stack-effect-info{ inputs: V{ stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: V{ stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } ]
 Stack: [ "quot: ( x -- y )" ]
 PASS: nested param >string
 Stack: [ ]

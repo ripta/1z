@@ -6,6 +6,7 @@
   dup 0 #nth
   over 1 #nth
   2 pick-n 2 #nth (raw>effect)
+  3 pick-n 3 #nth
   make-stack-effect-param nip
 ] ;
 

@@ -13,12 +13,13 @@ dup #first #len 2 "quotation>effect inputs has 2 params" assert=
 [ 1 + ] native.quotation>effect
 f "quotation>effect returns false for unannotated quotation" assert=
 
-"quotation>effect raw param is 3-element array" test-section
+"quotation>effect raw param is 4-element array" test-section
 [ ( x -- y ) 1 + ] native.quotation>effect
 #first #first
 dup 0 #nth "x" "raw param name is x" assert=
 dup 1 #nth f "raw param is not a row variable" assert=
-2 #nth f "raw param has no nested effect" assert=
+dup 2 #nth f "raw param has no nested effect" assert=
+3 #nth f "raw param has no type annotation" assert=
 
 "quotation>effect with row variable" test-section
 [ ( ..a x -- ..a y ) 1 + ] native.quotation>effect
@@ -47,12 +48,12 @@ nested-effect>> f "input param has no nested effect" assert=
 stack-effect>> >string "( a -- a a )" "stack-effect >string still works" assert=
 
 "stack-effect-param >string for simple param" test-section
-"x" f f make-stack-effect-param >string
+"x" f f f make-stack-effect-param >string
 "x" "simple param >string" assert=
 
 "stack-effect-param >string with nested effect" test-section
-"x" f f make-stack-effect-param V{ } swap #push
-"y" f f make-stack-effect-param V{ } swap #push
+"x" f f f make-stack-effect-param V{ } swap #push
+"y" f f f make-stack-effect-param V{ } swap #push
 make-stack-effect-info
-"quot" f 2 pick-n make-stack-effect-param nip >string
+"quot" f 2 pick-n f make-stack-effect-param nip >string
 "quot: ( x -- y )" "nested param >string" assert=
