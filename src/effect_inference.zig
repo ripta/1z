@@ -399,8 +399,30 @@ pub const InferenceEngine = struct {
         var delta: i64 = 0;
         var stack_model: std.ArrayListUnmanaged(StackEntry) = .{};
         defer stack_model.deinit(self.allocator);
+        var uncertain: bool = false;
+        var uncertain_source: ?[]const u8 = null;
+        var uncertain_is_polymorphic: bool = false;
+        var dead_code: bool = false;
+        var dead_code_warned: bool = false;
 
         for (instructions) |instr| {
+            if (dead_code) {
+                if (!dead_code_warned) {
+                    try self.emitDiagnostic(.{
+                        .word_name = caller.word_name,
+                        .source_file = caller.source_file,
+                        .source_line = instr.line,
+                        .severity = .warning,
+                        .message = try std.fmt.allocPrint(
+                            self.allocator,
+                            "dead code: unreachable after guaranteed underflow",
+                            .{},
+                        ),
+                    });
+                    dead_code_warned = true;
+                }
+                continue;
+            }
             switch (instr.op) {
                 .push_literal => |val| {
                     delta += 1;
@@ -421,6 +443,16 @@ pub const InferenceEngine = struct {
                         if (std.mem.indexOfScalar(u8, name, '.') != null) {
                             if (self.resolveQualifiedName(name)) |mod_word| {
                                 if (mod_word.polymorphic) {
+                                    if (mod_word.stack_effect) |eff| {
+                                        if (computeDeclaredDelta(eff)) |result| {
+                                            delta += result.known;
+                                            try adjustStackModel(&stack_model, result.known, self.allocator);
+                                            uncertain = true;
+                                            uncertain_source = name;
+                                            uncertain_is_polymorphic = true;
+                                            continue;
+                                        }
+                                    }
                                     self.last_unknown_callee = name;
                                     self.last_unknown_is_polymorphic = true;
                                     return .unknown;
@@ -520,7 +552,23 @@ pub const InferenceEngine = struct {
                     }
 
                     if (self.arity_check_mode != .off) {
-                        try self.checkCallsiteArity(&wd, name, delta, caller, instr.line);
+                        const guaranteed = try self.checkCallsiteArity(&wd, name, delta, caller, instr.line, uncertain, uncertain_source);
+                        if (guaranteed) {
+                            dead_code = true;
+                            continue;
+                        }
+                    }
+
+                    if (isDynamicCall(name)) {
+                        if (wd.stack_effect) |eff| {
+                            if (computeDeclaredDelta(eff)) |result| {
+                                delta += result.known;
+                                try adjustStackModel(&stack_model, result.known, self.allocator);
+                                uncertain = true;
+                                uncertain_source = name;
+                                continue;
+                            }
+                        }
                     }
 
                     const callee_result = try self.inferWord(name);
@@ -529,10 +577,29 @@ pub const InferenceEngine = struct {
                             delta += callee_delta;
                             try self.adjustStackModelTyped(&wd, &stack_model, callee_delta);
                         },
-                        .unknown => return .unknown,
+                        .unknown => {
+                            if (wd.stack_effect) |eff| {
+                                if (computeDeclaredDelta(eff)) |result| {
+                                    delta += result.known;
+                                    try adjustStackModel(&stack_model, result.known, self.allocator);
+                                    uncertain = true;
+                                    uncertain_source = name;
+                                    continue;
+                                }
+                            }
+                            return .unknown;
+                        },
                     }
                 },
             }
+        }
+
+        if (dead_code or uncertain) {
+            if (uncertain and uncertain_source != null and !isDynamicCall(uncertain_source.?)) {
+                self.last_unknown_callee = uncertain_source;
+                self.last_unknown_is_polymorphic = uncertain_is_polymorphic;
+            }
+            return .unknown;
         }
 
         if (out_stack) |os| {
@@ -984,14 +1051,30 @@ pub const InferenceEngine = struct {
         delta: i64,
         caller: CallerInfo,
         call_line: usize,
-    ) Allocator.Error!void {
-        const caller_inputs = caller.declared_input_count orelse return;
-        const callee_eff = word_def.stack_effect orelse return;
-        if (stack_effect_mod.hasAnyRowVariable(callee_eff)) return;
+        is_uncertain: bool,
+        uncertain_src: ?[]const u8,
+    ) Allocator.Error!bool {
+        const caller_inputs = caller.declared_input_count orelse return false;
+        const callee_eff = word_def.stack_effect orelse return false;
+        if (stack_effect_mod.hasAnyRowVariable(callee_eff)) return false;
         const required = callee_eff.concreteInputCount();
-        if (required == 0) return;
+        if (required == 0) return false;
         const available = @as(i64, @intCast(caller_inputs)) + delta;
         if (available < @as(i64, @intCast(required))) {
+            if (is_uncertain) {
+                try self.emitDiagnostic(.{
+                    .word_name = caller.word_name,
+                    .source_file = caller.source_file,
+                    .source_line = call_line,
+                    .severity = .warning,
+                    .message = try std.fmt.allocPrint(
+                        self.allocator,
+                        "potential underflow: call to '{s}' requires {d} value(s) but only {d} available (depth uncertain due to '{s}')",
+                        .{ callee_name, required, available, uncertain_src orelse "unknown" },
+                    ),
+                });
+                return false;
+            }
             const severity: Severity = if (self.arity_check_mode == .warning) .warning else .err;
             try self.emitDiagnostic(.{
                 .word_name = caller.word_name,
@@ -1004,7 +1087,9 @@ pub const InferenceEngine = struct {
                     .{ callee_name, required, available },
                 ),
             });
+            return severity == .err;
         }
+        return false;
     }
 
     fn adjustStackModelTyped(
@@ -1091,6 +1176,10 @@ fn computeDeclaredDelta(effect: StackEffect) ?InferenceResult {
     const inputs: i64 = @intCast(effect.inputs.len);
     const outputs: i64 = @intCast(effect.outputs.len);
     return .{ .known = outputs - inputs };
+}
+
+fn isDynamicCall(name: []const u8) bool {
+    return std.mem.eql(u8, name, "eval-string");
 }
 
 fn isGeneric(word_def: *const WordDefinition) bool {
