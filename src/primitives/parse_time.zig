@@ -12,6 +12,7 @@ const Primitive = @import("types.zig").Primitive;
 const popString = helpers.popString;
 
 pub const primitives = [_]Primitive{
+    .{ .name = "(", .stack_effect = "-- stack-effect", .doc = "Parse a stack effect declaration.", .func = nativeOpenParen, .parse_time = true },
     .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .doc = "Read tokens until delimiter, return as quotation.", .func = nativeParseUntil, .parse_time_only = true },
     .{ .name = "parse-tokens-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, return as string array.", .func = nativeParseTokensUntil, .parse_time_only = true },
     .{ .name = "parse-values-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, executing parse-time words. Return as array.", .func = nativeParseValuesUntil, .parse_time_only = true },
@@ -139,6 +140,15 @@ fn tryResolveLiteral(ctx: *Context, alloc: std.mem.Allocator, tokenizer: *tokeni
     }
 
     return error.NotALiteral;
+}
+
+/// ( ( -- stack-effect ) - Parse a stack effect declaration from the tokenizer.
+fn nativeOpenParen(ctx: *Context) anyerror!void {
+    const tokenizer = ctx.parse_tokenizer.?;
+    const alloc = ctx.quotationAllocator();
+    const line = if (tokenizer.peeked) |p| p.line else 0;
+    const effect = parser.parseStackEffect(alloc, tokenizer, ctx, line) catch return error.ParseError;
+    try ctx.stack.push(.{ .stack_effect = effect });
 }
 
 /// parse-until ( delimiter -- quotation ) - Read tokens until delimiter, return as quotation

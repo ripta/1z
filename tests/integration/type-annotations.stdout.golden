@@ -1,53 +1,53 @@
 === simple type annotation round-trips ===
 Stack: [ ]
-Stack: [ { { { "n" f f "fixnum" } } { { "m" f f "fixnum" } } } ]
-Stack: [ { { { "n" f f "fixnum" } } { { "m" f f "fixnum" } } } { "n" f f "fixnum" } ]
+Stack: [ { { { "n" f f <type:fixnum> } } { { "m" f f <type:fixnum> } } } ]
+Stack: [ { { { "n" f f <type:fixnum> } } { { "m" f f <type:fixnum> } } } { "n" f f <type:fixnum> } ]
 PASS: input param name
-Stack: [ { { { "n" f f "fixnum" } } { { "m" f f "fixnum" } } } { "n" f f "fixnum" } ]
+Stack: [ { { { "n" f f <type:fixnum> } } { { "m" f f <type:fixnum> } } } { "n" f f <type:fixnum> } ]
 PASS: input is not a row variable
-Stack: [ { { { "n" f f "fixnum" } } { { "m" f f "fixnum" } } } { "n" f f "fixnum" } ]
+Stack: [ { { { "n" f f <type:fixnum> } } { { "m" f f <type:fixnum> } } } { "n" f f <type:fixnum> } ]
 PASS: input has no nested effect
-Stack: [ { { { "n" f f "fixnum" } } { { "m" f f "fixnum" } } } { "n" f f "fixnum" } ]
-PASS: input type annotation
-Stack: [ { { { "n" f f "fixnum" } } { { "m" f f "fixnum" } } } ]
-Stack: [ { "m" f f "fixnum" } ]
+Stack: [ { { { "n" f f <type:fixnum> } } { { "m" f f <type:fixnum> } } } { "n" f f <type:fixnum> } ]
+PASS: input type annotation is fixnum TypeValue
+Stack: [ { { { "n" f f <type:fixnum> } } { { "m" f f <type:fixnum> } } } ]
+Stack: [ { "m" f f <type:fixnum> } ]
 PASS: output param name
-Stack: [ { "m" f f "fixnum" } ]
-PASS: output type annotation
+Stack: [ { "m" f f <type:fixnum> } ]
+PASS: output type annotation is fixnum TypeValue
 Stack: [ ]
-=== parameterized type annotation is a single token ===
+=== second basic type annotation ===
 Stack: [ ]
-Stack: [ { { { "arr" f f "array(fixnum)" } } { { "n" f f "fixnum" } } } ]
-Stack: [ { "arr" f f "array(fixnum)" } ]
-PASS: parameterized input name
-Stack: [ { "arr" f f "array(fixnum)" } ]
-PASS: parameterized type annotation
+Stack: [ { { { "arr" f f <type:array> } } { { "n" f f <type:fixnum> } } } ]
+Stack: [ { "arr" f f <type:array> } ]
+PASS: second basic input name
+Stack: [ { "arr" f f <type:array> } ]
+PASS: type annotation is array TypeValue
 Stack: [ ]
 === type annotations with row variables ===
 Stack: [ ]
-Stack: [ { { { "..a" t f f } { "x" f f "fixnum" } } { { "..a" t f f } { "y" f f "string" } } } ]
-Stack: [ { { { "..a" t f f } { "x" f f "fixnum" } } { { "..a" t f f } { "y" f f "string" } } } { { "..a" t f f } { "x" f f "fixnum" } } ]
+Stack: [ { { { "..a" t f f } { "x" f f <type:fixnum> } } { { "..a" t f f } { "y" f f <type:string> } } } ]
+Stack: [ { { { "..a" t f f } { "x" f f <type:fixnum> } } { { "..a" t f f } { "y" f f <type:string> } } } { { "..a" t f f } { "x" f f <type:fixnum> } } ]
 PASS: first input is row variable
-Stack: [ { { { "..a" t f f } { "x" f f "fixnum" } } { { "..a" t f f } { "y" f f "string" } } } { { "..a" t f f } { "x" f f "fixnum" } } ]
+Stack: [ { { { "..a" t f f } { "x" f f <type:fixnum> } } { { "..a" t f f } { "y" f f <type:string> } } } { { "..a" t f f } { "x" f f <type:fixnum> } } ]
 PASS: row variable flag is true
-Stack: [ { { { "..a" t f f } { "x" f f "fixnum" } } { { "..a" t f f } { "y" f f "string" } } } { { "..a" t f f } { "x" f f "fixnum" } } ]
+Stack: [ { { { "..a" t f f } { "x" f f <type:fixnum> } } { { "..a" t f f } { "y" f f <type:string> } } } { { "..a" t f f } { "x" f f <type:fixnum> } } ]
 PASS: second input name
-Stack: [ { { { "..a" t f f } { "x" f f "fixnum" } } { { "..a" t f f } { "y" f f "string" } } } ]
-Stack: [ { { "..a" t f f } { "y" f f "string" } } ]
+Stack: [ { { { "..a" t f f } { "x" f f <type:fixnum> } } { { "..a" t f f } { "y" f f <type:string> } } } ]
+Stack: [ { { "..a" t f f } { "y" f f <type:string> } } ]
 PASS: first output is row variable
-Stack: [ { { "..a" t f f } { "y" f f "string" } } ]
+Stack: [ { { "..a" t f f } { "y" f f <type:string> } } ]
 PASS: output type annotation
 Stack: [ ]
 === mixed type annotation and quotation annotation ===
 Stack: [ ]
-Stack: [ { { { "arr" f f "array" } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } { { "arr2" f f "array" } } } ]
-Stack: [ { { { "arr" f f "array" } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } { { "arr2" f f "array" } } } { { "arr" f f "array" } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } ]
+Stack: [ { { { "arr" f f <type:array> } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } { { "arr2" f f <type:array> } } } ]
+Stack: [ { { { "arr" f f <type:array> } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } { { "arr2" f f <type:array> } } } { { "arr" f f <type:array> } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } ]
 PASS: first input has type annotation
-Stack: [ { { { "arr" f f "array" } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } { { "arr2" f f "array" } } } { { "arr" f f "array" } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } ]
+Stack: [ { { { "arr" f f <type:array> } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } { { "arr2" f f <type:array> } } } { { "arr" f f <type:array> } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } ]
 PASS: type-annotated param has no nested effect
-Stack: [ { { { "arr" f f "array" } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } { { "arr2" f f "array" } } } { { "arr" f f "array" } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } ]
+Stack: [ { { { "arr" f f <type:array> } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } { { "arr2" f f <type:array> } } } { { "arr" f f <type:array> } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } ]
 PASS: quotation-annotated param has nested effect
-Stack: [ { { { "arr" f f "array" } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } { { "arr2" f f "array" } } } ]
+Stack: [ { { { "arr" f f <type:array> } { "quot" f { { { "x" f f f } } { { "y" f f f } } } f } } { { "arr2" f f <type:array> } } } ]
 PASS: output has type annotation
 Stack: [ ]
 === unannotated params still work ===
@@ -60,15 +60,21 @@ PASS: unannotated has no type annotation
 Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } ]
 === type annotation round-trips through >string via effect.1z ===
 Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } ]
-Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } <option:some option-payload{ value: stack-effect-info{ inputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: "fixnum" } } outputs: { stack-effect-param{ name: "m" row-variable?: f nested-effect: f type-annotation: "fixnum" } } } }> ]
+Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } <option:some option-payload{ value: stack-effect-info{ inputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } } outputs: { stack-effect-param{ name: "m" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } } } }> ]
 Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } "( n: fixnum -- m: fixnum )" ]
 PASS: effect >string with type annotations
 Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } ]
 === type annotation round-trips through >word-info ===
 Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } ]
 Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } ]
-Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: "fixnum" } ]
+Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } ]
 PASS: word-info param name
-Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: "fixnum" } ]
+Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } ]
 PASS: word-info param type annotation
+Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } ]
+=== user-defined virtual type works as type annotation ===
+Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } ]
+Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } ]
+Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } { { { "x" f f <type:my-test-type> } } { { "y" f f <type:fixnum> } } } ]
+PASS: user-defined type annotation
 Stack: [ { { { "a" f f f } { "b" f f f } } { { "c" f f f } } } ]

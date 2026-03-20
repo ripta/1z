@@ -1,4 +1,5 @@
 const std = @import("std");
+const TypeValue = @import("value.zig").TypeValue;
 
 /// Represents a single parameter in a stack effect. Parameters can optionally
 /// have quotation annotations.
@@ -8,9 +9,9 @@ pub const StackEffectParam = struct {
     quotation_effect: ?*const StackEffect = null,
     /// True if name starts with ".." (a row variable like ..a, ..b)
     is_row_variable: bool = false,
-    /// If non-null, this parameter has a type annotation (e.g., "fixnum", "array(fixnum)").
+    /// If non-null, this parameter has a type annotation resolved to a TypeValue.
     /// Mutually exclusive with quotation_effect.
-    type_annotation: ?[]const u8 = null,
+    type_annotation: ?*const TypeValue = null,
 
     /// Write parameter to writer.
     pub fn write(self: StackEffectParam, writer: anytype) anyerror!void {
@@ -18,9 +19,9 @@ pub const StackEffectParam = struct {
         if (self.quotation_effect) |effect| {
             try writer.writeAll(": ");
             try effect.write(writer);
-        } else if (self.type_annotation) |type_name| {
+        } else if (self.type_annotation) |tv| {
             try writer.writeAll(": ");
-            try writer.writeAll(type_name);
+            try writer.writeAll(tv.name);
         }
     }
 
@@ -28,15 +29,7 @@ pub const StackEffectParam = struct {
         if (!std.mem.eql(u8, self.name, other.name)) return false;
         if (self.is_row_variable != other.is_row_variable) return false;
 
-        const self_ta = self.type_annotation;
-        const other_ta = other.type_annotation;
-        if (self_ta == null and other_ta == null) {
-            // fall through to quotation_effect comparison
-        } else if (self_ta != null and other_ta != null) {
-            if (!std.mem.eql(u8, self_ta.?, other_ta.?)) return false;
-        } else {
-            return false;
-        }
+        if (self.type_annotation != other.type_annotation) return false;
 
         if (self.quotation_effect == null and other.quotation_effect == null) return true;
         if (self.quotation_effect == null or other.quotation_effect == null) return false;
@@ -487,7 +480,8 @@ test "passThroughParams for dip (one pass-through)" {
 }
 
 test "type_annotation write format" {
-    const param = StackEffectParam{ .name = "n", .type_annotation = "fixnum" };
+    var tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    const param = StackEffectParam{ .name = "n", .type_annotation = &tv };
 
     var buf: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
@@ -496,12 +490,13 @@ test "type_annotation write format" {
 }
 
 test "type_annotation in full stack effect" {
+    var tv = TypeValue{ .name = "fixnum", .descriptor = null };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{
-            .{ .name = "n", .type_annotation = "fixnum" },
+            .{ .name = "n", .type_annotation = &tv },
         },
         .outputs = &[_]StackEffectParam{
-            .{ .name = "m", .type_annotation = "fixnum" },
+            .{ .name = "m", .type_annotation = &tv },
         },
     };
 
@@ -512,9 +507,11 @@ test "type_annotation in full stack effect" {
 }
 
 test "type_annotation equality" {
-    const a = StackEffectParam{ .name = "n", .type_annotation = "fixnum" };
-    const b = StackEffectParam{ .name = "n", .type_annotation = "fixnum" };
-    const c = StackEffectParam{ .name = "n", .type_annotation = "string" };
+    var tv_a = TypeValue{ .name = "fixnum", .descriptor = null };
+    var tv_b = TypeValue{ .name = "string", .descriptor = null };
+    const a = StackEffectParam{ .name = "n", .type_annotation = &tv_a };
+    const b = StackEffectParam{ .name = "n", .type_annotation = &tv_a };
+    const c = StackEffectParam{ .name = "n", .type_annotation = &tv_b };
     const d = StackEffectParam{ .name = "n" };
 
     try std.testing.expect(a.eql(b));
@@ -524,7 +521,8 @@ test "type_annotation equality" {
 }
 
 test "type_annotation parameterized type" {
-    const param = StackEffectParam{ .name = "arr", .type_annotation = "array(fixnum)" };
+    var tv = TypeValue{ .name = "array(fixnum)", .descriptor = null };
+    const param = StackEffectParam{ .name = "arr", .type_annotation = &tv };
 
     var buf: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);

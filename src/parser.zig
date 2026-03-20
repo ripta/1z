@@ -381,8 +381,8 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .array = arr } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "}")) {
             return ParseError.UnmatchedCloseBrace;
-        } else if (std.mem.eql(u8, token, "(")) {
-            const effect = try parseStackEffect(allocator, tokenizer, ctx, line);
+        } else if (std.mem.eql(u8, token, "(") and ctx == null) {
+            const effect = try parseStackEffect(allocator, tokenizer, null, line);
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, ")")) {
             return ParseError.UnmatchedCloseParen;
@@ -491,15 +491,13 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .array = arr } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "}")) {
             return ParseError.UnmatchedCloseBrace;
-        } else if (std.mem.eql(u8, token, "(")) {
-            const effect = try parseStackEffect(allocator, tokenizer, ctx, line);
+        } else if (std.mem.eql(u8, token, "(") and ctx == null) {
+            const effect = try parseStackEffect(allocator, tokenizer, null, line);
             if (is_first_token) {
-                // Leading stack effect becomes the quotation's declared effect
                 const effect_ptr = allocator.create(StackEffect) catch return ParseError.OutOfMemory;
                 effect_ptr.* = effect;
                 quotation_effect = effect_ptr;
             } else {
-                // Non-leading stack effect is pushed as a value
                 instructions.append(allocator, .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
             }
             is_first_token = false;
@@ -531,7 +529,19 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
                                     };
                                     return ParseError.ParseTimeExecutionError;
                                 }
+                                const was_first_token = is_first_token;
                                 try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line);
+
+                                if (was_first_token and instructions.items.len > 0) {
+                                    const last = instructions.items[instructions.items.len - 1];
+                                    if (last.op == .push_literal and last.op.push_literal == .stack_effect) {
+                                        const effect_ptr = allocator.create(StackEffect) catch return ParseError.OutOfMemory;
+                                        effect_ptr.* = last.op.push_literal.stack_effect;
+                                        quotation_effect = effect_ptr;
+                                        instructions.items.len -= 1;
+                                    }
+                                }
+
                                 is_first_token = false;
 
                                 if (has_pending_docs) {
@@ -558,6 +568,33 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
 
     setUnmatchedDiagnostics(ctx, "UnmatchedOpenBracket", opening_line);
     return ParseError.UnmatchedOpenBracket;
+}
+
+/// Resolve a type annotation token to a TypeValue pointer by looking up
+/// the word in the context.
+///
+/// Returns null if ctx is null, as is in unit tests, or if the word is
+/// not found, or if the word not is a type.
+fn resolveTypeAnnotation(ctx: ?*Context, token: []const u8) ?*const value_mod.TypeValue {
+    const c = ctx orelse return null;
+    if (c.lookupWord(token)) |word| {
+        if (word.parse_time) {
+            const old_tokenizer = c.parse_tokenizer;
+            defer c.parse_tokenizer = old_tokenizer;
+
+            const pre_depth = c.stack.depth();
+            switch (word.action) {
+                .native => |func| func(c) catch return null,
+                .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch return null,
+            }
+            const post_depth = c.stack.depth();
+            if (post_depth > pre_depth) {
+                const val = c.stack.pop() catch return null;
+                if (val == .type_val) return val.type_val;
+            }
+        }
+    }
+    return null;
 }
 
 /// Parse a stack effect with support for quotation annotations.
@@ -625,10 +662,10 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Cont
             current_list = &outputs;
         } else if (pending_param_name) |name| {
             if (pending_is_annotated) {
-                const type_name = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
+                const type_val = resolveTypeAnnotation(ctx, token);
                 current_list.append(allocator, .{
                     .name = name,
-                    .type_annotation = type_name,
+                    .type_annotation = type_val,
                     .is_row_variable = stack_effect_mod.isRowVariable(name),
                 }) catch return ParseError.OutOfMemory;
                 pending_param_name = null;

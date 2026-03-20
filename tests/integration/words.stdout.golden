@@ -34,6 +34,7 @@ Stack: [ ]
 #unshift ( seq elem -- seq' )
 #unshift! ( vec elem -- vec )
 % ( a b -- a%b )
+( ( -- stack-effect )
 (=) ( a b -- ? )
 (trampoline) ( *unsafe-fn-ptr* -- )
 * ( a b -- a*b )

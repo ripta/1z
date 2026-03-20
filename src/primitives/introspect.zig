@@ -44,8 +44,8 @@ fn buildStackEffectParamValue(alloc: Allocator, param: StackEffectParam) Allocat
         try buildStackEffectValue(alloc, nested)
     else
         .{ .boolean = false };
-    fields[3] = if (param.type_annotation) |ta|
-        Value{ .string = ta }
+    fields[3] = if (param.type_annotation) |tv|
+        Value{ .type_val = @constCast(tv) }
     else
         .{ .boolean = false };
     return .{ .array = fields };

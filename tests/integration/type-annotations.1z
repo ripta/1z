@@ -9,16 +9,16 @@ dup #first #first
 dup 0 #nth "n" "input param name" assert=
 dup 1 #nth f "input is not a row variable" assert=
 dup 2 #nth f "input has no nested effect" assert=
-3 #nth "fixnum" "input type annotation" assert=
+3 #nth fixnum "input type annotation is fixnum TypeValue" assert=
 #last #first
 dup 0 #nth "m" "output param name" assert=
-3 #nth "fixnum" "output type annotation" assert=
+3 #nth fixnum "output type annotation is fixnum TypeValue" assert=
 
-"parameterized type annotation is a single token" test-section
-[ ( arr: array(fixnum) -- n: fixnum ) ] native.quotation>effect
+"second basic type annotation" test-section
+[ ( arr: array -- n: fixnum ) ] native.quotation>effect
 #first #first
-dup 0 #nth "arr" "parameterized input name" assert=
-3 #nth "array(fixnum)" "parameterized type annotation" assert=
+dup 0 #nth "arr" "second basic input name" assert=
+3 #nth array "type annotation is array TypeValue" assert=
 
 "type annotations with row variables" test-section
 [ ( ..a x: fixnum -- ..a y: string ) ] native.quotation>effect
@@ -28,15 +28,15 @@ dup 0 #nth 1 #nth t "row variable flag is true" assert=
 1 #nth 0 #nth "x" "second input name" assert=
 #last
 dup 0 #nth 0 #nth "..a" "first output is row variable" assert=
-1 #nth 3 #nth "string" "output type annotation" assert=
+1 #nth 3 #nth string "output type annotation" assert=
 
 "mixed type annotation and quotation annotation" test-section
 [ ( arr: array quot: ( x -- y ) -- arr2: array ) ] native.quotation>effect
 dup #first
-dup 0 #nth 3 #nth "array" "first input has type annotation" assert=
+dup 0 #nth 3 #nth array "first input has type annotation" assert=
 dup 0 #nth 2 #nth f "type-annotated param has no nested effect" assert=
 1 #nth 2 #nth f = f "quotation-annotated param has nested effect" assert=
-#last #first 3 #nth "array" "output has type annotation" assert=
+#last #first 3 #nth array "output has type annotation" assert=
 
 "unannotated params still work" test-section
 [ ( a b -- c ) ] native.quotation>effect
@@ -53,4 +53,9 @@ unwrap-or-throw >string
 test-typed-word: ( n: fixnum -- m: string ) [ >string ] ;
 test-typed-word: >word-info stack-effect>> inputs>> #first
 dup name>> "n" "word-info param name" assert=
-type-annotation>> "fixnum" "word-info param type annotation" assert=
+type-annotation>> fixnum "word-info param type annotation" assert=
+
+"user-defined virtual type works as type annotation" test-section
+my-test-type: virtual{ fixnum } ;
+[ ( x: my-test-type -- y: fixnum ) ] native.quotation>effect
+#first #first 3 #nth my-test-type "user-defined type annotation" assert=

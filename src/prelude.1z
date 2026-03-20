@@ -697,7 +697,7 @@ stack-effect-param: struct{ name row-variable? nested-effect type-annotation } ;
     dup type-annotation>> dup f = [
       drop name>>
     ] [
-      swap name>> ": " #append swap #append
+      native.type-name swap name>> ": " #append swap #append
     ] if
   ] [
     >string swap name>> ": " #append swap #append

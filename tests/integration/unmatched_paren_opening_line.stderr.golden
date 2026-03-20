@@ -1,1 +1,1 @@
-tests/integration/unmatched_paren_opening_line.1z:3: error 'unmatched-open-paren' opened at line 3
+tests/integration/unmatched_paren_opening_line.1z:3: error 'parse-error'
