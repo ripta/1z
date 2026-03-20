@@ -118,6 +118,7 @@ pub const InferenceEngine = struct {
     checked_source: ?[]const u8,
     builtin_type_values: ?*const std.StringHashMapUnmanaged(*TypeValue),
     type_check_mode: TypeCheckMode,
+    type_cache: std.StringHashMapUnmanaged(?[]StackEntry),
 
     // Set by inferInstructions when it returns .unknown
     last_unknown_callee: ?[]const u8 = null,
@@ -144,6 +145,7 @@ pub const InferenceEngine = struct {
             .cache = .{},
             .in_progress = .{},
             .diagnostics = .{},
+            .type_cache = .{},
             .severity_override = severity_override,
             .suppressed = suppressed,
             .suppress_undeclared = suppress_undeclared,
@@ -160,6 +162,14 @@ pub const InferenceEngine = struct {
         self.diagnostics.deinit(self.allocator);
         self.cache.deinit(self.allocator);
         self.in_progress.deinit(self.allocator);
+
+        var tc_iter = self.type_cache.iterator();
+        while (tc_iter.next()) |entry| {
+            if (entry.value_ptr.*) |types| {
+                self.allocator.free(types);
+            }
+        }
+        self.type_cache.deinit(self.allocator);
     }
 
     pub fn analyzeAll(self: *InferenceEngine, checked_source: ?[]const u8) Allocator.Error!void {
@@ -234,6 +244,13 @@ pub const InferenceEngine = struct {
         if (self.in_progress.contains(name)) {
             const word_def = self.lookupWord(name) orelse return .unknown;
             if (word_def.stack_effect) |eff| {
+                if (!self.type_cache.contains(name)) {
+                    const out_types = try self.allocator.alloc(StackEntry, eff.outputs.len);
+                    for (eff.outputs, 0..) |param, i| {
+                        out_types[i] = if (param.type_annotation) |tv| .{ .typed = tv } else .other;
+                    }
+                    try self.type_cache.put(self.allocator, name, out_types);
+                }
                 return computeDeclaredDelta(eff) orelse .unknown;
             }
             return .unknown;
@@ -263,8 +280,16 @@ pub const InferenceEngine = struct {
                     .source_file = word_def.source_file,
                     .source_line = word_def.source_line,
                 };
-                const inferred = try self.inferInstructions(instructions, caller_info);
+                var body_out_stack: std.ArrayListUnmanaged(StackEntry) = .{};
+                defer body_out_stack.deinit(self.allocator);
+                const inferred = try self.inferInstructions(instructions, caller_info, &body_out_stack);
                 _ = self.in_progress.fetchRemove(name);
+
+                if (inferred == .known and body_out_stack.items.len > 0) {
+                    const cached_types = try self.allocator.alloc(StackEntry, body_out_stack.items.len);
+                    @memcpy(cached_types, body_out_stack.items);
+                    try self.type_cache.put(self.allocator, name, cached_types);
+                }
 
                 if (isGeneric(&word_def)) {
                     try self.validateDispatchEntries(name, inferred, &word_def, caller_info);
@@ -351,7 +376,12 @@ pub const InferenceEngine = struct {
         return btv.get(type_name);
     }
 
-    fn inferInstructions(self: *InferenceEngine, instructions: []const Instruction, caller: CallerInfo) Allocator.Error!InferenceResult {
+    fn inferInstructions(
+        self: *InferenceEngine,
+        instructions: []const Instruction,
+        caller: CallerInfo,
+        out_stack: ?*std.ArrayListUnmanaged(StackEntry),
+    ) Allocator.Error!InferenceResult {
         self.last_unknown_callee = null;
         self.last_unknown_is_polymorphic = false;
         var delta: i64 = 0;
@@ -418,9 +448,15 @@ pub const InferenceEngine = struct {
                                     delta = applied.new_delta;
                                     stack_model.shrinkRetainingCapacity(0);
 
-                                    var i: usize = 0;
-                                    while (i < applied.new_model_size) : (i += 1) {
-                                        try stack_model.append(self.allocator, .other);
+                                    if (applied.output_types) |out_types| {
+                                        for (out_types) |entry| {
+                                            try stack_model.append(self.allocator, entry);
+                                        }
+                                    } else {
+                                        var i: usize = 0;
+                                        while (i < applied.new_model_size) : (i += 1) {
+                                            try stack_model.append(self.allocator, .other);
+                                        }
                                     }
                                     continue;
                                 },
@@ -446,9 +482,15 @@ pub const InferenceEngine = struct {
                                         delta = applied.new_delta;
                                         stack_model.shrinkRetainingCapacity(0);
 
-                                        var i: usize = 0;
-                                        while (i < applied.new_model_size) : (i += 1) {
-                                            try stack_model.append(self.allocator, .other);
+                                        if (applied.output_types) |out_types| {
+                                            for (out_types) |entry| {
+                                                try stack_model.append(self.allocator, entry);
+                                            }
+                                        } else {
+                                            var i: usize = 0;
+                                            while (i < applied.new_model_size) : (i += 1) {
+                                                try stack_model.append(self.allocator, .other);
+                                            }
                                         }
                                         continue;
                                     },
@@ -475,6 +517,12 @@ pub const InferenceEngine = struct {
             }
         }
 
+        if (out_stack) |os| {
+            os.shrinkRetainingCapacity(0);
+            try os.ensureTotalCapacity(self.allocator, stack_model.items.len);
+            os.appendSliceAssumeCapacity(stack_model.items);
+        }
+
         return .{ .known = delta };
     }
 
@@ -495,7 +543,11 @@ pub const InferenceEngine = struct {
     }
 
     const CombinatorResult = union(enum) {
-        applied: struct { new_delta: i64, new_model_size: usize },
+        applied: struct {
+            new_delta: i64,
+            new_model_size: usize,
+            output_types: ?[]StackEntry = null,
+        },
         unknown,
         fallthrough,
     };
@@ -518,21 +570,33 @@ pub const InferenceEngine = struct {
         var all_literal = true;
         var found_any_quot = false;
 
+        const max_branch_stacks = 8;
+        var branch_stacks: [max_branch_stacks]std.ArrayListUnmanaged(StackEntry) = undefined;
+        var branch_stack_count: usize = 0;
+        defer for (branch_stacks[0..branch_stack_count]) |*bs| bs.deinit(self.allocator);
+
         for (0..input_count) |param_index| {
-            if (stack_model.items.len < input_count) {
-                // Not enough stack model entries to analyze
-                break;
-            }
+            if (stack_model.items.len < input_count) break;
             const stack_pos = stack_model.items.len - input_count + param_index;
 
             switch (stack_model.items[stack_pos]) {
                 .quotation => |quot| {
                     found_any_quot = true;
-                    const qd = try self.inferInstructions(quot.instructions, caller);
+                    var branch_out: std.ArrayListUnmanaged(StackEntry) = .{};
+                    const qd = try self.inferInstructions(quot.instructions, caller, &branch_out);
                     switch (qd) {
-                        .known => |d| try quot_deltas.append(self.allocator, d),
+                        .known => |d| {
+                            try quot_deltas.append(self.allocator, d);
+                            if (branch_stack_count < max_branch_stacks) {
+                                branch_stacks[branch_stack_count] = branch_out;
+                                branch_stack_count += 1;
+                            } else {
+                                branch_out.deinit(self.allocator);
+                            }
+                        },
                         .unknown => {
                             all_literal = false;
+                            branch_out.deinit(self.allocator);
                         },
                     }
                 },
@@ -570,7 +634,13 @@ pub const InferenceEngine = struct {
                 const total_delta = current_delta + declared.known + first;
                 const consumed = @min(stack_model.items.len, input_count);
                 const new_model_size = stack_model.items.len - consumed;
-                return .{ .applied = .{ .new_delta = total_delta, .new_model_size = new_model_size } };
+
+                const merged = try self.mergeBranchTypes(branch_stacks[0..branch_stack_count]);
+                return .{ .applied = .{
+                    .new_delta = total_delta,
+                    .new_model_size = new_model_size,
+                    .output_types = merged,
+                } };
             },
             .loop => {
                 for (quot_deltas.items) |d| {
@@ -599,6 +669,68 @@ pub const InferenceEngine = struct {
         }
     }
 
+    fn mergeBranchTypes(
+        self: *InferenceEngine,
+        branch_stacks: []std.ArrayListUnmanaged(StackEntry),
+    ) Allocator.Error!?[]StackEntry {
+        if (branch_stacks.len == 0) return null;
+
+        const first = branch_stacks[0].items;
+        if (first.len == 0) return null;
+
+        for (branch_stacks[1..]) |bs| {
+            if (bs.items.len != first.len) return null;
+        }
+
+        const result = try self.allocator.alloc(StackEntry, first.len);
+        for (0..first.len) |i| {
+            result[i] = first[i];
+            for (branch_stacks[1..]) |bs| {
+                result[i] = mergeEntry(result[i], bs.items[i]);
+            }
+        }
+        return result;
+    }
+
+    fn mergeEntry(a: StackEntry, b: StackEntry) StackEntry {
+        switch (a) {
+            .other => return .other,
+            .quotation => return .other,
+            .typed => |tv_a| {
+                switch (b) {
+                    .typed => |tv_b| {
+                        if (tv_a == tv_b) return a;
+                        var u = TypeUnion{};
+                        u.add(tv_a);
+                        u.add(tv_b);
+                        return .{ .typed_union = u };
+                    },
+                    .typed_union => |tu_b| {
+                        var u = tu_b;
+                        u.add(tv_a);
+                        return .{ .typed_union = u };
+                    },
+                    else => return .other,
+                }
+            },
+            .typed_union => |tu_a| {
+                switch (b) {
+                    .typed => |tv_b| {
+                        var u = tu_a;
+                        u.add(tv_b);
+                        return .{ .typed_union = u };
+                    },
+                    .typed_union => |tu_b| {
+                        var u = tu_a;
+                        for (tu_b.types[0..tu_b.len]) |tv| u.add(tv);
+                        return .{ .typed_union = u };
+                    },
+                    else => return .other,
+                }
+            },
+        }
+    }
+
     fn handleRowPoly(
         self: *InferenceEngine,
         word_def: *const WordDefinition,
@@ -615,6 +747,11 @@ pub const InferenceEngine = struct {
         var adjustments: std.ArrayListUnmanaged(i64) = .{};
         defer adjustments.deinit(self.allocator);
 
+        const max_rp_stacks = 8;
+        var rp_branch_stacks: [max_rp_stacks]std.ArrayListUnmanaged(StackEntry) = undefined;
+        var rp_branch_count: usize = 0;
+        defer for (rp_branch_stacks[0..rp_branch_count]) |*bs| bs.deinit(self.allocator);
+
         var all_literal = true;
         var found_any_quot = false;
         var concrete_index: usize = 0;
@@ -627,14 +764,22 @@ pub const InferenceEngine = struct {
                 const stack_pos = stack_model.items.len - concrete_inputs + concrete_index;
                 switch (stack_model.items[stack_pos]) {
                     .quotation => |quot| {
-                        const qd = try self.inferInstructions(quot.instructions, caller);
+                        var rp_out: std.ArrayListUnmanaged(StackEntry) = .{};
+                        const qd = try self.inferInstructions(quot.instructions, caller, &rp_out);
                         switch (qd) {
                             .known => |d| {
                                 const annotated_qcd = annotation.concreteDelta();
                                 try adjustments.append(self.allocator, d - annotated_qcd);
+                                if (rp_branch_count < max_rp_stacks) {
+                                    rp_branch_stacks[rp_branch_count] = rp_out;
+                                    rp_branch_count += 1;
+                                } else {
+                                    rp_out.deinit(self.allocator);
+                                }
                             },
                             .unknown => {
                                 all_literal = false;
+                                rp_out.deinit(self.allocator);
                             },
                         }
                     },
@@ -695,9 +840,11 @@ pub const InferenceEngine = struct {
                     }
                 }
 
+                const merged = try self.mergeBranchTypes(rp_branch_stacks[0..rp_branch_count]);
                 return .{ .applied = .{
                     .new_delta = current_delta + concrete_delta + first,
                     .new_model_size = new_model_size,
+                    .output_types = merged,
                 } };
             },
 
@@ -705,10 +852,21 @@ pub const InferenceEngine = struct {
                 var adj_sum: i64 = 0;
                 for (adjustments.items) |adj| adj_sum += adj;
 
+                const out_types = if (rp_branch_count == 1) blk: {
+                    const items = rp_branch_stacks[0].items;
+                    if (items.len > 0) {
+                        const result = try self.allocator.alloc(StackEntry, items.len);
+                        @memcpy(result, items);
+                        break :blk result;
+                    }
+                    break :blk null;
+                } else try self.mergeBranchTypes(rp_branch_stacks[0..rp_branch_count]);
+
                 return .{
                     .applied = .{
                         .new_delta = current_delta + concrete_delta + adj_sum,
                         .new_model_size = new_model_size,
+                        .output_types = out_types,
                     },
                 };
             },
@@ -724,7 +882,7 @@ pub const InferenceEngine = struct {
                 .quotation => |instrs| instrs,
                 .native_fn => continue,
             };
-            const entry_result = try self.inferInstructions(entry_instrs, caller);
+            const entry_result = try self.inferInstructions(entry_instrs, caller, null);
             if (base_result == .known and entry_result == .known) {
                 if (base_result.known != entry_result.known) {
                     try self.emitDiagnostic(.{
@@ -819,6 +977,17 @@ pub const InferenceEngine = struct {
         }
 
         if (!has_typed_outputs) {
+            if (self.type_cache.get(word_def.name)) |cached_opt| {
+                if (cached_opt) |cached_types| {
+                    const input_count = eff.inputs.len;
+                    const remove_count = @min(input_count, stack_model.items.len);
+                    stack_model.shrinkRetainingCapacity(stack_model.items.len - remove_count);
+                    for (cached_types) |entry| {
+                        try stack_model.append(self.allocator, entry);
+                    }
+                    return;
+                }
+            }
             try adjustStackModel(stack_model, callee_delta, self.allocator);
             return;
         }
