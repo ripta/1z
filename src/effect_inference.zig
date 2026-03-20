@@ -13,6 +13,8 @@ const Value = value_mod.Value;
 const Quotation = value_mod.Quotation;
 const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
+const StackEffectParam = stack_effect_mod.StackEffectParam;
+const TypeValue = value_mod.TypeValue;
 const markers = @import("primitives/markers.zig");
 const Context = @import("context.zig").Context;
 
@@ -62,8 +64,43 @@ pub const Diagnostic = struct {
     message: []const u8,
 };
 
+const max_union_types = 8;
+
+const TypeUnion = struct {
+    types: [max_union_types]*const TypeValue = undefined,
+    len: usize = 0,
+
+    fn add(self: *TypeUnion, tv: *const TypeValue) void {
+        for (self.types[0..self.len]) |existing| {
+            if (existing == tv) return;
+        }
+        if (self.len < max_union_types) {
+            self.types[self.len] = tv;
+            self.len += 1;
+        }
+    }
+
+    fn allMatch(self: *const TypeUnion, expected: *const TypeValue) bool {
+        for (self.types[0..self.len]) |tv| {
+            if (tv != expected) return false;
+        }
+        return true;
+    }
+
+    fn format(self: *const TypeUnion, allocator: Allocator) ![]const u8 {
+        var parts: std.ArrayListUnmanaged([]const u8) = .{};
+        defer parts.deinit(allocator);
+        for (self.types[0..self.len]) |tv| {
+            try parts.append(allocator, tv.name);
+        }
+        return std.mem.join(allocator, " | ", parts.items);
+    }
+};
+
 const StackEntry = union(enum) {
     quotation: Quotation,
+    typed: *const TypeValue,
+    typed_union: TypeUnion,
     other,
 };
 
@@ -79,10 +116,14 @@ pub const InferenceEngine = struct {
     suppressed: bool,
     suppress_undeclared: bool,
     checked_source: ?[]const u8,
+    builtin_type_values: ?*const std.StringHashMapUnmanaged(*TypeValue),
+    type_check_mode: TypeCheckMode,
 
     // Set by inferInstructions when it returns .unknown
     last_unknown_callee: ?[]const u8 = null,
     last_unknown_is_polymorphic: bool = false,
+
+    pub const TypeCheckMode = enum { err, warning, off };
 
     pub fn init(
         dictionary: *const Dictionary,
@@ -92,6 +133,8 @@ pub const InferenceEngine = struct {
         severity_override: ?Severity,
         suppressed: bool,
         suppress_undeclared: bool,
+        builtin_type_values: ?*const std.StringHashMapUnmanaged(*TypeValue),
+        type_check_mode: TypeCheckMode,
     ) InferenceEngine {
         return .{
             .dictionary = dictionary,
@@ -105,6 +148,8 @@ pub const InferenceEngine = struct {
             .suppressed = suppressed,
             .suppress_undeclared = suppress_undeclared,
             .checked_source = null,
+            .builtin_type_values = builtin_type_values,
+            .type_check_mode = type_check_mode,
         };
     }
 
@@ -300,6 +345,12 @@ pub const InferenceEngine = struct {
         }
     }
 
+    fn resolveValueType(self: *const InferenceEngine, val: Value) ?*const TypeValue {
+        const btv = self.builtin_type_values orelse return null;
+        const type_name = dispatch_mod.dispatchTypeName(val);
+        return btv.get(type_name);
+    }
+
     fn inferInstructions(self: *InferenceEngine, instructions: []const Instruction, caller: CallerInfo) Allocator.Error!InferenceResult {
         self.last_unknown_callee = null;
         self.last_unknown_is_polymorphic = false;
@@ -313,7 +364,13 @@ pub const InferenceEngine = struct {
                     delta += 1;
                     switch (val) {
                         .quotation => |quot| try stack_model.append(self.allocator, .{ .quotation = quot }),
-                        else => try stack_model.append(self.allocator, .other),
+                        else => {
+                            if (self.resolveValueType(val)) |tv| {
+                                try stack_model.append(self.allocator, .{ .typed = tv });
+                            } else {
+                                try stack_model.append(self.allocator, .other);
+                            }
+                        },
                     }
                 },
                 .call_word => |name| {
@@ -402,11 +459,15 @@ pub const InferenceEngine = struct {
                         }
                     }
 
+                    if (self.type_check_mode != .off) {
+                        try self.checkInputTypes(&wd, &stack_model, caller);
+                    }
+
                     const callee_result = try self.inferWord(name);
                     switch (callee_result) {
                         .known => |callee_delta| {
                             delta += callee_delta;
-                            try adjustStackModel(&stack_model, callee_delta, self.allocator);
+                            try self.adjustStackModelTyped(&wd, &stack_model, callee_delta);
                         },
                         .unknown => return .unknown,
                     }
@@ -475,7 +536,7 @@ pub const InferenceEngine = struct {
                         },
                     }
                 },
-                .other => {},
+                .typed, .typed_union, .other => {},
             }
         }
 
@@ -577,7 +638,7 @@ pub const InferenceEngine = struct {
                             },
                         }
                     },
-                    .other => {
+                    .typed, .typed_union, .other => {
                         all_literal = false;
                     },
                 }
@@ -682,6 +743,99 @@ pub const InferenceEngine = struct {
         }
     }
 
+    fn checkInputTypes(
+        self: *InferenceEngine,
+        word_def: *const WordDefinition,
+        stack_model: *const std.ArrayListUnmanaged(StackEntry),
+        caller: CallerInfo,
+    ) Allocator.Error!void {
+        const eff = word_def.stack_effect orelse return;
+        const concrete_count = eff.concreteInputCount();
+        if (concrete_count == 0 or stack_model.items.len < concrete_count) return;
+
+        var concrete_index: usize = 0;
+        for (eff.inputs) |param| {
+            if (param.is_row_variable) continue;
+            defer concrete_index += 1;
+
+            const expected_tv = param.type_annotation orelse continue;
+            const stack_pos = stack_model.items.len - concrete_count + concrete_index;
+            const entry = stack_model.items[stack_pos];
+
+            const mismatch_actual: ?[]const u8 = switch (entry) {
+                .typed => |tv| if (tv != expected_tv) tv.name else null,
+                .typed_union => |tu| if (!tu.allMatch(expected_tv)) blk: {
+                    break :blk tu.format(self.allocator) catch null;
+                } else null,
+                .quotation => blk: {
+                    const qtv = self.resolveValueType(.{ .quotation = .{ .instructions = &.{} } });
+                    if (qtv) |qtype| {
+                        if (qtype != expected_tv) break :blk qtype.name;
+                    }
+                    break :blk null;
+                },
+                .other => null,
+            };
+
+            if (mismatch_actual) |actual_name| {
+                const severity: Severity = if (self.type_check_mode == .warning) .warning else .err;
+                try self.emitDiagnostic(.{
+                    .word_name = caller.word_name,
+                    .source_file = caller.source_file,
+                    .source_line = caller.source_line,
+                    .severity = severity,
+                    .message = try std.fmt.allocPrint(
+                        self.allocator,
+                        "type mismatch: {s} expects {s} for parameter '{s}', but got {s}",
+                        .{ word_def.name, expected_tv.name, param.name, actual_name },
+                    ),
+                });
+            }
+        }
+    }
+
+    fn adjustStackModelTyped(
+        self: *InferenceEngine,
+        word_def: *const WordDefinition,
+        stack_model: *std.ArrayListUnmanaged(StackEntry),
+        callee_delta: i64,
+    ) Allocator.Error!void {
+        const eff = word_def.stack_effect orelse {
+            try adjustStackModel(stack_model, callee_delta, self.allocator);
+            return;
+        };
+
+        if (stack_effect_mod.hasAnyRowVariable(eff)) {
+            try adjustStackModel(stack_model, callee_delta, self.allocator);
+            return;
+        }
+
+        var has_typed_outputs = false;
+        for (eff.outputs) |param| {
+            if (param.type_annotation != null) {
+                has_typed_outputs = true;
+                break;
+            }
+        }
+
+        if (!has_typed_outputs) {
+            try adjustStackModel(stack_model, callee_delta, self.allocator);
+            return;
+        }
+
+        const input_count = eff.inputs.len;
+        const remove_count = @min(input_count, stack_model.items.len);
+        stack_model.shrinkRetainingCapacity(stack_model.items.len - remove_count);
+
+        for (eff.outputs) |param| {
+            if (param.type_annotation) |tv| {
+                try stack_model.append(self.allocator, .{ .typed = tv });
+            } else {
+                try stack_model.append(self.allocator, .other);
+            }
+        }
+    }
+
     fn emitDiagnostic(self: *InferenceEngine, diagnostic: Diagnostic) Allocator.Error!void {
         if (self.suppressed) {
             self.allocator.free(diagnostic.message);
@@ -752,7 +906,7 @@ test "native word uses declared effect" {
         .action = .{ .native = dummy },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("dup");
@@ -798,7 +952,7 @@ test "compound word with inferrable body" {
         .action = .{ .compound = instrs },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("my-word");
@@ -825,7 +979,7 @@ test "row-variable effect returns unknown" {
         .action = .{ .compound = instrs },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("row-word");
@@ -881,7 +1035,7 @@ test "branch combinator with agreeing quotations" {
         .action = .{ .compound = body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("test-word");
@@ -939,7 +1093,7 @@ test "branch combinator with disagreeing quotations emits diagnostic" {
         .action = .{ .compound = body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("test-word");
@@ -1011,7 +1165,7 @@ test "loop combinator with zero-delta body" {
         .action = .{ .compound = body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("test-word");
@@ -1072,7 +1226,7 @@ test "loop combinator with non-zero-delta body emits diagnostic" {
         .action = .{ .compound = body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("test-word");
@@ -1108,7 +1262,7 @@ test "transitive inference" {
         .action = .{ .compound = outer_body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("outer");
@@ -1135,7 +1289,7 @@ test "recursive cycle with declared effect breaks correctly" {
         .action = .{ .compound = body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("rec");
@@ -1158,7 +1312,7 @@ test "recursive cycle without declared effect returns unknown" {
         .action = .{ .compound = body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("rec-no-decl");
@@ -1192,7 +1346,7 @@ test "generic word with agreeing dispatch entries" {
         false,
     );
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("my-generic");
@@ -1228,7 +1382,7 @@ test "generic word with disagreeing dispatch entries emits diagnostic" {
         false,
     );
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("my-generic");
@@ -1288,7 +1442,7 @@ test "non-literal quotation args fall back to declared effect" {
         .action = .{ .compound = body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("test-word");
@@ -1317,7 +1471,7 @@ test "declared vs inferred mismatch emits diagnostic" {
         .action = .{ .compound = body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("bad-decl");
@@ -1342,7 +1496,7 @@ test "unknown word returns unknown" {
         .action = .{ .compound = body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("calls-unknown");
@@ -1425,7 +1579,7 @@ test "row-poly keep with literal quotation computes delta" {
         .action = .{ .compound = body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("test-word");
@@ -1512,7 +1666,7 @@ test "row-poly while with balanced quotations" {
         .action = .{ .compound = body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("test-word");
@@ -1591,7 +1745,7 @@ test "row-poly while with unbalanced quotations emits diagnostic" {
         .action = .{ .compound = body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("test-word");
@@ -1652,7 +1806,7 @@ test "row-poly keep with insufficient stack falls through" {
         .action = .{ .compound = body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     // Falls through to inferWord which returns unknown for row-poly keep
@@ -1719,7 +1873,7 @@ test "row-poly keep with non-literal quotation falls through" {
         .action = .{ .compound = body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     // Falls through to inferWord which returns unknown for row-poly keep
@@ -1787,7 +1941,7 @@ test "qualified name resolves to known delta" {
         .action = .{ .compound = body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     defer engine.deinit();
 
     const result = try engine.inferWord("test-word");
@@ -1842,7 +1996,7 @@ test "polymorphic qualified name falls back to declared delta with note" {
         .action = .{ .compound = body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     engine.checked_source = "test.1z";
     defer engine.deinit();
 
@@ -1889,7 +2043,7 @@ test "declared-delta fallback prevents cascade" {
         .action = .{ .compound = body_b },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     engine.checked_source = "test.1z";
     defer engine.deinit();
 
@@ -1958,11 +2112,201 @@ test "generated word calling polymorphic callee is silent" {
         .action = .{ .compound = body },
     });
 
-    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true);
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, .off);
     engine.checked_source = "test.1z";
     defer engine.deinit();
 
     const result = try engine.inferWord("generated-caller");
     try testing.expectEqual(InferenceResult{ .known = 1 }, result);
+    try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
+}
+
+// =============================================================================
+// Type checking tests
+// =============================================================================
+
+test "typed literal produces typed stack entry" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var btv: std.StringHashMapUnmanaged(*TypeValue) = .{};
+    defer btv.deinit(testing.allocator);
+    try btv.put(testing.allocator, "fixnum", &fixnum_tv);
+
+    const dummy: @import("dictionary.zig").NativeFn = struct {
+        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    }.f;
+
+    try dict.put("consume-fixnum", .{
+        .name = "consume-fixnum",
+        .stack_effect = .{
+            .inputs = &.{.{ .name = "n", .type_annotation = &fixnum_tv }},
+            .outputs = &.{},
+        },
+        .action = .{ .native = dummy },
+    });
+
+    const body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .fixnum = 42 } }),
+        makeInstr(.{ .call_word = "consume-fixnum" }),
+    };
+
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, &btv, .err);
+    defer engine.deinit();
+
+    const result = try engine.inferWord("test-word");
+    try testing.expectEqual(InferenceResult{ .known = 0 }, result);
+    try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
+}
+
+test "type mismatch emits diagnostic" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var string_tv = TypeValue{ .name = "string", .descriptor = null };
+    var btv: std.StringHashMapUnmanaged(*TypeValue) = .{};
+    defer btv.deinit(testing.allocator);
+    try btv.put(testing.allocator, "fixnum", &fixnum_tv);
+    try btv.put(testing.allocator, "string", &string_tv);
+
+    const dummy: @import("dictionary.zig").NativeFn = struct {
+        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    }.f;
+
+    try dict.put("consume-fixnum", .{
+        .name = "consume-fixnum",
+        .stack_effect = .{
+            .inputs = &.{.{ .name = "n", .type_annotation = &fixnum_tv }},
+            .outputs = &.{},
+        },
+        .action = .{ .native = dummy },
+    });
+
+    const body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .string = "hello" } }),
+        makeInstr(.{ .call_word = "consume-fixnum" }),
+    };
+
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, &btv, .err);
+    defer engine.deinit();
+
+    const result = try engine.inferWord("test-word");
+    try testing.expectEqual(InferenceResult{ .known = 0 }, result);
+    try testing.expectEqual(@as(usize, 1), engine.diagnostics.items.len);
+    try testing.expectEqual(Severity.err, engine.diagnostics.items[0].severity);
+}
+
+test "unknown type skips check" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var btv: std.StringHashMapUnmanaged(*TypeValue) = .{};
+    defer btv.deinit(testing.allocator);
+    try btv.put(testing.allocator, "fixnum", &fixnum_tv);
+
+    const dummy: @import("dictionary.zig").NativeFn = struct {
+        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    }.f;
+
+    try dict.put("unknown-producer", .{
+        .name = "unknown-producer",
+        .stack_effect = .{
+            .inputs = &.{},
+            .outputs = &.{.{ .name = "x" }},
+        },
+        .action = .{ .native = dummy },
+    });
+
+    try dict.put("consume-fixnum", .{
+        .name = "consume-fixnum",
+        .stack_effect = .{
+            .inputs = &.{.{ .name = "n", .type_annotation = &fixnum_tv }},
+            .outputs = &.{},
+        },
+        .action = .{ .native = dummy },
+    });
+
+    const body: []const Instruction = &.{
+        makeInstr(.{ .call_word = "unknown-producer" }),
+        makeInstr(.{ .call_word = "consume-fixnum" }),
+    };
+
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, &btv, .err);
+    defer engine.deinit();
+
+    const result = try engine.inferWord("test-word");
+    try testing.expectEqual(InferenceResult{ .known = 0 }, result);
+    try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
+}
+
+test "type check mode off skips all checks" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var string_tv = TypeValue{ .name = "string", .descriptor = null };
+    var btv: std.StringHashMapUnmanaged(*TypeValue) = .{};
+    defer btv.deinit(testing.allocator);
+    try btv.put(testing.allocator, "fixnum", &fixnum_tv);
+    try btv.put(testing.allocator, "string", &string_tv);
+
+    const dummy: @import("dictionary.zig").NativeFn = struct {
+        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    }.f;
+
+    try dict.put("consume-fixnum", .{
+        .name = "consume-fixnum",
+        .stack_effect = .{
+            .inputs = &.{.{ .name = "n", .type_annotation = &fixnum_tv }},
+            .outputs = &.{},
+        },
+        .action = .{ .native = dummy },
+    });
+
+    const body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .string = "hello" } }),
+        makeInstr(.{ .call_word = "consume-fixnum" }),
+    };
+
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, &btv, .off);
+    defer engine.deinit();
+
+    const result = try engine.inferWord("test-word");
+    try testing.expectEqual(InferenceResult{ .known = 0 }, result);
     try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
 }

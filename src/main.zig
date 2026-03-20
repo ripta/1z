@@ -955,7 +955,21 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
             }
         }
 
-        var engine = effect_inference.InferenceEngine.init(&ctx.dictionary, &ctx.dispatch, ctx.local_frames.items, ctx.quotationAllocator(), severity_override, suppressed, suppress_undeclared);
+        var type_check_mode: effect_inference.InferenceEngine.TypeCheckMode = .err;
+        if (ctx.getPragma("type-check")) |pragma_val| {
+            switch (pragma_val) {
+                .string => |s| {
+                    if (std.mem.eql(u8, s, "off")) {
+                        type_check_mode = .off;
+                    } else if (std.mem.eql(u8, s, "warning")) {
+                        type_check_mode = .warning;
+                    }
+                },
+                else => {},
+            }
+        }
+
+        var engine = effect_inference.InferenceEngine.init(&ctx.dictionary, &ctx.dispatch, ctx.local_frames.items, ctx.quotationAllocator(), severity_override, suppressed, suppress_undeclared, &ctx.builtin_type_values, type_check_mode);
         defer engine.deinit();
         engine.analyzeAll(ctx.current_source) catch |err| {
             err_writer.print("Error during effect inference: {any}\n", .{err}) catch {};
