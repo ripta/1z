@@ -1,0 +1,8 @@
+\ Test that recursive word with annotated output uses annotations as fixed point
+pragma{ suppress-undeclared: t }
+
+typed-add: ( n: fixnum -- m ) [ 1 + ] ;
+
+\ Recursive word with typed output -> output type used at call sites
+countdown: ( n: fixnum -- result: fixnum ) [ dup 0 = [ ] [ 1 - countdown ] if ] ;
+use-recursive: ( -- ) [ 10 countdown typed-add drop ] ;

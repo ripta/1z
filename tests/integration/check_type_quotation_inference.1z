@@ -1,0 +1,19 @@
+\ Test that types propagate through quotation bodies in combinators
+pragma{ suppress-undeclared: t }
+
+typed-add: ( n: fixnum -- m ) [ 1 + ] ;
+
+\ Branch type propagation: both branches return fixnum -> downstream fixnum param passes
+branch-fixnum: ( -- n ) [ t [ 1 ] [ 2 ] if ] ;
+use-after-branch: ( -- ) [ branch-fixnum typed-add drop ] ;
+
+\ Unannotated word inference: body pushes fixnum literal -> inferred type propagates
+make-num: ( -- n ) [ 42 ] ;
+use-inferred: ( -- ) [ make-num typed-add drop ] ;
+
+\ dip type propagation: type survives through dip
+use-dip: ( -- ) [ 10 [ 20 ] dip typed-add drop drop ] ;
+
+\ Nested combinators: quotation inside quotation type propagation
+nested-branch: ( -- n ) [ t [ t [ 1 ] [ 2 ] if ] [ 3 ] if ] ;
+use-nested: ( -- ) [ nested-branch typed-add drop ] ;

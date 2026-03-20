@@ -1,0 +1,8 @@
+\ Test that branch union types cause mismatch with specific-type annotation
+pragma{ suppress-undeclared: t }
+
+typed-add: ( n: fixnum -- m ) [ 1 + ] ;
+
+\ Branches return different types -> union detected, mismatch with fixnum annotation
+branch-mixed: ( -- x ) [ t [ 1 ] [ "hello" ] if ] ;
+use-mixed: ( -- ) [ branch-mixed typed-add drop ] ;

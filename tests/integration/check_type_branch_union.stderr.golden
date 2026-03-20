@@ -1,0 +1,1 @@
+tests/integration/check_type_branch_union.1z:8: err: use-mixed: type mismatch: typed-add expects fixnum for parameter 'n', but got fixnum | string
