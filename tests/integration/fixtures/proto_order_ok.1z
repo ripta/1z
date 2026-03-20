@@ -1,0 +1,17 @@
+\ Module where the method is defined AFTER the protocol declaration.
+\ Should load successfully because validation is deferred to module load
+\ completion.
+
+showable: protocol{ show: } ;
+
+show: generic ( val -- str ) [ drop "" ] ;
+
+order-type: virtual{ fixnum } ;
+
+\ Protocol obligation declared before the method is defined
+order-type: showable
+
+\ Method defined after the protocol declaration
+show: method{ order-type } [
+  unmake-order-type inspect
+] ;

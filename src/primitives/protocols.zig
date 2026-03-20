@@ -122,6 +122,28 @@ fn protocolCheckHelper(ctx: *Context) anyerror!void {
         },
     };
 
+    if (ctx.in_module_load) {
+        try ctx.protocol_obligations.append(ctx.allocator, .{
+            .type_name = type_name,
+            .methods_array = methods_array,
+            .protocol_name = protocol_name,
+        });
+        return;
+    }
+
+    try validateProtocolObligation(ctx, type_name, methods_array, protocol_name);
+}
+
+/// Validate a single protocol obligation: check that all required methods
+/// are registered in the dispatch table. Same-type and bare methods are
+/// checked immediately; cross-type (`any`) methods are checked immediately
+/// as well (they enumerate dispatch entries).
+pub fn validateProtocolObligation(
+    ctx: *Context,
+    type_name: []const u8,
+    methods_array: []const Value,
+    protocol_name: []const u8,
+) !void {
     var i: usize = 0;
     while (i < methods_array.len) {
         const method_val = methods_array[i];
@@ -134,14 +156,12 @@ fn protocolCheckHelper(ctx: *Context) anyerror!void {
         };
         i += 1;
 
-        // Check if next element is a stack-effect typed method
         if (i < methods_array.len and methods_array[i] == .stack_effect) {
             const effect = methods_array[i].stack_effect;
             i += 1;
 
             try validateTypedMethod(ctx, method_name, effect, type_name, protocol_name);
         } else {
-            // Bare method fallback: check unary or same-type binary
             const has_method = ctx.dispatch.lookupUnary(method_name, type_name) != null or
                 ctx.dispatch.lookupBinary(method_name, type_name, type_name) != null;
 
@@ -151,6 +171,72 @@ fn protocolCheckHelper(ctx: *Context) anyerror!void {
             }
         }
     }
+}
+
+/// Validate deferred protocol obligations.
+pub fn validateObligationsSameType(ctx: *Context) !void {
+    for (ctx.protocol_obligations.items) |obligation| {
+        try validateObligationSameTypeOnly(
+            ctx,
+            obligation.type_name,
+            obligation.methods_array,
+            obligation.protocol_name,
+        );
+    }
+
+    ctx.protocol_obligations.clearRetainingCapacity();
+}
+
+/// Validate a single obligation, but skip any method that involves a cross-type
+/// `ˀany` marker, which are left to runtime checks.
+fn validateObligationSameTypeOnly(
+    ctx: *Context,
+    type_name: []const u8,
+    methods_array: []const Value,
+    protocol_name: []const u8,
+) !void {
+    var i: usize = 0;
+    while (i < methods_array.len) {
+        const method_val = methods_array[i];
+        const method_name = switch (method_val) {
+            .symbol => |s| s,
+            else => {
+                helpers.setErrorContext(ctx, "protocol method entries must be symbols", .{});
+                return error.TypeMismatch;
+            },
+        };
+        i += 1;
+
+        if (i < methods_array.len and methods_array[i] == .stack_effect) {
+            const effect = methods_array[i].stack_effect;
+            i += 1;
+
+            if (isCrossTypeMethod(effect)) continue;
+
+            try validateTypedMethod(ctx, method_name, effect, type_name, protocol_name);
+        } else {
+            const has_method = ctx.dispatch.lookupUnary(method_name, type_name) != null or
+                ctx.dispatch.lookupBinary(method_name, type_name, type_name) != null;
+
+            if (!has_method) {
+                throwProtocolError(ctx, type_name, method_name, protocol_name);
+                return error.UserThrown;
+            }
+        }
+    }
+}
+
+/// Returns true if the stack effect has any non-self type annotation,
+/// i.e., the `any` sentinel or a concrete type that is not `self`.
+fn isCrossTypeMethod(effect: StackEffect) bool {
+    const n_inputs = @min(effect.inputs.len, 2);
+    for (0..n_inputs) |pos| {
+        if (effect.inputs[pos].type_annotation) |tv| {
+            if (tv == &markers_mod.any_type_sentinel) return true;
+            if (tv != &markers_mod.self_type_sentinel) return true;
+        }
+    }
+    return false;
 }
 
 /// Validate a typed method by examining the stack effect's input type annotations.

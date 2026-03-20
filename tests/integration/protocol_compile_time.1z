@@ -1,0 +1,42 @@
+use "testing" ;
+
+\ -- Parse-time missing method detection --
+\ Loading a module that has a same-type protocol obligation with a missing
+\ method should produce a hard error at module load time.
+
+test-missing-method-error: ( -- ) [
+  [ "fixtures/proto_missing_method.1z" load ]
+    "missing same-type method detected at module load" assert-error
+] ;
+
+\ -- Cross-type remains runtime-only --
+\ A module with a cross-type (any) protocol obligation where the cross-type
+\ method is missing should load successfully.
+
+test-cross-type-loads: ( -- ) [
+  "fixtures/proto_cross_type_ok.1z" load drop
+  t "cross-type protocol obligation loads without error" assert-true
+] ;
+
+\ -- Order independence --
+\ Method defined AFTER protocol declaration in the same module loads OK.
+
+test-order-independence: ( -- ) [
+  "fixtures/proto_order_ok.1z" load drop
+  t "method after protocol declaration loads successfully" assert-true
+] ;
+
+\ -- Positive case --
+\ Module with all same-type methods implemented loads successfully.
+
+test-all-methods-ok: ( -- ) [
+  "fixtures/proto_all_ok.1z" load drop
+  t "module with all methods implemented loads successfully" assert-true
+] ;
+
+\ -- Run all tests --
+
+test-missing-method-error
+test-cross-type-loads
+test-order-independence
+test-all-methods-ok

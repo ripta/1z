@@ -1,0 +1,13 @@
+\ Module with all same-type methods implemented. Should load successfully.
+
+showable: protocol{ show: } ;
+
+show: generic ( val -- str ) [ drop "" ] ;
+
+ok-type: virtual{ fixnum } ;
+
+show: method{ ok-type } [
+  unmake-ok-type inspect
+] ;
+
+ok-type: showable

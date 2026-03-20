@@ -77,6 +77,14 @@ pub const PragmaRegistration = struct {
 /// PragmaFrame holds pragma values for the current file scope.
 pub const PragmaFrame = std.StringHashMapUnmanaged(Value);
 
+/// A deferred protocol obligation recorded during module loading.
+/// Validated after all definitions in the module have been processed.
+pub const ProtocolObligation = struct {
+    type_name: []const u8,
+    methods_array: []const Value,
+    protocol_name: []const u8,
+};
+
 /// ErrorDetail captures information about an error for debugging purposes.
 pub const ErrorDetail = struct {
     error_type: []const u8,
@@ -142,6 +150,10 @@ pub const Context = struct {
     /// throw an error to prevent yielding mid-load, which would expose
     /// half-defined module frames to other tasks via ancestor traversal.
     in_module_load: bool = false,
+    /// Deferred protocol obligations collected during module loading.
+    /// Validated at module load completion so that methods defined after the
+    /// protocol declaration in the same file are still found.
+    protocol_obligations: std.ArrayListUnmanaged(ProtocolObligation) = .{},
     /// True while parsing a definition body that has a parse-time or
     /// parse-time-only marker. Used by the parser to allow parse-time-only
     /// words inside parse-time definitions.

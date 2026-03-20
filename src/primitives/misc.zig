@@ -8,6 +8,7 @@ const StatementProcessor = @import("../statement.zig").StatementProcessor;
 
 const markers_mod = @import("markers.zig");
 const helpers = @import("helpers.zig");
+const protocols = @import("protocols.zig");
 const Primitive = @import("types.zig").Primitive;
 const trace_mod = @import("../trace.zig");
 
@@ -227,6 +228,13 @@ fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator,
     ctx.in_module_load = true;
     defer ctx.in_module_load = was_in_module_load;
 
+    const saved_obligations = ctx.protocol_obligations;
+    ctx.protocol_obligations = .{};
+    defer {
+        ctx.protocol_obligations.deinit(ctx.allocator);
+        ctx.protocol_obligations = saved_obligations;
+    }
+
     var processor: StatementProcessor = .{};
     while (true) {
         const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
@@ -256,6 +264,11 @@ fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator,
             },
         }
     }
+
+    // Validate deferred protocol obligations before finalizing the module.
+    // Only same-type methods are checked here; cross-type (any) obligations
+    // remain runtime-only.
+    try protocols.validateObligationsSameType(ctx);
 
     // Capture definitions from the frame before popping
     const frame_index = ctx.local_frames.items.len - 1;

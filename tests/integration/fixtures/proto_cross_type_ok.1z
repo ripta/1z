@@ -1,0 +1,13 @@
+\ Module with a cross-type (any) protocol obligation where the cross-type
+\ method is missing. Module should load successfully because cross-type
+\ checks are deferred to runtime.
+
+scalable: protocol{ scale: ( a: self b: any -- result ) } ;
+
+scale: generic ( a b -- c ) [ drop ] ;
+
+ct-val: virtual{ fixnum } ;
+
+\ No scale: method{ ct-val ... } registered -- cross-type, so deferred
+
+ct-val: scalable

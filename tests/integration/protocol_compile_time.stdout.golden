@@ -1,0 +1,12 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: missing same-type method detected at module load
+Stack: [ ]
+PASS: cross-type protocol obligation loads without error
+Stack: [ ]
+PASS: method after protocol declaration loads successfully
+Stack: [ ]
+PASS: module with all methods implemented loads successfully
+Stack: [ ]

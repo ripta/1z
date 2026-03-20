@@ -1,0 +1,8 @@
+\ Module that declares a protocol obligation but is missing the required method.
+
+showable: protocol{ show: } ;
+
+missing-type: virtual{ fixnum } ;
+
+\ Declare obligation without implementing show: for missing-type
+missing-type: showable
