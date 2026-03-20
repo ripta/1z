@@ -1,0 +1,2 @@
+\ Uncertain depth: calling eval-string makes depth uncertain, then further calls get warnings
+uncertain-under: ( a s -- x ) [ eval-string + ] ;

@@ -1,0 +1,2 @@
+\ eval-string should not produce arity warnings or cannot-verify warnings
+uses-eval: ( s -- x ) [ eval-string ] ;

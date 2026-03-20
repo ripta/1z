@@ -1,0 +1,2 @@
+\ eval-string followed by a word that may underflow -- warning, not error
+eval-then-add: ( s -- x ) [ eval-string + ] ;

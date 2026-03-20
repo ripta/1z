@@ -1,2 +1,1 @@
 tests/integration/check_callsite_polymorphic.1z:4: err: under-generic: call to '+' requires 2 value(s) but only 1 available
-tests/integration/check_callsite_polymorphic.1z:4: err: under-generic: declared stack effect delta is 0, but inferred delta is -1

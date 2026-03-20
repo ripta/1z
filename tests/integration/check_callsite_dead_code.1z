@@ -1,0 +1,2 @@
+\ Guaranteed underflow followed by dead code
+dead-after: ( -- ) [ + drop ] ;

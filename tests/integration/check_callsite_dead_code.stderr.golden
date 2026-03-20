@@ -1,0 +1,2 @@
+tests/integration/check_callsite_dead_code.1z:2: err: dead-after: call to '+' requires 2 value(s) but only 0 available
+tests/integration/check_callsite_dead_code.1z:2: warning: dead-after: dead code: unreachable after guaranteed underflow
