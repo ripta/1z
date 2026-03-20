@@ -288,6 +288,9 @@ pub const InferenceEngine = struct {
                 if (inferred == .known and body_out_stack.items.len > 0) {
                     const cached_types = try self.allocator.alloc(StackEntry, body_out_stack.items.len);
                     @memcpy(cached_types, body_out_stack.items);
+                    if (self.type_cache.get(name)) |existing| {
+                        if (existing) |old| self.allocator.free(old);
+                    }
                     try self.type_cache.put(self.allocator, name, cached_types);
                 }
 
@@ -449,6 +452,7 @@ pub const InferenceEngine = struct {
                                     stack_model.shrinkRetainingCapacity(0);
 
                                     if (applied.output_types) |out_types| {
+                                        defer self.allocator.free(out_types);
                                         for (out_types) |entry| {
                                             try stack_model.append(self.allocator, entry);
                                         }
@@ -483,6 +487,7 @@ pub const InferenceEngine = struct {
                                         stack_model.shrinkRetainingCapacity(0);
 
                                         if (applied.output_types) |out_types| {
+                                            defer self.allocator.free(out_types);
                                             for (out_types) |entry| {
                                                 try stack_model.append(self.allocator, entry);
                                             }
