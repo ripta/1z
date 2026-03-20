@@ -48,15 +48,15 @@ rowfn: ( x -- y ) [ 1 + ] ;
 
 "pragma warning downgrades arity mismatch" test-section
 
-pragma{ arity-mismatch: "warning" }
+pragma{ redefinition-arity-mismatch: "warning" }
 warn1: ( a -- b ) [ 1 + ] ;
 warn1: ( a b -- c ) [ + ] ;
 3 4 warn1 7 "warning pragma allows mismatched redefinition" assert=
-pragma{ arity-mismatch: "error" }
+pragma{ redefinition-arity-mismatch: "error" }
 
 "pragma error preserves hard error" test-section
 
-pragma{ arity-mismatch: "error" }
+pragma{ redefinition-arity-mismatch: "error" }
 [
   err1: ( a -- b ) [ 1 + ] ;
   err1: ( a b -- c ) [ + ] ;
@@ -71,26 +71,26 @@ pragma{ arity-mismatch: "error" }
 
 "invalid pragma value rejected" test-section
 
-[ "pragma{ arity-mismatch: \"ignore\" }" eval-string
+[ "pragma{ redefinition-arity-mismatch: \"ignore\" }" eval-string
 ] "invalid pragma value is rejected" assert-error
 
-[ "pragma{ arity-mismatch: 42 }" eval-string
+[ "pragma{ redefinition-arity-mismatch: 42 }" eval-string
 ] "non-string pragma value is rejected" assert-error
 
 "warning mode uses new definition" test-section
 
-pragma{ arity-mismatch: "warning" }
+pragma{ redefinition-arity-mismatch: "warning" }
 wfn: ( a -- b ) [ 1 + ] ;
 wfn: ( a b -- c ) [ * ] ;
 3 4 wfn 12 "warning mode uses the new definition body" assert=
-pragma{ arity-mismatch: "error" }
+pragma{ redefinition-arity-mismatch: "error" }
 
 "warning then back to error" test-section
 
-pragma{ arity-mismatch: "warning" }
+pragma{ redefinition-arity-mismatch: "warning" }
 toggle1: ( a -- b ) [ 1 + ] ;
 toggle1: ( a b -- c ) [ + ] ;
-pragma{ arity-mismatch: "error" }
+pragma{ redefinition-arity-mismatch: "error" }
 [
   toggle2: ( a -- b ) [ 1 + ] ;
   toggle2: ( a b -- c ) [ + ] ;

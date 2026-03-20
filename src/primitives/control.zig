@@ -132,7 +132,7 @@ const require_doc_parse_time: i64 = 2; // bit 1
 const require_doc_type_descriptor: i64 = 4; // bit 2
 const require_doc_marker: i64 = 8; // bit 3
 
-pub fn nativeArityMismatchValidator(ctx: *Context) anyerror!void {
+pub fn nativeRedefinitionArityMismatchValidator(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
         .string => |s| {
@@ -140,12 +140,33 @@ pub fn nativeArityMismatchValidator(ctx: *Context) anyerror!void {
                 try ctx.stack.push(.{ .string = s });
                 try ctx.stack.push(.{ .boolean = true });
             } else {
-                try ctx.stack.push(.{ .string = "arity-mismatch: expected \"error\" or \"warning\"" });
+                try ctx.stack.push(.{ .string = "redefinition-arity-mismatch: expected \"error\" or \"warning\"" });
                 try ctx.stack.push(.{ .boolean = false });
             }
         },
         else => {
-            try ctx.stack.push(.{ .string = "arity-mismatch: expected \"error\" or \"warning\"" });
+            try ctx.stack.push(.{ .string = "redefinition-arity-mismatch: expected \"error\" or \"warning\"" });
+            try ctx.stack.push(.{ .boolean = false });
+        },
+    }
+}
+
+/// Native validator for the callsite-arity-mismatch pragma.
+/// Accepts "error", "warning", or "off".
+pub fn nativeCallsiteArityMismatchValidator(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .string => |s| {
+            if (std.mem.eql(u8, s, "error") or std.mem.eql(u8, s, "warning") or std.mem.eql(u8, s, "off")) {
+                try ctx.stack.push(.{ .string = s });
+                try ctx.stack.push(.{ .boolean = true });
+            } else {
+                try ctx.stack.push(.{ .string = "callsite-arity-mismatch: expected \"error\", \"warning\", or \"off\"" });
+                try ctx.stack.push(.{ .boolean = false });
+            }
+        },
+        else => {
+            try ctx.stack.push(.{ .string = "callsite-arity-mismatch: expected \"error\", \"warning\", or \"off\"" });
             try ctx.stack.push(.{ .boolean = false });
         },
     }

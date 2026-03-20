@@ -1,6 +1,6 @@
 \ Test that types propagate through call chain with no false positive
 pragma{ suppress-undeclared: t }
 
-make-fixnum: ( -- n: fixnum ) [ 42 ] ;
-use-fixnum: ( n: fixnum -- m ) [ 1 + ] ;
-chain: ( -- ) [ make-fixnum use-fixnum drop ] ;
+make-fixnum: ( -- n: fixnum )   [ 42 ] ;
+use-fixnum:  ( n: fixnum -- m ) [ 1 + ] ;
+chain:       ( -- )             [ make-fixnum use-fixnum drop ] ;

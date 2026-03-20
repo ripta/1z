@@ -1,6 +1,6 @@
 \ Test that output type annotation prevents cross-type passing
 pragma{ suppress-undeclared: t }
 
-make-string: ( -- s: string ) [ "hello" ] ;
-use-fixnum: ( n: fixnum -- m ) [ 1 + ] ;
-bad-chain: ( -- ) [ make-string use-fixnum drop ] ;
+make-string: ( -- s: string )   [ "hello" ] ;
+use-fixnum:  ( n: fixnum -- m ) [ 1 + ] ;
+bad-chain:   ( -- )             [ make-string use-fixnum drop ] ;

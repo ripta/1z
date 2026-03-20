@@ -562,7 +562,7 @@ fn formatDirectory(allocator: std.mem.Allocator, dir_path: []const u8, check_onl
 }
 
 fn repl(ctx: *Context, verbosity: Verbosity, max_memory_bytes: usize) void {
-    ctx.setPragma("arity-mismatch", .{ .string = "warning" }) catch {};
+    ctx.setPragma("redefinition-arity-mismatch", .{ .string = "warning" }) catch {};
 
     const stdout_file: File = .stdout();
     var stdout_buf: [4096]u8 = undefined;
@@ -969,7 +969,21 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
             }
         }
 
-        var engine = effect_inference.InferenceEngine.init(&ctx.dictionary, &ctx.dispatch, ctx.local_frames.items, ctx.quotationAllocator(), severity_override, suppressed, suppress_undeclared, &ctx.builtin_type_values, type_check_mode);
+        var arity_check_mode: effect_inference.InferenceEngine.ArityCheckMode = .err;
+        if (ctx.getPragma("callsite-arity-mismatch")) |pragma_val| {
+            switch (pragma_val) {
+                .string => |s| {
+                    if (std.mem.eql(u8, s, "off")) {
+                        arity_check_mode = .off;
+                    } else if (std.mem.eql(u8, s, "warning")) {
+                        arity_check_mode = .warning;
+                    }
+                },
+                else => {},
+            }
+        }
+
+        var engine = effect_inference.InferenceEngine.init(&ctx.dictionary, &ctx.dispatch, ctx.local_frames.items, ctx.quotationAllocator(), severity_override, suppressed, suppress_undeclared, &ctx.builtin_type_values, type_check_mode, arity_check_mode);
         defer engine.deinit();
         engine.analyzeAll(ctx.current_source) catch |err| {
             err_writer.print("Error during effect inference: {any}\n", .{err}) catch {};

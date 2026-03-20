@@ -349,12 +349,16 @@ pub const Context = struct {
 
         try self.pragma_registry.put(self.allocator, "suppress-undeclared", .{});
 
-        try self.pragma_registry.put(self.allocator, "arity-mismatch", .{
-            .native_validator = &control.nativeArityMismatchValidator,
+        try self.pragma_registry.put(self.allocator, "redefinition-arity-mismatch", .{
+            .native_validator = &control.nativeRedefinitionArityMismatchValidator,
         });
 
         try self.pragma_registry.put(self.allocator, "type-check", .{
             .native_validator = &control.nativeTypeCheckValidator,
+        });
+
+        try self.pragma_registry.put(self.allocator, "callsite-arity-mismatch", .{
+            .native_validator = &control.nativeCallsiteArityMismatchValidator,
         });
 
         // Split prelude into lines and process incrementally
@@ -627,7 +631,7 @@ pub const Context = struct {
                             old_effect.concreteOutputCount() != new_effect.concreteOutputCount())
                         {
                             const msg = std.fmt.allocPrint(self.arena.allocator(), "arity mismatch on redefinition of '{s}' (was {d} -> {d}, now {d} -> {d})", .{ name, old_effect.concreteInputCount(), old_effect.concreteOutputCount(), new_effect.concreteInputCount(), new_effect.concreteOutputCount() }) catch "arity mismatch on redefinition";
-                            const pragma_val = self.getPragma("arity-mismatch");
+                            const pragma_val = self.getPragma("redefinition-arity-mismatch");
                             const is_warning = if (pragma_val) |pv| switch (pv) {
                                 .string => |s| std.mem.eql(u8, s, "warning"),
                                 else => false,
