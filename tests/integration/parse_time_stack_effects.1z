@@ -1,0 +1,45 @@
+\ Tests for parse-time stack effect attachment to quotations
+
+use "testing" ;
+use "effect" ;
+
+"named word with effect before [" test-section
+add1: ( n -- m ) [ 1 + ] ;
+add1: >word-info
+stack-effect>> >string "( n -- m )" "effect attached via >word-info" assert=
+
+"anonymous quotation with effect" test-section
+( n -- n ) [ 1 + ] native.quotation>effect
+dup f = f "anonymous quotation has effect" assert=
+dup #first #len 1 "effect has 1 input" assert=
+#last #len 1 "effect has 1 output" assert=
+
+"effect inside quotation" test-section
+[ ( n -- n ) 1 + ] native.quotation>effect
+dup f = f "inner effect is present" assert=
+#first #first 0 #nth "n" "inner effect input name" assert=
+
+"markers before effect before [" test-section
+pt-word: parse-time ( -- n ) [ 42 ] ;
+pt-word: >word-info
+dup stack-effect>> >string "( -- n )" "effect with markers" assert=
+markers>> #len 1 "has parse-time marker" assert=
+
+"nested quotation effects" test-section
+apply-fn: ( n quot: ( n -- n ) -- m ) [ call ] ;
+apply-fn: >word-info stack-effect>> inputs>>
+dup #first name>> "n" "first input name" assert=
+#last
+dup name>> "quot" "second input name" assert=
+nested-effect>> f = f "second input has nested effect" assert=
+
+"type annotations resolve" test-section
+typed-fn: ( n: fixnum -- m: fixnum ) [ 1 + ] ;
+typed-fn: >word-info stack-effect>> inputs>> #first
+dup name>> "n" "typed input name" assert=
+type-annotation>> fixnum "type annotation is fixnum" assert=
+
+"effect round-trips through >string" test-section
+with-effect: ( a b -- c ) [ + ] ;
+with-effect: >word-info stack-effect>> >string
+"( a b -- c )" "effect >string" assert=

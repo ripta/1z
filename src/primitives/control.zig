@@ -350,13 +350,16 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 var collected_markers = std.ArrayListUnmanaged(*Marker){};
                 defer collected_markers.deinit(alloc);
 
+                // Extract stack effect from the quotation's .effect field if present
+                if (top_val == .quotation) {
+                    if (top_val.quotation.effect) |eff| {
+                        stack_effect_val = eff.*;
+                    }
+                }
+
                 while (true) {
                     const next_val = try ctx.stack.peek();
                     switch (next_val) {
-                        .stack_effect => |se| {
-                            _ = try ctx.stack.pop();
-                            stack_effect_val = se;
-                        },
                         .marker => |mk| {
                             _ = try ctx.stack.pop();
                             try collected_markers.append(alloc, mk);
@@ -367,7 +370,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                         },
                         .symbol => break,
                         else => {
-                            helpers.setTypeMismatchError(ctx, "symbol, marker, stack-effect, or doc-string before word definition", next_val);
+                            helpers.setTypeMismatchError(ctx, "symbol, marker, or doc-string before word definition", next_val);
                             return error.TypeMismatch;
                         },
                     }

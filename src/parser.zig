@@ -146,14 +146,49 @@ fn handleParseTimeError(c: *Context, err: anyerror) ParseError {
     return ParseError.ParseTimeExecutionError;
 }
 
-/// 5. Capture all values above the pre-depth stack as `push_literal` instructions
+/// Scan backwards through `instructions` past markers and doc_strings to find a
+/// stack_effect literal. If found, remove it and return a heap-allocated pointer
+/// to the effect. Otherwise, return null.
+fn extractPrecedingEffect(instructions: *std.ArrayListUnmanaged(Instruction), allocator: Allocator) ?*const StackEffect {
+    var i = instructions.items.len;
+    while (i > 0) {
+        i -= 1;
+
+        const item = instructions.items[i];
+        if (item.op == .push_literal) {
+            switch (item.op.push_literal) {
+                .stack_effect => |se| {
+                    const effect_ptr = allocator.create(StackEffect) catch return null;
+                    effect_ptr.* = se;
+                    // Remove the stack_effect instruction by shifting subsequent items down
+                    std.mem.copyForwards(
+                        Instruction,
+                        instructions.items[i .. instructions.items.len - 1],
+                        instructions.items[i + 1 .. instructions.items.len],
+                    );
+                    instructions.items.len -= 1;
+                    return effect_ptr;
+                },
+                .marker, .doc_string => continue,
+                else => return null,
+            }
+        } else {
+            return null;
+        }
+    }
+
+    return null;
+}
+
+/// Capture all values above the pre-depth stack as `push_literal` instructions
 ///
-/// NOTE(ripta): The `call_word` acts as a barrier: the parse-time word can only reach back
-///              to literals that appear after the last `call_word` in the pending
-///              instruction stream. This prevents reordering when `push_literals` and
-///              `call_words` are interleaved.
-/// Scan backwards through pending instructions for a parse-time or
-/// parse-time-only marker literal, stopping at call_word barriers.
+/// The `call_word` acts as a barrier: the parse-time word can only reach back
+/// to literals that appear after the last `call_word` in the pending instruction
+/// stream. This prevents reordering when `push_literals` and `call_words` are
+/// interleaved.
+///
+/// Scan backwards through pending instructions for a parse-time or parse-time-
+/// only marker literal, stopping at call_word barriers.
 fn hasParseTimeMarkerInTrail(instructions: []const Instruction) bool {
     var i = instructions.len;
     while (i > 0) {
@@ -359,19 +394,26 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
         const line = tok.line;
         const column = tok.column;
         if (std.mem.eql(u8, token, "[")) {
+            const preceding_effect = extractPrecedingEffect(&instructions, allocator);
             if (ctx) |c| {
                 if (hasParseTimeMarkerInTrail(instructions.items)) {
                     const old = c.parsing_parse_time_def;
                     c.parsing_parse_time_def = true;
-                    const quotation = try parseQuotation(allocator, tokenizer, ctx, line);
+
+                    var quotation = try parseQuotation(allocator, tokenizer, ctx, line);
                     c.parsing_parse_time_def = old;
+
+                    if (quotation.effect == null) quotation.effect = preceding_effect;
                     instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = quotation } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
                 } else {
-                    const quotation = try parseQuotation(allocator, tokenizer, ctx, line);
+                    var quotation = try parseQuotation(allocator, tokenizer, ctx, line);
+
+                    if (quotation.effect == null) quotation.effect = preceding_effect;
                     instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = quotation } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
                 }
             } else {
-                const quotation = try parseQuotation(allocator, tokenizer, ctx, line);
+                var quotation = try parseQuotation(allocator, tokenizer, ctx, line);
+                if (quotation.effect == null) quotation.effect = preceding_effect;
                 instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = quotation } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
             }
         } else if (std.mem.eql(u8, token, "]")) {
@@ -468,19 +510,24 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
             return Quotation{ .instructions = instrs, .effect = quotation_effect };
         } else if (std.mem.eql(u8, token, "[")) {
             is_first_token = false;
+            const preceding_effect = extractPrecedingEffect(&instructions, allocator);
+
             if (ctx) |c| {
                 if (hasParseTimeMarkerInTrail(instructions.items)) {
                     const old = c.parsing_parse_time_def;
                     c.parsing_parse_time_def = true;
-                    const nested = try parseQuotation(allocator, tokenizer, ctx, line);
+                    var nested = try parseQuotation(allocator, tokenizer, ctx, line);
                     c.parsing_parse_time_def = old;
+                    if (nested.effect == null) nested.effect = preceding_effect;
                     instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = nested } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
                 } else {
-                    const nested = try parseQuotation(allocator, tokenizer, ctx, line);
+                    var nested = try parseQuotation(allocator, tokenizer, ctx, line);
+                    if (nested.effect == null) nested.effect = preceding_effect;
                     instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = nested } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
                 }
             } else {
-                const nested = try parseQuotation(allocator, tokenizer, ctx, line);
+                var nested = try parseQuotation(allocator, tokenizer, ctx, line);
+                if (nested.effect == null) nested.effect = preceding_effect;
                 instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = nested } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
             }
         } else if (std.mem.eql(u8, token, "]")) {
@@ -1028,15 +1075,15 @@ test "parse top level with stack effect" {
     var tokenizer = Tokenizer.init("foo: ( n -- n ) [ 1 ]");
     const instrs = try parseTopLevel(arena.allocator(), &tokenizer, null);
 
-    try std.testing.expectEqual(@as(usize, 3), instrs.len);
+    try std.testing.expectEqual(@as(usize, 2), instrs.len);
     try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol);
 
-    const effect = instrs[1].op.push_literal.stack_effect;
-    try std.testing.expectEqual(@as(usize, 1), effect.inputs.len);
-    try std.testing.expectEqual(@as(usize, 1), effect.outputs.len);
-    try std.testing.expectEqualStrings("n", effect.inputs[0].name);
-
-    try std.testing.expectEqual(@as(usize, 1), instrs[2].op.push_literal.quotation.instructions.len);
+    const quot = instrs[1].op.push_literal.quotation;
+    try std.testing.expect(quot.effect != null);
+    try std.testing.expectEqual(@as(usize, 1), quot.effect.?.inputs.len);
+    try std.testing.expectEqual(@as(usize, 1), quot.effect.?.outputs.len);
+    try std.testing.expectEqualStrings("n", quot.effect.?.inputs[0].name);
+    try std.testing.expectEqual(@as(usize, 1), quot.instructions.len);
 }
 
 test "parse top level with comments" {

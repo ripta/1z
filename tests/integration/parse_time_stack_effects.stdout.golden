@@ -1,0 +1,55 @@
+=== named word with effect before [ ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ word-info{ name: "add1" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "m" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/parse_time_stack_effects.1z" line: 7 column: 26 } module: f provenance: f } ]
+PASS: effect attached via >word-info
+Stack: [ ]
+=== anonymous quotation with effect ===
+Stack: [ ]
+Stack: [ { { { "n" f f f } } { { "n" f f f } } } ]
+PASS: anonymous quotation has effect
+Stack: [ { { { "n" f f f } } { { "n" f f f } } } ]
+PASS: effect has 1 input
+Stack: [ { { { "n" f f f } } { { "n" f f f } } } ]
+PASS: effect has 1 output
+Stack: [ ]
+=== effect inside quotation ===
+Stack: [ ]
+Stack: [ { { { "n" f f f } } { { "n" f f f } } } ]
+PASS: inner effect is present
+Stack: [ { { { "n" f f f } } { { "n" f f f } } } ]
+PASS: inner effect input name
+Stack: [ ]
+=== markers before effect before [ ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ word-info{ name: "pt-word" stack-effect: stack-effect-info{ inputs: { } outputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { <marker:parse-time> } native?: f body: [ 42 ] methods: { } source-loc: source-loc{ file: "tests/integration/parse_time_stack_effects.1z" line: 23 column: 37 } module: f provenance: f } ]
+PASS: effect with markers
+Stack: [ word-info{ name: "pt-word" stack-effect: stack-effect-info{ inputs: { } outputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { <marker:parse-time> } native?: f body: [ 42 ] methods: { } source-loc: source-loc{ file: "tests/integration/parse_time_stack_effects.1z" line: 23 column: 37 } module: f provenance: f } ]
+PASS: has parse-time marker
+Stack: [ ]
+=== nested quotation effects ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "quot" row-variable?: f nested-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } } } type-annotation: f } } ]
+PASS: first input name
+Stack: [ { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "quot" row-variable?: f nested-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } } } type-annotation: f } } ]
+Stack: [ stack-effect-param{ name: "quot" row-variable?: f nested-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } } } type-annotation: f } ]
+PASS: second input name
+Stack: [ stack-effect-param{ name: "quot" row-variable?: f nested-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } } } type-annotation: f } ]
+PASS: second input has nested effect
+Stack: [ ]
+=== type annotations resolve ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } ]
+PASS: typed input name
+Stack: [ stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } ]
+PASS: type annotation is fixnum
+Stack: [ ]
+=== effect round-trips through >string ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "( a b -- c )" ]
+PASS: effect >string
+Stack: [ ]
