@@ -41,6 +41,17 @@ Stack: [ ]
 Stack: [ ]
 16
 Stack: [ ]
+=== Qualified name assertions ===
+Stack: [ ]
+Stack: [ ]
+PASS: qualified double
+Stack: [ ]
+PASS: qualified triple
+Stack: [ ]
+PASS: qualified squared
+Stack: [ ]
+PASS: qualified nonexistent throws
+Stack: [ ]
 === Qualified name without import ===
 Stack: [ ]
 Stack: [ ]

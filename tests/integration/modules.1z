@@ -55,6 +55,15 @@ mymath: "module_lib.1z" load ;
 3 mymath.triple .
 4 mymath.squared .
 
+\ === Qualified name assertions ===
+"Qualified name assertions" test-section
+
+name: "module_lib.1z" load ;
+5 name.double 10 "qualified double" assert=
+3 name.triple 9 "qualified triple" assert=
+4 name.squared 16 "qualified squared" assert=
+[ 1 name.nonexistent ] "qualified nonexistent throws" assert-error
+
 \ === Qualified name with nested path ===
 "Qualified name without import" test-section
 
