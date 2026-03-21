@@ -65,3 +65,40 @@ dup 3 tree-contains? t "reverse cmp: contains 3" assert=
 dup 5 tree-contains? t "reverse cmp: contains 5" assert=
 dup 6 tree-contains? f "reverse cmp: does not contain 6" assert=
 drop
+
+"tree-min on empty tree" test-section
+[ cmp ] <bst> tree-min option:none? t "min of empty is none" assert=
+
+"tree-min on non-empty tree" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst tree-min option:some> 1 "min is 1" assert=
+{ 42 } [ cmp ] >bst tree-min option:some> 42 "min of singleton is 42" assert=
+{ 10 9 8 7 6 5 4 3 2 1 } [ cmp ] >bst tree-min option:some> 1 "min of reverse sorted is 1" assert=
+
+"tree-max on empty tree" test-section
+[ cmp ] <bst> tree-max option:none? t "max of empty is none" assert=
+
+"tree-max on non-empty tree" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst tree-max option:some> 8 "max is 8" assert=
+{ 42 } [ cmp ] >bst tree-max option:some> 42 "max of singleton is 42" assert=
+{ 1 2 3 4 5 6 7 8 9 10 } [ cmp ] >bst tree-max option:some> 10 "max of sorted is 10" assert=
+
+"tree-size" test-section
+[ cmp ] <bst> tree-size 0 "size of empty is 0" assert=
+[ cmp ] <bst> 42 tree-insert tree-size 1 "size after 1 insert is 1" assert=
+{ 5 3 8 1 4 } [ cmp ] >bst tree-size 5 "size of 5-element tree is 5" assert=
+{ 1 2 3 4 5 6 7 8 9 10 } [ cmp ] >bst tree-size 10 "size of 10-element tree is 10" assert=
+{ 5 5 5 } [ cmp ] >bst tree-size 1 "duplicate inserts do not increase size" assert=
+
+"tree-lookup present" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst
+dup 5 tree-lookup option:some> 5 "lookup 5 found" assert=
+dup 1 tree-lookup option:some> 1 "lookup 1 found" assert=
+dup 8 tree-lookup option:some> 8 "lookup 8 found" assert=
+drop
+
+"tree-lookup absent" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst
+dup 6 tree-lookup option:none? t "lookup 6 is none" assert=
+dup 0 tree-lookup option:none? t "lookup 0 is none" assert=
+drop
+[ cmp ] <bst> 42 tree-lookup option:none? t "lookup on empty is none" assert=

@@ -293,6 +293,80 @@ tree-contains?: ( bst value -- bool ) [
   contains-node
 ] ;
 
+min-node: stack-recursive ( node -- option ) [
+  {
+    tree-node:branch: [
+      \ ( color key left right )
+      drop [ nip ] dip
+      \ ( key left )
+      dup leaf? [
+        drop >option:some
+      ] [
+        nip min-node
+      ] if
+    ]
+    tree-node:leaf: [ option:none ]
+  } unchecked-match
+] ;
+
+max-node: stack-recursive ( node -- option ) [
+  {
+    tree-node:branch: [
+      \ ( color key left right )
+      nip [ nip ] dip
+      \ ( key right )
+      dup leaf? [
+        drop >option:some
+      ] [
+        nip max-node
+      ] if
+    ]
+    tree-node:leaf: [ option:none ]
+  } unchecked-match
+] ;
+
+size-node: stack-recursive ( node -- n ) [
+  {
+    tree-node:branch: [
+      \ ( color key left right )
+      swap size-node swap size-node + 1 + nip nip
+    ]
+    tree-node:leaf: [ 0 ]
+  } unchecked-match
+] ;
+
+lookup-node: stack-recursive ( value comparator node -- option ) [
+  {
+    tree-node:branch: [
+      \ ( value comparator color key left right )
+      compare-with-key {
+        ordering:lt: [
+          drop nip nip lookup-node
+        ]
+        ordering:eq: [
+          drop drop nip nip nip >option:some
+        ]
+        ordering:gt: [
+          nip nip nip lookup-node
+        ]
+      } unchecked-match
+    ]
+    tree-node:leaf: [
+      drop drop option:none
+    ]
+  } unchecked-match
+] ;
+
+tree-min:  ( bst -- option ) [ unmake-bst drop min-node ] ;
+tree-max:  ( bst -- option ) [ unmake-bst drop max-node ] ;
+tree-size: ( bst -- n )      [ unmake-bst drop size-node ] ;
+
+tree-lookup: ( bst value -- option ) [
+  swap unmake-bst  \ ( value root comparator )
+  swap             \ ( value comparator root )
+  lookup-node
+] ;
+
 >bst: ( array comparator -- bst ) [
   <bst> swap [ tree-insert ] #each
 ] ;

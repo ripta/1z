@@ -93,3 +93,59 @@ Stack: [ <bst bst{ root: <tree-node:branch tree-node-data{ color: <tree-color:bl
 PASS: reverse cmp: does not contain 6
 Stack: [ <bst bst{ root: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 2 left: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 4 left: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 5 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 3 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> }> right: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 1 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> }> comparator: [ swap cmp ] }> ]
 Stack: [ ]
+=== tree-min on empty tree ===
+Stack: [ ]
+PASS: min of empty is none
+Stack: [ ]
+=== tree-min on non-empty tree ===
+Stack: [ ]
+PASS: min is 1
+Stack: [ ]
+PASS: min of singleton is 42
+Stack: [ ]
+PASS: min of reverse sorted is 1
+Stack: [ ]
+=== tree-max on empty tree ===
+Stack: [ ]
+PASS: max of empty is none
+Stack: [ ]
+=== tree-max on non-empty tree ===
+Stack: [ ]
+PASS: max is 8
+Stack: [ ]
+PASS: max of singleton is 42
+Stack: [ ]
+PASS: max of sorted is 10
+Stack: [ ]
+=== tree-size ===
+Stack: [ ]
+PASS: size of empty is 0
+Stack: [ ]
+PASS: size after 1 insert is 1
+Stack: [ ]
+PASS: size of 5-element tree is 5
+Stack: [ ]
+PASS: size of 10-element tree is 10
+Stack: [ ]
+PASS: duplicate inserts do not increase size
+Stack: [ ]
+=== tree-lookup present ===
+Stack: [ ]
+Stack: [ <bst bst{ root: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 3 left: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 1 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 5 left: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 4 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 8 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> }> }> comparator: [ cmp ] }> ]
+PASS: lookup 5 found
+Stack: [ <bst bst{ root: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 3 left: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 1 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 5 left: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 4 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 8 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> }> }> comparator: [ cmp ] }> ]
+PASS: lookup 1 found
+Stack: [ <bst bst{ root: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 3 left: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 1 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 5 left: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 4 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 8 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> }> }> comparator: [ cmp ] }> ]
+PASS: lookup 8 found
+Stack: [ <bst bst{ root: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 3 left: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 1 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 5 left: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 4 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 8 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> }> }> comparator: [ cmp ] }> ]
+Stack: [ ]
+=== tree-lookup absent ===
+Stack: [ ]
+Stack: [ <bst bst{ root: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 3 left: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 1 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 5 left: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 4 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 8 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> }> }> comparator: [ cmp ] }> ]
+PASS: lookup 6 is none
+Stack: [ <bst bst{ root: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 3 left: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 1 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 5 left: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 4 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 8 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> }> }> comparator: [ cmp ] }> ]
+PASS: lookup 0 is none
+Stack: [ <bst bst{ root: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 3 left: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 1 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 5 left: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 4 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 8 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> }> }> comparator: [ cmp ] }> ]
+Stack: [ ]
+PASS: lookup on empty is none
+Stack: [ ]
