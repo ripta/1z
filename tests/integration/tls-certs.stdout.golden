@@ -1,0 +1,8 @@
+=== add-ca-pem adds certificates to config ===
+PASS: connect with added PEM CAs
+=== add-ca-file adds certificates from file ===
+PASS: connect with file CAs
+=== add-ca-pem on no-verify config does not crash ===
+PASS: type is still tls-config
+=== add-ca-file with nonexistent path throws ===
+PASS: nonexistent file

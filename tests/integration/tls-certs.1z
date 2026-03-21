@@ -1,0 +1,25 @@
+\ Integration tests for TLS certificate loading
+
+use "testing" ;
+use "tls" ;
+
+"add-ca-pem adds certificates to config" test-section
+"/etc/ssl/cert.pem" read: stream-open dup stream-read-all swap stream-close
+<tls-config> swap add-ca-pem
+[ "example.com" 443 ] dip connect-with
+dup "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n" stream-write drop
+stream-read-line "HTTP/" #starts-with? t "connect with added PEM CAs" assert=
+
+"add-ca-file adds certificates from file" test-section
+<tls-config> "/etc/ssl/cert.pem" add-ca-file
+[ "example.com" 443 ] dip connect-with
+dup "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n" stream-write drop
+stream-read-line "HTTP/" #starts-with? t "connect with file CAs" assert=
+
+"add-ca-pem on no-verify config does not crash" test-section
+"/etc/ssl/cert.pem" read: stream-open dup stream-read-all swap stream-close
+<tls-config-no-verify> swap add-ca-pem
+type-of tls-config "type is still tls-config" assert=
+
+"add-ca-file with nonexistent path throws" test-section
+[ <tls-config-no-verify> "/nonexistent/cert.pem" add-ca-file ] "nonexistent file" assert-error

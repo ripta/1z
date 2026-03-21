@@ -2,8 +2,8 @@
 
 use "testing" ;
 use "net" ;
-use "tcp" ;
 use "tls" ;
+use "tcp" shadow-ok ;
 
 "basic HTTPS request over TLS" test-section
 "example.com" 443 make-addr:tcp connect

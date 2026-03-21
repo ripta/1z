@@ -15,6 +15,7 @@ pub const primitives = [_]Primitive{};
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "tls-config", .func = nativeTlsConfig },
+    .{ .name = "tls-config-add-ca-pem", .func = nativeTlsConfigAddCaPem },
     .{ .name = "tls-config-no-verify", .func = nativeTlsConfigNoVerify },
     .{ .name = "tls-upgrade", .func = nativeTlsUpgrade },
 };
@@ -139,6 +140,39 @@ fn tlsFlushState(tls_state: *TlsState) !void {
 }
 
 // =============================================================================
+// Helpers
+// =============================================================================
+
+/// Extract a TlsConfig pointer from a value that is either a bare resource or
+/// a tagged (virtual-type-wrapped) resource with type_name "tls-config".
+fn extractTlsConfig(ctx: *Context, val: Value) !*TlsConfig {
+    const resource = switch (val) {
+        .tagged => |t| switch (t.inner.*) {
+            .resource => |r| r,
+            else => {
+                helpers.setTypeMismatchError(ctx, "tls-config", val);
+                return error.TypeMismatch;
+            },
+        },
+        .resource => |r| r,
+        else => {
+            helpers.setTypeMismatchError(ctx, "tls-config", val);
+            return error.TypeMismatch;
+        },
+    };
+
+    if (!std.mem.eql(u8, resource.type_name, "tls-config")) {
+        helpers.setTypeMismatchError(ctx, "tls-config", val);
+        return error.TypeMismatch;
+    }
+
+    return @ptrCast(@alignCast(resource.ptr orelse {
+        helpers.setErrorContext(ctx, "tls-config resource is closed", .{});
+        return error.IOFailed;
+    }));
+}
+
+// =============================================================================
 // TLS config and upgrade primitives
 // =============================================================================
 
@@ -189,6 +223,61 @@ fn nativeTlsConfigNoVerify(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .resource = r });
 }
 
+/// tls-config-add-ca-pem ( resource pem-data -- resource )
+///
+/// Adds CA certificates from in-memory PEM data to a TLS config resource.
+/// The PEM data is parsed for BEGIN/END CERTIFICATE markers, base64-decoded,
+/// and each certificate is added to the config's CA bundle. If the bundle is
+/// null (no-verify config), it is initialized to empty before adding.
+fn nativeTlsConfigAddCaPem(ctx: *Context) anyerror!void {
+    const pem_val = try ctx.stack.pop();
+    const pem_data: []const u8 = switch (pem_val) {
+        .string => |s| s,
+        .byte_array => |ba| ba.items,
+        else => {
+            helpers.setTypeMismatchError(ctx, "string or byte-array", pem_val);
+            return error.TypeMismatch;
+        },
+    };
+    const config_val = try ctx.stack.pop();
+    const config = try extractTlsConfig(ctx, config_val);
+    const alloc = config.allocator;
+
+    if (config.bundle == null) {
+        config.bundle = .{};
+    }
+
+    const begin_marker = "-----BEGIN CERTIFICATE-----";
+    const end_marker = "-----END CERTIFICATE-----";
+    const now_sec = std.time.timestamp();
+    const base64_decoder = std.base64.standard.decoderWithIgnore(" \t\r\n");
+
+    var start_index: usize = 0;
+    while (std.mem.indexOfPos(u8, pem_data, start_index, begin_marker)) |begin_marker_start| {
+        const cert_start = begin_marker_start + begin_marker.len;
+        const cert_end = std.mem.indexOfPos(u8, pem_data, cert_start, end_marker) orelse {
+            helpers.setErrorContext(ctx, "PEM data has BEGIN marker without matching END marker", .{});
+            return error.InvalidArgument;
+        };
+        start_index = cert_end + end_marker.len;
+        const encoded_cert = std.mem.trim(u8, pem_data[cert_start..cert_end], " \t\r\n");
+
+        const decoded_start: u32 = @intCast(config.bundle.?.bytes.items.len);
+        const decoded_size_upper = encoded_cert.len / 4 * 3 + 4;
+        try config.bundle.?.bytes.ensureUnusedCapacity(alloc, decoded_size_upper);
+        const dest_buf = config.bundle.?.bytes.allocatedSlice()[decoded_start..];
+        config.bundle.?.bytes.items.len += base64_decoder.decode(dest_buf, encoded_cert) catch {
+            helpers.setErrorContext(ctx, "PEM certificate contains invalid base64 data", .{});
+            return error.InvalidArgument;
+        };
+        config.bundle.?.parseCert(alloc, decoded_start, now_sec) catch {
+            config.bundle.?.bytes.items.len = decoded_start;
+        };
+    }
+
+    try ctx.stack.push(config_val);
+}
+
 /// tls-upgrade ( stream config hostname -- stream )
 ///
 /// Upgrades a stream to TLS using the provided configuration and hostname for
@@ -200,30 +289,7 @@ fn nativeTlsUpgrade(ctx: *Context) anyerror!void {
     const config_val = try ctx.stack.pop();
     const stream = try helpers.popStream(ctx);
 
-    const resource = switch (config_val) {
-        .tagged => |t| switch (t.inner.*) {
-            .resource => |r| r,
-            else => {
-                helpers.setTypeMismatchError(ctx, "tls-config", config_val);
-                return error.TypeMismatch;
-            },
-        },
-        .resource => |r| r,
-        else => {
-            helpers.setTypeMismatchError(ctx, "tls-config", config_val);
-            return error.TypeMismatch;
-        },
-    };
-
-    if (!std.mem.eql(u8, resource.type_name, "tls-config")) {
-        helpers.setTypeMismatchError(ctx, "tls-config", config_val);
-        return error.TypeMismatch;
-    }
-
-    const config: *TlsConfig = @ptrCast(@alignCast(resource.ptr orelse {
-        helpers.setErrorContext(ctx, "tls-config resource is closed", .{});
-        return error.IOFailed;
-    }));
+    const config = try extractTlsConfig(ctx, config_val);
 
     if (stream.closed) {
         helpers.setErrorContext(ctx, "stream is closed", .{});

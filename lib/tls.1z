@@ -1,5 +1,8 @@
 \ lib/tls.1z - TLS configuration and connection support
 
+use "net" ;
+tcp: "tcp" load ;
+
 tls-config: virtual{ resource } ;
 
 \\ Create a TLS config loaded with system CA certificates.
@@ -8,8 +11,33 @@ tls-config: virtual{ resource } ;
 \\ Create a TLS config with no CA verification. For testing only.
 <tls-config-no-verify>: ( -- tls-config ) [ native.tls-config-no-verify >tls-config ] ;
 
+\\ Add CA certificates from in-memory PEM data to a TLS config.
+add-ca-pem: ( tls-config pem-data -- tls-config ) [
+  [ unmake-tls-config ] dip native.tls-config-add-ca-pem >tls-config
+] ;
+
+\\ Add CA certificates from a PEM file to a TLS config.
+add-ca-file: ( tls-config path -- tls-config ) [
+  read: stream-open dup stream-read-all swap stream-close
+  add-ca-pem
+] ;
+
 \\ Upgrade a TCP stream to TLS.
 \\ Returns a new TLS-wrapped stream. The original stream should not be used.
 tls-upgrade: ( stream tls-config hostname -- stream ) [
   native.tls-upgrade
+] ;
+
+\\ Connect to a host over TLS using system CA certificates.
+connect: ( hostname port -- stream ) [
+  over
+  [ make-addr:tcp tcp.connect ] dip
+  <tls-config> swap tls-upgrade
+] ;
+
+\\ Connect to a host over TLS using an explicit TLS config.
+connect-with: ( hostname port tls-config -- stream ) [
+  -rot> over
+  [ make-addr:tcp tcp.connect ] dip
+  [ swap ] dip tls-upgrade
 ] ;
