@@ -1,0 +1,20 @@
+=== udp-bind creates udp-socket ===
+Stack: [ ]
+PASS: type is udp-socket
+Stack: [ ]
+=== udp-open creates unbound udp-socket ===
+Stack: [ ]
+PASS: type is udp-socket
+Stack: [ ]
+=== udp-connect creates connected-udp-socket ===
+Stack: [ ]
+PASS: type is connected-udp-socket
+Stack: [ ]
+=== udp-bind echo round-trip via udp-sendto and udp-recvfrom ===
+Stack: [ ]
+PASS: received data
+Stack: [ ]
+=== connected udp send and recv ===
+Stack: [ ]
+PASS: connected recv data
+Stack: [ ]

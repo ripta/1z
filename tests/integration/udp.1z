@@ -40,7 +40,7 @@ udp-bound: ( port -- fd ) [
 
   \ Connect A to B, B to A
   over "127.0.0.1" 39603 make-addr:udp resolve #first native.connect
-  dup  "127.0.0.1" 39602 make-addr:udp resolve #first native.connect
+  dup "127.0.0.1" 39602 make-addr:udp resolve #first native.connect
   \ fd-a fd-b
 
   \ Spawn receiver on A

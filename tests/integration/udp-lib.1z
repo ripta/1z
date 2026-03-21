@@ -1,0 +1,72 @@
+\ Integration tests for lib/udp.1z
+
+use "testing" ;
+use "net" ;
+use "udp" ;
+
+"udp-bind creates udp-socket" test-section
+[
+  "127.0.0.1" 39700 make-addr:udp udp-bind
+  dup type-of udp-socket "type is udp-socket" assert=
+  unmake-udp-socket drop fd-close
+] task-scope
+
+"udp-open creates unbound udp-socket" test-section
+[
+  udp-open
+  dup type-of udp-socket "type is udp-socket" assert=
+  unmake-udp-socket drop fd-close
+] task-scope
+
+"udp-connect creates connected-udp-socket" test-section
+[
+  "127.0.0.1" 39701 make-addr:udp udp-bind
+  "127.0.0.1" 39702 make-addr:udp udp-bind
+
+  swap "127.0.0.1" 39702 make-addr:udp udp-connect
+  dup type-of connected-udp-socket "type is connected-udp-socket" assert=
+  unmake-connected-udp-socket drop drop fd-close
+
+  unmake-udp-socket drop fd-close
+] task-scope
+
+"udp-bind echo round-trip via udp-sendto and udp-recvfrom" test-section
+[
+  "127.0.0.1" 39703 make-addr:udp udp-bind
+  "127.0.0.1" 39704 make-addr:udp udp-bind
+
+  \ Spawn receiver on first socket
+  over unmake-udp-socket drop [
+    1024 udp-recvfrom
+    drop drop bytes> "hello from udp-lib" "received data" assert=
+  ] curry spawn
+
+  \ Send from second socket to first
+  swap unmake-udp-socket drop
+  "hello from udp-lib"
+  "127.0.0.1" 39703 make-addr:udp resolve #first
+  udp-sendto drop
+
+  await drop
+] task-scope
+
+"connected udp send and recv" test-section
+[
+  "127.0.0.1" 39705 make-addr:udp udp-bind
+  "127.0.0.1" 39706 make-addr:udp udp-bind
+
+  \ Connect both directions
+  over "127.0.0.1" 39706 make-addr:udp udp-connect
+  swap "127.0.0.1" 39705 make-addr:udp udp-connect
+
+  \ Spawn receiver on first connected socket
+  over unmake-connected-udp-socket drop drop [
+    1024 udp-recv
+    bytes> "connected msg" "connected recv data" assert=
+  ] curry spawn
+
+  \ Send from second connected socket
+  swap unmake-connected-udp-socket drop drop "connected msg" udp-send drop
+
+  await drop
+] task-scope
