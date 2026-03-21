@@ -20,7 +20,7 @@ fmt: build ## Format zig and 1z source files
 	zig fmt src/ build.zig
 	./zig-out/bin/1z fmt $(ONE_Z_FILES)
 
-test: unit-test integration-test fmt-test ## Run all tests
+test: unit-test integration-test fmt-test jit-test ## Run all tests
 
 unit-test: ## Run unit tests
 	( time timeout $(TIMEOUT) zig build test $(if $(VERBOSE),--summary all,) )
