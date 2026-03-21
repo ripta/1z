@@ -12,6 +12,8 @@ pub const primitives = [_]Primitive{
     .{ .name = "dip", .stack_effect = "..a x quot: ( ..a -- ..b ) -- ..b x", .doc = "Execute quotation with x temporarily removed.", .func = nativeDip, .effect_transparent = true },
     .{ .name = "wipe", .stack_effect = "... --", .doc = "Clear the entire stack.", .func = nativeWipe },
     .{ .name = "pick-n", .stack_effect = "n -- val", .doc = "Copy the item at stack depth n (0-indexed from top, before n itself).", .func = nativePickN },
+    .{ .name = "<rot-n", .stack_effect = "n --", .doc = "Pull item at depth n to top, shifting items above it down.", .func = nativeRotUp },
+    .{ .name = "rot-n>", .stack_effect = "n --", .doc = "Push top item to depth n, shifting items above it up.", .func = nativeRotDown },
 };
 
 /// dup ( a -- a a ) - Duplicate top of stack
@@ -70,4 +72,42 @@ fn nativePickN(ctx: *Context) anyerror!void {
 
     const val = ctx.stack.items.items[stack_len - 1 - depth];
     try ctx.stack.push(val);
+}
+
+/// <rot-n ( n -- ) - Pull item at depth n to top, shifting items above it down.
+///
+/// Equivalencies: 0 is no-op, 1 is swap, 2 is <rot-.
+fn nativeRotUp(ctx: *Context) anyerror!void {
+    const n = try helpers.popFixnum(ctx);
+    if (n < 0) return error.StackUnderflow;
+    const depth: usize = @intCast(n);
+    const len = ctx.stack.items.items.len;
+    if (depth >= len) return error.StackUnderflow;
+    if (depth == 0) return;
+    const start = len - 1 - depth;
+    const val = ctx.stack.items.items[start];
+    var i: usize = start;
+    while (i < len - 1) : (i += 1) {
+        ctx.stack.items.items[i] = ctx.stack.items.items[i + 1];
+    }
+    ctx.stack.items.items[len - 1] = val;
+}
+
+/// rot-n> ( n -- ) - Push top item to depth n, shifting items above it up.
+///
+/// Equivalencies: 0 is no-op, 1 is swap, 2 is -rot>.
+fn nativeRotDown(ctx: *Context) anyerror!void {
+    const n = try helpers.popFixnum(ctx);
+    if (n < 0) return error.StackUnderflow;
+    const depth: usize = @intCast(n);
+    const len = ctx.stack.items.items.len;
+    if (depth >= len) return error.StackUnderflow;
+    if (depth == 0) return;
+    const start = len - 1 - depth;
+    const val = ctx.stack.items.items[len - 1];
+    var i: usize = len - 1;
+    while (i > start) : (i -= 1) {
+        ctx.stack.items.items[i] = ctx.stack.items.items[i - 1];
+    }
+    ctx.stack.items.items[start] = val;
 }

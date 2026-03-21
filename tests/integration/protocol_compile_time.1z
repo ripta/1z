@@ -6,7 +6,7 @@ use "testing" ;
 
 test-missing-method-error: ( -- ) [
   [ "fixtures/proto_missing_method.1z" load ]
-    "missing same-type method detected at module load" assert-error
+  "missing same-type method detected at module load" assert-error
 ] ;
 
 \ -- Cross-type remains runtime-only --

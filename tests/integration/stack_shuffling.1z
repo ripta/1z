@@ -61,3 +61,15 @@ use "testing" ;
 "1check" test-section
 5 [ 3 > ] 1check t "1check result" assert= 5 "1check preserves" assert=
 2 [ 3 > ] 1check f "1check false result" assert= 2 "1check preserves false" assert=
+
+"<rot-n" test-section
+1 2 3 0 <rot-n 3 "<rot-n 0 is no-op top" assert= 2 "<rot-n 0 second" assert= 1 "<rot-n 0 third" assert=
+1 2 3 1 <rot-n 2 "<rot-n 1 is swap top" assert= 3 "<rot-n 1 second" assert= 1 "<rot-n 1 third" assert=
+1 2 3 2 <rot-n 1 "<rot-n 2 is <rot- top" assert= 3 "<rot-n 2 second" assert= 2 "<rot-n 2 third" assert=
+1 2 3 4 5 4 <rot-n 1 "<rot-n 4 pulls bottom" assert= 5 "<rot-n 4 second" assert= 4 "<rot-n 4 third" assert= 3 "<rot-n 4 fourth" assert= 2 "<rot-n 4 fifth" assert=
+
+"rot-n>" test-section
+1 2 3 0 rot-n> 3 "rot-n> 0 is no-op top" assert= 2 "rot-n> 0 second" assert= 1 "rot-n> 0 third" assert=
+1 2 3 1 rot-n> 2 "rot-n> 1 is swap top" assert= 3 "rot-n> 1 second" assert= 1 "rot-n> 1 third" assert=
+1 2 3 2 rot-n> 2 "rot-n> 2 is -rot> top" assert= 1 "rot-n> 2 second" assert= 3 "rot-n> 2 third" assert=
+1 2 3 4 5 4 rot-n> 4 "rot-n> 4 pushes top to bottom" assert= 3 "rot-n> 4 second" assert= 2 "rot-n> 4 third" assert= 1 "rot-n> 4 fourth" assert= 5 "rot-n> 4 fifth" assert=

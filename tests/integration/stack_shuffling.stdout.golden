@@ -116,3 +116,43 @@ Stack: [ ]
 PASS: 1check false result
 PASS: 1check preserves false
 Stack: [ ]
+=== <rot-n ===
+Stack: [ ]
+PASS: <rot-n 0 is no-op top
+PASS: <rot-n 0 second
+PASS: <rot-n 0 third
+Stack: [ ]
+PASS: <rot-n 1 is swap top
+PASS: <rot-n 1 second
+PASS: <rot-n 1 third
+Stack: [ ]
+PASS: <rot-n 2 is <rot- top
+PASS: <rot-n 2 second
+PASS: <rot-n 2 third
+Stack: [ ]
+PASS: <rot-n 4 pulls bottom
+PASS: <rot-n 4 second
+PASS: <rot-n 4 third
+PASS: <rot-n 4 fourth
+PASS: <rot-n 4 fifth
+Stack: [ ]
+=== rot-n> ===
+Stack: [ ]
+PASS: rot-n> 0 is no-op top
+PASS: rot-n> 0 second
+PASS: rot-n> 0 third
+Stack: [ ]
+PASS: rot-n> 1 is swap top
+PASS: rot-n> 1 second
+PASS: rot-n> 1 third
+Stack: [ ]
+PASS: rot-n> 2 is -rot> top
+PASS: rot-n> 2 second
+PASS: rot-n> 2 third
+Stack: [ ]
+PASS: rot-n> 4 pushes top to bottom
+PASS: rot-n> 4 second
+PASS: rot-n> 4 third
+PASS: rot-n> 4 fourth
+PASS: rot-n> 4 fifth
+Stack: [ ]
