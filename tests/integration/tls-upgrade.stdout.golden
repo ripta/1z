@@ -1,0 +1,29 @@
+=== basic HTTPS request over TLS ===
+Stack: [ ]
+Stack: [ <stream fd read-write> ]
+Stack: [ <stream tls fd read-write> ]
+Stack: [ <stream tls fd read-write> ]
+PASS: response starts with HTTP
+Stack: [ ]
+=== TLS stream display includes tls ===
+Stack: [ ]
+Stack: [ <stream fd read-write> ]
+Stack: [ <stream tls fd read-write> ]
+PASS: inspect shows tls
+Stack: [ <stream tls fd read-write> ]
+Stack: [ ]
+=== double upgrade is rejected ===
+Stack: [ ]
+Stack: [ <stream fd read-write> ]
+Stack: [ <stream tls fd read-write> ]
+Stack: [ <stream tls fd read-write> <stream tls fd read-write> ]
+PASS: io-failed
+Stack: [ <stream tls fd read-write> <stream tls fd read-write> ]
+Stack: [ <stream fd (closed)> ]
+=== closing a TLS stream works ===
+Stack: [ <stream fd (closed)> ]
+Stack: [ <stream fd (closed)> <stream fd read-write> ]
+Stack: [ <stream fd (closed)> <stream tls fd read-write> ]
+Stack: [ <stream fd (closed)> ]
+PASS: close succeeded
+Stack: [ <stream fd (closed)> ]

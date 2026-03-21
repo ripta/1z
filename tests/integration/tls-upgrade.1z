@@ -1,0 +1,31 @@
+\ Integration tests for TLS stream upgrade
+
+use "testing" ;
+use "net" ;
+use "tcp" ;
+use "tls" ;
+
+"basic HTTPS request over TLS" test-section
+"example.com" 443 make-addr:tcp connect
+<tls-config> "example.com" tls-upgrade
+dup "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n" stream-write drop
+stream-read-line "HTTP/" #starts-with? t "response starts with HTTP" assert=
+
+"TLS stream display includes tls" test-section
+"example.com" 443 make-addr:tcp connect
+<tls-config> "example.com" tls-upgrade
+dup inspect "<stream tls" #starts-with? t "inspect shows tls" assert=
+stream-close
+
+"double upgrade is rejected" test-section
+"example.com" 443 make-addr:tcp connect
+<tls-config> "example.com" tls-upgrade
+dup
+[ dup <tls-config> "example.com" tls-upgrade ] "io-failed" assert-error
+stream-close
+
+"closing a TLS stream works" test-section
+"example.com" 443 make-addr:tcp connect
+<tls-config> "example.com" tls-upgrade
+stream-close
+t "close succeeded" assert-true

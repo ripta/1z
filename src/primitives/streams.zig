@@ -13,6 +13,8 @@ const ByteArray = value_mod.ByteArray;
 const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
 const error_mapping = @import("error_mapping.zig");
+const tls_mod = @import("tls.zig");
+const TlsState = tls_mod.TlsState;
 
 const popFixnum = helpers.popFixnum;
 const popSymbol = helpers.popSymbol;
@@ -170,6 +172,12 @@ pub fn nativeStreamClose(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
 
+    if (stream.tls) |tls_ptr| {
+        const tls_state: *TlsState = @ptrCast(@alignCast(tls_ptr));
+        tls_mod.tlsFlush(tls_state) catch {};
+        stream.tls = null;
+    }
+
     restoreBlocking(stream);
 
     // Don't actually close stdin/stdout/stderr
@@ -216,6 +224,12 @@ pub fn nativeStreamWrite(ctx: *Context) anyerror!void {
 pub fn nativeStreamFlush(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
+
+    if (stream.tls) |tls_ptr| {
+        const tls_state: *TlsState = @ptrCast(@alignCast(tls_ptr));
+        try tls_mod.tlsFlush(tls_state);
+        return;
+    }
 
     // NOTE(ripta): The standard streams and fd-based streams, e.g., sockets and pipes,
     //              are unbuffered at the zig file level, so sync is a no-op or unsupported.
@@ -583,6 +597,20 @@ fn restoreBlocking(stream: *Stream) void {
 /// When no scheduler is active and WouldBlock occurs (leftover O_NONBLOCK),
 /// restores blocking mode and retries.
 fn asyncRead(stream: *Stream, buffer: []u8, ctx: *Context) anyerror!usize {
+    if (stream.tls) |tls_ptr| {
+        const tls_state: *TlsState = @ptrCast(@alignCast(tls_ptr));
+        while (true) {
+            return tls_state.client.reader.readSliceShort(buffer) catch {
+                if (ctx.scheduler) |sched| {
+                    sched.ioSuspendCurrentTask(tls_state.fd, .read);
+                    try helpers.checkCancellation(ctx);
+                    continue;
+                }
+                return error.IOFailed;
+            };
+        }
+    }
+
     if (ctx.scheduler != null and !stream.nonblocking_set) {
         setNonBlocking(stream);
     }
@@ -607,6 +635,43 @@ fn asyncRead(stream: *Stream, buffer: []u8, ctx: *Context) anyerror!usize {
 /// Write to a stream, yielding to the scheduler on WouldBlock.
 ///
 fn asyncWrite(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!usize {
+    if (stream.tls) |tls_ptr| {
+        const tls_state: *TlsState = @ptrCast(@alignCast(tls_ptr));
+        while (true) {
+            const n = tls_state.client.writer.write(bytes) catch |err| switch (err) {
+                error.WriteFailed => {
+                    if (ctx.scheduler) |sched| {
+                        sched.ioSuspendCurrentTask(tls_state.fd, .write);
+                        try helpers.checkCancellation(ctx);
+                        continue;
+                    }
+                    return error.IOFailed;
+                },
+            };
+            tls_state.client.writer.flush() catch |err| switch (err) {
+                error.WriteFailed => {
+                    if (ctx.scheduler) |sched| {
+                        sched.ioSuspendCurrentTask(tls_state.fd, .write);
+                        try helpers.checkCancellation(ctx);
+                        continue;
+                    }
+                    return error.IOFailed;
+                },
+            };
+            tls_state.transport_writer.interface.flush() catch |err| switch (err) {
+                error.WriteFailed => {
+                    if (ctx.scheduler) |sched| {
+                        sched.ioSuspendCurrentTask(tls_state.fd, .write);
+                        try helpers.checkCancellation(ctx);
+                        continue;
+                    }
+                    return error.IOFailed;
+                },
+            };
+            return n;
+        }
+    }
+
     if (ctx.scheduler != null and !stream.nonblocking_set) {
         setNonBlocking(stream);
     }

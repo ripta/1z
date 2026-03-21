@@ -7,3 +7,9 @@ tls-config: virtual{ resource } ;
 
 \\ Create a TLS config with no CA verification. For testing only.
 <tls-config-no-verify>: ( -- tls-config ) [ native.tls-config-no-verify >tls-config ] ;
+
+\\ Upgrade a TCP stream to TLS.
+\\ Returns a new TLS-wrapped stream. The original stream should not be used.
+tls-upgrade: ( stream tls-config hostname -- stream ) [
+  native.tls-upgrade
+] ;

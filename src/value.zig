@@ -93,6 +93,7 @@ pub const Stream = struct {
     name: []const u8, // For display: "stdout", "stderr", file path
     buffering: BufferingMode = .none,
     nonblocking_set: bool = false,
+    tls: ?*anyopaque = null,
 };
 
 /// Resource wraps an opaque C pointer for FFI interop.
@@ -538,6 +539,8 @@ pub const Value = union(enum) {
             .stream => |s| {
                 if (s.closed) {
                     try writer.print("<stream {s} (closed)>", .{s.name});
+                } else if (s.tls != null) {
+                    try writer.print("<stream tls {s} {s}>", .{ s.name, s.mode.toString() });
                 } else {
                     try writer.print("<stream {s} {s}>", .{ s.name, s.mode.toString() });
                 }
