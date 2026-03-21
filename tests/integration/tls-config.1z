@@ -1,0 +1,14 @@
+\ Integration tests for TLS config creation
+
+use "testing" ;
+use "tls" ;
+
+"<tls-config> creates tls-config with system CAs" test-section
+<tls-config>
+dup type-of tls-config "type is tls-config" assert=
+unmake-tls-config resource-close
+
+"<tls-config-no-verify> creates tls-config without verification" test-section
+<tls-config-no-verify>
+dup type-of tls-config "type is tls-config" assert=
+unmake-tls-config resource-close

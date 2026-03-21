@@ -1,0 +1,9 @@
+\ lib/tls.1z - TLS configuration and connection support
+
+tls-config: virtual{ resource } ;
+
+\\ Create a TLS config loaded with system CA certificates.
+<tls-config>: ( -- tls-config ) [ native.tls-config >tls-config ] ;
+
+\\ Create a TLS config with no CA verification. For testing only.
+<tls-config-no-verify>: ( -- tls-config ) [ native.tls-config-no-verify >tls-config ] ;

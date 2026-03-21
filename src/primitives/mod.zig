@@ -63,6 +63,7 @@ pub const ffi_toy = @import("../ffi/toy.zig");
 pub const ffi_dynamic = @import("../ffi/dynamic.zig");
 pub const pragmas = @import("pragmas.zig");
 pub const native_dispatch_access = @import("native_dispatch_access.zig");
+pub const tls = @import("tls.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -119,7 +120,8 @@ pub const extracted_primitives = stack.primitives ++
     sockets.primitives ++
     bitwise.primitives ++
     resources.primitives ++
-    pragmas.primitives;
+    pragmas.primitives ++
+    tls.primitives;
 
 // Aggregated registry entries for the native virtual module
 pub const extracted_registry_entries = structs.registry_entries ++
@@ -137,4 +139,5 @@ pub const extracted_registry_entries = structs.registry_entries ++
     ffi_toy.registry_entries ++
     ffi_dynamic.registry_entries ++
     native_dispatch_access.registry_entries ++
-    tasks.registry_entries;
+    tasks.registry_entries ++
+    tls.registry_entries;

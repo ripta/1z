@@ -1,0 +1,12 @@
+=== <tls-config> creates tls-config with system CAs ===
+Stack: [ ]
+Stack: [ <tls-config <resource:tls-config>> ]
+PASS: type is tls-config
+Stack: [ <tls-config <resource:tls-config>> ]
+Stack: [ ]
+=== <tls-config-no-verify> creates tls-config without verification ===
+Stack: [ ]
+Stack: [ <tls-config <resource:tls-config>> ]
+PASS: type is tls-config
+Stack: [ <tls-config <resource:tls-config>> ]
+Stack: [ ]
