@@ -367,6 +367,50 @@ tree-lookup: ( bst value -- option ) [
   lookup-node
 ] ;
 
+each-node: stack-recursive ( node quot -- ) [
+  swap {
+    tree-node:branch: [
+      \ ( quot color key left right )
+      swap 4 pick-n each-node    \ recurse left
+      swap 3 pick-n call         \ call quot on key
+      nip swap each-node         \ drop color, recurse right
+    ]
+    tree-node:leaf: [ drop ]
+  } unchecked-match
+] ;
+
+fold-node: stack-recursive ( node acc quot -- acc ) [
+  [ swap ] dip swap {
+    tree-node:branch: [
+      \ ( acc quot color key left right )
+      3 <rot-n drop
+      \ ( acc quot key left right )
+      swap 4 pick-n 4 pick-n fold-node
+      \ ( acc quot key right acc' )
+      2 pick-n 4 pick-n call
+      \ ( acc quot key right acc'' )
+      1 pick-n 1 pick-n 5 pick-n fold-node
+      \ ( acc quot key right acc'' final )
+      nip nip nip nip nip
+    ]
+    tree-node:leaf: [ drop ]
+  } unchecked-match
+] ;
+
+tree-each: ( bst quot -- ) [
+  swap unmake-bst drop swap each-node
+] ;
+
+tree-fold: ( bst init quot -- value ) [
+  [ [ unmake-bst drop ] dip ] dip fold-node
+] ;
+
+tree>array: ( bst -- array ) [
+  { } [ #push ] tree-fold
+] ;
+
+>iterator: method{ bst } [ tree>array >iterator ] ;
+
 >bst: ( array comparator -- bst ) [
   <bst> swap [ tree-insert ] #each
 ] ;

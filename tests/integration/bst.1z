@@ -102,3 +102,42 @@ dup 6 tree-lookup option:none? t "lookup 6 is none" assert=
 dup 0 tree-lookup option:none? t "lookup 0 is none" assert=
 drop
 [ cmp ] <bst> 42 tree-lookup option:none? t "lookup on empty is none" assert=
+
+"tree-each sorted order" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst [ . ] tree-each
+[ cmp ] <bst> [ . ] tree-each
+
+"tree-fold" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst 0 [ + ] tree-fold
+21 "tree-fold sums elements" assert=
+[ cmp ] <bst> 0 [ + ] tree-fold
+0 "tree-fold on empty tree returns init" assert=
+{ 5 3 8 1 4 } [ cmp ] >bst { } [ #push ] tree-fold
+{ 1 3 4 5 8 } "tree-fold builds sorted array" assert=
+
+"tree>array" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst tree>array
+{ 1 3 4 5 8 } "tree>array produces sorted array" assert=
+{ 10 9 8 7 6 5 4 3 2 1 } [ cmp ] >bst tree>array
+{ 1 2 3 4 5 6 7 8 9 10 } "tree>array from reverse sorted input" assert=
+{ 42 } [ cmp ] >bst tree>array
+{ 42 } "tree>array of single element" assert=
+[ cmp ] <bst> tree>array
+{ } "tree>array of empty tree" assert=
+
+">iterator and #collect" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst
+dup tree>array swap >iterator #collect
+"tree>array equals >iterator #collect" assert=
+[ cmp ] <bst> >iterator #collect
+{ } ">iterator #collect on empty tree" assert=
+
+">iterator with lazy adapters" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst >iterator [ 2 * ] #map #collect
+{ 2 6 8 10 16 } ">iterator #map doubles elements" assert=
+{ 5 3 8 1 4 } [ cmp ] >bst >iterator [ 4 > ] #filter #collect
+{ 5 8 } ">iterator #filter keeps elements > 4" assert=
+{ 5 3 8 1 4 } [ cmp ] >bst >iterator 3 #take #collect
+{ 1 3 4 } ">iterator #take 3" assert=
+{ 5 3 8 1 4 } [ cmp ] >bst >iterator 0 [ + ] #reduce
+21 ">iterator #reduce sums elements" assert=
