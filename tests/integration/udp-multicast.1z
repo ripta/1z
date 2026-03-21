@@ -1,0 +1,55 @@
+\ Integration tests for UDP multicast support
+
+use "testing" ;
+use "net" ;
+use "udp" ;
+
+"parse-ipv4 produces 4-byte ip" test-section
+"127.0.0.1" parse-ipv4
+dup type-of ip "type is ip" assert=
+unmake-ip #len 4 "IPv4 is 4 bytes" assert=
+
+"parse-ipv6 produces 16-byte ip" test-section
+"::1" parse-ipv6
+dup type-of ip "type is ip" assert=
+unmake-ip #len 16 "IPv6 is 16 bytes" assert=
+
+">ip auto-detects IPv4" test-section
+"10.0.0.1" >ip
+unmake-ip #len 4 ">ip on dotted quad is 4 bytes" assert=
+
+">ip auto-detects IPv6" test-section
+"::1" >ip
+unmake-ip #len 16 ">ip on coloned addr is 16 bytes" assert=
+
+"set-sockopt with reuseaddr variant" test-section
+[
+  "127.0.0.1" 39800 make-addr:udp udp-bind
+  dup 1 make-sockopt:reuseaddr set-sockopt
+  unmake-udp-socket drop fd-close
+] task-scope
+t "reuseaddr set-sockopt did not error" assert-true
+
+"multicast join and leave on loopback" test-section
+[
+  "224.0.0.251" 39801 make-addr:udp udp-bind
+  dup 1 make-sockopt:reuseaddr set-sockopt
+  dup "224.0.0.251" parse-ipv4 join-multicast
+
+  udp-open
+
+  \ Spawn receiver
+  over unmake-udp-socket drop [
+    1024 udp-recvfrom
+    drop drop bytes> "mcast hello" "received multicast data" assert=
+  ] curry spawn
+
+  \ Send to multicast group
+  swap unmake-udp-socket drop
+  "mcast hello"
+  "224.0.0.251" 39801 make-addr:udp resolve #first
+  udp-sendto drop
+
+  await drop
+] task-scope
+t "multicast round-trip completed" assert-true

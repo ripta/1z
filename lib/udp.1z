@@ -30,3 +30,77 @@ udp-connect: ( udp-socket addr -- connected-udp-socket ) [
   2 pick-n over native.connect
   make-connected-udp-socket
 ] ;
+
+\ -- sockopt enum and multicast support --
+
+sockopt-membership: struct{ group iface } ;
+sockopt-value: struct{ value } ;
+sockopt: enum{
+  add-membership:  sockopt-membership
+  drop-membership: sockopt-membership
+  reuseaddr:       sockopt-value
+  broadcast:       sockopt-value
+  multicast-loop:  sockopt-value
+  multicast-ttl:   sockopt-value
+} ;
+
+\\ Build an ip_mreq byte array from group and iface ip values.
+ip-mreq: ( group-ip iface-ip -- bytes ) [
+  unmake-ip swap unmake-ip swap #append
+] ;
+
+\\ Apply a socket option to a udp-socket.
+\\ match{ auto-unwraps struct fields onto the stack.
+set-sockopt: ( udp-socket sockopt -- ) [
+  swap unmake-udp-socket drop  \ sockopt fd
+  swap match{
+    sockopt:add-membership: [
+      \ fd group-ip iface-ip
+      ip-mreq
+      [ "IPPROTO_IP" sock-const "IP_ADD_MEMBERSHIP" sock-const ] dip
+      native.setsockopt
+    ]
+    sockopt:drop-membership: [
+      ip-mreq
+      [ "IPPROTO_IP" sock-const "IP_DROP_MEMBERSHIP" sock-const ] dip
+      native.setsockopt
+    ]
+    sockopt:reuseaddr: [
+      \ fd value
+      [ "SOL_SOCKET" sock-const "SO_REUSEADDR" sock-const ] dip
+      native.setsockopt
+    ]
+    sockopt:broadcast: [
+      [ "SOL_SOCKET" sock-const "SO_BROADCAST" sock-const ] dip
+      native.setsockopt
+    ]
+    sockopt:multicast-loop: [
+      [ "IPPROTO_IP" sock-const "IP_MULTICAST_LOOP" sock-const ] dip
+      native.setsockopt
+    ]
+    sockopt:multicast-ttl: [
+      [ "IPPROTO_IP" sock-const "IP_MULTICAST_TTL" sock-const ] dip
+      native.setsockopt
+    ]
+  }
+] ;
+
+\\ Join a multicast group on a specific interface.
+join-multicast-on: ( udp-socket group-ip iface-ip -- ) [
+  make-sockopt:add-membership set-sockopt
+] ;
+
+\\ Leave a multicast group on a specific interface.
+leave-multicast-on: ( udp-socket group-ip iface-ip -- ) [
+  make-sockopt:drop-membership set-sockopt
+] ;
+
+\\ Join a multicast group on all interfaces.
+join-multicast: ( udp-socket group-ip -- ) [
+  "0.0.0.0" parse-ipv4 join-multicast-on
+] ;
+
+\\ Leave a multicast group on all interfaces.
+leave-multicast: ( udp-socket group-ip -- ) [
+  "0.0.0.0" parse-ipv4 leave-multicast-on
+] ;

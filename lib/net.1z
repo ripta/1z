@@ -11,6 +11,20 @@ addr: enum{
   unix: unix-addr
 } ;
 
+ip: virtual{ byte-array } ;
+
+AF_INET: 2 ;
+AF_INET6: 30 ;
+
+\\ Parse an IPv4 address string into an ip value.
+parse-ipv4: ( str -- ip ) [ AF_INET swap inet-pton make-ip ] ;
+
+\\ Parse an IPv6 address string into an ip value.
+parse-ipv6: ( str -- ip ) [ AF_INET6 swap inet-pton make-ip ] ;
+
+\\ Parse an IP address string, auto-detecting IPv4 or IPv6.
+>ip: ( str -- ip ) [ dup ":" #in? [ parse-ipv6 ] [ parse-ipv4 ] if ] ;
+
 \ Split a "host:port" string on the last colon, parse port as integer.
 \ Handles IPv6 addresses in brackets: "[::1]:8080" -> "::1" 8080
 \ Returns a hash with host: and port: keys.

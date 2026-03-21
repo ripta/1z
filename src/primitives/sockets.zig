@@ -22,6 +22,8 @@ pub const primitives = [_]Primitive{
     .{ .name = "udp-recvfrom", .stack_effect = "fd maxlen -- data host port", .doc = "Receive datagram; returns byte-array data, sender host string, and port.", .func = nativeUdpRecvfrom },
     .{ .name = "udp-send", .stack_effect = "fd data -- n", .doc = "Send datagram on connected socket; data is string or byte-array; returns bytes sent.", .func = nativeUdpSend },
     .{ .name = "udp-recv", .stack_effect = "fd maxlen -- data", .doc = "Receive datagram on connected socket; returns byte-array.", .func = nativeUdpRecv },
+    .{ .name = "inet-pton", .stack_effect = "family str -- bytes", .doc = "Parse IP address string to raw bytes; family is AF_INET (2) or AF_INET6 (30).", .func = nativeInetPton },
+    .{ .name = "sock-const", .stack_effect = "str -- n", .doc = "Look up a platform-correct socket constant by name.", .func = nativeSockConst },
 };
 
 pub const registry_entries = [_]RegistryEntry{
@@ -598,7 +600,7 @@ fn nativeUdpRecv(ctx: *Context) anyerror!void {
 
 /// setsockopt ( fd level optname value -- )
 fn nativeSetsockopt(ctx: *Context) anyerror!void {
-    const opt_val = try popFixnum(ctx);
+    const val = try ctx.stack.pop();
     const optname_val = try popFixnum(ctx);
     const level_val = try popFixnum(ctx);
     const fd_val = try popFixnum(ctx);
@@ -607,13 +609,113 @@ fn nativeSetsockopt(ctx: *Context) anyerror!void {
     const fd: std.posix.fd_t = @intCast(fd_val);
     const level: i32 = @intCast(level_val);
     const optname: u32 = @intCast(optname_val);
-    const value_bytes = std.mem.toBytes(@as(c_int, @intCast(opt_val)));
 
-    std.posix.setsockopt(fd, level, optname, &value_bytes) catch {
-        helpers.setErrorContext(ctx, "setsockopt failed", .{});
-        return error.IOFailed;
-    };
+    switch (val) {
+        .fixnum => |n| {
+            const value_bytes = std.mem.toBytes(@as(c_int, @intCast(n)));
+            std.posix.setsockopt(fd, level, optname, &value_bytes) catch {
+                helpers.setErrorContext(ctx, "setsockopt failed", .{});
+                return error.IOFailed;
+            };
+        },
+        .byte_array => |ba| {
+            std.posix.setsockopt(fd, level, optname, ba.items) catch {
+                helpers.setErrorContext(ctx, "setsockopt failed", .{});
+                return error.IOFailed;
+            };
+        },
+        else => {
+            helpers.setErrorContext(ctx, "setsockopt value must be fixnum or byte-array", .{});
+            return error.TypeError;
+        },
+    }
 }
+
+/// inet-pton ( family str -- bytes )
+fn nativeInetPton(ctx: *Context) anyerror!void {
+    const str = try helpers.popString(ctx);
+    const family = try popFixnum(ctx);
+    const alloc = ctx.quotationAllocator();
+
+    switch (family) {
+        std.posix.AF.INET => {
+            const addr = std.net.Address.parseIp4(str, 0) catch {
+                helpers.setErrorContext(ctx, "invalid IPv4 address: {s}", .{str});
+                return error.InvalidArgument;
+            };
+            const bytes: *const [4]u8 = @ptrCast(&addr.in.sa.addr);
+            try ctx.stack.push(try makeBytesValue(alloc, bytes));
+        },
+        std.posix.AF.INET6 => {
+            const addr = std.net.Address.parseIp6(str, 0) catch {
+                helpers.setErrorContext(ctx, "invalid IPv6 address: {s}", .{str});
+                return error.InvalidArgument;
+            };
+            const bytes: []const u8 = addr.in6.sa.addr[0..16];
+            try ctx.stack.push(try makeBytesValue(alloc, bytes));
+        },
+        else => {
+            helpers.setErrorContext(ctx, "inet-pton: unsupported address family {d}", .{family});
+            return error.InvalidArgument;
+        },
+    }
+}
+
+/// sock-const ( str -- n )
+fn nativeSockConst(ctx: *Context) anyerror!void {
+    const name = try helpers.popString(ctx);
+
+    const val: i64 = if (std.mem.eql(u8, name, "SOL_SOCKET"))
+        std.posix.SOL.SOCKET
+    else if (std.mem.eql(u8, name, "SO_REUSEADDR"))
+        std.posix.SO.REUSEADDR
+    else if (std.mem.eql(u8, name, "SO_BROADCAST"))
+        std.posix.SO.BROADCAST
+    else if (std.mem.eql(u8, name, "IPPROTO_IP"))
+        std.c.IPPROTO.IP
+    else if (std.mem.eql(u8, name, "IP_ADD_MEMBERSHIP"))
+        ip_add_membership
+    else if (std.mem.eql(u8, name, "IP_DROP_MEMBERSHIP"))
+        ip_drop_membership
+    else if (std.mem.eql(u8, name, "IP_MULTICAST_LOOP"))
+        ip_multicast_loop
+    else if (std.mem.eql(u8, name, "IP_MULTICAST_TTL"))
+        ip_multicast_ttl
+    else {
+        helpers.setErrorContext(ctx, "unknown socket constant: {s}", .{name});
+        return error.InvalidArgument;
+    };
+
+    try ctx.stack.push(.{ .fixnum = val });
+}
+
+const ip_add_membership: i64 = switch (native_os) {
+    .macos, .ios, .tvos, .watchos, .visionos => 12,
+    .linux => 35,
+    .freebsd, .netbsd, .openbsd, .dragonfly => 12,
+    else => @compileError("unsupported OS for IP_ADD_MEMBERSHIP"),
+};
+
+const ip_drop_membership: i64 = switch (native_os) {
+    .macos, .ios, .tvos, .watchos, .visionos => 13,
+    .linux => 36,
+    .freebsd, .netbsd, .openbsd, .dragonfly => 13,
+    else => @compileError("unsupported OS for IP_DROP_MEMBERSHIP"),
+};
+
+const ip_multicast_loop: i64 = switch (native_os) {
+    .macos, .ios, .tvos, .watchos, .visionos => 11,
+    .linux => 34,
+    .freebsd, .netbsd, .openbsd, .dragonfly => 11,
+    else => @compileError("unsupported OS for IP_MULTICAST_LOOP"),
+};
+
+const ip_multicast_ttl: i64 = switch (native_os) {
+    .macos, .ios, .tvos, .watchos, .visionos => 10,
+    .linux => 33,
+    .freebsd, .netbsd, .openbsd, .dragonfly => 10,
+    else => @compileError("unsupported OS for IP_MULTICAST_TTL"),
+};
 
 // =============================================================================
 // Helpers
