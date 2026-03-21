@@ -15,6 +15,8 @@ const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
 
 const dispatch_mod = @import("dispatch.zig");
 const DispatchEntry = dispatch_mod.DispatchEntry;
+const DispatchKey = dispatch_mod.DispatchKey;
+const DispatchFrame = dispatch_mod.DispatchFrame;
 const DispatchTable = dispatch_mod.DispatchTable;
 
 const pic_mod = @import("pic.zig");
@@ -76,6 +78,19 @@ pub const PragmaRegistration = struct {
 
 /// PragmaFrame holds pragma values for the current file scope.
 pub const PragmaFrame = std.StringHashMapUnmanaged(Value);
+
+/// TypeRegistryFrame holds type descriptor and enum registry entries for
+/// a single scope. Pushed/popped by `with-isolation` to enable rollback
+/// of type registrations.
+pub const TypeRegistryFrame = struct {
+    type_descriptors: std.StringHashMapUnmanaged(*value_mod.HashTable) = .{},
+    enum_registry: std.StringHashMapUnmanaged([]const *const value_mod.VirtualType) = .{},
+
+    pub fn deinit(self: *TypeRegistryFrame, allocator: Allocator) void {
+        self.type_descriptors.deinit(allocator);
+        self.enum_registry.deinit(allocator);
+    }
+};
 
 /// A deferred protocol obligation recorded during module loading.
 /// Validated after all definitions in the module have been processed.
@@ -203,10 +218,13 @@ pub const Context = struct {
     current_pic_entry: ?*PolymorphicCache = null,
     /// Shared scheduler for green thread contexts. Null for the root context.
     scheduler: ?*Scheduler = null,
-    /// Enum registry mapping enum names to their variant VirtualType pointers.
-    enum_registry: std.StringHashMapUnmanaged([]const *const value_mod.VirtualType) = .{},
-    /// Type descriptor registry mapping type names to their descriptor maps.
-    type_descriptors: std.StringHashMapUnmanaged(*value_mod.HashTable) = .{},
+    /// Stack of type registry frames for scoped type descriptor and enum
+    /// registry entries. The bottom frame holds boot-time registrations;
+    /// additional frames are pushed by `with-isolation`.
+    type_registry_frames: std.ArrayListUnmanaged(TypeRegistryFrame) = .{},
+    /// Stack of dispatch frames layered on top of `dispatch.entries`.
+    /// Pushed by `with-isolation` for scoped method registrations.
+    dispatch_frames: std.ArrayListUnmanaged(DispatchFrame) = .{},
     /// Mapping from type name to registered TypeValue for built-in types.
     /// Populated by `define-builtin-type`; used by `type-of` for lookup.
     builtin_type_values: std.StringHashMapUnmanaged(*value_mod.TypeValue) = .{},
@@ -263,6 +281,11 @@ pub const Context = struct {
             .benchmark = null,
             .dispatch = DispatchTable.init(allocator),
             .jit_dispatch = JitDispatchTable.init(allocator),
+        };
+
+        // Push the base type registry frame so boot-time registrations have a target.
+        ctx.type_registry_frames.append(allocator, .{}) catch |err| {
+            std.debug.panic("Failed to push base type registry frame: {any}", .{err});
         };
 
         primitives.registerPrimitives(&ctx.dictionary, ctx.arena.allocator()) catch |err| {
@@ -422,8 +445,14 @@ pub const Context = struct {
         self.pragma_frames.deinit(self.allocator);
         self.pragma_registry.deinit(self.allocator);
         self.parse_time_deferred_calls.deinit(self.allocator);
-        self.enum_registry.deinit(self.allocator);
-        self.type_descriptors.deinit(self.allocator);
+        for (self.type_registry_frames.items) |*frame| {
+            frame.deinit(self.allocator);
+        }
+        self.type_registry_frames.deinit(self.allocator);
+        for (self.dispatch_frames.items) |*frame| {
+            frame.deinit(self.allocator);
+        }
+        self.dispatch_frames.deinit(self.allocator);
         self.builtin_type_values.deinit(self.allocator);
         self.resource_type_values.deinit(self.allocator);
         self.dispatch.deinit();
@@ -985,12 +1014,25 @@ pub const Context = struct {
         return null;
     }
 
-    /// Look up a binary dispatch entry by walking upthe parent context chain.
+    /// Look up a binary dispatch entry by walking dispatch frames (top to
+    /// bottom), then the base dispatch table, then the parent context chain.
     pub fn lookupBinaryDispatch(self: *const Context, word_name: []const u8, type_a: []const u8, type_b: []const u8) ?DispatchEntry {
+        // Walk dispatch frames top-to-bottom
+        var i = self.dispatch_frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (dispatch_mod.lookupBinaryInEntries(&self.dispatch_frames.items[i].entries, word_name, type_a, type_b)) |entry| return entry;
+        }
+        // Base dispatch table
         if (self.dispatch.lookupBinary(word_name, type_a, type_b)) |entry| return entry;
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
+            var j = ctx.dispatch_frames.items.len;
+            while (j > 0) {
+                j -= 1;
+                if (dispatch_mod.lookupBinaryInEntries(&ctx.dispatch_frames.items[j].entries, word_name, type_a, type_b)) |entry| return entry;
+            }
             if (ctx.dispatch.lookupBinary(word_name, type_a, type_b)) |entry| return entry;
             ancestor = ctx.parent_context;
         }
@@ -998,12 +1040,25 @@ pub const Context = struct {
         return null;
     }
 
-    /// Look up a unary dispatch entry by walking u pthe parent context chain.
+    /// Look up a unary dispatch entry by walking dispatch frames (top to
+    /// bottom), then the base dispatch table, then the parent context chain.
     pub fn lookupUnaryDispatch(self: *const Context, word_name: []const u8, type_a: []const u8) ?DispatchEntry {
+        // Walk dispatch frames top-to-bottom
+        var i = self.dispatch_frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (dispatch_mod.lookupUnaryInEntries(&self.dispatch_frames.items[i].entries, word_name, type_a)) |entry| return entry;
+        }
+        // Base dispatch table
         if (self.dispatch.lookupUnary(word_name, type_a)) |entry| return entry;
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
+            var j = ctx.dispatch_frames.items.len;
+            while (j > 0) {
+                j -= 1;
+                if (dispatch_mod.lookupUnaryInEntries(&ctx.dispatch_frames.items[j].entries, word_name, type_a)) |entry| return entry;
+            }
             if (ctx.dispatch.lookupUnary(word_name, type_a)) |entry| return entry;
             ancestor = ctx.parent_context;
         }
@@ -1039,26 +1094,44 @@ pub const Context = struct {
         return null;
     }
 
-    /// Look up enum variant types by enum name, walking the parent context chain.
+    /// Look up enum variant types by enum name, walking type registry frames
+    /// (top to bottom), then the parent context chain.
     pub fn lookupEnumVariants(self: *const Context, enum_name: []const u8) ?[]const *const value_mod.VirtualType {
-        if (self.enum_registry.get(enum_name)) |variants| return variants;
+        var i = self.type_registry_frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.type_registry_frames.items[i].enum_registry.get(enum_name)) |variants| return variants;
+        }
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
-            if (ctx.enum_registry.get(enum_name)) |variants| return variants;
+            var j = ctx.type_registry_frames.items.len;
+            while (j > 0) {
+                j -= 1;
+                if (ctx.type_registry_frames.items[j].enum_registry.get(enum_name)) |variants| return variants;
+            }
             ancestor = ctx.parent_context;
         }
 
         return null;
     }
 
-    /// Look up a type descriptor by type name, walking the parent context chain.
+    /// Look up a type descriptor by type name, walking type registry frames
+    /// (top to bottom), then the parent context chain.
     pub fn lookupTypeDescriptor(self: *const Context, name: []const u8) ?*value_mod.HashTable {
-        if (self.type_descriptors.get(name)) |desc| return desc;
+        var i = self.type_registry_frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.type_registry_frames.items[i].type_descriptors.get(name)) |desc| return desc;
+        }
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
-            if (ctx.type_descriptors.get(name)) |desc| return desc;
+            var j = ctx.type_registry_frames.items.len;
+            while (j > 0) {
+                j -= 1;
+                if (ctx.type_registry_frames.items[j].type_descriptors.get(name)) |desc| return desc;
+            }
             ancestor = ctx.parent_context;
         }
 
@@ -1089,6 +1162,139 @@ pub const Context = struct {
         }
 
         return null;
+    }
+
+    // =========================================================================
+    // Type registry frame methods
+    // =========================================================================
+
+    /// Push a new empty type registry frame onto the stack.
+    pub fn pushTypeRegistryFrame(self: *Context) !void {
+        try self.type_registry_frames.append(self.allocator, .{});
+    }
+
+    /// Pop the top type registry frame, discarding its entries.
+    pub fn popTypeRegistryFrame(self: *Context) void {
+        if (self.type_registry_frames.items.len > 0) {
+            const last = self.type_registry_frames.items.len - 1;
+            self.type_registry_frames.items[last].deinit(self.allocator);
+            self.type_registry_frames.items.len -= 1;
+        }
+    }
+
+    /// Register a type descriptor into the topmost type registry frame.
+    pub fn registerTypeDescriptor(self: *Context, name: []const u8, desc: *value_mod.HashTable) !void {
+        if (self.type_registry_frames.items.len == 0) return error.OutOfMemory;
+        const top = self.type_registry_frames.items.len - 1;
+        try self.type_registry_frames.items[top].type_descriptors.put(self.allocator, name, desc);
+    }
+
+    /// Register enum variants into the topmost type registry frame.
+    pub fn registerEnumVariants(self: *Context, name: []const u8, variants: []const *const value_mod.VirtualType) !void {
+        if (self.type_registry_frames.items.len == 0) return error.OutOfMemory;
+        const top = self.type_registry_frames.items.len - 1;
+        try self.type_registry_frames.items[top].enum_registry.put(self.allocator, name, variants);
+    }
+
+    // =========================================================================
+    // Dispatch frame methods
+    // =========================================================================
+
+    /// Push a new empty dispatch frame onto the stack.
+    pub fn pushDispatchFrame(self: *Context) !void {
+        try self.dispatch_frames.append(self.allocator, .{});
+    }
+
+    /// Pop the top dispatch frame, discarding its entries.
+    /// Bumps the dispatch generation counter to invalidate PICs.
+    pub fn popDispatchFrame(self: *Context) void {
+        if (self.dispatch_frames.items.len > 0) {
+            const last = self.dispatch_frames.items.len - 1;
+            self.dispatch_frames.items[last].deinit(self.allocator);
+            self.dispatch_frames.items.len -= 1;
+            self.dispatch.generation +%= 1;
+        }
+    }
+
+    /// Register a dispatch entry into the topmost dispatch frame, or the
+    /// base `dispatch.entries` if no frames are pushed.
+    pub fn registerDispatch(self: *Context, key: DispatchKey, entry: DispatchEntry, allow_overwrite: bool) !void {
+        if (self.dispatch_frames.items.len > 0) {
+            const top = self.dispatch_frames.items.len - 1;
+            const gop = try self.dispatch_frames.items[top].entries.getOrPut(self.allocator, key);
+            if (gop.found_existing and !allow_overwrite) {
+                return error.DuplicateMethod;
+            }
+            gop.value_ptr.* = entry;
+            self.dispatch.generation +%= 1;
+        } else {
+            try self.dispatch.register(key, entry, allow_overwrite);
+        }
+    }
+
+    /// Look up a dispatch entry by key, walking frames then base table.
+    /// Used for duplicate/provenance checks during method registration.
+    pub fn getDispatchEntry(self: *const Context, key: DispatchKey) ?DispatchEntry {
+        // Walk dispatch frames top-to-bottom
+        var i = self.dispatch_frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.dispatch_frames.items[i].entries.get(key)) |entry| return entry;
+        }
+        // Base dispatch table
+        return self.dispatch.entries.get(key);
+    }
+
+    /// Collect all dispatch key-entry pairs for a given word name, including
+    /// entries from all frames, the base table, and parent contexts.
+    pub fn dispatchEntriesForWord(self: *const Context, word_name: []const u8, alloc: Allocator) ![]DispatchTable.KeyEntryPair {
+        var results: std.ArrayListUnmanaged(DispatchTable.KeyEntryPair) = .{};
+        // Walk dispatch frames top-to-bottom
+        var i = self.dispatch_frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            try dispatch_mod.collectEntriesForWord(&self.dispatch_frames.items[i].entries, word_name, &results, alloc);
+        }
+        // Base dispatch table
+        try dispatch_mod.collectEntriesForWord(&self.dispatch.entries, word_name, &results, alloc);
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            var j = ctx.dispatch_frames.items.len;
+            while (j > 0) {
+                j -= 1;
+                try dispatch_mod.collectEntriesForWord(&ctx.dispatch_frames.items[j].entries, word_name, &results, alloc);
+            }
+            try dispatch_mod.collectEntriesForWord(&ctx.dispatch.entries, word_name, &results, alloc);
+            ancestor = ctx.parent_context;
+        }
+        return results.toOwnedSlice(alloc);
+    }
+
+    /// Collect all dispatch keys for a given word name, including
+    /// entries from all frames, the base table, and parent contexts.
+    pub fn dispatchKeysForWord(self: *const Context, word_name: []const u8, alloc: Allocator) ![]DispatchKey {
+        var results: std.ArrayListUnmanaged(DispatchKey) = .{};
+        // Walk dispatch frames top-to-bottom
+        var i = self.dispatch_frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            try dispatch_mod.collectKeysForWord(&self.dispatch_frames.items[i].entries, word_name, &results, alloc);
+        }
+        // Base dispatch table
+        try dispatch_mod.collectKeysForWord(&self.dispatch.entries, word_name, &results, alloc);
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            var j = ctx.dispatch_frames.items.len;
+            while (j > 0) {
+                j -= 1;
+                try dispatch_mod.collectKeysForWord(&ctx.dispatch_frames.items[j].entries, word_name, &results, alloc);
+            }
+            try dispatch_mod.collectKeysForWord(&ctx.dispatch.entries, word_name, &results, alloc);
+            ancestor = ctx.parent_context;
+        }
+        return results.toOwnedSlice(alloc);
     }
 
     /// Check if a name is a qualified name (contains a dot).
@@ -2785,4 +2991,186 @@ test "quotation with incorrect declared effect fails" {
 
     // Should fail with StackEffectMismatch
     try std.testing.expectError(primitives.InterpreterError.StackEffectMismatch, result);
+}
+
+// =============================================================================
+// Type registry frame tests
+// =============================================================================
+
+test "type registry frame push/pop with lookup visibility" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.arena.allocator();
+    const desc = try alloc.create(value_mod.HashTable);
+    desc.* = .{};
+    try ctx.registerTypeDescriptor("test-type", desc);
+
+    // Visible through base frame
+    try std.testing.expect(ctx.lookupTypeDescriptor("test-type") != null);
+
+    // Push a new frame, register in it
+    try ctx.pushTypeRegistryFrame();
+    const desc2 = try alloc.create(value_mod.HashTable);
+    desc2.* = .{};
+    try ctx.registerTypeDescriptor("inner-type", desc2);
+
+    try std.testing.expect(ctx.lookupTypeDescriptor("inner-type") != null);
+    try std.testing.expect(ctx.lookupTypeDescriptor("test-type") != null);
+
+    // Pop the frame; inner-type should vanish
+    ctx.popTypeRegistryFrame();
+    try std.testing.expect(ctx.lookupTypeDescriptor("inner-type") == null);
+    try std.testing.expect(ctx.lookupTypeDescriptor("test-type") != null);
+}
+
+test "type registry frame shadowing" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.arena.allocator();
+
+    // Register in base frame
+    const desc1 = try alloc.create(value_mod.HashTable);
+    desc1.* = .{};
+    try desc1.put(alloc, "marker", .{ .fixnum = 1 });
+    try ctx.registerTypeDescriptor("shadowed", desc1);
+
+    // Push a frame and shadow the same name
+    try ctx.pushTypeRegistryFrame();
+    const desc2 = try alloc.create(value_mod.HashTable);
+    desc2.* = .{};
+    try desc2.put(alloc, "marker", .{ .fixnum = 2 });
+    try ctx.registerTypeDescriptor("shadowed", desc2);
+
+    // Inner wins
+    const found = ctx.lookupTypeDescriptor("shadowed").?;
+    try std.testing.expectEqual(@as(i64, 2), found.get("marker").?.fixnum);
+
+    // Pop; outer visible again
+    ctx.popTypeRegistryFrame();
+    const found2 = ctx.lookupTypeDescriptor("shadowed").?;
+    try std.testing.expectEqual(@as(i64, 1), found2.get("marker").?.fixnum);
+}
+
+test "enum registry frame push/pop" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.arena.allocator();
+    const vt = try alloc.create(value_mod.VirtualType);
+    vt.* = .{ .name = "red", .inner_type = "symbol" };
+    const variants: []const *const value_mod.VirtualType = &.{vt};
+    try ctx.registerEnumVariants("color", variants);
+
+    try std.testing.expect(ctx.lookupEnumVariants("color") != null);
+
+    try ctx.pushTypeRegistryFrame();
+    const vt2 = try alloc.create(value_mod.VirtualType);
+    vt2.* = .{ .name = "small", .inner_type = "symbol" };
+    const variants2: []const *const value_mod.VirtualType = &.{vt2};
+    try ctx.registerEnumVariants("size", variants2);
+
+    try std.testing.expect(ctx.lookupEnumVariants("size") != null);
+    try std.testing.expect(ctx.lookupEnumVariants("color") != null);
+
+    ctx.popTypeRegistryFrame();
+    try std.testing.expect(ctx.lookupEnumVariants("size") == null);
+    try std.testing.expect(ctx.lookupEnumVariants("color") != null);
+}
+
+// =============================================================================
+// Dispatch frame tests
+// =============================================================================
+
+test "dispatch frame push/pop with lookup visibility" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 0 }};
+
+    // Register in base dispatch table
+    try ctx.dispatch.register(
+        .{ .word_name = "show", .type_a = "fixnum", .type_b = dispatch_mod.unary_sentinel },
+        .{ .body = .{ .quotation = body } },
+        false,
+    );
+
+    try std.testing.expect(ctx.lookupUnaryDispatch("show", "fixnum") != null);
+
+    // Push a frame and register a new entry
+    try ctx.pushDispatchFrame();
+    const body2 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 0 }};
+    try ctx.registerDispatch(
+        .{ .word_name = "show", .type_a = "string", .type_b = dispatch_mod.unary_sentinel },
+        .{ .body = .{ .quotation = body2 } },
+        false,
+    );
+
+    try std.testing.expect(ctx.lookupUnaryDispatch("show", "string") != null);
+    try std.testing.expect(ctx.lookupUnaryDispatch("show", "fixnum") != null);
+
+    // Pop; string entry should vanish
+    ctx.popDispatchFrame();
+    try std.testing.expect(ctx.lookupUnaryDispatch("show", "string") == null);
+    try std.testing.expect(ctx.lookupUnaryDispatch("show", "fixnum") != null);
+}
+
+test "dispatch frame shadowing" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const body1 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
+    const body2 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
+
+    // Register in base table
+    try ctx.dispatch.register(
+        .{ .word_name = "+", .type_a = "duration", .type_b = "duration" },
+        .{ .body = .{ .quotation = body1 } },
+        false,
+    );
+
+    // Push frame and shadow
+    try ctx.pushDispatchFrame();
+    try ctx.registerDispatch(
+        .{ .word_name = "+", .type_a = "duration", .type_b = "duration" },
+        .{ .body = .{ .quotation = body2 } },
+        false,
+    );
+
+    // Inner should win
+    const entry = ctx.lookupBinaryDispatch("+", "duration", "duration").?;
+    try std.testing.expectEqual(@as(i64, 2), entry.body.quotation[0].op.push_literal.fixnum);
+
+    // Pop; outer visible again
+    ctx.popDispatchFrame();
+    const entry2 = ctx.lookupBinaryDispatch("+", "duration", "duration").?;
+    try std.testing.expectEqual(@as(i64, 1), entry2.body.quotation[0].op.push_literal.fixnum);
+}
+
+test "dispatch generation bumped on frame pop" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const gen_before = ctx.dispatch.generation;
+    try ctx.pushDispatchFrame();
+    ctx.popDispatchFrame();
+    try std.testing.expect(ctx.dispatch.generation > gen_before);
+}
+
+test "base behavior with no extra frames matches original" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // No extra frames pushed, so registerDispatch goes to base dispatch table
+    const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0 }};
+    try ctx.registerDispatch(
+        .{ .word_name = "test-op", .type_a = "fixnum", .type_b = dispatch_mod.unary_sentinel },
+        .{ .body = .{ .quotation = body } },
+        false,
+    );
+
+    // Should be findable via both the new API and the raw dispatch table
+    try std.testing.expect(ctx.lookupUnaryDispatch("test-op", "fixnum") != null);
+    try std.testing.expect(ctx.dispatch.lookupUnary("test-op", "fixnum") != null);
 }

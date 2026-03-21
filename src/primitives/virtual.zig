@@ -172,7 +172,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             const gw_slice = try generated_words.toOwnedSlice(alloc);
             try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
             const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
-            try ctx.type_descriptors.put(ctx.allocator, name, frozen_desc);
+            try ctx.registerTypeDescriptor(name, frozen_desc);
             vtype.type_val.?.descriptor = frozen_desc;
         },
         .mutable_map => |struct_desc| {
@@ -272,7 +272,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             const gw_slice = try generated_words.toOwnedSlice(alloc);
             try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
             const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
-            try ctx.type_descriptors.put(ctx.allocator, name, frozen_desc);
+            try ctx.registerTypeDescriptor(name, frozen_desc);
             vtype.type_val.?.descriptor = frozen_desc;
         },
         else => {
@@ -1119,7 +1119,7 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
 
     const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
-    try ctx.type_descriptors.put(ctx.allocator, name, frozen_desc);
+    try ctx.registerTypeDescriptor(name, frozen_desc);
     vtype.type_val.?.descriptor = frozen_desc;
 }
 
@@ -1150,7 +1150,7 @@ fn registerVectorMutationDispatches(
         instrs[7] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
         instrs[8] = .{ .op = .{ .call_word = "native.virtual-wrap" }, .line = 0 };
 
-        try ctx.dispatch.register(.{
+        try ctx.registerDispatch(.{
             .word_name = op_name,
             .type_a = type_name,
             .type_b = dispatch_mod.unary_sentinel,
@@ -1173,7 +1173,7 @@ fn registerVectorMutationDispatches(
         instrs[5] = .{ .op = .{ .call_word = "native.virtual-wrap" }, .line = 0 };
         instrs[6] = .{ .op = .{ .call_word = "swap" }, .line = 0 };
 
-        try ctx.dispatch.register(.{
+        try ctx.registerDispatch(.{
             .word_name = op_name,
             .type_a = type_name,
             .type_b = dispatch_mod.unary_sentinel,
@@ -1190,7 +1190,7 @@ fn registerVectorMutationDispatches(
         instrs[0] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
         instrs[1] = .{ .op = .{ .call_word = "native.typed-nth-mut-dispatch" }, .line = 0 };
 
-        try ctx.dispatch.register(.{
+        try ctx.registerDispatch(.{
             .word_name = "#nth!",
             .type_a = type_name,
             .type_b = dispatch_mod.unary_sentinel,
@@ -1213,7 +1213,7 @@ fn registerVectorMutationDispatches(
         instrs[7] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
         instrs[8] = .{ .op = .{ .call_word = "native.virtual-wrap" }, .line = 0 };
 
-        try ctx.dispatch.register(.{
+        try ctx.registerDispatch(.{
             .word_name = "#append!",
             .type_a = type_name,
             .type_b = dispatch_mod.unary_sentinel,
@@ -1228,7 +1228,7 @@ fn registerVectorMutationDispatches(
         instrs[0] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
         instrs[1] = .{ .op = .{ .call_word = "native.typed-freeze-dispatch" }, .line = 0 };
 
-        try ctx.dispatch.register(.{
+        try ctx.registerDispatch(.{
             .word_name = "freeze",
             .type_a = type_name,
             .type_b = dispatch_mod.unary_sentinel,
@@ -1255,7 +1255,7 @@ fn registerMutableMapMutationDispatches(
         instrs[0] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
         instrs[1] = .{ .op = .{ .call_word = "native.typed-at-set-mut-dispatch" }, .line = 0 };
 
-        try ctx.dispatch.register(.{
+        try ctx.registerDispatch(.{
             .word_name = "@set!",
             .type_a = type_name,
             .type_b = dispatch_mod.unary_sentinel,
@@ -1270,7 +1270,7 @@ fn registerMutableMapMutationDispatches(
         instrs[0] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
         instrs[1] = .{ .op = .{ .call_word = "native.typed-at-remove-mut-dispatch" }, .line = 0 };
 
-        try ctx.dispatch.register(.{
+        try ctx.registerDispatch(.{
             .word_name = "@remove!",
             .type_a = type_name,
             .type_b = dispatch_mod.unary_sentinel,
@@ -1303,7 +1303,7 @@ pub fn registerHashDispatch(ctx: *Context, type_name: []const u8, instrs: []cons
         });
     }
 
-    try ctx.dispatch.register(.{
+    try ctx.registerDispatch(.{
         .word_name = ">hash",
         .type_a = type_name,
         .type_b = dispatch_mod.unary_sentinel,

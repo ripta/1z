@@ -92,7 +92,7 @@ fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: 
         .native => .{ .boolean = false },
     };
 
-    const dispatch_pairs = try ctx.dispatch.entriesForWord(name, alloc);
+    const dispatch_pairs = try ctx.dispatchEntriesForWord(name, alloc);
     const methods_arr = try alloc.alloc(Value, dispatch_pairs.len);
     for (dispatch_pairs, 0..) |pair, i| {
         const types = if (std.mem.eql(u8, pair.key.type_b, dispatch_mod.unary_sentinel)) blk: {

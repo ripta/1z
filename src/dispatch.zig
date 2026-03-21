@@ -270,6 +270,68 @@ pub const DispatchTable = struct {
     }
 };
 
+/// A scoped frame of dispatch entries, used by `with-isolation` to layer
+/// registrations that can be discarded on scope exit.
+pub const DispatchFrame = struct {
+    entries: std.HashMapUnmanaged(DispatchKey, DispatchEntry, DispatchKeyContext, 80) = .{},
+
+    pub fn deinit(self: *DispatchFrame, allocator: Allocator) void {
+        self.entries.deinit(allocator);
+    }
+};
+
+const EntriesMap = std.HashMapUnmanaged(DispatchKey, DispatchEntry, DispatchKeyContext, 80);
+
+/// Look up a binary dispatch entry in a single entries map, following the
+/// 4-step precedence: exact, wildcard-b, wildcard-a, both-wildcards.
+pub fn lookupBinaryInEntries(entries: *const EntriesMap, word_name: []const u8, type_a: []const u8, type_b: []const u8) ?DispatchEntry {
+    if (entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = type_b })) |entry| {
+        return entry;
+    }
+    if (entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = any_sentinel })) |entry| {
+        return entry;
+    }
+    if (entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = type_b })) |entry| {
+        return entry;
+    }
+    if (entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = any_sentinel })) |entry| {
+        return entry;
+    }
+    return null;
+}
+
+/// Look up a unary dispatch entry in a single entries map, following the
+/// 2-step precedence: exact, wildcard.
+pub fn lookupUnaryInEntries(entries: *const EntriesMap, word_name: []const u8, type_a: []const u8) ?DispatchEntry {
+    if (entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = unary_sentinel })) |entry| {
+        return entry;
+    }
+    if (entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = unary_sentinel })) |entry| {
+        return entry;
+    }
+    return null;
+}
+
+/// Collect dispatch keys from an entries map for a given word, appending to results.
+pub fn collectKeysForWord(entries: *const EntriesMap, word_name: []const u8, results: *std.ArrayListUnmanaged(DispatchKey), alloc: Allocator) !void {
+    var iter = entries.iterator();
+    while (iter.next()) |entry| {
+        if (std.mem.eql(u8, entry.key_ptr.word_name, word_name)) {
+            try results.append(alloc, entry.key_ptr.*);
+        }
+    }
+}
+
+/// Collect dispatch key-entry pairs from an entries map for a given word, appending to results.
+pub fn collectEntriesForWord(entries: *const EntriesMap, word_name: []const u8, results: *std.ArrayListUnmanaged(DispatchTable.KeyEntryPair), alloc: Allocator) !void {
+    var iter = entries.iterator();
+    while (iter.next()) |entry| {
+        if (std.mem.eql(u8, entry.key_ptr.word_name, word_name)) {
+            try results.append(alloc, .{ .key = entry.key_ptr.*, .entry = entry.value_ptr.* });
+        }
+    }
+}
+
 // =============================================================================
 // Tests
 // =============================================================================

@@ -260,11 +260,11 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     const gw_slice = try generated_words.toOwnedSlice(alloc);
     try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
     const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
-    try ctx.type_descriptors.put(ctx.allocator, enum_name, frozen_desc);
+    try ctx.registerTypeDescriptor(enum_name, frozen_desc);
     enum_tv.descriptor = frozen_desc;
 
     const vtypes_slice = try vtype_list.toOwnedSlice(alloc);
-    try ctx.enum_registry.put(ctx.allocator, enum_name, vtypes_slice);
+    try ctx.registerEnumVariants(enum_name, vtypes_slice);
 }
 
 /// Trampoline helper ( value enum-type-val -- bool )
@@ -486,11 +486,15 @@ fn lookupVariantEnum(ctx: *const Context, variant_name: []const u8) ?EnumInfo {
 
     var search_ctx: ?*const Context = ctx;
     while (search_ctx) |c| {
-        var it = c.enum_registry.iterator();
-        while (it.next()) |entry| {
-            for (entry.value_ptr.*) |vt| {
-                if (std.mem.eql(u8, vt.name, variant_name)) {
-                    return .{ .name = entry.key_ptr.*, .variants = entry.value_ptr.* };
+        var fi = c.type_registry_frames.items.len;
+        while (fi > 0) {
+            fi -= 1;
+            var it = c.type_registry_frames.items[fi].enum_registry.iterator();
+            while (it.next()) |entry| {
+                for (entry.value_ptr.*) |vt| {
+                    if (std.mem.eql(u8, vt.name, variant_name)) {
+                        return .{ .name = entry.key_ptr.*, .variants = entry.value_ptr.* };
+                    }
                 }
             }
         }

@@ -153,16 +153,16 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
         .body = .{ .quotation = body.instructions },
     };
 
-    ctx.dispatch.register(key, entry, allow_overwrite) catch |err| {
+    ctx.registerDispatch(key, entry, allow_overwrite) catch |err| {
         if (err == error.DuplicateMethod) {
             // If the existing entry was registered by the native dispatch
             // system, allow user methods to silently overwrite it. This lets
             // libraries like ratio register `method{ fixnum fixnum }` for `/`
             // without requiring the `mutable` marker.
-            if (ctx.dispatch.entries.get(key)) |existing| {
+            if (ctx.getDispatchEntry(key)) |existing| {
                 if (existing.provenance) |prov| {
                     if (std.mem.eql(u8, prov.generator, "native")) {
-                        ctx.dispatch.register(key, entry, true) catch |err2| return err2;
+                        ctx.registerDispatch(key, entry, true) catch |err2| return err2;
                         return;
                     }
                 }

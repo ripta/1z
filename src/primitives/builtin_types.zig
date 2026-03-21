@@ -40,7 +40,7 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
     const tv = try alloc.create(value_mod.TypeValue);
     tv.* = .{ .name = name, .descriptor = descriptor };
 
-    try ctx.type_descriptors.put(ctx.allocator, name, descriptor);
+    try ctx.registerTypeDescriptor(name, descriptor);
 
     // Register in the built-in type value mapping table for type-of lookups
     try ctx.builtin_type_values.put(ctx.allocator, name, tv);

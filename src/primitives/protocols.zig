@@ -317,7 +317,7 @@ fn hasAnyMatchingEntry(
     any_position: usize,
 ) bool {
     const alloc = ctx.arena.allocator();
-    const keys = ctx.dispatch.keysForWord(method_name, alloc) catch return false;
+    const keys = ctx.dispatchKeysForWord(method_name, alloc) catch return false;
     defer alloc.free(keys);
 
     for (keys) |key| {
