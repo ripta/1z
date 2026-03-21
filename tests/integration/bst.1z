@@ -1,0 +1,67 @@
+\ Integration tests for bst, an immutable red-black binary search tree
+
+use "testing" ;
+use "bst" ;
+
+"empty tree" test-section
+[ cmp ] <bst> tree-empty? t "new bst is empty" assert=
+
+"single insert" test-section
+[ cmp ] <bst> 42 tree-insert tree-empty? f "tree with element is not empty" assert=
+[ cmp ] <bst> 42 tree-insert 42 tree-contains? t "contains inserted element" assert=
+[ cmp ] <bst> 42 tree-insert 99 tree-contains? f "does not contain absent element" assert=
+
+"multiple inserts" test-section
+[ cmp ] <bst> 10 tree-insert 20 tree-insert 30 tree-insert
+dup 10 tree-contains? t "contains 10" assert=
+dup 20 tree-contains? t "contains 20" assert=
+dup 30 tree-contains? t "contains 30" assert=
+dup 15 tree-contains? f "does not contain 15" assert=
+dup 5 tree-contains? f "does not contain 5" assert=
+drop
+
+"duplicate insert" test-section
+[ cmp ] <bst> 42 tree-insert 42 tree-insert
+42 tree-contains? t "still contains element after dup insert" assert=
+
+">bst from array" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst
+dup 5 tree-contains? t ">bst contains 5" assert=
+dup 3 tree-contains? t ">bst contains 3" assert=
+dup 8 tree-contains? t ">bst contains 8" assert=
+dup 1 tree-contains? t ">bst contains 1" assert=
+dup 4 tree-contains? t ">bst contains 4" assert=
+dup 6 tree-contains? f ">bst does not contain 6" assert=
+drop
+
+"sorted sequence insert" test-section
+{ 1 2 3 4 5 6 7 8 9 10 } [ cmp ] >bst
+dup 1 tree-contains? t "sorted: contains 1" assert=
+dup 5 tree-contains? t "sorted: contains 5" assert=
+dup 10 tree-contains? t "sorted: contains 10" assert=
+dup 0 tree-contains? f "sorted: does not contain 0" assert=
+drop
+
+"reverse sorted sequence" test-section
+{ 10 9 8 7 6 5 4 3 2 1 } [ cmp ] >bst
+dup 1 tree-contains? t "reverse: contains 1" assert=
+dup 5 tree-contains? t "reverse: contains 5" assert=
+dup 10 tree-contains? t "reverse: contains 10" assert=
+dup 11 tree-contains? f "reverse: does not contain 11" assert=
+drop
+
+"string keys" test-section
+{ "apple" "banana" "cherry" } [ cmp ] >bst
+dup "apple" tree-contains? t "contains apple" assert=
+dup "banana" tree-contains? t "contains banana" assert=
+dup "cherry" tree-contains? t "contains cherry" assert=
+dup "date" tree-contains? f "does not contain date" assert=
+drop
+
+"custom comparator (reverse)" test-section
+{ 1 2 3 4 5 } [ swap cmp ] >bst
+dup 1 tree-contains? t "reverse cmp: contains 1" assert=
+dup 3 tree-contains? t "reverse cmp: contains 3" assert=
+dup 5 tree-contains? t "reverse cmp: contains 5" assert=
+dup 6 tree-contains? f "reverse cmp: does not contain 6" assert=
+drop
