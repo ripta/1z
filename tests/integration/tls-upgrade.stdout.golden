@@ -19,11 +19,11 @@ Stack: [ <stream tls fd read-write> ]
 Stack: [ <stream tls fd read-write> <stream tls fd read-write> ]
 PASS: io-failed
 Stack: [ <stream tls fd read-write> <stream tls fd read-write> ]
-Stack: [ <stream fd (closed)> ]
+Stack: [ <stream tls (closed)> ]
 === closing a TLS stream works ===
-Stack: [ <stream fd (closed)> ]
-Stack: [ <stream fd (closed)> <stream fd read-write> ]
-Stack: [ <stream fd (closed)> <stream tls fd read-write> ]
-Stack: [ <stream fd (closed)> ]
+Stack: [ <stream tls (closed)> ]
+Stack: [ <stream tls (closed)> <stream fd read-write> ]
+Stack: [ <stream tls (closed)> <stream tls fd read-write> ]
+Stack: [ <stream tls (closed)> ]
 PASS: close succeeded
-Stack: [ <stream fd (closed)> ]
+Stack: [ <stream tls (closed)> ]

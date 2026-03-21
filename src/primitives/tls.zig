@@ -4,10 +4,12 @@ const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const Stream = value_mod.Stream;
+const StreamVTable = value_mod.StreamVTable;
 const Resource = value_mod.Resource;
 const Primitive = @import("types.zig").Primitive;
 const RegistryEntry = @import("types.zig").RegistryEntry;
 const helpers = @import("helpers.zig");
+const streams_mod = @import("streams.zig");
 
 pub const primitives = [_]Primitive{};
 
@@ -24,7 +26,7 @@ const TlsConfig = struct {
     allocator: std.mem.Allocator,
 };
 
-/// TLS session state, stored as an opaque pointer on the Stream.
+/// TLS session state, stored as `impl` on the wrapper stream.
 pub const TlsState = struct {
     client: std.crypto.tls.Client,
     transport_reader: std.fs.File.Reader,
@@ -42,6 +44,103 @@ fn tlsConfigCloseFn(ptr: *anyopaque) void {
         b.deinit(config.allocator);
     }
 }
+
+// =============================================================================
+// TLS stream vtable
+// =============================================================================
+
+const tls_vtable = StreamVTable{
+    .read = tlsRead,
+    .write = tlsWrite,
+    .close = tlsClose,
+    .flush = tlsFlush,
+};
+
+fn tlsRead(stream: *Stream, buffer: []u8, ctx: *Context) anyerror!usize {
+    const tls_state: *TlsState = @ptrCast(@alignCast(stream.impl.?));
+    while (true) {
+        return tls_state.client.reader.readSliceShort(buffer) catch {
+            if (ctx.scheduler) |sched| {
+                sched.ioSuspendCurrentTask(tls_state.fd, .read);
+                try helpers.checkCancellation(ctx);
+                continue;
+            }
+            return error.IOFailed;
+        };
+    }
+}
+
+fn tlsWrite(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!usize {
+    const tls_state: *TlsState = @ptrCast(@alignCast(stream.impl.?));
+    while (true) {
+        const n = tls_state.client.writer.write(bytes) catch |err| switch (err) {
+            error.WriteFailed => {
+                if (ctx.scheduler) |sched| {
+                    sched.ioSuspendCurrentTask(tls_state.fd, .write);
+                    try helpers.checkCancellation(ctx);
+                    continue;
+                }
+                return error.IOFailed;
+            },
+        };
+        tls_state.client.writer.flush() catch |err| switch (err) {
+            error.WriteFailed => {
+                if (ctx.scheduler) |sched| {
+                    sched.ioSuspendCurrentTask(tls_state.fd, .write);
+                    try helpers.checkCancellation(ctx);
+                    continue;
+                }
+                return error.IOFailed;
+            },
+        };
+        tls_state.transport_writer.interface.flush() catch |err| switch (err) {
+            error.WriteFailed => {
+                if (ctx.scheduler) |sched| {
+                    sched.ioSuspendCurrentTask(tls_state.fd, .write);
+                    try helpers.checkCancellation(ctx);
+                    continue;
+                }
+                return error.IOFailed;
+            },
+        };
+        return n;
+    }
+}
+
+fn tlsClose(stream: *Stream) void {
+    if (stream.impl) |impl_ptr| {
+        const tls_state: *TlsState = @ptrCast(@alignCast(impl_ptr));
+        tlsFlushState(tls_state) catch {};
+        stream.impl = null;
+    }
+    if (stream.inner) |inner| {
+        inner.vtable.close(inner);
+    }
+}
+
+fn tlsFlush(stream: *Stream) anyerror!void {
+    if (stream.impl) |impl_ptr| {
+        const tls_state: *TlsState = @ptrCast(@alignCast(impl_ptr));
+        try tlsFlushState(tls_state);
+    }
+    if (stream.inner) |inner| {
+        try inner.vtable.flush(inner);
+    }
+}
+
+/// Flush TLS writer, sending any buffered encrypted data to the transport.
+fn tlsFlushState(tls_state: *TlsState) !void {
+    tls_state.client.writer.flush() catch {
+        return error.IOFailed;
+    };
+    tls_state.transport_writer.interface.flush() catch {
+        return error.IOFailed;
+    };
+}
+
+// =============================================================================
+// TLS config and upgrade primitives
+// =============================================================================
 
 /// tls-config ( -- resource )
 fn nativeTlsConfig(ctx: *Context) anyerror!void {
@@ -93,17 +192,9 @@ fn nativeTlsConfigNoVerify(ctx: *Context) anyerror!void {
 /// tls-upgrade ( stream config hostname -- stream )
 ///
 /// Upgrades a stream to TLS using the provided configuration and hostname for
-/// verification. The stream must not already have TLS enabled. The TLS state
-/// is stored as an opaque pointer on the Stream struct.
-///
-/// The TLS handshake is performed synchronously, so the stream's fd is temporarily
-/// set to blocking mode if it was non-blocking. After the handshake, the original
-/// non-blocking mode is restored. This allows the handshake to complete without
-/// needing to be resumable, while still supporting non-blocking streams in general.
-///
-/// If the handshake fails, an error is returned and the original stream is left unchanged.
-/// On success, a new stream with the same underlying file and TLS enabled is pushed
-/// onto the stack. The original stream remains unchanged.
+/// verification. The stream must not already be a TLS wrapper. The resulting
+/// stream delegates I/O through the TLS vtable and chains to the original
+/// stream via the `inner` pointer.
 fn nativeTlsUpgrade(ctx: *Context) anyerror!void {
     const hostname = try helpers.popString(ctx);
     const config_val = try ctx.stack.pop();
@@ -139,13 +230,13 @@ fn nativeTlsUpgrade(ctx: *Context) anyerror!void {
         return error.IOFailed;
     }
 
-    if (stream.tls != null) {
+    if (stream.vtable == &tls_vtable) {
         helpers.setErrorContext(ctx, "stream already has TLS", .{});
         return error.IOFailed;
     }
 
     const alloc = ctx.arena.allocator();
-    const fd = stream.file.handle;
+    const fd = stream.fd;
 
     const tls_state = try alloc.create(TlsState);
     const read_buf = try alloc.alloc(u8, std.crypto.tls.max_ciphertext_record_len);
@@ -167,7 +258,7 @@ fn nativeTlsUpgrade(ctx: *Context) anyerror!void {
     // for the handshake since Client.init is not resumable mid-handshake.
     const was_nonblocking = stream.nonblocking_set;
     if (was_nonblocking) {
-        clearNonBlocking(fd);
+        streams_mod.clearNonBlockingFd(fd);
     }
 
     tls_state.client = std.crypto.tls.Client.init(
@@ -185,50 +276,26 @@ fn nativeTlsUpgrade(ctx: *Context) anyerror!void {
         },
     ) catch |err| {
         if (was_nonblocking) {
-            setNonBlocking(fd);
+            streams_mod.setNonBlockingFd(fd);
         }
         helpers.setErrorContext(ctx, "TLS handshake failed: {s}", .{@errorName(err)});
         return error.IOFailed;
     };
 
     if (was_nonblocking) {
-        setNonBlocking(fd);
+        streams_mod.setNonBlockingFd(fd);
     }
 
     const new_stream = try alloc.create(Stream);
     new_stream.* = .{
-        .file = file,
+        .vtable = &tls_vtable,
+        .fd = fd,
         .mode = stream.mode,
-        .name = stream.name,
+        .name = "tls",
         .nonblocking_set = was_nonblocking,
-        .tls = @ptrCast(tls_state),
+        .impl = @ptrCast(tls_state),
+        .inner = stream,
     };
 
     try ctx.stack.push(.{ .stream = new_stream });
-}
-
-/// Flush TLS writer, sending any buffered encrypted data to the transport.
-pub fn tlsFlush(tls_state: *TlsState) !void {
-    tls_state.client.writer.flush() catch {
-        return error.IOFailed;
-    };
-    tls_state.transport_writer.interface.flush() catch {
-        return error.IOFailed;
-    };
-}
-
-fn setNonBlocking(fd: std.posix.fd_t) void {
-    const raw_flags = std.c.fcntl(fd, std.c.F.GETFL);
-    if (raw_flags < 0) return;
-    var flags: std.c.O = @bitCast(@as(u32, @intCast(raw_flags)));
-    flags.NONBLOCK = true;
-    _ = std.c.fcntl(fd, std.c.F.SETFL, @as(c_int, @bitCast(flags)));
-}
-
-fn clearNonBlocking(fd: std.posix.fd_t) void {
-    const raw_flags = std.c.fcntl(fd, std.c.F.GETFL);
-    if (raw_flags < 0) return;
-    var flags: std.c.O = @bitCast(@as(u32, @intCast(raw_flags)));
-    flags.NONBLOCK = false;
-    _ = std.c.fcntl(fd, std.c.F.SETFL, @as(c_int, @bitCast(flags)));
 }

@@ -7,14 +7,13 @@ const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const Stream = value_mod.Stream;
 const StreamMode = value_mod.StreamMode;
+const StreamVTable = value_mod.StreamVTable;
 const BufferingMode = value_mod.BufferingMode;
 const ByteArray = value_mod.ByteArray;
 
 const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
 const error_mapping = @import("error_mapping.zig");
-const tls_mod = @import("tls.zig");
-const TlsState = tls_mod.TlsState;
 
 const popFixnum = helpers.popFixnum;
 const popSymbol = helpers.popSymbol;
@@ -54,6 +53,109 @@ pub const primitives = [_]Primitive{
 };
 
 // =============================================================================
+// Base file vtable
+// =============================================================================
+
+pub const file_vtable = StreamVTable{
+    .read = fileRead,
+    .write = fileWrite,
+    .close = fileClose,
+    .flush = fileFlush,
+};
+
+/// Read from the underlying fd, yielding to the scheduler on WouldBlock.
+fn fileRead(stream: *Stream, buffer: []u8, ctx: *Context) anyerror!usize {
+    if (ctx.scheduler != null and !stream.nonblocking_set) {
+        setNonBlocking(stream);
+    }
+
+    const file = std.fs.File{ .handle = stream.fd };
+    while (true) {
+        return file.read(buffer) catch |err| {
+            if (err == error.WouldBlock) {
+                if (ctx.scheduler) |sched| {
+                    sched.ioSuspendCurrentTask(stream.fd, .read);
+                    try helpers.checkCancellation(ctx);
+                    continue;
+                }
+                restoreBlocking(stream);
+                continue;
+            }
+            return err;
+        };
+    }
+}
+
+/// Write to the underlying fd, yielding to the scheduler on WouldBlock.
+fn fileWrite(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!usize {
+    if (ctx.scheduler != null and !stream.nonblocking_set) {
+        setNonBlocking(stream);
+    }
+
+    const file = std.fs.File{ .handle = stream.fd };
+    while (true) {
+        return file.write(bytes) catch |err| {
+            if (err == error.WouldBlock) {
+                if (ctx.scheduler) |sched| {
+                    sched.ioSuspendCurrentTask(stream.fd, .write);
+                    try helpers.checkCancellation(ctx);
+                    continue;
+                }
+                restoreBlocking(stream);
+                continue;
+            }
+            return err;
+        };
+    }
+}
+
+/// Close the base fd. Guards stdin/stdout/stderr from actual close.
+fn fileClose(stream: *Stream) void {
+    restoreBlocking(stream);
+
+    if (isStandardStream(stream.name)) {
+        return;
+    }
+
+    const file = std.fs.File{ .handle = stream.fd };
+    file.close();
+}
+
+/// Flush the base fd. No-op for standard streams, sockets, and pipes.
+///
+/// NOTE(ripta): The standard streams and fd-based streams, e.g., sockets and pipes,
+///              are unbuffered at the zig file level, so sync is a no-op or unsupported.
+fn fileFlush(stream: *Stream) anyerror!void {
+    if (isStandardStream(stream.name) or
+        std.mem.eql(u8, stream.name, "fd") or
+        std.mem.startsWith(u8, stream.name, "pipe"))
+    {
+        return;
+    }
+
+    const file = std.fs.File{ .handle = stream.fd };
+    file.sync() catch |err| {
+        return mapFileSyncError(err);
+    };
+}
+
+fn isStandardStream(name: []const u8) bool {
+    return std.mem.eql(u8, name, "stdin") or
+        std.mem.eql(u8, name, "stdout") or
+        std.mem.eql(u8, name, "stderr");
+}
+
+/// Create a base file stream from a fd with the given mode and name.
+pub fn createFileStream(fd: std.posix.fd_t, mode: StreamMode, name: []const u8) Stream {
+    return Stream{
+        .vtable = &file_vtable,
+        .fd = fd,
+        .mode = mode,
+        .name = name,
+    };
+}
+
+// =============================================================================
 // Standard streams
 // =============================================================================
 
@@ -61,12 +163,8 @@ pub const primitives = [_]Primitive{
 pub fn nativeStdin(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const stream = alloc.create(Stream) catch return error.OutOfMemory;
-    stream.* = Stream{
-        .file = std.fs.File.stdin(),
-        .mode = .read,
-        .name = "stdin",
-        .buffering = .line,
-    };
+    stream.* = createFileStream(std.posix.STDIN_FILENO, .read, "stdin");
+    stream.buffering = .line;
     try ctx.stack.push(.{ .stream = stream });
 }
 
@@ -74,12 +172,8 @@ pub fn nativeStdin(ctx: *Context) anyerror!void {
 pub fn nativeStdout(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const stream = alloc.create(Stream) catch return error.OutOfMemory;
-    stream.* = Stream{
-        .file = std.fs.File.stdout(),
-        .mode = .write,
-        .name = "stdout",
-        .buffering = .line,
-    };
+    stream.* = createFileStream(std.posix.STDOUT_FILENO, .write, "stdout");
+    stream.buffering = .line;
     try ctx.stack.push(.{ .stream = stream });
 }
 
@@ -87,12 +181,8 @@ pub fn nativeStdout(ctx: *Context) anyerror!void {
 pub fn nativeStderr(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const stream = alloc.create(Stream) catch return error.OutOfMemory;
-    stream.* = Stream{
-        .file = std.fs.File.stderr(),
-        .mode = .write,
-        .name = "stderr",
-        .buffering = .line,
-    };
+    stream.* = createFileStream(std.posix.STDERR_FILENO, .write, "stderr");
+    stream.buffering = .line;
     try ctx.stack.push(.{ .stream = stream });
 }
 
@@ -159,11 +249,7 @@ pub fn nativeStreamOpen(ctx: *Context) anyerror!void {
     // Create stream object
     const stream = alloc.create(Stream) catch return error.OutOfMemory;
     const name_copy = alloc.dupe(u8, path) catch return error.OutOfMemory;
-    stream.* = Stream{
-        .file = file,
-        .mode = mode,
-        .name = name_copy,
-    };
+    stream.* = createFileStream(file.handle, mode, name_copy);
     try ctx.stack.push(.{ .stream = stream });
 }
 
@@ -172,24 +258,7 @@ pub fn nativeStreamClose(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
 
-    if (stream.tls) |tls_ptr| {
-        const tls_state: *TlsState = @ptrCast(@alignCast(tls_ptr));
-        tls_mod.tlsFlush(tls_state) catch {};
-        stream.tls = null;
-    }
-
-    restoreBlocking(stream);
-
-    // Don't actually close stdin/stdout/stderr
-    if (std.mem.eql(u8, stream.name, "stdin") or
-        std.mem.eql(u8, stream.name, "stdout") or
-        std.mem.eql(u8, stream.name, "stderr"))
-    {
-        stream.closed = true;
-        return;
-    }
-
-    stream.file.close();
+    stream.vtable.close(stream);
     stream.closed = true;
 }
 
@@ -213,7 +282,7 @@ pub fn nativeStreamWrite(ctx: *Context) anyerror!void {
         },
     };
 
-    const written = asyncWrite(stream, bytes, ctx) catch |err| {
+    const written = stream.vtable.write(stream, bytes, ctx) catch |err| {
         return mapFileWriteError(err);
     };
 
@@ -225,26 +294,7 @@ pub fn nativeStreamFlush(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
 
-    if (stream.tls) |tls_ptr| {
-        const tls_state: *TlsState = @ptrCast(@alignCast(tls_ptr));
-        try tls_mod.tlsFlush(tls_state);
-        return;
-    }
-
-    // NOTE(ripta): The standard streams and fd-based streams, e.g., sockets and pipes,
-    //              are unbuffered at the zig file level, so sync is a no-op or unsupported.
-    if (std.mem.eql(u8, stream.name, "stdin") or
-        std.mem.eql(u8, stream.name, "stdout") or
-        std.mem.eql(u8, stream.name, "stderr") or
-        std.mem.eql(u8, stream.name, "fd") or
-        std.mem.eql(u8, stream.name, "pipe"))
-    {
-        return;
-    }
-
-    stream.file.sync() catch |err| {
-        return mapFileSyncError(err);
-    };
+    try stream.vtable.flush(stream);
 }
 
 // =============================================================================
@@ -265,7 +315,7 @@ pub fn nativeStreamRead(ctx: *Context) anyerror!void {
     const buffer = alloc.alloc(u8, @intCast(n)) catch return error.OutOfMemory;
     defer alloc.free(buffer);
 
-    const bytes_read = asyncRead(stream, buffer, ctx) catch |err| {
+    const bytes_read = stream.vtable.read(stream, buffer, ctx) catch |err| {
         return mapFileReadError(err);
     };
 
@@ -290,7 +340,7 @@ pub fn nativeStreamReadLine(ctx: *Context) anyerror!void {
 
     while (true) {
         var byte_buf: [1]u8 = undefined;
-        const bytes_read = asyncRead(stream, &byte_buf, ctx) catch |err| {
+        const bytes_read = stream.vtable.read(stream, &byte_buf, ctx) catch |err| {
             return mapFileReadError(err);
         };
 
@@ -313,7 +363,7 @@ pub fn nativeStreamReadLine(ctx: *Context) anyerror!void {
         // Handle \r\n by skipping \r if followed by \n
         if (byte == '\r') {
             var peek_buf: [1]u8 = undefined;
-            const peek_read = asyncRead(stream, &peek_buf, ctx) catch |err| {
+            const peek_read = stream.vtable.read(stream, &peek_buf, ctx) catch |err| {
                 return mapFileReadError(err);
             };
             if (peek_read > 0 and peek_buf[0] == '\n') {
@@ -350,7 +400,7 @@ pub fn nativeStreamReadAll(ctx: *Context) anyerror!void {
 
     var buffer: [4096]u8 = undefined;
     while (true) {
-        const bytes_read = asyncRead(stream, &buffer, ctx) catch |err| {
+        const bytes_read = stream.vtable.read(stream, &buffer, ctx) catch |err| {
             return mapFileReadError(err);
         };
 
@@ -385,7 +435,8 @@ pub fn nativeStreamTell(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
 
-    const pos = stream.file.getPos() catch |err| {
+    const file = std.fs.File{ .handle = stream.fd };
+    const pos = file.getPos() catch |err| {
         return mapGetPosError(err);
     };
 
@@ -402,7 +453,8 @@ pub fn nativeStreamSeek(ctx: *Context) anyerror!void {
         return error.InvalidArgument;
     }
 
-    stream.file.seekTo(@intCast(pos)) catch |err| {
+    const file = std.fs.File{ .handle = stream.fd };
+    file.seekTo(@intCast(pos)) catch |err| {
         return mapSeekError(err);
     };
 }
@@ -413,7 +465,8 @@ pub fn nativeStreamSeekEnd(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
 
-    stream.file.seekFromEnd(offset) catch |err| {
+    const file = std.fs.File{ .handle = stream.fd };
+    file.seekFromEnd(offset) catch |err| {
         return mapSeekError(err);
     };
 }
@@ -461,7 +514,7 @@ pub fn nativeStreamToFd(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
 
-    const fd: i64 = @intCast(stream.file.handle);
+    const fd: i64 = @intCast(stream.fd);
     try ctx.stack.push(.{ .fixnum = fd });
 }
 
@@ -486,11 +539,7 @@ pub fn nativeFdToStream(ctx: *Context) anyerror!void {
 
     const alloc = ctx.quotationAllocator();
     const stream = alloc.create(Stream) catch return error.OutOfMemory;
-    stream.* = Stream{
-        .file = std.fs.File{ .handle = @intCast(fd_val) },
-        .mode = .read_write,
-        .name = "fd",
-    };
+    stream.* = createFileStream(@intCast(fd_val), .read_write, "fd");
     try ctx.stack.push(.{ .stream = stream });
 }
 
@@ -504,18 +553,10 @@ fn nativePipe(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const rd = alloc.create(Stream) catch return error.OutOfMemory;
-    rd.* = Stream{
-        .file = std.fs.File{ .handle = fds[0] },
-        .mode = .read,
-        .name = "pipe(rd)",
-    };
+    rd.* = createFileStream(fds[0], .read, "pipe(rd)");
 
     const wr = alloc.create(Stream) catch return error.OutOfMemory;
-    wr.* = Stream{
-        .file = std.fs.File{ .handle = fds[1] },
-        .mode = .write,
-        .name = "pipe(wr)",
-    };
+    wr.* = createFileStream(fds[1], .write, "pipe(wr)");
 
     try ctx.stack.push(.{ .stream = rd });
     try ctx.stack.push(.{ .stream = wr });
@@ -561,133 +602,35 @@ pub fn nativeToCodepoint(ctx: *Context) anyerror!void {
 }
 
 // =============================================================================
-// Async I/O helpers
+// Non-blocking helpers (used by base file vtable and TLS handshake)
 // =============================================================================
 
 /// Set O_NONBLOCK on the stream's fd.
-fn setNonBlocking(stream: *Stream) void {
+pub fn setNonBlocking(stream: *Stream) void {
     if (stream.nonblocking_set) return;
-
-    const fd = stream.file.handle;
-    const raw_flags = std.c.fcntl(fd, std.c.F.GETFL);
-    if (raw_flags < 0) return;
-
-    var flags: std.c.O = @bitCast(@as(u32, @intCast(raw_flags)));
-    flags.NONBLOCK = true;
-    _ = std.c.fcntl(fd, std.c.F.SETFL, @as(c_int, @bitCast(flags)));
+    setNonBlockingFd(stream.fd);
     stream.nonblocking_set = true;
 }
 
 /// Clear O_NONBLOCK on the stream's fd, restoring blocking mode.
-fn restoreBlocking(stream: *Stream) void {
+pub fn restoreBlocking(stream: *Stream) void {
     if (!stream.nonblocking_set) return;
-
-    const fd = stream.file.handle;
-    const raw_flags = std.c.fcntl(fd, std.c.F.GETFL);
-    if (raw_flags < 0) return;
-
-    var flags: std.c.O = @bitCast(@as(u32, @intCast(raw_flags)));
-    flags.NONBLOCK = false;
-    _ = std.c.fcntl(fd, std.c.F.SETFL, @as(c_int, @bitCast(flags)));
+    clearNonBlockingFd(stream.fd);
     stream.nonblocking_set = false;
 }
 
-/// Read from a stream, yielding to the scheduler on WouldBlock.
-///
-/// When no scheduler is active and WouldBlock occurs (leftover O_NONBLOCK),
-/// restores blocking mode and retries.
-fn asyncRead(stream: *Stream, buffer: []u8, ctx: *Context) anyerror!usize {
-    if (stream.tls) |tls_ptr| {
-        const tls_state: *TlsState = @ptrCast(@alignCast(tls_ptr));
-        while (true) {
-            return tls_state.client.reader.readSliceShort(buffer) catch {
-                if (ctx.scheduler) |sched| {
-                    sched.ioSuspendCurrentTask(tls_state.fd, .read);
-                    try helpers.checkCancellation(ctx);
-                    continue;
-                }
-                return error.IOFailed;
-            };
-        }
-    }
-
-    if (ctx.scheduler != null and !stream.nonblocking_set) {
-        setNonBlocking(stream);
-    }
-
-    while (true) {
-        return stream.file.read(buffer) catch |err| {
-            if (err == error.WouldBlock) {
-                if (ctx.scheduler) |sched| {
-                    sched.ioSuspendCurrentTask(stream.file.handle, .read);
-                    try helpers.checkCancellation(ctx);
-                    continue;
-                }
-
-                restoreBlocking(stream);
-                continue;
-            }
-            return err;
-        };
-    }
+pub fn setNonBlockingFd(fd: std.posix.fd_t) void {
+    const raw_flags = std.c.fcntl(fd, std.c.F.GETFL);
+    if (raw_flags < 0) return;
+    var flags: std.c.O = @bitCast(@as(u32, @intCast(raw_flags)));
+    flags.NONBLOCK = true;
+    _ = std.c.fcntl(fd, std.c.F.SETFL, @as(c_int, @bitCast(flags)));
 }
 
-/// Write to a stream, yielding to the scheduler on WouldBlock.
-///
-fn asyncWrite(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!usize {
-    if (stream.tls) |tls_ptr| {
-        const tls_state: *TlsState = @ptrCast(@alignCast(tls_ptr));
-        while (true) {
-            const n = tls_state.client.writer.write(bytes) catch |err| switch (err) {
-                error.WriteFailed => {
-                    if (ctx.scheduler) |sched| {
-                        sched.ioSuspendCurrentTask(tls_state.fd, .write);
-                        try helpers.checkCancellation(ctx);
-                        continue;
-                    }
-                    return error.IOFailed;
-                },
-            };
-            tls_state.client.writer.flush() catch |err| switch (err) {
-                error.WriteFailed => {
-                    if (ctx.scheduler) |sched| {
-                        sched.ioSuspendCurrentTask(tls_state.fd, .write);
-                        try helpers.checkCancellation(ctx);
-                        continue;
-                    }
-                    return error.IOFailed;
-                },
-            };
-            tls_state.transport_writer.interface.flush() catch |err| switch (err) {
-                error.WriteFailed => {
-                    if (ctx.scheduler) |sched| {
-                        sched.ioSuspendCurrentTask(tls_state.fd, .write);
-                        try helpers.checkCancellation(ctx);
-                        continue;
-                    }
-                    return error.IOFailed;
-                },
-            };
-            return n;
-        }
-    }
-
-    if (ctx.scheduler != null and !stream.nonblocking_set) {
-        setNonBlocking(stream);
-    }
-
-    while (true) {
-        return stream.file.write(bytes) catch |err| {
-            if (err == error.WouldBlock) {
-                if (ctx.scheduler) |sched| {
-                    sched.ioSuspendCurrentTask(stream.file.handle, .write);
-                    try helpers.checkCancellation(ctx);
-                    continue;
-                }
-                restoreBlocking(stream);
-                continue;
-            }
-            return err;
-        };
-    }
+pub fn clearNonBlockingFd(fd: std.posix.fd_t) void {
+    const raw_flags = std.c.fcntl(fd, std.c.F.GETFL);
+    if (raw_flags < 0) return;
+    var flags: std.c.O = @bitCast(@as(u32, @intCast(raw_flags)));
+    flags.NONBLOCK = false;
+    _ = std.c.fcntl(fd, std.c.F.SETFL, @as(c_int, @bitCast(flags)));
 }

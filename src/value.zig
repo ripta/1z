@@ -85,15 +85,31 @@ pub const BufferingMode = enum {
     }
 };
 
-/// Stream wraps a file handle for I/O operations.
+/// VTable for stream I/O dispatch. Each wrapper layer provides its own vtable.
+pub const StreamVTable = struct {
+    read: *const fn (*Stream, []u8, *@import("context.zig").Context) anyerror!usize,
+    write: *const fn (*Stream, []const u8, *@import("context.zig").Context) anyerror!usize,
+    close: *const fn (*Stream) void,
+    flush: *const fn (*Stream) anyerror!void,
+};
+
+/// Stream wraps a file descriptor for I/O operations. Wrappers (TLS,
+/// compression, etc.) form a singly-linked list via `inner`, each with
+/// its own vtable. The `fd` field always holds the bottom-level file
+/// descriptor for scheduler integration and fcntl operations.
 pub const Stream = struct {
-    file: std.fs.File,
+    vtable: *const StreamVTable,
+    fd: std.posix.fd_t,
     mode: StreamMode,
     closed: bool = false,
-    name: []const u8, // For display: "stdout", "stderr", file path
+    // For display: "stdout", "stderr", file path
+    name: []const u8,
     buffering: BufferingMode = .none,
     nonblocking_set: bool = false,
-    tls: ?*anyopaque = null,
+    // Wrapper-specific state, e.g., TLS session state or compressor context.
+    impl: ?*anyopaque = null,
+    // Wrapped stream, where base streams have null inner.
+    inner: ?*Stream = null,
 };
 
 /// Resource wraps an opaque C pointer for FFI interop.
@@ -539,10 +555,19 @@ pub const Value = union(enum) {
             .stream => |s| {
                 if (s.closed) {
                     try writer.print("<stream {s} (closed)>", .{s.name});
-                } else if (s.tls != null) {
-                    try writer.print("<stream tls {s} {s}>", .{ s.name, s.mode.toString() });
                 } else {
-                    try writer.print("<stream {s} {s}>", .{ s.name, s.mode.toString() });
+                    try writer.writeAll("<stream ");
+                    // Walk the wrapper chain from outermost to innermost to
+                    // build labels like "tls fd" or "compress tls fd".
+                    var cur: ?*const Stream = s;
+                    var first = true;
+                    while (cur) |c| {
+                        if (!first) try writer.writeAll(" ");
+                        first = false;
+                        try writer.writeAll(c.name);
+                        cur = c.inner;
+                    }
+                    try writer.print(" {s}>", .{s.mode.toString()});
                 }
             },
             .resource => |r| {
