@@ -499,6 +499,52 @@ fn nativeToIntegerPassthrough(ctx: *Context) anyerror!void {
 }
 
 // =============================================================================
+// String / byte-array lexicographic comparison helpers and dispatch entries
+// =============================================================================
+
+const ByteType = enum { string, byte_array };
+
+fn extractBytes(comptime bt: ByteType, val: Value) []const u8 {
+    return switch (bt) {
+        .string => val.string,
+        .byte_array => val.byte_array.items,
+    };
+}
+
+fn lexOrder(a: []const u8, b: []const u8) std.math.Order {
+    return std.mem.order(u8, a, b);
+}
+
+fn makeBytesLtEntry(comptime ta: ByteType, comptime tb: ByteType) *const fn (*Context) anyerror!void {
+    return &struct {
+        fn func(ctx: *Context) anyerror!void {
+            const b = try ctx.stack.pop();
+            const a = try ctx.stack.pop();
+            try ctx.stack.push(.{ .boolean = lexOrder(extractBytes(ta, a), extractBytes(tb, b)) == .lt });
+        }
+    }.func;
+}
+
+fn makeBytesGtEntry(comptime ta: ByteType, comptime tb: ByteType) *const fn (*Context) anyerror!void {
+    return &struct {
+        fn func(ctx: *Context) anyerror!void {
+            const b = try ctx.stack.pop();
+            const a = try ctx.stack.pop();
+            try ctx.stack.push(.{ .boolean = lexOrder(extractBytes(ta, a), extractBytes(tb, b)) == .gt });
+        }
+    }.func;
+}
+
+const byte_types = [_]ByteType{ .string, .byte_array };
+
+fn byteTypeName(comptime bt: ByteType) []const u8 {
+    return switch (bt) {
+        .string => "string",
+        .byte_array => "byte_array",
+    };
+}
+
+// =============================================================================
 // Registration of all native dispatch entries
 // =============================================================================
 
@@ -567,6 +613,14 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
     // >integer : 2 entries
     try dispatch.registerNative(">integer", "float", unary_sentinel, nativeToIntegerFloat);
     try dispatch.registerNative(">integer", "fixnum", unary_sentinel, nativeToIntegerPassthrough);
+
+    // <, > for string/byte_array : 4 entries each (2x2 matrix)
+    inline for (byte_types) |ta| {
+        inline for (byte_types) |tb| {
+            try dispatch.registerNative("<", byteTypeName(ta), byteTypeName(tb), makeBytesLtEntry(ta, tb));
+            try dispatch.registerNative(">", byteTypeName(ta), byteTypeName(tb), makeBytesGtEntry(ta, tb));
+        }
+    }
 }
 
 // =============================================================================
@@ -1009,6 +1063,38 @@ fn nativeCmp(ctx: *Context) anyerror!void {
                     return error.NotComparable;
                 }
                 break :blk if (af < bv) @as(i64, -1) else if (af > bv) @as(i64, 1) else @as(i64, 0);
+            },
+            else => {
+                helpers.setErrorContext(ctx, "cmp: values are not comparable", .{});
+                return error.NotComparable;
+            },
+        },
+        .string => |av| switch (b) {
+            .string => |bv| switch (std.mem.order(u8, av, bv)) {
+                .lt => @as(i64, -1),
+                .gt => @as(i64, 1),
+                .eq => @as(i64, 0),
+            },
+            .byte_array => |bv| switch (std.mem.order(u8, av, bv.items)) {
+                .lt => @as(i64, -1),
+                .gt => @as(i64, 1),
+                .eq => @as(i64, 0),
+            },
+            else => {
+                helpers.setErrorContext(ctx, "cmp: values are not comparable", .{});
+                return error.NotComparable;
+            },
+        },
+        .byte_array => |av| switch (b) {
+            .string => |bv| switch (std.mem.order(u8, av.items, bv)) {
+                .lt => @as(i64, -1),
+                .gt => @as(i64, 1),
+                .eq => @as(i64, 0),
+            },
+            .byte_array => |bv| switch (std.mem.order(u8, av.items, bv.items)) {
+                .lt => @as(i64, -1),
+                .gt => @as(i64, 1),
+                .eq => @as(i64, 0),
             },
             else => {
                 helpers.setErrorContext(ctx, "cmp: values are not comparable", .{});

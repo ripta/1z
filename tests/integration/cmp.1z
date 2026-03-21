@@ -130,3 +130,42 @@ t "weight satisfies comparable" assert-true
   ordering:gt: [ "greater" ]
 } unchecked-match
 "greater" "match gt branch" assert=
+
+"cmp string-string" test-section
+"a" "b" cmp ordering:lt "a < b" assert=
+"b" "b" cmp ordering:eq "b = b" assert=
+"b" "a" cmp ordering:gt "b > a" assert=
+"" "" cmp ordering:eq "empty = empty" assert=
+"" "a" cmp ordering:lt "empty < a" assert=
+"a" "" cmp ordering:gt "a > empty" assert=
+"abc" "abd" cmp ordering:lt "abc < abd" assert=
+"abc" "abcd" cmp ordering:lt "prefix < longer" assert=
+"abcd" "abc" cmp ordering:gt "longer > prefix" assert=
+
+"cmp byte-array-byte-array" test-section
+B{ 1 2 3 } B{ 1 2 4 } cmp ordering:lt "B{1 2 3} < B{1 2 4}" assert=
+B{ 1 2 3 } B{ 1 2 3 } cmp ordering:eq "B{1 2 3} = B{1 2 3}" assert=
+B{ 1 2 4 } B{ 1 2 3 } cmp ordering:gt "B{1 2 4} > B{1 2 3}" assert=
+B{ } B{ } cmp ordering:eq "empty BA = empty BA" assert=
+B{ } B{ 1 } cmp ordering:lt "empty BA < non-empty" assert=
+B{ 1 } B{ } cmp ordering:gt "non-empty BA > empty" assert=
+B{ 1 2 } B{ 1 2 3 } cmp ordering:lt "prefix BA < longer BA" assert=
+
+"cmp string-byte-array cross-type" test-section
+"abc" B{ 97 98 99 } cmp ordering:eq "string = equivalent byte array" assert=
+"abc" B{ 97 98 100 } cmp ordering:lt "string < larger byte array" assert=
+B{ 97 98 100 } "abc" cmp ordering:gt "byte array > smaller string" assert=
+
+"< > <= >= on strings" test-section
+"a" "b" < t "a < b" assert=
+"b" "a" < f "b not < a" assert=
+"a" "a" < f "a not < a" assert=
+"b" "a" > t "b > a" assert=
+"a" "b" > f "a not > b" assert=
+"a" "a" > f "a not > a" assert=
+"a" "b" <= t "a <= b" assert=
+"a" "a" <= t "a <= a" assert=
+"b" "a" <= f "b not <= a" assert=
+"a" "b" >= f "a not >= b" assert=
+"a" "a" >= t "a >= a" assert=
+"b" "a" >= t "b >= a" assert=

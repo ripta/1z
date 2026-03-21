@@ -186,3 +186,73 @@ Stack: [ ]
 Stack: [ "greater" ]
 PASS: match gt branch
 Stack: [ ]
+=== cmp string-string ===
+Stack: [ ]
+PASS: a < b
+Stack: [ ]
+PASS: b = b
+Stack: [ ]
+PASS: b > a
+Stack: [ ]
+PASS: empty = empty
+Stack: [ ]
+PASS: empty < a
+Stack: [ ]
+PASS: a > empty
+Stack: [ ]
+PASS: abc < abd
+Stack: [ ]
+PASS: prefix < longer
+Stack: [ ]
+PASS: longer > prefix
+Stack: [ ]
+=== cmp byte-array-byte-array ===
+Stack: [ ]
+PASS: B{1 2 3} < B{1 2 4}
+Stack: [ ]
+PASS: B{1 2 3} = B{1 2 3}
+Stack: [ ]
+PASS: B{1 2 4} > B{1 2 3}
+Stack: [ ]
+PASS: empty BA = empty BA
+Stack: [ ]
+PASS: empty BA < non-empty
+Stack: [ ]
+PASS: non-empty BA > empty
+Stack: [ ]
+PASS: prefix BA < longer BA
+Stack: [ ]
+=== cmp string-byte-array cross-type ===
+Stack: [ ]
+PASS: string = equivalent byte array
+Stack: [ ]
+PASS: string < larger byte array
+Stack: [ ]
+PASS: byte array > smaller string
+Stack: [ ]
+=== < > <= >= on strings ===
+Stack: [ ]
+PASS: a < b
+Stack: [ ]
+PASS: b not < a
+Stack: [ ]
+PASS: a not < a
+Stack: [ ]
+PASS: b > a
+Stack: [ ]
+PASS: a not > b
+Stack: [ ]
+PASS: a not > a
+Stack: [ ]
+PASS: a <= b
+Stack: [ ]
+PASS: a <= a
+Stack: [ ]
+PASS: b not <= a
+Stack: [ ]
+PASS: a not >= b
+Stack: [ ]
+PASS: a >= a
+Stack: [ ]
+PASS: b >= a
+Stack: [ ]
