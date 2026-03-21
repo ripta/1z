@@ -141,3 +141,137 @@ dup tree>array swap >iterator #collect
 { 1 3 4 } ">iterator #take 3" assert=
 { 5 3 8 1 4 } [ cmp ] >bst >iterator 0 [ + ] #reduce
 21 ">iterator #reduce sums elements" assert=
+
+\ === Deletion tests ===
+
+"delete from empty tree" test-section
+[ cmp ] <bst> 42 tree-delete tree-empty? t "delete from empty is no-op" assert=
+
+"delete single element" test-section
+[ cmp ] <bst> 42 tree-insert 42 tree-delete
+dup tree-empty? t "tree is empty after deleting only element" assert=
+42 tree-contains? f "does not contain deleted element" assert=
+
+"delete leaf node" test-section
+{ 5 3 8 } [ cmp ] >bst 3 tree-delete
+dup tree>array { 5 8 } "delete leaf 3" assert=
+drop
+
+"delete node with two children" test-section
+{ 2 1 3 } [ cmp ] >bst 2 tree-delete
+tree>array { 1 3 } "delete root with two children" assert=
+
+"delete from multi-element tree" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst 3 tree-delete
+dup 3 tree-contains? f "does not contain deleted 3" assert=
+dup 5 tree-contains? t "still contains 5" assert=
+dup 8 tree-contains? t "still contains 8" assert=
+dup 1 tree-contains? t "still contains 1" assert=
+dup 4 tree-contains? t "still contains 4" assert=
+drop
+
+"delete non-existent element" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst
+dup tree-size swap 99 tree-delete tree-size
+"delete non-existent does not change size" assert=
+
+"delete all elements one by one" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst
+5 tree-delete 3 tree-delete 8 tree-delete 1 tree-delete 4 tree-delete
+tree-empty? t "tree is empty after deleting all elements" assert=
+
+"tree-size after deletions" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst
+dup tree-size 5 "size before deletion" assert=
+3 tree-delete
+dup tree-size 4 "size after deleting one" assert=
+8 tree-delete
+tree-size 3 "size after deleting two" assert=
+
+"tree>array after deletions" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst 3 tree-delete tree>array
+{ 1 4 5 8 } "tree>array after deleting 3" assert=
+{ 5 3 8 1 4 } [ cmp ] >bst 5 tree-delete tree>array
+{ 1 3 4 8 } "tree>array after deleting 5 (root)" assert=
+
+"delete root node" test-section
+{ 10 5 15 3 7 12 20 } [ cmp ] >bst 10 tree-delete
+dup 10 tree-contains? f "root deleted" assert=
+dup tree-size 6 "size after root deletion" assert=
+tree>array { 3 5 7 12 15 20 } "sorted after root deletion" assert=
+
+"large sorted insert then delete" test-section
+{ 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 } [ cmp ] >bst
+5 tree-delete 10 tree-delete 15 tree-delete 20 tree-delete
+dup tree-size 16 "size after 4 deletions from 20" assert=
+dup 5 tree-contains? f "does not contain 5" assert=
+dup 10 tree-contains? f "does not contain 10" assert=
+dup 15 tree-contains? f "does not contain 15" assert=
+dup 20 tree-contains? f "does not contain 20" assert=
+dup 1 tree-contains? t "still contains 1" assert=
+dup 8 tree-contains? t "still contains 8" assert=
+dup 19 tree-contains? t "still contains 19" assert=
+tree>array { 1 2 3 4 6 7 8 9 11 12 13 14 16 17 18 19 }
+"sorted array after deletions" assert=
+
+\ === bst-map tests ===
+
+"bst-map empty" test-section
+[ cmp ] <bst-map> map-empty? t "new bst-map is empty" assert=
+
+"map-insert and map-lookup" test-section
+[ cmp ] <bst-map>
+"a" 1 map-insert
+"b" 2 map-insert
+"c" 3 map-insert
+dup "a" map-lookup option:some> 1 "lookup a" assert=
+dup "b" map-lookup option:some> 2 "lookup b" assert=
+dup "c" map-lookup option:some> 3 "lookup c" assert=
+dup "d" map-lookup option:none? t "lookup d is none" assert=
+drop
+
+"map-insert duplicate overwrites" test-section
+[ cmp ] <bst-map>
+"x" 1 map-insert
+"x" 99 map-insert
+"x" map-lookup option:some> 99 "overwritten value" assert=
+
+"map-delete" test-section
+[ cmp ] <bst-map>
+"a" 1 map-insert
+"b" 2 map-insert
+"c" 3 map-insert
+"b" map-delete
+dup "b" map-lookup option:none? t "deleted key is none" assert=
+dup "a" map-lookup option:some> 1 "a still present" assert=
+dup "c" map-lookup option:some> 3 "c still present" assert=
+drop
+
+"map-delete non-existent" test-section
+[ cmp ] <bst-map>
+"a" 1 map-insert
+dup map-size swap "z" map-delete map-size
+"delete non-existent key is no-op" assert=
+
+"map-size on bst-map" test-section
+[ cmp ] <bst-map>
+"a" 1 map-insert
+"b" 2 map-insert
+"c" 3 map-insert
+map-size 3 "bst-map size is 3" assert=
+
+"bst-map custom comparator" test-section
+[ swap cmp ] <bst-map>
+"a" 1 map-insert
+"b" 2 map-insert
+"c" 3 map-insert
+dup "a" map-lookup option:some> 1 "reverse cmp lookup a" assert=
+dup "c" map-lookup option:some> 3 "reverse cmp lookup c" assert=
+drop
+
+"map>array on bst-map" test-section
+[ cmp ] <bst-map>
+"b" 2 map-insert
+"a" 1 map-insert
+"c" 3 map-insert
+map>array #len 3 "bst-map map>array has 3 pairs" assert=
