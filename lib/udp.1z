@@ -5,8 +5,8 @@ use "net" ;
 udp-socket: virtual{ struct{ fd bound-addr } } ;
 connected-udp-socket: virtual{ struct{ fd bound-addr peer-addr } } ;
 
-\ Create a bound UDP socket on the given address.
-\ Resolves the address, creates a socket, binds, and wraps.
+\\ Create a bound UDP socket on the given address.
+\\ Resolves the address, creates a socket, binds, and wraps.
 udp-bind: ( addr -- udp-socket ) [
   resolve #first
   dup socket
@@ -14,15 +14,15 @@ udp-bind: ( addr -- udp-socket ) [
   swap make-udp-socket
 ] ;
 
-\ Create an unbound UDP socket.
+\\ Create an unbound UDP socket.
 udp-open: ( -- udp-socket ) [
   "0.0.0.0" 0 make-addr:udp resolve #first
   dup socket
   swap make-udp-socket
 ] ;
 
-\ Connect an existing UDP socket to a peer address.
-\ Returns a connected-udp-socket that can use udp-send/udp-recv.
+\\ Connect an existing UDP socket to a peer address.
+\\ Returns a connected-udp-socket that can use udp-send/udp-recv.
 udp-connect: ( udp-socket addr -- connected-udp-socket ) [
   resolve #first
   swap unmake-udp-socket  \ peer-addr fd bound-addr

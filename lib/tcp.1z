@@ -4,8 +4,8 @@ use "net" ;
 
 server: virtual{ struct{ fd bound-addr } } ;
 
-\ Create a listening TCP server socket.
-\ Resolves the address, creates a socket, binds, and starts listening.
+\\ Create a listening TCP server socket.
+\\ Resolves the address, creates a socket, binds, and starts listening.
 listen: ( addr backlog -- server ) [
   swap resolve #first              \ backlog resolved-addr
   dup socket                       \ backlog resolved-addr fd
@@ -15,7 +15,7 @@ listen: ( addr backlog -- server ) [
   make-server
 ] ;
 
-\ Connect to a remote TCP address and return a read-write stream.
+\\ Connect to a remote TCP address and return a read-write stream.
 connect: ( addr -- stream ) [
   resolve #first
   dup socket
@@ -23,15 +23,15 @@ connect: ( addr -- stream ) [
   fd>stream
 ] ;
 
-\ Accept a connection on a listening server.
-\ Returns the client stream and the peer address.
+\\ Accept a connection on a listening server.
+\\ Returns the client stream and the peer address.
 accept: ( server -- stream addr ) [
   unmake-server drop native.accept
   make-addr:tcp
   [ fd>stream ] dip
 ] ;
 
-\ Close a server's listening socket.
+\\ Close a server's listening socket.
 close: ( server -- ) [
   unmake-server drop fd-close
 ] ;
