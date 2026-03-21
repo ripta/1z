@@ -1,0 +1,18 @@
+Stack: [ ]
+=== udp-sendto and udp-recvfrom ===
+Stack: [ ]
+PASS: sendto returned 9 bytes
+PASS: sender port
+PASS: sender host is loopback
+PASS: received data content
+Stack: [ ]
+=== udp-send and udp-recv on connected socket ===
+Stack: [ ]
+PASS: udp-send returned 13 bytes
+PASS: connected recv data
+Stack: [ ]
+=== native.setsockopt ===
+Stack: [ ]
+Stack: [ ]
+PASS: setsockopt did not error
+Stack: [ ]

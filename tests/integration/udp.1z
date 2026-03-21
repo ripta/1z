@@ -1,0 +1,69 @@
+\ Integration tests for UDP datagram primitives
+
+use "testing" ;
+use "net" ;
+
+\ Helper: create a bound UDP socket on a given port
+udp-bound: ( port -- fd ) [
+  "127.0.0.1" swap make-addr:udp resolve #first
+  dup socket dup <rot- bind
+] ;
+
+"udp-sendto and udp-recvfrom" test-section
+[
+  39600 udp-bound  \ recv-fd
+  39601 udp-bound  \ recv-fd send-fd
+
+  \ Spawn receiver
+  over [
+    1024 udp-recvfrom  \ data host port
+    39601 "sender port" assert=
+    "127.0.0.1" "sender host is loopback" assert=
+    bytes> "hello udp" "received data content" assert=
+  ] curry spawn  \ recv-fd send-fd task
+
+  \ Send datagram to receiver address
+  swap "hello udp"
+  "127.0.0.1" 39600 make-addr:udp resolve #first
+  udp-sendto  \ recv-fd task n
+  9 "sendto returned 9 bytes" assert=
+
+  \ Await receiver task, then close fd
+  await drop  \ recv-fd
+  fd-close
+] task-scope
+
+"udp-send and udp-recv on connected socket" test-section
+[
+  39602 udp-bound  \ fd-a
+  39603 udp-bound  \ fd-a fd-b
+
+  \ Connect A to B, B to A
+  over "127.0.0.1" 39603 make-addr:udp resolve #first native.connect
+  dup  "127.0.0.1" 39602 make-addr:udp resolve #first native.connect
+  \ fd-a fd-b
+
+  \ Spawn receiver on A
+  over [
+    1024 udp-recv
+    bytes> "connected udp" "connected recv data" assert=
+  ] curry spawn  \ fd-a fd-b task
+
+  \ Send from B
+  swap "connected udp" udp-send  \ fd-a task n
+  13 "udp-send returned 13 bytes" assert=
+
+  \ Await, then close
+  await drop  \ fd-a
+  fd-close
+] task-scope
+
+"native.setsockopt" test-section
+[
+  "127.0.0.1" 0 make-addr:udp resolve #first
+  socket
+  \ SO_REUSEADDR: SOL_SOCKET=0xffff, SO_REUSEADDR=0x0004 on macOS
+  dup 0xffff 0x0004 1 native.setsockopt
+  fd-close
+] task-scope
+t "setsockopt did not error" assert-true

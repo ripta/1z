@@ -18,12 +18,17 @@ pub const primitives = [_]Primitive{
     .{ .name = "socket", .stack_effect = "addr -- fd", .doc = "Create socket; infers address family and type from addr variant.", .func = nativeSocket },
     .{ .name = "bind", .stack_effect = "fd addr --", .doc = "Bind socket fd to resolved address.", .func = nativeBind },
     .{ .name = "fd-close", .stack_effect = "fd --", .doc = "Close a raw file descriptor.", .func = nativeFdClose },
+    .{ .name = "udp-sendto", .stack_effect = "fd data addr -- n", .doc = "Send datagram to address; data is string or byte-array; returns bytes sent.", .func = nativeUdpSendto },
+    .{ .name = "udp-recvfrom", .stack_effect = "fd maxlen -- data host port", .doc = "Receive datagram; returns byte-array data, sender host string, and port.", .func = nativeUdpRecvfrom },
+    .{ .name = "udp-send", .stack_effect = "fd data -- n", .doc = "Send datagram on connected socket; data is string or byte-array; returns bytes sent.", .func = nativeUdpSend },
+    .{ .name = "udp-recv", .stack_effect = "fd maxlen -- data", .doc = "Receive datagram on connected socket; returns byte-array.", .func = nativeUdpRecv },
 };
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "listen", .func = nativeListen },
     .{ .name = "accept", .func = nativeAccept },
     .{ .name = "connect", .func = nativeConnect },
+    .{ .name = "setsockopt", .func = nativeSetsockopt },
 };
 
 /// Addr variant info extracted from a tagged addr enum value.
@@ -413,6 +418,201 @@ fn nativeFdClose(ctx: *Context) anyerror!void {
     if (fd_val < 0) return error.InvalidArgument;
     const fd: std.posix.fd_t = @intCast(fd_val);
     std.posix.close(fd);
+}
+
+// =============================================================================
+// UDP primitives
+// =============================================================================
+
+/// Extract data bytes from a string or byte-array value.
+fn extractDataBytes(ctx: *Context, val: Value) ![]const u8 {
+    return switch (val) {
+        .byte_array => |ba| ba.items,
+        .string => |s| s,
+        else => {
+            helpers.setTypeMismatchError(ctx, "string or byte-array", val);
+            return error.TypeMismatch;
+        },
+    };
+}
+
+/// Create a ByteArray value from a slice of bytes.
+fn makeBytesValue(alloc: std.mem.Allocator, data: []const u8) !Value {
+    const ba = try alloc.create(value_mod.ByteArray);
+    ba.* = .{};
+    try ba.ensureTotalCapacity(alloc, data.len);
+    for (data) |byte| {
+        ba.appendAssumeCapacity(byte);
+    }
+    return .{ .byte_array = ba };
+}
+
+/// udp-sendto ( fd data addr -- n )
+fn nativeUdpSendto(ctx: *Context) anyerror!void {
+    const addr_info = try extractAddr(ctx);
+    const data_val = try ctx.stack.pop();
+    const fd_val = try popFixnum(ctx);
+    if (fd_val < 0) return error.InvalidArgument;
+    const fd: std.posix.fd_t = @intCast(fd_val);
+
+    const bytes = try extractDataBytes(ctx, data_val);
+    const sock_addr = try addrToSockaddr(ctx, addr_info);
+
+    if (ctx.scheduler != null) {
+        setNonBlocking(fd);
+    }
+
+    while (true) {
+        const n = std.posix.sendto(fd, bytes, 0, &sock_addr.any, sock_addr.getOsSockLen()) catch |err| {
+            if (err == error.WouldBlock) {
+                if (ctx.scheduler) |sched| {
+                    sched.ioSuspendCurrentTask(fd, .write);
+                    try helpers.checkCancellation(ctx);
+                    continue;
+                }
+                clearNonBlocking(fd);
+                continue;
+            }
+            helpers.setErrorContext(ctx, "udp-sendto failed", .{});
+            return error.IOFailed;
+        };
+        try ctx.stack.push(.{ .fixnum = @intCast(n) });
+        return;
+    }
+}
+
+/// udp-recvfrom ( fd maxlen -- data host port )
+fn nativeUdpRecvfrom(ctx: *Context) anyerror!void {
+    const maxlen = try popFixnum(ctx);
+    const fd_val = try popFixnum(ctx);
+    if (fd_val < 0) return error.InvalidArgument;
+    if (maxlen <= 0) return error.InvalidArgument;
+    const fd: std.posix.fd_t = @intCast(fd_val);
+
+    const alloc = ctx.quotationAllocator();
+    const buffer = try alloc.alloc(u8, @intCast(maxlen));
+    defer alloc.free(buffer);
+
+    if (ctx.scheduler != null) {
+        setNonBlocking(fd);
+    }
+
+    while (true) {
+        var peer_addr: std.posix.sockaddr.storage = undefined;
+        var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.storage);
+
+        const n = std.posix.recvfrom(fd, buffer, 0, @ptrCast(&peer_addr), &addr_len) catch |err| {
+            if (err == error.WouldBlock) {
+                if (ctx.scheduler) |sched| {
+                    sched.ioSuspendCurrentTask(fd, .read);
+                    try helpers.checkCancellation(ctx);
+                    continue;
+                }
+                clearNonBlocking(fd);
+                continue;
+            }
+            helpers.setErrorContext(ctx, "udp-recvfrom failed", .{});
+            return error.IOFailed;
+        };
+
+        const data_val = try makeBytesValue(alloc, buffer[0..n]);
+        try ctx.stack.push(data_val);
+
+        const net_addr = std.net.Address{ .any = @as(*const std.posix.sockaddr, @ptrCast(&peer_addr)).* };
+        var ip_buf: [46]u8 = undefined;
+        const ip_str = formatAddress(net_addr, &ip_buf);
+        const host_copy = try alloc.dupe(u8, ip_str);
+        try ctx.stack.push(.{ .string = host_copy });
+        try ctx.stack.push(.{ .fixnum = @intCast(net_addr.getPort()) });
+        return;
+    }
+}
+
+/// udp-send ( fd data -- n )
+fn nativeUdpSend(ctx: *Context) anyerror!void {
+    const data_val = try ctx.stack.pop();
+    const fd_val = try popFixnum(ctx);
+    if (fd_val < 0) return error.InvalidArgument;
+    const fd: std.posix.fd_t = @intCast(fd_val);
+
+    const bytes = try extractDataBytes(ctx, data_val);
+
+    if (ctx.scheduler != null) {
+        setNonBlocking(fd);
+    }
+
+    while (true) {
+        const n = std.posix.sendto(fd, bytes, 0, null, 0) catch |err| {
+            if (err == error.WouldBlock) {
+                if (ctx.scheduler) |sched| {
+                    sched.ioSuspendCurrentTask(fd, .write);
+                    try helpers.checkCancellation(ctx);
+                    continue;
+                }
+                clearNonBlocking(fd);
+                continue;
+            }
+            helpers.setErrorContext(ctx, "udp-send failed", .{});
+            return error.IOFailed;
+        };
+        try ctx.stack.push(.{ .fixnum = @intCast(n) });
+        return;
+    }
+}
+
+/// udp-recv ( fd maxlen -- data )
+fn nativeUdpRecv(ctx: *Context) anyerror!void {
+    const maxlen = try popFixnum(ctx);
+    const fd_val = try popFixnum(ctx);
+    if (fd_val < 0) return error.InvalidArgument;
+    if (maxlen <= 0) return error.InvalidArgument;
+    const fd: std.posix.fd_t = @intCast(fd_val);
+
+    const alloc = ctx.quotationAllocator();
+    const buffer = try alloc.alloc(u8, @intCast(maxlen));
+    defer alloc.free(buffer);
+
+    if (ctx.scheduler != null) {
+        setNonBlocking(fd);
+    }
+
+    while (true) {
+        const n = std.posix.recvfrom(fd, buffer, 0, null, null) catch |err| {
+            if (err == error.WouldBlock) {
+                if (ctx.scheduler) |sched| {
+                    sched.ioSuspendCurrentTask(fd, .read);
+                    try helpers.checkCancellation(ctx);
+                    continue;
+                }
+                clearNonBlocking(fd);
+                continue;
+            }
+            helpers.setErrorContext(ctx, "udp-recv failed", .{});
+            return error.IOFailed;
+        };
+        const data_val = try makeBytesValue(alloc, buffer[0..n]);
+        try ctx.stack.push(data_val);
+        return;
+    }
+}
+
+/// setsockopt ( fd level optname value -- )
+fn nativeSetsockopt(ctx: *Context) anyerror!void {
+    const opt_val = try popFixnum(ctx);
+    const optname_val = try popFixnum(ctx);
+    const level_val = try popFixnum(ctx);
+    const fd_val = try popFixnum(ctx);
+    if (fd_val < 0) return error.InvalidArgument;
+
+    const fd: std.posix.fd_t = @intCast(fd_val);
+    const level: i32 = @intCast(level_val);
+    const optname: u32 = @intCast(optname_val);
+    const value_bytes = std.mem.toBytes(@as(c_int, @intCast(opt_val)));
+
+    std.posix.setsockopt(fd, level, optname, &value_bytes) catch {
+        helpers.setErrorContext(ctx, "setsockopt failed", .{});
+        return error.IOFailed;
+    };
 }
 
 // =============================================================================
