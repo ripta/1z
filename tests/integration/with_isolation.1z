@@ -44,3 +44,47 @@ outer-type: virtual{ fixnum } ;
 [
   42 >outer-type type-name "outer-type" "outer type visible inside isolation" assert=
 ] with-isolation
+
+"dangling reference detection" test-section
+
+\ Tagged value of isolated type with declared effect -> error
+[
+  [ ( -- x ) iso-type: virtual{ fixnum } ;
+    42 >iso-type
+  ] with-isolation
+] "isolated tagged value with effect triggers error" assert-error
+
+\ No declared effect with isolated tagged value -> no error (passthrough)
+[
+  iso-pass: virtual{ fixnum } ;
+  42 >iso-pass
+] with-isolation
+type-name "iso-pass" "no-effect passthrough allows isolated type" assert=
+
+\ Plain value output with types defined in isolation -> no error
+[
+  [ ( -- x ) plain-inner: virtual{ fixnum } ;
+    99
+  ] with-isolation
+] [ drop ] recover
+99 swap "plain value survives even with isolated types" assert=
+
+\ Outer-scope type in output -> no error
+outer-val-type: virtual{ string } ;
+"hi" >outer-val-type
+[ ( a -- a ) ] with-isolation
+"outer-val-type" swap type-name "outer type in output is allowed" assert=
+
+\ Enum variant of isolated enum with declared effect -> error
+[
+  [ ( -- x ) iso-color: enum{ red: green: blue: } ;
+    iso-color:red
+  ] with-isolation
+] "isolated enum variant with effect triggers error" assert-error
+
+\ Nested tagged value inside array with declared effect -> error
+[
+  [ ( -- x ) nested-type: virtual{ fixnum } ;
+    1 >nested-type V{ } swap #push!
+  ] with-isolation
+] "nested isolated type in vector triggers error" assert-error

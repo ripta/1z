@@ -31,3 +31,22 @@ Stack: [ ]
 Stack: [ ]
 PASS: outer type visible inside isolation
 Stack: [ ]
+=== dangling reference detection ===
+Stack: [ ]
+PASS: isolated tagged value with effect triggers error
+Stack: [ ]
+Stack: [ <iso-pass 42> ]
+PASS: no-effect passthrough allows isolated type
+Stack: [ ]
+Stack: [ 99 ]
+PASS: plain value survives even with isolated types
+Stack: [ ]
+Stack: [ ]
+Stack: [ <outer-val-type "hi"> ]
+Stack: [ <outer-val-type "hi"> ]
+PASS: outer type in output is allowed
+Stack: [ ]
+PASS: isolated enum variant with effect triggers error
+Stack: [ ]
+PASS: nested isolated type in vector triggers error
+Stack: [ ]

@@ -1,14 +1,21 @@
 const std = @import("std");
-const Context = @import("../context.zig").Context;
+
+const context_mod = @import("../context.zig");
+const Context = context_mod.Context;
+const TypeRegistryFrame = context_mod.TypeRegistryFrame;
+
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const ErrorObject = value_mod.ErrorObject;
 const StackFrame = value_mod.StackFrame;
 
-const helpers = @import("helpers.zig");
-const Primitive = @import("types.zig").Primitive;
+const stack_effect_mod = @import("../stack_effect.zig");
+const StackEffect = stack_effect_mod.StackEffect;
 
+const helpers = @import("helpers.zig");
 const popQuotation = helpers.popQuotation;
+
+const Primitive = @import("types.zig").Primitive;
 
 /// Convert a PascalCase error name to kebab-case at comptime.
 /// E.g., "StackUnderflow" -> "stack-underflow", "IOError" -> "io-error"
@@ -303,6 +310,88 @@ fn nativeThrow(ctx: *Context) anyerror!void {
     }
 }
 
+/// Check a single value for references to types registered in the isolation
+/// frame, which is the topmost type registry frame.
+///
+/// Returns the dangling type name if found, null otherwise. Depth-limited to avoid unbounded recursion.
+fn findDanglingIsolatedType(val: Value, isolation_frame: *const TypeRegistryFrame, depth: usize) ?[]const u8 {
+    if (depth > 16) return null;
+
+    switch (val) {
+        .tagged => |t| {
+            if (t.tag.parent_type) |pt| {
+                if (isolation_frame.type_descriptors.get(pt.name) != null) return pt.name;
+            }
+
+            if (isolation_frame.type_descriptors.get(t.tag.name) != null) return t.tag.name;
+            return findDanglingIsolatedType(t.inner.*, isolation_frame, depth + 1);
+        },
+        .array => |items| {
+            for (items) |item| {
+                if (findDanglingIsolatedType(item, isolation_frame, depth + 1)) |name| return name;
+            }
+            return null;
+        },
+        .hash => |h| {
+            var it = h.iterator();
+            while (it.next()) |entry| {
+                if (findDanglingIsolatedType(entry.value_ptr.*, isolation_frame, depth + 1)) |name| return name;
+            }
+            return null;
+        },
+        .vector => |v| {
+            for (v.items) |item| {
+                if (findDanglingIsolatedType(item, isolation_frame, depth + 1)) |name| return name;
+            }
+            return null;
+        },
+        .set => |s| {
+            for (s.keys()) |key| {
+                if (findDanglingIsolatedType(key, isolation_frame, depth + 1)) |name| return name;
+            }
+            return null;
+        },
+        .mutable_map => |m| {
+            var it = m.iterator();
+            while (it.next()) |entry| {
+                if (findDanglingIsolatedType(entry.value_ptr.*, isolation_frame, depth + 1)) |name| return name;
+            }
+            return null;
+        },
+        .struct_instance => |si| {
+            for (si.fields) |field| {
+                if (findDanglingIsolatedType(field, isolation_frame, depth + 1)) |name| return name;
+            }
+            return null;
+        },
+        else => return null,
+    }
+}
+
+/// After executing an isolated quotation, check that none of the output values
+/// reference types from the isolation scope. Only called when the quotation has
+/// a declared stack effect.
+fn checkIsolationBoundary(ctx: *Context, effect: *const StackEffect, isolation_frame: *const TypeRegistryFrame) anyerror!void {
+    const output_count = effect.concreteOutputCount();
+    if (output_count == 0) return;
+    if (isolation_frame.type_descriptors.count() == 0) return;
+
+    var i: usize = 0;
+    while (i < output_count) : (i += 1) {
+        const val = ctx.stack.peekN(i) catch return;
+        if (findDanglingIsolatedType(val, isolation_frame, 0)) |type_name| {
+            const allocator = ctx.arena.allocator();
+            ctx.pending_error_message = std.fmt.allocPrint(
+                allocator,
+                "value of type '{s}' cannot escape isolation scope",
+                .{type_name},
+            ) catch null;
+            ctx.pending_error_hint = "types defined inside with-isolation are discarded on exit; the quotation's output values must not reference them";
+            return error.TypeMismatch;
+        }
+    }
+}
+
 /// with-isolation ( quot -- ) - Execute quotation with isolated type registry,
 /// dispatch tables, and protocol obligations. Only stack effects survive.
 fn nativeWithIsolation(ctx: *Context) anyerror!void {
@@ -322,4 +411,11 @@ fn nativeWithIsolation(ctx: *Context) anyerror!void {
     }
 
     try ctx.executeQuotationWithFrame(quot);
+
+    if (quot.effect) |effect| {
+        const frames = ctx.type_registry_frames.items;
+        if (frames.len > 0) {
+            try checkIsolationBoundary(ctx, effect, &frames[frames.len - 1]);
+        }
+    }
 }
