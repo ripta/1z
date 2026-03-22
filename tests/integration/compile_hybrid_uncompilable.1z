@@ -1,0 +1,13 @@
+use "testing" ;
+
+\ A word using eval-string -- the compiler cannot handle this, so it falls
+\ back to interpreter after marking the word uncompilable.
+eval-add: ( a b -- n ) [ "+" eval-string ] ;
+
+run-many: ( -- ) [
+  200 [ 1 1 eval-add drop ] times
+] ;
+
+run-many
+
+3 4 eval-add 7 "eval-add falls back to interpreter" assert=

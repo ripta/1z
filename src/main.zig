@@ -246,11 +246,13 @@ pub fn main() u8 {
                 compile_mode = .off;
             } else if (std.mem.eql(u8, value, "eager")) {
                 compile_mode = .eager;
+            } else if (std.mem.eql(u8, value, "hybrid")) {
+                compile_mode = .hybrid;
             } else {
                 const stderr_file: File = .stderr();
                 var stderr_buf: [4096]u8 = undefined;
                 var stderr = stderr_file.writer(&stderr_buf);
-                stderr.interface.print("Error: invalid value for --compile: '{s}' (expected 'off' or 'eager')\n", .{value}) catch {};
+                stderr.interface.print("Error: invalid value for --compile: '{s}' (expected 'off', 'eager', or 'hybrid')\n", .{value}) catch {};
                 stderr.interface.flush() catch {};
                 return 1;
             }
@@ -276,6 +278,8 @@ pub fn main() u8 {
                 compile_mode = .off;
             } else if (std.mem.eql(u8, env_val, "eager")) {
                 compile_mode = .eager;
+            } else if (std.mem.eql(u8, env_val, "hybrid")) {
+                compile_mode = .hybrid;
             }
             // Silently ignore invalid env var values
         }

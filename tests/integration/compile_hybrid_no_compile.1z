@@ -1,0 +1,13 @@
+use "testing" ;
+
+\ Word with no-compile marker stays interpreted
+interp-only: ( n -- n ) no-compile [ 10 + ] ;
+
+\ Call it many times -- should never attempt compilation
+run-many: ( -- ) [
+  200 [ 0 interp-only drop ] times
+] ;
+
+run-many
+
+5 interp-only 15 "no-compile word works" assert=

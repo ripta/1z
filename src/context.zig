@@ -46,7 +46,7 @@ const StackEffectParam = stack_effect_mod.StackEffectParam;
 /// Embedded prelude source code
 const prelude_source = @embedFile("prelude.1z");
 
-pub const CompileMode = enum { off, eager };
+pub const CompileMode = enum { off, eager, hybrid };
 
 pub const ExecutionError = error{
     UnknownWord,
@@ -264,6 +264,9 @@ pub const Context = struct {
     /// compiled. Compilation failures are silently ignored and the
     /// word falls back to the interpreter.
     compile_mode: CompileMode = .off,
+    hybrid_threshold: u32 = 100,
+    hybrid_effective_threshold: u32 = 100,
+    hybrid_recent_compilations: u32 = 0,
     /// Active sandbox spec restricting which capabilities are available.
     /// When non-null, word lookup checks the word's capability against
     /// this spec and rejects words whose capability is not granted.
@@ -773,6 +776,8 @@ pub const Context = struct {
 
         if (self.compile_mode == .eager) {
             self.tryAutoCompile(name, def);
+        } else if (self.compile_mode == .hybrid) {
+            self.tryAssignWordId(name, def);
         }
     }
 
@@ -831,6 +836,71 @@ pub const Context = struct {
         if (self.trace.trace_jit) {
             var tw = trace_mod.TraceWriter.init();
             trace_mod.traceJitCompile(&tw, name, final_id);
+        }
+    }
+
+    /// Assign a word_id without compiling. Used in hybrid mode so the dispatch
+    /// table entry exists for call counting when the word is later executed.
+    fn tryAssignWordId(self: *Context, name: []const u8, def: WordDefinition) void {
+        switch (def.action) {
+            .compound => {},
+            .native => return,
+        }
+
+        if (def.stack_effect == null) return;
+        const effect = def.stack_effect.?;
+
+        for (def.markers) |mk| {
+            if (markers_mod.isParseTimeOnlyMarker(mk)) return;
+            if (markers_mod.isParseTimeMarker(mk)) return;
+            if (markers_mod.isGenericMarker(mk)) return;
+            if (markers_mod.isNoCompileMarker(mk)) return;
+        }
+
+        if (stack_effect_mod.hasAnyRowVariable(effect)) return;
+
+        if (def.word_id != null) return;
+
+        const new_id = self.jit_dispatch.assignId(name) catch return;
+        propagateWordId(self, name, new_id);
+    }
+
+    /// In hybrid mode, increment the call counter for a word and compile it
+    /// when the counter exceeds the effective threshold.
+    fn tryHybridCompile(self: *Context, word_id: u32, name: []const u8, word: WordDefinition) void {
+        const entry = self.jit_dispatch.getMut(word_id) orelse return;
+        if (entry.uncompilable or entry.code_ptr != null) return;
+
+        entry.call_count += 1;
+        if (entry.call_count < self.hybrid_effective_threshold) return;
+
+        self.tryAutoCompile(name, word);
+
+        if (self.jit_dispatch.get(word_id)) |updated| {
+            if (updated.code_ptr == null) {
+                self.jit_dispatch.markUncompilable(word_id);
+            } else {
+                self.updateBackpressure();
+            }
+        }
+    }
+
+    fn updateBackpressure(self: *Context) void {
+        self.hybrid_recent_compilations += 1;
+        if (self.hybrid_recent_compilations >= 10) {
+            const max_threshold = self.hybrid_threshold * 8;
+            if (self.hybrid_effective_threshold < max_threshold) {
+                self.hybrid_effective_threshold = @min(self.hybrid_effective_threshold * 2, max_threshold);
+            }
+            self.hybrid_recent_compilations = 0;
+        } else if (self.hybrid_recent_compilations < 5) {
+            if (self.hybrid_effective_threshold > self.hybrid_threshold) {
+                if (self.hybrid_effective_threshold > self.hybrid_threshold * 2) {
+                    self.hybrid_effective_threshold -= self.hybrid_threshold;
+                } else {
+                    self.hybrid_effective_threshold = self.hybrid_threshold;
+                }
+            }
         }
     }
 
@@ -2546,7 +2616,11 @@ pub const Context = struct {
                                     self.jit_pending_error = null;
                                     return err;
                                 },
-                                .bail => {},
+                                .bail => {
+                                    if (self.compile_mode == .hybrid) {
+                                        self.tryHybridCompile(wid, name, word);
+                                    }
+                                },
                             }
                         }
 

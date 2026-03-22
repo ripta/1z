@@ -1,0 +1,12 @@
+use "testing" ;
+
+add-five: ( n -- n ) [ 5 + ] ;
+
+\ Call add-five more than 100 times to trigger compilation
+run-many: ( -- ) [
+  110 [ 0 add-five drop ] times
+] ;
+
+run-many
+
+10 add-five 15 "add-five after hot loop" assert=

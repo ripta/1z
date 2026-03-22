@@ -6,6 +6,8 @@ pub const JitEntry = struct {
     code_ptr: ?*const anyopaque,
     jit_buf: ?JitBuffer,
     word_name: []const u8,
+    call_count: u32 = 0,
+    uncompilable: bool = false,
 };
 
 pub const JitDispatchTable = struct {
@@ -45,6 +47,19 @@ pub const JitDispatchTable = struct {
         return self.entries.items[word_id];
     }
 
+    /// Get mutable pointer to entry by word ID.
+    pub fn getMut(self: *JitDispatchTable, word_id: u32) ?*JitEntry {
+        if (word_id >= self.entries.items.len) return null;
+        return &self.entries.items[word_id];
+    }
+
+    /// Mark a word as permanently uncompilable.
+    pub fn markUncompilable(self: *JitDispatchTable, word_id: u32) void {
+        if (word_id < self.entries.items.len) {
+            self.entries.items[word_id].uncompilable = true;
+        }
+    }
+
     /// Update the code pointer and JitBuffer for a word ID.
     /// Frees the old JitBuffer if one exists.
     pub fn update(self: *JitDispatchTable, word_id: u32, code_ptr: *const anyopaque, buf: JitBuffer) void {
@@ -56,12 +71,16 @@ pub const JitDispatchTable = struct {
     }
 
     /// Clear the code pointer for a word ID. Frees the JitBuffer.
+    /// Also resets call count and uncompilable flag so the word can be
+    /// recompiled after module reload.
     pub fn invalidate(self: *JitDispatchTable, word_id: u32) void {
         if (self.entries.items[word_id].jit_buf) |buf| {
             buf.deinit();
         }
         self.entries.items[word_id].code_ptr = null;
         self.entries.items[word_id].jit_buf = null;
+        self.entries.items[word_id].call_count = 0;
+        self.entries.items[word_id].uncompilable = false;
     }
 };
 
@@ -137,6 +156,63 @@ test "invalidate clears code_ptr and jit_buf" {
     const entry = table.get(id).?;
     try std.testing.expectEqual(null, entry.code_ptr);
     try std.testing.expectEqual(null, entry.jit_buf);
+}
+
+test "getMut returns mutable pointer" {
+    var table = JitDispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    const id = try table.assignId("foo");
+    const entry = table.getMut(id).?;
+
+    try std.testing.expectEqual(@as(u32, 0), entry.call_count);
+    entry.call_count += 1;
+    try std.testing.expectEqual(@as(u32, 1), table.get(id).?.call_count);
+}
+
+test "getMut returns null for out-of-bounds ID" {
+    var table = JitDispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    try std.testing.expectEqual(null, table.getMut(0));
+    try std.testing.expectEqual(null, table.getMut(42));
+}
+
+test "markUncompilable sets flag" {
+    var table = JitDispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    const id = try table.assignId("foo");
+    try std.testing.expect(!table.get(id).?.uncompilable);
+
+    table.markUncompilable(id);
+    try std.testing.expect(table.get(id).?.uncompilable);
+}
+
+test "invalidate resets call_count and uncompilable" {
+    var table = JitDispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    const id = try table.assignId("foo");
+    table.getMut(id).?.call_count = 50;
+    table.markUncompilable(id);
+
+    table.invalidate(id);
+
+    const entry = table.get(id).?;
+    try std.testing.expectEqual(@as(u32, 0), entry.call_count);
+    try std.testing.expect(!entry.uncompilable);
+}
+
+test "new entries have zero call_count and uncompilable false" {
+    var table = JitDispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    const id = try table.assignId("foo");
+    const entry = table.get(id).?;
+
+    try std.testing.expectEqual(@as(u32, 0), entry.call_count);
+    try std.testing.expect(!entry.uncompilable);
 }
 
 test "multiple IDs coexist independently" {
