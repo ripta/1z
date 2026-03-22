@@ -1956,7 +1956,7 @@ fn nativeBytesAlloc(ctx: *Context) anyerror!void {
         return error.IndexOutOfBounds;
     }
     const n: usize = @intCast(n_val);
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.containerAllocator();
     const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
     ba.* = ByteArray{};
     if (n > 0) {

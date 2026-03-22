@@ -91,7 +91,27 @@ test-vector-multi-child-push: ( -- ) [
   #len 2 "vector has two elements from two children" assert=
 ] ;
 
+\ Test: bytes-alloc cross-task mutation
+\ Parent creates byte array via bytes-alloc, child's cleanup writes to it.
+
+test-bytes-alloc-cross-task: ( -- ) [
+  3 bytes-alloc
+  dup
+  [
+    dup [ 0 42 #nth! drop ] curry
+    [ [ 100000 milliseconds sleep ] swap cleanup ] curry
+    spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+    yield
+    drop
+  ] curry
+  task-scope
+  0 #nth 42 "byte array element set by child" assert=
+] ;
+
 test-vector-push-fixnum
 test-vector-push-string
 test-mutable-map-set
 test-vector-multi-child-push
+test-bytes-alloc-cross-task

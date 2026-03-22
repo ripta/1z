@@ -2,6 +2,7 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
 PASS: vector has one element after child push
 PASS: vector element is 99
 Stack: [ ]
@@ -11,4 +12,6 @@ Stack: [ ]
 PASS: mutable map has child's entry
 Stack: [ ]
 PASS: vector has two elements from two children
+Stack: [ ]
+PASS: byte array element set by child
 Stack: [ ]
