@@ -1,0 +1,26 @@
+=== load returns cached module on second call ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: load returns same module
+Stack: [ ]
+=== reload returns a fresh module ===
+Stack: [ ]
+Stack: [ ]
+PASS: reload returns different module
+Stack: [ ]
+=== use with reload modifier ===
+Stack: [ ]
+PASS: use imports greeting
+Stack: [ ]
+PASS: use reload reimports greeting
+Stack: [ ]
+=== use with selective import and reload ===
+Stack: [ ]
+PASS: selective use reload works
+Stack: [ ]
+=== unrecognized modifier in use throws error ===
+Stack: [ ]
+Stack: [ [ "use "testing" bad-modifier ;" eval-string ] ]
+PASS: unrecognized modifier throws
+Stack: [ ]

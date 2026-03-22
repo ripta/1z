@@ -1,0 +1,30 @@
+use "testing" ;
+
+"load returns cached module on second call" test-section
+
+mod-a: "./module_reload_helper.1z" load ;
+mod-b: "./module_reload_helper.1z" load ;
+mod-a mod-b = t "load returns same module" assert=
+
+"reload returns a fresh module" test-section
+
+mod-c: "./module_reload_helper.1z" reload ;
+mod-a mod-c = f "reload returns different module" assert=
+
+"use with reload modifier" test-section
+
+use "./module_reload_helper.1z" ;
+greeting "hello from helper" "use imports greeting" assert=
+
+use "./module_reload_helper.1z" reload shadow-ok ;
+greeting "hello from helper" "use reload reimports greeting" assert=
+
+"use with selective import and reload" test-section
+
+use { greeting: } "./module_reload_helper.1z" reload shadow-ok ;
+greeting "hello from helper" "selective use reload works" assert=
+
+"unrecognized modifier in use throws error" test-section
+
+[ "use \"testing\" bad-modifier ;" eval-string ]
+"unrecognized modifier throws" assert-error

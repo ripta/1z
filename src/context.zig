@@ -844,6 +844,10 @@ pub const Context = struct {
                     return error.CannotRedefineConst;
                 }
             }
+
+            if (existing.word_id) |wid| {
+                self.jit_dispatch.invalidate(wid);
+            }
         }
 
         var def = definition;

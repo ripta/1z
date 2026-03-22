@@ -21,6 +21,7 @@ Stack: [ ]
 Load and import a module by name or file path.
 Optionally restrict imported words with a set of symbols.
 Insert `shadow-ok` before `;` to suppress the shadow check.
+Insert `reload` before `;` to bypass the module cache.
 use [<marker:parse-time>] \compound
 
 Stack: [ ]

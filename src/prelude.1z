@@ -159,6 +159,20 @@ error-stream: define-parameter [ stderr ] ;
 \\ The module cache M{}, used by `load` and `use` for caching loaded modules.
 module-cache: define-parameter [ module-cache-value ] ;
 
+\\ Load a module by name or file path, returning a cached copy if available.
+load: ( filename -- module ) [
+  dup native.resolve-load-path
+  module-cache get over @has?
+  [ swap drop module-cache get swap @get ]
+  [ drop module-cache get swap load-file ]
+  if
+] ;
+
+\\ Load a module by name or file path, bypassing the cache.
+reload: ( filename -- module ) [
+  module-cache get swap load-file
+] ;
+
 \ Control flow
 \\ Execute the quotation when the condition is true.
 when: branch-combinator ( ? quot -- ) [ [ ] if ] ;
@@ -472,35 +486,40 @@ assert-no-shadow: ( module names -- ) [
 \\ Load and import a module by name or file path.
 \\ Optionally restrict imported words with a set of symbols.
 \\ Insert `shadow-ok` before `;` to suppress the shadow check.
+\\ Insert `reload` before `;` to bypass the module cache.
 use: parse-time [
-  (validate-use-tail): ( values -- ? ) [
-    dup #empty?
-    [ drop f ]
+  (validate-use-tail): ( values -- ) [
     [
-      [
-        dup shadow-ok = not
-        [ inspect "unrecognized token in use: " swap #append f swap EInvalidArgument make-error throw ]
-        when
-        drop
-      ] #each
-      t
-    ]
-    if
+      dup shadow-ok = swap "reload" = or not
+      [ inspect "unrecognized token in use: " swap #append
+        f swap EInvalidArgument make-error throw
+      ]
+      when
+    ] #each
+  ] ;
+
+  (use-load): ( filename modifiers -- module ) [
+    "reload" #in? [ reload ] [ load ] if
   ] ;
 
   parse-literal
   dup string?
   [
-    load
-    ";" parse-values-until (validate-use-tail) not
+    \ use "filename" [modifiers] ;
+    ";" parse-values-until dup (validate-use-tail)
+    dup [ (use-load) ] dip
+    shadow-ok #in? not
     [ dup dup @keys assert-no-shadow ] when
     import
   ]
   [
-    parse-literal load swap
-    ";" parse-values-until (validate-use-tail) not
-    [ over over assert-no-shadow ] when
-    import
+    \ use { selection } "filename" [modifiers] ;
+    parse-literal
+    ";" parse-values-until dup (validate-use-tail)
+    dup [ (use-load) ] dip  \ { sel } module { mods }
+    shadow-ok #in? not      \ { sel } module no-shadow?
+    [ over over swap assert-no-shadow ] when
+    swap import
   ]
   if
 ] ;

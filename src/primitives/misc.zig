@@ -16,7 +16,6 @@ const trace_mod = @import("../trace.zig");
 const popString = helpers.popString;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "load", .stack_effect = "filename -- module", .doc = "Load a 1z source file and return a module with its definitions.", .func = nativeLoad, .capability = .io_fs },
     .{ .name = "import", .stack_effect = "module --", .doc = "Bring module words into the current scope.", .func = nativeImport },
     .{ .name = ">module", .stack_effect = "name hashtable -- module", .doc = "Convert a name string and a hashtable of quotations into a module value suitable for import.", .func = nativeToModule },
     .{ .name = "1array", .stack_effect = "elem -- array", .doc = "Wrap element in a single-element array.", .func = native1Array },
@@ -29,6 +28,11 @@ pub const primitives = [_]Primitive{
     .{ .name = "compile!", .stack_effect = "sym --", .doc = "JIT-compile a word for integer arithmetic. Throws if the word is not found or not compilable.", .func = nativeCompile },
     .{ .name = "load-file", .stack_effect = "cache filename -- module", .doc = "Load a 1z source file unconditionally (no cache check) and store the result in the given M{} cache.", .func = nativeLoadFile, .capability = .io_fs },
     .{ .name = "module-cache-value", .stack_effect = "-- cache", .doc = "Push the current module cache M{} onto the stack.", .func = nativeModuleCacheValue },
+};
+
+const RegistryEntry = @import("types.zig").RegistryEntry;
+pub const registry_entries = [_]RegistryEntry{
+    .{ .name = "resolve-load-path", .func = nativeResolveLoadPath, .stack_effect = "filename -- resolved", .capability = .io_fs },
 };
 
 fn nativeToModule(ctx: *Context) anyerror!void {
@@ -148,13 +152,9 @@ fn resolveLoadPath(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator
     return null;
 }
 
-/// load ( filename -- module ) - Load a 1z source file and return a module with its definitions
-///
-/// Caches loaded modules by canonical file path to avoid redundant loads, so that
-/// multiple `load` calls for the same file return the same module instance.
-fn nativeLoad(ctx: *Context) anyerror!void {
+/// resolve-load-path ( filename -- resolved ) - Resolve a filename to its canonical path
+fn nativeResolveLoadPath(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
-
     const filename = try popString(ctx);
     const resolved = resolveLoadPath(ctx, filename, alloc) orelse {
         const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
@@ -163,23 +163,11 @@ fn nativeLoad(ctx: *Context) anyerror!void {
             .message = msg,
             .source = ctx.current_source,
             .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
-            .word_name = "load",
+            .word_name = "resolve-load-path",
         }) catch {};
-
         return error.FileNotFound;
     };
-
-    // XXX(ripta): Module cache hit - side-effects won't run again.
-    //             Is this okay? It better be.
-    if (ctx.module_cache_value.get(resolved)) |cached_val| {
-        if (ctx.trace.trace_modules) {
-            var tw = trace_mod.TraceWriter.init();
-            trace_mod.traceModuleCacheHit(&tw, filename, resolved);
-        }
-        return try ctx.stack.push(cached_val);
-    }
-
-    return nativeLoadImpl(ctx, ctx.module_cache_value, filename, alloc, resolved);
+    try ctx.stack.push(.{ .string = resolved });
 }
 
 fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []const u8, alloc: std.mem.Allocator, resolved: []const u8) anyerror!void {
