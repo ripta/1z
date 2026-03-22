@@ -7,8 +7,8 @@ const HashTable = value_mod.HashTable;
 const Primitive = @import("types.zig").Primitive;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "environ", .stack_effect = "-- hash", .doc = "Return a fresh hash of current environment variables.", .func = nativeEnviron },
-    .{ .name = "sys-info", .stack_effect = "-- hash", .doc = "Return a hash of system/platform information.", .func = nativeSysInfo },
+    .{ .name = "environ", .stack_effect = "-- hash", .doc = "Return a fresh hash of current environment variables.", .func = nativeEnviron, .capability = .system },
+    .{ .name = "sys-info", .stack_effect = "-- hash", .doc = "Return a hash of system/platform information.", .func = nativeSysInfo, .capability = .system },
 };
 
 /// environ ( -- hash ) - Return a fresh hash of current environment variables

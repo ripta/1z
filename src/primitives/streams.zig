@@ -12,6 +12,7 @@ const BufferingMode = value_mod.BufferingMode;
 const ByteArray = value_mod.ByteArray;
 
 const Primitive = @import("types.zig").Primitive;
+const Capability = @import("types.zig").Capability;
 const helpers = @import("helpers.zig");
 const error_mapping = @import("error_mapping.zig");
 
@@ -30,24 +31,24 @@ const mapGetPosError = error_mapping.mapGetPosError;
 const ensureStreamOpen = error_mapping.ensureStreamOpen;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "stdin", .stack_effect = "-- stream", .doc = "Push standard input stream.", .func = nativeStdin },
-    .{ .name = "stdout", .stack_effect = "-- stream", .doc = "Push standard output stream.", .func = nativeStdout },
-    .{ .name = "stderr", .stack_effect = "-- stream", .doc = "Push standard error stream.", .func = nativeStderr },
-    .{ .name = "stream-open", .stack_effect = "path mode -- stream", .doc = "Open a file stream with mode (read:, write:, append:, read-write:).", .func = nativeStreamOpen },
-    .{ .name = "stream-close", .stack_effect = "stream --", .doc = "Close a stream.", .func = nativeStreamClose },
-    .{ .name = "stream-write", .stack_effect = "stream bytes -- n", .doc = "Write bytes to stream, return count written.", .func = nativeStreamWrite },
-    .{ .name = "stream-flush", .stack_effect = "stream --", .doc = "Flush stream buffer.", .func = nativeStreamFlush },
-    .{ .name = "stream-read", .stack_effect = "stream n -- bytes", .doc = "Read up to n bytes from stream.", .func = nativeStreamRead },
-    .{ .name = "stream-read-line", .stack_effect = "stream -- str/f", .doc = "Read one line (no newline), or f at EOF.", .func = nativeStreamReadLine },
-    .{ .name = "stream-read-all", .stack_effect = "stream -- bytes", .doc = "Read all remaining content from stream.", .func = nativeStreamReadAll },
-    .{ .name = "stream-tell", .stack_effect = "stream -- pos", .doc = "Get current stream position.", .func = nativeStreamTell },
-    .{ .name = "stream-seek", .stack_effect = "stream pos --", .doc = "Seek to absolute position in stream.", .func = nativeStreamSeek },
-    .{ .name = "stream-seek-end", .stack_effect = "stream offset --", .doc = "Seek relative to end of stream.", .func = nativeStreamSeekEnd },
-    .{ .name = "buffering-mode", .stack_effect = "stream -- symbol", .doc = "Get stream buffering mode.", .func = nativeBufferingMode },
-    .{ .name = "set-buffering-mode", .stack_effect = "stream symbol --", .doc = "Set stream buffering mode (none:, line:, block:).", .func = nativeSetBufferingMode },
-    .{ .name = "stream>fd", .stack_effect = "stream -- int", .doc = "Get file descriptor from stream (Unix only).", .func = nativeStreamToFd },
-    .{ .name = "fd>stream", .stack_effect = "fd -- stream", .doc = "Create stream from file descriptor (Unix only). Opens in read-write mode.", .func = nativeFdToStream },
-    .{ .name = "<pipe>", .stack_effect = "-- rd wr", .doc = "Create a Unix pipe, returning read-end and write-end streams.", .func = nativePipe },
+    .{ .name = "stdin", .stack_effect = "-- stream", .doc = "Push standard input stream.", .func = nativeStdin, .capability = .io },
+    .{ .name = "stdout", .stack_effect = "-- stream", .doc = "Push standard output stream.", .func = nativeStdout, .capability = .io },
+    .{ .name = "stderr", .stack_effect = "-- stream", .doc = "Push standard error stream.", .func = nativeStderr, .capability = .io },
+    .{ .name = "stream-open", .stack_effect = "path mode -- stream", .doc = "Open a file stream with mode (read:, write:, append:, read-write:).", .func = nativeStreamOpen, .capability = .io_fs },
+    .{ .name = "stream-close", .stack_effect = "stream --", .doc = "Close a stream.", .func = nativeStreamClose, .capability = .io },
+    .{ .name = "stream-write", .stack_effect = "stream bytes -- n", .doc = "Write bytes to stream, return count written.", .func = nativeStreamWrite, .capability = .io },
+    .{ .name = "stream-flush", .stack_effect = "stream --", .doc = "Flush stream buffer.", .func = nativeStreamFlush, .capability = .io },
+    .{ .name = "stream-read", .stack_effect = "stream n -- bytes", .doc = "Read up to n bytes from stream.", .func = nativeStreamRead, .capability = .io },
+    .{ .name = "stream-read-line", .stack_effect = "stream -- str/f", .doc = "Read one line (no newline), or f at EOF.", .func = nativeStreamReadLine, .capability = .io },
+    .{ .name = "stream-read-all", .stack_effect = "stream -- bytes", .doc = "Read all remaining content from stream.", .func = nativeStreamReadAll, .capability = .io },
+    .{ .name = "stream-tell", .stack_effect = "stream -- pos", .doc = "Get current stream position.", .func = nativeStreamTell, .capability = .io },
+    .{ .name = "stream-seek", .stack_effect = "stream pos --", .doc = "Seek to absolute position in stream.", .func = nativeStreamSeek, .capability = .io },
+    .{ .name = "stream-seek-end", .stack_effect = "stream offset --", .doc = "Seek relative to end of stream.", .func = nativeStreamSeekEnd, .capability = .io },
+    .{ .name = "buffering-mode", .stack_effect = "stream -- symbol", .doc = "Get stream buffering mode.", .func = nativeBufferingMode, .capability = .io },
+    .{ .name = "set-buffering-mode", .stack_effect = "stream symbol --", .doc = "Set stream buffering mode (none:, line:, block:).", .func = nativeSetBufferingMode, .capability = .io },
+    .{ .name = "stream>fd", .stack_effect = "stream -- int", .doc = "Get file descriptor from stream (Unix only).", .func = nativeStreamToFd, .capability = .io },
+    .{ .name = "fd>stream", .stack_effect = "fd -- stream", .doc = "Create stream from file descriptor (Unix only). Opens in read-write mode.", .func = nativeFdToStream, .capability = .io },
+    .{ .name = "<pipe>", .stack_effect = "-- rd wr", .doc = "Create a Unix pipe, returning read-end and write-end streams.", .func = nativePipe, .capability = .io },
     .{ .name = ">char", .stack_effect = "codepoint -- str", .doc = "Convert Unicode codepoint to single-character string.", .func = nativeChr },
     .{ .name = ">codepoint", .stack_effect = "str -- int", .doc = "Convert single-character string to Unicode codepoint.", .func = nativeToCodepoint },
 };

@@ -32,6 +32,7 @@ pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
             .stack_effect = effect,
             .markers = p.markers,
             .doc = p.doc,
+            .capability = p.capability,
             .action = .{ .native = p.func },
         });
     }
@@ -61,6 +62,7 @@ pub fn createNativeModule(dict: *Dictionary, allocator: Allocator) !void {
             .action = .{ .native = entry.func },
             .stack_effect = effect,
             .polymorphic = entry.polymorphic,
+            .capability = entry.capability,
         });
     }
 

@@ -14,23 +14,23 @@ const helpers = @import("helpers.zig");
 const popFixnum = helpers.popFixnum;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "resolve", .stack_effect = "addr -- addrs", .doc = "DNS resolution; returns array of resolved addr values with IP addresses.", .func = nativeResolve },
-    .{ .name = "socket", .stack_effect = "addr -- fd", .doc = "Create socket; infers address family and type from addr variant.", .func = nativeSocket },
-    .{ .name = "bind", .stack_effect = "fd addr --", .doc = "Bind socket fd to resolved address.", .func = nativeBind },
-    .{ .name = "fd-close", .stack_effect = "fd --", .doc = "Close a raw file descriptor.", .func = nativeFdClose },
-    .{ .name = "udp-sendto", .stack_effect = "fd data addr -- n", .doc = "Send datagram to address; data is string or byte-array; returns bytes sent.", .func = nativeUdpSendto },
-    .{ .name = "udp-recvfrom", .stack_effect = "fd maxlen -- data host port", .doc = "Receive datagram; returns byte-array data, sender host string, and port.", .func = nativeUdpRecvfrom },
-    .{ .name = "udp-send", .stack_effect = "fd data -- n", .doc = "Send datagram on connected socket; data is string or byte-array; returns bytes sent.", .func = nativeUdpSend },
-    .{ .name = "udp-recv", .stack_effect = "fd maxlen -- data", .doc = "Receive datagram on connected socket; returns byte-array.", .func = nativeUdpRecv },
-    .{ .name = "inet-pton", .stack_effect = "family str -- bytes", .doc = "Parse IP address string to raw bytes; family is AF_INET (2) or AF_INET6 (30).", .func = nativeInetPton },
-    .{ .name = "sock-const", .stack_effect = "str -- n", .doc = "Look up a platform-correct socket constant by name.", .func = nativeSockConst },
+    .{ .name = "resolve", .stack_effect = "addr -- addrs", .doc = "DNS resolution; returns array of resolved addr values with IP addresses.", .func = nativeResolve, .capability = .io_net },
+    .{ .name = "socket", .stack_effect = "addr -- fd", .doc = "Create socket; infers address family and type from addr variant.", .func = nativeSocket, .capability = .io_net },
+    .{ .name = "bind", .stack_effect = "fd addr --", .doc = "Bind socket fd to resolved address.", .func = nativeBind, .capability = .io_net },
+    .{ .name = "fd-close", .stack_effect = "fd --", .doc = "Close a raw file descriptor.", .func = nativeFdClose, .capability = .io_net },
+    .{ .name = "udp-sendto", .stack_effect = "fd data addr -- n", .doc = "Send datagram to address; data is string or byte-array; returns bytes sent.", .func = nativeUdpSendto, .capability = .io_net },
+    .{ .name = "udp-recvfrom", .stack_effect = "fd maxlen -- data host port", .doc = "Receive datagram; returns byte-array data, sender host string, and port.", .func = nativeUdpRecvfrom, .capability = .io_net },
+    .{ .name = "udp-send", .stack_effect = "fd data -- n", .doc = "Send datagram on connected socket; data is string or byte-array; returns bytes sent.", .func = nativeUdpSend, .capability = .io_net },
+    .{ .name = "udp-recv", .stack_effect = "fd maxlen -- data", .doc = "Receive datagram on connected socket; returns byte-array.", .func = nativeUdpRecv, .capability = .io_net },
+    .{ .name = "inet-pton", .stack_effect = "family str -- bytes", .doc = "Parse IP address string to raw bytes; family is AF_INET (2) or AF_INET6 (30).", .func = nativeInetPton, .capability = .io_net },
+    .{ .name = "sock-const", .stack_effect = "str -- n", .doc = "Look up a platform-correct socket constant by name.", .func = nativeSockConst, .capability = .io_net },
 };
 
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = "listen", .func = nativeListen },
-    .{ .name = "accept", .func = nativeAccept },
-    .{ .name = "connect", .func = nativeConnect },
-    .{ .name = "setsockopt", .func = nativeSetsockopt },
+    .{ .name = "listen", .func = nativeListen, .capability = .io_net },
+    .{ .name = "accept", .func = nativeAccept, .capability = .io_net },
+    .{ .name = "connect", .func = nativeConnect, .capability = .io_net },
+    .{ .name = "setsockopt", .func = nativeSetsockopt, .capability = .io_net },
 };
 
 /// Addr variant info extracted from a tagged addr enum value.

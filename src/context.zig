@@ -555,6 +555,7 @@ pub const Context = struct {
                 .stack_effect = entry.value_ptr.*.stack_effect,
                 .markers = entry.value_ptr.*.markers,
                 .source_module = entry.value_ptr.*.source_module orelse module,
+                .capability = entry.value_ptr.*.capability,
                 .action = switch (entry.value_ptr.*.action) {
                     .compound => |instrs| .{ .compound = instrs },
                     .native => |func| .{ .native = func },
@@ -569,6 +570,7 @@ pub const Context = struct {
                 .stack_effect = entry.value_ptr.*.stack_effect,
                 .markers = entry.value_ptr.*.markers,
                 .source_module = entry.value_ptr.*.source_module orelse module,
+                .capability = entry.value_ptr.*.capability,
                 .action = switch (entry.value_ptr.*.action) {
                     .compound => |instrs| .{ .compound = instrs },
                     .native => |func| .{ .native = func },

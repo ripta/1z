@@ -10,14 +10,14 @@ const c = @cImport({
 });
 
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = "toy-add", .func = nativeToyAdd },
-    .{ .name = "toy-strlen", .func = nativeToyStrlen },
-    .{ .name = "toy-greeting", .func = nativeToyGreeting },
-    .{ .name = "toy-checksum", .func = nativeToyChecksum },
-    .{ .name = "toy-fill", .func = nativeToyFill },
-    .{ .name = "toy-open", .func = nativeToyOpen },
-    .{ .name = "toy-increment", .func = nativeToyIncrement },
-    .{ .name = "toy-read", .func = nativeToyRead },
+    .{ .name = "toy-add", .func = nativeToyAdd, .capability = .ffi },
+    .{ .name = "toy-strlen", .func = nativeToyStrlen, .capability = .ffi },
+    .{ .name = "toy-greeting", .func = nativeToyGreeting, .capability = .ffi },
+    .{ .name = "toy-checksum", .func = nativeToyChecksum, .capability = .ffi },
+    .{ .name = "toy-fill", .func = nativeToyFill, .capability = .ffi },
+    .{ .name = "toy-open", .func = nativeToyOpen, .capability = .ffi },
+    .{ .name = "toy-increment", .func = nativeToyIncrement, .capability = .ffi },
+    .{ .name = "toy-read", .func = nativeToyRead, .capability = .ffi },
 };
 
 fn nativeToyAdd(ctx: *Context) anyerror!void {

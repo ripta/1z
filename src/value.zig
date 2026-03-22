@@ -249,6 +249,7 @@ pub const ModuleWord = struct {
     source_line: usize = 0,
     source_column: usize = 0,
     provenance: ?WordProvenance = null,
+    capability: @import("primitives/types.zig").Capability = .none,
     action: union(enum) {
         compound: []const Instruction,
         native: NativeFn,

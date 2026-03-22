@@ -5,6 +5,7 @@ const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
 const Marker = value_mod.Marker;
 const StackEffect = @import("stack_effect.zig").StackEffect;
+pub const Capability = @import("primitives/types.zig").Capability;
 
 /// Native function signature: takes context, can return errors.
 pub const NativeFn = *const fn (ctx: *Context) anyerror!void;
@@ -47,6 +48,8 @@ pub const WordDefinition = struct {
     source_module: ?*const value_mod.Module = null,
     /// Provenance metadata for generated words, or null for hand-written words.
     provenance: ?WordProvenance = null,
+    /// Capability category for sandboxing.
+    capability: Capability = .none,
     /// JIT dispatch table ID, assigned when this word is registered for JIT compilation.
     word_id: ?u32 = null,
     /// The action performed by this word: either a native function or a

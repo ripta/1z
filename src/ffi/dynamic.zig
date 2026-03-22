@@ -19,14 +19,14 @@ const FfiType = signature.FfiType;
 const FfiSignature = signature.FfiSignature;
 
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = "lib-open", .func = nativeLibOpen },
-    .{ .name = "lib-symbol", .func = nativeLibSymbol },
-    .{ .name = "bind-sig", .func = nativeBindSig },
-    .{ .name = "bind-close", .func = nativeBindClose },
-    .{ .name = "ffi-call", .func = nativeFfiCall },
-    .{ .name = "ffi-callback", .func = nativeFfiCallback },
-    .{ .name = "bytes-raw-ptr", .func = nativeBytesRawPtr },
-    .{ .name = "ffi-ptr+len>bytes", .func = nativeFfiPtrLenToBytes },
+    .{ .name = "lib-open", .func = nativeLibOpen, .capability = .ffi },
+    .{ .name = "lib-symbol", .func = nativeLibSymbol, .capability = .ffi },
+    .{ .name = "bind-sig", .func = nativeBindSig, .capability = .ffi },
+    .{ .name = "bind-close", .func = nativeBindClose, .capability = .ffi },
+    .{ .name = "ffi-call", .func = nativeFfiCall, .capability = .ffi },
+    .{ .name = "ffi-callback", .func = nativeFfiCallback, .capability = .ffi },
+    .{ .name = "bytes-raw-ptr", .func = nativeBytesRawPtr, .capability = .ffi },
+    .{ .name = "ffi-ptr+len>bytes", .func = nativeFfiPtrLenToBytes, .capability = .ffi },
 };
 
 fn dylibCloseFn(ptr: *anyopaque) void {

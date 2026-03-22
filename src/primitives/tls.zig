@@ -14,10 +14,10 @@ const streams_mod = @import("streams.zig");
 pub const primitives = [_]Primitive{};
 
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = "tls-config", .func = nativeTlsConfig },
-    .{ .name = "tls-config-add-ca-pem", .func = nativeTlsConfigAddCaPem },
-    .{ .name = "tls-config-no-verify", .func = nativeTlsConfigNoVerify },
-    .{ .name = "tls-upgrade", .func = nativeTlsUpgrade },
+    .{ .name = "tls-config", .func = nativeTlsConfig, .capability = .io_net },
+    .{ .name = "tls-config-add-ca-pem", .func = nativeTlsConfigAddCaPem, .capability = .io_net },
+    .{ .name = "tls-config-no-verify", .func = nativeTlsConfigNoVerify, .capability = .io_net },
+    .{ .name = "tls-upgrade", .func = nativeTlsUpgrade, .capability = .io_net },
 };
 
 /// Heap-allocated TLS configuration holding an optional CA bundle.
