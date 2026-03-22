@@ -1,0 +1,151 @@
+\ lib/fs.1z - High-level filesystem operations
+
+use "path" ;
+use "time" ;
+
+\ Types
+
+dir-entry:      struct{ name type } ;
+file-info-data: struct{ size type modified accessed permissions } ;
+file-info:      virtual{ file-info-data } ;
+
+\ Directory listing
+
+\\ List directory entries as an array of dir-entry structs.
+list-directory: ( path -- array ) [
+  native.list-directory
+  [ dup #first swap #last make-dir-entry ] #map #collect
+] ;
+
+\\ List only file entries in a directory.
+list-files: ( path -- array ) [
+  list-directory [ type>> file: = ] #filter #collect
+] ;
+
+\\ List only directory entries in a directory.
+list-directories: ( path -- array ) [
+  list-directory [ type>> directory: = ] #filter #collect
+] ;
+
+\ File info wrapper
+
+\\ Return file metadata as a file-info virtual type.
+\\ Fields: size (fixnum), type (symbol), modified (timestamp),
+\\ accessed (timestamp), permissions (fixnum).
+<file-info>: ( path -- file-info ) [
+  native.file-info
+  dup size: @get
+  over type: @get
+  2 pick-n modified: @get 0 make-timestamp
+  3 pick-n accessed: @get 0 make-timestamp
+  4 pick-n permissions: @get
+  make-file-info-data >file-info
+  nip
+] ;
+
+\ Existence checks
+
+\\ Check if a path exists (alias for path-exists?).
+exists?: ( path -- bool ) [ path-exists? ] ;
+
+\\ Check if a path exists and is a regular file.
+file-exists?: ( path -- bool ) [
+  [ native.file-info type: @get file: = ] [ drop f ] recover
+] ;
+
+\\ Check if a path exists and is a directory.
+directory-exists?: ( path -- bool ) [
+  [ native.file-info type: @get directory: = ] [ drop f ] recover
+] ;
+
+\\ Check if a path exists and is a symbolic link.
+symlink-exists?: ( path -- bool ) [
+  [ read-symlink drop t ] [ drop f ] recover
+] ;
+
+\ Convenience words
+
+\\ Create a directory idempotently (no error if it already exists).
+ensure-directory: ( path -- ) [
+  [ create-directory ] [ drop ] recover
+] ;
+
+\\ Recursively delete a directory and all its contents.
+delete-directory-recursive: stack-recursive ( path -- ) [
+  dup native.list-directory over
+  [
+    \ stack: pair path
+    over #last directory: = [
+      swap #first path-join delete-directory-recursive
+    ] [
+      swap #first path-join delete-file
+    ] if
+  ] curry #each
+  delete-directory
+] ;
+
+\\ Execute a quotation with a temporary directory path on the stack.
+\\ The directory is created before and deleted after execution.
+with-temp-directory: ( quot -- ... ) [
+  environ "TMPDIR" "/tmp" @get-or
+  monotonic-nanos inspect "1z-tmp-" swap #append
+  path-join
+  dup create-directory
+  swap over [ delete-directory-recursive ] curry cleanup
+] ;
+
+\ Walk iterator (BFS)
+
+\\ Expand a directory entry's children into the pending queue.
+\\ pending: mutable vector to append to
+\\ rel-dir: relative path of this directory (for building child relative paths)
+\\ abs-dir: absolute filesystem path (for listing)
+(walk-expand): ( pending rel-dir abs-dir -- ) [
+  [
+    native.list-directory
+    \ stack: pending rel-dir children-array
+    [
+      \ stack: pending rel-dir pair
+      dup #first swap #last
+      \ stack: pending rel-dir child-name child-type
+      swap 2 pick-n swap path-join swap
+      \ stack: pending rel-dir child-rel-path child-type
+      make-dir-entry
+      \ stack: pending rel-dir child-entry
+      2 pick-n swap #push! drop
+      \ stack: pending rel-dir
+    ] #each
+    2drop
+  ] [ drop 2drop ] recover
+] ;
+
+\\ Step function for the walk iterator.
+(walk-step): ( base pending -- option ) [
+  dup #len 0 = [
+    2drop option:none
+  ] [
+    #shift!
+    \ stack: base pending entry
+    dup type>> directory: = [
+      \ stack: base pending entry
+      over                     \ base pending entry pending
+      over name>>              \ base pending entry pending rel-dir
+      4 pick-n over path-join  \ base pending entry pending rel-dir abs-dir
+      (walk-expand)
+    ] when
+    nip nip >option:some
+  ] if
+] ;
+
+\\ Breadth-first recursive directory traversal.
+\\ Yields dir-entry structs with paths relative to the starting directory.
+walk: ( path -- iterator ) [
+  [ ] make-vector
+  over native.list-directory
+  [
+    dup #first swap #last make-dir-entry
+    over swap #push! drop
+  ] #each
+  [ (walk-step) ] curry curry
+  >iterator
+] ;

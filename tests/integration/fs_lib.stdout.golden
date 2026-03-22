@@ -1,0 +1,152 @@
+=== dir-entry struct ===
+Stack: [ ]
+Stack: [ dir-entry{ name: "test.txt" type: file: } ]
+PASS: dir-entry name>>
+Stack: [ dir-entry{ name: "test.txt" type: file: } ]
+PASS: dir-entry type>>
+Stack: [ ]
+=== file-info ===
+Stack: [ ]
+Stack: [ file-info-data{ size: 13 type: file: modified: <timestamp timestamp-inner{ ts-sec: 1771397730 ts-nsec: 0 }> accessed: <timestamp timestamp-inner{ ts-sec: 1774143832 ts-nsec: 0 }> permissions: 420 } ]
+PASS: file-info size is positive
+Stack: [ ]
+Stack: [ file-info-data{ size: 13 type: file: modified: <timestamp timestamp-inner{ ts-sec: 1771397730 ts-nsec: 0 }> accessed: <timestamp timestamp-inner{ ts-sec: 1774143832 ts-nsec: 0 }> permissions: 420 } ]
+PASS: file-info type is file:
+Stack: [ ]
+Stack: [ file-info-data{ size: 13 type: file: modified: <timestamp timestamp-inner{ ts-sec: 1771397730 ts-nsec: 0 }> accessed: <timestamp timestamp-inner{ ts-sec: 1774143832 ts-nsec: 0 }> permissions: 420 } ]
+PASS: file-info modified is timestamp
+Stack: [ ]
+Stack: [ file-info-data{ size: 13 type: file: modified: <timestamp timestamp-inner{ ts-sec: 1771397730 ts-nsec: 0 }> accessed: <timestamp timestamp-inner{ ts-sec: 1774143832 ts-nsec: 0 }> permissions: 420 } ]
+PASS: file-info accessed is timestamp
+Stack: [ ]
+Stack: [ file-info-data{ size: 13 type: file: modified: <timestamp timestamp-inner{ ts-sec: 1771397730 ts-nsec: 0 }> accessed: <timestamp timestamp-inner{ ts-sec: 1774143832 ts-nsec: 0 }> permissions: 420 } ]
+PASS: file-info permissions is positive
+Stack: [ ]
+=== list-directory ===
+Stack: [ ]
+Stack: [ { dir-entry{ name: "lines.txt" type: file: } dir-entry{ name: "hello.txt" type: file: } dir-entry{ name: "redirect-test.txt" type: file: } } ]
+PASS: list-directory returns entries
+Stack: [ { dir-entry{ name: "lines.txt" type: file: } dir-entry{ name: "hello.txt" type: file: } dir-entry{ name: "redirect-test.txt" type: file: } } ]
+Stack: [ dir-entry{ name: "lines.txt" type: file: } ]
+PASS: list-directory returns dir-entry structs
+Stack: [ dir-entry{ name: "lines.txt" type: file: } ]
+PASS: dir-entry name is string
+Stack: [ dir-entry{ name: "lines.txt" type: file: } ]
+PASS: dir-entry type is symbol
+Stack: [ ]
+=== list-files and list-directories ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_fs_lib_filter/a.txt write> ]
+Stack: [ <stream tests/integration/_tmp_fs_lib_filter/a.txt write> ]
+Stack: [ ]
+Stack: [ { dir-entry{ name: "a.txt" type: file: } } ]
+PASS: list-files returns only files
+Stack: [ { dir-entry{ name: "a.txt" type: file: } } ]
+PASS: list-files entry name
+Stack: [ ]
+Stack: [ { dir-entry{ name: "sub" type: directory: } } ]
+PASS: list-directories returns only dirs
+Stack: [ { dir-entry{ name: "sub" type: directory: } } ]
+PASS: list-directories entry name
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== exists? ===
+Stack: [ ]
+PASS: exists? on existing file
+Stack: [ ]
+PASS: exists? on nonexistent
+Stack: [ ]
+=== file-exists? ===
+Stack: [ ]
+PASS: file-exists? on file
+Stack: [ ]
+PASS: file-exists? on directory
+Stack: [ ]
+PASS: file-exists? on nonexistent
+Stack: [ ]
+=== directory-exists? ===
+Stack: [ ]
+PASS: directory-exists? on directory
+Stack: [ ]
+PASS: directory-exists? on file
+Stack: [ ]
+PASS: directory-exists? on nonexistent
+Stack: [ ]
+=== symlink-exists? ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_fs_lib_symlink/target.txt write> ]
+Stack: [ <stream tests/integration/_tmp_fs_lib_symlink/target.txt write> ]
+Stack: [ ]
+Stack: [ ]
+PASS: symlink-exists? on symlink
+Stack: [ ]
+PASS: symlink-exists? on regular file
+Stack: [ ]
+PASS: symlink-exists? on nonexistent
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== ensure-directory ===
+Stack: [ ]
+Stack: [ ]
+PASS: ensure-directory creates dir
+Stack: [ ]
+Stack: [ ]
+PASS: ensure-directory idempotent
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== delete-directory-recursive ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_fs_lib_recursive/a/b/file.txt write> ]
+Stack: [ <stream tests/integration/_tmp_fs_lib_recursive/a/b/file.txt write> ]
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_fs_lib_recursive/a/file2.txt write> ]
+Stack: [ <stream tests/integration/_tmp_fs_lib_recursive/a/file2.txt write> ]
+Stack: [ ]
+Stack: [ ]
+PASS: delete-directory-recursive removes all
+Stack: [ ]
+=== with-temp-directory ===
+Stack: [ ]
+PASS: with-temp-directory: dir exists inside quot
+Stack: [ t ]
+PASS: with-temp-directory: quotation executed
+Stack: [ ]
+=== walk ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_fs_lib_walk/file1.txt write> ]
+Stack: [ <stream tests/integration/_tmp_fs_lib_walk/file1.txt write> ]
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_fs_lib_walk/sub1/nested.txt write> ]
+Stack: [ <stream tests/integration/_tmp_fs_lib_walk/sub1/nested.txt write> ]
+Stack: [ ]
+Stack: [ { dir-entry{ name: "file1.txt" type: file: } dir-entry{ name: "sub1" type: directory: } dir-entry{ name: "sub2" type: directory: } dir-entry{ name: "sub1/nested.txt" type: file: } } ]
+PASS: walk returns all entries
+Stack: [ { dir-entry{ name: "file1.txt" type: file: } dir-entry{ name: "sub1" type: directory: } dir-entry{ name: "sub2" type: directory: } dir-entry{ name: "sub1/nested.txt" type: file: } } ]
+Stack: [ { "file1.txt" "sub1" "sub2" "sub1/nested.txt" } ]
+PASS: walk includes top-level file
+Stack: [ { "file1.txt" "sub1" "sub2" "sub1/nested.txt" } ]
+PASS: walk includes subdirectory
+Stack: [ { "file1.txt" "sub1" "sub2" "sub1/nested.txt" } ]
+PASS: walk includes nested file
+Stack: [ { "file1.txt" "sub1" "sub2" "sub1/nested.txt" } ]
+PASS: walk includes empty subdirectory
+Stack: [ ]
+Stack: [ ]
+=== error cases ===
+Stack: [ ]
+PASS: file-info on nonexistent throws
+Stack: [ ]
+PASS: list-directory on nonexistent throws
+Stack: [ ]

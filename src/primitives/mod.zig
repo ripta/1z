@@ -145,4 +145,5 @@ pub const extracted_registry_entries = structs.registry_entries ++
     native_dispatch_access.registry_entries ++
     tasks.registry_entries ++
     tls.registry_entries ++
+    filesystem.registry_entries ++
     misc.registry_entries;

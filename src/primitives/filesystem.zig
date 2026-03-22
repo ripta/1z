@@ -6,6 +6,7 @@ const helpers = @import("helpers.zig");
 const mapFileOpenError = @import("error_mapping.zig").mapFileOpenError;
 const mapFileCreateError = @import("error_mapping.zig").mapFileCreateError;
 const Primitive = @import("types.zig").Primitive;
+const RegistryEntry = @import("types.zig").RegistryEntry;
 
 pub const primitives = [_]Primitive{
     .{ .name = "create-directory", .stack_effect = "path --", .doc = "Create a directory and all parent directories (mkdir -p behavior).", .func = nativeCreateDirectory, .capability = .io_fs },
@@ -19,6 +20,11 @@ pub const primitives = [_]Primitive{
     .{ .name = "create-symlink", .stack_effect = "target link-path --", .doc = "Create a symbolic link at link-path pointing to target.", .func = nativeCreateSymlink, .capability = .io_fs },
     .{ .name = "read-symlink", .stack_effect = "path -- target-path", .doc = "Read the target of a symbolic link.", .func = nativeReadSymlink, .capability = .io_fs },
     .{ .name = "set-permissions", .stack_effect = "path mode --", .doc = "Set file or directory permissions (octal mode bits).", .func = nativeSetPermissions, .capability = .io_fs },
+};
+
+pub const registry_entries = [_]RegistryEntry{
+    .{ .name = "file-info", .func = nativeFileInfo, .capability = .io_fs },
+    .{ .name = "list-directory", .func = nativeListDirectory, .capability = .io_fs },
 };
 
 /// create-directory ( path -- )

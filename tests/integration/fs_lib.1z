@@ -1,0 +1,121 @@
+\ Integration tests for lib/fs.1z
+
+use "testing" ;
+use "fs" ;
+
+"dir-entry struct" test-section
+"test.txt" file: make-dir-entry
+dup name>> "test.txt" "dir-entry name>>" assert=
+type>> file: "dir-entry type>>" assert=
+
+"file-info" test-section
+"tests/fixtures/hello.txt" <file-info> unmake-file-info
+size>> 0 > "file-info size is positive" assert-true
+"tests/fixtures/hello.txt" <file-info> unmake-file-info
+type>> file: "file-info type is file:" assert=
+"tests/fixtures/hello.txt" <file-info> unmake-file-info
+modified>> type-name "timestamp" "file-info modified is timestamp" assert=
+"tests/fixtures/hello.txt" <file-info> unmake-file-info
+accessed>> type-name "timestamp" "file-info accessed is timestamp" assert=
+"tests/fixtures/hello.txt" <file-info> unmake-file-info
+permissions>> 0 > "file-info permissions is positive" assert-true
+
+"list-directory" test-section
+"tests/fixtures" list-directory
+dup #len 0 > "list-directory returns entries" assert-true
+#first
+dup type-name "dir-entry" "list-directory returns dir-entry structs" assert=
+dup name>> string? "dir-entry name is string" assert-true
+type>> symbol? "dir-entry type is symbol" assert-true
+
+"list-files and list-directories" test-section
+"tests/integration/_tmp_fs_lib_filter" create-directory
+"tests/integration/_tmp_fs_lib_filter/sub" create-directory
+"tests/integration/_tmp_fs_lib_filter/a.txt" write: stream-open
+dup "hello" stream-write drop
+stream-close
+"tests/integration/_tmp_fs_lib_filter" list-files
+dup #len 1 "list-files returns only files" assert=
+#first name>> "a.txt" "list-files entry name" assert=
+"tests/integration/_tmp_fs_lib_filter" list-directories
+dup #len 1 "list-directories returns only dirs" assert=
+#first name>> "sub" "list-directories entry name" assert=
+"tests/integration/_tmp_fs_lib_filter/a.txt" delete-file
+"tests/integration/_tmp_fs_lib_filter/sub" delete-directory
+"tests/integration/_tmp_fs_lib_filter" delete-directory
+
+"exists?" test-section
+t "tests/fixtures/hello.txt" exists? "exists? on existing file" assert=
+f "nonexistent-abc-fs-lib" exists? "exists? on nonexistent" assert=
+
+"file-exists?" test-section
+t "tests/fixtures/hello.txt" file-exists? "file-exists? on file" assert=
+f "tests/fixtures" file-exists? "file-exists? on directory" assert=
+f "nonexistent-abc-fs-lib" file-exists? "file-exists? on nonexistent" assert=
+
+"directory-exists?" test-section
+t "tests/fixtures" directory-exists? "directory-exists? on directory" assert=
+f "tests/fixtures/hello.txt" directory-exists? "directory-exists? on file" assert=
+f "nonexistent-abc-fs-lib" directory-exists? "directory-exists? on nonexistent" assert=
+
+"symlink-exists?" test-section
+"tests/integration/_tmp_fs_lib_symlink" create-directory
+"tests/integration/_tmp_fs_lib_symlink/target.txt" write: stream-open
+dup "data" stream-write drop
+stream-close
+"target.txt" "tests/integration/_tmp_fs_lib_symlink/link.txt" create-symlink
+t "tests/integration/_tmp_fs_lib_symlink/link.txt" symlink-exists? "symlink-exists? on symlink" assert=
+f "tests/integration/_tmp_fs_lib_symlink/target.txt" symlink-exists? "symlink-exists? on regular file" assert=
+f "nonexistent-abc-fs-lib" symlink-exists? "symlink-exists? on nonexistent" assert=
+"tests/integration/_tmp_fs_lib_symlink/link.txt" delete-file
+"tests/integration/_tmp_fs_lib_symlink/target.txt" delete-file
+"tests/integration/_tmp_fs_lib_symlink" delete-directory
+
+"ensure-directory" test-section
+"tests/integration/_tmp_fs_lib_ensure/nested/dir" ensure-directory
+t "tests/integration/_tmp_fs_lib_ensure/nested/dir" path-exists? "ensure-directory creates dir" assert=
+"tests/integration/_tmp_fs_lib_ensure/nested/dir" ensure-directory
+t "tests/integration/_tmp_fs_lib_ensure/nested/dir" path-exists? "ensure-directory idempotent" assert=
+"tests/integration/_tmp_fs_lib_ensure/nested/dir" delete-directory
+"tests/integration/_tmp_fs_lib_ensure/nested" delete-directory
+"tests/integration/_tmp_fs_lib_ensure" delete-directory
+
+"delete-directory-recursive" test-section
+"tests/integration/_tmp_fs_lib_recursive/a/b" create-directory
+"tests/integration/_tmp_fs_lib_recursive/a/b/file.txt" write: stream-open
+dup "data" stream-write drop
+stream-close
+"tests/integration/_tmp_fs_lib_recursive/a/file2.txt" write: stream-open
+dup "data" stream-write drop
+stream-close
+"tests/integration/_tmp_fs_lib_recursive" delete-directory-recursive
+f "tests/integration/_tmp_fs_lib_recursive" path-exists? "delete-directory-recursive removes all" assert=
+
+"with-temp-directory" test-section
+t [
+  dup path-exists? "with-temp-directory: dir exists inside quot" assert-true
+  drop
+] with-temp-directory
+"with-temp-directory: quotation executed" assert-true
+
+"walk" test-section
+"tests/integration/_tmp_fs_lib_walk/sub1" create-directory
+"tests/integration/_tmp_fs_lib_walk/sub2" create-directory
+"tests/integration/_tmp_fs_lib_walk/file1.txt" write: stream-open
+dup "data" stream-write drop
+stream-close
+"tests/integration/_tmp_fs_lib_walk/sub1/nested.txt" write: stream-open
+dup "data" stream-write drop
+stream-close
+"tests/integration/_tmp_fs_lib_walk" walk #collect
+dup #len 4 "walk returns all entries" assert=
+[ name>> ] #map #collect
+dup "file1.txt" #in? "walk includes top-level file" assert-true
+dup "sub1" #in? "walk includes subdirectory" assert-true
+dup "sub1/nested.txt" #in? "walk includes nested file" assert-true
+"sub2" #in? "walk includes empty subdirectory" assert-true
+"tests/integration/_tmp_fs_lib_walk" delete-directory-recursive
+
+"error cases" test-section
+[ "nonexistent-abc-fs-lib" <file-info> ] "file-info on nonexistent throws" assert-error
+[ "nonexistent-abc-fs-lib" list-directory ] "list-directory on nonexistent throws" assert-error
