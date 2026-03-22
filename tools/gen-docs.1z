@@ -140,6 +140,55 @@ render-word: ( wi -- str ) [
 \ Sort word-infos alphabetically by name
 sort-words: ( words -- words ) [ [ name>> ] #sort-by ] ;
 
+\ --- Index page ---
+
+\ Format one index table row: | word | [module](module.md) | `effect` |
+render-index-entry: ( module-name wi -- str ) [
+  dup stack-effect>>
+  dup f =
+  [ drop "" ]
+  [ >string "`" swap #append "`" #append ]
+  if                                \ module-name wi effect-str
+  swap name>>                       \ module-name effect-str word-name
+  "| " swap #append " | [" #append  \ module-name effect-str "| word | ["
+  <rot-                             \ effect-str "| word | [" module-name
+  dup                               \ effect-str "| word | [" mod mod
+  [ #append "](" #append ] dip      \ effect-str "| word | [mod](" mod
+  #append ".md) | " #append         \ effect-str "| word | [mod](mod.md) | "
+  swap #append " |\n" #append  \ "| word | [mod](mod.md) | effect |\n"
+] ;
+
+\ Collect index entries for one module
+module-entries: ( grouped module-key -- entries ) [
+  over over @get  \ grouped module-key words
+  swap >string    \ grouped words name-str
+  swap >iterator  \ grouped name-str words-iter
+  swap [ swap render-index-entry ] curry
+  #map #collect  \ grouped entries
+  swap drop      \ entries
+] ;
+
+\ Collect all entries, sort, render index page
+render-index-page: ( grouped -- str ) [
+  dup @keys  \ grouped keys-array
+  >iterator
+  swap [ swap module-entries ] curry
+  #map #collect  \ array-of-entry-arrays
+  { } swap >iterator [ #append ] #each
+  [ ] #sort-by
+  "" #join
+  "# Word Index\n\n| Word | Module | Stack Effect |\n|------|--------|--------------|\n"
+  swap #append
+] ;
+
+\ Write index page to docs/reference/index.md
+write-index-page: ( content -- ) [
+  "docs/reference/index.md"
+  write: stream-open
+  dup -rot> [ print ] with-output-stream
+  stream-close
+] ;
+
 \ Render a full module page
 render-module-page: ( name words -- str ) [
   sort-words  \ name sorted-words
@@ -183,7 +232,11 @@ generate-one: ( key grouped -- ) [
 ] ;
 
 "Generating documentation..." eprint-line
+dup
 dup @keys [ >string ] #sort-by
 swap [ generate-one ] curry #each
+
+"Generating index..." eprint-line
+render-index-page write-index-page
 
 "Done." eprint-line
