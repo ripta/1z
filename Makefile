@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test unit-test integration-test jit-test fmt-test update-golden update-fmt-golden benchmark clean help
+.PHONY: all build release run fmt test unit-test integration-test jit-test fmt-test update-golden update-fmt-golden benchmark clean help docs
 
 SHELL := /bin/bash
 
@@ -53,3 +53,6 @@ clean: ## Remove build artifacts
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-20s %s\n", $$1, $$2}'
+
+docs: build ## Generate API reference documentation
+	./zig-out/bin/1z tools/gen-docs.1z

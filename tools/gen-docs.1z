@@ -1,0 +1,189 @@
+\ tools/gen-docs.1z - Generate per-module API reference documentation
+\
+\ Introspects the running interpreter to produce markdown files in
+\ docs/reference/, one per module plus a prelude page.
+
+use "fs" ;
+use "path" ;
+use "strings" ;
+use "sequences" ;
+use "introspect" ;
+
+\ --- Step 1: Discover stdlib modules ---
+
+stdlib-dir: "testing" native.resolve-load-path dirname ;
+
+discover-modules: ( -- array ) [
+  stdlib-dir list-files
+  [ name>> ".1z" #ends-with? ] #filter #collect
+  [ name>> dup #len 3 - #take ] #map #collect
+] ;
+
+\ --- Step 2: Load all modules ---
+
+try-load-module: ( name -- ) [
+  [ load import ] [ drop "  skipped: " swap #append eprint-line ] recover
+] ;
+
+load-all-modules: ( modules -- ) [
+  [ try-load-module ] #each
+] ;
+
+\ --- Step 3: Collect and group words ---
+
+\ Extract module key from a word-info's module>> field.
+module-key: ( wi -- string ) [
+  module>> dup f =
+  [ drop "prelude" ]
+  [
+    inspect
+    8 #drop
+    " (" split-once?
+    dup option:some? [ option:some> #first ] [ drop "unknown" ] if
+  ]
+  if
+] ;
+
+\ --- Step 4: Generate markdown ---
+
+\ Internal markers to skip in output
+internal-marker?: ( marker-str -- ? ) [
+  dup "<marker:typed>" =
+  over "<marker:stack-recursive>" = or
+  over "<marker:parse-time-only>" = or
+  swap "<marker:shadow-ok>" = or
+] ;
+
+\ Strip <marker:NAME> to just NAME
+marker-name: ( str -- str ) [
+  dup "<marker:" #starts-with?
+  [ 8 #drop dup #len 1 - #take ]
+  when
+] ;
+
+\ Render marker badges on a single line
+render-markers: ( markers -- str ) [
+  >iterator [ inspect ] #map #collect
+  [ internal-marker? not ] #filter #collect
+  dup #len 0 =
+  [ drop "" ]
+  [ [ marker-name "`" swap #append "`" #append ] #map #collect " " #join "\n\n" #append ]
+  if
+] ;
+
+\ Render a single method entry as a bullet
+render-method: ( method-info -- str ) [
+  types>>
+  "- `method{ " swap " " #join #append " }`\n" #append
+] ;
+
+\ Render methods section
+render-methods: ( methods -- str ) [
+  dup #len 0 =
+  [ drop "" ]
+  [
+    "\n#### Methods\n\n"
+    swap >iterator [ render-method ] #map #collect "" #join
+    #append
+  ]
+  if
+] ;
+
+\ Render type info section for typed words
+render-type-info: ( wi -- str ) [
+  dup markers>> [ inspect "<marker:typed>" = ] #any
+  [
+    [
+      name>> native.type-descriptor
+      dup "type" @get
+      dup struct-descriptor: = [ drop format-struct-type-info ] [
+        dup virtual: = [ drop format-virtual-type-info ] [
+          dup enum-descriptor: = [ drop format-enum-type-info ] [
+            builtin-type: = [ format-builtin-type-info ] [ drop "" ] if
+          ] if
+        ] if
+      ] if
+      \ Wrap in markdown section
+      dup #len 0 =
+      [ ]
+      [ "\n#### Type Info\n\n```\n" swap #append "```\n" #append ]
+      if
+    ]
+    [ drop "" ]
+    recover
+  ]
+  [ drop "" ]
+  if
+] ;
+
+\ Render a single word entry
+render-word: ( wi -- str ) [
+  "### " over name>> #append "\n\n" #append
+
+  over markers>> render-markers #append
+
+  over stack-effect>> dup f =
+  [ drop ]
+  [ >string "`" swap #append "`\n\n" #append #append ]
+  if
+
+  over doc>> dup f =
+  [ drop "*Undocumented.*\n" #append ]
+  [ #append "\n" #append ]
+  if
+
+  over methods>> render-methods #append
+
+  swap render-type-info #append
+] ;
+
+\ Sort word-infos alphabetically by name
+sort-words: ( words -- words ) [ [ name>> ] #sort-by ] ;
+
+\ Render a full module page
+render-module-page: ( name words -- str ) [
+  sort-words  \ name sorted-words
+  swap        \ sorted-words name
+  "# " swap #append "\n\n" #append  \ sorted-words "# name\n\n"
+  swap >iterator [ render-word "\n" #append ] #map #collect "" #join
+  #append
+] ;
+
+\ --- Step 5: Write files ---
+
+write-module-page: ( name content -- ) [
+  swap "docs/reference/" swap #append ".md" #append
+  write: stream-open
+  dup -rot> [ print ] with-output-stream
+  stream-close
+] ;
+
+\ --- Main ---
+
+"Discovering modules..." eprint-line
+discover-modules
+dup "Found " swap #len inspect #append " modules" #append eprint-line
+
+"Loading modules..." eprint-line
+dup load-all-modules
+
+"Collecting words..." eprint-line
+all-words [ module-key ] #group-by
+
+"docs/reference" ensure-directory
+
+\ Generate one module's docs. Called via curry: TOS=grouped, below=key.
+generate-one: ( key grouped -- ) [
+  swap  \ grouped key
+  dup >string "  " swap #append "..." #append eprint-line
+  dup >string                      \ grouped key name
+  [ @get ] dip swap                \ name words
+  over [ render-module-page ] dip  \ content name
+  swap write-module-page
+] ;
+
+"Generating documentation..." eprint-line
+dup @keys [ >string ] #sort-by
+swap [ generate-one ] curry #each
+
+"Done." eprint-line
