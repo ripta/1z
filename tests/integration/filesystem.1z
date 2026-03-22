@@ -1,0 +1,76 @@
+\ Integration tests for filesystem primitives
+
+use "testing" ;
+
+"path-exists?" test-section
+t "." path-exists? "cwd exists" assert=
+t "tests/fixtures/hello.txt" path-exists? "known fixture exists" assert=
+f "nonexistent-path-abc123" path-exists? "nonexistent path returns false" assert=
+
+"file-info basics" test-section
+"tests/fixtures/hello.txt" file-info
+dup size: @get 0 > "file-info size is positive" assert-true
+dup type: @get file: "file-info type is file:" assert=
+dup modified: @get 0 > "file-info modified is positive" assert-true
+dup accessed: @get 0 > "file-info accessed is positive" assert-true
+permissions: @get 0 > "file-info permissions is positive" assert-true
+
+"file-info on directory" test-section
+"tests/fixtures" file-info type: @get directory: "directory type is directory:" assert=
+
+"create-directory and delete-directory" test-section
+"tests/integration/_tmp_fs_test/nested/dir" create-directory
+t "tests/integration/_tmp_fs_test/nested/dir" path-exists? "nested dir created" assert=
+"tests/integration/_tmp_fs_test/nested/dir" delete-directory
+f "tests/integration/_tmp_fs_test/nested/dir" path-exists? "nested dir deleted" assert=
+"tests/integration/_tmp_fs_test/nested" delete-directory
+"tests/integration/_tmp_fs_test" delete-directory
+
+"list-directory" test-section
+"tests/fixtures" list-directory
+dup #len 0 > "list-directory returns entries" assert-true
+#first
+dup #first string? "entry name is a string" assert-true
+#last symbol? "entry type is a symbol" assert-true
+
+"delete-file" test-section
+"tests/integration/_tmp_fs_delete_test" create-directory
+"tests/integration/_tmp_fs_delete_test/tempfile.txt" write: stream-open
+dup "hello" stream-write drop
+stream-close
+t "tests/integration/_tmp_fs_delete_test/tempfile.txt" path-exists? "temp file created" assert=
+"tests/integration/_tmp_fs_delete_test/tempfile.txt" delete-file
+f "tests/integration/_tmp_fs_delete_test/tempfile.txt" path-exists? "temp file deleted" assert=
+"tests/integration/_tmp_fs_delete_test" delete-directory
+
+"rename-path" test-section
+"tests/integration/_tmp_fs_rename_test" create-directory
+"tests/integration/_tmp_fs_rename_test/original.txt" write: stream-open
+dup "data" stream-write drop
+stream-close
+"tests/integration/_tmp_fs_rename_test/original.txt" "tests/integration/_tmp_fs_rename_test/renamed.txt" rename-path
+f "tests/integration/_tmp_fs_rename_test/original.txt" path-exists? "original gone after rename" assert=
+t "tests/integration/_tmp_fs_rename_test/renamed.txt" path-exists? "renamed file exists" assert=
+"tests/integration/_tmp_fs_rename_test/renamed.txt" delete-file
+"tests/integration/_tmp_fs_rename_test" delete-directory
+
+"copy-file" test-section
+"tests/integration/_tmp_fs_copy_test" create-directory
+"tests/integration/_tmp_fs_copy_test/source.txt" write: stream-open
+dup "content" stream-write drop
+stream-close
+"tests/integration/_tmp_fs_copy_test/source.txt" "tests/integration/_tmp_fs_copy_test/dest.txt" copy-file
+t "tests/integration/_tmp_fs_copy_test/source.txt" path-exists? "source still exists after copy" assert=
+t "tests/integration/_tmp_fs_copy_test/dest.txt" path-exists? "dest exists after copy" assert=
+"tests/integration/_tmp_fs_copy_test/source.txt" file-info size: @get
+"tests/integration/_tmp_fs_copy_test/dest.txt" file-info size: @get
+"copy preserves file size" assert=
+"tests/integration/_tmp_fs_copy_test/source.txt" delete-file
+"tests/integration/_tmp_fs_copy_test/dest.txt" delete-file
+"tests/integration/_tmp_fs_copy_test" delete-directory
+
+"error cases" test-section
+[ "nonexistent-abc123/file.txt" delete-file ] "delete-file on nonexistent throws" assert-error
+[ "nonexistent-abc123" delete-directory ] "delete-directory on nonexistent throws" assert-error
+[ "nonexistent-abc123" list-directory ] "list-directory on nonexistent throws" assert-error
+[ "nonexistent-abc123/file.txt" file-info ] "file-info on nonexistent throws" assert-error

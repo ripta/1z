@@ -1,0 +1,98 @@
+=== path-exists? ===
+Stack: [ ]
+PASS: cwd exists
+Stack: [ ]
+PASS: known fixture exists
+Stack: [ ]
+PASS: nonexistent path returns false
+Stack: [ ]
+=== file-info basics ===
+Stack: [ ]
+Stack: [ H{ size: 13 modified: 1771397730 accessed: 1774143832 type: file: permissions: 420 } ]
+PASS: file-info size is positive
+Stack: [ H{ size: 13 modified: 1771397730 accessed: 1774143832 type: file: permissions: 420 } ]
+PASS: file-info type is file:
+Stack: [ H{ size: 13 modified: 1771397730 accessed: 1774143832 type: file: permissions: 420 } ]
+PASS: file-info modified is positive
+Stack: [ H{ size: 13 modified: 1771397730 accessed: 1774143832 type: file: permissions: 420 } ]
+PASS: file-info accessed is positive
+Stack: [ H{ size: 13 modified: 1771397730 accessed: 1774143832 type: file: permissions: 420 } ]
+PASS: file-info permissions is positive
+Stack: [ ]
+=== file-info on directory ===
+Stack: [ ]
+PASS: directory type is directory:
+Stack: [ ]
+=== create-directory and delete-directory ===
+Stack: [ ]
+Stack: [ ]
+PASS: nested dir created
+Stack: [ ]
+Stack: [ ]
+PASS: nested dir deleted
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== list-directory ===
+Stack: [ ]
+Stack: [ { { "lines.txt" file: } { "hello.txt" file: } { "redirect-test.txt" file: } } ]
+PASS: list-directory returns entries
+Stack: [ { { "lines.txt" file: } { "hello.txt" file: } { "redirect-test.txt" file: } } ]
+Stack: [ { "lines.txt" file: } ]
+PASS: entry name is a string
+Stack: [ { "lines.txt" file: } ]
+PASS: entry type is a symbol
+Stack: [ ]
+=== delete-file ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_fs_delete_test/tempfile.txt write> ]
+Stack: [ <stream tests/integration/_tmp_fs_delete_test/tempfile.txt write> ]
+Stack: [ ]
+PASS: temp file created
+Stack: [ ]
+Stack: [ ]
+PASS: temp file deleted
+Stack: [ ]
+Stack: [ ]
+=== rename-path ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_fs_rename_test/original.txt write> ]
+Stack: [ <stream tests/integration/_tmp_fs_rename_test/original.txt write> ]
+Stack: [ ]
+Stack: [ ]
+PASS: original gone after rename
+Stack: [ ]
+PASS: renamed file exists
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== copy-file ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_fs_copy_test/source.txt write> ]
+Stack: [ <stream tests/integration/_tmp_fs_copy_test/source.txt write> ]
+Stack: [ ]
+Stack: [ ]
+PASS: source still exists after copy
+Stack: [ ]
+PASS: dest exists after copy
+Stack: [ ]
+Stack: [ 7 ]
+Stack: [ 7 7 ]
+PASS: copy preserves file size
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== error cases ===
+Stack: [ ]
+PASS: delete-file on nonexistent throws
+Stack: [ ]
+PASS: delete-directory on nonexistent throws
+Stack: [ ]
+PASS: list-directory on nonexistent throws
+Stack: [ ]
+PASS: file-info on nonexistent throws
+Stack: [ ]
