@@ -16,6 +16,9 @@ pub const primitives = [_]Primitive{
     .{ .name = "copy-file", .stack_effect = "src dst --", .doc = "Copy a file from src to dst.", .func = nativeCopyFile, .capability = .io_fs },
     .{ .name = "path-exists?", .stack_effect = "path -- bool", .doc = "Return true if the path exists, false otherwise.", .func = nativePathExists, .capability = .io_fs },
     .{ .name = "file-info", .stack_effect = "path -- hash", .doc = "Return a hash with file metadata: size, type, modified, accessed, permissions.", .func = nativeFileInfo, .capability = .io_fs },
+    .{ .name = "create-symlink", .stack_effect = "target link-path --", .doc = "Create a symbolic link at link-path pointing to target.", .func = nativeCreateSymlink, .capability = .io_fs },
+    .{ .name = "read-symlink", .stack_effect = "path -- target-path", .doc = "Read the target of a symbolic link.", .func = nativeReadSymlink, .capability = .io_fs },
+    .{ .name = "set-permissions", .stack_effect = "path mode --", .doc = "Set file or directory permissions (octal mode bits).", .func = nativeSetPermissions, .capability = .io_fs },
 };
 
 /// create-directory ( path -- )
@@ -162,4 +165,41 @@ fn nativeFileInfo(ctx: *Context) anyerror!void {
     hash.put(alloc, perm_key, .{ .fixnum = mode }) catch return error.OutOfMemory;
 
     try ctx.stack.push(.{ .hash = hash });
+}
+
+/// create-symlink ( target link-path -- )
+fn nativeCreateSymlink(ctx: *Context) anyerror!void {
+    const link_path = try helpers.popString(ctx);
+    const target = try helpers.popString(ctx);
+    std.fs.cwd().symLink(target, link_path, .{}) catch |err| {
+        helpers.setErrorContext(ctx, "create-symlink: {s}", .{@errorName(err)});
+        return mapFileCreateError(err);
+    };
+}
+
+/// read-symlink ( path -- target-path )
+fn nativeReadSymlink(ctx: *Context) anyerror!void {
+    const path = try helpers.popString(ctx);
+    const alloc = ctx.quotationAllocator();
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const target = std.fs.cwd().readLink(path, &buf) catch |err| {
+        helpers.setErrorContext(ctx, "read-symlink: {s}", .{@errorName(err)});
+        return mapFileOpenError(err);
+    };
+    const result = alloc.dupe(u8, target) catch return error.OutOfMemory;
+    try ctx.stack.push(.{ .string = result });
+}
+
+/// set-permissions ( path mode -- )
+fn nativeSetPermissions(ctx: *Context) anyerror!void {
+    const mode = try helpers.popFixnum(ctx);
+    const path = try helpers.popString(ctx);
+    std.posix.fchmodat(std.fs.cwd().fd, path, @intCast(mode), 0) catch |err| {
+        helpers.setErrorContext(ctx, "set-permissions: {s}", .{@errorName(err)});
+        return switch (err) {
+            error.FileNotFound => error.FileNotFound,
+            error.AccessDenied, error.PermissionDenied => error.PermissionDenied,
+            else => error.IOFailed,
+        };
+    };
 }

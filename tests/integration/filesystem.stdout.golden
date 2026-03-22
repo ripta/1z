@@ -86,6 +86,35 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+=== create-symlink and read-symlink ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_fs_symlink_test/target.txt write> ]
+Stack: [ <stream tests/integration/_tmp_fs_symlink_test/target.txt write> ]
+Stack: [ ]
+Stack: [ ]
+PASS: symlink exists
+Stack: [ ]
+Stack: [ "target.txt" ]
+PASS: read-symlink returns target path
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== set-permissions ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_fs_perms_test/perm.txt write> ]
+Stack: [ <stream tests/integration/_tmp_fs_perms_test/perm.txt write> ]
+Stack: [ ]
+Stack: [ ]
+PASS: set-permissions to 0o644
+Stack: [ ]
+Stack: [ ]
+PASS: set-permissions to 0o755
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 === error cases ===
 Stack: [ ]
 PASS: delete-file on nonexistent throws
@@ -95,4 +124,8 @@ Stack: [ ]
 PASS: list-directory on nonexistent throws
 Stack: [ ]
 PASS: file-info on nonexistent throws
+Stack: [ ]
+PASS: read-symlink on nonexistent throws
+Stack: [ ]
+PASS: set-permissions on nonexistent throws
 Stack: [ ]

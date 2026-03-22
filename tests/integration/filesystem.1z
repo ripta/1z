@@ -69,8 +69,35 @@ t "tests/integration/_tmp_fs_copy_test/dest.txt" path-exists? "dest exists after
 "tests/integration/_tmp_fs_copy_test/dest.txt" delete-file
 "tests/integration/_tmp_fs_copy_test" delete-directory
 
+"create-symlink and read-symlink" test-section
+"tests/integration/_tmp_fs_symlink_test" create-directory
+"tests/integration/_tmp_fs_symlink_test/target.txt" write: stream-open
+dup "symlink-content" stream-write drop
+stream-close
+"target.txt" "tests/integration/_tmp_fs_symlink_test/link.txt" create-symlink
+t "tests/integration/_tmp_fs_symlink_test/link.txt" path-exists? "symlink exists" assert=
+"tests/integration/_tmp_fs_symlink_test/link.txt" read-symlink
+"target.txt" "read-symlink returns target path" assert=
+"tests/integration/_tmp_fs_symlink_test/link.txt" delete-file
+"tests/integration/_tmp_fs_symlink_test/target.txt" delete-file
+"tests/integration/_tmp_fs_symlink_test" delete-directory
+
+"set-permissions" test-section
+"tests/integration/_tmp_fs_perms_test" create-directory
+"tests/integration/_tmp_fs_perms_test/perm.txt" write: stream-open
+dup "perm-test" stream-write drop
+stream-close
+"tests/integration/_tmp_fs_perms_test/perm.txt" 0o644 set-permissions
+420 "tests/integration/_tmp_fs_perms_test/perm.txt" file-info permissions: @get "set-permissions to 0o644" assert=
+"tests/integration/_tmp_fs_perms_test/perm.txt" 0o755 set-permissions
+493 "tests/integration/_tmp_fs_perms_test/perm.txt" file-info permissions: @get "set-permissions to 0o755" assert=
+"tests/integration/_tmp_fs_perms_test/perm.txt" delete-file
+"tests/integration/_tmp_fs_perms_test" delete-directory
+
 "error cases" test-section
 [ "nonexistent-abc123/file.txt" delete-file ] "delete-file on nonexistent throws" assert-error
 [ "nonexistent-abc123" delete-directory ] "delete-directory on nonexistent throws" assert-error
 [ "nonexistent-abc123" list-directory ] "list-directory on nonexistent throws" assert-error
 [ "nonexistent-abc123/file.txt" file-info ] "file-info on nonexistent throws" assert-error
+[ "nonexistent-abc123/link" read-symlink ] "read-symlink on nonexistent throws" assert-error
+[ "nonexistent-abc123/file.txt" 0o644 set-permissions ] "set-permissions on nonexistent throws" assert-error
