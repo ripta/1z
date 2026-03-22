@@ -774,6 +774,7 @@ word-info: struct{ name stack-effect doc markers native? body methods source-loc
   >provenance:    [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-provenance nip ] if ] ;
   >dispatch-prov: [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth 3 pick-n 3 #nth make-dispatch-provenance nip ] if ] ;
   >method-info:   [ dup 0 #nth swap 1 #nth >dispatch-prov make-method-info ] ;
+
   dup 0 #nth
   over 1 #nth >stack-effect-info
   2 pick-n 2 #nth
@@ -794,7 +795,7 @@ word-info: struct{ name stack-effect doc markers native? body methods source-loc
 all-words: ( -- array ) [ native.all-words [ (raw>word-info) ] #map #collect ] ;
 
 \\ Safe variant of >word-info that returns an option instead of throwing.
->word?: ( symbol -- option ) [ [ >word-info >option:some ] [ drop option:none ] recover ] ;
+>word-info?: ( symbol -- option ) [ [ >word-info >option:some ] [ drop option:none ] recover ] ;
 
 \\ Return the value of a pragma as an option.
 pragma-get: ( name -- option ) [ pragma-get-raw [ >option:some ] [ option:none ] if ] ;

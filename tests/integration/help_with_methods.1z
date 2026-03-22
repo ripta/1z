@@ -5,7 +5,7 @@ use "introspect" ;
 greet: generic ( x -- str ) [ drop "hello" ] ;
 greet: method{ float } [ drop "hello float" ] ;
 
-greet: >word? unwrap-or-throw format-word-info
+greet: >word-info? unwrap-or-throw format-word-info
 dup "greet" #in? "help output contains word name" assert-true
 dup "method{ float }" #in? "help output contains method signature" assert-true
 

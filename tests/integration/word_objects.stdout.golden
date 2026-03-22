@@ -74,15 +74,15 @@ Stack: [ ]
 Stack: [ ]
 PASS: native.>word accepts string input
 Stack: [ ]
-=== >word? returns some for known word ===
+=== >word-info? returns some for known word ===
 Stack: [ ]
-PASS: >word? returns some for known word
+PASS: >word-info? returns some for known word
 Stack: [ ]
-PASS: >word? some contains word-info
+PASS: >word-info? some contains word-info
 Stack: [ ]
-=== >word? returns none for unknown word ===
+=== >word-info? returns none for unknown word ===
 Stack: [ ]
-PASS: >word? returns none for unknown word
+PASS: >word-info? returns none for unknown word
 Stack: [ ]
 === >quotation still works ===
 Stack: [ ]
@@ -132,9 +132,9 @@ Stack: [ ]
 Stack: [ ]
 PASS: stack-effect >string for compound word
 Stack: [ ]
-=== prelude word >word? retains stack effect ===
+=== prelude word >word-info? retains stack effect ===
 Stack: [ ]
-PASS: prelude >word? has non-null stack-effect
+PASS: prelude >word-info? has non-null stack-effect
 Stack: [ ]
 === native.>word raw array for >word-info has stack effect ===
 Stack: [ ]
@@ -144,9 +144,9 @@ Stack: [ ]
 Stack: [ ]
 PASS: native.>word raw se for all-words is not f
 Stack: [ ]
-=== native.>word raw array for >word? has stack effect ===
+=== native.>word raw array for >word-info? has stack effect ===
 Stack: [ ]
-PASS: native.>word raw se for >word? is not f
+PASS: native.>word raw se for >word-info? is not f
 Stack: [ ]
 === stack-effect >string with no inputs ===
 Stack: [ ]

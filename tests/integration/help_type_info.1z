@@ -4,7 +4,7 @@ use "introspect" ;
 "struct type info" test-section
 
 ht-point: struct{ x y } ;
-ht-point: >word? unwrap-or-throw format-word-info
+ht-point: >word-info? unwrap-or-throw format-word-info
 dup "type info:" #in? "struct has type info header" assert-true
 dup "kind: struct" #in? "struct shows kind" assert-true
 dup "fields: x y" #in? "struct shows fields" assert-true
@@ -15,7 +15,7 @@ drop
 "virtual type info (simple wrap)" test-section
 
 ht-meter: virtual{ fixnum } ;
-ht-meter: >word? unwrap-or-throw format-word-info
+ht-meter: >word-info? unwrap-or-throw format-word-info
 dup "type info:" #in? "simple virtual has type info header" assert-true
 dup "kind: virtual" #in? "simple virtual shows kind" assert-true
 dup "wraps: fixnum" #in? "simple virtual shows wraps" assert-true
@@ -25,7 +25,7 @@ drop
 "virtual type info (struct-backed)" test-section
 
 ht-vec: virtual{ struct{ vx vy } } ;
-ht-vec: >word? unwrap-or-throw format-word-info
+ht-vec: >word-info? unwrap-or-throw format-word-info
 dup "type info:" #in? "struct-backed virtual has type info header" assert-true
 dup "kind: virtual" #in? "struct-backed virtual shows kind" assert-true
 dup "fields: vx vy" #in? "struct-backed virtual shows fields" assert-true
@@ -35,7 +35,7 @@ drop
 "enum type info (flat)" test-section
 
 ht-color: enum{ red: unit green: unit blue: unit } ;
-ht-color: >word? unwrap-or-throw format-word-info
+ht-color: >word-info? unwrap-or-throw format-word-info
 dup "type info:" #in? "enum has type info header" assert-true
 dup "kind: enum" #in? "enum shows kind" assert-true
 dup "variants:" #in? "enum shows variants header" assert-true
@@ -50,7 +50,7 @@ drop
 
 ht-circle-data: struct{ radius } ;
 ht-shape: enum{ circle: ht-circle-data dot: unit } ;
-ht-shape: >word? unwrap-or-throw format-word-info
+ht-shape: >word-info? unwrap-or-throw format-word-info
 dup "kind: enum" #in? "data enum shows kind" assert-true
 dup "circle:" #in? "data enum shows circle variant" assert-true
 dup "ht-circle-data" #in? "data enum shows struct type" assert-true
@@ -59,7 +59,7 @@ drop
 
 "builtin type info (with metadata)" test-section
 
-fixnum: >word? unwrap-or-throw format-word-info
+fixnum: >word-info? unwrap-or-throw format-word-info
 dup "type info:" #in? "fixnum has type info header" assert-true
 dup "kind: builtin-type" #in? "fixnum shows kind" assert-true
 dup "numeric: t" #in? "fixnum shows numeric" assert-true
@@ -69,12 +69,12 @@ drop
 
 "builtin type info (without metadata)" test-section
 
-boolean: >word? unwrap-or-throw format-word-info
+boolean: >word-info? unwrap-or-throw format-word-info
 dup "type info:" #in? "boolean has type info header" assert-true
 dup "kind: builtin-type" #in? "boolean shows kind" assert-true
 drop
 
 "non-typed word has no type info" test-section
 
-dup: >word? unwrap-or-throw format-word-info
+dup: >word-info? unwrap-or-throw format-word-info
 "type info:" #in? not "dup has no type info" assert-true

@@ -196,5 +196,5 @@ my-handwritten: generated-by f "generated-by returns f for hand-written word" as
 x>>: generated-by f "generated-by returns f for generic word" assert=
 
 "consistency: all generated-words are findable" test-section
-gw-point: generated-words >iterator [ >word? option:some? ] #map #collect
+gw-point: generated-words >iterator [ >word-info? option:some? ] #map #collect
 >iterator [ t "generated word is findable" assert= ] #each
