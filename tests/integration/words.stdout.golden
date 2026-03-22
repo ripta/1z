@@ -140,6 +140,7 @@ inspect ( value -- string )
 instance-of? ( val type -- ? )
 interpolate ( source template -- string )
 load ( filename -- module )
+load-file ( cache filename -- module )
 loop-combinator ( -- marker )
 lowercase ( str -- str )
 make-benchmark-report ( -- report )
@@ -151,6 +152,7 @@ make-parameter ( name quot -- param )
 make-range-iter ( start end step infinite? -- iterator )
 make-set ( quotation -- set )
 make-vector ( quotation -- vector )
+module-cache-value ( -- cache )
 multiplexer-stats ( -- hash )
 mutable ( -- marker )
 over ( a b -- a b a )
@@ -432,6 +434,7 @@ methods>> ( instance -- value )
 method{
 min ( a1 a2 -- a )
 module
+module-cache
 module>> ( instance -- value )
 module? ( val -- ? )
 mutable-map

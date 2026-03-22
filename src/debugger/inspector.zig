@@ -169,23 +169,30 @@ pub const Inspector = struct {
 
     /// List all loaded modules.
     pub fn listModules(ctx: *Context, writer: anytype) !void {
-        if (ctx.module_cache.count() == 0) {
+        if (ctx.module_cache_value.count() == 0) {
             try writer.writeAll("  No modules loaded.\n");
             return;
         }
-        var iter = ctx.module_cache.iterator();
+        var iter = ctx.module_cache_value.iterator();
         while (iter.next()) |entry| {
-            const module = entry.value_ptr.*;
+            const val = entry.value_ptr.*;
+            const module = switch (val) {
+                .module => |m| m,
+                else => continue,
+            };
             try writer.print("  {s} ({d} exports)\n", .{ module.name, module.words.count() });
         }
     }
 
     /// List exports of a loaded module.
     pub fn showModule(ctx: *Context, name: []const u8, writer: anytype) !void {
-        // Search module_cache for a module whose name matches
-        var iter = ctx.module_cache.iterator();
+        var iter = ctx.module_cache_value.iterator();
         while (iter.next()) |entry| {
-            const module = entry.value_ptr.*;
+            const val = entry.value_ptr.*;
+            const module = switch (val) {
+                .module => |m| m,
+                else => continue,
+            };
             if (std.mem.eql(u8, module.name, name)) {
                 try writer.print("  module '{s}':\n", .{name});
                 var word_iter = module.words.iterator();
@@ -239,7 +246,7 @@ pub const Inspector = struct {
 
         // Modules
         try writer.writeAll("\nModules:\n");
-        try writer.print("  Loaded:          {d}\n", .{ctx.module_cache.count()});
+        try writer.print("  Loaded:          {d}\n", .{ctx.module_cache_value.count()});
         try writer.print("  Load paths:      {d}\n", .{ctx.load_paths.items.len});
         if (ctx.stdlib_path) |sp| {
             try writer.print("  Stdlib:          {s}\n", .{sp});

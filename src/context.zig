@@ -178,7 +178,8 @@ pub const Context = struct {
     parsing_parse_time_def: bool = false,
     /// Cache of loaded modules keyed by canonical file path.
     /// Prevents redundant loading when multiple files `use` the same module.
-    module_cache: std.StringHashMapUnmanaged(*value_mod.Module) = .{},
+    /// Stored as an M{} value so it can be exposed as a dynamic parameter.
+    module_cache_value: *value_mod.MutableMap = undefined,
     /// Stashed error object from user `throw`, consumed by `recover`.
     thrown_error: ?value_mod.ErrorObject = null,
     /// Parse-time error diagnostics, populated by the parser catch blocks
@@ -290,6 +291,12 @@ pub const Context = struct {
             .jit_dispatch = JitDispatchTable.init(allocator),
         };
 
+        // Allocate the module cache M{} on the arena.
+        ctx.module_cache_value = ctx.arena.allocator().create(value_mod.MutableMap) catch |err| {
+            std.debug.panic("Failed to allocate module cache: {any}", .{err});
+        };
+        ctx.module_cache_value.* = .{};
+
         // Push the base type registry frame so boot-time registrations have a target.
         ctx.type_registry_frames.append(allocator, .{}) catch |err| {
             std.debug.panic("Failed to push base type registry frame: {any}", .{err});
@@ -350,6 +357,9 @@ pub const Context = struct {
             .stdlib_path = parent.stdlib_path,
             .program_args = parent.program_args,
         };
+
+        // Share the parent's module cache so tasks don't re-load from disk.
+        ctx.module_cache_value = parent.module_cache_value;
 
         // Inherit the parent's active sandbox, if any. Allocate a copy on the
         // task's arena so the pointer outlives the parent's stack frame.
@@ -453,7 +463,6 @@ pub const Context = struct {
         self.call_stack.deinit(self.allocator);
         self.error_details.deinit(self.allocator);
         self.load_paths.deinit(self.allocator);
-        self.module_cache.deinit(self.arena.allocator());
         for (self.pragma_frames.items) |*frame| {
             frame.deinit(self.allocator);
         }

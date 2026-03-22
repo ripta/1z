@@ -27,6 +27,8 @@ pub const primitives = [_]Primitive{
     .{ .name = "eval-string", .stack_effect = "string --", .doc = "Execute a string as 1z code in the caller's scope.", .func = nativeEvalString, .capability = .eval },
     .{ .name = "export", .stack_effect = "name --", .doc = "Promote an imported word to a public definition in the current scope.", .func = nativeExport },
     .{ .name = "compile!", .stack_effect = "sym --", .doc = "JIT-compile a word for integer arithmetic. Throws if the word is not found or not compilable.", .func = nativeCompile },
+    .{ .name = "load-file", .stack_effect = "cache filename -- module", .doc = "Load a 1z source file unconditionally (no cache check) and store the result in the given M{} cache.", .func = nativeLoadFile, .capability = .io_fs },
+    .{ .name = "module-cache-value", .stack_effect = "-- cache", .doc = "Push the current module cache M{} onto the stack.", .func = nativeModuleCacheValue },
 };
 
 fn nativeToModule(ctx: *Context) anyerror!void {
@@ -169,18 +171,18 @@ fn nativeLoad(ctx: *Context) anyerror!void {
 
     // XXX(ripta): Module cache hit - side-effects won't run again.
     //             Is this okay? It better be.
-    if (ctx.module_cache.get(resolved)) |cached_module| {
+    if (ctx.module_cache_value.get(resolved)) |cached_val| {
         if (ctx.trace.trace_modules) {
             var tw = trace_mod.TraceWriter.init();
             trace_mod.traceModuleCacheHit(&tw, filename, resolved);
         }
-        return try ctx.stack.push(.{ .module = cached_module });
+        return try ctx.stack.push(cached_val);
     }
 
-    return nativeLoadImpl(ctx, filename, alloc, resolved);
+    return nativeLoadImpl(ctx, ctx.module_cache_value, filename, alloc, resolved);
 }
 
-fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator, resolved: []const u8) anyerror!void {
+fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []const u8, alloc: std.mem.Allocator, resolved: []const u8) anyerror!void {
     if (ctx.trace.trace_modules) {
         var tw = trace_mod.TraceWriter.init();
         trace_mod.traceModuleLoad(&tw, filename, resolved);
@@ -314,7 +316,7 @@ fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator,
         trace_mod.traceModuleLoadEnd(&tw, filename, module.words.count());
     }
 
-    ctx.module_cache.put(alloc, resolved, module) catch {};
+    cache.put(alloc, resolved, .{ .module = module }) catch {};
     ctx.popPragmaFrame();
     ctx.popLocalFrame();
     try ctx.stack.push(.{ .module = module });
@@ -671,6 +673,40 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
         }
         ancestor = anc.parent_context;
     }
+}
+
+/// load-file ( cache filename -- module ) - Load a file unconditionally into the given cache
+fn nativeLoadFile(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const filename = try popString(ctx);
+    const cache_val = try ctx.stack.pop();
+    const cache: *value_mod.MutableMap = switch (cache_val) {
+        .mutable_map => |m| m,
+        else => {
+            helpers.setTypeMismatchError(ctx, "mutable-map", cache_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const resolved = resolveLoadPath(ctx, filename, alloc) orelse {
+        const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
+        ctx.error_details.append(ctx.allocator, .{
+            .error_type = "file-not-found",
+            .message = msg,
+            .source = ctx.current_source,
+            .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
+            .word_name = "load-file",
+        }) catch {};
+        return error.FileNotFound;
+    };
+
+    return nativeLoadImpl(ctx, cache, filename, alloc, resolved);
+}
+
+/// module-cache-value ( -- cache ) - Push the current module cache M{}
+fn nativeModuleCacheValue(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .mutable_map = ctx.module_cache_value });
 }
 
 /// eval-string ( string -- ) - Execute a string as 1z code in the caller's scope
