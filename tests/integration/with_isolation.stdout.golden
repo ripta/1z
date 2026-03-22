@@ -1,0 +1,33 @@
+=== isolation discards types ===
+Stack: [ ]
+Stack: [ ]
+PASS: type defined in isolation is not visible after
+Stack: [ ]
+=== isolation discards dispatch ===
+Stack: [ ]
+Stack: [ ]
+PASS: dispatch works inside isolation
+Stack: [ ]
+PASS: dispatch registered in isolation is gone after
+Stack: [ ]
+=== stack values survive ===
+Stack: [ ]
+Stack: [ 1 2 3 ]
+PASS: third value survives isolation
+Stack: [ 1 2 ]
+PASS: second value survives isolation
+Stack: [ 1 ]
+PASS: first value survives isolation
+Stack: [ ]
+=== error propagation cleans up frames ===
+Stack: [ ]
+PASS: error propagates out of isolation
+Stack: [ ]
+Stack: [ ]
+PASS: types work after isolation error
+Stack: [ ]
+=== outer registries visible inside ===
+Stack: [ ]
+Stack: [ ]
+PASS: outer type visible inside isolation
+Stack: [ ]

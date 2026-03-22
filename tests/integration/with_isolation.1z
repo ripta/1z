@@ -1,0 +1,46 @@
+\ Test with-isolation combinator
+
+use "testing" ;
+
+"isolation discards types" test-section
+
+\ Define a virtual type inside isolation; it should not be visible after
+[ color: virtual{ string } ;
+] with-isolation
+[ "red" >color ] "type defined in isolation is not visible after" assert-error
+
+"isolation discards dispatch" test-section
+
+\ Register a method inside isolation; verify it works inside but is gone after
+my-op: generic ( a -- b ) [ ] ;
+[
+  my-op: method{ fixnum } [ 1 + ] ;
+  43 42 my-op "dispatch works inside isolation" assert=
+] with-isolation
+[ 42 my-op ] "dispatch registered in isolation is gone after" assert-error
+
+"stack values survive" test-section
+
+[ 1 2 3 ] with-isolation
+3 "third value survives isolation" assert=
+2 "second value survives isolation" assert=
+1 "first value survives isolation" assert=
+
+"error propagation cleans up frames" test-section
+
+[
+  [
+    temp-type: virtual{ fixnum } ;
+    f "oops" EUserThrown make-error throw
+  ] with-isolation
+] "error propagates out of isolation" assert-error
+\ After error, isolation frames should be cleaned up; defining a new type should work
+post-error-type: virtual{ string } ;
+"hello" >post-error-type type-name "post-error-type" "types work after isolation error" assert=
+
+"outer registries visible inside" test-section
+
+outer-type: virtual{ fixnum } ;
+[
+  42 >outer-type type-name "outer-type" "outer type visible inside isolation" assert=
+] with-isolation
