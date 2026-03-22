@@ -30,6 +30,26 @@ pub fn build(b: *std.Build) void {
     const install_exe = b.addInstallArtifact(exe, .{});
     b.getInstallStep().dependOn(&install_exe.step);
 
+    // zig-out/bin/1z-lsp
+    const lsp_module = b.createModule(.{
+        .root_source_file = b.path("src/lsp_main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    lsp_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
+    lsp_module.addIncludePath(b.path("ext/toy"));
+    lsp_module.linkSystemLibrary("ffi", .{});
+    addIrSources(b, lsp_module);
+    lsp_module.addOptions("build_options", options);
+
+    const lsp_exe = b.addExecutable(.{
+        .name = "1z-lsp",
+        .root_module = lsp_module,
+    });
+    const install_lsp = b.addInstallArtifact(lsp_exe, .{});
+    b.getInstallStep().dependOn(&install_lsp.step);
+
     // zig-out/lib -> lib/
     //
     // TODO(ripta): A bit hacky, but otherwise the stdlib path has to be

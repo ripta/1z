@@ -1089,4 +1089,5 @@ test {
     _ = @import("trace.zig");
     _ = @import("call_graph.zig");
     _ = @import("effect_inference.zig");
+    _ = @import("lsp/mod.zig");
 }
