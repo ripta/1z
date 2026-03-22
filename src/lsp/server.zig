@@ -2,6 +2,9 @@ const std = @import("std");
 const types = @import("types.zig");
 const Transport = @import("transport.zig").Transport;
 const Context = @import("../context.zig").Context;
+const Tokenizer = @import("../tokenizer.zig").Tokenizer;
+const WordDefinition = @import("../dictionary.zig").WordDefinition;
+const StackEffect = @import("../stack_effect.zig").StackEffect;
 
 const Allocator = std.mem.Allocator;
 
@@ -19,18 +22,31 @@ pub const Server = struct {
     transport: *Transport,
     state: State = .uninitialized,
     ctx: *Context,
+    documents: std.StringHashMap([]const u8),
 
     pub fn init(allocator: Allocator, transport: *Transport, ctx: *Context) Server {
         return .{
             .allocator = allocator,
             .transport = transport,
             .ctx = ctx,
+            .documents = std.StringHashMap([]const u8).init(allocator),
         };
+    }
+
+    pub fn deinit(self: *Server) void {
+        var it = self.documents.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.documents.deinit();
     }
 
     /// Main loop: read requests and dispatch until exit.
     /// Returns the process exit code.
     pub fn run(self: *Server) u8 {
+        defer self.deinit();
+
         while (true) {
             const body = self.transport.readMessage() catch |err| {
                 switch (err) {
@@ -90,6 +106,17 @@ pub const Server = struct {
             return;
         }
 
+        // Document sync notifications
+        if (std.mem.eql(u8, request.method, "textDocument/didOpen")) {
+            return self.handleDidOpen(request);
+        } else if (std.mem.eql(u8, request.method, "textDocument/didChange")) {
+            return self.handleDidChange(request);
+        } else if (std.mem.eql(u8, request.method, "textDocument/hover")) {
+            return self.handleHover(request);
+        } else if (std.mem.eql(u8, request.method, "textDocument/completion")) {
+            return self.handleCompletion(request);
+        }
+
         if (request.id) |id| {
             try self.transport.writeError(id, .method_not_found, "Method not found");
         }
@@ -104,7 +131,11 @@ pub const Server = struct {
         }
 
         const result = types.InitializeResult{
-            .capabilities = .{},
+            .capabilities = .{
+                .hoverProvider = true,
+                .completionProvider = .{},
+                .textDocumentSync = .{ .openClose = true, .change = 1 },
+            },
             .serverInfo = .{
                 .name = "1z-lsp",
                 .version = build_options.version,
@@ -121,6 +152,190 @@ pub const Server = struct {
         self.state = .shutdown;
     }
 
+    fn handleDidOpen(self: *Server, request: types.Request) !void {
+        const params = request.params orelse return;
+        const td = getJsonObject(params, "textDocument") orelse return;
+        const uri = getJsonString(td, "uri") orelse return;
+        const text = getJsonString(td, "text") orelse return;
+
+        const owned_uri = try self.allocator.dupe(u8, uri);
+        errdefer self.allocator.free(owned_uri);
+
+        const owned_text = try self.allocator.dupe(u8, text);
+        errdefer self.allocator.free(owned_text);
+
+        if (self.documents.fetchRemove(owned_uri)) |removed| {
+            self.allocator.free(removed.key);
+            self.allocator.free(removed.value);
+        }
+
+        try self.documents.put(owned_uri, owned_text);
+    }
+
+    fn handleDidChange(self: *Server, request: types.Request) !void {
+        const params = request.params orelse return;
+        const td = getJsonObject(params, "textDocument") orelse return;
+        const uri = getJsonString(td, "uri") orelse return;
+
+        const changes = getJsonArray(params, "contentChanges") orelse return;
+        if (changes.len == 0) return;
+        const new_text = getJsonString(changes[0], "text") orelse return;
+
+        const owned_text = try self.allocator.dupe(u8, new_text);
+        errdefer self.allocator.free(owned_text);
+
+        var it = self.documents.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.key_ptr.*, uri)) {
+                self.allocator.free(entry.value_ptr.*);
+                entry.value_ptr.* = owned_text;
+                return;
+            }
+        }
+
+        const owned_uri = try self.allocator.dupe(u8, uri);
+        try self.documents.put(owned_uri, owned_text);
+    }
+
+    fn handleHover(self: *Server, request: types.Request) !void {
+        const id = request.id orelse return;
+        const params = request.params orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+
+        const td = getJsonObject(params, "textDocument") orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+        const uri = getJsonString(td, "uri") orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+        const position = getJsonObject(params, "position") orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+        const line = getJsonInt(position, "line") orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+        const character = getJsonInt(position, "character") orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+
+        const text = self.getDocumentText(uri) orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+
+        const word = findWordAtPosition(text, line, character) orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+
+        // strip trailing `:` from symbol literals
+        const lookup_name = if (word.len > 1 and word[word.len - 1] == ':')
+            word[0 .. word.len - 1]
+        else
+            word;
+
+        const def = self.ctx.lookupWord(lookup_name) orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+
+        const markdown = try formatHoverMarkdown(self.allocator, lookup_name, def);
+        defer self.allocator.free(markdown);
+
+        const result = types.HoverResult{
+            .contents = .{ .value = markdown },
+        };
+        try self.transport.writeResponse(id, result);
+    }
+
+    fn handleCompletion(self: *Server, request: types.Request) !void {
+        const id = request.id orelse return;
+        const params = request.params orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+
+        const td = getJsonObject(params, "textDocument") orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+        const uri = getJsonString(td, "uri") orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+        const position = getJsonObject(params, "position") orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+        const line = getJsonInt(position, "line") orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+        const character = getJsonInt(position, "character") orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+
+        const text = self.getDocumentText(uri) orelse {
+            try self.transport.writeResponse(id, types.CompletionList{ .items = &.{} });
+            return;
+        };
+
+        const prefix = findPrefixAtPosition(text, line, character);
+
+        var items: std.ArrayListUnmanaged(types.CompletionItem) = .{};
+        defer items.deinit(self.allocator);
+
+        const max_items: usize = 100;
+
+        // Iterate local frames, wherethe prelude words live
+        for (self.ctx.local_frames.items) |*frame| {
+            if (items.items.len >= max_items) break;
+            var frame_it = frame.iterator();
+            while (frame_it.next()) |entry| {
+                if (items.items.len >= max_items) break;
+                const name = entry.key_ptr.*;
+                if (prefix.len == 0 or std.mem.startsWith(u8, name, prefix)) {
+                    try items.append(self.allocator, makeCompletionItem(name, entry.value_ptr.*));
+                }
+            }
+        }
+
+        // Iterate global dictionary, where native words live
+        {
+            var dict_it = self.ctx.dictionary.entries.iterator();
+            while (dict_it.next()) |entry| {
+                if (items.items.len >= max_items) break;
+                const name = entry.key_ptr.*;
+                if (prefix.len == 0 or std.mem.startsWith(u8, name, prefix)) {
+                    try items.append(self.allocator, makeCompletionItem(name, entry.value_ptr.*));
+                }
+            }
+        }
+
+        const result = types.CompletionList{
+            .items = items.items,
+        };
+        try self.transport.writeResponse(id, result);
+    }
+
+    fn getDocumentText(self: *Server, uri: []const u8) ?[]const u8 {
+        var it = self.documents.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.key_ptr.*, uri)) {
+                return entry.value_ptr.*;
+            }
+        }
+        return null;
+    }
+
     fn log(self: *Server, comptime fmt: []const u8, args: anytype) void {
         _ = self;
         const stderr_file: std.fs.File = .stderr();
@@ -130,6 +345,188 @@ pub const Server = struct {
         stderr.interface.flush() catch {};
     }
 };
+
+// =========================================================================
+// Helpers
+// =========================================================================
+
+fn getJsonString(val: std.json.Value, key: []const u8) ?[]const u8 {
+    const obj = switch (val) {
+        .object => |o| o,
+        else => return null,
+    };
+    const field = obj.get(key) orelse return null;
+    return switch (field) {
+        .string => |s| s,
+        else => null,
+    };
+}
+
+fn getJsonObject(val: std.json.Value, key: []const u8) ?std.json.Value {
+    const obj = switch (val) {
+        .object => |o| o,
+        else => return null,
+    };
+    return obj.get(key);
+}
+
+fn getJsonInt(val: std.json.Value, key: []const u8) ?i64 {
+    const obj = switch (val) {
+        .object => |o| o,
+        else => return null,
+    };
+    const field = obj.get(key) orelse return null;
+    return switch (field) {
+        .integer => |v| v,
+        else => null,
+    };
+}
+
+fn getJsonArray(val: std.json.Value, key: []const u8) ?[]std.json.Value {
+    const obj = switch (val) {
+        .object => |o| o,
+        else => return null,
+    };
+    const field = obj.get(key) orelse return null;
+    return switch (field) {
+        .array => |a| a.items,
+        else => null,
+    };
+}
+
+/// Find the word token at a given LSP position, 0-based line / character.
+/// Returns the token text or null if no word token found at that position.
+fn findWordAtPosition(text: []const u8, lsp_line: i64, lsp_char: i64) ?[]const u8 {
+    if (lsp_line < 0 or lsp_char < 0) return null;
+
+    const target_line: usize = @intCast(lsp_line);
+    const target_char: usize = @intCast(lsp_char);
+
+    // tokenizer is 1-based
+    const tok_line = target_line + 1;
+
+    var tokenizer = Tokenizer.init(text);
+    while (tokenizer.next()) |token| {
+        if (token.kind != .word) continue;
+        if (token.line != tok_line) continue;
+
+        // token.column is 1-based
+        const tok_start = token.column - 1;
+        const tok_end = tok_start + token.text.len;
+        if (target_char >= tok_start and target_char < tok_end) {
+            return token.text;
+        }
+    }
+
+    return null;
+}
+
+/// Find the prefix at a given LSP position by scanning backward from cursor.
+/// Returns the prefix string (may be empty if cursor is at whitespace).
+fn findPrefixAtPosition(text: []const u8, lsp_line: i64, lsp_char: i64) []const u8 {
+    if (lsp_line < 0 or lsp_char < 0) return "";
+
+    const target_line: usize = @intCast(lsp_line);
+    const target_char: usize = @intCast(lsp_char);
+
+    var line_start: usize = 0;
+    var current_line: usize = 0;
+    for (text, 0..) |c, i| {
+        if (current_line == target_line) {
+            line_start = i;
+            break;
+        }
+        if (c == '\n') current_line += 1;
+    } else {
+        // target_line is beyond the text
+        if (current_line == target_line) {
+            line_start = text.len;
+        } else {
+            return "";
+        }
+    }
+
+    const cursor = @min(line_start + target_char, text.len);
+
+    var start = cursor;
+    while (start > line_start) {
+        const c = text[start - 1];
+        if (c == ' ' or c == '\t' or c == '\n' or c == '\r') break;
+        start -= 1;
+    }
+
+    return text[start..cursor];
+}
+
+/// Format hover markdown for a word definition.
+fn formatHoverMarkdown(allocator: Allocator, name: []const u8, def: WordDefinition) ![]u8 {
+    // estimate: code fence + name + effect + doc
+    var effect_buf: [256]u8 = undefined;
+    var effect_str: []const u8 = "";
+    if (def.stack_effect) |effect| {
+        var fbs = std.io.fixedBufferStream(&effect_buf);
+        effect.write(fbs.writer()) catch {};
+        effect_str = fbs.getWritten();
+    }
+
+    const space_and_effect = if (effect_str.len > 0) effect_str.len + 1 else 0;
+    // doc_part: "\n\n" + doc
+    const doc_part = if (def.doc) |doc| doc.len + 2 else 0;
+    // total: "```1z\n" + name + " effect" + "\n```" + "\n\ndoc"
+    const total = 6 + name.len + space_and_effect + 4 + doc_part;
+
+    const result = try allocator.alloc(u8, total);
+    var pos: usize = 0;
+
+    @memcpy(result[pos..][0..6], "```1z\n");
+    pos += 6;
+    @memcpy(result[pos..][0..name.len], name);
+    pos += name.len;
+
+    if (effect_str.len > 0) {
+        result[pos] = ' ';
+        pos += 1;
+        @memcpy(result[pos..][0..effect_str.len], effect_str);
+        pos += effect_str.len;
+    }
+
+    @memcpy(result[pos..][0..4], "\n```");
+    pos += 4;
+
+    if (def.doc) |doc| {
+        @memcpy(result[pos..][0..2], "\n\n");
+        pos += 2;
+        @memcpy(result[pos..][0..doc.len], doc);
+        pos += doc.len;
+    }
+
+    return result[0..pos];
+}
+
+/// Build a CompletionItem from a word name and definition.
+fn makeCompletionItem(name: []const u8, def: WordDefinition) types.CompletionItem {
+    // Function (3) for words with stack effects, Variable (6) for others
+    const kind: i64 = if (def.stack_effect != null) 3 else 6;
+
+    return .{
+        .label = name,
+        .kind = kind,
+        .detail = if (def.stack_effect) |effect| formatEffectStatic(effect) else null,
+        .documentation = if (def.doc) |doc| .{ .value = doc } else null,
+    };
+}
+
+/// Format a stack effect as a static string for completion detail.
+/// Uses a fixed buffer since completion details are short.
+fn formatEffectStatic(effect: StackEffect) ?[]const u8 {
+    var buf: [256]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    effect.write(stream.writer()) catch return null;
+
+    const written = stream.getWritten();
+    if (written.len == 0) return null;
+    return written;
+}
 
 // =========================================================================
 // Tests
@@ -150,94 +547,416 @@ fn buildInput(allocator: Allocator, messages: []const []const u8) ![]u8 {
     }
     var out: IoWriter.Allocating = .init(allocator);
     errdefer out.deinit();
-    for (messages) |msg| {
+    for (messages) |raw_msg| {
+        const msg = std.mem.trimRight(u8, raw_msg, "\n");
         out.writer.print("Content-Length: {d}\r\n\r\n{s}", .{ msg.len, msg }) catch return error.OutOfMemory;
     }
     return out.toOwnedSlice();
 }
 
-fn runServer(input: []const u8, out_buf: []u8) u8 {
+const RunResult = struct {
+    exit_code: u8,
+    output: []const u8,
+};
+
+fn runServer(input: []const u8, out_buf: []u8) RunResult {
     var reader = IoReader.fixed(input);
     var writer = IoWriter.fixed(out_buf);
     var transport = Transport.init(std.testing.allocator, &reader, &writer);
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
-    ctx.loadPrelude(null) catch return 255;
+    ctx.loadPrelude(null) catch return .{ .exit_code = 255, .output = "" };
     var server = Server.init(std.testing.allocator, &transport, &ctx);
-    return server.run();
+    const exit_code = server.run();
+    return .{ .exit_code = exit_code, .output = writer.buffered() };
+}
+
+/// Extract the Nth JSON-RPC response from the output buffer (0-indexed).
+fn extractResponse(output: []const u8, index: usize) ?[]const u8 {
+    var pos: usize = 0;
+    var count: usize = 0;
+
+    while (pos < output.len) {
+        const header_end = std.mem.indexOf(u8, output[pos..], "\r\n\r\n") orelse return null;
+        const header = output[pos .. pos + header_end];
+
+        var content_length: usize = 0;
+        if (std.ascii.startsWithIgnoreCase(header, "content-length:")) {
+            const value_str = std.mem.trim(u8, header["content-length:".len..], " \t");
+            content_length = std.fmt.parseInt(usize, value_str, 10) catch return null;
+        }
+        if (content_length == 0) return null;
+
+        const body_start = pos + header_end + 4;
+        const body_end = body_start + content_length;
+        if (body_end > output.len) return null;
+
+        if (count == index) {
+            return output[body_start..body_end];
+        }
+
+        pos = body_end;
+        count += 1;
+    }
+
+    return null;
 }
 
 test "clean lifecycle returns exit code 0" {
     const allocator = std.testing.allocator;
     const input = try buildInput(allocator, &.{
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}",
-        "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}",
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\"}",
-        "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}",
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
     });
     defer allocator.free(input);
 
     var out_buf: [8192]u8 = undefined;
-    const exit_code = runServer(input, &out_buf);
-    try std.testing.expectEqual(@as(u8, 0), exit_code);
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
 }
 
 test "exit without shutdown returns exit code 1" {
     const allocator = std.testing.allocator;
     const input = try buildInput(allocator, &.{
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}",
-        "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}",
-        "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}",
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
     });
     defer allocator.free(input);
 
     var out_buf: [8192]u8 = undefined;
-    const exit_code = runServer(input, &out_buf);
-    try std.testing.expectEqual(@as(u8, 1), exit_code);
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 1), result.exit_code);
 }
 
 test "request before initialize returns server_not_initialized" {
     const allocator = std.testing.allocator;
     const input = try buildInput(allocator, &.{
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"textDocument/hover\",\"params\":{}}",
-        "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}",
-        "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"shutdown\"}",
-        "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}",
+        \\{"jsonrpc":"2.0","id":1,"method":"textDocument/hover","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","id":10,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","id":11,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
     });
     defer allocator.free(input);
 
     var out_buf: [8192]u8 = undefined;
-    const exit_code = runServer(input, &out_buf);
-    try std.testing.expectEqual(@as(u8, 0), exit_code);
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
 }
 
 test "unknown method returns method_not_found" {
     const allocator = std.testing.allocator;
     const input = try buildInput(allocator, &.{
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}",
-        "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}",
-        "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"nonexistent\",\"params\":{}}",
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\"}",
-        "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}",
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","id":5,"method":"nonexistent","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
     });
     defer allocator.free(input);
 
     var out_buf: [8192]u8 = undefined;
-    const exit_code = runServer(input, &out_buf);
-    try std.testing.expectEqual(@as(u8, 0), exit_code);
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
 }
 
 test "double initialize returns error" {
     const allocator = std.testing.allocator;
     const input = try buildInput(allocator, &.{
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}",
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}",
-        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\"}",
-        "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}",
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
     });
     defer allocator.free(input);
 
     var out_buf: [8192]u8 = undefined;
-    const exit_code = runServer(input, &out_buf);
-    try std.testing.expectEqual(@as(u8, 0), exit_code);
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+}
+
+test "hover on known prelude word returns stack effect" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"dup drop"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///test.1z"},"position":{"line":0,"character":1}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    // response 0 = initialize, response 1 = hover
+    const hover_resp = extractResponse(result.output, 1);
+    try std.testing.expect(hover_resp != null);
+
+    // hover response should contain "dup" and stack effect notation
+    try std.testing.expect(std.mem.indexOf(u8, hover_resp.?, "dup") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hover_resp.?, "```1z") != null);
+}
+
+test "hover on unknown word returns null result" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"xyznonexistent"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///test.1z"},"position":{"line":0,"character":0}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    const hover_resp = extractResponse(result.output, 1);
+    try std.testing.expect(hover_resp != null);
+    try std.testing.expect(std.mem.indexOf(u8, hover_resp.?, "\"result\":null") != null);
+}
+
+test "hover on whitespace returns null result" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"dup   drop"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///test.1z"},"position":{"line":0,"character":4}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    const hover_resp = extractResponse(result.output, 1);
+    try std.testing.expect(hover_resp != null);
+    try std.testing.expect(std.mem.indexOf(u8, hover_resp.?, "\"result\":null") != null);
+}
+
+test "didChange updates document for hover" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"dup"}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///test.1z","version":2},"contentChanges":[{"text":"drop"}]}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///test.1z"},"position":{"line":0,"character":1}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    const hover_resp = extractResponse(result.output, 1);
+    try std.testing.expect(hover_resp != null);
+
+    // should show "drop" not "dup" after the change
+    try std.testing.expect(std.mem.indexOf(u8, hover_resp.?, "drop") != null);
+}
+
+test "completion with prefix returns matching words" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"du"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///test.1z"},"position":{"line":0,"character":2}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    const comp_resp = extractResponse(result.output, 1);
+    try std.testing.expect(comp_resp != null);
+
+    try std.testing.expect(std.mem.indexOf(u8, comp_resp.?, "dup") != null);
+}
+
+test "completion with empty prefix returns items" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":" "}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///test.1z"},"position":{"line":0,"character":1}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    const comp_resp = extractResponse(result.output, 1);
+    try std.testing.expect(comp_resp != null);
+    // Should have items (non-empty list)
+    try std.testing.expect(std.mem.indexOf(u8, comp_resp.?, "\"items\":[{") != null);
+}
+
+test "initialize returns hover and completion capabilities" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    const init_resp = extractResponse(result.output, 0);
+    try std.testing.expect(init_resp != null);
+    try std.testing.expect(std.mem.indexOf(u8, init_resp.?, "\"hoverProvider\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, init_resp.?, "\"completionProvider\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, init_resp.?, "\"textDocumentSync\"") != null);
+}
+
+test "findWordAtPosition" {
+    const text = "dup drop swap";
+    // "dup" at column 0-2, "drop" at column 4-7, "swap" at column 9-12
+    try std.testing.expectEqualSlices(u8, "dup", findWordAtPosition(text, 0, 0).?);
+    try std.testing.expectEqualSlices(u8, "dup", findWordAtPosition(text, 0, 2).?);
+    try std.testing.expect(findWordAtPosition(text, 0, 3) == null); // whitespace
+    try std.testing.expectEqualSlices(u8, "drop", findWordAtPosition(text, 0, 4).?);
+    try std.testing.expectEqualSlices(u8, "swap", findWordAtPosition(text, 0, 9).?);
+}
+
+test "findWordAtPosition multiline" {
+    const text = "dup\ndrop\nswap";
+    try std.testing.expectEqualSlices(u8, "dup", findWordAtPosition(text, 0, 0).?);
+    try std.testing.expectEqualSlices(u8, "drop", findWordAtPosition(text, 1, 0).?);
+    try std.testing.expectEqualSlices(u8, "swap", findWordAtPosition(text, 2, 0).?);
+}
+
+test "findPrefixAtPosition" {
+    const text = "du";
+    const prefix = findPrefixAtPosition(text, 0, 2);
+    try std.testing.expectEqualSlices(u8, "du", prefix);
+}
+
+test "findPrefixAtPosition at whitespace" {
+    const text = "dup ";
+    const prefix = findPrefixAtPosition(text, 0, 4);
+    try std.testing.expectEqualSlices(u8, "", prefix);
+}
+
+test "findPrefixAtPosition multiline" {
+    const text = "dup\ndro";
+    const prefix = findPrefixAtPosition(text, 1, 3);
+    try std.testing.expectEqualSlices(u8, "dro", prefix);
+}
+
+test "formatHoverMarkdown with stack effect and doc" {
+    const allocator = std.testing.allocator;
+    const def = WordDefinition{
+        .name = "dup",
+        .stack_effect = .{
+            .inputs = &.{.{ .name = "a" }},
+            .outputs = &.{ .{ .name = "a" }, .{ .name = "a" } },
+        },
+        .doc = "Duplicate the top stack value.",
+        .action = .{ .compound = &.{} },
+    };
+    const md = try formatHoverMarkdown(allocator, "dup", def);
+    defer allocator.free(md);
+
+    try std.testing.expect(std.mem.indexOf(u8, md, "```1z") != null);
+    try std.testing.expect(std.mem.indexOf(u8, md, "dup") != null);
+    try std.testing.expect(std.mem.indexOf(u8, md, "Duplicate") != null);
+}
+
+test "formatHoverMarkdown without doc" {
+    const allocator = std.testing.allocator;
+    const def = WordDefinition{
+        .name = "foo",
+        .action = .{ .compound = &.{} },
+    };
+    const md = try formatHoverMarkdown(allocator, "foo", def);
+    defer allocator.free(md);
+
+    try std.testing.expect(std.mem.indexOf(u8, md, "```1z") != null);
+    try std.testing.expect(std.mem.indexOf(u8, md, "foo") != null);
 }

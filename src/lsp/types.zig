@@ -48,8 +48,52 @@ pub const InitializeParams = struct {
     capabilities: ?std.json.Value = null,
 };
 
+/// LSP Position (0-based line and character).
+pub const Position = struct {
+    line: i64,
+    character: i64,
+};
+
+/// LSP MarkupContent for hover/completion documentation.
+pub const MarkupContent = struct {
+    kind: []const u8 = "markdown",
+    value: []const u8,
+};
+
+/// LSP Hover result.
+pub const HoverResult = struct {
+    contents: MarkupContent,
+};
+
+/// LSP CompletionItem.
+pub const CompletionItem = struct {
+    label: []const u8,
+    kind: i64,
+    detail: ?[]const u8 = null,
+    documentation: ?MarkupContent = null,
+};
+
+/// LSP CompletionList.
+pub const CompletionList = struct {
+    isIncomplete: bool = false,
+    items: []const CompletionItem,
+};
+
+/// LSP CompletionOptions (server capability).
+pub const CompletionOptions = struct {};
+
+/// LSP TextDocumentSyncOptions (server capability).
+pub const TextDocumentSyncOptions = struct {
+    openClose: bool = false,
+    change: i64 = 0,
+};
+
 /// Server capabilities returned in the initialize response.
-pub const ServerCapabilities = struct {};
+pub const ServerCapabilities = struct {
+    hoverProvider: bool = false,
+    completionProvider: ?CompletionOptions = null,
+    textDocumentSync: ?TextDocumentSyncOptions = null,
+};
 
 /// InitializeResult returned to the client.
 pub const InitializeResult = struct {
