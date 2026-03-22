@@ -7,6 +7,7 @@ const dictionary_mod = @import("dictionary.zig");
 const NativeFn = dictionary_mod.NativeFn;
 const WordProvenance = dictionary_mod.WordProvenance;
 const FfiSignature = @import("ffi/signature.zig").FfiSignature;
+pub const SandboxSpec = @import("primitives/types.zig").SandboxSpec;
 
 pub const BigIntManaged = std.math.big.int.Managed;
 
@@ -459,6 +460,7 @@ pub const Value = union(enum) {
     iterator: *Iterator,
     doc_string: []const u8,
     type_val: *TypeValue,
+    sandbox_spec: *SandboxSpec,
     unit: void,
 
     pub fn write(self: Value, writer: anytype) anyerror!void {
@@ -642,6 +644,7 @@ pub const Value = union(enum) {
             },
             .doc_string => |s| try writer.print("<doc-string \"{s}\">", .{s}),
             .type_val => |tv| try writer.print("<type:{s}>", .{tv.name}),
+            .sandbox_spec => |spec| try spec.writeGranted(writer),
             .unit => try writer.writeAll("unit"),
         }
     }
@@ -767,6 +770,7 @@ pub const Value = union(enum) {
             .iterator => |a| a == other.iterator,
             .doc_string => |a| std.mem.eql(u8, a, other.doc_string),
             .type_val => |a| a == other.type_val,
+            .sandbox_spec => |a| a == other.sandbox_spec,
             .unit => true,
         };
     }
@@ -953,6 +957,10 @@ pub const Value = union(enum) {
             .doc_string => |s| hasher.update(s),
             .type_val => |tv| {
                 const ptr_val = @intFromPtr(tv);
+                hasher.update(std.mem.asBytes(&ptr_val));
+            },
+            .sandbox_spec => |spec| {
+                const ptr_val = @intFromPtr(spec);
                 hasher.update(std.mem.asBytes(&ptr_val));
             },
             .unit => {},

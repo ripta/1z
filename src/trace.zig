@@ -124,6 +124,7 @@ pub fn writeValuePreview(val: Value, writer: anytype) !void {
         .error_value => try writer.writeAll("<error>"),
         .doc_string => try writer.writeAll("<doc-string>"),
         .type_val => |tv| try writer.print("<type:{s}>", .{tv.name}),
+        .sandbox_spec => try writer.writeAll("<sandbox-spec>"),
         .unit => try writer.writeAll("unit"),
     }
 }

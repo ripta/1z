@@ -56,6 +56,7 @@ iterator: M{ type: builtin-type: } native.define-builtin-type ;
 doc-string: M{ type: builtin-type: } native.define-builtin-type ;
 type: M{ type: builtin-type: } native.define-builtin-type ;
 unit: M{ type: builtin-type: } native.define-builtin-type ;
+sandbox-spec: M{ type: builtin-type: } native.define-builtin-type ;
 
 \\ Word array literal syntax. Tokenizes words as strings without requiring quotes.
 W{: parse-time [ "}" parse-tokens-until ] ;

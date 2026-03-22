@@ -44,6 +44,7 @@ pub fn dispatchTypeName(val: Value) []const u8 {
         .iterator => "iterator",
         .doc_string => "doc-string",
         .type_val => "type",
+        .sandbox_spec => "sandbox-spec",
         .unit => "unit",
     };
 }

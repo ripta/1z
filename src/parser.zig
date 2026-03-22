@@ -123,7 +123,9 @@ const WordDefinition = @import("dictionary.zig").WordDefinition;
 /// ParseError.
 fn handleParseTimeError(c: *Context, err: anyerror) ParseError {
     if (err == error.DebuggerQuit) return ParseError.DebuggerQuit;
-    if (c.thrown_error) |thrown| {
+    if (c.parse_diagnostics != null) {
+        // Primitive already set diagnostics directly; preserve them.
+    } else if (c.thrown_error) |thrown| {
         c.parse_diagnostics = .{
             .error_type = thrown.error_type,
             .message = thrown.message,
@@ -137,6 +139,12 @@ fn handleParseTimeError(c: *Context, err: anyerror) ParseError {
             .error_type = detail.error_type,
             .message = if (has_real_message) detail.message else null,
         };
+    } else if (c.pending_error_message) |msg| {
+        c.parse_diagnostics = .{
+            .error_type = @errorName(err),
+            .message = msg,
+        };
+        c.pending_error_message = null;
     } else {
         c.parse_diagnostics = .{
             .error_type = @errorName(err),
