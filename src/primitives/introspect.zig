@@ -142,8 +142,15 @@ fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: 
         break :blk .{ .array = prov_fields };
     } else .{ .boolean = false };
 
-    // Raw array: name stack-effect doc markers native? body methods source-loc module provenance
-    const wi_fields = try alloc.alloc(Value, 10);
+    const is_compiled: bool = blk: {
+        for (ctx.jit_dispatch.entries.items) |entry| {
+            if (std.mem.eql(u8, entry.word_name, name) and entry.code_ptr != null) break :blk true;
+        }
+        break :blk false;
+    };
+
+    // Raw array: name stack-effect doc markers native? body methods source-loc module provenance compiled?
+    const wi_fields = try alloc.alloc(Value, 11);
     wi_fields[0] = .{ .string = name };
     wi_fields[1] = effect_val;
     wi_fields[2] = doc_val;
@@ -154,6 +161,7 @@ fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: 
     wi_fields[7] = source_loc_val;
     wi_fields[8] = module_val;
     wi_fields[9] = provenance_val;
+    wi_fields[10] = .{ .boolean = is_compiled };
 
     return .{ .array = wi_fields };
 }
@@ -260,7 +268,7 @@ fn nativeCurrentScope(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .module = module });
 }
 
-/// >word ( module symbol -- array ) - Look up a word in a module and return a raw 10-element array
+/// >word ( module symbol -- array ) - Look up a word in a module and return a raw 11-element array
 fn nativeToWord(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 

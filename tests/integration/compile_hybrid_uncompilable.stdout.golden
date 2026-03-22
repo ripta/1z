@@ -3,3 +3,5 @@ Stack: [ ]
 Stack: [ ]
 PASS: eval-add falls back to interpreter
 Stack: [ ]
+PASS: eval-add is not compiled
+Stack: [ ]

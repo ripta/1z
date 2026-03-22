@@ -11,3 +11,4 @@ run-many: ( -- ) [
 run-many
 
 5 interp-only 15 "no-compile word works" assert=
+f interp-only: >word-info compiled?>> "no-compile word is not compiled" assert=

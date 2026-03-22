@@ -3,3 +3,5 @@ Stack: [ ]
 Stack: [ ]
 PASS: add-five after hot loop
 Stack: [ ]
+PASS: add-five is compiled
+Stack: [ ]

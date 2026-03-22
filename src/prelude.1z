@@ -752,9 +752,9 @@ dispatch-provenance: struct{ generator parent role field } ;
 method-info: struct{ types provenance } ;
 
 \\ Structured word information for runtime introspection.
-word-info: struct{ name stack-effect doc markers native? body methods source-loc module provenance } ;
+word-info: struct{ name stack-effect doc markers native? body methods source-loc module provenance compiled? } ;
 
-\\ Convert a raw 10-element array from native.>word into a word-info struct.
+\\ Convert a raw 11-element array from native.>word into a word-info struct.
 (raw>word-info): [
   >param: [
     dup 0 #nth
@@ -785,6 +785,7 @@ word-info: struct{ name stack-effect doc markers native? body methods source-loc
   7 pick-n 7 #nth >source-loc
   8 pick-n 8 #nth
   9 pick-n 9 #nth >provenance
+  10 pick-n 10 #nth
   make-word-info nip
 ] ;
 

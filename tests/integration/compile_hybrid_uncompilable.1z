@@ -11,3 +11,4 @@ run-many: ( -- ) [
 run-many
 
 3 4 eval-add 7 "eval-add falls back to interpreter" assert=
+f eval-add: >word-info compiled?>> "eval-add is not compiled" assert=

@@ -3,3 +3,5 @@ Stack: [ ]
 Stack: [ ]
 PASS: no-compile word works
 Stack: [ ]
+PASS: no-compile word is not compiled
+Stack: [ ]

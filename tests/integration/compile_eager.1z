@@ -1,2 +1,5 @@
+use "testing" ;
+
 double: ( n -- n ) [ 2 * ] ;
 5 double .
+t double: >word-info compiled?>> "double is compiled" assert=

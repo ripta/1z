@@ -10,3 +10,4 @@ run-many: ( -- ) [
 run-many
 
 10 add-five 15 "add-five after hot loop" assert=
+t add-five: >word-info compiled?>> "add-five is compiled" assert=
