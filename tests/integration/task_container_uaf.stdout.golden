@@ -1,0 +1,14 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: vector has one element after child push
+PASS: vector element is 99
+Stack: [ ]
+PASS: vector has one element after child string push
+PASS: vector element is the pushed string
+Stack: [ ]
+PASS: mutable map has child's entry
+Stack: [ ]
+PASS: vector has two elements from two children
+Stack: [ ]

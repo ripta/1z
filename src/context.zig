@@ -131,6 +131,10 @@ pub const Context = struct {
     stack: Stack,
     dictionary: Dictionary,
     arena: std.heap.ArenaAllocator,
+    /// Shared arena for mutable container backing storage. Owned by the root
+    /// context and shared by pointer to all child task contexts so that
+    /// container allocations outlive any individual task's arena.
+    container_arena: *std.heap.ArenaAllocator,
     allocator: Allocator,
     call_stack: std.ArrayListUnmanaged(CallFrame),
     error_details: std.ArrayListUnmanaged(ErrorDetail),
@@ -279,10 +283,16 @@ pub const Context = struct {
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
     pub fn init(allocator: Allocator) Context {
+        const ca = allocator.create(std.heap.ArenaAllocator) catch |err| {
+            std.debug.panic("Failed to allocate container arena: {any}", .{err});
+        };
+        ca.* = std.heap.ArenaAllocator.init(allocator);
+
         var ctx = Context{
             .stack = Stack.init(allocator),
             .dictionary = Dictionary.init(allocator),
             .arena = std.heap.ArenaAllocator.init(allocator),
+            .container_arena = ca,
             .allocator = allocator,
             .call_stack = .{},
             .error_details = .{},
@@ -342,6 +352,7 @@ pub const Context = struct {
             .stack = Stack.init(allocator),
             .dictionary = Dictionary.init(allocator),
             .arena = std.heap.ArenaAllocator.init(allocator),
+            .container_arena = parent.container_arena,
             .allocator = allocator,
             .call_stack = .{},
             .error_details = .{},
@@ -491,6 +502,10 @@ pub const Context = struct {
         }
         self.pic_cache.deinit(self.allocator);
         self.arena.deinit();
+        if (self.parent_context == null) {
+            self.container_arena.deinit();
+            self.allocator.destroy(self.container_arena);
+        }
         self.dictionary.deinit();
         self.stack.deinit();
     }
@@ -498,6 +513,12 @@ pub const Context = struct {
     /// Allocator for quotations and other parsed data.
     pub fn quotationAllocator(self: *Context) Allocator {
         return self.arena.allocator();
+    }
+
+    /// Allocator for mutable container backing storage. Shared across all
+    /// task contexts so that container data outlives any individual task's arena.
+    pub fn containerAllocator(self: *Context) Allocator {
+        return self.container_arena.allocator();
     }
 
     /// Clear all error details and call stack.

@@ -1,0 +1,97 @@
+use "testing" ;
+use "time" ;
+
+\ Test: vector backing storage UAF
+\ Parent creates vector, child's cleanup pushes a fixnum.
+\ After task-scope, the vector's backing was reallocated into the
+\ child's arena. Reading it after the child's arena is freed is UAF.
+
+test-vector-push-fixnum: ( -- ) [
+  V{ }
+  dup
+  [
+    dup [ 99 #push! drop ] curry
+    [ [ 100000 milliseconds sleep ] swap cleanup ] curry
+    spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+    yield
+    drop
+  ] curry
+  task-scope
+  dup #len 1 "vector has one element after child push" assert=
+  #first 99 "vector element is 99" assert=
+] ;
+
+\ Test: vector backing storage UAF with string value
+\ Same pattern but pushes a heap-allocated string instead of a fixnum.
+\ This tests the broader values-crossing-boundaries issue.
+
+test-vector-push-string: ( -- ) [
+  V{ }
+  dup
+  [
+    dup [ "hello-from-child" #push! drop ] curry
+    [ [ 100000 milliseconds sleep ] swap cleanup ] curry
+    spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+    yield
+    drop
+  ] curry
+  task-scope
+  dup #len 1 "vector has one element after child string push" assert=
+  #first "hello-from-child" "vector element is the pushed string" assert=
+] ;
+
+\ Test: mutable map @set! across task boundary
+\ Parent creates mutable map, child's cleanup sets a key.
+
+test-mutable-map-set: ( -- ) [
+  M{ }
+  dup
+  [
+    dup [ "key" 42 @set! drop ] curry
+    [ [ 100000 milliseconds sleep ] swap cleanup ] curry
+    spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+    yield
+    drop
+  ] curry
+  task-scope
+  "key" @get 42 "mutable map has child's entry" assert=
+] ;
+
+\ Test: multiple children pushing to same parent vector
+
+test-vector-multi-child-push: ( -- ) [
+  V{ }
+  dup
+  [
+    \ stack: vec (from curry)
+    dup [ 1 #push! drop ] curry
+    [ [ 100000 milliseconds sleep ] swap cleanup ] curry
+    spawn
+    \ stack: vec task1
+
+    over [ 2 #push! drop ] curry
+    [ [ 100000 milliseconds sleep ] swap cleanup ] curry
+    spawn
+    \ stack: vec task1 task2
+
+    10 milliseconds sleep
+    dup cancel-task
+    swap dup cancel-task
+    drop drop
+    yield yield
+    drop
+  ] curry
+  task-scope
+  #len 2 "vector has two elements from two children" assert=
+] ;
+
+test-vector-push-fixnum
+test-vector-push-string
+test-mutable-map-set
+test-vector-multi-child-push

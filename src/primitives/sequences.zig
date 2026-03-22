@@ -16,6 +16,7 @@ const unary_sentinel = dispatch_mod.unary_sentinel;
 const markers_mod = @import("markers.zig");
 const sequence = @import("sequence.zig");
 const Iterator = @import("../iterator.zig").Iterator;
+const tasks = @import("tasks.zig");
 
 const popFixnum = helpers.popFixnum;
 const popBoolean = helpers.popBoolean;
@@ -545,7 +546,7 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
         }
     }
 
-    const value = try ctx.stack.pop();
+    var value = try ctx.stack.pop();
     const index = try popFixnum(ctx);
     const seq = try ctx.stack.pop();
 
@@ -561,6 +562,7 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
                 setErrorContext(ctx, "index {d} out of bounds for vector of length {d}", .{ idx, v.items.len });
                 return error.IndexOutOfBounds;
             }
+            if (ctx.parent_context != null) value = tasks.deepCopyValue(value, ctx.containerAllocator()) catch return error.OutOfMemory;
             v.items[idx] = value;
             try ctx.stack.push(.{ .vector = v });
         },
@@ -946,11 +948,13 @@ pub fn nativeAppendMut(ctx: *Context) anyerror!void {
 
     const seq = try ctx.stack.pop();
     const vec = try popVector(ctx);
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.containerAllocator();
+    const in_task = ctx.parent_context != null;
 
     const items = try sequenceToValues(seq, alloc);
     for (items) |elem| {
-        vec.append(alloc, elem) catch return error.OutOfMemory;
+        const stored = if (in_task) tasks.deepCopyValue(elem, alloc) catch return error.OutOfMemory else elem;
+        vec.append(alloc, stored) catch return error.OutOfMemory;
     }
 
     try ctx.stack.push(.{ .vector = vec });
@@ -1379,10 +1383,11 @@ fn nativePushMut(ctx: *Context) anyerror!void {
         }
     }
 
-    const elem = try ctx.stack.pop();
+    var elem = try ctx.stack.pop();
     const vec = try popVector(ctx);
 
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.containerAllocator();
+    if (ctx.parent_context != null) elem = tasks.deepCopyValue(elem, alloc) catch return error.OutOfMemory;
     vec.append(alloc, elem) catch return error.OutOfMemory;
     try ctx.stack.push(.{ .vector = vec });
 }
@@ -1450,10 +1455,11 @@ fn nativeUnshiftMut(ctx: *Context) anyerror!void {
         }
     }
 
-    const elem = try ctx.stack.pop();
+    var elem = try ctx.stack.pop();
     const vec = try popVector(ctx);
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.containerAllocator();
 
+    if (ctx.parent_context != null) elem = tasks.deepCopyValue(elem, alloc) catch return error.OutOfMemory;
     vec.insert(alloc, 0, elem) catch return error.OutOfMemory;
     try ctx.stack.push(.{ .vector = vec });
 }
@@ -2031,7 +2037,7 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
                     return error.TypeMismatch;
                 },
             };
-            const alloc = ctx.quotationAllocator();
+            const alloc = ctx.containerAllocator();
             const old_len = ba.items.len;
             ba.ensureTotalCapacity(alloc, n) catch return error.OutOfMemory;
             ba.items.len = n;
@@ -2043,11 +2049,12 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
                 setErrorContext(ctx, "#grow! count {d} is less than vector length {d}", .{ n_val, vec.items.len });
                 return error.IndexOutOfBounds;
             }
-            const alloc = ctx.quotationAllocator();
+            const alloc = ctx.containerAllocator();
             const old_len = vec.items.len;
             vec.ensureTotalCapacity(alloc, n) catch return error.OutOfMemory;
             vec.items.len = n;
-            @memset(vec.items[old_len..n], fill);
+            const stored_fill = if (ctx.parent_context != null) tasks.deepCopyValue(fill, alloc) catch return error.OutOfMemory else fill;
+            @memset(vec.items[old_len..n], stored_fill);
             try ctx.stack.push(.{ .vector = vec });
         },
         else => {

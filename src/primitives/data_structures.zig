@@ -13,6 +13,7 @@ const helpers = @import("helpers.zig");
 const dispatch_helpers = @import("dispatch_helpers.zig");
 const dispatch_mod = @import("../dispatch.zig");
 const Primitive = @import("types.zig").Primitive;
+const tasks = @import("tasks.zig");
 
 const popQuotation = helpers.popQuotation;
 
@@ -105,14 +106,15 @@ pub fn nativeMakeVector(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const instrs = quot.instructions;
 
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.containerAllocator();
+    const in_task = ctx.parent_context != null;
 
     const vec = alloc.create(Vector) catch return error.OutOfMemory;
     vec.* = Vector{};
 
     // Execute each instruction and collect values
     for (instrs) |instr| {
-        const val = switch (instr.op) {
+        var val = switch (instr.op) {
             .push_literal => |v| v,
             .call_word => blk: {
                 // Execute the word to get the value
@@ -120,6 +122,7 @@ pub fn nativeMakeVector(ctx: *Context) anyerror!void {
                 break :blk ctx.stack.pop() catch return error.OutOfMemory;
             },
         };
+        if (in_task) val = tasks.deepCopyValue(val, alloc) catch return error.OutOfMemory;
         vec.append(alloc, val) catch return error.OutOfMemory;
     }
 
@@ -132,7 +135,7 @@ pub fn nativeMakeVector(ctx: *Context) anyerror!void {
 pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const instrs = quot.instructions;
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.containerAllocator();
 
     // Create a new byte array
     const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
@@ -198,7 +201,8 @@ pub fn nativeMakeSet(ctx: *Context) anyerror!void {
 pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const instrs = quot.instructions;
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.containerAllocator();
+    const in_task = ctx.parent_context != null;
 
     // Create a new mutable map
     const mmap = alloc.create(MutableMap) catch return error.OutOfMemory;
@@ -246,7 +250,8 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
 
         // Copy key to arena for persistence
         const key_copy = alloc.dupe(u8, key) catch return error.OutOfMemory;
-        mmap.put(alloc, key_copy, val) catch return error.OutOfMemory;
+        const stored_val = if (in_task) tasks.deepCopyValue(val, alloc) catch return error.OutOfMemory else val;
+        mmap.put(alloc, key_copy, stored_val) catch return error.OutOfMemory;
     }
 
     try ctx.stack.push(.{ .mutable_map = mmap });
@@ -286,16 +291,20 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
 
     switch (obj) {
         .mutable_map => |m| {
-            const alloc = ctx.quotationAllocator();
+            const alloc = ctx.containerAllocator();
+            const stored_value = if (ctx.parent_context != null)
+                tasks.deepCopyValue(new_value, alloc) catch return error.OutOfMemory
+            else
+                new_value;
 
             // Check if key already exists
             if (m.get(key_str) != null) {
                 // Update existing key in place (use the same key pointer)
-                m.putAssumeCapacity(key_str, new_value);
+                m.putAssumeCapacity(key_str, stored_value);
             } else {
                 // New key - need to copy it
                 const key_copy = alloc.dupe(u8, key_str) catch return error.OutOfMemory;
-                m.put(alloc, key_copy, new_value) catch return error.OutOfMemory;
+                m.put(alloc, key_copy, stored_value) catch return error.OutOfMemory;
             }
 
             try ctx.stack.push(.{ .mutable_map = m });
