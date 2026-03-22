@@ -1,0 +1,7 @@
+=== sandbox nesting restricts ===
+Stack: [ ]
+PASS: nested sandbox restricts io/fs
+Stack: [ ]
+Stack: [ 3 ]
+PASS: nested sandbox intersection allows common caps
+Stack: [ ]

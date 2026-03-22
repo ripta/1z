@@ -1,0 +1,16 @@
+use "testing" ;
+
+"sandbox composes with isolation" test-section
+
+\ Both combinators can be used together
+sandbox{ } [
+  [ 10 20 + ] with-isolation
+] with-sandbox
+30 "sandbox + isolation compose for pure code" assert=
+
+\ Isolation inside sandbox still enforces sandbox
+[
+  sandbox{ } [
+    [ "hello" print-line ] with-isolation
+  ] with-sandbox
+] "sandbox + isolation still enforces denial" assert-error

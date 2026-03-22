@@ -1,0 +1,6 @@
+use "testing" ;
+
+"sandbox denies qualified names" test-section
+
+\ native.stdout requires io capability
+[ sandbox{ } [ native.stdout ] with-sandbox ] "qualified name denied by sandbox" assert-error

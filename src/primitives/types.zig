@@ -62,6 +62,19 @@ pub const Capability = enum {
         if (required == .io) return self == .io_fs or self == .io_net;
         return false;
     }
+
+    /// Returns the user-facing display name for this capability.
+    pub fn displayName(self: Capability) []const u8 {
+        return switch (self) {
+            .none => "none",
+            .io => "io",
+            .io_fs => "io/fs",
+            .io_net => "io/net",
+            .ffi => "ffi",
+            .system => "system",
+            .eval => "eval",
+        };
+    }
 };
 
 pub const SandboxSpec = struct {
@@ -112,6 +125,11 @@ pub const SandboxSpec = struct {
         if (std.mem.eql(u8, name, "system")) return .system;
         if (std.mem.eql(u8, name, "eval")) return .eval;
         return null;
+    }
+
+    /// Returns a sandbox spec granting only capabilities present in both specs.
+    pub fn intersect(self: SandboxSpec, other: SandboxSpec) SandboxSpec {
+        return .{ .granted = self.granted & other.granted };
     }
 
     /// Write the granted capabilities in display format.
@@ -235,4 +253,34 @@ test "SandboxSpec.writeGranted with capabilities" {
     var fbs = std.io.fixedBufferStream(&buf);
     try spec.writeGranted(fbs.writer());
     try testing.expectEqualStrings("sandbox{ ffi eval }", fbs.getWritten());
+}
+
+test "Capability.displayName" {
+    try testing.expectEqualStrings("none", Capability.none.displayName());
+    try testing.expectEqualStrings("io", Capability.io.displayName());
+    try testing.expectEqualStrings("io/fs", Capability.io_fs.displayName());
+    try testing.expectEqualStrings("io/net", Capability.io_net.displayName());
+    try testing.expectEqualStrings("ffi", Capability.ffi.displayName());
+    try testing.expectEqualStrings("system", Capability.system.displayName());
+    try testing.expectEqualStrings("eval", Capability.eval.displayName());
+}
+
+test "SandboxSpec.intersect" {
+    var a = SandboxSpec{};
+    a.grant(.io);
+    a.grant(.ffi);
+    var b = SandboxSpec{};
+    b.grant(.io);
+    b.grant(.system);
+    const result = a.intersect(b);
+    try testing.expect(result.allows(.io));
+    try testing.expect(!result.allows(.ffi));
+    try testing.expect(!result.allows(.system));
+}
+
+test "SandboxSpec.intersect with empty" {
+    var a = SandboxSpec{};
+    a.grant(.io);
+    const result = a.intersect(SandboxSpec{});
+    try testing.expect(!result.allows(.io));
 }

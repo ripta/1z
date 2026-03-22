@@ -1,13 +1,39 @@
 const std = @import("std");
 const Context = @import("../context.zig").Context;
 const Value = @import("../value.zig").Value;
+const helpers = @import("helpers.zig");
 const SandboxSpec = @import("types.zig").SandboxSpec;
 const Primitive = @import("types.zig").Primitive;
 const Token = @import("../tokenizer.zig").Token;
 
 pub const primitives = [_]Primitive{
     .{ .name = "sandbox{", .func = nativeSandboxParse, .parse_time = true, .stack_effect = "-- sandbox-spec", .doc = "Parse a sandbox specification granting named capabilities. Default-deny: an empty sandbox{ } grants nothing." },
+    .{ .name = "with-sandbox", .func = nativeWithSandbox, .stack_effect = "sandbox-spec quot --", .doc = "Execute quotation with the given sandbox restricting capability access. Nesting intersects (can only restrict, never widen)." },
 };
+
+/// ( sandbox-spec quot -- ) Execute quotation with sandbox enforcement.
+fn nativeWithSandbox(ctx: *Context) anyerror!void {
+    const quot = try helpers.popQuotation(ctx);
+    const spec_val = ctx.stack.pop() catch return error.StackUnderflow;
+    const spec = switch (spec_val) {
+        .sandbox_spec => |s| s,
+        else => {
+            ctx.pending_error_message = "with-sandbox expects a sandbox-spec value";
+            return error.TypeMismatch;
+        },
+    };
+
+    var effective = spec.*;
+    if (ctx.active_sandbox) |parent_sandbox| {
+        effective = parent_sandbox.intersect(effective);
+    }
+
+    const saved = ctx.active_sandbox;
+    ctx.active_sandbox = &effective;
+    defer ctx.active_sandbox = saved;
+
+    try ctx.executeQuotationWithFrame(quot);
+}
 
 /// sandbox{ cap1 cap2 ... } parses capability names until `}` and produces a SandboxSpec.
 fn nativeSandboxParse(ctx: *Context) anyerror!void {

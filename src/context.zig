@@ -26,6 +26,9 @@ const JitDispatchTable = @import("jit_dispatch.zig").JitDispatchTable;
 const ir_codegen = @import("ir_codegen.zig");
 const Scheduler = @import("scheduler.zig").Scheduler;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
+const types_mod = @import("primitives/types.zig");
+const Capability = types_mod.Capability;
+const SandboxSpec = types_mod.SandboxSpec;
 const primitives = @import("primitives.zig");
 const parser = @import("parser.zig");
 const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
@@ -253,6 +256,10 @@ pub const Context = struct {
     /// JIT-compiled. Compilation failures are silently ignored and the
     /// word falls back to the interpreter. Set via the -Djit-all build option.
     compile_all: bool = false,
+    /// Active sandbox spec restricting which capabilities are available.
+    /// When non-null, word lookup checks the word's capability against
+    /// this spec and rejects words whose capability is not granted.
+    active_sandbox: ?*const SandboxSpec = null,
 
     /// Returns true when the instruction sequence ends with a call to `;`,
     /// which means it is a word definition and should be executed even in
@@ -343,6 +350,14 @@ pub const Context = struct {
             .stdlib_path = parent.stdlib_path,
             .program_args = parent.program_args,
         };
+
+        // Inherit the parent's active sandbox, if any. Allocate a copy on the
+        // task's arena so the pointer outlives the parent's stack frame.
+        if (parent.active_sandbox) |sandbox| {
+            const copy = try ctx.arena.allocator().create(SandboxSpec);
+            copy.* = sandbox.*;
+            ctx.active_sandbox = copy;
+        }
 
         // Snapshot the parent's dynamic variable bindings into the task context.
         for (parent.parameter_env.items) |parent_frame| {
@@ -1335,6 +1350,20 @@ pub const Context = struct {
         };
 
         if (module.words.get(word_name)) |mod_word| {
+            if (self.active_sandbox) |sandbox| {
+                if (!sandbox.allows(mod_word.capability)) {
+                    self.pushCallFrame(name, line, column);
+                    self.pending_error_message = std.fmt.allocPrint(
+                        self.arena.allocator(),
+                        "'{s}' requires capability '{s}' which is not granted by the active sandbox",
+                        .{ name, mod_word.capability.displayName() },
+                    ) catch "word denied by sandbox";
+                    self.captureCallStackOnError(error.PermissionDenied);
+                    self.popCallFrame();
+                    return error.PermissionDenied;
+                }
+            }
+
             if (self.trace.trace_resolve and trace_mod.matchesPattern(name, self.trace.trace_resolve_pattern)) {
                 var tw = trace_mod.TraceWriter.init();
                 trace_mod.traceResolve(&tw, name, .{ .qualified_found = .{ .module = module_path, .word = word_name } });
@@ -2435,6 +2464,18 @@ pub const Context = struct {
                     }
 
                     if (self.lookupWord(name)) |word| {
+                        if (self.active_sandbox) |sandbox| {
+                            if (!sandbox.allows(word.capability)) {
+                                self.pushCallFrame(name, instr.line, instr.column);
+                                self.pending_error_message = std.fmt.allocPrint(
+                                    self.arena.allocator(),
+                                    "'{s}' requires capability '{s}' which is not granted by the active sandbox",
+                                    .{ name, word.capability.displayName() },
+                                ) catch "word denied by sandbox";
+                                return self.wordErrorCleanup(name, error.PermissionDenied);
+                            }
+                        }
+
                         if (word.parse_time_only and self.parse_tokenizer == null) {
                             self.pushCallFrame(name, instr.line, instr.column);
                             self.pending_error_message = "parse-time-only word cannot be called at runtime";

@@ -231,6 +231,7 @@ validate-match-block ( array -- array )
 wipe ( ... -- )
 with-isolation ( quot -- )
 with-parameter ( value param quot -- )
+with-sandbox ( sandbox-spec quot -- )
 with-timeout ( quot duration -- value )
 yield ( -- )
 

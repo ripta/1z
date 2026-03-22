@@ -1,0 +1,20 @@
+use "testing" ;
+
+"sandbox nesting restricts" test-section
+
+\ Outer grants io and io/fs, inner grants only io; stream-open requires io/fs
+[
+  sandbox{ io io/fs } [
+    sandbox{ io } [
+      "nonexistent" read: stream-open
+    ] with-sandbox
+  ] with-sandbox
+] "nested sandbox restricts io/fs" assert-error
+
+\ Inner granting more than outer still restricted (intersection)
+sandbox{ io } [
+  sandbox{ io io/fs } [
+    1 2 +
+  ] with-sandbox
+] with-sandbox
+3 "nested sandbox intersection allows common caps" assert=

@@ -1,0 +1,4 @@
+=== sandbox denies qualified names ===
+Stack: [ ]
+PASS: qualified name denied by sandbox
+Stack: [ ]

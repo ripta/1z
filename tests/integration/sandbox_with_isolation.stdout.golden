@@ -1,0 +1,7 @@
+=== sandbox composes with isolation ===
+Stack: [ ]
+Stack: [ 30 ]
+PASS: sandbox + isolation compose for pure code
+Stack: [ ]
+PASS: sandbox + isolation still enforces denial
+Stack: [ ]

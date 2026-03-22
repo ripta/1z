@@ -1,0 +1,16 @@
+use "testing" ;
+
+"with-sandbox basic denial" test-section
+
+\ Empty sandbox denies io capability (stream-write requires io)
+[ sandbox{ } [ "hello" print-line ] with-sandbox ] "empty sandbox denies io" assert-error
+
+"with-sandbox grants" test-section
+
+\ Granting io allows print-line to work
+sandbox{ io } [ 42 ] with-sandbox
+42 "sandbox with io allows pure computation" assert=
+
+\ Pure computation (no capabilities needed) works in empty sandbox
+sandbox{ } [ 1 2 + ] with-sandbox
+3 "empty sandbox allows pure computation" assert=

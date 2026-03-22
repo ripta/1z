@@ -1,0 +1,6 @@
+use "testing" ;
+
+"sandbox error type" test-section
+
+[ sandbox{ } [ stdout ] with-sandbox ]
+permission-denied: "sandbox denial raises permission-denied" assert-error-type

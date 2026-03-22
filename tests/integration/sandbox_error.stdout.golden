@@ -1,0 +1,5 @@
+=== sandbox error type ===
+Stack: [ ]
+Stack: [ [ sandbox{ } [ stdout ] with-sandbox ] ]
+PASS: sandbox denial raises permission-denied
+Stack: [ ]

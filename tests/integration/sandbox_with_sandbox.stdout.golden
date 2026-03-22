@@ -1,0 +1,12 @@
+=== with-sandbox basic denial ===
+Stack: [ ]
+PASS: empty sandbox denies io
+Stack: [ ]
+=== with-sandbox grants ===
+Stack: [ ]
+Stack: [ 42 ]
+PASS: sandbox with io allows pure computation
+Stack: [ ]
+Stack: [ 3 ]
+PASS: empty sandbox allows pure computation
+Stack: [ ]
