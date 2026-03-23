@@ -8,6 +8,7 @@ const StackEffect = @import("../stack_effect.zig").StackEffect;
 const effect_inference = @import("../effect_inference.zig");
 const call_graph = @import("../call_graph.zig");
 const parser = @import("../parser.zig");
+const formatter = @import("../formatter.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -139,6 +140,12 @@ pub const Server = struct {
             return self.handleHover(request);
         } else if (std.mem.eql(u8, request.method, "textDocument/completion")) {
             return self.handleCompletion(request);
+        } else if (std.mem.eql(u8, request.method, "textDocument/signatureHelp")) {
+            return self.handleSignatureHelp(request);
+        } else if (std.mem.eql(u8, request.method, "textDocument/formatting")) {
+            return self.handleFormatting(request);
+        } else if (std.mem.eql(u8, request.method, "textDocument/documentSymbol")) {
+            return self.handleDocumentSymbol(request);
         }
 
         if (request.id) |id| {
@@ -159,6 +166,9 @@ pub const Server = struct {
                 .hoverProvider = true,
                 .completionProvider = .{},
                 .textDocumentSync = .{ .openClose = true, .change = 1 },
+                .signatureHelpProvider = .{ .triggerCharacters = &.{" "} },
+                .documentFormattingProvider = true,
+                .documentSymbolProvider = true,
             },
             .serverInfo = .{
                 .name = "1z-lsp",
@@ -564,6 +574,253 @@ pub const Server = struct {
         try self.transport.writeResponse(id, result);
     }
 
+    fn handleSignatureHelp(self: *Server, request: types.Request) !void {
+        const id = request.id orelse return;
+        const params = request.params orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+
+        const td = getJsonObject(params, "textDocument") orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+        const uri = getJsonString(td, "uri") orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+        const position = getJsonObject(params, "position") orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+        const line = getJsonInt(position, "line") orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+        const character = getJsonInt(position, "character") orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+
+        const text = self.getDocumentText(uri) orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+
+        const word = findWordBeforePosition(text, line, character) orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+
+        const lookup_name = if (word.len > 1 and word[word.len - 1] == ':')
+            word[0 .. word.len - 1]
+        else
+            word;
+
+        const def = self.ctx.lookupWord(lookup_name) orelse {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+
+        var label_buf: [512]u8 = undefined;
+        var label_pos: usize = 0;
+        @memcpy(label_buf[0..lookup_name.len], lookup_name);
+        label_pos = lookup_name.len;
+
+        if (def.stack_effect) |effect| {
+            label_buf[label_pos] = ' ';
+            label_pos += 1;
+            var fbs = std.io.fixedBufferStream(label_buf[label_pos..]);
+            effect.write(fbs.writer()) catch {};
+            label_pos += fbs.pos;
+        }
+
+        var param_items: [32]types.ParameterInformation = undefined;
+        var param_count: usize = 0;
+
+        if (def.stack_effect) |effect| {
+            for (effect.inputs) |input_param| {
+                if (param_count >= param_items.len) break;
+                param_items[param_count] = .{ .label = input_param.name };
+                param_count += 1;
+            }
+        }
+
+        const sig = types.SignatureInformation{
+            .label = label_buf[0..label_pos],
+            .documentation = if (def.doc) |doc| .{ .value = doc } else null,
+            .parameters = if (param_count > 0) param_items[0..param_count] else null,
+        };
+
+        const result = types.SignatureHelp{
+            .signatures = &.{sig},
+        };
+        try self.transport.writeResponse(id, result);
+    }
+
+    fn handleFormatting(self: *Server, request: types.Request) !void {
+        const id = request.id orelse return;
+        const params = request.params orelse {
+            try self.transport.writeResponse(id, @as([]const types.TextEdit, &.{}));
+            return;
+        };
+
+        const td = getJsonObject(params, "textDocument") orelse {
+            try self.transport.writeResponse(id, @as([]const types.TextEdit, &.{}));
+            return;
+        };
+        const uri = getJsonString(td, "uri") orelse {
+            try self.transport.writeResponse(id, @as([]const types.TextEdit, &.{}));
+            return;
+        };
+
+        const text = self.getDocumentText(uri) orelse {
+            try self.transport.writeResponse(id, @as([]const types.TextEdit, &.{}));
+            return;
+        };
+
+        const formatted = formatter.formatString(self.allocator, text) catch {
+            try self.transport.writeResponse(id, @as([]const types.TextEdit, &.{}));
+            return;
+        };
+        defer self.allocator.free(formatted);
+
+        var last_line: i64 = 0;
+        var last_line_len: i64 = 0;
+        var line_start: usize = 0;
+        for (text, 0..) |c, i| {
+            if (c == '\n') {
+                last_line += 1;
+                line_start = i + 1;
+            }
+        }
+        last_line_len = @intCast(text.len - line_start);
+
+        const edit = types.TextEdit{
+            .range = .{
+                .start = .{ .line = 0, .character = 0 },
+                .end = .{ .line = last_line, .character = last_line_len },
+            },
+            .newText = formatted,
+        };
+        try self.transport.writeResponse(id, [1]types.TextEdit{edit});
+    }
+
+    fn handleDocumentSymbol(self: *Server, request: types.Request) !void {
+        const id = request.id orelse return;
+        const params = request.params orelse {
+            try self.transport.writeResponse(id, @as([]const types.DocumentSymbol, &.{}));
+            return;
+        };
+
+        const td = getJsonObject(params, "textDocument") orelse {
+            try self.transport.writeResponse(id, @as([]const types.DocumentSymbol, &.{}));
+            return;
+        };
+        const uri = getJsonString(td, "uri") orelse {
+            try self.transport.writeResponse(id, @as([]const types.DocumentSymbol, &.{}));
+            return;
+        };
+
+        const text = self.getDocumentText(uri) orelse {
+            try self.transport.writeResponse(id, @as([]const types.DocumentSymbol, &.{}));
+            return;
+        };
+
+        const saved_source = self.ctx.current_source;
+        const saved_source_dir = self.ctx.current_source_dir;
+        const saved_check_mode = self.ctx.check_mode;
+        const saved_import_frame = self.ctx.import_frame_index;
+        const saved_stack_depth = self.ctx.stack.depth();
+        defer {
+            self.ctx.current_source = saved_source;
+            self.ctx.current_source_dir = saved_source_dir;
+            self.ctx.check_mode = saved_check_mode;
+            self.ctx.import_frame_index = saved_import_frame;
+            while (self.ctx.stack.depth() > saved_stack_depth) {
+                _ = self.ctx.stack.pop() catch break;
+            }
+        }
+
+        self.ctx.pushLocalFrame() catch {
+            try self.transport.writeResponse(id, @as([]const types.DocumentSymbol, &.{}));
+            return;
+        };
+        defer self.ctx.popLocalFrame();
+
+        self.ctx.pushPragmaFrame() catch {
+            try self.transport.writeResponse(id, @as([]const types.DocumentSymbol, &.{}));
+            return;
+        };
+        defer self.ctx.popPragmaFrame();
+
+        self.ctx.check_mode = true;
+        self.ctx.current_source = uri;
+        self.ctx.import_frame_index = self.ctx.local_frames.items.len - 1;
+
+        var tokenizer = Tokenizer.init(text);
+        while (true) {
+            const prev_pos = tokenizer.pos;
+            const instrs = parser.parseTopLevel(self.ctx.quotationAllocator(), &tokenizer, self.ctx) catch break;
+            if (instrs.len == 0 and tokenizer.pos == prev_pos) break;
+            if (instrs.len == 0) continue;
+            if (Context.isDefinitionStatement(instrs)) {
+                self.ctx.executeQuotation(.{ .instructions = instrs }) catch {};
+            }
+        }
+
+        var symbols: std.ArrayListUnmanaged(types.DocumentSymbol) = .{};
+        defer symbols.deinit(self.allocator);
+
+        const top_frame = &self.ctx.local_frames.items[self.ctx.local_frames.items.len - 1];
+        var frame_it = top_frame.iterator();
+        while (frame_it.next()) |entry| {
+            const def = entry.value_ptr.*;
+            const src = def.source_file orelse continue;
+            if (!std.mem.eql(u8, src, uri)) continue;
+
+            const def_line: i64 = if (def.source_line > 0) @intCast(def.source_line - 1) else 0;
+            const def_col: i64 = if (def.source_column > 0) @intCast(def.source_column - 1) else 0;
+
+            var detail_buf: [256]u8 = undefined;
+            var detail: ?[]const u8 = null;
+            if (def.stack_effect) |effect| {
+                var fbs = std.io.fixedBufferStream(&detail_buf);
+                effect.write(fbs.writer()) catch {};
+                const written = fbs.getWritten();
+                if (written.len > 0) {
+                    detail = self.allocator.dupe(u8, written) catch null;
+                }
+            }
+
+            // kind 12 = Function, kind 13 = Variable
+            const kind: i64 = if (def.stack_effect != null) 12 else 13;
+            const name_len: i64 = @intCast(entry.key_ptr.*.len);
+
+            symbols.append(self.allocator, .{
+                .name = entry.key_ptr.*,
+                .kind = kind,
+                .range = .{
+                    .start = .{ .line = def_line, .character = def_col },
+                    .end = .{ .line = def_line, .character = def_col + name_len },
+                },
+                .selectionRange = .{
+                    .start = .{ .line = def_line, .character = def_col },
+                    .end = .{ .line = def_line, .character = def_col + name_len },
+                },
+                .detail = detail,
+            }) catch continue;
+        }
+
+        defer {
+            for (symbols.items) |sym| {
+                if (sym.detail) |d| self.allocator.free(d);
+            }
+        }
+
+        try self.transport.writeResponse(id, symbols.items);
+    }
+
     fn getDocumentText(self: *Server, uri: []const u8) ?[]const u8 {
         var it = self.documents.iterator();
         while (it.next()) |entry| {
@@ -657,6 +914,54 @@ fn findWordAtPosition(text: []const u8, lsp_line: i64, lsp_char: i64) ?[]const u
     }
 
     return null;
+}
+
+/// Find the word immediately before the cursor position (skipping whitespace).
+/// Used for signature help to identify the word being called.
+fn findWordBeforePosition(text: []const u8, lsp_line: i64, lsp_char: i64) ?[]const u8 {
+    if (lsp_line < 0 or lsp_char < 0) return null;
+
+    const target_line: usize = @intCast(lsp_line);
+    const target_char: usize = @intCast(lsp_char);
+
+    // find line start
+    var line_start: usize = 0;
+    var current_line: usize = 0;
+    for (text, 0..) |c, i| {
+        if (current_line == target_line) {
+            line_start = i;
+            break;
+        }
+        if (c == '\n') current_line += 1;
+    } else {
+        if (current_line == target_line) {
+            line_start = text.len;
+        } else {
+            return null;
+        }
+    }
+
+    var cursor = @min(line_start + target_char, text.len);
+
+    // skip back over whitespace
+    while (cursor > 0) {
+        const c = text[cursor - 1];
+        if (c != ' ' and c != '\t' and c != '\n' and c != '\r') break;
+        cursor -= 1;
+    }
+
+    if (cursor == 0) return null;
+
+    // walk back over nonwhites pace to find word start
+    const word_end = cursor;
+    while (cursor > 0) {
+        const c = text[cursor - 1];
+        if (c == ' ' or c == '\t' or c == '\n' or c == '\r') break;
+        cursor -= 1;
+    }
+
+    if (word_end == cursor) return null;
+    return text[cursor..word_end];
 }
 
 /// Find the prefix at a given LSP position by scanning backward from cursor.
@@ -1331,4 +1636,182 @@ test "didOpen with bad definition publishes error diagnostic" {
     try std.testing.expect(std.mem.indexOf(u8, diag_resp.?, "textDocument/publishDiagnostics") != null);
     // Should contain diagnostics (not empty) because the word declares output but produces nothing
     try std.testing.expect(std.mem.indexOf(u8, diag_resp.?, "\"diagnostics\":[]") == null);
+}
+
+test "findWordBeforePosition" {
+    const text = "dup drop";
+    // cursor at position 4 (space after "dup"), word before is "dup"
+    try std.testing.expectEqualSlices(u8, "dup", findWordBeforePosition(text, 0, 4).?);
+    // cursor at position 8 (end of "drop"), word before is "drop"
+    try std.testing.expectEqualSlices(u8, "drop", findWordBeforePosition(text, 0, 8).?);
+    // cursor at position 0, no word before
+    try std.testing.expect(findWordBeforePosition(text, 0, 0) == null);
+}
+
+test "signatureHelp on known word" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"dup "}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"file:///test.1z"},"position":{"line":0,"character":4}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    // response 0 = initialize, 1 = publishDiagnostics, 2 = signatureHelp
+    const sig_resp = extractResponse(result.output, 2);
+    try std.testing.expect(sig_resp != null);
+    try std.testing.expect(std.mem.indexOf(u8, sig_resp.?, "signatures") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sig_resp.?, "dup") != null);
+}
+
+test "signatureHelp on unknown word returns null" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"xyznonexistent "}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"file:///test.1z"},"position":{"line":0,"character":15}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    const sig_resp = extractResponse(result.output, 2);
+    try std.testing.expect(sig_resp != null);
+    try std.testing.expect(std.mem.indexOf(u8, sig_resp.?, "\"result\":null") != null);
+}
+
+test "formatting produces formatted output" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"dup   drop"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/formatting","params":{"textDocument":{"uri":"file:///test.1z"},"options":{"tabSize":4,"insertSpaces":true}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    // response 0 = initialize, 1 = publishDiagnostics, 2 = formatting
+    const fmt_resp = extractResponse(result.output, 2);
+    try std.testing.expect(fmt_resp != null);
+    try std.testing.expect(std.mem.indexOf(u8, fmt_resp.?, "newText") != null);
+}
+
+test "documentSymbol finds defined words" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"double: ( n -- n ) [ 2 * ] ;"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file:///test.1z"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    // response 0 = initialize, 1 = publishDiagnostics, 2 = documentSymbol
+    const sym_resp = extractResponse(result.output, 2);
+    try std.testing.expect(sym_resp != null);
+    try std.testing.expect(std.mem.indexOf(u8, sym_resp.?, "double") != null);
+    // kind 12 = Function (has stack effect)
+    try std.testing.expect(std.mem.indexOf(u8, sym_resp.?, "\"kind\":12") != null);
+}
+
+test "documentSymbol excludes prelude words" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"dup drop"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file:///test.1z"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    // response 0 = initialize, 1 = publishDiagnostics, 2 = documentSymbol
+    const sym_resp = extractResponse(result.output, 2);
+    try std.testing.expect(sym_resp != null);
+    // Should be an empty array since no definitions in the document
+    try std.testing.expect(std.mem.indexOf(u8, sym_resp.?, "\"result\":[]") != null);
+}
+
+test "initialize advertises new capabilities" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    const init_resp = extractResponse(result.output, 0);
+    try std.testing.expect(init_resp != null);
+    try std.testing.expect(std.mem.indexOf(u8, init_resp.?, "\"signatureHelpProvider\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, init_resp.?, "\"documentFormattingProvider\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, init_resp.?, "\"documentSymbolProvider\":true") != null);
 }

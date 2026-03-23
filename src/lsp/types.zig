@@ -93,6 +93,9 @@ pub const ServerCapabilities = struct {
     hoverProvider: bool = false,
     completionProvider: ?CompletionOptions = null,
     textDocumentSync: ?TextDocumentSyncOptions = null,
+    signatureHelpProvider: ?SignatureHelpOptions = null,
+    documentFormattingProvider: bool = false,
+    documentSymbolProvider: bool = false,
 };
 
 /// InitializeResult returned to the client.
@@ -124,4 +127,43 @@ pub const LspDiagnostic = struct {
 pub const PublishDiagnosticsParams = struct {
     uri: []const u8,
     diagnostics: []const LspDiagnostic,
+};
+
+/// Signature help trigger configuration.
+pub const SignatureHelpOptions = struct {
+    triggerCharacters: []const []const u8 = &.{},
+};
+
+/// Signature help response.
+pub const SignatureHelp = struct {
+    signatures: []const SignatureInformation,
+    activeSignature: i64 = 0,
+    activeParameter: ?i64 = null,
+};
+
+/// Information about a single signature.
+pub const SignatureInformation = struct {
+    label: []const u8,
+    documentation: ?MarkupContent = null,
+    parameters: ?[]const ParameterInformation = null,
+};
+
+/// Information about a single parameter.
+pub const ParameterInformation = struct {
+    label: []const u8,
+};
+
+/// A text edit replacing a range with new text.
+pub const TextEdit = struct {
+    range: LspRange,
+    newText: []const u8,
+};
+
+/// A symbol in a document (for outline view).
+pub const DocumentSymbol = struct {
+    name: []const u8,
+    kind: i64,
+    range: LspRange,
+    selectionRange: LspRange,
+    detail: ?[]const u8 = null,
 };
