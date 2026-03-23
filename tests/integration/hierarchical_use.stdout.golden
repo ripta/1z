@@ -1,0 +1,8 @@
+=== hierarchical use resolves via search path ===
+Stack: [ ]
+PASS: slash name resolved via load path
+Stack: [ ]
+=== explicit path indicators still work ===
+Stack: [ ]
+PASS: dotslash path mode works
+Stack: [ ]

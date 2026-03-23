@@ -1,0 +1,11 @@
+\ Test that slash-containing names resolve via search paths, not as filesystem paths.
+
+use "testing" ;
+
+"hierarchical use resolves via search path" test-section
+use "sub/hello" ;
+"hello from sub" greet "slash name resolved via load path" assert=
+
+"explicit path indicators still work" test-section
+use "./hierarchical_use_local.1z" ;
+"local" local-word "dotslash path mode works" assert=

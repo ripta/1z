@@ -101,10 +101,14 @@ fn nativeToModule(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .module = module });
 }
 
-/// Check for if input refers to a file (contains '/' or ends with '.1z'),
-/// or if it is a bare name to search for in load paths.
+/// Check for if input refers to a file path (starts with './', '../', '/',
+/// or ends with '.1z'), or if it is a bare name to search for in load paths.
+/// Names containing '/' without a path prefix are treated as search-mode
+/// names, enabling hierarchical module resolution (e.g., "net/tcp").
 fn isPathMode(filename: []const u8) bool {
-    return std.mem.indexOfScalar(u8, filename, '/') != null or
+    return std.mem.startsWith(u8, filename, "./") or
+        std.mem.startsWith(u8, filename, "../") or
+        std.mem.startsWith(u8, filename, "/") or
         std.mem.endsWith(u8, filename, ".1z");
 }
 
