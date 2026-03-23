@@ -1,0 +1,2 @@
+on:unhandled-error [ error-type: @get inspect eprint-line ] add-hook
+this-word-does-not-exist

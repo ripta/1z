@@ -450,6 +450,8 @@ fn nativeCommandLineArgs(ctx: *Context) anyerror!void {
 /// sys-exit ( code -- ) - Exit the process with the given exit code
 fn nativeSysExit(ctx: *Context) anyerror!void {
     const code = try helpers.popFixnum(ctx);
+    const hooks_mod = @import("hooks.zig");
+    hooks_mod.fireHooks(ctx, "on:exit", &.{.{ .fixnum = code }});
     std.process.exit(@intCast(code));
 }
 

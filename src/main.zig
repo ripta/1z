@@ -5,12 +5,17 @@ const context = @import("context.zig");
 const Context = context.Context;
 const ErrorDetail = context.ErrorDetail;
 const ParseDiagnostics = context.ParseDiagnostics;
-const Quotation = @import("value.zig").Quotation;
+const value_mod = @import("value.zig");
+const Quotation = value_mod.Quotation;
+const ErrorObject = value_mod.ErrorObject;
+const StackFrame = value_mod.StackFrame;
+const Value = value_mod.Value;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 const formatter = @import("formatter.zig");
 const benchmark = @import("benchmark.zig");
 const debugger_mod = @import("debugger/mod.zig");
 const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
+const hooks = @import("primitives/hooks.zig");
 const LineEditor = @import("line_editor.zig").LineEditor;
 const BenchmarkStats = benchmark.BenchmarkStats;
 const BenchmarkConfig = benchmark.BenchmarkConfig;
@@ -37,18 +42,48 @@ const Verbosity = enum(u8) {
 /// Print error details from the context's error stack.
 /// Format: source:line: error.TYPE message at word 'WORD'
 fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
+    if (ctx.thrown_error) |thrown| {
+        hooks.fireHooks(ctx, "on:unhandled-error", &.{.{ .error_value = thrown }});
+    } else {
+        const alloc = ctx.quotationAllocator();
+        var stack_trace: ?[]const StackFrame = null;
+
+        if (ctx.error_details.items.len > 0) {
+            const frames = alloc.alloc(StackFrame, ctx.error_details.items.len) catch null;
+            if (frames) |f| {
+                for (ctx.error_details.items, 0..) |detail, i| {
+                    f[i] = .{
+                        .word_name = detail.word_name orelse detail.message,
+                        .source = detail.source,
+                        .line = detail.line,
+                    };
+                }
+                stack_trace = f;
+            }
+        }
+
+        var kebab_buf: [128]u8 = undefined;
+        const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
+        const duped_name = alloc.dupe(u8, kebab_name) catch @errorName(err);
+        const error_obj = ErrorObject{
+            .error_type = duped_name,
+            .message = duped_name,
+            .data = null,
+            .stack_trace = stack_trace,
+        };
+        hooks.fireHooks(ctx, "on:unhandled-error", &.{.{ .error_value = error_obj }});
+    }
+
     const details = ctx.error_details.items;
     if (details.len > 0) {
-        // Print first detail (innermost error location) in single-line format
+        // print first (innermost) error location
         const detail = details[0];
         writer.print("{s}:{d}: error '{s}'", .{ detail.source, detail.line, detail.error_type }) catch return;
 
-        // Print message if different from word name
         if (detail.word_name != null and !std.mem.eql(u8, detail.message, detail.word_name.?)) {
             writer.print(" {s}", .{detail.message}) catch return;
         }
 
-        // Print word name
         if (detail.word_name) |word_name| {
             writer.print(" at word '{s}'", .{word_name}) catch return;
         }
@@ -61,7 +96,7 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
             writer.print("  hint: {s}\n", .{hint}) catch return;
         }
 
-        // Print remaining call stack (caller chain)
+        // print remaining caller chain
         if (details.len > 1) {
             for (details[1..]) |frame| {
                 writer.print("  called from {s}:{d}: {s}\n", .{
@@ -72,7 +107,7 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
             }
         }
     } else {
-        // Fallback if no details captured
+        // fallback if no details captured
         var kebab_buf: [128]u8 = undefined;
         const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
         writer.print("error.{s}\n", .{kebab_name}) catch return;
@@ -401,6 +436,8 @@ pub fn main() u8 {
         repl(&ctx, verbosity, max_memory_bytes);
         break :blk @as(u8, 0);
     };
+
+    hooks.fireHooks(&ctx, "on:exit", &.{.{ .fixnum = @intCast(result) }});
 
     // Stop benchmark timer if enabled
     if (bench_config.enabled) {

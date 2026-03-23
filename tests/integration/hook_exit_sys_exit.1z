@@ -1,0 +1,2 @@
+on:exit [ drop "exit hook fired via sys-exit" eprint-line ] add-hook
+42 sys-exit

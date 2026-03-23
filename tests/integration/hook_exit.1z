@@ -1,0 +1,2 @@
+on:exit [ drop "exit hook fired" print-line ] add-hook
+"before exit" print-line
