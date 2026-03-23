@@ -1,0 +1,7 @@
+Stack: [ V{ } ]
+Stack: [ V{ } ]
+Stack: [ V{ "my-test-word" } ]
+=== word-defined hooks ===
+Stack: [ V{ "my-test-word" } ]
+PASS: hook captured my-test-word
+Stack: [ ]

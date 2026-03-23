@@ -1,0 +1,12 @@
+Stack: [ V{ } ]
+Stack: [ V{ } ]
+Stack: [ V{ "sequences" "strings" } ]
+=== module-loaded hooks ===
+Stack: [ V{ "sequences" "strings" } ]
+PASS: hook fired for strings module
+Stack: [ V{ "sequences" "strings" } ]
+Stack: [ V{ "sequences" "strings" } 2 ]
+Stack: [ V{ "sequences" "strings" } 2 ]
+Stack: [ 2 2 ]
+PASS: hook does not fire on cache hit
+Stack: [ ]

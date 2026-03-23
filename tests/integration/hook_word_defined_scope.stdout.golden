@@ -1,0 +1,17 @@
+Stack: [ V{ } ]
+Stack: [ V{ } ]
+Stack: [ V{ "outer-word" } ]
+Stack: [ V{ "outer-word" } V{ } ]
+Stack: [ V{ "outer-word" } V{ } [ V{ } swap (raw>word-info) name>> #push! drop ] ]
+Stack: [ V{ "outer-word" } V{ "inner-word" } ]
+Stack: [ V{ "outer-word" "post-scope-word" } V{ "inner-word" } ]
+=== word-defined scoping ===
+Stack: [ V{ "outer-word" "post-scope-word" } V{ "inner-word" } ]
+PASS: inner scope captured inner-word
+Stack: [ V{ "outer-word" "post-scope-word" } ]
+PASS: outer scope captured outer-word
+Stack: [ V{ "outer-word" "post-scope-word" } ]
+PASS: outer scope captured post-scope-word
+Stack: [ V{ "outer-word" "post-scope-word" } ]
+PASS: outer scope did not capture inner-word
+Stack: [ ]

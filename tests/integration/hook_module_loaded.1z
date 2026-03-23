@@ -1,0 +1,23 @@
+use "testing" ;
+
+\ Use a mutable vector to accumulate module names from load events
+V{ }
+
+dup on:module-loaded swap [
+  \ curry pushes vec: stack is ( name path vec -- )
+  swap drop swap #push! drop
+] curry add-hook
+
+\ Load a module -- this should trigger the hook
+"strings" load drop
+
+"module-loaded hooks" test-section
+dup "strings" #in? "hook fired for strings module" assert-true
+
+\ Record length before second load
+dup #len
+\ Load the same module again -- cache hit, hook should NOT fire again
+"strings" load drop
+\ Check length is unchanged
+swap #len
+"hook does not fire on cache hit" assert=

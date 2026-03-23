@@ -1,0 +1,7 @@
+Stack: [ V{ } ]
+Stack: [ V{ } ]
+Stack: [ V{ "child-task-word" } ]
+=== word-defined task inheritance ===
+Stack: [ V{ "child-task-word" } ]
+PASS: child task hook inherited from parent
+Stack: [ ]

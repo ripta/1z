@@ -16,8 +16,8 @@ Stack: [ t t t t ]
 Stack: [ t t t t ]
 PASS: multiple hooks for same event
 Stack: [ t t t t ]
-=== register-hook with symbol ===
+=== register-global-hook with symbol ===
 Stack: [ t t t t ]
 Stack: [ t t t t ]
-PASS: register-hook accepts symbol + quotation
+PASS: register-global-hook accepts symbol + quotation
 Stack: [ t t t t ]

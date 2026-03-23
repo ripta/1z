@@ -449,6 +449,7 @@ method{
 min ( a1 a2 -- a )
 module
 module-cache
+module-loaded-hooks
 module>> ( instance -- value )
 module? ( val -- ? )
 mutable-map
@@ -607,6 +608,7 @@ while ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b )
 with-input-stream ( stream quot -- )
 with-iterator ( iterator quot -- ... )
 with-output-stream ( stream quot -- )
+word-defined-hooks
 word-info ( -- type )
 word-info>hash ( word-info -- hash )
 word-info? ( val -- ? )

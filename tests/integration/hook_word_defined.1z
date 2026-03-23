@@ -1,0 +1,12 @@
+use "testing" ;
+
+\ Use a mutable vector to accumulate defined word names
+V{ }
+
+dup on:word-defined swap [ swap (raw>word-info) name>> #push! drop ] curry add-hook
+
+\ Define a word -- this should trigger the hook
+my-test-word: [ 42 ] ;
+
+"word-defined hooks" test-section
+"my-test-word" #in? "hook captured my-test-word" assert-true

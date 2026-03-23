@@ -1,0 +1,28 @@
+use "testing" ;
+
+\ Outer vector tracks words defined in outer scope
+V{ }
+dup on:word-defined swap [ swap (raw>word-info) name>> #push! drop ] curry add-hook
+
+outer-word: [ 1 ] ;
+
+\ Inner scope: shadow word-defined-hooks with a fresh empty array
+\ so the outer hook is not visible during the inner scope
+V{ }
+dup [ swap (raw>word-info) name>> #push! drop ] curry
+{ } word-defined-hooks [
+  on:word-defined swap add-hook
+  inner-word: [ 2 ] ;
+] with-parameter
+
+\ After inner scope, define another word -- outer hook fires again
+post-scope-word: [ 3 ] ;
+
+"word-defined scoping" test-section
+\ Inner vector should have captured inner-word
+"inner-word" #in? "inner scope captured inner-word" assert-true
+\ Outer vector should have captured outer-word and post-scope-word
+dup "outer-word" #in? "outer scope captured outer-word" assert-true
+dup "post-scope-word" #in? "outer scope captured post-scope-word" assert-true
+\ Outer vector should NOT have captured inner-word (it was shadowed)
+"inner-word" #in? not "outer scope did not capture inner-word" assert-true

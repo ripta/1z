@@ -136,7 +136,19 @@ on: enum{
 } ;
 
 \\ Register a hook quotation for a lifecycle event.
-add-hook: ( on-variant quot -- ) [ [ type-name ] dip native.register-hook ] ;
+\\ Global events (exit, unhandled-error) use the shared registry.
+\\ Scoped events (word-defined, module-loaded) use dynamic parameters.
+\\ Defined early with forward references resolved by deferred quotation bodies.
+add-hook: ( on-variant quot -- ) [
+  [ type-name ] dip
+  over "on:word-defined" =
+  [ swap drop word-defined-hooks native.register-scoped-hook ]
+  [ over "on:module-loaded" =
+    [ swap drop module-loaded-hooks native.register-scoped-hook ]
+    [ native.register-global-hook ]
+    if
+  ] if
+] ;
 
 \\ Method dispatch registration syntax.
 \   word: method{ type1 type2 } [ body ] ;
@@ -169,6 +181,10 @@ input-stream: define-parameter [ stdin ] ;
 error-stream: define-parameter [ stderr ] ;
 \\ The module cache M{}, used by `load` and `use` for caching loaded modules.
 module-cache: define-parameter [ module-cache-value ] ;
+\\ Scoped hooks for word-defined events (array of quotations).
+word-defined-hooks: define-parameter [ { } ] ;
+\\ Scoped hooks for module-loaded events (array of quotations).
+module-loaded-hooks: define-parameter [ { } ] ;
 
 \\ Load a module by name or file path, returning a cached copy if available.
 load: ( filename -- module ) [

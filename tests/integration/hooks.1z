@@ -12,6 +12,6 @@ on:exit [ ] add-hook
 on:exit [ ] add-hook
 t "multiple hooks for same event" assert-true
 
-"register-hook with symbol" test-section
-on:exit: [ ] native.register-hook
-t "register-hook accepts symbol + quotation" assert-true
+"register-global-hook with symbol" test-section
+on:exit: [ ] native.register-global-hook
+t "register-global-hook accepts symbol + quotation" assert-true

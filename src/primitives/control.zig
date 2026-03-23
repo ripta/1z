@@ -14,6 +14,9 @@ const WordDefinition = dictionary_mod.WordDefinition;
 
 const markers_mod = @import("markers.zig");
 
+const hooks = @import("hooks.zig");
+const introspect = @import("introspect.zig");
+
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 
@@ -332,6 +335,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 .parse_time = true,
                 .action = .{ .compound = push_instr },
             });
+            fireWordDefinedHook(ctx, alloc, name_copy);
         },
 
         else => {
@@ -469,8 +473,16 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     .doc = doc_val,
                     .action = .{ .compound = instructions },
                 });
+                fireWordDefinedHook(ctx, alloc, name_copy);
             }
         },
+    }
+}
+
+fn fireWordDefinedHook(ctx: *Context, alloc: std.mem.Allocator, name: []const u8) void {
+    if (ctx.lookupWord(name)) |word_def| {
+        const info = introspect.buildWordInfo(alloc, ctx, name, word_def) catch return;
+        hooks.fireScopedHooks(ctx, "word-defined-hooks", &.{info});
     }
 }
 

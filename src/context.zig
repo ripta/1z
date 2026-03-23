@@ -175,6 +175,8 @@ pub const Context = struct {
     /// throw an error to prevent yielding mid-load, which would expose
     /// half-defined module frames to other tasks via ancestor traversal.
     in_module_load: bool = false,
+    /// Re-entrancy guard for scoped hooks (e.g., word-defined).
+    firing_scoped_hooks: bool = false,
     /// Deferred protocol obligations collected during module loading.
     /// Validated at module load completion so that methods defined after the
     /// protocol declaration in the same file are still found.
@@ -323,6 +325,11 @@ pub const Context = struct {
             std.debug.panic("Failed to allocate hook registry: {any}", .{err});
         };
         ctx.hook_registry.* = .{};
+
+        // Push base parameter frame so scoped hooks can be registered at top level.
+        ctx.parameter_env.append(allocator, .{}) catch |err| {
+            std.debug.panic("Failed to push base parameter frame: {any}", .{err});
+        };
 
         // Push the base type registry frame so boot-time registrations have a target.
         ctx.type_registry_frames.append(allocator, .{}) catch |err| {

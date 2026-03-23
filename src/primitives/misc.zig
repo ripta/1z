@@ -8,6 +8,7 @@ const StatementProcessor = @import("../statement.zig").StatementProcessor;
 
 const markers_mod = @import("markers.zig");
 const helpers = @import("helpers.zig");
+const hooks = @import("hooks.zig");
 const protocols = @import("protocols.zig");
 const Primitive = @import("types.zig").Primitive;
 const Capability = @import("types.zig").Capability;
@@ -307,6 +308,7 @@ fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []const
     cache.put(alloc, resolved, .{ .module = module }) catch {};
     ctx.popPragmaFrame();
     ctx.popLocalFrame();
+    hooks.fireScopedHooks(ctx, "module-loaded-hooks", &.{ .{ .string = filename }, .{ .string = resolved } });
     try ctx.stack.push(.{ .module = module });
 }
 

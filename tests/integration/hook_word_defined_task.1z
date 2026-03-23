@@ -1,0 +1,17 @@
+use "testing" ;
+
+\ Use a mutable vector to accumulate defined word names
+V{ }
+
+dup on:word-defined swap [ swap (raw>word-info) name>> #push! drop ] curry add-hook
+
+\ Use dip to preserve vec under task-scope execution
+[
+  [
+    [ child-task-word: [ 99 ] ;
+    ] spawn await drop
+  ] task-scope
+] dip
+
+"word-defined task inheritance" test-section
+"child-task-word" #in? "child task hook inherited from parent" assert-true

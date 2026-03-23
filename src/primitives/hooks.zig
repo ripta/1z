@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const Context = @import("../context.zig").Context;
 const Value = @import("../value.zig").Value;
@@ -10,7 +11,8 @@ pub const HookRegistry = struct {
 };
 
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = "register-hook", .func = nativeRegisterHook, .stack_effect = "key quot --" },
+    .{ .name = "register-global-hook", .func = nativeRegisterHook, .stack_effect = "key quot --" },
+    .{ .name = "register-scoped-hook", .func = nativeRegisterScopedHook, .stack_effect = "quot param --" },
 };
 
 /// ( key quot -- ) Register a hook quotation for a lifecycle event.
@@ -22,7 +24,7 @@ fn nativeRegisterHook(ctx: *Context) anyerror!void {
         .symbol => |s| s,
         .string => |s| s,
         else => {
-            ctx.pending_error_message = "register-hook expects a symbol or string as the event key";
+            ctx.pending_error_message = "register-global-hook expects a symbol or string as the event key";
             return error.TypeMismatch;
         },
     };
@@ -56,11 +58,97 @@ pub fn fireHooks(ctx: *Context, event_name: []const u8, args: []const Value) voi
         }
 
         ctx.executeQuotation(quot) catch |err| {
-            const stderr_file: std.fs.File = .stderr();
-            var buf: [256]u8 = undefined;
-            var writer = stderr_file.writer(&buf);
-            writer.interface.print("hook error ({s}): {s}\n", .{ event_name, @errorName(err) }) catch {};
-            writer.interface.flush() catch {};
+            if (!builtin.is_test) {
+                const stderr_file: std.fs.File = .stderr();
+                var buf: [256]u8 = undefined;
+                var writer = stderr_file.writer(&buf);
+                writer.interface.print("hook error ({s}): {s}\n", .{ event_name, @errorName(err) }) catch {};
+                writer.interface.flush() catch {};
+            }
+            continue;
+        };
+    }
+}
+
+/// ( quot param -- ) Register a scoped hook quotation on a dynamic parameter.
+///
+/// The parameter should hold an array of quotations, e.g., word-defined-hooks.
+fn nativeRegisterScopedHook(ctx: *Context) anyerror!void {
+    const param_val = ctx.stack.pop() catch return error.StackUnderflow;
+    const param = switch (param_val) {
+        .parameter => |p| p,
+        else => {
+            ctx.pending_error_message = "register-scoped-hook expects a parameter as second argument";
+            return error.TypeMismatch;
+        },
+    };
+
+    const quot_val = ctx.stack.pop() catch return error.StackUnderflow;
+    switch (quot_val) {
+        .quotation => {},
+        else => {
+            ctx.pending_error_message = "register-scoped-hook expects a quotation as first argument";
+            return error.TypeMismatch;
+        },
+    }
+
+    const alloc = ctx.containerAllocator();
+
+    const current = ctx.getParameterBinding(param.name) orelse blk: {
+        ctx.executeQuotation(param.default_quotation) catch return error.OutOfMemory;
+        break :blk ctx.stack.pop() catch return error.StackUnderflow;
+    };
+
+    const old_items = switch (current) {
+        .array => |arr| arr,
+        else => &[_]Value{},
+    };
+
+    const new_items = alloc.alloc(Value, old_items.len + 1) catch return error.OutOfMemory;
+    @memcpy(new_items[0..old_items.len], old_items);
+    new_items[old_items.len] = quot_val;
+
+    try ctx.setParameterInTopFrame(param.name, .{ .array = new_items });
+}
+
+/// Fire all scoped hooks stored in a dynamic parameter.
+///
+/// Pushes args onto the stack before each hook. Iterates in LIFO (reverse) order.
+/// On error, logs to stderr and continues with remaining hooks.
+/// Reëntrant calls are suppressed to prevent infinite recursion, e.g., a word-defined hook that itself defines words.
+pub fn fireScopedHooks(ctx: *Context, param_name: []const u8, args: []const Value) void {
+    if (ctx.firing_scoped_hooks) return;
+
+    const hook_array = ctx.getParameterBinding(param_name) orelse return;
+    const items = switch (hook_array) {
+        .array => |arr| arr,
+        else => return,
+    };
+    if (items.len == 0) return;
+
+    ctx.firing_scoped_hooks = true;
+    defer ctx.firing_scoped_hooks = false;
+
+    var i = items.len;
+    while (i > 0) {
+        i -= 1;
+        const quot = switch (items[i]) {
+            .quotation => |q| q,
+            else => continue,
+        };
+
+        for (args) |arg| {
+            ctx.stack.push(arg) catch continue;
+        }
+
+        ctx.executeQuotation(quot) catch |err| {
+            if (!builtin.is_test) {
+                const stderr_file: std.fs.File = .stderr();
+                var buf: [256]u8 = undefined;
+                var writer = stderr_file.writer(&buf);
+                writer.interface.print("scoped hook error ({s}): {s}\n", .{ param_name, @errorName(err) }) catch {};
+                writer.interface.flush() catch {};
+            }
             continue;
         };
     }
