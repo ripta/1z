@@ -18,6 +18,73 @@
 \   - Failure details: shows expected vs actual values on failure
 \   - Reduced golden file churn: no need to track exact output values
 
+\ --- Module-scope mutable counter ---
+
+test-counts: ( -- mmap ) [ M{ counter: 0 passed: 0 failed: 0 skipped: 0 } ] ;
+
+(next-counter): ( -- n ) [
+  test-counts counter: @get 1 +
+  dup test-counts swap counter: swap @set! drop
+] ;
+
+(record-pass): ( -- ) [
+  test-counts passed: @get 1 +
+  test-counts swap passed: swap @set! drop
+] ;
+
+(record-fail): ( -- ) [
+  test-counts failed: @get 1 +
+  test-counts swap failed: swap @set! drop
+] ;
+
+(record-skip): ( -- ) [
+  test-counts skipped: @get 1 +
+  test-counts swap skipped: swap @set! drop
+] ;
+
+\ --- Default reporter ---
+
+(default-reporter): ( -- hash ) [ H{
+    on-start: [ drop ]
+    on-pass:  [ description: @get "PASS: " swap #append print-line ]
+    on-fail:  [
+      dup kind: @get
+      no-error: =
+      [
+        description: @get
+        "FAIL (no error): " swap #append print-line
+      ]
+      [
+        dup expected: @get inspect
+        swap dup actual: @get inspect
+        swap description: @get
+        -rot>
+        \ msg expected-str actual-str
+        ", got " swap #append
+        swap "(expected " swap #append ")" #append
+        #append
+        " " swap #append #append
+        "FAIL: " swap #append print-line
+      ]
+      if
+    ]
+    on-skip: [ drop ]
+    on-section-start: [ name: @get "=== " swap #append " ===" #append print-line ]
+    on-section-end:   [ drop ]
+    on-complete:      [ drop ]
+  }
+] ;
+
+\ --- Dynamic parameter and dispatch helper ---
+
+test-reporter: ( -- param ) [ test-reporter: [ (default-reporter) ] make-parameter ] ;
+
+(fire-reporter): ( key details -- ) [
+  swap test-reporter get swap @get call
+] ;
+
+\ --- Assertion words ---
+
 \ Core assertion: check equality, print PASS/FAIL with values on failure
 \ Stack: actual expected msg --
 assert=: ( actual expected msg -- ) [
@@ -25,20 +92,22 @@ assert=: ( actual expected msg -- ) [
   2dup =  \ msg actual expected bool
   [
     2drop  \ msg
-    "PASS: " swap #append print-line
+    (next-counter) swap
+    H{ } swap description: swap @set swap counter: swap @set
+    (record-pass)
+    on-pass: swap (fire-reporter)
   ]
   [
-    \ Build: "FAIL: {msg} (expected {expected}, got {actual})"
-    inspect                    \ msg actual expected-str
-    swap inspect               \ msg expected-str actual-str
-    ", got " swap #append      \ msg expected-str ", got {actual}"
-    swap                       \ msg ", got {actual}" expected-str
-    "(expected " swap #append  \ msg ", got {actual}" "(expected {exp}"
-    ")" #append                \ msg ", got {actual}" "(expected {exp})"
-    #append                    \ msg "(expected {exp}), got {actual}"
-    " " swap #append           \ msg " (expected {exp}), got {actual}"
-    #append                    \ "{msg} (expected {exp}), got {actual}"
-    "FAIL: " swap #append print-line
+    \ msg actual expected, then build fail details
+    (next-counter)
+    H{ }
+    swap counter: swap @set
+    mismatch: kind: swap @set
+    swap expected: swap @set
+    swap actual: swap @set
+    swap description: swap @set
+    (record-fail)
+    on-fail: swap (fire-reporter)
   ]
   if
 ] ;
@@ -84,14 +153,21 @@ assert-error: ( quot msg -- ) [
       __drop_until_marker__
       drop  \ drop :__START__:
       __assert_msg__ get
-      "FAIL (no error): " swap #append print-line
+      (next-counter) swap
+      H{ } swap description: swap @set swap counter: swap @set
+      no-error: kind: swap @set
+      (record-fail)
+      on-fail: swap (fire-reporter)
     ]
     [
       \ ERROR - PASS the test
       __drop_until_marker__
       drop  \ drop :__START__:
       __assert_msg__ get
-      "PASS: " swap #append print-line
+      (next-counter) swap
+      H{ } swap description: swap @set swap counter: swap @set
+      (record-pass)
+      on-pass: swap (fire-reporter)
     ]
     if
   ] with-parameter
@@ -129,17 +205,21 @@ assert-error-type: ( quot expected-type msg -- ) [
         [
           2drop
           __aet_msg__ get
-          "PASS: " swap #append print-line
+          (next-counter) swap
+          H{ } swap description: swap @set swap counter: swap @set
+          (record-pass)
+          on-pass: swap (fire-reporter)
         ]
         [
-          \ Wrong error type
-          swap  \ expected actual
-          inspect ", got " swap #append
-          swap inspect "(expected " swap #append
-          ")" #append #append
+          \ Wrong error type: actual expected on stack
           __aet_msg__ get
-          " " swap #append swap #append
-          "FAIL: " swap #append print-line
+          (next-counter) swap
+          H{ } swap description: swap @set swap counter: swap @set
+          wrong-type: kind: swap @set
+          swap expected: swap @set
+          swap actual: swap @set
+          (record-fail)
+          on-fail: swap (fire-reporter)
         ]
         if
       ]
@@ -151,7 +231,11 @@ assert-error-type: ( quot expected-type msg -- ) [
         __drop_until_marker__
         drop
         __aet_msg__ get
-        "FAIL (no error): " swap #append print-line
+        (next-counter) swap
+        H{ } swap description: swap @set swap counter: swap @set
+        no-error: kind: swap @set
+        (record-fail)
+        on-fail: swap (fire-reporter)
       ]
       [
         \ Error path already printed result; just clean up stack
@@ -164,7 +248,43 @@ assert-error-type: ( quot expected-type msg -- ) [
 ] ;
 
 \ Print section header
-test-section: ( msg -- ) [ "=== " swap #append " ===" #append print-line ] ;
+test-section: ( msg -- ) [
+  H{ } swap name: swap @set
+  on-section-start: swap (fire-reporter)
+] ;
+
+\ Skip a test
+skip: ( msg -- ) [
+  (next-counter) swap
+  H{ } swap description: swap @set swap counter: swap @set
+  (record-skip)
+  on-skip: swap (fire-reporter)
+] ;
+
+\ --- Top-level initialization ---
+
+\ Fire on-start: when testing library is loaded
+on-start: H{ } (fire-reporter)
+
+\ Register exit hook to fire on-complete: with final counts.
+\ The hook fires outside the testing module's frame, so curry in
+\ the mutable counter map and the reporter hash.
+test-counts test-reporter get
+[
+  \ stack: exit-code test-counts-map reporter-hash
+  -rot> swap drop
+  \ stack: reporter-hash test-counts-map
+  H{ }
+  over counter: @get counter: swap @set
+  over passed: @get passed: swap @set
+  over failed: @get failed: swap @set
+  swap skipped: @get skipped: swap @set
+  \ stack: reporter-hash completed-hash
+  swap on-complete: @get call
+] curry curry
+on:exit swap add-hook
+
+\ --- Fake clock ---
 
 \ Activate fake clock in the current task-scope
 fake-clock: ( -- ) [ native.fake-clock ] ;
