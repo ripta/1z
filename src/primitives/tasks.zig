@@ -128,10 +128,10 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     scheduler.deadlock_detect_ns = ctx.deadlock_detect_ns;
 
     ctx.scheduler = &scheduler;
-    scheduler_mod.active_scheduler.store(&scheduler, .release);
+    ctx.active_scheduler.store(&scheduler, .release);
     defer {
         ctx.scheduler = null;
-        scheduler_mod.active_scheduler.store(null, .release);
+        ctx.active_scheduler.store(null, .release);
     }
 
     var scope = TaskScope.init(ctx.allocator);

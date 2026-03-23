@@ -422,7 +422,7 @@ pub fn main() u8 {
 
     // Spawn watchdog thread for --test-timeout (batch mode only)
     const watchdog_thread: ?std.Thread = if (test_timeout_ns != null and file_path != null)
-        std.Thread.spawn(.{}, testTimeoutWatchdog, .{test_timeout_ns.?}) catch null
+        std.Thread.spawn(.{}, testTimeoutWatchdog, .{ test_timeout_ns.?, &ctx }) catch null
     else
         null;
     defer if (watchdog_thread) |t| t.detach();
@@ -467,14 +467,13 @@ pub fn main() u8 {
     return result;
 }
 
-fn testTimeoutWatchdog(timeout_ns: u64) void {
+fn testTimeoutWatchdog(timeout_ns: u64, ctx: *Context) void {
     std.Thread.sleep(timeout_ns);
     var tw = trace_mod.TraceWriter.init();
     const secs = @as(f64, @floatFromInt(timeout_ns)) /
         @as(f64, @floatFromInt(@as(u64, std.time.ns_per_s)));
     tw.print("TEST-TIMEOUT: {d:.1}s limit reached\n", .{secs});
-    const scheduler_mod = @import("scheduler.zig");
-    if (scheduler_mod.active_scheduler.load(.acquire)) |sched| {
+    if (ctx.active_scheduler.load(.acquire)) |sched| {
         sched.dumpAllTasks();
     }
     std.process.exit(124);

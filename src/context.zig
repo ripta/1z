@@ -231,6 +231,10 @@ pub const Context = struct {
     current_pic_entry: ?*PolymorphicCache = null,
     /// Shared scheduler for green thread contexts. Null for the root context.
     scheduler: ?*Scheduler = null,
+    /// Atomic scheduler pointer for cross-thread diagnostic access.
+    /// Set by task-scope on entry, cleared on exit. Read by the
+    /// test-timeout watchdog thread.
+    active_scheduler: std.atomic.Value(?*Scheduler) = std.atomic.Value(?*Scheduler).init(null),
     /// Stack of type registry frames for scoped type descriptor and enum
     /// registry entries. The bottom frame holds boot-time registrations;
     /// additional frames are pushed by `with-isolation`.

@@ -9,10 +9,6 @@ const Multiplexer = @import("multiplexer.zig").Multiplexer;
 const IoEvent = @import("multiplexer.zig").IoEvent;
 const trace = @import("trace.zig");
 
-/// Global pointer to the active top-level scheduler if any.
-/// Set by `nativeTaskScope` on entry, and cleared on exit.
-pub var active_scheduler: std.atomic.Value(?*Scheduler) = std.atomic.Value(?*Scheduler).init(null);
-
 /// Entry in the sleep queue: a task and its absolute monotonic wake time in nanoseconds.
 pub const SleepEntry = struct {
     task: *Task,
