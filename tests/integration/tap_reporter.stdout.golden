@@ -1,0 +1,16 @@
+TAP version 13
+# arithmetic
+ok 1 - two plus two
+ok 2 - one greater than zero
+# failures
+not ok 3 - three equals four
+  ---
+  severity: fail
+  expected: 4
+  actual: 3
+  ...
+# error tests
+ok 4 - division by zero throws
+# skipping
+ok 5 - not yet implemented # SKIP
+1..5

@@ -22,6 +22,8 @@
 
 test-counts: ( -- mmap ) [ M{ counter: 0 passed: 0 failed: 0 skipped: 0 } ] ;
 
+section-state: ( -- mmap ) [ M{ current: f } ] ;
+
 (next-counter): ( -- n ) [
   test-counts counter: @get 1 +
   dup test-counts swap counter: swap @set! drop
@@ -75,9 +77,66 @@ test-counts: ( -- mmap ) [ M{ counter: 0 passed: 0 failed: 0 skipped: 0 } ] ;
   }
 ] ;
 
+\ --- TAP v13 reporter ---
+
+(tap-reporter): ( -- hash ) [ H{
+    on-start: [ drop "TAP version 13" print-line ]
+    on-pass: [
+      dup counter: @get inspect
+      swap description: @get swap
+      "ok " swap #append " - " #append swap #append print-line
+    ]
+    on-fail: [
+      dup counter: @get inspect
+      swap dup description: @get
+      <rot-
+      \ stack: details description counter-str
+      "not ok " swap #append " - " #append swap #append print-line
+      \ stack: details
+      dup kind: @get no-error: =
+      [
+        "  ---" print-line
+        "  severity: fail" print-line
+        "  message: no error was thrown" print-line
+        "  ..." print-line
+        drop
+      ]
+      [
+        "  ---" print-line
+        "  severity: fail" print-line
+        dup expected: @get inspect
+        "  expected: " swap #append print-line
+        actual: @get inspect
+        "  actual: " swap #append print-line
+        "  ..." print-line
+      ]
+      if
+    ]
+    on-skip: [
+      dup counter: @get inspect
+      swap description: @get swap
+      "ok " swap #append " - " #append swap #append " # SKIP" #append print-line
+    ]
+    on-section-start: [ name: @get "# " swap #append print-line ]
+    on-section-end:   [ drop ]
+    on-complete:      [ counter: @get inspect "1.." swap #append print-line ]
+  }
+] ;
+
+\ --- Reporter selection ---
+
+(select-reporter): ( -- hash ) [
+  environ "ONEZ_TEST_REPORTER" @has?
+  [ environ "ONEZ_TEST_REPORTER" @get "tap" =
+    [ (tap-reporter) ] [ (default-reporter) ] if
+  ]
+  [ (default-reporter) ]
+  if
+] ;
+
 \ --- Dynamic parameter and dispatch helper ---
 
-test-reporter: ( -- param ) [ test-reporter: [ (default-reporter) ] make-parameter ] ;
+test-reporter: ( -- param ) [ test-reporter: [ (select-reporter) ] make-parameter ] ;
 
 (fire-reporter): ( key details -- ) [
   swap test-reporter get swap @get call
@@ -249,6 +308,12 @@ assert-error-type: ( quot expected-type msg -- ) [
 
 \ Print section header
 test-section: ( msg -- ) [
+  section-state current: @get
+  dup f = not
+  [ H{ } swap name: swap @set on-section-end: swap (fire-reporter) ]
+  [ drop ]
+  if
+  dup section-state swap current: swap @set! drop
   H{ } swap name: swap @set
   on-section-start: swap (fire-reporter)
 ] ;
@@ -256,7 +321,9 @@ test-section: ( msg -- ) [
 \ Skip a test
 skip: ( msg -- ) [
   (next-counter) swap
-  H{ } swap description: swap @set swap counter: swap @set
+  H{ } swap description: swap @set
+  dup description: @get reason: swap @set
+  swap counter: swap @set
   (record-skip)
   on-skip: swap (fire-reporter)
 ] ;
@@ -269,19 +336,29 @@ on-start: H{ } (fire-reporter)
 \ Register exit hook to fire on-complete: with final counts.
 \ The hook fires outside the testing module's frame, so curry in
 \ the mutable counter map and the reporter hash.
-test-counts test-reporter get
+test-counts section-state test-reporter get
 [
-  \ stack: exit-code test-counts-map reporter-hash
-  -rot> swap drop
-  \ stack: reporter-hash test-counts-map
+  \ stack: exit-code test-counts section-state reporter
+  over current: @get
+  dup f = not
+  [ H{ } swap name: swap @set
+    1 pick-n on-section-end: @get call
+  ]
+  [ drop ]
+  if
+  \ stack: exit-code test-counts section-state reporter
+  \ Remove exit-code and section-state, keep reporter and test-counts
+  swap drop
+  \ stack: exit-code test-counts reporter
+  <rot- drop swap
+  \ stack: reporter test-counts
   H{ }
   over counter: @get counter: swap @set
   over passed: @get passed: swap @set
   over failed: @get failed: swap @set
   swap skipped: @get skipped: swap @set
-  \ stack: reporter-hash completed-hash
   swap on-complete: @get call
-] curry curry
+] curry curry curry
 on:exit swap add-hook
 
 \ --- Fake clock ---

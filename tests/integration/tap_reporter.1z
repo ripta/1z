@@ -1,0 +1,14 @@
+use "testing" ;
+
+"arithmetic" test-section
+4 2 2 + "two plus two" assert=
+t 1 0 > "one greater than zero" assert-true
+
+"failures" test-section
+3 4 "three equals four" assert=
+
+"error tests" test-section
+[ 1 0 / ] "division by zero throws" assert-error
+
+"skipping" test-section
+"not yet implemented" skip
