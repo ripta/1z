@@ -22,11 +22,12 @@ const c = struct {
 pub const makecontext = c.makecontext;
 pub const swapcontext = c.swapcontext;
 
-/// Module-level variable to pass the task pointer to `taskEntryPoint`.
-/// Safe because scheduling is single-threaded cooperative: the scheduler
-/// sets this immediately before swapcontext, and the entry function reads
-/// and clears it before any yield point.
-pub var pending_entry_task: ?*Task = null;
+/// Thread-local variable to pass the task pointer to `taskEntryPoint`.
+/// Thread safety is enforced by `threadlocal`: each OS thread gets its own
+/// slot, so concurrent threads cannot interfere. Within a thread the usage
+/// is a same-thread trampoline: set immediately before swapcontext, read
+/// and cleared in the entry function before any yield point.
+pub threadlocal var pending_entry_task: ?*Task = null;
 
 /// Entry function for task coroutines. Called via makecontext with no
 /// arguments; reads the task pointer from `pending_entry_task`.
