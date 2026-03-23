@@ -105,3 +105,23 @@ pub const ServerInfo = struct {
     name: []const u8,
     version: []const u8,
 };
+
+/// LSP Range (start and end positions).
+pub const LspRange = struct {
+    start: Position,
+    end: Position,
+};
+
+/// LSP Diagnostic with severity, source, and message.
+pub const LspDiagnostic = struct {
+    range: LspRange,
+    severity: i64,
+    source: []const u8,
+    message: []const u8,
+};
+
+/// Parameters for textDocument/publishDiagnostics notification.
+pub const PublishDiagnosticsParams = struct {
+    uri: []const u8,
+    diagnostics: []const LspDiagnostic,
+};

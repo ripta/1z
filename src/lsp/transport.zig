@@ -127,6 +127,30 @@ pub const Transport = struct {
         try self.writeMessage(body);
     }
 
+    /// Write a JSON-RPC notification (no id field).
+    pub fn writeNotification(self: *Transport, method: []const u8, params: anytype) !void {
+        const body = try self.serializeNotification(method, params);
+        defer self.allocator.free(body);
+        try self.writeMessage(body);
+    }
+
+    fn serializeNotification(self: *Transport, method: []const u8, params: anytype) ![]u8 {
+        var out: IoWriter.Allocating = .init(self.allocator);
+        errdefer out.deinit();
+
+        var jw: Stringify = .{ .writer = &out.writer, .options = .{} };
+        try jw.beginObject();
+        try jw.objectField("jsonrpc");
+        try jw.write("2.0");
+        try jw.objectField("method");
+        try jw.write(method);
+        try jw.objectField("params");
+        try jw.write(params);
+        try jw.endObject();
+
+        return out.toOwnedSlice();
+    }
+
     fn serializeResponse(self: *Transport, id: types.Id, result: anytype) ![]u8 {
         var out: IoWriter.Allocating = .init(self.allocator);
         errdefer out.deinit();

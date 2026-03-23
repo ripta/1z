@@ -5,6 +5,9 @@ const Context = @import("../context.zig").Context;
 const Tokenizer = @import("../tokenizer.zig").Tokenizer;
 const WordDefinition = @import("../dictionary.zig").WordDefinition;
 const StackEffect = @import("../stack_effect.zig").StackEffect;
+const effect_inference = @import("../effect_inference.zig");
+const call_graph = @import("../call_graph.zig");
+const parser = @import("../parser.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -18,11 +21,21 @@ const State = enum {
 };
 
 pub const Server = struct {
+    const AnalysisResult = struct {
+        arena: std.heap.ArenaAllocator,
+        diagnostics: []const types.LspDiagnostic,
+
+        fn deinit(self: *AnalysisResult) void {
+            self.arena.deinit();
+        }
+    };
+
     allocator: Allocator,
     transport: *Transport,
     state: State = .uninitialized,
     ctx: *Context,
     documents: std.StringHashMap([]const u8),
+    last_diagnostics: std.StringHashMap(AnalysisResult),
 
     pub fn init(allocator: Allocator, transport: *Transport, ctx: *Context) Server {
         return .{
@@ -30,10 +43,19 @@ pub const Server = struct {
             .transport = transport,
             .ctx = ctx,
             .documents = std.StringHashMap([]const u8).init(allocator),
+            .last_diagnostics = std.StringHashMap(AnalysisResult).init(allocator),
         };
     }
 
     pub fn deinit(self: *Server) void {
+        var diag_it = self.last_diagnostics.iterator();
+        while (diag_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            var result = entry.value_ptr.*;
+            result.deinit();
+        }
+        self.last_diagnostics.deinit();
+
         var it = self.documents.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -111,6 +133,8 @@ pub const Server = struct {
             return self.handleDidOpen(request);
         } else if (std.mem.eql(u8, request.method, "textDocument/didChange")) {
             return self.handleDidChange(request);
+        } else if (std.mem.eql(u8, request.method, "textDocument/didClose")) {
+            return self.handleDidClose(request);
         } else if (std.mem.eql(u8, request.method, "textDocument/hover")) {
             return self.handleHover(request);
         } else if (std.mem.eql(u8, request.method, "textDocument/completion")) {
@@ -170,6 +194,8 @@ pub const Server = struct {
         }
 
         try self.documents.put(owned_uri, owned_text);
+
+        self.analyzeDocument(uri, text);
     }
 
     fn handleDidChange(self: *Server, request: types.Request) !void {
@@ -184,17 +210,229 @@ pub const Server = struct {
         const owned_text = try self.allocator.dupe(u8, new_text);
         errdefer self.allocator.free(owned_text);
 
+        var found = false;
         var it = self.documents.iterator();
         while (it.next()) |entry| {
             if (std.mem.eql(u8, entry.key_ptr.*, uri)) {
                 self.allocator.free(entry.value_ptr.*);
                 entry.value_ptr.* = owned_text;
-                return;
+                found = true;
+                break;
             }
         }
 
-        const owned_uri = try self.allocator.dupe(u8, uri);
-        try self.documents.put(owned_uri, owned_text);
+        if (!found) {
+            const owned_uri = try self.allocator.dupe(u8, uri);
+            try self.documents.put(owned_uri, owned_text);
+        }
+
+        self.analyzeDocument(uri, new_text);
+    }
+
+    fn handleDidClose(self: *Server, request: types.Request) !void {
+        const params = request.params orelse return;
+        const td = getJsonObject(params, "textDocument") orelse return;
+        const uri = getJsonString(td, "uri") orelse return;
+
+        // Remove document text
+        var it = self.documents.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.key_ptr.*, uri)) {
+                self.allocator.free(entry.key_ptr.*);
+                self.allocator.free(entry.value_ptr.*);
+                self.documents.removeByPtr(entry.key_ptr);
+                break;
+            }
+        }
+
+        // Remove cached diagnostics
+        var diag_it = self.last_diagnostics.iterator();
+        while (diag_it.next()) |entry| {
+            if (std.mem.eql(u8, entry.key_ptr.*, uri)) {
+                self.allocator.free(entry.key_ptr.*);
+                var result = entry.value_ptr.*;
+                result.deinit();
+                self.last_diagnostics.removeByPtr(entry.key_ptr);
+                break;
+            }
+        }
+
+        // Publish empty diagnostics to clear editor markers
+        self.transport.writeNotification("textDocument/publishDiagnostics", types.PublishDiagnosticsParams{
+            .uri = uri,
+            .diagnostics = &.{},
+        }) catch {};
+    }
+
+    fn analyzeDocument(self: *Server, uri: []const u8, text: []const u8) void {
+        var analysis_arena = std.heap.ArenaAllocator.init(self.allocator);
+        var stored_in_cache = false;
+        defer if (!stored_in_cache) analysis_arena.deinit();
+        const arena_alloc = analysis_arena.allocator();
+
+        // Save context state
+        const saved_source = self.ctx.current_source;
+        const saved_source_dir = self.ctx.current_source_dir;
+        const saved_check_mode = self.ctx.check_mode;
+        const saved_import_frame = self.ctx.import_frame_index;
+        const saved_stack_depth = self.ctx.stack.depth();
+
+        // Restore context state on exit
+        defer {
+            self.ctx.current_source = saved_source;
+            self.ctx.current_source_dir = saved_source_dir;
+            self.ctx.check_mode = saved_check_mode;
+            self.ctx.import_frame_index = saved_import_frame;
+            // Truncate stack to saved depth
+            while (self.ctx.stack.depth() > saved_stack_depth) {
+                _ = self.ctx.stack.pop() catch break;
+            }
+        }
+
+        // Push frames for analysis
+        self.ctx.pushLocalFrame() catch return;
+        defer self.ctx.popLocalFrame();
+
+        self.ctx.pushPragmaFrame() catch return;
+        defer self.ctx.popPragmaFrame();
+
+        self.ctx.check_mode = true;
+        self.ctx.current_source = uri;
+        self.ctx.import_frame_index = self.ctx.local_frames.items.len - 1;
+
+        // Parse and execute definitions using the parser directly
+        var parse_error_diag: ?types.LspDiagnostic = null;
+        var tokenizer = Tokenizer.init(text);
+
+        while (true) {
+            const prev_pos = tokenizer.pos;
+            const instrs = parser.parseTopLevel(self.ctx.quotationAllocator(), &tokenizer, self.ctx) catch {
+                const lsp_line: i64 = if (tokenizer.line > 1) @intCast(tokenizer.line - 1) else 0;
+                parse_error_diag = .{
+                    .range = .{
+                        .start = .{ .line = lsp_line, .character = 0 },
+                        .end = .{ .line = lsp_line, .character = 0 },
+                    },
+                    .severity = 1,
+                    .source = "1z",
+                    .message = "parse error",
+                };
+                break;
+            };
+            if (instrs.len == 0 and tokenizer.pos == prev_pos) break;
+            if (instrs.len == 0) continue;
+            if (Context.isDefinitionStatement(instrs)) {
+                self.ctx.executeQuotation(.{ .instructions = instrs }) catch {};
+            }
+        }
+
+        if (parse_error_diag != null) {
+            // Error recovery: use cached diagnostics if available, else publish parse error
+            var diag_it = self.last_diagnostics.iterator();
+            while (diag_it.next()) |entry| {
+                if (std.mem.eql(u8, entry.key_ptr.*, uri)) {
+                    // Republish cached diagnostics
+                    self.transport.writeNotification("textDocument/publishDiagnostics", types.PublishDiagnosticsParams{
+                        .uri = uri,
+                        .diagnostics = entry.value_ptr.diagnostics,
+                    }) catch {};
+                    return;
+                }
+            }
+            // No cache; publish just the parse error
+            const diags = [1]types.LspDiagnostic{parse_error_diag.?};
+            self.transport.writeNotification("textDocument/publishDiagnostics", types.PublishDiagnosticsParams{
+                .uri = uri,
+                .diagnostics = &diags,
+            }) catch {};
+            return;
+        }
+
+        // Run InferenceEngine
+        _ = call_graph.build(&self.ctx.dictionary, &self.ctx.dispatch, self.ctx.quotationAllocator()) catch return;
+
+        var engine = effect_inference.InferenceEngine.init(
+            &self.ctx.dictionary,
+            &self.ctx.dispatch,
+            self.ctx.local_frames.items,
+            self.ctx.quotationAllocator(),
+            null,
+            false,
+            false,
+            &self.ctx.builtin_type_values,
+            .err,
+            .err,
+        );
+        defer engine.deinit();
+        engine.analyzeAll(uri) catch return;
+
+        // Map engine diagnostics to LSP diagnostics
+        const engine_diags = engine.getDiagnostics();
+        var lsp_diags: std.ArrayListUnmanaged(types.LspDiagnostic) = .{};
+        for (engine_diags) |diag| {
+            const lsp_line: i64 = if (diag.source_line > 0) @intCast(diag.source_line - 1) else 0;
+
+            // Find line length for end character
+            var end_char: i64 = 0;
+            var line_idx: usize = 0;
+            var scan_lines = std.mem.splitScalar(u8, text, '\n');
+            while (scan_lines.next()) |scan_line| {
+                if (line_idx == @as(usize, @intCast(lsp_line))) {
+                    end_char = @intCast(scan_line.len);
+                    break;
+                }
+                line_idx += 1;
+            }
+
+            const severity: i64 = switch (diag.severity) {
+                .err => 1,
+                .warning => 2,
+                .note => 3,
+            };
+
+            const message = std.fmt.allocPrint(arena_alloc, "{s}: {s}", .{ diag.word_name, diag.message }) catch continue;
+
+            lsp_diags.append(arena_alloc, .{
+                .range = .{
+                    .start = .{ .line = lsp_line, .character = 0 },
+                    .end = .{ .line = lsp_line, .character = end_char },
+                },
+                .severity = severity,
+                .source = "1z",
+                .message = message,
+            }) catch continue;
+        }
+
+        // Store in cache
+        const cached_diags = arena_alloc.dupe(types.LspDiagnostic, lsp_diags.items) catch return;
+
+        // Remove old cached entry for this URI
+        var old_it = self.last_diagnostics.iterator();
+        while (old_it.next()) |entry| {
+            if (std.mem.eql(u8, entry.key_ptr.*, uri)) {
+                self.allocator.free(entry.key_ptr.*);
+                var old_result = entry.value_ptr.*;
+                old_result.deinit();
+                self.last_diagnostics.removeByPtr(entry.key_ptr);
+                break;
+            }
+        }
+
+        const cache_key = self.allocator.dupe(u8, uri) catch return;
+        self.last_diagnostics.put(cache_key, .{
+            .arena = analysis_arena,
+            .diagnostics = cached_diags,
+        }) catch {
+            self.allocator.free(cache_key);
+            return;
+        };
+        stored_in_cache = true;
+
+        // Publish diagnostics
+        self.transport.writeNotification("textDocument/publishDiagnostics", types.PublishDiagnosticsParams{
+            .uri = uri,
+            .diagnostics = cached_diags,
+        }) catch {};
     }
 
     fn handleHover(self: *Server, request: types.Request) !void {
@@ -719,8 +957,8 @@ test "hover on known prelude word returns stack effect" {
     const result = runServer(input, &out_buf);
     try std.testing.expectEqual(@as(u8, 0), result.exit_code);
 
-    // response 0 = initialize, response 1 = hover
-    const hover_resp = extractResponse(result.output, 1);
+    // response 0 = initialize, response 1 = publishDiagnostics, response 2 = hover
+    const hover_resp = extractResponse(result.output, 2);
     try std.testing.expect(hover_resp != null);
 
     // hover response should contain "dup" and stack effect notation
@@ -750,7 +988,8 @@ test "hover on unknown word returns null result" {
     const result = runServer(input, &out_buf);
     try std.testing.expectEqual(@as(u8, 0), result.exit_code);
 
-    const hover_resp = extractResponse(result.output, 1);
+    // response 0 = initialize, 1 = publishDiagnostics, 2 = hover
+    const hover_resp = extractResponse(result.output, 2);
     try std.testing.expect(hover_resp != null);
     try std.testing.expect(std.mem.indexOf(u8, hover_resp.?, "\"result\":null") != null);
 }
@@ -777,7 +1016,8 @@ test "hover on whitespace returns null result" {
     const result = runServer(input, &out_buf);
     try std.testing.expectEqual(@as(u8, 0), result.exit_code);
 
-    const hover_resp = extractResponse(result.output, 1);
+    // response 0 = initialize, 1 = publishDiagnostics, 2 = hover
+    const hover_resp = extractResponse(result.output, 2);
     try std.testing.expect(hover_resp != null);
     try std.testing.expect(std.mem.indexOf(u8, hover_resp.?, "\"result\":null") != null);
 }
@@ -806,7 +1046,8 @@ test "didChange updates document for hover" {
     const result = runServer(input, &out_buf);
     try std.testing.expectEqual(@as(u8, 0), result.exit_code);
 
-    const hover_resp = extractResponse(result.output, 1);
+    // response 0 = initialize, 1 = didOpen diags, 2 = didChange diags, 3 = hover
+    const hover_resp = extractResponse(result.output, 3);
     try std.testing.expect(hover_resp != null);
 
     // should show "drop" not "dup" after the change
@@ -835,7 +1076,8 @@ test "completion with prefix returns matching words" {
     const result = runServer(input, &out_buf);
     try std.testing.expectEqual(@as(u8, 0), result.exit_code);
 
-    const comp_resp = extractResponse(result.output, 1);
+    // response 0 = initialize, 1 = publishDiagnostics, 2 = completion
+    const comp_resp = extractResponse(result.output, 2);
     try std.testing.expect(comp_resp != null);
 
     try std.testing.expect(std.mem.indexOf(u8, comp_resp.?, "dup") != null);
@@ -863,7 +1105,8 @@ test "completion with empty prefix returns items" {
     const result = runServer(input, &out_buf);
     try std.testing.expectEqual(@as(u8, 0), result.exit_code);
 
-    const comp_resp = extractResponse(result.output, 1);
+    // response 0 = initialize, 1 = publishDiagnostics, 2 = completion
+    const comp_resp = extractResponse(result.output, 2);
     try std.testing.expect(comp_resp != null);
     // Should have items (non-empty list)
     try std.testing.expect(std.mem.indexOf(u8, comp_resp.?, "\"items\":[{") != null);
@@ -959,4 +1202,133 @@ test "formatHoverMarkdown without doc" {
 
     try std.testing.expect(std.mem.indexOf(u8, md, "```1z") != null);
     try std.testing.expect(std.mem.indexOf(u8, md, "foo") != null);
+}
+
+test "writeNotification format has method and params but no id" {
+    var out_buf: [4096]u8 = undefined;
+    var reader = IoReader.fixed("");
+    var writer = IoWriter.fixed(&out_buf);
+    var transport = Transport.init(std.testing.allocator, &reader, &writer);
+
+    try transport.writeNotification("textDocument/publishDiagnostics", types.PublishDiagnosticsParams{
+        .uri = "file:///test.1z",
+        .diagnostics = &.{},
+    });
+
+    const written = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, written, "\"method\":\"textDocument/publishDiagnostics\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "\"params\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "\"id\"") == null);
+}
+
+test "didOpen publishes diagnostics" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"dup drop"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    // Response 0 = initialize, response 1 = publishDiagnostics notification, response 2 = shutdown
+    const diag_resp = extractResponse(result.output, 1);
+    try std.testing.expect(diag_resp != null);
+    try std.testing.expect(std.mem.indexOf(u8, diag_resp.?, "textDocument/publishDiagnostics") != null);
+    try std.testing.expect(std.mem.indexOf(u8, diag_resp.?, "file:///test.1z") != null);
+}
+
+test "didChange re-publishes diagnostics" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"dup drop"}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///test.1z","version":2},"contentChanges":[{"text":"swap drop"}]}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    // Response 0 = initialize, 1 = didOpen diags, 2 = didChange diags, 3 = shutdown
+    const diag_resp = extractResponse(result.output, 2);
+    try std.testing.expect(diag_resp != null);
+    try std.testing.expect(std.mem.indexOf(u8, diag_resp.?, "textDocument/publishDiagnostics") != null);
+}
+
+test "didClose clears diagnostics" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"dup drop"}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"file:///test.1z"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    // Response 0 = initialize, 1 = didOpen diags, 2 = didClose empty diags, 3 = shutdown
+    const close_diag = extractResponse(result.output, 2);
+    try std.testing.expect(close_diag != null);
+    try std.testing.expect(std.mem.indexOf(u8, close_diag.?, "textDocument/publishDiagnostics") != null);
+    try std.testing.expect(std.mem.indexOf(u8, close_diag.?, "\"diagnostics\":[]") != null);
+}
+
+test "didOpen with bad definition publishes error diagnostic" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"bad: ( -- x ) [ ] ;"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    // Response 0 = initialize, response 1 = publishDiagnostics
+    const diag_resp = extractResponse(result.output, 1);
+    try std.testing.expect(diag_resp != null);
+    try std.testing.expect(std.mem.indexOf(u8, diag_resp.?, "textDocument/publishDiagnostics") != null);
+    // Should contain diagnostics (not empty) because the word declares output but produces nothing
+    try std.testing.expect(std.mem.indexOf(u8, diag_resp.?, "\"diagnostics\":[]") == null);
 }
