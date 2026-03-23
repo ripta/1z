@@ -36,11 +36,12 @@ pub const ParserCoroutine = struct {
     }
 };
 
-/// Module-level variable to pass the coroutine pointer to `parserEntryPoint`.
-/// Safe because parser coroutine scheduling is single-threaded cooperative:
-/// the SP sets this immediately before the first resume, and the entry
-/// function reads and clears it before any yield point.
-pub var pending_entry_coroutine: ?*ParserCoroutine = null;
+/// Thread-local variable to pass the coroutine pointer to `parserEntryPoint`.
+/// Thread safety is enforced by `threadlocal`: each OS thread gets its own
+/// slot, so concurrent threads cannot interfere. Within a thread the usage
+/// is a same-thread trampoline: set immediately before the first resume,
+/// read and cleared in the entry function before any yield point.
+pub threadlocal var pending_entry_coroutine: ?*ParserCoroutine = null;
 
 /// Entry function for parser coroutines. Called via makecontext with no
 /// arguments; reads the coroutine pointer from `pending_entry_coroutine`.
