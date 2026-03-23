@@ -1,0 +1,23 @@
+=== on enum ===
+Stack: [ ]
+PASS: on:exit is on
+Stack: [ t ]
+PASS: on:unhandled-error is on
+Stack: [ t t ]
+PASS: on:word-defined is on
+Stack: [ t t t ]
+PASS: on:module-loaded is on
+Stack: [ t t t t ]
+PASS: on:exit type-name
+Stack: [ t t t t ]
+=== add-hook registration ===
+Stack: [ t t t t ]
+Stack: [ t t t t ]
+Stack: [ t t t t ]
+PASS: multiple hooks for same event
+Stack: [ t t t t ]
+=== register-hook with symbol ===
+Stack: [ t t t t ]
+Stack: [ t t t t ]
+PASS: register-hook accepts symbol + quotation
+Stack: [ t t t t ]

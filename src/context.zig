@@ -38,6 +38,7 @@ const TraceConfig = trace_mod.TraceConfig;
 
 const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
 const markers_mod = @import("primitives/markers.zig");
+const HookRegistry = @import("primitives/hooks.zig").HookRegistry;
 
 const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
@@ -271,6 +272,10 @@ pub const Context = struct {
     /// When non-null, word lookup checks the word's capability against
     /// this spec and rejects words whose capability is not granted.
     active_sandbox: ?*const SandboxSpec = null,
+    /// Shared hook registry for lifecycle event callbacks.
+    /// Allocated on the container arena by the root context and shared by
+    /// pointer to all child task contexts.
+    hook_registry: *HookRegistry = undefined,
 
     /// Returns true when the instruction sequence ends with a call to `;`,
     /// which means it is a word definition and should be executed even in
@@ -312,6 +317,12 @@ pub const Context = struct {
             std.debug.panic("Failed to allocate module cache: {any}", .{err});
         };
         ctx.module_cache_value.* = .{};
+
+        // Allocate the shared hook registry on the container arena.
+        ctx.hook_registry = ca.allocator().create(HookRegistry) catch |err| {
+            std.debug.panic("Failed to allocate hook registry: {any}", .{err});
+        };
+        ctx.hook_registry.* = .{};
 
         // Push the base type registry frame so boot-time registrations have a target.
         ctx.type_registry_frames.append(allocator, .{}) catch |err| {
@@ -377,6 +388,9 @@ pub const Context = struct {
 
         // Share the parent's module cache so tasks don't re-load from disk.
         ctx.module_cache_value = parent.module_cache_value;
+
+        // Share the parent's hook registry so all contexts fire the same hooks.
+        ctx.hook_registry = parent.hook_registry;
 
         // Inherit the parent's active sandbox, if any. Allocate a copy on the
         // task's arena so the pointer outlives the parent's stack frame.

@@ -1,0 +1,17 @@
+use "testing" ;
+
+"on enum" test-section
+t on:exit on? "on:exit is on" assert-true
+t on:unhandled-error on? "on:unhandled-error is on" assert-true
+t on:word-defined on? "on:word-defined is on" assert-true
+t on:module-loaded on? "on:module-loaded is on" assert-true
+"on:exit" on:exit type-name "on:exit type-name" assert=
+
+"add-hook registration" test-section
+on:exit [ ] add-hook
+on:exit [ ] add-hook
+t "multiple hooks for same event" assert-true
+
+"register-hook with symbol" test-section
+on:exit: [ ] native.register-hook
+t "register-hook accepts symbol + quotation" assert-true

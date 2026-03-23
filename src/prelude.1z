@@ -127,6 +127,17 @@ cmp: generic ( a b -- ordering ) [
 \\ Greater than or equal. Derived from cmp: true unless the result is lt.
 >=: ( a b -- bool ) [ cmp ordering:lt = not ] ;
 
+\\ Lifecycle hook event types.
+on: enum{
+  exit: unit
+  unhandled-error: unit
+  word-defined:    unit
+  module-loaded:   unit
+} ;
+
+\\ Register a hook quotation for a lifecycle event.
+add-hook: ( on-variant quot -- ) [ [ type-name ] dip native.register-hook ] ;
+
 \\ Method dispatch registration syntax.
 \   word: method{ type1 type2 } [ body ] ;
 method{: parse-time [
