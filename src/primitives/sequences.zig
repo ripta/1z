@@ -26,6 +26,8 @@ const popByteArray = helpers.popByteArray;
 const setErrorContext = helpers.setErrorContext;
 const valueTypeName = helpers.valueTypeName;
 
+const builtin = @import("builtin");
+const BigIntManaged = value_mod.BigIntManaged;
 const Allocator = std.mem.Allocator;
 
 const unwrapBaseType = dispatch_mod.unwrapBaseType;
@@ -453,6 +455,10 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
     try dispatch.registerNative("#last", "array", unary_sentinel, nativeLastArray);
     try dispatch.registerNative("#last", "vector", unary_sentinel, nativeLastVector);
     try dispatch.registerNative("#last", "byte-array", unary_sentinel, nativeLastByteArray);
+
+    // #peek / #poke! : byte-level access
+    try dispatch.registerNative("#peek", "byte-array", unary_sentinel, nativePeekByteArray);
+    try dispatch.registerNative("#poke!", "byte-array", unary_sentinel, nativePokeByteArray);
 }
 
 pub const primitives = [_]Primitive{
@@ -500,6 +506,9 @@ pub const primitives = [_]Primitive{
     .{ .name = "#index-of", .stack_effect = "seq elem -- n/f", .doc = "Find index of element, or f if not found.", .func = nativeIndexOf },
     // Freeze
     .{ .name = "freeze", .stack_effect = "vector -- array", .doc = "Convert a vector to an array (copy semantics).", .func = nativeFreeze, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    // Byte-level access
+    .{ .name = "#peek", .stack_effect = "byte-array offset width -- fixnum", .doc = "Read width bytes (1/2/4/8) at offset from byte-array as unsigned fixnum.", .func = nativePeek, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = "#poke!", .stack_effect = "byte-array offset value width -- byte-array", .doc = "Write value as width bytes (1/2/4/8) at offset in byte-array.", .func = nativePoke, .markers = &.{@constCast(&markers_mod.generic_marker)} },
 };
 
 /// #len ( seq -- n ) - Get length of sequence
@@ -2080,4 +2089,211 @@ fn nativeFreeze(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     }
+}
+
+const native_endian = builtin.target.cpu.arch.endian();
+
+fn validateWidth(ctx: *Context, width: i64) !u3 {
+    return switch (width) {
+        1 => 0,
+        2 => 1,
+        4 => 2,
+        8 => 3,
+        else => {
+            setErrorContext(ctx, "#peek/#poke! width must be 1, 2, 4, or 8, got {d}", .{width});
+            return error.InvalidArgument;
+        },
+    };
+}
+
+/// #peek ( byte-array offset width -- fixnum ) - Read width bytes at offset
+fn nativePeekByteArray(ctx: *Context) anyerror!void {
+    const width_val = try popFixnum(ctx);
+    const offset_val = try popFixnum(ctx);
+    const ba_val = try ctx.stack.pop();
+
+    const ba = ba_val.byte_array;
+
+    _ = try validateWidth(ctx, width_val);
+    const width: usize = @intCast(width_val);
+
+    if (offset_val < 0) {
+        setErrorContext(ctx, "negative offset {d}", .{offset_val});
+        return error.IndexOutOfBounds;
+    }
+    const offset: usize = @intCast(offset_val);
+
+    if (offset + width > ba.items.len) {
+        setErrorContext(ctx, "offset {d} + width {d} exceeds byte-array length {d}", .{ offset, width, ba.items.len });
+        return error.IndexOutOfBounds;
+    }
+
+    const slice = ba.items[offset..];
+    switch (width) {
+        1 => try ctx.stack.push(.{ .fixnum = slice[0] }),
+        2 => {
+            const val = std.mem.readInt(u16, slice[0..2], native_endian);
+            try ctx.stack.push(.{ .fixnum = val });
+        },
+        4 => {
+            const val = std.mem.readInt(u32, slice[0..4], native_endian);
+            try ctx.stack.push(.{ .fixnum = val });
+        },
+        8 => {
+            const bits = std.mem.readInt(u64, slice[0..8], native_endian);
+            if (bits <= std.math.maxInt(i64)) {
+                try ctx.stack.push(.{ .fixnum = @intCast(bits) });
+            } else {
+                const alloc = ctx.arena.allocator();
+                const big = try BigIntManaged.initSet(alloc, bits);
+                try ctx.stack.push(.{ .bignum = big });
+            }
+        },
+        else => unreachable,
+    }
+}
+
+/// #poke! ( byte-array offset value width -- byte-array ) - Write value at offset
+fn nativePokeByteArray(ctx: *Context) anyerror!void {
+    const width_val = try popFixnum(ctx);
+    const value = try ctx.stack.pop();
+    const offset_val = try popFixnum(ctx);
+    const ba_val = try ctx.stack.pop();
+
+    const ba = ba_val.byte_array;
+
+    _ = try validateWidth(ctx, width_val);
+    const width: usize = @intCast(width_val);
+
+    if (offset_val < 0) {
+        setErrorContext(ctx, "negative offset {d}", .{offset_val});
+        return error.IndexOutOfBounds;
+    }
+    const offset: usize = @intCast(offset_val);
+
+    if (offset + width > ba.items.len) {
+        setErrorContext(ctx, "offset {d} + width {d} exceeds byte-array length {d}", .{ offset, width, ba.items.len });
+        return error.IndexOutOfBounds;
+    }
+
+    // For width 8, any u64 is valid; for smaller widths, check range.
+    const max_val: u64 = if (width == 8) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(width * 8)) - 1;
+
+    const bits: u64 = switch (value) {
+        .fixnum => |i| blk: {
+            if (i < 0) {
+                setErrorContext(ctx, "#poke! value must be non-negative, got {d}", .{i});
+                return error.FixnumOverflow;
+            }
+            const u: u64 = @intCast(i);
+            if (u > max_val) {
+                setErrorContext(ctx, "#poke! value {d} exceeds range for width {d} (max {d})", .{ u, width, max_val });
+                return error.FixnumOverflow;
+            }
+            break :blk u;
+        },
+        .bignum => |b| blk: {
+            if (!b.fits(u64)) {
+                setErrorContext(ctx, "#poke! value exceeds range for width {d}", .{width});
+                return error.FixnumOverflow;
+            }
+            const u = b.toInt(u64) catch unreachable;
+            if (u > max_val) {
+                setErrorContext(ctx, "#poke! value {d} exceeds range for width {d} (max {d})", .{ u, width, max_val });
+                return error.FixnumOverflow;
+            }
+            break :blk u;
+        },
+        else => {
+            setErrorContext(ctx, "#poke! expected fixnum or bignum value, got {s}", .{valueTypeName(value)});
+            return error.TypeMismatch;
+        },
+    };
+
+    const slice = ba.items[offset..];
+    switch (width) {
+        1 => slice[0] = @intCast(bits),
+        2 => std.mem.writeInt(u16, slice[0..2], @intCast(bits), native_endian),
+        4 => std.mem.writeInt(u32, slice[0..4], @intCast(bits), native_endian),
+        8 => std.mem.writeInt(u64, slice[0..8], bits, native_endian),
+        else => unreachable,
+    }
+
+    try ctx.stack.push(.{ .byte_array = ba });
+}
+
+/// #peek ( byte-array offset width -- fixnum ) - Entry point with dispatch
+fn nativePeek(ctx: *Context) anyerror!void {
+    // dispatch: byte-array is at stack depth 2 (below offset and width)
+    if (ctx.stack.depth() >= 3) {
+        const seq_peek = try ctx.stack.peekN(2);
+        const a_type = dispatch_mod.dispatchTypeName(seq_peek);
+        if (ctx.lookupUnaryDispatch("#peek", a_type)) |entry| {
+            try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+            return;
+        }
+        if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
+            if (ctx.lookupUnaryDispatch("#peek", ae)) |entry| {
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+        if (dispatch_mod.dispatchBaseTypeName(seq_peek)) |bt| {
+            if (ctx.lookupUnaryDispatch("#peek", bt)) |entry| {
+                const len = ctx.stack.items.items.len;
+                ctx.stack.items.items[len - 3] = seq_peek.tagged.inner.*;
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+
+        if (seq_peek == .byte_array) return nativePeekByteArray(ctx);
+    }
+
+    const val = try ctx.stack.pop();
+    _ = val;
+    const val2 = try ctx.stack.pop();
+    _ = val2;
+    const val3 = try ctx.stack.pop();
+    setErrorContext(ctx, "#peek expected byte-array, got {s}", .{valueTypeName(val3)});
+    return error.TypeMismatch;
+}
+
+/// #poke! ( byte-array offset value width -- byte-array ) - Entry point with dispatch
+fn nativePoke(ctx: *Context) anyerror!void {
+    // dispatch: byte-array is at stack depth 3 (below offset, value, and width)
+    if (ctx.stack.depth() >= 4) {
+        const seq_peek = try ctx.stack.peekN(3);
+        const a_type = dispatch_mod.dispatchTypeName(seq_peek);
+        if (ctx.lookupUnaryDispatch("#poke!", a_type)) |entry| {
+            try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+            return;
+        }
+        if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
+            if (ctx.lookupUnaryDispatch("#poke!", ae)) |entry| {
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+        if (dispatch_mod.dispatchBaseTypeName(seq_peek)) |bt| {
+            if (ctx.lookupUnaryDispatch("#poke!", bt)) |entry| {
+                const len = ctx.stack.items.items.len;
+                ctx.stack.items.items[len - 4] = seq_peek.tagged.inner.*;
+                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                return;
+            }
+        }
+
+        if (seq_peek == .byte_array) return nativePokeByteArray(ctx);
+    }
+
+    const val = try ctx.stack.pop();
+    _ = val;
+    const val2 = try ctx.stack.pop();
+    _ = val2;
+    const val3 = try ctx.stack.pop();
+    _ = val3;
+    const val4 = try ctx.stack.pop();
+    setErrorContext(ctx, "#poke! expected byte-array, got {s}", .{valueTypeName(val4)});
+    return error.TypeMismatch;
 }

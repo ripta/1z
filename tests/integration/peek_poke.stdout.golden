@@ -1,0 +1,74 @@
+=== #peek width 1 ===
+Stack: [ ]
+PASS: #peek width 1 at offset 0
+Stack: [ ]
+PASS: #peek width 1 at offset 1
+Stack: [ ]
+PASS: #peek width 1 at offset 2
+Stack: [ ]
+=== #peek width 2 ===
+Stack: [ ]
+PASS: #peek width 2 round-trip
+Stack: [ ]
+=== #peek width 4 ===
+Stack: [ ]
+PASS: #peek width 4 round-trip
+Stack: [ ]
+=== #peek width 8 ===
+Stack: [ ]
+PASS: #peek width 8 round-trip
+Stack: [ ]
+=== #peek width 8 bignum ===
+Stack: [ ]
+PASS: #peek width 8 bignum value
+Stack: [ ]
+=== #poke! and #peek at non-zero offsets ===
+Stack: [ ]
+PASS: #poke! then #peek at offset 2
+Stack: [ ]
+PASS: #poke! then #peek at offset 4
+Stack: [ ]
+=== #poke! returns byte-array ===
+Stack: [ ]
+PASS: #poke! returns byte-array with correct length
+Stack: [ ]
+=== #peek error: invalid width ===
+Stack: [ ]
+PASS: #peek invalid width 3
+Stack: [ ]
+PASS: #peek invalid width 0
+Stack: [ ]
+PASS: #peek invalid width 5
+Stack: [ ]
+=== #peek error: negative offset ===
+Stack: [ ]
+PASS: #peek negative offset
+Stack: [ ]
+=== #peek error: out of bounds ===
+Stack: [ ]
+PASS: #peek offset+width exceeds length
+Stack: [ ]
+PASS: #peek offset 1 + width 2 exceeds length 2
+Stack: [ ]
+=== #poke! error: invalid width ===
+Stack: [ ]
+PASS: #poke! invalid width 3
+Stack: [ ]
+=== #poke! error: negative offset ===
+Stack: [ ]
+PASS: #poke! negative offset
+Stack: [ ]
+=== #poke! error: out of bounds ===
+Stack: [ ]
+PASS: #poke! offset+width exceeds length
+Stack: [ ]
+=== #poke! error: negative value ===
+Stack: [ ]
+PASS: #poke! negative value
+Stack: [ ]
+=== #poke! error: value overflow ===
+Stack: [ ]
+PASS: #poke! value 256 exceeds width 1
+Stack: [ ]
+PASS: #poke! value 65536 exceeds width 2
+Stack: [ ]

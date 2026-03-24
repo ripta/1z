@@ -1,0 +1,58 @@
+\ Integration tests for #peek and #poke!
+
+use "testing" ;
+
+"#peek width 1" test-section
+B{ 0xAB 0xCD 0xEF } 0 1 #peek 0xAB "#peek width 1 at offset 0" assert=
+B{ 0xAB 0xCD 0xEF } 1 1 #peek 0xCD "#peek width 1 at offset 1" assert=
+B{ 0xAB 0xCD 0xEF } 2 1 #peek 0xEF "#peek width 1 at offset 2" assert=
+
+"#peek width 2" test-section
+\ Poke known bytes then peek as width 2
+B{ 0x00 0x00 0x00 0x00 } 0 0x0102 2 #poke! 0 2 #peek 0x0102 "#peek width 2 round-trip" assert=
+
+"#peek width 4" test-section
+B{ 0x00 0x00 0x00 0x00 } 0 0x01020304 4 #poke! 0 4 #peek 0x01020304 "#peek width 4 round-trip" assert=
+
+"#peek width 8" test-section
+8 bytes-alloc 0 0x0102030405060708 8 #poke! 0 8 #peek 0x0102030405060708 "#peek width 8 round-trip" assert=
+
+"#peek width 8 bignum" test-section
+\ Value > i64 max (2^63 - 1 = 9223372036854775807)
+\ Use 0xFFFFFFFFFFFFFFFF = 18446744073709551615
+8 bytes-alloc 0 18446744073709551615 8 #poke! 0 8 #peek 18446744073709551615 "#peek width 8 bignum value" assert=
+
+"#poke! and #peek at non-zero offsets" test-section
+8 bytes-alloc 2 0xBEEF 2 #poke! 2 2 #peek 0xBEEF "#poke! then #peek at offset 2" assert=
+8 bytes-alloc 4 0xDEADBEEF 4 #poke! 4 4 #peek 0xDEADBEEF "#poke! then #peek at offset 4" assert=
+
+"#poke! returns byte-array" test-section
+B{ 0x00 0x00 } 0 0xFF 1 #poke! #len 2 "#poke! returns byte-array with correct length" assert=
+
+"#peek error: invalid width" test-section
+[ B{ 0x00 } 0 3 #peek ] "#peek invalid width 3" assert-error
+[ B{ 0x00 } 0 0 #peek ] "#peek invalid width 0" assert-error
+[ B{ 0x00 } 0 5 #peek ] "#peek invalid width 5" assert-error
+
+"#peek error: negative offset" test-section
+[ B{ 0x00 } -1 1 #peek ] "#peek negative offset" assert-error
+
+"#peek error: out of bounds" test-section
+[ B{ 0x00 } 0 2 #peek ] "#peek offset+width exceeds length" assert-error
+[ B{ 0x00 0x01 } 1 2 #peek ] "#peek offset 1 + width 2 exceeds length 2" assert-error
+
+"#poke! error: invalid width" test-section
+[ B{ 0x00 } 0 0 3 #poke! ] "#poke! invalid width 3" assert-error
+
+"#poke! error: negative offset" test-section
+[ B{ 0x00 } -1 0 1 #poke! ] "#poke! negative offset" assert-error
+
+"#poke! error: out of bounds" test-section
+[ B{ 0x00 } 0 0 2 #poke! ] "#poke! offset+width exceeds length" assert-error
+
+"#poke! error: negative value" test-section
+[ B{ 0x00 } 0 -1 1 #poke! ] "#poke! negative value" assert-error
+
+"#poke! error: value overflow" test-section
+[ B{ 0x00 } 0 256 1 #poke! ] "#poke! value 256 exceeds width 1" assert-error
+[ B{ 0x00 0x00 } 0 65536 2 #poke! ] "#poke! value 65536 exceeds width 2" assert-error
