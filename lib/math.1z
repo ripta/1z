@@ -63,7 +63,7 @@ bits-pad-hex: [
 ] ;
 
 \\ Display bits as zero-padded 16-digit uppercase hex.
->string: method{ bits } [
+inspect: method{ bits } [
   unmake-bits 16 >string-base uppercase
   bits-pad-hex
   "0x" swap #append

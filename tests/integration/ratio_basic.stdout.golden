@@ -33,11 +33,11 @@ PASS: numer>> is 5
 Stack: [ ]
 PASS: denom>> is 3
 Stack: [ ]
-=== ratio: >string ===
+=== ratio: inspect ===
 Stack: [ ]
-PASS: >string
+PASS: inspect
 Stack: [ ]
-PASS: >string negative
+PASS: inspect negative
 Stack: [ ]
 === ratio: zero denominator ===
 Stack: [ ]

@@ -827,7 +827,7 @@ gather: ( ndarray indices -- ndarray ) [
   nip nip nip nip nip
 ] ;
 
-inspect: method{ ndarray } [
+>string: method{ ndarray } [
   dup rank 1 = [
     \ 1D: ndarray{float}(3): 1.0 2.0 3.0
     "ndarray{" over element-type native.type-name #append "}(" #append
@@ -875,7 +875,7 @@ inspect: method{ ndarray } [
   ] if
 ] ;
 
->string: method{ ndarray } [
+inspect: method{ ndarray } [
   dup rank 1 = [
     "nd{ " swap (inspect-elements) " " (join) #append " }" #append
   ] [

@@ -358,23 +358,23 @@ nd{ 10 20 30 } >iterator 0 [ + ] #reduce 60 ">iterator reduce" assert=
 
 "ndarray inspect" test-section
 
-nd{ 1.0 2.0 3.0 } inspect "ndarray{float}(3): 1.0 2.0 3.0" "1D inspect" assert=
-nd{ 1 2 3 } inspect "ndarray{fixnum}(3): 1 2 3" "1D inspect fixnum" assert=
-
+nd{ 1 2 3 } inspect "nd{ 1 2 3 }" "1D inspect" assert=
+nd{ 1.0 2.0 3.0 } inspect "nd{ 1.0 2.0 3.0 }" "1D inspect float" assert=
 nd{ 1 2 3 ;
   4 5 6
-} inspect "2x3 ndarray{fixnum}:\n1 2 3\n4 5 6" "2D inspect" assert=
+} inspect "nd{ 1 2 3 ; 4 5 6 }" "2D inspect" assert=
 
-{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 2 3 } <ndarray> inspect
-"2x2x3 ndarray{fixnum}:\n[:, :, 0] =\n1 2 3\n4 5 6\n[:, :, 1] =\n 7  8  9\n10 11 12" "3D inspect" assert=
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } <ndarray> inspect
+"ndarray(shape={ 2 3 2 } data={ 1 2 3 4 5 6 7 8 9 10 11 12 })" "3D inspect" assert=
 
 "ndarray >string" test-section
 
-nd{ 1 2 3 } >string "nd{ 1 2 3 }" "1D >string" assert=
-nd{ 1.0 2.0 3.0 } >string "nd{ 1.0 2.0 3.0 }" "1D >string float" assert=
+nd{ 1.0 2.0 3.0 } >string "ndarray{float}(3): 1.0 2.0 3.0" "1D >string" assert=
+nd{ 1 2 3 } >string "ndarray{fixnum}(3): 1 2 3" "1D >string fixnum" assert=
+
 nd{ 1 2 3 ;
   4 5 6
-} >string "nd{ 1 2 3 ; 4 5 6 }" "2D >string" assert=
+} >string "2x3 ndarray{fixnum}:\n1 2 3\n4 5 6" "2D >string" assert=
 
-{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } <ndarray> >string
-"ndarray(shape={ 2 3 2 } data={ 1 2 3 4 5 6 7 8 9 10 11 12 })" "3D >string" assert=
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 2 3 } <ndarray> >string
+"2x2x3 ndarray{fixnum}:\n[:, :, 0] =\n1 2 3\n4 5 6\n[:, :, 1] =\n 7  8  9\n10 11 12" "3D >string" assert=

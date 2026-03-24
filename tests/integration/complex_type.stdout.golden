@@ -47,11 +47,11 @@ Stack: [ 3.0 4.0 ]
 PASS: unmake imag
 PASS: unmake real
 Stack: [ ]
-=== complex: >string ===
+=== complex: inspect ===
 Stack: [ ]
-PASS: >string format
+PASS: inspect format
 Stack: [ ]
-PASS: >string negative real
+PASS: inspect negative real
 Stack: [ ]
 === complex: equality ===
 Stack: [ ]

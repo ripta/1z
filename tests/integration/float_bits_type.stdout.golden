@@ -10,7 +10,7 @@ PASS: -1.0 round-trip
 Stack: [ ]
 PASS: 0.0 round-trip
 Stack: [ ]
-=== bits hex formatting ===
+=== bits inspect ===
 Stack: [ ]
 PASS: 1.0 hex
 Stack: [ ]

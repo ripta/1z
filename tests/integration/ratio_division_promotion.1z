@@ -3,10 +3,10 @@ use "testing" ;
 
 "inexact fixnum division produces ratio" test-section
 7 2 / ratio? "7/2 is ratio" assert-true
-7 2 / >string "7/2" "7/2 display" assert=
-5 3 / >string "5/3" "5/3 display" assert=
--7 2 / >string "-7/2" "-7/2 display" assert=
-7 -2 / >string "-7/2" "7/-2 normalizes sign" assert=
+7 2 / inspect "7/2" "7/2 display" assert=
+5 3 / inspect "5/3" "5/3 display" assert=
+-7 2 / inspect "-7/2" "-7/2 display" assert=
+7 -2 / inspect "-7/2" "7/-2 normalizes sign" assert=
 
 "exact fixnum division still produces integer" test-section
 6 2 / 3 "6/2 = 3" assert=

@@ -9,10 +9,10 @@ use "math" ;
 -1.0 float>bits bits>float -1.0 "-1.0 round-trip" assert=
 0.0 float>bits bits>float 0.0 "0.0 round-trip" assert=
 
-"bits hex formatting" test-section
-1.0 float>bits >string "0x3FF0000000000000" "1.0 hex" assert=
-0.0 float>bits >string "0x0000000000000000" "0.0 hex" assert=
--1.0 float>bits >string "0xBFF0000000000000" "-1.0 hex" assert=
+"bits inspect" test-section
+1.0 float>bits inspect "0x3FF0000000000000" "1.0 hex" assert=
+0.0 float>bits inspect "0x0000000000000000" "0.0 hex" assert=
+-1.0 float>bits inspect "0xBFF0000000000000" "-1.0 hex" assert=
 
 "bitwise ops on bits" test-section
 1.0 float>bits 0.0 float>bits bitor unmake-bits

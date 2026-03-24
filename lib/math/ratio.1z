@@ -27,7 +27,7 @@ normalize-ratio: ( numer denom -- ratio-or-int ) [
   if
 ] ;
 
->string: method{ ratio } [
+inspect: method{ ratio } [
   dup numer>> >string "/" #append
   swap denom>> >string #append
 ] ;

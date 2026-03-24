@@ -6,10 +6,10 @@ use "testing" ;
 5 3 normalize-ratio type-name "ratio" "type-of is ratio:" assert=
 
 "ratio: normalization" test-section
-10 6 normalize-ratio >string "5/3" "10/6 normalizes to 5/3" assert=
--10 6 normalize-ratio >string "-5/3" "-10/6 -> -5/3" assert=
-10 -6 normalize-ratio >string "-5/3" "10/-6 -> -5/3" assert=
--10 -6 normalize-ratio >string "5/3" "-10/-6 -> 5/3" assert=
+10 6 normalize-ratio inspect "5/3" "10/6 normalizes to 5/3" assert=
+-10 6 normalize-ratio inspect "-5/3" "-10/6 -> -5/3" assert=
+10 -6 normalize-ratio inspect "-5/3" "10/-6 -> -5/3" assert=
+-10 -6 normalize-ratio inspect "5/3" "-10/-6 -> 5/3" assert=
 
 "ratio: demotion" test-section
 6 3 normalize-ratio 2 "6/3 demotes to 2" assert=
@@ -23,9 +23,9 @@ use "testing" ;
 5 3 normalize-ratio numer>> 5 "numer>> is 5" assert=
 5 3 normalize-ratio denom>> 3 "denom>> is 3" assert=
 
-"ratio: >string" test-section
-5 3 normalize-ratio >string "5/3" ">string" assert=
--7 4 normalize-ratio >string "-7/4" ">string negative" assert=
+"ratio: inspect" test-section
+5 3 normalize-ratio inspect "5/3" "inspect" assert=
+-7 4 normalize-ratio inspect "-7/4" "inspect negative" assert=
 
 "ratio: zero denominator" test-section
 [ 5 0 normalize-ratio ] "DivisionByZero" assert-error

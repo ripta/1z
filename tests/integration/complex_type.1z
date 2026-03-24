@@ -33,9 +33,9 @@ C{ tau 2 / tau } imaginary-part 6.28318 "C{ word expr } imag" assert=
 3.0 4.0 make-complex unmake-complex
 4.0 "unmake imag" assert= 3.0 "unmake real" assert=
 
-"complex: >string" test-section
-C{ 1.0 2.0 } >string "C{ 1.0 2.0 }" ">string format" assert=
-C{ -1.0 0.0 } >string "C{ -1.0 0.0 }" ">string negative real" assert=
+"complex: inspect" test-section
+C{ 1.0 2.0 } inspect "C{ 1.0 2.0 }" "inspect format" assert=
+C{ -1.0 0.0 } inspect "C{ -1.0 0.0 }" "inspect negative real" assert=
 
 "complex: equality" test-section
 C{ 1.0 2.0 } C{ 1.0 2.0 } = "equal complex" assert-true

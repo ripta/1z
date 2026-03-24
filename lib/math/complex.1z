@@ -13,7 +13,7 @@ imaginary-part: ( c -- f ) [ unmake-complex nip ] ;
 \\ Complex literal syntax. Promotes components to float.
 C{: parse-time [ "}" parse-until call >float swap >float swap make-complex ] ;
 
->string: method{ complex } [
+inspect: method{ complex } [
   "C{ " over real-part >string #append
   " " #append
   swap imaginary-part >string #append

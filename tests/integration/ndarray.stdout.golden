@@ -421,9 +421,20 @@ Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-t
 Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> ]
 PASS: 1D inspect
 Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> ]
-PASS: 1D inspect fixnum
+PASS: 1D inspect float
 Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> ]
 PASS: 2D inspect
+Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> ]
+Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> "ndarray(shape={ 2 3 2 } data={ 1 2 3 4 5 6 7 8 9 10 11 12 })" ]
+PASS: 3D inspect
+Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> ]
+=== ndarray >string ===
+Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> ]
+PASS: 1D >string
+Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> ]
+PASS: 1D >string fixnum
+Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> ]
+PASS: 2D >string
 Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> ]
 Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> "2x2x3 ndarray{fixnum}:
 [:, :, 0] =
@@ -432,16 +443,5 @@ Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-t
 [:, :, 1] =
  7  8  9
 10 11 12" ]
-PASS: 3D inspect
-Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> ]
-=== ndarray >string ===
-Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> ]
-PASS: 1D >string
-Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> ]
-PASS: 1D >string float
-Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> ]
-PASS: 2D >string
-Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> ]
-Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> "ndarray(shape={ 2 3 2 } data={ 1 2 3 4 5 6 7 8 9 10 11 12 })" ]
 PASS: 3D >string
 Stack: [ <ndarray ndarray{ data: V{ t f } shape: { 2 } strides: V{ 1 } element-type: <type:boolean> }> <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> :__START__: <ndarray ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: V{ 1 } element-type: <type:fixnum> }> ]
