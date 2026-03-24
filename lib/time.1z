@@ -234,3 +234,21 @@ elapsed: [
   [ call ] dip
   monotonic-nanos swap - >duration
 ] ;
+
+\ --- Display ---
+
+inspect: method{ duration } [
+  "<duration " swap unmake-duration inspect #append ">" #append
+] ;
+
+inspect: method{ timestamp } [
+  dup timestamp-sec inspect swap timestamp-nsec inspect
+  \ Stack: sec-str nsec-str
+  swap "<timestamp " swap #append " " #append swap #append ">" #append
+] ;
+
+inspect: method{ timezone } [
+  dup timezone-name swap timezone-offset 60 * format-tz-offset
+  \ Stack: name-str offset-str
+  swap "<timezone " swap #append " " #append swap #append ">" #append
+] ;

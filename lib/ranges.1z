@@ -85,3 +85,17 @@ range-inclusive: ( start end -- range ) [ range= ] ;
   swap unmake-range drop nip
   <rot- -- * +
 ] ;
+
+inspect: method{ range } [
+  unmake-range
+  \ Stack: start end step infinite?
+  [ nip "inf" swap ] [ swap inspect swap ] if
+  \ Stack: start end-str step
+  inspect [ inspect ] 2dip
+  \ Stack: start-str end-str step-str
+  "<range "
+  3 pick-n #append " " #append
+  2 pick-n #append " " #append
+  1 pick-n #append ">" #append
+  nip nip nip
+] ;

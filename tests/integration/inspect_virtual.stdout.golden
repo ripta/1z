@@ -1,0 +1,37 @@
+=== duration inspect ===
+Stack: [ ]
+PASS: zero duration
+Stack: [ ]
+PASS: positive duration
+Stack: [ ]
+PASS: one second
+Stack: [ ]
+=== timestamp inspect ===
+Stack: [ ]
+PASS: epoch
+Stack: [ ]
+=== timezone inspect ===
+Stack: [ ]
+PASS: utc
+Stack: [ ]
+=== range inspect ===
+Stack: [ ]
+PASS: ascending range
+Stack: [ ]
+PASS: descending range
+Stack: [ ]
+PASS: infinite range
+Stack: [ ]
+PASS: stepped range
+Stack: [ ]
+=== semaphore inspect ===
+Stack: [ ]
+PASS: semaphore
+Stack: [ ]
+=== prefix-table inspect ===
+Stack: [ ]
+Stack: [ "<prefix-table 2 entries>" ]
+PASS: prefix-table with 2 entries
+Stack: [ ]
+PASS: empty prefix-table
+Stack: [ ]

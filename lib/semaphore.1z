@@ -21,3 +21,5 @@ try-acquire: method{ semaphore } [
 release: ( sem -- ) [
   unmake-semaphore t swap send
 ] ;
+
+inspect: method{ semaphore } [ drop "<semaphore>" ] ;

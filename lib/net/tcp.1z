@@ -35,3 +35,7 @@ accept: ( server -- stream addr ) [
 close: ( server -- ) [
   unmake-server drop fd-close
 ] ;
+
+inspect: method{ server } [
+  "<server fd=" swap unmake-server drop inspect #append ">" #append
+] ;

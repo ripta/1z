@@ -416,6 +416,7 @@ inf ( -- f )
 infinite? ( x -- ? )
 input-stream
 inputs>> ( instance -- value )
+inspectable
 integer? ( val -- ? )
 iterator
 iterator? ( val -- ? )
@@ -559,6 +560,7 @@ stream-write-string ( stream str -- n )
 stream? ( val -- ? )
 string
 string? ( val -- ? )
+stringable
 struct-instance
 struct-type
 struct{

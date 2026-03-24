@@ -170,6 +170,12 @@ protocol{: parse-time [
 \\ Protocol for types that support three-way comparison via cmp.
 comparable: protocol{ cmp: } ;
 
+\\ Protocol for types that support roundtrippable inspection via inspect.
+inspectable: protocol{ inspect: } ;
+
+\\ Protocol for types that support human-friendly display via >string.
+stringable: protocol{ >string: } ;
+
 \\ Dynamic variable definition syntax.
 define-parameter: parse-time [ dup parse-quotation make-parameter ] ;
 

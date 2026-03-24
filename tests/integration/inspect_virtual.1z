@@ -1,0 +1,32 @@
+\ Integration tests for inspect methods on virtual types
+
+use "testing" ;
+use "time" ;
+use "ranges" ;
+use "semaphore" ;
+use "prefix-match" ;
+
+"duration inspect" test-section
+0 nanoseconds inspect "<duration 0>" "zero duration" assert=
+42 nanoseconds inspect "<duration 42>" "positive duration" assert=
+1000000000 nanoseconds inspect "<duration 1000000000>" "one second" assert=
+
+"timestamp inspect" test-section
+0 0 make-timestamp inspect "<timestamp 0 0>" "epoch" assert=
+
+"timezone inspect" test-section
+utc inspect "<timezone UTC +0000>" "utc" assert=
+
+"range inspect" test-section
+1 10 <range> inspect "<range 1 10 1>" "ascending range" assert=
+10 1 <range> inspect "<range 10 1 -1>" "descending range" assert=
+0 range-from inspect "<range 0 inf 1>" "infinite range" assert=
+0 20 3 range-step inspect "<range 0 20 3>" "stepped range" assert=
+
+"semaphore inspect" test-section
+[ 1 <semaphore> inspect "<semaphore>" "semaphore" assert= ] task-scope
+
+"prefix-table inspect" test-section
+{ { "/api" "api-handler" } { "/static" "static-handler" } } <prefix-table> inspect
+"<prefix-table 2 entries>" "prefix-table with 2 entries" assert=
+{ } <prefix-table> inspect "<prefix-table 0 entries>" "empty prefix-table" assert=

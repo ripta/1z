@@ -28,3 +28,7 @@ prefix-match: ( prefix-table key -- value ) [
   [ drop f "no matching prefix" EKeyNotFound make-error throw ]
   if
 ] ;
+
+inspect: method{ prefix-table } [
+  "<prefix-table " swap unmake-prefix-table #len inspect #append " entries>" #append
+] ;
