@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test lsp-test update-golden update-fmt-golden benchmark clean help docs
+.PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test lsp-test update-golden update-fmt-golden benchmark build-example clean help docs
 
 SHELL := /bin/bash
 
@@ -53,6 +53,9 @@ BENCHMARK_FILES := $(wildcard tests/benchmark/*.1z)
 
 benchmark: build ## Run benchmarks
 	@for f in $(BENCHMARK_FILES); do echo "--- $$f ---"; ./zig-out/bin/1z "$$f"; echo; done
+
+build-example: build ## Build the C embedding example
+	zig cc -o zig-out/embed examples/embed.c -Iinclude zig-out/clib/lib1z.a -lffi
 
 clean: ## Remove build artifacts
 	rm -rf zig-out .zig-cache
