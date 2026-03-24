@@ -50,6 +50,54 @@ pub fn build(b: *std.Build) void {
     const install_lsp = b.addInstallArtifact(lsp_exe, .{});
     b.getInstallStep().dependOn(&install_lsp.step);
 
+    // zig-out/clib/lib1z.a (static library)
+    // Installed to clib/ instead of lib/ because zig-out/lib is symlinked
+    // to the stdlib directory.
+    const capi_static_module = b.createModule(.{
+        .root_source_file = b.path("src/capi.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    capi_static_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
+    capi_static_module.addIncludePath(b.path("ext/toy"));
+    capi_static_module.linkSystemLibrary("ffi", .{});
+    addIrSources(b, capi_static_module);
+    capi_static_module.addOptions("build_options", options);
+
+    const static_lib = b.addLibrary(.{
+        .name = "1z",
+        .root_module = capi_static_module,
+        .linkage = .static,
+    });
+    const install_static = b.addInstallArtifact(static_lib, .{
+        .dest_dir = .{ .override = .{ .custom = "clib" } },
+    });
+    b.getInstallStep().dependOn(&install_static.step);
+
+    // zig-out/clib/lib1z.dylib (shared library)
+    const capi_shared_module = b.createModule(.{
+        .root_source_file = b.path("src/capi.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    capi_shared_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
+    capi_shared_module.addIncludePath(b.path("ext/toy"));
+    capi_shared_module.linkSystemLibrary("ffi", .{});
+    addIrSources(b, capi_shared_module);
+    capi_shared_module.addOptions("build_options", options);
+
+    const shared_lib = b.addLibrary(.{
+        .name = "1z",
+        .root_module = capi_shared_module,
+        .linkage = .dynamic,
+    });
+    const install_shared = b.addInstallArtifact(shared_lib, .{
+        .dest_dir = .{ .override = .{ .custom = "clib" } },
+    });
+    b.getInstallStep().dependOn(&install_shared.step);
+
     // zig-out/lib -> lib/
     //
     // TODO(ripta): A bit hacky, but otherwise the stdlib path has to be
