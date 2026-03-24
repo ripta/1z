@@ -51,9 +51,18 @@ truncate: ( n -- f ) [ native.truncate ] ;
 bits: virtual{ fixnum } ;
 
 \\ Convert a float to its raw IEEE 754 bit pattern.
-float>bits: ( f -- bits ) [ native.float-raw-bits make-bits ] ;
+float>bits: ( f -- bits ) [ 64 native.float-raw-bits make-bits ] ;
 \\ Convert a raw IEEE 754 bit pattern back to a float.
-bits>float: ( bits -- f ) [ unmake-bits native.raw-bits-float ] ;
+bits>float: ( bits -- f ) [ unmake-bits 64 native.raw-bits-float ] ;
+
+\\ Convert a float to its raw 32-bit IEEE 754 bit pattern as a fixnum.
+float32>bits: ( f -- fixnum ) [ 32 native.float-raw-bits ] ;
+\\ Convert a raw 32-bit IEEE 754 bit pattern to a float.
+bits>float32: ( fixnum -- f ) [ 32 native.raw-bits-float ] ;
+\\ Alias for float>bits.
+float64>bits: ( f -- bits ) [ float>bits ] ;
+\\ Alias for bits>float.
+bits>float64: ( bits -- f ) [ bits>float ] ;
 
 \ Prepend "0" until the string is 16 characters.
 bits-pad-hex: [
@@ -83,12 +92,12 @@ next-float: ( f -- f' ) [
   dup nan? [ ] [
     dup inf = [ ] [
       dup 0.0 = [
-        drop 1 native.raw-bits-float
+        drop 1 64 native.raw-bits-float
       ] [
         dup 0.0 > [
-          native.float-raw-bits 1 + native.raw-bits-float
+          64 native.float-raw-bits 1 + 64 native.raw-bits-float
         ] [
-          native.float-raw-bits 1 - native.raw-bits-float
+          64 native.float-raw-bits 1 - 64 native.raw-bits-float
         ] if
       ] if
     ] if
@@ -100,12 +109,12 @@ prev-float: ( f -- f' ) [
   dup nan? [ ] [
     dup -inf = [ ] [
       dup 0.0 = [
-        drop 9223372036854775809 native.raw-bits-float
+        drop 9223372036854775809 64 native.raw-bits-float
       ] [
         dup 0.0 > [
-          native.float-raw-bits 1 - native.raw-bits-float
+          64 native.float-raw-bits 1 - 64 native.raw-bits-float
         ] [
-          native.float-raw-bits 1 + native.raw-bits-float
+          64 native.float-raw-bits 1 + 64 native.raw-bits-float
         ] if
       ] if
     ] if

@@ -1,0 +1,22 @@
+use "testing" ;
+use "math" ;
+
+"float32>bits / bits>float32 round-trips" test-section
+1.0 float32>bits bits>float32 1.0 "1.0 round-trips through f32" assert=
+-1.0 float32>bits bits>float32 -1.0 "-1.0 round-trips through f32" assert=
+0.0 float32>bits bits>float32 0.0 "0.0 round-trips through f32" assert=
+
+"float32>bits known patterns" test-section
+1.0 float32>bits 1065353216 "1.0 f32 bits" assert=
+-1.0 float32>bits 3212836864 "-1.0 f32 bits" assert=
+0.0 float32>bits 0 "0.0 f32 bits" assert=
+
+"float64>bits / bits>float64 alias equivalence" test-section
+1.0 float64>bits 1.0 float>bits "float64>bits = float>bits for 1.0" assert=
+-1.0 float64>bits -1.0 float>bits "float64>bits = float>bits for -1.0" assert=
+1.0 float>bits bits>float64 1.0 float>bits bits>float "bits>float64 = bits>float for 1.0" assert=
+
+"precision truncation" test-section
+0.1 float32>bits bits>float32
+0.1
+= f "0.1 does not round-trip exactly through f32" assert=

@@ -131,44 +131,90 @@ fn nativeTruncate(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .float = @trunc(x) });
 }
 
+// ( float width -- fixnum )
 fn nativeFloatRawBits(ctx: *Context) anyerror!void {
+    const width_val = try ctx.stack.pop();
+    if (width_val != .fixnum or (width_val.fixnum != 32 and width_val.fixnum != 64)) {
+        helpers.setErrorContext(ctx, "float-raw-bits: width must be 32 or 64", .{});
+        return error.TypeMismatch;
+    }
+    const width: u7 = @intCast(width_val.fixnum);
     const val = try ctx.stack.pop();
     if (val != .float) {
         helpers.setTypeMismatchError(ctx, "float", val);
         return error.TypeMismatch;
     }
-    const bits: u64 = @bitCast(val.float);
-    if (bits >> 63 == 0) {
+    if (width == 32) {
+        const f32_val: f32 = @floatCast(val.float);
+        const bits: u32 = @bitCast(f32_val);
         try ctx.stack.push(.{ .fixnum = @intCast(bits) });
     } else {
-        const alloc = ctx.arena.allocator();
-        const big = try BigIntManaged.initSet(alloc, bits);
-        try ctx.stack.push(.{ .bignum = big });
+        const bits: u64 = @bitCast(val.float);
+        if (bits >> 63 == 0) {
+            try ctx.stack.push(.{ .fixnum = @intCast(bits) });
+        } else {
+            const alloc = ctx.arena.allocator();
+            const big = try BigIntManaged.initSet(alloc, bits);
+            try ctx.stack.push(.{ .bignum = big });
+        }
     }
 }
 
+// ( fixnum width -- float )
 fn nativeRawBitsFloat(ctx: *Context) anyerror!void {
+    const width_val = try ctx.stack.pop();
+    if (width_val != .fixnum or (width_val.fixnum != 32 and width_val.fixnum != 64)) {
+        helpers.setErrorContext(ctx, "raw-bits-float: width must be 32 or 64", .{});
+        return error.TypeMismatch;
+    }
+    const width: u7 = @intCast(width_val.fixnum);
     const val = try ctx.stack.pop();
-    const bits: u64 = switch (val) {
-        .fixnum => |i| blk: {
-            if (i < 0) {
-                helpers.setErrorContext(ctx, "raw-bits-float: value must be in range 0..2^64-1, got {d}", .{i});
+    if (width == 32) {
+        const bits: u32 = switch (val) {
+            .fixnum => |i| blk: {
+                if (i < 0 or i > std.math.maxInt(u32)) {
+                    helpers.setErrorContext(ctx, "raw-bits-float: value must be in range 0..2^32-1, got {d}", .{i});
+                    return error.TypeMismatch;
+                }
+                break :blk @intCast(i);
+            },
+            .bignum => |b| blk: {
+                if (!b.fits(u32)) {
+                    helpers.setErrorContext(ctx, "raw-bits-float: value must be in range 0..2^32-1", .{});
+                    return error.TypeMismatch;
+                }
+                break :blk b.toInt(u32) catch unreachable;
+            },
+            else => {
+                helpers.setTypeMismatchError(ctx, "fixnum or bignum", val);
                 return error.TypeMismatch;
-            }
-            break :blk @intCast(i);
-        },
-        .bignum => |b| blk: {
-            if (!b.fits(u64)) {
-                helpers.setErrorContext(ctx, "raw-bits-float: value must be in range 0..2^64-1", .{});
+            },
+        };
+        const f32_val: f32 = @bitCast(bits);
+        const f: f64 = @floatCast(f32_val);
+        try ctx.stack.push(.{ .float = f });
+    } else {
+        const bits: u64 = switch (val) {
+            .fixnum => |i| blk: {
+                if (i < 0) {
+                    helpers.setErrorContext(ctx, "raw-bits-float: value must be in range 0..2^64-1, got {d}", .{i});
+                    return error.TypeMismatch;
+                }
+                break :blk @intCast(i);
+            },
+            .bignum => |b| blk: {
+                if (!b.fits(u64)) {
+                    helpers.setErrorContext(ctx, "raw-bits-float: value must be in range 0..2^64-1", .{});
+                    return error.TypeMismatch;
+                }
+                break :blk b.toInt(u64) catch unreachable;
+            },
+            else => {
+                helpers.setTypeMismatchError(ctx, "fixnum or bignum", val);
                 return error.TypeMismatch;
-            }
-            break :blk b.toInt(u64) catch unreachable;
-        },
-        else => {
-            helpers.setTypeMismatchError(ctx, "fixnum or bignum", val);
-            return error.TypeMismatch;
-        },
-    };
-    const f: f64 = @bitCast(bits);
-    try ctx.stack.push(.{ .float = f });
+            },
+        };
+        const f: f64 = @bitCast(bits);
+        try ctx.stack.push(.{ .float = f });
+    }
 }

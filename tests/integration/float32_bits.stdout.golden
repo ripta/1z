@@ -1,0 +1,30 @@
+=== float32>bits / bits>float32 round-trips ===
+Stack: [ ]
+PASS: 1.0 round-trips through f32
+Stack: [ ]
+PASS: -1.0 round-trips through f32
+Stack: [ ]
+PASS: 0.0 round-trips through f32
+Stack: [ ]
+=== float32>bits known patterns ===
+Stack: [ ]
+PASS: 1.0 f32 bits
+Stack: [ ]
+PASS: -1.0 f32 bits
+Stack: [ ]
+PASS: 0.0 f32 bits
+Stack: [ ]
+=== float64>bits / bits>float64 alias equivalence ===
+Stack: [ ]
+PASS: float64>bits = float>bits for 1.0
+Stack: [ ]
+PASS: float64>bits = float>bits for -1.0
+Stack: [ ]
+PASS: bits>float64 = bits>float for 1.0
+Stack: [ ]
+=== precision truncation ===
+Stack: [ ]
+Stack: [ 0.10000000149011612 ]
+Stack: [ 0.10000000149011612 0.1 ]
+PASS: 0.1 does not round-trip exactly through f32
+Stack: [ ]

@@ -1,10 +1,10 @@
-=== float-raw-bits known bit patterns ===
+=== float-raw-bits known bit patterns (64-bit) ===
 Stack: [ ]
 PASS: 1.0 raw bits
 Stack: [ ]
 PASS: 0.0 raw bits
 Stack: [ ]
-=== float-raw-bits round-trip positive floats ===
+=== float-raw-bits round-trip positive floats (64-bit) ===
 Stack: [ ]
 PASS: 1.0 round-trips
 Stack: [ ]
@@ -12,11 +12,11 @@ PASS: 0.0 round-trips
 Stack: [ ]
 PASS: 3.14 round-trips
 Stack: [ ]
-=== float-raw-bits round-trip negative floats ===
+=== float-raw-bits round-trip negative floats (64-bit) ===
 Stack: [ ]
 PASS: -1.0 round-trips
 Stack: [ ]
-=== float-raw-bits negative zero ===
+=== float-raw-bits negative zero (64-bit) ===
 Stack: [ ]
 Stack: [ 9223372036854775808 ]
 Stack: [ 9223372036854775808 0 ]
@@ -26,7 +26,7 @@ Stack: [ 9223372036854775808 ]
 Stack: [ 9223372036854775808 9223372036854775808 ]
 PASS: -0.0 round-trips
 Stack: [ ]
-=== float-raw-bits infinity ===
+=== float-raw-bits infinity (64-bit) ===
 Stack: [ ]
 Stack: [ inf ]
 Stack: [ inf inf ]
@@ -36,13 +36,39 @@ Stack: [ -inf ]
 Stack: [ -inf -inf ]
 PASS: -inf round-trips
 Stack: [ ]
-=== float-raw-bits nan ===
+=== float-raw-bits nan (64-bit) ===
 Stack: [ ]
 PASS: nan bit pattern preserved
 Stack: [ ]
-=== raw-bits-float error cases ===
+=== raw-bits-float error cases (64-bit) ===
 Stack: [ ]
 PASS: negative fixnum errors
 Stack: [ ]
 PASS: fixnum rejected by float-raw-bits
+Stack: [ ]
+=== float-raw-bits known bit patterns (32-bit) ===
+Stack: [ ]
+PASS: 1.0 f32 raw bits
+Stack: [ ]
+PASS: 0.0 f32 raw bits
+Stack: [ ]
+PASS: -1.0 f32 raw bits
+Stack: [ ]
+=== float-raw-bits round-trip (32-bit) ===
+Stack: [ ]
+PASS: 1.0 f32 round-trips
+Stack: [ ]
+PASS: 0.0 f32 round-trips
+Stack: [ ]
+PASS: -1.0 f32 round-trips
+Stack: [ ]
+=== error cases: invalid width ===
+Stack: [ ]
+PASS: invalid width 16 for float-raw-bits
+Stack: [ ]
+PASS: invalid width 16 for raw-bits-float
+Stack: [ ]
+=== error cases: u32 overflow for width=32 ===
+Stack: [ ]
+PASS: u32 overflow errors
 Stack: [ ]
