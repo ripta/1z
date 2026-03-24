@@ -96,6 +96,8 @@ pub const ServerCapabilities = struct {
     signatureHelpProvider: ?SignatureHelpOptions = null,
     documentFormattingProvider: bool = false,
     documentSymbolProvider: bool = false,
+    semanticTokensProvider: ?SemanticTokensOptions = null,
+    definitionProvider: bool = false,
 };
 
 /// InitializeResult returned to the client.
@@ -166,4 +168,27 @@ pub const DocumentSymbol = struct {
     range: LspRange,
     selectionRange: LspRange,
     detail: ?[]const u8 = null,
+};
+
+/// Semantic tokens legend mapping indices to token type/modifier names.
+pub const SemanticTokensLegend = struct {
+    tokenTypes: []const []const u8,
+    tokenModifiers: []const []const u8,
+};
+
+/// Semantic tokens server capability.
+pub const SemanticTokensOptions = struct {
+    legend: SemanticTokensLegend,
+    full: bool = false,
+};
+
+/// Semantic tokens response containing encoded token data.
+pub const SemanticTokensResult = struct {
+    data: []const i64,
+};
+
+/// A location in a document (URI + range).
+pub const Location = struct {
+    uri: []const u8,
+    range: LspRange,
 };
