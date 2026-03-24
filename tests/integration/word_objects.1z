@@ -109,7 +109,7 @@ native.current-scope >word-info?: native.>word 1 #nth f = f "native.>word raw se
 all-words: >word-info stack-effect>> >string "( -- array )" "stack-effect >string for all-words" assert=
 
 \ Library word tests
-use "introspect" ;
+use "runtime/introspect" ;
 
 "words-matching finds words" test-section
 "dup" words-matching >iterator [ name>> "dup" = ] #filter #count

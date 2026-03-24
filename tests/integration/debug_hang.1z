@@ -1,6 +1,6 @@
 use "testing" ;
 use "net" ;
-use "tcp" ;
+use "net/tcp" ;
 
 "test: inlined connect body in spawned task" test-section
 [

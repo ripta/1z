@@ -1,6 +1,6 @@
 use "testing" ;
 use "net" ;
-use "tcp" ;
+use "net/tcp" ;
 use "time" ;
 
 "tcp wrappers: accept with raw connect" test-section

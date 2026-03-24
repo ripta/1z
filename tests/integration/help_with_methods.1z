@@ -1,5 +1,5 @@
 use "testing" ;
-use "introspect" ;
+use "runtime/introspect" ;
 
 \\ A polymorphic word for testing help display with methods.
 greet: generic ( x -- str ) [ drop "hello" ] ;

@@ -1,6 +1,6 @@
 \ Verify a sampling of prelude words have doc-comments visible via help.
 
-use "introspect" ;
+use "runtime/introspect" ;
 
 []: help
 when: help

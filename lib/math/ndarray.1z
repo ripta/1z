@@ -1,6 +1,6 @@
 \ lib/ndarray.1z - N-dimensional arrays
 
-use "ratio" ;
+use "math/ratio" ;
 
 ndarray: virtual{ struct{ data shape strides element-type } } ;
 

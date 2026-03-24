@@ -1,7 +1,7 @@
 \ Integration tests for lib/path.1z
 
 use "testing" ;
-use "path" ;
+use "os/path" ;
 
 "basename basic" test-section
 "/foo/bar.txt" basename "bar.txt" "basename file in dir" assert=

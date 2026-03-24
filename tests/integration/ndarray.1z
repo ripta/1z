@@ -1,5 +1,5 @@
 use "testing" ;
-use "ndarray" ;
+use "math/ndarray" ;
 
 "ndarray construction" test-section
 

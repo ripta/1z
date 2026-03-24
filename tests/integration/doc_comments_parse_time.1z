@@ -1,6 +1,6 @@
 \ Verify doc-comments on parse-time prelude words.
 
-use "introspect" ;
+use "runtime/introspect" ;
 
 H{: help
 struct{: help

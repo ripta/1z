@@ -2,7 +2,7 @@
 
 use "testing" ;
 use "net" ;
-use "udp" ;
+use "net/udp" ;
 
 "parse-ipv4 produces 4-byte ip" test-section
 "127.0.0.1" parse-ipv4

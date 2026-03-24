@@ -1,5 +1,5 @@
 use "testing" ;
-use "ratio" ;
+use "math/ratio" ;
 
 "variant word syntax: define and call" test-section
 

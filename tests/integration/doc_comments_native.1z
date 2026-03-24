@@ -1,6 +1,6 @@
 \ Verify a sampling of native words have doc-comments visible via help.
 
-use "introspect" ;
+use "runtime/introspect" ;
 
 dup: help
 +: help

@@ -14,7 +14,7 @@ my-batch-word: 123 ;
 my-batch-word 123 = "user word in batch frame" assert-true
 
 \ Imports work in the batch frame
-use "introspect" ;
+use "runtime/introspect" ;
 all-words array? "imported all-words works" assert-true
 
 \ User-defined word appears in all-words

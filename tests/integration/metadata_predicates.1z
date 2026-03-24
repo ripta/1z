@@ -1,6 +1,6 @@
 use "testing" ;
-use "ratio" ;
-use "complex" ;
+use "math/ratio" ;
+use "math/complex" ;
 
 \ --- number? ---
 42 number? "fixnum is numeric" assert-true

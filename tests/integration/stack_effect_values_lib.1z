@@ -1,7 +1,7 @@
 \ Tests for lib/effect.1z: stack effect value utilities
 
 use "testing" ;
-use "effect" ;
+use "runtime/effect" ;
 
 "quotation>effect? returns some for annotated quotation" test-section
 [ ( a b -- c ) + ] quotation>effect?

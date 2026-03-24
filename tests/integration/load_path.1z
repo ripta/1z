@@ -10,7 +10,7 @@ use "testing" ;
 5 add3 8 "path mode load with .1z" assert=
 
 "Nested loads resolve relative to their own file" test-section
-use "grid" ;
+use "math/grid" ;
 3 3 S{ } new-grid grid? t "grid loaded (which loads ranges, strings, sequences)" assert=
 
 "add-load-path adds searchable directory" test-section

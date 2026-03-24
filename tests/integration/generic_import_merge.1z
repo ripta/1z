@@ -9,7 +9,7 @@ use "testing" ;
 \ generating `path>>` as a generic word in each module.
 \ Importing both must succeed without shadow errors.
 use "net" ;
-use "http" ;
+use "net/http" ;
 
 \ Verify both getters dispatch correctly
 "/sock" make-unix-addr

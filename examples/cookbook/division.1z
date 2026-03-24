@@ -4,7 +4,7 @@
 \ ratio library is loaded. `div` always truncates toward zero.
 \ When the ratio library is not loaded, `/` also truncates.
 
-use "ratio" ;
+use "math/ratio" ;
 use "testing" ;
 
 \ --- Exact division returns an integer either way ---

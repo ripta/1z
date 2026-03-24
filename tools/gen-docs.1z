@@ -3,20 +3,21 @@
 \ Introspects the running interpreter to produce markdown files in
 \ docs/reference/, one per module plus a prelude page.
 
-use "fs" ;
-use "path" ;
+use "os/fs" ;
+use "os/path" ;
 use "strings" ;
 use "sequences" ;
-use "introspect" ;
+use "runtime/introspect" ;
 
 \ --- Step 1: Discover stdlib modules ---
 
 stdlib-dir: "testing" native.resolve-load-path dirname ;
 
 discover-modules: ( -- array ) [
-  stdlib-dir list-files
-  [ name>> ".1z" #ends-with? ] #filter #collect
-  [ name>> dup #len 3 - #take ] #map #collect
+  stdlib-dir walk
+  [ name>> ".1z" #ends-with? ] #filter
+  [ name>> dup #len 3 - #take ] #map
+  #collect
 ] ;
 
 \ --- Step 2: Load all modules ---
@@ -202,6 +203,7 @@ render-module-page: ( name words -- str ) [
 
 write-module-page: ( name content -- ) [
   swap "docs/reference/" swap #append ".md" #append
+  dup dirname ensure-directory
   write: stream-open
   dup -rot> [ print ] with-output-stream
   stream-close

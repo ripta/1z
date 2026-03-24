@@ -2,8 +2,8 @@
 
 use "testing" ;
 use "net" ;
-use "tcp" ;
-use "server" ;
+use "net/tcp" ;
+use "net/server" ;
 
 "split-host-port basic" test-section
 "127.0.0.1:8080" split-host-port dup port: @get 8080 "port from host:port" assert=

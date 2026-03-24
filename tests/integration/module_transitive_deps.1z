@@ -1,6 +1,6 @@
 use "testing" ;
-use "http" ;
-use "path" ;
+use "net/http" ;
+use "os/path" ;
 
 "transitive deps: normalize via direct import" test-section
 "/a/b/../c" normalize "/a/c" "normalize direct" assert=

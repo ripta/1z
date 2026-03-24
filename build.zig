@@ -449,18 +449,22 @@ fn addIntegrationTests(
             test_run.setStdIn(.{ .bytes = te.stdin_content });
         }
 
-        // Library file dependencies
+        // Library file dependencies (recursive)
         {
             var lib_dir = b.build_root.handle.openDir("lib", .{ .iterate = true }) catch |err| {
                 std.debug.print("Warning: Could not open lib/: {}\n", .{err});
                 return;
             };
             defer lib_dir.close();
-            var lib_iter = lib_dir.iterate();
-            while (lib_iter.next() catch null) |lib_entry| {
-                if (lib_entry.kind != .file) continue;
-                if (!std.mem.endsWith(u8, lib_entry.name, ".1z")) continue;
-                test_run.addFileInput(b.path(b.fmt("lib/{s}", .{lib_entry.name})));
+            var walker = lib_dir.walk(b.allocator) catch |err| {
+                std.debug.print("Warning: Could not walk lib/: {}\n", .{err});
+                return;
+            };
+            defer walker.deinit();
+            while (walker.next() catch null) |entry| {
+                if (entry.kind != .file) continue;
+                if (!std.mem.endsWith(u8, entry.path, ".1z")) continue;
+                test_run.addFileInput(b.path(b.fmt("lib/{s}", .{entry.path})));
             }
         }
         test_run.addFileInput(b.path("src/prelude.1z"));
@@ -560,18 +564,22 @@ fn addIntegrationTests(
                 update_run.setStdIn(.{ .bytes = te.stdin_content });
             }
 
-            // Library file dependencies
+            // Library file dependencies (recursive)
             {
                 var lib_dir2 = b.build_root.handle.openDir("lib", .{ .iterate = true }) catch |err| {
                     std.debug.print("Warning: Could not open lib/: {}\n", .{err});
                     return;
                 };
                 defer lib_dir2.close();
-                var lib_iter2 = lib_dir2.iterate();
-                while (lib_iter2.next() catch null) |lib_entry| {
-                    if (lib_entry.kind != .file) continue;
-                    if (!std.mem.endsWith(u8, lib_entry.name, ".1z")) continue;
-                    update_run.addFileInput(b.path(b.fmt("lib/{s}", .{lib_entry.name})));
+                var walker2 = lib_dir2.walk(b.allocator) catch |err| {
+                    std.debug.print("Warning: Could not walk lib/: {}\n", .{err});
+                    return;
+                };
+                defer walker2.deinit();
+                while (walker2.next() catch null) |entry| {
+                    if (entry.kind != .file) continue;
+                    if (!std.mem.endsWith(u8, entry.path, ".1z")) continue;
+                    update_run.addFileInput(b.path(b.fmt("lib/{s}", .{entry.path})));
                 }
             }
             update_run.addFileInput(b.path("src/prelude.1z"));

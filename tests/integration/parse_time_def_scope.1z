@@ -53,8 +53,8 @@ f "ffi module does not export (read-ffi-params)" assert=
 "ffi" load @keys [ "(read-ffi-def)" = ] #any
 f "ffi module does not export (read-ffi-def)" assert=
 
-"matrix" load @keys [ "(read-matrix-row)" = ] #any
+"math/matrix" load @keys [ "(read-matrix-row)" = ] #any
 f "matrix module does not export (read-matrix-row)" assert=
 
-"matrix" load @keys [ "(read-matrix)" = ] #any
+"math/matrix" load @keys [ "(read-matrix)" = ] #any
 f "matrix module does not export (read-matrix)" assert=

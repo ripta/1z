@@ -2,7 +2,7 @@
 \ à la Golang http.ServeMux
 
 use "prefix-match" ;
-use "http" ;
+use "net/http" ;
 
 \\ Mutable router builder.
 router: mutable struct{ routes } ;

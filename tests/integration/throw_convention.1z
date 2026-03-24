@@ -1,7 +1,7 @@
 use "testing" ;
 use "ranges" ;
 use "cons-list" ;
-use "ratio" ;
+use "math/ratio" ;
 
 "throw requires error objects" test-section
 

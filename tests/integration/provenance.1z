@@ -1,7 +1,7 @@
 \ Tests for word-level provenance on generated words
 
 use "testing" ;
-use "introspect" ;
+use "runtime/introspect" ;
 
 "struct provenance on constructor" test-section
 prov-point: struct{ x y } ;

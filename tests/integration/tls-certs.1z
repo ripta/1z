@@ -1,7 +1,7 @@
 \ Integration tests for TLS certificate loading
 
 use "testing" ;
-use "tls" ;
+use "net/tls" ;
 
 "add-ca-pem adds certificates to config" test-section
 "/etc/ssl/cert.pem" read: stream-open dup stream-read-all swap stream-close

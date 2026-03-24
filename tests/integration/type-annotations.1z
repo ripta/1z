@@ -1,7 +1,7 @@
 \ Tests for type annotation parsing in stack effect declarations
 
 use "testing" ;
-use "effect" ;
+use "runtime/effect" ;
 
 "simple type annotation round-trips" test-section
 [ ( n: fixnum -- m: fixnum ) 1 + ] native.quotation>effect

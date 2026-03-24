@@ -1,4 +1,4 @@
-use "introspect" ;
+use "runtime/introspect" ;
 
 \\ Add two numbers.
 add2: ( a b -- sum ) [ + ] ;

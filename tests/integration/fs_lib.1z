@@ -1,7 +1,7 @@
 \ Integration tests for lib/fs.1z
 
 use "testing" ;
-use "fs" ;
+use "os/fs" ;
 
 "dir-entry struct" test-section
 "test.txt" file: make-dir-entry

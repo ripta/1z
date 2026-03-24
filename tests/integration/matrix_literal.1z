@@ -1,7 +1,7 @@
 \ Test matrix{ literal syntax
 
 use "testing" ;
-use "matrix" ;
+use "math/matrix" ;
 
 "matrix{ basic" test-section
 

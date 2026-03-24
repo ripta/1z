@@ -1,7 +1,7 @@
 use "testing" ;
 use "net" ;
-use "tcp" ;
-use "server" ;
+use "net/tcp" ;
+use "net/server" ;
 use "time" ;
 
 "serve-forever with cancel" test-section

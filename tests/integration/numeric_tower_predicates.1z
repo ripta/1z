@@ -1,5 +1,5 @@
 use "testing" ;
-use "ratio" ;
+use "math/ratio" ;
 
 "integer?" test-section
 42 integer? "fixnum is integer" assert-true

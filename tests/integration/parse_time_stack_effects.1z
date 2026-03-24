@@ -1,7 +1,7 @@
 \ Tests for parse-time stack effect attachment to quotations
 
 use "testing" ;
-use "effect" ;
+use "runtime/effect" ;
 
 "named word with effect before [" test-section
 add1: ( n -- m ) [ 1 + ] ;

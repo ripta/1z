@@ -2,7 +2,7 @@
 
 use "testing" ;
 use "net" ;
-use "udp" ;
+use "net/udp" ;
 
 "udp-bind creates udp-socket" test-section
 [

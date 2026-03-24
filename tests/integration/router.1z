@@ -1,8 +1,8 @@
 use "testing" ;
-use "router" ;
-use "http" ;
+use "net/http/router" ;
+use "net/http" ;
 use "net" ;
-use "tcp" ;
+use "net/tcp" ;
 use "time" ;
 
 \\ Helper: create a GET request for a path.

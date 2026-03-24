@@ -1,9 +1,9 @@
 \ lib/http.1z - HTTP/1.0 library
 
 use "strings" ;
-use "path" ;
+use "os/path" ;
 use "mimetype" ;
-use "server" ;
+use "net/server" ;
 
 EMalformedRequest: [ malformed-request: ] ;
 

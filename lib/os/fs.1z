@@ -1,6 +1,6 @@
 \ lib/fs.1z - High-level filesystem operations
 
-use "path" ;
+use "os/path" ;
 use "time" ;
 
 \ Types

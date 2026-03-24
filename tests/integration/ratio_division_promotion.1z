@@ -1,4 +1,4 @@
-use "ratio" ;
+use "math/ratio" ;
 use "testing" ;
 
 "inexact fixnum division produces ratio" test-section

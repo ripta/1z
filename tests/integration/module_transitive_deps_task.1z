@@ -1,6 +1,6 @@
 use "testing" ;
-use "http" ;
-use "path" ;
+use "net/http" ;
+use "os/path" ;
 use "time" ;
 
 "task normalize" test-section

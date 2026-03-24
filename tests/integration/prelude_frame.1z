@@ -20,7 +20,7 @@ my-prelude-test-word: 99 ;
 my-prelude-test-word 99 = "user word visible" assert-true
 
 \ Imported module words work
-use "introspect" ;
+use "runtime/introspect" ;
 all-words array? "all-words returns array" assert-true
 all-words >iterator [ name>> "dup" = ] #filter #count 1 =
 "all-words includes prelude words" assert-true

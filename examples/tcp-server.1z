@@ -3,7 +3,7 @@
 \ Start:   zig build run -- examples/tcp-server.1z
 \ Connect: nc 127.0.0.1 9000
 
-use "server" ;
+use "net/server" ;
 
 echo-loop: ( stream -- ) [
   dup stream-read-line

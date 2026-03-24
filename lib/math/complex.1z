@@ -1,6 +1,6 @@
 \ lib/complex.1z - Complex numbers
 
-use "ratio" ;
+use "math/ratio" ;
 
 complex: H{ numeric: t } virtual{ struct{ real imag } } ;
 

@@ -1,4 +1,4 @@
-use "introspect" ;
+use "runtime/introspect" ;
 
 double: ( n -- n ) [ 2 * ] ;
 double: help

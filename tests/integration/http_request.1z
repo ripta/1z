@@ -1,8 +1,8 @@
 use "testing" ;
-use "http" ;
+use "net/http" ;
 use "net" ;
-use "tcp" ;
-use "server" ;
+use "net/tcp" ;
+use "net/server" ;
 use "time" ;
 
 "read-request: simple GET" test-section

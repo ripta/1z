@@ -1,7 +1,7 @@
 \ lib/tls.1z - TLS configuration and connection support
 
 use "net" ;
-tcp: "tcp" load ;
+tcp: "net/tcp" load ;
 
 tls-config: virtual{ resource } ;
 

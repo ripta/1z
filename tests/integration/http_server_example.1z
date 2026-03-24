@@ -1,7 +1,7 @@
 use "testing" ;
-use "http" ;
+use "net/http" ;
 use "net" ;
-use "tcp" ;
+use "net/tcp" ;
 use "time" ;
 
 "serve: root endpoint returns endpoint list" test-section

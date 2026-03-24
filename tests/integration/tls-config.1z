@@ -1,7 +1,7 @@
 \ Integration tests for TLS config creation
 
 use "testing" ;
-use "tls" ;
+use "net/tls" ;
 
 "<tls-config> creates tls-config with system CAs" test-section
 <tls-config>

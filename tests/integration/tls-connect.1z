@@ -1,7 +1,7 @@
 \ Integration tests for TLS connect convenience words
 
 use "testing" ;
-use "tls" ;
+use "net/tls" ;
 
 "connect with system CAs" test-section
 "example.com" 443 connect
@@ -19,7 +19,7 @@ dup inspect "<stream tls" #starts-with? t "inspect shows tls" assert=
 stream-close
 
 "qualified access via load" test-section
-tlsmod: "tls" load ;
+tlsmod: "net/tls" load ;
 "example.com" 443 tlsmod.connect
 dup "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n" stream-write drop
 stream-read-line "HTTP/" #starts-with? t "qualified access works" assert=

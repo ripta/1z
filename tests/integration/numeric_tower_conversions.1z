@@ -1,5 +1,5 @@
 use "testing" ;
-use "ratio" ;
+use "math/ratio" ;
 use "math" ;
 
 "float-parts: normal" test-section
