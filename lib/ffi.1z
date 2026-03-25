@@ -32,6 +32,15 @@ ffi{: parse-time [
   { } (read-ffi-params) make-ffi-sig
 ] ;
 
+\\ Parse-time word for FFI struct layout descriptors.
+\\ ffi-struct{ x: f32 y: f32 } produces a virtual type backed by a byte array
+\\ with field offsets computed via libffi.
+ffi-struct{: parse-time [
+  M{ type: ffi-struct-descriptor: }
+  fields: "}" parse-tokens-until @set!
+  define: [ define-ffi-struct ] @set!
+] ;
+
 \\ Open a shared library by path or short name.
 lib-open: ( path-or-name -- dylib ) [ native.lib-open ] ;
 

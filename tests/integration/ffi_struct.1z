@@ -1,0 +1,50 @@
+use "testing" ;
+use "ffi" ;
+
+"ffi-struct basic scalar struct" test-section
+
+vector2: ffi-struct{ x: f32 y: f32 } ;
+
+1.0 2.0 make-vector2
+dup vector2? "vector2? returns true for vector2" assert-true
+dup type-of vector2 = "type-of returns vector2 type" assert-true
+drop
+
+"ffi-struct integer fields" test-section
+
+point: ffi-struct{ x: i32 y: i32 } ;
+
+10 20 make-point
+dup point? "point? returns true for point" assert-true
+dup type-of point = "type-of returns point type" assert-true
+drop
+
+"ffi-struct mixed types with alignment" test-section
+
+mixed: ffi-struct{ a: i32 b: f64 c: u8 } ;
+
+42 3.14 7 make-mixed
+dup mixed? "mixed? returns true for mixed" assert-true
+drop
+
+"ffi-struct nested struct" test-section
+
+rect: ffi-struct{ origin: vector2 size: vector2 } ;
+
+1.0 2.0 make-vector2
+3.0 4.0 make-vector2
+make-rect
+dup rect? "rect? returns true for rect" assert-true
+dup type-of rect = "type-of returns rect type" assert-true
+drop
+
+"ffi-struct predicate returns false for other types" test-section
+
+f 42 vector2? "vector2? returns false for fixnum" assert-false
+f "hello" vector2? "vector2? returns false for string" assert-false
+f 10 20 make-point vector2? "vector2? returns false for different ffi-struct" assert-false
+
+"ffi-struct error on wrong arg types" test-section
+
+[ "hello" 2.0 make-vector2 ] "make-vector2 rejects string for f32 field" assert-error
+[ 1.0 2 make-vector2 ] "make-vector2 rejects fixnum for f32 field" assert-error

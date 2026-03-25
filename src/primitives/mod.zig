@@ -61,6 +61,7 @@ pub const bitwise = @import("bitwise.zig");
 pub const resources = @import("resources.zig");
 pub const ffi_toy = @import("../ffi/toy.zig");
 pub const ffi_dynamic = @import("../ffi/dynamic.zig");
+pub const ffi_struct = @import("../ffi/ffi_struct.zig");
 pub const pragmas = @import("pragmas.zig");
 pub const native_dispatch_access = @import("native_dispatch_access.zig");
 pub const tls = @import("tls.zig");
@@ -126,7 +127,8 @@ pub const extracted_primitives = stack.primitives ++
     pragmas.primitives ++
     tls.primitives ++
     sandbox.primitives ++
-    filesystem.primitives;
+    filesystem.primitives ++
+    ffi_struct.primitives;
 
 // Aggregated registry entries for the native virtual module
 pub const extracted_registry_entries = structs.registry_entries ++
@@ -143,6 +145,7 @@ pub const extracted_registry_entries = structs.registry_entries ++
     iterators.registry_entries ++
     ffi_toy.registry_entries ++
     ffi_dynamic.registry_entries ++
+    ffi_struct.registry_entries ++
     native_dispatch_access.registry_entries ++
     tasks.registry_entries ++
     tls.registry_entries ++

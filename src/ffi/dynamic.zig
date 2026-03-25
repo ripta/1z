@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const c_ffi = @cImport({
-    @cInclude("ffi.h");
+pub const c_ffi = @cImport({
+    @cInclude("ffi/ffi.h");
 });
 const Context = @import("../context.zig").Context;
 const helpers = @import("../primitives/helpers.zig");
@@ -224,7 +224,7 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
 }
 
 /// Map an FfiTypeTag to the corresponding libffi type descriptor.
-fn ffiTypeToLibffi(tag: FfiTypeTag) [*c]c_ffi.ffi_type {
+pub fn ffiTypeToLibffi(tag: FfiTypeTag) [*c]c_ffi.ffi_type {
     return switch (tag) {
         .i8 => &c_ffi.ffi_type_sint8,
         .i16 => &c_ffi.ffi_type_sint16,
