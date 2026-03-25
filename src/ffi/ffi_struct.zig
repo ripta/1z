@@ -542,9 +542,25 @@ fn nativeFfiStructFieldGet(ctx: *Context) anyerror!void {
     const field = layout.fields[field_index];
     const buf = ba.items[field.offset .. field.offset + field.size];
 
-    if (field.nested_layout != null) {
-        helpers.setErrorContext(ctx, "ffi-struct-field-get: nested struct field '{s}' not yet supported", .{field.name});
-        return error.FFITypeMismatch;
+    if (field.nested_layout) |nested| {
+        const alloc = ctx.arena.allocator();
+
+        const vtype = nested.vtype orelse {
+            helpers.setErrorContext(ctx, "ffi-struct-field-get: nested struct field '{s}' has no virtual type", .{field.name});
+            return error.FFITypeMismatch;
+        };
+
+        const new_ba = try alloc.create(ByteArray);
+        new_ba.* = ByteArray{};
+        try new_ba.ensureTotalCapacity(alloc, field.size);
+        new_ba.items.len = field.size;
+        @memcpy(new_ba.items[0..field.size], buf);
+
+        const inner = try alloc.create(Value);
+        inner.* = .{ .byte_array = new_ba };
+
+        try ctx.stack.push(.{ .tagged = .{ .tag = vtype, .inner = inner } });
+        return;
     }
 
     const tag = field.ffi_tag orelse {

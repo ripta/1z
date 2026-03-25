@@ -63,6 +63,11 @@ rect: ffi-struct{ origin: vector2 size: vector2 } ;
 make-rect
 dup rect? "rect? returns true for rect" assert-true
 dup type-of rect = "type-of returns rect type" assert-true
+dup origin>> vector2? "origin>> returns a vector2" assert-true
+dup origin>> x>> 1.0 "origin>> x>> returns 1.0" assert=
+dup origin>> y>> 2.0 "origin>> y>> returns 2.0" assert=
+dup size>> x>> 3.0 "size>> x>> returns 3.0" assert=
+dup size>> y>> 4.0 "size>> y>> returns 4.0" assert=
 drop
 
 "ffi-struct predicate returns false for other types" test-section
