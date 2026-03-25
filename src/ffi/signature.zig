@@ -1,4 +1,5 @@
 const std = @import("std");
+const FfiStructLayout = @import("struct_layout.zig").FfiStructLayout;
 
 pub const FfiTypeTag = enum {
     i8,
@@ -19,6 +20,7 @@ pub const FfiTypeTag = enum {
     cstring_owned,
     ptr,
     void_type,
+    struct_type,
 };
 
 pub const ParamMode = enum {
@@ -31,6 +33,8 @@ pub const FfiType = struct {
     tag: FfiTypeTag,
     ptr_name: ?[]const u8 = null,
     mode: ParamMode = .normal,
+    struct_layout: ?*const FfiStructLayout = null,
+    struct_name: ?[]const u8 = null,
 
     pub fn is_out(self: FfiType) bool {
         return self.mode == .out;

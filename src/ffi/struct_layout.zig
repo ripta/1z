@@ -28,5 +28,6 @@ pub fn ffiTagToSize(tag: FfiTypeTag) usize {
         .i64, .u64, .f64, .usize_type, .isize_type => 8,
         .cstring, .cstring_retained, .cstring_owned, .ptr => @sizeOf(*anyopaque),
         .void_type => 0,
+        .struct_type => unreachable,
     };
 }

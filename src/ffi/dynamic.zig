@@ -17,6 +17,8 @@ const Quotation = @import("../value.zig").Quotation;
 const signature = @import("signature.zig");
 const FfiType = signature.FfiType;
 const FfiSignature = signature.FfiSignature;
+const struct_layout = @import("struct_layout.zig");
+const FfiStructLayout = struct_layout.FfiStructLayout;
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "lib-open", .func = nativeLibOpen, .capability = .ffi },
@@ -193,17 +195,29 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
             },
         };
         param_types[i] = signature.parseTypeToken(token) catch {
-            helpers.setErrorContext(ctx, "unknown FFI type: {s}", .{token});
-            return error.FFITypeMismatch;
+            if (resolveStructType(ctx, token)) |struct_type| {
+                param_types[i] = struct_type;
+            } else {
+                helpers.setErrorContext(ctx, "unknown FFI type: {s}", .{token});
+                return error.FFITypeMismatch;
+            }
+            continue;
         };
         if (param_types[i].tag == .void_type) {
             helpers.setErrorContext(ctx, "void is not valid as a parameter type", .{});
             return error.FFITypeMismatch;
         }
+        if (param_types[i].tag == .struct_type and (param_types[i].is_out() or param_types[i].is_inout())) {
+            helpers.setErrorContext(ctx, "out/inout parameters are not supported for struct types", .{});
+            return error.FFITypeMismatch;
+        }
     }
 
     // Parse return type token
-    const return_type = signature.parseTypeToken(return_type_str) catch {
+    const return_type = signature.parseTypeToken(return_type_str) catch blk: {
+        if (resolveStructType(ctx, return_type_str)) |struct_type| {
+            break :blk struct_type;
+        }
         helpers.setErrorContext(ctx, "unknown FFI type: {s}", .{return_type_str});
         return error.FFITypeMismatch;
     };
@@ -224,6 +238,7 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
 }
 
 /// Map an FfiTypeTag to the corresponding libffi type descriptor.
+/// For struct types, use ffiTypeToLibffiExt instead.
 pub fn ffiTypeToLibffi(tag: FfiTypeTag) [*c]c_ffi.ffi_type {
     return switch (tag) {
         .i8 => &c_ffi.ffi_type_sint8,
@@ -242,6 +257,30 @@ pub fn ffiTypeToLibffi(tag: FfiTypeTag) [*c]c_ffi.ffi_type {
         .cstring, .cstring_retained, .cstring_owned => &c_ffi.ffi_type_pointer,
         .ptr => &c_ffi.ffi_type_pointer,
         .void_type => &c_ffi.ffi_type_void,
+        .struct_type => unreachable,
+    };
+}
+
+/// Map an FfiType to the corresponding libffi type descriptor, supporting struct types.
+fn ffiTypeToLibffiExt(ffi_type: FfiType) [*c]c_ffi.ffi_type {
+    if (ffi_type.tag == .struct_type) {
+        return ffi_type.struct_layout.?.ffi_type;
+    }
+    return ffiTypeToLibffi(ffi_type.tag);
+}
+
+/// Resolve a token as an FFI struct type by looking up its type descriptor.
+fn resolveStructType(ctx: *const Context, token: []const u8) ?FfiType {
+    const desc = ctx.lookupTypeDescriptor(token) orelse return null;
+    const layout_val = desc.get("ffi-layout") orelse return null;
+    const layout_ptr: *const FfiStructLayout = switch (layout_val) {
+        .fixnum => |v| @ptrFromInt(@as(usize, @intCast(v))),
+        else => return null,
+    };
+    return FfiType{
+        .tag = .struct_type,
+        .struct_layout = layout_ptr,
+        .struct_name = token,
     };
 }
 
@@ -334,6 +373,13 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
             arg_types[pi] = &c_ffi.ffi_type_pointer;
             arg_ptrs[pi] = @ptrCast(&out_ptr_slots[pi]);
             stack_arg_idx += 1;
+        } else if (param_type.tag == .struct_type) {
+            arg_types[pi] = ffiTypeToLibffiExt(param_type);
+            const ba = try extractStructByteArray(ctx, param_type, arg_vals[stack_arg_idx], stack_arg_idx);
+            arg_ptrs[pi] = @ptrCast(ba.items.ptr);
+            arg_slots[pi] = std.mem.zeroes(ArgSlot);
+            out_ptr_slots[pi] = null;
+            stack_arg_idx += 1;
         } else {
             arg_types[pi] = ffiTypeToLibffi(param_type.tag);
             arg_slots[pi] = try marshalArg(ctx, param_type, arg_vals[stack_arg_idx], stack_arg_idx);
@@ -348,7 +394,7 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
         &cif,
         c_ffi.FFI_DEFAULT_ABI,
         @intCast(nargs),
-        ffiTypeToLibffi(sig.return_type.tag),
+        ffiTypeToLibffiExt(sig.return_type),
         if (nargs > 0) arg_types.ptr else null,
     );
     if (prep_status != c_ffi.FFI_OK) {
@@ -467,7 +513,28 @@ fn marshalArg(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) 
             helpers.setErrorContext(ctx, "argument {d}: void is not valid as a parameter type", .{arg_index + 1});
             return error.FFITypeMismatch;
         },
+        .struct_type => unreachable,
     }
+}
+
+/// Extract the byte array data from an FFI struct tagged value for passing to libffi.
+fn extractStructByteArray(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) !*ByteArray {
+    const inner = switch (val) {
+        .tagged => |t| t.inner.*,
+        else => {
+            const sname = param_type.struct_name orelse "struct";
+            helpers.setErrorContext(ctx, "argument {d}: expected FFI struct '{s}', got {s}", .{ arg_index + 1, sname, helpers.valueTypeName(val) });
+            return error.FFITypeMismatch;
+        },
+    };
+    return switch (inner) {
+        .byte_array => |ba| ba,
+        else => {
+            const sname = param_type.struct_name orelse "struct";
+            helpers.setErrorContext(ctx, "argument {d}: expected FFI struct '{s}', got {s}", .{ arg_index + 1, sname, helpers.valueTypeName(val) });
+            return error.FFITypeMismatch;
+        },
+    };
 }
 
 fn argTypeMismatch(ctx: *Context, expected: []const u8, val: Value, arg_index: usize) error{FFITypeMismatch} {
@@ -624,6 +691,10 @@ fn marshalReturn(ctx: *Context, return_type: FfiType, ret: *const ReturnStorage)
             try ctx.stack.push(.{ .resource = r });
         },
         .void_type => {},
+        .struct_type => {
+            helpers.setErrorContext(ctx, "struct return-by-value not yet supported (see milestone 150.5)", .{});
+            return error.FFICallFailed;
+        },
     }
 }
 
@@ -671,7 +742,7 @@ fn marshalOutParam(ctx: *Context, param_type: FfiType, slot: *const ArgSlot) !vo
                 try ctx.stack.push(.{ .string = str });
             }
         },
-        .void_type => unreachable,
+        .void_type, .struct_type => unreachable,
     }
 }
 
@@ -884,7 +955,7 @@ fn unmarshalArg(ctx: *Context, param_type: FfiType, arg_ptr: *anyopaque) !void {
             };
             try ctx.stack.push(.{ .resource = r });
         },
-        .cstring_owned, .void_type => unreachable,
+        .cstring_owned, .void_type, .struct_type => unreachable,
     }
 }
 
@@ -940,7 +1011,7 @@ fn marshalCallbackReturn(ret: ?*anyopaque, return_type: FfiType, val: Value) !vo
             const ptr: *?*anyopaque = @ptrCast(@alignCast(r));
             ptr.* = resource.ptr;
         },
-        .cstring_owned, .void_type => {},
+        .cstring_owned, .void_type, .struct_type => {},
     }
 }
 
@@ -1003,7 +1074,13 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
             },
         };
         param_types[i] = signature.parseTypeToken(token) catch {
-            helpers.setErrorContext(ctx, "unknown FFI type: {s}", .{token});
+            if (resolveStructType(ctx, token)) |struct_type| {
+                param_types[i] = struct_type;
+            } else {
+                helpers.setErrorContext(ctx, "unknown FFI type: {s}", .{token});
+                return error.FFITypeMismatch;
+            }
+            helpers.setErrorContext(ctx, "struct types are not supported in callback signatures", .{});
             return error.FFITypeMismatch;
         };
         if (param_types[i].tag == .void_type) {
@@ -1017,7 +1094,11 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
     }
 
     const return_type = signature.parseTypeToken(return_type_str) catch {
-        helpers.setErrorContext(ctx, "unknown FFI type: {s}", .{return_type_str});
+        if (resolveStructType(ctx, return_type_str)) |_| {
+            helpers.setErrorContext(ctx, "struct types are not supported in callback return types", .{});
+        } else {
+            helpers.setErrorContext(ctx, "unknown FFI type: {s}", .{return_type_str});
+        }
         return error.FFITypeMismatch;
     };
 
@@ -1029,7 +1110,7 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
 
     var arg_types = try alloc.alloc([*c]c_ffi.ffi_type, param_types.len);
     for (param_types, 0..) |pt, i| {
-        arg_types[i] = ffiTypeToLibffi(pt.tag);
+        arg_types[i] = ffiTypeToLibffiExt(pt);
     }
 
     const ud = try alloc.create(CallbackUserData);
@@ -1047,7 +1128,7 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
         &ud.cif,
         c_ffi.FFI_DEFAULT_ABI,
         @intCast(param_types.len),
-        ffiTypeToLibffi(return_type.tag),
+        ffiTypeToLibffiExt(return_type),
         if (param_types.len > 0) arg_types.ptr else null,
     );
     if (prep_status != c_ffi.FFI_OK) {

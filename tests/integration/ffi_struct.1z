@@ -48,3 +48,44 @@ f 10 20 make-point vector2? "vector2? returns false for different ffi-struct" as
 
 [ "hello" 2.0 make-vector2 ] "make-vector2 rejects string for f32 field" assert-error
 [ 1.0 2 make-vector2 ] "make-vector2 rejects fixnum for f32 field" assert-error
+
+"bind-sig with struct type" test-section
+
+\\ Helper to get the shared library path for the toy library.
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy.dylib" #append
+] ;
+
+toy-lib-path lib-open
+
+\\ toy_vec2_length_sq takes struct arg, returns scalar
+dup "toy_vec2_length_sq" lib-symbol ffi{ vector2 -> f32 } bind-sig
+3.0 4.0 make-vector2 1 pick-n ffi-call
+25.0 "toy_vec2_length_sq(3,4) = 25.0" assert=
+drop
+
+"struct return-by-value error" test-section
+
+\\ toy_vec2_add returns struct by value -- not yet supported
+dup "toy_vec2_add" lib-symbol ffi{ vector2 vector2 -> vector2 } bind-sig
+[
+  1.0 2.0 make-vector2
+  3.0 4.0 make-vector2
+  2 pick-n ffi-call
+] "struct return-by-value not yet supported" assert-error
+drop
+
+"unknown type still rejected" test-section
+
+[ dup "toy_vec2_length_sq" lib-symbol ffi{ nonexistent -> f32 } bind-sig ]
+"unknown type in bind-sig" assert-error
+
+"struct in callback rejected" test-section
+
+[ [ drop 0.0 ] ffi{ vector2 -> f32 } ffi-callback ]
+"struct type in callback param" assert-error
+
+[ [ 1.0 2.0 make-vector2 ] ffi{ -> vector2 } ffi-callback ]
+"struct type in callback return" assert-error
+
+resource-close

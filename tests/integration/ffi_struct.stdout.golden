@@ -48,3 +48,32 @@ PASS: make-vector2 rejects string for f32 field
 Stack: [ f f f ]
 PASS: make-vector2 rejects fixnum for f32 field
 Stack: [ f f f ]
+=== bind-sig with struct type ===
+Stack: [ f f f ]
+Stack: [ f f f ]
+Stack: [ f f f <resource:dylib> ]
+Stack: [ f f f <resource:dylib> <resource:ffi-fn> ]
+Stack: [ f f f <resource:dylib> <resource:ffi-fn> 25.0 ]
+PASS: toy_vec2_length_sq(3,4) = 25.0
+Stack: [ f f f <resource:dylib> <resource:ffi-fn> ]
+Stack: [ f f f <resource:dylib> ]
+=== struct return-by-value error ===
+Stack: [ f f f <resource:dylib> ]
+Stack: [ f f f <resource:dylib> <resource:ffi-fn> ]
+PASS: struct return-by-value not yet supported
+Stack: [ f f f <resource:dylib> <resource:ffi-fn> ]
+Stack: [ f f f <resource:dylib> ]
+=== unknown type still rejected ===
+Stack: [ f f f <resource:dylib> ]
+Stack: [ f f f <resource:dylib> [ dup "toy_vec2_length_sq" lib-symbol ffi-sig{ params: { "nonexistent" } return-type: "f32" } bind-sig ] ]
+PASS: unknown type in bind-sig
+Stack: [ f f f <resource:dylib> ]
+=== struct in callback rejected ===
+Stack: [ f f f <resource:dylib> ]
+Stack: [ f f f <resource:dylib> [ [ drop 0.0 ] ffi-sig{ params: { "vector2" } return-type: "f32" } ffi-callback ] ]
+PASS: struct type in callback param
+Stack: [ f f f <resource:dylib> ]
+Stack: [ f f f <resource:dylib> [ [ 1.0 2.0 make-vector2 ] ffi-sig{ params: { } return-type: "vector2" } ffi-callback ] ]
+PASS: struct type in callback return
+Stack: [ f f f <resource:dylib> ]
+Stack: [ f f f ]
