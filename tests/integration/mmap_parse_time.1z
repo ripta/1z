@@ -1,0 +1,62 @@
+\ Test that M{} inside parse-time word bodies shares state across invocations,
+\ and that [ ... ] make-mutable-map allocates fresh maps each time.
+
+use "testing" ;
+
+\ --- Section A: Direct sharing demonstration ---
+
+"direct sharing" test-section
+
+\ Parse-time word using M{} — shares the same map across calls.
+pt-shared: parse-time [ M{ } ] ;
+
+\ Parse-time word using make-mutable-map — fresh map each call.
+pt-fresh: parse-time [ [ ] make-mutable-map ] ;
+
+\ Call pt-shared twice, mutate after first call.
+pt-shared
+x: 42 @set! drop
+pt-shared
+x: @has?
+t "M{} in parse-time shares state" assert=
+
+\ Call pt-fresh twice, mutate after first call.
+pt-fresh
+x: 42 @set! drop
+pt-fresh
+x: @has?
+f "make-mutable-map in parse-time is fresh" assert=
+
+\ --- Section B: Consecutive definitions work correctly ---
+
+"consecutive definitions" test-section
+
+\ Two enum definitions; each should have correct variant counts.
+color: enum{ red: unit green: unit blue: unit } ;
+shape: enum{ circle: unit square: unit } ;
+
+t color:red color:red? "color:red predicate" assert=
+t shape:circle shape:circle? "shape:circle predicate" assert=
+
+\ Two virtual type definitions; each should wrap/unwrap correctly.
+meters: virtual{ fixnum } ;
+seconds: virtual{ fixnum } ;
+
+42 make-meters unmake-meters 42 "meters wrap/unwrap" assert=
+10 make-seconds unmake-seconds 10 "seconds wrap/unwrap" assert=
+
+\ Two method registrations; each should dispatch correctly.
+greet: generic [ "hello" ] ;
+greet: method{ fixnum } [ drop "number" ] ;
+greet: method{ string } [ drop "word" ] ;
+
+42 greet "number" "method on fixnum" assert=
+"x" greet "word" "method on string" assert=
+
+\ Two protocol definitions; both exist independently.
+proto-a: protocol{ greet: } ;
+proto-b: protocol{ inspect: } ;
+
+\ Both protocols are words that can be referenced.
+t proto-a: >word-info type-of word-info = "proto-a exists" assert=
+t proto-b: >word-info type-of word-info = "proto-b exists" assert=

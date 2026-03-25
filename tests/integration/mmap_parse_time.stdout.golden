@@ -1,0 +1,43 @@
+=== direct sharing ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ M{ } ]
+Stack: [ ]
+Stack: [ M{ x: 42 } ]
+Stack: [ t ]
+PASS: M{} in parse-time shares state
+Stack: [ ]
+Stack: [ M{ } ]
+Stack: [ ]
+Stack: [ M{ } ]
+Stack: [ f ]
+PASS: make-mutable-map in parse-time is fresh
+Stack: [ ]
+=== consecutive definitions ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: color:red predicate
+Stack: [ ]
+PASS: shape:circle predicate
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: meters wrap/unwrap
+Stack: [ ]
+PASS: seconds wrap/unwrap
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: method on fixnum
+Stack: [ ]
+PASS: method on string
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: proto-a exists
+Stack: [ ]
+PASS: proto-b exists
+Stack: [ ]

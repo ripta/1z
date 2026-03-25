@@ -78,7 +78,7 @@ virtual{: parse-time [
     over @keys [ dup [ [ over ] dip @get ] dip swap @set! ] #each
     swap drop
   ]
-  [ M{ type: virtual: } ]
+  [ [ type: virtual: ] make-mutable-map ]
   if
   inner-type: "}" parse-types-until @set!
   define: [ define-virtual ] @set!
@@ -87,7 +87,7 @@ virtual{: parse-time [
 \\ Enum type definition syntax.
 \   name: enum{ variant1: type1 variant2: type2 ... } ;
 enum{: parse-time [
-  M{ type: enum-descriptor: }
+  [ type: enum-descriptor: ] make-mutable-map
   variants: "}" parse-values-until @set!
   define: [ define-enum ] @set!
 ] ;
@@ -153,7 +153,7 @@ add-hook: ( on-variant quot -- ) [
 \\ Method dispatch registration syntax.
 \   word: method{ type1 type2 } [ body ] ;
 method{: parse-time [
-  M{ }
+  [ ] make-mutable-map
   types:  "}" parse-values-until @set!
   body:   parse-quotation @set!
   define: [ define-method ] @set!
@@ -162,7 +162,7 @@ method{: parse-time [
 \\ Protocol definition syntax. Defines a word that validates a type implements all listed methods.
 \   protocol-name: protocol{ method1: method2: } ;
 protocol{: parse-time [
-  M{ }
+  [ ] make-mutable-map
   methods: "}" parse-values-until @set!
   define: [ define-protocol ] @set!
 ] ;
