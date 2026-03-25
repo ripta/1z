@@ -36,7 +36,7 @@ ffi{: parse-time [
 \\ ffi-struct{ x: f32 y: f32 } produces a virtual type backed by a byte array
 \\ with field offsets computed via libffi.
 ffi-struct{: parse-time [
-  [ type: ffi-struct-descriptor: ] make-mutable-map
+  M{ type: ffi-struct-descriptor: }
   fields: "}" parse-tokens-until @set!
   define: [ define-ffi-struct ] @set!
 ] ;

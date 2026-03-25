@@ -1,18 +1,18 @@
-=== direct sharing ===
+=== fresh allocation ===
 Stack: [ ]
-Stack: [ ]
-Stack: [ ]
-Stack: [ M{ } ]
-Stack: [ ]
-Stack: [ M{ x: 42 } ]
-Stack: [ t ]
-PASS: M{} in parse-time shares state
 Stack: [ ]
 Stack: [ M{ } ]
 Stack: [ ]
 Stack: [ M{ } ]
 Stack: [ f ]
-PASS: make-mutable-map in parse-time is fresh
+PASS: M{} in parse-time allocates fresh
+Stack: [ ]
+Stack: [ ]
+Stack: [ V{ } ]
+Stack: [ ]
+Stack: [ V{ } ]
+Stack: [ 0 ]
+PASS: V{} in parse-time allocates fresh
 Stack: [ ]
 === consecutive definitions ===
 Stack: [ ]

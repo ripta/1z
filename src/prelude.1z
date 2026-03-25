@@ -14,16 +14,16 @@ parse-quotation: ( -- quotation ) [
 H{: parse-time [ "}" parse-until make-hash ] ;
 
 \\ Vector literal syntax.
-V{: parse-time [ "}" parse-until make-vector ] ;
+V{: parse-time [ "}" parse-until make-vector: emit-call ] ;
 
 \\ Byte array literal syntax.
-B{: parse-time [ "}" parse-until make-byte-array ] ;
+B{: parse-time [ "}" parse-until make-byte-array: emit-call ] ;
 
 \\ Set literal syntax.
 S{: parse-time [ "}" parse-until make-set ] ;
 
 \\ Mutable map literal syntax.
-M{: parse-time [ "}" parse-until make-mutable-map ] ;
+M{: parse-time [ "}" parse-until make-mutable-map: emit-call ] ;
 
 \ Built-in type values
 fixnum:    M{ type: builtin-type: numeric: t exact: t integer: t } native.define-builtin-type ;
@@ -64,7 +64,7 @@ W{: parse-time [ "}" parse-tokens-until ] ;
 \\ Struct definition syntax.
 \   name: struct{ field1 field2 ... } ;
 struct{: parse-time [
-  [ type: struct-descriptor: ] make-mutable-map
+  M{ type: struct-descriptor: }
   fields: "}" parse-tokens-until @set!
   define: [ define-struct ] @set!
 ] ;
@@ -74,11 +74,11 @@ struct{: parse-time [
 virtual{: parse-time [
   dup type-of hash =
   [
-    [ type: virtual: ] make-mutable-map
+    M{ type: virtual: }
     over @keys [ dup [ [ over ] dip @get ] dip swap @set! ] #each
     swap drop
   ]
-  [ [ type: virtual: ] make-mutable-map ]
+  [ M{ type: virtual: } ]
   if
   inner-type: "}" parse-types-until @set!
   define: [ define-virtual ] @set!
@@ -87,7 +87,7 @@ virtual{: parse-time [
 \\ Enum type definition syntax.
 \   name: enum{ variant1: type1 variant2: type2 ... } ;
 enum{: parse-time [
-  [ type: enum-descriptor: ] make-mutable-map
+  M{ type: enum-descriptor: }
   variants: "}" parse-values-until @set!
   define: [ define-enum ] @set!
 ] ;
@@ -153,7 +153,7 @@ add-hook: ( on-variant quot -- ) [
 \\ Method dispatch registration syntax.
 \   word: method{ type1 type2 } [ body ] ;
 method{: parse-time [
-  [ ] make-mutable-map
+  M{ }
   types:  "}" parse-values-until @set!
   body:   parse-quotation @set!
   define: [ define-method ] @set!
@@ -162,7 +162,7 @@ method{: parse-time [
 \\ Protocol definition syntax. Defines a word that validates a type implements all listed methods.
 \   protocol-name: protocol{ method1: method2: } ;
 protocol{: parse-time [
-  [ ] make-mutable-map
+  M{ }
   methods: "}" parse-values-until @set!
   define: [ define-protocol ] @set!
 ] ;

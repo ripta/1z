@@ -76,21 +76,21 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
             return error.InvalidHashSyntax;
         }
 
-        // Get the value - could be a literal or need execution
-        const val_instr = instrs[i];
-        const val = switch (val_instr.op) {
-            .push_literal => |v| v,
-            .call_word => blk: {
-                // Execute the remaining instructions to get the value
-                // TODO(ripta): figure out supporting beyond single-words
-                try ctx.executeQuotation(.{ .instructions = instrs[i .. i + 1] });
-                break :blk ctx.stack.pop() catch {
-                    helpers.setErrorContext(ctx, "value for key '{s}' produced no result", .{key});
-                    return error.InvalidHashSyntax;
-                };
-            },
-        };
+        // Get the value: could be a literal, a call_word, or a literal followed by call_words
+        // that transform it, e.g., `V{` producing push_literal [1 2 3] + call_word make-vector
+        const val_start = i;
         i += 1;
+
+        while (i < instrs.len and instrs[i].op == .call_word) : (i += 1) {}
+        const val = if (i - val_start == 1 and instrs[val_start].op == .push_literal)
+            instrs[val_start].op.push_literal
+        else blk: {
+            try ctx.executeQuotation(.{ .instructions = instrs[val_start..i] });
+            break :blk ctx.stack.pop() catch {
+                helpers.setErrorContext(ctx, "value for key '{s}' produced no result", .{key});
+                return error.InvalidHashSyntax;
+            };
+        };
 
         // Copy key to arena for persistence
         const key_copy = ctx.quotationAllocator().dupe(u8, key) catch return error.OutOfMemory;
@@ -234,19 +234,21 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
             return error.InvalidHashSyntax;
         }
 
-        // Get the value - could be a literal or need execution
-        const val_instr = instrs[i];
-        const val = switch (val_instr.op) {
-            .push_literal => |v| v,
-            .call_word => blk: {
-                try ctx.executeQuotation(.{ .instructions = instrs[i .. i + 1] });
-                break :blk ctx.stack.pop() catch {
-                    helpers.setErrorContext(ctx, "value for key '{s}' produced no result", .{key});
-                    return error.InvalidHashSyntax;
-                };
-            },
-        };
+        // Get the value - could be a literal, a call_word, or a literal
+        // followed by call_words that transform it (e.g., V{ } producing
+        // push_literal [1 2 3] + call_word make-vector).
+        const val_start = i;
         i += 1;
+        while (i < instrs.len and instrs[i].op == .call_word) : (i += 1) {}
+        const val = if (i - val_start == 1 and instrs[val_start].op == .push_literal)
+            instrs[val_start].op.push_literal
+        else blk: {
+            try ctx.executeQuotation(.{ .instructions = instrs[val_start..i] });
+            break :blk ctx.stack.pop() catch {
+                helpers.setErrorContext(ctx, "value for key '{s}' produced no result", .{key});
+                return error.InvalidHashSyntax;
+            };
+        };
 
         // Copy key to arena for persistence
         const key_copy = alloc.dupe(u8, key) catch return error.OutOfMemory;

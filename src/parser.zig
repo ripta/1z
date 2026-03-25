@@ -779,6 +779,18 @@ fn executeParseTimeWordForArray(
         .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
     }
 
+    // Execute deferred calls, e.g., `emit-call` from `V{`, `B{`, `M{`, so the
+    // final value is produced immediately rather than left as a raw quotation.
+    for (c.parse_time_deferred_calls.items) |call_name| {
+        if (c.lookupWord(call_name)) |deferred_word| {
+            switch (deferred_word.action) {
+                .native => |func| func(c) catch |err| return handleParseTimeError(c, err),
+                .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
+            }
+        }
+    }
+    c.parse_time_deferred_calls.clearRetainingCapacity();
+
     const post_depth = c.stack.depth();
     if (post_depth > pre_depth) {
         const num_results = post_depth - pre_depth;

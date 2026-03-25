@@ -1,31 +1,31 @@
-\ Test that M{} inside parse-time word bodies shares state across invocations,
-\ and that [ ... ] make-mutable-map allocates fresh maps each time.
+\ Test that M{} and V{} allocate fresh containers on each execution,
+\ and that mutations to one instance do not affect the next.
 
 use "testing" ;
 
-\ --- Section A: Direct sharing demonstration ---
+\ --- Section A: Fresh allocation demonstration ---
 
-"direct sharing" test-section
+"fresh allocation" test-section
 
-\ Parse-time word using M{} — shares the same map across calls.
-pt-shared: parse-time [ M{ } ] ;
+\ Parse-time word using M{}, which should allocate fresh each call.
+pt-mmap: parse-time [ M{ } ] ;
 
-\ Parse-time word using make-mutable-map — fresh map each call.
-pt-fresh: parse-time [ [ ] make-mutable-map ] ;
-
-\ Call pt-shared twice, mutate after first call.
-pt-shared
+\ Call pt-mmap twice, mutate after first call.
+pt-mmap
 x: 42 @set! drop
-pt-shared
+pt-mmap
 x: @has?
-t "M{} in parse-time shares state" assert=
+f "M{} in parse-time allocates fresh" assert=
 
-\ Call pt-fresh twice, mutate after first call.
-pt-fresh
-x: 42 @set! drop
-pt-fresh
-x: @has?
-f "make-mutable-map in parse-time is fresh" assert=
+\ Parse-time word using V{}, which should allocate fresh each call.
+pt-vec: parse-time [ V{ } ] ;
+
+\ Call pt-vec twice, mutate after first call.
+pt-vec
+42 #push! drop
+pt-vec
+#len
+0 "V{} in parse-time allocates fresh" assert=
 
 \ --- Section B: Consecutive definitions work correctly ---
 

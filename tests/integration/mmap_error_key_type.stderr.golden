@@ -1,1 +1,2 @@
-tests/integration/mmap_error_key_type.1z:2: error 'invalid-hash-syntax' expected symbol or string key, got word 't'
+tests/integration/mmap_error_key_type.1z:2: error 'invalid-hash-syntax' expected symbol or string key, got word 't' at word 'make-mutable-map'
+  stack effect: ( quotation -- mmap )

@@ -20,9 +20,11 @@
 
 \ --- Module-scope mutable counter ---
 
-test-counts: ( -- mmap ) [ M{ counter: 0 passed: 0 failed: 0 skipped: 0 } ] ;
+(test-counts-storage): ( -- mmap ) parse-time [ [ counter: 0 passed: 0 failed: 0 skipped: 0 ] make-mutable-map ] ;
+test-counts: ( -- mmap ) [ (test-counts-storage) ] ;
 
-section-state: ( -- mmap ) [ M{ current: f } ] ;
+(section-state-storage): ( -- mmap ) parse-time [ [ current: f ] make-mutable-map ] ;
+section-state: ( -- mmap ) [ (section-state-storage) ] ;
 
 (next-counter): ( -- n ) [
   test-counts counter: @get 1 +
