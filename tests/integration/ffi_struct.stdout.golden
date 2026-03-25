@@ -57,11 +57,20 @@ Stack: [ f f f <resource:dylib> <resource:ffi-fn> 25.0 ]
 PASS: toy_vec2_length_sq(3,4) = 25.0
 Stack: [ f f f <resource:dylib> <resource:ffi-fn> ]
 Stack: [ f f f <resource:dylib> ]
-=== struct return-by-value error ===
+=== struct return-by-value ===
 Stack: [ f f f <resource:dylib> ]
 Stack: [ f f f <resource:dylib> <resource:ffi-fn> ]
-PASS: struct return-by-value not yet supported
-Stack: [ f f f <resource:dylib> <resource:ffi-fn> ]
+Stack: [ f f f <resource:dylib> <resource:ffi-fn> <vector2 B{ 0x00 0x00 0x80 0x3F 0x00 0x00 0x00 0x40 }> ]
+Stack: [ f f f <resource:dylib> <resource:ffi-fn> <vector2 B{ 0x00 0x00 0x80 0x3F 0x00 0x00 0x00 0x40 }> <vector2 B{ 0x00 0x00 0x40 0x40 0x00 0x00 0x80 0x40 }> ]
+Stack: [ f f f <resource:dylib> <resource:ffi-fn> <vector2 B{ 0x00 0x00 0x80 0x40 0x00 0x00 0xC0 0x40 }> ]
+PASS: returned value is vector2
+Stack: [ f f f <resource:dylib> <resource:ffi-fn> <vector2 B{ 0x00 0x00 0x80 0x40 0x00 0x00 0xC0 0x40 }> ]
+PASS: return type-of is vector2
+Stack: [ f f f <resource:dylib> <resource:ffi-fn> <vector2 B{ 0x00 0x00 0x80 0x40 0x00 0x00 0xC0 0x40 }> ]
+Stack: [ f f f <resource:dylib> <resource:ffi-fn> <vector2 B{ 0x00 0x00 0x80 0x40 0x00 0x00 0xC0 0x40 }> <resource:ffi-fn> ]
+Stack: [ f f f <resource:dylib> <resource:ffi-fn> <resource:ffi-fn> 52.0 ]
+PASS: vec2_add result fields correct (length_sq=52)
+Stack: [ f f f <resource:dylib> <resource:ffi-fn> <resource:ffi-fn> ]
 Stack: [ f f f <resource:dylib> ]
 === unknown type still rejected ===
 Stack: [ f f f <resource:dylib> ]

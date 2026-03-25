@@ -7,16 +7,21 @@ const Context = @import("../context.zig").Context;
 const helpers = @import("../primitives/helpers.zig");
 const error_mapping = @import("../primitives/error_mapping.zig");
 const RegistryEntry = @import("../primitives/types.zig").RegistryEntry;
-const FfiTypeTag = signature.FfiTypeTag;
-const Value = @import("../value.zig").Value;
-const BigIntManaged = @import("../value.zig").BigIntManaged;
-const Resource = @import("../value.zig").Resource;
-const FfiCloseFn = @import("../value.zig").FfiCloseFn;
-const ByteArray = @import("../value.zig").ByteArray;
-const Quotation = @import("../value.zig").Quotation;
+
+const value_mod = @import("../value.zig");
+const Value = value_mod.Value;
+const BigIntManaged = value_mod.BigIntManaged;
+const Resource = value_mod.Resource;
+const FfiCloseFn = value_mod.FfiCloseFn;
+const ByteArray = value_mod.ByteArray;
+const VirtualType = value_mod.VirtualType;
+const Quotation = value_mod.Quotation;
+
 const signature = @import("signature.zig");
 const FfiType = signature.FfiType;
+const FfiTypeTag = signature.FfiTypeTag;
 const FfiSignature = signature.FfiSignature;
+
 const struct_layout = @import("struct_layout.zig");
 const FfiStructLayout = struct_layout.FfiStructLayout;
 
@@ -404,11 +409,27 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
 
     // Call the foreign function
     var ret_storage: ReturnStorage = .{ .as_u64 = 0 };
+    var ret_ba: ?*ByteArray = null;
+    var ret_buf: *anyopaque = undefined;
+
+    if (sig.return_type.tag == .struct_type) {
+        const layout = sig.return_type.struct_layout.?;
+        const ba = try alloc.create(ByteArray);
+        ba.* = ByteArray{};
+        try ba.ensureTotalCapacity(alloc, layout.total_size);
+        ba.items.len = layout.total_size;
+        @memset(ba.items[0..layout.total_size], 0);
+        ret_ba = ba;
+        ret_buf = @ptrCast(ba.items.ptr);
+    } else {
+        ret_buf = @ptrCast(&ret_storage);
+    }
+
     const fn_ptr: ?*const fn () callconv(.c) void = @ptrCast(@alignCast(ffi_fn.ptr.?));
     c_ffi.ffi_call(
         &cif,
         fn_ptr,
-        @ptrCast(&ret_storage),
+        ret_buf,
         if (nargs > 0) arg_ptrs.ptr else null,
     );
 
@@ -429,7 +450,7 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
     }
 
     // Return value goes on top
-    try marshalReturn(ctx, sig.return_type, &ret_storage);
+    try marshalReturn(ctx, sig.return_type, &ret_storage, ret_ba);
 }
 
 const ReturnStorage = extern union {
@@ -627,7 +648,7 @@ fn marshalFixnumToSlot(comptime tag: FfiTypeTag, fixnum: i64) ArgSlot {
 }
 
 /// Marshal a C return value back to a 1z Value and push it onto the stack.
-fn marshalReturn(ctx: *Context, return_type: FfiType, ret: *const ReturnStorage) !void {
+fn marshalReturn(ctx: *Context, return_type: FfiType, ret: *const ReturnStorage, ret_ba: ?*ByteArray) !void {
     const alloc = ctx.arena.allocator();
     switch (return_type.tag) {
         inline .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64, .usize_type, .isize_type => |tag| {
@@ -692,8 +713,21 @@ fn marshalReturn(ctx: *Context, return_type: FfiType, ret: *const ReturnStorage)
         },
         .void_type => {},
         .struct_type => {
-            helpers.setErrorContext(ctx, "struct return-by-value not yet supported (see milestone 150.5)", .{});
-            return error.FFICallFailed;
+            const layout = return_type.struct_layout orelse {
+                helpers.setErrorContext(ctx, "struct return type has no layout", .{});
+                return error.FFICallFailed;
+            };
+            const vtype = layout.vtype orelse {
+                helpers.setErrorContext(ctx, "struct return type has no virtual type", .{});
+                return error.FFICallFailed;
+            };
+            const ba = ret_ba orelse {
+                helpers.setErrorContext(ctx, "struct return missing byte array buffer", .{});
+                return error.FFICallFailed;
+            };
+            const inner = try alloc.create(Value);
+            inner.* = .{ .byte_array = ba };
+            try ctx.stack.push(.{ .tagged = .{ .tag = vtype, .inner = inner } });
         },
     }
 }

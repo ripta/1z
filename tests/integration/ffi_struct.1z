@@ -64,16 +64,27 @@ dup "toy_vec2_length_sq" lib-symbol ffi{ vector2 -> f32 } bind-sig
 25.0 "toy_vec2_length_sq(3,4) = 25.0" assert=
 drop
 
-"struct return-by-value error" test-section
+"struct return-by-value" test-section
 
-\\ toy_vec2_add returns struct by value -- not yet supported
+\\ toy_vec2_add returns struct by value; verify via length_sq on result
 dup "toy_vec2_add" lib-symbol ffi{ vector2 vector2 -> vector2 } bind-sig
-[
-  1.0 2.0 make-vector2
-  3.0 4.0 make-vector2
-  2 pick-n ffi-call
-] "struct return-by-value not yet supported" assert-error
-drop
+
+\ stack: lib-handle add-sig
+1.0 2.0 make-vector2
+3.0 4.0 make-vector2
+2 pick-n ffi-call
+
+\ stack: lib-handle add-sig result
+dup vector2? "returned value is vector2" assert-true
+dup type-of vector2 = "return type-of is vector2" assert-true
+
+\ Verify fields by passing result to toy_vec2_length_sq: (4,6) => 4^2+6^2 = 52
+2 pick-n "toy_vec2_length_sq" lib-symbol ffi{ vector2 -> f32 } bind-sig
+\ stack: lib-handle add-sig result lsq-sig
+swap 1 pick-n ffi-call
+\ stack: lib-handle add-sig lsq-sig 52.0
+52.0 "vec2_add result fields correct (length_sq=52)" assert=
+drop drop
 
 "unknown type still rejected" test-section
 

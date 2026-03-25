@@ -224,6 +224,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
         .name = name,
         .inner_type = "byte-array",
     };
+    layout.vtype = vtype;
 
     const tv = try alloc.create(value_mod.TypeValue);
     tv.* = .{ .name = name, .descriptor = null };

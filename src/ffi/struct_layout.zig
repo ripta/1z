@@ -1,6 +1,7 @@
 const std = @import("std");
 const c_ffi = @import("dynamic.zig").c_ffi;
 const FfiTypeTag = @import("signature.zig").FfiTypeTag;
+const VirtualType = @import("../value.zig").VirtualType;
 
 pub const FfiStructField = struct {
     name: []const u8,
@@ -17,6 +18,7 @@ pub const FfiStructLayout = struct {
     alignment: usize,
     ffi_type: *c_ffi.ffi_type,
     elements: [*c][*c]c_ffi.ffi_type,
+    vtype: ?*const VirtualType = null,
 };
 
 /// Map a scalar FFI type tag to its byte size.
