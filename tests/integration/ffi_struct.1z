@@ -25,6 +25,33 @@ mixed: ffi-struct{ a: i32 b: f64 c: u8 } ;
 
 42 3.14 7 make-mixed
 dup mixed? "mixed? returns true for mixed" assert-true
+"ffi-struct f32 field getters" test-section
+
+1.0 2.0 make-vector2
+dup x>> 1.0 "vector2 x>> returns 1.0" assert=
+dup y>> 2.0 "vector2 y>> returns 2.0" assert=
+drop
+
+"ffi-struct i32 field getters" test-section
+
+10 20 make-point
+dup x>> 10 "point x>> returns 10" assert=
+dup y>> 20 "point y>> returns 20" assert=
+drop
+
+"ffi-struct signed negative values" test-section
+
+-5 -10 make-point
+dup x>> -5 "point x>> returns -5" assert=
+dup y>> -10 "point y>> returns -10" assert=
+drop
+
+"ffi-struct mixed-type getters" test-section
+
+42 3.14 7 make-mixed
+dup a>> 42 "mixed a>> returns 42" assert=
+dup b>> 3.14 "mixed b>> returns 3.14" assert=
+dup c>> 7 "mixed c>> returns 7" assert=
 drop
 
 "ffi-struct nested struct" test-section
@@ -43,6 +70,19 @@ drop
 f 42 vector2? "vector2? returns false for fixnum" assert-false
 f "hello" vector2? "vector2? returns false for string" assert-false
 f 10 20 make-point vector2? "vector2? returns false for different ffi-struct" assert-false
+
+"ffi-struct bool field getter" test-section
+
+flagged: ffi-struct{ value: i32 active: bool } ;
+
+99 t make-flagged
+dup value>> 99 "flagged value>> returns 99" assert=
+dup active>> "flagged active>> returns true" assert-true
+drop
+
+0 f make-flagged
+dup active>> not "flagged active>> returns false" assert-true
+drop
 
 "ffi-struct error on wrong arg types" test-section
 
@@ -84,6 +124,17 @@ dup type-of vector2 = "return type-of is vector2" assert-true
 swap 1 pick-n ffi-call
 \ stack: lib-handle add-sig lsq-sig 52.0
 52.0 "vec2_add result fields correct (length_sq=52)" assert=
+drop drop
+
+"FFI return + getter" test-section
+
+\ Call toy_vec2_add(1,2 + 3,4) and read fields with getters
+dup "toy_vec2_add" lib-symbol ffi{ vector2 vector2 -> vector2 } bind-sig
+1.0 2.0 make-vector2
+3.0 4.0 make-vector2
+2 pick-n ffi-call
+dup x>> 4.0 "vec2_add result x>> = 4.0" assert=
+dup y>> 6.0 "vec2_add result y>> = 6.0" assert=
 drop drop
 
 "unknown type still rejected" test-section

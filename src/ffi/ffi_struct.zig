@@ -6,6 +6,9 @@ const Instruction = value_mod.Instruction;
 const VirtualType = value_mod.VirtualType;
 const ByteArray = value_mod.ByteArray;
 const Marker = value_mod.Marker;
+const BigIntManaged = value_mod.BigIntManaged;
+
+const dispatch_mod = @import("../dispatch.zig");
 
 const helpers = @import("../primitives/helpers.zig");
 const markers_mod = @import("../primitives/markers.zig");
@@ -29,6 +32,7 @@ pub const primitives = [_]Primitive{
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "ffi-struct-make", .func = nativeFfiStructMake, .stack_effect = "fields... layout-ptr vtype-ptr -- tagged" },
+    .{ .name = "ffi-struct-field-get", .func = nativeFfiStructFieldGet, .stack_effect = "tagged layout-ptr field-index -- value" },
 };
 
 /// define-ffi-struct ( name: descriptor markers -- )
@@ -276,10 +280,53 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
     const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{name});
     try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
 
+    // FIELD>> getters for each field
+    var getter_names = try alloc.alloc([]const u8, layout.fields.len);
+    for (layout.fields, 0..) |field, i| {
+        const getter_name = try std.fmt.allocPrint(alloc, "{s}>>", .{field.name});
+        getter_names[i] = getter_name;
+
+        const getter_instrs = try alloc.alloc(Instruction, 3);
+        getter_instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(layout)) } }, .line = 0 };
+        getter_instrs[1] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(i) } }, .line = 0 };
+        getter_instrs[2] = .{ .op = .{ .call_word = "native.ffi-struct-field-get" }, .line = 0 };
+
+        const is_generic = if (ctx.lookupWord(getter_name)) |existing| blk: {
+            for (existing.markers) |mk| {
+                if (markers_mod.isGenericMarker(mk)) break :blk true;
+            }
+            break :blk false;
+        } else false;
+
+        if (!is_generic) {
+            const generic_markers = try alloc.alloc(*Marker, 1);
+            generic_markers[0] = @constCast(&markers_mod.generic_marker);
+
+            try ctx.defineWord(getter_name, .{
+                .name = getter_name,
+                .stack_effect = try helpers.makeSimpleEffect(alloc, "instance -- value"),
+                .markers = generic_markers,
+                .action = .{ .compound = &.{} },
+            });
+        }
+
+        try ctx.registerDispatch(.{
+            .word_name = getter_name,
+            .type_a = name,
+            .type_b = dispatch_mod.unary_sentinel,
+        }, .{
+            .body = .{ .quotation = getter_instrs },
+            .provenance = .{ .generator = "ffi-struct", .parent = name, .role = "getter", .field = field.name },
+        }, true);
+    }
+
     var generated_words = std.ArrayListUnmanaged(Value){};
     try generated_words.append(alloc, .{ .string = name });
     try generated_words.append(alloc, .{ .string = make_name });
     try generated_words.append(alloc, .{ .string = pred_name });
+    for (getter_names) |gn| {
+        try generated_words.append(alloc, .{ .string = gn });
+    }
     const gw_slice = try generated_words.toOwnedSlice(alloc);
     try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
 
@@ -461,4 +508,87 @@ fn checkFieldRange(ctx: *Context, struct_name: []const u8, field_name: []const u
         helpers.setErrorContext(ctx, "make-{s}: field '{s}' value {d} out of range for {s}", .{ struct_name, field_name, fixnum, @typeName(T) });
         return error.FFIRangeError;
     }
+}
+
+/// ffi-struct-field-get ( tagged layout-ptr field-index -- value )
+///
+/// Reads a single field from an FFI struct byte array and converts to the appropriate 1z value
+///  based on the field's FFI type tag.
+fn nativeFfiStructFieldGet(ctx: *Context) anyerror!void {
+    const field_index: usize = @intCast(try helpers.popFixnum(ctx));
+    const layout_fixnum = try helpers.popFixnum(ctx);
+    const layout: *const FfiStructLayout = @ptrFromInt(@as(usize, @intCast(layout_fixnum)));
+
+    const tagged_val = try ctx.stack.pop();
+    const ba = switch (tagged_val) {
+        .tagged => |t| switch (t.inner.*) {
+            .byte_array => |b| b,
+            else => {
+                helpers.setTypeMismatchError(ctx, "ffi-struct (byte-array)", t.inner.*);
+                return error.TypeMismatch;
+            },
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "ffi-struct", tagged_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    if (field_index >= layout.fields.len) {
+        helpers.setErrorContext(ctx, "ffi-struct-field-get: field index {d} out of range (struct has {d} fields)", .{ field_index, layout.fields.len });
+        return error.IndexOutOfBounds;
+    }
+
+    const field = layout.fields[field_index];
+    const buf = ba.items[field.offset .. field.offset + field.size];
+
+    if (field.nested_layout != null) {
+        helpers.setErrorContext(ctx, "ffi-struct-field-get: nested struct field '{s}' not yet supported", .{field.name});
+        return error.FFITypeMismatch;
+    }
+
+    const tag = field.ffi_tag orelse {
+        helpers.setErrorContext(ctx, "ffi-struct-field-get: field '{s}' has no FFI type tag", .{field.name});
+        return error.FFITypeMismatch;
+    };
+
+    const result: Value = switch (tag) {
+        .u8 => .{ .fixnum = std.mem.readInt(u8, buf[0..1], .little) },
+        .u16 => .{ .fixnum = std.mem.readInt(u16, buf[0..2], .little) },
+        .u32 => .{ .fixnum = std.mem.readInt(u32, buf[0..4], .little) },
+        .u64 => blk: {
+            const v = std.mem.readInt(u64, buf[0..8], .little);
+            if (v > @as(u64, @intCast(std.math.maxInt(i64)))) {
+                break :blk .{ .bignum = try BigIntManaged.initSet(ctx.quotationAllocator(), v) };
+            }
+            break :blk .{ .fixnum = @intCast(v) };
+        },
+        .i8 => .{ .fixnum = std.mem.readInt(i8, buf[0..1], .little) },
+        .i16 => .{ .fixnum = std.mem.readInt(i16, buf[0..2], .little) },
+        .i32 => .{ .fixnum = std.mem.readInt(i32, buf[0..4], .little) },
+        .i64 => .{ .fixnum = std.mem.readInt(i64, buf[0..8], .little) },
+        .f32 => blk: {
+            const bits = std.mem.readInt(u32, buf[0..4], .little);
+            break :blk .{ .float = @floatCast(@as(f32, @bitCast(bits))) };
+        },
+        .f64 => blk: {
+            const bits = std.mem.readInt(u64, buf[0..8], .little);
+            break :blk .{ .float = @as(f64, @bitCast(bits)) };
+        },
+        .bool_type => .{ .boolean = buf[0] != 0 },
+        .usize_type => blk: {
+            const v = std.mem.readInt(usize, buf[0..@sizeOf(usize)], .little);
+            break :blk .{ .fixnum = @intCast(v) };
+        },
+        .isize_type => blk: {
+            const v = std.mem.readInt(isize, buf[0..@sizeOf(isize)], .little);
+            break :blk .{ .fixnum = @intCast(v) };
+        },
+        else => {
+            helpers.setErrorContext(ctx, "ffi-struct-field-get: unsupported field type for '{s}'", .{field.name});
+            return error.FFITypeMismatch;
+        },
+    };
+
+    try ctx.stack.push(result);
 }
