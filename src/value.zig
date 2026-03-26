@@ -339,7 +339,6 @@ pub const Value = union(enum) {
     template: []const TemplateSegment,
     benchmark_report: *BenchmarkReport,
     stack_effect: StackEffect,
-    parse_time_marker: void, // Deprecated: parse-time word definitions; use marker instead
     error_value: ErrorObject,
 
     pub fn write(self: Value, writer: anytype) anyerror!void {
@@ -457,7 +456,6 @@ pub const Value = union(enum) {
                 try writer.print("<benchmark-report ({d} entries)>", .{br.entries.items.len});
             },
             .stack_effect => |effect| try effect.write(writer),
-            .parse_time_marker => try writer.writeAll("parse-time"),
             .error_value => |err| try err.write(writer),
         }
     }
@@ -570,7 +568,6 @@ pub const Value = union(enum) {
             // Benchmark reports are equal if they refer to the same object
             .benchmark_report => |a| a == other.benchmark_report,
             .stack_effect => |a| a.eql(other.stack_effect),
-            .parse_time_marker => true, // All parse_time_markers are equal
             .error_value => |a| a.eql(other.error_value),
         };
     }
@@ -713,10 +710,6 @@ pub const Value = union(enum) {
                 for (effect.outputs) |param| {
                     hasher.update(param.name);
                 }
-            },
-            .parse_time_marker => {
-                // All parse_time_markers hash the same
-                hasher.update("parse_time_marker");
             },
             .error_value => |err| {
                 hasher.update(err.error_type);
@@ -919,11 +912,4 @@ test "cross-type inequality" {
     try std.testing.expect(!arr_val.eql(int_val));
 }
 
-test "parse_time_marker equality" {
-    const a = Value{ .parse_time_marker = {} };
-    const b = Value{ .parse_time_marker = {} };
-    const c = Value{ .integer = 0 };
 
-    try std.testing.expect(a.eql(b));
-    try std.testing.expect(!a.eql(c));
-}

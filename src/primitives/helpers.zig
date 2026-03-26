@@ -128,7 +128,6 @@ pub fn valueTypeName(val: Value) []const u8 {
         .template => "template",
         .benchmark_report => "benchmark-report",
         .stack_effect => "stack-effect",
-        .parse_time_marker => "parse-time",
         .error_value => "error",
     };
 }

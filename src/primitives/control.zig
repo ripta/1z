@@ -121,10 +121,6 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                             _ = try ctx.stack.pop();
                             try collected_markers.append(alloc, mk);
                         },
-                        .parse_time_marker => {
-                            _ = try ctx.stack.pop();
-                            try collected_markers.append(alloc, @constCast(&markers_mod.parse_time_marker));
-                        },
                         .symbol => break,
                         else => return error.TypeMismatch,
                     }
@@ -163,10 +159,6 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                         .marker => |mk| {
                             _ = try ctx.stack.pop();
                             try collected_markers.append(alloc, mk);
-                        },
-                        .parse_time_marker => {
-                            _ = try ctx.stack.pop();
-                            try collected_markers.append(alloc, @constCast(&markers_mod.parse_time_marker));
                         },
                         .symbol => break,
                         else => return error.TypeMismatch,

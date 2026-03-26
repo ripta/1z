@@ -30,7 +30,6 @@ fn nativeTypeOf(ctx: *Context) anyerror!void {
         .template => "template",
         .benchmark_report => "benchmark-report",
         .stack_effect => "stack-effect",
-        .parse_time_marker => "parse-time",
         .error_value => "error",
     };
     try ctx.stack.push(.{ .symbol = type_name });
