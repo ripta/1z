@@ -216,7 +216,7 @@ pub fn main() u8 {
         bench_stats.markPreludeEnd();
     }
 
-    var dbg: ?debugger_mod.Debugger = if (debug_mode) debugger_mod.Debugger.init(allocator) catch null else null;
+    var dbg: ?debugger_mod.Debugger = if (debug_mode) debugger_mod.Debugger.init(allocator) else null;
     defer if (dbg != null) dbg.?.deinit();
 
     if (dbg != null) {
