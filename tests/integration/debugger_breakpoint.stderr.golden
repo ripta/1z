@@ -1,0 +1,3 @@
+[tests/integration/debugger_breakpoint.1z:1] call  :
+  [ ]
+Breakpoint 1 set on word 'foo'

@@ -74,6 +74,7 @@ pub const ParseError = error{
     UnmatchedCloseParen,
     OutOfMemory,
     ParseTimeExecutionError,
+    DebuggerQuit,
 };
 
 /// Returns true if the parse error indicates incomplete input.
@@ -128,8 +129,8 @@ fn executeParseTimeWord(
 
     // 4. Run the parse-time word
     switch (word.action) {
-        .native => |func| func(c) catch return ParseError.ParseTimeExecutionError,
-        .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch return ParseError.ParseTimeExecutionError,
+        .native => |func| func(c) catch |err| return if (err == error.DebuggerQuit) ParseError.DebuggerQuit else ParseError.ParseTimeExecutionError,
+        .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch |err| return if (err == error.DebuggerQuit) ParseError.DebuggerQuit else ParseError.ParseTimeExecutionError,
     }
 
     // 5. Capture all values above the pre-depth stack as `push_literal` instructions
@@ -374,8 +375,8 @@ fn executeParseTimeWordForArray(
     defer c.parse_tokenizer = old_tokenizer;
 
     switch (word.action) {
-        .native => |func| func(c) catch return ParseError.ParseTimeExecutionError,
-        .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch return ParseError.ParseTimeExecutionError,
+        .native => |func| func(c) catch |err| return if (err == error.DebuggerQuit) ParseError.DebuggerQuit else ParseError.ParseTimeExecutionError,
+        .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch |err| return if (err == error.DebuggerQuit) ParseError.DebuggerQuit else ParseError.ParseTimeExecutionError,
     }
 
     const post_depth = c.stack.depth();

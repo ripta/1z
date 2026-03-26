@@ -94,11 +94,59 @@ pub fn build(b: *std.Build) void {
         const file_path = b.fmt("tests/integration/{s}", .{entry.name});
         const stdout_golden_path = b.fmt("tests/integration/{s}.stdout.golden", .{name_without_ext});
 
+        // Check for .stdin file as source of input for the test
+        const stdin_path = b.fmt("tests/integration/{s}.stdin", .{name_without_ext});
+        var has_stdin = false;
+        var stdin_content: []const u8 = "";
+        if (test_dir.openFile(b.fmt("{s}.stdin", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            stdin_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            if (stdin_content.len > 0) {
+                has_stdin = true;
+            }
+        } else |_| {}
+
+        // Check for .flags file for extra CLI flags for the test
+        const flags_path = b.fmt("tests/integration/{s}.flags", .{name_without_ext});
+        var flags_lines: ?[]const u8 = null;
+        var has_flags = false;
+        if (test_dir.openFile(b.fmt("{s}.flags", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            flags_lines = file.readToEndAlloc(b.allocator, 1024 * 1024) catch null;
+            has_flags = true;
+        } else |_| {}
+
+        // Check for .exitcode file to override expected exit code
+        const exitcode_path = b.fmt("tests/integration/{s}.exitcode", .{name_without_ext});
+        var has_exitcode = false;
+        var expected_exit_code: ?u8 = null;
+        if (test_dir.openFile(b.fmt("{s}.exitcode", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            has_exitcode = true;
+            const code_str = file.readToEndAlloc(b.allocator, 64) catch "";
+            const trimmed_code = std.mem.trim(u8, code_str, " \t\r\n");
+            if (trimmed_code.len > 0) {
+                expected_exit_code = std.fmt.parseInt(u8, trimmed_code, 10) catch null;
+            }
+        } else |_| {}
+
         // Integration test: compare against golden file if it exists
         const test_run = b.addRunArtifact(exe);
         test_run.addArg("--show-stack");
         test_run.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
+        if (flags_lines) |fl| {
+            var flag_iter = std.mem.splitScalar(u8, fl, '\n');
+            while (flag_iter.next()) |flag| {
+                const trimmed_flag = std.mem.trim(u8, flag, " \t\r");
+                if (trimmed_flag.len > 0) {
+                    test_run.addArg(trimmed_flag);
+                }
+            }
+        }
         test_run.addFileArg(b.path(file_path));
+        if (has_stdin) {
+            test_run.setStdIn(.{ .bytes = stdin_content });
+        }
 
         // Library file dependencies
         {
@@ -115,26 +163,28 @@ pub fn build(b: *std.Build) void {
             }
         }
         test_run.addFileInput(b.path("src/prelude.1z"));
+        if (has_stdin) test_run.addFileInput(b.path(stdin_path));
+        if (has_flags) test_run.addFileInput(b.path(flags_path));
+        if (has_exitcode) test_run.addFileInput(b.path(exitcode_path));
 
-        // Check for stderr golden file (error tests)
+        // Check for stderr golden file for tests with stderr output
         var has_stderr_golden = false;
         const stderr_golden_name = b.fmt("{s}.stderr.golden", .{name_without_ext});
         if (test_dir.openFile(stderr_golden_name, .{})) |file| {
             defer file.close();
             const stderr_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
-            if (stderr_content.len > 0) {
-                has_stderr_golden = true;
-                // Track the stderr golden file as a dependency
-                test_run.addFileInput(b.path(b.fmt("tests/integration/{s}", .{stderr_golden_name})));
-                test_run.expectStdErrEqual(stderr_content);
-                test_run.expectExitCode(1); // Error tests should fail
-            }
+            has_stderr_golden = true;
+            // Track the stderr golden file as a dependency
+            test_run.addFileInput(b.path(b.fmt("tests/integration/{s}", .{stderr_golden_name})));
+            test_run.expectStdErrEqual(stderr_content);
         } else |_| {}
 
         if (!has_stderr_golden) {
             test_run.expectStdErrEqual("");
-            test_run.expectExitCode(0);
         }
+
+        // Set expected exit code: .exitcode file > default (1 for error tests, 0 otherwise)
+        test_run.expectExitCode(expected_exit_code orelse if (has_stderr_golden) 1 else 0);
 
         // Try to read stdout golden file for comparison
         if (test_dir.openFile(b.fmt("{s}.stdout.golden", .{name_without_ext}), .{})) |file| {
@@ -152,7 +202,19 @@ pub fn build(b: *std.Build) void {
         const update_run = b.addRunArtifact(exe);
         update_run.addArg("--show-stack");
         update_run.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
+        if (flags_lines) |fl| {
+            var flag_iter2 = std.mem.splitScalar(u8, fl, '\n');
+            while (flag_iter2.next()) |flag| {
+                const trimmed_flag = std.mem.trim(u8, flag, " \t\r");
+                if (trimmed_flag.len > 0) {
+                    update_run.addArg(trimmed_flag);
+                }
+            }
+        }
         update_run.addFileArg(b.path(file_path));
+        if (has_stdin) {
+            update_run.setStdIn(.{ .bytes = stdin_content });
+        }
 
         // Library file dependencies
         {
@@ -169,11 +231,17 @@ pub fn build(b: *std.Build) void {
             }
         }
         update_run.addFileInput(b.path("src/prelude.1z"));
+        if (has_stdin) update_run.addFileInput(b.path(stdin_path));
+        if (has_flags) update_run.addFileInput(b.path(flags_path));
+        if (has_exitcode) update_run.addFileInput(b.path(exitcode_path));
         update_files.addCopyFileToSource(update_run.captureStdOut(), stdout_golden_path);
 
-        // For error tests, allow exit code 1 and capture stderr
+        // Set expected exit code and capture stderr for golden update
+        const update_exit_code = expected_exit_code orelse if (has_stderr_golden) @as(u8, 1) else @as(u8, 0);
+        if (update_exit_code != 0) {
+            update_run.expectExitCode(update_exit_code);
+        }
         if (has_stderr_golden) {
-            update_run.expectExitCode(1);
             const stderr_golden_path = b.fmt("tests/integration/{s}.stderr.golden", .{name_without_ext});
             update_files.addCopyFileToSource(update_run.captureStdErr(), stderr_golden_path);
         }

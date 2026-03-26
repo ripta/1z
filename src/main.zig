@@ -8,6 +8,7 @@ const Quotation = @import("value.zig").Quotation;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 const formatter = @import("formatter.zig");
 const benchmark = @import("benchmark.zig");
+const debugger_mod = @import("debugger/mod.zig");
 const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
 const LineEditor = @import("line_editor.zig").LineEditor;
 const BenchmarkStats = benchmark.BenchmarkStats;
@@ -87,6 +88,9 @@ pub fn main() u8 {
     defer cli_load_paths.deinit(gpa_allocator);
 
     var cli_stdlib_path: ?[]const u8 = null;
+    var debug_mode = false;
+    var initial_breakpoints: [16][]const u8 = undefined;
+    var initial_breakpoint_count: usize = 0;
 
     // TODO(ripta): bit hacky arg parsing, improve later?
     for (args[1..]) |arg| {
@@ -122,6 +126,15 @@ pub fn main() u8 {
             cli_load_paths.append(gpa_allocator, value) catch return 1;
         } else if (std.mem.startsWith(u8, arg, "--stdlib-path=")) {
             cli_stdlib_path = arg["--stdlib-path=".len..];
+        } else if (std.mem.eql(u8, arg, "--debug")) {
+            debug_mode = true;
+        } else if (std.mem.startsWith(u8, arg, "--break=")) {
+            debug_mode = true;
+            const word = arg["--break=".len..];
+            if (initial_breakpoint_count < 16) {
+                initial_breakpoints[initial_breakpoint_count] = word;
+                initial_breakpoint_count += 1;
+            }
         } else {
             file_path = arg;
         }
@@ -201,6 +214,20 @@ pub fn main() u8 {
     };
     if (bench_config.enabled) {
         bench_stats.markPreludeEnd();
+    }
+
+    var dbg: ?debugger_mod.Debugger = if (debug_mode) debugger_mod.Debugger.init(allocator) else null;
+    defer if (dbg != null) dbg.?.deinit();
+
+    if (dbg != null) {
+        ctx.debugger = &dbg.?;
+        for (initial_breakpoints[0..initial_breakpoint_count]) |bp| {
+            _ = dbg.?.breakpoints.addWord(bp);
+        }
+        if (initial_breakpoint_count > 0) {
+            // Start in continue mode so execution runs until a breakpoint hits
+            dbg.?.stepper.mode = .continue_running;
+        }
     }
 
     // If a file path is provided, run in batch mode, which executes the file
@@ -454,6 +481,7 @@ fn replInteractive(ctx: *Context, writer: anytype) void {
         switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
             .needs_more_input => continue,
             .parse_error => |err| {
+                if (err == error.DebuggerQuit) return;
                 writer.print("Error: {any}\n", .{err}) catch {};
                 writer.flush() catch {};
                 processor.reset();
@@ -523,6 +551,7 @@ fn replPiped(ctx: *Context, writer: anytype) void {
         switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
             .needs_more_input => continue,
             .parse_error => |err| {
+                if (err == error.DebuggerQuit) return;
                 writer.print("Error: {any}\n", .{err}) catch {};
                 writer.flush() catch return;
                 processor.reset();
@@ -603,6 +632,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                 switch (processor.flush(ctx.quotationAllocator(), ctx)) {
                     .needs_more_input => {},
                     .parse_error => |e| {
+                        if (e == error.DebuggerQuit) return 0;
                         err_writer.print("Error: {any}\n", .{e}) catch {};
                         err_writer.flush() catch {};
                         return 1;
@@ -612,6 +642,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                             // Adjust line numbers in instructions based on file position
                             adjustInstructionLines(instrs, processor.start_line);
                             ctx.executeQuotation(.{ .instructions = instrs }) catch |e| {
+                                if (e == debugger_mod.DebuggerQuit.DebuggerQuit) return 0;
                                 printErrorDetails(ctx, err_writer, e);
                                 err_writer.flush() catch {};
                                 return 1;
@@ -640,6 +671,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
         switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
             .needs_more_input => continue,
             .parse_error => |err| {
+                if (err == error.DebuggerQuit) return 0;
                 err_writer.print("Error at line {d}: {any}\n", .{ file_line, err }) catch {};
                 err_writer.flush() catch {};
                 return 1;
@@ -649,6 +681,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                     // Adjust line numbers in instructions based on file position
                     adjustInstructionLines(instrs, processor.start_line);
                     ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
+                        if (err == debugger_mod.DebuggerQuit.DebuggerQuit) return 0;
                         printErrorDetails(ctx, err_writer, err);
                         err_writer.flush() catch {};
                         return 1;
@@ -704,4 +737,5 @@ test {
     _ = @import("benchmark.zig");
     _ = @import("memory_limit.zig");
     _ = @import("line_editor.zig");
+    _ = @import("debugger/mod.zig");
 }

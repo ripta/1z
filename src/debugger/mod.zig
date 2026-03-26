@@ -1,0 +1,12 @@
+pub const Debugger = @import("debugger.zig").Debugger;
+pub const DebuggerQuit = @import("debugger.zig").DebuggerQuit;
+pub const Stepper = @import("stepper.zig").Stepper;
+pub const DisplayRenderer = @import("display.zig").DisplayRenderer;
+pub const CommandDispatcher = @import("commands.zig").CommandDispatcher;
+pub const CommandResult = @import("commands.zig").CommandResult;
+pub const Inspector = @import("inspector.zig").Inspector;
+pub const BreakpointManager = @import("breakpoints.zig").BreakpointManager;
+pub const Breakpoint = @import("breakpoints.zig").Breakpoint;
+pub const EventEmitter = @import("events.zig").EventEmitter;
+pub const DebugEvent = @import("events.zig").DebugEvent;
+pub const EventListener = @import("events.zig").EventListener;
