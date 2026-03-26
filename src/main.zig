@@ -8,6 +8,7 @@ const Quotation = @import("value.zig").Quotation;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 const formatter = @import("formatter.zig");
 const benchmark = @import("benchmark.zig");
+const debugger_mod = @import("debugger/mod.zig");
 const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
 const LineEditor = @import("line_editor.zig").LineEditor;
 const BenchmarkStats = benchmark.BenchmarkStats;
@@ -87,6 +88,7 @@ pub fn main() u8 {
     defer cli_load_paths.deinit(gpa_allocator);
 
     var cli_stdlib_path: ?[]const u8 = null;
+    var debug_mode = false;
 
     // TODO(ripta): bit hacky arg parsing, improve later?
     for (args[1..]) |arg| {
@@ -122,6 +124,8 @@ pub fn main() u8 {
             cli_load_paths.append(gpa_allocator, value) catch return 1;
         } else if (std.mem.startsWith(u8, arg, "--stdlib-path=")) {
             cli_stdlib_path = arg["--stdlib-path=".len..];
+        } else if (std.mem.eql(u8, arg, "--debug")) {
+            debug_mode = true;
         } else {
             file_path = arg;
         }
@@ -201,6 +205,13 @@ pub fn main() u8 {
     };
     if (bench_config.enabled) {
         bench_stats.markPreludeEnd();
+    }
+
+    var dbg: ?debugger_mod.Debugger = if (debug_mode) debugger_mod.Debugger.init(allocator) catch null else null;
+    defer if (dbg != null) dbg.?.deinit();
+
+    if (dbg != null) {
+        ctx.debugger = &dbg.?;
     }
 
     // If a file path is provided, run in batch mode, which executes the file
@@ -612,6 +623,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                             // Adjust line numbers in instructions based on file position
                             adjustInstructionLines(instrs, processor.start_line);
                             ctx.executeQuotation(.{ .instructions = instrs }) catch |e| {
+                                if (e == debugger_mod.DebuggerQuit.DebuggerQuit) return 0;
                                 printErrorDetails(ctx, err_writer, e);
                                 err_writer.flush() catch {};
                                 return 1;
@@ -649,6 +661,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                     // Adjust line numbers in instructions based on file position
                     adjustInstructionLines(instrs, processor.start_line);
                     ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
+                        if (err == debugger_mod.DebuggerQuit.DebuggerQuit) return 0;
                         printErrorDetails(ctx, err_writer, err);
                         err_writer.flush() catch {};
                         return 1;
@@ -704,4 +717,5 @@ test {
     _ = @import("benchmark.zig");
     _ = @import("memory_limit.zig");
     _ = @import("line_editor.zig");
+    _ = @import("debugger/mod.zig");
 }

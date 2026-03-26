@@ -5,6 +5,7 @@ const Stack = @import("stack.zig").Stack;
 const Dictionary = @import("dictionary.zig").Dictionary;
 const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
+const debugger_mod = @import("debugger/mod.zig");
 const Quotation = value_mod.Quotation;
 const Value = value_mod.Value;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
@@ -93,6 +94,12 @@ pub const Context = struct {
     /// Pending error message set by primitives before returning an error.
     /// Used by captureCallStackOnError for the innermost frame's message.
     pending_error_message: ?[]const u8 = null,
+    /// Optional debugger. When non-null, the execution loop checks whether to
+    /// pause before each instruction. When null (the default), the cost is a
+    /// single pointer check per instruction.
+    ///
+    /// TODO(ripta): Consider making this a comptime flag to eliminate the pointer check.
+    debugger: ?*debugger_mod.Debugger = null,
 
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
@@ -823,6 +830,12 @@ pub const Context = struct {
     /// compound `call_word`, sets `tail_call_instructions` instead of recursing.
     fn executeInstructions(self: *Context, instructions: []const Instruction) anyerror!void {
         for (instructions, 0..) |instr, idx| {
+            if (self.debugger) |dbg| {
+                if (try dbg.shouldPause(instr, self)) {
+                    try dbg.enterPrompt(instr, self);
+                }
+            }
+
             const is_last = (idx == instructions.len - 1);
 
             switch (instr.op) {
