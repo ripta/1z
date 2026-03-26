@@ -45,10 +45,23 @@ pub const Debugger = struct {
     /// Check whether the debugger should pause before this instruction.
     pub fn shouldPause(self: *Debugger, instr: Instruction, ctx: *Context) !bool {
         _ = instr;
-        _ = ctx;
         return switch (self.stepper.mode) {
             .step_into => true,
             .continue_running => false,
+            .step_over => blk: {
+                if (ctx.call_stack.items.len <= self.stepper.target_depth) {
+                    self.stepper.mode = .step_into;
+                    break :blk true;
+                }
+                break :blk false;
+            },
+            .step_finish => blk: {
+                if (ctx.call_stack.items.len < self.stepper.target_depth) {
+                    self.stepper.mode = .step_into;
+                    break :blk true;
+                }
+                break :blk false;
+            },
         };
     }
 
@@ -79,10 +92,18 @@ pub const Debugger = struct {
             };
 
             const trimmed = std.mem.trim(u8, line, " \t\r\n");
+            if (trimmed.len > 0) {
+                self.editor.addHistory(trimmed);
+            }
 
-            // Empty line: repeat last stepping command
+            // Empty line: repeat last stepping command; keep track of depth
+            // for step_over/step_finish
             if (trimmed.len == 0) {
                 self.stepper.mode = self.last_step_mode;
+                if (self.last_step_mode == .step_over or self.last_step_mode == .step_finish) {
+                    self.stepper.target_depth = ctx.call_stack.items.len;
+                }
+
                 return;
             }
 

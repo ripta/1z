@@ -4,3 +4,4 @@ pub const Stepper = @import("stepper.zig").Stepper;
 pub const DisplayRenderer = @import("display.zig").DisplayRenderer;
 pub const CommandDispatcher = @import("commands.zig").CommandDispatcher;
 pub const CommandResult = @import("commands.zig").CommandResult;
+pub const Inspector = @import("inspector.zig").Inspector;
