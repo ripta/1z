@@ -1,0 +1,29 @@
+\ Integration tests for >array container conversion
+
+use "testing" ;
+
+"vector >array" test-section
+V{ 1 2 3 } >array { 1 2 3 } "vector to array" assert=
+V{ } >array { } "empty vector to array" assert=
+
+"byte-array >array" test-section
+B{ 65 66 67 } >array { 65 66 67 } "byte-array to array" assert=
+B{ } >array { } "empty byte-array to array" assert=
+
+"set >array" test-section
+S{ 10 20 30 } >array #len 3 "set to array has 3 elements" assert=
+
+"array >array (identity)" test-section
+{ 1 2 3 } >array { 1 2 3 } "array identity" assert=
+{ } >array { } "empty array identity" assert=
+
+"copy semantics" test-section
+\ Mutating vector after >array should not affect the array
+v: [ V{ 10 20 30 } ] ;
+arr: [ v >array ] ;
+v 99 #push! drop
+arr { 10 20 30 } "vector >array is a snapshot" assert=
+
+"error on unsupported type" test-section
+[ "hello" >array ] "string >array throws" assert-error
+[ 42 >array ] "fixnum >array throws" assert-error

@@ -1,0 +1,35 @@
+=== vector >array ===
+Stack: [ ]
+PASS: vector to array
+Stack: [ ]
+PASS: empty vector to array
+Stack: [ ]
+=== byte-array >array ===
+Stack: [ ]
+PASS: byte-array to array
+Stack: [ ]
+PASS: empty byte-array to array
+Stack: [ ]
+=== set >array ===
+Stack: [ ]
+PASS: set to array has 3 elements
+Stack: [ ]
+=== array >array (identity) ===
+Stack: [ ]
+PASS: array identity
+Stack: [ ]
+PASS: empty array identity
+Stack: [ ]
+=== copy semantics ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: vector >array is a snapshot
+Stack: [ ]
+=== error on unsupported type ===
+Stack: [ ]
+PASS: string >array throws
+Stack: [ ]
+PASS: fixnum >array throws
+Stack: [ ]

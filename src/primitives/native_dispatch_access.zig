@@ -85,6 +85,9 @@ pub const registry_entries = [_]RegistryEntry{
     // Sequence (binary)
     .{ .name = "dispatch#nth", .func = makeBinaryNativeAccessEntry("#nth") },
 
+    // Container conversion (unary)
+    .{ .name = "dispatch>array", .func = makeUnaryNativeAccessEntry(">array") },
+
     // String (unary)
     .{ .name = "dispatchinspect", .func = makeUnaryNativeAccessEntry("inspect") },
     .{ .name = "dispatch>string", .func = makeUnaryNativeAccessEntry(">string") },

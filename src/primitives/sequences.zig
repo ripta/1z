@@ -456,6 +456,12 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
     try dispatch.registerNative("#last", "vector", unary_sentinel, nativeLastVector);
     try dispatch.registerNative("#last", "byte-array", unary_sentinel, nativeLastByteArray);
 
+    // >array : 4 unary entries
+    try dispatch.registerNative(">array", "vector", unary_sentinel, nativeToArrayVector);
+    try dispatch.registerNative(">array", "byte-array", unary_sentinel, nativeToArrayByteArray);
+    try dispatch.registerNative(">array", "set", unary_sentinel, nativeToArraySet);
+    try dispatch.registerNative(">array", "array", unary_sentinel, nativeToArrayArray);
+
     // #peek / #poke! : byte-level access
     try dispatch.registerNative("#peek", "byte-array", unary_sentinel, nativePeekByteArray);
     try dispatch.registerNative("#poke!", "byte-array", unary_sentinel, nativePokeByteArray);
@@ -506,6 +512,8 @@ pub const primitives = [_]Primitive{
     .{ .name = "#index-of", .stack_effect = "seq elem -- n/f", .doc = "Find index of element, or f if not found.", .func = nativeIndexOf },
     // Freeze
     .{ .name = "freeze", .stack_effect = "vector -- array", .doc = "Convert a vector to an array (copy semantics).", .func = nativeFreeze, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    // Container conversion
+    .{ .name = ">array", .stack_effect = "container -- array", .doc = "Convert vector, byte-array, set, or array to an immutable array. Copy semantics; original unchanged.", .func = nativeToArray, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     // Byte-level access
     .{ .name = "#peek", .stack_effect = "byte-array offset width -- fixnum", .doc = "Read width bytes (1/2/4/8) at offset from byte-array as unsigned fixnum.", .func = nativePeek, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = "#poke!", .stack_effect = "byte-array offset value width -- byte-array", .doc = "Write value as width bytes (1/2/4/8) at offset in byte-array.", .func = nativePoke, .markers = &.{@constCast(&markers_mod.generic_marker)} },
@@ -2089,6 +2097,43 @@ fn nativeFreeze(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     }
+}
+
+/// >array ( vector -- array ) - Snapshot vector items into an immutable array
+fn nativeToArrayVector(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+    const items = try alloc.dupe(Value, val.vector.items);
+    try ctx.stack.push(.{ .array = items });
+}
+
+/// >array ( byte-array -- array ) - Convert each byte to a fixnum element
+fn nativeToArrayByteArray(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+    const items = try sequenceToValues(val, alloc);
+    try ctx.stack.push(.{ .array = items });
+}
+
+/// >array ( set -- array ) - Convert set to array in insertion order
+fn nativeToArraySet(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+    const items = try sequenceToValues(val, alloc);
+    try ctx.stack.push(.{ .array = items });
+}
+
+/// >array ( array -- array ) - Identity, no allocation
+fn nativeToArrayArray(_: *Context) anyerror!void {
+    // Pop and push back, an identity (value is already on the stack)
+}
+
+/// >array ( container -- array ) - Convert vector, byte-array, set, or array to an immutable array
+fn nativeToArray(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ">array")) return;
+    const val = try ctx.stack.pop();
+    setErrorContext(ctx, ">array expected vector, byte-array, set, or array, got {s}", .{valueTypeName(val)});
+    return error.TypeMismatch;
 }
 
 const native_endian = builtin.target.cpu.arch.endian();
