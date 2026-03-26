@@ -26,6 +26,7 @@ fn nativeTypeOf(ctx: *Context) anyerror!void {
         .marker => "marker",
         .struct_type => "struct-type",
         .struct_instance => |si| si.struct_type.name,
+        .tagged => |t| t.tag.name,
         .template => "template",
         .benchmark_report => "benchmark-report",
         .stack_effect => "stack-effect",

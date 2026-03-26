@@ -100,6 +100,14 @@ pub const Marker = struct {
     name: []const u8, // Empty for anonymous, actual name when defined with ;
 };
 
+/// VirtualType represents the definition of a virtual type.
+/// All instances of the same virtual type share a single VirtualType allocation,
+/// enabling pointer equality for type identity checks.
+pub const VirtualType = struct {
+    name: []const u8, // Type name (e.g., "duration")
+    inner_type: []const u8, // Expected inner type name (e.g., "integer")
+};
+
 /// StructType represents the definition of a struct type.
 /// Created by `struct{ field1 field2 ... }` syntax.
 pub const StructType = struct {
@@ -327,6 +335,7 @@ pub const Value = union(enum) {
     marker: *Marker,
     struct_type: *StructType,
     struct_instance: *StructInstance,
+    tagged: struct { tag: *const VirtualType, inner: *const Value },
     template: []const TemplateSegment,
     benchmark_report: *BenchmarkReport,
     stack_effect: StackEffect,
@@ -431,6 +440,11 @@ pub const Value = union(enum) {
                     try writer.writeAll(" ");
                 }
                 try writer.writeAll("}");
+            },
+            .tagged => |t| {
+                try writer.print("<{s} ", .{t.tag.name});
+                try t.inner.write(writer);
+                try writer.writeAll(">");
             },
             .template => |segments| {
                 try writer.writeAll("T\"");
@@ -538,6 +552,11 @@ pub const Value = union(enum) {
                     if (!af.eql(bf)) return false;
                 }
                 return true;
+            },
+            // Tagged values are equal if same tag pointer and inner values equal
+            .tagged => |a| {
+                const b = other.tagged;
+                return a.tag == b.tag and a.inner.eql(b.inner.*);
             },
             .template => |a| {
                 const b = other.template;
@@ -663,6 +682,13 @@ pub const Value = union(enum) {
                     const field_hash = field.hashValue();
                     hasher.update(std.mem.asBytes(&field_hash));
                 }
+            },
+            // Tagged values hash by tag pointer and inner value
+            .tagged => |t| {
+                const ptr_val = @intFromPtr(t.tag);
+                hasher.update(std.mem.asBytes(&ptr_val));
+                const inner_hash = t.inner.hashValue();
+                hasher.update(std.mem.asBytes(&inner_hash));
             },
             .template => |segments| {
                 for (segments) |seg| {
