@@ -166,6 +166,19 @@ pub const Inspector = struct {
         }
     }
 
+    /// List all loaded modules.
+    pub fn listModules(ctx: *Context, writer: anytype) !void {
+        if (ctx.module_cache.count() == 0) {
+            try writer.writeAll("  No modules loaded.\n");
+            return;
+        }
+        var iter = ctx.module_cache.iterator();
+        while (iter.next()) |entry| {
+            const module = entry.value_ptr.*;
+            try writer.print("  {s} ({d} exports)\n", .{ module.name, module.words.count() });
+        }
+    }
+
     /// List exports of a loaded module.
     pub fn showModule(ctx: *Context, name: []const u8, writer: anytype) !void {
         // Search module_cache for a module whose name matches

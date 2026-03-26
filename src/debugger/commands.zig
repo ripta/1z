@@ -58,12 +58,12 @@ pub const CommandDispatcher = struct {
             return .stay;
         }
 
-        if (std.mem.eql(u8, cmd, "call")) {
+        if (std.mem.eql(u8, cmd, "bt") or std.mem.eql(u8, cmd, "call")) {
             try Inspector.showCallStack(ctx, writer);
             return .stay;
         }
 
-        if (std.mem.eql(u8, cmd, "where")) {
+        if (std.mem.eql(u8, cmd, "wh") or std.mem.eql(u8, cmd, "where")) {
             try Inspector.showWhere(ctx, writer);
             return .stay;
         }
@@ -73,17 +73,17 @@ pub const CommandDispatcher = struct {
             return .stay;
         }
 
-        if (std.mem.eql(u8, cmd, "locals")) {
+        if (std.mem.eql(u8, cmd, "ll") or std.mem.eql(u8, cmd, "locals")) {
             try Inspector.showLocals(ctx, writer);
             return .stay;
         }
 
-        if (std.mem.eql(u8, cmd, "params")) {
+        if (std.mem.eql(u8, cmd, "pl") or std.mem.eql(u8, cmd, "params")) {
             try Inspector.showParams(ctx, writer);
             return .stay;
         }
 
-        if (std.mem.eql(u8, cmd, "dict")) {
+        if (std.mem.eql(u8, cmd, "di") or std.mem.eql(u8, cmd, "dict")) {
             if (arg) |name| {
                 try Inspector.showDictEntry(ctx, name, writer);
             } else {
@@ -92,7 +92,7 @@ pub const CommandDispatcher = struct {
             return .stay;
         }
 
-        if (std.mem.eql(u8, cmd, "module")) {
+        if (std.mem.eql(u8, cmd, "m") or std.mem.eql(u8, cmd, "module")) {
             if (arg) |name| {
                 try Inspector.showModule(ctx, name, writer);
             } else {
@@ -101,10 +101,25 @@ pub const CommandDispatcher = struct {
             return .stay;
         }
 
+        if (std.mem.eql(u8, cmd, "ml") or std.mem.eql(u8, cmd, "modules")) {
+            try Inspector.listModules(ctx, writer);
+            return .stay;
+        }
+
         if (std.mem.eql(u8, cmd, "b") or std.mem.eql(u8, cmd, "break")) {
             if (arg) |bp_arg| {
-                // If arg contains ':' and the part after parses as a number, treat as source:line
-                if (parseSourceLocation(bp_arg)) |loc| {
+                if (bp_arg.len > 1 and bp_arg[0] == ':') {
+                    if (std.fmt.parseInt(usize, bp_arg[1..], 10)) |bp_line| {
+                        const id = breakpoints.addSourceLocation(ctx.current_source, bp_line);
+                        if (id > 0) {
+                            try writer.print("Breakpoint {d} set at {s}:{d}\n", .{ id, ctx.current_source, bp_line });
+                        } else {
+                            try writer.writeAll("Failed to set breakpoint\n");
+                        }
+                    } else |_| {
+                        try writer.writeAll("Usage: break :<line>\n");
+                    }
+                } else if (parseSourceLocation(bp_arg)) |loc| {
                     const id = breakpoints.addSourceLocation(loc.source, loc.line);
                     if (id > 0) {
                         try writer.print("Breakpoint {d} set at {s}:{d}\n", .{ id, loc.source, loc.line });
@@ -120,7 +135,7 @@ pub const CommandDispatcher = struct {
                     }
                 }
             } else {
-                try writer.writeAll("Usage: break <word> or break <file>:<line>\n");
+                try writer.writeAll("Usage: break <word> or break <file>:<line> or break :<line>\n");
             }
             return .stay;
         }
@@ -130,7 +145,7 @@ pub const CommandDispatcher = struct {
             return .stay;
         }
 
-        if (std.mem.eql(u8, cmd, "en") or std.mem.eql(u8, cmd, "enable")) {
+        if (std.mem.eql(u8, cmd, "be") or std.mem.eql(u8, cmd, "en") or std.mem.eql(u8, cmd, "enable")) {
             if (arg) |id_str| {
                 if (std.fmt.parseInt(u32, id_str, 10)) |id| {
                     if (breakpoints.enable(id)) {
@@ -147,7 +162,7 @@ pub const CommandDispatcher = struct {
             return .stay;
         }
 
-        if (std.mem.eql(u8, cmd, "dis") or std.mem.eql(u8, cmd, "disable")) {
+        if (std.mem.eql(u8, cmd, "bd") or std.mem.eql(u8, cmd, "dis") or std.mem.eql(u8, cmd, "disable")) {
             if (arg) |id_str| {
                 if (std.fmt.parseInt(u32, id_str, 10)) |id| {
                     if (breakpoints.disable(id)) {
@@ -181,7 +196,7 @@ pub const CommandDispatcher = struct {
             return .stay;
         }
 
-        if (std.mem.eql(u8, cmd, "h") or std.mem.eql(u8, cmd, "help")) {
+        if (std.mem.eql(u8, cmd, "?") or std.mem.eql(u8, cmd, "h") or std.mem.eql(u8, cmd, "help")) {
             try printHelp(writer);
             return .stay;
         }
@@ -214,25 +229,26 @@ pub const CommandDispatcher = struct {
     fn printHelp(writer: anytype) !void {
         try writer.writeAll(
             \\Commands:
-            \\  s, step       Step one instruction (step into)
-            \\  n, next       Step over (run until same call depth)
-            \\  f, finish     Run until current word returns
-            \\  c, continue   Run until next breakpoint or end
-            \\  q, quit       Abort execution
-            \\  ., stack      Show data stack
-            \\  call          Show call stack
-            \\  where         Show current source location
-            \\  w, word       Show current word's instruction listing
-            \\  locals        Show local frame bindings
-            \\  params        Show parameter bindings
-            \\  dict <name>   Inspect a dictionary entry
-            \\  module <name> List exports of a loaded module
-            \\  b, break <w>       Set breakpoint on word or file:line
-            \\  bl, breakpoints    List all breakpoints
-            \\  en, enable <id>    Enable a breakpoint
-            \\  dis, disable <id>  Disable a breakpoint
-            \\  del, delete <id>   Delete a breakpoint
-            \\  h, help            Show this help
+            \\  s,   step                  Step one instruction (step into)
+            \\  n,   next                  Step over (run until same call depth)
+            \\  f,   finish                Run until current word returns
+            \\  c,   continue              Run until next breakpoint or end
+            \\  q,   quit                  Abort execution
+            \\  .,   stack                 Show data stack
+            \\  bt,  call                  Show call stack (backtrace)
+            \\  wh,  where                 Show current source location
+            \\  w,   word                  Show current word's instruction listing
+            \\  ll,  locals                Show local frame bindings
+            \\  pl,  params                Show parameter bindings
+            \\  di,  dict <name>           Inspect a dictionary entry
+            \\  m,   module <name>         List exports of a module
+            \\  ml,  modules               List all loaded modules
+            \\  b,   break <w>             Set breakpoint on word, file:line, or :line
+            \\  bl,  breakpoints           List all breakpoints
+            \\  be,  en, enable <id>       Enable a breakpoint
+            \\  bd,  dis, disable <id>     Disable a breakpoint
+            \\  del, delete <id>           Delete a breakpoint
+            \\  ?,   h, help               Show this help
             \\
             \\Press Enter on an empty line to repeat the last stepping command.
             \\
