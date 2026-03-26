@@ -51,3 +51,27 @@ PASS: duration is not a weight
 Stack: [ ]
 PASS: weight is not a duration
 Stack: [ ]
+=== inner comparison (=) ===
+Stack: [ ]
+PASS: (=) tagged vs plain integer
+Stack: [ ]
+PASS: (=) same tag same inner
+Stack: [ ]
+PASS: (=) same tag different inner
+Stack: [ ]
+PASS: (=) different tags same inner
+Stack: [ ]
+PASS: (=) different tags different inner
+Stack: [ ]
+PASS: (=) plain integers equal
+Stack: [ ]
+PASS: (=) plain integers not equal
+Stack: [ ]
+PASS: (=) plain strings equal
+Stack: [ ]
+PASS: (=) nested different depth not equal
+Stack: [ ]
+PASS: (=) nested same depth equal
+Stack: [ ]
+PASS: (=) nested does not unwrap two layers
+Stack: [ ]

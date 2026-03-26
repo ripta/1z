@@ -65,3 +65,29 @@ weight: virtual{ integer } ;
 \ Each has its own predicate
 42 >duration weight? f "duration is not a weight" assert=
 42 >weight duration? f "weight is not a duration" assert=
+
+"inner comparison (=)" test-section
+
+\ (=) unwraps tagged and compares inner value with plain value
+42 >duration 42 (=) t "(=) tagged vs plain integer" assert=
+
+\ (=) unwraps both sides
+42 >duration 42 >duration (=) t "(=) same tag same inner" assert=
+42 >duration 43 >duration (=) f "(=) same tag different inner" assert=
+
+\ (=) compares across different virtual types with same inner
+42 >duration 42 >weight (=) t "(=) different tags same inner" assert=
+42 >duration 43 >weight (=) f "(=) different tags different inner" assert=
+
+\ (=) with plain values (no tags) behaves like =
+42 42 (=) t "(=) plain integers equal" assert=
+42 43 (=) f "(=) plain integers not equal" assert=
+"hello" "hello" (=) t "(=) plain strings equal" assert=
+
+\ (=) unwraps only one layer for nested virtual types
+\ nested: unwrapping one layer gives duration{42} vs 42, not equal
+42 >duration >positive-duration 42 >duration (=) f "(=) nested different depth not equal" assert=
+\ nested: same nesting level compares equal
+42 >duration >positive-duration 42 >duration >positive-duration (=) t "(=) nested same depth equal" assert=
+\ nested (=) does not unwrap two layers
+42 >duration >positive-duration 42 (=) f "(=) nested does not unwrap two layers" assert=
