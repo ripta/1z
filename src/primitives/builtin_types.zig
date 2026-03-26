@@ -43,7 +43,7 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
     try ctx.registerTypeDescriptor(name, descriptor);
 
     // Register in the built-in type value mapping table for type-of lookups
-    try ctx.builtin_type_values.put(ctx.allocator, name, tv);
+    try ctx.registerBuiltinTypeValue(name, tv);
 
     try ctx.stack.push(.{ .marker = @constCast(&markers_mod.parse_time_marker) });
     try ctx.stack.push(.{ .marker = @constCast(&markers_mod.const_marker) });

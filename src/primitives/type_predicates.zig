@@ -45,7 +45,7 @@ fn nativeTypeOf(ctx: *Context) anyerror!void {
         const alloc = ctx.quotationAllocator();
         const tv = try alloc.create(value_mod.TypeValue);
         tv.* = .{ .name = type_name, .descriptor = null };
-        try ctx.resource_type_values.put(ctx.allocator, type_name, tv);
+        try ctx.registerResourceTypeValue(type_name, tv);
         try ctx.stack.push(.{ .type_val = tv });
         return;
     }

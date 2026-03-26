@@ -266,6 +266,9 @@ pub const Context = struct {
     /// ancestor scopes, up to the root context which holds primitives and
     /// prelude words.
     parent_context: ?*const Context = null,
+    /// RwLock protecting shared registries. Heap-allocated by the root context
+    /// and shared by reference to all child task contexts.
+    shared_lock: *std.Thread.RwLock = undefined,
     /// Controls automatic JIT compilation of word definitions.
     /// When .eager, every word defined via defineWord is automatically
     /// compiled. Compilation failures are silently ignored and the
@@ -317,6 +320,11 @@ pub const Context = struct {
             .dispatch = DispatchTable.init(allocator),
             .jit_dispatch = JitDispatchTable.init(allocator),
         };
+
+        ctx.shared_lock = allocator.create(std.Thread.RwLock) catch |err| {
+            std.debug.panic("Failed to allocate shared lock: {any}", .{err});
+        };
+        ctx.shared_lock.* = .{};
 
         // Allocate the module cache M{} on the arena.
         ctx.module_cache_value = ctx.arena.allocator().create(value_mod.MutableMap) catch |err| {
@@ -396,6 +404,9 @@ pub const Context = struct {
             .stdlib_path = parent.stdlib_path,
             .program_args = parent.program_args,
         };
+
+        // Share the parent's lock so all tasks use the same RwLock.
+        ctx.shared_lock = parent.shared_lock;
 
         // Share the parent's module cache so tasks don't re-load from disk.
         ctx.module_cache_value = parent.module_cache_value;
@@ -531,6 +542,7 @@ pub const Context = struct {
         self.pic_cache.deinit(self.allocator);
         self.arena.deinit();
         if (self.parent_context == null) {
+            self.allocator.destroy(self.shared_lock);
             self.container_arena.deinit();
             self.allocator.destroy(self.container_arena);
         }
@@ -666,11 +678,25 @@ pub const Context = struct {
 
     /// Push a new empty pragma frame onto the frame stack.
     pub fn pushPragmaFrame(self: *Context) !void {
+        const lk = self.shared_lock;
+        lk.lock();
+        defer lk.unlock();
+        return self.pushPragmaFrameLocked();
+    }
+
+    fn pushPragmaFrameLocked(self: *Context) !void {
         try self.pragma_frames.append(self.allocator, PragmaFrame{});
     }
 
     /// Pop the top pragma frame from the frame stack.
     pub fn popPragmaFrame(self: *Context) void {
+        const lk = self.shared_lock;
+        lk.lock();
+        defer lk.unlock();
+        return self.popPragmaFrameLocked();
+    }
+
+    fn popPragmaFrameLocked(self: *Context) void {
         if (self.pragma_frames.items.len > 0) {
             const last_idx = self.pragma_frames.items.len - 1;
             self.pragma_frames.items[last_idx].deinit(self.allocator);
@@ -688,6 +714,13 @@ pub const Context = struct {
     /// Get the current value of a pragma, searching frames top-to-bottom
     /// and then walking the parent context chain.
     pub fn getPragma(self: *const Context, name: []const u8) ?Value {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.getPragmaLocked(name);
+    }
+
+    fn getPragmaLocked(self: *const Context, name: []const u8) ?Value {
         var i = self.pragma_frames.items.len;
         while (i > 0) {
             i -= 1;
@@ -713,6 +746,13 @@ pub const Context = struct {
 
     /// Look up a pragma registration by name, walking the parent context chain.
     pub fn lookupPragmaRegistration(self: *const Context, name: []const u8) ?PragmaRegistration {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.lookupPragmaRegistrationLocked(name);
+    }
+
+    fn lookupPragmaRegistrationLocked(self: *const Context, name: []const u8) ?PragmaRegistration {
         if (self.pragma_registry.get(name)) |reg| return reg;
 
         var ancestor = self.parent_context;
@@ -727,7 +767,23 @@ pub const Context = struct {
     /// Define a word in the current local frame if one exists, otherwise
     /// in global dictionary.
     pub fn defineWord(self: *Context, name: []const u8, definition: WordDefinition) !void {
-        if (self.lookupWord(name)) |existing| {
+        {
+            const lk = self.shared_lock;
+            lk.lock();
+            defer lk.unlock();
+            try self.defineWordLocked(name, definition);
+        }
+
+        // NOTE(ripta): auto-compile runs after the lock is released so JIT callbacks can acquire their own locks
+        if (self.compile_mode == .eager) {
+            self.tryAutoCompile(name, definition);
+        } else if (self.compile_mode == .hybrid) {
+            self.tryAssignWordId(name, definition);
+        }
+    }
+
+    fn defineWordLocked(self: *Context, name: []const u8, definition: WordDefinition) !void {
+        if (self.lookupWordLocked(name)) |existing| {
             for (existing.markers) |mk| {
                 if (markers_mod.isConstMarker(mk)) {
                     self.pending_error_message = "cannot redefine const word";
@@ -750,7 +806,7 @@ pub const Context = struct {
                             old_effect.concreteOutputCount() != new_effect.concreteOutputCount())
                         {
                             const msg = std.fmt.allocPrint(self.arena.allocator(), "arity mismatch on redefinition of '{s}' (was {d} -> {d}, now {d} -> {d})", .{ name, old_effect.concreteInputCount(), old_effect.concreteOutputCount(), new_effect.concreteInputCount(), new_effect.concreteOutputCount() }) catch "arity mismatch on redefinition";
-                            const pragma_val = self.getPragma("redefinition-arity-mismatch");
+                            const pragma_val = self.getPragmaLocked("redefinition-arity-mismatch");
                             const is_warning = if (pragma_val) |pv| switch (pv) {
                                 .string => |s| std.mem.eql(u8, s, "warning"),
                                 else => false,
@@ -797,12 +853,6 @@ pub const Context = struct {
             try self.local_frames.items[top_index].put(self.allocator, name, def);
         } else {
             try self.dictionary.put(name, def);
-        }
-
-        if (self.compile_mode == .eager) {
-            self.tryAutoCompile(name, def);
-        } else if (self.compile_mode == .hybrid) {
-            self.tryAssignWordId(name, def);
         }
     }
 
@@ -933,6 +983,13 @@ pub const Context = struct {
     /// `import_frame_index`, which is always set in every execution context,
     /// i.e., prelude, batch, REPL, module load.
     pub fn defineImportedWord(self: *Context, name: []const u8, definition: WordDefinition) !void {
+        const lk = self.shared_lock;
+        lk.lock();
+        defer lk.unlock();
+        return self.defineImportedWordLocked(name, definition);
+    }
+
+    fn defineImportedWordLocked(self: *Context, name: []const u8, definition: WordDefinition) !void {
         // Check only the target frame for dedup, not the full lookup chain.
         // The full lookupWord traverses parent frames, which would suppress
         // imports that the current module needs captured in its own frame
@@ -987,6 +1044,13 @@ pub const Context = struct {
     /// 2. the global dictionary of the current context;
     /// 3. the parent dictionary if this is a task context that inherits from a parent.
     pub fn lookupWord(self: *const Context, name: []const u8) ?WordDefinition {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.lookupWordLocked(name);
+    }
+
+    fn lookupWordLocked(self: *const Context, name: []const u8) ?WordDefinition {
         var i = self.local_frames.items.len;
         while (i > 0) {
             i -= 1;
@@ -1014,6 +1078,13 @@ pub const Context = struct {
     /// Look up a word and return a stable pointer to its stack effect field.
     /// Used by the JIT compiler to bake effect pointers as compile-time constants.
     pub fn lookupWordStackEffectPtr(self: *const Context, name: []const u8) ?*const StackEffect {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.lookupWordStackEffectPtrLocked(name);
+    }
+
+    fn lookupWordStackEffectPtrLocked(self: *const Context, name: []const u8) ?*const StackEffect {
         var i = self.local_frames.items.len;
         while (i > 0) {
             i -= 1;
@@ -1072,6 +1143,13 @@ pub const Context = struct {
     /// Determine where a word was found during lookup, mirroring the
     /// search order of `lookupWord`. Used only when trace_resolve is active.
     fn lookupWordSource(self: *const Context, name: []const u8) trace_mod.ResolveSource {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.lookupWordSourceLocked(name);
+    }
+
+    fn lookupWordSourceLocked(self: *const Context, name: []const u8) trace_mod.ResolveSource {
         var i = self.local_frames.items.len;
         while (i > 0) {
             i -= 1;
@@ -1100,6 +1178,13 @@ pub const Context = struct {
 
     /// Dump the full scope chain to stderr for `--dump-scope`.
     fn dumpScope(self: *const Context, name: []const u8, source: []const u8, line: usize) void {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.dumpScopeLocked(name, source, line);
+    }
+
+    fn dumpScopeLocked(self: *const Context, name: []const u8, source: []const u8, line: usize) void {
         var tw = trace_mod.TraceWriter.init();
         trace_mod.traceDumpScopeHeader(&tw, name, source, line);
 
@@ -1134,6 +1219,13 @@ pub const Context = struct {
     /// and combinator frames, so that introspection words see the some definitions
     /// that the user would write at the top level.
     pub fn lookupUserVisibleWord(self: *const Context, name: []const u8) ?WordDefinition {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.lookupUserVisibleWordLocked(name);
+    }
+
+    fn lookupUserVisibleWordLocked(self: *const Context, name: []const u8) ?WordDefinition {
         const frame_cap = if (self.import_frame_index) |idx| idx + 1 else 0;
 
         var i = frame_cap;
@@ -1166,6 +1258,13 @@ pub const Context = struct {
     /// Look up a binary dispatch entry by walking dispatch frames (top to
     /// bottom), then the base dispatch table, then the parent context chain.
     pub fn lookupBinaryDispatch(self: *const Context, word_name: []const u8, type_a: []const u8, type_b: []const u8) ?DispatchEntry {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.lookupBinaryDispatchLocked(word_name, type_a, type_b);
+    }
+
+    fn lookupBinaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: []const u8, type_b: []const u8) ?DispatchEntry {
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
         while (i > 0) {
@@ -1192,6 +1291,13 @@ pub const Context = struct {
     /// Look up a unary dispatch entry by walking dispatch frames (top to
     /// bottom), then the base dispatch table, then the parent context chain.
     pub fn lookupUnaryDispatch(self: *const Context, word_name: []const u8, type_a: []const u8) ?DispatchEntry {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.lookupUnaryDispatchLocked(word_name, type_a);
+    }
+
+    fn lookupUnaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: []const u8) ?DispatchEntry {
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
         while (i > 0) {
@@ -1218,6 +1324,13 @@ pub const Context = struct {
     /// Look up a binary dispatch entry in the native-only shadow table,
     /// walking the parent context chain.
     pub fn lookupNativeBinaryDispatch(self: *const Context, word_name: []const u8, type_a: []const u8, type_b: []const u8) ?DispatchEntry {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.lookupNativeBinaryDispatchLocked(word_name, type_a, type_b);
+    }
+
+    fn lookupNativeBinaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: []const u8, type_b: []const u8) ?DispatchEntry {
         if (self.dispatch.lookupNativeBinary(word_name, type_a, type_b)) |entry| return entry;
 
         var ancestor = self.parent_context;
@@ -1232,6 +1345,13 @@ pub const Context = struct {
     /// Look up a unary dispatch entry in the native-only shadow table,
     /// walking the parent context chain.
     pub fn lookupNativeUnaryDispatch(self: *const Context, word_name: []const u8, type_a: []const u8) ?DispatchEntry {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.lookupNativeUnaryDispatchLocked(word_name, type_a);
+    }
+
+    fn lookupNativeUnaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: []const u8) ?DispatchEntry {
         if (self.dispatch.lookupNativeUnary(word_name, type_a)) |entry| return entry;
 
         var ancestor = self.parent_context;
@@ -1246,6 +1366,13 @@ pub const Context = struct {
     /// Look up enum variant types by enum name, walking type registry frames
     /// (top to bottom), then the parent context chain.
     pub fn lookupEnumVariants(self: *const Context, enum_name: []const u8) ?[]const *const value_mod.VirtualType {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.lookupEnumVariantsLocked(enum_name);
+    }
+
+    fn lookupEnumVariantsLocked(self: *const Context, enum_name: []const u8) ?[]const *const value_mod.VirtualType {
         var i = self.type_registry_frames.items.len;
         while (i > 0) {
             i -= 1;
@@ -1268,6 +1395,13 @@ pub const Context = struct {
     /// Look up a type descriptor by type name, walking type registry frames
     /// (top to bottom), then the parent context chain.
     pub fn lookupTypeDescriptor(self: *const Context, name: []const u8) ?*value_mod.HashTable {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.lookupTypeDescriptorLocked(name);
+    }
+
+    fn lookupTypeDescriptorLocked(self: *const Context, name: []const u8) ?*value_mod.HashTable {
         var i = self.type_registry_frames.items.len;
         while (i > 0) {
             i -= 1;
@@ -1289,6 +1423,13 @@ pub const Context = struct {
 
     /// Look up a built-in type value by type name, walking the parent context chain.
     pub fn lookupBuiltinTypeValue(self: *const Context, name: []const u8) ?*value_mod.TypeValue {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.lookupBuiltinTypeValueLocked(name);
+    }
+
+    fn lookupBuiltinTypeValueLocked(self: *const Context, name: []const u8) ?*value_mod.TypeValue {
         if (self.builtin_type_values.get(name)) |tv| return tv;
 
         var ancestor = self.parent_context;
@@ -1302,6 +1443,13 @@ pub const Context = struct {
 
     /// Look up a resource type value by type name, walking the parent context chain.
     pub fn lookupResourceTypeValue(self: *const Context, name: []const u8) ?*value_mod.TypeValue {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.lookupResourceTypeValueLocked(name);
+    }
+
+    fn lookupResourceTypeValueLocked(self: *const Context, name: []const u8) ?*value_mod.TypeValue {
         if (self.resource_type_values.get(name)) |tv| return tv;
 
         var ancestor = self.parent_context;
@@ -1313,17 +1461,47 @@ pub const Context = struct {
         return null;
     }
 
+    /// Register a built-in type value by name (write-locked).
+    pub fn registerBuiltinTypeValue(self: *Context, name: []const u8, tv: *value_mod.TypeValue) !void {
+        const lk = self.shared_lock;
+        lk.lock();
+        defer lk.unlock();
+        try self.builtin_type_values.put(self.allocator, name, tv);
+    }
+
+    /// Register a resource type value by name (write-locked).
+    pub fn registerResourceTypeValue(self: *Context, name: []const u8, tv: *value_mod.TypeValue) !void {
+        const lk = self.shared_lock;
+        lk.lock();
+        defer lk.unlock();
+        try self.resource_type_values.put(self.allocator, name, tv);
+    }
+
     // =========================================================================
     // Type registry frame methods
     // =========================================================================
 
     /// Push a new empty type registry frame onto the stack.
     pub fn pushTypeRegistryFrame(self: *Context) !void {
+        const lk = self.shared_lock;
+        lk.lock();
+        defer lk.unlock();
+        return self.pushTypeRegistryFrameLocked();
+    }
+
+    fn pushTypeRegistryFrameLocked(self: *Context) !void {
         try self.type_registry_frames.append(self.allocator, .{});
     }
 
     /// Pop the top type registry frame, discarding its entries.
     pub fn popTypeRegistryFrame(self: *Context) void {
+        const lk = self.shared_lock;
+        lk.lock();
+        defer lk.unlock();
+        return self.popTypeRegistryFrameLocked();
+    }
+
+    fn popTypeRegistryFrameLocked(self: *Context) void {
         if (self.type_registry_frames.items.len > 0) {
             const last = self.type_registry_frames.items.len - 1;
             self.type_registry_frames.items[last].deinit(self.allocator);
@@ -1333,6 +1511,13 @@ pub const Context = struct {
 
     /// Register a type descriptor into the topmost type registry frame.
     pub fn registerTypeDescriptor(self: *Context, name: []const u8, desc: *value_mod.HashTable) !void {
+        const lk = self.shared_lock;
+        lk.lock();
+        defer lk.unlock();
+        return self.registerTypeDescriptorLocked(name, desc);
+    }
+
+    fn registerTypeDescriptorLocked(self: *Context, name: []const u8, desc: *value_mod.HashTable) !void {
         if (self.type_registry_frames.items.len == 0) return error.OutOfMemory;
         const top = self.type_registry_frames.items.len - 1;
         try self.type_registry_frames.items[top].type_descriptors.put(self.allocator, name, desc);
@@ -1340,6 +1525,13 @@ pub const Context = struct {
 
     /// Register enum variants into the topmost type registry frame.
     pub fn registerEnumVariants(self: *Context, name: []const u8, variants: []const *const value_mod.VirtualType) !void {
+        const lk = self.shared_lock;
+        lk.lock();
+        defer lk.unlock();
+        return self.registerEnumVariantsLocked(name, variants);
+    }
+
+    fn registerEnumVariantsLocked(self: *Context, name: []const u8, variants: []const *const value_mod.VirtualType) !void {
         if (self.type_registry_frames.items.len == 0) return error.OutOfMemory;
         const top = self.type_registry_frames.items.len - 1;
         try self.type_registry_frames.items[top].enum_registry.put(self.allocator, name, variants);
@@ -1351,12 +1543,26 @@ pub const Context = struct {
 
     /// Push a new empty dispatch frame onto the stack.
     pub fn pushDispatchFrame(self: *Context) !void {
+        const lk = self.shared_lock;
+        lk.lock();
+        defer lk.unlock();
+        return self.pushDispatchFrameLocked();
+    }
+
+    fn pushDispatchFrameLocked(self: *Context) !void {
         try self.dispatch_frames.append(self.allocator, .{});
     }
 
     /// Pop the top dispatch frame, discarding its entries.
     /// Bumps the dispatch generation counter to invalidate PICs.
     pub fn popDispatchFrame(self: *Context) void {
+        const lk = self.shared_lock;
+        lk.lock();
+        defer lk.unlock();
+        return self.popDispatchFrameLocked();
+    }
+
+    fn popDispatchFrameLocked(self: *Context) void {
         if (self.dispatch_frames.items.len > 0) {
             const last = self.dispatch_frames.items.len - 1;
             self.dispatch_frames.items[last].deinit(self.allocator);
@@ -1368,6 +1574,13 @@ pub const Context = struct {
     /// Register a dispatch entry into the topmost dispatch frame, or the
     /// base `dispatch.entries` if no frames are pushed.
     pub fn registerDispatch(self: *Context, key: DispatchKey, entry: DispatchEntry, allow_overwrite: bool) !void {
+        const lk = self.shared_lock;
+        lk.lock();
+        defer lk.unlock();
+        return self.registerDispatchLocked(key, entry, allow_overwrite);
+    }
+
+    fn registerDispatchLocked(self: *Context, key: DispatchKey, entry: DispatchEntry, allow_overwrite: bool) !void {
         if (self.dispatch_frames.items.len > 0) {
             const top = self.dispatch_frames.items.len - 1;
             const gop = try self.dispatch_frames.items[top].entries.getOrPut(self.allocator, key);
@@ -1384,6 +1597,13 @@ pub const Context = struct {
     /// Look up a dispatch entry by key, walking frames then base table.
     /// Used for duplicate/provenance checks during method registration.
     pub fn getDispatchEntry(self: *const Context, key: DispatchKey) ?DispatchEntry {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.getDispatchEntryLocked(key);
+    }
+
+    fn getDispatchEntryLocked(self: *const Context, key: DispatchKey) ?DispatchEntry {
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
         while (i > 0) {
@@ -1397,6 +1617,13 @@ pub const Context = struct {
     /// Collect all dispatch key-entry pairs for a given word name, including
     /// entries from all frames, the base table, and parent contexts.
     pub fn dispatchEntriesForWord(self: *const Context, word_name: []const u8, alloc: Allocator) ![]DispatchTable.KeyEntryPair {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.dispatchEntriesForWordLocked(word_name, alloc);
+    }
+
+    fn dispatchEntriesForWordLocked(self: *const Context, word_name: []const u8, alloc: Allocator) ![]DispatchTable.KeyEntryPair {
         var results: std.ArrayListUnmanaged(DispatchTable.KeyEntryPair) = .{};
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
@@ -1423,6 +1650,13 @@ pub const Context = struct {
     /// Collect all dispatch keys for a given word name, including
     /// entries from all frames, the base table, and parent contexts.
     pub fn dispatchKeysForWord(self: *const Context, word_name: []const u8, alloc: Allocator) ![]DispatchKey {
+        const lk = self.shared_lock;
+        lk.lockShared();
+        defer lk.unlockShared();
+        return self.dispatchKeysForWordLocked(word_name, alloc);
+    }
+
+    fn dispatchKeysForWordLocked(self: *const Context, word_name: []const u8, alloc: Allocator) ![]DispatchKey {
         var results: std.ArrayListUnmanaged(DispatchKey) = .{};
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
