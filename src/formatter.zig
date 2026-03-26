@@ -37,6 +37,7 @@ pub const FormatterToken = struct {
         if (std.mem.eql(u8, text, "[")) return .{ .kind = .open_bracket, .text = text };
         if (std.mem.eql(u8, text, "]")) return .{ .kind = .close_bracket, .text = text };
         if (std.mem.eql(u8, text, "{")) return .{ .kind = .open_brace, .text = text };
+        if (text.len > 1 and text[text.len - 1] == '{') return .{ .kind = .open_brace, .text = text };
         if (std.mem.eql(u8, text, "}")) return .{ .kind = .close_brace, .text = text };
         if (std.mem.eql(u8, text, "(")) return .{ .kind = .open_paren, .text = text };
         if (std.mem.eql(u8, text, ")")) return .{ .kind = .close_paren, .text = text };
