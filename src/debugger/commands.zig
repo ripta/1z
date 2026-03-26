@@ -4,6 +4,7 @@ const Inspector = @import("inspector.zig").Inspector;
 const BreakpointManager = @import("breakpoints.zig").BreakpointManager;
 const context_mod = @import("../context.zig");
 const Context = context_mod.Context;
+const StatementProcessor = @import("../statement.zig").StatementProcessor;
 
 /// Result of dispatching a command.
 pub const CommandResult = enum {
@@ -201,6 +202,54 @@ pub const CommandDispatcher = struct {
             return .stay;
         }
 
+        if (std.mem.eql(u8, cmd, "push")) {
+            if (arg) |push_arg| {
+                evalCode(push_arg, ctx, writer);
+            } else {
+                try writer.writeAll("Usage: push <value>\n");
+            }
+            return .stay;
+        }
+
+        if (std.mem.eql(u8, cmd, "pop")) {
+            if (ctx.stack.pop()) |val| {
+                try val.write(writer);
+                try writer.writeAll("\n");
+            } else |_| {
+                try writer.writeAll("Error: stack underflow\n");
+            }
+            return .stay;
+        }
+
+        if (std.mem.eql(u8, cmd, "!") or std.mem.eql(u8, cmd, "eval")) {
+            if (arg) |eval_arg| {
+                evalCode(eval_arg, ctx, writer);
+            } else {
+                try writer.writeAll("Usage: eval <code>\n");
+            }
+            return .stay;
+        }
+
+        if (std.mem.eql(u8, cmd, "bc") or std.mem.eql(u8, cmd, "condbreak")) {
+            if (arg) |cb_arg| {
+                // Split into word name and condition
+                const word_name, const condition = splitCommand(cb_arg);
+                if (condition) |cond| {
+                    const id = breakpoints.addConditional(word_name, cond);
+                    if (id > 0) {
+                        try writer.print("Conditional breakpoint {d} set on word '{s}' when {s}\n", .{ id, word_name, cond });
+                    } else {
+                        try writer.writeAll("Failed to set conditional breakpoint\n");
+                    }
+                } else {
+                    try writer.writeAll("Usage: condbreak <word> <condition>\n");
+                }
+            } else {
+                try writer.writeAll("Usage: condbreak <word> <condition>\n");
+            }
+            return .stay;
+        }
+
         if (std.mem.eql(u8, cmd, "?") or std.mem.eql(u8, cmd, "h") or std.mem.eql(u8, cmd, "help")) {
             try printHelp(writer);
             return .stay;
@@ -231,6 +280,31 @@ pub const CommandDispatcher = struct {
         return .{ .source = arg[0..colon_idx], .line = line };
     }
 
+    /// Parse and execute 1z code on live state, with debugger temporarily disabled.
+    fn evalCode(code: []const u8, ctx: *Context, writer: anytype) void {
+        // Null out debugger to prevent recursive debug pauses
+        const saved_debugger = ctx.debugger;
+        ctx.debugger = null;
+        defer ctx.debugger = saved_debugger;
+
+        var processor: StatementProcessor = .{};
+        const result = processor.feedLine(ctx.quotationAllocator(), code, ctx);
+        switch (result) {
+            .complete => |instrs| {
+                if (instrs.len == 0) return;
+                ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
+                    writer.print("Error: {s}\n", .{@errorName(err)}) catch {};
+                };
+            },
+            .needs_more_input => {
+                writer.writeAll("Error: incomplete expression\n") catch {};
+            },
+            .parse_error => |err| {
+                writer.print("Parse error: {s}\n", .{@errorName(err)}) catch {};
+            },
+        }
+    }
+
     fn printHelp(writer: anytype) !void {
         try writer.writeAll(
             \\Commands:
@@ -254,6 +328,10 @@ pub const CommandDispatcher = struct {
             \\  be,  en, enable <id>       Enable a breakpoint
             \\  bd,  dis, disable <id>     Disable a breakpoint
             \\  del, delete <id>           Delete a breakpoint
+            \\  push <value>               Push a value onto the stack
+            \\  pop                        Pop and display top of stack
+            \\  !,   eval <code>           Execute 1z code on live state
+            \\  bc,  condbreak <w> <cond>  Conditional breakpoint
             \\  ?,   h, help               Show this help
             \\
             \\Press Enter on an empty line to repeat the last stepping command.
