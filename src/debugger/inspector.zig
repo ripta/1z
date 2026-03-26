@@ -3,6 +3,7 @@ const context_mod = @import("../context.zig");
 const Context = context_mod.Context;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
+const BenchmarkStats = @import("../benchmark.zig").BenchmarkStats;
 
 /// Inspector provides read-only state accessors for debugger inspection commands.
 pub const Inspector = struct {
@@ -202,5 +203,77 @@ pub const Inspector = struct {
             }
         }
         try writer.print("  module '{s}' not found\n", .{name});
+    }
+
+    /// Show interpreter statistics.
+    pub fn showStats(ctx: *Context, writer: anytype) !void {
+        // Stack
+        try writer.writeAll("Stack:\n");
+        try writer.print("  Depth:           {d}\n", .{ctx.stack.depth()});
+        try writer.print("  Call stack:      {d}\n", .{ctx.call_stack.items.len});
+        try writer.print("  Local frames:    {d}\n", .{ctx.local_frames.items.len});
+        try writer.print("  Param frames:    {d}\n", .{ctx.parameter_env.items.len});
+
+        // Dictionary
+        const dict_count = ctx.dictionary.entries.count();
+        var native_count: usize = 0;
+        var compound_count: usize = 0;
+        var parse_time_count: usize = 0;
+        var imported_count: usize = 0;
+        var iter = ctx.dictionary.entries.iterator();
+        while (iter.next()) |entry| {
+            const word = entry.value_ptr.*;
+            switch (word.action) {
+                .native => native_count += 1,
+                .compound => compound_count += 1,
+            }
+            if (word.parse_time) parse_time_count += 1;
+            if (word.imported) imported_count += 1;
+        }
+        try writer.writeAll("\nDictionary:\n");
+        try writer.print("  Words:           {d}\n", .{dict_count});
+        try writer.print("  Native:          {d}\n", .{native_count});
+        try writer.print("  Compound:        {d}\n", .{compound_count});
+        try writer.print("  Parse-time:      {d}\n", .{parse_time_count});
+        try writer.print("  Imported:        {d}\n", .{imported_count});
+
+        // Modules
+        try writer.writeAll("\nModules:\n");
+        try writer.print("  Loaded:          {d}\n", .{ctx.module_cache.count()});
+        try writer.print("  Load paths:      {d}\n", .{ctx.load_paths.items.len});
+        if (ctx.stdlib_path) |sp| {
+            try writer.print("  Stdlib:          {s}\n", .{sp});
+        }
+
+        // Benchmark stats if enabled
+        if (ctx.benchmark) |bench| {
+            try writer.writeAll("\nInstructions:\n");
+            try writer.writeAll("  push_literal:    ");
+            try BenchmarkStats.formatNumber(writer, bench.push_literal_count);
+            try writer.writeAll("\n");
+            try writer.writeAll("  call_word:       ");
+            try BenchmarkStats.formatNumber(writer, bench.call_word_count);
+            try writer.writeAll("\n");
+            try writer.writeAll("  Total:           ");
+            try BenchmarkStats.formatNumber(writer, bench.totalInstructions());
+            try writer.writeAll("\n");
+
+            try writer.writeAll("\nMemory:\n");
+            try writer.writeAll("  Allocations:     ");
+            try BenchmarkStats.formatNumber(writer, bench.total_allocations);
+            try writer.writeAll("\n");
+            try writer.writeAll("  Total bytes:     ");
+            try BenchmarkStats.formatBytes(writer, bench.total_bytes);
+            try writer.writeAll("\n");
+            try writer.writeAll("  Peak live:       ");
+            try BenchmarkStats.formatBytes(writer, bench.peak_live_bytes);
+            try writer.writeAll("\n");
+            try writer.writeAll("  Current live:    ");
+            try BenchmarkStats.formatBytes(writer, bench.current_live_bytes);
+            try writer.writeAll("\n");
+
+            try writer.writeAll("\nStack (benchmark):\n");
+            try writer.print("  Peak depth:      {d}\n", .{bench.peak_stack_depth});
+        }
     }
 };

@@ -106,6 +106,11 @@ pub const CommandDispatcher = struct {
             return .stay;
         }
 
+        if (std.mem.eql(u8, cmd, "st") or std.mem.eql(u8, cmd, "stats")) {
+            try Inspector.showStats(ctx, writer);
+            return .stay;
+        }
+
         if (std.mem.eql(u8, cmd, "b") or std.mem.eql(u8, cmd, "break")) {
             if (arg) |bp_arg| {
                 if (bp_arg.len > 1 and bp_arg[0] == ':') {
@@ -243,6 +248,7 @@ pub const CommandDispatcher = struct {
             \\  di,  dict <name>           Inspect a dictionary entry
             \\  m,   module <name>         List exports of a module
             \\  ml,  modules               List all loaded modules
+            \\  st,  stats                 Show interpreter statistics
             \\  b,   break <w>             Set breakpoint on word, file:line, or :line
             \\  bl,  breakpoints           List all breakpoints
             \\  be,  en, enable <id>       Enable a breakpoint
