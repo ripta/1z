@@ -100,6 +100,14 @@ pub const Marker = struct {
     name: []const u8, // Empty for anonymous, actual name when defined with ;
 };
 
+/// VirtualType represents the definition of a virtual type.
+/// All instances of the same virtual type share a single VirtualType allocation,
+/// enabling pointer equality for type identity checks.
+pub const VirtualType = struct {
+    name: []const u8, // Type name (e.g., "duration")
+    inner_type: []const u8, // Expected inner type name (e.g., "integer")
+};
+
 /// StructType represents the definition of a struct type.
 /// Created by `struct{ field1 field2 ... }` syntax.
 pub const StructType = struct {
@@ -327,10 +335,10 @@ pub const Value = union(enum) {
     marker: *Marker,
     struct_type: *StructType,
     struct_instance: *StructInstance,
+    tagged: struct { tag: *const VirtualType, inner: *const Value },
     template: []const TemplateSegment,
     benchmark_report: *BenchmarkReport,
     stack_effect: StackEffect,
-    parse_time_marker: void, // Deprecated: parse-time word definitions; use marker instead
     error_value: ErrorObject,
 
     pub fn write(self: Value, writer: anytype) anyerror!void {
@@ -432,6 +440,11 @@ pub const Value = union(enum) {
                 }
                 try writer.writeAll("}");
             },
+            .tagged => |t| {
+                try writer.print("<{s} ", .{t.tag.name});
+                try t.inner.write(writer);
+                try writer.writeAll(">");
+            },
             .template => |segments| {
                 try writer.writeAll("T\"");
                 for (segments) |seg| {
@@ -443,7 +456,6 @@ pub const Value = union(enum) {
                 try writer.print("<benchmark-report ({d} entries)>", .{br.entries.items.len});
             },
             .stack_effect => |effect| try effect.write(writer),
-            .parse_time_marker => try writer.writeAll("parse-time"),
             .error_value => |err| try err.write(writer),
         }
     }
@@ -539,6 +551,11 @@ pub const Value = union(enum) {
                 }
                 return true;
             },
+            // Tagged values are equal if same tag pointer and inner values equal
+            .tagged => |a| {
+                const b = other.tagged;
+                return a.tag == b.tag and a.inner.eql(b.inner.*);
+            },
             .template => |a| {
                 const b = other.template;
 
@@ -551,7 +568,6 @@ pub const Value = union(enum) {
             // Benchmark reports are equal if they refer to the same object
             .benchmark_report => |a| a == other.benchmark_report,
             .stack_effect => |a| a.eql(other.stack_effect),
-            .parse_time_marker => true, // All parse_time_markers are equal
             .error_value => |a| a.eql(other.error_value),
         };
     }
@@ -664,6 +680,13 @@ pub const Value = union(enum) {
                     hasher.update(std.mem.asBytes(&field_hash));
                 }
             },
+            // Tagged values hash by tag pointer and inner value
+            .tagged => |t| {
+                const ptr_val = @intFromPtr(t.tag);
+                hasher.update(std.mem.asBytes(&ptr_val));
+                const inner_hash = t.inner.hashValue();
+                hasher.update(std.mem.asBytes(&inner_hash));
+            },
             .template => |segments| {
                 for (segments) |seg| {
                     switch (seg) {
@@ -687,10 +710,6 @@ pub const Value = union(enum) {
                 for (effect.outputs) |param| {
                     hasher.update(param.name);
                 }
-            },
-            .parse_time_marker => {
-                // All parse_time_markers hash the same
-                hasher.update("parse_time_marker");
             },
             .error_value => |err| {
                 hasher.update(err.error_type);
@@ -893,11 +912,4 @@ test "cross-type inequality" {
     try std.testing.expect(!arr_val.eql(int_val));
 }
 
-test "parse_time_marker equality" {
-    const a = Value{ .parse_time_marker = {} };
-    const b = Value{ .parse_time_marker = {} };
-    const c = Value{ .integer = 0 };
 
-    try std.testing.expect(a.eql(b));
-    try std.testing.expect(!a.eql(c));
-}

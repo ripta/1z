@@ -55,22 +55,22 @@ split: ( str delim -- array ) [
       [ drop drop 1array ]
       [
         \ str delim idx -- move delim to bottom
-        [ swap ] dip                \ delim str idx
+        [ swap ] dip  \ delim str idx
 
         \ Compute prefix = str[0..idx], guarding empty slice
         dup 0 =
         [ "" ]
         [ 2dup 0 swap #slice ]
-        if                              \ delim str idx prefix
+        if  \ delim str idx prefix
 
         \ Compute rest (replaces str idx, keeps delim at bottom)
-        [ split-rest ] dip          \ delim rest prefix
+        [ split-rest ] dip  \ delim rest prefix
 
         \ Recurse on rest and prepend prefix
-        swap                        \ delim prefix rest
-        -rot>                       \ rest delim prefix
-        [ split ] dip               \ rest-parts prefix
-        1array swap #append         \ { prefix } ++ rest-parts
+        swap                 \ delim prefix rest
+        -rot>                \ rest delim prefix
+        [ split ] dip        \ rest-parts prefix
+        1array swap #append  \ { prefix } ++ rest-parts
       ]
       if
     ]
@@ -124,9 +124,9 @@ repeat-loop: [
 repeat: ( str n -- str ) [
   dup 1 < [ 2drop "" ] [
     \ Stack: str n (n >= 1)
-    over swap      \ str str n (str is both pattern and accumulator)
-    1 -            \ str str (n-1)
-    repeat-loop    \ str result
-    swap drop      \ result
+    over swap    \ str str n (str is both pattern and accumulator)
+    1 -          \ str str (n-1)
+    repeat-loop  \ str result
+    swap drop    \ result
   ] if
 ] ;

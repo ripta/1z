@@ -55,14 +55,14 @@ assert-error: ( quot msg -- ) [
     when
   ] ;
 
-  dup __assert_msg__ [              \ with-parameter msg
-    drop                            \ quot msg-param
+  dup __assert_msg__ [  \ with-parameter msg
+    drop                \ quot msg-param
 
-    :__START__:                     \ quot :__START__:
-    swap                            \ :__START__: quot
+    :__START__:  \ quot :__START__:
+    swap         \ :__START__: quot
 
-    [ call :__OK__: ]               \ success: push OK marker
-    [ drop ]                        \ error: drop error, effect (1 -- 0)
+    [ call :__OK__: ]  \ success: push OK marker
+    [ drop ]           \ error: drop error, effect (1 -- 0)
     recover
 
     \ Stack after recover:
@@ -72,14 +72,14 @@ assert-error: ( quot msg -- ) [
     [
       \ SUCCESS - FAIL the test (quotation didn't error)
       __drop_until_marker__
-      drop                          \ drop :__START__:
+      drop  \ drop :__START__:
       __assert_msg__ get
       "FAIL (no error): " swap #append print-line
     ]
     [
       \ ERROR - PASS the test
       __drop_until_marker__
-      drop                          \ drop :__START__:
+      drop  \ drop :__START__:
       __assert_msg__ get
       "PASS: " swap #append print-line
     ]
@@ -101,9 +101,9 @@ assert-error-type: ( quot expected-type msg -- ) [
   ] ;
 
   dup __aet_msg__ [
-    drop                                \ quot expected-type
+    drop  \ quot expected-type
     dup __aet_expected__ [
-      drop                              \ quot
+      drop  \ quot
 
       :__START__:
       swap
@@ -113,8 +113,8 @@ assert-error-type: ( quot expected-type msg -- ) [
         \ Recovery quotation: error on TOS, must consume it (1 -- 0).
         \ Compare error type and print result here, while parameter
         \ bindings are still in scope.
-        error-type: @get                \ actual-type
-        __aet_expected__ get            \ actual-type expected-type
+        error-type: @get      \ actual-type
+        __aet_expected__ get  \ actual-type expected-type
         2dup =
         [
           2drop
@@ -123,7 +123,7 @@ assert-error-type: ( quot expected-type msg -- ) [
         ]
         [
           \ Wrong error type
-          swap                          \ expected actual
+          swap  \ expected actual
           to-string ", got " swap #append
           swap to-string "(expected " swap #append
           ")" #append #append

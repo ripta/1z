@@ -14,9 +14,9 @@ slow-split-nl: ( acc char -- acc' ) [
     dup slow-current>>
     dup #len 0 >
     [
-      over slow-lines>>          \ acc current lines
-      swap 1array #append       \ acc lines'
-      nip                       \ lines'
+      over slow-lines>>    \ acc current lines
+      swap 1array #append  \ acc lines'
+      nip                  \ lines'
       "" make-slow-acc
     ]
     [ drop ]

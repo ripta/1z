@@ -26,10 +26,10 @@ fn nativeTypeOf(ctx: *Context) anyerror!void {
         .marker => "marker",
         .struct_type => "struct-type",
         .struct_instance => |si| si.struct_type.name,
+        .tagged => |t| t.tag.name,
         .template => "template",
         .benchmark_report => "benchmark-report",
         .stack_effect => "stack-effect",
-        .parse_time_marker => "parse-time",
         .error_value => "error",
     };
     try ctx.stack.push(.{ .symbol = type_name });

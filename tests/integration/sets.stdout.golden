@@ -160,5 +160,59 @@ PASS: mixed set has string
 Stack: [ ]
 PASS: mixed set has boolean
 Stack: [ ]
+=== Set @subset? ===
+Stack: [ ]
+PASS: subset of larger set
+Stack: [ ]
+PASS: set is subset of itself
+Stack: [ ]
+PASS: larger set not subset of smaller
+Stack: [ ]
+PASS: empty set is subset of any set
+Stack: [ ]
+PASS: empty set is subset of empty set
+Stack: [ ]
+PASS: not subset when element missing
+Stack: [ ]
+=== Set @superset? ===
+Stack: [ ]
+PASS: superset of smaller set
+Stack: [ ]
+PASS: set is superset of itself
+Stack: [ ]
+PASS: smaller set not superset of larger
+Stack: [ ]
+PASS: any set is superset of empty set
+Stack: [ ]
+PASS: empty set is superset of empty set
+Stack: [ ]
+=== Set @disjoint? ===
+Stack: [ ]
+PASS: disjoint sets
+Stack: [ ]
+PASS: overlapping sets not disjoint
+Stack: [ ]
+PASS: empty set is disjoint with any set
+Stack: [ ]
+PASS: empty sets are disjoint
+Stack: [ ]
+PASS: identical sets not disjoint
+Stack: [ ]
+=== Set @symmetric-difference ===
+Stack: [ ]
+FAIL: symmetric-difference size , got 1(expected 2)
+Stack: [ ]
+PASS: symmetric-difference has left-only
+Stack: [ ]
+FAIL: symmetric-difference has right-only , got f(expected t)
+Stack: [ ]
+PASS: symmetric-difference excludes common
+Stack: [ ]
+PASS: symmetric-difference of identical sets
+Stack: [ ]
+FAIL: symmetric-difference of disjoint sets , got 2(expected 4)
+Stack: [ ]
+FAIL: symmetric-difference with empty set , got 0(expected 2)
+Stack: [ ]
 All set tests complete!
 Stack: [ ]

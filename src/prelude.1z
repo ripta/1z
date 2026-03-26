@@ -21,11 +21,19 @@ M{: parse-time [ "}" parse-until make-mutable-map ] ;
 
 \ Struct definition syntax, produces a struct descriptor
 struct{: parse-time [
-  parse-struct-fields           \ -- ...fields
-  M{ type: struct-descriptor: } \ -- ...fields mmap
-  swap                          \ -- mmap fields-array
-  fields: swap @set!            \ -- mmap (with fields set)
+  parse-struct-fields                   \ -- ...fields
+  M{ type: struct-descriptor: }         \ -- ...fields mmap
+  swap                                  \ -- mmap fields-array
+  fields: swap @set!                    \ -- mmap (with fields set)
   [ define-struct ] define: swap @set!  \ -- mmap (with define set)
+] ;
+
+\ Virtual type definition syntax, produces a type descriptor
+virtual{: parse-time [
+  parse-virtual-inner
+  M{ type: virtual: } swap inner-type: swap @set!
+  [ define-virtual ] define:
+  swap @set!
 ] ;
 
 \ Dynamic variables (parameters) syntax
@@ -119,6 +127,7 @@ rem: ( a b -- r ) [ tuck % over + swap % ] ;
 not: ( ? -- ? ) [ [ f ] [ t ] if ] ;
 and: ( ? ? -- ? ) [ [ ] [ drop f ] if ] ;
 or: ( ? ? -- ? ) [ [ drop t ] [ ] if ] ;
+xor: ( ? ? -- ? ) [ 2dup and not -rot> or and ] ;
 
 \ I/O - stream-based primitives
 stream-write-string: ( stream str -- n ) [ >bytes stream-write ] ;

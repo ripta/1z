@@ -41,6 +41,7 @@ pub const parse_time_marker = &markers.parse_time_marker;
 pub const structs = @import("structs.zig");
 pub const env = @import("env.zig");
 pub const template = @import("template.zig");
+pub const virtual = @import("virtual.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -85,4 +86,5 @@ pub const extracted_primitives = stack.primitives ++
     markers.primitives ++
     structs.primitives ++
     env.primitives ++
-    template.primitives;
+    template.primitives ++
+    virtual.primitives;

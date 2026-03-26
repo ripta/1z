@@ -1,0 +1,93 @@
+\ Test virtual type definitions
+
+use "testing" ;
+
+"virtual{ } syntax" test-section
+
+\ Define a virtual type backed by integer
+duration: virtual{ integer } ;
+
+\ Test wrapping
+42 >duration type-of duration: "type-of returns virtual type name" assert=
+
+\ Test predicate
+42 >duration duration? t "duration? on duration is true" assert=
+42 duration? f "duration? on plain integer is false" assert=
+"hello" duration? f "duration? on string is false" assert=
+
+\ Test strict newtype semantics
+42 >duration integer? f "integer? on duration is false (strict)" assert=
+
+\ Test display format
+42 >duration to-string "<duration 42>" "display format is <name inner>" assert=
+
+\ Test unwrapping
+42 >duration duration> 42 "duration> unwraps to inner value" assert=
+
+\ Test equality
+42 >duration 42 >duration = t "same tag same inner are equal" assert=
+42 >duration 43 >duration = f "same tag different inner not equal" assert=
+42 >duration 42 = f "tagged vs plain integer not equal" assert=
+
+"nesting virtual types" test-section
+
+\ Define a nested virtual type
+positive-duration: virtual{ duration } ;
+
+\ Test nested wrapping
+42 >duration >positive-duration type-of positive-duration: "nested type-of" assert=
+42 >duration >positive-duration positive-duration? t "nested predicate true" assert=
+42 >duration >positive-duration duration? f "nested does not match inner type predicate" assert=
+
+\ Test nested unwrapping
+42 >duration >positive-duration positive-duration> type-of duration: "unwrap nested reveals duration" assert=
+42 >duration >positive-duration positive-duration> duration> 42 "double unwrap reveals integer" assert=
+
+\ Test nested display
+42 >duration >positive-duration to-string "<positive-duration <duration 42>>" "nested display format" assert=
+
+"error cases" test-section
+
+\ Test unwrapping wrong type
+[ 42 positive-duration> ] "unwrap wrong type errors" assert-error
+
+\ Test unwrapping a non-tagged value
+[ 42 duration> ] "unwrap plain value errors" assert-error
+
+"multiple virtual types" test-section
+
+\ Define another virtual type backed by integer
+weight: virtual{ integer } ;
+
+\ Different virtual types are not equal even with same inner
+42 >duration 42 >weight = f "different virtual types not equal" assert=
+
+\ Each has its own predicate
+42 >duration weight? f "duration is not a weight" assert=
+42 >weight duration? f "weight is not a duration" assert=
+
+"inner comparison (=)" test-section
+
+\ (=) unwraps tagged and compares inner value with plain value
+42 >duration 42 (=) t "(=) tagged vs plain integer" assert=
+
+\ (=) unwraps both sides
+42 >duration 42 >duration (=) t "(=) same tag same inner" assert=
+42 >duration 43 >duration (=) f "(=) same tag different inner" assert=
+
+\ (=) compares across different virtual types with same inner
+42 >duration 42 >weight (=) t "(=) different tags same inner" assert=
+42 >duration 43 >weight (=) f "(=) different tags different inner" assert=
+
+\ (=) with plain values (no tags) behaves like =
+42 42 (=) t "(=) plain integers equal" assert=
+42 43 (=) f "(=) plain integers not equal" assert=
+"hello" "hello" (=) t "(=) plain strings equal" assert=
+
+\ (=) unwraps only one layer for nested virtual types
+\ nested: unwrapping one layer gives duration{42} vs 42, not equal
+42 >duration >positive-duration 42 >duration (=) f "(=) nested different depth not equal" assert=
+\ nested: same nesting level compares equal
+42 >duration >positive-duration 42 >duration >positive-duration (=) t "(=) nested same depth equal" assert=
+\ nested (=) does not unwrap two layers
+42 >duration >positive-duration 42 (=) f "(=) nested does not unwrap two layers" assert=

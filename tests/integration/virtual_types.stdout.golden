@@ -1,0 +1,77 @@
+=== virtual{ } syntax ===
+Stack: [ ]
+Stack: [ ]
+PASS: type-of returns virtual type name
+Stack: [ ]
+PASS: duration? on duration is true
+Stack: [ ]
+PASS: duration? on plain integer is false
+Stack: [ ]
+PASS: duration? on string is false
+Stack: [ ]
+PASS: integer? on duration is false (strict)
+Stack: [ ]
+PASS: display format is <name inner>
+Stack: [ ]
+PASS: duration> unwraps to inner value
+Stack: [ ]
+PASS: same tag same inner are equal
+Stack: [ ]
+PASS: same tag different inner not equal
+Stack: [ ]
+PASS: tagged vs plain integer not equal
+Stack: [ ]
+=== nesting virtual types ===
+Stack: [ ]
+Stack: [ ]
+PASS: nested type-of
+Stack: [ ]
+PASS: nested predicate true
+Stack: [ ]
+PASS: nested does not match inner type predicate
+Stack: [ ]
+PASS: unwrap nested reveals duration
+Stack: [ ]
+PASS: double unwrap reveals integer
+Stack: [ ]
+PASS: nested display format
+Stack: [ ]
+=== error cases ===
+Stack: [ ]
+PASS: unwrap wrong type errors
+Stack: [ ]
+PASS: unwrap plain value errors
+Stack: [ ]
+=== multiple virtual types ===
+Stack: [ ]
+Stack: [ ]
+PASS: different virtual types not equal
+Stack: [ ]
+PASS: duration is not a weight
+Stack: [ ]
+PASS: weight is not a duration
+Stack: [ ]
+=== inner comparison (=) ===
+Stack: [ ]
+PASS: (=) tagged vs plain integer
+Stack: [ ]
+PASS: (=) same tag same inner
+Stack: [ ]
+PASS: (=) same tag different inner
+Stack: [ ]
+PASS: (=) different tags same inner
+Stack: [ ]
+PASS: (=) different tags different inner
+Stack: [ ]
+PASS: (=) plain integers equal
+Stack: [ ]
+PASS: (=) plain integers not equal
+Stack: [ ]
+PASS: (=) plain strings equal
+Stack: [ ]
+PASS: (=) nested different depth not equal
+Stack: [ ]
+PASS: (=) nested same depth equal
+Stack: [ ]
+PASS: (=) nested does not unwrap two layers
+Stack: [ ]

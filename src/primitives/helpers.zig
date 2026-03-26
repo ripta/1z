@@ -124,10 +124,10 @@ pub fn valueTypeName(val: Value) []const u8 {
         .marker => "marker",
         .struct_type => "struct-type",
         .struct_instance => "struct-instance",
+        .tagged => |t| t.tag.name,
         .template => "template",
         .benchmark_report => "benchmark-report",
         .stack_effect => "stack-effect",
-        .parse_time_marker => "parse-time",
         .error_value => "error",
     };
 }

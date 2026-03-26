@@ -18,6 +18,12 @@ t f or "t or f" assert-true
 f t or "f or t" assert-true
 f f or "f or f" assert-false
 
+"Logical XOR" test-section
+t t xor "t xor t" assert-false
+t f xor "t xor f" assert-true
+f t xor "f xor t" assert-true
+f f xor "f xor f" assert-false
+
 "Combined boolean expressions" test-section
 t t and t or "t and t or t" assert-true
 f f or not "not (f or f)" assert-true

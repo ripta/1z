@@ -1,5 +1,6 @@
 const std = @import("std");
 const Context = @import("../context.zig").Context;
+const Value = @import("../value.zig").Value;
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 
@@ -18,6 +19,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "*%", .stack_effect = "a b -- a*b", .func = nativeMulWrap },
     // Comparators
     .{ .name = "=", .stack_effect = "a b -- ?", .func = nativeEq },
+    .{ .name = "(=)", .stack_effect = "a b -- ?", .func = nativeInnerEq },
     .{ .name = "<", .stack_effect = "a b -- ?", .func = nativeLt },
     .{ .name = ">", .stack_effect = "a b -- ?", .func = nativeGt },
 };
@@ -92,6 +94,15 @@ pub fn nativeEq(ctx: *Context) anyerror!void {
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     try ctx.stack.push(.{ .boolean = a.eql(b) });
+}
+
+/// (=) ( a b -- ? ) - Inner equality: unwraps one layer of tagged values, then compares
+pub fn nativeInnerEq(ctx: *Context) anyerror!void {
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    const a_inner: Value = if (a == .tagged) a.tagged.inner.* else a;
+    const b_inner: Value = if (b == .tagged) b.tagged.inner.* else b;
+    try ctx.stack.push(.{ .boolean = a_inner.eql(b_inner) });
 }
 
 /// < ( a b -- ? ) - Less than

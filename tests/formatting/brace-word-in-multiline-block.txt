@@ -1,0 +1,5 @@
+foo: parse-time [
+  parse-struct-fields
+  M{ type: struct-descriptor: }
+  swap
+] ;

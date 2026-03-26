@@ -2,6 +2,7 @@
 
 use "testing" ;
 use "sequences" ;
+use "sets" ;
 
 "Set creation" test-section
 S{ } #len 0 "empty set length" assert=
@@ -101,5 +102,36 @@ S{ 1 "a" t } #len 3 "mixed type set" assert=
 S{ 1 "a" t } 1 @in? t "mixed set has integer" assert=
 S{ 1 "a" t } "a" @in? t "mixed set has string" assert=
 S{ 1 "a" t } t @in? t "mixed set has boolean" assert=
+
+"Set @subset?" test-section
+S{ 1 2 } S{ 1 2 3 } @subset? t "subset of larger set" assert=
+S{ 1 2 3 } S{ 1 2 3 } @subset? t "set is subset of itself" assert=
+S{ 1 2 3 } S{ 1 2 } @subset? f "larger set not subset of smaller" assert=
+S{ } S{ 1 2 } @subset? t "empty set is subset of any set" assert=
+S{ } S{ } @subset? t "empty set is subset of empty set" assert=
+S{ 1 4 } S{ 1 2 3 } @subset? f "not subset when element missing" assert=
+
+"Set @superset?" test-section
+S{ 1 2 3 } S{ 1 2 } @superset? t "superset of smaller set" assert=
+S{ 1 2 3 } S{ 1 2 3 } @superset? t "set is superset of itself" assert=
+S{ 1 2 } S{ 1 2 3 } @superset? f "smaller set not superset of larger" assert=
+S{ 1 2 } S{ } @superset? t "any set is superset of empty set" assert=
+S{ } S{ } @superset? t "empty set is superset of empty set" assert=
+
+"Set @disjoint?" test-section
+S{ 1 2 } S{ 3 4 } @disjoint? t "disjoint sets" assert=
+S{ 1 2 } S{ 2 3 } @disjoint? f "overlapping sets not disjoint" assert=
+S{ } S{ 1 2 } @disjoint? t "empty set is disjoint with any set" assert=
+S{ } S{ } @disjoint? t "empty sets are disjoint" assert=
+S{ 1 2 3 } S{ 1 2 3 } @disjoint? f "identical sets not disjoint" assert=
+
+"Set @symmetric-difference" test-section
+S{ 1 2 3 } S{ 2 3 4 } @symmetric-difference #len 2 "symmetric-difference size" assert=
+S{ 1 2 3 } S{ 2 3 4 } @symmetric-difference 1 @in? t "symmetric-difference has left-only" assert=
+S{ 1 2 3 } S{ 2 3 4 } @symmetric-difference 4 @in? t "symmetric-difference has right-only" assert=
+S{ 1 2 3 } S{ 2 3 4 } @symmetric-difference 2 @in? f "symmetric-difference excludes common" assert=
+S{ 1 2 } S{ 1 2 } @symmetric-difference #len 0 "symmetric-difference of identical sets" assert=
+S{ 1 2 } S{ 3 4 } @symmetric-difference #len 4 "symmetric-difference of disjoint sets" assert=
+S{ } S{ 1 2 } @symmetric-difference #len 2 "symmetric-difference with empty set" assert=
 
 "All set tests complete!" print-line

@@ -14,7 +14,7 @@ const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "define-struct", .stack_effect = "name: fields markers --", .func = nativeDefineStruct },
+    .{ .name = "define-struct", .stack_effect = "name: descriptor markers --", .func = nativeDefineStruct },
     .{ .name = "parse-struct-fields", .stack_effect = "-- fields", .func = nativeParseStructFields },
 };
 
@@ -47,7 +47,7 @@ fn nativeParseStructFields(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .array = fields_array });
 }
 
-/// define-struct ( name: fields markers -- ) - Define a struct type and its accessor words
+/// define-struct ( name: descriptor markers -- ) - Define a struct type and its accessor words
 /// Creates: make-NAME, >NAME, NAME?, and FIELD>> for each field
 fn nativeDefineStruct(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
@@ -67,7 +67,12 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     }
     const markers_slice = try markers_list.toOwnedSlice(alloc);
 
-    const fields_val = try ctx.stack.pop();
+    const desc_val = try ctx.stack.pop();
+    const desc_map: *value_mod.MutableMap = switch (desc_val) {
+        .mutable_map => |m| m,
+        else => return error.TypeMismatch,
+    };
+    const fields_val = desc_map.get("fields") orelse return error.MissingField;
     const fields_array = switch (fields_val) {
         .array => |arr| arr,
         else => return error.TypeMismatch,
