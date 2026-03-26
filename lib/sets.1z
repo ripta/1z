@@ -1,0 +1,13 @@
+\ lib/sets.1z - Set predicates and utilities
+
+\ Check if set1 is a subset of set2 (every element of set1 is in set2)
+@subset?: ( set1 set2 -- ? ) [ @difference #len 0 = ] ;
+
+\ Check if set1 is a superset of set2 (every element of set2 is in set1)
+@superset?: ( set1 set2 -- ? ) [ swap @subset? ] ;
+
+\ Check if two sets have no elements in common
+@disjoint?: ( set1 set2 -- ? ) [ @intersection #len 0 = ] ;
+
+\ Elements in either set but not both
+@symmetric-difference: ( set1 set2 -- set ) [ 2dup @difference -rot> @difference @union ] ;
