@@ -13,6 +13,8 @@ const popInteger = helpers.popInteger;
 const popBoolean = helpers.popBoolean;
 const popQuotation = helpers.popQuotation;
 const popVector = helpers.popVector;
+const setErrorContext = helpers.setErrorContext;
+const valueTypeName = helpers.valueTypeName;
 
 const SequenceIterator = sequence.SequenceIterator;
 const SequenceBuilder = sequence.SequenceBuilder;
@@ -50,8 +52,10 @@ pub fn nativeLen(ctx: *Context) anyerror!void {
         @intCast(val.mutable_map.count())
     else if (val == .module)
         @intCast(val.module.words.count())
-    else
-        return error.TypeError;
+    else {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
+        return error.TypeMismatch;
+    };
     try ctx.stack.push(.{ .integer = len });
 }
 
@@ -60,28 +64,47 @@ pub fn nativeNth(ctx: *Context) anyerror!void {
     const index = try popInteger(ctx);
     const val = try ctx.stack.pop();
 
-    if (index < 0) return error.IndexOutOfBounds;
+    if (index < 0) {
+        setErrorContext(ctx, "negative index {d}", .{index});
+        return error.IndexOutOfBounds;
+    }
     const idx: usize = @intCast(index);
 
     switch (val) {
         .string => |s| {
-            const cp_slice = utf8NthCodepoint(s, idx) orelse return error.IndexOutOfBounds;
+            const cp_slice = utf8NthCodepoint(s, idx) orelse {
+                const slen = std.unicode.utf8CountCodepoints(s) catch s.len;
+                setErrorContext(ctx, "index {d} out of bounds for string of length {d}", .{ idx, slen });
+                return error.IndexOutOfBounds;
+            };
             const result = ctx.quotationAllocator().dupe(u8, cp_slice) catch return error.OutOfMemory;
             try ctx.stack.push(.{ .string = result });
         },
         .array => |a| {
-            if (idx >= a.len) return error.IndexOutOfBounds;
+            if (idx >= a.len) {
+                setErrorContext(ctx, "index {d} out of bounds for array of length {d}", .{ idx, a.len });
+                return error.IndexOutOfBounds;
+            }
             try ctx.stack.push(a[idx]);
         },
         .vector => |v| {
-            if (idx >= v.items.len) return error.IndexOutOfBounds;
+            if (idx >= v.items.len) {
+                setErrorContext(ctx, "index {d} out of bounds for vector of length {d}", .{ idx, v.items.len });
+                return error.IndexOutOfBounds;
+            }
             try ctx.stack.push(v.items[idx]);
         },
         .byte_array => |b| {
-            if (idx >= b.items.len) return error.IndexOutOfBounds;
+            if (idx >= b.items.len) {
+                setErrorContext(ctx, "index {d} out of bounds for byte-array of length {d}", .{ idx, b.items.len });
+                return error.IndexOutOfBounds;
+            }
             try ctx.stack.push(.{ .integer = b.items[idx] });
         },
-        else => return error.TypeError,
+        else => {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
+            return error.TypeMismatch;
+        },
     }
 }
 
@@ -91,10 +114,19 @@ pub fn nativeFirst(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     // Sets are not supported for positional access (unordered)
-    if (val == .set) return error.TypeError;
+    if (val == .set) {
+        setErrorContext(ctx, "sets do not support positional access", .{});
+        return error.TypeMismatch;
+    }
 
-    var iter = SequenceIterator.init(val, alloc) orelse return error.TypeError;
-    const first = try iter.next() orelse return error.EmptySequence;
+    var iter = SequenceIterator.init(val, alloc) orelse {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
+        return error.TypeMismatch;
+    };
+    const first = try iter.next() orelse {
+        setErrorContext(ctx, "empty {s}", .{valueTypeName(val)});
+        return error.EmptySequence;
+    };
     try ctx.stack.push(first);
 }
 
@@ -104,14 +136,23 @@ pub fn nativeLast(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     // Sets are not supported for positional access (unordered)
-    if (val == .set) return error.TypeError;
+    if (val == .set) {
+        setErrorContext(ctx, "sets do not support positional access", .{});
+        return error.TypeMismatch;
+    }
 
-    var iter = SequenceIterator.init(val, alloc) orelse return error.TypeError;
+    var iter = SequenceIterator.init(val, alloc) orelse {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
+        return error.TypeMismatch;
+    };
     var last: ?Value = null;
     while (try iter.next()) |elem| {
         last = elem;
     }
-    try ctx.stack.push(last orelse return error.EmptySequence);
+    try ctx.stack.push(last orelse {
+        setErrorContext(ctx, "empty {s}", .{valueTypeName(val)});
+        return error.EmptySequence;
+    });
 }
 
 /// #each ( seq quot -- ) - Execute quotation for each element of sequence
@@ -120,7 +161,10 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
 
-    var iter = SequenceIterator.init(seq, alloc) orelse return error.TypeError;
+    var iter = SequenceIterator.init(seq, alloc) orelse {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+        return error.TypeMismatch;
+    };
     while (try iter.next()) |elem| {
         try ctx.stack.push(elem);
         try ctx.executeQuotationWithFrame(quot);
@@ -134,15 +178,24 @@ pub fn nativeMap(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
 
-    const input_kind = classifySequence(seq) orelse return error.TypeError;
+    const input_kind = classifySequence(seq) orelse {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+        return error.TypeMismatch;
+    };
     // string and byte_array map to array; others preserve type
     const output_kind: SequenceKind = switch (input_kind) {
         .string, .byte_array => .array,
         else => input_kind,
     };
 
-    const len = sequenceLength(seq) orelse return error.TypeError;
-    var iter = SequenceIterator.init(seq, alloc) orelse return error.TypeError;
+    const len = sequenceLength(seq) orelse {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+        return error.TypeMismatch;
+    };
+    var iter = SequenceIterator.init(seq, alloc) orelse {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+        return error.TypeMismatch;
+    };
     var builder = try SequenceBuilder.initWithCapacity(output_kind, alloc, len);
 
     while (try iter.next()) |elem| {
@@ -161,8 +214,14 @@ pub fn nativeFilter(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
 
-    const kind = classifySequence(seq) orelse return error.TypeError;
-    var iter = SequenceIterator.init(seq, alloc) orelse return error.TypeError;
+    const kind = classifySequence(seq) orelse {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+        return error.TypeMismatch;
+    };
+    var iter = SequenceIterator.init(seq, alloc) orelse {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+        return error.TypeMismatch;
+    };
     var builder = try SequenceBuilder.init(kind, alloc);
 
     while (try iter.next()) |elem| {
@@ -184,7 +243,10 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
 
-    var iter = SequenceIterator.init(seq, alloc) orelse return error.TypeError;
+    var iter = SequenceIterator.init(seq, alloc) orelse {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+        return error.TypeMismatch;
+    };
     while (try iter.next()) |elem| {
         try ctx.stack.push(acc);
         try ctx.stack.push(elem);
@@ -200,9 +262,18 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
     const start_val = try popInteger(ctx);
     const seq = try ctx.stack.pop();
 
-    if (start_val < 0) return error.IndexOutOfBounds;
-    if (end_val < 0) return error.IndexOutOfBounds;
-    if (start_val > end_val) return error.IndexOutOfBounds;
+    if (start_val < 0) {
+        setErrorContext(ctx, "negative start index {d}", .{start_val});
+        return error.IndexOutOfBounds;
+    }
+    if (end_val < 0) {
+        setErrorContext(ctx, "negative end index {d}", .{end_val});
+        return error.IndexOutOfBounds;
+    }
+    if (start_val > end_val) {
+        setErrorContext(ctx, "start {d} > end {d}", .{ start_val, end_val });
+        return error.IndexOutOfBounds;
+    }
 
     const start: usize = @intCast(start_val);
     const end: usize = @intCast(end_val);
@@ -211,19 +282,29 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
 
     switch (seq) {
         .array => |arr| {
-            if (end > arr.len) return error.IndexOutOfBounds;
+            if (end > arr.len) {
+                setErrorContext(ctx, "slice [{}:{}] out of bounds for array of length {}", .{ start, end, arr.len });
+                return error.IndexOutOfBounds;
+            }
             const slice_len = end - start;
             const result = alloc.alloc(Value, slice_len) catch return error.OutOfMemory;
             @memcpy(result, arr[start..end]);
             try ctx.stack.push(.{ .array = result });
         },
         .string => |s| {
-            const bounds = utf8SliceByCodepoints(s, start, end) orelse return error.IndexOutOfBounds;
+            const bounds = utf8SliceByCodepoints(s, start, end) orelse {
+                const slen = std.unicode.utf8CountCodepoints(s) catch s.len;
+                setErrorContext(ctx, "slice [{}:{}] out of bounds for string of length {}", .{ start, end, slen });
+                return error.IndexOutOfBounds;
+            };
             const result = alloc.dupe(u8, s[bounds.start_byte..bounds.end_byte]) catch return error.OutOfMemory;
             try ctx.stack.push(.{ .string = result });
         },
         .vector => |v| {
-            if (end > v.items.len) return error.IndexOutOfBounds;
+            if (end > v.items.len) {
+                setErrorContext(ctx, "slice [{}:{}] out of bounds for vector of length {}", .{ start, end, v.items.len });
+                return error.IndexOutOfBounds;
+            }
             const slice_len = end - start;
             const result_vec = alloc.create(Vector) catch return error.OutOfMemory;
             result_vec.* = Vector{};
@@ -234,7 +315,10 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .vector = result_vec });
         },
         .byte_array => |b| {
-            if (end > b.items.len) return error.IndexOutOfBounds;
+            if (end > b.items.len) {
+                setErrorContext(ctx, "slice [{}:{}] out of bounds for byte-array of length {}", .{ start, end, b.items.len });
+                return error.IndexOutOfBounds;
+            }
             const slice_len = end - start;
             const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
             result_ba.* = ByteArray{};
@@ -244,7 +328,10 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
             }
             try ctx.stack.push(.{ .byte_array = result_ba });
         },
-        else => return error.TypeError,
+        else => {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
     }
 }
 
@@ -286,10 +373,16 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
                 switch (item) {
                     .string => |s| total_len += s.len,
                     .integer => |i| {
-                        if (i < 0 or i > 255) return error.IntegerOverflow;
+                        if (i < 0 or i > 255) {
+                            setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
+                            return error.IntegerOverflow;
+                        }
                         total_len += 1;
                     },
-                    else => return error.TypeError,
+                    else => {
+                        setErrorContext(ctx, "cannot append {s} to string", .{valueTypeName(item)});
+                        return error.TypeMismatch;
+                    },
                 }
             }
             const result = alloc.alloc(u8, total_len) catch return error.OutOfMemory;
@@ -318,11 +411,17 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
             for (items2) |item| {
                 switch (item) {
                     .integer => |i| {
-                        if (i < 0 or i > 255) return error.IntegerOverflow;
+                        if (i < 0 or i > 255) {
+                            setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
+                            return error.IntegerOverflow;
+                        }
                         extra_len += 1;
                     },
                     .string => |s| extra_len += s.len,
-                    else => return error.TypeError,
+                    else => {
+                        setErrorContext(ctx, "cannot append {s} to byte-array", .{valueTypeName(item)});
+                        return error.TypeMismatch;
+                    },
                 }
             }
             const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
@@ -346,7 +445,10 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
             }
             try ctx.stack.push(.{ .byte_array = result_ba });
         },
-        else => return error.TypeError,
+        else => {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq1)});
+            return error.TypeMismatch;
+        },
     }
 }
 
@@ -402,10 +504,16 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
                 switch (item) {
                     .string => |s| total_len += s.len,
                     .integer => |i| {
-                        if (i < 0 or i > 255) return error.IntegerOverflow;
+                        if (i < 0 or i > 255) {
+                            setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
+                            return error.IntegerOverflow;
+                        }
                         total_len += 1; // single byte
                     },
-                    else => return error.TypeError,
+                    else => {
+                        setErrorContext(ctx, "cannot prepend {s} to string", .{valueTypeName(item)});
+                        return error.TypeMismatch;
+                    },
                 }
             }
 
@@ -436,11 +544,17 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
             for (items2) |item| {
                 switch (item) {
                     .integer => |i| {
-                        if (i < 0 or i > 255) return error.IntegerOverflow;
+                        if (i < 0 or i > 255) {
+                            setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
+                            return error.IntegerOverflow;
+                        }
                         extra_len += 1;
                     },
                     .string => |s| extra_len += s.len,
-                    else => return error.TypeError,
+                    else => {
+                        setErrorContext(ctx, "cannot prepend {s} to byte-array", .{valueTypeName(item)});
+                        return error.TypeMismatch;
+                    },
                 }
             }
 
@@ -467,6 +581,9 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
 
             try ctx.stack.push(.{ .byte_array = result_ba });
         },
-        else => return error.TypeError,
+        else => {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq1)});
+            return error.TypeMismatch;
+        },
     }
 }

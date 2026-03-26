@@ -3,15 +3,19 @@
 use "testing" ;
 
 "Error type fields" test-section
-[ drop ] [ dup error-type: @get "StackUnderflow" = [ "PASS: error has error-type field" print-line ] [ "FAIL" print-line ] if drop ] recover
+[ drop ] [ dup error-type: @get EStackUnderflow = [ "PASS: error has error-type field" print-line ] [ "FAIL" print-line ] if drop ] recover
 
 "Nested error call chain" test-section
 nested-fail: [ drop ] ;
 outer-fail: [ nested-fail ] ;
-[ outer-fail ] [ dup error-type: @get "StackUnderflow" = [ "PASS: nested error has type" print-line ] [ "FAIL" print-line ] if drop ] recover
+[ outer-fail ] [ dup error-type: @get EStackUnderflow = [ "PASS: nested error has type" print-line ] [ "FAIL" print-line ] if drop ] recover
 
 "Unknown word error" test-section
-[ unknown-word-xyz ] [ dup error-type: @get "UnknownWord" = [ "PASS: unknown word error type" print-line ] [ "FAIL" print-line ] if drop ] recover
+[ unknown-word-xyz ] [ dup error-type: @get EUnknownWord = [ "PASS: unknown word error type" print-line ] [ "FAIL" print-line ] if drop ] recover
 
 "Rethrow error" test-section
-[ [ drop ] [ rethrow ] recover ] [ dup error-type: @get "RethrowError" = [ "PASS: rethrow error type" print-line ] [ "FAIL" print-line ] if drop ] recover
+[ [ drop ] [ rethrow ] recover ] [ dup error-type: @get EUserRethrown = [ "PASS: rethrow error type" print-line ] [ "FAIL" print-line ] if drop ] recover
+
+"Error type contract: bare symbol" test-section
+\ Verify built-in error types are kebab-case symbols
+[ drop ] [ error-type: @get stack-underflow: = [ "PASS: bare symbol contract" print-line ] [ "FAIL" print-line ] if ] recover

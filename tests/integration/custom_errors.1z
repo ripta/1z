@@ -1,0 +1,80 @@
+\ Test make-error and throw primitives
+
+use "testing" ;
+
+"make-error with string type" test-section
+f "something failed" "MyError" make-error
+dup "error-type" @get MyError: "error-type is MyError" assert=
+dup "message" @get "something failed" "message is correct" assert=
+dup "data" @get f "data is f when not set" assert=
+drop
+
+"make-error with symbol type" test-section
+f "something failed" my-error: make-error
+"error-type" @get my-error: "symbol error-type preserved" assert=
+
+"make-error with data" test-section
+H{ code: 42 } "oops" my-error: make-error
+dup "data" @get "code" @get 42 "data field accessible" assert=
+drop
+
+"make-error with f message" test-section
+f f my-error: make-error
+dup "message" @get "my-error" "message defaults to error-type when f" assert=
+drop
+
+"throw and recover roundtrip" test-section
+[
+  f "custom failure" my-error: make-error throw
+] [
+  dup "error-type" @get my-error: "thrown error-type preserved" assert=
+  dup "message" @get "custom failure" "thrown message preserved" assert=
+  drop
+] recover
+
+"throw with data roundtrip" test-section
+[
+  H{ elapsed: 30 } "timed out" timeout-error: make-error throw
+] [
+  dup "error-type" @get timeout-error: "data error-type" assert=
+  dup "data" @get "elapsed" @get 30 "data field roundtrips" assert=
+  drop
+] recover
+
+"throw type error on non-error" test-section
+[
+  42 throw
+] [
+  "error-type" @get ETypeMismatch "throw rejects non-error" assert=
+] recover
+
+"throw preserves stack trace" test-section
+fail-deep: [ f "deep" my-error: make-error throw ] ;
+fail-outer: [ fail-deep ] ;
+[
+  fail-outer
+] [
+  dup "stack-trace" @get f /= "has stack trace" assert-true
+  drop
+] recover
+
+"nested throw and recover" test-section
+[
+  [
+    f "inner" inner-error: make-error throw
+  ] [
+    "error-type" @get inner-error: =
+    [ f "outer" outer-error: make-error throw ]
+    when
+  ] recover
+] [
+  "error-type" @get outer-error: "nested rethrow as new error" assert=
+] recover
+
+"error type contract: bare symbol" test-section
+\ Verify that built-in error types use kebab-case symbols
+[ drop ] [ "error-type" @get stack-underflow: "built-in uses kebab-case symbol" assert= ] recover
+
+"error? predicate on make-error" test-section
+f "test" my-error: make-error
+error? "make-error produces error value" assert-true

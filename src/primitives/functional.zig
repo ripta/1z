@@ -154,7 +154,7 @@ fn nativeBenchmarkRun(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const report = switch (val) {
         .benchmark_report => |r| r,
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     };
 
     const hash = try executeBenchmark(ctx, quot);
@@ -177,7 +177,7 @@ fn nativePrintBenchmarkReport(ctx: *Context) anyerror!void {
             const label_val = try ctx.stack.pop();
             const label = switch (label_val) {
                 .string => |s| s,
-                else => return error.TypeError,
+                else => return error.TypeMismatch,
             };
             // Create a temporary single-entry report
             const alloc = ctx.quotationAllocator();
@@ -185,7 +185,7 @@ fn nativePrintBenchmarkReport(ctx: *Context) anyerror!void {
             try tmp_report.addEntry(label, hash);
             try printReportTable(ctx, &tmp_report);
         },
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     }
 }
 

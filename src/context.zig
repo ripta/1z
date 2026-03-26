@@ -13,6 +13,7 @@ const parser = @import("parser.zig");
 const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
+const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
 
 /// Embedded prelude source code
 const prelude_source = @embedFile("prelude.1z");
@@ -87,6 +88,11 @@ pub const Context = struct {
     /// Cache of loaded modules keyed by canonical file path.
     /// Prevents redundant loading when multiple files `use` the same module.
     module_cache: std.StringHashMapUnmanaged(*value_mod.Module) = .{},
+    /// Stashed error object from user `throw`, consumed by `recover`.
+    thrown_error: ?value_mod.ErrorObject = null,
+    /// Pending error message set by primitives before returning an error.
+    /// Used by captureCallStackOnError for the innermost frame's message.
+    pending_error_message: ?[]const u8 = null,
 
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
@@ -183,6 +189,7 @@ pub const Context = struct {
     pub fn clearExecutionDetails(self: *Context) void {
         self.error_details.clearRetainingCapacity();
         self.call_stack.clearRetainingCapacity();
+        self.pending_error_message = null;
     }
 
     /// Get the current binding for a parameter by name.
@@ -344,7 +351,7 @@ pub const Context = struct {
         const module_val = self.stack.pop() catch return ExecutionError.UnknownWord;
         const module = switch (module_val) {
             .module => |m| m,
-            else => return error.TypeError,
+            else => return error.TypeMismatch,
         };
 
         if (module.words.get(word_name)) |mod_word| {
@@ -468,7 +475,7 @@ pub const Context = struct {
                 const msg_copy = self.arena.allocator().dupe(u8, msg) catch return primitives.InterpreterError.StackEffectMismatch;
 
                 self.error_details.append(self.allocator, .{
-                    .error_type = "StackEffectMismatch",
+                    .error_type = "stack-effect-mismatch",
                     .message = msg_copy,
                     .source = self.current_source,
                     .line = 0,
@@ -561,7 +568,7 @@ pub const Context = struct {
                 const msg_copy = self.arena.allocator().dupe(u8, msg) catch return primitives.InterpreterError.StackEffectMismatch;
 
                 self.error_details.append(self.allocator, .{
-                    .error_type = "StackEffectMismatch",
+                    .error_type = "stack-effect-mismatch",
                     .message = msg_copy,
                     .source = self.current_source,
                     .line = 0,
@@ -584,7 +591,7 @@ pub const Context = struct {
                 const msg_copy = self.arena.allocator().dupe(u8, msg) catch return primitives.InterpreterError.StackEffectMismatch;
 
                 self.error_details.append(self.allocator, .{
-                    .error_type = "StackEffectMismatch",
+                    .error_type = "stack-effect-mismatch",
                     .message = msg_copy,
                     .source = self.current_source,
                     .line = 0,
@@ -652,18 +659,29 @@ pub const Context = struct {
         // Only capture on first error
         if (self.error_details.items.len > 0) return;
 
+        var kebab_buf: [128]u8 = undefined;
+        const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
+        const duped_name = self.arena.allocator().dupe(u8, kebab_name) catch @errorName(err);
+
+        // Consume any pending error message for the innermost frame
+        const pending_msg = self.pending_error_message;
+        self.pending_error_message = null;
+
         // Iterate call_stack in reverse (innermost first for display)
         var i = self.call_stack.items.len;
+        var is_innermost = true;
         while (i > 0) {
             i -= 1;
             const frame = self.call_stack.items[i];
+            const message = if (is_innermost and pending_msg != null) pending_msg.? else frame.word_name;
             self.error_details.append(self.allocator, .{
-                .error_type = @errorName(err),
-                .message = frame.word_name,
+                .error_type = duped_name,
+                .message = message,
                 .source = self.current_source,
                 .line = frame.line,
                 .word_name = frame.word_name,
             }) catch {};
+            is_innermost = false;
         }
     }
 
@@ -701,7 +719,7 @@ pub const Context = struct {
             0;
 
         self.error_details.append(self.allocator, .{
-            .error_type = "StackEffectMismatch",
+            .error_type = "stack-effect-mismatch",
             .message = msg_copy,
             .source = self.current_source,
             .line = line,
@@ -1013,7 +1031,7 @@ pub const Context = struct {
             0;
 
         self.error_details.append(self.allocator, .{
-            .error_type = "StackEffectMismatch",
+            .error_type = "stack-effect-mismatch",
             .message = msg_copy,
             .source = self.current_source,
             .line = line,
@@ -1135,7 +1153,7 @@ test "clearExecutionDetails clears both call stack and error details" {
     // Manually add some data to test clearing
     ctx.call_stack.append(ctx.allocator, .{ .word_name = "test", .line = 1 }) catch {};
     ctx.error_details.append(ctx.allocator, .{
-        .error_type = "TestError",
+        .error_type = "test-error",
         .message = "test",
         .source = "<test>",
         .line = 1,

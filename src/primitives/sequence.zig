@@ -351,10 +351,10 @@ pub const SequenceBuilder = struct {
 /// Convert a sequence to an array of Values.
 /// Useful for operations that need random access.
 pub fn sequenceToValues(val: Value, allocator: Allocator) ![]Value {
-    const len = sequenceLength(val) orelse return error.TypeError;
+    const len = sequenceLength(val) orelse return error.TypeMismatch;
     const result = allocator.alloc(Value, len) catch return error.OutOfMemory;
 
-    var iter = SequenceIterator.init(val, allocator) orelse return error.TypeError;
+    var iter = SequenceIterator.init(val, allocator) orelse return error.TypeMismatch;
     var i: usize = 0;
     while (try iter.next()) |elem| {
         result[i] = elem;

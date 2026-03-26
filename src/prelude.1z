@@ -45,16 +45,21 @@ error?: ( val -- ? ) [ type-of error: = ] ;
 error-type?: ( error type -- error ? ) [ over error-type: @get = ] ;
 
 \ Error type constants
-EStackUnderflow: [ "StackUnderflow" ] ;
-ETypeError: [ "TypeError" ] ;
-EDivisionByZero: [ "DivisionByZero" ] ;
-EIntegerOverflow: [ "IntegerOverflow" ] ;
-EStackEffectMismatch: [ "StackEffectMismatch" ] ;
-EUnknownWord: [ "UnknownWord" ] ;
-EFileNotFound: [ "FileNotFound" ] ;
-EFileReadError: [ "FileReadError" ] ;
-ERethrowError: [ "RethrowError" ] ;
-EKeyNotFound: [ "KeyNotFound" ] ;
+EStackUnderflow: [ stack-underflow: ] ;
+ETypeMismatch: [ type-mismatch: ] ;
+EDivisionByZero: [ division-by-zero: ] ;
+EIntegerOverflow: [ integer-overflow: ] ;
+EStackEffectMismatch: [ stack-effect-mismatch: ] ;
+EUnknownWord: [ unknown-word: ] ;
+EFileNotFound: [ file-not-found: ] ;
+EFileReadFailed: [ file-read-failed: ] ;
+EUserRethrown: [ user-rethrown: ] ;
+EUserThrown: [ user-thrown: ] ;
+EKeyNotFound: [ key-not-found: ] ;
+EIOFailed: [ io-failed: ] ;
+ENoMatchingBranch: [ no-matching-branch: ] ;
+\ TODO(ripta): the pattern is a bit repetitive and odd; maybe a parse-time?
+no-matching-branch: ( data -- error ) [ "no matching branch" ENoMatchingBranch make-error ] ;
 
 \ Type predicates
 integer?: ( val -- ? ) [ type-of integer: = ] ;
@@ -166,6 +171,39 @@ while: ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b ) [
 do: ( pred body -- pred body ) [ dup 2dip ] ;
 loop: ( ... pred: ( ... -- ... ? ) -- ... ) [
   [ call ] keep [ loop ] curry when
+] ;
+
+\ Multi-way dispatch
+case: ( val branches -- ... ) [
+  dup #len 0 = [
+    drop no-matching-branch throw
+  ] [
+    dup #first dup quotation? [
+      nip call
+    ] [
+      dup #first 3 pick-n = [
+        #last nip nip call
+      ] [
+        drop
+        dup #len 1 swap #slice case
+      ] if
+    ] if
+  ] if
+] ;
+cond: ( branches -- ... ) [
+  dup #len 0 = [
+    drop { cond: } no-matching-branch throw
+  ] [
+    dup #first dup quotation? [
+      nip nip call
+    ] [
+      #first swap [ call ] dip swap [
+        dup #first #last nip call
+      ] [
+        dup #len 1 swap #slice cond
+      ] if
+    ] if
+  ] if
 ] ;
 
 \ String formatting

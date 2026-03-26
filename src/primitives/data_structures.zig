@@ -29,7 +29,7 @@ pub fn extractKeyString(val: Value) ![]const u8 {
     return switch (val) {
         .symbol => |s| s,
         .string => |s| s,
-        else => error.TypeError,
+        else => error.TypeMismatch,
     };
 }
 
@@ -136,7 +136,7 @@ pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
                 if (int < 0 or int > 255) return error.IntegerOverflow;
                 ba.append(alloc, @intCast(int)) catch return error.OutOfMemory;
             },
-            else => return error.TypeError,
+            else => return error.TypeMismatch,
         }
     }
 
@@ -241,7 +241,7 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
 
             try ctx.stack.push(.{ .mutable_map = m });
         },
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     }
 }
 
@@ -257,6 +257,6 @@ pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
             _ = m.remove(key_str);
             try ctx.stack.push(.{ .mutable_map = m });
         },
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     }
 }

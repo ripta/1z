@@ -1,0 +1,60 @@
+=== make-error with string type ===
+Stack: [ ]
+Stack: [ <error MyError: something failed> ]
+PASS: error-type is MyError
+Stack: [ <error MyError: something failed> ]
+PASS: message is correct
+Stack: [ <error MyError: something failed> ]
+PASS: data is f when not set
+Stack: [ <error MyError: something failed> ]
+Stack: [ ]
+=== make-error with symbol type ===
+Stack: [ ]
+Stack: [ <error my-error: something failed> ]
+PASS: symbol error-type preserved
+Stack: [ ]
+=== make-error with data ===
+Stack: [ ]
+Stack: [ <error my-error: oops data=H{ code: 42 }> ]
+PASS: data field accessible
+Stack: [ <error my-error: oops data=H{ code: 42 }> ]
+Stack: [ ]
+=== make-error with f message ===
+Stack: [ ]
+Stack: [ <error my-error: my-error> ]
+PASS: message defaults to error-type when f
+Stack: [ <error my-error: my-error> ]
+Stack: [ ]
+=== throw and recover roundtrip ===
+Stack: [ ]
+PASS: thrown error-type preserved
+PASS: thrown message preserved
+Stack: [ ]
+=== throw with data roundtrip ===
+Stack: [ ]
+PASS: data error-type
+PASS: data field roundtrips
+Stack: [ ]
+=== throw type error on non-error ===
+Stack: [ ]
+PASS: throw rejects non-error
+Stack: [ ]
+=== throw preserves stack trace ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: has stack trace
+Stack: [ ]
+=== nested throw and recover ===
+Stack: [ ]
+PASS: nested rethrow as new error
+Stack: [ ]
+=== error type contract: bare symbol ===
+Stack: [ ]
+PASS: built-in uses kebab-case symbol
+Stack: [ ]
+=== error? predicate on make-error ===
+Stack: [ ]
+Stack: [ <error my-error: test> ]
+PASS: make-error produces error value
+Stack: [ ]

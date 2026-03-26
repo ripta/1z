@@ -1,0 +1,96 @@
+\ Tests for case equality-based multi-way dispatch
+
+use "testing" ;
+
+"case basics" test-section
+
+\ Single matching branch
+1 {
+  { 1 [ "one" ] }
+} case
+"one" "single branch match" assert=
+
+\ First branch matches
+"red" {
+  { "red"   [ 255 0 0 ] }
+  { "green" [ 0 255 0 ] }
+  { "blue"  [ 0 0 255 ] }
+} case
+0 "red blue component" assert=
+0 "red green component" assert=
+255 "red red component" assert=
+
+\ Second branch matches
+"green" {
+  { "red"   [ 255 0 0 ] }
+  { "green" [ 0 255 0 ] }
+  { "blue"  [ 0 0 255 ] }
+} case
+0 "green blue component" assert=
+255 "green green component" assert=
+0 "green red component" assert=
+
+\ Third branch matches
+"blue" {
+  { "red"   [ 255 0 0 ] }
+  { "green" [ 0 255 0 ] }
+  { "blue"  [ 0 0 255 ] }
+} case
+255 "blue blue component" assert=
+0 "blue green component" assert=
+0 "blue red component" assert=
+
+"case with default" test-section
+
+\ Default branch when no match
+"purple" {
+  { "red"   [ 255 0 0 ] }
+  { "green" [ 0 255 0 ] }
+  [ drop "unknown" ]
+} case
+"unknown" "default branch" assert=
+
+\ Default receives unmatched value
+"purple" {
+  { "red" [ "matched" ] }
+  [ "got: " swap #append ]
+} case
+"got: purple" "default receives value" assert=
+
+"case consumes value" test-section
+
+\ Value is consumed for match bodies (body sees clean stack)
+100 200 {
+  { 200 [ "found" ] }
+} case
+"found" "match result" assert=
+100 "stack preserved below" assert=
+
+"case with symbols" test-section
+
+\ Works with symbol values
+read: {
+  { read:  [ "reading" ] }
+  { write: [ "writing" ] }
+} case
+"reading" "symbol dispatch" assert=
+
+"case with integers" test-section
+
+\ Works with integer values
+42 {
+  { 0  [ "zero" ] }
+  { 42 [ "answer" ] }
+  [ drop "other" ]
+} case
+"answer" "integer dispatch" assert=
+
+"case error on no match" test-section
+
+\ No matching branch and no default
+[ 99 {
+  { 1 [ "one" ] }
+  { 2 [ "two" ] }
+} case ] ENoMatchingBranch "no match without default errors" assert-error-type
+
+"All case tests complete!" print-line

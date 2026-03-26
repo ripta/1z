@@ -1,0 +1,57 @@
+=== case basics ===
+Stack: [ ]
+Stack: [ "one" ]
+PASS: single branch match
+Stack: [ ]
+Stack: [ 255 0 0 ]
+PASS: red blue component
+Stack: [ 255 0 ]
+PASS: red green component
+Stack: [ 255 ]
+PASS: red red component
+Stack: [ ]
+Stack: [ 0 255 0 ]
+PASS: green blue component
+Stack: [ 0 255 ]
+PASS: green green component
+Stack: [ 0 ]
+PASS: green red component
+Stack: [ ]
+Stack: [ 0 0 255 ]
+PASS: blue blue component
+Stack: [ 0 0 ]
+PASS: blue green component
+Stack: [ 0 ]
+PASS: blue red component
+Stack: [ ]
+=== case with default ===
+Stack: [ ]
+Stack: [ "unknown" ]
+PASS: default branch
+Stack: [ ]
+Stack: [ "got: purple" ]
+PASS: default receives value
+Stack: [ ]
+=== case consumes value ===
+Stack: [ ]
+Stack: [ 100 "found" ]
+PASS: match result
+Stack: [ 100 ]
+PASS: stack preserved below
+Stack: [ ]
+=== case with symbols ===
+Stack: [ ]
+Stack: [ "reading" ]
+PASS: symbol dispatch
+Stack: [ ]
+=== case with integers ===
+Stack: [ ]
+Stack: [ "answer" ]
+PASS: integer dispatch
+Stack: [ ]
+=== case error on no match ===
+Stack: [ ]
+PASS: no match without default errors
+Stack: [ ]
+All case tests complete!
+Stack: [ ]

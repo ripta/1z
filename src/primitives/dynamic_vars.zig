@@ -35,7 +35,7 @@ pub fn nativeParseQuotation(ctx: *Context) anyerror!void {
 
         if (!std.mem.eql(u8, tok.text, "[")) {
             // Expected '[' but got something else
-            return error.TypeError;
+            return error.TypeMismatch;
         }
 
         // Found '[', now parse the quotation body
@@ -45,7 +45,7 @@ pub fn nativeParseQuotation(ctx: *Context) anyerror!void {
     }
 
     // Unexpected end of input
-    return error.TypeError;
+    return error.TypeMismatch;
 }
 
 /// parse-literal ( -- value ) - Read the next literal from the tokenizer
@@ -86,10 +86,10 @@ pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
             return;
         }
 
-        return error.TypeError;
+        return error.TypeMismatch;
     }
 
-    return error.TypeError;
+    return error.TypeMismatch;
 }
 
 // =============================================================================
@@ -117,7 +117,7 @@ pub fn nativeGet(ctx: *Context) anyerror!void {
     const param_val = try ctx.stack.pop();
     const param = switch (param_val) {
         .parameter => |p| p,
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     };
 
     // Search frames from top (innermost) to bottom (outermost)
@@ -137,7 +137,7 @@ pub fn nativeWithParameter(ctx: *Context) anyerror!void {
     const param_val = try ctx.stack.pop();
     const param = switch (param_val) {
         .parameter => |p| p,
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     };
     const new_value = try ctx.stack.pop();
 

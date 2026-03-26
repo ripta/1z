@@ -1,1 +1,1 @@
-tests/integration/error_nested.1z:2: error.UnknownWord at word 'bad-word'
+tests/integration/error_nested.1z:2: error 'unknown-word' at word 'bad-word'

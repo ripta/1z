@@ -82,7 +82,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 const next_val = try ctx.stack.peek();
                 switch (next_val) {
                     .symbol => break,
-                    else => return error.TypeError,
+                    else => return error.TypeMismatch,
                 }
             }
 
@@ -110,7 +110,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
         else => {
             if (isStructDescriptor(top_val)) {
                 // Handle struct definition first
-                const desc_map = getDescriptorMap(top_val) orelse return error.TypeError;
+                const desc_map = getDescriptorMap(top_val) orelse return error.TypeMismatch;
 
                 var collected_markers = std.ArrayListUnmanaged(*Marker){};
                 defer collected_markers.deinit(alloc);
@@ -127,7 +127,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                             try collected_markers.append(alloc, @constCast(&markers_mod.parse_time_marker));
                         },
                         .symbol => break,
-                        else => return error.TypeError,
+                        else => return error.TypeMismatch,
                     }
                 }
 
@@ -146,7 +146,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 const define_val = desc_map.get("define") orelse return error.MissingField;
                 const define_quot = switch (define_val) {
                     .quotation => |q| q,
-                    else => return error.TypeError,
+                    else => return error.TypeMismatch,
                 };
                 try ctx.executeQuotationWithFrame(define_quot);
             } else {
@@ -171,7 +171,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                             try collected_markers.append(alloc, @constCast(&markers_mod.parse_time_marker));
                         },
                         .symbol => break,
-                        else => return error.TypeError,
+                        else => return error.TypeMismatch,
                     }
                 }
 

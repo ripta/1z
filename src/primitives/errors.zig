@@ -1,5 +1,7 @@
+const std = @import("std");
 const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
+const Value = value_mod.Value;
 const ErrorObject = value_mod.ErrorObject;
 const StackFrame = value_mod.StackFrame;
 
@@ -8,10 +10,93 @@ const Primitive = @import("types.zig").Primitive;
 
 const popQuotation = helpers.popQuotation;
 
+/// Convert a PascalCase error name to kebab-case at comptime.
+/// E.g., "StackUnderflow" -> "stack-underflow", "IOError" -> "io-error"
+pub fn pascalToKebab(comptime name: []const u8) []const u8 {
+    comptime {
+        if (name.len == 0) return "";
+        var result: [name.len * 2]u8 = undefined;
+        var out_len: usize = 0;
+
+        var i: usize = 0;
+        while (i < name.len) {
+            const c = name[i];
+            if (c >= 'A' and c <= 'Z') {
+                const next_is_lower = (i + 1 < name.len) and (name[i + 1] >= 'a' and name[i + 1] <= 'z');
+
+                if (i > 0) {
+                    const prev_is_upper = (name[i - 1] >= 'A' and name[i - 1] <= 'Z');
+                    if (prev_is_upper and next_is_lower) {
+                        // End of acronym before a new word: "IOError" -> insert dash before 'E'
+                        result[out_len] = '-';
+                        out_len += 1;
+                    } else if (!prev_is_upper) {
+                        // Normal transition from lowercase to uppercase
+                        result[out_len] = '-';
+                        out_len += 1;
+                    }
+                }
+
+                result[out_len] = c - 'A' + 'a';
+                out_len += 1;
+            } else {
+                result[out_len] = c;
+                out_len += 1;
+            }
+            i += 1;
+        }
+
+        const final = result[0..out_len];
+        return final[0..final.len];
+    }
+}
+
+/// Runtime version: convert a PascalCase Zig error name to a 1z error symbol.
+/// Writes into a caller-provided buffer.
+pub fn pascalToKebabRuntime(name: []const u8, buf: []u8) []const u8 {
+    if (name.len == 0) return "";
+    var out_len: usize = 0;
+
+    for (name, 0..) |c, i| {
+        if (c >= 'A' and c <= 'Z') {
+            const next_is_lower = (i + 1 < name.len) and (name[i + 1] >= 'a' and name[i + 1] <= 'z');
+
+            if (i > 0) {
+                const prev_is_upper = (name[i - 1] >= 'A' and name[i - 1] <= 'Z');
+                if (prev_is_upper and next_is_lower) {
+                    if (out_len < buf.len) {
+                        buf[out_len] = '-';
+                        out_len += 1;
+                    }
+                } else if (!prev_is_upper) {
+                    if (out_len < buf.len) {
+                        buf[out_len] = '-';
+                        out_len += 1;
+                    }
+                }
+            }
+
+            if (out_len < buf.len) {
+                buf[out_len] = c - 'A' + 'a';
+                out_len += 1;
+            }
+        } else {
+            if (out_len < buf.len) {
+                buf[out_len] = c;
+                out_len += 1;
+            }
+        }
+    }
+
+    return buf[0..out_len];
+}
+
 pub const primitives = [_]Primitive{
     .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ) --", .func = nativeRecover },
     .{ .name = "cleanup", .stack_effect = "body-quot cleanup-quot --", .func = nativeCleanup },
     .{ .name = "rethrow", .stack_effect = "error --", .func = nativeRethrow },
+    .{ .name = "make-error", .stack_effect = "data message type -- error", .func = nativeMakeError },
+    .{ .name = "throw", .stack_effect = "error --", .func = nativeThrow },
 };
 
 /// recover ( try-quot recover-quot -- ) - Execute try quotation; if error,
@@ -24,6 +109,35 @@ pub fn nativeRecover(ctx: *Context) anyerror!void {
 
     // Execute try quotation with error-catching
     ctx.executeQuotationWithFrame(try_quot) catch |err| {
+        // Check if this is a user-thrown error with a stashed ErrorObject
+        if (err == error.UserThrown) {
+            if (ctx.thrown_error) |thrown| {
+                var error_obj = thrown;
+                ctx.thrown_error = null;
+
+                // Capture stack trace from error_details if not already present
+                if (error_obj.stack_trace == null and ctx.error_details.items.len > 0) {
+                    const alloc = ctx.quotationAllocator();
+                    const frames = alloc.alloc(StackFrame, ctx.error_details.items.len) catch null;
+                    if (frames) |f| {
+                        for (ctx.error_details.items, 0..) |detail, i| {
+                            f[i] = .{
+                                .word_name = detail.word_name orelse detail.message,
+                                .source = detail.source,
+                                .line = detail.line,
+                            };
+                        }
+                        error_obj.stack_trace = f;
+                    }
+                }
+
+                try ctx.stack.push(.{ .error_value = error_obj });
+                ctx.clearExecutionDetails();
+                try ctx.executeQuotationWithFrame(recover_quot);
+                return;
+            }
+        }
+
         const alloc = ctx.quotationAllocator();
         var stack_trace: ?[]const StackFrame = null;
 
@@ -41,9 +155,13 @@ pub fn nativeRecover(ctx: *Context) anyerror!void {
             }
         }
 
+        var kebab_buf: [128]u8 = undefined;
+        const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
+        const duped_name = alloc.dupe(u8, kebab_name) catch @errorName(err);
         const error_obj = ErrorObject{
-            .error_type = @errorName(err),
-            .message = @errorName(err),
+            .error_type = duped_name,
+            .message = duped_name,
+            .data = null,
             .stack_trace = stack_trace,
         };
         try ctx.stack.push(.{ .error_value = error_obj });
@@ -93,8 +211,69 @@ pub fn nativeRethrow(ctx: *Context) anyerror!void {
                     }) catch {};
                 }
             }
-            return error.RethrowError;
+            return error.UserRethrown;
         },
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
+    }
+}
+
+/// make-error ( data message type -- error ) - Construct an error object.
+/// data: any value or f (arbitrary associated data)
+/// message: string or f (human-readable message)
+/// type: string or symbol (error type name)
+fn nativeMakeError(ctx: *Context) anyerror!void {
+    const type_val = try ctx.stack.pop();
+    const message_val = try ctx.stack.pop();
+    const data_val = try ctx.stack.pop();
+
+    // Extract error type from string or symbol
+    const error_type = switch (type_val) {
+        .string => |s| s,
+        .symbol => |s| s,
+        else => return error.TypeMismatch,
+    };
+
+    // Extract message from string or f (false = no message)
+    const message = switch (message_val) {
+        .string => |s| s,
+        .boolean => |b| if (!b) error_type else return error.TypeMismatch,
+        else => return error.TypeMismatch,
+    };
+
+    // Data can be any value; f means no data
+    const data: ?*const Value = switch (data_val) {
+        .boolean => |b| if (!b) null else blk: {
+            const alloc = ctx.quotationAllocator();
+            const ptr = alloc.create(Value) catch return error.OutOfMemory;
+            ptr.* = data_val;
+            break :blk ptr;
+        },
+        else => blk: {
+            const alloc = ctx.quotationAllocator();
+            const ptr = alloc.create(Value) catch return error.OutOfMemory;
+            ptr.* = data_val;
+            break :blk ptr;
+        },
+    };
+
+    const error_obj = ErrorObject{
+        .error_type = error_type,
+        .message = message,
+        .data = data,
+    };
+    try ctx.stack.push(.{ .error_value = error_obj });
+}
+
+/// throw ( error -- ) - Raise an error object as an actual error.
+/// Only accepts error values. The error object is stashed on the context
+/// and recovered by `recover` with its original type, message, and data intact.
+fn nativeThrow(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .error_value => |err_obj| {
+            ctx.thrown_error = err_obj;
+            return error.UserThrown;
+        },
+        else => return error.TypeMismatch,
     }
 }

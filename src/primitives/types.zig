@@ -4,10 +4,11 @@ pub const NativeFn = dictionary.NativeFn;
 pub const InterpreterError = error{
     // General error types
     StackUnderflow,
-    TypeError,
+    TypeMismatch,
     NoTokenizerAvailable,
     // Error handling types
-    RethrowError,
+    UserRethrown,
+    UserThrown,
     // Stack effect error types
     StackEffectMismatch,
     // Arithmetic error types
@@ -15,7 +16,7 @@ pub const InterpreterError = error{
     IntegerOverflow,
     // File error types
     FileNotFound,
-    FileReadError,
+    FileReadFailed,
     // Hash table error types
     InvalidHashSyntax,
     // Sequence error types
@@ -25,7 +26,7 @@ pub const InterpreterError = error{
     // Import error types
     EmptyImport,
     // I/O error types
-    IOError,
+    IOFailed,
     ClosedStream,
     PermissionDenied,
     NotSeekable,

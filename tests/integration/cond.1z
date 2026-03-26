@@ -1,0 +1,69 @@
+\ Tests for cond multi-way conditional dispatch
+
+use "testing" ;
+
+"cond basics" test-section
+
+\ Single matching branch
+5 dup {
+  { [ dup 0 > ] [ drop "positive" ] }
+} cond
+"positive" "single branch match" assert=
+
+\ First branch matches, second skipped
+3 dup {
+  { [ dup 0 > ] [ drop "positive" ] }
+  { [ dup 0 = ] [ drop "zero" ] }
+} cond
+"positive" "first branch wins" assert=
+
+\ Second branch matches
+0 dup {
+  { [ dup 0 > ] [ drop "positive" ] }
+  { [ dup 0 = ] [ drop "zero" ] }
+} cond
+"zero" "second branch matches" assert=
+
+"cond with default" test-section
+
+\ Default branch when no test matches
+-5 dup {
+  { [ dup 0 > ] [ drop "positive" ] }
+  { [ dup 0 = ] [ drop "zero" ] }
+  [ drop "negative" ]
+} cond
+"negative" "default branch" assert=
+
+\ Default branch is only option
+42 dup {
+  [ drop "always" ]
+} cond
+"always" "default-only branch" assert=
+
+"cond error on no match" test-section
+
+\ No matching branch and no default
+[ 99 dup {
+  { [ dup 0 = ] [ drop "zero" ] }
+} cond ] ENoMatchingBranch "no match without default errors" assert-error-type
+
+"cond preserves stack" test-section
+
+\ Values below the dispatched value are preserved
+100 200 dup {
+  { [ dup 200 = ] [ drop drop "found" ] }
+} cond
+"found" "cond result correct" assert=
+100 "stack preserved below" assert=
+
+"cond with multiple value types" test-section
+
+\ Works with strings
+"hello" dup {
+  { [ dup "world" = ] [ drop "planet" ] }
+  { [ dup "hello" = ] [ drop "greeting" ] }
+  [ drop "unknown" ]
+} cond
+"greeting" "string dispatch" assert=
+
+"All cond tests complete!" print-line

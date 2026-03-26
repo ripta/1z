@@ -12,7 +12,7 @@ pub fn mapFileOpenError(err: anyerror) InterpreterError {
     return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.PermissionDenied,
-        else => error.IOError,
+        else => error.IOFailed,
     };
 }
 
@@ -21,43 +21,43 @@ pub fn mapFileOpenError(err: anyerror) InterpreterError {
 pub fn mapFileCreateError(err: anyerror) InterpreterError {
     return switch (err) {
         error.AccessDenied => error.PermissionDenied,
-        else => error.IOError,
+        else => error.IOFailed,
     };
 }
 
 /// Map file write errors to interpreter errors.
 pub fn mapFileWriteError(err: anyerror) InterpreterError {
     return switch (err) {
-        error.BrokenPipe => error.IOError,
-        error.ConnectionResetByPeer => error.IOError,
-        error.DiskQuota => error.IOError,
-        error.FileTooBig => error.IOError,
-        error.InputOutput => error.IOError,
-        error.NoSpaceLeft => error.IOError,
+        error.BrokenPipe => error.IOFailed,
+        error.ConnectionResetByPeer => error.IOFailed,
+        error.DiskQuota => error.IOFailed,
+        error.FileTooBig => error.IOFailed,
+        error.InputOutput => error.IOFailed,
+        error.NoSpaceLeft => error.IOFailed,
         error.AccessDenied => error.PermissionDenied,
-        else => error.IOError,
+        else => error.IOFailed,
     };
 }
 
 /// Map file read errors to interpreter errors.
 pub fn mapFileReadError(err: anyerror) InterpreterError {
     return switch (err) {
-        error.InputOutput => error.IOError,
-        error.BrokenPipe => error.IOError,
-        error.ConnectionResetByPeer => error.IOError,
-        error.ConnectionTimedOut => error.IOError,
+        error.InputOutput => error.IOFailed,
+        error.BrokenPipe => error.IOFailed,
+        error.ConnectionResetByPeer => error.IOFailed,
+        error.ConnectionTimedOut => error.IOFailed,
         error.AccessDenied => error.PermissionDenied,
         error.NotOpenForReading => error.PermissionDenied,
-        else => error.IOError,
+        else => error.IOFailed,
     };
 }
 
 /// Map file sync errors to interpreter errors.
 pub fn mapFileSyncError(err: anyerror) InterpreterError {
     return switch (err) {
-        error.InputOutput => error.IOError,
+        error.InputOutput => error.IOFailed,
         error.AccessDenied => error.PermissionDenied,
-        else => error.IOError,
+        else => error.IOFailed,
     };
 }
 
@@ -65,7 +65,7 @@ pub fn mapFileSyncError(err: anyerror) InterpreterError {
 pub fn mapSeekError(err: anyerror) InterpreterError {
     return switch (err) {
         error.Unseekable => error.NotSeekable,
-        else => error.IOError,
+        else => error.IOFailed,
     };
 }
 
@@ -73,7 +73,7 @@ pub fn mapSeekError(err: anyerror) InterpreterError {
 pub fn mapGetPosError(err: anyerror) InterpreterError {
     return switch (err) {
         error.Unseekable => error.NotSeekable,
-        else => error.IOError,
+        else => error.IOFailed,
     };
 }
 
@@ -97,21 +97,21 @@ pub fn ensureStreamOpen(stream: *const Stream) InterpreterError!void {
 test "mapFileOpenError" {
     try std.testing.expectEqual(error.FileNotFound, mapFileOpenError(error.FileNotFound));
     try std.testing.expectEqual(error.PermissionDenied, mapFileOpenError(error.AccessDenied));
-    try std.testing.expectEqual(error.IOError, mapFileOpenError(error.SystemResources));
+    try std.testing.expectEqual(error.IOFailed, mapFileOpenError(error.SystemResources));
 }
 
 test "mapFileWriteError" {
-    try std.testing.expectEqual(error.IOError, mapFileWriteError(error.BrokenPipe));
-    try std.testing.expectEqual(error.IOError, mapFileWriteError(error.NoSpaceLeft));
+    try std.testing.expectEqual(error.IOFailed, mapFileWriteError(error.BrokenPipe));
+    try std.testing.expectEqual(error.IOFailed, mapFileWriteError(error.NoSpaceLeft));
     try std.testing.expectEqual(error.PermissionDenied, mapFileWriteError(error.AccessDenied));
 }
 
 test "mapFileReadError" {
-    try std.testing.expectEqual(error.IOError, mapFileReadError(error.InputOutput));
+    try std.testing.expectEqual(error.IOFailed, mapFileReadError(error.InputOutput));
     try std.testing.expectEqual(error.PermissionDenied, mapFileReadError(error.NotOpenForReading));
 }
 
 test "mapSeekError" {
     try std.testing.expectEqual(error.NotSeekable, mapSeekError(error.Unseekable));
-    try std.testing.expectEqual(error.IOError, mapSeekError(error.SystemResources));
+    try std.testing.expectEqual(error.IOFailed, mapSeekError(error.SystemResources));
 }

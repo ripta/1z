@@ -30,8 +30,8 @@ H{ a: 1 b: 2 } @keys #len 2 "hash @keys count" assert=
 H{ a: 1 b: 2 } @values #len 2 "hash @values count" assert=
 
 "Error object field access" test-section
-[ 1 0 / ] [ dup error-type: @get "DivisionByZero" = [ "PASS: error @get error-type" print-line ] [ "FAIL: error @get error-type" print-line ] if drop ] recover
-[ 1 0 / ] [ dup message: @get "DivisionByZero" = [ "PASS: error @get message" print-line ] [ "FAIL: error @get message" print-line ] if drop ] recover
+[ 1 0 / ] [ dup error-type: @get EDivisionByZero = [ "PASS: error @get error-type" print-line ] [ "FAIL: error @get error-type" print-line ] if drop ] recover
+[ 1 0 / ] [ dup message: @get "division-by-zero" = [ "PASS: error @get message" print-line ] [ "FAIL: error @get message" print-line ] if drop ] recover
 
 "Error @has?" test-section
 [ 1 0 / ] [ dup error-type: @has? [ "PASS: error @has? error-type" print-line ] [ "FAIL: error @has? error-type" print-line ] if drop ] recover
@@ -50,7 +50,7 @@ H{ a: 1 } a: 0 @get-or 1 "hash @get-or existing returns value" assert=
 H{ } x: 42 @get-or 42 "hash @get-or empty hash" assert=
 
 "@get-or on error objects" test-section
-[ 1 0 / ] [ dup error-type: "none" @get-or "DivisionByZero" "error @get-or existing field" assert= drop ] recover
+[ 1 0 / ] [ dup error-type: "none" @get-or EDivisionByZero "error @get-or existing field" assert= drop ] recover
 [ 1 0 / ] [ dup invalid-field: "fallback" @get-or "fallback" "error @get-or missing field" assert= drop ] recover
 
 "Nested hash access" test-section

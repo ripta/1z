@@ -53,7 +53,7 @@ fn nativeToBytes(ctx: *Context) anyerror!void {
             }
             try ctx.stack.push(.{ .byte_array = ba });
         },
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     }
 }
 
@@ -66,6 +66,6 @@ fn nativeBytesToString(ctx: *Context) anyerror!void {
             const result = alloc.dupe(u8, b.items) catch return error.OutOfMemory;
             try ctx.stack.push(.{ .string = result });
         },
-        else => return error.TypeError,
+        else => return error.TypeMismatch,
     }
 }

@@ -8,6 +8,7 @@ const Quotation = @import("value.zig").Quotation;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 const formatter = @import("formatter.zig");
 const benchmark = @import("benchmark.zig");
+const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
 const LineEditor = @import("line_editor.zig").LineEditor;
 const BenchmarkStats = benchmark.BenchmarkStats;
 const BenchmarkConfig = benchmark.BenchmarkConfig;
@@ -25,7 +26,7 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
     if (details.len > 0) {
         // Print first detail (innermost error location) in single-line format
         const detail = details[0];
-        writer.print("{s}:{d}: error.{s}", .{ detail.source, detail.line, detail.error_type }) catch return;
+        writer.print("{s}:{d}: error '{s}'", .{ detail.source, detail.line, detail.error_type }) catch return;
 
         // Print message if different from word name
         if (detail.word_name != null and !std.mem.eql(u8, detail.message, detail.word_name.?)) {
@@ -50,7 +51,9 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
         }
     } else {
         // Fallback if no details captured
-        writer.print("error.{s}\n", .{@errorName(err)}) catch return;
+        var kebab_buf: [128]u8 = undefined;
+        const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
+        writer.print("error.{s}\n", .{kebab_name}) catch return;
     }
     ctx.clearExecutionDetails();
 }

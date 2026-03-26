@@ -6,7 +6,7 @@
 \   5 5 "five equals five" assert=
 \   t "condition is true" assert-true
 \   [ 1 0 / ] "division by zero" assert-error
-\   [ 1 0 / ] "DivisionByZero" "division by zero" assert-error-type
+\   [ 1 0 / ] division-by-zero: "division by zero" assert-error-type
 
 \ Core assertion: check equality, print PASS/FAIL with values on failure
 \ Stack: actual expected msg --
@@ -89,7 +89,7 @@ assert-error: ( quot msg -- ) [
 
 \ Assert quotation throws an error of a specific type.
 \
-\   [ 1 0 / ] "DivisionByZero" "division by zero" assert-error-type
+\   [ 1 0 / ] division-by-zero: "division by zero" assert-error-type
 assert-error-type: ( quot expected-type msg -- ) [
   __aet_msg__: parameter [ "" ] ;
   __aet_expected__: parameter [ "" ] ;
