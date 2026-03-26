@@ -465,6 +465,7 @@ fn replInteractive(ctx: *Context, writer: anytype) void {
         switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
             .needs_more_input => continue,
             .parse_error => |err| {
+                if (err == error.DebuggerQuit) return;
                 writer.print("Error: {any}\n", .{err}) catch {};
                 writer.flush() catch {};
                 processor.reset();
@@ -534,6 +535,7 @@ fn replPiped(ctx: *Context, writer: anytype) void {
         switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
             .needs_more_input => continue,
             .parse_error => |err| {
+                if (err == error.DebuggerQuit) return;
                 writer.print("Error: {any}\n", .{err}) catch {};
                 writer.flush() catch return;
                 processor.reset();
@@ -614,6 +616,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                 switch (processor.flush(ctx.quotationAllocator(), ctx)) {
                     .needs_more_input => {},
                     .parse_error => |e| {
+                        if (e == error.DebuggerQuit) return 0;
                         err_writer.print("Error: {any}\n", .{e}) catch {};
                         err_writer.flush() catch {};
                         return 1;
@@ -652,6 +655,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
         switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
             .needs_more_input => continue,
             .parse_error => |err| {
+                if (err == error.DebuggerQuit) return 0;
                 err_writer.print("Error at line {d}: {any}\n", .{ file_line, err }) catch {};
                 err_writer.flush() catch {};
                 return 1;
