@@ -80,16 +80,21 @@ fn nativeSend(ctx: *Context) anyerror!void {
     const ch = try helpers.popChannel(ctx);
     const value = try ctx.stack.pop();
 
+    ch.mutex.lock();
+
     if (ch.closed) {
+        ch.mutex.unlock();
         return throwChannelClosed(ctx, "cannot send on closed channel");
     }
 
     const scheduler = ctx.scheduler orelse {
+        ch.mutex.unlock();
         ctx.pending_error_message = "send must be called within a task-scope";
         return error.InvalidState;
     };
 
     const current = scheduler.current_task orelse {
+        ch.mutex.unlock();
         ctx.pending_error_message = "send must be called from a running task";
         return error.InvalidState;
     };
@@ -111,6 +116,7 @@ fn nativeSend(ctx: *Context) anyerror!void {
 
         receiver.blocked_on_channel = null;
         receiver.value_delivered = true;
+        ch.mutex.unlock();
         try scheduler.enqueue(receiver);
         return;
     }
@@ -118,18 +124,21 @@ fn nativeSend(ctx: *Context) anyerror!void {
     // if buffer has space, which is never true for unbuffered, push to buffer
     if (ch.capacity > 0 and !ch.buffer.isFull()) {
         ch.buffer.push(value);
+        ch.mutex.unlock();
         return;
     }
 
-    // blocking send, ig
+    // blocking send: add to waiting list, release lock, then suspend
     try ch.waiting_senders.append(ch.allocator, .{
         .task = current,
         .value = value,
     });
     current.blocked_on_channel = @ptrCast(ch);
+    ch.mutex.unlock();
     scheduler.suspendCurrentTask();
 
     // coming back from blocking
+    ch.mutex.lock();
     current.blocked_on_channel = null;
 
     // A receiver may have taken our value directly while we were suspended.
@@ -137,12 +146,16 @@ fn nativeSend(ctx: *Context) anyerror!void {
     // subsequently closed.
     if (current.value_delivered) {
         current.value_delivered = false;
+        ch.mutex.unlock();
         return;
     }
 
+    const closed = ch.closed;
+    ch.mutex.unlock();
+
     try helpers.checkCancellation(ctx);
 
-    if (ch.closed) {
+    if (closed) {
         return throwChannelClosed(ctx, "cannot send on closed channel");
     }
 }
@@ -163,12 +176,16 @@ fn nativeReceive(ctx: *Context) anyerror!void {
 
     const ch = try helpers.popChannel(ctx);
 
+    ch.mutex.lock();
+
     const scheduler = ctx.scheduler orelse {
+        ch.mutex.unlock();
         ctx.pending_error_message = "receive must be called within a task-scope";
         return error.InvalidState;
     };
 
     const current = scheduler.current_task orelse {
+        ch.mutex.unlock();
         ctx.pending_error_message = "receive must be called from a running task";
         return error.InvalidState;
     };
@@ -183,6 +200,7 @@ fn nativeReceive(ctx: *Context) anyerror!void {
 
         sender.blocked_on_channel = null;
         sender.value_delivered = true;
+        ch.mutex.unlock();
         try scheduler.enqueue(sender);
         return;
     }
@@ -201,22 +219,26 @@ fn nativeReceive(ctx: *Context) anyerror!void {
             sender_entry.task.value_delivered = true;
             try scheduler.enqueue(sender_entry.task);
         }
+        ch.mutex.unlock();
         return;
     }
 
     // if closed and nothing available, throw
     if (ch.closed) {
+        ch.mutex.unlock();
         return throwChannelClosed(ctx, "channel is closed");
     }
 
-    // blocking receive
+    // blocking receive: add to waiting list, release lock, then suspend
     try ch.waiting_receivers.append(ch.allocator, .{
         .task = current,
     });
     current.blocked_on_channel = @ptrCast(ch);
+    ch.mutex.unlock();
     scheduler.suspendCurrentTask();
 
     // resume from blocking
+    ch.mutex.lock();
     current.blocked_on_channel = null;
 
     // NOTE(ripta_: A sender may have delivered a value directly to our stack while we
@@ -224,13 +246,17 @@ fn nativeReceive(ctx: *Context) anyerror!void {
     //              the channel was subsequently closed.
     if (current.value_delivered) {
         current.value_delivered = false;
+        ch.mutex.unlock();
         return;
     }
+
+    const closed = ch.closed;
+    ch.mutex.unlock();
 
     try helpers.checkCancellation(ctx);
 
     // If the channel was closed while we were waiting, no value was pushed
-    if (ch.closed) {
+    if (closed) {
         return throwChannelClosed(ctx, "channel is closed");
     }
 }
@@ -246,6 +272,9 @@ fn nativeTryReceive(ctx: *Context) anyerror!void {
         ctx.pending_error_message = "try-receive must be called within a task-scope";
         return error.InvalidState;
     };
+
+    ch.mutex.lock();
+    defer ch.mutex.unlock();
 
     if (ch.waiting_senders.items.len > 0) {
         const sender_entry = ch.waiting_senders.orderedRemove(0);
@@ -283,16 +312,35 @@ fn nativeTryReceive(ctx: *Context) anyerror!void {
 /// Mark the channel as closed. Double-close is a no-op.
 /// Wakes all blocked senders and receivers so they can observe the closed state.
 fn nativeCloseChannel(ctx: *Context) anyerror!void {
+    const Task = @import("../task.zig").Task;
     const ch = try helpers.popChannel(ctx);
 
-    if (ch.closed) return;
+    ch.mutex.lock();
+
+    if (ch.closed) {
+        ch.mutex.unlock();
+        return;
+    }
     ch.closed = true;
 
-    const scheduler = ctx.scheduler orelse return;
+    const scheduler = ctx.scheduler orelse {
+        ch.mutex.unlock();
+        return;
+    };
+
+    // Collect tasks to wake under the lock, then enqueue outside the lock
+    //  to avoid holding the channel mutex while touching the scheduler
+    const alloc = ctx.arena.allocator();
+    const tasks_to_wake = alloc.alloc(*Task, ch.waiting_senders.items.len + ch.waiting_receivers.items.len) catch {
+        ch.mutex.unlock();
+        return;
+    };
+    var wake_count: usize = 0;
 
     for (ch.waiting_senders.items) |entry| {
         entry.task.blocked_on_channel = null;
-        scheduler.enqueue(entry.task) catch {};
+        tasks_to_wake[wake_count] = entry.task;
+        wake_count += 1;
     }
     ch.waiting_senders.clearRetainingCapacity();
 
@@ -303,9 +351,16 @@ fn nativeCloseChannel(ctx: *Context) anyerror!void {
             sel.result_channel = ch;
         }
         entry.task.blocked_on_channel = null;
-        scheduler.enqueue(entry.task) catch {};
+        tasks_to_wake[wake_count] = entry.task;
+        wake_count += 1;
     }
     ch.waiting_receivers.clearRetainingCapacity();
+
+    ch.mutex.unlock();
+
+    for (tasks_to_wake[0..wake_count]) |task| {
+        scheduler.enqueue(task) catch {};
+    }
 }
 
 /// select ( array -- val ch )
@@ -360,6 +415,8 @@ fn nativeSelect(ctx: *Context) anyerror!void {
         return error.InvalidState;
     };
 
+    lockChannelsOrdered(channels);
+
     // NOTE(ripta): we check waiting senders before buffered data to give priority to directt
     //              handoff in unbuffered channels, but this means that if a sender and a buffered
     //              value become available simultaneously, the sender wins.
@@ -371,6 +428,7 @@ fn nativeSelect(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .channel = ch });
 
             sender_entry.task.blocked_on_channel = null;
+            unlockChannelsOrdered(channels);
             try scheduler.enqueue(sender_entry.task);
             return;
         }
@@ -388,6 +446,7 @@ fn nativeSelect(ctx: *Context) anyerror!void {
                 sender_entry.task.blocked_on_channel = null;
                 try scheduler.enqueue(sender_entry.task);
             }
+            unlockChannelsOrdered(channels);
             return;
         }
     }
@@ -400,6 +459,7 @@ fn nativeSelect(ctx: *Context) anyerror!void {
         }
     }
     if (all_closed) {
+        unlockChannelsOrdered(channels);
         return throwChannelClosed(ctx, "all channels in select are closed");
     }
 
@@ -417,22 +477,46 @@ fn nativeSelect(ctx: *Context) anyerror!void {
     }
 
     current.blocked_on_channel = @ptrCast(channels[0]);
+    unlockChannelsOrdered(channels);
     scheduler.suspendCurrentTask();
+
+    lockChannelsOrdered(channels);
     current.blocked_on_channel = null;
 
     for (channels) |ch| {
         removeReceiverEntries(ch, current);
     }
 
+    const result_value = sel_ctx.result_value;
+    const result_channel = sel_ctx.result_channel;
+    unlockChannelsOrdered(channels);
+
     try helpers.checkCancellation(ctx);
 
-    if (sel_ctx.result_value) |result_val| {
+    if (result_value) |result_val| {
         try ctx.stack.push(result_val);
-        try ctx.stack.push(.{ .channel = sel_ctx.result_channel.? });
+        try ctx.stack.push(.{ .channel = result_channel.? });
         return;
     }
 
     return throwChannelClosed(ctx, "selected channel was closed");
+}
+
+fn channelPtrLessThan(_: void, a: *Channel, b: *Channel) bool {
+    return @intFromPtr(a) < @intFromPtr(b);
+}
+
+fn lockChannelsOrdered(channels: []*Channel) void {
+    std.mem.sort(*Channel, channels, {}, channelPtrLessThan);
+    for (channels) |ch| ch.mutex.lock();
+}
+
+fn unlockChannelsOrdered(channels: []*Channel) void {
+    var i: usize = channels.len;
+    while (i > 0) {
+        i -= 1;
+        channels[i].mutex.unlock();
+    }
 }
 
 /// Remove all receiver entries for a specific task from a channel's waiting list.

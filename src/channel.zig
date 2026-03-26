@@ -10,6 +10,7 @@ pub const Channel = struct {
     waiting_senders: std.ArrayListUnmanaged(SenderEntry),
     waiting_receivers: std.ArrayListUnmanaged(ReceiverEntry),
     allocator: Allocator,
+    mutex: std.Thread.Mutex = .{},
 
     pub fn init(allocator: Allocator, capacity: usize) !*Channel {
         const ch = try allocator.create(Channel);
