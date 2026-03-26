@@ -1,0 +1,36 @@
+=== #peek8 / #poke8! aliases ===
+Stack: [ ]
+PASS: #peek8 at offset 0
+Stack: [ ]
+PASS: #peek8 at offset 1
+Stack: [ ]
+PASS: #poke8! then #peek8
+Stack: [ ]
+=== #peek8/#poke8! match #nth/#nth! ===
+Stack: [ ]
+Stack: [ 153 ]
+Stack: [ 153 153 ]
+PASS: #peek8 matches #nth
+Stack: [ ]
+Stack: [ 171 ]
+Stack: [ 171 171 ]
+PASS: #poke8! matches #nth!
+Stack: [ ]
+=== #peek16 / #poke16! ===
+Stack: [ ]
+PASS: #peek16 round-trip at 0
+Stack: [ ]
+PASS: #peek16 round-trip at offset 2
+Stack: [ ]
+=== #peek32 / #poke32! ===
+Stack: [ ]
+PASS: #peek32 round-trip at 0
+Stack: [ ]
+PASS: #peek32 round-trip at offset 4
+Stack: [ ]
+=== #peek64 / #poke64! ===
+Stack: [ ]
+PASS: #peek64 round-trip at 0
+Stack: [ ]
+PASS: #peek64 round-trip at offset 8
+Stack: [ ]

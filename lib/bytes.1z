@@ -1,0 +1,25 @@
+\ lib/bytes.1z - Width-specific byte access aliases
+
+\\ Read a single byte at offset (alias for #nth).
+#peek8: ( byte-array offset -- fixnum ) [ #nth ] ;
+
+\\ Write a single byte at offset (alias for #nth!).
+#poke8!: ( byte-array offset value -- byte-array ) [ #nth! ] ;
+
+\\ Read a 16-bit (2-byte) little-endian value at offset.
+#peek16: ( byte-array offset -- fixnum ) [ 2 #peek ] ;
+
+\\ Write a 16-bit (2-byte) little-endian value at offset.
+#poke16!: ( byte-array offset value -- byte-array ) [ 2 #poke! ] ;
+
+\\ Read a 32-bit (4-byte) little-endian value at offset.
+#peek32: ( byte-array offset -- fixnum ) [ 4 #peek ] ;
+
+\\ Write a 32-bit (4-byte) little-endian value at offset.
+#poke32!: ( byte-array offset value -- byte-array ) [ 4 #poke! ] ;
+
+\\ Read a 64-bit (8-byte) little-endian value at offset.
+#peek64: ( byte-array offset -- fixnum ) [ 8 #peek ] ;
+
+\\ Write a 64-bit (8-byte) little-endian value at offset.
+#poke64!: ( byte-array offset value -- byte-array ) [ 8 #poke! ] ;

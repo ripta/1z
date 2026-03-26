@@ -1,0 +1,29 @@
+\ Integration tests for lib/bytes.1z
+
+use "testing" ;
+use "bytes" ;
+
+"#peek8 / #poke8! aliases" test-section
+B{ 0xAB 0xCD 0xEF } 0 #peek8 0xAB "#peek8 at offset 0" assert=
+B{ 0xAB 0xCD 0xEF } 1 #peek8 0xCD "#peek8 at offset 1" assert=
+B{ 0x00 0x00 } 0 0xFF #poke8! 0 #peek8 0xFF "#poke8! then #peek8" assert=
+
+"#peek8/#poke8! match #nth/#nth!" test-section
+B{ 0x42 0x99 } 1 #peek8
+B{ 0x42 0x99 } 1 #nth
+"#peek8 matches #nth" assert=
+B{ 0x00 0x00 } 1 0xAB #poke8! 1 #nth
+B{ 0x00 0x00 } 1 0xAB #nth! 1 #nth
+"#poke8! matches #nth!" assert=
+
+"#peek16 / #poke16!" test-section
+B{ 0x00 0x00 0x00 0x00 } 0 0x1234 #poke16! 0 #peek16 0x1234 "#peek16 round-trip at 0" assert=
+B{ 0x00 0x00 0x00 0x00 } 2 0xBEEF #poke16! 2 #peek16 0xBEEF "#peek16 round-trip at offset 2" assert=
+
+"#peek32 / #poke32!" test-section
+B{ 0x00 0x00 0x00 0x00 } 0 0xDEADBEEF #poke32! 0 #peek32 0xDEADBEEF "#peek32 round-trip at 0" assert=
+8 bytes-alloc 4 0x12345678 #poke32! 4 #peek32 0x12345678 "#peek32 round-trip at offset 4" assert=
+
+"#peek64 / #poke64!" test-section
+8 bytes-alloc 0 0x0102030405060708 #poke64! 0 #peek64 0x0102030405060708 "#peek64 round-trip at 0" assert=
+16 bytes-alloc 8 0xFFFFFFFFFFFFFFFF #poke64! 8 #peek64 0xFFFFFFFFFFFFFFFF "#peek64 round-trip at offset 8" assert=
