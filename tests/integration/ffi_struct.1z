@@ -155,4 +155,61 @@ drop drop
 [ [ 1.0 2.0 make-vector2 ] ffi{ -> vector2 } ffi-callback ]
 "struct type in callback return" assert-error
 
+"mutable ffi-struct scalar setters" test-section
+
+mut-point: mutable ffi-struct{ x: i32 y: i32 } ;
+
+10 20 make-mut-point
+99 >>x
+dup x>> 99 ">>x sets x to 99" assert=
+dup y>> 20 ">>x leaves y unchanged" assert=
+drop
+
+"mutable ffi-struct float setters" test-section
+
+mut-vec: mutable ffi-struct{ x: f32 y: f32 } ;
+
+1.0 2.0 make-mut-vec
+9.5 >>x
+dup x>> 9.5 ">>x sets f32 field" assert=
+dup y>> 2.0 ">>x leaves y unchanged" assert=
+drop
+
+"mutable ffi-struct bool setter" test-section
+
+mut-flag: mutable ffi-struct{ value: i32 active: bool } ;
+
+42 t make-mut-flag
+f >>active
+dup active>> not ">>active sets bool to false" assert-true
+dup value>> 42 ">>active leaves value unchanged" assert=
+drop
+
+"mutable ffi-struct nested struct setter" test-section
+
+mut-rect: mutable ffi-struct{ origin: vector2 size: vector2 } ;
+
+1.0 2.0 make-vector2
+3.0 4.0 make-vector2
+make-mut-rect
+
+5.0 6.0 make-vector2 >>origin
+dup origin>> x>> 5.0 ">>origin replaces nested struct x" assert=
+dup origin>> y>> 6.0 ">>origin replaces nested struct y" assert=
+dup size>> x>> 3.0 ">>origin leaves size unchanged" assert=
+drop
+
+"mutable ffi-struct setter chaining" test-section
+
+10 20 make-mut-point
+99 >>x 88 >>y
+dup x>> 99 "chained >>x sets x" assert=
+dup y>> 88 "chained >>y sets y" assert=
+drop
+
+"immutable ffi-struct has no setters" test-section
+
+\ point is defined without mutable marker
+[ 10 20 make-point 99 >>x ] ">>x on immutable ffi-struct errors" assert-error
+
 resource-close

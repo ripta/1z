@@ -33,6 +33,7 @@ pub const primitives = [_]Primitive{
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "ffi-struct-make", .func = nativeFfiStructMake, .stack_effect = "fields... layout-ptr vtype-ptr -- tagged" },
     .{ .name = "ffi-struct-field-get", .func = nativeFfiStructFieldGet, .stack_effect = "tagged layout-ptr field-index -- value" },
+    .{ .name = "ffi-struct-field-set", .func = nativeFfiStructFieldSet, .stack_effect = "tagged value layout-ptr field-index -- tagged" },
 };
 
 /// define-ffi-struct ( name: descriptor markers -- )
@@ -320,12 +321,65 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
         }, true);
     }
 
+    // >>FIELD setters (only if mutable marker is present)
+    const has_mutable = for (markers_slice) |mk| {
+        if (markers_mod.isMutableMarker(mk)) break true;
+    } else false;
+
+    var setter_names: ?[][]const u8 = null;
+    if (has_mutable) {
+        const sn = try alloc.alloc([]const u8, layout.fields.len);
+        for (layout.fields, 0..) |field, i| {
+            const setter_name = try std.fmt.allocPrint(alloc, ">>{s}", .{field.name});
+            sn[i] = setter_name;
+
+            const setter_instrs = try alloc.alloc(Instruction, 3);
+            setter_instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(layout)) } }, .line = 0 };
+            setter_instrs[1] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(i) } }, .line = 0 };
+            setter_instrs[2] = .{ .op = .{ .call_word = "native.ffi-struct-field-set" }, .line = 0 };
+
+            const is_setter_generic = if (ctx.lookupWord(setter_name)) |existing| blk: {
+                for (existing.markers) |mk| {
+                    if (markers_mod.isGenericMarker(mk)) break :blk true;
+                }
+                break :blk false;
+            } else false;
+
+            if (!is_setter_generic) {
+                const generic_markers = try alloc.alloc(*Marker, 1);
+                generic_markers[0] = @constCast(&markers_mod.generic_marker);
+
+                try ctx.defineWord(setter_name, .{
+                    .name = setter_name,
+                    .stack_effect = try helpers.makeSimpleEffect(alloc, "instance value -- instance"),
+                    .markers = generic_markers,
+                    .action = .{ .compound = &.{} },
+                });
+            }
+
+            try ctx.registerDispatch(.{
+                .word_name = setter_name,
+                .type_a = name,
+                .type_b = dispatch_mod.any_sentinel,
+            }, .{
+                .body = .{ .quotation = setter_instrs },
+                .provenance = .{ .generator = "ffi-struct", .parent = name, .role = "setter", .field = field.name },
+            }, true);
+        }
+        setter_names = sn;
+    }
+
     var generated_words = std.ArrayListUnmanaged(Value){};
     try generated_words.append(alloc, .{ .string = name });
     try generated_words.append(alloc, .{ .string = make_name });
     try generated_words.append(alloc, .{ .string = pred_name });
     for (getter_names) |gn| {
         try generated_words.append(alloc, .{ .string = gn });
+    }
+    if (setter_names) |sn| {
+        for (sn) |setter_name| {
+            try generated_words.append(alloc, .{ .string = setter_name });
+        }
     }
     const gw_slice = try generated_words.toOwnedSlice(alloc);
     try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
@@ -366,6 +420,8 @@ fn nativeFfiStructMake(ctx: *Context) anyerror!void {
     ba.items.len = layout.total_size;
     @memset(ba.items[0..layout.total_size], 0);
 
+    const make_caller = try std.fmt.allocPrint(alloc, "make-{s}", .{vtype.name});
+
     for (layout.fields, 0..) |field, fi| {
         const val = field_vals[fi];
         const buf = ba.items[field.offset .. field.offset + field.size];
@@ -375,22 +431,22 @@ fn nativeFfiStructMake(ctx: *Context) anyerror!void {
                 .tagged => |t| switch (t.inner.*) {
                     .byte_array => |b| b,
                     else => {
-                        helpers.setErrorContext(ctx, "make-{s}: field '{s}' expected FFI struct, got {s}", .{ vtype.name, field.name, helpers.valueTypeName(t.inner.*) });
+                        helpers.setErrorContext(ctx, "{s}: field '{s}' expected FFI struct, got {s}", .{ make_caller, field.name, helpers.valueTypeName(t.inner.*) });
                         return error.TypeMismatch;
                     },
                 },
                 else => {
-                    helpers.setErrorContext(ctx, "make-{s}: field '{s}' expected FFI struct, got {s}", .{ vtype.name, field.name, helpers.valueTypeName(val) });
+                    helpers.setErrorContext(ctx, "{s}: field '{s}' expected FFI struct, got {s}", .{ make_caller, field.name, helpers.valueTypeName(val) });
                     return error.TypeMismatch;
                 },
             };
             if (inner_ba.items.len != field.size) {
-                helpers.setErrorContext(ctx, "make-{s}: field '{s}' size mismatch: expected {d}, got {d}", .{ vtype.name, field.name, field.size, inner_ba.items.len });
+                helpers.setErrorContext(ctx, "{s}: field '{s}' size mismatch: expected {d}, got {d}", .{ make_caller, field.name, field.size, inner_ba.items.len });
                 return error.FFITypeMismatch;
             }
             @memcpy(buf, inner_ba.items[0..field.size]);
         } else if (field.ffi_tag) |tag| {
-            try marshalFieldValue(ctx, vtype.name, field.name, tag, val, buf);
+            try marshalFieldValue(ctx, make_caller, field.name, tag, val, buf);
         }
     }
 
@@ -400,57 +456,57 @@ fn nativeFfiStructMake(ctx: *Context) anyerror!void {
 }
 
 /// Marshal a single 1z value into a byte buffer at the appropriate size.
-fn marshalFieldValue(ctx: *Context, struct_name: []const u8, field_name: []const u8, tag: FfiTypeTag, val: Value, buf: []u8) !void {
+fn marshalFieldValue(ctx: *Context, caller: []const u8, field_name: []const u8, tag: FfiTypeTag, val: Value, buf: []u8) !void {
     switch (tag) {
         .i8 => {
-            const v = try expectFixnum(ctx, struct_name, field_name, val);
-            try checkFieldRange(ctx, struct_name, field_name, v, i8);
+            const v = try expectFixnum(ctx, caller, field_name, val);
+            try checkFieldRange(ctx, caller, field_name, v, i8);
             std.mem.writeInt(i8, buf[0..1], @intCast(v), .little);
         },
         .i16 => {
-            const v = try expectFixnum(ctx, struct_name, field_name, val);
-            try checkFieldRange(ctx, struct_name, field_name, v, i16);
+            const v = try expectFixnum(ctx, caller, field_name, val);
+            try checkFieldRange(ctx, caller, field_name, v, i16);
             std.mem.writeInt(i16, buf[0..2], @intCast(v), .little);
         },
         .i32 => {
-            const v = try expectFixnum(ctx, struct_name, field_name, val);
-            try checkFieldRange(ctx, struct_name, field_name, v, i32);
+            const v = try expectFixnum(ctx, caller, field_name, val);
+            try checkFieldRange(ctx, caller, field_name, v, i32);
             std.mem.writeInt(i32, buf[0..4], @intCast(v), .little);
         },
         .i64 => {
-            const v = try expectFixnum(ctx, struct_name, field_name, val);
+            const v = try expectFixnum(ctx, caller, field_name, val);
             std.mem.writeInt(i64, buf[0..8], v, .little);
         },
         .u8 => {
-            const v = try expectFixnum(ctx, struct_name, field_name, val);
-            try checkFieldRange(ctx, struct_name, field_name, v, u8);
+            const v = try expectFixnum(ctx, caller, field_name, val);
+            try checkFieldRange(ctx, caller, field_name, v, u8);
             std.mem.writeInt(u8, buf[0..1], @intCast(v), .little);
         },
         .u16 => {
-            const v = try expectFixnum(ctx, struct_name, field_name, val);
-            try checkFieldRange(ctx, struct_name, field_name, v, u16);
+            const v = try expectFixnum(ctx, caller, field_name, val);
+            try checkFieldRange(ctx, caller, field_name, v, u16);
             std.mem.writeInt(u16, buf[0..2], @intCast(v), .little);
         },
         .u32 => {
-            const v = try expectFixnum(ctx, struct_name, field_name, val);
-            try checkFieldRange(ctx, struct_name, field_name, v, u32);
+            const v = try expectFixnum(ctx, caller, field_name, val);
+            try checkFieldRange(ctx, caller, field_name, v, u32);
             std.mem.writeInt(u32, buf[0..4], @intCast(v), .little);
         },
         .u64 => {
-            const v = try expectFixnum(ctx, struct_name, field_name, val);
+            const v = try expectFixnum(ctx, caller, field_name, val);
             if (v < 0) {
-                helpers.setErrorContext(ctx, "make-{s}: field '{s}' value {d} out of range for u64", .{ struct_name, field_name, v });
+                helpers.setErrorContext(ctx, "{s}: field '{s}' value {d} out of range for u64", .{ caller, field_name, v });
                 return error.FFIRangeError;
             }
             std.mem.writeInt(u64, buf[0..8], @intCast(v), .little);
         },
         .f32 => {
-            const f = try expectFloat(ctx, struct_name, field_name, val);
+            const f = try expectFloat(ctx, caller, field_name, val);
             const bits: u32 = @bitCast(@as(f32, @floatCast(f)));
             std.mem.writeInt(u32, buf[0..4], bits, .little);
         },
         .f64 => {
-            const f = try expectFloat(ctx, struct_name, field_name, val);
+            const f = try expectFloat(ctx, caller, field_name, val);
             const bits: u64 = @bitCast(f);
             std.mem.writeInt(u64, buf[0..8], bits, .little);
         },
@@ -458,54 +514,54 @@ fn marshalFieldValue(ctx: *Context, struct_name: []const u8, field_name: []const
             const b = switch (val) {
                 .boolean => |v| v,
                 else => {
-                    helpers.setErrorContext(ctx, "make-{s}: field '{s}' expected boolean, got {s}", .{ struct_name, field_name, helpers.valueTypeName(val) });
+                    helpers.setErrorContext(ctx, "{s}: field '{s}' expected boolean, got {s}", .{ caller, field_name, helpers.valueTypeName(val) });
                     return error.TypeMismatch;
                 },
             };
             buf[0] = if (b) 1 else 0;
         },
         .usize_type => {
-            const v = try expectFixnum(ctx, struct_name, field_name, val);
+            const v = try expectFixnum(ctx, caller, field_name, val);
             if (v < 0) {
-                helpers.setErrorContext(ctx, "make-{s}: field '{s}' value {d} out of range for usize", .{ struct_name, field_name, v });
+                helpers.setErrorContext(ctx, "{s}: field '{s}' value {d} out of range for usize", .{ caller, field_name, v });
                 return error.FFIRangeError;
             }
             std.mem.writeInt(usize, buf[0..@sizeOf(usize)], @intCast(v), .little);
         },
         .isize_type => {
-            const v = try expectFixnum(ctx, struct_name, field_name, val);
+            const v = try expectFixnum(ctx, caller, field_name, val);
             std.mem.writeInt(isize, buf[0..@sizeOf(isize)], @intCast(v), .little);
         },
         else => {
-            helpers.setErrorContext(ctx, "make-{s}: unsupported field type for '{s}'", .{ struct_name, field_name });
+            helpers.setErrorContext(ctx, "{s}: unsupported field type for '{s}'", .{ caller, field_name });
             return error.FFITypeMismatch;
         },
     }
 }
 
-fn expectFixnum(ctx: *Context, struct_name: []const u8, field_name: []const u8, val: Value) !i64 {
+fn expectFixnum(ctx: *Context, caller: []const u8, field_name: []const u8, val: Value) !i64 {
     return switch (val) {
         .fixnum => |v| v,
         else => {
-            helpers.setErrorContext(ctx, "make-{s}: field '{s}' expected fixnum, got {s}", .{ struct_name, field_name, helpers.valueTypeName(val) });
+            helpers.setErrorContext(ctx, "{s}: field '{s}' expected fixnum, got {s}", .{ caller, field_name, helpers.valueTypeName(val) });
             return error.TypeMismatch;
         },
     };
 }
 
-fn expectFloat(ctx: *Context, struct_name: []const u8, field_name: []const u8, val: Value) !f64 {
+fn expectFloat(ctx: *Context, caller: []const u8, field_name: []const u8, val: Value) !f64 {
     return switch (val) {
         .float => |v| v,
         else => {
-            helpers.setErrorContext(ctx, "make-{s}: field '{s}' expected float, got {s}", .{ struct_name, field_name, helpers.valueTypeName(val) });
+            helpers.setErrorContext(ctx, "{s}: field '{s}' expected float, got {s}", .{ caller, field_name, helpers.valueTypeName(val) });
             return error.TypeMismatch;
         },
     };
 }
 
-fn checkFieldRange(ctx: *Context, struct_name: []const u8, field_name: []const u8, fixnum: i64, comptime T: type) !void {
+fn checkFieldRange(ctx: *Context, caller: []const u8, field_name: []const u8, fixnum: i64, comptime T: type) !void {
     if (fixnum < std.math.minInt(T) or fixnum > std.math.maxInt(T)) {
-        helpers.setErrorContext(ctx, "make-{s}: field '{s}' value {d} out of range for {s}", .{ struct_name, field_name, fixnum, @typeName(T) });
+        helpers.setErrorContext(ctx, "{s}: field '{s}' value {d} out of range for {s}", .{ caller, field_name, fixnum, @typeName(T) });
         return error.FFIRangeError;
     }
 }
@@ -607,4 +663,68 @@ fn nativeFfiStructFieldGet(ctx: *Context) anyerror!void {
     };
 
     try ctx.stack.push(result);
+}
+
+/// ffi-struct-field-set ( tagged value layout-ptr field-index -- tagged )
+///
+/// Writes a single field value into an FFI struct byte array and pushes the
+/// modified instance back onto the stack.
+fn nativeFfiStructFieldSet(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const field_index: usize = @intCast(try helpers.popFixnum(ctx));
+    const layout_fixnum = try helpers.popFixnum(ctx);
+    const layout: *const FfiStructLayout = @ptrFromInt(@as(usize, @intCast(layout_fixnum)));
+
+    const new_val = try ctx.stack.pop();
+
+    const tagged_val = try ctx.stack.pop();
+    const tagged = switch (tagged_val) {
+        .tagged => |t| t,
+        else => {
+            helpers.setTypeMismatchError(ctx, "ffi-struct", tagged_val);
+            return error.TypeMismatch;
+        },
+    };
+    const ba = switch (tagged.inner.*) {
+        .byte_array => |b| b,
+        else => {
+            helpers.setTypeMismatchError(ctx, "ffi-struct (byte-array)", tagged.inner.*);
+            return error.TypeMismatch;
+        },
+    };
+
+    if (field_index >= layout.fields.len) {
+        helpers.setErrorContext(ctx, "ffi-struct-field-set: field index {d} out of range (struct has {d} fields)", .{ field_index, layout.fields.len });
+        return error.IndexOutOfBounds;
+    }
+
+    const field = layout.fields[field_index];
+    const buf = ba.items[field.offset .. field.offset + field.size];
+    const caller = try std.fmt.allocPrint(alloc, ">>{s}", .{field.name});
+
+    if (field.nested_layout) |_| {
+        const inner_ba = switch (new_val) {
+            .tagged => |t| switch (t.inner.*) {
+                .byte_array => |b| b,
+                else => {
+                    helpers.setErrorContext(ctx, "{s}: expected FFI struct, got {s}", .{ caller, helpers.valueTypeName(t.inner.*) });
+                    return error.TypeMismatch;
+                },
+            },
+            else => {
+                helpers.setErrorContext(ctx, "{s}: expected FFI struct, got {s}", .{ caller, helpers.valueTypeName(new_val) });
+                return error.TypeMismatch;
+            },
+        };
+        if (inner_ba.items.len != field.size) {
+            helpers.setErrorContext(ctx, "{s}: size mismatch: expected {d}, got {d}", .{ caller, field.size, inner_ba.items.len });
+            return error.FFITypeMismatch;
+        }
+        @memcpy(buf, inner_ba.items[0..field.size]);
+    } else if (field.ffi_tag) |tag| {
+        try marshalFieldValue(ctx, caller, field.name, tag, new_val, buf);
+    }
+
+    try ctx.stack.push(tagged_val);
 }
