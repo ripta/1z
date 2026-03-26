@@ -127,6 +127,7 @@ rem: ( a b -- r ) [ tuck % over + swap % ] ;
 not: ( ? -- ? ) [ [ f ] [ t ] if ] ;
 and: ( ? ? -- ? ) [ [ ] [ drop f ] if ] ;
 or: ( ? ? -- ? ) [ [ drop t ] [ ] if ] ;
+xor: ( ? ? -- ? ) [ 2dup and not -rot> or and ] ;
 
 \ I/O - stream-based primitives
 stream-write-string: ( stream str -- n ) [ >bytes stream-write ] ;

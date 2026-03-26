@@ -24,6 +24,16 @@ PASS: f or t
 Stack: [ ]
 PASS: f or f
 Stack: [ ]
+=== Logical XOR ===
+Stack: [ ]
+PASS: t xor t
+Stack: [ ]
+PASS: t xor f
+Stack: [ ]
+PASS: f xor t
+Stack: [ ]
+PASS: f xor f
+Stack: [ ]
 === Combined boolean expressions ===
 Stack: [ ]
 PASS: t and t or t
