@@ -28,6 +28,14 @@ struct{: parse-time [
   [ define-struct ] define: swap @set!  \ -- mmap (with define set)
 ] ;
 
+\ Virtual type definition syntax, produces a type descriptor
+virtual{: parse-time [
+  parse-virtual-inner
+  M{ type: virtual: } swap inner-type: swap @set!
+  [ define-virtual ] define:
+  swap @set!
+] ;
+
 \ Dynamic variables (parameters) syntax
 parameter: parse-time [ dup parse-quotation make-parameter ] ;
 

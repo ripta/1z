@@ -16,26 +16,26 @@ const popQuotation = helpers.popQuotation;
 const popBoolean = helpers.popBoolean;
 const popSymbol = helpers.popSymbol;
 
-/// Check if a value is a struct descriptor, which is hash or mutable-map
-/// with type: and struct-descriptor: fields
-fn isStructDescriptor(val: Value) bool {
-    const type_val_opt: ?Value = switch (val) {
-        .hash => |h| h.get("type"),
-        .mutable_map => |m| m.get("type"),
+/// Check if a value is a type descriptor, which is a hash or mutable-map with a `define:` quotation.
+/// Used by `;` to recognize type-defining syntaxes like `struct{ ... }` or `virtual{ ... }`.
+fn isTypeDescriptor(val: Value) bool {
+    const define_val_opt: ?Value = switch (val) {
+        .hash => |h| h.get("define"),
+        .mutable_map => |m| m.get("define"),
         else => null,
     };
 
-    if (type_val_opt) |type_val| {
-        switch (type_val) {
-            .symbol => |s| return std.mem.eql(u8, s, "struct-descriptor"),
-            else => return false,
-        }
+    if (define_val_opt) |define_val| {
+        return switch (define_val) {
+            .quotation => true,
+            else => false,
+        };
     }
 
     return false;
 }
 
-/// Get the underlying map from a struct descriptor
+/// Get the underlying map from a type descriptor
 fn getDescriptorMap(val: Value) ?*value_mod.MutableMap {
     return switch (val) {
         .hash => |h| h,
@@ -108,8 +108,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
         },
 
         else => {
-            if (isStructDescriptor(top_val)) {
-                // Handle struct definition first
+            if (isTypeDescriptor(top_val)) {
                 const desc_map = getDescriptorMap(top_val) orelse return error.TypeMismatch;
 
                 var collected_markers = std.ArrayListUnmanaged(*Marker){};
@@ -134,8 +133,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 const name = try popSymbol(ctx);
                 try ctx.stack.push(.{ .symbol = name });
 
-                const fields_val = desc_map.get("fields") orelse return error.MissingField;
-                try ctx.stack.push(fields_val);
+                try ctx.stack.push(top_val);
 
                 const markers_array = try alloc.alloc(Value, collected_markers.items.len);
                 for (collected_markers.items, 0..) |mk, i| {
