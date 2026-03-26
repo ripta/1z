@@ -1,0 +1,34 @@
+=== mutable-map >hash ===
+Stack: [ ]
+PASS: mutable-map to hash preserves x
+Stack: [ ]
+PASS: mutable-map to hash preserves y
+Stack: [ ]
+PASS: empty mutable-map to hash
+Stack: [ ]
+=== hash >hash (identity) ===
+Stack: [ ]
+PASS: hash identity preserves value
+Stack: [ ]
+PASS: empty hash identity
+Stack: [ ]
+=== copy semantics ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: mutable-map >hash is a snapshot
+Stack: [ ]
+PASS: hash does not have key added after snapshot
+Stack: [ ]
+=== struct >hash still works ===
+Stack: [ ]
+Stack: [ ]
+PASS: struct >hash regression
+Stack: [ ]
+=== error on unsupported type ===
+Stack: [ ]
+PASS: fixnum >hash throws
+Stack: [ ]
+PASS: string >hash throws
+Stack: [ ]

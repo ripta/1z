@@ -4,6 +4,7 @@ const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const Vector = value_mod.Vector;
 const ByteArray = value_mod.ByteArray;
+const HashTable = value_mod.HashTable;
 
 const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
@@ -428,7 +429,7 @@ fn nativeLastByteArray(ctx: *Context) anyerror!void {
 // =============================================================================
 
 pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
-    // #len : 8 unary entries
+    // #len : unary entries
     try dispatch.registerNative("#len", "string", unary_sentinel, nativeLenString);
     try dispatch.registerNative("#len", "array", unary_sentinel, nativeLenArray);
     try dispatch.registerNative("#len", "vector", unary_sentinel, nativeLenVector);
@@ -438,29 +439,33 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
     try dispatch.registerNative("#len", "mutable-map", unary_sentinel, nativeLenMutableMap);
     try dispatch.registerNative("#len", "module", unary_sentinel, nativeLenModule);
 
-    // #nth : 4 binary entries (all with type_b = fixnum)
+    // #nth : binary entries (all with type_b = fixnum)
     try dispatch.registerNative("#nth", "string", "fixnum", nativeNthString);
     try dispatch.registerNative("#nth", "array", "fixnum", nativeNthArray);
     try dispatch.registerNative("#nth", "vector", "fixnum", nativeNthVector);
     try dispatch.registerNative("#nth", "byte-array", "fixnum", nativeNthByteArray);
 
-    // #first : 4 unary entries
+    // #first : unary entries
     try dispatch.registerNative("#first", "string", unary_sentinel, nativeFirstString);
     try dispatch.registerNative("#first", "array", unary_sentinel, nativeFirstArray);
     try dispatch.registerNative("#first", "vector", unary_sentinel, nativeFirstVector);
     try dispatch.registerNative("#first", "byte-array", unary_sentinel, nativeFirstByteArray);
 
-    // #last : 4 unary entries
+    // #last : unary entries
     try dispatch.registerNative("#last", "string", unary_sentinel, nativeLastString);
     try dispatch.registerNative("#last", "array", unary_sentinel, nativeLastArray);
     try dispatch.registerNative("#last", "vector", unary_sentinel, nativeLastVector);
     try dispatch.registerNative("#last", "byte-array", unary_sentinel, nativeLastByteArray);
 
-    // >array : 4 unary entries
+    // >array : unary entries
     try dispatch.registerNative(">array", "vector", unary_sentinel, nativeToArrayVector);
     try dispatch.registerNative(">array", "byte-array", unary_sentinel, nativeToArrayByteArray);
     try dispatch.registerNative(">array", "set", unary_sentinel, nativeToArraySet);
     try dispatch.registerNative(">array", "array", unary_sentinel, nativeToArrayArray);
+
+    // >hash : unary entries
+    try dispatch.registerNative(">hash", "mutable-map", unary_sentinel, nativeToHashMutableMap);
+    try dispatch.registerNative(">hash", "hash", unary_sentinel, nativeToHashHash);
 
     // #peek / #poke! : byte-level access
     try dispatch.registerNative("#peek", "byte-array", unary_sentinel, nativePeekByteArray);
@@ -514,6 +519,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "freeze", .stack_effect = "vector -- array", .doc = "Convert a vector to an array (copy semantics).", .func = nativeFreeze, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     // Container conversion
     .{ .name = ">array", .stack_effect = "container -- array", .doc = "Convert vector, byte-array, set, or array to an immutable array. Copy semantics; original unchanged.", .func = nativeToArray, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = ">hash", .stack_effect = "container -- hash", .doc = "Convert mutable-map or hash to an immutable hash. Mutable-map uses copy semantics; original unchanged.", .func = nativeToHash, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     // Byte-level access
     .{ .name = "#peek", .stack_effect = "byte-array offset width -- fixnum", .doc = "Read width bytes (1/2/4/8) at offset from byte-array as unsigned fixnum.", .func = nativePeek, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = "#poke!", .stack_effect = "byte-array offset value width -- byte-array", .doc = "Write value as width bytes (1/2/4/8) at offset in byte-array.", .func = nativePoke, .markers = &.{@constCast(&markers_mod.generic_marker)} },
@@ -2133,6 +2139,32 @@ fn nativeToArray(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, ">array")) return;
     const val = try ctx.stack.pop();
     setErrorContext(ctx, ">array expected vector, byte-array, set, or array, got {s}", .{valueTypeName(val)});
+    return error.TypeMismatch;
+}
+
+/// >hash ( mutable-map -- hash ) - Snapshot mutable-map into an immutable hash
+fn nativeToHashMutableMap(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const m = val.mutable_map;
+    const alloc = ctx.quotationAllocator();
+    const new_hash = alloc.create(HashTable) catch return error.OutOfMemory;
+    new_hash.* = HashTable{};
+    var iter = m.iterator();
+    while (iter.next()) |entry| {
+        const key_copy = alloc.dupe(u8, entry.key_ptr.*) catch return error.OutOfMemory;
+        new_hash.put(alloc, key_copy, entry.value_ptr.*) catch return error.OutOfMemory;
+    }
+    try ctx.stack.push(.{ .hash = new_hash });
+}
+
+/// >hash ( hash -- hash ) - Identity, no allocation
+fn nativeToHashHash(_: *Context) anyerror!void {}
+
+/// >hash ( container -- hash ) - Convert mutable-map or hash to an immutable hash
+fn nativeToHash(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ">hash")) return;
+    const val = try ctx.stack.pop();
+    setErrorContext(ctx, ">hash expected mutable-map, hash, struct, virtual, or enum, got {s}", .{valueTypeName(val)});
     return error.TypeMismatch;
 }
 

@@ -87,6 +87,7 @@ pub const registry_entries = [_]RegistryEntry{
 
     // Container conversion (unary)
     .{ .name = "dispatch>array", .func = makeUnaryNativeAccessEntry(">array") },
+    .{ .name = "dispatch>hash", .func = makeUnaryNativeAccessEntry(">hash") },
 
     // String (unary)
     .{ .name = "dispatchinspect", .func = makeUnaryNativeAccessEntry("inspect") },

@@ -1,0 +1,28 @@
+\ Integration tests for >hash container conversion
+
+use "testing" ;
+
+"mutable-map >hash" test-section
+M{ x: 1 y: 2 } >hash x: @get 1 "mutable-map to hash preserves x" assert=
+M{ x: 1 y: 2 } >hash y: @get 2 "mutable-map to hash preserves y" assert=
+M{ } >hash #len 0 "empty mutable-map to hash" assert=
+
+"hash >hash (identity)" test-section
+H{ a: 1 } >hash a: @get 1 "hash identity preserves value" assert=
+H{ } >hash #len 0 "empty hash identity" assert=
+
+"copy semantics" test-section
+\ Mutating the mutable-map after >hash should not affect the hash
+m: [ M{ a: 10 b: 20 } ] ;
+h: [ m >hash ] ;
+m c: 30 @set! drop
+h b: @get 20 "mutable-map >hash is a snapshot" assert=
+h c: @has? f "hash does not have key added after snapshot" assert=
+
+"struct >hash still works" test-section
+point: struct{ x y } ;
+1 2 make-point >hash x: @get 1 "struct >hash regression" assert=
+
+"error on unsupported type" test-section
+[ 42 >hash ] "fixnum >hash throws" assert-error
+[ "hello" >hash ] "string >hash throws" assert-error
