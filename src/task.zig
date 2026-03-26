@@ -39,9 +39,9 @@ pub fn taskEntryPoint() callconv(.c) void {
         if (task.ctx.thrown_error) |thrown| {
             task.error_obj = thrown;
             if (task.cancellation_phase != .none and std.mem.eql(u8, thrown.error_type, "task-cancelled")) {
-                task.status = .cancelled;
+                task.setStatus(.cancelled);
             } else {
-                task.status = .failed;
+                task.setStatus(.failed);
             }
         } else if (task.ctx.error_details.items.len > 0) {
             const detail = task.ctx.error_details.items[0];
@@ -49,9 +49,9 @@ pub fn taskEntryPoint() callconv(.c) void {
                 .error_type = detail.error_type,
                 .message = detail.message,
             };
-            task.status = .failed;
+            task.setStatus(.failed);
         } else {
-            task.status = .failed;
+            task.setStatus(.failed);
         }
         return;
     };
@@ -59,11 +59,11 @@ pub fn taskEntryPoint() callconv(.c) void {
     if (task.ctx.stack.depth() > 0) {
         task.result = task.ctx.stack.pop() catch null;
     }
-    task.status = .completed;
+    task.setStatus(.completed);
 }
 
 /// Status of a green thread task.
-pub const TaskStatus = enum {
+pub const TaskStatus = enum(u8) {
     pending,
     running,
     completed,
@@ -94,7 +94,7 @@ pub const CancellationPhase = enum {
 pub const Task = struct {
     id: u64,
     name: ?[]const u8,
-    status: TaskStatus,
+    status: std.atomic.Value(TaskStatus),
     result: ?Value = null,
     error_obj: ?ErrorObject = null,
     uctx: std.c.ucontext_t = undefined,
@@ -113,6 +113,14 @@ pub const Task = struct {
     peak_stack_usage: usize = 0,
     /// Task that is waiting for this task to complete (via await).
     awaiting_task: ?*Task = null,
+
+    pub inline fn getStatus(self: *const Task) TaskStatus {
+        return self.status.load(.acquire);
+    }
+
+    pub inline fn setStatus(self: *Task, s: TaskStatus) void {
+        self.status.store(s, .release);
+    }
 };
 
 /// TaskScope tracks children and completion for structured concurrency.
@@ -126,6 +134,10 @@ pub const TaskScope = struct {
     /// First child error, propagated to parent on scope exit.
     failed_error: ?ErrorObject = null,
     allocator: Allocator,
+    /// Atomic count of children that have not yet finished.
+    active_children: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// Atomic flag set when a child fails and sibling cancellation triggers.
+    cancellation_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub fn init(allocator: Allocator) TaskScope {
         return .{
@@ -143,17 +155,12 @@ pub const TaskScope = struct {
 
     pub fn addChild(self: *TaskScope, task: *Task) !void {
         try self.children.append(self.allocator, task);
+        _ = self.active_children.fetchAdd(1, .release);
     }
 
     /// Check if all children have finished (completed, failed, or cancelled).
     pub fn allChildrenDone(self: *const TaskScope) bool {
-        for (self.children.items) |child| {
-            switch (child.status) {
-                .completed, .failed, .cancelled => continue,
-                .pending, .running => return false,
-            }
-        }
-        return true;
+        return self.active_children.load(.acquire) == 0;
     }
 };
 
@@ -205,4 +212,49 @@ pub fn initTaskContext(task: *Task, entry_fn: *const fn () callconv(.c) void, sc
     task.uctx.link = scheduler_uctx;
 
     c.makecontext(&task.uctx, entry_fn, 0);
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+test "atomic status round-trip" {
+    var status = std.atomic.Value(TaskStatus).init(.pending);
+    try std.testing.expectEqual(TaskStatus.pending, status.load(.acquire));
+
+    status.store(.running, .release);
+    try std.testing.expectEqual(TaskStatus.running, status.load(.acquire));
+
+    status.store(.completed, .release);
+    try std.testing.expectEqual(TaskStatus.completed, status.load(.acquire));
+}
+
+test "active children counter and allChildrenDone" {
+    var scope = TaskScope.init(std.testing.allocator);
+    defer scope.deinit();
+
+    try std.testing.expect(scope.allChildrenDone());
+
+    // Simulate two children added
+    _ = scope.active_children.fetchAdd(1, .release);
+    _ = scope.active_children.fetchAdd(1, .release);
+    try std.testing.expect(!scope.allChildrenDone());
+
+    // First child finishes
+    _ = scope.active_children.fetchSub(1, .release);
+    try std.testing.expect(!scope.allChildrenDone());
+
+    // Second child finishes
+    _ = scope.active_children.fetchSub(1, .release);
+    try std.testing.expect(scope.allChildrenDone());
+}
+
+test "cancellation requested flag" {
+    var scope = TaskScope.init(std.testing.allocator);
+    defer scope.deinit();
+
+    try std.testing.expect(!scope.cancellation_requested.load(.acquire));
+
+    scope.cancellation_requested.store(true, .release);
+    try std.testing.expect(scope.cancellation_requested.load(.acquire));
 }

@@ -258,11 +258,11 @@ pub const Scheduler = struct {
                 //              For new tasks, the entry function reads and clears it.
                 //              For resumed tasks, the variable is ignored and overwritten on the next iteration.
                 task_mod.pending_entry_task = task;
-                task.status = .running;
+                task.setStatus(.running);
 
                 _ = task_mod.swapcontext(&self.scheduler_uctx, &task.uctx);
                 self.current_task = null;
-                switch (task.status) {
+                switch (task.getStatus()) {
                     .completed, .failed, .cancelled => {
                         self.handleTaskDone(task);
                         self.last_progress_ns = monotonicNowNs();
@@ -282,7 +282,7 @@ pub const Scheduler = struct {
             const has_io_waiters = self.io_wait_map.count() > 0;
             const has_blocked_tasks = blk: {
                 for (self.all_tasks.items) |task| {
-                    switch (task.status) {
+                    switch (task.getStatus()) {
                         .completed, .failed, .cancelled => continue,
                         .pending, .running => {},
                     }
@@ -341,7 +341,7 @@ pub const Scheduler = struct {
         var active_count: usize = 0;
         var runnable_count: usize = 0;
         for (self.all_tasks.items) |task| {
-            switch (task.status) {
+            switch (task.getStatus()) {
                 .completed, .failed, .cancelled => continue,
                 .pending, .running => {},
             }
@@ -365,7 +365,7 @@ pub const Scheduler = struct {
         var runnable_count: usize = 0;
         var active_count: usize = 0;
         for (self.all_tasks.items) |task| {
-            switch (task.status) {
+            switch (task.getStatus()) {
                 .completed, .failed, .cancelled => continue,
                 .pending, .running => {},
             }
@@ -378,7 +378,7 @@ pub const Scheduler = struct {
         tw.print("TASK-DUMP: {d} tasks, {d} runnable\n", .{ active_count, runnable_count });
 
         for (self.all_tasks.items) |task| {
-            switch (task.status) {
+            switch (task.getStatus()) {
                 .completed, .failed, .cancelled => continue,
                 .pending, .running => {},
             }
@@ -477,7 +477,7 @@ pub const Scheduler = struct {
     /// nested scope, we recursively cancel all children so the scope drains
     /// and the waiting task is eventually requeued by `handleTaskDone`.
     pub fn cancelTask(self: *Scheduler, task: *Task) void {
-        switch (task.status) {
+        switch (task.getStatus()) {
             .completed, .failed, .cancelled => return,
             .pending, .running => {},
         }
@@ -522,11 +522,13 @@ pub const Scheduler = struct {
     /// 3. If all children in the scope are done and the scope is being awaited, re-enqueue the scope waiter.
     /// 4. Track the finished task for resource cleanup in deinit.
     fn handleTaskDone(self: *Scheduler, task: *Task) void {
+        _ = task.scope.active_children.fetchSub(1, .release);
+
         if (task.awaiting_task) |awaiter| {
             self.run_queue.append(self.allocator, awaiter) catch {};
         }
 
-        if (task.status == .failed and task.scope.failed_error == null) {
+        if (task.getStatus() == .failed and task.scope.failed_error == null) {
             task.scope.failed_error = task.error_obj orelse .{
                 .error_type = "task-error",
                 .message = "task failed without error details",
@@ -540,6 +542,8 @@ pub const Scheduler = struct {
             //              is already running then it may not observe the cancellation until it yields
             //              back to the scheduler.
             //
+            task.scope.cancellation_requested.store(true, .release);
+
             // XXX(ripta): Be sure to skip the scope task since it's the coordinator and needs to observe
             //             the failure via await, but it may not be in the same scope if it's a nested scope.
             for (task.scope.children.items) |sibling| {

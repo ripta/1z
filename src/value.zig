@@ -617,16 +617,17 @@ pub const Value = union(enum) {
             .stack_effect => |effect| try effect.write(writer),
             .error_value => |err| try err.write(writer),
             .task => |t| {
+                const status = t.getStatus();
                 if (t.name) |name| {
                     try writer.print("<task #{d} ({s}) {s}>", .{
                         t.id,
                         name,
-                        @tagName(t.status),
+                        @tagName(status),
                     });
                 } else {
                     try writer.print("<task #{d} {s}>", .{
                         t.id,
-                        @tagName(t.status),
+                        @tagName(status),
                     });
                 }
             },

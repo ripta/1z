@@ -62,7 +62,7 @@ fn allocateTask(
     task.* = .{
         .id = scheduler.nextId(),
         .name = null,
-        .status = .pending,
+        .status = std.atomic.Value(task_mod.TaskStatus).init(.pending),
         .uctx = undefined,
         .stack_mem = stack_mem,
         .ctx = task_ctx,
@@ -332,7 +332,7 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     try helpers.checkCancellation(ctx);
 
     // inspect main task status to determine outcome
-    switch (main_task.status) {
+    switch (main_task.getStatus()) {
         .completed => {
             if (main_task.result) |result| {
                 const copied = try deepCopyValue(result, ctx.arena.allocator());
@@ -373,9 +373,9 @@ fn timerTaskEntryPoint() callconv(.c) void {
 
     task.ctx.executeQuotation(task.quotation) catch {
         if (task.cancellation_phase != .none) {
-            task.status = .cancelled;
+            task.setStatus(.cancelled);
         } else {
-            task.status = .failed;
+            task.setStatus(.failed);
         }
         if (task.ctx.thrown_error) |thrown| {
             task.error_obj = thrown;
@@ -386,7 +386,7 @@ fn timerTaskEntryPoint() callconv(.c) void {
     // Sleep completed normally, meaning the timeout fired before the main task
     // finished. Mark the timer as failed with a timeout error to trigger sibling
     // cancellation of the main task.
-    task.status = .failed;
+    task.setStatus(.failed);
     task.error_obj = .{
         .error_type = "timeout",
         .message = "operation timed out",
@@ -431,7 +431,7 @@ fn nativeAwait(ctx: *Context) anyerror!void {
         return error.InvalidState;
     };
 
-    switch (task.status) {
+    switch (task.getStatus()) {
         .pending, .running => {
             task.awaiting_task = current;
             scheduler.suspendCurrentTask();
@@ -494,7 +494,7 @@ fn nativeAwaitAll(ctx: *Context) anyerror!void {
     // reënqueue when the awaited task completes.
     for (tasks) |item| {
         const task = item.task;
-        switch (task.status) {
+        switch (task.getStatus()) {
             .pending, .running => {
                 task.awaiting_task = current;
                 scheduler.suspendCurrentTask();
@@ -507,7 +507,7 @@ fn nativeAwaitAll(ctx: *Context) anyerror!void {
 
     for (tasks) |item| {
         const task = item.task;
-        switch (task.status) {
+        switch (task.getStatus()) {
             .failed => {
                 if (task.error_obj) |err_obj| {
                     ctx.thrown_error = err_obj;
@@ -551,7 +551,7 @@ fn nativeAwaitAll(ctx: *Context) anyerror!void {
 /// Extract the result from a finished task: deep-copy completed results into the
 /// caller's allocator, re-throw failures, and report cancellations.
 fn handleAwaitResult(ctx: *Context, task: *Task) anyerror!void {
-    switch (task.status) {
+    switch (task.getStatus()) {
         .completed => {
             if (task.result) |result| {
                 const copied = try deepCopyValue(result, ctx.arena.allocator());

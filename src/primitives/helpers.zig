@@ -442,7 +442,25 @@ pub fn checkCancellation(ctx: *Context) error{UserThrown}!void {
     const scheduler = ctx.scheduler orelse return;
     const current = scheduler.current_task orelse return;
 
+    // Task-level cancellation: if this task was individually cancelled,
+    // it should observe said cancellation as soon as it reaches a yield
+    // point and unwind immediately.
     if (current.cancellation_phase == .pending) {
+        current.cancellation_phase = .unwinding;
+        ctx.thrown_error = .{
+            .error_type = "task-cancelled",
+            .message = "task was cancelled",
+        };
+        return error.UserThrown;
+    }
+
+    // Scope-level cancellation: if a sibling failed and the scope flagged
+    // cancellation, tasks that yield can observe it without waiting for the
+    // scheduler to individually cancelTask each sibling.
+    if (current.cancellation_phase == .none and
+        current.scope.cancellation_requested.load(.acquire) and
+        current != (current.scope.scope_task orelse current))
+    {
         current.cancellation_phase = .unwinding;
         ctx.thrown_error = .{
             .error_type = "task-cancelled",
