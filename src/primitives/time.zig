@@ -110,8 +110,12 @@ fn nativeTzDecompose(ctx: *Context) anyerror!void {
 
         tz_zone_str = try alloc.dupe(u8, std.mem.sliceTo(result.tm_zone, 0));
     } else {
+        ctx.lock_order_tracker.acquire(.tz);
         tz_mutex.lock();
-        defer tz_mutex.unlock();
+        defer {
+            tz_mutex.unlock();
+            ctx.lock_order_tracker.release(.tz);
+        }
 
         const old_tz = c.getenv("TZ");
 
