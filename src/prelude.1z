@@ -21,10 +21,10 @@ M{: parse-time [ "}" parse-until make-mutable-map ] ;
 
 \ Struct definition syntax, produces a struct descriptor
 struct{: parse-time [
-  parse-struct-fields           \ -- ...fields
-  M{ type: struct-descriptor: } \ -- ...fields mmap
-  swap                          \ -- mmap fields-array
-  fields: swap @set!            \ -- mmap (with fields set)
+  parse-struct-fields                   \ -- ...fields
+  M{ type: struct-descriptor: }         \ -- ...fields mmap
+  swap                                  \ -- mmap fields-array
+  fields: swap @set!                    \ -- mmap (with fields set)
   [ define-struct ] define: swap @set!  \ -- mmap (with define set)
 ] ;
 

@@ -15,8 +15,8 @@ range-loop: [
 range: ( start end -- array ) [
   2dup <
   [
-    { } -rot>      \ arr start end
-    range-loop     \ arr
+    { } -rot>   \ arr start end
+    range-loop  \ arr
   ]
   [ 2drop { } ]
   if
