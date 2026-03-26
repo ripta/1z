@@ -136,6 +136,60 @@ fn printParseDiagnostics(ctx: *Context, writer: anytype, source: []const u8, lin
     ctx.parse_diagnostics = null;
 }
 
+fn printUsage() void {
+    const stdout_file: File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writer(&stdout_buf);
+    const w = &stdout.interface;
+
+    w.writeAll(
+        \\Usage: 1z [options] [file] [args...]
+        \\       1z fmt [files...]
+        \\
+        \\General:
+        \\  -h, --help              Show this help and exit
+        \\  -q, --quiet             Suppress REPL banner
+        \\  -qq, --silent           Suppress banner, prompts, stack, and goodbye
+        \\  --show-stack            Print the stack after execution
+        \\  --max-memory=SIZE       Set memory limit (e.g. 128M, 1G; default 256M)
+        \\  --load-path=PATH        Add a module search path (repeatable)
+        \\  --stdlib-path=PATH      Override standard library path
+        \\  --prelude=PATH          Override prelude file path
+        \\
+        \\Debugging:
+        \\  --debug                 Start in interactive debugger
+        \\  --break=WORD            Set a breakpoint on WORD (implies --debug)
+        \\  --check                 Run static analysis without executing
+        \\  --allow-all-recursion   Suppress non-tail recursion warnings
+        \\
+        \\Tracing:
+        \\  --trace-words[=PAT]     Trace word execution (optional pattern filter)
+        \\  --trace-resolve[=PAT]   Trace word resolution (optional pattern filter)
+        \\  --trace-modules         Trace module loading
+        \\  --trace-jit             Trace JIT compilation
+        \\  --dump-scope=WORD       Dump scope after loading WORD
+        \\
+        \\Scheduling:
+        \\  --deadlock-detect[=SECS]  Enable deadlock detection (default 5s)
+        \\  --test-timeout=SECS     Set test timeout in seconds
+        \\
+        \\Compilation:
+        \\  --compile=MODE          Set compile mode: off, eager, hybrid
+        \\
+        \\Benchmarking:
+        \\  -b, --benchmark         Enable benchmarking
+        \\  --benchmark=verbose     Benchmark with human-readable output
+        \\  --benchmark=json        Benchmark with JSON output
+        \\
+        \\Environment variables:
+        \\  ONEZ_MAX_MEMORY         Default memory limit (overridden by --max-memory)
+        \\  ONEZ_COMPILE            Default compile mode (overridden by --compile)
+        \\  ONEZ_PRELUDE            Default prelude path (overridden by --prelude)
+        \\
+    ) catch {};
+    w.flush() catch {};
+}
+
 pub fn main() u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -144,6 +198,14 @@ pub fn main() u8 {
     // Use GPA for initial arg parsing
     const args = std.process.argsAlloc(gpa_allocator) catch return 1;
     defer std.process.argsFree(gpa_allocator, args);
+
+    // Check for --help/-h before anything else
+    for (args[1..]) |arg| {
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            printUsage();
+            return 0;
+        }
+    }
 
     // Check for fmt subcommand first
     if (args.len > 1 and std.mem.eql(u8, args[1], "fmt")) {
