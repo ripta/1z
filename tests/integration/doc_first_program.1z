@@ -1,0 +1,66 @@
+\ Test all code examples from docs/getting-started/first-program.md
+
+\ === Hello World ===
+"Hello, world!" print-line
+
+\ === Stack Basics ===
+3 4 + .
+10 3 - .
+6 7 * .
+
+5 dup + .
+1 2 3 drop + .
+1 2 swap - .
+
+\ === Defining Words ===
+square: [ dup * ] ;
+5 square .
+9 square .
+
+cube: ( n -- n ) [ dup dup * * ] ;
+3 cube .
+
+\ === Booleans and Comparisons ===
+5 3 > .
+5 10 > .
+5 5 = .
+3 7 < .
+
+\ === Quotations and Control Flow ===
+[ 1 2 + ] call .
+
+5 3 > [ "yes" ] [ "no" ] if print-line
+
+t [ "this runs" print-line ] when
+f [ "this runs too" print-line ] unless
+
+\ === Loops ===
+5 [ "hello" print-line ] times
+
+{ 10 20 30 } [ . ] #each
+
+\ === Strings ===
+"hello" #len .
+"hello" " world" #append print-line
+
+\ === Arrays ===
+{ 1 2 3 } .
+
+{ 10 20 30 } 0 #nth .
+{ 10 20 30 } #len .
+
+{ 1 2 3 4 5 } [ 2 * ] #map #collect .
+{ 1 2 3 4 5 } [ 3 > ] #filter #collect .
+
+\ === Hashes ===
+H{ name: "Alice" age: 30 } .
+
+H{ name: "Alice" age: 30 } name: @get print-line
+H{ name: "Alice" } age: 30 @set .
+H{ x: 1 y: 2 } @keys .
+
+\ === Comments ===
+\ This is a comment.
+42 .  \ This prints 42.
+\\ Double a number by adding it to itself.
+double: ( n -- n ) [ dup + ] ;
