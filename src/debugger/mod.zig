@@ -5,3 +5,5 @@ pub const DisplayRenderer = @import("display.zig").DisplayRenderer;
 pub const CommandDispatcher = @import("commands.zig").CommandDispatcher;
 pub const CommandResult = @import("commands.zig").CommandResult;
 pub const Inspector = @import("inspector.zig").Inspector;
+pub const BreakpointManager = @import("breakpoints.zig").BreakpointManager;
+pub const Breakpoint = @import("breakpoints.zig").Breakpoint;

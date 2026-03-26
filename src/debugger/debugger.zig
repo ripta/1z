@@ -11,6 +11,7 @@ const Stepper = @import("stepper.zig").Stepper;
 const DisplayRenderer = @import("display.zig").DisplayRenderer;
 const CommandDispatcher = @import("commands.zig").CommandDispatcher;
 const CommandResult = @import("commands.zig").CommandResult;
+const BreakpointManager = @import("breakpoints.zig").BreakpointManager;
 
 pub const DebuggerQuit = error{
     DebuggerQuit,
@@ -21,6 +22,7 @@ pub const Debugger = struct {
     stepper: Stepper,
     display: DisplayRenderer,
     commands: CommandDispatcher,
+    breakpoints: BreakpointManager,
     editor: LineEditor,
     allocator: Allocator,
     /// The last stepping command issued, for empty-line repeat.
@@ -32,6 +34,7 @@ pub const Debugger = struct {
             .stepper = .{},
             .display = .{},
             .commands = .{},
+            .breakpoints = BreakpointManager.init(allocator),
             .editor = try LineEditor.init(allocator),
             .allocator = allocator,
             .last_step_mode = .step_into,
@@ -39,17 +42,27 @@ pub const Debugger = struct {
     }
 
     pub fn deinit(self: *Debugger) void {
+        self.breakpoints.deinit();
         self.editor.deinit();
     }
 
     /// Check whether the debugger should pause before this instruction.
     pub fn shouldPause(self: *Debugger, instr: Instruction, ctx: *Context) !bool {
-        _ = instr;
         return switch (self.stepper.mode) {
             .step_into => true,
-            .continue_running => false,
+            .continue_running => blk: {
+                if (self.breakpoints.check(instr, ctx) != null) {
+                    self.stepper.mode = .step_into;
+                    break :blk true;
+                }
+                break :blk false;
+            },
             .step_over => blk: {
                 if (ctx.call_stack.items.len <= self.stepper.target_depth) {
+                    self.stepper.mode = .step_into;
+                    break :blk true;
+                }
+                if (self.breakpoints.check(instr, ctx) != null) {
                     self.stepper.mode = .step_into;
                     break :blk true;
                 }
@@ -57,6 +70,10 @@ pub const Debugger = struct {
             },
             .step_finish => blk: {
                 if (ctx.call_stack.items.len < self.stepper.target_depth) {
+                    self.stepper.mode = .step_into;
+                    break :blk true;
+                }
+                if (self.breakpoints.check(instr, ctx) != null) {
                     self.stepper.mode = .step_into;
                     break :blk true;
                 }
@@ -107,7 +124,7 @@ pub const Debugger = struct {
                 return;
             }
 
-            const result = try self.commands.dispatch(trimmed, &self.stepper, ctx, writer);
+            const result = try self.commands.dispatch(trimmed, &self.stepper, &self.breakpoints, ctx, writer);
             try writer.flush();
 
             switch (result) {

@@ -89,6 +89,8 @@ pub fn main() u8 {
 
     var cli_stdlib_path: ?[]const u8 = null;
     var debug_mode = false;
+    var initial_breakpoints: [16][]const u8 = undefined;
+    var initial_breakpoint_count: usize = 0;
 
     // TODO(ripta): bit hacky arg parsing, improve later?
     for (args[1..]) |arg| {
@@ -126,6 +128,13 @@ pub fn main() u8 {
             cli_stdlib_path = arg["--stdlib-path=".len..];
         } else if (std.mem.eql(u8, arg, "--debug")) {
             debug_mode = true;
+        } else if (std.mem.startsWith(u8, arg, "--break=")) {
+            debug_mode = true;
+            const word = arg["--break=".len..];
+            if (initial_breakpoint_count < 16) {
+                initial_breakpoints[initial_breakpoint_count] = word;
+                initial_breakpoint_count += 1;
+            }
         } else {
             file_path = arg;
         }
@@ -212,6 +221,13 @@ pub fn main() u8 {
 
     if (dbg != null) {
         ctx.debugger = &dbg.?;
+        for (initial_breakpoints[0..initial_breakpoint_count]) |bp| {
+            _ = dbg.?.breakpoints.addWord(bp);
+        }
+        if (initial_breakpoint_count > 0) {
+            // Start in continue mode so execution runs until a breakpoint hits
+            dbg.?.stepper.mode = .continue_running;
+        }
     }
 
     // If a file path is provided, run in batch mode, which executes the file

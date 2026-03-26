@@ -1,6 +1,7 @@
 const std = @import("std");
 const Stepper = @import("stepper.zig").Stepper;
 const Inspector = @import("inspector.zig").Inspector;
+const BreakpointManager = @import("breakpoints.zig").BreakpointManager;
 const context_mod = @import("../context.zig");
 const Context = context_mod.Context;
 
@@ -17,7 +18,7 @@ pub const CommandResult = enum {
 /// CommandDispatcher handles parsing and executing debugger commands.
 pub const CommandDispatcher = struct {
     /// Dispatch a command line. Returns the action to take.
-    pub fn dispatch(self: *CommandDispatcher, line: []const u8, stepper: *Stepper, ctx: *Context, writer: anytype) !CommandResult {
+    pub fn dispatch(self: *CommandDispatcher, line: []const u8, stepper: *Stepper, breakpoints: *BreakpointManager, ctx: *Context, writer: anytype) !CommandResult {
         _ = self;
         const trimmed = std.mem.trim(u8, line, " \t\r\n");
 
@@ -100,6 +101,86 @@ pub const CommandDispatcher = struct {
             return .stay;
         }
 
+        if (std.mem.eql(u8, cmd, "b") or std.mem.eql(u8, cmd, "break")) {
+            if (arg) |bp_arg| {
+                // If arg contains ':' and the part after parses as a number, treat as source:line
+                if (parseSourceLocation(bp_arg)) |loc| {
+                    const id = breakpoints.addSourceLocation(loc.source, loc.line);
+                    if (id > 0) {
+                        try writer.print("Breakpoint {d} set at {s}:{d}\n", .{ id, loc.source, loc.line });
+                    } else {
+                        try writer.writeAll("Failed to set breakpoint\n");
+                    }
+                } else {
+                    const id = breakpoints.addWord(bp_arg);
+                    if (id > 0) {
+                        try writer.print("Breakpoint {d} set on word '{s}'\n", .{ id, bp_arg });
+                    } else {
+                        try writer.writeAll("Failed to set breakpoint\n");
+                    }
+                }
+            } else {
+                try writer.writeAll("Usage: break <word> or break <file>:<line>\n");
+            }
+            return .stay;
+        }
+
+        if (std.mem.eql(u8, cmd, "bl") or std.mem.eql(u8, cmd, "breakpoints")) {
+            try breakpoints.list(writer);
+            return .stay;
+        }
+
+        if (std.mem.eql(u8, cmd, "en") or std.mem.eql(u8, cmd, "enable")) {
+            if (arg) |id_str| {
+                if (std.fmt.parseInt(u32, id_str, 10)) |id| {
+                    if (breakpoints.enable(id)) {
+                        try writer.print("Breakpoint {d} enabled\n", .{id});
+                    } else {
+                        try writer.print("Breakpoint {d} not found\n", .{id});
+                    }
+                } else |_| {
+                    try writer.writeAll("Usage: enable <id>\n");
+                }
+            } else {
+                try writer.writeAll("Usage: enable <id>\n");
+            }
+            return .stay;
+        }
+
+        if (std.mem.eql(u8, cmd, "dis") or std.mem.eql(u8, cmd, "disable")) {
+            if (arg) |id_str| {
+                if (std.fmt.parseInt(u32, id_str, 10)) |id| {
+                    if (breakpoints.disable(id)) {
+                        try writer.print("Breakpoint {d} disabled\n", .{id});
+                    } else {
+                        try writer.print("Breakpoint {d} not found\n", .{id});
+                    }
+                } else |_| {
+                    try writer.writeAll("Usage: disable <id>\n");
+                }
+            } else {
+                try writer.writeAll("Usage: disable <id>\n");
+            }
+            return .stay;
+        }
+
+        if (std.mem.eql(u8, cmd, "del") or std.mem.eql(u8, cmd, "delete")) {
+            if (arg) |id_str| {
+                if (std.fmt.parseInt(u32, id_str, 10)) |id| {
+                    if (breakpoints.delete(id)) {
+                        try writer.print("Breakpoint {d} deleted\n", .{id});
+                    } else {
+                        try writer.print("Breakpoint {d} not found\n", .{id});
+                    }
+                } else |_| {
+                    try writer.writeAll("Usage: delete <id>\n");
+                }
+            } else {
+                try writer.writeAll("Usage: delete <id>\n");
+            }
+            return .stay;
+        }
+
         if (std.mem.eql(u8, cmd, "h") or std.mem.eql(u8, cmd, "help")) {
             try printHelp(writer);
             return .stay;
@@ -121,6 +202,15 @@ pub const CommandDispatcher = struct {
         return .{ line, null };
     }
 
+    /// Try to parse "source:line" from a string. Returns null if not a valid source location.
+    fn parseSourceLocation(arg: []const u8) ?struct { source: []const u8, line: usize } {
+        const colon_idx = std.mem.lastIndexOfScalar(u8, arg, ':') orelse return null;
+        if (colon_idx == 0 or colon_idx == arg.len - 1) return null;
+        const line_str = arg[colon_idx + 1 ..];
+        const line = std.fmt.parseInt(usize, line_str, 10) catch return null;
+        return .{ .source = arg[0..colon_idx], .line = line };
+    }
+
     fn printHelp(writer: anytype) !void {
         try writer.writeAll(
             \\Commands:
@@ -137,7 +227,12 @@ pub const CommandDispatcher = struct {
             \\  params        Show parameter bindings
             \\  dict <name>   Inspect a dictionary entry
             \\  module <name> List exports of a loaded module
-            \\  h, help       Show this help
+            \\  b, break <w>       Set breakpoint on word or file:line
+            \\  bl, breakpoints    List all breakpoints
+            \\  en, enable <id>    Enable a breakpoint
+            \\  dis, disable <id>  Disable a breakpoint
+            \\  del, delete <id>   Delete a breakpoint
+            \\  h, help            Show this help
             \\
             \\Press Enter on an empty line to repeat the last stepping command.
             \\
