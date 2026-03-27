@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
 const Value = value_mod.Value;
+const VirtualType = value_mod.VirtualType;
 
 const ir_mod = @import("ffi/ir.zig");
 const JitBuffer = ir_mod.JitBuffer;
@@ -42,13 +43,21 @@ fn isSupportedOp(name: []const u8) bool {
     for (supported_comparison_ops) |op| {
         if (std.mem.eql(u8, name, op)) return true;
     }
+
+    // HACK(ripta): include some non-primitive ops as "supported" so they can be compiled with the same fast path
+    //              as primitives instead of going through dynamic dispatch
     if (std.mem.eql(u8, name, "if")) return true;
     if (std.mem.eql(u8, name, "call")) return true;
     if (std.mem.eql(u8, name, "t") or std.mem.eql(u8, name, "f")) return true;
+
     if (isLoopOp(name)) return true;
     if (isErrorHandlingOp(name)) return true;
     if (isDynamicVarOp(name)) return true;
     if (isIteratorOp(name)) return true;
+
+    // HACK(ripta): not technically native, but treat virtual-unwrap as a hardcoded intrinsic in the IR for simplicity
+    if (std.mem.eql(u8, name, "native.virtual-unwrap")) return true;
+
     return false;
 }
 
@@ -155,6 +164,7 @@ const ValueLayout = struct {
     const tag_size: usize = @sizeOf(TagType);
     const fixnum_tag: u8 = @intFromEnum(@as(TagType, .fixnum));
     const quotation_tag: u8 = @intFromEnum(@as(TagType, .quotation));
+    const tagged_tag: u8 = @intFromEnum(@as(TagType, .tagged));
 
     const ir_tag_type: c_uint = switch (tag_size) {
         1 => c.IR_U8,
@@ -191,6 +201,8 @@ const ValueLayout = struct {
     var tag_offset: usize = 0;
     var slice_len_offset: usize = 0;
     var quotation_code_ptr_offset: usize = 0;
+    var tagged_tag_ptr_offset: usize = 0;
+    var tagged_inner_ptr_offset: usize = 0;
     var initialized: bool = false;
 
     fn ensureInit() void {
@@ -247,6 +259,34 @@ const ValueLayout = struct {
             }
         }
         std.debug.assert(found_code_ptr);
+
+        // tag and inner pointer offsets within the `tagged` variant's double-indirection
+        const tag_sentinel_addr: usize = 0xDEAD_BEEF_CAFE_0010;
+        const inner_sentinel_addr: usize = 0xDEAD_BEEF_CAFE_0020;
+
+        var tv: Value = .{ .tagged = .{
+            .tag = @ptrFromInt(tag_sentinel_addr),
+            .inner = @ptrFromInt(inner_sentinel_addr),
+        } };
+
+        const tv_bytes: [*]const u8 = @ptrCast(&tv);
+        var found_tag_ptr = false;
+        var found_inner_ptr = false;
+        for (0..@sizeOf(Value) - @sizeOf(usize) + 1) |offset| {
+            const ptr_at: *align(1) const usize = @ptrCast(tv_bytes + offset);
+            if (!found_tag_ptr and ptr_at.* == tag_sentinel_addr) {
+                tagged_tag_ptr_offset = offset;
+                found_tag_ptr = true;
+            } else if (!found_inner_ptr and ptr_at.* == inner_sentinel_addr) {
+                tagged_inner_ptr_offset = offset;
+                found_inner_ptr = true;
+            }
+
+            if (found_tag_ptr and found_inner_ptr) break;
+        }
+
+        std.debug.assert(found_tag_ptr);
+        std.debug.assert(found_inner_ptr);
 
         initialized = true;
     }
@@ -486,6 +526,28 @@ fn emitSwapSlots(ctx: *c.ir_ctx, base_addr: c.ir_ref, slot_a: usize, slot_b: usi
     }
 }
 
+/// Copy a full Value's raw bytes from a runtime pointer into a physical stack slot.
+fn emitCopyFromPtr(ctx: *c.ir_ctx, base_addr: c.ir_ref, src_ptr: c.ir_ref, dest_slot: usize) void {
+    const num_words = ValueLayout.value_size / 8;
+    var i: usize = 0;
+    while (i < num_words) : (i += 1) {
+        const offset = i * 8;
+        const src_addr = if (offset == 0) src_ptr else c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), src_ptr, c.ir_const_addr(ctx, offset));
+        const word_val = c._ir_LOAD(ctx, c.IR_U64, src_addr);
+        const dest_off = dest_slot * ValueLayout.value_size + offset;
+        const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, dest_off));
+        c._ir_STORE(ctx, dest_addr, word_val);
+    }
+    var offset = num_words * 8;
+    while (offset < ValueLayout.value_size) : (offset += 1) {
+        const src_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), src_ptr, c.ir_const_addr(ctx, offset));
+        const byte_val = c._ir_LOAD(ctx, c.IR_U8, src_addr);
+        const dest_off = dest_slot * ValueLayout.value_size + offset;
+        const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, dest_off));
+        c._ir_STORE(ctx, dest_addr, byte_val);
+    }
+}
+
 /// Symbolic stack entry: tracks the IR representation of each value on the
 /// abstract compilation stack.
 const StackEntry = union(enum) {
@@ -514,6 +576,7 @@ const CompileState = struct {
     fixnum_tag_const: c.ir_ref,
     float_tag_const: c.ir_ref,
     boolean_tag_const: c.ir_ref,
+    tagged_tag_const: c.ir_ref,
     bail_status: c.ir_ref,
     ok_status: c.ir_ref,
     items_ptr: c.ir_ref,
@@ -840,6 +903,57 @@ fn compilePredBodyLoop(
 
     c._ir_IF_FALSE(ctx, if_continue);
     resetStackToPhysical(stack, sp.*);
+}
+
+/// Try to emit inline IR for virtual type unwrapping.
+/// Recognizes the pattern: push_literal(fixnum=vtypePtr) + call_word("native.virtual-unwrap").
+/// Returns true if inlined; false to fall back to runtime callback.
+fn tryEmitInlineVirtualUnwrap(
+    state: *CompileState,
+    instructions: []const Instruction,
+    idx: usize,
+    stack: *[64]StackEntry,
+    sp: *usize,
+) bool {
+    if (sp.* < 2) return false;
+
+    // virtual type pointer must be a constant fixnum from the preceding instruction
+    const vtype_fixnum: i64 = if (idx > 0) blk: {
+        break :blk switch (instructions[idx - 1].op) {
+            .push_literal => |v| if (v == .fixnum) v.fixnum else return false,
+            else => return false,
+        };
+    } else return false;
+
+    const value_slot: usize = switch (stack[sp.* - 2]) {
+        .raw_at_slot => |s| s,
+        else => return false,
+    };
+
+    sp.* -= 2;
+
+    const ctx = state.ctx;
+    const base_addr = state.base_addr;
+
+    const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, value_slot * ValueLayout.value_size));
+    emitTagCheck(ctx, elem_addr, state.tagged_tag_const, state.tag_offset_const, state.bail_status);
+
+    const tag_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, c.ir_const_addr(ctx, ValueLayout.tagged_tag_ptr_offset));
+    const actual_vtype = c._ir_LOAD(ctx, c.IR_ADDR, tag_ptr_addr);
+    const expected_vtype = c.ir_const_addr(ctx, @as(usize, @intCast(vtype_fixnum)));
+    const vtype_mismatch = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), actual_vtype, expected_vtype);
+    const if_mismatch = c._ir_IF(ctx, vtype_mismatch);
+    c._ir_IF_TRUE_cold(ctx, if_mismatch);
+    c._ir_RETURN(ctx, state.bail_status);
+    c._ir_IF_FALSE(ctx, if_mismatch);
+
+    const inner_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, c.ir_const_addr(ctx, ValueLayout.tagged_inner_ptr_offset));
+    const inner_ptr = c._ir_LOAD(ctx, c.IR_ADDR, inner_ptr_addr);
+    emitCopyFromPtr(ctx, base_addr, inner_ptr, value_slot);
+
+    stack[sp.*] = .{ .raw_at_slot = value_slot };
+    sp.* += 1;
+    return true;
 }
 
 /// Compile a sequence of instructions, updating the abstract stack.
@@ -1459,6 +1573,33 @@ fn compileInstructions(
                     // (unreachable, but keeps state consistent)
                     sp.* = ic;
                     resetStackToPhysical(stack, sp.*);
+                } else if (std.mem.eql(u8, name, "native.virtual-unwrap")) {
+                    // fallthrough to resolver for runtime callback
+                    if (tryEmitInlineVirtualUnwrap(state, instructions, idx, stack, sp)) continue;
+
+                    const res = state.resolver orelse return IrCodegenError.NotCompilable;
+                    const resolved = res.resolve(name, res.user_data) orelse return IrCodegenError.NotCompilable;
+
+                    if (resolved.native_fn_ptr) |fn_ptr| {
+                        if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
+
+                        materializeQuotations(state, stack, sp.*);
+                        flushToPhysicalStack(state, stack, sp.*);
+                        const ctx_val = emitCallbackPreamble(state, sp.*);
+
+                        if (resolved.stack_effect_ptr) |eff_ptr| {
+                            emitParamValidation(state, eff_ptr);
+                        }
+
+                        const fn_ptr_const = c.ir_const_addr(ctx, fn_ptr);
+                        const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.native_call_fn, ctx_val, fn_ptr_const);
+                        emitCallbackPostCheck(state, call_result, call_result);
+
+                        sp.* = sp.* - resolved.input_count + resolved.output_count;
+                        resetStackToPhysical(stack, sp.*);
+                    } else {
+                        return IrCodegenError.NotCompilable;
+                    }
                 } else {
                     // Unrecognized word: try dispatch table call if a resolver is available
                     const res = state.resolver orelse return IrCodegenError.NotCompilable;
@@ -1836,6 +1977,7 @@ pub fn compileWord(
     const fixnum_tag_const = emitTagConst(&ctx, .fixnum);
     const float_tag_const = emitTagConst(&ctx, .float);
     const boolean_tag_const = emitTagConst(&ctx, .boolean);
+    const tagged_tag_const = emitTagConst(&ctx, .tagged);
 
     // Precompute the base address for output writes:
     // base_addr = items_ptr + (sp_val - input_count) * value_size
@@ -1861,6 +2003,7 @@ pub fn compileWord(
         .fixnum_tag_const = fixnum_tag_const,
         .float_tag_const = float_tag_const,
         .boolean_tag_const = boolean_tag_const,
+        .tagged_tag_const = tagged_tag_const,
         .bail_status = bail_status,
         .ok_status = ok_status,
         .items_ptr = items_ptr,
@@ -3371,4 +3514,114 @@ test "% with float operand bails" {
         .{ .op = .{ .call_word = "%" }, .line = 3 },
     };
     try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 0, 1, null, null, null));
+}
+
+test "compile inline virtual-unwrap" {
+    var vtype = VirtualType{ .name = "test-vt", .inner_type = "fixnum" };
+    var inner_val = Value{ .fixnum = 42 };
+    const tagged_val = Value{ .tagged = .{ .tag = &vtype, .inner = &inner_val } };
+    const vtype_ptr: i64 = @intCast(@intFromPtr(&vtype));
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = tagged_val }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = vtype_ptr } }, .line = 2 },
+        .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 3 },
+    };
+
+    const result = try compileWord(&instrs, 0, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 42), values[0].fixnum);
+}
+
+test "inline virtual-unwrap bails on wrong vtype" {
+    var vtype_a = VirtualType{ .name = "type-a", .inner_type = "fixnum" };
+    var vtype_b = VirtualType{ .name = "type-b", .inner_type = "fixnum" };
+    var inner_val = Value{ .fixnum = 99 };
+    const tagged_val = Value{ .tagged = .{ .tag = &vtype_a, .inner = &inner_val } };
+    const vtype_b_ptr: i64 = @intCast(@intFromPtr(&vtype_b));
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = tagged_val }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = vtype_b_ptr } }, .line = 2 },
+        .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 3 },
+    };
+
+    const result = try compileWord(&instrs, 0, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 1), callCompiledValues(func, &values, &sp));
+}
+
+test "inline virtual-unwrap bails on non-tagged value" {
+    var vtype = VirtualType{ .name = "test-vt", .inner_type = "fixnum" };
+    const vtype_ptr: i64 = @intCast(@intFromPtr(&vtype));
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = vtype_ptr } }, .line = 1 },
+        .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 2 },
+    };
+
+    const result = try compileWord(&instrs, 1, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values = [_]Value{ .{ .fixnum = 123 }, .unit, .unit, .unit };
+    var sp: usize = 1;
+    try testing.expectEqual(@as(i32, 1), callCompiledValues(func, &values, &sp));
+}
+
+test "inline virtual-unwrap on input parameter" {
+    var vtype = VirtualType{ .name = "test-vt", .inner_type = "fixnum" };
+    var inner_val = Value{ .fixnum = 77 };
+    const vtype_ptr: i64 = @intCast(@intFromPtr(&vtype));
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = vtype_ptr } }, .line = 1 },
+        .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 2 },
+    };
+
+    const result = try compileWord(&instrs, 1, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values = [_]Value{ .{ .tagged = .{ .tag = &vtype, .inner = &inner_val } }, .unit, .unit, .unit };
+    var sp: usize = 1;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 77), values[0].fixnum);
+}
+
+test "inline virtual-unwrap then arithmetic" {
+    var vtype = VirtualType{ .name = "test-vt", .inner_type = "fixnum" };
+    var inner_val = Value{ .fixnum = 10 };
+    const vtype_ptr: i64 = @intCast(@intFromPtr(&vtype));
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = vtype_ptr } }, .line = 1 },
+        .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 5 } }, .line = 3 },
+        .{ .op = .{ .call_word = "+" }, .line = 4 },
+    };
+
+    const result = try compileWord(&instrs, 1, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values = [_]Value{ .{ .tagged = .{ .tag = &vtype, .inner = &inner_val } }, .unit, .unit, .unit };
+    var sp: usize = 1;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 15), values[0].fixnum);
 }
