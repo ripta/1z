@@ -7,6 +7,7 @@ const Value = value_mod.Value;
 const VirtualType = value_mod.VirtualType;
 const StructInstance = value_mod.StructInstance;
 const StructType = value_mod.StructType;
+const TypeValue = value_mod.TypeValue;
 
 const ir_mod = @import("ffi/ir.zig");
 const JitBuffer = ir_mod.JitBuffer;
@@ -61,6 +62,7 @@ fn isSupportedOp(name: []const u8) bool {
     //              instrinsics so they can be compiled with the same fast path instead of dynamic dispatch
     if (std.mem.eql(u8, name, "native.virtual-unwrap")) return true;
     if (std.mem.eql(u8, name, "native.struct-field-get")) return true;
+    if (std.mem.eql(u8, name, "native.typed-validate-and-promote")) return true;
 
     return false;
 }
@@ -372,6 +374,28 @@ fn emitTagConst(ctx: *c.ir_ctx, tag: ValueLayout.TagType) c.ir_ref {
         4 => c.ir_const_u32(ctx, tag_int),
         else => unreachable,
     };
+}
+
+/// Map a type name string to an IR tag constant for the corresponding Value variant.
+/// Returns null for types that need pointer comparison (virtual types, struct types).
+fn mapTypeNameToTagConst(state: *CompileState, name: []const u8) ?c.ir_ref {
+    const ctx = state.ctx;
+
+    if (std.mem.eql(u8, name, "fixnum")) return state.fixnum_tag_const;
+    if (std.mem.eql(u8, name, "float")) return state.float_tag_const;
+    if (std.mem.eql(u8, name, "boolean")) return state.boolean_tag_const;
+    if (std.mem.eql(u8, name, "string")) return emitTagConst(ctx, .string);
+    if (std.mem.eql(u8, name, "symbol")) return emitTagConst(ctx, .symbol);
+    if (std.mem.eql(u8, name, "array")) return emitTagConst(ctx, .array);
+    if (std.mem.eql(u8, name, "quotation")) return emitTagConst(ctx, .quotation);
+    if (std.mem.eql(u8, name, "hash")) return emitTagConst(ctx, .hash);
+    if (std.mem.eql(u8, name, "vector")) return emitTagConst(ctx, .vector);
+    if (std.mem.eql(u8, name, "byte-array")) return emitTagConst(ctx, .byte_array);
+    if (std.mem.eql(u8, name, "set")) return emitTagConst(ctx, .set);
+    if (std.mem.eql(u8, name, "mutable-map")) return emitTagConst(ctx, .mutable_map);
+    if (std.mem.eql(u8, name, "bignum")) return emitTagConst(ctx, .bignum);
+
+    return null;
 }
 
 /// Check the tag of a Value at elem_addr; bail if it doesn't match expected_tag.
@@ -974,6 +998,86 @@ fn tryEmitInlineVirtualUnwrap(
     const inner_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, c.ir_const_addr(ctx, ValueLayout.tagged_inner_ptr_offset));
     const inner_ptr = c._ir_LOAD(ctx, c.IR_ADDR, inner_ptr_addr);
     emitCopyFromPtr(ctx, base_addr, inner_ptr, value_slot);
+
+    stack[sp.*] = .{ .raw_at_slot = value_slot };
+    sp.* += 1;
+    return true;
+}
+
+/// Try to emit inline IR for parameterized type element validation.
+/// Recognizes the pattern: push_literal(fixnum=vtypePtr) + call_word("native.typed-validate-and-promote").
+/// Returns true if inlined; false to fall back to runtime callback.
+fn tryEmitInlineTypedValidateAndPromote(
+    state: *CompileState,
+    instructions: []const Instruction,
+    idx: usize,
+    stack: *[64]StackEntry,
+    sp: *usize,
+) bool {
+    if (sp.* < 2) return false;
+
+    // virtual type pointer must be a constant fixnum from the preceding instruction
+    const vtype_fixnum: i64 = if (idx > 0) blk: {
+        break :blk switch (instructions[idx - 1].op) {
+            .push_literal => |v| if (v == .fixnum) v.fixnum else return false,
+            else => return false,
+        };
+    } else return false;
+
+    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(vtype_fixnum)));
+
+    // no type_params means validation is a no-op
+    const params = vt.type_params orelse {
+        sp.* -= 1;
+        return true;
+    };
+    if (params.len == 0) {
+        sp.* -= 1;
+        return true;
+    }
+
+    const expected_name = params[0].name;
+
+    const value_entry = stack[sp.* - 2];
+
+    // statically known type on the abstract stack can be resolved at compile time
+    switch (value_entry) {
+        .i64_ref => {
+            if (std.mem.eql(u8, expected_name, "fixnum")) {
+                sp.* -= 1;
+                return true;
+            }
+            return false;
+        },
+        .f64_ref => {
+            if (std.mem.eql(u8, expected_name, "float")) {
+                sp.* -= 1;
+                return true;
+            }
+            return false;
+        },
+        .bool_ref => {
+            if (std.mem.eql(u8, expected_name, "boolean")) {
+                sp.* -= 1;
+                return true;
+            }
+            return false;
+        },
+        .raw_at_slot => {},
+        .quotation_body => return false,
+    }
+
+    const expected_tag_const = mapTypeNameToTagConst(state, expected_name) orelse return false;
+
+    const value_slot: usize = value_entry.raw_at_slot;
+
+    sp.* -= 2;
+
+    const ctx = state.ctx;
+    const base_addr = state.base_addr;
+
+    const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, value_slot * ValueLayout.value_size));
+    emitTagCheck(ctx, elem_addr, expected_tag_const, state.tag_offset_const, state.bail_status);
 
     stack[sp.*] = .{ .raw_at_slot = value_slot };
     sp.* += 1;
@@ -1701,6 +1805,33 @@ fn compileInstructions(
                 } else if (std.mem.eql(u8, name, "native.struct-field-get")) {
                     // fallthrough to resolver for runtime callback
                     if (tryEmitInlineStructFieldGet(state, instructions, idx, stack, sp)) continue;
+
+                    const res = state.resolver orelse return IrCodegenError.NotCompilable;
+                    const resolved = res.resolve(name, res.user_data) orelse return IrCodegenError.NotCompilable;
+
+                    if (resolved.native_fn_ptr) |fn_ptr| {
+                        if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
+
+                        materializeQuotations(state, stack, sp.*);
+                        flushToPhysicalStack(state, stack, sp.*);
+                        const ctx_val = emitCallbackPreamble(state, sp.*);
+
+                        if (resolved.stack_effect_ptr) |eff_ptr| {
+                            emitParamValidation(state, eff_ptr);
+                        }
+
+                        const fn_ptr_const = c.ir_const_addr(ctx, fn_ptr);
+                        const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.native_call_fn, ctx_val, fn_ptr_const);
+                        emitCallbackPostCheck(state, call_result, call_result);
+
+                        sp.* = sp.* - resolved.input_count + resolved.output_count;
+                        resetStackToPhysical(stack, sp.*);
+                    } else {
+                        return IrCodegenError.NotCompilable;
+                    }
+                } else if (std.mem.eql(u8, name, "native.typed-validate-and-promote")) {
+                    // fallthrough to resolver for runtime callback
+                    if (tryEmitInlineTypedValidateAndPromote(state, instructions, idx, stack, sp)) continue;
 
                     const res = state.resolver orelse return IrCodegenError.NotCompilable;
                     const resolved = res.resolve(name, res.user_data) orelse return IrCodegenError.NotCompilable;
@@ -3861,4 +3992,143 @@ test "inline struct-field-get bails on wrong struct type" {
     var values = [_]Value{ .{ .struct_instance = &instance }, .unit, .unit, .unit };
     var sp: usize = 1;
     try testing.expectEqual(@as(i32, 1), callCompiledValues(func, &values, &sp));
+}
+
+test "compile inline typed-validate-and-promote with fixnum" {
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var type_params = [_]*const TypeValue{&fixnum_tv};
+    var vt = VirtualType{ .name = "array(fixnum)", .inner_type = "array", .type_params = &type_params };
+    const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(&vt)) };
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 1 },
+        .{ .op = .{ .push_literal = vtype_ptr }, .line = 2 },
+        .{ .op = .{ .call_word = "native.typed-validate-and-promote" }, .line = 3 },
+    };
+
+    const result = try compileWord(&instrs, 0, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 42), values[0].fixnum);
+}
+
+test "compile inline typed-validate-and-promote with float" {
+    var float_tv = TypeValue{ .name = "float", .descriptor = null };
+    var type_params = [_]*const TypeValue{&float_tv};
+    var vt = VirtualType{ .name = "array(float)", .inner_type = "array", .type_params = &type_params };
+    const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(&vt)) };
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 3.14 } }, .line = 1 },
+        .{ .op = .{ .push_literal = vtype_ptr }, .line = 2 },
+        .{ .op = .{ .call_word = "native.typed-validate-and-promote" }, .line = 3 },
+    };
+
+    const result = try compileWord(&instrs, 0, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .float);
+    try testing.expectEqual(@as(f64, 3.14), values[0].float);
+}
+
+test "inline typed-validate-and-promote bails on type mismatch" {
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var type_params = [_]*const TypeValue{&fixnum_tv};
+    var vt = VirtualType{ .name = "array(fixnum)", .inner_type = "array", .type_params = &type_params };
+    const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(&vt)) };
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = vtype_ptr }, .line = 1 },
+        .{ .op = .{ .call_word = "native.typed-validate-and-promote" }, .line = 2 },
+    };
+
+    const result = try compileWord(&instrs, 1, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values = [_]Value{ .{ .float = 1.5 }, .unit, .unit, .unit };
+    var sp: usize = 1;
+    try testing.expectEqual(@as(i32, 1), callCompiledValues(func, &values, &sp));
+}
+
+test "inline typed-validate-and-promote no-op when no type_params" {
+    var vt = VirtualType{ .name = "wrapper", .inner_type = "array" };
+    const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(&vt)) };
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 1 },
+        .{ .op = .{ .push_literal = vtype_ptr }, .line = 2 },
+        .{ .op = .{ .call_word = "native.typed-validate-and-promote" }, .line = 3 },
+    };
+
+    const result = try compileWord(&instrs, 0, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 99), values[0].fixnum);
+}
+
+test "inline typed-validate-and-promote on input parameter" {
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var type_params = [_]*const TypeValue{&fixnum_tv};
+    var vt = VirtualType{ .name = "vector(fixnum)", .inner_type = "vector", .type_params = &type_params };
+    const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(&vt)) };
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = vtype_ptr }, .line = 1 },
+        .{ .op = .{ .call_word = "native.typed-validate-and-promote" }, .line = 2 },
+    };
+
+    const result = try compileWord(&instrs, 1, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values = [_]Value{ .{ .fixnum = 55 }, .unit, .unit, .unit };
+    var sp: usize = 1;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 55), values[0].fixnum);
+}
+
+test "inline typed-validate-and-promote then arithmetic" {
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var type_params = [_]*const TypeValue{&fixnum_tv};
+    var vt = VirtualType{ .name = "array(fixnum)", .inner_type = "array", .type_params = &type_params };
+    const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(&vt)) };
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 10 } }, .line = 1 },
+        .{ .op = .{ .push_literal = vtype_ptr }, .line = 2 },
+        .{ .op = .{ .call_word = "native.typed-validate-and-promote" }, .line = 3 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 5 } }, .line = 4 },
+        .{ .op = .{ .call_word = "+" }, .line = 5 },
+    };
+
+    const result = try compileWord(&instrs, 0, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 15), values[0].fixnum);
 }
