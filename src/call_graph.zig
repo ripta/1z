@@ -64,6 +64,10 @@ fn buildEntry(word_name: []const u8, word_def: *const WordDefinition, dispatch_t
     }
 }
 
+pub fn collectCalleesPublic(instructions: []const Instruction, callee_set: *std.StringHashMapUnmanaged(void), has_opaque: *bool, allocator: Allocator) !void {
+    return collectCallees(instructions, callee_set, has_opaque, allocator);
+}
+
 fn collectCallees(instructions: []const Instruction, callee_set: *std.StringHashMapUnmanaged(void), has_opaque: *bool, allocator: Allocator) !void {
     for (instructions) |instr| {
         switch (instr.op) {
@@ -289,6 +293,12 @@ pub const MutualTcoGroups = struct {
     }
 };
 
+/// A word is compilable if it is a compound word with a known stack effect and no parse-time-only markers.
+///
+/// Parse-time markers indicate that the word performs parsing or compilation tasks that cannot be safely
+/// handled by the trampoline.
+///
+/// An unknown stack effect means we cannot verify the arity requirement for trampoline groups.
 fn isCompilable(word_def: *const WordDefinition) bool {
     switch (word_def.action) {
         .native => return false,
@@ -342,6 +352,14 @@ pub fn findMutualTcoGroups(
     };
 }
 
+/// SCC eligibility: a component is strongly-connected when every member can reach every other member.
+///
+/// To be eligible for mutual TCO, we require that every such path is a tail call, which ensures that
+/// the trampoline can cycle through the members without consuming additional stack frames.
+///
+/// The eligibility criteria are checked conservatively based on the presence of tail calls in
+/// the original source; we do not attempt to prove that non-tail calls are actually unreachable
+/// at runtime.
 fn isSccEligible(
     scc: []const []const u8,
     graph: *const CallGraph,
@@ -354,10 +372,22 @@ fn isSccEligible(
         member_set.put(std.heap.page_allocator, name, {}) catch return false;
     }
 
+    // members must have the same stack-effect arity: trampoline reuses the same physical stack slots
+    // across bounces, so mismatched arities would break the slot layout
+    var ref_inputs: ?usize = null;
+    var ref_outputs: ?usize = null;
+
     for (scc) |name| {
-        // Every member must be compilable
+        // XXX(ripta): isCompilable invariant: word def being compilatble guarantees non-null stack effect
         const word_def = dictionary.get(name) orelse return false;
         if (!isCompilable(&word_def)) return false;
+        const effect = word_def.stack_effect.?;
+        if (ref_inputs) |ri| {
+            if (effect.inputs.len != ri or effect.outputs.len != ref_outputs.?) return false;
+        } else {
+            ref_inputs = effect.inputs.len;
+            ref_outputs = effect.outputs.len;
+        }
 
         // No opaque calls
         const graph_entry = graph.get(name) orelse return false;
@@ -772,6 +802,36 @@ test "findMutualTcoGroups: opaque member disqualifies" {
     defer dict.deinit();
     try dict.put("A", .{ .name = "A", .action = .{ .compound = a_instrs }, .stack_effect = simple_effect });
     try dict.put("B", .{ .name = "B", .action = .{ .compound = b_instrs }, .stack_effect = simple_effect });
+
+    var dispatch = DispatchTable.init(std.testing.allocator);
+    defer dispatch.deinit();
+    var graph = try build(&dict, &dispatch, std.testing.allocator);
+    defer deinitGraph(&graph, std.testing.allocator);
+
+    var groups = try findMutualTcoGroups(&graph, &dict, std.testing.allocator);
+    defer groups.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), groups.groups.len);
+}
+
+test "findMutualTcoGroups: mismatched arities disqualifies" {
+    // A ( a -- b ) tail-calls B, B ( a b -- c ) tail-calls A
+    const a_instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "B" }, .line = 1 },
+    };
+    const b_instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "A" }, .line = 1 },
+    };
+
+    const two_in_effect: StackEffect = .{
+        .inputs = &.{ .{ .name = "a" }, .{ .name = "b" } },
+        .outputs = &.{.{ .name = "c" }},
+    };
+
+    var dict = Dictionary.init(std.testing.allocator);
+    defer dict.deinit();
+    try dict.put("A", .{ .name = "A", .action = .{ .compound = a_instrs }, .stack_effect = simple_effect });
+    try dict.put("B", .{ .name = "B", .action = .{ .compound = b_instrs }, .stack_effect = two_in_effect });
 
     var dispatch = DispatchTable.init(std.testing.allocator);
     defer dispatch.deinit();

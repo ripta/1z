@@ -1,0 +1,57 @@
+use "testing" ;
+
+"mutual recursion: is-even?/is-odd?" test-section
+
+is-even?: ( n -- b ) [ dup 0 = [ drop t ] [ 1 - is-odd? ] if ] ;
+is-odd?: ( n -- b ) [ dup 0 = [ drop f ] [ 1 - is-even? ] if ] ;
+
+\ Verify correctness before compilation
+t 0 is-even? "0 is even (interp)" assert=
+f 1 is-even? "1 is not even (interp)" assert=
+t 2 is-even? "2 is even (interp)" assert=
+f 3 is-even? "3 is not even (interp)" assert=
+t 10 is-even? "10 is even (interp)" assert=
+
+"compile mutual group" test-section
+
+is-even?: compile!
+
+\ After compiling, both words should work via trampoline
+t 0 is-even? "0 is even (compiled)" assert=
+f 1 is-even? "1 is not even (compiled)" assert=
+t 2 is-even? "2 is even (compiled)" assert=
+f 3 is-even? "3 is not even (compiled)" assert=
+t 10 is-even? "10 is even (compiled)" assert=
+f 11 is-even? "11 is not even (compiled)" assert=
+
+t 1 is-odd? "1 is odd (compiled)" assert=
+f 0 is-odd? "0 is not odd (compiled)" assert=
+f 2 is-odd? "2 is not odd (compiled)" assert=
+t 3 is-odd? "3 is odd (compiled)" assert=
+
+"deep mutual recursion" test-section
+
+\ This would stack overflow without trampoline TCO
+t 100000 is-even? "100000 is even (deep)" assert=
+f 99999 is-even? "99999 is not even (deep)" assert=
+t 99999 is-odd? "99999 is odd (deep)" assert=
+
+"three-member mutual cycle" test-section
+
+mod3-is-0: ( n -- b ) [ dup 0 = [ drop t ] [ 1 - mod3-is-2 ] if ] ;
+mod3-is-1: ( n -- b ) [ dup 0 = [ drop f ] [ 1 - mod3-is-0 ] if ] ;
+mod3-is-2: ( n -- b ) [ dup 0 = [ drop f ] [ 1 - mod3-is-1 ] if ] ;
+
+\ Verify before compilation
+t 0 mod3-is-0 "0 mod 3 == 0 (interp)" assert=
+t 3 mod3-is-0 "3 mod 3 == 0 (interp)" assert=
+f 1 mod3-is-0 "1 mod 3 != 0 (interp)" assert=
+
+mod3-is-0: compile!
+
+t 0 mod3-is-0 "0 mod 3 == 0 (compiled)" assert=
+t 3 mod3-is-0 "3 mod 3 == 0 (compiled)" assert=
+f 1 mod3-is-0 "1 mod 3 != 0 (compiled)" assert=
+f 2 mod3-is-0 "2 mod 3 != 0 (compiled)" assert=
+t 6 mod3-is-0 "6 mod 3 == 0 (compiled)" assert=
+t 99999 mod3-is-0 "99999 mod 3 == 0 (deep 3-cycle)" assert=

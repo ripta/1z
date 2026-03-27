@@ -1,0 +1,69 @@
+=== mutual recursion: is-even?/is-odd? ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: 0 is even (interp)
+Stack: [ ]
+PASS: 1 is not even (interp)
+Stack: [ ]
+PASS: 2 is even (interp)
+Stack: [ ]
+PASS: 3 is not even (interp)
+Stack: [ ]
+PASS: 10 is even (interp)
+Stack: [ ]
+=== compile mutual group ===
+Stack: [ ]
+Stack: [ ]
+PASS: 0 is even (compiled)
+Stack: [ ]
+PASS: 1 is not even (compiled)
+Stack: [ ]
+PASS: 2 is even (compiled)
+Stack: [ ]
+PASS: 3 is not even (compiled)
+Stack: [ ]
+PASS: 10 is even (compiled)
+Stack: [ ]
+PASS: 11 is not even (compiled)
+Stack: [ ]
+PASS: 1 is odd (compiled)
+Stack: [ ]
+PASS: 0 is not odd (compiled)
+Stack: [ ]
+PASS: 2 is not odd (compiled)
+Stack: [ ]
+PASS: 3 is odd (compiled)
+Stack: [ ]
+=== deep mutual recursion ===
+Stack: [ ]
+PASS: 100000 is even (deep)
+Stack: [ ]
+PASS: 99999 is not even (deep)
+Stack: [ ]
+PASS: 99999 is odd (deep)
+Stack: [ ]
+=== three-member mutual cycle ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: 0 mod 3 == 0 (interp)
+Stack: [ ]
+PASS: 3 mod 3 == 0 (interp)
+Stack: [ ]
+PASS: 1 mod 3 != 0 (interp)
+Stack: [ ]
+Stack: [ ]
+PASS: 0 mod 3 == 0 (compiled)
+Stack: [ ]
+PASS: 3 mod 3 == 0 (compiled)
+Stack: [ ]
+PASS: 1 mod 3 != 0 (compiled)
+Stack: [ ]
+PASS: 2 mod 3 != 0 (compiled)
+Stack: [ ]
+PASS: 6 mod 3 == 0 (compiled)
+Stack: [ ]
+PASS: 99999 mod 3 == 0 (deep 3-cycle)
+Stack: [ ]
