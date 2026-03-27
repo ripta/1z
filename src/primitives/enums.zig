@@ -160,6 +160,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
                 .inner_type = "symbol",
                 .parent_type = enum_tv,
             };
+            ctx.virtual_type_count += 1;
 
             const variant_tv = try alloc.create(value_mod.TypeValue);
             variant_tv.* = .{ .name = full_name, .descriptor = null };
@@ -202,6 +203,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
                 .parent_type = enum_tv,
                 .anon_struct = struct_type,
             };
+            ctx.virtual_type_count += 1;
 
             const variant_tv = try alloc.create(value_mod.TypeValue);
             variant_tv.* = .{ .name = full_name, .descriptor = null };

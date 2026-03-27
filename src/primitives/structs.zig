@@ -110,6 +110,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
         .name = name,
         .fields = fields_slice,
     };
+    ctx.struct_type_count += 1;
 
     // Create a TypeValue for type-of lookups
     const tv = try alloc.create(value_mod.TypeValue);

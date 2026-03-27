@@ -229,6 +229,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
         .name = name,
         .inner_type = "byte-array",
     };
+    ctx.virtual_type_count += 1;
     layout.vtype = vtype;
 
     const tv = try alloc.create(value_mod.TypeValue);

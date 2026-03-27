@@ -152,6 +152,10 @@ pub const Context = struct {
     parse_time_deferred_calls: std.ArrayListUnmanaged([]const u8) = .{},
     /// Optional benchmark stats (null when benchmarking is disabled)
     benchmark: ?*BenchmarkStats = null,
+    /// Counters for unique VirtualType/StructType allocations, used by
+    /// --benchmark to report prelude output inventory.
+    virtual_type_count: usize = 0,
+    struct_type_count: usize = 0,
     /// Current source file name for error reporting (defaults to "<repl>")
     current_source: []const u8 = "<repl>",
     /// Tail call target for TCO, which is set by executeInstructions and consumed by executeQuotation

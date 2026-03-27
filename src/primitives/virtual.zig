@@ -124,6 +124,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
                 .name = name,
                 .inner_type = inner_type,
             };
+            ctx.virtual_type_count += 1;
 
             // Create a TypeValue for type-of lookups
             const tv = try alloc.create(value_mod.TypeValue);
@@ -208,6 +209,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
                 .name = name,
                 .fields = fields_slice,
             };
+            ctx.struct_type_count += 1;
 
             const vtype = try alloc.create(VirtualType);
             vtype.* = .{
@@ -215,6 +217,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
                 .inner_type = name,
                 .anon_struct = anon_struct,
             };
+            ctx.virtual_type_count += 1;
 
             // Create a TypeValue for type-of lookups
             const tv = try alloc.create(value_mod.TypeValue);
@@ -1054,6 +1057,7 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
         .base_type = base_tv,
         .type_params = type_params,
     };
+    ctx.virtual_type_count += 1;
 
     const tv = try alloc.create(value_mod.TypeValue);
     tv.* = .{ .name = name, .descriptor = null };

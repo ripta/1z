@@ -30,14 +30,24 @@ fn allocProfileLessThan(_: void, a: AllocProfileEntry, b: AllocProfileEntry) boo
 
 /// Benchmark statistics collected during execution
 pub const BenchmarkStats = struct {
-    // Timing (nanoseconds)
+    // Timing in nanoseconds
     start_time: i128 = 0,
     prelude_end_time: i128 = 0,
     end_time: i128 = 0,
 
-    // Prelude timing breakdown (accumulated inside loadPrelude)
+    // Prelude timing breakdown, accumulated inside loadPrelude
     prelude_parse_ns: i128 = 0,
     prelude_exec_ns: i128 = 0,
+
+    // Prelude output inventory, populated after loadPrelude
+    prelude_dict_entries: usize = 0,
+    prelude_dispatch_user: usize = 0,
+    prelude_dispatch_native: usize = 0,
+    prelude_type_values: usize = 0,
+    prelude_enum_entries: usize = 0,
+    prelude_pragma_entries: usize = 0,
+    prelude_virtual_types: usize = 0,
+    prelude_struct_types: usize = 0,
 
     // Instruction counts
     push_literal_count: u64 = 0,
@@ -70,6 +80,28 @@ pub const BenchmarkStats = struct {
     /// Mark the end of prelude loading
     pub fn markPreludeEnd(self: *BenchmarkStats) void {
         self.prelude_end_time = std.time.nanoTimestamp();
+    }
+
+    /// Record prelude output inventory counts
+    pub fn collectPreludeInventory(
+        self: *BenchmarkStats,
+        dict_entries: usize,
+        dispatch_user: usize,
+        dispatch_native: usize,
+        type_values: usize,
+        enum_entries: usize,
+        pragma_entries: usize,
+        virtual_types: usize,
+        struct_types: usize,
+    ) void {
+        self.prelude_dict_entries = dict_entries;
+        self.prelude_dispatch_user = dispatch_user;
+        self.prelude_dispatch_native = dispatch_native;
+        self.prelude_type_values = type_values;
+        self.prelude_enum_entries = enum_entries;
+        self.prelude_pragma_entries = pragma_entries;
+        self.prelude_virtual_types = virtual_types;
+        self.prelude_struct_types = struct_types;
     }
 
     /// Stop the benchmark timer
@@ -245,6 +277,35 @@ pub const BenchmarkStats = struct {
         try formatTime(writer, self.totalTimeNs());
         try writer.writeAll("\n");
 
+        // Prelude inventory section
+        if (self.prelude_dict_entries > 0 or self.prelude_dispatch_user > 0) {
+            try writer.writeAll("\nPrelude Inventory:\n");
+            try writer.writeAll("  Dictionary:      ");
+            try formatNumber(writer, self.prelude_dict_entries);
+            try writer.writeAll("\n");
+            try writer.writeAll("  Dispatch (user): ");
+            try formatNumber(writer, self.prelude_dispatch_user);
+            try writer.writeAll("\n");
+            try writer.writeAll("  Dispatch (native): ");
+            try formatNumber(writer, self.prelude_dispatch_native);
+            try writer.writeAll("\n");
+            try writer.writeAll("  Type values:     ");
+            try formatNumber(writer, self.prelude_type_values);
+            try writer.writeAll("\n");
+            try writer.writeAll("  Enum entries:    ");
+            try formatNumber(writer, self.prelude_enum_entries);
+            try writer.writeAll("\n");
+            try writer.writeAll("  Pragma entries:  ");
+            try formatNumber(writer, self.prelude_pragma_entries);
+            try writer.writeAll("\n");
+            try writer.writeAll("  Virtual types:   ");
+            try formatNumber(writer, self.prelude_virtual_types);
+            try writer.writeAll("\n");
+            try writer.writeAll("  Struct types:    ");
+            try formatNumber(writer, self.prelude_struct_types);
+            try writer.writeAll("\n");
+        }
+
         // Instructions section
         try writer.writeAll("\nInstructions:\n");
         try writer.writeAll("  push_literal:    ");
@@ -323,13 +384,21 @@ pub const BenchmarkStats = struct {
     /// Output benchmark results in JSON format
     pub fn formatJson(self: *const BenchmarkStats, writer: anytype) !void {
         try writer.print(
-            \\{{"timing":{{"prelude_ns":{d},"prelude_parse_ns":{d},"prelude_exec_ns":{d},"user_ns":{d},"total_ns":{d}}},"instructions":{{"push_literal":{d},"call_word":{d},"total":{d}}},"stack":{{"peak_depth":{d},"peak_task_stack_usage":{d}}},"jit":{{"words_compiled":{d},"compile_time_ns":{d}}},"memory":{{"allocations":{d},"bytes":{d},"peak_live_bytes":{d}}},"alloc_profile":[
+            \\{{"timing":{{"prelude_ns":{d},"prelude_parse_ns":{d},"prelude_exec_ns":{d},"user_ns":{d},"total_ns":{d}}},"prelude_inventory":{{"dict_entries":{d},"dispatch_user":{d},"dispatch_native":{d},"type_values":{d},"enum_entries":{d},"pragma_entries":{d},"virtual_types":{d},"struct_types":{d}}},"instructions":{{"push_literal":{d},"call_word":{d},"total":{d}}},"stack":{{"peak_depth":{d},"peak_task_stack_usage":{d}}},"jit":{{"words_compiled":{d},"compile_time_ns":{d}}},"memory":{{"allocations":{d},"bytes":{d},"peak_live_bytes":{d}}},"alloc_profile":[
         , .{
             @as(i64, @intCast(self.preludeTimeNs())),
             @as(i64, @intCast(self.prelude_parse_ns)),
             @as(i64, @intCast(self.prelude_exec_ns)),
             @as(i64, @intCast(self.userTimeNs())),
             @as(i64, @intCast(self.totalTimeNs())),
+            self.prelude_dict_entries,
+            self.prelude_dispatch_user,
+            self.prelude_dispatch_native,
+            self.prelude_type_values,
+            self.prelude_enum_entries,
+            self.prelude_pragma_entries,
+            self.prelude_virtual_types,
+            self.prelude_struct_types,
             self.push_literal_count,
             self.call_word_count,
             self.totalInstructions(),
@@ -707,6 +776,7 @@ test "formatHuman includes prelude parse/exec breakdown" {
     var buf: [8192]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buf);
     try stats.formatHuman(stream.writer());
+
     const output = stream.getWritten();
     try std.testing.expect(std.mem.indexOf(u8, output, "Parse:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Execute:") != null);
@@ -723,7 +793,82 @@ test "formatJson includes prelude_parse_ns and prelude_exec_ns" {
     var buf: [8192]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buf);
     try stats.formatJson(stream.writer());
+
     const output = stream.getWritten();
     try std.testing.expect(std.mem.indexOf(u8, output, "\"prelude_parse_ns\":600000") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"prelude_exec_ns\":400000") != null);
+}
+
+test "collectPreludeInventory stores counts" {
+    var stats = BenchmarkStats{};
+    stats.collectPreludeInventory(100, 200, 50, 30, 10, 6, 45, 15);
+
+    try std.testing.expectEqual(@as(usize, 100), stats.prelude_dict_entries);
+    try std.testing.expectEqual(@as(usize, 200), stats.prelude_dispatch_user);
+    try std.testing.expectEqual(@as(usize, 50), stats.prelude_dispatch_native);
+    try std.testing.expectEqual(@as(usize, 30), stats.prelude_type_values);
+    try std.testing.expectEqual(@as(usize, 10), stats.prelude_enum_entries);
+    try std.testing.expectEqual(@as(usize, 6), stats.prelude_pragma_entries);
+    try std.testing.expectEqual(@as(usize, 45), stats.prelude_virtual_types);
+    try std.testing.expectEqual(@as(usize, 15), stats.prelude_struct_types);
+}
+
+test "formatHuman includes prelude inventory" {
+    var stats = BenchmarkStats{};
+    stats.start_time = 0;
+    stats.prelude_end_time = 1_000_000;
+    stats.end_time = 2_000_000;
+    stats.collectPreludeInventory(427, 312, 89, 45, 12, 6, 38, 15);
+
+    var buf: [8192]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try stats.formatHuman(stream.writer());
+
+    const output = stream.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "Prelude Inventory:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Dictionary:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Dispatch (user):") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Dispatch (native):") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Type values:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Enum entries:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Pragma entries:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Virtual types:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Struct types:") != null);
+}
+
+test "formatHuman omits prelude inventory when empty" {
+    var stats = BenchmarkStats{};
+    stats.start_time = 0;
+    stats.prelude_end_time = 1_000_000;
+    stats.end_time = 2_000_000;
+
+    var buf: [8192]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try stats.formatHuman(stream.writer());
+
+    const output = stream.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "Prelude Inventory:") == null);
+}
+
+test "formatJson includes prelude_inventory" {
+    var stats = BenchmarkStats{};
+    stats.start_time = 0;
+    stats.prelude_end_time = 1_000_000;
+    stats.end_time = 2_000_000;
+    stats.collectPreludeInventory(427, 312, 89, 45, 12, 6, 38, 15);
+
+    var buf: [8192]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try stats.formatJson(stream.writer());
+
+    const output = stream.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"prelude_inventory\":{") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"dict_entries\":427") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"dispatch_user\":312") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"dispatch_native\":89") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"type_values\":45") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"enum_entries\":12") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"pragma_entries\":6") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"virtual_types\":38") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"struct_types\":15") != null);
 }

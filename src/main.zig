@@ -465,6 +465,16 @@ pub fn main() u8 {
     ctx.check_mode = check_mode;
     ctx.allow_all_recursion = allow_all_recursion;
     if (bench_config.enabled) {
+        bench_stats.collectPreludeInventory(
+            if (ctx.local_frames.items.len > 0) ctx.local_frames.items[0].count() else 0,
+            ctx.dispatch.entries.count(),
+            ctx.dispatch.native_entries.count(),
+            ctx.builtin_type_values.count(),
+            if (ctx.type_registry_frames.items.len > 0) ctx.type_registry_frames.items[0].enum_registry.count() else 0,
+            ctx.pragma_registry.count(),
+            ctx.virtual_type_count,
+            ctx.struct_type_count,
+        );
         bench_stats.markPreludeEnd();
     }
 
