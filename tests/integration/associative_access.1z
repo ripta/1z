@@ -40,8 +40,8 @@ H{ a: 1 b: 2 } @values #len 2 "hash @values count" assert=
 [ 1 0 / ] [ dup invalid-field: @has? not [ "PASS: error @has? invalid field" print-line ] [ "FAIL: error @has? invalid field" print-line ] if drop ] recover
 
 "Error @keys and @values" test-section
-[ 1 0 / ] [ dup @keys #len 3 = [ "PASS: error @keys count" print-line ] [ "FAIL: error @keys count" print-line ] if drop ] recover
-[ 1 0 / ] [ dup @values #len 3 = [ "PASS: error @values count" print-line ] [ "FAIL: error @values count" print-line ] if drop ] recover
+[ 1 0 / ] [ dup @keys #len 4 = [ "PASS: error @keys count" print-line ] [ "FAIL: error @keys count" print-line ] if drop ] recover
+[ 1 0 / ] [ dup @values #len 4 = [ "PASS: error @values count" print-line ] [ "FAIL: error @values count" print-line ] if drop ] recover
 
 "@get-or on hashes" test-section
 H{ name: "Alice" age: 30 } name: "default" @get-or "Alice" "hash @get-or existing key" assert=
