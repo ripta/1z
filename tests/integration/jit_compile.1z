@@ -106,6 +106,38 @@ jit-float: ( -- n ) [ 3.14 ] ;
 jit-float: compile!
 jit-float 3.14 "float literal 3.14" assert=
 
+"compile! float arithmetic" test-section
+
+jit-float-add: ( -- n ) [ 1.5 2.5 + ] ;
+jit-float-add: compile!
+jit-float-add 4.0 "float add" assert=
+
+jit-float-sub: ( -- n ) [ 5.0 2.0 - ] ;
+jit-float-sub: compile!
+jit-float-sub 3.0 "float sub" assert=
+
+jit-float-mul: ( -- n ) [ 2.0 3.0 * ] ;
+jit-float-mul: compile!
+jit-float-mul 6.0 "float mul" assert=
+
+jit-float-div: ( -- n ) [ 7.0 2.0 / ] ;
+jit-float-div: compile!
+jit-float-div 3.5 "float div" assert=
+
+"compile! float comparison" test-section
+
+jit-float-eq: ( -- ? ) [ 1.5 1.5 = ] ;
+jit-float-eq: compile!
+jit-float-eq t "float 1.5 = 1.5" assert=
+
+jit-float-lt: ( -- ? ) [ 1.5 2.5 < ] ;
+jit-float-lt: compile!
+jit-float-lt t "float 1.5 < 2.5" assert=
+
+jit-float-gt: ( -- ? ) [ 2.5 1.5 > ] ;
+jit-float-gt: compile!
+jit-float-gt t "float 2.5 > 1.5" assert=
+
 "compile! non-fixnum literal round-trip: string" test-section
 
 jit-str: ( -- s ) [ "hello" ] ;

@@ -113,6 +113,38 @@ Stack: [ ]
 Stack: [ ]
 PASS: float literal 3.14
 Stack: [ ]
+=== compile! float arithmetic ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: float add
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: float sub
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: float mul
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: float div
+Stack: [ ]
+=== compile! float comparison ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: float 1.5 = 1.5
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: float 1.5 < 2.5
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: float 2.5 > 1.5
+Stack: [ ]
 === compile! non-fixnum literal round-trip: string ===
 Stack: [ ]
 Stack: [ ]

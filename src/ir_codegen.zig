@@ -576,6 +576,35 @@ fn requireF64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
     };
 }
 
+const ResolvedPair = union(enum) {
+    i64_pair: struct { a: c.ir_ref, b: c.ir_ref },
+    f64_pair: struct { a: c.ir_ref, b: c.ir_ref },
+};
+
+/// Resolve a pair of stack entries to a common numeric type for binary ops.
+/// If either operand is f64_ref, both resolve as f64. If either is i64_ref
+/// (and neither is f64_ref), both resolve as i64. Two raw_at_slot entries
+/// default to i64 (the common case; runtime tag check bails on mismatch).
+fn resolveOperandPair(entry_a: StackEntry, entry_b: StackEntry, state: *CompileState) IrCodegenError!ResolvedPair {
+    // f64 takes priority: if either operand is a known float, resolve both as f64.
+    if (entry_a == .f64_ref or entry_b == .f64_ref) {
+        return .{ .f64_pair = .{
+            .a = try requireF64(entry_a, state),
+            .b = try requireF64(entry_b, state),
+        } };
+    }
+    // Otherwise resolve as i64 (covers i64_ref, raw_at_slot, and mixed).
+    if (entry_a == .i64_ref or entry_b == .i64_ref or
+        (entry_a == .raw_at_slot and entry_b == .raw_at_slot))
+    {
+        return .{ .i64_pair = .{
+            .a = try requireI64(entry_a, state),
+            .b = try requireI64(entry_b, state),
+        } };
+    }
+    return IrCodegenError.NotCompilable;
+}
+
 /// Materialize any quotation_body entries as raw Values on the physical stack.
 /// flushToPhysicalStack skips quotation_body since it's normally consumed by
 /// `if`/`call`, but callback-based ops need them as proper Values for the
@@ -913,32 +942,48 @@ fn compileInstructions(
                 } else if (std.mem.eql(u8, name, "abs")) {
                     if (sp.* < 1) return IrCodegenError.StackUnderflow;
                     sp.* -= 1;
-                    const a = try requireI64(stack[sp.*], state);
+                    const entry = stack[sp.*];
 
-                    const min_val = c.ir_const_i64(ctx, std.math.minInt(i64));
-                    const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a, min_val);
-                    const if_min = c._ir_IF(ctx, is_min);
-                    c._ir_IF_TRUE_cold(ctx, if_min);
-                    c._ir_RETURN(ctx, bail_status);
-                    c._ir_IF_FALSE(ctx, if_min);
+                    if (entry == .f64_ref) {
+                        const a = entry.f64_ref;
+                        const zero = c.ir_const_double(ctx, 0.0);
+                        const is_neg = c.ir_fold2(ctx, c.IR_OPT(c.IR_LT, c.IR_BOOL), a, zero);
+                        const neg_a = c.ir_fold1(ctx, c.IR_OPT(c.IR_NEG, c.IR_DOUBLE), a);
+                        const if_neg = c._ir_IF(ctx, is_neg);
+                        c._ir_IF_TRUE(ctx, if_neg);
+                        const end_true = c._ir_END(ctx);
+                        c._ir_IF_FALSE(ctx, if_neg);
+                        const end_false = c._ir_END(ctx);
+                        c._ir_MERGE_2(ctx, end_true, end_false);
+                        const result = c._ir_PHI_2(ctx, c.IR_DOUBLE, neg_a, a);
+                        stack[sp.*] = .{ .f64_ref = result };
+                    } else {
+                        const a = try requireI64(entry, state);
 
-                    const zero = c.ir_const_i64(ctx, 0);
-                    const is_neg = c.ir_fold2(ctx, c.IR_OPT(c.IR_LT, c.IR_BOOL), a, zero);
-                    const neg_a = c.ir_fold1(ctx, c.IR_OPT(c.IR_NEG, c.IR_I64), a);
-                    const if_neg = c._ir_IF(ctx, is_neg);
-                    c._ir_IF_TRUE(ctx, if_neg);
-                    const end_true = c._ir_END(ctx);
-                    c._ir_IF_FALSE(ctx, if_neg);
-                    const end_false = c._ir_END(ctx);
-                    c._ir_MERGE_2(ctx, end_true, end_false);
-                    const result = c._ir_PHI_2(ctx, c.IR_I64, neg_a, a);
-                    stack[sp.*] = .{ .i64_ref = result };
+                        const min_val = c.ir_const_i64(ctx, std.math.minInt(i64));
+                        const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a, min_val);
+                        const if_min = c._ir_IF(ctx, is_min);
+                        c._ir_IF_TRUE_cold(ctx, if_min);
+                        c._ir_RETURN(ctx, bail_status);
+                        c._ir_IF_FALSE(ctx, if_min);
+
+                        const zero = c.ir_const_i64(ctx, 0);
+                        const is_neg = c.ir_fold2(ctx, c.IR_OPT(c.IR_LT, c.IR_BOOL), a, zero);
+                        const neg_a = c.ir_fold1(ctx, c.IR_OPT(c.IR_NEG, c.IR_I64), a);
+                        const if_neg = c._ir_IF(ctx, is_neg);
+                        c._ir_IF_TRUE(ctx, if_neg);
+                        const end_true = c._ir_END(ctx);
+                        c._ir_IF_FALSE(ctx, if_neg);
+                        const end_false = c._ir_END(ctx);
+                        c._ir_MERGE_2(ctx, end_true, end_false);
+                        const result = c._ir_PHI_2(ctx, c.IR_I64, neg_a, a);
+                        stack[sp.*] = .{ .i64_ref = result };
+                    }
                     sp.* += 1;
                 } else if (isComparisonOp(name)) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     sp.* -= 2;
-                    const a = try requireI64(stack[sp.*], state);
-                    const b = try requireI64(stack[sp.* + 1], state);
+                    const resolved = try resolveOperandPair(stack[sp.*], stack[sp.* + 1], state);
 
                     const ir_op: c_uint = if (std.mem.eql(u8, name, "="))
                         c.IR_EQ
@@ -947,7 +992,10 @@ fn compileInstructions(
                     else
                         c.IR_GT;
 
-                    const result = c.ir_fold2(ctx, c.IR_OPT(ir_op, c.IR_BOOL), a, b);
+                    const result = switch (resolved) {
+                        .i64_pair => |p| c.ir_fold2(ctx, c.IR_OPT(ir_op, c.IR_BOOL), p.a, p.b),
+                        .f64_pair => |p| c.ir_fold2(ctx, c.IR_OPT(ir_op, c.IR_BOOL), p.a, p.b),
+                    };
                     stack[sp.*] = .{ .bool_ref = result };
                     sp.* += 1;
                 } else if (std.mem.eql(u8, name, "if")) {
@@ -1256,26 +1304,51 @@ fn compileInstructions(
                 } else if (isBinaryOp(name)) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     sp.* -= 2;
-                    const a = try requireI64(stack[sp.*], state);
-                    const b = try requireI64(stack[sp.* + 1], state);
 
-                    if (std.mem.eql(u8, name, "+")) {
-                        stack[sp.*] = .{ .i64_ref = emitOverflowCheckedBinary(ctx, c.IR_ADD_OV, a, b, bail_status) };
-                        sp.* += 1;
-                    } else if (std.mem.eql(u8, name, "-")) {
-                        stack[sp.*] = .{ .i64_ref = emitOverflowCheckedBinary(ctx, c.IR_SUB_OV, a, b, bail_status) };
-                        sp.* += 1;
-                    } else if (std.mem.eql(u8, name, "*")) {
-                        stack[sp.*] = .{ .i64_ref = emitOverflowCheckedBinary(ctx, c.IR_MUL_OV, a, b, bail_status) };
-                        sp.* += 1;
-                    } else if (std.mem.eql(u8, name, "/") or std.mem.eql(u8, name, "div")) {
+                    // div, rem, and % are integer-only; resolve both operands as i64.
+                    if (std.mem.eql(u8, name, "div")) {
+                        const a = try requireI64(stack[sp.*], state);
+                        const b = try requireI64(stack[sp.* + 1], state);
                         stack[sp.*] = .{ .i64_ref = emitDivision(ctx, a, b, bail_status) };
                         sp.* += 1;
                     } else if (std.mem.eql(u8, name, "rem")) {
+                        const a = try requireI64(stack[sp.*], state);
+                        const b = try requireI64(stack[sp.* + 1], state);
                         stack[sp.*] = .{ .i64_ref = emitRemainder(ctx, a, b, bail_status) };
                         sp.* += 1;
                     } else if (std.mem.eql(u8, name, "%")) {
+                        const a = try requireI64(stack[sp.*], state);
+                        const b = try requireI64(stack[sp.* + 1], state);
                         stack[sp.*] = .{ .i64_ref = emitEuclideanMod(ctx, a, b, bail_status) };
+                        sp.* += 1;
+                    } else {
+                        // +, -, *, / support both i64 and f64 operands.
+                        const resolved = try resolveOperandPair(stack[sp.*], stack[sp.* + 1], state);
+                        switch (resolved) {
+                            .i64_pair => |p| {
+                                if (std.mem.eql(u8, name, "+")) {
+                                    stack[sp.*] = .{ .i64_ref = emitOverflowCheckedBinary(ctx, c.IR_ADD_OV, p.a, p.b, bail_status) };
+                                } else if (std.mem.eql(u8, name, "-")) {
+                                    stack[sp.*] = .{ .i64_ref = emitOverflowCheckedBinary(ctx, c.IR_SUB_OV, p.a, p.b, bail_status) };
+                                } else if (std.mem.eql(u8, name, "*")) {
+                                    stack[sp.*] = .{ .i64_ref = emitOverflowCheckedBinary(ctx, c.IR_MUL_OV, p.a, p.b, bail_status) };
+                                } else {
+                                    // "/"
+                                    stack[sp.*] = .{ .i64_ref = emitDivision(ctx, p.a, p.b, bail_status) };
+                                }
+                            },
+                            .f64_pair => |p| {
+                                const ir_op: c_uint = if (std.mem.eql(u8, name, "+"))
+                                    c.IR_ADD
+                                else if (std.mem.eql(u8, name, "-"))
+                                    c.IR_SUB
+                                else if (std.mem.eql(u8, name, "*"))
+                                    c.IR_MUL
+                                else
+                                    c.IR_DIV;
+                                stack[sp.*] = .{ .f64_ref = c.ir_fold2(ctx, c.IR_OPT(ir_op, c.IR_DOUBLE), p.a, p.b) };
+                            },
+                        }
                         sp.* += 1;
                     }
                 } else if (isErrorHandlingOp(name)) {
@@ -3118,4 +3191,184 @@ test "compile float truthiness in if" {
     try testing.expectEqual(@as(usize, 1), sp);
     try testing.expect(values[0] == .fixnum);
     try testing.expectEqual(@as(i64, 1), values[0].fixnum);
+}
+
+test "compile float addition" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 1.5 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .float = 2.5 } }, .line = 2 },
+        .{ .op = .{ .call_word = "+" }, .line = 3 },
+    };
+    const result = try compileWord(&instrs, 0, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .float);
+    try testing.expectEqual(@as(f64, 4.0), values[0].float);
+}
+
+test "compile float subtraction" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 5.0 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .float = 2.0 } }, .line = 2 },
+        .{ .op = .{ .call_word = "-" }, .line = 3 },
+    };
+    const result = try compileWord(&instrs, 0, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .float);
+    try testing.expectEqual(@as(f64, 3.0), values[0].float);
+}
+
+test "compile float multiplication" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 2.0 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .float = 3.0 } }, .line = 2 },
+        .{ .op = .{ .call_word = "*" }, .line = 3 },
+    };
+    const result = try compileWord(&instrs, 0, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .float);
+    try testing.expectEqual(@as(f64, 6.0), values[0].float);
+}
+
+test "compile float division" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 7.0 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .float = 2.0 } }, .line = 2 },
+        .{ .op = .{ .call_word = "/" }, .line = 3 },
+    };
+    const result = try compileWord(&instrs, 0, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .float);
+    try testing.expectEqual(@as(f64, 3.5), values[0].float);
+}
+
+test "compile float comparison =" {
+    const instrs_eq = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 1.5 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .float = 1.5 } }, .line = 2 },
+        .{ .op = .{ .call_word = "=" }, .line = 3 },
+    };
+    const result_eq = try compileWord(&instrs_eq, 0, 1, null, null, null);
+    defer result_eq.jit_buf.deinit();
+
+    const func_eq: CompiledFn = @ptrCast(@alignCast(result_eq.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func_eq, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .boolean);
+    try testing.expect(values[0].boolean == true);
+
+    const instrs_ne = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 1.5 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .float = 2.5 } }, .line = 2 },
+        .{ .op = .{ .call_word = "=" }, .line = 3 },
+    };
+    const result_ne = try compileWord(&instrs_ne, 0, 1, null, null, null);
+    defer result_ne.jit_buf.deinit();
+
+    const func_ne: CompiledFn = @ptrCast(@alignCast(result_ne.code_ptr));
+    sp = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func_ne, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .boolean);
+    try testing.expect(values[0].boolean == false);
+}
+
+test "compile float comparison <" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 1.5 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .float = 2.5 } }, .line = 2 },
+        .{ .op = .{ .call_word = "<" }, .line = 3 },
+    };
+    const result = try compileWord(&instrs, 0, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .boolean);
+    try testing.expect(values[0].boolean == true);
+}
+
+test "compile float comparison >" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 2.5 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .float = 1.5 } }, .line = 2 },
+        .{ .op = .{ .call_word = ">" }, .line = 3 },
+    };
+    const result = try compileWord(&instrs, 0, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .boolean);
+    try testing.expect(values[0].boolean == true);
+}
+
+test "compile float + raw_at_slot input" {
+    // Float literal inside compiled body + float input from caller.
+    // resolveOperandPair sees f64_ref + raw_at_slot -> resolves both as f64.
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 1.5 } }, .line = 1 },
+        .{ .op = .{ .call_word = "+" }, .line = 2 },
+    };
+    const result = try compileWord(&instrs, 1, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values = [_]Value{.{ .float = 2.5 }};
+    var sp: usize = 1;
+    const status = callCompiledValues(func, &values, &sp);
+    try testing.expectEqual(@as(i32, 0), status);
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .float);
+    try testing.expectEqual(@as(f64, 4.0), values[0].float);
+}
+
+test "div with float operand bails" {
+    // div is integer-only; f64_ref operand should cause NotCompilable.
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 7.0 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .float = 2.0 } }, .line = 2 },
+        .{ .op = .{ .call_word = "div" }, .line = 3 },
+    };
+    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 0, 1, null, null, null));
+}
+
+test "% with float operand bails" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 7.0 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .float = 2.0 } }, .line = 2 },
+        .{ .op = .{ .call_word = "%" }, .line = 3 },
+    };
+    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 0, 1, null, null, null));
 }
