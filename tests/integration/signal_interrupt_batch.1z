@@ -1,0 +1,4 @@
+\ Test that an uncaught interrupt error in batch mode exits non-zero.
+\ Simulates SIGINT by throwing an "interrupted" error directly.
+
+f "interrupted by signal" interrupted: make-error throw

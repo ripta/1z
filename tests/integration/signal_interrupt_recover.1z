@@ -1,0 +1,5 @@
+\ Test that an interrupt error in batch mode is catchable with recover.
+\ The program should exit cleanly (exit code 0) after handling the error.
+
+[ f "interrupted by signal" interrupted: make-error throw ]
+[ drop "Caught interrupt gracefully" print-line ] recover

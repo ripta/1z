@@ -1,0 +1,2 @@
+tests/integration/signal_interrupt_batch.1z:4: error 'interrupted' interrupted by signal at word 'throw'
+  stack effect: ( error --  )

@@ -1,0 +1,3 @@
+Stack: [ [ f "interrupted by signal" interrupted: make-error throw ] ]
+Caught interrupt gracefully
+Stack: [ ]

@@ -137,6 +137,15 @@ fn printParseDiagnostics(ctx: *Context, writer: anytype, source: []const u8, lin
     ctx.parse_diagnostics = null;
 }
 
+/// Check whether the current error is a signal interrupt, e.g., SIGINT.
+/// Used by the REPL to print a short notice instead of a full error trace.
+fn isInterruptError(ctx: *const Context) bool {
+    if (ctx.thrown_error) |thrown| {
+        return std.mem.eql(u8, thrown.error_type, "interrupted");
+    }
+    return false;
+}
+
 fn printUsage() void {
     const stdout_file: File = .stdout();
     var stdout_buf: [4096]u8 = undefined;
@@ -812,7 +821,13 @@ fn replInteractive(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
 
                 var had_error = false;
                 ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
-                    printErrorDetails(ctx, writer, err);
+                    if (isInterruptError(ctx)) {
+                        writer.writeAll("Interrupted.\n") catch {};
+                        ctx.thrown_error = null;
+                        ctx.clearExecutionDetails();
+                    } else {
+                        printErrorDetails(ctx, writer, err);
+                    }
                     had_error = true;
                 };
                 signal.reset();
@@ -914,7 +929,13 @@ fn replPiped(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
 
                 var had_error = false;
                 ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
-                    printErrorDetails(ctx, writer, err);
+                    if (isInterruptError(ctx)) {
+                        writer.writeAll("Interrupted.\n") catch {};
+                        ctx.thrown_error = null;
+                        ctx.clearExecutionDetails();
+                    } else {
+                        printErrorDetails(ctx, writer, err);
+                    }
                     had_error = true;
                 };
                 signal.reset();
