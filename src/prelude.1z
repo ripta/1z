@@ -19,32 +19,29 @@ S{: parse-time [ "}" parse-until make-set ] ;
 \ Mutable map literal syntax
 M{: parse-time [ "}" parse-until make-mutable-map ] ;
 
-\ Struct definition syntax, produces a struct descriptor
+\ Struct definition syntax
+\   name: struct{ field1 field2 ... } ;
 struct{: parse-time [
-  parse-struct-fields                   \ -- ...fields
-  M{ type: struct-descriptor: }         \ -- ...fields mmap
-  swap                                  \ -- mmap fields-array
-  fields: swap @set!                    \ -- mmap (with fields set)
-  [ define-struct ] define: swap @set!  \ -- mmap (with define set)
+  M{ type: struct-descriptor: }
+  fields: parse-struct-fields @set!
+  define: [ define-struct ] @set!
 ] ;
 
-\ Virtual type definition syntax, produces a type descriptor
+\ Virtual type definition syntax
+\   name: virtual{ inner-type } ;
 virtual{: parse-time [
-  parse-virtual-inner
-  M{ type: virtual: } swap inner-type: swap @set!
-  [ define-virtual ] define:
-  swap @set!
+  M{ type: virtual: }
+  inner-type: parse-virtual-inner @set!
+  define: [ define-virtual ] @set!
 ] ;
 
 \ Method dispatch registration syntax
-\ Syntax: word: method{ type1 type2 } [ body ] ;
+\   word: method{ type1 type2 } [ body ] ;
 method{: parse-time [
-  "}" parse-tokens-until          \ { "type1" "type2" }
-  parse-quotation                 \ [ body ]
   M{ }
-  swap body: swap @set!           \ M{ body: [...] }
-  swap types: swap @set!          \ M{ body: [...] types: {...} }
-  [ define-method ] define: swap @set!
+  types: "}" parse-tokens-until @set!
+  body: parse-quotation @set!
+  define: [ define-method ] @set!
 ] ;
 
 \ Dynamic variables (parameters) syntax
