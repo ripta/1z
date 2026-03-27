@@ -1,7 +1,6 @@
 # Your First Program
 
-This tutorial builds a single file step by step, adding one concept at a time.
-Create a file called `hello.1z` and run it with:
+Create a file called `hello.1z` and follow along. Run it after each section with:
 
 ```
 ./zig-out/bin/1z hello.1z
@@ -21,8 +20,8 @@ Hello, world!
 
 ## Stack Basics
 
-Everything in 1z lives on the stack. Numbers push themselves; words consume
-and produce values.
+Everything in 1z lives on the stack. Numbers push themselves; words pop
+values and push results.
 
 ```
 3 4 + .
@@ -72,8 +71,8 @@ Output:
 81
 ```
 
-Stack effects document what a word consumes and produces. They go between the
-name and the body:
+Stack effects document what a word pops and pushes. They go between the name
+and the body:
 
 ```
 cube: ( n -- n ) [ dup dup * * ] ;
@@ -111,8 +110,8 @@ is truthy.
 
 ## Quotations and Control Flow
 
-Quotations are blocks of code in `[ ]`. They are values that sit on the stack
-until executed.
+Quotations are blocks of code in `[ ]`. They sit on the stack like any other
+value until something executes them.
 
 `call` executes a quotation:
 
@@ -187,7 +186,7 @@ Output:
 
 ## Strings
 
-String literals use double quotes. `#len` returns the length. `#append`
+String literals use double quotes. `#len` gives the length. `#append`
 concatenates.
 
 ```
@@ -230,7 +229,7 @@ Output:
 3
 ```
 
-`#map` and `#filter` return lazy iterators. Use `#collect` to materialize the
+`#map` and `#filter` return lazy iterators. `#collect` materializes the
 result into an array.
 
 ```
@@ -259,8 +258,8 @@ Output:
 H{ name: "Alice" age: 30 }
 ```
 
-`@get` retrieves a value by key. `@set` returns a new hash with the key added
-or updated. `@keys` returns an array of keys.
+`@get` plucks a value by key. `@set` returns a new hash with the key added
+or updated. `@keys` gives the keys as an array.
 
 ```
 H{ name: "Alice" age: 30 } name: @get print-line
@@ -295,8 +294,16 @@ double: ( n -- n ) [ dup + ] ;
 
 ## Next Steps
 
-This covers the fundamentals: the stack, words, control flow, collections, and
-comments. From here:
+That covers the fundamentals. The [language tutorials](../tutorials/index.md)
+go deeper on each topic:
 
-- Browse the [API Reference](../reference/index.md) for the full list of
-  available words.
+- [Stack Fundamentals](../tutorials/stack-fundamentals.md) -- understanding the
+  stack in depth
+- [Quotations](../tutorials/quotations.md) -- code as data, combinators
+- [Defining Words](../tutorials/defining-words.md) -- anatomy, conventions,
+  composition
+- [Control Flow](../tutorials/control-flow.md) -- conditionals, loops,
+  iteration, error handling
+
+For a complete listing of every available word, see the
+[API Reference](../reference/index.md).
