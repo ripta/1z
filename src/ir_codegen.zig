@@ -491,6 +491,8 @@ fn emitSwapSlots(ctx: *c.ir_ctx, base_addr: c.ir_ref, slot_a: usize, slot_b: usi
 const StackEntry = union(enum) {
     /// Unboxed fixnum payload, usable directly in arithmetic and comparisons.
     i64_ref: c.ir_ref,
+    /// Unboxed float payload, usable directly in float arithmetic.
+    f64_ref: c.ir_ref,
     /// IR boolean from a comparison op or `t`/`f` literal, boxed to a boolean
     /// Value at finalization.
     bool_ref: c.ir_ref,
@@ -510,6 +512,7 @@ const CompileState = struct {
     tag_offset_const: c.ir_ref,
     payload_offset_const: c.ir_ref,
     fixnum_tag_const: c.ir_ref,
+    float_tag_const: c.ir_ref,
     boolean_tag_const: c.ir_ref,
     bail_status: c.ir_ref,
     ok_status: c.ir_ref,
@@ -552,6 +555,22 @@ fn requireI64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
             const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, slot_byte_offset);
             emitTagCheck(ctx, elem_addr, state.fixnum_tag_const, state.tag_offset_const, state.bail_status);
             return emitUnboxI64(ctx, elem_addr, state.payload_offset_const);
+        },
+        else => IrCodegenError.NotCompilable,
+    };
+}
+
+/// Extract or emit an f64 IR ref from a stack entry. For raw_at_slot entries,
+/// emits a float tag check and unboxes the payload; bails if the tag doesn't match.
+fn requireF64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
+    return switch (entry) {
+        .f64_ref => |ref| ref,
+        .raw_at_slot => |s| {
+            const ctx = state.ctx;
+            const slot_byte_offset = c.ir_const_addr(ctx, s * ValueLayout.value_size);
+            const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, slot_byte_offset);
+            emitTagCheck(ctx, elem_addr, state.float_tag_const, state.tag_offset_const, state.bail_status);
+            return emitUnboxF64(ctx, elem_addr, state.payload_offset_const);
         },
         else => IrCodegenError.NotCompilable,
     };
@@ -602,6 +621,12 @@ fn flushToPhysicalStack(state: *CompileState, stack: *[64]StackEntry, sp: usize)
                 emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, ref);
                 stack[i] = .{ .raw_at_slot = i };
             },
+            .f64_ref => |ref| {
+                const slot_byte_offset = c.ir_const_addr(ctx, i * ValueLayout.value_size);
+                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.float_tag_const, ref);
+                stack[i] = .{ .raw_at_slot = i };
+            },
             .bool_ref => |ref| {
                 const slot_byte_offset = c.ir_const_addr(ctx, i * ValueLayout.value_size);
                 const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
@@ -640,7 +665,7 @@ fn emitTruthiness(state: *CompileState, entry: StackEntry, base_addr: c.ir_ref) 
     const ctx = state.ctx;
     return switch (entry) {
         .bool_ref => |ref| ref,
-        .i64_ref => c.ir_const_bool(ctx, true),
+        .i64_ref, .f64_ref => c.ir_const_bool(ctx, true),
         .raw_at_slot => |s| blk: {
             const slot_byte_offset = c.ir_const_addr(ctx, s * ValueLayout.value_size);
             const slot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
@@ -811,6 +836,9 @@ fn compileInstructions(
                 } else if (val == .quotation) {
                     stack[sp.*] = .{ .quotation_body = val.quotation.instructions };
                     sp.* += 1;
+                } else if (val == .float) {
+                    stack[sp.*] = .{ .f64_ref = c.ir_const_double(ctx, val.float) };
+                    sp.* += 1;
                 } else if (val == .boolean) {
                     stack[sp.*] = .{ .bool_ref = c.ir_const_bool(ctx, val.boolean) };
                     sp.* += 1;
@@ -828,6 +856,9 @@ fn compileInstructions(
                     switch (stack[sp.* - 1]) {
                         .i64_ref => |ref| {
                             stack[sp.*] = .{ .i64_ref = ref };
+                        },
+                        .f64_ref => |ref| {
+                            stack[sp.*] = .{ .f64_ref = ref };
                         },
                         .bool_ref => |ref| {
                             stack[sp.*] = .{ .bool_ref = ref };
@@ -857,6 +888,9 @@ fn compileInstructions(
                     switch (stack[sp.* - 2]) {
                         .i64_ref => |ref| {
                             stack[sp.*] = .{ .i64_ref = ref };
+                        },
+                        .f64_ref => |ref| {
+                            stack[sp.*] = .{ .f64_ref = ref };
                         },
                         .bool_ref => |ref| {
                             stack[sp.*] = .{ .bool_ref = ref };
@@ -943,7 +977,7 @@ fn compileInstructions(
                     // Determine the IR bool for the condition
                     const cond_ref = switch (cond_entry) {
                         .bool_ref => |ref| ref,
-                        .i64_ref => {
+                        .i64_ref, .f64_ref => {
                             // Non-boolean values are always truthy in 1z.
                             // Compile both branches to validate stack effects
                             // match, but only emit the true branch.
@@ -1092,7 +1126,7 @@ fn compileInstructions(
 
                             state.dynamic_call_emitted = true;
                         },
-                        .i64_ref, .bool_ref => return IrCodegenError.NotCompilable,
+                        .i64_ref, .f64_ref, .bool_ref => return IrCodegenError.NotCompilable,
                     }
                 } else if (std.mem.eql(u8, name, "times")) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
@@ -1457,6 +1491,10 @@ fn mergeEntries(
             .i64_ref => |false_ref| return .{ .i64_ref = c._ir_PHI_2(ctx, c.IR_I64, true_ref, false_ref) },
             else => return IrCodegenError.NotCompilable,
         },
+        .f64_ref => |true_ref| switch (false_entry) {
+            .f64_ref => |false_ref| return .{ .f64_ref = c._ir_PHI_2(ctx, c.IR_DOUBLE, true_ref, false_ref) },
+            else => return IrCodegenError.NotCompilable,
+        },
         .bool_ref => |true_ref| switch (false_entry) {
             .bool_ref => |false_ref| return .{ .bool_ref = c._ir_PHI_2(ctx, c.IR_BOOL, true_ref, false_ref) },
             else => return IrCodegenError.NotCompilable,
@@ -1723,6 +1761,7 @@ pub fn compileWord(
     const tag_offset_const = c.ir_const_addr(&ctx, ValueLayout.tag_offset);
     const payload_offset_const = c.ir_const_addr(&ctx, ValueLayout.payload_offset);
     const fixnum_tag_const = emitTagConst(&ctx, .fixnum);
+    const float_tag_const = emitTagConst(&ctx, .float);
     const boolean_tag_const = emitTagConst(&ctx, .boolean);
 
     // Precompute the base address for output writes:
@@ -1747,6 +1786,7 @@ pub fn compileWord(
         .tag_offset_const = tag_offset_const,
         .payload_offset_const = payload_offset_const,
         .fixnum_tag_const = fixnum_tag_const,
+        .float_tag_const = float_tag_const,
         .boolean_tag_const = boolean_tag_const,
         .bail_status = bail_status,
         .ok_status = ok_status,
@@ -1803,6 +1843,7 @@ pub fn compileWord(
 
         // Finalize each symbolic stack entry into a physical Value on the stack.
         //   i64_ref       -- box with fixnum tag and write to the output slot
+        //   f64_ref       -- box with float tag and write to the output slot
         //   bool_ref      -- box with boolean tag and write to the output slot
         //   raw_at_slot   -- already a physical Value; copy only if the slot
         //                    index differs from the output position
@@ -1814,6 +1855,11 @@ pub fn compileWord(
                     const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
                     const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
                     emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, fixnum_tag_const, ref);
+                },
+                .f64_ref => |ref| {
+                    const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
+                    const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                    emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, float_tag_const, ref);
                 },
                 .bool_ref => |ref| {
                     const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
@@ -2983,4 +3029,93 @@ test "compile if with non-compilable body fails" {
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
     try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 0, 1, null, null, null));
+}
+
+test "compile float dup" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 2.5 } }, .line = 1 },
+        .{ .op = .{ .call_word = "dup" }, .line = 2 },
+    };
+    const result = try compileWord(&instrs, 0, 2, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expect(values[0] == .float);
+    try testing.expectEqual(@as(f64, 2.5), values[0].float);
+    try testing.expect(values[1] == .float);
+    try testing.expectEqual(@as(f64, 2.5), values[1].float);
+}
+
+test "compile float swap" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 1.0 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .float = 2.0 } }, .line = 2 },
+        .{ .op = .{ .call_word = "swap" }, .line = 3 },
+    };
+    const result = try compileWord(&instrs, 0, 2, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expect(values[0] == .float);
+    try testing.expectEqual(@as(f64, 2.0), values[0].float);
+    try testing.expect(values[1] == .float);
+    try testing.expectEqual(@as(f64, 1.0), values[1].float);
+}
+
+test "compile float if-else merge" {
+    const true_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 1.0 } }, .line = 1 },
+    };
+    const false_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 2.0 } }, .line = 1 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = true_body } } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
+        .{ .op = .{ .call_word = "if" }, .line = 4 },
+    };
+    const result = try compileWord(&instrs, 0, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .float);
+    try testing.expectEqual(@as(f64, 1.0), values[0].float);
+}
+
+test "compile float truthiness in if" {
+    const true_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+    };
+    const false_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 3.14 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = true_body } } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
+        .{ .op = .{ .call_word = "if" }, .line = 4 },
+    };
+    const result = try compileWord(&instrs, 0, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 1), values[0].fixnum);
 }
