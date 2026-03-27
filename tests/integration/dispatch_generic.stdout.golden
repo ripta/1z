@@ -1,0 +1,71 @@
+=== generic word dispatch basics ===
+Stack: [ ]
+Stack: [ ]
+PASS: default body runs for integer
+Stack: [ ]
+Stack: [ ]
+PASS: method dispatches for integer
+Stack: [ ]
+Stack: [ ]
+PASS: method dispatches for boolean true
+Stack: [ ]
+PASS: method dispatches for boolean false
+Stack: [ ]
+PASS: integer method still works
+Stack: [ ]
+=== generic word with virtual types ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: method dispatches for duration
+Stack: [ ]
+PASS: duration has correct type
+Stack: [ ]
+=== binary generic dispatch ===
+Stack: [ ]
+Stack: [ ]
+PASS: default body adds integers
+Stack: [ ]
+Stack: [ ]
+PASS: method dispatches for string string
+Stack: [ ]
+PASS: integers still use default
+Stack: [ ]
+=== wildcard dispatch for generic words ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: wildcard matches integer
+Stack: [ ]
+PASS: wildcard matches boolean
+Stack: [ ]
+PASS: wildcard matches string
+Stack: [ ]
+=== dispatch precedence ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: specific beats wildcard
+Stack: [ ]
+PASS: wildcard handles other types
+Stack: [ ]
+=== generic word without default body ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: method works on integer
+Stack: [ ]
+=== binary dispatch precedence ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: binary dispatch for two integers
+Stack: [ ]
+Stack: [ ]
+PASS: another binary dispatch
+Stack: [ ]
+=== all generic dispatch tests passed ===
+Stack: [ ]
