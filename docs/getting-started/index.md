@@ -11,5 +11,8 @@ New to stack languages? Start here:
 Once the basics click, the [Language Tutorials](../tutorials/index.md)
 go deeper into the stack, quotations, word definitions, and control flow.
 
+The [Conceptual Guides](../guides/index.md) cover the type system, modules,
+iterators, concurrency, async I/O, and FFI in depth.
+
 The [API Reference](../reference/index.md) documents every word in the
 standard library.

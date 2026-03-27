@@ -15,5 +15,8 @@ one assumes familiarity with the previous ones.
 All examples are runnable. Save any snippet to a `.1z` file and run it with
 `./zig-out/bin/1z file.1z`.
 
+The [Conceptual Guides](../guides/index.md) go deeper into the type system,
+modules, iterators, concurrency, async I/O, and FFI.
+
 The [API Reference](../reference/index.md) documents every word in the
 standard library.

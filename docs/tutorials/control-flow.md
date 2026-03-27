@@ -467,3 +467,6 @@ Buzz
 
 Word definitions, `cond` for multi-way dispatch, a `while` loop with a
 counter, stack manipulation -- each piece small and testable on its own.
+
+The [Conceptual Guides](../guides/index.md) cover the type system, modules,
+iterators, concurrency, async I/O, and FFI in depth.
