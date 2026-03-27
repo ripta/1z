@@ -6,6 +6,7 @@ const Dictionary = @import("dictionary.zig").Dictionary;
 const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
 const debugger_mod = @import("debugger/mod.zig");
+const DispatchTable = @import("dispatch.zig").DispatchTable;
 const Quotation = value_mod.Quotation;
 const Value = value_mod.Value;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
@@ -100,6 +101,8 @@ pub const Context = struct {
     ///
     /// TODO(ripta): Consider making this a comptime flag to eliminate the pointer check.
     debugger: ?*debugger_mod.Debugger = null,
+    /// Dispatch table for user-defined operator/method dispatch.
+    dispatch: DispatchTable,
 
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
@@ -115,6 +118,7 @@ pub const Context = struct {
             .local_frames = .{},
             .parse_tokenizer = null,
             .benchmark = null,
+            .dispatch = DispatchTable.init(allocator),
         };
 
         primitives.registerPrimitives(&ctx.dictionary, ctx.arena.allocator()) catch |err| {
@@ -182,6 +186,7 @@ pub const Context = struct {
         self.error_details.deinit(self.allocator);
         self.load_paths.deinit(self.allocator);
         self.module_cache.deinit(self.arena.allocator());
+        self.dispatch.deinit();
         self.arena.deinit();
         self.dictionary.deinit();
         self.stack.deinit();
