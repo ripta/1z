@@ -1,0 +1,66 @@
+\ String Processing
+\
+\ Splitting, joining, formatting, and character-level operations.
+
+use "testing" ;
+use "strings" ;
+
+"splitting and joining" test-section
+
+\ split breaks a string by a delimiter, keeping empty segments.
+"a,b,c" "," split
+{ "a" "b" "c" } "split by comma" assert=
+
+"a,,b" "," split
+{ "a" "" "b" } "split keeps empties" assert=
+
+\ #join is the inverse:
+{ "a" "b" "c" } ", " #join
+"a, b, c" "join with separator" assert=
+
+\ Round-trip:
+"one:two:three" ":" split ":" #join
+"one:two:three" "split-join round-trip" assert=
+
+"trimming" test-section
+
+"  hello  " trim "hello" "trim both sides" assert=
+"  hello  " ltrim "hello  " "ltrim" assert=
+"  hello  " rtrim "  hello" "rtrim" assert=
+
+"template formatting" test-section
+
+\ fmt parses a template and interpolates values.
+
+\ Identity placeholder -- uses the source value directly:
+42 "The answer is {}." fmt
+"The answer is 42." "identity placeholder" assert=
+
+\ Named placeholders -- keys from a hash:
+H{ item: "widget" qty: 5 } "Order: {qty}x {item}" fmt
+"Order: 5x widget" "named placeholders" assert=
+
+\ Indexed placeholders -- positions from an array:
+{ "Alice" "Bob" } "{0} and {1}" fmt
+"Alice and Bob" "indexed placeholders" assert=
+
+"format specifiers" test-section
+
+\ Width and fill for padding:
+H{ n: 7 } "{n:width=3,fill=0}" fmt
+"007" "zero-padded" assert=
+
+"character iteration" test-section
+
+\ Strings are sequences -- #len, #nth, #map, #each all work.
+"hello" #len 5 "string length" assert=
+"hello" 0 #nth "h" "first character" assert=
+
+\ Iterate characters:
+"abc" [ ] #map #collect
+{ "a" "b" "c" } "map over characters" assert=
+
+"case conversion" test-section
+
+"hello" uppercase "HELLO" "uppercase" assert=
+"HELLO" lowercase "hello" "lowercase" assert=

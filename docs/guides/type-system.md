@@ -463,4 +463,6 @@ name: ( shape -- str ) [
 Structs define the data, enums define the variants, methods provide
 polymorphic behavior, and `match{` handles exhaustive case analysis.
 
+See also: [Data Structures cookbook](../cookbook/data-structures.md)
+
 The [next guide](modules.md) covers how to organize code into modules.

@@ -217,4 +217,6 @@ returns the same module value -- the file is not reëxecuted:
 Mostly useful during REPL development when you are editing a module and want
 to pick up changes without restarting.
 
+See also: [Module Organization cookbook](../cookbook/module-organization.md)
+
 The [next guide](iterators.md) covers lazy iteration and sequence pipelines.

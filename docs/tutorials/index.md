@@ -18,5 +18,11 @@ All examples are runnable. Save any snippet to a `.1z` file and run it with
 The [Conceptual Guides](../guides/index.md) go deeper into the type system,
 modules, iterators, concurrency, async I/O, and FFI.
 
+The [Cookbook](../cookbook/index.md) collects common patterns and idiomatic
+recipes.
+
+The [Cheatsheet](../cheatsheet.md) is a compact reference for all syntax
+and standard words.
+
 The [API Reference](../reference/index.md) documents every word in the
 standard library.

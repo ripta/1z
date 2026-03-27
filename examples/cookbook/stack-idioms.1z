@@ -1,0 +1,79 @@
+\ Stack Idioms
+\
+\ Combinators like dip, keep, bi, and tri let you express stack
+\ manipulation declaratively instead of shuffling with swap/rot.
+
+use "testing" ;
+
+"dip -- access buried values" test-section
+
+\ dip hides TOS, runs the quotation, then restores TOS.
+\ Equivalent to: swap [ body ] dip  =>  body swap
+\ but clearer when the shuffle gets deeper.
+
+1 2 [ 10 + ] dip
+2 "dip: TOS preserved" assert=
+11 "dip: body ran on second" assert=
+
+\ Nested dip reaches further down:
+1 2 3 [ 10 * ] 2dip
+3 "2dip: TOS preserved" assert=
+2 "2dip: second preserved" assert=
+10 "2dip: body ran on third" assert=
+
+"keep -- use a value without consuming it" test-section
+
+\ keep runs the quotation with TOS, then restores TOS afterward.
+5 [ 2 * ] keep
+5 "keep: original restored" assert=
+10 "keep: result below" assert=
+
+\ Handy when you need both a computed result and the original:
+"hello" [ #len ] keep
+"hello" "keep: string restored" assert=
+5 "keep: length computed" assert=
+
+"bi -- apply two operations to one value" test-section
+
+\ bi duplicates TOS, applies first quot, stashes result,
+\ applies second quot. Cleaner than dup-swap chains.
+10 [ 2 * ] [ 3 + ] bi
+13 "bi: second quotation result" assert=
+20 "bi: first quotation result" assert=
+
+"tri -- three operations on one value" test-section
+
+6 [ 2 * ] [ 3 + ] [ 1 - ] tri
+5 "tri: third" assert=
+9 "tri: second" assert=
+12 "tri: first" assert=
+
+"cleave -- array of quotations on one value" test-section
+
+10 { [ 2 * ] [ 3 + ] [ 1 - ] } cleave
+9 "cleave: third" assert=
+13 "cleave: second" assert=
+20 "cleave: first" assert=
+
+"curry and compose" test-section
+
+\ curry partially applies a value to a quotation:
+10 [ + ] curry
+\ Now the quotation is [ 10 + ]:
+5 swap call 15 "curry: 10 + 5" assert=
+
+\ compose chains two quotations:
+[ 2 * ] [ 1 + ] compose
+\ Now the quotation is [ 2 * 1 + ]:
+3 swap call 7 "compose: (3*2)+1" assert=
+
+"when to define a helper" test-section
+
+\ If you find yourself writing swap rot swap dip swap, stop.
+\ Define a word instead:
+add-to-each: ( n seq -- seq ) [
+  swap [ + ] curry #map #collect
+] ;
+
+5 { 1 2 3 } add-to-each
+{ 6 7 8 } "helper vs shuffle" assert=

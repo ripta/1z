@@ -1,0 +1,36 @@
+\ Testing Patterns
+\
+\ The testing library provides assertion words and test grouping.
+\ Every test file is a runnable program.
+
+use "testing" ;
+
+"equality assertions" test-section
+
+\ assert= checks that the top two stack values are equal.
+\ The third argument is a message shown on failure.
+4 2 2 + "two plus two" assert=
+"hello" "hel" "lo" #append "string concatenation" assert=
+
+"boolean assertions" test-section
+
+\ assert-true and assert-false check truthiness.
+t 1 0 > "one is greater" assert-true
+t 0 0 = "zero equals zero" assert-true
+f 1 0 < "one is not less" assert-false
+
+"error assertions" test-section
+
+\ assert-error checks that a quotation throws any error.
+[ 1 0 / ] "division by zero throws" assert-error
+
+\ assert-error-type checks for a specific error type.
+[ 1 0 / ] division-by-zero: "specific error type" assert-error-type
+
+"grouping with test-section" test-section
+
+\ test-section prints a header to organize test output.
+\ Use it to group related assertions under a descriptive label.
+\ Each section is independent -- a failure in one does not
+\ prevent later sections from running.
+t "this test runs" assert-true

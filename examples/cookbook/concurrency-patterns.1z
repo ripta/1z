@@ -1,0 +1,75 @@
+\ Concurrency Patterns
+\
+\ Green threads with structured scoping, channels for
+\ communication, and timeout control.
+
+use "testing" ;
+use "time" ;
+use "channel" ;
+
+"fan-out with task-scope" test-section
+
+\ task-scope runs a quotation that can spawn tasks.
+\ The scope waits for all spawned tasks to complete.
+[
+  [ 1 drop ] spawn drop
+  [ 2 drop ] spawn drop
+] task-scope
+t "both tasks completed" assert-true
+
+"producer-consumer with channels" test-section
+
+\ A channel connects a producer task to the main consumer.
+[
+  <channel>
+  dup [
+    dup 10 swap send
+    dup 20 swap send
+    30 swap send
+  ] curry spawn drop
+
+  dup receive 10 "first value" assert=
+  dup receive 20 "second value" assert=
+  receive 30 "third value" assert=
+] task-scope
+
+"buffered channels" test-section
+
+\ A buffered channel can hold N values before send blocks.
+\ Sends into a non-full buffer return immediately.
+[
+  3 <buffered-channel>
+  dup 1 swap send
+  dup 2 swap send
+  dup 3 swap send
+
+  dup receive 1 "buffered: first" assert=
+  dup receive 2 "buffered: second" assert=
+  receive 3 "buffered: third" assert=
+] task-scope
+
+"select for multiplexed receives" test-section
+
+\ select receives from the first channel that has data ready.
+[
+  <channel>
+  dup [ 42 swap send ] curry spawn drop
+  yield
+  { } swap #push
+  select
+  drop 42 "select picks ready channel" assert=
+] task-scope
+
+"timeout" test-section
+
+\ with-timeout cancels the computation if it exceeds the duration.
+[
+  [
+    [ 10000 milliseconds sleep 99 ] 10 milliseconds with-timeout
+  ] try result:err?
+  "timeout triggers error" assert-true
+
+  \ Fast computation completes before timeout:
+  [ 42 ] 5000 milliseconds with-timeout
+  42 "fast computation succeeds" assert=
+] task-scope

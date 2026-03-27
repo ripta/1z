@@ -315,5 +315,7 @@ For simple array iterators the cleanup is a no-op, but the pattern matters
 for resource-backed iterators -- file line iterators, database row iterators,
 and similar.
 
+See also: [Iterator Pipelines cookbook](../cookbook/iterator-pipelines.md)
+
 The [next guide](concurrency.md) covers green threads and structured
 concurrency.

@@ -15,9 +15,17 @@ definitions, and control flow.
 4. [Concurrency](concurrency.md) -- green threads, structured scopes, channels
 5. [Async I/O](async-io.md) -- transparent non-blocking I/O inside task scopes
 6. [Foreign Function Interface](ffi.md) -- calling C libraries from 1z
+7. [Coming from Forth or Factor](coming-from-forth.md) -- side-by-side syntax
+   comparison for experienced stack-language programmers
 
 All examples are runnable. Save any snippet to a `.1z` file and run it with
 `./zig-out/bin/1z file.1z`.
+
+The [Cookbook](../cookbook/index.md) collects common patterns and idiomatic
+recipes.
+
+The [Cheatsheet](../cheatsheet.md) is a compact reference for all syntax
+and standard words.
 
 The [API Reference](../reference/index.md) documents every word in the
 standard library.

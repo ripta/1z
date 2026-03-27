@@ -271,5 +271,7 @@ use "testing" ;
 ] task-scope
 ```
 
+See also: [Concurrency Patterns cookbook](../cookbook/concurrency-patterns.md)
+
 The [next guide](async-io.md) covers how I/O operations integrate with the
 task scheduler.

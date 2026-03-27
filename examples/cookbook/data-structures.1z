@@ -1,0 +1,90 @@
+\ Data Structures
+\
+\ Constructing and querying hashes, structs, virtual types,
+\ enums, vectors, and sets.
+
+use "testing" ;
+
+"hash tables" test-section
+
+\ H{ } creates an immutable hash with symbol keys.
+H{ name: "Alice" age: 30 }
+dup name: @get "Alice" "hash lookup" assert=
+dup age: @has? "key exists" assert-true
+dup role: @has? "key missing" assert-false
+
+\ @set returns a new hash (immutable):
+role: "admin" @set
+role: @get "admin" "hash with added key" assert=
+
+"option-returning lookup" test-section
+
+\ @get? returns an option instead of throwing on missing keys.
+H{ x: 1 }
+dup x: @get? option:some? "found key is some" assert-true
+y: @get? option:none? "missing key is none" assert-true
+
+\ Chain with unwrap-or for a default:
+H{ x: 1 } y: @get? 0 unwrap-or
+0 "unwrap-or provides default" assert=
+
+"structs" test-section
+
+\ struct{ } generates a constructor, getters, and predicate.
+point: struct{ x y } ;
+
+10 20 make-point
+dup x>> 10 "getter" assert=
+dup y>> 20 "second field" assert=
+point? "predicate" assert-true
+
+\ mutable structs also generate setters (>>field):
+mpoint: mutable struct{ mx my } ;
+
+10 20 make-mpoint
+99 >>mx mx>> 99 "setter updates field" assert=
+
+"virtual types (newtypes)" test-section
+
+\ virtual{ } wraps an existing type with a distinct identity.
+celsius: virtual{ float } ;
+
+100.0 >celsius
+dup celsius? "predicate" assert-true
+unmake-celsius 100.0 "unwrap" assert=
+
+"enums and match" test-section
+
+\ Flat enum -- every variant carries unit (no data).
+direction: enum{ north: unit south: unit east: unit west: unit } ;
+
+direction:north direction:north? "variant predicate" assert-true
+direction:north direction? "enum predicate" assert-true
+
+\ Exhaustive match:
+direction:east match{
+  direction:north: [ "N" ]
+  direction:south: [ "S" ]
+  direction:east:  [ "E" ]
+  direction:west:  [ "W" ]
+} "E" "match dispatches" assert=
+
+"vectors (mutable arrays)" test-section
+
+V{ 1 2 3 }
+dup 4 #push!
+dup #len 4 "push grows vector" assert=
+dup #pop! 4 "pop returns last" assert=
+#len 3 "pop shrinks vector" assert=
+
+"sets" test-section
+
+S{ "a" "b" "c" }
+dup "a" @in? "membership" assert-true
+dup "z" @in? "non-member" assert-false
+dup "d" @adjoin "d" @in? "adjoin adds element" assert-true
+
+S{ 1 2 3 } S{ 2 3 4 } @intersection
+dup 2 @in? "intersection contains 2" assert-true
+dup 1 @in? "intersection excludes 1" assert-false
+4 @in? "intersection excludes 4" assert-false

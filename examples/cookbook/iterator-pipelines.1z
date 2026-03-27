@@ -1,0 +1,83 @@
+\ Iterator Pipelines
+\
+\ Higher-order sequence words (#map, #filter, etc.) return lazy
+\ iterators. Chain them freely -- no intermediate arrays are
+\ allocated until you materialize with #collect.
+
+use "testing" ;
+use "ranges" ;
+use "sequences" ;
+
+"map-filter-collect" test-section
+
+\ A typical pipeline: transform, filter, materialize.
+{ 1 2 3 4 5 }
+[ 2 * ] #map
+[ 5 > ] #filter
+#collect
+{ 6 8 10 } "doubled then kept >5" assert=
+
+"reduce for aggregation" test-section
+
+\ #reduce folds left-to-right with an initial accumulator.
+{ 1 2 3 4 5 } 0 [ + ] #reduce
+15 "sum via reduce" assert=
+
+\ Product:
+{ 2 3 4 } 1 [ * ] #reduce
+24 "product via reduce" assert=
+
+"take and drop for windowing" test-section
+
+\ #take returns the first N elements as an iterator.
+{ 10 20 30 40 50 } >iterator 3 #take #collect
+{ 10 20 30 } "first 3 elements" assert=
+
+\ #drop skips the first N elements.
+{ 10 20 30 40 50 } >iterator 2 #drop #collect
+{ 30 40 50 } "after dropping 2" assert=
+
+"partition and group-by" test-section
+
+\ #partition splits into two arrays: ( true-arr false-arr ).
+\ true-arr sits deeper; false-arr is on top.
+{ 1 2 3 4 5 6 } [ even? ] #partition
+{ 1 3 5 } swap "partition: false-arr (odd, on top)" assert=
+{ 2 4 6 } swap "partition: true-arr (even, below)" assert=
+
+\ #group-by returns a hash keyed by the quotation's result.
+{ "apple" "avocado" "banana" "cherry" }
+[ 0 #nth >string ] #group-by
+dup "a" @get { "apple" "avocado" } "group-by: a words" assert=
+dup "b" @get { "banana" } "group-by: b words" assert=
+"c" @get { "cherry" } "group-by: c words" assert=
+
+"infinite ranges with take" test-section
+
+\ range-from creates an infinite range. >iterator makes it mappable.
+0 range-from >iterator [ 2 * ] #map 5 #take #collect
+{ 0 2 4 6 8 } "first 5 even numbers" assert=
+
+"composing adapters" test-section
+
+\ Chain multiple lazy adapters before materializing.
+\ Nothing runs until #collect pulls values through the pipeline.
+10 iota >iterator
+[ 2 * ] #map         \ 0 2 4 6 8 10 12 14 16 18
+[ 3 % 0 = ] #filter  \ 0 6 12 18
+2 #drop              \ 12 18
+#collect
+{ 12 18 } "chained adapters" assert=
+
+"each vs reduce" test-section
+
+\ #each is for side effects -- it returns nothing useful.
+\ #reduce is for computing a single value from a sequence.
+
+\ Use #reduce to compute:
+{ 1 2 3 } 0 [ + ] #reduce
+6 "reduce computes a value" assert=
+
+\ #each for side effects (here, accumulating into a vector):
+V{ } { 10 20 30 } [ over swap #push! drop ] #each
+V{ 10 20 30 } "each for side effects" assert=

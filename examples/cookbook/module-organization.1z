@@ -1,0 +1,39 @@
+\ Module Organization
+\
+\ Modules let you split code across files, import selectively,
+\ and use qualified names to avoid collisions.
+
+use "testing" ;
+
+"standard library import" test-section
+
+\ use loads a module from lib/ by name.
+use "strings" ;
+
+"  hello  " trim "hello" "strings loaded" assert=
+
+"selective import" test-section
+
+\ Import only the words you need. Names are symbols (trailing colon):
+use { split: } "strings" shadow-ok ;
+
+\ split is in scope:
+"a,b" "," split { "a" "b" } "selective import works" assert=
+
+"qualified access" test-section
+
+\ Bind a module to a name with load; dot notation accesses
+\ its words without importing them into the current scope.
+m: "math" load ;
+
+m.pi 3.0 > "pi via qualified access" assert-true
+
+"shadow-ok for deliberate shadowing" test-section
+
+\ If two modules export the same word, importing both raises
+\ a shadow warning. Use shadow-ok to suppress it when the
+\ shadowing is intentional.
+use "strings" shadow-ok ;
+
+\ The import succeeds without a warning.
+t "shadow-ok suppresses warning" assert-true

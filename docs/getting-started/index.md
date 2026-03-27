@@ -14,5 +14,8 @@ go deeper into the stack, quotations, word definitions, and control flow.
 The [Conceptual Guides](../guides/index.md) cover the type system, modules,
 iterators, concurrency, async I/O, and FFI in depth.
 
+The [Cheatsheet](../cheatsheet.md) is a compact reference for all syntax
+and standard words.
+
 The [API Reference](../reference/index.md) documents every word in the
 standard library.

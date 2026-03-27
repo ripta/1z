@@ -1,0 +1,70 @@
+\ Error Handling Patterns
+\
+\ 1z errors are first-class values. recover catches them,
+\ try wraps them in result types, and cleanup guarantees
+\ resource teardown.
+
+use "testing" ;
+
+"recover -- catch and inspect errors" test-section
+
+\ recover takes a body quotation and a handler quotation.
+\ If the body throws, the handler receives the error object.
+[ 1 0 / ] [ error-type: @get ] recover
+division-by-zero: "recover catches division by zero" assert=
+
+\ Successful execution skips the handler entirely:
+[ 42 ] [ drop -1 ] recover
+42 "recover: success passes through" assert=
+
+"try -- convert exceptions to result values" test-section
+
+\ try wraps the outcome in result:ok or result:err.
+[ 42 ] try result:ok? "try: success is result:ok" assert-true
+[ 1 0 / ] try result:err? "try: failure is result:err" assert-true
+
+\ Extract with unwrap-or:
+[ 42 ] try 0 unwrap-or 42 "unwrap-or: ok value" assert=
+[ 1 0 / ] try 0 unwrap-or 0 "unwrap-or: err fallback" assert=
+
+"ignore-errors -- best-effort operations" test-section
+
+\ ignore-errors silently discards any error from the quotation.
+\ Use sparingly -- silent failure hides bugs.
+[ drop ] ignore-errors
+\ No crash, no error. Program continues.
+t "ignore-errors: survived" assert-true
+
+"cleanup -- guaranteed teardown" test-section
+
+\ cleanup runs the second quotation whether the first succeeds or fails.
+\ Both quotations' results stay on the stack.
+
+\ Success case:
+[ 10 ] [ 20 ] cleanup
+20 "cleanup: cleanup result on top" assert=
+10 "cleanup: body result below" assert=
+
+\ Failure case -- cleanup still runs, then error propagates:
+[
+  [ [ drop ] [ 99 ] cleanup ] [ drop ] recover
+] call
+99 "cleanup: ran despite error" assert=
+
+"custom errors" test-section
+
+\ Build an error with make-error and throw it:
+[
+  f "bad input" EUserThrown make-error throw
+] [ message: @get ] recover
+"bad input" "custom error message" assert=
+
+"nested recovery" test-section
+
+\ Inner recover handles the error; outer never sees it.
+[
+  [ 1 0 / ]
+  [ drop "caught" ]
+  recover
+] [ drop "outer" ] recover
+"caught" "inner handler ran" assert=
