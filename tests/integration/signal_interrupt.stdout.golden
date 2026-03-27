@@ -1,0 +1,17 @@
+=== interrupted error catchable by recover ===
+Stack: [ ]
+Stack: [ [ f "interrupted by signal" interrupted: make-error throw ] ]
+Stack: [ "interrupted" ]
+PASS: interrupted error type
+Stack: [ ]
+=== interrupted error catchable by try ===
+Stack: [ ]
+Stack: [ <result:err result-error{ error: <error interrupted: interrupted by signal [tests/integration/signal_interrupt.1z:13:throw <- tests/integration/signal_interrupt.1z:2:call <- tests/integration/signal_interrupt.1z:2:recover]> }> ]
+PASS: try wraps interrupted error
+Stack: [ ]
+=== interrupted error message ===
+Stack: [ ]
+Stack: [ [ f "interrupted by signal" interrupted: make-error throw ] ]
+Stack: [ "interrupted by signal" ]
+PASS: interrupted error message
+Stack: [ ]

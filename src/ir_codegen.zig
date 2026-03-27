@@ -19,6 +19,7 @@ const JitEntry = jit_dispatch_mod.JitEntry;
 
 const Context = @import("context.zig").Context;
 const StackEffect = @import("stack_effect.zig").StackEffect;
+const signal = @import("signal.zig");
 
 pub const IrCodegenError = error{
     NotCompilable,
@@ -2606,6 +2607,12 @@ const helpers = @import("primitives/helpers.zig");
 fn jitSafepoint(ctx_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 0;
     const ctx: *Context = @ptrFromInt(ctx_raw);
+
+    signal.checkInterrupt(ctx) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+
     const scheduler: *Scheduler = ctx.scheduler orelse return 0;
     const should_yield = scheduler.run_queue.items.len > 0 or scheduler.sleep_queue.count() > 0;
     if (should_yield) {

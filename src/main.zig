@@ -26,6 +26,7 @@ const trace_mod = @import("trace.zig");
 const call_graph = @import("call_graph.zig");
 const effect_inference = @import("effect_inference.zig");
 
+const signal = @import("signal.zig");
 const build_options = @import("build_options");
 pub const version = build_options.version;
 
@@ -499,6 +500,8 @@ pub fn main() u8 {
         null;
     defer if (watchdog_thread) |t| t.detach();
 
+    signal.install();
+
     // If a file path is provided, run in batch mode, which executes the file
     // and exits. Errors print to stderr, and cause a non-zero exit code.
     // Otherwise, interactive REPL starts.
@@ -812,6 +815,7 @@ fn replInteractive(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
                     printErrorDetails(ctx, writer, err);
                     had_error = true;
                 };
+                signal.reset();
 
                 if (!had_error and verbosity != .silent) {
                     writer.writeAll("Stack: ") catch {};
@@ -913,6 +917,7 @@ fn replPiped(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
                     printErrorDetails(ctx, writer, err);
                     had_error = true;
                 };
+                signal.reset();
 
                 if (!had_error and verbosity != .silent) {
                     writer.writeAll("Stack: ") catch return;

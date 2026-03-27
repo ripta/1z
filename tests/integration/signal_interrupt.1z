@@ -1,0 +1,19 @@
+\ Test that interrupted errors follow the standard error handling path.
+\ Actual SIGINT delivery cannot be tested from within 1z, but we can
+\ verify the error type is catchable by simulating it with make-error/throw.
+
+use "testing" ;
+
+"interrupted error catchable by recover" test-section
+[ f "interrupted by signal" interrupted: make-error throw ]
+[ error-type: @get >string ] recover
+"interrupted" "interrupted error type" assert=
+
+"interrupted error catchable by try" test-section
+[ f "interrupted by signal" interrupted: make-error throw ] try
+result:err? "try wraps interrupted error" assert-true
+
+"interrupted error message" test-section
+[ f "interrupted by signal" interrupted: make-error throw ]
+[ message: @get ] recover
+"interrupted by signal" "interrupted error message" assert=

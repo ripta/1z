@@ -47,6 +47,8 @@ const StackEffectParam = stack_effect_mod.StackEffectParam;
 const lock_order = @import("lock_order.zig");
 const LockOrderTracker = lock_order.LockOrderTracker;
 
+const signal = @import("signal.zig");
+
 /// Embedded prelude source code
 const prelude_source = @embedFile("prelude.1z");
 
@@ -2843,6 +2845,11 @@ pub const Context = struct {
                     }
                 },
                 .call_word => |name| {
+                    signal.checkInterrupt(self) catch |err| {
+                        self.pushCallFrame(name, instr.line, instr.column);
+                        return self.wordErrorCleanup(name, err);
+                    };
+
                     if (self.benchmark) |b| {
                         b.recordCallWord();
                         b.beginWordProfile();
