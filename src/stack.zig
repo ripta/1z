@@ -44,6 +44,15 @@ pub const Stack = struct {
         return self.items.items[self.items.items.len - 1];
     }
 
+    /// Return the value at depth n from top (0 = top, 1 = second from top, etc.)
+    /// Returns StackUnderflow if n >= stack depth.
+    pub fn peekN(self: *const Stack, n: usize) StackError!Value {
+        if (n >= self.items.items.len) {
+            return error.StackUnderflow;
+        }
+        return self.items.items[self.items.items.len - 1 - n];
+    }
+
     /// Return the number of items on the stack.
     pub fn depth(self: *const Stack) usize {
         return self.items.items.len;
@@ -126,6 +135,41 @@ test "peek empty stack returns StackUnderflow" {
     defer stack.deinit();
 
     try std.testing.expectError(error.StackUnderflow, stack.peek());
+}
+
+test "peekN returns value at depth n" {
+    var stack = Stack.init(std.testing.allocator);
+    defer stack.deinit();
+
+    try stack.push(.{ .integer = 1 });
+    try stack.push(.{ .integer = 2 });
+    try stack.push(.{ .integer = 3 });
+
+    // n=0 is top (3), n=1 is second (2), n=2 is bottom (1)
+    try std.testing.expectEqual(@as(i64, 3), (try stack.peekN(0)).integer);
+    try std.testing.expectEqual(@as(i64, 2), (try stack.peekN(1)).integer);
+    try std.testing.expectEqual(@as(i64, 1), (try stack.peekN(2)).integer);
+
+    // Doesn't remove values
+    try std.testing.expectEqual(@as(usize, 3), stack.depth());
+}
+
+test "peekN returns StackUnderflow for n >= depth" {
+    var stack = Stack.init(std.testing.allocator);
+    defer stack.deinit();
+
+    try stack.push(.{ .integer = 1 });
+    try stack.push(.{ .integer = 2 });
+
+    try std.testing.expectError(error.StackUnderflow, stack.peekN(2));
+    try std.testing.expectError(error.StackUnderflow, stack.peekN(10));
+}
+
+test "peekN on empty stack returns StackUnderflow" {
+    var stack = Stack.init(std.testing.allocator);
+    defer stack.deinit();
+
+    try std.testing.expectError(error.StackUnderflow, stack.peekN(0));
 }
 
 test "dump empty stack" {

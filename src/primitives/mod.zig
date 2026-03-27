@@ -43,6 +43,7 @@ pub const env = @import("env.zig");
 pub const template = @import("template.zig");
 pub const virtual = @import("virtual.zig");
 pub const dispatch_words = @import("dispatch_words.zig");
+pub const dispatch_helpers = @import("dispatch_helpers.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");

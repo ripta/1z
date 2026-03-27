@@ -1,0 +1,76 @@
+=== virtual type arithmetic dispatch ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: + dispatches for duration duration
+Stack: [ ]
+PASS: - dispatches for duration duration
+Stack: [ ]
+PASS: * dispatches for duration integer
+Stack: [ ]
+PASS: / dispatches for duration integer
+Stack: [ ]
+PASS: % dispatches for duration integer
+Stack: [ ]
+PASS: result type is duration
+Stack: [ ]
+=== comparison dispatch ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: = dispatches for equal durations
+Stack: [ ]
+PASS: = dispatches for unequal durations
+Stack: [ ]
+PASS: < dispatches for duration duration (10 < 20)
+Stack: [ ]
+PASS: < dispatches for duration duration (20 not < 10)
+Stack: [ ]
+PASS: > dispatches for duration duration (20 > 10)
+Stack: [ ]
+PASS: > dispatches for duration duration (10 not > 20)
+Stack: [ ]
+=== wildcard dispatch ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: wildcard: duration + integer via any
+Stack: [ ]
+=== wildcard precedence ===
+Stack: [ ]
+PASS: exact match beats wildcard for duration+duration
+Stack: [ ]
+=== struct instance dispatch ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: point = dispatches (same x)
+Stack: [ ]
+PASS: point = dispatches (different x)
+Stack: [ ]
+=== native fallback ===
+Stack: [ ]
+PASS: native + still works for integers
+Stack: [ ]
+PASS: native - still works for integers
+Stack: [ ]
+PASS: native * still works for integers
+Stack: [ ]
+PASS: native / still works for integers
+Stack: [ ]
+PASS: native % still works for integers
+Stack: [ ]
+PASS: native = still works for integers
+Stack: [ ]
+PASS: native < still works for integers
+Stack: [ ]
+PASS: native > still works for integers
+Stack: [ ]
+=== all dispatch tests passed ===
+Stack: [ ]
