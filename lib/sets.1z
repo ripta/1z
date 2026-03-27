@@ -10,4 +10,4 @@
 @disjoint?: ( set1 set2 -- ? ) [ @intersection #len 0 = ] ;
 
 \ Elements in either set but not both
-@symmetric-difference: ( set1 set2 -- set ) [ 2dup @difference -rot> @difference @union ] ;
+@symmetric-difference: ( set1 set2 -- set ) [ 2dup @difference -rot> swap @difference @union ] ;

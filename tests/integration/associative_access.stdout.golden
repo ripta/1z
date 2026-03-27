@@ -54,9 +54,9 @@ PASS: error @has? invalid field
 Stack: [ ]
 === Error @keys and @values ===
 Stack: [ ]
-FAIL: error @keys count
+PASS: error @keys count
 Stack: [ ]
-FAIL: error @values count
+PASS: error @values count
 Stack: [ ]
 === @get-or on hashes ===
 Stack: [ ]

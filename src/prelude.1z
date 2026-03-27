@@ -19,21 +19,29 @@ S{: parse-time [ "}" parse-until make-set ] ;
 \ Mutable map literal syntax
 M{: parse-time [ "}" parse-until make-mutable-map ] ;
 
-\ Struct definition syntax, produces a struct descriptor
+\ Struct definition syntax
+\   name: struct{ field1 field2 ... } ;
 struct{: parse-time [
-  parse-struct-fields                   \ -- ...fields
-  M{ type: struct-descriptor: }         \ -- ...fields mmap
-  swap                                  \ -- mmap fields-array
-  fields: swap @set!                    \ -- mmap (with fields set)
-  [ define-struct ] define: swap @set!  \ -- mmap (with define set)
+  M{ type: struct-descriptor: }
+  fields: parse-struct-fields @set!
+  define: [ define-struct ] @set!
 ] ;
 
-\ Virtual type definition syntax, produces a type descriptor
+\ Virtual type definition syntax
+\   name: virtual{ inner-type } ;
 virtual{: parse-time [
-  parse-virtual-inner
-  M{ type: virtual: } swap inner-type: swap @set!
-  [ define-virtual ] define:
-  swap @set!
+  M{ type: virtual: }
+  inner-type: parse-virtual-inner @set!
+  define: [ define-virtual ] @set!
+] ;
+
+\ Method dispatch registration syntax
+\   word: method{ type1 type2 } [ body ] ;
+method{: parse-time [
+  M{ }
+  types: "}" parse-tokens-until @set!
+  body: parse-quotation @set!
+  define: [ define-method ] @set!
 ] ;
 
 \ Dynamic variables (parameters) syntax
@@ -95,7 +103,7 @@ keep: ( ..a x quot: ( ..a x -- ..b ) -- ..b x ) [ over [ call ] dip ] ;
 3keep: ( ..a x y z quot: ( ..a x y z -- ..b ) -- ..b x y z ) [ [ 3dup ] dip 3dip ] ;
 bi: ( x quot1 quot2 -- ) [ [ keep ] dip call ] ;
 2dup: ( a b -- a b a b ) [ over over ] ;
-3dup: ( a b c -- a b c a b c ) [ over over over ] ;
+3dup: ( a b c -- a b c a b c ) [ 2 pick-n 2 pick-n 2 pick-n ] ;
 dupd: ( a b -- a a b ) [ over swap ] ;
 2drop: ( a b -- ) [ drop drop ] ;
 3drop: ( a b c -- ) [ 2drop drop ] ;

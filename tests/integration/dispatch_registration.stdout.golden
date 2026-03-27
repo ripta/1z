@@ -1,0 +1,23 @@
+=== method{ registration ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+"registered + method for duration duration"
+Stack: [ ]
+Stack: [ ]
+"registered to-string method for duration"
+Stack: [ ]
+Stack: [ ]
+"re-registered + method with mutable"
+Stack: [ ]
+Stack: [ ]
+"defined generic word serialize"
+Stack: [ ]
+Stack: [ ]
+"registered serialize method for duration"
+Stack: [ ]
+Stack: [ ]
+"registered - method with any wildcard"
+Stack: [ ]
+=== all registration tests passed ===
+Stack: [ ]

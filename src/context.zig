@@ -6,6 +6,8 @@ const Dictionary = @import("dictionary.zig").Dictionary;
 const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
 const debugger_mod = @import("debugger/mod.zig");
+const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
+const DispatchTable = @import("dispatch.zig").DispatchTable;
 const Quotation = value_mod.Quotation;
 const Value = value_mod.Value;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
@@ -15,6 +17,7 @@ const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
 const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
+const markers_mod = @import("primitives/markers.zig");
 
 /// Embedded prelude source code
 const prelude_source = @embedFile("prelude.1z");
@@ -100,6 +103,8 @@ pub const Context = struct {
     ///
     /// TODO(ripta): Consider making this a comptime flag to eliminate the pointer check.
     debugger: ?*debugger_mod.Debugger = null,
+    /// Dispatch table for user-defined operator/method dispatch.
+    dispatch: DispatchTable,
 
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
@@ -115,6 +120,7 @@ pub const Context = struct {
             .local_frames = .{},
             .parse_tokenizer = null,
             .benchmark = null,
+            .dispatch = DispatchTable.init(allocator),
         };
 
         primitives.registerPrimitives(&ctx.dictionary, ctx.arena.allocator()) catch |err| {
@@ -182,6 +188,7 @@ pub const Context = struct {
         self.error_details.deinit(self.allocator);
         self.load_paths.deinit(self.allocator);
         self.module_cache.deinit(self.arena.allocator());
+        self.dispatch.deinit();
         self.arena.deinit();
         self.dictionary.deinit();
         self.stack.deinit();
@@ -826,8 +833,12 @@ pub const Context = struct {
 
     /// Execute raw instructions without stack-effect validation.
     ///
+    /// Supports generic word dispatch.
+    ///
     /// Supports tail call optimization: i.e., when the last instruction is a
     /// compound `call_word`, sets `tail_call_instructions` instead of recursing.
+    ///
+    /// TODO(ripta): Split into smaller functions for readability, cause holy cow.
     fn executeInstructions(self: *Context, instructions: []const Instruction) anyerror!void {
         for (instructions, 0..) |instr, idx| {
             if (self.debugger) |dbg| {
@@ -866,6 +877,46 @@ pub const Context = struct {
                                 self.popCallFrame();
                                 return err;
                             };
+                        }
+
+                        // Dispatch generic words, which are compound words with `generic` marker
+                        if (word.action == .compound) {
+                            const has_generic = blk: {
+                                for (word.markers) |mk| {
+                                    if (markers_mod.isGenericMarker(mk)) break :blk true;
+                                }
+                                break :blk false;
+                            };
+
+                            if (has_generic) {
+                                const dispatched = dispatch_helpers.tryDispatchGeneric(self, name) catch |err| {
+                                    if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+                                    self.captureCallStackOnError(err);
+                                    self.popCallFrame();
+                                    return err;
+                                };
+
+                                if (dispatched) {
+                                    if (self.benchmark) |b| {
+                                        b.endWordProfile(self.allocator, name);
+                                        b.updatePeakStackDepth(self.stack.depth());
+                                    }
+                                    self.popCallFrame();
+                                    continue; // NOTE: Advance to next instruction
+                                }
+
+                                // No method found check if default body exists
+                                const instrs = word.action.compound;
+                                if (instrs.len == 0) {
+                                    self.pending_error_message = "no method found for given argument types";
+                                    self.captureCallStackOnError(error.TypeError);
+                                    if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+                                    self.popCallFrame();
+                                    return error.TypeError;
+                                }
+
+                                // NOTE: Fall through to execute default body
+                            }
                         }
 
                         if (is_last) {

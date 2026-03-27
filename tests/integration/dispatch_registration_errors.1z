@@ -1,0 +1,29 @@
+\ dispatch_registration_errors.1z - Error cases for method{ registration
+
+use "testing" ;
+
+"method{ registration errors" test-section
+
+\ Setup: Define a virtual type
+duration: virtual{ integer } ;
+
+\ Test 1: Error when registering on a non-existent word
+[ nonexistent-word: method{ duration } [ drop ] ; ]
+[ error-type: @get word-not-found: = t "error on non-existent word" assert= ]
+recover
+
+\ Test 2: Error when registering on a non-generic user word
+regular-word: [ drop ] ;
+
+[ regular-word: method{ duration } [ drop ] ; ]
+[ error-type: @get type-mismatch: = t "error on non-generic user word" assert= ]
+recover
+
+\ Test 3: Error on duplicate registration without mutable
++: method{ duration duration } [ drop drop 0 >duration ] ;
+
+[ +: method{ duration duration } [ drop drop 1 >duration ] ; ]
+[ error-type: @get duplicate-method: = t "error on duplicate without mutable" assert= ]
+recover
+
+"all error tests passed" test-section

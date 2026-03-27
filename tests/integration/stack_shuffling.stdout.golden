@@ -56,10 +56,10 @@ PASS: 2nip three values
 Stack: [ ]
 === 3dup ===
 Stack: [ ]
-Stack: [ 1 2 3 2 3 2 ]
-FAIL: 3dup top , got 2(expected 3)
-FAIL: 3dup second , got 3(expected 2)
-FAIL: 3dup third , got 2(expected 1)
+Stack: [ 1 2 3 1 2 3 ]
+PASS: 3dup top
+PASS: 3dup second
+PASS: 3dup third
 Stack: [ 1 2 3 ]
 PASS: 3dup fourth
 PASS: 3dup fifth
@@ -96,9 +96,9 @@ PASS: 2keep result
 Stack: [ ]
 === 3keep ===
 Stack: [ ]
-FAIL: 3keep z preserved , got 2(expected 3)
-FAIL: 3keep y preserved , got 3(expected 2)
-FAIL: 3keep x preserved , got 2(expected 1)
+PASS: 3keep z preserved
+PASS: 3keep y preserved
+PASS: 3keep x preserved
 PASS: 3keep result
 Stack: [ ]
 === pick ===

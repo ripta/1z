@@ -1,0 +1,118 @@
+\ dispatch_generic.1z - Tests for generic word dispatch
+
+use "testing" ;
+
+"generic word dispatch basics" test-section
+
+\ Define a generic word with a default body that works on integers
+describe: ( value -- string ) generic [ to-string "default" #append ] ;
+
+\ Test 1: Default body runs when no method registered
+42 describe "42default" "default body runs for integer" assert=
+
+\ Test 2: Register a method for a specific type
+describe: method{ integer } [ to-string " (int)" #append ] ;
+
+\ Now integer should use the registered method
+42 describe "42 (int)" "method dispatches for integer" assert=
+
+\ Test 3: Register a method for boolean
+describe: method{ boolean } [ [ "yes" ] [ "no" ] if ] ;
+
+t describe "yes" "method dispatches for boolean true" assert=
+f describe "no" "method dispatches for boolean false" assert=
+
+\ Integers still use their method
+42 describe "42 (int)" "integer method still works" assert=
+
+"generic word with virtual types" test-section
+
+\ Define a virtual type
+duration: virtual{ integer } ;
+
+\ Register a method for the virtual type
+describe: method{ duration } [ duration> to-string " ns" #append ] ;
+
+\ Test: virtual type uses its registered method
+100 >duration describe "100 ns" "method dispatches for duration" assert=
+
+\ Verify type resolution
+100 >duration type-of duration: "duration has correct type" assert=
+
+"binary generic dispatch" test-section
+
+\ Define a generic binary word
+combine: ( a b -- result ) generic [ + ] ;
+
+\ Test default body (integer addition)
+10 32 combine 42 "default body adds integers" assert=
+
+\ Register a method for string combination
+combine: method{ string string } [ #append ] ;
+
+\ Test: strings use registered method
+"hello" " world" combine "hello world" "method dispatches for string string" assert=
+
+\ Test: integers still use default
+5 7 combine 12 "integers still use default" assert=
+
+"wildcard dispatch for generic words" test-section
+
+\ Define a generic word with a non-to-string default
+tag: ( value -- string ) generic [ drop "unknown" ] ;
+
+\ Register a wildcard method (matches any type)
+tag: method{ any } [ drop "tagged" ] ;
+
+\ Test: wildcard matches various types
+42 tag "tagged" "wildcard matches integer" assert=
+t tag "tagged" "wildcard matches boolean" assert=
+"test" tag "tagged" "wildcard matches string" assert=
+
+"dispatch precedence" test-section
+
+\ Define a generic word
+label: ( value -- string ) generic [ drop "default" ] ;
+
+\ Register both specific and wildcard methods
+label: method{ any } [ drop "any" ] ;
+label: method{ integer } [ drop "int" ] ;
+
+\ Specific method should take precedence over wildcard
+42 label "int" "specific beats wildcard" assert=
+t label "any" "wildcard handles other types" assert=
+
+"generic word without default body" test-section
+
+\ Define a generic word with empty default body
+process: ( value -- result ) generic [ ] ;
+
+\ Register a method
+process: method{ integer } [ 1 + ] ;
+
+\ Test: method works
+41 process 42 "method works on integer" assert=
+
+"binary dispatch precedence" test-section
+
+\ When both unary and binary methods exist, binary is tried first
+\ if there are 2+ elements on the stack
+
+\ Clear the stack first
+wipe
+
+compute: ( args -- result ) generic [ ] ;
+
+\ Register both methods
+compute: method{ integer } [ 10 * ] ;
+compute: method{ integer integer } [ + 100 * ] ;
+
+\ Test: with clean stack, binary dispatch takes both elements
+3 4 compute 700 "binary dispatch for two integers" assert=
+
+wipe
+
+\ Test: binary still works
+10 20 compute 3000 "another binary dispatch" assert=
+
+"all generic dispatch tests passed" test-section

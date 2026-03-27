@@ -3,6 +3,7 @@ const Context = @import("../context.zig").Context;
 const Value = @import("../value.zig").Value;
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
+const dispatch_helpers = @import("dispatch_helpers.zig");
 
 const popInteger = helpers.popInteger;
 
@@ -26,6 +27,7 @@ pub const primitives = [_]Primitive{
 
 /// + ( a b -- a+b ) - Add two integers
 pub fn nativeAdd(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "+")) return;
     const b = try popInteger(ctx);
     const a = try popInteger(ctx);
     const result = @addWithOverflow(a, b);
@@ -35,6 +37,7 @@ pub fn nativeAdd(ctx: *Context) anyerror!void {
 
 /// - ( a b -- a-b ) - Subtract: a minus b
 pub fn nativeSub(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "-")) return;
     const b = try popInteger(ctx);
     const a = try popInteger(ctx);
     const result = @subWithOverflow(a, b);
@@ -44,6 +47,7 @@ pub fn nativeSub(ctx: *Context) anyerror!void {
 
 /// * ( a b -- a*b ) - Multiply two integers
 pub fn nativeMul(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "*")) return;
     const b = try popInteger(ctx);
     const a = try popInteger(ctx);
     const result = @mulWithOverflow(a, b);
@@ -53,6 +57,7 @@ pub fn nativeMul(ctx: *Context) anyerror!void {
 
 /// / ( a b -- a/b ) - Integer division
 pub fn nativeDiv(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "/")) return;
     const b = try popInteger(ctx);
     const a = try popInteger(ctx);
     if (b == 0) return error.DivisionByZero;
@@ -62,6 +67,7 @@ pub fn nativeDiv(ctx: *Context) anyerror!void {
 
 /// % ( a b -- a%b ) - Modulo (remainder)
 pub fn nativeMod(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "%")) return;
     const b = try popInteger(ctx);
     const a = try popInteger(ctx);
     if (b == 0) return error.DivisionByZero;
@@ -91,6 +97,7 @@ pub fn nativeMulWrap(ctx: *Context) anyerror!void {
 
 /// = ( a b -- ? ) - Equality comparison
 pub fn nativeEq(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "=")) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     try ctx.stack.push(.{ .boolean = a.eql(b) });
@@ -107,6 +114,7 @@ pub fn nativeInnerEq(ctx: *Context) anyerror!void {
 
 /// < ( a b -- ? ) - Less than
 pub fn nativeLt(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "<")) return;
     const b = try popInteger(ctx);
     const a = try popInteger(ctx);
     try ctx.stack.push(.{ .boolean = a < b });
@@ -114,6 +122,7 @@ pub fn nativeLt(ctx: *Context) anyerror!void {
 
 /// > ( a b -- ? ) - Greater than
 pub fn nativeGt(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ">")) return;
     const b = try popInteger(ctx);
     const a = try popInteger(ctx);
     try ctx.stack.push(.{ .boolean = a > b });

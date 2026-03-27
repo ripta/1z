@@ -1,0 +1,16 @@
+\ dispatch_generic_error.1z - Tests error handling for generic words
+
+use "testing" ;
+
+\ Define a generic word with an empty default body
+no-default: ( value -- result ) generic [ ] ;
+
+\ Register a method only for integers
+no-default: method{ integer } [ 1 + ] ;
+
+\ This should work fine
+42 no-default 43 "method works for registered type" assert=
+
+\ But calling with a string (no method registered) should error
+\ This test expects an error
+"test" no-default

@@ -15,10 +15,15 @@ pub const parse_time_marker: Marker = .{ .name = "parse-time" };
 /// When present on a struct, setters (>>field) are generated in addition to getters.
 pub const mutable_marker: Marker = .{ .name = "mutable" };
 
+/// Well-known marker for generic word definitions.
+/// When present, method dispatch is enabled for the word.
+pub const generic_marker: Marker = .{ .name = "generic" };
+
 pub const primitives = [_]Primitive{
     .{ .name = "marker", .stack_effect = "-- marker", .func = nativeMarker },
     .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTimeMarker, .parse_time = true },
     .{ .name = "mutable", .stack_effect = "-- marker", .func = nativeMutableMarker, .parse_time = true },
+    .{ .name = "generic", .stack_effect = "-- marker", .func = nativeGenericMarker, .parse_time = true },
     .{ .name = "word-markers", .stack_effect = "name -- markers", .func = nativeWordMarkers },
     .{ .name = "native?", .stack_effect = "name -- ?", .func = nativeIsNative },
 };
@@ -44,6 +49,12 @@ pub fn nativeMutableMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&mutable_marker) });
 }
 
+/// generic ( -- marker ) - Push the well-known generic marker
+/// This marker indicates that a word supports method dispatch.
+pub fn nativeGenericMarker(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .marker = @constCast(&generic_marker) });
+}
+
 /// Check if a marker is the well-known mutable marker
 pub fn isMutableMarker(mk: *const Marker) bool {
     return mk == &mutable_marker;
@@ -52,6 +63,11 @@ pub fn isMutableMarker(mk: *const Marker) bool {
 /// Check if a marker is the well-known parse-time marker
 pub fn isParseTimeMarker(mk: *const Marker) bool {
     return mk == &parse_time_marker;
+}
+
+/// Check if a marker is the well-known generic marker
+pub fn isGenericMarker(mk: *const Marker) bool {
+    return mk == &generic_marker;
 }
 
 /// word-markers ( name -- markers ) - Get the markers attached to a word definition

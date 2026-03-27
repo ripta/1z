@@ -249,6 +249,19 @@ pub fn build(b: *std.Build) void {
 
     update_golden_step.dependOn(&update_files.step);
 
+    // XXX(ripta): icky hack to validate that no golden files contain "FAIL:", since
+    //             I seem to keep missing them when reviewing test diffs.
+    const validate_golden = b.addSystemCommand(&.{
+        "sh", "-c",
+        \\if grep -l 'FAIL:' tests/integration/*.stdout.golden 2>/dev/null; then
+        \\  echo ""
+        \\  echo "ERROR: Golden files contain FAIL: - fix the failing tests before updating golden files"
+        \\  exit 1
+        \\fi
+    });
+    validate_golden.step.dependOn(&update_files.step);
+    update_golden_step.dependOn(&validate_golden.step);
+
     // Formatter tests
     const fmt_test_step = b.step("fmt-test", "Run formatter tests");
     const update_fmt_golden_step = b.step("update-fmt-golden", "Update golden files for formatter tests");
