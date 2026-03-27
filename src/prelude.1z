@@ -36,6 +36,17 @@ virtual{: parse-time [
   swap @set!
 ] ;
 
+\ Method dispatch registration syntax
+\ Syntax: word: method{ type1 type2 } [ body ] ;
+method{: parse-time [
+  "}" parse-tokens-until          \ { "type1" "type2" }
+  parse-quotation                 \ [ body ]
+  M{ }
+  swap body: swap @set!           \ M{ body: [...] }
+  swap types: swap @set!          \ M{ body: [...] types: {...} }
+  [ define-method ] define: swap @set!
+] ;
+
 \ Dynamic variables (parameters) syntax
 parameter: parse-time [ dup parse-quotation make-parameter ] ;
 
