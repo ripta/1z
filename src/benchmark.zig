@@ -35,6 +35,10 @@ pub const BenchmarkStats = struct {
     prelude_end_time: i128 = 0,
     end_time: i128 = 0,
 
+    // Prelude timing breakdown (accumulated inside loadPrelude)
+    prelude_parse_ns: i128 = 0,
+    prelude_exec_ns: i128 = 0,
+
     // Instruction counts
     push_literal_count: u64 = 0,
     call_word_count: u64 = 0,
@@ -226,6 +230,14 @@ pub const BenchmarkStats = struct {
         try writer.writeAll("  Prelude load:    ");
         try formatTime(writer, self.preludeTimeNs());
         try writer.writeAll("\n");
+        if (self.prelude_parse_ns > 0 or self.prelude_exec_ns > 0) {
+            try writer.writeAll("    Parse:         ");
+            try formatTime(writer, self.prelude_parse_ns);
+            try writer.writeAll("\n");
+            try writer.writeAll("    Execute:       ");
+            try formatTime(writer, self.prelude_exec_ns);
+            try writer.writeAll("\n");
+        }
         try writer.writeAll("  User code:       ");
         try formatTime(writer, self.userTimeNs());
         try writer.writeAll("\n");
@@ -311,9 +323,11 @@ pub const BenchmarkStats = struct {
     /// Output benchmark results in JSON format
     pub fn formatJson(self: *const BenchmarkStats, writer: anytype) !void {
         try writer.print(
-            \\{{"timing":{{"prelude_ns":{d},"user_ns":{d},"total_ns":{d}}},"instructions":{{"push_literal":{d},"call_word":{d},"total":{d}}},"stack":{{"peak_depth":{d},"peak_task_stack_usage":{d}}},"jit":{{"words_compiled":{d},"compile_time_ns":{d}}},"memory":{{"allocations":{d},"bytes":{d},"peak_live_bytes":{d}}},"alloc_profile":[
+            \\{{"timing":{{"prelude_ns":{d},"prelude_parse_ns":{d},"prelude_exec_ns":{d},"user_ns":{d},"total_ns":{d}}},"instructions":{{"push_literal":{d},"call_word":{d},"total":{d}}},"stack":{{"peak_depth":{d},"peak_task_stack_usage":{d}}},"jit":{{"words_compiled":{d},"compile_time_ns":{d}}},"memory":{{"allocations":{d},"bytes":{d},"peak_live_bytes":{d}}},"alloc_profile":[
         , .{
             @as(i64, @intCast(self.preludeTimeNs())),
+            @as(i64, @intCast(self.prelude_parse_ns)),
+            @as(i64, @intCast(self.prelude_exec_ns)),
             @as(i64, @intCast(self.userTimeNs())),
             @as(i64, @intCast(self.totalTimeNs())),
             self.push_literal_count,
@@ -670,4 +684,46 @@ test "formatSignedBytes" {
         try BenchmarkStats.formatSignedBytes(stream.writer(), 0);
         try std.testing.expectEqualStrings("+0 B", stream.getWritten());
     }
+}
+
+test "BenchmarkStats prelude timing accumulates" {
+    var stats = BenchmarkStats{};
+    stats.prelude_parse_ns += 100;
+    stats.prelude_parse_ns += 200;
+    stats.prelude_exec_ns += 50;
+    stats.prelude_exec_ns += 75;
+    try std.testing.expectEqual(@as(i128, 300), stats.prelude_parse_ns);
+    try std.testing.expectEqual(@as(i128, 125), stats.prelude_exec_ns);
+}
+
+test "formatHuman includes prelude parse/exec breakdown" {
+    var stats = BenchmarkStats{};
+    stats.start_time = 0;
+    stats.prelude_end_time = 1_000_000;
+    stats.end_time = 2_000_000;
+    stats.prelude_parse_ns = 600_000;
+    stats.prelude_exec_ns = 400_000;
+
+    var buf: [8192]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try stats.formatHuman(stream.writer());
+    const output = stream.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "Parse:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Execute:") != null);
+}
+
+test "formatJson includes prelude_parse_ns and prelude_exec_ns" {
+    var stats = BenchmarkStats{};
+    stats.start_time = 0;
+    stats.prelude_end_time = 1_000_000;
+    stats.end_time = 2_000_000;
+    stats.prelude_parse_ns = 600_000;
+    stats.prelude_exec_ns = 400_000;
+
+    var buf: [8192]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try stats.formatJson(stream.writer());
+    const output = stream.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"prelude_parse_ns\":600000") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"prelude_exec_ns\":400000") != null);
 }

@@ -490,12 +490,16 @@ pub const Context = struct {
         const source = external_source orelse prelude_source;
         var lines = std.mem.splitScalar(u8, source, '\n');
         while (lines.next()) |line| {
+            const parse_start = if (self.benchmark != null) std.time.nanoTimestamp() else 0;
             const result = processor.feedLine(self.arena.allocator(), line, self);
+            if (self.benchmark) |b| b.prelude_parse_ns += std.time.nanoTimestamp() - parse_start;
             switch (result) {
                 .needs_more_input => continue,
                 .complete => |instrs| {
                     if (instrs.len > 0) {
+                        const exec_start = if (self.benchmark != null) std.time.nanoTimestamp() else 0;
                         try self.executeQuotation(.{ .instructions = instrs });
+                        if (self.benchmark) |b| b.prelude_exec_ns += std.time.nanoTimestamp() - exec_start;
                     }
                     processor.reset();
                 },
@@ -504,10 +508,15 @@ pub const Context = struct {
         }
 
         // Flush any remaining buffered content
-        switch (processor.flush(self.arena.allocator(), self)) {
+        const flush_parse_start = if (self.benchmark != null) std.time.nanoTimestamp() else 0;
+        const flush_result = processor.flush(self.arena.allocator(), self);
+        if (self.benchmark) |b| b.prelude_parse_ns += std.time.nanoTimestamp() - flush_parse_start;
+        switch (flush_result) {
             .complete => |instrs| {
                 if (instrs.len > 0) {
+                    const exec_start = if (self.benchmark != null) std.time.nanoTimestamp() else 0;
                     try self.executeQuotation(.{ .instructions = instrs });
+                    if (self.benchmark) |b| b.prelude_exec_ns += std.time.nanoTimestamp() - exec_start;
                 }
             },
             .parse_error => |err| return err,
