@@ -5,6 +5,8 @@ const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
 const Value = value_mod.Value;
 const VirtualType = value_mod.VirtualType;
+const StructInstance = value_mod.StructInstance;
+const StructType = value_mod.StructType;
 
 const ir_mod = @import("ffi/ir.zig");
 const JitBuffer = ir_mod.JitBuffer;
@@ -55,8 +57,10 @@ fn isSupportedOp(name: []const u8) bool {
     if (isDynamicVarOp(name)) return true;
     if (isIteratorOp(name)) return true;
 
-    // HACK(ripta): not technically native, but treat virtual-unwrap as a hardcoded intrinsic in the IR for simplicity
+    // HACK(ripta): not technically native, but treat certain native core library words as harcoded
+    //              instrinsics so they can be compiled with the same fast path instead of dynamic dispatch
     if (std.mem.eql(u8, name, "native.virtual-unwrap")) return true;
+    if (std.mem.eql(u8, name, "native.struct-field-get")) return true;
 
     return false;
 }
@@ -287,6 +291,25 @@ const ValueLayout = struct {
 
         std.debug.assert(found_tag_ptr);
         std.debug.assert(found_inner_ptr);
+
+        initialized = true;
+    }
+};
+
+/// Layout of StructInstance for use in generated IR code, determined at
+/// runtime since Zig structs don't expose field offsets at comptime.
+const StructInstanceLayout = struct {
+    var struct_type_offset: usize = 0;
+    var fields_ptr_offset: usize = 0;
+    var initialized: bool = false;
+
+    fn ensureInit() void {
+        if (initialized) return;
+
+        var dummy: StructInstance = undefined;
+        const base: usize = @intFromPtr(&dummy);
+        struct_type_offset = @intFromPtr(&dummy.struct_type) - base;
+        fields_ptr_offset = @intFromPtr(&dummy.fields.ptr) - base;
 
         initialized = true;
     }
@@ -577,6 +600,7 @@ const CompileState = struct {
     float_tag_const: c.ir_ref,
     boolean_tag_const: c.ir_ref,
     tagged_tag_const: c.ir_ref,
+    struct_instance_tag_const: c.ir_ref,
     bail_status: c.ir_ref,
     ok_status: c.ir_ref,
     items_ptr: c.ir_ref,
@@ -952,6 +976,80 @@ fn tryEmitInlineVirtualUnwrap(
     emitCopyFromPtr(ctx, base_addr, inner_ptr, value_slot);
 
     stack[sp.*] = .{ .raw_at_slot = value_slot };
+    sp.* += 1;
+    return true;
+}
+
+/// Try to emit inline IR for struct field access.
+///
+/// Attempts to recognize the pattern:
+///
+///     push_literal(.struct_type)
+///     push_literal(.fixnum=idx)
+///     call_word("native.struct-field-get")
+///
+/// Returns true if inlined; or false to fall back to runtime callback.
+fn tryEmitInlineStructFieldGet(
+    state: *CompileState,
+    instructions: []const Instruction,
+    idx: usize,
+    stack: *[64]StackEntry,
+    sp: *usize,
+) bool {
+    if (sp.* < 3) return false;
+    if (idx < 2) return false;
+
+    // struct_type pointer must be a const from two instructions back
+    const struct_type_ptr: *const StructType = switch (instructions[idx - 2].op) {
+        .push_literal => |v| if (v == .struct_type) v.struct_type else return false,
+        else => return false,
+    };
+
+    // field index must be a const fixnum from the preceding instruction
+    const field_index: usize = switch (instructions[idx - 1].op) {
+        .push_literal => |v| if (v == .fixnum) @as(usize, @intCast(v.fixnum)) else return false,
+        else => return false,
+    };
+
+    // the instance must be a raw value on the physical stack
+    const instance_slot: usize = switch (stack[sp.* - 3]) {
+        .raw_at_slot => |s| s,
+        else => return false,
+    };
+
+    sp.* -= 3;
+
+    StructInstanceLayout.ensureInit();
+
+    const ctx = state.ctx;
+    const base_addr = state.base_addr;
+
+    // check Value at instance_slot must be .struct_instance
+    const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, instance_slot * ValueLayout.value_size));
+    emitTagCheck(ctx, elem_addr, state.struct_instance_tag_const, state.tag_offset_const, state.bail_status);
+
+    // load *StructInstance from Value
+    const si_ptr = emitUnboxPtr(ctx, elem_addr, state.payload_offset_const);
+
+    // check si_ptr.struct_type must match expected tpye
+    const type_field_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), si_ptr, c.ir_const_addr(ctx, StructInstanceLayout.struct_type_offset));
+    const actual_type = c._ir_LOAD(ctx, c.IR_ADDR, type_field_addr);
+    const expected_type = c.ir_const_addr(ctx, @intFromPtr(struct_type_ptr));
+    const type_mismatch = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), actual_type, expected_type);
+    const if_mismatch = c._ir_IF(ctx, type_mismatch);
+    c._ir_IF_TRUE_cold(ctx, if_mismatch);
+    c._ir_RETURN(ctx, state.bail_status);
+    c._ir_IF_FALSE(ctx, if_mismatch);
+
+    const fields_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), si_ptr, c.ir_const_addr(ctx, StructInstanceLayout.fields_ptr_offset));
+    const fields_ptr = c._ir_LOAD(ctx, c.IR_ADDR, fields_ptr_addr);
+
+    // index into fields [fields_ptr + field_index * value_size]
+    const field_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), fields_ptr, c.ir_const_addr(ctx, field_index * ValueLayout.value_size));
+
+    emitCopyFromPtr(ctx, base_addr, field_addr, instance_slot);
+
+    stack[sp.*] = .{ .raw_at_slot = instance_slot };
     sp.* += 1;
     return true;
 }
@@ -1600,6 +1698,33 @@ fn compileInstructions(
                     } else {
                         return IrCodegenError.NotCompilable;
                     }
+                } else if (std.mem.eql(u8, name, "native.struct-field-get")) {
+                    // fallthrough to resolver for runtime callback
+                    if (tryEmitInlineStructFieldGet(state, instructions, idx, stack, sp)) continue;
+
+                    const res = state.resolver orelse return IrCodegenError.NotCompilable;
+                    const resolved = res.resolve(name, res.user_data) orelse return IrCodegenError.NotCompilable;
+
+                    if (resolved.native_fn_ptr) |fn_ptr| {
+                        if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
+
+                        materializeQuotations(state, stack, sp.*);
+                        flushToPhysicalStack(state, stack, sp.*);
+                        const ctx_val = emitCallbackPreamble(state, sp.*);
+
+                        if (resolved.stack_effect_ptr) |eff_ptr| {
+                            emitParamValidation(state, eff_ptr);
+                        }
+
+                        const fn_ptr_const = c.ir_const_addr(ctx, fn_ptr);
+                        const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.native_call_fn, ctx_val, fn_ptr_const);
+                        emitCallbackPostCheck(state, call_result, call_result);
+
+                        sp.* = sp.* - resolved.input_count + resolved.output_count;
+                        resetStackToPhysical(stack, sp.*);
+                    } else {
+                        return IrCodegenError.NotCompilable;
+                    }
                 } else {
                     // Unrecognized word: try dispatch table call if a resolver is available
                     const res = state.resolver orelse return IrCodegenError.NotCompilable;
@@ -1978,6 +2103,7 @@ pub fn compileWord(
     const float_tag_const = emitTagConst(&ctx, .float);
     const boolean_tag_const = emitTagConst(&ctx, .boolean);
     const tagged_tag_const = emitTagConst(&ctx, .tagged);
+    const struct_instance_tag_const = emitTagConst(&ctx, .struct_instance);
 
     // Precompute the base address for output writes:
     // base_addr = items_ptr + (sp_val - input_count) * value_size
@@ -2004,6 +2130,7 @@ pub fn compileWord(
         .float_tag_const = float_tag_const,
         .boolean_tag_const = boolean_tag_const,
         .tagged_tag_const = tagged_tag_const,
+        .struct_instance_tag_const = struct_instance_tag_const,
         .bail_status = bail_status,
         .ok_status = ok_status,
         .items_ptr = items_ptr,
@@ -3624,4 +3751,114 @@ test "inline virtual-unwrap then arithmetic" {
     try testing.expectEqual(@as(usize, 1), sp);
     try testing.expect(values[0] == .fixnum);
     try testing.expectEqual(@as(i64, 15), values[0].fixnum);
+}
+
+test "compile inline struct-field-get field 0" {
+    var st = StructType{ .name = "point", .fields = &.{ "x", "y" } };
+    var fields = [_]Value{ .{ .fixnum = 42 }, .{ .fixnum = 99 } };
+    var instance = StructInstance{ .struct_type = &st, .fields = &fields };
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .struct_instance = &instance } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .struct_type = &st } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 3 },
+        .{ .op = .{ .call_word = "native.struct-field-get" }, .line = 4 },
+    };
+
+    const result = try compileWord(&instrs, 0, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 42), values[0].fixnum);
+}
+
+test "compile inline struct-field-get field 1" {
+    var st = StructType{ .name = "point", .fields = &.{ "x", "y" } };
+    var fields = [_]Value{ .{ .fixnum = 42 }, .{ .fixnum = 99 } };
+    var instance = StructInstance{ .struct_type = &st, .fields = &fields };
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .struct_instance = &instance } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .struct_type = &st } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 3 },
+        .{ .op = .{ .call_word = "native.struct-field-get" }, .line = 4 },
+    };
+
+    const result = try compileWord(&instrs, 0, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 99), values[0].fixnum);
+}
+
+test "inline struct-field-get on input parameter" {
+    var st = StructType{ .name = "point", .fields = &.{ "x", "y" } };
+    var fields = [_]Value{ .{ .fixnum = 77 }, .{ .fixnum = 88 } };
+    var instance = StructInstance{ .struct_type = &st, .fields = &fields };
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .struct_type = &st } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 2 },
+        .{ .op = .{ .call_word = "native.struct-field-get" }, .line = 3 },
+    };
+
+    const result = try compileWord(&instrs, 1, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values = [_]Value{ .{ .struct_instance = &instance }, .unit, .unit, .unit };
+    var sp: usize = 1;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 77), values[0].fixnum);
+}
+
+test "inline struct-field-get bails on non-struct value" {
+    var st = StructType{ .name = "point", .fields = &.{ "x", "y" } };
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .struct_type = &st } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 2 },
+        .{ .op = .{ .call_word = "native.struct-field-get" }, .line = 3 },
+    };
+
+    const result = try compileWord(&instrs, 1, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values = [_]Value{ .{ .fixnum = 123 }, .unit, .unit, .unit };
+    var sp: usize = 1;
+    try testing.expectEqual(@as(i32, 1), callCompiledValues(func, &values, &sp));
+}
+
+test "inline struct-field-get bails on wrong struct type" {
+    var st_a = StructType{ .name = "point", .fields = &.{ "x", "y" } };
+    var st_b = StructType{ .name = "color", .fields = &.{ "r", "g" } };
+    var fields = [_]Value{ .{ .fixnum = 42 }, .{ .fixnum = 99 } };
+    var instance = StructInstance{ .struct_type = &st_a, .fields = &fields };
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .struct_type = &st_b } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 2 },
+        .{ .op = .{ .call_word = "native.struct-field-get" }, .line = 3 },
+    };
+
+    const result = try compileWord(&instrs, 1, 1, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values = [_]Value{ .{ .struct_instance = &instance }, .unit, .unit, .unit };
+    var sp: usize = 1;
+    try testing.expectEqual(@as(i32, 1), callCompiledValues(func, &values, &sp));
 }
