@@ -833,7 +833,11 @@ pub const Context = struct {
         if (self.lookupWordLocked(name)) |existing| {
             for (existing.markers) |mk| {
                 if (markers_mod.isConstMarker(mk)) {
-                    self.pending_error_message = "cannot redefine const word";
+                    self.pending_error_message = std.fmt.allocPrint(
+                        self.arena.allocator(),
+                        "cannot redefine const word '{s}'",
+                        .{name},
+                    ) catch "cannot redefine const word";
                     return error.CannotRedefineConst;
                 }
             }
@@ -1062,7 +1066,11 @@ pub const Context = struct {
 
             for (existing.markers) |mk| {
                 if (markers_mod.isConstMarker(mk)) {
-                    self.pending_error_message = "cannot redefine const word";
+                    self.pending_error_message = std.fmt.allocPrint(
+                        self.arena.allocator(),
+                        "cannot redefine const word '{s}'",
+                        .{name},
+                    ) catch "cannot redefine const word";
                     return error.CannotRedefineConst;
                 }
             }
