@@ -200,19 +200,19 @@ PASS: identical sets not disjoint
 Stack: [ ]
 === Set @symmetric-difference ===
 Stack: [ ]
-FAIL: symmetric-difference size , got 1(expected 2)
+PASS: symmetric-difference size
 Stack: [ ]
 PASS: symmetric-difference has left-only
 Stack: [ ]
-FAIL: symmetric-difference has right-only , got f(expected t)
+PASS: symmetric-difference has right-only
 Stack: [ ]
 PASS: symmetric-difference excludes common
 Stack: [ ]
 PASS: symmetric-difference of identical sets
 Stack: [ ]
-FAIL: symmetric-difference of disjoint sets , got 2(expected 4)
+PASS: symmetric-difference of disjoint sets
 Stack: [ ]
-FAIL: symmetric-difference with empty set , got 0(expected 2)
+PASS: symmetric-difference with empty set
 Stack: [ ]
 All set tests complete!
 Stack: [ ]
