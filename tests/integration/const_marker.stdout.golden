@@ -1,0 +1,11 @@
+Stack: [ ]
+PASS: const word returns value
+Stack: [ ]
+Stack: [ ]
+PASS: initial value
+Stack: [ ]
+Stack: [ ]
+PASS: redefined value
+Stack: [ ]
+const_marker tests passed
+Stack: [ ]

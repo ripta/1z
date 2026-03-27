@@ -74,6 +74,7 @@ EUserThrown: [ user-thrown: ] ;
 EKeyNotFound: [ key-not-found: ] ;
 EIOFailed: [ io-failed: ] ;
 ENoMatchingBranch: [ no-matching-branch: ] ;
+ECannotRedefineConst: [ cannot-redefine-const: ] ;
 \ TODO(ripta): the pattern is a bit repetitive and odd; maybe a parse-time?
 no-matching-branch: ( data -- error ) [ "no matching branch" ENoMatchingBranch make-error ] ;
 

@@ -68,6 +68,7 @@ call ( quot --  )
 cleanup ( body-quot cleanup-quot --  )
 command-line-args (  -- args )
 compose ( quot1 quot2 -- quot' )
+const (  -- marker )
 curry ( x quot -- quot' )
 define-method ( name descriptor markers --  )
 define-struct ( name descriptor markers --  )
@@ -163,6 +164,7 @@ words (  --  )
 <rot- ( a b c -- b c a )
 >= ( a b -- ? )
 B{
+ECannotRedefineConst
 EDivisionByZero
 EFileNotFound
 EFileReadFailed

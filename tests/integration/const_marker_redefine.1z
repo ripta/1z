@@ -1,0 +1,11 @@
+\ Test that redefining a const word fails
+
+use "testing" ;
+
+\ Define a constant
+PI: const 3 ;
+
+\ Attempt to redefine - should fail with ECannotRedefineConst
+[ PI: 4 ; ] ECannotRedefineConst "redefining const fails" assert-error-type
+
+"const_marker_redefine tests passed" print-line

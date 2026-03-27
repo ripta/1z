@@ -1,0 +1,16 @@
+\ Test for const marker - redefinition protection
+
+use "testing" ;
+
+\ Define a constant and verify it works
+PI: const 3 ;
+PI 3 "const word returns value" assert=
+
+\ Non-const words can still be redefined
+counter: 0 ;
+counter 0 "initial value" assert=
+
+counter: 1 ;
+counter 1 "redefined value" assert=
+
+"const_marker tests passed" print-line

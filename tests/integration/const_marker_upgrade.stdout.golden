@@ -1,0 +1,10 @@
+Stack: [ ]
+PASS: initial non-const value
+Stack: [ ]
+Stack: [ ]
+PASS: upgraded to const
+Stack: [ ]
+PASS: cannot redefine after upgrade to const
+Stack: [ ]
+const_marker_upgrade tests passed
+Stack: [ ]

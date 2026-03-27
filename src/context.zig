@@ -299,6 +299,15 @@ pub const Context = struct {
     /// Define a word in the current local frame if one exists, otherwise
     /// in global dictionary.
     pub fn defineWord(self: *Context, name: []const u8, definition: WordDefinition) !void {
+        if (self.lookupWord(name)) |existing| {
+            for (existing.markers) |mk| {
+                if (markers_mod.isConstMarker(mk)) {
+                    self.pending_error_message = "cannot redefine const word";
+                    return error.CannotRedefineConst;
+                }
+            }
+        }
+
         if (self.local_frames.items.len > 0) {
             const top_index = self.local_frames.items.len - 1;
             try self.local_frames.items[top_index].put(self.allocator, name, definition);
@@ -312,6 +321,15 @@ pub const Context = struct {
     /// dictionary otherwise. This prevents imported words from leaking
     /// into the global namespace when loading modules.
     pub fn defineImportedWord(self: *Context, name: []const u8, definition: WordDefinition) !void {
+        if (self.lookupWord(name)) |existing| {
+            for (existing.markers) |mk| {
+                if (markers_mod.isConstMarker(mk)) {
+                    self.pending_error_message = "cannot redefine const word";
+                    return error.CannotRedefineConst;
+                }
+            }
+        }
+
         if (self.import_frame_index) |idx| {
             try self.local_frames.items[idx].put(self.allocator, name, definition);
         } else {
