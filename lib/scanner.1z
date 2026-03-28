@@ -34,6 +34,45 @@ rest: ( scanner -- str ) [
   <rot- swap #slice
 ] ;
 
+\\ Consume characters while the predicate quotation returns true.
+\\ Returns the advanced scanner and the consumed substring.
+take-while: ( scanner quot -- scanner str ) [
+  over position>>
+  [
+    [ over peek dup f = [ drop f ] [ over call ] if ]
+    [ swap advance swap ] while
+    drop
+  ] dip
+  over position>>
+  2 pick-n str>>
+  -rot> #slice
+] ;
+
+\\ Advance past characters matching the predicate, discarding the consumed text.
+skip-while: ( scanner quot -- scanner ) [
+  take-while drop
+] ;
+
+\\ Consume an expected string prefix or throw an error.
+\\ Compares the prefix of remaining input against the expected string.
+expect: ( scanner str -- scanner ) [
+  over rest over #len
+  2dup swap #len swap <
+  [
+    2drop "expected \"" swap #append "\" but reached end of input" #append
+    f swap EInvalidArgument make-error throw
+  ] [
+    0 swap #slice
+    over over = not [
+      "expected \"" <rot- #append "\" but found \"" #append swap #append "\"" #append
+      f swap EInvalidArgument make-error throw
+    ] [
+      drop #len
+      [ unmake-scanner ] dip + make-scanner
+    ] if
+  ] if
+] ;
+
 \\ Debug representation of a scanner value.
 inspect: method{ scanner } [
   dup position>> inspect

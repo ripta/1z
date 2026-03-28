@@ -2,6 +2,8 @@
 
 use "testing" ;
 use "scanner" ;
+use "char" ;
+use "conversions" ;
 
 "scanner type" test-section
 "hello" <scanner> type-name "scanner" "type-name returns scanner" assert=
@@ -58,6 +60,39 @@ at-end? "at end after scanning all" assert-true
 "hello" <scanner> advance advance dup
 advance advance advance at-end? "advanced copy at end" assert-true
 position>> 2 "original unchanged at position 2" assert=
+
+"take-while" test-section
+"123abc" <scanner> [ digit? ] take-while "123" "take-while digits" assert=
+position>> 3 "take-while advances position" assert=
+"abc123" <scanner> [ alpha? ] take-while "abc" "take-while alpha" assert=
+drop
+"abc" <scanner> [ digit? ] take-while "" "take-while no match returns empty" assert=
+position>> 0 "take-while no match stays at 0" assert=
+"" <scanner> [ digit? ] take-while "" "take-while on empty returns empty" assert=
+drop
+"12345" <scanner> [ digit? ] take-while "12345" "take-while full match" assert=
+at-end? "take-while full match at end" assert-true
+
+"skip-while" test-section
+"   hello" <scanner> [ " " = ] skip-while
+dup position>> 3 "skip-while skips spaces" assert=
+rest "hello" "skip-while leaves rest" assert=
+"" <scanner> [ digit? ] skip-while at-end? "skip-while on empty at end" assert-true
+"abc" <scanner> [ digit? ] skip-while position>> 0 "skip-while no match stays at 0" assert=
+
+"expect" test-section
+"hello world" <scanner> "hello" expect
+dup position>> 5 "expect advances past expected" assert=
+rest " world" "expect leaves rest" assert=
+"abc" <scanner> "" expect position>> 0 "expect empty string is no-op" assert=
+[ "hello" <scanner> "xyz" expect ] "expect wrong char throws" assert-error
+[ "hi" <scanner> "hello" expect ] "expect past end throws" assert-error
+
+"composition" test-section
+"  123abc" <scanner>
+[ " " = ] skip-while
+[ digit? ] take-while "123" "composed: take digits" assert=
+rest "abc" "composed: rest after take" assert=
 
 "inspect" test-section
 "hello" <scanner> inspect "<scanner pos=0 rest=\"hello\">" "inspect at start" assert=

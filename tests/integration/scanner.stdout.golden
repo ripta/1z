@@ -83,6 +83,58 @@ PASS: advanced copy at end
 Stack: [ scanner{ str: "hello" position: 2 } ]
 PASS: original unchanged at position 2
 Stack: [ ]
+=== take-while ===
+Stack: [ ]
+PASS: take-while digits
+Stack: [ scanner{ str: "123abc" position: 3 } ]
+PASS: take-while advances position
+Stack: [ ]
+PASS: take-while alpha
+Stack: [ scanner{ str: "abc123" position: 3 } ]
+Stack: [ ]
+PASS: take-while no match returns empty
+Stack: [ scanner{ str: "abc" position: 0 } ]
+PASS: take-while no match stays at 0
+Stack: [ ]
+PASS: take-while on empty returns empty
+Stack: [ scanner{ str: "" position: 0 } ]
+Stack: [ ]
+PASS: take-while full match
+Stack: [ scanner{ str: "12345" position: 5 } ]
+PASS: take-while full match at end
+Stack: [ ]
+=== skip-while ===
+Stack: [ ]
+Stack: [ scanner{ str: "   hello" position: 3 } ]
+PASS: skip-while skips spaces
+Stack: [ scanner{ str: "   hello" position: 3 } ]
+PASS: skip-while leaves rest
+Stack: [ ]
+PASS: skip-while on empty at end
+Stack: [ ]
+PASS: skip-while no match stays at 0
+Stack: [ ]
+=== expect ===
+Stack: [ ]
+Stack: [ scanner{ str: "hello world" position: 5 } ]
+PASS: expect advances past expected
+Stack: [ scanner{ str: "hello world" position: 5 } ]
+PASS: expect leaves rest
+Stack: [ ]
+PASS: expect empty string is no-op
+Stack: [ ]
+PASS: expect wrong char throws
+Stack: [ ]
+PASS: expect past end throws
+Stack: [ ]
+=== composition ===
+Stack: [ ]
+Stack: [ scanner{ str: "  123abc" position: 0 } ]
+Stack: [ scanner{ str: "  123abc" position: 2 } ]
+PASS: composed: take digits
+Stack: [ scanner{ str: "  123abc" position: 5 } ]
+PASS: composed: rest after take
+Stack: [ ]
 === inspect ===
 Stack: [ ]
 PASS: inspect at start
