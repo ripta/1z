@@ -1,0 +1,5 @@
+\ lib/raylib/types.1z - Raylib FFI struct type definitions
+
+use "ffi" ;
+
+Color: ffi-struct{ r: u8 g: u8 b: u8 a: u8 } ;

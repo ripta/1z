@@ -1,0 +1,18 @@
+=== Color struct ===
+Stack: [ ]
+Stack: [ <Color B{ 0xFF 0x00 0x80 0xC8 }> ]
+PASS: make-Color creates a Color
+Stack: [ <Color B{ 0xFF 0x00 0x80 0xC8 }> ]
+PASS: Color r>>
+Stack: [ <Color B{ 0xFF 0x00 0x80 0xC8 }> ]
+PASS: Color g>>
+Stack: [ <Color B{ 0xFF 0x00 0x80 0xC8 }> ]
+PASS: Color b>>
+Stack: [ <Color B{ 0xFF 0x00 0x80 0xC8 }> ]
+PASS: Color a>>
+Stack: [ <Color B{ 0xFF 0x00 0x80 0xC8 }> ]
+Stack: [ ]
+=== raylib symbol resolution ===
+Stack: [ ]
+Stack: [ <result:err result-error{ error: <error ffi-library-not-found: ffi-library-not-found [tests/integration/raylib_bindings.1z:2:native.lib-open <- tests/integration/raylib_bindings.1z:2:call <- tests/integration/raylib_bindings.1z:2:recover]> }> ]
+Stack: [ ]

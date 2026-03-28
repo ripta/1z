@@ -1,0 +1,29 @@
+use "testing" ;
+use "ffi" ;
+use "raylib/types" ;
+
+"Color struct" test-section
+
+255 0 128 200 make-Color
+dup Color? "make-Color creates a Color" assert-true
+dup r>> 255 "Color r>>" assert=
+dup g>> 0 "Color g>>" assert=
+dup b>> 128 "Color b>>" assert=
+dup a>> 200 "Color a>>" assert=
+drop
+
+"raylib symbol resolution" test-section
+
+[ "raylib" lib-open ] try
+dup result:ok? [
+  unwrap-or-throw
+  dup "InitWindow" lib-symbol resource? "InitWindow resolved" assert-true
+  dup "CloseWindow" lib-symbol resource? "CloseWindow resolved" assert-true
+  dup "ClearBackground" lib-symbol resource? "ClearBackground resolved" assert-true
+  dup "DrawRectangle" lib-symbol resource? "DrawRectangle resolved" assert-true
+  dup "IsKeyPressed" lib-symbol resource? "IsKeyPressed resolved" assert-true
+  dup "SetTargetFPS" lib-symbol resource? "SetTargetFPS resolved" assert-true
+  resource-close
+] [
+  drop "raylib not installed" skip
+] if

@@ -1,0 +1,36 @@
+\ lib/raylib/core.1z - Raylib core window and drawing via dynamic FFI
+
+use "ffi" ;
+use "raylib/types" ;
+
+"raylib" lib-open ffi-def{
+  (init-window):         "InitWindow" ffi{ i32 i32 cstring -> void }
+  (close-window):        "CloseWindow" ffi{ -> void }
+  (window-should-close): "WindowShouldClose" ffi{ -> bool }
+  (begin-drawing):       "BeginDrawing" ffi{ -> void }
+  (end-drawing):         "EndDrawing" ffi{ -> void }
+  (clear-background):    "ClearBackground" ffi{ Color -> void }
+  (draw-rectangle):      "DrawRectangle" ffi{ i32 i32 i32 i32 Color -> void }
+  (is-key-pressed):      "IsKeyPressed" ffi{ i32 -> bool }
+  (set-target-fps):      "SetTargetFPS" ffi{ i32 -> void }
+} call "raylib-core-raw" swap >module import
+
+init-window:          ( width height title -- )     [ (init-window) ] ;
+close-window:         ( -- )                        [ (close-window) ] ;
+window-should-close?: ( -- bool )                   [ (window-should-close) ] ;
+begin-drawing:        ( -- )                        [ (begin-drawing) ] ;
+end-drawing:          ( -- )                        [ (end-drawing) ] ;
+clear-background:     ( color -- )                  [ (clear-background) ] ;
+draw-rectangle:       ( x y width height color -- ) [ (draw-rectangle) ] ;
+key-pressed?:         ( key -- bool )               [ (is-key-pressed) ] ;
+set-target-fps:       ( fps -- )                    [ (set-target-fps) ] ;
+
+with-window: ( width height title quot -- ... ) [
+  [ init-window ] dip
+  [ close-window ] cleanup
+] ;
+
+draw: ( quot -- ) [
+  begin-drawing
+  [ end-drawing ] cleanup
+] ;
