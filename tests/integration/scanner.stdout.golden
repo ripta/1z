@@ -1,0 +1,93 @@
+=== scanner type ===
+Stack: [ ]
+PASS: type-name returns scanner
+Stack: [ ]
+PASS: scanner? on scanner
+Stack: [ ]
+PASS: scanner? on fixnum
+Stack: [ ]
+=== <scanner> constructor ===
+Stack: [ ]
+PASS: initial position is 0
+Stack: [ ]
+PASS: str>> returns input
+Stack: [ ]
+=== at-end? ===
+Stack: [ ]
+PASS: not at end on non-empty
+Stack: [ ]
+PASS: at end on empty string
+Stack: [ ]
+=== peek ===
+Stack: [ ]
+PASS: peek returns first char
+Stack: [ ]
+PASS: peek returns a
+Stack: [ ]
+PASS: peek returns f at end
+Stack: [ ]
+=== peek does not advance ===
+Stack: [ ]
+PASS: peek leaves position unchanged
+Stack: [ ]
+=== advance ===
+Stack: [ ]
+PASS: advance increments position
+Stack: [ ]
+PASS: advance then peek gives second char
+Stack: [ ]
+PASS: advance to end
+Stack: [ ]
+=== advance at end is no-op ===
+Stack: [ ]
+PASS: advance on empty stays at end
+Stack: [ ]
+PASS: advance past end stays at end
+Stack: [ ]
+=== position>> ===
+Stack: [ ]
+PASS: position starts at 0
+Stack: [ ]
+PASS: position after two advances
+Stack: [ ]
+=== rest ===
+Stack: [ ]
+PASS: rest at start is full string
+Stack: [ ]
+PASS: rest after one advance
+Stack: [ ]
+PASS: rest after three advances
+Stack: [ ]
+PASS: rest at end is empty
+Stack: [ ]
+PASS: rest on empty string
+Stack: [ ]
+=== full scan ===
+Stack: [ ]
+Stack: [ scanner{ str: "abc" position: 0 } ]
+PASS: scan a
+Stack: [ scanner{ str: "abc" position: 0 } ]
+Stack: [ scanner{ str: "abc" position: 1 } ]
+PASS: scan b
+Stack: [ scanner{ str: "abc" position: 1 } ]
+Stack: [ scanner{ str: "abc" position: 2 } ]
+PASS: scan c
+Stack: [ scanner{ str: "abc" position: 2 } ]
+Stack: [ scanner{ str: "abc" position: 3 } ]
+PASS: at end after scanning all
+Stack: [ ]
+=== backtracking via dup ===
+Stack: [ ]
+Stack: [ scanner{ str: "hello" position: 2 } scanner{ str: "hello" position: 2 } ]
+PASS: advanced copy at end
+Stack: [ scanner{ str: "hello" position: 2 } ]
+PASS: original unchanged at position 2
+Stack: [ ]
+=== inspect ===
+Stack: [ ]
+PASS: inspect at start
+Stack: [ ]
+PASS: inspect after advances
+Stack: [ ]
+PASS: inspect on empty
+Stack: [ ]

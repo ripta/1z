@@ -1,0 +1,65 @@
+\ Integration tests for lib/scanner.1z
+
+use "testing" ;
+use "scanner" ;
+
+"scanner type" test-section
+"hello" <scanner> type-name "scanner" "type-name returns scanner" assert=
+"hello" <scanner> scanner? "scanner? on scanner" assert-true
+42 scanner? "scanner? on fixnum" assert-false
+
+"<scanner> constructor" test-section
+"hello" <scanner> position>> 0 "initial position is 0" assert=
+"hello" <scanner> str>> "hello" "str>> returns input" assert=
+
+"at-end?" test-section
+"hello" <scanner> at-end? "not at end on non-empty" assert-false
+"" <scanner> at-end? "at end on empty string" assert-true
+
+"peek" test-section
+"hello" <scanner> peek "h" "peek returns first char" assert=
+"abc" <scanner> peek "a" "peek returns a" assert=
+"" <scanner> peek f "peek returns f at end" assert=
+
+"peek does not advance" test-section
+"hello" <scanner> dup peek drop position>> 0 "peek leaves position unchanged" assert=
+
+"advance" test-section
+"hello" <scanner> advance position>> 1 "advance increments position" assert=
+"hello" <scanner> advance peek "e" "advance then peek gives second char" assert=
+"hello" <scanner> advance advance advance advance advance at-end? "advance to end" assert-true
+
+"advance at end is no-op" test-section
+"" <scanner> advance at-end? "advance on empty stays at end" assert-true
+"a" <scanner> advance advance position>> 1 "advance past end stays at end" assert=
+
+"position>>" test-section
+"hello" <scanner> position>> 0 "position starts at 0" assert=
+"hello" <scanner> advance advance position>> 2 "position after two advances" assert=
+
+"rest" test-section
+"hello" <scanner> rest "hello" "rest at start is full string" assert=
+"hello" <scanner> advance rest "ello" "rest after one advance" assert=
+"hello" <scanner> advance advance advance rest "lo" "rest after three advances" assert=
+"hello" <scanner> advance advance advance advance advance rest "" "rest at end is empty" assert=
+"" <scanner> rest "" "rest on empty string" assert=
+
+"full scan" test-section
+"abc" <scanner>
+dup peek "a" "scan a" assert=
+advance
+dup peek "b" "scan b" assert=
+advance
+dup peek "c" "scan c" assert=
+advance
+at-end? "at end after scanning all" assert-true
+
+"backtracking via dup" test-section
+"hello" <scanner> advance advance dup
+advance advance advance at-end? "advanced copy at end" assert-true
+position>> 2 "original unchanged at position 2" assert=
+
+"inspect" test-section
+"hello" <scanner> inspect "<scanner pos=0 rest=\"hello\">" "inspect at start" assert=
+"hello" <scanner> advance advance inspect "<scanner pos=2 rest=\"llo\">" "inspect after advances" assert=
+"" <scanner> inspect "<scanner pos=0 rest=\"\">" "inspect on empty" assert=

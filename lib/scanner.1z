@@ -1,0 +1,42 @@
+\ lib/scanner.1z - Cursor abstraction for character-by-character string scanning
+
+\ Scanner struct: str is the input, position is the current offset
+scanner: struct{ str position } ;
+
+\\ Construct a scanner at position 0 over a string.
+<scanner>: ( str -- scanner ) [ 0 make-scanner ] ;
+
+\\ True if the scanner has consumed all input.
+at-end?: ( scanner -- ? ) [
+  dup position>> swap str>> #len >=
+] ;
+
+\\ Current character as a single-character string, or f at end.
+peek: ( scanner -- char/f ) [
+  dup at-end?
+  [ drop f ]
+  [ dup position>> swap str>> swap #nth ]
+  if
+] ;
+
+\\ Return a new scanner advanced by one character. No-op at end.
+advance: ( scanner -- scanner ) [
+  dup at-end?
+  [ ]
+  [ unmake-scanner 1 + make-scanner ]
+  if
+] ;
+
+\\ Return the remaining unconsumed portion of the input string.
+rest: ( scanner -- str ) [
+  dup position>> swap str>>
+  dup #len
+  <rot- swap #slice
+] ;
+
+\\ Debug representation of a scanner value.
+inspect: method{ scanner } [
+  dup position>> inspect
+  swap rest inspect
+  "<scanner pos=" <rot- #append " rest=" #append swap #append ">" #append
+] ;
