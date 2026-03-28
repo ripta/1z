@@ -1,9 +1,23 @@
 const std = @import("std");
 const Dictionary = @import("dictionary.zig").Dictionary;
 
+/// A single UTF-8 encoded codepoint (1-4 bytes).
+pub const Utf8Char = struct {
+    bytes: [4]u8 = .{ 0, 0, 0, 0 },
+    len: u3 = 0,
+
+    fn fromAscii(c: u8) Utf8Char {
+        return .{ .bytes = .{ c, 0, 0, 0 }, .len = 1 };
+    }
+
+    fn slice(self: *const Utf8Char) []const u8 {
+        return self.bytes[0..@as(usize, self.len)];
+    }
+};
+
 /// Key represents a parsed keyboard input event.
 pub const Key = union(enum) {
-    char: u8,
+    char: Utf8Char,
     enter,
     backspace,
     delete,
@@ -162,7 +176,7 @@ pub const LineEditor = struct {
 
             switch (key) {
                 .char => |c| {
-                    insertChar(self, c);
+                    self.insertBytes(c);
                     self.refreshLine();
                 },
                 .enter => {
@@ -180,12 +194,15 @@ pub const LineEditor = struct {
                 .left => {
                     if (self.cursor > 0) {
                         self.cursor -= 1;
+                        while (self.cursor > 0 and self.buf[self.cursor] & 0xc0 == 0x80) {
+                            self.cursor -= 1;
+                        }
                         self.refreshLine();
                     }
                 },
                 .right => {
                     if (self.cursor < self.len) {
-                        self.cursor += 1;
+                        self.cursor += @min(utf8ByteLen(self.buf[self.cursor]), self.len - self.cursor);
                         self.refreshLine();
                     }
                 },
@@ -475,13 +492,11 @@ pub const LineEditor = struct {
 
         writer.writeAll("\r") catch return;
         writer.writeAll(self.prompt) catch return;
-        writer.writeAll(self.buf[0..self.len]) catch return;
+        writer.writeAll(self.buf[0..self.cursor]) catch return;
+        writer.writeAll("\x1b7") catch return; // DECSC: save cursor position
+        writer.writeAll(self.buf[self.cursor..self.len]) catch return;
         writer.writeAll("\x1b[K") catch return;
-
-        const chars_after_cursor = self.len - self.cursor;
-        if (chars_after_cursor > 0) {
-            std.fmt.format(writer, "\x1b[{d}D", .{chars_after_cursor}) catch return;
-        }
+        writer.writeAll("\x1b8") catch return; // DECRC: restore cursor position
 
         const data = stream.getWritten();
         _ = std.posix.write(std.posix.STDOUT_FILENO, data) catch {};
@@ -509,7 +524,10 @@ pub const LineEditor = struct {
             '\x15' => .ctrl_u,
             '\x17' => .ctrl_w,
             '\t' => .tab,
-            0x20...0x7e => .{ .char = byte },
+            0x20...0x7e => .{ .char = Utf8Char.fromAscii(byte) },
+            0xc0...0xdf => readUtf8Char(byte, 2),
+            0xe0...0xef => readUtf8Char(byte, 3),
+            0xf0...0xf7 => readUtf8Char(byte, 4),
             else => .unknown,
         };
     }
@@ -566,31 +584,64 @@ pub const LineEditor = struct {
         return .unknown;
     }
 
-    fn insertChar(self: *LineEditor, c: u8) void {
-        if (self.len >= self.buf.len) return;
-        if (self.cursor < self.len) {
-            std.mem.copyBackwards(u8, self.buf[self.cursor + 1 .. self.len + 1], self.buf[self.cursor..self.len]);
+    /// Read continuation bytes for a UTF-8 multibyte sequence.
+    fn readUtf8Char(first: u8, expected_len: u3) Key {
+        var result = Utf8Char{ .bytes = .{ first, 0, 0, 0 }, .len = expected_len };
+        for (1..@as(usize, expected_len)) |i| {
+            var buf: [1]u8 = undefined;
+            const n = std.posix.read(std.posix.STDIN_FILENO, &buf) catch return .unknown;
+            if (n == 0) return .unknown;
+            if (buf[0] & 0xc0 != 0x80) return .unknown;
+            result.bytes[i] = buf[0];
         }
-        self.buf[self.cursor] = c;
-        self.len += 1;
-        self.cursor += 1;
+        return .{ .char = result };
+    }
+
+    /// Return the byte length of a UTF-8 codepoint given its leading byte.
+    fn utf8ByteLen(first_byte: u8) usize {
+        if (first_byte < 0x80) return 1;
+        if (first_byte & 0xe0 == 0xc0) return 2;
+        if (first_byte & 0xf0 == 0xe0) return 3;
+        if (first_byte & 0xf8 == 0xf0) return 4;
+        return 1;
+    }
+
+    fn insertChar(self: *LineEditor, c: u8) void {
+        self.insertBytes(Utf8Char.fromAscii(c));
+    }
+
+    fn insertBytes(self: *LineEditor, char: Utf8Char) void {
+        const count = @as(usize, char.len);
+        if (self.len + count > self.buf.len) return;
+        if (self.cursor < self.len) {
+            std.mem.copyBackwards(u8, self.buf[self.cursor + count .. self.len + count], self.buf[self.cursor..self.len]);
+        }
+        @memcpy(self.buf[self.cursor .. self.cursor + count], char.slice());
+        self.len += count;
+        self.cursor += count;
     }
 
     fn deleteCharBefore(self: *LineEditor) void {
         if (self.cursor == 0) return;
-        if (self.cursor < self.len) {
-            std.mem.copyForwards(u8, self.buf[self.cursor - 1 .. self.len - 1], self.buf[self.cursor..self.len]);
+        var start = self.cursor - 1;
+        while (start > 0 and self.buf[start] & 0xc0 == 0x80) {
+            start -= 1;
         }
-        self.len -= 1;
-        self.cursor -= 1;
+        const deleted = self.cursor - start;
+        if (self.cursor < self.len) {
+            std.mem.copyForwards(u8, self.buf[start .. self.len - deleted], self.buf[self.cursor..self.len]);
+        }
+        self.len -= deleted;
+        self.cursor = start;
     }
 
     fn deleteCharAt(self: *LineEditor) void {
         if (self.cursor >= self.len) return;
-        if (self.cursor + 1 < self.len) {
-            std.mem.copyForwards(u8, self.buf[self.cursor .. self.len - 1], self.buf[self.cursor + 1 .. self.len]);
+        const cp_len = @min(utf8ByteLen(self.buf[self.cursor]), self.len - self.cursor);
+        if (self.cursor + cp_len < self.len) {
+            std.mem.copyForwards(u8, self.buf[self.cursor .. self.len - cp_len], self.buf[self.cursor + cp_len .. self.len]);
         }
-        self.len -= 1;
+        self.len -= cp_len;
     }
 
     fn killToStart(self: *LineEditor) void {
@@ -655,6 +706,47 @@ test "LineEditor buffer operations" {
     LineEditor.deleteCharBefore(&editor);
     try std.testing.expectEqualStrings("helo", editor.buf[0..editor.len]);
     try std.testing.expectEqual(@as(usize, 2), editor.cursor);
+}
+
+test "LineEditor UTF-8 multibyte insert and delete" {
+    var editor = testEditor();
+
+    // Insert "café"; the é is 2 bytes (0xc3 0xa9)
+    LineEditor.insertChar(&editor, 'c');
+    LineEditor.insertChar(&editor, 'a');
+    LineEditor.insertChar(&editor, 'f');
+    editor.insertBytes(.{ .bytes = .{ 0xc3, 0xa9, 0, 0 }, .len = 2 });
+    try std.testing.expectEqualStrings("caf\xc3\xa9", editor.buf[0..editor.len]);
+    try std.testing.expectEqual(@as(usize, 5), editor.len);
+    try std.testing.expectEqual(@as(usize, 5), editor.cursor);
+
+    // Backspace should delete both bytes of é
+    LineEditor.deleteCharBefore(&editor);
+    try std.testing.expectEqualStrings("caf", editor.buf[0..editor.len]);
+    try std.testing.expectEqual(@as(usize, 3), editor.cursor);
+
+    // Insert a 3-byte character: 日 (0xe6 0x97 0xa5)
+    editor.insertBytes(.{ .bytes = .{ 0xe6, 0x97, 0xa5, 0 }, .len = 3 });
+    try std.testing.expectEqualStrings("caf\xe6\x97\xa5", editor.buf[0..editor.len]);
+    try std.testing.expectEqual(@as(usize, 6), editor.len);
+
+    // Move cursor left should skip all 3 bytes
+    editor.cursor -= 1;
+    while (editor.cursor > 0 and editor.buf[editor.cursor] & 0xc0 == 0x80) {
+        editor.cursor -= 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), editor.cursor);
+
+    // Delete at cursor should remove all 3 bytes of 日
+    LineEditor.deleteCharAt(&editor);
+    try std.testing.expectEqualStrings("caf", editor.buf[0..editor.len]);
+}
+
+test "LineEditor utf8ByteLen" {
+    try std.testing.expectEqual(@as(usize, 1), LineEditor.utf8ByteLen('a'));
+    try std.testing.expectEqual(@as(usize, 2), LineEditor.utf8ByteLen(0xc3)); // é lead
+    try std.testing.expectEqual(@as(usize, 3), LineEditor.utf8ByteLen(0xe6)); // 日 lead
+    try std.testing.expectEqual(@as(usize, 4), LineEditor.utf8ByteLen(0xf0)); // 𝄞 lead
 }
 
 test "LineEditor kill operations" {
