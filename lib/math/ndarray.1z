@@ -105,13 +105,13 @@ ref: ( ndarray index-array -- val ) [
 ref2d: ( ndarray i j -- val ) [
   2 pick-n rank 2 =
   not [ f "ref2d requires rank-2 ndarray" EInvalidArgument make-error throw ] when
-  { } 2 pick-n #push over #push nip nip ref
+  2 array-n ref
 ] ;
 
 ref3d: ( ndarray i j k -- val ) [
   3 pick-n rank 3 =
   not [ f "ref3d requires rank-3 ndarray" EInvalidArgument make-error throw ] when
-  { } 3 pick-n #push 2 pick-n #push over #push nip nip nip ref
+  3 array-n ref
 ] ;
 
 \ Logical-order element access for non-contiguous arrays.
@@ -390,7 +390,7 @@ matmul-2d: ( ndarray ndarray -- ndarray ) [
   \ stack: a(5) b(4) M(3) N(2) K(1) result-vec(0)
   nip
   \ stack: a(4) b(3) M(2) N(1) result-vec(0)
-  { } 3 pick-n #push 2 pick-n #push
+  2 pick-n 2 pick-n 2 array-n
   \ stack: a(5) b(4) M(3) N(2) result-vec(1) { M N }(0)
   vec>ndarray
   \ stack: a(4) b(3) M(2) N(1) ndarray(0)
@@ -421,11 +421,11 @@ matmul: ( ndarray ndarray -- ) [
         over #len over shape 0 #nth =
         not [ f "matmul: inner dimensions must match" EInvalidArgument make-error throw ] when
         \ stack: a(1) b(0)
-        swap dup #len { 1 } swap #push reshape swap
+        swap dup #len 1 swap 2 array-n reshape swap
         \ stack: a-2d(1) b(0)
         matmul-2d
         \ result shape is {1, N}; reshape to {N}
-        dup shape 1 #nth { } swap #push reshape
+        dup shape 1 #nth 1 array-n reshape
       ] [
         \ Case: 2D * 1D -> treat 1D as column vector {K,1}
         2dup 1 = swap 2 = and [
@@ -433,11 +433,11 @@ matmul: ( ndarray ndarray -- ) [
           over shape 1 #nth over #len =
           not [ f "matmul: inner dimensions must match" EInvalidArgument make-error throw ] when
           \ stack: a(1) b(0)
-          dup #len { } swap #push 1 #push reshape
+          dup #len 1 2 array-n reshape
           \ stack: a(1) b-2d(0)
           matmul-2d
           \ result shape is {M, 1}; reshape to {M}
-          dup shape 0 #nth { } swap #push reshape
+          dup shape 0 #nth 1 array-n reshape
         ] [
           2drop
           f "matmul: ranks must be 1 or 2" EInvalidArgument make-error throw
@@ -479,9 +479,7 @@ outer: ( ndarray ndarray -- ndarray ) [
   ] while
   drop
   \ stack: a(4) b(3) N(2) result-vec(1) M(0)
-  { } swap #push
-  \ stack: a(4) b(3) N(2) result-vec(1) { M }(0)
-  <rot- #push
+  <rot- 2 array-n
   \ stack: a(3) b(2) result-vec(1) { M N }(0)
   vec>ndarray nip nip
 ] ;
@@ -661,7 +659,7 @@ nd{: parse-time [
   dup #len 1 = [
     \ 1D: single row, shape is { n }
     0 #nth
-    dup { } swap #len #push
+    dup #len 1 array-n
     <ndarray>
   ] [
     \ 2D: validate all rows have same length, flatten
@@ -672,7 +670,7 @@ nd{: parse-time [
       not [ f "nd{: all rows must have the same length" EInvalidArgument make-error throw ] when
     ] #each
     \ stack: rows ncols
-    { } 2 pick-n #len #push over #push nip
+    over #len swap 2 array-n
     \ stack: rows shape
     swap
     \ stack: shape rows
@@ -706,7 +704,7 @@ mask: ( ndarray bool-ndarray -- ndarray ) [
   dup #len 0 = [
     drop { } { 0 } { 1 } <rot- make-ndarray
   ] [
-    { } over #len #push <ndarray> nip
+    dup #len 1 array-n <ndarray> nip
   ] if
 ] ;
 
@@ -727,7 +725,7 @@ gather: ( ndarray indices -- ndarray ) [
   dup #len 0 = [
     drop { } { 0 } { 1 } <rot- make-ndarray
   ] [
-    { } over #len #push <ndarray> nip
+    dup #len 1 array-n <ndarray> nip
   ] if
 ] ;
 

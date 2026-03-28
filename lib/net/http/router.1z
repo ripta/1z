@@ -15,7 +15,7 @@ router: mutable struct{ routes } ;
 \\ Non-trailing-slash patterns require an exact match.
 \\ Handler stack effect is ( request -- response ).
 route: ( router path handler -- router ) [
-  { } <rot- #push swap #push
+  2 array-n
   swap dup routes>> <rot- #push >>routes
 ] ;
 
