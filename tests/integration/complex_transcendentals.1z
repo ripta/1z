@@ -65,3 +65,82 @@ imaginary-part swap imaginary-part - abs 1.0e-10 < "sqrt round-trip imag" assert
 C{ 2.0 3.0 } dup log exp swap
 over real-part over real-part - abs 1.0e-10 < "exp(log(z)) round-trip real" assert-true
 imaginary-part swap imaginary-part - abs 1.0e-10 < "exp(log(z)) round-trip imag" assert-true
+
+"sin: pure real" test-section
+C{ 0.0 0.0 } sin real-part abs 1.0e-10 < "sin(0) real ~ 0" assert-true
+C{ 0.0 0.0 } sin imaginary-part abs 1.0e-10 < "sin(0) imag ~ 0" assert-true
+pi 0.0 make-complex sin real-part abs 1.0e-10 < "sin(pi) real ~ 0" assert-true
+pi 0.0 make-complex sin imaginary-part abs 1.0e-10 < "sin(pi) imag ~ 0" assert-true
+
+"sin: pure imaginary" test-section
+\ sin(i) = i*sinh(1)
+C{ 0.0 1.0 } sin real-part abs 1.0e-10 < "sin(i) real ~ 0" assert-true
+\ sinh(1) = (e - 1/e) / 2
+C{ 0.0 1.0 } sin imaginary-part
+e 1.0 e / - 2.0 / - abs 1.0e-10 < "sin(i) imag ~ sinh(1)" assert-true
+
+"sin: general complex" test-section
+\ sin(1+i): sin(1)*cosh(1) + i*cos(1)*sinh(1)
+C{ 1.0 1.0 } sin real-part
+1.0 native.sin e 1.0 e / + 2.0 / *
+- abs 1.0e-10 < "sin(1+i) real" assert-true
+C{ 1.0 1.0 } sin imaginary-part
+1.0 native.cos e 1.0 e / - 2.0 / *
+- abs 1.0e-10 < "sin(1+i) imag" assert-true
+
+"cos: pure real" test-section
+C{ 0.0 0.0 } cos real-part 1.0 - abs 1.0e-10 < "cos(0) real ~ 1" assert-true
+C{ 0.0 0.0 } cos imaginary-part abs 1.0e-10 < "cos(0) imag ~ 0" assert-true
+
+"cos: pure imaginary" test-section
+\ cos(i) = cosh(1) (real)
+C{ 0.0 1.0 } cos real-part
+e 1.0 e / + 2.0 / - abs 1.0e-10 < "cos(i) real ~ cosh(1)" assert-true
+C{ 0.0 1.0 } cos imaginary-part abs 1.0e-10 < "cos(i) imag ~ 0" assert-true
+
+"cos: general complex" test-section
+\ cos(1+i): cos(1)*cosh(1) - i*sin(1)*sinh(1)
+C{ 1.0 1.0 } cos real-part
+1.0 native.cos e 1.0 e / + 2.0 / *
+- abs 1.0e-10 < "cos(1+i) real" assert-true
+C{ 1.0 1.0 } cos imaginary-part
+1.0 native.sin e 1.0 e / - 2.0 / * 0.0 swap -
+- abs 1.0e-10 < "cos(1+i) imag" assert-true
+
+"sin-cos: identity" test-section
+\ sin^2(z) + cos^2(z) = 1
+C{ 2.0 3.0 } dup sin dup * swap cos dup * +
+real-part 1.0 - abs 1.0e-10 < "sin^2+cos^2 real ~ 1" assert-true
+C{ 2.0 3.0 } dup sin dup * swap cos dup * +
+imaginary-part abs 1.0e-10 < "sin^2+cos^2 imag ~ 0" assert-true
+
+"pow: integer power" test-section
+\ z^2 vs z*z
+C{ 1.0 2.0 } dup dup * swap C{ 2.0 0.0 } pow
+over real-part over real-part - abs 1.0e-10 < "z^2 real ~ z*z real" assert-true
+imaginary-part swap imaginary-part - abs 1.0e-10 < "z^2 imag ~ z*z imag" assert-true
+
+"pow: fractional power" test-section
+\ z^0.5 vs sqrt(z)
+C{ 3.0 4.0 } dup sqrt swap C{ 0.5 0.0 } pow
+over real-part over real-part - abs 1.0e-10 < "z^0.5 real ~ sqrt(z) real" assert-true
+imaginary-part swap imaginary-part - abs 1.0e-10 < "z^0.5 imag ~ sqrt(z) imag" assert-true
+
+"pow: complex exponent" test-section
+\ i^i = e^(i*log(i)) = e^(i*i*pi/2) = e^(-pi/2)
+C{ 0.0 1.0 } C{ 0.0 1.0 } pow
+real-part pi -2.0 / native.exp - abs 1.0e-10 < "i^i real ~ e^(-pi/2)" assert-true
+C{ 0.0 1.0 } C{ 0.0 1.0 } pow
+imaginary-part abs 1.0e-10 < "i^i imag ~ 0" assert-true
+
+"pow: mixed types" test-section
+\ 2.0 ^ (1+i) via float/complex method
+2.0 C{ 1.0 1.0 } pow
+C{ 2.0 0.0 } C{ 1.0 1.0 } pow
+over real-part over real-part - abs 1.0e-10 < "float^complex real" assert-true
+imaginary-part swap imaginary-part - abs 1.0e-10 < "float^complex imag" assert-true
+\ (1+i) ^ 3 via complex/fixnum method
+C{ 1.0 1.0 } 3 pow
+C{ 1.0 1.0 } C{ 3.0 0.0 } pow
+over real-part over real-part - abs 1.0e-10 < "complex^fixnum real" assert-true
+imaginary-part swap imaginary-part - abs 1.0e-10 < "complex^fixnum imag" assert-true

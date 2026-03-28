@@ -80,3 +80,97 @@ PASS: exp(log(z)) round-trip real
 Stack: [ <complex complex{ real: 2.0 imag: 3.0 }> <complex complex{ real: 2.0 imag: 3.0 }> ]
 PASS: exp(log(z)) round-trip imag
 Stack: [ ]
+=== sin: pure real ===
+Stack: [ ]
+PASS: sin(0) real ~ 0
+Stack: [ ]
+PASS: sin(0) imag ~ 0
+Stack: [ ]
+PASS: sin(pi) real ~ 0
+Stack: [ ]
+PASS: sin(pi) imag ~ 0
+Stack: [ ]
+=== sin: pure imaginary ===
+Stack: [ ]
+PASS: sin(i) real ~ 0
+Stack: [ ]
+Stack: [ 1.1752011936438014 ]
+PASS: sin(i) imag ~ sinh(1)
+Stack: [ ]
+=== sin: general complex ===
+Stack: [ ]
+Stack: [ 1.2984575814159773 ]
+Stack: [ 1.2984575814159773 1.2984575814159773 ]
+PASS: sin(1+i) real
+Stack: [ ]
+Stack: [ 0.6349639147847361 ]
+Stack: [ 0.6349639147847361 0.6349639147847361 ]
+PASS: sin(1+i) imag
+Stack: [ ]
+=== cos: pure real ===
+Stack: [ ]
+PASS: cos(0) real ~ 1
+Stack: [ ]
+PASS: cos(0) imag ~ 0
+Stack: [ ]
+=== cos: pure imaginary ===
+Stack: [ ]
+Stack: [ 1.5430806348152437 ]
+PASS: cos(i) real ~ cosh(1)
+Stack: [ ]
+PASS: cos(i) imag ~ 0
+Stack: [ ]
+=== cos: general complex ===
+Stack: [ ]
+Stack: [ 0.8337300251311491 ]
+Stack: [ 0.8337300251311491 0.8337300251311491 ]
+PASS: cos(1+i) real
+Stack: [ ]
+Stack: [ -0.9888977057628651 ]
+Stack: [ -0.9888977057628651 -0.9888977057628651 ]
+PASS: cos(1+i) imag
+Stack: [ ]
+=== sin-cos: identity ===
+Stack: [ ]
+Stack: [ <complex complex{ real: 1.0 imag: -0.000000000000014210854715202004 }> ]
+PASS: sin^2+cos^2 real ~ 1
+Stack: [ ]
+Stack: [ <complex complex{ real: 1.0 imag: -0.000000000000014210854715202004 }> ]
+PASS: sin^2+cos^2 imag ~ 0
+Stack: [ ]
+=== pow: integer power ===
+Stack: [ ]
+Stack: [ <complex complex{ real: -3.0 imag: 4.0 }> <complex complex{ real: -3.0 imag: 4.000000000000002 }> ]
+PASS: z^2 real ~ z*z real
+Stack: [ <complex complex{ real: -3.0 imag: 4.0 }> <complex complex{ real: -3.0 imag: 4.000000000000002 }> ]
+PASS: z^2 imag ~ z*z imag
+Stack: [ ]
+=== pow: fractional power ===
+Stack: [ ]
+Stack: [ <complex complex{ real: 2.0 imag: 1.0 }> <complex complex{ real: 2.0 imag: 1.0 }> ]
+PASS: z^0.5 real ~ sqrt(z) real
+Stack: [ <complex complex{ real: 2.0 imag: 1.0 }> <complex complex{ real: 2.0 imag: 1.0 }> ]
+PASS: z^0.5 imag ~ sqrt(z) imag
+Stack: [ ]
+=== pow: complex exponent ===
+Stack: [ ]
+Stack: [ <complex complex{ real: 0.20787957635076193 imag: 0.0 }> ]
+PASS: i^i real ~ e^(-pi/2)
+Stack: [ ]
+Stack: [ <complex complex{ real: 0.20787957635076193 imag: 0.0 }> ]
+PASS: i^i imag ~ 0
+Stack: [ ]
+=== pow: mixed types ===
+Stack: [ ]
+Stack: [ <complex complex{ real: 1.5384778027279442 imag: 1.2779225526272695 }> ]
+Stack: [ <complex complex{ real: 1.5384778027279442 imag: 1.2779225526272695 }> <complex complex{ real: 1.5384778027279442 imag: 1.2779225526272695 }> ]
+PASS: float^complex real
+Stack: [ <complex complex{ real: 1.5384778027279442 imag: 1.2779225526272695 }> <complex complex{ real: 1.5384778027279442 imag: 1.2779225526272695 }> ]
+PASS: float^complex imag
+Stack: [ ]
+Stack: [ <complex complex{ real: -2.0 imag: 2.0000000000000004 }> ]
+Stack: [ <complex complex{ real: -2.0 imag: 2.0000000000000004 }> <complex complex{ real: -2.0 imag: 2.0000000000000004 }> ]
+PASS: complex^fixnum real
+Stack: [ <complex complex{ real: -2.0 imag: 2.0000000000000004 }> <complex complex{ real: -2.0 imag: 2.0000000000000004 }> ]
+PASS: complex^fixnum imag
+Stack: [ ]

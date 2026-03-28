@@ -164,6 +164,50 @@ sqrt: method{ complex } [
   make-complex nip
 ] ;
 
+\\ Complex sine: sin(a+bi) = sin(a)*cosh(b) + i*cos(a)*sinh(b).
+\\ No branch cut.
+sin: method{ complex } [
+  dup real-part swap imaginary-part
+  native.exp dup 1.0 swap /
+  over over + 2.0 /
+  \ stack: a e^b e^(-b) cosh(b)
+  3 pick-n native.sin *
+  \ stack: a e^b e^(-b) sin(a)*cosh(b)
+  -rot> - 2.0 /
+  \ stack: a sin(a)*cosh(b) sinh(b)
+  2 pick-n native.cos *
+  \ stack: a sin(a)*cosh(b) cos(a)*sinh(b)
+  make-complex nip
+] ;
+
+\\ Complex cosine: cos(a+bi) = cos(a)*cosh(b) - i*sin(a)*sinh(b).
+\\ No branch cut.
+cos: method{ complex } [
+  dup real-part swap imaginary-part
+  native.exp dup 1.0 swap /
+  over over + 2.0 /
+  \ stack: a e^b e^(-b) cosh(b)
+  3 pick-n native.cos *
+  \ stack: a e^b e^(-b) cos(a)*cosh(b)
+  -rot> - 2.0 /
+  \ stack: a cos(a)*cosh(b) sinh(b)
+  2 pick-n native.sin * 0.0 swap -
+  \ stack: a cos(a)*cosh(b) -sin(a)*sinh(b)
+  make-complex nip
+] ;
+
+\\ Complex exponentiation: base^exp = exp(exp * log(base)).
+\\ Branch cut: inherited from log (negative real axis of base).
+pow: method{ complex complex } [ swap log * exp ] ;
+pow: method{ complex float } [ 0.0 make-complex pow ] ;
+pow: method{ float complex } [ swap 0.0 make-complex swap pow ] ;
+pow: method{ complex fixnum } [ >float 0.0 make-complex pow ] ;
+pow: method{ fixnum complex } [ swap >float 0.0 make-complex swap pow ] ;
+pow: method{ complex bignum } [ >float 0.0 make-complex pow ] ;
+pow: method{ bignum complex } [ swap >float 0.0 make-complex swap pow ] ;
+pow: method{ complex ratio } [ >float 0.0 make-complex pow ] ;
+pow: method{ ratio complex } [ swap >float 0.0 make-complex swap pow ] ;
+
 \ --- Misc. library words ---
 
 \\ Absolute value (modulus) of a complex number.

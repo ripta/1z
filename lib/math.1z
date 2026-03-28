@@ -8,9 +8,9 @@ tau: ( -- f ) [ 6.283185307179586 ] ;
 e: ( -- f ) [ 2.718281828459045 ] ;
 
 \\ Sine.
-sin: ( n -- f ) [ native.sin ] ;
+sin: generic ( n -- f ) [ native.sin ] ;
 \\ Cosine.
-cos: ( n -- f ) [ native.cos ] ;
+cos: generic ( n -- f ) [ native.cos ] ;
 \\ Tangent.
 tan: ( n -- f ) [ native.tan ] ;
 \\ Arcsine.
@@ -34,7 +34,7 @@ log10: ( n -- f ) [ native.log10 ] ;
 \\ Square root.
 sqrt: generic ( n -- f ) [ native.sqrt ] ;
 \\ Exponentiation.
-pow: ( base exp -- f ) [ native.pow ] ;
+pow: generic ( base exp -- f ) [ native.pow ] ;
 
 \\ Round toward negative infinity.
 floor: ( n -- f ) [ native.floor ] ;
