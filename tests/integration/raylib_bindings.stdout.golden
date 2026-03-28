@@ -14,5 +14,11 @@ Stack: [ <Color B{ 0xFF 0x00 0x80 0xC8 }> ]
 Stack: [ ]
 === raylib symbol resolution ===
 Stack: [ ]
-Stack: [ <result:err result-error{ error: <error ffi-library-not-found: ffi-library-not-found [tests/integration/raylib_bindings.1z:2:native.lib-open <- tests/integration/raylib_bindings.1z:2:call <- tests/integration/raylib_bindings.1z:2:recover]> }> ]
+Stack: [ <result:ok result-value{ value: <resource:dylib> }> ]
+PASS: InitWindow resolved
+PASS: CloseWindow resolved
+PASS: ClearBackground resolved
+PASS: DrawRectangle resolved
+PASS: IsKeyPressed resolved
+PASS: SetTargetFPS resolved
 Stack: [ ]
