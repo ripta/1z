@@ -1,0 +1,119 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== token struct ===
+Stack: [ ]
+PASS: token? on token
+Stack: [ ]
+PASS: kind>> returns kind
+Stack: [ ]
+PASS: value>> returns value
+Stack: [ ]
+PASS: pos>> returns pos
+Stack: [ ]
+PASS: token? on non-token
+Stack: [ ]
+=== lexer struct ===
+Stack: [ ]
+PASS: lexer? on lexer
+Stack: [ ]
+PASS: rules>> returns rules array
+Stack: [ ]
+PASS: lexer? on non-lexer
+Stack: [ ]
+=== tokenize empty string ===
+Stack: [ ]
+Stack: [ { } ]
+PASS: empty string yields no tokens
+Stack: [ ]
+=== single-character rule ===
+Stack: [ ]
+Stack: [ { token{ kind: plus: value: "+" pos: 0 } } ]
+PASS: single + yields one token
+Stack: [ { token{ kind: plus: value: "+" pos: 0 } } ]
+PASS: kind is plus:
+Stack: [ token{ kind: plus: value: "+" pos: 0 } ]
+PASS: value is +
+Stack: [ token{ kind: plus: value: "+" pos: 0 } ]
+PASS: pos is 0
+Stack: [ ]
+=== multi-character rule ===
+Stack: [ ]
+Stack: [ { token{ kind: number: value: "12345" pos: 0 } } ]
+PASS: digit run yields one token
+Stack: [ { token{ kind: number: value: "12345" pos: 0 } } ]
+PASS: kind is number:
+Stack: [ token{ kind: number: value: "12345" pos: 0 } ]
+PASS: value is full digit run
+Stack: [ token{ kind: number: value: "12345" pos: 0 } ]
+PASS: pos is 0
+Stack: [ ]
+=== multiple tokens ===
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "aaa" pos: 0 } } ]
+PASS: aaa with alpha rule yields one token
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "abc" pos: 0 } } ]
+PASS: abc yields one word token
+Stack: [ { token{ kind: word: value: "abc" pos: 0 } } ]
+PASS: value is abc
+Stack: [ ]
+Stack: [ { token{ kind: plus: value: "+" pos: 0 } token{ kind: plus: value: "+" pos: 1 } token{ kind: plus: value: "+" pos: 2 } } ]
+PASS: +++ yields three tokens
+Stack: [ { token{ kind: plus: value: "+" pos: 0 } token{ kind: plus: value: "+" pos: 1 } token{ kind: plus: value: "+" pos: 2 } } ]
+PASS: first + at pos 0
+Stack: [ { token{ kind: plus: value: "+" pos: 0 } token{ kind: plus: value: "+" pos: 1 } token{ kind: plus: value: "+" pos: 2 } } ]
+PASS: second + at pos 1
+Stack: [ { token{ kind: plus: value: "+" pos: 0 } token{ kind: plus: value: "+" pos: 1 } token{ kind: plus: value: "+" pos: 2 } } ]
+PASS: third + at pos 2
+Stack: [ ]
+=== first-match priority ===
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "abc" pos: 0 } } ]
+PASS: alpha-rule matches first, one token
+Stack: [ { token{ kind: word: value: "abc" pos: 0 } } ]
+PASS: first-match produces word: not any:
+Stack: [ ]
+=== mixed rules ===
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "ab" pos: 0 } token{ kind: number: value: "12" pos: 2 } token{ kind: word: value: "cd" pos: 4 } } ]
+PASS: ab12cd yields three tokens
+Stack: [ { token{ kind: word: value: "ab" pos: 0 } token{ kind: number: value: "12" pos: 2 } token{ kind: word: value: "cd" pos: 4 } } ]
+PASS: first is word:
+Stack: [ { token{ kind: word: value: "ab" pos: 0 } token{ kind: number: value: "12" pos: 2 } token{ kind: word: value: "cd" pos: 4 } } token{ kind: word: value: "ab" pos: 0 } ]
+PASS: first value is ab
+Stack: [ { token{ kind: word: value: "ab" pos: 0 } token{ kind: number: value: "12" pos: 2 } token{ kind: word: value: "cd" pos: 4 } } token{ kind: word: value: "ab" pos: 0 } ]
+PASS: first pos is 0
+Stack: [ { token{ kind: word: value: "ab" pos: 0 } token{ kind: number: value: "12" pos: 2 } token{ kind: word: value: "cd" pos: 4 } } ]
+PASS: second is number:
+Stack: [ { token{ kind: word: value: "ab" pos: 0 } token{ kind: number: value: "12" pos: 2 } token{ kind: word: value: "cd" pos: 4 } } token{ kind: number: value: "12" pos: 2 } ]
+PASS: second value is 12
+Stack: [ { token{ kind: word: value: "ab" pos: 0 } token{ kind: number: value: "12" pos: 2 } token{ kind: word: value: "cd" pos: 4 } } token{ kind: number: value: "12" pos: 2 } ]
+PASS: second pos is 2
+Stack: [ { token{ kind: word: value: "ab" pos: 0 } token{ kind: number: value: "12" pos: 2 } token{ kind: word: value: "cd" pos: 4 } } ]
+PASS: third is word:
+Stack: [ token{ kind: word: value: "cd" pos: 4 } ]
+PASS: third value is cd
+Stack: [ token{ kind: word: value: "cd" pos: 4 } ]
+PASS: third pos is 4
+Stack: [ ]
+=== error on unrecognized input ===
+Stack: [ ]
+PASS: unrecognized char throws
+Stack: [ ]
+=== error includes position ===
+Stack: [ ]
+Stack: [ [ "ab!cd" [ ] make-vector ALPHA-RULE #push! >array <lexer> tokenize #collect ] ]
+Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } <error invalid-argument: unrecognized input at position 2: '!' [tests/integration/lexer.1z:13:throw <- tests/integration/lexer.1z:29:if <- tests/integration/lexer.1z:7:(try-rules) <- tests/integration/lexer.1z:11:if <- tests/integration/lexer.1z:5:call <- tests/integration/lexer.1z:128:#collect <- tests/integration/lexer.1z:129:recover]> ]
+PASS: error mentions position
+Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
+=== inspect ===
+Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } "<token number: "42">" ]
+PASS: token inspect format
+Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]

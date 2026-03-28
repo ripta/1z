@@ -1,0 +1,73 @@
+\ lib/lexer.1z - Rule-based tokenizer producing lazy token iterators
+
+use "scanner" ;
+
+\\ A token with a kind (symbol), value (string), and byte offset position.
+token: struct{ kind value pos } ;
+
+\\ A lexer holding an array of rule hashes. Each rule has `kind:` (symbol)
+\\ and `match:` (quotation with effect `( scanner -- new-scanner token | f )`).
+lexer: struct{ rules } ;
+
+\\ Construct a lexer from an array of rules.
+<lexer>: ( rules -- lexer ) [ make-lexer ] ;
+
+\\ Try rules in order. First match wins.
+\\ Each rule's match quotation receives a scanner and returns either
+\\ new-scanner + token on match, or f on no match.
+(try-rules): ( scanner rules -- new-scanner token ) [
+  dup #empty? [
+    drop
+    \ scanner
+    "unrecognized input at position " over position>> >string #append
+    over peek dup [
+      [ ": '" ] dip #append "'" #append #append
+    ] [ drop ] if
+    \ scanner message-str
+    nip f swap EInvalidArgument make-error throw
+  ] [
+    dup #first match: @get
+    \ scanner rules match-quot
+    2 pick-n swap
+    \ scanner rules scanner match-quot
+    call
+    \ scanner rules (new-scanner token | f)
+    dup f = [
+      drop
+      1 #drop
+      (try-rules)
+    ] [
+      \ scanner rules new-scanner token
+      [ nip nip ] dip
+    ] if
+  ] if
+] ;
+
+\\ Single step of the lexer iterator.
+(lexer-step): ( state rules -- option ) [
+  over 0 #nth
+  dup at-end? [
+    2drop drop option:none
+  ] [
+    swap (try-rules)
+    \ state new-scanner token
+    swap 2 pick-n swap 0 swap #nth!
+    drop nip >option:some
+  ] if
+] ;
+
+\\ Produce a lazy token iterator from a string and a lexer.
+tokenize: ( str lexer -- iterator ) [
+  rules>>
+  swap <scanner> V{ } swap #push!
+  swap [ (lexer-step) ] curry curry
+  >iterator
+] ;
+
+\\ Debug representation of a token.
+inspect: method{ token } [
+  dup kind>> inspect swap value>> inspect
+  \ kind-str value-str
+  [ "<token " swap #append " " #append ] dip
+  #append ">" #append
+] ;

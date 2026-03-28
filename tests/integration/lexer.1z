@@ -1,0 +1,134 @@
+use "testing" ;
+use "lexer" ;
+use "scanner" ;
+use "conversions" ;
+use "char" ;
+
+\ --- Test helper rules ---
+
+\ Rule that matches a run of digits, producing a number: token
+(digit-match): ( scanner -- new-scanner token | f ) [
+  dup peek dup f = [ 2drop f ] [
+    digit? [
+      dup position>> swap
+      [ digit? ] take-while
+      \ start-pos scanner' value
+      <rot- [ number: swap ] dip make-token
+    ] [ drop f ] if
+  ] if
+] ;
+
+\ Rule that matches a run of letters, producing a word: token
+(alpha-match): ( scanner -- new-scanner token | f ) [
+  dup peek dup f = [ 2drop f ] [
+    alpha? [
+      dup position>> swap
+      [ alpha? ] take-while
+      \ start-pos scanner' value
+      <rot- [ word: swap ] dip make-token
+    ] [ drop f ] if
+  ] if
+] ;
+
+\ Rule that matches a single "+" character
+(plus-match): ( scanner -- new-scanner token | f ) [
+  dup peek "+" = [
+    dup position>> swap advance swap
+    \ scanner' start-pos
+    [ plus: "+" ] dip make-token
+  ] [ drop f ] if
+] ;
+
+\ Rule that matches any single character
+(any-match): ( scanner -- new-scanner token | f ) [
+  dup peek dup f = [ 2drop f ] [
+    \ scanner char
+    over position>>
+    \ scanner char start-pos
+    -rot> advance swap
+    \ scanner' char start-pos
+    [ any: swap ] dip make-token
+  ] if
+] ;
+
+\ Build rule hashes
+DIGIT-RULE: const [ H{ kind: number: match: [ (digit-match) ] } ] ;
+ALPHA-RULE: const [ H{ kind: word: match: [ (alpha-match) ] } ] ;
+PLUS-RULE:  const [ H{ kind: plus: match: [ (plus-match) ] } ] ;
+ANY-RULE:   const [ H{ kind: any: match: [ (any-match) ] } ] ;
+
+\ ===== Tests =====
+
+"token struct" test-section
+number: "42" 5 make-token token? "token? on token" assert-true
+number: "42" 5 make-token kind>> number: "kind>> returns kind" assert=
+number: "42" 5 make-token value>> "42" "value>> returns value" assert=
+number: "42" 5 make-token pos>> 5 "pos>> returns pos" assert=
+42 token? not "token? on non-token" assert-true
+
+"lexer struct" test-section
+{ } <lexer> lexer? "lexer? on lexer" assert-true
+V{ } DIGIT-RULE #push! >array <lexer> rules>> #len 1 "rules>> returns rules array" assert=
+42 lexer? not "lexer? on non-lexer" assert-true
+
+"tokenize empty string" test-section
+"" V{ } DIGIT-RULE #push! >array <lexer> tokenize #collect
+#len 0 "empty string yields no tokens" assert=
+
+"single-character rule" test-section
+"+" V{ } PLUS-RULE #push! >array <lexer> tokenize #collect
+dup #len 1 "single + yields one token" assert=
+#first dup kind>> plus: "kind is plus:" assert=
+dup value>> "+" "value is +" assert=
+pos>> 0 "pos is 0" assert=
+
+"multi-character rule" test-section
+"12345" V{ } DIGIT-RULE #push! >array <lexer> tokenize #collect
+dup #len 1 "digit run yields one token" assert=
+#first dup kind>> number: "kind is number:" assert=
+dup value>> "12345" "value is full digit run" assert=
+pos>> 0 "pos is 0" assert=
+
+"multiple tokens" test-section
+"aaa" V{ } ALPHA-RULE #push! >array <lexer> tokenize #collect
+#len 1 "aaa with alpha rule yields one token" assert=
+
+"abc" V{ } PLUS-RULE #push! ALPHA-RULE #push! >array <lexer> tokenize #collect
+dup #len 1 "abc yields one word token" assert=
+#first value>> "abc" "value is abc" assert=
+
+"+++" V{ } PLUS-RULE #push! >array <lexer> tokenize #collect
+dup #len 3 "+++ yields three tokens" assert=
+dup 0 #nth pos>> 0 "first + at pos 0" assert=
+dup 1 #nth pos>> 1 "second + at pos 1" assert=
+2 #nth pos>> 2 "third + at pos 2" assert=
+
+"first-match priority" test-section
+"abc" V{ } ALPHA-RULE #push! ANY-RULE #push! >array <lexer> tokenize #collect
+dup #len 1 "alpha-rule matches first, one token" assert=
+#first kind>> word: "first-match produces word: not any:" assert=
+
+"mixed rules" test-section
+"ab12cd" V{ } ALPHA-RULE #push! DIGIT-RULE #push! >array <lexer> tokenize #collect
+dup #len 3 "ab12cd yields three tokens" assert=
+dup 0 #nth dup kind>> word: "first is word:" assert=
+dup value>> "ab" "first value is ab" assert=
+pos>> 0 "first pos is 0" assert=
+dup 1 #nth dup kind>> number: "second is number:" assert=
+dup value>> "12" "second value is 12" assert=
+pos>> 2 "second pos is 2" assert=
+2 #nth dup kind>> word: "third is word:" assert=
+dup value>> "cd" "third value is cd" assert=
+pos>> 4 "third pos is 4" assert=
+
+"error on unrecognized input" test-section
+[ "!" V{ } ALPHA-RULE #push! >array <lexer> tokenize #collect ] "unrecognized char throws" assert-error
+
+"error includes position" test-section
+[ "ab!cd" V{ } ALPHA-RULE #push! >array <lexer> tokenize #collect ]
+[ ] recover
+message: @get "position 2" #in? "error mentions position" assert-true
+
+"inspect" test-section
+number: "42" 0 make-token inspect
+"<token number: \"42\">" "token inspect format" assert=
