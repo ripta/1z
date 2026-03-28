@@ -1,0 +1,53 @@
+use "testing" ;
+use "char" ;
+
+"upper?" test-section
+t "A" upper? "A is uppercase" assert=
+t "Z" upper? "Z is uppercase" assert=
+t "M" upper? "M is uppercase" assert=
+f "a" upper? "a is not uppercase" assert=
+f "z" upper? "z is not uppercase" assert=
+f "0" upper? "0 is not uppercase" assert=
+f "@" upper? "@ is not uppercase (before A)" assert=
+f "[" upper? "[ is not uppercase (after Z)" assert=
+
+"lower?" test-section
+t "a" lower? "a is lowercase" assert=
+t "z" lower? "z is lowercase" assert=
+t "m" lower? "m is lowercase" assert=
+f "A" lower? "A is not lowercase" assert=
+f "Z" lower? "Z is not lowercase" assert=
+f "0" lower? "0 is not lowercase" assert=
+f "`" lower? "` is not lowercase (before a)" assert=
+f "{" lower? "{ is not lowercase (after z)" assert=
+
+"alpha?" test-section
+t "A" alpha? "A is alpha" assert=
+t "z" alpha? "z is alpha" assert=
+f "0" alpha? "0 is not alpha" assert=
+f " " alpha? "space is not alpha" assert=
+f "!" alpha? "! is not alpha" assert=
+
+"alnum?" test-section
+t "A" alnum? "A is alnum" assert=
+t "z" alnum? "z is alnum" assert=
+t "0" alnum? "0 is alnum" assert=
+t "9" alnum? "9 is alnum" assert=
+f " " alnum? "space is not alnum" assert=
+f "!" alnum? "! is not alnum" assert=
+f "@" alnum? "@ is not alnum" assert=
+
+"ascii?" test-section
+t "A" ascii? "A is ascii" assert=
+t " " ascii? "space is ascii" assert=
+t "~" ascii? "~ is ascii" assert=
+f "\u{0080}" ascii? "U+0080 is not ascii" assert=
+f "\u{00FF}" ascii? "U+00FF is not ascii" assert=
+
+"printable?" test-section
+t " " printable? "space is printable" assert=
+t "~" printable? "~ is printable" assert=
+t "A" printable? "A is printable" assert=
+t "!" printable? "! is printable" assert=
+f "\t" printable? "tab is not printable" assert=
+f "\n" printable? "newline is not printable" assert=

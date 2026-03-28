@@ -1,0 +1,90 @@
+=== upper? ===
+Stack: [ ]
+PASS: A is uppercase
+Stack: [ ]
+PASS: Z is uppercase
+Stack: [ ]
+PASS: M is uppercase
+Stack: [ ]
+PASS: a is not uppercase
+Stack: [ ]
+PASS: z is not uppercase
+Stack: [ ]
+PASS: 0 is not uppercase
+Stack: [ ]
+PASS: @ is not uppercase (before A)
+Stack: [ ]
+PASS: [ is not uppercase (after Z)
+Stack: [ ]
+=== lower? ===
+Stack: [ ]
+PASS: a is lowercase
+Stack: [ ]
+PASS: z is lowercase
+Stack: [ ]
+PASS: m is lowercase
+Stack: [ ]
+PASS: A is not lowercase
+Stack: [ ]
+PASS: Z is not lowercase
+Stack: [ ]
+PASS: 0 is not lowercase
+Stack: [ ]
+PASS: ` is not lowercase (before a)
+Stack: [ ]
+PASS: { is not lowercase (after z)
+Stack: [ ]
+=== alpha? ===
+Stack: [ ]
+PASS: A is alpha
+Stack: [ ]
+PASS: z is alpha
+Stack: [ ]
+PASS: 0 is not alpha
+Stack: [ ]
+PASS: space is not alpha
+Stack: [ ]
+PASS: ! is not alpha
+Stack: [ ]
+=== alnum? ===
+Stack: [ ]
+PASS: A is alnum
+Stack: [ ]
+PASS: z is alnum
+Stack: [ ]
+PASS: 0 is alnum
+Stack: [ ]
+PASS: 9 is alnum
+Stack: [ ]
+PASS: space is not alnum
+Stack: [ ]
+PASS: ! is not alnum
+Stack: [ ]
+PASS: @ is not alnum
+Stack: [ ]
+=== ascii? ===
+Stack: [ ]
+PASS: A is ascii
+Stack: [ ]
+PASS: space is ascii
+Stack: [ ]
+PASS: ~ is ascii
+Stack: [ ]
+PASS: U+0080 is not ascii
+Stack: [ ]
+PASS: U+00FF is not ascii
+Stack: [ ]
+=== printable? ===
+Stack: [ ]
+PASS: space is printable
+Stack: [ ]
+PASS: ~ is printable
+Stack: [ ]
+PASS: A is printable
+Stack: [ ]
+PASS: ! is printable
+Stack: [ ]
+PASS: tab is not printable
+Stack: [ ]
+PASS: newline is not printable
+Stack: [ ]

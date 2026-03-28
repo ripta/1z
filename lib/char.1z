@@ -1,0 +1,33 @@
+\ lib/char.1z - ASCII character classification predicates
+
+use "conversions" ;
+
+\\ Test if single-character string is an ASCII uppercase letter (A-Z).
+upper?: ( str -- ? ) [
+  >codepoint dup 65 >= swap 90 <= and
+] ;
+
+\\ Test if single-character string is an ASCII lowercase letter (a-z).
+lower?: ( str -- ? ) [
+  >codepoint dup 97 >= swap 122 <= and
+] ;
+
+\\ Test if single-character string is an ASCII letter (a-z or A-Z).
+alpha?: ( str -- ? ) [
+  dup upper? swap lower? or
+] ;
+
+\\ Test if single-character string is an ASCII letter or digit.
+alnum?: ( str -- ? ) [
+  dup alpha? swap digit? or
+] ;
+
+\\ Test if single-character string is in the ASCII range (codepoint 0-127).
+ascii?: ( str -- ? ) [
+  >codepoint dup 0 >= swap 127 <= and
+] ;
+
+\\ Test if single-character string is a printable ASCII character (codepoint 32-126).
+printable?: ( str -- ? ) [
+  >codepoint dup 32 >= swap 126 <= and
+] ;
