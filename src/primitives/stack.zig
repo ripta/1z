@@ -16,6 +16,8 @@ pub const primitives = [_]Primitive{
     .{ .name = "<rot-n", .stack_effect = "n --", .doc = "Pull item at depth n to top, shifting items above it down.", .func = nativeRotUp },
     .{ .name = "rot-n>", .stack_effect = "n --", .doc = "Push top item to depth n, shifting items above it up.", .func = nativeRotDown },
     .{ .name = "array-n", .stack_effect = "...elems n -- array", .doc = "Pop n, then pop n elements and pack them into an array (stack-order preserved).", .func = nativeArrayN },
+    .{ .name = "drop-n", .stack_effect = "x1..xn n --", .doc = "Drop n items from the stack.", .func = nativeDropN },
+    .{ .name = "apply-n", .stack_effect = "x1..xn quot: ( x -- ..results ) n -- ..results", .doc = "Apply quotation to each of the top n stack values separately, left to right.", .func = nativeApplyN },
 };
 
 /// dup ( a -- a a ) - Duplicate top of stack
@@ -132,4 +134,44 @@ fn nativeArrayN(ctx: *Context) anyerror!void {
     }
 
     try ctx.stack.push(.{ .array = arr });
+}
+
+/// drop-n ( x1...xn n -- ) - Drop n items from the stack in O(1).
+fn nativeDropN(ctx: *Context) anyerror!void {
+    const n = try helpers.popFixnum(ctx);
+    if (n < 0) return error.StackUnderflow;
+
+    const count: usize = @intCast(n);
+    if (count > ctx.stack.items.items.len) return error.StackUnderflow;
+    if (count == 0) return;
+
+    ctx.stack.items.shrinkRetainingCapacity(ctx.stack.items.items.len - count);
+}
+
+/// apply-n ( x1...xn quot n -- ) - Apply quotation to each of the top n stack values.
+fn nativeApplyN(ctx: *Context) anyerror!void {
+    const n = try helpers.popFixnum(ctx);
+    if (n < 0) return error.StackUnderflow;
+
+    const quot = try popQuotation(ctx);
+
+    const count: usize = @intCast(n);
+    if (count > ctx.stack.items.items.len) return error.StackUnderflow;
+    if (count == 0) return;
+
+    // Copy n values into temp buffer, preserving order (deepest first).
+    const alloc = ctx.quotationAllocator();
+    const temp = try alloc.alloc(Value, count);
+    defer alloc.free(temp);
+
+    const stack_len = ctx.stack.items.items.len;
+    const start = stack_len - count;
+    @memcpy(temp, ctx.stack.items.items[start..stack_len]);
+
+    ctx.stack.items.shrinkRetainingCapacity(start);
+
+    for (temp) |val| {
+        try ctx.stack.push(val);
+        try ctx.executeQuotationWithFrame(quot);
+    }
 }

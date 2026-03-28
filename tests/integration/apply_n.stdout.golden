@@ -1,0 +1,60 @@
+=== basic ===
+Stack: [ ]
+Stack: [ 10 20 30 ]
+PASS: third result
+Stack: [ 10 20 ]
+PASS: second result
+Stack: [ 10 ]
+PASS: first result
+Stack: [ ]
+=== zero is no-op ===
+Stack: [ ]
+Stack: [ 1 2 ]
+PASS: top unchanged
+Stack: [ 1 ]
+PASS: second unchanged
+Stack: [ ]
+=== single element ===
+Stack: [ ]
+Stack: [ 43 ]
+PASS: single apply
+Stack: [ ]
+=== identity quotation ===
+Stack: [ ]
+Stack: [ 1 2 3 ]
+PASS: id third
+Stack: [ 1 2 ]
+PASS: id second
+Stack: [ 1 ]
+PASS: id first
+Stack: [ ]
+=== preserves values below ===
+Stack: [ ]
+Stack: [ 99 11 12 ]
+PASS: applied second
+Stack: [ 99 11 ]
+PASS: applied first
+Stack: [ 99 ]
+PASS: below preserved
+Stack: [ ]
+=== left-to-right order ===
+Stack: [ ]
+Stack: [ { "x" 1 } { "x" 2 } { "x" 3 } ]
+PASS: third pair
+Stack: [ { "x" 1 } { "x" 2 } ]
+PASS: second pair
+Stack: [ { "x" 1 } ]
+PASS: first pair
+Stack: [ ]
+=== error: negative count ===
+Stack: [ ]
+PASS: negative count
+Stack: [ ]
+=== error: underflow ===
+Stack: [ ]
+PASS: more than available
+Stack: [ ]
+=== error: not a quotation ===
+Stack: [ ]
+PASS: not a quotation
+Stack: [ ]

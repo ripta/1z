@@ -1,0 +1,25 @@
+use "testing" ;
+
+"basic" test-section
+1 2 3 4 5 3 drop-n
+2 "second remains" assert=
+1 "first remains" assert=
+
+"zero is no-op" test-section
+1 2 3 0 drop-n
+3 "top unchanged" assert=
+2 "second unchanged" assert=
+1 "third unchanged" assert=
+
+"drop all" test-section
+10 20 30 3 drop-n
+
+"single drop" test-section
+99 42 1 drop-n
+99 "below preserved" assert=
+
+"error: negative count" test-section
+[ -1 drop-n ] "negative count" assert-error
+
+"error: underflow" test-section
+[ 1 5 drop-n ] "more than available" assert-error

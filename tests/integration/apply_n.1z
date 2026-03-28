@@ -1,0 +1,44 @@
+use "testing" ;
+
+"basic" test-section
+1 2 3 [ 10 * ] 3 apply-n
+30 "third result" assert=
+20 "second result" assert=
+10 "first result" assert=
+
+"zero is no-op" test-section
+1 2 [ 10 * ] 0 apply-n
+2 "top unchanged" assert=
+1 "second unchanged" assert=
+
+"single element" test-section
+42 [ 1 + ] 1 apply-n
+43 "single apply" assert=
+
+"identity quotation" test-section
+1 2 3 [ ] 3 apply-n
+3 "id third" assert=
+2 "id second" assert=
+1 "id first" assert=
+
+"preserves values below" test-section
+99 1 2 [ 10 + ] 2 apply-n
+12 "applied second" assert=
+11 "applied first" assert=
+99 "below preserved" assert=
+
+"left-to-right order" test-section
+\ Each quotation pushes a tagged pair, so order is visible
+1 2 3 [ "x" swap 2 array-n ] 3 apply-n
+{ "x" 3 } "third pair" assert=
+{ "x" 2 } "second pair" assert=
+{ "x" 1 } "first pair" assert=
+
+"error: negative count" test-section
+[ [ ] -1 apply-n ] "negative count" assert-error
+
+"error: underflow" test-section
+[ 1 [ ] 5 apply-n ] "more than available" assert-error
+
+"error: not a quotation" test-section
+[ 1 2 3 apply-n ] "not a quotation" assert-error

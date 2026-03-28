@@ -1,0 +1,32 @@
+=== basic ===
+Stack: [ ]
+Stack: [ 1 2 ]
+PASS: second remains
+Stack: [ 1 ]
+PASS: first remains
+Stack: [ ]
+=== zero is no-op ===
+Stack: [ ]
+Stack: [ 1 2 3 ]
+PASS: top unchanged
+Stack: [ 1 2 ]
+PASS: second unchanged
+Stack: [ 1 ]
+PASS: third unchanged
+Stack: [ ]
+=== drop all ===
+Stack: [ ]
+Stack: [ ]
+=== single drop ===
+Stack: [ ]
+Stack: [ 99 ]
+PASS: below preserved
+Stack: [ ]
+=== error: negative count ===
+Stack: [ ]
+PASS: negative count
+Stack: [ ]
+=== error: underflow ===
+Stack: [ ]
+PASS: more than available
+Stack: [ ]
