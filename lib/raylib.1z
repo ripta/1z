@@ -1,0 +1,4 @@
+\ lib/raylib.1z - Raylib bindings top-level re-export
+
+"raylib/types" load reexport
+"raylib/core" load reexport

@@ -1,0 +1,13 @@
+\ examples/raylib-hello.1z - Open a window, draw a rectangle, close on ESC
+
+use "raylib" ;
+
+800 600 "1Z Raylib Hello" [
+  60 set-target-fps
+  [ window-should-close? not ] [
+    [
+      RAYWHITE clear-background
+      100 100 200 150 RED draw-rectangle
+    ] draw
+  ] while
+] with-window

@@ -3,3 +3,34 @@
 use "ffi" ;
 
 Color: ffi-struct{ r: u8 g: u8 b: u8 a: u8 } ;
+
+\ Standard colors (matching raylib.h)
+LIGHTGRAY: const [ 200 200 200 255 make-Color ] ;
+GRAY:      const [ 130 130 130 255 make-Color ] ;
+DARKGRAY:  const [ 80 80 80 255 make-Color ] ;
+YELLOW:    const [ 253 249 0 255 make-Color ] ;
+GOLD:      const [ 255 203 0 255 make-Color ] ;
+ORANGE:    const [ 255 161 0 255 make-Color ] ;
+PINK:      const [ 255 109 194 255 make-Color ] ;
+RED:    const [ 230 41 55 255 make-Color ] ;
+MAROON: const [ 190 33 55 255 make-Color ] ;
+GREEN:  const [ 0 228 48 255 make-Color ] ;
+LIME:   const [ 0 158 47 255 make-Color ] ;
+DARKGREEN: const [ 0 117 44 255 make-Color ] ;
+SKYBLUE:   const [ 102 191 255 255 make-Color ] ;
+BLUE:      const [ 0 121 241 255 make-Color ] ;
+DARKBLUE:  const [ 0 82 172 255 make-Color ] ;
+PURPLE:    const [ 200 122 255 255 make-Color ] ;
+VIOLET:    const [ 135 60 190 255 make-Color ] ;
+DARKPURPLE: const [ 112 31 126 255 make-Color ] ;
+BEIGE:      const [ 211 176 131 255 make-Color ] ;
+BROWN:      const [ 127 106 79 255 make-Color ] ;
+DARKBROWN:  const [ 76 63 47 255 make-Color ] ;
+WHITE:      const [ 255 255 255 255 make-Color ] ;
+BLACK:      const [ 0 0 0 255 make-Color ] ;
+BLANK:      const [ 0 0 0 0 make-Color ] ;
+MAGENTA:    const [ 255 0 255 255 make-Color ] ;
+RAYWHITE:   const [ 245 245 245 255 make-Color ] ;
+
+\ Key codes
+KEY_ESCAPE: 256 ;

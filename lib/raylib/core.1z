@@ -15,21 +15,32 @@ use "raylib/types" ;
   (set-target-fps):      "SetTargetFPS" ffi{ i32 -> void }
 } call "raylib-core-raw" swap >module import
 
-init-window:          ( width height title -- )     [ (init-window) ] ;
-close-window:         ( -- )                        [ (close-window) ] ;
-window-should-close?: ( -- bool )                   [ (window-should-close) ] ;
-begin-drawing:        ( -- )                        [ (begin-drawing) ] ;
-end-drawing:          ( -- )                        [ (end-drawing) ] ;
-clear-background:     ( color -- )                  [ (clear-background) ] ;
-draw-rectangle:       ( x y width height color -- ) [ (draw-rectangle) ] ;
-key-pressed?:         ( key -- bool )               [ (is-key-pressed) ] ;
-set-target-fps:       ( fps -- )                    [ (set-target-fps) ] ;
+\\ Initialize a window with given dimensions and title. C: InitWindow
+init-window: ( width height title -- ) [ (init-window) ] ;
+\\ Close the current window and OpenGL context. C: CloseWindow
+close-window: ( -- ) [ (close-window) ] ;
+\\ Check if the window close button or ESC key has been pressed. C: WindowShouldClose
+window-should-close?: ( -- bool ) [ (window-should-close) ] ;
+\\ Begin drawing to the default framebuffer. C: BeginDrawing
+begin-drawing: ( -- ) [ (begin-drawing) ] ;
+\\ End drawing and swap buffers. C: EndDrawing
+end-drawing: ( -- ) [ (end-drawing) ] ;
+\\ Clear the background with a color. C: ClearBackground
+clear-background: ( color -- ) [ (clear-background) ] ;
+\\ Draw a filled rectangle at position (x, y) with given size and color. C: DrawRectangle
+draw-rectangle: ( x y width height color -- ) [ (draw-rectangle) ] ;
+\\ Check if a specific key has been pressed once. C: IsKeyPressed
+key-pressed?: ( key -- bool ) [ (is-key-pressed) ] ;
+\\ Set the target frames per second. C: SetTargetFPS
+set-target-fps: ( fps -- ) [ (set-target-fps) ] ;
 
+\\ Open a window, run a quotation, and close the window on exit.
 with-window: ( width height title quot -- ... ) [
   [ init-window ] dip
   [ close-window ] cleanup
 ] ;
 
+\\ Execute a quotation between begin-drawing and end-drawing calls.
 draw: ( quot -- ) [
   begin-drawing
   [ end-drawing ] cleanup
