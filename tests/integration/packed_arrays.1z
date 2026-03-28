@@ -108,6 +108,86 @@ dup 0 #nth 3.0 = swap 31 #nth 3.0 = and t "large f64 + first and last" assert=
 [ { 128 } >packed:i8 ] "128 out of range for i8" assert-error
 [ { -129 } >packed:i8 ] "-129 out of range for i8" assert-error
 
+"scalar broadcast +" test-section
+
+{ 1.0 2.0 3.0 } >packed:f64 10.0 + packed>array
+{ 11.0 12.0 13.0 } "f64 + float scalar" assert=
+
+{ 1.0 2.0 3.0 } >packed:f64 10 + packed>array
+{ 11.0 12.0 13.0 } "f64 + fixnum scalar" assert=
+
+{ 1 2 3 } >packed:i32 10 + packed>array
+{ 11 12 13 } "i32 + fixnum scalar" assert=
+
+"scalar broadcast - * /" test-section
+
+{ 10.0 20.0 } >packed:f64 3.0 - packed>array
+{ 7.0 17.0 } "f64 - scalar" assert=
+
+{ 2.0 3.0 } >packed:f64 4.0 * packed>array
+{ 8.0 12.0 } "f64 * scalar" assert=
+
+{ 10.0 20.0 } >packed:f64 5.0 / packed>array
+{ 2.0 4.0 } "f64 / scalar" assert=
+
+{ 2 3 4 } >packed:i32 5 * packed>array
+{ 10 15 20 } "i32 * scalar" assert=
+
+"packed-sum" test-section
+
+{ 1.0 2.0 3.0 4.0 } >packed:f64 packed-sum 10.0 "f64 sum" assert=
+{ } >packed:f64 packed-sum 0.0 "f64 sum empty" assert=
+{ 1 2 3 } >packed:i32 packed-sum 6 "i32 sum" assert=
+{ 1 2 3 } >packed:u8 packed-sum 6 "u8 sum" assert=
+
+"packed-product" test-section
+
+{ 1.0 2.0 3.0 } >packed:f64 packed-product 6.0 "f64 product" assert=
+{ } >packed:f64 packed-product 1.0 "f64 product empty" assert=
+{ 2 3 4 } >packed:i32 packed-product 24 "i32 product" assert=
+
+"packed-min packed-max" test-section
+
+{ 3.0 1.0 4.0 1.5 } >packed:f64 packed-min 1.0 "f64 min" assert=
+{ 3.0 1.0 4.0 1.5 } >packed:f64 packed-max 4.0 "f64 max" assert=
+{ -5 3 -1 7 } >packed:i32 packed-min -5 "i32 min" assert=
+{ -5 3 -1 7 } >packed:i32 packed-max 7 "i32 max" assert=
+[ { } >packed:f64 packed-min ] "min on empty" assert-error
+[ { } >packed:f64 packed-max ] "max on empty" assert-error
+
+"packed-dot" test-section
+
+{ 1.0 2.0 3.0 } >packed:f64 { 4.0 5.0 6.0 } >packed:f64 packed-dot
+32.0 "f64 dot product" assert=
+{ 1 2 3 } >packed:i32 { 4 5 6 } >packed:i32 packed-dot
+32 "i32 dot product" assert=
+[ { 1.0 2.0 } >packed:f64 { 1.0 } >packed:f64 packed-dot ] "dot length mismatch" assert-error
+
+"#len on packed arrays" test-section
+
+{ 1.0 2.0 3.0 } >packed:f64 #len 3 "f64 #len" assert=
+{ } >packed:f64 #len 0 "f64 #len empty" assert=
+{ 1 2 3 4 5 } >packed:i32 #len 5 "i32 #len" assert=
+{ 1 2 } >packed:u8 #len 2 "u8 #len" assert=
+
+"#nth on packed arrays" test-section
+
+{ 10.0 20.0 30.0 } >packed:f64 1 #nth 20.0 "f64 #nth" assert=
+{ 10 20 30 } >packed:i32 0 #nth 10 "i32 #nth first" assert=
+{ 10 20 30 } >packed:i32 2 #nth 30 "i32 #nth last" assert=
+[ { 10.0 } >packed:f64 5 #nth ] "f64 #nth out of bounds" assert-error
+[ { 10.0 } >packed:f64 -1 #nth ] "f64 #nth negative" assert-error
+
+">iterator on packed arrays" test-section
+
+{ 1.0 2.0 3.0 } >packed:f64 >iterator #collect { 1.0 2.0 3.0 } "f64 iterator roundtrip" assert=
+{ 1 2 3 } >packed:i32 >iterator [ 10 * ] #map #collect { 10 20 30 } "i32 iterate+map" assert=
+{ } >packed:f64 >iterator #collect { } "f64 iterator empty" assert=
+
+"large reductions exercise SIMD path" test-section
+
+64 1.0 packed-fill:f64 packed-sum 64.0 "64-element sum" assert=
+
 "inspect" test-section
 
 { 1.0 2.0 3.0 } >packed:f64 inspect "packed-f64{ 1.0 2.0 3.0 }" "f64 inspect" assert=

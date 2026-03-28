@@ -18,6 +18,17 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "packed-sub", .func = nativePackedSub, .stack_effect = "packed-T packed-T -- packed-T" },
     .{ .name = "packed-mul", .func = nativePackedMul, .stack_effect = "packed-T packed-T -- packed-T" },
     .{ .name = "packed-div", .func = nativePackedDiv, .stack_effect = "packed-T packed-T -- packed-T" },
+    .{ .name = "packed-scalar-add", .func = nativePackedScalarAdd, .stack_effect = "packed-T scalar -- packed-T" },
+    .{ .name = "packed-scalar-sub", .func = nativePackedScalarSub, .stack_effect = "packed-T scalar -- packed-T" },
+    .{ .name = "packed-scalar-mul", .func = nativePackedScalarMul, .stack_effect = "packed-T scalar -- packed-T" },
+    .{ .name = "packed-scalar-div", .func = nativePackedScalarDiv, .stack_effect = "packed-T scalar -- packed-T" },
+    .{ .name = "packed-sum-impl", .func = nativePackedSum, .stack_effect = "packed-T -- number" },
+    .{ .name = "packed-product-impl", .func = nativePackedProduct, .stack_effect = "packed-T -- number" },
+    .{ .name = "packed-min-impl", .func = nativePackedMin, .stack_effect = "packed-T -- number" },
+    .{ .name = "packed-max-impl", .func = nativePackedMax, .stack_effect = "packed-T -- number" },
+    .{ .name = "packed-dot-impl", .func = nativePackedDot, .stack_effect = "packed-T packed-T -- number" },
+    .{ .name = "packed-len", .func = nativePackedLen, .stack_effect = "packed-T -- fixnum" },
+    .{ .name = "packed-nth", .func = nativePackedNth, .stack_effect = "packed-T fixnum -- value" },
 };
 
 const PackedElementType = enum {
@@ -457,4 +468,283 @@ fn nativePackedMul(ctx: *Context) anyerror!void {
 
 fn nativePackedDiv(ctx: *Context) anyerror!void {
     return packedArithmeticOp(.div, ctx);
+}
+
+// ---------------------------------------------------------------------------
+// Scalar broadcast arithmetic: packed-T op scalar -> packed-T
+// ---------------------------------------------------------------------------
+
+fn packedScalarArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyerror!void {
+    const alloc = ctx.containerAllocator();
+    const arena = ctx.arena.allocator();
+
+    const scalar_val = try ctx.stack.pop();
+    const a_val = try ctx.stack.pop();
+
+    const a_tagged = switch (a_val) {
+        .tagged => |t| t,
+        else => {
+            helpers.setTypeMismatchError(ctx, "packed-*", a_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const a_ba = switch (a_tagged.inner.*) {
+        .byte_array => |b| b,
+        else => {
+            helpers.setErrorContext(ctx, "packed scalar arithmetic: inner value is not byte-array", .{});
+            return error.TypeMismatch;
+        },
+    };
+
+    const elem_type = PackedElementType.fromTagName(a_tagged.tag.name) orelse {
+        helpers.setErrorContext(ctx, "packed scalar arithmetic: not a packed type: {s}", .{a_tagged.tag.name});
+        return error.TypeMismatch;
+    };
+
+    const out_ba = try alloc.create(ByteArray);
+    out_ba.* = ByteArray{};
+    try out_ba.ensureTotalCapacity(alloc, a_ba.items.len);
+    out_ba.items.len = a_ba.items.len;
+
+    switch (elem_type) {
+        inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
+            const T = comptime etToType(et);
+            const scalar = try valueToElement(T, ctx, arena, scalar_val);
+            packed_kernels.scalarBinaryOp(T, op, a_ba.items, scalar, out_ba.items);
+        },
+    }
+
+    const inner = try alloc.create(Value);
+    inner.* = .{ .byte_array = out_ba };
+    try ctx.stack.push(.{ .tagged = .{ .tag = a_tagged.tag, .inner = inner } });
+}
+
+fn nativePackedScalarAdd(ctx: *Context) anyerror!void {
+    return packedScalarArithmeticOp(.add, ctx);
+}
+
+fn nativePackedScalarSub(ctx: *Context) anyerror!void {
+    return packedScalarArithmeticOp(.sub, ctx);
+}
+
+fn nativePackedScalarMul(ctx: *Context) anyerror!void {
+    return packedScalarArithmeticOp(.mul, ctx);
+}
+
+fn nativePackedScalarDiv(ctx: *Context) anyerror!void {
+    return packedScalarArithmeticOp(.div, ctx);
+}
+
+// ---------------------------------------------------------------------------
+// Reductions
+// ---------------------------------------------------------------------------
+
+/// packed-sum-impl ( packed-T -- number )
+fn nativePackedSum(ctx: *Context) anyerror!void {
+    const tagged = try popPackedTagged(ctx);
+    const ba = try extractByteArray(ctx, tagged);
+    const elem_type = try extractElemType(ctx, tagged);
+
+    switch (elem_type) {
+        inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
+            const T = comptime etToType(et);
+            try ctx.stack.push(elementToValue(T, packed_kernels.sumPacked(T, ba.items)));
+        },
+    }
+}
+
+/// packed-product-impl ( packed-T -- number )
+fn nativePackedProduct(ctx: *Context) anyerror!void {
+    const tagged = try popPackedTagged(ctx);
+    const ba = try extractByteArray(ctx, tagged);
+    const elem_type = try extractElemType(ctx, tagged);
+
+    switch (elem_type) {
+        inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
+            const T = comptime etToType(et);
+            try ctx.stack.push(elementToValue(T, packed_kernels.productPacked(T, ba.items)));
+        },
+    }
+}
+
+/// packed-min-impl ( packed-T -- number )
+fn nativePackedMin(ctx: *Context) anyerror!void {
+    const tagged = try popPackedTagged(ctx);
+    const ba = try extractByteArray(ctx, tagged);
+    const elem_type = try extractElemType(ctx, tagged);
+
+    switch (elem_type) {
+        inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
+            const T = comptime etToType(et);
+            const result = packed_kernels.minPacked(T, ba.items) orelse {
+                helpers.setErrorContext(ctx, "packed-min: empty array", .{});
+                return error.InvalidArgument;
+            };
+            try ctx.stack.push(elementToValue(T, result));
+        },
+    }
+}
+
+/// packed-max-impl ( packed-T -- number )
+fn nativePackedMax(ctx: *Context) anyerror!void {
+    const tagged = try popPackedTagged(ctx);
+    const ba = try extractByteArray(ctx, tagged);
+    const elem_type = try extractElemType(ctx, tagged);
+
+    switch (elem_type) {
+        inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
+            const T = comptime etToType(et);
+            const result = packed_kernels.maxPacked(T, ba.items) orelse {
+                helpers.setErrorContext(ctx, "packed-max: empty array", .{});
+                return error.InvalidArgument;
+            };
+            try ctx.stack.push(elementToValue(T, result));
+        },
+    }
+}
+
+/// packed-dot-impl ( packed-T packed-T -- number )
+fn nativePackedDot(ctx: *Context) anyerror!void {
+    const b_val = try ctx.stack.pop();
+    const a_val = try ctx.stack.pop();
+
+    const a_tagged = switch (a_val) {
+        .tagged => |t| t,
+        else => {
+            helpers.setTypeMismatchError(ctx, "packed-*", a_val);
+            return error.TypeMismatch;
+        },
+    };
+    const b_tagged = switch (b_val) {
+        .tagged => |t| t,
+        else => {
+            helpers.setTypeMismatchError(ctx, "packed-*", b_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    if (a_tagged.tag != b_tagged.tag) {
+        helpers.setErrorContext(ctx, "packed-dot: element type mismatch ({s} vs {s})", .{ a_tagged.tag.name, b_tagged.tag.name });
+        return error.TypeMismatch;
+    }
+
+    const a_ba = try extractByteArray(ctx, a_tagged);
+    const b_ba = try extractByteArray(ctx, b_tagged);
+    const elem_type = try extractElemType(ctx, a_tagged);
+
+    if (a_ba.items.len != b_ba.items.len) {
+        const a_count = a_ba.items.len / elem_type.elemSize();
+        const b_count = b_ba.items.len / elem_type.elemSize();
+        helpers.setErrorContext(ctx, "packed-dot: length mismatch ({d} vs {d} elements)", .{ a_count, b_count });
+        return error.TypeMismatch;
+    }
+
+    switch (elem_type) {
+        inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
+            const T = comptime etToType(et);
+            try ctx.stack.push(elementToValue(T, packed_kernels.dotPacked(T, a_ba.items, b_ba.items)));
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sequence protocol: packed-len, packed-nth
+// ---------------------------------------------------------------------------
+
+/// packed-len ( packed-T -- fixnum )
+fn nativePackedLen(ctx: *Context) anyerror!void {
+    const tagged = try popPackedTagged(ctx);
+    const ba = try extractByteArray(ctx, tagged);
+    const elem_type = try extractElemType(ctx, tagged);
+    const count = ba.items.len / elem_type.elemSize();
+    try ctx.stack.push(.{ .fixnum = @intCast(count) });
+}
+
+/// packed-nth ( packed-T fixnum -- value )
+fn nativePackedNth(ctx: *Context) anyerror!void {
+    const idx_val = try ctx.stack.pop();
+    const a_val = try ctx.stack.pop();
+
+    const idx: i64 = switch (idx_val) {
+        .fixnum => |n| n,
+        else => {
+            helpers.setTypeMismatchError(ctx, "fixnum", idx_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const tagged = switch (a_val) {
+        .tagged => |t| t,
+        else => {
+            helpers.setTypeMismatchError(ctx, "packed-*", a_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const ba = try extractByteArray(ctx, tagged);
+    const elem_type = try extractElemType(ctx, tagged);
+    const count = ba.items.len / elem_type.elemSize();
+
+    if (idx < 0 or idx >= @as(i64, @intCast(count))) {
+        helpers.setErrorContext(ctx, "#nth: index {d} out of bounds for packed array of {d} elements", .{ idx, count });
+        return error.IndexOutOfBounds;
+    }
+
+    const i: usize = @intCast(idx);
+    switch (elem_type) {
+        inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
+            const T = comptime etToType(et);
+            try ctx.stack.push(elementToValue(T, packed_kernels.readElement(T, ba.items, i)));
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared extraction helpers
+// ---------------------------------------------------------------------------
+
+fn etToType(comptime et: PackedElementType) type {
+    return switch (et) {
+        .f64 => f64,
+        .f32 => f32,
+        .i8 => i8,
+        .i16 => i16,
+        .i32 => i32,
+        .i64 => i64,
+        .u8 => u8,
+        .u16 => u16,
+        .u32 => u32,
+        .u64 => u64,
+    };
+}
+
+const TaggedPayload = std.meta.TagPayload(Value, .tagged);
+
+fn popPackedTagged(ctx: *Context) !TaggedPayload {
+    const val = try ctx.stack.pop();
+    return switch (val) {
+        .tagged => |t| t,
+        else => {
+            helpers.setTypeMismatchError(ctx, "packed-*", val);
+            return error.TypeMismatch;
+        },
+    };
+}
+
+fn extractByteArray(ctx: *Context, tagged: TaggedPayload) !*ByteArray {
+    return switch (tagged.inner.*) {
+        .byte_array => |b| b,
+        else => {
+            helpers.setErrorContext(ctx, "packed operation: inner value is not byte-array", .{});
+            return error.TypeMismatch;
+        },
+    };
+}
+
+fn extractElemType(ctx: *Context, tagged: TaggedPayload) !PackedElementType {
+    return PackedElementType.fromTagName(tagged.tag.name) orelse {
+        helpers.setErrorContext(ctx, "packed operation: not a packed type: {s}", .{tagged.tag.name});
+        return error.TypeMismatch;
+    };
 }

@@ -51,6 +51,203 @@ pub fn elementCount(comptime T: type, bytes: []const u8) usize {
 }
 
 // ---------------------------------------------------------------------------
+// Reductions
+// ---------------------------------------------------------------------------
+
+/// Sum all elements. Returns 0 for empty arrays.
+pub fn sumPacked(comptime T: type, bytes: []const u8) T {
+    const n = elementCount(T, bytes);
+    if (n == 0) return zeroval(T);
+
+    const chunk = std.simd.suggestVectorLength(T) orelse 4;
+    const is_int = @typeInfo(T) == .int;
+    const elem_size = @sizeOf(T);
+    const chunk_bytes = chunk * elem_size;
+
+    var acc: T = zeroval(T);
+    var i: usize = 0;
+    while (i + chunk <= n) : (i += chunk) {
+        const byte_off = i * elem_size;
+        var buf: [chunk_bytes]u8 align(@alignOf(@Vector(chunk, T))) = undefined;
+        @memcpy(&buf, bytes[byte_off..][0..chunk_bytes]);
+        const aligned: *align(@alignOf(@Vector(chunk, T))) const [chunk]T = @ptrCast(&buf);
+        const v: @Vector(chunk, T) = aligned.*;
+        const chunk_sum: T = if (is_int) @reduce(.Add, v) else @reduce(.Add, v);
+        acc = if (is_int) acc +% chunk_sum else acc + chunk_sum;
+    }
+    while (i < n) : (i += 1) {
+        const e = readElement(T, bytes, i);
+        acc = if (is_int) acc +% e else acc + e;
+    }
+    return acc;
+}
+
+/// Product of all elements. Returns 1 for empty arrays.
+pub fn productPacked(comptime T: type, bytes: []const u8) T {
+    const n = elementCount(T, bytes);
+    if (n == 0) return oneval(T);
+
+    var acc: T = oneval(T);
+    const is_int = @typeInfo(T) == .int;
+    for (0..n) |i| {
+        const e = readElement(T, bytes, i);
+        acc = if (is_int) acc *% e else acc * e;
+    }
+    return acc;
+}
+
+/// Minimum element. Returns null for empty arrays.
+pub fn minPacked(comptime T: type, bytes: []const u8) ?T {
+    const n = elementCount(T, bytes);
+    if (n == 0) return null;
+
+    const chunk = std.simd.suggestVectorLength(T) orelse 4;
+    const elem_size = @sizeOf(T);
+    const chunk_bytes = chunk * elem_size;
+
+    var acc: T = readElement(T, bytes, 0);
+    var i: usize = 0;
+    while (i + chunk <= n) : (i += chunk) {
+        const byte_off = i * elem_size;
+        var buf: [chunk_bytes]u8 align(@alignOf(@Vector(chunk, T))) = undefined;
+        @memcpy(&buf, bytes[byte_off..][0..chunk_bytes]);
+        const aligned: *align(@alignOf(@Vector(chunk, T))) const [chunk]T = @ptrCast(&buf);
+        const v: @Vector(chunk, T) = aligned.*;
+        const chunk_min: T = @reduce(.Min, v);
+        acc = if (minCmp(T, chunk_min, acc)) chunk_min else acc;
+    }
+    while (i < n) : (i += 1) {
+        const e = readElement(T, bytes, i);
+        if (minCmp(T, e, acc)) acc = e;
+    }
+    return acc;
+}
+
+/// Maximum element. Returns null for empty arrays.
+pub fn maxPacked(comptime T: type, bytes: []const u8) ?T {
+    const n = elementCount(T, bytes);
+    if (n == 0) return null;
+
+    const chunk = std.simd.suggestVectorLength(T) orelse 4;
+    const elem_size = @sizeOf(T);
+    const chunk_bytes = chunk * elem_size;
+
+    var acc: T = readElement(T, bytes, 0);
+    var i: usize = 0;
+    while (i + chunk <= n) : (i += chunk) {
+        const byte_off = i * elem_size;
+        var buf: [chunk_bytes]u8 align(@alignOf(@Vector(chunk, T))) = undefined;
+        @memcpy(&buf, bytes[byte_off..][0..chunk_bytes]);
+        const aligned: *align(@alignOf(@Vector(chunk, T))) const [chunk]T = @ptrCast(&buf);
+        const v: @Vector(chunk, T) = aligned.*;
+        const chunk_max: T = @reduce(.Max, v);
+        acc = if (minCmp(T, acc, chunk_max)) chunk_max else acc;
+    }
+    while (i < n) : (i += 1) {
+        const e = readElement(T, bytes, i);
+        if (minCmp(T, acc, e)) acc = e;
+    }
+    return acc;
+}
+
+/// Dot product: element-wise multiply then sum. Returns 0 for empty arrays.
+pub fn dotPacked(comptime T: type, a: []const u8, b: []const u8) T {
+    const elem_size = @sizeOf(T);
+    const n = a.len / elem_size;
+    if (n == 0) return zeroval(T);
+
+    const chunk = std.simd.suggestVectorLength(T) orelse 4;
+    const is_int = @typeInfo(T) == .int;
+    const chunk_bytes = chunk * elem_size;
+
+    var acc: T = zeroval(T);
+    var i: usize = 0;
+    while (i + chunk <= n) : (i += chunk) {
+        const byte_off = i * elem_size;
+        var a_buf: [chunk_bytes]u8 align(@alignOf(@Vector(chunk, T))) = undefined;
+        var b_buf: [chunk_bytes]u8 align(@alignOf(@Vector(chunk, T))) = undefined;
+        @memcpy(&a_buf, a[byte_off..][0..chunk_bytes]);
+        @memcpy(&b_buf, b[byte_off..][0..chunk_bytes]);
+
+        const a_aligned: *align(@alignOf(@Vector(chunk, T))) const [chunk]T = @ptrCast(&a_buf);
+        const b_aligned: *align(@alignOf(@Vector(chunk, T))) const [chunk]T = @ptrCast(&b_buf);
+
+        const va: @Vector(chunk, T) = a_aligned.*;
+        const vb: @Vector(chunk, T) = b_aligned.*;
+        const prod: @Vector(chunk, T) = if (is_int) va *% vb else va * vb;
+        const chunk_sum: T = @reduce(.Add, prod);
+        acc = if (is_int) acc +% chunk_sum else acc + chunk_sum;
+    }
+    while (i < n) : (i += 1) {
+        const ae = readElement(T, a, i);
+        const be = readElement(T, b, i);
+        const p: T = if (is_int) ae *% be else ae * be;
+        acc = if (is_int) acc +% p else acc + p;
+    }
+    return acc;
+}
+
+// ---------------------------------------------------------------------------
+// Scalar broadcast operation
+// ---------------------------------------------------------------------------
+
+/// Element-wise operation with a scalar broadcast to the second operand.
+pub fn scalarBinaryOp(comptime T: type, comptime op: Op, a: []const u8, scalar: T, out: []u8) void {
+    const elem_size = @sizeOf(T);
+    const n = a.len / elem_size;
+    const chunk = std.simd.suggestVectorLength(T) orelse 4;
+    const is_int = @typeInfo(T) == .int;
+    const chunk_bytes = chunk * elem_size;
+
+    var i: usize = 0;
+    while (i + chunk <= n) : (i += chunk) {
+        const byte_off = i * elem_size;
+        var a_buf: [chunk_bytes]u8 align(@alignOf(@Vector(chunk, T))) = undefined;
+        @memcpy(&a_buf, a[byte_off..][0..chunk_bytes]);
+
+        const a_aligned: *align(@alignOf(@Vector(chunk, T))) const [chunk]T = @ptrCast(&a_buf);
+        const va: @Vector(chunk, T) = a_aligned.*;
+        const vb: @Vector(chunk, T) = @splat(scalar);
+        const vr: @Vector(chunk, T) = switch (op) {
+            .add => if (is_int) va +% vb else va + vb,
+            .sub => if (is_int) va -% vb else va - vb,
+            .mul => if (is_int) va *% vb else va * vb,
+            .div => if (is_int) @divTrunc(va, vb) else va / vb,
+        };
+
+        const r_aligned: *const [chunk_bytes]u8 = @ptrCast(&vr);
+        @memcpy(out[byte_off..][0..chunk_bytes], r_aligned);
+    }
+
+    while (i < n) : (i += 1) {
+        const ae = readElement(T, a, i);
+        const re: T = switch (op) {
+            .add => if (is_int) ae +% scalar else ae + scalar,
+            .sub => if (is_int) ae -% scalar else ae - scalar,
+            .mul => if (is_int) ae *% scalar else ae * scalar,
+            .div => if (is_int) @divTrunc(ae, scalar) else ae / scalar,
+        };
+        writeElement(T, out, i, re);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn zeroval(comptime T: type) T {
+    return if (@typeInfo(T) == .float) @as(T, 0.0) else @as(T, 0);
+}
+
+fn oneval(comptime T: type) T {
+    return if (@typeInfo(T) == .float) @as(T, 1.0) else @as(T, 1);
+}
+
+fn minCmp(comptime T: type, a: T, b: T) bool {
+    return if (@typeInfo(T) == .float) a < b else a < b;
+}
+
+// ---------------------------------------------------------------------------
 // Internal: SIMD binary operation kernel
 // ---------------------------------------------------------------------------
 
@@ -198,6 +395,121 @@ test "fillPacked i32: basic" {
         try testing.expectEqual(@as(i32, -7), readElement(i32, &out_bytes, i));
     }
 }
+
+// ---------------------------------------------------------------------------
+// Reduction tests
+// ---------------------------------------------------------------------------
+
+test "sumPacked f64: empty" {
+    try testing.expectEqual(@as(f64, 0.0), sumPacked(f64, &.{}));
+}
+
+test "sumPacked f64: single" {
+    const vals = [_]f64{3.5};
+    try testing.expectEqual(@as(f64, 3.5), sumPacked(f64, std.mem.sliceAsBytes(&vals)));
+}
+
+test "sumPacked f64: multiple" {
+    const vals = [_]f64{ 1.0, 2.0, 3.0, 4.0, 5.0 };
+    try testing.expectEqual(@as(f64, 15.0), sumPacked(f64, std.mem.sliceAsBytes(&vals)));
+}
+
+test "sumPacked i32: wrapping" {
+    const vals = [_]i32{ std.math.maxInt(i32), 1 };
+    try testing.expectEqual(std.math.minInt(i32), sumPacked(i32, std.mem.sliceAsBytes(&vals)));
+}
+
+test "productPacked f64: empty" {
+    try testing.expectEqual(@as(f64, 1.0), productPacked(f64, &.{}));
+}
+
+test "productPacked f64: multiple" {
+    const vals = [_]f64{ 2.0, 3.0, 4.0 };
+    try testing.expectEqual(@as(f64, 24.0), productPacked(f64, std.mem.sliceAsBytes(&vals)));
+}
+
+test "productPacked i32: basic" {
+    const vals = [_]i32{ 2, 3, 4 };
+    try testing.expectEqual(@as(i32, 24), productPacked(i32, std.mem.sliceAsBytes(&vals)));
+}
+
+test "minPacked f64: empty" {
+    try testing.expect(minPacked(f64, &.{}) == null);
+}
+
+test "minPacked f64: multiple" {
+    const vals = [_]f64{ 3.0, 1.0, 4.0, 1.5 };
+    try testing.expectEqual(@as(f64, 1.0), minPacked(f64, std.mem.sliceAsBytes(&vals)).?);
+}
+
+test "minPacked i32: negative" {
+    const vals = [_]i32{ 5, -3, 2, 0 };
+    try testing.expectEqual(@as(i32, -3), minPacked(i32, std.mem.sliceAsBytes(&vals)).?);
+}
+
+test "maxPacked f64: multiple" {
+    const vals = [_]f64{ 3.0, 1.0, 4.0, 1.5 };
+    try testing.expectEqual(@as(f64, 4.0), maxPacked(f64, std.mem.sliceAsBytes(&vals)).?);
+}
+
+test "maxPacked i32: negative" {
+    const vals = [_]i32{ -5, -3, -2, -10 };
+    try testing.expectEqual(@as(i32, -2), maxPacked(i32, std.mem.sliceAsBytes(&vals)).?);
+}
+
+test "dotPacked f64: empty" {
+    try testing.expectEqual(@as(f64, 0.0), dotPacked(f64, &.{}, &.{}));
+}
+
+test "dotPacked f64: basic" {
+    const a_vals = [_]f64{ 1.0, 2.0, 3.0 };
+    const b_vals = [_]f64{ 4.0, 5.0, 6.0 };
+    try testing.expectEqual(@as(f64, 32.0), dotPacked(f64, std.mem.sliceAsBytes(&a_vals), std.mem.sliceAsBytes(&b_vals)));
+}
+
+test "dotPacked i32: basic" {
+    const a_vals = [_]i32{ 1, 2, 3 };
+    const b_vals = [_]i32{ 4, 5, 6 };
+    try testing.expectEqual(@as(i32, 32), dotPacked(i32, std.mem.sliceAsBytes(&a_vals), std.mem.sliceAsBytes(&b_vals)));
+}
+
+test "sumPacked f64: large array exercises multi-chunk path" {
+    const n = 64;
+    var vals: [n]f64 = undefined;
+    for (0..n) |i| vals[i] = 1.0;
+    try testing.expectEqual(@as(f64, 64.0), sumPacked(f64, std.mem.sliceAsBytes(&vals)));
+}
+
+// ---------------------------------------------------------------------------
+// Scalar broadcast tests
+// ---------------------------------------------------------------------------
+
+test "scalarBinaryOp f64 add: basic" {
+    const a_vals = [_]f64{ 1.0, 2.0, 3.0 };
+    var out_bytes: [3 * 8]u8 = undefined;
+    scalarBinaryOp(f64, .add, std.mem.sliceAsBytes(&a_vals), 10.0, &out_bytes);
+    try testing.expectEqual(@as(f64, 11.0), readElement(f64, &out_bytes, 0));
+    try testing.expectEqual(@as(f64, 12.0), readElement(f64, &out_bytes, 1));
+    try testing.expectEqual(@as(f64, 13.0), readElement(f64, &out_bytes, 2));
+}
+
+test "scalarBinaryOp i32 mul: basic" {
+    const a_vals = [_]i32{ 2, 3, 4 };
+    var out_bytes: [3 * 4]u8 = undefined;
+    scalarBinaryOp(i32, .mul, std.mem.sliceAsBytes(&a_vals), 10, &out_bytes);
+    try testing.expectEqual(@as(i32, 20), readElement(i32, &out_bytes, 0));
+    try testing.expectEqual(@as(i32, 30), readElement(i32, &out_bytes, 1));
+    try testing.expectEqual(@as(i32, 40), readElement(i32, &out_bytes, 2));
+}
+
+test "scalarBinaryOp f64: empty" {
+    var out = [_]u8{};
+    scalarBinaryOp(f64, .add, &.{}, 5.0, &out);
+}
+
+// ---------------------------------------------------------------------------
+// Existing binary operation tests
+// ---------------------------------------------------------------------------
 
 test "addPacked u16: large array exercises multi-chunk path" {
     const n = 64;

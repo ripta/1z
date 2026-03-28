@@ -104,6 +104,205 @@ packed>array: method{ packed-f64 } [ native.packed-to-array ] ;
 *: method{ packed-f64 packed-f64 } [ native.packed-mul ] ;
 /: method{ packed-f64 packed-f64 } [ native.packed-div ] ;
 
+\ Scalar broadcast arithmetic: packed-T op scalar
+
++: method{ packed-i8 fixnum } [ native.packed-scalar-add ] ;
++: method{ packed-i8 float } [ native.packed-scalar-add ] ;
+-: method{ packed-i8 fixnum } [ native.packed-scalar-sub ] ;
+-: method{ packed-i8 float } [ native.packed-scalar-sub ] ;
+*: method{ packed-i8 fixnum } [ native.packed-scalar-mul ] ;
+*: method{ packed-i8 float } [ native.packed-scalar-mul ] ;
+/: method{ packed-i8 fixnum } [ native.packed-scalar-div ] ;
+/: method{ packed-i8 float } [ native.packed-scalar-div ] ;
+
++: method{ packed-i16 fixnum } [ native.packed-scalar-add ] ;
++: method{ packed-i16 float } [ native.packed-scalar-add ] ;
+-: method{ packed-i16 fixnum } [ native.packed-scalar-sub ] ;
+-: method{ packed-i16 float } [ native.packed-scalar-sub ] ;
+*: method{ packed-i16 fixnum } [ native.packed-scalar-mul ] ;
+*: method{ packed-i16 float } [ native.packed-scalar-mul ] ;
+/: method{ packed-i16 fixnum } [ native.packed-scalar-div ] ;
+/: method{ packed-i16 float } [ native.packed-scalar-div ] ;
+
++: method{ packed-i32 fixnum } [ native.packed-scalar-add ] ;
++: method{ packed-i32 float } [ native.packed-scalar-add ] ;
+-: method{ packed-i32 fixnum } [ native.packed-scalar-sub ] ;
+-: method{ packed-i32 float } [ native.packed-scalar-sub ] ;
+*: method{ packed-i32 fixnum } [ native.packed-scalar-mul ] ;
+*: method{ packed-i32 float } [ native.packed-scalar-mul ] ;
+/: method{ packed-i32 fixnum } [ native.packed-scalar-div ] ;
+/: method{ packed-i32 float } [ native.packed-scalar-div ] ;
+
++: method{ packed-i64 fixnum } [ native.packed-scalar-add ] ;
++: method{ packed-i64 float } [ native.packed-scalar-add ] ;
+-: method{ packed-i64 fixnum } [ native.packed-scalar-sub ] ;
+-: method{ packed-i64 float } [ native.packed-scalar-sub ] ;
+*: method{ packed-i64 fixnum } [ native.packed-scalar-mul ] ;
+*: method{ packed-i64 float } [ native.packed-scalar-mul ] ;
+/: method{ packed-i64 fixnum } [ native.packed-scalar-div ] ;
+/: method{ packed-i64 float } [ native.packed-scalar-div ] ;
+
++: method{ packed-u8 fixnum } [ native.packed-scalar-add ] ;
++: method{ packed-u8 float } [ native.packed-scalar-add ] ;
+-: method{ packed-u8 fixnum } [ native.packed-scalar-sub ] ;
+-: method{ packed-u8 float } [ native.packed-scalar-sub ] ;
+*: method{ packed-u8 fixnum } [ native.packed-scalar-mul ] ;
+*: method{ packed-u8 float } [ native.packed-scalar-mul ] ;
+/: method{ packed-u8 fixnum } [ native.packed-scalar-div ] ;
+/: method{ packed-u8 float } [ native.packed-scalar-div ] ;
+
++: method{ packed-u16 fixnum } [ native.packed-scalar-add ] ;
++: method{ packed-u16 float } [ native.packed-scalar-add ] ;
+-: method{ packed-u16 fixnum } [ native.packed-scalar-sub ] ;
+-: method{ packed-u16 float } [ native.packed-scalar-sub ] ;
+*: method{ packed-u16 fixnum } [ native.packed-scalar-mul ] ;
+*: method{ packed-u16 float } [ native.packed-scalar-mul ] ;
+/: method{ packed-u16 fixnum } [ native.packed-scalar-div ] ;
+/: method{ packed-u16 float } [ native.packed-scalar-div ] ;
+
++: method{ packed-u32 fixnum } [ native.packed-scalar-add ] ;
++: method{ packed-u32 float } [ native.packed-scalar-add ] ;
+-: method{ packed-u32 fixnum } [ native.packed-scalar-sub ] ;
+-: method{ packed-u32 float } [ native.packed-scalar-sub ] ;
+*: method{ packed-u32 fixnum } [ native.packed-scalar-mul ] ;
+*: method{ packed-u32 float } [ native.packed-scalar-mul ] ;
+/: method{ packed-u32 fixnum } [ native.packed-scalar-div ] ;
+/: method{ packed-u32 float } [ native.packed-scalar-div ] ;
+
++: method{ packed-u64 fixnum } [ native.packed-scalar-add ] ;
++: method{ packed-u64 float } [ native.packed-scalar-add ] ;
+-: method{ packed-u64 fixnum } [ native.packed-scalar-sub ] ;
+-: method{ packed-u64 float } [ native.packed-scalar-sub ] ;
+*: method{ packed-u64 fixnum } [ native.packed-scalar-mul ] ;
+*: method{ packed-u64 float } [ native.packed-scalar-mul ] ;
+/: method{ packed-u64 fixnum } [ native.packed-scalar-div ] ;
+/: method{ packed-u64 float } [ native.packed-scalar-div ] ;
+
++: method{ packed-f32 fixnum } [ native.packed-scalar-add ] ;
++: method{ packed-f32 float } [ native.packed-scalar-add ] ;
+-: method{ packed-f32 fixnum } [ native.packed-scalar-sub ] ;
+-: method{ packed-f32 float } [ native.packed-scalar-sub ] ;
+*: method{ packed-f32 fixnum } [ native.packed-scalar-mul ] ;
+*: method{ packed-f32 float } [ native.packed-scalar-mul ] ;
+/: method{ packed-f32 fixnum } [ native.packed-scalar-div ] ;
+/: method{ packed-f32 float } [ native.packed-scalar-div ] ;
+
++: method{ packed-f64 fixnum } [ native.packed-scalar-add ] ;
++: method{ packed-f64 float } [ native.packed-scalar-add ] ;
+-: method{ packed-f64 fixnum } [ native.packed-scalar-sub ] ;
+-: method{ packed-f64 float } [ native.packed-scalar-sub ] ;
+*: method{ packed-f64 fixnum } [ native.packed-scalar-mul ] ;
+*: method{ packed-f64 float } [ native.packed-scalar-mul ] ;
+/: method{ packed-f64 fixnum } [ native.packed-scalar-div ] ;
+/: method{ packed-f64 float } [ native.packed-scalar-div ] ;
+
+\ Reductions
+
+packed-sum: generic ( packed-T -- number ) [
+  f "packed-sum: not a packed type" EInvalidArgument make-error throw
+] ;
+packed-sum: method{ packed-i8 } [ native.packed-sum-impl ] ;
+packed-sum: method{ packed-i16 } [ native.packed-sum-impl ] ;
+packed-sum: method{ packed-i32 } [ native.packed-sum-impl ] ;
+packed-sum: method{ packed-i64 } [ native.packed-sum-impl ] ;
+packed-sum: method{ packed-u8 } [ native.packed-sum-impl ] ;
+packed-sum: method{ packed-u16 } [ native.packed-sum-impl ] ;
+packed-sum: method{ packed-u32 } [ native.packed-sum-impl ] ;
+packed-sum: method{ packed-u64 } [ native.packed-sum-impl ] ;
+packed-sum: method{ packed-f32 } [ native.packed-sum-impl ] ;
+packed-sum: method{ packed-f64 } [ native.packed-sum-impl ] ;
+
+packed-product: generic ( packed-T -- number ) [
+  f "packed-product: not a packed type" EInvalidArgument make-error throw
+] ;
+packed-product: method{ packed-i8 } [ native.packed-product-impl ] ;
+packed-product: method{ packed-i16 } [ native.packed-product-impl ] ;
+packed-product: method{ packed-i32 } [ native.packed-product-impl ] ;
+packed-product: method{ packed-i64 } [ native.packed-product-impl ] ;
+packed-product: method{ packed-u8 } [ native.packed-product-impl ] ;
+packed-product: method{ packed-u16 } [ native.packed-product-impl ] ;
+packed-product: method{ packed-u32 } [ native.packed-product-impl ] ;
+packed-product: method{ packed-u64 } [ native.packed-product-impl ] ;
+packed-product: method{ packed-f32 } [ native.packed-product-impl ] ;
+packed-product: method{ packed-f64 } [ native.packed-product-impl ] ;
+
+packed-min: generic ( packed-T -- number ) [
+  f "packed-min: not a packed type" EInvalidArgument make-error throw
+] ;
+packed-min: method{ packed-i8 } [ native.packed-min-impl ] ;
+packed-min: method{ packed-i16 } [ native.packed-min-impl ] ;
+packed-min: method{ packed-i32 } [ native.packed-min-impl ] ;
+packed-min: method{ packed-i64 } [ native.packed-min-impl ] ;
+packed-min: method{ packed-u8 } [ native.packed-min-impl ] ;
+packed-min: method{ packed-u16 } [ native.packed-min-impl ] ;
+packed-min: method{ packed-u32 } [ native.packed-min-impl ] ;
+packed-min: method{ packed-u64 } [ native.packed-min-impl ] ;
+packed-min: method{ packed-f32 } [ native.packed-min-impl ] ;
+packed-min: method{ packed-f64 } [ native.packed-min-impl ] ;
+
+packed-max: generic ( packed-T -- number ) [
+  f "packed-max: not a packed type" EInvalidArgument make-error throw
+] ;
+packed-max: method{ packed-i8 } [ native.packed-max-impl ] ;
+packed-max: method{ packed-i16 } [ native.packed-max-impl ] ;
+packed-max: method{ packed-i32 } [ native.packed-max-impl ] ;
+packed-max: method{ packed-i64 } [ native.packed-max-impl ] ;
+packed-max: method{ packed-u8 } [ native.packed-max-impl ] ;
+packed-max: method{ packed-u16 } [ native.packed-max-impl ] ;
+packed-max: method{ packed-u32 } [ native.packed-max-impl ] ;
+packed-max: method{ packed-u64 } [ native.packed-max-impl ] ;
+packed-max: method{ packed-f32 } [ native.packed-max-impl ] ;
+packed-max: method{ packed-f64 } [ native.packed-max-impl ] ;
+
+packed-dot: generic ( packed-T packed-T -- number ) [
+  f "packed-dot: not a packed type" EInvalidArgument make-error throw
+] ;
+packed-dot: method{ packed-i8 packed-i8 } [ native.packed-dot-impl ] ;
+packed-dot: method{ packed-i16 packed-i16 } [ native.packed-dot-impl ] ;
+packed-dot: method{ packed-i32 packed-i32 } [ native.packed-dot-impl ] ;
+packed-dot: method{ packed-i64 packed-i64 } [ native.packed-dot-impl ] ;
+packed-dot: method{ packed-u8 packed-u8 } [ native.packed-dot-impl ] ;
+packed-dot: method{ packed-u16 packed-u16 } [ native.packed-dot-impl ] ;
+packed-dot: method{ packed-u32 packed-u32 } [ native.packed-dot-impl ] ;
+packed-dot: method{ packed-u64 packed-u64 } [ native.packed-dot-impl ] ;
+packed-dot: method{ packed-f32 packed-f32 } [ native.packed-dot-impl ] ;
+packed-dot: method{ packed-f64 packed-f64 } [ native.packed-dot-impl ] ;
+
+\ Sequence protocol
+
+#len: method{ packed-i8 } [ native.packed-len ] ;
+#len: method{ packed-i16 } [ native.packed-len ] ;
+#len: method{ packed-i32 } [ native.packed-len ] ;
+#len: method{ packed-i64 } [ native.packed-len ] ;
+#len: method{ packed-u8 } [ native.packed-len ] ;
+#len: method{ packed-u16 } [ native.packed-len ] ;
+#len: method{ packed-u32 } [ native.packed-len ] ;
+#len: method{ packed-u64 } [ native.packed-len ] ;
+#len: method{ packed-f32 } [ native.packed-len ] ;
+#len: method{ packed-f64 } [ native.packed-len ] ;
+
+#nth: method{ packed-i8 fixnum } [ native.packed-nth ] ;
+#nth: method{ packed-i16 fixnum } [ native.packed-nth ] ;
+#nth: method{ packed-i32 fixnum } [ native.packed-nth ] ;
+#nth: method{ packed-i64 fixnum } [ native.packed-nth ] ;
+#nth: method{ packed-u8 fixnum } [ native.packed-nth ] ;
+#nth: method{ packed-u16 fixnum } [ native.packed-nth ] ;
+#nth: method{ packed-u32 fixnum } [ native.packed-nth ] ;
+#nth: method{ packed-u64 fixnum } [ native.packed-nth ] ;
+#nth: method{ packed-f32 fixnum } [ native.packed-nth ] ;
+#nth: method{ packed-f64 fixnum } [ native.packed-nth ] ;
+
+>iterator: method{ packed-i8 } [ packed>array >iterator ] ;
+>iterator: method{ packed-i16 } [ packed>array >iterator ] ;
+>iterator: method{ packed-i32 } [ packed>array >iterator ] ;
+>iterator: method{ packed-i64 } [ packed>array >iterator ] ;
+>iterator: method{ packed-u8 } [ packed>array >iterator ] ;
+>iterator: method{ packed-u16 } [ packed>array >iterator ] ;
+>iterator: method{ packed-u32 } [ packed>array >iterator ] ;
+>iterator: method{ packed-u64 } [ packed>array >iterator ] ;
+>iterator: method{ packed-f32 } [ packed>array >iterator ] ;
+>iterator: method{ packed-f64 } [ packed>array >iterator ] ;
+
 \ Display support
 
 (packed-inspect-helper): ( packed-T type-name -- string ) [

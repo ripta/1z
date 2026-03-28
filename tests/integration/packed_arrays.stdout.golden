@@ -125,6 +125,107 @@ PASS: 128 out of range for i8
 Stack: [ ]
 PASS: -129 out of range for i8
 Stack: [ ]
+=== scalar broadcast + ===
+Stack: [ ]
+Stack: [ { 11.0 12.0 13.0 } ]
+PASS: f64 + float scalar
+Stack: [ ]
+Stack: [ { 11.0 12.0 13.0 } ]
+PASS: f64 + fixnum scalar
+Stack: [ ]
+Stack: [ { 11 12 13 } ]
+PASS: i32 + fixnum scalar
+Stack: [ ]
+=== scalar broadcast - * / ===
+Stack: [ ]
+Stack: [ { 7.0 17.0 } ]
+PASS: f64 - scalar
+Stack: [ ]
+Stack: [ { 8.0 12.0 } ]
+PASS: f64 * scalar
+Stack: [ ]
+Stack: [ { 2.0 4.0 } ]
+PASS: f64 / scalar
+Stack: [ ]
+Stack: [ { 10 15 20 } ]
+PASS: i32 * scalar
+Stack: [ ]
+=== packed-sum ===
+Stack: [ ]
+PASS: f64 sum
+Stack: [ ]
+PASS: f64 sum empty
+Stack: [ ]
+PASS: i32 sum
+Stack: [ ]
+PASS: u8 sum
+Stack: [ ]
+=== packed-product ===
+Stack: [ ]
+PASS: f64 product
+Stack: [ ]
+PASS: f64 product empty
+Stack: [ ]
+PASS: i32 product
+Stack: [ ]
+=== packed-min packed-max ===
+Stack: [ ]
+PASS: f64 min
+Stack: [ ]
+PASS: f64 max
+Stack: [ ]
+PASS: i32 min
+Stack: [ ]
+PASS: i32 max
+Stack: [ ]
+PASS: min on empty
+Stack: [ ]
+PASS: max on empty
+Stack: [ ]
+=== packed-dot ===
+Stack: [ ]
+Stack: [ 32.0 ]
+PASS: f64 dot product
+Stack: [ ]
+Stack: [ 32 ]
+PASS: i32 dot product
+Stack: [ ]
+PASS: dot length mismatch
+Stack: [ ]
+=== #len on packed arrays ===
+Stack: [ ]
+PASS: f64 #len
+Stack: [ ]
+PASS: f64 #len empty
+Stack: [ ]
+PASS: i32 #len
+Stack: [ ]
+PASS: u8 #len
+Stack: [ ]
+=== #nth on packed arrays ===
+Stack: [ ]
+PASS: f64 #nth
+Stack: [ ]
+PASS: i32 #nth first
+Stack: [ ]
+PASS: i32 #nth last
+Stack: [ ]
+PASS: f64 #nth out of bounds
+Stack: [ ]
+PASS: f64 #nth negative
+Stack: [ ]
+=== >iterator on packed arrays ===
+Stack: [ ]
+PASS: f64 iterator roundtrip
+Stack: [ ]
+PASS: i32 iterate+map
+Stack: [ ]
+PASS: f64 iterator empty
+Stack: [ ]
+=== large reductions exercise SIMD path ===
+Stack: [ ]
+PASS: 64-element sum
+Stack: [ ]
 === inspect ===
 Stack: [ ]
 PASS: f64 inspect
