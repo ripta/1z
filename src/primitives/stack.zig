@@ -1,4 +1,5 @@
 const Context = @import("../context.zig").Context;
+const Value = @import("../value.zig").Value;
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 
@@ -14,6 +15,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "pick-n", .stack_effect = "n -- val", .doc = "Copy the item at stack depth n (0-indexed from top, before n itself).", .func = nativePickN },
     .{ .name = "<rot-n", .stack_effect = "n --", .doc = "Pull item at depth n to top, shifting items above it down.", .func = nativeRotUp },
     .{ .name = "rot-n>", .stack_effect = "n --", .doc = "Push top item to depth n, shifting items above it up.", .func = nativeRotDown },
+    .{ .name = "array-n", .stack_effect = "...elems n -- array", .doc = "Pop n, then pop n elements and pack them into an array (stack-order preserved).", .func = nativeArrayN },
 };
 
 /// dup ( a -- a a ) - Duplicate top of stack
@@ -110,4 +112,24 @@ fn nativeRotDown(ctx: *Context) anyerror!void {
         ctx.stack.items.items[i] = ctx.stack.items.items[i - 1];
     }
     ctx.stack.items.items[start] = val;
+}
+
+/// array-n ( ...elems n -- array ) - Pop n elements and pack into an array.
+fn nativeArrayN(ctx: *Context) anyerror!void {
+    const n = try helpers.popFixnum(ctx);
+    if (n < 0) return error.StackUnderflow;
+
+    const count: usize = @intCast(n);
+    if (count > ctx.stack.items.items.len) return error.StackUnderflow;
+
+    const alloc = ctx.containerAllocator();
+    const arr = try alloc.alloc(Value, count);
+
+    var i: usize = count;
+    while (i > 0) {
+        i -= 1;
+        arr[i] = try ctx.stack.pop();
+    }
+
+    try ctx.stack.push(.{ .array = arr });
 }

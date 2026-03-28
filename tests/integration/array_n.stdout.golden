@@ -1,0 +1,23 @@
+=== basic ===
+Stack: [ ]
+PASS: three elements
+Stack: [ ]
+PASS: single element
+Stack: [ ]
+PASS: zero count
+Stack: [ ]
+=== stack preservation ===
+Stack: [ ]
+Stack: [ 99 { 1 2 } ]
+PASS: collected top two
+Stack: [ 99 ]
+PASS: element below untouched
+Stack: [ ]
+=== error: negative count ===
+Stack: [ ]
+PASS: negative count
+Stack: [ ]
+=== error: underflow ===
+Stack: [ ]
+PASS: more than available
+Stack: [ ]

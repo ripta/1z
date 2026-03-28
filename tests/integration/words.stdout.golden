@@ -86,6 +86,7 @@ Stack: [ ]
 abs ( n -- n )
 add-load-path ( path -- )
 any ( -- marker )
+array-n ( ...elems n -- array )
 await ( task -- value )
 await-all ( array -- array )
 benchmark ( quot -- hash )

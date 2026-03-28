@@ -1,0 +1,17 @@
+use "testing" ;
+
+"basic" test-section
+1 2 3 3 array-n { 1 2 3 } "three elements" assert=
+42 1 array-n { 42 } "single element" assert=
+0 array-n { } "zero count" assert=
+
+"stack preservation" test-section
+99 1 2 2 array-n
+{ 1 2 } "collected top two" assert=
+99 "element below untouched" assert=
+
+"error: negative count" test-section
+[ -1 array-n drop ] "negative count" assert-error
+
+"error: underflow" test-section
+[ 1 5 array-n drop ] "more than available" assert-error
