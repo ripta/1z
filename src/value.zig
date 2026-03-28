@@ -7,6 +7,7 @@ const dictionary_mod = @import("dictionary.zig");
 const NativeFn = dictionary_mod.NativeFn;
 const WordProvenance = dictionary_mod.WordProvenance;
 const FfiSignature = @import("ffi/signature.zig").FfiSignature;
+const simd = @import("simd.zig");
 pub const SandboxSpec = @import("primitives/types.zig").SandboxSpec;
 
 pub const BigIntManaged = std.math.big.int.Managed;
@@ -661,8 +662,8 @@ pub const Value = union(enum) {
             .float => |a| a == other.float,
             .bignum => |a| a.toConst().eql(other.bignum.toConst()),
             .boolean => |a| a == other.boolean,
-            .string => |a| std.mem.eql(u8, a, other.string),
-            .symbol => |a| std.mem.eql(u8, a, other.symbol),
+            .string => |a| simd.eqlBytes(a, other.string),
+            .symbol => |a| simd.eqlBytes(a, other.symbol),
             .array => |a| {
                 const b = other.array;
                 if (a.len != b.len) return false;
@@ -698,7 +699,7 @@ pub const Value = union(enum) {
             },
             .byte_array => |a| {
                 const b = other.byte_array;
-                return std.mem.eql(u8, a.items, b.items);
+                return simd.eqlBytes(a.items, b.items);
             },
             // Sets use order-independent equality: two sets are equal if they
             // contain the same elements regardless of iteration order.

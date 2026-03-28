@@ -1224,4 +1224,5 @@ test {
     _ = @import("call_graph.zig");
     _ = @import("effect_inference.zig");
     _ = @import("lsp/mod.zig");
+    _ = @import("simd.zig");
 }

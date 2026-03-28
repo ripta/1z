@@ -1,0 +1,46 @@
+=== uppercase with SIMD-length strings ===
+Stack: [ ]
+PASS: uppercase 16 bytes
+Stack: [ ]
+PASS: uppercase 17 bytes
+Stack: [ ]
+PASS: uppercase 32 bytes
+Stack: [ ]
+PASS: uppercase 33 bytes
+Stack: [ ]
+Stack: [ "HELLO, WORLD! THIS IS A LONGER STRING WITH MIXED CASE." ]
+PASS: uppercase mixed long
+Stack: [ ]
+=== lowercase with SIMD-length strings ===
+Stack: [ ]
+PASS: lowercase 16 bytes
+Stack: [ ]
+PASS: lowercase 17 bytes
+Stack: [ ]
+PASS: lowercase 32 bytes
+Stack: [ ]
+Stack: [ "hello, world! this is a longer string with mixed case." ]
+PASS: lowercase mixed long
+Stack: [ ]
+=== byte-array #index-of with SIMD-length arrays ===
+Stack: [ ]
+PASS: index-of at position 15
+Stack: [ ]
+PASS: index-of at position 16
+Stack: [ ]
+PASS: index-of at position 19
+Stack: [ ]
+PASS: index-of not found in long array
+Stack: [ ]
+=== string equality with SIMD-length strings ===
+Stack: [ ]
+PASS: equal 16-byte strings
+Stack: [ ]
+PASS: equal 17-byte strings
+Stack: [ ]
+PASS: equal 32-byte strings
+Stack: [ ]
+PASS: unequal at last byte of 16-byte chunk
+Stack: [ ]
+PASS: unequal at byte 17
+Stack: [ ]

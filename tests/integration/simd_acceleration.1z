@@ -1,0 +1,37 @@
+\ Tests: transparent SIMD acceleration for strings > 16 bytes
+\ Exercises vectorized code paths for uppercase, lowercase, #index-of, and equality
+
+use "testing" ;
+
+"uppercase with SIMD-length strings" test-section
+
+"abcdefghijklmnop" uppercase "ABCDEFGHIJKLMNOP" "uppercase 16 bytes" assert=
+"abcdefghijklmnopq" uppercase "ABCDEFGHIJKLMNOPQ" "uppercase 17 bytes" assert=
+"abcdefghijklmnopqrstuvwxyz012345" uppercase "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" "uppercase 32 bytes" assert=
+"abcdefghijklmnopqrstuvwxyz0123456" uppercase "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456" "uppercase 33 bytes" assert=
+"Hello, World! This is a longer string with mixed CASE." uppercase
+"HELLO, WORLD! THIS IS A LONGER STRING WITH MIXED CASE." "uppercase mixed long" assert=
+
+"lowercase with SIMD-length strings" test-section
+
+"ABCDEFGHIJKLMNOP" lowercase "abcdefghijklmnop" "lowercase 16 bytes" assert=
+"ABCDEFGHIJKLMNOPQ" lowercase "abcdefghijklmnopq" "lowercase 17 bytes" assert=
+"ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" lowercase "abcdefghijklmnopqrstuvwxyz012345" "lowercase 32 bytes" assert=
+"Hello, World! This is a longer string with mixed CASE." lowercase
+"hello, world! this is a longer string with mixed case." "lowercase mixed long" assert=
+
+"byte-array #index-of with SIMD-length arrays" test-section
+
+\ Build a byte array > 16 bytes and search for elements
+B{ 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 } 15 #index-of 15 "index-of at position 15" assert=
+B{ 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 } 16 #index-of 16 "index-of at position 16" assert=
+B{ 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 } 19 #index-of 19 "index-of at position 19" assert=
+B{ 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 } 99 #index-of f "index-of not found in long array" assert=
+
+"string equality with SIMD-length strings" test-section
+
+"abcdefghijklmnop" "abcdefghijklmnop" = t "equal 16-byte strings" assert=
+"abcdefghijklmnopq" "abcdefghijklmnopq" = t "equal 17-byte strings" assert=
+"abcdefghijklmnopqrstuvwxyz012345" "abcdefghijklmnopqrstuvwxyz012345" = t "equal 32-byte strings" assert=
+"abcdefghijklmnop" "abcdefghijklmnoX" = f "unequal at last byte of 16-byte chunk" assert=
+"abcdefghijklmnopq" "abcdefghijklmnopX" = f "unequal at byte 17" assert=

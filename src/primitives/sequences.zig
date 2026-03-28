@@ -19,6 +19,8 @@ const sequence = @import("sequence.zig");
 const Iterator = @import("../iterator.zig").Iterator;
 const tasks = @import("tasks.zig");
 
+const simd = @import("../simd.zig");
+
 const popFixnum = helpers.popFixnum;
 const popBoolean = helpers.popBoolean;
 const popQuotation = helpers.popQuotation;
@@ -1806,7 +1808,7 @@ fn nativeIndexOf(ctx: *Context) anyerror!void {
                     return error.TypeMismatch;
                 },
             };
-            if (std.mem.indexOfScalar(u8, b.items, byte_val)) |idx| {
+            if (simd.indexOfScalar(b.items, byte_val)) |idx| {
                 try ctx.stack.push(.{ .fixnum = @intCast(idx) });
             } else {
                 try ctx.stack.push(.{ .boolean = false });

@@ -5,6 +5,7 @@ const BigIntManaged = value_mod.BigIntManaged;
 const ByteArray = value_mod.ByteArray;
 const Instruction = value_mod.Instruction;
 
+const simd = @import("../simd.zig");
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 const dispatch_helpers = @import("dispatch_helpers.zig");
@@ -201,9 +202,8 @@ fn nativeUppercase(ctx: *Context) anyerror!void {
         .string => |s| {
             const alloc = ctx.quotationAllocator();
             const result = alloc.alloc(u8, s.len) catch return error.OutOfMemory;
-            for (s, 0..) |c, i| {
-                result[i] = std.ascii.toUpper(c);
-            }
+            @memcpy(result, s);
+            simd.uppercaseAscii(result);
             try ctx.stack.push(.{ .string = result });
         },
         else => {
@@ -221,9 +221,8 @@ fn nativeLowercase(ctx: *Context) anyerror!void {
         .string => |s| {
             const alloc = ctx.quotationAllocator();
             const result = alloc.alloc(u8, s.len) catch return error.OutOfMemory;
-            for (s, 0..) |c, i| {
-                result[i] = std.ascii.toLower(c);
-            }
+            @memcpy(result, s);
+            simd.lowercaseAscii(result);
             try ctx.stack.push(.{ .string = result });
         },
         else => {
