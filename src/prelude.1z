@@ -395,6 +395,16 @@ choose: ( a1 a2 quot -- a ) [ [ over over ] dip call [ drop ] [ nip ] if ] ;
 pick: ( a b c -- a b c a ) [ [ over ] dip swap ] ;
 \\ Call a predicate on the top element, preserving the element below the result.
 1check: ( a quot -- a ) [ keep swap ] ;
+\\ Swap the top two pairs.
+2swap: ( a b c d -- c d a b ) [ 3 <rot-n 3 <rot-n ] ;
+\\ Copy the second pair to the top.
+2over: ( a b c d -- a b c d a b ) [ 3 pick-n 3 pick-n ] ;
+\\ Apply a quotation to one value. Alias for `call`.
+1apply: ( ..a x quot: ( ..a x -- ..b ) -- ..b ) [ call ] ;
+\\ Apply a quotation to each of two values separately.
+2apply: ( ..a x y quot: ( ..a x -- ..b ) -- ..b ) [ 2 apply-n ] ;
+\\ Apply a quotation to each of three values separately.
+3apply: ( ..a x y z quot: ( ..a x -- ..b ) -- ..b ) [ 3 apply-n ] ;
 
 \ Arithmetic operators
 \\ Negate a number.

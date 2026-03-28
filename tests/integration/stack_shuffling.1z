@@ -73,3 +73,18 @@ use "testing" ;
 1 2 3 1 rot-n> 2 "rot-n> 1 is swap top" assert= 3 "rot-n> 1 second" assert= 1 "rot-n> 1 third" assert=
 1 2 3 2 rot-n> 2 "rot-n> 2 is -rot> top" assert= 1 "rot-n> 2 second" assert= 3 "rot-n> 2 third" assert=
 1 2 3 4 5 4 rot-n> 4 "rot-n> 4 pushes top to bottom" assert= 3 "rot-n> 4 second" assert= 2 "rot-n> 4 third" assert= 1 "rot-n> 4 fourth" assert= 5 "rot-n> 4 fifth" assert=
+
+"2swap" test-section
+1 2 3 4 2swap 2 "2swap top" assert= 1 "2swap second" assert= 4 "2swap third" assert= 3 "2swap fourth" assert=
+
+"2over" test-section
+1 2 3 4 2over 2 "2over top" assert= 1 "2over second" assert= 4 "2over third" assert= 3 "2over fourth" assert= 2 "2over fifth" assert= 1 "2over sixth" assert=
+
+"1apply" test-section
+5 [ 10 * ] 1apply 50 "1apply single" assert=
+
+"2apply" test-section
+10 20 [ 1 + ] 2apply 21 "2apply top" assert= 11 "2apply second" assert=
+
+"3apply" test-section
+1 2 3 [ 10 * ] 3apply 30 "3apply top" assert= 20 "3apply second" assert= 10 "3apply third" assert=

@@ -156,3 +156,34 @@ PASS: rot-n> 4 third
 PASS: rot-n> 4 fourth
 PASS: rot-n> 4 fifth
 Stack: [ ]
+=== 2swap ===
+Stack: [ ]
+PASS: 2swap top
+PASS: 2swap second
+PASS: 2swap third
+PASS: 2swap fourth
+Stack: [ ]
+=== 2over ===
+Stack: [ ]
+PASS: 2over top
+PASS: 2over second
+PASS: 2over third
+PASS: 2over fourth
+PASS: 2over fifth
+PASS: 2over sixth
+Stack: [ ]
+=== 1apply ===
+Stack: [ ]
+PASS: 1apply single
+Stack: [ ]
+=== 2apply ===
+Stack: [ ]
+PASS: 2apply top
+PASS: 2apply second
+Stack: [ ]
+=== 3apply ===
+Stack: [ ]
+PASS: 3apply top
+PASS: 3apply second
+PASS: 3apply third
+Stack: [ ]
