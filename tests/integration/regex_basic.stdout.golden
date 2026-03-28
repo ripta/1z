@@ -1,0 +1,72 @@
+=== regex-compile ===
+Stack: [ ]
+PASS: regex-compile produces regex type
+Stack: [ ]
+=== regex-compile error ===
+Stack: [ ]
+PASS: invalid pattern throws ERegexCompileError
+Stack: [ ]
+=== regex-match: simple match ===
+Stack: [ ]
+Stack: [ <option:some option-payload{ value: { <option:some option-payload{ value: "hello" }> } }> ]
+PASS: simple match returns option:some
+Stack: [ <option:some option-payload{ value: { <option:some option-payload{ value: "hello" }> } }> ]
+PASS: full match is 'hello'
+Stack: [ ]
+=== regex-match: no match ===
+Stack: [ ]
+Stack: [ <option:none none:> ]
+PASS: no match returns option:none
+Stack: [ ]
+=== regex-match: capture groups ===
+Stack: [ ]
+Stack: [ <option:some option-payload{ value: { <option:some option-payload{ value: "2026-03-28" }> <option:some option-payload{ value: "2026" }> <option:some option-payload{ value: "03" }> <option:some option-payload{ value: "28" }> } }> ]
+Stack: [ { <option:some option-payload{ value: "2026-03-28" }> <option:some option-payload{ value: "2026" }> <option:some option-payload{ value: "03" }> <option:some option-payload{ value: "28" }> } ]
+PASS: 4 elements (full match + 3 groups)
+Stack: [ { <option:some option-payload{ value: "2026-03-28" }> <option:some option-payload{ value: "2026" }> <option:some option-payload{ value: "03" }> <option:some option-payload{ value: "28" }> } ]
+PASS: group 0: full match
+Stack: [ { <option:some option-payload{ value: "2026-03-28" }> <option:some option-payload{ value: "2026" }> <option:some option-payload{ value: "03" }> <option:some option-payload{ value: "28" }> } ]
+PASS: group 1: year
+Stack: [ { <option:some option-payload{ value: "2026-03-28" }> <option:some option-payload{ value: "2026" }> <option:some option-payload{ value: "03" }> <option:some option-payload{ value: "28" }> } ]
+PASS: group 2: month
+Stack: [ { <option:some option-payload{ value: "2026-03-28" }> <option:some option-payload{ value: "2026" }> <option:some option-payload{ value: "03" }> <option:some option-payload{ value: "28" }> } ]
+PASS: group 3: day
+Stack: [ ]
+=== regex-match: optional unmatched group ===
+Stack: [ ]
+Stack: [ <option:some option-payload{ value: { <option:some option-payload{ value: "ac" }> <option:some option-payload{ value: "a" }> <option:none none:> <option:some option-payload{ value: "c" }> } }> ]
+Stack: [ { <option:some option-payload{ value: "ac" }> <option:some option-payload{ value: "a" }> <option:none none:> <option:some option-payload{ value: "c" }> } ]
+PASS: 4 elements including optional group
+Stack: [ { <option:some option-payload{ value: "ac" }> <option:some option-payload{ value: "a" }> <option:none none:> <option:some option-payload{ value: "c" }> } ]
+PASS: group 0: full match
+Stack: [ { <option:some option-payload{ value: "ac" }> <option:some option-payload{ value: "a" }> <option:none none:> <option:some option-payload{ value: "c" }> } ]
+PASS: group 1: a
+Stack: [ { <option:some option-payload{ value: "ac" }> <option:some option-payload{ value: "a" }> <option:none none:> <option:some option-payload{ value: "c" }> } ]
+PASS: group 2: unmatched optional is option:none
+Stack: [ { <option:some option-payload{ value: "ac" }> <option:some option-payload{ value: "a" }> <option:none none:> <option:some option-payload{ value: "c" }> } ]
+PASS: group 3: c
+Stack: [ ]
+=== regex-compile-with: caseless ===
+Stack: [ ]
+Stack: [ <regex <resource:pcre2-code>> ]
+Stack: [ <option:some option-payload{ value: { <option:some option-payload{ value: "HELLO" }> } }> ]
+PASS: caseless match succeeds
+Stack: [ ]
+=== regex-compile-with: multiline ===
+Stack: [ ]
+Stack: [ <regex <resource:pcre2-code>> ]
+Stack: [ <option:some option-payload{ value: { <option:some option-payload{ value: "world" }> } }> ]
+PASS: multiline ^ matches after newline
+Stack: [ ]
+=== regex-match: UTF-8 ===
+Stack: [ ]
+Stack: [ <option:some option-payload{ value: { <option:some option-payload{ value: "café" }> } }> ]
+PASS: UTF-8 match succeeds
+Stack: [ ]
+=== regex-match: dotall ===
+Stack: [ ]
+Stack: [ <regex <resource:pcre2-code>> ]
+Stack: [ <option:some option-payload{ value: { <option:some option-payload{ value: "hello
+world" }> } }> ]
+PASS: dotall: dot matches newline
+Stack: [ ]

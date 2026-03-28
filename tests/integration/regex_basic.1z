@@ -1,0 +1,56 @@
+\ Integration tests for lib/regex.1z (PCRE2 bindings)
+
+use "testing" ;
+use "regex" ;
+
+"regex-compile" test-section
+"hello" regex-compile type-name "regex" "regex-compile produces regex type" assert=
+
+"regex-compile error" test-section
+[ "(" regex-compile ] regex-compile-error: "invalid pattern throws ERegexCompileError" assert-error-type
+
+"regex-match: simple match" test-section
+"hello world" "hello" regex-compile regex-match
+dup option:some? t "simple match returns option:some" assert=
+option:some> 0 #nth option:some> "hello" "full match is 'hello'" assert=
+
+"regex-match: no match" test-section
+"hello" "xyz" regex-compile regex-match
+option:none? t "no match returns option:none" assert=
+
+"regex-match: capture groups" test-section
+"2026-03-28" "(\\d{4})-(\\d{2})-(\\d{2})" regex-compile regex-match
+option:some>
+dup #len 4 "4 elements (full match + 3 groups)" assert=
+dup 0 #nth option:some> "2026-03-28" "group 0: full match" assert=
+dup 1 #nth option:some> "2026" "group 1: year" assert=
+dup 2 #nth option:some> "03" "group 2: month" assert=
+3 #nth option:some> "28" "group 3: day" assert=
+
+"regex-match: optional unmatched group" test-section
+"ac" "(a)(b)?(c)" regex-compile regex-match
+option:some>
+dup #len 4 "4 elements including optional group" assert=
+dup 0 #nth option:some> "ac" "group 0: full match" assert=
+dup 1 #nth option:some> "a" "group 1: a" assert=
+dup 2 #nth option:none? t "group 2: unmatched optional is option:none" assert=
+3 #nth option:some> "c" "group 3: c" assert=
+
+"regex-compile-with: caseless" test-section
+{ caseless: } "hello" regex-compile-with
+"HELLO WORLD" swap regex-match
+option:some? t "caseless match succeeds" assert=
+
+"regex-compile-with: multiline" test-section
+{ multiline: } "^world" regex-compile-with
+"hello\nworld" swap regex-match
+option:some? t "multiline ^ matches after newline" assert=
+
+"regex-match: UTF-8" test-section
+"café" "caf\\x{e9}" regex-compile regex-match
+option:some? t "UTF-8 match succeeds" assert=
+
+"regex-match: dotall" test-section
+{ dotall: } "hello.world" regex-compile-with
+"hello\nworld" swap regex-match
+option:some? t "dotall: dot matches newline" assert=

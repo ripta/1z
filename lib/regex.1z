@@ -1,0 +1,200 @@
+\ lib/regex.1z - Regular expressions via PCRE2 dynamic FFI
+
+use "ffi" ;
+
+\ FFI bindings to libpcre2-8
+
+"pcre2-8" lib-open ffi-def{
+  (compile):           "pcre2_compile_8" ffi{ cstring usize u32 ptr ptr isize -> ptr:pcre2-code }
+  (match-raw):         "pcre2_match_8" ffi{ ptr cstring usize usize u32 ptr isize -> i32 }
+  (match-data-create): "pcre2_match_data_create_from_pattern_8" ffi{ ptr isize -> ptr:pcre2-match-data }
+  (get-ovector-pointer): "pcre2_get_ovector_pointer_8" ffi{ ptr -> ptr }
+  (match-data-free):     "pcre2_match_data_free_8" ffi{ ptr -> void }
+  (code-free):           "pcre2_code_free_8" ffi{ ptr -> void }
+  (pattern-info):        "pcre2_pattern_info_8" ffi{ ptr u32 isize -> i32 }
+  (get-error-message):   "pcre2_get_error_message_8" ffi{ i32 ptr usize -> i32 }
+} call "pcre2-raw" swap >module reexport
+
+\ Constants
+
+PCRE2_UTF:           0x00080000 ;
+PCRE2_UCP:           0x00020000 ;
+PCRE2_CASELESS:      0x00000008 ;
+PCRE2_MULTILINE:     0x00000400 ;
+PCRE2_DOTALL:        0x00000020 ;
+PCRE2_EXTENDED:      0x00000080 ;
+PCRE2_UNGREEDY:      0x00040000 ;
+PCRE2_ERROR_NOMATCH: -1 ;
+PCRE2_UNSET:         18446744073709551615 ;
+
+\ PCRE2 sets *errorcode = COMPILE_ERROR_BASE (100) at compilation start.
+\ On success it stays 100; on error it becomes 101+.
+PCRE2_COMPILE_ERROR_BASE: 100 ;
+
+\ Types and errors
+
+regex: virtual{ resource } ;
+
+regex-flag: enum{
+  caseless:  unit
+  multiline: unit
+  dotall:    unit
+  extended:  unit
+  ungreedy:  unit
+} ;
+
+ERegexCompileError: [ f swap regex-compile-error: ] ;
+ERegexMatchError: [ f swap regex-match-error: ] ;
+
+\ Internal helpers
+
+(base-flags): ( -- u32 ) [ PCRE2_UTF PCRE2_UCP bitor ] ;
+
+(flag>bit): ( flag -- u32 ) [
+  {
+    { caseless: [ PCRE2_CASELESS ] }
+    { multiline: [ PCRE2_MULTILINE ] }
+    { dotall: [ PCRE2_DOTALL ] }
+    { extended: [ PCRE2_EXTENDED ] }
+    { ungreedy: [ PCRE2_UNGREEDY ] }
+    [ "unknown regex flag" ERegexCompileError make-error throw ]
+  } case
+] ;
+
+(flags>options): ( flags -- u32 ) [
+  (base-flags) [ (flag>bit) bitor ] #reduce
+] ;
+
+(byte-length): ( str -- n ) [ >bytes #len ] ;
+
+\\ Convert a PCRE2 error code to a human-readable string.
+(pcre2-error-msg): ( errorcode -- str ) [
+  256 bytes-alloc
+  dup bytes>ffi-ptr+len drop
+  \ Stack: errorcode buf buf-resource
+  <rot- swap 256 (get-error-message)
+  \ Stack: buf written-or-error
+  dup 0 > [
+    bytes-resize! >string
+  ] [
+    2drop "unknown PCRE2 error"
+  ] if
+] ;
+
+\ Public API
+
+\\ Compile a regex pattern with default flags (UTF-8 and UCP enabled).
+regex-compile: ( pattern -- regex ) [ { } swap regex-compile-with ] ;
+
+\\ Compile a regex pattern with additional flags.
+\\ After (compile), stack is: errorcode erroroffset code (code on top).
+\\ Compile a regex pattern with additional flags.
+regex-compile-with: ( flags pattern -- regex ) [
+  swap (flags>options)
+  \ Stack: pattern options
+  \ Allocate error buffers: 4 bytes for errorcode (int), 8 bytes for erroroffset (size_t)
+  4 bytes-alloc dup bytes>ffi-ptr+len drop
+  \ Stack: pattern options err-buf err-ptr
+  8 bytes-alloc dup bytes>ffi-ptr+len drop
+  \ Stack: pattern options err-buf err-ptr off-buf off-ptr
+  5 pick-n dup (byte-length)
+  \ Stack: pattern options err-buf err-ptr off-buf off-ptr pattern byte-len
+  6 pick-n
+  \ Stack: pattern options err-buf err-ptr off-buf off-ptr pattern byte-len options
+  5 pick-n 4 pick-n 0
+  \ Stack: pattern options err-buf err-ptr off-buf off-ptr pattern byte-len options err-ptr off-ptr 0
+  (compile)
+  \ Stack: pattern options err-buf err-ptr off-buf off-ptr code
+  \ Check errorcode from buffer (PCRE2 sets to 100 on success, > 100 on error)
+  \ Stack: pattern options err-buf err-ptr off-buf off-ptr code
+  4 pick-n 0 4 #peek
+  \ Stack: pattern options err-buf err-ptr off-buf off-ptr code errorcode
+  dup PCRE2_COMPILE_ERROR_BASE <= [
+    \ Success: clean up temporaries and return regex
+    drop nip nip nip nip nip nip >regex
+  ] [
+    \ Failure: get error message and throw
+    nip nip nip nip nip nip nip
+    \ Stack: errorcode
+    (pcre2-error-msg)
+    ERegexCompileError make-error throw
+  ] if
+] ;
+
+\\ Match a string against a compiled regex. Returns option:some wrapping an
+\\ array of capture groups on match, or option:none on no match. Each capture
+\\ group is option:some wrapping the matched text, or option:none for unmatched
+\\ optional groups. Index 0 is the full match.
+regex-match: ( str regex -- option ) [
+  unmake-regex
+  \ Stack: str code
+  over >bytes
+  \ Stack: str code subject-bytes
+  -rot>
+  \ Stack: subject-bytes str code
+  dup 0 (match-data-create)
+  \ Stack: subject-bytes str code match-data
+  over
+  \ Stack: subject-bytes str code match-data code
+  3 pick-n dup (byte-length) 0 0
+  \ Stack: subject-bytes str code match-data code str byte-len 0 0
+  5 pick-n 0 (match-raw)
+  \ Stack: subject-bytes str code match-data rc
+  dup PCRE2_ERROR_NOMATCH = [
+    drop (match-data-free)
+    drop drop drop
+    option:none
+  ] [
+    dup 0 < [
+      (pcre2-error-msg)
+      swap (match-data-free)
+      drop drop drop
+      ERegexMatchError make-error throw
+    ] [
+      \ Stack: subject-bytes str code match-data rc
+      swap dup (get-ovector-pointer)
+      \ Stack: subject-bytes str code rc match-data ovector-ptr
+      2 pick-n 2 * 8 * ffi-ptr+len>bytes
+      \ Stack: subject-bytes str code rc match-data ovector-bytes
+      swap (match-data-free)
+      \ Stack: subject-bytes str code rc ovector-bytes
+      4 pick-n swap
+      \ Stack: subject-bytes str code rc subject-bytes ovector-bytes
+      <rot- 0 swap { } (extract-captures)
+      \ Stack: subject-bytes str code array
+      >option:some
+      swap drop swap drop swap drop
+    ] if
+  ] if
+] ;
+
+\ Capture extraction loop
+\ ( subject-bytes ovector-bytes i count accum -- array )
+(extract-captures): [
+  \ indices: accum=0 count=1 i=2 ovector=3 subject=4
+  2 pick-n 2 pick-n >= [
+    \ i >= count: done, return accum
+    nip nip nip nip
+  ] [
+    \ Read start and end from ovector for capture i
+    2 pick-n 16 *
+    \ Stack: sub(5) ov(4) i(3) cnt(2) acc(1) byte-offset(0)
+    4 pick-n over 8 #peek
+    \ Stack: sub(6) ov(5) i(4) cnt(3) acc(2) bo(1) start(0)
+    5 pick-n 2 pick-n 8 + 8 #peek
+    \ Stack: sub(7) ov(6) i(5) cnt(4) acc(3) bo(2) start(1) end(0)
+    <rot- drop
+    \ Stack: sub(6) ov(5) i(4) cnt(3) acc(2) start(1) end(0)
+    over PCRE2_UNSET = [
+      2drop option:none
+    ] [
+      6 pick-n -rot> #slice bytes> >option:some
+    ] if
+    \ Stack: sub(5) ov(4) i(3) cnt(2) acc(1) element(0)
+    1array #append
+    \ Stack: sub(4) ov(3) i(2) cnt(1) acc(0)
+    \ Increment i (index 2: below count and accum)
+    [ ++ ] 2dip
+    (extract-captures)
+  ] if
+] ;
