@@ -1,5 +1,6 @@
 \ lib/complex.1z - Complex numbers
 
+use "math" ;
 use "math/ratio" ;
 
 complex: H{ numeric: t } virtual{ struct{ real imag } } ;
@@ -132,6 +133,36 @@ inspect: method{ complex } [
 
 =: method{ complex ratio } [ >float 0.0 make-complex = ] ;
 =: method{ ratio complex } [ swap >float 0.0 make-complex swap = ] ;
+
+\ --- Transcendental functions ---
+
+\\ Complex exponential: e^(a+bi) = e^a * (cos b + i sin b).
+\\ No branch cut.
+exp: method{ complex } [
+  dup real-part native.exp
+  swap imaginary-part
+  dup native.cos 2 pick-n *
+  swap native.sin 2 pick-n *
+  make-complex nip
+] ;
+
+\\ Complex natural logarithm: ln|z| + i*arg(z).
+\\ Branch cut: negative real axis (imaginary part of result in (-pi, pi]).
+log: method{ complex } [
+  dup magnitude native.log
+  swap phase
+  make-complex
+] ;
+
+\\ Complex square root via polar form: sqrt(|z|) * cis(arg(z)/2).
+\\ Branch cut: negative real axis (result has non-negative real part).
+sqrt: method{ complex } [
+  dup magnitude native.sqrt
+  swap phase 2.0 /
+  dup native.cos 2 pick-n *
+  swap native.sin 2 pick-n *
+  make-complex nip
+] ;
 
 \ --- Misc. library words ---
 

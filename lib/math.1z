@@ -23,16 +23,16 @@ atan: ( n -- f ) [ native.atan ] ;
 atan2: ( y x -- f ) [ native.atan2 ] ;
 
 \\ Natural exponential (e^n).
-exp: ( n -- f ) [ native.exp ] ;
+exp: generic ( n -- f ) [ native.exp ] ;
 \\ Natural logarithm.
-log: ( n -- f ) [ native.log ] ;
+log: generic ( n -- f ) [ native.log ] ;
 \\ Base-2 logarithm.
 log2: ( n -- f ) [ native.log2 ] ;
 \\ Base-10 logarithm.
 log10: ( n -- f ) [ native.log10 ] ;
 
 \\ Square root.
-sqrt: ( n -- f ) [ native.sqrt ] ;
+sqrt: generic ( n -- f ) [ native.sqrt ] ;
 \\ Exponentiation.
 pow: ( base exp -- f ) [ native.pow ] ;
 

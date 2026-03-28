@@ -1,0 +1,67 @@
+use "testing" ;
+use "math" ;
+use "math/complex" ;
+
+"exp: pure real" test-section
+C{ 1.0 0.0 } exp real-part e - abs 1.0e-10 < "exp(1+0i) real ~ e" assert-true
+C{ 1.0 0.0 } exp imaginary-part abs 1.0e-10 < "exp(1+0i) imag ~ 0" assert-true
+C{ 0.0 0.0 } exp real-part 1.0 "exp(0+0i) real = 1" assert=
+C{ 0.0 0.0 } exp imaginary-part 0.0 "exp(0+0i) imag = 0" assert=
+
+"exp: Euler's formula" test-section
+\ e^(i*pi) = -1 + 0i
+0.0 pi make-complex exp
+real-part -1.0 - abs 1.0e-10 < "exp(i*pi) real ~ -1" assert-true
+0.0 pi make-complex exp
+imaginary-part abs 1.0e-10 < "exp(i*pi) imag ~ 0" assert-true
+
+"exp: general complex" test-section
+\ e^(1+i) = e*cos(1) + e*sin(1)*i
+C{ 1.0 1.0 } exp real-part
+e 1.0 native.cos * - abs 1.0e-10 < "exp(1+i) real" assert-true
+C{ 1.0 1.0 } exp imaginary-part
+e 1.0 native.sin * - abs 1.0e-10 < "exp(1+i) imag" assert-true
+
+"log: basic" test-section
+C{ 1.0 0.0 } log real-part abs 1.0e-10 < "log(1+0i) real ~ 0" assert-true
+C{ 1.0 0.0 } log imaginary-part abs 1.0e-10 < "log(1+0i) imag ~ 0" assert-true
+
+"log: of e" test-section
+e 0.0 make-complex log real-part 1.0 - abs 1.0e-10 < "log(e+0i) real ~ 1" assert-true
+e 0.0 make-complex log imaginary-part abs 1.0e-10 < "log(e+0i) imag ~ 0" assert-true
+
+"log: branch cut" test-section
+\ log(-1) = 0 + pi*i
+C{ -1.0 0.0 } log real-part abs 1.0e-10 < "log(-1) real ~ 0" assert-true
+C{ -1.0 0.0 } log imaginary-part pi - abs 1.0e-10 < "log(-1) imag ~ pi" assert-true
+
+"log: general complex" test-section
+\ log(i) = 0 + pi/2 * i
+C{ 0.0 1.0 } log real-part abs 1.0e-10 < "log(i) real ~ 0" assert-true
+C{ 0.0 1.0 } log imaginary-part pi 2.0 / - abs 1.0e-10 < "log(i) imag ~ pi/2" assert-true
+
+"sqrt: positive real" test-section
+C{ 4.0 0.0 } sqrt real-part 2.0 - abs 1.0e-10 < "sqrt(4+0i) real ~ 2" assert-true
+C{ 4.0 0.0 } sqrt imaginary-part abs 1.0e-10 < "sqrt(4+0i) imag ~ 0" assert-true
+
+"sqrt: branch cut" test-section
+\ sqrt(-1) = 0 + 1i (principal value)
+C{ -1.0 0.0 } sqrt real-part abs 1.0e-10 < "sqrt(-1) real ~ 0" assert-true
+C{ -1.0 0.0 } sqrt imaginary-part 1.0 - abs 1.0e-10 < "sqrt(-1) imag ~ 1" assert-true
+
+"sqrt: general complex" test-section
+\ sqrt(i) = sqrt(2)/2 + sqrt(2)/2 * i
+C{ 0.0 1.0 } sqrt real-part 2.0 native.sqrt 2.0 / - abs 1.0e-10 < "sqrt(i) real ~ sqrt(2)/2" assert-true
+C{ 0.0 1.0 } sqrt imaginary-part 2.0 native.sqrt 2.0 / - abs 1.0e-10 < "sqrt(i) imag ~ sqrt(2)/2" assert-true
+
+"sqrt: round-trip" test-section
+\ z = sqrt(z)^2
+C{ 3.0 4.0 } dup sqrt dup * swap
+over real-part over real-part - abs 1.0e-10 < "sqrt round-trip real" assert-true
+imaginary-part swap imaginary-part - abs 1.0e-10 < "sqrt round-trip imag" assert-true
+
+"exp-log: round-trip" test-section
+\ z = exp(log(z)) for z != 0
+C{ 2.0 3.0 } dup log exp swap
+over real-part over real-part - abs 1.0e-10 < "exp(log(z)) round-trip real" assert-true
+imaginary-part swap imaginary-part - abs 1.0e-10 < "exp(log(z)) round-trip imag" assert-true

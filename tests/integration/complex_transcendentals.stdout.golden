@@ -1,0 +1,82 @@
+=== exp: pure real ===
+Stack: [ ]
+PASS: exp(1+0i) real ~ e
+Stack: [ ]
+PASS: exp(1+0i) imag ~ 0
+Stack: [ ]
+PASS: exp(0+0i) real = 1
+Stack: [ ]
+PASS: exp(0+0i) imag = 0
+Stack: [ ]
+=== exp: Euler's formula ===
+Stack: [ ]
+Stack: [ <complex complex{ real: -1.0 imag: 0.00000000000000012246467991473532 }> ]
+PASS: exp(i*pi) real ~ -1
+Stack: [ ]
+Stack: [ <complex complex{ real: -1.0 imag: 0.00000000000000012246467991473532 }> ]
+PASS: exp(i*pi) imag ~ 0
+Stack: [ ]
+=== exp: general complex ===
+Stack: [ ]
+Stack: [ 1.4686939399158851 ]
+PASS: exp(1+i) real
+Stack: [ ]
+Stack: [ 2.2873552871788423 ]
+PASS: exp(1+i) imag
+Stack: [ ]
+=== log: basic ===
+Stack: [ ]
+PASS: log(1+0i) real ~ 0
+Stack: [ ]
+PASS: log(1+0i) imag ~ 0
+Stack: [ ]
+=== log: of e ===
+Stack: [ ]
+PASS: log(e+0i) real ~ 1
+Stack: [ ]
+PASS: log(e+0i) imag ~ 0
+Stack: [ ]
+=== log: branch cut ===
+Stack: [ ]
+PASS: log(-1) real ~ 0
+Stack: [ ]
+PASS: log(-1) imag ~ pi
+Stack: [ ]
+=== log: general complex ===
+Stack: [ ]
+PASS: log(i) real ~ 0
+Stack: [ ]
+PASS: log(i) imag ~ pi/2
+Stack: [ ]
+=== sqrt: positive real ===
+Stack: [ ]
+PASS: sqrt(4+0i) real ~ 2
+Stack: [ ]
+PASS: sqrt(4+0i) imag ~ 0
+Stack: [ ]
+=== sqrt: branch cut ===
+Stack: [ ]
+PASS: sqrt(-1) real ~ 0
+Stack: [ ]
+PASS: sqrt(-1) imag ~ 1
+Stack: [ ]
+=== sqrt: general complex ===
+Stack: [ ]
+PASS: sqrt(i) real ~ sqrt(2)/2
+Stack: [ ]
+PASS: sqrt(i) imag ~ sqrt(2)/2
+Stack: [ ]
+=== sqrt: round-trip ===
+Stack: [ ]
+Stack: [ <complex complex{ real: 3.0 imag: 4.0 }> <complex complex{ real: 3.0 imag: 4.0 }> ]
+PASS: sqrt round-trip real
+Stack: [ <complex complex{ real: 3.0 imag: 4.0 }> <complex complex{ real: 3.0 imag: 4.0 }> ]
+PASS: sqrt round-trip imag
+Stack: [ ]
+=== exp-log: round-trip ===
+Stack: [ ]
+Stack: [ <complex complex{ real: 2.0 imag: 3.0 }> <complex complex{ real: 2.0 imag: 3.0 }> ]
+PASS: exp(log(z)) round-trip real
+Stack: [ <complex complex{ real: 2.0 imag: 3.0 }> <complex complex{ real: 2.0 imag: 3.0 }> ]
+PASS: exp(log(z)) round-trip imag
+Stack: [ ]
