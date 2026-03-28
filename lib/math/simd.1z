@@ -1,0 +1,157 @@
+\ lib/math/simd.1z - Fixed-width 128-bit SIMD vector types
+
+use "strings" ;
+
+\ Virtual type definitions: each SIMD vector wraps a 16-byte byte-array
+simd-2xf64: virtual{ byte-array } ;
+simd-4xf32: virtual{ byte-array } ;
+simd-2xi64: virtual{ byte-array } ;
+simd-4xi32: virtual{ byte-array } ;
+simd-8xi16: virtual{ byte-array } ;
+simd-16xi8: virtual{ byte-array } ;
+simd-2xu64: virtual{ byte-array } ;
+simd-4xu32: virtual{ byte-array } ;
+simd-8xu16: virtual{ byte-array } ;
+simd-16xu8: virtual{ byte-array } ;
+
+\ Construction: <simd-NxT> ( v0..vN-1 -- simd-NxT )
+<simd-2xf64>: ( f0 f1 -- simd-2xf64 )                                                 [ "2xf64" native.simd-from-stack >simd-2xf64 ] ;
+<simd-4xf32>: ( f0 f1 f2 f3 -- simd-4xf32 )                                           [ "4xf32" native.simd-from-stack >simd-4xf32 ] ;
+<simd-2xi64>: ( n0 n1 -- simd-2xi64 )                                                 [ "2xi64" native.simd-from-stack >simd-2xi64 ] ;
+<simd-4xi32>: ( n0 n1 n2 n3 -- simd-4xi32 )                                           [ "4xi32" native.simd-from-stack >simd-4xi32 ] ;
+<simd-8xi16>: ( n0 n1 n2 n3 n4 n5 n6 n7 -- simd-8xi16 )                               [ "8xi16" native.simd-from-stack >simd-8xi16 ] ;
+<simd-16xi8>: ( n0 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 -- simd-16xi8 ) [ "16xi8" native.simd-from-stack >simd-16xi8 ] ;
+<simd-2xu64>: ( n0 n1 -- simd-2xu64 )                                                 [ "2xu64" native.simd-from-stack >simd-2xu64 ] ;
+<simd-4xu32>: ( n0 n1 n2 n3 -- simd-4xu32 )                                           [ "4xu32" native.simd-from-stack >simd-4xu32 ] ;
+<simd-8xu16>: ( n0 n1 n2 n3 n4 n5 n6 n7 -- simd-8xu16 )                               [ "8xu16" native.simd-from-stack >simd-8xu16 ] ;
+<simd-16xu8>: ( n0 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 -- simd-16xu8 ) [ "16xu8" native.simd-from-stack >simd-16xu8 ] ;
+
+\ Construction: simd-splat:NxT ( value -- simd-NxT )
+simd-splat:2xf64: ( value -- simd-2xf64 ) [ "2xf64" native.simd-splat-impl >simd-2xf64 ] ;
+simd-splat:4xf32: ( value -- simd-4xf32 ) [ "4xf32" native.simd-splat-impl >simd-4xf32 ] ;
+simd-splat:2xi64: ( value -- simd-2xi64 ) [ "2xi64" native.simd-splat-impl >simd-2xi64 ] ;
+simd-splat:4xi32: ( value -- simd-4xi32 ) [ "4xi32" native.simd-splat-impl >simd-4xi32 ] ;
+simd-splat:8xi16: ( value -- simd-8xi16 ) [ "8xi16" native.simd-splat-impl >simd-8xi16 ] ;
+simd-splat:16xi8: ( value -- simd-16xi8 ) [ "16xi8" native.simd-splat-impl >simd-16xi8 ] ;
+simd-splat:2xu64: ( value -- simd-2xu64 ) [ "2xu64" native.simd-splat-impl >simd-2xu64 ] ;
+simd-splat:4xu32: ( value -- simd-4xu32 ) [ "4xu32" native.simd-splat-impl >simd-4xu32 ] ;
+simd-splat:8xu16: ( value -- simd-8xu16 ) [ "8xu16" native.simd-splat-impl >simd-8xu16 ] ;
+simd-splat:16xu8: ( value -- simd-16xu8 ) [ "16xu8" native.simd-splat-impl >simd-16xu8 ] ;
+
+\ Conversion: simd>array ( simd-NxT -- array )
+simd>array: generic ( simd-NxT -- array ) [
+  f "simd>array: not a SIMD vector type" EInvalidArgument make-error throw
+] ;
+simd>array: method{ simd-2xf64 } [ native.simd-to-array ] ;
+simd>array: method{ simd-4xf32 } [ native.simd-to-array ] ;
+simd>array: method{ simd-2xi64 } [ native.simd-to-array ] ;
+simd>array: method{ simd-4xi32 } [ native.simd-to-array ] ;
+simd>array: method{ simd-8xi16 } [ native.simd-to-array ] ;
+simd>array: method{ simd-16xi8 } [ native.simd-to-array ] ;
+simd>array: method{ simd-2xu64 } [ native.simd-to-array ] ;
+simd>array: method{ simd-4xu32 } [ native.simd-to-array ] ;
+simd>array: method{ simd-8xu16 } [ native.simd-to-array ] ;
+simd>array: method{ simd-16xu8 } [ native.simd-to-array ] ;
+
+\ Lane access: simd-lane ( simd-NxT fixnum -- value )
+simd-lane: generic ( simd-NxT fixnum -- value ) [
+  f "simd-lane: not a SIMD vector type" EInvalidArgument make-error throw
+] ;
+simd-lane: method{ simd-2xf64 fixnum } [ native.simd-lane-get ] ;
+simd-lane: method{ simd-4xf32 fixnum } [ native.simd-lane-get ] ;
+simd-lane: method{ simd-2xi64 fixnum } [ native.simd-lane-get ] ;
+simd-lane: method{ simd-4xi32 fixnum } [ native.simd-lane-get ] ;
+simd-lane: method{ simd-8xi16 fixnum } [ native.simd-lane-get ] ;
+simd-lane: method{ simd-16xi8 fixnum } [ native.simd-lane-get ] ;
+simd-lane: method{ simd-2xu64 fixnum } [ native.simd-lane-get ] ;
+simd-lane: method{ simd-4xu32 fixnum } [ native.simd-lane-get ] ;
+simd-lane: method{ simd-8xu16 fixnum } [ native.simd-lane-get ] ;
+simd-lane: method{ simd-16xu8 fixnum } [ native.simd-lane-get ] ;
+
+\ Lane mutation: simd-set-lane ( simd-NxT value fixnum -- simd-NxT )
+simd-set-lane: ( simd-NxT value fixnum -- simd-NxT ) [ native.simd-lane-set ] ;
+
+\ Lane manipulation
+simd-shuffle: ( simd-NxT array -- simd-NxT ) [ native.simd-shuffle-impl ] ;
+simd-select:  ( mask a b -- simd-NxT )       [ native.simd-select-impl ] ;
+simd-blend:   ( a b fixnum -- simd-NxT )     [ native.simd-blend-impl ] ;
+
+\ Element-wise arithmetic: + - * /
++: method{ simd-2xf64 simd-2xf64 } [ native.simd-add ] ;
+-: method{ simd-2xf64 simd-2xf64 } [ native.simd-sub ] ;
+*: method{ simd-2xf64 simd-2xf64 } [ native.simd-mul ] ;
+/: method{ simd-2xf64 simd-2xf64 } [ native.simd-div ] ;
+
++: method{ simd-4xf32 simd-4xf32 } [ native.simd-add ] ;
+-: method{ simd-4xf32 simd-4xf32 } [ native.simd-sub ] ;
+*: method{ simd-4xf32 simd-4xf32 } [ native.simd-mul ] ;
+/: method{ simd-4xf32 simd-4xf32 } [ native.simd-div ] ;
+
++: method{ simd-2xi64 simd-2xi64 } [ native.simd-add ] ;
+-: method{ simd-2xi64 simd-2xi64 } [ native.simd-sub ] ;
+*: method{ simd-2xi64 simd-2xi64 } [ native.simd-mul ] ;
+/: method{ simd-2xi64 simd-2xi64 } [ native.simd-div ] ;
+
++: method{ simd-4xi32 simd-4xi32 } [ native.simd-add ] ;
+-: method{ simd-4xi32 simd-4xi32 } [ native.simd-sub ] ;
+*: method{ simd-4xi32 simd-4xi32 } [ native.simd-mul ] ;
+/: method{ simd-4xi32 simd-4xi32 } [ native.simd-div ] ;
+
++: method{ simd-8xi16 simd-8xi16 } [ native.simd-add ] ;
+-: method{ simd-8xi16 simd-8xi16 } [ native.simd-sub ] ;
+*: method{ simd-8xi16 simd-8xi16 } [ native.simd-mul ] ;
+/: method{ simd-8xi16 simd-8xi16 } [ native.simd-div ] ;
+
++: method{ simd-16xi8 simd-16xi8 } [ native.simd-add ] ;
+-: method{ simd-16xi8 simd-16xi8 } [ native.simd-sub ] ;
+*: method{ simd-16xi8 simd-16xi8 } [ native.simd-mul ] ;
+/: method{ simd-16xi8 simd-16xi8 } [ native.simd-div ] ;
+
++: method{ simd-2xu64 simd-2xu64 } [ native.simd-add ] ;
+-: method{ simd-2xu64 simd-2xu64 } [ native.simd-sub ] ;
+*: method{ simd-2xu64 simd-2xu64 } [ native.simd-mul ] ;
+/: method{ simd-2xu64 simd-2xu64 } [ native.simd-div ] ;
+
++: method{ simd-4xu32 simd-4xu32 } [ native.simd-add ] ;
+-: method{ simd-4xu32 simd-4xu32 } [ native.simd-sub ] ;
+*: method{ simd-4xu32 simd-4xu32 } [ native.simd-mul ] ;
+/: method{ simd-4xu32 simd-4xu32 } [ native.simd-div ] ;
+
++: method{ simd-8xu16 simd-8xu16 } [ native.simd-add ] ;
+-: method{ simd-8xu16 simd-8xu16 } [ native.simd-sub ] ;
+*: method{ simd-8xu16 simd-8xu16 } [ native.simd-mul ] ;
+/: method{ simd-8xu16 simd-8xu16 } [ native.simd-div ] ;
+
++: method{ simd-16xu8 simd-16xu8 } [ native.simd-add ] ;
+-: method{ simd-16xu8 simd-16xu8 } [ native.simd-sub ] ;
+*: method{ simd-16xu8 simd-16xu8 } [ native.simd-mul ] ;
+/: method{ simd-16xu8 simd-16xu8 } [ native.simd-div ] ;
+
+\ Display support
+
+(simd-inspect-helper): ( simd-NxT type-name -- string ) [
+  "simd-" swap #append "{ " #append
+  swap simd>array >iterator [ inspect ] #map #collect " " #join #append " }" #append
+] ;
+
+inspect: method{ simd-2xf64 } [ "2xf64" (simd-inspect-helper) ] ;
+inspect: method{ simd-4xf32 } [ "4xf32" (simd-inspect-helper) ] ;
+inspect: method{ simd-2xi64 } [ "2xi64" (simd-inspect-helper) ] ;
+inspect: method{ simd-4xi32 } [ "4xi32" (simd-inspect-helper) ] ;
+inspect: method{ simd-8xi16 } [ "8xi16" (simd-inspect-helper) ] ;
+inspect: method{ simd-16xi8 } [ "16xi8" (simd-inspect-helper) ] ;
+inspect: method{ simd-2xu64 } [ "2xu64" (simd-inspect-helper) ] ;
+inspect: method{ simd-4xu32 } [ "4xu32" (simd-inspect-helper) ] ;
+inspect: method{ simd-8xu16 } [ "8xu16" (simd-inspect-helper) ] ;
+inspect: method{ simd-16xu8 } [ "16xu8" (simd-inspect-helper) ] ;
+
+>string: method{ simd-2xf64 } [ inspect ] ;
+>string: method{ simd-4xf32 } [ inspect ] ;
+>string: method{ simd-2xi64 } [ inspect ] ;
+>string: method{ simd-4xi32 } [ inspect ] ;
+>string: method{ simd-8xi16 } [ inspect ] ;
+>string: method{ simd-16xi8 } [ inspect ] ;
+>string: method{ simd-2xu64 } [ inspect ] ;
+>string: method{ simd-4xu32 } [ inspect ] ;
+>string: method{ simd-8xu16 } [ inspect ] ;
+>string: method{ simd-16xu8 } [ inspect ] ;

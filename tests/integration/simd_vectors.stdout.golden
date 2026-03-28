@@ -1,0 +1,138 @@
+=== construction: <simd-4xf32> from stack values ===
+Stack: [ ]
+PASS: simd-4xf32 roundtrip
+Stack: [ ]
+=== construction: <simd-2xf64> from stack values ===
+Stack: [ ]
+PASS: simd-2xf64 roundtrip
+Stack: [ ]
+=== construction: <simd-4xi32> from stack values ===
+Stack: [ ]
+PASS: simd-4xi32 roundtrip
+Stack: [ ]
+=== construction: <simd-16xu8> from stack values ===
+Stack: [ ]
+Stack: [ { 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 } ]
+Stack: [ { 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 } { 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 } ]
+PASS: simd-16xu8 roundtrip
+Stack: [ ]
+=== splat: simd-splat:4xi32 ===
+Stack: [ ]
+PASS: splat 4xi32
+Stack: [ ]
+=== splat: simd-splat:2xf64 ===
+Stack: [ ]
+PASS: splat 2xf64
+Stack: [ ]
+=== lane access: simd-lane ===
+Stack: [ ]
+Stack: [ 10 ]
+PASS: lane 0 of 4xi32
+Stack: [ ]
+Stack: [ 40 ]
+PASS: lane 3 of 4xi32
+Stack: [ ]
+=== lane access: out of bounds ===
+Stack: [ ]
+PASS: lane out of bounds
+Stack: [ ]
+PASS: lane negative index
+Stack: [ ]
+=== lane set: simd-set-lane ===
+Stack: [ ]
+Stack: [ { 1 99 3 4 } ]
+Stack: [ { 1 99 3 4 } { 1 99 3 4 } ]
+PASS: set lane 1
+Stack: [ ]
+Stack: [ { 10 20 30 99 } ]
+Stack: [ { 10 20 30 99 } { 10 20 30 99 } ]
+PASS: set lane 3
+Stack: [ ]
+=== arithmetic: simd-2xf64 addition ===
+Stack: [ ]
+Stack: [ { 11.5 22.5 } ]
+Stack: [ { 11.5 22.5 } { 11.5 22.5 } ]
+PASS: 2xf64 +
+Stack: [ ]
+=== arithmetic: simd-2xf64 subtraction ===
+Stack: [ ]
+Stack: [ { 8.5 17.5 } ]
+Stack: [ { 8.5 17.5 } { 8.5 17.5 } ]
+PASS: 2xf64 -
+Stack: [ ]
+=== arithmetic: simd-2xf64 multiplication ===
+Stack: [ ]
+Stack: [ { 15.0 50.0 } ]
+Stack: [ { 15.0 50.0 } { 15.0 50.0 } ]
+PASS: 2xf64 *
+Stack: [ ]
+=== arithmetic: simd-2xf64 division ===
+Stack: [ ]
+Stack: [ { 2.5 4.0 } ]
+Stack: [ { 2.5 4.0 } { 2.5 4.0 } ]
+PASS: 2xf64 /
+Stack: [ ]
+=== arithmetic: simd-4xi32 addition ===
+Stack: [ ]
+Stack: [ { 5 7 9 11 } ]
+Stack: [ { 5 7 9 11 } { 5 7 9 11 } ]
+PASS: 4xi32 +
+Stack: [ ]
+=== arithmetic: simd-16xu8 wrapping add ===
+Stack: [ ]
+Stack: [ <simd-16xu8 B{ 0xFF 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 }> ]
+Stack: [ <simd-16xu8 B{ 0xFF 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 }> <simd-16xu8 B{ 0x01 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 }> ]
+Stack: [ 0 ]
+PASS: u8 255+1 wraps to 0
+Stack: [ ]
+=== type mismatch: different SIMD types ===
+Stack: [ ]
+PASS: type mismatch throws
+Stack: [ ]
+=== shuffle: reverse lanes ===
+Stack: [ ]
+Stack: [ { 4 3 2 1 } ]
+Stack: [ { 4 3 2 1 } { 4 3 2 1 } ]
+PASS: shuffle reverse
+Stack: [ ]
+=== shuffle: duplicate lane ===
+Stack: [ ]
+Stack: [ { 2 2 2 2 } ]
+Stack: [ { 2 2 2 2 } { 2 2 2 2 } ]
+PASS: shuffle broadcast lane 1
+Stack: [ ]
+=== select: per-lane conditional ===
+Stack: [ ]
+Stack: [ { 100 20 300 40 } ]
+Stack: [ { 100 20 300 40 } <simd-4xi32 B{ 0x00 0x00 0x00 0x00 0x01 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x01 0x00 0x00 0x00 }> ]
+Stack: [ { 100 20 300 40 } <simd-4xi32 B{ 0x00 0x00 0x00 0x00 0x01 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x01 0x00 0x00 0x00 }> <simd-4xi32 B{ 0x0A 0x00 0x00 0x00 0x14 0x00 0x00 0x00 0x1E 0x00 0x00 0x00 0x28 0x00 0x00 0x00 }> ]
+Stack: [ { 100 20 300 40 } <simd-4xi32 B{ 0x00 0x00 0x00 0x00 0x01 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x01 0x00 0x00 0x00 }> <simd-4xi32 B{ 0x0A 0x00 0x00 0x00 0x14 0x00 0x00 0x00 0x1E 0x00 0x00 0x00 0x28 0x00 0x00 0x00 }> <simd-4xi32 B{ 0x64 0x00 0x00 0x00 0xC8 0x00 0x00 0x00 0x2C 0x01 0x00 0x00 0x90 0x01 0x00 0x00 }> ]
+Stack: [ { 100 20 300 40 } { 100 20 300 40 } ]
+PASS: select picks a for non-zero mask, b for zero
+Stack: [ ]
+=== blend: bitmask merge ===
+Stack: [ ]
+Stack: [ { 100 20 300 40 } ]
+Stack: [ { 100 20 300 40 } <simd-4xi32 B{ 0x0A 0x00 0x00 0x00 0x14 0x00 0x00 0x00 0x1E 0x00 0x00 0x00 0x28 0x00 0x00 0x00 }> ]
+Stack: [ { 100 20 300 40 } <simd-4xi32 B{ 0x0A 0x00 0x00 0x00 0x14 0x00 0x00 0x00 0x1E 0x00 0x00 0x00 0x28 0x00 0x00 0x00 }> <simd-4xi32 B{ 0x64 0x00 0x00 0x00 0xC8 0x00 0x00 0x00 0x2C 0x01 0x00 0x00 0x90 0x01 0x00 0x00 }> ]
+Stack: [ { 100 20 300 40 } { 100 20 300 40 } ]
+PASS: blend picks b for set bits
+Stack: [ ]
+=== inspect: simd-4xi32 ===
+Stack: [ ]
+Stack: [ "simd-4xi32{ 1 2 3 4 }" ]
+Stack: [ "simd-4xi32{ 1 2 3 4 }" "simd-4xi32{ 1 2 3 4 }" ]
+PASS: 4xi32 inspect
+Stack: [ ]
+=== inspect: simd-2xf64 ===
+Stack: [ ]
+Stack: [ "simd-2xf64{ 1.5 2.5 }" ]
+Stack: [ "simd-2xf64{ 1.5 2.5 }" "simd-2xf64{ 1.5 2.5 }" ]
+PASS: 2xf64 inspect
+Stack: [ ]
+=== type predicates ===
+Stack: [ ]
+PASS: simd-4xf32? on simd-4xf32
+Stack: [ t ]
+PASS: simd-4xf32? on simd-4xi32
+Stack: [ t f ]
