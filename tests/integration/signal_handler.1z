@@ -1,0 +1,34 @@
+use "testing" ;
+use "os/signal" ;
+
+"signal constants" test-section
+
+\ Verify named constants produce signal virtual type values
+SIGINT signal? "SIGINT is a signal" assert-true
+SIGTERM signal? "SIGTERM is a signal" assert-true
+SIGHUP signal? "SIGHUP is a signal" assert-true
+
+\ Verify unwrapping yields fixnums
+SIGINT unmake-signal fixnum? "SIGINT unwraps to fixnum" assert-true
+SIGTERM unmake-signal fixnum? "SIGTERM unwraps to fixnum" assert-true
+
+"handler registration and retrieval" test-section
+
+\ No handler initially
+f SIGTERM signal-handler "SIGTERM has no handler initially" assert=
+
+\ Register a handler
+SIGTERM [ drop "got SIGTERM" ] on-signal
+
+\ Retrieve handler (should not be f)
+SIGTERM signal-handler f = not "SIGTERM handler is registered" assert-true
+
+\ Clear handler
+SIGTERM off-signal
+f SIGTERM signal-handler "SIGTERM handler cleared" assert=
+
+"sandbox blocks signal handlers" test-section
+
+\ Empty sandbox should deny set-signal-handler (requires system capability)
+[ sandbox{ io } [ SIGTERM [ drop ] on-signal ] with-sandbox ]
+"sandbox denies signal handler registration" assert-error

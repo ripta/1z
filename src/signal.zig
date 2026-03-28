@@ -3,14 +3,40 @@ const posix = std.posix;
 
 const Context = @import("context.zig").Context;
 const value_mod = @import("value.zig");
+const Quotation = value_mod.Quotation;
 
-var sigint_pending: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+const SIG = posix.SIG;
 
-fn handleSigint(_: c_int) callconv(.c) void {
-    if (sigint_pending.load(.acquire)) {
+/// Maximum number of signals supported. POSIX signals range from 1 to 31.
+const MAX_SIGNALS = 32;
+
+/// Per-signal atomic pending flags. Index 0 is unused.
+var signal_pending: [MAX_SIGNALS]std.atomic.Value(bool) = blk: {
+    var arr: [MAX_SIGNALS]std.atomic.Value(bool) = undefined;
+    for (&arr) |*slot| slot.* = std.atomic.Value(bool).init(false);
+    break :blk arr;
+};
+
+/// Per-signal user handler quotations. null means no user handler.
+/// Only accessed from the main interpreter thread; no synchronization needed.
+var user_handlers: [MAX_SIGNALS]?Quotation = .{null} ** MAX_SIGNALS;
+
+/// Previous sigaction states for restoring defaults on removeHandler.
+var prev_actions: [MAX_SIGNALS]?posix.Sigaction = .{null} ** MAX_SIGNALS;
+
+/// Generic async-signal-safe handler. Sets the pending flag for the
+/// received signal. For SIGINT, a second signal while the first is
+/// still pending force-terminates (exit 130).
+fn handleSignal(signum: c_int) callconv(.c) void {
+    const idx: usize = if (signum >= 0 and signum < MAX_SIGNALS)
+        @intCast(signum)
+    else
+        return;
+
+    if (signum == SIG.INT and signal_pending[idx].load(.acquire)) {
         posix.exit(130);
     }
-    sigint_pending.store(true, .release);
+    signal_pending[idx].store(true, .release);
 }
 
 /// Install OS signal handlers. Call once at startup.
@@ -19,14 +45,7 @@ fn handleSigint(_: c_int) callconv(.c) void {
 ///   Second SIGINT while first is pending force-terminates (exit 130).
 /// - SIGPIPE: ignored (SIG_IGN) to prevent crashes on broken pipes.
 pub fn install() void {
-    const SIG = posix.SIG;
-
-    const sigint_act: posix.Sigaction = .{
-        .handler = .{ .handler = handleSigint },
-        .mask = 0,
-        .flags = 0,
-    };
-    posix.sigaction(SIG.INT, &sigint_act, null);
+    installHandler(@intCast(SIG.INT));
 
     const sigpipe_act: posix.Sigaction = .{
         .handler = .{ .handler = SIG.IGN },
@@ -36,23 +55,86 @@ pub fn install() void {
     posix.sigaction(SIG.PIPE, &sigpipe_act, null);
 }
 
-/// Check for a pending SIGINT and convert it to a catchable error.
+/// Install our generic handler for the given signal number, saving
+/// the previous action for later restoration.
+pub fn installHandler(signum: u6) void {
+    const act: posix.Sigaction = .{
+        .handler = .{ .handler = handleSignal },
+        .mask = 0,
+        .flags = 0,
+    };
+    var old: posix.Sigaction = undefined;
+    posix.sigaction(@intCast(signum), &act, &old);
+    prev_actions[signum] = old;
+}
+
+/// Restore the previous OS signal action and clear the user handler.
+pub fn removeHandler(signum: u6) void {
+    if (prev_actions[signum]) |old| {
+        posix.sigaction(@intCast(signum), &old, null);
+        prev_actions[signum] = null;
+    }
+    user_handlers[signum] = null;
+    signal_pending[signum].store(false, .release);
+}
+
+/// Register a user handler quotation for a signal.
+pub fn setUserHandler(signum: u6, handler: ?Quotation) void {
+    user_handlers[signum] = handler;
+}
+
+/// Retrieve the user handler quotation for a signal, or null.
+pub fn getUserHandler(signum: u6) ?Quotation {
+    return user_handlers[signum];
+}
+
+/// Returns true if the signal number is valid and can be caught
+/// (not SIGKILL or SIGSTOP).
+pub fn isHandleable(signum: i64) bool {
+    if (signum < 1 or signum >= MAX_SIGNALS) return false;
+    const s: u6 = @intCast(signum);
+    if (s == SIG.KILL or s == SIG.STOP) return false;
+    return true;
+}
+
+/// Check all pending signal flags and dispatch handlers.
+///
 /// Called at interpreter safe points (executeInstructions, jitSafepoint).
-pub fn checkInterrupt(ctx: *Context) error{UserThrown}!void {
-    if (sigint_pending.load(.acquire)) {
-        sigint_pending.store(false, .release);
-        ctx.thrown_error = .{
-            .error_type = "interrupted",
-            .message = "interrupted by signal",
-        };
-        return error.UserThrown;
+/// For each pending signal:
+/// - If a user handler is registered: push signal number, execute handler.
+/// - If no handler and signal is SIGINT: raise "interrupted" error.
+/// - If no handler and not SIGINT: consume and ignore.
+pub fn checkPendingSignals(ctx: *Context) error{UserThrown}!void {
+    for (1..MAX_SIGNALS) |i| {
+        if (signal_pending[i].load(.acquire)) {
+            signal_pending[i].store(false, .release);
+
+            if (user_handlers[i]) |handler| {
+                ctx.stack.push(.{ .fixnum = @intCast(i) }) catch return;
+                ctx.executeQuotation(handler) catch |err| {
+                    switch (err) {
+                        error.UserThrown => return error.UserThrown,
+                        else => return,
+                    }
+                };
+            } else if (i == @as(usize, @intCast(SIG.INT))) {
+                ctx.thrown_error = .{
+                    .error_type = "interrupted",
+                    .message = "interrupted by signal",
+                };
+                return error.UserThrown;
+            }
+            // Other signals with no handler: consume and ignore.
+        }
     }
 }
 
-/// Clear pending signal state. Called after the REPL catches an error
-/// so the next iteration starts clean.
+/// Clear all pending signal state. Called after the REPL catches an
+/// error so the next iteration starts clean.
 pub fn reset() void {
-    sigint_pending.store(false, .release);
+    for (1..MAX_SIGNALS) |i| {
+        signal_pending[i].store(false, .release);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -61,38 +143,76 @@ pub fn reset() void {
 
 const testing = std.testing;
 
-test "checkInterrupt returns cleanly when no signal pending" {
+test "checkPendingSignals returns cleanly when no signal pending" {
     var ctx = testContext();
     defer ctx.deinit();
 
-    try checkInterrupt(&ctx);
+    try checkPendingSignals(&ctx);
     try testing.expect(ctx.thrown_error == null);
 }
 
-test "checkInterrupt fires when sigint_pending is set" {
+test "checkPendingSignals fires for SIGINT when no user handler" {
     var ctx = testContext();
     defer ctx.deinit();
 
-    sigint_pending.store(true, .release);
-    defer sigint_pending.store(false, .release);
+    signal_pending[@intCast(SIG.INT)].store(true, .release);
+    defer signal_pending[@intCast(SIG.INT)].store(false, .release);
 
-    const result = checkInterrupt(&ctx);
+    const result = checkPendingSignals(&ctx);
     try testing.expectError(error.UserThrown, result);
     try testing.expect(ctx.thrown_error != null);
     try testing.expectEqualStrings("interrupted", ctx.thrown_error.?.error_type);
     try testing.expectEqualStrings("interrupted by signal", ctx.thrown_error.?.message);
     // Flag should be cleared after consumption
-    try testing.expect(!sigint_pending.load(.acquire));
+    try testing.expect(!signal_pending[@intCast(SIG.INT)].load(.acquire));
 }
 
-test "reset clears pending flag" {
-    sigint_pending.store(true, .release);
+test "checkPendingSignals ignores non-SIGINT with no user handler" {
+    var ctx = testContext();
+    defer ctx.deinit();
+
+    signal_pending[@intCast(SIG.TERM)].store(true, .release);
+    defer signal_pending[@intCast(SIG.TERM)].store(false, .release);
+
+    try checkPendingSignals(&ctx);
+    try testing.expect(ctx.thrown_error == null);
+    // Flag should be cleared
+    try testing.expect(!signal_pending[@intCast(SIG.TERM)].load(.acquire));
+}
+
+test "reset clears all pending flags" {
+    signal_pending[@intCast(SIG.INT)].store(true, .release);
+    signal_pending[@intCast(SIG.TERM)].store(true, .release);
     reset();
-    try testing.expect(!sigint_pending.load(.acquire));
+    try testing.expect(!signal_pending[@intCast(SIG.INT)].load(.acquire));
+    try testing.expect(!signal_pending[@intCast(SIG.TERM)].load(.acquire));
+}
+
+test "isHandleable rejects invalid signals" {
+    try testing.expect(!isHandleable(0));
+    try testing.expect(!isHandleable(-1));
+    try testing.expect(!isHandleable(32));
+    try testing.expect(!isHandleable(SIG.KILL));
+    try testing.expect(!isHandleable(SIG.STOP));
+    try testing.expect(isHandleable(SIG.INT));
+    try testing.expect(isHandleable(SIG.TERM));
+    try testing.expect(isHandleable(SIG.HUP));
 }
 
 test "install does not crash" {
     install();
+}
+
+test "user handler storage round-trips" {
+    const signum: u6 = @intCast(SIG.TERM);
+    try testing.expect(getUserHandler(signum) == null);
+
+    const dummy = Quotation{ .instructions = &.{} };
+    setUserHandler(signum, dummy);
+    try testing.expect(getUserHandler(signum) != null);
+
+    setUserHandler(signum, null);
+    try testing.expect(getUserHandler(signum) == null);
 }
 
 fn testContext() Context {

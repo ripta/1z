@@ -2853,7 +2853,7 @@ pub const Context = struct {
                     }
                 },
                 .call_word => |name| {
-                    signal.checkInterrupt(self) catch |err| {
+                    signal.checkPendingSignals(self) catch |err| {
                         self.pushCallFrame(name, instr.line, instr.column);
                         return self.wordErrorCleanup(name, err);
                     };

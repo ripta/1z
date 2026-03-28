@@ -2608,7 +2608,7 @@ fn jitSafepoint(ctx_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 0;
     const ctx: *Context = @ptrFromInt(ctx_raw);
 
-    signal.checkInterrupt(ctx) catch |err| {
+    signal.checkPendingSignals(ctx) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
     };

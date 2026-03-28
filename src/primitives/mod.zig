@@ -68,6 +68,7 @@ pub const tls = @import("tls.zig");
 pub const sandbox = @import("sandbox.zig");
 pub const filesystem = @import("filesystem.zig");
 pub const hooks = @import("hooks.zig");
+pub const signals = @import("signals.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -128,6 +129,7 @@ pub const extracted_primitives = stack.primitives ++
     tls.primitives ++
     sandbox.primitives ++
     filesystem.primitives ++
+    signals.primitives ++
     ffi_struct.primitives;
 
 // Aggregated registry entries for the native virtual module
@@ -151,4 +153,5 @@ pub const extracted_registry_entries = structs.registry_entries ++
     tls.registry_entries ++
     filesystem.registry_entries ++
     hooks.registry_entries ++
+    signals.registry_entries ++
     misc.registry_entries;

@@ -1,0 +1,34 @@
+\ lib/os/signal.1z - Signal handling API
+
+\ Virtual type wrapping POSIX signal numbers
+signal: virtual{ fixnum } ;
+
+\ Named constants (platform-correct via native lookup)
+SIGINT:   const [ INT: native.signal-number >signal ] ;
+SIGTERM:  const [ TERM: native.signal-number >signal ] ;
+SIGHUP:   const [ HUP: native.signal-number >signal ] ;
+SIGQUIT:  const [ QUIT: native.signal-number >signal ] ;
+SIGPIPE:  const [ PIPE: native.signal-number >signal ] ;
+SIGUSR1:  const [ USR1: native.signal-number >signal ] ;
+SIGUSR2:  const [ USR2: native.signal-number >signal ] ;
+SIGALRM:  const [ ALRM: native.signal-number >signal ] ;
+SIGCHLD:  const [ CHLD: native.signal-number >signal ] ;
+SIGWINCH: const [ WINCH: native.signal-number >signal ] ;
+
+\ Convenience words that unwrap the virtual type before calling the native primitives.
+
+\\ Register a handler quotation for a signal.
+\\ The handler receives the signal number (fixnum) on the stack.
+on-signal: ( signal quot -- ) [ swap unmake-signal swap set-signal-handler ] ;
+
+\\ Remove the handler for a signal, restoring default behavior.
+off-signal: ( signal -- ) [ unmake-signal clear-signal-handler ] ;
+
+\\ Get the handler for a signal, or f if none is registered.
+signal-handler: ( signal -- quot/f ) [ unmake-signal get-signal-handler ] ;
+
+\\ Register a handler for SIGINT (Ctrl-C).
+on-interrupt: ( quot -- ) [ SIGINT swap on-signal ] ;
+
+\\ Register a handler for SIGTERM.
+on-terminate: ( quot -- ) [ SIGTERM swap on-signal ] ;

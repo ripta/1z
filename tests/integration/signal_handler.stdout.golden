@@ -1,0 +1,27 @@
+=== signal constants ===
+Stack: [ ]
+PASS: SIGINT is a signal
+Stack: [ ]
+PASS: SIGTERM is a signal
+Stack: [ ]
+PASS: SIGHUP is a signal
+Stack: [ ]
+PASS: SIGINT unwraps to fixnum
+Stack: [ ]
+PASS: SIGTERM unwraps to fixnum
+Stack: [ ]
+=== handler registration and retrieval ===
+Stack: [ ]
+PASS: SIGTERM has no handler initially
+Stack: [ ]
+Stack: [ ]
+PASS: SIGTERM handler is registered
+Stack: [ ]
+Stack: [ ]
+PASS: SIGTERM handler cleared
+Stack: [ ]
+=== sandbox blocks signal handlers ===
+Stack: [ ]
+Stack: [ [ sandbox{ io } [ SIGTERM [ drop ] on-signal ] with-sandbox ] ]
+PASS: sandbox denies signal handler registration
+Stack: [ ]
