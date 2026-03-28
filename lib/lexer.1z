@@ -1,6 +1,9 @@
 \ lib/lexer.1z - Rule-based tokenizer producing lazy token iterators
 
 use "scanner" ;
+use "strings" ;
+use "conversions" ;
+use "char" ;
 
 \\ A token with a kind (symbol), value (string), and byte offset position.
 token: struct{ kind value pos } ;
@@ -13,8 +16,10 @@ lexer: struct{ rules } ;
 <lexer>: ( rules -- lexer ) [ make-lexer ] ;
 
 \\ Try rules in order. First match wins.
-\\ Each rule's match quotation receives a scanner and returns either
-\\ new-scanner + token on match, or f on no match.
+\\ Each rule's match quotation receives a scanner and returns one of:
+\\   new-scanner token  -- matched, emit token
+\\   new-scanner t      -- consumed input, no token (restart rules)
+\\   f                  -- no match (try next rule)
 (try-rules): ( scanner rules -- new-scanner token ) [
   dup #empty? [
     drop
@@ -31,14 +36,22 @@ lexer: struct{ rules } ;
     2 pick-n swap
     \ scanner rules scanner match-quot
     call
-    \ scanner rules (new-scanner token | f)
+    \ scanner rules (new-scanner token | new-scanner t | f)
     dup f = [
       drop
       1 #drop
       (try-rules)
     ] [
-      \ scanner rules new-scanner token
-      [ nip nip ] dip
+      dup t = [
+        \ consumed, no token: restart all rules with new scanner
+        \ stack: scanner rules new-scanner t
+        drop -rot> nip
+        \ new-scanner rules
+        over at-end? [ 2drop t ] [ (try-rules) ] if
+      ] [
+        \ scanner rules new-scanner token
+        [ nip nip ] dip
+      ] if
     ] if
   ] if
 ] ;
@@ -50,9 +63,15 @@ lexer: struct{ rules } ;
     2drop drop option:none
   ] [
     swap (try-rules)
-    \ state new-scanner token
-    swap 2 pick-n swap 0 swap #nth!
-    drop nip >option:some
+    \ state (new-scanner token | t)
+    dup t = [
+      \ skip rules consumed remaining input
+      2drop option:none
+    ] [
+      \ state new-scanner token
+      swap 2 pick-n swap 0 swap #nth!
+      drop nip >option:some
+    ] if
   ] if
 ] ;
 
@@ -70,4 +89,87 @@ inspect: method{ token } [
   \ kind-str value-str
   [ "<token " swap #append " " #append ] dip
   #append ">" #append
+] ;
+
+\ --- Built-in rules ---
+
+\\ Match a run of decimal digits, optionally followed by '.' and more digits.
+(number-match): ( scanner -- new-scanner token | f ) [
+  dup peek dup f = [ 2drop f ] [
+    digit? [
+      dup position>> swap
+      [ digit? ] take-while
+      \ start-pos scanner' int-str
+      over peek "." = [
+        swap advance
+        [ digit? ] take-while
+        \ start-pos int-str scanner'' frac-str
+        <rot- "." #append swap #append
+        \ start-pos scanner'' full-str
+      ] when
+      <rot- [ number: swap ] dip make-token
+    ] [ drop f ] if
+  ] if
+] ;
+
+\\ Built-in rule matching decimal integers and floats.
+number-rule: ( -- rule ) [
+  H{ kind: number: match: [ (number-match) ] }
+] ;
+
+\\ Match a letter followed by zero or more alphanumeric characters.
+(word-match): ( scanner -- new-scanner token | f ) [
+  dup peek dup f = [ 2drop f ] [
+    alpha? [
+      dup position>> swap
+      [ alnum? ] take-while
+      <rot- [ word: swap ] dip make-token
+    ] [ drop f ] if
+  ] if
+] ;
+
+\\ Built-in rule matching alphabetic identifiers.
+word-rule: ( -- rule ) [
+  H{ kind: word: match: [ (word-match) ] }
+] ;
+
+\\ Try candidates (longest-first) against scanner rest.
+(symbols-match): ( scanner candidates -- new-scanner token | f ) [
+  dup #empty? [ 2drop f ] [
+    dup #first
+    2 pick-n rest over #starts-with? [
+      \ scanner candidates sym
+      [ drop ] dip
+      \ scanner sym
+      2dup expect -rot>
+      \ new-scanner scanner sym
+      swap position>>
+      \ new-scanner sym pos
+      [ symbol: swap ] dip make-token
+    ] [
+      drop 1 #drop (symbols-match)
+    ] if
+  ] if
+] ;
+
+\\ Built-in rule matching any of the given exact strings (longest-first).
+symbols-rule: ( array -- rule ) [
+  [ #len 0 swap - ] #sort-by
+  [ (symbols-match) ] curry
+  H{ kind: symbol: } match: <rot- @set
+] ;
+
+\\ Match one or more whitespace characters, consuming without producing a token.
+(skip-ws-match): ( scanner -- new-scanner t | f ) [
+  dup peek dup f = [ 2drop f ] [
+    whitespace? [
+      [ whitespace? ] skip-while
+      t
+    ] [ drop f ] if
+  ] if
+] ;
+
+\\ Built-in rule that skips whitespace (produces no token).
+skip-whitespace-rule: ( -- rule ) [
+  H{ kind: whitespace: match: [ (skip-ws-match) ] }
 ] ;

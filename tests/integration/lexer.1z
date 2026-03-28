@@ -132,3 +132,82 @@ message: @get "position 2" #in? "error mentions position" assert-true
 "inspect" test-section
 number: "42" 0 make-token inspect
 "<token number: \"42\">" "token inspect format" assert=
+
+\ ===== Built-in rule tests =====
+
+"number-rule integers" test-section
+"42" V{ } number-rule #push! >array <lexer> tokenize #collect
+dup #len 1 "single integer yields one token" assert=
+#first dup kind>> number: "kind is number:" assert=
+value>> "42" "value is 42" assert=
+
+"0" V{ } number-rule #push! >array <lexer> tokenize #collect
+#first value>> "0" "zero" assert=
+
+"number-rule floats" test-section
+"3.14" V{ } number-rule #push! >array <lexer> tokenize #collect
+dup #len 1 "float yields one token" assert=
+#first dup kind>> number: "float kind is number:" assert=
+value>> "3.14" "float value is 3.14" assert=
+
+"0.5" V{ } number-rule #push! >array <lexer> tokenize #collect
+#first value>> "0.5" "float value is 0.5" assert=
+
+"number-rule trailing dot" test-section
+"3." V{ } number-rule #push! >array <lexer> tokenize #collect
+#first value>> "3." "trailing dot kept as 3." assert=
+
+"word-rule" test-section
+"hello" V{ } word-rule #push! >array <lexer> tokenize #collect
+dup #len 1 "word yields one token" assert=
+#first dup kind>> word: "kind is word:" assert=
+value>> "hello" "value is hello" assert=
+
+"abc123" V{ } word-rule #push! >array <lexer> tokenize #collect
+#first value>> "abc123" "word with trailing digits" assert=
+
+"x" V{ } word-rule #push! >array <lexer> tokenize #collect
+#first value>> "x" "single letter" assert=
+
+"symbols-rule longest match" test-section
+{ "+" "++" } symbols-rule
+V{ } swap #push! >array <lexer>
+"++" swap tokenize #collect
+dup #len 1 "++ yields one token (longest match)" assert=
+#first dup kind>> symbol: "kind is symbol:" assert=
+value>> "++" "value is ++ not +" assert=
+
+"symbols-rule multiple" test-section
+{ "(" ")" } symbols-rule
+V{ } swap #push! >array <lexer>
+"()" swap tokenize #collect
+dup #len 2 "() yields two tokens" assert=
+dup 0 #nth value>> "(" "first is (" assert=
+1 #nth value>> ")" "second is )" assert=
+
+"skip-whitespace-rule" test-section
+" hello "
+V{ } skip-whitespace-rule #push! word-rule #push! >array <lexer>
+tokenize #collect
+dup #len 1 "whitespace skipped, one word token" assert=
+#first value>> "hello" "value is hello after skip" assert=
+
+"ab  cd"
+V{ } skip-whitespace-rule #push! word-rule #push! >array <lexer>
+tokenize #collect
+dup #len 2 "two words with whitespace yields two tokens" assert=
+dup 0 #nth value>> "ab" "first word is ab" assert=
+1 #nth value>> "cd" "second word is cd" assert=
+
+"combined rules" test-section
+"x + 42"
+V{ } skip-whitespace-rule #push! word-rule #push!
+number-rule #push! { "+" } symbols-rule #push! >array <lexer>
+tokenize #collect
+dup #len 3 "x + 42 yields three tokens" assert=
+dup 0 #nth dup kind>> word: "first is word:" assert=
+value>> "x" "first is x" assert=
+dup 1 #nth dup kind>> symbol: "second is symbol:" assert=
+value>> "+" "second is +" assert=
+2 #nth dup kind>> number: "third is number:" assert=
+value>> "42" "third is 42" assert=
