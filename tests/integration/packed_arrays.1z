@@ -1,0 +1,115 @@
+use "testing" ;
+use "math/packed" ;
+
+"packed-f64 construction" test-section
+
+{ 1.0 2.0 3.0 } >packed:f64 packed-f64? t ">packed:f64 creates packed-f64" assert=
+{ } >packed:f64 packed-f64? t ">packed:f64 empty array" assert=
+
+"packed-i32 construction" test-section
+
+{ 1 2 3 } >packed:i32 packed-i32? t ">packed:i32 creates packed-i32" assert=
+{ -128 0 127 } >packed:i8 packed-i8? t ">packed:i8 range boundary" assert=
+
+"packed-fill construction" test-section
+
+4 0.0 packed-fill:f64 packed-f64? t "packed-fill:f64 type" assert=
+4 0.0 packed-fill:f64 packed>array { 0.0 0.0 0.0 0.0 } "packed-fill:f64 contents" assert=
+3 42 packed-fill:i32 packed>array { 42 42 42 } "packed-fill:i32 contents" assert=
+
+"packed>array roundtrip" test-section
+
+{ 1.0 2.0 3.0 } >packed:f64 packed>array { 1.0 2.0 3.0 } "f64 roundtrip" assert=
+{ 1 2 3 } >packed:i32 packed>array { 1 2 3 } "i32 roundtrip" assert=
+{ 100 200 } >packed:u16 packed>array { 100 200 } "u16 roundtrip" assert=
+{ -1 0 1 } >packed:i8 packed>array { -1 0 1 } "i8 roundtrip" assert=
+{ } >packed:f64 packed>array { } "empty roundtrip" assert=
+
+"packed-f64 arithmetic" test-section
+
+{ 1.0 2.0 3.0 } >packed:f64 { 4.0 5.0 6.0 } >packed:f64 + packed>array
+{ 5.0 7.0 9.0 } "f64 +" assert=
+
+{ 10.0 20.0 } >packed:f64 { 3.0 7.0 } >packed:f64 - packed>array
+{ 7.0 13.0 } "f64 -" assert=
+
+{ 2.0 3.0 } >packed:f64 { 4.0 5.0 } >packed:f64 * packed>array
+{ 8.0 15.0 } "f64 *" assert=
+
+{ 10.0 20.0 } >packed:f64 { 2.0 5.0 } >packed:f64 / packed>array
+{ 5.0 4.0 } "f64 /" assert=
+
+"packed-i32 arithmetic" test-section
+
+{ 1 2 3 } >packed:i32 { 4 5 6 } >packed:i32 + packed>array
+{ 5 7 9 } "i32 +" assert=
+
+{ 10 20 30 } >packed:i32 { 3 7 10 } >packed:i32 - packed>array
+{ 7 13 20 } "i32 -" assert=
+
+{ 2 3 4 } >packed:i32 { 5 6 7 } >packed:i32 * packed>array
+{ 10 18 28 } "i32 *" assert=
+
+{ 7 -7 10 } >packed:i32 { 2 2 3 } >packed:i32 / packed>array
+{ 3 -3 3 } "i32 / truncating" assert=
+
+"integer wrapping" test-section
+
+{ 127 } >packed:i8 { 1 } >packed:i8 + packed>array
+{ -128 } "i8 overflow wraps" assert=
+
+{ -128 } >packed:i8 { 1 } >packed:i8 - packed>array
+{ 127 } "i8 underflow wraps" assert=
+
+"all element types roundtrip" test-section
+
+{ 1 2 } >packed:i8 packed>array { 1 2 } "i8 roundtrip" assert=
+{ 1 2 } >packed:i16 packed>array { 1 2 } "i16 roundtrip" assert=
+{ 1 2 } >packed:i64 packed>array { 1 2 } "i64 roundtrip" assert=
+{ 1 2 } >packed:u8 packed>array { 1 2 } "u8 roundtrip" assert=
+{ 1 2 } >packed:u16 packed>array { 1 2 } "u16 roundtrip" assert=
+{ 1 2 } >packed:u32 packed>array { 1 2 } "u32 roundtrip" assert=
+{ 1 2 } >packed:u64 packed>array { 1 2 } "u64 roundtrip" assert=
+{ 1.0 2.0 } >packed:f32 packed>array
+dup 0 #nth 1.0 = swap 1 #nth 2.0 = and t "f32 roundtrip" assert=
+
+"all element types arithmetic" test-section
+
+{ 1 2 } >packed:u8 { 3 4 } >packed:u8 + packed>array { 4 6 } "u8 +" assert=
+{ 1 2 } >packed:u16 { 3 4 } >packed:u16 + packed>array { 4 6 } "u16 +" assert=
+{ 1 2 } >packed:u32 { 3 4 } >packed:u32 + packed>array { 4 6 } "u32 +" assert=
+{ 1 2 } >packed:u64 { 3 4 } >packed:u64 + packed>array { 4 6 } "u64 +" assert=
+{ 1 2 } >packed:i16 { 3 4 } >packed:i16 + packed>array { 4 6 } "i16 +" assert=
+{ 1 2 } >packed:i64 { 3 4 } >packed:i64 + packed>array { 4 6 } "i64 +" assert=
+
+{ 1.0 2.0 } >packed:f32 { 3.0 4.0 } >packed:f32 + packed>array
+dup 0 #nth 4.0 = swap 1 #nth 6.0 = and t "f32 +" assert=
+
+"large arrays exercise SIMD path" test-section
+
+\ 32 elements of f64 exercises multiple SIMD chunks
+32 1.0 packed-fill:f64 32 2.0 packed-fill:f64 + packed>array
+dup 0 #nth 3.0 = swap 31 #nth 3.0 = and t "large f64 + first and last" assert=
+
+"error: type mismatch" test-section
+
+[ { 1.0 } >packed:f64 { 1 } >packed:i32 + ] "mixed packed types" assert-error
+
+"error: length mismatch" test-section
+
+[ { 1.0 2.0 } >packed:f64 { 1.0 } >packed:f64 + ] "length mismatch" assert-error
+
+"error: non-numeric input" test-section
+
+[ { "hello" } >packed:f64 ] "non-numeric in >packed:f64" assert-error
+
+"error: out-of-range integer" test-section
+
+[ { 128 } >packed:i8 ] "128 out of range for i8" assert-error
+[ { -129 } >packed:i8 ] "-129 out of range for i8" assert-error
+
+"inspect" test-section
+
+{ 1.0 2.0 3.0 } >packed:f64 inspect "packed-f64{ 1.0 2.0 3.0 }" "f64 inspect" assert=
+{ 1 2 3 } >packed:i32 inspect "packed-i32{ 1 2 3 }" "i32 inspect" assert=
+{ } >packed:f64 inspect "packed-f64{ }" "empty inspect" assert=

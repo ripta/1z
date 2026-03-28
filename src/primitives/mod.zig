@@ -69,6 +69,7 @@ pub const sandbox = @import("sandbox.zig");
 pub const filesystem = @import("filesystem.zig");
 pub const hooks = @import("hooks.zig");
 pub const signals = @import("signals.zig");
+pub const packed_arrays = @import("packed.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -154,4 +155,5 @@ pub const extracted_registry_entries = structs.registry_entries ++
     filesystem.registry_entries ++
     hooks.registry_entries ++
     signals.registry_entries ++
-    misc.registry_entries;
+    misc.registry_entries ++
+    packed_arrays.registry_entries;

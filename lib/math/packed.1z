@@ -1,0 +1,137 @@
+\ lib/math/packed.1z - Packed array types with SIMD-accelerated element-wise arithmetic
+
+use "strings" ;
+
+\ Virtual type definitions: each packed type wraps a byte-array
+packed-i8:  virtual{ byte-array } ;
+packed-i16: virtual{ byte-array } ;
+packed-i32: virtual{ byte-array } ;
+packed-i64: virtual{ byte-array } ;
+packed-u8:  virtual{ byte-array } ;
+packed-u16: virtual{ byte-array } ;
+packed-u32: virtual{ byte-array } ;
+packed-u64: virtual{ byte-array } ;
+packed-f32: virtual{ byte-array } ;
+packed-f64: virtual{ byte-array } ;
+
+\ Construction: >packed:T ( array -- packed-T )
+>packed:i8:  ( array -- packed-i8 )  [ "i8" native.packed-from-array >packed-i8 ] ;
+>packed:i16: ( array -- packed-i16 ) [ "i16" native.packed-from-array >packed-i16 ] ;
+>packed:i32: ( array -- packed-i32 ) [ "i32" native.packed-from-array >packed-i32 ] ;
+>packed:i64: ( array -- packed-i64 ) [ "i64" native.packed-from-array >packed-i64 ] ;
+>packed:u8:  ( array -- packed-u8 )  [ "u8" native.packed-from-array >packed-u8 ] ;
+>packed:u16: ( array -- packed-u16 ) [ "u16" native.packed-from-array >packed-u16 ] ;
+>packed:u32: ( array -- packed-u32 ) [ "u32" native.packed-from-array >packed-u32 ] ;
+>packed:u64: ( array -- packed-u64 ) [ "u64" native.packed-from-array >packed-u64 ] ;
+>packed:f32: ( array -- packed-f32 ) [ "f32" native.packed-from-array >packed-f32 ] ;
+>packed:f64: ( array -- packed-f64 ) [ "f64" native.packed-from-array >packed-f64 ] ;
+
+\ Construction: packed-fill:T ( n value -- packed-T )
+packed-fill:i8:  ( n value -- packed-i8 )  [ "i8" native.packed-fill-impl >packed-i8 ] ;
+packed-fill:i16: ( n value -- packed-i16 ) [ "i16" native.packed-fill-impl >packed-i16 ] ;
+packed-fill:i32: ( n value -- packed-i32 ) [ "i32" native.packed-fill-impl >packed-i32 ] ;
+packed-fill:i64: ( n value -- packed-i64 ) [ "i64" native.packed-fill-impl >packed-i64 ] ;
+packed-fill:u8:  ( n value -- packed-u8 )  [ "u8" native.packed-fill-impl >packed-u8 ] ;
+packed-fill:u16: ( n value -- packed-u16 ) [ "u16" native.packed-fill-impl >packed-u16 ] ;
+packed-fill:u32: ( n value -- packed-u32 ) [ "u32" native.packed-fill-impl >packed-u32 ] ;
+packed-fill:u64: ( n value -- packed-u64 ) [ "u64" native.packed-fill-impl >packed-u64 ] ;
+packed-fill:f32: ( n value -- packed-f32 ) [ "f32" native.packed-fill-impl >packed-f32 ] ;
+packed-fill:f64: ( n value -- packed-f64 ) [ "f64" native.packed-fill-impl >packed-f64 ] ;
+
+\ Conversion: packed>array ( packed-T -- array )
+packed>array: generic ( packed-T -- array ) [
+  f "packed>array: not a packed type" EInvalidArgument make-error throw
+] ;
+packed>array: method{ packed-i8 } [ native.packed-to-array ] ;
+packed>array: method{ packed-i16 } [ native.packed-to-array ] ;
+packed>array: method{ packed-i32 } [ native.packed-to-array ] ;
+packed>array: method{ packed-i64 } [ native.packed-to-array ] ;
+packed>array: method{ packed-u8 } [ native.packed-to-array ] ;
+packed>array: method{ packed-u16 } [ native.packed-to-array ] ;
+packed>array: method{ packed-u32 } [ native.packed-to-array ] ;
+packed>array: method{ packed-u64 } [ native.packed-to-array ] ;
+packed>array: method{ packed-f32 } [ native.packed-to-array ] ;
+packed>array: method{ packed-f64 } [ native.packed-to-array ] ;
+
+\ Element-wise arithmetic: + - * /
++: method{ packed-i8 packed-i8 } [ native.packed-add ] ;
+-: method{ packed-i8 packed-i8 } [ native.packed-sub ] ;
+*: method{ packed-i8 packed-i8 } [ native.packed-mul ] ;
+/: method{ packed-i8 packed-i8 } [ native.packed-div ] ;
+
++: method{ packed-i16 packed-i16 } [ native.packed-add ] ;
+-: method{ packed-i16 packed-i16 } [ native.packed-sub ] ;
+*: method{ packed-i16 packed-i16 } [ native.packed-mul ] ;
+/: method{ packed-i16 packed-i16 } [ native.packed-div ] ;
+
++: method{ packed-i32 packed-i32 } [ native.packed-add ] ;
+-: method{ packed-i32 packed-i32 } [ native.packed-sub ] ;
+*: method{ packed-i32 packed-i32 } [ native.packed-mul ] ;
+/: method{ packed-i32 packed-i32 } [ native.packed-div ] ;
+
++: method{ packed-i64 packed-i64 } [ native.packed-add ] ;
+-: method{ packed-i64 packed-i64 } [ native.packed-sub ] ;
+*: method{ packed-i64 packed-i64 } [ native.packed-mul ] ;
+/: method{ packed-i64 packed-i64 } [ native.packed-div ] ;
+
++: method{ packed-u8 packed-u8 } [ native.packed-add ] ;
+-: method{ packed-u8 packed-u8 } [ native.packed-sub ] ;
+*: method{ packed-u8 packed-u8 } [ native.packed-mul ] ;
+/: method{ packed-u8 packed-u8 } [ native.packed-div ] ;
+
++: method{ packed-u16 packed-u16 } [ native.packed-add ] ;
+-: method{ packed-u16 packed-u16 } [ native.packed-sub ] ;
+*: method{ packed-u16 packed-u16 } [ native.packed-mul ] ;
+/: method{ packed-u16 packed-u16 } [ native.packed-div ] ;
+
++: method{ packed-u32 packed-u32 } [ native.packed-add ] ;
+-: method{ packed-u32 packed-u32 } [ native.packed-sub ] ;
+*: method{ packed-u32 packed-u32 } [ native.packed-mul ] ;
+/: method{ packed-u32 packed-u32 } [ native.packed-div ] ;
+
++: method{ packed-u64 packed-u64 } [ native.packed-add ] ;
+-: method{ packed-u64 packed-u64 } [ native.packed-sub ] ;
+*: method{ packed-u64 packed-u64 } [ native.packed-mul ] ;
+/: method{ packed-u64 packed-u64 } [ native.packed-div ] ;
+
++: method{ packed-f32 packed-f32 } [ native.packed-add ] ;
+-: method{ packed-f32 packed-f32 } [ native.packed-sub ] ;
+*: method{ packed-f32 packed-f32 } [ native.packed-mul ] ;
+/: method{ packed-f32 packed-f32 } [ native.packed-div ] ;
+
++: method{ packed-f64 packed-f64 } [ native.packed-add ] ;
+-: method{ packed-f64 packed-f64 } [ native.packed-sub ] ;
+*: method{ packed-f64 packed-f64 } [ native.packed-mul ] ;
+/: method{ packed-f64 packed-f64 } [ native.packed-div ] ;
+
+\ Display support
+
+(packed-inspect-helper): ( packed-T type-name -- string ) [
+  "packed-" swap #append "{ " #append
+  swap packed>array
+  dup #len 0 = [ drop "}" #append ] [
+    >iterator [ inspect ] #map #collect " " #join #append " }" #append
+  ] if
+] ;
+
+inspect: method{ packed-i8 } [ "i8" (packed-inspect-helper) ] ;
+inspect: method{ packed-i16 } [ "i16" (packed-inspect-helper) ] ;
+inspect: method{ packed-i32 } [ "i32" (packed-inspect-helper) ] ;
+inspect: method{ packed-i64 } [ "i64" (packed-inspect-helper) ] ;
+inspect: method{ packed-u8 } [ "u8" (packed-inspect-helper) ] ;
+inspect: method{ packed-u16 } [ "u16" (packed-inspect-helper) ] ;
+inspect: method{ packed-u32 } [ "u32" (packed-inspect-helper) ] ;
+inspect: method{ packed-u64 } [ "u64" (packed-inspect-helper) ] ;
+inspect: method{ packed-f32 } [ "f32" (packed-inspect-helper) ] ;
+inspect: method{ packed-f64 } [ "f64" (packed-inspect-helper) ] ;
+
+>string: method{ packed-i8 } [ inspect ] ;
+>string: method{ packed-i16 } [ inspect ] ;
+>string: method{ packed-i32 } [ inspect ] ;
+>string: method{ packed-i64 } [ inspect ] ;
+>string: method{ packed-u8 } [ inspect ] ;
+>string: method{ packed-u16 } [ inspect ] ;
+>string: method{ packed-u32 } [ inspect ] ;
+>string: method{ packed-u64 } [ inspect ] ;
+>string: method{ packed-f32 } [ inspect ] ;
+>string: method{ packed-f64 } [ inspect ] ;

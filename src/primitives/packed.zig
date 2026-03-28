@@ -1,0 +1,460 @@
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const Context = @import("../context.zig").Context;
+const value_mod = @import("../value.zig");
+const Value = value_mod.Value;
+const ByteArray = value_mod.ByteArray;
+const VirtualType = value_mod.VirtualType;
+const BigIntManaged = value_mod.BigIntManaged;
+const helpers = @import("helpers.zig");
+const RegistryEntry = @import("types.zig").RegistryEntry;
+const packed_kernels = @import("../packed.zig");
+
+pub const registry_entries = [_]RegistryEntry{
+    .{ .name = "packed-from-array", .func = nativePackedFromArray, .stack_effect = "array elem-type-str -- byte-array" },
+    .{ .name = "packed-fill-impl", .func = nativePackedFill, .stack_effect = "n value elem-type-str -- byte-array" },
+    .{ .name = "packed-to-array", .func = nativePackedToArray, .stack_effect = "packed-T -- array" },
+    .{ .name = "packed-add", .func = nativePackedAdd, .stack_effect = "packed-T packed-T -- packed-T" },
+    .{ .name = "packed-sub", .func = nativePackedSub, .stack_effect = "packed-T packed-T -- packed-T" },
+    .{ .name = "packed-mul", .func = nativePackedMul, .stack_effect = "packed-T packed-T -- packed-T" },
+    .{ .name = "packed-div", .func = nativePackedDiv, .stack_effect = "packed-T packed-T -- packed-T" },
+};
+
+const PackedElementType = enum {
+    i8,
+    i16,
+    i32,
+    i64,
+    u8,
+    u16,
+    u32,
+    u64,
+    f32,
+    f64,
+
+    fn fromString(s: []const u8) ?PackedElementType {
+        const map = std.StaticStringMap(PackedElementType).initComptime(.{
+            .{ "i8", .i8 },
+            .{ "i16", .i16 },
+            .{ "i32", .i32 },
+            .{ "i64", .i64 },
+            .{ "u8", .u8 },
+            .{ "u16", .u16 },
+            .{ "u32", .u32 },
+            .{ "u64", .u64 },
+            .{ "f32", .f32 },
+            .{ "f64", .f64 },
+        });
+        return map.get(s);
+    }
+
+    fn fromTagName(name: []const u8) ?PackedElementType {
+        if (std.mem.startsWith(u8, name, "packed-")) {
+            return fromString(name["packed-".len..]);
+        }
+        return null;
+    }
+
+    fn elemSize(self: PackedElementType) usize {
+        return switch (self) {
+            .i8, .u8 => 1,
+            .i16, .u16 => 2,
+            .i32, .u32, .f32 => 4,
+            .i64, .u64, .f64 => 8,
+        };
+    }
+
+    fn typeName(self: PackedElementType) []const u8 {
+        return switch (self) {
+            .i8 => "i8",
+            .i16 => "i16",
+            .i32 => "i32",
+            .i64 => "i64",
+            .u8 => "u8",
+            .u16 => "u16",
+            .u32 => "u32",
+            .u64 => "u64",
+            .f32 => "f32",
+            .f64 => "f64",
+        };
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Construction: packed-from-array ( array elem-type-str -- byte-array )
+// ---------------------------------------------------------------------------
+
+/// Convert a 1z array of numbers to a byte-array with packed element encoding.
+fn nativePackedFromArray(ctx: *Context) anyerror!void {
+    const alloc = ctx.containerAllocator();
+    const arena = ctx.arena.allocator();
+
+    const type_str_val = try ctx.stack.pop();
+    const arr_val = try ctx.stack.pop();
+
+    const type_str = switch (type_str_val) {
+        .string => |s| s,
+        else => {
+            helpers.setTypeMismatchError(ctx, "string", type_str_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const elem_type = PackedElementType.fromString(type_str) orelse {
+        helpers.setErrorContext(ctx, "packed-from-array: unknown element type \"{s}\"", .{type_str});
+        return error.TypeMismatch;
+    };
+
+    const items = switch (arr_val) {
+        .array => |a| a,
+        else => {
+            helpers.setTypeMismatchError(ctx, "array", arr_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const byte_len = items.len * elem_type.elemSize();
+    const ba = try alloc.create(ByteArray);
+    ba.* = ByteArray{};
+    try ba.ensureTotalCapacity(alloc, byte_len);
+    ba.items.len = byte_len;
+
+    switch (elem_type) {
+        .f64 => try writeElements(f64, ctx, arena, items, ba.items),
+        .f32 => try writeElements(f32, ctx, arena, items, ba.items),
+        .i8 => try writeElements(i8, ctx, arena, items, ba.items),
+        .i16 => try writeElements(i16, ctx, arena, items, ba.items),
+        .i32 => try writeElements(i32, ctx, arena, items, ba.items),
+        .i64 => try writeElements(i64, ctx, arena, items, ba.items),
+        .u8 => try writeElements(u8, ctx, arena, items, ba.items),
+        .u16 => try writeElements(u16, ctx, arena, items, ba.items),
+        .u32 => try writeElements(u32, ctx, arena, items, ba.items),
+        .u64 => try writeElements(u64, ctx, arena, items, ba.items),
+    }
+
+    try ctx.stack.push(.{ .byte_array = ba });
+}
+
+fn writeElements(comptime T: type, ctx: *Context, arena: Allocator, items: []const Value, out: []u8) !void {
+    for (items, 0..) |val, i| {
+        packed_kernels.writeElement(T, out, i, try valueToElement(T, ctx, arena, val));
+    }
+}
+
+fn valueToElement(comptime T: type, ctx: *Context, arena: Allocator, val: Value) !T {
+    const info = @typeInfo(T);
+    if (info == .float) {
+        return switch (val) {
+            .float => |f| @floatCast(f),
+            .fixnum => |n| @floatFromInt(n),
+            .bignum => |b| blk: {
+                const str = b.toConst().toStringAlloc(arena, 10, .lower) catch {
+                    helpers.setErrorContext(ctx, "packed-from-array: bignum too large for {s}", .{@typeName(T)});
+                    return error.TypeMismatch;
+                };
+                break :blk std.fmt.parseFloat(T, str) catch {
+                    helpers.setErrorContext(ctx, "packed-from-array: cannot convert bignum to {s}", .{@typeName(T)});
+                    return error.TypeMismatch;
+                };
+            },
+            else => {
+                helpers.setErrorContext(ctx, "packed-from-array: expected number, got {s}", .{helpers.valueTypeName(val)});
+                return error.TypeMismatch;
+            },
+        };
+    } else if (info == .int) {
+        const n: i64 = switch (val) {
+            .fixnum => |f| f,
+            .float => |f| blk: {
+                if (f != @trunc(f)) {
+                    helpers.setErrorContext(ctx, "packed-from-array: float {d} is not an integer", .{f});
+                    return error.TypeMismatch;
+                }
+                break :blk @intFromFloat(f);
+            },
+            else => {
+                helpers.setErrorContext(ctx, "packed-from-array: expected number, got {s}", .{helpers.valueTypeName(val)});
+                return error.TypeMismatch;
+            },
+        };
+        return std.math.cast(T, n) orelse {
+            helpers.setErrorContext(ctx, "packed-from-array: value {d} out of range for {s}", .{ n, @typeName(T) });
+            return error.TypeMismatch;
+        };
+    } else {
+        unreachable;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Construction: packed-fill-impl ( n value elem-type-str -- byte-array )
+// ---------------------------------------------------------------------------
+
+fn nativePackedFill(ctx: *Context) anyerror!void {
+    const alloc = ctx.containerAllocator();
+    const arena = ctx.arena.allocator();
+
+    const type_str_val = try ctx.stack.pop();
+    const value_val = try ctx.stack.pop();
+    const n_val = try ctx.stack.pop();
+
+    const type_str = switch (type_str_val) {
+        .string => |s| s,
+        else => {
+            helpers.setTypeMismatchError(ctx, "string", type_str_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const elem_type = PackedElementType.fromString(type_str) orelse {
+        helpers.setErrorContext(ctx, "packed-fill: unknown element type \"{s}\"", .{type_str});
+        return error.TypeMismatch;
+    };
+
+    const count: usize = switch (n_val) {
+        .fixnum => |n| blk: {
+            if (n < 0) {
+                helpers.setErrorContext(ctx, "packed-fill: count must be non-negative, got {d}", .{n});
+                return error.TypeMismatch;
+            }
+            break :blk @intCast(n);
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "fixnum", n_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const byte_len = count * elem_type.elemSize();
+    const ba = try alloc.create(ByteArray);
+    ba.* = ByteArray{};
+    try ba.ensureTotalCapacity(alloc, byte_len);
+    ba.items.len = byte_len;
+
+    switch (elem_type) {
+        .f64 => packed_kernels.fillPacked(f64, ba.items, try valueToElement(f64, ctx, arena, value_val)),
+        .f32 => packed_kernels.fillPacked(f32, ba.items, try valueToElement(f32, ctx, arena, value_val)),
+        .i8 => packed_kernels.fillPacked(i8, ba.items, try valueToElement(i8, ctx, arena, value_val)),
+        .i16 => packed_kernels.fillPacked(i16, ba.items, try valueToElement(i16, ctx, arena, value_val)),
+        .i32 => packed_kernels.fillPacked(i32, ba.items, try valueToElement(i32, ctx, arena, value_val)),
+        .i64 => packed_kernels.fillPacked(i64, ba.items, try valueToElement(i64, ctx, arena, value_val)),
+        .u8 => packed_kernels.fillPacked(u8, ba.items, try valueToElement(u8, ctx, arena, value_val)),
+        .u16 => packed_kernels.fillPacked(u16, ba.items, try valueToElement(u16, ctx, arena, value_val)),
+        .u32 => packed_kernels.fillPacked(u32, ba.items, try valueToElement(u32, ctx, arena, value_val)),
+        .u64 => packed_kernels.fillPacked(u64, ba.items, try valueToElement(u64, ctx, arena, value_val)),
+    }
+
+    try ctx.stack.push(.{ .byte_array = ba });
+}
+
+// ---------------------------------------------------------------------------
+// Conversion: packed-to-array ( packed-T -- array )
+// ---------------------------------------------------------------------------
+
+fn nativePackedToArray(ctx: *Context) anyerror!void {
+    const alloc = ctx.containerAllocator();
+
+    const val = try ctx.stack.pop();
+    const tagged = switch (val) {
+        .tagged => |t| t,
+        else => {
+            helpers.setTypeMismatchError(ctx, "packed-*", val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const elem_type = PackedElementType.fromTagName(tagged.tag.name) orelse {
+        helpers.setErrorContext(ctx, "packed-to-array: not a packed type: {s}", .{tagged.tag.name});
+        return error.TypeMismatch;
+    };
+
+    const ba = switch (tagged.inner.*) {
+        .byte_array => |b| b,
+        else => {
+            helpers.setErrorContext(ctx, "packed-to-array: inner value is not byte-array", .{});
+            return error.TypeMismatch;
+        },
+    };
+
+    const count = ba.items.len / elem_type.elemSize();
+    const result = try alloc.alloc(Value, count);
+
+    switch (elem_type) {
+        .f64 => readElements(f64, ba.items, result),
+        .f32 => readElements(f32, ba.items, result),
+        .i8 => readElements(i8, ba.items, result),
+        .i16 => readElements(i16, ba.items, result),
+        .i32 => readElements(i32, ba.items, result),
+        .i64 => readElements(i64, ba.items, result),
+        .u8 => readElements(u8, ba.items, result),
+        .u16 => readElements(u16, ba.items, result),
+        .u32 => readElements(u32, ba.items, result),
+        .u64 => readElements(u64, ba.items, result),
+    }
+
+    try ctx.stack.push(.{ .array = result });
+}
+
+fn readElements(comptime T: type, bytes: []const u8, out: []Value) void {
+    const n = packed_kernels.elementCount(T, bytes);
+    for (0..n) |i| {
+        out[i] = elementToValue(T, packed_kernels.readElement(T, bytes, i));
+    }
+}
+
+fn elementToValue(comptime T: type, elem: T) Value {
+    const info = @typeInfo(T);
+    if (info == .float) {
+        return .{ .float = @floatCast(elem) };
+    } else if (info == .int) {
+        if (info.int.signedness == .unsigned) {
+            // uint: always fit in i64 for u8..u32, check for u64
+            if (@sizeOf(T) <= 4) {
+                return .{ .fixnum = @intCast(elem) };
+            } else {
+                // u64: check if it fits in i64
+                if (elem <= std.math.maxInt(i64)) {
+                    return .{ .fixnum = @intCast(elem) };
+                } else {
+                    // Would need bignum; for now, truncate to i64
+                    // TODO: promote to bignum for u64 values > maxInt(i64)
+                    return .{ .fixnum = @bitCast(@as(u64, elem)) };
+                }
+            }
+        } else {
+            // int: i8..i32 always fit; i64 is fixnum directly
+            return .{ .fixnum = @intCast(elem) };
+        }
+    } else {
+        unreachable;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Arithmetic helpers
+// ---------------------------------------------------------------------------
+
+fn packedArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyerror!void {
+    const alloc = ctx.containerAllocator();
+
+    const b_val = try ctx.stack.pop();
+    const a_val = try ctx.stack.pop();
+
+    const a_tagged = switch (a_val) {
+        .tagged => |t| t,
+        else => {
+            helpers.setTypeMismatchError(ctx, "packed-*", a_val);
+            return error.TypeMismatch;
+        },
+    };
+    const b_tagged = switch (b_val) {
+        .tagged => |t| t,
+        else => {
+            helpers.setTypeMismatchError(ctx, "packed-*", b_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    // validate both must be the same packed type
+    if (a_tagged.tag != b_tagged.tag) {
+        const op_name = switch (op) {
+            .add => "+",
+            .sub => "-",
+            .mul => "*",
+            .div => "/",
+        };
+        helpers.setErrorContext(ctx, "{s} {s} {s}: element type mismatch", .{ a_tagged.tag.name, op_name, b_tagged.tag.name });
+        return error.TypeMismatch;
+    }
+
+    const a_ba = switch (a_tagged.inner.*) {
+        .byte_array => |b| b,
+        else => {
+            helpers.setErrorContext(ctx, "packed arithmetic: inner value is not byte-array", .{});
+            return error.TypeMismatch;
+        },
+    };
+    const b_ba = switch (b_tagged.inner.*) {
+        .byte_array => |b| b,
+        else => {
+            helpers.setErrorContext(ctx, "packed arithmetic: inner value is not byte-array", .{});
+            return error.TypeMismatch;
+        },
+    };
+
+    const elem_type = PackedElementType.fromTagName(a_tagged.tag.name) orelse {
+        helpers.setErrorContext(ctx, "packed arithmetic: not a packed type: {s}", .{a_tagged.tag.name});
+        return error.TypeMismatch;
+    };
+
+    // check lenghts match
+    if (a_ba.items.len != b_ba.items.len) {
+        const a_count = a_ba.items.len / elem_type.elemSize();
+        const b_count = b_ba.items.len / elem_type.elemSize();
+        const op_name = switch (op) {
+            .add => "+",
+            .sub => "-",
+            .mul => "*",
+            .div => "/",
+        };
+        helpers.setErrorContext(ctx, "{s} {s}: length mismatch ({d} vs {d} elements)", .{ a_tagged.tag.name, op_name, a_count, b_count });
+        return error.TypeMismatch;
+    }
+
+    const out_ba = try alloc.create(ByteArray);
+    out_ba.* = ByteArray{};
+    try out_ba.ensureTotalCapacity(alloc, a_ba.items.len);
+    out_ba.items.len = a_ba.items.len;
+
+    callKernel(op, elem_type, a_ba.items, b_ba.items, out_ba.items);
+
+    const inner = try alloc.create(Value);
+    inner.* = .{ .byte_array = out_ba };
+    try ctx.stack.push(.{
+        .tagged = .{
+            .tag = a_tagged.tag,
+            .inner = inner,
+        },
+    });
+}
+
+fn callKernel(comptime op: packed_kernels.Op, elem_type: PackedElementType, a: []const u8, b: []const u8, out: []u8) void {
+    switch (elem_type) {
+        inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
+            const T = switch (et) {
+                .f64 => f64,
+                .f32 => f32,
+                .i8 => i8,
+                .i16 => i16,
+                .i32 => i32,
+                .i64 => i64,
+                .u8 => u8,
+                .u16 => u16,
+                .u32 => u32,
+                .u64 => u64,
+            };
+            switch (op) {
+                .add => packed_kernels.addPacked(T, a, b, out),
+                .sub => packed_kernels.subPacked(T, a, b, out),
+                .mul => packed_kernels.mulPacked(T, a, b, out),
+                .div => packed_kernels.divPacked(T, a, b, out),
+            }
+        },
+    }
+}
+
+fn nativePackedAdd(ctx: *Context) anyerror!void {
+    return packedArithmeticOp(.add, ctx);
+}
+
+fn nativePackedSub(ctx: *Context) anyerror!void {
+    return packedArithmeticOp(.sub, ctx);
+}
+
+fn nativePackedMul(ctx: *Context) anyerror!void {
+    return packedArithmeticOp(.mul, ctx);
+}
+
+fn nativePackedDiv(ctx: *Context) anyerror!void {
+    return packedArithmeticOp(.div, ctx);
+}

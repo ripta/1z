@@ -1,0 +1,135 @@
+=== packed-f64 construction ===
+Stack: [ ]
+PASS: >packed:f64 creates packed-f64
+Stack: [ ]
+PASS: >packed:f64 empty array
+Stack: [ ]
+=== packed-i32 construction ===
+Stack: [ ]
+PASS: >packed:i32 creates packed-i32
+Stack: [ ]
+PASS: >packed:i8 range boundary
+Stack: [ ]
+=== packed-fill construction ===
+Stack: [ ]
+PASS: packed-fill:f64 type
+Stack: [ ]
+PASS: packed-fill:f64 contents
+Stack: [ ]
+PASS: packed-fill:i32 contents
+Stack: [ ]
+=== packed>array roundtrip ===
+Stack: [ ]
+PASS: f64 roundtrip
+Stack: [ ]
+PASS: i32 roundtrip
+Stack: [ ]
+PASS: u16 roundtrip
+Stack: [ ]
+PASS: i8 roundtrip
+Stack: [ ]
+PASS: empty roundtrip
+Stack: [ ]
+=== packed-f64 arithmetic ===
+Stack: [ ]
+Stack: [ { 5.0 7.0 9.0 } ]
+PASS: f64 +
+Stack: [ ]
+Stack: [ { 7.0 13.0 } ]
+PASS: f64 -
+Stack: [ ]
+Stack: [ { 8.0 15.0 } ]
+PASS: f64 *
+Stack: [ ]
+Stack: [ { 5.0 4.0 } ]
+PASS: f64 /
+Stack: [ ]
+=== packed-i32 arithmetic ===
+Stack: [ ]
+Stack: [ { 5 7 9 } ]
+PASS: i32 +
+Stack: [ ]
+Stack: [ { 7 13 20 } ]
+PASS: i32 -
+Stack: [ ]
+Stack: [ { 10 18 28 } ]
+PASS: i32 *
+Stack: [ ]
+Stack: [ { 3 -3 3 } ]
+PASS: i32 / truncating
+Stack: [ ]
+=== integer wrapping ===
+Stack: [ ]
+Stack: [ { -128 } ]
+PASS: i8 overflow wraps
+Stack: [ ]
+Stack: [ { 127 } ]
+PASS: i8 underflow wraps
+Stack: [ ]
+=== all element types roundtrip ===
+Stack: [ ]
+PASS: i8 roundtrip
+Stack: [ ]
+PASS: i16 roundtrip
+Stack: [ ]
+PASS: i64 roundtrip
+Stack: [ ]
+PASS: u8 roundtrip
+Stack: [ ]
+PASS: u16 roundtrip
+Stack: [ ]
+PASS: u32 roundtrip
+Stack: [ ]
+PASS: u64 roundtrip
+Stack: [ ]
+Stack: [ { 1.0 2.0 } ]
+PASS: f32 roundtrip
+Stack: [ ]
+=== all element types arithmetic ===
+Stack: [ ]
+PASS: u8 +
+Stack: [ ]
+PASS: u16 +
+Stack: [ ]
+PASS: u32 +
+Stack: [ ]
+PASS: u64 +
+Stack: [ ]
+PASS: i16 +
+Stack: [ ]
+PASS: i64 +
+Stack: [ ]
+Stack: [ { 4.0 6.0 } ]
+PASS: f32 +
+Stack: [ ]
+=== large arrays exercise SIMD path ===
+Stack: [ ]
+Stack: [ { 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 } ]
+PASS: large f64 + first and last
+Stack: [ ]
+=== error: type mismatch ===
+Stack: [ ]
+PASS: mixed packed types
+Stack: [ ]
+=== error: length mismatch ===
+Stack: [ ]
+PASS: length mismatch
+Stack: [ ]
+=== error: non-numeric input ===
+Stack: [ ]
+PASS: non-numeric in >packed:f64
+Stack: [ ]
+=== error: out-of-range integer ===
+Stack: [ ]
+PASS: 128 out of range for i8
+Stack: [ ]
+PASS: -129 out of range for i8
+Stack: [ ]
+=== inspect ===
+Stack: [ ]
+PASS: f64 inspect
+Stack: [ ]
+PASS: i32 inspect
+Stack: [ ]
+PASS: empty inspect
+Stack: [ ]
