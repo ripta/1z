@@ -82,6 +82,24 @@ pub const JitDispatchTable = struct {
         self.entries.items[word_id].call_count = 0;
         self.entries.items[word_id].uncompilable = false;
     }
+
+    /// Grow the entries array to at least `count` slots, filling new slots
+    /// with null placeholders. Used by AOT to pre-allocate the dispatch table.
+    pub fn ensureCapacity(self: *JitDispatchTable, count: u32) !void {
+        while (self.entries.items.len < count) {
+            try self.entries.append(self.allocator, .{
+                .code_ptr = null,
+                .jit_buf = null,
+                .word_name = "",
+            });
+        }
+    }
+
+    /// Set the code pointer for a word ID without a JitBuffer. Used by AOT
+    /// where compiled code lives in the executable's text segment.
+    pub fn setCodePtr(self: *JitDispatchTable, word_id: u32, code_ptr: *const anyopaque) void {
+        self.entries.items[word_id].code_ptr = code_ptr;
+    }
 };
 
 // =============================================================================
@@ -235,4 +253,45 @@ test "multiple IDs coexist independently" {
     try std.testing.expectEqual(null, entry1.code_ptr);
     try std.testing.expectEqualStrings("alpha", entry0.word_name);
     try std.testing.expectEqualStrings("beta", entry1.word_name);
+}
+
+test "ensureCapacity grows table to requested size" {
+    var table = JitDispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    try table.ensureCapacity(5);
+    try std.testing.expectEqual(@as(usize, 5), table.entries.items.len);
+
+    for (0..5) |i| {
+        const entry = table.get(@intCast(i)).?;
+        try std.testing.expectEqual(null, entry.code_ptr);
+    }
+}
+
+test "ensureCapacity is no-op when already large enough" {
+    var table = JitDispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    _ = try table.assignId("foo");
+    _ = try table.assignId("bar");
+    _ = try table.assignId("baz");
+
+    try table.ensureCapacity(2);
+    try std.testing.expectEqual(@as(usize, 3), table.entries.items.len);
+}
+
+test "setCodePtr sets pointer without JitBuffer" {
+    var table = JitDispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    try table.ensureCapacity(3);
+
+    var dummy: u8 = 0;
+    const fake_ptr: *const anyopaque = &dummy;
+    table.setCodePtr(1, fake_ptr);
+
+    try std.testing.expectEqual(null, table.get(0).?.code_ptr);
+    try std.testing.expectEqual(fake_ptr, table.get(1).?.code_ptr.?);
+    try std.testing.expectEqual(null, table.get(1).?.jit_buf);
+    try std.testing.expectEqual(null, table.get(2).?.code_ptr);
 }

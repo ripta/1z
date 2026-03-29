@@ -148,6 +148,33 @@ const char *onez_last_error(onez_t ctx);
  */
 int onez_set_stdlib_path(onez_t ctx, const char *path, size_t len);
 
+/* ---- AOT Runtime ---- */
+
+/*
+ * Initialize the AOT runtime. Like onez_init but accepts argc/argv so that
+ * the program can access command-line arguments via sys-info.
+ *
+ * Returns an opaque runtime handle as uintptr_t, or 0 on failure.
+ */
+uintptr_t onez_runtime_init(int argc, char **argv);
+
+/*
+ * Register the AOT-compiled dispatch table with the runtime.
+ * `table` is an array of function pointers (NULL for uncompiled slots).
+ * `size` is the number of entries.
+ */
+int onez_runtime_register_compiled(uintptr_t rt, int32_t (**table)(uintptr_t), const char **names, uint32_t size);
+
+/*
+ * Execute the AOT entry word. Returns 0 on success, non-zero on error.
+ */
+int32_t onez_runtime_run(uintptr_t rt, uint32_t entry_word_id);
+
+/*
+ * Shut down the runtime and free all resources.
+ */
+void onez_runtime_shutdown(uintptr_t rt);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test lsp-test update-golden update-fmt-golden benchmark build-example clean help docs
+.PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test lsp-test aot-test update-golden update-fmt-golden benchmark build-example clean help docs
 
 SHELL := /bin/bash
 
@@ -20,7 +20,7 @@ fmt: build ## Format zig and 1z source files
 	zig fmt src/ build.zig
 	./zig-out/bin/1z fmt $(ONE_Z_FILES)
 
-test: unit-test integration-test fmt-test eager-test lsp-test ## Run all tests
+test: unit-test integration-test fmt-test eager-test lsp-test aot-test ## Run all tests
 
 unit-test: ## Run unit tests
 	( time timeout $(TIMEOUT) zig build test $(if $(VERBOSE),--summary all,) )
@@ -39,6 +39,9 @@ eager-test: ## Run integration tests with eager compilation
 
 fmt-test: ## Run formatter tests
 	( time timeout $(TIMEOUT) zig build fmt-test $(if $(VERBOSE),--summary all,) )
+
+aot-test: build ## Run AOT build integration tests
+	@for f in tests/aot/test_*.sh; do echo "--- $$f ---"; bash "$$f"; done
 
 lsp-test: build ## Run LSP server tests
 	@for f in tests/lsp/test_*.sh; do echo "--- $$f ---"; bash "$$f"; done

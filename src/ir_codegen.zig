@@ -679,6 +679,18 @@ const CompileState = struct {
     aot_proto_2arg: c.ir_ref = c.IR_UNUSED,
     /// jitCallQuotation callback ref (used inline, not stored in CompileState for JIT).
     call_quotation_fn: c.ir_ref = c.IR_UNUSED,
+    /// Pre-loaded interpreter Context pointer from JitContext. In AOT mode,
+    /// this is loaded once in the prologue to avoid the ir_emit_c d_0 bug
+    /// where unused LOADs get assigned vreg 0 without a declaration.
+    preloaded_ctx_val: c.ir_ref = c.IR_UNUSED,
+    /// Accumulator for string/symbol literals encountered during AOT compilation.
+    /// Each entry gets emitted as a `static const char[]` in the C preamble.
+    aot_string_literals: ?*std.ArrayListUnmanaged(AotStringLiteral) = null,
+};
+
+const AotStringLiteral = struct {
+    data: []const u8,
+    is_symbol: bool,
 };
 
 /// Extract or emit an i64 IR ref from a stack entry. For raw_at_slot entries,
@@ -1212,6 +1224,58 @@ fn compileInstructions(
                     sp.* += 1;
                 } else if (val == .boolean) {
                     stack[sp.*] = .{ .bool_ref = c.ir_const_bool(ctx, val.boolean) };
+                    sp.* += 1;
+                } else if (state.aot_mode and (val == .string or val == .symbol)) {
+                    // In AOT mode, string/symbol literals can't be baked as
+                    // raw bytes because they contain heap pointers. Emit a
+                    // callback that pushes the literal using a C string
+                    // constant embedded in the AOT binary.
+                    const str_data = if (val == .string) val.string else val.symbol;
+                    const push_fn_name = if (val == .string) "onez_push_string" else "onez_push_symbol";
+
+                    // Use a 3-arg prototype for (ctx, str_ptr, str_len).
+                    const proto_3arg = c.ir_proto_3(ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+                    const push_fn = c.ir_const_func(ctx, c.ir_str(ctx, push_fn_name), proto_3arg);
+
+                    // Store sp before callback.
+                    const sp_const = c.ir_const_addr(ctx, sp.*);
+                    const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
+                    c._ir_STORE(ctx, state.sp_ptr, new_sp);
+
+                    const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+                        state.preloaded_ctx_val
+                    else blk: {
+                        JitContextLayout.ensureInit();
+                        const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+                        const ctx_addr2 = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+                        break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr2);
+                    };
+
+                    // Reference the string via ir_const_sym. The symbol is
+                    // defined as a static const char[] in emitProgramC.
+                    const lit_id = if (state.aot_string_literals) |lits| lits.items.len else 0;
+                    var sym_buf: [32]u8 = undefined;
+                    const sym_name = std.fmt.bufPrint(&sym_buf, "onez_lit_{d}", .{lit_id}) catch unreachable;
+                    // Use ir_const_func (not ir_const_sym) so the C emitter
+                    // outputs the bare symbol name without the & prefix.
+                    // The symbol resolves to a char[] which decays to char*.
+                    const sym_ref = c.ir_const_func(ctx, c.ir_strl(ctx, &sym_buf, sym_name.len), 0);
+                    const str_len_const = c.ir_const_addr(ctx, str_data.len);
+
+                    const call_result = c._ir_CALL_3(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, str_len_const);
+                    emitCallbackPostCheck(state, call_result, state.error_propagate_status);
+
+                    // Record the literal for emission in the C preamble.
+                    if (state.aot_string_literals) |lits| {
+                        lits.append(std.heap.page_allocator, .{
+                            .data = str_data,
+                            .is_symbol = val == .symbol,
+                        }) catch {};
+                    }
+
+                    // Re-read sp after callback (it pushed one value).
+                    _ = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
+                    stack[sp.*] = .{ .raw_at_slot = sp.* };
                     sp.* += 1;
                 } else {
                     const sp_byte_offset = c.ir_const_addr(ctx, sp.* * ValueLayout.value_size);
@@ -2689,6 +2753,7 @@ pub fn emitWordCAot(
     resolver: ?WordResolver,
     self_name: ?[]const u8,
     aot_compiled_names: *const std.StringHashMapUnmanaged(u32),
+    string_literals: ?*std.ArrayListUnmanaged(AotStringLiteral),
     allocator: Allocator,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     ValueLayout.ensureInit();
@@ -2786,6 +2851,13 @@ pub fn emitWordCAot(
 
     const sp_val = c._ir_LOAD(&ctx, c.IR_ADDR, sp_ptr);
 
+    // Pre-load the interpreter Context pointer from the JitContext struct.
+    // This must happen early to avoid the ir_emit_c bug where late LOADs
+    // get assigned vreg 0 without a C variable declaration.
+    const ctx_off = c.ir_const_addr(&ctx, JitContextLayout.ctx_offset);
+    const ctx_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), jit_ctx_ptr, ctx_off);
+    const preloaded_ctx_val = c._ir_LOAD(&ctx, c.IR_ADDR, ctx_addr);
+
     if (input_count > 0) {
         const min_sp = c.ir_const_addr(&ctx, input_count);
         const sp_too_small = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ULT, c.IR_BOOL), sp_val, min_sp);
@@ -2851,6 +2923,8 @@ pub fn emitWordCAot(
         .aot_proto_1arg = proto_1arg,
         .aot_proto_2arg = proto_2arg,
         .call_quotation_fn = call_quotation_fn,
+        .preloaded_ctx_val = preloaded_ctx_val,
+        .aot_string_literals = string_literals,
     };
 
     // Self-tail-call detection for AOT
@@ -2922,6 +2996,27 @@ pub fn emitWordCAot(
     return ir_mod.emitC(&ctx, c_name.ptr, allocator);
 }
 
+/// Work around ir_emit_c vreg 0 bug: if the emitted C body uses `d_0` but
+/// does not declare it, insert `\tuintptr_t d_0;\n` after the opening brace.
+fn patchMissingD0(body: []u8, allocator: Allocator) Allocator.Error![]u8 {
+    // Check if d_0 is used anywhere in the body.
+    if (std.mem.indexOf(u8, body, "d_0") == null) return body;
+
+    // Check if d_0 is already declared (pattern: "\tuintptr_t d_0")
+    if (std.mem.indexOf(u8, body, "\tuintptr_t d_0") != null) return body;
+
+    // Find the opening brace + newline to insert after.
+    const brace_nl = std.mem.indexOf(u8, body, "{\n") orelse return body;
+    const insert_pos = brace_nl + 2;
+    const decl = "\tuintptr_t d_0;\n";
+
+    const new = try allocator.alloc(u8, body.len + decl.len);
+    @memcpy(new[0..insert_pos], body[0..insert_pos]);
+    @memcpy(new[insert_pos .. insert_pos + decl.len], decl);
+    @memcpy(new[insert_pos + decl.len ..], body[insert_pos..]);
+    return new;
+}
+
 /// Emit a complete, compilable C source file for a set of words.
 ///
 /// The output contains:
@@ -2949,81 +3044,37 @@ pub fn emitProgramC(
         try compiled_names.put(allocator, w.name, w.word_id);
     }
 
-    // Pre-scan all words to determine which callbacks are needed
-    var needs_safepoint = false;
-    var needs_error_handling = false;
-    var needs_dynamic_vars = false;
-    var needs_iterators = false;
-    var needs_native_call = false;
-    var needs_dispatch = false;
-    var needs_param_validation = false;
-    var needs_call_quotation = false;
-
-    for (words) |w| {
-        var scan_flags = PreScanFlags{};
-        preScanInstructions(w.instructions, null, &scan_flags, false) catch continue;
-        if (scan_flags.needs_safepoint) needs_safepoint = true;
-        if (scan_flags.needs_error_handling) needs_error_handling = true;
-        if (scan_flags.needs_dynamic_vars) needs_dynamic_vars = true;
-        if (scan_flags.needs_iterators) needs_iterators = true;
-        if (scan_flags.needs_native_call) needs_native_call = true;
-        if (scan_flags.needs_dispatch) needs_dispatch = true;
-        if (scan_flags.needs_param_validation) needs_param_validation = true;
-        // Check for quotation calls (call word with raw_at_slot)
-        for (w.instructions) |instr| {
-            if (instr.op == .call_word) {
-                if (std.mem.eql(u8, instr.op.call_word, "call")) {
-                    needs_call_quotation = true;
-                }
-            }
-        }
-    }
-
     // 1. Preamble
     try out.appendSlice(allocator, "#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n\n");
 
-    // 2. Callback extern declarations
-    if (needs_safepoint)
-        try out.appendSlice(allocator, "extern int32_t jitSafepoint(uintptr_t ctx);\n");
-    if (needs_error_handling) {
-        try out.appendSlice(allocator, "extern int32_t jitRecover(uintptr_t ctx);\n");
-        try out.appendSlice(allocator, "extern int32_t jitCleanup(uintptr_t ctx);\n");
-    }
-    if (needs_dynamic_vars) {
-        try out.appendSlice(allocator, "extern int32_t jitGet(uintptr_t ctx);\n");
-        try out.appendSlice(allocator, "extern int32_t jitWithParameter(uintptr_t ctx);\n");
-    }
-    if (needs_iterators)
-        try out.appendSlice(allocator, "extern int32_t jitIteratorOp(uintptr_t ctx, uintptr_t opcode);\n");
-    if (needs_native_call)
-        try out.appendSlice(allocator, "extern int32_t jitNativeCall(uintptr_t ctx, uintptr_t fn_ptr);\n");
-    if (needs_dispatch or needs_native_call)
-        try out.appendSlice(allocator, "extern int32_t jitInterpretedCall(uintptr_t ctx, uintptr_t word_id);\n");
-    if (needs_param_validation)
-        try out.appendSlice(allocator, "extern int32_t jitValidateParamEffects(uintptr_t ctx, uintptr_t effect_ptr);\n");
-    if (needs_call_quotation)
-        try out.appendSlice(allocator, "extern int32_t jitCallQuotation(uintptr_t ctx);\n");
+    // 2. Callback extern declarations -- emit all unconditionally since the
+    // two-pass compilation may introduce interpreter fallback calls that
+    // weren't predicted by the pre-scan.
+    try out.appendSlice(allocator, "extern int32_t jitSafepoint(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitRecover(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitCleanup(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitGet(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitWithParameter(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitIteratorOp(uintptr_t ctx, uintptr_t opcode);\n");
+    try out.appendSlice(allocator, "extern int32_t jitNativeCall(uintptr_t ctx, uintptr_t fn_ptr);\n");
+    try out.appendSlice(allocator, "extern int32_t jitInterpretedCall(uintptr_t ctx, uintptr_t word_id);\n");
+    try out.appendSlice(allocator, "extern int32_t jitValidateParamEffects(uintptr_t ctx, uintptr_t effect_ptr);\n");
+    try out.appendSlice(allocator, "extern int32_t jitCallQuotation(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushString(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushSymbol(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
+    try out.appendSlice(allocator, "static int32_t onez_push_string(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushString(ctx, (uintptr_t)str, len); }\n");
+    try out.appendSlice(allocator, "static int32_t onez_push_symbol(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushSymbol(ctx, (uintptr_t)str, len); }\n");
 
     // Runtime entry point externs
     try out.appendSlice(allocator,
         \\
         \\extern uintptr_t onez_runtime_init(int argc, char **argv);
-        \\extern int32_t onez_runtime_register_compiled(uintptr_t rt, int32_t (**table)(uintptr_t), uint32_t size);
+        \\extern int32_t onez_runtime_register_compiled(uintptr_t rt, int32_t (**table)(uintptr_t), const char **names, uint32_t size);
         \\extern int32_t onez_runtime_run(uintptr_t rt, uint32_t entry_word_id);
         \\extern void onez_runtime_shutdown(uintptr_t rt);
         \\
         \\
     );
-
-    // 3. Forward declarations for compiled word functions
-    for (words) |w| {
-        const mangled = try mangleWordName(w.name, allocator);
-        defer allocator.free(mangled);
-        try out.appendSlice(allocator, "int32_t ");
-        try out.appendSlice(allocator, mangled);
-        try out.appendSlice(allocator, "(uintptr_t jit_ctx);\n");
-    }
-    try out.appendSlice(allocator, "\n");
 
     // Build a resolver from the AOT word list for cross-word calls
     var word_map: std.StringHashMapUnmanaged(AotWordDesc) = .{};
@@ -3053,9 +3104,15 @@ pub fn emitProgramC(
         .dispatch_table_ptr = undefined,
     };
 
-    // 4. Compiled word function bodies
+    // 4. Two-pass compilation: first determine which words compile,
+    // then re-compile with only the compilable set so that cross-word calls
+    // to uncompilable words use jitInterpretedCall instead of direct calls.
+
+    // Pass 1: trial compile to discover the compilable set.
+    var compilable_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compilable_names.deinit(allocator);
     for (words) |w| {
-        const body = emitWordCAot(
+        const trial = emitWordCAot(
             w.instructions,
             w.input_count,
             w.output_count,
@@ -3063,13 +3120,90 @@ pub fn emitProgramC(
             resolver,
             w.name,
             &compiled_names,
+            null,
+            allocator,
+        ) catch continue;
+        allocator.free(trial);
+        try compilable_names.put(allocator, w.name, w.word_id);
+    }
+
+    // String literal table populated during pass 2.
+    var string_literals: std.ArrayListUnmanaged(AotStringLiteral) = .{};
+    defer string_literals.deinit(std.heap.page_allocator);
+
+    // Pass 2: compile with only the compilable set.
+    var compiled_bodies: std.ArrayListUnmanaged(struct { word_id: u32, body: []u8 }) = .{};
+    defer {
+        for (compiled_bodies.items) |item| allocator.free(item.body);
+        compiled_bodies.deinit(allocator);
+    }
+
+    var actually_compiled: std.AutoHashMapUnmanaged(u32, void) = .{};
+    defer actually_compiled.deinit(allocator);
+
+    for (words) |w| {
+        if (!compilable_names.contains(w.name)) continue;
+        const raw_body = emitWordCAot(
+            w.instructions,
+            w.input_count,
+            w.output_count,
+            w.name,
+            resolver,
+            w.name,
+            &compilable_names,
+            &string_literals,
             allocator,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
         };
-        defer allocator.free(body);
-        try out.appendSlice(allocator, body);
+        const body = try patchMissingD0(raw_body, allocator);
+        if (body.ptr != raw_body.ptr) allocator.free(raw_body);
+        try compiled_bodies.append(allocator, .{ .word_id = w.word_id, .body = body });
+        try actually_compiled.put(allocator, w.word_id, {});
+    }
+
+    // 3.5. String/symbol literal constants
+    for (string_literals.items, 0..) |lit, lit_idx| {
+        var idx_buf: [20]u8 = undefined;
+        const idx_str = std.fmt.bufPrint(&idx_buf, "{d}", .{lit_idx}) catch unreachable;
+        try out.appendSlice(allocator, "static const char onez_lit_");
+        try out.appendSlice(allocator, idx_str);
+        try out.appendSlice(allocator, "[] = \"");
+        for (lit.data) |ch| {
+            switch (ch) {
+                '"' => try out.appendSlice(allocator, "\\\""),
+                '\\' => try out.appendSlice(allocator, "\\\\"),
+                '\n' => try out.appendSlice(allocator, "\\n"),
+                '\r' => try out.appendSlice(allocator, "\\r"),
+                '\t' => try out.appendSlice(allocator, "\\t"),
+                0 => try out.appendSlice(allocator, "\\0"),
+                else => {
+                    const buf = [_]u8{ch};
+                    try out.appendSlice(allocator, &buf);
+                },
+            }
+        }
+        try out.appendSlice(allocator, "\";\n");
+    }
+    if (string_literals.items.len > 0) {
+        try out.appendSlice(allocator, "\n");
+    }
+
+    // 4a. Forward declarations (only for successfully compiled words)
+    for (words) |w| {
+        if (!actually_compiled.contains(w.word_id)) continue;
+        const mangled = try mangleWordName(w.name, allocator);
+        defer allocator.free(mangled);
+        try out.appendSlice(allocator, "int32_t ");
+        try out.appendSlice(allocator, mangled);
+        try out.appendSlice(allocator, "(uintptr_t jit_ctx);\n");
+    }
+    try out.appendSlice(allocator, "\n");
+
+    // 4b. Emit compiled function bodies
+    for (compiled_bodies.items) |item| {
+        try out.appendSlice(allocator, item.body);
         try out.appendSlice(allocator, "\n");
     }
 
@@ -3081,12 +3215,31 @@ pub fn emitProgramC(
     for (0..table_size) |id| {
         var found = false;
         for (words) |w| {
-            if (w.word_id == id) {
+            if (w.word_id == id and actually_compiled.contains(w.word_id)) {
                 const mangled = try mangleWordName(w.name, allocator);
                 defer allocator.free(mangled);
                 try out.appendSlice(allocator, "    ");
                 try out.appendSlice(allocator, mangled);
                 try out.appendSlice(allocator, ",\n");
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            try out.appendSlice(allocator, "    NULL,\n");
+        }
+    }
+    try out.appendSlice(allocator, "};\n\n");
+
+    // 5b. Word name table (for interpreter fallback)
+    try out.appendSlice(allocator, "static const char *onez_word_names[] = {\n");
+    for (0..table_size) |id| {
+        var found = false;
+        for (words) |w| {
+            if (w.word_id == id) {
+                try out.appendSlice(allocator, "    \"");
+                try out.appendSlice(allocator, w.name);
+                try out.appendSlice(allocator, "\",\n");
                 found = true;
                 break;
             }
@@ -3105,12 +3258,13 @@ pub fn emitProgramC(
     var size_buf: [20]u8 = undefined;
     const size_str = std.fmt.bufPrint(&size_buf, "{d}", .{table_size}) catch unreachable;
 
+    try out.appendSlice(allocator, "    onez_runtime_register_compiled(rt, onez_dispatch_table, onez_word_names, ");
+    try out.appendSlice(allocator, size_str);
+    try out.appendSlice(allocator, ");\n");
+
     var id_buf: [20]u8 = undefined;
     const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{entry_word_id}) catch unreachable;
 
-    try out.appendSlice(allocator, "    onez_runtime_register_compiled(rt, onez_dispatch_table, ");
-    try out.appendSlice(allocator, size_str);
-    try out.appendSlice(allocator, ");\n");
     try out.appendSlice(allocator, "    int32_t status = onez_runtime_run(rt, ");
     try out.appendSlice(allocator, id_str);
     try out.appendSlice(allocator, ");\n");
@@ -3229,6 +3383,12 @@ fn emitCallbackPreamble(state: *CompileState, sp: usize) c.ir_ref {
     const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
     c._ir_STORE(ctx, state.sp_ptr, new_sp);
 
+    // In AOT mode, reuse the ctx pointer loaded in the prologue to avoid
+    // the ir_emit_c bug where LOADs get assigned vreg 0 without declaration.
+    if (state.preloaded_ctx_val != c.IR_UNUSED) {
+        return state.preloaded_ctx_val;
+    }
+
     JitContextLayout.ensureInit();
     const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
     const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
@@ -3251,10 +3411,15 @@ fn emitCallbackPostCheck(state: *CompileState, call_result: c.ir_ref, return_sta
 /// from the JitContext struct and calls jitSafepoint.
 fn emitSafepointCall(state: *CompileState) void {
     if (state.safepoint_fn == c.IR_UNUSED) return;
-    JitContextLayout.ensureInit();
-    const ctx_off = c.ir_const_addr(state.ctx, JitContextLayout.ctx_offset);
-    const ctx_addr = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
-    const ctx_val = c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
+
+    const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+        state.preloaded_ctx_val
+    else blk: {
+        JitContextLayout.ensureInit();
+        const ctx_off = c.ir_const_addr(state.ctx, JitContextLayout.ctx_offset);
+        const ctx_addr = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+        break :blk c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
+    };
     const call_result = c._ir_CALL_1(state.ctx, c.IR_I32, state.safepoint_fn, ctx_val);
     emitCallbackPostCheck(state, call_result, state.error_propagate_status);
 }
@@ -3303,10 +3468,14 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
 /// jitValidateParamEffects to check quotation arguments on the stack.
 fn emitParamValidation(state: *CompileState, effect_ptr: usize) void {
     if (state.validate_params_fn == c.IR_UNUSED) return;
-    JitContextLayout.ensureInit();
-    const ctx_off = c.ir_const_addr(state.ctx, JitContextLayout.ctx_offset);
-    const ctx_addr = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
-    const ctx_val = c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
+    const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+        state.preloaded_ctx_val
+    else blk: {
+        JitContextLayout.ensureInit();
+        const ctx_off = c.ir_const_addr(state.ctx, JitContextLayout.ctx_offset);
+        const ctx_addr = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+        break :blk c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
+    };
     const effect_const = c.ir_const_addr(state.ctx, effect_ptr);
     const call_result = c._ir_CALL_2(state.ctx, c.IR_I32, state.validate_params_fn, ctx_val, effect_const);
     emitCallbackPostCheck(state, call_result, state.error_propagate_status);
@@ -3320,7 +3489,7 @@ const Scheduler = @import("scheduler.zig").Scheduler;
 
 const helpers = @import("primitives/helpers.zig");
 
-fn jitSafepoint(ctx_raw: usize) callconv(.c) i32 {
+export fn jitSafepoint(ctx_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 0;
     const ctx: *Context = @ptrFromInt(ctx_raw);
 
@@ -3353,7 +3522,7 @@ fn jitSafepoint(ctx_raw: usize) callconv(.c) i32 {
 
 const dynamic_vars_mod = @import("primitives/dynamic_vars.zig");
 
-fn jitGet(ctx_raw: usize) callconv(.c) i32 {
+export fn jitGet(ctx_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     dynamic_vars_mod.nativeGet(ctx) catch |err| {
@@ -3363,7 +3532,7 @@ fn jitGet(ctx_raw: usize) callconv(.c) i32 {
     return 0;
 }
 
-fn jitWithParameter(ctx_raw: usize) callconv(.c) i32 {
+export fn jitWithParameter(ctx_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     dynamic_vars_mod.nativeWithParameter(ctx) catch |err| {
@@ -3375,7 +3544,7 @@ fn jitWithParameter(ctx_raw: usize) callconv(.c) i32 {
 
 const errors_mod = @import("primitives/errors.zig");
 
-fn jitRecover(ctx_raw: usize) callconv(.c) i32 {
+export fn jitRecover(ctx_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     errors_mod.nativeRecover(ctx) catch |err| {
@@ -3385,7 +3554,7 @@ fn jitRecover(ctx_raw: usize) callconv(.c) i32 {
     return 0;
 }
 
-fn jitCleanup(ctx_raw: usize) callconv(.c) i32 {
+export fn jitCleanup(ctx_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     errors_mod.nativeCleanup(ctx) catch |err| {
@@ -3398,7 +3567,7 @@ fn jitCleanup(ctx_raw: usize) callconv(.c) i32 {
 const iterators_mod = @import("primitives/iterators.zig");
 const sequences_mod = @import("primitives/sequences.zig");
 
-fn jitValidateParamEffects(ctx_raw: usize, effect_ptr_raw: usize) callconv(.c) i32 {
+export fn jitValidateParamEffects(ctx_raw: usize, effect_ptr_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const effect: *const StackEffect = @ptrFromInt(effect_ptr_raw);
@@ -3413,7 +3582,7 @@ fn jitValidateParamEffects(ctx_raw: usize, effect_ptr_raw: usize) callconv(.c) i
     return 0;
 }
 
-fn jitIteratorOp(ctx_raw: usize, opcode_raw: usize) callconv(.c) i32 {
+export fn jitIteratorOp(ctx_raw: usize, opcode_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const opcode = std.meta.intToEnum(IteratorOpcode, opcode_raw) catch return 1;
@@ -3436,7 +3605,7 @@ fn jitIteratorOp(ctx_raw: usize, opcode_raw: usize) callconv(.c) i32 {
     return 0;
 }
 
-fn jitNativeCall(ctx_raw: usize, fn_ptr_raw: usize) callconv(.c) i32 {
+export fn jitNativeCall(ctx_raw: usize, fn_ptr_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const func: *const fn (*Context) anyerror!void = @ptrFromInt(fn_ptr_raw);
@@ -3447,7 +3616,7 @@ fn jitNativeCall(ctx_raw: usize, fn_ptr_raw: usize) callconv(.c) i32 {
     return 0;
 }
 
-fn jitCallQuotation(ctx_raw: usize) callconv(.c) i32 {
+export fn jitCallQuotation(ctx_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const control = @import("primitives/control.zig");
@@ -3458,7 +3627,40 @@ fn jitCallQuotation(ctx_raw: usize) callconv(.c) i32 {
     return 0;
 }
 
-fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize) callconv(.c) i32 {
+/// Push a string literal onto the stack. The string data is at `str_ptr`
+/// with length `str_len`. The runtime copies the data into a managed allocation.
+export fn jitPushString(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const src: [*]const u8 = @ptrFromInt(str_ptr);
+    const copy = ctx.quotationAllocator().dupe(u8, src[0..str_len]) catch {
+        ctx.jit_pending_error = error.OutOfMemory;
+        return 2;
+    };
+    ctx.stack.push(.{ .string = copy }) catch {
+        ctx.jit_pending_error = error.OutOfMemory;
+        return 2;
+    };
+    return 0;
+}
+
+/// Push a symbol literal onto the stack. Same mechanism as jitPushString.
+export fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const src: [*]const u8 = @ptrFromInt(str_ptr);
+    const copy = ctx.quotationAllocator().dupe(u8, src[0..str_len]) catch {
+        ctx.jit_pending_error = error.OutOfMemory;
+        return 2;
+    };
+    ctx.stack.push(.{ .symbol = copy }) catch {
+        ctx.jit_pending_error = error.OutOfMemory;
+        return 2;
+    };
+    return 0;
+}
+
+export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const word_id: u32 = @intCast(word_id_raw);
@@ -5030,6 +5232,7 @@ test "emitWordCAot emits named callback for safepoint" {
         null,
         null,
         &compiled_names,
+        null,
         testing.allocator,
     ) catch |err| {
         // times requires a quotation on stack which we don't have in this
@@ -5059,6 +5262,7 @@ test "emitWordCAot basic arithmetic" {
         null,
         null,
         &compiled_names,
+        null,
         testing.allocator,
     );
     defer testing.allocator.free(source);

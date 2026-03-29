@@ -280,6 +280,120 @@ export fn onez_set_stdlib_path(ptr: ?*anyopaque, data: [*]const u8, len: usize) 
     return ONEZ_OK;
 }
 
+// =========================================================================
+// AOT Runtime API
+// =========================================================================
+
+const ir_codegen = @import("ir_codegen.zig");
+const JitContext = ir_codegen.JitContext;
+
+const AotWordFn = *const fn (usize) callconv(.c) i32;
+
+export fn onez_runtime_init(argc: c_int, argv: [*]const [*:0]const u8) usize {
+    const gpa = page.create(std.heap.GeneralPurposeAllocator(.{})) catch return 0;
+    gpa.* = .{};
+    const allocator = gpa.allocator();
+
+    const ctx = allocator.create(Context) catch return 0;
+    ctx.* = Context.init(allocator);
+
+    // Discover stdlib relative to the executable binary.
+    var self_exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (std.fs.selfExeDirPath(&self_exe_buf)) |exe_dir| {
+        const lib_path = std.fs.path.join(ctx.quotationAllocator(), &.{ exe_dir, "../lib" }) catch null;
+        if (lib_path) |lp| {
+            var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+            if (std.fs.cwd().realpath(lp, &real_buf)) |real| {
+                ctx.stdlib_path = ctx.quotationAllocator().dupe(u8, real) catch null;
+            } else |_| {}
+        }
+    } else |_| {}
+
+    ctx.loadPrelude(null) catch return 0;
+
+    // Populate program_args from argc/argv.
+    if (argc > 0) {
+        const count: usize = @intCast(argc);
+        const args = allocator.alloc([]const u8, count) catch null;
+        if (args) |a| {
+            for (0..count) |idx| {
+                a[idx] = std.mem.span(argv[idx]);
+            }
+            ctx.program_args = a;
+        }
+    }
+
+    const handle = page.create(OnezHandle) catch return 0;
+    handle.* = .{
+        .gpa = gpa,
+        .ctx = ctx,
+    };
+    return @intFromPtr(handle);
+}
+
+export fn onez_runtime_register_compiled(rt: usize, table: [*]const ?*const anyopaque, names: [*]const ?[*:0]const u8, size: u32) i32 {
+    if (rt == 0) return ONEZ_ERR_NULL_HANDLE;
+    const handle: *OnezHandle = @ptrFromInt(rt);
+    const ctx = handle.ctx;
+
+    ctx.jit_dispatch.ensureCapacity(size) catch return ONEZ_ERR_ALLOC;
+    for (0..size) |i| {
+        if (names[i]) |name_ptr| {
+            const entry = ctx.jit_dispatch.getMut(@intCast(i)) orelse continue;
+            entry.word_name = std.mem.span(name_ptr);
+        }
+        if (table[i]) |ptr| {
+            ctx.jit_dispatch.setCodePtr(@intCast(i), ptr);
+        }
+    }
+    return ONEZ_OK;
+}
+
+export fn onez_runtime_run(rt: usize, entry_word_id: u32) i32 {
+    if (rt == 0) return 1;
+    const handle: *OnezHandle = @ptrFromInt(rt);
+    const ctx = handle.ctx;
+
+    const entry = ctx.jit_dispatch.get(entry_word_id) orelse return 1;
+    var code_ptr = entry.code_ptr orelse return 1;
+
+    var jit_ctx = JitContext{
+        .items_ptr = ctx.stack.items.items.ptr,
+        .sp_ptr = &ctx.stack.items.items.len,
+        .capacity = ctx.stack.items.capacity,
+        .ctx = ctx,
+    };
+    var func: *const fn (*JitContext) callconv(.c) i32 = @ptrCast(@alignCast(code_ptr));
+    var status = func(&jit_ctx);
+
+    // Trampoline loop for tail calls (status 3).
+    while (status == 3) {
+        const target_id = jit_ctx.trampoline_target;
+        const target_entry = ctx.jit_dispatch.get(target_id) orelse return 1;
+        code_ptr = target_entry.code_ptr orelse return 1;
+        jit_ctx.items_ptr = ctx.stack.items.items.ptr;
+        jit_ctx.capacity = ctx.stack.items.capacity;
+        func = @ptrCast(@alignCast(code_ptr));
+        status = func(&jit_ctx);
+    }
+
+    return if (status == 0) 0 else 1;
+}
+
+export fn onez_runtime_shutdown(rt: usize) void {
+    if (rt == 0) return;
+    const handle: *OnezHandle = @ptrFromInt(rt);
+    const allocator = handle.gpa.allocator();
+
+    clearLastError(handle);
+
+    handle.ctx.deinit();
+    allocator.destroy(handle.ctx);
+    _ = handle.gpa.deinit();
+    page.destroy(handle.gpa);
+    page.destroy(handle);
+}
+
 fn castHandle(ptr: ?*anyopaque) ?*OnezHandle {
     const p = ptr orelse return null;
     return @ptrCast(@alignCast(p));

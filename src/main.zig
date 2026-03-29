@@ -25,6 +25,8 @@ const MemoryLimitAllocator = memory_limit.MemoryLimitAllocator;
 const trace_mod = @import("trace.zig");
 const call_graph = @import("call_graph.zig");
 const effect_inference = @import("effect_inference.zig");
+const aot_freeze = @import("aot_freeze.zig");
+const ir_codegen = @import("ir_codegen.zig");
 
 const signal = @import("signal.zig");
 const build_options = @import("build_options");
@@ -154,6 +156,7 @@ fn printUsage() void {
 
     w.writeAll(
         \\Usage: 1z [options] [file] [args...]
+        \\       1z build <file.1z> [-o <output>] [options]
         \\       1z fmt [files...]
         \\
         \\General:
@@ -217,9 +220,12 @@ pub fn main() u8 {
         }
     }
 
-    // Check for fmt subcommand first
+    // Check for subcommands first
     if (args.len > 1 and std.mem.eql(u8, args[1], "fmt")) {
         return handleFmt(gpa_allocator, args[2..]);
+    }
+    if (args.len > 1 and std.mem.eql(u8, args[1], "build")) {
+        return handleBuild(gpa_allocator, args[2..]);
     }
 
     // Parse flags
@@ -711,6 +717,233 @@ fn formatDirectory(allocator: std.mem.Allocator, dir_path: []const u8, check_onl
     }
 
     return result;
+}
+
+fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) u8 {
+    const stderr_file: File = .stderr();
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr = stderr_file.writer(&stderr_buf);
+    const err_writer = &stderr.interface;
+
+    // Parse build-specific args.
+    var source_file: ?[]const u8 = null;
+    var output_path: ?[]const u8 = null;
+    var cli_stdlib_path: ?[]const u8 = null;
+    var cli_prelude_path: ?[]const u8 = null;
+    var cli_load_paths: std.ArrayListUnmanaged([]const u8) = .{};
+    defer cli_load_paths.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "-o")) {
+            i += 1;
+            if (i >= args.len) {
+                err_writer.writeAll("Error: -o requires an argument\n") catch {};
+                err_writer.flush() catch {};
+                return 1;
+            }
+            output_path = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--stdlib-path=")) {
+            cli_stdlib_path = arg["--stdlib-path=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--prelude=")) {
+            cli_prelude_path = arg["--prelude=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--load-path=")) {
+            cli_load_paths.append(allocator, arg["--load-path=".len..]) catch {
+                err_writer.writeAll("Error: out of memory\n") catch {};
+                err_writer.flush() catch {};
+                return 1;
+            };
+        } else if (std.mem.startsWith(u8, arg, "-")) {
+            err_writer.print("Error: unknown flag '{s}'\n", .{arg}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        } else {
+            if (source_file != null) {
+                err_writer.writeAll("Error: multiple source files not supported\n") catch {};
+                err_writer.flush() catch {};
+                return 1;
+            }
+            source_file = arg;
+        }
+    }
+
+    const source = source_file orelse {
+        err_writer.writeAll("Usage: 1z build <file.1z> [-o <output>]\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+
+    // Default output path: strip .1z extension.
+    const output = output_path orelse blk: {
+        if (std.mem.endsWith(u8, source, ".1z")) {
+            break :blk source[0 .. source.len - 3];
+        }
+        break :blk "a.out";
+    };
+
+    // Initialize context for module graph freezing.
+    var ctx_obj = Context.init(allocator);
+    defer ctx_obj.deinit();
+    const ctx = &ctx_obj;
+
+    // Discover stdlib path.
+    var self_exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var exe_dir_slice: ?[]const u8 = null;
+    if (std.fs.selfExeDirPath(&self_exe_buf)) |exe_dir| {
+        exe_dir_slice = exe_dir;
+        if (cli_stdlib_path) |sp| {
+            ctx.stdlib_path = sp;
+        } else {
+            const lib_path = std.fs.path.join(allocator, &.{ exe_dir, "../lib" }) catch null;
+            if (lib_path) |lp| {
+                var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+                if (std.fs.cwd().realpath(lp, &real_buf)) |real| {
+                    ctx.stdlib_path = allocator.dupe(u8, real) catch null;
+                } else |_| {}
+                allocator.free(lp);
+            }
+        }
+    } else |_| {
+        if (cli_stdlib_path) |sp| {
+            ctx.stdlib_path = sp;
+        }
+    }
+
+    for (cli_load_paths.items) |lp| {
+        const duped = ctx.quotationAllocator().dupe(u8, lp) catch continue;
+        ctx.load_paths.append(allocator, duped) catch continue;
+    }
+
+    ctx.loadPrelude(cli_prelude_path) catch |err| {
+        err_writer.print("Error loading prelude: {s}\n", .{@errorName(err)}) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+
+    // Stage 1: Freeze module graph and emit C source.
+    var freeze_result = aot_freeze.freezeModuleGraph(ctx, source, allocator) catch |err| {
+        err_writer.print("Error freezing module graph: {s}\n", .{@errorName(err)}) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+    defer freeze_result.deinit(allocator);
+
+    if (freeze_result.skipped_words.len > 0) {
+        for (freeze_result.skipped_words) |name| {
+            err_writer.print("Warning: skipped word '{s}' (no stack effect)\n", .{name}) catch {};
+        }
+        err_writer.flush() catch {};
+    }
+
+    const c_source = ir_codegen.emitProgramC(
+        freeze_result.words,
+        freeze_result.entry_word_id,
+        freeze_result.max_word_id,
+        allocator,
+    ) catch |err| {
+        err_writer.print("Error generating C source: {s}\n", .{@errorName(err)}) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+    defer allocator.free(c_source);
+
+    // Write C source to a temp file.
+    const tmpdir = std.posix.getenv("TMPDIR") orelse "/tmp";
+    const tmp_path = std.fmt.allocPrint(allocator, "{s}/1z_aot_XXXXXX.c", .{tmpdir}) catch {
+        err_writer.writeAll("Error: out of memory\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+    defer allocator.free(tmp_path);
+
+    const tmp_file = std.fs.cwd().createFile(tmp_path, .{}) catch |err| {
+        err_writer.print("Error creating temp file '{s}': {s}\n", .{ tmp_path, @errorName(err) }) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+    tmp_file.writeAll(c_source) catch |err| {
+        tmp_file.close();
+        err_writer.print("Error writing temp file: {s}\n", .{@errorName(err)}) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+    tmp_file.close();
+    // Temp file cleanup is at the end, after we know the cc result.
+
+    // Discover lib1z.a path relative to this executable.
+    const lib1z_path = if (exe_dir_slice) |exe_dir|
+        std.fs.path.join(allocator, &.{ exe_dir, "../clib/lib1z.a" }) catch null
+    else
+        null;
+    defer if (lib1z_path) |p| allocator.free(p);
+
+    const resolved_lib = lib1z_path orelse {
+        err_writer.writeAll("Error: cannot locate lib1z.a\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+
+    // Stage 2: Invoke C compiler.
+    // Default to zig cc since lib1z.a is built with Zig's C backend and may
+    // contain sanitizer references that system cc doesn't resolve.
+    const cc_env = std.posix.getenv("CC");
+    const cc_cmd = cc_env orelse "zig";
+
+    var cc_argv: std.ArrayListUnmanaged([]const u8) = .{};
+    defer cc_argv.deinit(allocator);
+    cc_argv.append(allocator, cc_cmd) catch return 1;
+    if (cc_env == null) cc_argv.append(allocator, "cc") catch return 1;
+    cc_argv.append(allocator, "-o") catch return 1;
+    cc_argv.append(allocator, output) catch return 1;
+    cc_argv.append(allocator, tmp_path) catch return 1;
+    cc_argv.append(allocator, resolved_lib) catch return 1;
+    cc_argv.append(allocator, "-lffi") catch return 1;
+
+    var child = std.process.Child.init(cc_argv.items, allocator);
+    child.stderr_behavior = .Pipe;
+    child.spawn() catch |err| {
+        err_writer.print("Error spawning C compiler '{s}': {s}\n", .{ cc_cmd, @errorName(err) }) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+
+    // Read stderr before wait() to avoid pipe buffer filling.
+    var cc_stderr_output: []u8 = &.{};
+    defer if (cc_stderr_output.len > 0) allocator.free(cc_stderr_output);
+    if (child.stderr) |stderr_pipe| {
+        var cc_err_list: std.ArrayListUnmanaged(u8) = .{};
+        defer cc_err_list.deinit(allocator);
+        var read_buf: [4096]u8 = undefined;
+        while (true) {
+            const n = stderr_pipe.read(&read_buf) catch break;
+            if (n == 0) break;
+            cc_err_list.appendSlice(allocator, read_buf[0..n]) catch break;
+        }
+        if (cc_err_list.items.len > 0) {
+            cc_stderr_output = cc_err_list.toOwnedSlice(allocator) catch &.{};
+        }
+    }
+
+    const result = child.wait() catch |err| {
+        err_writer.print("Error waiting for C compiler: {s}\n", .{@errorName(err)}) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+
+    if (result.Exited != 0) {
+        if (cc_stderr_output.len > 0) {
+            err_writer.writeAll(cc_stderr_output) catch {};
+        }
+        err_writer.print("Error: C compiler exited with status {d}\n", .{result.Exited}) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    }
+
+    // Clean up temp file on success.
+    std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    return 0;
 }
 
 fn repl(ctx: *Context, verbosity: Verbosity, max_memory_bytes: usize) void {
