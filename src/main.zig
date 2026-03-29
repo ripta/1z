@@ -1225,4 +1225,5 @@ test {
     _ = @import("effect_inference.zig");
     _ = @import("lsp/mod.zig");
     _ = @import("simd.zig");
+    _ = @import("aot_freeze.zig");
 }
