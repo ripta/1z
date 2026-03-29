@@ -11,7 +11,8 @@ use "ffi" ;
   (get-ovector-pointer): "pcre2_get_ovector_pointer_8" ffi{ ptr -> ptr }
   (match-data-free):     "pcre2_match_data_free_8" ffi{ ptr -> void }
   (code-free):           "pcre2_code_free_8" ffi{ ptr -> void }
-  (pattern-info):        "pcre2_pattern_info_8" ffi{ ptr u32 isize -> i32 }
+  (pattern-info):        "pcre2_pattern_info_8" ffi{ ptr u32 ptr -> i32 }
+  (pattern-info-out):    "pcre2_pattern_info_8" ffi{ ptr u32 out-ptr -> i32 }
   (get-error-message):   "pcre2_get_error_message_8" ffi{ i32 ptr usize -> i32 }
 } call "pcre2-raw" swap >module reexport
 
@@ -30,6 +31,11 @@ PCRE2_UNSET:         18446744073709551615 ;
 \ PCRE2 sets *errorcode = COMPILE_ERROR_BASE (100) at compilation start.
 \ On success it stays 100; on error it becomes 101+.
 PCRE2_COMPILE_ERROR_BASE: 100 ;
+
+\ Pattern info constants (for named-groups)
+PCRE2_INFO_NAMECOUNT:     17 ;
+PCRE2_INFO_NAMEENTRYSIZE: 18 ;
+PCRE2_INFO_NAMETABLE:     19 ;
 
 \ Types and errors
 
@@ -168,6 +174,55 @@ regex-match: ( str regex -- option ) [
   ] if
 ] ;
 
+\ Internal match at arbitrary byte offset.
+\ Returns match-start, match-end, and captures array on match, or f f f on no-match.
+\ ( subject-bytes str code offset -- subject-bytes str code match-start match-end captures )
+(regex-match-at): [
+  \ Stack: sb(3) str(2) code(1) offset(0)
+  1 pick-n 0 (match-data-create)
+  \ Stack: sb(4) str(3) code(2) offset(1) md(0)
+  2 pick-n
+  \ Stack: sb(5) str(4) code(3) offset(2) md(1) code(0)
+  4 pick-n dup (byte-length)
+  \ Stack: sb(7) str(6) code(5) offset(4) md(3) code(2) str(1) byte-len(0)
+  4 pick-n 0
+  \ Stack: sb(9) str(8) code(7) offset(6) md(5) code(4) str(3) bl(2) offset(1) 0(0)
+  5 pick-n 0 (match-raw)
+  \ Stack: sb(5) str(4) code(3) offset(2) md(1) rc(0)
+  dup PCRE2_ERROR_NOMATCH = [
+    drop (match-data-free) drop
+    \ Stack: sb(2) str(1) code(0)
+    f f f
+  ] [
+    dup 0 < [
+      (pcre2-error-msg)
+      swap (match-data-free) drop
+      ERegexMatchError make-error throw
+    ] [
+      \ Stack: sb(5) str(4) code(3) offset(2) rc(1) md(0)
+      swap dup (get-ovector-pointer)
+      \ Stack: sb(6) str(5) code(4) offset(3) rc(2) md(1) ov-ptr(0)
+      2 pick-n 2 * 8 * ffi-ptr+len>bytes
+      \ Stack: sb(6) str(5) code(4) offset(3) rc(2) md(1) ov-bytes(0)
+      swap (match-data-free)
+      \ Stack: sb(5) str(4) code(3) offset(2) rc(1) ov-bytes(0)
+      \ Read match-start and match-end from ovector group 0
+      dup 0 8 #peek
+      \ Stack: sb(6) str(5) code(4) offset(3) rc(2) ov(1) ms(0)
+      over 8 8 #peek
+      \ Stack: sb(7) str(6) code(5) offset(4) rc(3) ov(2) ms(1) me(0)
+      \ Extract captures
+      7 pick-n 3 pick-n
+      \ Stack: sb(9) str(8) code(7) offset(6) rc(5) ov(4) ms(3) me(2) sb(1) ov(0)
+      5 pick-n 0 swap { } (extract-captures)
+      \ Stack: sb(7) str(6) code(5) offset(4) rc(3) ov(2) ms(1) me(0) captures
+      \ Clean up: drop ov, rc, offset; keep sb, str, code, ms, me, captures
+      [ nip nip nip ] 2dip
+      \ Stack: sb(3) str(2) code(1) ms(0) me captures
+    ] if
+  ] if
+] ;
+
 \ Capture extraction loop
 \ ( subject-bytes ovector-bytes i count accum -- array )
 (extract-captures): [
@@ -196,5 +251,244 @@ regex-match: ( str regex -- option ) [
     \ Increment i (index 2: below count and accum)
     [ ++ ] 2dip
     (extract-captures)
+  ] if
+] ;
+
+\ --- Higher-level words ---
+
+\ Step function for regex-find-all iterator.
+\ State vector: V{ subject-bytes str code offset }
+(find-all-step): ( state -- option ) [
+  dup 0 #nth
+  over 1 #nth
+  2 pick-n 2 #nth
+  3 pick-n 3 #nth
+  \ Stack: state(4) sb(3) str(2) code(1) offset(0)
+  (regex-match-at)
+  \ Stack: state(4) sb(3) str(2) code(1) ms-or-f(0) me-or-f captures-or-f
+  over f = [
+    \ No match
+    drop drop drop
+    drop drop drop drop
+    option:none
+  ] [
+    \ Stack: state(4) sb(3) str(2) code(1) ms(0) me captures
+    \ Advance offset: use match-end, but at least match-start + 1 for zero-width
+    swap
+    \ Stack: state(5) sb(4) str(3) code(2) ms(1) captures(0) me
+    2 pick-n 1 + max
+    \ Stack: state(5) sb(4) str(3) code(2) ms(1) captures(0) new-offset
+    6 pick-n swap 3 swap #nth! drop
+    \ Stack: sb(4) str(3) code(2) ms(1) captures(0)
+    nip nip nip nip
+    >option:some
+  ] if
+] ;
+
+\\ Return a lazy iterator of all non-overlapping matches.
+\\ Each element is an array of option-wrapped capture groups (same as regex-match).
+regex-find-all: ( str regex -- iterator ) [
+  unmake-regex
+  \ Stack: str code
+  over >bytes
+  \ Stack: str code subject-bytes
+  -rot>
+  \ Stack: subject-bytes str code
+  V{ } 3 pick-n #push! 2 pick-n #push! 1 pick-n #push! 0 #push!
+  \ State: V{ subject-bytes str code 0 }
+  nip nip nip
+  [ (find-all-step) ] curry
+  >iterator
+] ;
+
+\ Helper: set up sb str code offset from bottom of stack.
+\ Given sb str code already deep in the stack with extra values on top,
+\ call (regex-match-at) with offset argument from the top.
+\ After the call, match results replace the offset on the stack.
+
+\\ Split a string by regex matches, returning an array of substrings.
+regex-split: ( str regex -- array ) [
+  unmake-regex
+  over >bytes -rot>
+  \ Stack: sb str code
+  0 { } (regex-split-loop)
+  nip nip nip
+] ;
+
+\ ( sb str code last-end accum -- sb str code result )
+(regex-split-loop): [
+  \ Stack: sb(4) str(3) code(2) le(1) acc(0)
+  over [ (regex-match-at) ] 2dip
+  \ 2dip saves le-copy(top) and acc. After match-at + restore:
+  \ Match:    sb(7) str(6) code(5) ms(4) me(3) cap(2) acc(1) le(0)
+  \ No match: sb(7) str(6) code(5) f(4)  f(3)  f(2)  acc(1) le(0)
+  4 pick-n f = [
+    \ No match: sb(7) str(6) code(5) f(4) f(3) f(2) acc(1) le(0)
+    \ Build tail = sb[le..sb-len], append to acc
+    7 pick-n swap over #len #slice bytes>
+    \ sb[le..end] → tail. Stack: sb(7) str(6) code(5) f(4) f(3) f(2) acc(0) tail
+    1array #append
+    nip nip nip
+  ] [
+    \ Match: sb(7) str(6) code(5) ms(4) me(3) cap(2) acc(1) le(0)
+    \ Build segment = sb[le..ms]
+    7 pick-n over 6 pick-n #slice bytes>
+    \ Stack: sb(8) str(7) code(6) ms(5) me(4) cap(3) acc(2) le(1) seg(0)
+    \ Append seg to acc
+    2 pick-n swap 1array #append
+    \ Stack: sb(8) str(7) code(6) ms(5) me(4) cap(3) acc-old(2) le(1) nacc(0)
+    \ new-le = me (or me+1 for zero-width)
+    4 pick-n dup 7 pick-n = [ ++ ] when
+    \ Stack: sb(9) str(8) code(7) ms(6) me(5) cap(4) acc-old(3) le(2) nacc(1) nle(0)
+    swap [ drop drop drop drop drop ] 2dip
+    \ Stack: sb(2) str(1) code(0) nle nacc
+    (regex-split-loop)
+  ] if
+] ;
+
+\\ Replace the first match of a regex with a replacement string.
+regex-replace: ( str regex replacement -- str ) [
+  -rot> unmake-regex
+  over >bytes -rot>
+  \ Stack: repl(3) sb(2) str(1) code(0)
+  0 (regex-match-at)
+  \ Stack: repl(3) sb(2) str(1) code(0) ms me captures (or repl sb str code f f f)
+  over f = [
+    drop drop drop nip nip nip
+  ] [
+    drop
+    \ Stack: repl(5) sb(4) str(3) code(2) ms(1) me(0)
+    \ prefix = sb[0..ms]
+    4 pick-n 0 3 pick-n #slice bytes>
+    \ Stack: repl(6) sb(5) str(4) code(3) ms(2) me(1) prefix(0)
+    6 pick-n #append
+    \ Stack: sb(5) str(4) code(3) ms(2) me(1) pr(0)
+    \ suffix = sb[me..end]
+    5 pick-n 2 pick-n over #len #slice bytes>
+    \ Stack: sb(6) str(5) code(4) ms(3) me(2) pr(1) suffix(0)
+    #append
+    nip nip nip nip nip
+  ] if
+] ;
+
+\\ Replace all matches of a regex with a replacement string.
+regex-replace-all: ( str regex replacement -- str ) [
+  -rot> unmake-regex
+  over >bytes -rot>
+  \ Stack: repl(3) sb(2) str(1) code(0)
+  0 "" (regex-replace-all-loop)
+  nip nip nip nip
+] ;
+
+\ ( repl sb str code last-end accum -- repl sb str code result )
+(regex-replace-all-loop): [
+  \ Stack: repl(5) sb(4) str(3) code(2) le(1) acc(0)
+  over [ (regex-match-at) ] 2dip
+  \ 2dip saves le-copy(top) and acc. After restore (le on top, acc below):
+  \ Match:    repl(8) sb(7) str(6) code(5) ms(4) me(3) cap(2) acc(1) le(0)
+  \ No match: repl(8) sb(7) str(6) code(5) f(4)  f(3)  f(2)  acc(1) le(0)
+  4 pick-n f = [
+    \ No match: repl(8) sb(7) str(6) code(5) f(4) f(3) f(2) acc(1) le(0)
+    \ Build tail = sb[le..end], append to acc
+    7 pick-n swap over #len #slice bytes>
+    \ Stack: repl(7) sb(6) str(5) code(4) f(3) f(2) f(1) acc(0) tail
+    #append
+    nip nip nip
+  ] [
+    \ Match: repl(8) sb(7) str(6) code(5) ms(4) me(3) cap(2) acc(1) le(0)
+    \ Build prefix = sb[le..ms]
+    7 pick-n swap 5 pick-n #slice bytes>
+    \ Stack: repl(8) sb(7) str(6) code(5) ms(4) me(3) cap(2) acc(1) prefix(0)
+    \ Append prefix + repl to acc
+    8 pick-n #append 1 pick-n swap #append nip
+    \ Stack: repl(7) sb(6) str(5) code(4) ms(3) me(2) cap(1) nacc(0)
+    \ new-le = me (or me+1 for zero-width)
+    2 pick-n dup 5 pick-n = [ ++ ] when
+    \ Stack: repl(8) sb(7) str(6) code(5) ms(4) me(3) cap(2) nacc(1) nle(0)
+    swap [ drop drop drop ] 2dip
+    \ Stack: repl(3) sb(2) str(1) code(0) nle nacc
+    (regex-replace-all-loop)
+  ] if
+] ;
+
+\ Query a uint32 from pcre2_pattern_info.
+(query-info-u32): ( code info-constant -- u32 ) [
+  4 bytes-alloc dup bytes>ffi-ptr+len drop
+  \ Stack: code(3) info(2) buf(1) ptr(0)
+  swap [ (pattern-info) drop ] dip
+  \ Stack: buf(0)
+  0 4 #peek
+] ;
+
+\ Query a pointer from pcre2_pattern_info (returned as resource).
+(query-info-ptr): ( code info-constant -- resource ) [
+  (pattern-info-out)
+  \ Stack: ptr-resource rc
+  drop
+] ;
+
+\ Read a big-endian uint16 from a byte array at offset.
+(read-be-u16): ( bytes offset -- u16 ) [
+  2dup #nth 256 *
+  -rot> ++ #nth +
+] ;
+
+\ Find the first null byte in a byte array starting at offset.
+\ Returns the offset of the null byte.
+(find-null-byte): ( bytes offset -- null-offset ) [
+  2dup #nth 0 = [
+    nip
+  ] [
+    ++ (find-null-byte)
+  ] if
+] ;
+
+\ Named groups extraction loop.
+\ ( match-array table-bytes entry-size i count accum -- hash )
+(named-groups-loop): [
+  2 pick-n 2 pick-n >= [
+    nip nip nip nip nip
+  ] [
+    2 pick-n 4 pick-n *
+    \ Stack: ma(6) tb(5) es(4) i(3) cnt(2) acc(1) eo(0)
+    5 pick-n over (read-be-u16)
+    \ Stack: ma(7) tb(6) es(5) i(4) cnt(3) acc(2) eo(1) gn(0)
+    6 pick-n 2 pick-n 2 +
+    \ Stack: ma(9) tb(8) es(7) i(6) cnt(5) acc(4) eo(3) gn(2) tb-copy(1) eo+2(0)
+    2dup (find-null-byte) #slice bytes> >symbol
+    \ Stack: ma(8) tb(7) es(6) i(5) cnt(4) acc(3) eo(2) gn(1) name-sym(0)
+    8 pick-n 2 pick-n #nth
+    \ Stack: ma(9) tb(8) es(7) i(6) cnt(5) acc(4) eo(3) gn(2) name-sym(1) capture(0)
+    4 pick-n -rot> @set
+    \ Stack: ma(8) tb(7) es(6) i(5) cnt(4) acc(3) eo(2) gn(1) new-acc(0)
+    nip nip nip
+    \ Stack: ma(5) tb(4) es(3) i(2) cnt(1) new-acc(0)
+    [ ++ ] 2dip
+    (named-groups-loop)
+  ] if
+] ;
+
+\\ Extract named capture groups from a match result array and compiled regex.
+\\ Returns a hash mapping group name symbols to their capture values.
+named-groups: ( match-array regex -- hash ) [
+  unmake-regex
+  \ Stack: match-array code
+  dup PCRE2_INFO_NAMECOUNT (query-info-u32)
+  \ Stack: match-array code name-count
+  dup 0 = [
+    drop drop drop H{ }
+  ] [
+    over PCRE2_INFO_NAMEENTRYSIZE (query-info-u32)
+    \ Stack: match-array code name-count entry-size
+    2 pick-n PCRE2_INFO_NAMETABLE (query-info-ptr)
+    \ Stack: ma(4) code(3) nc(2) es(1) table-ptr(0)
+    2 pick-n 2 pick-n * ffi-ptr+len>bytes
+    \ Stack: ma(4) code(3) nc(2) es(1) table-bytes(0)
+    \ Need: ma tb es 0 nc { } for (named-groups-loop)
+    4 pick-n 1 pick-n 3 pick-n 0 6 pick-n H{ }
+    \ Stack: ma(10) code(9) nc(8) es(7) tb(6) ma(5) tb(4) es(3) 0(2) nc(1) {}(0)
+    (named-groups-loop)
+    \ Stack: ma(5) code(4) nc(3) es(2) tb(1) hash(0)
+    nip nip nip nip nip
   ] if
 ] ;

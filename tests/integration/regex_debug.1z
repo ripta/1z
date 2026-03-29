@@ -1,0 +1,4 @@
+use "regex" ;
+
+"2026-03-28" "(?P<year>\\d{4})-(?P<month>\\d{2})-(?P<day>\\d{2})" regex-compile
+2dup regex-match option:some> swap named-groups .
