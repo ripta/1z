@@ -548,7 +548,7 @@ static void ir_emit_overflow_math(ir_ctx *ctx, FILE *f, int def, ir_insn *insn, 
 	IR_ASSERT(overflow != IR_UNUSED);
 
 	if (ir_type_size[type] == 4 || ir_type_size[type] == 8) {
-		fprintf(f, "\tint overflow_%d;\n", overflow);
+		fprintf(f, "\t%s overflow_%d;\n", ir_type_cname[type], overflow);
 		ir_emit_def_ref(ctx, f, def);
 		fprintf(f, "__builtin_%s%s%s_overflow(",
 			IR_IS_TYPE_SIGNED(type) ? "s" : "u",
