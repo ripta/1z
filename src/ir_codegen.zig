@@ -3068,11 +3068,12 @@ pub fn emitProgramC(
     // Runtime entry point externs
     try out.appendSlice(allocator,
         \\
-        \\extern void *onez_runtime_init(int argc, char **argv);
+        \\extern void *onez_init(void);
+        \\extern int onez_set_args(void *ctx, int argc, char **argv);
         \\extern int32_t onez_runtime_register_compiled(void *rt, int32_t (**table)(uintptr_t), const char **names, uint32_t size);
         \\extern int32_t onez_runtime_run(void *rt, uint32_t entry_word_id);
         \\extern void onez_print_error(void *rt);
-        \\extern void onez_runtime_shutdown(void *rt);
+        \\extern void onez_deinit(void *rt);
         \\
         \\
     );
@@ -3253,7 +3254,8 @@ pub fn emitProgramC(
 
     // 6. Main entry point
     try out.appendSlice(allocator, "int main(int argc, char **argv) {\n");
-    try out.appendSlice(allocator, "    void *rt = onez_runtime_init(argc, argv);\n");
+    try out.appendSlice(allocator, "    void *rt = onez_init();\n");
+    try out.appendSlice(allocator, "    onez_set_args(rt, argc, argv);\n");
 
     // Format dispatch table size
     var size_buf: [20]u8 = undefined;
@@ -3270,7 +3272,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, id_str);
     try out.appendSlice(allocator, ");\n");
     try out.appendSlice(allocator, "    if (status != 0) onez_print_error(rt);\n");
-    try out.appendSlice(allocator, "    onez_runtime_shutdown(rt);\n");
+    try out.appendSlice(allocator, "    onez_deinit(rt);\n");
     try out.appendSlice(allocator, "    return (status != 0) ? 1 : 0;\n");
     try out.appendSlice(allocator, "}\n");
 
@@ -5292,10 +5294,11 @@ test "emitProgramC generates complete C source" {
     try testing.expect(std.mem.indexOf(u8, source, "#include <stdbool.h>") != null);
 
     // Runtime externs
-    try testing.expect(std.mem.indexOf(u8, source, "onez_runtime_init") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_init") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_set_args") != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_runtime_run") != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_print_error") != null);
-    try testing.expect(std.mem.indexOf(u8, source, "onez_runtime_shutdown") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_deinit") != null);
 
     // Forward declarations
     try testing.expect(std.mem.indexOf(u8, source, "int32_t onez_w_double(uintptr_t jit_ctx);") != null);

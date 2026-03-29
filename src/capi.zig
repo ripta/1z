@@ -76,6 +76,11 @@ export fn onez_deinit(ptr: ?*anyopaque) void {
 
     clearLastError(handle);
 
+    if (handle.ctx.program_args.len > 0) {
+        allocator.free(handle.ctx.program_args);
+        handle.ctx.program_args = &.{};
+    }
+
     handle.ctx.deinit();
     allocator.destroy(handle.ctx);
     _ = handle.gpa.deinit();
@@ -291,36 +296,31 @@ export fn onez_set_source(ptr: ?*anyopaque, data: [*]const u8, len: usize) c_int
     return ONEZ_OK;
 }
 
+export fn onez_set_args(ptr: ?*anyopaque, argc: c_int, argv: [*]const [*:0]const u8) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const allocator = handle.gpa.allocator();
+
+    if (argc > 0) {
+        const count: usize = @intCast(argc);
+        const args = allocator.alloc([]const u8, count) catch return ONEZ_ERR_ALLOC;
+        for (0..count) |idx| {
+            args[idx] = std.mem.span(argv[idx]);
+        }
+        handle.ctx.program_args = args;
+
+        const argv0 = std.mem.span(argv[0]);
+        handle.ctx.current_source = handle.ctx.quotationAllocator().dupe(u8, argv0) catch argv0;
+    }
+
+    return ONEZ_OK;
+}
+
 // =========================================================================
 // AOT Runtime API
 // =========================================================================
 
 const ir_codegen = @import("ir_codegen.zig");
 const JitContext = ir_codegen.JitContext;
-
-const AotWordFn = *const fn (usize) callconv(.c) i32;
-
-export fn onez_runtime_init(argc: c_int, argv: [*]const [*:0]const u8) ?*anyopaque {
-    const ptr = onez_init() orelse return null;
-    const handle = castHandle(ptr).?;
-    const allocator = handle.gpa.allocator();
-
-    // Populate program_args from argc/argv.
-    if (argc > 0) {
-        const count: usize = @intCast(argc);
-        const args = allocator.alloc([]const u8, count) catch return ptr;
-        for (0..count) |idx| {
-            args[idx] = std.mem.span(argv[idx]);
-        }
-        handle.ctx.program_args = args;
-
-        // Use argv[0] as the source attribution for error messages.
-        const argv0 = std.mem.span(argv[0]);
-        handle.ctx.current_source = handle.ctx.quotationAllocator().dupe(u8, argv0) catch argv0;
-    }
-
-    return ptr;
-}
 
 export fn onez_runtime_register_compiled(ptr: ?*anyopaque, table: [*]const ?*const anyopaque, names: [*]const ?[*:0]const u8, size: u32) i32 {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
@@ -417,18 +417,6 @@ export fn onez_print_error(ptr: ?*anyopaque) void {
 
     stderr.interface.flush() catch {};
     ctx.clearExecutionDetails();
-}
-
-export fn onez_runtime_shutdown(ptr: ?*anyopaque) void {
-    const handle = castHandle(ptr) orelse return;
-    const allocator = handle.gpa.allocator();
-
-    if (handle.ctx.program_args.len > 0) {
-        allocator.free(handle.ctx.program_args);
-        handle.ctx.program_args = &.{};
-    }
-
-    onez_deinit(ptr);
 }
 
 fn castHandle(ptr: ?*anyopaque) ?*OnezHandle {
@@ -686,4 +674,20 @@ test "null handle returns appropriate defaults" {
     try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_stack_type(null, 0));
     try std.testing.expect(onez_last_error(null) == null);
     try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_set_stdlib_path(null, "x", 1));
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_set_args(null, 0, undefined));
+}
+
+test "set_args populates program_args and source" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const argv = [_][*:0]const u8{ "my-program", "--flag" };
+    try std.testing.expectEqual(ONEZ_OK, onez_set_args(handle_ptr, 2, &argv));
+
+    const handle = castHandle(handle_ptr).?;
+    try std.testing.expectEqual(@as(usize, 2), handle.ctx.program_args.len);
+    try std.testing.expectEqualStrings("my-program", handle.ctx.program_args[0]);
+    try std.testing.expectEqualStrings("--flag", handle.ctx.program_args[1]);
+    try std.testing.expectEqualStrings("my-program", handle.ctx.current_source);
 }

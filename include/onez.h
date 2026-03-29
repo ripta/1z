@@ -156,20 +156,19 @@ int onez_set_stdlib_path(onez_t ctx, const char *path, size_t len);
 
 /*
  * Set the source name used in error messages. The data is copied.
- * Defaults to "<repl>". For AOT executables, onez_runtime_init sets this
- * to argv[0] automatically.
+ * Defaults to "<repl>". onez_set_args sets this to argv[0] automatically.
  */
 int onez_set_source(onez_t ctx, const char *data, size_t len);
 
-/* ---- AOT Runtime ---- */
-
 /*
- * Initialize the AOT runtime. Like onez_init but accepts argc/argv so that
- * the program can access command-line arguments via sys-info.
- *
- * Returns an opaque runtime handle, or NULL on failure.
+ * Set command-line arguments on the context. Populates program_args for
+ * sys-info access and sets source attribution to argv[0].
+ * The argv strings are NOT copied; they must remain valid for the lifetime
+ * of the handle.
  */
-onez_t onez_runtime_init(int argc, char **argv);
+int onez_set_args(onez_t ctx, int argc, char **argv);
+
+/* ---- AOT Runtime ---- */
 
 /*
  * Register the AOT-compiled dispatch table with the runtime.
@@ -182,11 +181,6 @@ int onez_runtime_register_compiled(onez_t rt, int32_t (**table)(uintptr_t), cons
  * Execute the AOT entry word. Returns 0 on success, non-zero on error.
  */
 int32_t onez_runtime_run(onez_t rt, uint32_t entry_word_id);
-
-/*
- * Shut down the runtime and free all resources.
- */
-void onez_runtime_shutdown(onez_t rt);
 
 #ifdef __cplusplus
 }
