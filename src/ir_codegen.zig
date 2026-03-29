@@ -2444,6 +2444,208 @@ pub fn compileWord(
     return IrCodegenError.CompilationFailed;
 }
 
+/// Convert a 1z word name to a valid C identifier.
+///
+/// Alphanumerics and underscores pass through; special characters are mapped to short mnemonics;
+/// everything else becomes `_xNN_` hex escapes.
+///
+/// The result is prefixed with `onez_w_` and null-terminated for C interop.
+pub fn mangleWordName(name: []const u8, allocator: Allocator) Allocator.Error![:0]u8 {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    errdefer buf.deinit(allocator);
+    try buf.appendSlice(allocator, "onez_w_");
+    for (name) |ch| {
+        switch (ch) {
+            'a'...'z', 'A'...'Z', '0'...'9', '_' => try buf.append(allocator, ch),
+            '-' => try buf.append(allocator, '_'),
+            '#' => try buf.appendSlice(allocator, "_H"),
+            '@' => try buf.appendSlice(allocator, "_A"),
+            '?' => try buf.appendSlice(allocator, "_Q"),
+            '!' => try buf.appendSlice(allocator, "_B"),
+            '*' => try buf.appendSlice(allocator, "_S"),
+            '+' => try buf.appendSlice(allocator, "_P"),
+            '/' => try buf.appendSlice(allocator, "_D"),
+            '<' => try buf.appendSlice(allocator, "_L"),
+            '>' => try buf.appendSlice(allocator, "_G"),
+            '=' => try buf.appendSlice(allocator, "_E"),
+            '.' => try buf.appendSlice(allocator, "_O"),
+            ':' => try buf.appendSlice(allocator, "_C"),
+            else => {
+                var hex_buf: [7]u8 = undefined;
+                const hex = std.fmt.bufPrint(&hex_buf, "_x{X:0>2}_", .{ch}) catch unreachable;
+                try buf.appendSlice(allocator, hex);
+            },
+        }
+    }
+    return buf.toOwnedSliceSentinel(allocator, 0);
+}
+
+/// Emit a compiled word as C source code via ir_emit_c.
+///
+/// Currently limited to pure-arithmetic words, no callbacks, no dispatch.
+pub fn emitWordC(
+    instructions: []const Instruction,
+    input_count: u8,
+    output_count: u8,
+    name: []const u8,
+    allocator: Allocator,
+) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
+    ValueLayout.ensureInit();
+
+    if (input_count > 8) return IrCodegenError.NotCompilable;
+
+    const c_name = try mangleWordName(name, allocator);
+    defer allocator.free(c_name);
+
+    // C emission does not use IR_OPT_FOLDING because the opt-level-0 pipeline
+    // used by ir_emit_c / no ir_sccp pass) is incompatible with it.
+    var ctx: c.ir_ctx = undefined;
+    c.ir_init(&ctx, c.IR_FUNCTION, c.IR_CONSTS_LIMIT_MIN, c.IR_INSNS_LIMIT_MIN);
+    defer c.ir_free(&ctx);
+
+    // ir_init zeroes ret_type to IR_VOID. Set it to IR_I32 so the C emitter
+    // generates the correct return type: compiled words return i32 status.
+    ctx.ret_type = c.IR_I32;
+
+    c._ir_START(&ctx);
+
+    JitContextLayout.ensureInit();
+
+    const jit_ctx_ptr = c._ir_PARAM(&ctx, c.IR_ADDR, "jit_ctx", 1);
+
+    const items_ptr = c._ir_LOAD(&ctx, c.IR_ADDR, jit_ctx_ptr);
+    const sp_ptr_off = c.ir_const_addr(&ctx, JitContextLayout.sp_ptr_offset);
+    const sp_ptr_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), jit_ctx_ptr, sp_ptr_off);
+    const sp_ptr = c._ir_LOAD(&ctx, c.IR_ADDR, sp_ptr_addr);
+
+    // Capacity is only needed for words that grow the stack beyond input slots.
+    // Defer loading it to avoid emitting an unused variable in the C output.
+    const capacity_param = if (output_count > input_count) blk: {
+        const cap_off = c.ir_const_addr(&ctx, JitContextLayout.capacity_offset);
+        const cap_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), jit_ctx_ptr, cap_off);
+        break :blk c._ir_LOAD(&ctx, c.IR_ADDR, cap_addr);
+    } else c.IR_UNUSED;
+
+    const bail_status = c.ir_const_i32(&ctx, 1);
+    const ok_status = c.ir_const_i32(&ctx, 0);
+
+    const sp_val = c._ir_LOAD(&ctx, c.IR_ADDR, sp_ptr);
+
+    if (input_count > 0) {
+        const min_sp = c.ir_const_addr(&ctx, input_count);
+        const sp_too_small = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ULT, c.IR_BOOL), sp_val, min_sp);
+        const if_underflow = c._ir_IF(&ctx, sp_too_small);
+        c._ir_IF_TRUE_cold(&ctx, if_underflow);
+        c._ir_RETURN(&ctx, bail_status);
+        c._ir_IF_FALSE(&ctx, if_underflow);
+    }
+
+    const value_size_const = c.ir_const_addr(&ctx, ValueLayout.value_size);
+    const tag_offset_const = c.ir_const_addr(&ctx, ValueLayout.tag_offset);
+    const payload_offset_const = c.ir_const_addr(&ctx, ValueLayout.payload_offset);
+    const fixnum_tag_const = emitTagConst(&ctx, .fixnum);
+    const float_tag_const = emitTagConst(&ctx, .float);
+    const boolean_tag_const = emitTagConst(&ctx, .boolean);
+    const tagged_tag_const = emitTagConst(&ctx, .tagged);
+    const struct_instance_tag_const = emitTagConst(&ctx, .struct_instance);
+
+    const input_count_const = c.ir_const_addr(&ctx, input_count);
+    const base_idx = c.ir_fold2(&ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), sp_val, input_count_const);
+    const base_byte_offset = c.ir_fold2(&ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), base_idx, value_size_const);
+    const base_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), items_ptr, base_byte_offset);
+
+    var stack: [64]StackEntry = undefined;
+    var sp: usize = 0;
+    for (0..input_count) |_| {
+        stack[sp] = .{ .raw_at_slot = sp };
+        sp += 1;
+    }
+
+    var state = CompileState{
+        .ctx = &ctx,
+        .base_addr = base_addr,
+        .tag_offset_const = tag_offset_const,
+        .payload_offset_const = payload_offset_const,
+        .fixnum_tag_const = fixnum_tag_const,
+        .float_tag_const = float_tag_const,
+        .boolean_tag_const = boolean_tag_const,
+        .tagged_tag_const = tagged_tag_const,
+        .struct_instance_tag_const = struct_instance_tag_const,
+        .bail_status = bail_status,
+        .ok_status = ok_status,
+        .items_ptr = items_ptr,
+        .sp_ptr = sp_ptr,
+        .capacity_param = capacity_param,
+        .sp_val = sp_val,
+        .base_idx = base_idx,
+        .value_size_const = value_size_const,
+        .jit_ctx_ptr = jit_ctx_ptr,
+    };
+
+    try compileInstructions(&state, instructions, &stack, &sp);
+
+    if (state.diverged) {
+        c._ir_RETURN(&ctx, ok_status);
+    } else if (state.dynamic_call_emitted) {
+        c._ir_RETURN(&ctx, ok_status);
+    } else {
+        if (sp != output_count) return IrCodegenError.StackShapeMismatch;
+        for (0..sp) |i| {
+            switch (stack[i]) {
+                .i64_ref => |ref| {
+                    const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
+                    const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                    emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, fixnum_tag_const, ref);
+                },
+                .f64_ref => |ref| {
+                    const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
+                    const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                    emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, float_tag_const, ref);
+                },
+                .bool_ref => |ref| {
+                    const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
+                    const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                    emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, boolean_tag_const, ref);
+                },
+                .quotation_body => return IrCodegenError.NotCompilable,
+                .raw_at_slot => |s| {
+                    if (s != i) {
+                        if (s < sp and stack[s] == .raw_at_slot and stack[s].raw_at_slot == i) {
+                            emitSwapSlots(&ctx, base_addr, i, s);
+                            stack[s] = .{ .raw_at_slot = s };
+                        } else {
+                            emitCopySlot(&ctx, base_addr, s, i);
+                        }
+                    }
+                },
+            }
+        }
+        if (input_count > output_count) {
+            const sp_delta = c.ir_const_addr(&ctx, input_count - output_count);
+            const new_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), sp_val, sp_delta);
+            c._ir_STORE(&ctx, sp_ptr, new_sp);
+        } else if (input_count < output_count) {
+            const sp_delta = c.ir_const_addr(&ctx, output_count - input_count);
+            const new_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), sp_val, sp_delta);
+            c._ir_STORE(&ctx, sp_ptr, new_sp);
+        } else {
+            c._ir_STORE(&ctx, sp_ptr, sp_val);
+        }
+        c._ir_RETURN(&ctx, ok_status);
+    }
+
+    // emit as C source with stdint.h preamble
+    const body = try ir_mod.emitC(&ctx, c_name.ptr, allocator);
+    errdefer allocator.free(body);
+
+    const preamble = "#include <stdint.h>\n#include <stdbool.h>\n\n";
+    const result = try allocator.alloc(u8, preamble.len + body.len);
+    @memcpy(result[0..preamble.len], preamble);
+    @memcpy(result[preamble.len..], body);
+    allocator.free(body);
+    return result;
+}
+
 /// Emit an overflow-checked binary operation (add/sub/mul).
 /// On overflow, returns bail_status. On success, returns the result ref.
 fn emitOverflowCheckedBinary(
@@ -4214,4 +4416,87 @@ test "inline typed-validate-and-promote then arithmetic" {
     try testing.expectEqual(@as(usize, 1), sp);
     try testing.expect(values[0] == .fixnum);
     try testing.expectEqual(@as(i64, 15), values[0].fixnum);
+}
+
+// --- C emission tests ---
+
+test "mangle simple word name" {
+    const name = try mangleWordName("double", testing.allocator);
+    defer testing.allocator.free(name);
+    try testing.expectEqualStrings("onez_w_double", name);
+}
+
+test "mangle word name with special chars" {
+    const name = try mangleWordName("#map", testing.allocator);
+    defer testing.allocator.free(name);
+    try testing.expectEqualStrings("onez_w__Hmap", name);
+}
+
+test "mangle word name with kebab-case" {
+    const name = try mangleWordName("?or-else", testing.allocator);
+    defer testing.allocator.free(name);
+    try testing.expectEqualStrings("onez_w__Qor_else", name);
+}
+
+test "mangle word name with multiple specials" {
+    const name = try mangleWordName("@set!", testing.allocator);
+    defer testing.allocator.free(name);
+    try testing.expectEqualStrings("onez_w__Aset_B", name);
+}
+
+test "mangle word name preserves digits and underscores" {
+    const name = try mangleWordName("foo_bar2", testing.allocator);
+    defer testing.allocator.free(name);
+    try testing.expectEqualStrings("onez_w_foo_bar2", name);
+}
+
+test "emit C for double: 2 *" {
+    const instrs = makeInstructions(.{ @as(i64, 2), "*" });
+    const source = try emitWordC(&instrs, 1, 1, "double", testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.startsWith(u8, source, "#include <stdint.h>"));
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_double") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "return") != null);
+}
+
+test "emit C for (a+3)*4" {
+    const instrs = makeInstructions(.{ @as(i64, 3), "+", @as(i64, 4), "*" });
+    const source = try emitWordC(&instrs, 1, 1, "compute", testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_compute") != null);
+}
+
+test "emit C for push literal" {
+    const instrs = makeInstructions(.{@as(i64, 42)});
+    const source = try emitWordC(&instrs, 0, 1, "forty-two", testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_forty_two") != null);
+}
+
+test "emitted C compiles with cc" {
+    const instrs = makeInstructions(.{ @as(i64, 2), "*" });
+    const source = try emitWordC(&instrs, 1, 1, "double", testing.allocator);
+    defer testing.allocator.free(source);
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const c_file = try tmp_dir.dir.createFile("test.c", .{});
+    try c_file.writeAll(source);
+    c_file.close();
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const c_path = try tmp_dir.dir.realpath("test.c", &path_buf);
+
+    // invoke cc -fsyntax-only to verify the C source is valid
+    var child = std.process.Child.init(
+        &.{ "cc", "-fsyntax-only", c_path },
+        testing.allocator,
+    );
+    child.stderr_behavior = .Inherit;
+    try child.spawn();
+    const result = try child.wait();
+    try testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, result);
 }
