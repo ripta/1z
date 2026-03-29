@@ -125,3 +125,51 @@ dup 1 #nth "name" @get "bob" "array of objects access" assert=
 "line1\nline2" "line1\\nline2" json-unescape "unescape newline" assert=
 "tab\there" "tab\\there" json-unescape "unescape tab" assert=
 "A" "\\u0041" json-unescape "unescape unicode" assert=
+
+\ -- json-escape --
+
+"json-escape" test-section
+"hello" "hello" json-escape "plain string unchanged" assert=
+"a\\\"b" "a\"b" json-escape "escape quote" assert=
+"a\\\\b" "a\\b" json-escape "escape backslash" assert=
+"line1\\nline2" "line1\nline2" json-escape "escape newline" assert=
+"tab\\there" "tab\there" json-escape "escape tab" assert=
+"\\u0001" 1 >char json-escape "escape control char as unicode" assert=
+
+\ -- emit-json --
+
+"emit-json" test-section
+"42" 42 emit-json "emit integer" assert=
+"3.5" 3.5 emit-json "emit float" assert=
+"true" t emit-json "emit true" assert=
+"false" f emit-json "emit false" assert=
+"null" option:none emit-json "emit null" assert=
+"\"hello\\nworld\"" "hello\nworld" emit-json "emit escaped string" assert=
+"[1,\"two\",false,null]" parse-json emit-json parse-json 0 #nth 1 "emit mixed array first" assert=
+"[1,\"two\",false,null]" parse-json emit-json parse-json 1 #nth "two" "emit mixed array second" assert=
+"[1,\"two\",false,null]" parse-json emit-json parse-json 2 #nth f "emit mixed array third" assert=
+"[1,\"two\",false,null]" parse-json emit-json parse-json 3 #nth option:none? "emit mixed array fourth null" assert-true
+"{\"b\":2,\"a\":1}" parse-json emit-json 0 #nth "{" "emit object sorted char 0" assert=
+"{\"b\":2,\"a\":1}" parse-json emit-json 1 #nth 34 >char "emit object sorted char 1" assert=
+"{\"b\":2,\"a\":1}" parse-json emit-json 2 #nth "a" "emit object sorted char 2" assert=
+"{\"b\":2,\"a\":1}" parse-json emit-json 7 #nth 34 >char "emit object sorted char 7" assert=
+"{\"b\":2,\"a\":1}" parse-json emit-json 8 #nth "b" "emit object sorted char 8" assert=
+"{\"b\":2,\"a\":1}" parse-json emit-json parse-json "a" @get 1 "emit object sorted value a" assert=
+"{\"b\":2,\"a\":1}" parse-json emit-json parse-json "b" @get 2 "emit object sorted value b" assert=
+"{\"z\":[2,3],\"outer\":{\"a\":1}}" parse-json emit-json parse-json "outer" @get "a" @get 1 "emit nested outer.a" assert=
+"{\"z\":[2,3],\"outer\":{\"a\":1}}" parse-json emit-json parse-json "z" @get 1 #nth 3 "emit nested z[1]" assert=
+
+\ -- emit-json-pretty --
+
+"emit-json-pretty" test-section
+"[\n  1,\n  \"two\",\n  null\n]" "[1,\"two\",null]" parse-json emit-json-pretty "pretty array" assert=
+"{\"b\":{\"c\":true},\"a\":1}" parse-json emit-json-pretty 0 #nth "{" "pretty nested char 0" assert=
+"{\"b\":{\"c\":true},\"a\":1}" parse-json emit-json-pretty 1 #nth "\n" "pretty nested char 1" assert=
+"{\"b\":{\"c\":true},\"a\":1}" parse-json emit-json-pretty 5 #nth "a" "pretty nested first key starts with a" assert=
+"{\"b\":{\"c\":true},\"a\":1}" parse-json emit-json-pretty 15 #nth "b" "pretty nested second key starts with b" assert=
+"{\"b\":{\"c\":true},\"a\":1}" parse-json emit-json-pretty parse-json "a" @get 1 "pretty nested roundtrip a" assert=
+
+\ -- emit-json: errors --
+
+"emit-json: errors" test-section
+[ { 1 2 } >option:some emit-json ] "unsupported option:some throws" assert-error

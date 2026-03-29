@@ -133,6 +133,170 @@ parse-json-number: ( scanner -- scanner value ) [
   if
 ] ;
 
+\ Emit a 4-digit uppercase hex string for a codepoint <= 0xFFFF.
+emit-hex4: ( n -- str ) [
+  16 >string-base uppercase
+  dup #len 4 swap - "0" swap repeat swap #append
+] ;
+
+\ Escape a single character as JSON string content.
+json-escape-char: ( char -- str ) [
+  dup "\"" = [ drop "\\\"" ]
+  [ dup "\\" = [ drop "\\\\" ]
+    [ dup 8 >char = [ drop "\\b" ]
+      [ dup 12 >char = [ drop "\\f" ]
+        [ dup "\n" = [ drop "\\n" ]
+          [ dup "\r" = [ drop "\\r" ]
+            [ dup "\t" = [ drop "\\t" ]
+              [ dup >codepoint 32 < [
+                  >codepoint emit-hex4 "\\u" swap #append
+                ] [ ] if
+              ] if
+            ] if
+          ] if
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+json-indent: ( level -- str ) [
+  2 * " " swap repeat
+] ;
+
+emit-json-quoted-string: ( str -- str ) [
+  json-escape "\"" swap #append "\"" #append
+] ;
+
+emit-json-array-item-compact: ( value indent -- str ) [
+  f swap emit-json-value
+] ;
+
+emit-json-array-item-pretty: ( value indent -- str ) [
+  [ t swap emit-json-value ] keep
+  json-indent swap #append
+] ;
+
+emit-json-array-items-compact: ( array indent -- array ) [
+  [ emit-json-array-item-compact ] curry #map #collect
+] ;
+
+emit-json-array-items-pretty: ( array indent -- array ) [
+  1 + [ emit-json-array-item-pretty ] curry #map #collect
+] ;
+
+emit-json-check-key: ( key -- key ) [
+  dup string? [
+  ] [
+    dup symbol? not [ dup "string or symbol" throw-type-error ] when
+  ] if
+] ;
+
+emit-json-key-value-pair: ( key hash -- pair ) [
+  2dup swap @get nip 2 array-n
+] ;
+
+emit-json-object-pairs: ( hash indent -- array ) [
+  drop
+  dup @keys [ >string ] #sort-by
+  swap [ emit-json-key-value-pair ] curry #map #collect
+] ;
+
+emit-json-object-pair-compact: ( pair indent -- str ) [
+  over 0 #nth emit-json-check-key >string emit-json-quoted-string ":" #append
+  2 pick-n 1 #nth f 3 pick-n emit-json-value #append
+  2nip
+] ;
+
+emit-json-object-pair-pretty: ( pair indent -- str ) [
+  over 0 #nth emit-json-check-key >string emit-json-quoted-string ": " #append
+  2 pick-n 1 #nth t 3 pick-n emit-json-value #append
+  swap json-indent swap #append
+  nip
+] ;
+
+emit-json-object-items-compact: ( hash indent -- array ) [
+  [ emit-json-object-pairs ] keep
+  [ emit-json-object-pair-compact ] curry #map #collect
+] ;
+
+emit-json-object-items-pretty: ( hash indent -- array ) [
+  [ emit-json-object-pairs ] keep
+  1 + [ emit-json-object-pair-pretty ] curry #map #collect
+] ;
+
+emit-json-array-compact: ( array indent -- str ) [
+  emit-json-array-items-compact
+  "," #join "[" swap #append "]" #append
+] ;
+
+emit-json-array-pretty: ( array indent -- str ) [
+  over #len 0 = [ 2drop "[]" ] [
+    [ emit-json-array-items-pretty ",\n" #join ] keep
+    swap "[\n" swap #append
+    "\n" #append
+    swap json-indent #append
+    "]" #append
+  ] if
+] ;
+
+emit-json-object-compact: ( hash indent -- str ) [
+  emit-json-object-items-compact
+  "," #join "{" swap #append "}" #append
+] ;
+
+emit-json-object-pretty: ( hash indent -- str ) [
+  over @keys #empty? [ 2drop "{}" ] [
+    [ emit-json-object-items-pretty ",\n" #join ] keep
+    swap "{\n" swap #append
+    "\n" #append
+    swap json-indent #append
+    "}" #append
+  ] if
+] ;
+
+emit-json-value: stack-recursive ( value pretty? indent -- str ) [
+  2 pick-n string? [
+    swap 2drop emit-json-quoted-string
+  ] [
+    2 pick-n array? [
+      1 pick-n
+      [ swap drop emit-json-array-pretty ]
+      [ swap drop emit-json-array-compact ]
+      if
+    ] [
+      2 pick-n hash? [
+        1 pick-n
+        [ swap drop emit-json-object-pretty ]
+        [ swap drop emit-json-object-compact ]
+        if
+      ] [
+        2 pick-n boolean? [
+          swap 2drop [ "true" ] [ "false" ] if
+        ] [
+          2 pick-n option:none? [
+            drop drop drop "null"
+          ] [
+            2 pick-n fixnum? [
+              swap 2drop >string
+            ] [
+              2 pick-n bignum? [
+                swap 2drop >string
+              ] [
+                2 pick-n float? [
+                  swap 2drop >string
+                ] [
+                  2 pick-n "JSON-serializable value" throw-type-error
+                ] if
+              ] if
+            ] if
+          ] if
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
 \ Parse a JSON value (scanner positioned at or before the value).
 \ Loop invariants: object = hash scanner, array = array scanner
 parse-json-value: stack-recursive ( scanner -- scanner value ) [
@@ -247,4 +411,19 @@ json-unescape: ( str -- str ) [
     ] if
   ] while
   swap drop
+] ;
+
+\\ Escape a string for JSON string literal contents.
+json-escape: ( str -- str ) [
+  >iterator [ json-escape-char ] #map #collect "" #join
+] ;
+
+\\ Emit a compact JSON string.
+emit-json: ( value -- str ) [
+  f 0 emit-json-value
+] ;
+
+\\ Emit a pretty-printed JSON string with fixed 2-space indentation.
+emit-json-pretty: ( value -- str ) [
+  t 0 emit-json-value
 ] ;

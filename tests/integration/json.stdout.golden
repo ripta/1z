@@ -171,3 +171,75 @@ PASS: unescape tab
 Stack: [ t t t t t t f f f ]
 PASS: unescape unicode
 Stack: [ t t t t t t f f f ]
+=== json-escape ===
+Stack: [ t t t t t t f f f ]
+PASS: plain string unchanged
+Stack: [ t t t t t t f f f ]
+PASS: escape quote
+Stack: [ t t t t t t f f f ]
+PASS: escape backslash
+Stack: [ t t t t t t f f f ]
+PASS: escape newline
+Stack: [ t t t t t t f f f ]
+PASS: escape tab
+Stack: [ t t t t t t f f f ]
+PASS: escape control char as unicode
+Stack: [ t t t t t t f f f ]
+=== emit-json ===
+Stack: [ t t t t t t f f f ]
+PASS: emit integer
+Stack: [ t t t t t t f f f ]
+PASS: emit float
+Stack: [ t t t t t t f f f ]
+PASS: emit true
+Stack: [ t t t t t t f f f ]
+PASS: emit false
+Stack: [ t t t t t t f f f ]
+PASS: emit null
+Stack: [ t t t t t t f f f ]
+PASS: emit escaped string
+Stack: [ t t t t t t f f f ]
+PASS: emit mixed array first
+Stack: [ t t t t t t f f f ]
+PASS: emit mixed array second
+Stack: [ t t t t t t f f f ]
+PASS: emit mixed array third
+Stack: [ t t t t t t f f f ]
+PASS: emit mixed array fourth null
+Stack: [ t t t t t t f f f ]
+PASS: emit object sorted char 0
+Stack: [ t t t t t t f f f ]
+PASS: emit object sorted char 1
+Stack: [ t t t t t t f f f ]
+PASS: emit object sorted char 2
+Stack: [ t t t t t t f f f ]
+PASS: emit object sorted char 7
+Stack: [ t t t t t t f f f ]
+PASS: emit object sorted char 8
+Stack: [ t t t t t t f f f ]
+PASS: emit object sorted value a
+Stack: [ t t t t t t f f f ]
+PASS: emit object sorted value b
+Stack: [ t t t t t t f f f ]
+PASS: emit nested outer.a
+Stack: [ t t t t t t f f f ]
+PASS: emit nested z[1]
+Stack: [ t t t t t t f f f ]
+=== emit-json-pretty ===
+Stack: [ t t t t t t f f f ]
+PASS: pretty array
+Stack: [ t t t t t t f f f ]
+PASS: pretty nested char 0
+Stack: [ t t t t t t f f f ]
+PASS: pretty nested char 1
+Stack: [ t t t t t t f f f ]
+PASS: pretty nested first key starts with a
+Stack: [ t t t t t t f f f ]
+PASS: pretty nested second key starts with b
+Stack: [ t t t t t t f f f ]
+PASS: pretty nested roundtrip a
+Stack: [ t t t t t t f f f ]
+=== emit-json: errors ===
+Stack: [ t t t t t t f f f ]
+PASS: unsupported option:some throws
+Stack: [ t t t t t t f f f ]
