@@ -130,8 +130,9 @@ fn executeAndCollectEntry(
                     .complete => |instrs| {
                         if (instrs.len > 0) {
                             const is_def = Context.isDefinitionStatement(instrs);
-                            try ctx.executeQuotation(.{ .instructions = instrs });
-                            if (!is_def) {
+                            if (is_def) {
+                                try ctx.executeQuotation(.{ .instructions = instrs });
+                            } else {
                                 try entry_instrs.appendSlice(allocator, instrs);
                             }
                         }
@@ -148,8 +149,9 @@ fn executeAndCollectEntry(
             .complete => |instrs| {
                 if (instrs.len > 0) {
                     const is_def = Context.isDefinitionStatement(instrs);
-                    try ctx.executeQuotation(.{ .instructions = instrs });
-                    if (!is_def) {
+                    if (is_def) {
+                        try ctx.executeQuotation(.{ .instructions = instrs });
+                    } else {
                         try entry_instrs.appendSlice(allocator, instrs);
                     }
                 }
