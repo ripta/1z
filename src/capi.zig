@@ -300,55 +300,30 @@ const JitContext = ir_codegen.JitContext;
 
 const AotWordFn = *const fn (usize) callconv(.c) i32;
 
-export fn onez_runtime_init(argc: c_int, argv: [*]const [*:0]const u8) usize {
-    const gpa = page.create(std.heap.GeneralPurposeAllocator(.{})) catch return 0;
-    gpa.* = .{};
-    const allocator = gpa.allocator();
-
-    const ctx = allocator.create(Context) catch return 0;
-    ctx.* = Context.init(allocator);
-
-    // Discover stdlib relative to the executable binary.
-    var self_exe_buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (std.fs.selfExeDirPath(&self_exe_buf)) |exe_dir| {
-        const lib_path = std.fs.path.join(ctx.quotationAllocator(), &.{ exe_dir, "../lib" }) catch null;
-        if (lib_path) |lp| {
-            var real_buf: [std.fs.max_path_bytes]u8 = undefined;
-            if (std.fs.cwd().realpath(lp, &real_buf)) |real| {
-                ctx.stdlib_path = ctx.quotationAllocator().dupe(u8, real) catch null;
-            } else |_| {}
-        }
-    } else |_| {}
-
-    ctx.loadPrelude(null) catch return 0;
+export fn onez_runtime_init(argc: c_int, argv: [*]const [*:0]const u8) ?*anyopaque {
+    const ptr = onez_init() orelse return null;
+    const handle = castHandle(ptr).?;
+    const allocator = handle.gpa.allocator();
 
     // Populate program_args from argc/argv.
     if (argc > 0) {
         const count: usize = @intCast(argc);
-        const args = allocator.alloc([]const u8, count) catch null;
-        if (args) |a| {
-            for (0..count) |idx| {
-                a[idx] = std.mem.span(argv[idx]);
-            }
-            ctx.program_args = a;
+        const args = allocator.alloc([]const u8, count) catch return ptr;
+        for (0..count) |idx| {
+            args[idx] = std.mem.span(argv[idx]);
         }
+        handle.ctx.program_args = args;
 
         // Use argv[0] as the source attribution for error messages.
         const argv0 = std.mem.span(argv[0]);
-        ctx.current_source = ctx.quotationAllocator().dupe(u8, argv0) catch argv0;
+        handle.ctx.current_source = handle.ctx.quotationAllocator().dupe(u8, argv0) catch argv0;
     }
 
-    const handle = page.create(OnezHandle) catch return 0;
-    handle.* = .{
-        .gpa = gpa,
-        .ctx = ctx,
-    };
-    return @intFromPtr(handle);
+    return ptr;
 }
 
-export fn onez_runtime_register_compiled(rt: usize, table: [*]const ?*const anyopaque, names: [*]const ?[*:0]const u8, size: u32) i32 {
-    if (rt == 0) return ONEZ_ERR_NULL_HANDLE;
-    const handle: *OnezHandle = @ptrFromInt(rt);
+export fn onez_runtime_register_compiled(ptr: ?*anyopaque, table: [*]const ?*const anyopaque, names: [*]const ?[*:0]const u8, size: u32) i32 {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const ctx = handle.ctx;
 
     ctx.jit_dispatch.ensureCapacity(size) catch return ONEZ_ERR_ALLOC;
@@ -357,16 +332,15 @@ export fn onez_runtime_register_compiled(rt: usize, table: [*]const ?*const anyo
             const entry = ctx.jit_dispatch.getMut(@intCast(i)) orelse continue;
             entry.word_name = std.mem.span(name_ptr);
         }
-        if (table[i]) |ptr| {
-            ctx.jit_dispatch.setCodePtr(@intCast(i), ptr);
+        if (table[i]) |code_ptr| {
+            ctx.jit_dispatch.setCodePtr(@intCast(i), code_ptr);
         }
     }
     return ONEZ_OK;
 }
 
-export fn onez_runtime_run(rt: usize, entry_word_id: u32) i32 {
-    if (rt == 0) return 1;
-    const handle: *OnezHandle = @ptrFromInt(rt);
+export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
+    const handle = castHandle(ptr) orelse return 1;
     const ctx = handle.ctx;
 
     const entry = ctx.jit_dispatch.get(entry_word_id) orelse return 1;
@@ -395,9 +369,8 @@ export fn onez_runtime_run(rt: usize, entry_word_id: u32) i32 {
     return if (status == 0) 0 else 1;
 }
 
-export fn onez_runtime_print_error(rt: usize) void {
-    if (rt == 0) return;
-    const handle: *OnezHandle = @ptrFromInt(rt);
+export fn onez_print_error(ptr: ?*anyopaque) void {
+    const handle = castHandle(ptr) orelse return;
     const ctx = handle.ctx;
 
     const stderr_file: std.fs.File = .stderr();
@@ -446,22 +419,16 @@ export fn onez_runtime_print_error(rt: usize) void {
     ctx.clearExecutionDetails();
 }
 
-export fn onez_runtime_shutdown(rt: usize) void {
-    if (rt == 0) return;
-    const handle: *OnezHandle = @ptrFromInt(rt);
+export fn onez_runtime_shutdown(ptr: ?*anyopaque) void {
+    const handle = castHandle(ptr) orelse return;
     const allocator = handle.gpa.allocator();
-
-    clearLastError(handle);
 
     if (handle.ctx.program_args.len > 0) {
         allocator.free(handle.ctx.program_args);
+        handle.ctx.program_args = &.{};
     }
 
-    handle.ctx.deinit();
-    allocator.destroy(handle.ctx);
-    _ = handle.gpa.deinit();
-    page.destroy(handle.gpa);
-    page.destroy(handle);
+    onez_deinit(ptr);
 }
 
 fn castHandle(ptr: ?*anyopaque) ?*OnezHandle {

@@ -140,6 +140,12 @@ int onez_stack_type(onez_t ctx, size_t index);
  */
 const char *onez_last_error(onez_t ctx);
 
+/*
+ * Print structured error details to stderr. Includes source location,
+ * error type, stack traces, and hints when available.
+ */
+void onez_print_error(onez_t ctx);
+
 /* ---- Configuration ---- */
 
 /*
@@ -161,26 +167,26 @@ int onez_set_source(onez_t ctx, const char *data, size_t len);
  * Initialize the AOT runtime. Like onez_init but accepts argc/argv so that
  * the program can access command-line arguments via sys-info.
  *
- * Returns an opaque runtime handle as uintptr_t, or 0 on failure.
+ * Returns an opaque runtime handle, or NULL on failure.
  */
-uintptr_t onez_runtime_init(int argc, char **argv);
+onez_t onez_runtime_init(int argc, char **argv);
 
 /*
  * Register the AOT-compiled dispatch table with the runtime.
  * `table` is an array of function pointers (NULL for uncompiled slots).
  * `size` is the number of entries.
  */
-int onez_runtime_register_compiled(uintptr_t rt, int32_t (**table)(uintptr_t), const char **names, uint32_t size);
+int onez_runtime_register_compiled(onez_t rt, int32_t (**table)(uintptr_t), const char **names, uint32_t size);
 
 /*
  * Execute the AOT entry word. Returns 0 on success, non-zero on error.
  */
-int32_t onez_runtime_run(uintptr_t rt, uint32_t entry_word_id);
+int32_t onez_runtime_run(onez_t rt, uint32_t entry_word_id);
 
 /*
  * Shut down the runtime and free all resources.
  */
-void onez_runtime_shutdown(uintptr_t rt);
+void onez_runtime_shutdown(onez_t rt);
 
 #ifdef __cplusplus
 }
