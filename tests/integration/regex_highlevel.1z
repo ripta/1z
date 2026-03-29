@@ -1,0 +1,90 @@
+\ Integration tests for higher-level regex words
+
+use "testing" ;
+
+use "regex" ;
+
+"regex-find-all: multiple matches" test-section
+"a1b2c3" "\\d+" regex-compile regex-find-all #collect
+dup #len 3 "finds 3 digit matches" assert=
+dup 0 #nth 0 #nth option:some> "1" "first match is '1'" assert=
+dup 1 #nth 0 #nth option:some> "2" "second match is '2'" assert=
+2 #nth 0 #nth option:some> "3" "third match is '3'" assert=
+
+"regex-find-all: single match" test-section
+"hello" "ell" regex-compile regex-find-all #collect
+dup #len 1 "finds 1 match" assert=
+0 #nth 0 #nth option:some> "ell" "match is 'ell'" assert=
+
+"regex-find-all: no matches" test-section
+"hello" "xyz" regex-compile regex-find-all #collect
+#len 0 "empty iterator when no matches" assert=
+
+"regex-find-all: capture groups" test-section
+"12+34" "(\\d+)\\+(\\d+)" regex-compile regex-find-all #collect
+dup #len 1 "one match" assert=
+0 #nth
+dup 0 #nth option:some> "12+34" "full match" assert=
+dup 1 #nth option:some> "12" "group 1" assert=
+2 #nth option:some> "34" "group 2" assert=
+
+"regex-split: comma-separated" test-section
+"a,b,c" "," regex-compile regex-split
+dup #len 3 "3 segments" assert=
+dup 0 #nth "a" "first segment" assert=
+dup 1 #nth "b" "second segment" assert=
+2 #nth "c" "third segment" assert=
+
+"regex-split: multi-char delimiter" test-section
+"a::b::c" "::" regex-compile regex-split
+dup #len 3 "3 segments" assert=
+dup 0 #nth "a" "first segment" assert=
+dup 1 #nth "b" "second segment" assert=
+2 #nth "c" "third segment" assert=
+
+"regex-split: no match" test-section
+"hello" "," regex-compile regex-split
+dup #len 1 "1 segment when no delimiter" assert=
+0 #nth "hello" "whole string returned" assert=
+
+"regex-split: leading match" test-section
+",a,b" "," regex-compile regex-split
+dup #len 3 "3 segments with leading delimiter" assert=
+0 #nth "" "first segment is empty" assert=
+
+"regex-split: trailing match" test-section
+"a,b," "," regex-compile regex-split
+dup #len 3 "3 segments with trailing delimiter" assert=
+2 #nth "" "last segment is empty" assert=
+
+"regex-replace: first occurrence" test-section
+"foo bar foo" "foo" regex-compile "baz" regex-replace
+"baz bar foo" "replaces only first match" assert=
+
+"regex-replace: no match" test-section
+"hello" "xyz" regex-compile "replaced" regex-replace
+"hello" "returns original when no match" assert=
+
+"regex-replace-all: all occurrences" test-section
+"aaa" "a" regex-compile "b" regex-replace-all
+"bbb" "replaces all matches" assert=
+
+"regex-replace-all: multiple non-adjacent" test-section
+"foo bar foo baz foo" "foo" regex-compile "X" regex-replace-all
+"X bar X baz X" "replaces all occurrences" assert=
+
+"regex-replace-all: no match" test-section
+"hello" "xyz" regex-compile "replaced" regex-replace-all
+"hello" "returns original when no match" assert=
+
+"named-groups: date pattern" test-section
+"2026-03-28" "(?P<year>\\d{4})-(?P<month>\\d{2})-(?P<day>\\d{2})" regex-compile
+2dup regex-match option:some> swap named-groups
+dup year: @get option:some> "2026" "year group" assert=
+dup month: @get option:some> "03" "month group" assert=
+day: @get option:some> "28" "day group" assert=
+
+"named-groups: no named groups" test-section
+"hello" "(h)(e)(l)" regex-compile
+2dup regex-match option:some> swap named-groups
+#len 0 "empty hash when no named groups" assert=

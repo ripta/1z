@@ -354,7 +354,7 @@ regex-replace: ( str regex replacement -- str ) [
   0 (regex-match-at)
   \ Stack: repl(3) sb(2) str(1) code(0) ms me captures (or repl sb str code f f f)
   over f = [
-    drop drop drop nip nip nip
+    drop drop drop drop nip nip
   ] [
     drop
     \ Stack: repl(5) sb(4) str(3) code(2) ms(1) me(0)
