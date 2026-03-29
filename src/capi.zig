@@ -2,6 +2,7 @@ const std = @import("std");
 const Context = @import("context.zig").Context;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 const Value = @import("value.zig").Value;
+const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
 
 const OnezHandle = struct {
     gpa: *std.heap.GeneralPurposeAllocator(.{}),
@@ -378,6 +379,57 @@ export fn onez_runtime_run(rt: usize, entry_word_id: u32) i32 {
     }
 
     return if (status == 0) 0 else 1;
+}
+
+export fn onez_runtime_print_error(rt: usize) void {
+    if (rt == 0) return;
+    const handle: *OnezHandle = @ptrFromInt(rt);
+    const ctx = handle.ctx;
+
+    const stderr_file: std.fs.File = .stderr();
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr = stderr_file.writer(&stderr_buf);
+
+    const details = ctx.error_details.items;
+    if (details.len > 0) {
+        const detail = details[0];
+        stderr.interface.print("{s}:{d}: error '{s}'", .{ detail.source, detail.line, detail.error_type }) catch {};
+
+        if (detail.word_name != null and !std.mem.eql(u8, detail.message, detail.word_name.?)) {
+            stderr.interface.print(" {s}", .{detail.message}) catch {};
+        }
+
+        if (detail.word_name) |word_name| {
+            stderr.interface.print(" at word '{s}'", .{word_name}) catch {};
+        }
+        stderr.interface.writeAll("\n") catch {};
+
+        if (detail.stack_effect_str) |se| {
+            stderr.interface.print("  stack effect: {s}\n", .{se}) catch {};
+        }
+        if (detail.hint) |hint| {
+            stderr.interface.print("  hint: {s}\n", .{hint}) catch {};
+        }
+
+        if (details.len > 1) {
+            for (details[1..]) |frame| {
+                stderr.interface.print("  called from {s}:{d}: {s}\n", .{
+                    frame.source,
+                    frame.line,
+                    frame.word_name orelse frame.message,
+                }) catch {};
+            }
+        }
+    } else if (ctx.jit_pending_error) |err| {
+        var kebab_buf: [128]u8 = undefined;
+        const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
+        stderr.interface.print("error.{s}\n", .{kebab_name}) catch {};
+    } else {
+        stderr.interface.writeAll("error: unknown runtime error\n") catch {};
+    }
+
+    stderr.interface.flush() catch {};
+    ctx.clearExecutionDetails();
 }
 
 export fn onez_runtime_shutdown(rt: usize) void {
