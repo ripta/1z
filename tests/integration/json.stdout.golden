@@ -1,0 +1,173 @@
+=== hex-digit? ===
+Stack: [ ]
+PASS: 0 is hex digit
+Stack: [ t ]
+PASS: 9 is hex digit
+Stack: [ t t ]
+PASS: a is hex digit
+Stack: [ t t t ]
+PASS: f is hex digit
+Stack: [ t t t t ]
+PASS: A is hex digit
+Stack: [ t t t t t ]
+PASS: F is hex digit
+Stack: [ t t t t t t ]
+PASS: g is not hex digit
+Stack: [ t t t t t t f ]
+PASS: G is not hex digit
+Stack: [ t t t t t t f f ]
+PASS: space is not hex digit
+Stack: [ t t t t t t f f f ]
+=== hex>fixnum ===
+Stack: [ t t t t t t f f f ]
+PASS: 0 hex value
+Stack: [ t t t t t t f f f ]
+PASS: 9 hex value
+Stack: [ t t t t t t f f f ]
+PASS: a hex value
+Stack: [ t t t t t t f f f ]
+PASS: f hex value
+Stack: [ t t t t t t f f f ]
+PASS: A hex value
+Stack: [ t t t t t t f f f ]
+PASS: F hex value
+Stack: [ t t t t t t f f f ]
+PASS: hex>fixnum on non-hex throws
+Stack: [ t t t t t t f f f ]
+=== parse-json: strings ===
+Stack: [ t t t t t t f f f ]
+PASS: simple string
+Stack: [ t t t t t t f f f ]
+PASS: empty string
+Stack: [ t t t t t t f f f ]
+PASS: string with space
+Stack: [ t t t t t t f f f ]
+=== parse-json: string escapes ===
+Stack: [ t t t t t t f f f ]
+PASS: newline escape
+Stack: [ t t t t t t f f f ]
+PASS: tab escape
+Stack: [ t t t t t t f f f ]
+PASS: quote escape
+Stack: [ t t t t t t f f f ]
+PASS: backslash escape
+Stack: [ t t t t t t f f f ]
+PASS: slash escape
+Stack: [ t t t t t t f f f ]
+=== parse-json: unicode escapes ===
+Stack: [ t t t t t t f f f ]
+PASS: unicode escape A
+Stack: [ t t t t t t f f f ]
+=== parse-json: integers ===
+Stack: [ t t t t t t f f f ]
+PASS: positive integer
+Stack: [ t t t t t t f f f ]
+PASS: zero
+Stack: [ t t t t t t f f f ]
+PASS: negative integer
+Stack: [ t t t t t t f f f ]
+PASS: large integer
+Stack: [ t t t t t t f f f ]
+=== parse-json: floats ===
+Stack: [ t t t t t t f f f ]
+PASS: decimal
+Stack: [ t t t t t t f f f ]
+PASS: exponent
+Stack: [ t t t t t t f f f ]
+PASS: negative decimal
+Stack: [ t t t t t t f f f ]
+PASS: decimal with exponent
+Stack: [ t t t t t t f f f ]
+=== parse-json: booleans ===
+Stack: [ t t t t t t f f f ]
+PASS: true
+Stack: [ t t t t t t f f f ]
+PASS: false
+Stack: [ t t t t t t f f f ]
+=== parse-json: null ===
+Stack: [ t t t t t t f f f ]
+PASS: null becomes option:none
+Stack: [ t t t t t t f f f ]
+=== parse-json: arrays ===
+Stack: [ t t t t t t f f f ]
+PASS: empty array
+Stack: [ t t t t t t f f f ]
+PASS: integer array
+Stack: [ t t t t t t f f f ]
+PASS: string array
+Stack: [ t t t t t t f f f ]
+Stack: [ t t t t t t f f f { 1 "two" t } ]
+PASS: mixed array first
+Stack: [ t t t t t t f f f { 1 "two" t } ]
+PASS: mixed array second
+Stack: [ t t t t t t f f f { 1 "two" t } ]
+PASS: mixed array third
+Stack: [ t t t t t t f f f ]
+PASS: nested arrays
+Stack: [ t t t t t t f f f ]
+=== parse-json: objects ===
+Stack: [ t t t t t t f f f ]
+PASS: empty object
+Stack: [ t t t t t t f f f ]
+Stack: [ t t t t t t f f f H{ a: 1 } ]
+PASS: object value
+Stack: [ t t t t t t f f f H{ a: 1 } ]
+PASS: single key
+Stack: [ t t t t t t f f f ]
+Stack: [ t t t t t t f f f H{ name: "alice" age: 30 } ]
+PASS: object string value
+Stack: [ t t t t t t f f f H{ name: "alice" age: 30 } ]
+PASS: object integer value
+Stack: [ t t t t t t f f f ]
+=== parse-json: nested objects ===
+Stack: [ t t t t t t f f f ]
+Stack: [ t t t t t t f f f H{ outer: H{ inner: 42 } } ]
+PASS: nested object access
+Stack: [ t t t t t t f f f ]
+=== parse-json: complex structure ===
+Stack: [ t t t t t t f f f ]
+Stack: [ t t t t t t f f f H{ users: { H{ name: "alice" } H{ name: "bob" } } } ]
+Stack: [ t t t t t t f f f { H{ name: "alice" } H{ name: "bob" } } ]
+PASS: array of objects access
+Stack: [ t t t t t t f f f { H{ name: "alice" } H{ name: "bob" } } ]
+PASS: first user name
+Stack: [ t t t t t t f f f ]
+=== parse-json: whitespace ===
+Stack: [ t t t t t t f f f ]
+PASS: leading/trailing whitespace
+Stack: [ t t t t t t f f f ]
+PASS: array with whitespace
+Stack: [ t t t t t t f f f ]
+Stack: [ t t t t t t f f f H{ a: 1 } ]
+PASS: object with newlines
+Stack: [ t t t t t t f f f ]
+=== parse-json: errors ===
+Stack: [ t t t t t t f f f ]
+PASS: empty input throws
+Stack: [ t t t t t t f f f ]
+PASS: unclosed object throws
+Stack: [ t t t t t t f f f ]
+PASS: unclosed array throws
+Stack: [ t t t t t t f f f ]
+PASS: unterminated string throws
+Stack: [ t t t t t t f f f ]
+PASS: truncated true throws
+Stack: [ t t t t t t f f f ]
+PASS: trailing content throws
+Stack: [ t t t t t t f f f ]
+PASS: trailing comma in object throws
+Stack: [ t t t t t t f f f ]
+=== json-unescape ===
+Stack: [ t t t t t t f f f ]
+PASS: plain string unchanged
+Stack: [ t t t t t t f f f ]
+PASS: unescape quote
+Stack: [ t t t t t t f f f ]
+PASS: unescape backslash
+Stack: [ t t t t t t f f f ]
+PASS: unescape newline
+Stack: [ t t t t t t f f f ]
+PASS: unescape tab
+Stack: [ t t t t t t f f f ]
+PASS: unescape unicode
+Stack: [ t t t t t t f f f ]

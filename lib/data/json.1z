@@ -1,0 +1,250 @@
+\ lib/data/json.1z - JSON parsing and unescaping
+
+use "scanner" ;
+use "char" ;
+use "conversions" ;
+use "strings" ;
+
+\ -- Internal helpers --
+
+json-ws?: ( str -- ? ) [
+  dup " " = swap dup "\t" = swap dup "\n" = swap "\r" = or or or
+] ;
+
+skip-ws: ( scanner -- scanner ) [
+  [ json-ws? ] skip-while
+] ;
+
+\ Parse a 4-digit hex escape, returning the codepoint and advanced scanner.
+parse-hex4: ( scanner -- scanner codepoint ) [
+  dup peek hex>fixnum 4096 *  \ scanner val
+  swap advance                \ val scanner'
+  dup peek hex>fixnum 256 *   \ val scanner' d2
+  <rot- +                     \ scanner' (val+d2)
+  swap advance                \ (val+d2) scanner''
+  dup peek hex>fixnum 16 *    \ (val+d2) scanner'' d3
+  <rot- +                     \ scanner'' (val+d2+d3)
+  swap advance                \ (val+d2+d3) scanner'''
+  dup peek hex>fixnum         \ (val+d2+d3) scanner''' d4
+  <rot- +                     \ scanner''' total
+  swap advance swap           \ scanner'''' total
+] ;
+
+\ Parse a unicode escape (after \u has been consumed).
+\ Handles surrogate pairs.
+parse-unicode-escape: ( scanner -- scanner str ) [
+  parse-hex4
+  \ check for high surrogate
+  dup 55296 >= over 56319 <= and [
+    swap dup peek "\\" = [
+      advance dup peek "u" = [
+        advance parse-hex4
+        \ combine: (high - 0xD800) * 0x400 + (low - 0xDC00) + 0x10000
+        swap 55296 - 1024 * swap 56320 - + 65536 +
+      ] [
+        "expected low surrogate after \\uXXXX"
+        f swap EInvalidArgument make-error throw
+      ] if
+    ] [
+      "expected \\uXXXX for surrogate pair"
+      f swap EInvalidArgument make-error throw
+    ] if
+  ] when
+  >char
+] ;
+
+\ Process a single backslash escape (scanner positioned after the backslash).
+\ Returns advanced scanner and the unescaped character string.
+parse-escape: ( scanner -- scanner str ) [
+  dup peek
+  dup "\"" = [ drop advance "\"" ]
+  [ dup "\\" = [ drop advance "\\" ]
+    [ dup "/" = [ drop advance "/" ]
+      [ dup "b" = [ drop advance 8 >char ]
+        [ dup "f" = [ drop advance 12 >char ]
+          [ dup "n" = [ drop advance "\n" ]
+            [ dup "r" = [ drop advance "\r" ]
+              [ dup "t" = [ drop advance "\t" ]
+                [ dup "u" = [
+                    drop advance parse-unicode-escape
+                  ]
+                  [ "invalid JSON escape: \\" swap #append
+                    f swap EInvalidArgument make-error throw
+                  ]
+                  if
+                ] if
+              ] if
+            ] if
+          ] if
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+\ Parse a JSON string (scanner positioned at opening quote).
+parse-json-string: ( scanner -- scanner str ) [
+  advance  \ consume opening "
+  ""       \ accumulator
+  [
+    over peek dup f =
+    [ drop f ]
+    [ "\"" = not ]
+    if
+  ]
+  [
+    over peek "\\" = [
+      swap advance parse-escape  \ accum scanner' char
+      [ swap ] dip #append       \ scanner' (accum++char)
+    ] [
+      over peek          \ scanner accum char
+      #append            \ scanner (accum++char)
+      swap advance swap  \ scanner' (accum++char)
+    ] if
+  ] while
+  over peek "\"" =
+  [ swap advance swap ]
+  [ "unterminated JSON string" f swap EInvalidArgument make-error throw ]
+  if
+] ;
+
+\ Parse a JSON number
+json-num-char?: ( str -- ? ) [
+  dup digit?
+  swap dup "." = swap dup "-" = swap dup "+" = swap dup "e" = swap "E" = or or or or or
+] ;
+
+\ Check if a number string contains a float indicator (., e, E)
+json-float?: ( str -- ? ) [
+  dup "." #index-of
+  swap dup "e" #index-of
+  swap "E" #index-of
+  or or
+] ;
+
+parse-json-number: ( scanner -- scanner value ) [
+  [ json-num-char? ] take-while
+  dup "" = [
+    drop "unexpected character in JSON" f swap EInvalidArgument make-error throw
+  ] when
+  dup json-float?
+  [ >float ]
+  [ parse-integer ]
+  if
+] ;
+
+\ Parse a JSON value (scanner positioned at or before the value).
+\ Loop invariants: object = hash scanner, array = array scanner
+parse-json-value: stack-recursive ( scanner -- scanner value ) [
+  skip-ws
+  dup at-end? [
+    "unexpected end of JSON input" f swap EInvalidArgument make-error throw
+  ] when
+  dup peek
+  dup "\"" = [ drop parse-json-string ]
+  [ dup "{" = [ drop
+      advance skip-ws  \ consume {, scanner on top
+      M{ } swap        \ mmap scanner
+      [ dup peek "}" = not ]
+      [
+        skip-ws
+        dup peek "\"" = [
+          parse-json-string  \ hash scanner' key
+        ] [
+          "expected string key in JSON object"
+          f swap EInvalidArgument make-error throw
+        ] if
+        swap  \ hash key scanner'
+        skip-ws dup peek ":" = [
+          advance skip-ws
+        ] [
+          "expected ':' after object key"
+          f swap EInvalidArgument make-error throw
+        ] if
+        parse-json-value    \ hash key scanner'' value
+        swap [ @set! ] dip  \ hash' scanner''
+        skip-ws
+        dup peek "," = [
+          advance skip-ws
+          dup peek "}" = [
+            "trailing comma in JSON object"
+            f swap EInvalidArgument make-error throw
+          ] when
+        ] when
+      ] while
+      \ hash scanner
+      dup peek "}" = [
+        advance
+      ] [
+        "expected '}'" f swap EInvalidArgument make-error throw
+      ] if
+      swap >hash  \ scanner hash
+    ]
+    [ dup "[" = [ drop
+        advance skip-ws  \ consume [, scanner on top
+        V{ } swap        \ vec scanner
+        [ dup peek "]" = not ]
+        [
+          parse-json-value     \ array scanner' value
+          swap [ #push! ] dip  \ array' scanner'
+          skip-ws
+          dup peek "," = [
+            advance skip-ws
+            dup peek "]" = [
+              "trailing comma in JSON array"
+              f swap EInvalidArgument make-error throw
+            ] when
+          ] when
+        ] while
+        \ array scanner
+        dup peek "]" = [
+          advance
+        ] [
+          "expected ']'" f swap EInvalidArgument make-error throw
+        ] if
+        swap >array  \ scanner array
+      ]
+      [ dup "t" = [ drop "true" expect t ]
+        [ dup "f" = [ drop "false" expect f ]
+          [ dup "n" = [ drop "null" expect option:none ]
+            [ drop parse-json-number ]
+            if
+          ] if
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+\ -- Public API --
+
+\\ Parse a JSON string into a native 1z value.
+\\ Objects become hashes, arrays become arrays, strings stay strings,
+\\ integers become fixnum/bignum, decimals become float,
+\\ true/false become t/f, null becomes option:none.
+parse-json: ( str -- value ) [
+  <scanner> parse-json-value swap
+  skip-ws at-end? not [
+    "unexpected trailing content after JSON value"
+    f swap EInvalidArgument make-error throw
+  ] when
+] ;
+
+\\ Unescape a JSON string: resolve backslash escape sequences.
+\\ Handles \", \\, \/, \b, \f, \n, \r, \t, and \uXXXX (including surrogate pairs).
+json-unescape: ( str -- str ) [
+  <scanner>
+  ""
+  [ over at-end? not ]
+  [
+    over peek "\\" = [
+      swap advance parse-escape  \ accum scanner' char
+      [ swap ] dip #append       \ scanner' (accum++char)
+    ] [
+      over peek          \ scanner accum char
+      #append            \ scanner (accum++char)
+      swap advance swap  \ scanner' (accum++char)
+    ] if
+  ] while
+  swap drop
+] ;

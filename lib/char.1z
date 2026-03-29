@@ -31,3 +31,34 @@ ascii?: ( str -- ? ) [
 printable?: ( str -- ? ) [
   >codepoint dup 32 >= swap 126 <= and
 ] ;
+
+\\ Test if single-character string is a hexadecimal digit (0-9, a-f, A-F).
+hex-digit?: ( str -- ? ) [
+  >codepoint
+  dup dup 48 >= swap 57 <= and  \ 0-9
+  [ drop t ]
+  [ dup dup 65 >= swap 70 <= and  \ A-F
+    [ drop t ]
+    [ dup 97 >= swap 102 <= and ]  \ a-f
+    if
+  ]
+  if
+] ;
+
+\\ Convert a single hex digit character to its integer value (0-15).
+\\ Throws on non-hex input.
+hex>fixnum: ( str -- n ) [
+  >codepoint
+  dup dup 48 >= swap 57 <= and  \ 0-9
+  [ 48 - ]
+  [ dup dup 65 >= swap 70 <= and  \ A-F
+    [ 65 - 10 + ]
+    [ dup dup 97 >= swap 102 <= and  \ a-f
+      [ 97 - 10 + ]
+      [ drop "not a hex digit" f swap EInvalidArgument make-error throw ]
+      if
+    ]
+    if
+  ]
+  if
+] ;

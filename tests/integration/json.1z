@@ -1,0 +1,127 @@
+\ Integration tests for lib/data/json.1z
+
+use "testing" ;
+use "data/json" ;
+use "char" ;
+
+\ -- hex-digit? and hex>fixnum tests (added to lib/char.1z) --
+
+"hex-digit?" test-section
+t "0" hex-digit? "0 is hex digit" assert-true
+t "9" hex-digit? "9 is hex digit" assert-true
+t "a" hex-digit? "a is hex digit" assert-true
+t "f" hex-digit? "f is hex digit" assert-true
+t "A" hex-digit? "A is hex digit" assert-true
+t "F" hex-digit? "F is hex digit" assert-true
+f "g" hex-digit? "g is not hex digit" assert-false
+f "G" hex-digit? "G is not hex digit" assert-false
+f " " hex-digit? "space is not hex digit" assert-false
+
+"hex>fixnum" test-section
+0 "0" hex>fixnum "0 hex value" assert=
+9 "9" hex>fixnum "9 hex value" assert=
+10 "a" hex>fixnum "a hex value" assert=
+15 "f" hex>fixnum "f hex value" assert=
+10 "A" hex>fixnum "A hex value" assert=
+15 "F" hex>fixnum "F hex value" assert=
+[ "g" hex>fixnum ] "hex>fixnum on non-hex throws" assert-error
+
+\ -- parse-json: primitives --
+
+"parse-json: strings" test-section
+"hello" "\"hello\"" parse-json "simple string" assert=
+"" "\"\"" parse-json "empty string" assert=
+"hello world" "\"hello world\"" parse-json "string with space" assert=
+
+"parse-json: string escapes" test-section
+"hello\nworld" "\"hello\\nworld\"" parse-json "newline escape" assert=
+"tab\there" "\"tab\\there\"" parse-json "tab escape" assert=
+"a\"b" "\"a\\\"b\"" parse-json "quote escape" assert=
+"a\\b" "\"a\\\\b\"" parse-json "backslash escape" assert=
+"a/b" "\"a\\/b\"" parse-json "slash escape" assert=
+
+"parse-json: unicode escapes" test-section
+"A" "\"\\u0041\"" parse-json "unicode escape A" assert=
+
+"parse-json: integers" test-section
+42 "42" parse-json "positive integer" assert=
+0 "0" parse-json "zero" assert=
+-1 "-1" parse-json "negative integer" assert=
+123456789 "123456789" parse-json "large integer" assert=
+
+"parse-json: floats" test-section
+3.14 "3.14" parse-json "decimal" assert=
+1.0e10 "1e10" parse-json "exponent" assert=
+-0.5 "-0.5" parse-json "negative decimal" assert=
+1.23e4 "1.23e4" parse-json "decimal with exponent" assert=
+
+"parse-json: booleans" test-section
+t "true" parse-json "true" assert=
+f "false" parse-json "false" assert=
+
+"parse-json: null" test-section
+option:none "null" parse-json "null becomes option:none" assert=
+
+\ -- parse-json: arrays --
+
+"parse-json: arrays" test-section
+{ } "[]" parse-json "empty array" assert=
+{ 1 2 3 } "[1, 2, 3]" parse-json "integer array" assert=
+{ "a" "b" } "[\"a\", \"b\"]" parse-json "string array" assert=
+"[1, \"two\", true]" parse-json
+dup 0 #nth 1 "mixed array first" assert=
+dup 1 #nth "two" "mixed array second" assert=
+2 #nth t "mixed array third" assert=
+{ { 1 2 } { 3 4 } } "[[1, 2], [3, 4]]" parse-json "nested arrays" assert=
+
+\ -- parse-json: objects --
+
+"parse-json: objects" test-section
+H{ } "{}" parse-json "empty object" assert=
+
+"{\"a\": 1}" parse-json
+dup "a" @get 1 "object value" assert=
+@keys #len 1 "single key" assert=
+
+"{\"name\": \"alice\", \"age\": 30}" parse-json
+dup "name" @get "alice" "object string value" assert=
+"age" @get 30 "object integer value" assert=
+
+"parse-json: nested objects" test-section
+"{\"outer\": {\"inner\": 42}}" parse-json
+"outer" @get "inner" @get 42 "nested object access" assert=
+
+"parse-json: complex structure" test-section
+"{\"users\": [{\"name\": \"alice\"}, {\"name\": \"bob\"}]}" parse-json
+"users" @get
+dup 1 #nth "name" @get "bob" "array of objects access" assert=
+0 #nth "name" @get "alice" "first user name" assert=
+
+\ -- parse-json: whitespace handling --
+
+"parse-json: whitespace" test-section
+42 "  42  " parse-json "leading/trailing whitespace" assert=
+{ 1 2 } "[ 1 , 2 ]" parse-json "array with whitespace" assert=
+"{\n  \"a\" : 1\n}" parse-json
+"a" @get 1 "object with newlines" assert=
+
+\ -- parse-json: error cases --
+
+"parse-json: errors" test-section
+[ "" parse-json ] "empty input throws" assert-error
+[ "{" parse-json ] "unclosed object throws" assert-error
+[ "[" parse-json ] "unclosed array throws" assert-error
+[ "\"hello" parse-json ] "unterminated string throws" assert-error
+[ "tru" parse-json ] "truncated true throws" assert-error
+[ "42 extra" parse-json ] "trailing content throws" assert-error
+[ "{\"a\": 1,}" parse-json ] "trailing comma in object throws" assert-error
+
+\ -- json-unescape --
+
+"json-unescape" test-section
+"hello" "hello" json-unescape "plain string unchanged" assert=
+"a\"b" "a\\\"b" json-unescape "unescape quote" assert=
+"a\\b" "a\\\\b" json-unescape "unescape backslash" assert=
+"line1\nline2" "line1\\nline2" json-unescape "unescape newline" assert=
+"tab\there" "tab\\there" json-unescape "unescape tab" assert=
+"A" "\\u0041" json-unescape "unescape unicode" assert=
