@@ -18,8 +18,10 @@ pub const FreezeResult = struct {
     entry_word_id: u32,
     max_word_id: u32,
     skipped_words: []const []const u8,
+    entry_instrs: []const Instruction,
 
     pub fn deinit(self: *FreezeResult, allocator: Allocator) void {
+        allocator.free(self.entry_instrs);
         allocator.free(self.words);
         allocator.free(self.skipped_words);
     }
@@ -286,6 +288,7 @@ fn buildAotDescs(
         .entry_word_id = entry_word_id,
         .max_word_id = max_word_id,
         .skipped_words = try skipped.toOwnedSlice(allocator),
+        .entry_instrs = entry_instrs,
     };
 }
 
@@ -315,9 +318,9 @@ test "collectCallWords extracts call_word names from instructions" {
 
 test "buildAotDescs assigns sequential IDs and skips effectless words" {
     const allocator = testing.allocator;
-    const entry_instrs = &[_]Instruction{
+    const entry_instrs = try allocator.dupe(Instruction, &[_]Instruction{
         .{ .op = .{ .call_word = "drop" }, .line = 1 },
-    };
+    });
 
     const effect = StackEffect{ .inputs = &.{}, .outputs = &.{} };
 

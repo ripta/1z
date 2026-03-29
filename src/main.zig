@@ -799,7 +799,7 @@ fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) u8 {
             if (lib_path) |lp| {
                 var real_buf: [std.fs.max_path_bytes]u8 = undefined;
                 if (std.fs.cwd().realpath(lp, &real_buf)) |real| {
-                    ctx.stdlib_path = allocator.dupe(u8, real) catch null;
+                    ctx.stdlib_path = ctx.quotationAllocator().dupe(u8, real) catch null;
                 } else |_| {}
                 allocator.free(lp);
             }

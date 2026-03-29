@@ -387,6 +387,10 @@ export fn onez_runtime_shutdown(rt: usize) void {
 
     clearLastError(handle);
 
+    if (handle.ctx.program_args.len > 0) {
+        allocator.free(handle.ctx.program_args);
+    }
+
     handle.ctx.deinit();
     allocator.destroy(handle.ctx);
     _ = handle.gpa.deinit();
