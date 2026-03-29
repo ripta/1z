@@ -148,6 +148,13 @@ const char *onez_last_error(onez_t ctx);
  */
 int onez_set_stdlib_path(onez_t ctx, const char *path, size_t len);
 
+/*
+ * Set the source name used in error messages. The data is copied.
+ * Defaults to "<repl>". For AOT executables, onez_runtime_init sets this
+ * to argv[0] automatically.
+ */
+int onez_set_source(onez_t ctx, const char *data, size_t len);
+
 /* ---- AOT Runtime ---- */
 
 /*

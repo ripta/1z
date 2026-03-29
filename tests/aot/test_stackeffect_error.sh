@@ -26,4 +26,8 @@ if ! echo "$STDERR_CONTENT" | grep -q "error"; then
     echo "FAIL: aot-stackeffect_error: expected error on stderr, got: '$STDERR_CONTENT'"
     exit 1
 fi
+if echo "$STDERR_CONTENT" | grep -q "<repl>"; then
+    echo "FAIL: aot-stackeffect_error: error should not attribute to <repl>, got: '$STDERR_CONTENT'"
+    exit 1
+fi
 echo "PASS: aot-stackeffect_error"

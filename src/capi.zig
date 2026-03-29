@@ -281,6 +281,16 @@ export fn onez_set_stdlib_path(ptr: ?*anyopaque, data: [*]const u8, len: usize) 
     return ONEZ_OK;
 }
 
+export fn onez_set_source(ptr: ?*anyopaque, data: [*]const u8, len: usize) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const copy = handle.ctx.quotationAllocator().dupe(u8, data[0..len]) catch {
+        setLastError(handle, "allocation failure copying source name", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    handle.ctx.current_source = copy;
+    return ONEZ_OK;
+}
+
 // =========================================================================
 // AOT Runtime API
 // =========================================================================
@@ -322,6 +332,10 @@ export fn onez_runtime_init(argc: c_int, argv: [*]const [*:0]const u8) usize {
             }
             ctx.program_args = a;
         }
+
+        // Use argv[0] as the source attribution for error messages.
+        const argv0 = std.mem.span(argv[0]);
+        ctx.current_source = ctx.quotationAllocator().dupe(u8, argv0) catch argv0;
     }
 
     const handle = page.create(OnezHandle) catch return 0;
@@ -670,6 +684,19 @@ test "set_stdlib_path updates ctx" {
 
     const handle = castHandle(handle_ptr).?;
     try std.testing.expectEqualStrings("/custom/stdlib", handle.ctx.stdlib_path.?);
+}
+
+test "set_source updates current_source" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const handle = castHandle(handle_ptr).?;
+    try std.testing.expectEqualStrings("<repl>", handle.ctx.current_source);
+
+    const name = "my-program";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, name.ptr, name.len));
+    try std.testing.expectEqualStrings("my-program", handle.ctx.current_source);
 }
 
 test "null handle returns appropriate defaults" {
