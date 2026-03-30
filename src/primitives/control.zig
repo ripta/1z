@@ -401,6 +401,9 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     if (top_val.quotation.effect) |eff| {
                         stack_effect_val = eff.*;
                     }
+                } else if (top_val == .parameter) {
+                    // Parameter words always push one value: ( -- param )
+                    stack_effect_val = .{ .inputs = &.{}, .outputs = &.{.{ .name = "param" }} };
                 }
 
                 while (true) {

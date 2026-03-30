@@ -391,7 +391,7 @@ enum{
 eprint ( str -- )
 eprint-line ( str -- )
 error
-error-stream
+error-stream ( -- param )
 error-type? ( error type -- error ? )
 error>> ( instance -- value )
 error? ( val -- ? )
@@ -429,7 +429,7 @@ ignore-errors ( quot -- )
 inexact? ( val -- ? )
 inf ( -- f )
 infinite? ( x -- ? )
-input-stream
+input-stream ( -- param )
 inputs>> ( instance -- value )
 inspectable
 integer? ( val -- ? )
@@ -464,8 +464,8 @@ methods>> ( instance -- value )
 method{
 min ( a1 a2 -- a )
 module
-module-cache
-module-loaded-hooks
+module-cache ( -- param )
+module-loaded-hooks ( -- param )
 module>> ( instance -- value )
 module? ( val -- ? )
 mutable-map
@@ -514,7 +514,7 @@ ordering:gt? ( val -- ? )
 ordering:lt ( -- ordering:lt )
 ordering:lt? ( val -- ? )
 ordering? ( val -- ? )
-output-stream
+output-stream ( -- param )
 outputs>> ( instance -- value )
 pad-right ( str width -- str )
 parameter
@@ -625,7 +625,7 @@ while ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b )
 with-input-stream ( stream quot -- )
 with-iterator ( iterator quot -- ... )
 with-output-stream ( stream quot -- )
-word-defined-hooks
+word-defined-hooks ( -- param )
 word-info ( -- type )
 word-info>hash ( word-info -- hash )
 word-info? ( val -- ? )

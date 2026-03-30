@@ -26,10 +26,10 @@ use [<marker:parse-time>] \compound
 
 Stack: [ ]
 The current output stream, defaulting to `stdout`.
-output-stream \compound
+output-stream ( -- param ) \compound
 
 Stack: [ ]
 The current input stream, defaulting to `stdin`.
-input-stream \compound
+input-stream ( -- param ) \compound
 
 Stack: [ ]
