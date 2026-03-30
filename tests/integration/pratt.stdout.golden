@@ -1,0 +1,120 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== eval: single number ===
+Stack: [ ]
+PASS: 42 parses to 42
+Stack: [ ]
+PASS: 0 parses to 0
+Stack: [ ]
+=== eval: addition ===
+Stack: [ ]
+PASS: 1 + 2 = 3
+Stack: [ ]
+=== eval: subtraction ===
+Stack: [ ]
+PASS: 5 - 3 = 2
+Stack: [ ]
+=== eval: multiplication ===
+Stack: [ ]
+PASS: 3 * 4 = 12
+Stack: [ ]
+=== eval: division ===
+Stack: [ ]
+PASS: 10 / 2 = 5
+Stack: [ ]
+=== eval: precedence ===
+Stack: [ ]
+PASS: 1 + 2 * 3 = 7
+Stack: [ ]
+PASS: 2 * 3 + 1 = 7
+Stack: [ ]
+=== eval: left associativity ===
+Stack: [ ]
+PASS: 10 - 3 - 2 = 5 (left-assoc)
+Stack: [ ]
+PASS: 20 / 4 / 5 = 1 (left-assoc)
+Stack: [ ]
+=== eval: right associativity ===
+Stack: [ ]
+PASS: 2 ^ 3 ^ 2 = 512 (right-assoc: 2^(3^2))
+Stack: [ ]
+PASS: 2 ^ 3 = 8
+Stack: [ ]
+=== eval: parentheses ===
+Stack: [ ]
+PASS: (1 + 2) * 3 = 9
+Stack: [ ]
+PASS: 2 * (3 + 4) = 14
+Stack: [ ]
+=== eval: nested parentheses ===
+Stack: [ ]
+PASS: ((1 + 2)) = 3
+Stack: [ ]
+PASS: ((2)) = 2
+Stack: [ ]
+=== eval: complex expression ===
+Stack: [ ]
+PASS: (1 + 2) * (3 + 4) = 21
+Stack: [ ]
+=== ast: single number ===
+Stack: [ ]
+PASS: atom is just a number
+Stack: [ ]
+=== ast: binary op ===
+Stack: [ ]
+Stack: [ { 1 "+" 2 } ]
+PASS: ast left is 1
+Stack: [ { 1 "+" 2 } ]
+PASS: ast op is +
+Stack: [ { 1 "+" 2 } ]
+PASS: ast right is 2
+Stack: [ ]
+=== ast: precedence tree ===
+Stack: [ ]
+Stack: [ { 1 "+" { 2 "*" 3 } } ]
+PASS: top left is 1
+Stack: [ { 1 "+" { 2 "*" 3 } } ]
+PASS: top op is +
+Stack: [ { 1 "+" { 2 "*" 3 } } ]
+Stack: [ { 2 "*" 3 } ]
+PASS: nested left is 2
+Stack: [ { 2 "*" 3 } ]
+PASS: nested op is *
+Stack: [ { 2 "*" 3 } ]
+PASS: nested right is 3
+Stack: [ ]
+=== ast: left associativity ===
+Stack: [ ]
+Stack: [ { { 1 "-" 2 } "-" 3 } ]
+Stack: [ { { 1 "-" 2 } "-" 3 } { 1 "-" 2 } ]
+PASS: inner left is 1
+Stack: [ { { 1 "-" 2 } "-" 3 } { 1 "-" 2 } ]
+PASS: inner op is -
+Stack: [ { { 1 "-" 2 } "-" 3 } { 1 "-" 2 } ]
+PASS: inner right is 2
+Stack: [ { { 1 "-" 2 } "-" 3 } ]
+PASS: outer op is -
+Stack: [ { { 1 "-" 2 } "-" 3 } ]
+PASS: outer right is 3
+Stack: [ ]
+=== error: empty input ===
+Stack: [ ]
+PASS: empty input throws
+Stack: [ ]
+=== error: message content ===
+Stack: [ ]
+Stack: [ M{ iter: <iterator callback callback> buf: <option:none none:> } pratt{ operators: H{ *: H{ left-bp: 20 right-bp: 21 } ^: H{ left-bp: 30 right-bp: 30 } /: H{ left-bp: 20 right-bp: 21 } +: H{ left-bp: 10 right-bp: 11 } -: H{ left-bp: 10 right-bp: 11 } } prefix: [ (eval-prefix) ] infix: [ (eval-infix) ] } 0 token{ kind: symbol: value: "+" pos: 0 } <error invalid-argument: expected expression, got '+' at byte 0 [tests/integration/pratt.1z:57:throw <- tests/integration/pratt.1z:58:if <- tests/integration/pratt.1z:59:if <- tests/integration/pratt.1z:7:call <- tests/integration/pratt.1z:213:recover]> ]
+Stack: [ M{ iter: <iterator callback callback> buf: <option:none none:> } pratt{ operators: H{ *: H{ left-bp: 20 right-bp: 21 } ^: H{ left-bp: 30 right-bp: 30 } /: H{ left-bp: 20 right-bp: 21 } +: H{ left-bp: 10 right-bp: 11 } -: H{ left-bp: 10 right-bp: 11 } } prefix: [ (eval-prefix) ] infix: [ (eval-infix) ] } 0 token{ kind: symbol: value: "+" pos: 0 } "expected expression, got '+' at byte 0" ]
+PASS: error mentions expected expression
+Stack: [ M{ iter: <iterator callback callback> buf: <option:none none:> } pratt{ operators: H{ *: H{ left-bp: 20 right-bp: 21 } ^: H{ left-bp: 30 right-bp: 30 } /: H{ left-bp: 20 right-bp: 21 } +: H{ left-bp: 10 right-bp: 11 } -: H{ left-bp: 10 right-bp: 11 } } prefix: [ (eval-prefix) ] infix: [ (eval-infix) ] } 0 token{ kind: symbol: value: "+" pos: 0 } "expected expression, got '+' at byte 0" ]
+PASS: error mentions byte position
+Stack: [ M{ iter: <iterator callback callback> buf: <option:none none:> } pratt{ operators: H{ *: H{ left-bp: 20 right-bp: 21 } ^: H{ left-bp: 30 right-bp: 30 } /: H{ left-bp: 20 right-bp: 21 } +: H{ left-bp: 10 right-bp: 11 } -: H{ left-bp: 10 right-bp: 11 } } prefix: [ (eval-prefix) ] infix: [ (eval-infix) ] } 0 token{ kind: symbol: value: "+" pos: 0 } ]

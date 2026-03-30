@@ -1,0 +1,150 @@
+\ lib/pratt.1z - Configurable Pratt parser (top-down operator precedence)
+
+use "lexer" ;
+use "conversions" ;
+
+\\ A Pratt parser holding operator config and handler quotations.
+\\ `operators` maps operator string to H{ left-bp: N right-bp: M }.
+\\ `prefix` is ( token parser tokens -- value ).
+\\ `infix` is ( left token parser tokens -- value ).
+pratt: struct{ operators prefix infix } ;
+
+\\ Construct a Pratt parser from a configuration hash.
+\\ Config keys: `operators:`, `prefix:`, `infix:`.
+<pratt>: ( config -- parser ) [
+  dup operators: @get
+  swap dup prefix: @get
+  swap infix: @get
+  make-pratt
+] ;
+
+\ --- Peekable token iterator wrapper ---
+\ Uses a mutable map so all call sites share state by reference.
+
+(make-peekable): ( iterator -- peekable ) [
+  M{ } iter: <rot- @set! buf: option:none @set!
+] ;
+
+\\ Peek at the next token without consuming it. Returns token or f.
+peek-token: ( peekable -- token/f ) [
+  dup buf: @get
+  dup option:some? [
+    option:some> nip
+  ] [
+    drop
+    dup iter: @get #next?
+    dup option:some? [
+      option:some>
+      \ peekable token -- cache token in buf, return token
+      2dup swap buf: <rot- >option:some @set! drop
+      nip
+    ] [
+      drop drop f
+    ] if
+  ] if
+] ;
+
+\\ Consume the next token. Returns token or f.
+next-token: ( peekable -- token/f ) [
+  dup buf: @get
+  dup option:some? [
+    option:some>
+    swap buf: option:none @set! drop
+  ] [
+    drop
+    dup iter: @get #next?
+    dup option:some? [
+      option:some> nip
+    ] [
+      drop drop f
+    ] if
+  ] if
+] ;
+
+\ --- Error helpers ---
+
+(prefix-error): ( token/f -- ) [
+  dup f = [
+    drop "expected expression at end of input"
+  ] [
+    dup value>> swap pos>>
+    \ value pos
+    "expected expression, got '" <rot-
+    \ pos "expected..." value
+    #append "' at byte " #append
+    swap >string #append
+  ] if
+  f swap EInvalidArgument make-error throw
+] ;
+
+\ --- Core algorithm ---
+
+(pratt-loop): stack-recursive ( peekable parser min-bp left -- value ) [
+  \ Invariant: peekable(3) parser(2) min-bp(1) left(0)
+  3 pick-n peek-token
+  \ peekable(4) parser(3) min-bp(2) left(1) token/f(0)
+  dup f = [
+    drop nip nip nip
+  ] [
+    \ Look up operator; @get? returns option (non-operators end the expr)
+    dup value>> 4 pick-n operators>> swap @get?
+    \ peekable(5) parser(4) min-bp(3) left(2) token(1) option(0)
+    dup option:none? [
+      2drop nip nip nip
+    ] [
+      option:some> left-bp: @get
+      \ peekable(5) parser(4) min-bp(3) left(2) token(1) left-bp(0)
+      3 pick-n
+      \ ...(6) token(2) left-bp(1) min-bp-copy(0)
+      < [
+        \ left-bp < min-bp: stop
+        drop nip nip nip
+      ] [
+        \ Continue: consume peeked token, call infix handler
+        4 pick-n next-token drop
+        \ peekable(4) parser(3) min-bp(2) left(1) token(0)
+        3 pick-n 5 pick-n
+        \ ...(6) left(3) token(2) parser(1) peekable(0)
+        1 pick-n infix>> call
+        \ peekable(3) parser(2) min-bp(1) new-left(0)
+        (pratt-loop)
+      ] if
+    ] if
+  ] if
+] ;
+
+(parse-expr): stack-recursive ( peekable parser min-bp -- value ) [
+  2 pick-n next-token
+  dup f = [ (prefix-error) ] when
+  \ peekable(3) parser(2) min-bp(1) token(0)
+  dup 3 pick-n 5 pick-n
+  \ ...(6) token(3) token(2) parser(1) peekable(0)
+  1 pick-n prefix>> call
+  \ peekable(4) parser(3) min-bp(2) token(1) left(0)
+  nip
+  \ peekable(3) parser(2) min-bp(1) left(0)
+  (pratt-loop)
+] ;
+
+\\ Parse a token iterator using a Pratt parser. Returns the parsed value.
+parse-expr: ( iterator parser -- value ) [
+  swap (make-peekable) swap 0 (parse-expr)
+] ;
+
+\\ Recursive parse entry point for use inside handler quotations.
+\\ Parses with the given minimum binding power.
+parse-pratt: ( peekable parser min-bp -- value ) [
+  (parse-expr)
+] ;
+
+\\ Parse the right-hand operand of a binary operator.
+\\ Looks up the operator's right-bp and recurses.
+\\ Returns the original token and the right operand.
+parse-right: ( token parser tokens -- token right ) [
+  1 pick-n operators>> 3 pick-n value>> @get right-bp: @get
+  \ stack: token parser tokens rbp
+  [ swap ] dip
+  \ stack: token tokens parser rbp
+  parse-pratt
+  \ stack: token right
+] ;
