@@ -1,0 +1,100 @@
+\ lib/pratt/arith.1z - Pre-wired arithmetic Pratt parser
+
+"pratt" load reexport
+
+ARITHMETIC-OPS: const [
+  H{
+    "+" H{ left-bp: 10 right-bp: 11 }
+    "-" H{ left-bp: 10 right-bp: 11 }
+    "*" H{ left-bp: 20 right-bp: 21 }
+    "/" H{ left-bp: 20 right-bp: 21 }
+  }
+] ;
+
+UNARY-MINUS-BP: const [ 30 ] ;
+
+(throw-invalid-argument): ( message -- ) [
+  f swap EInvalidArgument make-error throw
+] ;
+
+(unexpected-expression): ( token -- ) [
+  dup value>> swap pos>>
+  "expected expression, got '" <rot-
+  #append "' at byte " #append
+  swap >string #append
+  (throw-invalid-argument)
+] ;
+
+(expected-close-paren): ( token/f -- ) [
+  dup f = [
+    drop "expected ')' at end of input"
+  ] [
+    dup value>> swap pos>>
+    "expected ')', got '" <rot-
+    #append "' at byte " #append
+    swap >string #append
+  ] if
+  (throw-invalid-argument)
+] ;
+
+(parse-number-token): ( token -- value ) [
+  value>> resolve-literal
+  [ ]
+  [ drop "invalid numeric literal" (throw-invalid-argument) ]
+  if
+] ;
+
+(parse-group): ( parser tokens -- value ) [
+  2dup swap 0 parse-pratt
+  1 pick-n next-token
+  dup f = [ (expected-close-paren) ] when
+  dup value>> ")" = not [ (expected-close-paren) ] when
+  drop nip nip
+] ;
+
+(arith-prefix): ( token parser tokens -- value ) [
+  <rot-
+  \ parser tokens token
+  dup kind>> number: = [
+    (parse-number-token)
+    nip nip
+  ] [
+    dup value>> "(" = [
+      drop (parse-group)
+    ] [
+      dup value>> "-" = [
+        drop
+        swap UNARY-MINUS-BP parse-pratt
+        -1 *
+      ] [
+        (unexpected-expression)
+      ] if
+    ] if
+  ] if
+] ;
+
+(arith-infix): ( left token parser tokens -- value ) [
+  parse-right
+  \ left token right
+  swap value>>
+  dup "+" = [ drop + ] [
+    dup "-" = [ drop - ] [
+      dup "*" = [ drop * ] [
+        dup "/" = [ drop / ] [
+          "unknown operator: " swap #append
+          (throw-invalid-argument)
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+\\ Construct a Pratt parser pre-wired for arithmetic expressions.
+\\ Supports `+`, `-`, `*`, `/`, parentheses, and unary minus.
+<arithmetic-pratt>: ( -- parser ) [
+  H{
+    operators: ARITHMETIC-OPS
+    prefix:    [ (arith-prefix) ]
+    infix:     [ (arith-infix) ]
+  } <pratt>
+] ;

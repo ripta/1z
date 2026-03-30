@@ -1,0 +1,60 @@
+use "testing" ;
+use "lexer" ;
+use "pratt/arith" ;
+
+TEST-LEXER: const [
+  V{ }
+  skip-whitespace-rule #push!
+  number-rule #push!
+  { "+" "-" "*" "/" "(" ")" } symbols-rule #push!
+  >array <lexer>
+] ;
+
+(eval): ( str -- value ) [
+  TEST-LEXER tokenize <arithmetic-pratt> parse-expr
+] ;
+
+"hierarchical use" test-section
+"1 + 2" (eval) 3 "use \"pratt/arith\" resolves through lib hierarchy" assert=
+
+"single literal" test-section
+"42" (eval) 42 "integer literal parses" assert=
+"3.5" (eval) 3.5 "float literal parses" assert=
+
+"binary arithmetic" test-section
+"1 + 2" (eval) 3 "1 + 2 = 3" assert=
+"5 - 3" (eval) 2 "5 - 3 = 2" assert=
+"3 * 4" (eval) 12 "3 * 4 = 12" assert=
+"10 / 2" (eval) 5 "10 / 2 = 5" assert=
+
+"precedence and associativity" test-section
+"1 + 2 * 3" (eval) 7 "multiplication binds tighter than addition" assert=
+"(1 + 2) * 3" (eval) 9 "parentheses override precedence" assert=
+"10 - 3 - 2" (eval) 5 "subtraction is left associative" assert=
+"20 / 4 / 5" (eval) 1 "division is left associative" assert=
+
+"unary minus" test-section
+"-2" (eval) -2 "unary minus on literal" assert=
+"-2 * 3" (eval) -6 "unary minus binds tighter than multiplication" assert=
+"-(1 + 2)" (eval) -3 "unary minus applies to grouped expression" assert=
+"1 + -2" (eval) -1 "unary minus can appear after binary operator" assert=
+
+"decimal arithmetic" test-section
+"3.5 + 0.5" (eval) 4.0 "decimal literals are parsed via resolve-literal" assert=
+
+"error: empty input" test-section
+[ "" (eval) ] "empty input throws" assert-error
+
+"error: unexpected operator" test-section
+[ "+" (eval) ] [ ] recover
+message: @get
+dup "expected expression" #in? "unexpected operator mentions expected expression" assert-true
+"byte 0" #in? "unexpected operator includes byte offset" assert-true
+wipe
+
+"error: missing close paren" test-section
+[ "(1 + 2" (eval) ] [ ] recover
+message: @get
+dup "expected ')'" #in? "missing close paren mentions expected token" assert-true
+"end of input" #in? "missing close paren mentions end of input" assert-true
+wipe
