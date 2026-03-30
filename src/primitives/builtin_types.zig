@@ -39,14 +39,20 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
         },
     };
 
-    const tv = ctx.lookupBuiltinTypeValue(name) orelse blk: {
+    const tv = if (ctx.lookupBuiltinTypeValue(name)) |existing| blk: {
+        if (existing.descriptor != null) {
+            helpers.setErrorContext(ctx, "builtin type '{s}' already has a descriptor attached", .{name});
+            return error.InvalidArgument;
+        }
+        existing.descriptor = descriptor;
+        break :blk existing;
+    } else blk: {
         const alloc = ctx.quotationAllocator();
         const new_tv = try alloc.create(value_mod.TypeValue);
         new_tv.* = .{ .name = name, .descriptor = descriptor };
         try ctx.registerBuiltinTypeValue(name, new_tv);
         break :blk new_tv;
     };
-    tv.descriptor = descriptor;
 
     try ctx.registerTypeDescriptor(name, descriptor);
 

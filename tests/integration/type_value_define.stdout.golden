@@ -4,3 +4,6 @@ Stack: [ ]
 Stack: [ H{ type: builtin-type: } ]
 PASS: descriptor registered
 Stack: [ ]
+Stack: [ [ fixnum: [ type: builtin-type: ] make-mutable-map native.define-builtin-type ; ] ]
+PASS: duplicate descriptor on builtin type errors
+Stack: [ ]
