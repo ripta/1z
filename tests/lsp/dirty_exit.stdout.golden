@@ -1,0 +1,3 @@
+Content-Length: 522
+
+{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"hoverProvider":true,"completionProvider":{},"textDocumentSync":{"openClose":true,"change":1},"signatureHelpProvider":{"triggerCharacters":[" "]},"documentFormattingProvider":true,"documentSymbolProvider":true,"semanticTokensProvider":{"legend":{"tokenTypes":["keyword","number","string","comment","function","variable","operator"],"tokenModifiers":["declaration","documentation"]},"full":true},"definitionProvider":true},"serverInfo":{"name":"1z-lsp","version":"0.0.1"}}}

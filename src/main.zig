@@ -850,7 +850,8 @@ fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) u8 {
 
     // Write C source to a temp file.
     const tmpdir = std.posix.getenv("TMPDIR") orelse "/tmp";
-    const tmp_path = std.fmt.allocPrint(allocator, "{s}/1z_aot_XXXXXX.c", .{tmpdir}) catch {
+    const pid = std.c.getpid();
+    const tmp_path = std.fmt.allocPrint(allocator, "{s}/1z_aot_{d}.c", .{ tmpdir, pid }) catch {
         err_writer.writeAll("Error: out of memory\n") catch {};
         err_writer.flush() catch {};
         return 1;

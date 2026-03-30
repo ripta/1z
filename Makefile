@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test lsp-test aot-test update-golden update-fmt-golden benchmark build-example clean help docs
+.PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test lsp-test aot-test update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark build-example clean help docs
 
 SHELL := /bin/bash
 
@@ -40,11 +40,17 @@ eager-test: ## Run integration tests with eager compilation
 fmt-test: ## Run formatter tests
 	( time timeout $(TIMEOUT) zig build fmt-test $(if $(VERBOSE),--summary all,) )
 
-aot-test: build ## Run AOT build integration tests
-	@for f in tests/aot/test_*.sh; do echo "--- $$f ---"; bash "$$f"; done
+aot-test: ## Run AOT build integration tests
+	timeout $(TIMEOUT) zig build aot-test $(if $(VERBOSE),--summary all,)
 
-lsp-test: build ## Run LSP server tests
-	@for f in tests/lsp/test_*.sh; do echo "--- $$f ---"; bash "$$f"; done
+lsp-test: ## Run LSP server tests
+	timeout $(TIMEOUT) zig build lsp-test $(if $(VERBOSE),--summary all,)
+
+update-aot-golden: ## Update AOT test golden files
+	timeout $(TIMEOUT) zig build update-aot-golden
+
+update-lsp-golden: ## Update LSP test golden files
+	timeout $(TIMEOUT) zig build update-lsp-golden
 
 update-golden: ## Update integration test golden files
 	( time timeout $(TIMEOUT) zig build update-golden )

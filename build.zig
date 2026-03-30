@@ -283,6 +283,46 @@ pub fn build(b: *std.Build) void {
     }
 
     update_fmt_golden_step.dependOn(&update_fmt_files.step);
+
+    // AOT build integration tests
+    const aot_test_step = b.step("aot-test", "Run AOT build integration tests");
+    aot_test_step.dependOn(b.getInstallStep());
+
+    const update_aot_golden_step = b.step("update-aot-golden", "Update AOT test golden files");
+    var update_aot_files = b.addUpdateSourceFiles();
+
+    {
+        var aot_dir = b.build_root.handle.openDir("tests/aot", .{ .iterate = true }) catch |err| {
+            std.debug.print("Warning: Could not open tests/aot: {}\n", .{err});
+            return;
+        };
+        defer aot_dir.close();
+
+        const aot_entries = collectAotTestEntries(b, &aot_dir) catch return;
+        addAotTests(b, aot_test_step, &update_aot_files, aot_entries, has_diff);
+    }
+
+    update_aot_golden_step.dependOn(&update_aot_files.step);
+
+    // LSP server tests
+    const lsp_test_step = b.step("lsp-test", "Run LSP server tests");
+    lsp_test_step.dependOn(&install_lsp.step);
+
+    const update_lsp_golden_step = b.step("update-lsp-golden", "Update LSP test golden files");
+    var update_lsp_files = b.addUpdateSourceFiles();
+
+    {
+        var lsp_dir = b.build_root.handle.openDir("tests/lsp", .{ .iterate = true }) catch |err| {
+            std.debug.print("Warning: Could not open tests/lsp: {}\n", .{err});
+            return;
+        };
+        defer lsp_dir.close();
+
+        const lsp_entries = collectLspTestEntries(b, &lsp_dir) catch return;
+        addLspTests(b, lsp_exe, lsp_test_step, &update_lsp_files, lsp_entries, has_diff);
+    }
+
+    update_lsp_golden_step.dependOn(&update_lsp_files.step);
 }
 
 fn addFfiIncludePath(b: *std.Build, module: *std.Build.Module, target: std.Build.ResolvedTarget) void {
@@ -643,6 +683,410 @@ fn addIntegrationTests(
             }
             if (te.has_stderr_golden or update_exit_code != 0 or te.has_exitcode) {
                 uf_ptr.*.addCopyFileToSource(update_run.captureStdErr(), te.stderr_golden_path);
+            }
+        }
+    }
+}
+
+const AotTestEntry = struct {
+    name_without_ext: []const u8,
+    file_path: []const u8,
+    has_stdout_golden: bool,
+    stdout_golden_path: []const u8,
+    stdout_content: []const u8,
+    has_stderr_golden: bool,
+    stderr_golden_path: []const u8,
+    stderr_content: []const u8,
+    has_exitcode: bool,
+    exitcode_path: []const u8,
+    expected_exit_code: ?u8,
+};
+
+fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEntry {
+    var entries: std.ArrayListUnmanaged(AotTestEntry) = .{};
+
+    var iter = aot_dir.iterate();
+    while (iter.next() catch null) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".1z")) continue;
+
+        const name_without_ext = b.dupe(entry.name[0 .. entry.name.len - 3]);
+        const file_path = b.fmt("tests/aot/{s}", .{entry.name});
+
+        var has_stdout_golden = false;
+        var stdout_content: []const u8 = "";
+        const stdout_golden_path = b.fmt("tests/aot/{s}.stdout.golden", .{name_without_ext});
+        if (aot_dir.openFile(b.fmt("{s}.stdout.golden", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            stdout_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            has_stdout_golden = true;
+        } else |_| {}
+
+        var has_stderr_golden = false;
+        var stderr_content: []const u8 = "";
+        const stderr_golden_path = b.fmt("tests/aot/{s}.stderr.golden", .{name_without_ext});
+        if (aot_dir.openFile(b.fmt("{s}.stderr.golden", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            stderr_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            has_stderr_golden = true;
+        } else |_| {}
+
+        var has_exitcode = false;
+        var expected_exit_code: ?u8 = null;
+        const exitcode_path = b.fmt("tests/aot/{s}.exitcode", .{name_without_ext});
+        if (aot_dir.openFile(b.fmt("{s}.exitcode", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            has_exitcode = true;
+            const code_str = file.readToEndAlloc(b.allocator, 64) catch "";
+            const trimmed_code = std.mem.trim(u8, code_str, " \t\r\n");
+            if (trimmed_code.len > 0) {
+                expected_exit_code = std.fmt.parseInt(u8, trimmed_code, 10) catch null;
+            }
+        } else |_| {}
+
+        entries.append(b.allocator, .{
+            .name_without_ext = name_without_ext,
+            .file_path = file_path,
+            .has_stdout_golden = has_stdout_golden,
+            .stdout_golden_path = stdout_golden_path,
+            .stdout_content = stdout_content,
+            .has_stderr_golden = has_stderr_golden,
+            .stderr_golden_path = stderr_golden_path,
+            .stderr_content = stderr_content,
+            .has_exitcode = has_exitcode,
+            .exitcode_path = exitcode_path,
+            .expected_exit_code = expected_exit_code,
+        }) catch return error.OutOfMemory;
+    }
+
+    return entries.items;
+}
+
+fn addAotTests(
+    b: *std.Build,
+    test_step: *std.Build.Step,
+    update_files: **std.Build.Step.UpdateSourceFiles,
+    aot_entries: []const AotTestEntry,
+    has_diff: bool,
+) void {
+    const exe_path = b.fmt("{s}/bin/1z", .{b.install_path});
+
+    for (aot_entries) |te| {
+        const expected_exit: u8 = te.expected_exit_code orelse if (te.has_stderr_golden) 1 else 0;
+
+        // Compile: 1z build <file.1z> -o <output>
+        const compile_run = b.addSystemCommand(&.{exe_path});
+        compile_run.addArg("build");
+        compile_run.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
+        compile_run.addFileArg(b.path(te.file_path));
+        compile_run.addArg("-o");
+        const aot_binary = compile_run.addOutputFileArg(b.fmt("aot_{s}", .{te.name_without_ext}));
+        compile_run.expectExitCode(0);
+        compile_run.step.dependOn(b.getInstallStep());
+
+        addLibFileDeps(b, compile_run);
+        compile_run.addFileInput(b.path("src/prelude.1z"));
+
+        // chmod +x the compiled binary
+        const chmod = b.addSystemCommand(&.{ "chmod", "+x" });
+        chmod.addFileArg(aot_binary);
+
+        // Execute the compiled binary
+        const exec_run = std.Build.Step.Run.create(b, b.fmt("run aot: {s}", .{te.name_without_ext}));
+        exec_run.addFileArg(aot_binary);
+        exec_run.step.dependOn(&chmod.step);
+        exec_run.expectExitCode(expected_exit);
+
+        if (has_diff) {
+            // Stdout: diff against golden
+            const captured_stdout = exec_run.captureStdOut();
+            const stdout_diff = b.addSystemCommand(&.{
+                "sh", "-c",
+                b.fmt(
+                    "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
+                    .{ if (te.has_stdout_golden) te.stdout_golden_path else "(empty)", te.file_path },
+                ),
+                "sh",
+            });
+            if (te.has_stdout_golden) {
+                stdout_diff.addFileArg(b.path(te.stdout_golden_path));
+            } else {
+                stdout_diff.addArg("/dev/null");
+            }
+            stdout_diff.addFileArg(captured_stdout);
+            test_step.dependOn(&stdout_diff.step);
+
+            // Stderr: normalize binary path, then diff against golden
+            const captured_stderr = exec_run.captureStdErr();
+            const normalize_stderr = b.addSystemCommand(&.{
+                "sed", "s|[^ ]*/aot_[^ :]*|<aot>|g",
+            });
+            normalize_stderr.addFileArg(captured_stderr);
+            const normalized_stderr = normalize_stderr.captureStdOut();
+
+            const stderr_diff = b.addSystemCommand(&.{
+                "sh", "-c",
+                b.fmt(
+                    "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
+                    .{ if (te.has_stderr_golden) te.stderr_golden_path else "(empty)", te.file_path },
+                ),
+                "sh",
+            });
+            if (te.has_stderr_golden) {
+                stderr_diff.addFileArg(b.path(te.stderr_golden_path));
+            } else {
+                stderr_diff.addArg("/dev/null");
+            }
+            stderr_diff.addFileArg(normalized_stderr);
+            test_step.dependOn(&stderr_diff.step);
+        } else {
+            if (te.has_stdout_golden) {
+                exec_run.expectStdOutEqual(te.stdout_content);
+            } else {
+                exec_run.expectStdOutEqual("");
+            }
+            // Stderr normalization requires sed; without diff, use sed + expectStdOutEqual
+            if (te.has_stderr_golden) {
+                const captured_stderr = exec_run.captureStdErr();
+                const normalize_stderr = b.addSystemCommand(&.{
+                    "sed", "s|[^ ]*/aot_[^ :]*|<aot>|g",
+                });
+                normalize_stderr.addFileArg(captured_stderr);
+                normalize_stderr.expectStdOutEqual(te.stderr_content);
+                test_step.dependOn(&normalize_stderr.step);
+            } else {
+                test_step.dependOn(&exec_run.step);
+            }
+        }
+
+        // Update golden
+        {
+            const update_compile = b.addSystemCommand(&.{exe_path});
+            update_compile.addArg("build");
+            update_compile.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
+            update_compile.addFileArg(b.path(te.file_path));
+            update_compile.addArg("-o");
+            const update_binary = update_compile.addOutputFileArg(b.fmt("aot_{s}", .{te.name_without_ext}));
+            update_compile.step.dependOn(b.getInstallStep());
+
+            addLibFileDeps(b, update_compile);
+            update_compile.addFileInput(b.path("src/prelude.1z"));
+
+            const update_chmod = b.addSystemCommand(&.{ "chmod", "+x" });
+            update_chmod.addFileArg(update_binary);
+
+            const update_exec = std.Build.Step.Run.create(b, b.fmt("update aot: {s}", .{te.name_without_ext}));
+            update_exec.addFileArg(update_binary);
+            update_exec.step.dependOn(&update_chmod.step);
+
+            if (expected_exit != 0) {
+                update_exec.expectExitCode(expected_exit);
+            }
+
+            update_files.*.addCopyFileToSource(update_exec.captureStdOut(), te.stdout_golden_path);
+
+            if (te.has_stderr_golden or expected_exit != 0) {
+                const update_stderr = update_exec.captureStdErr();
+                const update_normalize = b.addSystemCommand(&.{
+                    "sed", "s|[^ ]*/aot_[^ :]*|<aot>|g",
+                });
+                update_normalize.addFileArg(update_stderr);
+                update_files.*.addCopyFileToSource(update_normalize.captureStdOut(), te.stderr_golden_path);
+            }
+        }
+    }
+}
+
+fn addLibFileDeps(b: *std.Build, run: *std.Build.Step.Run) void {
+    var lib_dir = b.build_root.handle.openDir("lib", .{ .iterate = true }) catch |err| {
+        std.debug.print("Warning: Could not open lib/: {}\n", .{err});
+        return;
+    };
+    defer lib_dir.close();
+    var walker = lib_dir.walk(b.allocator) catch |err| {
+        std.debug.print("Warning: Could not walk lib/: {}\n", .{err});
+        return;
+    };
+    defer walker.deinit();
+    while (walker.next() catch null) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.path, ".1z")) continue;
+        run.addFileInput(b.path(b.fmt("lib/{s}", .{entry.path})));
+    }
+}
+
+const LspTestEntry = struct {
+    name_without_ext: []const u8,
+    jsonl_path: []const u8,
+    formatted_stdin: []const u8,
+    has_stdout_golden: bool,
+    stdout_golden_path: []const u8,
+    stdout_content: []const u8,
+    has_stderr_golden: bool,
+    stderr_golden_path: []const u8,
+    stderr_content: []const u8,
+    has_exitcode: bool,
+    exitcode_path: []const u8,
+    expected_exit_code: ?u8,
+};
+
+fn collectLspTestEntries(b: *std.Build, lsp_dir: *std.fs.Dir) ![]const LspTestEntry {
+    var entries: std.ArrayListUnmanaged(LspTestEntry) = .{};
+
+    var iter = lsp_dir.iterate();
+    while (iter.next() catch null) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".jsonl")) continue;
+
+        const name_without_ext = b.dupe(entry.name[0 .. entry.name.len - 6]);
+        const jsonl_path = b.fmt("tests/lsp/{s}", .{entry.name});
+
+        var formatted_stdin: []const u8 = "";
+        if (lsp_dir.openFile(entry.name, .{})) |file| {
+            defer file.close();
+            const content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            formatted_stdin = formatLspStdin(b, content);
+        } else |_| {}
+
+        var has_stdout_golden = false;
+        var stdout_content: []const u8 = "";
+        const stdout_golden_path = b.fmt("tests/lsp/{s}.stdout.golden", .{name_without_ext});
+        if (lsp_dir.openFile(b.fmt("{s}.stdout.golden", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            stdout_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            has_stdout_golden = true;
+        } else |_| {}
+
+        var has_stderr_golden = false;
+        var stderr_content: []const u8 = "";
+        const stderr_golden_path = b.fmt("tests/lsp/{s}.stderr.golden", .{name_without_ext});
+        if (lsp_dir.openFile(b.fmt("{s}.stderr.golden", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            stderr_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            has_stderr_golden = true;
+        } else |_| {}
+
+        var has_exitcode = false;
+        var expected_exit_code: ?u8 = null;
+        const exitcode_path = b.fmt("tests/lsp/{s}.exitcode", .{name_without_ext});
+        if (lsp_dir.openFile(b.fmt("{s}.exitcode", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            has_exitcode = true;
+            const code_str = file.readToEndAlloc(b.allocator, 64) catch "";
+            const trimmed_code = std.mem.trim(u8, code_str, " \t\r\n");
+            if (trimmed_code.len > 0) {
+                expected_exit_code = std.fmt.parseInt(u8, trimmed_code, 10) catch null;
+            }
+        } else |_| {}
+
+        entries.append(b.allocator, .{
+            .name_without_ext = name_without_ext,
+            .jsonl_path = jsonl_path,
+            .formatted_stdin = formatted_stdin,
+            .has_stdout_golden = has_stdout_golden,
+            .stdout_golden_path = stdout_golden_path,
+            .stdout_content = stdout_content,
+            .has_stderr_golden = has_stderr_golden,
+            .stderr_golden_path = stderr_golden_path,
+            .stderr_content = stderr_content,
+            .has_exitcode = has_exitcode,
+            .exitcode_path = exitcode_path,
+            .expected_exit_code = expected_exit_code,
+        }) catch return error.OutOfMemory;
+    }
+
+    return entries.items;
+}
+
+fn formatLspStdin(b: *std.Build, jsonl_content: []const u8) []const u8 {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    var line_iter = std.mem.splitScalar(u8, jsonl_content, '\n');
+    while (line_iter.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+        const header = b.fmt("Content-Length: {d}\r\n\r\n", .{trimmed.len});
+        buf.appendSlice(b.allocator, header) catch continue;
+        buf.appendSlice(b.allocator, trimmed) catch continue;
+    }
+    return buf.toOwnedSlice(b.allocator) catch "";
+}
+
+fn addLspTests(
+    b: *std.Build,
+    lsp_artifact: *std.Build.Step.Compile,
+    test_step: *std.Build.Step,
+    update_files: **std.Build.Step.UpdateSourceFiles,
+    lsp_entries: []const LspTestEntry,
+    has_diff: bool,
+) void {
+    for (lsp_entries) |te| {
+        const expected_exit: u8 = te.expected_exit_code orelse if (te.has_stderr_golden) 1 else 0;
+
+        const test_run = b.addRunArtifact(lsp_artifact);
+        test_run.setStdIn(.{ .bytes = te.formatted_stdin });
+        test_run.expectExitCode(expected_exit);
+
+        test_run.addFileInput(b.path(te.jsonl_path));
+        if (te.has_stdout_golden) test_run.addFileInput(b.path(te.stdout_golden_path));
+        if (te.has_stderr_golden) test_run.addFileInput(b.path(te.stderr_golden_path));
+        if (te.has_exitcode) test_run.addFileInput(b.path(te.exitcode_path));
+
+        if (has_diff) {
+            const captured_stdout = test_run.captureStdOut();
+            const stdout_diff = b.addSystemCommand(&.{
+                "sh", "-c",
+                b.fmt(
+                    "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
+                    .{ if (te.has_stdout_golden) te.stdout_golden_path else "(empty)", te.jsonl_path },
+                ),
+                "sh",
+            });
+            if (te.has_stdout_golden) {
+                stdout_diff.addFileArg(b.path(te.stdout_golden_path));
+            } else {
+                stdout_diff.addArg("/dev/null");
+            }
+            stdout_diff.addFileArg(captured_stdout);
+            test_step.dependOn(&stdout_diff.step);
+
+            if (te.has_stderr_golden) {
+                const captured_stderr = test_run.captureStdErr();
+                const stderr_diff = b.addSystemCommand(&.{
+                    "sh", "-c",
+                    b.fmt(
+                        "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
+                        .{ te.stderr_golden_path, te.jsonl_path },
+                    ),
+                    "sh",
+                });
+                stderr_diff.addFileArg(b.path(te.stderr_golden_path));
+                stderr_diff.addFileArg(captured_stderr);
+                test_step.dependOn(&stderr_diff.step);
+            }
+        } else {
+            if (te.has_stdout_golden) {
+                test_run.expectStdOutEqual(te.stdout_content);
+            } else {
+                test_run.expectStdOutEqual("");
+            }
+            if (te.has_stderr_golden) {
+                test_run.expectStdErrEqual(te.stderr_content);
+            }
+            test_step.dependOn(&test_run.step);
+        }
+
+        // Update golden
+        {
+            const update_run = b.addRunArtifact(lsp_artifact);
+            update_run.setStdIn(.{ .bytes = te.formatted_stdin });
+
+            if (expected_exit != 0) {
+                update_run.expectExitCode(expected_exit);
+            }
+
+            update_files.*.addCopyFileToSource(update_run.captureStdOut(), te.stdout_golden_path);
+            if (te.has_stderr_golden or expected_exit != 0) {
+                update_files.*.addCopyFileToSource(update_run.captureStdErr(), te.stderr_golden_path);
             }
         }
     }
