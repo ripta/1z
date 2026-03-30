@@ -68,7 +68,7 @@ PASS: bitand has dispatch entries
 Stack: [ ]
 === native provenance visible ===
 Stack: [ ]
-Stack: [ { method-info{ types: { "bignum" "fixnum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } method-info{ types: { "fixnum" "fixnum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } method-info{ types: { "bignum" "bignum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } method-info{ types: { "fixnum" "bignum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } } ]
+Stack: [ { method-info{ types: { "bignum" "bignum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } method-info{ types: { "bignum" "fixnum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } method-info{ types: { "fixnum" "bignum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } method-info{ types: { "fixnum" "fixnum" } provenance: dispatch-provenance{ generator: "native" parent: "" role: "" field: "" } } } ]
 PASS: native provenance generator
 Stack: [ ]
 === user override of native dispatch ===

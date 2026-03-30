@@ -229,7 +229,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             const hash_instrs = try alloc.alloc(Instruction, 2);
             hash_instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
             hash_instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-to-hash" }, .line = 0 };
-            try virtual.registerHashDispatch(ctx, full_name, hash_instrs);
+            try virtual.registerHashDispatch(ctx, vtype.type_val.?, hash_instrs);
 
             const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{full_name});
             try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);

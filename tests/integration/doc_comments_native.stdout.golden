@@ -5,15 +5,15 @@ Stack: [ ]
 Add two numbers. Promotes to bignum on fixnum overflow, or to float if either operand is a float.
 + ( a b -- a+b ) [<marker:generic>] \native
 
-  method{ bignum fixnum }
   method{ bignum bignum }
-  method{ fixnum fixnum }
+  method{ bignum fixnum }
+  method{ bignum float }
   method{ fixnum bignum }
-  method{ float float }
+  method{ fixnum fixnum }
   method{ fixnum float }
   method{ float bignum }
-  method{ bignum float }
   method{ float fixnum }
+  method{ float float }
 Stack: [ ]
 Conditional execution.
 if ( ..a ? true-quot: ( ..a -- ..b ) false-quot: ( ..a -- ..b ) -- ..b ) [<marker:branch-combinator>] \native
@@ -23,13 +23,13 @@ Get length of sequence. O(1) and non-destructive; does not work on iterators (us
 #len ( seq -- n ) [<marker:generic>] \native
 
   method{ array }
-  method{ vector }
-  method{ hash }
   method{ byte-array }
-  method{ string }
-  method{ set }
+  method{ hash }
   method{ module }
   method{ mutable-map }
+  method{ set }
+  method{ string }
+  method{ vector }
 Stack: [ ]
 Execute try quotation; if error, run recover quotation with error on stack.
 recover ( try-quot recover-quot: ( error -- ..a ) -- ) \native

@@ -430,48 +430,65 @@ fn nativeLastByteArray(ctx: *Context) anyerror!void {
 // Registration of all native dispatch entries
 // =============================================================================
 
-pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
+pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
+    const unary = &dispatch_mod.unary_sentinel;
+    const tv = struct {
+        fn get(c: *Context, name: []const u8) *const value_mod.TypeValue {
+            return c.lookupBuiltinTypeValue(name).?;
+        }
+    }.get;
+
+    const string = tv(ctx, "string");
+    const array = tv(ctx, "array");
+    const vector = tv(ctx, "vector");
+    const byte_array = tv(ctx, "byte-array");
+    const set = tv(ctx, "set");
+    const hash = tv(ctx, "hash");
+    const mutable_map = tv(ctx, "mutable-map");
+    const module = tv(ctx, "module");
+    const fixnum = tv(ctx, "fixnum");
+
     // #len : unary entries
-    try dispatch.registerNative("#len", "string", unary_sentinel, nativeLenString);
-    try dispatch.registerNative("#len", "array", unary_sentinel, nativeLenArray);
-    try dispatch.registerNative("#len", "vector", unary_sentinel, nativeLenVector);
-    try dispatch.registerNative("#len", "byte-array", unary_sentinel, nativeLenByteArray);
-    try dispatch.registerNative("#len", "set", unary_sentinel, nativeLenSet);
-    try dispatch.registerNative("#len", "hash", unary_sentinel, nativeLenHash);
-    try dispatch.registerNative("#len", "mutable-map", unary_sentinel, nativeLenMutableMap);
-    try dispatch.registerNative("#len", "module", unary_sentinel, nativeLenModule);
+    try dispatch.registerNative("#len", string, unary, nativeLenString);
+    try dispatch.registerNative("#len", array, unary, nativeLenArray);
+    try dispatch.registerNative("#len", vector, unary, nativeLenVector);
+    try dispatch.registerNative("#len", byte_array, unary, nativeLenByteArray);
+    try dispatch.registerNative("#len", set, unary, nativeLenSet);
+    try dispatch.registerNative("#len", hash, unary, nativeLenHash);
+    try dispatch.registerNative("#len", mutable_map, unary, nativeLenMutableMap);
+    try dispatch.registerNative("#len", module, unary, nativeLenModule);
 
     // #nth : binary entries (all with type_b = fixnum)
-    try dispatch.registerNative("#nth", "string", "fixnum", nativeNthString);
-    try dispatch.registerNative("#nth", "array", "fixnum", nativeNthArray);
-    try dispatch.registerNative("#nth", "vector", "fixnum", nativeNthVector);
-    try dispatch.registerNative("#nth", "byte-array", "fixnum", nativeNthByteArray);
+    try dispatch.registerNative("#nth", string, fixnum, nativeNthString);
+    try dispatch.registerNative("#nth", array, fixnum, nativeNthArray);
+    try dispatch.registerNative("#nth", vector, fixnum, nativeNthVector);
+    try dispatch.registerNative("#nth", byte_array, fixnum, nativeNthByteArray);
 
     // #first : unary entries
-    try dispatch.registerNative("#first", "string", unary_sentinel, nativeFirstString);
-    try dispatch.registerNative("#first", "array", unary_sentinel, nativeFirstArray);
-    try dispatch.registerNative("#first", "vector", unary_sentinel, nativeFirstVector);
-    try dispatch.registerNative("#first", "byte-array", unary_sentinel, nativeFirstByteArray);
+    try dispatch.registerNative("#first", string, unary, nativeFirstString);
+    try dispatch.registerNative("#first", array, unary, nativeFirstArray);
+    try dispatch.registerNative("#first", vector, unary, nativeFirstVector);
+    try dispatch.registerNative("#first", byte_array, unary, nativeFirstByteArray);
 
     // #last : unary entries
-    try dispatch.registerNative("#last", "string", unary_sentinel, nativeLastString);
-    try dispatch.registerNative("#last", "array", unary_sentinel, nativeLastArray);
-    try dispatch.registerNative("#last", "vector", unary_sentinel, nativeLastVector);
-    try dispatch.registerNative("#last", "byte-array", unary_sentinel, nativeLastByteArray);
+    try dispatch.registerNative("#last", string, unary, nativeLastString);
+    try dispatch.registerNative("#last", array, unary, nativeLastArray);
+    try dispatch.registerNative("#last", vector, unary, nativeLastVector);
+    try dispatch.registerNative("#last", byte_array, unary, nativeLastByteArray);
 
     // >array : unary entries
-    try dispatch.registerNative(">array", "vector", unary_sentinel, nativeToArrayVector);
-    try dispatch.registerNative(">array", "byte-array", unary_sentinel, nativeToArrayByteArray);
-    try dispatch.registerNative(">array", "set", unary_sentinel, nativeToArraySet);
-    try dispatch.registerNative(">array", "array", unary_sentinel, nativeToArrayArray);
+    try dispatch.registerNative(">array", vector, unary, nativeToArrayVector);
+    try dispatch.registerNative(">array", byte_array, unary, nativeToArrayByteArray);
+    try dispatch.registerNative(">array", set, unary, nativeToArraySet);
+    try dispatch.registerNative(">array", array, unary, nativeToArrayArray);
 
     // >hash : unary entries
-    try dispatch.registerNative(">hash", "mutable-map", unary_sentinel, nativeToHashMutableMap);
-    try dispatch.registerNative(">hash", "hash", unary_sentinel, nativeToHashHash);
+    try dispatch.registerNative(">hash", mutable_map, unary, nativeToHashMutableMap);
+    try dispatch.registerNative(">hash", hash, unary, nativeToHashHash);
 
     // #peek / #poke! : byte-level access
-    try dispatch.registerNative("#peek", "byte-array", unary_sentinel, nativePeekByteArray);
-    try dispatch.registerNative("#poke!", "byte-array", unary_sentinel, nativePokeByteArray);
+    try dispatch.registerNative("#peek", byte_array, unary, nativePeekByteArray);
+    try dispatch.registerNative("#poke!", byte_array, unary, nativePokeByteArray);
 }
 
 pub const primitives = [_]Primitive{
@@ -550,18 +567,18 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
     // dispatch: seq is at position 2, below n and value
     if (ctx.stack.depth() >= 3) {
         const seq_peek = try ctx.stack.peekN(2);
-        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx).name;
+        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx);
         if (ctx.lookupUnaryDispatch("#nth!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
         }
-        if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
+        if (dispatch_mod.dispatchEnumTypeValue(seq_peek)) |ae| {
             if (ctx.lookupUnaryDispatch("#nth!", ae)) |entry| {
                 try dispatch_helpers.executeDispatchBody(ctx, entry.body);
                 return;
             }
         }
-        if (dispatch_mod.dispatchBaseTypeName(seq_peek)) |bt| {
+        if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
             if (ctx.lookupUnaryDispatch("#nth!", bt)) |entry| {
                 const len = ctx.stack.items.items.len;
                 ctx.stack.items.items[len - 3] = seq_peek.tagged.inner.*;
@@ -950,18 +967,18 @@ pub fn nativeAppendMut(ctx: *Context) anyerror!void {
     // dispatch: vec is at position 1, below seq
     if (ctx.stack.depth() >= 2) {
         const seq_peek = try ctx.stack.peekN(1);
-        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx).name;
+        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx);
         if (ctx.lookupUnaryDispatch("#append!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
         }
-        if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
+        if (dispatch_mod.dispatchEnumTypeValue(seq_peek)) |ae| {
             if (ctx.lookupUnaryDispatch("#append!", ae)) |entry| {
                 try dispatch_helpers.executeDispatchBody(ctx, entry.body);
                 return;
             }
         }
-        if (dispatch_mod.dispatchBaseTypeName(seq_peek)) |bt| {
+        if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
             if (ctx.lookupUnaryDispatch("#append!", bt)) |entry| {
                 const len = ctx.stack.items.items.len;
                 ctx.stack.items.items[len - 2] = seq_peek.tagged.inner.*;
@@ -1387,18 +1404,18 @@ fn nativePushMut(ctx: *Context) anyerror!void {
     // dispatch: vec is at position 1, below elem
     if (ctx.stack.depth() >= 2) {
         const seq_peek = try ctx.stack.peekN(1);
-        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx).name;
+        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx);
         if (ctx.lookupUnaryDispatch("#push!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
         }
-        if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
+        if (dispatch_mod.dispatchEnumTypeValue(seq_peek)) |ae| {
             if (ctx.lookupUnaryDispatch("#push!", ae)) |entry| {
                 try dispatch_helpers.executeDispatchBody(ctx, entry.body);
                 return;
             }
         }
-        if (dispatch_mod.dispatchBaseTypeName(seq_peek)) |bt| {
+        if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
             if (ctx.lookupUnaryDispatch("#push!", bt)) |entry| {
                 const len = ctx.stack.items.items.len;
                 ctx.stack.items.items[len - 2] = seq_peek.tagged.inner.*;
@@ -1422,18 +1439,18 @@ fn nativePopMut(ctx: *Context) anyerror!void {
     // dispatch: vec is at position 0
     if (ctx.stack.depth() >= 1) {
         const seq_peek = try ctx.stack.peek();
-        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx).name;
+        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx);
         if (ctx.lookupUnaryDispatch("#pop!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
         }
-        if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
+        if (dispatch_mod.dispatchEnumTypeValue(seq_peek)) |ae| {
             if (ctx.lookupUnaryDispatch("#pop!", ae)) |entry| {
                 try dispatch_helpers.executeDispatchBody(ctx, entry.body);
                 return;
             }
         }
-        if (dispatch_mod.dispatchBaseTypeName(seq_peek)) |bt| {
+        if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
             if (ctx.lookupUnaryDispatch("#pop!", bt)) |entry| {
                 const len = ctx.stack.items.items.len;
                 ctx.stack.items.items[len - 1] = seq_peek.tagged.inner.*;
@@ -1459,18 +1476,18 @@ fn nativeUnshiftMut(ctx: *Context) anyerror!void {
     // dispatch: vec is at position 1, below elem
     if (ctx.stack.depth() >= 2) {
         const seq_peek = try ctx.stack.peekN(1);
-        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx).name;
+        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx);
         if (ctx.lookupUnaryDispatch("#unshift!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
         }
-        if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
+        if (dispatch_mod.dispatchEnumTypeValue(seq_peek)) |ae| {
             if (ctx.lookupUnaryDispatch("#unshift!", ae)) |entry| {
                 try dispatch_helpers.executeDispatchBody(ctx, entry.body);
                 return;
             }
         }
-        if (dispatch_mod.dispatchBaseTypeName(seq_peek)) |bt| {
+        if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
             if (ctx.lookupUnaryDispatch("#unshift!", bt)) |entry| {
                 const len = ctx.stack.items.items.len;
                 ctx.stack.items.items[len - 2] = seq_peek.tagged.inner.*;
@@ -1494,18 +1511,18 @@ fn nativeShiftMut(ctx: *Context) anyerror!void {
     // dispatch: vec is at position 0
     if (ctx.stack.depth() >= 1) {
         const seq_peek = try ctx.stack.peek();
-        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx).name;
+        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx);
         if (ctx.lookupUnaryDispatch("#shift!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
         }
-        if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
+        if (dispatch_mod.dispatchEnumTypeValue(seq_peek)) |ae| {
             if (ctx.lookupUnaryDispatch("#shift!", ae)) |entry| {
                 try dispatch_helpers.executeDispatchBody(ctx, entry.body);
                 return;
             }
         }
-        if (dispatch_mod.dispatchBaseTypeName(seq_peek)) |bt| {
+        if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
             if (ctx.lookupUnaryDispatch("#shift!", bt)) |entry| {
                 const len = ctx.stack.items.items.len;
                 ctx.stack.items.items[len - 1] = seq_peek.tagged.inner.*;
@@ -2306,18 +2323,18 @@ fn nativePeek(ctx: *Context) anyerror!void {
     // dispatch: byte-array is at stack depth 2 (below offset and width)
     if (ctx.stack.depth() >= 3) {
         const seq_peek = try ctx.stack.peekN(2);
-        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx).name;
+        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx);
         if (ctx.lookupUnaryDispatch("#peek", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
         }
-        if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
+        if (dispatch_mod.dispatchEnumTypeValue(seq_peek)) |ae| {
             if (ctx.lookupUnaryDispatch("#peek", ae)) |entry| {
                 try dispatch_helpers.executeDispatchBody(ctx, entry.body);
                 return;
             }
         }
-        if (dispatch_mod.dispatchBaseTypeName(seq_peek)) |bt| {
+        if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
             if (ctx.lookupUnaryDispatch("#peek", bt)) |entry| {
                 const len = ctx.stack.items.items.len;
                 ctx.stack.items.items[len - 3] = seq_peek.tagged.inner.*;
@@ -2343,18 +2360,18 @@ fn nativePoke(ctx: *Context) anyerror!void {
     // dispatch: byte-array is at stack depth 3 (below offset, value, and width)
     if (ctx.stack.depth() >= 4) {
         const seq_peek = try ctx.stack.peekN(3);
-        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx).name;
+        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx);
         if (ctx.lookupUnaryDispatch("#poke!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
         }
-        if (dispatch_mod.dispatchEnumName(seq_peek)) |ae| {
+        if (dispatch_mod.dispatchEnumTypeValue(seq_peek)) |ae| {
             if (ctx.lookupUnaryDispatch("#poke!", ae)) |entry| {
                 try dispatch_helpers.executeDispatchBody(ctx, entry.body);
                 return;
             }
         }
-        if (dispatch_mod.dispatchBaseTypeName(seq_peek)) |bt| {
+        if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
             if (ctx.lookupUnaryDispatch("#poke!", bt)) |entry| {
                 const len = ctx.stack.items.items.len;
                 ctx.stack.items.items[len - 4] = seq_peek.tagged.inner.*;

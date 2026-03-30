@@ -47,8 +47,10 @@ fn nativeAsStringSymbol(ctx: *Context) anyerror!void {
 // Registration of all native dispatch entries
 // =============================================================================
 
-pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
-    const inspect_types = [_][]const u8{
+pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
+    const unary = &dispatch_mod.unary_sentinel;
+
+    const inspect_type_names = [_][]const u8{
         "fixnum",      "float",            "bignum",
         "boolean",     "string",           "symbol",
         "array",       "quotation",        "hash",
@@ -61,17 +63,22 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
         "unit",
     };
 
-    for (inspect_types) |t| {
-        try dispatch.registerNative("inspect", t, unary_sentinel, nativeInspectGeneric);
+    for (inspect_type_names) |name| {
+        const tv = ctx.lookupBuiltinTypeValue(name).?;
+        try dispatch.registerNative("inspect", tv, unary, nativeInspectGeneric);
     }
 
-    for (inspect_types) |t| {
-        if (std.mem.eql(u8, t, "string")) {
-            try dispatch.registerNative(">string", t, unary_sentinel, nativeAsStringPassthrough);
-        } else if (std.mem.eql(u8, t, "symbol")) {
-            try dispatch.registerNative(">string", t, unary_sentinel, nativeAsStringSymbol);
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+    const symbol_tv = ctx.lookupBuiltinTypeValue("symbol").?;
+
+    for (inspect_type_names) |name| {
+        const tv = ctx.lookupBuiltinTypeValue(name).?;
+        if (tv == string_tv) {
+            try dispatch.registerNative(">string", tv, unary, nativeAsStringPassthrough);
+        } else if (tv == symbol_tv) {
+            try dispatch.registerNative(">string", tv, unary, nativeAsStringSymbol);
         } else {
-            try dispatch.registerNative(">string", t, unary_sentinel, nativeAsStringGeneric);
+            try dispatch.registerNative(">string", tv, unary, nativeAsStringGeneric);
         }
     }
 }

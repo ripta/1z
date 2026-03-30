@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const Dictionary = @import("dictionary.zig").Dictionary;
 const WordDefinition = @import("dictionary.zig").WordDefinition;
 const StackEffect = @import("stack_effect.zig").StackEffect;
+
 const value_mod = @import("value.zig");
 const Module = value_mod.Module;
 const ModuleWord = value_mod.ModuleWord;
@@ -13,9 +14,18 @@ const primitives_mod = @import("primitives/mod.zig");
 pub const InterpreterError = primitives_mod.InterpreterError;
 const Primitive = primitives_mod.Primitive;
 const makeSimpleEffect = primitives_mod.makeSimpleEffect;
-
 const all_primitives = primitives_mod.extracted_primitives;
 const all_registry_entries = primitives_mod.extracted_registry_entries;
+
+const dispatch_mod = @import("dispatch.zig");
+const DispatchTable = dispatch_mod.DispatchTable;
+
+const arithmetic_mod = @import("primitives/arithmetic.zig");
+const bitwise_mod = @import("primitives/bitwise.zig");
+const sequences_mod = @import("primitives/sequences.zig");
+const strings_mod = @import("primitives/strings.zig");
+
+const Context = @import("context.zig").Context;
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
     for (all_primitives) |p| {
@@ -38,11 +48,11 @@ pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
     }
 }
 
-pub fn registerNativeDispatch(dispatch: *@import("dispatch.zig").DispatchTable) !void {
-    try @import("primitives/arithmetic.zig").registerNativeDispatch(dispatch);
-    try @import("primitives/bitwise.zig").registerNativeDispatch(dispatch);
-    try @import("primitives/sequences.zig").registerNativeDispatch(dispatch);
-    try @import("primitives/strings.zig").registerNativeDispatch(dispatch);
+pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
+    try arithmetic_mod.registerNativeDispatch(dispatch, ctx);
+    try bitwise_mod.registerNativeDispatch(dispatch, ctx);
+    try sequences_mod.registerNativeDispatch(dispatch, ctx);
+    try strings_mod.registerNativeDispatch(dispatch, ctx);
 }
 
 pub fn createNativeModule(dict: *Dictionary, allocator: Allocator) !void {

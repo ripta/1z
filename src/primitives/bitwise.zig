@@ -182,7 +182,12 @@ fn makeShiftEntry(comptime t: BitType) *const fn (*Context) anyerror!void {
 // Registration of all native dispatch entries
 // =============================================================================
 
-pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
+pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
+    const unary = &dispatch_mod.unary_sentinel;
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const bignum_tv = ctx.lookupBuiltinTypeValue("bignum").?;
+    const bit_tvs = [_]*const value_mod.TypeValue{ fixnum_tv, bignum_tv };
+
     // bitand, bitor, bitxor: 4 entries each (2x2 bit-type matrix)
     inline for ([_]struct { op: BitwiseOp, name: []const u8 }{
         .{ .op = .bitand, .name = "bitand" },
@@ -191,32 +196,32 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
     }) |item| {
         inline for (bit_types) |ta| {
             inline for (bit_types) |tb| {
-                try dispatch.registerNative(item.name, bitTypeName(ta), bitTypeName(tb), makeBinaryBitwiseEntry(item.op, ta, tb));
+                try dispatch.registerNative(item.name, bit_tvs[@intFromEnum(ta)], bit_tvs[@intFromEnum(tb)], makeBinaryBitwiseEntry(item.op, ta, tb));
             }
         }
     }
 
     // bitnot: 2 entries (unary)
     inline for (bit_types) |t| {
-        try dispatch.registerNative("bitnot", bitTypeName(t), unary_sentinel, makeBitnotEntry(t));
+        try dispatch.registerNative("bitnot", bit_tvs[@intFromEnum(t)], unary, makeBitnotEntry(t));
     }
 
     // shift-left: 2 entries (fixnum x fixnum, bignum x fixnum)
     inline for (bit_types) |t| {
-        try dispatch.registerNative("shift-left", bitTypeName(t), "fixnum", makeShiftLeftEntry(t));
+        try dispatch.registerNative("shift-left", bit_tvs[@intFromEnum(t)], fixnum_tv, makeShiftLeftEntry(t));
     }
 
     // shift-right: 2 entries (fixnum x fixnum, bignum x fixnum)
     inline for (bit_types) |t| {
-        try dispatch.registerNative("shift-right", bitTypeName(t), "fixnum", makeShiftRightEntry(t));
+        try dispatch.registerNative("shift-right", bit_tvs[@intFromEnum(t)], fixnum_tv, makeShiftRightEntry(t));
     }
 
     // ushift-right: 1 entry (fixnum x fixnum only)
-    try dispatch.registerNative("ushift-right", "fixnum", "fixnum", makeUshiftRightEntry());
+    try dispatch.registerNative("ushift-right", fixnum_tv, fixnum_tv, makeUshiftRightEntry());
 
     // shift: 2 entries (fixnum x fixnum, bignum x fixnum)
     inline for (bit_types) |t| {
-        try dispatch.registerNative("shift", bitTypeName(t), "fixnum", makeShiftEntry(t));
+        try dispatch.registerNative("shift", bit_tvs[@intFromEnum(t)], fixnum_tv, makeShiftEntry(t));
     }
 }
 

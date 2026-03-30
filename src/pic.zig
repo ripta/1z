@@ -1,16 +1,18 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const DispatchEntry = @import("dispatch.zig").DispatchEntry;
+const dispatch_mod = @import("dispatch.zig");
+const DispatchEntry = dispatch_mod.DispatchEntry;
+const value_mod = @import("value.zig");
+const TypeValue = value_mod.TypeValue;
 
 pub const max_pic_entries = 4;
 
 /// A single entry in a polymorphic inline cache, caching the result of
-/// a dispatch table lookup keyed by type name pointers. Pointer
-/// comparison is safe because all type names are stable: string
-/// literals for builtins, arena-allocated for user types.
+/// a dispatch table lookup keyed by TypeValue pointers. Pointer
+/// comparison is safe because TypeValue objects have stable identity.
 pub const PicEntry = struct {
-    type_a: []const u8 = "",
-    type_b: []const u8 = "",
+    type_a: *const TypeValue = &dispatch_mod.unary_sentinel,
+    type_b: *const TypeValue = &dispatch_mod.unary_sentinel,
     entry: DispatchEntry = undefined,
     unwrap_a: bool = false,
     unwrap_b: bool = false,
@@ -27,9 +29,9 @@ pub const PolymorphicCache = struct {
     generation: u32 = 0,
     megamorphic: bool = false,
 
-    pub fn lookup(self: *const PolymorphicCache, a_type: []const u8, b_type: []const u8) ?*const PicEntry {
+    pub fn lookup(self: *const PolymorphicCache, a_type: *const TypeValue, b_type: *const TypeValue) ?*const PicEntry {
         for (self.entries[0..self.count]) |*e| {
-            if (a_type.ptr == e.type_a.ptr and b_type.ptr == e.type_b.ptr) return e;
+            if (a_type == e.type_a and b_type == e.type_b) return e;
         }
         return null;
     }
@@ -84,46 +86,58 @@ test "PolymorphicCache defaults to empty" {
 
 test "PolymorphicCache lookup returns null when empty" {
     const cache = PolymorphicCache{};
-    try std.testing.expect(cache.lookup("fixnum", "fixnum") == null);
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    try std.testing.expect(cache.lookup(&fixnum_tv, &fixnum_tv) == null);
 }
 
 test "PolymorphicCache insert and lookup" {
     var cache = PolymorphicCache{};
-    const type_a: []const u8 = "fixnum";
-    const type_b: []const u8 = "fixnum";
-    cache.insert(.{ .type_a = type_a, .type_b = type_b });
+    var type_a_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var type_b_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    cache.insert(.{ .type_a = &type_a_tv, .type_b = &type_b_tv });
     try std.testing.expectEqual(@as(u8, 1), cache.count);
 
-    const result = cache.lookup(type_a, type_b);
+    const result = cache.lookup(&type_a_tv, &type_b_tv);
     try std.testing.expect(result != null);
-    try std.testing.expect(result.?.type_a.ptr == type_a.ptr);
+    try std.testing.expect(result.?.type_a == &type_a_tv);
 }
 
 test "PolymorphicCache holds up to max_pic_entries" {
     var cache = PolymorphicCache{};
-    const types = [_][]const u8{ "a", "b", "c", "d" };
-    for (types) |t| {
-        cache.insert(.{ .type_a = t, .type_b = t });
+    var tvs = [_]TypeValue{
+        .{ .name = "a", .descriptor = null },
+        .{ .name = "b", .descriptor = null },
+        .{ .name = "c", .descriptor = null },
+        .{ .name = "d", .descriptor = null },
+    };
+    for (&tvs) |*tv| {
+        cache.insert(.{ .type_a = tv, .type_b = tv });
     }
     try std.testing.expectEqual(@as(u8, max_pic_entries), cache.count);
     try std.testing.expect(!cache.megamorphic);
 
-    for (types) |t| {
-        try std.testing.expect(cache.lookup(t, t) != null);
+    for (&tvs) |*tv| {
+        try std.testing.expect(cache.lookup(tv, tv) != null);
     }
 }
 
 test "PolymorphicCache becomes megamorphic on overflow" {
     var cache = PolymorphicCache{};
-    const types = [_][]const u8{ "a", "b", "c", "d", "e" };
-    for (types) |t| {
-        cache.insert(.{ .type_a = t, .type_b = t });
+    var tvs = [_]TypeValue{
+        .{ .name = "a", .descriptor = null },
+        .{ .name = "b", .descriptor = null },
+        .{ .name = "c", .descriptor = null },
+        .{ .name = "d", .descriptor = null },
+        .{ .name = "e", .descriptor = null },
+    };
+    for (&tvs) |*tv| {
+        cache.insert(.{ .type_a = tv, .type_b = tv });
     }
     try std.testing.expectEqual(@as(u8, max_pic_entries), cache.count);
     try std.testing.expect(cache.megamorphic);
 
     // The 5th type should not be in the cache
-    try std.testing.expect(cache.lookup(types[4], types[4]) == null);
+    try std.testing.expect(cache.lookup(&tvs[4], &tvs[4]) == null);
 }
 
 test "PicTable init creates entries with correct count" {
@@ -146,7 +160,8 @@ test "PicTable get returns mutable pointer to entry" {
     try std.testing.expectEqual(@as(u8, 0), entry.count);
 
     entry.generation = 42;
-    entry.insert(.{ .type_a = "fixnum", .type_b = "fixnum" });
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    entry.insert(.{ .type_a = &fixnum_tv, .type_b = &fixnum_tv });
 
     try std.testing.expectEqual(@as(u32, 42), table.entries[1].generation);
     try std.testing.expectEqual(@as(u8, 1), table.entries[1].count);

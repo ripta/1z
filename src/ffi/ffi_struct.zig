@@ -314,8 +314,8 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
 
         try ctx.registerDispatch(.{
             .word_name = getter_name,
-            .type_a = name,
-            .type_b = dispatch_mod.unary_sentinel,
+            .type_a = vtype.type_val.?,
+            .type_b = &dispatch_mod.unary_sentinel,
         }, .{
             .body = .{ .quotation = getter_instrs },
             .provenance = .{ .generator = "ffi-struct", .parent = name, .role = "getter", .field = field.name },
@@ -360,8 +360,8 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
 
             try ctx.registerDispatch(.{
                 .word_name = setter_name,
-                .type_a = name,
-                .type_b = dispatch_mod.any_sentinel,
+                .type_a = vtype.type_val.?,
+                .type_b = &dispatch_mod.any_sentinel,
             }, .{
                 .body = .{ .quotation = setter_instrs },
                 .provenance = .{ .generator = "ffi-struct", .parent = name, .role = "setter", .field = field.name },

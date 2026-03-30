@@ -155,7 +155,8 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     const hash_instrs = try alloc.alloc(Instruction, 2);
     hash_instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
     hash_instrs[1] = .{ .op = .{ .call_word = "native.struct-instance-to-hash" }, .line = 0 };
-    try virtual.registerHashDispatch(ctx, name, hash_instrs);
+    const struct_tv = struct_type.type_val orelse return error.TypeMismatch;
+    try virtual.registerHashDispatch(ctx, struct_tv, hash_instrs);
 
     // NAME?: ( val -- ? ) - type predicate
     const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{name});
@@ -456,10 +457,11 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
         });
     }
 
+    const type_tv = struct_type.type_val orelse return error.TypeMismatch;
     try ctx.registerDispatch(.{
         .word_name = name,
-        .type_a = struct_type.name,
-        .type_b = dispatch_mod.unary_sentinel,
+        .type_a = type_tv,
+        .type_b = &dispatch_mod.unary_sentinel,
     }, .{
         .body = .{ .quotation = instrs },
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "getter", .field = field },
@@ -498,10 +500,11 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
         });
     }
 
+    const type_tv = struct_type.type_val orelse return error.TypeMismatch;
     try ctx.registerDispatch(.{
         .word_name = name,
-        .type_a = struct_type.name,
-        .type_b = dispatch_mod.any_sentinel,
+        .type_a = type_tv,
+        .type_b = &dispatch_mod.any_sentinel,
     }, .{
         .body = .{ .quotation = instrs },
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "setter", .field = field },

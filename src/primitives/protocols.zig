@@ -162,8 +162,12 @@ pub fn validateProtocolObligation(
 
             try validateTypedMethod(ctx, method_name, effect, type_name, protocol_name);
         } else {
-            const has_method = ctx.dispatch.lookupUnary(method_name, type_name) != null or
-                ctx.dispatch.lookupBinary(method_name, type_name, type_name) != null;
+            const type_tv = ctx.lookupTypeValueByName(type_name) orelse {
+                helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
+                return error.TypeMismatch;
+            };
+            const has_method = ctx.dispatch.lookupUnary(method_name, type_tv) != null or
+                ctx.dispatch.lookupBinary(method_name, type_tv, type_tv) != null;
 
             if (!has_method) {
                 throwProtocolError(ctx, type_name, method_name, protocol_name);
@@ -215,8 +219,12 @@ fn validateObligationSameTypeOnly(
 
             try validateTypedMethod(ctx, method_name, effect, type_name, protocol_name);
         } else {
-            const has_method = ctx.dispatch.lookupUnary(method_name, type_name) != null or
-                ctx.dispatch.lookupBinary(method_name, type_name, type_name) != null;
+            const type_tv = ctx.lookupTypeValueByName(type_name) orelse {
+                helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
+                return error.TypeMismatch;
+            };
+            const has_method = ctx.dispatch.lookupUnary(method_name, type_tv) != null or
+                ctx.dispatch.lookupBinary(method_name, type_tv, type_tv) != null;
 
             if (!has_method) {
                 throwProtocolError(ctx, type_name, method_name, protocol_name);
@@ -251,32 +259,38 @@ fn validateTypedMethod(
 ) !void {
     const inputs = effect.inputs;
 
-    // Determine concrete type names for each input position, substituting sentinels
+    // Look up the TypeValue for the implementing type
+    const type_tv = ctx.lookupTypeValueByName(type_name) orelse {
+        helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
+        return error.TypeMismatch;
+    };
+
+    // Determine concrete TypeValues for each input position, substituting sentinels
     var has_any = false;
     var any_position: usize = 0;
-    var concrete_types: [2][]const u8 = .{ "", "" };
+    var concrete_types: [2]*const value_mod.TypeValue = .{ &dispatch_mod.unary_sentinel, &dispatch_mod.unary_sentinel };
     const n_inputs = @min(inputs.len, 2);
 
     for (0..n_inputs) |pos| {
         if (inputs[pos].type_annotation) |tv| {
             if (tv == &markers_mod.self_type_sentinel) {
-                concrete_types[pos] = type_name;
+                concrete_types[pos] = type_tv;
             } else if (tv == &markers_mod.any_type_sentinel) {
                 has_any = true;
                 any_position = pos;
-                concrete_types[pos] = dispatch_mod.any_sentinel;
+                concrete_types[pos] = &dispatch_mod.any_sentinel;
             } else {
-                concrete_types[pos] = tv.name;
+                concrete_types[pos] = tv;
             }
         } else {
             // Unannotated input -- treat as `self`
-            concrete_types[pos] = type_name;
+            concrete_types[pos] = type_tv;
         }
     }
 
     if (n_inputs == 0 or n_inputs == 1) {
         // Unary dispatch
-        const type_a = if (n_inputs == 1) concrete_types[0] else type_name;
+        const type_a = if (n_inputs == 1) concrete_types[0] else type_tv;
         if (!has_any) {
             if (ctx.dispatch.lookupUnary(method_name, type_a) == null) {
                 throwProtocolError(ctx, type_name, method_name, protocol_name);
@@ -284,7 +298,7 @@ fn validateTypedMethod(
             }
         } else {
             // `any` in unary position: check that at least one entry exists
-            if (!hasAnyMatchingEntry(ctx, method_name, type_name, true, 0)) {
+            if (!hasAnyMatchingEntry(ctx, method_name, type_tv, true, 0)) {
                 throwProtocolError(ctx, type_name, method_name, protocol_name);
                 return error.UserThrown;
             }
@@ -299,7 +313,7 @@ fn validateTypedMethod(
         } else {
             // `any` in one position: check that at least one dispatch entry exists
             // where the non-any position matches the implementing type
-            if (!hasAnyMatchingEntry(ctx, method_name, type_name, false, any_position)) {
+            if (!hasAnyMatchingEntry(ctx, method_name, type_tv, false, any_position)) {
                 throwProtocolError(ctx, type_name, method_name, protocol_name);
                 return error.UserThrown;
             }
@@ -312,7 +326,7 @@ fn validateTypedMethod(
 fn hasAnyMatchingEntry(
     ctx: *Context,
     method_name: []const u8,
-    type_name: []const u8,
+    type_tv: *const value_mod.TypeValue,
     is_unary: bool,
     any_position: usize,
 ) bool {
@@ -322,26 +336,26 @@ fn hasAnyMatchingEntry(
 
     for (keys) |key| {
         if (is_unary) {
-            if (std.mem.eql(u8, key.type_b, dispatch_mod.unary_sentinel)) {
-                if (std.mem.eql(u8, key.type_a, type_name) or
-                    std.mem.eql(u8, key.type_a, dispatch_mod.any_sentinel))
+            if (key.type_b == &dispatch_mod.unary_sentinel) {
+                if (key.type_a == type_tv or
+                    key.type_a == &dispatch_mod.any_sentinel)
                 {
                     return true;
                 }
             }
         } else {
-            if (std.mem.eql(u8, key.type_b, dispatch_mod.unary_sentinel)) continue;
+            if (key.type_b == &dispatch_mod.unary_sentinel) continue;
             if (any_position == 0) {
                 // any is first position, self must be in second
-                if (std.mem.eql(u8, key.type_b, type_name) or
-                    std.mem.eql(u8, key.type_b, dispatch_mod.any_sentinel))
+                if (key.type_b == type_tv or
+                    key.type_b == &dispatch_mod.any_sentinel)
                 {
                     return true;
                 }
             } else {
                 // any is second position, self must be in first
-                if (std.mem.eql(u8, key.type_a, type_name) or
-                    std.mem.eql(u8, key.type_a, dispatch_mod.any_sentinel))
+                if (key.type_a == type_tv or
+                    key.type_a == &dispatch_mod.any_sentinel)
                 {
                     return true;
                 }

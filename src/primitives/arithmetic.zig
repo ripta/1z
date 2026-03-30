@@ -548,7 +548,19 @@ fn byteTypeName(comptime bt: ByteType) []const u8 {
 // Registration of all native dispatch entries
 // =============================================================================
 
-pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
+pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
+    const unary = &dispatch_mod.unary_sentinel;
+
+    // Look up builtin TypeValue pointers
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const bignum_tv = ctx.lookupBuiltinTypeValue("bignum").?;
+    const float_tv = ctx.lookupBuiltinTypeValue("float").?;
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+    const byte_array_tv = ctx.lookupBuiltinTypeValue("byte-array").?;
+
+    const num_tvs = [_]*const value_mod.TypeValue{ fixnum_tv, bignum_tv, float_tv };
+    const byte_tvs = [_]*const value_mod.TypeValue{ string_tv, byte_array_tv };
+
     // +, -, * : 9 entries each (3x3 numeric matrix)
     inline for ([_]struct { op: ArithOp, name: []const u8 }{
         .{ .op = .add, .name = "+" },
@@ -557,7 +569,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
     }) |item| {
         inline for (num_types) |ta| {
             inline for (num_types) |tb| {
-                try dispatch.registerNative(item.name, numTypeName(ta), numTypeName(tb), makeBinaryArithEntry(item.op, ta, tb));
+                try dispatch.registerNative(item.name, num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeBinaryArithEntry(item.op, ta, tb));
             }
         }
     }
@@ -565,14 +577,14 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
     // / : 9 entries
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
-            try dispatch.registerNative("/", numTypeName(ta), numTypeName(tb), makeDivEntry(ta, tb));
+            try dispatch.registerNative("/", num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeDivEntry(ta, tb));
         }
     }
 
     // % : 9 entries
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
-            try dispatch.registerNative("%", numTypeName(ta), numTypeName(tb), makeModEntry(ta, tb));
+            try dispatch.registerNative("%", num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeModEntry(ta, tb));
         }
     }
 
@@ -580,7 +592,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
             if (ta != tb) {
-                try dispatch.registerNative("=", numTypeName(ta), numTypeName(tb), makeEqCrossTypeEntry(ta, tb));
+                try dispatch.registerNative("=", num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeEqCrossTypeEntry(ta, tb));
             }
         }
     }
@@ -588,37 +600,37 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable) !void {
     // < : 9 entries
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
-            try dispatch.registerNative("<", numTypeName(ta), numTypeName(tb), makeLtEntry(ta, tb));
+            try dispatch.registerNative("<", num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeLtEntry(ta, tb));
         }
     }
 
     // > : 9 entries
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
-            try dispatch.registerNative(">", numTypeName(ta), numTypeName(tb), makeGtEntry(ta, tb));
+            try dispatch.registerNative(">", num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeGtEntry(ta, tb));
         }
     }
 
     // abs : 3 entries
-    try dispatch.registerNative("abs", "fixnum", unary_sentinel, nativeAbsFixnum);
-    try dispatch.registerNative("abs", "bignum", unary_sentinel, nativeAbsBignum);
-    try dispatch.registerNative("abs", "float", unary_sentinel, nativeAbsFloat);
+    try dispatch.registerNative("abs", fixnum_tv, unary, nativeAbsFixnum);
+    try dispatch.registerNative("abs", bignum_tv, unary, nativeAbsBignum);
+    try dispatch.registerNative("abs", float_tv, unary, nativeAbsFloat);
 
     // >float : 4 entries
-    try dispatch.registerNative(">float", "fixnum", unary_sentinel, nativeToFloatFixnum);
-    try dispatch.registerNative(">float", "float", unary_sentinel, nativeToFloatPassthrough);
-    try dispatch.registerNative(">float", "bignum", unary_sentinel, nativeToFloatBignum);
-    try dispatch.registerNative(">float", "string", unary_sentinel, nativeToFloatString);
+    try dispatch.registerNative(">float", fixnum_tv, unary, nativeToFloatFixnum);
+    try dispatch.registerNative(">float", float_tv, unary, nativeToFloatPassthrough);
+    try dispatch.registerNative(">float", bignum_tv, unary, nativeToFloatBignum);
+    try dispatch.registerNative(">float", string_tv, unary, nativeToFloatString);
 
     // >integer : 2 entries
-    try dispatch.registerNative(">integer", "float", unary_sentinel, nativeToIntegerFloat);
-    try dispatch.registerNative(">integer", "fixnum", unary_sentinel, nativeToIntegerPassthrough);
+    try dispatch.registerNative(">integer", float_tv, unary, nativeToIntegerFloat);
+    try dispatch.registerNative(">integer", fixnum_tv, unary, nativeToIntegerPassthrough);
 
     // <, > for string/byte_array : 4 entries each (2x2 matrix)
     inline for (byte_types) |ta| {
         inline for (byte_types) |tb| {
-            try dispatch.registerNative("<", byteTypeName(ta), byteTypeName(tb), makeBytesLtEntry(ta, tb));
-            try dispatch.registerNative(">", byteTypeName(ta), byteTypeName(tb), makeBytesGtEntry(ta, tb));
+            try dispatch.registerNative("<", byte_tvs[@intFromEnum(ta)], byte_tvs[@intFromEnum(tb)], makeBytesLtEntry(ta, tb));
+            try dispatch.registerNative(">", byte_tvs[@intFromEnum(ta)], byte_tvs[@intFromEnum(tb)], makeBytesGtEntry(ta, tb));
         }
     }
 }

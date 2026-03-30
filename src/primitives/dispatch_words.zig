@@ -6,8 +6,6 @@ const MutableMap = value_mod.MutableMap;
 const dispatch_mod = @import("../dispatch.zig");
 const DispatchKey = dispatch_mod.DispatchKey;
 const DispatchEntry = dispatch_mod.DispatchEntry;
-const any_sentinel = dispatch_mod.any_sentinel;
-const unary_sentinel = dispatch_mod.unary_sentinel;
 
 const helpers = @import("helpers.zig");
 const markers_mod = @import("markers.zig");
@@ -135,13 +133,13 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
         },
     }
 
-    var type_a: []const u8 = undefined;
-    var type_b: []const u8 = unary_sentinel;
+    var type_a: *const value_mod.TypeValue = undefined;
+    var type_b: *const value_mod.TypeValue = &dispatch_mod.unary_sentinel;
 
-    type_a = try extractTypeName(ctx, types_array[0]);
+    type_a = try extractTypeValue(ctx, types_array[0]);
 
     if (types_array.len == 2) {
-        type_b = try extractTypeName(ctx, types_array[1]);
+        type_b = try extractTypeValue(ctx, types_array[1]);
     }
 
     const key = DispatchKey{
@@ -167,22 +165,27 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
                     }
                 }
             }
-            helpers.setErrorContext(ctx, "method for '{s}' with types ({s}, {s}) already registered (use `mutable` to overwrite)", .{ word_name, type_a, type_b });
+            helpers.setErrorContext(ctx, "method for '{s}' with types ({s}, {s}) already registered (use `mutable` to overwrite)", .{ word_name, type_a.name, type_b.name });
             return error.DuplicateMethod;
         }
         return err;
     };
 }
 
-fn extractTypeName(ctx: *Context, val: value_mod.Value) ![]const u8 {
+fn extractTypeValue(ctx: *Context, val: value_mod.Value) !*const value_mod.TypeValue {
     return switch (val) {
-        .type_val => |tv| tv.name,
+        .type_val => |tv| tv,
         .marker => |mk| {
-            if (markers_mod.isAnyMarker(mk)) return any_sentinel;
+            if (markers_mod.isAnyMarker(mk)) return &dispatch_mod.any_sentinel;
             helpers.setErrorContext(ctx, "invalid marker in method type position; only `any` is allowed", .{});
             return error.InvalidArgument;
         },
-        .string => |s| s,
+        .string => |s| {
+            return ctx.lookupTypeValueByName(s) orelse {
+                helpers.setErrorContext(ctx, "unknown type name '{s}' in method type position", .{s});
+                return error.TypeMismatch;
+            };
+        },
         else => {
             helpers.setTypeMismatchError(ctx, "type, `any` marker, or string", val);
             return error.TypeMismatch;

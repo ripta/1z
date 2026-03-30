@@ -406,7 +406,7 @@ pub const Context = struct {
             std.debug.panic("Failed to create native module: {any}", .{err});
         };
 
-        primitives.registerNativeDispatch(&ctx.dispatch) catch |err| {
+        primitives.registerNativeDispatch(&ctx.dispatch, &ctx) catch |err| {
             std.debug.panic("Failed to register native dispatch: {any}", .{err});
         };
 
@@ -1339,13 +1339,13 @@ pub const Context = struct {
 
     /// Look up a binary dispatch entry by walking dispatch frames (top to
     /// bottom), then the base dispatch table, then the parent context chain.
-    pub fn lookupBinaryDispatch(self: *const Context, word_name: []const u8, type_a: []const u8, type_b: []const u8) ?DispatchEntry {
+    pub fn lookupBinaryDispatch(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue, type_b: *const value_mod.TypeValue) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupBinaryDispatchLocked(word_name, type_a, type_b);
     }
 
-    fn lookupBinaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: []const u8, type_b: []const u8) ?DispatchEntry {
+    fn lookupBinaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue, type_b: *const value_mod.TypeValue) ?DispatchEntry {
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
         while (i > 0) {
@@ -1371,13 +1371,13 @@ pub const Context = struct {
 
     /// Look up a unary dispatch entry by walking dispatch frames (top to
     /// bottom), then the base dispatch table, then the parent context chain.
-    pub fn lookupUnaryDispatch(self: *const Context, word_name: []const u8, type_a: []const u8) ?DispatchEntry {
+    pub fn lookupUnaryDispatch(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupUnaryDispatchLocked(word_name, type_a);
     }
 
-    fn lookupUnaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: []const u8) ?DispatchEntry {
+    fn lookupUnaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue) ?DispatchEntry {
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
         while (i > 0) {
@@ -1403,13 +1403,13 @@ pub const Context = struct {
 
     /// Look up a binary dispatch entry in the native-only shadow table,
     /// walking the parent context chain.
-    pub fn lookupNativeBinaryDispatch(self: *const Context, word_name: []const u8, type_a: []const u8, type_b: []const u8) ?DispatchEntry {
+    pub fn lookupNativeBinaryDispatch(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue, type_b: *const value_mod.TypeValue) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupNativeBinaryDispatchLocked(word_name, type_a, type_b);
     }
 
-    fn lookupNativeBinaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: []const u8, type_b: []const u8) ?DispatchEntry {
+    fn lookupNativeBinaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue, type_b: *const value_mod.TypeValue) ?DispatchEntry {
         if (self.dispatch.lookupNativeBinary(word_name, type_a, type_b)) |entry| return entry;
 
         var ancestor = self.parent_context;
@@ -1423,13 +1423,13 @@ pub const Context = struct {
 
     /// Look up a unary dispatch entry in the native-only shadow table,
     /// walking the parent context chain.
-    pub fn lookupNativeUnaryDispatch(self: *const Context, word_name: []const u8, type_a: []const u8) ?DispatchEntry {
+    pub fn lookupNativeUnaryDispatch(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupNativeUnaryDispatchLocked(word_name, type_a);
     }
 
-    fn lookupNativeUnaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: []const u8) ?DispatchEntry {
+    fn lookupNativeUnaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue) ?DispatchEntry {
         if (self.dispatch.lookupNativeUnary(word_name, type_a)) |entry| return entry;
 
         var ancestor = self.parent_context;
@@ -1541,6 +1541,36 @@ pub const Context = struct {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupResourceTypeValueLocked(name);
+    }
+
+    /// Look up a TypeValue by name, searching builtins, resources, and type words.
+    /// This is the general-purpose lookup for resolving a type name string to a
+    /// TypeValue pointer, covering both builtin and user-defined types.
+    pub fn lookupTypeValueByName(self: *const Context, name: []const u8) ?*value_mod.TypeValue {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+        if (self.lookupBuiltinTypeValueLocked(name)) |tv| return tv;
+        if (self.lookupResourceTypeValueLocked(name)) |tv| return tv;
+        // Fall back to dictionary: type words push a single .type_val literal,
+        // and enum variant constructors push a single .tagged literal whose
+        // VirtualType carries a .type_val.
+        const word = self.lookupWordLocked(name) orelse return null;
+        switch (word.action) {
+            .compound => |instrs| {
+                if (instrs.len == 1) {
+                    switch (instrs[0].op) {
+                        .push_literal => |val| switch (val) {
+                            .type_val => |tv| return tv,
+                            .tagged => |t| return t.tag.type_val,
+                            else => return null,
+                        },
+                        else => return null,
+                    }
+                }
+                return null;
+            },
+            .native => return null,
+        }
     }
 
     fn lookupResourceTypeValueLocked(self: *const Context, name: []const u8) ?*value_mod.TypeValue {
@@ -1740,7 +1770,15 @@ pub const Context = struct {
             try dispatch_mod.collectEntriesForWord(&ctx.dispatch.entries, word_name, &results, alloc);
             ancestor = ctx.parent_context;
         }
-        return results.toOwnedSlice(alloc);
+        const slice = try results.toOwnedSlice(alloc);
+        std.mem.sort(DispatchTable.KeyEntryPair, slice, {}, struct {
+            fn lessThan(_: void, a: DispatchTable.KeyEntryPair, b: DispatchTable.KeyEntryPair) bool {
+                const cmp_a = std.mem.order(u8, a.key.type_a.name, b.key.type_a.name);
+                if (cmp_a != .eq) return cmp_a == .lt;
+                return std.mem.order(u8, a.key.type_b.name, b.key.type_b.name) == .lt;
+            }
+        }.lessThan);
+        return slice;
     }
 
     /// Collect all dispatch keys for a given word name, including
@@ -1772,7 +1810,15 @@ pub const Context = struct {
             try dispatch_mod.collectKeysForWord(&ctx.dispatch.entries, word_name, &results, alloc);
             ancestor = ctx.parent_context;
         }
-        return results.toOwnedSlice(alloc);
+        const slice = try results.toOwnedSlice(alloc);
+        std.mem.sort(DispatchKey, slice, {}, struct {
+            fn lessThan(_: void, a: DispatchKey, b: DispatchKey) bool {
+                const cmp_a = std.mem.order(u8, a.type_a.name, b.type_a.name);
+                if (cmp_a != .eq) return cmp_a == .lt;
+                return std.mem.order(u8, a.type_b.name, b.type_b.name) == .lt;
+            }
+        }.lessThan);
+        return slice;
     }
 
     /// Check if a name is a qualified name (contains a dot).
@@ -3592,45 +3638,50 @@ test "dispatch frame push/pop with lookup visibility" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 0 }};
 
     // Register in base dispatch table
     try ctx.dispatch.register(
-        .{ .word_name = "show", .type_a = "fixnum", .type_b = dispatch_mod.unary_sentinel },
+        .{ .word_name = "show", .type_a = fixnum_tv, .type_b = &dispatch_mod.unary_sentinel },
         .{ .body = .{ .quotation = body } },
         false,
     );
 
-    try std.testing.expect(ctx.lookupUnaryDispatch("show", "fixnum") != null);
+    try std.testing.expect(ctx.lookupUnaryDispatch("show", fixnum_tv) != null);
 
     // Push a frame and register a new entry
     try ctx.pushDispatchFrame();
     const body2 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 0 }};
     try ctx.registerDispatch(
-        .{ .word_name = "show", .type_a = "string", .type_b = dispatch_mod.unary_sentinel },
+        .{ .word_name = "show", .type_a = string_tv, .type_b = &dispatch_mod.unary_sentinel },
         .{ .body = .{ .quotation = body2 } },
         false,
     );
 
-    try std.testing.expect(ctx.lookupUnaryDispatch("show", "string") != null);
-    try std.testing.expect(ctx.lookupUnaryDispatch("show", "fixnum") != null);
+    try std.testing.expect(ctx.lookupUnaryDispatch("show", string_tv) != null);
+    try std.testing.expect(ctx.lookupUnaryDispatch("show", fixnum_tv) != null);
 
     // Pop; string entry should vanish
     ctx.popDispatchFrame();
-    try std.testing.expect(ctx.lookupUnaryDispatch("show", "string") == null);
-    try std.testing.expect(ctx.lookupUnaryDispatch("show", "fixnum") != null);
+    try std.testing.expect(ctx.lookupUnaryDispatch("show", string_tv) == null);
+    try std.testing.expect(ctx.lookupUnaryDispatch("show", fixnum_tv) != null);
 }
 
 test "dispatch frame shadowing" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
+    var duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
+
     const body1 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
     const body2 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
 
     // Register in base table
     try ctx.dispatch.register(
-        .{ .word_name = "+", .type_a = "duration", .type_b = "duration" },
+        .{ .word_name = "+", .type_a = &duration_tv, .type_b = &duration_tv },
         .{ .body = .{ .quotation = body1 } },
         false,
     );
@@ -3638,18 +3689,18 @@ test "dispatch frame shadowing" {
     // Push frame and shadow
     try ctx.pushDispatchFrame();
     try ctx.registerDispatch(
-        .{ .word_name = "+", .type_a = "duration", .type_b = "duration" },
+        .{ .word_name = "+", .type_a = &duration_tv, .type_b = &duration_tv },
         .{ .body = .{ .quotation = body2 } },
         false,
     );
 
     // Inner should win
-    const entry = ctx.lookupBinaryDispatch("+", "duration", "duration").?;
+    const entry = ctx.lookupBinaryDispatch("+", &duration_tv, &duration_tv).?;
     try std.testing.expectEqual(@as(i64, 2), entry.body.quotation[0].op.push_literal.fixnum);
 
     // Pop; outer visible again
     ctx.popDispatchFrame();
-    const entry2 = ctx.lookupBinaryDispatch("+", "duration", "duration").?;
+    const entry2 = ctx.lookupBinaryDispatch("+", &duration_tv, &duration_tv).?;
     try std.testing.expectEqual(@as(i64, 1), entry2.body.quotation[0].op.push_literal.fixnum);
 }
 
@@ -3667,17 +3718,19 @@ test "base behavior with no extra frames matches original" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+
     // No extra frames pushed, so registerDispatch goes to base dispatch table
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0 }};
     try ctx.registerDispatch(
-        .{ .word_name = "test-op", .type_a = "fixnum", .type_b = dispatch_mod.unary_sentinel },
+        .{ .word_name = "test-op", .type_a = fixnum_tv, .type_b = &dispatch_mod.unary_sentinel },
         .{ .body = .{ .quotation = body } },
         false,
     );
 
     // Should be findable via both the new API and the raw dispatch table
-    try std.testing.expect(ctx.lookupUnaryDispatch("test-op", "fixnum") != null);
-    try std.testing.expect(ctx.dispatch.lookupUnary("test-op", "fixnum") != null);
+    try std.testing.expect(ctx.lookupUnaryDispatch("test-op", fixnum_tv) != null);
+    try std.testing.expect(ctx.dispatch.lookupUnary("test-op", fixnum_tv) != null);
 }
 
 test "initBuiltinTypeValues populates all array slots" {

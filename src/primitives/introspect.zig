@@ -95,14 +95,14 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
     const dispatch_pairs = try ctx.dispatchEntriesForWord(name, alloc);
     const methods_arr = try alloc.alloc(Value, dispatch_pairs.len);
     for (dispatch_pairs, 0..) |pair, i| {
-        const types = if (std.mem.eql(u8, pair.key.type_b, dispatch_mod.unary_sentinel)) blk: {
+        const types = if (pair.key.type_b == &dispatch_mod.unary_sentinel) blk: {
             const t = try alloc.alloc(Value, 1);
-            t[0] = .{ .string = pair.key.type_a };
+            t[0] = .{ .string = pair.key.type_a.name };
             break :blk t;
         } else blk: {
             const t = try alloc.alloc(Value, 2);
-            t[0] = .{ .string = pair.key.type_a };
-            t[1] = .{ .string = pair.key.type_b };
+            t[0] = .{ .string = pair.key.type_a.name };
+            t[1] = .{ .string = pair.key.type_b.name };
             break :blk t;
         };
 

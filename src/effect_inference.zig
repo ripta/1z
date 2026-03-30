@@ -4,17 +4,21 @@ const Allocator = std.mem.Allocator;
 const dictionary_mod = @import("dictionary.zig");
 const Dictionary = dictionary_mod.Dictionary;
 const WordDefinition = dictionary_mod.WordDefinition;
+
 const LocalFrame = @import("context.zig").LocalFrame;
 const dispatch_mod = @import("dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
+
 const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
 const Value = value_mod.Value;
 const Quotation = value_mod.Quotation;
+const TypeValue = value_mod.TypeValue;
+
 const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
-const TypeValue = value_mod.TypeValue;
+
 const markers = @import("primitives/markers.zig");
 const Context = @import("context.zig").Context;
 
@@ -985,7 +989,7 @@ pub const InferenceEngine = struct {
                         .message = try std.fmt.allocPrint(
                             self.allocator,
                             "dispatch entry for ({s}, {s}) has delta {d}, but base body has delta {d}",
-                            .{ pair.key.type_a, pair.key.type_b, entry_result.known, base_result.known },
+                            .{ pair.key.type_a.name, pair.key.type_b.name, entry_result.known, base_result.known },
                         ),
                     });
                 }
@@ -1206,8 +1210,8 @@ test "native word uses declared effect" {
     var dispatch = DispatchTable.init(testing.allocator);
     defer dispatch.deinit();
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     try dict.put("dup", .{
@@ -1232,8 +1236,8 @@ test "compound word with inferrable body" {
     var dispatch = DispatchTable.init(testing.allocator);
     defer dispatch.deinit();
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     try dict.put("dup", .{
@@ -1305,8 +1309,8 @@ test "branch combinator with agreeing quotations" {
     var dispatch = DispatchTable.init(testing.allocator);
     defer dispatch.deinit();
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     const quot_effect = StackEffect{
@@ -1362,8 +1366,8 @@ test "branch combinator with disagreeing quotations emits diagnostic" {
     var dispatch = DispatchTable.init(testing.allocator);
     defer dispatch.deinit();
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     const quot_effect = StackEffect{
@@ -1421,8 +1425,8 @@ test "loop combinator with zero-delta body" {
     var dispatch = DispatchTable.init(testing.allocator);
     defer dispatch.deinit();
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     const quot_effect = StackEffect{
@@ -1492,8 +1496,8 @@ test "loop combinator with non-zero-delta body emits diagnostic" {
     var dispatch = DispatchTable.init(testing.allocator);
     defer dispatch.deinit();
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     const quot_effect = StackEffect{
@@ -1654,7 +1658,14 @@ test "generic word with agreeing dispatch entries" {
     };
 
     try dispatch.register(
-        .{ .word_name = "my-generic", .type_a = "duration", .type_b = "" },
+        .{
+            .word_name = "my-generic",
+            .type_a = &TypeValue{
+                .name = "duration",
+                .descriptor = null,
+            },
+            .type_b = &dispatch_mod.unary_sentinel,
+        },
         .{ .body = .{ .quotation = dispatch_body } },
         false,
     );
@@ -1690,7 +1701,14 @@ test "generic word with disagreeing dispatch entries emits diagnostic" {
     };
 
     try dispatch.register(
-        .{ .word_name = "my-generic", .type_a = "duration", .type_b = "" },
+        .{
+            .word_name = "my-generic",
+            .type_a = &TypeValue{
+                .name = "duration",
+                .descriptor = null,
+            },
+            .type_b = &dispatch_mod.unary_sentinel,
+        },
         .{ .body = .{ .quotation = dispatch_body } },
         false,
     );
@@ -1710,8 +1728,8 @@ test "non-literal quotation args fall back to declared effect" {
     var dispatch = DispatchTable.init(testing.allocator);
     defer dispatch.deinit();
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     const quot_effect = StackEffect{
@@ -1830,8 +1848,8 @@ test "row-poly keep with literal quotation computes delta" {
     var dispatch = DispatchTable.init(testing.allocator);
     defer dispatch.deinit();
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     const quot_annotation = StackEffect{
@@ -1914,8 +1932,8 @@ test "row-poly while with balanced quotations" {
     var dispatch = DispatchTable.init(testing.allocator);
     defer dispatch.deinit();
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     const pred_annotation = StackEffect{
@@ -1998,8 +2016,8 @@ test "row-poly while with unbalanced quotations emits diagnostic" {
     var dispatch = DispatchTable.init(testing.allocator);
     defer dispatch.deinit();
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     const pred_annotation = StackEffect{
@@ -2075,8 +2093,8 @@ test "row-poly keep with insufficient stack falls through" {
     var dispatch = DispatchTable.init(testing.allocator);
     defer dispatch.deinit();
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     const quot_annotation = StackEffect{
@@ -2134,8 +2152,8 @@ test "row-poly keep with non-literal quotation falls through" {
     var dispatch = DispatchTable.init(testing.allocator);
     defer dispatch.deinit();
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     const quot_annotation = StackEffect{
@@ -2218,8 +2236,8 @@ test "qualified name resolves to known delta" {
     defer testing.allocator.destroy(mod);
     defer mod.words.deinit(testing.allocator);
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     try mod.words.put(testing.allocator, "double", .{
@@ -2272,8 +2290,8 @@ test "polymorphic qualified name falls back to declared delta with note" {
     defer testing.allocator.destroy(mod);
     defer mod.words.deinit(testing.allocator);
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     try mod.words.put(testing.allocator, "poly-word", .{
@@ -2381,8 +2399,8 @@ test "generated word calling polymorphic callee is silent" {
     defer testing.allocator.destroy(mod);
     defer mod.words.deinit(testing.allocator);
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     try mod.words.put(testing.allocator, "poly-word", .{
@@ -2408,7 +2426,7 @@ test "generated word calling polymorphic callee is silent" {
         makeInstr(.{ .call_word = "mymod.poly-word" }),
     };
 
-    const provenance = @import("dictionary.zig").WordProvenance{
+    const provenance = dictionary_mod.WordProvenance{
         .generator = "struct{",
         .parent = "test-type",
         .role = "accessor",
@@ -2449,8 +2467,8 @@ test "typed literal produces typed stack entry" {
     defer btv.deinit(testing.allocator);
     try btv.put(testing.allocator, "fixnum", &fixnum_tv);
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     try dict.put("consume-fixnum", .{
@@ -2494,8 +2512,8 @@ test "type mismatch emits diagnostic" {
     try btv.put(testing.allocator, "fixnum", &fixnum_tv);
     try btv.put(testing.allocator, "string", &string_tv);
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     try dict.put("consume-fixnum", .{
@@ -2538,8 +2556,8 @@ test "unknown type skips check" {
     defer btv.deinit(testing.allocator);
     try btv.put(testing.allocator, "fixnum", &fixnum_tv);
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     try dict.put("unknown-producer", .{
@@ -2592,8 +2610,8 @@ test "type check mode off skips all checks" {
     try btv.put(testing.allocator, "fixnum", &fixnum_tv);
     try btv.put(testing.allocator, "string", &string_tv);
 
-    const dummy: @import("dictionary.zig").NativeFn = struct {
-        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
     }.f;
 
     try dict.put("consume-fixnum", .{

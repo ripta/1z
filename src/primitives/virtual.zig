@@ -260,7 +260,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             const hash_instrs = try alloc.alloc(Instruction, 2);
             hash_instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
             hash_instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-to-hash" }, .line = 0 };
-            try registerHashDispatch(ctx, name, hash_instrs);
+            try registerHashDispatch(ctx, vtype.type_val.?, hash_instrs);
 
             const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{name});
             try definePredicate(ctx, pred_name, vtype, markers_slice);
@@ -1132,10 +1132,11 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
 fn registerVectorMutationDispatches(
     ctx: *Context,
     alloc: Allocator,
-    type_name: []const u8,
+    _: []const u8,
     vtype: *const VirtualType,
     generated_words: *std.ArrayListUnmanaged(Value),
 ) !void {
+    const type_tv = vtype.type_val.?;
     const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(vtype)) };
 
     // Element-adding ops: #push!, #unshift!
@@ -1156,8 +1157,8 @@ fn registerVectorMutationDispatches(
 
         try ctx.registerDispatch(.{
             .word_name = op_name,
-            .type_a = type_name,
-            .type_b = dispatch_mod.unary_sentinel,
+            .type_a = type_tv,
+            .type_b = &dispatch_mod.unary_sentinel,
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = op_name });
@@ -1179,8 +1180,8 @@ fn registerVectorMutationDispatches(
 
         try ctx.registerDispatch(.{
             .word_name = op_name,
-            .type_a = type_name,
-            .type_b = dispatch_mod.unary_sentinel,
+            .type_a = type_tv,
+            .type_b = &dispatch_mod.unary_sentinel,
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = op_name });
@@ -1196,8 +1197,8 @@ fn registerVectorMutationDispatches(
 
         try ctx.registerDispatch(.{
             .word_name = "#nth!",
-            .type_a = type_name,
-            .type_b = dispatch_mod.unary_sentinel,
+            .type_a = type_tv,
+            .type_b = &dispatch_mod.unary_sentinel,
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = "#nth!" });
@@ -1219,8 +1220,8 @@ fn registerVectorMutationDispatches(
 
         try ctx.registerDispatch(.{
             .word_name = "#append!",
-            .type_a = type_name,
-            .type_b = dispatch_mod.unary_sentinel,
+            .type_a = type_tv,
+            .type_b = &dispatch_mod.unary_sentinel,
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = "#append!" });
@@ -1234,8 +1235,8 @@ fn registerVectorMutationDispatches(
 
         try ctx.registerDispatch(.{
             .word_name = "freeze",
-            .type_a = type_name,
-            .type_b = dispatch_mod.unary_sentinel,
+            .type_a = type_tv,
+            .type_b = &dispatch_mod.unary_sentinel,
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = "freeze" });
@@ -1247,10 +1248,11 @@ fn registerVectorMutationDispatches(
 fn registerMutableMapMutationDispatches(
     ctx: *Context,
     alloc: Allocator,
-    type_name: []const u8,
+    _: []const u8,
     vtype: *const VirtualType,
     generated_words: *std.ArrayListUnmanaged(Value),
 ) !void {
+    const type_tv = vtype.type_val.?;
     const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(vtype)) };
 
     // @set! ( typed-mmap key value -- typed-mmap )
@@ -1261,8 +1263,8 @@ fn registerMutableMapMutationDispatches(
 
         try ctx.registerDispatch(.{
             .word_name = "@set!",
-            .type_a = type_name,
-            .type_b = dispatch_mod.unary_sentinel,
+            .type_a = type_tv,
+            .type_b = &dispatch_mod.unary_sentinel,
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = "@set!" });
@@ -1276,16 +1278,16 @@ fn registerMutableMapMutationDispatches(
 
         try ctx.registerDispatch(.{
             .word_name = "@remove!",
-            .type_a = type_name,
-            .type_b = dispatch_mod.unary_sentinel,
+            .type_a = type_tv,
+            .type_b = &dispatch_mod.unary_sentinel,
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = "@remove!" });
     }
 }
 
-/// Register a >hash dispatch entry for a type name, creating the generic `>hash` word if it doesn't exist yet.
-pub fn registerHashDispatch(ctx: *Context, type_name: []const u8, instrs: []const Instruction) !void {
+/// Register a >hash dispatch entry for a type, creating the generic `>hash` word if it doesn't exist yet.
+pub fn registerHashDispatch(ctx: *Context, type_tv: *const value_mod.TypeValue, instrs: []const Instruction) !void {
     const alloc = ctx.quotationAllocator();
 
     const is_generic = if (ctx.lookupWord(">hash")) |existing| blk: {
@@ -1309,7 +1311,7 @@ pub fn registerHashDispatch(ctx: *Context, type_name: []const u8, instrs: []cons
 
     try ctx.registerDispatch(.{
         .word_name = ">hash",
-        .type_a = type_name,
-        .type_b = dispatch_mod.unary_sentinel,
+        .type_a = type_tv,
+        .type_b = &dispatch_mod.unary_sentinel,
     }, .{ .body = .{ .quotation = instrs } }, true);
 }

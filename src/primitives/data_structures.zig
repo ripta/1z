@@ -264,18 +264,18 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
     // dispatch: mmap is at position 2 (below key and value)
     if (ctx.stack.depth() >= 3) {
         const mmap_peek = try ctx.stack.peekN(2);
-        const a_type = dispatch_mod.dispatchTypeValue(mmap_peek, ctx).name;
+        const a_type = dispatch_mod.dispatchTypeValue(mmap_peek, ctx);
         if (ctx.lookupUnaryDispatch("@set!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
         }
-        if (dispatch_mod.dispatchEnumName(mmap_peek)) |ae| {
+        if (dispatch_mod.dispatchEnumTypeValue(mmap_peek)) |ae| {
             if (ctx.lookupUnaryDispatch("@set!", ae)) |entry| {
                 try dispatch_helpers.executeDispatchBody(ctx, entry.body);
                 return;
             }
         }
-        if (dispatch_mod.dispatchBaseTypeName(mmap_peek)) |bt| {
+        if (dispatch_mod.dispatchBaseTypeValue(mmap_peek)) |bt| {
             if (ctx.lookupUnaryDispatch("@set!", bt)) |entry| {
                 const len = ctx.stack.items.items.len;
                 ctx.stack.items.items[len - 3] = mmap_peek.tagged.inner.*;
@@ -323,18 +323,18 @@ pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
     // dispatch: mmap is at position 1 (below key)
     if (ctx.stack.depth() >= 2) {
         const mmap_peek = try ctx.stack.peekN(1);
-        const a_type = dispatch_mod.dispatchTypeValue(mmap_peek, ctx).name;
+        const a_type = dispatch_mod.dispatchTypeValue(mmap_peek, ctx);
         if (ctx.lookupUnaryDispatch("@remove!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
         }
-        if (dispatch_mod.dispatchEnumName(mmap_peek)) |ae| {
+        if (dispatch_mod.dispatchEnumTypeValue(mmap_peek)) |ae| {
             if (ctx.lookupUnaryDispatch("@remove!", ae)) |entry| {
                 try dispatch_helpers.executeDispatchBody(ctx, entry.body);
                 return;
             }
         }
-        if (dispatch_mod.dispatchBaseTypeName(mmap_peek)) |bt| {
+        if (dispatch_mod.dispatchBaseTypeValue(mmap_peek)) |bt| {
             if (ctx.lookupUnaryDispatch("@remove!", bt)) |entry| {
                 const len = ctx.stack.items.items.len;
                 ctx.stack.items.items[len - 2] = mmap_peek.tagged.inner.*;

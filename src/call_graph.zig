@@ -1,12 +1,17 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+
 const Dictionary = @import("dictionary.zig").Dictionary;
 const WordDefinition = @import("dictionary.zig").WordDefinition;
-const DispatchTable = @import("dispatch.zig").DispatchTable;
+
+const dispatch_mod = @import("dispatch.zig");
+const DispatchTable = dispatch_mod.DispatchTable;
+
 const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
 const Value = value_mod.Value;
 const Marker = value_mod.Marker;
+
 const markers = @import("primitives/markers.zig");
 const stack_effect_mod = @import("stack_effect.zig");
 
@@ -554,8 +559,10 @@ test "generic word includes dispatch entry callees" {
     const dispatch_body = &[_]Instruction{
         .{ .op = .{ .call_word = "dispatch-call" }, .line = 1 },
     };
+
+    var duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
     try dispatch.register(
-        .{ .word_name = "my-generic", .type_a = "duration", .type_b = "" },
+        .{ .word_name = "my-generic", .type_a = &duration_tv, .type_b = &dispatch_mod.unary_sentinel },
         .{ .body = .{ .quotation = dispatch_body } },
         false,
     );
