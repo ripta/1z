@@ -1,0 +1,3 @@
+\ recover followed by more computation makes the word uncompilable.
+not-compilable: ( -- n ) [ [ 1 ] [ drop 0 ] recover 2 + ] ;
+not-compilable print-line

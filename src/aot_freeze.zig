@@ -63,6 +63,20 @@ pub fn freezeModuleGraph(
 ) (FreezeError || Allocator.Error)!FreezeResult {
     diagnostics.* = .{};
 
+    // Snapshot prelude word names before loading the entry file. Words
+    // that exist now will be available in the AOT runtime dictionary
+    // (which also calls loadPrelude), so codegen failures for these
+    // words are safe -- they can fall back to jitInterpretedCall.
+    const prelude_frame_count = ctx.local_frames.items.len;
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+    defer prelude_words.deinit(allocator);
+    for (ctx.local_frames.items[0..prelude_frame_count]) |frame| {
+        var it = frame.iterator();
+        while (it.next()) |entry| {
+            try prelude_words.put(allocator, entry.key_ptr.*, {});
+        }
+    }
+
     // Phase 1: Execute entry file, collect non-definition instructions.
     // The local frame and pragma frame are kept alive so that lookupWord
     // can find words defined in the entry file during discovery.
@@ -93,7 +107,7 @@ pub fn freezeModuleGraph(
     ctx.popLocalFrame();
 
     // Phase 3: Build AotWordDesc array
-    const result = try buildAotDescs(entry_instrs, &discovered, allocator);
+    const result = try buildAotDescs(entry_instrs, &discovered, &prelude_words, allocator);
     if (result.skipped_words.len > 0) {
         diagnostics.missing_stack_effects = result.skipped_words;
         allocator.free(result.words);
@@ -346,6 +360,7 @@ fn addFeatureWarning(
 fn buildAotDescs(
     entry_instrs: []const Instruction,
     discovered: *const DiscoveredWords,
+    prelude_words: *const std.StringHashMapUnmanaged(void),
     allocator: Allocator,
 ) Allocator.Error!FreezeResult {
     var words = std.ArrayListUnmanaged(AotWordDesc){};
@@ -377,6 +392,7 @@ fn buildAotDescs(
             .input_count = @intCast(effect.inputs.len),
             .output_count = @intCast(effect.outputs.len),
             .word_id = id,
+            .is_prelude = prelude_words.contains(name),
         });
     }
 
@@ -459,7 +475,8 @@ test "buildAotDescs assigns sequential IDs and skips effectless words" {
         .action = .{ .compound = &.{} },
     });
 
-    var result = try buildAotDescs(entry_instrs, &discovered, allocator);
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+    var result = try buildAotDescs(entry_instrs, &discovered, &prelude_words, allocator);
     defer result.deinit(allocator);
 
     // Entry word (id 0) + foo (id 1) = 2 words; bar skipped

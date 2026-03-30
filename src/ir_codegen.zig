@@ -26,6 +26,11 @@ pub const IrCodegenError = error{
     CompilationFailed,
     StackUnderflow,
     StackShapeMismatch,
+    UncompiledWords,
+};
+
+pub const CodegenDiagnostics = struct {
+    uncompiled_words: []const []const u8 = &.{},
 };
 
 pub const CompiledWord = struct {
@@ -40,6 +45,9 @@ pub const AotWordDesc = struct {
     input_count: u8,
     output_count: u8,
     word_id: u32,
+    /// Prelude words are available in the AOT runtime dictionary and can
+    /// safely fall back to jitInterpretedCall if codegen fails.
+    is_prelude: bool = false,
 };
 
 const supported_binary_ops = [_][]const u8{ "+", "-", "*", "/", "div", "rem", "%" };
@@ -1277,6 +1285,11 @@ fn compileInstructions(
                     _ = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
                     stack[sp.*] = .{ .raw_at_slot = sp.* };
                     sp.* += 1;
+                } else if (state.aot_mode) {
+                    // In AOT mode, non-simple literals (parameters, tagged
+                    // values, etc.) contain process-local pointers that are
+                    // invalid in the AOT binary. Bail to interpreter fallback.
+                    return IrCodegenError.NotCompilable;
                 } else {
                     const sp_byte_offset = c.ir_const_addr(ctx, sp.* * ValueLayout.value_size);
                     const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, sp_byte_offset);
@@ -3032,6 +3045,7 @@ pub fn emitProgramC(
     words: []const AotWordDesc,
     entry_word_id: u32,
     max_word_id: u32,
+    diagnostics: *CodegenDiagnostics,
     allocator: Allocator,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var out: std.ArrayListUnmanaged(u8) = .{};
@@ -3163,6 +3177,24 @@ pub fn emitProgramC(
         if (body.ptr != raw_body.ptr) allocator.free(raw_body);
         try compiled_bodies.append(allocator, .{ .word_id = w.word_id, .body = body });
         try actually_compiled.put(allocator, w.word_id, {});
+    }
+
+    // Strict codegen: verify all non-prelude input words were compiled.
+    // Prelude words can safely fall back to jitInterpretedCall since they
+    // exist in the AOT runtime dictionary.
+    {
+        var uncompiled: std.ArrayListUnmanaged([]const u8) = .{};
+        for (words) |w| {
+            if (!w.is_prelude and !actually_compiled.contains(w.word_id)) {
+                try uncompiled.append(allocator, w.name);
+            }
+        }
+        if (uncompiled.items.len > 0) {
+            diagnostics.uncompiled_words = try allocator.dupe([]const u8, uncompiled.items);
+            uncompiled.deinit(allocator);
+            return error.UncompiledWords;
+        }
+        uncompiled.deinit(allocator);
     }
 
     // 3.5. String/symbol literal constants
@@ -5286,7 +5318,8 @@ test "emitProgramC generates complete C source" {
         .{ .name = "add3", .instructions = &add3_instrs, .input_count = 1, .output_count = 1, .word_id = 1 },
     };
 
-    const source = try emitProgramC(&words, 0, 1, testing.allocator);
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&words, 0, 1, &diag, testing.allocator);
     defer testing.allocator.free(source);
 
     // Preamble
@@ -5324,7 +5357,8 @@ test "emitProgramC dispatch table has correct entries" {
         .{ .name = "bar", .instructions = &instrs, .input_count = 0, .output_count = 1, .word_id = 2 },
     };
 
-    const source = try emitProgramC(&words, 0, 2, testing.allocator);
+    var diag2: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&words, 0, 2, &diag2, testing.allocator);
     defer testing.allocator.free(source);
 
     // word_id 0 -> onez_w_foo
@@ -5344,7 +5378,8 @@ test "emitProgramC output compiles with cc" {
         .{ .name = "answer", .instructions = &lit_instrs, .input_count = 0, .output_count = 1, .word_id = 1 },
     };
 
-    const source = try emitProgramC(&words, 1, 1, testing.allocator);
+    var diag3: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&words, 1, 1, &diag3, testing.allocator);
     defer testing.allocator.free(source);
 
     var tmp_dir = testing.tmpDir(.{});

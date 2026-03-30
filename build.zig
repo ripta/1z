@@ -299,7 +299,7 @@ pub fn build(b: *std.Build) void {
         defer aot_dir.close();
 
         const aot_entries = collectAotTestEntries(b, &aot_dir) catch return;
-        addAotTests(b, aot_test_step, &update_aot_files, aot_entries, has_diff);
+        addAotTests(b, exe, aot_test_step, &update_aot_files, aot_entries, has_diff);
     }
 
     update_aot_golden_step.dependOn(&update_aot_files.step);
@@ -813,6 +813,7 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
 
 fn addAotTests(
     b: *std.Build,
+    artifact: *std.Build.Step.Compile,
     test_step: *std.Build.Step,
     update_files: **std.Build.Step.UpdateSourceFiles,
     aot_entries: []const AotTestEntry,
@@ -834,6 +835,7 @@ fn addAotTests(
         const aot_binary = compile_run.addOutputFileArg(b.fmt("aot_{s}", .{te.name_without_ext}));
         compile_run.expectExitCode(if (is_build_only) expected_build_exit else 0);
         compile_run.step.dependOn(b.getInstallStep());
+        compile_run.addFileInput(artifact.getEmittedBin());
 
         addLibFileDeps(b, compile_run);
         compile_run.addFileInput(b.path("src/prelude.1z"));
@@ -905,6 +907,7 @@ fn addAotTests(
                 update_compile.addArg("-o");
                 _ = update_compile.addOutputFileArg(b.fmt("aot_{s}", .{te.name_without_ext}));
                 update_compile.step.dependOn(b.getInstallStep());
+                update_compile.addFileInput(artifact.getEmittedBin());
 
                 addLibFileDeps(b, update_compile);
                 update_compile.addFileInput(b.path("src/prelude.1z"));
@@ -1006,6 +1009,7 @@ fn addAotTests(
             update_compile.addArg("-o");
             const update_binary = update_compile.addOutputFileArg(b.fmt("aot_{s}", .{te.name_without_ext}));
             update_compile.step.dependOn(b.getInstallStep());
+            update_compile.addFileInput(artifact.getEmittedBin());
 
             addLibFileDeps(b, update_compile);
             update_compile.addFileInput(b.path("src/prelude.1z"));

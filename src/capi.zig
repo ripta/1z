@@ -40,6 +40,13 @@ pub const ONEZ_ERR_TYPE_MISMATCH: c_int = 1;
 pub const ONEZ_ERR_STACK_UNDERFLOW: c_int = 2;
 pub const ONEZ_ERR_ALLOC: c_int = 3;
 
+/// Initialize the 1z runtime for AOT-compiled programs.
+///
+/// The runtime loads the prelude only. This is sufficient because the build
+/// rejects dynamic features (eval-string, load, etc.) and requires all
+/// reachable words to compile to C. Native primitives are available via the
+/// prelude dictionary; user words dispatch through the compiled function
+/// table registered by onez_runtime_register_compiled.
 export fn onez_init() ?*anyopaque {
     const gpa = page.create(std.heap.GeneralPurposeAllocator(.{})) catch return null;
     gpa.* = .{};

@@ -1,4 +1,3 @@
 <aot>:2: error 'type-mismatch' expected string, got fixnum 42 at word '>bytes'
   stack effect: ( string -- byte-array )
-  called from <aot>:2: stream-write-string
-  called from <aot>:0: print
+  called from <aot>:0: stream-write-string

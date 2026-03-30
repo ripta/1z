@@ -859,13 +859,25 @@ fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) u8 {
         err_writer.flush() catch {};
     }
 
+    var codegen_diagnostics: ir_codegen.CodegenDiagnostics = .{};
     const c_source = ir_codegen.emitProgramC(
         freeze_result.words,
         freeze_result.entry_word_id,
         freeze_result.max_word_id,
+        &codegen_diagnostics,
         allocator,
     ) catch |err| {
-        err_writer.print("Error generating C source: {s}\n", .{@errorName(err)}) catch {};
+        if (err == error.UncompiledWords) {
+            for (codegen_diagnostics.uncompiled_words) |name| {
+                err_writer.print(
+                    "Error: word '{s}' could not be compiled to C\n",
+                    .{name},
+                ) catch {};
+            }
+            allocator.free(codegen_diagnostics.uncompiled_words);
+        } else {
+            err_writer.print("Error generating C source: {s}\n", .{@errorName(err)}) catch {};
+        }
         err_writer.flush() catch {};
         return 1;
     };
