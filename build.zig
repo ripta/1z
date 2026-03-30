@@ -342,6 +342,9 @@ const TestEntry = struct {
     name_without_ext: []const u8,
     file_path: []const u8,
     stdout_golden_path: []const u8,
+    args_path: []const u8,
+    args_lines: ?[]const u8,
+    has_args: bool,
     stdin_path: []const u8,
     has_stdin: bool,
     stdin_content: []const u8,
@@ -373,6 +376,15 @@ fn collectTestEntries(b: *std.Build, test_dir: *std.fs.Dir) ![]const TestEntry {
         const name_without_ext = entry.name[0 .. entry.name.len - 3];
         const file_path = b.fmt("tests/integration/{s}", .{entry.name});
         const stdout_golden_path = b.fmt("tests/integration/{s}.stdout.golden", .{name_without_ext});
+
+        const args_path = b.fmt("tests/integration/{s}.args", .{name_without_ext});
+        var args_lines: ?[]const u8 = null;
+        var has_args = false;
+        if (test_dir.openFile(b.fmt("{s}.args", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            args_lines = file.readToEndAlloc(b.allocator, 1024 * 1024) catch null;
+            has_args = true;
+        } else |_| {}
 
         const stdin_path = b.fmt("tests/integration/{s}.stdin", .{name_without_ext});
         var has_stdin = false;
@@ -449,6 +461,9 @@ fn collectTestEntries(b: *std.Build, test_dir: *std.fs.Dir) ![]const TestEntry {
             .name_without_ext = name_without_ext,
             .file_path = file_path,
             .stdout_golden_path = stdout_golden_path,
+            .args_path = args_path,
+            .args_lines = args_lines,
+            .has_args = has_args,
             .stdin_path = stdin_path,
             .has_stdin = has_stdin,
             .stdin_content = stdin_content,
@@ -533,6 +548,15 @@ fn addIntegrationTests(
             }
         }
         test_run.addFileArg(b.path(te.file_path));
+        if (te.args_lines) |al| {
+            var arg_iter = std.mem.splitScalar(u8, al, '\n');
+            while (arg_iter.next()) |arg| {
+                const trimmed_arg = std.mem.trimRight(u8, arg, "\r");
+                if (trimmed_arg.len > 0) {
+                    test_run.addArg(trimmed_arg);
+                }
+            }
+        }
         if (te.has_stdin) {
             test_run.setStdIn(.{ .bytes = te.stdin_content });
         }
@@ -555,7 +579,25 @@ fn addIntegrationTests(
                 test_run.addFileInput(b.path(b.fmt("lib/{s}", .{entry.path})));
             }
         }
+        {
+            var examples_dir = b.build_root.handle.openDir("examples", .{ .iterate = true }) catch |err| {
+                std.debug.print("Warning: Could not open examples/: {}\n", .{err});
+                return;
+            };
+            defer examples_dir.close();
+            var walker = examples_dir.walk(b.allocator) catch |err| {
+                std.debug.print("Warning: Could not walk examples/: {}\n", .{err});
+                return;
+            };
+            defer walker.deinit();
+            while (walker.next() catch null) |entry| {
+                if (entry.kind != .file) continue;
+                if (!std.mem.endsWith(u8, entry.path, ".1z")) continue;
+                test_run.addFileInput(b.path(b.fmt("examples/{s}", .{entry.path})));
+            }
+        }
         test_run.addFileInput(b.path("src/prelude.1z"));
+        if (te.has_args) test_run.addFileInput(b.path(te.args_path));
         if (te.has_stdin) test_run.addFileInput(b.path(te.stdin_path));
         if (te.has_flags) test_run.addFileInput(b.path(te.flags_path));
         if (te.has_exitcode) test_run.addFileInput(b.path(te.exitcode_path));
@@ -648,6 +690,15 @@ fn addIntegrationTests(
                 }
             }
             update_run.addFileArg(b.path(te.file_path));
+            if (te.args_lines) |al| {
+                var arg_iter2 = std.mem.splitScalar(u8, al, '\n');
+                while (arg_iter2.next()) |arg| {
+                    const trimmed_arg = std.mem.trimRight(u8, arg, "\r");
+                    if (trimmed_arg.len > 0) {
+                        update_run.addArg(trimmed_arg);
+                    }
+                }
+            }
             if (te.has_stdin) {
                 update_run.setStdIn(.{ .bytes = te.stdin_content });
             }
@@ -671,6 +722,7 @@ fn addIntegrationTests(
                 }
             }
             update_run.addFileInput(b.path("src/prelude.1z"));
+            if (te.has_args) update_run.addFileInput(b.path(te.args_path));
             if (te.has_stdin) update_run.addFileInput(b.path(te.stdin_path));
             if (te.has_flags) update_run.addFileInput(b.path(te.flags_path));
             if (te.has_exitcode) update_run.addFileInput(b.path(te.exitcode_path));
