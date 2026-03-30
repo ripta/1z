@@ -1,0 +1,50 @@
+use "testing" ;
+use "lexer" ;
+use "pratt" ;
+use "conversions" ;
+use "char" ;
+
+TEST-LEXER: const [
+  V{ }
+  skip-whitespace-rule #push!
+  number-rule #push!
+  { "^" } symbols-rule #push!
+  >array <lexer>
+] ;
+
+TEST-OPS: const [
+  H{ "^" H{ left-bp: 30 right-bp: 30 } }
+] ;
+
+(ipow): stack-recursive ( base exp -- result ) [
+  dup 0 = [ 2drop 1 ] [
+    dup 1 = [ drop ] [
+      1 - over swap (ipow) *
+    ] if
+  ] if
+] ;
+
+(prefix): ( token parser tokens -- value ) [
+  <rot- value>> parse-integer nip nip
+] ;
+
+(infix): ( left token parser tokens -- value ) [
+  parse-right swap value>>
+  "^" = [ (ipow) ] when
+] ;
+
+PARSER: const [
+  H{
+    operators: TEST-OPS
+    prefix:    [ (prefix) ]
+    infix:     [ (infix) ]
+  } <pratt>
+] ;
+
+(eval): ( str -- value ) [
+  TEST-LEXER tokenize PARSER parse-expr
+] ;
+
+"right associativity" test-section
+"2 ^ 3 ^ 2" (eval) 512 "2 ^ 3 ^ 2 = 512 (right-assoc)" assert=
+"2 ^ 3" (eval) 8 "2 ^ 3 = 8" assert=

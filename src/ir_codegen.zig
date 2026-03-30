@@ -808,6 +808,24 @@ fn flushToPhysicalStack(state: *CompileState, stack: *[64]StackEntry, sp: usize)
     const ctx = state.ctx;
     const base_addr = state.base_addr;
 
+    // Preserve raw aliases whose source slot would be overwritten by
+    // first-pass boxing before they get a chance to copy from it.
+    for (0..sp) |i| {
+        switch (stack[i]) {
+            .raw_at_slot => |s| {
+                if (s == i or s >= sp) continue;
+                switch (stack[s]) {
+                    .i64_ref, .f64_ref, .bool_ref => {
+                        emitCopySlot(ctx, base_addr, s, i);
+                        stack[i] = .{ .raw_at_slot = i };
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
+
     // First pass: handle non-raw entries and detect swap patterns.
     for (0..sp) |i| {
         switch (stack[i]) {
@@ -3909,6 +3927,46 @@ test "compile a+b with two inputs" {
     var out: i64 = undefined;
     try testing.expectEqual(@as(i32, 0), callCompiled(func, &.{ 17, 25 }, &out));
     try testing.expectEqual(@as(i64, 42), out);
+}
+
+test "compiled direct call preserves aliased lower stack values" {
+    var dispatch = JitDispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    const callee_instrs = makeInstructions(.{"+"});
+    const callee = try compileWord(&callee_instrs, 2, 1, null, null, null, null);
+    const callee_id = try dispatch.assignId("sum2");
+    dispatch.update(callee_id, callee.code_ptr, callee.jit_buf);
+
+    const ResolverState = struct {
+        callee_id: u32,
+    };
+    var resolver_state = ResolverState{ .callee_id = callee_id };
+    const Resolver = struct {
+        fn resolve(name: []const u8, user_data: *anyopaque) ?ResolvedWord {
+            const state: *ResolverState = @ptrCast(@alignCast(user_data));
+            if (!std.mem.eql(u8, name, "sum2")) return null;
+            return .{
+                .word_id = state.callee_id,
+                .input_count = 2,
+                .output_count = 1,
+            };
+        }
+    };
+    const resolver = WordResolver{
+        .resolve = &Resolver.resolve,
+        .user_data = @ptrCast(&resolver_state),
+        .dispatch_table_ptr = @ptrCast(&dispatch),
+    };
+
+    const caller_instrs = makeInstructions(.{ @as(i64, 1), "-", "over", "swap", "sum2", "*" });
+    const caller = try compileWord(&caller_instrs, 2, 1, resolver, null, null, null);
+    defer caller.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(caller.code_ptr));
+    var out: i64 = undefined;
+    try testing.expectEqual(@as(i32, 0), callCompiled(func, &.{ 2, 4 }, &out));
+    try testing.expectEqual(@as(i64, 10), out);
 }
 
 test "overflow bails out" {
