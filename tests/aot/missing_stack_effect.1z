@@ -1,0 +1,4 @@
+\ Word without stack effect should fail AOT build.
+no-effect: [ 42 ] ;
+
+no-effect print-line

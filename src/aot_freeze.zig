@@ -36,6 +36,7 @@ pub const FreezeFeatureUse = struct {
 
 pub const FreezeDiagnostics = struct {
     fatal_dynamic_feature: ?FreezeFeatureUse = null,
+    missing_stack_effects: []const []const u8 = &.{},
 };
 
 pub const FreezeError = error{
@@ -44,6 +45,7 @@ pub const FreezeError = error{
     ExecutionFailed,
     OutOfMemory,
     DisallowedDynamicFeature,
+    MissingStackEffects,
 };
 
 /// Walk the module dependency graph from an entry file, collecting all
@@ -61,7 +63,7 @@ pub fn freezeModuleGraph(
 ) (FreezeError || Allocator.Error)!FreezeResult {
     diagnostics.* = .{};
 
-    // Phase A: Execute entry file, collect non-definition instructions.
+    // Phase 1: Execute entry file, collect non-definition instructions.
     // The local frame and pragma frame are kept alive so that lookupWord
     // can find words defined in the entry file during discovery.
     const entry_instrs = executeAndCollectEntry(ctx, entry_file, allocator) catch |err| switch (err) {
@@ -71,7 +73,7 @@ pub fn freezeModuleGraph(
         else => return error.ExecutionFailed,
     };
 
-    // Phase B: Discover all reachable compound words via BFS.
+    // Phase 2: Discover all reachable compound words via BFS.
     // The entry file's local frame is still on the stack, so lookupWord
     // finds entry-file definitions and their imports.
     var discovered = discoverReachableWords(ctx, entry_instrs, diagnostics, allocator) catch |err| {
@@ -90,8 +92,17 @@ pub fn freezeModuleGraph(
     ctx.popPragmaFrame();
     ctx.popLocalFrame();
 
-    // Phase C: Build AotWordDesc array
-    return buildAotDescs(entry_instrs, &discovered, allocator);
+    // Phase 3: Build AotWordDesc array
+    const result = try buildAotDescs(entry_instrs, &discovered, allocator);
+    if (result.skipped_words.len > 0) {
+        diagnostics.missing_stack_effects = result.skipped_words;
+        allocator.free(result.words);
+        allocator.free(result.entry_instrs);
+        allocator.free(result.warnings);
+        return error.MissingStackEffects;
+    }
+
+    return result;
 }
 
 /// Accumulated non-definition instructions from the entry file and

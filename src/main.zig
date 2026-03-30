@@ -824,7 +824,15 @@ fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     // Stage 1: Freeze module graph and emit C source.
     var freeze_diagnostics: aot_freeze.FreezeDiagnostics = .{};
     var freeze_result = aot_freeze.freezeModuleGraph(ctx, source, &freeze_diagnostics, allocator) catch |err| {
-        if (err == error.DisallowedDynamicFeature) {
+        if (err == error.MissingStackEffects) {
+            for (freeze_diagnostics.missing_stack_effects) |name| {
+                err_writer.print(
+                    "Error: word '{s}' has no stack effect declaration\n",
+                    .{name},
+                ) catch {};
+            }
+            allocator.free(freeze_diagnostics.missing_stack_effects);
+        } else if (err == error.DisallowedDynamicFeature) {
             if (freeze_diagnostics.fatal_dynamic_feature) |feature_use| {
                 err_writer.print(
                     "Error: AOT build disallows dynamic feature '{s}' in '{s}'\n",
@@ -841,12 +849,6 @@ fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     };
     defer freeze_result.deinit(allocator);
 
-    if (freeze_result.skipped_words.len > 0) {
-        for (freeze_result.skipped_words) |name| {
-            err_writer.print("Warning: skipped word '{s}' (no stack effect)\n", .{name}) catch {};
-        }
-        err_writer.flush() catch {};
-    }
     if (freeze_result.warnings.len > 0) {
         for (freeze_result.warnings) |warning| {
             err_writer.print(
