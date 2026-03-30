@@ -13,6 +13,9 @@ const protocols = @import("protocols.zig");
 const Primitive = @import("types.zig").Primitive;
 const Capability = @import("types.zig").Capability;
 const trace_mod = @import("../trace.zig");
+const call_graph_mod = @import("../call_graph.zig");
+const ir_codegen = @import("../ir_codegen.zig");
+const stack_effect_mod = @import("../stack_effect.zig");
 
 const popString = helpers.popString;
 
@@ -456,8 +459,7 @@ fn nativeCommandLineArgs(ctx: *Context) anyerror!void {
 /// sys-exit ( code -- ) - Exit the process with the given exit code
 fn nativeSysExit(ctx: *Context) anyerror!void {
     const code = try helpers.popFixnum(ctx);
-    const hooks_mod = @import("hooks.zig");
-    hooks_mod.fireHooks(ctx, "on:exit", &.{.{ .fixnum = code }});
+    hooks.fireHooks(ctx, "on:exit", &.{.{ .fixnum = code }});
     std.process.exit(@intCast(code));
 }
 
@@ -510,16 +512,14 @@ const ResolverState = struct {
     context: *Context,
 };
 
-fn hasQuotationParams(effect: @import("../stack_effect.zig").StackEffect) bool {
+fn hasQuotationParams(effect: stack_effect_mod.StackEffect) bool {
     for (effect.inputs) |param| {
         if (param.quotation_effect != null) return true;
     }
     return false;
 }
 
-fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?@import("../ir_codegen.zig").ResolvedWord {
-    const ir_codegen = @import("../ir_codegen.zig");
-    const stack_effect_mod = @import("../stack_effect.zig");
+fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.ResolvedWord {
     const state: *ResolverState = @ptrCast(@alignCast(user_data));
     const ctx = state.context;
     const callee = ctx.lookupWord(name) orelse return null;
@@ -565,8 +565,6 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?@import("../
 
 /// compile! ( sym -- ) - JIT-compile a word for integer arithmetic
 fn nativeCompile(ctx: *Context) anyerror!void {
-    const call_graph_mod = @import("../call_graph.zig");
-
     const sym = try helpers.popSymbol(ctx);
     const word = ctx.lookupWord(sym) orelse {
         ctx.pending_error_message = "compile!: word not found";
@@ -624,12 +622,10 @@ fn nativeCompile(ctx: *Context) anyerror!void {
 /// Detect mutual recursion groups by scanning word bodies via lookupWord.
 /// Builds a local call graph over all reachable words from `sym`, then
 /// runs SCC detection and eligibility filtering.
-fn detectMutualGroup(ctx: *Context, sym: []const u8, call_graph_mod: anytype) ?[]const []const u8 {
-    const stack_effect_mod = @import("../stack_effect.zig");
-
+fn detectMutualGroup(ctx: *Context, sym: []const u8, call_graph_ns: anytype) ?[]const []const u8 {
     // Build a mini call graph by walking reachable words from `sym`.
     // Use lookupWord so we find words in local frames, not just the dictionary.
-    var graph: call_graph_mod.CallGraph = .{};
+    var graph: call_graph_ns.CallGraph = .{};
     defer {
         var iter = graph.iterator();
         while (iter.next()) |entry| {
@@ -660,7 +656,7 @@ fn detectMutualGroup(ctx: *Context, sym: []const u8, call_graph_mod: anytype) ?[
         var callee_set: std.StringHashMapUnmanaged(void) = .{};
         defer callee_set.deinit(ctx.allocator);
         var has_opaque = false;
-        call_graph_mod.collectCalleesPublic(instrs, &callee_set, &has_opaque, ctx.allocator) catch return null;
+        call_graph_ns.collectCalleesPublic(instrs, &callee_set, &has_opaque, ctx.allocator) catch return null;
 
         const callees = sortedKeysFromSet(callee_set, ctx.allocator) catch return null;
         graph.put(ctx.allocator, name, .{ .callees = callees, .has_opaque = has_opaque }) catch return null;
@@ -673,7 +669,7 @@ fn detectMutualGroup(ctx: *Context, sym: []const u8, call_graph_mod: anytype) ?[
     }
 
     // Find SCCs and eligible mutual TCO groups
-    const sccs = call_graph_mod.findSCCs(&graph, ctx.allocator) catch return null;
+    const sccs = call_graph_ns.findSCCs(&graph, ctx.allocator) catch return null;
     defer {
         for (sccs) |members| ctx.allocator.free(members);
         ctx.allocator.free(sccs);
@@ -691,7 +687,7 @@ fn detectMutualGroup(ctx: *Context, sym: []const u8, call_graph_mod: anytype) ?[
         if (!has_sym) continue;
 
         // Verify eligibility using lookupWord
-        if (isSccEligibleViaLookup(ctx, scc, &graph, call_graph_mod, stack_effect_mod)) {
+        if (isSccEligibleViaLookup(ctx, scc, &graph, call_graph_ns, stack_effect_mod)) {
             return ctx.allocator.dupe([]const u8, scc) catch return null;
         }
     }
@@ -720,12 +716,10 @@ fn sortedKeysFromSet(set: std.StringHashMapUnmanaged(void), allocator: std.mem.A
 fn isSccEligibleViaLookup(
     ctx: *Context,
     scc: []const []const u8,
-    graph: *const @import("../call_graph.zig").CallGraph,
-    call_graph_mod: anytype,
-    stack_effect_mod: anytype,
+    graph: *const call_graph_mod.CallGraph,
+    call_graph_ns: anytype,
+    stack_effect_ns: anytype,
 ) bool {
-    const markers_mod2 = @import("markers.zig");
-
     var member_set: std.StringHashMapUnmanaged(void) = .{};
     defer member_set.deinit(ctx.allocator);
     for (scc) |name| {
@@ -747,11 +741,11 @@ fn isSccEligibleViaLookup(
 
         const effect = word_def.stack_effect orelse return false;
         for (word_def.markers) |mk| {
-            if (markers_mod2.isParseTimeOnlyMarker(mk)) return false;
-            if (markers_mod2.isParseTimeMarker(mk)) return false;
-            if (markers_mod2.isGenericMarker(mk)) return false;
+            if (markers_mod.isParseTimeOnlyMarker(mk)) return false;
+            if (markers_mod.isParseTimeMarker(mk)) return false;
+            if (markers_mod.isGenericMarker(mk)) return false;
         }
-        if (stack_effect_mod.hasAnyRowVariable(effect)) return false;
+        if (stack_effect_ns.hasAnyRowVariable(effect)) return false;
 
         // Arity uniformity
         if (ref_inputs) |ri| {
@@ -772,7 +766,7 @@ fn isSccEligibleViaLookup(
         };
         for (graph_entry.callees) |callee| {
             if (member_set.contains(callee)) {
-                if (!call_graph_mod.hasTailCallTo(word_instrs, callee)) return false;
+                if (!call_graph_ns.hasTailCallTo(word_instrs, callee)) return false;
             }
         }
     }
@@ -781,8 +775,6 @@ fn isSccEligibleViaLookup(
 }
 
 fn compileSingleWord(ctx: *Context, sym: []const u8, mutual_group: ?[]const []const u8) !void {
-    const ir_codegen = @import("../ir_codegen.zig");
-
     const word = ctx.lookupWord(sym) orelse return error.UnknownWord;
 
     const instrs = switch (word.action) {

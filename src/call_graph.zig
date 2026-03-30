@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 
 const Dictionary = @import("dictionary.zig").Dictionary;
 const WordDefinition = @import("dictionary.zig").WordDefinition;
+const Context = @import("context.zig").Context;
 
 const dispatch_mod = @import("dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
@@ -577,7 +578,7 @@ test "generic word includes dispatch entry callees" {
     try std.testing.expect(!entry.has_opaque);
 }
 
-fn dummyNative(_: *@import("context.zig").Context) anyerror!void {}
+fn dummyNative(_: *Context) anyerror!void {}
 
 fn deinitGraph(graph: *CallGraph, allocator: Allocator) void {
     var iter = graph.iterator();

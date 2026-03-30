@@ -3,7 +3,9 @@ const Context = @import("../context.zig").Context;
 const dispatch_mod = @import("../dispatch.zig");
 const pic_mod = @import("../pic.zig");
 const PolymorphicCache = pic_mod.PolymorphicCache;
-const Value = @import("../value.zig").Value;
+const value_mod = @import("../value.zig");
+const Instruction = value_mod.Instruction;
+const Value = value_mod.Value;
 
 /// Execute a dispatch entry body, handling both quotation and native_fn variants.
 pub fn executeDispatchBody(ctx: *Context, body: dispatch_mod.DispatchBody) !void {
@@ -441,7 +443,7 @@ test "tryDispatchGeneric dispatches unary method for native type" {
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
 
     // Register a unary method for "fixnum" type
-    const body = &[_]@import("../value.zig").Instruction{
+    const body = &[_]Instruction{
         .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
     try ctx.dispatch.register(
@@ -468,10 +470,10 @@ test "tryDispatchGeneric tries binary before unary" {
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
 
     // Register both binary and unary methods
-    const binary_body = &[_]@import("../value.zig").Instruction{
+    const binary_body = &[_]Instruction{
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
-    const unary_body = &[_]@import("../value.zig").Instruction{
+    const unary_body = &[_]Instruction{
         .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
 
@@ -505,7 +507,7 @@ test "tryDispatchGenericWithPic populates cache on miss" {
 
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
 
-    const body = &[_]@import("../value.zig").Instruction{
+    const body = &[_]Instruction{
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
     try ctx.dispatch.register(
@@ -536,7 +538,7 @@ test "tryDispatchGenericWithPic hits cache on matching types" {
 
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
 
-    const body = &[_]@import("../value.zig").Instruction{
+    const body = &[_]Instruction{
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
     try ctx.dispatch.register(
@@ -567,7 +569,7 @@ test "tryDispatchGenericWithPic invalidates on generation change" {
 
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
 
-    const body = &[_]@import("../value.zig").Instruction{
+    const body = &[_]Instruction{
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
     try ctx.dispatch.register(
@@ -587,7 +589,7 @@ test "tryDispatchGenericWithPic invalidates on generation change" {
     const gen_before = cache.generation;
 
     // Register a new method, bumping generation
-    const body2 = &[_]@import("../value.zig").Instruction{
+    const body2 = &[_]Instruction{
         .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
     try ctx.dispatch.register(
@@ -615,7 +617,7 @@ test "tryDispatchGenericWithPic with null pic_entry falls back to full lookup" {
 
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
 
-    const body = &[_]@import("../value.zig").Instruction{
+    const body = &[_]Instruction{
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
     try ctx.dispatch.register(
@@ -638,7 +640,7 @@ test "tryDispatchGenericWithPic caches unary dispatch" {
 
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
 
-    const body = &[_]@import("../value.zig").Instruction{
+    const body = &[_]Instruction{
         .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
     try ctx.dispatch.register(

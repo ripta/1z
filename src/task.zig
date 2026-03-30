@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Context = @import("context.zig").Context;
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const Quotation = value_mod.Quotation;
@@ -99,7 +100,7 @@ pub const Task = struct {
     error_obj: ?ErrorObject = null,
     uctx: std.c.ucontext_t = undefined,
     stack_mem: ?[]align(std.heap.page_size_min) u8 = null,
-    ctx: *@import("context.zig").Context,
+    ctx: *Context,
     scope: *TaskScope,
     cancellation_phase: CancellationPhase = .none,
     blocked_on_channel: ?*anyopaque = null,

@@ -14,6 +14,7 @@ const Marker = value_mod.Marker;
 const StructType = value_mod.StructType;
 const StructInstance = value_mod.StructInstance;
 const Task = @import("../task.zig").Task;
+const Channel = @import("../channel.zig").Channel;
 
 const stack_effect_mod = @import("../stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
@@ -333,7 +334,7 @@ pub fn popTask(ctx: *Context) !*Task {
     return popAs(.task, ctx);
 }
 
-pub fn popChannel(ctx: *Context) !*@import("../channel.zig").Channel {
+pub fn popChannel(ctx: *Context) !*Channel {
     return popAs(.channel, ctx);
 }
 

@@ -32,6 +32,7 @@ const SandboxSpec = types_mod.SandboxSpec;
 const primitives = @import("primitives.zig");
 const parser = @import("parser.zig");
 const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
+const StatementProcessor = @import("statement.zig").StatementProcessor;
 
 const trace_mod = @import("trace.zig");
 const TraceConfig = trace_mod.TraceConfig;
@@ -48,6 +49,8 @@ const lock_order = @import("lock_order.zig");
 const LockOrderTracker = lock_order.LockOrderTracker;
 
 const signal = @import("signal.zig");
+const control = @import("primitives/control.zig");
+const nativeSuppressChecksValidator = @import("effect_inference.zig").nativeSuppressChecksValidator;
 
 /// Embedded prelude source code
 const prelude_source = @embedFile("prelude.1z");
@@ -489,7 +492,6 @@ pub const Context = struct {
     /// Load the prelude source. When external_source is non-null, it is used
     /// instead of the compiled-in embedded prelude.
     pub fn loadPrelude(self: *Context, external_source: ?[]const u8) !void {
-        const StatementProcessor = @import("statement.zig").StatementProcessor;
         var processor: StatementProcessor = .{};
 
         // Push an initial frame so that the prelude definitions land in a local
@@ -502,13 +504,12 @@ pub const Context = struct {
 
         // Register require-doc pragma with a native validator so enforcement
         // does not depend on prelude definitions.
-        const control = @import("primitives/control.zig");
         try self.pragma_registry.put(self.allocator, "require-doc", .{
             .native_validator = &control.nativeRequireDocValidator,
         });
 
         try self.pragma_registry.put(self.allocator, "suppress-checks", .{
-            .native_validator = &@import("effect_inference.zig").nativeSuppressChecksValidator,
+            .native_validator = &nativeSuppressChecksValidator,
         });
 
         try self.pragma_registry.put(self.allocator, "suppress-undeclared", .{});
@@ -2209,10 +2210,9 @@ pub const Context = struct {
     }
 
     fn adjustShadowForTransparent(self: *Context, shadow: *std.ArrayListUnmanaged(SlotType), effect: StackEffect, quot_delta: i64) void {
-        const StackEffectMod = @import("stack_effect.zig");
         const concrete_inputs = effect.concreteInputCount();
         const concrete_outputs = effect.concreteOutputCount();
-        const pass_throughs = StackEffectMod.passThroughParams(effect);
+        const pass_throughs = stack_effect_mod.passThroughParams(effect);
 
         if (pass_throughs.len == 0) {
             const total_delta = -@as(i64, @intCast(concrete_inputs)) + @as(i64, @intCast(concrete_outputs)) + quot_delta;

@@ -1,8 +1,11 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const Context = @import("../context.zig").Context;
-const Value = @import("../value.zig").Value;
-const Quotation = @import("../value.zig").Quotation;
+const context_mod = @import("../context.zig");
+const Context = context_mod.Context;
+const value_mod = @import("../value.zig");
+const Instruction = value_mod.Instruction;
+const Quotation = value_mod.Quotation;
+const Value = value_mod.Value;
 const helpers = @import("helpers.zig");
 const RegistryEntry = @import("types.zig").RegistryEntry;
 
@@ -154,14 +157,11 @@ pub fn fireScopedHooks(ctx: *Context, param_name: []const u8, args: []const Valu
     }
 }
 
-const Instruction = @import("../value.zig").Instruction;
-
 fn makeInstr(op: Instruction.Op) Instruction {
     return .{ .op = op, .line = 0 };
 }
 
 test "LIFO ordering" {
-    const context_mod = @import("../context.zig");
     var ctx = context_mod.Context.init(std.testing.allocator);
     defer ctx.deinit();
     ctx.loadPrelude(null) catch unreachable;
@@ -193,7 +193,6 @@ test "LIFO ordering" {
 }
 
 test "error resilience" {
-    const context_mod = @import("../context.zig");
     var ctx = context_mod.Context.init(std.testing.allocator);
     defer ctx.deinit();
     ctx.loadPrelude(null) catch unreachable;
@@ -233,7 +232,6 @@ test "error resilience" {
 }
 
 test "empty registry" {
-    const context_mod = @import("../context.zig");
     var ctx = context_mod.Context.init(std.testing.allocator);
     defer ctx.deinit();
     ctx.loadPrelude(null) catch unreachable;

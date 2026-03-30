@@ -6,6 +6,8 @@ const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
+const task_mod = @import("../task.zig");
+const Task = task_mod.Task;
 const channel_mod = @import("../channel.zig");
 const Channel = channel_mod.Channel;
 const Scheduler = @import("../scheduler.zig").Scheduler;
@@ -323,7 +325,6 @@ fn nativeTryReceive(ctx: *Context) anyerror!void {
 /// Mark the channel as closed. Double-close is a no-op.
 /// Wakes all blocked senders and receivers so they can observe the closed state.
 fn nativeCloseChannel(ctx: *Context) anyerror!void {
-    const Task = @import("../task.zig").Task;
     const ch = try helpers.popChannel(ctx);
 
     acquireChannel(ctx, ch);
@@ -532,7 +533,7 @@ fn unlockChannelsOrdered(ctx: *Context, channels: []*Channel) void {
 
 /// Remove all receiver entries for a specific task from a channel's waiting list.
 ///
-fn removeReceiverEntries(ch: *Channel, task: *@import("../task.zig").Task) void {
+fn removeReceiverEntries(ch: *Channel, task: *Task) void {
     var i: usize = 0;
     while (i < ch.waiting_receivers.items.len) {
         if (ch.waiting_receivers.items[i].task == task) {

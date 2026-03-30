@@ -12,8 +12,10 @@ const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const Instruction = value_mod.Instruction;
 const ErrorObject = value_mod.ErrorObject;
-const StackEffect = @import("../stack_effect.zig").StackEffect;
-const StackEffectParam = @import("../stack_effect.zig").StackEffectParam;
+const Quotation = value_mod.Quotation;
+const stack_effect_mod = @import("../stack_effect.zig");
+const StackEffect = stack_effect_mod.StackEffect;
+const StackEffectParam = stack_effect_mod.StackEffectParam;
 
 const task_stack_size: usize = 512 * 1024;
 
@@ -47,7 +49,7 @@ fn allocateTask(
     ctx: *Context,
     scheduler: *Scheduler,
     scope: *TaskScope,
-    quotation: @import("../value.zig").Quotation,
+    quotation: Quotation,
 ) !*Task {
     const task = try ctx.allocator.create(Task);
     errdefer ctx.allocator.destroy(task);
@@ -315,7 +317,7 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     const timer_instrs = try alloc.alloc(Instruction, 2);
     timer_instrs[0] = .{ .op = .{ .push_literal = dur.val }, .line = 0 };
     timer_instrs[1] = .{ .op = .{ .call_word = "sleep" }, .line = 0 };
-    const timer_quot: @import("../value.zig").Quotation = .{ .instructions = timer_instrs };
+    const timer_quot: Quotation = .{ .instructions = timer_instrs };
 
     // spawn the timer task with a custom entry point that marks as failed with a timeout error after the sleep completes
     const timer_task = try allocateTask(ctx, scheduler, &scope, timer_quot);

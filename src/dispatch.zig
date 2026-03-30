@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Context = @import("context.zig").Context;
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const Instruction = value_mod.Instruction;
@@ -53,7 +54,7 @@ pub fn dispatchTypeName(val: Value) []const u8 {
 /// builtin_type_array and resource type lookup. For tagged values and struct
 /// instances, returns the specific type's TypeValue when available, falling
 /// back to the discriminant-level builtin TypeValue.
-pub fn dispatchTypeValue(val: Value, ctx: *@import("context.zig").Context) *value_mod.TypeValue {
+pub fn dispatchTypeValue(val: Value, ctx: *Context) *value_mod.TypeValue {
     return switch (val) {
         .tagged => |t| t.tag.type_val orelse ctx.lookupBuiltinTypeValueByTag(.tagged).?,
         .struct_instance => |si| si.struct_type.type_val orelse ctx.lookupBuiltinTypeValueByTag(.struct_instance).?,
@@ -389,7 +390,7 @@ pub fn collectEntriesForWord(entries: *const EntriesMap, word_name: []const u8, 
 // Tests
 // =============================================================================
 
-fn dummyNativeFn(_: *@import("context.zig").Context) anyerror!void {}
+fn dummyNativeFn(_: *Context) anyerror!void {}
 
 test "dispatchTypeName returns correct name for native types" {
     try std.testing.expectEqualStrings("fixnum", dispatchTypeName(.{ .fixnum = 42 }));
@@ -664,7 +665,7 @@ test "builtinTypeName matches dispatchTypeName for static variants" {
 }
 
 test "dispatchTypeValue returns correct TypeValue for builtin types" {
-    var ctx = @import("context.zig").Context.init(std.testing.allocator);
+    var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
     const fixnum_tv = dispatchTypeValue(.{ .fixnum = 42 }, &ctx);
@@ -684,7 +685,7 @@ test "dispatchTypeValue returns correct TypeValue for builtin types" {
 }
 
 test "dispatchTypeValue returns VirtualType type_val for tagged values" {
-    var ctx = @import("context.zig").Context.init(std.testing.allocator);
+    var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
     var tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
@@ -698,7 +699,7 @@ test "dispatchTypeValue returns VirtualType type_val for tagged values" {
 }
 
 test "dispatchTypeValue falls back to builtin for tagged without type_val" {
-    var ctx = @import("context.zig").Context.init(std.testing.allocator);
+    var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
     const vt = value_mod.VirtualType{ .name = "legacy", .inner_type = "fixnum" };
@@ -710,7 +711,7 @@ test "dispatchTypeValue falls back to builtin for tagged without type_val" {
 }
 
 test "dispatchTypeValue returns StructType type_val for struct instances" {
-    var ctx = @import("context.zig").Context.init(std.testing.allocator);
+    var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
     var tv = value_mod.TypeValue{ .name = "point", .descriptor = null };
@@ -723,7 +724,7 @@ test "dispatchTypeValue returns StructType type_val for struct instances" {
 }
 
 test "dispatchTypeValue creates TypeValue for resources" {
-    var ctx = @import("context.zig").Context.init(std.testing.allocator);
+    var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
     var r = value_mod.Resource{ .type_name = "sqlite-db" };
@@ -736,7 +737,7 @@ test "dispatchTypeValue creates TypeValue for resources" {
 }
 
 test "dispatchTypeValue .name matches dispatchTypeName for builtin types" {
-    var ctx = @import("context.zig").Context.init(std.testing.allocator);
+    var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
     const num_variants = comptime @typeInfo(Value).@"union".fields.len;

@@ -1,14 +1,20 @@
 const std = @import("std");
+const context_mod = @import("context.zig");
+const Context = context_mod.Context;
 const StackEffect = @import("stack_effect.zig").StackEffect;
+const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
 const BenchmarkReport = @import("benchmark.zig").BenchmarkReport;
 const Task = @import("task.zig").Task;
 const Iterator = @import("iterator.zig").Iterator;
+const Channel = @import("channel.zig").Channel;
 const dictionary_mod = @import("dictionary.zig");
 const NativeFn = dictionary_mod.NativeFn;
 const WordProvenance = dictionary_mod.WordProvenance;
 const FfiSignature = @import("ffi/signature.zig").FfiSignature;
 const simd = @import("simd.zig");
-pub const SandboxSpec = @import("primitives/types.zig").SandboxSpec;
+const types_mod = @import("primitives/types.zig");
+const Capability = types_mod.Capability;
+pub const SandboxSpec = types_mod.SandboxSpec;
 
 pub const BigIntManaged = std.math.big.int.Managed;
 
@@ -89,8 +95,8 @@ pub const BufferingMode = enum {
 
 /// VTable for stream I/O dispatch. Each wrapper layer provides its own vtable.
 pub const StreamVTable = struct {
-    read: *const fn (*Stream, []u8, *@import("context.zig").Context) anyerror!usize,
-    write: *const fn (*Stream, []const u8, *@import("context.zig").Context) anyerror!usize,
+    read: *const fn (*Stream, []u8, *Context) anyerror!usize,
+    write: *const fn (*Stream, []const u8, *Context) anyerror!usize,
     close: *const fn (*Stream) void,
     flush: *const fn (*Stream) anyerror!void,
 };
@@ -251,7 +257,7 @@ pub const ModuleWord = struct {
     source_line: usize = 0,
     source_column: usize = 0,
     provenance: ?WordProvenance = null,
-    capability: @import("primitives/types.zig").Capability = .none,
+    capability: Capability = .none,
     action: union(enum) {
         compound: []const Instruction,
         native: NativeFn,
@@ -457,7 +463,7 @@ pub const Value = union(enum) {
     stack_effect: StackEffect,
     error_value: ErrorObject,
     task: *Task,
-    channel: *@import("channel.zig").Channel,
+    channel: *Channel,
     iterator: *Iterator,
     doc_string: []const u8,
     type_val: *TypeValue,
@@ -1075,7 +1081,6 @@ test "float vs fixnum not equal" {
 }
 
 test "stack effect format" {
-    const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
     const val = Value{ .stack_effect = StackEffect{
         .inputs = &[_]StackEffectParam{.{ .name = "n" }},
         .outputs = &[_]StackEffectParam{.{ .name = "n" }},
@@ -1087,7 +1092,6 @@ test "stack effect format" {
 }
 
 test "stack effect equality" {
-    const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
     const a = Value{ .stack_effect = StackEffect{
         .inputs = &[_]StackEffectParam{.{ .name = "n" }},
         .outputs = &[_]StackEffectParam{.{ .name = "n" }},
@@ -1106,7 +1110,6 @@ test "stack effect equality" {
 }
 
 test "stack effect not equal to other types" {
-    const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
     const effect = Value{ .stack_effect = StackEffect{
         .inputs = &[_]StackEffectParam{.{ .name = "n" }},
         .outputs = &[_]StackEffectParam{.{ .name = "n" }},

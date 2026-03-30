@@ -20,6 +20,16 @@ const JitEntry = jit_dispatch_mod.JitEntry;
 const Context = @import("context.zig").Context;
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const signal = @import("signal.zig");
+const trace_mod = @import("trace.zig");
+const Scheduler = @import("scheduler.zig").Scheduler;
+const helpers = @import("primitives/helpers.zig");
+const dynamic_vars_mod = @import("primitives/dynamic_vars.zig");
+const errors_mod = @import("primitives/errors.zig");
+const iterators_mod = @import("primitives/iterators.zig");
+const sequences_mod = @import("primitives/sequences.zig");
+const control = @import("primitives/control.zig");
+const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
+const markers_mod = @import("primitives/markers.zig");
 
 pub const IrCodegenError = error{
     NotCompilable,
@@ -3521,10 +3531,6 @@ fn emitParamValidation(state: *CompileState, effect_ptr: usize) void {
 // Trampoline
 // =============================================================================
 
-const Scheduler = @import("scheduler.zig").Scheduler;
-
-const helpers = @import("primitives/helpers.zig");
-
 export fn jitSafepoint(ctx_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 0;
     const ctx: *Context = @ptrFromInt(ctx_raw);
@@ -3541,7 +3547,6 @@ export fn jitSafepoint(ctx_raw: usize) callconv(.c) i32 {
     }
     helpers.checkCancellation(ctx) catch |err| {
         if (ctx.trace.trace_jit) {
-            const trace_mod = @import("trace.zig");
             var tw = trace_mod.TraceWriter.init();
             trace_mod.traceJitSafepoint(&tw, should_yield, true);
         }
@@ -3549,14 +3554,11 @@ export fn jitSafepoint(ctx_raw: usize) callconv(.c) i32 {
         return 2;
     };
     if (ctx.trace.trace_jit) {
-        const trace_mod = @import("trace.zig");
         var tw = trace_mod.TraceWriter.init();
         trace_mod.traceJitSafepoint(&tw, should_yield, false);
     }
     return 0;
 }
-
-const dynamic_vars_mod = @import("primitives/dynamic_vars.zig");
 
 export fn jitGet(ctx_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
@@ -3578,8 +3580,6 @@ export fn jitWithParameter(ctx_raw: usize) callconv(.c) i32 {
     return 0;
 }
 
-const errors_mod = @import("primitives/errors.zig");
-
 export fn jitRecover(ctx_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
@@ -3599,9 +3599,6 @@ export fn jitCleanup(ctx_raw: usize) callconv(.c) i32 {
     };
     return 0;
 }
-
-const iterators_mod = @import("primitives/iterators.zig");
-const sequences_mod = @import("primitives/sequences.zig");
 
 export fn jitValidateParamEffects(ctx_raw: usize, effect_ptr_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
@@ -3655,7 +3652,6 @@ export fn jitNativeCall(ctx_raw: usize, fn_ptr_raw: usize) callconv(.c) i32 {
 export fn jitCallQuotation(ctx_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
-    const control = @import("primitives/control.zig");
     control.nativeCall(ctx) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
@@ -3716,9 +3712,6 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize) callconv(.c) i3
             return 2;
         };
     }
-
-    const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
-    const markers_mod = @import("primitives/markers.zig");
 
     if (word.action == .compound) {
         const has_generic = for (word.markers) |mk| {

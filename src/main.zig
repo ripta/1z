@@ -6,6 +6,7 @@ const Context = context.Context;
 const ErrorDetail = context.ErrorDetail;
 const ParseDiagnostics = context.ParseDiagnostics;
 const value_mod = @import("value.zig");
+const Instruction = value_mod.Instruction;
 const Quotation = value_mod.Quotation;
 const ErrorObject = value_mod.ErrorObject;
 const StackFrame = value_mod.StackFrame;
@@ -1452,7 +1453,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
 }
 
 /// Adjust line numbers in instructions by adding an offset.
-fn adjustInstructionLines(instrs: []const @import("value.zig").Instruction, line_offset: usize) void {
+fn adjustInstructionLines(instrs: []const Instruction, line_offset: usize) void {
     if (line_offset == 0) return;
     for (instrs) |*instr| {
         const ptr = @constCast(instr);
