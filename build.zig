@@ -691,6 +691,15 @@ fn addIntegrationTests(
 const AotTestEntry = struct {
     name_without_ext: []const u8,
     file_path: []const u8,
+    has_build_stdout_golden: bool,
+    build_stdout_golden_path: []const u8,
+    build_stdout_content: []const u8,
+    has_build_stderr_golden: bool,
+    build_stderr_golden_path: []const u8,
+    build_stderr_content: []const u8,
+    has_build_exitcode: bool,
+    build_exitcode_path: []const u8,
+    expected_build_exit_code: ?u8,
     has_stdout_golden: bool,
     stdout_golden_path: []const u8,
     stdout_content: []const u8,
@@ -712,6 +721,37 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
 
         const name_without_ext = b.dupe(entry.name[0 .. entry.name.len - 3]);
         const file_path = b.fmt("tests/aot/{s}", .{entry.name});
+
+        var has_build_stdout_golden = false;
+        var build_stdout_content: []const u8 = "";
+        const build_stdout_golden_path = b.fmt("tests/aot/{s}.build.stdout.golden", .{name_without_ext});
+        if (aot_dir.openFile(b.fmt("{s}.build.stdout.golden", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            build_stdout_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            has_build_stdout_golden = true;
+        } else |_| {}
+
+        var has_build_stderr_golden = false;
+        var build_stderr_content: []const u8 = "";
+        const build_stderr_golden_path = b.fmt("tests/aot/{s}.build.stderr.golden", .{name_without_ext});
+        if (aot_dir.openFile(b.fmt("{s}.build.stderr.golden", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            build_stderr_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            has_build_stderr_golden = true;
+        } else |_| {}
+
+        var has_build_exitcode = false;
+        var expected_build_exit_code: ?u8 = null;
+        const build_exitcode_path = b.fmt("tests/aot/{s}.build.exitcode", .{name_without_ext});
+        if (aot_dir.openFile(b.fmt("{s}.build.exitcode", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            has_build_exitcode = true;
+            const code_str = file.readToEndAlloc(b.allocator, 64) catch "";
+            const trimmed_code = std.mem.trim(u8, code_str, " \t\r\n");
+            if (trimmed_code.len > 0) {
+                expected_build_exit_code = std.fmt.parseInt(u8, trimmed_code, 10) catch null;
+            }
+        } else |_| {}
 
         var has_stdout_golden = false;
         var stdout_content: []const u8 = "";
@@ -747,6 +787,15 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
         entries.append(b.allocator, .{
             .name_without_ext = name_without_ext,
             .file_path = file_path,
+            .has_build_stdout_golden = has_build_stdout_golden,
+            .build_stdout_golden_path = build_stdout_golden_path,
+            .build_stdout_content = build_stdout_content,
+            .has_build_stderr_golden = has_build_stderr_golden,
+            .build_stderr_golden_path = build_stderr_golden_path,
+            .build_stderr_content = build_stderr_content,
+            .has_build_exitcode = has_build_exitcode,
+            .build_exitcode_path = build_exitcode_path,
+            .expected_build_exit_code = expected_build_exit_code,
             .has_stdout_golden = has_stdout_golden,
             .stdout_golden_path = stdout_golden_path,
             .stdout_content = stdout_content,
@@ -772,6 +821,8 @@ fn addAotTests(
     const exe_path = b.fmt("{s}/bin/1z", .{b.install_path});
 
     for (aot_entries) |te| {
+        const is_build_only = te.has_build_stdout_golden or te.has_build_stderr_golden or te.has_build_exitcode;
+        const expected_build_exit: u8 = te.expected_build_exit_code orelse 0;
         const expected_exit: u8 = te.expected_exit_code orelse if (te.has_stderr_golden) 1 else 0;
 
         // Compile: 1z build <file.1z> -o <output>
@@ -781,11 +832,98 @@ fn addAotTests(
         compile_run.addFileArg(b.path(te.file_path));
         compile_run.addArg("-o");
         const aot_binary = compile_run.addOutputFileArg(b.fmt("aot_{s}", .{te.name_without_ext}));
-        compile_run.expectExitCode(0);
+        compile_run.expectExitCode(if (is_build_only) expected_build_exit else 0);
         compile_run.step.dependOn(b.getInstallStep());
 
         addLibFileDeps(b, compile_run);
         compile_run.addFileInput(b.path("src/prelude.1z"));
+
+        if (is_build_only) {
+            if (has_diff) {
+                const captured_build_stdout = compile_run.captureStdOut();
+                const build_stdout_diff = b.addSystemCommand(&.{
+                    "sh", "-c",
+                    b.fmt(
+                        "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
+                        .{ if (te.has_build_stdout_golden) te.build_stdout_golden_path else "(empty)", te.file_path },
+                    ),
+                    "sh",
+                });
+                if (te.has_build_stdout_golden) {
+                    build_stdout_diff.addFileArg(b.path(te.build_stdout_golden_path));
+                } else {
+                    build_stdout_diff.addArg("/dev/null");
+                }
+                build_stdout_diff.addFileArg(captured_build_stdout);
+                test_step.dependOn(&build_stdout_diff.step);
+
+                const captured_build_stderr = compile_run.captureStdErr();
+                const normalize_build_stderr = b.addSystemCommand(&.{
+                    "sed", "/^error(gpa):/,$d",
+                });
+                normalize_build_stderr.addFileArg(captured_build_stderr);
+                const normalized_build_stderr = normalize_build_stderr.captureStdOut();
+                const build_stderr_diff = b.addSystemCommand(&.{
+                    "sh", "-c",
+                    b.fmt(
+                        "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
+                        .{ if (te.has_build_stderr_golden) te.build_stderr_golden_path else "(empty)", te.file_path },
+                    ),
+                    "sh",
+                });
+                if (te.has_build_stderr_golden) {
+                    build_stderr_diff.addFileArg(b.path(te.build_stderr_golden_path));
+                } else {
+                    build_stderr_diff.addArg("/dev/null");
+                }
+                build_stderr_diff.addFileArg(normalized_build_stderr);
+                test_step.dependOn(&build_stderr_diff.step);
+            } else {
+                if (te.has_build_stdout_golden) {
+                    compile_run.expectStdOutEqual(te.build_stdout_content);
+                } else {
+                    compile_run.expectStdOutEqual("");
+                }
+                if (te.has_build_stderr_golden) {
+                    const captured_build_stderr = compile_run.captureStdErr();
+                    const normalize_build_stderr = b.addSystemCommand(&.{
+                        "sed", "/^error(gpa):/,$d",
+                    });
+                    normalize_build_stderr.addFileArg(captured_build_stderr);
+                    normalize_build_stderr.expectStdOutEqual(te.build_stderr_content);
+                } else {
+                    compile_run.expectStdErrEqual("");
+                }
+                test_step.dependOn(&compile_run.step);
+            }
+
+            {
+                const update_compile = b.addSystemCommand(&.{exe_path});
+                update_compile.addArg("build");
+                update_compile.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
+                update_compile.addFileArg(b.path(te.file_path));
+                update_compile.addArg("-o");
+                _ = update_compile.addOutputFileArg(b.fmt("aot_{s}", .{te.name_without_ext}));
+                update_compile.step.dependOn(b.getInstallStep());
+
+                addLibFileDeps(b, update_compile);
+                update_compile.addFileInput(b.path("src/prelude.1z"));
+                if (expected_build_exit != 0) {
+                    update_compile.expectExitCode(expected_build_exit);
+                }
+
+                update_files.*.addCopyFileToSource(update_compile.captureStdOut(), te.build_stdout_golden_path);
+                if (te.has_build_stderr_golden or expected_build_exit != 0 or te.has_build_exitcode) {
+                    const update_build_stderr = update_compile.captureStdErr();
+                    const normalize_update_build_stderr = b.addSystemCommand(&.{
+                        "sed", "/^error(gpa):/,$d",
+                    });
+                    normalize_update_build_stderr.addFileArg(update_build_stderr);
+                    update_files.*.addCopyFileToSource(normalize_update_build_stderr.captureStdOut(), te.build_stderr_golden_path);
+                }
+            }
+            continue;
+        }
 
         // chmod +x the compiled binary
         const chmod = b.addSystemCommand(&.{ "chmod", "+x" });

@@ -18,13 +18,24 @@ pub const FreezeResult = struct {
     entry_word_id: u32,
     max_word_id: u32,
     skipped_words: []const []const u8,
+    warnings: []const FreezeFeatureUse,
     entry_instrs: []const Instruction,
 
     pub fn deinit(self: *FreezeResult, allocator: Allocator) void {
         allocator.free(self.entry_instrs);
         allocator.free(self.words);
         allocator.free(self.skipped_words);
+        allocator.free(self.warnings);
     }
+};
+
+pub const FreezeFeatureUse = struct {
+    caller_name: []const u8,
+    feature_name: []const u8,
+};
+
+pub const FreezeDiagnostics = struct {
+    fatal_dynamic_feature: ?FreezeFeatureUse = null,
 };
 
 pub const FreezeError = error{
@@ -32,6 +43,7 @@ pub const FreezeError = error{
     FileReadFailed,
     ExecutionFailed,
     OutOfMemory,
+    DisallowedDynamicFeature,
 };
 
 /// Walk the module dependency graph from an entry file, collecting all
@@ -44,8 +56,11 @@ pub const FreezeError = error{
 pub fn freezeModuleGraph(
     ctx: *Context,
     entry_file: []const u8,
+    diagnostics: *FreezeDiagnostics,
     allocator: Allocator,
 ) (FreezeError || Allocator.Error)!FreezeResult {
+    diagnostics.* = .{};
+
     // Phase A: Execute entry file, collect non-definition instructions.
     // The local frame and pragma frame are kept alive so that lookupWord
     // can find words defined in the entry file during discovery.
@@ -59,11 +74,17 @@ pub fn freezeModuleGraph(
     // Phase B: Discover all reachable compound words via BFS.
     // The entry file's local frame is still on the stack, so lookupWord
     // finds entry-file definitions and their imports.
-    var discovered = discoverReachableWords(ctx, entry_instrs, allocator) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
+    var discovered = discoverReachableWords(ctx, entry_instrs, diagnostics, allocator) catch |err| {
+        ctx.popPragmaFrame();
+        ctx.popLocalFrame();
+        return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.DisallowedDynamicFeature => error.DisallowedDynamicFeature,
+        };
     };
-    defer discovered.names.deinit(allocator);
-    defer discovered.defs.deinit(allocator);
+    defer discovered.names.deinit(ctx.quotationAllocator());
+    defer discovered.defs.deinit(ctx.quotationAllocator());
+    defer discovered.warning_entries.deinit(ctx.quotationAllocator());
 
     // Now safe to pop the frames
     ctx.popPragmaFrame();
@@ -82,7 +103,7 @@ const EntryInstructions = []const Instruction;
 fn executeAndCollectEntry(
     ctx: *Context,
     entry_file: []const u8,
-    allocator: Allocator,
+    _: Allocator,
 ) anyerror!EntryInstructions {
     const file = std.fs.cwd().openFile(entry_file, .{}) catch {
         return error.FileNotFound;
@@ -122,6 +143,7 @@ fn executeAndCollectEntry(
 
     var processor: StatementProcessor = .{};
     defer processor.deinit();
+    const temp_allocator = ctx.quotationAllocator();
 
     while (true) {
         const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
@@ -135,7 +157,7 @@ fn executeAndCollectEntry(
                             if (is_def) {
                                 try ctx.executeQuotation(.{ .instructions = instrs });
                             } else {
-                                try entry_instrs.appendSlice(allocator, instrs);
+                                try entry_instrs.appendSlice(temp_allocator, instrs);
                             }
                         }
                     },
@@ -154,7 +176,7 @@ fn executeAndCollectEntry(
                     if (is_def) {
                         try ctx.executeQuotation(.{ .instructions = instrs });
                     } else {
-                        try entry_instrs.appendSlice(allocator, instrs);
+                        try entry_instrs.appendSlice(temp_allocator, instrs);
                     }
                 }
                 processor.reset();
@@ -165,12 +187,13 @@ fn executeAndCollectEntry(
     // Do NOT pop the local frame or pragma frame here. The caller
     // (freezeModuleGraph) keeps them alive for word discovery, then pops.
 
-    return entry_instrs.toOwnedSlice(allocator);
+    return entry_instrs.toOwnedSlice(temp_allocator);
 }
 
 const DiscoveredWords = struct {
     names: std.ArrayListUnmanaged([]const u8),
     defs: std.ArrayListUnmanaged(WordDefinition),
+    warning_entries: std.ArrayListUnmanaged(FreezeFeatureUse),
 };
 
 /// BFS over call_word references starting from entry instructions,
@@ -178,21 +201,39 @@ const DiscoveredWords = struct {
 fn discoverReachableWords(
     ctx: *Context,
     entry_instrs: []const Instruction,
-    allocator: Allocator,
-) Allocator.Error!DiscoveredWords {
+    diagnostics: *FreezeDiagnostics,
+    _: Allocator,
+) (Allocator.Error || error{DisallowedDynamicFeature})!DiscoveredWords {
+    const temp_allocator = ctx.quotationAllocator();
+
     var seen = std.StringHashMapUnmanaged(void){};
-    defer seen.deinit(allocator);
+    defer seen.deinit(temp_allocator);
 
     var worklist = std.ArrayListUnmanaged([]const u8){};
-    defer worklist.deinit(allocator);
+    defer worklist.deinit(temp_allocator);
+
+    var warning_seen = std.StringHashMapUnmanaged(void){};
+    defer {
+        var warning_iter = warning_seen.iterator();
+        while (warning_iter.next()) |entry| {
+            temp_allocator.free(entry.key_ptr.*);
+        }
+        warning_seen.deinit(temp_allocator);
+    }
 
     var result = DiscoveredWords{
         .names = .{},
         .defs = .{},
+        .warning_entries = .{},
     };
 
     // Seed worklist from entry instructions
-    try collectCallWords(entry_instrs, &worklist, &seen, allocator);
+    collectCallWords(entry_instrs, "__entry__", &worklist, &seen, &result.warning_entries, &warning_seen, diagnostics, temp_allocator) catch |err| {
+        result.names.deinit(temp_allocator);
+        result.defs.deinit(temp_allocator);
+        result.warning_entries.deinit(temp_allocator);
+        return err;
+    };
 
     // BFS
     while (worklist.pop()) |name| {
@@ -207,11 +248,16 @@ fn discoverReachableWords(
             .native => continue,
         };
 
-        try result.names.append(allocator, name);
-        try result.defs.append(allocator, word);
+        try result.names.append(temp_allocator, name);
+        try result.defs.append(temp_allocator, word);
 
         // Discover callees
-        try collectCallWords(instrs, &worklist, &seen, allocator);
+        collectCallWords(instrs, name, &worklist, &seen, &result.warning_entries, &warning_seen, diagnostics, temp_allocator) catch |err| {
+            result.names.deinit(temp_allocator);
+            result.defs.deinit(temp_allocator);
+            result.warning_entries.deinit(temp_allocator);
+            return err;
+        };
     }
 
     return result;
@@ -220,13 +266,27 @@ fn discoverReachableWords(
 /// Extract call_word names from instructions and add unseen ones to the worklist.
 fn collectCallWords(
     instrs: []const Instruction,
+    caller_name: []const u8,
     worklist: *std.ArrayListUnmanaged([]const u8),
     seen: *std.StringHashMapUnmanaged(void),
+    warnings: *std.ArrayListUnmanaged(FreezeFeatureUse),
+    warning_seen: *std.StringHashMapUnmanaged(void),
+    diagnostics: *FreezeDiagnostics,
     allocator: Allocator,
-) Allocator.Error!void {
+) (Allocator.Error || error{DisallowedDynamicFeature})!void {
     for (instrs) |instr| {
         switch (instr.op) {
             .call_word => |name| {
+                if (isDisallowedDynamicFeature(name)) {
+                    diagnostics.fatal_dynamic_feature = .{
+                        .caller_name = caller_name,
+                        .feature_name = name,
+                    };
+                    return error.DisallowedDynamicFeature;
+                }
+                if (std.mem.eql(u8, name, ">quotation")) {
+                    try addFeatureWarning(caller_name, name, warnings, warning_seen, allocator);
+                }
                 const gop = try seen.getOrPut(allocator, name);
                 if (!gop.found_existing) {
                     try worklist.append(allocator, name);
@@ -235,12 +295,40 @@ fn collectCallWords(
             .push_literal => |val| {
                 // Recurse into nested quotations
                 switch (val) {
-                    .quotation => |q| try collectCallWords(q.instructions, worklist, seen, allocator),
+                    .quotation => |q| try collectCallWords(q.instructions, caller_name, worklist, seen, warnings, warning_seen, diagnostics, allocator),
                     else => {},
                 }
             },
         }
     }
+}
+
+fn isDisallowedDynamicFeature(name: []const u8) bool {
+    return std.mem.eql(u8, name, "eval-string") or
+        std.mem.eql(u8, name, "load") or
+        std.mem.eql(u8, name, "reload") or
+        std.mem.eql(u8, name, "load-file") or
+        std.mem.eql(u8, name, "compile!");
+}
+
+fn addFeatureWarning(
+    caller_name: []const u8,
+    feature_name: []const u8,
+    warnings: *std.ArrayListUnmanaged(FreezeFeatureUse),
+    warning_seen: *std.StringHashMapUnmanaged(void),
+    allocator: Allocator,
+) Allocator.Error!void {
+    const key = try std.fmt.allocPrint(allocator, "{s}\x00{s}", .{ caller_name, feature_name });
+    errdefer allocator.free(key);
+    const gop = try warning_seen.getOrPut(allocator, key);
+    if (gop.found_existing) {
+        allocator.free(key);
+        return;
+    }
+    try warnings.append(allocator, .{
+        .caller_name = caller_name,
+        .feature_name = feature_name,
+    });
 }
 
 /// Assign word IDs and build the AotWordDesc array.
@@ -288,7 +376,8 @@ fn buildAotDescs(
         .entry_word_id = entry_word_id,
         .max_word_id = max_word_id,
         .skipped_words = try skipped.toOwnedSlice(allocator),
-        .entry_instrs = entry_instrs,
+        .warnings = try allocator.dupe(FreezeFeatureUse, discovered.warning_entries.items),
+        .entry_instrs = try allocator.dupe(Instruction, entry_instrs),
     };
 }
 
@@ -308,12 +397,23 @@ test "collectCallWords extracts call_word names from instructions" {
     defer seen.deinit(allocator);
     var worklist = std.ArrayListUnmanaged([]const u8){};
     defer worklist.deinit(allocator);
+    var warnings = std.ArrayListUnmanaged(FreezeFeatureUse){};
+    defer warnings.deinit(allocator);
+    var warning_seen = std.StringHashMapUnmanaged(void){};
+    defer {
+        var iter = warning_seen.iterator();
+        while (iter.next()) |entry| allocator.free(entry.key_ptr.*);
+        warning_seen.deinit(allocator);
+    }
+    var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(instrs, &worklist, &seen, allocator);
+    try collectCallWords(instrs, "__entry__", &worklist, &seen, &warnings, &warning_seen, &diagnostics, allocator);
 
     try testing.expectEqual(@as(usize, 2), worklist.items.len);
     try testing.expect(seen.contains("double"));
     try testing.expect(seen.contains("drop"));
+    try testing.expectEqual(@as(usize, 0), warnings.items.len);
+    try testing.expect(diagnostics.fatal_dynamic_feature == null);
 }
 
 test "buildAotDescs assigns sequential IDs and skips effectless words" {
@@ -321,12 +421,14 @@ test "buildAotDescs assigns sequential IDs and skips effectless words" {
     const entry_instrs = try allocator.dupe(Instruction, &[_]Instruction{
         .{ .op = .{ .call_word = "drop" }, .line = 1 },
     });
+    defer allocator.free(entry_instrs);
 
     const effect = StackEffect{ .inputs = &.{}, .outputs = &.{} };
 
     var discovered = DiscoveredWords{
         .names = .{},
         .defs = .{},
+        .warning_entries = .{},
     };
     defer discovered.names.deinit(allocator);
     defer discovered.defs.deinit(allocator);
@@ -354,5 +456,71 @@ test "buildAotDescs assigns sequential IDs and skips effectless words" {
     try testing.expectEqual(@as(u32, 0), result.entry_word_id);
     try testing.expectEqual(@as(u32, 1), result.max_word_id);
     try testing.expectEqual(@as(usize, 1), result.skipped_words.len);
+    try testing.expectEqual(@as(usize, 0), result.warnings.len);
     try testing.expect(std.mem.eql(u8, result.skipped_words[0], "bar"));
+}
+
+test "collectCallWords records >quotation warning once per caller" {
+    const allocator = testing.allocator;
+    const instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = ">quotation" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &[_]Instruction{
+            .{ .op = .{ .call_word = ">quotation" }, .line = 2 },
+        } } } }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var warnings = std.ArrayListUnmanaged(FreezeFeatureUse){};
+    defer warnings.deinit(allocator);
+    var warning_seen = std.StringHashMapUnmanaged(void){};
+    defer {
+        var iter = warning_seen.iterator();
+        while (iter.next()) |entry| allocator.free(entry.key_ptr.*);
+        warning_seen.deinit(allocator);
+    }
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try collectCallWords(instrs, "foo", &worklist, &seen, &warnings, &warning_seen, &diagnostics, allocator);
+
+    try testing.expectEqual(@as(usize, 1), warnings.items.len);
+    try testing.expectEqualStrings("foo", warnings.items[0].caller_name);
+    try testing.expectEqualStrings(">quotation", warnings.items[0].feature_name);
+}
+
+test "collectCallWords rejects disallowed dynamic features with caller" {
+    const allocator = testing.allocator;
+    const instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "eval-string" }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var warnings = std.ArrayListUnmanaged(FreezeFeatureUse){};
+    defer warnings.deinit(allocator);
+    var warning_seen = std.StringHashMapUnmanaged(void){};
+    defer {
+        var iter = warning_seen.iterator();
+        while (iter.next()) |entry| allocator.free(entry.key_ptr.*);
+        warning_seen.deinit(allocator);
+    }
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try testing.expectError(error.DisallowedDynamicFeature, collectCallWords(
+        instrs,
+        "__entry__",
+        &worklist,
+        &seen,
+        &warnings,
+        &warning_seen,
+        &diagnostics,
+        allocator,
+    ));
+    try testing.expect(diagnostics.fatal_dynamic_feature != null);
+    try testing.expectEqualStrings("__entry__", diagnostics.fatal_dynamic_feature.?.caller_name);
+    try testing.expectEqualStrings("eval-string", diagnostics.fatal_dynamic_feature.?.feature_name);
 }

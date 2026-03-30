@@ -822,8 +822,20 @@ fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     };
 
     // Stage 1: Freeze module graph and emit C source.
-    var freeze_result = aot_freeze.freezeModuleGraph(ctx, source, allocator) catch |err| {
-        err_writer.print("Error freezing module graph: {s}\n", .{@errorName(err)}) catch {};
+    var freeze_diagnostics: aot_freeze.FreezeDiagnostics = .{};
+    var freeze_result = aot_freeze.freezeModuleGraph(ctx, source, &freeze_diagnostics, allocator) catch |err| {
+        if (err == error.DisallowedDynamicFeature) {
+            if (freeze_diagnostics.fatal_dynamic_feature) |feature_use| {
+                err_writer.print(
+                    "Error: AOT build disallows dynamic feature '{s}' in '{s}'\n",
+                    .{ feature_use.feature_name, feature_use.caller_name },
+                ) catch {};
+            } else {
+                err_writer.writeAll("Error: AOT build disallows a dynamic feature\n") catch {};
+            }
+        } else {
+            err_writer.print("Error freezing module graph: {s}\n", .{@errorName(err)}) catch {};
+        }
         err_writer.flush() catch {};
         return 1;
     };
@@ -832,6 +844,15 @@ fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     if (freeze_result.skipped_words.len > 0) {
         for (freeze_result.skipped_words) |name| {
             err_writer.print("Warning: skipped word '{s}' (no stack effect)\n", .{name}) catch {};
+        }
+        err_writer.flush() catch {};
+    }
+    if (freeze_result.warnings.len > 0) {
+        for (freeze_result.warnings) |warning| {
+            err_writer.print(
+                "Warning: AOT build may diverge at runtime: '{s}' in '{s}'\n",
+                .{ warning.feature_name, warning.caller_name },
+            ) catch {};
         }
         err_writer.flush() catch {};
     }

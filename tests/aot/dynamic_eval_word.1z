@@ -1,0 +1,3 @@
+run-it: ( -- ) [ "1 2 +" eval-string ] ;
+
+run-it
