@@ -16,9 +16,11 @@ pub const registry_entries = [_]RegistryEntry{
 /// define-builtin-type ( descriptor -- marker marker marker type ) - Create a type value from a descriptor,
 /// deriving the name from the word-name symbol already on the stack. Pushes parse-time, const, and typed
 /// markers so `;` sees them automatically.
+///
+/// If a TypeValue for this name was pre-created by Context.initBuiltinTypeValues(),
+/// the existing object is augmented with the descriptor (preserving pointer identity).
+/// Otherwise a new TypeValue is allocated and registered.
 fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
-
     const desc_val = try ctx.stack.pop();
     const descriptor: *value_mod.HashTable = switch (desc_val) {
         .mutable_map => |m| @ptrCast(m),
@@ -37,13 +39,16 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
         },
     };
 
-    const tv = try alloc.create(value_mod.TypeValue);
-    tv.* = .{ .name = name, .descriptor = descriptor };
+    const tv = ctx.lookupBuiltinTypeValue(name) orelse blk: {
+        const alloc = ctx.quotationAllocator();
+        const new_tv = try alloc.create(value_mod.TypeValue);
+        new_tv.* = .{ .name = name, .descriptor = descriptor };
+        try ctx.registerBuiltinTypeValue(name, new_tv);
+        break :blk new_tv;
+    };
+    tv.descriptor = descriptor;
 
     try ctx.registerTypeDescriptor(name, descriptor);
-
-    // Register in the built-in type value mapping table for type-of lookups
-    try ctx.registerBuiltinTypeValue(name, tv);
 
     try ctx.stack.push(.{ .marker = @constCast(&markers_mod.parse_time_marker) });
     try ctx.stack.push(.{ .marker = @constCast(&markers_mod.const_marker) });

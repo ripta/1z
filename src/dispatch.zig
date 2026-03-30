@@ -49,6 +49,46 @@ pub fn dispatchTypeName(val: Value) []const u8 {
     };
 }
 
+/// Returns the canonical type name for a Value discriminant tag.
+/// For the three dynamic variants (.tagged, .struct_instance, .resource),
+/// returns the base type name used in the prelude's define-builtin-type.
+pub fn builtinTypeName(comptime tag: std.meta.Tag(Value)) []const u8 {
+    return switch (tag) {
+        .fixnum => "fixnum",
+        .float => "float",
+        .bignum => "bignum",
+        .boolean => "boolean",
+        .string => "string",
+        .symbol => "symbol",
+        .array => "array",
+        .quotation => "quotation",
+        .hash => "hash",
+        .vector => "vector",
+        .byte_array => "byte-array",
+        .set => "set",
+        .mutable_map => "mutable-map",
+        .stream => "stream",
+        .resource => "resource",
+        .parameter => "parameter",
+        .module => "module",
+        .marker => "marker",
+        .struct_type => "struct-type",
+        .struct_instance => "struct-instance",
+        .tagged => "tagged",
+        .template => "template",
+        .benchmark_report => "benchmark-report",
+        .stack_effect => "stack-effect",
+        .error_value => "error",
+        .task => "task",
+        .channel => "channel",
+        .iterator => "iterator",
+        .doc_string => "doc-string",
+        .type_val => "type",
+        .sandbox_spec => "sandbox-spec",
+        .unit => "unit",
+    };
+}
+
 /// Returns the enum name for a tagged value that is an enum variant,
 /// or null for everything else.
 pub fn dispatchEnumName(val: Value) ?[]const u8 {
@@ -556,4 +596,34 @@ test "register increments generation counter" {
         true,
     );
     try std.testing.expectEqual(@as(u32, 2), table.generation);
+}
+
+test "builtinTypeName matches dispatchTypeName for static variants" {
+    // Verify all non-dynamic variants produce the same name via both functions.
+    const num_variants = comptime @typeInfo(Value).@"union".fields.len;
+    inline for (0..num_variants) |i| {
+        const tag: std.meta.Tag(Value) = @enumFromInt(i);
+        const comptime_name = builtinTypeName(tag);
+
+        // Skip dynamic variants where dispatchTypeName reads from the value.
+        if (tag == .tagged or tag == .struct_instance or tag == .resource) continue;
+
+        // Construct a zero-initialized value with this discriminant.
+        const val: Value = switch (tag) {
+            .fixnum => .{ .fixnum = 0 },
+            .float => .{ .float = 0.0 },
+            .boolean => .{ .boolean = false },
+            .string => .{ .string = "" },
+            .symbol => .{ .symbol = "" },
+            .array => .{ .array = &.{} },
+            .doc_string => .{ .doc_string = "" },
+            .unit => .{ .unit = {} },
+            // For pointer-based variants, skip runtime check (would need valid allocations).
+            // The comptime name matching is sufficient for these.
+            else => continue,
+        };
+
+        const runtime_name = dispatchTypeName(val);
+        try std.testing.expectEqualStrings(comptime_name, runtime_name);
+    }
 }

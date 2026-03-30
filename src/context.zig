@@ -254,6 +254,11 @@ pub const Context = struct {
     /// Mapping from type name to registered TypeValue for built-in types.
     /// Populated by `define-builtin-type`; used by `type-of` for lookup.
     builtin_type_values: std.StringHashMapUnmanaged(*value_mod.TypeValue) = .{},
+    /// O(1) lookup of builtin TypeValue by Value discriminant index.
+    /// Populated at init time for all discriminants. The three dynamic
+    /// variants (.tagged, .struct_instance, .resource) have entries here
+    /// but callers should prefer the TypeValue embedded in those values.
+    builtin_type_array: []?*value_mod.TypeValue = &.{},
     /// Cache of TypeValues for resource types, keyed by resource type name.
     /// Lazily populated by `type-of` when encountering a resource.
     resource_type_values: std.StringHashMapUnmanaged(*value_mod.TypeValue) = .{},
@@ -307,6 +312,30 @@ pub const Context = struct {
             .call_word => |name| std.mem.eql(u8, name, ";"),
             .push_literal => false,
         };
+    }
+
+    /// Pre-create TypeValue objects for all builtin Value discriminants.
+    /// Called during init() before registerNativeDispatch(). Each TypeValue
+    /// starts with a null descriptor; define-builtin-type in the prelude
+    /// attaches descriptors later.
+    fn initBuiltinTypeValues(self: *Context) !void {
+        const alloc = self.arena.allocator();
+        const num_variants = comptime @typeInfo(value_mod.Value).@"union".fields.len;
+
+        const arr = try alloc.alloc(?*value_mod.TypeValue, num_variants);
+        @memset(arr, null);
+        self.builtin_type_array = arr;
+
+        inline for (0..num_variants) |i| {
+            const tag: std.meta.Tag(value_mod.Value) = @enumFromInt(i);
+            const name = dispatch_mod.builtinTypeName(tag);
+
+            const tv = try alloc.create(value_mod.TypeValue);
+            tv.* = .{ .name = name, .descriptor = null };
+
+            self.builtin_type_array[i] = tv;
+            try self.builtin_type_values.put(self.allocator, name, tv);
+        }
     }
 
     /// Initialize a new interpreter context with an empty stack and primitives.
@@ -363,6 +392,10 @@ pub const Context = struct {
         // Push the base type registry frame so boot-time registrations have a target.
         ctx.type_registry_frames.append(allocator, .{}) catch |err| {
             std.debug.panic("Failed to push base type registry frame: {any}", .{err});
+        };
+
+        ctx.initBuiltinTypeValues() catch |err| {
+            std.debug.panic("Failed to init builtin type values: {any}", .{err});
         };
 
         primitives.registerPrimitives(&ctx.dictionary, ctx.arena.allocator()) catch |err| {
@@ -1481,6 +1514,15 @@ pub const Context = struct {
         }
 
         return null;
+    }
+
+    /// Look up a builtin TypeValue by Value discriminant tag. O(1) array index.
+    /// Returns null only if the tag has no pre-created TypeValue (e.g., on
+    /// task contexts where the array is unpopulated).
+    pub fn lookupBuiltinTypeValueByTag(self: *const Context, tag: std.meta.Tag(value_mod.Value)) ?*value_mod.TypeValue {
+        const idx = @intFromEnum(tag);
+        if (idx >= self.builtin_type_array.len) return null;
+        return self.builtin_type_array[idx];
     }
 
     /// Look up a resource type value by type name, walking the parent context chain.
@@ -3620,4 +3662,51 @@ test "base behavior with no extra frames matches original" {
     // Should be findable via both the new API and the raw dispatch table
     try std.testing.expect(ctx.lookupUnaryDispatch("test-op", "fixnum") != null);
     try std.testing.expect(ctx.dispatch.lookupUnary("test-op", "fixnum") != null);
+}
+
+test "initBuiltinTypeValues populates all array slots" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    for (ctx.builtin_type_array) |slot| {
+        try std.testing.expect(slot != null);
+    }
+}
+
+test "initBuiltinTypeValues names match builtinTypeName" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const num_variants = comptime @typeInfo(value_mod.Value).@"union".fields.len;
+    inline for (0..num_variants) |i| {
+        const tag: std.meta.Tag(value_mod.Value) = @enumFromInt(i);
+        const expected = dispatch_mod.builtinTypeName(tag);
+        const tv = ctx.builtin_type_array[i].?;
+        try std.testing.expectEqualStrings(expected, tv.name);
+    }
+}
+
+test "lookupBuiltinTypeValueByTag returns same pointer as name lookup" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const num_variants = comptime @typeInfo(value_mod.Value).@"union".fields.len;
+    inline for (0..num_variants) |i| {
+        const tag: std.meta.Tag(value_mod.Value) = @enumFromInt(i);
+        const by_tag = ctx.lookupBuiltinTypeValueByTag(tag);
+        const by_name = ctx.lookupBuiltinTypeValue(dispatch_mod.builtinTypeName(tag));
+        try std.testing.expect(by_tag != null);
+        try std.testing.expect(by_name != null);
+        try std.testing.expect(by_tag.? == by_name.?);
+    }
+}
+
+test "initBuiltinTypeValues creates TypeValues with null descriptors" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // Before prelude, all descriptors should be null.
+    const tv = ctx.lookupBuiltinTypeValue("fixnum");
+    try std.testing.expect(tv != null);
+    try std.testing.expect(tv.?.descriptor == null);
 }
