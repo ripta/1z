@@ -11,55 +11,14 @@ pub const primitives = [_]Primitive{
 
 /// type-of ( val -- type ) - Return the type of a value as a first-class type value.
 ///
-/// For tagged values (virtual types), returns the TypeValue stored on the VirtualType.
-/// For struct instances, returns the TypeValue stored on the StructType.
-/// For resources, lazily creates and caches a TypeValue by the resource's type name.
-/// For all other types, looks up the TypeValue by dispatch type name, walking the
-/// parent context chain to find built-in type registrations from the prelude.
+/// Delegates to `dispatchTypeValue` which handles all value variants:
+/// tagged (VirtualType.type_val), struct instances (StructType.type_val),
+/// resources (lazy TypeValue creation), and builtins (discriminant-indexed
+/// array lookup).
 fn nativeTypeOf(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
-
-    // Tagged values: follow VirtualType.type_val
-    if (val == .tagged) {
-        if (val.tagged.tag.type_val) |tv| {
-            try ctx.stack.push(.{ .type_val = tv });
-            return;
-        }
-    }
-
-    // Struct instances: follow StructType.type_val
-    if (val == .struct_instance) {
-        if (val.struct_instance.struct_type.type_val) |tv| {
-            try ctx.stack.push(.{ .type_val = tv });
-            return;
-        }
-    }
-
-    // Resources: lazily create and cache TypeValue by resource type name
-    if (val == .resource) {
-        const type_name = val.resource.type_name;
-        if (ctx.lookupResourceTypeValue(type_name)) |tv| {
-            try ctx.stack.push(.{ .type_val = tv });
-            return;
-        }
-        const alloc = ctx.quotationAllocator();
-        const tv = try alloc.create(value_mod.TypeValue);
-        tv.* = .{ .name = type_name, .descriptor = null };
-        try ctx.registerResourceTypeValue(type_name, tv);
-        try ctx.stack.push(.{ .type_val = tv });
-        return;
-    }
-
-    // Built-in types: lookup by dispatch type name, walking parent context chain
-    const type_name = dispatch.dispatchTypeName(val);
-    if (ctx.lookupBuiltinTypeValue(type_name)) |tv| {
-        try ctx.stack.push(.{ .type_val = tv });
-        return;
-    }
-
-    // Fallback: during early bootstrap before define-builtin-type runs,
-    // return a symbol as before.
-    try ctx.stack.push(.{ .symbol = type_name });
+    const tv = dispatch.dispatchTypeValue(val, ctx);
+    try ctx.stack.push(.{ .type_val = tv });
 }
 
 /// instance-of? ( val type -- ? ) - Check whether a value is an instance of the given type.
@@ -71,26 +30,14 @@ fn nativeInstanceOf(ctx: *Context) anyerror!void {
     const tv = try helpers.popAs(.type_val, ctx);
     const val = try ctx.stack.pop();
 
-    const val_tv: ?*const value_mod.TypeValue = blk: {
-        if (val == .tagged) {
-            break :blk val.tagged.tag.type_val;
-        }
-        if (val == .struct_instance) {
-            break :blk val.struct_instance.struct_type.type_val;
-        }
-        if (val == .resource) {
-            break :blk ctx.lookupResourceTypeValue(val.resource.type_name);
-        }
-        break :blk ctx.lookupBuiltinTypeValue(dispatch.dispatchTypeName(val));
-    };
+    const val_tv: *const value_mod.TypeValue = dispatch.dispatchTypeValue(val, ctx);
 
-    if (val_tv) |vt| {
-        if (vt == tv) {
-            try ctx.stack.push(.{ .boolean = true });
-            return;
-        }
+    if (val_tv == tv) {
+        try ctx.stack.push(.{ .boolean = true });
+        return;
     }
 
+    // For tagged values, also check parent (enum) and base (parameterized) types.
     if (val == .tagged) {
         if (val.tagged.tag.parent_type) |pt| {
             if (pt == tv) {

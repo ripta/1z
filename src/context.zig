@@ -1516,13 +1516,24 @@ pub const Context = struct {
         return null;
     }
 
-    /// Look up a builtin TypeValue by Value discriminant tag. O(1) array index.
-    /// Returns null only if the tag has no pre-created TypeValue (e.g., on
-    /// task contexts where the array is unpopulated).
+    /// Look up a builtin TypeValue by Value discriminant tag, O(1) array index.
+    /// Walks the parent context chain if the local array is unpopulated,
+    /// e.g., on task contexts.
     pub fn lookupBuiltinTypeValueByTag(self: *const Context, tag: std.meta.Tag(value_mod.Value)) ?*value_mod.TypeValue {
         const idx = @intFromEnum(tag);
-        if (idx >= self.builtin_type_array.len) return null;
-        return self.builtin_type_array[idx];
+        if (idx < self.builtin_type_array.len) {
+            if (self.builtin_type_array[idx]) |tv| return tv;
+        }
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            if (idx < ctx.builtin_type_array.len) {
+                if (ctx.builtin_type_array[idx]) |tv| return tv;
+            }
+            ancestor = ctx.parent_context;
+        }
+
+        return null;
     }
 
     /// Look up a resource type value by type name, walking the parent context chain.
@@ -1556,6 +1567,19 @@ pub const Context = struct {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
         try self.resource_type_values.put(self.allocator, name, tv);
+    }
+
+    /// Look up a resource TypeValue by name, creating and registering one if it does not exist yet.
+    /// This centralizes the lazy-creation pattern used by `type-of` and `dispatchTypeValue`.
+    pub fn getOrCreateResourceTypeValue(self: *Context, name: []const u8) !*value_mod.TypeValue {
+        if (self.lookupResourceTypeValue(name)) |tv| return tv;
+
+        const alloc = self.quotationAllocator();
+        const tv = try alloc.create(value_mod.TypeValue);
+        tv.* = .{ .name = name, .descriptor = null };
+
+        try self.registerResourceTypeValue(name, tv);
+        return tv;
     }
 
     // =========================================================================
@@ -2499,18 +2523,10 @@ pub const Context = struct {
             const stack_index = self.stack.depth() - 1 - offset_from_top;
             const val = self.stack.items.items[stack_index];
 
-            const val_tv: ?*const value_mod.TypeValue = blk: {
-                if (val == .tagged) break :blk val.tagged.tag.type_val;
-                if (val == .struct_instance) break :blk val.struct_instance.struct_type.type_val;
-                if (val == .resource) break :blk self.lookupResourceTypeValue(val.resource.type_name);
-                break :blk self.lookupBuiltinTypeValue(dispatch_mod.dispatchTypeName(val));
-            };
-
-            // Skip check if type values aren't registered yet, e.g., bootstrapping phase
-            if (val_tv == null) continue;
+            const val_tv: *const value_mod.TypeValue = dispatch_mod.dispatchTypeValue(val, self);
 
             // Regular types: direct pointer match
-            if (val_tv.? == expected_tv) continue;
+            if (val_tv == expected_tv) continue;
 
             // Tagged values: check parent_type for parameterized types and base_type for enum variant matching
             //
@@ -2526,7 +2542,7 @@ pub const Context = struct {
             }
 
             // Type mismatch
-            const actual_name = if (val_tv) |vt| vt.name else "unknown";
+            const actual_name = val_tv.name;
             const msg = std.fmt.allocPrint(self.arena.allocator(), "type mismatch for parameter '{s}': expected {s}, got {s}", .{ param.name, expected_tv.name, actual_name }) catch "type mismatch";
 
             const is_warning = if (self.getPragma("type-check")) |pv2| switch (pv2) {

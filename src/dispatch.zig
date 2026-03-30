@@ -49,6 +49,20 @@ pub fn dispatchTypeName(val: Value) []const u8 {
     };
 }
 
+/// Returns the dispatch TypeValue for a value. Requires a Context for the
+/// builtin_type_array and resource type lookup. For tagged values and struct
+/// instances, returns the specific type's TypeValue when available, falling
+/// back to the discriminant-level builtin TypeValue.
+pub fn dispatchTypeValue(val: Value, ctx: *@import("context.zig").Context) *value_mod.TypeValue {
+    return switch (val) {
+        .tagged => |t| t.tag.type_val orelse ctx.lookupBuiltinTypeValueByTag(.tagged).?,
+        .struct_instance => |si| si.struct_type.type_val orelse ctx.lookupBuiltinTypeValueByTag(.struct_instance).?,
+        .resource => |r| ctx.getOrCreateResourceTypeValue(r.type_name) catch
+            ctx.lookupBuiltinTypeValueByTag(.resource).?,
+        inline else => |_, tag| ctx.lookupBuiltinTypeValueByTag(tag).?,
+    };
+}
+
 /// Returns the canonical type name for a Value discriminant tag.
 /// For the three dynamic variants (.tagged, .struct_instance, .resource),
 /// returns the base type name used in the prelude's define-builtin-type.
@@ -625,5 +639,105 @@ test "builtinTypeName matches dispatchTypeName for static variants" {
 
         const runtime_name = dispatchTypeName(val);
         try std.testing.expectEqualStrings(comptime_name, runtime_name);
+    }
+}
+
+test "dispatchTypeValue returns correct TypeValue for builtin types" {
+    var ctx = @import("context.zig").Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = dispatchTypeValue(.{ .fixnum = 42 }, &ctx);
+    try std.testing.expectEqualStrings("fixnum", fixnum_tv.name);
+
+    const bool_tv = dispatchTypeValue(.{ .boolean = true }, &ctx);
+    try std.testing.expectEqualStrings("boolean", bool_tv.name);
+
+    const string_tv = dispatchTypeValue(.{ .string = "hello" }, &ctx);
+    try std.testing.expectEqualStrings("string", string_tv.name);
+
+    const symbol_tv = dispatchTypeValue(.{ .symbol = "foo" }, &ctx);
+    try std.testing.expectEqualStrings("symbol", symbol_tv.name);
+
+    const unit_tv = dispatchTypeValue(.{ .unit = {} }, &ctx);
+    try std.testing.expectEqualStrings("unit", unit_tv.name);
+}
+
+test "dispatchTypeValue returns VirtualType type_val for tagged values" {
+    var ctx = @import("context.zig").Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
+    const vt = value_mod.VirtualType{ .name = "duration", .inner_type = "fixnum", .type_val = &tv };
+    const inner = Value{ .fixnum = 42 };
+    const tagged = Value{ .tagged = .{ .tag = &vt, .inner = &inner } };
+
+    const result = dispatchTypeValue(tagged, &ctx);
+    try std.testing.expectEqual(&tv, result);
+    try std.testing.expectEqualStrings("duration", result.name);
+}
+
+test "dispatchTypeValue falls back to builtin for tagged without type_val" {
+    var ctx = @import("context.zig").Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const vt = value_mod.VirtualType{ .name = "legacy", .inner_type = "fixnum" };
+    const inner = Value{ .fixnum = 42 };
+    const tagged = Value{ .tagged = .{ .tag = &vt, .inner = &inner } };
+
+    const result = dispatchTypeValue(tagged, &ctx);
+    try std.testing.expectEqualStrings("tagged", result.name);
+}
+
+test "dispatchTypeValue returns StructType type_val for struct instances" {
+    var ctx = @import("context.zig").Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var tv = value_mod.TypeValue{ .name = "point", .descriptor = null };
+    const st = value_mod.StructType{ .name = "point", .fields = &.{ "x", "y" }, .type_val = &tv };
+    var si = value_mod.StructInstance{ .struct_type = &st, .fields = &.{} };
+
+    const result = dispatchTypeValue(.{ .struct_instance = &si }, &ctx);
+    try std.testing.expectEqual(&tv, result);
+    try std.testing.expectEqualStrings("point", result.name);
+}
+
+test "dispatchTypeValue creates TypeValue for resources" {
+    var ctx = @import("context.zig").Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var r = value_mod.Resource{ .type_name = "sqlite-db" };
+    const result = dispatchTypeValue(.{ .resource = &r }, &ctx);
+    try std.testing.expectEqualStrings("sqlite-db", result.name);
+
+    // Second call returns the same pointer (cached).
+    const result2 = dispatchTypeValue(.{ .resource = &r }, &ctx);
+    try std.testing.expectEqual(result, result2);
+}
+
+test "dispatchTypeValue .name matches dispatchTypeName for builtin types" {
+    var ctx = @import("context.zig").Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const num_variants = comptime @typeInfo(Value).@"union".fields.len;
+    inline for (0..num_variants) |i| {
+        const tag: std.meta.Tag(Value) = @enumFromInt(i);
+
+        if (tag == .tagged or tag == .struct_instance or tag == .resource) continue;
+
+        const val: Value = switch (tag) {
+            .fixnum => .{ .fixnum = 0 },
+            .float => .{ .float = 0.0 },
+            .boolean => .{ .boolean = false },
+            .string => .{ .string = "" },
+            .symbol => .{ .symbol = "" },
+            .array => .{ .array = &.{} },
+            .doc_string => .{ .doc_string = "" },
+            .unit => .{ .unit = {} },
+            else => continue,
+        };
+
+        const tv = dispatchTypeValue(val, &ctx);
+        const name = dispatchTypeName(val);
+        try std.testing.expectEqualStrings(name, tv.name);
     }
 }

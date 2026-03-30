@@ -550,7 +550,7 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
     // dispatch: seq is at position 2, below n and value
     if (ctx.stack.depth() >= 3) {
         const seq_peek = try ctx.stack.peekN(2);
-        const a_type = dispatch_mod.dispatchTypeName(seq_peek);
+        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx).name;
         if (ctx.lookupUnaryDispatch("#nth!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
@@ -950,7 +950,7 @@ pub fn nativeAppendMut(ctx: *Context) anyerror!void {
     // dispatch: vec is at position 1, below seq
     if (ctx.stack.depth() >= 2) {
         const seq_peek = try ctx.stack.peekN(1);
-        const a_type = dispatch_mod.dispatchTypeName(seq_peek);
+        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx).name;
         if (ctx.lookupUnaryDispatch("#append!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
@@ -1387,7 +1387,7 @@ fn nativePushMut(ctx: *Context) anyerror!void {
     // dispatch: vec is at position 1, below elem
     if (ctx.stack.depth() >= 2) {
         const seq_peek = try ctx.stack.peekN(1);
-        const a_type = dispatch_mod.dispatchTypeName(seq_peek);
+        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx).name;
         if (ctx.lookupUnaryDispatch("#push!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
@@ -1422,7 +1422,7 @@ fn nativePopMut(ctx: *Context) anyerror!void {
     // dispatch: vec is at position 0
     if (ctx.stack.depth() >= 1) {
         const seq_peek = try ctx.stack.peek();
-        const a_type = dispatch_mod.dispatchTypeName(seq_peek);
+        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx).name;
         if (ctx.lookupUnaryDispatch("#pop!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
@@ -1459,7 +1459,7 @@ fn nativeUnshiftMut(ctx: *Context) anyerror!void {
     // dispatch: vec is at position 1, below elem
     if (ctx.stack.depth() >= 2) {
         const seq_peek = try ctx.stack.peekN(1);
-        const a_type = dispatch_mod.dispatchTypeName(seq_peek);
+        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx).name;
         if (ctx.lookupUnaryDispatch("#unshift!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
@@ -1494,7 +1494,7 @@ fn nativeShiftMut(ctx: *Context) anyerror!void {
     // dispatch: vec is at position 0
     if (ctx.stack.depth() >= 1) {
         const seq_peek = try ctx.stack.peek();
-        const a_type = dispatch_mod.dispatchTypeName(seq_peek);
+        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx).name;
         if (ctx.lookupUnaryDispatch("#shift!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
@@ -2306,7 +2306,7 @@ fn nativePeek(ctx: *Context) anyerror!void {
     // dispatch: byte-array is at stack depth 2 (below offset and width)
     if (ctx.stack.depth() >= 3) {
         const seq_peek = try ctx.stack.peekN(2);
-        const a_type = dispatch_mod.dispatchTypeName(seq_peek);
+        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx).name;
         if (ctx.lookupUnaryDispatch("#peek", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
@@ -2343,7 +2343,7 @@ fn nativePoke(ctx: *Context) anyerror!void {
     // dispatch: byte-array is at stack depth 3 (below offset, value, and width)
     if (ctx.stack.depth() >= 4) {
         const seq_peek = try ctx.stack.peekN(3);
-        const a_type = dispatch_mod.dispatchTypeName(seq_peek);
+        const a_type = dispatch_mod.dispatchTypeValue(seq_peek, ctx).name;
         if (ctx.lookupUnaryDispatch("#poke!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;

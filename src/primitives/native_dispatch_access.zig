@@ -12,8 +12,8 @@ fn makeBinaryNativeAccessEntry(comptime word_name: []const u8) *const fn (*Conte
             const b = try ctx.stack.peek();
             const a = try ctx.stack.peekN(1);
 
-            const type_a = dispatch_mod.dispatchTypeName(a);
-            const type_b = dispatch_mod.dispatchTypeName(b);
+            const type_a = dispatch_mod.dispatchTypeValue(a, ctx).name;
+            const type_b = dispatch_mod.dispatchTypeValue(b, ctx).name;
 
             if (ctx.lookupNativeBinaryDispatch(word_name, type_a, type_b)) |entry| {
                 try dispatch_helpers.executeDispatchBody(ctx, entry.body);
@@ -32,7 +32,7 @@ fn makeUnaryNativeAccessEntry(comptime word_name: []const u8) *const fn (*Contex
             if (ctx.stack.depth() < 1) return error.StackUnderflow;
 
             const a = try ctx.stack.peek();
-            const type_a = dispatch_mod.dispatchTypeName(a);
+            const type_a = dispatch_mod.dispatchTypeValue(a, ctx).name;
 
             if (ctx.lookupNativeUnaryDispatch(word_name, type_a)) |entry| {
                 try dispatch_helpers.executeDispatchBody(ctx, entry.body);

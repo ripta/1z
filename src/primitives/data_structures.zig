@@ -264,7 +264,7 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
     // dispatch: mmap is at position 2 (below key and value)
     if (ctx.stack.depth() >= 3) {
         const mmap_peek = try ctx.stack.peekN(2);
-        const a_type = dispatch_mod.dispatchTypeName(mmap_peek);
+        const a_type = dispatch_mod.dispatchTypeValue(mmap_peek, ctx).name;
         if (ctx.lookupUnaryDispatch("@set!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;
@@ -323,7 +323,7 @@ pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
     // dispatch: mmap is at position 1 (below key)
     if (ctx.stack.depth() >= 2) {
         const mmap_peek = try ctx.stack.peekN(1);
-        const a_type = dispatch_mod.dispatchTypeName(mmap_peek);
+        const a_type = dispatch_mod.dispatchTypeValue(mmap_peek, ctx).name;
         if (ctx.lookupUnaryDispatch("@remove!", a_type)) |entry| {
             try dispatch_helpers.executeDispatchBody(ctx, entry.body);
             return;

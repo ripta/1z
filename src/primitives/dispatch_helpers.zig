@@ -44,8 +44,8 @@ const AutoUnwrap = struct {
 };
 
 fn lookupBinaryWithFallback(ctx: *Context, word_name: []const u8, a: Value, b: Value) ?AutoUnwrap {
-    const a_type = dispatch_mod.dispatchTypeName(a);
-    const b_type = dispatch_mod.dispatchTypeName(b);
+    const a_type = dispatch_mod.dispatchTypeValue(a, ctx).name;
+    const b_type = dispatch_mod.dispatchTypeValue(b, ctx).name;
     if (ctx.lookupBinaryDispatch(word_name, a_type, b_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
 
     const a_enum = dispatch_mod.dispatchEnumName(a);
@@ -86,7 +86,7 @@ fn lookupBinaryWithFallback(ctx: *Context, word_name: []const u8, a: Value, b: V
 /// 1. Exact variant type name (includes wildcard expansion)
 /// 2. Enum name fallback
 fn lookupUnaryWithFallback(ctx: *Context, word_name: []const u8, a: Value) ?AutoUnwrap {
-    const a_type = dispatch_mod.dispatchTypeName(a);
+    const a_type = dispatch_mod.dispatchTypeValue(a, ctx).name;
     if (ctx.lookupUnaryDispatch(word_name, a_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
 
     if (dispatch_mod.dispatchEnumName(a)) |ae| {
@@ -124,8 +124,8 @@ pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
             if (cache.count > 0 and cache.generation != ctx.dispatch.generation) {
                 cache.count = 0;
             } else if (cache.count > 0) {
-                const a_type = dispatch_mod.dispatchTypeName(a);
-                const b_type = dispatch_mod.dispatchTypeName(b);
+                const a_type = dispatch_mod.dispatchTypeValue(a, ctx).name;
+                const b_type = dispatch_mod.dispatchTypeValue(b, ctx).name;
                 if (cache.lookup(a_type, b_type)) |entry| {
                     if (entry.unwrap_a or entry.unwrap_b) {
                         try autoUnwrapBinaryOperands(ctx, entry.unwrap_a, entry.unwrap_b);
@@ -140,8 +140,8 @@ pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
     if (lookupBinaryWithFallback(ctx, word_name, a, b)) |result| {
         if (ctx.current_pic_entry) |cache| {
             if (!cache.megamorphic) {
-                const a_type = dispatch_mod.dispatchTypeName(a);
-                const b_type = dispatch_mod.dispatchTypeName(b);
+                const a_type = dispatch_mod.dispatchTypeValue(a, ctx).name;
+                const b_type = dispatch_mod.dispatchTypeValue(b, ctx).name;
                 cache.insert(.{
                     .type_a = a_type,
                     .type_b = b_type,
@@ -180,7 +180,7 @@ pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
             if (cache.count > 0 and cache.generation != ctx.dispatch.generation) {
                 cache.count = 0;
             } else if (cache.count > 0) {
-                const a_type = dispatch_mod.dispatchTypeName(a);
+                const a_type = dispatch_mod.dispatchTypeValue(a, ctx).name;
                 if (cache.lookup(a_type, "")) |entry| {
                     if (entry.unwrap_a) {
                         try autoUnwrapTopOperand(ctx);
@@ -195,7 +195,7 @@ pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
     if (lookupUnaryWithFallback(ctx, word_name, a)) |result| {
         if (ctx.current_pic_entry) |cache| {
             if (!cache.megamorphic) {
-                const a_type = dispatch_mod.dispatchTypeName(a);
+                const a_type = dispatch_mod.dispatchTypeValue(a, ctx).name;
                 cache.insert(.{
                     .type_a = a_type,
                     .type_b = "",
@@ -291,8 +291,8 @@ pub fn tryDispatchGenericWithPic(ctx: *Context, word_name: []const u8, pic: ?*Po
                 if (ctx.stack.depth() >= 2) {
                     const a = try ctx.stack.peekN(1);
                     const b = try ctx.stack.peek();
-                    const a_type = dispatch_mod.dispatchTypeName(a);
-                    const b_type = dispatch_mod.dispatchTypeName(b);
+                    const a_type = dispatch_mod.dispatchTypeValue(a, ctx).name;
+                    const b_type = dispatch_mod.dispatchTypeValue(b, ctx).name;
                     if (cache.lookup(a_type, b_type)) |entry| {
                         if (entry.unwrap_a or entry.unwrap_b) {
                             try autoUnwrapBinaryOperands(ctx, entry.unwrap_a, entry.unwrap_b);
@@ -302,7 +302,7 @@ pub fn tryDispatchGenericWithPic(ctx: *Context, word_name: []const u8, pic: ?*Po
                     }
                 } else if (ctx.stack.depth() >= 1) {
                     const a = try ctx.stack.peek();
-                    const a_type = dispatch_mod.dispatchTypeName(a);
+                    const a_type = dispatch_mod.dispatchTypeValue(a, ctx).name;
                     if (cache.lookup(a_type, "")) |entry| {
                         if (entry.unwrap_a) {
                             try autoUnwrapTopOperand(ctx);
@@ -321,8 +321,8 @@ pub fn tryDispatchGenericWithPic(ctx: *Context, word_name: []const u8, pic: ?*Po
         if (lookupBinaryWithFallback(ctx, word_name, a, b)) |result| {
             if (pic) |cache| {
                 if (!cache.megamorphic) {
-                    const a_type = dispatch_mod.dispatchTypeName(a);
-                    const b_type = dispatch_mod.dispatchTypeName(b);
+                    const a_type = dispatch_mod.dispatchTypeValue(a, ctx).name;
+                    const b_type = dispatch_mod.dispatchTypeValue(b, ctx).name;
                     cache.insert(.{
                         .type_a = a_type,
                         .type_b = b_type,
@@ -346,7 +346,7 @@ pub fn tryDispatchGenericWithPic(ctx: *Context, word_name: []const u8, pic: ?*Po
         if (lookupUnaryWithFallback(ctx, word_name, a)) |result| {
             if (pic) |cache| {
                 if (!cache.megamorphic) {
-                    const a_type = dispatch_mod.dispatchTypeName(a);
+                    const a_type = dispatch_mod.dispatchTypeValue(a, ctx).name;
                     cache.insert(.{
                         .type_a = a_type,
                         .type_b = "",

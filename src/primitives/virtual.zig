@@ -684,19 +684,19 @@ fn typedValidateAndPromote(ctx: *Context) anyerror!void {
         return;
     }
 
-    const expected = params[0].name;
-    const actual = dispatch_mod.dispatchTypeName(val);
-    if (std.mem.eql(u8, actual, expected)) {
+    const expected_tv = params[0];
+    const actual_tv = dispatch_mod.dispatchTypeValue(val, ctx);
+    if (actual_tv == expected_tv) {
         try ctx.stack.push(val);
         return;
     }
 
-    if (tryPromoteElement(alloc, val, expected)) |promoted| {
+    if (tryPromoteElement(alloc, val, expected_tv.name)) |promoted| {
         try ctx.stack.push(promoted);
         return;
     }
 
-    helpers.setErrorContext(ctx, "{s} element has type {s}, expected {s}", .{ vt.name, actual, expected });
+    helpers.setErrorContext(ctx, "{s} element has type {s}, expected {s}", .{ vt.name, actual_tv.name, expected_tv.name });
     return error.TypeMismatch;
 }
 
@@ -719,7 +719,7 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
         return;
     }
 
-    const expected = params[0].name;
+    const expected_tv = params[0];
     const items: []const Value = switch (seq) {
         .array => |arr| arr,
         .vector => |v| v.items,
@@ -731,9 +731,9 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
 
     var promoted_items: ?std.ArrayListUnmanaged(Value) = null;
     for (items, 0..) |elem, i| {
-        const actual = dispatch_mod.dispatchTypeName(elem);
-        if (!std.mem.eql(u8, actual, expected)) {
-            if (tryPromoteElement(alloc, elem, expected)) |promoted| {
+        const actual_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
+        if (actual_tv != expected_tv) {
+            if (tryPromoteElement(alloc, elem, expected_tv.name)) |promoted| {
                 if (promoted_items == null) {
                     promoted_items = std.ArrayListUnmanaged(Value){};
                     promoted_items.?.ensureTotalCapacity(alloc, items.len) catch return error.OutOfMemory;
@@ -741,7 +741,7 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
                 }
                 promoted_items.?.append(alloc, promoted) catch return error.OutOfMemory;
             } else {
-                helpers.setErrorContext(ctx, "{s} element at index {d} has type {s}, expected {s}", .{ vt.name, i, actual, expected });
+                helpers.setErrorContext(ctx, "{s} element at index {d} has type {s}, expected {s}", .{ vt.name, i, actual_tv.name, expected_tv.name });
                 return error.TypeMismatch;
             }
         } else if (promoted_items) |*pi| {
@@ -781,13 +781,13 @@ fn typedNthMutDispatch(ctx: *Context) anyerror!void {
     // Validate and promote element
     if (vt.type_params) |params| {
         if (params.len > 0) {
-            const expected = params[0].name;
-            const actual = dispatch_mod.dispatchTypeName(elem);
-            if (!std.mem.eql(u8, actual, expected)) {
-                if (tryPromoteElement(alloc, elem, expected)) |promoted| {
+            const expected_tv = params[0];
+            const actual_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
+            if (actual_tv != expected_tv) {
+                if (tryPromoteElement(alloc, elem, expected_tv.name)) |promoted| {
                     elem = promoted;
                 } else {
-                    helpers.setErrorContext(ctx, "{s} element has type {s}, expected {s}", .{ vt.name, actual, expected });
+                    helpers.setErrorContext(ctx, "{s} element has type {s}, expected {s}", .{ vt.name, actual_tv.name, expected_tv.name });
                     return error.TypeMismatch;
                 }
             }
@@ -828,13 +828,13 @@ fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
     // Validate and promote value
     if (vt.type_params) |params| {
         if (params.len > 0) {
-            const expected = params[0].name;
-            const actual = dispatch_mod.dispatchTypeName(new_value);
-            if (!std.mem.eql(u8, actual, expected)) {
-                if (tryPromoteElement(alloc, new_value, expected)) |promoted| {
+            const expected_tv = params[0];
+            const actual_tv = dispatch_mod.dispatchTypeValue(new_value, ctx);
+            if (actual_tv != expected_tv) {
+                if (tryPromoteElement(alloc, new_value, expected_tv.name)) |promoted| {
                     new_value = promoted;
                 } else {
-                    helpers.setErrorContext(ctx, "{s} element has type {s}, expected {s}", .{ vt.name, actual, expected });
+                    helpers.setErrorContext(ctx, "{s} element has type {s}, expected {s}", .{ vt.name, actual_tv.name, expected_tv.name });
                     return error.TypeMismatch;
                 }
             }
@@ -958,21 +958,21 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
 
     if (vt.type_params) |params| {
         if (params.len > 0) {
-            const expected_elem_type = params[0].name;
+            const expected_tv = params[0];
             switch (val) {
                 .array => |arr| {
                     var promoted_arr: ?[]Value = null;
                     for (arr, 0..) |elem, i| {
-                        const elem_type = dispatch_mod.dispatchTypeName(elem);
-                        if (!std.mem.eql(u8, elem_type, expected_elem_type)) {
-                            if (tryPromoteElement(alloc, elem, expected_elem_type)) |promoted| {
+                        const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
+                        if (elem_tv != expected_tv) {
+                            if (tryPromoteElement(alloc, elem, expected_tv.name)) |promoted| {
                                 if (promoted_arr == null) {
                                     promoted_arr = try alloc.alloc(Value, arr.len);
                                     @memcpy(promoted_arr.?[0..i], arr[0..i]);
                                 }
                                 promoted_arr.?[i] = promoted;
                             } else {
-                                helpers.setErrorContext(ctx, ">{s} element at index {d} has type {s}, expected {s}", .{ vt.name, i, elem_type, expected_elem_type });
+                                helpers.setErrorContext(ctx, ">{s} element at index {d} has type {s}, expected {s}", .{ vt.name, i, elem_tv.name, expected_tv.name });
                                 return error.TypeMismatch;
                             }
                         } else if (promoted_arr) |pa| {
