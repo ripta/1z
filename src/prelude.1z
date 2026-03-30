@@ -294,6 +294,8 @@ exact?: ( val -- ? ) [ "exact" type-has-property? ] ;
 inexact?: ( val -- ? ) [ dup number? [ exact? not ] [ drop f ] if ] ;
 \\ True for any integer type.
 integer?: ( val -- ? ) [ "integer" type-has-property? ] ;
+\\ True for mutable types.
+mutable?: ( val -- ? ) [ "mutable" type-has-property? ] ;
 
 \\ Push IEEE 754 NaN (not a number).
 nan: ( -- f ) [ 0.0 0.0 / ] ;

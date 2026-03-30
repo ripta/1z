@@ -470,6 +470,7 @@ module>> ( instance -- value )
 module? ( val -- ? )
 mutable-map
 mutable-map? ( val -- ? )
+mutable? ( val -- ? )
 my-test-word
 name>> ( instance -- value )
 nan ( -- f )

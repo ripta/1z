@@ -1,0 +1,29 @@
+\ Tests for mutable? predicate
+
+use "testing" ;
+
+"Mutable built-in types" test-section
+
+V{ 1 2 3 } mutable? t "vector is mutable" assert=
+M{ } mutable? t "mutable-map is mutable" assert=
+B{ 1 2 3 } mutable? t "byte-array is mutable" assert=
+stdin mutable? t "stream is mutable" assert=
+[ <channel> mutable? t "channel is mutable" assert= ] task-scope
+
+"Immutable built-in types" test-section
+
+{ 1 2 3 } mutable? f "array is not mutable" assert=
+H{ } mutable? f "hash is not mutable" assert=
+"hello" mutable? f "string is not mutable" assert=
+S{ 1 2 3 } mutable? f "set is not mutable" assert=
+42 mutable? f "fixnum is not mutable" assert=
+
+"Mutable struct instance" test-section
+
+mut-pt: mutable struct{ x y } ;
+1 2 make-mut-pt mutable? t "mutable struct is mutable" assert=
+
+"Immutable struct instance" test-section
+
+imm-pt: struct{ x y } ;
+1 2 make-imm-pt mutable? f "immutable struct is not mutable" assert=

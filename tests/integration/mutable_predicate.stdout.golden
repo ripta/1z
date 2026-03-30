@@ -1,0 +1,34 @@
+=== Mutable built-in types ===
+Stack: [ ]
+PASS: vector is mutable
+Stack: [ ]
+PASS: mutable-map is mutable
+Stack: [ ]
+PASS: byte-array is mutable
+Stack: [ ]
+PASS: stream is mutable
+Stack: [ ]
+PASS: channel is mutable
+Stack: [ ]
+=== Immutable built-in types ===
+Stack: [ ]
+PASS: array is not mutable
+Stack: [ ]
+PASS: hash is not mutable
+Stack: [ ]
+PASS: string is not mutable
+Stack: [ ]
+PASS: set is not mutable
+Stack: [ ]
+PASS: fixnum is not mutable
+Stack: [ ]
+=== Mutable struct instance ===
+Stack: [ ]
+Stack: [ ]
+PASS: mutable struct is mutable
+Stack: [ ]
+=== Immutable struct instance ===
+Stack: [ ]
+Stack: [ ]
+PASS: immutable struct is not mutable
+Stack: [ ]
