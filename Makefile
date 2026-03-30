@@ -2,6 +2,7 @@
 
 SHELL := /bin/bash
 TIMEOUT := 45
+MAKEFLAGS += -j4
 
 all: build test
 
