@@ -1,0 +1,27 @@
+\ Tests for mutable descriptor propagation
+
+use "testing" ;
+
+"Built-in mutable types have mutable property" test-section
+
+V{ 1 2 3 } "mutable" type-has-property? t "vector has mutable" assert=
+M{ } "mutable" type-has-property? t "mutable-map has mutable" assert=
+B{ 1 2 3 } "mutable" type-has-property? t "byte-array has mutable" assert=
+
+"Built-in immutable types lack mutable property" test-section
+
+{ 1 2 3 } "mutable" type-has-property? f "array lacks mutable" assert=
+H{ } "mutable" type-has-property? f "hash lacks mutable" assert=
+"hello" "mutable" type-has-property? f "string lacks mutable" assert=
+S{ 1 2 3 } "mutable" type-has-property? f "set lacks mutable" assert=
+42 "mutable" type-has-property? f "fixnum lacks mutable" assert=
+
+"Mutable struct has mutable property" test-section
+
+mutable-point: mutable struct{ x y } ;
+1 2 make-mutable-point "mutable" type-has-property? t "mutable struct has mutable" assert=
+
+"Immutable struct lacks mutable property" test-section
+
+imm-point: struct{ x y } ;
+1 2 make-imm-point "mutable" type-has-property? f "immutable struct lacks mutable" assert=

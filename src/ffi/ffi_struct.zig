@@ -387,6 +387,10 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
 
     try desc_map.put(alloc, "ffi-layout", .{ .fixnum = @intCast(@intFromPtr(layout)) });
 
+    if (has_mutable) {
+        try desc_map.put(alloc, "mutable", .{ .boolean = true });
+    }
+
     const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
     try ctx.registerTypeDescriptor(name, frozen_desc);
     vtype.type_val.?.descriptor = frozen_desc;

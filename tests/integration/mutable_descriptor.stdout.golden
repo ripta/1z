@@ -1,0 +1,30 @@
+=== Built-in mutable types have mutable property ===
+Stack: [ ]
+PASS: vector has mutable
+Stack: [ ]
+PASS: mutable-map has mutable
+Stack: [ ]
+PASS: byte-array has mutable
+Stack: [ ]
+=== Built-in immutable types lack mutable property ===
+Stack: [ ]
+PASS: array lacks mutable
+Stack: [ ]
+PASS: hash lacks mutable
+Stack: [ ]
+PASS: string lacks mutable
+Stack: [ ]
+PASS: set lacks mutable
+Stack: [ ]
+PASS: fixnum lacks mutable
+Stack: [ ]
+=== Mutable struct has mutable property ===
+Stack: [ ]
+Stack: [ ]
+PASS: mutable struct has mutable
+Stack: [ ]
+=== Immutable struct lacks mutable property ===
+Stack: [ ]
+Stack: [ ]
+PASS: immutable struct lacks mutable
+Stack: [ ]
