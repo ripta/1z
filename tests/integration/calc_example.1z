@@ -1,0 +1,3 @@
+\ Run the calculator example through the integration harness.
+
+"../../examples/calc.1z" load drop

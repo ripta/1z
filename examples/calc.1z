@@ -1,0 +1,93 @@
+\ Infix calculator example
+\ Usage: 1z examples/calc.1z "2 + 3 * (4 - 1)"
+
+use "conversions" ;
+use "lexer" ;
+use "pratt/arith" ;
+use "strings" ;
+
+CALC-LEXER: const [
+  V{ }
+  skip-whitespace-rule #push!
+  number-rule #push!
+  { "+" "-" "*" "/" "(" ")" } symbols-rule #push!
+  >array <lexer>
+] ;
+
+calc-expr: define-parameter [ "" ] ;
+report-msg: M{ value: "" } ;
+
+(extract-byte-pos): ( msg expr -- pos ) [
+  swap
+  dup "at byte " split dup #len 1 > [
+    #last parse-integer
+    nip
+  ] [
+    drop
+    dup "position " split dup #len 1 > [
+      #last ":" split #first parse-integer
+      nip
+    ] [
+      drop
+      dup "end of input" #in? [
+        drop #len
+      ] [
+        drop drop 0
+      ] if
+    ] if
+  ] if
+] ;
+
+(caret-line): ( pos -- str ) [
+  " " swap repeat "^" #append
+] ;
+
+(throw-trailing-token): ( token -- ) [
+  dup value>> swap pos>>
+  "unexpected trailing token '" <rot-
+  #append "' at byte " #append
+  swap >string #append
+  f swap EInvalidArgument make-error throw
+] ;
+
+(parse-complete): ( expr -- value ) [
+  CALC-LEXER tokenize (make-peekable)
+  <arithmetic-pratt>
+  2dup 0 parse-pratt
+  \ peekable parser value
+  swap drop swap
+  \ value peekable
+  dup next-token dup f = [
+    2drop
+  ] [
+    (throw-trailing-token)
+  ] if
+] ;
+
+(report-error): ( expr error -- ) [
+  message: @get
+  report-msg swap value: swap @set! drop
+  dup eprint-line
+  dup report-msg value: @get swap (extract-byte-pos) (caret-line) eprint-line
+  report-msg value: @get eprint-line
+  drop
+] ;
+
+(command-expr): ( -- expr ) [
+  command-line-args
+  dup #len 0 = [
+    drop
+    "Usage: 1z examples/calc.1z \"EXPR\"" eprint-line
+    "missing expression argument" eprint-line
+    1 sys-exit
+  ] when
+  #first
+] ;
+
+(command-expr)
+dup calc-expr [
+  [ (parse-complete) ]
+  [ calc-expr get swap (report-error) 1 sys-exit ]
+  recover
+] with-parameter
+>string print-line

@@ -1,0 +1,3 @@
+\ Verify the calculator example reports syntax errors with a caret.
+
+"../../examples/calc.1z" load drop

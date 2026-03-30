@@ -1,0 +1,3 @@
+\ Verify the calculator example reports a missing CLI expression.
+
+"../../examples/calc.1z" load drop

@@ -1,0 +1,3 @@
+\ Verify the calculator example rejects trailing tokens after a valid expression.
+
+"../../examples/calc.1z" load drop

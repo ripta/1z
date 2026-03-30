@@ -1,0 +1,2 @@
+Usage: 1z examples/calc.1z "EXPR"
+missing expression argument
