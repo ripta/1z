@@ -1,0 +1,64 @@
+=== encode: strings ===
+Stack: [ ]
+PASS: encode empty string
+Stack: [ ]
+PASS: encode one byte string
+Stack: [ ]
+PASS: encode two byte string
+Stack: [ ]
+PASS: encode three byte string
+Stack: [ ]
+PASS: encode hello
+Stack: [ ]
+=== encode: byte arrays ===
+Stack: [ ]
+PASS: encode binary bytes
+Stack: [ ]
+PASS: encode byte array text
+Stack: [ ]
+=== decode: standard padded ===
+Stack: [ ]
+PASS: decode empty string
+Stack: [ ]
+PASS: decode one byte
+Stack: [ ]
+PASS: decode two bytes
+Stack: [ ]
+PASS: decode three bytes
+Stack: [ ]
+PASS: decode binary bytes
+Stack: [ ]
+=== decode: standard unpadded ===
+Stack: [ ]
+PASS: decode unpadded one byte
+Stack: [ ]
+PASS: decode unpadded two bytes
+Stack: [ ]
+PASS: decode unpadded hello
+Stack: [ ]
+=== decode>string ===
+Stack: [ ]
+PASS: decode>string padded
+Stack: [ ]
+PASS: decode>string unpadded
+Stack: [ ]
+=== type checks ===
+Stack: [ ]
+PASS: decode returns byte-array
+Stack: [ ]
+PASS: encode rejects non string/bytes
+Stack: [ ]
+=== decode: invalid input ===
+Stack: [ ]
+PASS: invalid character errors
+Stack: [ ]
+PASS: wrong alphabet character errors
+Stack: [ ]
+PASS: interior padding errors
+Stack: [ ]
+PASS: excessive padding errors
+Stack: [ ]
+PASS: truncated length mod 4 = 1 errors
+Stack: [ ]
+PASS: padded input length must be multiple of 4
+Stack: [ ]

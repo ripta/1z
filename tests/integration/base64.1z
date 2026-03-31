@@ -1,0 +1,43 @@
+\ Integration tests for lib/data/base64.1z
+
+use "testing" ;
+use "data/base64" ;
+
+"encode: strings" test-section
+"" "" encode "encode empty string" assert=
+"Zg==" "f" encode "encode one byte string" assert=
+"Zm8=" "fo" encode "encode two byte string" assert=
+"Zm9v" "foo" encode "encode three byte string" assert=
+"aGVsbG8=" "hello" encode "encode hello" assert=
+
+"encode: byte arrays" test-section
+"AAEC" B{ 0x00 0x01 0x02 } encode "encode binary bytes" assert=
+"Zm9v" B{ 0x66 0x6F 0x6F } encode "encode byte array text" assert=
+
+"decode: standard padded" test-section
+B{ } "" decode "decode empty string" assert=
+B{ 0x66 } "Zg==" decode "decode one byte" assert=
+B{ 0x66 0x6F } "Zm8=" decode "decode two bytes" assert=
+B{ 0x66 0x6F 0x6F } "Zm9v" decode "decode three bytes" assert=
+B{ 0x00 0x01 0x02 } "AAEC" decode "decode binary bytes" assert=
+
+"decode: standard unpadded" test-section
+B{ 0x66 } "Zg" decode "decode unpadded one byte" assert=
+B{ 0x66 0x6F } "Zm8" decode "decode unpadded two bytes" assert=
+B{ 0x68 0x65 0x6C 0x6C 0x6F } "aGVsbG8" decode "decode unpadded hello" assert=
+
+"decode>string" test-section
+"hello" "aGVsbG8=" decode>string "decode>string padded" assert=
+"hello" "aGVsbG8" decode>string "decode>string unpadded" assert=
+
+"type checks" test-section
+"byte-array" "Zm9v" decode type-name "decode returns byte-array" assert=
+[ 42 encode ] "encode rejects non string/bytes" assert-error
+
+"decode: invalid input" test-section
+[ "Zm$=" decode ] "invalid character errors" assert-error
+[ "Zm-9" decode ] "wrong alphabet character errors" assert-error
+[ "Zm=9" decode ] "interior padding errors" assert-error
+[ "Zm9v===" decode ] "excessive padding errors" assert-error
+[ "A" decode ] "truncated length mod 4 = 1 errors" assert-error
+[ "Zg=" decode ] "padded input length must be multiple of 4" assert-error

@@ -1,0 +1,285 @@
+\ lib/data/base64.1z - RFC 4648 Base64 encoding and decoding
+
+use "strings" ;
+
+standard-alphabet: const [ "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" ] ;
+
+\ ASCII lookup table for standard Base64. Invalid entries are 0xFF.
+standard-reverse-table: const [
+  B{
+    0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF
+    0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF
+    0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0x3E 0xFF 0xFF 0xFF 0x3F
+    0x34 0x35 0x36 0x37 0x38 0x39 0x3A 0x3B 0x3C 0x3D 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF
+    0xFF 0x00 0x01 0x02 0x03 0x04 0x05 0x06 0x07 0x08 0x09 0x0A 0x0B 0x0C 0x0D 0x0E
+    0x0F 0x10 0x11 0x12 0x13 0x14 0x15 0x16 0x17 0x18 0x19 0xFF 0xFF 0xFF 0xFF 0xFF
+    0xFF 0x1A 0x1B 0x1C 0x1D 0x1E 0x1F 0x20 0x21 0x22 0x23 0x24 0x25 0x26 0x27 0x28
+    0x29 0x2A 0x2B 0x2C 0x2D 0x2E 0x2F 0x30 0x31 0x32 0x33 0xFF 0xFF 0xFF 0xFF 0xFF
+  }
+] ;
+
+base64-encode-state: mutable struct{ src pos out } ;
+base64-decode-state: mutable struct{ src pos out } ;
+
+(base64-error): ( msg -- * ) [ f swap EInvalidArgument make-error throw ] ;
+
+(invalid-char-error): ( idx -- * ) [
+  "invalid base64 character at position " swap >string #append
+  (base64-error)
+] ;
+
+(padding-error): ( idx -- * ) [
+  "invalid base64 padding at position " swap >string #append
+  (base64-error)
+] ;
+
+(truncated-error): ( idx -- * ) [
+  "truncated base64 input at position " swap >string #append
+  (base64-error)
+] ;
+
+(normalize-input): ( val -- byte-array ) [
+  dup string? [ >bytes ] [
+    dup byte-array? [ ] [ "string or byte-array" throw-type-error ] if
+  ] if
+] ;
+
+(sextet>char): ( n -- str ) [ standard-alphabet swap #nth ] ;
+
+(make-string4): ( c0 c1 c2 c3 -- str ) [ 4 array-n "" #join ] ;
+
+(enc-char0): ( triple -- char ) [ 0 #nth 2 ushift-right (sextet>char) ] ;
+
+(enc-char1): ( triple -- char ) [
+  dup 0 #nth 3 bitand 4 shift-left
+  over 1 #nth 4 ushift-right bitor
+  (sextet>char)
+  nip
+] ;
+
+(enc-char2): ( triple -- char ) [
+  dup 1 #nth 15 bitand 2 shift-left
+  over 2 #nth 6 ushift-right bitor
+  (sextet>char)
+  nip
+] ;
+
+(enc-char3): ( triple -- char ) [ 2 #nth 63 bitand (sextet>char) ] ;
+
+(encode-bytes-3): ( b0 b1 b2 -- str ) [
+  3 array-n
+  dup (enc-char0)
+  1 pick-n (enc-char1)
+  2 pick-n (enc-char2)
+  3 pick-n (enc-char3)
+  4 <rot-n drop
+  (make-string4)
+] ;
+
+(encode-bytes-2): ( b0 b1 -- str ) [
+  2 array-n
+  dup 0 #nth 2 ushift-right (sextet>char)
+  1 pick-n dup 0 #nth 3 bitand 4 shift-left over 1 #nth 4 ushift-right bitor (sextet>char) nip
+  2 pick-n dup 1 #nth 15 bitand 2 shift-left (sextet>char) nip
+  "="
+  4 <rot-n drop
+  (make-string4)
+] ;
+
+(encode-bytes-1): ( b0 -- str ) [
+  dup 2 ushift-right (sextet>char)
+  swap 3 bitand 4 shift-left (sextet>char)
+  "=" "="
+  (make-string4)
+] ;
+
+(enc-src-at): ( state idx -- byte ) [ over src>> swap #nth nip ] ;
+
+(enc-remaining): ( state -- n ) [ dup src>> #len swap pos>> - ] ;
+
+(enc-append-chunk): ( state str -- state ) [
+  over out>> swap #append
+  >>out
+] ;
+
+(enc-advance): ( state n -- state ) [ over pos>> + >>pos ] ;
+
+(enc-step3): ( state -- state ) [
+  [ dup pos>> (enc-src-at) ] keep
+  [ dup pos>> 1 + (enc-src-at) ] keep
+  [ dup pos>> 2 + (enc-src-at) ] keep
+  3 rot-n>
+  (encode-bytes-3)
+  (enc-append-chunk)
+  3 (enc-advance)
+] ;
+
+(enc-finish): ( state -- state ) [
+  dup (enc-remaining) 1 = [
+    [ dup pos>> (enc-src-at) ] keep
+    swap
+    (encode-bytes-1)
+    (enc-append-chunk)
+    1 (enc-advance)
+  ] [
+    dup (enc-remaining) 2 = [
+      [ dup pos>> (enc-src-at) ] keep
+      [ dup pos>> 1 + (enc-src-at) ] keep
+      2 rot-n>
+      (encode-bytes-2)
+      (enc-append-chunk)
+      2 (enc-advance)
+    ] when
+  ] if
+] ;
+
+\\ Encode a string or byte array using standard RFC 4648 Base64 with `=` padding.
+encode: ( str-or-bytes -- str ) [
+  (normalize-input)
+  0 "" make-base64-encode-state
+  [ dup (enc-remaining) 3 >= ] [ (enc-step3) ] while
+  (enc-finish)
+  out>>
+] ;
+
+(trailing-pad-count): ( str -- n ) [
+  dup "===" #ends-with? [ dup #len 3 - (padding-error) ] [
+    dup "==" #ends-with? [ drop 2 ] [
+      "=" #ends-with? [ 1 ] [ 0 ] if
+    ] if
+  ] if
+] ;
+
+(strip-padding): ( str pad -- str' ) [
+  dup 0 = [ drop ] [ over #len swap - #take ] if
+] ;
+
+(validate-standard-input): ( str -- str ) [
+  dup (trailing-pad-count) dup 0 > [
+    drop
+    dup #len 4 rem 0 = not [ dup #len 1 - (padding-error) ] when
+  ] [ drop ] if
+  dup (trailing-pad-count) (strip-padding)
+  dup "=" #index-of dup [ (padding-error) ] [ drop ] if
+  dup #len 4 rem dup 1 = [ drop dup #len (truncated-error) ] [ drop ] if
+] ;
+
+(decode-sextet-at): ( str idx -- sextet ) [
+  2dup #nth >codepoint
+  dup 128 >= [
+    drop nip (invalid-char-error)
+  ] [
+    standard-reverse-table swap #nth
+    dup 0xFF = [ drop nip (invalid-char-error) ] [ 2nip ] if
+  ] if
+] ;
+
+(dec-byte0): ( quad -- byte ) [
+  dup 0 #nth 2 shift-left
+  over 1 #nth 4 ushift-right bitor
+  nip
+] ;
+
+(dec-byte1): ( quad -- byte ) [
+  dup 1 #nth 15 bitand 4 shift-left
+  over 2 #nth 2 ushift-right bitor
+  nip
+] ;
+
+(dec-byte2): ( quad -- byte ) [
+  dup 2 #nth 3 bitand 6 shift-left
+  over 3 #nth bitor
+  nip
+] ;
+
+(dec-byte0-3): ( triple -- byte ) [
+  dup 0 #nth 2 shift-left
+  over 1 #nth 4 ushift-right bitor
+  nip
+] ;
+
+(dec-byte1-3): ( triple -- byte ) [
+  dup 1 #nth 15 bitand 4 shift-left
+  over 2 #nth 2 ushift-right bitor
+  nip
+] ;
+
+(decode-bytes-4): ( a b c d -- bytes ) [
+  4 array-n
+  dup (dec-byte0)
+  1 pick-n (dec-byte1)
+  2 pick-n (dec-byte2)
+  3 <rot-n drop
+  3 array-n B{ } [ #push ] #reduce
+] ;
+
+(decode-bytes-3): ( a b c -- bytes ) [
+  3 array-n
+  dup (dec-byte0-3)
+  1 pick-n (dec-byte1-3)
+  2 <rot-n drop
+  2 array-n B{ } [ #push ] #reduce
+] ;
+
+(decode-bytes-2): ( a b -- bytes ) [
+  2 array-n
+  dup 0 #nth 2 shift-left
+  over 1 #nth 4 ushift-right bitor
+  nip
+  1 array-n B{ } [ #push ] #reduce
+] ;
+
+(dec-src-at): ( state idx -- sextet ) [ over src>> swap (decode-sextet-at) nip ] ;
+
+(dec-remaining): ( state -- n ) [ dup src>> #len swap pos>> - ] ;
+
+(dec-append-chunk): ( state bytes -- state ) [
+  over out>> swap #append
+  >>out
+] ;
+
+(dec-advance): ( state n -- state ) [ over pos>> + >>pos ] ;
+
+(dec-step4): ( state -- state ) [
+  [ dup pos>> (dec-src-at) ] keep
+  [ dup pos>> 1 + (dec-src-at) ] keep
+  [ dup pos>> 2 + (dec-src-at) ] keep
+  [ dup pos>> 3 + (dec-src-at) ] keep
+  4 rot-n>
+  (decode-bytes-4)
+  (dec-append-chunk)
+  4 (dec-advance)
+] ;
+
+(dec-finish): ( state -- state ) [
+  dup (dec-remaining) 2 = [
+    [ dup pos>> (dec-src-at) ] keep
+    [ dup pos>> 1 + (dec-src-at) ] keep
+    2 rot-n>
+    (decode-bytes-2)
+    (dec-append-chunk)
+    2 (dec-advance)
+  ] [
+    dup (dec-remaining) 3 = [
+      [ dup pos>> (dec-src-at) ] keep
+      [ dup pos>> 1 + (dec-src-at) ] keep
+      [ dup pos>> 2 + (dec-src-at) ] keep
+      3 rot-n>
+      (decode-bytes-3)
+      (dec-append-chunk)
+      3 (dec-advance)
+    ] when
+  ] if
+] ;
+
+\\ Decode standard Base64 text to a byte array. Accepts padded or unpadded input.
+decode: ( str -- bytes ) [
+  (validate-standard-input)
+  0 B{ } make-base64-decode-state
+  [ dup (dec-remaining) 4 >= ] [ (dec-step4) ] while
+  (dec-finish)
+  out>>
+] ;
+
+\\ Decode standard Base64 text and interpret the result as a UTF-8 string.
+decode>string: ( str -- str ) [ decode bytes> ] ;
