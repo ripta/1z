@@ -7,6 +7,7 @@ const ErrorObject = value_mod.ErrorObject;
 
 /// C library functions for ucontext coroutine support.
 const c = struct {
+    extern "c" fn getcontext(ucp: *std.c.ucontext_t) c_int;
     extern "c" fn makecontext(
         ucp: *std.c.ucontext_t,
         func: *const fn () callconv(.c) void,
@@ -156,7 +157,7 @@ pub fn initTaskContext(task: *Task, entry_fn: *const fn () callconv(.c) void, sc
     const stack_mem = task.stack_mem.?;
     const page_size = std.heap.page_size_min;
 
-    task.uctx.mcontext = undefined;
+    _ = c.getcontext(&task.uctx);
     task.uctx.stack.sp = @ptrCast(stack_mem.ptr + page_size);
     task.uctx.stack.size = @intCast(stack_mem.len - page_size);
     task.uctx.stack.flags = 0;
