@@ -7,6 +7,7 @@ const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const Stream = value_mod.Stream;
 const StreamMode = value_mod.StreamMode;
+const HashTable = value_mod.HashTable;
 
 const types_mod = @import("types.zig");
 const RegistryEntry = types_mod.RegistryEntry;
@@ -19,7 +20,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{
         .name = "spawn-process",
         .func = nativeSpawnProcess,
-        .stack_effect = "argv stdin-sym stdout-sym stderr-sym -- pid stdin-or-f stdout-or-f stderr-or-f",
+        .stack_effect = "argv cwd-or-f env-or-f stdin-sym stdout-sym stderr-sym -- pid stdin-or-f stdout-or-f stderr-or-f",
         .capability = .process,
     },
     .{
@@ -40,13 +41,20 @@ fn nativeSpawnProcess(ctx: *Context) anyerror!void {
     const stderr_sym = try helpers.popSymbol(ctx);
     const stdout_sym = try helpers.popSymbol(ctx);
     const stdin_sym = try helpers.popSymbol(ctx);
+    const env_val = ctx.stack.pop() catch return error.StackUnderflow;
+    const cwd_val = ctx.stack.pop() catch return error.StackUnderflow;
     const argv_val = ctx.stack.pop() catch return error.StackUnderflow;
     const argv = try parseArgv(ctx, argv_val);
+    const cwd = try parseOptionalCwd(ctx, cwd_val);
+    var env_map = try parseOptionalEnvMap(ctx, env_val);
+    defer if (env_map) |*map| map.deinit();
 
     var child = std.process.Child.init(argv, ctx.quotationAllocator());
     child.stdin_behavior = try parseStdIoMode(ctx, stdin_sym);
     child.stdout_behavior = try parseStdIoMode(ctx, stdout_sym);
     child.stderr_behavior = try parseStdIoMode(ctx, stderr_sym);
+    child.cwd = cwd;
+    if (env_map) |*map| child.env_map = map;
     child.spawn() catch |err| {
         helpers.setErrorContext(ctx, "spawn-process: {s}", .{@errorName(err)});
         return mapSpawnError(err);
@@ -138,6 +146,58 @@ fn parseStdIoMode(ctx: *Context, mode_sym: []const u8) !std.process.Child.StdIo 
         .{mode_sym},
     );
     return error.TypeMismatch;
+}
+
+fn parseOptionalCwd(ctx: *Context, cwd_val: Value) !?[]const u8 {
+    return switch (cwd_val) {
+        .boolean => |b| if (!b) null else {
+            helpers.setTypeMismatchError(ctx, "string or f", cwd_val);
+            return error.TypeMismatch;
+        },
+        .string => |s| s,
+        else => {
+            helpers.setTypeMismatchError(ctx, "string or f", cwd_val);
+            return error.TypeMismatch;
+        },
+    };
+}
+
+fn parseOptionalEnvMap(ctx: *Context, env_val: Value) !?std.process.EnvMap {
+    return switch (env_val) {
+        .boolean => |b| if (!b) null else {
+            helpers.setTypeMismatchError(ctx, "hash or f", env_val);
+            return error.TypeMismatch;
+        },
+        .hash => |env_hash| try hashToEnvMap(ctx, env_hash),
+        else => {
+            helpers.setTypeMismatchError(ctx, "hash or f", env_val);
+            return error.TypeMismatch;
+        },
+    };
+}
+
+fn hashToEnvMap(ctx: *Context, env_hash: *HashTable) !std.process.EnvMap {
+    var env_map = std.process.EnvMap.init(ctx.quotationAllocator());
+    errdefer env_map.deinit();
+
+    var iter = env_hash.iterator();
+    while (iter.next()) |entry| {
+        const value = entry.value_ptr.*;
+        const value_str = switch (value) {
+            .string => |s| s,
+            else => {
+                helpers.setErrorContext(
+                    ctx,
+                    "spawn-process env values must be strings, key '{s}' had type {s}",
+                    .{ entry.key_ptr.*, helpers.valueTypeName(value) },
+                );
+                return error.TypeMismatch;
+            },
+        };
+        env_map.put(entry.key_ptr.*, value_str) catch return error.OutOfMemory;
+    }
+
+    return env_map;
 }
 
 fn pushChildStream(ctx: *Context, maybe_file: ?std.fs.File, mode: StreamMode, name: []const u8) !void {

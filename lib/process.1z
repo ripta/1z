@@ -1,0 +1,139 @@
+\ lib/process.1z - High-level child process helpers
+
+use "os/signal" ;
+
+stdio-mode: enum{
+  inherit: unit
+  pipe: unit
+  close: unit
+  ignore: unit
+} ;
+
+stdio-opts: mutable struct{ stdin stdout stderr cwd env } ;
+process: struct{ pid stdin stdout stderr } ;
+process-result: struct{ exit-code stdout stderr } ;
+
+\\ Create default child process options.
+\\ Defaults stdin/stdout/stderr to inherit and leaves cwd/env unset.
+<stdio-opts>: ( -- stdio-opts ) [
+  stdio-mode:inherit
+  stdio-mode:inherit
+  stdio-mode:inherit
+  f
+  f
+  make-stdio-opts
+] ;
+
+(stdio-mode>symbol): ( mode -- symbol ) generic [ "stdio-mode" throw-type-error ] ;
+
+(stdio-mode>symbol): method{ stdio-mode:inherit } [ drop inherit: ] ;
+(stdio-mode>symbol): method{ stdio-mode:pipe } [ drop pipe: ] ;
+(stdio-mode>symbol): method{ stdio-mode:close } [ drop close: ] ;
+(stdio-mode>symbol): method{ stdio-mode:ignore } [ drop ignore: ] ;
+
+(clone-stdio-opts): ( opts -- opts' ) [ unmake-stdio-opts make-stdio-opts ] ;
+
+(stdio-opts>native): ( opts -- cwd env stdin-sym stdout-sym stderr-sym ) [
+  dup cwd>>
+  over env>>
+  2 pick-n stdin>> (stdio-mode>symbol)
+  3 pick-n stdout>> (stdio-mode>symbol)
+  4 pick-n stderr>> (stdio-mode>symbol)
+  5 <rot-n drop
+] ;
+
+(close-if-stream): ( value -- ) [ dup stream? [ stream-close ] [ drop ] if ] ;
+
+(read-all-and-close): ( stream/f -- bytes/f ) [
+  dup stream?
+  [ dup stream-read-all swap stream-close ]
+  [ drop f ]
+  if
+] ;
+
+(close-process-streams): ( process -- ) [
+  dup stdin>> (close-if-stream)
+  dup stdout>> (close-if-stream)
+  stderr>> (close-if-stream)
+] ;
+
+(process>result): ( process stdout stderr -- process-result ) [
+  [ wait-process ] 2dip
+  make-process-result
+] ;
+
+(terminate-process): ( process -- ) [
+  [ dup SIGTERM kill-process ] [ drop ] recover drop
+] ;
+
+(wait-process-safely): ( process -- ) [
+  [ dup wait-process drop ] [ drop ] recover drop
+] ;
+
+(terminate-and-wait): ( process -- ) [
+  dup (terminate-process)
+  (wait-process-safely)
+] ;
+
+(capture-stdout-opts): ( opts -- opts' ) [
+  (clone-stdio-opts)
+  stdio-mode:pipe >>stdout
+] ;
+
+(capture-all-opts): ( opts -- opts' ) [
+  (clone-stdio-opts)
+  stdio-mode:pipe >>stdout
+  stdio-mode:pipe >>stderr
+] ;
+
+\\ Spawn a child process using argv and stdio options.
+spawn-process: ( argv opts -- process ) [
+  dup (stdio-opts>native)
+  5 <rot-n drop
+  native.spawn-process
+  make-process
+] ;
+
+\\ Wait for a child process to exit and return its exit code.
+wait-process: ( process -- exit-code ) [ pid>> native.wait-pid ] ;
+
+\\ Send a signal to a child process.
+\\ Accepts either a signal value or a raw signal number.
+kill-process: ( process signal -- ) generic [ swap pid>> swap native.kill-pid ] ;
+kill-process: method{ process fixnum } [ swap pid>> swap native.kill-pid ] ;
+kill-process: method{ process signal } [ swap pid>> swap unmake-signal native.kill-pid ] ;
+
+\\ Run a child process to completion without capturing output.
+run: ( argv opts -- process-result ) [
+  spawn-process
+  dup (close-process-streams)
+  f
+  f
+  (process>result)
+] ;
+
+\\ Run a child process and capture stdout as a byte array.
+capture-stdout: ( argv opts -- process-result ) [
+  (capture-stdout-opts) spawn-process
+  dup stdin>> (close-if-stream)
+  dup stderr>> (close-if-stream)
+  dup stdout>> (read-all-and-close)
+  f
+  (process>result)
+] ;
+
+\\ Run a child process and capture stdout and stderr as byte arrays.
+capture-all: ( argv opts -- process-result ) [
+  (capture-all-opts) spawn-process
+  dup stdin>> (close-if-stream)
+  dup stdout>> (read-all-and-close)
+  over stderr>> (read-all-and-close)
+  (process>result)
+] ;
+
+\\ Execute a quotation with a running child process.
+\\ Sends SIGTERM and waits for exit during cleanup.
+with-process: ( argv opts quot -- ... ) [
+  [ spawn-process ] dip
+  over [ (terminate-and-wait) ] curry cleanup
+] ;

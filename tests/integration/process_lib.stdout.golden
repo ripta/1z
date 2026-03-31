@@ -1,0 +1,81 @@
+=== stdio opts defaults ===
+Stack: [ ]
+Stack: [ stdio-opts{ stdin: <stdio-mode:inherit inherit:> stdout: <stdio-mode:inherit inherit:> stderr: <stdio-mode:inherit inherit:> cwd: f env: f } ]
+PASS: stdin default is inherit
+Stack: [ stdio-opts{ stdin: <stdio-mode:inherit inherit:> stdout: <stdio-mode:inherit inherit:> stderr: <stdio-mode:inherit inherit:> cwd: f env: f } ]
+PASS: stdout default is inherit
+Stack: [ stdio-opts{ stdin: <stdio-mode:inherit inherit:> stdout: <stdio-mode:inherit inherit:> stderr: <stdio-mode:inherit inherit:> cwd: f env: f } ]
+PASS: stderr default is inherit
+Stack: [ stdio-opts{ stdin: <stdio-mode:inherit inherit:> stdout: <stdio-mode:inherit inherit:> stderr: <stdio-mode:inherit inherit:> cwd: f env: f } ]
+PASS: cwd default is f
+Stack: [ stdio-opts{ stdin: <stdio-mode:inherit inherit:> stdout: <stdio-mode:inherit inherit:> stderr: <stdio-mode:inherit inherit:> cwd: f env: f } ]
+PASS: env default is f
+Stack: [ ]
+=== spawn-process wrapper ===
+Stack: [ ]
+PASS: spawn-process returns process struct
+PASS: stdin inherit remains false
+PASS: stderr inherit remains false
+PASS: stdout pipe is a stream
+PASS: stdout pipe carries bytes
+PASS: spawned process exits successfully
+Stack: [ ]
+=== working directory override ===
+Stack: [ ]
+Stack: [ B{ 0x2F 0x55 0x73 0x65 0x72 0x73 0x2F 0x72 0x69 0x70 0x74 0x61 0x2F 0x70 0x72 0x6F 0x6A 0x65 0x63 0x74 0x73 0x2F 0x31 0x7A 0x0A } ]
+Stack: [ B{ 0x2F 0x55 0x73 0x65 0x72 0x73 0x2F 0x72 0x69 0x70 0x74 0x61 0x2F 0x70 0x72 0x6F 0x6A 0x65 0x63 0x74 0x73 0x2F 0x31 0x7A 0x0A } process-result{ exit-code: 0 stdout: B{ 0x2F 0x55 0x73 0x65 0x72 0x73 0x2F 0x72 0x69 0x70 0x74 0x61 0x2F 0x70 0x72 0x6F 0x6A 0x65 0x63 0x74 0x73 0x2F 0x31 0x7A 0x0A } stderr: f } ]
+PASS: cwd override exits zero
+Stack: [ B{ 0x2F 0x55 0x73 0x65 0x72 0x73 0x2F 0x72 0x69 0x70 0x74 0x61 0x2F 0x70 0x72 0x6F 0x6A 0x65 0x63 0x74 0x73 0x2F 0x31 0x7A 0x0A } process-result{ exit-code: 0 stdout: B{ 0x2F 0x55 0x73 0x65 0x72 0x73 0x2F 0x72 0x69 0x70 0x74 0x61 0x2F 0x70 0x72 0x6F 0x6A 0x65 0x63 0x74 0x73 0x2F 0x31 0x7A 0x0A } stderr: f } ]
+PASS: cwd override affects child process
+Stack: [ ]
+=== environment replacement ===
+Stack: [ ]
+Stack: [ { "/bin/sh" "-c" "printf '%s|' "$ONLY_ONE"; if [ -z "${HOME+x}" ]; then printf unset; else printf set; fi" } ]
+Stack: [ { "/bin/sh" "-c" "printf '%s|' "$ONLY_ONE"; if [ -z "${HOME+x}" ]; then printf unset; else printf set; fi" } stdio-opts{ stdin: <stdio-mode:inherit inherit:> stdout: <stdio-mode:inherit inherit:> stderr: <stdio-mode:inherit inherit:> cwd: f env: f } ]
+Stack: [ { "/bin/sh" "-c" "printf '%s|' "$ONLY_ONE"; if [ -z "${HOME+x}" ]; then printf unset; else printf set; fi" } stdio-opts{ stdin: <stdio-mode:inherit inherit:> stdout: <stdio-mode:inherit inherit:> stderr: <stdio-mode:inherit inherit:> cwd: f env: H{ ONLY_ONE: "set" } } ]
+Stack: [ process-result{ exit-code: 0 stdout: B{ 0x73 0x65 0x74 0x7C 0x75 0x6E 0x73 0x65 0x74 } stderr: f } ]
+PASS: env override exits zero
+Stack: [ process-result{ exit-code: 0 stdout: B{ 0x73 0x65 0x74 0x7C 0x75 0x6E 0x73 0x65 0x74 } stderr: f } ]
+PASS: env override replaces instead of merging
+Stack: [ ]
+=== run returns compact process result ===
+Stack: [ ]
+Stack: [ process-result{ exit-code: 7 stdout: f stderr: f } ]
+PASS: run returns child exit code
+Stack: [ process-result{ exit-code: 7 stdout: f stderr: f } ]
+PASS: run leaves stdout as f
+Stack: [ process-result{ exit-code: 7 stdout: f stderr: f } ]
+PASS: run leaves stderr as f
+Stack: [ ]
+=== capture helpers ===
+Stack: [ ]
+Stack: [ process-result{ exit-code: 0 stdout: B{ 0x68 0x65 0x6C 0x6C 0x6F } stderr: f } ]
+PASS: capture-stdout exits zero
+Stack: [ process-result{ exit-code: 0 stdout: B{ 0x68 0x65 0x6C 0x6C 0x6F } stderr: f } ]
+PASS: capture-stdout returns bytes
+Stack: [ process-result{ exit-code: 0 stdout: B{ 0x68 0x65 0x6C 0x6C 0x6F } stderr: f } ]
+PASS: capture-stdout leaves stderr as f
+Stack: [ ]
+Stack: [ process-result{ exit-code: 0 stdout: B{ 0x6F 0x75 0x74 } stderr: B{ 0x65 0x72 0x72 } } ]
+PASS: capture-all exits zero
+Stack: [ process-result{ exit-code: 0 stdout: B{ 0x6F 0x75 0x74 } stderr: B{ 0x65 0x72 0x72 } } ]
+PASS: capture-all captures stdout
+Stack: [ process-result{ exit-code: 0 stdout: B{ 0x6F 0x75 0x74 } stderr: B{ 0x65 0x72 0x72 } } ]
+PASS: capture-all captures stderr
+Stack: [ ]
+=== kill-process accepts signal and fixnum ===
+Stack: [ ]
+PASS: kill-process accepts signal virtual type
+Stack: [ ]
+PASS: kill-process accepts raw fixnum
+Stack: [ ]
+=== with-process cleanup terminates child ===
+Stack: [ ]
+Stack: [ t ]
+PASS: with-process sends SIGTERM and waits on scope exit
+Stack: [ ]
+=== capture helper async compatibility ===
+Stack: [ ]
+PASS: capture-stdout keeps scheduler responsive
+PASS: capture-stdout still works in task
+Stack: [ ]

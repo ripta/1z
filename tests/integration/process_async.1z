@@ -3,7 +3,7 @@ use "time" ;
 
 test-async-wait-pid: ( -- ) [
   [
-    { "/bin/sh" "-c" "sleep 1" } inherit: inherit: inherit: native.spawn-process
+    { "/bin/sh" "-c" "sleep 1" } f f inherit: inherit: inherit: native.spawn-process
     f "stderr inherit returns false for async wait test" assert=
     f "stdout inherit returns false for async wait test" assert=
     f "stdin inherit returns false for async wait test" assert=
@@ -16,7 +16,7 @@ test-async-wait-pid: ( -- ) [
 
 test-async-process-stdout: ( -- ) [
   [
-    { "/bin/sh" "-c" "sleep 1; printf hello" } inherit: pipe: inherit: native.spawn-process
+    { "/bin/sh" "-c" "sleep 1; printf hello" } f f inherit: pipe: inherit: native.spawn-process
     f "stderr inherit returns false for async stdout test" assert=
     dup [ dup 5 stream-read "hello" >bytes "reader gets delayed child stdout" assert= stream-close ] curry spawn drop
     drop
@@ -30,7 +30,7 @@ test-async-process-stdout: ( -- ) [
 test-cancel-process-waiter: ( -- ) [
   [
     V{ }
-    { "/bin/sh" "-c" "sleep 30" } inherit: inherit: inherit: native.spawn-process
+    { "/bin/sh" "-c" "sleep 30" } f f inherit: inherit: inherit: native.spawn-process
     f "stderr inherit returns false for cancel test" assert=
     f "stdout inherit returns false for cancel test" assert=
     f "stdin inherit returns false for cancel test" assert=

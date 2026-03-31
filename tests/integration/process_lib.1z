@@ -1,0 +1,100 @@
+use "testing" ;
+use "time" ;
+use "process" ;
+use "os/signal" ;
+
+"stdio opts defaults" test-section
+
+<stdio-opts>
+dup stdin>> stdio-mode:inherit = "stdin default is inherit" assert-true
+dup stdout>> stdio-mode:inherit = "stdout default is inherit" assert-true
+dup stderr>> stdio-mode:inherit = "stderr default is inherit" assert-true
+dup cwd>> f = "cwd default is f" assert-true
+env>> f = "env default is f" assert-true
+
+"spawn-process wrapper" test-section
+
+[
+  { "/bin/sh" "-c" "printf hello" }
+  <stdio-opts> stdio-mode:pipe >>stdout
+  spawn-process
+  dup process? "spawn-process returns process struct" assert-true
+  dup stdin>> f "stdin inherit remains false" assert=
+  dup stderr>> f "stderr inherit remains false" assert=
+  dup stdout>> dup stream? "stdout pipe is a stream" assert-true
+  dup 5 stream-read "hello" >bytes "stdout pipe carries bytes" assert=
+  stream-close
+  wait-process 0 "spawned process exits successfully" assert=
+] call
+
+"working directory override" test-section
+
+environ "PWD" @get "\n" #append >bytes
+{ "/bin/pwd" } <stdio-opts> environ "PWD" @get >>cwd capture-stdout
+dup exit-code>> 0 "cwd override exits zero" assert=
+stdout>> swap "cwd override affects child process" assert=
+
+"environment replacement" test-section
+
+{ "/bin/sh" "-c" "printf '%s|' \"$ONLY_ONE\"; if [ -z \"${HOME+x}\" ]; then printf unset; else printf set; fi" }
+<stdio-opts>
+H{ "ONLY_ONE" "set" } >>env
+capture-stdout
+dup exit-code>> 0 "env override exits zero" assert=
+stdout>> "set|unset" >bytes "env override replaces instead of merging" assert=
+
+"run returns compact process result" test-section
+
+{ "/bin/sh" "-c" "exit 7" } <stdio-opts> run
+dup exit-code>> 7 "run returns child exit code" assert=
+dup stdout>> f "run leaves stdout as f" assert=
+stderr>> f "run leaves stderr as f" assert=
+
+"capture helpers" test-section
+
+{ "/bin/sh" "-c" "printf hello" } <stdio-opts> capture-stdout
+dup exit-code>> 0 "capture-stdout exits zero" assert=
+dup stdout>> "hello" >bytes "capture-stdout returns bytes" assert=
+stderr>> f "capture-stdout leaves stderr as f" assert=
+
+{ "/bin/sh" "-c" "printf out; printf err >&2" } <stdio-opts> capture-all
+dup exit-code>> 0 "capture-all exits zero" assert=
+dup stdout>> "out" >bytes "capture-all captures stdout" assert=
+stderr>> "err" >bytes "capture-all captures stderr" assert=
+
+"kill-process accepts signal and fixnum" test-section
+
+[
+  { "/bin/sh" "-c" "sleep 30" } <stdio-opts> spawn-process
+  dup SIGTERM kill-process
+  wait-process 143 "kill-process accepts signal virtual type" assert=
+] call
+
+[
+  { "/bin/sh" "-c" "sleep 30" } <stdio-opts> spawn-process
+  dup 15 kill-process
+  wait-process 143 "kill-process accepts raw fixnum" assert=
+] call
+
+"with-process cleanup terminates child" test-section
+
+[
+  [ { "/bin/sh" "-c" "sleep 30" } <stdio-opts> [ drop ] with-process ] elapsed
+  1500 milliseconds <
+] call
+"with-process sends SIGTERM and waits on scope exit" assert-true
+
+"capture helper async compatibility" test-section
+
+[
+  [
+    [
+      { "/bin/sh" "-c" "sleep 1; printf hello" }
+      <stdio-opts>
+      capture-stdout
+      stdout>> "hello" >bytes "capture-stdout still works in task" assert=
+    ] spawn drop
+    [ 10 milliseconds sleep ] elapsed
+    400 milliseconds < "capture-stdout keeps scheduler responsive" assert-true
+  ] task-scope
+] call

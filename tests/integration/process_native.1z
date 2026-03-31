@@ -3,7 +3,7 @@ use "testing" ;
 "native spawn-process inherited stdio" test-section
 
 [
-  { "/bin/sh" "-c" "exit 0" } inherit: inherit: inherit: native.spawn-process
+  { "/bin/sh" "-c" "exit 0" } f f inherit: inherit: inherit: native.spawn-process
   f "stderr inherit returns false" assert=
   f "stdout inherit returns false" assert=
   f "stdin inherit returns false" assert=
@@ -13,7 +13,7 @@ use "testing" ;
 "native spawn-process piped stdout" test-section
 
 [
-  { "/bin/sh" "-c" "printf 'hello\\n'" } inherit: pipe: inherit: native.spawn-process
+  { "/bin/sh" "-c" "printf 'hello\\n'" } f f inherit: pipe: inherit: native.spawn-process
   f "stderr inherit returns false when stdout is piped" assert=
   dup stream-read-line "hello" "piped stdout is readable" assert=
   stream-close
@@ -24,7 +24,7 @@ use "testing" ;
 "native kill-pid" test-section
 
 [
-  { "/bin/sh" "-c" "sleep 30" } inherit: inherit: inherit: native.spawn-process
+  { "/bin/sh" "-c" "sleep 30" } f f inherit: inherit: inherit: native.spawn-process
   f "stderr inherit returns false for kill test" assert=
   f "stdout inherit returns false for kill test" assert=
   f "stdin inherit returns false for kill test" assert=
@@ -34,31 +34,37 @@ use "testing" ;
 
 "native spawn-process errors" test-section
 
-[ { "/bin/sh" "-c" "exit 0" } bogus: inherit: inherit: native.spawn-process ]
+[ { "/bin/sh" "-c" "exit 0" } f f bogus: inherit: inherit: native.spawn-process ]
 type-mismatch: "invalid stdio symbol throws type-mismatch" assert-error-type
 
-[ { "/bin/sh" 42 } inherit: inherit: inherit: native.spawn-process ]
+[ { "/bin/sh" 42 } f f inherit: inherit: inherit: native.spawn-process ]
 type-mismatch: "non-string argv element throws type-mismatch" assert-error-type
 
-[ { } inherit: inherit: inherit: native.spawn-process ]
+[ { } f f inherit: inherit: inherit: native.spawn-process ]
 type-mismatch: "empty argv throws type-mismatch" assert-error-type
+
+[ { "/bin/sh" "-c" "exit 0" } t f inherit: inherit: inherit: native.spawn-process ]
+type-mismatch: "boolean true cwd throws type-mismatch" assert-error-type
+
+[ { "/bin/sh" "-c" "exit 0" } f H{ HOME: 42 } inherit: inherit: inherit: native.spawn-process ]
+type-mismatch: "non-string env value throws type-mismatch" assert-error-type
 
 "sandbox process capability" test-section
 
 sandbox{ process } inspect "sandbox{ process }" "process sandbox display" assert=
 
-[ sandbox{ } [ { "/bin/sh" "-c" "exit 0" } inherit: inherit: inherit: native.spawn-process ] with-sandbox ]
+[ sandbox{ } [ { "/bin/sh" "-c" "exit 0" } f f inherit: inherit: inherit: native.spawn-process ] with-sandbox ]
 permission-denied: "empty sandbox denies spawn-process" assert-error-type
 
 sandbox{ process } [
-  { "/bin/sh" "-c" "exit 0" } inherit: inherit: inherit: native.spawn-process
+  { "/bin/sh" "-c" "exit 0" } f f inherit: inherit: inherit: native.spawn-process
   drop drop drop
   native.wait-pid
 ] with-sandbox
 0 "process sandbox grants spawn-process" assert=
 
 sandbox{ io } [
-  { "/bin/sh" "-c" "exit 0" } inherit: inherit: inherit: native.spawn-process
+  { "/bin/sh" "-c" "exit 0" } f f inherit: inherit: inherit: native.spawn-process
   drop drop drop
   native.wait-pid
 ] with-sandbox
