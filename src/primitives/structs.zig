@@ -62,14 +62,14 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     const markers_slice = try markers_list.toOwnedSlice(alloc);
 
     const desc_val = try ctx.stack.pop();
-    const desc_map: *value_mod.MutableMap = switch (desc_val) {
+    const raw_desc_map: *value_mod.MutableMap = switch (desc_val) {
         .mutable_map => |m| m,
         else => {
             helpers.setTypeMismatchError(ctx, "mutable_map", desc_val);
             return error.TypeMismatch;
         },
     };
-    const fields_val = desc_map.get("fields") orelse return error.MissingField;
+    const fields_val = raw_desc_map.get("fields") orelse return error.MissingField;
     const fields_array = switch (fields_val) {
         .array => |arr| arr,
         else => {
@@ -105,6 +105,22 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
         },
     };
 
+    const has_mutable = for (markers_slice) |mk| {
+        if (markers_mod.isMutableMarker(mk)) break true;
+    } else false;
+
+    const desc_map = try value_mod.createTypeDescriptor(
+        alloc,
+        "struct-descriptor:",
+        .{ .mutable = has_mutable },
+    );
+    const desc_fields = try alloc.alloc(Value, fields_slice.len);
+    for (fields_slice, 0..) |field, i| {
+        desc_fields[i] = .{ .string = field };
+    }
+    try desc_map.put(alloc, "fields", .{ .array = desc_fields });
+    const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
+
     const struct_type = try alloc.create(StructType);
     struct_type.* = .{
         .name = name,
@@ -114,7 +130,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
 
     // Create a TypeValue for type-of lookups
     const tv = try alloc.create(value_mod.TypeValue);
-    tv.* = .{ .name = name, .descriptor = null };
+    tv.* = .{ .name = name, .descriptor = frozen_desc };
     struct_type.type_val = tv;
 
     // NAME: ( -- type ) - the struct type itself pushing a TypeValue
@@ -169,9 +185,6 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     }
 
     // >>FIELD: ( instance value -- instance ) - field setter (only if mutable)
-    const has_mutable = for (markers_slice) |mk| {
-        if (markers_mod.isMutableMarker(mk)) break true;
-    } else false;
     if (has_mutable) {
         for (fields_slice, 0..) |field, i| {
             const setter_name = try std.fmt.allocPrint(alloc, ">>{s}", .{field});
@@ -199,12 +212,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     }
     const gw_slice = try generated_words.toOwnedSlice(alloc);
     try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
-    if (has_mutable) {
-        try desc_map.put(alloc, "mutable", .{ .boolean = true });
-    }
-    const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
     try ctx.registerTypeDescriptor(name, frozen_desc);
-    struct_type.type_val.?.descriptor = frozen_desc;
 }
 
 /// Trampoline helper ( field1 .. fieldN struct-type -- instance )
@@ -461,7 +469,7 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
     try ctx.registerDispatch(.{
         .word_name = name,
         .type_a = type_tv,
-        .type_b = &dispatch_mod.unary_sentinel,
+        .type_b = ctx.getDispatchUnarySentinel(),
     }, .{
         .body = .{ .quotation = instrs },
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "getter", .field = field },
@@ -504,7 +512,7 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
     try ctx.registerDispatch(.{
         .word_name = name,
         .type_a = type_tv,
-        .type_b = &dispatch_mod.any_sentinel,
+        .type_b = ctx.getDispatchAnySentinel(),
     }, .{
         .body = .{ .quotation = instrs },
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "setter", .field = field },

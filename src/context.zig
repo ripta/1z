@@ -262,6 +262,14 @@ pub const Context = struct {
     /// variants (.tagged, .struct_instance, .resource) have entries here
     /// but callers should prefer the TypeValue embedded in those values.
     builtin_type_array: []?*value_mod.TypeValue = &.{},
+    /// Runtime-initialized dispatch wildcard TypeValue.
+    dispatch_any_sentinel: ?*value_mod.TypeValue = null,
+    /// Runtime-initialized unary dispatch sentinel TypeValue.
+    dispatch_unary_sentinel: ?*value_mod.TypeValue = null,
+    /// Runtime-initialized protocol `self` type sentinel.
+    self_type_sentinel: ?*value_mod.TypeValue = null,
+    /// Runtime-initialized protocol `any` type sentinel.
+    any_type_sentinel: ?*value_mod.TypeValue = null,
     /// Cache of TypeValues for resource types, keyed by resource type name.
     /// Lazily populated by `type-of` when encountering a resource.
     resource_type_values: std.StringHashMapUnmanaged(*value_mod.TypeValue) = .{},
@@ -317,10 +325,41 @@ pub const Context = struct {
         };
     }
 
+    fn builtinDescriptorFlags(comptime tag: std.meta.Tag(value_mod.Value)) value_mod.DescriptorFlags {
+        return switch (tag) {
+            .fixnum, .bignum => .{ .numeric = true, .exact = true, .integer = true },
+            .float => .{ .numeric = true },
+            .vector, .byte_array, .mutable_map, .stream, .channel => .{ .mutable = true },
+            else => .{},
+        };
+    }
+
+    fn initSentinelTypeValues(self: *Context) !void {
+        const alloc = self.arena.allocator();
+
+        const dispatch_any_desc: *value_mod.HashTable = @ptrCast(try value_mod.createSentinelTypeDescriptor(alloc));
+        const dispatch_any = try alloc.create(value_mod.TypeValue);
+        dispatch_any.* = .{ .name = "*", .descriptor = dispatch_any_desc };
+        self.dispatch_any_sentinel = dispatch_any;
+
+        const dispatch_unary_desc: *value_mod.HashTable = @ptrCast(try value_mod.createSentinelTypeDescriptor(alloc));
+        const dispatch_unary = try alloc.create(value_mod.TypeValue);
+        dispatch_unary.* = .{ .name = "", .descriptor = dispatch_unary_desc };
+        self.dispatch_unary_sentinel = dispatch_unary;
+
+        const type_sentinel_desc: *value_mod.HashTable = @ptrCast(try value_mod.createSentinelTypeDescriptor(alloc));
+
+        const self_sentinel = try alloc.create(value_mod.TypeValue);
+        self_sentinel.* = .{ .name = "self", .descriptor = type_sentinel_desc };
+        self.self_type_sentinel = self_sentinel;
+
+        const any_sentinel = try alloc.create(value_mod.TypeValue);
+        any_sentinel.* = .{ .name = "any", .descriptor = type_sentinel_desc };
+        self.any_type_sentinel = any_sentinel;
+    }
+
     /// Pre-create TypeValue objects for all builtin Value discriminants.
-    /// Called during init() before registerNativeDispatch(). Each TypeValue
-    /// starts with a null descriptor; define-builtin-type in the prelude
-    /// attaches descriptors later.
+    /// Called during init() before registerNativeDispatch().
     fn initBuiltinTypeValues(self: *Context) !void {
         const alloc = self.arena.allocator();
         const num_variants = comptime @typeInfo(value_mod.Value).@"union".fields.len;
@@ -332,9 +371,13 @@ pub const Context = struct {
         inline for (0..num_variants) |i| {
             const tag: std.meta.Tag(value_mod.Value) = @enumFromInt(i);
             const name = dispatch_mod.builtinTypeName(tag);
+            const desc: *value_mod.HashTable = @ptrCast(try value_mod.createBuiltinTypeDescriptor(
+                alloc,
+                builtinDescriptorFlags(tag),
+            ));
 
             const tv = try alloc.create(value_mod.TypeValue);
-            tv.* = .{ .name = name, .descriptor = null };
+            tv.* = .{ .name = name, .descriptor = desc };
 
             self.builtin_type_array[i] = tv;
             try self.builtin_type_values.put(self.allocator, name, tv);
@@ -397,6 +440,10 @@ pub const Context = struct {
             std.debug.panic("Failed to push base type registry frame: {any}", .{err});
         };
 
+        ctx.initSentinelTypeValues() catch |err| {
+            std.debug.panic("Failed to init sentinel type values: {any}", .{err});
+        };
+
         ctx.initBuiltinTypeValues() catch |err| {
             std.debug.panic("Failed to init builtin type values: {any}", .{err});
         };
@@ -456,6 +503,11 @@ pub const Context = struct {
             .load_paths = parent.load_paths,
             .stdlib_path = parent.stdlib_path,
             .program_args = parent.program_args,
+            .builtin_type_array = parent.builtin_type_array,
+            .dispatch_any_sentinel = parent.dispatch_any_sentinel,
+            .dispatch_unary_sentinel = parent.dispatch_unary_sentinel,
+            .self_type_sentinel = parent.self_type_sentinel,
+            .any_type_sentinel = parent.any_type_sentinel,
         };
 
         // Share the parent's lock so all tasks use the same RwLock.
@@ -487,6 +539,26 @@ pub const Context = struct {
         }
 
         return ctx;
+    }
+
+    pub fn getDispatchAnySentinel(self: *const Context) *const value_mod.TypeValue {
+        if (self.dispatch_any_sentinel) |tv| return tv;
+        return self.parent_context.?.getDispatchAnySentinel();
+    }
+
+    pub fn getDispatchUnarySentinel(self: *const Context) *const value_mod.TypeValue {
+        if (self.dispatch_unary_sentinel) |tv| return tv;
+        return self.parent_context.?.getDispatchUnarySentinel();
+    }
+
+    pub fn getSelfTypeSentinel(self: *const Context) *const value_mod.TypeValue {
+        if (self.self_type_sentinel) |tv| return tv;
+        return self.parent_context.?.getSelfTypeSentinel();
+    }
+
+    pub fn getAnyTypeSentinel(self: *const Context) *const value_mod.TypeValue {
+        if (self.any_type_sentinel) |tv| return tv;
+        return self.parent_context.?.getAnyTypeSentinel();
     }
 
     /// Load the prelude source. When external_source is non-null, it is used
@@ -1347,23 +1419,24 @@ pub const Context = struct {
     }
 
     fn lookupBinaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue, type_b: *const value_mod.TypeValue) ?DispatchEntry {
+        const any_sentinel = self.getDispatchAnySentinel();
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
         while (i > 0) {
             i -= 1;
-            if (dispatch_mod.lookupBinaryInEntries(&self.dispatch_frames.items[i].entries, word_name, type_a, type_b)) |entry| return entry;
+            if (dispatch_mod.lookupBinaryInEntries(&self.dispatch_frames.items[i].entries, word_name, type_a, type_b, any_sentinel)) |entry| return entry;
         }
         // Base dispatch table
-        if (self.dispatch.lookupBinary(word_name, type_a, type_b)) |entry| return entry;
+        if (self.dispatch.lookupBinary(word_name, type_a, type_b, any_sentinel)) |entry| return entry;
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
             var j = ctx.dispatch_frames.items.len;
             while (j > 0) {
                 j -= 1;
-                if (dispatch_mod.lookupBinaryInEntries(&ctx.dispatch_frames.items[j].entries, word_name, type_a, type_b)) |entry| return entry;
+                if (dispatch_mod.lookupBinaryInEntries(&ctx.dispatch_frames.items[j].entries, word_name, type_a, type_b, ctx.getDispatchAnySentinel())) |entry| return entry;
             }
-            if (ctx.dispatch.lookupBinary(word_name, type_a, type_b)) |entry| return entry;
+            if (ctx.dispatch.lookupBinary(word_name, type_a, type_b, ctx.getDispatchAnySentinel())) |entry| return entry;
             ancestor = ctx.parent_context;
         }
 
@@ -1379,23 +1452,25 @@ pub const Context = struct {
     }
 
     fn lookupUnaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue) ?DispatchEntry {
+        const any_sentinel = self.getDispatchAnySentinel();
+        const unary_sentinel = self.getDispatchUnarySentinel();
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
         while (i > 0) {
             i -= 1;
-            if (dispatch_mod.lookupUnaryInEntries(&self.dispatch_frames.items[i].entries, word_name, type_a)) |entry| return entry;
+            if (dispatch_mod.lookupUnaryInEntries(&self.dispatch_frames.items[i].entries, word_name, type_a, any_sentinel, unary_sentinel)) |entry| return entry;
         }
         // Base dispatch table
-        if (self.dispatch.lookupUnary(word_name, type_a)) |entry| return entry;
+        if (self.dispatch.lookupUnary(word_name, type_a, any_sentinel, unary_sentinel)) |entry| return entry;
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
             var j = ctx.dispatch_frames.items.len;
             while (j > 0) {
                 j -= 1;
-                if (dispatch_mod.lookupUnaryInEntries(&ctx.dispatch_frames.items[j].entries, word_name, type_a)) |entry| return entry;
+                if (dispatch_mod.lookupUnaryInEntries(&ctx.dispatch_frames.items[j].entries, word_name, type_a, ctx.getDispatchAnySentinel(), ctx.getDispatchUnarySentinel())) |entry| return entry;
             }
-            if (ctx.dispatch.lookupUnary(word_name, type_a)) |entry| return entry;
+            if (ctx.dispatch.lookupUnary(word_name, type_a, ctx.getDispatchAnySentinel(), ctx.getDispatchUnarySentinel())) |entry| return entry;
             ancestor = ctx.parent_context;
         }
 
@@ -1411,11 +1486,11 @@ pub const Context = struct {
     }
 
     fn lookupNativeBinaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue, type_b: *const value_mod.TypeValue) ?DispatchEntry {
-        if (self.dispatch.lookupNativeBinary(word_name, type_a, type_b)) |entry| return entry;
+        if (self.dispatch.lookupNativeBinary(word_name, type_a, type_b, self.getDispatchAnySentinel())) |entry| return entry;
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
-            if (ctx.dispatch.lookupNativeBinary(word_name, type_a, type_b)) |entry| return entry;
+            if (ctx.dispatch.lookupNativeBinary(word_name, type_a, type_b, ctx.getDispatchAnySentinel())) |entry| return entry;
             ancestor = ctx.parent_context;
         }
 
@@ -1431,11 +1506,11 @@ pub const Context = struct {
     }
 
     fn lookupNativeUnaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue) ?DispatchEntry {
-        if (self.dispatch.lookupNativeUnary(word_name, type_a)) |entry| return entry;
+        if (self.dispatch.lookupNativeUnary(word_name, type_a, self.getDispatchAnySentinel(), self.getDispatchUnarySentinel())) |entry| return entry;
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
-            if (ctx.dispatch.lookupNativeUnary(word_name, type_a)) |entry| return entry;
+            if (ctx.dispatch.lookupNativeUnary(word_name, type_a, ctx.getDispatchAnySentinel(), ctx.getDispatchUnarySentinel())) |entry| return entry;
             ancestor = ctx.parent_context;
         }
 
@@ -1606,8 +1681,15 @@ pub const Context = struct {
         if (self.lookupResourceTypeValue(name)) |tv| return tv;
 
         const alloc = self.quotationAllocator();
+        const desc_map = try value_mod.createTypeDescriptor(
+            alloc,
+            "resource-type:",
+            .{ .mutable = true },
+        );
+        try desc_map.put(alloc, "resource-kind", .{ .string = name });
+        // TODO(ripta): investigate per-resource mutability instead of assuming all resources are mutable.
         const tv = try alloc.create(value_mod.TypeValue);
-        tv.* = .{ .name = name, .descriptor = null };
+        tv.* = .{ .name = name, .descriptor = @ptrCast(desc_map) };
 
         try self.registerResourceTypeValue(name, tv);
         return tv;
@@ -3645,7 +3727,7 @@ test "dispatch frame push/pop with lookup visibility" {
 
     // Register in base dispatch table
     try ctx.dispatch.register(
-        .{ .word_name = "show", .type_a = fixnum_tv, .type_b = &dispatch_mod.unary_sentinel },
+        .{ .word_name = "show", .type_a = fixnum_tv, .type_b = ctx.getDispatchUnarySentinel() },
         .{ .body = .{ .quotation = body } },
         false,
     );
@@ -3656,7 +3738,7 @@ test "dispatch frame push/pop with lookup visibility" {
     try ctx.pushDispatchFrame();
     const body2 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 0 }};
     try ctx.registerDispatch(
-        .{ .word_name = "show", .type_a = string_tv, .type_b = &dispatch_mod.unary_sentinel },
+        .{ .word_name = "show", .type_a = string_tv, .type_b = ctx.getDispatchUnarySentinel() },
         .{ .body = .{ .quotation = body2 } },
         false,
     );
@@ -3723,14 +3805,14 @@ test "base behavior with no extra frames matches original" {
     // No extra frames pushed, so registerDispatch goes to base dispatch table
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0 }};
     try ctx.registerDispatch(
-        .{ .word_name = "test-op", .type_a = fixnum_tv, .type_b = &dispatch_mod.unary_sentinel },
+        .{ .word_name = "test-op", .type_a = fixnum_tv, .type_b = ctx.getDispatchUnarySentinel() },
         .{ .body = .{ .quotation = body } },
         false,
     );
 
     // Should be findable via both the new API and the raw dispatch table
     try std.testing.expect(ctx.lookupUnaryDispatch("test-op", fixnum_tv) != null);
-    try std.testing.expect(ctx.dispatch.lookupUnary("test-op", fixnum_tv) != null);
+    try std.testing.expect(ctx.dispatch.lookupUnary("test-op", fixnum_tv, ctx.getDispatchAnySentinel(), ctx.getDispatchUnarySentinel()) != null);
 }
 
 test "initBuiltinTypeValues populates all array slots" {
@@ -3770,12 +3852,16 @@ test "lookupBuiltinTypeValueByTag returns same pointer as name lookup" {
     }
 }
 
-test "initBuiltinTypeValues creates TypeValues with null descriptors" {
+test "initBuiltinTypeValues creates TypeValues with normalized descriptors" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    // Before prelude, all descriptors should be null.
     const tv = ctx.lookupBuiltinTypeValue("fixnum");
     try std.testing.expect(tv != null);
-    try std.testing.expect(tv.?.descriptor == null);
+    const desc = tv.?.descriptor orelse unreachable;
+    try std.testing.expectEqualStrings("builtin-type:", desc.get("type").?.symbol);
+    try std.testing.expect(desc.get("numeric").?.boolean);
+    try std.testing.expect(desc.get("exact").?.boolean);
+    try std.testing.expect(desc.get("integer").?.boolean);
+    try std.testing.expect(!desc.get("mutable").?.boolean);
 }

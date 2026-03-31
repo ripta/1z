@@ -10,7 +10,6 @@ const RegistryEntry = @import("types.zig").RegistryEntry;
 const dispatch_helpers = @import("dispatch_helpers.zig");
 const dispatch_mod = @import("../dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
-const unary_sentinel = dispatch_mod.unary_sentinel;
 const markers_mod = @import("markers.zig");
 
 const popFixnum = helpers.popFixnum;
@@ -549,7 +548,7 @@ fn byteTypeName(comptime bt: ByteType) []const u8 {
 // =============================================================================
 
 pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
-    const unary = &dispatch_mod.unary_sentinel;
+    const unary = ctx.getDispatchUnarySentinel();
 
     // Look up builtin TypeValue pointers
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;

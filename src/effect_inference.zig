@@ -1664,7 +1664,10 @@ test "generic word with agreeing dispatch entries" {
                 .name = "duration",
                 .descriptor = null,
             },
-            .type_b = &dispatch_mod.unary_sentinel,
+            .type_b = &TypeValue{
+                .name = "",
+                .descriptor = null,
+            },
         },
         .{ .body = .{ .quotation = dispatch_body } },
         false,
@@ -1707,7 +1710,10 @@ test "generic word with disagreeing dispatch entries emits diagnostic" {
                 .name = "duration",
                 .descriptor = null,
             },
-            .type_b = &dispatch_mod.unary_sentinel,
+            .type_b = &TypeValue{
+                .name = "",
+                .descriptor = null,
+            },
         },
         .{ .body = .{ .quotation = dispatch_body } },
         false,

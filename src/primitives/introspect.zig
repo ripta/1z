@@ -95,7 +95,7 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
     const dispatch_pairs = try ctx.dispatchEntriesForWord(name, alloc);
     const methods_arr = try alloc.alloc(Value, dispatch_pairs.len);
     for (dispatch_pairs, 0..) |pair, i| {
-        const types = if (pair.key.type_b == &dispatch_mod.unary_sentinel) blk: {
+        const types = if (pair.key.type_b == ctx.getDispatchUnarySentinel()) blk: {
             const t = try alloc.alloc(Value, 1);
             t[0] = .{ .string = pair.key.type_a.name };
             break :blk t;

@@ -88,10 +88,35 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     };
-    const desc_map = try alloc.create(MutableMap);
-    desc_map.* = MutableMap{};
+    const descriptor_flags = value_mod.DescriptorFlags{
+        .numeric = if (src_map.get("numeric")) |v| switch (v) {
+            .boolean => |b| b,
+            else => true,
+        } else false,
+        .exact = if (src_map.get("exact")) |v| switch (v) {
+            .boolean => |b| b,
+            else => true,
+        } else false,
+        .integer = if (src_map.get("integer")) |v| switch (v) {
+            .boolean => |b| b,
+            else => true,
+        } else false,
+        .mutable = if (src_map.get("mutable")) |v| switch (v) {
+            .boolean => |b| b,
+            else => true,
+        } else false,
+    };
+    const desc_map = try value_mod.createTypeDescriptor(alloc, "virtual:", descriptor_flags);
     var src_iter = src_map.iterator();
     while (src_iter.next()) |entry| {
+        if (std.mem.eql(u8, entry.key_ptr.*, "type") or
+            std.mem.eql(u8, entry.key_ptr.*, "numeric") or
+            std.mem.eql(u8, entry.key_ptr.*, "exact") or
+            std.mem.eql(u8, entry.key_ptr.*, "integer") or
+            std.mem.eql(u8, entry.key_ptr.*, "mutable"))
+        {
+            continue;
+        }
         try desc_map.put(alloc, entry.key_ptr.*, entry.value_ptr.*);
     }
     const inner_type_raw = desc_map.get("inner-type") orelse return error.MissingField;
@@ -128,7 +153,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
 
             // Create a TypeValue for type-of lookups
             const tv = try alloc.create(value_mod.TypeValue);
-            tv.* = .{ .name = name, .descriptor = null };
+            tv.* = .{ .name = name, .descriptor = @ptrCast(desc_map) };
             vtype.type_val = tv;
 
             // NAME: ( -- type ) - the virtual type itself pushing a TypeValue
@@ -174,7 +199,6 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
             const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
             try ctx.registerTypeDescriptor(name, frozen_desc);
-            vtype.type_val.?.descriptor = frozen_desc;
         },
         .mutable_map => |struct_desc| {
             const fields_val = struct_desc.get("fields") orelse return error.MissingField;
@@ -221,7 +245,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
 
             // Create a TypeValue for type-of lookups
             const tv = try alloc.create(value_mod.TypeValue);
-            tv.* = .{ .name = name, .descriptor = null };
+            tv.* = .{ .name = name, .descriptor = @ptrCast(desc_map) };
             vtype.type_val = tv;
 
             // NAME: ( -- type ) - the virtual type itself pushing a TypeValue
@@ -276,7 +300,6 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
             const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
             try ctx.registerTypeDescriptor(name, frozen_desc);
-            vtype.type_val.?.descriptor = frozen_desc;
         },
         else => {
             helpers.setErrorContext(ctx, "virtual{{ inner type must be a type value or struct descriptor, got {s}", .{helpers.valueTypeName(inner_type_val)});
@@ -1059,8 +1082,12 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     };
     ctx.virtual_type_count += 1;
 
+    const desc_map = try value_mod.createTypeDescriptor(alloc, "virtual:", .{});
+    try desc_map.put(alloc, "inner-type", .{ .type_val = base_tv });
+    try desc_map.put(alloc, "element-type", .{ .type_val = elem_tv });
+
     const tv = try alloc.create(value_mod.TypeValue);
-    tv.* = .{ .name = name, .descriptor = null };
+    tv.* = .{ .name = name, .descriptor = @ptrCast(desc_map) };
     vtype.type_val = tv;
 
     // NAME: ( -- type ) - parse-time const pushing TypeValue
@@ -1097,12 +1124,6 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{name});
     try definePredicate(ctx, pred_name, vtype, &.{});
 
-    // Register type descriptor
-    const desc_map = try alloc.create(MutableMap);
-    desc_map.* = MutableMap{};
-    try desc_map.put(alloc, "inner-type", .{ .type_val = base_tv });
-    try desc_map.put(alloc, "element-type", .{ .type_val = elem_tv });
-
     var generated_words = std.ArrayListUnmanaged(Value){};
     try generated_words.append(alloc, .{ .string = name });
     try generated_words.append(alloc, .{ .string = wrap_name });
@@ -1124,7 +1145,6 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
 
     const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
     try ctx.registerTypeDescriptor(name, frozen_desc);
-    vtype.type_val.?.descriptor = frozen_desc;
 }
 
 /// Register dispatch entries for vector mutation ops on a parameterized vector type.
@@ -1158,7 +1178,7 @@ fn registerVectorMutationDispatches(
         try ctx.registerDispatch(.{
             .word_name = op_name,
             .type_a = type_tv,
-            .type_b = &dispatch_mod.unary_sentinel,
+            .type_b = ctx.getDispatchUnarySentinel(),
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = op_name });
@@ -1181,7 +1201,7 @@ fn registerVectorMutationDispatches(
         try ctx.registerDispatch(.{
             .word_name = op_name,
             .type_a = type_tv,
-            .type_b = &dispatch_mod.unary_sentinel,
+            .type_b = ctx.getDispatchUnarySentinel(),
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = op_name });
@@ -1198,7 +1218,7 @@ fn registerVectorMutationDispatches(
         try ctx.registerDispatch(.{
             .word_name = "#nth!",
             .type_a = type_tv,
-            .type_b = &dispatch_mod.unary_sentinel,
+            .type_b = ctx.getDispatchUnarySentinel(),
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = "#nth!" });
@@ -1221,7 +1241,7 @@ fn registerVectorMutationDispatches(
         try ctx.registerDispatch(.{
             .word_name = "#append!",
             .type_a = type_tv,
-            .type_b = &dispatch_mod.unary_sentinel,
+            .type_b = ctx.getDispatchUnarySentinel(),
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = "#append!" });
@@ -1236,7 +1256,7 @@ fn registerVectorMutationDispatches(
         try ctx.registerDispatch(.{
             .word_name = "freeze",
             .type_a = type_tv,
-            .type_b = &dispatch_mod.unary_sentinel,
+            .type_b = ctx.getDispatchUnarySentinel(),
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = "freeze" });
@@ -1264,7 +1284,7 @@ fn registerMutableMapMutationDispatches(
         try ctx.registerDispatch(.{
             .word_name = "@set!",
             .type_a = type_tv,
-            .type_b = &dispatch_mod.unary_sentinel,
+            .type_b = ctx.getDispatchUnarySentinel(),
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = "@set!" });
@@ -1279,7 +1299,7 @@ fn registerMutableMapMutationDispatches(
         try ctx.registerDispatch(.{
             .word_name = "@remove!",
             .type_a = type_tv,
-            .type_b = &dispatch_mod.unary_sentinel,
+            .type_b = ctx.getDispatchUnarySentinel(),
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = "@remove!" });
@@ -1312,6 +1332,6 @@ pub fn registerHashDispatch(ctx: *Context, type_tv: *const value_mod.TypeValue, 
     try ctx.registerDispatch(.{
         .word_name = ">hash",
         .type_a = type_tv,
-        .type_b = &dispatch_mod.unary_sentinel,
+        .type_b = ctx.getDispatchUnarySentinel(),
     }, .{ .body = .{ .quotation = instrs } }, true);
 }

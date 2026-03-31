@@ -166,8 +166,8 @@ pub fn validateProtocolObligation(
                 helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
                 return error.TypeMismatch;
             };
-            const has_method = ctx.dispatch.lookupUnary(method_name, type_tv) != null or
-                ctx.dispatch.lookupBinary(method_name, type_tv, type_tv) != null;
+            const has_method = ctx.lookupUnaryDispatch(method_name, type_tv) != null or
+                ctx.lookupBinaryDispatch(method_name, type_tv, type_tv) != null;
 
             if (!has_method) {
                 throwProtocolError(ctx, type_name, method_name, protocol_name);
@@ -215,7 +215,7 @@ fn validateObligationSameTypeOnly(
             const effect = methods_array[i].stack_effect;
             i += 1;
 
-            if (isCrossTypeMethod(effect)) continue;
+            if (isCrossTypeMethod(ctx, effect)) continue;
 
             try validateTypedMethod(ctx, method_name, effect, type_name, protocol_name);
         } else {
@@ -223,8 +223,8 @@ fn validateObligationSameTypeOnly(
                 helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
                 return error.TypeMismatch;
             };
-            const has_method = ctx.dispatch.lookupUnary(method_name, type_tv) != null or
-                ctx.dispatch.lookupBinary(method_name, type_tv, type_tv) != null;
+            const has_method = ctx.lookupUnaryDispatch(method_name, type_tv) != null or
+                ctx.lookupBinaryDispatch(method_name, type_tv, type_tv) != null;
 
             if (!has_method) {
                 throwProtocolError(ctx, type_name, method_name, protocol_name);
@@ -236,12 +236,12 @@ fn validateObligationSameTypeOnly(
 
 /// Returns true if the stack effect has any non-self type annotation,
 /// i.e., the `any` sentinel or a concrete type that is not `self`.
-fn isCrossTypeMethod(effect: StackEffect) bool {
+fn isCrossTypeMethod(ctx: *Context, effect: StackEffect) bool {
     const n_inputs = @min(effect.inputs.len, 2);
     for (0..n_inputs) |pos| {
         if (effect.inputs[pos].type_annotation) |tv| {
-            if (tv == &markers_mod.any_type_sentinel) return true;
-            if (tv != &markers_mod.self_type_sentinel) return true;
+            if (tv == ctx.getAnyTypeSentinel()) return true;
+            if (tv != ctx.getSelfTypeSentinel()) return true;
         }
     }
     return false;
@@ -268,17 +268,17 @@ fn validateTypedMethod(
     // Determine concrete TypeValues for each input position, substituting sentinels
     var has_any = false;
     var any_position: usize = 0;
-    var concrete_types: [2]*const value_mod.TypeValue = .{ &dispatch_mod.unary_sentinel, &dispatch_mod.unary_sentinel };
+    var concrete_types: [2]*const value_mod.TypeValue = .{ ctx.getDispatchUnarySentinel(), ctx.getDispatchUnarySentinel() };
     const n_inputs = @min(inputs.len, 2);
 
     for (0..n_inputs) |pos| {
         if (inputs[pos].type_annotation) |tv| {
-            if (tv == &markers_mod.self_type_sentinel) {
+            if (tv == ctx.getSelfTypeSentinel()) {
                 concrete_types[pos] = type_tv;
-            } else if (tv == &markers_mod.any_type_sentinel) {
+            } else if (tv == ctx.getAnyTypeSentinel()) {
                 has_any = true;
                 any_position = pos;
-                concrete_types[pos] = &dispatch_mod.any_sentinel;
+                concrete_types[pos] = ctx.getDispatchAnySentinel();
             } else {
                 concrete_types[pos] = tv;
             }
@@ -292,7 +292,7 @@ fn validateTypedMethod(
         // Unary dispatch
         const type_a = if (n_inputs == 1) concrete_types[0] else type_tv;
         if (!has_any) {
-            if (ctx.dispatch.lookupUnary(method_name, type_a) == null) {
+            if (ctx.lookupUnaryDispatch(method_name, type_a) == null) {
                 throwProtocolError(ctx, type_name, method_name, protocol_name);
                 return error.UserThrown;
             }
@@ -306,7 +306,7 @@ fn validateTypedMethod(
     } else {
         // Binary dispatch
         if (!has_any) {
-            if (ctx.dispatch.lookupBinary(method_name, concrete_types[0], concrete_types[1]) == null) {
+            if (ctx.lookupBinaryDispatch(method_name, concrete_types[0], concrete_types[1]) == null) {
                 throwProtocolError(ctx, type_name, method_name, protocol_name);
                 return error.UserThrown;
             }
@@ -336,26 +336,26 @@ fn hasAnyMatchingEntry(
 
     for (keys) |key| {
         if (is_unary) {
-            if (key.type_b == &dispatch_mod.unary_sentinel) {
+            if (key.type_b == ctx.getDispatchUnarySentinel()) {
                 if (key.type_a == type_tv or
-                    key.type_a == &dispatch_mod.any_sentinel)
+                    key.type_a == ctx.getDispatchAnySentinel())
                 {
                     return true;
                 }
             }
         } else {
-            if (key.type_b == &dispatch_mod.unary_sentinel) continue;
+            if (key.type_b == ctx.getDispatchUnarySentinel()) continue;
             if (any_position == 0) {
                 // any is first position, self must be in second
                 if (key.type_b == type_tv or
-                    key.type_b == &dispatch_mod.any_sentinel)
+                    key.type_b == ctx.getDispatchAnySentinel())
                 {
                     return true;
                 }
             } else {
                 // any is second position, self must be in first
                 if (key.type_a == type_tv or
-                    key.type_a == &dispatch_mod.any_sentinel)
+                    key.type_a == ctx.getDispatchAnySentinel())
                 {
                     return true;
                 }

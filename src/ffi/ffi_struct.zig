@@ -74,17 +74,12 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
         },
     };
 
-    const desc_map = try alloc.create(value_mod.MutableMap);
-    desc_map.* = value_mod.MutableMap{};
-    var src_iter = src_map.iterator();
-    while (src_iter.next()) |entry| {
-        try desc_map.put(alloc, entry.key_ptr.*, entry.value_ptr.*);
-    }
-
-    const fields_val = desc_map.get("fields") orelse {
+    const desc_map = try value_mod.createTypeDescriptor(alloc, "ffi-struct-type:", .{ .mutable = true });
+    const fields_val = src_map.get("fields") orelse {
         helpers.setErrorContext(ctx, "ffi-struct{{ descriptor missing 'fields' key", .{});
         return error.MissingField;
     };
+    try desc_map.put(alloc, "fields", fields_val);
     const fields_array = switch (fields_val) {
         .array => |arr| arr,
         else => {
@@ -233,7 +228,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
     layout.vtype = vtype;
 
     const tv = try alloc.create(value_mod.TypeValue);
-    tv.* = .{ .name = name, .descriptor = null };
+    tv.* = .{ .name = name, .descriptor = @ptrCast(desc_map) };
     vtype.type_val = tv;
 
     // Define NAME as parse-time const pushing TypeValue
@@ -315,7 +310,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
         try ctx.registerDispatch(.{
             .word_name = getter_name,
             .type_a = vtype.type_val.?,
-            .type_b = &dispatch_mod.unary_sentinel,
+            .type_b = ctx.getDispatchUnarySentinel(),
         }, .{
             .body = .{ .quotation = getter_instrs },
             .provenance = .{ .generator = "ffi-struct", .parent = name, .role = "getter", .field = field.name },
@@ -361,7 +356,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
             try ctx.registerDispatch(.{
                 .word_name = setter_name,
                 .type_a = vtype.type_val.?,
-                .type_b = &dispatch_mod.any_sentinel,
+                .type_b = ctx.getDispatchAnySentinel(),
             }, .{
                 .body = .{ .quotation = setter_instrs },
                 .provenance = .{ .generator = "ffi-struct", .parent = name, .role = "setter", .field = field.name },
@@ -387,13 +382,8 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
 
     try desc_map.put(alloc, "ffi-layout", .{ .fixnum = @intCast(@intFromPtr(layout)) });
 
-    if (has_mutable) {
-        try desc_map.put(alloc, "mutable", .{ .boolean = true });
-    }
-
     const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
     try ctx.registerTypeDescriptor(name, frozen_desc);
-    vtype.type_val.?.descriptor = frozen_desc;
 }
 
 /// ffi-struct-make ( field1..fieldN layout-ptr vtype-ptr -- tagged )

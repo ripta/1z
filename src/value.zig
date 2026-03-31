@@ -238,6 +238,38 @@ pub const TypeValue = struct {
     descriptor: ?*HashTable,
 };
 
+pub const DescriptorFlags = struct {
+    numeric: bool = false,
+    exact: bool = false,
+    integer: bool = false,
+    mutable: bool = false,
+};
+
+/// Allocate a normalized descriptor with the shared boolean property schema.
+pub fn createTypeDescriptor(
+    allocator: std.mem.Allocator,
+    category: []const u8,
+    flags: DescriptorFlags,
+) !*MutableMap {
+    const desc = try allocator.create(MutableMap);
+    desc.* = MutableMap{};
+    try desc.put(allocator, "type", .{ .symbol = category });
+    try desc.put(allocator, "numeric", .{ .boolean = flags.numeric });
+    try desc.put(allocator, "exact", .{ .boolean = flags.exact });
+    try desc.put(allocator, "integer", .{ .boolean = flags.integer });
+    try desc.put(allocator, "mutable", .{ .boolean = flags.mutable });
+
+    return desc;
+}
+
+pub fn createBuiltinTypeDescriptor(allocator: std.mem.Allocator, flags: DescriptorFlags) !*MutableMap {
+    return createTypeDescriptor(allocator, "builtin-type:", flags);
+}
+
+pub fn createSentinelTypeDescriptor(allocator: std.mem.Allocator) !*MutableMap {
+    return createTypeDescriptor(allocator, "sentinel:", .{});
+}
+
 /// StructInstance represents an instance of a struct type.
 /// Created by make-NAME or >NAME words.
 pub const StructInstance = struct {

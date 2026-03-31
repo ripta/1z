@@ -134,7 +134,7 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
     }
 
     var type_a: *const value_mod.TypeValue = undefined;
-    var type_b: *const value_mod.TypeValue = &dispatch_mod.unary_sentinel;
+    var type_b: *const value_mod.TypeValue = ctx.getDispatchUnarySentinel();
 
     type_a = try extractTypeValue(ctx, types_array[0]);
 
@@ -176,7 +176,7 @@ fn extractTypeValue(ctx: *Context, val: value_mod.Value) !*const value_mod.TypeV
     return switch (val) {
         .type_val => |tv| tv,
         .marker => |mk| {
-            if (markers_mod.isAnyMarker(mk)) return &dispatch_mod.any_sentinel;
+            if (markers_mod.isAnyMarker(mk)) return ctx.getDispatchAnySentinel();
             helpers.setErrorContext(ctx, "invalid marker in method type position; only `any` is allowed", .{});
             return error.InvalidArgument;
         },

@@ -1,7 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const dispatch_mod = @import("dispatch.zig");
-const DispatchEntry = dispatch_mod.DispatchEntry;
+const DispatchEntry = @import("dispatch.zig").DispatchEntry;
 const value_mod = @import("value.zig");
 const TypeValue = value_mod.TypeValue;
 
@@ -11,8 +10,8 @@ pub const max_pic_entries = 4;
 /// a dispatch table lookup keyed by TypeValue pointers. Pointer
 /// comparison is safe because TypeValue objects have stable identity.
 pub const PicEntry = struct {
-    type_a: *const TypeValue = &dispatch_mod.unary_sentinel,
-    type_b: *const TypeValue = &dispatch_mod.unary_sentinel,
+    type_a: *const TypeValue = undefined,
+    type_b: *const TypeValue = undefined,
     entry: DispatchEntry = undefined,
     unwrap_a: bool = false,
     unwrap_b: bool = false,

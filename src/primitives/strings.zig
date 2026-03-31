@@ -11,7 +11,6 @@ const Primitive = @import("types.zig").Primitive;
 const dispatch_helpers = @import("dispatch_helpers.zig");
 const dispatch_mod = @import("../dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
-const unary_sentinel = dispatch_mod.unary_sentinel;
 const markers_mod = @import("markers.zig");
 
 // =============================================================================
@@ -48,7 +47,7 @@ fn nativeAsStringSymbol(ctx: *Context) anyerror!void {
 // =============================================================================
 
 pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
-    const unary = &dispatch_mod.unary_sentinel;
+    const unary = ctx.getDispatchUnarySentinel();
 
     const inspect_type_names = [_][]const u8{
         "fixnum",      "float",            "bignum",

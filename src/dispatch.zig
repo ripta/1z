@@ -6,12 +6,6 @@ const Value = value_mod.Value;
 const Instruction = value_mod.Instruction;
 const NativeFn = @import("dictionary.zig").NativeFn;
 
-/// Sentinel TypeValue for "any type" in dispatch keys.
-pub var any_sentinel = value_mod.TypeValue{ .name = "*", .descriptor = null };
-
-/// Sentinel TypeValue for unary dispatch (no second operand).
-pub var unary_sentinel = value_mod.TypeValue{ .name = "", .descriptor = null };
-
 /// Returns the dispatch type name for a value. Also used by `type-of`.
 pub fn dispatchTypeName(val: Value) []const u8 {
     return switch (val) {
@@ -217,17 +211,23 @@ pub const DispatchTable = struct {
     /// 2. (word, type_a, "*") wildcard on second
     /// 3. (word, "*", type_b) wildcard on first
     /// 4. (word, "*", "*") both wildcards
-    pub fn lookupBinary(self: *const DispatchTable, word_name: []const u8, type_a: *const value_mod.TypeValue, type_b: *const value_mod.TypeValue) ?DispatchEntry {
+    pub fn lookupBinary(
+        self: *const DispatchTable,
+        word_name: []const u8,
+        type_a: *const value_mod.TypeValue,
+        type_b: *const value_mod.TypeValue,
+        any_sentinel: *const value_mod.TypeValue,
+    ) ?DispatchEntry {
         if (self.entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = type_b })) |entry| {
             return entry;
         }
-        if (self.entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = &any_sentinel })) |entry| {
+        if (self.entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = any_sentinel })) |entry| {
             return entry;
         }
-        if (self.entries.get(.{ .word_name = word_name, .type_a = &any_sentinel, .type_b = type_b })) |entry| {
+        if (self.entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = type_b })) |entry| {
             return entry;
         }
-        if (self.entries.get(.{ .word_name = word_name, .type_a = &any_sentinel, .type_b = &any_sentinel })) |entry| {
+        if (self.entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = any_sentinel })) |entry| {
             return entry;
         }
         return null;
@@ -237,11 +237,17 @@ pub const DispatchTable = struct {
     ///
     /// 1. (word, type_a, "") exact
     /// 2. (word, "*", "") wildcard
-    pub fn lookupUnary(self: *const DispatchTable, word_name: []const u8, type_a: *const value_mod.TypeValue) ?DispatchEntry {
-        if (self.entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = &unary_sentinel })) |entry| {
+    pub fn lookupUnary(
+        self: *const DispatchTable,
+        word_name: []const u8,
+        type_a: *const value_mod.TypeValue,
+        any_sentinel: *const value_mod.TypeValue,
+        unary_sentinel: *const value_mod.TypeValue,
+    ) ?DispatchEntry {
+        if (self.entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = unary_sentinel })) |entry| {
             return entry;
         }
-        if (self.entries.get(.{ .word_name = word_name, .type_a = &any_sentinel, .type_b = &unary_sentinel })) |entry| {
+        if (self.entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = unary_sentinel })) |entry| {
             return entry;
         }
         return null;
@@ -283,28 +289,40 @@ pub const DispatchTable = struct {
     }
 
     /// Look up a binary dispatch entry in the native-only shadow table.
-    pub fn lookupNativeBinary(self: *const DispatchTable, word_name: []const u8, type_a: *const value_mod.TypeValue, type_b: *const value_mod.TypeValue) ?DispatchEntry {
+    pub fn lookupNativeBinary(
+        self: *const DispatchTable,
+        word_name: []const u8,
+        type_a: *const value_mod.TypeValue,
+        type_b: *const value_mod.TypeValue,
+        any_sentinel: *const value_mod.TypeValue,
+    ) ?DispatchEntry {
         if (self.native_entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = type_b })) |entry| {
             return entry;
         }
-        if (self.native_entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = &any_sentinel })) |entry| {
+        if (self.native_entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = any_sentinel })) |entry| {
             return entry;
         }
-        if (self.native_entries.get(.{ .word_name = word_name, .type_a = &any_sentinel, .type_b = type_b })) |entry| {
+        if (self.native_entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = type_b })) |entry| {
             return entry;
         }
-        if (self.native_entries.get(.{ .word_name = word_name, .type_a = &any_sentinel, .type_b = &any_sentinel })) |entry| {
+        if (self.native_entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = any_sentinel })) |entry| {
             return entry;
         }
         return null;
     }
 
     /// Look up a unary dispatch entry in the native-only shadow table.
-    pub fn lookupNativeUnary(self: *const DispatchTable, word_name: []const u8, type_a: *const value_mod.TypeValue) ?DispatchEntry {
-        if (self.native_entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = &unary_sentinel })) |entry| {
+    pub fn lookupNativeUnary(
+        self: *const DispatchTable,
+        word_name: []const u8,
+        type_a: *const value_mod.TypeValue,
+        any_sentinel: *const value_mod.TypeValue,
+        unary_sentinel: *const value_mod.TypeValue,
+    ) ?DispatchEntry {
+        if (self.native_entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = unary_sentinel })) |entry| {
             return entry;
         }
-        if (self.native_entries.get(.{ .word_name = word_name, .type_a = &any_sentinel, .type_b = &unary_sentinel })) |entry| {
+        if (self.native_entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = unary_sentinel })) |entry| {
             return entry;
         }
         return null;
@@ -338,17 +356,23 @@ const EntriesMap = std.HashMapUnmanaged(DispatchKey, DispatchEntry, DispatchKeyC
 
 /// Look up a binary dispatch entry in a single entries map, following the
 /// 4-step precedence: exact, wildcard-b, wildcard-a, both-wildcards.
-pub fn lookupBinaryInEntries(entries: *const EntriesMap, word_name: []const u8, type_a: *const value_mod.TypeValue, type_b: *const value_mod.TypeValue) ?DispatchEntry {
+pub fn lookupBinaryInEntries(
+    entries: *const EntriesMap,
+    word_name: []const u8,
+    type_a: *const value_mod.TypeValue,
+    type_b: *const value_mod.TypeValue,
+    any_sentinel: *const value_mod.TypeValue,
+) ?DispatchEntry {
     if (entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = type_b })) |entry| {
         return entry;
     }
-    if (entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = &any_sentinel })) |entry| {
+    if (entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = any_sentinel })) |entry| {
         return entry;
     }
-    if (entries.get(.{ .word_name = word_name, .type_a = &any_sentinel, .type_b = type_b })) |entry| {
+    if (entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = type_b })) |entry| {
         return entry;
     }
-    if (entries.get(.{ .word_name = word_name, .type_a = &any_sentinel, .type_b = &any_sentinel })) |entry| {
+    if (entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = any_sentinel })) |entry| {
         return entry;
     }
     return null;
@@ -356,11 +380,17 @@ pub fn lookupBinaryInEntries(entries: *const EntriesMap, word_name: []const u8, 
 
 /// Look up a unary dispatch entry in a single entries map, following the
 /// 2-step precedence: exact, wildcard.
-pub fn lookupUnaryInEntries(entries: *const EntriesMap, word_name: []const u8, type_a: *const value_mod.TypeValue) ?DispatchEntry {
-    if (entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = &unary_sentinel })) |entry| {
+pub fn lookupUnaryInEntries(
+    entries: *const EntriesMap,
+    word_name: []const u8,
+    type_a: *const value_mod.TypeValue,
+    any_sentinel: *const value_mod.TypeValue,
+    unary_sentinel: *const value_mod.TypeValue,
+) ?DispatchEntry {
+    if (entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = unary_sentinel })) |entry| {
         return entry;
     }
-    if (entries.get(.{ .word_name = word_name, .type_a = &any_sentinel, .type_b = &unary_sentinel })) |entry| {
+    if (entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = unary_sentinel })) |entry| {
         return entry;
     }
     return null;
@@ -418,6 +448,7 @@ test "register and lookupBinary exact match" {
     defer table.deinit();
 
     var duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
+    var any_tv = value_mod.TypeValue{ .name = "*", .descriptor = null };
 
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 0 }};
     try table.register(
@@ -426,7 +457,7 @@ test "register and lookupBinary exact match" {
         false,
     );
 
-    const result = table.lookupBinary("+", &duration_tv, &duration_tv);
+    const result = table.lookupBinary("+", &duration_tv, &duration_tv, &any_tv);
     try std.testing.expect(result != null);
     try std.testing.expectEqual(@as(usize, 1), result.?.body.quotation.len);
 }
@@ -436,8 +467,9 @@ test "lookupBinary returns null when no match" {
     defer table.deinit();
 
     var duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
+    var any_tv = value_mod.TypeValue{ .name = "*", .descriptor = null };
 
-    const result = table.lookupBinary("+", &duration_tv, &duration_tv);
+    const result = table.lookupBinary("+", &duration_tv, &duration_tv, &any_tv);
     try std.testing.expect(result == null);
 }
 
@@ -448,6 +480,7 @@ test "lookupBinary wildcard precedence" {
     var duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
     var fixnum_tv = value_mod.TypeValue{ .name = "fixnum", .descriptor = null };
     var string_tv = value_mod.TypeValue{ .name = "string", .descriptor = null };
+    var any_tv = value_mod.TypeValue{ .name = "*", .descriptor = null };
 
     const exact_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
     const wild_b_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
@@ -456,17 +489,17 @@ test "lookupBinary wildcard precedence" {
 
     // Register in reverse precedence order to ensure lookup logic is correct
     try table.register(
-        .{ .word_name = "+", .type_a = &any_sentinel, .type_b = &any_sentinel },
+        .{ .word_name = "+", .type_a = &any_tv, .type_b = &any_tv },
         .{ .body = .{ .quotation = wild_both_body } },
         false,
     );
     try table.register(
-        .{ .word_name = "+", .type_a = &any_sentinel, .type_b = &fixnum_tv },
+        .{ .word_name = "+", .type_a = &any_tv, .type_b = &fixnum_tv },
         .{ .body = .{ .quotation = wild_a_body } },
         false,
     );
     try table.register(
-        .{ .word_name = "+", .type_a = &duration_tv, .type_b = &any_sentinel },
+        .{ .word_name = "+", .type_a = &duration_tv, .type_b = &any_tv },
         .{ .body = .{ .quotation = wild_b_body } },
         false,
     );
@@ -477,19 +510,19 @@ test "lookupBinary wildcard precedence" {
     );
 
     // Exact match should win
-    const r1 = table.lookupBinary("+", &duration_tv, &duration_tv).?;
+    const r1 = table.lookupBinary("+", &duration_tv, &duration_tv, &any_tv).?;
     try std.testing.expectEqual(@as(i64, 1), r1.body.quotation[0].op.push_literal.fixnum);
 
     // Wildcard on second: (duration, fixnum) matches (duration, *)
-    const r2 = table.lookupBinary("+", &duration_tv, &fixnum_tv).?;
+    const r2 = table.lookupBinary("+", &duration_tv, &fixnum_tv, &any_tv).?;
     try std.testing.expectEqual(@as(i64, 2), r2.body.quotation[0].op.push_literal.fixnum);
 
     // Wildcard on first: (string, fixnum) matches (*, fixnum)
-    const r3 = table.lookupBinary("+", &string_tv, &fixnum_tv).?;
+    const r3 = table.lookupBinary("+", &string_tv, &fixnum_tv, &any_tv).?;
     try std.testing.expectEqual(@as(i64, 3), r3.body.quotation[0].op.push_literal.fixnum);
 
     // Both wildcards: (string, string) matches (*, *)
-    const r4 = table.lookupBinary("+", &string_tv, &string_tv).?;
+    const r4 = table.lookupBinary("+", &string_tv, &string_tv, &any_tv).?;
     try std.testing.expectEqual(@as(i64, 4), r4.body.quotation[0].op.push_literal.fixnum);
 }
 
@@ -499,31 +532,33 @@ test "lookupUnary exact and wildcard" {
 
     var duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
     var point_tv = value_mod.TypeValue{ .name = "point", .descriptor = null };
+    var any_tv = value_mod.TypeValue{ .name = "*", .descriptor = null };
+    var unary_tv = value_mod.TypeValue{ .name = "", .descriptor = null };
 
     const exact_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 10 } }, .line = 0 }};
     const wild_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 20 } }, .line = 0 }};
 
     try table.register(
-        .{ .word_name = "serialize", .type_a = &duration_tv, .type_b = &unary_sentinel },
+        .{ .word_name = "serialize", .type_a = &duration_tv, .type_b = &unary_tv },
         .{ .body = .{ .quotation = exact_body } },
         false,
     );
     try table.register(
-        .{ .word_name = "serialize", .type_a = &any_sentinel, .type_b = &unary_sentinel },
+        .{ .word_name = "serialize", .type_a = &any_tv, .type_b = &unary_tv },
         .{ .body = .{ .quotation = wild_body } },
         false,
     );
 
     // Exact match
-    const r1 = table.lookupUnary("serialize", &duration_tv).?;
+    const r1 = table.lookupUnary("serialize", &duration_tv, &any_tv, &unary_tv).?;
     try std.testing.expectEqual(@as(i64, 10), r1.body.quotation[0].op.push_literal.fixnum);
 
     // Wildcard fallback
-    const r2 = table.lookupUnary("serialize", &point_tv).?;
+    const r2 = table.lookupUnary("serialize", &point_tv, &any_tv, &unary_tv).?;
     try std.testing.expectEqual(@as(i64, 20), r2.body.quotation[0].op.push_literal.fixnum);
 
     // No match for different word
-    try std.testing.expect(table.lookupUnary("other-word", &duration_tv) == null);
+    try std.testing.expect(table.lookupUnary("other-word", &duration_tv, &any_tv, &unary_tv) == null);
 }
 
 test "register duplicate key errors without allow_overwrite" {
@@ -552,6 +587,7 @@ test "register duplicate key succeeds with allow_overwrite" {
     defer table.deinit();
 
     var duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
+    var any_tv = value_mod.TypeValue{ .name = "*", .descriptor = null };
 
     const body1 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
     const body2 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
@@ -568,7 +604,7 @@ test "register duplicate key succeeds with allow_overwrite" {
     );
 
     // Shoulda gotten the overwritten body
-    const result = table.lookupBinary("+", &duration_tv, &duration_tv).?;
+    const result = table.lookupBinary("+", &duration_tv, &duration_tv, &any_tv).?;
     try std.testing.expectEqual(@as(i64, 2), result.body.quotation[0].op.push_literal.fixnum);
 }
 
@@ -577,10 +613,11 @@ test "registerNative creates retrievable entry with native_fn body" {
     defer table.deinit();
 
     var fixnum_tv = value_mod.TypeValue{ .name = "fixnum", .descriptor = null };
+    var any_tv = value_mod.TypeValue{ .name = "*", .descriptor = null };
 
     try table.registerNative("+", &fixnum_tv, &fixnum_tv, dummyNativeFn);
 
-    const result = table.lookupBinary("+", &fixnum_tv, &fixnum_tv);
+    const result = table.lookupBinary("+", &fixnum_tv, &fixnum_tv, &any_tv);
     try std.testing.expect(result != null);
     try std.testing.expect(result.?.body == .native_fn);
     try std.testing.expectEqualStrings("native", result.?.provenance.?.generator);
@@ -591,10 +628,12 @@ test "registerNative unary entry is retrievable via lookupUnary" {
     defer table.deinit();
 
     var fixnum_tv = value_mod.TypeValue{ .name = "fixnum", .descriptor = null };
+    var any_tv = value_mod.TypeValue{ .name = "*", .descriptor = null };
+    var unary_tv = value_mod.TypeValue{ .name = "", .descriptor = null };
 
-    try table.registerNative("abs", &fixnum_tv, &unary_sentinel, dummyNativeFn);
+    try table.registerNative("abs", &fixnum_tv, &unary_tv, dummyNativeFn);
 
-    const result = table.lookupUnary("abs", &fixnum_tv);
+    const result = table.lookupUnary("abs", &fixnum_tv, &any_tv, &unary_tv);
     try std.testing.expect(result != null);
     try std.testing.expect(result.?.body == .native_fn);
 }

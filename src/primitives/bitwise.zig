@@ -9,7 +9,6 @@ const Primitive = @import("types.zig").Primitive;
 const dispatch_helpers = @import("dispatch_helpers.zig");
 const dispatch_mod = @import("../dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
-const unary_sentinel = dispatch_mod.unary_sentinel;
 const markers_mod = @import("markers.zig");
 
 const demoteBignum = helpers.demoteBignum;
@@ -183,7 +182,7 @@ fn makeShiftEntry(comptime t: BitType) *const fn (*Context) anyerror!void {
 // =============================================================================
 
 pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
-    const unary = &dispatch_mod.unary_sentinel;
+    const unary = ctx.getDispatchUnarySentinel();
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
     const bignum_tv = ctx.lookupBuiltinTypeValue("bignum").?;
     const bit_tvs = [_]*const value_mod.TypeValue{ fixnum_tv, bignum_tv };

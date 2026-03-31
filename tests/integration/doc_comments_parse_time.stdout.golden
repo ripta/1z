@@ -17,6 +17,10 @@ Stack: [ ]
 parameter [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
 type info:
   kind: builtin-type
+  integer: f
+  mutable: f
+  exact: f
+  numeric: f
 Stack: [ ]
 Load and import a module by name or file path.
 Optionally restrict imported words with a set of symbols.

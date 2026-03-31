@@ -92,9 +92,13 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
         },
     };
 
+    const enum_desc_map = try value_mod.createTypeDescriptor(alloc, "enum-descriptor:", .{});
+    try enum_desc_map.put(alloc, "variants", variants_val);
+    const enum_desc: *value_mod.HashTable = @ptrCast(enum_desc_map);
+
     // Create a TypeValue for the enum type itself
     const enum_tv = try alloc.create(value_mod.TypeValue);
-    enum_tv.* = .{ .name = enum_name, .descriptor = null };
+    enum_tv.* = .{ .name = enum_name, .descriptor = enum_desc };
 
     // NAME: ( -- type ) - the enum type pushing a TypeValue
     const type_markers = try alloc.alloc(*Marker, 3);
@@ -163,7 +167,10 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             ctx.virtual_type_count += 1;
 
             const variant_tv = try alloc.create(value_mod.TypeValue);
-            variant_tv.* = .{ .name = full_name, .descriptor = null };
+            const variant_desc_map = try value_mod.createTypeDescriptor(alloc, "enum-variant:", .{});
+            try variant_desc_map.put(alloc, "parent", .{ .type_val = enum_tv });
+            try variant_desc_map.put(alloc, "inner-type", .{ .type_val = tv });
+            variant_tv.* = .{ .name = full_name, .descriptor = @ptrCast(variant_desc_map) };
             vtype.type_val = variant_tv;
 
             try vtype_list.append(alloc, vtype);
@@ -206,7 +213,10 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             ctx.virtual_type_count += 1;
 
             const variant_tv = try alloc.create(value_mod.TypeValue);
-            variant_tv.* = .{ .name = full_name, .descriptor = null };
+            const variant_desc_map = try value_mod.createTypeDescriptor(alloc, "enum-variant:", .{});
+            try variant_desc_map.put(alloc, "parent", .{ .type_val = enum_tv });
+            try variant_desc_map.put(alloc, "inner-type", .{ .type_val = tv });
+            variant_tv.* = .{ .name = full_name, .descriptor = @ptrCast(variant_desc_map) };
             vtype.type_val = variant_tv;
 
             try vtype_list.append(alloc, vtype);
@@ -260,10 +270,8 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     try generated_words.append(alloc, .{ .string = agg_pred_name });
     try generated_words.append(alloc, .{ .string = try alloc.dupe(u8, enum_name) });
     const gw_slice = try generated_words.toOwnedSlice(alloc);
-    try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
-    const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
-    try ctx.registerTypeDescriptor(enum_name, frozen_desc);
-    enum_tv.descriptor = frozen_desc;
+    try enum_desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
+    try ctx.registerTypeDescriptor(enum_name, enum_desc);
 
     const vtypes_slice = try vtype_list.toOwnedSlice(alloc);
     try ctx.registerEnumVariants(enum_name, vtypes_slice);

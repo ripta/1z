@@ -648,8 +648,8 @@ fn resolveTypeAnnotation(ctx: ?*Context, token: []const u8) ?*const value_mod.Ty
                 const val = c.stack.pop() catch return null;
                 if (val == .type_val) return val.type_val;
                 if (val == .marker) {
-                    if (markers_mod.isSelfMarker(val.marker)) return &markers_mod.self_type_sentinel;
-                    if (markers_mod.isAnyMarker(val.marker)) return &markers_mod.any_type_sentinel;
+                    if (markers_mod.isSelfMarker(val.marker)) return c.getSelfTypeSentinel();
+                    if (markers_mod.isAnyMarker(val.marker)) return c.getAnyTypeSentinel();
                 }
             }
         }

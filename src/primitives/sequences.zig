@@ -13,7 +13,6 @@ const helpers = @import("helpers.zig");
 const dispatch_helpers = @import("dispatch_helpers.zig");
 const dispatch_mod = @import("../dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
-const unary_sentinel = dispatch_mod.unary_sentinel;
 const markers_mod = @import("markers.zig");
 const sequence = @import("sequence.zig");
 const Iterator = @import("../iterator.zig").Iterator;
@@ -431,7 +430,7 @@ fn nativeLastByteArray(ctx: *Context) anyerror!void {
 // =============================================================================
 
 pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
-    const unary = &dispatch_mod.unary_sentinel;
+    const unary = ctx.getDispatchUnarySentinel();
     const tv = struct {
         fn get(c: *Context, name: []const u8) *const value_mod.TypeValue {
             return c.lookupBuiltinTypeValue(name).?;

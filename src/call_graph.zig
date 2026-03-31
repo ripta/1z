@@ -562,8 +562,9 @@ test "generic word includes dispatch entry callees" {
     };
 
     var duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
+    var unary_tv = value_mod.TypeValue{ .name = "", .descriptor = null };
     try dispatch.register(
-        .{ .word_name = "my-generic", .type_a = &duration_tv, .type_b = &dispatch_mod.unary_sentinel },
+        .{ .word_name = "my-generic", .type_a = &duration_tv, .type_b = &unary_tv },
         .{ .body = .{ .quotation = dispatch_body } },
         false,
     );

@@ -40,10 +40,6 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
     };
 
     const tv = if (ctx.lookupBuiltinTypeValue(name)) |existing| blk: {
-        if (existing.descriptor != null) {
-            helpers.setErrorContext(ctx, "builtin type '{s}' already has a descriptor attached", .{name});
-            return error.InvalidArgument;
-        }
         existing.descriptor = descriptor;
         break :blk existing;
     } else blk: {
@@ -76,8 +72,12 @@ fn nativeTypeHasProperty(ctx: *Context) anyerror!void {
     const type_val = try ctx.stack.pop();
     switch (type_val) {
         .type_val => |tv| {
-            const result = if (tv.descriptor) |desc|
-                desc.get(prop_str) != null
+            const desc = tv.descriptor orelse unreachable;
+            const result = if (desc.get(prop_str)) |prop|
+                switch (prop) {
+                    .boolean => |b| b,
+                    else => true,
+                }
             else
                 false;
             try ctx.stack.push(.{ .boolean = result });
