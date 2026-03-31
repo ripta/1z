@@ -105,6 +105,8 @@ pub const Task = struct {
     cancellation_phase: CancellationPhase = .none,
     blocked_on_channel: ?*anyopaque = null,
     blocked_on_io_fd: ?std.posix.fd_t = null,
+    blocked_on_process_pid: ?std.posix.pid_t = null,
+    blocked_on_process_key: ?u64 = null,
     blocked_on_scope: ?*TaskScope = null,
     /// Set by a sender when it delivers a value directly to this receiver's
     /// stack. The receiver checks and clears this on resume so it can

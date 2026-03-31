@@ -60,16 +60,21 @@ fn nativeSpawnProcess(ctx: *Context) anyerror!void {
 
 fn nativeWaitPid(ctx: *Context) anyerror!void {
     const pid = try popPid(ctx, "wait-pid");
+
+    if (ctx.scheduler) |scheduler| {
+        while (true) {
+            if (tryWaitPidNoHang(pid)) |status| {
+                try ctx.stack.push(.{ .fixnum = exitCodeFromStatus(status) });
+                return;
+            }
+
+            try scheduler.processSuspendCurrentTask(pid);
+            try helpers.checkCancellation(ctx);
+        }
+    }
+
     const status = std.posix.waitpid(pid, 0).status;
-    const exit_code: i64 = if (std.posix.W.IFEXITED(status))
-        std.posix.W.EXITSTATUS(status)
-    else if (std.posix.W.IFSIGNALED(status))
-        @as(i64, 128) + @as(i64, @intCast(std.posix.W.TERMSIG(status)))
-    else if (std.posix.W.IFSTOPPED(status))
-        @as(i64, 128) + @as(i64, @intCast(std.posix.W.STOPSIG(status)))
-    else
-        @as(i64, @intCast(status & 0xff));
-    try ctx.stack.push(.{ .fixnum = exit_code });
+    try ctx.stack.push(.{ .fixnum = exitCodeFromStatus(status) });
 }
 
 fn nativeKillPid(ctx: *Context) anyerror!void {
@@ -164,4 +169,21 @@ fn mapSpawnError(err: anyerror) anyerror {
         error.FileNotFound => error.FileNotFound,
         else => error.IOFailed,
     };
+}
+
+fn tryWaitPidNoHang(pid: std.posix.pid_t) ?u32 {
+    const result = std.posix.waitpid(pid, std.posix.W.NOHANG);
+    if (result.pid == 0) return null;
+    return result.status;
+}
+
+fn exitCodeFromStatus(status: u32) i64 {
+    return if (std.posix.W.IFEXITED(status))
+        std.posix.W.EXITSTATUS(status)
+    else if (std.posix.W.IFSIGNALED(status))
+        @as(i64, 128) + @as(i64, @intCast(std.posix.W.TERMSIG(status)))
+    else if (std.posix.W.IFSTOPPED(status))
+        @as(i64, 128) + @as(i64, @intCast(std.posix.W.STOPSIG(status)))
+    else
+        @as(i64, @intCast(status & 0xff));
 }

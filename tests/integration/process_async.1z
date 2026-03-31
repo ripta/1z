@@ -1,0 +1,54 @@
+use "testing" ;
+use "time" ;
+
+test-async-wait-pid: ( -- ) [
+  [
+    { "/bin/sh" "-c" "sleep 1" } inherit: inherit: inherit: native.spawn-process
+    f "stderr inherit returns false for async wait test" assert=
+    f "stdout inherit returns false for async wait test" assert=
+    f "stdin inherit returns false for async wait test" assert=
+    dup [ native.wait-pid 0 "async waiter returns zero" assert= ] curry spawn drop
+    drop
+    [ 10 milliseconds sleep ] elapsed
+    400 milliseconds < "wait-pid suspension keeps scheduler responsive" assert-true
+  ] task-scope
+] ;
+
+test-async-process-stdout: ( -- ) [
+  [
+    { "/bin/sh" "-c" "sleep 1; printf hello" } inherit: pipe: inherit: native.spawn-process
+    f "stderr inherit returns false for async stdout test" assert=
+    dup [ dup 5 stream-read "hello" >bytes "reader gets delayed child stdout" assert= stream-close ] curry spawn drop
+    drop
+    f "stdin inherit returns false for async stdout test" assert=
+    [ 10 milliseconds sleep ] elapsed
+    400 milliseconds < "process stdout read keeps scheduler responsive" assert-true
+    native.wait-pid 0 "child exits zero after async stdout read" assert=
+  ] task-scope
+] ;
+
+test-cancel-process-waiter: ( -- ) [
+  [
+    V{ }
+    { "/bin/sh" "-c" "sleep 30" } inherit: inherit: inherit: native.spawn-process
+    f "stderr inherit returns false for cancel test" assert=
+    f "stdout inherit returns false for cancel test" assert=
+    f "stdin inherit returns false for cancel test" assert=
+    dup [ native.wait-pid drop ] curry
+    2 pick-n [ cancelled? #push! drop ] curry
+    swap [ swap cleanup ] curry curry
+    spawn
+    yield
+    10 milliseconds sleep
+    dup cancel-task drop
+    yield
+    dup 15 native.kill-pid
+    drop
+    dup #len 1 "cancel-task wakes process-blocked waiter" assert=
+    #first t "process waiter sees cancellation during cleanup" assert=
+  ] task-scope
+] ;
+
+test-async-wait-pid
+test-async-process-stdout
+test-cancel-process-waiter

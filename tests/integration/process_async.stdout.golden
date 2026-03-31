@@ -1,0 +1,21 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: stderr inherit returns false for async wait test
+PASS: stdout inherit returns false for async wait test
+PASS: stdin inherit returns false for async wait test
+PASS: wait-pid suspension keeps scheduler responsive
+PASS: async waiter returns zero
+Stack: [ ]
+PASS: stderr inherit returns false for async stdout test
+PASS: stdin inherit returns false for async stdout test
+PASS: process stdout read keeps scheduler responsive
+PASS: reader gets delayed child stdout
+PASS: child exits zero after async stdout read
+Stack: [ ]
+PASS: stderr inherit returns false for cancel test
+PASS: stdout inherit returns false for cancel test
+PASS: stdin inherit returns false for cancel test
+PASS: cancel-task wakes process-blocked waiter
+PASS: process waiter sees cancellation during cleanup
+Stack: [ ]

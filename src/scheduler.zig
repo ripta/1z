@@ -7,6 +7,8 @@ const TaskStatus = task_mod.TaskStatus;
 const TaskScope = task_mod.TaskScope;
 const Multiplexer = @import("multiplexer.zig").Multiplexer;
 const IoEvent = @import("multiplexer.zig").IoEvent;
+const ProcessWaitHandle = @import("multiplexer.zig").ProcessWaitHandle;
+const processWaitHandleKey = @import("multiplexer.zig").processWaitHandleKey;
 const trace = @import("trace.zig");
 
 /// Entry in the sleep queue: a task and its absolute monotonic wake time in nanoseconds.
@@ -25,6 +27,12 @@ fn sleepEntryLessThan(_: void, a: SleepEntry, b: SleepEntry) std.math.Order {
 pub const IoWaitEntry = struct {
     task: *Task,
     event: IoEvent,
+};
+
+pub const ProcessWaitEntry = struct {
+    task: *Task,
+    pid: std.posix.pid_t,
+    handle: ProcessWaitHandle,
 };
 
 /// Read the monotonic clock and return the current time as a single i128 nanosecond value.
@@ -62,6 +70,8 @@ pub const Scheduler = struct {
     multiplexer: Multiplexer,
     /// Maps file descriptors to tasks suspended waiting on I/O readiness.
     io_wait_map: std.AutoHashMapUnmanaged(std.posix.fd_t, IoWaitEntry) = .{},
+    /// Maps child-process wait handles to tasks suspended waiting on exit.
+    process_wait_map: std.AutoHashMapUnmanaged(u64, ProcessWaitEntry) = .{},
     /// Wall-clock stall detection threshold in nanoseconds.
     deadlock_detect_ns: ?i128 = null,
     /// Monotonic timestamp of the last progress event (task done, sleeper woken, I/O ready).
@@ -118,6 +128,7 @@ pub const Scheduler = struct {
         self.sleep_queue.deinit();
         self.multiplexer.deinit();
         self.io_wait_map.deinit(self.allocator);
+        self.process_wait_map.deinit(self.allocator);
     }
 
     /// Register a channel for cleanup when the scheduler is destroyed.
@@ -209,6 +220,23 @@ pub const Scheduler = struct {
         }
     }
 
+    /// Suspend the current task until the child process exits.
+    pub fn processSuspendCurrentTask(self: *Scheduler, pid: std.posix.pid_t) !void {
+        const task = self.current_task orelse return;
+        const handle = try self.multiplexer.registerProcessExit(pid);
+        errdefer self.multiplexer.unregisterProcessExit(handle) catch {};
+
+        const key = processWaitHandleKey(handle);
+        try self.process_wait_map.put(self.allocator, key, .{
+            .task = task,
+            .pid = pid,
+            .handle = handle,
+        });
+        task.blocked_on_process_pid = pid;
+        task.blocked_on_process_key = key;
+        _ = task_mod.swapcontext(&task.uctx, &self.scheduler_uctx);
+    }
+
     /// Move cancelled tasks from the I/O wait map to the run queue so they
     /// resume and unwind cooperatively through their cleanup handlers.
     fn drainCancelledIOWaiters(self: *Scheduler) void {
@@ -226,6 +254,28 @@ pub const Scheduler = struct {
             if (self.io_wait_map.fetchRemove(fd)) |kv| {
                 self.multiplexer.unregister(fd, kv.value.event) catch {};
                 kv.value.task.blocked_on_io_fd = null;
+                self.run_queue.append(self.allocator, kv.value.task) catch {};
+            }
+        }
+    }
+
+    /// Move cancelled process waiters to the run queue so they can unwind.
+    fn drainCancelledProcessWaiters(self: *Scheduler) void {
+        var removals = std.ArrayListUnmanaged(u64){};
+        defer removals.deinit(self.allocator);
+
+        var it = self.process_wait_map.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.task.cancellation_phase != .none) {
+                removals.append(self.allocator, entry.key_ptr.*) catch {};
+            }
+        }
+
+        for (removals.items) |key| {
+            if (self.process_wait_map.fetchRemove(key)) |kv| {
+                self.multiplexer.unregisterProcessExit(kv.value.handle) catch {};
+                kv.value.task.blocked_on_process_pid = null;
+                kv.value.task.blocked_on_process_key = null;
                 self.run_queue.append(self.allocator, kv.value.task) catch {};
             }
         }
@@ -274,12 +324,14 @@ pub const Scheduler = struct {
 
             self.drainCancelledSleepers();
             self.drainCancelledIOWaiters();
+            self.drainCancelledProcessWaiters();
 
             // draining coulda woken waiting tasks via handleTaskDone, so re-check before blocking
             if (self.run_queue.items.len > 0) continue;
 
             const has_sleepers = self.sleep_queue.count() > 0;
             const has_io_waiters = self.io_wait_map.count() > 0;
+            const has_process_waiters = self.process_wait_map.count() > 0;
             const has_blocked_tasks = blk: {
                 for (self.all_tasks.items) |task| {
                     switch (task.getStatus()) {
@@ -291,7 +343,7 @@ pub const Scheduler = struct {
                 break :blk false;
             };
 
-            if (!has_sleepers and !has_io_waiters and !has_blocked_tasks) break;
+            if (!has_sleepers and !has_io_waiters and !has_process_waiters and !has_blocked_tasks) break;
 
             var timeout: ?i128 = if (has_sleepers) blk: {
                 const next = self.sleep_queue.peek().?;
@@ -316,9 +368,22 @@ pub const Scheduler = struct {
                 self.last_progress_ns = monotonicNowNs();
             }
             for (ready) |ev| {
-                if (self.io_wait_map.fetchRemove(ev.fd)) |kv| {
-                    kv.value.task.blocked_on_io_fd = null;
-                    self.run_queue.append(self.allocator, kv.value.task) catch {};
+                switch (ev) {
+                    .io => |ready_io| {
+                        if (self.io_wait_map.fetchRemove(ready_io.fd)) |kv| {
+                            kv.value.task.blocked_on_io_fd = null;
+                            self.run_queue.append(self.allocator, kv.value.task) catch {};
+                        }
+                    },
+                    .process_exit => |ready_process| {
+                        const key = processWaitHandleKey(ready_process.handle);
+                        if (self.process_wait_map.fetchRemove(key)) |kv| {
+                            self.multiplexer.unregisterProcessExit(kv.value.handle) catch {};
+                            kv.value.task.blocked_on_process_pid = null;
+                            kv.value.task.blocked_on_process_key = null;
+                            self.run_queue.append(self.allocator, kv.value.task) catch {};
+                        }
+                    },
                 }
             }
 
@@ -389,6 +454,7 @@ pub const Scheduler = struct {
     const TaskState = enum {
         running,
         blocked_fd,
+        blocked_process,
         blocked_channel,
         blocked_scope,
         sleeping,
@@ -398,6 +464,7 @@ pub const Scheduler = struct {
     fn taskState(self: *const Scheduler, task: *const Task) TaskState {
         if (self.current_task == task) return .running;
         if (task.blocked_on_io_fd != null) return .blocked_fd;
+        if (task.blocked_on_process_pid != null) return .blocked_process;
         if (task.blocked_on_channel != null) return .blocked_channel;
         if (task.blocked_on_scope != null) return .blocked_scope;
         for (self.sleep_queue.items[0..self.sleep_queue.count()]) |entry| {
@@ -419,6 +486,7 @@ pub const Scheduler = struct {
         switch (self.taskState(task)) {
             .running => w.writeAll(" running") catch return,
             .blocked_fd => w.print(" blocked_fd={d}", .{task.blocked_on_io_fd.?}) catch return,
+            .blocked_process => w.print(" blocked_process={d}", .{task.blocked_on_process_pid.?}) catch return,
             .blocked_channel => w.writeAll(" blocked_channel") catch return,
             .blocked_scope => w.writeAll(" blocked_scope") catch return,
             .sleeping => {
@@ -491,6 +559,13 @@ pub const Scheduler = struct {
                 self.multiplexer.unregister(fd, kv.value.event) catch {};
             }
             task.blocked_on_io_fd = null;
+            self.run_queue.append(self.allocator, task) catch {};
+        } else if (task.blocked_on_process_key) |key| {
+            if (self.process_wait_map.fetchRemove(key)) |kv| {
+                self.multiplexer.unregisterProcessExit(kv.value.handle) catch {};
+            }
+            task.blocked_on_process_pid = null;
+            task.blocked_on_process_key = null;
             self.run_queue.append(self.allocator, task) catch {};
         } else if (task.blocked_on_scope) |scope| {
             for (scope.children.items) |child| {
