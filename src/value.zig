@@ -1,6 +1,7 @@
 const std = @import("std");
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const BenchmarkReport = @import("benchmark.zig").BenchmarkReport;
+const Task = @import("task.zig").Task;
 
 /// Instruction represents a single operation in a compiled quotation.
 pub const Instruction = struct {
@@ -340,6 +341,7 @@ pub const Value = union(enum) {
     benchmark_report: *BenchmarkReport,
     stack_effect: StackEffect,
     error_value: ErrorObject,
+    task: *Task,
 
     pub fn write(self: Value, writer: anytype) anyerror!void {
         switch (self) {
@@ -457,6 +459,20 @@ pub const Value = union(enum) {
             },
             .stack_effect => |effect| try effect.write(writer),
             .error_value => |err| try err.write(writer),
+            .task => |t| {
+                if (t.name) |name| {
+                    try writer.print("<task #{d} ({s}) {s}>", .{
+                        t.id,
+                        name,
+                        @tagName(t.status),
+                    });
+                } else {
+                    try writer.print("<task #{d} {s}>", .{
+                        t.id,
+                        @tagName(t.status),
+                    });
+                }
+            },
         }
     }
 
@@ -569,6 +585,7 @@ pub const Value = union(enum) {
             .benchmark_report => |a| a == other.benchmark_report,
             .stack_effect => |a| a.eql(other.stack_effect),
             .error_value => |a| a.eql(other.error_value),
+            .task => |a| a == other.task,
         };
     }
 
@@ -719,7 +736,11 @@ pub const Value = union(enum) {
                     hasher.update(std.mem.asBytes(&data_hash));
                 }
             },
-
+            // Tasks hash by pointer identity (same as equality)
+            .task => |t| {
+                const ptr_val = @intFromPtr(t);
+                hasher.update(std.mem.asBytes(&ptr_val));
+            },
         }
 
         return hasher.final();
@@ -911,5 +932,3 @@ test "cross-type inequality" {
     try std.testing.expect(!str_val.eql(sym_val));
     try std.testing.expect(!arr_val.eql(int_val));
 }
-
-

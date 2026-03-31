@@ -12,6 +12,7 @@ const Module = value_mod.Module;
 const Marker = value_mod.Marker;
 const StructType = value_mod.StructType;
 const StructInstance = value_mod.StructInstance;
+const Task = @import("../task.zig").Task;
 
 const StackEffect = @import("../stack_effect.zig").StackEffect;
 const StackEffectParam = @import("../stack_effect.zig").StackEffectParam;
@@ -129,6 +130,7 @@ pub fn valueTypeName(val: Value) []const u8 {
         .benchmark_report => "benchmark-report",
         .stack_effect => "stack-effect",
         .error_value => "error",
+        .task => "task",
     };
 }
 
@@ -171,6 +173,7 @@ pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]con
         .benchmark_report => allocator.dupe(u8, "<benchmark-report>"),
         .stack_effect => allocator.dupe(u8, "<stack-effect>"),
         .error_value => |e| std.fmt.allocPrint(allocator, "<error {s}>", .{e.error_type}),
+        .task => |t| std.fmt.allocPrint(allocator, "<task #{d}>", .{t.id}),
     };
 }
 
@@ -338,6 +341,42 @@ pub fn popStructInstance(ctx: *Context) !*StructInstance {
         .struct_instance => |si| si,
         else => {
             setTypeMismatchError(ctx, "struct-instance", val);
+            return error.TypeMismatch;
+        },
+    };
+}
+
+pub fn popTask(ctx: *Context) !*Task {
+    const val = try ctx.stack.pop();
+    return switch (val) {
+        .task => |t| t,
+        else => {
+            setTypeMismatchError(ctx, "task", val);
+            return error.TypeMismatch;
+        },
+    };
+}
+
+/// Pop a duration value (tagged integer with inner_type "integer") and return
+/// the raw nanosecond count plus the original Value for re-use.
+pub fn popDuration(ctx: *Context) !struct { ns: i128, val: Value } {
+    const val = try ctx.stack.pop();
+    return switch (val) {
+        .tagged => |t| {
+            if (!std.mem.eql(u8, t.tag.inner_type, "integer")) {
+                setTypeMismatchError(ctx, "duration", val);
+                return error.TypeMismatch;
+            }
+            return switch (t.inner.*) {
+                .integer => |i| .{ .ns = @as(i128, i), .val = val },
+                else => {
+                    setTypeMismatchError(ctx, "duration", val);
+                    return error.TypeMismatch;
+                },
+            };
+        },
+        else => {
+            setTypeMismatchError(ctx, "duration", val);
             return error.TypeMismatch;
         },
     };

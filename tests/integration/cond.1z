@@ -44,8 +44,9 @@ use "testing" ;
 
 \ No matching branch and no default
 [ 99 dup {
-  { [ dup 0 = ] [ drop "zero" ] }
-} cond ] ENoMatchingBranch "no match without default errors" assert-error-type
+    { [ dup 0 = ] [ drop "zero" ] }
+  } cond
+] ENoMatchingBranch "no match without default errors" assert-error-type
 
 "cond preserves stack" test-section
 

@@ -9,7 +9,7 @@ microseconds: ( n -- duration ) [ 1000 * >duration ] ;
 milliseconds: ( n -- duration ) [ 1000000 * >duration ] ;
 seconds:      ( n -- duration ) [ 1000000000 * >duration ] ;
 minutes:      ( n -- duration ) [ 60 * seconds ] ;
-hours:        ( n -- duration ) [ 60 * minutes ] ;
+hours: ( n -- duration ) [ 60 * minutes ] ;
 
 \ Timestamp: virtual type backed by a hidden struct
 timestamp-inner: struct{ ts-sec ts-nsec } ;
@@ -19,7 +19,7 @@ timestamp: virtual{ timestamp-inner } ;
 make-timestamp: ( sec nsec -- timestamp ) [ make-timestamp-inner >timestamp ] ;
 
 \ Accessors
-timestamp-sec:  ( timestamp -- sec )  [ timestamp> ts-sec>> ] ;
+timestamp-sec: ( timestamp -- sec ) [ timestamp> ts-sec>> ] ;
 timestamp-nsec: ( timestamp -- nsec ) [ timestamp> ts-nsec>> ] ;
 
 \ Create timestamp from current wall-clock time
@@ -97,7 +97,7 @@ timezone: virtual{ tz-inner } ;
 make-timezone: ( offset-min name -- timezone ) [ make-tz-inner >timezone ] ;
 
 timezone-offset: ( tz -- offset-min ) [ timezone> offset-min>> ] ;
-timezone-name:   ( tz -- name )       [ timezone> name>> ] ;
+timezone-name: ( tz -- name ) [ timezone> name>> ] ;
 
 utc: ( -- timezone ) [ 0 "UTC" make-timezone ] ;
 local: ( -- timezone ) [ 0 "" make-timezone ] ;
@@ -212,8 +212,8 @@ time-format-in: ( timestamp tz fmt-string -- string ) [
 \ Format constants
 iso8601-fmt: const [ "{year}-{month-num:width=2,fill=0}-{day:width=2,fill=0}T{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0}{tz}" ] ;
 rfc2822-fmt: const [ "{weekday-short}, {day:width=2,fill=0} {month-short} {year} {hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0} {tz}" ] ;
-date-fmt: const [ "{year}-{month-num:width=2,fill=0}-{day:width=2,fill=0}" ] ;
-time-fmt: const [ "{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0}" ] ;
+date-fmt:    const [ "{year}-{month-num:width=2,fill=0}-{day:width=2,fill=0}" ] ;
+time-fmt:    const [ "{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0}" ] ;
 
 \ --- Elapsed time measurement ---
 

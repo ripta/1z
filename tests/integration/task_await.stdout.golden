@@ -1,0 +1,21 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: await returns task result
+Stack: [ ]
+PASS: await copies string across arenas
+Stack: [ ]
+PASS: await copies array across arenas
+Stack: [ ]
+PASS: await hash: key a
+Stack: [ ]
+PASS: await with no result returns f
+Stack: [ ]
+PASS: await already-completed task
+Stack: [ ]
+PASS: await propagates task error
+Stack: [ ]

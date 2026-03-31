@@ -268,8 +268,8 @@ parse-flags: [
     ] #each
   ] ;
 
-  pf-result: parameter [ [ ] make-mutable-map ] ;
-  pf-desc: parameter [ "" ] ;
+  pf-result:    parameter [ [ ] make-mutable-map ] ;
+  pf-desc:      parameter [ "" ] ;
   pf-pos-state: M{ idx: 0 } ;
 
   \

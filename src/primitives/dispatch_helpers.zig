@@ -17,7 +17,7 @@ pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
 
     const a_name = dispatch_mod.dispatchTypeName(a);
     const b_name = dispatch_mod.dispatchTypeName(b);
-    if (ctx.dispatch.lookupBinary(word_name, a_name, b_name)) |entry| {
+    if (ctx.lookupBinaryDispatch(word_name, a_name, b_name)) |entry| {
         try ctx.executeQuotation(.{ .instructions = entry.body });
         return true;
     }
@@ -37,7 +37,7 @@ pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
     if (!dispatch_mod.isUserType(a)) return false;
 
     const a_name = dispatch_mod.dispatchTypeName(a);
-    if (ctx.dispatch.lookupUnary(word_name, a_name)) |entry| {
+    if (ctx.lookupUnaryDispatch(word_name, a_name)) |entry| {
         try ctx.executeQuotation(.{ .instructions = entry.body });
         return true;
     }
@@ -58,7 +58,7 @@ pub fn tryDispatchGeneric(ctx: *Context, word_name: []const u8) !bool {
         const b = try ctx.stack.peek();
         const a_name = dispatch_mod.dispatchTypeName(a);
         const b_name = dispatch_mod.dispatchTypeName(b);
-        if (ctx.dispatch.lookupBinary(word_name, a_name, b_name)) |entry| {
+        if (ctx.lookupBinaryDispatch(word_name, a_name, b_name)) |entry| {
             try ctx.executeQuotation(.{ .instructions = entry.body });
             return true;
         }
@@ -67,7 +67,7 @@ pub fn tryDispatchGeneric(ctx: *Context, word_name: []const u8) !bool {
     if (ctx.stack.depth() >= 1) {
         const a = try ctx.stack.peek();
         const a_name = dispatch_mod.dispatchTypeName(a);
-        if (ctx.dispatch.lookupUnary(word_name, a_name)) |entry| {
+        if (ctx.lookupUnaryDispatch(word_name, a_name)) |entry| {
             try ctx.executeQuotation(.{ .instructions = entry.body });
             return true;
         }

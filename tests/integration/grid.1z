@@ -4,9 +4,9 @@ use "testing" ;
 use "grid" ;
 
 \ Build marks sets using @adjoin (S{ } can't nest { } inside)
-marks-01: S{ } { 0 0 } @adjoin { 1 1 } @adjoin ;
-marks-diag: S{ } { 0 0 } @adjoin { 1 1 } @adjoin { 2 2 } @adjoin ;
-marks-row: S{ } { 0 0 } @adjoin { 2 0 } @adjoin ;
+marks-01:     S{ } { 0 0 } @adjoin { 1 1 } @adjoin ;
+marks-diag:   S{ } { 0 0 } @adjoin { 1 1 } @adjoin { 2 2 } @adjoin ;
+marks-row:    S{ } { 0 0 } @adjoin { 2 0 } @adjoin ;
 marks-single: S{ } { 0 0 } @adjoin ;
 
 "Grid creation" test-section

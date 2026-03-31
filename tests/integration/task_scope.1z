@@ -1,0 +1,42 @@
+use "testing" ;
+
+test-empty-scope: ( -- ) [
+  [ ] task-scope
+  t "empty task-scope completes" assert-true
+] ;
+
+test-spawn-returns-task: ( -- ) [
+  [
+    [ ] spawn
+    type-of task: "spawn returns task type" assert=
+  ] task-scope
+] ;
+
+test-spawn-runs: ( -- ) [
+  [
+    [ 1 1 + drop ] spawn drop
+  ] task-scope
+  t "spawned task runs" assert-true
+] ;
+
+test-yield: ( -- ) [
+  [
+    [ yield ] spawn drop
+  ] task-scope
+  t "yield works" assert-true
+] ;
+
+test-multiple-tasks: ( -- ) [
+  [
+    [ 1 drop ] spawn drop
+    [ 2 drop ] spawn drop
+    [ 3 drop ] spawn drop
+  ] task-scope
+  t "multiple spawned tasks complete" assert-true
+] ;
+
+test-empty-scope
+test-spawn-returns-task
+test-spawn-runs
+test-yield
+test-multiple-tasks

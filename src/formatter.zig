@@ -463,12 +463,16 @@ pub fn formatString(allocator: Allocator, input: []const u8) ![]u8 {
     const formatted = try output.toOwnedSlice(allocator);
     defer allocator.free(formatted);
 
-    // Post-process to align consecutive inline comments
-    return alignComments(allocator, formatted);
+    // Post-process to align consecutive inline comments and single-line definitions
+    const with_comments = try alignComments(allocator, formatted);
+    defer allocator.free(with_comments);
+    return alignDefinitions(allocator, with_comments);
 }
 
 /// Align consecutive inline comments to the same column.
 /// Groups of consecutive lines with inline comments are aligned together.
+///
+/// XXX(ripta): Not a fan of reparsing lines here. Find better ways in the future.
 fn alignComments(allocator: Allocator, input: []const u8) ![]u8 {
     var result: std.ArrayListUnmanaged(u8) = .{};
     errdefer result.deinit(allocator);
@@ -569,6 +573,274 @@ fn findInlineComment(line: []const u8) ?usize {
     }
 
     return null;
+}
+
+/// Parsed representation of a single-line definition for alignment purposes.
+const DefinitionLine = struct {
+    indent: []const u8,
+    name: []const u8,
+    has_stack_effect: bool,
+    stack_effect: []const u8,
+    body: []const u8,
+    trailing_comment: ?[]const u8,
+};
+
+/// Parse a line as a single-line definition.
+/// Returns null if the line is not a single-line definition.
+///
+/// Logic:
+/// - Ignore leading indentation for matching, but preserve it in the result
+/// - Must end with " ;" possibly followed by an inline comment
+/// - First token must be a symbol
+/// - If there's a stack effect, it must be immediately after the name and properly closed
+/// - The body must have content (can't be empty after name and optional stack effect)
+///
+/// XXX(ripta): Not a fan of reparsing lines here. Find better ways in the future.
+fn parseDefinitionLine(line: []const u8) ?DefinitionLine {
+    const trimmed_right = std.mem.trimRight(u8, line, " \t");
+
+    var trailing_comment: ?[]const u8 = null;
+    var def_end: usize = undefined;
+
+    if (findInlineComment(trimmed_right)) |comment_pos| {
+        // XXX: Line has an inline comment, so the definition part is before it
+        const before_comment = std.mem.trimRight(u8, trimmed_right[0 .. comment_pos - 2], " ");
+        if (before_comment.len < 2 or !std.mem.endsWith(u8, before_comment, " ;")) return null;
+        def_end = before_comment.len - 2;
+        trailing_comment = trimmed_right[comment_pos..];
+    } else {
+        if (!std.mem.endsWith(u8, trimmed_right, " ;")) return null;
+        def_end = trimmed_right.len - 2;
+    }
+
+    const stripped = std.mem.trimLeft(u8, line, " ");
+    const indent_len = line.len - stripped.len;
+    const indent = line[0..indent_len];
+
+    const content = std.mem.trimRight(u8, line[indent_len..def_end], " ");
+
+    const first_space = std.mem.indexOf(u8, content, " ") orelse return null;
+    const first_word = content[0..first_space];
+    if (first_word.len < 2 or first_word[first_word.len - 1] != ':') return null;
+
+    // Don't align multi-line definitions
+    // A definition must have content after the name
+    const after_name = std.mem.trimLeft(u8, content[first_space..], " ");
+    if (after_name.len == 0) return null;
+
+    // Check if there's a stack effect
+    if (after_name[0] == '(') {
+        const close_paren = std.mem.indexOf(u8, after_name, " )") orelse return null;
+        const stack_effect = after_name[0 .. close_paren + 2];
+        const body = std.mem.trimLeft(u8, after_name[close_paren + 2 ..], " ");
+        if (body.len == 0) return null;
+
+        return .{
+            .indent = indent,
+            .name = first_word,
+            .has_stack_effect = true,
+            .stack_effect = stack_effect,
+            .body = body,
+            .trailing_comment = trailing_comment,
+        };
+    }
+
+    return .{
+        .indent = indent,
+        .name = first_word,
+        .has_stack_effect = false,
+        .stack_effect = "",
+        .body = after_name,
+        .trailing_comment = trailing_comment,
+    };
+}
+
+/// Align consecutive single-line definitions so their stack effects and bodies
+/// line up vertically. Groups of 3 or more like-structured definitions are
+/// aligned together. A divergence limit prevents excessive padding.
+///
+/// XXX(ripta): Not a fan of reparsing lines here. Find better ways in the future.
+fn alignDefinitions(allocator: Allocator, input: []const u8) ![]u8 {
+    var result: std.ArrayListUnmanaged(u8) = .{};
+    errdefer result.deinit(allocator);
+
+    var lines: std.ArrayListUnmanaged([]const u8) = .{};
+    defer lines.deinit(allocator);
+
+    var line_start: usize = 0;
+    for (input, 0..) |c, idx| {
+        if (c == '\n') {
+            try lines.append(allocator, input[line_start..idx]);
+            line_start = idx + 1;
+        }
+    }
+    if (line_start < input.len) {
+        try lines.append(allocator, input[line_start..]);
+    }
+
+    var parsed = try std.ArrayListUnmanaged(?DefinitionLine).initCapacity(allocator, lines.items.len);
+    defer parsed.deinit(allocator);
+    for (lines.items) |line| {
+        parsed.appendAssumeCapacity(parseDefinitionLine(line));
+    }
+
+    var i: usize = 0;
+    while (i < lines.items.len) {
+        // Try to find a group of consecutive definition lines
+        if (parsed.items[i] == null) {
+            try result.appendSlice(allocator, lines.items[i]);
+            try result.append(allocator, '\n');
+            i += 1;
+            continue;
+        }
+
+        // Found a definition; scan for the end of the group
+        const group_start = i;
+        var group_end = i;
+        while (group_end < lines.items.len and parsed.items[group_end] != null) {
+            group_end += 1;
+        }
+
+        // Split group into sub-runs of like-structured definitions
+        var run_start = group_start;
+        while (run_start < group_end) {
+            const run_has_effect = parsed.items[run_start].?.has_stack_effect;
+            var run_end = run_start + 1;
+            while (run_end < group_end and parsed.items[run_end].?.has_stack_effect == run_has_effect) {
+                run_end += 1;
+            }
+
+            const run_len = run_end - run_start;
+            if (run_len >= 3) {
+                // Apply divergence limit subgrouping and alignment
+                try alignDefinitionRun(allocator, &result, parsed.items[run_start..run_end], lines.items[run_start..run_end]);
+            } else {
+                // Too few; output as-is
+                for (lines.items[run_start..run_end]) |line| {
+                    try result.appendSlice(allocator, line);
+                    try result.append(allocator, '\n');
+                }
+            }
+
+            run_start = run_end;
+        }
+
+        i = group_end;
+    }
+
+    if (result.items.len > 0 and input.len > 0 and input[input.len - 1] != '\n') {
+        _ = result.pop();
+    }
+
+    return result.toOwnedSlice(allocator);
+}
+
+/// Align a run of like-structured definitions, applying divergence-limit
+/// subgrouping as needed.
+fn alignDefinitionRun(
+    allocator: Allocator,
+    result: *std.ArrayListUnmanaged(u8),
+    defs: []const ?DefinitionLine,
+    raw_lines: []const []const u8,
+) !void {
+    // XXX: Apply divergence limit subgrouping with greedy scan? Keep track of subgroup, flush when adding next would violate any existing member's padding limit
+    var subgroup_start: usize = 0;
+    while (subgroup_start < defs.len) {
+        var subgroup_end = subgroup_start + 1;
+        var max_name_len = defs[subgroup_start].?.name.len;
+        var min_name_len = defs[subgroup_start].?.name.len;
+
+        while (subgroup_end < defs.len) {
+            const candidate_len = defs[subgroup_end].?.name.len;
+            const new_max = @max(max_name_len, candidate_len);
+            const new_min = @min(min_name_len, candidate_len);
+
+            // Check if adding this candidate would violate any member's limit
+            // For any member, padding must not exceed min(this_name_len, 15)
+            const padding_needed = new_max - new_min;
+            const limit = @min(new_min, 15);
+            if (padding_needed > limit) {
+                break;
+            }
+
+            max_name_len = new_max;
+            min_name_len = new_min;
+            subgroup_end += 1;
+        }
+
+        const subgroup_len = subgroup_end - subgroup_start;
+        if (subgroup_len >= 3) {
+            try emitAlignedSubgroup(allocator, result, defs[subgroup_start..subgroup_end]);
+        } else {
+            for (raw_lines[subgroup_start..subgroup_end]) |line| {
+                try result.appendSlice(allocator, line);
+                try result.append(allocator, '\n');
+            }
+        }
+
+        subgroup_start = subgroup_end;
+    }
+}
+
+/// Emit a subgroup of definitions with aligned columns.
+///
+/// Logic:
+/// - col 1: name, padded to max name length in subgroup
+/// - col 2 (if stack effects): stack effect, padded to max effect length in subgroup
+/// - col 3: body
+fn emitAlignedSubgroup(
+    allocator: Allocator,
+    result: *std.ArrayListUnmanaged(u8),
+    defs: []const ?DefinitionLine,
+) !void {
+    var max_name_len: usize = 0;
+    for (defs) |maybe_def| {
+        const def = maybe_def.?;
+        max_name_len = @max(max_name_len, def.name.len);
+    }
+
+    const has_stack_effect = defs[0].?.has_stack_effect;
+
+    var max_effect_len: usize = 0;
+    if (has_stack_effect) {
+        for (defs) |maybe_def| {
+            const def = maybe_def.?;
+            max_effect_len = @max(max_effect_len, def.stack_effect.len);
+        }
+    }
+
+    for (defs) |maybe_def| {
+        const def = maybe_def.?;
+
+        try result.appendSlice(allocator, def.indent);
+        try result.appendSlice(allocator, def.name);
+
+        const name_padding = max_name_len - def.name.len;
+        for (0..name_padding) |_| {
+            try result.append(allocator, ' ');
+        }
+
+        if (has_stack_effect) {
+            try result.append(allocator, ' ');
+            try result.appendSlice(allocator, def.stack_effect);
+
+            const effect_padding = max_effect_len - def.stack_effect.len;
+            for (0..effect_padding) |_| {
+                try result.append(allocator, ' ');
+            }
+        }
+
+        try result.append(allocator, ' ');
+        try result.appendSlice(allocator, def.body);
+        try result.appendSlice(allocator, " ;");
+
+        if (def.trailing_comment) |comment| {
+            try result.appendSlice(allocator, "  ");
+            try result.appendSlice(allocator, comment);
+        }
+
+        try result.append(allocator, '\n');
+    }
 }
 
 /// Format a file in-place.

@@ -41,11 +41,11 @@ fib-memo: ( n -- fib(n) ) [
   ] if
 ] ;
 
-make-benchmark-report
-  "fib(15)"      [ 15 fib drop ] benchmark-run
-  "fib(20)"      [ 20 fib drop ] benchmark-run
+[
+  "fib(15)" [ 15 fib drop ] benchmark-run
+  "fib(20)" [ 20 fib drop ] benchmark-run
   "fib-iter(30)" [ 30 fib-iter drop ] benchmark-run
   "fib-iter(40)" [ 40 fib-iter drop ] benchmark-run
   "fib-memo(30)" [ [ 30 fib-memo drop ] with-memo ] benchmark-run
   "fib-memo(40)" [ [ 40 fib-memo drop ] with-memo ] benchmark-run
-print-benchmark-report
+] run-benchmarks

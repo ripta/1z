@@ -1,0 +1,21 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: await-all returns results in order
+Stack: [ ]
+PASS: await-all on empty array
+Stack: [ ]
+PASS: await-all with mixed yields
+Stack: [ ]
+PASS: result array has 3 elements
+PASS: first no-result task produces f
+PASS: middle task produces 42
+PASS: last no-result task produces f
+Stack: [ ]
+PASS: await-all propagates task error
+Stack: [ ]
+PASS: first error in array order propagates
+Stack: [ ]

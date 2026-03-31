@@ -1,17 +1,14 @@
 === method{ registration errors ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ [ nonexistent-word: M{ define: [ define-method ] types: { "duration" } body: [ drop ] } ; ] ]
 Stack: [ [ nonexistent-word: M{ define: [ define-method ] types: { "duration" } body: [ drop ] } ; ] [ error-type: @get word-not-found: = t "error on non-existent word" assert= ] ]
 PASS: error on non-existent word
 Stack: [ ]
 Stack: [ ]
-Stack: [ [ regular-word: M{ define: [ define-method ] types: { "duration" } body: [ drop ] } ; ] ]
 Stack: [ [ regular-word: M{ define: [ define-method ] types: { "duration" } body: [ drop ] } ; ] [ error-type: @get type-mismatch: = t "error on non-generic user word" assert= ] ]
 PASS: error on non-generic user word
 Stack: [ ]
 Stack: [ ]
-Stack: [ [ +: M{ define: [ define-method ] types: { "duration" "duration" } body: [ drop drop 1 >duration ] } ; ] ]
 Stack: [ [ +: M{ define: [ define-method ] types: { "duration" "duration" } body: [ drop drop 1 >duration ] } ; ] [ error-type: @get duplicate-method: = t "error on duplicate without mutable" assert= ] ]
 PASS: error on duplicate without mutable
 Stack: [ ]

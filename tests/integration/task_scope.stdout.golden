@@ -1,0 +1,15 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: empty task-scope completes
+Stack: [ ]
+PASS: spawn returns task type
+Stack: [ ]
+PASS: spawned task runs
+Stack: [ ]
+PASS: yield works
+Stack: [ ]
+PASS: multiple spawned tasks complete
+Stack: [ ]

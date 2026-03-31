@@ -1,0 +1,94 @@
+use "testing" ;
+
+\ -- 1. Dictionary fallback: tasks inherit outer words --
+
+test-dictionary-fallback: ( -- ) [
+  outer-word: ( -- n ) [ 42 ] ;
+  [
+    \ Task calls a word defined in the outer scope. If it can't find
+    \ outer-word the task will error and task-scope will propagate.
+    [ outer-word 42 = [ ] [ "outer-word returned wrong value" throw ] if ] spawn drop
+  ] task-scope
+  t "task inherits outer dictionary" assert-true
+] ;
+
+\ -- 2. Task-local definitions don't leak --
+
+test-local-def-no-leak: ( -- ) [
+  [
+    \ Spawn a task that defines a word locally
+    [
+      task-only-word: ( -- n ) [ 99 ] ;
+      task-only-word drop
+    ] spawn drop
+
+    \ The scope task itself should not see task-only-word
+    [ task-only-word ] "task-local word not visible to sibling" assert-error
+  ] task-scope
+] ;
+
+\ -- 3. Dynamic variable snapshot isolation --
+
+test-dvar-snapshot: parameter [ 0 ] ;
+
+test-dvar-isolation: ( -- ) [
+  10 test-dvar-snapshot [
+    [
+      \ Task sees the snapshot value from spawn time
+      [
+        test-dvar-snapshot get 10 =
+        [ ] [ "task did not see parent dvar value" throw ] if
+      ] spawn drop
+    ] task-scope
+  ] with-parameter
+  t "task sees parent dvar snapshot" assert-true
+] ;
+
+test-dvar-task-modify: ( -- ) [
+  10 test-dvar-snapshot [
+    [
+      \ Task modifies its own copy; parent is unaffected
+      [
+        20 test-dvar-snapshot [
+          test-dvar-snapshot get 20 =
+          [ ] [ "task did not see own modified dvar" throw ] if
+        ] with-parameter
+      ] spawn drop
+    ] task-scope
+    test-dvar-snapshot get 10 "parent dvar unchanged after task modify" assert=
+  ] with-parameter
+] ;
+
+\ -- 4. Independent stacks --
+
+test-independent-stacks: ( -- ) [
+  [
+    [ 111 yield drop ] spawn drop
+    [ 222 yield drop ] spawn drop
+  ] task-scope
+  t "independent stacks with yield" assert-true
+] ;
+
+\ -- 5. Per-task string/array allocation --
+
+test-per-task-alloc: ( -- ) [
+  [
+    [
+      "hello" " world" #append "hello world" =
+      [ ] [ "string append failed in task" throw ] if
+    ] spawn drop
+    [
+      { 1 2 3 } { 4 5 } #append
+      #len 5 =
+      [ ] [ "array append length wrong in task" throw ] if
+    ] spawn drop
+  ] task-scope
+  t "per-task heap allocation works" assert-true
+] ;
+
+test-dictionary-fallback
+test-local-def-no-leak
+test-dvar-isolation
+test-dvar-task-modify
+test-independent-stacks
+test-per-task-alloc
