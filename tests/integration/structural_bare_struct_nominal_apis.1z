@@ -1,0 +1,13 @@
+use "testing" ;
+
+"cross-definition nominal generated APIs" test-section
+
+point-a: struct{ x y } ;
+point-b: struct{ x y } ;
+
+1 2 make-point-a point-b instance-of? f "instance-of? stays nominal from point-a to point-b" assert=
+1 2 make-point-b point-a instance-of? f "instance-of? stays nominal from point-b to point-a" assert=
+[ 1 2 make-point-b unmake-point-a ] "unmake-point-a rejects point-b instance" assert-error
+[ 1 2 make-point-a unmake-point-b ] "unmake-point-b rejects point-a instance" assert-error
+[ 1 2 make-point-b point-a>hash ] "point-a>hash rejects point-b instance" assert-error
+[ 1 2 make-point-a point-b>hash ] "point-b>hash rejects point-a instance" assert-error

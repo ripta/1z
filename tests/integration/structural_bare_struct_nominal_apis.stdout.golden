@@ -1,0 +1,16 @@
+=== cross-definition nominal generated APIs ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: instance-of? stays nominal from point-a to point-b
+Stack: [ ]
+PASS: instance-of? stays nominal from point-b to point-a
+Stack: [ ]
+PASS: unmake-point-a rejects point-b instance
+Stack: [ ]
+PASS: unmake-point-b rejects point-a instance
+Stack: [ ]
+PASS: point-a>hash rejects point-b instance
+Stack: [ ]
+PASS: point-b>hash rejects point-a instance
+Stack: [ ]
