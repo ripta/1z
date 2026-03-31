@@ -1,0 +1,28 @@
+\ Tests: uppercase and lowercase string operations
+
+use "testing" ;
+
+"String case operations" test-section
+
+\ Basic uppercase tests
+"hello" uppercase "HELLO" "uppercase basic" assert=
+"HELLO" uppercase "HELLO" "uppercase already upper" assert=
+"Hello World" uppercase "HELLO WORLD" "uppercase mixed" assert=
+
+\ Basic lowercase tests
+"HELLO" lowercase "hello" "lowercase basic" assert=
+"hello" lowercase "hello" "lowercase already lower" assert=
+"Hello World" lowercase "hello world" "lowercase mixed" assert=
+
+\ Edge cases
+"" uppercase "" "uppercase empty" assert=
+"" lowercase "" "lowercase empty" assert=
+"123!@#" uppercase "123!@#" "uppercase non-alpha" assert=
+"123!@#" lowercase "123!@#" "lowercase non-alpha" assert=
+
+\ Mixed content
+"abc123XYZ" uppercase "ABC123XYZ" "uppercase alphanumeric" assert=
+"abc123XYZ" lowercase "abc123xyz" "lowercase alphanumeric" assert=
+
+\ Non-ASCII passthrough (UTF-8 bytes preserved)
+"cafe" uppercase "CAFE" "uppercase ascii in utf8 context" assert=

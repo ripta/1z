@@ -1,0 +1,41 @@
+\ tests/integration/truthiness.1z - Verify truthiness semantics
+\ Only f is falsy; everything else (including 0) is truthy
+
+\ === Boolean values ===
+t [ "PASS" ] [ "FAIL" ] if ": t is truthy" #append print-line
+f [ "FAIL" ] [ "PASS" ] if ": f is falsy" #append print-line
+
+\ === Integer values (all truthy, including 0) ===
+0 [ "PASS" ] [ "FAIL" ] if ": 0 is truthy" #append print-line
+1 [ "PASS" ] [ "FAIL" ] if ": 1 is truthy" #append print-line
+-1 [ "PASS" ] [ "FAIL" ] if ": -1 is truthy" #append print-line
+42 [ "PASS" ] [ "FAIL" ] if ": 42 is truthy" #append print-line
+
+\ === String values (all truthy, including empty) ===
+"" [ "PASS" ] [ "FAIL" ] if ": empty string is truthy" #append print-line
+"hello" [ "PASS" ] [ "FAIL" ] if ": non-empty string is truthy" #append print-line
+
+\ === Array values (all truthy, including empty) ===
+{ } [ "PASS" ] [ "FAIL" ] if ": empty array is truthy" #append print-line
+{ 1 2 3 } [ "PASS" ] [ "FAIL" ] if ": non-empty array is truthy" #append print-line
+
+\ === Other types (all truthy) ===
+[ ] [ "PASS" ] [ "FAIL" ] if ": empty quotation is truthy" #append print-line
+H{ } [ "PASS" ] [ "FAIL" ] if ": empty hash is truthy" #append print-line
+foo: [ "PASS" ] [ "FAIL" ] if ": symbol is truthy" #append print-line
+
+\ === Practical use case: index-of returning 0 vs f ===
+\ This pattern works cleanly now because 0 is truthy
+found-check: ( idx -- ) [
+  [ "PASS: index found" ] [ "FAIL: index not found" ] if print-line
+] ;
+
+not-found-check: ( idx -- ) [
+  [ "FAIL: should not be found" ] [ "PASS: correctly not found" ] if print-line
+] ;
+
+\ Simulate index-of returning 0 (found at first position)
+0 found-check
+
+\ Simulate index-of returning f (not found)
+f not-found-check

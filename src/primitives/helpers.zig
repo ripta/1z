@@ -132,6 +132,48 @@ pub fn valueTypeName(val: Value) []const u8 {
     };
 }
 
+/// Format a value briefly for error messages.
+/// Returns a short representation suitable for inclusion in error text.
+/// Strings and symbols are truncated to max_len characters.
+pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]const u8 {
+    return switch (val) {
+        .integer => |i| std.fmt.allocPrint(allocator, "{d}", .{i}),
+        .boolean => |b| allocator.dupe(u8, if (b) "t" else "f"),
+        .string => |s| blk: {
+            if (s.len <= max_len) {
+                break :blk std.fmt.allocPrint(allocator, "\"{s}\"", .{s});
+            } else {
+                break :blk std.fmt.allocPrint(allocator, "\"{s}...\"", .{s[0..max_len]});
+            }
+        },
+        .symbol => |s| blk: {
+            if (s.len <= max_len) {
+                break :blk std.fmt.allocPrint(allocator, "{s}:", .{s});
+            } else {
+                break :blk std.fmt.allocPrint(allocator, "{s}...:", .{s[0..max_len]});
+            }
+        },
+        .array => |items| std.fmt.allocPrint(allocator, "array[{d}]", .{items.len}),
+        .quotation => |q| std.fmt.allocPrint(allocator, "quotation[{d}]", .{q.instructions.len}),
+        .hash => |h| std.fmt.allocPrint(allocator, "hash[{d}]", .{h.count()}),
+        .vector => |v| std.fmt.allocPrint(allocator, "vector[{d}]", .{v.items.len}),
+        .byte_array => |b| std.fmt.allocPrint(allocator, "byte-array[{d}]", .{b.items.len}),
+        .set => |s| std.fmt.allocPrint(allocator, "set[{d}]", .{s.count()}),
+        .mutable_map => |m| std.fmt.allocPrint(allocator, "mutable-map[{d}]", .{m.count()}),
+        .stream => allocator.dupe(u8, "<stream>"),
+        .parameter => |p| std.fmt.allocPrint(allocator, "<parameter {s}>", .{p.name}),
+        .module => |m| std.fmt.allocPrint(allocator, "<module {s}>", .{m.name}),
+        .marker => |m| std.fmt.allocPrint(allocator, "<marker {s}>", .{m.name}),
+        .struct_type => |st| std.fmt.allocPrint(allocator, "<struct-type {s}>", .{st.name}),
+        .struct_instance => |si| std.fmt.allocPrint(allocator, "<{s} instance>", .{si.struct_type.name}),
+        .tagged => |t| std.fmt.allocPrint(allocator, "<{s}>", .{t.tag.name}),
+        .template => allocator.dupe(u8, "<template>"),
+        .benchmark_report => allocator.dupe(u8, "<benchmark-report>"),
+        .stack_effect => allocator.dupe(u8, "<stack-effect>"),
+        .error_value => |e| std.fmt.allocPrint(allocator, "<error {s}>", .{e.error_type}),
+    };
+}
+
 // =============================================================================
 // Error context helpers
 // =============================================================================
@@ -143,6 +185,18 @@ pub fn setErrorContext(ctx: *Context, comptime fmt: []const u8, args: anytype) v
     ctx.pending_error_message = std.fmt.allocPrint(ctx.arena.allocator(), fmt, args) catch null;
 }
 
+/// Set a pending error message, special case for type mismatch errors,
+/// so we can include the actual value.
+pub fn setTypeMismatchError(ctx: *Context, expected: []const u8, val: Value) void {
+    const allocator = ctx.arena.allocator();
+    const val_brief = formatValueBrief(allocator, val, 20) catch valueTypeName(val);
+    ctx.pending_error_message = std.fmt.allocPrint(
+        allocator,
+        "expected {s}, got {s} {s}",
+        .{ expected, valueTypeName(val), val_brief },
+    ) catch null;
+}
+
 // =============================================================================
 // Type-safe poppers
 // =============================================================================
@@ -152,21 +206,19 @@ pub fn popInteger(ctx: *Context) !i64 {
     return switch (val) {
         .integer => |i| i,
         else => {
-            setErrorContext(ctx, "expected integer, got {s}", .{valueTypeName(val)});
+            setTypeMismatchError(ctx, "integer", val);
             return error.TypeMismatch;
         },
     };
 }
 
+/// Pop a boolean value.
+/// Only the explicit false value is false. All other values are true.
 pub fn popBoolean(ctx: *Context) !bool {
     const val = try ctx.stack.pop();
     return switch (val) {
         .boolean => |b| b,
-        .integer => |i| i != 0,
-        else => {
-            setErrorContext(ctx, "expected boolean, got {s}", .{valueTypeName(val)});
-            return error.TypeMismatch;
-        },
+        else => true,
     };
 }
 
@@ -175,7 +227,7 @@ pub fn popQuotation(ctx: *Context) !Quotation {
     return switch (val) {
         .quotation => |q| q,
         else => {
-            setErrorContext(ctx, "expected quotation, got {s}", .{valueTypeName(val)});
+            setTypeMismatchError(ctx, "quotation", val);
             return error.TypeMismatch;
         },
     };
@@ -186,7 +238,7 @@ pub fn popSymbol(ctx: *Context) ![]const u8 {
     return switch (val) {
         .symbol => |s| s,
         else => {
-            setErrorContext(ctx, "expected symbol, got {s}", .{valueTypeName(val)});
+            setTypeMismatchError(ctx, "symbol", val);
             return error.TypeMismatch;
         },
     };
@@ -197,7 +249,7 @@ pub fn popString(ctx: *Context) ![]const u8 {
     return switch (val) {
         .string => |s| s,
         else => {
-            setErrorContext(ctx, "expected string, got {s}", .{valueTypeName(val)});
+            setTypeMismatchError(ctx, "string", val);
             return error.TypeMismatch;
         },
     };
@@ -208,7 +260,7 @@ pub fn popStackEffect(ctx: *Context) !StackEffect {
     return switch (val) {
         .stack_effect => |se| se,
         else => {
-            setErrorContext(ctx, "expected stack-effect, got {s}", .{valueTypeName(val)});
+            setTypeMismatchError(ctx, "stack-effect", val);
             return error.TypeMismatch;
         },
     };
@@ -219,7 +271,7 @@ pub fn popVector(ctx: *Context) !*Vector {
     return switch (val) {
         .vector => |v| v,
         else => {
-            setErrorContext(ctx, "expected vector, got {s}", .{valueTypeName(val)});
+            setTypeMismatchError(ctx, "vector", val);
             return error.TypeMismatch;
         },
     };
@@ -230,7 +282,7 @@ pub fn popByteArray(ctx: *Context) !*ByteArray {
     return switch (val) {
         .byte_array => |b| b,
         else => {
-            setErrorContext(ctx, "expected byte-array, got {s}", .{valueTypeName(val)});
+            setTypeMismatchError(ctx, "byte-array", val);
             return error.TypeMismatch;
         },
     };
@@ -241,7 +293,7 @@ pub fn popStream(ctx: *Context) !*Stream {
     return switch (val) {
         .stream => |s| s,
         else => {
-            setErrorContext(ctx, "expected stream, got {s}", .{valueTypeName(val)});
+            setTypeMismatchError(ctx, "stream", val);
             return error.TypeMismatch;
         },
     };
@@ -252,7 +304,7 @@ pub fn popModule(ctx: *Context) !*Module {
     return switch (val) {
         .module => |m| m,
         else => {
-            setErrorContext(ctx, "expected module, got {s}", .{valueTypeName(val)});
+            setTypeMismatchError(ctx, "module", val);
             return error.TypeMismatch;
         },
     };
@@ -263,7 +315,7 @@ pub fn popMarker(ctx: *Context) !*Marker {
     return switch (val) {
         .marker => |m| m,
         else => {
-            setErrorContext(ctx, "expected marker, got {s}", .{valueTypeName(val)});
+            setTypeMismatchError(ctx, "marker", val);
             return error.TypeMismatch;
         },
     };
@@ -274,7 +326,7 @@ pub fn popStructType(ctx: *Context) !*StructType {
     return switch (val) {
         .struct_type => |st| st,
         else => {
-            setErrorContext(ctx, "expected struct-type, got {s}", .{valueTypeName(val)});
+            setTypeMismatchError(ctx, "struct-type", val);
             return error.TypeMismatch;
         },
     };
@@ -285,7 +337,7 @@ pub fn popStructInstance(ctx: *Context) !*StructInstance {
     return switch (val) {
         .struct_instance => |si| si,
         else => {
-            setErrorContext(ctx, "expected struct-instance, got {s}", .{valueTypeName(val)});
+            setTypeMismatchError(ctx, "struct-instance", val);
             return error.TypeMismatch;
         },
     };

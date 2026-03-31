@@ -32,7 +32,15 @@ pub const StatementProcessor = struct {
     pub fn feedLine(self: *StatementProcessor, allocator: Allocator, line: []const u8, ctx: ?*Context) Result {
         const trimmed = std.mem.trim(u8, line, " \t\r\n");
         if (trimmed.len == 0) {
-            return if (self.stmt_len > 0) .needs_more_input else .{ .complete = &.{} };
+            if (self.stmt_len > 0) {
+                // Preserve the newline for multiline strings with empty lines
+                if (self.stmt_len < self.stmt_buf.len) {
+                    self.stmt_buf[self.stmt_len] = '\n';
+                    self.stmt_len += 1;
+                }
+                return .needs_more_input;
+            }
+            return .{ .complete = &.{} };
         }
 
         // Add newline separator if accumulating (preserves comment boundaries)

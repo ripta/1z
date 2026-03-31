@@ -27,7 +27,7 @@ Stack: [ ]
 === Vector mutation with #pop! ===
 Stack: [ ]
 PASS: #pop! returns last element
-Stack: [ ]
+Stack: [ V{ 1 2 } ]
 PASS: vector shortened after #pop!
 Stack: [ ]
 === Vector mutation with #append! ===

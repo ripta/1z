@@ -1,0 +1,104 @@
+\ Tests: #push, #pop, #unshift, #shift and mutable variants
+
+use "testing" ;
+
+"Sequence element operations" test-section
+
+\ #push tests (add to end)
+{ 1 2 } 3 #push #len 3 "#push array length" assert=
+{ 1 2 } 3 #push #last 3 "#push array last elem" assert=
+{ 1 2 } 3 #push #first 1 "#push array first unchanged" assert=
+{ } 42 #push #len 1 "#push empty array" assert=
+{ } 42 #push #first 42 "#push empty array value" assert=
+"ab" "c" #push "abc" "#push string" assert=
+"" "x" #push "x" "#push empty string" assert=
+
+\ #pop tests (remove from end)
+{ 1 2 3 } #pop 3 "#pop array elem" assert=
+#len 2 "#pop array length" assert=
+{ 1 2 3 } #pop drop #last 2 "#pop array new last" assert=
+"abc" #pop "c" "#pop string elem" assert=
+"ab" "#pop string rest" assert=
+
+\ #unshift tests (add to start)
+{ 1 2 } 0 #unshift #len 3 "#unshift array length" assert=
+{ 1 2 } 0 #unshift #first 0 "#unshift array first" assert=
+{ 1 2 } 0 #unshift #last 2 "#unshift array last unchanged" assert=
+{ } 42 #unshift #len 1 "#unshift empty array" assert=
+"bc" "a" #unshift "abc" "#unshift string" assert=
+"" "x" #unshift "x" "#unshift empty string" assert=
+
+\ #shift tests (remove from start)
+{ 1 2 3 } #shift 1 "#shift array elem" assert=
+#len 2 "#shift array length" assert=
+{ 1 2 3 } #shift drop #first 2 "#shift array new first" assert=
+"abc" #shift "a" "#shift string elem" assert=
+"bc" "#shift string rest" assert=
+
+\ Immutability tests
+orig1: { 1 2 3 } ;
+orig1 4 #push drop
+orig1 #len 3 "#push immutability" assert=
+
+orig2: { 1 2 3 } ;
+orig2 #pop 2drop
+orig2 #len 3 "#pop immutability" assert=
+
+orig3: { 1 2 3 } ;
+orig3 0 #unshift drop
+orig3 #len 3 "#unshift immutability" assert=
+
+orig4: { 1 2 3 } ;
+orig4 #shift 2drop
+orig4 #len 3 "#shift immutability" assert=
+
+"Mutable vector operations" test-section
+
+\ #push! tests
+V{ 1 2 } 3 #push! #len 3 "#push! vector length" assert=
+vec1: V{ 1 2 } ;
+vec1 3 #push! drop
+vec1 #len 3 "#push! mutates original" assert=
+
+\ #pop! tests
+V{ 1 2 3 } #pop! 3 "#pop! vector elem" assert=
+#len 2 "#pop! vector length" assert=
+vec2: V{ 1 2 3 } ;
+vec2 #pop! 2drop
+vec2 #len 2 "#pop! mutates original" assert=
+
+\ #unshift! tests
+V{ 1 2 } 0 #unshift! #len 3 "#unshift! vector length" assert=
+V{ 1 2 } 0 #unshift! #first 0 "#unshift! vector first" assert=
+vec3: V{ 1 2 } ;
+vec3 0 #unshift! drop
+vec3 #len 3 "#unshift! mutates original" assert=
+
+\ #shift! tests
+V{ 1 2 3 } #shift! 1 "#shift! vector elem" assert=
+#len 2 "#shift! vector length" assert=
+vec4: V{ 1 2 3 } ;
+vec4 #shift! 2drop
+vec4 #len 2 "#shift! mutates original" assert=
+
+"Byte array operations" test-section
+
+\ #push on byte-array
+B{ 1 2 } 3 #push #len 3 "#push byte-array length" assert=
+\ #pop on byte-array
+B{ 1 2 3 } #pop 3 "#pop byte-array elem" assert=
+#len 2 "#pop byte-array length" assert=
+\ #unshift on byte-array
+B{ 2 3 } 1 #unshift #len 3 "#unshift byte-array length" assert=
+\ #shift on byte-array
+B{ 1 2 3 } #shift 1 "#shift byte-array elem" assert=
+#len 2 "#shift byte-array length" assert=
+
+"Vector immutable operations" test-section
+
+\ Immutable ops on vectors (returns new vector)
+V{ 1 2 } 3 #push #len 3 "#push vector (immut) length" assert=
+V{ 1 2 3 } #pop 3 "#pop vector (immut) elem" assert=
+#len 2 "#pop vector (immut) length" assert=
+V{ 1 2 } 0 #unshift #first 0 "#unshift vector (immut) first" assert=
+V{ 1 2 3 } #shift 1 "#shift vector (immut) elem" assert=

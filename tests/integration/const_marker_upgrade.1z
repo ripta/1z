@@ -1,0 +1,16 @@
+\ Test upgrading a word to const
+
+use "testing" ;
+
+\ Define without const
+foo: 1 ;
+foo 1 "initial non-const value" assert=
+
+\ Redefine WITH const (should work since existing isn't const)
+foo: const 2 ;
+foo 2 "upgraded to const" assert=
+
+\ Now try to redefine again (should fail)
+[ foo: 3 ; ] ECannotRedefineConst "cannot redefine after upgrade to const" assert-error-type
+
+"const_marker_upgrade tests passed" print-line

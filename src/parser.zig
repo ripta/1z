@@ -72,6 +72,7 @@ pub const ParseError = error{
     UnmatchedCloseBrace,
     UnmatchedOpenParen,
     UnmatchedCloseParen,
+    UnmatchedOpenQuote,
     OutOfMemory,
     ParseTimeExecutionError,
     DebuggerQuit,
@@ -79,7 +80,7 @@ pub const ParseError = error{
 
 /// Returns true if the parse error indicates incomplete input.
 pub fn isIncompleteError(err: anyerror) bool {
-    return err == error.UnmatchedOpenBracket or err == error.UnmatchedOpenBrace;
+    return err == error.UnmatchedOpenBracket or err == error.UnmatchedOpenBrace or err == error.UnmatchedOpenQuote;
 }
 
 const WordDefinition = @import("dictionary.zig").WordDefinition;
@@ -179,6 +180,8 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
         } else if (parseString(token)) |s| {
             const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line }) catch return ParseError.OutOfMemory;
+        } else if (token.len > 0 and token[0] == '"') {
+            return ParseError.UnmatchedOpenQuote;
         } else {
             // Check if this is a parse-time word
             if (ctx) |c| {
@@ -257,6 +260,8 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
             is_first_token = false;
             const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line }) catch return ParseError.OutOfMemory;
+        } else if (token.len > 0 and token[0] == '"') {
+            return ParseError.UnmatchedOpenQuote;
         } else {
             // Check if this is a parse-time word
             if (ctx) |c| {
@@ -414,6 +419,8 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) P
         } else if (parseString(token)) |s| {
             const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
             values.append(allocator, .{ .string = s_copy }) catch return ParseError.OutOfMemory;
+        } else if (token.len > 0 and token[0] == '"') {
+            return ParseError.UnmatchedOpenQuote;
         } else if (token.len > 1 and token[token.len - 1] == ':') {
             const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
             values.append(allocator, .{ .symbol = sym_copy }) catch return ParseError.OutOfMemory;

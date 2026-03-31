@@ -1,0 +1,7 @@
+\ Test for words primitive - dictionary introspection
+
+\ Define a user word for testing
+my-test-word: 42 ;
+
+\ Call words (output will be captured in golden file)
+words

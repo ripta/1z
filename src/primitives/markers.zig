@@ -19,11 +19,22 @@ pub const mutable_marker: Marker = .{ .name = "mutable" };
 /// When present, method dispatch is enabled for the word.
 pub const generic_marker: Marker = .{ .name = "generic" };
 
+/// Well-known marker for constant word definitions.
+/// When present, the word cannot be redefined.
+///
+/// XXX(ripta): I considered making all words const by default and having a
+///             mutable marker instead, but that would be a breaking change.
+///             Plus, we already have the mutable marker for structs, so it
+///             gets confusing when `mutable` struct may affect the struct
+///             contentts and the word definition itself.
+pub const const_marker: Marker = .{ .name = "const" };
+
 pub const primitives = [_]Primitive{
     .{ .name = "marker", .stack_effect = "-- marker", .func = nativeMarker },
     .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTimeMarker, .parse_time = true },
     .{ .name = "mutable", .stack_effect = "-- marker", .func = nativeMutableMarker, .parse_time = true },
     .{ .name = "generic", .stack_effect = "-- marker", .func = nativeGenericMarker, .parse_time = true },
+    .{ .name = "const", .stack_effect = "-- marker", .func = nativeConstMarker, .parse_time = true },
     .{ .name = "word-markers", .stack_effect = "name -- markers", .func = nativeWordMarkers },
     .{ .name = "native?", .stack_effect = "name -- ?", .func = nativeIsNative },
 };
@@ -55,6 +66,12 @@ pub fn nativeGenericMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&generic_marker) });
 }
 
+/// const ( -- marker ) - Push the well-known const marker
+/// This marker indicates that a word cannot be redefined.
+pub fn nativeConstMarker(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .marker = @constCast(&const_marker) });
+}
+
 /// Check if a marker is the well-known mutable marker
 pub fn isMutableMarker(mk: *const Marker) bool {
     return mk == &mutable_marker;
@@ -68,6 +85,11 @@ pub fn isParseTimeMarker(mk: *const Marker) bool {
 /// Check if a marker is the well-known generic marker
 pub fn isGenericMarker(mk: *const Marker) bool {
     return mk == &generic_marker;
+}
+
+/// Check if a marker is the well-known const marker
+pub fn isConstMarker(mk: *const Marker) bool {
+    return mk == &const_marker;
 }
 
 /// word-markers ( name -- markers ) - Get the markers attached to a word definition

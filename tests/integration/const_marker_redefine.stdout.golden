@@ -1,0 +1,5 @@
+Stack: [ ]
+PASS: redefining const fails
+Stack: [ ]
+const_marker_redefine tests passed
+Stack: [ ]

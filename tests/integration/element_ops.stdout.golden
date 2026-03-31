@@ -1,0 +1,122 @@
+=== Sequence element operations ===
+Stack: [ ]
+PASS: #push array length
+Stack: [ ]
+PASS: #push array last elem
+Stack: [ ]
+PASS: #push array first unchanged
+Stack: [ ]
+PASS: #push empty array
+Stack: [ ]
+PASS: #push empty array value
+Stack: [ ]
+PASS: #push string
+Stack: [ ]
+PASS: #push empty string
+Stack: [ ]
+PASS: #pop array elem
+Stack: [ { 1 2 } ]
+PASS: #pop array length
+Stack: [ ]
+PASS: #pop array new last
+Stack: [ ]
+PASS: #pop string elem
+Stack: [ "ab" ]
+PASS: #pop string rest
+Stack: [ ]
+PASS: #unshift array length
+Stack: [ ]
+PASS: #unshift array first
+Stack: [ ]
+PASS: #unshift array last unchanged
+Stack: [ ]
+PASS: #unshift empty array
+Stack: [ ]
+PASS: #unshift string
+Stack: [ ]
+PASS: #unshift empty string
+Stack: [ ]
+PASS: #shift array elem
+Stack: [ { 2 3 } ]
+PASS: #shift array length
+Stack: [ ]
+PASS: #shift array new first
+Stack: [ ]
+PASS: #shift string elem
+Stack: [ "bc" ]
+PASS: #shift string rest
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: #push immutability
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: #pop immutability
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: #unshift immutability
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: #shift immutability
+Stack: [ ]
+=== Mutable vector operations ===
+Stack: [ ]
+PASS: #push! vector length
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: #push! mutates original
+Stack: [ ]
+PASS: #pop! vector elem
+Stack: [ V{ 1 2 } ]
+PASS: #pop! vector length
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: #pop! mutates original
+Stack: [ ]
+PASS: #unshift! vector length
+Stack: [ ]
+PASS: #unshift! vector first
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: #unshift! mutates original
+Stack: [ ]
+PASS: #shift! vector elem
+Stack: [ V{ 2 3 } ]
+PASS: #shift! vector length
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: #shift! mutates original
+Stack: [ ]
+=== Byte array operations ===
+Stack: [ ]
+PASS: #push byte-array length
+Stack: [ ]
+PASS: #pop byte-array elem
+Stack: [ B{ 0x01 0x02 } ]
+PASS: #pop byte-array length
+Stack: [ ]
+PASS: #unshift byte-array length
+Stack: [ ]
+PASS: #shift byte-array elem
+Stack: [ B{ 0x02 0x03 } ]
+PASS: #shift byte-array length
+Stack: [ ]
+=== Vector immutable operations ===
+Stack: [ ]
+PASS: #push vector (immut) length
+Stack: [ ]
+PASS: #pop vector (immut) elem
+Stack: [ V{ 1 2 } ]
+PASS: #pop vector (immut) length
+Stack: [ ]
+PASS: #unshift vector (immut) first
+Stack: [ ]
+PASS: #shift vector (immut) elem
+Stack: [ V{ 2 3 } ]

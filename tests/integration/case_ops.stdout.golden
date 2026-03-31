@@ -1,0 +1,28 @@
+=== String case operations ===
+Stack: [ ]
+PASS: uppercase basic
+Stack: [ ]
+PASS: uppercase already upper
+Stack: [ ]
+PASS: uppercase mixed
+Stack: [ ]
+PASS: lowercase basic
+Stack: [ ]
+PASS: lowercase already lower
+Stack: [ ]
+PASS: lowercase mixed
+Stack: [ ]
+PASS: uppercase empty
+Stack: [ ]
+PASS: lowercase empty
+Stack: [ ]
+PASS: uppercase non-alpha
+Stack: [ ]
+PASS: lowercase non-alpha
+Stack: [ ]
+PASS: uppercase alphanumeric
+Stack: [ ]
+PASS: lowercase alphanumeric
+Stack: [ ]
+PASS: uppercase ascii in utf8 context
+Stack: [ ]
