@@ -149,6 +149,37 @@ fn isInterruptError(ctx: *const Context) bool {
     return false;
 }
 
+fn runReplStartupStatement(ctx: *Context, writer: anytype, statement: []const u8) void {
+    var processor: StatementProcessor = .{};
+    defer processor.deinit();
+
+    switch (processor.feedLine(ctx.quotationAllocator(), statement, ctx)) {
+        .complete => |instrs| {
+            if (instrs.len > 0) {
+                adjustInstructionLines(instrs, 1);
+            }
+
+            ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
+                printErrorDetails(ctx, writer, err);
+            };
+            processor.reset();
+        },
+        .parse_error => |err| {
+            if (err == error.DebuggerQuit) return;
+            if (ctx.parse_diagnostics != null) {
+                printParseDiagnostics(ctx, writer, ctx.current_source, 1, processor.start_line);
+            } else {
+                writer.print("Error: {any}\n", .{err}) catch {};
+            }
+            ctx.clearExecutionDetails();
+            processor.reset();
+        },
+        .needs_more_input => {
+            processor.reset();
+        },
+    }
+}
+
 fn printUsage() void {
     const stdout_file: File = .stdout();
     var stdout_buf: [4096]u8 = undefined;
@@ -1116,18 +1147,13 @@ fn replInteractive(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
 }
 
 fn autoloadReplModules(ctx: *Context) void {
-    var processor: StatementProcessor = .{};
-    defer processor.deinit();
+    const stderr_file: File = .stderr();
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr = stderr_file.writer(&stderr_buf);
+    const writer = &stderr.interface;
 
-    switch (processor.feedLine(ctx.quotationAllocator(), "use \"introspect\" ;", ctx)) {
-        .complete => |instrs| {
-            ctx.executeQuotation(.{ .instructions = instrs }) catch {};
-            processor.reset();
-        },
-        .needs_more_input, .parse_error => {
-            processor.reset();
-        },
-    }
+    runReplStartupStatement(ctx, writer, "use \"runtime/introspect\" ;");
+    writer.flush() catch {};
 }
 
 fn replPiped(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
