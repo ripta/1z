@@ -98,3 +98,68 @@ stderr>> "err" >bytes "capture-all captures stderr" assert=
     400 milliseconds < "capture-stdout keeps scheduler responsive" assert-true
   ] task-scope
 ] call
+
+"shell-safe virtual type" test-section
+
+"printf hi" >shell-safe dup shell-safe? "shell-safe constructor wraps trusted command" assert-true
+unmake-shell-safe "printf hi" "shell-safe unwrap preserves trusted text" assert=
+
+"escape-shell uses POSIX quoting" test-section
+
+"hello" escape-shell unmake-shell-safe "'hello'" "escape-shell wraps plain string in single quotes" assert=
+"" escape-shell unmake-shell-safe "''" "escape-shell handles empty string" assert=
+"hello world" escape-shell unmake-shell-safe "'hello world'" "escape-shell preserves spaces inside quotes" assert=
+"it's" escape-shell unmake-shell-safe "'it'\"'\"'s'" "escape-shell escapes embedded single quotes" assert=
+
+"join-shell joins fragments with spaces" test-section
+
+"printf %s" >shell-safe 1array
+"hello world" 1array #append
+join-shell
+dup unmake-shell-safe "printf %s 'hello world'" "join-shell preserves shell-safe fragment and escapes raw string" assert=
+{ "/bin/sh" "-c" } over unmake-shell-safe 1array #append <stdio-opts> capture-stdout
+dup exit-code>> 0 "join-shell command exits zero" assert=
+stdout>> "hello world" >bytes "join-shell command executes with escaped argument" assert=
+drop
+
+"fmt-shell mirrors fmt placeholder semantics" test-section
+
+"printf %s" >shell-safe 1array
+"hello world" 1array #append
+"{0} {1}" fmt-shell
+dup unmake-shell-safe "printf %s 'hello world'" "fmt-shell supports indexed placeholders" assert=
+{ "/bin/sh" "-c" } over unmake-shell-safe 1array #append <stdio-opts> capture-stdout
+dup exit-code>> 0 "fmt-shell indexed command exits zero" assert=
+stdout>> "hello world" >bytes "fmt-shell indexed command executes correctly" assert=
+drop
+
+[ ] make-mutable-map
+dup cmd: "printf %s" >shell-safe @set! drop
+dup arg: "hello world" @set! drop
+"{cmd} {arg}" fmt-shell
+dup unmake-shell-safe "printf %s 'hello world'" "fmt-shell supports named placeholders" assert=
+{ "/bin/sh" "-c" } over unmake-shell-safe 1array #append <stdio-opts> capture-stdout
+dup exit-code>> 0 "fmt-shell named command exits zero" assert=
+stdout>> "hello world" >bytes "fmt-shell named command executes correctly" assert=
+drop
+
+"fmt-shell preserves shell safety" test-section
+
+[ ] make-mutable-map
+dup cmd: "printf %s" >shell-safe @set! drop
+dup arg: "hello; echo hacked" @set! drop
+"{cmd} {arg}" fmt-shell
+dup unmake-shell-safe "printf %s 'hello; echo hacked'" "fmt-shell escapes injected raw strings" assert=
+{ "/bin/sh" "-c" } over unmake-shell-safe 1array #append <stdio-opts> capture-stdout
+dup exit-code>> 0 "escaped injection command exits zero" assert=
+stdout>> "hello; echo hacked" >bytes "escaped injection stays a single argument" assert=
+drop
+
+"run-shell executes only shell-safe commands" test-section
+
+"exit 9" >shell-safe run-shell
+dup exit-code>> 9 "run-shell returns child exit code" assert=
+dup stdout>> f "run-shell leaves stdout as f" assert=
+stderr>> f "run-shell leaves stderr as f" assert=
+
+[ "exit 0" run-shell ] type-mismatch: "run-shell rejects raw strings" assert-error-type

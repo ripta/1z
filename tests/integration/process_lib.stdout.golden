@@ -79,3 +79,82 @@ Stack: [ ]
 PASS: capture-stdout keeps scheduler responsive
 PASS: capture-stdout still works in task
 Stack: [ ]
+=== shell-safe virtual type ===
+Stack: [ ]
+PASS: shell-safe constructor wraps trusted command
+Stack: [ <shell-safe "printf hi"> ]
+PASS: shell-safe unwrap preserves trusted text
+Stack: [ ]
+=== escape-shell uses POSIX quoting ===
+Stack: [ ]
+PASS: escape-shell wraps plain string in single quotes
+Stack: [ ]
+PASS: escape-shell handles empty string
+Stack: [ ]
+PASS: escape-shell preserves spaces inside quotes
+Stack: [ ]
+PASS: escape-shell escapes embedded single quotes
+Stack: [ ]
+=== join-shell joins fragments with spaces ===
+Stack: [ ]
+Stack: [ { <shell-safe "printf %s"> } ]
+Stack: [ { <shell-safe "printf %s"> "hello world" } ]
+Stack: [ <shell-safe "printf %s 'hello world'"> ]
+PASS: join-shell preserves shell-safe fragment and escapes raw string
+Stack: [ <shell-safe "printf %s 'hello world'"> ]
+Stack: [ <shell-safe "printf %s 'hello world'"> process-result{ exit-code: 0 stdout: B{ 0x68 0x65 0x6C 0x6C 0x6F 0x20 0x77 0x6F 0x72 0x6C 0x64 } stderr: f } ]
+PASS: join-shell command exits zero
+Stack: [ <shell-safe "printf %s 'hello world'"> process-result{ exit-code: 0 stdout: B{ 0x68 0x65 0x6C 0x6C 0x6F 0x20 0x77 0x6F 0x72 0x6C 0x64 } stderr: f } ]
+PASS: join-shell command executes with escaped argument
+Stack: [ <shell-safe "printf %s 'hello world'"> ]
+Stack: [ ]
+=== fmt-shell mirrors fmt placeholder semantics ===
+Stack: [ ]
+Stack: [ { <shell-safe "printf %s"> } ]
+Stack: [ { <shell-safe "printf %s"> "hello world" } ]
+Stack: [ <shell-safe "printf %s 'hello world'"> ]
+PASS: fmt-shell supports indexed placeholders
+Stack: [ <shell-safe "printf %s 'hello world'"> ]
+Stack: [ <shell-safe "printf %s 'hello world'"> process-result{ exit-code: 0 stdout: B{ 0x68 0x65 0x6C 0x6C 0x6F 0x20 0x77 0x6F 0x72 0x6C 0x64 } stderr: f } ]
+PASS: fmt-shell indexed command exits zero
+Stack: [ <shell-safe "printf %s 'hello world'"> process-result{ exit-code: 0 stdout: B{ 0x68 0x65 0x6C 0x6C 0x6F 0x20 0x77 0x6F 0x72 0x6C 0x64 } stderr: f } ]
+PASS: fmt-shell indexed command executes correctly
+Stack: [ <shell-safe "printf %s 'hello world'"> ]
+Stack: [ ]
+Stack: [ M{ } ]
+Stack: [ M{ cmd: <shell-safe "printf %s"> } ]
+Stack: [ M{ arg: "hello world" cmd: <shell-safe "printf %s"> } ]
+Stack: [ <shell-safe "printf %s 'hello world'"> ]
+PASS: fmt-shell supports named placeholders
+Stack: [ <shell-safe "printf %s 'hello world'"> ]
+Stack: [ <shell-safe "printf %s 'hello world'"> process-result{ exit-code: 0 stdout: B{ 0x68 0x65 0x6C 0x6C 0x6F 0x20 0x77 0x6F 0x72 0x6C 0x64 } stderr: f } ]
+PASS: fmt-shell named command exits zero
+Stack: [ <shell-safe "printf %s 'hello world'"> process-result{ exit-code: 0 stdout: B{ 0x68 0x65 0x6C 0x6C 0x6F 0x20 0x77 0x6F 0x72 0x6C 0x64 } stderr: f } ]
+PASS: fmt-shell named command executes correctly
+Stack: [ <shell-safe "printf %s 'hello world'"> ]
+Stack: [ ]
+=== fmt-shell preserves shell safety ===
+Stack: [ ]
+Stack: [ M{ } ]
+Stack: [ M{ cmd: <shell-safe "printf %s"> } ]
+Stack: [ M{ arg: "hello; echo hacked" cmd: <shell-safe "printf %s"> } ]
+Stack: [ <shell-safe "printf %s 'hello; echo hacked'"> ]
+PASS: fmt-shell escapes injected raw strings
+Stack: [ <shell-safe "printf %s 'hello; echo hacked'"> ]
+Stack: [ <shell-safe "printf %s 'hello; echo hacked'"> process-result{ exit-code: 0 stdout: B{ 0x68 0x65 0x6C 0x6C 0x6F 0x3B 0x20 0x65 0x63 0x68 0x6F 0x20 0x68 0x61 0x63 0x6B 0x65 0x64 } stderr: f } ]
+PASS: escaped injection command exits zero
+Stack: [ <shell-safe "printf %s 'hello; echo hacked'"> process-result{ exit-code: 0 stdout: B{ 0x68 0x65 0x6C 0x6C 0x6F 0x3B 0x20 0x65 0x63 0x68 0x6F 0x20 0x68 0x61 0x63 0x6B 0x65 0x64 } stderr: f } ]
+PASS: escaped injection stays a single argument
+Stack: [ <shell-safe "printf %s 'hello; echo hacked'"> ]
+Stack: [ ]
+=== run-shell executes only shell-safe commands ===
+Stack: [ ]
+Stack: [ process-result{ exit-code: 9 stdout: f stderr: f } ]
+PASS: run-shell returns child exit code
+Stack: [ process-result{ exit-code: 9 stdout: f stderr: f } ]
+PASS: run-shell leaves stdout as f
+Stack: [ process-result{ exit-code: 9 stdout: f stderr: f } ]
+PASS: run-shell leaves stderr as f
+Stack: [ ]
+PASS: run-shell rejects raw strings
+Stack: [ ]

@@ -1,17 +1,19 @@
 \ lib/process.1z - High-level child process helpers
 
 use "os/signal" ;
+use "strings" ;
 
 stdio-mode: enum{
   inherit: unit
-  pipe: unit
-  close: unit
-  ignore: unit
+  pipe:    unit
+  close:   unit
+  ignore:  unit
 } ;
 
-stdio-opts: mutable struct{ stdin stdout stderr cwd env } ;
-process: struct{ pid stdin stdout stderr } ;
+stdio-opts:     mutable struct{ stdin stdout stderr cwd env } ;
+process:        struct{ pid stdin stdout stderr } ;
 process-result: struct{ exit-code stdout stderr } ;
+shell-safe:     virtual{ string } ;
 
 \\ Create default child process options.
 \\ Defaults stdin/stdout/stderr to inherit and leaves cwd/env unset.
@@ -86,6 +88,61 @@ process-result: struct{ exit-code stdout stderr } ;
   stdio-mode:pipe >>stderr
 ] ;
 
+(shell-text): ( value -- string ) generic [ "string or shell-safe" throw-type-error ] ;
+
+(shell-text): method{ string } [ escape-shell unmake-shell-safe ] ;
+(shell-text): method{ shell-safe } [ unmake-shell-safe ] ;
+
+(sanitize-shell-map): ( src -- mmap ) [
+  [ ] make-mutable-map
+  over @keys
+  [ dup [ [ over ] dip @get (shell-text) ] dip swap @set! ] #each
+  swap drop
+] ;
+
+(sanitize-shell-source): ( source -- source' ) [
+  dup string? over shell-safe? or [
+    (shell-text)
+  ] [
+    dup array? [
+      [ (shell-text) ] #map #collect
+    ] [
+      dup hash? over mutable-map? or [
+        (sanitize-shell-map)
+      ] [
+        dup struct-instance? [
+          >hash (sanitize-shell-map)
+        ] [
+          "string, shell-safe, array, hash, mutable-map, or struct-instance"
+          throw-type-error
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+\\ Escape a string for safe POSIX shell usage.
+escape-shell: ( string -- shell-safe ) [
+  "'" split
+  "'\"'\"'" #join
+  "'" swap #append "'" #append
+  >shell-safe
+] ;
+
+\\ Join mixed string and shell-safe fragments into a shell-safe command.
+join-shell: ( array -- shell-safe ) [
+  [ (shell-text) ] #map #collect
+  " " #join
+  >shell-safe
+] ;
+
+\\ Format a shell command from a source value using normal fmt placeholders.
+fmt-shell: ( source fmt-string -- shell-safe ) [
+  swap (sanitize-shell-source)
+  swap fmt
+  >shell-safe
+] ;
+
 \\ Spawn a child process using argv and stdio options.
 spawn-process: ( argv opts -- process ) [
   dup (stdio-opts>native)
@@ -136,4 +193,13 @@ capture-all: ( argv opts -- process-result ) [
 with-process: ( argv opts quot -- ... ) [
   [ spawn-process ] dip
   over [ (terminate-and-wait) ] curry cleanup
+] ;
+
+\\ Execute a shell-safe command string via /bin/sh -c.
+run-shell: ( shell-safe -- process-result ) [
+  unmake-shell-safe
+  1array
+  { "/bin/sh" "-c" } swap #append
+  <stdio-opts>
+  run
 ] ;
