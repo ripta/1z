@@ -270,7 +270,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     try generated_words.append(alloc, .{ .string = agg_pred_name });
     try generated_words.append(alloc, .{ .string = try alloc.dupe(u8, enum_name) });
     const gw_slice = try generated_words.toOwnedSlice(alloc);
-    try enum_desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
+    enum_tv.generated_words = gw_slice;
     try ctx.registerTypeDescriptor(enum_name, enum_desc);
 
     const vtypes_slice = try vtype_list.toOwnedSlice(alloc);

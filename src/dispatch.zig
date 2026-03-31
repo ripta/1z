@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const Context = @import("context.zig").Context;
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
+const HashTable = value_mod.HashTable;
 const Instruction = value_mod.Instruction;
 const NativeFn = @import("dictionary.zig").NativeFn;
 
@@ -56,6 +57,13 @@ pub fn dispatchTypeValue(val: Value, ctx: *Context) *value_mod.TypeValue {
             ctx.lookupBuiltinTypeValueByTag(.resource).?,
         inline else => |_, tag| ctx.lookupBuiltinTypeValueByTag(tag).?,
     };
+}
+
+/// Returns the dispatch descriptor for a value. Requires a Context for the
+/// builtin type lookup and resource type creation path.
+pub fn dispatchDescriptor(val: Value, ctx: *Context) *const HashTable {
+    const tv = dispatchTypeValue(val, ctx);
+    return tv.descriptor orelse unreachable;
 }
 
 /// Returns the canonical type name for a Value discriminant tag.
@@ -131,8 +139,8 @@ pub fn unwrapBaseType(val: Value) Value {
 /// For unary dispatch, type_b is `&unary_sentinel`.
 pub const DispatchKey = struct {
     word_name: []const u8,
-    type_a: *const value_mod.TypeValue,
-    type_b: *const value_mod.TypeValue,
+    type_a: *const HashTable,
+    type_b: *const HashTable,
 };
 
 /// HashMap context for DispatchKey: hashes word_name as string, type_a/type_b as pointers.
@@ -214,9 +222,9 @@ pub const DispatchTable = struct {
     pub fn lookupBinary(
         self: *const DispatchTable,
         word_name: []const u8,
-        type_a: *const value_mod.TypeValue,
-        type_b: *const value_mod.TypeValue,
-        any_sentinel: *const value_mod.TypeValue,
+        type_a: *const HashTable,
+        type_b: *const HashTable,
+        any_sentinel: *const HashTable,
     ) ?DispatchEntry {
         if (self.entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = type_b })) |entry| {
             return entry;
@@ -240,9 +248,9 @@ pub const DispatchTable = struct {
     pub fn lookupUnary(
         self: *const DispatchTable,
         word_name: []const u8,
-        type_a: *const value_mod.TypeValue,
-        any_sentinel: *const value_mod.TypeValue,
-        unary_sentinel: *const value_mod.TypeValue,
+        type_a: *const HashTable,
+        any_sentinel: *const HashTable,
+        unary_sentinel: *const HashTable,
     ) ?DispatchEntry {
         if (self.entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = unary_sentinel })) |entry| {
             return entry;
@@ -271,15 +279,31 @@ pub const DispatchTable = struct {
         entry: DispatchEntry,
     };
 
+    fn coerceDescriptor(ptr: anytype) *const HashTable {
+        const T = @TypeOf(ptr);
+        switch (@typeInfo(T)) {
+            .pointer => |info| {
+                if (info.child == HashTable) return ptr;
+                if (info.child == value_mod.TypeValue) return ptr.descriptor.?;
+            },
+            else => {},
+        }
+        @compileError("expected *const HashTable or *const TypeValue");
+    }
+
     /// Register a native function dispatch entry with "native" provenance.
     pub fn registerNative(
         self: *DispatchTable,
         word_name: []const u8,
-        type_a: *const value_mod.TypeValue,
-        type_b: *const value_mod.TypeValue,
+        type_a: anytype,
+        type_b: anytype,
         func: NativeFn,
     ) !void {
-        const key = DispatchKey{ .word_name = word_name, .type_a = type_a, .type_b = type_b };
+        const key = DispatchKey{
+            .word_name = word_name,
+            .type_a = coerceDescriptor(type_a),
+            .type_b = coerceDescriptor(type_b),
+        };
         const entry = DispatchEntry{
             .body = .{ .native_fn = func },
             .provenance = .{ .generator = "native", .parent = "", .role = "", .field = "" },
@@ -292,9 +316,9 @@ pub const DispatchTable = struct {
     pub fn lookupNativeBinary(
         self: *const DispatchTable,
         word_name: []const u8,
-        type_a: *const value_mod.TypeValue,
-        type_b: *const value_mod.TypeValue,
-        any_sentinel: *const value_mod.TypeValue,
+        type_a: *const HashTable,
+        type_b: *const HashTable,
+        any_sentinel: *const HashTable,
     ) ?DispatchEntry {
         if (self.native_entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = type_b })) |entry| {
             return entry;
@@ -315,9 +339,9 @@ pub const DispatchTable = struct {
     pub fn lookupNativeUnary(
         self: *const DispatchTable,
         word_name: []const u8,
-        type_a: *const value_mod.TypeValue,
-        any_sentinel: *const value_mod.TypeValue,
-        unary_sentinel: *const value_mod.TypeValue,
+        type_a: *const HashTable,
+        any_sentinel: *const HashTable,
+        unary_sentinel: *const HashTable,
     ) ?DispatchEntry {
         if (self.native_entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = unary_sentinel })) |entry| {
             return entry;
@@ -359,9 +383,9 @@ const EntriesMap = std.HashMapUnmanaged(DispatchKey, DispatchEntry, DispatchKeyC
 pub fn lookupBinaryInEntries(
     entries: *const EntriesMap,
     word_name: []const u8,
-    type_a: *const value_mod.TypeValue,
-    type_b: *const value_mod.TypeValue,
-    any_sentinel: *const value_mod.TypeValue,
+    type_a: *const HashTable,
+    type_b: *const HashTable,
+    any_sentinel: *const HashTable,
 ) ?DispatchEntry {
     if (entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = type_b })) |entry| {
         return entry;
@@ -383,9 +407,9 @@ pub fn lookupBinaryInEntries(
 pub fn lookupUnaryInEntries(
     entries: *const EntriesMap,
     word_name: []const u8,
-    type_a: *const value_mod.TypeValue,
-    any_sentinel: *const value_mod.TypeValue,
-    unary_sentinel: *const value_mod.TypeValue,
+    type_a: *const HashTable,
+    any_sentinel: *const HashTable,
+    unary_sentinel: *const HashTable,
 ) ?DispatchEntry {
     if (entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = unary_sentinel })) |entry| {
         return entry;
@@ -422,6 +446,12 @@ pub fn collectEntriesForWord(entries: *const EntriesMap, word_name: []const u8, 
 
 fn dummyNativeFn(_: *Context) anyerror!void {}
 
+fn testDescriptor(name: []const u8) !*value_mod.MutableMap {
+    const desc = try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{});
+    try desc.put(std.testing.allocator, "name", .{ .string = name });
+    return desc;
+}
+
 test "dispatchTypeName returns correct name for native types" {
     try std.testing.expectEqualStrings("fixnum", dispatchTypeName(.{ .fixnum = 42 }));
     try std.testing.expectEqualStrings("boolean", dispatchTypeName(.{ .boolean = true }));
@@ -447,17 +477,19 @@ test "register and lookupBinary exact match" {
     var table = DispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    var duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
-    var any_tv = value_mod.TypeValue{ .name = "*", .descriptor = null };
+    const duration_desc = try testDescriptor("duration");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, duration_desc);
+    const any_desc = try testDescriptor("*");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, any_desc);
 
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 0 }};
     try table.register(
-        .{ .word_name = "+", .type_a = &duration_tv, .type_b = &duration_tv },
+        .{ .word_name = "+", .type_a = duration_desc, .type_b = duration_desc },
         .{ .body = .{ .quotation = body } },
         false,
     );
 
-    const result = table.lookupBinary("+", &duration_tv, &duration_tv, &any_tv);
+    const result = table.lookupBinary("+", duration_desc, duration_desc, any_desc);
     try std.testing.expect(result != null);
     try std.testing.expectEqual(@as(usize, 1), result.?.body.quotation.len);
 }
@@ -466,10 +498,12 @@ test "lookupBinary returns null when no match" {
     var table = DispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    var duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
-    var any_tv = value_mod.TypeValue{ .name = "*", .descriptor = null };
+    const duration_desc = try testDescriptor("duration");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, duration_desc);
+    const any_desc = try testDescriptor("*");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, any_desc);
 
-    const result = table.lookupBinary("+", &duration_tv, &duration_tv, &any_tv);
+    const result = table.lookupBinary("+", duration_desc, duration_desc, any_desc);
     try std.testing.expect(result == null);
 }
 
@@ -477,10 +511,14 @@ test "lookupBinary wildcard precedence" {
     var table = DispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    var duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
-    var fixnum_tv = value_mod.TypeValue{ .name = "fixnum", .descriptor = null };
-    var string_tv = value_mod.TypeValue{ .name = "string", .descriptor = null };
-    var any_tv = value_mod.TypeValue{ .name = "*", .descriptor = null };
+    const duration_desc = try testDescriptor("duration");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, duration_desc);
+    const fixnum_desc = try testDescriptor("fixnum");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, fixnum_desc);
+    const string_desc = try testDescriptor("string");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, string_desc);
+    const any_desc = try testDescriptor("*");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, any_desc);
 
     const exact_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
     const wild_b_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
@@ -489,40 +527,40 @@ test "lookupBinary wildcard precedence" {
 
     // Register in reverse precedence order to ensure lookup logic is correct
     try table.register(
-        .{ .word_name = "+", .type_a = &any_tv, .type_b = &any_tv },
+        .{ .word_name = "+", .type_a = any_desc, .type_b = any_desc },
         .{ .body = .{ .quotation = wild_both_body } },
         false,
     );
     try table.register(
-        .{ .word_name = "+", .type_a = &any_tv, .type_b = &fixnum_tv },
+        .{ .word_name = "+", .type_a = any_desc, .type_b = fixnum_desc },
         .{ .body = .{ .quotation = wild_a_body } },
         false,
     );
     try table.register(
-        .{ .word_name = "+", .type_a = &duration_tv, .type_b = &any_tv },
+        .{ .word_name = "+", .type_a = duration_desc, .type_b = any_desc },
         .{ .body = .{ .quotation = wild_b_body } },
         false,
     );
     try table.register(
-        .{ .word_name = "+", .type_a = &duration_tv, .type_b = &duration_tv },
+        .{ .word_name = "+", .type_a = duration_desc, .type_b = duration_desc },
         .{ .body = .{ .quotation = exact_body } },
         false,
     );
 
     // Exact match should win
-    const r1 = table.lookupBinary("+", &duration_tv, &duration_tv, &any_tv).?;
+    const r1 = table.lookupBinary("+", duration_desc, duration_desc, any_desc).?;
     try std.testing.expectEqual(@as(i64, 1), r1.body.quotation[0].op.push_literal.fixnum);
 
     // Wildcard on second: (duration, fixnum) matches (duration, *)
-    const r2 = table.lookupBinary("+", &duration_tv, &fixnum_tv, &any_tv).?;
+    const r2 = table.lookupBinary("+", duration_desc, fixnum_desc, any_desc).?;
     try std.testing.expectEqual(@as(i64, 2), r2.body.quotation[0].op.push_literal.fixnum);
 
     // Wildcard on first: (string, fixnum) matches (*, fixnum)
-    const r3 = table.lookupBinary("+", &string_tv, &fixnum_tv, &any_tv).?;
+    const r3 = table.lookupBinary("+", string_desc, fixnum_desc, any_desc).?;
     try std.testing.expectEqual(@as(i64, 3), r3.body.quotation[0].op.push_literal.fixnum);
 
     // Both wildcards: (string, string) matches (*, *)
-    const r4 = table.lookupBinary("+", &string_tv, &string_tv, &any_tv).?;
+    const r4 = table.lookupBinary("+", string_desc, string_desc, any_desc).?;
     try std.testing.expectEqual(@as(i64, 4), r4.body.quotation[0].op.push_literal.fixnum);
 }
 
@@ -530,52 +568,57 @@ test "lookupUnary exact and wildcard" {
     var table = DispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    var duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
-    var point_tv = value_mod.TypeValue{ .name = "point", .descriptor = null };
-    var any_tv = value_mod.TypeValue{ .name = "*", .descriptor = null };
-    var unary_tv = value_mod.TypeValue{ .name = "", .descriptor = null };
+    const duration_desc = try testDescriptor("duration");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, duration_desc);
+    const point_desc = try testDescriptor("point");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, point_desc);
+    const any_desc = try testDescriptor("*");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, any_desc);
+    const unary_desc = try testDescriptor("");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, unary_desc);
 
     const exact_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 10 } }, .line = 0 }};
     const wild_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 20 } }, .line = 0 }};
 
     try table.register(
-        .{ .word_name = "serialize", .type_a = &duration_tv, .type_b = &unary_tv },
+        .{ .word_name = "serialize", .type_a = duration_desc, .type_b = unary_desc },
         .{ .body = .{ .quotation = exact_body } },
         false,
     );
     try table.register(
-        .{ .word_name = "serialize", .type_a = &any_tv, .type_b = &unary_tv },
+        .{ .word_name = "serialize", .type_a = any_desc, .type_b = unary_desc },
         .{ .body = .{ .quotation = wild_body } },
         false,
     );
 
     // Exact match
-    const r1 = table.lookupUnary("serialize", &duration_tv, &any_tv, &unary_tv).?;
+    const r1 = table.lookupUnary("serialize", duration_desc, any_desc, unary_desc).?;
     try std.testing.expectEqual(@as(i64, 10), r1.body.quotation[0].op.push_literal.fixnum);
 
     // Wildcard fallback
-    const r2 = table.lookupUnary("serialize", &point_tv, &any_tv, &unary_tv).?;
+    const r2 = table.lookupUnary("serialize", point_desc, any_desc, unary_desc).?;
     try std.testing.expectEqual(@as(i64, 20), r2.body.quotation[0].op.push_literal.fixnum);
 
     // No match for different word
-    try std.testing.expect(table.lookupUnary("other-word", &duration_tv, &any_tv, &unary_tv) == null);
+    try std.testing.expect(table.lookupUnary("other-word", duration_desc, any_desc, unary_desc) == null);
 }
 
 test "register duplicate key errors without allow_overwrite" {
     var table = DispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    var duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
+    const duration_desc = try testDescriptor("duration");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, duration_desc);
 
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
     try table.register(
-        .{ .word_name = "+", .type_a = &duration_tv, .type_b = &duration_tv },
+        .{ .word_name = "+", .type_a = duration_desc, .type_b = duration_desc },
         .{ .body = .{ .quotation = body } },
         false,
     );
 
     const result = table.register(
-        .{ .word_name = "+", .type_a = &duration_tv, .type_b = &duration_tv },
+        .{ .word_name = "+", .type_a = duration_desc, .type_b = duration_desc },
         .{ .body = .{ .quotation = body } },
         false,
     );
@@ -586,25 +629,27 @@ test "register duplicate key succeeds with allow_overwrite" {
     var table = DispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    var duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
-    var any_tv = value_mod.TypeValue{ .name = "*", .descriptor = null };
+    const duration_desc = try testDescriptor("duration");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, duration_desc);
+    const any_desc = try testDescriptor("*");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, any_desc);
 
     const body1 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
     const body2 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
 
     try table.register(
-        .{ .word_name = "+", .type_a = &duration_tv, .type_b = &duration_tv },
+        .{ .word_name = "+", .type_a = duration_desc, .type_b = duration_desc },
         .{ .body = .{ .quotation = body1 } },
         false,
     );
     try table.register(
-        .{ .word_name = "+", .type_a = &duration_tv, .type_b = &duration_tv },
+        .{ .word_name = "+", .type_a = duration_desc, .type_b = duration_desc },
         .{ .body = .{ .quotation = body2 } },
         true,
     );
 
     // Shoulda gotten the overwritten body
-    const result = table.lookupBinary("+", &duration_tv, &duration_tv, &any_tv).?;
+    const result = table.lookupBinary("+", duration_desc, duration_desc, any_desc).?;
     try std.testing.expectEqual(@as(i64, 2), result.body.quotation[0].op.push_literal.fixnum);
 }
 
@@ -612,12 +657,14 @@ test "registerNative creates retrievable entry with native_fn body" {
     var table = DispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    var fixnum_tv = value_mod.TypeValue{ .name = "fixnum", .descriptor = null };
-    var any_tv = value_mod.TypeValue{ .name = "*", .descriptor = null };
+    const fixnum_desc = try testDescriptor("fixnum");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, fixnum_desc);
+    const any_desc = try testDescriptor("*");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, any_desc);
 
-    try table.registerNative("+", &fixnum_tv, &fixnum_tv, dummyNativeFn);
+    try table.registerNative("+", fixnum_desc, fixnum_desc, dummyNativeFn);
 
-    const result = table.lookupBinary("+", &fixnum_tv, &fixnum_tv, &any_tv);
+    const result = table.lookupBinary("+", fixnum_desc, fixnum_desc, any_desc);
     try std.testing.expect(result != null);
     try std.testing.expect(result.?.body == .native_fn);
     try std.testing.expectEqualStrings("native", result.?.provenance.?.generator);
@@ -627,13 +674,16 @@ test "registerNative unary entry is retrievable via lookupUnary" {
     var table = DispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    var fixnum_tv = value_mod.TypeValue{ .name = "fixnum", .descriptor = null };
-    var any_tv = value_mod.TypeValue{ .name = "*", .descriptor = null };
-    var unary_tv = value_mod.TypeValue{ .name = "", .descriptor = null };
+    const fixnum_desc = try testDescriptor("fixnum");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, fixnum_desc);
+    const any_desc = try testDescriptor("*");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, any_desc);
+    const unary_desc = try testDescriptor("");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, unary_desc);
 
-    try table.registerNative("abs", &fixnum_tv, &unary_tv, dummyNativeFn);
+    try table.registerNative("abs", fixnum_desc, unary_desc, dummyNativeFn);
 
-    const result = table.lookupUnary("abs", &fixnum_tv, &any_tv, &unary_tv);
+    const result = table.lookupUnary("abs", fixnum_desc, any_desc, unary_desc);
     try std.testing.expect(result != null);
     try std.testing.expect(result.?.body == .native_fn);
 }
@@ -642,10 +692,11 @@ test "registerNative duplicate returns DuplicateMethod" {
     var table = DispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    var fixnum_tv = value_mod.TypeValue{ .name = "fixnum", .descriptor = null };
+    const fixnum_desc = try testDescriptor("fixnum");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, fixnum_desc);
 
-    try table.registerNative("+", &fixnum_tv, &fixnum_tv, dummyNativeFn);
-    const result = table.registerNative("+", &fixnum_tv, &fixnum_tv, dummyNativeFn);
+    try table.registerNative("+", fixnum_desc, fixnum_desc, dummyNativeFn);
+    const result = table.registerNative("+", fixnum_desc, fixnum_desc, dummyNativeFn);
     try std.testing.expectError(error.DuplicateMethod, result);
 }
 
@@ -653,20 +704,21 @@ test "register increments generation counter" {
     var table = DispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    var fixnum_tv = value_mod.TypeValue{ .name = "fixnum", .descriptor = null };
+    const fixnum_desc = try testDescriptor("fixnum");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, fixnum_desc);
 
     try std.testing.expectEqual(@as(u32, 0), table.generation);
 
     const body = &[_]value_mod.Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
     try table.register(
-        .{ .word_name = "+", .type_a = &fixnum_tv, .type_b = &fixnum_tv },
+        .{ .word_name = "+", .type_a = fixnum_desc, .type_b = fixnum_desc },
         .{ .body = .{ .quotation = body } },
         false,
     );
     try std.testing.expectEqual(@as(u32, 1), table.generation);
 
     try table.register(
-        .{ .word_name = "+", .type_a = &fixnum_tv, .type_b = &fixnum_tv },
+        .{ .word_name = "+", .type_a = fixnum_desc, .type_b = fixnum_desc },
         .{ .body = .{ .quotation = body } },
         true,
     );
@@ -703,41 +755,42 @@ test "builtinTypeName matches dispatchTypeName for static variants" {
     }
 }
 
-test "dispatchTypeValue returns correct TypeValue for builtin types" {
+test "dispatchDescriptor returns correct descriptor for builtin types" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const fixnum_tv = dispatchTypeValue(.{ .fixnum = 42 }, &ctx);
-    try std.testing.expectEqualStrings("fixnum", fixnum_tv.name);
+    const fixnum_desc = dispatchDescriptor(.{ .fixnum = 42 }, &ctx);
+    try std.testing.expectEqual(fixnum_desc, ctx.lookupBuiltinTypeValue("fixnum").?.descriptor.?);
 
-    const bool_tv = dispatchTypeValue(.{ .boolean = true }, &ctx);
-    try std.testing.expectEqualStrings("boolean", bool_tv.name);
+    const bool_desc = dispatchDescriptor(.{ .boolean = true }, &ctx);
+    try std.testing.expectEqual(bool_desc, ctx.lookupBuiltinTypeValue("boolean").?.descriptor.?);
 
-    const string_tv = dispatchTypeValue(.{ .string = "hello" }, &ctx);
-    try std.testing.expectEqualStrings("string", string_tv.name);
+    const string_desc = dispatchDescriptor(.{ .string = "hello" }, &ctx);
+    try std.testing.expectEqual(string_desc, ctx.lookupBuiltinTypeValue("string").?.descriptor.?);
 
-    const symbol_tv = dispatchTypeValue(.{ .symbol = "foo" }, &ctx);
-    try std.testing.expectEqualStrings("symbol", symbol_tv.name);
+    const symbol_desc = dispatchDescriptor(.{ .symbol = "foo" }, &ctx);
+    try std.testing.expectEqual(symbol_desc, ctx.lookupBuiltinTypeValue("symbol").?.descriptor.?);
 
-    const unit_tv = dispatchTypeValue(.{ .unit = {} }, &ctx);
-    try std.testing.expectEqualStrings("unit", unit_tv.name);
+    const unit_desc = dispatchDescriptor(.{ .unit = {} }, &ctx);
+    try std.testing.expectEqual(unit_desc, ctx.lookupBuiltinTypeValue("unit").?.descriptor.?);
 }
 
-test "dispatchTypeValue returns VirtualType type_val for tagged values" {
+test "dispatchDescriptor returns VirtualType descriptor for tagged values" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    var tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
+    const desc = try testDescriptor("duration");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, desc);
+    var tv = value_mod.TypeValue{ .name = "duration", .descriptor = @ptrCast(desc) };
     const vt = value_mod.VirtualType{ .name = "duration", .inner_type = "fixnum", .type_val = &tv };
     const inner = Value{ .fixnum = 42 };
     const tagged = Value{ .tagged = .{ .tag = &vt, .inner = &inner } };
 
-    const result = dispatchTypeValue(tagged, &ctx);
-    try std.testing.expectEqual(&tv, result);
-    try std.testing.expectEqualStrings("duration", result.name);
+    const result = dispatchDescriptor(tagged, &ctx);
+    try std.testing.expectEqual(desc, result);
 }
 
-test "dispatchTypeValue falls back to builtin for tagged without type_val" {
+test "dispatchDescriptor falls back to builtin for tagged without type_val" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
@@ -745,37 +798,38 @@ test "dispatchTypeValue falls back to builtin for tagged without type_val" {
     const inner = Value{ .fixnum = 42 };
     const tagged = Value{ .tagged = .{ .tag = &vt, .inner = &inner } };
 
-    const result = dispatchTypeValue(tagged, &ctx);
-    try std.testing.expectEqualStrings("tagged", result.name);
+    const result = dispatchDescriptor(tagged, &ctx);
+    try std.testing.expectEqual(result, ctx.lookupBuiltinTypeValue("tagged").?.descriptor.?);
 }
 
-test "dispatchTypeValue returns StructType type_val for struct instances" {
+test "dispatchDescriptor returns StructType descriptor for struct instances" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    var tv = value_mod.TypeValue{ .name = "point", .descriptor = null };
+    const desc = try testDescriptor("point");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, desc);
+    var tv = value_mod.TypeValue{ .name = "point", .descriptor = @ptrCast(desc) };
     const st = value_mod.StructType{ .name = "point", .fields = &.{ "x", "y" }, .type_val = &tv };
     var si = value_mod.StructInstance{ .struct_type = &st, .fields = &.{} };
 
-    const result = dispatchTypeValue(.{ .struct_instance = &si }, &ctx);
-    try std.testing.expectEqual(&tv, result);
-    try std.testing.expectEqualStrings("point", result.name);
+    const result = dispatchDescriptor(.{ .struct_instance = &si }, &ctx);
+    try std.testing.expectEqual(desc, result);
 }
 
-test "dispatchTypeValue creates TypeValue for resources" {
+test "dispatchDescriptor creates resource descriptor" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
     var r = value_mod.Resource{ .type_name = "sqlite-db" };
-    const result = dispatchTypeValue(.{ .resource = &r }, &ctx);
-    try std.testing.expectEqualStrings("sqlite-db", result.name);
+    const result = dispatchDescriptor(.{ .resource = &r }, &ctx);
+    try std.testing.expectEqualStrings("sqlite-db", ctx.lookupResourceTypeValue("sqlite-db").?.name);
 
     // Second call returns the same pointer (cached).
-    const result2 = dispatchTypeValue(.{ .resource = &r }, &ctx);
+    const result2 = dispatchDescriptor(.{ .resource = &r }, &ctx);
     try std.testing.expectEqual(result, result2);
 }
 
-test "dispatchTypeValue .name matches dispatchTypeName for builtin types" {
+test "dispatchDescriptor matches builtin type descriptors" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
@@ -797,8 +851,8 @@ test "dispatchTypeValue .name matches dispatchTypeName for builtin types" {
             else => continue,
         };
 
-        const tv = dispatchTypeValue(val, &ctx);
+        const desc = dispatchDescriptor(val, &ctx);
         const name = dispatchTypeName(val);
-        try std.testing.expectEqualStrings(name, tv.name);
+        try std.testing.expectEqual(desc, ctx.lookupBuiltinTypeValue(name).?.descriptor.?);
     }
 }

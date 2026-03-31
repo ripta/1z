@@ -236,6 +236,7 @@ pub const TemplateSegment = union(enum) {
 pub const TypeValue = struct {
     name: []const u8,
     descriptor: ?*HashTable,
+    generated_words: ?[]Value = null,
 };
 
 pub const DescriptorFlags = struct {
@@ -268,6 +269,11 @@ pub fn createBuiltinTypeDescriptor(allocator: std.mem.Allocator, flags: Descript
 
 pub fn createSentinelTypeDescriptor(allocator: std.mem.Allocator) !*MutableMap {
     return createTypeDescriptor(allocator, "sentinel:", .{});
+}
+
+pub fn destroyTypeDescriptor(allocator: std.mem.Allocator, desc: *MutableMap) void {
+    desc.deinit(allocator);
+    allocator.destroy(desc);
 }
 
 /// StructInstance represents an instance of a struct type.
@@ -809,7 +815,13 @@ pub const Value = union(enum) {
             .channel => |a| a == other.channel,
             .iterator => |a| a == other.iterator,
             .doc_string => |a| std.mem.eql(u8, a, other.doc_string),
-            .type_val => |a| a == other.type_val,
+            .type_val => |a| {
+                const b = other.type_val;
+                if (a.descriptor) |a_desc| {
+                    return b.descriptor != null and a_desc == b.descriptor.?;
+                }
+                return b.descriptor == null and a == b;
+            },
             .sandbox_spec => |a| a == other.sandbox_spec,
             .unit => true,
         };

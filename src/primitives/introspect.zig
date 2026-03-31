@@ -30,6 +30,8 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "locally-defined?", .func = nativeLocallyDefined },
     .{ .name = "scope-frames", .func = nativeScopeFrames },
     .{ .name = "type-descriptor", .func = nativeTypeDescriptor },
+    .{ .name = "type-generated-words", .func = nativeTypeGeneratedWords },
+    .{ .name = "type-info-string", .func = nativeTypeInfoString },
     .{ .name = "word-source", .func = nativeWordSource },
     .{ .name = "quotation>effect", .func = nativeQuotationToEffect },
 };
@@ -95,14 +97,16 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
     const dispatch_pairs = try ctx.dispatchEntriesForWord(name, alloc);
     const methods_arr = try alloc.alloc(Value, dispatch_pairs.len);
     for (dispatch_pairs, 0..) |pair, i| {
-        const types = if (pair.key.type_b == ctx.getDispatchUnarySentinel()) blk: {
+        const type_a_name = ctx.lookupTypeNameByDescriptor(pair.key.type_a) orelse "<unknown>";
+        const type_b_name = ctx.lookupTypeNameByDescriptor(pair.key.type_b) orelse "<unknown>";
+        const types = if (pair.key.type_b == ctx.getDispatchUnarySentinel().descriptor.?) blk: {
             const t = try alloc.alloc(Value, 1);
-            t[0] = .{ .string = pair.key.type_a.name };
+            t[0] = .{ .string = type_a_name };
             break :blk t;
         } else blk: {
             const t = try alloc.alloc(Value, 2);
-            t[0] = .{ .string = pair.key.type_a.name };
-            t[1] = .{ .string = pair.key.type_b.name };
+            t[0] = .{ .string = type_a_name };
+            t[1] = .{ .string = type_b_name };
             break :blk t;
         };
 
@@ -323,6 +327,171 @@ fn nativeTypeDescriptor(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     }
+}
+
+/// type-generated-words ( symbol|type -- array ) - Look up generated words for a type name or value
+fn nativeTypeGeneratedWords(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const tv = switch (val) {
+        .type_val => |tv| tv,
+        .symbol, .string => |name| ctx.lookupTypeValueByName(name) orelse {
+            helpers.setErrorContext(ctx, "no type value for '{s}'", .{name});
+            return error.NameError;
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol or type", val);
+            return error.TypeMismatch;
+        },
+    };
+    try ctx.stack.push(.{ .array = tv.generated_words orelse &.{} });
+}
+
+fn resolveTypeValue(ctx: *Context, val: Value) !*value_mod.TypeValue {
+    return switch (val) {
+        .type_val => |tv| tv,
+        .symbol, .string => |name| ctx.lookupTypeValueByName(name) orelse {
+            helpers.setErrorContext(ctx, "no type value for '{s}'", .{name});
+            return error.NameError;
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol or type", val);
+            return error.TypeMismatch;
+        },
+    };
+}
+
+fn appendGeneratedWords(buf: *std.ArrayListUnmanaged(u8), alloc: Allocator, tv: *const value_mod.TypeValue) !void {
+    try buf.appendSlice(alloc, "  generated-words: ");
+    if (tv.generated_words) |words| {
+        for (words, 0..) |word, i| {
+            if (i > 0) try buf.append(alloc, ' ');
+            switch (word) {
+                .string => |s| try buf.appendSlice(alloc, s),
+                .symbol => |s| try buf.appendSlice(alloc, s),
+                else => try buf.appendSlice(alloc, try helpers.formatValueBrief(alloc, word, 256)),
+            }
+        }
+    }
+    try buf.appendSlice(alloc, "\n");
+}
+
+fn appendBoolFieldIfTrue(
+    buf: *std.ArrayListUnmanaged(u8),
+    alloc: Allocator,
+    desc: *const value_mod.HashTable,
+    key: []const u8,
+) !void {
+    const field = desc.get(key) orelse return;
+    if (field != .boolean or !field.boolean) return;
+    try buf.appendSlice(alloc, "  ");
+    try buf.appendSlice(alloc, key);
+    try buf.appendSlice(alloc, ": ");
+    try buf.appendSlice(alloc, try helpers.formatValueBrief(alloc, field, 256));
+    try buf.appendSlice(alloc, "\n");
+}
+
+/// type-info-string ( symbol|type -- string ) - Render type info for help/introspection output.
+fn nativeTypeInfoString(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const tv = try resolveTypeValue(ctx, try ctx.stack.pop());
+    const desc = tv.descriptor orelse {
+        try ctx.stack.push(.{ .string = "" });
+        return;
+    };
+
+    const kind = desc.get("type") orelse {
+        try ctx.stack.push(.{ .string = "" });
+        return;
+    };
+
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+
+    const kind_name = switch (kind) {
+        .symbol => |sym| sym,
+        .string => |s| s,
+        else => "",
+    };
+
+    if (std.mem.eql(u8, kind_name, "builtin-type:") or std.mem.eql(u8, kind_name, "builtin-type")) {
+        try buf.appendSlice(alloc, "type info:\n  kind: builtin-type\n");
+        const ordered_keys = [_][]const u8{ "integer", "exact", "numeric", "mutable" };
+        for (ordered_keys) |key| {
+            try appendBoolFieldIfTrue(&buf, alloc, desc, key);
+        }
+    } else if (std.mem.eql(u8, kind_name, "struct-descriptor:")) {
+        try buf.appendSlice(alloc, "type info:\n  kind: struct\n  fields: ");
+        if (desc.get("fields")) |fields| if (fields == .array) {
+            for (fields.array, 0..) |field, i| {
+                if (i > 0) try buf.append(alloc, ' ');
+                try buf.appendSlice(alloc, field.string);
+            }
+        };
+        try buf.appendSlice(alloc, "\n");
+        try appendGeneratedWords(&buf, alloc, tv);
+    } else if (std.mem.eql(u8, kind_name, "virtual:")) {
+        try buf.appendSlice(alloc, "type info:\n  kind: virtual\n");
+        if (desc.get("inner-type")) |inner_raw| {
+            const inner = if (inner_raw == .array and inner_raw.array.len > 0) inner_raw.array[0] else inner_raw;
+            switch (inner) {
+                .type_val => |inner_tv| {
+                    try buf.appendSlice(alloc, "  wraps: ");
+                    try buf.appendSlice(alloc, inner_tv.name);
+                    try buf.appendSlice(alloc, "\n");
+                },
+                .mutable_map, .hash => |h| {
+                    try buf.appendSlice(alloc, "  fields: ");
+                    if (h.get("fields")) |fields| if (fields == .array) {
+                        for (fields.array, 0..) |field, i| {
+                            if (i > 0) try buf.append(alloc, ' ');
+                            try buf.appendSlice(alloc, field.string);
+                        }
+                    };
+                    try buf.appendSlice(alloc, "\n");
+                },
+                else => {},
+            }
+        }
+        try appendGeneratedWords(&buf, alloc, tv);
+    } else if (std.mem.eql(u8, kind_name, "enum-descriptor:")) {
+        try buf.appendSlice(alloc, "type info:\n  kind: enum\n  variants:\n");
+        if (desc.get("variants")) |variants| if (variants == .array) {
+            var max_name_len: usize = 0;
+            var i_width: usize = 0;
+            while (i_width + 1 < variants.array.len) : (i_width += 2) {
+                const variant_name = variants.array[i_width];
+                const name_len = switch (variant_name) {
+                    .symbol => |name| name.len,
+                    .string => |name| name.len,
+                    else => continue,
+                };
+                if (name_len > max_name_len) max_name_len = name_len;
+            }
+
+            var i: usize = 0;
+            while (i + 1 < variants.array.len) : (i += 2) {
+                const variant_name = variants.array[i];
+                const variant_type = variants.array[i + 1];
+                const variant_name_str = switch (variant_name) {
+                    .symbol => |name| name,
+                    .string => |name| name,
+                    else => try helpers.formatValueBrief(alloc, variant_name, 256),
+                };
+                try buf.appendSlice(alloc, "    ");
+                try buf.appendSlice(alloc, variant_name_str);
+                try buf.appendSlice(alloc, ":");
+                const padding = max_name_len - variant_name_str.len + 1;
+                for (0..padding) |_| try buf.append(alloc, ' ');
+                switch (variant_type) {
+                    .type_val => |variant_tv| try buf.appendSlice(alloc, variant_tv.name),
+                    else => try buf.appendSlice(alloc, try helpers.formatValueBrief(alloc, variant_type, 256)),
+                }
+                try buf.appendSlice(alloc, "\n");
+            }
+        };
+        try appendGeneratedWords(&buf, alloc, tv);
+    }
+
+    try ctx.stack.push(.{ .string = try buf.toOwnedSlice(alloc) });
 }
 
 /// locally-defined? ( name -- bool ) - Check if a word is defined in the import frame.

@@ -309,8 +309,8 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
 
         try ctx.registerDispatch(.{
             .word_name = getter_name,
-            .type_a = vtype.type_val.?,
-            .type_b = ctx.getDispatchUnarySentinel(),
+            .type_a = vtype.type_val.?.descriptor.?,
+            .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{
             .body = .{ .quotation = getter_instrs },
             .provenance = .{ .generator = "ffi-struct", .parent = name, .role = "getter", .field = field.name },
@@ -355,8 +355,8 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
 
             try ctx.registerDispatch(.{
                 .word_name = setter_name,
-                .type_a = vtype.type_val.?,
-                .type_b = ctx.getDispatchAnySentinel(),
+                .type_a = vtype.type_val.?.descriptor.?,
+                .type_b = ctx.getDispatchAnySentinel().descriptor.?,
             }, .{
                 .body = .{ .quotation = setter_instrs },
                 .provenance = .{ .generator = "ffi-struct", .parent = name, .role = "setter", .field = field.name },
@@ -378,7 +378,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
         }
     }
     const gw_slice = try generated_words.toOwnedSlice(alloc);
-    try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
+    tv.generated_words = gw_slice;
 
     try desc_map.put(alloc, "ffi-layout", .{ .fixnum = @intCast(@intFromPtr(layout)) });
 

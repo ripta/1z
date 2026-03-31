@@ -46,36 +46,36 @@ const AutoUnwrap = struct {
 };
 
 fn lookupBinaryWithFallback(ctx: *Context, word_name: []const u8, a: Value, b: Value) ?AutoUnwrap {
-    const a_type = dispatch_mod.dispatchTypeValue(a, ctx);
-    const b_type = dispatch_mod.dispatchTypeValue(b, ctx);
+    const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
+    const b_type = dispatch_mod.dispatchDescriptor(b, ctx);
     if (ctx.lookupBinaryDispatch(word_name, a_type, b_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
 
     const a_enum = dispatch_mod.dispatchEnumTypeValue(a);
     const b_enum = dispatch_mod.dispatchEnumTypeValue(b);
     if (a_enum) |ae| {
-        if (ctx.lookupBinaryDispatch(word_name, ae, b_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+        if (ctx.lookupBinaryDispatch(word_name, ae.descriptor.?, b_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
     }
     if (b_enum) |be| {
-        if (ctx.lookupBinaryDispatch(word_name, a_type, be)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+        if (ctx.lookupBinaryDispatch(word_name, a_type, be.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
     }
 
     if (a_enum) |ae| {
         if (b_enum) |be| {
-            if (ctx.lookupBinaryDispatch(word_name, ae, be)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+            if (ctx.lookupBinaryDispatch(word_name, ae.descriptor.?, be.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
         }
     }
 
     const a_base = dispatch_mod.dispatchBaseTypeValue(a);
     const b_base = dispatch_mod.dispatchBaseTypeValue(b);
     if (a_base) |ab| {
-        if (ctx.lookupBinaryDispatch(word_name, ab, b_type)) |entry| return .{ .entry = entry, .unwrap_a = true, .unwrap_b = false };
+        if (ctx.lookupBinaryDispatch(word_name, ab.descriptor.?, b_type)) |entry| return .{ .entry = entry, .unwrap_a = true, .unwrap_b = false };
     }
     if (b_base) |bb| {
-        if (ctx.lookupBinaryDispatch(word_name, a_type, bb)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = true };
+        if (ctx.lookupBinaryDispatch(word_name, a_type, bb.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = true };
     }
     if (a_base) |ab| {
         if (b_base) |bb| {
-            if (ctx.lookupBinaryDispatch(word_name, ab, bb)) |entry| return .{ .entry = entry, .unwrap_a = true, .unwrap_b = true };
+            if (ctx.lookupBinaryDispatch(word_name, ab.descriptor.?, bb.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = true, .unwrap_b = true };
         }
     }
 
@@ -88,15 +88,15 @@ fn lookupBinaryWithFallback(ctx: *Context, word_name: []const u8, a: Value, b: V
 /// 1. Exact variant type name (includes wildcard expansion)
 /// 2. Enum name fallback
 fn lookupUnaryWithFallback(ctx: *Context, word_name: []const u8, a: Value) ?AutoUnwrap {
-    const a_type = dispatch_mod.dispatchTypeValue(a, ctx);
+    const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
     if (ctx.lookupUnaryDispatch(word_name, a_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
 
     if (dispatch_mod.dispatchEnumTypeValue(a)) |ae| {
-        if (ctx.lookupUnaryDispatch(word_name, ae)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+        if (ctx.lookupUnaryDispatch(word_name, ae.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
     }
 
     if (dispatch_mod.dispatchBaseTypeValue(a)) |ab| {
-        if (ctx.lookupUnaryDispatch(word_name, ab)) |entry| return .{ .entry = entry, .unwrap_a = true, .unwrap_b = false };
+        if (ctx.lookupUnaryDispatch(word_name, ab.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = true, .unwrap_b = false };
     }
 
     return null;
@@ -126,8 +126,8 @@ pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
             if (cache.count > 0 and cache.generation != ctx.dispatch.generation) {
                 cache.count = 0;
             } else if (cache.count > 0) {
-                const a_type = dispatch_mod.dispatchTypeValue(a, ctx);
-                const b_type = dispatch_mod.dispatchTypeValue(b, ctx);
+                const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
+                const b_type = dispatch_mod.dispatchDescriptor(b, ctx);
                 if (cache.lookup(a_type, b_type)) |entry| {
                     if (entry.unwrap_a or entry.unwrap_b) {
                         try autoUnwrapBinaryOperands(ctx, entry.unwrap_a, entry.unwrap_b);
@@ -142,8 +142,8 @@ pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
     if (lookupBinaryWithFallback(ctx, word_name, a, b)) |result| {
         if (ctx.current_pic_entry) |cache| {
             if (!cache.megamorphic) {
-                const a_type = dispatch_mod.dispatchTypeValue(a, ctx);
-                const b_type = dispatch_mod.dispatchTypeValue(b, ctx);
+                const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
+                const b_type = dispatch_mod.dispatchDescriptor(b, ctx);
                 cache.insert(.{
                     .type_a = a_type,
                     .type_b = b_type,
@@ -182,8 +182,8 @@ pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
             if (cache.count > 0 and cache.generation != ctx.dispatch.generation) {
                 cache.count = 0;
             } else if (cache.count > 0) {
-                const a_type = dispatch_mod.dispatchTypeValue(a, ctx);
-                if (cache.lookup(a_type, ctx.getDispatchUnarySentinel())) |entry| {
+                const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
+                if (cache.lookup(a_type, ctx.getDispatchUnarySentinel().descriptor.?)) |entry| {
                     if (entry.unwrap_a) {
                         try autoUnwrapTopOperand(ctx);
                     }
@@ -197,10 +197,10 @@ pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
     if (lookupUnaryWithFallback(ctx, word_name, a)) |result| {
         if (ctx.current_pic_entry) |cache| {
             if (!cache.megamorphic) {
-                const a_type = dispatch_mod.dispatchTypeValue(a, ctx);
+                const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
                 cache.insert(.{
                     .type_a = a_type,
-                    .type_b = ctx.getDispatchUnarySentinel(),
+                    .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
                     .entry = result.entry,
                     .unwrap_a = result.unwrap_a,
                     .unwrap_b = false,
@@ -293,8 +293,8 @@ pub fn tryDispatchGenericWithPic(ctx: *Context, word_name: []const u8, pic: ?*Po
                 if (ctx.stack.depth() >= 2) {
                     const a = try ctx.stack.peekN(1);
                     const b = try ctx.stack.peek();
-                    const a_type = dispatch_mod.dispatchTypeValue(a, ctx);
-                    const b_type = dispatch_mod.dispatchTypeValue(b, ctx);
+                    const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
+                    const b_type = dispatch_mod.dispatchDescriptor(b, ctx);
                     if (cache.lookup(a_type, b_type)) |entry| {
                         if (entry.unwrap_a or entry.unwrap_b) {
                             try autoUnwrapBinaryOperands(ctx, entry.unwrap_a, entry.unwrap_b);
@@ -304,8 +304,8 @@ pub fn tryDispatchGenericWithPic(ctx: *Context, word_name: []const u8, pic: ?*Po
                     }
                 } else if (ctx.stack.depth() >= 1) {
                     const a = try ctx.stack.peek();
-                    const a_type = dispatch_mod.dispatchTypeValue(a, ctx);
-                    if (cache.lookup(a_type, ctx.getDispatchUnarySentinel())) |entry| {
+                    const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
+                    if (cache.lookup(a_type, ctx.getDispatchUnarySentinel().descriptor.?)) |entry| {
                         if (entry.unwrap_a) {
                             try autoUnwrapTopOperand(ctx);
                         }
@@ -323,8 +323,8 @@ pub fn tryDispatchGenericWithPic(ctx: *Context, word_name: []const u8, pic: ?*Po
         if (lookupBinaryWithFallback(ctx, word_name, a, b)) |result| {
             if (pic) |cache| {
                 if (!cache.megamorphic) {
-                    const a_type = dispatch_mod.dispatchTypeValue(a, ctx);
-                    const b_type = dispatch_mod.dispatchTypeValue(b, ctx);
+                    const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
+                    const b_type = dispatch_mod.dispatchDescriptor(b, ctx);
                     cache.insert(.{
                         .type_a = a_type,
                         .type_b = b_type,
@@ -348,10 +348,10 @@ pub fn tryDispatchGenericWithPic(ctx: *Context, word_name: []const u8, pic: ?*Po
         if (lookupUnaryWithFallback(ctx, word_name, a)) |result| {
             if (pic) |cache| {
                 if (!cache.megamorphic) {
-                    const a_type = dispatch_mod.dispatchTypeValue(a, ctx);
+                    const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
                     cache.insert(.{
                         .type_a = a_type,
-                        .type_b = ctx.getDispatchUnarySentinel(),
+                        .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
                         .entry = result.entry,
                         .unwrap_a = result.unwrap_a,
                         .unwrap_b = false,
@@ -447,7 +447,7 @@ test "tryDispatchGeneric dispatches unary method for native type" {
         .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
     try ctx.dispatch.register(
-        .{ .word_name = "serialize", .type_a = fixnum_tv, .type_b = ctx.getDispatchUnarySentinel() },
+        .{ .word_name = "serialize", .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
         .{ .body = .{ .quotation = body } },
         false,
     );
@@ -478,12 +478,12 @@ test "tryDispatchGeneric tries binary before unary" {
     };
 
     try ctx.dispatch.register(
-        .{ .word_name = "combine", .type_a = fixnum_tv, .type_b = fixnum_tv },
+        .{ .word_name = "combine", .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
         .{ .body = .{ .quotation = binary_body } },
         false,
     );
     try ctx.dispatch.register(
-        .{ .word_name = "combine", .type_a = fixnum_tv, .type_b = ctx.getDispatchUnarySentinel() },
+        .{ .word_name = "combine", .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
         .{ .body = .{ .quotation = unary_body } },
         false,
     );
@@ -511,7 +511,7 @@ test "tryDispatchGenericWithPic populates cache on miss" {
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
     try ctx.dispatch.register(
-        .{ .word_name = "add", .type_a = fixnum_tv, .type_b = fixnum_tv },
+        .{ .word_name = "add", .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
         .{ .body = .{ .quotation = body } },
         false,
     );
@@ -527,8 +527,8 @@ test "tryDispatchGenericWithPic populates cache on miss" {
 
     // Cache should now be populated
     try std.testing.expectEqual(@as(u8, 1), cache.count);
-    try std.testing.expectEqual(fixnum_tv, cache.entries[0].type_a);
-    try std.testing.expectEqual(fixnum_tv, cache.entries[0].type_b);
+    try std.testing.expectEqual(fixnum_tv.descriptor.?, cache.entries[0].type_a);
+    try std.testing.expectEqual(fixnum_tv.descriptor.?, cache.entries[0].type_b);
     try std.testing.expectEqual(ctx.dispatch.generation, cache.generation);
 }
 
@@ -542,7 +542,7 @@ test "tryDispatchGenericWithPic hits cache on matching types" {
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
     try ctx.dispatch.register(
-        .{ .word_name = "add", .type_a = fixnum_tv, .type_b = fixnum_tv },
+        .{ .word_name = "add", .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
         .{ .body = .{ .quotation = body } },
         false,
     );
@@ -573,7 +573,7 @@ test "tryDispatchGenericWithPic invalidates on generation change" {
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
     try ctx.dispatch.register(
-        .{ .word_name = "add", .type_a = fixnum_tv, .type_b = fixnum_tv },
+        .{ .word_name = "add", .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
         .{ .body = .{ .quotation = body } },
         false,
     );
@@ -593,7 +593,7 @@ test "tryDispatchGenericWithPic invalidates on generation change" {
         .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
     try ctx.dispatch.register(
-        .{ .word_name = "show", .type_a = fixnum_tv, .type_b = ctx.getDispatchUnarySentinel() },
+        .{ .word_name = "show", .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
         .{ .body = .{ .quotation = body2 } },
         false,
     );
@@ -621,7 +621,7 @@ test "tryDispatchGenericWithPic with null pic_entry falls back to full lookup" {
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
     try ctx.dispatch.register(
-        .{ .word_name = "add", .type_a = fixnum_tv, .type_b = fixnum_tv },
+        .{ .word_name = "add", .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
         .{ .body = .{ .quotation = body } },
         false,
     );
@@ -644,7 +644,7 @@ test "tryDispatchGenericWithPic caches unary dispatch" {
         .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
     try ctx.dispatch.register(
-        .{ .word_name = "show", .type_a = fixnum_tv, .type_b = ctx.getDispatchUnarySentinel() },
+        .{ .word_name = "show", .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
         .{ .body = .{ .quotation = body } },
         false,
     );
@@ -658,6 +658,6 @@ test "tryDispatchGenericWithPic caches unary dispatch" {
 
     // Cache should record unary dispatch (type_b is unary_sentinel)
     try std.testing.expectEqual(@as(u8, 1), cache.count);
-    try std.testing.expectEqual(fixnum_tv, cache.entries[0].type_a);
-    try std.testing.expectEqual(ctx.getDispatchUnarySentinel(), cache.entries[0].type_b);
+    try std.testing.expectEqual(fixnum_tv.descriptor.?, cache.entries[0].type_a);
+    try std.testing.expectEqual(ctx.getDispatchUnarySentinel().descriptor.?, cache.entries[0].type_b);
 }

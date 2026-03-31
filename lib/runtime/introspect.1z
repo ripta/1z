@@ -55,60 +55,38 @@ format-variant-lines: stack-recursive ( variants max-name-len -- str ) [
 ] ;
 
 format-builtin-type-info: ( desc -- str ) [
-  dup @keys >iterator
-  [ dup type: = swap define: = or not ] #filter #collect
-  swap
-  [ over >string "  " swap #append ": " #append -rot> swap @get >string #append "\n" #append ] curry
-  swap >iterator swap #map #collect
-  "" #join
-  "type info:\n  kind: builtin-type\n" swap #append
+  "type info:\n  kind: builtin-type\n"
 ] ;
 
 format-struct-type-info: ( desc -- str ) [
   "type info:\n  kind: struct\n  fields: "
-  over "fields" @get " " #join #append "\n" #append
-  "  generated-words: " #append
-  swap "generated-words" @get " " #join #append "\n" #append
+  swap "fields" @get " " #join #append "\n" #append
 ] ;
 
 format-virtual-type-info: ( desc -- str ) [
   "type info:\n  kind: virtual\n"
-  over "inner-type" @get #first type-of type =
+  dup "inner-type" @get #first type-of type =
   [
     "  wraps: " #append
-    over "inner-type" @get #first native.type-name #append "\n" #append
+    swap "inner-type" @get #first native.type-name #append "\n" #append
   ]
   [
     "  fields: " #append
-    over "inner-type" @get #first "fields" @get " " #join #append "\n" #append
+    swap "inner-type" @get #first "fields" @get " " #join #append "\n" #append
   ]
   if
-  "  generated-words: " #append
-  swap "generated-words" @get " " #join #append "\n" #append
 ] ;
 
 format-enum-type-info: ( desc -- str ) [
   "type info:\n  kind: enum\n  variants:\n"
-  over "variants" @get
+  swap "variants" @get
   dup variant-max-name-len
   format-variant-lines #append
-  "  generated-words: " #append
-  swap "generated-words" @get " " #join #append "\n" #append
 ] ;
 
 format-type-info: ( wi -- str ) [
   dup markers>> [ typed = ] #any
-  [
-    name>> native.type-descriptor
-    dup "type" @get
-    dup struct-descriptor: = [ drop format-struct-type-info ] [
-      dup virtual: = [ drop format-virtual-type-info ] [
-        dup enum-descriptor: = [ drop format-enum-type-info ] [
-          builtin-type: = [ format-builtin-type-info ] [ drop "" ] if
-        ] if
-      ] if
-    ] if
-  ]
+  [ name>> native.type-info-string ]
   [ drop "" ]
   if
 ] ;
@@ -185,7 +163,7 @@ generated-by: ( symbol -- provenance/f ) [
 
 \ Return the generated-words array for a type name
 generated-words: ( symbol -- array ) [
-  native.type-descriptor "generated-words" @get
+  native.type-generated-words
 ] ;
 
 \ Print all defined words in the dictionary, grouped by native vs user-defined

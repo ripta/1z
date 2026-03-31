@@ -211,7 +211,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
         }
     }
     const gw_slice = try generated_words.toOwnedSlice(alloc);
-    try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
+    struct_tv.generated_words = gw_slice;
     try ctx.registerTypeDescriptor(name, frozen_desc);
 }
 
@@ -468,8 +468,8 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
     const type_tv = struct_type.type_val orelse return error.TypeMismatch;
     try ctx.registerDispatch(.{
         .word_name = name,
-        .type_a = type_tv,
-        .type_b = ctx.getDispatchUnarySentinel(),
+        .type_a = type_tv.descriptor.?,
+        .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
     }, .{
         .body = .{ .quotation = instrs },
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "getter", .field = field },
@@ -511,8 +511,8 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
     const type_tv = struct_type.type_val orelse return error.TypeMismatch;
     try ctx.registerDispatch(.{
         .word_name = name,
-        .type_a = type_tv,
-        .type_b = ctx.getDispatchAnySentinel(),
+        .type_a = type_tv.descriptor.?,
+        .type_b = ctx.getDispatchAnySentinel().descriptor.?,
     }, .{
         .body = .{ .quotation = instrs },
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "setter", .field = field },

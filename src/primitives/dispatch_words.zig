@@ -144,8 +144,8 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
 
     const key = DispatchKey{
         .word_name = word_name,
-        .type_a = type_a,
-        .type_b = type_b,
+        .type_a = type_a.descriptor.?,
+        .type_b = type_b.descriptor.?,
     };
     const entry = DispatchEntry{
         .body = .{ .quotation = body.instructions },

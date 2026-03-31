@@ -201,6 +201,20 @@ pub const InferenceEngine = struct {
         return self.diagnostics.items;
     }
 
+    fn descriptorName(self: *const InferenceEngine, desc: *const value_mod.HashTable) []const u8 {
+        if (desc.get("type")) |kind| {
+            if (kind == .symbol and std.mem.eql(u8, kind.symbol, "sentinel:")) return "";
+        }
+        const btv = self.builtin_type_values orelse return "<descriptor>";
+        var iter = btv.iterator();
+        while (iter.next()) |entry| {
+            if (entry.value_ptr.*.descriptor) |tv_desc| {
+                if (tv_desc == desc) return entry.key_ptr.*;
+            }
+        }
+        return "<descriptor>";
+    }
+
     pub fn hasErrors(self: *const InferenceEngine) bool {
         for (self.diagnostics.items) |d| {
             if (d.severity == .err) return true;
@@ -989,7 +1003,7 @@ pub const InferenceEngine = struct {
                         .message = try std.fmt.allocPrint(
                             self.allocator,
                             "dispatch entry for ({s}, {s}) has delta {d}, but base body has delta {d}",
-                            .{ pair.key.type_a.name, pair.key.type_b.name, entry_result.known, base_result.known },
+                            .{ self.descriptorName(pair.key.type_a), self.descriptorName(pair.key.type_b), entry_result.known, base_result.known },
                         ),
                     });
                 }
@@ -1656,18 +1670,16 @@ test "generic word with agreeing dispatch entries" {
     const dispatch_body: []const Instruction = &.{
         makeInstr(.{ .push_literal = .{ .fixnum = 42 } }),
     };
+    const duration_desc = try value_mod.createTypeDescriptor(testing.allocator, "test:", .{});
+    defer value_mod.destroyTypeDescriptor(testing.allocator, duration_desc);
+    const unary_desc = try value_mod.createTypeDescriptor(testing.allocator, "test:", .{});
+    defer value_mod.destroyTypeDescriptor(testing.allocator, unary_desc);
 
     try dispatch.register(
         .{
             .word_name = "my-generic",
-            .type_a = &TypeValue{
-                .name = "duration",
-                .descriptor = null,
-            },
-            .type_b = &TypeValue{
-                .name = "",
-                .descriptor = null,
-            },
+            .type_a = duration_desc,
+            .type_b = unary_desc,
         },
         .{ .body = .{ .quotation = dispatch_body } },
         false,
@@ -1702,18 +1714,16 @@ test "generic word with disagreeing dispatch entries emits diagnostic" {
         makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
         makeInstr(.{ .push_literal = .{ .fixnum = 2 } }),
     };
+    const duration_desc2 = try value_mod.createTypeDescriptor(testing.allocator, "test:", .{});
+    defer value_mod.destroyTypeDescriptor(testing.allocator, duration_desc2);
+    const unary_desc2 = try value_mod.createTypeDescriptor(testing.allocator, "test:", .{});
+    defer value_mod.destroyTypeDescriptor(testing.allocator, unary_desc2);
 
     try dispatch.register(
         .{
             .word_name = "my-generic",
-            .type_a = &TypeValue{
-                .name = "duration",
-                .descriptor = null,
-            },
-            .type_b = &TypeValue{
-                .name = "",
-                .descriptor = null,
-            },
+            .type_a = duration_desc2,
+            .type_b = unary_desc2,
         },
         .{ .body = .{ .quotation = dispatch_body } },
         false,

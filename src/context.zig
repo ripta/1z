@@ -1412,14 +1412,14 @@ pub const Context = struct {
 
     /// Look up a binary dispatch entry by walking dispatch frames (top to
     /// bottom), then the base dispatch table, then the parent context chain.
-    pub fn lookupBinaryDispatch(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue, type_b: *const value_mod.TypeValue) ?DispatchEntry {
+    pub fn lookupBinaryDispatch(self: *const Context, word_name: []const u8, type_a: *const value_mod.HashTable, type_b: *const value_mod.HashTable) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupBinaryDispatchLocked(word_name, type_a, type_b);
     }
 
-    fn lookupBinaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue, type_b: *const value_mod.TypeValue) ?DispatchEntry {
-        const any_sentinel = self.getDispatchAnySentinel();
+    fn lookupBinaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.HashTable, type_b: *const value_mod.HashTable) ?DispatchEntry {
+        const any_sentinel = self.getDispatchAnySentinel().descriptor.?;
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
         while (i > 0) {
@@ -1434,9 +1434,9 @@ pub const Context = struct {
             var j = ctx.dispatch_frames.items.len;
             while (j > 0) {
                 j -= 1;
-                if (dispatch_mod.lookupBinaryInEntries(&ctx.dispatch_frames.items[j].entries, word_name, type_a, type_b, ctx.getDispatchAnySentinel())) |entry| return entry;
+                if (dispatch_mod.lookupBinaryInEntries(&ctx.dispatch_frames.items[j].entries, word_name, type_a, type_b, ctx.getDispatchAnySentinel().descriptor.?)) |entry| return entry;
             }
-            if (ctx.dispatch.lookupBinary(word_name, type_a, type_b, ctx.getDispatchAnySentinel())) |entry| return entry;
+            if (ctx.dispatch.lookupBinary(word_name, type_a, type_b, ctx.getDispatchAnySentinel().descriptor.?)) |entry| return entry;
             ancestor = ctx.parent_context;
         }
 
@@ -1445,15 +1445,15 @@ pub const Context = struct {
 
     /// Look up a unary dispatch entry by walking dispatch frames (top to
     /// bottom), then the base dispatch table, then the parent context chain.
-    pub fn lookupUnaryDispatch(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue) ?DispatchEntry {
+    pub fn lookupUnaryDispatch(self: *const Context, word_name: []const u8, type_a: *const value_mod.HashTable) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupUnaryDispatchLocked(word_name, type_a);
     }
 
-    fn lookupUnaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue) ?DispatchEntry {
-        const any_sentinel = self.getDispatchAnySentinel();
-        const unary_sentinel = self.getDispatchUnarySentinel();
+    fn lookupUnaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.HashTable) ?DispatchEntry {
+        const any_sentinel = self.getDispatchAnySentinel().descriptor.?;
+        const unary_sentinel = self.getDispatchUnarySentinel().descriptor.?;
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
         while (i > 0) {
@@ -1468,9 +1468,9 @@ pub const Context = struct {
             var j = ctx.dispatch_frames.items.len;
             while (j > 0) {
                 j -= 1;
-                if (dispatch_mod.lookupUnaryInEntries(&ctx.dispatch_frames.items[j].entries, word_name, type_a, ctx.getDispatchAnySentinel(), ctx.getDispatchUnarySentinel())) |entry| return entry;
+                if (dispatch_mod.lookupUnaryInEntries(&ctx.dispatch_frames.items[j].entries, word_name, type_a, ctx.getDispatchAnySentinel().descriptor.?, ctx.getDispatchUnarySentinel().descriptor.?)) |entry| return entry;
             }
-            if (ctx.dispatch.lookupUnary(word_name, type_a, ctx.getDispatchAnySentinel(), ctx.getDispatchUnarySentinel())) |entry| return entry;
+            if (ctx.dispatch.lookupUnary(word_name, type_a, ctx.getDispatchAnySentinel().descriptor.?, ctx.getDispatchUnarySentinel().descriptor.?)) |entry| return entry;
             ancestor = ctx.parent_context;
         }
 
@@ -1479,18 +1479,18 @@ pub const Context = struct {
 
     /// Look up a binary dispatch entry in the native-only shadow table,
     /// walking the parent context chain.
-    pub fn lookupNativeBinaryDispatch(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue, type_b: *const value_mod.TypeValue) ?DispatchEntry {
+    pub fn lookupNativeBinaryDispatch(self: *const Context, word_name: []const u8, type_a: *const value_mod.HashTable, type_b: *const value_mod.HashTable) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupNativeBinaryDispatchLocked(word_name, type_a, type_b);
     }
 
-    fn lookupNativeBinaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue, type_b: *const value_mod.TypeValue) ?DispatchEntry {
-        if (self.dispatch.lookupNativeBinary(word_name, type_a, type_b, self.getDispatchAnySentinel())) |entry| return entry;
+    fn lookupNativeBinaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.HashTable, type_b: *const value_mod.HashTable) ?DispatchEntry {
+        if (self.dispatch.lookupNativeBinary(word_name, type_a, type_b, self.getDispatchAnySentinel().descriptor.?)) |entry| return entry;
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
-            if (ctx.dispatch.lookupNativeBinary(word_name, type_a, type_b, ctx.getDispatchAnySentinel())) |entry| return entry;
+            if (ctx.dispatch.lookupNativeBinary(word_name, type_a, type_b, ctx.getDispatchAnySentinel().descriptor.?)) |entry| return entry;
             ancestor = ctx.parent_context;
         }
 
@@ -1499,18 +1499,18 @@ pub const Context = struct {
 
     /// Look up a unary dispatch entry in the native-only shadow table,
     /// walking the parent context chain.
-    pub fn lookupNativeUnaryDispatch(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue) ?DispatchEntry {
+    pub fn lookupNativeUnaryDispatch(self: *const Context, word_name: []const u8, type_a: *const value_mod.HashTable) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupNativeUnaryDispatchLocked(word_name, type_a);
     }
 
-    fn lookupNativeUnaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.TypeValue) ?DispatchEntry {
-        if (self.dispatch.lookupNativeUnary(word_name, type_a, self.getDispatchAnySentinel(), self.getDispatchUnarySentinel())) |entry| return entry;
+    fn lookupNativeUnaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.HashTable) ?DispatchEntry {
+        if (self.dispatch.lookupNativeUnary(word_name, type_a, self.getDispatchAnySentinel().descriptor.?, self.getDispatchUnarySentinel().descriptor.?)) |entry| return entry;
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
-            if (ctx.dispatch.lookupNativeUnary(word_name, type_a, ctx.getDispatchAnySentinel(), ctx.getDispatchUnarySentinel())) |entry| return entry;
+            if (ctx.dispatch.lookupNativeUnary(word_name, type_a, ctx.getDispatchAnySentinel().descriptor.?, ctx.getDispatchUnarySentinel().descriptor.?)) |entry| return entry;
             ancestor = ctx.parent_context;
         }
 
@@ -1647,6 +1647,95 @@ pub const Context = struct {
             },
             .native => return null,
         }
+    }
+
+    pub fn lookupTypeNameByDescriptor(self: *const Context, desc: *const value_mod.HashTable) ?[]const u8 {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+        return self.lookupTypeNameByDescriptorLocked(desc);
+    }
+
+    fn lookupTypeNameByDescriptorLocked(self: *const Context, desc: *const value_mod.HashTable) ?[]const u8 {
+        const sentinels = [_]*const value_mod.TypeValue{
+            self.dispatch_any_sentinel orelse unreachable,
+            self.dispatch_unary_sentinel orelse unreachable,
+            self.self_type_sentinel orelse unreachable,
+            self.any_type_sentinel orelse unreachable,
+        };
+        for (sentinels) |tv| {
+            if (tv.descriptor) |tv_desc| {
+                if (tv_desc == desc) return tv.name;
+            }
+        }
+
+        var builtin_iter = self.builtin_type_values.iterator();
+        while (builtin_iter.next()) |entry| {
+            if (entry.value_ptr.*.descriptor) |tv_desc| {
+                if (tv_desc == desc) return entry.key_ptr.*;
+            }
+        }
+
+        var resource_iter = self.resource_type_values.iterator();
+        while (resource_iter.next()) |entry| {
+            if (entry.value_ptr.*.descriptor) |tv_desc| {
+                if (tv_desc == desc) return entry.key_ptr.*;
+            }
+        }
+
+        var ancestor = self;
+        while (true) {
+            var frame_idx = ancestor.local_frames.items.len;
+            while (frame_idx > 0) {
+                frame_idx -= 1;
+                var frame_iter = ancestor.local_frames.items[frame_idx].iterator();
+                while (frame_iter.next()) |entry| {
+                    switch (entry.value_ptr.action) {
+                        .compound => |instrs| {
+                            if (instrs.len != 1 or instrs[0].op != .push_literal) continue;
+                            switch (instrs[0].op.push_literal) {
+                                .type_val => |tv| if (tv.descriptor) |tv_desc| {
+                                    if (tv_desc == desc) return tv.name;
+                                },
+                                .tagged => |t| {
+                                    const tv = t.tag.type_val orelse continue;
+                                    if (tv.descriptor) |tv_desc| {
+                                        if (tv_desc == desc) return tv.name;
+                                    }
+                                },
+                                else => {},
+                            }
+                        },
+                        .native => {},
+                    }
+                }
+            }
+
+            var dict_iter = ancestor.dictionary.entries.iterator();
+            while (dict_iter.next()) |entry| {
+                switch (entry.value_ptr.action) {
+                    .compound => |instrs| {
+                        if (instrs.len != 1 or instrs[0].op != .push_literal) continue;
+                        switch (instrs[0].op.push_literal) {
+                            .type_val => |tv| if (tv.descriptor) |tv_desc| {
+                                if (tv_desc == desc) return tv.name;
+                            },
+                            .tagged => |t| {
+                                const tv = t.tag.type_val orelse continue;
+                                if (tv.descriptor) |tv_desc| {
+                                    if (tv_desc == desc) return tv.name;
+                                }
+                            },
+                            else => {},
+                        }
+                    },
+                    .native => {},
+                }
+            }
+
+            ancestor = ancestor.parent_context orelse break;
+        }
+
+        return null;
     }
 
     fn lookupResourceTypeValueLocked(self: *const Context, name: []const u8) ?*value_mod.TypeValue {
@@ -1854,11 +1943,15 @@ pub const Context = struct {
             ancestor = ctx.parent_context;
         }
         const slice = try results.toOwnedSlice(alloc);
-        std.mem.sort(DispatchTable.KeyEntryPair, slice, {}, struct {
-            fn lessThan(_: void, a: DispatchTable.KeyEntryPair, b: DispatchTable.KeyEntryPair) bool {
-                const cmp_a = std.mem.order(u8, a.key.type_a.name, b.key.type_a.name);
+        std.mem.sort(DispatchTable.KeyEntryPair, slice, self, struct {
+            fn lessThan(ctx: *const Context, a: DispatchTable.KeyEntryPair, b: DispatchTable.KeyEntryPair) bool {
+                const a_name = ctx.lookupTypeNameByDescriptorLocked(a.key.type_a) orelse "";
+                const b_name = ctx.lookupTypeNameByDescriptorLocked(b.key.type_a) orelse "";
+                const cmp_a = std.mem.order(u8, a_name, b_name);
                 if (cmp_a != .eq) return cmp_a == .lt;
-                return std.mem.order(u8, a.key.type_b.name, b.key.type_b.name) == .lt;
+                const a_b_name = ctx.lookupTypeNameByDescriptorLocked(a.key.type_b) orelse "";
+                const b_b_name = ctx.lookupTypeNameByDescriptorLocked(b.key.type_b) orelse "";
+                return std.mem.order(u8, a_b_name, b_b_name) == .lt;
             }
         }.lessThan);
         return slice;
@@ -1894,11 +1987,15 @@ pub const Context = struct {
             ancestor = ctx.parent_context;
         }
         const slice = try results.toOwnedSlice(alloc);
-        std.mem.sort(DispatchKey, slice, {}, struct {
-            fn lessThan(_: void, a: DispatchKey, b: DispatchKey) bool {
-                const cmp_a = std.mem.order(u8, a.type_a.name, b.type_a.name);
+        std.mem.sort(DispatchKey, slice, self, struct {
+            fn lessThan(ctx: *const Context, a: DispatchKey, b: DispatchKey) bool {
+                const a_name = ctx.lookupTypeNameByDescriptorLocked(a.type_a) orelse "";
+                const b_name = ctx.lookupTypeNameByDescriptorLocked(b.type_a) orelse "";
+                const cmp_a = std.mem.order(u8, a_name, b_name);
                 if (cmp_a != .eq) return cmp_a == .lt;
-                return std.mem.order(u8, a.type_b.name, b.type_b.name) == .lt;
+                const a_b_name = ctx.lookupTypeNameByDescriptorLocked(a.type_b) orelse "";
+                const b_b_name = ctx.lookupTypeNameByDescriptorLocked(b.type_b) orelse "";
+                return std.mem.order(u8, a_b_name, b_b_name) == .lt;
             }
         }.lessThan);
         return slice;
@@ -3727,43 +3824,45 @@ test "dispatch frame push/pop with lookup visibility" {
 
     // Register in base dispatch table
     try ctx.dispatch.register(
-        .{ .word_name = "show", .type_a = fixnum_tv, .type_b = ctx.getDispatchUnarySentinel() },
+        .{ .word_name = "show", .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
         .{ .body = .{ .quotation = body } },
         false,
     );
 
-    try std.testing.expect(ctx.lookupUnaryDispatch("show", fixnum_tv) != null);
+    try std.testing.expect(ctx.lookupUnaryDispatch("show", fixnum_tv.descriptor.?) != null);
 
     // Push a frame and register a new entry
     try ctx.pushDispatchFrame();
     const body2 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 0 }};
     try ctx.registerDispatch(
-        .{ .word_name = "show", .type_a = string_tv, .type_b = ctx.getDispatchUnarySentinel() },
+        .{ .word_name = "show", .type_a = string_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
         .{ .body = .{ .quotation = body2 } },
         false,
     );
 
-    try std.testing.expect(ctx.lookupUnaryDispatch("show", string_tv) != null);
-    try std.testing.expect(ctx.lookupUnaryDispatch("show", fixnum_tv) != null);
+    try std.testing.expect(ctx.lookupUnaryDispatch("show", string_tv.descriptor.?) != null);
+    try std.testing.expect(ctx.lookupUnaryDispatch("show", fixnum_tv.descriptor.?) != null);
 
     // Pop; string entry should vanish
     ctx.popDispatchFrame();
-    try std.testing.expect(ctx.lookupUnaryDispatch("show", string_tv) == null);
-    try std.testing.expect(ctx.lookupUnaryDispatch("show", fixnum_tv) != null);
+    try std.testing.expect(ctx.lookupUnaryDispatch("show", string_tv.descriptor.?) == null);
+    try std.testing.expect(ctx.lookupUnaryDispatch("show", fixnum_tv.descriptor.?) != null);
 }
 
 test "dispatch frame shadowing" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    var duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = null };
+    const duration_desc = try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{});
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, duration_desc);
+    const duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = @ptrCast(duration_desc) };
 
     const body1 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
     const body2 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
 
     // Register in base table
     try ctx.dispatch.register(
-        .{ .word_name = "+", .type_a = &duration_tv, .type_b = &duration_tv },
+        .{ .word_name = "+", .type_a = duration_tv.descriptor.?, .type_b = duration_tv.descriptor.? },
         .{ .body = .{ .quotation = body1 } },
         false,
     );
@@ -3771,18 +3870,18 @@ test "dispatch frame shadowing" {
     // Push frame and shadow
     try ctx.pushDispatchFrame();
     try ctx.registerDispatch(
-        .{ .word_name = "+", .type_a = &duration_tv, .type_b = &duration_tv },
+        .{ .word_name = "+", .type_a = duration_tv.descriptor.?, .type_b = duration_tv.descriptor.? },
         .{ .body = .{ .quotation = body2 } },
         false,
     );
 
     // Inner should win
-    const entry = ctx.lookupBinaryDispatch("+", &duration_tv, &duration_tv).?;
+    const entry = ctx.lookupBinaryDispatch("+", duration_tv.descriptor.?, duration_tv.descriptor.?).?;
     try std.testing.expectEqual(@as(i64, 2), entry.body.quotation[0].op.push_literal.fixnum);
 
     // Pop; outer visible again
     ctx.popDispatchFrame();
-    const entry2 = ctx.lookupBinaryDispatch("+", &duration_tv, &duration_tv).?;
+    const entry2 = ctx.lookupBinaryDispatch("+", duration_tv.descriptor.?, duration_tv.descriptor.?).?;
     try std.testing.expectEqual(@as(i64, 1), entry2.body.quotation[0].op.push_literal.fixnum);
 }
 
@@ -3805,14 +3904,14 @@ test "base behavior with no extra frames matches original" {
     // No extra frames pushed, so registerDispatch goes to base dispatch table
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0 }};
     try ctx.registerDispatch(
-        .{ .word_name = "test-op", .type_a = fixnum_tv, .type_b = ctx.getDispatchUnarySentinel() },
+        .{ .word_name = "test-op", .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
         .{ .body = .{ .quotation = body } },
         false,
     );
 
     // Should be findable via both the new API and the raw dispatch table
-    try std.testing.expect(ctx.lookupUnaryDispatch("test-op", fixnum_tv) != null);
-    try std.testing.expect(ctx.dispatch.lookupUnary("test-op", fixnum_tv, ctx.getDispatchAnySentinel(), ctx.getDispatchUnarySentinel()) != null);
+    try std.testing.expect(ctx.lookupUnaryDispatch("test-op", fixnum_tv.descriptor.?) != null);
+    try std.testing.expect(ctx.dispatch.lookupUnary("test-op", fixnum_tv.descriptor.?, ctx.getDispatchAnySentinel().descriptor.?, ctx.getDispatchUnarySentinel().descriptor.?) != null);
 }
 
 test "initBuiltinTypeValues populates all array slots" {

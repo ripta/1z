@@ -196,7 +196,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try generated_words.append(alloc, .{ .string = unmake_name });
             try generated_words.append(alloc, .{ .string = pred_name });
             const gw_slice = try generated_words.toOwnedSlice(alloc);
-            try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
+            tv.generated_words = gw_slice;
             const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
             try ctx.registerTypeDescriptor(name, frozen_desc);
         },
@@ -297,7 +297,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try generated_words.append(alloc, .{ .string = to_hash_name });
             try generated_words.append(alloc, .{ .string = pred_name });
             const gw_slice = try generated_words.toOwnedSlice(alloc);
-            try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
+            tv.generated_words = gw_slice;
             const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
             try ctx.registerTypeDescriptor(name, frozen_desc);
         },
@@ -1141,7 +1141,7 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     }
 
     const gw_slice = try generated_words.toOwnedSlice(alloc);
-    try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
+    tv.generated_words = gw_slice;
 
     const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
     try ctx.registerTypeDescriptor(name, frozen_desc);
@@ -1177,8 +1177,8 @@ fn registerVectorMutationDispatches(
 
         try ctx.registerDispatch(.{
             .word_name = op_name,
-            .type_a = type_tv,
-            .type_b = ctx.getDispatchUnarySentinel(),
+            .type_a = type_tv.descriptor.?,
+            .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = op_name });
@@ -1200,8 +1200,8 @@ fn registerVectorMutationDispatches(
 
         try ctx.registerDispatch(.{
             .word_name = op_name,
-            .type_a = type_tv,
-            .type_b = ctx.getDispatchUnarySentinel(),
+            .type_a = type_tv.descriptor.?,
+            .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = op_name });
@@ -1217,8 +1217,8 @@ fn registerVectorMutationDispatches(
 
         try ctx.registerDispatch(.{
             .word_name = "#nth!",
-            .type_a = type_tv,
-            .type_b = ctx.getDispatchUnarySentinel(),
+            .type_a = type_tv.descriptor.?,
+            .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = "#nth!" });
@@ -1240,8 +1240,8 @@ fn registerVectorMutationDispatches(
 
         try ctx.registerDispatch(.{
             .word_name = "#append!",
-            .type_a = type_tv,
-            .type_b = ctx.getDispatchUnarySentinel(),
+            .type_a = type_tv.descriptor.?,
+            .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = "#append!" });
@@ -1255,8 +1255,8 @@ fn registerVectorMutationDispatches(
 
         try ctx.registerDispatch(.{
             .word_name = "freeze",
-            .type_a = type_tv,
-            .type_b = ctx.getDispatchUnarySentinel(),
+            .type_a = type_tv.descriptor.?,
+            .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = "freeze" });
@@ -1283,8 +1283,8 @@ fn registerMutableMapMutationDispatches(
 
         try ctx.registerDispatch(.{
             .word_name = "@set!",
-            .type_a = type_tv,
-            .type_b = ctx.getDispatchUnarySentinel(),
+            .type_a = type_tv.descriptor.?,
+            .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = "@set!" });
@@ -1298,8 +1298,8 @@ fn registerMutableMapMutationDispatches(
 
         try ctx.registerDispatch(.{
             .word_name = "@remove!",
-            .type_a = type_tv,
-            .type_b = ctx.getDispatchUnarySentinel(),
+            .type_a = type_tv.descriptor.?,
+            .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = instrs } }, true);
 
         try generated_words.append(alloc, .{ .string = "@remove!" });
@@ -1331,7 +1331,7 @@ pub fn registerHashDispatch(ctx: *Context, type_tv: *const value_mod.TypeValue, 
 
     try ctx.registerDispatch(.{
         .word_name = ">hash",
-        .type_a = type_tv,
-        .type_b = ctx.getDispatchUnarySentinel(),
+        .type_a = type_tv.descriptor.?,
+        .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
     }, .{ .body = .{ .quotation = instrs } }, true);
 }

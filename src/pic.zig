@@ -2,16 +2,15 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const DispatchEntry = @import("dispatch.zig").DispatchEntry;
 const value_mod = @import("value.zig");
-const TypeValue = value_mod.TypeValue;
+const HashTable = value_mod.HashTable;
 
 pub const max_pic_entries = 4;
 
 /// A single entry in a polymorphic inline cache, caching the result of
-/// a dispatch table lookup keyed by TypeValue pointers. Pointer
-/// comparison is safe because TypeValue objects have stable identity.
+/// a dispatch table lookup keyed by descriptor pointers.
 pub const PicEntry = struct {
-    type_a: *const TypeValue = undefined,
-    type_b: *const TypeValue = undefined,
+    type_a: *const HashTable = undefined,
+    type_b: *const HashTable = undefined,
     entry: DispatchEntry = undefined,
     unwrap_a: bool = false,
     unwrap_b: bool = false,
@@ -28,7 +27,7 @@ pub const PolymorphicCache = struct {
     generation: u32 = 0,
     megamorphic: bool = false,
 
-    pub fn lookup(self: *const PolymorphicCache, a_type: *const TypeValue, b_type: *const TypeValue) ?*const PicEntry {
+    pub fn lookup(self: *const PolymorphicCache, a_type: *const HashTable, b_type: *const HashTable) ?*const PicEntry {
         for (self.entries[0..self.count]) |*e| {
             if (a_type == e.type_a and b_type == e.type_b) return e;
         }
@@ -85,58 +84,67 @@ test "PolymorphicCache defaults to empty" {
 
 test "PolymorphicCache lookup returns null when empty" {
     const cache = PolymorphicCache{};
-    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
-    try std.testing.expect(cache.lookup(&fixnum_tv, &fixnum_tv) == null);
+    const fixnum_desc = try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{});
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, fixnum_desc);
+    try std.testing.expect(cache.lookup(fixnum_desc, fixnum_desc) == null);
 }
 
 test "PolymorphicCache insert and lookup" {
     var cache = PolymorphicCache{};
-    var type_a_tv = TypeValue{ .name = "fixnum", .descriptor = null };
-    var type_b_tv = TypeValue{ .name = "fixnum", .descriptor = null };
-    cache.insert(.{ .type_a = &type_a_tv, .type_b = &type_b_tv });
+    const type_a_desc = try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{});
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, type_a_desc);
+    const type_b_desc = try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{});
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, type_b_desc);
+    cache.insert(.{ .type_a = type_a_desc, .type_b = type_b_desc });
     try std.testing.expectEqual(@as(u8, 1), cache.count);
 
-    const result = cache.lookup(&type_a_tv, &type_b_tv);
+    const result = cache.lookup(type_a_desc, type_b_desc);
     try std.testing.expect(result != null);
-    try std.testing.expect(result.?.type_a == &type_a_tv);
+    try std.testing.expect(result.?.type_a == type_a_desc);
 }
 
 test "PolymorphicCache holds up to max_pic_entries" {
     var cache = PolymorphicCache{};
-    var tvs = [_]TypeValue{
-        .{ .name = "a", .descriptor = null },
-        .{ .name = "b", .descriptor = null },
-        .{ .name = "c", .descriptor = null },
-        .{ .name = "d", .descriptor = null },
+    const descs = [_]*value_mod.MutableMap{
+        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
+        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
+        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
+        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
     };
-    for (&tvs) |*tv| {
-        cache.insert(.{ .type_a = tv, .type_b = tv });
+    defer {
+        for (descs) |desc| value_mod.destroyTypeDescriptor(std.testing.allocator, desc);
+    }
+    for (descs) |desc| {
+        cache.insert(.{ .type_a = desc, .type_b = desc });
     }
     try std.testing.expectEqual(@as(u8, max_pic_entries), cache.count);
     try std.testing.expect(!cache.megamorphic);
 
-    for (&tvs) |*tv| {
-        try std.testing.expect(cache.lookup(tv, tv) != null);
+    for (descs) |desc| {
+        try std.testing.expect(cache.lookup(desc, desc) != null);
     }
 }
 
 test "PolymorphicCache becomes megamorphic on overflow" {
     var cache = PolymorphicCache{};
-    var tvs = [_]TypeValue{
-        .{ .name = "a", .descriptor = null },
-        .{ .name = "b", .descriptor = null },
-        .{ .name = "c", .descriptor = null },
-        .{ .name = "d", .descriptor = null },
-        .{ .name = "e", .descriptor = null },
+    const descs = [_]*value_mod.MutableMap{
+        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
+        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
+        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
+        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
+        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
     };
-    for (&tvs) |*tv| {
-        cache.insert(.{ .type_a = tv, .type_b = tv });
+    defer {
+        for (descs) |desc| value_mod.destroyTypeDescriptor(std.testing.allocator, desc);
+    }
+    for (descs) |desc| {
+        cache.insert(.{ .type_a = desc, .type_b = desc });
     }
     try std.testing.expectEqual(@as(u8, max_pic_entries), cache.count);
     try std.testing.expect(cache.megamorphic);
 
     // The 5th type should not be in the cache
-    try std.testing.expect(cache.lookup(&tvs[4], &tvs[4]) == null);
+    try std.testing.expect(cache.lookup(descs[4], descs[4]) == null);
 }
 
 test "PicTable init creates entries with correct count" {
@@ -159,8 +167,9 @@ test "PicTable get returns mutable pointer to entry" {
     try std.testing.expectEqual(@as(u8, 0), entry.count);
 
     entry.generation = 42;
-    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
-    entry.insert(.{ .type_a = &fixnum_tv, .type_b = &fixnum_tv });
+    const fixnum_desc = try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{});
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, fixnum_desc);
+    entry.insert(.{ .type_a = fixnum_desc, .type_b = fixnum_desc });
 
     try std.testing.expectEqual(@as(u32, 42), table.entries[1].generation);
     try std.testing.expectEqual(@as(u8, 1), table.entries[1].count);

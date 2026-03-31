@@ -81,6 +81,7 @@ weight: virtual{ fixnum } ;
 
 \ Different virtual types are not equal even with same inner
 42 >duration 42 >weight = f "different virtual types not equal" assert=
+duration weight = f "different virtual type values are not equal" assert=
 
 \ Each has its own predicate
 42 >duration weight? f "duration is not a weight" assert=

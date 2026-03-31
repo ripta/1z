@@ -95,15 +95,7 @@ render-type-info: ( wi -- str ) [
   dup markers>> [ inspect "<marker:typed>" = ] #any
   [
     [
-      name>> native.type-descriptor
-      dup "type" @get
-      dup struct-descriptor: = [ drop format-struct-type-info ] [
-        dup virtual: = [ drop format-virtual-type-info ] [
-          dup enum-descriptor: = [ drop format-enum-type-info ] [
-            builtin-type: = [ format-builtin-type-info ] [ drop "" ] if
-          ] if
-        ] if
-      ] if
+      format-type-info
       \ Wrap in markdown section
       dup #len 0 =
       [ ]

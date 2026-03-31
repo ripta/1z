@@ -568,7 +568,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     }) |item| {
         inline for (num_types) |ta| {
             inline for (num_types) |tb| {
-                try dispatch.registerNative(item.name, num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeBinaryArithEntry(item.op, ta, tb));
+                try dispatch.registerNative(item.name, num_tvs[@intFromEnum(ta)].descriptor.?, num_tvs[@intFromEnum(tb)].descriptor.?, makeBinaryArithEntry(item.op, ta, tb));
             }
         }
     }
@@ -576,14 +576,14 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     // / : 9 entries
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
-            try dispatch.registerNative("/", num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeDivEntry(ta, tb));
+            try dispatch.registerNative("/", num_tvs[@intFromEnum(ta)].descriptor.?, num_tvs[@intFromEnum(tb)].descriptor.?, makeDivEntry(ta, tb));
         }
     }
 
     // % : 9 entries
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
-            try dispatch.registerNative("%", num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeModEntry(ta, tb));
+            try dispatch.registerNative("%", num_tvs[@intFromEnum(ta)].descriptor.?, num_tvs[@intFromEnum(tb)].descriptor.?, makeModEntry(ta, tb));
         }
     }
 

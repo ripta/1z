@@ -166,8 +166,8 @@ pub fn validateProtocolObligation(
                 helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
                 return error.TypeMismatch;
             };
-            const has_method = ctx.lookupUnaryDispatch(method_name, type_tv) != null or
-                ctx.lookupBinaryDispatch(method_name, type_tv, type_tv) != null;
+            const has_method = ctx.lookupUnaryDispatch(method_name, type_tv.descriptor.?) != null or
+                ctx.lookupBinaryDispatch(method_name, type_tv.descriptor.?, type_tv.descriptor.?) != null;
 
             if (!has_method) {
                 throwProtocolError(ctx, type_name, method_name, protocol_name);
@@ -223,8 +223,8 @@ fn validateObligationSameTypeOnly(
                 helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
                 return error.TypeMismatch;
             };
-            const has_method = ctx.lookupUnaryDispatch(method_name, type_tv) != null or
-                ctx.lookupBinaryDispatch(method_name, type_tv, type_tv) != null;
+            const has_method = ctx.lookupUnaryDispatch(method_name, type_tv.descriptor.?) != null or
+                ctx.lookupBinaryDispatch(method_name, type_tv.descriptor.?, type_tv.descriptor.?) != null;
 
             if (!has_method) {
                 throwProtocolError(ctx, type_name, method_name, protocol_name);
@@ -292,7 +292,7 @@ fn validateTypedMethod(
         // Unary dispatch
         const type_a = if (n_inputs == 1) concrete_types[0] else type_tv;
         if (!has_any) {
-            if (ctx.lookupUnaryDispatch(method_name, type_a) == null) {
+            if (ctx.lookupUnaryDispatch(method_name, type_a.descriptor.?) == null) {
                 throwProtocolError(ctx, type_name, method_name, protocol_name);
                 return error.UserThrown;
             }
@@ -306,7 +306,7 @@ fn validateTypedMethod(
     } else {
         // Binary dispatch
         if (!has_any) {
-            if (ctx.lookupBinaryDispatch(method_name, concrete_types[0], concrete_types[1]) == null) {
+            if (ctx.lookupBinaryDispatch(method_name, concrete_types[0].descriptor.?, concrete_types[1].descriptor.?) == null) {
                 throwProtocolError(ctx, type_name, method_name, protocol_name);
                 return error.UserThrown;
             }
@@ -336,26 +336,26 @@ fn hasAnyMatchingEntry(
 
     for (keys) |key| {
         if (is_unary) {
-            if (key.type_b == ctx.getDispatchUnarySentinel()) {
-                if (key.type_a == type_tv or
-                    key.type_a == ctx.getDispatchAnySentinel())
+            if (key.type_b == ctx.getDispatchUnarySentinel().descriptor.?) {
+                if (key.type_a == type_tv.descriptor.? or
+                    key.type_a == ctx.getDispatchAnySentinel().descriptor.?)
                 {
                     return true;
                 }
             }
         } else {
-            if (key.type_b == ctx.getDispatchUnarySentinel()) continue;
+            if (key.type_b == ctx.getDispatchUnarySentinel().descriptor.?) continue;
             if (any_position == 0) {
                 // any is first position, self must be in second
-                if (key.type_b == type_tv or
-                    key.type_b == ctx.getDispatchAnySentinel())
+                if (key.type_b == type_tv.descriptor.? or
+                    key.type_b == ctx.getDispatchAnySentinel().descriptor.?)
                 {
                     return true;
                 }
             } else {
                 // any is second position, self must be in first
-                if (key.type_a == type_tv or
-                    key.type_a == ctx.getDispatchAnySentinel())
+                if (key.type_a == type_tv.descriptor.? or
+                    key.type_a == ctx.getDispatchAnySentinel().descriptor.?)
                 {
                     return true;
                 }

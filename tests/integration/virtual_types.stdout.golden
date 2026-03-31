@@ -66,6 +66,8 @@ Stack: [ ]
 Stack: [ ]
 PASS: different virtual types not equal
 Stack: [ ]
+PASS: different virtual type values are not equal
+Stack: [ ]
 PASS: duration is not a weight
 Stack: [ ]
 PASS: weight is not a duration

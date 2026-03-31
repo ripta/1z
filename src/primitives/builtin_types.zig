@@ -40,6 +40,13 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
     };
 
     const tv = if (ctx.lookupBuiltinTypeValue(name)) |existing| blk: {
+        if (existing.descriptor) |existing_desc| {
+            var iter = descriptor.iterator();
+            while (iter.next()) |entry| {
+                try existing_desc.put(ctx.quotationAllocator(), entry.key_ptr.*, entry.value_ptr.*);
+            }
+            break :blk existing;
+        }
         existing.descriptor = descriptor;
         break :blk existing;
     } else blk: {
@@ -50,7 +57,7 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
         break :blk new_tv;
     };
 
-    try ctx.registerTypeDescriptor(name, descriptor);
+    try ctx.registerTypeDescriptor(name, tv.descriptor.?);
 
     try ctx.stack.push(.{ .marker = @constCast(&markers_mod.parse_time_marker) });
     try ctx.stack.push(.{ .marker = @constCast(&markers_mod.const_marker) });
