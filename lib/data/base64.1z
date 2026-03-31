@@ -3,6 +3,7 @@
 use "strings" ;
 
 standard-alphabet: const [ "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" ] ;
+url-alphabet: const [ "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" ] ;
 
 \ ASCII lookup table for standard Base64. Invalid entries are 0xFF.
 standard-reverse-table: const [
@@ -18,8 +19,22 @@ standard-reverse-table: const [
   }
 ] ;
 
+\ ASCII lookup table for URL-safe Base64. Invalid entries are 0xFF.
+url-reverse-table: const [
+  B{
+    0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF
+    0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF
+    0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0x3E 0xFF 0xFF
+    0x34 0x35 0x36 0x37 0x38 0x39 0x3A 0x3B 0x3C 0x3D 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF
+    0xFF 0x00 0x01 0x02 0x03 0x04 0x05 0x06 0x07 0x08 0x09 0x0A 0x0B 0x0C 0x0D 0x0E
+    0x0F 0x10 0x11 0x12 0x13 0x14 0x15 0x16 0x17 0x18 0x19 0xFF 0xFF 0xFF 0xFF 0x3F
+    0xFF 0x1A 0x1B 0x1C 0x1D 0x1E 0x1F 0x20 0x21 0x22 0x23 0x24 0x25 0x26 0x27 0x28
+    0x29 0x2A 0x2B 0x2C 0x2D 0x2E 0x2F 0x30 0x31 0x32 0x33 0xFF 0xFF 0xFF 0xFF 0xFF
+  }
+] ;
+
 base64-encode-state: mutable struct{ src pos out } ;
-base64-decode-state: mutable struct{ src pos out } ;
+base64-decode-state: mutable struct{ src pos out table } ;
 
 (base64-error): ( msg -- * ) [ f swap EInvalidArgument make-error throw ] ;
 
@@ -142,6 +157,12 @@ encode: ( str-or-bytes -- str ) [
   out>>
 ] ;
 
+(url-safe-char): ( char -- char ) [
+  dup "+" = [ drop "-" ] [ dup "/" = [ drop "_" ] when ] if
+] ;
+
+(url-safe-string): ( str -- str ) [ [ (url-safe-char) ] #map #collect "" #join ] ;
+
 (trailing-pad-count): ( str -- n ) [
   dup "===" #ends-with? [ dup #len 3 - (padding-error) ] [
     dup "==" #ends-with? [ drop 2 ] [
@@ -154,6 +175,8 @@ encode: ( str-or-bytes -- str ) [
   dup 0 = [ drop ] [ over #len swap - #take ] if
 ] ;
 
+(trim-padding): ( str -- str' ) [ dup (trailing-pad-count) (strip-padding) ] ;
+
 (validate-standard-input): ( str -- str ) [
   dup (trailing-pad-count) dup 0 > [
     drop
@@ -164,12 +187,12 @@ encode: ( str-or-bytes -- str ) [
   dup #len 4 rem dup 1 = [ drop dup #len (truncated-error) ] [ drop ] if
 ] ;
 
-(decode-sextet-at): ( str idx -- sextet ) [
-  2dup #nth >codepoint
+(decode-sextet-at): ( state idx -- sextet ) [
+  1 pick-n src>> 1 pick-n #nth >codepoint
   dup 128 >= [
     drop nip (invalid-char-error)
   ] [
-    standard-reverse-table swap #nth
+    2 pick-n table>> swap #nth
     dup 0xFF = [ drop nip (invalid-char-error) ] [ 2nip ] if
   ] if
 ] ;
@@ -229,7 +252,7 @@ encode: ( str-or-bytes -- str ) [
   1 array-n B{ } [ #push ] #reduce
 ] ;
 
-(dec-src-at): ( state idx -- sextet ) [ over src>> swap (decode-sextet-at) nip ] ;
+(dec-src-at): ( state idx -- sextet ) [ (decode-sextet-at) ] ;
 
 (dec-remaining): ( state -- n ) [ dup src>> #len swap pos>> - ] ;
 
@@ -275,7 +298,7 @@ encode: ( str-or-bytes -- str ) [
 \\ Decode standard Base64 text to a byte array. Accepts padded or unpadded input.
 decode: ( str -- bytes ) [
   (validate-standard-input)
-  0 B{ } make-base64-decode-state
+  0 B{ } standard-reverse-table make-base64-decode-state
   [ dup (dec-remaining) 4 >= ] [ (dec-step4) ] while
   (dec-finish)
   out>>
@@ -283,3 +306,24 @@ decode: ( str -- bytes ) [
 
 \\ Decode standard Base64 text and interpret the result as a UTF-8 string.
 decode>string: ( str -- str ) [ decode bytes> ] ;
+
+\\ Encode a string or byte array using URL-safe Base64 with `=` padding.
+encode(url): ( str-or-bytes -- str ) [ encode (url-safe-string) ] ;
+
+\\ Encode a string or byte array using standard Base64 without `=` padding.
+encode(no-pad): ( str-or-bytes -- str ) [ encode (trim-padding) ] ;
+
+\\ Encode a string or byte array using URL-safe Base64 without `=` padding.
+encode(url-no-pad): ( str-or-bytes -- str ) [ encode(url) (trim-padding) ] ;
+
+\\ Decode URL-safe Base64 text to a byte array. Accepts padded or unpadded input.
+decode(url): ( str -- bytes ) [
+  (validate-standard-input)
+  0 B{ } url-reverse-table make-base64-decode-state
+  [ dup (dec-remaining) 4 >= ] [ (dec-step4) ] while
+  (dec-finish)
+  out>>
+] ;
+
+\\ Decode URL-safe Base64 text and interpret the result as a UTF-8 string.
+decode>string(url): ( str -- str ) [ decode(url) bytes> ] ;

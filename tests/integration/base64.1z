@@ -14,6 +14,13 @@ use "data/base64" ;
 "AAEC" B{ 0x00 0x01 0x02 } encode "encode binary bytes" assert=
 "Zm9v" B{ 0x66 0x6F 0x6F } encode "encode byte array text" assert=
 
+"encode: url-safe variants" test-section
+"--__" B{ 0xFB 0xEF 0xFF } encode(url) "encode url-safe alphabet" assert=
+"Zg" "f" encode(no-pad) "encode no-pad one byte string" assert=
+"Zm8" "fo" encode(no-pad) "encode no-pad two byte string" assert=
+"--8" B{ 0xFB 0xEF } encode(url-no-pad) "encode url-safe no-pad" assert=
+"AAEC" B{ 0x00 0x01 0x02 } encode(url) "encode url-safe unchanged when no special chars" assert=
+
 "decode: standard padded" test-section
 B{ } "" decode "decode empty string" assert=
 B{ 0x66 } "Zg==" decode "decode one byte" assert=
@@ -26,9 +33,19 @@ B{ 0x66 } "Zg" decode "decode unpadded one byte" assert=
 B{ 0x66 0x6F } "Zm8" decode "decode unpadded two bytes" assert=
 B{ 0x68 0x65 0x6C 0x6C 0x6F } "aGVsbG8" decode "decode unpadded hello" assert=
 
+"decode: url-safe" test-section
+B{ } "" decode(url) "decode url-safe empty string" assert=
+B{ 0xFB 0xEF 0xFF } "--__" decode(url) "decode url-safe padded alphabet" assert=
+B{ 0xFB 0xEF } "--8" decode(url) "decode url-safe unpadded alphabet" assert=
+B{ 0x68 0x65 0x6C 0x6C 0x6F } "aGVsbG8" decode(url) "decode url-safe plain text" assert=
+
 "decode>string" test-section
 "hello" "aGVsbG8=" decode>string "decode>string padded" assert=
 "hello" "aGVsbG8" decode>string "decode>string unpadded" assert=
+
+"decode>string(url)" test-section
+"hello" "aGVsbG8=" decode>string(url) "decode>string(url) padded" assert=
+"hello" "aGVsbG8" decode>string(url) "decode>string(url) unpadded" assert=
 
 "type checks" test-section
 "byte-array" "Zm9v" decode type-name "decode returns byte-array" assert=
@@ -37,7 +54,13 @@ B{ 0x68 0x65 0x6C 0x6C 0x6F } "aGVsbG8" decode "decode unpadded hello" assert=
 "decode: invalid input" test-section
 [ "Zm$=" decode ] "invalid character errors" assert-error
 [ "Zm-9" decode ] "wrong alphabet character errors" assert-error
+[ "Zm+9" decode(url) ] "url-safe rejects standard plus" assert-error
+[ "Zm/9" decode(url) ] "url-safe rejects standard slash" assert-error
 [ "Zm=9" decode ] "interior padding errors" assert-error
+[ "Zm=9" decode(url) ] "url-safe interior padding errors" assert-error
 [ "Zm9v===" decode ] "excessive padding errors" assert-error
+[ "Zm9v===" decode(url) ] "url-safe excessive padding errors" assert-error
 [ "A" decode ] "truncated length mod 4 = 1 errors" assert-error
+[ "A" decode(url) ] "url-safe truncated length mod 4 = 1 errors" assert-error
 [ "Zg=" decode ] "padded input length must be multiple of 4" assert-error
+[ "Zg=" decode(url) ] "url-safe padded input length must be multiple of 4" assert-error

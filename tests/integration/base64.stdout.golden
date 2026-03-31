@@ -16,6 +16,18 @@ PASS: encode binary bytes
 Stack: [ ]
 PASS: encode byte array text
 Stack: [ ]
+=== encode: url-safe variants ===
+Stack: [ ]
+PASS: encode url-safe alphabet
+Stack: [ ]
+PASS: encode no-pad one byte string
+Stack: [ ]
+PASS: encode no-pad two byte string
+Stack: [ ]
+PASS: encode url-safe no-pad
+Stack: [ ]
+PASS: encode url-safe unchanged when no special chars
+Stack: [ ]
 === decode: standard padded ===
 Stack: [ ]
 PASS: decode empty string
@@ -36,11 +48,27 @@ PASS: decode unpadded two bytes
 Stack: [ ]
 PASS: decode unpadded hello
 Stack: [ ]
+=== decode: url-safe ===
+Stack: [ ]
+PASS: decode url-safe empty string
+Stack: [ ]
+PASS: decode url-safe padded alphabet
+Stack: [ ]
+PASS: decode url-safe unpadded alphabet
+Stack: [ ]
+PASS: decode url-safe plain text
+Stack: [ ]
 === decode>string ===
 Stack: [ ]
 PASS: decode>string padded
 Stack: [ ]
 PASS: decode>string unpadded
+Stack: [ ]
+=== decode>string(url) ===
+Stack: [ ]
+PASS: decode>string(url) padded
+Stack: [ ]
+PASS: decode>string(url) unpadded
 Stack: [ ]
 === type checks ===
 Stack: [ ]
@@ -54,11 +82,23 @@ PASS: invalid character errors
 Stack: [ ]
 PASS: wrong alphabet character errors
 Stack: [ ]
+PASS: url-safe rejects standard plus
+Stack: [ ]
+PASS: url-safe rejects standard slash
+Stack: [ ]
 PASS: interior padding errors
+Stack: [ ]
+PASS: url-safe interior padding errors
 Stack: [ ]
 PASS: excessive padding errors
 Stack: [ ]
+PASS: url-safe excessive padding errors
+Stack: [ ]
 PASS: truncated length mod 4 = 1 errors
 Stack: [ ]
+PASS: url-safe truncated length mod 4 = 1 errors
+Stack: [ ]
 PASS: padded input length must be multiple of 4
+Stack: [ ]
+PASS: url-safe padded input length must be multiple of 4
 Stack: [ ]
