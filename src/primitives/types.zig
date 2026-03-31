@@ -55,11 +55,13 @@ pub const Capability = enum {
     ffi,
     system,
     eval,
+    process,
 
     /// Returns true if `self` grants access to `required`.
     pub fn grants(self: Capability, required: Capability) bool {
         if (self == required) return true;
         if (required == .io) return self == .io_fs or self == .io_net;
+        if (required == .process) return self == .io or self == .io_fs or self == .io_net;
         return false;
     }
 
@@ -67,12 +69,15 @@ pub const Capability = enum {
     pub fn displayName(self: Capability) []const u8 {
         return switch (self) {
             .none => "none",
+
             .io => "io",
             .io_fs => "io/fs",
             .io_net => "io/net",
+
             .ffi => "ffi",
             .system => "system",
             .eval => "eval",
+            .process => "process",
         };
     }
 };
@@ -84,9 +89,11 @@ pub const SandboxSpec = struct {
         .{ .cap = .io, .bit = 0 },
         .{ .cap = .io_fs, .bit = 1 },
         .{ .cap = .io_net, .bit = 2 },
+
         .{ .cap = .ffi, .bit = 3 },
         .{ .cap = .system, .bit = 4 },
         .{ .cap = .eval, .bit = 5 },
+        .{ .cap = .process, .bit = 6 },
     };
 
     fn bitFor(cap: Capability) ?u3 {
@@ -112,8 +119,12 @@ pub const SandboxSpec = struct {
     /// Returns true if the required capability is granted (or is .none).
     pub fn allows(self: SandboxSpec, required: Capability) bool {
         if (required == .none) return true;
-        const bit = bitFor(required) orelse return false;
-        return (self.granted & (@as(u8, 1) << bit)) != 0;
+        for (cap_bits) |entry| {
+            if ((self.granted & (@as(u8, 1) << entry.bit)) != 0 and entry.cap.grants(required)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// Map a user-facing string to a Capability.
@@ -121,9 +132,12 @@ pub const SandboxSpec = struct {
         if (std.mem.eql(u8, name, "io")) return .io;
         if (std.mem.eql(u8, name, "io/fs")) return .io_fs;
         if (std.mem.eql(u8, name, "io/net")) return .io_net;
+
         if (std.mem.eql(u8, name, "ffi")) return .ffi;
         if (std.mem.eql(u8, name, "system")) return .system;
         if (std.mem.eql(u8, name, "eval")) return .eval;
+        if (std.mem.eql(u8, name, "process")) return .process;
+
         return null;
     }
 
@@ -144,9 +158,12 @@ pub const SandboxSpec = struct {
                     .io => "io",
                     .io_fs => "io/fs",
                     .io_net => "io/net",
+
                     .ffi => "ffi",
                     .system => "system",
                     .eval => "eval",
+                    .process => "process",
+
                     .none => unreachable,
                 });
             }
@@ -181,6 +198,7 @@ const testing = @import("std").testing;
 test "Capability.grants identity" {
     try testing.expect(Capability.none.grants(.none));
     try testing.expect(Capability.io.grants(.io));
+    try testing.expect(Capability.process.grants(.process));
     try testing.expect(Capability.io_fs.grants(.io_fs));
     try testing.expect(Capability.io_net.grants(.io_net));
     try testing.expect(Capability.ffi.grants(.ffi));
@@ -191,6 +209,9 @@ test "Capability.grants identity" {
 test "Capability.grants hierarchy" {
     try testing.expect(Capability.io_fs.grants(.io));
     try testing.expect(Capability.io_net.grants(.io));
+    try testing.expect(Capability.io.grants(.process));
+    try testing.expect(Capability.io_fs.grants(.process));
+    try testing.expect(Capability.io_net.grants(.process));
 }
 
 test "Capability.grants does not grant unrelated" {
@@ -201,6 +222,7 @@ test "Capability.grants does not grant unrelated" {
     try testing.expect(!Capability.system.grants(.ffi));
     try testing.expect(!Capability.io_fs.grants(.io_net));
     try testing.expect(!Capability.io_net.grants(.io_fs));
+    try testing.expect(!Capability.process.grants(.io));
 }
 
 test "SandboxSpec empty grants nothing" {
@@ -208,6 +230,7 @@ test "SandboxSpec empty grants nothing" {
     try testing.expect(!spec.allows(.io));
     try testing.expect(!spec.allows(.io_fs));
     try testing.expect(!spec.allows(.ffi));
+    try testing.expect(!spec.allows(.process));
     try testing.expect(spec.allows(.none));
 }
 
@@ -217,6 +240,7 @@ test "SandboxSpec grant and allows" {
     try testing.expect(spec.allows(.ffi));
     try testing.expect(!spec.allows(.io));
     try testing.expect(!spec.allows(.system));
+    try testing.expect(!spec.allows(.process));
 }
 
 test "SandboxSpec hierarchy expansion" {
@@ -225,6 +249,7 @@ test "SandboxSpec hierarchy expansion" {
     try testing.expect(spec.allows(.io_fs));
     try testing.expect(spec.allows(.io));
     try testing.expect(!spec.allows(.io_net));
+    try testing.expect(spec.allows(.process));
 }
 
 test "SandboxSpec.fromString" {
@@ -234,6 +259,7 @@ test "SandboxSpec.fromString" {
     try testing.expectEqual(Capability.ffi, SandboxSpec.fromString("ffi").?);
     try testing.expectEqual(Capability.system, SandboxSpec.fromString("system").?);
     try testing.expectEqual(Capability.eval, SandboxSpec.fromString("eval").?);
+    try testing.expectEqual(Capability.process, SandboxSpec.fromString("process").?);
     try testing.expect(SandboxSpec.fromString("bogus") == null);
 }
 
@@ -249,20 +275,25 @@ test "SandboxSpec.writeGranted with capabilities" {
     var spec = SandboxSpec{};
     spec.grant(.eval);
     spec.grant(.ffi);
+    spec.grant(.process);
+
     var buf: [64]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     try spec.writeGranted(fbs.writer());
-    try testing.expectEqualStrings("sandbox{ ffi eval }", fbs.getWritten());
+    try testing.expectEqualStrings("sandbox{ ffi eval process }", fbs.getWritten());
 }
 
 test "Capability.displayName" {
     try testing.expectEqualStrings("none", Capability.none.displayName());
+
     try testing.expectEqualStrings("io", Capability.io.displayName());
     try testing.expectEqualStrings("io/fs", Capability.io_fs.displayName());
     try testing.expectEqualStrings("io/net", Capability.io_net.displayName());
+
     try testing.expectEqualStrings("ffi", Capability.ffi.displayName());
     try testing.expectEqualStrings("system", Capability.system.displayName());
     try testing.expectEqualStrings("eval", Capability.eval.displayName());
+    try testing.expectEqualStrings("process", Capability.process.displayName());
 }
 
 test "SandboxSpec.intersect" {

@@ -4,6 +4,8 @@ PASS: empty sandbox type-of
 Stack: [ ]
 PASS: io sandbox type-of
 Stack: [ ]
+PASS: process sandbox type-of
+Stack: [ ]
 PASS: full sandbox type-of
 Stack: [ ]
 === sandbox spec display ===
@@ -13,6 +15,8 @@ Stack: [ ]
 PASS: eval-only sandbox display
 Stack: [ ]
 PASS: ffi+eval sandbox display
+Stack: [ ]
+PASS: process sandbox display
 Stack: [ ]
 PASS: io/fs sandbox displays io too
 Stack: [ ]

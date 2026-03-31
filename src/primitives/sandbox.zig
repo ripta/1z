@@ -54,7 +54,7 @@ fn nativeSandboxParse(ctx: *Context) anyerror!void {
         } else {
             ctx.parse_diagnostics = .{
                 .error_type = "TypeMismatch",
-                .message = std.fmt.allocPrint(alloc, "sandbox{{: unknown capability '{s}'. Valid capabilities: io, io/fs, io/net, ffi, system, eval", .{tok.text}) catch null,
+                .message = std.fmt.allocPrint(alloc, "sandbox{{: unknown capability '{s}'. Valid capabilities: io, process, io/fs, io/net, ffi, system, eval", .{tok.text}) catch null,
             };
             return error.TypeMismatch;
         }

@@ -4,11 +4,13 @@ use "testing" ;
 
 sandbox{ } type-of sandbox-spec "empty sandbox type-of" assert=
 sandbox{ io } type-of sandbox-spec "io sandbox type-of" assert=
-sandbox{ io/fs io/net ffi system eval } type-of sandbox-spec "full sandbox type-of" assert=
+sandbox{ process } type-of sandbox-spec "process sandbox type-of" assert=
+sandbox{ process io/fs io/net ffi system eval } type-of sandbox-spec "full sandbox type-of" assert=
 
 "sandbox spec display" test-section
 
 sandbox{ } inspect "sandbox{ }" "empty sandbox display" assert=
 sandbox{ eval } inspect "sandbox{ eval }" "eval-only sandbox display" assert=
 sandbox{ ffi eval } inspect "sandbox{ ffi eval }" "ffi+eval sandbox display" assert=
+sandbox{ process } inspect "sandbox{ process }" "process sandbox display" assert=
 sandbox{ io/fs } inspect "sandbox{ io io/fs }" "io/fs sandbox displays io too" assert=

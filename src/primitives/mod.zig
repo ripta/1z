@@ -67,6 +67,7 @@ pub const native_dispatch_access = @import("native_dispatch_access.zig");
 pub const tls = @import("tls.zig");
 pub const sandbox = @import("sandbox.zig");
 pub const filesystem = @import("filesystem.zig");
+pub const process = @import("process.zig");
 pub const hooks = @import("hooks.zig");
 pub const signals = @import("signals.zig");
 pub const packed_arrays = @import("packed.zig");
@@ -154,6 +155,7 @@ pub const extracted_registry_entries = structs.registry_entries ++
     tasks.registry_entries ++
     tls.registry_entries ++
     filesystem.registry_entries ++
+    process.registry_entries ++
     hooks.registry_entries ++
     signals.registry_entries ++
     misc.registry_entries ++
