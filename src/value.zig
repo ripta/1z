@@ -283,6 +283,11 @@ pub const StructInstance = struct {
     fields: []Value, // Field values in order (mutable for setter support)
 };
 
+fn structTypeDescriptor(st: *const StructType) ?*const HashTable {
+    const tv = st.type_val orelse return null;
+    return tv.descriptor;
+}
+
 /// ModuleWord represents a word definition captured from a loaded file
 /// or registered in a virtual module.
 pub const ModuleWord = struct {
@@ -787,7 +792,10 @@ pub const Value = union(enum) {
             // Struct instances are equal if same type and all fields equal
             .struct_instance => |a| {
                 const b = other.struct_instance;
-                if (a.struct_type != b.struct_type) return false;
+                if (structTypeDescriptor(a.struct_type)) |a_desc| {
+                    const b_desc = structTypeDescriptor(b.struct_type) orelse return false;
+                    if (a_desc != b_desc) return false;
+                } else if (a.struct_type != b.struct_type) return false;
                 for (a.fields, b.fields) |af, bf| {
                     if (!af.eql(bf)) return false;
                 }

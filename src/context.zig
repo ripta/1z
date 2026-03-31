@@ -111,6 +111,11 @@ pub const ParameterizedTypeKey = struct {
     element: *const value_mod.TypeValue,
 };
 
+pub const StructDescriptorKey = struct {
+    fields: []const []const u8,
+    mutable: bool,
+};
+
 pub const ParameterizedTypeKeyContext = struct {
     pub fn hash(_: @This(), key: ParameterizedTypeKey) u64 {
         var h = std.hash.Wyhash.init(0);
@@ -121,6 +126,27 @@ pub const ParameterizedTypeKeyContext = struct {
 
     pub fn eql(_: @This(), a: ParameterizedTypeKey, b: ParameterizedTypeKey) bool {
         return a.base == b.base and a.element == b.element;
+    }
+};
+
+pub const StructDescriptorKeyContext = struct {
+    pub fn hash(_: @This(), key: StructDescriptorKey) u64 {
+        var h = std.hash.Wyhash.init(0);
+        const mutable_byte: u8 = if (key.mutable) 1 else 0;
+        h.update(&[_]u8{mutable_byte});
+        for (key.fields) |field| {
+            h.update(field);
+            h.update(&[_]u8{0});
+        }
+        return h.final();
+    }
+
+    pub fn eql(_: @This(), a: StructDescriptorKey, b: StructDescriptorKey) bool {
+        if (a.mutable != b.mutable or a.fields.len != b.fields.len) return false;
+        for (a.fields, b.fields) |a_field, b_field| {
+            if (!std.mem.eql(u8, a_field, b_field)) return false;
+        }
+        return true;
     }
 };
 
@@ -297,6 +323,13 @@ pub const Context = struct {
         ParameterizedTypeKey,
         *value_mod.HashTable,
         ParameterizedTypeKeyContext,
+        80,
+    ) = .{},
+    /// Interned descriptors for bare structs, keyde by ordered field names and by mutability.
+    struct_descriptors: std.HashMapUnmanaged(
+        StructDescriptorKey,
+        *value_mod.HashTable,
+        StructDescriptorKeyContext,
         80,
     ) = .{},
     /// Registry of known pragma keys and their validation rules.
@@ -692,6 +725,7 @@ pub const Context = struct {
         self.builtin_type_values.deinit(self.allocator);
         self.resource_type_values.deinit(self.allocator);
         self.parameterized_type_descriptors.deinit(self.allocator);
+        self.struct_descriptors.deinit(self.allocator);
         self.dispatch.deinit();
         self.jit_dispatch.deinit();
         var pic_iter = self.pic_cache.iterator();
@@ -1804,6 +1838,33 @@ pub const Context = struct {
         return null;
     }
 
+    pub fn lookupStructDescriptor(
+        self: *const Context,
+        fields: []const []const u8,
+        mutable: bool,
+    ) ?*value_mod.HashTable {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+        return self.lookupStructDescriptorLocked(fields, mutable);
+    }
+
+    fn lookupStructDescriptorLocked(
+        self: *const Context,
+        fields: []const []const u8,
+        mutable: bool,
+    ) ?*value_mod.HashTable {
+        const key = StructDescriptorKey{ .fields = fields, .mutable = mutable };
+        if (self.struct_descriptors.get(key)) |desc| return desc;
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            if (ctx.struct_descriptors.get(key)) |desc| return desc;
+            ancestor = ctx.parent_context;
+        }
+
+        return null;
+    }
+
     /// Register a built-in type value by name (write-locked).
     pub fn registerBuiltinTypeValue(self: *Context, name: []const u8, tv: *value_mod.TypeValue) !void {
         self.acquireSharedWrite();
@@ -1856,6 +1917,36 @@ pub const Context = struct {
         try self.parameterized_type_descriptors.put(
             self.allocator,
             .{ .base = base, .element = element },
+            @ptrCast(desc_map),
+        );
+        return @ptrCast(desc_map);
+    }
+
+    pub fn getOrCreateStructDescriptor(
+        self: *Context,
+        fields: []const []const u8,
+        mutable: bool,
+    ) !*value_mod.HashTable {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+
+        if (self.lookupStructDescriptorLocked(fields, mutable)) |desc| return desc;
+
+        const alloc = self.quotationAllocator();
+        const desc_map = try value_mod.createTypeDescriptor(
+            alloc,
+            "struct-descriptor:",
+            .{ .mutable = mutable },
+        );
+        const desc_fields = try alloc.alloc(value_mod.Value, fields.len);
+        for (fields, 0..) |field, i| {
+            desc_fields[i] = .{ .string = field };
+        }
+        try desc_map.put(alloc, "fields", .{ .array = desc_fields });
+
+        try self.struct_descriptors.put(
+            self.allocator,
+            .{ .fields = fields, .mutable = mutable },
             @ptrCast(desc_map),
         );
         return @ptrCast(desc_map);
@@ -3874,6 +3965,24 @@ test "parameterized type descriptor interning reuses descriptor for same key" {
 
     const desc3 = try ctx.getOrCreateParameterizedTypeDescriptor(array_tv, string_tv);
     try std.testing.expect(desc1 != desc3);
+}
+
+test "struct descriptor interning reuses descriptor for same shape" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fields_xy = [_][]const u8{ "x", "y" };
+    const fields_yx = [_][]const u8{ "y", "x" };
+
+    const desc1 = try ctx.getOrCreateStructDescriptor(&fields_xy, false);
+    const desc2 = try ctx.getOrCreateStructDescriptor(&fields_xy, false);
+    try std.testing.expect(desc1 == desc2);
+
+    const desc3 = try ctx.getOrCreateStructDescriptor(&fields_yx, false);
+    try std.testing.expect(desc1 != desc3);
+
+    const desc4 = try ctx.getOrCreateStructDescriptor(&fields_xy, true);
+    try std.testing.expect(desc1 != desc4);
 }
 
 test "enum registry frame push/pop" {

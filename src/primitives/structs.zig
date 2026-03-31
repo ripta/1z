@@ -109,17 +109,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
         if (markers_mod.isMutableMarker(mk)) break true;
     } else false;
 
-    const desc_map = try value_mod.createTypeDescriptor(
-        alloc,
-        "struct-descriptor:",
-        .{ .mutable = has_mutable },
-    );
-    const desc_fields = try alloc.alloc(Value, fields_slice.len);
-    for (fields_slice, 0..) |field, i| {
-        desc_fields[i] = .{ .string = field };
-    }
-    try desc_map.put(alloc, "fields", .{ .array = desc_fields });
-    const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
+    const frozen_desc = try ctx.getOrCreateStructDescriptor(fields_slice, has_mutable);
 
     const struct_type = try alloc.create(StructType);
     struct_type.* = .{
@@ -276,7 +266,7 @@ fn structTypePredicateHelper(ctx: *Context) anyerror!void {
 
     const val = try ctx.stack.pop();
     const is_instance = switch (val) {
-        .struct_instance => |si| si.struct_type == st,
+        .struct_instance => |si| si.struct_type.type_val.?.descriptor.? == st.type_val.?.descriptor.?,
         else => false,
     };
 
@@ -289,7 +279,7 @@ fn structFieldGetHelper(ctx: *Context) anyerror!void {
     const st = try helpers.popStructType(ctx);
     const inst = try helpers.popStructInstance(ctx);
 
-    if (inst.struct_type != st) {
+    if (inst.struct_type.type_val.?.descriptor.? != st.type_val.?.descriptor.?) {
         helpers.setErrorContext(ctx, "expected struct '{s}', got struct '{s}'", .{ st.name, inst.struct_type.name });
         return error.TypeMismatch;
     }
@@ -304,7 +294,7 @@ fn structFieldSetHelper(ctx: *Context) anyerror!void {
     const new_val = try ctx.stack.pop();
     const inst = try helpers.popStructInstance(ctx);
 
-    if (inst.struct_type != st) {
+    if (inst.struct_type.type_val.?.descriptor.? != st.type_val.?.descriptor.?) {
         helpers.setErrorContext(ctx, "expected struct '{s}', got struct '{s}'", .{ st.name, inst.struct_type.name });
         return error.TypeMismatch;
     }

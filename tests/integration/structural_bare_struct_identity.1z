@@ -1,0 +1,30 @@
+use "testing" ;
+
+"equal bare struct type values share descriptor" test-section
+
+point-a: struct{ x y } ;
+point-b: struct{ x y } ;
+
+point-a point-b = t "matching bare struct type values are equal" assert=
+
+"field order and mutability remain distinct" test-section
+
+point-swapped: struct{ y x } ;
+point-mut: mutable struct{ x y } ;
+
+point-a point-swapped = f "field order changes identity" assert=
+point-a point-mut = f "mutability changes identity" assert=
+
+"cross-definition predicates and instance equality" test-section
+
+1 2 make-point-a point-b? t "predicate accepts same-shape instance" assert=
+1 2 make-point-a 1 2 make-point-b = t "instances compare equal across definitions" assert=
+1 2 make-point-a 1 3 make-point-b = f "cross-definition unequal fields stay unequal" assert=
+1 2 make-point-a x>> 1 "getter still works after duplicate shape definition" assert=
+
+"virtual struct-backed types remain nominal" test-section
+
+point-v: virtual{ struct{ x y } } ;
+
+point-a point-v = f "virtual struct-backed type stays distinct" assert=
+1 2 make-point-v type-of point-a = f "virtual instance type stays distinct from bare struct" assert=

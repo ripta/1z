@@ -1,0 +1,31 @@
+=== equal bare struct type values share descriptor ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: matching bare struct type values are equal
+Stack: [ ]
+=== field order and mutability remain distinct ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: field order changes identity
+Stack: [ ]
+PASS: mutability changes identity
+Stack: [ ]
+=== cross-definition predicates and instance equality ===
+Stack: [ ]
+PASS: predicate accepts same-shape instance
+Stack: [ ]
+PASS: instances compare equal across definitions
+Stack: [ ]
+PASS: cross-definition unequal fields stay unequal
+Stack: [ ]
+PASS: getter still works after duplicate shape definition
+Stack: [ ]
+=== virtual struct-backed types remain nominal ===
+Stack: [ ]
+Stack: [ ]
+PASS: virtual struct-backed type stays distinct
+Stack: [ ]
+PASS: virtual instance type stays distinct from bare struct
+Stack: [ ]
