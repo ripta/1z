@@ -106,6 +106,24 @@ pub const TypeRegistryFrame = struct {
     }
 };
 
+pub const ParameterizedTypeKey = struct {
+    base: *const value_mod.TypeValue,
+    element: *const value_mod.TypeValue,
+};
+
+pub const ParameterizedTypeKeyContext = struct {
+    pub fn hash(_: @This(), key: ParameterizedTypeKey) u64 {
+        var h = std.hash.Wyhash.init(0);
+        h.update(std.mem.asBytes(&@intFromPtr(key.base)));
+        h.update(std.mem.asBytes(&@intFromPtr(key.element)));
+        return h.final();
+    }
+
+    pub fn eql(_: @This(), a: ParameterizedTypeKey, b: ParameterizedTypeKey) bool {
+        return a.base == b.base and a.element == b.element;
+    }
+};
+
 /// A deferred protocol obligation recorded during module loading.
 /// Validated after all definitions in the module have been processed.
 pub const ProtocolObligation = struct {
@@ -273,6 +291,14 @@ pub const Context = struct {
     /// Cache of TypeValues for resource types, keyed by resource type name.
     /// Lazily populated by `type-of` when encountering a resource.
     resource_type_values: std.StringHashMapUnmanaged(*value_mod.TypeValue) = .{},
+    /// Interned descriptors for parameterized types, keyed by
+    /// (base TypeValue pointer, element TypeValue pointer).
+    parameterized_type_descriptors: std.HashMapUnmanaged(
+        ParameterizedTypeKey,
+        *value_mod.HashTable,
+        ParameterizedTypeKeyContext,
+        80,
+    ) = .{},
     /// Registry of known pragma keys and their validation rules.
     pragma_registry: std.StringHashMapUnmanaged(PragmaRegistration) = .{},
     /// Stack of pragma frames for file-scoped pragma values.
@@ -665,6 +691,7 @@ pub const Context = struct {
         self.dispatch_frames.deinit(self.allocator);
         self.builtin_type_values.deinit(self.allocator);
         self.resource_type_values.deinit(self.allocator);
+        self.parameterized_type_descriptors.deinit(self.allocator);
         self.dispatch.deinit();
         self.jit_dispatch.deinit();
         var pic_iter = self.pic_cache.iterator();
@@ -1750,6 +1777,33 @@ pub const Context = struct {
         return null;
     }
 
+    pub fn lookupParameterizedTypeDescriptor(
+        self: *const Context,
+        base: *const value_mod.TypeValue,
+        element: *const value_mod.TypeValue,
+    ) ?*value_mod.HashTable {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+        return self.lookupParameterizedTypeDescriptorLocked(base, element);
+    }
+
+    fn lookupParameterizedTypeDescriptorLocked(
+        self: *const Context,
+        base: *const value_mod.TypeValue,
+        element: *const value_mod.TypeValue,
+    ) ?*value_mod.HashTable {
+        const key = ParameterizedTypeKey{ .base = base, .element = element };
+        if (self.parameterized_type_descriptors.get(key)) |desc| return desc;
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            if (ctx.parameterized_type_descriptors.get(key)) |desc| return desc;
+            ancestor = ctx.parent_context;
+        }
+
+        return null;
+    }
+
     /// Register a built-in type value by name (write-locked).
     pub fn registerBuiltinTypeValue(self: *Context, name: []const u8, tv: *value_mod.TypeValue) !void {
         self.acquireSharedWrite();
@@ -1782,6 +1836,29 @@ pub const Context = struct {
 
         try self.registerResourceTypeValue(name, tv);
         return tv;
+    }
+
+    pub fn getOrCreateParameterizedTypeDescriptor(
+        self: *Context,
+        base: *const value_mod.TypeValue,
+        element: *const value_mod.TypeValue,
+    ) !*value_mod.HashTable {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+
+        if (self.lookupParameterizedTypeDescriptorLocked(base, element)) |desc| return desc;
+
+        const alloc = self.quotationAllocator();
+        const desc_map = try value_mod.createTypeDescriptor(alloc, "virtual:", .{});
+        try desc_map.put(alloc, "inner-type", .{ .type_val = @constCast(base) });
+        try desc_map.put(alloc, "element-type", .{ .type_val = @constCast(element) });
+
+        try self.parameterized_type_descriptors.put(
+            self.allocator,
+            .{ .base = base, .element = element },
+            @ptrCast(desc_map),
+        );
+        return @ptrCast(desc_map);
     }
 
     // =========================================================================
@@ -3781,6 +3858,22 @@ test "type registry frame shadowing" {
     ctx.popTypeRegistryFrame();
     const found2 = ctx.lookupTypeDescriptor("shadowed").?;
     try std.testing.expectEqual(@as(i64, 1), found2.get("marker").?.fixnum);
+}
+
+test "parameterized type descriptor interning reuses descriptor for same key" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const array_tv = ctx.lookupBuiltinTypeValue("array").?;
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+
+    const desc1 = try ctx.getOrCreateParameterizedTypeDescriptor(array_tv, fixnum_tv);
+    const desc2 = try ctx.getOrCreateParameterizedTypeDescriptor(array_tv, fixnum_tv);
+    try std.testing.expect(desc1 == desc2);
+
+    const desc3 = try ctx.getOrCreateParameterizedTypeDescriptor(array_tv, string_tv);
+    try std.testing.expect(desc1 != desc3);
 }
 
 test "enum registry frame push/pop" {

@@ -79,3 +79,59 @@ Stack: [ ]
 Stack: [ <array(array(fixnum)) { <array(fixnum) { 1 2 }> <array(fixnum) { 3 4 }> }> ]
 PASS: nested parameterized types work
 Stack: [ ]
+=== alias interning and nominal wrappers ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: same parameterized aliases compare equal as types
+Stack: [ ]
+PASS: different parameterized aliases compare unequal as types
+Stack: [ ]
+PASS: >foo alias keeps own type-of name
+Stack: [ ]
+PASS: >bar alias keeps own type-of name
+Stack: [ ]
+PASS: foo-array? matches foo wrapper
+Stack: [ ]
+PASS: foo-array? rejects bar wrapper
+Stack: [ ]
+PASS: bar-array? rejects foo wrapper
+Stack: [ ]
+PASS: error
+Stack: [ ]
+PASS: foo alias generated words stay alias-specific
+Stack: [ ]
+PASS: foo alias generated words exclude bar names
+Stack: [ ]
+PASS: bar alias generated words stay alias-specific
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: dispatch works on defining alias
+Stack: [ ]
+PASS: dispatch shares across equal aliases
+Stack: [ ]
+PASS: error
+Stack: [ ]
+=== virtual wrappers over parameterized aliases stay nominal ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: distinct virtual wrappers over same parameterized alias are different types
+Stack: [ ]
+PASS: first virtual wrapper keeps its own type name
+Stack: [ ]
+PASS: second virtual wrapper keeps its own type name
+Stack: [ ]
+Stack: [ f ]
+PASS: values wrapped by distinct virtual aliases are not equal
+Stack: [ ]
+PASS: first virtual wrapper predicate matches
+Stack: [ ]
+PASS: first virtual wrapper predicate rejects second wrapper
+Stack: [ ]
+PASS: second virtual wrapper predicate rejects first wrapper
+Stack: [ ]
+PASS: error
+Stack: [ ]

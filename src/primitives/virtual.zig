@@ -1082,12 +1082,10 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     };
     ctx.virtual_type_count += 1;
 
-    const desc_map = try value_mod.createTypeDescriptor(alloc, "virtual:", .{});
-    try desc_map.put(alloc, "inner-type", .{ .type_val = base_tv });
-    try desc_map.put(alloc, "element-type", .{ .type_val = elem_tv });
+    const desc = try ctx.getOrCreateParameterizedTypeDescriptor(base_tv, elem_tv);
 
     const tv = try alloc.create(value_mod.TypeValue);
-    tv.* = .{ .name = name, .descriptor = @ptrCast(desc_map) };
+    tv.* = .{ .name = name, .descriptor = desc };
     vtype.type_val = tv;
 
     // NAME: ( -- type ) - parse-time const pushing TypeValue
@@ -1143,8 +1141,7 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     const gw_slice = try generated_words.toOwnedSlice(alloc);
     tv.generated_words = gw_slice;
 
-    const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
-    try ctx.registerTypeDescriptor(name, frozen_desc);
+    try ctx.registerTypeDescriptor(name, desc);
 }
 
 /// Register dispatch entries for vector mutation ops on a parameterized vector type.

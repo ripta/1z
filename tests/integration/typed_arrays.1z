@@ -107,3 +107,51 @@ type-name "array(bignum)" "fixnum elements promote to array(bignum)" assert=
 array(array(fixnum)): array array(fixnum) define-parameterized-type
 { { 1 2 } { 3 4 } } [ >array(fixnum) ] #map #collect >array(array(fixnum))
 type-name "array(array(fixnum))" "nested parameterized types work" assert=
+
+"alias interning and nominal wrappers" test-section
+
+foo-array: array fixnum define-parameterized-type
+bar-array: array fixnum define-parameterized-type
+baz-array: array string define-parameterized-type
+
+foo-array bar-array = "same parameterized aliases compare equal as types" assert-true
+foo-array baz-array = "different parameterized aliases compare unequal as types" assert-false
+
+{ 1 2 } >foo-array type-name "foo-array" ">foo alias keeps own type-of name" assert=
+{ 1 2 } >bar-array type-name "bar-array" ">bar alias keeps own type-of name" assert=
+
+{ 1 2 } >foo-array foo-array? "foo-array? matches foo wrapper" assert-true
+{ 1 2 } >bar-array foo-array? "foo-array? rejects bar wrapper" assert-false
+{ 1 2 } >foo-array bar-array? "bar-array? rejects foo wrapper" assert-false
+
+[ { 1 2 } >bar-array unmake-foo-array drop ] "error" assert-error
+
+foo-array native.type-generated-words "make-foo-array" #in? "foo alias generated words stay alias-specific" assert-true
+foo-array native.type-generated-words "make-bar-array" #in? "foo alias generated words exclude bar names" assert-false
+bar-array native.type-generated-words "make-bar-array" #in? "bar alias generated words stay alias-specific" assert-true
+
+describe-array: generic [ ] ;
+describe-array: method{ foo-array } [ drop "shared-dispatch" ] ;
+
+{ 1 2 } >foo-array describe-array "shared-dispatch" "dispatch works on defining alias" assert=
+{ 1 2 } >bar-array describe-array "shared-dispatch" "dispatch shares across equal aliases" assert=
+[ { "a" "b" } >baz-array describe-array ] "error" assert-error
+
+"virtual wrappers over parameterized aliases stay nominal" test-section
+
+foo-array-box-a: virtual{ foo-array } ;
+foo-array-box-b: virtual{ foo-array } ;
+
+foo-array-box-a foo-array-box-b = "distinct virtual wrappers over same parameterized alias are different types" assert-false
+
+{ 1 2 } >foo-array >foo-array-box-a type-name "foo-array-box-a" "first virtual wrapper keeps its own type name" assert=
+{ 1 2 } >foo-array >foo-array-box-b type-name "foo-array-box-b" "second virtual wrapper keeps its own type name" assert=
+
+{ 1 2 } >foo-array >foo-array-box-a { 1 2 } >foo-array >foo-array-box-b =
+f "values wrapped by distinct virtual aliases are not equal" assert=
+
+{ 1 2 } >foo-array >foo-array-box-a foo-array-box-a? "first virtual wrapper predicate matches" assert-true
+{ 1 2 } >foo-array >foo-array-box-b foo-array-box-a? "first virtual wrapper predicate rejects second wrapper" assert-false
+{ 1 2 } >foo-array >foo-array-box-a foo-array-box-b? "second virtual wrapper predicate rejects first wrapper" assert-false
+
+[ { 1 2 } >foo-array >foo-array-box-b unmake-foo-array-box-a drop ] "error" assert-error
