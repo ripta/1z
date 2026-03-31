@@ -1,142 +1,188 @@
-t
+=== #empty? - empty sequences ===
 Stack: [ ]
-t
+PASS: #empty? array
 Stack: [ ]
-t
+PASS: #empty? string
 Stack: [ ]
-t
+PASS: #empty? vector
 Stack: [ ]
-f
+PASS: #empty? byte-array
 Stack: [ ]
-f
+=== #empty? - non-empty sequences ===
 Stack: [ ]
-f
+PASS: #empty? array with element
 Stack: [ ]
-f
+PASS: #empty? string with char
 Stack: [ ]
-t
+PASS: #empty? vector with element
 Stack: [ ]
-f
+PASS: #empty? byte-array with byte
 Stack: [ ]
-t
+=== #starts-with? - strings ===
 Stack: [ ]
-t
+PASS: starts-with he
 Stack: [ ]
-f
+PASS: not starts-with lo
 Stack: [ ]
-t
+PASS: starts-with empty
 Stack: [ ]
-f
+PASS: starts-with self
 Stack: [ ]
-t
+PASS: not starts-with longer
 Stack: [ ]
-t
+=== #starts-with? - arrays ===
 Stack: [ ]
-f
+PASS: array starts-with prefix
 Stack: [ ]
-t
+PASS: array not starts-with suffix
 Stack: [ ]
-f
+PASS: array starts-with empty
 Stack: [ ]
-t
+PASS: array starts-with self
 Stack: [ ]
-t
+PASS: array not starts-with longer
 Stack: [ ]
-f
+=== #ends-with? - strings ===
 Stack: [ ]
-t
+PASS: ends-with lo
 Stack: [ ]
-f
+PASS: not ends-with he
 Stack: [ ]
-t
+PASS: ends-with empty
 Stack: [ ]
-t
+PASS: ends-with self
 Stack: [ ]
-f
+PASS: not ends-with longer
 Stack: [ ]
-t
+=== #ends-with? - arrays ===
 Stack: [ ]
-f
+PASS: array ends-with suffix
 Stack: [ ]
-t
+PASS: array not ends-with prefix
 Stack: [ ]
-t
+PASS: array ends-with empty
 Stack: [ ]
-t
+PASS: array ends-with self
 Stack: [ ]
-f
+PASS: array not ends-with longer
 Stack: [ ]
-t
+=== #in? - strings (substring) ===
 Stack: [ ]
-f
+PASS: substring ll
 Stack: [ ]
-t
+PASS: substring x not found
 Stack: [ ]
-f
+PASS: empty substring
 Stack: [ ]
-t
+PASS: full string
 Stack: [ ]
-f
+=== #in? - arrays (element) ===
 Stack: [ ]
-1
+PASS: element 2 found
 Stack: [ ]
-2
+PASS: element 5 not found
 Stack: [ ]
-f
+PASS: string element found
 Stack: [ ]
-4
+PASS: string element not found
 Stack: [ ]
-0
+=== #in? - sets ===
 Stack: [ ]
-1
+PASS: set contains 2
 Stack: [ ]
-f
+PASS: set not contains 5
 Stack: [ ]
-2
+=== #in? - byte arrays ===
 Stack: [ ]
-f
+PASS: byte 66 found
 Stack: [ ]
-1
+PASS: byte 68 not found
 Stack: [ ]
-f
+=== #index-of - strings ===
 Stack: [ ]
-"hel"
+PASS: index-of e
 Stack: [ ]
-""
+PASS: index-of ll
 Stack: [ ]
-"hello"
+PASS: index-of x not found
 Stack: [ ]
-{ 1 2 3 }
+PASS: index-of o
 Stack: [ ]
-{ }
+PASS: index-of empty
 Stack: [ ]
-{ 1 2 3 }
+=== #index-of - arrays ===
 Stack: [ ]
-V{ 1 2 }
+PASS: index-of 20
 Stack: [ ]
-"llo"
+PASS: index-of 50 not found
 Stack: [ ]
-"hello"
+PASS: index-of c
 Stack: [ ]
-""
+PASS: index-of d not found
 Stack: [ ]
-{ 3 4 5 }
+=== #index-of - byte arrays ===
 Stack: [ ]
-{ 1 2 3 }
+PASS: byte index-of 66
 Stack: [ ]
-{ }
+PASS: byte index-of 68 not found
 Stack: [ ]
-V{ 4 5 }
+=== #take - strings ===
 Stack: [ ]
-found at index 0Stack: [ ]
-not foundStack: [ ]
-"caf"
+PASS: take 3 from hello
 Stack: [ ]
-"fé"
+PASS: take 0
 Stack: [ ]
-t
+PASS: take more than length
 Stack: [ ]
-t
+=== #take - arrays ===
 Stack: [ ]
-3
+PASS: take 3 from array
+Stack: [ ]
+PASS: take 0 from array
+Stack: [ ]
+PASS: take more than length
+Stack: [ ]
+=== #take - vectors ===
+Stack: [ ]
+PASS: take 2 from vector
+Stack: [ ]
+=== #drop - strings ===
+Stack: [ ]
+PASS: drop 2 from hello
+Stack: [ ]
+PASS: drop 0
+Stack: [ ]
+PASS: drop more than length
+Stack: [ ]
+=== #drop - arrays ===
+Stack: [ ]
+PASS: drop 2 from array
+Stack: [ ]
+PASS: drop 0 from array
+Stack: [ ]
+PASS: drop more than length
+Stack: [ ]
+=== #drop - vectors ===
+Stack: [ ]
+PASS: drop 3 from vector
+Stack: [ ]
+=== #index-of with truthiness (0 is truthy) ===
+Stack: [ ]
+PASS: index 0 found
+Stack: [ ]
+PASS: index 0 is truthy
+Stack: [ ]
+PASS: not found returns f
+Stack: [ ]
+=== UTF-8 handling ===
+Stack: [ ]
+PASS: take 3 from UTF-8
+Stack: [ ]
+PASS: drop 2 from UTF-8
+Stack: [ ]
+PASS: UTF-8 starts-with
+Stack: [ ]
+PASS: UTF-8 ends-with
+Stack: [ ]
+PASS: UTF-8 index-of
 Stack: [ ]

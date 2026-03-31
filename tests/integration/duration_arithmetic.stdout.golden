@@ -1,0 +1,42 @@
+=== duration + duration ===
+Stack: [ ]
+PASS: 1s + 2s = 3s
+Stack: [ ]
+PASS: 100ms + 200ms = 300ms
+Stack: [ ]
+PASS: 1h + 30m = 90 minutes
+Stack: [ ]
+=== duration - duration ===
+Stack: [ ]
+PASS: 5s - 2s = 3s
+Stack: [ ]
+PASS: 1m - 30s = 30s
+Stack: [ ]
+PASS: 10ms - 10ms = 0
+Stack: [ ]
+=== duration * integer ===
+Stack: [ ]
+PASS: 2s * 3 = 6s
+Stack: [ ]
+PASS: 500ms * 4 = 2s
+Stack: [ ]
+PASS: 1h * 0 = 0
+Stack: [ ]
+=== integer * duration ===
+Stack: [ ]
+PASS: 3 * 2s = 6s
+Stack: [ ]
+PASS: 4 * 500ms = 2s
+Stack: [ ]
+PASS: 0 * 1h = 0
+Stack: [ ]
+=== result type preserved ===
+Stack: [ ]
+PASS: addition result is duration
+Stack: [ ]
+PASS: subtraction result is duration
+Stack: [ ]
+PASS: multiplication result is duration
+Stack: [ ]
+PASS: commutative multiplication result is duration
+Stack: [ ]

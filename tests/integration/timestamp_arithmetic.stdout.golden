@@ -1,0 +1,52 @@
+=== timestamp + duration ===
+Stack: [ ]
+PASS: 10s + 5s = 15s (sec)
+Stack: [ ]
+PASS: 10s + 5s = 15s (nsec)
+Stack: [ ]
+PASS: 10.5s + 2.5s = 13s (sec)
+Stack: [ ]
+PASS: 10.5s + 2.5s = 13s (nsec)
+Stack: [ ]
+PASS: 10s + 500ms (nsec)
+Stack: [ ]
+PASS: 10s + 500ms (sec)
+Stack: [ ]
+=== duration + timestamp (commutative) ===
+Stack: [ ]
+PASS: 5s + ts(10,0) = 15s (sec)
+Stack: [ ]
+PASS: 2.5s + ts(10,0.5) = 13s (sec)
+Stack: [ ]
+PASS: 2.5s + ts(10,0.5) = 13s (nsec)
+Stack: [ ]
+=== timestamp - duration ===
+Stack: [ ]
+PASS: 15s - 5s = 10s (sec)
+Stack: [ ]
+PASS: 15s - 5s = 10s (nsec)
+Stack: [ ]
+PASS: 10.2s - 500ms = 9.7s (sec)
+Stack: [ ]
+PASS: 10.2s - 500ms = 9.7s (nsec)
+Stack: [ ]
+=== timestamp - timestamp ===
+Stack: [ ]
+PASS: 15s - 10s = 5s
+Stack: [ ]
+PASS: 10.5s - 10s = 0.5s
+Stack: [ ]
+PASS: 13s - 10.5s = 2.5s
+Stack: [ ]
+PASS: same timestamp - same = 0
+Stack: [ ]
+=== result type preserved ===
+Stack: [ ]
+PASS: ts + dur is timestamp
+Stack: [ ]
+PASS: dur + ts is timestamp
+Stack: [ ]
+PASS: ts - dur is timestamp
+Stack: [ ]
+PASS: ts - ts is duration
+Stack: [ ]

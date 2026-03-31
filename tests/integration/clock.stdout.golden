@@ -1,0 +1,24 @@
+=== clock-realtime primitive ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: clock-realtime nsec is integer
+PASS: clock-realtime sec is integer
+Stack: [ ]
+PASS: clock-realtime sec is reasonable
+Stack: [ ]
+PASS: clock-realtime nsec in valid range
+Stack: [ ]
+=== clock-monotonic primitive ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: clock-monotonic nsec is integer
+PASS: clock-monotonic sec is integer
+Stack: [ ]
+PASS: clock-monotonic nsec in valid range
+Stack: [ ]
+PASS: clock-monotonic increases
+Stack: [ ]

@@ -1,0 +1,24 @@
+=== timestamp virtual type ===
+Stack: [ ]
+PASS: type-of returns timestamp:
+Stack: [ ]
+PASS: timestamp? on timestamp is true
+Stack: [ ]
+PASS: timestamp? on inner struct is false
+Stack: [ ]
+PASS: timestamp-sec on epoch is 0
+Stack: [ ]
+PASS: timestamp-nsec on epoch is 0
+Stack: [ ]
+PASS: timestamp-sec extracts sec
+Stack: [ ]
+PASS: timestamp-nsec extracts nsec
+Stack: [ ]
+=== now constructor ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: now returns a timestamp
+Stack: [ ]
+PASS: now sec is reasonable
+Stack: [ ]

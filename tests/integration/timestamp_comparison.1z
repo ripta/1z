@@ -1,0 +1,26 @@
+\ Timestamp comparison tests
+
+use "testing" ;
+use "time" ;
+
+"timestamp < timestamp" test-section
+
+10 0 make-timestamp 20 0 make-timestamp < "10s < 20s" assert-true
+10 0 make-timestamp 10 500000000 make-timestamp < "10.0s < 10.5s (same sec, diff nsec)" assert-true
+20 0 make-timestamp 10 0 make-timestamp < f "20s < 10s is false" assert=
+10 0 make-timestamp 10 0 make-timestamp < f "10s < 10s is false (equal)" assert=
+
+"timestamp > timestamp" test-section
+
+20 0 make-timestamp 10 0 make-timestamp > "20s > 10s" assert-true
+10 500000000 make-timestamp 10 0 make-timestamp > "10.5s > 10.0s (same sec, diff nsec)" assert-true
+10 0 make-timestamp 20 0 make-timestamp > f "10s > 20s is false" assert=
+10 0 make-timestamp 10 0 make-timestamp > f "10s > 10s is false (equal)" assert=
+
+"timestamp = timestamp" test-section
+
+10 0 make-timestamp 10 0 make-timestamp = "10s = 10s" assert-true
+10 500000000 make-timestamp 10 500000000 make-timestamp = "10.5s = 10.5s" assert-true
+10 0 make-timestamp 20 0 make-timestamp = f "10s = 20s is false (diff sec)" assert=
+10 0 make-timestamp 10 500000000 make-timestamp = f "10.0s = 10.5s is false (diff nsec)" assert=
+0 0 make-timestamp 0 0 make-timestamp = "epoch = epoch" assert-true

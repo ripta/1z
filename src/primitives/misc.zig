@@ -10,6 +10,7 @@ const markers_mod = @import("markers.zig");
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 const WordDefinition = @import("../dictionary.zig").WordDefinition;
+const dispatch_mod = @import("../dispatch.zig");
 
 const popSymbol = helpers.popSymbol;
 const popString = helpers.popString;
@@ -23,10 +24,12 @@ pub const primitives = [_]Primitive{
     .{ .name = "sys-exit", .stack_effect = "code --", .func = nativeSysExit },
     .{ .name = "add-load-path", .stack_effect = "path --", .func = nativeAddLoadPath },
     .{ .name = "words", .stack_effect = "--", .func = nativeWords },
+    .{ .name = "(trampoline)", .stack_effect = "*unsafe-fn-ptr* --", .func = nativeTrampoline },
 };
 
 /// help ( symbol -- ) - Display help for a word
 fn nativeHelp(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
     const name = try popSymbol(ctx);
 
     const stdout_file: std.fs.File = .stdout();
@@ -41,9 +44,45 @@ fn nativeHelp(ctx: *Context) anyerror!void {
             try effect.write(writer);
         }
 
+        if (word.markers.len > 0) {
+            try writer.writeAll(" [");
+            for (word.markers, 0..) |mk, i| {
+                if (i > 0) try writer.writeAll(", ");
+                try writer.print("{s}", .{mk.name});
+            }
+            try writer.writeAll("]");
+        }
+
         switch (word.action) {
-            .native => try writer.writeAll(" \\native\n"),
-            .compound => try writer.writeAll(" [compound]\n"),
+            .native => try writer.writeAll(" \\native"),
+            .compound => try writer.writeAll(" \\compound"),
+        }
+
+        try writer.writeAll("\n");
+        const has_generic = for (word.markers) |mk| {
+            if (markers_mod.isGenericMarker(mk)) break true;
+        } else false;
+
+        const dispatch_keys = ctx.dispatch.keysForWord(name, alloc) catch &.{};
+        if (dispatch_keys.len > 0 and (has_generic or word.action == .native)) {
+            for (dispatch_keys) |key| {
+                try writer.writeAll("  method{ ");
+                if (std.mem.eql(u8, key.type_a, dispatch_mod.any_sentinel)) {
+                    try writer.writeAll("any");
+                } else {
+                    try writer.print("{s}", .{key.type_a});
+                }
+
+                if (!std.mem.eql(u8, key.type_b, dispatch_mod.unary_sentinel)) {
+                    try writer.writeAll(" ");
+                    if (std.mem.eql(u8, key.type_b, dispatch_mod.any_sentinel)) {
+                        try writer.writeAll("any");
+                    } else {
+                        try writer.print("{s}", .{key.type_b});
+                    }
+                }
+                try writer.writeAll(" }\n");
+            }
         }
     } else {
         try writer.print("{s}: no such word\n", .{name});
@@ -423,6 +462,25 @@ fn nativeAddLoadPath(ctx: *Context) anyerror!void {
     const path = try popString(ctx);
     const duped = ctx.quotationAllocator().dupe(u8, path) catch return error.OutOfMemory;
     ctx.load_paths.append(ctx.allocator, duped) catch return error.OutOfMemory;
+}
+
+/// (trampoline) ( *unsafe-fn-ptr* -- ) - Call a native function via pointer
+///
+/// Bridge primitive: pops a function pointer (as integer) from the stack and calls it.
+/// Used by auto-generated struct/virtual words to invoke their backing native helpers.
+///
+/// WARNING: This is inherently unsafe! The function pointer must be valid and
+///          must conform to the expected signature (fn (*Context) anyerror!void), or
+///          else the runtime will likely crash. - This is an experiment.
+fn nativeTrampoline(ctx: *Context) anyerror!void {
+    const ptr_val = try helpers.popInteger(ctx);
+    if (ptr_val <= 0) {
+        ctx.pending_error_message = "(trampoline): null or negative function pointer";
+        return error.InvalidFunctionPointer;
+    }
+    const addr: usize = @intCast(ptr_val);
+    const func: *const fn (*Context) anyerror!void = @ptrFromInt(addr);
+    try func(ctx);
 }
 
 /// 1array ( elem -- array ) - Wrap element in single-element array

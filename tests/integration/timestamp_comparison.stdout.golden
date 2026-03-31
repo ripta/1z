@@ -1,0 +1,32 @@
+=== timestamp < timestamp ===
+Stack: [ ]
+PASS: 10s < 20s
+Stack: [ ]
+PASS: 10.0s < 10.5s (same sec, diff nsec)
+Stack: [ ]
+PASS: 20s < 10s is false
+Stack: [ ]
+PASS: 10s < 10s is false (equal)
+Stack: [ ]
+=== timestamp > timestamp ===
+Stack: [ ]
+PASS: 20s > 10s
+Stack: [ ]
+PASS: 10.5s > 10.0s (same sec, diff nsec)
+Stack: [ ]
+PASS: 10s > 20s is false
+Stack: [ ]
+PASS: 10s > 10s is false (equal)
+Stack: [ ]
+=== timestamp = timestamp ===
+Stack: [ ]
+PASS: 10s = 10s
+Stack: [ ]
+PASS: 10.5s = 10.5s
+Stack: [ ]
+PASS: 10s = 20s is false (diff sec)
+Stack: [ ]
+PASS: 10.0s = 10.5s is false (diff nsec)
+Stack: [ ]
+PASS: epoch = epoch
+Stack: [ ]

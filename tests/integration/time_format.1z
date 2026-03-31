@@ -1,0 +1,29 @@
+use "testing" ;
+use "time" ;
+
+"time-format with date-fmt" test-section
+0 0 make-timestamp date-fmt time-format "1970-01-01" "epoch date-fmt" assert=
+1000000000 0 make-timestamp date-fmt time-format "2001-09-09" "billennium date-fmt" assert=
+
+"time-format with time-fmt" test-section
+0 0 make-timestamp time-fmt time-format "00:00:00" "epoch time-fmt" assert=
+1000000000 0 make-timestamp time-fmt time-format "01:46:40" "billennium time-fmt" assert=
+
+"time-format with iso8601-fmt" test-section
+0 0 make-timestamp iso8601-fmt time-format "1970-01-01T00:00:00+0000" "epoch iso8601" assert=
+
+"time-format with rfc2822-fmt" test-section
+0 0 make-timestamp rfc2822-fmt time-format "Thu, 01 Jan 1970 00:00:00 +0000" "epoch rfc2822" assert=
+
+"time-format-in with utc" test-section
+0 0 make-timestamp utc iso8601-fmt time-format-in "1970-01-01T00:00:00+0000" "epoch utc iso8601" assert=
+0 0 make-timestamp utc date-fmt time-format-in "1970-01-01" "epoch utc date" assert=
+
+"custom time-format" test-section
+0 0 make-timestamp "{weekday}, {month} {day}, {year}" time-format "Thursday, January 1, 1970" "epoch custom weekday month day year" assert=
+0 0 make-timestamp "{hour12}:{min:width=2,fill=0} {ampm}" time-format "12:00 AM" "epoch 12-hour format" assert=
+
+"elapsed" test-section
+[ ] elapsed duration? "elapsed returns duration" assert-true
+[ ] elapsed duration> 0 >= "elapsed noop is non-negative" assert-true
+[ 42 ] elapsed duration? "elapsed preserves result below duration" assert-true 42 "elapsed quotation result intact" assert=

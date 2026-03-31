@@ -1,0 +1,40 @@
+\ Timestamp arithmetic tests
+
+use "testing" ;
+use "time" ;
+
+"timestamp + duration" test-section
+
+10 0 make-timestamp 5 seconds + timestamp-sec 15 "10s + 5s = 15s (sec)" assert=
+10 0 make-timestamp 5 seconds + timestamp-nsec 0 "10s + 5s = 15s (nsec)" assert=
+10 500000000 make-timestamp 2500000000 nanoseconds + timestamp-sec 13 "10.5s + 2.5s = 13s (sec)" assert=
+10 500000000 make-timestamp 2500000000 nanoseconds + timestamp-nsec 0 "10.5s + 2.5s = 13s (nsec)" assert=
+10 0 make-timestamp 500 milliseconds + timestamp-nsec 500000000 "10s + 500ms (nsec)" assert=
+10 0 make-timestamp 500 milliseconds + timestamp-sec 10 "10s + 500ms (sec)" assert=
+
+"duration + timestamp (commutative)" test-section
+
+5 seconds 10 0 make-timestamp + timestamp-sec 15 "5s + ts(10,0) = 15s (sec)" assert=
+2500000000 nanoseconds 10 500000000 make-timestamp + timestamp-sec 13 "2.5s + ts(10,0.5) = 13s (sec)" assert=
+2500000000 nanoseconds 10 500000000 make-timestamp + timestamp-nsec 0 "2.5s + ts(10,0.5) = 13s (nsec)" assert=
+
+"timestamp - duration" test-section
+
+15 0 make-timestamp 5 seconds - timestamp-sec 10 "15s - 5s = 10s (sec)" assert=
+15 0 make-timestamp 5 seconds - timestamp-nsec 0 "15s - 5s = 10s (nsec)" assert=
+10 200000000 make-timestamp 500 milliseconds - timestamp-sec 9 "10.2s - 500ms = 9.7s (sec)" assert=
+10 200000000 make-timestamp 500 milliseconds - timestamp-nsec 700000000 "10.2s - 500ms = 9.7s (nsec)" assert=
+
+"timestamp - timestamp" test-section
+
+15 0 make-timestamp 10 0 make-timestamp - duration> 5000000000 "15s - 10s = 5s" assert=
+10 500000000 make-timestamp 10 0 make-timestamp - duration> 500000000 "10.5s - 10s = 0.5s" assert=
+13 0 make-timestamp 10 500000000 make-timestamp - duration> 2500000000 "13s - 10.5s = 2.5s" assert=
+10 0 make-timestamp 10 0 make-timestamp - duration> 0 "same timestamp - same = 0" assert=
+
+"result type preserved" test-section
+
+10 0 make-timestamp 1 seconds + type-of timestamp: "ts + dur is timestamp" assert=
+1 seconds 10 0 make-timestamp + type-of timestamp: "dur + ts is timestamp" assert=
+10 0 make-timestamp 1 seconds - type-of timestamp: "ts - dur is timestamp" assert=
+10 0 make-timestamp 5 0 make-timestamp - type-of duration: "ts - ts is duration" assert=

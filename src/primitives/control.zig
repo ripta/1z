@@ -142,7 +142,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     .quotation => |q| q,
                     else => return error.TypeMismatch,
                 };
-                try ctx.executeQuotationWithFrame(define_quot);
+                try ctx.executeQuotation(define_quot);
             } else {
                 // Fall back to normal word definition
                 var stack_effect_val: ?StackEffect = null;

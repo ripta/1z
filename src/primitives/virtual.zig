@@ -106,122 +106,101 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
     try definePredicate(ctx, pred_name, vtype, markers_slice);
 }
 
+/// Trampoline helper ( value vtype-ptr -- tagged )
+fn virtualWrapHelper(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const ptr_val = try helpers.popInteger(ctx);
+    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+
+    const val = try ctx.stack.pop();
+
+    const inner = try alloc.create(Value);
+    inner.* = val;
+
+    try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
+}
+
+/// Trampoline helper ( tagged vtype-ptr -- value )
+fn virtualUnwrapHelper(ctx: *Context) anyerror!void {
+    const ptr_val = try helpers.popInteger(ctx);
+    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .tagged => |t| {
+            if (t.tag == vt) {
+                try ctx.stack.push(t.inner.*);
+            } else {
+                helpers.setErrorContext(ctx, "expected {s}, got {s}", .{ vt.name, t.tag.name });
+                return error.TypeMismatch;
+            }
+        },
+        else => {
+            helpers.setErrorContext(ctx, "expected {s}, got {s}", .{ vt.name, helpers.valueTypeName(val) });
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// Trampoline helper ( value vtype-ptr -- ? )
+fn virtualTypePredicateHelper(ctx: *Context) anyerror!void {
+    const ptr_val = try helpers.popInteger(ctx);
+    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+
+    const val = try ctx.stack.pop();
+    const is_match = switch (val) {
+        .tagged => |t| t.tag == vt,
+        else => false,
+    };
+
+    try ctx.stack.push(.{ .boolean = is_match });
+}
+
 /// >NAME: ( value -- tagged ) - wrap a value as this virtual type
 fn defineWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    const instrs = try alloc.alloc(Instruction, 2);
+    const instrs = try alloc.alloc(Instruction, 3);
     instrs[0] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .call_word = "__virtual-wrap" }, .line = 0 };
+    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&virtualWrapHelper)) } }, .line = 0 };
+    instrs[2] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
 
-    try ctx.dictionary.put(name, .{
+    try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
         .action = .{ .compound = instrs },
     });
-
-    if (ctx.dictionary.get("__virtual-wrap") == null) {
-        try ctx.dictionary.put("__virtual-wrap", .{
-            .name = "__virtual-wrap",
-            .action = .{
-                .native = struct {
-                    fn helper(c: *Context) anyerror!void {
-                        const a = c.quotationAllocator();
-
-                        const ptr_val = try helpers.popInteger(c);
-                        const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
-
-                        const val = try c.stack.pop();
-
-                        const inner = try a.create(Value);
-                        inner.* = val;
-
-                        try c.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
-                    }
-                }.helper,
-            },
-        });
-    }
 }
 
 /// NAME>: ( tagged -- value ) - unwrap a tagged value, validating the type
 fn defineUnwrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    const instrs = try alloc.alloc(Instruction, 2);
+    const instrs = try alloc.alloc(Instruction, 3);
     instrs[0] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .call_word = "__virtual-unwrap" }, .line = 0 };
+    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&virtualUnwrapHelper)) } }, .line = 0 };
+    instrs[2] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
 
-    try ctx.dictionary.put(name, .{
+    try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
         .action = .{ .compound = instrs },
     });
-
-    if (ctx.dictionary.get("__virtual-unwrap") == null) {
-        try ctx.dictionary.put("__virtual-unwrap", .{
-            .name = "__virtual-unwrap",
-            .action = .{
-                .native = struct {
-                    fn helper(c: *Context) anyerror!void {
-                        const ptr_val = try helpers.popInteger(c);
-                        const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
-
-                        const val = try c.stack.pop();
-                        switch (val) {
-                            .tagged => |t| {
-                                if (t.tag == vt) {
-                                    try c.stack.push(t.inner.*);
-                                } else {
-                                    helpers.setErrorContext(c, "expected {s}, got {s}", .{ vt.name, t.tag.name });
-                                    return error.TypeMismatch;
-                                }
-                            },
-                            else => {
-                                helpers.setErrorContext(c, "expected {s}, got {s}", .{ vt.name, helpers.valueTypeName(val) });
-                                return error.TypeMismatch;
-                            },
-                        }
-                    }
-                }.helper,
-            },
-        });
-    }
 }
 
 /// NAME?: ( value -- bool ) - type predicate for virtual type
 fn definePredicate(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    const instrs = try alloc.alloc(Instruction, 2);
+    const instrs = try alloc.alloc(Instruction, 3);
     instrs[0] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .call_word = "__virtual-type?" }, .line = 0 };
+    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&virtualTypePredicateHelper)) } }, .line = 0 };
+    instrs[2] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
 
-    try ctx.dictionary.put(name, .{
+    try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
         .action = .{ .compound = instrs },
     });
-
-    if (ctx.dictionary.get("__virtual-type?") == null) {
-        try ctx.dictionary.put("__virtual-type?", .{
-            .name = "__virtual-type?",
-            .action = .{
-                .native = struct {
-                    fn helper(c: *Context) anyerror!void {
-                        const ptr_val = try helpers.popInteger(c);
-                        const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
-
-                        const val = try c.stack.pop();
-                        const is_match = switch (val) {
-                            .tagged => |t| t.tag == vt,
-                            else => false,
-                        };
-
-                        try c.stack.push(.{ .boolean = is_match });
-                    }
-                }.helper,
-            },
-        });
-    }
 }

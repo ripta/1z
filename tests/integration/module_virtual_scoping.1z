@@ -1,0 +1,32 @@
+\ Test that virtual type auto-generated words respect module scoping
+
+use "testing" ;
+
+"Virtual words appear in module word map" test-section
+
+m: "module_virtual_lib.1z" load ;
+m >meters: @has? t "module has >meters" assert=
+m meters>: @has? t "module has meters>" assert=
+m meters?: @has? t "module has meters?" assert=
+
+"Virtual words not in global scope without import" test-section
+
+[ 42 >meters ] [ error-type: @get EUnknownWord ">meters not in global scope" assert= ] recover
+
+"Qualified access works for virtual words" test-section
+
+42 m.>meters m.meters> 42 "qualified wrap and unwrap" assert=
+42 m.>meters m.meters? t "qualified predicate true" assert=
+"hello" m.meters? f "qualified predicate false" assert=
+
+"Selective import works for virtual words" test-section
+
+m2: "module_virtual_lib.1z" load ;
+m2 { >meters: meters>: } import
+100 >meters meters> 100 "selective import wrap and unwrap" assert=
+
+"Full import works for virtual words" test-section
+
+use "module_virtual_lib.1z" ;
+99 >meters meters? t "full import predicate" assert=
+99 >meters meters> 99 "full import unwrap" assert=

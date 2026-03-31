@@ -1,36 +1,55 @@
-Stack: [ ]
-10
-Stack: [ ]
-Stack: [ ]
-16
+=== basic stack effects ===
 Stack: [ ]
 Stack: [ ]
-6
+PASS: double
 Stack: [ ]
 Stack: [ ]
-14
+PASS: square
 Stack: [ ]
 Stack: [ ]
+PASS: add3
 Stack: [ ]
-"consumed"
+=== multiple outputs ===
 Stack: [ ]
 Stack: [ ]
-7
+PASS: dup2
 Stack: [ ]
+=== consuming words ===
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
-"handled"
+PASS: consume2 no stack effect
+Stack: [ ]
+=== quotation parameters ===
 Stack: [ ]
 Stack: [ ]
-18
+PASS: apply-twice
+Stack: [ ]
+=== while with row variables ===
+Stack: [ ]
+Stack: [ ]
+PASS: count-to-zero
+Stack: [ ]
+=== recover quotation effects ===
+Stack: [ ]
+Stack: [ ]
+PASS: error-handler
+Stack: [ ]
+=== nested quotation effects ===
+Stack: [ ]
+Stack: [ ]
+PASS: transform
+Stack: [ ]
+=== row variable passthrough ===
 Stack: [ ]
 Stack: [ ]
 Stack: [ 1 2 3 ]
-6
+PASS: passthrough
+Stack: [ ]
+=== if with stack effect ===
 Stack: [ ]
 Stack: [ ]
-7
+PASS: max2 second larger
 Stack: [ ]
-9
+PASS: max2 first larger
 Stack: [ ]

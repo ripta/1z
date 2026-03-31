@@ -1,0 +1,227 @@
+\ Time library - durations, timestamps, and formatting
+
+\ Duration: virtual type backed by integer nanoseconds
+duration: virtual{ integer } ;
+
+\ Convenience constructors for durations
+nanoseconds:  ( n -- duration ) [ >duration ] ;
+microseconds: ( n -- duration ) [ 1000 * >duration ] ;
+milliseconds: ( n -- duration ) [ 1000000 * >duration ] ;
+seconds:      ( n -- duration ) [ 1000000000 * >duration ] ;
+minutes:      ( n -- duration ) [ 60 * seconds ] ;
+hours:        ( n -- duration ) [ 60 * minutes ] ;
+
+\ Timestamp: virtual type backed by a hidden struct
+timestamp-inner: struct{ ts-sec ts-nsec } ;
+timestamp: virtual{ timestamp-inner } ;
+
+\ Constructor from sec/nsec components
+make-timestamp: ( sec nsec -- timestamp ) [ make-timestamp-inner >timestamp ] ;
+
+\ Accessors
+timestamp-sec:  ( timestamp -- sec )  [ timestamp> ts-sec>> ] ;
+timestamp-nsec: ( timestamp -- nsec ) [ timestamp> ts-nsec>> ] ;
+
+\ Create timestamp from current wall-clock time
+now: ( -- timestamp ) [ clock-realtime make-timestamp ] ;
+
+\ Duration arithmetic
++: method{ duration duration } [ swap duration> swap duration> + >duration ] ;
+-: method{ duration duration } [ swap duration> swap duration> - >duration ] ;
+*: method{ duration integer } [ swap duration> swap * >duration ] ;
+*: method{ integer duration } [ duration> * >duration ] ;
+
+\ Duration comparison
+<: method{ duration duration } [ swap duration> swap duration> < ] ;
+>: method{ duration duration } [ swap duration> swap duration> > ] ;
+=: method{ duration duration } [ swap duration> swap duration> = ] ;
+
+\ Helper: split nanoseconds into sec + nsec with consistent floored semantics
+ns>sec-nsec: ( ns -- sec nsec ) [
+  dup 1000000000 % swap over - 1000000000 / swap
+] ;
+
+timestamp+nanos: ( ts nanos -- timestamp ) [
+  over timestamp-sec -rot>
+  swap timestamp-nsec +
+  ns>sec-nsec [ + ] dip
+  make-timestamp
+] ;
+
+\ Timestamp + Duration = Timestamp
++: method{ timestamp duration } [ duration> timestamp+nanos ] ;
+
+\ Duration + Timestamp = Timestamp (commutative)
++: method{ duration timestamp } [ swap duration> timestamp+nanos ] ;
+
+\ Timestamp - Duration = Timestamp
+-: method{ timestamp duration } [ duration> 0 swap - timestamp+nanos ] ;
+
+\ Timestamp - Timestamp = Duration
+-: method{ timestamp timestamp } [ over timestamp-sec over timestamp-sec - -rot> swap timestamp-nsec swap timestamp-nsec - swap 1000000000 * + >duration ] ;
+
+\ Timestamp comparison
+<: method{ timestamp timestamp } [ over timestamp-sec over timestamp-sec 2dup = [ 2drop swap timestamp-nsec swap timestamp-nsec < ] [ < 2nip ] if ] ;
+>: method{ timestamp timestamp } [ over timestamp-sec over timestamp-sec 2dup = [ 2drop swap timestamp-nsec swap timestamp-nsec > ] [ > 2nip ] if ] ;
+=: method{ timestamp timestamp } [ over timestamp-sec over timestamp-sec = [ swap timestamp-nsec swap timestamp-nsec = ] [ 2drop f ] if ] ;
+
+\ --- Lookup tables for >time-parts ---
+
+month-names: ( -- array ) [
+  { "January" "February" "March" "April" "May" "June" "July" "August" "September" "October" "November" "December" }
+] ;
+
+month-names-short: ( -- array ) [
+  { "Jan" "Feb" "Mar" "Apr" "May" "Jun" "Jul" "Aug" "Sep" "Oct" "Nov" "Dec" }
+] ;
+
+weekday-names: ( -- array ) [
+  { "Sunday" "Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" }
+] ;
+
+weekday-names-short: ( -- array ) [
+  { "Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat" }
+] ;
+
+\ Compute ISO week number (simplified: edge cases at year boundaries may be off)
+compute-iso-week: ( yearday iso-weekday -- iso-week ) [
+  - 10 + 7 /
+  dup 1 < [ drop 1 ] [ dup 53 > [ drop 53 ] [ ] if ] if
+] ;
+
+\ --- Timezone type ---
+
+tz-inner: struct{ offset-min name } ;
+timezone: virtual{ tz-inner } ;
+
+make-timezone: ( offset-min name -- timezone ) [ make-tz-inner >timezone ] ;
+
+timezone-offset: ( tz -- offset-min ) [ timezone> offset-min>> ] ;
+timezone-name:   ( tz -- name )       [ timezone> name>> ] ;
+
+utc: ( -- timezone ) [ 0 "UTC" make-timezone ] ;
+local: ( -- timezone ) [ 0 "" make-timezone ] ;
+
+\ --- libc bridge struct and wrappers ---
+
+tm-result: struct{ year month-num day hour min sec posix-weekday yearday gmtoff tz-abbrev } ;
+
+tz-localtime: ( sec tz-name -- tm-result ) [ tz-decompose make-tm-result ] ;
+
+\ Format gmtoff (seconds east of UTC) as "+HHMM" or "-HHMM"
+format-tz-offset: ( gmtoff-sec -- string ) [
+  dup 0 < [ 0 swap - "-" ] [ "+" ] if swap
+  \ Stack: sign abs-gmtoff
+  60 / dup 60 / swap 60 %
+  \ Stack: sign hh mm
+  H{ }
+  \ Stack: sign hh mm hash
+  3 pick-n sign: swap @set
+  2 pick-n hour: swap @set
+  1 pick-n min: swap @set
+  \ Stack: sign hh mm hash
+  \ Clean up the 3 values below the hash
+  swap drop swap drop swap drop
+  "{sign}{hour:width=2,fill=0}{min:width=2,fill=0}" fmt
+] ;
+
+\ Build a time-parts hash from a tm-result and nsec value.
+\
+\ 2 pick-n always reaches tm-result, 1 pick-n always reaches nsec.
+\ @set is stack-neutral so depths stay constant.
+tm>time-parts: ( tm-result nsec -- hash ) [
+  H{ }
+
+  \ Year
+  2 pick-n year>> year: swap @set
+  2 pick-n year>> 100 % year-short: swap @set
+
+  \ Month (month-num is 1-12; arrays are 0-indexed)
+  2 pick-n month-num>> month-num: swap @set
+  2 pick-n month-num>> 1 - month-names swap #nth month: swap @set
+  2 pick-n month-num>> 1 - month-names swap #nth month-name: swap @set
+  2 pick-n month-num>> 1 - month-names-short swap #nth month-short: swap @set
+
+  \ Day
+  2 pick-n day>> day: swap @set
+  2 pick-n yearday>> yearday: swap @set
+
+  \ Weekday (posix-weekday 0=Sun; arrays 0-indexed)
+  2 pick-n posix-weekday>> weekday-names swap #nth weekday: swap @set
+  2 pick-n posix-weekday>> weekday-names swap #nth weekday-name: swap @set
+  2 pick-n posix-weekday>> weekday-names-short swap #nth weekday-short: swap @set
+  2 pick-n posix-weekday>> posix-weekday: swap @set
+  2 pick-n posix-weekday>> dup 0 = [ drop 7 ] [ ] if iso-weekday: swap @set
+
+  \ ISO week
+  2 pick-n yearday>>
+  3 pick-n posix-weekday>> dup 0 = [ drop 7 ] [ ] if
+  compute-iso-week iso-week: swap @set
+
+  \ Time
+  2 pick-n hour>> hour: swap @set
+  2 pick-n hour>> hour24: swap @set
+  2 pick-n hour>> 12 % dup 0 = [ drop 12 ] [ ] if hour12: swap @set
+  2 pick-n min>> min: swap @set
+  2 pick-n sec>> sec: swap @set
+
+  \ Sub-second (from nsec argument)
+  1 pick-n nsec: swap @set
+  1 pick-n 1000 / usec: swap @set
+  1 pick-n 1000000 / msec: swap @set
+
+  \ AM/PM
+  2 pick-n hour>> 12 < [ "AM" ] [ "PM" ] if ampm: swap @set
+
+  \ Timezone
+  2 pick-n gmtoff>> format-tz-offset tz: swap @set
+  2 pick-n gmtoff>> format-tz-offset tz-offset: swap @set
+  2 pick-n tz-abbrev>> tz-name: swap @set
+
+  \ Clean up tm-result and nsec from below hash
+  swap drop swap drop
+] ;
+
+\ --- >time-parts (UTC decomposition via libc) ---
+
+>time-parts: ( timestamp -- hash ) [
+  dup timestamp-nsec swap timestamp-sec
+  "UTC" tz-localtime swap
+  tm>time-parts
+] ;
+
+\ --- >time-parts-in (timezone-aware decomposition via libc) ---
+
+>time-parts-in: ( timestamp tz -- hash ) [
+  swap dup timestamp-nsec swap timestamp-sec
+  <rot- timezone-name
+  tz-localtime swap
+  tm>time-parts
+] ;
+
+\ --- Formatting ---
+
+time-format: ( timestamp fmt-string -- string ) [
+  swap >time-parts swap fmt
+] ;
+
+time-format-in: ( timestamp tz fmt-string -- string ) [
+  -rot> >time-parts-in swap fmt
+] ;
+
+\ Format constants
+iso8601-fmt: const [ "{year}-{month-num:width=2,fill=0}-{day:width=2,fill=0}T{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0}{tz}" ] ;
+rfc2822-fmt: const [ "{weekday-short}, {day:width=2,fill=0} {month-short} {year} {hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0} {tz}" ] ;
+date-fmt: const [ "{year}-{month-num:width=2,fill=0}-{day:width=2,fill=0}" ] ;
+time-fmt: const [ "{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0}" ] ;
+
+\ --- Elapsed time measurement ---
+
+\ elapsed ( quot -- ...results duration )
+\ Runs quotation, measures wall time, pushes duration on top.
+\ Quotation results remain on stack below the duration.
+elapsed: [
+  clock-monotonic swap 1000000000 * +
+  [ call ] dip
+  clock-monotonic swap 1000000000 * + swap - >duration
+] ;

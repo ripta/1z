@@ -43,6 +43,7 @@ pub const template = @import("template.zig");
 pub const virtual = @import("virtual.zig");
 pub const dispatch_words = @import("dispatch_words.zig");
 pub const dispatch_helpers = @import("dispatch_helpers.zig");
+pub const time = @import("time.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -88,4 +89,5 @@ pub const extracted_primitives = stack.primitives ++
     env.primitives ++
     template.primitives ++
     virtual.primitives ++
-    dispatch_words.primitives;
+    dispatch_words.primitives ++
+    time.primitives;

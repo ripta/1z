@@ -346,6 +346,13 @@ pub const BenchmarkReport = struct {
     pub fn addEntry(self: *BenchmarkReport, label: []const u8, results: *std.StringHashMapUnmanaged(Value)) !void {
         try self.entries.append(self.allocator, .{ .label = label, .results = results });
     }
+
+    pub fn deinit(self: *BenchmarkReport) void {
+        for (self.entries.items) |*entry| {
+            entry.results.deinit(self.allocator);
+        }
+        self.entries.deinit(self.allocator);
+    }
 };
 
 /// An allocator wrapper that counts allocations and bytes for benchmarking with minimal overhead.

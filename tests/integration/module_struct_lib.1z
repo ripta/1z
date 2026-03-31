@@ -1,0 +1,3 @@
+\ Module that defines a struct type for scoping tests
+
+point: struct{ x y } ;

@@ -1,23 +1,27 @@
 \ Bug: comments in quotations should not consume tokens on subsequent lines
 
+use "testing" ;
+
+"comments in multiline quotations" test-section
+
 \ Test comment in a multiline quotation
 [ 1 2  \ this comment should end at the newline
   +
-] call .
+] call 3 "comment mid-quotation" assert=
 
 \ Test comment at the start of a continuation line
 [
   \ comment on its own line
   1 2 +
-] call .
+] call 3 "comment on own line" assert=
 
 \ Test empty quotation (should work)
-[ ] .
+[ ] quotation? "empty quotation" assert-true
 
 \ Test quotation with only a comment
 [
   \ just a comment
-] .
+] quotation? "quotation with only comment" assert-true
 
 \ Test multiple comments in quotation
 [
@@ -27,4 +31,4 @@
   2
   \ third comment
   +
-] call .
+] call 3 "multiple comments" assert=

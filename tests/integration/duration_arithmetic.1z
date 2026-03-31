@@ -1,0 +1,35 @@
+\ Duration arithmetic tests
+
+use "testing" ;
+use "time" ;
+
+"duration + duration" test-section
+
+1 seconds 2 seconds + duration> 3000000000 "1s + 2s = 3s" assert=
+100 milliseconds 200 milliseconds + duration> 300000000 "100ms + 200ms = 300ms" assert=
+1 hours 30 minutes + duration> 5400000000000 "1h + 30m = 90 minutes" assert=
+
+"duration - duration" test-section
+
+5 seconds 2 seconds - duration> 3000000000 "5s - 2s = 3s" assert=
+1 minutes 30 seconds - duration> 30000000000 "1m - 30s = 30s" assert=
+10 milliseconds 10 milliseconds - duration> 0 "10ms - 10ms = 0" assert=
+
+"duration * integer" test-section
+
+2 seconds 3 * duration> 6000000000 "2s * 3 = 6s" assert=
+500 milliseconds 4 * duration> 2000000000 "500ms * 4 = 2s" assert=
+1 hours 0 * duration> 0 "1h * 0 = 0" assert=
+
+"integer * duration" test-section
+
+3 2 seconds * duration> 6000000000 "3 * 2s = 6s" assert=
+4 500 milliseconds * duration> 2000000000 "4 * 500ms = 2s" assert=
+0 1 hours * duration> 0 "0 * 1h = 0" assert=
+
+"result type preserved" test-section
+
+1 seconds 2 seconds + type-of duration: "addition result is duration" assert=
+5 seconds 2 seconds - type-of duration: "subtraction result is duration" assert=
+2 seconds 3 * type-of duration: "multiplication result is duration" assert=
+3 2 seconds * type-of duration: "commutative multiplication result is duration" assert=

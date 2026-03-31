@@ -144,6 +144,19 @@ pub const DispatchTable = struct {
         }
         return null;
     }
+
+    /// Collect all dispatch keys registered for a given word name.
+    /// Caller owns the returned slice.
+    pub fn keysForWord(self: *const DispatchTable, word_name: []const u8, alloc: Allocator) ![]DispatchKey {
+        var results: std.ArrayListUnmanaged(DispatchKey) = .{};
+        var iter = self.entries.iterator();
+        while (iter.next()) |entry| {
+            if (std.mem.eql(u8, entry.key_ptr.word_name, word_name)) {
+                try results.append(alloc, entry.key_ptr.*);
+            }
+        }
+        return results.toOwnedSlice(alloc);
+    }
 };
 
 // =============================================================================
