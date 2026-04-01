@@ -15,6 +15,50 @@ typed-pair: struct{ left: any right: fixnum } ;
 typed-pair: native.type-descriptor "field-types" @get
 [ native.type-name ] #map #collect { "any" "fixnum" } "any field uses sentinel type name" assert=
 
+"typed struct runtime validation" test-section
+
+1 "ok" make-typed-point drop
+H{ x: 2 y: "also ok" } >typed-point drop
+1 "bad" make-typed-point x>> 1 "typed constructor preserves typed getter output" assert=
+
+[ "oops" "bad" make-typed-point drop ]
+"typed constructor rejects wrong field type" assert-error
+
+[ H{ x: "bad" y: "ok" } >typed-point drop ]
+"hash constructor rejects wrong field type" assert-error
+
+"typed mutable setter validation" test-section
+
+typed-box: mutable struct{ payload: fixnum } ;
+
+41 make-typed-box
+dup 99 >>payload
+payload>> 99 "typed setter accepts matching type" assert=
+drop
+
+[ 41 make-typed-box "bad" >>payload drop ]
+"typed setter rejects wrong field type" assert-error
+
+"typed generated stack effects" test-section
+
+make-typed-point: >word-info stack-effect>>
+dup inputs>> [ type-annotation>> native.type-name ] #map #collect
+{ "fixnum" "string" } "constructor input type annotations preserved" assert=
+outputs>> 0 #nth type-annotation>> native.type-name
+"typed-point" "constructor output type annotation preserved" assert=
+
+x>>: >word-info stack-effect>>
+dup inputs>> 0 #nth type-annotation>> native.type-name
+"typed-point" "getter input type annotation preserved" assert=
+outputs>> 0 #nth type-annotation>> native.type-name
+"fixnum" "getter output type annotation preserved" assert=
+
+>>payload: >word-info stack-effect>>
+dup inputs>> [ type-annotation>> native.type-name ] #map #collect
+{ "typed-box" "fixnum" } "setter input type annotations preserved" assert=
+outputs>> 0 #nth type-annotation>> native.type-name
+"typed-box" "setter output type annotation preserved" assert=
+
 "untyped struct remains unchanged" test-section
 
 plain-point: struct{ x y } ;

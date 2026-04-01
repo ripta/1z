@@ -51,6 +51,7 @@ const LockOrderTracker = lock_order.LockOrderTracker;
 const signal = @import("signal.zig");
 const control = @import("primitives/control.zig");
 const nativeSuppressChecksValidator = @import("effect_inference.zig").nativeSuppressChecksValidator;
+const helpers = @import("primitives/helpers.zig");
 
 /// Embedded prelude source code
 const prelude_source = @embedFile("prelude.1z");
@@ -2938,23 +2939,8 @@ pub const Context = struct {
             const stack_index = self.stack.depth() - 1 - offset_from_top;
             const val = self.stack.items.items[stack_index];
 
-            const val_tv: *const value_mod.TypeValue = dispatch_mod.dispatchTypeValue(val, self);
-
-            // Regular types: direct pointer match
-            if (val_tv == expected_tv) continue;
-
-            // Tagged values: check parent_type for parameterized types and base_type for enum variant matching
-            //
-            // TODO(ripta): This is a tad ad-hoc, but it allows us to support common patterns like `list of int` parameters,
-            //              and enum variants without requiring explicit type annotations on the tagged value itself.
-            if (val == .tagged) {
-                if (val.tagged.tag.parent_type) |pt| {
-                    if (pt == expected_tv) continue;
-                }
-                if (val.tagged.tag.base_type) |bt| {
-                    if (bt == expected_tv) continue;
-                }
-            }
+            const val_tv = helpers.resolveValueTypeValue(self, val) orelse continue;
+            if (helpers.valueMatchesType(self, val, expected_tv)) continue;
 
             // Type mismatch
             const actual_name = val_tv.name;

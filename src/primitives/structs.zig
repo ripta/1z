@@ -21,6 +21,10 @@ const dictionary_mod = @import("../dictionary.zig");
 const WordProvenance = dictionary_mod.WordProvenance;
 const WordDefinition = dictionary_mod.WordDefinition;
 
+const stack_effect_mod = @import("../stack_effect.zig");
+const StackEffect = stack_effect_mod.StackEffect;
+const StackEffectParam = stack_effect_mod.StackEffectParam;
+
 pub const primitives = [_]Primitive{
     .{ .name = "define-struct", .stack_effect = "name: descriptor markers --", .doc = "Define a struct type and its accessor words.", .func = nativeDefineStruct },
 };
@@ -203,6 +207,14 @@ fn makeStructInstanceHelper(ctx: *Context) anyerror!void {
     while (i > 0) {
         i -= 1;
         field_values[i] = try ctx.stack.pop();
+        if (st.field_types.len != 0) {
+            const expected_tv = st.field_types[i] orelse unreachable;
+            if (!helpers.valueMatchesType(ctx, field_values[i], expected_tv)) {
+                const actual_tv = helpers.resolveValueTypeValue(ctx, field_values[i]) orelse unreachable;
+                helpers.setErrorContext(ctx, "make-{s}: field '{s}' expects {s}, got {s}", .{ st.name, st.fields[i], expected_tv.name, actual_tv.name });
+                return error.TypeError;
+            }
+        }
     }
 
     const instance = try alloc.create(StructInstance);
@@ -231,6 +243,14 @@ fn hashToStructHelper(ctx: *Context) anyerror!void {
     const field_values = try alloc.alloc(Value, st.fields.len);
     for (st.fields, 0..) |field, i| {
         if (hash.get(field)) |val| {
+            if (st.field_types.len != 0) {
+                const expected_tv = st.field_types[i] orelse unreachable;
+                if (!helpers.valueMatchesType(ctx, val, expected_tv)) {
+                    const actual_tv = helpers.resolveValueTypeValue(ctx, val) orelse unreachable;
+                    helpers.setErrorContext(ctx, ">{s}: field '{s}' expects {s}, got {s}", .{ st.name, field, expected_tv.name, actual_tv.name });
+                    return error.TypeError;
+                }
+            }
             field_values[i] = val;
         } else {
             helpers.setErrorContext(ctx, "field '{s}' missing in hash for struct '{s}'", .{ field, st.name });
@@ -286,6 +306,15 @@ fn structFieldSetHelper(ctx: *Context) anyerror!void {
         return error.TypeMismatch;
     }
 
+    if (st.field_types.len != 0) {
+        const expected_tv = st.field_types[idx] orelse unreachable;
+        if (!helpers.valueMatchesType(ctx, new_val, expected_tv)) {
+            const actual_tv = helpers.resolveValueTypeValue(ctx, new_val) orelse unreachable;
+            helpers.setErrorContext(ctx, ">>{s}: field '{s}' expects {s}, got {s}", .{ st.fields[idx], st.fields[idx], expected_tv.name, actual_tv.name });
+            return error.TypeError;
+        }
+    }
+
     inst.fields[idx] = new_val;
     try ctx.stack.push(.{ .struct_instance = inst });
 }
@@ -333,10 +362,9 @@ fn defineConstructor(ctx: *Context, name: []const u8, struct_type: *const Struct
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.make-struct-instance" }, .line = 0 };
 
-    const effect_str = try helpers.buildConstructorEffectStr(alloc, struct_type.fields, struct_type.name);
     try ctx.defineWord(name, .{
         .name = name,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
+        .stack_effect = try buildConstructorEffect(alloc, struct_type),
         .markers = markers,
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "constructor" },
         .action = .{ .compound = instrs },
@@ -436,7 +464,7 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
 
         try ctx.defineWord(name, .{
             .name = name,
-            .stack_effect = try helpers.makeSimpleEffect(alloc, "instance -- value"),
+            .stack_effect = try buildGetterEffect(alloc, struct_type, field_index),
             .markers = generic_markers,
             .action = .{ .compound = &.{} },
         });
@@ -479,7 +507,7 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
 
         try ctx.defineWord(name, .{
             .name = name,
-            .stack_effect = try helpers.makeSimpleEffect(alloc, "instance value -- instance"),
+            .stack_effect = try buildSetterEffect(alloc, struct_type, field_index),
             .markers = generic_markers,
             .action = .{ .compound = &.{} },
         });
@@ -512,4 +540,58 @@ pub fn getStructTypeFromMaker(ctx: *const Context, maker_name: []const u8) ?*con
         },
         else => null,
     };
+}
+
+fn buildConstructorEffect(alloc: std.mem.Allocator, struct_type: *const StructType) !StackEffect {
+    const inputs = try alloc.alloc(StackEffectParam, struct_type.fields.len);
+    for (struct_type.fields, 0..) |field, i| {
+        inputs[i] = .{
+            .name = field,
+            .type_annotation = if (struct_type.field_types.len != 0) struct_type.field_types[i] else null,
+        };
+    }
+
+    const outputs = try alloc.alloc(StackEffectParam, 1);
+    outputs[0] = .{
+        .name = struct_type.name,
+        .type_annotation = struct_type.type_val,
+    };
+
+    return .{ .inputs = inputs, .outputs = outputs };
+}
+
+fn buildGetterEffect(alloc: std.mem.Allocator, struct_type: *const StructType, field_index: usize) !StackEffect {
+    const inputs = try alloc.alloc(StackEffectParam, 1);
+    inputs[0] = .{
+        .name = "instance",
+        .type_annotation = struct_type.type_val,
+    };
+
+    const outputs = try alloc.alloc(StackEffectParam, 1);
+    outputs[0] = .{
+        .name = struct_type.fields[field_index],
+        .type_annotation = if (struct_type.field_types.len != 0) struct_type.field_types[field_index] else null,
+    };
+
+    return .{ .inputs = inputs, .outputs = outputs };
+}
+
+fn buildSetterEffect(alloc: std.mem.Allocator, struct_type: *const StructType, field_index: usize) !StackEffect {
+    const inputs = try alloc.alloc(StackEffectParam, 2);
+    inputs[0] = .{
+        .name = "instance",
+        .type_annotation = struct_type.type_val,
+    };
+    inputs[1] = .{
+        .name = struct_type.fields[field_index],
+        .type_annotation = if (struct_type.field_types.len != 0) struct_type.field_types[field_index] else null,
+    };
+
+    const outputs = try alloc.alloc(StackEffectParam, 1);
+    outputs[0] = .{
+        .name = "instance",
+        .type_annotation = struct_type.type_val,
+    };
+
+    return .{ .inputs = inputs, .outputs = outputs };
 }

@@ -1,39 +1,29 @@
 === typed struct descriptor metadata ===
-Stack: [ ]
-Stack: [ ]
 PASS: typed struct fields exposed
-Stack: [ H{ mutable: f exact: f integer: f fields: { "x" "y" } field-types: { <type:fixnum> <type:string> } type: struct-descriptor:: numeric: f } ]
 PASS: typed struct field-types exposed
-Stack: [ H{ mutable: f exact: f integer: f fields: { "x" "y" } field-types: { <type:fixnum> <type:string> } type: struct-descriptor:: numeric: f } ]
-Stack: [ ]
 === typed struct any metadata ===
-Stack: [ ]
-Stack: [ ]
-Stack: [ { <type:any> <type:fixnum> } ]
 PASS: any field uses sentinel type name
-Stack: [ ]
+=== typed struct runtime validation ===
+PASS: typed constructor preserves typed getter output
+PASS: typed constructor rejects wrong field type
+PASS: hash constructor rejects wrong field type
+=== typed mutable setter validation ===
+PASS: typed setter accepts matching type
+PASS: typed setter rejects wrong field type
+=== typed generated stack effects ===
+PASS: constructor input type annotations preserved
+PASS: constructor output type annotation preserved
+PASS: getter input type annotation preserved
+PASS: getter output type annotation preserved
+PASS: setter input type annotations preserved
+PASS: setter output type annotation preserved
 === untyped struct remains unchanged ===
-Stack: [ ]
-Stack: [ ]
 PASS: untyped struct omits field-types
-Stack: [ ]
 === mixed typed and untyped fields error ===
-Stack: [ ]
-Stack: [ [ "broken-point: struct{ x: fixnum y } ;" eval-string ] ]
 PASS: mixed typed and untyped struct fields error
-Stack: [ ]
 === typed virtual struct metadata ===
-Stack: [ ]
-Stack: [ ]
-Stack: [ H{ mutable: f exact: f integer: f fields: { "dx" "dy" } field-types: { <type:fixnum> <type:any> } type: struct-descriptor:: numeric: f } ]
 PASS: virtual inner struct fields exposed
-Stack: [ H{ mutable: f exact: f integer: f fields: { "dx" "dy" } field-types: { <type:fixnum> <type:any> } type: struct-descriptor:: numeric: f } ]
 PASS: virtual inner struct field-types exposed
-Stack: [ ]
 === any stack effect annotation skips validation ===
-Stack: [ ]
-Stack: [ ]
 PASS: any annotation accepts fixnum
-Stack: [ ]
 PASS: any annotation accepts string
-Stack: [ ]

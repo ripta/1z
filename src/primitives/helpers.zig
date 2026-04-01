@@ -15,10 +15,12 @@ const StructType = value_mod.StructType;
 const StructInstance = value_mod.StructInstance;
 const Task = @import("../task.zig").Task;
 const Channel = @import("../channel.zig").Channel;
+const dispatch_mod = @import("../dispatch.zig");
 
 const stack_effect_mod = @import("../stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
+const TypeValue = value_mod.TypeValue;
 
 /// Create a stack effect from a raw string at runtime.
 /// Supports quotation annotations like "seq quot: ( elem -- elem' ) -- seq'"
@@ -103,6 +105,34 @@ pub fn makeSimpleEffect(allocator: Allocator, raw: []const u8) !StackEffect {
         .inputs = try inputs.toOwnedSlice(allocator),
         .outputs = try outputs.toOwnedSlice(allocator),
     };
+}
+
+/// Resolve the runtime TypeValue for an arbitrary value using the same rules as
+/// dispatch and `type-of`.
+pub fn resolveValueTypeValue(ctx: *Context, val: Value) ?*const TypeValue {
+    return dispatch_mod.dispatchTypeValue(val, ctx);
+}
+
+/// Check whether a value satisfies an expected type annotation.
+/// Supports `any`, enum parent types, and tagged base types.
+pub fn valueMatchesType(ctx: *Context, val: Value, expected_tv: *const TypeValue) bool {
+    if (ctx.any_type_sentinel) |any_tv| {
+        if (expected_tv == any_tv) return true;
+    }
+
+    const actual_tv = resolveValueTypeValue(ctx, val) orelse return false;
+    if (actual_tv == expected_tv) return true;
+
+    if (val == .tagged) {
+        if (val.tagged.tag.parent_type) |pt| {
+            if (pt == expected_tv) return true;
+        }
+        if (val.tagged.tag.base_type) |bt| {
+            if (bt == expected_tv) return true;
+        }
+    }
+
+    return false;
 }
 
 // =============================================================================
