@@ -13,8 +13,8 @@ const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "define-struct", .stack_effect = "name: descriptor markers --", .func = nativeDefineStruct },
-    .{ .name = "parse-struct-fields", .stack_effect = "-- fields", .func = nativeParseStructFields },
+    .{ .name = "define-struct", .stack_effect = "name: descriptor markers --", .doc = "Define a struct type and its accessor words.", .func = nativeDefineStruct },
+    .{ .name = "parse-struct-fields", .stack_effect = "-- fields", .doc = "Parse field names until } from tokenizer.", .func = nativeParseStructFields },
 };
 
 /// parse-struct-fields ( -- fields ) - Parse field names until } from tokenizer

@@ -1,0 +1,12 @@
+\ Verify a sampling of native words have doc-comments visible via help.
+
+dup: help
++: help
+if: help
+#len: help
+recover: help
+stream-open: help
+spawn: help
+make-parameter: help
+type-of: help
+@get: help

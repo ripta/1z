@@ -1,0 +1,40 @@
+dup ( a -- a a ) \native
+
+Duplicate top of stack.
+Stack: [ ]
++ ( a b -- a+b ) \native
+
+Add two integers.
+Stack: [ ]
+if ( ? true-quot false-quot --  ) \native
+
+Conditional execution.
+Stack: [ ]
+#len ( seq -- n ) \native
+
+Get length of sequence.
+Stack: [ ]
+recover ( try-quot recover-quot: ( error --  ) --  ) \native
+
+Execute try quotation; if error, run recover quotation with error on stack.
+Stack: [ ]
+stream-open ( path mode -- stream ) \native
+
+Open a file stream with mode (read:, write:, append:, read-write:).
+Stack: [ ]
+spawn ( quot -- task ) \native
+
+Spawn a new task from a quotation.
+Stack: [ ]
+make-parameter ( name quot -- param ) \native
+
+Create a dynamic parameter with a name and default quotation.
+Stack: [ ]
+type-of ( val -- symbol ) \native
+
+Return type of value as a symbol.
+Stack: [ ]
+@get ( assoc key -- value ) \native
+
+Get value by key from an associative type.
+Stack: [ ]

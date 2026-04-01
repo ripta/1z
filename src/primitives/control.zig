@@ -45,11 +45,11 @@ fn getDescriptorMap(val: Value) ?*value_mod.MutableMap {
 }
 
 pub const primitives = [_]Primitive{
-    .{ .name = "call", .stack_effect = "quot --", .func = nativeCall },
-    .{ .name = ";", .stack_effect = "name quot --", .func = nativeSemicolon },
-    .{ .name = "t", .stack_effect = "-- t", .func = nativeTrue },
-    .{ .name = "f", .stack_effect = "-- f", .func = nativeFalse },
-    .{ .name = "if", .stack_effect = "? true-quot false-quot --", .func = nativeIf },
+    .{ .name = "call", .stack_effect = "quot --", .doc = "Execute a quotation.", .func = nativeCall },
+    .{ .name = ";", .stack_effect = "name quot --", .doc = "Define a new word.", .func = nativeSemicolon },
+    .{ .name = "t", .stack_effect = "-- t", .doc = "Push true.", .func = nativeTrue },
+    .{ .name = "f", .stack_effect = "-- f", .doc = "Push false.", .func = nativeFalse },
+    .{ .name = "if", .stack_effect = "? true-quot false-quot --", .doc = "Conditional execution.", .func = nativeIf },
 };
 
 /// call ( quot -- ) - Execute a quotation with a new local frame for scoping

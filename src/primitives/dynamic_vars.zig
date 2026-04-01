@@ -13,11 +13,11 @@ const popQuotation = helpers.popQuotation;
 const popSymbol = helpers.popSymbol;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "parse-quotation", .stack_effect = "-- quotation", .func = nativeParseQuotation },
-    .{ .name = "parse-literal", .stack_effect = "-- value", .func = nativeParseLiteral },
-    .{ .name = "make-parameter", .stack_effect = "name: quot -- param", .func = nativeMakeParameter },
-    .{ .name = "get", .stack_effect = "param -- value", .func = nativeGet },
-    .{ .name = "with-parameter", .stack_effect = "value param quot --", .func = nativeWithParameter },
+    .{ .name = "parse-quotation", .stack_effect = "-- quotation", .doc = "Read the next [ ... ] block from the tokenizer.", .func = nativeParseQuotation },
+    .{ .name = "parse-literal", .stack_effect = "-- value", .doc = "Read the next literal value from the tokenizer.", .func = nativeParseLiteral },
+    .{ .name = "make-parameter", .stack_effect = "name: quot -- param", .doc = "Create a dynamic parameter with a name and default quotation.", .func = nativeMakeParameter },
+    .{ .name = "get", .stack_effect = "param -- value", .doc = "Get the current value of a dynamic parameter.", .func = nativeGet },
+    .{ .name = "with-parameter", .stack_effect = "value param quot --", .doc = "Execute quotation with parameter temporarily bound to value.", .func = nativeWithParameter },
 };
 
 // =============================================================================

@@ -2,4 +2,6 @@ Stack: [ ]
 double ( n -- n ) \compound
 Stack: [ ]
 + ( a b -- a+b ) \native
+
+Add two integers.
 Stack: [ ]

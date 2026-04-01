@@ -17,12 +17,12 @@ const data_structures = @import("data_structures.zig");
 const extractKeyString = data_structures.extractKeyString;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "@get", .stack_effect = "assoc key -- value", .func = nativeAtGet },
-    .{ .name = "@get-or", .stack_effect = "assoc key default -- value", .func = nativeAtGetOr },
-    .{ .name = "@has?", .stack_effect = "assoc key -- ?", .func = nativeAtHas },
-    .{ .name = "@set", .stack_effect = "assoc key value -- assoc'", .func = nativeAtSet },
-    .{ .name = "@keys", .stack_effect = "assoc -- array", .func = nativeAtKeys },
-    .{ .name = "@values", .stack_effect = "assoc -- array", .func = nativeAtValues },
+    .{ .name = "@get", .stack_effect = "assoc key -- value", .doc = "Get value by key from an associative type.", .func = nativeAtGet },
+    .{ .name = "@get-or", .stack_effect = "assoc key default -- value", .doc = "Get value by key, or return default if missing.", .func = nativeAtGetOr },
+    .{ .name = "@has?", .stack_effect = "assoc key -- ?", .doc = "Check if key exists in an associative type.", .func = nativeAtHas },
+    .{ .name = "@set", .stack_effect = "assoc key value -- assoc'", .doc = "Set value by key, returns new hash.", .func = nativeAtSet },
+    .{ .name = "@keys", .stack_effect = "assoc -- array", .doc = "Get all keys from an associative type.", .func = nativeAtKeys },
+    .{ .name = "@values", .stack_effect = "assoc -- array", .doc = "Get all values from an associative type.", .func = nativeAtValues },
 };
 
 /// Helper to get error object field value

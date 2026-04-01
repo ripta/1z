@@ -2,7 +2,7 @@ const Context = @import("../context.zig").Context;
 const Primitive = @import("types.zig").Primitive;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "type-of", .stack_effect = "val -- symbol", .func = nativeTypeOf },
+    .{ .name = "type-of", .stack_effect = "val -- symbol", .doc = "Return type of value as a symbol.", .func = nativeTypeOf },
 };
 
 /// type-of ( val -- symbol ) - Return type of value as a symbol

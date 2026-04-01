@@ -15,7 +15,7 @@ const markers_mod = @import("markers.zig");
 const Primitive = @import("types.zig").Primitive;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "define-method", .stack_effect = "name: descriptor markers --", .func = nativeDefineMethod },
+    .{ .name = "define-method", .stack_effect = "name: descriptor markers --", .doc = "Register a method in the dispatch table.", .func = nativeDefineMethod },
 };
 
 /// define-method ( name: descriptor markers -- ) - Register a method in the dispatch table

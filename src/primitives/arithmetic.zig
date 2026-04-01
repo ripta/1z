@@ -9,20 +9,20 @@ const popInteger = helpers.popInteger;
 
 pub const primitives = [_]Primitive{
     // Basic arithmetic
-    .{ .name = "+", .stack_effect = "a b -- a+b", .func = nativeAdd },
-    .{ .name = "-", .stack_effect = "a b -- a-b", .func = nativeSub },
-    .{ .name = "*", .stack_effect = "a b -- a*b", .func = nativeMul },
-    .{ .name = "/", .stack_effect = "a b -- a/b", .func = nativeDiv },
-    .{ .name = "%", .stack_effect = "a b -- a%b", .func = nativeMod },
+    .{ .name = "+", .stack_effect = "a b -- a+b", .doc = "Add two integers.", .func = nativeAdd },
+    .{ .name = "-", .stack_effect = "a b -- a-b", .doc = "Subtract: a minus b.", .func = nativeSub },
+    .{ .name = "*", .stack_effect = "a b -- a*b", .doc = "Multiply two integers.", .func = nativeMul },
+    .{ .name = "/", .stack_effect = "a b -- a/b", .doc = "Integer division.", .func = nativeDiv },
+    .{ .name = "%", .stack_effect = "a b -- a%b", .doc = "Modulo (remainder).", .func = nativeMod },
     // Wraparound arithmetic
-    .{ .name = "+%", .stack_effect = "a b -- a+b", .func = nativeAddWrap },
-    .{ .name = "-%", .stack_effect = "a b -- a-b", .func = nativeSubWrap },
-    .{ .name = "*%", .stack_effect = "a b -- a*b", .func = nativeMulWrap },
+    .{ .name = "+%", .stack_effect = "a b -- a+b", .doc = "Add two integers with wraparound on overflow.", .func = nativeAddWrap },
+    .{ .name = "-%", .stack_effect = "a b -- a-b", .doc = "Subtract with wraparound on overflow.", .func = nativeSubWrap },
+    .{ .name = "*%", .stack_effect = "a b -- a*b", .doc = "Multiply with wraparound on overflow.", .func = nativeMulWrap },
     // Comparators
-    .{ .name = "=", .stack_effect = "a b -- ?", .func = nativeEq },
-    .{ .name = "(=)", .stack_effect = "a b -- ?", .func = nativeInnerEq },
-    .{ .name = "<", .stack_effect = "a b -- ?", .func = nativeLt },
-    .{ .name = ">", .stack_effect = "a b -- ?", .func = nativeGt },
+    .{ .name = "=", .stack_effect = "a b -- ?", .doc = "Equality comparison.", .func = nativeEq },
+    .{ .name = "(=)", .stack_effect = "a b -- ?", .doc = "Inner equality: unwraps one layer of tagged values, then compares.", .func = nativeInnerEq },
+    .{ .name = "<", .stack_effect = "a b -- ?", .doc = "Less than.", .func = nativeLt },
+    .{ .name = ">", .stack_effect = "a b -- ?", .doc = "Greater than.", .func = nativeGt },
 };
 
 /// + ( a b -- a+b ) - Add two integers

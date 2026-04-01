@@ -12,8 +12,8 @@ const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "define-virtual", .stack_effect = "name: descriptor markers --", .func = nativeDefineVirtual },
-    .{ .name = "parse-virtual-inner", .stack_effect = "-- inner-type", .func = nativeParseVirtualInner },
+    .{ .name = "define-virtual", .stack_effect = "name: descriptor markers --", .doc = "Define a virtual type and its accessor words.", .func = nativeDefineVirtual },
+    .{ .name = "parse-virtual-inner", .stack_effect = "-- inner-type", .doc = "Parse inner type name until } from tokenizer.", .func = nativeParseVirtualInner },
 };
 
 /// parse-virtual-inner ( -- inner-type ) - Parse inner type name until } from tokenizer

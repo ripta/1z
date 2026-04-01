@@ -35,6 +35,7 @@ pub const InterpreterError = error{
 pub const Primitive = struct {
     name: []const u8,
     stack_effect: ?[]const u8 = null,
+    doc: ?[]const u8 = null,
     func: NativeFn,
     parse_time: bool = false,
 };

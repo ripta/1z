@@ -30,13 +30,13 @@ pub const generic_marker: Marker = .{ .name = "generic" };
 pub const const_marker: Marker = .{ .name = "const" };
 
 pub const primitives = [_]Primitive{
-    .{ .name = "marker", .stack_effect = "-- marker", .func = nativeMarker },
-    .{ .name = "parse-time", .stack_effect = "-- marker", .func = nativeParseTimeMarker, .parse_time = true },
-    .{ .name = "mutable", .stack_effect = "-- marker", .func = nativeMutableMarker, .parse_time = true },
-    .{ .name = "generic", .stack_effect = "-- marker", .func = nativeGenericMarker, .parse_time = true },
-    .{ .name = "const", .stack_effect = "-- marker", .func = nativeConstMarker, .parse_time = true },
-    .{ .name = "word-markers", .stack_effect = "name -- markers", .func = nativeWordMarkers },
-    .{ .name = "native?", .stack_effect = "name -- ?", .func = nativeIsNative },
+    .{ .name = "marker", .stack_effect = "-- marker", .doc = "Create an anonymous marker value.", .func = nativeMarker },
+    .{ .name = "parse-time", .stack_effect = "-- marker", .doc = "Push the well-known parse-time marker.", .func = nativeParseTimeMarker, .parse_time = true },
+    .{ .name = "mutable", .stack_effect = "-- marker", .doc = "Push the well-known mutable marker.", .func = nativeMutableMarker, .parse_time = true },
+    .{ .name = "generic", .stack_effect = "-- marker", .doc = "Push the well-known generic marker.", .func = nativeGenericMarker, .parse_time = true },
+    .{ .name = "const", .stack_effect = "-- marker", .doc = "Push the well-known const marker.", .func = nativeConstMarker, .parse_time = true },
+    .{ .name = "word-markers", .stack_effect = "name -- markers", .doc = "Get the markers attached to a word definition.", .func = nativeWordMarkers },
+    .{ .name = "native?", .stack_effect = "name -- ?", .doc = "Check if a word is implemented as a native primitive.", .func = nativeIsNative },
 };
 
 /// marker ( -- marker ) - Create an anonymous marker value
