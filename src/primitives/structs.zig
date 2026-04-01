@@ -10,6 +10,7 @@ const markers_mod = @import("markers.zig");
 const dispatch_mod = @import("../dispatch.zig");
 
 const helpers = @import("helpers.zig");
+const struct_field_spec = @import("struct_field_spec.zig");
 const virtual = @import("virtual.zig");
 
 const types_mod = @import("types.zig");
@@ -77,24 +78,9 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     };
-
-    var fields_list = std.ArrayListUnmanaged([]const u8){};
-    for (fields_array) |f| {
-        const raw = switch (f) {
-            .string => |s| s,
-            .symbol => |s| s,
-            else => {
-                helpers.setTypeMismatchError(ctx, "string or symbol", f);
-                return error.TypeMismatch;
-            },
-        };
-        const field_name = if (raw.len > 1 and raw[raw.len - 1] == ':')
-            raw[0 .. raw.len - 1]
-        else
-            raw;
-        try fields_list.append(alloc, field_name);
-    }
-    const fields_slice = try fields_list.toOwnedSlice(alloc);
+    const parsed_fields = try struct_field_spec.parse(alloc, ctx, fields_array, "struct{");
+    const fields_slice = parsed_fields.names;
+    const field_types_slice = parsed_fields.types;
 
     const name_val = try ctx.stack.pop();
     const name = switch (name_val) {
@@ -109,12 +95,13 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
         if (markers_mod.isMutableMarker(mk)) break true;
     } else false;
 
-    const frozen_desc = try ctx.getOrCreateStructDescriptor(fields_slice, has_mutable);
+    const frozen_desc = try ctx.getOrCreateStructDescriptor(fields_slice, field_types_slice, has_mutable);
 
     const struct_type = try alloc.create(StructType);
     struct_type.* = .{
         .name = name,
         .fields = fields_slice,
+        .field_types = field_types_slice,
     };
     ctx.struct_type_count += 1;
 

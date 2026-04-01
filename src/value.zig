@@ -204,8 +204,12 @@ pub const VirtualType = struct {
 /// StructType represents the definition of a struct type.
 /// Created by `struct{ field1 field2 ... }` syntax.
 pub const StructType = struct {
-    name: []const u8, // Type name (e.g., "point")
-    fields: []const []const u8, // Field names in order (e.g., ["x", "y"])
+    // Type name, e.g., "point"
+    name: []const u8,
+    // Field names in order, e.g., ["x", "y"]
+    fields: []const []const u8,
+    // Optional field type annotations for validation
+    field_types: []const ?*const TypeValue = &.{},
     // First-class type value for this struct type, set during type registration
     type_val: ?*TypeValue = null,
 };

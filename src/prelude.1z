@@ -65,7 +65,7 @@ W{: parse-time [ "}" parse-tokens-until ] ;
 \   name: struct{ field1 field2 ... } ;
 struct{: parse-time [
   M{ type: struct-descriptor: }
-  fields: "}" parse-tokens-until @set!
+  fields: "}" parse-values-until @set!
   define: [ define-struct ] @set!
 ] ;
 

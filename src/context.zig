@@ -113,6 +113,7 @@ pub const ParameterizedTypeKey = struct {
 
 pub const StructDescriptorKey = struct {
     fields: []const []const u8,
+    field_types: []const ?*const value_mod.TypeValue = &.{},
     mutable: bool,
 };
 
@@ -138,13 +139,21 @@ pub const StructDescriptorKeyContext = struct {
             h.update(field);
             h.update(&[_]u8{0});
         }
+        h.update(std.mem.asBytes(&key.field_types.len));
+        for (key.field_types) |field_type| {
+            const ptr_value: usize = if (field_type) |tv| @intFromPtr(tv) else 0;
+            h.update(std.mem.asBytes(&ptr_value));
+        }
         return h.final();
     }
 
     pub fn eql(_: @This(), a: StructDescriptorKey, b: StructDescriptorKey) bool {
-        if (a.mutable != b.mutable or a.fields.len != b.fields.len) return false;
+        if (a.mutable != b.mutable or a.fields.len != b.fields.len or a.field_types.len != b.field_types.len) return false;
         for (a.fields, b.fields) |a_field, b_field| {
             if (!std.mem.eql(u8, a_field, b_field)) return false;
+        }
+        for (a.field_types, b.field_types) |a_field_type, b_field_type| {
+            if (a_field_type != b_field_type) return false;
         }
         return true;
     }
@@ -1841,19 +1850,21 @@ pub const Context = struct {
     pub fn lookupStructDescriptor(
         self: *const Context,
         fields: []const []const u8,
+        field_types: []const ?*const value_mod.TypeValue,
         mutable: bool,
     ) ?*value_mod.HashTable {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
-        return self.lookupStructDescriptorLocked(fields, mutable);
+        return self.lookupStructDescriptorLocked(fields, field_types, mutable);
     }
 
     fn lookupStructDescriptorLocked(
         self: *const Context,
         fields: []const []const u8,
+        field_types: []const ?*const value_mod.TypeValue,
         mutable: bool,
     ) ?*value_mod.HashTable {
-        const key = StructDescriptorKey{ .fields = fields, .mutable = mutable };
+        const key = StructDescriptorKey{ .fields = fields, .field_types = field_types, .mutable = mutable };
         if (self.struct_descriptors.get(key)) |desc| return desc;
 
         var ancestor = self.parent_context;
@@ -1925,12 +1936,13 @@ pub const Context = struct {
     pub fn getOrCreateStructDescriptor(
         self: *Context,
         fields: []const []const u8,
+        field_types: []const ?*const value_mod.TypeValue,
         mutable: bool,
     ) !*value_mod.HashTable {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
 
-        if (self.lookupStructDescriptorLocked(fields, mutable)) |desc| return desc;
+        if (self.lookupStructDescriptorLocked(fields, field_types, mutable)) |desc| return desc;
 
         const alloc = self.quotationAllocator();
         const desc_map = try value_mod.createTypeDescriptor(
@@ -1943,10 +1955,17 @@ pub const Context = struct {
             desc_fields[i] = .{ .string = field };
         }
         try desc_map.put(alloc, "fields", .{ .array = desc_fields });
+        if (field_types.len != 0) {
+            const desc_field_types = try alloc.alloc(value_mod.Value, field_types.len);
+            for (field_types, 0..) |field_type, i| {
+                desc_field_types[i] = .{ .type_val = @constCast(field_type orelse unreachable) };
+            }
+            try desc_map.put(alloc, "field-types", .{ .array = desc_field_types });
+        }
 
         try self.struct_descriptors.put(
             self.allocator,
-            .{ .fields = fields, .mutable = mutable },
+            .{ .fields = fields, .field_types = field_types, .mutable = mutable },
             @ptrCast(desc_map),
         );
         return @ptrCast(desc_map);
@@ -2911,6 +2930,9 @@ pub const Context = struct {
             defer concrete_index += 1;
 
             const expected_tv = param.type_annotation orelse continue;
+            if (self.any_type_sentinel) |any_tv| {
+                if (expected_tv == any_tv) continue;
+            }
 
             const offset_from_top = concrete_params - 1 - concrete_index;
             const stack_index = self.stack.depth() - 1 - offset_from_top;
@@ -3973,16 +3995,29 @@ test "struct descriptor interning reuses descriptor for same shape" {
 
     const fields_xy = [_][]const u8{ "x", "y" };
     const fields_yx = [_][]const u8{ "y", "x" };
+    const no_field_types = [_]?*const value_mod.TypeValue{};
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+    const typed_fixnum_fixnum = [_]?*const value_mod.TypeValue{ fixnum_tv, fixnum_tv };
+    const typed_fixnum_string = [_]?*const value_mod.TypeValue{ fixnum_tv, string_tv };
 
-    const desc1 = try ctx.getOrCreateStructDescriptor(&fields_xy, false);
-    const desc2 = try ctx.getOrCreateStructDescriptor(&fields_xy, false);
+    const desc1 = try ctx.getOrCreateStructDescriptor(&fields_xy, &no_field_types, false);
+    const desc2 = try ctx.getOrCreateStructDescriptor(&fields_xy, &no_field_types, false);
     try std.testing.expect(desc1 == desc2);
 
-    const desc3 = try ctx.getOrCreateStructDescriptor(&fields_yx, false);
+    const desc3 = try ctx.getOrCreateStructDescriptor(&fields_yx, &no_field_types, false);
     try std.testing.expect(desc1 != desc3);
 
-    const desc4 = try ctx.getOrCreateStructDescriptor(&fields_xy, true);
+    const desc4 = try ctx.getOrCreateStructDescriptor(&fields_xy, &no_field_types, true);
     try std.testing.expect(desc1 != desc4);
+
+    const desc5 = try ctx.getOrCreateStructDescriptor(&fields_xy, &typed_fixnum_fixnum, false);
+    const desc6 = try ctx.getOrCreateStructDescriptor(&fields_xy, &typed_fixnum_fixnum, false);
+    try std.testing.expect(desc5 == desc6);
+    try std.testing.expect(desc1 != desc5);
+
+    const desc7 = try ctx.getOrCreateStructDescriptor(&fields_xy, &typed_fixnum_string, false);
+    try std.testing.expect(desc5 != desc7);
 }
 
 test "enum registry frame push/pop" {

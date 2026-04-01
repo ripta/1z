@@ -14,6 +14,7 @@ const Allocator = std.mem.Allocator;
 
 const helpers = @import("helpers.zig");
 const markers_mod = @import("markers.zig");
+const struct_field_spec = @import("struct_field_spec.zig");
 const dispatch_mod = @import("../dispatch.zig");
 
 const types_mod = @import("types.zig");
@@ -209,29 +210,23 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
                     return error.TypeMismatch;
                 },
             };
-
-            var fields_list = std.ArrayListUnmanaged([]const u8){};
-            for (fields_array) |f| {
-                const raw = switch (f) {
-                    .string => |s| s,
-                    .symbol => |s| s,
-                    else => {
-                        helpers.setErrorContext(ctx, "virtual{{ struct field name must be a string or symbol, got {s}", .{helpers.valueTypeName(f)});
-                        return error.TypeMismatch;
-                    },
-                };
-                const field_name = if (raw.len > 1 and raw[raw.len - 1] == ':')
-                    raw[0 .. raw.len - 1]
-                else
-                    raw;
-                try fields_list.append(alloc, field_name);
-            }
-            const fields_slice = try fields_list.toOwnedSlice(alloc);
+            const parsed_fields = try struct_field_spec.parse(alloc, ctx, fields_array, "virtual{");
+            const fields_slice = parsed_fields.names;
+            const field_types_slice = parsed_fields.types;
+            const inner_mutable = if (struct_desc.get("mutable")) |v| switch (v) {
+                .boolean => |b| b,
+                else => false,
+            } else false;
+            const frozen_inner_desc = try ctx.getOrCreateStructDescriptor(fields_slice, field_types_slice, inner_mutable);
+            const inner_type_values = try alloc.alloc(Value, 1);
+            inner_type_values[0] = .{ .hash = frozen_inner_desc };
+            try desc_map.put(alloc, "inner-type", .{ .array = inner_type_values });
 
             const anon_struct = try alloc.create(StructType);
             anon_struct.* = .{
                 .name = name,
                 .fields = fields_slice,
+                .field_types = field_types_slice,
             };
             ctx.struct_type_count += 1;
 

@@ -1,0 +1,41 @@
+use "testing" ;
+
+"typed struct descriptor metadata" test-section
+
+typed-point: struct{ x: fixnum y: string } ;
+
+typed-point: native.type-descriptor dup "fields" @get { "x" "y" } "typed struct fields exposed" assert=
+dup "field-types" @get [ native.type-name ] #map #collect { "fixnum" "string" } "typed struct field-types exposed" assert=
+drop
+
+"typed struct any metadata" test-section
+
+typed-pair: struct{ left: any right: fixnum } ;
+
+typed-pair: native.type-descriptor "field-types" @get
+[ native.type-name ] #map #collect { "any" "fixnum" } "any field uses sentinel type name" assert=
+
+"untyped struct remains unchanged" test-section
+
+plain-point: struct{ x y } ;
+plain-point: native.type-descriptor "field-types" @has? f "untyped struct omits field-types" assert=
+
+"mixed typed and untyped fields error" test-section
+
+[ "broken-point: struct{ x: fixnum y } ;" eval-string ]
+"mixed typed and untyped struct fields error" assert-error
+
+"typed virtual struct metadata" test-section
+
+typed-vec: virtual{ struct{ dx: fixnum dy: any } } ;
+
+typed-vec: native.type-descriptor "inner-type" @get #first
+dup "fields" @get { "dx" "dy" } "virtual inner struct fields exposed" assert=
+"field-types" @get [ native.type-name ] #map #collect { "fixnum" "any" } "virtual inner struct field-types exposed" assert=
+
+"any stack effect annotation skips validation" test-section
+
+keep-any: ( value: any -- value ) [ ] ;
+
+42 keep-any 42 "any annotation accepts fixnum" assert=
+"hello" keep-any "hello" "any annotation accepts string" assert=
