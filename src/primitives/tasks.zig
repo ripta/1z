@@ -116,7 +116,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
         try helpers.checkCancellation(ctx);
 
         if (scope.failed_error) |err_obj| {
-            ctx.thrown_error = err_obj;
+            ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator());
             return error.UserThrown;
         }
 
@@ -154,7 +154,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     }
 
     if (scope.failed_error) |err_obj| {
-        ctx.thrown_error = err_obj;
+        ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator());
         return error.UserThrown;
     }
 }
@@ -345,7 +345,7 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
         },
         .failed => {
             if (main_task.error_obj) |err_obj| {
-                ctx.thrown_error = err_obj;
+                ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator());
             } else {
                 ctx.thrown_error = .{
                     .error_type = "task-error",
@@ -512,7 +512,7 @@ fn nativeAwaitAll(ctx: *Context) anyerror!void {
         switch (task.getStatus()) {
             .failed => {
                 if (task.error_obj) |err_obj| {
-                    ctx.thrown_error = err_obj;
+                    ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator());
                 } else {
                     ctx.thrown_error = .{
                         .error_type = "task-error",
@@ -564,7 +564,7 @@ fn handleAwaitResult(ctx: *Context, task: *Task) anyerror!void {
         },
         .failed => {
             if (task.error_obj) |err_obj| {
-                ctx.thrown_error = err_obj;
+                ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator());
             } else {
                 ctx.thrown_error = .{
                     .error_type = "task-error",

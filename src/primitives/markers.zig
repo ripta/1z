@@ -258,7 +258,7 @@ fn nativeWordMarkers(ctx: *Context) anyerror!void {
             ctx.error_details.append(ctx.allocator, .{
                 .error_type = "type-mismatch",
                 .message = msg,
-                .source = ctx.current_source,
+                .source = ctx.ownedCurrentSource(),
                 .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
                 .word_name = "word-markers",
             }) catch {};
@@ -280,7 +280,7 @@ fn nativeWordMarkers(ctx: *Context) anyerror!void {
         ctx.error_details.append(ctx.allocator, .{
             .error_type = "word-not-found",
             .message = msg,
-            .source = ctx.current_source,
+            .source = ctx.ownedCurrentSource(),
             .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
             .word_name = "word-markers",
         }) catch {};
@@ -313,7 +313,7 @@ fn nativeIsNative(ctx: *Context) anyerror!void {
             ctx.error_details.append(ctx.allocator, .{
                 .error_type = "type-mismatch",
                 .message = msg,
-                .source = ctx.current_source,
+                .source = ctx.ownedCurrentSource(),
                 .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
                 .word_name = "native?",
             }) catch {};
@@ -335,7 +335,7 @@ fn nativeIsNative(ctx: *Context) anyerror!void {
         ctx.error_details.append(ctx.allocator, .{
             .error_type = "word-not-found",
             .message = msg,
-            .source = ctx.current_source,
+            .source = ctx.ownedCurrentSource(),
             .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
             .word_name = "native?",
         }) catch {};

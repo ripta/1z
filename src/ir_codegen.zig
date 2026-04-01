@@ -30,6 +30,7 @@ const sequences_mod = @import("primitives/sequences.zig");
 const control = @import("primitives/control.zig");
 const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
 const markers_mod = @import("primitives/markers.zig");
+const WordDefinition = @import("dictionary.zig").WordDefinition;
 
 pub const IrCodegenError = error{
     NotCompilable,
@@ -47,6 +48,18 @@ pub const CompiledWord = struct {
     code_ptr: *const anyopaque,
     jit_buf: JitBuffer,
 };
+
+fn shouldSkipTypeAnnotationValidation(word: WordDefinition) bool {
+    const has_generic = for (word.markers) |mk| {
+        if (markers_mod.isGenericMarker(mk)) break true;
+    } else false;
+    if (!has_generic) return false;
+
+    return switch (word.action) {
+        .compound => |instrs| instrs.len == 0,
+        .native => false,
+    };
+}
 
 /// Description of a word to be compiled for AOT C emission.
 pub const AotWordDesc = struct {
@@ -3725,10 +3738,12 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize) callconv(.c) i3
             ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
             return 2;
         };
-        ctx.validateTypeAnnotations(&effect) catch |err| {
-            ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
-            return 2;
-        };
+        if (!shouldSkipTypeAnnotationValidation(word)) {
+            ctx.validateTypeAnnotations(&effect) catch |err| {
+                ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                return 2;
+            };
+        }
     }
 
     if (word.action == .compound) {

@@ -37,20 +37,24 @@ pub fn taskEntryPoint() callconv(.c) void {
     pending_entry_task = null;
 
     task.ctx.executeQuotation(task.quotation) catch {
-        if (task.ctx.thrown_error) |thrown| {
+        if (task.ctx.error_details.items.len > 0) {
+            const detail = task.ctx.error_details.items[0];
+            task.error_obj = .{
+                .error_type = detail.error_type,
+                .message = detail.message,
+            };
+            if (task.cancellation_phase != .none and std.mem.eql(u8, detail.error_type, "task-cancelled")) {
+                task.setStatus(.cancelled);
+            } else {
+                task.setStatus(.failed);
+            }
+        } else if (task.ctx.thrown_error) |thrown| {
             task.error_obj = thrown;
             if (task.cancellation_phase != .none and std.mem.eql(u8, thrown.error_type, "task-cancelled")) {
                 task.setStatus(.cancelled);
             } else {
                 task.setStatus(.failed);
             }
-        } else if (task.ctx.error_details.items.len > 0) {
-            const detail = task.ctx.error_details.items[0];
-            task.error_obj = .{
-                .error_type = detail.error_type,
-                .message = detail.message,
-            };
-            task.setStatus(.failed);
         } else {
             task.setStatus(.failed);
         }

@@ -80,6 +80,18 @@ pub const ParameterFrame = std.StringHashMapUnmanaged(Value);
 pub const LocalFrame = std.StringHashMapUnmanaged(WordDefinition);
 const WordDefinition = @import("dictionary.zig").WordDefinition;
 
+fn shouldSkipTypeAnnotationValidation(word: WordDefinition) bool {
+    const has_generic = for (word.markers) |mk| {
+        if (markers_mod.isGenericMarker(mk)) break true;
+    } else false;
+    if (!has_generic) return false;
+
+    return switch (word.action) {
+        .compound => |instrs| instrs.len == 0,
+        .native => false,
+    };
+}
+
 /// PragmaRegistration holds metadata for a registered pragma key.
 /// If both validators are null, the pragma accepts only boolean values.
 /// If validator is a quotation, it is called with the value on the stack
@@ -772,6 +784,10 @@ pub const Context = struct {
         self.call_stack.clearRetainingCapacity();
         self.pending_error_message = null;
         self.pending_error_hint = null;
+    }
+
+    pub fn ownedCurrentSource(self: *Context) []const u8 {
+        return self.arena.allocator().dupe(u8, self.current_source) catch self.current_source;
     }
 
     /// Get the current binding for a parameter by name.
@@ -2757,7 +2773,7 @@ pub const Context = struct {
                 self.error_details.append(self.allocator, .{
                     .error_type = "stack-effect-mismatch",
                     .message = msg_copy,
-                    .source = self.current_source,
+                    .source = self.ownedCurrentSource(),
                     .line = 0,
                     .word_name = param_name,
                 }) catch {};
@@ -2796,7 +2812,7 @@ pub const Context = struct {
                 self.error_details.append(self.allocator, .{
                     .error_type = "stack-effect-mismatch",
                     .message = msg_copy,
-                    .source = self.current_source,
+                    .source = self.ownedCurrentSource(),
                     .line = 0,
                     .word_name = param_name,
                 }) catch {};
@@ -2819,7 +2835,7 @@ pub const Context = struct {
                 self.error_details.append(self.allocator, .{
                     .error_type = "stack-effect-mismatch",
                     .message = msg_copy,
-                    .source = self.current_source,
+                    .source = self.ownedCurrentSource(),
                     .line = 0,
                     .word_name = param_name,
                 }) catch {};
@@ -2971,7 +2987,9 @@ pub const Context = struct {
         // instead of the generic "user-thrown" Zig error name.
         const error_type: []const u8 = blk: {
             if (err == error.UserThrown) {
-                if (self.thrown_error) |thrown| break :blk thrown.error_type;
+                if (self.thrown_error) |thrown| {
+                    break :blk self.arena.allocator().dupe(u8, thrown.error_type) catch thrown.error_type;
+                }
             }
             var kebab_buf: [128]u8 = undefined;
             const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
@@ -2980,7 +2998,9 @@ pub const Context = struct {
 
         const thrown_msg: ?[]const u8 = blk: {
             if (err == error.UserThrown) {
-                if (self.thrown_error) |thrown| break :blk thrown.message;
+                if (self.thrown_error) |thrown| {
+                    break :blk self.arena.allocator().dupe(u8, thrown.message) catch thrown.message;
+                }
             }
             break :blk null;
         };
@@ -3021,7 +3041,7 @@ pub const Context = struct {
             self.error_details.append(self.allocator, .{
                 .error_type = error_type,
                 .message = message,
-                .source = self.current_source,
+                .source = self.ownedCurrentSource(),
                 .line = frame.line,
                 .word_name = frame.word_name,
                 .stack_effect_str = se_str,
@@ -3067,7 +3087,7 @@ pub const Context = struct {
         self.error_details.append(self.allocator, .{
             .error_type = "stack-effect-mismatch",
             .message = msg_copy,
-            .source = self.current_source,
+            .source = self.ownedCurrentSource(),
             .line = line,
             .word_name = word_name,
         }) catch {};
@@ -3348,10 +3368,12 @@ pub const Context = struct {
                                     self.pushCallFrame(name, instr.line, instr.column);
                                     return self.wordErrorCleanup(name, err);
                                 };
-                                self.validateTypeAnnotations(&effect) catch |err| {
-                                    self.pushCallFrame(name, instr.line, instr.column);
-                                    return self.wordErrorCleanup(name, err);
-                                };
+                                if (!shouldSkipTypeAnnotationValidation(word)) {
+                                    self.validateTypeAnnotations(&effect) catch |err| {
+                                        self.pushCallFrame(name, instr.line, instr.column);
+                                        return self.wordErrorCleanup(name, err);
+                                    };
+                                }
                             }
                             const jit_result = ir_codegen.executeCompiled(self, wid);
                             if (self.trace.trace_jit) {
@@ -3382,8 +3404,10 @@ pub const Context = struct {
                         if (word.stack_effect) |effect| {
                             self.validateParameterEffects(&effect) catch |err|
                                 return self.wordErrorCleanup(name, err);
-                            self.validateTypeAnnotations(&effect) catch |err|
-                                return self.wordErrorCleanup(name, err);
+                            if (!shouldSkipTypeAnnotationValidation(word)) {
+                                self.validateTypeAnnotations(&effect) catch |err|
+                                    return self.wordErrorCleanup(name, err);
+                            }
                         }
 
                         if (word.action == .compound) {
@@ -3563,7 +3587,7 @@ pub const Context = struct {
         self.error_details.append(self.allocator, .{
             .error_type = "stack-effect-mismatch",
             .message = msg_copy,
-            .source = self.current_source,
+            .source = self.ownedCurrentSource(),
             .line = line,
             .word_name = "<quotation>",
         }) catch {};

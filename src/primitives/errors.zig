@@ -285,8 +285,8 @@ fn nativeMakeError(ctx: *Context) anyerror!void {
     };
 
     const error_obj = ErrorObject{
-        .error_type = error_type,
-        .message = message,
+        .error_type = try ctx.quotationAllocator().dupe(u8, error_type),
+        .message = try ctx.quotationAllocator().dupe(u8, message),
         .data = data,
     };
     try ctx.stack.push(.{ .error_value = error_obj });

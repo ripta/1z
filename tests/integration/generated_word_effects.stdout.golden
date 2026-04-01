@@ -7,9 +7,9 @@ Stack: [ ]
 Stack: [ stack-effect-info{ inputs: { } outputs: { stack-effect-param{ name: "type" row-variable?: f nested-effect: f type-annotation: f } } } ]
 PASS: struct type word outputs type
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "point" row-variable?: f nested-effect: f type-annotation: f } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "point" row-variable?: f nested-effect: f type-annotation: <type:point> } } } ]
 PASS: make-point inputs are field names
-Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "point" row-variable?: f nested-effect: f type-annotation: f } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "point" row-variable?: f nested-effect: f type-annotation: <type:point> } } } ]
 PASS: make-point output is type name
 Stack: [ ]
 Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "hash" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "point" row-variable?: f nested-effect: f type-annotation: f } } } ]
@@ -32,10 +32,14 @@ PASS: point? input is val
 Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "val" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "?" row-variable?: f nested-effect: f type-annotation: f } } } ]
 PASS: point? output is ?
 Stack: [ ]
-Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "value" row-variable?: f nested-effect: f type-annotation: f } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:point> } } outputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } } ]
 PASS: x>> input is instance
-Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "value" row-variable?: f nested-effect: f type-annotation: f } } } ]
-PASS: x>> output is value
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:point> } } outputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } } ]
+PASS: x>> input type is point
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:point> } } outputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } } ]
+PASS: x>> output is field name
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:point> } } outputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } } ]
+PASS: x>> output type annotation absent for untyped field
 Stack: [ ]
 === virtual simple generated word effects ===
 Stack: [ ]

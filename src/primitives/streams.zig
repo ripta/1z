@@ -30,6 +30,16 @@ const mapSeekError = error_mapping.mapSeekError;
 const mapGetPosError = error_mapping.mapGetPosError;
 const ensureStreamOpen = error_mapping.ensureStreamOpen;
 
+fn mapStreamReadError(err: anyerror) anyerror {
+    if (err == error.UserThrown) return err;
+    return mapFileReadError(err);
+}
+
+fn mapStreamWriteError(err: anyerror) anyerror {
+    if (err == error.UserThrown) return err;
+    return mapFileWriteError(err);
+}
+
 pub const primitives = [_]Primitive{
     .{ .name = "stdin", .stack_effect = "-- stream", .doc = "Push standard input stream.", .func = nativeStdin, .capability = .io },
     .{ .name = "stdout", .stack_effect = "-- stream", .doc = "Push standard output stream.", .func = nativeStdout, .capability = .io },
@@ -284,7 +294,7 @@ pub fn nativeStreamWrite(ctx: *Context) anyerror!void {
     };
 
     const written = stream.vtable.write(stream, bytes, ctx) catch |err| {
-        return mapFileWriteError(err);
+        return mapStreamWriteError(err);
     };
 
     try ctx.stack.push(.{ .fixnum = @intCast(written) });
@@ -317,7 +327,7 @@ pub fn nativeStreamRead(ctx: *Context) anyerror!void {
     defer alloc.free(buffer);
 
     const bytes_read = stream.vtable.read(stream, buffer, ctx) catch |err| {
-        return mapFileReadError(err);
+        return mapStreamReadError(err);
     };
 
     const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
@@ -342,7 +352,7 @@ pub fn nativeStreamReadLine(ctx: *Context) anyerror!void {
     while (true) {
         var byte_buf: [1]u8 = undefined;
         const bytes_read = stream.vtable.read(stream, &byte_buf, ctx) catch |err| {
-            return mapFileReadError(err);
+            return mapStreamReadError(err);
         };
 
         if (bytes_read == 0) {
@@ -365,7 +375,7 @@ pub fn nativeStreamReadLine(ctx: *Context) anyerror!void {
         if (byte == '\r') {
             var peek_buf: [1]u8 = undefined;
             const peek_read = stream.vtable.read(stream, &peek_buf, ctx) catch |err| {
-                return mapFileReadError(err);
+                return mapStreamReadError(err);
             };
             if (peek_read > 0 and peek_buf[0] == '\n') {
                 break;
@@ -402,7 +412,7 @@ pub fn nativeStreamReadAll(ctx: *Context) anyerror!void {
     var buffer: [4096]u8 = undefined;
     while (true) {
         const bytes_read = stream.vtable.read(stream, &buffer, ctx) catch |err| {
-            return mapFileReadError(err);
+            return mapStreamReadError(err);
         };
 
         // EOF?

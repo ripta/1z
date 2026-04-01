@@ -1,29 +1,85 @@
 === typed struct descriptor metadata ===
+Stack: [ ]
+Stack: [ ]
 PASS: typed struct fields exposed
+Stack: [ H{ mutable: f exact: f integer: f fields: { "x" "y" } field-types: { <type:fixnum> <type:string> } type: struct-descriptor:: numeric: f } ]
 PASS: typed struct field-types exposed
+Stack: [ H{ mutable: f exact: f integer: f fields: { "x" "y" } field-types: { <type:fixnum> <type:string> } type: struct-descriptor:: numeric: f } ]
+Stack: [ ]
 === typed struct any metadata ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ { <type:any> <type:fixnum> } ]
 PASS: any field uses sentinel type name
+Stack: [ ]
 === typed struct runtime validation ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: typed constructor preserves typed getter output
+Stack: [ ]
+Stack: [ [ "oops" "bad" make-typed-point drop ] ]
 PASS: typed constructor rejects wrong field type
+Stack: [ ]
+Stack: [ [ H{ x: "bad" y: "ok" } >typed-point drop ] ]
 PASS: hash constructor rejects wrong field type
+Stack: [ ]
 === typed mutable setter validation ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ typed-box{ payload: 41 } ]
+Stack: [ typed-box{ payload: 99 } typed-box{ payload: 99 } ]
 PASS: typed setter accepts matching type
+Stack: [ typed-box{ payload: 99 } ]
+Stack: [ ]
+Stack: [ [ 41 make-typed-box "bad" >>payload drop ] ]
 PASS: typed setter rejects wrong field type
+Stack: [ ]
 === typed generated stack effects ===
+Stack: [ ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: <type:string> } } outputs: { stack-effect-param{ name: "typed-point" row-variable?: f nested-effect: f type-annotation: <type:typed-point> } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: <type:string> } } outputs: { stack-effect-param{ name: "typed-point" row-variable?: f nested-effect: f type-annotation: <type:typed-point> } } } { "fixnum" "string" } ]
 PASS: constructor input type annotations preserved
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: <type:string> } } outputs: { stack-effect-param{ name: "typed-point" row-variable?: f nested-effect: f type-annotation: <type:typed-point> } } } ]
+Stack: [ "typed-point" ]
 PASS: constructor output type annotation preserved
+Stack: [ ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:typed-point> } } outputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:typed-point> } } outputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } } } "typed-point" ]
 PASS: getter input type annotation preserved
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:typed-point> } } outputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } } } ]
+Stack: [ "fixnum" ]
 PASS: getter output type annotation preserved
+Stack: [ ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:typed-box> } stack-effect-param{ name: "payload" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } } outputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:typed-box> } } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:typed-box> } stack-effect-param{ name: "payload" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } } outputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:typed-box> } } } { "typed-box" "fixnum" } ]
 PASS: setter input type annotations preserved
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:typed-box> } stack-effect-param{ name: "payload" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } } outputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:typed-box> } } } ]
+Stack: [ "typed-box" ]
 PASS: setter output type annotation preserved
+Stack: [ ]
 === untyped struct remains unchanged ===
+Stack: [ ]
+Stack: [ ]
 PASS: untyped struct omits field-types
+Stack: [ ]
 === mixed typed and untyped fields error ===
+Stack: [ ]
+Stack: [ [ "broken-point: struct{ x: fixnum y } ;" eval-string ] ]
 PASS: mixed typed and untyped struct fields error
+Stack: [ ]
 === typed virtual struct metadata ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ H{ mutable: f exact: f integer: f fields: { "dx" "dy" } field-types: { <type:fixnum> <type:any> } type: struct-descriptor:: numeric: f } ]
 PASS: virtual inner struct fields exposed
+Stack: [ H{ mutable: f exact: f integer: f fields: { "dx" "dy" } field-types: { <type:fixnum> <type:any> } type: struct-descriptor:: numeric: f } ]
 PASS: virtual inner struct field-types exposed
+Stack: [ ]
 === any stack effect annotation skips validation ===
+Stack: [ ]
+Stack: [ ]
 PASS: any annotation accepts fixnum
+Stack: [ ]
 PASS: any annotation accepts string
+Stack: [ ]

@@ -458,10 +458,10 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
         break :blk false;
     } else false;
 
-    if (!is_generic) {
-        const generic_markers = try alloc.alloc(*Marker, 1);
-        generic_markers[0] = @constCast(&markers_mod.generic_marker);
+    const generic_markers = try alloc.alloc(*Marker, 1);
+    generic_markers[0] = @constCast(&markers_mod.generic_marker);
 
+    if (!is_generic) {
         try ctx.defineWord(name, .{
             .name = name,
             .stack_effect = try buildGetterEffect(alloc, struct_type, field_index),
@@ -501,10 +501,10 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
         break :blk false;
     } else false;
 
-    if (!is_generic) {
-        const generic_markers = try alloc.alloc(*Marker, 1);
-        generic_markers[0] = @constCast(&markers_mod.generic_marker);
+    const generic_markers = try alloc.alloc(*Marker, 1);
+    generic_markers[0] = @constCast(&markers_mod.generic_marker);
 
+    if (!is_generic) {
         try ctx.defineWord(name, .{
             .name = name,
             .stack_effect = try buildSetterEffect(alloc, struct_type, field_index),

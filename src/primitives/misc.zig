@@ -169,7 +169,7 @@ fn nativeResolveLoadPath(ctx: *Context) anyerror!void {
         ctx.error_details.append(ctx.allocator, .{
             .error_type = "file-not-found",
             .message = msg,
-            .source = ctx.current_source,
+            .source = ctx.ownedCurrentSource(),
             .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
             .word_name = "resolve-load-path",
         }) catch {};
@@ -190,7 +190,7 @@ fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []const
         ctx.error_details.append(ctx.allocator, .{
             .error_type = "file-not-found",
             .message = msg,
-            .source = ctx.current_source,
+            .source = ctx.ownedCurrentSource(),
             .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
             .word_name = "load",
         }) catch {};
@@ -346,7 +346,7 @@ fn addImportError(ctx: *Context, error_type: []const u8, message: []const u8) vo
     ctx.error_details.append(ctx.allocator, .{
         .error_type = error_type,
         .message = message,
-        .source = ctx.current_source,
+        .source = ctx.ownedCurrentSource(),
         .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
         .word_name = "import",
     }) catch {};
@@ -433,7 +433,7 @@ fn nativeExport(ctx: *Context) anyerror!void {
         ctx.error_details.append(ctx.allocator, .{
             .error_type = "key-not-found",
             .message = msg,
-            .source = ctx.current_source,
+            .source = ctx.ownedCurrentSource(),
             .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
             .word_name = "export",
         }) catch {};
@@ -884,7 +884,7 @@ fn nativeLoadFile(ctx: *Context) anyerror!void {
         ctx.error_details.append(ctx.allocator, .{
             .error_type = "file-not-found",
             .message = msg,
-            .source = ctx.current_source,
+            .source = ctx.ownedCurrentSource(),
             .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
             .word_name = "load-file",
         }) catch {};

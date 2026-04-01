@@ -36,7 +36,9 @@ outputs>> [ name>> ] #map #collect { "?" } "point? output is ?" assert=
 
 x>>: >word-info stack-effect>>
 dup inputs>> [ name>> ] #map #collect { "instance" } "x>> input is instance" assert=
-outputs>> [ name>> ] #map #collect { "value" } "x>> output is value" assert=
+dup inputs>> [ type-annotation>> native.type-name ] #map #collect { "point" } "x>> input type is point" assert=
+dup outputs>> [ name>> ] #map #collect { "x" } "x>> output is field name" assert=
+outputs>> 0 #nth type-annotation>> f "x>> output type annotation absent for untyped field" assert=
 
 \ -- virtual (simple) --
 
