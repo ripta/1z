@@ -88,7 +88,7 @@ const WordDefinition = @import("dictionary.zig").WordDefinition;
 /// Execute a parse-time word during parsing:
 ///
 /// 1. Find trailing `push_literal` instructions after the last `call_word` barrier
-/// 2. Push only those trailing literals onto the data stack
+/// 2. Push trailing literals onto the data stack
 /// 3. Keep everything before the trail, including call_words and their operands, untouched
 /// 4. Run the parse-time word
 /// 5. Capture all values above the pre-depth stack as `push_literal` instructions
@@ -116,9 +116,26 @@ fn executeParseTimeWord(
         }
     }
 
-    // 2. Push only those trailing literals onto the data stack
+    // 2. Push trailing literals onto the data stack, saving doc_strings
+    //    separately. Doc-string values are definition metadata that parse-time
+    //    words should not see on the stack.
+    //
+    // TODO(ripta): Supports up to 8 trailing doc_strings, which should be
+    //              plenty for most use cases but is an arbitrary limit.
+    var saved_doc_instrs: [8]Instruction = undefined;
+    var saved_doc_count: usize = 0;
+    var pushed_count: usize = 0;
     for (instructions.items[tail_start..]) |instr| {
-        c.stack.push(instr.op.push_literal) catch return ParseError.OutOfMemory;
+        switch (instr.op.push_literal) {
+            .doc_string => {
+                saved_doc_instrs[saved_doc_count] = instr;
+                saved_doc_count += 1;
+            },
+            else => {
+                c.stack.push(instr.op.push_literal) catch return ParseError.OutOfMemory;
+                pushed_count += 1;
+            },
+        }
     }
 
     // 3. Keep everything before the trail, including call_words and their operands, untouched
@@ -147,6 +164,23 @@ fn executeParseTimeWord(
         }
 
         std.mem.reverse(Instruction, instructions.items[base_idx..]);
+
+        // Reïnsert saved doc_string instructions after the original
+        // trailing literals, e.g., the name symbol, but before the
+        // parse-time word's results: they end up between the name
+        // and the definition value on the stack for `;` to collect.
+        //
+        // TODO(ripta): Hacky
+        if (saved_doc_count > 0) {
+            const insert_at = base_idx + @min(pushed_count, num_results);
+            for (saved_doc_instrs[0..saved_doc_count]) |doc_instr| {
+                instructions.insert(allocator, insert_at, doc_instr) catch return ParseError.OutOfMemory;
+            }
+        }
+    } else if (saved_doc_count > 0) {
+        for (saved_doc_instrs[0..saved_doc_count]) |doc_instr| {
+            instructions.append(allocator, doc_instr) catch return ParseError.OutOfMemory;
+        }
     }
 }
 
