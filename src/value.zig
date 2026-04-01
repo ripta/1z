@@ -342,6 +342,7 @@ pub const Value = union(enum) {
     stack_effect: StackEffect,
     error_value: ErrorObject,
     task: *Task,
+    doc_string: []const u8,
 
     pub fn write(self: Value, writer: anytype) anyerror!void {
         switch (self) {
@@ -473,6 +474,7 @@ pub const Value = union(enum) {
                     });
                 }
             },
+            .doc_string => |s| try writer.print("<doc-string \"{s}\">", .{s}),
         }
     }
 
@@ -586,6 +588,7 @@ pub const Value = union(enum) {
             .stack_effect => |a| a.eql(other.stack_effect),
             .error_value => |a| a.eql(other.error_value),
             .task => |a| a == other.task,
+            .doc_string => |a| std.mem.eql(u8, a, other.doc_string),
         };
     }
 
@@ -741,6 +744,7 @@ pub const Value = union(enum) {
                 const ptr_val = @intFromPtr(t);
                 hasher.update(std.mem.asBytes(&ptr_val));
             },
+            .doc_string => |s| hasher.update(s),
         }
 
         return hasher.final();

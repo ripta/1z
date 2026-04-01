@@ -643,6 +643,8 @@ fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
         .stack_effect => |effect| .{ .stack_effect = try deepCopyStackEffect(effect, alloc) },
         .error_value => |err| .{ .error_value = try deepCopyErrorObject(err, alloc) },
 
+        .doc_string => |s| .{ .doc_string = try alloc.dupe(u8, s) },
+
         // NOTE(ripta): Reference types not owned by the task arena so it's safe to share without copying
         .stream, .parameter, .module, .marker, .struct_type, .benchmark_report, .task => val,
     };

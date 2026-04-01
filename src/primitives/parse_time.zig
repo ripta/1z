@@ -41,7 +41,7 @@ pub fn nativeParseTokensUntil(ctx: *Context) anyerror!void {
     defer tokens.deinit(alloc);
 
     while (tokenizer.next()) |tok| {
-        if (tok.kind == .comment or tok.kind == .newline) continue;
+        if (tok.kind == .comment or tok.kind == .doc_comment or tok.kind == .newline) continue;
 
         const token = tok.text;
         if (std.mem.eql(u8, token, delimiter)) {

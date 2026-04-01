@@ -26,7 +26,7 @@ pub const FormatterToken = struct {
     };
 
     fn classify(tok: Token) FormatterToken {
-        if (tok.kind == .comment) {
+        if (tok.kind == .comment or tok.kind == .doc_comment) {
             return .{ .kind = .comment, .text = tok.text };
         }
         if (tok.kind == .newline) {

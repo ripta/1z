@@ -26,7 +26,7 @@ fn nativeParseStructFields(ctx: *Context) anyerror!void {
     var fields = std.ArrayListUnmanaged(Value){};
 
     while (tokenizer.next()) |tok| {
-        if (tok.kind == .comment or tok.kind == .newline) continue;
+        if (tok.kind == .comment or tok.kind == .doc_comment or tok.kind == .newline) continue;
 
         const token = tok.text;
         if (std.mem.eql(u8, token, "}")) {

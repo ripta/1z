@@ -24,7 +24,7 @@ fn nativeParseVirtualInner(ctx: *Context) anyerror!void {
     var inner_type: ?[]const u8 = null;
 
     while (tokenizer.next()) |tok| {
-        if (tok.kind == .comment or tok.kind == .newline) continue;
+        if (tok.kind == .comment or tok.kind == .doc_comment or tok.kind == .newline) continue;
 
         const token = tok.text;
         if (std.mem.eql(u8, token, "}")) {

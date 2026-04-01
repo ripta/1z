@@ -31,7 +31,7 @@ pub fn nativeParseQuotation(ctx: *Context) anyerror!void {
 
     // Skip whitespace/comments until we find '['
     while (tokenizer.next()) |tok| {
-        if (tok.kind == .comment or tok.kind == .newline) continue;
+        if (tok.kind == .comment or tok.kind == .doc_comment or tok.kind == .newline) continue;
 
         if (!std.mem.eql(u8, tok.text, "[")) {
             // Expected '[' but got something else
@@ -53,7 +53,7 @@ pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
     const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
     const alloc = ctx.quotationAllocator();
     while (tokenizer.next()) |tok| {
-        if (tok.kind == .comment or tok.kind == .newline) continue;
+        if (tok.kind == .comment or tok.kind == .doc_comment or tok.kind == .newline) continue;
 
         const token = tok.text;
 
