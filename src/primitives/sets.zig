@@ -6,12 +6,12 @@ const Set = value_mod.Set;
 const Primitive = @import("types.zig").Primitive;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "@in?", .stack_effect = "set value -- ?", .func = nativeAtIn },
-    .{ .name = "@adjoin", .stack_effect = "set value -- set'", .func = nativeAtAdjoin },
-    .{ .name = "@remove", .stack_effect = "set value -- set'", .func = nativeAtRemove },
-    .{ .name = "@union", .stack_effect = "set1 set2 -- set'", .func = nativeAtUnion },
-    .{ .name = "@intersection", .stack_effect = "set1 set2 -- set'", .func = nativeAtIntersection },
-    .{ .name = "@difference", .stack_effect = "set1 set2 -- set'", .func = nativeAtDifference },
+    .{ .name = "@in?", .stack_effect = "set value -- ?", .doc = "Check if value is in the set.", .func = nativeAtIn },
+    .{ .name = "@adjoin", .stack_effect = "set value -- set'", .doc = "Add value to set, returning new set.", .func = nativeAtAdjoin },
+    .{ .name = "@remove", .stack_effect = "set value -- set'", .doc = "Remove value from set, returning new set.", .func = nativeAtRemove },
+    .{ .name = "@union", .stack_effect = "set1 set2 -- set'", .doc = "Return union of two sets.", .func = nativeAtUnion },
+    .{ .name = "@intersection", .stack_effect = "set1 set2 -- set'", .doc = "Return intersection of two sets.", .func = nativeAtIntersection },
+    .{ .name = "@difference", .stack_effect = "set1 set2 -- set'", .doc = "Return elements in set1 but not in set2.", .func = nativeAtDifference },
 };
 
 /// @in? ( set value -- ? ) - Check if value is in the set

@@ -1,0 +1,10 @@
+\ Verify doc-comments on parse-time prelude words.
+
+H{: help
+struct{: help
+virtual{: help
+method{: help
+parameter: help
+use: help
+output-stream: help
+input-stream: help

@@ -16,15 +16,15 @@ const popSymbol = helpers.popSymbol;
 const popString = helpers.popString;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "help", .stack_effect = "name --", .func = nativeHelp },
-    .{ .name = "load", .stack_effect = "filename -- module", .func = nativeLoad },
-    .{ .name = "import", .stack_effect = "module --", .func = nativeImport },
-    .{ .name = "1array", .stack_effect = "elem -- array", .func = native1Array },
-    .{ .name = "command-line-args", .stack_effect = "-- args", .func = nativeCommandLineArgs },
-    .{ .name = "sys-exit", .stack_effect = "code --", .func = nativeSysExit },
-    .{ .name = "add-load-path", .stack_effect = "path --", .func = nativeAddLoadPath },
-    .{ .name = "words", .stack_effect = "--", .func = nativeWords },
-    .{ .name = "(trampoline)", .stack_effect = "*unsafe-fn-ptr* --", .func = nativeTrampoline },
+    .{ .name = "help", .stack_effect = "name --", .doc = "Display help for a word.", .func = nativeHelp },
+    .{ .name = "load", .stack_effect = "filename -- module", .doc = "Load a 1z source file and return a module with its definitions.", .func = nativeLoad },
+    .{ .name = "import", .stack_effect = "module --", .doc = "Bring module words into the current scope.", .func = nativeImport },
+    .{ .name = "1array", .stack_effect = "elem -- array", .doc = "Wrap element in a single-element array.", .func = native1Array },
+    .{ .name = "command-line-args", .stack_effect = "-- args", .doc = "Push program arguments as an array of strings.", .func = nativeCommandLineArgs },
+    .{ .name = "sys-exit", .stack_effect = "code --", .doc = "Exit the process with the given exit code.", .func = nativeSysExit },
+    .{ .name = "add-load-path", .stack_effect = "path --", .doc = "Add a directory to the load path search list.", .func = nativeAddLoadPath },
+    .{ .name = "words", .stack_effect = "--", .doc = "Print all defined words in dictionary.", .func = nativeWords },
+    .{ .name = "(trampoline)", .stack_effect = "*unsafe-fn-ptr* --", .doc = "Call a native function via pointer. Internal use only.", .func = nativeTrampoline },
 };
 
 /// help ( symbol -- ) - Display help for a word
@@ -59,6 +59,12 @@ fn nativeHelp(ctx: *Context) anyerror!void {
         }
 
         try writer.writeAll("\n");
+
+        if (word.doc) |doc| {
+            try writer.writeAll("\n");
+            try writer.print("{s}\n", .{doc});
+        }
+
         const has_generic = for (word.markers) |mk| {
             if (markers_mod.isGenericMarker(mk)) break true;
         } else false;

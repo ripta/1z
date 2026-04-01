@@ -17,14 +17,14 @@ const popString = helpers.popString;
 const popInteger = helpers.popInteger;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "curry", .stack_effect = "x quot -- quot'", .func = nativeCurry },
-    .{ .name = "compose", .stack_effect = "quot1 quot2 -- quot'", .func = nativeCompose },
-    .{ .name = "benchmark", .stack_effect = "quot -- hash", .func = nativeBenchmark },
-    .{ .name = "make-benchmark-report", .stack_effect = "-- report", .func = nativeMakeBenchmarkReport },
-    .{ .name = "benchmark-run", .stack_effect = "report label quot -- report", .func = nativeBenchmarkRun },
-    .{ .name = "benchmark-n", .stack_effect = "report label n quot -- report", .func = nativeBenchmarkN },
-    .{ .name = "benchmark-auto", .stack_effect = "report label quot -- report", .func = nativeBenchmarkAuto },
-    .{ .name = "print-benchmark-report", .func = nativePrintBenchmarkReport },
+    .{ .name = "curry", .stack_effect = "x quot -- quot'", .doc = "Partially apply a value to a quotation.", .func = nativeCurry },
+    .{ .name = "compose", .stack_effect = "quot1 quot2 -- quot'", .doc = "Concatenate two quotations into one.", .func = nativeCompose },
+    .{ .name = "benchmark", .stack_effect = "quot -- hash", .doc = "Execute quotation once and return timing stats as a hash.", .func = nativeBenchmark },
+    .{ .name = "make-benchmark-report", .stack_effect = "-- report", .doc = "Create a benchmark report collector.", .func = nativeMakeBenchmarkReport },
+    .{ .name = "benchmark-run", .stack_effect = "report label quot -- report", .doc = "Benchmark a quotation once and add to report.", .func = nativeBenchmarkRun },
+    .{ .name = "benchmark-n", .stack_effect = "report label n quot -- report", .doc = "Benchmark a quotation N times and add to report.", .func = nativeBenchmarkN },
+    .{ .name = "benchmark-auto", .stack_effect = "report label quot -- report", .doc = "Auto-calibrate iterations targeting ~100ms and add to report.", .func = nativeBenchmarkAuto },
+    .{ .name = "print-benchmark-report", .doc = "Print benchmark results as a formatted table.", .func = nativePrintBenchmarkReport },
 };
 
 /// curry ( x quot -- quot' ) - Partially apply a value to a quotation

@@ -88,7 +88,7 @@ const WordDefinition = @import("dictionary.zig").WordDefinition;
 /// Execute a parse-time word during parsing:
 ///
 /// 1. Find trailing `push_literal` instructions after the last `call_word` barrier
-/// 2. Push only those trailing literals onto the data stack
+/// 2. Push trailing literals onto the data stack
 /// 3. Keep everything before the trail, including call_words and their operands, untouched
 /// 4. Run the parse-time word
 /// 5. Capture all values above the pre-depth stack as `push_literal` instructions
@@ -116,9 +116,26 @@ fn executeParseTimeWord(
         }
     }
 
-    // 2. Push only those trailing literals onto the data stack
+    // 2. Push trailing literals onto the data stack, saving doc_strings
+    //    separately. Doc-string values are definition metadata that parse-time
+    //    words should not see on the stack.
+    //
+    // TODO(ripta): Supports up to 8 trailing doc_strings, which should be
+    //              plenty for most use cases but is an arbitrary limit.
+    var saved_doc_instrs: [8]Instruction = undefined;
+    var saved_doc_count: usize = 0;
+    var pushed_count: usize = 0;
     for (instructions.items[tail_start..]) |instr| {
-        c.stack.push(instr.op.push_literal) catch return ParseError.OutOfMemory;
+        switch (instr.op.push_literal) {
+            .doc_string => {
+                saved_doc_instrs[saved_doc_count] = instr;
+                saved_doc_count += 1;
+            },
+            else => {
+                c.stack.push(instr.op.push_literal) catch return ParseError.OutOfMemory;
+                pushed_count += 1;
+            },
+        }
     }
 
     // 3. Keep everything before the trail, including call_words and their operands, untouched
@@ -147,7 +164,53 @@ fn executeParseTimeWord(
         }
 
         std.mem.reverse(Instruction, instructions.items[base_idx..]);
+
+        // Reïnsert saved doc_string instructions after the original
+        // trailing literals, e.g., the name symbol, but before the
+        // parse-time word's results: they end up between the name
+        // and the definition value on the stack for `;` to collect.
+        //
+        // TODO(ripta): Hacky
+        if (saved_doc_count > 0) {
+            const insert_at = base_idx + @min(pushed_count, num_results);
+            for (saved_doc_instrs[0..saved_doc_count]) |doc_instr| {
+                instructions.insert(allocator, insert_at, doc_instr) catch return ParseError.OutOfMemory;
+            }
+        }
+    } else if (saved_doc_count > 0) {
+        for (saved_doc_instrs[0..saved_doc_count]) |doc_instr| {
+            instructions.append(allocator, doc_instr) catch return ParseError.OutOfMemory;
+        }
     }
+}
+
+/// Strip the `\\ ` prefix from a doc-comment token's text.
+/// Returns the documentation content without the leading `\\ `.
+fn stripDocCommentPrefix(text: []const u8) []const u8 {
+    if (text.len <= 2) return "";
+    if (text[2] == ' ' or text[2] == '\t') return text[3..];
+    return text[2..];
+}
+
+/// Join multiple doc-comment lines into a single string separated by newlines.
+fn joinDocLines(allocator: Allocator, lines: []const []const u8) ParseError![]const u8 {
+    if (lines.len == 0) return "";
+    if (lines.len == 1) return allocator.dupe(u8, lines[0]) catch return ParseError.OutOfMemory;
+
+    var total_len: usize = lines.len - 1;
+    for (lines) |line| total_len += line.len;
+
+    const result = allocator.alloc(u8, total_len) catch return ParseError.OutOfMemory;
+    var pos: usize = 0;
+    for (lines, 0..) |line, i| {
+        if (i > 0) {
+            result[pos] = '\n';
+            pos += 1;
+        }
+        @memcpy(result[pos..][0..line.len], line);
+        pos += line.len;
+    }
+    return result;
 }
 
 /// Parse a top-level sequence of instructions. This is the entry point for
@@ -157,7 +220,20 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
     var instructions: std.ArrayListUnmanaged(Instruction) = .{};
     errdefer instructions.deinit(allocator);
 
+    var doc_lines: std.ArrayListUnmanaged([]const u8) = .{};
+    defer doc_lines.deinit(allocator);
+    var doc_first_line: usize = 0;
+
     while (nextToken(tokenizer)) |tok| {
+        if (tok.kind == .doc_comment) {
+            doc_lines.append(allocator, stripDocCommentPrefix(tok.text)) catch return ParseError.OutOfMemory;
+            if (doc_first_line == 0) doc_first_line = tok.line;
+            continue;
+        }
+
+        const pending_doc_line = doc_first_line;
+        const has_pending_docs = doc_lines.items.len > 0;
+
         const token = tok.text;
         const line = tok.line;
         if (std.mem.eql(u8, token, "[")) {
@@ -188,6 +264,12 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
                 if (c.dictionary.get(token)) |word| {
                     if (word.parse_time) {
                         try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line);
+
+                        if (has_pending_docs) {
+                            doc_lines.clearRetainingCapacity();
+                            doc_first_line = 0;
+                        }
+
                         continue;
                     }
                 }
@@ -196,10 +278,20 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
             if (token.len > 1 and token[token.len - 1] == ':') {
                 const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
                 instructions.append(allocator, .{ .op = .{ .push_literal = .{ .symbol = sym_copy } }, .line = line }) catch return ParseError.OutOfMemory;
+
+                if (has_pending_docs) {
+                    const doc_text = try joinDocLines(allocator, doc_lines.items);
+                    instructions.append(allocator, .{ .op = .{ .push_literal = .{ .doc_string = doc_text } }, .line = pending_doc_line }) catch return ParseError.OutOfMemory;
+                }
             } else {
                 const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
                 instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line }) catch return ParseError.OutOfMemory;
             }
+        }
+
+        if (has_pending_docs) {
+            doc_lines.clearRetainingCapacity();
+            doc_first_line = 0;
         }
     }
 
@@ -221,7 +313,20 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
     var is_first_token = true;
     var quotation_effect: ?*const StackEffect = null;
 
+    var doc_lines: std.ArrayListUnmanaged([]const u8) = .{};
+    defer doc_lines.deinit(allocator);
+    var doc_first_line: usize = 0;
+
     while (nextToken(tokenizer)) |tok| {
+        if (tok.kind == .doc_comment) {
+            doc_lines.append(allocator, stripDocCommentPrefix(tok.text)) catch return ParseError.OutOfMemory;
+            if (doc_first_line == 0) doc_first_line = tok.line;
+            continue;
+        }
+
+        const pending_doc_line = doc_first_line;
+        const has_pending_docs = doc_lines.items.len > 0;
+
         const token = tok.text;
         const line = tok.line;
         if (std.mem.eql(u8, token, close_delim)) {
@@ -269,6 +374,11 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
                     if (word.parse_time) {
                         try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line);
                         is_first_token = false;
+
+                        if (has_pending_docs) {
+                            doc_lines.clearRetainingCapacity();
+                            doc_first_line = 0;
+                        }
                         continue;
                     }
                 }
@@ -278,10 +388,20 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
             if (token.len > 1 and token[token.len - 1] == ':') {
                 const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
                 instructions.append(allocator, .{ .op = .{ .push_literal = .{ .symbol = sym_copy } }, .line = line }) catch return ParseError.OutOfMemory;
+
+                if (has_pending_docs) {
+                    const doc_text = try joinDocLines(allocator, doc_lines.items);
+                    instructions.append(allocator, .{ .op = .{ .push_literal = .{ .doc_string = doc_text } }, .line = pending_doc_line }) catch return ParseError.OutOfMemory;
+                }
             } else {
                 const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
                 instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line }) catch return ParseError.OutOfMemory;
             }
+        }
+
+        if (has_pending_docs) {
+            doc_lines.clearRetainingCapacity();
+            doc_first_line = 0;
         }
     }
 
@@ -303,6 +423,8 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer) ParseError!
     var pending_param_name: ?[]const u8 = null;
 
     while (nextToken(tokenizer)) |tok| {
+        if (tok.kind == .doc_comment) continue;
+
         const token = tok.text;
         if (std.mem.eql(u8, token, "(")) {
             // This should be a nested effect for the pending parameter
@@ -404,6 +526,8 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) P
     errdefer values.deinit(allocator);
 
     while (nextToken(tokenizer)) |tok| {
+        if (tok.kind == .doc_comment) continue;
+
         const token = tok.text;
         if (std.mem.eql(u8, token, "{")) {
             const nested = try parseArray(allocator, tokenizer, ctx);
@@ -768,4 +892,115 @@ test "parse-time word preserves call_word barrier ordering" {
     try std.testing.expectEqualStrings("some-word", instrs[1].op.call_word);
     try std.testing.expectEqualStrings("bar", instrs[2].op.push_literal.symbol);
     try std.testing.expectEqualStrings("bar", instrs[3].op.push_literal.symbol);
+}
+
+test "doc-comment before definition emits doc_string after symbol" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("\\\\ Add two numbers.\nfoo: 42");
+    const instrs = try parseTopLevel(arena.allocator(), &tokenizer, null);
+
+    try std.testing.expectEqual(@as(usize, 3), instrs.len);
+    try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("Add two numbers.", instrs[1].op.push_literal.doc_string);
+    try std.testing.expectEqual(@as(i64, 42), instrs[2].op.push_literal.integer);
+}
+
+test "consecutive doc-comments joined with newlines" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("\\\\ line one\n\\\\ line two\nfoo: 1");
+    const instrs = try parseTopLevel(arena.allocator(), &tokenizer, null);
+
+    try std.testing.expectEqual(@as(usize, 3), instrs.len);
+    try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("line one\nline two", instrs[1].op.push_literal.doc_string);
+    try std.testing.expectEqual(@as(i64, 1), instrs[2].op.push_literal.integer);
+}
+
+test "orphaned doc-comment before non-symbol is discarded" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("\\\\ orphaned\n42");
+    const instrs = try parseTopLevel(arena.allocator(), &tokenizer, null);
+
+    try std.testing.expectEqual(@as(usize, 1), instrs.len);
+    try std.testing.expectEqual(@as(i64, 42), instrs[0].op.push_literal.integer);
+}
+
+test "doc-comment inside quotation emits doc_string after symbol" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("\\\\ doc\nbar: 1 ]");
+    const quot = try parseQuotation(arena.allocator(), &tokenizer, null);
+
+    try std.testing.expectEqual(@as(usize, 3), quot.instructions.len);
+    try std.testing.expectEqualStrings("bar", quot.instructions[0].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("doc", quot.instructions[1].op.push_literal.doc_string);
+    try std.testing.expectEqual(@as(i64, 1), quot.instructions[2].op.push_literal.integer);
+}
+
+test "doc-comment does not affect leading stack effect in quotation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("\\\\ orphaned doc\n( n -- n ) dup ]");
+    const quot = try parseQuotation(arena.allocator(), &tokenizer, null);
+
+    try std.testing.expect(quot.effect != null);
+    try std.testing.expectEqual(@as(usize, 1), quot.effect.?.inputs.len);
+    try std.testing.expectEqualStrings("n", quot.effect.?.inputs[0].name);
+
+    try std.testing.expectEqual(@as(usize, 1), quot.instructions.len);
+    try std.testing.expectEqualStrings("dup", quot.instructions[0].op.call_word);
+}
+
+test "doc-comment with definition in quotation preserves leading stack effect" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("( n -- n ) \\\\ doc\nfoo: 1 ]");
+    const quot = try parseQuotation(arena.allocator(), &tokenizer, null);
+
+    try std.testing.expect(quot.effect != null);
+
+    try std.testing.expectEqual(@as(usize, 3), quot.instructions.len);
+    try std.testing.expectEqualStrings("foo", quot.instructions[0].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("doc", quot.instructions[1].op.push_literal.doc_string);
+    try std.testing.expectEqual(@as(i64, 1), quot.instructions[2].op.push_literal.integer);
+}
+
+test "doc-comment line number preserved" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("1\n\\\\ doc\nfoo: 2");
+    const instrs = try parseTopLevel(arena.allocator(), &tokenizer, null);
+
+    try std.testing.expectEqual(@as(usize, 4), instrs.len);
+    try std.testing.expectEqualStrings("doc", instrs[2].op.push_literal.doc_string);
+    try std.testing.expectEqual(@as(usize, 2), instrs[2].line);
+}
+
+test "stripDocCommentPrefix" {
+    try std.testing.expectEqualStrings("", stripDocCommentPrefix("\\\\"));
+    try std.testing.expectEqualStrings("hello", stripDocCommentPrefix("\\\\ hello"));
+    try std.testing.expectEqualStrings("hello", stripDocCommentPrefix("\\\\\thello"));
+    try std.testing.expectEqualStrings("", stripDocCommentPrefix("\\\\ "));
+}
+
+test "doc-comment in array is skipped" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("1 \\\\ comment inside array\n2 }");
+    const arr = try parseArray(arena.allocator(), &tokenizer, null);
+
+    try std.testing.expectEqual(@as(usize, 2), arr.len);
+    try std.testing.expectEqual(@as(i64, 1), arr[0].integer);
+    try std.testing.expectEqual(@as(i64, 2), arr[1].integer);
 }

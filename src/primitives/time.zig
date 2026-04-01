@@ -8,9 +8,9 @@ const setErrorContext = helpers.setErrorContext;
 const Primitive = @import("types.zig").Primitive;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "clock-realtime", .stack_effect = "-- sec nsec", .func = nativeClockRealtime },
-    .{ .name = "clock-monotonic", .stack_effect = "-- sec nsec", .func = nativeClockMonotonic },
-    .{ .name = "tz-decompose", .stack_effect = "sec tz-name -- year month-num day hour min sec wday yday gmtoff tz-abbrev", .func = nativeTzDecompose },
+    .{ .name = "clock-realtime", .stack_effect = "-- sec nsec", .doc = "Current wall-clock time (UTC) since Unix epoch.", .func = nativeClockRealtime },
+    .{ .name = "clock-monotonic", .stack_effect = "-- sec nsec", .doc = "Monotonic clock for measuring durations.", .func = nativeClockMonotonic },
+    .{ .name = "tz-decompose", .stack_effect = "sec tz-name -- year month-num day hour min sec wday yday gmtoff tz-abbrev", .doc = "Decompose epoch seconds in a named timezone via libc localtime_r.", .func = nativeTzDecompose },
 };
 
 /// clock-realtime ( -- sec nsec ) - Current wall-clock time (UTC) since Unix epoch

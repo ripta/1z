@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const Token = @import("tokenizer.zig").Token;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const Instruction = @import("value.zig").Instruction;
 const parser = @import("parser.zig");
@@ -63,6 +64,10 @@ pub const StatementProcessor = struct {
             return .{ .parse_error = err };
         };
 
+        if (instrs.len == 0 and self.stmt_len > 0 and bufferHasDocComment(self.stmt_buf[0..self.stmt_len])) {
+            return .needs_more_input;
+        }
+
         return .{ .complete = instrs };
     }
 
@@ -97,6 +102,14 @@ pub const StatementProcessor = struct {
         return .{ .complete = instrs };
     }
 };
+
+fn bufferHasDocComment(buf: []const u8) bool {
+    var tokenizer = Tokenizer.init(buf);
+    while (tokenizer.next()) |tok| {
+        if (tok.kind == .doc_comment) return true;
+    }
+    return false;
+}
 
 // =============================================================================
 // Tests

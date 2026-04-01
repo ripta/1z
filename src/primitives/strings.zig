@@ -6,12 +6,12 @@ const ByteArray = value_mod.ByteArray;
 const Primitive = @import("types.zig").Primitive;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "to-string", .stack_effect = "value -- string", .func = nativeToString },
-    .{ .name = ">string", .stack_effect = "value -- string", .func = nativeAsString },
-    .{ .name = ">bytes", .stack_effect = "string -- byte-array", .func = nativeToBytes },
-    .{ .name = "bytes>", .stack_effect = "byte-array -- string", .func = nativeBytesToString },
-    .{ .name = "uppercase", .stack_effect = "str -- str", .func = nativeUppercase },
-    .{ .name = "lowercase", .stack_effect = "str -- str", .func = nativeLowercase },
+    .{ .name = "to-string", .stack_effect = "value -- string", .doc = "Convert any value to its string representation, including quotes for strings.", .func = nativeToString },
+    .{ .name = ">string", .stack_effect = "value -- string", .doc = "Convert value to string, strings pass through unquoted.", .func = nativeAsString },
+    .{ .name = ">bytes", .stack_effect = "string -- byte-array", .doc = "Convert string to byte array (UTF-8 encoded bytes).", .func = nativeToBytes },
+    .{ .name = "bytes>", .stack_effect = "byte-array -- string", .doc = "Convert byte array to string (interprets as UTF-8).", .func = nativeBytesToString },
+    .{ .name = "uppercase", .stack_effect = "str -- str", .doc = "Convert ASCII letters to uppercase, non-ASCII bytes pass through.", .func = nativeUppercase },
+    .{ .name = "lowercase", .stack_effect = "str -- str", .doc = "Convert ASCII letters to lowercase, non-ASCII bytes pass through.", .func = nativeLowercase },
 };
 
 /// to-string ( value -- string ) - Convert any value to its string representation,

@@ -9,12 +9,18 @@ pub const Token = struct {
     pub const Kind = enum {
         word, // Regular token (word, number, symbol, bracket, etc.)
         comment, // Line comment starting with `\ `
+        doc_comment, // Doc-comment starting with `\\ `
         newline, // Newline character (only emitted when preserve_newlines is true)
     };
 
     /// Returns true if this token is a comment.
     pub fn isComment(self: Token) bool {
         return self.kind == .comment;
+    }
+
+    /// Returns true if this token is a doc-comment.
+    pub fn isDocComment(self: Token) bool {
+        return self.kind == .doc_comment;
     }
 
     /// Returns true if this token is a newline.
@@ -75,6 +81,22 @@ pub const Tokenizer = struct {
 
         const start = self.pos;
         const token_line = self.line;
+
+        // Doc-comment: `\\` followed by space/tab/newline/CR or end-of-input
+        if (self.input[self.pos] == '\\' and
+            self.pos + 1 < self.input.len and
+            self.input[self.pos + 1] == '\\' and
+            (self.pos + 2 >= self.input.len or
+                self.input[self.pos + 2] == ' ' or
+                self.input[self.pos + 2] == '\t' or
+                self.input[self.pos + 2] == '\n' or
+                self.input[self.pos + 2] == '\r'))
+        {
+            while (self.pos < self.input.len and self.input[self.pos] != '\n') {
+                self.pos += 1;
+            }
+            return .{ .kind = .doc_comment, .text = self.input[start..self.pos], .line = token_line };
+        }
 
         // Line comment: `\ ` followed by space/tab, or `\` at end-of-line/input
         if (self.input[self.pos] == '\\' and
@@ -365,4 +387,72 @@ test "empty comment with code before" {
     try std.testing.expectEqualStrings("\\", comment.text);
     try std.testing.expectEqualStrings("3", t.next().?.text);
     try std.testing.expectEqual(null, t.next());
+}
+
+test "doc-comment" {
+    var t = Tokenizer.init("\\\\ this is a doc comment");
+    const tok = t.next().?;
+    try std.testing.expectEqual(Token.Kind.doc_comment, tok.kind);
+    try std.testing.expectEqualStrings("\\\\ this is a doc comment", tok.text);
+    try std.testing.expectEqual(null, t.next());
+}
+
+test "doc-comment with code before" {
+    var t = Tokenizer.init("1 2 + \\\\ doc");
+    try std.testing.expectEqualStrings("1", t.next().?.text);
+    try std.testing.expectEqualStrings("2", t.next().?.text);
+    try std.testing.expectEqualStrings("+", t.next().?.text);
+    const doc = t.next().?;
+    try std.testing.expectEqual(Token.Kind.doc_comment, doc.kind);
+    try std.testing.expectEqualStrings("\\\\ doc", doc.text);
+    try std.testing.expectEqual(null, t.next());
+}
+
+test "empty doc-comment at end of input" {
+    var t = Tokenizer.init("\\\\");
+    const tok = t.next().?;
+    try std.testing.expectEqual(Token.Kind.doc_comment, tok.kind);
+    try std.testing.expectEqualStrings("\\\\", tok.text);
+    try std.testing.expectEqual(null, t.next());
+}
+
+test "doc-comment followed by newline and code" {
+    var t = Tokenizer.init("\\\\\n42");
+    const doc = t.next().?;
+    try std.testing.expectEqual(Token.Kind.doc_comment, doc.kind);
+    try std.testing.expectEqualStrings("\\\\", doc.text);
+    try std.testing.expectEqualStrings("42", t.next().?.text);
+    try std.testing.expectEqual(null, t.next());
+}
+
+test "double backslash without space is not a doc-comment" {
+    var t = Tokenizer.init("\\\\word");
+    const tok = t.next().?;
+    try std.testing.expectEqual(Token.Kind.word, tok.kind);
+    try std.testing.expectEqualStrings("\\\\word", tok.text);
+    try std.testing.expectEqual(null, t.next());
+}
+
+test "consecutive doc-comments" {
+    var t = Tokenizer.init("\\\\ line one\n\\\\ line two");
+    const doc1 = t.next().?;
+    try std.testing.expectEqual(Token.Kind.doc_comment, doc1.kind);
+    try std.testing.expectEqualStrings("\\\\ line one", doc1.text);
+    const doc2 = t.next().?;
+    try std.testing.expectEqual(Token.Kind.doc_comment, doc2.kind);
+    try std.testing.expectEqualStrings("\\\\ line two", doc2.text);
+    try std.testing.expectEqual(null, t.next());
+}
+
+test "doc-comment line tracking" {
+    var t = Tokenizer.init("a\n\\\\ doc\nb");
+    const tok1 = t.next().?;
+    try std.testing.expectEqual(@as(usize, 1), tok1.line);
+
+    const doc = t.next().?;
+    try std.testing.expectEqual(Token.Kind.doc_comment, doc.kind);
+    try std.testing.expectEqual(@as(usize, 2), doc.line);
+
+    const tok2 = t.next().?;
+    try std.testing.expectEqual(@as(usize, 3), tok2.line);
 }

@@ -17,16 +17,16 @@ const StackEffectParam = @import("../stack_effect.zig").StackEffectParam;
 const task_stack_size: usize = 64 * 1024;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "task-scope", .stack_effect = "quot --", .func = nativeTaskScope },
-    .{ .name = "spawn", .stack_effect = "quot -- task", .func = nativeSpawn },
-    .{ .name = "spawn-named", .stack_effect = "quot name -- task", .func = nativeSpawnNamed },
-    .{ .name = "task-self", .stack_effect = "-- task", .func = nativeTaskSelf },
-    .{ .name = "yield", .stack_effect = "--", .func = nativeYield },
-    .{ .name = "await", .stack_effect = "task -- value", .func = nativeAwait },
-    .{ .name = "await-all", .stack_effect = "array -- array", .func = nativeAwaitAll },
-    .{ .name = "sleep", .stack_effect = "duration --", .func = nativeSleep },
-    .{ .name = "cancel-task", .stack_effect = "task --", .func = nativeCancelTask },
-    .{ .name = "with-timeout", .stack_effect = "quot duration -- value", .func = nativeWithTimeout },
+    .{ .name = "task-scope", .stack_effect = "quot --", .doc = "Run quotation in a structured concurrency scope.", .func = nativeTaskScope },
+    .{ .name = "spawn", .stack_effect = "quot -- task", .doc = "Spawn a new task from a quotation.", .func = nativeSpawn },
+    .{ .name = "spawn-named", .stack_effect = "quot name -- task", .doc = "Spawn a named task from a quotation.", .func = nativeSpawnNamed },
+    .{ .name = "task-self", .stack_effect = "-- task", .doc = "Push the current task handle.", .func = nativeTaskSelf },
+    .{ .name = "yield", .stack_effect = "--", .doc = "Voluntarily yield the current task.", .func = nativeYield },
+    .{ .name = "await", .stack_effect = "task -- value", .doc = "Wait for a task to complete and push its result.", .func = nativeAwait },
+    .{ .name = "await-all", .stack_effect = "array -- array", .doc = "Wait for all tasks in array and return array of results.", .func = nativeAwaitAll },
+    .{ .name = "sleep", .stack_effect = "duration --", .doc = "Suspend the current task for a duration.", .func = nativeSleep },
+    .{ .name = "cancel-task", .stack_effect = "task --", .doc = "Cancel a task.", .func = nativeCancelTask },
+    .{ .name = "with-timeout", .stack_effect = "quot duration -- value", .doc = "Run a quotation with a timeout duration.", .func = nativeWithTimeout },
 };
 
 /// Allocate a Task and its Context on the heap, wire up the ucontext, and
@@ -642,6 +642,8 @@ fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
 
         .stack_effect => |effect| .{ .stack_effect = try deepCopyStackEffect(effect, alloc) },
         .error_value => |err| .{ .error_value = try deepCopyErrorObject(err, alloc) },
+
+        .doc_string => |s| .{ .doc_string = try alloc.dupe(u8, s) },
 
         // NOTE(ripta): Reference types not owned by the task arena so it's safe to share without copying
         .stream, .parameter, .module, .marker, .struct_type, .benchmark_report, .task => val,

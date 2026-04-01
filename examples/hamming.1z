@@ -1,0 +1,44 @@
+\ Hamming distance between two DNA strands
+\ Usage: 1z examples/hamming.1z
+
+use "testing" ;
+use "ranges" ;
+
+\ Count positional differences between two equal-length strings.
+\ Returns f if strands have different lengths.
+hamming: ( strand1 strand2 -- n|f ) [
+  over #len over #len = not [ drop drop f ] [
+    dup #len iota 0 [
+      \ s1 s2 sit below the reduce; count and idx are on top
+      dup 4 pick-n swap #nth
+      swap 3 pick-n swap #nth
+      = not [ 1 + ] when
+    ] #reduce
+    -rot> drop drop
+  ] if
+] ;
+
+"hamming distance" test-section
+
+"GAGCCTACTAACGGGAT" "CATCGTAATGACGGCCT" hamming
+7 "long strands" assert=
+
+"CAT" "DOG" hamming
+3 "no shared nucleotides" assert=
+
+"DEPOSIT" "DOPIEST" hamming
+4 "non-dna strings" assert=
+
+"" "" hamming
+0 "empty strands" assert=
+
+"unequal lengths" test-section
+
+"" "A" hamming
+f "empty vs non-empty" assert=
+
+"A" "" hamming
+f "non-empty vs empty" assert=
+
+"ABCD" "ABC" hamming
+f "longer vs shorter" assert=

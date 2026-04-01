@@ -9,8 +9,8 @@ const Primitive = @import("types.zig").Primitive;
 const popString = helpers.popString;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .func = nativeParseUntil },
-    .{ .name = "parse-tokens-until", .stack_effect = "delimiter -- array", .func = nativeParseTokensUntil },
+    .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .doc = "Read tokens until delimiter, return as quotation.", .func = nativeParseUntil },
+    .{ .name = "parse-tokens-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, return as string array.", .func = nativeParseTokensUntil },
 };
 
 /// parse-until ( delimiter -- quotation ) - Read tokens until delimiter, return as quotation
@@ -41,7 +41,7 @@ pub fn nativeParseTokensUntil(ctx: *Context) anyerror!void {
     defer tokens.deinit(alloc);
 
     while (tokenizer.next()) |tok| {
-        if (tok.kind == .comment or tok.kind == .newline) continue;
+        if (tok.kind == .comment or tok.kind == .doc_comment or tok.kind == .newline) continue;
 
         const token = tok.text;
         if (std.mem.eql(u8, token, delimiter)) {

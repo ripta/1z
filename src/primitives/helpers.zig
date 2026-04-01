@@ -131,6 +131,7 @@ pub fn valueTypeName(val: Value) []const u8 {
         .stack_effect => "stack-effect",
         .error_value => "error",
         .task => "task",
+        .doc_string => "doc-string",
     };
 }
 
@@ -174,6 +175,7 @@ pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]con
         .stack_effect => allocator.dupe(u8, "<stack-effect>"),
         .error_value => |e| std.fmt.allocPrint(allocator, "<error {s}>", .{e.error_type}),
         .task => |t| std.fmt.allocPrint(allocator, "<task #{d}>", .{t.id}),
+        .doc_string => |s| std.fmt.allocPrint(allocator, "<doc-string \"{s}\">", .{s}),
     };
 }
 

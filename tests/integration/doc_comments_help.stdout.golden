@@ -1,0 +1,5 @@
+Stack: [ ]
+add2 ( a b -- sum ) \compound
+
+Add two numbers.
+Stack: [ ]

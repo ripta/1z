@@ -15,13 +15,13 @@ const Primitive = @import("types.zig").Primitive;
 const popQuotation = helpers.popQuotation;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "make-hash", .stack_effect = "quotation -- hash", .func = nativeMakeHash },
-    .{ .name = "make-vector", .stack_effect = "quotation -- vector", .func = nativeMakeVector },
-    .{ .name = "make-byte-array", .stack_effect = "quotation -- byte-array", .func = nativeMakeByteArray },
-    .{ .name = "make-set", .stack_effect = "quotation -- set", .func = nativeMakeSet },
-    .{ .name = "make-mutable-map", .stack_effect = "quotation -- mmap", .func = nativeMakeMutableMap },
-    .{ .name = "@set!", .stack_effect = "mmap key value -- mmap", .func = nativeAtSetMut },
-    .{ .name = "@remove!", .stack_effect = "mmap key -- mmap", .func = nativeAtRemoveMut },
+    .{ .name = "make-hash", .stack_effect = "quotation -- hash", .doc = "Create a hash table from key: value pairs in a quotation.", .func = nativeMakeHash },
+    .{ .name = "make-vector", .stack_effect = "quotation -- vector", .doc = "Create a mutable vector from values in a quotation.", .func = nativeMakeVector },
+    .{ .name = "make-byte-array", .stack_effect = "quotation -- byte-array", .doc = "Create a byte array from integer values in a quotation.", .func = nativeMakeByteArray },
+    .{ .name = "make-set", .stack_effect = "quotation -- set", .doc = "Create a set from unique values in a quotation.", .func = nativeMakeSet },
+    .{ .name = "make-mutable-map", .stack_effect = "quotation -- mmap", .doc = "Create a mutable map from key: value pairs in a quotation.", .func = nativeMakeMutableMap },
+    .{ .name = "@set!", .stack_effect = "mmap key value -- mmap", .doc = "Set value in mutable map, mutating in place.", .func = nativeAtSetMut },
+    .{ .name = "@remove!", .stack_effect = "mmap key -- mmap", .doc = "Remove key from mutable map, mutating in place.", .func = nativeAtRemoveMut },
 };
 
 /// Helper to extract string from symbol or string value

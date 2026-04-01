@@ -1,0 +1,29 @@
+\ Find anagrams of a word from a list of candidates
+\ Usage: 1z examples/anagrams.1z
+
+use "testing" ;
+use "strings" ;
+
+\ Build a character frequency hash from a word
+char-freq: ( word -- hash ) [
+  lowercase H{ } [ over over 0 @get-or 1 + @set ] #reduce
+] ;
+
+\ Filter candidates to only those that are anagrams of the word
+anagrams: ( word candidates -- filtered ) [
+  swap char-freq [ swap char-freq = ] curry #filter
+] ;
+
+"anagrams" test-section
+
+"" { "enlists" "google" "inlets" "banana" } anagrams
+{ } "empty word returns nothing" assert=
+
+"listen" { } anagrams
+{ } "empty candidates returns nothing" assert=
+
+"listen" { "enlists" "google" "inlets" "banana" } anagrams
+{ "inlets" } "listen finds inlets" assert=
+
+"hatreds" { "dearths" "hardest" "salmon" "devilish" "threads" } anagrams
+{ "dearths" "hardest" "threads" } "hatreds finds three anagrams" assert=

@@ -1,0 +1,14 @@
+\ Verify a sampling of prelude words have doc-comments visible via help.
+
+[]: help
+when: help
+ignore-errors: help
+nip: help
+abs: help
+<=: help
+not: help
+print: help
+times: help
+case: help
+fmt: help
+run-benchmarks: help

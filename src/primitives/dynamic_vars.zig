@@ -13,11 +13,11 @@ const popQuotation = helpers.popQuotation;
 const popSymbol = helpers.popSymbol;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "parse-quotation", .stack_effect = "-- quotation", .func = nativeParseQuotation },
-    .{ .name = "parse-literal", .stack_effect = "-- value", .func = nativeParseLiteral },
-    .{ .name = "make-parameter", .stack_effect = "name: quot -- param", .func = nativeMakeParameter },
-    .{ .name = "get", .stack_effect = "param -- value", .func = nativeGet },
-    .{ .name = "with-parameter", .stack_effect = "value param quot --", .func = nativeWithParameter },
+    .{ .name = "parse-quotation", .stack_effect = "-- quotation", .doc = "Read the next [ ... ] block from the tokenizer.", .func = nativeParseQuotation },
+    .{ .name = "parse-literal", .stack_effect = "-- value", .doc = "Read the next literal value from the tokenizer.", .func = nativeParseLiteral },
+    .{ .name = "make-parameter", .stack_effect = "name: quot -- param", .doc = "Create a dynamic parameter with a name and default quotation.", .func = nativeMakeParameter },
+    .{ .name = "get", .stack_effect = "param -- value", .doc = "Get the current value of a dynamic parameter.", .func = nativeGet },
+    .{ .name = "with-parameter", .stack_effect = "value param quot --", .doc = "Execute quotation with parameter temporarily bound to value.", .func = nativeWithParameter },
 };
 
 // =============================================================================
@@ -31,7 +31,7 @@ pub fn nativeParseQuotation(ctx: *Context) anyerror!void {
 
     // Skip whitespace/comments until we find '['
     while (tokenizer.next()) |tok| {
-        if (tok.kind == .comment or tok.kind == .newline) continue;
+        if (tok.kind == .comment or tok.kind == .doc_comment or tok.kind == .newline) continue;
 
         if (!std.mem.eql(u8, tok.text, "[")) {
             // Expected '[' but got something else
@@ -53,7 +53,7 @@ pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
     const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
     const alloc = ctx.quotationAllocator();
     while (tokenizer.next()) |tok| {
-        if (tok.kind == .comment or tok.kind == .newline) continue;
+        if (tok.kind == .comment or tok.kind == .doc_comment or tok.kind == .newline) continue;
 
         const token = tok.text;
 

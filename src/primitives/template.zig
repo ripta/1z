@@ -14,8 +14,8 @@ const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "template", .stack_effect = "string -- template", .func = nativeTemplate },
-    .{ .name = "interpolate", .stack_effect = "source template -- string", .func = nativeInterpolate },
+    .{ .name = "template", .stack_effect = "string -- template", .doc = "Parse format string into template value.", .func = nativeTemplate },
+    .{ .name = "interpolate", .stack_effect = "source template -- string", .doc = "Apply template to source value.", .func = nativeInterpolate },
 };
 
 /// template ( string -- template ) - Parse format string into template value

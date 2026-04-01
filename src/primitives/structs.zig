@@ -13,8 +13,8 @@ const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "define-struct", .stack_effect = "name: descriptor markers --", .func = nativeDefineStruct },
-    .{ .name = "parse-struct-fields", .stack_effect = "-- fields", .func = nativeParseStructFields },
+    .{ .name = "define-struct", .stack_effect = "name: descriptor markers --", .doc = "Define a struct type and its accessor words.", .func = nativeDefineStruct },
+    .{ .name = "parse-struct-fields", .stack_effect = "-- fields", .doc = "Parse field names until } from tokenizer.", .func = nativeParseStructFields },
 };
 
 /// parse-struct-fields ( -- fields ) - Parse field names until } from tokenizer
@@ -26,7 +26,7 @@ fn nativeParseStructFields(ctx: *Context) anyerror!void {
     var fields = std.ArrayListUnmanaged(Value){};
 
     while (tokenizer.next()) |tok| {
-        if (tok.kind == .comment or tok.kind == .newline) continue;
+        if (tok.kind == .comment or tok.kind == .doc_comment or tok.kind == .newline) continue;
 
         const token = tok.text;
         if (std.mem.eql(u8, token, "}")) {

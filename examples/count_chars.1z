@@ -1,0 +1,19 @@
+\ Count characters in non-stopwords
+\ Usage: 1z examples/count_chars.1z
+
+\ Translation from the python:
+\
+\ ```
+\ def count_em(sentence, stopwords):
+\   return sum([len(word) for word in sentence.split() if word.lower() not in stopwords])
+\ ```
+
+use "strings" ;
+
+count-em: ( stopwords sentence -- n ) [
+  " " split
+  swap [ swap lowercase #in? not ] curry #filter
+  0 [ #len + ] #reduce
+] ;
+
+S{ "to" "the" "and" } "I went to the store and bought some cat food" dup . count-em .
