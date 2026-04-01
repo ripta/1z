@@ -81,6 +81,9 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
             while (true) {
                 const next_val = try ctx.stack.peek();
                 switch (next_val) {
+                    .doc_string => {
+                        _ = try ctx.stack.pop();
+                    },
                     .symbol => break,
                     else => return error.TypeMismatch,
                 }
@@ -121,6 +124,9 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                             _ = try ctx.stack.pop();
                             try collected_markers.append(alloc, mk);
                         },
+                        .doc_string => {
+                            _ = try ctx.stack.pop();
+                        },
                         .symbol => break,
                         else => return error.TypeMismatch,
                     }
@@ -146,6 +152,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
             } else {
                 // Fall back to normal word definition
                 var stack_effect_val: ?StackEffect = null;
+                var doc_val: ?[]const u8 = null;
                 var collected_markers = std.ArrayListUnmanaged(*Marker){};
                 defer collected_markers.deinit(alloc);
 
@@ -159,6 +166,10 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                         .marker => |mk| {
                             _ = try ctx.stack.pop();
                             try collected_markers.append(alloc, mk);
+                        },
+                        .doc_string => |d| {
+                            _ = try ctx.stack.pop();
+                            doc_val = d;
                         },
                         .symbol => break,
                         else => return error.TypeMismatch,
@@ -187,6 +198,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     .parse_time = has_parse_time,
                     .stack_effect = stack_effect_val,
                     .markers = markers_slice,
+                    .doc = doc_val,
                     .action = .{ .compound = instructions },
                 });
             }

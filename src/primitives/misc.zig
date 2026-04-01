@@ -59,6 +59,12 @@ fn nativeHelp(ctx: *Context) anyerror!void {
         }
 
         try writer.writeAll("\n");
+
+        if (word.doc) |doc| {
+            try writer.writeAll("\n");
+            try writer.print("{s}\n", .{doc});
+        }
+
         const has_generic = for (word.markers) |mk| {
             if (markers_mod.isGenericMarker(mk)) break true;
         } else false;

@@ -1,0 +1,15 @@
+use "testing" ;
+
+\\ Add two numbers together.
+add2: ( a b -- sum ) [ + ] ;
+
+\\ First line.
+\\ Second line.
+the-answer: ( -- n ) [ 42 ] ;
+
+\\ Orphaned doc-comment before a non-definition
+99 drop
+
+"doc-commented words" test-section
+3 4 add2 7 "add2 works" assert=
+the-answer 42 "the-answer works" assert=

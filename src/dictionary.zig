@@ -21,6 +21,8 @@ pub const WordDefinition = struct {
     stack_effect: ?StackEffect = null,
     /// Markers associated with this word.
     markers: []const *Marker = &.{},
+    // Documentation string for this word, if any.
+    doc: ?[]const u8 = null,
     /// Module this word was imported from. When set, executing this word
     /// pushes the module's deps as a local frame so that late-bound
     /// references to the module's dependencies resolve correctly.
