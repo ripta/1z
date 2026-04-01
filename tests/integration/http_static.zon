@@ -1,0 +1,7 @@
+// `http_static.1z` produces corrupted stdout when the integration harness
+// routes its output through Zig's temp-file capture path for external `diff`.
+// Keep this test on direct stdout/stderr expectations until the runtime/capture
+// interaction is understood and fixed.
+.{
+    .stdio_expect = .direct_expect,
+}

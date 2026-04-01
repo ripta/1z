@@ -339,6 +339,15 @@ fn addFfiIncludePath(b: *std.Build, module: *std.Build.Module, target: std.Build
 }
 
 const TestEntry = struct {
+    const StdioExpectMode = enum {
+        diff_capture,
+        direct_expect,
+    };
+
+    const Metadata = struct {
+        stdio_expect: StdioExpectMode = .diff_capture,
+    };
+
     name_without_ext: []const u8,
     file_path: []const u8,
     stdout_golden_path: []const u8,
@@ -363,6 +372,7 @@ const TestEntry = struct {
     stderr_content: []const u8,
     has_stdout_golden: bool,
     stdout_content: []const u8,
+    stdio_expect_mode: StdioExpectMode,
 };
 
 fn collectTestEntries(b: *std.Build, test_dir: *std.fs.Dir) ![]const TestEntry {
@@ -376,6 +386,7 @@ fn collectTestEntries(b: *std.Build, test_dir: *std.fs.Dir) ![]const TestEntry {
         const name_without_ext = entry.name[0 .. entry.name.len - 3];
         const file_path = b.fmt("tests/integration/{s}", .{entry.name});
         const stdout_golden_path = b.fmt("tests/integration/{s}.stdout.golden", .{name_without_ext});
+        const zon_path = b.fmt("tests/integration/{s}.zon", .{name_without_ext});
 
         const args_path = b.fmt("tests/integration/{s}.args", .{name_without_ext});
         var args_lines: ?[]const u8 = null;
@@ -457,6 +468,33 @@ fn collectTestEntries(b: *std.Build, test_dir: *std.fs.Dir) ![]const TestEntry {
             has_stdout_golden = true;
         } else |_| {}
 
+        var stdio_expect_mode: TestEntry.StdioExpectMode = .diff_capture;
+        if (test_dir.openFile(b.fmt("{s}.zon", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            const zon_content = file.readToEndAlloc(b.allocator, 4096) catch return error.OutOfMemory;
+            const zon_content_z = b.allocator.dupeZ(u8, zon_content) catch return error.OutOfMemory;
+            var diag: std.zon.parse.Diagnostics = .{};
+            defer diag.deinit(b.allocator);
+
+            const metadata = std.zon.parse.fromSlice(TestEntry.Metadata, b.allocator, zon_content_z, &diag, .{}) catch |err| {
+                switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.ParseZon => {
+                        std.debug.print("Error parsing {s}\n", .{zon_path});
+                        var stderr_buffer: [4096]u8 = undefined;
+                        var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+                        diag.format(&stderr_writer.interface) catch {};
+                        stderr_writer.interface.flush() catch {};
+                        return err;
+                    },
+                }
+            };
+            stdio_expect_mode = metadata.stdio_expect;
+        } else |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        }
+
         entries.append(b.allocator, .{
             .name_without_ext = name_without_ext,
             .file_path = file_path,
@@ -482,6 +520,7 @@ fn collectTestEntries(b: *std.Build, test_dir: *std.fs.Dir) ![]const TestEntry {
             .stderr_content = stderr_content,
             .has_stdout_golden = has_stdout_golden,
             .stdout_content = stdout_content,
+            .stdio_expect_mode = stdio_expect_mode,
         }) catch return error.OutOfMemory;
     }
 
@@ -612,7 +651,7 @@ fn addIntegrationTests(
 
         test_run.expectExitCode(te.expected_exit_code orelse if (te.has_stderr_golden) 1 else 0);
 
-        if (has_diff) {
+        if (has_diff and te.stdio_expect_mode == .diff_capture) {
             const captured_stdout = test_run.captureStdOut();
             const stdout_diff = b.addSystemCommand(&.{
                 "sh", "-c",
