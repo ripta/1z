@@ -52,8 +52,8 @@ stack-effect>> >string "( a -- a a )" "stack-effect >string still works" assert=
 "x" "simple param >string" assert=
 
 "stack-effect-param >string with nested effect" test-section
-"x" f f f make-stack-effect-param V{ } swap #push
-"y" f f f make-stack-effect-param V{ } swap #push
+"x" f f f make-stack-effect-param { } swap #push
+"y" f f f make-stack-effect-param { } swap #push
 make-stack-effect-info
 "quot" f 2 pick-n f make-stack-effect-param nip >string
 "quot: ( x -- y )" "nested param >string" assert=

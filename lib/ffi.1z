@@ -1,6 +1,6 @@
 \ lib/ffi.1z - FFI signature descriptor and convenience wrappers
 
-ffi-sig: struct{ params return-type } ;
+ffi-sig: struct{ params: array return-type: string } ;
 
 \\ Parse-time word for FFI signature descriptors.
 \\ ffi{ i32 i32 -> i32 } produces an ffi-sig with params { "i32" "i32" } and return-type "i32".

@@ -1,0 +1,23 @@
+\ Test that --check propagates typed struct field annotations through generated words
+
+typed-point: struct{ x: fixnum y: string } ;
+typed-box: mutable struct{ payload: fixnum } ;
+
+expect-fixnum: ( n: fixnum -- ) [ drop ] ;
+expect-string: ( s: string -- ) [ drop ] ;
+
+local-constructor-and-getter: ( -- ) [
+  1 "ok" make-typed-point
+  dup x>> expect-fixnum
+  y>> expect-string
+] ;
+
+local-setter: ( -- ) [
+  1 make-typed-box
+  dup payload>> expect-fixnum
+  2 >>payload
+  payload>> expect-fixnum
+] ;
+
+local-constructor-and-getter
+local-setter

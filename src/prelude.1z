@@ -755,7 +755,7 @@ try-acquire: generic ( resource -- option ) [ "acquirable resource" throw-type-e
 \ Introspection struct types
 
 \\ A single parameter in a stack effect declaration.
-stack-effect-param: struct{ name row-variable? nested-effect type-annotation } ;
+stack-effect-param: struct{ name: string row-variable?: boolean nested-effect: any type-annotation: any } ;
 
 \\ Format a stack-effect-param as a string for display.
 >string: method{ stack-effect-param } [
@@ -772,7 +772,7 @@ stack-effect-param: struct{ name row-variable? nested-effect type-annotation } ;
 ] ;
 
 \\ Parsed stack effect with input and output parameter lists.
-stack-effect-info: struct{ inputs outputs } ;
+stack-effect-info: struct{ inputs: array outputs: array } ;
 \\ Format a stack-effect-info struct as "( inputs -- outputs )".
 >string: method{ stack-effect-info } [
   dup inputs>> ""
@@ -785,19 +785,19 @@ stack-effect-info: struct{ inputs outputs } ;
 ] ;
 
 \\ Source location: file path, line number, and column number.
-source-loc: struct{ file line column } ;
+source-loc: struct{ file: string line: fixnum column: fixnum } ;
 
 \\ Provenance metadata for generated words: generator, parent type, and role.
-provenance: struct{ generator parent role } ;
+provenance: struct{ generator: string parent: string role: string } ;
 
 \\ Provenance metadata for a dispatch entry: generator, parent type, role, and field name.
-dispatch-provenance: struct{ generator parent role field } ;
+dispatch-provenance: struct{ generator: string parent: string role: string field: string } ;
 
 \\ A single method entry: the dispatch type signature and optional provenance.
-method-info: struct{ types provenance } ;
+method-info: struct{ types: array provenance: any } ;
 
 \\ Structured word information for runtime introspection.
-word-info: struct{ name stack-effect doc markers native? body methods source-loc module provenance compiled? } ;
+word-info: struct{ name: string stack-effect: any doc: any markers: array native?: boolean body: any methods: array source-loc: any module: any provenance: any compiled?: boolean } ;
 
 \\ Convert a raw 11-element array from native.>word into a word-info struct.
 (raw>word-info): [

@@ -294,6 +294,18 @@ pub const InferenceEngine = struct {
                         try self.cache.put(self.allocator, name, .unknown);
                         return .unknown;
                     }
+                    if (isGeneric(&word_def) and instructions.len == 0) {
+                        if (!self.type_cache.contains(name)) {
+                            const out_types = try self.allocator.alloc(StackEntry, eff.outputs.len);
+                            for (eff.outputs, 0..) |param, i| {
+                                out_types[i] = if (param.type_annotation) |tv| .{ .typed = tv } else .other;
+                            }
+                            try self.type_cache.put(self.allocator, name, out_types);
+                        }
+                        const result = computeDeclaredDelta(eff) orelse .unknown;
+                        try self.cache.put(self.allocator, name, result);
+                        return result;
+                    }
                 }
 
                 try self.in_progress.put(self.allocator, name, {});
@@ -321,13 +333,19 @@ pub const InferenceEngine = struct {
                     try self.type_cache.put(self.allocator, name, cached_types);
                 }
 
+                const generic_uses_declared_delta = isGeneric(&word_def) and instructions.len == 0 and word_def.stack_effect != null;
+                const inferred_for_delta = if (generic_uses_declared_delta)
+                    computeDeclaredDelta(word_def.stack_effect.?) orelse inferred
+                else
+                    inferred;
+
                 if (isGeneric(&word_def)) {
-                    try self.validateDispatchEntries(name, inferred, &word_def, caller_info);
+                    try self.validateDispatchEntries(name, inferred_for_delta, &word_def, caller_info);
                 }
 
                 if (word_def.stack_effect) |eff| {
                     if (computeDeclaredDelta(eff)) |declared| {
-                        switch (inferred) {
+                        switch (inferred_for_delta) {
                             .known => |inferred_delta| {
                                 if (declared.known != inferred_delta) {
                                     try self.emitDiagnostic(.{

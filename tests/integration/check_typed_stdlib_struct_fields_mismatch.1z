@@ -1,0 +1,9 @@
+\ Test that --check rejects mismatches propagated from typed stdlib struct fields
+
+expect-fixnum: ( n: fixnum -- ) [ drop ] ;
+
+bad-prelude-getter: ( -- ) [
+  "main.1z" 12 34 make-source-loc
+  file>>
+  expect-fixnum
+] ;

@@ -15,7 +15,7 @@ hours: ( n -- duration ) [ 60 * minutes ] ;
 duration-nsec: ( duration -- nsec ) [ unmake-duration ] ;
 
 \ Timestamp: virtual type backed by a hidden struct
-timestamp-inner: struct{ ts-sec ts-nsec } ;
+timestamp-inner: struct{ ts-sec: fixnum ts-nsec: fixnum } ;
 timestamp: virtual{ timestamp-inner } ;
 
 \ Constructor from sec/nsec components
@@ -95,7 +95,7 @@ compute-iso-week: ( yearday iso-weekday -- iso-week ) [
 
 \ --- Timezone type ---
 
-tz-inner: struct{ offset-min name } ;
+tz-inner: struct{ offset-min: fixnum name: string } ;
 timezone: virtual{ tz-inner } ;
 
 make-timezone: ( offset-min name -- timezone ) [ make-tz-inner >timezone ] ;
@@ -108,7 +108,7 @@ local: ( -- timezone ) [ 0 "" make-timezone ] ;
 
 \ --- libc bridge struct and wrappers ---
 
-tm-result: struct{ year month-num day hour min sec posix-weekday yearday gmtoff tz-abbrev } ;
+tm-result: struct{ year: fixnum month-num: fixnum day: fixnum hour: fixnum min: fixnum sec: fixnum posix-weekday: fixnum yearday: fixnum gmtoff: fixnum tz-abbrev: string } ;
 
 tz-localtime: ( sec tz-name -- tm-result ) [ tz-decompose make-tm-result ] ;
 

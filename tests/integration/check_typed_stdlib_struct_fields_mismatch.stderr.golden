@@ -1,0 +1,1 @@
+tests/integration/check_typed_stdlib_struct_fields_mismatch.1z:9: err: bad-prelude-getter: type mismatch: expect-fixnum expects fixnum for parameter 'n', but got string

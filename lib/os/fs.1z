@@ -5,8 +5,8 @@ use "time" ;
 
 \ Types
 
-dir-entry:      struct{ name type } ;
-file-info-data: struct{ size type modified accessed permissions } ;
+dir-entry:      struct{ name: string type: symbol } ;
+file-info-data: struct{ size: fixnum type: symbol modified: timestamp accessed: timestamp permissions: fixnum } ;
 file-info:      virtual{ file-info-data } ;
 
 \ Directory listing

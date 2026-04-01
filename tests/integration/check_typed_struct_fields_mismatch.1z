@@ -1,0 +1,11 @@
+\ Test that --check rejects mismatches propagated from typed struct fields
+
+typed-point: struct{ x: fixnum y: string } ;
+
+expect-string: ( s: string -- ) [ drop ] ;
+
+bad-local-getter: ( -- ) [
+  1 "ok" make-typed-point
+  x>>
+  expect-string
+] ;

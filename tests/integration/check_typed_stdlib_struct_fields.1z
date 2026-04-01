@@ -1,0 +1,34 @@
+\ Test that --check propagates typed stdlib struct field annotations
+
+use "ffi" ;
+
+expect-fixnum:     ( n: fixnum -- )       [ drop ] ;
+expect-string:     ( s: string -- )       [ drop ] ;
+expect-array:      ( arr: array -- )      [ drop ] ;
+expect-source-loc: ( loc: source-loc -- ) [ drop ] ;
+expect-provenance: ( p: provenance -- )   [ drop ] ;
+expect-ffi-sig:    ( sig: ffi-sig -- )    [ drop ] ;
+
+prelude-flow: ( -- ) [
+  "main.1z" 12 34 make-source-loc
+  dup expect-source-loc
+  dup file>> expect-string
+  dup line>> expect-fixnum
+  column>> expect-fixnum
+
+  "struct" "point" "getter" make-provenance
+  dup expect-provenance
+  dup generator>> expect-string
+  dup parent>> expect-string
+  role>> expect-string
+] ;
+
+ffi-flow: ( -- ) [
+  { "i32" "i32" } "void" make-ffi-sig
+  dup expect-ffi-sig
+  dup params>> expect-array
+  return-type>> expect-string
+] ;
+
+prelude-flow
+ffi-flow

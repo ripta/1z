@@ -10,9 +10,9 @@ stdio-mode: enum{
   ignore:  unit
 } ;
 
-stdio-opts:     mutable struct{ stdin stdout stderr cwd env } ;
-process:        struct{ pid stdin stdout stderr } ;
-process-result: struct{ exit-code stdout stderr } ;
+stdio-opts:     mutable struct{ stdin: stdio-mode stdout: stdio-mode stderr: stdio-mode cwd: any env: any } ;
+process:        struct{ pid: fixnum stdin: any stdout: any stderr: any } ;
+process-result: struct{ exit-code: fixnum stdout: any stderr: any } ;
 shell-safe:     virtual{ string } ;
 
 \\ Create default child process options.

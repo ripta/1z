@@ -72,9 +72,9 @@ PASS: simple param >string
 Stack: [ ]
 === stack-effect-param >string with nested effect ===
 Stack: [ ]
-Stack: [ V{ stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } ]
-Stack: [ V{ stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } V{ stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } ]
-Stack: [ stack-effect-info{ inputs: V{ stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: V{ stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } ]
+Stack: [ { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } ]
+Stack: [ { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } ]
 Stack: [ "quot: ( x -- y )" ]
 PASS: nested param >string
 Stack: [ ]

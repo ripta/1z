@@ -1,0 +1,1 @@
+tests/integration/check_typed_struct_fields_mismatch.1z:11: err: bad-local-getter: type mismatch: expect-string expects string for parameter 's', but got fixnum
