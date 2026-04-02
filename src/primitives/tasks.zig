@@ -856,3 +856,84 @@ fn nativeMultiplexerStats(ctx: *Context) anyerror!void {
 
     try ctx.stack.push(.{ .hash = hash });
 }
+
+test "handleAwaitResult rethrows borrowed buffer escape" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var scope = TaskScope.init(std.testing.allocator);
+    defer scope.deinit();
+
+    var task = Task{
+        .id = 1,
+        .name = null,
+        .status = std.atomic.Value(task_mod.TaskStatus).init(.failed),
+        .error_obj = .{
+            .error_type = "borrowed-buffer-escape",
+            .message = "borrowed buffer cannot cross task boundary via task result; call >byte-array first",
+        },
+        .ctx = &ctx,
+        .scope = &scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+
+    try std.testing.expectError(error.UserThrown, handleAwaitResult(&ctx, &task));
+    try std.testing.expect(ctx.thrown_error != null);
+    try std.testing.expectEqualStrings("borrowed-buffer-escape", ctx.thrown_error.?.error_type);
+}
+
+test "await-all propagates borrowed buffer escape from failed child" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var scheduler = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+    ctx.scheduler = &scheduler;
+
+    var parent_scope = TaskScope.init(std.testing.allocator);
+    defer parent_scope.deinit();
+    var child_scope = TaskScope.init(std.testing.allocator);
+    defer child_scope.deinit();
+
+    var parent_task = Task{
+        .id = 1,
+        .name = null,
+        .status = std.atomic.Value(task_mod.TaskStatus).init(.running),
+        .ctx = &ctx,
+        .scope = &parent_scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+    scheduler.current_task = &parent_task;
+
+    var failed_child = Task{
+        .id = 2,
+        .name = null,
+        .status = std.atomic.Value(task_mod.TaskStatus).init(.failed),
+        .error_obj = .{
+            .error_type = "borrowed-buffer-escape",
+            .message = "borrowed buffer cannot cross task boundary via task result; call >byte-array first",
+        },
+        .ctx = &ctx,
+        .scope = &child_scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+    var completed_child = Task{
+        .id = 3,
+        .name = null,
+        .status = std.atomic.Value(task_mod.TaskStatus).init(.completed),
+        .result = .{ .fixnum = 42 },
+        .ctx = &ctx,
+        .scope = &child_scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+
+    var task_values = [_]Value{
+        .{ .task = &failed_child },
+        .{ .task = &completed_child },
+    };
+    try ctx.stack.push(.{ .array = task_values[0..] });
+
+    try std.testing.expectError(error.UserThrown, nativeAwaitAll(&ctx));
+    try std.testing.expect(ctx.thrown_error != null);
+    try std.testing.expectEqualStrings("borrowed-buffer-escape", ctx.thrown_error.?.error_type);
+}

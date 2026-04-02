@@ -31,6 +31,20 @@ fn throwChannelClosed(ctx: *Context, message: []const u8) anyerror {
     return error.UserThrown;
 }
 
+fn throwBorrowedBufferEscape(ctx: *Context, message: []const u8) anyerror {
+    ctx.thrown_error = .{
+        .error_type = "borrowed-buffer-escape",
+        .message = message,
+    };
+    return error.UserThrown;
+}
+
+fn ensureSendValueEscapable(ctx: *Context, value: Value) anyerror!void {
+    if (value_mod.valueContainsBorrowedBuffer(value)) {
+        return throwBorrowedBufferEscape(ctx, "borrowed buffer cannot cross task boundary via channel send; call >byte-array first");
+    }
+}
+
 pub const primitives = [_]Primitive{
     .{ .name = "<channel>", .stack_effect = "-- ch", .doc = "Create an unbufferedf channel.", .func = nativeCreateChannel },
     .{ .name = "send", .stack_effect = "val ch --", .doc = "Send a value to a channel. Blocks if no receiver ready (unbuffered) or buffer full.", .func = nativeSend },
@@ -92,6 +106,7 @@ fn nativeSend(ctx: *Context) anyerror!void {
 
     const ch = try helpers.popChannel(ctx);
     const value = try ctx.stack.pop();
+    try ensureSendValueEscapable(ctx, value);
 
     acquireChannel(ctx, ch);
 
@@ -542,4 +557,92 @@ fn removeReceiverEntries(ch: *Channel, task: *Task) void {
             i += 1;
         }
     }
+}
+
+test "send rejects borrowed buffer before buffered channel insertion" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var scheduler = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var scope = task_mod.TaskScope.init(std.testing.allocator);
+    defer scope.deinit();
+
+    var current = Task{
+        .id = 1,
+        .name = null,
+        .status = std.atomic.Value(task_mod.TaskStatus).init(.running),
+        .ctx = &ctx,
+        .scope = &scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+    scheduler.current_task = &current;
+    ctx.scheduler = &scheduler;
+
+    const ch = try Channel.init(std.testing.allocator, 1);
+    defer {
+        ch.deinit();
+        std.testing.allocator.destroy(ch);
+    }
+
+    var bytes = [_]u8{ 1, 2, 3 };
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, bytes[0..]);
+    defer std.testing.allocator.destroy(ba);
+
+    try ctx.stack.push(.{ .byte_array = ba });
+    try ctx.stack.push(.{ .channel = ch });
+
+    try std.testing.expectError(error.UserThrown, nativeSend(&ctx));
+    try std.testing.expect(ctx.thrown_error != null);
+    try std.testing.expectEqualStrings("borrowed-buffer-escape", ctx.thrown_error.?.error_type);
+    try std.testing.expectEqual(@as(usize, 0), ch.buffer.count);
+    try std.testing.expectEqual(@as(usize, 0), ch.waiting_senders.items.len);
+}
+
+test "send accepts owned buffer into buffered channel" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var scheduler = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var scope = task_mod.TaskScope.init(std.testing.allocator);
+    defer scope.deinit();
+
+    var current = Task{
+        .id = 1,
+        .name = null,
+        .status = std.atomic.Value(task_mod.TaskStatus).init(.running),
+        .ctx = &ctx,
+        .scope = &scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+    scheduler.current_task = &current;
+    ctx.scheduler = &scheduler;
+
+    const ch = try Channel.init(std.testing.allocator, 1);
+    defer {
+        ch.deinit();
+        std.testing.allocator.destroy(ch);
+    }
+
+    const ba = try std.testing.allocator.create(value_mod.ByteArray);
+    defer {
+        ba.deinit(std.testing.allocator);
+        std.testing.allocator.destroy(ba);
+    }
+    ba.* = .{};
+    try ba.ensureTotalCapacity(std.testing.allocator, 3);
+    ba.appendAssumeCapacity(1);
+    ba.appendAssumeCapacity(2);
+    ba.appendAssumeCapacity(3);
+
+    try ctx.stack.push(.{ .byte_array = ba });
+    try ctx.stack.push(.{ .channel = ch });
+
+    try nativeSend(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ch.buffer.count);
+    try std.testing.expect(ctx.thrown_error == null);
 }

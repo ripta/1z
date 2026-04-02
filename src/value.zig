@@ -121,6 +121,78 @@ pub fn makeBorrowedByteArray(allocator: std.mem.Allocator, bytes: []u8) !*ByteAr
     return ba;
 }
 
+pub fn valueContainsBorrowedBuffer(val: Value) bool {
+    return switch (val) {
+        .byte_array => |ba| ba.isBorrowed(),
+        .array => |items| containsBorrowedInSlice(items),
+        .quotation => |quot| blk: {
+            for (quot.instructions) |instr| {
+                switch (instr.op) {
+                    .push_literal => |literal| {
+                        if (valueContainsBorrowedBuffer(literal)) break :blk true;
+                    },
+                    .call_word => {},
+                }
+            }
+            break :blk false;
+        },
+        .hash => |h| blk: {
+            var iter = h.iterator();
+            while (iter.next()) |entry| {
+                if (valueContainsBorrowedBuffer(entry.value_ptr.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        .vector => |v| containsBorrowedInSlice(v.items),
+        .set => |s| blk: {
+            for (s.keys()) |key| {
+                if (valueContainsBorrowedBuffer(key)) break :blk true;
+            }
+            break :blk false;
+        },
+        .mutable_map => |m| blk: {
+            var iter = m.iterator();
+            while (iter.next()) |entry| {
+                if (valueContainsBorrowedBuffer(entry.value_ptr.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        .struct_instance => |si| containsBorrowedInSlice(si.fields),
+        .tagged => |t| valueContainsBorrowedBuffer(t.inner.*),
+        .error_value => |err| if (err.data) |data| valueContainsBorrowedBuffer(data.*) else false,
+        .fixnum,
+        .float,
+        .boolean,
+        .unit,
+        .bignum,
+        .string,
+        .symbol,
+        .stream,
+        .parameter,
+        .marker,
+        .type_val,
+        .resource,
+        .task,
+        .iterator,
+        .channel,
+        .stack_effect,
+        .struct_type,
+        .template,
+        .doc_string,
+        .benchmark_report,
+        .module,
+        .sandbox_spec,
+        => false,
+    };
+}
+
+fn containsBorrowedInSlice(items: []const Value) bool {
+    for (items) |item| {
+        if (valueContainsBorrowedBuffer(item)) return true;
+    }
+    return false;
+}
+
 /// Context for hashing and comparing Values in hash-based containers.
 pub const ValueContext = struct {
     pub fn hash(self: @This(), key: Value) u32 {
@@ -1383,6 +1455,63 @@ test "byte array value uses slice for equality write and hash" {
 
     try std.testing.expect(a.eql(b));
     try std.testing.expectEqual(a.hashValue(), b.hashValue());
+}
+
+test "valueContainsBorrowedBuffer detects direct packed and nested borrowed buffers" {
+    var owned_items = [_]u8{ 1, 2, 3 };
+    var borrowed_items = [_]u8{ 4, 5, 6 };
+
+    var owned_ba = ByteArray{
+        .items = owned_items[0..],
+        .owned_items = .{
+            .items = owned_items[0..],
+            .capacity = owned_items.len,
+        },
+        .storage = .owned,
+    };
+    var borrowed_ba = ByteArray{
+        .items = borrowed_items[0..],
+        .storage = .{ .borrowed = borrowed_items[0..] },
+    };
+
+    const packed_type = VirtualType{
+        .name = "packed-u8",
+        .inner_type = "byte-array",
+    };
+    const borrowed_inner = Value{ .byte_array = &borrowed_ba };
+    const packed_borrowed = Value{ .tagged = .{ .tag = &packed_type, .inner = &borrowed_inner } };
+
+    var nested_array = [_]Value{
+        .{ .fixnum = 1 },
+        .{ .byte_array = &borrowed_ba },
+    };
+    var nested_struct_fields = [_]Value{
+        .{ .fixnum = 99 },
+        packed_borrowed,
+    };
+    var struct_type = StructType{
+        .name = "borrowed-holder",
+        .fields = &.{ "id", "payload" },
+    };
+    var struct_instance = StructInstance{
+        .struct_type = &struct_type,
+        .fields = nested_struct_fields[0..],
+    };
+
+    var err_data = borrowed_inner;
+    const err_obj = ErrorObject{
+        .error_type = "borrowed-buffer-escape",
+        .message = "test",
+        .data = &err_data,
+    };
+
+    try std.testing.expect(!valueContainsBorrowedBuffer(.{ .byte_array = &owned_ba }));
+    try std.testing.expect(valueContainsBorrowedBuffer(.{ .byte_array = &borrowed_ba }));
+    try std.testing.expect(valueContainsBorrowedBuffer(packed_borrowed));
+    try std.testing.expect(valueContainsBorrowedBuffer(.{ .array = nested_array[0..] }));
+    try std.testing.expect(valueContainsBorrowedBuffer(.{ .struct_instance = &struct_instance }));
+    try std.testing.expect(valueContainsBorrowedBuffer(.{ .error_value = err_obj }));
+    try std.testing.expect(!valueContainsBorrowedBuffer(.{ .fixnum = 42 }));
 }
 
 test "array equality" {

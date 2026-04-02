@@ -61,10 +61,7 @@ pub fn taskEntryPoint() callconv(.c) void {
         return;
     };
 
-    if (task.ctx.stack.depth() > 0) {
-        task.result = task.ctx.stack.pop() catch null;
-    }
-    task.setStatus(.completed);
+    publishTaskResult(task);
 }
 
 /// Status of a green thread task.
@@ -129,6 +126,25 @@ pub const Task = struct {
         self.status.store(s, .release);
     }
 };
+
+pub fn publishTaskResult(task: *Task) void {
+    if (task.ctx.stack.depth() > 0) {
+        const result = task.ctx.stack.pop() catch null;
+        if (result) |val| {
+            if (value_mod.valueContainsBorrowedBuffer(val)) {
+                task.error_obj = .{
+                    .error_type = "borrowed-buffer-escape",
+                    .message = "borrowed buffer cannot cross task boundary via task result; call >byte-array first",
+                };
+                task.result = null;
+                task.setStatus(.failed);
+                return;
+            }
+            task.result = val;
+        }
+    }
+    task.setStatus(.completed);
+}
 
 /// TaskScope tracks children and completion for structured concurrency.
 pub const TaskScope = struct {
@@ -264,4 +280,34 @@ test "cancellation requested flag" {
 
     scope.cancellation_requested.store(true, .release);
     try std.testing.expect(scope.cancellation_requested.load(.acquire));
+}
+
+test "publishTaskResult rejects borrowed buffer results" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var scope = TaskScope.init(std.testing.allocator);
+    defer scope.deinit();
+
+    var bytes = [_]u8{ 1, 2, 3 };
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, bytes[0..]);
+    defer std.testing.allocator.destroy(ba);
+
+    try ctx.stack.push(.{ .byte_array = ba });
+
+    var task = Task{
+        .id = 1,
+        .name = null,
+        .status = std.atomic.Value(TaskStatus).init(.running),
+        .ctx = &ctx,
+        .scope = &scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+
+    publishTaskResult(&task);
+
+    try std.testing.expectEqual(TaskStatus.failed, task.getStatus());
+    try std.testing.expect(task.result == null);
+    try std.testing.expect(task.error_obj != null);
+    try std.testing.expectEqualStrings("borrowed-buffer-escape", task.error_obj.?.error_type);
 }
