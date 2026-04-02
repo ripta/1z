@@ -296,6 +296,8 @@ inexact?: ( val -- ? ) [ dup number? [ exact? not ] [ drop f ] if ] ;
 integer?: ( val -- ? ) [ "integer" type-has-property? ] ;
 \\ True for mutable types.
 mutable?: ( val -- ? ) [ "mutable" type-has-property? ] ;
+\\ True for borrowed byte-arrays and packed values backed by borrowed byte-arrays.
+borrowed?: ( val -- ? ) [ native.borrowed? ] ;
 
 \\ Push IEEE 754 NaN (not a number).
 nan: ( -- f ) [ 0.0 0.0 / ] ;

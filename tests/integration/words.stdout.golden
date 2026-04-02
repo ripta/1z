@@ -57,6 +57,7 @@ Stack: [ ]
 = ( a b -- ? )
 > ( a b -- ? )
 >array ( container -- array )
+>byte-array ( value -- value )
 >bytes ( string -- byte-array )
 >char ( codepoint -- str )
 >codepoint ( str -- int )
@@ -363,6 +364,7 @@ bl ( -- )
 body>> ( instance: word-info -- body: any )
 boolean
 boolean? ( val -- ? )
+borrowed? ( val -- ? )
 byte-array
 byte-array? ( val -- ? )
 bytes-alloc ( n -- byte-array )

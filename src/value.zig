@@ -49,6 +49,13 @@ pub const ByteArray = struct {
         return self.items;
     }
 
+    pub fn isBorrowed(self: ByteArray) bool {
+        return switch (self.storage) {
+            .owned => false,
+            .borrowed => true,
+        };
+    }
+
     pub fn syncOwnedView(self: *ByteArray) void {
         if (self.storage == .owned) {
             self.owned_items.items = self.items;
@@ -104,6 +111,15 @@ pub const ByteArray = struct {
         }
     }
 };
+
+pub fn makeBorrowedByteArray(allocator: std.mem.Allocator, bytes: []u8) !*ByteArray {
+    const ba = try allocator.create(ByteArray);
+    ba.* = .{
+        .items = bytes,
+        .storage = .{ .borrowed = bytes },
+    };
+    return ba;
+}
 
 /// Context for hashing and comparing Values in hash-based containers.
 pub const ValueContext = struct {
@@ -1328,6 +1344,16 @@ test "byte array slice borrowed" {
     };
 
     try std.testing.expectEqualSlices(u8, items[0..], ba.slice());
+}
+
+test "makeBorrowedByteArray constructs borrowed storage" {
+    var items = [_]u8{ 0xAA, 0xBB, 0xCC };
+    const ba = try makeBorrowedByteArray(std.testing.allocator, items[0..]);
+    defer std.testing.allocator.destroy(ba);
+
+    try std.testing.expect(ba.isBorrowed());
+    try std.testing.expectEqualSlices(u8, items[0..], ba.slice());
+    try std.testing.expectEqual(@intFromPtr(items[0..].ptr), @intFromPtr(ba.slice().ptr));
 }
 
 test "byte array value uses slice for equality write and hash" {

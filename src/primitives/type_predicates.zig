@@ -1,12 +1,22 @@
+const std = @import("std");
+
 const Context = @import("../context.zig").Context;
+
 const value_mod = @import("../value.zig");
 const dispatch = @import("../dispatch.zig");
 const helpers = @import("helpers.zig");
-const Primitive = @import("types.zig").Primitive;
+
+const types_mod = @import("types.zig");
+const Primitive = types_mod.Primitive;
+const RegistryEntry = types_mod.RegistryEntry;
 
 pub const primitives = [_]Primitive{
     .{ .name = "type-of", .stack_effect = "val -- type", .doc = "Return the type of a value as a first-class type value.", .func = nativeTypeOf },
     .{ .name = "instance-of?", .stack_effect = "val type -- ?", .doc = "Check whether a value is an instance of the given type. For enum variants, also matches the parent enum type.", .func = nativeInstanceOf },
+};
+
+pub const registry_entries = [_]RegistryEntry{
+    .{ .name = "borrowed?", .func = nativeBorrowed, .stack_effect = "val -- ?" },
 };
 
 /// type-of ( val -- type ) - Return the type of a value as a first-class type value.
@@ -54,4 +64,55 @@ fn nativeInstanceOf(ctx: *Context) anyerror!void {
     }
 
     try ctx.stack.push(.{ .boolean = false });
+}
+
+fn nativeBorrowed(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    try ctx.stack.push(.{ .boolean = valueIsBorrowed(val) });
+}
+
+fn valueIsBorrowed(val: value_mod.Value) bool {
+    return switch (val) {
+        .byte_array => |ba| ba.isBorrowed(),
+        .tagged => |tagged| blk: {
+            if (!std.mem.startsWith(u8, tagged.tag.name, "packed-")) break :blk false;
+            break :blk switch (tagged.inner.*) {
+                .byte_array => |ba| ba.isBorrowed(),
+                else => false,
+            };
+        },
+        else => false,
+    };
+}
+
+test "borrowed? reports byte-array and packed backing ownership" {
+    var owned_bytes = [_]u8{ 1, 2, 3, 4 };
+    var borrowed_bytes = [_]u8{ 5, 6, 7, 8 };
+    var owned_ba = value_mod.ByteArray{
+        .items = owned_bytes[0..],
+        .owned_items = .{
+            .items = owned_bytes[0..],
+            .capacity = owned_bytes.len,
+        },
+        .storage = .owned,
+    };
+    var borrowed_ba = value_mod.ByteArray{
+        .items = borrowed_bytes[0..],
+        .storage = .{
+            .borrowed = borrowed_bytes[0..],
+        },
+    };
+
+    const packed_type = value_mod.VirtualType{
+        .name = "packed-u8",
+        .inner_type = "byte-array",
+    };
+    const owned_inner = value_mod.Value{ .byte_array = &owned_ba };
+    const borrowed_inner = value_mod.Value{ .byte_array = &borrowed_ba };
+
+    try std.testing.expect(!valueIsBorrowed(.{ .byte_array = &owned_ba }));
+    try std.testing.expect(valueIsBorrowed(.{ .byte_array = &borrowed_ba }));
+    try std.testing.expect(!valueIsBorrowed(.{ .tagged = .{ .tag = &packed_type, .inner = &owned_inner } }));
+    try std.testing.expect(valueIsBorrowed(.{ .tagged = .{ .tag = &packed_type, .inner = &borrowed_inner } }));
+    try std.testing.expect(!valueIsBorrowed(.{ .fixnum = 42 }));
 }

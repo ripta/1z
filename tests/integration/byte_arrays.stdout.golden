@@ -142,6 +142,14 @@ PASS: string -> bytes -> string
 Stack: [ ]
 PASS: bytes -> string -> bytes
 Stack: [ ]
+=== Owned byte-array conversion and predicate ===
+Stack: [ ]
+PASS: literal byte array is owned
+Stack: [ ]
+PASS: >byte-array keeps owned byte array owned
+Stack: [ ]
+PASS: >byte-array preserves owned byte array contents
+Stack: [ ]
 === Byte array inspect ===
 Stack: [ ]
 PASS: empty byte array inspect

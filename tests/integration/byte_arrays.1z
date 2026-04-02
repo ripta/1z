@@ -93,6 +93,11 @@ B{ 0x48 0x69 } bytes> "Hi" "bytes> hex to string" assert=
 "test" >bytes bytes> "test" "string -> bytes -> string" assert=
 B{ 65 66 67 } bytes> >bytes #first 65 "bytes -> string -> bytes" assert=
 
+"Owned byte-array conversion and predicate" test-section
+B{ 1 2 3 } borrowed? f "literal byte array is owned" assert=
+B{ 1 2 3 } >byte-array borrowed? f ">byte-array keeps owned byte array owned" assert=
+B{ 1 2 3 } >byte-array 1 #nth 2 ">byte-array preserves owned byte array contents" assert=
+
 "Byte array inspect" test-section
 B{ } inspect "B{ }" "empty byte array inspect" assert=
 B{ 1 2 3 } inspect "B{ 0x01 0x02 0x03 }" "byte array inspect" assert=

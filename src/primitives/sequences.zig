@@ -31,6 +31,7 @@ const valueTypeName = helpers.valueTypeName;
 const builtin = @import("builtin");
 const BigIntManaged = value_mod.BigIntManaged;
 const Allocator = std.mem.Allocator;
+const TaggedPayload = std.meta.TagPayload(Value, .tagged);
 
 const unwrapBaseType = dispatch_mod.unwrapBaseType;
 
@@ -540,6 +541,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "freeze", .stack_effect = "vector -- array", .doc = "Convert a vector to an array (copy semantics).", .func = nativeFreeze, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     // Container conversion
     .{ .name = ">array", .stack_effect = "container -- array", .doc = "Convert vector, byte-array, set, or array to an immutable array. Copy semantics; original unchanged.", .func = nativeToArray, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = ">byte-array", .stack_effect = "value -- value", .doc = "Convert a byte-array or packed value to owned byte-array storage. Owned inputs are returned unchanged; borrowed inputs are copied.", .func = nativeToByteArray, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = ">hash", .stack_effect = "container -- hash", .doc = "Convert mutable-map or hash to an immutable hash. Mutable-map uses copy semantics; original unchanged.", .func = nativeToHash, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     // Byte-level access
     .{ .name = "#peek", .stack_effect = "byte-array offset width -- fixnum", .doc = "Read width bytes (1/2/4/8) at offset from byte-array as unsigned fixnum.", .func = nativePeek, .markers = &.{@constCast(&markers_mod.generic_marker)} },
@@ -2195,6 +2197,66 @@ fn nativeToArray(ctx: *Context) anyerror!void {
     return error.TypeMismatch;
 }
 
+fn copyByteArrayToOwned(alloc: Allocator, src: *ByteArray) !*ByteArray {
+    const dst = try alloc.create(ByteArray);
+    dst.* = ByteArray{};
+    try dst.ensureTotalCapacity(alloc, src.slice().len);
+    dst.items.len = src.slice().len;
+    @memcpy(dst.items, src.slice());
+    return dst;
+}
+
+fn clonePackedToOwned(ctx: *Context, tagged: TaggedPayload) !void {
+    if (!std.mem.startsWith(u8, tagged.tag.name, "packed-")) {
+        setErrorContext(ctx, ">byte-array expected byte-array or packed value, got {s}", .{tagged.tag.name});
+        return error.TypeMismatch;
+    }
+
+    const inner_ba = switch (tagged.inner.*) {
+        .byte_array => |ba| ba,
+        else => {
+            setErrorContext(ctx, ">byte-array expected packed value backed by byte-array", .{});
+            return error.TypeMismatch;
+        },
+    };
+
+    if (!inner_ba.isBorrowed()) {
+        try ctx.stack.push(.{ .tagged = tagged });
+        return;
+    }
+
+    const alloc = ctx.containerAllocator();
+    const owned_ba = try copyByteArrayToOwned(alloc, inner_ba);
+    const new_inner = try alloc.create(Value);
+    new_inner.* = .{ .byte_array = owned_ba };
+    try ctx.stack.push(.{
+        .tagged = .{
+            .tag = tagged.tag,
+            .inner = new_inner,
+        },
+    });
+}
+
+/// >byte-array ( value -- value ) - Ensure byte-array backing storage is owned
+fn nativeToByteArray(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .byte_array => |ba| {
+            if (!ba.isBorrowed()) {
+                try ctx.stack.push(val);
+                return;
+            }
+
+            try ctx.stack.push(.{ .byte_array = try copyByteArrayToOwned(ctx.containerAllocator(), ba) });
+        },
+        .tagged => |tagged| try clonePackedToOwned(ctx, tagged),
+        else => {
+            setErrorContext(ctx, ">byte-array expected byte-array or packed value, got {s}", .{valueTypeName(val)});
+            return error.TypeMismatch;
+        },
+    }
+}
+
 /// >hash ( mutable-map -- hash ) - Snapshot mutable-map into an immutable hash
 fn nativeToHashMutableMap(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
@@ -2500,4 +2562,82 @@ test "borrowed byte-array structural mutations are rejected" {
     try std.testing.expectError(error.InvalidArgument, nativeGrowMut(&ctx));
     try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
     try std.testing.expectEqual(@as(usize, 3), ba.slice().len);
+}
+
+test ">byte-array on owned byte-array is a no-op" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var items = [_]u8{ 1, 2, 3 };
+    var ba = ByteArray{
+        .items = items[0..],
+        .owned_items = .{ .items = items[0..], .capacity = items.len },
+        .storage = .owned,
+    };
+
+    try ctx.stack.push(.{ .byte_array = &ba });
+    try nativeToByteArray(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .byte_array);
+    try std.testing.expect(result.byte_array == &ba);
+}
+
+test ">byte-array copies borrowed byte-array to owned storage" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var items = [_]u8{ 9, 8, 7 };
+    var ba = ByteArray{
+        .items = items[0..],
+        .storage = .{ .borrowed = items[0..] },
+    };
+
+    try ctx.stack.push(.{ .byte_array = &ba });
+    try nativeToByteArray(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .byte_array);
+    try std.testing.expect(result.byte_array != &ba);
+    try std.testing.expect(!result.byte_array.isBorrowed());
+    try std.testing.expectEqualSlices(u8, items[0..], result.byte_array.slice());
+}
+
+test ">byte-array copies borrowed packed backing and preserves tag" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var items = [_]u8{ 0xAA, 0xBB, 0xCC, 0xDD };
+    var ba = ByteArray{
+        .items = items[0..],
+        .storage = .{ .borrowed = items[0..] },
+    };
+    const inner = Value{ .byte_array = &ba };
+    const packed_type = value_mod.VirtualType{
+        .name = "packed-u8",
+        .inner_type = "byte-array",
+    };
+
+    try ctx.stack.push(.{
+        .tagged = .{
+            .tag = &packed_type,
+            .inner = &inner,
+        },
+    });
+    try nativeToByteArray(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .tagged);
+    try std.testing.expect(result.tagged.tag == &packed_type);
+    try std.testing.expect(result.tagged.inner.* == .byte_array);
+    try std.testing.expect(!result.tagged.inner.*.byte_array.isBorrowed());
+    try std.testing.expectEqualSlices(u8, items[0..], result.tagged.inner.*.byte_array.slice());
+}
+
+test ">byte-array rejects unrelated values" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .fixnum = 42 });
+    try std.testing.expectError(error.TypeMismatch, nativeToByteArray(&ctx));
 }
