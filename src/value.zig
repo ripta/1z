@@ -37,7 +37,73 @@ pub const HashTable = std.StringHashMapUnmanaged(Value);
 pub const Vector = std.ArrayListUnmanaged(Value);
 
 /// ByteArray type for B{ } literals - mutable, dynamically-sized byte sequences.
-pub const ByteArray = std.ArrayListUnmanaged(u8);
+pub const ByteArray = struct {
+    items: []u8 = &.{},
+    owned_items: std.ArrayListUnmanaged(u8) = .{},
+    storage: union(enum) {
+        owned,
+        borrowed: []u8,
+    } = .owned,
+
+    pub fn slice(self: ByteArray) []u8 {
+        return self.items;
+    }
+
+    fn syncOwnedView(self: *ByteArray) void {
+        if (self.storage == .owned) {
+            self.owned_items.items = self.items;
+        }
+    }
+
+    fn refreshOwnedView(self: *ByteArray) void {
+        if (self.storage == .owned) {
+            self.items = self.owned_items.items[0..self.owned_items.items.len];
+        }
+    }
+
+    pub fn ensureTotalCapacity(self: *ByteArray, allocator: std.mem.Allocator, n: usize) error{OutOfMemory}!void {
+        switch (self.storage) {
+            .owned => {
+                self.syncOwnedView();
+                try self.owned_items.ensureTotalCapacity(allocator, n);
+                self.refreshOwnedView();
+            },
+            .borrowed => return error.OutOfMemory,
+        }
+    }
+
+    pub fn append(self: *ByteArray, allocator: std.mem.Allocator, item: u8) error{OutOfMemory}!void {
+        switch (self.storage) {
+            .owned => {
+                self.syncOwnedView();
+                try self.owned_items.append(allocator, item);
+                self.refreshOwnedView();
+            },
+            .borrowed => return error.OutOfMemory,
+        }
+    }
+
+    pub fn appendAssumeCapacity(self: *ByteArray, item: u8) void {
+        std.debug.assert(self.storage == .owned);
+        self.syncOwnedView();
+        self.owned_items.appendAssumeCapacity(item);
+        self.refreshOwnedView();
+    }
+
+    pub fn appendSliceAssumeCapacity(self: *ByteArray, items: []const u8) void {
+        std.debug.assert(self.storage == .owned);
+        self.syncOwnedView();
+        self.owned_items.appendSliceAssumeCapacity(items);
+        self.refreshOwnedView();
+    }
+
+    pub fn deinit(self: *ByteArray, allocator: std.mem.Allocator) void {
+        if (self.storage == .owned) {
+            self.syncOwnedView();
+            self.owned_items.deinit(allocator);
+        }
+    }
+};
 
 /// Context for hashing and comparing Values in hash-based containers.
 pub const ValueContext = struct {
@@ -586,7 +652,7 @@ pub const Value = union(enum) {
             },
             .byte_array => |b| {
                 try writer.writeAll("B{ ");
-                for (b.items) |byte| {
+                for (b.slice()) |byte| {
                     try writer.print("0x{X:0>2} ", .{byte});
                 }
                 try writer.writeAll("}");
@@ -752,7 +818,7 @@ pub const Value = union(enum) {
             },
             .byte_array => |a| {
                 const b = other.byte_array;
-                return simd.eqlBytes(a.items, b.items);
+                return simd.eqlBytes(a.slice(), b.slice());
             },
             // Sets use order-independent equality: two sets are equal if they
             // contain the same elements regardless of iteration order.
@@ -904,7 +970,7 @@ pub const Value = union(enum) {
                     hasher.update(std.mem.asBytes(&elem_hash));
                 }
             },
-            .byte_array => |b| hasher.update(b.items),
+            .byte_array => |b| hasher.update(b.slice()),
             .set => |s| {
                 // Order-independent hash using XOR
                 var combined: u64 = 0;
@@ -1237,6 +1303,60 @@ test "symbol equality" {
 
     try std.testing.expect(a.eql(b));
     try std.testing.expect(!a.eql(c));
+}
+
+test "byte array slice owned" {
+    var items = [_]u8{ 0x01, 0x7F, 0xFF };
+    const backing = std.ArrayListUnmanaged(u8){
+        .items = items[0..],
+        .capacity = items.len,
+    };
+    const ba = ByteArray{
+        .items = items[0..],
+        .owned_items = backing,
+        .storage = .owned,
+    };
+
+    try std.testing.expectEqualSlices(u8, items[0..], ba.slice());
+}
+
+test "byte array slice borrowed" {
+    var items = [_]u8{ 0x10, 0x20, 0x30 };
+    const ba = ByteArray{
+        .items = items[0..],
+        .storage = .{ .borrowed = items[0..] },
+    };
+
+    try std.testing.expectEqualSlices(u8, items[0..], ba.slice());
+}
+
+test "byte array value uses slice for equality write and hash" {
+    var owned_items = [_]u8{ 0xDE, 0xAD, 0xBE, 0xEF };
+    const owned_list = std.ArrayListUnmanaged(u8){
+        .items = owned_items[0..],
+        .capacity = owned_items.len,
+    };
+    var borrowed_items = [_]u8{ 0xDE, 0xAD, 0xBE, 0xEF };
+
+    var owned = ByteArray{
+        .items = owned_items[0..],
+        .owned_items = owned_list,
+        .storage = .owned,
+    };
+    var borrowed = ByteArray{
+        .items = borrowed_items[0..],
+        .storage = .{ .borrowed = borrowed_items[0..] },
+    };
+    const a = Value{ .byte_array = &owned };
+    const b = Value{ .byte_array = &borrowed };
+
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try a.write(fbs.writer());
+    try std.testing.expectEqualStrings("B{ 0xDE 0xAD 0xBE 0xEF }", fbs.getWritten());
+
+    try std.testing.expect(a.eql(b));
+    try std.testing.expectEqual(a.hashValue(), b.hashValue());
 }
 
 test "array equality" {
