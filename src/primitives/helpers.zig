@@ -120,6 +120,13 @@ pub fn valueMatchesType(ctx: *Context, val: Value, expected_tv: *const TypeValue
         if (expected_tv == any_tv) return true;
     }
 
+    if (expected_tv.member_types) |members| {
+        for (members) |member_tv| {
+            if (valueMatchesType(ctx, val, member_tv)) return true;
+        }
+        return false;
+    }
+
     const actual_tv = resolveValueTypeValue(ctx, val) orelse return false;
     if (actual_tv == expected_tv) return true;
 
@@ -133,6 +140,21 @@ pub fn valueMatchesType(ctx: *Context, val: Value, expected_tv: *const TypeValue
     }
 
     return false;
+}
+
+const testing = std.testing;
+
+test "valueMatchesType accepts values matching anonymous union members" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+    const union_tv = try ctx.getOrCreateAnonymousUnionTypeValue(&.{ string_tv, fixnum_tv });
+
+    try testing.expect(valueMatchesType(&ctx, .{ .fixnum = 42 }, union_tv));
+    try testing.expect(valueMatchesType(&ctx, .{ .string = "ok" }, union_tv));
+    try testing.expect(!valueMatchesType(&ctx, .{ .boolean = true }, union_tv));
 }
 
 // =============================================================================

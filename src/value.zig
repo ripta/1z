@@ -395,6 +395,7 @@ pub const TypeValue = struct {
     name: []const u8,
     descriptor: ?*HashTable,
     generated_words: ?[]Value = null,
+    member_types: ?[]const *const TypeValue = null,
 };
 
 pub const DescriptorFlags = struct {

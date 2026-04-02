@@ -124,12 +124,6 @@ pub const ParameterizedTypeKey = struct {
     element: *const value_mod.TypeValue,
 };
 
-pub const StructDescriptorKey = struct {
-    fields: []const []const u8,
-    field_types: []const ?*const value_mod.TypeValue = &.{},
-    mutable: bool,
-};
-
 pub const ParameterizedTypeKeyContext = struct {
     pub fn hash(_: @This(), key: ParameterizedTypeKey) u64 {
         var h = std.hash.Wyhash.init(0);
@@ -141,6 +135,12 @@ pub const ParameterizedTypeKeyContext = struct {
     pub fn eql(_: @This(), a: ParameterizedTypeKey, b: ParameterizedTypeKey) bool {
         return a.base == b.base and a.element == b.element;
     }
+};
+
+pub const StructDescriptorKey = struct {
+    fields: []const []const u8,
+    field_types: []const ?*const value_mod.TypeValue = &.{},
+    mutable: bool,
 };
 
 pub const StructDescriptorKeyContext = struct {
@@ -167,6 +167,32 @@ pub const StructDescriptorKeyContext = struct {
         }
         for (a.field_types, b.field_types) |a_field_type, b_field_type| {
             if (a_field_type != b_field_type) return false;
+        }
+        return true;
+    }
+};
+
+/// Key for anonymous union interning, represented by the sorted unique member set.
+pub const AnonymousUnionKey = struct {
+    members: []const *const value_mod.TypeValue,
+};
+
+/// Context for anonymous union interning keys.
+pub const AnonymousUnionKeyContext = struct {
+    pub fn hash(_: @This(), key: AnonymousUnionKey) u64 {
+        var h = std.hash.Wyhash.init(0);
+        h.update(std.mem.asBytes(&key.members.len));
+        for (key.members) |member| {
+            const ptr_value = @intFromPtr(member);
+            h.update(std.mem.asBytes(&ptr_value));
+        }
+        return h.final();
+    }
+
+    pub fn eql(_: @This(), a: AnonymousUnionKey, b: AnonymousUnionKey) bool {
+        if (a.members.len != b.members.len) return false;
+        for (a.members, b.members) |a_member, b_member| {
+            if (a_member != b_member) return false;
         }
         return true;
     }
@@ -352,6 +378,13 @@ pub const Context = struct {
         StructDescriptorKey,
         *value_mod.HashTable,
         StructDescriptorKeyContext,
+        80,
+    ) = .{},
+    /// Interned anonymous union TypeValues keyed by sorted unique member pointers.
+    anonymous_union_type_values: std.HashMapUnmanaged(
+        AnonymousUnionKey,
+        *value_mod.TypeValue,
+        AnonymousUnionKeyContext,
         80,
     ) = .{},
     /// Registry of known pragma keys and their validation rules.
@@ -748,6 +781,7 @@ pub const Context = struct {
         self.resource_type_values.deinit(self.allocator);
         self.parameterized_type_descriptors.deinit(self.allocator);
         self.struct_descriptors.deinit(self.allocator);
+        self.anonymous_union_type_values.deinit(self.allocator);
         self.dispatch.deinit();
         self.jit_dispatch.deinit();
         var pic_iter = self.pic_cache.iterator();
@@ -1893,6 +1927,32 @@ pub const Context = struct {
         return null;
     }
 
+    /// Look up an interned anonymous union type value by its sorted unique members.
+    pub fn lookupAnonymousUnionTypeValue(
+        self: *const Context,
+        members: []const *const value_mod.TypeValue,
+    ) ?*value_mod.TypeValue {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+        return self.lookupAnonymousUnionTypeValueLocked(members);
+    }
+
+    fn lookupAnonymousUnionTypeValueLocked(
+        self: *const Context,
+        members: []const *const value_mod.TypeValue,
+    ) ?*value_mod.TypeValue {
+        const key = AnonymousUnionKey{ .members = members };
+        if (self.anonymous_union_type_values.get(key)) |tv| return tv;
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            if (ctx.anonymous_union_type_values.get(key)) |tv| return tv;
+            ancestor = ctx.parent_context;
+        }
+
+        return null;
+    }
+
     /// Register a built-in type value by name (write-locked).
     pub fn registerBuiltinTypeValue(self: *Context, name: []const u8, tv: *value_mod.TypeValue) !void {
         self.acquireSharedWrite();
@@ -1986,6 +2046,80 @@ pub const Context = struct {
             @ptrCast(desc_map),
         );
         return @ptrCast(desc_map);
+    }
+
+    fn lessThanTypeValuePtr(_: void, a: *const value_mod.TypeValue, b: *const value_mod.TypeValue) bool {
+        return @intFromPtr(a) < @intFromPtr(b);
+    }
+
+    fn lessThanTypeValueName(_: void, a: *const value_mod.TypeValue, b: *const value_mod.TypeValue) bool {
+        return std.mem.order(u8, a.name, b.name) == .lt;
+    }
+
+    /// Return the canonical type value for an anonymous union member set.
+    /// Member order does not matter; duplicates are removed before interning.
+    pub fn getOrCreateAnonymousUnionTypeValue(
+        self: *Context,
+        members: []const *const value_mod.TypeValue,
+    ) !*value_mod.TypeValue {
+        std.debug.assert(members.len != 0);
+
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+
+        const alloc = self.quotationAllocator();
+        var sorted_members = try alloc.alloc(*const value_mod.TypeValue, members.len);
+        @memcpy(sorted_members, members);
+        std.sort.pdq(*const value_mod.TypeValue, sorted_members, {}, lessThanTypeValuePtr);
+
+        var unique_len: usize = 0;
+        for (sorted_members) |member| {
+            if (unique_len == 0 or sorted_members[unique_len - 1] != member) {
+                sorted_members[unique_len] = member;
+                unique_len += 1;
+            }
+        }
+        sorted_members = sorted_members[0..unique_len];
+
+        if (sorted_members.len == 1) {
+            return @constCast(sorted_members[0]);
+        }
+
+        if (self.lookupAnonymousUnionTypeValueLocked(sorted_members)) |tv| return tv;
+
+        const display_members = try alloc.alloc(*const value_mod.TypeValue, sorted_members.len);
+        @memcpy(display_members, sorted_members);
+        std.sort.pdq(*const value_mod.TypeValue, display_members, {}, lessThanTypeValueName);
+
+        var name_len: usize = 0;
+        for (display_members, 0..) |member, i| {
+            name_len += member.name.len;
+            if (i + 1 < display_members.len) name_len += 1;
+        }
+        const union_name = try alloc.alloc(u8, name_len);
+        var cursor: usize = 0;
+        for (display_members, 0..) |member, i| {
+            @memcpy(union_name[cursor .. cursor + member.name.len], member.name);
+            cursor += member.name.len;
+            if (i + 1 < display_members.len) {
+                union_name[cursor] = '|';
+                cursor += 1;
+            }
+        }
+
+        const tv = try alloc.create(value_mod.TypeValue);
+        tv.* = .{
+            .name = union_name,
+            .descriptor = null,
+            .member_types = sorted_members,
+        };
+
+        try self.anonymous_union_type_values.put(
+            self.allocator,
+            .{ .members = sorted_members },
+            tv,
+        );
+        return tv;
     }
 
     // =========================================================================
@@ -4028,6 +4162,25 @@ test "struct descriptor interning reuses descriptor for same shape" {
 
     const desc7 = try ctx.getOrCreateStructDescriptor(&fields_xy, &typed_fixnum_string, false);
     try std.testing.expect(desc5 != desc7);
+}
+
+test "anonymous union interning reuses type value for same member set" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+    const bignum_tv = ctx.lookupBuiltinTypeValue("bignum").?;
+
+    const union1 = try ctx.getOrCreateAnonymousUnionTypeValue(&.{ fixnum_tv, string_tv, bignum_tv });
+    const union2 = try ctx.getOrCreateAnonymousUnionTypeValue(&.{ string_tv, bignum_tv, fixnum_tv });
+    const union3 = try ctx.getOrCreateAnonymousUnionTypeValue(&.{ string_tv, fixnum_tv, string_tv, bignum_tv });
+
+    try std.testing.expect(union1 == union2);
+    try std.testing.expect(union1 == union3);
+    try std.testing.expectEqualStrings("bignum|fixnum|string", union1.name);
+    try std.testing.expect(union1.member_types != null);
+    try std.testing.expectEqual(@as(usize, 3), union1.member_types.?.len);
 }
 
 test "enum registry frame push/pop" {
