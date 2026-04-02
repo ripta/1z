@@ -34,6 +34,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "ffi-callback", .func = nativeFfiCallback, .capability = .ffi },
     .{ .name = "bytes-raw-ptr", .func = nativeBytesRawPtr, .capability = .ffi },
     .{ .name = "ffi-ptr+len>bytes", .func = nativeFfiPtrLenToBytes, .capability = .ffi },
+    .{ .name = "ffi-ptr+len>borrowed-bytes", .func = nativeFfiPtrLenToBorrowedBytes, .capability = .ffi },
 };
 
 fn dylibCloseFn(ptr: *anyopaque) void {
@@ -841,6 +842,72 @@ fn nativeFfiPtrLenToBytes(ctx: *Context) anyerror!void {
     }
 
     try ctx.stack.push(.{ .byte_array = ba });
+}
+
+/// ffi-ptr+len>borrowed-bytes ( resource n -- byte-array )
+///
+/// Wraps n bytes from a raw pointer resource as a borrowed byte-array.
+/// No copy is performed; the returned byte-array is only valid while the
+/// source pointer remains alive. The resource is not consumed or closed.
+fn nativeFfiPtrLenToBorrowedBytes(ctx: *Context) anyerror!void {
+    const n_val = try helpers.popFixnum(ctx);
+    const resource_val = try ctx.stack.pop();
+
+    const resource = switch (resource_val) {
+        .resource => |r| r,
+        else => {
+            helpers.setTypeMismatchError(ctx, "resource", resource_val);
+            return error.TypeMismatch;
+        },
+    };
+    try error_mapping.ensureResourceOpen(resource);
+
+    if (n_val < 0) {
+        helpers.setErrorContext(ctx, "ffi-ptr+len>borrowed-bytes size must be non-negative, got {d}", .{n_val});
+        return error.IndexOutOfBounds;
+    }
+    const n: usize = @intCast(n_val);
+
+    var bytes: []u8 = &.{};
+    if (n > 0) {
+        const raw_ptr = resource.ptr orelse {
+            helpers.setErrorContext(ctx, "ffi-ptr+len>borrowed-bytes: resource pointer is null", .{});
+            return error.FFICallFailed;
+        };
+        const src: [*]u8 = @ptrCast(raw_ptr);
+        bytes = src[0..n];
+    }
+
+    const ba = try value_mod.makeBorrowedByteArray(ctx.quotationAllocator(), bytes);
+    try ctx.stack.push(.{ .byte_array = ba });
+}
+
+test "ffi-ptr+len>borrowed-bytes wraps source memory without copying" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var items = [_]u8{ 1, 2, 3, 4 };
+    var resource = Resource{
+        .type_name = "ffi-bytes",
+        .ptr = @ptrCast(items[0..].ptr),
+        .closed = false,
+        .close_fn = .none,
+    };
+
+    try ctx.stack.push(.{ .resource = &resource });
+    try ctx.stack.push(.{ .fixnum = items.len });
+    try nativeFfiPtrLenToBorrowedBytes(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .byte_array);
+    try std.testing.expect(result.byte_array.isBorrowed());
+    try std.testing.expectEqualSlices(u8, items[0..], result.byte_array.slice());
+
+    items[1] = 99;
+    try std.testing.expectEqual(@as(u8, 99), result.byte_array.slice()[1]);
+
+    result.byte_array.slice()[2] = 77;
+    try std.testing.expectEqual(@as(u8, 77), items[2]);
 }
 
 /// Call a foreign close function via libffi with the signature (ptr -> void).

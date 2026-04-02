@@ -19,15 +19,17 @@ packed-raw-ptr: method{ packed-u64 } [ unmake-packed-u64 bytes>ffi-ptr+len ] ;
 packed-raw-ptr: method{ packed-f32 } [ unmake-packed-f32 bytes>ffi-ptr+len ] ;
 packed-raw-ptr: method{ packed-f64 } [ unmake-packed-f64 bytes>ffi-ptr+len ] ;
 
-\ packed-from-ptr:T: copy n elements from a C pointer into a new packed array
+\ packed-from-ptr:T: wrap n elements from a C pointer without copying
+\ Lifetime is tied to the source pointer; call >byte-array before long-lived use,
+\ e.g., crossing a task boundary or outliving the source allocation.
 
-packed-from-ptr:i8:  ( resource n -- packed-i8 )  [ native.ffi-ptr+len>bytes >packed-i8 ] ;
-packed-from-ptr:i16: ( resource n -- packed-i16 ) [ 2 * native.ffi-ptr+len>bytes >packed-i16 ] ;
-packed-from-ptr:i32: ( resource n -- packed-i32 ) [ 4 * native.ffi-ptr+len>bytes >packed-i32 ] ;
-packed-from-ptr:i64: ( resource n -- packed-i64 ) [ 8 * native.ffi-ptr+len>bytes >packed-i64 ] ;
-packed-from-ptr:u8:  ( resource n -- packed-u8 )  [ native.ffi-ptr+len>bytes >packed-u8 ] ;
-packed-from-ptr:u16: ( resource n -- packed-u16 ) [ 2 * native.ffi-ptr+len>bytes >packed-u16 ] ;
-packed-from-ptr:u32: ( resource n -- packed-u32 ) [ 4 * native.ffi-ptr+len>bytes >packed-u32 ] ;
-packed-from-ptr:u64: ( resource n -- packed-u64 ) [ 8 * native.ffi-ptr+len>bytes >packed-u64 ] ;
-packed-from-ptr:f32: ( resource n -- packed-f32 ) [ 4 * native.ffi-ptr+len>bytes >packed-f32 ] ;
-packed-from-ptr:f64: ( resource n -- packed-f64 ) [ 8 * native.ffi-ptr+len>bytes >packed-f64 ] ;
+packed-from-ptr:i8:  ( resource n -- packed-i8 )  [ native.ffi-ptr+len>borrowed-bytes >packed-i8 ] ;
+packed-from-ptr:i16: ( resource n -- packed-i16 ) [ 2 * native.ffi-ptr+len>borrowed-bytes >packed-i16 ] ;
+packed-from-ptr:i32: ( resource n -- packed-i32 ) [ 4 * native.ffi-ptr+len>borrowed-bytes >packed-i32 ] ;
+packed-from-ptr:i64: ( resource n -- packed-i64 ) [ 8 * native.ffi-ptr+len>borrowed-bytes >packed-i64 ] ;
+packed-from-ptr:u8:  ( resource n -- packed-u8 )  [ native.ffi-ptr+len>borrowed-bytes >packed-u8 ] ;
+packed-from-ptr:u16: ( resource n -- packed-u16 ) [ 2 * native.ffi-ptr+len>borrowed-bytes >packed-u16 ] ;
+packed-from-ptr:u32: ( resource n -- packed-u32 ) [ 4 * native.ffi-ptr+len>borrowed-bytes >packed-u32 ] ;
+packed-from-ptr:u64: ( resource n -- packed-u64 ) [ 8 * native.ffi-ptr+len>borrowed-bytes >packed-u64 ] ;
+packed-from-ptr:f32: ( resource n -- packed-f32 ) [ 4 * native.ffi-ptr+len>borrowed-bytes >packed-f32 ] ;
+packed-from-ptr:f64: ( resource n -- packed-f64 ) [ 8 * native.ffi-ptr+len>borrowed-bytes >packed-f64 ] ;
