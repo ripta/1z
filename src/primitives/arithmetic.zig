@@ -506,7 +506,7 @@ const ByteType = enum { string, byte_array };
 fn extractBytes(comptime bt: ByteType, val: Value) []const u8 {
     return switch (bt) {
         .string => val.string,
-        .byte_array => val.byte_array.items,
+        .byte_array => val.byte_array.slice(),
     };
 }
 
@@ -1086,7 +1086,7 @@ fn nativeCmp(ctx: *Context) anyerror!void {
                 .gt => @as(i64, 1),
                 .eq => @as(i64, 0),
             },
-            .byte_array => |bv| switch (std.mem.order(u8, av, bv.items)) {
+            .byte_array => |bv| switch (std.mem.order(u8, av, bv.slice())) {
                 .lt => @as(i64, -1),
                 .gt => @as(i64, 1),
                 .eq => @as(i64, 0),
@@ -1097,12 +1097,12 @@ fn nativeCmp(ctx: *Context) anyerror!void {
             },
         },
         .byte_array => |av| switch (b) {
-            .string => |bv| switch (std.mem.order(u8, av.items, bv)) {
+            .string => |bv| switch (std.mem.order(u8, av.slice(), bv)) {
                 .lt => @as(i64, -1),
                 .gt => @as(i64, 1),
                 .eq => @as(i64, 0),
             },
-            .byte_array => |bv| switch (std.mem.order(u8, av.items, bv.items)) {
+            .byte_array => |bv| switch (std.mem.order(u8, av.slice(), bv.slice())) {
                 .lt => @as(i64, -1),
                 .gt => @as(i64, 1),
                 .eq => @as(i64, 0),

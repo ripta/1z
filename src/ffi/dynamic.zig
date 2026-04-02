@@ -381,7 +381,7 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
         } else if (param_type.tag == .struct_type) {
             arg_types[pi] = ffiTypeToLibffiExt(param_type);
             const ba = try extractStructByteArray(ctx, param_type, arg_vals[stack_arg_idx], stack_arg_idx);
-            arg_ptrs[pi] = @ptrCast(ba.items.ptr);
+            arg_ptrs[pi] = @ptrCast(ba.slice().ptr);
             arg_slots[pi] = std.mem.zeroes(ArgSlot);
             out_ptr_slots[pi] = null;
             stack_arg_idx += 1;
@@ -420,7 +420,7 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
         ba.items.len = layout.total_size;
         @memset(ba.items[0..layout.total_size], 0);
         ret_ba = ba;
-        ret_buf = @ptrCast(ba.items.ptr);
+        ret_buf = @ptrCast(ba.slice().ptr);
     } else {
         ret_buf = @ptrCast(&ret_storage);
     }
@@ -793,13 +793,13 @@ fn nativeBytesRawPtr(ctx: *Context) anyerror!void {
     const r = try alloc.create(Resource);
     r.* = .{
         .type_name = "ffi-bytes",
-        .ptr = @ptrCast(ba.items.ptr),
+        .ptr = @ptrCast(ba.slice().ptr),
         .closed = false,
         .close_fn = .none,
     };
 
     try ctx.stack.push(.{ .resource = r });
-    try ctx.stack.push(.{ .fixnum = @intCast(ba.items.len) });
+    try ctx.stack.push(.{ .fixnum = @intCast(ba.slice().len) });
 }
 
 /// ffi-ptr+len>bytes ( resource n -- byte-array )

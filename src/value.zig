@@ -49,13 +49,13 @@ pub const ByteArray = struct {
         return self.items;
     }
 
-    fn syncOwnedView(self: *ByteArray) void {
+    pub fn syncOwnedView(self: *ByteArray) void {
         if (self.storage == .owned) {
             self.owned_items.items = self.items;
         }
     }
 
-    fn refreshOwnedView(self: *ByteArray) void {
+    pub fn refreshOwnedView(self: *ByteArray) void {
         if (self.storage == .owned) {
             self.items = self.owned_items.items[0..self.owned_items.items.len];
         }

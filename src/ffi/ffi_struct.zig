@@ -435,11 +435,12 @@ fn nativeFfiStructMake(ctx: *Context) anyerror!void {
                     return error.TypeMismatch;
                 },
             };
-            if (inner_ba.items.len != field.size) {
-                helpers.setErrorContext(ctx, "{s}: field '{s}' size mismatch: expected {d}, got {d}", .{ make_caller, field.name, field.size, inner_ba.items.len });
+            const inner_bytes = inner_ba.slice();
+            if (inner_bytes.len != field.size) {
+                helpers.setErrorContext(ctx, "{s}: field '{s}' size mismatch: expected {d}, got {d}", .{ make_caller, field.name, field.size, inner_bytes.len });
                 return error.FFITypeMismatch;
             }
-            @memcpy(buf, inner_ba.items[0..field.size]);
+            @memcpy(buf, inner_bytes[0..field.size]);
         } else if (field.ffi_tag) |tag| {
             try marshalFieldValue(ctx, make_caller, field.name, tag, val, buf);
         }
@@ -712,11 +713,12 @@ fn nativeFfiStructFieldSet(ctx: *Context) anyerror!void {
                 return error.TypeMismatch;
             },
         };
-        if (inner_ba.items.len != field.size) {
-            helpers.setErrorContext(ctx, "{s}: size mismatch: expected {d}, got {d}", .{ caller, field.size, inner_ba.items.len });
+        const inner_bytes = inner_ba.slice();
+        if (inner_bytes.len != field.size) {
+            helpers.setErrorContext(ctx, "{s}: size mismatch: expected {d}, got {d}", .{ caller, field.size, inner_bytes.len });
             return error.FFITypeMismatch;
         }
-        @memcpy(buf, inner_ba.items[0..field.size]);
+        @memcpy(buf, inner_bytes[0..field.size]);
     } else if (field.ffi_tag) |tag| {
         try marshalFieldValue(ctx, caller, field.name, tag, new_val, buf);
     }

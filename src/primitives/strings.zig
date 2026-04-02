@@ -191,7 +191,7 @@ fn nativeBytesToString(ctx: *Context) anyerror!void {
     switch (val) {
         .byte_array => |b| {
             const alloc = ctx.quotationAllocator();
-            const result = alloc.dupe(u8, b.items) catch return error.OutOfMemory;
+            const result = alloc.dupe(u8, b.slice()) catch return error.OutOfMemory;
             try ctx.stack.push(.{ .string = result });
         },
         else => {

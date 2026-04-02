@@ -285,7 +285,7 @@ pub fn nativeStreamWrite(ctx: *Context) anyerror!void {
 
     // Get bytes to write - accept byte arrays or strings
     const bytes: []const u8 = switch (bytes_val) {
-        .byte_array => |ba| ba.items,
+        .byte_array => |ba| ba.slice(),
         .string => |s| s,
         else => {
             helpers.setTypeMismatchError(ctx, "string or byte-array", bytes_val);

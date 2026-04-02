@@ -633,8 +633,9 @@ pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
         .byte_array => |b| blk: {
             const new_b = try alloc.create(value_mod.ByteArray);
             new_b.* = .{};
-            try new_b.ensureTotalCapacity(alloc, b.items.len);
-            new_b.appendSliceAssumeCapacity(b.items);
+            const bytes = b.slice();
+            try new_b.ensureTotalCapacity(alloc, bytes.len);
+            new_b.appendSliceAssumeCapacity(bytes);
             break :blk .{ .byte_array = new_b };
         },
 

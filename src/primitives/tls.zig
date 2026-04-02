@@ -233,7 +233,7 @@ fn nativeTlsConfigAddCaPem(ctx: *Context) anyerror!void {
     const pem_val = try ctx.stack.pop();
     const pem_data: []const u8 = switch (pem_val) {
         .string => |s| s,
-        .byte_array => |ba| ba.items,
+        .byte_array => |ba| ba.slice(),
         else => {
             helpers.setTypeMismatchError(ctx, "string or byte-array", pem_val);
             return error.TypeMismatch;

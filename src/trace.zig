@@ -101,7 +101,7 @@ pub fn writeValuePreview(val: Value, writer: anytype) !void {
         .symbol => |s| try writer.print("{s}:", .{s}),
         .array => |items| try writer.print("<array:{d}>", .{items.len}),
         .vector => |v| try writer.print("<vector:{d}>", .{v.items.len}),
-        .byte_array => |b| try writer.print("<byte-array:{d}>", .{b.items.len}),
+        .byte_array => |b| try writer.print("<byte-array:{d}>", .{b.slice().len}),
         .set => |s| try writer.print("<set:{d}>", .{s.count()}),
         .hash => |h| try writer.print("<hash:{d}>", .{h.count()}),
         .mutable_map => |m| try writer.print("<mutable-map:{d}>", .{m.count()}),

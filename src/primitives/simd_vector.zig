@@ -224,11 +224,12 @@ fn extractSimdType(ctx: *Context, tagged: TaggedPayload) !SimdVectorType {
 }
 
 fn validateSimdSize(ctx: *Context, ba: *ByteArray) !*[simd_kernels.SIMD_BYTES]u8 {
-    if (ba.items.len != simd_kernels.SIMD_BYTES) {
-        helpers.setErrorContext(ctx, "simd operation: expected {d} bytes, got {d}", .{ simd_kernels.SIMD_BYTES, ba.items.len });
+    const bytes = ba.slice();
+    if (bytes.len != simd_kernels.SIMD_BYTES) {
+        helpers.setErrorContext(ctx, "simd operation: expected {d} bytes, got {d}", .{ simd_kernels.SIMD_BYTES, bytes.len });
         return error.TypeMismatch;
     }
-    return ba.items[0..simd_kernels.SIMD_BYTES];
+    return bytes[0..simd_kernels.SIMD_BYTES];
 }
 
 fn allocSimdByteArray(alloc: Allocator) !*ByteArray {
@@ -289,7 +290,7 @@ fn nativeSimdFromStack(ctx: *Context) anyerror!void {
                 const elem = try valueToElement(T, ctx, arena, vals[j]);
                 const elem_size = @sizeOf(T);
                 const offset = j * elem_size;
-                ba.items[offset..][0..elem_size].* = std.mem.toBytes(elem);
+                ba.slice()[offset..][0..elem_size].* = std.mem.toBytes(elem);
             }
         },
     }
@@ -328,7 +329,7 @@ fn nativeSimdSplat(ctx: *Context) anyerror!void {
             const T = comptime etToType(et);
             const N = comptime etToLaneCount(et);
             const scalar = try valueToElement(T, ctx, arena, value_val);
-            simd_kernels.simdSplat(N, T, scalar, ba.items[0..simd_kernels.SIMD_BYTES]);
+            simd_kernels.simdSplat(N, T, scalar, ba.slice()[0..simd_kernels.SIMD_BYTES]);
         },
     }
 

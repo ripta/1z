@@ -216,7 +216,7 @@ pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]con
         .quotation => |q| std.fmt.allocPrint(allocator, "quotation[{d}]", .{q.instructions.len}),
         .hash => |h| std.fmt.allocPrint(allocator, "hash[{d}]", .{h.count()}),
         .vector => |v| std.fmt.allocPrint(allocator, "vector[{d}]", .{v.items.len}),
-        .byte_array => |b| std.fmt.allocPrint(allocator, "byte-array[{d}]", .{b.items.len}),
+        .byte_array => |b| std.fmt.allocPrint(allocator, "byte-array[{d}]", .{b.slice().len}),
         .set => |s| std.fmt.allocPrint(allocator, "set[{d}]", .{s.count()}),
         .mutable_map => |m| std.fmt.allocPrint(allocator, "mutable-map[{d}]", .{m.count()}),
         .stream => allocator.dupe(u8, "<stream>"),

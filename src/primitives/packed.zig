@@ -287,20 +287,21 @@ fn nativePackedToArray(ctx: *Context) anyerror!void {
         },
     };
 
-    const count = ba.items.len / elem_type.elemSize();
+    const bytes = ba.slice();
+    const count = bytes.len / elem_type.elemSize();
     const result = try alloc.alloc(Value, count);
 
     switch (elem_type) {
-        .f64 => readElements(f64, ba.items, result),
-        .f32 => readElements(f32, ba.items, result),
-        .i8 => readElements(i8, ba.items, result),
-        .i16 => readElements(i16, ba.items, result),
-        .i32 => readElements(i32, ba.items, result),
-        .i64 => readElements(i64, ba.items, result),
-        .u8 => readElements(u8, ba.items, result),
-        .u16 => readElements(u16, ba.items, result),
-        .u32 => readElements(u32, ba.items, result),
-        .u64 => readElements(u64, ba.items, result),
+        .f64 => readElements(f64, bytes, result),
+        .f32 => readElements(f32, bytes, result),
+        .i8 => readElements(i8, bytes, result),
+        .i16 => readElements(i16, bytes, result),
+        .i32 => readElements(i32, bytes, result),
+        .i64 => readElements(i64, bytes, result),
+        .u8 => readElements(u8, bytes, result),
+        .u16 => readElements(u16, bytes, result),
+        .u32 => readElements(u32, bytes, result),
+        .u64 => readElements(u64, bytes, result),
     }
 
     try ctx.stack.push(.{ .array = result });
@@ -399,9 +400,11 @@ fn packedArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyerror!vo
     };
 
     // check lenghts match
-    if (a_ba.items.len != b_ba.items.len) {
-        const a_count = a_ba.items.len / elem_type.elemSize();
-        const b_count = b_ba.items.len / elem_type.elemSize();
+    const a_bytes = a_ba.slice();
+    const b_bytes = b_ba.slice();
+    if (a_bytes.len != b_bytes.len) {
+        const a_count = a_bytes.len / elem_type.elemSize();
+        const b_count = b_bytes.len / elem_type.elemSize();
         const op_name = switch (op) {
             .add => "+",
             .sub => "-",
@@ -414,10 +417,10 @@ fn packedArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyerror!vo
 
     const out_ba = try alloc.create(ByteArray);
     out_ba.* = ByteArray{};
-    try out_ba.ensureTotalCapacity(alloc, a_ba.items.len);
-    out_ba.items.len = a_ba.items.len;
+    try out_ba.ensureTotalCapacity(alloc, a_bytes.len);
+    out_ba.items.len = a_bytes.len;
 
-    callKernel(op, elem_type, a_ba.items, b_ba.items, out_ba.items);
+    callKernel(op, elem_type, a_bytes, b_bytes, out_ba.items);
 
     const inner = try alloc.create(Value);
     inner.* = .{ .byte_array = out_ba };
@@ -504,14 +507,15 @@ fn packedScalarArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyer
 
     const out_ba = try alloc.create(ByteArray);
     out_ba.* = ByteArray{};
-    try out_ba.ensureTotalCapacity(alloc, a_ba.items.len);
-    out_ba.items.len = a_ba.items.len;
+    const a_bytes = a_ba.slice();
+    try out_ba.ensureTotalCapacity(alloc, a_bytes.len);
+    out_ba.items.len = a_bytes.len;
 
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
             const T = comptime etToType(et);
             const scalar = try valueToElement(T, ctx, arena, scalar_val);
-            packed_kernels.scalarBinaryOp(T, op, a_ba.items, scalar, out_ba.items);
+            packed_kernels.scalarBinaryOp(T, op, a_bytes, scalar, out_ba.items);
         },
     }
 
@@ -549,7 +553,7 @@ fn nativePackedSum(ctx: *Context) anyerror!void {
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
             const T = comptime etToType(et);
-            try ctx.stack.push(elementToValue(T, packed_kernels.sumPacked(T, ba.items)));
+            try ctx.stack.push(elementToValue(T, packed_kernels.sumPacked(T, ba.slice())));
         },
     }
 }
@@ -563,7 +567,7 @@ fn nativePackedProduct(ctx: *Context) anyerror!void {
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
             const T = comptime etToType(et);
-            try ctx.stack.push(elementToValue(T, packed_kernels.productPacked(T, ba.items)));
+            try ctx.stack.push(elementToValue(T, packed_kernels.productPacked(T, ba.slice())));
         },
     }
 }
@@ -577,7 +581,7 @@ fn nativePackedMin(ctx: *Context) anyerror!void {
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
             const T = comptime etToType(et);
-            const result = packed_kernels.minPacked(T, ba.items) orelse {
+            const result = packed_kernels.minPacked(T, ba.slice()) orelse {
                 helpers.setErrorContext(ctx, "packed-min: empty array", .{});
                 return error.InvalidArgument;
             };
@@ -595,7 +599,7 @@ fn nativePackedMax(ctx: *Context) anyerror!void {
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
             const T = comptime etToType(et);
-            const result = packed_kernels.maxPacked(T, ba.items) orelse {
+            const result = packed_kernels.maxPacked(T, ba.slice()) orelse {
                 helpers.setErrorContext(ctx, "packed-max: empty array", .{});
                 return error.InvalidArgument;
             };
@@ -633,9 +637,11 @@ fn nativePackedDot(ctx: *Context) anyerror!void {
     const b_ba = try extractByteArray(ctx, b_tagged);
     const elem_type = try extractElemType(ctx, a_tagged);
 
-    if (a_ba.items.len != b_ba.items.len) {
-        const a_count = a_ba.items.len / elem_type.elemSize();
-        const b_count = b_ba.items.len / elem_type.elemSize();
+    const a_bytes = a_ba.slice();
+    const b_bytes = b_ba.slice();
+    if (a_bytes.len != b_bytes.len) {
+        const a_count = a_bytes.len / elem_type.elemSize();
+        const b_count = b_bytes.len / elem_type.elemSize();
         helpers.setErrorContext(ctx, "packed-dot: length mismatch ({d} vs {d} elements)", .{ a_count, b_count });
         return error.TypeMismatch;
     }
@@ -643,7 +649,7 @@ fn nativePackedDot(ctx: *Context) anyerror!void {
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
             const T = comptime etToType(et);
-            try ctx.stack.push(elementToValue(T, packed_kernels.dotPacked(T, a_ba.items, b_ba.items)));
+            try ctx.stack.push(elementToValue(T, packed_kernels.dotPacked(T, a_bytes, b_bytes)));
         },
     }
 }
@@ -657,7 +663,7 @@ fn nativePackedLen(ctx: *Context) anyerror!void {
     const tagged = try popPackedTagged(ctx);
     const ba = try extractByteArray(ctx, tagged);
     const elem_type = try extractElemType(ctx, tagged);
-    const count = ba.items.len / elem_type.elemSize();
+    const count = ba.slice().len / elem_type.elemSize();
     try ctx.stack.push(.{ .fixnum = @intCast(count) });
 }
 
@@ -684,7 +690,8 @@ fn nativePackedNth(ctx: *Context) anyerror!void {
 
     const ba = try extractByteArray(ctx, tagged);
     const elem_type = try extractElemType(ctx, tagged);
-    const count = ba.items.len / elem_type.elemSize();
+    const bytes = ba.slice();
+    const count = bytes.len / elem_type.elemSize();
 
     if (idx < 0 or idx >= @as(i64, @intCast(count))) {
         helpers.setErrorContext(ctx, "#nth: index {d} out of bounds for packed array of {d} elements", .{ idx, count });
@@ -695,7 +702,7 @@ fn nativePackedNth(ctx: *Context) anyerror!void {
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
             const T = comptime etToType(et);
-            try ctx.stack.push(elementToValue(T, packed_kernels.readElement(T, ba.items, i)));
+            try ctx.stack.push(elementToValue(T, packed_kernels.readElement(T, bytes, i)));
         },
     }
 }

@@ -107,7 +107,7 @@ pub fn sequenceLength(val: Value) ?usize {
         .string => |s| utf8CodepointCount(s),
         .array => |a| a.len,
         .vector => |v| v.items.len,
-        .byte_array => |b| b.items.len,
+        .byte_array => |b| b.slice().len,
         .set => |s| s.count(),
         else => null,
     };
@@ -168,7 +168,7 @@ pub const SequenceIterator = struct {
             .byte_array => |b| SequenceIterator{
                 .kind = .byte_array,
                 .allocator = allocator,
-                .state = .{ .byte_array = .{ .items = b.items, .index = 0 } },
+                .state = .{ .byte_array = .{ .items = b.slice(), .index = 0 } },
             },
             .set => |s| SequenceIterator{
                 .kind = .set,

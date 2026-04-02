@@ -48,14 +48,16 @@ fn nativeToyGreeting(ctx: *Context) anyerror!void {
 
 fn nativeToyChecksum(ctx: *Context) anyerror!void {
     const ba = try helpers.popByteArray(ctx);
-    const result = c.toy_checksum(ba.items.ptr, @intCast(ba.items.len));
+    const bytes = ba.slice();
+    const result = c.toy_checksum(bytes.ptr, @intCast(bytes.len));
     try ctx.stack.push(.{ .fixnum = @intCast(result) });
 }
 
 fn nativeToyFill(ctx: *Context) anyerror!void {
     const val = try helpers.popFixnum(ctx);
     const ba = try helpers.popByteArray(ctx);
-    c.toy_fill(ba.items.ptr, @intCast(ba.items.len), @intCast(val));
+    const bytes = ba.slice();
+    c.toy_fill(bytes.ptr, @intCast(bytes.len), @intCast(val));
 }
 
 fn toyCloseFn(ptr: *anyopaque) void {

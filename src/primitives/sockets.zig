@@ -429,7 +429,7 @@ fn nativeFdClose(ctx: *Context) anyerror!void {
 /// Extract data bytes from a string or byte-array value.
 fn extractDataBytes(ctx: *Context, val: Value) ![]const u8 {
     return switch (val) {
-        .byte_array => |ba| ba.items,
+        .byte_array => |ba| ba.slice(),
         .string => |s| s,
         else => {
             helpers.setTypeMismatchError(ctx, "string or byte-array", val);
@@ -619,7 +619,7 @@ fn nativeSetsockopt(ctx: *Context) anyerror!void {
             };
         },
         .byte_array => |ba| {
-            std.posix.setsockopt(fd, level, optname, ba.items) catch {
+            std.posix.setsockopt(fd, level, optname, ba.slice()) catch {
                 helpers.setErrorContext(ctx, "setsockopt failed", .{});
                 return error.IOFailed;
             };
