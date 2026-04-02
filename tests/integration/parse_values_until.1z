@@ -1,0 +1,44 @@
+\ Test parse-token and parse-values-until primitives
+
+use "testing" ;
+
+"parse-token" test-section
+
+\ Define a parse-time word that reads one raw token
+grab-token: parse-time [ parse-token ] ;
+
+grab-token hello
+"hello" "parse-token reads a single token" assert=
+
+grab-token 42
+"42" "parse-token returns raw string even for numbers" assert=
+
+"parse-values-until raw tokens" test-section
+
+\ Define a parse-time word that uses parse-values-until with a delimiter
+grab-until-end: parse-time [ "END" parse-values-until ] ;
+
+grab-until-end a b c END
+#len 3 "parse-values-until collects three tokens" assert=
+
+grab-until-end a b c END
+#first "a" "first token is a" assert=
+
+grab-until-end a b c END
+2 #nth "c" "third token is c" assert=
+
+"parse-values-until with parse-time words" test-section
+
+\ parse-values-until should execute parse-time words and collect their results
+\ struct{ is a parse-time word that produces a struct descriptor on the stack
+
+grab-fields: parse-time [ "END" parse-values-until ] ;
+
+grab-fields struct{ x y } END
+#len 1 "struct{ produces one value" assert=
+
+grab-fields hello struct{ x y } END
+#len 2 "raw token + struct produces two values" assert=
+
+grab-fields hello struct{ x y } END
+#first "hello" "first value is raw string" assert=

@@ -1,10 +1,6 @@
-const std = @import("std");
 const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
-const Value = value_mod.Value;
 const Parameter = value_mod.Parameter;
-const parser = @import("../parser.zig");
-const tokenizer_mod = @import("../tokenizer.zig");
 
 const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
@@ -13,88 +9,10 @@ const popQuotation = helpers.popQuotation;
 const popSymbol = helpers.popSymbol;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "parse-quotation", .stack_effect = "-- quotation", .doc = "Read the next [ ... ] block from the tokenizer.", .func = nativeParseQuotation },
-    .{ .name = "parse-literal", .stack_effect = "-- value", .doc = "Read the next literal value from the tokenizer.", .func = nativeParseLiteral },
     .{ .name = "make-parameter", .stack_effect = "name: quot -- param", .doc = "Create a dynamic parameter with a name and default quotation.", .func = nativeMakeParameter },
     .{ .name = "get", .stack_effect = "param -- value", .doc = "Get the current value of a dynamic parameter.", .func = nativeGet },
     .{ .name = "with-parameter", .stack_effect = "value param quot --", .doc = "Execute quotation with parameter temporarily bound to value.", .func = nativeWithParameter },
 };
-
-// =============================================================================
-// Parse-time primitives
-// =============================================================================
-
-/// parse-quotation ( -- quotation ) - Read the next [ ... ] block from the tokenizer
-/// Can only be called during parse-time execution (when tokenizer is available)
-pub fn nativeParseQuotation(ctx: *Context) anyerror!void {
-    const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
-
-    // Skip whitespace/comments until we find '['
-    while (tokenizer.next()) |tok| {
-        if (tok.kind == .comment or tok.kind == .doc_comment or tok.kind == .newline) continue;
-
-        if (!std.mem.eql(u8, tok.text, "[")) {
-            // Expected '[' but got something else
-            return error.TypeMismatch;
-        }
-
-        // Found '[', now parse the quotation body
-        const quot = parser.parseQuotation(ctx.quotationAllocator(), tokenizer, ctx) catch return error.OutOfMemory;
-        try ctx.stack.push(.{ .quotation = quot });
-        return;
-    }
-
-    // Unexpected end of input
-    return error.TypeMismatch;
-}
-
-/// parse-literal ( -- value ) - Read the next literal from the tokenizer
-pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
-    const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
-    const alloc = ctx.quotationAllocator();
-    while (tokenizer.next()) |tok| {
-        if (tok.kind == .comment or tok.kind == .doc_comment or tok.kind == .newline) continue;
-
-        const token = tok.text;
-
-        if (std.mem.eql(u8, token, "{")) {
-            const arr = parser.parseArray(alloc, tokenizer, ctx) catch return error.OutOfMemory;
-            try ctx.stack.push(.{ .array = arr });
-            return;
-        }
-
-        if (std.mem.eql(u8, token, "[")) {
-            const quot = parser.parseQuotation(alloc, tokenizer, ctx) catch return error.OutOfMemory;
-            try ctx.stack.push(.{ .quotation = quot });
-            return;
-        }
-
-        if (tokenizer_mod.parseString(token)) |s| {
-            const s_copy = parser.processEscapes(alloc, s) catch return error.OutOfMemory;
-            try ctx.stack.push(.{ .string = s_copy });
-            return;
-        }
-
-        if (token.len > 1 and token[token.len - 1] == ':') {
-            const sym_copy = alloc.dupe(u8, token[0 .. token.len - 1]) catch return error.OutOfMemory;
-            try ctx.stack.push(.{ .symbol = sym_copy });
-            return;
-        }
-
-        if (tokenizer_mod.parseInteger(token)) |n| {
-            try ctx.stack.push(.{ .integer = n });
-            return;
-        }
-
-        return error.TypeMismatch;
-    }
-
-    return error.TypeMismatch;
-}
-
-// =============================================================================
-// Runtime primitives
-// =============================================================================
 
 /// make-parameter ( name: quot -- param ) - Create a parameter with the given name and default quotation
 pub fn nativeMakeParameter(ctx: *Context) anyerror!void {

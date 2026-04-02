@@ -15,54 +15,7 @@ const Primitive = @import("types.zig").Primitive;
 
 pub const primitives = [_]Primitive{
     .{ .name = "define-virtual", .stack_effect = "name: descriptor markers --", .doc = "Define a virtual type and its accessor words.", .func = nativeDefineVirtual },
-    .{ .name = "parse-virtual-inner", .stack_effect = "-- inner-type", .doc = "Parse inner type name until } from tokenizer.", .func = nativeParseVirtualInner },
 };
-
-/// parse-virtual-inner ( -- inner-type ) - Parse inner type name until } from tokenizer
-///
-/// Reads the next non-comment token. If it is a parse-time word (e.g. `struct{`),
-/// execute it -- it will consume its own tokens including its own `}` -- then pop
-/// its result from the stack. Otherwise treat it as a type name string. After the
-/// inner value is obtained, consume the outer `}` for `virtual{`.
-fn nativeParseVirtualInner(ctx: *Context) anyerror!void {
-    const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
-    const alloc = ctx.quotationAllocator();
-
-    var got_inner = false;
-
-    while (tokenizer.next()) |tok| {
-        if (tok.kind == .comment or tok.kind == .doc_comment or tok.kind == .newline) continue;
-
-        const token = tok.text;
-        if (std.mem.eql(u8, token, "}")) {
-            break;
-        }
-
-        if (got_inner) {
-            helpers.setErrorContext(ctx, "virtual{{ expects exactly one inner type before }}", .{});
-            return error.ParseError;
-        }
-
-        if (ctx.lookupWord(token)) |word| {
-            if (word.parse_time) {
-                switch (word.action) {
-                    .native => |func| try func(ctx),
-                    .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
-                }
-                got_inner = true;
-                continue;
-            }
-        }
-
-        try ctx.stack.push(.{ .string = try alloc.dupe(u8, token) });
-        got_inner = true;
-    }
-
-    if (!got_inner) {
-        helpers.setErrorContext(ctx, "virtual{{ expects an inner type name", .{});
-        return error.ParseError;
-    }
-}
 
 /// define-virtual ( name: descriptor markers -- ) - Define a virtual type and its accessor words
 ///
@@ -95,7 +48,17 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
         .mutable_map => |m| m,
         else => return error.TypeMismatch,
     };
-    const inner_type_val = desc_map.get("inner-type") orelse return error.MissingField;
+    const inner_type_raw = desc_map.get("inner-type") orelse return error.MissingField;
+    const inner_type_val = switch (inner_type_raw) {
+        .array => |arr| blk: {
+            if (arr.len != 1) {
+                helpers.setErrorContext(ctx, "virtual{{ expects exactly one inner type, got {d}", .{arr.len});
+                return error.ParseError;
+            }
+            break :blk arr[0];
+        },
+        else => inner_type_raw,
+    };
 
     const name_val = try ctx.stack.pop();
     const name = switch (name_val) {
@@ -133,10 +96,16 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
 
             var fields_list = std.ArrayListUnmanaged([]const u8){};
             for (fields_array) |f| {
-                switch (f) {
-                    .symbol => |s| try fields_list.append(alloc, s),
+                const raw = switch (f) {
+                    .string => |s| s,
+                    .symbol => |s| s,
                     else => return error.TypeMismatch,
-                }
+                };
+                const field_name = if (raw.len > 1 and raw[raw.len - 1] == ':')
+                    raw[0 .. raw.len - 1]
+                else
+                    raw;
+                try fields_list.append(alloc, field_name);
             }
             const fields_slice = try fields_list.toOwnedSlice(alloc);
 

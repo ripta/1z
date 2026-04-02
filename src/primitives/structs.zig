@@ -14,37 +14,7 @@ const Primitive = @import("types.zig").Primitive;
 
 pub const primitives = [_]Primitive{
     .{ .name = "define-struct", .stack_effect = "name: descriptor markers --", .doc = "Define a struct type and its accessor words.", .func = nativeDefineStruct },
-    .{ .name = "parse-struct-fields", .stack_effect = "-- fields", .doc = "Parse field names until } from tokenizer.", .func = nativeParseStructFields },
 };
-
-/// parse-struct-fields ( -- fields ) - Parse field names until } from tokenizer
-/// Returns an array of field name symbols
-fn nativeParseStructFields(ctx: *Context) anyerror!void {
-    const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
-    const alloc = ctx.quotationAllocator();
-
-    var fields = std.ArrayListUnmanaged(Value){};
-
-    while (tokenizer.next()) |tok| {
-        if (tok.kind == .comment or tok.kind == .doc_comment or tok.kind == .newline) continue;
-
-        const token = tok.text;
-        if (std.mem.eql(u8, token, "}")) {
-            break;
-        }
-
-        if (token.len > 1 and token[token.len - 1] == ':') {
-            const field_name = try alloc.dupe(u8, token[0 .. token.len - 1]);
-            try fields.append(alloc, .{ .symbol = field_name });
-        } else {
-            const field_name = try alloc.dupe(u8, token);
-            try fields.append(alloc, .{ .symbol = field_name });
-        }
-    }
-
-    const fields_array = try fields.toOwnedSlice(alloc);
-    try ctx.stack.push(.{ .array = fields_array });
-}
 
 /// define-struct ( name: descriptor markers -- ) - Define a struct type and its accessor words
 ///
@@ -80,10 +50,16 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
 
     var fields_list = std.ArrayListUnmanaged([]const u8){};
     for (fields_array) |f| {
-        switch (f) {
-            .symbol => |s| try fields_list.append(alloc, s),
+        const raw = switch (f) {
+            .string => |s| s,
+            .symbol => |s| s,
             else => return error.TypeMismatch,
-        }
+        };
+        const field_name = if (raw.len > 1 and raw[raw.len - 1] == ':')
+            raw[0 .. raw.len - 1]
+        else
+            raw;
+        try fields_list.append(alloc, field_name);
     }
     const fields_slice = try fields_list.toOwnedSlice(alloc);
 
