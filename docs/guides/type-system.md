@@ -94,8 +94,8 @@ A simple wrapper around a fixnum:
 
 ```
 speed: virtual{ fixnum } ;
-42 make-speed type-name .
-42 make-speed unmake-speed .
+42 >speed type-name .
+42 >speed unmake-speed .
 ```
 
 Output:
@@ -105,12 +105,12 @@ Output:
 42
 ```
 
-`make-speed` wraps, `unmake-speed` unwraps. The value inside is still a
+`>speed` wraps, `unmake-speed` unwraps. The value inside is still a
 fixnum, but `speed?` and `fixnum?` give different answers:
 
 ```
-42 make-speed speed? .
-42 make-speed fixnum? .
+42 >speed speed? .
+42 >speed fixnum? .
 ```
 
 Output:
@@ -124,33 +124,60 @@ This is the point of newtypes: a `speed` is not a `fixnum`, even though it
 contains one. You cannot accidentally pass a speed where a distance is
 expected.
 
-### Struct-Backed Virtual Types
+### Opaque Virtual Types
 
-Virtual types can wrap a struct for multi-field newtypes:
-
-```
-vec2: virtual{ struct{ vx vy } } ;
-10 20 make-vec2 >hash vx: @get .
-```
-
-Output:
+Sometimes the wrapped type is itself a named struct. This is the right pattern
+when the inner struct has independent meaning and the outer virtual type adds a
+semantic boundary:
 
 ```
-10
+timestamp-inner: struct{ ts-sec ts-nsec } ;
+timestamp: virtual{ timestamp-inner } ;
 ```
 
-The hash-based constructor also works:
+This keeps `timestamp` nominally distinct while letting library code define
+named accessors such as `timestamp-sec` and `timestamp-nsec`.
+
+### Metadata-Bearing Virtual Types
+
+Some types must carry metadata on their type descriptor. That metadata is
+attached by `virtual{`, not by `struct{`:
 
 ```
-vec2: virtual{ struct{ vx vy } } ;
-H{ vx: 10 vy: 20 } >vec2 type-name .
+complex: H{ numeric: t } virtual{ struct{ real imag } } ;
+ratio:   H{ numeric: t exact: t } virtual{ struct{ numer denom } } ;
 ```
 
-Output:
+These remain virtual because the metadata is part of the type definition, not
+because anonymous struct-backed virtuals are the default for multi-field data.
 
-```
-"vec2"
-```
+## Choosing a Type Definition
+
+Use this decision tree when defining a new type:
+
+1. Need type metadata such as `numeric: t` or `exact: t`?
+   Use `H{ ... } virtual{ ... }`.
+1. Need a distinct nominal wrapper around one existing type?
+   Use `virtual{ inner }`.
+1. Need an opaque outer type over an inner struct that is meaningful on its own?
+   Use `virtual{ named-inner-struct }`.
+1. Need a normal multi-field record with direct field access?
+   Use `struct{ ... }`.
+
+Examples:
+
+- `range: struct{ start end step: fixnum infinite?: boolean } ;`
+- `ndarray: struct{ data: vector shape: array strides: array element-type: type } ;`
+- `duration: virtual{ fixnum } ;`
+- `timestamp: virtual{ timestamp-inner } ;`
+- `complex: H{ numeric: t } virtual{ struct{ real imag } } ;`
+
+Avoid anonymous `virtual{ struct{ ... } }` for ordinary record types. It adds
+opacity, but usually does not protect invariants because `unmake-*` still
+exposes the underlying fields. After structural bare structs, keeping a type
+virtual should be a deliberate nominal choice, such as `server` and
+`udp-socket`, which share the same field layout and must not collapse to the
+same structural type.
 
 ## Sum Types with `enum{`
 

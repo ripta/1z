@@ -432,7 +432,7 @@ describe: generic ( val -- str ) [ drop "unknown" ] ;
 describe: method{ duration } [ drop "a duration" ] ;
 
 +: method{ duration duration } [
-  swap duration> swap duration> + >duration
+  swap unmake-duration swap unmake-duration + >duration
 ] ;
 ```
 
@@ -522,12 +522,14 @@ Virtual types wrap an existing type with a distinct type identity:
 duration: virtual{ fixnum } ;
 ```
 
-Generates `>duration`, `duration>`, `duration?`.
+Generates `>duration`, `unmake-duration`, `duration?`.
 
-Struct-backed virtual types combine both:
+For ordinary multi-field records, use `struct{ ... }`. Virtual types are for
+nominal wrappers or intentional opacity:
 
 ```
-timestamp: virtual{ struct{ sec nsec } } ;
+timestamp-inner: struct{ sec nsec } ;
+timestamp: virtual{ timestamp-inner } ;
 ```
 
 ### Enums

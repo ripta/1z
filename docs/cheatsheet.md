@@ -64,7 +64,9 @@ See also: [Defining Words](tutorials/defining-words.md)
 ```
 person: struct{ name age } ;                           \ struct
 duration: virtual{ fixnum } ;                          \ newtype
-timestamp: virtual{ struct{ sec nsec } } ;             \ struct-backed virtual
+timestamp-inner: struct{ sec nsec } ;                  \ backing record for opaque wrapper
+timestamp: virtual{ timestamp-inner } ;                \ opaque wrapper over inner struct
+complex: H{ numeric: t } virtual{ struct{ real imag } } ; \ metadata-bearing virtual
 color: enum{ red: unit green: unit blue: unit } ;      \ flat enum
 shape: enum{ circle: circle-data point: unit } ;       \ data-carrying enum
 iterable: protocol{ >iterator } ;                      \ protocol
@@ -77,8 +79,11 @@ Generated words per type:
 |------|-----------|
 | `struct{ }` | `make-name`, `unmake-name`, `field>>`, `>>field`, `name?` |
 | `virtual{ inner }` | `>name`, `unmake-name`, `name?` |
-| `virtual{ struct{ } }` | `make-name`, `unmake-name`, `name?`, `field>>`, `>>field` |
+| `virtual{ struct{ } }` | `make-name`, `>name`, `unmake-name`, `name?`, `name>hash` |
 | `enum{ }` | `enum:variant` constructors, `>enum:variant` wrap, `enum:variant>` unwrap, `enum:variant?`, `enum?` predicates |
+
+Rule of thumb: use `struct{ }` for normal multi-field records; use `virtual{ }`
+when you need a nominal wrapper, intentional opacity, or attached metadata.
 
 See also: [The Type System](guides/type-system.md)
 
