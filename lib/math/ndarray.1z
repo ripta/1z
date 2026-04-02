@@ -2,7 +2,7 @@
 
 use "math/ratio" ;
 
-ndarray: virtual{ struct{ data shape strides element-type } } ;
+ndarray: struct{ data: vector shape: array strides: array element-type: type } ;
 
 shape-product: ( shape -- n ) [ 1 [ * ] #reduce ] ;
 
@@ -12,7 +12,7 @@ row-major-strides: ( shape -- strides ) [
   <rot- >iterator [
     div dup <rot- swap #push! swap
   ] #each
-  drop
+  drop >iterator #collect
 ] ;
 
 contiguous?: ( shape strides -- bool ) [
@@ -43,11 +43,9 @@ contiguous?: ( shape strides -- bool ) [
   make-ndarray
 ] ;
 
-shape: ( ndarray -- array ) [ unmake-ndarray drop drop nip ] ;
+shape: ( ndarray -- array ) [ shape>> ] ;
 rank: ( ndarray -- n ) [ shape #len ] ;
-element-type: ( ndarray -- sym )     [ unmake-ndarray nip nip nip ] ;
-data>>:       ( ndarray -- vec )     [ unmake-ndarray drop drop drop ] ;
-strides>>:    ( ndarray -- strides ) [ unmake-ndarray drop nip nip ] ;
+element-type: ( ndarray -- type ) [ element-type>> ] ;
 
 reshape: ( ndarray new-shape -- ndarray ) [
   over shape shape-product over shape-product =
@@ -702,7 +700,7 @@ mask: ( ndarray bool-ndarray -- ndarray ) [
   >iterator #collect
   \ stack: elem-type(1) result-arr(0)
   dup #len 0 = [
-    drop { } { 0 } { 1 } <rot- make-ndarray
+    drop [ ] make-vector { 0 } { 1 } 3 pick-n make-ndarray nip
   ] [
     dup #len 1 array-n <ndarray> nip
   ] if
@@ -723,7 +721,7 @@ gather: ( ndarray indices -- ndarray ) [
   >iterator #collect
   \ stack: elem-type(1) result-arr(0)
   dup #len 0 = [
-    drop { } { 0 } { 1 } <rot- make-ndarray
+    drop [ ] make-vector { 0 } { 1 } 3 pick-n make-ndarray nip
   ] [
     dup #len 1 array-n <ndarray> nip
   ] if

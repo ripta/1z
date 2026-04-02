@@ -8,6 +8,15 @@ use "ranges" ;
 1 10 <range> range? t "range? on range" assert=
 42 range? f "range? on integer" assert=
 
+"range getters" test-section
+1 10 <range> dup start>> 1 "start>> returns start" assert=
+dup end>> 10 "end>> returns end" assert=
+dup step>> 1 "step>> returns inferred step" assert=
+infinite?>> f "infinite?>> returns false for finite range" assert=
+
+1 range-from dup step>> 1 "range-from step>> is 1" assert=
+infinite?>> t "range-from infinite?>> returns true" assert=
+
 "range (exclusive ascending)" test-section
 1 10 <range> >iterator #collect { 1 2 3 4 5 6 7 8 9 } "1 to 10" assert=
 0 5 <range> >iterator #collect { 0 1 2 3 4 } "0 to 5" assert=

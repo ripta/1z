@@ -9,7 +9,7 @@ tree-node: enum{
   bb-leaf:   unit
   bb-branch: tree-node-data
 } ;
-bst: virtual{ struct{ root comparator } } ;
+bst: struct{ root: tree-node comparator: quotation } ;
 
 \ Short aliases
 leaf: ( -- tree-node ) [ tree-node:leaf ] ;
@@ -647,7 +647,7 @@ tree-insert: ( bst value -- bst ) [
   swap make-bst
 ] ;
 
-tree-empty?: ( bst -- bool ) [ unmake-bst drop leaf? ] ;
+tree-empty?: ( bst -- bool ) [ root>> leaf? ] ;
 
 tree-contains?: ( bst value -- bool ) [
   swap unmake-bst  \ ( value root comparator )
@@ -741,9 +741,9 @@ lookup-node: stack-recursive ( value comparator node -- option ) [
   } unchecked-match
 ] ;
 
-tree-min:  ( bst -- option ) [ unmake-bst drop min-node ] ;
-tree-max:  ( bst -- option ) [ unmake-bst drop max-node ] ;
-tree-size: ( bst -- n )      [ unmake-bst drop size-node ] ;
+tree-min:  ( bst -- option ) [ root>> min-node ] ;
+tree-max:  ( bst -- option ) [ root>> max-node ] ;
+tree-size: ( bst -- n )      [ root>> size-node ] ;
 
 tree-lookup: ( bst value -- option ) [
   swap unmake-bst  \ ( value root comparator )
@@ -795,13 +795,9 @@ fold-node: stack-recursive ( node acc quot -- acc ) [
   } unchecked-match
 ] ;
 
-tree-each: ( bst quot -- ) [
-  swap unmake-bst drop swap each-node
-] ;
+tree-each: ( bst quot -- ) [ swap root>> swap each-node ] ;
 
-tree-fold: ( bst init quot -- value ) [
-  [ [ unmake-bst drop ] dip ] dip fold-node
-] ;
+tree-fold: ( bst init quot -- value ) [ [ [ root>> ] dip ] dip fold-node ] ;
 
 tree>array: ( bst -- array ) [
   { } [ #push ] tree-fold

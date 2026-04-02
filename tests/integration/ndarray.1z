@@ -15,6 +15,14 @@ use "math/ndarray" ;
 { 1 2 3 } { 3 } <ndarray> rank 1 "1D rank" assert=
 { 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } <ndarray> rank 3 "3D rank" assert=
 
+"ndarray getters" test-section
+
+{ 1 2 3 4 5 6 } { 2 3 } <ndarray>
+dup shape>> { 2 3 } "shape>> returns shape" assert=
+dup strides>> { 3 1 } "strides>> returns row-major strides" assert=
+dup element-type>> fixnum "element-type>> returns fixnum type" assert=
+data>> #len 6 "data>> returns backing vector" assert=
+
 "ndarray element type detection" test-section
 
 { 1 2 3 } { 3 } <ndarray> element-type fixnum "fixnum element-type" assert=

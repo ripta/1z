@@ -9,6 +9,13 @@ Stack: [ ]
 === udp-connect creates connected-udp-socket ===
 Stack: [ ]
 PASS: type is connected-udp-socket
+PASS: fd>> returns fixnum
+PASS: bound-addr>> returns udp addr
+PASS: peer-addr>> returns udp addr
+Stack: [ ]
+=== server and udp-socket remain distinct types ===
+Stack: [ ]
+PASS: server and udp-socket stay distinct
 Stack: [ ]
 === udp-bind echo round-trip via udp-sendto and udp-recvfrom ===
 Stack: [ ]

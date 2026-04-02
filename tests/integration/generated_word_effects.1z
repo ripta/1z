@@ -1,6 +1,7 @@
 \ Tests that auto-generated words from struct{, virtual{, and enum{ have stack effects
 
 use "testing" ;
+use "ranges" ;
 
 \ -- struct --
 
@@ -89,6 +90,20 @@ outputs>> [ name>> ] #map #collect { "hash" } "color>hash output is hash" assert
 color?: >word-info stack-effect>>
 dup inputs>> [ name>> ] #map #collect { "val" } "color? input is val" assert=
 outputs>> [ name>> ] #map #collect { "?" } "color? output is ?" assert=
+
+\ -- converted stdlib struct with typed fields --
+
+"converted stdlib struct generated word effects" test-section
+
+step>>: >word-info stack-effect>>
+dup inputs>> [ name>> ] #map #collect { "instance" } "step>> input is instance" assert=
+dup inputs>> [ type-annotation>> native.type-name ] #map #collect { "range" } "step>> input type is range" assert=
+dup outputs>> [ name>> ] #map #collect { "step" } "step>> output is field name" assert=
+outputs>> 0 #nth type-annotation>> fixnum "step>> output type annotation is fixnum" assert=
+
+infinite?>>: >word-info stack-effect>>
+dup inputs>> [ type-annotation>> native.type-name ] #map #collect { "range" } "infinite?>> input type is range" assert=
+outputs>> 0 #nth type-annotation>> boolean "infinite?>> output type annotation is boolean" assert=
 
 \ -- enum --
 

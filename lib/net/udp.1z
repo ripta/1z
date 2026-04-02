@@ -3,7 +3,7 @@
 use "net" ;
 
 udp-socket: virtual{ struct{ fd bound-addr } } ;
-connected-udp-socket: virtual{ struct{ fd bound-addr peer-addr } } ;
+connected-udp-socket: struct{ fd: fixnum bound-addr: addr peer-addr: addr } ;
 
 \\ Create a bound UDP socket on the given address.
 \\ Resolves the address, creates a socket, binds, and wraps.

@@ -6,6 +6,11 @@ use "bst" ;
 "empty tree" test-section
 [ cmp ] <bst> tree-empty? t "new bst is empty" assert=
 
+"bst getters" test-section
+[ cmp ] <bst>
+dup root>> leaf? t "root>> returns leaf for empty tree" assert=
+comparator>> quotation? t "comparator>> returns quotation" assert=
+
 "single insert" test-section
 [ cmp ] <bst> 42 tree-insert tree-empty? f "tree with element is not empty" assert=
 [ cmp ] <bst> 42 tree-insert 42 tree-contains? t "contains inserted element" assert=

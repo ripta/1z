@@ -2,6 +2,7 @@
 
 use "testing" ;
 use "net" ;
+use "net/tcp" ;
 use "net/udp" ;
 
 "udp-bind creates udp-socket" test-section
@@ -25,10 +26,16 @@ use "net/udp" ;
 
   swap "127.0.0.1" 39702 make-addr:udp udp-connect
   dup type-of connected-udp-socket "type is connected-udp-socket" assert=
-  unmake-connected-udp-socket drop drop fd-close
+  dup fd>> fixnum? t "fd>> returns fixnum" assert=
+  dup bound-addr>> type-name "addr:udp" "bound-addr>> returns udp addr" assert=
+  dup peer-addr>> type-name "addr:udp" "peer-addr>> returns udp addr" assert=
+  fd>> fd-close
 
   unmake-udp-socket drop fd-close
 ] task-scope
+
+"server and udp-socket remain distinct types" test-section
+server udp-socket = f "server and udp-socket stay distinct" assert=
 
 "udp-bind echo round-trip via udp-sendto and udp-recvfrom" test-section
 [
@@ -60,13 +67,13 @@ use "net/udp" ;
   swap "127.0.0.1" 39705 make-addr:udp udp-connect
 
   \ Spawn receiver on first connected socket
-  over unmake-connected-udp-socket drop drop [
+  over fd>> [
     1024 udp-recv
     bytes> "connected msg" "connected recv data" assert=
   ] curry spawn
 
   \ Send from second connected socket
-  swap unmake-connected-udp-socket drop drop "connected msg" udp-send drop
+  swap fd>> "connected msg" udp-send drop
 
   await drop
 ] task-scope

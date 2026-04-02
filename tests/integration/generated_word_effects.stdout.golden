@@ -93,6 +93,22 @@ PASS: color? input is val
 Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "val" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "?" row-variable?: f nested-effect: f type-annotation: f } } } ]
 PASS: color? output is ?
 Stack: [ ]
+=== converted stdlib struct generated word effects ===
+Stack: [ ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:range> } } outputs: { stack-effect-param{ name: "step" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } } } ]
+PASS: step>> input is instance
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:range> } } outputs: { stack-effect-param{ name: "step" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } } } ]
+PASS: step>> input type is range
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:range> } } outputs: { stack-effect-param{ name: "step" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } } } ]
+PASS: step>> output is field name
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:range> } } outputs: { stack-effect-param{ name: "step" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } } } ]
+PASS: step>> output type annotation is fixnum
+Stack: [ ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:range> } } outputs: { stack-effect-param{ name: "infinite?" row-variable?: f nested-effect: f type-annotation: <type:boolean> } } } ]
+PASS: infinite?>> input type is range
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "instance" row-variable?: f nested-effect: f type-annotation: <type:range> } } outputs: { stack-effect-param{ name: "infinite?" row-variable?: f nested-effect: f type-annotation: <type:boolean> } } } ]
+PASS: infinite?>> output type annotation is boolean
+Stack: [ ]
 === enum generated word effects ===
 Stack: [ ]
 Stack: [ ]

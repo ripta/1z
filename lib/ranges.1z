@@ -1,7 +1,7 @@
 \ lib/ranges.1z - Range type for lazy integer sequences
 
-\ Range virtual type: start, end, step, infinite? fields
-range: virtual{ struct{ start end step infinite? } } ;
+\ Range record: start, end, step, infinite? fields
+range: struct{ start: any end: any step: fixnum infinite?: boolean } ;
 
 \ Exclusive range [start, end) with auto-step +-1
 <range>: ( start end -- range ) [

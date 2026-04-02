@@ -6,6 +6,20 @@ PASS: range? on range
 Stack: [ ]
 PASS: range? on integer
 Stack: [ ]
+=== range getters ===
+Stack: [ ]
+PASS: start>> returns start
+Stack: [ range{ start: 1 end: 10 step: 1 infinite?: f } ]
+PASS: end>> returns end
+Stack: [ range{ start: 1 end: 10 step: 1 infinite?: f } ]
+PASS: step>> returns inferred step
+Stack: [ range{ start: 1 end: 10 step: 1 infinite?: f } ]
+PASS: infinite?>> returns false for finite range
+Stack: [ ]
+PASS: range-from step>> is 1
+Stack: [ range{ start: 1 end: 0 step: 1 infinite?: t } ]
+PASS: range-from infinite?>> returns true
+Stack: [ ]
 === range (exclusive ascending) ===
 Stack: [ ]
 PASS: 1 to 10
