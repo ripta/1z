@@ -1,5 +1,6 @@
 const std = @import("std");
 const Value = @import("value.zig").Value;
+const dispatch = @import("dispatch.zig");
 
 /// Output format for benchmark CLI reporting
 pub const BenchmarkOutput = enum { none, human, json };
@@ -26,6 +27,23 @@ fn allocProfileLessThan(_: void, a: AllocProfileEntry, b: AllocProfileEntry) boo
     const abs_a: i64 = if (a.profile.net_bytes >= 0) a.profile.net_bytes else -a.profile.net_bytes;
     const abs_b: i64 = if (b.profile.net_bytes >= 0) b.profile.net_bytes else -b.profile.net_bytes;
     return abs_a > abs_b;
+}
+
+fn formatPercent(writer: anytype, numerator: u64, denominator: u64) !void {
+    if (denominator == 0) {
+        try writer.writeAll("0.0%");
+        return;
+    }
+
+    const scaled = percentTenths(numerator, denominator);
+    const whole: u64 = @intCast(scaled / 10);
+    const frac: u8 = @intCast(scaled % 10);
+    try writer.print("{d}.{d}%", .{ whole, frac });
+}
+
+fn percentTenths(numerator: u64, denominator: u64) u128 {
+    if (denominator == 0) return 0;
+    return @divTrunc((@as(u128, numerator) * 1000) + (@as(u128, denominator) / 2), denominator);
 }
 
 /// Benchmark statistics collected during execution
@@ -380,6 +398,28 @@ pub const BenchmarkStats = struct {
         try formatBytes(writer, self.peak_live_bytes);
         try writer.writeAll("\n");
 
+        if (self.variant_counts.len > 0) {
+            var total_variants: u64 = 0;
+            for (self.variant_counts) |count| total_variants += count;
+
+            if (total_variants > 0) {
+                const Tag = std.meta.Tag(Value);
+
+                try writer.writeAll("\nValue Variants:\n");
+                inline for (std.meta.fields(Tag)) |field| {
+                    const tag: Tag = @enumFromInt(field.value);
+                    const count = self.variant_counts[@intFromEnum(tag)];
+                    if (count > 0) {
+                        try writer.print("  {s:<16} ", .{variantName(tag)});
+                        try formatNumber(writer, count);
+                        try writer.writeAll("  (");
+                        try formatPercent(writer, count, total_variants);
+                        try writer.writeAll(")\n");
+                    }
+                }
+            }
+        }
+
         // Allocation profile section
         if (self.word_alloc_profiles.count() > 0) {
             try writer.writeAll("\nAllocation Profile (top 10 by net bytes):\n");
@@ -413,8 +453,11 @@ pub const BenchmarkStats = struct {
 
     /// Output benchmark results in JSON format
     pub fn formatJson(self: *const BenchmarkStats, writer: anytype) !void {
+        var total_variants: u64 = 0;
+        for (self.variant_counts) |count| total_variants += count;
+
         try writer.print(
-            \\{{"timing":{{"prelude_ns":{d},"prelude_parse_ns":{d},"prelude_exec_ns":{d},"user_ns":{d},"total_ns":{d}}},"prelude_inventory":{{"dict_entries":{d},"dispatch_user":{d},"dispatch_native":{d},"type_values":{d},"enum_entries":{d},"pragma_entries":{d},"virtual_types":{d},"struct_types":{d}}},"instructions":{{"push_literal":{d},"call_word":{d},"total":{d}}},"stack":{{"peak_depth":{d},"peak_task_stack_usage":{d}}},"jit":{{"words_compiled":{d},"compile_time_ns":{d}}},"memory":{{"allocations":{d},"bytes":{d},"peak_live_bytes":{d}}},"alloc_profile":[
+            \\{{"timing":{{"prelude_ns":{d},"prelude_parse_ns":{d},"prelude_exec_ns":{d},"user_ns":{d},"total_ns":{d}}},"prelude_inventory":{{"dict_entries":{d},"dispatch_user":{d},"dispatch_native":{d},"type_values":{d},"enum_entries":{d},"pragma_entries":{d},"virtual_types":{d},"struct_types":{d}}},"instructions":{{"push_literal":{d},"call_word":{d},"total":{d}}},"stack":{{"peak_depth":{d},"peak_task_stack_usage":{d}}},"jit":{{"words_compiled":{d},"compile_time_ns":{d}}},"memory":{{"allocations":{d},"bytes":{d},"peak_live_bytes":{d}}},"value_variants":{{
         , .{
             @as(i64, @intCast(self.preludeTimeNs())),
             @as(i64, @intCast(self.prelude_parse_ns)),
@@ -440,6 +483,28 @@ pub const BenchmarkStats = struct {
             self.total_bytes,
             self.peak_live_bytes,
         });
+
+        if (total_variants > 0) {
+            const Tag = std.meta.Tag(Value);
+            var first_variant = true;
+            inline for (std.meta.fields(Tag)) |field| {
+                const tag: Tag = @enumFromInt(field.value);
+                const count = self.variant_counts[@intFromEnum(tag)];
+                if (count > 0) {
+                    if (!first_variant) try writer.writeAll(",");
+                    first_variant = false;
+                    const scaled = percentTenths(count, total_variants);
+                    try writer.print("\"{s}\":{{\"count\":{d},\"percent\":{d}.{d}}}", .{
+                        variantName(tag),
+                        count,
+                        @as(u64, @intCast(scaled / 10)),
+                        @as(u8, @intCast(scaled % 10)),
+                    });
+                }
+            }
+        }
+
+        try writer.writeAll("},\"alloc_profile\":[");
 
         // Collect and sort allocation profile entries
         if (self.word_alloc_profiles.count() > 0) {
@@ -472,6 +537,13 @@ pub const BenchmarkStats = struct {
 // 😬 that was not obvious to me
 fn valueVariantCount() usize {
     return @typeInfo(Value).@"union".fields.len;
+}
+
+fn variantName(comptime tag: std.meta.Tag(Value)) []const u8 {
+    return switch (tag) {
+        .error_value => "error-value",
+        else => dispatch.builtinTypeName(tag),
+    };
 }
 
 const VariantHistogramWalker = struct {
@@ -956,6 +1028,91 @@ test "formatJson includes prelude_parse_ns and prelude_exec_ns" {
     const output = stream.getWritten();
     try std.testing.expect(std.mem.indexOf(u8, output, "\"prelude_parse_ns\":600000") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"prelude_exec_ns\":400000") != null);
+}
+
+test "formatHuman includes value variants section with counts and percentages" {
+    var stats = BenchmarkStats{};
+    defer stats.deinit(std.testing.allocator);
+    const Tag = std.meta.Tag(Value);
+
+    stats.start_time = 0;
+    stats.prelude_end_time = 1_000_000;
+    stats.end_time = 2_000_000;
+    stats.variant_counts = try std.testing.allocator.alloc(u64, valueVariantCount());
+    @memset(stats.variant_counts, 0);
+    stats.variant_counts[@intFromEnum(Tag.fixnum)] = 3;
+    stats.variant_counts[@intFromEnum(Tag.byte_array)] = 1;
+
+    var buf: [8192]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try stats.formatHuman(stream.writer());
+
+    const output = stream.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "Value Variants:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "fixnum") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "byte-array") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "3  (75.0%)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "1  (25.0%)") != null);
+}
+
+test "formatHuman omits value variants when histogram is empty" {
+    var stats = BenchmarkStats{};
+    defer stats.deinit(std.testing.allocator);
+
+    stats.start_time = 0;
+    stats.prelude_end_time = 1_000_000;
+    stats.end_time = 2_000_000;
+    stats.variant_counts = try std.testing.allocator.alloc(u64, valueVariantCount());
+    @memset(stats.variant_counts, 0);
+
+    var buf: [8192]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try stats.formatHuman(stream.writer());
+
+    const output = stream.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "Value Variants:") == null);
+}
+
+test "formatJson includes value_variants object" {
+    var stats = BenchmarkStats{};
+    defer stats.deinit(std.testing.allocator);
+    const Tag = std.meta.Tag(Value);
+
+    stats.start_time = 0;
+    stats.prelude_end_time = 1_000_000;
+    stats.end_time = 2_000_000;
+    stats.variant_counts = try std.testing.allocator.alloc(u64, valueVariantCount());
+    @memset(stats.variant_counts, 0);
+    stats.variant_counts[@intFromEnum(Tag.fixnum)] = 3;
+    stats.variant_counts[@intFromEnum(Tag.byte_array)] = 1;
+
+    var buf: [8192]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try stats.formatJson(stream.writer());
+
+    const output = stream.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"value_variants\":{") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"fixnum\":{\"count\":3,\"percent\":75.0}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"byte-array\":{\"count\":1,\"percent\":25.0}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"float\":") == null);
+}
+
+test "formatJson emits empty value_variants object when histogram is empty" {
+    var stats = BenchmarkStats{};
+    defer stats.deinit(std.testing.allocator);
+
+    stats.start_time = 0;
+    stats.prelude_end_time = 1_000_000;
+    stats.end_time = 2_000_000;
+    stats.variant_counts = try std.testing.allocator.alloc(u64, valueVariantCount());
+    @memset(stats.variant_counts, 0);
+
+    var buf: [8192]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try stats.formatJson(stream.writer());
+
+    const output = stream.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"value_variants\":{}") != null);
 }
 
 test "collectPreludeInventory stores counts" {
