@@ -46,6 +46,11 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
         }
 
         if (mode == .evaluate_parse_time or mode == .evaluate_parse_time_strict) {
+            if (try parser.maybeParseTypeUnionToken(alloc, tokenizer, ctx, token)) |union_type| {
+                try tokens.append(alloc, .{ .type_val = @constCast(union_type) });
+                continue;
+            }
+
             if (tryResolveLiteral(ctx, alloc, tokenizer, tok)) |val| {
                 try tokens.append(alloc, val);
                 continue;

@@ -451,6 +451,16 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
                     return ParseError.UnmatchedOpenQuote;
                 },
                 .unrecognized => {
+                    if (ctx != null) {
+                        if (try maybeParseTypeUnionToken(allocator, tokenizer, ctx, token)) |union_type| {
+                            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .type_val = @constCast(union_type) } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                            if (has_pending_docs) {
+                                doc_lines.clearRetainingCapacity();
+                                doc_first_line = 0;
+                            }
+                            continue;
+                        }
+                    }
                     if (ctx) |c| {
                         if (c.lookupWord(token)) |word| {
                             if (word.parse_time) {
@@ -574,6 +584,17 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
                     return ParseError.UnmatchedOpenQuote;
                 },
                 .unrecognized => {
+                    if (ctx != null) {
+                        if (try maybeParseTypeUnionToken(allocator, tokenizer, ctx, token)) |union_type| {
+                            is_first_token = false;
+                            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .type_val = @constCast(union_type) } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                            if (has_pending_docs) {
+                                doc_lines.clearRetainingCapacity();
+                                doc_first_line = 0;
+                            }
+                            continue;
+                        }
+                    }
                     if (ctx) |c| {
                         if (c.lookupWord(token)) |word| {
                             if (word.parse_time) {
@@ -625,13 +646,34 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
     return ParseError.UnmatchedOpenBracket;
 }
 
+/// Return whether the token can plausibly name a type annotation.
+/// Excludes delimiters, declaration names, and tokens containing syntax
+/// characters that are never valid standalone type names here.
+fn isTypeAnnotationCandidate(token: []const u8) bool {
+    if (token.len == 0) return false;
+    if (std.mem.eql(u8, token, "|") or
+        std.mem.eql(u8, token, "--") or
+        std.mem.eql(u8, token, ";") or
+        std.mem.eql(u8, token, "(") or
+        std.mem.eql(u8, token, ")") or
+        std.mem.eql(u8, token, "[") or
+        std.mem.eql(u8, token, "]") or
+        std.mem.eql(u8, token, "{") or
+        std.mem.eql(u8, token, "}")) return false;
+
+    if (token[token.len - 1] == ':') return false;
+    if (std.mem.indexOfAny(u8, token, "{}[];|")) |_| return false;
+    return true;
+}
+
 /// Resolve a type annotation token to a TypeValue pointer by looking up
 /// the word in the context.
 ///
 /// Returns null if ctx is null, as is in unit tests, or if the word is
-/// not found, or if the word not is a type.
+/// not found, or if the word is not a type.
 fn resolveTypeAnnotation(ctx: ?*Context, token: []const u8) ?*const value_mod.TypeValue {
     const c = ctx orelse return null;
+    if (!isTypeAnnotationCandidate(token)) return null;
     if (c.lookupWord(token)) |word| {
         if (word.parse_time) {
             const old_tokenizer = c.parse_tokenizer;
@@ -656,6 +698,105 @@ fn resolveTypeAnnotation(ctx: ?*Context, token: []const u8) ?*const value_mod.Ty
     }
 
     return null;
+}
+
+/// Raise a parse-time diagnostic for malformed inline type unions.
+fn invalidTypeUnion(ctx: ?*Context, allocator: Allocator, comptime fmt: []const u8, args: anytype) ParseError {
+    if (ctx) |c| {
+        c.parse_diagnostics = .{
+            .error_type = "InvalidTypeUnion",
+            .message = std.fmt.allocPrint(allocator, fmt, args) catch null,
+        };
+        return ParseError.ParseTimeExecutionError;
+    }
+    return ParseError.OutOfMemory;
+}
+
+/// Parse the remaining `| T | U ...` tail after the first type token has
+/// already been resolved. Produces the canonical anonymous union type.
+fn parseTypeUnionTail(
+    allocator: Allocator,
+    tokenizer: *Tokenizer,
+    ctx: ?*Context,
+    first_type: *const value_mod.TypeValue,
+) ParseError!*const value_mod.TypeValue {
+    const c = ctx orelse return first_type;
+
+    var members = std.ArrayListUnmanaged(*const value_mod.TypeValue){};
+    defer members.deinit(allocator);
+    members.append(allocator, first_type) catch return ParseError.OutOfMemory;
+
+    while (true) {
+        const member_tok = nextTokenOrYield(tokenizer) orelse {
+            return invalidTypeUnion(ctx, allocator, "expected a type after '|'", .{});
+        };
+        const member_type = resolveTypeAnnotation(ctx, member_tok.text) orelse {
+            return invalidTypeUnion(ctx, allocator, "'{s}' is not a known type in union position", .{member_tok.text});
+        };
+        members.append(allocator, member_type) catch return ParseError.OutOfMemory;
+
+        const next_tok = nextTokenOrYield(tokenizer) orelse {
+            return c.getOrCreateAnonymousUnionTypeValue(members.items) catch return ParseError.OutOfMemory;
+        };
+        if (std.mem.eql(u8, next_tok.text, "|")) continue;
+        tokenizer.peeked = next_tok;
+        return c.getOrCreateAnonymousUnionTypeValue(members.items) catch return ParseError.OutOfMemory;
+    }
+}
+
+/// Parse a type annotation token, greedily consuming a trailing `|` union
+/// continuation when present.
+fn parseTypeAnnotationToken(
+    allocator: Allocator,
+    tokenizer: *Tokenizer,
+    ctx: ?*Context,
+    token: []const u8,
+) ParseError!?*const value_mod.TypeValue {
+    const first_type = resolveTypeAnnotation(ctx, token) orelse return null;
+    const next_tok = nextTokenOrYield(tokenizer) orelse return first_type;
+    if (!std.mem.eql(u8, next_tok.text, "|")) {
+        tokenizer.peeked = next_tok;
+        return first_type;
+    }
+    return parseTypeUnionTail(allocator, tokenizer, ctx, first_type);
+}
+
+/// Try to interpret an otherwise-unrecognized token as the start of an
+/// anonymous type union in general parse-time value contexts.
+pub fn maybeParseTypeUnionToken(
+    allocator: Allocator,
+    tokenizer: *Tokenizer,
+    ctx: ?*Context,
+    token: []const u8,
+) ParseError!?*const value_mod.TypeValue {
+    if (!isTypeAnnotationCandidate(token)) return null;
+
+    // Quick peek at the raw input to check for a `|` continuation without
+    // consuming any tokens or mutating tokenizer state.
+    if (!peekNextTokenIsPipe(tokenizer)) return null;
+
+    const first_type = resolveTypeAnnotation(ctx, token) orelse return null;
+    // Consume the `|` we already verified is there.
+    _ = nextTokenOrYield(tokenizer);
+    return parseTypeUnionTail(allocator, tokenizer, ctx, first_type);
+}
+
+/// Check whether the next non-whitespace, non-comment token in the raw input
+/// is the single-character `|` token, without advancing the tokenizer state.
+fn peekNextTokenIsPipe(tokenizer: *const Tokenizer) bool {
+    if (tokenizer.peeked) |tok| return std.mem.eql(u8, tok.text, "|");
+    var pos = tokenizer.pos;
+    while (pos < tokenizer.input.len) : (pos += 1) {
+        const c = tokenizer.input[pos];
+        if (c == ' ' or c == '\t' or c == '\r' or c == '\n') continue;
+        if (c == '\\') return false; // comment, so stop scanning
+        return c == '|' and (pos + 1 >= tokenizer.input.len or isWhitespace(tokenizer.input[pos + 1]));
+    }
+    return false;
+}
+
+fn isWhitespace(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\r' or c == '\n';
 }
 
 /// Parse a stack effect with support for quotation annotations.
@@ -723,7 +864,7 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Cont
             current_list = &outputs;
         } else if (pending_param_name) |name| {
             if (pending_is_annotated) {
-                const type_val = resolveTypeAnnotation(ctx, token);
+                const type_val = try parseTypeAnnotationToken(allocator, tokenizer, ctx, token);
                 current_list.append(allocator, .{
                     .name = name,
                     .type_annotation = type_val,
@@ -1355,4 +1496,75 @@ test "parse row-polymorphic effect with quotation annotation" {
     try std.testing.expect(effect.outputs[0].is_row_variable);
     try std.testing.expectEqualStrings("..b", effect.outputs[0].name);
     try std.testing.expect(!effect.outputs[1].is_row_variable);
+}
+
+test "parse stack effect type union with context" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("n: fixnum | string -- out: string | fixnum )");
+    const effect = try parseStackEffect(arena.allocator(), &tokenizer, &ctx, 0);
+
+    try std.testing.expectEqual(@as(usize, 1), effect.inputs.len);
+    try std.testing.expectEqual(@as(usize, 1), effect.outputs.len);
+    try std.testing.expect(effect.inputs[0].type_annotation != null);
+    try std.testing.expect(effect.outputs[0].type_annotation != null);
+    try std.testing.expect(effect.inputs[0].type_annotation.? == effect.outputs[0].type_annotation.?);
+    try std.testing.expect(effect.inputs[0].type_annotation.?.member_types != null);
+    try std.testing.expectEqual(@as(usize, 2), effect.inputs[0].type_annotation.?.member_types.?.len);
+    try std.testing.expectEqualStrings("fixnum|string", effect.inputs[0].type_annotation.?.name);
+}
+
+test "named union definition parses anonymous union before semicolon" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.quotationAllocator();
+    var tokenizer = Tokenizer.init("number: fixnum | bignum | float ;");
+    const instrs = try parseTopLevel(alloc, &tokenizer, &ctx);
+
+    try std.testing.expectEqual(@as(usize, 2), instrs.len);
+    try std.testing.expectEqualStrings("number", instrs[0].op.push_literal.symbol);
+    try std.testing.expect(instrs[1].op.push_literal == .type_val);
+    try std.testing.expect(instrs[1].op.push_literal.type_val.member_types != null);
+    try std.testing.expectEqual(@as(usize, 3), instrs[1].op.push_literal.type_val.member_types.?.len);
+    try std.testing.expectEqualStrings("bignum|fixnum|float", instrs[1].op.push_literal.type_val.name);
+}
+
+test "struct field annotations accept anonymous unions" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.quotationAllocator();
+    var tokenizer = Tokenizer.init("range-like: struct{ start: fixnum | bignum end: fixnum | bignum } ;");
+    const instrs = try parseTopLevel(alloc, &tokenizer, &ctx);
+    try ctx.executeQuotation(.{ .instructions = instrs });
+
+    const word = ctx.lookupWord("range-like") orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    switch (word.action) {
+        .compound => |type_instrs| {
+            const tv = type_instrs[0].op.push_literal.type_val;
+            const desc = tv.descriptor orelse {
+                try std.testing.expect(false);
+                return;
+            };
+            const field_types_val = desc.get("field-types") orelse {
+                try std.testing.expect(false);
+                return;
+            };
+            const field_types = field_types_val.array;
+
+            try std.testing.expectEqual(@as(usize, 2), field_types.len);
+            try std.testing.expect(field_types[0].type_val.member_types != null);
+            try std.testing.expect(field_types[0].type_val == field_types[1].type_val);
+            try std.testing.expectEqualStrings("bignum|fixnum", field_types[0].type_val.name);
+        },
+        .native => try std.testing.expect(false),
+    }
 }

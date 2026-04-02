@@ -395,6 +395,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 var doc_val: ?[]const u8 = null;
                 var collected_markers = std.ArrayListUnmanaged(*Marker){};
                 defer collected_markers.deinit(alloc);
+                const is_named_union_type = top_val == .type_val and top_val.type_val.member_types != null;
 
                 // Extract stack effect from the quotation's .effect field if present
                 if (top_val == .quotation) {
@@ -435,7 +436,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     if (mk == @as(*const Marker, &markers_mod.parse_time_only_marker)) break true;
                 } else false;
 
-                try enforceRequireDoc(ctx, name, doc_val != null, has_parse_time or has_parse_time_only, false, false);
+                try enforceRequireDoc(ctx, name, doc_val != null, has_parse_time or has_parse_time_only, is_named_union_type, false);
 
                 const name_copy = try alloc.dupe(u8, name);
 
@@ -449,6 +450,41 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 };
 
                 var markers_slice = try alloc.dupe(*Marker, collected_markers.items);
+
+                if (is_named_union_type) {
+                    const has_parse_time_marker = for (markers_slice) |mk| {
+                        if (mk == @as(*const Marker, &markers_mod.parse_time_marker)) break true;
+                    } else false;
+                    const has_const_marker = for (markers_slice) |mk| {
+                        if (mk == @as(*const Marker, &markers_mod.const_marker)) break true;
+                    } else false;
+                    const has_typed_marker = for (markers_slice) |mk| {
+                        if (mk == @as(*const Marker, &markers_mod.typed_marker)) break true;
+                    } else false;
+
+                    var extra: usize = 0;
+                    if (!has_parse_time_marker) extra += 1;
+                    if (!has_const_marker) extra += 1;
+                    if (!has_typed_marker) extra += 1;
+
+                    if (extra != 0) {
+                        const extended = try alloc.alloc(*Marker, markers_slice.len + extra);
+                        @memcpy(extended[0..markers_slice.len], markers_slice);
+                        var idx = markers_slice.len;
+                        if (!has_parse_time_marker) {
+                            extended[idx] = @constCast(&markers_mod.parse_time_marker);
+                            idx += 1;
+                        }
+                        if (!has_const_marker) {
+                            extended[idx] = @constCast(&markers_mod.const_marker);
+                            idx += 1;
+                        }
+                        if (!has_typed_marker) {
+                            extended[idx] = @constCast(&markers_mod.typed_marker);
+                        }
+                        markers_slice = extended;
+                    }
+                }
 
                 if (!ctx.allow_all_recursion and containsNonTailSelfCall(ctx, instructions, name_copy)) {
                     const has_stack_recursive = for (collected_markers.items) |mk| {
@@ -469,7 +505,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
 
                 try ctx.defineWord(name_copy, WordDefinition{
                     .name = name_copy,
-                    .parse_time = has_parse_time or has_parse_time_only,
+                    .parse_time = has_parse_time or has_parse_time_only or is_named_union_type,
                     .parse_time_only = has_parse_time_only,
                     .stack_effect = stack_effect_val,
                     .markers = markers_slice,
@@ -506,4 +542,47 @@ pub fn nativeIf(ctx: *Context) anyerror!void {
     const true_quot = try popQuotation(ctx);
     const cond = try popBoolean(ctx);
     try ctx.executeQuotationInline(if (cond) true_quot else false_quot);
+}
+
+test "semicolon defines named union type as parse-time word" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const bignum_tv = ctx.lookupBuiltinTypeValue("bignum").?;
+    const float_tv = ctx.lookupBuiltinTypeValue("float").?;
+    const union_tv = try ctx.getOrCreateAnonymousUnionTypeValue(&.{ fixnum_tv, bignum_tv, float_tv });
+
+    try ctx.stack.push(.{ .symbol = "number" });
+    try ctx.stack.push(.{ .type_val = union_tv });
+    try nativeSemicolon(&ctx);
+
+    const word = ctx.lookupWord("number") orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    try std.testing.expect(word.parse_time);
+
+    const has_parse_time = for (word.markers) |mk| {
+        if (mk == @as(*const Marker, &markers_mod.parse_time_marker)) break true;
+    } else false;
+    const has_const = for (word.markers) |mk| {
+        if (mk == @as(*const Marker, &markers_mod.const_marker)) break true;
+    } else false;
+    const has_typed = for (word.markers) |mk| {
+        if (mk == @as(*const Marker, &markers_mod.typed_marker)) break true;
+    } else false;
+
+    try std.testing.expect(has_parse_time);
+    try std.testing.expect(has_const);
+    try std.testing.expect(has_typed);
+
+    switch (word.action) {
+        .compound => |instrs| {
+            try std.testing.expectEqual(@as(usize, 1), instrs.len);
+            try std.testing.expect(instrs[0].op.push_literal == .type_val);
+            try std.testing.expect(instrs[0].op.push_literal.type_val == union_tv);
+        },
+        .native => try std.testing.expect(false),
+    }
 }
