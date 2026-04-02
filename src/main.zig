@@ -563,6 +563,7 @@ pub fn main() u8 {
 
     // Stop benchmark timer if enabled
     if (bench_config.enabled) {
+        bench_stats.collectVariantHistogram(ctx.stack.items.items) catch {};
         bench_stats.stop();
     }
 

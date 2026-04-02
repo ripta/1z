@@ -1,6 +1,10 @@
 const std = @import("std");
 const Value = @import("value.zig").Value;
 
+// Keep this in sync with Value's discriminant count. We can't directly
+// query it here without creating a circular dependency. 😬
+pub const value_variant_count = 32;
+
 /// Output format for benchmark CLI reporting
 pub const BenchmarkOutput = enum { none, human, json };
 
@@ -71,6 +75,9 @@ pub const BenchmarkStats = struct {
     word_alloc_profiles: std.StringHashMapUnmanaged(WordAllocProfile) = .{},
     alloc_profile_stack: [1024]usize = [_]usize{0} ** 1024,
     alloc_profile_depth: usize = 0,
+
+    // Value variant histogram collected from a live snapshot at program exit.
+    variant_counts: [value_variant_count]u64 = [_]u64{0} ** value_variant_count,
 
     /// Start the benchmark timer
     pub fn start(self: *BenchmarkStats) void {
@@ -160,6 +167,20 @@ pub const BenchmarkStats = struct {
     /// Free per-word allocation profile hash map
     pub fn deinit(self: *BenchmarkStats, alloc: std.mem.Allocator) void {
         self.word_alloc_profiles.deinit(alloc);
+    }
+
+    /// Collect a histogram of live Value discriminants reachable from the
+    /// supplied roots. Traversal follows nested arrays, hashes, quotations,
+    /// and other value-bearing containers while guarding against cycles.
+    pub fn collectVariantHistogram(self: *BenchmarkStats, roots: []const Value) std.mem.Allocator.Error!void {
+        self.variant_counts = [_]u64{0} ** value_variant_count;
+
+        var walker = VariantHistogramWalker{};
+        defer walker.deinit(std.heap.page_allocator);
+
+        for (roots) |root| {
+            try walker.walkValue(std.heap.page_allocator, self, root);
+        }
     }
 
     /// Get total instruction count
@@ -436,6 +457,157 @@ pub const BenchmarkStats = struct {
         }
 
         try writer.writeAll("]}\n");
+    }
+};
+
+const VariantHistogramWalker = struct {
+    array_slices: std.AutoHashMapUnmanaged(usize, void) = .{},
+    quotation_slices: std.AutoHashMapUnmanaged(usize, void) = .{},
+    hashes: std.AutoHashMapUnmanaged(usize, void) = .{},
+    vectors: std.AutoHashMapUnmanaged(usize, void) = .{},
+    sets: std.AutoHashMapUnmanaged(usize, void) = .{},
+    mutable_maps: std.AutoHashMapUnmanaged(usize, void) = .{},
+    struct_instances: std.AutoHashMapUnmanaged(usize, void) = .{},
+    value_ptrs: std.AutoHashMapUnmanaged(usize, void) = .{},
+
+    fn deinit(self: *VariantHistogramWalker, alloc: std.mem.Allocator) void {
+        self.array_slices.deinit(alloc);
+        self.quotation_slices.deinit(alloc);
+        self.hashes.deinit(alloc);
+        self.vectors.deinit(alloc);
+        self.sets.deinit(alloc);
+        self.mutable_maps.deinit(alloc);
+        self.struct_instances.deinit(alloc);
+        self.value_ptrs.deinit(alloc);
+    }
+
+    fn record(stats: *BenchmarkStats, val: Value) void {
+        const idx: usize = @intFromEnum(val);
+        stats.variant_counts[idx] += 1;
+    }
+
+    fn enterPointer(
+        set: *std.AutoHashMapUnmanaged(usize, void),
+        alloc: std.mem.Allocator,
+        ptr_key: usize,
+    ) std.mem.Allocator.Error!bool {
+        const gop = try set.getOrPut(alloc, ptr_key);
+        if (gop.found_existing) return false;
+        gop.value_ptr.* = {};
+        return true;
+    }
+
+    fn walkInstructionSlice(
+        self: *VariantHistogramWalker,
+        alloc: std.mem.Allocator,
+        stats: *BenchmarkStats,
+        instructions: anytype,
+    ) std.mem.Allocator.Error!void {
+        if (instructions.len == 0) return;
+        const ptr_key = @intFromPtr(instructions.ptr);
+        if (!try enterPointer(&self.quotation_slices, alloc, ptr_key)) return;
+        defer _ = self.quotation_slices.remove(ptr_key);
+
+        for (instructions) |instr| {
+            switch (instr.op) {
+                .push_literal => |literal| try self.walkValue(alloc, stats, literal),
+                .call_word => {},
+            }
+        }
+    }
+
+    fn walkValue(
+        self: *VariantHistogramWalker,
+        alloc: std.mem.Allocator,
+        stats: *BenchmarkStats,
+        val: Value,
+    ) std.mem.Allocator.Error!void {
+        record(stats, val);
+
+        switch (val) {
+            .array => |items| {
+                if (items.len == 0) return;
+                const ptr_key = @intFromPtr(items.ptr);
+                if (!try enterPointer(&self.array_slices, alloc, ptr_key)) return;
+                defer _ = self.array_slices.remove(ptr_key);
+                for (items) |item| try self.walkValue(alloc, stats, item);
+            },
+            .quotation => |quot| try self.walkInstructionSlice(alloc, stats, quot.instructions),
+            .hash => |h| {
+                const ptr_key = @intFromPtr(h);
+                if (!try enterPointer(&self.hashes, alloc, ptr_key)) return;
+                defer _ = self.hashes.remove(ptr_key);
+                var iter = h.iterator();
+                while (iter.next()) |entry| {
+                    try self.walkValue(alloc, stats, entry.value_ptr.*);
+                }
+            },
+            .vector => |v| {
+                const ptr_key = @intFromPtr(v);
+                if (!try enterPointer(&self.vectors, alloc, ptr_key)) return;
+                defer _ = self.vectors.remove(ptr_key);
+                for (v.items) |item| try self.walkValue(alloc, stats, item);
+            },
+            .set => |s| {
+                const ptr_key = @intFromPtr(s);
+                if (!try enterPointer(&self.sets, alloc, ptr_key)) return;
+                defer _ = self.sets.remove(ptr_key);
+                for (s.keys()) |key| try self.walkValue(alloc, stats, key);
+            },
+            .mutable_map => |m| {
+                const ptr_key = @intFromPtr(m);
+                if (!try enterPointer(&self.mutable_maps, alloc, ptr_key)) return;
+                defer _ = self.mutable_maps.remove(ptr_key);
+                var iter = m.iterator();
+                while (iter.next()) |entry| {
+                    try self.walkValue(alloc, stats, entry.value_ptr.*);
+                }
+            },
+            .struct_instance => |si| {
+                const ptr_key = @intFromPtr(si);
+                if (!try enterPointer(&self.struct_instances, alloc, ptr_key)) return;
+                defer _ = self.struct_instances.remove(ptr_key);
+                for (si.fields) |field| try self.walkValue(alloc, stats, field);
+            },
+            .tagged => |tagged| {
+                const ptr_key = @intFromPtr(tagged.inner);
+                if (!try enterPointer(&self.value_ptrs, alloc, ptr_key)) return;
+                defer _ = self.value_ptrs.remove(ptr_key);
+                try self.walkValue(alloc, stats, tagged.inner.*);
+            },
+            .error_value => |err| {
+                if (err.data) |data| {
+                    const ptr_key = @intFromPtr(data);
+                    if (!try enterPointer(&self.value_ptrs, alloc, ptr_key)) return;
+                    defer _ = self.value_ptrs.remove(ptr_key);
+                    try self.walkValue(alloc, stats, data.*);
+                }
+            },
+            .fixnum,
+            .float,
+            .bignum,
+            .boolean,
+            .string,
+            .symbol,
+            .byte_array,
+            .stream,
+            .resource,
+            .parameter,
+            .module,
+            .marker,
+            .struct_type,
+            .template,
+            .benchmark_report,
+            .stack_effect,
+            .task,
+            .channel,
+            .iterator,
+            .doc_string,
+            .type_val,
+            .sandbox_spec,
+            .unit,
+            => {},
+        }
     }
 };
 
@@ -811,6 +983,58 @@ test "collectPreludeInventory stores counts" {
     try std.testing.expectEqual(@as(usize, 6), stats.prelude_pragma_entries);
     try std.testing.expectEqual(@as(usize, 45), stats.prelude_virtual_types);
     try std.testing.expectEqual(@as(usize, 15), stats.prelude_struct_types);
+}
+
+test "collectVariantHistogram counts nested arrays hashes and quotation literals" {
+    var stats = BenchmarkStats{};
+    const Instruction = @import("value.zig").Instruction;
+    const Tag = std.meta.Tag(Value);
+
+    const nested_instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .string = "hi" } }, .line = 1 },
+    };
+    const quot = Value{ .quotation = .{ .instructions = &nested_instrs } };
+    const arr = [_]Value{
+        .{ .fixnum = 7 },
+        quot,
+    };
+
+    var hash = @import("value.zig").HashTable{};
+    defer hash.deinit(std.testing.allocator);
+    try hash.put(std.testing.allocator, "k", .{ .array = arr[0..] });
+
+    const roots = [_]Value{
+        .{ .array = arr[0..] },
+        .{ .hash = &hash },
+    };
+
+    try stats.collectVariantHistogram(&roots);
+
+    try std.testing.expectEqual(@as(u64, 2), stats.variant_counts[@intFromEnum(Tag.array)]);
+    try std.testing.expectEqual(@as(u64, 2), stats.variant_counts[@intFromEnum(Tag.fixnum)]);
+    try std.testing.expectEqual(@as(u64, 2), stats.variant_counts[@intFromEnum(Tag.quotation)]);
+    try std.testing.expectEqual(@as(u64, 2), stats.variant_counts[@intFromEnum(Tag.boolean)]);
+    try std.testing.expectEqual(@as(u64, 2), stats.variant_counts[@intFromEnum(Tag.string)]);
+    try std.testing.expectEqual(@as(u64, 1), stats.variant_counts[@intFromEnum(Tag.hash)]);
+}
+
+test "collectVariantHistogram stops on self-referential vector cycles" {
+    var stats = BenchmarkStats{};
+    const Tag = std.meta.Tag(Value);
+
+    const vec = try std.testing.allocator.create(@import("value.zig").Vector);
+    defer {
+        vec.deinit(std.testing.allocator);
+        std.testing.allocator.destroy(vec);
+    }
+    vec.* = .{};
+    try vec.append(std.testing.allocator, .{ .vector = vec });
+
+    const roots = [_]Value{.{ .vector = vec }};
+    try stats.collectVariantHistogram(&roots);
+
+    try std.testing.expectEqual(@as(u64, 2), stats.variant_counts[@intFromEnum(Tag.vector)]);
 }
 
 test "formatHuman includes prelude inventory" {
