@@ -78,6 +78,7 @@ command-line-args (  -- args )
 compose ( quot1 quot2 -- quot' )
 const (  -- marker )
 curry ( x quot -- quot' )
+define-enum ( name descriptor markers --  )
 define-method ( name descriptor markers --  )
 define-struct ( name descriptor markers --  )
 define-virtual ( name descriptor markers --  )
@@ -198,6 +199,7 @@ H{
 M{
 S{
 V{
+W{
 []
 abs ( a -- b )
 and ( ? ? -- ? )
@@ -213,6 +215,7 @@ cond ( branches -- ... )
 do ( pred body -- pred body )
 dupd ( a b -- a a b )
 emit ( codepoint --  )
+enum{
 error-type? ( error type -- error ? )
 error? ( val -- ? )
 flush (  --  )

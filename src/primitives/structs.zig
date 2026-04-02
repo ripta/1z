@@ -47,7 +47,8 @@ fn nativeParseStructFields(ctx: *Context) anyerror!void {
 }
 
 /// define-struct ( name: descriptor markers -- ) - Define a struct type and its accessor words
-/// Creates: make-NAME, >NAME, NAME?, and FIELD>> for each field
+///
+/// Generates: make-NAME, >NAME, NAME?, and FIELD>> for each field
 fn nativeDefineStruct(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 

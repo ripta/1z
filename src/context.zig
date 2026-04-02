@@ -110,6 +110,8 @@ pub const Context = struct {
     dispatch: DispatchTable,
     /// Shared scheduler for green thread contexts. Null for the root context.
     scheduler: ?*Scheduler = null,
+    /// Enum registry mapping enum names to their variant VirtualType pointers.
+    enum_registry: std.StringHashMapUnmanaged([]const *const value_mod.VirtualType) = .{},
     /// Parent context for dictionary and dispatch table lookup chaining.
     /// Task contexts walk this chain to find words and methods defined in
     /// ancestor scopes, up to the root context which holds primitives and
@@ -240,6 +242,7 @@ pub const Context = struct {
         self.error_details.deinit(self.allocator);
         self.load_paths.deinit(self.allocator);
         self.module_cache.deinit(self.arena.allocator());
+        self.enum_registry.deinit(self.allocator);
         self.dispatch.deinit();
         self.arena.deinit();
         self.dictionary.deinit();
@@ -433,6 +436,19 @@ pub const Context = struct {
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
             if (ctx.dispatch.lookupUnary(word_name, type_a)) |entry| return entry;
+            ancestor = ctx.parent_context;
+        }
+
+        return null;
+    }
+
+    /// Look up enum variant types by enum name, walking the parent context chain.
+    pub fn lookupEnumVariants(self: *const Context, enum_name: []const u8) ?[]const *const value_mod.VirtualType {
+        if (self.enum_registry.get(enum_name)) |variants| return variants;
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            if (ctx.enum_registry.get(enum_name)) |variants| return variants;
             ancestor = ctx.parent_context;
         }
 

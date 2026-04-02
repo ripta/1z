@@ -19,6 +19,9 @@ S{: parse-time [ "}" parse-until make-set ] ;
 \\ Mutable map literal syntax.
 M{: parse-time [ "}" parse-until make-mutable-map ] ;
 
+\\ Word array literal syntax. Tokenizes words as strings without requiring quotes.
+W{: parse-time [ "}" parse-tokens-until ] ;
+
 \\ Struct definition syntax.
 \   name: struct{ field1 field2 ... } ;
 struct{: parse-time [
@@ -33,6 +36,14 @@ virtual{: parse-time [
   M{ type: virtual: }
   inner-type: parse-virtual-inner @set!
   define: [ define-virtual ] @set!
+] ;
+
+\\ Enum type definition syntax.
+\   name: enum{ variant1 variant2 ... } ;
+enum{: parse-time [
+  M{ type: enum-descriptor: }
+  variants: "}" parse-tokens-until @set!
+  define: [ define-enum ] @set!
 ] ;
 
 \\ Method dispatch registration syntax.
