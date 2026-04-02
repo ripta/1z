@@ -1,10 +1,6 @@
 const std = @import("std");
 const Value = @import("value.zig").Value;
 
-// Keep this in sync with Value's discriminant count. We can't directly
-// query it here without creating a circular dependency. 😬
-pub const value_variant_count = 32;
-
 /// Output format for benchmark CLI reporting
 pub const BenchmarkOutput = enum { none, human, json };
 
@@ -77,7 +73,7 @@ pub const BenchmarkStats = struct {
     alloc_profile_depth: usize = 0,
 
     // Value variant histogram collected from a live snapshot at program exit.
-    variant_counts: [value_variant_count]u64 = [_]u64{0} ** value_variant_count,
+    variant_counts: []u64 = &.{},
 
     /// Start the benchmark timer
     pub fn start(self: *BenchmarkStats) void {
@@ -167,13 +163,26 @@ pub const BenchmarkStats = struct {
     /// Free per-word allocation profile hash map
     pub fn deinit(self: *BenchmarkStats, alloc: std.mem.Allocator) void {
         self.word_alloc_profiles.deinit(alloc);
+        if (self.variant_counts.len > 0) {
+            alloc.free(self.variant_counts);
+            self.variant_counts = &.{};
+        }
     }
 
     /// Collect a histogram of live Value discriminants reachable from the
     /// supplied roots. Traversal follows nested arrays, hashes, quotations,
     /// and other value-bearing containers while guarding against cycles.
-    pub fn collectVariantHistogram(self: *BenchmarkStats, roots: []const Value) std.mem.Allocator.Error!void {
-        self.variant_counts = [_]u64{0} ** value_variant_count;
+    pub fn collectVariantHistogram(
+        self: *BenchmarkStats,
+        alloc: std.mem.Allocator,
+        roots: []const Value,
+    ) std.mem.Allocator.Error!void {
+        const variant_count = valueVariantCount();
+        if (self.variant_counts.len != variant_count) {
+            if (self.variant_counts.len > 0) alloc.free(self.variant_counts);
+            self.variant_counts = try alloc.alloc(u64, variant_count);
+        }
+        @memset(self.variant_counts, 0);
 
         var walker = VariantHistogramWalker{};
         defer walker.deinit(std.heap.page_allocator);
@@ -460,6 +469,11 @@ pub const BenchmarkStats = struct {
     }
 };
 
+// 😬 that was not obvious to me
+fn valueVariantCount() usize {
+    return @typeInfo(Value).@"union".fields.len;
+}
+
 const VariantHistogramWalker = struct {
     array_slices: std.AutoHashMapUnmanaged(usize, void) = .{},
     quotation_slices: std.AutoHashMapUnmanaged(usize, void) = .{},
@@ -608,33 +622,6 @@ const VariantHistogramWalker = struct {
             .unit,
             => {},
         }
-    }
-};
-
-/// A single entry in a benchmark report.
-pub const BenchmarkReportEntry = struct {
-    label: []const u8,
-    results: *std.StringHashMapUnmanaged(Value),
-};
-
-/// A benchmark report collecting multiple benchmark entries for reporting later.
-pub const BenchmarkReport = struct {
-    entries: std.ArrayListUnmanaged(BenchmarkReportEntry) = .{},
-    allocator: std.mem.Allocator,
-
-    pub fn init(alloc: std.mem.Allocator) BenchmarkReport {
-        return .{ .allocator = alloc };
-    }
-
-    pub fn addEntry(self: *BenchmarkReport, label: []const u8, results: *std.StringHashMapUnmanaged(Value)) !void {
-        try self.entries.append(self.allocator, .{ .label = label, .results = results });
-    }
-
-    pub fn deinit(self: *BenchmarkReport) void {
-        for (self.entries.items) |*entry| {
-            entry.results.deinit(self.allocator);
-        }
-        self.entries.deinit(self.allocator);
     }
 };
 
@@ -987,6 +974,7 @@ test "collectPreludeInventory stores counts" {
 
 test "collectVariantHistogram counts nested arrays hashes and quotation literals" {
     var stats = BenchmarkStats{};
+    defer stats.deinit(std.testing.allocator);
     const Instruction = @import("value.zig").Instruction;
     const Tag = std.meta.Tag(Value);
 
@@ -1009,7 +997,7 @@ test "collectVariantHistogram counts nested arrays hashes and quotation literals
         .{ .hash = &hash },
     };
 
-    try stats.collectVariantHistogram(&roots);
+    try stats.collectVariantHistogram(std.testing.allocator, &roots);
 
     try std.testing.expectEqual(@as(u64, 2), stats.variant_counts[@intFromEnum(Tag.array)]);
     try std.testing.expectEqual(@as(u64, 2), stats.variant_counts[@intFromEnum(Tag.fixnum)]);
@@ -1021,6 +1009,7 @@ test "collectVariantHistogram counts nested arrays hashes and quotation literals
 
 test "collectVariantHistogram stops on self-referential vector cycles" {
     var stats = BenchmarkStats{};
+    defer stats.deinit(std.testing.allocator);
     const Tag = std.meta.Tag(Value);
 
     const vec = try std.testing.allocator.create(@import("value.zig").Vector);
@@ -1032,7 +1021,7 @@ test "collectVariantHistogram stops on self-referential vector cycles" {
     try vec.append(std.testing.allocator, .{ .vector = vec });
 
     const roots = [_]Value{.{ .vector = vec }};
-    try stats.collectVariantHistogram(&roots);
+    try stats.collectVariantHistogram(std.testing.allocator, &roots);
 
     try std.testing.expectEqual(@as(u64, 2), stats.variant_counts[@intFromEnum(Tag.vector)]);
 }

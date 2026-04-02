@@ -3,7 +3,7 @@ const context_mod = @import("context.zig");
 const Context = context_mod.Context;
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
-const BenchmarkReport = @import("benchmark.zig").BenchmarkReport;
+const BenchmarkReportHandle = @import("benchmark_report.zig").BenchmarkReportHandle;
 const Task = @import("task.zig").Task;
 const Iterator = @import("iterator.zig").Iterator;
 const Channel = @import("channel.zig").Channel;
@@ -660,7 +660,7 @@ pub const Value = union(enum) {
     struct_instance: *StructInstance,
     tagged: struct { tag: *const VirtualType, inner: *const Value },
     template: []const TemplateSegment,
-    benchmark_report: *BenchmarkReport,
+    benchmark_report: *BenchmarkReportHandle,
     stack_effect: StackEffect,
     error_value: ErrorObject,
     task: *Task,
@@ -819,9 +819,7 @@ pub const Value = union(enum) {
                 }
                 try writer.writeByte('"');
             },
-            .benchmark_report => |br| {
-                try writer.print("<benchmark-report ({d} entries)>", .{br.entries.items.len});
-            },
+            .benchmark_report => try writer.writeAll("<benchmark-report>"),
             .stack_effect => |effect| try effect.write(writer),
             .error_value => |err| try err.write(writer),
             .task => |t| {

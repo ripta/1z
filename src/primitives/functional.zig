@@ -7,7 +7,8 @@ const HashTable = value_mod.HashTable;
 const Quotation = value_mod.Quotation;
 const benchmark_mod = @import("../benchmark.zig");
 const BenchmarkStats = benchmark_mod.BenchmarkStats;
-const BenchmarkReport = benchmark_mod.BenchmarkReport;
+const BenchmarkReport = @import("../benchmark_report.zig").BenchmarkReport(Value);
+const BenchmarkReportHandle = @import("../benchmark_report.zig").BenchmarkReportHandle;
 
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
@@ -160,7 +161,7 @@ fn nativeMakeBenchmarkReport(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const report = alloc.create(BenchmarkReport) catch return error.OutOfMemory;
     report.* = BenchmarkReport.init(alloc);
-    try ctx.stack.push(.{ .benchmark_report = report });
+    try ctx.stack.push(.{ .benchmark_report = @as(*BenchmarkReportHandle, @ptrCast(report)) });
 }
 
 /// benchmark-run ( report label quot -- report ) - Benchmark a quotation once and add to report
@@ -170,7 +171,7 @@ fn nativeBenchmarkRun(ctx: *Context) anyerror!void {
     const label = try popString(ctx);
     const val = try ctx.stack.pop();
     const report = switch (val) {
-        .benchmark_report => |r| r,
+        .benchmark_report => |r| @as(*BenchmarkReport, @ptrCast(@alignCast(r))),
         else => {
             helpers.setTypeMismatchError(ctx, "benchmark-report", val);
             return error.TypeMismatch;
@@ -179,7 +180,7 @@ fn nativeBenchmarkRun(ctx: *Context) anyerror!void {
 
     const hash = try executeBenchmark(ctx, quot);
     try report.addEntry(label, hash);
-    try ctx.stack.push(.{ .benchmark_report = report });
+    try ctx.stack.push(.{ .benchmark_report = @as(*BenchmarkReportHandle, @ptrCast(report)) });
 }
 
 /// benchmark-n ( report label n quot -- report ) - Benchmark a quotation N times and add to report
@@ -193,7 +194,7 @@ fn nativeBenchmarkN(ctx: *Context) anyerror!void {
     const label = try popString(ctx);
     const val = try ctx.stack.pop();
     const report = switch (val) {
-        .benchmark_report => |r| r,
+        .benchmark_report => |r| @as(*BenchmarkReport, @ptrCast(@alignCast(r))),
         else => {
             helpers.setTypeMismatchError(ctx, "benchmark-report", val);
             return error.TypeMismatch;
@@ -202,7 +203,7 @@ fn nativeBenchmarkN(ctx: *Context) anyerror!void {
 
     const hash = try executeBenchmarkN(ctx, quot, n);
     try report.addEntry(label, hash);
-    try ctx.stack.push(.{ .benchmark_report = report });
+    try ctx.stack.push(.{ .benchmark_report = @as(*BenchmarkReportHandle, @ptrCast(report)) });
 }
 
 /// benchmark-auto ( report label quot -- report ) - Auto-calibrate iterations targeting ~100ms
@@ -211,7 +212,7 @@ fn nativeBenchmarkAuto(ctx: *Context) anyerror!void {
     const label = try popString(ctx);
     const val = try ctx.stack.pop();
     const report = switch (val) {
-        .benchmark_report => |r| r,
+        .benchmark_report => |r| @as(*BenchmarkReport, @ptrCast(@alignCast(r))),
         else => {
             helpers.setTypeMismatchError(ctx, "benchmark-report", val);
             return error.TypeMismatch;
@@ -243,7 +244,7 @@ fn nativeBenchmarkAuto(ctx: *Context) anyerror!void {
     }
 
     try report.addEntry(label, final_hash.?);
-    try ctx.stack.push(.{ .benchmark_report = report });
+    try ctx.stack.push(.{ .benchmark_report = @as(*BenchmarkReportHandle, @ptrCast(report)) });
 }
 
 /// print-benchmark-report - Polymorphic:
@@ -255,7 +256,7 @@ fn nativePrintBenchmarkReport(ctx: *Context) anyerror!void {
 
     switch (val) {
         .benchmark_report => |report| {
-            try printReportTable(ctx, report);
+            try printReportTable(ctx, @as(*BenchmarkReport, @ptrCast(@alignCast(report))));
         },
         .hash => |hash| {
             // Single benchmark: label is on the stack
