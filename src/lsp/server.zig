@@ -384,6 +384,7 @@ pub const Server = struct {
             false,
             false,
             &self.ctx.builtin_type_values,
+            self.ctx.getAnyTypeSentinel(),
             .err,
             .err,
         );

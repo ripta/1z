@@ -1446,7 +1446,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
             }
         }
 
-        var engine = effect_inference.InferenceEngine.init(&ctx.dictionary, &ctx.dispatch, ctx.local_frames.items, ctx.quotationAllocator(), severity_override, suppressed, suppress_undeclared, &ctx.builtin_type_values, type_check_mode, arity_check_mode);
+        var engine = effect_inference.InferenceEngine.init(&ctx.dictionary, &ctx.dispatch, ctx.local_frames.items, ctx.quotationAllocator(), severity_override, suppressed, suppress_undeclared, &ctx.builtin_type_values, ctx.getAnyTypeSentinel(), type_check_mode, arity_check_mode);
         defer engine.deinit();
         engine.analyzeAll(ctx.current_source) catch |err| {
             err_writer.print("Error during effect inference: {any}\n", .{err}) catch {};
