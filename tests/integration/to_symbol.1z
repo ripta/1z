@@ -22,17 +22,32 @@ foo: >string >symbol foo: "symbol>string>symbol roundtrip" assert=
 [ 42 >symbol ] "integer rejected" assert-error
 
 ">symbol enum variants" test-section
-color: enum{ red: unit green: unit blue: unit } ;
+color:       enum{ red: unit green: unit blue: unit } ;
 circle-data: struct{ radius } ;
+rect-dims:   struct{ width height } ;
 shape: enum{
   circle: circle-data
   point: unit
+} ;
+geom: enum{
+  rect: rect-dims
+  dot: unit
 } ;
 
 color:red >symbol red: "flat enum variant converts to symbol" assert=
 color:green >symbol green: "another flat enum variant converts to symbol" assert=
 shape:point >symbol point: "flat variant in mixed enum converts to symbol" assert=
 [ 42 >shape:circle >symbol ] "data enum variant rejected" assert-error
+
+">enum-name generated conversions" test-section
+red: >color color:red ">color converts flat symbol to enum variant" assert=
+point: >shape shape:point ">shape converts mixed flat symbol to enum variant" assert=
+color:red >symbol >color color:red "flat enum roundtrip through symbol" assert=
+[ purple: >color ] "unknown flat variant symbol rejected" assert-error
+[ circle: >shape ] "data-carrying variant symbol rejected" assert-error
+[ rect: >geom ] "multi-field data variant symbol rejected" assert-error
+[ "red" >color ] "string input rejected by >color" assert-error
+[ 42 >color ] "non-symbol input rejected by >color" assert-error
 
 ">quotation from string" test-section
 greet: [ "hello" ] ;

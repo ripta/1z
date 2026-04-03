@@ -33,6 +33,8 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: flat enum variant converts to symbol
 Stack: [ ]
 PASS: another flat enum variant converts to symbol
@@ -40,6 +42,24 @@ Stack: [ ]
 PASS: flat variant in mixed enum converts to symbol
 Stack: [ ]
 PASS: data enum variant rejected
+Stack: [ ]
+=== >enum-name generated conversions ===
+Stack: [ ]
+PASS: >color converts flat symbol to enum variant
+Stack: [ ]
+PASS: >shape converts mixed flat symbol to enum variant
+Stack: [ ]
+PASS: flat enum roundtrip through symbol
+Stack: [ ]
+PASS: unknown flat variant symbol rejected
+Stack: [ ]
+PASS: data-carrying variant symbol rejected
+Stack: [ ]
+PASS: multi-field data variant symbol rejected
+Stack: [ ]
+PASS: string input rejected by >color
+Stack: [ ]
+PASS: non-symbol input rejected by >color
 Stack: [ ]
 === >quotation from string ===
 Stack: [ ]

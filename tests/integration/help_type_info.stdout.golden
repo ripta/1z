@@ -129,7 +129,7 @@ type info:
     red:   unit
     green: unit
     blue:  unit
-  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? >ht-color ht-color
 " ]
 PASS: enum has type info header
 Stack: [ "ht-color ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
@@ -139,7 +139,7 @@ type info:
     red:   unit
     green: unit
     blue:  unit
-  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? >ht-color ht-color
 " ]
 PASS: enum shows kind
 Stack: [ "ht-color ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
@@ -149,7 +149,7 @@ type info:
     red:   unit
     green: unit
     blue:  unit
-  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? >ht-color ht-color
 " ]
 PASS: enum shows variants header
 Stack: [ "ht-color ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
@@ -159,7 +159,7 @@ type info:
     red:   unit
     green: unit
     blue:  unit
-  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? >ht-color ht-color
 " ]
 PASS: enum shows red variant
 Stack: [ "ht-color ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
@@ -169,7 +169,7 @@ type info:
     red:   unit
     green: unit
     blue:  unit
-  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? >ht-color ht-color
 " ]
 PASS: enum shows green variant
 Stack: [ "ht-color ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
@@ -179,7 +179,7 @@ type info:
     red:   unit
     green: unit
     blue:  unit
-  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? >ht-color ht-color
 " ]
 PASS: enum shows blue variant
 Stack: [ "ht-color ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
@@ -189,7 +189,7 @@ type info:
     red:   unit
     green: unit
     blue:  unit
-  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? >ht-color ht-color
 " ]
 PASS: enum shows unit type
 Stack: [ "ht-color ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
@@ -199,7 +199,7 @@ type info:
     red:   unit
     green: unit
     blue:  unit
-  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? >ht-color ht-color
 " ]
 PASS: enum shows generated-words
 Stack: [ "ht-color ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
@@ -209,7 +209,7 @@ type info:
     red:   unit
     green: unit
     blue:  unit
-  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? ht-color
+  generated-words: ht-color:red ht-color:red? ht-color:green ht-color:green? ht-color:blue ht-color:blue? ht-color? >ht-color ht-color
 " ]
 Stack: [ ]
 === enum type info (data-carrying) ===
@@ -222,7 +222,7 @@ type info:
   variants:
     circle: ht-circle-data
     dot:    unit
-  generated-words: >ht-shape:circle make-ht-shape:circle unmake-ht-shape:circle ht-shape:circle> ht-shape:circle>hash ht-shape:circle? ht-shape:dot ht-shape:dot? ht-shape? ht-shape
+  generated-words: >ht-shape:circle make-ht-shape:circle unmake-ht-shape:circle ht-shape:circle> ht-shape:circle>hash ht-shape:circle? ht-shape:dot ht-shape:dot? ht-shape? >ht-shape ht-shape
 " ]
 PASS: data enum shows kind
 Stack: [ "ht-shape ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
@@ -231,7 +231,7 @@ type info:
   variants:
     circle: ht-circle-data
     dot:    unit
-  generated-words: >ht-shape:circle make-ht-shape:circle unmake-ht-shape:circle ht-shape:circle> ht-shape:circle>hash ht-shape:circle? ht-shape:dot ht-shape:dot? ht-shape? ht-shape
+  generated-words: >ht-shape:circle make-ht-shape:circle unmake-ht-shape:circle ht-shape:circle> ht-shape:circle>hash ht-shape:circle? ht-shape:dot ht-shape:dot? ht-shape? >ht-shape ht-shape
 " ]
 PASS: data enum shows circle variant
 Stack: [ "ht-shape ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
@@ -240,7 +240,7 @@ type info:
   variants:
     circle: ht-circle-data
     dot:    unit
-  generated-words: >ht-shape:circle make-ht-shape:circle unmake-ht-shape:circle ht-shape:circle> ht-shape:circle>hash ht-shape:circle? ht-shape:dot ht-shape:dot? ht-shape? ht-shape
+  generated-words: >ht-shape:circle make-ht-shape:circle unmake-ht-shape:circle ht-shape:circle> ht-shape:circle>hash ht-shape:circle? ht-shape:dot ht-shape:dot? ht-shape? >ht-shape ht-shape
 " ]
 PASS: data enum shows struct type
 Stack: [ "ht-shape ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
@@ -249,7 +249,7 @@ type info:
   variants:
     circle: ht-circle-data
     dot:    unit
-  generated-words: >ht-shape:circle make-ht-shape:circle unmake-ht-shape:circle ht-shape:circle> ht-shape:circle>hash ht-shape:circle? ht-shape:dot ht-shape:dot? ht-shape? ht-shape
+  generated-words: >ht-shape:circle make-ht-shape:circle unmake-ht-shape:circle ht-shape:circle> ht-shape:circle>hash ht-shape:circle? ht-shape:dot ht-shape:dot? ht-shape? >ht-shape ht-shape
 " ]
 PASS: data enum shows dot variant
 Stack: [ "ht-shape ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
@@ -258,7 +258,7 @@ type info:
   variants:
     circle: ht-circle-data
     dot:    unit
-  generated-words: >ht-shape:circle make-ht-shape:circle unmake-ht-shape:circle ht-shape:circle> ht-shape:circle>hash ht-shape:circle? ht-shape:dot ht-shape:dot? ht-shape? ht-shape
+  generated-words: >ht-shape:circle make-ht-shape:circle unmake-ht-shape:circle ht-shape:circle> ht-shape:circle>hash ht-shape:circle? ht-shape:dot ht-shape:dot? ht-shape? >ht-shape ht-shape
 " ]
 Stack: [ ]
 === builtin type info (with metadata) ===

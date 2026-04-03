@@ -31,6 +31,7 @@ pub const primitives = [_]Primitive{
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "enum-aggregate-predicate", .func = enumAggregatePredicateHelper, .stack_effect = "val enum-type-val -- ?" },
+    .{ .name = "enum-from-symbol", .func = enumFromSymbolHelper, .stack_effect = "symbol enum-type-val -- enum-variant" },
 };
 
 fn enumVariantToSymbol(ctx: *Context) anyerror!void {
@@ -62,6 +63,65 @@ fn enumDataVariantToSymbol(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     }
+}
+
+fn enumVariantShortName(full_name: []const u8) []const u8 {
+    const idx = std.mem.lastIndexOfScalar(u8, full_name, ':') orelse return full_name;
+    return full_name[idx + 1 ..];
+}
+
+fn stripTrailingColon(name: []const u8) []const u8 {
+    if (name.len > 0 and name[name.len - 1] == ':') return name[0 .. name.len - 1];
+    return name;
+}
+
+fn enumFromSymbolHelper(ctx: *Context) anyerror!void {
+    const tv_val = try ctx.stack.pop();
+    const enum_tv = switch (tv_val) {
+        .type_val => |tv| tv,
+        else => {
+            helpers.setTypeMismatchError(ctx, "type", tv_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const symbol_val = try ctx.stack.pop();
+    const variant_name = switch (symbol_val) {
+        .symbol => |s| s,
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol", symbol_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const vtypes = ctx.lookupEnumVariants(enum_tv.name) orelse {
+        helpers.setErrorContext(ctx, "unknown enum '{s}'", .{enum_tv.name});
+        return error.NameError;
+    };
+
+    for (vtypes) |vtype| {
+        const short_name = enumVariantShortName(vtype.name);
+        if (!std.mem.eql(u8, short_name, variant_name)) continue;
+
+        if (vtype.anon_struct != null) {
+            const enum_display_name = stripTrailingColon(enum_tv.name);
+            helpers.setErrorContext(
+                ctx,
+                "variant '{s}' of enum '{s}' carries data; use >{s} instead",
+                .{ variant_name, enum_display_name, vtype.name },
+            );
+            return error.TypeMismatch;
+        }
+
+        const alloc = ctx.quotationAllocator();
+        const inner = try alloc.create(Value);
+        inner.* = .{ .symbol = short_name };
+        try ctx.stack.push(.{ .tagged = .{ .tag = vtype, .inner = inner } });
+        return;
+    }
+
+    helpers.setErrorContext(ctx, "unknown variant '{s}' for enum '{s}'", .{ variant_name, stripTrailingColon(enum_tv.name) });
+    return error.NameError;
 }
 
 /// define-enum ( name: descriptor markers -- )
@@ -301,7 +361,23 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
         .action = .{ .compound = agg_instrs },
     });
 
+    const enum_display_name = stripTrailingColon(enum_name);
+    const convert_name = try std.fmt.allocPrint(alloc, ">{s}", .{enum_display_name});
+    const convert_effect = try std.fmt.allocPrint(alloc, "symbol -- {s}", .{enum_display_name});
+    const convert_instrs = try alloc.alloc(Instruction, 2);
+    convert_instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = enum_tv } }, .line = 0 };
+    convert_instrs[1] = .{ .op = .{ .call_word = "native.enum-from-symbol" }, .line = 0 };
+
+    try ctx.defineWord(convert_name, .{
+        .name = convert_name,
+        .stack_effect = try helpers.makeSimpleEffect(alloc, convert_effect),
+        .markers = markers_slice,
+        .provenance = .{ .generator = "enum", .parent = enum_name, .role = "conversion" },
+        .action = .{ .compound = convert_instrs },
+    });
+
     try generated_words.append(alloc, .{ .string = agg_pred_name });
+    try generated_words.append(alloc, .{ .string = convert_name });
     try generated_words.append(alloc, .{ .string = try alloc.dupe(u8, enum_name) });
     const gw_slice = try generated_words.toOwnedSlice(alloc);
     enum_tv.generated_words = gw_slice;
