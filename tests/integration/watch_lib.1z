@@ -1,0 +1,77 @@
+use "testing" ;
+use "os/fs" ;
+use "os/path" ;
+use "os/watch" ;
+
+(write-text): ( path text -- ) [
+  swap write: stream-open
+  dup 2 pick-n stream-write drop
+  stream-close
+  drop
+] ;
+
+(with-supported-watch-file): ( quot -- ... ) [
+  [
+    dup "watched.txt" path-join
+    swap drop
+    dup "seed" (write-text)
+    dup supports-event-watch? [
+      swap call
+    ] [
+      drop
+      drop
+      "native event watch unsupported on this platform/filesystem" skip
+    ] if
+  ] with-temp-directory
+] ;
+
+"watcher type and probe" test-section
+
+[
+  <event-watcher>
+  dup watcher? "<event-watcher> returns watcher virtual type" assert-true
+  close-watcher
+] [
+  "event watcher creation unsupported on this platform" skip
+] recover
+
+[
+  dup supports-event-watch? "supports-event-watch? succeeds on watched file" assert-true
+] (with-supported-watch-file)
+
+"next-event translates native events" test-section
+
+[
+  <event-watcher> [
+    dup 2 pick-n add-watch drop
+    over "changed" (write-text)
+    next-event
+    dup watch-event:modified? "file write produces modified event" assert-true
+    unmake-watch-event:modified path>> swap "next-event preserves watched path" assert=
+  ] with-watcher
+] (with-supported-watch-file)
+
+"with-watcher closes on exit" test-section
+
+[
+  <event-watcher>
+  [ dup ] with-watcher
+  next-event
+] use-after-close: "with-watcher closes returned watcher value" assert-error-type
+
+"each forwards events to callback" test-section
+
+[
+  <event-watcher> [
+    dup 2 pick-n add-watch drop
+    over "again" (write-text)
+    [
+      dup watch-event:modified? "each forwards modified event" assert-true
+      unmake-watch-event:modified path>>
+      3 pick-n
+      "each forwards watched path"
+      assert=
+      f "stop each loop" EUserThrown make-error throw
+    ] each
+  ] [ drop ] recover
+] (with-supported-watch-file)

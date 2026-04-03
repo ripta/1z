@@ -1,0 +1,75 @@
+\ lib/os/watch.1z - High-level file watching API
+
+\\ Path payload for create/modify/delete watcher events.
+watch-path: struct{ path } ;
+\\ Rename payload carrying the old path and the new path when available.
+watch-rename: struct{ old-path new-path } ;
+
+\\ File watcher event enum with per-variant path payloads.
+watch-event: enum{
+  created:  watch-path
+  modified: watch-path
+  deleted:  watch-path
+  renamed:  watch-rename
+} ;
+
+\\ Watcher handle wrapping a native watcher resource.
+watcher: virtual{ resource } ;
+
+(raw-event>watch-event): ( raw -- event ) [
+  dup kind: @get created: = [
+    path: @get
+    make-watch-path
+    make-watch-event:created
+  ] [
+    dup kind: @get modified: = [
+      path: @get
+      make-watch-path
+      make-watch-event:modified
+    ] [
+      dup kind: @get deleted: = [
+        path: @get
+        make-watch-path
+        make-watch-event:deleted
+      ] [
+        dup kind: @get renamed: = [
+          dup path: @get
+          swap new-path: @get
+          make-watch-rename
+          make-watch-event:renamed
+        ] [
+          drop
+          f "unknown watcher event kind" EInvalidArgument make-error throw
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+\\ Create an OS-native event watcher.
+<event-watcher>: ( -- watcher ) [ event: watcher-create >watcher ] ;
+
+\\ Probe whether OS-native event watching works on the given path.
+supports-event-watch?: ( path -- bool ) [ watcher-probe ] ;
+
+\\ Add a non-recursive watch for all event kinds on a path.
+add-watch: ( watcher path -- watch-id ) [ swap unmake-watcher swap f watcher-add ] ;
+
+\\ Remove a previously registered watch id.
+remove-watch: ( watcher watch-id -- ) [ swap unmake-watcher swap watcher-remove ] ;
+
+\\ Read the next watcher event and convert it to watch-event.
+next-event: ( watcher -- event ) [ unmake-watcher watcher-read (raw-event>watch-event) ] ;
+
+\\ Close a watcher explicitly.
+close-watcher: ( watcher -- ) [ unmake-watcher resource-close ] ;
+
+\\ Run a quotation with a watcher and close it on exit.
+with-watcher: ( watcher quot -- ... ) [ over [ close-watcher ] curry cleanup ] ;
+
+\\ Loop forever, calling quot with each event as it arrives.
+each: stack-recursive ( watcher quot -- ) [
+  over next-event
+  over call
+  each
+] ;
