@@ -31,7 +31,7 @@ W{: parse-time [ "}" parse-tokens-until ] ;
 \\ Struct definition syntax.
 \   name: struct{ field1 field2 ... } ;
 struct{: parse-time [
-  M{ type: struct-descriptor: }
+  [ type: struct-descriptor: ] make-mutable-map
   fields: "}" parse-tokens-until @set!
   define: [ define-struct ] @set!
 ] ;
@@ -48,7 +48,7 @@ virtual{: parse-time [
 \   name: enum{ variant1 variant2 ... } ;
 enum{: parse-time [
   M{ type: enum-descriptor: }
-  variants: "}" parse-tokens-until @set!
+  variants: "}" parse-values-until @set!
   define: [ define-enum ] @set!
 ] ;
 

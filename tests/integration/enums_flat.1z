@@ -76,7 +76,7 @@ color:red suit? f "suit? on red is false" assert=
 
 "data-carrying variants" test-section
 
-shape: enum{ circle( radius ) point } ;
+shape: enum{ circle struct{ radius } point } ;
 
 \ Wrap and unwrap
 42 >shape:circle shape:circle> 42 "wrap and unwrap circle" assert=
@@ -103,7 +103,7 @@ shape:point shape:circle? f "shape:circle? on point is false" assert=
 42 >shape:circle 99 >shape:circle = f "different circle values are not equal" assert=
 
 \ Display format
-42 >shape:circle to-string "<shape:circle 42>" "circle display format" assert=
+42 >shape:circle to-string "<shape:circle shape:circle{ radius: 42 }>" "circle display format" assert=
 
 \ Flat variant still works alongside data variant
 shape:point type-of shape:point: "flat variant type-of in mixed enum" assert=
@@ -111,7 +111,7 @@ shape:point to-string "<shape:point point:>" "flat variant display in mixed enum
 
 "multi-field data variants" test-section
 
-geom: enum{ rect( width height ) tri( a b c ) dot } ;
+geom: enum{ rect struct{ width height } tri struct{ a b c } dot } ;
 
 \ Wrap and unwrap multi-field variant
 10 20 >geom:rect geom:rect> 20 "rect unwrap height" assert= 10 "rect unwrap width" assert=
@@ -145,3 +145,151 @@ geom:dot geom? t "geom? on dot is true" assert=
 \ Display format
 10 20 >geom:rect to-string "<geom:rect geom:rect{ width: 10 height: 20 }>" "rect display format" assert=
 geom:dot to-string "<geom:dot dot:>" "flat variant display in multi-field enum" assert=
+
+"enum-of" test-section
+
+\ Flat variant returns enum name
+color:red enum-of "color" "enum-of on flat variant returns enum name" assert=
+color:green enum-of "color" "enum-of on another flat variant" assert=
+
+\ Data-carrying variant returns enum name
+42 >shape:circle enum-of "shape" "enum-of on data variant returns enum name" assert=
+shape:point enum-of "shape" "enum-of on flat variant in mixed enum" assert=
+
+\ Non-enum values return f
+42 enum-of f "enum-of on integer returns f" assert=
+"hello" enum-of f "enum-of on string returns f" assert=
+red: enum-of f "enum-of on bare symbol returns f" assert=
+
+"enum-variants" test-section
+
+\ Flat enum returns variant name symbols
+color: enum-variants { color:red: color:green: color:blue: } "enum-variants for flat enum" assert=
+
+\ Mixed enum returns all variant name symbols
+shape: enum-variants { shape:circle: shape:point: } "enum-variants for mixed enum" assert=
+
+\ Multi-field enum returns all variant name symbols
+geom: enum-variants { geom:rect: geom:tri: geom:dot: } "enum-variants for multi-field enum" assert=
+
+\ Unknown enum throws error
+[ unknown-enum: enum-variants ] [ "unknown enum" assert-error ] recover
+
+"match flat enum" test-section
+
+\ Basic match on flat variants
+color:red {
+  color:red: [ "R" ]
+  color:green: [ "G" ]
+  color:blue: [ "B" ]
+} match "R" "match selects correct flat variant" assert=
+
+color:green {
+  color:red: [ "R" ]
+  color:green: [ "G" ]
+  color:blue: [ "B" ]
+} match "G" "match selects green" assert=
+
+color:blue {
+  color:red: [ "R" ]
+  color:green: [ "G" ]
+  color:blue: [ "B" ]
+} match "B" "match selects blue" assert=
+
+"match data-carrying enum" test-section
+
+\ Data-carrying variant auto-unwraps
+42 >shape:circle {
+  shape:circle: [ 2 * ]
+  shape:point: [ 0 ]
+} match 84 "match unwraps data variant" assert=
+
+\ Flat variant in mixed enum
+shape:point {
+  shape:circle: [ 2 * ]
+  shape:point: [ 99 ]
+} match 99 "match flat variant in mixed enum" assert=
+
+"match multi-field data variant" test-section
+
+\ Multi-field unwrap pushes all fields
+10 20 >geom:rect {
+  geom:rect: [ + ]
+  geom:tri: [ + + ]
+  geom:dot: [ 0 ]
+} match 30 "match unwraps multi-field variant" assert=
+
+3 4 5 >geom:tri {
+  geom:rect: [ + ]
+  geom:tri: [ + + ]
+  geom:dot: [ 0 ]
+} match 12 "match unwraps three-field variant" assert=
+
+geom:dot {
+  geom:rect: [ + ]
+  geom:tri: [ + + ]
+  geom:dot: [ 0 ]
+} match 0 "match flat variant in multi-field enum" assert=
+
+"match exhaustiveness errors" test-section
+
+\ Missing branch throws error
+[ color:red {
+    color:red: [ "R" ]
+    color:green: [ "G" ]
+  } match
+] [ "missing match branch" assert-error ] recover
+
+\ Duplicate branch throws error
+[ color:red {
+    color:red: [ "R" ]
+    color:green: [ "G" ]
+    color:red: [ "R2" ]
+    color:blue: [ "B" ]
+  } match
+] [ "duplicate match branch" assert-error ] recover
+
+\ Non-enum value throws error
+[ 42 {
+    color:red: [ "R" ]
+  } match
+] [ "match requires an enum" assert-error ] recover
+
+\ Wrong variant name throws error
+[ color:red {
+    color:red: [ "R" ]
+    color:green: [ "G" ]
+    suit:hearts: [ "H" ]
+  } match
+] [ "not a variant" assert-error ] recover
+
+"enum-level dispatch fallback" test-section
+
+\ Define a generic word with an enum-level method
+describe: generic ( val -- str ) [ drop "unknown" ] ;
+describe: method{ color } [ drop "a color" ] ;
+
+\ All color variants dispatch to the enum-level method
+color:red describe "a color" "enum fallback for color:red" assert=
+color:green describe "a color" "enum fallback for color:green" assert=
+color:blue describe "a color" "enum fallback for color:blue" assert=
+
+\ Per-variant override takes priority
+describe: mutable method{ color:red } [ drop "red!" ] ;
+color:red describe "red!" "per-variant override wins" assert=
+color:green describe "a color" "other variants still use enum fallback" assert=
+
+\ Enum method on data-carrying enum
+label: generic ( val -- str ) [ "none" ] ;
+label: method{ shape } [ drop "a shape" ] ;
+
+42 >shape:circle label "a shape" "enum fallback for data variant" assert=
+shape:point label "a shape" "enum fallback for flat variant in mixed enum" assert=
+
+\ Non-enum values use default body
+42 describe "unknown" "non-enum uses default body" assert=
+
+\ Native operator dispatch with enum fallback
+neg: generic ( val -- val ) [ 0 swap - ] ;
+neg: method{ color } [ drop color:blue ] ;
+color:red neg color:blue "native op enum fallback" assert=

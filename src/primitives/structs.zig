@@ -143,6 +143,7 @@ fn hashToStructHelper(ctx: *Context) anyerror!void {
         if (hash.get(field)) |val| {
             field_values[i] = val;
         } else {
+            helpers.setErrorContext(ctx, "field '{s}' missing in hash for struct '{s}'", .{ field, st.name });
             return error.MissingField;
         }
     }

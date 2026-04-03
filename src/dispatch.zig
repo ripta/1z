@@ -43,6 +43,15 @@ pub fn dispatchTypeName(val: Value) []const u8 {
     };
 }
 
+/// Returns the enum name for a tagged value that is an enum variant,
+/// or null for everything else.
+pub fn dispatchEnumName(val: Value) ?[]const u8 {
+    return switch (val) {
+        .tagged => |t| t.tag.enum_name,
+        else => null,
+    };
+}
+
 /// Returns true for `.tagged` and `.struct_instance`.
 /// The types that trigger dispatch lookups. Native ops only attempt dispatch when
 /// at least one operand satisfies this.

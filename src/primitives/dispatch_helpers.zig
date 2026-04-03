@@ -1,6 +1,53 @@
 const std = @import("std");
 const Context = @import("../context.zig").Context;
 const dispatch_mod = @import("../dispatch.zig");
+const Value = @import("../value.zig").Value;
+
+/// Look up a binary dispatch entry, trying enum-level fallback.
+///
+/// Precedence:
+/// 1. Exact variant type names (includes wildcard expansion)
+/// 2. a's enum name with b's variant name
+/// 3. a's variant name with b's enum name
+/// 4. Both enum names
+fn lookupBinaryWithFallback(ctx: *Context, word_name: []const u8, a: Value, b: Value) ?dispatch_mod.DispatchEntry {
+    const a_type = dispatch_mod.dispatchTypeName(a);
+    const b_type = dispatch_mod.dispatchTypeName(b);
+    if (ctx.lookupBinaryDispatch(word_name, a_type, b_type)) |entry| return entry;
+
+    const a_enum = dispatch_mod.dispatchEnumName(a);
+    const b_enum = dispatch_mod.dispatchEnumName(b);
+    if (a_enum) |ae| {
+        if (ctx.lookupBinaryDispatch(word_name, ae, b_type)) |entry| return entry;
+    }
+    if (b_enum) |be| {
+        if (ctx.lookupBinaryDispatch(word_name, a_type, be)) |entry| return entry;
+    }
+
+    if (a_enum) |ae| {
+        if (b_enum) |be| {
+            if (ctx.lookupBinaryDispatch(word_name, ae, be)) |entry| return entry;
+        }
+    }
+
+    return null;
+}
+
+/// Look up a unary dispatch entry, trying enum-level fallback.
+///
+/// Precedence:
+/// 1. Exact variant type name (includes wildcard expansion)
+/// 2. Enum name fallback
+fn lookupUnaryWithFallback(ctx: *Context, word_name: []const u8, a: Value) ?dispatch_mod.DispatchEntry {
+    const a_type = dispatch_mod.dispatchTypeName(a);
+    if (ctx.lookupUnaryDispatch(word_name, a_type)) |entry| return entry;
+
+    if (dispatch_mod.dispatchEnumName(a)) |ae| {
+        if (ctx.lookupUnaryDispatch(word_name, ae)) |entry| return entry;
+    }
+
+    return null;
+}
 
 /// Try to dispatch a binary operation via the dispatch table.
 ///
@@ -15,12 +62,11 @@ pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
     const b = try ctx.stack.peek();
     if (!dispatch_mod.isUserType(a) and !dispatch_mod.isUserType(b)) return false;
 
-    const a_name = dispatch_mod.dispatchTypeName(a);
-    const b_name = dispatch_mod.dispatchTypeName(b);
-    if (ctx.lookupBinaryDispatch(word_name, a_name, b_name)) |entry| {
+    if (lookupBinaryWithFallback(ctx, word_name, a, b)) |entry| {
         try ctx.executeQuotation(.{ .instructions = entry.body });
         return true;
     }
+
     return false;
 }
 
@@ -36,8 +82,7 @@ pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
     const a = try ctx.stack.peek();
     if (!dispatch_mod.isUserType(a)) return false;
 
-    const a_name = dispatch_mod.dispatchTypeName(a);
-    if (ctx.lookupUnaryDispatch(word_name, a_name)) |entry| {
+    if (lookupUnaryWithFallback(ctx, word_name, a)) |entry| {
         try ctx.executeQuotation(.{ .instructions = entry.body });
         return true;
     }
@@ -56,9 +101,7 @@ pub fn tryDispatchGeneric(ctx: *Context, word_name: []const u8) !bool {
     if (ctx.stack.depth() >= 2) {
         const a = try ctx.stack.peekN(1);
         const b = try ctx.stack.peek();
-        const a_name = dispatch_mod.dispatchTypeName(a);
-        const b_name = dispatch_mod.dispatchTypeName(b);
-        if (ctx.lookupBinaryDispatch(word_name, a_name, b_name)) |entry| {
+        if (lookupBinaryWithFallback(ctx, word_name, a, b)) |entry| {
             try ctx.executeQuotation(.{ .instructions = entry.body });
             return true;
         }
@@ -66,8 +109,7 @@ pub fn tryDispatchGeneric(ctx: *Context, word_name: []const u8) !bool {
 
     if (ctx.stack.depth() >= 1) {
         const a = try ctx.stack.peek();
-        const a_name = dispatch_mod.dispatchTypeName(a);
-        if (ctx.lookupUnaryDispatch(word_name, a_name)) |entry| {
+        if (lookupUnaryWithFallback(ctx, word_name, a)) |entry| {
             try ctx.executeQuotation(.{ .instructions = entry.body });
             return true;
         }

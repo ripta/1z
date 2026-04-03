@@ -15,6 +15,9 @@ const Primitive = @import("types.zig").Primitive;
 
 pub const primitives = [_]Primitive{
     .{ .name = "define-enum", .stack_effect = "name: descriptor markers --", .doc = "Define an enum type with flat variant constructors and predicates.", .func = nativeDefineEnum },
+    .{ .name = "enum-of", .stack_effect = "val -- str/f", .doc = "Return the parent enum name for an enum variant value, or f if not an enum variant.", .func = nativeEnumOf },
+    .{ .name = "enum-variants", .stack_effect = "symbol -- array", .doc = "Return an array of variant name symbols for the named enum.", .func = nativeEnumVariants },
+    .{ .name = "match", .stack_effect = "val branches -- ...", .doc = "Exhaustive dispatch on enum variants. Branches are alternating symbol-quotation pairs. Auto-unwraps data-carrying variants.", .func = nativeMatch },
 };
 
 /// define-enum ( name: descriptor markers -- )
@@ -66,79 +69,83 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     var i: usize = 0;
     while (i < variants_array.len) {
         const variant_val = variants_array[i];
-        const token = switch (variant_val) {
+        const variant_sym = switch (variant_val) {
             .string => |s| s,
+            .symbol => |s| s,
             else => return error.TypeMismatch,
         };
 
-        if (token.len > 0 and token[token.len - 1] == '(') {
-            // Data variant syntax: "VariantName(" ...field names... ")"
-            const variant_name = token[0 .. token.len - 1];
-            i += 1;
-
-            var fields_list = std.ArrayListUnmanaged([]const u8){};
-            while (i < variants_array.len) {
-                const field_tok = switch (variants_array[i]) {
-                    .string => |s| s,
-                    else => return error.TypeMismatch,
-                };
-                i += 1;
-                if (std.mem.eql(u8, field_tok, ")")) break;
-                try fields_list.append(alloc, try alloc.dupe(u8, field_tok));
+        const has_struct_desc = if (i + 1 < variants_array.len)
+            switch (variants_array[i + 1]) {
+                .mutable_map => true,
+                else => false,
             }
+        else
+            false;
 
-            if (fields_list.items.len == 0) {
-                helpers.setErrorContext(ctx, "data variant '{s}' must have at least one field", .{variant_name});
+        if (has_struct_desc) {
+            const struct_desc = switch (variants_array[i + 1]) {
+                .mutable_map => |m| m,
+                else => unreachable,
+            };
+            i += 2;
+
+            const fields_val = struct_desc.get("fields") orelse {
+                helpers.setErrorContext(ctx, "struct descriptor missing fields key", .{});
+                return error.MissingField;
+            };
+            const fields_array = switch (fields_val) {
+                .array => |arr| arr,
+                else => return error.TypeMismatch,
+            };
+
+            if (fields_array.len == 0) {
+                helpers.setErrorContext(ctx, "data variant '{s}' must have at least one field", .{variant_sym});
                 return error.ParseError;
             }
 
-            const full_name = try std.fmt.allocPrint(alloc, "{s}:{s}", .{ enum_name, variant_name });
+            var fields_list = std.ArrayListUnmanaged([]const u8){};
+            for (fields_array) |f| {
+                const raw = switch (f) {
+                    .string => |s| s,
+                    .symbol => |s| s,
+                    else => return error.TypeMismatch,
+                };
+                const field_name = if (raw.len > 1 and raw[raw.len - 1] == ':')
+                    raw[0 .. raw.len - 1]
+                else
+                    raw;
+                try fields_list.append(alloc, try alloc.dupe(u8, field_name));
+            }
+            const fields_slice = try fields_list.toOwnedSlice(alloc);
+
+            const full_name = try std.fmt.allocPrint(alloc, "{s}:{s}", .{ enum_name, variant_sym });
+
+            const anon_struct = try alloc.create(StructType);
+            anon_struct.* = .{
+                .name = full_name,
+                .fields = fields_slice,
+            };
 
             const vtype = try alloc.create(VirtualType);
-            if (fields_list.items.len == 1) {
-                vtype.* = .{
-                    .name = full_name,
-                    .inner_type = "<data>",
-                    .enum_name = enum_name,
-                };
+            vtype.* = .{
+                .name = full_name,
+                .inner_type = full_name,
+                .enum_name = enum_name,
+                .anon_struct = anon_struct,
+            };
 
-                try vtype_list.append(alloc, vtype);
+            try vtype_list.append(alloc, vtype);
 
-                const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
-                try virtual.defineWrap(ctx, wrap_name, vtype, markers_slice);
+            const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
+            try virtual.defineStructWrap(ctx, wrap_name, vtype, markers_slice);
 
-                const unwrap_name = try std.fmt.allocPrint(alloc, "{s}>", .{full_name});
-                try virtual.defineUnwrap(ctx, unwrap_name, vtype, markers_slice);
-            } else {
-                const fields_slice = try fields_list.toOwnedSlice(alloc);
-
-                const anon_struct = try alloc.create(StructType);
-                anon_struct.* = .{
-                    .name = full_name,
-                    .fields = fields_slice,
-                };
-
-                vtype.* = .{
-                    .name = full_name,
-                    .inner_type = full_name,
-                    .enum_name = enum_name,
-                    .anon_struct = anon_struct,
-                };
-
-                try vtype_list.append(alloc, vtype);
-
-                const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
-                try virtual.defineStructWrap(ctx, wrap_name, vtype, markers_slice);
-
-                const unwrap_name = try std.fmt.allocPrint(alloc, "{s}>", .{full_name});
-                try virtual.defineStructUnwrap(ctx, unwrap_name, vtype, markers_slice);
-            }
+            const unwrap_name = try std.fmt.allocPrint(alloc, "{s}>", .{full_name});
+            try virtual.defineStructUnwrap(ctx, unwrap_name, vtype, markers_slice);
 
             const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{full_name});
             try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
         } else {
-            // Flat variant syntax: "VariantName"
-            const variant_sym = token;
             const full_name = try std.fmt.allocPrint(alloc, "{s}:{s}", .{ enum_name, variant_sym });
 
             const vtype = try alloc.create(VirtualType);
@@ -206,4 +213,159 @@ fn enumAggregatePredicateHelper(ctx: *Context) anyerror!void {
     };
 
     try ctx.stack.push(.{ .boolean = is_match });
+}
+
+/// enum-of ( val -- str | f )
+///
+/// Returns the parent enum name as a string if the value is an enum variant,
+/// or f if the value is not an enum variant.
+fn nativeEnumOf(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .tagged => |t| {
+            if (t.tag.enum_name) |en| {
+                try ctx.stack.push(.{ .string = en });
+                return;
+            }
+        },
+        else => {},
+    }
+    try ctx.stack.push(.{ .boolean = false });
+}
+
+/// enum-variants ( symbol -- array )
+///
+/// Returns an array of variant name symbols for the named enum.
+fn nativeEnumVariants(ctx: *Context) anyerror!void {
+    const name_val = try ctx.stack.pop();
+    const enum_name = switch (name_val) {
+        .symbol => |s| s,
+        else => return error.TypeMismatch,
+    };
+
+    const vtypes = ctx.lookupEnumVariants(enum_name) orelse {
+        helpers.setErrorContext(ctx, "unknown enum '{s}'", .{enum_name});
+        return error.NameError;
+    };
+
+    const alloc = ctx.quotationAllocator();
+    const result = try alloc.alloc(Value, vtypes.len);
+    for (vtypes, 0..) |vt, i| {
+        result[i] = .{ .symbol = vt.name };
+    }
+
+    try ctx.stack.push(.{ .array = result });
+}
+
+/// match ( val branches -- ... )
+///
+/// Exhaustive dispatch on enum variants. The branches array alternates between
+/// variant name symbols and quotation bodies. Every variant of the enum must
+/// appear exactly once. For data-carrying variants, the unwrapped payload fields
+/// are pushed onto the stack before the body executes.
+fn nativeMatch(ctx: *Context) anyerror!void {
+    const branches_val = try ctx.stack.pop();
+    const branches = switch (branches_val) {
+        .array => |arr| arr,
+        else => return error.TypeMismatch,
+    };
+
+    const val = try ctx.stack.pop();
+    const tag = switch (val) {
+        .tagged => |t| t,
+        else => {
+            helpers.setErrorContext(ctx, "match requires an enum variant, got {s}", .{helpers.valueTypeName(val)});
+            return error.TypeMismatch;
+        },
+    };
+
+    const enum_name = tag.tag.enum_name orelse {
+        helpers.setErrorContext(ctx, "match requires an enum variant, got virtual type '{s}'", .{tag.tag.name});
+        return error.TypeMismatch;
+    };
+
+    if (branches.len % 2 != 0) {
+        helpers.setErrorContext(ctx, "match branches must be symbol-quotation pairs (got odd count {d})", .{branches.len});
+        return error.ParseError;
+    }
+
+    const vtypes = ctx.lookupEnumVariants(enum_name) orelse {
+        helpers.setErrorContext(ctx, "unknown enum '{s}'", .{enum_name});
+        return error.NameError;
+    };
+
+    const alloc = ctx.quotationAllocator();
+    const n_branches = branches.len / 2;
+
+    if (n_branches != vtypes.len) {
+        helpers.setErrorContext(ctx, "match has {d} branches but enum '{s}' has {d} variants", .{ n_branches, enum_name, vtypes.len });
+        return error.ParseError;
+    }
+
+    var matched_body: ?value_mod.Quotation = null;
+    var seen = std.StringHashMapUnmanaged(void){};
+
+    var i: usize = 0;
+    while (i < branches.len) : (i += 2) {
+        const key = switch (branches[i]) {
+            .symbol => |s| s,
+            else => {
+                helpers.setErrorContext(ctx, "match branch key must be a symbol, got {s}", .{helpers.valueTypeName(branches[i])});
+                return error.TypeMismatch;
+            },
+        };
+        const body = switch (branches[i + 1]) {
+            .quotation => |q| q,
+            else => {
+                helpers.setErrorContext(ctx, "match branch body must be a quotation", .{});
+                return error.TypeMismatch;
+            },
+        };
+
+        var valid = false;
+        for (vtypes) |vt| {
+            if (std.mem.eql(u8, vt.name, key)) {
+                valid = true;
+                break;
+            }
+        }
+        if (!valid) {
+            helpers.setErrorContext(ctx, "'{s}' is not a variant of enum '{s}'", .{ key, enum_name });
+            return error.NameError;
+        }
+
+        if (seen.contains(key)) {
+            helpers.setErrorContext(ctx, "duplicate match branch for '{s}'", .{key});
+            return error.ParseError;
+        }
+        try seen.put(alloc, key, {});
+
+        if (std.mem.eql(u8, tag.tag.name, key)) {
+            matched_body = body;
+        }
+    }
+
+    // Exhaustiveness check
+    for (vtypes) |vt| {
+        if (!seen.contains(vt.name)) {
+            helpers.setErrorContext(ctx, "missing match branch for variant '{s}'", .{vt.name});
+            return error.ParseError;
+        }
+    }
+
+    const body = matched_body orelse unreachable;
+
+    // For data-carrying variants, unwrap the struct fields onto the stack
+    if (tag.tag.anon_struct != null) {
+        switch (tag.inner.*) {
+            .struct_instance => |si| {
+                for (si.fields) |field_val| {
+                    try ctx.stack.push(field_val);
+                }
+            },
+            else => {},
+        }
+    }
+
+    try ctx.executeQuotation(body);
 }

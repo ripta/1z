@@ -149,3 +149,88 @@ PASS: rect display format
 Stack: [ ]
 PASS: flat variant display in multi-field enum
 Stack: [ ]
+=== enum-of ===
+Stack: [ ]
+PASS: enum-of on flat variant returns enum name
+Stack: [ ]
+PASS: enum-of on another flat variant
+Stack: [ ]
+PASS: enum-of on data variant returns enum name
+Stack: [ ]
+PASS: enum-of on flat variant in mixed enum
+Stack: [ ]
+PASS: enum-of on integer returns f
+Stack: [ ]
+PASS: enum-of on string returns f
+Stack: [ ]
+PASS: enum-of on bare symbol returns f
+Stack: [ ]
+=== enum-variants ===
+Stack: [ ]
+PASS: enum-variants for flat enum
+Stack: [ ]
+PASS: enum-variants for mixed enum
+Stack: [ ]
+PASS: enum-variants for multi-field enum
+Stack: [ ]
+PASS: unknown enum
+Stack: [ ]
+=== match flat enum ===
+Stack: [ ]
+PASS: match selects correct flat variant
+Stack: [ ]
+PASS: match selects green
+Stack: [ ]
+PASS: match selects blue
+Stack: [ ]
+=== match data-carrying enum ===
+Stack: [ ]
+PASS: match unwraps data variant
+Stack: [ ]
+PASS: match flat variant in mixed enum
+Stack: [ ]
+=== match multi-field data variant ===
+Stack: [ ]
+PASS: match unwraps multi-field variant
+Stack: [ ]
+PASS: match unwraps three-field variant
+Stack: [ ]
+PASS: match flat variant in multi-field enum
+Stack: [ ]
+=== match exhaustiveness errors ===
+Stack: [ ]
+PASS: missing match branch
+Stack: [ ]
+PASS: duplicate match branch
+Stack: [ ]
+PASS: match requires an enum
+Stack: [ ]
+PASS: not a variant
+Stack: [ ]
+=== enum-level dispatch fallback ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: enum fallback for color:red
+Stack: [ ]
+PASS: enum fallback for color:green
+Stack: [ ]
+PASS: enum fallback for color:blue
+Stack: [ ]
+Stack: [ ]
+PASS: per-variant override wins
+Stack: [ ]
+PASS: other variants still use enum fallback
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: enum fallback for data variant
+Stack: [ ]
+PASS: enum fallback for flat variant in mixed enum
+Stack: [ ]
+PASS: non-enum uses default body
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: native op enum fallback
+Stack: [ ]
