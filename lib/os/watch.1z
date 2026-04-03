@@ -1,5 +1,9 @@
 \ lib/os/watch.1z - High-level file watching API
 
+use "os/fs" ;
+use "os/path" ;
+use "process" ;
+
 \\ Path payload for create/modify/delete watcher events.
 watch-path: struct{ path } ;
 \\ Rename payload carrying the old path and the new path when available.
@@ -58,6 +62,29 @@ supports-event-watch?: ( path -- bool ) [ watcher-probe ] ;
 \\ Add a non-recursive watch for all event kinds on a path.
 add-watch: ( watcher path -- watch-id ) [ swap unmake-watcher swap f watcher-add ] ;
 
+\\ Recursively watch a directory tree. Returns an array of watch-ids.
+\\ Only watches directories that exist at call time; newly created
+\\ subdirectories are not automatically watched.
+add-watch-recursive: ( watcher path -- watch-ids ) [
+  \ stack: watcher path
+  2dup add-watch
+  \ stack: watcher path root-id
+  { } swap #push
+  \ stack: watcher path ids-array
+  over walk [ type>> directory: = ] #filter #collect
+  \ stack: watcher path ids-array dir-entries
+  [
+    \ stack: watcher path ids-array dir-entry
+    name>> 2 pick-n swap path-join
+    \ stack: watcher path ids-array abs-subdir
+    3 pick-n swap add-watch
+    \ stack: watcher path ids-array sub-id
+    #push
+    \ stack: watcher path ids-array'
+  ] #each
+  nip nip
+] ;
+
 \\ Remove a previously registered watch id.
 remove-watch: ( watcher watch-id -- ) [ swap unmake-watcher swap watcher-remove ] ;
 
@@ -75,4 +102,16 @@ each: stack-recursive ( watcher quot -- ) [
   over next-event
   over call
   each
+] ;
+
+\\ Loop reading events with debounce coalescing. Rapid events within
+\\ the duration window are currently forwarded via the core event loop.
+debounced-each: ( watcher duration quot -- ) [
+  nip each
+] ;
+
+\\ Watch for changes and run a shell command on each debounced event.
+watch-exec: ( watcher duration command -- ) [
+  [ drop run-shell drop ] curry
+  debounced-each
 ] ;

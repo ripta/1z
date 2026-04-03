@@ -2,6 +2,7 @@ use "testing" ;
 use "os/fs" ;
 use "os/path" ;
 use "os/watch" ;
+use "time" ;
 
 (write-text): ( path text -- ) [
   swap write: stream-open
@@ -99,3 +100,60 @@ use "os/watch" ;
   [ dup ] with-watcher
   next-event
 ] use-after-close: "with-watcher closes returned polling watcher value" assert-error-type
+
+"add-watch-recursive with subdirs" test-section
+
+[
+  [
+    dup supports-event-watch? [
+      dup "sub1" path-join create-directory
+      dup "sub2" path-join create-directory
+      dup "sub1" path-join "nested" path-join create-directory
+
+      <event-watcher> [
+        over add-watch-recursive
+        #len 4 "add-watch-recursive returns one id per directory" assert=
+      ] with-watcher
+    ] [
+      drop
+      "native event watch unsupported on this platform/filesystem" skip
+    ] if
+  ] with-temp-directory
+] [ drop ] recover
+
+"add-watch-recursive on flat dir" test-section
+
+[
+  [
+    dup supports-event-watch? [
+      <event-watcher> [
+        over add-watch-recursive
+        #len 1 "add-watch-recursive on flat dir returns one id" assert=
+      ] with-watcher
+    ] [
+      drop
+      "native event watch unsupported on this platform/filesystem" skip
+    ] if
+  ] with-temp-directory
+] [ drop ] recover
+
+"debounced-each delivers events" test-section
+
+[
+  [
+    <event-watcher> [
+      dup 2 pick-n add-watch drop
+      over "changed for debounce" (write-text)
+      100 milliseconds
+      [
+        dup watch-event:modified? "debounced-each delivers modified event" assert-true
+        unmake-watch-event:modified path>>
+        3 pick-n
+        "debounced-each preserves watched path"
+        assert=
+        f "stop debounce loop" EUserThrown make-error throw
+      ] debounced-each
+    ] with-watcher
+  ] [ drop ] recover
+  3drop
+] (with-supported-watch-file)
