@@ -37,6 +37,7 @@ use "os/watch" ;
 
 [
   dup supports-event-watch? "supports-event-watch? succeeds on watched file" assert-true
+  drop
 ] (with-supported-watch-file)
 
 "next-event translates native events" test-section
@@ -51,6 +52,18 @@ use "os/watch" ;
   ] with-watcher
 ] (with-supported-watch-file)
 
+"polling watcher translates file changes" test-section
+
+[
+  <polling-watcher> [
+    dup 2 pick-n add-watch drop
+    over "changed again for polling" (write-text)
+    next-event
+    dup watch-event:modified? "polling watcher reports modified event" assert-true
+    unmake-watch-event:modified path>> swap "polling watcher preserves watched path" assert=
+  ] with-watcher
+] (with-supported-watch-file)
+
 "with-watcher closes on exit" test-section
 
 [
@@ -62,16 +75,27 @@ use "os/watch" ;
 "each forwards events to callback" test-section
 
 [
-  <event-watcher> [
-    dup 2 pick-n add-watch drop
-    over "again" (write-text)
-    [
-      dup watch-event:modified? "each forwards modified event" assert-true
-      unmake-watch-event:modified path>>
-      3 pick-n
-      "each forwards watched path"
-      assert=
-      f "stop each loop" EUserThrown make-error throw
-    ] each
+  [
+    <event-watcher> [
+      dup 2 pick-n add-watch drop
+      over "again" (write-text)
+      [
+        dup watch-event:modified? "each forwards modified event" assert-true
+        unmake-watch-event:modified path>>
+        3 pick-n
+        "each forwards watched path"
+        assert=
+        f "stop each loop" EUserThrown make-error throw
+      ] each
+    ] with-watcher
   ] [ drop ] recover
+  3drop
 ] (with-supported-watch-file)
+
+"polling with-watcher closes on exit" test-section
+
+[
+  <polling-watcher>
+  [ dup ] with-watcher
+  next-event
+] use-after-close: "with-watcher closes returned polling watcher value" assert-error-type

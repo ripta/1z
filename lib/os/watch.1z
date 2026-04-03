@@ -49,6 +49,9 @@ watcher: virtual{ resource } ;
 \\ Create an OS-native event watcher.
 <event-watcher>: ( -- watcher ) [ event: watcher-create >watcher ] ;
 
+\\ Create a portable polling watcher.
+<polling-watcher>: ( -- watcher ) [ polling: watcher-create >watcher ] ;
+
 \\ Probe whether OS-native event watching works on the given path.
 supports-event-watch?: ( path -- bool ) [ watcher-probe ] ;
 

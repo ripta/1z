@@ -20,6 +20,7 @@ const Scheduler = @import("../scheduler.zig").Scheduler;
 const is_macos = builtin.os.tag == .macos;
 const is_linux = builtin.os.tag == .linux;
 const supports_event_watch = is_macos or is_linux;
+const default_polling_interval_ns: u64 = 20 * std.time.ns_per_ms;
 
 pub const primitives = [_]Primitive{
     .{ .name = "watcher-create", .stack_effect = "mode -- watcher", .doc = "Create a watcher resource for event: mode.", .func = nativeWatcherCreate, .capability = .io_fs },
@@ -61,6 +62,19 @@ const WatchEntry = struct {
     backend_handle: i32,
     path: []u8,
     mask: WatchEventMask,
+};
+
+const WatcherVTable = struct {
+    addWatch: *const fn (ptr: *anyopaque, path: []const u8, mask: WatchEventMask) anyerror!i64,
+    removeWatch: *const fn (ptr: *anyopaque, watch_id: i64) anyerror!void,
+    readEvent: *const fn (ptr: *anyopaque, scheduler: ?*Scheduler) anyerror!PendingEvent,
+    deinit: *const fn (ptr: *anyopaque) void,
+};
+
+const WatcherHandle = struct {
+    allocator: std.mem.Allocator,
+    ptr: *anyopaque,
+    vtable: *const WatcherVTable,
 };
 
 const NativeWatcher = struct {
@@ -365,22 +379,139 @@ const NativeWatcher = struct {
     }
 };
 
+const PollingSnapshot = struct {
+    exists: bool,
+    modified: ?i128,
+    size: u64,
+};
+
+const PollingWatchEntry = struct {
+    path: []u8,
+    exists: bool,
+    modified: ?i128,
+    size: u64,
+};
+
+const PollingWatcher = struct {
+    allocator: std.mem.Allocator,
+    next_watch_id: i64 = 1,
+    interval_ns: u64 = default_polling_interval_ns,
+    watches: std.AutoHashMapUnmanaged(i64, PollingWatchEntry) = .{},
+
+    fn init(allocator: std.mem.Allocator) !*PollingWatcher {
+        const watcher = try allocator.create(PollingWatcher);
+        errdefer allocator.destroy(watcher);
+        watcher.* = .{ .allocator = allocator };
+        return watcher;
+    }
+
+    fn deinit(self: *PollingWatcher) void {
+        var it = self.watches.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.value_ptr.path);
+        }
+        self.watches.deinit(self.allocator);
+        self.allocator.destroy(self);
+    }
+
+    fn addWatch(self: *PollingWatcher, path: []const u8, _: WatchEventMask) !i64 {
+        const owned_path = try self.allocator.dupe(u8, path);
+        errdefer self.allocator.free(owned_path);
+
+        const snapshot = try pollSnapshot(path);
+        const watch_id = self.next_watch_id;
+        self.next_watch_id += 1;
+
+        try self.watches.put(self.allocator, watch_id, .{
+            .path = owned_path,
+            .exists = snapshot.exists,
+            .modified = snapshot.modified,
+            .size = snapshot.size,
+        });
+
+        return watch_id;
+    }
+
+    fn removeWatch(self: *PollingWatcher, watch_id: i64) !void {
+        const removed = self.watches.fetchRemove(watch_id) orelse return error.KeyNotFound;
+        self.allocator.free(removed.value.path);
+    }
+
+    fn readEvent(self: *PollingWatcher, scheduler: ?*Scheduler) !PendingEvent {
+        while (true) {
+            var it = self.watches.iterator();
+            while (it.next()) |entry| {
+                const watch_id = entry.key_ptr.*;
+                const watch = entry.value_ptr;
+                const snapshot = try pollSnapshot(watch.path);
+
+                const event_kind: ?[]const u8 = if (!watch.exists and snapshot.exists)
+                    "created"
+                else if (watch.exists and !snapshot.exists)
+                    "deleted"
+                else if (watch.exists and snapshot.exists and
+                    (watch.modified != snapshot.modified or watch.size != snapshot.size))
+                    "modified"
+                else
+                    null;
+
+                watch.exists = snapshot.exists;
+                watch.modified = snapshot.modified;
+                watch.size = snapshot.size;
+
+                if (event_kind) |kind| {
+                    return .{
+                        .watch_id = watch_id,
+                        .kind = kind,
+                        .path = try self.allocator.dupe(u8, watch.path),
+                        .new_path = null,
+                    };
+                }
+            }
+
+            if (scheduler) |sched| {
+                sched.sleepCurrentTask(@intCast(self.interval_ns));
+                return error.WouldBlock;
+            }
+
+            std.Thread.sleep(self.interval_ns);
+        }
+    }
+};
+
 fn nativeWatcherCreate(ctx: *Context) anyerror!void {
     const mode = try helpers.popSymbol(ctx);
-    if (!std.mem.eql(u8, mode, "event")) {
+    const handle = try ctx.quotationAllocator().create(WatcherHandle);
+    errdefer ctx.quotationAllocator().destroy(handle);
+
+    if (std.mem.eql(u8, mode, "event")) {
+        if (!supports_event_watch) {
+            helpers.setErrorContext(ctx, "watcher-create: event watchers are only implemented on macOS and Linux", .{});
+            return error.IOFailed;
+        }
+
+        const watcher = try NativeWatcher.init(ctx.quotationAllocator());
+        handle.* = .{
+            .allocator = ctx.quotationAllocator(),
+            .ptr = watcher,
+            .vtable = &native_watcher_vtable,
+        };
+    } else if (std.mem.eql(u8, mode, "polling")) {
+        const watcher = try PollingWatcher.init(ctx.quotationAllocator());
+        handle.* = .{
+            .allocator = ctx.quotationAllocator(),
+            .ptr = watcher,
+            .vtable = &polling_watcher_vtable,
+        };
+    } else {
         helpers.setErrorContext(ctx, "watcher-create: unsupported mode {s}:", .{mode});
         return error.IOFailed;
     }
-    if (!supports_event_watch) {
-        helpers.setErrorContext(ctx, "watcher-create: event watchers are only implemented on macOS and Linux", .{});
-        return error.IOFailed;
-    }
 
-    const watcher = try NativeWatcher.init(ctx.quotationAllocator());
     const resource = try ctx.quotationAllocator().create(Resource);
     resource.* = .{
         .type_name = "watcher",
-        .ptr = @ptrCast(watcher),
+        .ptr = @ptrCast(handle),
         .close_fn = .{ .native = watcherCloseFn },
     };
     try ctx.stack.push(.{ .resource = resource });
@@ -393,7 +524,7 @@ fn nativeWatcherAdd(ctx: *Context) anyerror!void {
     const watcher = watcherFromResource(watcher_resource);
     const mask = try parseMask(ctx, flags_val);
 
-    const watch_id = watcher.addWatch(path, if (mask.empty()) WatchEventMask.all() else mask) catch |err| {
+    const watch_id = watcher.vtable.addWatch(watcher.ptr, path, if (mask.empty()) WatchEventMask.all() else mask) catch |err| {
         helpers.setErrorContext(ctx, "watcher-add: {s}", .{@errorName(err)});
         return switch (err) {
             error.AccessDenied => error.PermissionDenied,
@@ -410,7 +541,7 @@ fn nativeWatcherRemove(ctx: *Context) anyerror!void {
     const watcher_resource = try popWatcherResource(ctx, "watcher-remove");
     const watcher = watcherFromResource(watcher_resource);
 
-    watcher.removeWatch(watch_id) catch {
+    watcher.vtable.removeWatch(watcher.ptr, watch_id) catch {
         helpers.setErrorContext(ctx, "watcher-remove: unknown watch id {d}", .{watch_id});
         return error.KeyNotFound;
     };
@@ -421,7 +552,14 @@ fn nativeWatcherRead(ctx: *Context) anyerror!void {
     const watcher = watcherFromResource(watcher_resource);
 
     while (true) {
-        const event = watcher.readEvent(ctx.scheduler) catch |err| {
+        const event = watcher.vtable.readEvent(watcher.ptr, ctx.scheduler) catch |err| {
+            if (err == error.WouldBlock) {
+                if (ctx.scheduler != null) {
+                    try helpers.checkCancellation(ctx);
+                }
+                continue;
+            }
+
             helpers.setErrorContext(ctx, "watcher-read: {s}", .{@errorName(err)});
             return error.IOFailed;
         };
@@ -488,14 +626,69 @@ fn popWatcherResource(ctx: *Context, op_name: []const u8) !*Resource {
     return resource;
 }
 
-fn watcherFromResource(resource: *Resource) *NativeWatcher {
+fn watcherFromResource(resource: *Resource) *WatcherHandle {
     return @ptrCast(@alignCast(resource.ptr.?));
 }
 
 fn watcherCloseFn(ptr: *anyopaque) void {
+    const watcher: *WatcherHandle = @ptrCast(@alignCast(ptr));
+    watcher.vtable.deinit(watcher.ptr);
+    watcher.allocator.destroy(watcher);
+}
+
+fn nativeWatcherAddImpl(ptr: *anyopaque, path: []const u8, mask: WatchEventMask) anyerror!i64 {
+    const watcher: *NativeWatcher = @ptrCast(@alignCast(ptr));
+    return watcher.addWatch(path, mask);
+}
+
+fn nativeWatcherRemoveImpl(ptr: *anyopaque, watch_id: i64) anyerror!void {
+    const watcher: *NativeWatcher = @ptrCast(@alignCast(ptr));
+    return watcher.removeWatch(watch_id);
+}
+
+fn nativeWatcherReadImpl(ptr: *anyopaque, scheduler: ?*Scheduler) anyerror!PendingEvent {
+    const watcher: *NativeWatcher = @ptrCast(@alignCast(ptr));
+    return watcher.readEvent(scheduler);
+}
+
+fn nativeWatcherDeinitImpl(ptr: *anyopaque) void {
     const watcher: *NativeWatcher = @ptrCast(@alignCast(ptr));
     watcher.deinit();
 }
+
+fn pollingWatcherAddImpl(ptr: *anyopaque, path: []const u8, mask: WatchEventMask) anyerror!i64 {
+    const watcher: *PollingWatcher = @ptrCast(@alignCast(ptr));
+    return watcher.addWatch(path, mask);
+}
+
+fn pollingWatcherRemoveImpl(ptr: *anyopaque, watch_id: i64) anyerror!void {
+    const watcher: *PollingWatcher = @ptrCast(@alignCast(ptr));
+    return watcher.removeWatch(watch_id);
+}
+
+fn pollingWatcherReadImpl(ptr: *anyopaque, scheduler: ?*Scheduler) anyerror!PendingEvent {
+    const watcher: *PollingWatcher = @ptrCast(@alignCast(ptr));
+    return watcher.readEvent(scheduler);
+}
+
+fn pollingWatcherDeinitImpl(ptr: *anyopaque) void {
+    const watcher: *PollingWatcher = @ptrCast(@alignCast(ptr));
+    watcher.deinit();
+}
+
+const native_watcher_vtable = WatcherVTable{
+    .addWatch = nativeWatcherAddImpl,
+    .removeWatch = nativeWatcherRemoveImpl,
+    .readEvent = nativeWatcherReadImpl,
+    .deinit = nativeWatcherDeinitImpl,
+};
+
+const polling_watcher_vtable = WatcherVTable{
+    .addWatch = pollingWatcherAddImpl,
+    .removeWatch = pollingWatcherRemoveImpl,
+    .readEvent = pollingWatcherReadImpl,
+    .deinit = pollingWatcherDeinitImpl,
+};
 
 fn parseMask(ctx: *Context, val: value_mod.Value) !WatchEventMask {
     return switch (val) {
@@ -588,6 +781,19 @@ fn removeInotifyWatch(fd: std.posix.fd_t, wd: i32) void {
         .SUCCESS, .INVAL => return,
         else => return,
     }
+}
+
+fn pollSnapshot(path: []const u8) !PollingSnapshot {
+    const stat = std.fs.cwd().statFile(path) catch |err| switch (err) {
+        error.FileNotFound => return .{ .exists = false, .modified = null, .size = 0 },
+        else => return err,
+    };
+
+    return .{
+        .exists = true,
+        .modified = stat.mtime,
+        .size = stat.size,
+    };
 }
 
 fn registerWatchFd(kq_fd: std.posix.fd_t, watch_fd: std.posix.fd_t, watch_id: i64, mask: WatchEventMask) !void {

@@ -1,0 +1,31 @@
+Stack: [ ]
+Stack: [ ]
+=== watcher type and probe ===
+Stack: [ ]
+PASS: <event-watcher> returns watcher virtual type
+Stack: [ ]
+PASS: supports-event-watch? succeeds on watched file
+Stack: [ ]
+=== next-event translates native events ===
+Stack: [ ]
+PASS: file write produces modified event
+PASS: next-event preserves watched path
+Stack: [ ]
+=== polling watcher translates file changes ===
+Stack: [ ]
+PASS: polling watcher reports modified event
+PASS: polling watcher preserves watched path
+Stack: [ ]
+=== with-watcher closes on exit ===
+Stack: [ ]
+PASS: with-watcher closes returned watcher value
+Stack: [ ]
+=== each forwards events to callback ===
+Stack: [ ]
+PASS: each forwards modified event
+PASS: each forwards watched path
+Stack: [ ]
+=== polling with-watcher closes on exit ===
+Stack: [ ]
+PASS: with-watcher closes returned polling watcher value
+Stack: [ ]
