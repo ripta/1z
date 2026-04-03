@@ -113,6 +113,21 @@ pub fn resolveValueTypeValue(ctx: *Context, val: Value) ?*const TypeValue {
     return dispatch_mod.dispatchTypeValue(val, ctx);
 }
 
+/// Check whether an actual type satisfies an expected type constraint. Supports anonymous union constraints
+/// on the expected type.
+pub fn typeMatchesConstraint(actual_tv: *const TypeValue, expected_tv: *const TypeValue) bool {
+    if (actual_tv == expected_tv) return true;
+
+    if (expected_tv.member_types) |members| {
+        for (members) |member_tv| {
+            if (typeMatchesConstraint(actual_tv, member_tv)) return true;
+        }
+        return false;
+    }
+
+    return false;
+}
+
 /// Check whether a value satisfies an expected type annotation.
 /// Supports `any`, enum parent types, and tagged base types.
 pub fn valueMatchesType(ctx: *Context, val: Value, expected_tv: *const TypeValue) bool {
@@ -120,22 +135,15 @@ pub fn valueMatchesType(ctx: *Context, val: Value, expected_tv: *const TypeValue
         if (expected_tv == any_tv) return true;
     }
 
-    if (expected_tv.member_types) |members| {
-        for (members) |member_tv| {
-            if (valueMatchesType(ctx, val, member_tv)) return true;
-        }
-        return false;
-    }
-
     const actual_tv = resolveValueTypeValue(ctx, val) orelse return false;
-    if (actual_tv == expected_tv) return true;
+    if (typeMatchesConstraint(actual_tv, expected_tv)) return true;
 
     if (val == .tagged) {
         if (val.tagged.tag.parent_type) |pt| {
-            if (pt == expected_tv) return true;
+            if (typeMatchesConstraint(pt, expected_tv)) return true;
         }
         if (val.tagged.tag.base_type) |bt| {
-            if (bt == expected_tv) return true;
+            if (typeMatchesConstraint(bt, expected_tv)) return true;
         }
     }
 
@@ -155,6 +163,52 @@ test "valueMatchesType accepts values matching anonymous union members" {
     try testing.expect(valueMatchesType(&ctx, .{ .fixnum = 42 }, union_tv));
     try testing.expect(valueMatchesType(&ctx, .{ .string = "ok" }, union_tv));
     try testing.expect(!valueMatchesType(&ctx, .{ .boolean = true }, union_tv));
+}
+
+test "typeMatchesConstraint accepts exact and anonymous union matches" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+    const boolean_tv = ctx.lookupBuiltinTypeValue("boolean").?;
+    const union_tv = try ctx.getOrCreateAnonymousUnionTypeValue(&.{ string_tv, fixnum_tv });
+
+    try testing.expect(typeMatchesConstraint(fixnum_tv, fixnum_tv));
+    try testing.expect(typeMatchesConstraint(fixnum_tv, union_tv));
+    try testing.expect(typeMatchesConstraint(string_tv, union_tv));
+    try testing.expect(!typeMatchesConstraint(boolean_tv, union_tv));
+}
+
+test "valueMatchesType preserves tagged parent and base type checks" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const array_tv = ctx.lookupBuiltinTypeValue("array").?;
+
+    var parent_tv = TypeValue{ .name = "color", .descriptor = null };
+    var base_tv = TypeValue{ .name = "array(fixnum)", .descriptor = null };
+    const variant_virtual = try testing.allocator.create(value_mod.VirtualType);
+    defer testing.allocator.destroy(variant_virtual);
+    variant_virtual.* = .{
+        .name = "color:red",
+        .inner_type = "symbol",
+        .parent_type = &parent_tv,
+        .base_type = array_tv,
+    };
+
+    const tagged_inner = try testing.allocator.create(Value);
+    defer testing.allocator.destroy(tagged_inner);
+    tagged_inner.* = .{ .symbol = "red" };
+
+    const tagged = Value{ .tagged = .{
+        .tag = variant_virtual,
+        .inner = tagged_inner,
+    } };
+
+    try testing.expect(valueMatchesType(&ctx, tagged, &parent_tv));
+    try testing.expect(valueMatchesType(&ctx, tagged, array_tv));
+    try testing.expect(!valueMatchesType(&ctx, tagged, &base_tv));
 }
 
 // =============================================================================

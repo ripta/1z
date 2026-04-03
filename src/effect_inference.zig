@@ -19,6 +19,7 @@ const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
 
+const helpers = @import("primitives/helpers.zig");
 const markers = @import("primitives/markers.zig");
 const Context = @import("context.zig").Context;
 
@@ -70,19 +71,6 @@ pub const Diagnostic = struct {
 
 const max_union_types = 8;
 
-fn typeMatchesConstraint(actual: *const TypeValue, expected: *const TypeValue) bool {
-    if (actual == expected) return true;
-
-    if (expected.member_types) |members| {
-        for (members) |member| {
-            if (typeMatchesConstraint(actual, member)) return true;
-        }
-        return false;
-    }
-
-    return false;
-}
-
 const TypeUnion = struct {
     types: [max_union_types]*const TypeValue = undefined,
     len: usize = 0,
@@ -99,7 +87,7 @@ const TypeUnion = struct {
 
     fn allMatch(self: *const TypeUnion, expected: *const TypeValue) bool {
         for (self.types[0..self.len]) |tv| {
-            if (!typeMatchesConstraint(tv, expected)) return false;
+            if (!helpers.typeMatchesConstraint(tv, expected)) return false;
         }
         return true;
     }
@@ -1062,7 +1050,7 @@ pub const InferenceEngine = struct {
             const entry = stack_model.items[stack_pos];
 
             const mismatch_actual: ?[]const u8 = switch (entry) {
-                .typed => |tv| if (!typeMatchesConstraint(tv, expected_tv)) tv.name else null,
+                .typed => |tv| if (!helpers.typeMatchesConstraint(tv, expected_tv)) tv.name else null,
                 .typed_union => |tu| if (!tu.allMatch(expected_tv)) blk: {
                     break :blk tu.format(self.allocator) catch null;
                 } else null,
