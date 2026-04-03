@@ -207,3 +207,30 @@ PASS: match requires an enum
 Stack: [ ]
 PASS: not a variant
 Stack: [ ]
+=== enum-level dispatch fallback ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: enum fallback for color:red
+Stack: [ ]
+PASS: enum fallback for color:green
+Stack: [ ]
+PASS: enum fallback for color:blue
+Stack: [ ]
+Stack: [ ]
+PASS: per-variant override wins
+Stack: [ ]
+PASS: other variants still use enum fallback
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: enum fallback for data variant
+Stack: [ ]
+PASS: enum fallback for flat variant in mixed enum
+Stack: [ ]
+PASS: non-enum uses default body
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: native op enum fallback
+Stack: [ ]
