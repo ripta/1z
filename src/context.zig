@@ -2056,6 +2056,39 @@ pub const Context = struct {
         return std.mem.order(u8, a.name, b.name) == .lt;
     }
 
+    fn inferUnionDescriptorFlags(members: []const *const value_mod.TypeValue) value_mod.DescriptorFlags {
+        std.debug.assert(members.len != 0);
+
+        var flags = value_mod.DescriptorFlags{
+            .numeric = true,
+            .exact = true,
+            .integer = true,
+            .mutable = true,
+        };
+
+        for (members) |member| {
+            const desc = member.descriptor orelse {
+                flags = .{};
+                break;
+            };
+
+            flags.numeric = flags.numeric and descriptorBooleanFlag(desc, "numeric");
+            flags.exact = flags.exact and descriptorBooleanFlag(desc, "exact");
+            flags.integer = flags.integer and descriptorBooleanFlag(desc, "integer");
+            flags.mutable = flags.mutable and descriptorBooleanFlag(desc, "mutable");
+        }
+
+        return flags;
+    }
+
+    fn descriptorBooleanFlag(desc: *const value_mod.HashTable, key: []const u8) bool {
+        const val = desc.get(key) orelse return false;
+        return switch (val) {
+            .boolean => |b| b,
+            else => false,
+        };
+    }
+
     /// Return the canonical type value for an anonymous union member set.
     /// Member order does not matter; duplicates are removed before interning.
     pub fn getOrCreateAnonymousUnionTypeValue(
@@ -2107,10 +2140,15 @@ pub const Context = struct {
             }
         }
 
+        const desc_map = try value_mod.createTypeDescriptor(
+            alloc,
+            "union-type:",
+            inferUnionDescriptorFlags(sorted_members),
+        );
         const tv = try alloc.create(value_mod.TypeValue);
         tv.* = .{
             .name = union_name,
-            .descriptor = null,
+            .descriptor = @ptrCast(desc_map),
             .member_types = sorted_members,
         };
 
@@ -4181,6 +4219,29 @@ test "anonymous union interning reuses type value for same member set" {
     try std.testing.expectEqualStrings("bignum|fixnum|string", union1.name);
     try std.testing.expect(union1.member_types != null);
     try std.testing.expectEqual(@as(usize, 3), union1.member_types.?.len);
+}
+
+test "anonymous union descriptor flags are inferred by intersection" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const bignum_tv = ctx.lookupBuiltinTypeValue("bignum").?;
+    const float_tv = ctx.lookupBuiltinTypeValue("float").?;
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+
+    const numeric_union = try ctx.getOrCreateAnonymousUnionTypeValue(&.{ fixnum_tv, bignum_tv, float_tv });
+    const mixed_union = try ctx.getOrCreateAnonymousUnionTypeValue(&.{ fixnum_tv, string_tv });
+
+    const numeric_desc = numeric_union.descriptor.?;
+    try std.testing.expect(Context.descriptorBooleanFlag(numeric_desc, "numeric"));
+    try std.testing.expect(!Context.descriptorBooleanFlag(numeric_desc, "exact"));
+    try std.testing.expect(!Context.descriptorBooleanFlag(numeric_desc, "integer"));
+
+    const mixed_desc = mixed_union.descriptor.?;
+    try std.testing.expect(!Context.descriptorBooleanFlag(mixed_desc, "numeric"));
+    try std.testing.expect(!Context.descriptorBooleanFlag(mixed_desc, "exact"));
+    try std.testing.expect(!Context.descriptorBooleanFlag(mixed_desc, "integer"));
 }
 
 test "enum registry frame push/pop" {

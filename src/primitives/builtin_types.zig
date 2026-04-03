@@ -10,6 +10,7 @@ const markers_mod = @import("markers.zig");
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "define-builtin-type", .func = nativeDefineBuiltinType },
     .{ .name = "type-has-property?", .func = nativeTypeHasProperty },
+    .{ .name = "type-members", .func = nativeTypeMembers },
     .{ .name = "type-name", .func = nativeTypeName },
 };
 
@@ -108,4 +109,47 @@ fn nativeTypeName(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     }
+}
+
+/// native.type-members ( type -- array/f ) - Return member type values for a union type, or f otherwise.
+fn nativeTypeMembers(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .type_val => |tv| {
+            if (tv.member_types) |members| {
+                const arr = try ctx.quotationAllocator().alloc(value_mod.Value, members.len);
+                for (members, 0..) |member, i| {
+                    arr[i] = .{ .type_val = @constCast(member) };
+                }
+                try ctx.stack.push(.{ .array = arr });
+            } else {
+                try ctx.stack.push(.{ .boolean = false });
+            }
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "type", val);
+            return error.TypeMismatch;
+        },
+    }
+}
+
+const std = @import("std");
+const testing = std.testing;
+
+test "native type-members returns members for union types" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+    const union_tv = try ctx.getOrCreateAnonymousUnionTypeValue(&.{ fixnum_tv, string_tv });
+
+    try ctx.stack.push(.{ .type_val = union_tv });
+    try nativeTypeMembers(&ctx);
+
+    const result = try ctx.stack.pop();
+    try testing.expect(result == .array);
+    try testing.expectEqual(@as(usize, 2), result.array.len);
+    try testing.expect(result.array[0] == .type_val);
+    try testing.expect(result.array[1] == .type_val);
 }

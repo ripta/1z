@@ -1,13 +1,15 @@
 \ Test that --check propagates typed stdlib struct field annotations
 
 use "ffi" ;
+use "ranges" ;
 
-expect-fixnum:     ( n: fixnum -- )       [ drop ] ;
-expect-string:     ( s: string -- )       [ drop ] ;
-expect-array:      ( arr: array -- )      [ drop ] ;
-expect-source-loc: ( loc: source-loc -- ) [ drop ] ;
-expect-provenance: ( p: provenance -- )   [ drop ] ;
-expect-ffi-sig:    ( sig: ffi-sig -- )    [ drop ] ;
+expect-fixnum:      ( n: fixnum -- )                  [ drop ] ;
+expect-string:      ( s: string -- )                  [ drop ] ;
+expect-array:       ( arr: array -- )                 [ drop ] ;
+expect-range-bound: ( n: fixnum | bignum | float -- ) [ drop ] ;
+expect-source-loc:  ( loc: source-loc -- )            [ drop ] ;
+expect-provenance:  ( p: provenance -- )              [ drop ] ;
+expect-ffi-sig:     ( sig: ffi-sig -- )               [ drop ] ;
 
 prelude-flow: ( -- ) [
   "main.1z" 12 34 make-source-loc
@@ -21,6 +23,10 @@ prelude-flow: ( -- ) [
   dup generator>> expect-string
   dup parent>> expect-string
   role>> expect-string
+
+  1 10 <range>
+  dup start>> expect-range-bound
+  end>> expect-range-bound
 ] ;
 
 ffi-flow: ( -- ) [

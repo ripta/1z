@@ -255,6 +255,10 @@ type-name: ( val -- string ) [ type-of native.type-name ] ;
 
 \\ Check whether a value's type descriptor contains a given property key.
 type-has-property?: ( val property -- ? ) [ swap type-of swap native.type-has-property? ] ;
+\\ Return member types for a union type, or f for non-union types.
+type-members: ( type -- array/f ) [ native.type-members ] ;
+\\ Check whether a type value represents a declared union.
+type-union?: ( type -- ? ) [ type-members f = not ] ;
 
 \\ Throw a type-mismatch error with expected/got/value context.
 throw-type-error: ( value expected-str -- * ) [

@@ -596,7 +596,9 @@ tuck ( a b -- b a b )
 type
 type-annotation>> ( instance: stack-effect-param -- type-annotation: any )
 type-has-property? ( val property -- ? )
+type-members ( type -- array/f )
 type-name ( val -- string )
+type-union? ( type -- ? )
 types>> ( instance: method-info -- types: array )
 unit
 unless ( ? quot -- )

@@ -70,6 +70,19 @@ pub const Diagnostic = struct {
 
 const max_union_types = 8;
 
+fn typeMatchesConstraint(actual: *const TypeValue, expected: *const TypeValue) bool {
+    if (actual == expected) return true;
+
+    if (expected.member_types) |members| {
+        for (members) |member| {
+            if (typeMatchesConstraint(actual, member)) return true;
+        }
+        return false;
+    }
+
+    return false;
+}
+
 const TypeUnion = struct {
     types: [max_union_types]*const TypeValue = undefined,
     len: usize = 0,
@@ -86,7 +99,7 @@ const TypeUnion = struct {
 
     fn allMatch(self: *const TypeUnion, expected: *const TypeValue) bool {
         for (self.types[0..self.len]) |tv| {
-            if (tv != expected) return false;
+            if (!typeMatchesConstraint(tv, expected)) return false;
         }
         return true;
     }
@@ -1049,7 +1062,7 @@ pub const InferenceEngine = struct {
             const entry = stack_model.items[stack_pos];
 
             const mismatch_actual: ?[]const u8 = switch (entry) {
-                .typed => |tv| if (tv != expected_tv) tv.name else null,
+                .typed => |tv| if (!typeMatchesConstraint(tv, expected_tv)) tv.name else null,
                 .typed_union => |tu| if (!tu.allMatch(expected_tv)) blk: {
                     break :blk tu.format(self.allocator) catch null;
                 } else null,
@@ -2577,6 +2590,53 @@ test "type mismatch emits diagnostic" {
     try testing.expectEqual(InferenceResult{ .known = 0 }, result);
     try testing.expectEqual(@as(usize, 1), engine.diagnostics.items.len);
     try testing.expectEqual(Severity.err, engine.diagnostics.items[0].severity);
+}
+
+test "declared union input accepts matching typed value" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var string_tv = TypeValue{ .name = "string", .descriptor = null };
+    var union_members = [_]*const TypeValue{ &fixnum_tv, &string_tv };
+    var union_tv = TypeValue{ .name = "fixnum|string", .descriptor = null, .member_types = union_members[0..] };
+    var btv: std.StringHashMapUnmanaged(*TypeValue) = .{};
+    defer btv.deinit(testing.allocator);
+    try btv.put(testing.allocator, "fixnum", &fixnum_tv);
+    try btv.put(testing.allocator, "string", &string_tv);
+
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    try dict.put("consume-union", .{
+        .name = "consume-union",
+        .stack_effect = .{
+            .inputs = &.{.{ .name = "x", .type_annotation = &union_tv }},
+            .outputs = &.{},
+        },
+        .action = .{ .native = dummy },
+    });
+
+    const body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .fixnum = 42 } }),
+        makeInstr(.{ .call_word = "consume-union" }),
+    };
+
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, &btv, .err, .off);
+    defer engine.deinit();
+
+    const result = try engine.inferWord("test-word");
+    try testing.expectEqual(InferenceResult{ .known = 0 }, result);
+    try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
 }
 
 test "unknown type skips check" {
