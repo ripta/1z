@@ -145,3 +145,32 @@ geom:dot geom? t "geom? on dot is true" assert=
 \ Display format
 10 20 >geom:rect to-string "<geom:rect geom:rect{ width: 10 height: 20 }>" "rect display format" assert=
 geom:dot to-string "<geom:dot dot:>" "flat variant display in multi-field enum" assert=
+
+"enum-of" test-section
+
+\ Flat variant returns enum name
+color:red enum-of "color" "enum-of on flat variant returns enum name" assert=
+color:green enum-of "color" "enum-of on another flat variant" assert=
+
+\ Data-carrying variant returns enum name
+42 >shape:circle enum-of "shape" "enum-of on data variant returns enum name" assert=
+shape:point enum-of "shape" "enum-of on flat variant in mixed enum" assert=
+
+\ Non-enum values return f
+42 enum-of f "enum-of on integer returns f" assert=
+"hello" enum-of f "enum-of on string returns f" assert=
+red: enum-of f "enum-of on bare symbol returns f" assert=
+
+"enum-variants" test-section
+
+\ Flat enum returns variant name symbols
+color: enum-variants { color:red: color:green: color:blue: } "enum-variants for flat enum" assert=
+
+\ Mixed enum returns all variant name symbols
+shape: enum-variants { shape:circle: shape:point: } "enum-variants for mixed enum" assert=
+
+\ Multi-field enum returns all variant name symbols
+geom: enum-variants { geom:rect: geom:tri: geom:dot: } "enum-variants for multi-field enum" assert=
+
+\ Unknown enum throws error
+[ unknown-enum: enum-variants ] [ "unknown enum" assert-error ] recover

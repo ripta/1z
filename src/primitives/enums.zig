@@ -15,6 +15,8 @@ const Primitive = @import("types.zig").Primitive;
 
 pub const primitives = [_]Primitive{
     .{ .name = "define-enum", .stack_effect = "name: descriptor markers --", .doc = "Define an enum type with flat variant constructors and predicates.", .func = nativeDefineEnum },
+    .{ .name = "enum-of", .stack_effect = "val -- str/f", .doc = "Return the parent enum name for an enum variant value, or f if not an enum variant.", .func = nativeEnumOf },
+    .{ .name = "enum-variants", .stack_effect = "symbol -- array", .doc = "Return an array of variant name symbols for the named enum.", .func = nativeEnumVariants },
 };
 
 /// define-enum ( name: descriptor markers -- )
@@ -210,4 +212,46 @@ fn enumAggregatePredicateHelper(ctx: *Context) anyerror!void {
     };
 
     try ctx.stack.push(.{ .boolean = is_match });
+}
+
+/// enum-of ( val -- str | f )
+///
+/// Returns the parent enum name as a string if the value is an enum variant,
+/// or f if the value is not an enum variant.
+fn nativeEnumOf(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .tagged => |t| {
+            if (t.tag.enum_name) |en| {
+                try ctx.stack.push(.{ .string = en });
+                return;
+            }
+        },
+        else => {},
+    }
+    try ctx.stack.push(.{ .boolean = false });
+}
+
+/// enum-variants ( symbol -- array )
+///
+/// Returns an array of variant name symbols for the named enum.
+fn nativeEnumVariants(ctx: *Context) anyerror!void {
+    const name_val = try ctx.stack.pop();
+    const enum_name = switch (name_val) {
+        .symbol => |s| s,
+        else => return error.TypeMismatch,
+    };
+
+    const vtypes = ctx.lookupEnumVariants(enum_name) orelse {
+        helpers.setErrorContext(ctx, "unknown enum '{s}'", .{enum_name});
+        return error.NameError;
+    };
+
+    const alloc = ctx.quotationAllocator();
+    const result = try alloc.alloc(Value, vtypes.len);
+    for (vtypes, 0..) |vt, i| {
+        result[i] = .{ .symbol = vt.name };
+    }
+
+    try ctx.stack.push(.{ .array = result });
 }

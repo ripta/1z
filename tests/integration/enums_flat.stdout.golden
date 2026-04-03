@@ -149,3 +149,29 @@ PASS: rect display format
 Stack: [ ]
 PASS: flat variant display in multi-field enum
 Stack: [ ]
+=== enum-of ===
+Stack: [ ]
+PASS: enum-of on flat variant returns enum name
+Stack: [ ]
+PASS: enum-of on another flat variant
+Stack: [ ]
+PASS: enum-of on data variant returns enum name
+Stack: [ ]
+PASS: enum-of on flat variant in mixed enum
+Stack: [ ]
+PASS: enum-of on integer returns f
+Stack: [ ]
+PASS: enum-of on string returns f
+Stack: [ ]
+PASS: enum-of on bare symbol returns f
+Stack: [ ]
+=== enum-variants ===
+Stack: [ ]
+PASS: enum-variants for flat enum
+Stack: [ ]
+PASS: enum-variants for mixed enum
+Stack: [ ]
+PASS: enum-variants for multi-field enum
+Stack: [ ]
+PASS: unknown enum
+Stack: [ ]
