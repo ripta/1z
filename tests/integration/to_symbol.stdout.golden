@@ -28,6 +28,19 @@ PASS: string with space rejected
 Stack: [ ]
 PASS: integer rejected
 Stack: [ ]
+=== >symbol enum variants ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: flat enum variant converts to symbol
+Stack: [ ]
+PASS: another flat enum variant converts to symbol
+Stack: [ ]
+PASS: flat variant in mixed enum converts to symbol
+Stack: [ ]
+PASS: data enum variant rejected
+Stack: [ ]
 === >quotation from string ===
 Stack: [ ]
 Stack: [ ]

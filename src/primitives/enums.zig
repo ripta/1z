@@ -33,6 +33,37 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "enum-aggregate-predicate", .func = enumAggregatePredicateHelper, .stack_effect = "val enum-type-val -- ?" },
 };
 
+fn enumVariantToSymbol(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .tagged => |t| {
+            if (t.tag.parent_type == null) {
+                helpers.setErrorContext(ctx, ">symbol requires an enum variant", .{});
+                return error.TypeMismatch;
+            }
+            try ctx.stack.push(t.inner.*);
+        },
+        else => {
+            helpers.setErrorContext(ctx, ">symbol requires an enum variant", .{});
+            return error.TypeMismatch;
+        },
+    }
+}
+
+fn enumDataVariantToSymbol(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .tagged => |t| {
+            helpers.setErrorContext(ctx, "cannot convert data-carrying enum variant '{s}' to symbol", .{t.tag.name});
+            return error.TypeMismatch;
+        },
+        else => {
+            helpers.setErrorContext(ctx, ">symbol requires an enum variant", .{});
+            return error.TypeMismatch;
+        },
+    }
+}
+
 /// define-enum ( name: descriptor markers -- )
 ///
 /// For each variant string in the descriptor's `variants` array, creates a
@@ -41,6 +72,7 @@ pub const registry_entries = [_]RegistryEntry{
 /// any variant of the enum.
 fn nativeDefineEnum(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
+    const unary = ctx.getDispatchUnarySentinel();
 
     const markers_val = try ctx.stack.pop();
     const markers_array = switch (markers_val) {
@@ -192,6 +224,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 
             const pred_name = try std.fmt.allocPrint(alloc, "{s}:{s}?", .{ enum_name, variant_sym });
             try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
+            try ctx.dispatch.registerNative(">symbol", variant_tv, unary, enumVariantToSymbol);
 
             try generated_words.append(alloc, .{ .string = full_name });
             try generated_words.append(alloc, .{ .string = pred_name });
@@ -243,6 +276,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 
             const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{full_name});
             try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
+            try ctx.dispatch.registerNative(">symbol", variant_tv, unary, enumDataVariantToSymbol);
 
             try generated_words.append(alloc, .{ .string = wrap_name });
             try generated_words.append(alloc, .{ .string = make_name_word });

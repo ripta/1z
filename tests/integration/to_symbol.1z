@@ -21,6 +21,19 @@ foo: >string >symbol foo: "symbol>string>symbol roundtrip" assert=
 [ "hello world" >symbol ] "string with space rejected" assert-error
 [ 42 >symbol ] "integer rejected" assert-error
 
+">symbol enum variants" test-section
+color: enum{ red: unit green: unit blue: unit } ;
+circle-data: struct{ radius } ;
+shape: enum{
+  circle: circle-data
+  point: unit
+} ;
+
+color:red >symbol red: "flat enum variant converts to symbol" assert=
+color:green >symbol green: "another flat enum variant converts to symbol" assert=
+shape:point >symbol point: "flat variant in mixed enum converts to symbol" assert=
+[ 42 >shape:circle >symbol ] "data enum variant rejected" assert-error
+
 ">quotation from string" test-section
 greet: [ "hello" ] ;
 "greet" >quotation call "hello" ">quotation from string then call" assert=

@@ -68,7 +68,7 @@ Stack: [ ]
 >quotation ( name -- quotation )
 >string ( value -- string )
 >string-base ( n base -- str )
->symbol ( string -- symbol )
+>symbol ( value -- symbol )
 >template ( string -- template )
 @adjoin ( set value -- set' )
 @difference ( set1 set2 -- set' )
