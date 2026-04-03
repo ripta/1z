@@ -18,6 +18,8 @@ const streams = @import("streams.zig");
 const Scheduler = @import("../scheduler.zig").Scheduler;
 
 const is_macos = builtin.os.tag == .macos;
+const is_linux = builtin.os.tag == .linux;
+const supports_event_watch = is_macos or is_linux;
 
 pub const primitives = [_]Primitive{
     .{ .name = "watcher-create", .stack_effect = "mode -- watcher", .doc = "Create a watcher resource for event: mode.", .func = nativeWatcherCreate, .capability = .io_fs },
@@ -50,28 +52,38 @@ const PendingEvent = struct {
     new_path: ?[]u8 = null,
 };
 
+const PendingRename = struct {
+    watch_id: i64,
+    path: []u8,
+};
+
 const WatchEntry = struct {
-    fd: std.posix.fd_t,
+    backend_handle: i32,
     path: []u8,
     mask: WatchEventMask,
 };
 
 const NativeWatcher = struct {
     allocator: std.mem.Allocator,
-    kq_fd: std.posix.fd_t,
+    backend_fd: std.posix.fd_t,
     next_watch_id: i64 = 1,
     watches: std.AutoHashMapUnmanaged(i64, WatchEntry) = .{},
+    watch_ids_by_backend_handle: std.AutoHashMapUnmanaged(i32, i64) = .{},
     pending: std.ArrayListUnmanaged(PendingEvent) = .{},
+    pending_renames: std.AutoHashMapUnmanaged(u32, PendingRename) = .{},
 
     fn init(allocator: std.mem.Allocator) !*NativeWatcher {
-        if (!is_macos) return error.Unsupported;
-
         const watcher = try allocator.create(NativeWatcher);
         errdefer allocator.destroy(watcher);
 
         watcher.* = .{
             .allocator = allocator,
-            .kq_fd = try std.posix.kqueue(),
+            .backend_fd = if (is_macos)
+                try std.posix.kqueue()
+            else if (is_linux)
+                try std.posix.inotify_init1(std.os.linux.IN.CLOEXEC | std.os.linux.IN.NONBLOCK)
+            else
+                return error.Unsupported,
         };
 
         return watcher;
@@ -87,46 +99,70 @@ const NativeWatcher = struct {
 
         self.pending.deinit(self.allocator);
 
+        var rename_it = self.pending_renames.iterator();
+        while (rename_it.next()) |entry| {
+            self.allocator.free(entry.value_ptr.path);
+        }
+        self.pending_renames.deinit(self.allocator);
+
+        self.watch_ids_by_backend_handle.deinit(self.allocator);
+
         var it = self.watches.iterator();
         while (it.next()) |entry| {
-            std.posix.close(entry.value_ptr.fd);
-            self.allocator.free(entry.value_ptr.path);
+            self.destroyWatchEntry(entry.value_ptr.*);
         }
         self.watches.deinit(self.allocator);
 
-        std.posix.close(self.kq_fd);
+        std.posix.close(self.backend_fd);
         self.allocator.destroy(self);
     }
 
     fn addWatch(self: *NativeWatcher, path: []const u8, mask: WatchEventMask) !i64 {
-        const path_z = try self.allocator.dupeZ(u8, path);
-        defer self.allocator.free(path_z);
-
-        const watch_fd = try openWatchFd(path_z);
-        errdefer std.posix.close(watch_fd);
-
         const watch_path = try self.allocator.dupe(u8, path);
         errdefer self.allocator.free(watch_path);
 
         const watch_id = self.next_watch_id;
         self.next_watch_id += 1;
 
-        try registerWatchFd(self.kq_fd, watch_fd, watch_id, mask);
+        const backend_handle = if (is_macos) blk: {
+            const path_z = try self.allocator.dupeZ(u8, path);
+            defer self.allocator.free(path_z);
+
+            const watch_fd = try openWatchFd(path_z);
+            errdefer std.posix.close(watch_fd);
+
+            try registerWatchFd(self.backend_fd, watch_fd, watch_id, mask);
+            break :blk watch_fd;
+        } else if (is_linux) blk: {
+            const wd = try std.posix.inotify_add_watch(self.backend_fd, path, inotifyMask(mask));
+            break :blk wd;
+        } else return error.Unsupported;
 
         try self.watches.put(self.allocator, watch_id, .{
-            .fd = watch_fd,
+            .backend_handle = backend_handle,
             .path = watch_path,
             .mask = mask,
         });
+        errdefer _ = self.watches.remove(watch_id);
+
+        if (is_linux) {
+            try self.watch_ids_by_backend_handle.put(self.allocator, backend_handle, watch_id);
+        }
 
         return watch_id;
     }
 
     fn removeWatch(self: *NativeWatcher, watch_id: i64) !void {
         const removed = self.watches.fetchRemove(watch_id) orelse return error.KeyNotFound;
-        unregisterWatchFd(self.kq_fd, removed.value.fd) catch {};
-        std.posix.close(removed.value.fd);
-        self.allocator.free(removed.value.path);
+
+        if (is_macos) {
+            unregisterWatchFd(self.backend_fd, removed.value.backend_handle) catch {};
+        } else if (is_linux) {
+            _ = self.watch_ids_by_backend_handle.remove(removed.value.backend_handle);
+            removeInotifyWatch(self.backend_fd, removed.value.backend_handle);
+        }
+
+        self.destroyWatchEntry(removed.value);
     }
 
     fn readEvent(self: *NativeWatcher, scheduler: ?*Scheduler) !PendingEvent {
@@ -135,24 +171,41 @@ const NativeWatcher = struct {
                 return self.pending.orderedRemove(0);
             }
 
-            try self.drainKqueue(false);
+            try self.drainBackend(false);
             if (self.pending.items.len > 0) {
                 return self.pending.orderedRemove(0);
             }
 
             if (scheduler) |sched| {
-                streams.setNonBlockingFd(self.kq_fd);
-                sched.ioSuspendCurrentTask(self.kq_fd, .read);
+                if (is_macos) streams.setNonBlockingFd(self.backend_fd);
+                sched.ioSuspendCurrentTask(self.backend_fd, .read);
             } else {
-                try self.drainKqueue(true);
+                try self.drainBackend(true);
             }
+        }
+    }
+
+    fn destroyWatchEntry(self: *NativeWatcher, watch: WatchEntry) void {
+        if (is_macos) {
+            std.posix.close(watch.backend_handle);
+        }
+        self.allocator.free(watch.path);
+    }
+
+    fn drainBackend(self: *NativeWatcher, blocking: bool) !void {
+        if (is_macos) {
+            try self.drainKqueue(blocking);
+        } else if (is_linux) {
+            try self.drainInotify(blocking);
+        } else {
+            return error.Unsupported;
         }
     }
 
     fn drainKqueue(self: *NativeWatcher, blocking: bool) !void {
         var events: [8]std.posix.Kevent = undefined;
         const timeout_ptr: ?*const std.posix.timespec = if (blocking) null else &.{ .sec = 0, .nsec = 0 };
-        const count = try std.posix.kevent(self.kq_fd, &.{}, &events, timeout_ptr);
+        const count = try std.posix.kevent(self.backend_fd, &.{}, &events, timeout_ptr);
         for (events[0..count]) |event| {
             try self.translateEvent(event);
         }
@@ -190,6 +243,126 @@ const NativeWatcher = struct {
             .new_path = owned_new_path,
         });
     }
+
+    fn drainInotify(self: *NativeWatcher, blocking: bool) !void {
+        if (blocking and self.pending.items.len == 0) {
+            var poll_fds = [_]std.posix.pollfd{.{
+                .fd = self.backend_fd,
+                .events = std.posix.POLL.IN,
+                .revents = 0,
+            }};
+            _ = try std.posix.poll(&poll_fds, -1);
+        }
+
+        var buf: [4096]u8 = undefined;
+        while (true) {
+            const len = std.posix.read(self.backend_fd, &buf) catch |err| switch (err) {
+                error.WouldBlock => break,
+                else => return err,
+            };
+            if (len == 0) break;
+            try self.translateInotifyBuffer(buf[0..len]);
+        }
+
+        try self.flushPendingRenames();
+    }
+
+    fn translateInotifyBuffer(self: *NativeWatcher, buf: []const u8) !void {
+        var offset: usize = 0;
+        while (offset + @sizeOf(std.os.linux.inotify_event) <= buf.len) {
+            const raw: *align(1) const std.os.linux.inotify_event = @ptrCast(buf[offset..].ptr);
+            const event = raw.*;
+            const event_len = @sizeOf(std.os.linux.inotify_event) + event.len;
+            if (offset + event_len > buf.len) break;
+
+            try self.translateInotifyEvent(event, buf[offset + @sizeOf(std.os.linux.inotify_event) .. offset + event_len]);
+            offset += event_len;
+        }
+    }
+
+    fn translateInotifyEvent(self: *NativeWatcher, event: std.os.linux.inotify_event, name_bytes: []const u8) !void {
+        const watch_id = self.watch_ids_by_backend_handle.get(event.wd) orelse return;
+        const watch = self.watches.get(watch_id) orelse return;
+        const event_path = try self.inotifyEventPath(watch.path, name_bytes);
+        defer self.allocator.free(event_path);
+
+        if (event.mask & std.os.linux.IN.IGNORED != 0) {
+            self.cleanupIgnoredWatch(event.wd);
+            return;
+        }
+
+        if (event.mask & std.os.linux.IN.Q_OVERFLOW != 0) return;
+
+        if ((event.mask & std.os.linux.IN.MOVED_FROM) != 0 and watch.mask.renamed) {
+            try self.storePendingRename(watch_id, event.cookie, event_path);
+        }
+        if ((event.mask & std.os.linux.IN.MOVED_TO) != 0) {
+            if (watch.mask.renamed) {
+                if (self.pending_renames.fetchRemove(event.cookie)) |entry| {
+                    defer self.allocator.free(entry.value.path);
+                    try self.enqueueEvent(entry.value.watch_id, "renamed", entry.value.path, event_path);
+                } else if (watch.mask.created) {
+                    try self.enqueueEvent(watch_id, "created", event_path, null);
+                }
+            } else if (watch.mask.created) {
+                try self.enqueueEvent(watch_id, "created", event_path, null);
+            }
+        }
+        if ((event.mask & std.os.linux.IN.CREATE) != 0 and watch.mask.created) {
+            try self.enqueueEvent(watch_id, "created", event_path, null);
+        }
+        if ((event.mask & (std.os.linux.IN.MODIFY | std.os.linux.IN.ATTRIB | std.os.linux.IN.CLOSE_WRITE)) != 0 and watch.mask.modified) {
+            try self.enqueueEvent(watch_id, "modified", event_path, null);
+        }
+        if ((event.mask & (std.os.linux.IN.DELETE | std.os.linux.IN.DELETE_SELF)) != 0 and watch.mask.deleted) {
+            try self.enqueueEvent(watch_id, "deleted", event_path, null);
+        }
+        if ((event.mask & std.os.linux.IN.MOVE_SELF) != 0 and watch.mask.renamed) {
+            try self.enqueueEvent(watch_id, "renamed", event_path, null);
+        }
+    }
+
+    fn inotifyEventPath(self: *NativeWatcher, watch_path: []const u8, name_bytes: []const u8) ![]u8 {
+        const name = trimInotifyName(name_bytes);
+        if (name.len == 0) return try self.allocator.dupe(u8, watch_path);
+        return try std.fs.path.join(self.allocator, &.{ watch_path, name });
+    }
+
+    fn storePendingRename(self: *NativeWatcher, watch_id: i64, cookie: u32, path: []const u8) !void {
+        if (cookie == 0) {
+            try self.enqueueEvent(watch_id, "renamed", path, null);
+            return;
+        }
+
+        const owned_path = try self.allocator.dupe(u8, path);
+        errdefer self.allocator.free(owned_path);
+
+        if (self.pending_renames.fetchRemove(cookie)) |entry| {
+            self.allocator.free(entry.value.path);
+        }
+        try self.pending_renames.put(self.allocator, cookie, .{
+            .watch_id = watch_id,
+            .path = owned_path,
+        });
+    }
+
+    fn flushPendingRenames(self: *NativeWatcher) !void {
+        if (self.pending_renames.count() == 0) return;
+
+        var it = self.pending_renames.iterator();
+        while (it.next()) |entry| {
+            const pending = entry.value_ptr.*;
+            defer self.allocator.free(pending.path);
+            try self.enqueueEvent(pending.watch_id, "renamed", pending.path, null);
+        }
+        self.pending_renames.clearRetainingCapacity();
+    }
+
+    fn cleanupIgnoredWatch(self: *NativeWatcher, wd: i32) void {
+        const watch_id = self.watch_ids_by_backend_handle.fetchRemove(wd) orelse return;
+        const watch = self.watches.fetchRemove(watch_id.value) orelse return;
+        self.destroyWatchEntry(watch.value);
+    }
 };
 
 fn nativeWatcherCreate(ctx: *Context) anyerror!void {
@@ -198,8 +371,8 @@ fn nativeWatcherCreate(ctx: *Context) anyerror!void {
         helpers.setErrorContext(ctx, "watcher-create: unsupported mode {s}:", .{mode});
         return error.IOFailed;
     }
-    if (!is_macos) {
-        helpers.setErrorContext(ctx, "watcher-create: event watchers are only implemented on macOS", .{});
+    if (!supports_event_watch) {
+        helpers.setErrorContext(ctx, "watcher-create: event watchers are only implemented on macOS and Linux", .{});
         return error.IOFailed;
     }
 
@@ -281,7 +454,7 @@ fn nativeWatcherRead(ctx: *Context) anyerror!void {
 
 fn nativeWatcherProbe(ctx: *Context) anyerror!void {
     const path = try helpers.popString(ctx);
-    if (!is_macos) {
+    if (!supports_event_watch) {
         try ctx.stack.push(.{ .boolean = false });
         return;
     }
@@ -384,6 +557,39 @@ fn openWatchFd(path_z: [:0]const u8) !std.posix.fd_t {
     }
 }
 
+fn inotifyMask(mask: WatchEventMask) u32 {
+    var result: u32 = 0;
+    if (mask.created) {
+        result |= std.os.linux.IN.CREATE;
+    }
+    if (mask.modified) {
+        result |= std.os.linux.IN.MODIFY | std.os.linux.IN.ATTRIB | std.os.linux.IN.CLOSE_WRITE;
+    }
+    if (mask.deleted) {
+        result |= std.os.linux.IN.DELETE | std.os.linux.IN.DELETE_SELF;
+    }
+    if (mask.renamed) {
+        result |= std.os.linux.IN.MOVED_FROM | std.os.linux.IN.MOVED_TO | std.os.linux.IN.MOVE_SELF;
+    }
+    if (result == 0) {
+        result = std.os.linux.IN.ALL_EVENTS;
+    }
+    return result;
+}
+
+fn trimInotifyName(name_bytes: []const u8) []const u8 {
+    const nul_index = std.mem.indexOfScalar(u8, name_bytes, 0) orelse name_bytes.len;
+    return name_bytes[0..nul_index];
+}
+
+fn removeInotifyWatch(fd: std.posix.fd_t, wd: i32) void {
+    const rc = std.c.inotify_rm_watch(fd, wd);
+    switch (std.posix.errno(rc)) {
+        .SUCCESS, .INVAL => return,
+        else => return,
+    }
+}
+
 fn registerWatchFd(kq_fd: std.posix.fd_t, watch_fd: std.posix.fd_t, watch_id: i64, mask: WatchEventMask) !void {
     if (!is_macos) return error.Unsupported;
 
@@ -430,7 +636,7 @@ fn unregisterWatchFd(kq_fd: std.posix.fd_t, watch_fd: std.posix.fd_t) !void {
 }
 
 test "watcher-create creates watcher resource" {
-    if (!is_macos) return;
+    if (!supports_event_watch) return;
 
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
@@ -446,7 +652,7 @@ test "watcher-create creates watcher resource" {
 }
 
 test "watcher-add and watcher-read observe file modification" {
-    if (!is_macos) return;
+    if (!supports_event_watch) return;
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -490,7 +696,7 @@ test "watcher-add and watcher-read observe file modification" {
 }
 
 test "watcher-probe reports true for existing file" {
-    if (!is_macos) return;
+    if (!supports_event_watch) return;
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
