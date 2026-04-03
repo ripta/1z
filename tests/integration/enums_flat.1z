@@ -76,7 +76,7 @@ color:red suit? f "suit? on red is false" assert=
 
 "data-carrying variants" test-section
 
-shape: enum{ circle( radius ) point } ;
+shape: enum{ circle struct{ radius } point } ;
 
 \ Wrap and unwrap
 42 >shape:circle shape:circle> 42 "wrap and unwrap circle" assert=
@@ -103,7 +103,7 @@ shape:point shape:circle? f "shape:circle? on point is false" assert=
 42 >shape:circle 99 >shape:circle = f "different circle values are not equal" assert=
 
 \ Display format
-42 >shape:circle to-string "<shape:circle 42>" "circle display format" assert=
+42 >shape:circle to-string "<shape:circle shape:circle{ radius: 42 }>" "circle display format" assert=
 
 \ Flat variant still works alongside data variant
 shape:point type-of shape:point: "flat variant type-of in mixed enum" assert=
@@ -111,7 +111,7 @@ shape:point to-string "<shape:point point:>" "flat variant display in mixed enum
 
 "multi-field data variants" test-section
 
-geom: enum{ rect( width height ) tri( a b c ) dot } ;
+geom: enum{ rect struct{ width height } tri struct{ a b c } dot } ;
 
 \ Wrap and unwrap multi-field variant
 10 20 >geom:rect geom:rect> 20 "rect unwrap height" assert= 10 "rect unwrap width" assert=

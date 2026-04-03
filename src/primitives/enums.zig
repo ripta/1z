@@ -66,79 +66,83 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     var i: usize = 0;
     while (i < variants_array.len) {
         const variant_val = variants_array[i];
-        const token = switch (variant_val) {
+        const variant_sym = switch (variant_val) {
             .string => |s| s,
+            .symbol => |s| s,
             else => return error.TypeMismatch,
         };
 
-        if (token.len > 0 and token[token.len - 1] == '(') {
-            // Data variant syntax: "VariantName(" ...field names... ")"
-            const variant_name = token[0 .. token.len - 1];
-            i += 1;
-
-            var fields_list = std.ArrayListUnmanaged([]const u8){};
-            while (i < variants_array.len) {
-                const field_tok = switch (variants_array[i]) {
-                    .string => |s| s,
-                    else => return error.TypeMismatch,
-                };
-                i += 1;
-                if (std.mem.eql(u8, field_tok, ")")) break;
-                try fields_list.append(alloc, try alloc.dupe(u8, field_tok));
+        const has_struct_desc = if (i + 1 < variants_array.len)
+            switch (variants_array[i + 1]) {
+                .mutable_map => true,
+                else => false,
             }
+        else
+            false;
 
-            if (fields_list.items.len == 0) {
-                helpers.setErrorContext(ctx, "data variant '{s}' must have at least one field", .{variant_name});
+        if (has_struct_desc) {
+            const struct_desc = switch (variants_array[i + 1]) {
+                .mutable_map => |m| m,
+                else => unreachable,
+            };
+            i += 2;
+
+            const fields_val = struct_desc.get("fields") orelse {
+                helpers.setErrorContext(ctx, "struct descriptor missing fields key", .{});
+                return error.MissingField;
+            };
+            const fields_array = switch (fields_val) {
+                .array => |arr| arr,
+                else => return error.TypeMismatch,
+            };
+
+            if (fields_array.len == 0) {
+                helpers.setErrorContext(ctx, "data variant '{s}' must have at least one field", .{variant_sym});
                 return error.ParseError;
             }
 
-            const full_name = try std.fmt.allocPrint(alloc, "{s}:{s}", .{ enum_name, variant_name });
+            var fields_list = std.ArrayListUnmanaged([]const u8){};
+            for (fields_array) |f| {
+                const raw = switch (f) {
+                    .string => |s| s,
+                    .symbol => |s| s,
+                    else => return error.TypeMismatch,
+                };
+                const field_name = if (raw.len > 1 and raw[raw.len - 1] == ':')
+                    raw[0 .. raw.len - 1]
+                else
+                    raw;
+                try fields_list.append(alloc, try alloc.dupe(u8, field_name));
+            }
+            const fields_slice = try fields_list.toOwnedSlice(alloc);
+
+            const full_name = try std.fmt.allocPrint(alloc, "{s}:{s}", .{ enum_name, variant_sym });
+
+            const anon_struct = try alloc.create(StructType);
+            anon_struct.* = .{
+                .name = full_name,
+                .fields = fields_slice,
+            };
 
             const vtype = try alloc.create(VirtualType);
-            if (fields_list.items.len == 1) {
-                vtype.* = .{
-                    .name = full_name,
-                    .inner_type = "<data>",
-                    .enum_name = enum_name,
-                };
+            vtype.* = .{
+                .name = full_name,
+                .inner_type = full_name,
+                .enum_name = enum_name,
+                .anon_struct = anon_struct,
+            };
 
-                try vtype_list.append(alloc, vtype);
+            try vtype_list.append(alloc, vtype);
 
-                const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
-                try virtual.defineWrap(ctx, wrap_name, vtype, markers_slice);
+            const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
+            try virtual.defineStructWrap(ctx, wrap_name, vtype, markers_slice);
 
-                const unwrap_name = try std.fmt.allocPrint(alloc, "{s}>", .{full_name});
-                try virtual.defineUnwrap(ctx, unwrap_name, vtype, markers_slice);
-            } else {
-                const fields_slice = try fields_list.toOwnedSlice(alloc);
-
-                const anon_struct = try alloc.create(StructType);
-                anon_struct.* = .{
-                    .name = full_name,
-                    .fields = fields_slice,
-                };
-
-                vtype.* = .{
-                    .name = full_name,
-                    .inner_type = full_name,
-                    .enum_name = enum_name,
-                    .anon_struct = anon_struct,
-                };
-
-                try vtype_list.append(alloc, vtype);
-
-                const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
-                try virtual.defineStructWrap(ctx, wrap_name, vtype, markers_slice);
-
-                const unwrap_name = try std.fmt.allocPrint(alloc, "{s}>", .{full_name});
-                try virtual.defineStructUnwrap(ctx, unwrap_name, vtype, markers_slice);
-            }
+            const unwrap_name = try std.fmt.allocPrint(alloc, "{s}>", .{full_name});
+            try virtual.defineStructUnwrap(ctx, unwrap_name, vtype, markers_slice);
 
             const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{full_name});
             try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
         } else {
-            // Flat variant syntax: "VariantName"
-            const variant_sym = token;
             const full_name = try std.fmt.allocPrint(alloc, "{s}:{s}", .{ enum_name, variant_sym });
 
             const vtype = try alloc.create(VirtualType);

@@ -1,0 +1,35 @@
+\ Test that parse-time words using M{} create fresh maps on each invocation.
+\
+\ Bug: M{} inside a parse-time word body compiles to a shared mutable map
+\ literal. Multiple invocations of the same word mutate the same map, so
+\ earlier descriptors get corrupted by later ones.
+\
+\ This bug manifests when struct{ is called multiple times inside
+\ parse-values-until (e.g., inside enum{), because the results are collected
+\ into an array before being processed by define-enum. The second struct{
+\ call overwrites the first descriptor's fields.
+
+use "testing" ;
+
+"struct{ mutable map reuse" test-section
+
+\ Two struct{ calls inside the same enum's parse-values-until.
+\ If the M{} literal is shared, both descriptors end up with tri's fields.
+geom: enum{ rect struct{ width height } tri struct{ a b c } dot } ;
+
+\ rect should have 2 fields (width, height), not 3 (a, b, c)
+10 20 >geom:rect geom:rect>
+20 "rect unwrap height" assert=
+10 "rect unwrap width" assert=
+
+\ tri should have 3 fields
+3 4 5 >geom:tri geom:tri>
+5 "tri unwrap c" assert=
+4 "tri unwrap b" assert=
+3 "tri unwrap a" assert=
+
+\ Display format reflects correct fields
+10 20 >geom:rect to-string "<geom:rect geom:rect{ width: 10 height: 20 }>"
+"rect display" assert=
+3 4 5 >geom:tri to-string "<geom:tri geom:tri{ a: 3 b: 4 c: 5 }>"
+"tri display" assert=
