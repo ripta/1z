@@ -175,3 +175,35 @@ PASS: enum-variants for multi-field enum
 Stack: [ ]
 PASS: unknown enum
 Stack: [ ]
+=== match flat enum ===
+Stack: [ ]
+PASS: match selects correct flat variant
+Stack: [ ]
+PASS: match selects green
+Stack: [ ]
+PASS: match selects blue
+Stack: [ ]
+=== match data-carrying enum ===
+Stack: [ ]
+PASS: match unwraps data variant
+Stack: [ ]
+PASS: match flat variant in mixed enum
+Stack: [ ]
+=== match multi-field data variant ===
+Stack: [ ]
+PASS: match unwraps multi-field variant
+Stack: [ ]
+PASS: match unwraps three-field variant
+Stack: [ ]
+PASS: match flat variant in multi-field enum
+Stack: [ ]
+=== match exhaustiveness errors ===
+Stack: [ ]
+PASS: missing match branch
+Stack: [ ]
+PASS: duplicate match branch
+Stack: [ ]
+PASS: match requires an enum
+Stack: [ ]
+PASS: not a variant
+Stack: [ ]

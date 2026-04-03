@@ -17,6 +17,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "define-enum", .stack_effect = "name: descriptor markers --", .doc = "Define an enum type with flat variant constructors and predicates.", .func = nativeDefineEnum },
     .{ .name = "enum-of", .stack_effect = "val -- str/f", .doc = "Return the parent enum name for an enum variant value, or f if not an enum variant.", .func = nativeEnumOf },
     .{ .name = "enum-variants", .stack_effect = "symbol -- array", .doc = "Return an array of variant name symbols for the named enum.", .func = nativeEnumVariants },
+    .{ .name = "match", .stack_effect = "val branches -- ...", .doc = "Exhaustive dispatch on enum variants. Branches are alternating symbol-quotation pairs. Auto-unwraps data-carrying variants.", .func = nativeMatch },
 };
 
 /// define-enum ( name: descriptor markers -- )
@@ -254,4 +255,117 @@ fn nativeEnumVariants(ctx: *Context) anyerror!void {
     }
 
     try ctx.stack.push(.{ .array = result });
+}
+
+/// match ( val branches -- ... )
+///
+/// Exhaustive dispatch on enum variants. The branches array alternates between
+/// variant name symbols and quotation bodies. Every variant of the enum must
+/// appear exactly once. For data-carrying variants, the unwrapped payload fields
+/// are pushed onto the stack before the body executes.
+fn nativeMatch(ctx: *Context) anyerror!void {
+    const branches_val = try ctx.stack.pop();
+    const branches = switch (branches_val) {
+        .array => |arr| arr,
+        else => return error.TypeMismatch,
+    };
+
+    const val = try ctx.stack.pop();
+    const tag = switch (val) {
+        .tagged => |t| t,
+        else => {
+            helpers.setErrorContext(ctx, "match requires an enum variant, got {s}", .{helpers.valueTypeName(val)});
+            return error.TypeMismatch;
+        },
+    };
+
+    const enum_name = tag.tag.enum_name orelse {
+        helpers.setErrorContext(ctx, "match requires an enum variant, got virtual type '{s}'", .{tag.tag.name});
+        return error.TypeMismatch;
+    };
+
+    if (branches.len % 2 != 0) {
+        helpers.setErrorContext(ctx, "match branches must be symbol-quotation pairs (got odd count {d})", .{branches.len});
+        return error.ParseError;
+    }
+
+    const vtypes = ctx.lookupEnumVariants(enum_name) orelse {
+        helpers.setErrorContext(ctx, "unknown enum '{s}'", .{enum_name});
+        return error.NameError;
+    };
+
+    const alloc = ctx.quotationAllocator();
+    const n_branches = branches.len / 2;
+
+    if (n_branches != vtypes.len) {
+        helpers.setErrorContext(ctx, "match has {d} branches but enum '{s}' has {d} variants", .{ n_branches, enum_name, vtypes.len });
+        return error.ParseError;
+    }
+
+    var matched_body: ?value_mod.Quotation = null;
+    var seen = std.StringHashMapUnmanaged(void){};
+
+    var i: usize = 0;
+    while (i < branches.len) : (i += 2) {
+        const key = switch (branches[i]) {
+            .symbol => |s| s,
+            else => {
+                helpers.setErrorContext(ctx, "match branch key must be a symbol, got {s}", .{helpers.valueTypeName(branches[i])});
+                return error.TypeMismatch;
+            },
+        };
+        const body = switch (branches[i + 1]) {
+            .quotation => |q| q,
+            else => {
+                helpers.setErrorContext(ctx, "match branch body must be a quotation", .{});
+                return error.TypeMismatch;
+            },
+        };
+
+        var valid = false;
+        for (vtypes) |vt| {
+            if (std.mem.eql(u8, vt.name, key)) {
+                valid = true;
+                break;
+            }
+        }
+        if (!valid) {
+            helpers.setErrorContext(ctx, "'{s}' is not a variant of enum '{s}'", .{ key, enum_name });
+            return error.NameError;
+        }
+
+        if (seen.contains(key)) {
+            helpers.setErrorContext(ctx, "duplicate match branch for '{s}'", .{key});
+            return error.ParseError;
+        }
+        try seen.put(alloc, key, {});
+
+        if (std.mem.eql(u8, tag.tag.name, key)) {
+            matched_body = body;
+        }
+    }
+
+    // Exhaustiveness check
+    for (vtypes) |vt| {
+        if (!seen.contains(vt.name)) {
+            helpers.setErrorContext(ctx, "missing match branch for variant '{s}'", .{vt.name});
+            return error.ParseError;
+        }
+    }
+
+    const body = matched_body orelse unreachable;
+
+    // For data-carrying variants, unwrap the struct fields onto the stack
+    if (tag.tag.anon_struct != null) {
+        switch (tag.inner.*) {
+            .struct_instance => |si| {
+                for (si.fields) |field_val| {
+                    try ctx.stack.push(field_val);
+                }
+            },
+            else => {},
+        }
+    }
+
+    try ctx.executeQuotation(body);
 }

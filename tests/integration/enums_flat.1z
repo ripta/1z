@@ -174,3 +174,87 @@ geom: enum-variants { geom:rect: geom:tri: geom:dot: } "enum-variants for multi-
 
 \ Unknown enum throws error
 [ unknown-enum: enum-variants ] [ "unknown enum" assert-error ] recover
+
+"match flat enum" test-section
+
+\ Basic match on flat variants
+color:red {
+  color:red:   [ "R" ]
+  color:green: [ "G" ]
+  color:blue:  [ "B" ]
+} match "R" "match selects correct flat variant" assert=
+
+color:green {
+  color:red:   [ "R" ]
+  color:green: [ "G" ]
+  color:blue:  [ "B" ]
+} match "G" "match selects green" assert=
+
+color:blue {
+  color:red:   [ "R" ]
+  color:green: [ "G" ]
+  color:blue:  [ "B" ]
+} match "B" "match selects blue" assert=
+
+"match data-carrying enum" test-section
+
+\ Data-carrying variant auto-unwraps
+42 >shape:circle {
+  shape:circle: [ 2 * ]
+  shape:point:  [ 0 ]
+} match 84 "match unwraps data variant" assert=
+
+\ Flat variant in mixed enum
+shape:point {
+  shape:circle: [ 2 * ]
+  shape:point:  [ 99 ]
+} match 99 "match flat variant in mixed enum" assert=
+
+"match multi-field data variant" test-section
+
+\ Multi-field unwrap pushes all fields
+10 20 >geom:rect {
+  geom:rect: [ + ]
+  geom:tri:  [ + + ]
+  geom:dot:  [ 0 ]
+} match 30 "match unwraps multi-field variant" assert=
+
+3 4 5 >geom:tri {
+  geom:rect: [ + ]
+  geom:tri:  [ + + ]
+  geom:dot:  [ 0 ]
+} match 12 "match unwraps three-field variant" assert=
+
+geom:dot {
+  geom:rect: [ + ]
+  geom:tri:  [ + + ]
+  geom:dot:  [ 0 ]
+} match 0 "match flat variant in multi-field enum" assert=
+
+"match exhaustiveness errors" test-section
+
+\ Missing branch throws error
+[ color:red {
+  color:red:  [ "R" ]
+  color:green: [ "G" ]
+} match ] [ "missing match branch" assert-error ] recover
+
+\ Duplicate branch throws error
+[ color:red {
+  color:red:   [ "R" ]
+  color:green: [ "G" ]
+  color:red:   [ "R2" ]
+  color:blue:  [ "B" ]
+} match ] [ "duplicate match branch" assert-error ] recover
+
+\ Non-enum value throws error
+[ 42 {
+  color:red: [ "R" ]
+} match ] [ "match requires an enum" assert-error ] recover
+
+\ Wrong variant name throws error
+[ color:red {
+  color:red:    [ "R" ]
+  color:green:  [ "G" ]
+  suit:hearts:  [ "H" ]
+} match ] [ "not a variant" assert-error ] recover
