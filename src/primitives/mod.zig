@@ -70,6 +70,7 @@ pub const filesystem = @import("filesystem.zig");
 pub const process = @import("process.zig");
 pub const hooks = @import("hooks.zig");
 pub const signals = @import("signals.zig");
+pub const watchers = @import("watchers.zig");
 pub const packed_arrays = @import("packed.zig");
 pub const simd_vector = @import("simd_vector.zig");
 
@@ -133,6 +134,7 @@ pub const extracted_primitives = stack.primitives ++
     sandbox.primitives ++
     filesystem.primitives ++
     signals.primitives ++
+    watchers.primitives ++
     ffi_struct.primitives;
 
 // Aggregated registry entries for the native virtual module
