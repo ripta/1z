@@ -1,0 +1,3 @@
+person: struct{  name:   string    age:  fixnum  } ;
+point: struct{   x: fixnum   y: fixnum   z: fixnum  } ;
+color: struct{  r: fixnum   g: fixnum   b: fixnum } ;

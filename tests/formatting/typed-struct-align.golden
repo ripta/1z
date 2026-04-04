@@ -1,0 +1,3 @@
+point: struct{ x: fixnum y: fixnum } ;
+color: struct{ r: fixnum g: fixnum b: fixnum } ;
+rect:  struct{ x: fixnum y: fixnum w: fixnum h: fixnum } ;

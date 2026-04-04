@@ -1,0 +1,5 @@
+person: struct{
+  name:  string
+  age:   fixnum
+  email: string
+} ;

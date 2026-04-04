@@ -1,0 +1,3 @@
+add: ( a: fixnum   b: fixnum  --  sum: fixnum ) [ + ] ;
+greet: ( name:  string  --  msg: string ) [ "hello " swap concat ] ;
+mul: ( a: fixnum b: fixnum -- product: fixnum ) [ * ] ;

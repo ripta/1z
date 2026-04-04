@@ -1,0 +1,7 @@
+http-request: struct{
+  method:  string
+  path:    string
+  headers: hash
+  body:    string
+  version: string
+} ;

@@ -1,0 +1,3 @@
+add: ( a: fixnum b: fixnum -- c: fixnum ) [ + ] ;
+sub: ( a: fixnum b: fixnum -- c: fixnum ) [ - ] ;
+mul: ( a: fixnum b: fixnum -- c: fixnum ) [ * ] ;

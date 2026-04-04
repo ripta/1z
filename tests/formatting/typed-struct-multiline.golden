@@ -1,0 +1,6 @@
+rect: struct{
+  x: fixnum
+  y: fixnum
+  width: fixnum
+  height: fixnum
+} ;

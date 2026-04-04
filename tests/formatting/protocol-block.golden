@@ -1,0 +1,4 @@
+printable: protocol{
+  >string: ( self -- s: string )
+  inspect: ( self -- s: string )
+} ;
