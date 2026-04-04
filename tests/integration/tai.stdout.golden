@@ -1,0 +1,62 @@
+=== tai-timestamp type ===
+Stack: [ ]
+PASS: type-name is tai-timestamp
+Stack: [ ]
+PASS: tai-timestamp? returns true
+Stack: [ ]
+PASS: timestamp? on tai-timestamp is false
+Stack: [ ]
+PASS: tai-timestamp? on timestamp is false
+Stack: [ ]
+=== tai-timestamp accessors ===
+Stack: [ ]
+PASS: tai-timestamp-sec
+Stack: [ ]
+PASS: tai-timestamp-nsec
+Stack: [ ]
+=== utc>tai known offsets ===
+Stack: [ ]
+PASS: epoch: TAI sec = 10
+Stack: [ ]
+PASS: epoch: nsec preserved
+Stack: [ ]
+PASS: 1972-07-01: offset 11
+Stack: [ ]
+PASS: 1999-01-01: offset 32
+Stack: [ ]
+PASS: 2000-01-01: offset 32
+Stack: [ ]
+PASS: 2017-01-01: offset 37
+Stack: [ ]
+PASS: nsec preserved in utc>tai
+Stack: [ ]
+=== tai>utc round-trip ===
+Stack: [ ]
+PASS: round-trip epoch sec
+Stack: [ ]
+PASS: round-trip epoch nsec
+Stack: [ ]
+PASS: round-trip 1972-07-01 sec
+Stack: [ ]
+PASS: round-trip 2000-01-01 sec
+Stack: [ ]
+PASS: round-trip 2000-01-01 nsec
+Stack: [ ]
+PASS: round-trip 2017-01-01 sec
+Stack: [ ]
+=== boundary cases ===
+Stack: [ ]
+PASS: pre-1972: offset 10
+Stack: [ ]
+PASS: at 1972-01-01: offset 10
+Stack: [ ]
+PASS: just before 1972-07-01: offset 10
+Stack: [ ]
+PASS: future: offset 37
+Stack: [ ]
+PASS: future round-trip
+Stack: [ ]
+=== inspect ===
+Stack: [ ]
+PASS: inspect format
+Stack: [ ]

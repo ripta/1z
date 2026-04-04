@@ -1,0 +1,135 @@
+\ TAI (International Atomic Time) support
+\
+\ TAI is a continuous time scale maintained by atomic clocks, without
+\ leap second adjustments. Conversions between UTC (POSIX) timestamps
+\ and TAI timestamps use a bundled leap second table.
+
+use "time" ;
+
+\ --- tai-timestamp virtual type ---
+
+tai-inner: struct{ tai-sec: fixnum tai-nsec: fixnum } ;
+tai-timestamp: virtual{ tai-inner } ;
+
+make-tai-timestamp: ( sec nsec -- tai-timestamp ) [ make-tai-inner >tai-timestamp ] ;
+tai-timestamp-sec:  ( tai-timestamp -- sec )      [ unmake-tai-timestamp tai-sec>> ] ;
+tai-timestamp-nsec: ( tai-timestamp -- nsec )     [ unmake-tai-timestamp tai-nsec>> ] ;
+
+\ --- Leap second table ---
+\
+\ Each entry marks the POSIX timestamp (UTC midnight) when a new leap
+\ second took effect, paired with the cumulative TAI-UTC offset at that
+\ point. Source: IERS Bulletin C. 28 entries from 1972 through 2017.
+
+leap-second-timestamps: const [
+  {
+    63072000    \ 1972-01-01
+    78796800    \ 1972-07-01
+    94694400    \ 1973-01-01
+    126230400   \ 1974-01-01
+    157766400   \ 1975-01-01
+    189302400   \ 1976-01-01
+    220924800   \ 1977-01-01
+    252460800   \ 1978-01-01
+    283996800   \ 1979-01-01
+    315532800   \ 1980-01-01
+    362793600   \ 1981-07-01
+    394329600   \ 1982-07-01
+    425865600   \ 1983-07-01
+    489024000   \ 1985-07-01
+    567993600   \ 1988-01-01
+    631152000   \ 1990-01-01
+    662688000   \ 1991-01-01
+    709948800   \ 1992-07-01
+    741484800   \ 1993-07-01
+    773020800   \ 1994-07-01
+    820454400   \ 1996-01-01
+    867715200   \ 1997-07-01
+    915148800   \ 1999-01-01
+    1136073600  \ 2006-01-01
+    1230768000  \ 2009-01-01
+    1341100800  \ 2012-07-01
+    1435708800  \ 2015-07-01
+    1483228800  \ 2017-01-01
+  }
+] ;
+
+leap-second-offsets: const [
+  { 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 }
+] ;
+
+\ --- Table lookup ---
+
+\\ Look up the TAI-UTC offset for a given POSIX timestamp.
+\\ Returns the cumulative offset (10..37) for timestamps after 1972-01-01,
+\\ or 10 for timestamps before the first leap second.
+\\ Linear scan from end of table (28 entries).
+(leap-offset-for): ( posix-sec -- offset ) [
+  -1 leap-second-timestamps #len 1 -
+  \ posix-sec result idx
+  [ dup 0 >= ] [
+    dup leap-second-timestamps swap #nth
+    \ posix-sec result idx table-val
+    3 pick-n swap >=
+    \ posix-sec result idx (posix-sec >= table-val)?
+    [
+      dup leap-second-offsets swap #nth
+      \ posix-sec result idx offset
+      swap drop swap drop -1
+      \ posix-sec result idx  (result=offset, idx=-1 to exit)
+    ] [ 1 - ] if
+  ] while
+  \ posix-sec result idx
+  drop swap drop
+  dup 0 < [ drop 10 ] [ ] if
+] ;
+
+\\ Reverse lookup: find the TAI-UTC offset for a TAI timestamp.
+\\ Scans from the last table entry backward. For each entry, computes
+\\ candidate-utc = tai-sec - offset and checks against the table.
+(tai>utc-offset): ( tai-sec -- offset ) [
+  -1 leap-second-timestamps #len 1 -
+  \ tai-sec result idx
+  [ dup 0 >= ] [
+    dup leap-second-offsets swap #nth
+    \ tai-sec result idx offset
+    3 pick-n over -
+    \ tai-sec result idx offset candidate-utc
+    2 pick-n leap-second-timestamps swap #nth >=
+    \ tai-sec result idx offset (candidate-utc >= table-entry)?
+    [
+      swap drop swap drop -1
+      \ tai-sec result idx  (result=offset, idx=-1 to exit)
+    ] [ drop 1 - ] if
+  ] while
+  \ tai-sec result idx
+  drop swap drop
+  dup 0 < [ drop 10 ] [ ] if
+] ;
+
+\ --- Conversion words ---
+
+\\ Convert a UTC (POSIX) timestamp to a TAI timestamp.
+utc>tai: ( timestamp -- tai-timestamp ) [
+  dup timestamp-nsec swap timestamp-sec
+  \ nsec sec
+  dup (leap-offset-for) +
+  \ nsec tai-sec
+  swap make-tai-timestamp
+] ;
+
+\\ Convert a TAI timestamp back to a UTC (POSIX) timestamp.
+tai>utc: ( tai-timestamp -- timestamp ) [
+  dup tai-timestamp-nsec swap tai-timestamp-sec
+  \ nsec sec
+  dup (tai>utc-offset) -
+  \ nsec utc-sec
+  swap make-timestamp
+] ;
+
+\ --- Display ---
+
+inspect: method{ tai-timestamp } [
+  dup tai-timestamp-sec inspect swap tai-timestamp-nsec inspect
+  swap "<tai-timestamp " swap #append " " #append swap #append ">" #append
+] ;
