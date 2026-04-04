@@ -800,6 +800,8 @@ const AotTestEntry = struct {
     has_exitcode: bool,
     exitcode_path: []const u8,
     expected_exit_code: ?u8,
+    build_flags: []const []const u8,
+    build_flags_path: []const u8,
 };
 
 fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEntry {
@@ -875,6 +877,20 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
             }
         } else |_| {}
 
+        var build_flags: std.ArrayListUnmanaged([]const u8) = .{};
+        const build_flags_path = b.fmt("tests/aot/{s}.build-flags", .{name_without_ext});
+        if (aot_dir.openFile(b.fmt("{s}.build-flags", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            const content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            var lines = std.mem.splitScalar(u8, content, '\n');
+            while (lines.next()) |line| {
+                const trimmed = std.mem.trim(u8, line, " \t\r");
+                if (trimmed.len > 0) {
+                    build_flags.append(b.allocator, trimmed) catch {};
+                }
+            }
+        } else |_| {}
+
         entries.append(b.allocator, .{
             .name_without_ext = name_without_ext,
             .file_path = file_path,
@@ -896,6 +912,8 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
             .has_exitcode = has_exitcode,
             .exitcode_path = exitcode_path,
             .expected_exit_code = expected_exit_code,
+            .build_flags = build_flags.items,
+            .build_flags_path = build_flags_path,
         }) catch return error.OutOfMemory;
     }
 
@@ -930,6 +948,8 @@ fn addAotTests(
 
         addLibFileDeps(b, compile_run);
         compile_run.addFileInput(b.path("src/prelude.1z"));
+        for (te.build_flags) |flag| compile_run.addArg(flag);
+        if (te.build_flags.len > 0) compile_run.addFileInput(b.path(te.build_flags_path));
 
         if (is_build_only) {
             if (has_diff) {
@@ -1002,6 +1022,8 @@ fn addAotTests(
 
                 addLibFileDeps(b, update_compile);
                 update_compile.addFileInput(b.path("src/prelude.1z"));
+                for (te.build_flags) |flag| update_compile.addArg(flag);
+                if (te.build_flags.len > 0) update_compile.addFileInput(b.path(te.build_flags_path));
                 if (expected_build_exit != 0) {
                     update_compile.expectExitCode(expected_build_exit);
                 }
@@ -1104,6 +1126,8 @@ fn addAotTests(
 
             addLibFileDeps(b, update_compile);
             update_compile.addFileInput(b.path("src/prelude.1z"));
+            for (te.build_flags) |flag| update_compile.addArg(flag);
+            if (te.build_flags.len > 0) update_compile.addFileInput(b.path(te.build_flags_path));
 
             const update_chmod = b.addSystemCommand(&.{ "chmod", "+x" });
             update_chmod.addFileArg(update_binary);
