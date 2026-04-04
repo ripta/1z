@@ -1,3 +1,2 @@
-<aot>:2: error 'type-mismatch' expected string, got fixnum 42 at word '>bytes'
+<aot>:0: error 'type-mismatch' expected string, got fixnum 42 at word '>bytes'
   stack effect: ( string -- byte-array )
-  called from <aot>:0: stream-write-string

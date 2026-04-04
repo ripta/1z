@@ -101,6 +101,8 @@ pub fn freezeModuleGraph(
     defer discovered.names.deinit(ctx.quotationAllocator());
     defer discovered.defs.deinit(ctx.quotationAllocator());
     defer discovered.warning_entries.deinit(ctx.quotationAllocator());
+    defer discovered.native_names.deinit(ctx.quotationAllocator());
+    defer discovered.native_defs.deinit(ctx.quotationAllocator());
 
     // Now safe to pop the frames
     ctx.popPragmaFrame();
@@ -219,6 +221,8 @@ const DiscoveredWords = struct {
     names: std.ArrayListUnmanaged([]const u8),
     defs: std.ArrayListUnmanaged(WordDefinition),
     warning_entries: std.ArrayListUnmanaged(FreezeFeatureUse),
+    native_names: std.ArrayListUnmanaged([]const u8),
+    native_defs: std.ArrayListUnmanaged(WordDefinition),
 };
 
 /// BFS over call_word references starting from entry instructions,
@@ -250,6 +254,8 @@ fn discoverReachableWords(
         .names = .{},
         .defs = .{},
         .warning_entries = .{},
+        .native_names = .{},
+        .native_defs = .{},
     };
 
     // Seed worklist from entry instructions
@@ -257,6 +263,8 @@ fn discoverReachableWords(
         result.names.deinit(temp_allocator);
         result.defs.deinit(temp_allocator);
         result.warning_entries.deinit(temp_allocator);
+        result.native_names.deinit(temp_allocator);
+        result.native_defs.deinit(temp_allocator);
         return err;
     };
 
@@ -267,10 +275,15 @@ fn discoverReachableWords(
         // Skip parse-time-only words
         if (word.parse_time_only) continue;
 
-        // Skip native words (they're in lib1z.a)
+        // Record native words for the resolver, but don't BFS into them, since
+        // they have no instructions to discover more words
         const instrs = switch (word.action) {
             .compound => |c| c,
-            .native => continue,
+            .native => {
+                try result.native_names.append(temp_allocator, name);
+                try result.native_defs.append(temp_allocator, word);
+                continue;
+            },
         };
 
         try result.names.append(temp_allocator, name);
@@ -281,6 +294,8 @@ fn discoverReachableWords(
             result.names.deinit(temp_allocator);
             result.defs.deinit(temp_allocator);
             result.warning_entries.deinit(temp_allocator);
+            result.native_names.deinit(temp_allocator);
+            result.native_defs.deinit(temp_allocator);
             return err;
         };
     }
@@ -396,6 +411,26 @@ fn buildAotDescs(
         });
     }
 
+    // Assign IDs to discovered native words. These get is_prelude = true
+    // so the strict codegen check allows interpreter fallback.
+    for (discovered.native_names.items, discovered.native_defs.items) |name, def| {
+        const effect = def.stack_effect orelse {
+            try skipped.append(allocator, name);
+            continue;
+        };
+        const id = next_id;
+        next_id += 1;
+        try words.append(allocator, .{
+            .name = name,
+            .instructions = &.{},
+            .input_count = @intCast(effect.inputs.len),
+            .output_count = @intCast(effect.outputs.len),
+            .word_id = id,
+            .is_prelude = true,
+            .is_native = true,
+        });
+    }
+
     const max_word_id = if (next_id > 0) next_id - 1 else 0;
 
     return FreezeResult{
@@ -456,6 +491,8 @@ test "buildAotDescs assigns sequential IDs and skips effectless words" {
         .names = .{},
         .defs = .{},
         .warning_entries = .{},
+        .native_names = .{},
+        .native_defs = .{},
     };
     defer discovered.names.deinit(allocator);
     defer discovered.defs.deinit(allocator);
@@ -486,6 +523,65 @@ test "buildAotDescs assigns sequential IDs and skips effectless words" {
     try testing.expectEqual(@as(usize, 1), result.skipped_words.len);
     try testing.expectEqual(@as(usize, 0), result.warnings.len);
     try testing.expect(std.mem.eql(u8, result.skipped_words[0], "bar"));
+}
+
+test "buildAotDescs includes native words with is_prelude and empty instructions" {
+    const allocator = testing.allocator;
+    const entry_instrs = try allocator.dupe(Instruction, &[_]Instruction{
+        .{ .op = .{ .call_word = "drop" }, .line = 1 },
+    });
+    defer allocator.free(entry_instrs);
+
+    const effect = StackEffect{ .inputs = &.{}, .outputs = &.{} };
+    const native_effect = StackEffect{
+        .inputs = &.{.{ .name = "val" }},
+        .outputs = &.{.{ .name = "type" }},
+    };
+
+    var discovered = DiscoveredWords{
+        .names = .{},
+        .defs = .{},
+        .warning_entries = .{},
+        .native_names = .{},
+        .native_defs = .{},
+    };
+    defer discovered.names.deinit(allocator);
+    defer discovered.defs.deinit(allocator);
+    defer discovered.native_names.deinit(allocator);
+    defer discovered.native_defs.deinit(allocator);
+
+    // Compound word
+    try discovered.names.append(allocator, "foo");
+    try discovered.defs.append(allocator, .{
+        .name = "foo",
+        .action = .{ .compound = &.{} },
+        .stack_effect = effect,
+    });
+
+    // Native word
+    try discovered.native_names.append(allocator, "type-of");
+    try discovered.native_defs.append(allocator, .{
+        .name = "type-of",
+        .action = .{ .native = undefined },
+        .stack_effect = native_effect,
+    });
+
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+    var result = try buildAotDescs(entry_instrs, &discovered, &prelude_words, allocator);
+    defer result.deinit(allocator);
+
+    // Entry (id 0) + foo (id 1) + type-of (id 2) = 3 words
+    try testing.expectEqual(@as(usize, 3), result.words.len);
+    try testing.expectEqual(@as(u32, 2), result.max_word_id);
+
+    // Native word is last, with is_prelude and empty instructions
+    const native_word = result.words[2];
+    try testing.expectEqualStrings("type-of", native_word.name);
+    try testing.expectEqual(@as(u32, 2), native_word.word_id);
+    try testing.expect(native_word.is_prelude);
+    try testing.expectEqual(@as(usize, 0), native_word.instructions.len);
+    try testing.expectEqual(@as(u8, 1), native_word.input_count);
+    try testing.expectEqual(@as(u8, 1), native_word.output_count);
 }
 
 test "collectCallWords records >quotation warning once per caller" {

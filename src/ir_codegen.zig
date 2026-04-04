@@ -71,6 +71,11 @@ pub const AotWordDesc = struct {
     /// Prelude words are available in the AOT runtime dictionary and can
     /// safely fall back to jitInterpretedCall if codegen fails.
     is_prelude: bool = false,
+    /// Native words have no compound instructions and must always use
+    /// jitInterpretedCall at runtime. They are included in the resolver
+    /// so that non-prelude words calling them are not rejected, but they
+    /// must not enter compiled_names or be trial-compiled.
+    is_native: bool = false,
 };
 
 const supported_binary_ops = [_][]const u8{ "+", "-", "*", "/", "div", "rem", "%" };
@@ -3093,10 +3098,11 @@ pub fn emitProgramC(
     var out: std.ArrayListUnmanaged(u8) = .{};
     errdefer out.deinit(allocator);
 
-    // Build name->word_id map for compiled words
+    // Build name->word_id map for compiled words, excluding native words, which must always use jitInterpretedCall
     var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
     defer compiled_names.deinit(allocator);
     for (words) |w| {
+        if (w.is_native) continue;
         try compiled_names.put(allocator, w.name, w.word_id);
     }
 
@@ -3171,6 +3177,7 @@ pub fn emitProgramC(
     var compilable_names: std.StringHashMapUnmanaged(u32) = .{};
     defer compilable_names.deinit(allocator);
     for (words) |w| {
+        if (w.is_native) continue;
         const trial = emitWordCAot(
             w.instructions,
             w.input_count,

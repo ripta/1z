@@ -1,0 +1,4 @@
+my-type: ( val -- type ) [ type-of ] ;
+
+42 my-type drop
+"native wrap works" print-line
