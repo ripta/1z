@@ -1,0 +1,3 @@
+\ Module A: defines meters virtual type wrapping fixnum
+
+meters: virtual{ fixnum } ;

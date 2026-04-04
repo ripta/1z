@@ -1,0 +1,6 @@
+\ Module A: defines color enum with red and green
+
+color: enum{
+  red: unit
+  green: unit
+} ;

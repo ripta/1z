@@ -1,0 +1,256 @@
+\ Test cross-module behavior of generic >NAME conversion words.
+\
+\ Documents the current behavior when two modules define same-named
+\ types, including a dispatch overwrite issue where the last-loaded
+\ module's dispatch entry wins for all qualified >NAME calls.
+
+use "testing" ;
+
+\ ============================================================
+\ SECTION 1: Same-named structs, same shape (structural identity)
+\ ============================================================
+
+"struct-same: qualified >point from each module" test-section
+
+sa: "cross_mod_conv_struct_lib_a.1z" load ;
+sb: "cross_mod_conv_struct_lib_b.1z" load ;
+
+H{ x: 1 y: 2 } sa.>point sa.x>> 1 "a.>point produces correct x" assert=
+H{ x: 1 y: 2 } sa.>point sa.y>> 2 "a.>point produces correct y" assert=
+H{ x: 3 y: 4 } sb.>point sb.x>> 3 "b.>point produces correct x" assert=
+H{ x: 3 y: 4 } sb.>point sb.y>> 4 "b.>point produces correct y" assert=
+
+"struct-same: structural identity across modules" test-section
+
+sa.point sb.point = t "same-shape bare struct types are equal" assert=
+
+"struct-same: cross-module predicate acceptance" test-section
+
+H{ x: 1 y: 2 } sa.>point sb.point? t "b.point? accepts a.>point instance" assert=
+H{ x: 3 y: 4 } sb.>point sa.point? t "a.point? accepts b.>point instance" assert=
+
+"struct-same: cross-module instance equality" test-section
+
+H{ x: 1 y: 2 } sa.>point H{ x: 1 y: 2 } sb.>point = t "same values cross-module are equal" assert=
+H{ x: 1 y: 2 } sa.>point H{ x: 1 y: 3 } sb.>point = f "different values cross-module are unequal" assert=
+
+"struct-same: cross-module field access" test-section
+
+H{ x: 5 y: 6 } sa.>point sb.x>> 5 "b.x>> reads a.>point instance" assert=
+H{ x: 7 y: 8 } sb.>point sa.y>> 8 "a.y>> reads b.>point instance" assert=
+
+\ ============================================================
+\ SECTION 2: Same-named structs, different shape
+\
+\ BUG: dispatch overwrite. Both modules register >thing with dispatch
+\ key (hash, unary). The second module's registration overwrites the
+\ first, so da.>thing silently uses db's converter.
+\ ============================================================
+
+"struct-diff: dispatch overwrite — last-loaded wins" test-section
+
+da: "cross_mod_conv_struct_diff_lib_a.1z" load ;
+db: "cross_mod_conv_struct_diff_lib_b.1z" load ;
+
+\ db was loaded second, so its dispatch entry for >thing overwrites da's.
+\ da.>thing with A's fields fails because the dispatch uses B's converter.
+[ H{ x: 1 y: 2 } da.>thing ] "a.>thing with a-fields fails (dispatch overwrite)" assert-error
+
+\ db.>thing with B's fields works (last-loaded wins).
+H{ a: 3 b: 4 } db.>thing db.a>> 3 "b.>thing produces correct a" assert=
+
+\ da.>thing with B's fields succeeds — wrong converter for the qualified name.
+H{ a: 5 b: 6 } da.>thing db.a>> 5 "a.>thing silently uses b's converter (dispatch overwrite)" assert=
+
+"struct-diff: types are distinct" test-section
+
+da.thing db.thing = f "different-shape structs are distinct types" assert=
+
+"struct-diff: cross-module predicate rejection" test-section
+
+H{ a: 1 b: 2 } db.>thing da.thing? f "a.thing? rejects b.>thing instance" assert=
+
+"struct-diff: cross-module field access errors" test-section
+
+[ H{ a: 1 b: 2 } db.>thing da.x>> ] "a.x>> on b.>thing instance throws" assert-error
+
+"struct-diff: import conflict without shadow-ok" test-section
+
+[ "use \"cross_mod_conv_struct_diff_lib_a.1z\" ; use \"cross_mod_conv_struct_diff_lib_b.1z\" ;" eval-string ]
+"different-shape struct import without shadow-ok throws" assert-error
+
+\ ============================================================
+\ SECTION 3: Same-named virtual types (nominal identity)
+\
+\ BUG: same dispatch overwrite. Both modules register >meters with
+\ dispatch key (fixnum, unary). The second module's registration
+\ overwrites the first, causing va.>meters to silently create
+\ values of vb's type.
+\ ============================================================
+
+"virtual: dispatch overwrite — last-loaded wins" test-section
+
+va: "cross_mod_conv_virtual_lib_a.1z" load ;
+vb: "cross_mod_conv_virtual_lib_b.1z" load ;
+
+\ vb was loaded second. va.>meters silently uses vb's wrap.
+42 va.>meters va.meters? f "a.>meters produces b's type (dispatch overwrite)" assert=
+42 va.>meters vb.meters? t "a.>meters actually creates vb.meters" assert=
+
+\ vb.>meters works correctly (last-loaded).
+99 vb.>meters vb.meters? t "b.>meters produces b's type" assert=
+99 vb.>meters va.meters? f "b.>meters does not produce a's type" assert=
+
+"virtual: nominal identity, types are distinct" test-section
+
+va.meters vb.meters = f "same-name virtual types from different modules are distinct" assert=
+
+"virtual: cross-module unwrap rejection" test-section
+
+\ Since va.>meters actually creates vb's type (dispatch overwrite),
+\ vb.unmake-meters accepts it and va.unmake-meters rejects it.
+[ 42 va.>meters va.unmake-meters ] "a.unmake-meters rejects a.>meters (it's actually b's type)" assert-error
+42 va.>meters vb.unmake-meters 42 "b.unmake-meters accepts a.>meters (it is b's type)" assert=
+
+"virtual: cross-module type-of" test-section
+
+42 va.>meters type-of vb.meters = t "a.>meters type-of matches b.meters (overwrite)" assert=
+42 va.>meters type-of va.meters = f "a.>meters type-of does not match a.meters (overwrite)" assert=
+
+\ ============================================================
+\ SECTION 4: Same-named enums (nominal identity)
+\
+\ BUG: same dispatch overwrite. Both register >color with dispatch
+\ key (symbol, unary). Last-loaded wins. ea.>color silently converts
+\ using eb's enum definition.
+\ ============================================================
+
+"enum: dispatch overwrite — last-loaded wins" test-section
+
+ea: "cross_mod_conv_enum_lib_a.1z" load ;
+eb: "cross_mod_conv_enum_lib_b.1z" load ;
+
+\ eb was loaded second. ea.>color silently uses eb's converter.
+red: ea.>color ea.color? f "a.>color red produces b's type (dispatch overwrite)" assert=
+red: ea.>color eb.color? t "a.>color red actually creates eb.color" assert=
+
+\ eb.>color works correctly (last-loaded).
+red: eb.>color eb.color? t "b.>color red produces b's type" assert=
+red: eb.>color ea.color? f "b.>color red does not produce a's type" assert=
+
+"enum: nominal identity, types are distinct" test-section
+
+ea.color eb.color = f "same-name enums from different modules are distinct" assert=
+
+"enum: module-specific variants with dispatch overwrite" test-section
+
+\ ea.>color uses eb's converter. green is not a variant of eb, so it throws.
+[ green: ea.>color ] "a.>color green throws (dispatch uses b which lacks green)" assert-error
+
+\ blue is a variant of eb, so it works through eb's converter.
+blue: eb.>color eb.color? t "b.>color blue works" assert=
+
+\ ea.>color with blue: creates eb's blue via dispatch overwrite.
+blue: ea.>color eb.color? t "a.>color blue silently creates eb type (overwrite)" assert=
+
+"enum: variant predicates remain module-scoped" test-section
+
+red: eb.>color eb.color:red? t "b.color:red? on b.>color red is true" assert=
+red: eb.>color ea.color:red? f "a.color:red? rejects b.>color red" assert=
+
+\ ============================================================
+\ SECTION 5: Single import works (when no conflict has been loaded)
+\
+\ These use the already-loaded modules from sections 1-4 via `use`.
+\ Note: dispatch overwrite from sections 3-4 affects these too.
+\ ============================================================
+
+"single-import: struct >point works" test-section
+
+use "cross_mod_conv_struct_lib_a.1z" ;
+
+H{ x: 10 y: 20 } >point x>> 10 "imported >point produces correct x" assert=
+H{ x: 10 y: 20 } >point point? t "imported point? works" assert=
+
+"single-import: virtual >meters affected by dispatch overwrite" test-section
+
+use "cross_mod_conv_virtual_lib_a.1z" ;
+
+\ >meters was imported from va, but dispatch was overwritten by vb in section 3.
+55 >meters vb.meters? t "imported >meters creates vb type (dispatch overwrite)" assert=
+55 >meters va.meters? f "imported >meters does not create va type" assert=
+
+"single-import: enum >color affected by dispatch overwrite" test-section
+
+use "cross_mod_conv_enum_lib_a.1z" ;
+
+\ >color was imported from ea, but dispatch was overwritten by eb in section 4.
+red: >color eb.color? t "imported >color creates eb type (dispatch overwrite)" assert=
+red: >color ea.color? f "imported >color does not create ea type" assert=
+
+\ ============================================================
+\ SECTION 6: method{ extension on imported >NAME
+\ ============================================================
+
+"method-ext: extend >point with fixnum input" test-section
+
+\ Extend >point to accept a fixnum, creating a point where x=y=n
+>point: method{ fixnum } [
+  dup make-point
+] ;
+
+5 >point x>> 5 "method{ fixnum } >point sets x" assert=
+5 >point y>> 5 "method{ fixnum } >point sets y" assert=
+H{ x: 1 y: 2 } >point x>> 1 "hash >point still works after extension" assert=
+5 >point point? t "fixnum-created >point passes predicate" assert=
+
+\ ============================================================
+\ SECTION 7: method{ with qualified names (syntax probes)
+\ ============================================================
+
+"method-qual: qualified type name in method{ fails" test-section
+
+\ method{ does not support dot-qualified type names.
+\ Type resolution uses lookupTypeValueByName which only searches bare names.
+[ "ea: \"cross_mod_conv_enum_lib_a.1z\" load ; inspect: method{ ea.color } [ \"from-a\" ] ;" eval-string ]
+  "method{ ea.color } fails — qualified types not supported" assert-error
+
+"method-qual: qualified word name in method{ fails" test-section
+
+\ Registering a dispatch entry with a qualified word name also fails.
+[ "ea: \"cross_mod_conv_enum_lib_a.1z\" load ; ea.>color: method{ string } [ drop red: ea.>color ] ;" eval-string ]
+  "ea.>color: method{ ... } fails — qualified word names not supported" assert-error
+
+\ ============================================================
+\ SECTION 8: make-NAME also affected by dispatch overwrite
+\
+\ make-NAME for simple virtuals is also defined via defineWrap,
+\ which registers dispatch. Both >NAME and make-NAME are affected.
+\ ============================================================
+
+"make-name: dispatch overwrite affects make-meters too" test-section
+
+\ va and vb are already loaded from section 3.
+\ make-meters was also made generic+dispatched, so it has the same bug.
+42 va.make-meters vb.meters? t "va.make-meters creates vb type (dispatch overwrite)" assert=
+42 va.make-meters va.meters? f "va.make-meters does not create va type" assert=
+42 vb.make-meters vb.meters? t "vb.make-meters creates vb type" assert=
+
+\ ============================================================
+\ SECTION 9: Double-import const conflicts
+\ ============================================================
+
+"double-import: struct same-shape hits const redefine" test-section
+
+[ "use \"cross_mod_conv_struct_lib_b.1z\" shadow-ok ;" eval-string ]
+"second same-name struct import hits const redefine" assert-error
+
+"double-import: virtual hits const redefine" test-section
+
+[ "use \"cross_mod_conv_virtual_lib_b.1z\" shadow-ok ;" eval-string ]
+"second same-name virtual import hits const redefine" assert-error
+
+"double-import: enum hits const redefine" test-section
+
+[ "use \"cross_mod_conv_enum_lib_b.1z\" shadow-ok ;" eval-string ]
+"second same-name enum import hits const redefine" assert-error

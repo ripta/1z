@@ -1,0 +1,3 @@
+\ Module B: defines thing struct with fields a and b (different shape from A)
+
+thing: struct{ a b } ;

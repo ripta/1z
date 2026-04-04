@@ -1,0 +1,3 @@
+\ Module A: defines thing struct with fields x and y
+
+thing: struct{ x y } ;
