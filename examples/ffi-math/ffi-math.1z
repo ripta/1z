@@ -1,0 +1,27 @@
+use "ffi" ;
+use "math" ;
+
+\ Load the system math library (libm).
+"m" lib-open
+
+\ sin(pi/6) ~ 0.5
+dup "sin" lib-symbol ffi{ f64 -> f64 } bind-sig
+pi 6.0 / 1 pick-n ffi-call
+"sin(pi/6) = " print . drop
+
+\ cos(0) = 1.0
+dup "cos" lib-symbol ffi{ f64 -> f64 } bind-sig
+0.0 1 pick-n ffi-call
+"cos(0)    = " print . drop
+
+\ sqrt(2) ~ 1.4142
+dup "sqrt" lib-symbol ffi{ f64 -> f64 } bind-sig
+2.0 1 pick-n ffi-call
+"sqrt(2)   = " print . drop
+
+\ pow(2, 10) = 1024.0
+dup "pow" lib-symbol ffi{ f64 f64 -> f64 } bind-sig
+2.0 10.0 2 pick-n ffi-call
+"pow(2,10) = " print . drop
+
+resource-close
