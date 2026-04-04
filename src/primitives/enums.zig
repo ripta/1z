@@ -368,13 +368,25 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     convert_instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = enum_tv } }, .line = 0 };
     convert_instrs[1] = .{ .op = .{ .call_word = "native.enum-from-symbol" }, .line = 0 };
 
+    const convert_markers = try alloc.alloc(*Marker, markers_slice.len + 1);
+    for (markers_slice, 0..) |mk, mi| convert_markers[mi] = mk;
+    convert_markers[markers_slice.len] = @constCast(&markers_mod.generic_marker);
+
     try ctx.defineWord(convert_name, .{
         .name = convert_name,
         .stack_effect = try helpers.makeSimpleEffect(alloc, convert_effect),
-        .markers = markers_slice,
+        .markers = convert_markers,
         .provenance = .{ .generator = "enum", .parent = enum_name, .role = "conversion" },
         .action = .{ .compound = convert_instrs },
     });
+
+    if (ctx.lookupBuiltinTypeValue("symbol")) |symbol_tv| {
+        try ctx.registerDispatch(.{
+            .word_name = convert_name,
+            .type_a = symbol_tv.descriptor.?,
+            .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
+        }, .{ .body = .{ .quotation = convert_instrs } }, true);
+    }
 
     try generated_words.append(alloc, .{ .string = agg_pred_name });
     try generated_words.append(alloc, .{ .string = convert_name });

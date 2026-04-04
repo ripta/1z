@@ -378,7 +378,7 @@ fn vtypeProvenance(vtype: *const VirtualType, role: []const u8) WordProvenance {
     };
 }
 
-/// >NAME: ( value -- tagged ) - wrap a value as this virtual type
+/// >NAME: ( value -- tagged ) - wrap a value as this virtual type (generic, extensible via method{)
 pub fn defineWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
@@ -386,14 +386,28 @@ pub fn defineWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, ma
     instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.virtual-wrap" }, .line = 0 };
 
+    const generic_markers = try alloc.alloc(*Marker, markers.len + 1);
+    for (markers, 0..) |mk, i| generic_markers[i] = mk;
+    generic_markers[markers.len] = @constCast(&markers_mod.generic_marker);
+
     const effect_str = try std.fmt.allocPrint(alloc, "value -- {s}", .{vtype.name});
     try ctx.defineWord(name, .{
         .name = name,
         .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
-        .markers = markers,
+        .markers = generic_markers,
         .provenance = vtypeProvenance(vtype, "wrap"),
         .action = .{ .compound = instrs },
     });
+
+    if (ctx.lookupTypeValueByName(vtype.inner_type)) |inner_tv| {
+        if (inner_tv.descriptor) |desc| {
+            try ctx.registerDispatch(.{
+                .word_name = name,
+                .type_a = desc,
+                .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
+            }, .{ .body = .{ .quotation = instrs } }, true);
+        }
+    }
 }
 
 /// NAME>: ( tagged -- value ) - unwrap a tagged value, validating the type
@@ -595,14 +609,25 @@ pub fn defineStructHashWrap(ctx: *Context, name: []const u8, vtype: *const Virtu
     instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-hash-wrap" }, .line = 0 };
 
+    const generic_markers = try alloc.alloc(*Marker, markers.len + 1);
+    for (markers, 0..) |mk, i| generic_markers[i] = mk;
+    generic_markers[markers.len] = @constCast(&markers_mod.generic_marker);
+
     const effect_str = try std.fmt.allocPrint(alloc, "hash -- {s}", .{vtype.name});
     try ctx.defineWord(name, .{
         .name = name,
         .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
-        .markers = markers,
+        .markers = generic_markers,
         .provenance = vtypeProvenance(vtype, "hash-wrap"),
         .action = .{ .compound = instrs },
     });
+
+    const hash_tv = ctx.lookupBuiltinTypeValue("hash") orelse return;
+    try ctx.registerDispatch(.{
+        .word_name = name,
+        .type_a = hash_tv.descriptor.?,
+        .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
+    }, .{ .body = .{ .quotation = instrs } }, true);
 }
 
 /// >NAME: ( field1..fieldN -- tagged ) - struct-aware positional wrap

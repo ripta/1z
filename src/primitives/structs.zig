@@ -371,7 +371,7 @@ fn defineConstructor(ctx: *Context, name: []const u8, struct_type: *const Struct
     });
 }
 
-// >NAME: ( hash -- instance ) - hash-to-struct converter
+// >NAME: ( hash -- instance ) - hash-to-struct converter (generic, extensible via method{)
 fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
@@ -379,14 +379,25 @@ fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const Stru
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.hash-to-struct" }, .line = 0 };
 
+    const generic_markers = try alloc.alloc(*Marker, markers.len + 1);
+    for (markers, 0..) |mk, i| generic_markers[i] = mk;
+    generic_markers[markers.len] = @constCast(&markers_mod.generic_marker);
+
     const effect_str = try std.fmt.allocPrint(alloc, "hash -- {s}", .{struct_type.name});
     try ctx.defineWord(name, .{
         .name = name,
         .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
-        .markers = markers,
+        .markers = generic_markers,
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "hash-converter" },
         .action = .{ .compound = instrs },
     });
+
+    const hash_tv = ctx.lookupBuiltinTypeValue("hash") orelse return;
+    try ctx.registerDispatch(.{
+        .word_name = name,
+        .type_a = hash_tv.descriptor.?,
+        .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
+    }, .{ .body = .{ .quotation = instrs } }, true);
 }
 
 /// unmake-NAME: ( instance -- field1 field2 ... ) - positional destructor
