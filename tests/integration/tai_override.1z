@@ -1,0 +1,23 @@
+\ TAI leap second table override via ONEZ_LEAP_SECONDS
+\
+\ This test uses a custom 2-entry leap second table:
+\   offset 10 at POSIX 0
+\   offset 99 at POSIX 1000
+
+use "testing" ;
+use "time" ;
+use "tai" ;
+
+"override table offsets" test-section
+
+\ Before the second entry (timestamp < 1000): offset = 10
+500 0 make-timestamp >tai-timestamp tai-timestamp-sec 510 "pre-1000: offset 10" assert=
+
+\ At and after the second entry (timestamp >= 1000): offset = 99
+1000 0 make-timestamp >tai-timestamp tai-timestamp-sec 1099 "at 1000: offset 99" assert=
+2000 0 make-timestamp >tai-timestamp tai-timestamp-sec 2099 "future: offset 99" assert=
+
+"override round-trip" test-section
+
+500 0 make-timestamp >tai-timestamp >timestamp timestamp-sec 500 "round-trip pre-1000" assert=
+2000 0 make-timestamp >tai-timestamp >timestamp timestamp-sec 2000 "round-trip post-1000" assert=

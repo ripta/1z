@@ -68,3 +68,64 @@ use "tai" ;
 "inspect" test-section
 
 10 0 make-tai-timestamp inspect "<tai-timestamp 10 0>" "inspect format" assert=
+
+"tai-timestamp + duration" test-section
+
+\ Add 5 seconds to a TAI timestamp
+1000 0 make-tai-timestamp 5 seconds +
+dup tai-timestamp-sec 1005 "tai + 5s: sec" assert=
+tai-timestamp-nsec 0 "tai + 5s: nsec" assert=
+
+\ Add sub-second duration
+1000 0 make-tai-timestamp 500000000 nanoseconds +
+dup tai-timestamp-sec 1000 "tai + 500ms: sec" assert=
+tai-timestamp-nsec 500000000 "tai + 500ms: nsec" assert=
+
+\ Nsec overflow: 900ms + 200ms = +1sec, 100ms
+1000 900000000 make-tai-timestamp 200000000 nanoseconds +
+dup tai-timestamp-sec 1001 "tai nsec overflow: sec" assert=
+tai-timestamp-nsec 100000000 "tai nsec overflow: nsec" assert=
+
+\ Commutative: duration + tai-timestamp
+5 seconds 1000 0 make-tai-timestamp +
+tai-timestamp-sec 1005 "duration + tai: sec" assert=
+
+"tai-timestamp - duration" test-section
+
+1000 500000000 make-tai-timestamp 3 seconds -
+dup tai-timestamp-sec 997 "tai - 3s: sec" assert=
+tai-timestamp-nsec 500000000 "tai - 3s: nsec" assert=
+
+\ Nsec underflow: 100ms - 200ms = -1sec, 900ms
+1000 100000000 make-tai-timestamp 200000000 nanoseconds -
+dup tai-timestamp-sec 999 "tai nsec underflow: sec" assert=
+tai-timestamp-nsec 900000000 "tai nsec underflow: nsec" assert=
+
+"tai-timestamp - tai-timestamp" test-section
+
+1010 0 make-tai-timestamp 1000 0 make-tai-timestamp -
+dup duration? t "tai - tai is duration" assert=
+unmake-duration 10000000000 "tai - tai = 10s in nanos" assert=
+
+1000 500000000 make-tai-timestamp 1000 200000000 make-tai-timestamp -
+unmake-duration 300000000 "tai sub-second diff" assert=
+
+"tai-timestamp comparison" test-section
+
+1000 0 make-tai-timestamp 1000 0 make-tai-timestamp = t "equal tai-timestamps" assert=
+1000 0 make-tai-timestamp 2000 0 make-tai-timestamp = f "unequal tai-timestamps" assert=
+1000 500 make-tai-timestamp 1000 600 make-tai-timestamp = f "unequal nsec" assert=
+
+1000 0 make-tai-timestamp 2000 0 make-tai-timestamp < t "tai < by sec" assert=
+2000 0 make-tai-timestamp 1000 0 make-tai-timestamp < f "tai not < by sec" assert=
+1000 100 make-tai-timestamp 1000 200 make-tai-timestamp < t "tai < by nsec" assert=
+
+2000 0 make-tai-timestamp 1000 0 make-tai-timestamp > t "tai > by sec" assert=
+1000 0 make-tai-timestamp 2000 0 make-tai-timestamp > f "tai not > by sec" assert=
+1000 200 make-tai-timestamp 1000 100 make-tai-timestamp > t "tai > by nsec" assert=
+
+"tai-now" test-section
+
+tai-now tai-timestamp? t "tai-now returns tai-timestamp" assert=
+tai-now tai-timestamp-sec 0 > t "tai-now sec is positive" assert=
+tai-now tai-now swap >= t "consecutive tai-now is monotonic" assert=

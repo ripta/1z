@@ -60,3 +60,73 @@ Stack: [ ]
 Stack: [ ]
 PASS: inspect format
 Stack: [ ]
+=== tai-timestamp + duration ===
+Stack: [ ]
+Stack: [ <tai-timestamp tai-inner{ tai-sec: 1005 tai-nsec: 0 }> ]
+PASS: tai + 5s: sec
+Stack: [ <tai-timestamp tai-inner{ tai-sec: 1005 tai-nsec: 0 }> ]
+PASS: tai + 5s: nsec
+Stack: [ ]
+Stack: [ <tai-timestamp tai-inner{ tai-sec: 1000 tai-nsec: 500000000 }> ]
+PASS: tai + 500ms: sec
+Stack: [ <tai-timestamp tai-inner{ tai-sec: 1000 tai-nsec: 500000000 }> ]
+PASS: tai + 500ms: nsec
+Stack: [ ]
+Stack: [ <tai-timestamp tai-inner{ tai-sec: 1001 tai-nsec: 100000000 }> ]
+PASS: tai nsec overflow: sec
+Stack: [ <tai-timestamp tai-inner{ tai-sec: 1001 tai-nsec: 100000000 }> ]
+PASS: tai nsec overflow: nsec
+Stack: [ ]
+Stack: [ <tai-timestamp tai-inner{ tai-sec: 1005 tai-nsec: 0 }> ]
+PASS: duration + tai: sec
+Stack: [ ]
+=== tai-timestamp - duration ===
+Stack: [ ]
+Stack: [ <tai-timestamp tai-inner{ tai-sec: 997 tai-nsec: 500000000 }> ]
+PASS: tai - 3s: sec
+Stack: [ <tai-timestamp tai-inner{ tai-sec: 997 tai-nsec: 500000000 }> ]
+PASS: tai - 3s: nsec
+Stack: [ ]
+Stack: [ <tai-timestamp tai-inner{ tai-sec: 999 tai-nsec: 900000000 }> ]
+PASS: tai nsec underflow: sec
+Stack: [ <tai-timestamp tai-inner{ tai-sec: 999 tai-nsec: 900000000 }> ]
+PASS: tai nsec underflow: nsec
+Stack: [ ]
+=== tai-timestamp - tai-timestamp ===
+Stack: [ ]
+Stack: [ <duration 10000000000> ]
+PASS: tai - tai is duration
+Stack: [ <duration 10000000000> ]
+PASS: tai - tai = 10s in nanos
+Stack: [ ]
+Stack: [ <duration 300000000> ]
+PASS: tai sub-second diff
+Stack: [ ]
+=== tai-timestamp comparison ===
+Stack: [ ]
+PASS: equal tai-timestamps
+Stack: [ ]
+PASS: unequal tai-timestamps
+Stack: [ ]
+PASS: unequal nsec
+Stack: [ ]
+PASS: tai < by sec
+Stack: [ ]
+PASS: tai not < by sec
+Stack: [ ]
+PASS: tai < by nsec
+Stack: [ ]
+PASS: tai > by sec
+Stack: [ ]
+PASS: tai not > by sec
+Stack: [ ]
+PASS: tai > by nsec
+Stack: [ ]
+=== tai-now ===
+Stack: [ ]
+PASS: tai-now returns tai-timestamp
+Stack: [ ]
+PASS: tai-now sec is positive
+Stack: [ ]
+PASS: consecutive tai-now is monotonic
+Stack: [ ]

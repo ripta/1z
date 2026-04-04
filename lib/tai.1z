@@ -5,6 +5,9 @@
 \ and TAI timestamps use a bundled leap second table.
 
 use "time" ;
+use "strings" ;
+use "conversions" ;
+use "text" ;
 
 \ --- tai-timestamp virtual type ---
 
@@ -20,43 +23,89 @@ tai-timestamp-nsec: ( tai-timestamp -- nsec )     [ unmake-tai-timestamp tai-nse
 \ Each entry marks the POSIX timestamp (UTC midnight) when a new leap
 \ second took effect, paired with the cumulative TAI-UTC offset at that
 \ point. Source: IERS Bulletin C. 28 entries from 1972 through 2017.
+\
+\ The table can be overridden by setting the ONEZ_LEAP_SECONDS
+\ environment variable to a file path. The file format is one entry per
+\ line, each line containing POSIX_TIMESTAMP OFFSET separated by
+\ whitespace. Lines starting with # are comments.
 
-leap-second-timestamps: const [
-  {
-    63072000    \ 1972-01-01
-    78796800    \ 1972-07-01
-    94694400    \ 1973-01-01
-    126230400   \ 1974-01-01
-    157766400   \ 1975-01-01
-    189302400   \ 1976-01-01
-    220924800   \ 1977-01-01
-    252460800   \ 1978-01-01
-    283996800   \ 1979-01-01
-    315532800   \ 1980-01-01
-    362793600   \ 1981-07-01
-    394329600   \ 1982-07-01
-    425865600   \ 1983-07-01
-    489024000   \ 1985-07-01
-    567993600   \ 1988-01-01
-    631152000   \ 1990-01-01
-    662688000   \ 1991-01-01
-    709948800   \ 1992-07-01
-    741484800   \ 1993-07-01
-    773020800   \ 1994-07-01
-    820454400   \ 1996-01-01
-    867715200   \ 1997-07-01
-    915148800   \ 1999-01-01
-    1136073600  \ 2006-01-01
-    1230768000  \ 2009-01-01
-    1341100800  \ 2012-07-01
-    1435708800  \ 2015-07-01
-    1483228800  \ 2017-01-01
+(default-leap-table): [
+  H{
+    timestamps: {
+      63072000    \ 1972-01-01
+      78796800    \ 1972-07-01
+      94694400    \ 1973-01-01
+      126230400   \ 1974-01-01
+      157766400   \ 1975-01-01
+      189302400   \ 1976-01-01
+      220924800   \ 1977-01-01
+      252460800   \ 1978-01-01
+      283996800   \ 1979-01-01
+      315532800   \ 1980-01-01
+      362793600   \ 1981-07-01
+      394329600   \ 1982-07-01
+      425865600   \ 1983-07-01
+      489024000   \ 1985-07-01
+      567993600   \ 1988-01-01
+      631152000   \ 1990-01-01
+      662688000   \ 1991-01-01
+      709948800   \ 1992-07-01
+      741484800   \ 1993-07-01
+      773020800   \ 1994-07-01
+      820454400   \ 1996-01-01
+      867715200   \ 1997-07-01
+      915148800   \ 1999-01-01
+      1136073600  \ 2006-01-01
+      1230768000  \ 2009-01-01
+      1341100800  \ 2012-07-01
+      1435708800  \ 2015-07-01
+      1483228800  \ 2017-01-01
+    }
+    offsets: {
+      10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37
+    }
   }
 ] ;
 
-leap-second-offsets: const [
-  { 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 }
+(parse-leap-line): ( timestamps offsets line -- timestamps offsets ) [
+  trim
+  dup #len 0 = [ drop ] [
+    dup "#" #starts-with? [ drop ] [
+      " " split
+      dup #len 2 >= [
+        dup 0 #nth parse-integer swap
+        1 #nth parse-integer
+        \ Stack: timestamps offsets ts offset
+        2 pick-n swap #push! drop
+        \ Stack: timestamps offsets ts
+        2 pick-n swap #push! drop
+        \ Stack: timestamps offsets
+      ] [ drop ] if
+    ] if
+  ] if
 ] ;
+
+(parse-leap-file): ( path -- hash ) [
+  read-lines
+  V{ } V{ }
+  \ lines timestamps offsets
+  2 pick-n [ (parse-leap-line) ] #each
+  \ lines timestamps offsets
+  <rot- drop
+  \ timestamps offsets
+  >array swap >array swap
+  H{ } swap offsets: swap @set swap timestamps: swap @set
+] ;
+
+(leap-table): const [
+  environ "ONEZ_LEAP_SECONDS" @has?
+  [ environ "ONEZ_LEAP_SECONDS" @get (parse-leap-file) ]
+  [ (default-leap-table) ]
+  if
+] ;
+
+leap-second-timestamps: const [ (leap-table) timestamps: @get ] ;
+leap-second-offsets: const [ (leap-table) offsets: @get ] ;
 
 \ --- Table lookup ---
 
@@ -132,4 +181,32 @@ leap-second-offsets: const [
 inspect: method{ tai-timestamp } [
   dup tai-timestamp-sec inspect swap tai-timestamp-nsec inspect
   swap "<tai-timestamp " swap #append " " #append swap #append ">" #append
+] ;
+
+\ --- TAI arithmetic ---
+
+tai-timestamp+nanos: ( tai nanos -- tai ) [
+  over tai-timestamp-sec -rot>
+  swap tai-timestamp-nsec +
+  ns>sec-nsec [ + ] dip
+  make-tai-timestamp
+] ;
+
++: method{ tai-timestamp duration } [ unmake-duration tai-timestamp+nanos ] ;
++: method{ duration tai-timestamp } [ swap unmake-duration tai-timestamp+nanos ] ;
+-: method{ tai-timestamp duration } [ unmake-duration 0 swap - tai-timestamp+nanos ] ;
+-: method{ tai-timestamp tai-timestamp } [ over tai-timestamp-sec over tai-timestamp-sec - -rot> swap tai-timestamp-nsec swap tai-timestamp-nsec - swap 1000000000 * + >duration ] ;
+
+\ --- TAI comparison ---
+
+<: method{ tai-timestamp tai-timestamp } [ over tai-timestamp-sec over tai-timestamp-sec 2dup = [ 2drop swap tai-timestamp-nsec swap tai-timestamp-nsec < ] [ < 2nip ] if ] ;
+>: method{ tai-timestamp tai-timestamp } [ over tai-timestamp-sec over tai-timestamp-sec 2dup = [ 2drop swap tai-timestamp-nsec swap tai-timestamp-nsec > ] [ > 2nip ] if ] ;
+=: method{ tai-timestamp tai-timestamp } [ over tai-timestamp-sec over tai-timestamp-sec = [ swap tai-timestamp-nsec swap tai-timestamp-nsec = ] [ 2drop f ] if ] ;
+
+\ --- tai-now ---
+
+\\ Return the current time as a TAI timestamp.
+\\ Synthesized from clock-realtime plus the leap second table offset.
+tai-now: ( -- tai-timestamp ) [
+  clock-realtime swap dup (leap-offset-for) + swap make-tai-timestamp
 ] ;

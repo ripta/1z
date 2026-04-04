@@ -1,0 +1,4 @@
+# Custom leap second table for testing
+# Only 2 entries: offset 10 at epoch, offset 99 at timestamp 1000
+0 10
+1000 99

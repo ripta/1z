@@ -1,0 +1,14 @@
+=== override table offsets ===
+Stack: [ ]
+PASS: pre-1000: offset 10
+Stack: [ ]
+PASS: at 1000: offset 99
+Stack: [ ]
+PASS: future: offset 99
+Stack: [ ]
+=== override round-trip ===
+Stack: [ ]
+PASS: round-trip pre-1000
+Stack: [ ]
+PASS: round-trip post-1000
+Stack: [ ]

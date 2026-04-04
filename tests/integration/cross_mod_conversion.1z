@@ -213,13 +213,13 @@ H{ x: 1 y: 2 } >point x>> 1 "hash >point still works after extension" assert=
 \ method{ does not support dot-qualified type names.
 \ Type resolution uses lookupTypeValueByName which only searches bare names.
 [ "ea: \"cross_mod_conv_enum_lib_a.1z\" load ; inspect: method{ ea.color } [ \"from-a\" ] ;" eval-string ]
-  "method{ ea.color } fails — qualified types not supported" assert-error
+"method{ ea.color } fails — qualified types not supported" assert-error
 
 "method-qual: qualified word name in method{ fails" test-section
 
 \ Registering a dispatch entry with a qualified word name also fails.
 [ "ea: \"cross_mod_conv_enum_lib_a.1z\" load ; ea.>color: method{ string } [ drop red: ea.>color ] ;" eval-string ]
-  "ea.>color: method{ ... } fails — qualified word names not supported" assert-error
+"ea.>color: method{ ... } fails — qualified word names not supported" assert-error
 
 \ ============================================================
 \ SECTION 8: make-NAME also affected by dispatch overwrite
