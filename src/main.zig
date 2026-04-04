@@ -765,6 +765,8 @@ fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var cli_prelude_path: ?[]const u8 = null;
     var cli_load_paths: std.ArrayListUnmanaged([]const u8) = .{};
     defer cli_load_paths.deinit(allocator);
+    var static_libs: std.ArrayListUnmanaged([]const u8) = .{};
+    defer static_libs.deinit(allocator);
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -783,6 +785,12 @@ fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) u8 {
             cli_prelude_path = arg["--prelude=".len..];
         } else if (std.mem.startsWith(u8, arg, "--load-path=")) {
             cli_load_paths.append(allocator, arg["--load-path=".len..]) catch {
+                err_writer.writeAll("Error: out of memory\n") catch {};
+                err_writer.flush() catch {};
+                return 1;
+            };
+        } else if (std.mem.startsWith(u8, arg, "--link-static=")) {
+            static_libs.append(allocator, arg["--link-static=".len..]) catch {
                 err_writer.writeAll("Error: out of memory\n") catch {};
                 err_writer.flush() catch {};
                 return 1;
@@ -897,6 +905,7 @@ fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) u8 {
         freeze_result.words,
         freeze_result.entry_word_id,
         freeze_result.max_word_id,
+        static_libs.items,
         &codegen_diagnostics,
         allocator,
     ) catch |err| {
@@ -968,6 +977,10 @@ fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     cc_argv.append(allocator, tmp_path) catch return 1;
     cc_argv.append(allocator, resolved_lib) catch return 1;
     cc_argv.append(allocator, "-lffi") catch return 1;
+    for (static_libs.items) |lib_name| {
+        const flag = std.fmt.allocPrint(allocator, "-l{s}", .{lib_name}) catch return 1;
+        cc_argv.append(allocator, flag) catch return 1;
+    }
 
     var child = std.process.Child.init(cc_argv.items, allocator);
     child.stderr_behavior = .Pipe;

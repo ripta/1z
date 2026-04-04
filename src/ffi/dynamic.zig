@@ -66,9 +66,34 @@ fn allocPrintZ(alloc: std.mem.Allocator, comptime fmt: []const u8, args: anytype
 /// (e.g., "foo" -> "libfoo.so" on Linux).
 ///
 /// The returned resource must be closed when no longer needed to free associated resources.
+///
+/// If the library is registered as statically linked by the --link-static=<LIB> flag, it will
+/// be opened with dlopen(NULL) instead, in order to access the main executable's symbol table.
+/// In this case, the resource will have a type name of "dylib-static" and will not be closed
+/// when the resource is closed, since it does not represent an actual dynamic library handle.
 fn nativeLibOpen(ctx: *Context) anyerror!void {
     const alloc = ctx.arena.allocator();
     const name = try helpers.popString(ctx);
+
+    const is_static = for (ctx.static_ffi_libs) |lib| {
+        if (std.mem.eql(u8, lib, name)) break true;
+    } else false;
+
+    if (is_static) {
+        const handle = std.c.dlopen(null, .{ .LAZY = true }) orelse {
+            helpers.setErrorContext(ctx, "dlopen(NULL) failed for static lib: {s}", .{name});
+            return error.FFILibraryNotFound;
+        };
+        const r = try alloc.create(Resource);
+        r.* = .{
+            .type_name = "dylib-static",
+            .ptr = @ptrCast(handle),
+            .closed = false,
+            .close_fn = .none,
+        };
+        try ctx.stack.push(.{ .resource = r });
+        return;
+    }
 
     const open_name: [:0]const u8 = if (isExplicitPath(name))
         try alloc.dupeZ(u8, name)
@@ -109,17 +134,28 @@ fn nativeLibSymbol(ctx: *Context) anyerror!void {
     const lib_resource = try helpers.popResource(ctx);
     try error_mapping.ensureResourceOpen(lib_resource);
 
-    if (!std.mem.eql(u8, lib_resource.type_name, "dylib")) {
+    const is_static = std.mem.eql(u8, lib_resource.type_name, "dylib-static");
+    if (!is_static and !std.mem.eql(u8, lib_resource.type_name, "dylib")) {
         helpers.setTypeMismatchError(ctx, "dylib resource", .{ .resource = lib_resource });
         return error.TypeMismatch;
     }
 
-    const dynlib_ptr: *std.DynLib = @ptrCast(@alignCast(lib_resource.ptr.?));
     const name_z = try alloc.dupeZ(u8, name);
 
-    const sym = dynlib_ptr.lookup(*anyopaque, name_z) orelse {
-        helpers.setErrorContext(ctx, "symbol not found: {s}", .{name});
-        return error.FFISymbolNotFound;
+    const sym: *anyopaque = if (is_static) blk: {
+        // Static handle: raw dlopen(NULL) pointer, use dlsym directly.
+        const handle: *anyopaque = lib_resource.ptr.?;
+        break :blk std.c.dlsym(handle, name_z) orelse {
+            helpers.setErrorContext(ctx, "symbol not found: {s}", .{name});
+            return error.FFISymbolNotFound;
+        };
+    } else blk: {
+        // Dynamic handle: std.DynLib wrapper.
+        const dynlib_ptr: *std.DynLib = @ptrCast(@alignCast(lib_resource.ptr.?));
+        break :blk dynlib_ptr.lookup(*anyopaque, name_z) orelse {
+            helpers.setErrorContext(ctx, "symbol not found: {s}", .{name});
+            return error.FFISymbolNotFound;
+        };
     };
 
     const r = try alloc.create(Resource);

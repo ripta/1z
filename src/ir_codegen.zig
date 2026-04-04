@@ -3086,6 +3086,7 @@ pub fn emitProgramC(
     words: []const AotWordDesc,
     entry_word_id: u32,
     max_word_id: u32,
+    static_libs: []const []const u8,
     diagnostics: *CodegenDiagnostics,
     allocator: Allocator,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
@@ -3100,7 +3101,7 @@ pub fn emitProgramC(
     }
 
     // 1. Preamble
-    try out.appendSlice(allocator, "#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n\n");
+    try out.appendSlice(allocator, "#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n#include <string.h>\n\n");
 
     // 2. Callback extern declarations -- emit all unconditionally since the
     // two-pass compilation may introduce interpreter fallback calls that
@@ -3129,6 +3130,7 @@ pub fn emitProgramC(
         \\extern int32_t onez_runtime_run(void *rt, uint32_t entry_word_id);
         \\extern void onez_print_error(void *rt);
         \\extern void onez_deinit(void *rt);
+        \\extern int onez_set_static_libs(void *rt, const char **names, unsigned int count);
         \\
         \\
     );
@@ -3329,6 +3331,25 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "int main(int argc, char **argv) {\n");
     try out.appendSlice(allocator, "    void *rt = onez_init();\n");
     try out.appendSlice(allocator, "    onez_set_args(rt, argc, argv);\n");
+
+    // Register statically linked FFI libraries.
+    if (static_libs.len > 0) {
+        try out.appendSlice(allocator, "    {\n");
+        try out.appendSlice(allocator, "        static const char *static_ffi_libs[] = {\n");
+        for (static_libs) |lib| {
+            try out.appendSlice(allocator, "            \"");
+            try out.appendSlice(allocator, lib);
+            try out.appendSlice(allocator, "\",\n");
+        }
+        try out.appendSlice(allocator, "        };\n");
+
+        var count_buf: [20]u8 = undefined;
+        const count_str = std.fmt.bufPrint(&count_buf, "{d}", .{static_libs.len}) catch unreachable;
+        try out.appendSlice(allocator, "        onez_set_static_libs(rt, static_ffi_libs, ");
+        try out.appendSlice(allocator, count_str);
+        try out.appendSlice(allocator, ");\n");
+        try out.appendSlice(allocator, "    }\n");
+    }
 
     // Format dispatch table size
     var size_buf: [20]u8 = undefined;
@@ -5385,7 +5406,7 @@ test "emitProgramC generates complete C source" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, 0, 1, &diag, testing.allocator);
+    const source = try emitProgramC(&words, 0, 1, &.{}, &diag, testing.allocator);
     defer testing.allocator.free(source);
 
     // Preamble
@@ -5424,7 +5445,7 @@ test "emitProgramC dispatch table has correct entries" {
     };
 
     var diag2: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, 0, 2, &diag2, testing.allocator);
+    const source = try emitProgramC(&words, 0, 2, &.{}, &diag2, testing.allocator);
     defer testing.allocator.free(source);
 
     // word_id 0 -> onez_w_foo
@@ -5445,7 +5466,7 @@ test "emitProgramC output compiles with cc" {
     };
 
     var diag3: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, 1, 1, &diag3, testing.allocator);
+    const source = try emitProgramC(&words, 1, 1, &.{}, &diag3, testing.allocator);
     defer testing.allocator.free(source);
 
     var tmp_dir = testing.tmpDir(.{});

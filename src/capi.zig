@@ -322,6 +322,41 @@ export fn onez_set_args(ptr: ?*anyopaque, argc: c_int, argv: [*]const [*:0]const
     return ONEZ_OK;
 }
 
+/// Register library names that are statically linked into the executable.
+///
+/// When `lib-open` encounters one of these names at runtime, it uses
+/// `dlopen(NULL)`, relying on the main executable's symbol table, instead of
+/// loading a shared library. This enables AOT executables built with
+/// `--link-static=LIB` to resolve FFI symbols without a runtime .so/.dylib.
+///
+/// This is a single-shot, non-additive call: it replaces any previously
+/// registered list rather than appending to it. Must be called before
+/// running any 1z code.
+///
+/// Also usable from the C embedding API -- any host that statically links
+/// a library can call this to get the same behavior.
+export fn onez_set_static_libs(ptr: ?*anyopaque, names: [*]const [*:0]const u8, count: u32) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const allocator = handle.gpa.allocator();
+    const n: usize = @intCast(count);
+
+    const libs = allocator.alloc([]const u8, n) catch return ONEZ_ERR_ALLOC;
+    for (0..n) |i| {
+        const name = std.mem.span(names[i]);
+        libs[i] = allocator.dupe(u8, name) catch {
+            for (0..i) |j| allocator.free(libs[j]);
+            allocator.free(libs);
+            return ONEZ_ERR_ALLOC;
+        };
+    }
+
+    for (handle.ctx.static_ffi_libs) |old| allocator.free(old);
+    if (handle.ctx.static_ffi_libs.len > 0) allocator.free(handle.ctx.static_ffi_libs);
+
+    handle.ctx.static_ffi_libs = libs;
+    return ONEZ_OK;
+}
+
 // =========================================================================
 // AOT Runtime API
 // =========================================================================

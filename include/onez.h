@@ -168,6 +168,23 @@ int onez_set_source(onez_t ctx, const char *data, size_t len);
  */
 int onez_set_args(onez_t ctx, int argc, char **argv);
 
+/*
+ * Register library names that are statically linked into the executable.
+ *
+ * When `lib-open` encounters one of these names at runtime, it uses
+ * dlopen(NULL) to access the main executable's symbol table instead of
+ * loading a shared library. This enables AOT executables built with
+ * --link-static=LIB to resolve FFI symbols without a runtime .so/.dylib.
+ *
+ * This is a single-shot, non-additive call: it replaces any previously
+ * registered list rather than appending to it. Must be called before
+ * running any 1z code.
+ *
+ * The name strings are copied; the caller retains ownership of the array
+ * and its contents.
+ */
+int onez_set_static_libs(onez_t ctx, const char **names, unsigned int count);
+
 /* ---- AOT Runtime ---- */
 
 /*

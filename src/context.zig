@@ -268,6 +268,10 @@ pub const Context = struct {
     stdlib_path: ?[]const u8 = null,
     /// Program arguments passed after the file path on the command line
     program_args: []const []const u8 = &.{},
+    /// Library names registered as statically linked into the executable.
+    /// When lib-open encounters one of these names, it uses dlopen(NULL)
+    /// instead of loading a shared library.
+    static_ffi_libs: []const []const u8 = &.{},
     /// Target frame index for `import` to write definitions into.
     /// Set by `load` to its local frame index so that `import` (which may run
     /// inside combinator frames like `if`) writes to the load frame, not to
@@ -617,6 +621,7 @@ pub const Context = struct {
             .load_paths = parent.load_paths,
             .stdlib_path = parent.stdlib_path,
             .program_args = parent.program_args,
+            .static_ffi_libs = parent.static_ffi_libs,
             .builtin_type_array = parent.builtin_type_array,
             .dispatch_any_sentinel = parent.dispatch_any_sentinel,
             .dispatch_unary_sentinel = parent.dispatch_unary_sentinel,
