@@ -16,54 +16,54 @@ use "tai" ;
 1234567890 123456789 make-tai-timestamp tai-timestamp-sec 1234567890 "tai-timestamp-sec" assert=
 1234567890 123456789 make-tai-timestamp tai-timestamp-nsec 123456789 "tai-timestamp-nsec" assert=
 
-"utc>tai known offsets" test-section
+">tai-timestamp known offsets" test-section
 
 \ Epoch (1970-01-01): before 1972, offset = 10
-0 0 make-timestamp utc>tai tai-timestamp-sec 10 "epoch: TAI sec = 10" assert=
-0 0 make-timestamp utc>tai tai-timestamp-nsec 0 "epoch: nsec preserved" assert=
+0 0 make-timestamp >tai-timestamp tai-timestamp-sec 10 "epoch: TAI sec = 10" assert=
+0 0 make-timestamp >tai-timestamp tai-timestamp-nsec 0 "epoch: nsec preserved" assert=
 
 \ 1972-07-01 (78796800): offset = 11
-78796800 0 make-timestamp utc>tai tai-timestamp-sec 78796811 "1972-07-01: offset 11" assert=
+78796800 0 make-timestamp >tai-timestamp tai-timestamp-sec 78796811 "1972-07-01: offset 11" assert=
 
 \ 1999-01-01 (915148800): offset = 32
-915148800 0 make-timestamp utc>tai tai-timestamp-sec 915148832 "1999-01-01: offset 32" assert=
+915148800 0 make-timestamp >tai-timestamp tai-timestamp-sec 915148832 "1999-01-01: offset 32" assert=
 
 \ 2000-01-01 (946684800): between 1999-01-01 and 2006-01-01, offset = 32
-946684800 0 make-timestamp utc>tai tai-timestamp-sec 946684832 "2000-01-01: offset 32" assert=
+946684800 0 make-timestamp >tai-timestamp tai-timestamp-sec 946684832 "2000-01-01: offset 32" assert=
 
 \ 2017-01-01 (1483228800): offset = 37
-1483228800 0 make-timestamp utc>tai tai-timestamp-sec 1483228837 "2017-01-01: offset 37" assert=
+1483228800 0 make-timestamp >tai-timestamp tai-timestamp-sec 1483228837 "2017-01-01: offset 37" assert=
 
 \ nsec preserved through conversion
-100 500000000 make-timestamp utc>tai tai-timestamp-nsec 500000000 "nsec preserved in utc>tai" assert=
+100 500000000 make-timestamp >tai-timestamp tai-timestamp-nsec 500000000 "nsec preserved in >tai-timestamp" assert=
 
-"tai>utc round-trip" test-section
+">timestamp round-trip" test-section
 
-\ Round-trip: utc>tai then tai>utc recovers original
-0 0 make-timestamp utc>tai tai>utc timestamp-sec 0 "round-trip epoch sec" assert=
-0 0 make-timestamp utc>tai tai>utc timestamp-nsec 0 "round-trip epoch nsec" assert=
+\ Round-trip: >tai-timestamp then >timestamp recovers original
+0 0 make-timestamp >tai-timestamp >timestamp timestamp-sec 0 "round-trip epoch sec" assert=
+0 0 make-timestamp >tai-timestamp >timestamp timestamp-nsec 0 "round-trip epoch nsec" assert=
 
-78796800 0 make-timestamp utc>tai tai>utc timestamp-sec 78796800 "round-trip 1972-07-01 sec" assert=
+78796800 0 make-timestamp >tai-timestamp >timestamp timestamp-sec 78796800 "round-trip 1972-07-01 sec" assert=
 
-946684800 123000000 make-timestamp utc>tai tai>utc timestamp-sec 946684800 "round-trip 2000-01-01 sec" assert=
-946684800 123000000 make-timestamp utc>tai tai>utc timestamp-nsec 123000000 "round-trip 2000-01-01 nsec" assert=
+946684800 123000000 make-timestamp >tai-timestamp >timestamp timestamp-sec 946684800 "round-trip 2000-01-01 sec" assert=
+946684800 123000000 make-timestamp >tai-timestamp >timestamp timestamp-nsec 123000000 "round-trip 2000-01-01 nsec" assert=
 
-1483228800 0 make-timestamp utc>tai tai>utc timestamp-sec 1483228800 "round-trip 2017-01-01 sec" assert=
+1483228800 0 make-timestamp >tai-timestamp >timestamp timestamp-sec 1483228800 "round-trip 2017-01-01 sec" assert=
 
 "boundary cases" test-section
 
 \ Before 1972: offset = 10
-1000 0 make-timestamp utc>tai tai-timestamp-sec 1010 "pre-1972: offset 10" assert=
+1000 0 make-timestamp >tai-timestamp tai-timestamp-sec 1010 "pre-1972: offset 10" assert=
 
 \ Exactly at first leap second boundary (1972-01-01 = 63072000): offset = 10
-63072000 0 make-timestamp utc>tai tai-timestamp-sec 63072010 "at 1972-01-01: offset 10" assert=
+63072000 0 make-timestamp >tai-timestamp tai-timestamp-sec 63072010 "at 1972-01-01: offset 10" assert=
 
 \ Just before second boundary (1972-07-01 = 78796800): offset still 10
-78796799 0 make-timestamp utc>tai tai-timestamp-sec 78796809 "just before 1972-07-01: offset 10" assert=
+78796799 0 make-timestamp >tai-timestamp tai-timestamp-sec 78796809 "just before 1972-07-01: offset 10" assert=
 
 \ Future timestamp: uses latest offset (37)
-2000000000 0 make-timestamp utc>tai tai-timestamp-sec 2000000037 "future: offset 37" assert=
-2000000000 0 make-timestamp utc>tai tai>utc timestamp-sec 2000000000 "future round-trip" assert=
+2000000000 0 make-timestamp >tai-timestamp tai-timestamp-sec 2000000037 "future: offset 37" assert=
+2000000000 0 make-timestamp >tai-timestamp >timestamp timestamp-sec 2000000000 "future round-trip" assert=
 
 "inspect" test-section
 

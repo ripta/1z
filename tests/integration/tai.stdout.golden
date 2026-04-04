@@ -14,7 +14,7 @@ PASS: tai-timestamp-sec
 Stack: [ ]
 PASS: tai-timestamp-nsec
 Stack: [ ]
-=== utc>tai known offsets ===
+=== >tai-timestamp known offsets ===
 Stack: [ ]
 PASS: epoch: TAI sec = 10
 Stack: [ ]
@@ -28,9 +28,9 @@ PASS: 2000-01-01: offset 32
 Stack: [ ]
 PASS: 2017-01-01: offset 37
 Stack: [ ]
-PASS: nsec preserved in utc>tai
+PASS: nsec preserved in >tai-timestamp
 Stack: [ ]
-=== tai>utc round-trip ===
+=== >timestamp round-trip ===
 Stack: [ ]
 PASS: round-trip epoch sec
 Stack: [ ]

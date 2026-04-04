@@ -110,7 +110,7 @@ leap-second-offsets: const [
 \ --- Conversion words ---
 
 \\ Convert a UTC (POSIX) timestamp to a TAI timestamp.
-utc>tai: ( timestamp -- tai-timestamp ) [
+>tai-timestamp: method{ timestamp } [
   dup timestamp-nsec swap timestamp-sec
   \ nsec sec
   dup (leap-offset-for) +
@@ -119,7 +119,7 @@ utc>tai: ( timestamp -- tai-timestamp ) [
 ] ;
 
 \\ Convert a TAI timestamp back to a UTC (POSIX) timestamp.
-tai>utc: ( tai-timestamp -- timestamp ) [
+>timestamp: method{ tai-timestamp } [
   dup tai-timestamp-nsec swap tai-timestamp-sec
   \ nsec sec
   dup (tai>utc-offset) -
