@@ -193,6 +193,7 @@ const NativeWatcher = struct {
             if (scheduler) |sched| {
                 if (is_macos) streams.setNonBlockingFd(self.backend_fd);
                 sched.ioSuspendCurrentTask(self.backend_fd, .read);
+                return error.WouldBlock;
             } else {
                 try self.drainBackend(true);
             }

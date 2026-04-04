@@ -2,6 +2,8 @@
 
 use "os/fs" ;
 use "os/path" ;
+use "channel" ;
+use "task" ;
 use "process" ;
 
 \\ Path payload for create/modify/delete watcher events.
@@ -104,10 +106,70 @@ each: stack-recursive ( watcher quot -- ) [
   each
 ] ;
 
+(drain-latest): stack-recursive ( ch latest -- latest' ) [
+  over try-receive [
+    nip (drain-latest)
+  ] [
+    drop nip
+  ] if
+] ;
+
+(forward-events): stack-recursive ( watcher ch -- ) [
+  over next-event
+  1 pick-n send
+  (forward-events)
+] ;
+
+(spawn-forwarder): ( watcher ch -- task ) [
+  [
+    [ (forward-events) ]
+    [
+      dup use-after-close: error-type?
+      swap task-cancelled: error-type?
+      or
+      [ drop ]
+      [ throw ]
+      if
+    ] recover
+  ] curry curry spawn
+] ;
+
+(cancel-await): ( task -- ) [
+  dup cancel-task
+  [ await drop ] curry
+  [ drop ] recover
+] ;
+
+(debounced-each-loop): stack-recursive ( watcher duration quot ch -- ) [
+  dup receive?
+  dup option:some? [
+    unwrap-or-throw
+    3 pick-n sleep
+    1 pick-n swap (drain-latest)
+    2 pick-n curry call
+    (debounced-each-loop)
+  ] [
+    drop 3drop drop
+  ] if
+] ;
+
+(debounced-each-body): ( watcher duration quot -- ) [
+  64 <buffered-channel>
+  3 pick-n over (spawn-forwarder)
+  [
+    [ (debounced-each-loop) ] dip
+  ] [
+    swap
+    (cancel-await)
+    throw
+  ] recover
+] ;
+
 \\ Loop reading events with debounce coalescing. Rapid events within
-\\ the duration window are currently forwarded via the core event loop.
+\\ the duration window are collapsed; the quotation receives the latest
+\\ event after the quiet period expires. Creates its own task-scope.
 debounced-each: ( watcher duration quot -- ) [
-  nip each
+  [ (debounced-each-body) ] curry curry curry task-scope
 ] ;
 
 \\ Watch for changes and run a shell command on each debounced event.

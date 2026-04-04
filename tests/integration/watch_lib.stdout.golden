@@ -29,3 +29,16 @@ Stack: [ ]
 Stack: [ ]
 PASS: with-watcher closes returned polling watcher value
 Stack: [ ]
+=== add-watch-recursive with subdirs ===
+Stack: [ ]
+PASS: add-watch-recursive returns one id per directory
+Stack: [ ]
+=== add-watch-recursive on flat dir ===
+Stack: [ ]
+PASS: add-watch-recursive on flat dir returns one id
+Stack: [ ]
+=== debounced-each delivers events ===
+Stack: [ ]
+PASS: debounced-each delivers modified event
+PASS: debounced-each preserves watched path
+Stack: [ ]

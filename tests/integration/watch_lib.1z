@@ -114,6 +114,7 @@ use "time" ;
         over add-watch-recursive
         #len 4 "add-watch-recursive returns one id per directory" assert=
       ] with-watcher
+      drop
     ] [
       drop
       "native event watch unsupported on this platform/filesystem" skip
@@ -130,6 +131,7 @@ use "time" ;
         over add-watch-recursive
         #len 1 "add-watch-recursive on flat dir returns one id" assert=
       ] with-watcher
+      drop
     ] [
       drop
       "native event watch unsupported on this platform/filesystem" skip
@@ -145,15 +147,17 @@ use "time" ;
       dup 2 pick-n add-watch drop
       over "changed for debounce" (write-text)
       100 milliseconds
+      2 pick-n
       [
+        swap
         dup watch-event:modified? "debounced-each delivers modified event" assert-true
         unmake-watch-event:modified path>>
-        3 pick-n
+        swap
         "debounced-each preserves watched path"
         assert=
         f "stop debounce loop" EUserThrown make-error throw
-      ] debounced-each
+      ] curry debounced-each
     ] with-watcher
   ] [ drop ] recover
-  3drop
+  drop
 ] (with-supported-watch-file)
