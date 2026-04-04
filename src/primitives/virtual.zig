@@ -402,10 +402,10 @@ pub fn defineWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, ma
     if (ctx.lookupTypeValueByName(vtype.inner_type)) |inner_tv| {
         if (inner_tv.descriptor) |desc| {
             try ctx.registerDispatch(.{
-                .word_name = name,
+                .dispatch_id = ctx.lookupWord(name).?.dispatch_id,
                 .type_a = desc,
                 .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
-            }, .{ .body = .{ .quotation = instrs } }, true);
+            }, .{ .body = .{ .quotation = instrs } }, false);
         }
     }
 }
@@ -624,7 +624,7 @@ pub fn defineStructHashWrap(ctx: *Context, name: []const u8, vtype: *const Virtu
 
     const hash_tv = ctx.lookupBuiltinTypeValue("hash") orelse return;
     try ctx.registerDispatch(.{
-        .word_name = name,
+        .dispatch_id = ctx.lookupWord(name).?.dispatch_id,
         .type_a = hash_tv.descriptor.?,
         .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
     }, .{ .body = .{ .quotation = instrs } }, true);
@@ -1193,7 +1193,7 @@ fn registerVectorMutationDispatches(
         instrs[8] = .{ .op = .{ .call_word = "native.virtual-wrap" }, .line = 0 };
 
         try ctx.registerDispatch(.{
-            .word_name = op_name,
+            .dispatch_id = ctx.lookupWord(op_name).?.dispatch_id,
             .type_a = type_tv.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = instrs } }, true);
@@ -1216,7 +1216,7 @@ fn registerVectorMutationDispatches(
         instrs[6] = .{ .op = .{ .call_word = "swap" }, .line = 0 };
 
         try ctx.registerDispatch(.{
-            .word_name = op_name,
+            .dispatch_id = ctx.lookupWord(op_name).?.dispatch_id,
             .type_a = type_tv.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = instrs } }, true);
@@ -1233,7 +1233,7 @@ fn registerVectorMutationDispatches(
         instrs[1] = .{ .op = .{ .call_word = "native.typed-nth-mut-dispatch" }, .line = 0 };
 
         try ctx.registerDispatch(.{
-            .word_name = "#nth!",
+            .dispatch_id = ctx.lookupWord("#nth!").?.dispatch_id,
             .type_a = type_tv.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = instrs } }, true);
@@ -1256,7 +1256,7 @@ fn registerVectorMutationDispatches(
         instrs[8] = .{ .op = .{ .call_word = "native.virtual-wrap" }, .line = 0 };
 
         try ctx.registerDispatch(.{
-            .word_name = "#append!",
+            .dispatch_id = ctx.lookupWord("#append!").?.dispatch_id,
             .type_a = type_tv.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = instrs } }, true);
@@ -1271,7 +1271,7 @@ fn registerVectorMutationDispatches(
         instrs[1] = .{ .op = .{ .call_word = "native.typed-freeze-dispatch" }, .line = 0 };
 
         try ctx.registerDispatch(.{
-            .word_name = "freeze",
+            .dispatch_id = ctx.lookupWord("freeze").?.dispatch_id,
             .type_a = type_tv.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = instrs } }, true);
@@ -1299,7 +1299,7 @@ fn registerMutableMapMutationDispatches(
         instrs[1] = .{ .op = .{ .call_word = "native.typed-at-set-mut-dispatch" }, .line = 0 };
 
         try ctx.registerDispatch(.{
-            .word_name = "@set!",
+            .dispatch_id = ctx.lookupWord("@set!").?.dispatch_id,
             .type_a = type_tv.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = instrs } }, true);
@@ -1314,7 +1314,7 @@ fn registerMutableMapMutationDispatches(
         instrs[1] = .{ .op = .{ .call_word = "native.typed-at-remove-mut-dispatch" }, .line = 0 };
 
         try ctx.registerDispatch(.{
-            .word_name = "@remove!",
+            .dispatch_id = ctx.lookupWord("@remove!").?.dispatch_id,
             .type_a = type_tv.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = instrs } }, true);
@@ -1347,7 +1347,7 @@ pub fn registerHashDispatch(ctx: *Context, type_tv: *const value_mod.TypeValue, 
     }
 
     try ctx.registerDispatch(.{
-        .word_name = ">hash",
+        .dispatch_id = ctx.lookupWord(">hash").?.dispatch_id,
         .type_a = type_tv.descriptor.?,
         .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
     }, .{ .body = .{ .quotation = instrs } }, true);

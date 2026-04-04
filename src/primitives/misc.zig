@@ -74,6 +74,7 @@ fn nativeToModule(ctx: *Context) anyerror!void {
                     .stack_effect = word_def.stack_effect,
                     .markers = word_def.markers,
                     .source_module = word_def.source_module,
+                    .dispatch_id = word_def.dispatch_id,
                     .action = switch (word_def.action) {
                         .compound => |instrs| .{ .compound = instrs },
                         .native => |func| .{ .native = func },
@@ -291,6 +292,7 @@ fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []const
             .stack_effect = word_def.stack_effect,
             .markers = word_def.markers,
             .source_module = word_def.source_module,
+            .dispatch_id = word_def.dispatch_id,
             .action = switch (word_def.action) {
                 .compound => |instrs| .{ .compound = instrs },
                 .native => |func| .{ .native = func },
@@ -323,6 +325,28 @@ fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module: *co
     const has_parse_time = for (mod_word.markers) |mk| {
         if (markers_mod.isParseTimeMarker(mk)) break true;
     } else false;
+
+    // When importing a generic word that already exists in scope as generic,
+    // merge dispatch entries under the existing word's dispatch_id so that
+    // cross-module field accessors (e.g., y>> from two struct-defining
+    // modules) all dispatch through a single word.
+    const incoming_generic = for (mod_word.markers) |mk| {
+        if (markers_mod.isGenericMarker(mk)) break true;
+    } else false;
+
+    var effective_dispatch_id = mod_word.dispatch_id;
+    if (incoming_generic) {
+        if (ctx.lookupWord(name)) |existing| {
+            const existing_generic = for (existing.markers) |mk| {
+                if (markers_mod.isGenericMarker(mk)) break true;
+            } else false;
+            if (existing_generic and existing.dispatch_id != mod_word.dispatch_id) {
+                try mergeDispatchEntries(ctx, mod_word.dispatch_id, existing.dispatch_id);
+                effective_dispatch_id = existing.dispatch_id;
+            }
+        }
+    }
+
     try ctx.defineImportedWord(name, .{
         .name = name,
         .parse_time = has_parse_time,
@@ -331,6 +355,7 @@ fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module: *co
         .markers = mod_word.markers,
         .source_module = module,
         .capability = mod_word.capability,
+        .dispatch_id = effective_dispatch_id,
         .action = switch (mod_word.action) {
             .compound => |instrs| .{ .compound = instrs },
             .native => |func| .{ .native = func },
@@ -339,6 +364,22 @@ fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module: *co
     if (ctx.trace.trace_modules) {
         var tw = trace_mod.TraceWriter.init();
         trace_mod.traceModuleImport(&tw, ctx.current_source, name, module.name);
+    }
+}
+
+/// Copy all dispatch entries from one dispatch_id to another, allowing
+/// overwrites for entries that already exist under the target ID.
+fn mergeDispatchEntries(ctx: *Context, from_id: u32, to_id: u32) !void {
+    const dispatch_mod = @import("../dispatch.zig");
+    const pairs = try ctx.dispatch.entriesForDispatchId(from_id, ctx.allocator);
+    defer ctx.allocator.free(pairs);
+    for (pairs) |pair| {
+        const new_key = dispatch_mod.DispatchKey{
+            .dispatch_id = to_id,
+            .type_a = pair.key.type_a,
+            .type_b = pair.key.type_b,
+        };
+        try ctx.registerDispatch(new_key, pair.entry, true);
     }
 }
 

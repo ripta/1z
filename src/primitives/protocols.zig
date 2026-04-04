@@ -166,8 +166,11 @@ pub fn validateProtocolObligation(
                 helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
                 return error.TypeMismatch;
             };
-            const has_method = ctx.lookupUnaryDispatch(method_name, type_tv.descriptor.?) != null or
-                ctx.lookupBinaryDispatch(method_name, type_tv.descriptor.?, type_tv.descriptor.?) != null;
+            const has_method = if (ctx.resolveDispatchId(method_name)) |did|
+                ctx.lookupUnaryDispatch(did, type_tv.descriptor.?) != null or
+                    ctx.lookupBinaryDispatch(did, type_tv.descriptor.?, type_tv.descriptor.?) != null
+            else
+                false;
 
             if (!has_method) {
                 throwProtocolError(ctx, type_name, method_name, protocol_name);
@@ -223,8 +226,11 @@ fn validateObligationSameTypeOnly(
                 helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
                 return error.TypeMismatch;
             };
-            const has_method = ctx.lookupUnaryDispatch(method_name, type_tv.descriptor.?) != null or
-                ctx.lookupBinaryDispatch(method_name, type_tv.descriptor.?, type_tv.descriptor.?) != null;
+            const has_method = if (ctx.resolveDispatchId(method_name)) |did|
+                ctx.lookupUnaryDispatch(did, type_tv.descriptor.?) != null or
+                    ctx.lookupBinaryDispatch(did, type_tv.descriptor.?, type_tv.descriptor.?) != null
+            else
+                false;
 
             if (!has_method) {
                 throwProtocolError(ctx, type_name, method_name, protocol_name);
@@ -292,7 +298,11 @@ fn validateTypedMethod(
         // Unary dispatch
         const type_a = if (n_inputs == 1) concrete_types[0] else type_tv;
         if (!has_any) {
-            if (ctx.lookupUnaryDispatch(method_name, type_a.descriptor.?) == null) {
+            const unary_did = ctx.resolveDispatchId(method_name) orelse {
+                throwProtocolError(ctx, type_name, method_name, protocol_name);
+                return error.UserThrown;
+            };
+            if (ctx.lookupUnaryDispatch(unary_did, type_a.descriptor.?) == null) {
                 throwProtocolError(ctx, type_name, method_name, protocol_name);
                 return error.UserThrown;
             }
@@ -306,7 +316,11 @@ fn validateTypedMethod(
     } else {
         // Binary dispatch
         if (!has_any) {
-            if (ctx.lookupBinaryDispatch(method_name, concrete_types[0].descriptor.?, concrete_types[1].descriptor.?) == null) {
+            const binary_did = ctx.resolveDispatchId(method_name) orelse {
+                throwProtocolError(ctx, type_name, method_name, protocol_name);
+                return error.UserThrown;
+            };
+            if (ctx.lookupBinaryDispatch(binary_did, concrete_types[0].descriptor.?, concrete_types[1].descriptor.?) == null) {
                 throwProtocolError(ctx, type_name, method_name, protocol_name);
                 return error.UserThrown;
             }

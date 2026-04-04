@@ -135,26 +135,26 @@ pub fn unwrapBaseType(val: Value) Value {
     return val;
 }
 
-/// Key for dispatch table lookups: (word_name, type_a, type_b).
+/// Key for dispatch table lookups: (dispatch_id, type_a, type_b).
 /// For unary dispatch, type_b is `&unary_sentinel`.
 pub const DispatchKey = struct {
-    word_name: []const u8,
+    dispatch_id: u32,
     type_a: *const HashTable,
     type_b: *const HashTable,
 };
 
-/// HashMap context for DispatchKey: hashes word_name as string, type_a/type_b as pointers.
+/// HashMap context for DispatchKey: hashes dispatch_id as u32, type_a/type_b as pointers.
 pub const DispatchKeyContext = struct {
     pub fn hash(_: @This(), key: DispatchKey) u64 {
         var h = std.hash.Wyhash.init(0);
-        h.update(key.word_name);
+        h.update(std.mem.asBytes(&key.dispatch_id));
         h.update(std.mem.asBytes(&@intFromPtr(key.type_a)));
         h.update(std.mem.asBytes(&@intFromPtr(key.type_b)));
         return h.final();
     }
 
     pub fn eql(_: @This(), a: DispatchKey, b: DispatchKey) bool {
-        return std.mem.eql(u8, a.word_name, b.word_name) and
+        return a.dispatch_id == b.dispatch_id and
             a.type_a == b.type_a and
             a.type_b == b.type_b;
     }
@@ -181,7 +181,7 @@ pub const DispatchEntry = struct {
     provenance: ?DispatchProvenance = null,
 };
 
-/// Dispatch table mapping (word_name, type_a, type_b) to method bodies.
+/// Dispatch table mapping (dispatch_id, type_a, type_b) to method bodies.
 pub const DispatchTable = struct {
     entries: std.HashMapUnmanaged(DispatchKey, DispatchEntry, DispatchKeyContext, 80),
     native_entries: std.HashMapUnmanaged(DispatchKey, DispatchEntry, DispatchKeyContext, 80),
@@ -221,21 +221,21 @@ pub const DispatchTable = struct {
     /// 4. (word, "*", "*") both wildcards
     pub fn lookupBinary(
         self: *const DispatchTable,
-        word_name: []const u8,
+        dispatch_id: u32,
         type_a: *const HashTable,
         type_b: *const HashTable,
         any_sentinel: *const HashTable,
     ) ?DispatchEntry {
-        if (self.entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = type_b })) |entry| {
+        if (self.entries.get(.{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = type_b })) |entry| {
             return entry;
         }
-        if (self.entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = any_sentinel })) |entry| {
+        if (self.entries.get(.{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = any_sentinel })) |entry| {
             return entry;
         }
-        if (self.entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = type_b })) |entry| {
+        if (self.entries.get(.{ .dispatch_id = dispatch_id, .type_a = any_sentinel, .type_b = type_b })) |entry| {
             return entry;
         }
-        if (self.entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = any_sentinel })) |entry| {
+        if (self.entries.get(.{ .dispatch_id = dispatch_id, .type_a = any_sentinel, .type_b = any_sentinel })) |entry| {
             return entry;
         }
         return null;
@@ -247,27 +247,27 @@ pub const DispatchTable = struct {
     /// 2. (word, "*", "") wildcard
     pub fn lookupUnary(
         self: *const DispatchTable,
-        word_name: []const u8,
+        dispatch_id: u32,
         type_a: *const HashTable,
         any_sentinel: *const HashTable,
         unary_sentinel: *const HashTable,
     ) ?DispatchEntry {
-        if (self.entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = unary_sentinel })) |entry| {
+        if (self.entries.get(.{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = unary_sentinel })) |entry| {
             return entry;
         }
-        if (self.entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = unary_sentinel })) |entry| {
+        if (self.entries.get(.{ .dispatch_id = dispatch_id, .type_a = any_sentinel, .type_b = unary_sentinel })) |entry| {
             return entry;
         }
         return null;
     }
 
-    /// Collect all dispatch keys registered for a given word name.
+    /// Collect all dispatch keys registered for a given dispatch ID.
     /// Caller owns the returned slice.
-    pub fn keysForWord(self: *const DispatchTable, word_name: []const u8, alloc: Allocator) ![]DispatchKey {
+    pub fn keysForDispatchId(self: *const DispatchTable, dispatch_id: u32, alloc: Allocator) ![]DispatchKey {
         var results: std.ArrayListUnmanaged(DispatchKey) = .{};
         var iter = self.entries.iterator();
         while (iter.next()) |entry| {
-            if (std.mem.eql(u8, entry.key_ptr.word_name, word_name)) {
+            if (entry.key_ptr.dispatch_id == dispatch_id) {
                 try results.append(alloc, entry.key_ptr.*);
             }
         }
@@ -294,13 +294,13 @@ pub const DispatchTable = struct {
     /// Register a native function dispatch entry with "native" provenance.
     pub fn registerNative(
         self: *DispatchTable,
-        word_name: []const u8,
+        dispatch_id: u32,
         type_a: anytype,
         type_b: anytype,
         func: NativeFn,
     ) !void {
         const key = DispatchKey{
-            .word_name = word_name,
+            .dispatch_id = dispatch_id,
             .type_a = coerceDescriptor(type_a),
             .type_b = coerceDescriptor(type_b),
         };
@@ -315,21 +315,21 @@ pub const DispatchTable = struct {
     /// Look up a binary dispatch entry in the native-only shadow table.
     pub fn lookupNativeBinary(
         self: *const DispatchTable,
-        word_name: []const u8,
+        dispatch_id: u32,
         type_a: *const HashTable,
         type_b: *const HashTable,
         any_sentinel: *const HashTable,
     ) ?DispatchEntry {
-        if (self.native_entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = type_b })) |entry| {
+        if (self.native_entries.get(.{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = type_b })) |entry| {
             return entry;
         }
-        if (self.native_entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = any_sentinel })) |entry| {
+        if (self.native_entries.get(.{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = any_sentinel })) |entry| {
             return entry;
         }
-        if (self.native_entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = type_b })) |entry| {
+        if (self.native_entries.get(.{ .dispatch_id = dispatch_id, .type_a = any_sentinel, .type_b = type_b })) |entry| {
             return entry;
         }
-        if (self.native_entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = any_sentinel })) |entry| {
+        if (self.native_entries.get(.{ .dispatch_id = dispatch_id, .type_a = any_sentinel, .type_b = any_sentinel })) |entry| {
             return entry;
         }
         return null;
@@ -338,27 +338,27 @@ pub const DispatchTable = struct {
     /// Look up a unary dispatch entry in the native-only shadow table.
     pub fn lookupNativeUnary(
         self: *const DispatchTable,
-        word_name: []const u8,
+        dispatch_id: u32,
         type_a: *const HashTable,
         any_sentinel: *const HashTable,
         unary_sentinel: *const HashTable,
     ) ?DispatchEntry {
-        if (self.native_entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = unary_sentinel })) |entry| {
+        if (self.native_entries.get(.{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = unary_sentinel })) |entry| {
             return entry;
         }
-        if (self.native_entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = unary_sentinel })) |entry| {
+        if (self.native_entries.get(.{ .dispatch_id = dispatch_id, .type_a = any_sentinel, .type_b = unary_sentinel })) |entry| {
             return entry;
         }
         return null;
     }
 
-    /// Collect all dispatch keys and entries registered for a given word name.
+    /// Collect all dispatch keys and entries registered for a given dispatch ID.
     /// Caller owns the returned slice.
-    pub fn entriesForWord(self: *const DispatchTable, word_name: []const u8, alloc: Allocator) ![]KeyEntryPair {
+    pub fn entriesForDispatchId(self: *const DispatchTable, dispatch_id: u32, alloc: Allocator) ![]KeyEntryPair {
         var results: std.ArrayListUnmanaged(KeyEntryPair) = .{};
         var iter = self.entries.iterator();
         while (iter.next()) |entry| {
-            if (std.mem.eql(u8, entry.key_ptr.word_name, word_name)) {
+            if (entry.key_ptr.dispatch_id == dispatch_id) {
                 try results.append(alloc, .{ .key = entry.key_ptr.*, .entry = entry.value_ptr.* });
             }
         }
@@ -382,21 +382,21 @@ const EntriesMap = std.HashMapUnmanaged(DispatchKey, DispatchEntry, DispatchKeyC
 /// 4-step precedence: exact, wildcard-b, wildcard-a, both-wildcards.
 pub fn lookupBinaryInEntries(
     entries: *const EntriesMap,
-    word_name: []const u8,
+    dispatch_id: u32,
     type_a: *const HashTable,
     type_b: *const HashTable,
     any_sentinel: *const HashTable,
 ) ?DispatchEntry {
-    if (entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = type_b })) |entry| {
+    if (entries.get(.{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = type_b })) |entry| {
         return entry;
     }
-    if (entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = any_sentinel })) |entry| {
+    if (entries.get(.{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = any_sentinel })) |entry| {
         return entry;
     }
-    if (entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = type_b })) |entry| {
+    if (entries.get(.{ .dispatch_id = dispatch_id, .type_a = any_sentinel, .type_b = type_b })) |entry| {
         return entry;
     }
-    if (entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = any_sentinel })) |entry| {
+    if (entries.get(.{ .dispatch_id = dispatch_id, .type_a = any_sentinel, .type_b = any_sentinel })) |entry| {
         return entry;
     }
     return null;
@@ -406,35 +406,35 @@ pub fn lookupBinaryInEntries(
 /// 2-step precedence: exact, wildcard.
 pub fn lookupUnaryInEntries(
     entries: *const EntriesMap,
-    word_name: []const u8,
+    dispatch_id: u32,
     type_a: *const HashTable,
     any_sentinel: *const HashTable,
     unary_sentinel: *const HashTable,
 ) ?DispatchEntry {
-    if (entries.get(.{ .word_name = word_name, .type_a = type_a, .type_b = unary_sentinel })) |entry| {
+    if (entries.get(.{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = unary_sentinel })) |entry| {
         return entry;
     }
-    if (entries.get(.{ .word_name = word_name, .type_a = any_sentinel, .type_b = unary_sentinel })) |entry| {
+    if (entries.get(.{ .dispatch_id = dispatch_id, .type_a = any_sentinel, .type_b = unary_sentinel })) |entry| {
         return entry;
     }
     return null;
 }
 
-/// Collect dispatch keys from an entries map for a given word, appending to results.
-pub fn collectKeysForWord(entries: *const EntriesMap, word_name: []const u8, results: *std.ArrayListUnmanaged(DispatchKey), alloc: Allocator) !void {
+/// Collect dispatch keys from an entries map for a given dispatch ID, appending to results.
+pub fn collectKeysForDispatchId(entries: *const EntriesMap, dispatch_id: u32, results: *std.ArrayListUnmanaged(DispatchKey), alloc: Allocator) !void {
     var iter = entries.iterator();
     while (iter.next()) |entry| {
-        if (std.mem.eql(u8, entry.key_ptr.word_name, word_name)) {
+        if (entry.key_ptr.dispatch_id == dispatch_id) {
             try results.append(alloc, entry.key_ptr.*);
         }
     }
 }
 
-/// Collect dispatch key-entry pairs from an entries map for a given word, appending to results.
-pub fn collectEntriesForWord(entries: *const EntriesMap, word_name: []const u8, results: *std.ArrayListUnmanaged(DispatchTable.KeyEntryPair), alloc: Allocator) !void {
+/// Collect dispatch key-entry pairs from an entries map for a given dispatch ID, appending to results.
+pub fn collectEntriesForDispatchId(entries: *const EntriesMap, dispatch_id: u32, results: *std.ArrayListUnmanaged(DispatchTable.KeyEntryPair), alloc: Allocator) !void {
     var iter = entries.iterator();
     while (iter.next()) |entry| {
-        if (std.mem.eql(u8, entry.key_ptr.word_name, word_name)) {
+        if (entry.key_ptr.dispatch_id == dispatch_id) {
             try results.append(alloc, .{ .key = entry.key_ptr.*, .entry = entry.value_ptr.* });
         }
     }
@@ -484,12 +484,12 @@ test "register and lookupBinary exact match" {
 
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 0 }};
     try table.register(
-        .{ .word_name = "+", .type_a = duration_desc, .type_b = duration_desc },
+        .{ .dispatch_id = 1, .type_a = duration_desc, .type_b = duration_desc },
         .{ .body = .{ .quotation = body } },
         false,
     );
 
-    const result = table.lookupBinary("+", duration_desc, duration_desc, any_desc);
+    const result = table.lookupBinary(1, duration_desc, duration_desc, any_desc);
     try std.testing.expect(result != null);
     try std.testing.expectEqual(@as(usize, 1), result.?.body.quotation.len);
 }
@@ -503,7 +503,7 @@ test "lookupBinary returns null when no match" {
     const any_desc = try testDescriptor("*");
     defer value_mod.destroyTypeDescriptor(std.testing.allocator, any_desc);
 
-    const result = table.lookupBinary("+", duration_desc, duration_desc, any_desc);
+    const result = table.lookupBinary(1, duration_desc, duration_desc, any_desc);
     try std.testing.expect(result == null);
 }
 
@@ -527,40 +527,40 @@ test "lookupBinary wildcard precedence" {
 
     // Register in reverse precedence order to ensure lookup logic is correct
     try table.register(
-        .{ .word_name = "+", .type_a = any_desc, .type_b = any_desc },
+        .{ .dispatch_id = 1, .type_a = any_desc, .type_b = any_desc },
         .{ .body = .{ .quotation = wild_both_body } },
         false,
     );
     try table.register(
-        .{ .word_name = "+", .type_a = any_desc, .type_b = fixnum_desc },
+        .{ .dispatch_id = 1, .type_a = any_desc, .type_b = fixnum_desc },
         .{ .body = .{ .quotation = wild_a_body } },
         false,
     );
     try table.register(
-        .{ .word_name = "+", .type_a = duration_desc, .type_b = any_desc },
+        .{ .dispatch_id = 1, .type_a = duration_desc, .type_b = any_desc },
         .{ .body = .{ .quotation = wild_b_body } },
         false,
     );
     try table.register(
-        .{ .word_name = "+", .type_a = duration_desc, .type_b = duration_desc },
+        .{ .dispatch_id = 1, .type_a = duration_desc, .type_b = duration_desc },
         .{ .body = .{ .quotation = exact_body } },
         false,
     );
 
     // Exact match should win
-    const r1 = table.lookupBinary("+", duration_desc, duration_desc, any_desc).?;
+    const r1 = table.lookupBinary(1, duration_desc, duration_desc, any_desc).?;
     try std.testing.expectEqual(@as(i64, 1), r1.body.quotation[0].op.push_literal.fixnum);
 
     // Wildcard on second: (duration, fixnum) matches (duration, *)
-    const r2 = table.lookupBinary("+", duration_desc, fixnum_desc, any_desc).?;
+    const r2 = table.lookupBinary(1, duration_desc, fixnum_desc, any_desc).?;
     try std.testing.expectEqual(@as(i64, 2), r2.body.quotation[0].op.push_literal.fixnum);
 
     // Wildcard on first: (string, fixnum) matches (*, fixnum)
-    const r3 = table.lookupBinary("+", string_desc, fixnum_desc, any_desc).?;
+    const r3 = table.lookupBinary(1, string_desc, fixnum_desc, any_desc).?;
     try std.testing.expectEqual(@as(i64, 3), r3.body.quotation[0].op.push_literal.fixnum);
 
     // Both wildcards: (string, string) matches (*, *)
-    const r4 = table.lookupBinary("+", string_desc, string_desc, any_desc).?;
+    const r4 = table.lookupBinary(1, string_desc, string_desc, any_desc).?;
     try std.testing.expectEqual(@as(i64, 4), r4.body.quotation[0].op.push_literal.fixnum);
 }
 
@@ -581,26 +581,26 @@ test "lookupUnary exact and wildcard" {
     const wild_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 20 } }, .line = 0 }};
 
     try table.register(
-        .{ .word_name = "serialize", .type_a = duration_desc, .type_b = unary_desc },
+        .{ .dispatch_id = 2, .type_a = duration_desc, .type_b = unary_desc },
         .{ .body = .{ .quotation = exact_body } },
         false,
     );
     try table.register(
-        .{ .word_name = "serialize", .type_a = any_desc, .type_b = unary_desc },
+        .{ .dispatch_id = 2, .type_a = any_desc, .type_b = unary_desc },
         .{ .body = .{ .quotation = wild_body } },
         false,
     );
 
     // Exact match
-    const r1 = table.lookupUnary("serialize", duration_desc, any_desc, unary_desc).?;
+    const r1 = table.lookupUnary(2, duration_desc, any_desc, unary_desc).?;
     try std.testing.expectEqual(@as(i64, 10), r1.body.quotation[0].op.push_literal.fixnum);
 
     // Wildcard fallback
-    const r2 = table.lookupUnary("serialize", point_desc, any_desc, unary_desc).?;
+    const r2 = table.lookupUnary(2, point_desc, any_desc, unary_desc).?;
     try std.testing.expectEqual(@as(i64, 20), r2.body.quotation[0].op.push_literal.fixnum);
 
     // No match for different word
-    try std.testing.expect(table.lookupUnary("other-word", duration_desc, any_desc, unary_desc) == null);
+    try std.testing.expect(table.lookupUnary(99, duration_desc, any_desc, unary_desc) == null);
 }
 
 test "register duplicate key errors without allow_overwrite" {
@@ -612,13 +612,13 @@ test "register duplicate key errors without allow_overwrite" {
 
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
     try table.register(
-        .{ .word_name = "+", .type_a = duration_desc, .type_b = duration_desc },
+        .{ .dispatch_id = 1, .type_a = duration_desc, .type_b = duration_desc },
         .{ .body = .{ .quotation = body } },
         false,
     );
 
     const result = table.register(
-        .{ .word_name = "+", .type_a = duration_desc, .type_b = duration_desc },
+        .{ .dispatch_id = 1, .type_a = duration_desc, .type_b = duration_desc },
         .{ .body = .{ .quotation = body } },
         false,
     );
@@ -638,18 +638,18 @@ test "register duplicate key succeeds with allow_overwrite" {
     const body2 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
 
     try table.register(
-        .{ .word_name = "+", .type_a = duration_desc, .type_b = duration_desc },
+        .{ .dispatch_id = 1, .type_a = duration_desc, .type_b = duration_desc },
         .{ .body = .{ .quotation = body1 } },
         false,
     );
     try table.register(
-        .{ .word_name = "+", .type_a = duration_desc, .type_b = duration_desc },
+        .{ .dispatch_id = 1, .type_a = duration_desc, .type_b = duration_desc },
         .{ .body = .{ .quotation = body2 } },
         true,
     );
 
     // Shoulda gotten the overwritten body
-    const result = table.lookupBinary("+", duration_desc, duration_desc, any_desc).?;
+    const result = table.lookupBinary(1, duration_desc, duration_desc, any_desc).?;
     try std.testing.expectEqual(@as(i64, 2), result.body.quotation[0].op.push_literal.fixnum);
 }
 
@@ -662,9 +662,9 @@ test "registerNative creates retrievable entry with native_fn body" {
     const any_desc = try testDescriptor("*");
     defer value_mod.destroyTypeDescriptor(std.testing.allocator, any_desc);
 
-    try table.registerNative("+", fixnum_desc, fixnum_desc, dummyNativeFn);
+    try table.registerNative(1, fixnum_desc, fixnum_desc, dummyNativeFn);
 
-    const result = table.lookupBinary("+", fixnum_desc, fixnum_desc, any_desc);
+    const result = table.lookupBinary(1, fixnum_desc, fixnum_desc, any_desc);
     try std.testing.expect(result != null);
     try std.testing.expect(result.?.body == .native_fn);
     try std.testing.expectEqualStrings("native", result.?.provenance.?.generator);
@@ -681,9 +681,9 @@ test "registerNative unary entry is retrievable via lookupUnary" {
     const unary_desc = try testDescriptor("");
     defer value_mod.destroyTypeDescriptor(std.testing.allocator, unary_desc);
 
-    try table.registerNative("abs", fixnum_desc, unary_desc, dummyNativeFn);
+    try table.registerNative(3, fixnum_desc, unary_desc, dummyNativeFn);
 
-    const result = table.lookupUnary("abs", fixnum_desc, any_desc, unary_desc);
+    const result = table.lookupUnary(3, fixnum_desc, any_desc, unary_desc);
     try std.testing.expect(result != null);
     try std.testing.expect(result.?.body == .native_fn);
 }
@@ -695,8 +695,8 @@ test "registerNative duplicate returns DuplicateMethod" {
     const fixnum_desc = try testDescriptor("fixnum");
     defer value_mod.destroyTypeDescriptor(std.testing.allocator, fixnum_desc);
 
-    try table.registerNative("+", fixnum_desc, fixnum_desc, dummyNativeFn);
-    const result = table.registerNative("+", fixnum_desc, fixnum_desc, dummyNativeFn);
+    try table.registerNative(1, fixnum_desc, fixnum_desc, dummyNativeFn);
+    const result = table.registerNative(1, fixnum_desc, fixnum_desc, dummyNativeFn);
     try std.testing.expectError(error.DuplicateMethod, result);
 }
 
@@ -711,14 +711,14 @@ test "register increments generation counter" {
 
     const body = &[_]value_mod.Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
     try table.register(
-        .{ .word_name = "+", .type_a = fixnum_desc, .type_b = fixnum_desc },
+        .{ .dispatch_id = 1, .type_a = fixnum_desc, .type_b = fixnum_desc },
         .{ .body = .{ .quotation = body } },
         false,
     );
     try std.testing.expectEqual(@as(u32, 1), table.generation);
 
     try table.register(
-        .{ .word_name = "+", .type_a = fixnum_desc, .type_b = fixnum_desc },
+        .{ .dispatch_id = 1, .type_a = fixnum_desc, .type_b = fixnum_desc },
         .{ .body = .{ .quotation = body } },
         true,
     );

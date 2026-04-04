@@ -43,7 +43,7 @@ pub fn build(dictionary: *const Dictionary, dispatch_table: *const DispatchTable
     return graph;
 }
 
-fn buildEntry(word_name: []const u8, word_def: *const WordDefinition, dispatch_table: *const DispatchTable, allocator: Allocator) !CallGraphEntry {
+fn buildEntry(_: []const u8, word_def: *const WordDefinition, dispatch_table: *const DispatchTable, allocator: Allocator) !CallGraphEntry {
     switch (word_def.action) {
         .native => return .{ .callees = &.{}, .has_opaque = false },
         .compound => |instructions| {
@@ -54,7 +54,7 @@ fn buildEntry(word_name: []const u8, word_def: *const WordDefinition, dispatch_t
             try collectCallees(instructions, &callee_set, &has_opaque, allocator);
 
             if (isGeneric(word_def)) {
-                const dispatch_entries = try dispatch_table.entriesForWord(word_name, allocator);
+                const dispatch_entries = try dispatch_table.entriesForDispatchId(word_def.dispatch_id, allocator);
                 defer allocator.free(dispatch_entries);
                 for (dispatch_entries) |pair| {
                     switch (pair.entry.body) {
@@ -555,6 +555,7 @@ test "generic word includes dispatch entry callees" {
         .name = "my-generic",
         .action = .{ .compound = body_instrs },
         .markers = &.{@constCast(&markers.generic_marker)},
+        .dispatch_id = 42,
     });
 
     const dispatch_body = &[_]Instruction{
@@ -566,7 +567,7 @@ test "generic word includes dispatch entry callees" {
     const unary_desc = try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{});
     defer value_mod.destroyTypeDescriptor(std.testing.allocator, unary_desc);
     try dispatch.register(
-        .{ .word_name = "my-generic", .type_a = duration_desc, .type_b = unary_desc },
+        .{ .dispatch_id = 42, .type_a = duration_desc, .type_b = unary_desc },
         .{ .body = .{ .quotation = dispatch_body } },
         false,
     );

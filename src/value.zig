@@ -460,6 +460,7 @@ pub const ModuleWord = struct {
     source_column: usize = 0,
     provenance: ?WordProvenance = null,
     capability: Capability = .none,
+    dispatch_id: u32 = 0,
     action: union(enum) {
         compound: []const Instruction,
         native: NativeFn,

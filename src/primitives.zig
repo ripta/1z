@@ -27,7 +27,7 @@ const strings_mod = @import("primitives/strings.zig");
 
 const Context = @import("context.zig").Context;
 
-pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
+pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator, dispatch_counter: *std.atomic.Value(u32)) !void {
     for (all_primitives) |p| {
         const effect: ?StackEffect = if (p.stack_effect) |raw|
             try makeSimpleEffect(allocator, raw)
@@ -43,6 +43,7 @@ pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
             .markers = p.markers,
             .doc = p.doc,
             .capability = p.capability,
+            .dispatch_id = dispatch_counter.fetchAdd(1, .monotonic),
             .action = .{ .native = p.func },
         });
     }
@@ -55,7 +56,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     try strings_mod.registerNativeDispatch(dispatch, ctx);
 }
 
-pub fn createNativeModule(dict: *Dictionary, allocator: Allocator) !void {
+pub fn createNativeModule(dict: *Dictionary, allocator: Allocator, dispatch_counter: *std.atomic.Value(u32)) !void {
     const module = try allocator.create(Module);
     module.* = .{
         .name = "native",
@@ -73,6 +74,7 @@ pub fn createNativeModule(dict: *Dictionary, allocator: Allocator) !void {
             .stack_effect = effect,
             .polymorphic = entry.polymorphic,
             .capability = entry.capability,
+            .dispatch_id = dispatch_counter.fetchAdd(1, .monotonic),
         });
     }
 
@@ -80,6 +82,7 @@ pub fn createNativeModule(dict: *Dictionary, allocator: Allocator) !void {
     instrs[0] = .{ .op = .{ .push_literal = .{ .module = module } }, .line = 0 };
     try dict.put("native", .{
         .name = "native",
+        .dispatch_id = dispatch_counter.fetchAdd(1, .monotonic),
         .action = .{ .compound = instrs },
     });
 }

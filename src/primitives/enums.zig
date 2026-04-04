@@ -94,7 +94,7 @@ fn enumFromSymbolHelper(ctx: *Context) anyerror!void {
         },
     };
 
-    const vtypes = ctx.lookupEnumVariants(enum_tv.name) orelse {
+    const vtypes = ctx.lookupEnumVariants(enum_tv) orelse {
         helpers.setErrorContext(ctx, "unknown enum '{s}'", .{enum_tv.name});
         return error.NameError;
     };
@@ -284,7 +284,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 
             const pred_name = try std.fmt.allocPrint(alloc, "{s}:{s}?", .{ enum_name, variant_sym });
             try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
-            try ctx.dispatch.registerNative(">symbol", variant_tv, unary, enumVariantToSymbol);
+            try ctx.dispatch.registerNative(ctx.resolveDispatchId(">symbol").?, variant_tv, unary, enumVariantToSymbol);
 
             try generated_words.append(alloc, .{ .string = full_name });
             try generated_words.append(alloc, .{ .string = pred_name });
@@ -336,7 +336,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 
             const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{full_name});
             try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
-            try ctx.dispatch.registerNative(">symbol", variant_tv, unary, enumDataVariantToSymbol);
+            try ctx.dispatch.registerNative(ctx.resolveDispatchId(">symbol").?, variant_tv, unary, enumDataVariantToSymbol);
 
             try generated_words.append(alloc, .{ .string = wrap_name });
             try generated_words.append(alloc, .{ .string = make_name_word });
@@ -381,8 +381,9 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     });
 
     if (ctx.lookupBuiltinTypeValue("symbol")) |symbol_tv| {
+        const did = ctx.lookupWord(convert_name).?.dispatch_id;
         try ctx.registerDispatch(.{
-            .word_name = convert_name,
+            .dispatch_id = did,
             .type_a = symbol_tv.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = convert_instrs } }, true);
@@ -396,7 +397,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     try ctx.registerTypeDescriptor(enum_name, enum_desc);
 
     const vtypes_slice = try vtype_list.toOwnedSlice(alloc);
-    try ctx.registerEnumVariants(enum_name, vtypes_slice);
+    try ctx.registerEnumVariants(enum_tv, vtypes_slice);
 }
 
 /// Trampoline helper ( value enum-type-val -- bool )
@@ -453,7 +454,11 @@ fn nativeEnumVariants(ctx: *Context) anyerror!void {
         },
     };
 
-    const vtypes = ctx.lookupEnumVariants(enum_name) orelse {
+    const enum_tv = ctx.lookupTypeValueByName(enum_name) orelse {
+        helpers.setErrorContext(ctx, "unknown enum '{s}'", .{enum_name});
+        return error.NameError;
+    };
+    const vtypes = ctx.lookupEnumVariants(enum_tv) orelse {
         helpers.setErrorContext(ctx, "unknown enum '{s}'", .{enum_name});
         return error.NameError;
     };
@@ -502,7 +507,7 @@ fn nativeMatch(ctx: *Context) anyerror!void {
         return error.ParseError;
     }
 
-    const vtypes = ctx.lookupEnumVariants(parent_tv.name) orelse {
+    const vtypes = ctx.lookupEnumVariants(parent_tv) orelse {
         helpers.setErrorContext(ctx, "unknown enum '{s}'", .{parent_tv.name});
         return error.NameError;
     };
@@ -607,8 +612,12 @@ fn nativeMatch(ctx: *Context) anyerror!void {
 }
 
 const EnumInfo = struct {
-    name: []const u8,
+    enum_tv: *const value_mod.TypeValue,
     variants: []const *const VirtualType,
+
+    fn name(self: EnumInfo) []const u8 {
+        return self.enum_tv.name;
+    }
 };
 
 /// Look up which enum a variant belongs to by searching the enum registry.
@@ -625,7 +634,7 @@ fn lookupVariantEnum(ctx: *const Context, variant_name: []const u8) ?EnumInfo {
             while (it.next()) |entry| {
                 for (entry.value_ptr.*) |vt| {
                     if (std.mem.eql(u8, vt.name, variant_name)) {
-                        return .{ .name = entry.key_ptr.*, .variants = entry.value_ptr.* };
+                        return .{ .enum_tv = entry.key_ptr.*, .variants = entry.value_ptr.* };
                     }
                 }
             }
@@ -720,7 +729,7 @@ fn nativeValidateMatchBlock(ctx: *Context) anyerror!void {
                 }
             }
             if (!found) {
-                helpers.setErrorContext(ctx, "match: '{s}' is not a variant of enum '{s}'", .{ key, info.name });
+                helpers.setErrorContext(ctx, "match: '{s}' is not a variant of enum '{s}'", .{ key, info.name() });
                 return error.NameError;
             }
         }
@@ -744,7 +753,7 @@ fn nativeValidateMatchBlock(ctx: *Context) anyerror!void {
             if (missing.items.len > 0) {
                 var msg = std.ArrayListUnmanaged(u8){};
                 try msg.appendSlice(alloc, "match: non-exhaustive for enum '");
-                try msg.appendSlice(alloc, info.name);
+                try msg.appendSlice(alloc, info.name());
                 try msg.appendSlice(alloc, "', missing: ");
                 for (missing.items, 0..) |name, j| {
                     if (j > 0) try msg.appendSlice(alloc, ", ");

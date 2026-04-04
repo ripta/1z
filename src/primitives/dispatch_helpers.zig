@@ -45,37 +45,37 @@ const AutoUnwrap = struct {
     unwrap_b: bool,
 };
 
-fn lookupBinaryWithFallback(ctx: *Context, word_name: []const u8, a: Value, b: Value) ?AutoUnwrap {
+fn lookupBinaryWithFallback(ctx: *Context, dispatch_id: u32, a: Value, b: Value) ?AutoUnwrap {
     const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
     const b_type = dispatch_mod.dispatchDescriptor(b, ctx);
-    if (ctx.lookupBinaryDispatch(word_name, a_type, b_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+    if (ctx.lookupBinaryDispatch(dispatch_id, a_type, b_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
 
     const a_enum = dispatch_mod.dispatchEnumTypeValue(a);
     const b_enum = dispatch_mod.dispatchEnumTypeValue(b);
     if (a_enum) |ae| {
-        if (ctx.lookupBinaryDispatch(word_name, ae.descriptor.?, b_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+        if (ctx.lookupBinaryDispatch(dispatch_id, ae.descriptor.?, b_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
     }
     if (b_enum) |be| {
-        if (ctx.lookupBinaryDispatch(word_name, a_type, be.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+        if (ctx.lookupBinaryDispatch(dispatch_id, a_type, be.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
     }
 
     if (a_enum) |ae| {
         if (b_enum) |be| {
-            if (ctx.lookupBinaryDispatch(word_name, ae.descriptor.?, be.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+            if (ctx.lookupBinaryDispatch(dispatch_id, ae.descriptor.?, be.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
         }
     }
 
     const a_base = dispatch_mod.dispatchBaseTypeValue(a);
     const b_base = dispatch_mod.dispatchBaseTypeValue(b);
     if (a_base) |ab| {
-        if (ctx.lookupBinaryDispatch(word_name, ab.descriptor.?, b_type)) |entry| return .{ .entry = entry, .unwrap_a = true, .unwrap_b = false };
+        if (ctx.lookupBinaryDispatch(dispatch_id, ab.descriptor.?, b_type)) |entry| return .{ .entry = entry, .unwrap_a = true, .unwrap_b = false };
     }
     if (b_base) |bb| {
-        if (ctx.lookupBinaryDispatch(word_name, a_type, bb.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = true };
+        if (ctx.lookupBinaryDispatch(dispatch_id, a_type, bb.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = true };
     }
     if (a_base) |ab| {
         if (b_base) |bb| {
-            if (ctx.lookupBinaryDispatch(word_name, ab.descriptor.?, bb.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = true, .unwrap_b = true };
+            if (ctx.lookupBinaryDispatch(dispatch_id, ab.descriptor.?, bb.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = true, .unwrap_b = true };
         }
     }
 
@@ -87,16 +87,16 @@ fn lookupBinaryWithFallback(ctx: *Context, word_name: []const u8, a: Value, b: V
 /// Precedence:
 /// 1. Exact variant type name (includes wildcard expansion)
 /// 2. Enum name fallback
-fn lookupUnaryWithFallback(ctx: *Context, word_name: []const u8, a: Value) ?AutoUnwrap {
+fn lookupUnaryWithFallback(ctx: *Context, dispatch_id: u32, a: Value) ?AutoUnwrap {
     const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
-    if (ctx.lookupUnaryDispatch(word_name, a_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+    if (ctx.lookupUnaryDispatch(dispatch_id, a_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
 
     if (dispatch_mod.dispatchEnumTypeValue(a)) |ae| {
-        if (ctx.lookupUnaryDispatch(word_name, ae.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+        if (ctx.lookupUnaryDispatch(dispatch_id, ae.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
     }
 
     if (dispatch_mod.dispatchBaseTypeValue(a)) |ab| {
-        if (ctx.lookupUnaryDispatch(word_name, ab.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = true, .unwrap_b = false };
+        if (ctx.lookupUnaryDispatch(dispatch_id, ab.descriptor.?)) |entry| return .{ .entry = entry, .unwrap_a = true, .unwrap_b = false };
     }
 
     return null;
@@ -116,6 +116,11 @@ fn lookupUnaryWithFallback(ctx: *Context, word_name: []const u8, a: Value) ?Auto
 ///
 /// See also notes in the implementation of `nativeDefineMethod`.
 pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
+    const dispatch_id = ctx.resolveDispatchId(word_name) orelse return false;
+    return tryDispatchBinaryById(ctx, dispatch_id);
+}
+
+fn tryDispatchBinaryById(ctx: *Context, dispatch_id: u32) !bool {
     if (ctx.stack.depth() < 2) return false;
 
     const a = try ctx.stack.peekN(1);
@@ -139,7 +144,7 @@ pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
         }
     }
 
-    if (lookupBinaryWithFallback(ctx, word_name, a, b)) |result| {
+    if (lookupBinaryWithFallback(ctx, dispatch_id, a, b)) |result| {
         if (ctx.current_pic_entry) |cache| {
             if (!cache.megamorphic) {
                 const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
@@ -173,6 +178,11 @@ pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
 /// Same opt-in rules as tryDispatchBinary: each native that supports
 /// dispatch must call this explicitly.
 pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
+    const dispatch_id = ctx.resolveDispatchId(word_name) orelse return false;
+    return tryDispatchUnaryById(ctx, dispatch_id);
+}
+
+fn tryDispatchUnaryById(ctx: *Context, dispatch_id: u32) !bool {
     if (ctx.stack.depth() < 1) return false;
 
     const a = try ctx.stack.peek();
@@ -194,7 +204,7 @@ pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
         }
     }
 
-    if (lookupUnaryWithFallback(ctx, word_name, a)) |result| {
+    if (lookupUnaryWithFallback(ctx, dispatch_id, a)) |result| {
         if (ctx.current_pic_entry) |cache| {
             if (!cache.megamorphic) {
                 const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
@@ -228,10 +238,11 @@ pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
 /// XXX(ripta): This reaches into 1z runtime to look up ordering:* enum variants.
 pub fn tryDispatchBinaryViaCmp(ctx: *Context, comptime op: enum { eq, lt, gt }) !bool {
     if (ctx.stack.depth() < 2) return false;
+    const cmp_id = ctx.resolveDispatchId("cmp") orelse return false;
 
     const a = try ctx.stack.peekN(1);
     const b = try ctx.stack.peek();
-    if (lookupBinaryWithFallback(ctx, "cmp", a, b)) |result| {
+    if (lookupBinaryWithFallback(ctx, cmp_id, a, b)) |result| {
         if (result.unwrap_a or result.unwrap_b) {
             try autoUnwrapBinaryOperands(ctx, result.unwrap_a, result.unwrap_b);
         }
@@ -273,18 +284,21 @@ pub fn tryDispatchBinaryViaCmp(ctx: *Context, comptime op: enum { eq, lt, gt }) 
 /// Tries binary dispatch first (if stack depth >= 2), then unary.
 /// Returns true if dispatched, false if not.
 pub fn tryDispatchGeneric(ctx: *Context, word_name: []const u8) !bool {
-    return tryDispatchGenericWithPic(ctx, word_name, null);
+    const dispatch_id = ctx.resolveDispatchId(word_name) orelse return false;
+    return tryDispatchGenericById(ctx, dispatch_id, null);
 }
 
-/// Try to dispatch a generic word, with optional polymorphic inline cache.
-///
-/// When `pic` is non-null and the cache generation matches, a
-/// pointer-based type check scans the cached entries to skip the full
-/// hash table lookup. On cache miss the full lookup proceeds and the
-/// result is inserted into the cache. When the cache overflows
-/// (more than `max_pic_entries` distinct type pairs), it transitions
-/// to a sticky megamorphic state that permanently bypasses caching.
+/// Convenience wrapper: resolve word name, then dispatch with PIC.
 pub fn tryDispatchGenericWithPic(ctx: *Context, word_name: []const u8, pic: ?*PolymorphicCache) !bool {
+    const dispatch_id = ctx.resolveDispatchId(word_name) orelse return false;
+    return tryDispatchGenericById(ctx, dispatch_id, pic);
+}
+
+/// Try to dispatch a generic word by dispatch ID, with optional PIC.
+///
+/// Used by the execution loop where the WordDefinition (and its dispatch_id)
+/// is already in hand, avoiding an extra dictionary lookup.
+pub fn tryDispatchGenericById(ctx: *Context, dispatch_id: u32, pic: ?*PolymorphicCache) !bool {
     if (pic) |cache| {
         if (!cache.megamorphic) {
             if (cache.count > 0 and cache.generation != ctx.dispatch.generation) {
@@ -320,7 +334,7 @@ pub fn tryDispatchGenericWithPic(ctx: *Context, word_name: []const u8, pic: ?*Po
     if (ctx.stack.depth() >= 2) {
         const a = try ctx.stack.peekN(1);
         const b = try ctx.stack.peek();
-        if (lookupBinaryWithFallback(ctx, word_name, a, b)) |result| {
+        if (lookupBinaryWithFallback(ctx, dispatch_id, a, b)) |result| {
             if (pic) |cache| {
                 if (!cache.megamorphic) {
                     const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
@@ -345,7 +359,7 @@ pub fn tryDispatchGenericWithPic(ctx: *Context, word_name: []const u8, pic: ?*Po
 
     if (ctx.stack.depth() >= 1) {
         const a = try ctx.stack.peek();
-        if (lookupUnaryWithFallback(ctx, word_name, a)) |result| {
+        if (lookupUnaryWithFallback(ctx, dispatch_id, a)) |result| {
             if (pic) |cache| {
                 if (!cache.megamorphic) {
                     const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
@@ -446,15 +460,16 @@ test "tryDispatchGeneric dispatches unary method for native type" {
     const body = &[_]Instruction{
         .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
+    const dispatch_id: u32 = 1;
     try ctx.dispatch.register(
-        .{ .word_name = "serialize", .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
         .{ .body = .{ .quotation = body } },
         false,
     );
 
     try ctx.stack.push(.{ .fixnum = 42 });
 
-    const result = try tryDispatchGeneric(&ctx, "serialize");
+    const result = try tryDispatchGenericById(&ctx, dispatch_id, null);
     try std.testing.expect(result);
 
     // Method should have executed (inspect converts fixnum to string)
@@ -477,13 +492,14 @@ test "tryDispatchGeneric tries binary before unary" {
         .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
 
+    const dispatch_id: u32 = 2;
     try ctx.dispatch.register(
-        .{ .word_name = "combine", .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
+        .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
         .{ .body = .{ .quotation = binary_body } },
         false,
     );
     try ctx.dispatch.register(
-        .{ .word_name = "combine", .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
         .{ .body = .{ .quotation = unary_body } },
         false,
     );
@@ -492,7 +508,7 @@ test "tryDispatchGeneric tries binary before unary" {
     try ctx.stack.push(.{ .fixnum = 10 });
     try ctx.stack.push(.{ .fixnum = 32 });
 
-    const result = try tryDispatchGeneric(&ctx, "combine");
+    const result = try tryDispatchGenericById(&ctx, dispatch_id, null);
     try std.testing.expect(result);
 
     // Binary method (addition) should have run
@@ -510,8 +526,9 @@ test "tryDispatchGenericWithPic populates cache on miss" {
     const body = &[_]Instruction{
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
+    const dispatch_id: u32 = 3;
     try ctx.dispatch.register(
-        .{ .word_name = "add", .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
+        .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
         .{ .body = .{ .quotation = body } },
         false,
     );
@@ -521,7 +538,7 @@ test "tryDispatchGenericWithPic populates cache on miss" {
     try ctx.stack.push(.{ .fixnum = 3 });
     try ctx.stack.push(.{ .fixnum = 4 });
 
-    const result = try tryDispatchGenericWithPic(&ctx, "add", &cache);
+    const result = try tryDispatchGenericById(&ctx, dispatch_id, &cache);
     try std.testing.expect(result);
     try std.testing.expectEqual(@as(i64, 7), (try ctx.stack.pop()).fixnum);
 
@@ -541,8 +558,9 @@ test "tryDispatchGenericWithPic hits cache on matching types" {
     const body = &[_]Instruction{
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
+    const dispatch_id: u32 = 3;
     try ctx.dispatch.register(
-        .{ .word_name = "add", .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
+        .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
         .{ .body = .{ .quotation = body } },
         false,
     );
@@ -552,13 +570,13 @@ test "tryDispatchGenericWithPic hits cache on matching types" {
     // First call: populates cache
     try ctx.stack.push(.{ .fixnum = 1 });
     try ctx.stack.push(.{ .fixnum = 2 });
-    _ = try tryDispatchGenericWithPic(&ctx, "add", &cache);
+    _ = try tryDispatchGenericById(&ctx, dispatch_id, &cache);
     _ = try ctx.stack.pop();
 
     // Second call: should hit cache (same types)
     try ctx.stack.push(.{ .fixnum = 10 });
     try ctx.stack.push(.{ .fixnum = 20 });
-    const result = try tryDispatchGenericWithPic(&ctx, "add", &cache);
+    const result = try tryDispatchGenericById(&ctx, dispatch_id, &cache);
     try std.testing.expect(result);
     try std.testing.expectEqual(@as(i64, 30), (try ctx.stack.pop()).fixnum);
 }
@@ -572,8 +590,9 @@ test "tryDispatchGenericWithPic invalidates on generation change" {
     const body = &[_]Instruction{
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
+    const add_id: u32 = 3;
     try ctx.dispatch.register(
-        .{ .word_name = "add", .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
+        .{ .dispatch_id = add_id, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
         .{ .body = .{ .quotation = body } },
         false,
     );
@@ -583,7 +602,7 @@ test "tryDispatchGenericWithPic invalidates on generation change" {
     // Populate cache
     try ctx.stack.push(.{ .fixnum = 1 });
     try ctx.stack.push(.{ .fixnum = 2 });
-    _ = try tryDispatchGenericWithPic(&ctx, "add", &cache);
+    _ = try tryDispatchGenericById(&ctx, add_id, &cache);
     _ = try ctx.stack.pop();
 
     const gen_before = cache.generation;
@@ -593,7 +612,7 @@ test "tryDispatchGenericWithPic invalidates on generation change" {
         .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
     try ctx.dispatch.register(
-        .{ .word_name = "show", .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .dispatch_id = 4, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
         .{ .body = .{ .quotation = body2 } },
         false,
     );
@@ -603,7 +622,7 @@ test "tryDispatchGenericWithPic invalidates on generation change" {
     // Cache should be stale: generation no longer matches
     try ctx.stack.push(.{ .fixnum = 5 });
     try ctx.stack.push(.{ .fixnum = 6 });
-    const result = try tryDispatchGenericWithPic(&ctx, "add", &cache);
+    const result = try tryDispatchGenericById(&ctx, add_id, &cache);
     try std.testing.expect(result);
     try std.testing.expectEqual(@as(i64, 11), (try ctx.stack.pop()).fixnum);
 
@@ -620,8 +639,9 @@ test "tryDispatchGenericWithPic with null pic_entry falls back to full lookup" {
     const body = &[_]Instruction{
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
+    const dispatch_id: u32 = 3;
     try ctx.dispatch.register(
-        .{ .word_name = "add", .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
+        .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
         .{ .body = .{ .quotation = body } },
         false,
     );
@@ -629,7 +649,7 @@ test "tryDispatchGenericWithPic with null pic_entry falls back to full lookup" {
     try ctx.stack.push(.{ .fixnum = 10 });
     try ctx.stack.push(.{ .fixnum = 20 });
 
-    const result = try tryDispatchGenericWithPic(&ctx, "add", null);
+    const result = try tryDispatchGenericById(&ctx, dispatch_id, null);
     try std.testing.expect(result);
     try std.testing.expectEqual(@as(i64, 30), (try ctx.stack.pop()).fixnum);
 }
@@ -643,8 +663,9 @@ test "tryDispatchGenericWithPic caches unary dispatch" {
     const body = &[_]Instruction{
         .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
+    const dispatch_id: u32 = 4;
     try ctx.dispatch.register(
-        .{ .word_name = "show", .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
         .{ .body = .{ .quotation = body } },
         false,
     );
@@ -652,7 +673,7 @@ test "tryDispatchGenericWithPic caches unary dispatch" {
     var cache = PolymorphicCache{};
 
     try ctx.stack.push(.{ .fixnum = 42 });
-    const result = try tryDispatchGenericWithPic(&ctx, "show", &cache);
+    const result = try tryDispatchGenericById(&ctx, dispatch_id, &cache);
     try std.testing.expect(result);
     try std.testing.expectEqualStrings("42", (try ctx.stack.pop()).string);
 

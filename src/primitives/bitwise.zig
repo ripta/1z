@@ -193,34 +193,39 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
         .{ .op = .bitor, .name = "bitor" },
         .{ .op = .bitxor, .name = "bitxor" },
     }) |item| {
+        const did = ctx.resolveDispatchId(item.name).?;
         inline for (bit_types) |ta| {
             inline for (bit_types) |tb| {
-                try dispatch.registerNative(item.name, bit_tvs[@intFromEnum(ta)], bit_tvs[@intFromEnum(tb)], makeBinaryBitwiseEntry(item.op, ta, tb));
+                try dispatch.registerNative(did, bit_tvs[@intFromEnum(ta)], bit_tvs[@intFromEnum(tb)], makeBinaryBitwiseEntry(item.op, ta, tb));
             }
         }
     }
 
     // bitnot: 2 entries (unary)
+    const bitnot_did = ctx.resolveDispatchId("bitnot").?;
     inline for (bit_types) |t| {
-        try dispatch.registerNative("bitnot", bit_tvs[@intFromEnum(t)], unary, makeBitnotEntry(t));
+        try dispatch.registerNative(bitnot_did, bit_tvs[@intFromEnum(t)], unary, makeBitnotEntry(t));
     }
 
     // shift-left: 2 entries (fixnum x fixnum, bignum x fixnum)
+    const shift_left_did = ctx.resolveDispatchId("shift-left").?;
     inline for (bit_types) |t| {
-        try dispatch.registerNative("shift-left", bit_tvs[@intFromEnum(t)], fixnum_tv, makeShiftLeftEntry(t));
+        try dispatch.registerNative(shift_left_did, bit_tvs[@intFromEnum(t)], fixnum_tv, makeShiftLeftEntry(t));
     }
 
     // shift-right: 2 entries (fixnum x fixnum, bignum x fixnum)
+    const shift_right_did = ctx.resolveDispatchId("shift-right").?;
     inline for (bit_types) |t| {
-        try dispatch.registerNative("shift-right", bit_tvs[@intFromEnum(t)], fixnum_tv, makeShiftRightEntry(t));
+        try dispatch.registerNative(shift_right_did, bit_tvs[@intFromEnum(t)], fixnum_tv, makeShiftRightEntry(t));
     }
 
     // ushift-right: 1 entry (fixnum x fixnum only)
-    try dispatch.registerNative("ushift-right", fixnum_tv, fixnum_tv, makeUshiftRightEntry());
+    try dispatch.registerNative(ctx.resolveDispatchId("ushift-right").?, fixnum_tv, fixnum_tv, makeUshiftRightEntry());
 
     // shift: 2 entries (fixnum x fixnum, bignum x fixnum)
+    const shift_did = ctx.resolveDispatchId("shift").?;
     inline for (bit_types) |t| {
-        try dispatch.registerNative("shift", bit_tvs[@intFromEnum(t)], fixnum_tv, makeShiftEntry(t));
+        try dispatch.registerNative(shift_did, bit_tvs[@intFromEnum(t)], fixnum_tv, makeShiftEntry(t));
     }
 }
 

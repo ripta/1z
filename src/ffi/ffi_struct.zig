@@ -308,7 +308,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
         }
 
         try ctx.registerDispatch(.{
-            .word_name = getter_name,
+            .dispatch_id = ctx.lookupWord(getter_name).?.dispatch_id,
             .type_a = vtype.type_val.?.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{
@@ -354,7 +354,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
             }
 
             try ctx.registerDispatch(.{
-                .word_name = setter_name,
+                .dispatch_id = ctx.lookupWord(setter_name).?.dispatch_id,
                 .type_a = vtype.type_val.?.descriptor.?,
                 .type_b = ctx.getDispatchAnySentinel().descriptor.?,
             }, .{

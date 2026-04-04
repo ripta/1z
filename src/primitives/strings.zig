@@ -62,22 +62,24 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
         "unit",
     };
 
+    const inspect_id = ctx.resolveDispatchId("inspect").?;
     for (inspect_type_names) |name| {
         const tv = ctx.lookupBuiltinTypeValue(name).?;
-        try dispatch.registerNative("inspect", tv, unary, nativeInspectGeneric);
+        try dispatch.registerNative(inspect_id, tv, unary, nativeInspectGeneric);
     }
 
     const string_tv = ctx.lookupBuiltinTypeValue("string").?;
     const symbol_tv = ctx.lookupBuiltinTypeValue("symbol").?;
 
+    const to_string_id = ctx.resolveDispatchId(">string").?;
     for (inspect_type_names) |name| {
         const tv = ctx.lookupBuiltinTypeValue(name).?;
         if (tv == string_tv) {
-            try dispatch.registerNative(">string", tv, unary, nativeAsStringPassthrough);
+            try dispatch.registerNative(to_string_id, tv, unary, nativeAsStringPassthrough);
         } else if (tv == symbol_tv) {
-            try dispatch.registerNative(">string", tv, unary, nativeAsStringSymbol);
+            try dispatch.registerNative(to_string_id, tv, unary, nativeAsStringSymbol);
         } else {
-            try dispatch.registerNative(">string", tv, unary, nativeAsStringGeneric);
+            try dispatch.registerNative(to_string_id, tv, unary, nativeAsStringGeneric);
         }
     }
 }

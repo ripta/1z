@@ -32,15 +32,21 @@ PASS: b.x>> reads a.>point instance
 Stack: [ ]
 PASS: a.y>> reads b.>point instance
 Stack: [ ]
-=== struct-diff: dispatch overwrite — last-loaded wins ===
+=== struct-diff: qualified access dispatches correctly ===
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
-PASS: a.>thing with a-fields fails (dispatch overwrite)
+PASS: a.>thing produces correct x
+Stack: [ ]
+PASS: a.>thing produces correct y
 Stack: [ ]
 PASS: b.>thing produces correct a
 Stack: [ ]
-PASS: a.>thing silently uses b's converter (dispatch overwrite)
+PASS: b.>thing produces correct b
+Stack: [ ]
+PASS: a.>thing with b-fields throws
+Stack: [ ]
+PASS: b.>thing with a-fields throws
 Stack: [ ]
 === struct-diff: types are distinct ===
 Stack: [ ]
@@ -49,6 +55,8 @@ Stack: [ ]
 === struct-diff: cross-module predicate rejection ===
 Stack: [ ]
 PASS: a.thing? rejects b.>thing instance
+Stack: [ ]
+PASS: b.thing? rejects a.>thing instance
 Stack: [ ]
 === struct-diff: cross-module field access errors ===
 Stack: [ ]
@@ -59,13 +67,13 @@ Stack: [ ]
 Stack: [ [ "use "cross_mod_conv_struct_diff_lib_a.1z" ; use "cross_mod_conv_struct_diff_lib_b.1z" ;" eval-string ] ]
 PASS: different-shape struct import without shadow-ok throws
 Stack: [ ]
-=== virtual: dispatch overwrite — last-loaded wins ===
+=== virtual: qualified access dispatches correctly ===
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
-PASS: a.>meters produces b's type (dispatch overwrite)
+PASS: a.>meters produces a's type
 Stack: [ ]
-PASS: a.>meters actually creates vb.meters
+PASS: a.>meters does not produce b's type
 Stack: [ ]
 PASS: b.>meters produces b's type
 Stack: [ ]
@@ -77,23 +85,23 @@ PASS: same-name virtual types from different modules are distinct
 Stack: [ ]
 === virtual: cross-module unwrap rejection ===
 Stack: [ ]
-PASS: a.unmake-meters rejects a.>meters (it's actually b's type)
+PASS: a.unmake-meters accepts a.>meters
 Stack: [ ]
-PASS: b.unmake-meters accepts a.>meters (it is b's type)
+PASS: b.unmake-meters rejects a.>meters
 Stack: [ ]
 === virtual: cross-module type-of ===
 Stack: [ ]
-PASS: a.>meters type-of matches b.meters (overwrite)
+PASS: a.>meters type-of matches a.meters
 Stack: [ ]
-PASS: a.>meters type-of does not match a.meters (overwrite)
+PASS: a.>meters type-of does not match b.meters
 Stack: [ ]
-=== enum: dispatch overwrite — last-loaded wins ===
+=== enum: qualified access dispatches correctly ===
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
-PASS: a.>color red produces b's type (dispatch overwrite)
+PASS: a.>color red produces a's type
 Stack: [ ]
-PASS: a.>color red actually creates eb.color
+PASS: a.>color red does not produce b's type
 Stack: [ ]
 PASS: b.>color red produces b's type
 Stack: [ ]
@@ -103,13 +111,15 @@ Stack: [ ]
 Stack: [ ]
 PASS: same-name enums from different modules are distinct
 Stack: [ ]
-=== enum: module-specific variants with dispatch overwrite ===
+=== enum: module-specific variants dispatch correctly ===
 Stack: [ ]
-PASS: a.>color green throws (dispatch uses b which lacks green)
+PASS: a.>color green works
+Stack: [ ]
+PASS: b.>color green throws (b lacks green)
 Stack: [ ]
 PASS: b.>color blue works
 Stack: [ ]
-PASS: a.>color blue silently creates eb type (overwrite)
+PASS: a.>color blue throws (a lacks blue)
 Stack: [ ]
 === enum: variant predicates remain module-scoped ===
 Stack: [ ]
@@ -123,17 +133,17 @@ PASS: imported >point produces correct x
 Stack: [ ]
 PASS: imported point? works
 Stack: [ ]
-=== single-import: virtual >meters affected by dispatch overwrite ===
+=== single-import: virtual >meters dispatches correctly ===
 Stack: [ ]
-PASS: imported >meters creates vb type (dispatch overwrite)
+PASS: imported >meters creates va type
 Stack: [ ]
-PASS: imported >meters does not create va type
+PASS: imported >meters does not create vb type
 Stack: [ ]
-=== single-import: enum >color affected by dispatch overwrite ===
+=== single-import: enum >color dispatches correctly ===
 Stack: [ ]
-PASS: imported >color creates eb type (dispatch overwrite)
+PASS: imported >color creates ea type
 Stack: [ ]
-PASS: imported >color does not create ea type
+PASS: imported >color does not create eb type
 Stack: [ ]
 === method-ext: extend >point with fixnum input ===
 Stack: [ ]
@@ -156,13 +166,15 @@ Stack: [ ]
 Stack: [ [ "ea: "cross_mod_conv_enum_lib_a.1z" load ; ea.>color: method{ string } [ drop red: ea.>color ] ;" eval-string ] ]
 PASS: ea.>color: method{ ... } fails — qualified word names not supported
 Stack: [ ]
-=== make-name: dispatch overwrite affects make-meters too ===
+=== make-name: qualified make-meters dispatches correctly ===
 Stack: [ ]
-PASS: va.make-meters creates vb type (dispatch overwrite)
+PASS: va.make-meters creates va type
 Stack: [ ]
-PASS: va.make-meters does not create va type
+PASS: va.make-meters does not create vb type
 Stack: [ ]
 PASS: vb.make-meters creates vb type
+Stack: [ ]
+PASS: vb.make-meters does not create va type
 Stack: [ ]
 === double-import: struct same-shape hits const redefine ===
 Stack: [ ]

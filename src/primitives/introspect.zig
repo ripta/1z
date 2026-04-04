@@ -181,6 +181,7 @@ fn moduleWordToWordDef(name: []const u8, mw: ModuleWord) WordDefinition {
         .source_line = mw.source_line,
         .source_column = mw.source_column,
         .provenance = mw.provenance,
+        .dispatch_id = mw.dispatch_id,
         .action = switch (mw.action) {
             .compound => |instrs| .{ .compound = instrs },
             .native => |f| .{ .native = f },
@@ -198,6 +199,7 @@ fn wordDefToModuleWord(def: WordDefinition) ModuleWord {
         .source_line = def.source_line,
         .source_column = def.source_column,
         .provenance = def.provenance,
+        .dispatch_id = def.dispatch_id,
         .action = switch (def.action) {
             .compound => |instrs| .{ .compound = instrs },
             .native => |f| .{ .native = f },

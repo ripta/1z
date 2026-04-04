@@ -263,24 +263,26 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
 pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
     // dispatch: mmap is at position 2 (below key and value)
     if (ctx.stack.depth() >= 3) {
-        const mmap_peek = try ctx.stack.peekN(2);
-        const a_type = dispatch_mod.dispatchDescriptor(mmap_peek, ctx);
-        if (ctx.lookupUnaryDispatch("@set!", a_type)) |entry| {
-            try dispatch_helpers.executeDispatchBody(ctx, entry.body);
-            return;
-        }
-        if (dispatch_mod.dispatchEnumTypeValue(mmap_peek)) |ae| {
-            if (ctx.lookupUnaryDispatch("@set!", ae.descriptor.?)) |entry| {
+        if (ctx.resolveDispatchId("@set!")) |did| {
+            const mmap_peek = try ctx.stack.peekN(2);
+            const a_type = dispatch_mod.dispatchDescriptor(mmap_peek, ctx);
+            if (ctx.lookupUnaryDispatch(did, a_type)) |entry| {
                 try dispatch_helpers.executeDispatchBody(ctx, entry.body);
                 return;
             }
-        }
-        if (dispatch_mod.dispatchBaseTypeValue(mmap_peek)) |bt| {
-            if (ctx.lookupUnaryDispatch("@set!", bt.descriptor.?)) |entry| {
-                const len = ctx.stack.items.items.len;
-                ctx.stack.items.items[len - 3] = mmap_peek.tagged.inner.*;
-                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
-                return;
+            if (dispatch_mod.dispatchEnumTypeValue(mmap_peek)) |ae| {
+                if (ctx.lookupUnaryDispatch(did, ae.descriptor.?)) |entry| {
+                    try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                    return;
+                }
+            }
+            if (dispatch_mod.dispatchBaseTypeValue(mmap_peek)) |bt| {
+                if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
+                    const len = ctx.stack.items.items.len;
+                    ctx.stack.items.items[len - 3] = mmap_peek.tagged.inner.*;
+                    try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                    return;
+                }
             }
         }
     }
@@ -322,24 +324,26 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
 pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
     // dispatch: mmap is at position 1 (below key)
     if (ctx.stack.depth() >= 2) {
-        const mmap_peek = try ctx.stack.peekN(1);
-        const a_type = dispatch_mod.dispatchDescriptor(mmap_peek, ctx);
-        if (ctx.lookupUnaryDispatch("@remove!", a_type)) |entry| {
-            try dispatch_helpers.executeDispatchBody(ctx, entry.body);
-            return;
-        }
-        if (dispatch_mod.dispatchEnumTypeValue(mmap_peek)) |ae| {
-            if (ctx.lookupUnaryDispatch("@remove!", ae.descriptor.?)) |entry| {
+        if (ctx.resolveDispatchId("@remove!")) |did| {
+            const mmap_peek = try ctx.stack.peekN(1);
+            const a_type = dispatch_mod.dispatchDescriptor(mmap_peek, ctx);
+            if (ctx.lookupUnaryDispatch(did, a_type)) |entry| {
                 try dispatch_helpers.executeDispatchBody(ctx, entry.body);
                 return;
             }
-        }
-        if (dispatch_mod.dispatchBaseTypeValue(mmap_peek)) |bt| {
-            if (ctx.lookupUnaryDispatch("@remove!", bt.descriptor.?)) |entry| {
-                const len = ctx.stack.items.items.len;
-                ctx.stack.items.items[len - 2] = mmap_peek.tagged.inner.*;
-                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
-                return;
+            if (dispatch_mod.dispatchEnumTypeValue(mmap_peek)) |ae| {
+                if (ctx.lookupUnaryDispatch(did, ae.descriptor.?)) |entry| {
+                    try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                    return;
+                }
+            }
+            if (dispatch_mod.dispatchBaseTypeValue(mmap_peek)) |bt| {
+                if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
+                    const len = ctx.stack.items.items.len;
+                    ctx.stack.items.items[len - 2] = mmap_peek.tagged.inner.*;
+                    try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                    return;
+                }
             }
         }
     }

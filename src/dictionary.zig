@@ -52,6 +52,10 @@ pub const WordDefinition = struct {
     capability: Capability = .none,
     /// JIT dispatch table ID, assigned when this word is registered for JIT compilation.
     word_id: ?u32 = null,
+    /// Monotonic dispatch ID assigned by Context.defineWord. Used as the
+    /// identity component of DispatchKey so that same-named words in
+    /// different modules get separate dispatch entries.
+    dispatch_id: u32 = 0,
     /// The action performed by this word: either a native function or a
     /// compound quotation. Unfortunate naming.
     action: union(enum) {

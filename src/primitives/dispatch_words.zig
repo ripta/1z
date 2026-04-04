@@ -142,8 +142,12 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
         type_b = try extractTypeValue(ctx, types_array[1]);
     }
 
+    const dispatch_id = if (ctx.lookupWord(word_name)) |wd| wd.dispatch_id else {
+        helpers.setErrorContext(ctx, "word '{s}' not found for method registration", .{word_name});
+        return error.WordNotFound;
+    };
     const key = DispatchKey{
-        .word_name = word_name,
+        .dispatch_id = dispatch_id,
         .type_a = type_a.descriptor.?,
         .type_b = type_b.descriptor.?,
     };

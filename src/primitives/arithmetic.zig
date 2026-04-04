@@ -566,70 +566,79 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
         .{ .op = .sub, .name = "-" },
         .{ .op = .mul, .name = "*" },
     }) |item| {
+        const did = ctx.resolveDispatchId(item.name).?;
         inline for (num_types) |ta| {
             inline for (num_types) |tb| {
-                try dispatch.registerNative(item.name, num_tvs[@intFromEnum(ta)].descriptor.?, num_tvs[@intFromEnum(tb)].descriptor.?, makeBinaryArithEntry(item.op, ta, tb));
+                try dispatch.registerNative(did, num_tvs[@intFromEnum(ta)].descriptor.?, num_tvs[@intFromEnum(tb)].descriptor.?, makeBinaryArithEntry(item.op, ta, tb));
             }
         }
     }
 
     // / : 9 entries
+    const div_did = ctx.resolveDispatchId("/").?;
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
-            try dispatch.registerNative("/", num_tvs[@intFromEnum(ta)].descriptor.?, num_tvs[@intFromEnum(tb)].descriptor.?, makeDivEntry(ta, tb));
+            try dispatch.registerNative(div_did, num_tvs[@intFromEnum(ta)].descriptor.?, num_tvs[@intFromEnum(tb)].descriptor.?, makeDivEntry(ta, tb));
         }
     }
 
     // % : 9 entries
+    const mod_did = ctx.resolveDispatchId("%").?;
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
-            try dispatch.registerNative("%", num_tvs[@intFromEnum(ta)].descriptor.?, num_tvs[@intFromEnum(tb)].descriptor.?, makeModEntry(ta, tb));
+            try dispatch.registerNative(mod_did, num_tvs[@intFromEnum(ta)].descriptor.?, num_tvs[@intFromEnum(tb)].descriptor.?, makeModEntry(ta, tb));
         }
     }
 
     // = : 6 cross-type entries only
+    const eq_did = ctx.resolveDispatchId("=").?;
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
             if (ta != tb) {
-                try dispatch.registerNative("=", num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeEqCrossTypeEntry(ta, tb));
+                try dispatch.registerNative(eq_did, num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeEqCrossTypeEntry(ta, tb));
             }
         }
     }
 
     // < : 9 entries
+    const lt_did = ctx.resolveDispatchId("<").?;
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
-            try dispatch.registerNative("<", num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeLtEntry(ta, tb));
+            try dispatch.registerNative(lt_did, num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeLtEntry(ta, tb));
         }
     }
 
     // > : 9 entries
+    const gt_did = ctx.resolveDispatchId(">").?;
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
-            try dispatch.registerNative(">", num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeGtEntry(ta, tb));
+            try dispatch.registerNative(gt_did, num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeGtEntry(ta, tb));
         }
     }
 
     // abs : 3 entries
-    try dispatch.registerNative("abs", fixnum_tv, unary, nativeAbsFixnum);
-    try dispatch.registerNative("abs", bignum_tv, unary, nativeAbsBignum);
-    try dispatch.registerNative("abs", float_tv, unary, nativeAbsFloat);
+    const abs_did = ctx.resolveDispatchId("abs").?;
+    try dispatch.registerNative(abs_did, fixnum_tv, unary, nativeAbsFixnum);
+    try dispatch.registerNative(abs_did, bignum_tv, unary, nativeAbsBignum);
+    try dispatch.registerNative(abs_did, float_tv, unary, nativeAbsFloat);
 
     // >float : 4 entries
-    try dispatch.registerNative(">float", fixnum_tv, unary, nativeToFloatFixnum);
-    try dispatch.registerNative(">float", float_tv, unary, nativeToFloatPassthrough);
-    try dispatch.registerNative(">float", bignum_tv, unary, nativeToFloatBignum);
-    try dispatch.registerNative(">float", string_tv, unary, nativeToFloatString);
+    const to_float_did = ctx.resolveDispatchId(">float").?;
+    try dispatch.registerNative(to_float_did, fixnum_tv, unary, nativeToFloatFixnum);
+    try dispatch.registerNative(to_float_did, float_tv, unary, nativeToFloatPassthrough);
+    try dispatch.registerNative(to_float_did, bignum_tv, unary, nativeToFloatBignum);
+    try dispatch.registerNative(to_float_did, string_tv, unary, nativeToFloatString);
 
     // >integer : 2 entries
-    try dispatch.registerNative(">integer", float_tv, unary, nativeToIntegerFloat);
-    try dispatch.registerNative(">integer", fixnum_tv, unary, nativeToIntegerPassthrough);
+    const to_integer_did = ctx.resolveDispatchId(">integer").?;
+    try dispatch.registerNative(to_integer_did, float_tv, unary, nativeToIntegerFloat);
+    try dispatch.registerNative(to_integer_did, fixnum_tv, unary, nativeToIntegerPassthrough);
 
     // <, > for string/byte_array : 4 entries each (2x2 matrix)
     inline for (byte_types) |ta| {
         inline for (byte_types) |tb| {
-            try dispatch.registerNative("<", byte_tvs[@intFromEnum(ta)], byte_tvs[@intFromEnum(tb)], makeBytesLtEntry(ta, tb));
-            try dispatch.registerNative(">", byte_tvs[@intFromEnum(ta)], byte_tvs[@intFromEnum(tb)], makeBytesGtEntry(ta, tb));
+            try dispatch.registerNative(lt_did, byte_tvs[@intFromEnum(ta)], byte_tvs[@intFromEnum(tb)], makeBytesLtEntry(ta, tb));
+            try dispatch.registerNative(gt_did, byte_tvs[@intFromEnum(ta)], byte_tvs[@intFromEnum(tb)], makeBytesGtEntry(ta, tb));
         }
     }
 }

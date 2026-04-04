@@ -1046,7 +1046,7 @@ pub const InferenceEngine = struct {
     }
 
     fn validateDispatchEntries(self: *InferenceEngine, name: []const u8, base_result: InferenceResult, word_def: *const WordDefinition, caller: CallerInfo) Allocator.Error!void {
-        const dispatch_entries = try self.dispatch_table.entriesForWord(name, self.allocator);
+        const dispatch_entries = try self.dispatch_table.entriesForDispatchId(word_def.dispatch_id, self.allocator);
         defer self.allocator.free(dispatch_entries);
 
         for (dispatch_entries) |pair| {
@@ -1725,6 +1725,7 @@ test "generic word with agreeing dispatch entries" {
     try dict.put("my-generic", .{
         .name = "my-generic",
         .source_file = "test.1z",
+        .dispatch_id = 1,
         .markers = &.{@constCast(&markers.generic_marker)},
         .action = .{ .compound = base_body },
     });
@@ -1739,7 +1740,7 @@ test "generic word with agreeing dispatch entries" {
 
     try dispatch.register(
         .{
-            .word_name = "my-generic",
+            .dispatch_id = 1,
             .type_a = duration_desc,
             .type_b = unary_desc,
         },
@@ -1768,6 +1769,7 @@ test "generic word with disagreeing dispatch entries emits diagnostic" {
     try dict.put("my-generic", .{
         .name = "my-generic",
         .source_file = "test.1z",
+        .dispatch_id = 1,
         .markers = &.{@constCast(&markers.generic_marker)},
         .action = .{ .compound = base_body },
     });
@@ -1783,7 +1785,7 @@ test "generic word with disagreeing dispatch entries emits diagnostic" {
 
     try dispatch.register(
         .{
-            .word_name = "my-generic",
+            .dispatch_id = 1,
             .type_a = duration_desc2,
             .type_b = unary_desc2,
         },

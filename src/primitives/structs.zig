@@ -394,7 +394,7 @@ fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const Stru
 
     const hash_tv = ctx.lookupBuiltinTypeValue("hash") orelse return;
     try ctx.registerDispatch(.{
-        .word_name = name,
+        .dispatch_id = ctx.lookupWord(name).?.dispatch_id,
         .type_a = hash_tv.descriptor.?,
         .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
     }, .{ .body = .{ .quotation = instrs } }, true);
@@ -483,7 +483,7 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
 
     const type_tv = struct_type.type_val orelse return error.TypeMismatch;
     try ctx.registerDispatch(.{
-        .word_name = name,
+        .dispatch_id = ctx.lookupWord(name).?.dispatch_id,
         .type_a = type_tv.descriptor.?,
         .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
     }, .{
@@ -526,7 +526,7 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
 
     const type_tv = struct_type.type_val orelse return error.TypeMismatch;
     try ctx.registerDispatch(.{
-        .word_name = name,
+        .dispatch_id = ctx.lookupWord(name).?.dispatch_id,
         .type_a = type_tv.descriptor.?,
         .type_b = ctx.getDispatchAnySentinel().descriptor.?,
     }, .{

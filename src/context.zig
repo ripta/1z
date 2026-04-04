@@ -111,7 +111,7 @@ pub const PragmaFrame = std.StringHashMapUnmanaged(Value);
 /// of type registrations.
 pub const TypeRegistryFrame = struct {
     type_descriptors: std.StringHashMapUnmanaged(*value_mod.HashTable) = .{},
-    enum_registry: std.StringHashMapUnmanaged([]const *const value_mod.VirtualType) = .{},
+    enum_registry: std.AutoHashMapUnmanaged(*const value_mod.TypeValue, []const *const value_mod.VirtualType) = .{},
 
     pub fn deinit(self: *TypeRegistryFrame, allocator: Allocator) void {
         self.type_descriptors.deinit(allocator);
@@ -323,6 +323,9 @@ pub const Context = struct {
     trace: TraceConfig = .{},
     /// Wall-clock stall detection threshold in nanoseconds, parsed from --deadlock-detect[=N].
     deadlock_detect_ns: ?i128 = null,
+    /// Monotonic counter for assigning unique dispatch IDs to word definitions.
+    /// Atomic for future thread-safety requirements.
+    next_dispatch_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     /// Dispatch table for user-defined operator/method dispatch.
     dispatch: DispatchTable,
     /// JIT dispatch table mapping word IDs to compiled code pointers.
@@ -566,11 +569,11 @@ pub const Context = struct {
             std.debug.panic("Failed to init builtin type values: {any}", .{err});
         };
 
-        primitives.registerPrimitives(&ctx.dictionary, ctx.arena.allocator()) catch |err| {
+        primitives.registerPrimitives(&ctx.dictionary, ctx.arena.allocator(), &ctx.next_dispatch_id) catch |err| {
             std.debug.panic("Failed to register primitives: {any}", .{err});
         };
 
-        primitives.createNativeModule(&ctx.dictionary, ctx.arena.allocator()) catch |err| {
+        primitives.createNativeModule(&ctx.dictionary, ctx.arena.allocator(), &ctx.next_dispatch_id) catch |err| {
             std.debug.panic("Failed to create native module: {any}", .{err});
         };
 
@@ -904,6 +907,7 @@ pub const Context = struct {
                 .markers = entry.value_ptr.*.markers,
                 .source_module = entry.value_ptr.*.source_module orelse module,
                 .capability = entry.value_ptr.*.capability,
+                .dispatch_id = entry.value_ptr.*.dispatch_id,
                 .action = switch (entry.value_ptr.*.action) {
                     .compound => |instrs| .{ .compound = instrs },
                     .native => |func| .{ .native = func },
@@ -919,6 +923,7 @@ pub const Context = struct {
                 .markers = entry.value_ptr.*.markers,
                 .source_module = entry.value_ptr.*.source_module orelse module,
                 .capability = entry.value_ptr.*.capability,
+                .dispatch_id = entry.value_ptr.*.dispatch_id,
                 .action = switch (entry.value_ptr.*.action) {
                     .compound => |instrs| .{ .compound = instrs },
                     .native => |func| .{ .native = func },
@@ -1122,6 +1127,7 @@ pub const Context = struct {
         }
 
         var def = definition;
+        def.dispatch_id = self.next_dispatch_id.fetchAdd(1, .monotonic);
         if (def.source_file == null) {
             def.source_file = self.current_source;
             if (self.call_stack.items.len > 0) {
@@ -1538,31 +1544,31 @@ pub const Context = struct {
 
     /// Look up a binary dispatch entry by walking dispatch frames (top to
     /// bottom), then the base dispatch table, then the parent context chain.
-    pub fn lookupBinaryDispatch(self: *const Context, word_name: []const u8, type_a: *const value_mod.HashTable, type_b: *const value_mod.HashTable) ?DispatchEntry {
+    pub fn lookupBinaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.HashTable, type_b: *const value_mod.HashTable) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
-        return self.lookupBinaryDispatchLocked(word_name, type_a, type_b);
+        return self.lookupBinaryDispatchLocked(dispatch_id, type_a, type_b);
     }
 
-    fn lookupBinaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.HashTable, type_b: *const value_mod.HashTable) ?DispatchEntry {
+    fn lookupBinaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.HashTable, type_b: *const value_mod.HashTable) ?DispatchEntry {
         const any_sentinel = self.getDispatchAnySentinel().descriptor.?;
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
         while (i > 0) {
             i -= 1;
-            if (dispatch_mod.lookupBinaryInEntries(&self.dispatch_frames.items[i].entries, word_name, type_a, type_b, any_sentinel)) |entry| return entry;
+            if (dispatch_mod.lookupBinaryInEntries(&self.dispatch_frames.items[i].entries, dispatch_id, type_a, type_b, any_sentinel)) |entry| return entry;
         }
         // Base dispatch table
-        if (self.dispatch.lookupBinary(word_name, type_a, type_b, any_sentinel)) |entry| return entry;
+        if (self.dispatch.lookupBinary(dispatch_id, type_a, type_b, any_sentinel)) |entry| return entry;
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
             var j = ctx.dispatch_frames.items.len;
             while (j > 0) {
                 j -= 1;
-                if (dispatch_mod.lookupBinaryInEntries(&ctx.dispatch_frames.items[j].entries, word_name, type_a, type_b, ctx.getDispatchAnySentinel().descriptor.?)) |entry| return entry;
+                if (dispatch_mod.lookupBinaryInEntries(&ctx.dispatch_frames.items[j].entries, dispatch_id, type_a, type_b, ctx.getDispatchAnySentinel().descriptor.?)) |entry| return entry;
             }
-            if (ctx.dispatch.lookupBinary(word_name, type_a, type_b, ctx.getDispatchAnySentinel().descriptor.?)) |entry| return entry;
+            if (ctx.dispatch.lookupBinary(dispatch_id, type_a, type_b, ctx.getDispatchAnySentinel().descriptor.?)) |entry| return entry;
             ancestor = ctx.parent_context;
         }
 
@@ -1571,52 +1577,58 @@ pub const Context = struct {
 
     /// Look up a unary dispatch entry by walking dispatch frames (top to
     /// bottom), then the base dispatch table, then the parent context chain.
-    pub fn lookupUnaryDispatch(self: *const Context, word_name: []const u8, type_a: *const value_mod.HashTable) ?DispatchEntry {
+    pub fn lookupUnaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.HashTable) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
-        return self.lookupUnaryDispatchLocked(word_name, type_a);
+        return self.lookupUnaryDispatchLocked(dispatch_id, type_a);
     }
 
-    fn lookupUnaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.HashTable) ?DispatchEntry {
+    fn lookupUnaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.HashTable) ?DispatchEntry {
         const any_sentinel = self.getDispatchAnySentinel().descriptor.?;
         const unary_sentinel = self.getDispatchUnarySentinel().descriptor.?;
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
         while (i > 0) {
             i -= 1;
-            if (dispatch_mod.lookupUnaryInEntries(&self.dispatch_frames.items[i].entries, word_name, type_a, any_sentinel, unary_sentinel)) |entry| return entry;
+            if (dispatch_mod.lookupUnaryInEntries(&self.dispatch_frames.items[i].entries, dispatch_id, type_a, any_sentinel, unary_sentinel)) |entry| return entry;
         }
         // Base dispatch table
-        if (self.dispatch.lookupUnary(word_name, type_a, any_sentinel, unary_sentinel)) |entry| return entry;
+        if (self.dispatch.lookupUnary(dispatch_id, type_a, any_sentinel, unary_sentinel)) |entry| return entry;
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
             var j = ctx.dispatch_frames.items.len;
             while (j > 0) {
                 j -= 1;
-                if (dispatch_mod.lookupUnaryInEntries(&ctx.dispatch_frames.items[j].entries, word_name, type_a, ctx.getDispatchAnySentinel().descriptor.?, ctx.getDispatchUnarySentinel().descriptor.?)) |entry| return entry;
+                if (dispatch_mod.lookupUnaryInEntries(&ctx.dispatch_frames.items[j].entries, dispatch_id, type_a, ctx.getDispatchAnySentinel().descriptor.?, ctx.getDispatchUnarySentinel().descriptor.?)) |entry| return entry;
             }
-            if (ctx.dispatch.lookupUnary(word_name, type_a, ctx.getDispatchAnySentinel().descriptor.?, ctx.getDispatchUnarySentinel().descriptor.?)) |entry| return entry;
+            if (ctx.dispatch.lookupUnary(dispatch_id, type_a, ctx.getDispatchAnySentinel().descriptor.?, ctx.getDispatchUnarySentinel().descriptor.?)) |entry| return entry;
             ancestor = ctx.parent_context;
         }
 
         return null;
     }
 
-    /// Look up a binary dispatch entry in the native-only shadow table,
-    /// walking the parent context chain.
-    pub fn lookupNativeBinaryDispatch(self: *const Context, word_name: []const u8, type_a: *const value_mod.HashTable, type_b: *const value_mod.HashTable) ?DispatchEntry {
-        self.acquireSharedRead();
-        defer self.releaseSharedRead();
-        return self.lookupNativeBinaryDispatchLocked(word_name, type_a, type_b);
+    /// Resolve a word name to its dispatch ID by looking up the word definition.
+    pub fn resolveDispatchId(self: *const Context, word_name: []const u8) ?u32 {
+        if (self.lookupWord(word_name)) |def| return def.dispatch_id;
+        return null;
     }
 
-    fn lookupNativeBinaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.HashTable, type_b: *const value_mod.HashTable) ?DispatchEntry {
-        if (self.dispatch.lookupNativeBinary(word_name, type_a, type_b, self.getDispatchAnySentinel().descriptor.?)) |entry| return entry;
+    /// Look up a binary dispatch entry in the native-only shadow table,
+    /// walking the parent context chain.
+    pub fn lookupNativeBinaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.HashTable, type_b: *const value_mod.HashTable) ?DispatchEntry {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+        return self.lookupNativeBinaryDispatchLocked(dispatch_id, type_a, type_b);
+    }
+
+    fn lookupNativeBinaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.HashTable, type_b: *const value_mod.HashTable) ?DispatchEntry {
+        if (self.dispatch.lookupNativeBinary(dispatch_id, type_a, type_b, self.getDispatchAnySentinel().descriptor.?)) |entry| return entry;
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
-            if (ctx.dispatch.lookupNativeBinary(word_name, type_a, type_b, ctx.getDispatchAnySentinel().descriptor.?)) |entry| return entry;
+            if (ctx.dispatch.lookupNativeBinary(dispatch_id, type_a, type_b, ctx.getDispatchAnySentinel().descriptor.?)) |entry| return entry;
             ancestor = ctx.parent_context;
         }
 
@@ -1625,18 +1637,18 @@ pub const Context = struct {
 
     /// Look up a unary dispatch entry in the native-only shadow table,
     /// walking the parent context chain.
-    pub fn lookupNativeUnaryDispatch(self: *const Context, word_name: []const u8, type_a: *const value_mod.HashTable) ?DispatchEntry {
+    pub fn lookupNativeUnaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.HashTable) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
-        return self.lookupNativeUnaryDispatchLocked(word_name, type_a);
+        return self.lookupNativeUnaryDispatchLocked(dispatch_id, type_a);
     }
 
-    fn lookupNativeUnaryDispatchLocked(self: *const Context, word_name: []const u8, type_a: *const value_mod.HashTable) ?DispatchEntry {
-        if (self.dispatch.lookupNativeUnary(word_name, type_a, self.getDispatchAnySentinel().descriptor.?, self.getDispatchUnarySentinel().descriptor.?)) |entry| return entry;
+    fn lookupNativeUnaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.HashTable) ?DispatchEntry {
+        if (self.dispatch.lookupNativeUnary(dispatch_id, type_a, self.getDispatchAnySentinel().descriptor.?, self.getDispatchUnarySentinel().descriptor.?)) |entry| return entry;
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
-            if (ctx.dispatch.lookupNativeUnary(word_name, type_a, ctx.getDispatchAnySentinel().descriptor.?, ctx.getDispatchUnarySentinel().descriptor.?)) |entry| return entry;
+            if (ctx.dispatch.lookupNativeUnary(dispatch_id, type_a, ctx.getDispatchAnySentinel().descriptor.?, ctx.getDispatchUnarySentinel().descriptor.?)) |entry| return entry;
             ancestor = ctx.parent_context;
         }
 
@@ -1645,17 +1657,17 @@ pub const Context = struct {
 
     /// Look up enum variant types by enum name, walking type registry frames
     /// (top to bottom), then the parent context chain.
-    pub fn lookupEnumVariants(self: *const Context, enum_name: []const u8) ?[]const *const value_mod.VirtualType {
+    pub fn lookupEnumVariants(self: *const Context, enum_tv: *const value_mod.TypeValue) ?[]const *const value_mod.VirtualType {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
-        return self.lookupEnumVariantsLocked(enum_name);
+        return self.lookupEnumVariantsLocked(enum_tv);
     }
 
-    fn lookupEnumVariantsLocked(self: *const Context, enum_name: []const u8) ?[]const *const value_mod.VirtualType {
+    fn lookupEnumVariantsLocked(self: *const Context, enum_tv: *const value_mod.TypeValue) ?[]const *const value_mod.VirtualType {
         var i = self.type_registry_frames.items.len;
         while (i > 0) {
             i -= 1;
-            if (self.type_registry_frames.items[i].enum_registry.get(enum_name)) |variants| return variants;
+            if (self.type_registry_frames.items[i].enum_registry.get(enum_tv)) |variants| return variants;
         }
 
         var ancestor = self.parent_context;
@@ -1663,7 +1675,7 @@ pub const Context = struct {
             var j = ctx.type_registry_frames.items.len;
             while (j > 0) {
                 j -= 1;
-                if (ctx.type_registry_frames.items[j].enum_registry.get(enum_name)) |variants| return variants;
+                if (ctx.type_registry_frames.items[j].enum_registry.get(enum_tv)) |variants| return variants;
             }
             ancestor = ctx.parent_context;
         }
@@ -2209,16 +2221,16 @@ pub const Context = struct {
     }
 
     /// Register enum variants into the topmost type registry frame.
-    pub fn registerEnumVariants(self: *Context, name: []const u8, variants: []const *const value_mod.VirtualType) !void {
+    pub fn registerEnumVariants(self: *Context, enum_tv: *const value_mod.TypeValue, variants: []const *const value_mod.VirtualType) !void {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
-        return self.registerEnumVariantsLocked(name, variants);
+        return self.registerEnumVariantsLocked(enum_tv, variants);
     }
 
-    fn registerEnumVariantsLocked(self: *Context, name: []const u8, variants: []const *const value_mod.VirtualType) !void {
+    fn registerEnumVariantsLocked(self: *Context, enum_tv: *const value_mod.TypeValue, variants: []const *const value_mod.VirtualType) !void {
         if (self.type_registry_frames.items.len == 0) return error.OutOfMemory;
         const top = self.type_registry_frames.items.len - 1;
-        try self.type_registry_frames.items[top].enum_registry.put(self.allocator, name, variants);
+        try self.type_registry_frames.items[top].enum_registry.put(self.allocator, enum_tv, variants);
     }
 
     // =========================================================================
@@ -2294,33 +2306,39 @@ pub const Context = struct {
         return self.dispatch.entries.get(key);
     }
 
-    /// Collect all dispatch key-entry pairs for a given word name, including
+    /// Collect all dispatch key-entry pairs for a given dispatch ID, including
     /// entries from all frames, the base table, and parent contexts.
-    pub fn dispatchEntriesForWord(self: *const Context, word_name: []const u8, alloc: Allocator) ![]DispatchTable.KeyEntryPair {
+    pub fn dispatchEntriesForId(self: *const Context, dispatch_id: u32, alloc: Allocator) ![]DispatchTable.KeyEntryPair {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
-        return self.dispatchEntriesForWordLocked(word_name, alloc);
+        return self.dispatchEntriesForIdLocked(dispatch_id, alloc);
     }
 
-    fn dispatchEntriesForWordLocked(self: *const Context, word_name: []const u8, alloc: Allocator) ![]DispatchTable.KeyEntryPair {
+    /// Convenience wrapper: resolve word name to dispatch ID, then collect entries.
+    pub fn dispatchEntriesForWord(self: *const Context, word_name: []const u8, alloc: Allocator) ![]DispatchTable.KeyEntryPair {
+        const did = self.resolveDispatchId(word_name) orelse return &.{};
+        return self.dispatchEntriesForId(did, alloc);
+    }
+
+    fn dispatchEntriesForIdLocked(self: *const Context, dispatch_id: u32, alloc: Allocator) ![]DispatchTable.KeyEntryPair {
         var results: std.ArrayListUnmanaged(DispatchTable.KeyEntryPair) = .{};
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
         while (i > 0) {
             i -= 1;
-            try dispatch_mod.collectEntriesForWord(&self.dispatch_frames.items[i].entries, word_name, &results, alloc);
+            try dispatch_mod.collectEntriesForDispatchId(&self.dispatch_frames.items[i].entries, dispatch_id, &results, alloc);
         }
         // Base dispatch table
-        try dispatch_mod.collectEntriesForWord(&self.dispatch.entries, word_name, &results, alloc);
+        try dispatch_mod.collectEntriesForDispatchId(&self.dispatch.entries, dispatch_id, &results, alloc);
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
             var j = ctx.dispatch_frames.items.len;
             while (j > 0) {
                 j -= 1;
-                try dispatch_mod.collectEntriesForWord(&ctx.dispatch_frames.items[j].entries, word_name, &results, alloc);
+                try dispatch_mod.collectEntriesForDispatchId(&ctx.dispatch_frames.items[j].entries, dispatch_id, &results, alloc);
             }
-            try dispatch_mod.collectEntriesForWord(&ctx.dispatch.entries, word_name, &results, alloc);
+            try dispatch_mod.collectEntriesForDispatchId(&ctx.dispatch.entries, dispatch_id, &results, alloc);
             ancestor = ctx.parent_context;
         }
         const slice = try results.toOwnedSlice(alloc);
@@ -2338,33 +2356,39 @@ pub const Context = struct {
         return slice;
     }
 
-    /// Collect all dispatch keys for a given word name, including
+    /// Collect all dispatch keys for a given dispatch ID, including
     /// entries from all frames, the base table, and parent contexts.
-    pub fn dispatchKeysForWord(self: *const Context, word_name: []const u8, alloc: Allocator) ![]DispatchKey {
+    pub fn dispatchKeysForId(self: *const Context, dispatch_id: u32, alloc: Allocator) ![]DispatchKey {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
-        return self.dispatchKeysForWordLocked(word_name, alloc);
+        return self.dispatchKeysForIdLocked(dispatch_id, alloc);
     }
 
-    fn dispatchKeysForWordLocked(self: *const Context, word_name: []const u8, alloc: Allocator) ![]DispatchKey {
+    /// Convenience wrapper: resolve word name to dispatch ID, then collect keys.
+    pub fn dispatchKeysForWord(self: *const Context, word_name: []const u8, alloc: Allocator) ![]DispatchKey {
+        const did = self.resolveDispatchId(word_name) orelse return &.{};
+        return self.dispatchKeysForId(did, alloc);
+    }
+
+    fn dispatchKeysForIdLocked(self: *const Context, dispatch_id: u32, alloc: Allocator) ![]DispatchKey {
         var results: std.ArrayListUnmanaged(DispatchKey) = .{};
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
         while (i > 0) {
             i -= 1;
-            try dispatch_mod.collectKeysForWord(&self.dispatch_frames.items[i].entries, word_name, &results, alloc);
+            try dispatch_mod.collectKeysForDispatchId(&self.dispatch_frames.items[i].entries, dispatch_id, &results, alloc);
         }
         // Base dispatch table
-        try dispatch_mod.collectKeysForWord(&self.dispatch.entries, word_name, &results, alloc);
+        try dispatch_mod.collectKeysForDispatchId(&self.dispatch.entries, dispatch_id, &results, alloc);
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
             var j = ctx.dispatch_frames.items.len;
             while (j > 0) {
                 j -= 1;
-                try dispatch_mod.collectKeysForWord(&ctx.dispatch_frames.items[j].entries, word_name, &results, alloc);
+                try dispatch_mod.collectKeysForDispatchId(&ctx.dispatch_frames.items[j].entries, dispatch_id, &results, alloc);
             }
-            try dispatch_mod.collectKeysForWord(&ctx.dispatch.entries, word_name, &results, alloc);
+            try dispatch_mod.collectKeysForDispatchId(&ctx.dispatch.entries, dispatch_id, &results, alloc);
             ancestor = ctx.parent_context;
         }
         const slice = try results.toOwnedSlice(alloc);
@@ -2460,7 +2484,7 @@ pub const Context = struct {
                     } else false;
 
                     if (has_generic) {
-                        if (try dispatch_helpers.tryDispatchGeneric(self, word_name)) return;
+                        if (try dispatch_helpers.tryDispatchGenericById(self, mod_word.dispatch_id, null)) return;
 
                         if (instrs.len == 0) {
                             self.pending_error_message = "no method found for given argument types";
@@ -3597,7 +3621,7 @@ pub const Context = struct {
 
                             if (has_generic) {
                                 const pic_entry = if (pic_table) |pt| pt.get(idx) else null;
-                                const dispatched = dispatch_helpers.tryDispatchGenericWithPic(self, name, pic_entry) catch |err|
+                                const dispatched = dispatch_helpers.tryDispatchGenericById(self, word.dispatch_id, pic_entry) catch |err|
                                     return self.wordErrorCleanup(name, err);
 
                                 if (dispatched) {
@@ -4254,25 +4278,29 @@ test "enum registry frame push/pop" {
     defer ctx.deinit();
 
     const alloc = ctx.arena.allocator();
+    const color_tv = try alloc.create(value_mod.TypeValue);
+    color_tv.* = .{ .name = "color:", .descriptor = null };
     const vt = try alloc.create(value_mod.VirtualType);
     vt.* = .{ .name = "red", .inner_type = "symbol" };
     const variants: []const *const value_mod.VirtualType = &.{vt};
-    try ctx.registerEnumVariants("color", variants);
+    try ctx.registerEnumVariants(color_tv, variants);
 
-    try std.testing.expect(ctx.lookupEnumVariants("color") != null);
+    try std.testing.expect(ctx.lookupEnumVariants(color_tv) != null);
 
     try ctx.pushTypeRegistryFrame();
+    const size_tv = try alloc.create(value_mod.TypeValue);
+    size_tv.* = .{ .name = "size:", .descriptor = null };
     const vt2 = try alloc.create(value_mod.VirtualType);
     vt2.* = .{ .name = "small", .inner_type = "symbol" };
     const variants2: []const *const value_mod.VirtualType = &.{vt2};
-    try ctx.registerEnumVariants("size", variants2);
+    try ctx.registerEnumVariants(size_tv, variants2);
 
-    try std.testing.expect(ctx.lookupEnumVariants("size") != null);
-    try std.testing.expect(ctx.lookupEnumVariants("color") != null);
+    try std.testing.expect(ctx.lookupEnumVariants(size_tv) != null);
+    try std.testing.expect(ctx.lookupEnumVariants(color_tv) != null);
 
     ctx.popTypeRegistryFrame();
-    try std.testing.expect(ctx.lookupEnumVariants("size") == null);
-    try std.testing.expect(ctx.lookupEnumVariants("color") != null);
+    try std.testing.expect(ctx.lookupEnumVariants(size_tv) == null);
+    try std.testing.expect(ctx.lookupEnumVariants(color_tv) != null);
 }
 
 // =============================================================================
@@ -4285,34 +4313,35 @@ test "dispatch frame push/pop with lookup visibility" {
 
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
     const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+    const did: u32 = 1000;
 
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 0 }};
 
     // Register in base dispatch table
     try ctx.dispatch.register(
-        .{ .word_name = "show", .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .dispatch_id = did, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
         .{ .body = .{ .quotation = body } },
         false,
     );
 
-    try std.testing.expect(ctx.lookupUnaryDispatch("show", fixnum_tv.descriptor.?) != null);
+    try std.testing.expect(ctx.lookupUnaryDispatch(did, fixnum_tv.descriptor.?) != null);
 
     // Push a frame and register a new entry
     try ctx.pushDispatchFrame();
     const body2 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 0 }};
     try ctx.registerDispatch(
-        .{ .word_name = "show", .type_a = string_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .dispatch_id = did, .type_a = string_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
         .{ .body = .{ .quotation = body2 } },
         false,
     );
 
-    try std.testing.expect(ctx.lookupUnaryDispatch("show", string_tv.descriptor.?) != null);
-    try std.testing.expect(ctx.lookupUnaryDispatch("show", fixnum_tv.descriptor.?) != null);
+    try std.testing.expect(ctx.lookupUnaryDispatch(did, string_tv.descriptor.?) != null);
+    try std.testing.expect(ctx.lookupUnaryDispatch(did, fixnum_tv.descriptor.?) != null);
 
     // Pop; string entry should vanish
     ctx.popDispatchFrame();
-    try std.testing.expect(ctx.lookupUnaryDispatch("show", string_tv.descriptor.?) == null);
-    try std.testing.expect(ctx.lookupUnaryDispatch("show", fixnum_tv.descriptor.?) != null);
+    try std.testing.expect(ctx.lookupUnaryDispatch(did, string_tv.descriptor.?) == null);
+    try std.testing.expect(ctx.lookupUnaryDispatch(did, fixnum_tv.descriptor.?) != null);
 }
 
 test "dispatch frame shadowing" {
@@ -4322,13 +4351,14 @@ test "dispatch frame shadowing" {
     const duration_desc = try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{});
     defer value_mod.destroyTypeDescriptor(std.testing.allocator, duration_desc);
     const duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = @ptrCast(duration_desc) };
+    const did: u32 = 1001;
 
     const body1 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
     const body2 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
 
     // Register in base table
     try ctx.dispatch.register(
-        .{ .word_name = "+", .type_a = duration_tv.descriptor.?, .type_b = duration_tv.descriptor.? },
+        .{ .dispatch_id = did, .type_a = duration_tv.descriptor.?, .type_b = duration_tv.descriptor.? },
         .{ .body = .{ .quotation = body1 } },
         false,
     );
@@ -4336,18 +4366,18 @@ test "dispatch frame shadowing" {
     // Push frame and shadow
     try ctx.pushDispatchFrame();
     try ctx.registerDispatch(
-        .{ .word_name = "+", .type_a = duration_tv.descriptor.?, .type_b = duration_tv.descriptor.? },
+        .{ .dispatch_id = did, .type_a = duration_tv.descriptor.?, .type_b = duration_tv.descriptor.? },
         .{ .body = .{ .quotation = body2 } },
         false,
     );
 
     // Inner should win
-    const entry = ctx.lookupBinaryDispatch("+", duration_tv.descriptor.?, duration_tv.descriptor.?).?;
+    const entry = ctx.lookupBinaryDispatch(did, duration_tv.descriptor.?, duration_tv.descriptor.?).?;
     try std.testing.expectEqual(@as(i64, 2), entry.body.quotation[0].op.push_literal.fixnum);
 
     // Pop; outer visible again
     ctx.popDispatchFrame();
-    const entry2 = ctx.lookupBinaryDispatch("+", duration_tv.descriptor.?, duration_tv.descriptor.?).?;
+    const entry2 = ctx.lookupBinaryDispatch(did, duration_tv.descriptor.?, duration_tv.descriptor.?).?;
     try std.testing.expectEqual(@as(i64, 1), entry2.body.quotation[0].op.push_literal.fixnum);
 }
 
@@ -4368,16 +4398,17 @@ test "base behavior with no extra frames matches original" {
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
 
     // No extra frames pushed, so registerDispatch goes to base dispatch table
+    const did: u32 = 1002;
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0 }};
     try ctx.registerDispatch(
-        .{ .word_name = "test-op", .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .dispatch_id = did, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
         .{ .body = .{ .quotation = body } },
         false,
     );
 
     // Should be findable via both the new API and the raw dispatch table
-    try std.testing.expect(ctx.lookupUnaryDispatch("test-op", fixnum_tv.descriptor.?) != null);
-    try std.testing.expect(ctx.dispatch.lookupUnary("test-op", fixnum_tv.descriptor.?, ctx.getDispatchAnySentinel().descriptor.?, ctx.getDispatchUnarySentinel().descriptor.?) != null);
+    try std.testing.expect(ctx.lookupUnaryDispatch(did, fixnum_tv.descriptor.?) != null);
+    try std.testing.expect(ctx.dispatch.lookupUnary(did, fixnum_tv.descriptor.?, ctx.getDispatchAnySentinel().descriptor.?, ctx.getDispatchUnarySentinel().descriptor.?) != null);
 }
 
 test "initBuiltinTypeValues populates all array slots" {
