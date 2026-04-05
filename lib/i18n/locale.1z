@@ -1,0 +1,198 @@
+\ lib/i18n/locale.1z - Locale identification and decomposition
+\
+\ Provides the `locale` virtual type wrapping a BCP 47 string,
+\ a `<locale>` smart constructor that validates and normalizes input,
+\ and `locale-parts` for decomposing into component fields.
+
+use "ffi" ;
+use "i18n/icu" ;
+
+\ --- Library loading and FFI bindings ---
+
+sys-info "os" @get "macos" = [
+  "icucore" lib-open
+] [
+  "icuuc" lib-open
+] if
+
+ffi-def{
+  (uloc-for-language-tag):  "uloc_forLanguageTag" ffi{ cstring ptr i32 out-i32 inout-i32 -> i32 }
+  (uloc-to-language-tag):   "uloc_toLanguageTag" ffi{ cstring ptr i32 i32 inout-i32 -> i32 }
+  (uloc-get-language):      "uloc_getLanguage" ffi{ cstring ptr i32 inout-i32 -> i32 }
+  (uloc-get-country):       "uloc_getCountry" ffi{ cstring ptr i32 inout-i32 -> i32 }
+  (uloc-get-script):        "uloc_getScript" ffi{ cstring ptr i32 inout-i32 -> i32 }
+  (uloc-get-variant):       "uloc_getVariant" ffi{ cstring ptr i32 inout-i32 -> i32 }
+  (uloc-get-keyword-value): "uloc_getKeywordValue" ffi{ cstring cstring ptr i32 inout-i32 -> i32 }
+} call "icu-locale-raw" swap >module reexport
+
+\ --- locale virtual type ---
+
+locale: virtual{ string } ;
+
+\ --- Error marker ---
+
+ELocaleError: [ locale-error: ] ;
+
+\ --- Internal helpers ---
+
+(locale-buf-size): const [ 256 ] ;
+
+\\ Allocate a buffer for ICU locale operations and return (buf ptr).
+(alloc-locale-buf): ( -- byte-array ptr ) [
+  (locale-buf-size) bytes-alloc
+  dup bytes>ffi-ptr+len drop
+] ;
+
+\\ Read a C string result from buf up to len bytes.
+(buf>string): ( byte-array len -- string ) [
+  bytes-resize! bytes>
+] ;
+
+\\ Convert a BCP 47 tag to an ICU locale ID. Validates that the entire
+\\ tag was consumed (parsedLength == input length).
+(bcp47>icu-id): ( tag -- icu-id ) [
+  (alloc-locale-buf)
+  \ Stack: tag buf ptr
+  2 pick-n 1 pick-n (locale-buf-size) 0
+  \ Stack: tag buf ptr tag ptr capacity status
+  (uloc-for-language-tag)
+  \ Out-params then return: parsedLength status actual-len
+  \ Stack: tag buf ptr parsedLength status actual-len
+  swap (icu-check)
+  \ Stack: tag buf ptr parsedLength actual-len
+  swap
+  \ Stack: tag buf ptr actual-len parsedLength
+  4 pick-n #len = not [
+    drop drop drop
+    f "invalid locale tag" ELocaleError make-error throw
+  ] when
+  \ Stack: tag buf ptr actual-len
+  swap drop
+  \ Stack: tag buf actual-len
+  (buf>string)
+  \ Stack: tag icu-id
+  swap drop
+] ;
+
+\\ Convert an ICU locale ID to a normalized BCP 47 tag.
+(icu-id>bcp47): ( icu-id -- bcp47 ) [
+  (alloc-locale-buf)
+  \ Stack: icu-id buf ptr
+  2 pick-n 1 pick-n (locale-buf-size) 0 0
+  \ Stack: icu-id buf ptr icu-id ptr capacity strict(=0) status(=0)
+  (uloc-to-language-tag)
+  \ inout-i32(status) then return(actual-len)
+  \ Stack: icu-id buf ptr status actual-len
+  swap (icu-check)
+  \ Stack: icu-id buf ptr actual-len
+  swap drop
+  \ Stack: icu-id buf actual-len
+  (buf>string)
+  \ Stack: icu-id bcp47
+  swap drop
+] ;
+
+\\ Strip POSIX charset suffix (everything from "." onward).
+(strip-posix-charset): ( string -- string ) [
+  dup "." #index-of dup [
+    swap over 0 swap #slice nip
+  ] [
+    drop
+  ] if
+] ;
+
+\ --- Smart constructor ---
+
+\\ Construct a locale from a BCP 47 or CLDR/POSIX string.
+\\ Accepts "en-US", "en_US", "en_US.UTF-8", "en", etc.
+\\ Normalizes to BCP 47.
+<locale>: ( string -- locale ) [
+  dup "" = [
+    drop f "empty locale string" ELocaleError make-error throw
+  ] when
+  (strip-posix-charset)
+  dup "-" #index-of [
+    \ BCP 47: round-trip through ICU for validation and normalization
+    (bcp47>icu-id) (icu-id>bcp47)
+  ] [
+    \ CLDR/POSIX or plain language code: already an ICU locale ID
+    (icu-id>bcp47)
+  ] if
+  >locale
+] ;
+
+\ --- Methods ---
+
+>string: method{ locale } [ unmake-locale ] ;
+
+inspect: method{ locale } [
+  "<locale " swap unmake-locale #append ">" #append
+] ;
+
+\ --- Component extraction helpers ---
+\
+\ Each helper follows the same pattern: allocate buffer, call uloc_get*,
+\ check error, resize to actual length, convert to string.
+
+(extract-language): ( icu-id -- string ) [
+  (alloc-locale-buf)
+  \ Stack: icu-id buf ptr
+  2 pick-n 1 pick-n (locale-buf-size) 0
+  \ Stack: icu-id buf ptr icu-id ptr capacity status
+  (uloc-get-language)
+  \ Stack: icu-id buf ptr status actual-len
+  swap (icu-check) swap drop (buf>string) nip
+] ;
+
+(extract-country): ( icu-id -- string ) [
+  (alloc-locale-buf)
+  2 pick-n 1 pick-n (locale-buf-size) 0
+  (uloc-get-country)
+  swap (icu-check) swap drop (buf>string) nip
+] ;
+
+(extract-script): ( icu-id -- string ) [
+  (alloc-locale-buf)
+  2 pick-n 1 pick-n (locale-buf-size) 0
+  (uloc-get-script)
+  swap (icu-check) swap drop (buf>string) nip
+] ;
+
+(extract-variant): ( icu-id -- string ) [
+  (alloc-locale-buf)
+  2 pick-n 1 pick-n (locale-buf-size) 0
+  (uloc-get-variant)
+  swap (icu-check) swap drop (buf>string) nip
+] ;
+
+(extract-keyword): ( icu-id keyword -- string ) [
+  (alloc-locale-buf)
+  \ Stack: icu-id keyword buf ptr
+  3 pick-n 3 pick-n 2 pick-n (locale-buf-size) 0
+  \ Stack: icu-id keyword buf ptr icu-id keyword ptr capacity status
+  (uloc-get-keyword-value)
+  \ Stack: icu-id keyword buf ptr status actual-len
+  swap (icu-check) swap drop (buf>string) nip nip
+] ;
+
+\\ Conditionally add a key-value pair to the hash if value is non-empty.
+(maybe-set): ( hash value key -- hash ) [
+  swap dup "" = [ 2drop ] [ @set ] if
+] ;
+
+\ --- locale-parts ---
+
+\\ Decompose a locale into its component parts as a hash.
+\\ Only includes keys with non-empty values.
+locale-parts: ( locale -- hash ) [
+  unmake-locale (bcp47>icu-id)
+  H{ }
+  over (extract-language) language: (maybe-set)
+  over (extract-country) region: (maybe-set)
+  over (extract-script) script: (maybe-set)
+  over (extract-variant) variant: (maybe-set)
+  over "calendar" (extract-keyword) calendar: (maybe-set)
+  over "collation" (extract-keyword) collation: (maybe-set)
+  over "numbers" (extract-keyword) numbers: (maybe-set)
+  nip
+] ;

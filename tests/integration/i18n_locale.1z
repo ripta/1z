@@ -1,0 +1,87 @@
+\ Locale virtual type tests
+
+use "testing" ;
+use "i18n/locale" ;
+
+"locale construction - BCP 47" test-section
+
+"en-US" <locale> unmake-locale
+"en-US" swap "BCP 47 en-US" assert=
+
+"zh-Hant-TW" <locale> unmake-locale
+"zh-Hant-TW" swap "BCP 47 zh-Hant-TW" assert=
+
+"fr-FR" <locale> unmake-locale
+"fr-FR" swap "BCP 47 fr-FR" assert=
+
+"locale construction - CLDR/POSIX" test-section
+
+"en_US" <locale> unmake-locale
+"en-US" swap "CLDR en_US normalizes" assert=
+
+"fr_FR" <locale> unmake-locale
+"fr-FR" swap "CLDR fr_FR normalizes" assert=
+
+"locale construction - POSIX charset stripping" test-section
+
+"en_US.UTF-8" <locale> unmake-locale
+"en-US" swap "strip .UTF-8" assert=
+
+"locale construction - plain language" test-section
+
+"en" <locale> unmake-locale
+"en" swap "plain language en" assert=
+
+"ja" <locale> unmake-locale
+"ja" swap "plain language ja" assert=
+
+"locale construction - case normalization" test-section
+
+"EN-us" <locale> unmake-locale
+"en-US" swap "case normalization EN-us" assert=
+
+"locale construction - BCP 47 extensions" test-section
+
+"en-US-u-ca-buddhist" <locale> unmake-locale
+"en-US-u-ca-buddhist" swap "BCP 47 with calendar extension" assert=
+
+">string method" test-section
+
+"en-US" <locale> >string
+"en-US" swap ">string returns BCP 47" assert=
+
+"fr-FR" <locale> >string
+"fr-FR" swap ">string fr-FR" assert=
+
+"inspect method" test-section
+
+"en-US" <locale> inspect
+"<locale en-US>" swap "inspect format" assert=
+
+"locale-parts decomposition" test-section
+
+"en-US" <locale> locale-parts
+dup language: @get "en" swap "en-US language" assert=
+dup region: @get "US" swap "en-US region" assert=
+script: @has? f swap "en-US has no script" assert=
+
+"zh-Hant-TW" <locale> locale-parts
+dup language: @get "zh" swap "zh-Hant-TW language" assert=
+dup script: @get "Hant" swap "zh-Hant-TW script" assert=
+region: @get "TW" swap "zh-Hant-TW region" assert=
+
+"en" <locale> locale-parts
+dup language: @get "en" swap "en language" assert=
+region: @has? f swap "en has no region" assert=
+
+"locale-parts with BCP 47 extensions" test-section
+
+"en-US-u-ca-buddhist" <locale> locale-parts
+dup language: @get "en" swap "extension: language" assert=
+dup region: @get "US" swap "extension: region" assert=
+calendar: @get "buddhist" swap "extension: calendar" assert=
+
+"error handling" test-section
+
+[ "" <locale> ] "empty string throws" assert-error
+[ "" <locale> ] locale-error: "empty string error type" assert-error-type

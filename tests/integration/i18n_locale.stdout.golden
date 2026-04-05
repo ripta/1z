@@ -1,0 +1,91 @@
+=== locale construction - BCP 47 ===
+Stack: [ ]
+Stack: [ "en-US" ]
+PASS: BCP 47 en-US
+Stack: [ ]
+Stack: [ "zh-Hant-TW" ]
+PASS: BCP 47 zh-Hant-TW
+Stack: [ ]
+Stack: [ "fr-FR" ]
+PASS: BCP 47 fr-FR
+Stack: [ ]
+=== locale construction - CLDR/POSIX ===
+Stack: [ ]
+Stack: [ "en-US" ]
+PASS: CLDR en_US normalizes
+Stack: [ ]
+Stack: [ "fr-FR" ]
+PASS: CLDR fr_FR normalizes
+Stack: [ ]
+=== locale construction - POSIX charset stripping ===
+Stack: [ ]
+Stack: [ "en-US" ]
+PASS: strip .UTF-8
+Stack: [ ]
+=== locale construction - plain language ===
+Stack: [ ]
+Stack: [ "en" ]
+PASS: plain language en
+Stack: [ ]
+Stack: [ "ja" ]
+PASS: plain language ja
+Stack: [ ]
+=== locale construction - case normalization ===
+Stack: [ ]
+Stack: [ "en-US" ]
+PASS: case normalization EN-us
+Stack: [ ]
+=== locale construction - BCP 47 extensions ===
+Stack: [ ]
+Stack: [ "en-US-u-ca-buddhist" ]
+PASS: BCP 47 with calendar extension
+Stack: [ ]
+=== >string method ===
+Stack: [ ]
+Stack: [ "en-US" ]
+PASS: >string returns BCP 47
+Stack: [ ]
+Stack: [ "fr-FR" ]
+PASS: >string fr-FR
+Stack: [ ]
+=== inspect method ===
+Stack: [ ]
+Stack: [ "<locale en-US>" ]
+PASS: inspect format
+Stack: [ ]
+=== locale-parts decomposition ===
+Stack: [ ]
+Stack: [ H{ language: "en" region: "US" } ]
+PASS: en-US language
+Stack: [ H{ language: "en" region: "US" } ]
+PASS: en-US region
+Stack: [ H{ language: "en" region: "US" } ]
+PASS: en-US has no script
+Stack: [ ]
+Stack: [ H{ script: "Hant" language: "zh" region: "TW" } ]
+PASS: zh-Hant-TW language
+Stack: [ H{ script: "Hant" language: "zh" region: "TW" } ]
+PASS: zh-Hant-TW script
+Stack: [ H{ script: "Hant" language: "zh" region: "TW" } ]
+PASS: zh-Hant-TW region
+Stack: [ ]
+Stack: [ H{ language: "en" } ]
+PASS: en language
+Stack: [ H{ language: "en" } ]
+PASS: en has no region
+Stack: [ ]
+=== locale-parts with BCP 47 extensions ===
+Stack: [ ]
+Stack: [ H{ language: "en" calendar: "buddhist" region: "US" } ]
+PASS: extension: language
+Stack: [ H{ language: "en" calendar: "buddhist" region: "US" } ]
+PASS: extension: region
+Stack: [ H{ language: "en" calendar: "buddhist" region: "US" } ]
+PASS: extension: calendar
+Stack: [ ]
+=== error handling ===
+Stack: [ ]
+PASS: empty string throws
+Stack: [ ]
+PASS: empty string error type
+Stack: [ ]
