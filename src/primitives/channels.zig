@@ -19,6 +19,7 @@ pub const primitives = [_]Primitive{
         .doc = "Receive a value from a channel. Blocks if no value available. Throws ChannelClosed if closed and empty.",
         .func = nativeReceive,
     },
+    .{ .name = "<buffered-channel>", .stack_effect = "n -- ch", .doc = "Create a buffered channel with capacity n.", .func = nativeCreateBufferedChannel },
 };
 
 /// <channel> ( -- ch )
@@ -29,6 +30,25 @@ fn nativeCreateChannel(ctx: *Context) anyerror!void {
     };
 
     const ch = try Channel.init(ctx.allocator, 0);
+    try scheduler.trackChannel(ch);
+    try ctx.stack.push(.{ .channel = ch });
+}
+
+/// <buffered-channel> ( n -- ch )
+fn nativeCreateBufferedChannel(ctx: *Context) anyerror!void {
+    const n = try helpers.popInteger(ctx);
+
+    if (n <= 0) {
+        ctx.pending_error_message = "buffered channel capacity must be positive";
+        return error.InvalidArgument;
+    }
+
+    const scheduler = ctx.scheduler orelse {
+        ctx.pending_error_message = "<buffered-channel> must be called within a task-scope";
+        return error.InvalidState;
+    };
+
+    const ch = try Channel.init(ctx.allocator, @intCast(n));
     try scheduler.trackChannel(ch);
     try ctx.stack.push(.{ .channel = ch });
 }
