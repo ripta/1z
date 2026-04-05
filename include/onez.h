@@ -60,6 +60,7 @@ typedef void *onez_t;
 #define ONEZ_ERR_NULL_VALUE    -2
 #define ONEZ_ERR_INDEX_OUT_OF_RANGE 4
 #define ONEZ_ERR_KEY_NOT_FOUND      5
+#define ONEZ_ERR_LOAD_FAILED        6
 
 /* ----- Lifecycle ----- */
 
@@ -89,6 +90,32 @@ void onez_deinit(onez_t ctx);
  * After failure, call `onez_last_error` for a human-readable message.
  */
 int onez_eval(onez_t ctx, const char *code, size_t len);
+
+/* ---- Module loading ---- */
+
+/*
+ * Load and execute a .1z file. The path is resolved using the same rules
+ * as the 1z `load-file` primitive: relative paths resolve against the
+ * current source directory, absolute paths are used directly.
+ *
+ * On success, the loaded module is pushed onto the stack. The caller may
+ * pop it with onez_pop_value, import it with onez_eval(ctx, "import", 6),
+ * or leave it on the stack.
+ *
+ * Returns ONEZ_OK on success, or ONEZ_ERR_LOAD_FAILED on failure.
+ */
+int onez_load_file(onez_t ctx, const char *path, size_t path_len);
+
+/*
+ * Load a module by name and import all its public words into the current
+ * scope. Equivalent to `use "name" ;` in 1z source code.
+ *
+ * Module resolution searches the configured load paths and stdlib path.
+ * Cached modules are reused without reloading.
+ *
+ * Returns ONEZ_OK on success, or ONEZ_ERR_LOAD_FAILED on failure.
+ */
+int onez_use_module(onez_t ctx, const char *name, size_t name_len);
 
 /* ---- Push (C -> 1z stack) ---- */
 

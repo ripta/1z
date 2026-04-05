@@ -133,7 +133,7 @@ fn resolveInDir(alloc: std.mem.Allocator, dir: []const u8, name: []const u8) ?[]
 /// Returns the resolved absolute path, or null if not found.
 /// Auto-append .1z, search configured paths only.
 /// Use path mode ("./foo.1z") for relative imports.
-fn resolveLoadPath(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator) ?[]const u8 {
+pub fn resolveLoadPath(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator) ?[]const u8 {
     if (isPathMode(filename)) {
         if (std.fs.path.isAbsolute(filename)) {
             return std.fs.cwd().realpathAlloc(alloc, filename) catch null;
@@ -179,7 +179,7 @@ fn nativeResolveLoadPath(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .string = resolved });
 }
 
-fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []const u8, alloc: std.mem.Allocator, resolved: []const u8) anyerror!void {
+pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []const u8, alloc: std.mem.Allocator, resolved: []const u8) anyerror!void {
     if (ctx.trace.trace_modules) {
         var tw = trace_mod.TraceWriter.init();
         trace_mod.traceModuleLoad(&tw, filename, resolved);
@@ -321,7 +321,7 @@ fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []const
     try ctx.stack.push(.{ .module = module });
 }
 
-fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module: *const Module) !void {
+pub fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module: *const Module) !void {
     const has_parse_time = for (mod_word.markers) |mk| {
         if (markers_mod.isParseTimeMarker(mk)) break true;
     } else false;

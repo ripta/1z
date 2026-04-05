@@ -1,8 +1,19 @@
 const std = @import("std");
-const Context = @import("context.zig").Context;
-const StatementProcessor = @import("statement.zig").StatementProcessor;
-const Value = @import("value.zig").Value;
-const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
+
+const context_mod = @import("context.zig");
+const Context = context_mod.Context;
+
+const statement_mod = @import("statement.zig");
+const StatementProcessor = statement_mod.StatementProcessor;
+
+const errors_mod = @import("primitives/errors.zig");
+const pascalToKebabRuntime = errors_mod.pascalToKebabRuntime;
+
+const misc = @import("primitives/misc.zig");
+
+const value_mod = @import("value.zig");
+const MutableMap = value_mod.MutableMap;
+const Value = value_mod.Value;
 
 const OnezHandle = struct {
     gpa: *std.heap.GeneralPurposeAllocator(.{}),
@@ -43,6 +54,7 @@ pub const ONEZ_ERR_ALLOC: c_int = 3;
 pub const ONEZ_ERR_NULL_VALUE: c_int = -2;
 pub const ONEZ_ERR_INDEX_OUT_OF_RANGE: c_int = 4;
 pub const ONEZ_ERR_KEY_NOT_FOUND: c_int = 5;
+pub const ONEZ_ERR_LOAD_FAILED: c_int = 6;
 
 /// Initialize the 1z runtime for AOT-compiled programs.
 ///
@@ -602,6 +614,87 @@ export fn onez_set_static_libs(ptr: ?*anyopaque, names: [*]const [*:0]const u8, 
 }
 
 // =========================================================================
+// Module loading
+// =========================================================================
+
+export fn onez_load_file(ptr: ?*anyopaque, path: [*]const u8, path_len: usize) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const ctx = handle.ctx;
+    const alloc = ctx.quotationAllocator();
+    const filepath = path[0..path_len];
+
+    ctx.clearExecutionDetails();
+    clearLastError(handle);
+
+    const resolved = misc.resolveLoadPath(ctx, filepath, alloc) orelse {
+        setLastError(handle, "file not found: {s}", .{filepath});
+        return ONEZ_ERR_LOAD_FAILED;
+    };
+
+    misc.nativeLoadImpl(ctx, ctx.module_cache_value, filepath, alloc, resolved) catch |err| {
+        captureError(handle, err);
+        return ONEZ_ERR_LOAD_FAILED;
+    };
+
+    return ONEZ_OK;
+}
+
+export fn onez_use_module(ptr: ?*anyopaque, name: [*]const u8, name_len: usize) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const ctx = handle.ctx;
+    const alloc = ctx.quotationAllocator();
+    const mod_name = name[0..name_len];
+
+    ctx.clearExecutionDetails();
+    clearLastError(handle);
+
+    const resolved = misc.resolveLoadPath(ctx, mod_name, alloc) orelse {
+        setLastError(handle, "module not found: {s}", .{mod_name});
+        return ONEZ_ERR_LOAD_FAILED;
+    };
+
+    // Check cache first
+    const module = if (ctx.module_cache_value.get(resolved)) |cached| blk: {
+        switch (cached) {
+            .module => |m| break :blk m,
+            else => {
+                setLastError(handle, "cached value for '{s}' is not a module", .{mod_name});
+                return ONEZ_ERR_LOAD_FAILED;
+            },
+        }
+    } else blk: {
+        // Load the module
+        misc.nativeLoadImpl(ctx, ctx.module_cache_value, mod_name, alloc, resolved) catch |err| {
+            captureError(handle, err);
+            return ONEZ_ERR_LOAD_FAILED;
+        };
+        // Pop the module from stack
+        const val = ctx.stack.pop() catch {
+            setLastError(handle, "internal error: module not on stack after load", .{});
+            return ONEZ_ERR_LOAD_FAILED;
+        };
+        switch (val) {
+            .module => |m| break :blk m,
+            else => {
+                setLastError(handle, "internal error: loaded value is not a module", .{});
+                return ONEZ_ERR_LOAD_FAILED;
+            },
+        }
+    };
+
+    // Import all public words from the module
+    var iter = module.words.iterator();
+    while (iter.next()) |entry| {
+        misc.importWord(ctx, entry.key_ptr.*, entry.value_ptr.*, module) catch |err| {
+            captureError(handle, err);
+            return ONEZ_ERR_LOAD_FAILED;
+        };
+    }
+
+    return ONEZ_OK;
+}
+
+// =========================================================================
 // AOT Runtime API
 // =========================================================================
 
@@ -965,6 +1058,9 @@ test "null handle returns appropriate defaults" {
 
     var vh: ?*anyopaque = null;
     try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_pop_value(null, &vh));
+
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_load_file(null, "x", 1));
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_use_module(null, "x", 1));
 }
 
 test "set_args populates program_args and source" {
@@ -1525,4 +1621,69 @@ test "struct_instance returns ONEZ_TYPE_STRUCT" {
     const code = "pt: struct{ a b } ;\n1 2 make-pt";
     try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code.ptr, code.len));
     try std.testing.expectEqual(ONEZ_TYPE_STRUCT, onez_stack_type(handle_ptr, 0));
+}
+
+test "load_file loads a file and pushes module" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const handle = castHandle(handle_ptr).?;
+    const stdlib = handle.ctx.stdlib_path orelse return error.SkipZigTest;
+    const path = std.fs.path.join(std.testing.allocator, &.{ stdlib, "testing.1z" }) catch return error.SkipZigTest;
+    defer std.testing.allocator.free(path);
+
+    const depth_before = onez_stack_depth(handle_ptr);
+    try std.testing.expectEqual(ONEZ_OK, onez_load_file(handle_ptr, path.ptr, path.len));
+    try std.testing.expectEqual(depth_before + 1, onez_stack_depth(handle_ptr));
+}
+
+test "load_file returns error for nonexistent file" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const bad = "/nonexistent/path/file.1z";
+    try std.testing.expectEqual(ONEZ_ERR_LOAD_FAILED, onez_load_file(handle_ptr, bad.ptr, bad.len));
+    try std.testing.expect(onez_last_error(handle_ptr) != null);
+}
+
+test "load_file null handle" {
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_load_file(null, "x", 1));
+}
+
+test "use_module loads and imports stdlib module" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const name = "testing";
+    try std.testing.expectEqual(ONEZ_OK, onez_use_module(handle_ptr, name.ptr, name.len));
+
+    const code = "3 3 \"eq\" assert=";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code.ptr, code.len));
+}
+
+test "use_module cached reuse" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const name = "testing";
+    try std.testing.expectEqual(ONEZ_OK, onez_use_module(handle_ptr, name.ptr, name.len));
+    try std.testing.expectEqual(ONEZ_OK, onez_use_module(handle_ptr, name.ptr, name.len));
+}
+
+test "use_module returns error for nonexistent module" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const name = "nonexistent-module-xyz";
+    try std.testing.expectEqual(ONEZ_ERR_LOAD_FAILED, onez_use_module(handle_ptr, name.ptr, name.len));
+    try std.testing.expect(onez_last_error(handle_ptr) != null);
+}
+
+test "use_module null handle" {
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_use_module(null, "x", 1));
 }
