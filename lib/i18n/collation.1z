@@ -1,0 +1,166 @@
+\ lib/i18n/collation.1z - Locale-aware string collation
+\
+\ Provides locale-compare, locale-compare-with, locale-sort, and
+\ collation-key via ICU's ucol_* API.
+
+use "ffi" ;
+use "i18n/icu" ;
+use "i18n/locale" ;
+
+\ --- Library loading and FFI bindings ---
+
+sys-info "os" @get "macos" = [
+  "icucore" lib-open
+] [
+  "icui18n" lib-open
+] if
+
+ffi-def{
+  (ucol-open):          "ucol_open" ffi{ cstring inout-i32 -> ptr }
+  (ucol-close):         "ucol_close" ffi{ ptr -> void }
+  (ucol-strcoll):       "ucol_strcoll" ffi{ ptr ptr i32 ptr i32 -> i32 }
+  (ucol-set-attribute): "ucol_setAttribute" ffi{ ptr i32 i32 inout-i32 -> void }
+  (ucol-get-sort-key):  "ucol_getSortKey" ffi{ ptr ptr i32 ptr i32 -> i32 }
+} call "icu-collation-raw" swap >module reexport
+
+\ --- Enum ---
+
+collation-strength: enum{
+  primary:   unit
+  secondary: unit
+  tertiary:  unit
+  identical: unit
+} ;
+
+\ --- Constants ---
+
+(UCOL_STRENGTH):     const [ 5 ] ;
+(UCOL_PRIMARY):      const [ 0 ] ;
+(UCOL_SECONDARY):    const [ 1 ] ;
+(UCOL_TERTIARY):     const [ 2 ] ;
+(UCOL_IDENTICAL):    const [ 15 ] ;
+(sort-key-buf-size): const [ 256 ] ;
+
+\ --- Internal helpers ---
+
+\\ Extract the ICU locale ID from a locale value.
+(locale>icu-id): ( locale -- icu-locale-id ) [
+  unmake-locale (bcp47>icu-id)
+] ;
+
+\\ Map a collation-strength enum variant to the ICU constant.
+(strength>icu-const): ( collation-strength -- i32 ) [
+  match{
+    collation-strength:primary:   [ (UCOL_PRIMARY) ]
+    collation-strength:secondary: [ (UCOL_SECONDARY) ]
+    collation-strength:tertiary:  [ (UCOL_TERTIARY) ]
+    collation-strength:identical: [ (UCOL_IDENTICAL) ]
+  }
+] ;
+
+\\ Open a UCollator for the given ICU locale ID.
+(open-collator): ( icu-locale-id -- ucol-ptr ) [
+  0 (ucol-open)
+  swap (icu-check)
+] ;
+
+\\ Set the strength attribute on an open collator.
+(set-collator-strength): ( ucol-ptr collation-strength -- ) [
+  (strength>icu-const)
+  \ Stack: ucol-ptr icu-strength
+  swap (UCOL_STRENGTH) 2 pick-n 0
+  \ Stack: icu-strength ucol-ptr UCOL_STRENGTH icu-strength 0
+  (ucol-set-attribute)
+  \ Stack: icu-strength status
+  (icu-check) drop
+] ;
+
+\\ Compare two strings using an open collator.
+\\ Converts both strings to UChar, calls ucol_strcoll, cleans up.
+(compare-strings): ( str1 str2 ucol-ptr -- n ) [
+  2 pick-n utf8>uchar
+  \ Stack: str1(4) str2(3) ucol-ptr(2) buf1(1) len1(0)
+  3 pick-n utf8>uchar
+  \ Stack: str1(6) str2(5) ucol-ptr(4) buf1(3) len1(2) buf2(1) len2(0)
+  3 pick-n bytes>ffi-ptr+len drop
+  \ Stack: str1(7) str2(6) ucol-ptr(5) buf1(4) len1(3) buf2(2) len2(1) ptr1(0)
+  2 pick-n bytes>ffi-ptr+len drop
+  \ Stack: str1(8) str2(7) ucol-ptr(6) buf1(5) len1(4) buf2(3) len2(2) ptr1(1) ptr2(0)
+  \ Arrange: ucol_strcoll(ucol, ptr1, len1, ptr2, len2)
+  6 pick-n 2 pick-n 6 pick-n 3 pick-n 6 pick-n
+  (ucol-strcoll)
+  \ Stack: str1 str2 ucol-ptr buf1 len1 buf2 len2 ptr1 ptr2 result
+  nip nip nip nip nip nip nip nip nip
+] ;
+
+\ --- Public words ---
+
+\\ Compare two strings using locale-specific collation at default
+\\ tertiary strength. Returns negative, zero, or positive.
+locale-compare: ( str1 str2 locale -- n ) [
+  (locale>icu-id) (open-collator)
+  \ Stack: str1 str2 ucol-ptr
+  dup [ (compare-strings) ] dip (ucol-close)
+] ;
+
+\\ Compare two strings using locale-specific collation at the given
+\\ strength. Returns negative, zero, or positive.
+locale-compare-with: ( str1 str2 collation-strength locale -- n ) [
+  (locale>icu-id) (open-collator)
+  \ Stack: str1 str2 strength ucol-ptr
+  dup 2 pick-n (set-collator-strength)
+  nip
+  \ Stack: str1 str2 ucol-ptr
+  dup [ (compare-strings) ] dip (ucol-close)
+] ;
+
+\\ Sort an array of strings using locale-specific collation.
+\\ Opens a single collator for efficiency.
+locale-sort: ( array locale -- array ) [
+  (locale>icu-id) (open-collator)
+  \ Stack: array ucol-ptr
+  swap over
+  \ Stack: ucol-ptr array ucol-ptr
+  \ curry prepends ucol-ptr to the quotation; #sort pushes (a b),
+  \ giving stack: a b ucol-ptr = ( str1 str2 ucol-ptr ) for compare.
+  [ (compare-strings) 0 < ] curry #sort
+  \ Stack: ucol-ptr sorted-array
+  swap (ucol-close)
+] ;
+
+\\ Generate a collation sort key for efficient repeated comparisons.
+\\ The returned byte-array can be compared with standard byte ordering.
+collation-key: ( string locale -- byte-array ) [
+  (locale>icu-id) (open-collator)
+  \ Stack: string ucol-ptr
+  dup [
+    \ Stack: string ucol-ptr
+    swap utf8>uchar
+    \ Stack: ucol-ptr uchar-buf uchar-len
+    over bytes>ffi-ptr+len drop swap
+    \ Stack: ucol-ptr(3) uchar-buf(2) uchar-ptr(1) uchar-len(0)
+    (sort-key-buf-size) bytes-alloc dup bytes>ffi-ptr+len drop
+    \ Stack: ucol-ptr(5) uchar-buf(4) uchar-ptr(3) uchar-len(2) key-buf(1) key-ptr(0)
+    \ Call ucol_getSortKey(ucol, source, sourceLen, result, resultCapacity)
+    5 pick-n 4 pick-n 4 pick-n 3 pick-n (sort-key-buf-size)
+    (ucol-get-sort-key)
+    \ Stack: ucol-ptr(6) uchar-buf(5) uchar-ptr(4) uchar-len(3) key-buf(2) key-ptr(1) actual-len(0)
+    swap drop
+    \ Stack: ucol-ptr(5) uchar-buf(4) uchar-ptr(3) uchar-len(2) key-buf(1) actual-len(0)
+    dup (sort-key-buf-size) > [
+      \ Buffer too small; reallocate with exact size and retry
+      nip
+      \ Stack: ucol-ptr(4) uchar-buf(3) uchar-ptr(2) uchar-len(1) actual-len(0)
+      dup bytes-alloc dup bytes>ffi-ptr+len drop
+      \ Stack: ucol-ptr(6) uchar-buf(5) uchar-ptr(4) uchar-len(3) actual-len(2) new-buf(1) new-ptr(0)
+      6 pick-n 5 pick-n 5 pick-n 3 pick-n 6 pick-n
+      (ucol-get-sort-key)
+      \ Stack: ucol-ptr(7) uchar-buf(6) uchar-ptr(5) uchar-len(4) actual-len(3) new-buf(2) new-ptr(1) actual-len2(0)
+      swap drop 1 - bytes-resize!
+      nip nip nip nip nip
+    ] [
+      1 - bytes-resize!
+      nip nip nip nip
+    ] if
+  ] dip (ucol-close)
+] ;

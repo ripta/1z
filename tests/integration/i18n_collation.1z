@@ -1,0 +1,92 @@
+\ Collation tests
+
+use "testing" ;
+use "i18n/collation" ;
+use "i18n/locale" ;
+
+"collation-strength enum" test-section
+
+collation-strength: enum-variants
+{ collation-strength:primary: collation-strength:secondary: collation-strength:tertiary: collation-strength:identical: }
+"collation-strength variants" assert=
+
+"locale-compare basics" test-section
+
+"apple" "banana" "en-US" <locale> locale-compare 0 <
+"apple < banana" assert-true
+
+"banana" "apple" "en-US" <locale> locale-compare 0 >
+"banana > apple" assert-true
+
+"hello" "hello" "en-US" <locale> locale-compare 0 =
+"equal strings" assert-true
+
+"locale-compare-with accent handling" test-section
+
+"cafe" "caf\u{00e9}" collation-strength:primary "en-US" <locale> locale-compare-with
+0 = "cafe = café at primary" assert-true
+
+"cafe" "caf\u{00e9}" collation-strength:secondary "en-US" <locale> locale-compare-with
+0 = "cafe ≠ café at secondary" assert-false
+
+"locale-compare-with case handling" test-section
+
+"a" "A" collation-strength:primary "en-US" <locale> locale-compare-with
+0 = "a = A at primary" assert-true
+
+"a" "A" collation-strength:secondary "en-US" <locale> locale-compare-with
+0 = "a = A at secondary" assert-true
+
+"a" "A" collation-strength:tertiary "en-US" <locale> locale-compare-with
+0 = "a ≠ A at tertiary" assert-false
+
+"locale variation" test-section
+
+\ In Swedish, ö sorts after z; in German (default), ö sorts near o (before z)
+"\u{00f6}" "z" "sv-SE" <locale> locale-compare
+0 > "Swedish: ö > z" assert-true
+
+"\u{00f6}" "z" "de-DE" <locale> locale-compare
+0 < "German: ö < z" assert-true
+
+"locale-sort" test-section
+
+{ "banana" "apple" "cherry" } "en-US" <locale> locale-sort
+{ "apple" "banana" "cherry" }
+"sort en-US" assert=
+
+{ } "en-US" <locale> locale-sort
+{ }
+"sort empty" assert=
+
+{ "hello" } "en-US" <locale> locale-sort
+{ "hello" }
+"sort single" assert=
+
+"locale-sort with accents" test-section
+
+{ "caf\u{00e9}" "cafe" "caff" } "en-US" <locale> locale-sort
+dup 0 #nth "cafe" = "accented sort first" assert-true
+dup 1 #nth "caf\u{00e9}" = "accented sort second" assert-true
+2 #nth "caff" = "accented sort third" assert-true
+
+"collation-key" test-section
+
+"apple" "en-US" <locale> collation-key byte-array?
+"collation-key returns byte-array" assert-true
+
+\ Keys for ordered strings should preserve ordering
+"apple" "en-US" <locale> collation-key
+"banana" "en-US" <locale> collation-key
+< "key(apple) < key(banana)" assert-true
+
+"apple" "en-US" <locale> collation-key
+"apple" "en-US" <locale> collation-key
+= "key(apple) = key(apple)" assert-true
+
+"bcp47 collation extensions" test-section
+
+\ Phonebook collation in German is accepted without error
+"Ä" "B" "de-DE" <locale> locale-compare drop
+"Ä" "B" "de-DE-u-co-phonebk" <locale> locale-compare drop
+t "phonebook collation accepted" assert-true

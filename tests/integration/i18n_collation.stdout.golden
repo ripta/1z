@@ -1,0 +1,86 @@
+=== collation-strength enum ===
+Stack: [ ]
+Stack: [ { collation-strength:primary: collation-strength:secondary: collation-strength:tertiary: collation-strength:identical: } ]
+Stack: [ { collation-strength:primary: collation-strength:secondary: collation-strength:tertiary: collation-strength:identical: } { collation-strength:primary: collation-strength:secondary: collation-strength:tertiary: collation-strength:identical: } ]
+PASS: collation-strength variants
+Stack: [ ]
+=== locale-compare basics ===
+Stack: [ ]
+Stack: [ t ]
+PASS: apple < banana
+Stack: [ ]
+Stack: [ t ]
+PASS: banana > apple
+Stack: [ ]
+Stack: [ t ]
+PASS: equal strings
+Stack: [ ]
+=== locale-compare-with accent handling ===
+Stack: [ ]
+Stack: [ 0 ]
+PASS: cafe = café at primary
+Stack: [ ]
+Stack: [ -1 ]
+PASS: cafe ≠ café at secondary
+Stack: [ ]
+=== locale-compare-with case handling ===
+Stack: [ ]
+Stack: [ 0 ]
+PASS: a = A at primary
+Stack: [ ]
+Stack: [ 0 ]
+PASS: a = A at secondary
+Stack: [ ]
+Stack: [ -1 ]
+PASS: a ≠ A at tertiary
+Stack: [ ]
+=== locale variation ===
+Stack: [ ]
+Stack: [ 1 ]
+PASS: Swedish: ö > z
+Stack: [ ]
+Stack: [ -1 ]
+PASS: German: ö < z
+Stack: [ ]
+=== locale-sort ===
+Stack: [ ]
+Stack: [ { "apple" "banana" "cherry" } ]
+Stack: [ { "apple" "banana" "cherry" } { "apple" "banana" "cherry" } ]
+PASS: sort en-US
+Stack: [ ]
+Stack: [ { } ]
+Stack: [ { } { } ]
+PASS: sort empty
+Stack: [ ]
+Stack: [ { "hello" } ]
+Stack: [ { "hello" } { "hello" } ]
+PASS: sort single
+Stack: [ ]
+=== locale-sort with accents ===
+Stack: [ ]
+Stack: [ { "cafe" "café" "caff" } ]
+PASS: accented sort first
+Stack: [ { "cafe" "café" "caff" } ]
+PASS: accented sort second
+Stack: [ { "cafe" "café" "caff" } ]
+PASS: accented sort third
+Stack: [ ]
+=== collation-key ===
+Stack: [ ]
+Stack: [ t ]
+PASS: collation-key returns byte-array
+Stack: [ ]
+Stack: [ B{ 0x2B 0x49 0x49 0x41 0x33 0x01 0x09 0x01 0x09 } ]
+Stack: [ B{ 0x2B 0x49 0x49 0x41 0x33 0x01 0x09 0x01 0x09 } B{ 0x2D 0x2B 0x45 0x2B 0x45 0x2B 0x01 0x0A 0x01 0x0A } ]
+PASS: key(apple) < key(banana)
+Stack: [ ]
+Stack: [ B{ 0x2B 0x49 0x49 0x41 0x33 0x01 0x09 0x01 0x09 } ]
+Stack: [ B{ 0x2B 0x49 0x49 0x41 0x33 0x01 0x09 0x01 0x09 } B{ 0x2B 0x49 0x49 0x41 0x33 0x01 0x09 0x01 0x09 } ]
+PASS: key(apple) = key(apple)
+Stack: [ ]
+=== bcp47 collation extensions ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: phonebook collation accepted
+Stack: [ ]
