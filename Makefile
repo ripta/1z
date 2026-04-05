@@ -91,9 +91,4 @@ docs: build ## Generate API reference documentation
 	./$(ZIG_PREFIX)/bin/1z tools/gen-docs.1z
 
 docker-build: ## Build the project inside Docker (Linux)
-	docker run --rm -v $(PWD):/workspace -w /workspace $(DOCKER_IMAGE) \
-		make build ZIG_PREFIX=/tmp/zig-out
-
-docker-test: ## Run build and tests inside Docker (Linux)
-	docker run --rm -v $(PWD):/workspace -w /workspace $(DOCKER_IMAGE) \
-		make build test ZIG_PREFIX=/tmp/zig-out
+	docker build --build-arg GCP_PROJECT_ID=$(GCP_PROJECT_ID) -t gcr.io/$(GCP_PROJECT_ID)/1z .
