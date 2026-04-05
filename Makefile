@@ -92,3 +92,6 @@ docs: build ## Generate API reference documentation
 
 docker-build: ## Build the project inside Docker (Linux)
 	docker build --build-arg GCP_PROJECT_ID=$(GCP_PROJECT_ID) -t gcr.io/$(GCP_PROJECT_ID)/1z .
+
+docker-test: ## Run integration tests inside a Docker container
+	docker run --rm gcr.io/$(GCP_PROJECT_ID)/1z make integration-test
