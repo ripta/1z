@@ -10,6 +10,14 @@ const Channel = channel_mod.Channel;
 const Scheduler = @import("../scheduler.zig").Scheduler;
 const tasks = @import("tasks.zig");
 
+fn throwChannelClosed(ctx: *Context, message: []const u8) anyerror {
+    ctx.thrown_error = .{
+        .error_type = "channel-closed",
+        .message = message,
+    };
+    return error.UserThrown;
+}
+
 pub const primitives = [_]Primitive{
     .{ .name = "<channel>", .stack_effect = "-- ch", .doc = "Create an unbufferedf channel.", .func = nativeCreateChannel },
     .{ .name = "send", .stack_effect = "val ch --", .doc = "Send a value to a channel. Blocks if no receiver ready (unbuffered) or buffer full.", .func = nativeSend },
@@ -20,6 +28,7 @@ pub const primitives = [_]Primitive{
         .func = nativeReceive,
     },
     .{ .name = "<buffered-channel>", .stack_effect = "n -- ch", .doc = "Create a buffered channel with capacity n.", .func = nativeCreateBufferedChannel },
+    .{ .name = "close-channel", .stack_effect = "ch --", .doc = "Close a channel. No more sends allowed; receives drain buffered values.", .func = nativeCloseChannel },
 };
 
 /// <channel> ( -- ch )
@@ -65,8 +74,7 @@ fn nativeSend(ctx: *Context) anyerror!void {
     const value = try ctx.stack.pop();
 
     if (ch.closed) {
-        ctx.pending_error_message = "cannot send on closed channel";
-        return error.ChannelClosed;
+        return throwChannelClosed(ctx, "cannot send on closed channel");
     }
 
     const scheduler = ctx.scheduler orelse {
@@ -114,6 +122,10 @@ fn nativeSend(ctx: *Context) anyerror!void {
             .message = "task was cancelled",
         };
         return error.UserThrown;
+    }
+
+    if (ch.closed) {
+        return throwChannelClosed(ctx, "cannot send on closed channel");
     }
 }
 
@@ -169,8 +181,7 @@ fn nativeReceive(ctx: *Context) anyerror!void {
 
     // if closed and nothing available, throw
     if (ch.closed) {
-        ctx.pending_error_message = "channel is closed";
-        return error.ChannelClosed;
+        return throwChannelClosed(ctx, "channel is closed");
     }
 
     // blocking receive
@@ -189,4 +200,34 @@ fn nativeReceive(ctx: *Context) anyerror!void {
         };
         return error.UserThrown;
     }
+
+    // If the channel was closed while we were waiting, no value was pushed
+    if (ch.closed) {
+        return throwChannelClosed(ctx, "channel is closed");
+    }
+}
+
+/// close-channel ( ch -- )
+///
+/// Mark the channel as closed. Double-close is a no-op.
+/// Wakes all blocked senders and receivers so they can observe the closed state.
+fn nativeCloseChannel(ctx: *Context) anyerror!void {
+    const ch = try helpers.popChannel(ctx);
+
+    if (ch.closed) return;
+    ch.closed = true;
+
+    const scheduler = ctx.scheduler orelse return;
+
+    for (ch.waiting_senders.items) |entry| {
+        entry.task.blocked_on_channel = null;
+        scheduler.enqueue(entry.task) catch {};
+    }
+    ch.waiting_senders.clearRetainingCapacity();
+
+    for (ch.waiting_receivers.items) |entry| {
+        entry.task.blocked_on_channel = null;
+        scheduler.enqueue(entry.task) catch {};
+    }
+    ch.waiting_receivers.clearRetainingCapacity();
 }
