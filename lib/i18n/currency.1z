@@ -1,0 +1,168 @@
+\ lib/i18n/currency.1z - Locale-aware currency formatting
+\
+\ Provides format-currency and currency-symbol via ICU's unum_* API.
+\ Formatting styles are selected via the currency-style enum.
+
+use "ffi" ;
+use "i18n/icu" ;
+use "i18n/locale" ;
+
+\ --- Library loading and FFI bindings ---
+
+sys-info "os" @get "macos" = [
+  "icucore" lib-open
+] [
+  "icui18n" lib-open
+] if
+
+ffi-def{
+  (unum-open):          "unum_open" ffi{ i32 ptr i32 cstring isize inout-i32 -> ptr }
+  (unum-close):         "unum_close" ffi{ ptr -> void }
+  (unum-format-double): "unum_formatDouble" ffi{ ptr f64 ptr i32 isize inout-i32 -> i32 }
+  (unum-set-text-attribute): "unum_setTextAttribute" ffi{ ptr i32 ptr i32 inout-i32 -> void }
+  (unum-get-symbol): "unum_getSymbol" ffi{ ptr i32 ptr i32 inout-i32 -> i32 }
+} call "icu-curr-raw" swap >module reexport
+
+\ --- Enum ---
+
+currency-style: enum{
+  symbol: unit
+  code: unit
+  accounting: unit
+  plural: unit
+} ;
+
+\ --- Constants ---
+
+(UNUM_CURRENCY):            const [ 2 ] ;
+(UNUM_CURRENCY_ISO):        const [ 10 ] ;
+(UNUM_CURRENCY_PLURAL):     const [ 11 ] ;
+(UNUM_CURRENCY_ACCOUNTING): const [ 12 ] ;
+(UNUM_CURRENCY_CODE_ATTR):  const [ 5 ] ;
+(UNUM_CURRENCY_SYMBOL):     const [ 8 ] ;
+(uchar-buf-size):           const [ 256 ] ;
+
+\ --- Internal helpers ---
+
+\\ Allocate a UChar result buffer and return (buf ptr).
+(alloc-uchar-buf): ( -- byte-array ptr ) [
+  (uchar-buf-size) 2 * bytes-alloc
+  dup bytes>ffi-ptr+len drop
+] ;
+
+\\ Open a UNumberFormat for a given style (no pattern).
+(open-number-format): ( style icu-locale-id -- fmt-ptr ) [
+  1 bytes-alloc dup bytes>ffi-ptr+len drop
+  \ Stack: style icu-locale-id pat-buf pat-ptr
+  3 pick-n
+  \ Stack: style icu-locale-id pat-buf pat-ptr style
+  1 pick-n 0
+  \ Stack: style icu-locale-id pat-buf pat-ptr style pat-ptr 0
+  5 pick-n 0 0
+  \ Stack: style icu-locale-id pat-buf pat-ptr style pat-ptr 0 icu-locale-id 0 0
+  (unum-open)
+  \ Stack: style icu-locale-id pat-buf pat-ptr status fmt-ptr
+  swap (icu-check)
+  \ Stack: style icu-locale-id pat-buf pat-ptr fmt-ptr
+  nip nip nip nip
+] ;
+
+\\ Format a number as a double using an open UNumberFormat.
+(format-with-double): ( n fmt-ptr -- string ) [
+  swap >float swap
+  \ Stack: f64-val fmt-ptr
+  (alloc-uchar-buf)
+  \ Stack: f64-val fmt-ptr buf ptr
+  2 pick-n 4 pick-n 2 pick-n
+  \ Stack: f64-val fmt-ptr buf ptr fmt-ptr f64-val ptr
+  (uchar-buf-size) 0 0
+  \ Stack: ... fmt-ptr f64-val ptr 256 0 0
+  (unum-format-double)
+  \ Stack: f64-val fmt-ptr buf ptr status actual-len
+  swap (icu-check)
+  \ Stack: f64-val fmt-ptr buf ptr actual-len
+  swap drop
+  \ Stack: f64-val fmt-ptr buf actual-len
+  uchar>utf8
+  \ Stack: f64-val fmt-ptr string
+  nip nip
+] ;
+
+\\ Format a number and close the UNumberFormat handle.
+(format-and-close): ( n fmt-ptr -- string ) [
+  dup [ (format-with-double) ] dip (unum-close)
+] ;
+
+\\ Extract the ICU locale ID from a locale value.
+(locale>icu-id): ( locale -- icu-locale-id ) [
+  unmake-locale (bcp47>icu-id)
+] ;
+
+\\ Map a currency-style enum variant to the ICU UNumberFormatStyle constant.
+(style>icu-const): ( currency-style -- i32 ) [
+  match{
+    currency-style:symbol:     [ (UNUM_CURRENCY) ]
+    currency-style:code:       [ (UNUM_CURRENCY_ISO) ]
+    currency-style:accounting: [ (UNUM_CURRENCY_ACCOUNTING) ]
+    currency-style:plural:     [ (UNUM_CURRENCY_PLURAL) ]
+  }
+] ;
+
+\\ Set the ISO 4217 currency code on a UNumberFormat handle.
+(set-currency-code): ( fmt-ptr currency-string -- ) [
+  utf8>uchar
+  \ Stack: fmt-ptr uchar-buf uchar-len
+  over bytes>ffi-ptr+len drop
+  \ Stack: fmt-ptr uchar-buf uchar-len uchar-ptr
+  3 pick-n (UNUM_CURRENCY_CODE_ATTR) 2 pick-n 4 pick-n 0
+  \ Stack: fmt-ptr uchar-buf uchar-len uchar-ptr fmt-ptr 5 uchar-ptr uchar-len 0
+  (unum-set-text-attribute)
+  \ Stack: fmt-ptr uchar-buf uchar-len uchar-ptr status
+  (icu-check)
+  drop drop drop drop
+] ;
+
+\ --- Public words ---
+
+\\ Format a number as currency using the given style and locale.
+\\ The currency parameter is an ISO 4217 code (e.g., "USD", "EUR").
+\\ All numeric types are accepted (fixnum, float, bignum, ratio).
+format-currency: ( amount currency style locale -- string ) [
+  (locale>icu-id)
+  \ Stack: amount currency style icu-id
+  swap (style>icu-const) swap
+  \ Stack: amount currency icu-const icu-id
+  (open-number-format)
+  \ Stack: amount currency fmt-ptr
+  swap over
+  \ Stack: amount fmt-ptr currency fmt-ptr
+  swap (set-currency-code)
+  \ Stack: amount fmt-ptr
+  (format-and-close)
+] ;
+
+\\ Look up the currency symbol for a given ISO 4217 code and locale.
+\\ Returns the locale-appropriate symbol (e.g., "$" for USD in en-US).
+currency-symbol: ( currency locale -- string ) [
+  (locale>icu-id)
+  \ Stack: currency icu-id
+  (UNUM_CURRENCY) swap (open-number-format)
+  \ Stack: currency fmt-ptr
+  swap over
+  \ Stack: fmt-ptr currency fmt-ptr
+  swap (set-currency-code)
+  \ Stack: fmt-ptr
+  (alloc-uchar-buf)
+  \ Stack: fmt-ptr buf ptr
+  2 pick-n (UNUM_CURRENCY_SYMBOL) 2 pick-n (uchar-buf-size) 0
+  \ Stack: fmt-ptr buf ptr fmt-ptr 8 ptr 256 0
+  (unum-get-symbol)
+  \ Stack: fmt-ptr buf ptr status actual-len
+  swap (icu-check)
+  \ Stack: fmt-ptr buf ptr actual-len
+  swap drop
+  \ Stack: fmt-ptr buf actual-len
+  uchar>utf8
+  \ Stack: fmt-ptr string
+  swap (unum-close)
+] ;

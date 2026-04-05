@@ -1,0 +1,60 @@
+\ Currency formatting and symbol tests
+
+use "testing" ;
+use "i18n/currency" ;
+use "i18n/locale" ;
+
+"format-currency symbol style" test-section
+
+"$1,234.50"
+1234.5 "USD" currency-style:symbol "en-US" <locale> format-currency
+"USD symbol en-US" assert=
+
+"$0.00"
+0 "USD" currency-style:symbol "en-US" <locale> format-currency
+"zero USD" assert=
+
+"-$42.00"
+-42 "USD" currency-style:symbol "en-US" <locale> format-currency
+"negative USD" assert=
+
+"format-currency code style" test-section
+
+"USD\u{a0}1,234.50"
+1234.5 "USD" currency-style:code "en-US" <locale> format-currency
+"USD code en-US" assert=
+
+"format-currency accounting style" test-section
+
+"$1,234.50"
+1234.5 "USD" currency-style:accounting "en-US" <locale> format-currency
+"positive accounting" assert=
+
+"($1,234.50)"
+-1234.5 "USD" currency-style:accounting "en-US" <locale> format-currency
+"negative accounting" assert=
+
+"format-currency plural style" test-section
+
+"1,234.50 US dollars"
+1234.5 "USD" currency-style:plural "en-US" <locale> format-currency
+"plural style" assert=
+
+"format-currency locale variation" test-section
+
+1234.5 "EUR" currency-style:symbol "de-DE" <locale> format-currency
+dup "1.234,50\u{a0}€" = over "1.234,50 €" = or
+"EUR symbol de-DE" assert-true drop
+
+"format-currency fixnum input" test-section
+
+"$42.00"
+42 "USD" currency-style:symbol "en-US" <locale> format-currency
+"fixnum input" assert=
+
+"currency-symbol" test-section
+
+"$" "USD" "en-US" <locale> currency-symbol "USD symbol" assert=
+"€" "EUR" "en-US" <locale> currency-symbol "EUR symbol" assert=
+"£" "GBP" "en-US" <locale> currency-symbol "GBP symbol" assert=
+"¥" "JPY" "en-US" <locale> currency-symbol "JPY symbol" assert=

@@ -1,0 +1,58 @@
+=== format-currency symbol style ===
+Stack: [ ]
+Stack: [ "$1,234.50" ]
+Stack: [ "$1,234.50" "$1,234.50" ]
+PASS: USD symbol en-US
+Stack: [ ]
+Stack: [ "$0.00" ]
+Stack: [ "$0.00" "$0.00" ]
+PASS: zero USD
+Stack: [ ]
+Stack: [ "-$42.00" ]
+Stack: [ "-$42.00" "-$42.00" ]
+PASS: negative USD
+Stack: [ ]
+=== format-currency code style ===
+Stack: [ ]
+Stack: [ "USD 1,234.50" ]
+Stack: [ "USD 1,234.50" "USD 1,234.50" ]
+PASS: USD code en-US
+Stack: [ ]
+=== format-currency accounting style ===
+Stack: [ ]
+Stack: [ "$1,234.50" ]
+Stack: [ "$1,234.50" "$1,234.50" ]
+PASS: positive accounting
+Stack: [ ]
+Stack: [ "($1,234.50)" ]
+Stack: [ "($1,234.50)" "($1,234.50)" ]
+PASS: negative accounting
+Stack: [ ]
+=== format-currency plural style ===
+Stack: [ ]
+Stack: [ "1,234.50 US dollars" ]
+Stack: [ "1,234.50 US dollars" "1,234.50 US dollars" ]
+PASS: plural style
+Stack: [ ]
+=== format-currency locale variation ===
+Stack: [ ]
+Stack: [ "1.234,50 €" ]
+Stack: [ "1.234,50 €" t ]
+PASS: EUR symbol de-DE
+Stack: [ ]
+=== format-currency fixnum input ===
+Stack: [ ]
+Stack: [ "$42.00" ]
+Stack: [ "$42.00" "$42.00" ]
+PASS: fixnum input
+Stack: [ ]
+=== currency-symbol ===
+Stack: [ ]
+PASS: USD symbol
+Stack: [ ]
+PASS: EUR symbol
+Stack: [ ]
+PASS: GBP symbol
+Stack: [ ]
+PASS: JPY symbol
+Stack: [ ]
