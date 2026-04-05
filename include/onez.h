@@ -102,7 +102,17 @@ int onez_push_string(onez_t ctx, const char *data, size_t len);
 
 /* ---- Opaque value handles ---- */
 
-/* Opaque value handle. Valid until onez_deinit on the owning context. */
+/*
+ * Opaque value handle. Valid until onez_deinit on the owning context.
+ *
+ * A handle is bound to the context that created it. Passing a handle to
+ * a different context, or using it after the owning context has been
+ * destroyed, is undefined behavior (same contract as onez_t itself).
+ *
+ * Each onez_pop_value call allocates a small arena cell that lives until
+ * onez_deinit. Handles are cheap but not free; callers doing unbounded
+ * pop_value calls on a long-lived context will accumulate memory.
+ */
 typedef void *onez_value_t;
 
 /*
@@ -117,6 +127,9 @@ int onez_pop_value(onez_t ctx, onez_value_t *out);
 
 /*
  * Push a previously obtained value handle back onto the stack.
+ *
+ * The handle must belong to the same context. Passing a handle from a
+ * different context is undefined behavior.
  *
  * Returns ONEZ_OK on success.
  * Returns ONEZ_ERR_NULL_HANDLE if ctx is NULL.
