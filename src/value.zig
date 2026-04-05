@@ -348,6 +348,7 @@ pub const Value = union(enum) {
     stack_effect: StackEffect,
     error_value: ErrorObject,
     task: *Task,
+    channel: *@import("channel.zig").Channel,
     doc_string: []const u8,
 
     pub fn write(self: Value, writer: anytype) anyerror!void {
@@ -480,6 +481,13 @@ pub const Value = union(enum) {
                     });
                 }
             },
+            .channel => |ch| {
+                if (ch.capacity == 0) {
+                    try writer.writeAll("<channel unbuffered>");
+                } else {
+                    try writer.print("<channel capacity={d}>", .{ch.capacity});
+                }
+            },
             .doc_string => |s| try writer.print("<doc-string \"{s}\">", .{s}),
         }
     }
@@ -594,6 +602,7 @@ pub const Value = union(enum) {
             .stack_effect => |a| a.eql(other.stack_effect),
             .error_value => |a| a.eql(other.error_value),
             .task => |a| a == other.task,
+            .channel => |a| a == other.channel,
             .doc_string => |a| std.mem.eql(u8, a, other.doc_string),
         };
     }
@@ -748,6 +757,10 @@ pub const Value = union(enum) {
             // Tasks hash by pointer identity (same as equality)
             .task => |t| {
                 const ptr_val = @intFromPtr(t);
+                hasher.update(std.mem.asBytes(&ptr_val));
+            },
+            .channel => |ch| {
+                const ptr_val = @intFromPtr(ch);
                 hasher.update(std.mem.asBytes(&ptr_val));
             },
             .doc_string => |s| hasher.update(s),

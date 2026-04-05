@@ -69,6 +69,7 @@ pub const Task = struct {
     ctx: *@import("context.zig").Context,
     scope: *TaskScope,
     cancelled: bool = false,
+    blocked_on_channel: ?*anyopaque = null,
     quotation: Quotation,
     /// Task that is waiting for this task to complete (via await).
     awaiting_task: ?*Task = null,

@@ -1,0 +1,18 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: type-of returns channel
+Stack: [ ]
+PASS: unbuffered ping-pong
+Stack: [ ]
+PASS: send/receive string
+Stack: [ ]
+PASS: send/receive array
+Stack: [ ]
+PASS: sender blocks until receiver
+Stack: [ ]
+PASS: receiver blocks until sender
+Stack: [ ]
