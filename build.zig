@@ -155,6 +155,7 @@ pub fn build(b: *std.Build) void {
 
     // Update golden files step
     const update_golden_step = b.step("update-golden", "Update golden files for integration tests");
+    update_golden_step.dependOn(&install_toy_shared.step);
     var update_files = b.addUpdateSourceFiles();
 
     addIntegrationTests(b, exe, test_case_helper, integration_test_step, &update_files, &integration_status_files, test_entries, has_diff, false, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms, test_filter);
