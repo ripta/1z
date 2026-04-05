@@ -38,7 +38,6 @@ Stack: [ ]
 % ( a b -- a%b )
 ( ( -- stack-effect )
 (=) ( a b -- ? )
-(trampoline) ( *unsafe-fn-ptr* -- )
 * ( a b -- a*b )
 *% ( a b -- a*b )
 + ( a b -- a+b )

@@ -26,7 +26,6 @@ pub const primitives = [_]Primitive{
     .{ .name = "command-line-args", .stack_effect = "-- args", .doc = "Push program arguments as an array of strings.", .func = nativeCommandLineArgs, .capability = .system },
     .{ .name = "sys-exit", .stack_effect = "code --", .doc = "Exit the process with the given exit code.", .func = nativeSysExit, .capability = .system },
     .{ .name = "add-load-path", .stack_effect = "path --", .doc = "Add a directory to the load path search list.", .func = nativeAddLoadPath },
-    .{ .name = "(trampoline)", .stack_effect = "*unsafe-fn-ptr* --", .doc = "Call a native function via pointer. Internal use only.", .func = nativeTrampoline },
     .{ .name = "eval-string", .stack_effect = "string --", .doc = "Execute a string as 1z code in the caller's scope.", .func = nativeEvalString, .capability = .eval },
     .{ .name = "export", .stack_effect = "name --", .doc = "Promote an imported word to a public definition in the current scope.", .func = nativeExport },
     .{ .name = "compile!", .stack_effect = "sym --", .doc = "JIT-compile a word for integer arithmetic. Throws if the word is not found or not compilable.", .func = nativeCompile },
@@ -509,33 +508,6 @@ fn nativeAddLoadPath(ctx: *Context) anyerror!void {
     const path = try popString(ctx);
     const duped = ctx.quotationAllocator().dupe(u8, path) catch return error.OutOfMemory;
     ctx.load_paths.append(ctx.allocator, duped) catch return error.OutOfMemory;
-}
-
-/// (trampoline) deprecated ( *unsafe-fn-ptr* -- ) - Call a native function via pointer
-///
-/// Dead code, kept for backward compatibility. All callsites were migrated to
-/// the native function registry (the native.* virtual module).
-///
-/// Bridge primitive: pops a function pointer as a fixnum from the stack and calls it.
-/// Used by auto-generated struct/virtual words to invoke their backing native helpers.
-///
-/// WARNING: This is inherently unsafe! The function pointer must be valid and
-///          must conform to the expected signature (fn (*Context) anyerror!void), or
-///          else the runtime will likely crash. - This is an experiment.
-fn nativeTrampoline(ctx: *Context) anyerror!void {
-    const ptr_val = try helpers.popFixnum(ctx);
-    if (ptr_val <= 0) {
-        ctx.pending_error_message = "(trampoline): null or negative function pointer";
-        return error.InvalidFunctionPointer;
-    }
-    const addr: usize = @intCast(ptr_val);
-    const alignment = @alignOf(fn (*Context) anyerror!void);
-    if (addr % alignment != 0) {
-        ctx.pending_error_message = "(trampoline): function pointer is not properly aligned";
-        return error.InvalidFunctionPointer;
-    }
-    const func: *const fn (*Context) anyerror!void = @ptrFromInt(addr);
-    try func(ctx);
 }
 
 /// 1array ( elem -- array ) - Wrap element in single-element array
