@@ -19,8 +19,8 @@ run: build ## Build and run the 1z interpreter
 	./$(ZIG_PREFIX)/bin/1z $(ARGS)
 
 fmt: build ## Format zig and 1z source files
-	zig fmt src/ build.zig
-	./$(ZIG_PREFIX)/bin/1z fmt $$(find . \( -path './.zig-cache' -o -path './$(ZIG_PREFIX)' \) -prune -o -name '*.1z' -print)
+	timeout $(TARGET_TIMEOUT) zig fmt src/ build.zig
+	timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z fmt $$(find . \( -path './.zig-cache' -o -path './$(ZIG_PREFIX)' \) -prune -o -name '*.1z' -print)
 
 test: ## Run all tests
 	timeout $(TARGET_TIMEOUT) zig build test --prefix $(ZIG_PREFIX) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
