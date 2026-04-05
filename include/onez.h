@@ -57,6 +57,8 @@ typedef void *onez_t;
 #define ONEZ_ERR_STACK_UNDERFLOW 2
 #define ONEZ_ERR_ALLOC          3
 #define ONEZ_ERR_NULL_VALUE    -2
+#define ONEZ_ERR_INDEX_OUT_OF_RANGE 4
+#define ONEZ_ERR_KEY_NOT_FOUND      5
 
 /* ----- Lifecycle ----- */
 
@@ -143,6 +145,40 @@ int onez_push_value(onez_t ctx, onez_value_t handle);
  * Returns ONEZ_TYPE_UNKNOWN if handle is NULL.
  */
 int onez_value_type(onez_value_t handle);
+
+/* ---- Value access ---- */
+
+/*
+ * Return the number of elements in an array handle.
+ * Returns 0 if handle is NULL or not an array.
+ */
+size_t onez_array_length(onez_value_t handle);
+
+/*
+ * Get the element at `index` from an array handle.
+ *
+ * On success, *out is set to a new handle and ONEZ_OK is returned.
+ * Returns ONEZ_ERR_TYPE_MISMATCH if handle is not an array.
+ * Returns ONEZ_ERR_INDEX_OUT_OF_RANGE if index >= array length.
+ */
+int onez_array_get(onez_t ctx, onez_value_t handle, size_t index, onez_value_t *out);
+
+/*
+ * Look up a string key in a hash handle.
+ *
+ * On success, *out is set to a new handle and ONEZ_OK is returned.
+ * Returns ONEZ_ERR_TYPE_MISMATCH if handle is not a hash.
+ * Returns ONEZ_ERR_KEY_NOT_FOUND if the key is not present.
+ */
+int onez_hash_get(onez_t ctx, onez_value_t handle, const char *key, size_t key_len, onez_value_t *out);
+
+/*
+ * Return the keys of a hash as an array handle of symbols.
+ *
+ * On success, *out is set to a new array handle and ONEZ_OK is returned.
+ * Returns ONEZ_ERR_TYPE_MISMATCH if handle is not a hash.
+ */
+int onez_hash_keys(onez_t ctx, onez_value_t handle, onez_value_t *out);
 
 /* ---- Pop (1z stack -> C) ---- */
 
