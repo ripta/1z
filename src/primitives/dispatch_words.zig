@@ -186,7 +186,7 @@ fn extractTypeValue(ctx: *Context, val: value_mod.Value) !*const value_mod.TypeV
 
             // Try qualified name resolution: "module.typename"
             if (std.mem.indexOfScalar(u8, s, '.') != null) {
-                if (try resolveQualifiedTypeValue(ctx, s)) |tv| return tv;
+                if (resolveQualifiedTypeValue(ctx, s)) |tv| return tv;
             }
 
             helpers.setErrorContext(ctx, "unknown type name '{s}' in method type position", .{s});
@@ -210,7 +210,6 @@ const ResolvedWord = struct {
 
 /// Resolve a word name (bare or dot-qualified) to dispatch-relevant fields.
 fn resolveWordForDispatch(ctx: *Context, name: []const u8) ?ResolvedWord {
-    // Try bare lookup first.
     if (ctx.lookupWord(name)) |wd| {
         return .{
             .dispatch_id = wd.dispatch_id,
@@ -222,14 +221,12 @@ fn resolveWordForDispatch(ctx: *Context, name: []const u8) ?ResolvedWord {
         };
     }
 
-    // Try qualified name: split on rightmost dot, execute module, look up word.
     const dot = std.mem.lastIndexOfScalar(u8, name, '.') orelse return null;
     const module_path = name[0..dot];
     const word_name = name[dot + 1 ..];
     if (module_path.len == 0 or word_name.len == 0) return null;
 
-    const module = resolveModule(ctx, module_path) orelse return null;
-
+    const module = resolveModuleLiteral(ctx, module_path) orelse return null;
     const mod_word = module.words.get(word_name) orelse return null;
     return .{
         .dispatch_id = mod_word.dispatch_id,
@@ -242,15 +239,14 @@ fn resolveWordForDispatch(ctx: *Context, name: []const u8) ?ResolvedWord {
 }
 
 /// Resolve a dot-qualified type name (e.g., "ea.color") to a TypeValue by
-/// executing the module word and looking up the type in that module.
-fn resolveQualifiedTypeValue(ctx: *Context, name: []const u8) !?*const value_mod.TypeValue {
+/// inspecting the module word's literal and looking up the type in that module.
+fn resolveQualifiedTypeValue(ctx: *Context, name: []const u8) ?*const value_mod.TypeValue {
     const dot = std.mem.lastIndexOfScalar(u8, name, '.') orelse return null;
     const module_path = name[0..dot];
     const type_name = name[dot + 1 ..];
     if (module_path.len == 0 or type_name.len == 0) return null;
 
-    const module = resolveModule(ctx, module_path) orelse return null;
-
+    const module = resolveModuleLiteral(ctx, module_path) orelse return null;
     const mod_word = module.words.get(type_name) orelse return null;
     switch (mod_word.action) {
         .compound => |instrs| {
@@ -270,19 +266,21 @@ fn resolveQualifiedTypeValue(ctx: *Context, name: []const u8) !?*const value_mod
     }
 }
 
-/// Execute a module path word and pop the resulting module from the stack.
-fn resolveModule(ctx: *Context, module_path: []const u8) ?*const value_mod.Module {
+/// Resolve a module path to a Module by inspecting the word's literal value.
+/// Only accepts single-instruction compound words that push a module literal,
+/// matching the pattern produced by `load`. Does not execute any code.
+fn resolveModuleLiteral(ctx: *Context, module_path: []const u8) ?*const value_mod.Module {
     const module_word = ctx.lookupWord(module_path) orelse return null;
-    switch (module_word.action) {
-        .native => |func| func(ctx) catch return null,
-        .compound => |instrs| {
-            const q = value_mod.Quotation{ .instructions = instrs };
-            ctx.executeQuotation(q) catch return null;
+    const instrs = switch (module_word.action) {
+        .compound => |i| i,
+        .native => return null,
+    };
+    if (instrs.len != 1) return null;
+    return switch (instrs[0].op) {
+        .push_literal => |val| switch (val) {
+            .module => |m| m,
+            else => null,
         },
-    }
-    const module_val = ctx.stack.pop() catch return null;
-    return switch (module_val) {
-        .module => |m| m,
         else => null,
     };
 }
