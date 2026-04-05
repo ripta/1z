@@ -1,0 +1,81 @@
+\ Case mapping tests
+
+use "testing" ;
+use "i18n/casemap" ;
+use "i18n/locale" ;
+
+"locale-uppercase basics" test-section
+
+"hello" "en-US" <locale> locale-uppercase
+"HELLO" "uppercase hello" assert=
+
+"abc123" "en-US" <locale> locale-uppercase
+"ABC123" "uppercase with digits" assert=
+
+"" "en-US" <locale> locale-uppercase
+"" "uppercase empty" assert=
+
+"locale-lowercase basics" test-section
+
+"HELLO" "en-US" <locale> locale-lowercase
+"hello" "lowercase HELLO" assert=
+
+"ABC123" "en-US" <locale> locale-lowercase
+"abc123" "lowercase with digits" assert=
+
+"" "en-US" <locale> locale-lowercase
+"" "lowercase empty" assert=
+
+"Turkish locale" test-section
+
+\ Turkish dotted/dotless i distinction
+"i" "tr-TR" <locale> locale-uppercase
+"\u{0130}" "Turkish uppercase i -> İ" assert=
+
+"I" "tr-TR" <locale> locale-lowercase
+"\u{0131}" "Turkish lowercase I -> ı" assert=
+
+\ English does not have the Turkish i distinction
+"i" "en-US" <locale> locale-uppercase
+"I" "English uppercase i -> I" assert=
+
+"I" "en-US" <locale> locale-lowercase
+"i" "English lowercase I -> i" assert=
+
+"German sharp s" test-section
+
+"\u{00df}" "de-DE" <locale> locale-uppercase
+"SS" "German uppercase ß -> SS" assert=
+
+"locale-titlecase" test-section
+
+"hello world" "en-US" <locale> locale-titlecase
+"Hello World" "titlecase two words" assert=
+
+"hello" "en-US" <locale> locale-titlecase
+"Hello" "titlecase single word" assert=
+
+"" "en-US" <locale> locale-titlecase
+"" "titlecase empty" assert=
+
+"case-fold basics" test-section
+
+"HELLO" "en-US" <locale> case-fold
+"hello" "case-fold HELLO" assert=
+
+"Hello World" "en-US" <locale> case-fold
+"hello world" "case-fold mixed" assert=
+
+"" "en-US" <locale> case-fold
+"" "case-fold empty" assert=
+
+"case-fold sharp s" test-section
+
+"\u{00df}" "de-DE" <locale> case-fold
+"ss" "case-fold ß -> ss" assert=
+
+"case-fold comparison" test-section
+
+"Stra\u{00df}e" "de-DE" <locale> case-fold
+"strasse" "de-DE" <locale> case-fold
+= "Straße case-fold = strasse case-fold" assert-true

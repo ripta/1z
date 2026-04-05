@@ -1,0 +1,106 @@
+\ lib/i18n/casemap.1z - Locale-aware case mapping
+\
+\ Provides locale-uppercase, locale-lowercase, locale-titlecase,
+\ and case-fold via ICU's u_strTo* API.
+
+use "ffi" ;
+use "i18n/icu" ;
+use "i18n/locale" ;
+
+\ --- Library loading and FFI bindings ---
+
+sys-info "os" @get "macos" = [
+  "icucore" lib-open
+] [
+  "icui18n" lib-open
+] if
+
+ffi-def{
+  (u-str-to-upper):  "u_strToUpper" ffi{ ptr i32 ptr i32 cstring inout-i32 -> i32 }
+  (u-str-to-lower):  "u_strToLower" ffi{ ptr i32 ptr i32 cstring inout-i32 -> i32 }
+  (u-str-to-title):  "u_strToTitle" ffi{ ptr i32 ptr i32 isize cstring inout-i32 -> i32 }
+  (u-str-fold-case): "u_strFoldCase" ffi{ ptr i32 ptr i32 i32 inout-i32 -> i32 }
+} call "icu-casemap-raw" swap >module reexport
+
+\ --- Internal helpers ---
+
+\\ Extract the ICU locale ID from a locale value.
+(locale>icu-id): ( locale -- icu-locale-id ) [
+  unmake-locale (bcp47>icu-id)
+] ;
+
+\\ Perform a case mapping on a string.
+\\ The quotation receives ( dest-ptr dest-cap src-ptr src-len ) on top of
+\\ the existing stack and must push ( status actual-len ) via its ICU call.
+(apply-case-map): ( string quot -- string ) [
+  swap utf8>uchar
+  \ Stack: quot(2) uchar-buf(1) uchar-len(0)
+  dup 0 = [
+    drop drop drop ""
+  ] [
+    \ Allocate dest: (uchar-len+1)*2 UChars = (uchar-len+1)*4 bytes
+    dup 1 + 2 * 2 * bytes-alloc
+    \ Stack: quot(3) uchar-buf(2) uchar-len(1) dest-buf(0)
+    dup bytes>ffi-ptr+len drop
+    \ Stack: quot(4) uchar-buf(3) uchar-len(2) dest-buf(1) dest-ptr(0)
+    2 pick-n 1 + 2 *
+    \ Stack: quot(5) uchar-buf(4) uchar-len(3) dest-buf(2) dest-ptr(1) dest-cap(0)
+    4 pick-n bytes>ffi-ptr+len drop
+    \ Stack: quot(6) uchar-buf(5) uchar-len(4) dest-buf(3) dest-ptr(2) dest-cap(1) src-ptr(0)
+    \ Push copies of (dest-ptr dest-cap src-ptr src-len) for the quotation.
+    2 pick-n 2 pick-n 2 pick-n 7 pick-n
+    \ Stack: quot(10) uchar-buf(9) uchar-len(8) dest-buf(7) dest-ptr(6)
+    \        dest-cap(5) src-ptr(4) dest-ptr(3) dest-cap(2) src-ptr(1) src-len(0)
+    10 pick-n call
+    \ Quotation pushed locale/options, called FFI which consumed args and
+    \ pushed (status actual-len). Net effect on top 4: consumed 4, pushed 2.
+    \ Stack: quot(8) uchar-buf(7) uchar-len(6) dest-buf(5) dest-ptr(4)
+    \        dest-cap(3) src-ptr(2) status(1) actual-len(0)
+    swap (icu-check)
+    \ Stack: quot(7) uchar-buf(6) uchar-len(5) dest-buf(4) dest-ptr(3)
+    \        dest-cap(2) src-ptr(1) actual-len(0)
+    4 pick-n swap uchar>utf8
+    \ Stack: quot(5) uchar-buf(4) uchar-len(3) dest-buf(2) dest-ptr(1)
+    \        dest-cap(0) src-ptr result
+    nip nip nip nip nip nip nip
+  ] if
+] ;
+
+\ --- Public words ---
+
+\\ Convert a string to uppercase using locale-specific rules.
+\\ Turkish: "i" -> "\u{0130}" (I with dot above).
+\\ German: "\u{00df}" (sharp s) -> "SS".
+locale-uppercase: ( string locale -- string ) [
+  (locale>icu-id)
+  \ Stack: string icu-locale-id
+  [ 0 (u-str-to-upper) ] curry
+  \ Stack: string [ icu-locale-id 0 (u-str-to-upper) ]
+  (apply-case-map)
+] ;
+
+\\ Convert a string to lowercase using locale-specific rules.
+\\ Turkish: "I" -> "\u{0131}" (dotless i).
+locale-lowercase: ( string locale -- string ) [
+  (locale>icu-id)
+  [ 0 (u-str-to-lower) ] curry
+  (apply-case-map)
+] ;
+
+\\ Convert a string to titlecase using locale-specific rules.
+\\ Uses default word-break boundaries (NULL break iterator).
+locale-titlecase: ( string locale -- string ) [
+  (locale>icu-id)
+  [ 0 swap 0 (u-str-to-title) ] curry
+  (apply-case-map)
+] ;
+
+\\ Apply Unicode case folding for case-insensitive comparison.
+\\ Normalizes to a common form so = can compare regardless of case.
+\\ The locale parameter is accepted for API consistency but not used;
+\\ case folding is locale-independent (U_FOLD_CASE_DEFAULT).
+case-fold: ( string locale -- string ) [
+  drop
+  [ 0 0 (u-str-fold-case) ]
+  (apply-case-map)
+] ;

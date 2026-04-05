@@ -1,0 +1,74 @@
+=== locale-uppercase basics ===
+Stack: [ ]
+Stack: [ "HELLO" ]
+PASS: uppercase hello
+Stack: [ ]
+Stack: [ "ABC123" ]
+PASS: uppercase with digits
+Stack: [ ]
+Stack: [ "" ]
+PASS: uppercase empty
+Stack: [ ]
+=== locale-lowercase basics ===
+Stack: [ ]
+Stack: [ "hello" ]
+PASS: lowercase HELLO
+Stack: [ ]
+Stack: [ "abc123" ]
+PASS: lowercase with digits
+Stack: [ ]
+Stack: [ "" ]
+PASS: lowercase empty
+Stack: [ ]
+=== Turkish locale ===
+Stack: [ ]
+Stack: [ "İ" ]
+PASS: Turkish uppercase i -> İ
+Stack: [ ]
+Stack: [ "ı" ]
+PASS: Turkish lowercase I -> ı
+Stack: [ ]
+Stack: [ "I" ]
+PASS: English uppercase i -> I
+Stack: [ ]
+Stack: [ "i" ]
+PASS: English lowercase I -> i
+Stack: [ ]
+=== German sharp s ===
+Stack: [ ]
+Stack: [ "SS" ]
+PASS: German uppercase ß -> SS
+Stack: [ ]
+=== locale-titlecase ===
+Stack: [ ]
+Stack: [ "Hello World" ]
+PASS: titlecase two words
+Stack: [ ]
+Stack: [ "Hello" ]
+PASS: titlecase single word
+Stack: [ ]
+Stack: [ "" ]
+PASS: titlecase empty
+Stack: [ ]
+=== case-fold basics ===
+Stack: [ ]
+Stack: [ "hello" ]
+PASS: case-fold HELLO
+Stack: [ ]
+Stack: [ "hello world" ]
+PASS: case-fold mixed
+Stack: [ ]
+Stack: [ "" ]
+PASS: case-fold empty
+Stack: [ ]
+=== case-fold sharp s ===
+Stack: [ ]
+Stack: [ "ss" ]
+PASS: case-fold ß -> ss
+Stack: [ ]
+=== case-fold comparison ===
+Stack: [ ]
+Stack: [ "strasse" ]
+Stack: [ "strasse" "strasse" ]
+PASS: Straße case-fold = strasse case-fold
+Stack: [ ]
