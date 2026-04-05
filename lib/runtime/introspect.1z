@@ -2,6 +2,24 @@
 
 use "strings" ;
 
+\\ Structured opcode information from quotation introspection.
+\\ opcode: is push-literal: or call-word:; detail: is the literal value or word name.
+opcode-info: struct{ opcode: symbol detail: any } ;
+
+(raw>opcode-info): ( raw -- opcode-info ) [
+  dup 0 #nth swap 1 #nth make-opcode-info
+] ;
+
+\\ Extract a quotation's instructions as an array of opcode-info structs.
+quotation>opcodes: ( quotation -- array ) [
+  native.quotation>opcodes [ (raw>opcode-info) ] #map #collect
+] ;
+
+\\ Test whether a quotation contains any word-call instructions.
+quotation-has-calls?: ( quotation -- bool ) [
+  native.quotation>opcodes [ 0 #nth call-word: = ] #any
+] ;
+
 \ Format a method-info struct as "  method{ type1 }" or "  method{ type1 type2 }"
 format-method: ( method-info -- str ) [
   types>> "  method{ " swap " " #join #append " }" #append

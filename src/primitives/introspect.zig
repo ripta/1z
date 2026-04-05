@@ -34,6 +34,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "type-info-string", .func = nativeTypeInfoString },
     .{ .name = "word-source", .func = nativeWordSource },
     .{ .name = "quotation>effect", .func = nativeQuotationToEffect },
+    .{ .name = "quotation>opcodes", .func = nativeQuotationToOpcodes },
 };
 
 const StackEffectParam = @import("../stack_effect.zig").StackEffectParam;
@@ -722,4 +723,35 @@ fn nativeQuotationToEffect(ctx: *Context) anyerror!void {
     } else {
         try ctx.stack.push(.{ .boolean = false });
     }
+}
+
+/// quotation>opcodes ( quotation -- array ) - Return instruction pairs as raw [symbol, value] arrays.
+fn nativeQuotationToOpcodes(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const val = try ctx.stack.pop();
+    const quot = switch (val) {
+        .quotation => |q| q,
+        else => {
+            helpers.setTypeMismatchError(ctx, "quotation", val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const result = try alloc.alloc(Value, quot.instructions.len);
+    for (quot.instructions, 0..) |instr, i| {
+        const pair = try alloc.alloc(Value, 2);
+        switch (instr.op) {
+            .push_literal => |lit| {
+                pair[0] = .{ .symbol = "push-literal" };
+                pair[1] = lit;
+            },
+            .call_word => |name| {
+                pair[0] = .{ .symbol = "call-word" };
+                pair[1] = .{ .string = name };
+            },
+        }
+        result[i] = .{ .array = pair };
+    }
+
+    try ctx.stack.push(.{ .array = result });
 }

@@ -1,0 +1,50 @@
+=== empty quotation ===
+Stack: [ ]
+PASS: empty quotation returns empty array
+Stack: [ ]
+PASS: empty quotation has no calls
+Stack: [ ]
+=== literals only ===
+Stack: [ ]
+PASS: three literals produce three opcodes
+Stack: [ ]
+PASS: first opcode is push-literal
+Stack: [ ]
+PASS: first detail is 1
+Stack: [ ]
+PASS: second detail is 2
+Stack: [ ]
+PASS: third detail is 3
+Stack: [ ]
+PASS: literals-only quotation has no calls
+Stack: [ ]
+=== word calls ===
+Stack: [ ]
+PASS: two literals and one call
+Stack: [ ]
+PASS: third opcode is call-word
+Stack: [ ]
+PASS: call detail is word name
+Stack: [ ]
+PASS: quotation with calls
+Stack: [ ]
+=== nested quotation ===
+Stack: [ ]
+PASS: nested quotation is one push-literal
+Stack: [ ]
+PASS: nested is push-literal
+Stack: [ ]
+PASS: detail is a quotation
+Stack: [ t ]
+=== parse-time-generated code ===
+Stack: [ t ]
+PASS: hash literal is one push-literal
+Stack: [ t ]
+PASS: hash opcode is push-literal
+Stack: [ t ]
+PASS: hash literal has no calls
+Stack: [ t ]
+=== type mismatch ===
+Stack: [ t ]
+PASS: non-quotation throws
+Stack: [ t ]

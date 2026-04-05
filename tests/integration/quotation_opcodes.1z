@@ -1,0 +1,33 @@
+use "testing" ;
+use "runtime/introspect" ;
+
+"empty quotation" test-section
+{ } [ ] quotation>opcodes "empty quotation returns empty array" assert=
+f [ ] quotation-has-calls? "empty quotation has no calls" assert=
+
+"literals only" test-section
+3 [ 1 2 3 ] quotation>opcodes #len "three literals produce three opcodes" assert=
+push-literal: [ 1 2 3 ] quotation>opcodes #first opcode>> "first opcode is push-literal" assert=
+1 [ 1 2 3 ] quotation>opcodes #first detail>> "first detail is 1" assert=
+2 [ 1 2 3 ] quotation>opcodes 1 #nth detail>> "second detail is 2" assert=
+3 [ 1 2 3 ] quotation>opcodes 2 #nth detail>> "third detail is 3" assert=
+f [ 1 2 3 ] quotation-has-calls? "literals-only quotation has no calls" assert=
+
+"word calls" test-section
+3 [ 1 2 + ] quotation>opcodes #len "two literals and one call" assert=
+call-word: [ 1 2 + ] quotation>opcodes 2 #nth opcode>> "third opcode is call-word" assert=
+"+" [ 1 2 + ] quotation>opcodes 2 #nth detail>> "call detail is word name" assert=
+t [ 1 2 + ] quotation-has-calls? "quotation with calls" assert=
+
+"nested quotation" test-section
+1 [ [ 1 ] ] quotation>opcodes #len "nested quotation is one push-literal" assert=
+push-literal: [ [ 1 ] ] quotation>opcodes #first opcode>> "nested is push-literal" assert=
+t [ [ 1 ] ] quotation>opcodes #first detail>> quotation? "detail is a quotation" assert-true
+
+"parse-time-generated code" test-section
+1 [ H{ "a" 1 } ] quotation>opcodes #len "hash literal is one push-literal" assert=
+push-literal: [ H{ "a" 1 } ] quotation>opcodes #first opcode>> "hash opcode is push-literal" assert=
+f [ H{ "a" 1 } ] quotation-has-calls? "hash literal has no calls" assert=
+
+"type mismatch" test-section
+[ 42 native.quotation>opcodes ] "non-quotation throws" assert-error
