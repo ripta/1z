@@ -9,25 +9,13 @@ pub fn build(b: *std.Build) void {
     const verbose_test_reporting = envFlagIsSet(b, "VERBOSE");
     const slow_test_threshold_ms: u64 = 1000;
 
-    const root_module = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    root_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
-    root_module.addIncludePath(b.path("ext/toy"));
-    root_module.linkSystemLibrary("ffi", .{});
-    addFfiIncludePath(b, root_module, target);
-    addIrSources(b, root_module);
-
-    // Set version as a build option
     const options = b.addOptions();
     options.addOption([]const u8, "version", version);
     options.addOption(u32, "test_case_timeout_secs", test_case_timeout_secs);
     options.addOption(bool, "verbose_test_reporting", verbose_test_reporting);
     options.addOption(u64, "slow_test_threshold_ms", slow_test_threshold_ms);
-    root_module.addOptions("build_options", options);
+
+    const root_module = createCommonModule(b, target, optimize, options, b.path("src/main.zig"));
 
     // zig-out/bin/1z
     const exe = b.addExecutable(.{
@@ -38,17 +26,7 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(&install_exe.step);
 
     // zig-out/bin/1z-lsp
-    const lsp_module = b.createModule(.{
-        .root_source_file = b.path("src/lsp_main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    lsp_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
-    lsp_module.addIncludePath(b.path("ext/toy"));
-    lsp_module.linkSystemLibrary("ffi", .{});
-    addIrSources(b, lsp_module);
-    lsp_module.addOptions("build_options", options);
+    const lsp_module = createCommonModule(b, target, optimize, options, b.path("src/lsp_main.zig"));
 
     const lsp_exe = b.addExecutable(.{
         .name = "1z-lsp",
@@ -60,17 +38,7 @@ pub fn build(b: *std.Build) void {
     // zig-out/clib/lib1z.a (static library)
     // Installed to clib/ instead of lib/ because zig-out/lib is symlinked
     // to the stdlib directory.
-    const capi_static_module = b.createModule(.{
-        .root_source_file = b.path("src/capi.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    capi_static_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
-    capi_static_module.addIncludePath(b.path("ext/toy"));
-    capi_static_module.linkSystemLibrary("ffi", .{});
-    addIrSources(b, capi_static_module);
-    capi_static_module.addOptions("build_options", options);
+    const capi_static_module = createCommonModule(b, target, optimize, options, b.path("src/capi.zig"));
 
     const static_lib = b.addLibrary(.{
         .name = "1z",
@@ -83,17 +51,7 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(&install_static.step);
 
     // zig-out/clib/lib1z.dylib (shared library)
-    const capi_shared_module = b.createModule(.{
-        .root_source_file = b.path("src/capi.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    capi_shared_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
-    capi_shared_module.addIncludePath(b.path("ext/toy"));
-    capi_shared_module.linkSystemLibrary("ffi", .{});
-    addIrSources(b, capi_shared_module);
-    capi_shared_module.addOptions("build_options", options);
+    const capi_shared_module = createCommonModule(b, target, optimize, options, b.path("src/capi.zig"));
 
     const shared_lib = b.addLibrary(.{
         .name = "1z",
@@ -146,18 +104,7 @@ pub fn build(b: *std.Build) void {
     });
 
     // Unit tests
-    const test_module = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    test_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
-    test_module.addIncludePath(b.path("ext/toy"));
-    test_module.linkSystemLibrary("ffi", .{});
-    addFfiIncludePath(b, test_module, target);
-    addIrSources(b, test_module);
-    test_module.addOptions("build_options", options);
+    const test_module = createCommonModule(b, target, optimize, options, b.path("src/main.zig"));
 
     const lib_unit_tests = b.addTest(.{
         .root_module = test_module,
@@ -301,18 +248,7 @@ pub fn build(b: *std.Build) void {
         fmt_run.expectExitCode(0);
 
         if (has_diff and has_fmt_golden) {
-            const captured_fmt_stdout = fmt_run.captureStdOut();
-            const fmt_diff = b.addSystemCommand(&.{
-                "sh", "-c",
-                b.fmt(
-                    "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
-                    .{ golden_path, input_path },
-                ),
-                "sh",
-            });
-            fmt_diff.addFileArg(b.path(golden_path));
-            fmt_diff.addFileArg(captured_fmt_stdout);
-            fmt_test_step.dependOn(&fmt_diff.step);
+            addGoldenDiff(b, fmt_test_step, fmt_run.captureStdOut(), golden_path, input_path);
         } else {
             if (has_fmt_golden) {
                 fmt_run.expectStdOutEqual(fmt_golden_content);
@@ -761,89 +697,7 @@ fn addIntegrationTests(
             }
             previous_serial_test_run = &test_run.step;
         }
-        if (te.show_stack) {
-            test_run.addArg("--show-stack");
-        }
-        test_run.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
-        if (jit_mode) {
-            test_run.addArg("--compile=eager");
-        }
-        if (!hasTestTimeoutFlag(te.flags_lines)) {
-            test_run.addArg(b.fmt("--test-timeout={d}", .{timeout_secs}));
-        }
-        if (te.flags_lines) |fl| {
-            var flag_iter = std.mem.splitScalar(u8, fl, '\n');
-            while (flag_iter.next()) |flag| {
-                const trimmed_flag = std.mem.trim(u8, flag, " \t\r");
-                if (trimmed_flag.len > 0 and !std.mem.eql(u8, trimmed_flag, "--no-show-stack") and !std.mem.eql(u8, trimmed_flag, "--no-jit")) {
-                    test_run.addArg(trimmed_flag);
-                }
-            }
-        }
-        if (te.env_lines) |el| {
-            var env_iter = std.mem.splitScalar(u8, el, '\n');
-            while (env_iter.next()) |line| {
-                const trimmed_line = std.mem.trim(u8, line, " \t\r");
-                if (trimmed_line.len == 0) continue;
-                if (std.mem.indexOfScalar(u8, trimmed_line, '=')) |eq_pos| {
-                    const key = trimmed_line[0..eq_pos];
-                    const value = trimmed_line[eq_pos + 1 ..];
-                    test_run.setEnvironmentVariable(key, value);
-                }
-            }
-        }
-        test_run.addFileArg(b.path(te.file_path));
-        if (te.args_lines) |al| {
-            var arg_iter = std.mem.splitScalar(u8, al, '\n');
-            while (arg_iter.next()) |arg| {
-                const trimmed_arg = std.mem.trimRight(u8, arg, "\r");
-                if (trimmed_arg.len > 0) {
-                    test_run.addArg(trimmed_arg);
-                }
-            }
-        }
-
-        // Library file dependencies (recursive)
-        {
-            var lib_dir = b.build_root.handle.openDir("lib", .{ .iterate = true }) catch |err| {
-                std.debug.print("Warning: Could not open lib/: {}\n", .{err});
-                return;
-            };
-            defer lib_dir.close();
-            var walker = lib_dir.walk(b.allocator) catch |err| {
-                std.debug.print("Warning: Could not walk lib/: {}\n", .{err});
-                return;
-            };
-            defer walker.deinit();
-            while (walker.next() catch null) |entry| {
-                if (entry.kind != .file) continue;
-                if (!std.mem.endsWith(u8, entry.path, ".1z")) continue;
-                test_run.addFileInput(b.path(b.fmt("lib/{s}", .{entry.path})));
-            }
-        }
-        {
-            var examples_dir = b.build_root.handle.openDir("examples", .{ .iterate = true }) catch |err| {
-                std.debug.print("Warning: Could not open examples/: {}\n", .{err});
-                return;
-            };
-            defer examples_dir.close();
-            var walker = examples_dir.walk(b.allocator) catch |err| {
-                std.debug.print("Warning: Could not walk examples/: {}\n", .{err});
-                return;
-            };
-            defer walker.deinit();
-            while (walker.next() catch null) |entry| {
-                if (entry.kind != .file) continue;
-                if (!std.mem.endsWith(u8, entry.path, ".1z")) continue;
-                test_run.addFileInput(b.path(b.fmt("examples/{s}", .{entry.path})));
-            }
-        }
-        test_run.addFileInput(b.path("src/prelude.1z"));
-        if (te.has_args) test_run.addFileInput(b.path(te.args_path));
-        if (te.has_stdin) test_run.addFileInput(b.path(te.stdin_path));
-        if (te.has_flags) test_run.addFileInput(b.path(te.flags_path));
-        if (te.has_exitcode) test_run.addFileInput(b.path(te.exitcode_path));
-        if (te.has_env) test_run.addFileInput(b.path(te.env_path));
+        configureIntegrationRun(b, test_run, te, timeout_secs, jit_mode);
 
         if (te.has_stderr_golden) {
             test_run.addFileInput(b.path(te.stderr_golden_path));
@@ -855,40 +709,8 @@ fn addIntegrationTests(
         test_run.expectExitCode(te.expected_exit_code orelse if (te.has_stderr_golden) 1 else 0);
 
         if (has_diff and te.stdio_expect_mode == .diff_capture) {
-            const captured_stdout = test_run.captureStdOut();
-            const stdout_diff = b.addSystemCommand(&.{
-                "sh", "-c",
-                b.fmt(
-                    "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
-                    .{ if (te.has_stdout_golden) te.stdout_golden_path else "(empty)", te.file_path },
-                ),
-                "sh",
-            });
-            if (te.has_stdout_golden) {
-                stdout_diff.addFileArg(b.path(te.stdout_golden_path));
-            } else {
-                stdout_diff.addArg("/dev/null");
-            }
-            stdout_diff.addFileArg(captured_stdout);
-
-            const captured_stderr = test_run.captureStdErr();
-            const stderr_diff = b.addSystemCommand(&.{
-                "sh", "-c",
-                b.fmt(
-                    "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
-                    .{ if (te.has_stderr_golden) te.stderr_golden_path else "(empty)", te.file_path },
-                ),
-                "sh",
-            });
-            if (te.has_stderr_golden) {
-                stderr_diff.addFileArg(b.path(te.stderr_golden_path));
-            } else {
-                stderr_diff.addArg("/dev/null");
-            }
-            stderr_diff.addFileArg(captured_stderr);
-
-            test_step.dependOn(&stdout_diff.step);
-            test_step.dependOn(&stderr_diff.step);
+            addGoldenDiff(b, test_step, test_run.captureStdOut(), if (te.has_stdout_golden) te.stdout_golden_path else null, te.file_path);
+            addGoldenDiff(b, test_step, test_run.captureStdErr(), if (te.has_stderr_golden) te.stderr_golden_path else null, te.file_path);
         } else {
             if (te.has_stdout_golden) {
                 test_run.expectStdOutEqual(te.stdout_content);
@@ -932,68 +754,7 @@ fn addIntegrationTests(
             update_run.addArg("--");
             update_run.addFileInput(artifact.getEmittedBin());
             update_run.addArtifactArg(artifact);
-            if (te.show_stack) {
-                update_run.addArg("--show-stack");
-            }
-            update_run.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
-            if (!hasTestTimeoutFlag(te.flags_lines)) {
-                update_run.addArg(b.fmt("--test-timeout={d}", .{timeout_secs}));
-            }
-            if (te.flags_lines) |fl| {
-                var flag_iter2 = std.mem.splitScalar(u8, fl, '\n');
-                while (flag_iter2.next()) |flag| {
-                    const trimmed_flag = std.mem.trim(u8, flag, " \t\r");
-                    if (trimmed_flag.len > 0 and !std.mem.eql(u8, trimmed_flag, "--no-show-stack") and !std.mem.eql(u8, trimmed_flag, "--no-jit")) {
-                        update_run.addArg(trimmed_flag);
-                    }
-                }
-            }
-            if (te.env_lines) |el| {
-                var env_iter2 = std.mem.splitScalar(u8, el, '\n');
-                while (env_iter2.next()) |line| {
-                    const trimmed_line = std.mem.trim(u8, line, " \t\r");
-                    if (trimmed_line.len == 0) continue;
-                    if (std.mem.indexOfScalar(u8, trimmed_line, '=')) |eq_pos| {
-                        const key = trimmed_line[0..eq_pos];
-                        const value = trimmed_line[eq_pos + 1 ..];
-                        update_run.setEnvironmentVariable(key, value);
-                    }
-                }
-            }
-            update_run.addFileArg(b.path(te.file_path));
-            if (te.args_lines) |al| {
-                var arg_iter2 = std.mem.splitScalar(u8, al, '\n');
-                while (arg_iter2.next()) |arg| {
-                    const trimmed_arg = std.mem.trimRight(u8, arg, "\r");
-                    if (trimmed_arg.len > 0) {
-                        update_run.addArg(trimmed_arg);
-                    }
-                }
-            }
-            // Library file dependencies (recursive)
-            {
-                var lib_dir2 = b.build_root.handle.openDir("lib", .{ .iterate = true }) catch |err| {
-                    std.debug.print("Warning: Could not open lib/: {}\n", .{err});
-                    return;
-                };
-                defer lib_dir2.close();
-                var walker2 = lib_dir2.walk(b.allocator) catch |err| {
-                    std.debug.print("Warning: Could not walk lib/: {}\n", .{err});
-                    return;
-                };
-                defer walker2.deinit();
-                while (walker2.next() catch null) |entry| {
-                    if (entry.kind != .file) continue;
-                    if (!std.mem.endsWith(u8, entry.path, ".1z")) continue;
-                    update_run.addFileInput(b.path(b.fmt("lib/{s}", .{entry.path})));
-                }
-            }
-            update_run.addFileInput(b.path("src/prelude.1z"));
-            if (te.has_args) update_run.addFileInput(b.path(te.args_path));
-            if (te.has_stdin) update_run.addFileInput(b.path(te.stdin_path));
-            if (te.has_flags) update_run.addFileInput(b.path(te.flags_path));
-            if (te.has_exitcode) update_run.addFileInput(b.path(te.exitcode_path));
-            if (te.has_env) update_run.addFileInput(b.path(te.env_path));
+            configureIntegrationRun(b, update_run, te, timeout_secs, false);
             uf_ptr.*.addCopyFileToSource(update_run.captureStdOut(), te.stdout_golden_path);
 
             const update_exit_code = te.expected_exit_code orelse if (te.has_stderr_golden) @as(u8, 1) else @as(u8, 0);
@@ -1204,51 +965,19 @@ fn addAotTests(
         compile_run.step.dependOn(b.getInstallStep());
         compile_run.addFileInput(artifact.getEmittedBin());
 
-        addLibFileDeps(b, compile_run);
-        compile_run.addFileInput(b.path("src/prelude.1z"));
+        addCommonFileDeps(b, compile_run);
         for (te.build_flags) |flag| compile_run.addArg(flag);
         if (te.build_flags.len > 0) compile_run.addFileInput(b.path(te.build_flags_path));
 
         if (is_build_only) {
             if (has_diff) {
-                const captured_build_stdout = compile_run.captureStdOut();
-                const build_stdout_diff = b.addSystemCommand(&.{
-                    "sh", "-c",
-                    b.fmt(
-                        "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
-                        .{ if (te.has_build_stdout_golden) te.build_stdout_golden_path else "(empty)", te.file_path },
-                    ),
-                    "sh",
-                });
-                if (te.has_build_stdout_golden) {
-                    build_stdout_diff.addFileArg(b.path(te.build_stdout_golden_path));
-                } else {
-                    build_stdout_diff.addArg("/dev/null");
-                }
-                build_stdout_diff.addFileArg(captured_build_stdout);
-                test_step.dependOn(&build_stdout_diff.step);
+                addGoldenDiff(b, test_step, compile_run.captureStdOut(), if (te.has_build_stdout_golden) te.build_stdout_golden_path else null, te.file_path);
 
-                const captured_build_stderr = compile_run.captureStdErr();
                 const normalize_build_stderr = b.addSystemCommand(&.{
                     "sed", "/^error(gpa):/,$d",
                 });
-                normalize_build_stderr.addFileArg(captured_build_stderr);
-                const normalized_build_stderr = normalize_build_stderr.captureStdOut();
-                const build_stderr_diff = b.addSystemCommand(&.{
-                    "sh", "-c",
-                    b.fmt(
-                        "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
-                        .{ if (te.has_build_stderr_golden) te.build_stderr_golden_path else "(empty)", te.file_path },
-                    ),
-                    "sh",
-                });
-                if (te.has_build_stderr_golden) {
-                    build_stderr_diff.addFileArg(b.path(te.build_stderr_golden_path));
-                } else {
-                    build_stderr_diff.addArg("/dev/null");
-                }
-                build_stderr_diff.addFileArg(normalized_build_stderr);
-                test_step.dependOn(&build_stderr_diff.step);
+                normalize_build_stderr.addFileArg(compile_run.captureStdErr());
+                addGoldenDiff(b, test_step, normalize_build_stderr.captureStdOut(), if (te.has_build_stderr_golden) te.build_stderr_golden_path else null, te.file_path);
             } else {
                 if (te.has_build_stdout_golden) {
                     compile_run.expectStdOutEqual(te.build_stdout_content);
@@ -1278,8 +1007,7 @@ fn addAotTests(
                 update_compile.step.dependOn(b.getInstallStep());
                 update_compile.addFileInput(artifact.getEmittedBin());
 
-                addLibFileDeps(b, update_compile);
-                update_compile.addFileInput(b.path("src/prelude.1z"));
+                addCommonFileDeps(b, update_compile);
                 for (te.build_flags) |flag| update_compile.addArg(flag);
                 if (te.build_flags.len > 0) update_compile.addFileInput(b.path(te.build_flags_path));
                 if (expected_build_exit != 0) {
@@ -1322,47 +1050,13 @@ fn addAotTests(
         exec_run.expectExitCode(expected_exit);
 
         if (has_diff) {
-            // Stdout: diff against golden
-            const captured_stdout = exec_run.captureStdOut();
-            const stdout_diff = b.addSystemCommand(&.{
-                "sh", "-c",
-                b.fmt(
-                    "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
-                    .{ if (te.has_stdout_golden) te.stdout_golden_path else "(empty)", te.file_path },
-                ),
-                "sh",
-            });
-            if (te.has_stdout_golden) {
-                stdout_diff.addFileArg(b.path(te.stdout_golden_path));
-            } else {
-                stdout_diff.addArg("/dev/null");
-            }
-            stdout_diff.addFileArg(captured_stdout);
-            test_step.dependOn(&stdout_diff.step);
+            addGoldenDiff(b, test_step, exec_run.captureStdOut(), if (te.has_stdout_golden) te.stdout_golden_path else null, te.file_path);
 
-            // Stderr: normalize binary path, then diff against golden
-            const captured_stderr = exec_run.captureStdErr();
             const normalize_stderr = b.addSystemCommand(&.{
                 "sed", "s|[^ ]*/aot_[^ :]*|<aot>|g",
             });
-            normalize_stderr.addFileArg(captured_stderr);
-            const normalized_stderr = normalize_stderr.captureStdOut();
-
-            const stderr_diff = b.addSystemCommand(&.{
-                "sh", "-c",
-                b.fmt(
-                    "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
-                    .{ if (te.has_stderr_golden) te.stderr_golden_path else "(empty)", te.file_path },
-                ),
-                "sh",
-            });
-            if (te.has_stderr_golden) {
-                stderr_diff.addFileArg(b.path(te.stderr_golden_path));
-            } else {
-                stderr_diff.addArg("/dev/null");
-            }
-            stderr_diff.addFileArg(normalized_stderr);
-            test_step.dependOn(&stderr_diff.step);
+            normalize_stderr.addFileArg(exec_run.captureStdErr());
+            addGoldenDiff(b, test_step, normalize_stderr.captureStdOut(), if (te.has_stderr_golden) te.stderr_golden_path else null, te.file_path);
         } else {
             if (te.has_stdout_golden) {
                 exec_run.expectStdOutEqual(te.stdout_content);
@@ -1394,8 +1088,7 @@ fn addAotTests(
             update_compile.step.dependOn(b.getInstallStep());
             update_compile.addFileInput(artifact.getEmittedBin());
 
-            addLibFileDeps(b, update_compile);
-            update_compile.addFileInput(b.path("src/prelude.1z"));
+            addCommonFileDeps(b, update_compile);
             for (te.build_flags) |flag| update_compile.addArg(flag);
             if (te.build_flags.len > 0) update_compile.addFileInput(b.path(te.build_flags_path));
 
@@ -1429,21 +1122,106 @@ fn addAotTests(
     }
 }
 
-fn addLibFileDeps(b: *std.Build, run: *std.Build.Step.Run) void {
-    var lib_dir = b.build_root.handle.openDir("lib", .{ .iterate = true }) catch |err| {
-        std.debug.print("Warning: Could not open lib/: {}\n", .{err});
+fn configureIntegrationRun(
+    b: *std.Build,
+    run: *std.Build.Step.Run,
+    te: TestEntry,
+    timeout_secs: u32,
+    jit_mode: bool,
+) void {
+    if (te.show_stack) {
+        run.addArg("--show-stack");
+    }
+    run.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
+    if (jit_mode) {
+        run.addArg("--compile=eager");
+    }
+    if (!hasTestTimeoutFlag(te.flags_lines)) {
+        run.addArg(b.fmt("--test-timeout={d}", .{timeout_secs}));
+    }
+    if (te.flags_lines) |fl| {
+        var flag_iter = std.mem.splitScalar(u8, fl, '\n');
+        while (flag_iter.next()) |flag| {
+            const trimmed_flag = std.mem.trim(u8, flag, " \t\r");
+            if (trimmed_flag.len > 0 and !std.mem.eql(u8, trimmed_flag, "--no-show-stack") and !std.mem.eql(u8, trimmed_flag, "--no-jit")) {
+                run.addArg(trimmed_flag);
+            }
+        }
+    }
+    if (te.env_lines) |el| {
+        var env_iter = std.mem.splitScalar(u8, el, '\n');
+        while (env_iter.next()) |line| {
+            const trimmed_line = std.mem.trim(u8, line, " \t\r");
+            if (trimmed_line.len == 0) continue;
+            if (std.mem.indexOfScalar(u8, trimmed_line, '=')) |eq_pos| {
+                run.setEnvironmentVariable(trimmed_line[0..eq_pos], trimmed_line[eq_pos + 1 ..]);
+            }
+        }
+    }
+    run.addFileArg(b.path(te.file_path));
+    if (te.args_lines) |al| {
+        var arg_iter = std.mem.splitScalar(u8, al, '\n');
+        while (arg_iter.next()) |arg| {
+            const trimmed_arg = std.mem.trimRight(u8, arg, "\r");
+            if (trimmed_arg.len > 0) {
+                run.addArg(trimmed_arg);
+            }
+        }
+    }
+    addCommonFileDeps(b, run);
+    if (te.has_args) run.addFileInput(b.path(te.args_path));
+    if (te.has_stdin) run.addFileInput(b.path(te.stdin_path));
+    if (te.has_flags) run.addFileInput(b.path(te.flags_path));
+    if (te.has_exitcode) run.addFileInput(b.path(te.exitcode_path));
+    if (te.has_env) run.addFileInput(b.path(te.env_path));
+}
+
+fn addGoldenDiff(
+    b: *std.Build,
+    test_step: *std.Build.Step,
+    captured: std.Build.LazyPath,
+    golden_path: ?[]const u8,
+    actual_label: []const u8,
+) void {
+    const expected_label = golden_path orelse "(empty)";
+    const diff = b.addSystemCommand(&.{
+        "sh", "-c",
+        b.fmt(
+            "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
+            .{ expected_label, actual_label },
+        ),
+        "sh",
+    });
+    if (golden_path) |gp| {
+        diff.addFileArg(b.path(gp));
+    } else {
+        diff.addArg("/dev/null");
+    }
+    diff.addFileArg(captured);
+    test_step.dependOn(&diff.step);
+}
+
+fn addCommonFileDeps(b: *std.Build, run: *std.Build.Step.Run) void {
+    addDirFileDeps(b, run, "lib");
+    addDirFileDeps(b, run, "examples");
+    run.addFileInput(b.path("src/prelude.1z"));
+}
+
+fn addDirFileDeps(b: *std.Build, run: *std.Build.Step.Run, dir_name: []const u8) void {
+    var dir = b.build_root.handle.openDir(dir_name, .{ .iterate = true }) catch |err| {
+        std.debug.print("Warning: Could not open {s}/: {}\n", .{ dir_name, err });
         return;
     };
-    defer lib_dir.close();
-    var walker = lib_dir.walk(b.allocator) catch |err| {
-        std.debug.print("Warning: Could not walk lib/: {}\n", .{err});
+    defer dir.close();
+    var walker = dir.walk(b.allocator) catch |err| {
+        std.debug.print("Warning: Could not walk {s}/: {}\n", .{ dir_name, err });
         return;
     };
     defer walker.deinit();
     while (walker.next() catch null) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.path, ".1z")) continue;
-        run.addFileInput(b.path(b.fmt("lib/{s}", .{entry.path})));
+        run.addFileInput(b.path(b.fmt("{s}/{s}", .{ dir_name, entry.path })));
     }
 }
 
@@ -1589,36 +1367,9 @@ fn addLspTests(
         if (te.has_exitcode) test_run.addFileInput(b.path(te.exitcode_path));
 
         if (has_diff) {
-            const captured_stdout = test_run.captureStdOut();
-            const stdout_diff = b.addSystemCommand(&.{
-                "sh", "-c",
-                b.fmt(
-                    "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
-                    .{ if (te.has_stdout_golden) te.stdout_golden_path else "(empty)", te.jsonl_path },
-                ),
-                "sh",
-            });
-            if (te.has_stdout_golden) {
-                stdout_diff.addFileArg(b.path(te.stdout_golden_path));
-            } else {
-                stdout_diff.addArg("/dev/null");
-            }
-            stdout_diff.addFileArg(captured_stdout);
-            test_step.dependOn(&stdout_diff.step);
-
+            addGoldenDiff(b, test_step, test_run.captureStdOut(), if (te.has_stdout_golden) te.stdout_golden_path else null, te.jsonl_path);
             if (te.has_stderr_golden) {
-                const captured_stderr = test_run.captureStdErr();
-                const stderr_diff = b.addSystemCommand(&.{
-                    "sh", "-c",
-                    b.fmt(
-                        "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
-                        .{ te.stderr_golden_path, te.jsonl_path },
-                    ),
-                    "sh",
-                });
-                stderr_diff.addFileArg(b.path(te.stderr_golden_path));
-                stderr_diff.addFileArg(captured_stderr);
-                test_step.dependOn(&stderr_diff.step);
+                addGoldenDiff(b, test_step, test_run.captureStdErr(), te.stderr_golden_path, te.jsonl_path);
             }
         } else {
             if (te.has_stdout_golden) {
@@ -1652,6 +1403,28 @@ fn addLspTests(
         const summary_cmd = b.addSystemCommand(&.{ "echo", b.fmt("Filter active: {d}/{d} lsp tests match '{s}'", .{ matched_count, lsp_entries.len, filter }) });
         test_step.dependOn(&summary_cmd.step);
     }
+}
+
+fn createCommonModule(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    options: *std.Build.Step.Options,
+    root_source_file: std.Build.LazyPath,
+) *std.Build.Module {
+    const module = b.createModule(.{
+        .root_source_file = root_source_file,
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
+    module.addIncludePath(b.path("ext/toy"));
+    module.linkSystemLibrary("ffi", .{});
+    addFfiIncludePath(b, module, target);
+    addIrSources(b, module);
+    module.addOptions("build_options", options);
+    return module;
 }
 
 fn addIrSources(b: *std.Build, module: *std.Build.Module) void {
