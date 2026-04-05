@@ -1,0 +1,60 @@
+=== format-number basics ===
+Stack: [ ]
+PASS: integer en-US
+Stack: [ ]
+PASS: zero
+Stack: [ ]
+PASS: negative
+Stack: [ ]
+PASS: float en-US
+Stack: [ ]
+=== format-number locale variation ===
+Stack: [ ]
+PASS: float de-DE
+Stack: [ ]
+=== format-decimal ===
+Stack: [ ]
+PASS: 2 decimals
+Stack: [ ]
+PASS: 3 decimals on integer
+Stack: [ ]
+PASS: trailing zero
+Stack: [ ]
+PASS: 0 decimals rounds
+Stack: [ ]
+=== format-percent ===
+Stack: [ ]
+PASS: 75 percent
+Stack: [ ]
+PASS: 100 percent
+Stack: [ ]
+=== format-number-pattern ===
+Stack: [ ]
+Stack: [ "1,234,567.89" ]
+Stack: [ "1,234,567.89" "1,234,567.89" ]
+PASS: grouping with decimals
+Stack: [ ]
+=== format-number-pattern scientific ===
+Stack: [ ]
+Stack: [ "1.234E3" ]
+Stack: [ "1.234E3" t ]
+PASS: scientific notation
+Stack: [ ]
+=== parse-number ===
+Stack: [ ]
+PASS: parse en-US integer
+Stack: [ ]
+PASS: parse negative float
+Stack: [ ]
+PASS: parse de-DE integer
+Stack: [ ]
+=== numeric tower inputs ===
+Stack: [ ]
+PASS: fixnum input
+Stack: [ ]
+PASS: float input
+Stack: [ ]
+=== error handling ===
+Stack: [ ]
+PASS: unparseable throws
+Stack: [ ]

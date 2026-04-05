@@ -1,0 +1,55 @@
+\ Number formatting and parsing tests
+
+use "testing" ;
+use "i18n/number" ;
+use "i18n/locale" ;
+
+"format-number basics" test-section
+
+"1,234,567" 1234567 "en-US" <locale> format-number "integer en-US" assert=
+"0" 0 "en-US" <locale> format-number "zero" assert=
+"-42" -42 "en-US" <locale> format-number "negative" assert=
+"1,234,567.89" 1234567.89 "en-US" <locale> format-number "float en-US" assert=
+
+"format-number locale variation" test-section
+
+"1.234.567,89" 1234567.89 "de-DE" <locale> format-number "float de-DE" assert=
+
+"format-decimal" test-section
+
+"3.14" 3.14159 2 "en-US" <locale> format-decimal "2 decimals" assert=
+"42.000" 42 3 "en-US" <locale> format-decimal "3 decimals on integer" assert=
+"1,234.50" 1234.5 2 "en-US" <locale> format-decimal "trailing zero" assert=
+"1,234" 1234.5 0 "en-US" <locale> format-decimal "0 decimals rounds" assert=
+
+"format-percent" test-section
+
+"75%" 0.75 "en-US" <locale> format-percent "75 percent" assert=
+"100%" 1.0 "en-US" <locale> format-percent "100 percent" assert=
+
+"format-number-pattern" test-section
+
+"1,234,567.89"
+1234567.89 "#,##0.00" "en-US" <locale> format-number-pattern
+"grouping with decimals" assert=
+
+"format-number-pattern scientific" test-section
+
+1234.0 "0.###E0" "en-US" <locale> format-number-pattern
+dup "1.234E3" = over "1.234E+3" = or
+"scientific notation" assert-true drop
+
+"parse-number" test-section
+
+1234567.0 "1,234,567" "en-US" <locale> parse-number "parse en-US integer" assert=
+-42.5 "-42.5" "en-US" <locale> parse-number "parse negative float" assert=
+1234567.0 "1.234.567" "de-DE" <locale> parse-number "parse de-DE integer" assert=
+
+"numeric tower inputs" test-section
+
+42 "en-US" <locale> format-number "42" swap "fixnum input" assert=
+3.14 "en-US" <locale> format-number "3.14" swap "float input" assert=
+
+"error handling" test-section
+
+[ "abc" "en-US" <locale> parse-number ] "unparseable throws" assert-error
