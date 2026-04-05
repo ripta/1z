@@ -1,0 +1,54 @@
+use "testing" ;
+use "config" ;
+
+"construction and unwrap" test-section
+t H{ "a" 1 } make-config config? "make-config produces config" assert-true
+1 H{ "a" 1 } make-config config-unwrap "a" @get "config-unwrap returns hash" assert=
+
+"config-get flat key" test-section
+42 H{ "port" 42 } make-config "port" config-get "flat key" assert=
+"hello" H{ "name" "hello" } make-config "name" config-get "string value" assert=
+
+"config-get nested path" test-section
+"localhost"
+H{ "db" H{ "host" "localhost" "port" 5432 } } make-config
+"db.host" config-get
+"nested path" assert=
+5432
+H{ "db" H{ "host" "localhost" "port" 5432 } } make-config
+"db.port" config-get
+"nested port" assert=
+
+"config-get deep nesting" test-section
+99
+H{ "a" H{ "b" H{ "c" H{ "d" 99 } } } } make-config
+"a.b.c.d" config-get
+"four levels deep" assert=
+
+"config-get missing key throws" test-section
+[ H{ "a" 1 } make-config "missing" config-get ] "missing flat key" assert-error
+[ H{ "a" H{ "b" 1 } } make-config "a.z" config-get ] "missing nested key" assert-error
+[ H{ "a" 1 } make-config "a.b" config-get ] "traverse through non-hash" assert-error
+
+"config-get? existing key" test-section
+t H{ "a" 1 } make-config "a" config-get? option:some? "existing key is some" assert-true
+1 H{ "a" 1 } make-config "a" config-get? option:some> "existing key value" assert=
+
+"config-get? nested" test-section
+t H{ "x" H{ "y" 7 } } make-config "x.y" config-get? option:some? "nested some" assert-true
+7 H{ "x" H{ "y" 7 } } make-config "x.y" config-get? option:some> "nested value" assert=
+
+"config-get? missing key" test-section
+t H{ "a" 1 } make-config "missing" config-get? option:none? "missing is none" assert-true
+t H{ "a" H{ "b" 1 } } make-config "a.z" config-get? option:none? "missing nested is none" assert-true
+t H{ "a" 1 } make-config "a.b" config-get? option:none? "non-hash intermediate is none" assert-true
+
+"config-get-or existing key" test-section
+42 H{ "port" 42 } make-config 0 "port" config-get-or "returns existing" assert=
+
+"config-get-or missing key uses default" test-section
+8080 H{ "a" 1 } make-config 8080 "port" config-get-or "uses default" assert=
+"fallback" H{ "a" 1 } make-config "fallback" "missing.path" config-get-or "nested default" assert=
+
+"inspect" test-section
+t H{ } make-config inspect "config" #in? "inspect contains config" assert-true

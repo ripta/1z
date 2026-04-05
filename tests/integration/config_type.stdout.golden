@@ -1,0 +1,73 @@
+=== construction and unwrap ===
+Stack: [ ]
+PASS: make-config produces config
+Stack: [ t ]
+PASS: config-unwrap returns hash
+Stack: [ t ]
+=== config-get flat key ===
+Stack: [ t ]
+PASS: flat key
+Stack: [ t ]
+PASS: string value
+Stack: [ t ]
+=== config-get nested path ===
+Stack: [ t ]
+Stack: [ t "localhost" ]
+Stack: [ t "localhost" <config H{ db: H{ host: "localhost" port: 5432 } }> ]
+Stack: [ t "localhost" "localhost" ]
+PASS: nested path
+Stack: [ t ]
+Stack: [ t 5432 ]
+Stack: [ t 5432 <config H{ db: H{ host: "localhost" port: 5432 } }> ]
+Stack: [ t 5432 5432 ]
+PASS: nested port
+Stack: [ t ]
+=== config-get deep nesting ===
+Stack: [ t ]
+Stack: [ t 99 ]
+Stack: [ t 99 <config H{ a: H{ b: H{ c: H{ d: 99 } } } }> ]
+Stack: [ t 99 99 ]
+PASS: four levels deep
+Stack: [ t ]
+=== config-get missing key throws ===
+Stack: [ t ]
+PASS: missing flat key
+Stack: [ t ]
+PASS: missing nested key
+Stack: [ t ]
+PASS: traverse through non-hash
+Stack: [ t ]
+=== config-get? existing key ===
+Stack: [ t ]
+PASS: existing key is some
+Stack: [ t t ]
+PASS: existing key value
+Stack: [ t t ]
+=== config-get? nested ===
+Stack: [ t t ]
+PASS: nested some
+Stack: [ t t t ]
+PASS: nested value
+Stack: [ t t t ]
+=== config-get? missing key ===
+Stack: [ t t t ]
+PASS: missing is none
+Stack: [ t t t t ]
+PASS: missing nested is none
+Stack: [ t t t t t ]
+PASS: non-hash intermediate is none
+Stack: [ t t t t t t ]
+=== config-get-or existing key ===
+Stack: [ t t t t t t ]
+PASS: returns existing
+Stack: [ t t t t t t ]
+=== config-get-or missing key uses default ===
+Stack: [ t t t t t t ]
+PASS: uses default
+Stack: [ t t t t t t ]
+PASS: nested default
+Stack: [ t t t t t t ]
+=== inspect ===
+Stack: [ t t t t t t ]
+PASS: inspect contains config
+Stack: [ t t t t t t t ]

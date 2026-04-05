@@ -1,0 +1,45 @@
+\ lib/config.1z - Config type with dot-path traversal
+
+use "strings" ;
+
+\\ A config value wrapping a hash, providing dot-path access.
+config: virtual{ hash } ;
+
+\\ Unwrap a config to its underlying hash.
+config-unwrap: ( config -- hash ) [ unmake-config ] ;
+
+\\ Retrieve a value by dot-separated path, throwing on missing key.
+config-get: ( config path -- value ) [
+  swap unmake-config swap
+  "." split
+  swap [ @get ] #reduce
+] ;
+
+\\ Retrieve a value by dot-separated path, returning an option.
+config-get?: ( config path -- option ) [
+  swap unmake-config swap
+  "." split swap >option:some
+  [ over option:some?
+    [ swap option:some> dup hash?
+      [ swap @get? ]
+      [ 2drop option:none ]
+      if
+    ]
+    [ drop ]
+    if
+  ] #reduce
+] ;
+
+\\ Retrieve a value by dot-separated path, returning a default on missing key.
+config-get-or: ( config default path -- value ) [
+  <rot- swap config-get?
+  dup option:some? [ option:some> nip ] [ drop ] if
+] ;
+
+inspect: method{ config } [
+  "<config " swap unmake-config inspect #append ">" #append
+] ;
+
+>string: method{ config } [
+  unmake-config >string
+] ;
