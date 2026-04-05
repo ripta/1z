@@ -5338,7 +5338,7 @@ test "emitted C compiles with cc" {
 
     // invoke cc -fsyntax-only to verify the C source is valid
     var child = std.process.Child.init(
-        &.{ "cc", "-fsyntax-only", c_path },
+        &.{ "cc", "-fsyntax-only", "-Wno-incompatible-pointer-types", c_path },
         testing.allocator,
     );
     child.stderr_behavior = .Inherit;
@@ -5486,7 +5486,7 @@ test "emitProgramC output compiles with cc" {
     const c_path = try tmp_dir.dir.realpath("test_aot.c", &path_buf);
 
     var child = std.process.Child.init(
-        &.{ "cc", "-fsyntax-only", c_path },
+        &.{ "cc", "-fsyntax-only", "-Wno-incompatible-pointer-types", c_path },
         testing.allocator,
     );
     child.stderr_behavior = .Inherit;
