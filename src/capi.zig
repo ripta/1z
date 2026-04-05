@@ -39,6 +39,7 @@ pub const ONEZ_ERR_NULL_HANDLE: c_int = -1;
 pub const ONEZ_ERR_TYPE_MISMATCH: c_int = 1;
 pub const ONEZ_ERR_STACK_UNDERFLOW: c_int = 2;
 pub const ONEZ_ERR_ALLOC: c_int = 3;
+pub const ONEZ_ERR_NULL_VALUE: c_int = -2;
 
 /// Initialize the 1z runtime for AOT-compiled programs.
 ///
@@ -188,6 +189,42 @@ export fn onez_push_string(ptr: ?*anyopaque, data: [*]const u8, len: usize) c_in
         return ONEZ_ERR_ALLOC;
     };
     return ONEZ_OK;
+}
+
+export fn onez_pop_value(ptr: ?*anyopaque, out: *?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const val = handle.ctx.stack.pop() catch {
+        setLastError(handle, "stack underflow: cannot pop value from empty stack", .{});
+        return ONEZ_ERR_STACK_UNDERFLOW;
+    };
+    const slot = handle.ctx.quotationAllocator().create(Value) catch {
+        handle.ctx.stack.push(val) catch {};
+        setLastError(handle, "allocation failure creating value handle", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    slot.* = val;
+    out.* = slot;
+    return ONEZ_OK;
+}
+
+export fn onez_push_value(ptr: ?*anyopaque, val_ptr: ?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const vp = val_ptr orelse {
+        setLastError(handle, "null value handle passed to onez_push_value", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    };
+    const value: *const Value = @ptrCast(@alignCast(vp));
+    handle.ctx.stack.push(value.*) catch {
+        setLastError(handle, "allocation failure pushing value", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    return ONEZ_OK;
+}
+
+export fn onez_value_type(val_ptr: ?*anyopaque) c_int {
+    const vp = val_ptr orelse return ONEZ_TYPE_UNKNOWN;
+    const value: *const Value = @ptrCast(@alignCast(vp));
+    return valueTypeToInt(value.*);
 }
 
 export fn onez_pop_int(ptr: ?*anyopaque, out: *i64) c_int {
@@ -717,6 +754,9 @@ test "null handle returns appropriate defaults" {
     try std.testing.expect(onez_last_error(null) == null);
     try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_set_stdlib_path(null, "x", 1));
     try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_set_args(null, 0, undefined));
+
+    var vh: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_pop_value(null, &vh));
 }
 
 test "set_args populates program_args and source" {
@@ -732,4 +772,127 @@ test "set_args populates program_args and source" {
     try std.testing.expectEqualStrings("my-program", handle.ctx.program_args[0]);
     try std.testing.expectEqualStrings("--flag", handle.ctx.program_args[1]);
     try std.testing.expectEqualStrings("my-program", handle.ctx.current_source);
+}
+
+test "pop_value/push_value round-trip" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 42));
+    var val_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &val_handle));
+    try std.testing.expect(val_handle != null);
+    try std.testing.expectEqual(@as(usize, 0), onez_stack_depth(handle_ptr));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_value(handle_ptr, val_handle));
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 42), out);
+}
+
+test "pop_value stack underflow" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    var val_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_ERR_STACK_UNDERFLOW, onez_pop_value(handle_ptr, &val_handle));
+    try std.testing.expect(onez_last_error(handle_ptr) != null);
+}
+
+test "value_type returns correct type code" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    var val_handle: ?*anyopaque = null;
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 7));
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &val_handle));
+    try std.testing.expectEqual(ONEZ_TYPE_FIXNUM, onez_value_type(val_handle));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_double(handle_ptr, 1.5));
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &val_handle));
+    try std.testing.expectEqual(ONEZ_TYPE_FLOAT, onez_value_type(val_handle));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_bool(handle_ptr, true));
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &val_handle));
+    try std.testing.expectEqual(ONEZ_TYPE_BOOLEAN, onez_value_type(val_handle));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_string(handle_ptr, "hi", 2));
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &val_handle));
+    try std.testing.expectEqual(ONEZ_TYPE_STRING, onez_value_type(val_handle));
+}
+
+test "value_type null handle returns UNKNOWN" {
+    try std.testing.expectEqual(ONEZ_TYPE_UNKNOWN, onez_value_type(null));
+}
+
+test "push_value null ctx returns ERR_NULL_HANDLE" {
+    var dummy: Value = .{ .fixnum = 0 };
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_push_value(null, &dummy));
+}
+
+test "push_value null value returns ERR_NULL_VALUE" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_ERR_NULL_VALUE, onez_push_value(handle_ptr, null));
+    try std.testing.expect(onez_last_error(handle_ptr) != null);
+}
+
+test "pop_value with eval-produced array" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, "{ 1 2 3 }", 9));
+    var val_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &val_handle));
+    try std.testing.expectEqual(ONEZ_TYPE_ARRAY, onez_value_type(val_handle));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_value(handle_ptr, val_handle));
+    try std.testing.expectEqual(@as(usize, 1), onez_stack_depth(handle_ptr));
+}
+
+test "handle survives eval call" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 99));
+    var val_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &val_handle));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, "1 2 +", 5));
+    var discard: i64 = 0;
+    _ = onez_pop_int(handle_ptr, &discard);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_value(handle_ptr, val_handle));
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 99), out);
+}
+
+test "handle can be pushed multiple times" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 55));
+    var val_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &val_handle));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_value(handle_ptr, val_handle));
+    try std.testing.expectEqual(ONEZ_OK, onez_push_value(handle_ptr, val_handle));
+    try std.testing.expectEqual(@as(usize, 2), onez_stack_depth(handle_ptr));
+
+    var out1: i64 = 0;
+    var out2: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out1));
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out2));
+    try std.testing.expectEqual(@as(i64, 55), out1);
+    try std.testing.expectEqual(@as(i64, 55), out2);
 }

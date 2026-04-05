@@ -56,6 +56,7 @@ typedef void *onez_t;
 #define ONEZ_ERR_TYPE_MISMATCH  1
 #define ONEZ_ERR_STACK_UNDERFLOW 2
 #define ONEZ_ERR_ALLOC          3
+#define ONEZ_ERR_NULL_VALUE    -2
 
 /* ----- Lifecycle ----- */
 
@@ -98,6 +99,37 @@ int onez_push_bool(onez_t ctx, bool value);
  * bytes are copied.
  */
 int onez_push_string(onez_t ctx, const char *data, size_t len);
+
+/* ---- Opaque value handles ---- */
+
+/* Opaque value handle. Valid until onez_deinit on the owning context. */
+typedef void *onez_value_t;
+
+/*
+ * Pop any value from the stack as an opaque handle.
+ *
+ * On success, *out is set to a non-NULL handle and ONEZ_OK is returned.
+ * Returns ONEZ_ERR_STACK_UNDERFLOW if the stack is empty.
+ * Returns ONEZ_ERR_ALLOC if the arena allocation fails.
+ * Returns ONEZ_ERR_NULL_HANDLE if ctx is NULL.
+ */
+int onez_pop_value(onez_t ctx, onez_value_t *out);
+
+/*
+ * Push a previously obtained value handle back onto the stack.
+ *
+ * Returns ONEZ_OK on success.
+ * Returns ONEZ_ERR_NULL_HANDLE if ctx is NULL.
+ * Returns ONEZ_ERR_NULL_VALUE if handle is NULL.
+ * Returns ONEZ_ERR_ALLOC on stack allocation failure.
+ */
+int onez_push_value(onez_t ctx, onez_value_t handle);
+
+/*
+ * Return the type code of a value handle (ONEZ_TYPE_* constants).
+ * Returns ONEZ_TYPE_UNKNOWN if handle is NULL.
+ */
+int onez_value_type(onez_value_t handle);
 
 /* ---- Pop (1z stack -> C) ---- */
 
