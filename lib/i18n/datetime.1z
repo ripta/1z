@@ -1,0 +1,230 @@
+\ lib/i18n/datetime.1z - Locale-aware date/time formatting
+\
+\ Provides format-date, format-time, and format-datetime via ICU's
+\ udat_* API, plus explicit timezone-aware *-in variants.
+
+use "ffi" ;
+use "i18n/icu" ;
+use "i18n/locale" ;
+use "time" ;
+
+\ --- Library loading and FFI bindings ---
+
+sys-info "os" @get "macos" = [
+  "icucore" lib-open
+] [
+  "icui18n" lib-open
+] if
+
+ffi-def{
+  (udat-open):   "udat_open" ffi{ i32 i32 cstring ptr i32 ptr i32 inout-i32 -> ptr }
+  (udat-close):  "udat_close" ffi{ ptr -> void }
+  (udat-format): "udat_format" ffi{ ptr f64 ptr i32 ptr inout-i32 -> i32 }
+} call "icu-datetime-raw" swap >module reexport
+
+\ --- Enum ---
+
+date-style: enum{
+  short: unit
+  medium: unit
+  long: unit
+  full: unit
+} ;
+
+\ --- Constants ---
+
+(UDAT_FULL):   const [ 0 ] ;
+(UDAT_LONG):   const [ 1 ] ;
+(UDAT_MEDIUM): const [ 2 ] ;
+(UDAT_SHORT):  const [ 3 ] ;
+(UDAT_NONE):   const [ -1 ] ;
+(uchar-buf-size): const [ 256 ] ;
+
+\ --- Internal helpers ---
+
+\\ Allocate a UChar result buffer and return (buf ptr).
+(alloc-uchar-buf): ( -- byte-array ptr ) [
+  (uchar-buf-size) 2 * bytes-alloc
+  dup bytes>ffi-ptr+len drop
+] ;
+
+\\ Extract the ICU locale ID from a locale value.
+(locale>icu-id): ( locale -- icu-locale-id ) [
+  unmake-locale (bcp47>icu-id)
+] ;
+
+\\ Map a date-style enum variant to the ICU UDateFormatStyle constant.
+(style>icu-const): ( date-style -- i32 ) [
+  match{
+    date-style:short:  [ (UDAT_SHORT) ]
+    date-style:medium: [ (UDAT_MEDIUM) ]
+    date-style:long:   [ (UDAT_LONG) ]
+    date-style:full:   [ (UDAT_FULL) ]
+  }
+] ;
+
+\\ Convert a timezone name to (buf ptr len) for udat_open.
+\\ Empty name means "use ICU default local timezone", so ptr/len are 0.
+(tz-name>udat-args): ( tz-name -- byte-array ptr i32 ) [
+  dup "" = [
+    drop 0 bytes-alloc 0 0
+  ] [
+    utf8>uchar
+    over bytes>ffi-ptr+len drop
+    swap
+  ] if
+] ;
+
+\\ Validate a named timezone through the existing libc-based time library.
+\\ Empty name is the local timezone sentinel and is accepted as-is.
+(timezone>icu-tz-name): ( timezone -- string ) [
+  timezone-name
+  dup "" = not [
+    0 over tz-localtime drop
+  ] when
+] ;
+
+\\ Open a UDateFormat with explicit time/date styles and timezone.
+(open-date-format): ( icu-locale-id time-style date-style tz-name -- fmt-ptr ) [
+  (tz-name>udat-args)
+  \ Stack: icu-locale-id time-style date-style tz-buf tz-ptr tz-len
+  1 bytes-alloc dup bytes>ffi-ptr+len drop
+  \ Stack: icu-locale-id time-style date-style tz-buf tz-ptr tz-len pat-buf pat-ptr
+  6 pick-n 6 pick-n 9 pick-n 6 pick-n 6 pick-n 5 pick-n 0 0
+  \ Stack: ... time-style date-style icu-locale-id tz-ptr tz-len pat-ptr 0 0
+  (udat-open)
+  \ Stack: icu-locale-id time-style date-style tz-buf tz-ptr tz-len pat-buf pat-ptr status fmt-ptr
+  swap (icu-check)
+  \ Stack: icu-locale-id time-style date-style tz-buf tz-ptr tz-len pat-buf pat-ptr fmt-ptr
+  nip nip nip nip nip nip nip nip
+] ;
+
+\\ Convert a timestamp to ICU UDate milliseconds.
+(timestamp>udate): ( timestamp -- f64-ms ) [
+  dup timestamp-sec >float 1000.0 * swap
+  timestamp-nsec >float 1000000.0 /
+  +
+] ;
+
+\\ Format a timestamp using an open UDateFormat handle.
+(format-with-date): ( timestamp fmt-ptr -- string ) [
+  swap (timestamp>udate) swap
+  \ Stack: f64-ms fmt-ptr
+  (alloc-uchar-buf)
+  \ Stack: f64-ms fmt-ptr buf ptr
+  16 bytes-alloc dup bytes>ffi-ptr+len drop
+  \ Stack: f64-ms fmt-ptr buf ptr pos-buf pos-ptr
+  4 pick-n 6 pick-n 4 pick-n
+  \ Stack: f64-ms fmt-ptr buf ptr pos-buf pos-ptr fmt-ptr f64-ms ptr
+  (uchar-buf-size) 4 pick-n 0
+  \ Stack: ... fmt-ptr f64-ms ptr 256 pos-ptr 0
+  (udat-format)
+  \ Stack: f64-ms fmt-ptr buf ptr pos-buf pos-ptr status actual-len
+  swap (icu-check)
+  \ Stack: f64-ms fmt-ptr buf ptr pos-buf pos-ptr actual-len
+  swap drop swap drop swap drop
+  \ Stack: f64-ms fmt-ptr buf actual-len
+  uchar>utf8
+  \ Stack: f64-ms fmt-ptr string
+  nip nip
+] ;
+
+\\ Format a timestamp and close the UDateFormat handle.
+(format-and-close): ( timestamp fmt-ptr -- string ) [
+  dup [ (format-with-date) ] dip (udat-close)
+] ;
+
+\\ Open a date-only formatter in UTC.
+(open-date-style-format-utc): ( style locale -- fmt-ptr ) [
+  (locale>icu-id)
+  swap (style>icu-const)
+  (UDAT_NONE) swap
+  "UTC"
+  (open-date-format)
+] ;
+
+\\ Open a time-only formatter in UTC.
+(open-time-style-format-utc): ( style locale -- fmt-ptr ) [
+  (locale>icu-id)
+  swap (style>icu-const)
+  (UDAT_NONE)
+  "UTC"
+  (open-date-format)
+] ;
+
+\\ Open a date+time formatter in UTC.
+(open-datetime-style-format-utc): ( style locale -- fmt-ptr ) [
+  (locale>icu-id)
+  swap (style>icu-const)
+  dup
+  "UTC"
+  (open-date-format)
+] ;
+
+\\ Open a date-only formatter in an explicit timezone.
+(open-date-style-format-in): ( timezone style locale -- fmt-ptr ) [
+  (locale>icu-id)
+  1 pick-n (style>icu-const)
+  3 pick-n (timezone>icu-tz-name)
+  2 pick-n (UDAT_NONE) 3 pick-n 3 pick-n
+  (open-date-format)
+  nip nip nip nip nip
+] ;
+
+\\ Open a time-only formatter in an explicit timezone.
+(open-time-style-format-in): ( timezone style locale -- fmt-ptr ) [
+  (locale>icu-id)
+  1 pick-n (style>icu-const)
+  3 pick-n (timezone>icu-tz-name)
+  2 pick-n 2 pick-n (UDAT_NONE) 3 pick-n
+  (open-date-format)
+  nip nip nip nip nip
+] ;
+
+\\ Open a date+time formatter in an explicit timezone.
+(open-datetime-style-format-in): ( timezone style locale -- fmt-ptr ) [
+  (locale>icu-id)
+  1 pick-n (style>icu-const)
+  3 pick-n (timezone>icu-tz-name)
+  2 pick-n 2 pick-n 3 pick-n 3 pick-n
+  (open-date-format)
+  nip nip nip nip nip
+] ;
+
+\ --- Public words ---
+
+\\ Format a timestamp as a locale-specific date in UTC.
+format-date: ( timestamp style locale -- string ) [
+  (open-date-style-format-utc)
+  (format-and-close)
+] ;
+
+\\ Format a timestamp as a locale-specific time in UTC.
+format-time: ( timestamp style locale -- string ) [
+  (open-time-style-format-utc)
+  (format-and-close)
+] ;
+
+\\ Format a timestamp as a locale-specific date and time in UTC.
+format-datetime: ( timestamp style locale -- string ) [
+  (open-datetime-style-format-utc)
+  (format-and-close)
+] ;
+
+\\ Format a timestamp as a locale-specific date in the given timezone.
+format-date-in: ( timestamp tz style locale -- string ) [
+  (open-date-style-format-in)
+  (format-and-close)
+] ;
+
+\\ Format a timestamp as a locale-specific time in the given timezone.
+format-time-in: ( timestamp tz style locale -- string ) [
+  (open-time-style-format-in)
+  (format-and-close)
+] ;
+
+\\ Format a timestamp as a locale-specific date and time in the given timezone.
+format-datetime-in: ( timestamp tz style locale -- string ) [
+  (open-datetime-style-format-in)
+  (format-and-close)
+] ;

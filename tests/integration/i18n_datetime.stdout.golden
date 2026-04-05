@@ -1,0 +1,96 @@
+=== date-style enum ===
+Stack: [ ]
+Stack: [ { date-style:short: date-style:medium: date-style:long: date-style:full: } ]
+Stack: [ { date-style:short: date-style:medium: date-style:long: date-style:full: } { date-style:short: date-style:medium: date-style:long: date-style:full: } ]
+PASS: date-style variants
+Stack: [ ]
+=== format-date en-US ===
+Stack: [ ]
+Stack: [ "1/1/70" ]
+Stack: [ "1/1/70" "1/1/70" ]
+PASS: short date en-US
+Stack: [ ]
+Stack: [ "Jan 1, 1970" ]
+Stack: [ "Jan 1, 1970" "Jan 1, 1970" ]
+PASS: medium date en-US
+Stack: [ ]
+Stack: [ "January 1, 1970" ]
+Stack: [ "January 1, 1970" "January 1, 1970" ]
+PASS: long date en-US
+Stack: [ ]
+Stack: [ "Thursday, January 1, 1970" ]
+Stack: [ "Thursday, January 1, 1970" "Thursday, January 1, 1970" ]
+PASS: full date en-US
+Stack: [ ]
+=== format-time en-US ===
+Stack: [ ]
+Stack: [ "12:00 AM" ]
+Stack: [ "12:00 AM" "12:00 AM" ]
+PASS: short time en-US
+Stack: [ ]
+Stack: [ "12:00:00 AM" ]
+Stack: [ "12:00:00 AM" "12:00:00 AM" ]
+PASS: medium time en-US
+Stack: [ ]
+Stack: [ "12:00:00 AM UTC" ]
+PASS: long time mentions UTC
+Stack: [ ]
+Stack: [ "12:00:00 AM Coordinated Universal Time" ]
+Stack: [ "12:00:00 AM Coordinated Universal Time" t ]
+Stack: [ "12:00:00 AM Coordinated Universal Time" t ]
+PASS: full time mentions UTC name
+Stack: [ ]
+=== format-datetime en-US ===
+Stack: [ ]
+Stack: [ "Jan 1, 1970 at 12:00:00 AM" ]
+Stack: [ "Jan 1, 1970 at 12:00:00 AM" "Jan 1, 1970 at 12:00:00 AM" ]
+PASS: medium datetime en-US
+Stack: [ ]
+=== locale variation ===
+Stack: [ ]
+Stack: [ "1/1/70" ]
+Stack: [ "1/1/70" "01.01.70" ]
+PASS: de-DE short date differs from en-US
+Stack: [ "1/1/70" "01.01.70" ]
+Stack: [ "01.01.70" ]
+PASS: de-DE short date uses dots
+Stack: [ "01.01.70" ]
+Stack: [ ]
+=== calendar extension ===
+Stack: [ ]
+Stack: [ "1970年1月1日" ]
+Stack: [ "1970年1月1日" "昭和45年1月1日" ]
+PASS: japanese calendar differs from gregorian
+Stack: [ "1970年1月1日" "昭和45年1月1日" ]
+Stack: [ ]
+=== timezone-aware variants ===
+Stack: [ ]
+Stack: [ "1/1/70" ]
+Stack: [ "1/1/70" "1/1/70" ]
+PASS: UTC short date-in
+Stack: [ ]
+Stack: [ "12/31/69" ]
+Stack: [ "12/31/69" "12/31/69" ]
+PASS: UTC-8 short date-in crosses to previous day
+Stack: [ ]
+Stack: [ "5:00 AM" ]
+Stack: [ "5:00 AM" "5:00 AM" ]
+PASS: UTC+5 short time-in
+Stack: [ ]
+=== pre-1970 timestamp ===
+Stack: [ ]
+Stack: [ "12/31/69" ]
+Stack: [ "12/31/69" "12/31/69" ]
+PASS: pre-1970 short date
+Stack: [ ]
+=== nanosecond input accepted ===
+Stack: [ ]
+Stack: [ "12:00:00 AM" ]
+Stack: [ "12:00:00 AM" "12:00:00 AM" ]
+PASS: medium time ignores sub-ms tail
+Stack: [ ]
+=== error handling ===
+Stack: [ ]
+Stack: [ "1/1/70" ]
+PASS: invalid timezone is handled
+Stack: [ ]

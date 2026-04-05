@@ -1,0 +1,101 @@
+\ Date/time localization tests
+
+use "testing" ;
+use "time" ;
+use "i18n/datetime" ;
+use "i18n/locale" ;
+
+"date-style enum" test-section
+
+date-style: enum-variants
+{ date-style:short: date-style:medium: date-style:long: date-style:full: }
+"date-style variants" assert=
+
+"format-date en-US" test-section
+
+"1/1/70"
+0 0 make-timestamp date-style:short "en-US" <locale> format-date
+"short date en-US" assert=
+
+"Jan 1, 1970"
+0 0 make-timestamp date-style:medium "en-US" <locale> format-date
+"medium date en-US" assert=
+
+"January 1, 1970"
+0 0 make-timestamp date-style:long "en-US" <locale> format-date
+"long date en-US" assert=
+
+"Thursday, January 1, 1970"
+0 0 make-timestamp date-style:full "en-US" <locale> format-date
+"full date en-US" assert=
+
+"format-time en-US" test-section
+
+"12:00\u{202f}AM"
+0 0 make-timestamp date-style:short "en-US" <locale> format-time
+"short time en-US" assert=
+
+"12:00:00\u{202f}AM"
+0 0 make-timestamp date-style:medium "en-US" <locale> format-time
+"medium time en-US" assert=
+
+0 0 make-timestamp date-style:long "en-US" <locale> format-time
+dup "UTC" #index-of f = not "long time mentions UTC" assert-true drop
+
+0 0 make-timestamp date-style:full "en-US" <locale> format-time
+dup "Universal" #index-of f = not
+over "Coordinated" #index-of f = not or
+"full time mentions UTC name" assert-true drop
+
+"format-datetime en-US" test-section
+
+"Jan 1, 1970 at 12:00:00\u{202f}AM"
+0 0 make-timestamp date-style:medium "en-US" <locale> format-datetime
+"medium datetime en-US" assert=
+
+"locale variation" test-section
+
+0 0 make-timestamp date-style:short "en-US" <locale> format-date
+0 0 make-timestamp date-style:short "de-DE" <locale> format-date
+2dup = "de-DE short date differs from en-US" assert-false
+swap drop
+dup "." #index-of f = not "de-DE short date uses dots" assert-true
+drop
+
+"calendar extension" test-section
+
+0 0 make-timestamp date-style:long "ja-JP" <locale> format-date
+0 0 make-timestamp date-style:long "ja-JP-u-ca-japanese" <locale> format-date
+2dup = "japanese calendar differs from gregorian" assert-false
+swap drop drop
+
+"timezone-aware variants" test-section
+
+"1/1/70"
+0 0 make-timestamp utc date-style:short "en-US" <locale> format-date-in
+"UTC short date-in" assert=
+
+"12/31/69"
+0 0 make-timestamp 0 "Etc/GMT+8" make-timezone date-style:short "en-US" <locale> format-date-in
+"UTC-8 short date-in crosses to previous day" assert=
+
+"5:00\u{202f}AM"
+0 0 make-timestamp 0 "Etc/GMT-5" make-timezone date-style:short "en-US" <locale> format-time-in
+"UTC+5 short time-in" assert=
+
+"pre-1970 timestamp" test-section
+
+"12/31/69"
+-1 0 make-timestamp date-style:short "en-US" <locale> format-date
+"pre-1970 short date" assert=
+
+"nanosecond input accepted" test-section
+
+"12:00:00\u{202f}AM"
+0 123456789 make-timestamp date-style:medium "en-US" <locale> format-time
+"medium time ignores sub-ms tail" assert=
+
+"error handling" test-section
+
+0 0 make-timestamp 0 "Definitely/Not-A-Timezone" make-timezone date-style:short "en-US" <locale> format-date-in
+string? "invalid timezone is handled" assert-true
