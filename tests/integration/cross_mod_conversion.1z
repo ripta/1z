@@ -209,18 +209,17 @@ H{ x: 1 y: 2 } >point x>> 1 "hash >point still works after extension" assert=
 \ SECTION 7: method{ with qualified names (syntax probes)
 \ ============================================================
 
-"method-qual: qualified type name in method{ fails" test-section
+"method-qual: qualified type name in method{ works" test-section
 
-\ method{ does not support dot-qualified type names.
-\ Type resolution uses lookupTypeValueByName which only searches bare names.
-[ "ea: \"cross_mod_conv_enum_lib_a.1z\" load ; inspect: method{ ea.color } [ \"from-a\" ] ;" eval-string ]
-"method{ ea.color } fails — qualified types not supported" assert-error
+\ method{ resolves dot-qualified type names through module lookup.
+"ea2: \"cross_mod_conv_enum_lib_a.1z\" load ; inspect: mutable method{ ea2.color } [ drop \"color-a\" ] ; red: ea2.>color inspect" eval-string
+"color-a" "method{ ea2.color } resolves qualified type" assert=
 
-"method-qual: qualified word name in method{ fails" test-section
+"method-qual: qualified word name in method{ works" test-section
 
-\ Registering a dispatch entry with a qualified word name also fails.
-[ "ea: \"cross_mod_conv_enum_lib_a.1z\" load ; ea.>color: method{ string } [ drop red: ea.>color ] ;" eval-string ]
-"ea.>color: method{ ... } fails — qualified word names not supported" assert-error
+\ Registering a dispatch entry with a qualified word name resolves through module.
+"ea3: \"cross_mod_conv_enum_lib_a.1z\" load ; ea3.>color: method{ string } [ drop red: ea3.>color ] ; \"hello\" ea3.>color ea3.color?" eval-string
+t "ea3.>color: method{ string } registers on module word" assert=
 
 \ ============================================================
 \ SECTION 8: make-NAME dispatches correctly per module

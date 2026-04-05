@@ -91,7 +91,7 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
         },
     };
 
-    const word_def = ctx.lookupWord(word_name) orelse {
+    const resolved = resolveWordForDispatch(ctx, word_name) orelse {
         helpers.setErrorContext(ctx, "cannot register method for unknown word '{s}'", .{word_name});
         return error.WordNotFound;
     };
@@ -116,11 +116,11 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
     // the manual boilerplate and ensuring the flag and behavior stay in
     // sync. Until then, each type-switching native is responsible for
     // calling tryDispatchBinary or tryDispatchUnary itself.
-    switch (word_def.action) {
+    switch (resolved.action) {
         .native => {},
         .compound => {
             var has_generic = false;
-            for (word_def.markers) |mk| {
+            for (resolved.markers) |mk| {
                 if (markers_mod.isGenericMarker(mk)) {
                     has_generic = true;
                     break;
@@ -142,10 +142,7 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
         type_b = try extractTypeValue(ctx, types_array[1]);
     }
 
-    const dispatch_id = if (ctx.lookupWord(word_name)) |wd| wd.dispatch_id else {
-        helpers.setErrorContext(ctx, "word '{s}' not found for method registration", .{word_name});
-        return error.WordNotFound;
-    };
+    const dispatch_id = resolved.dispatch_id;
     const key = DispatchKey{
         .dispatch_id = dispatch_id,
         .type_a = type_a.descriptor.?,
@@ -185,14 +182,107 @@ fn extractTypeValue(ctx: *Context, val: value_mod.Value) !*const value_mod.TypeV
             return error.InvalidArgument;
         },
         .string => |s| {
-            return ctx.lookupTypeValueByName(s) orelse {
-                helpers.setErrorContext(ctx, "unknown type name '{s}' in method type position", .{s});
-                return error.TypeMismatch;
-            };
+            if (ctx.lookupTypeValueByName(s)) |tv| return tv;
+
+            // Try qualified name resolution: "module.typename"
+            if (std.mem.indexOfScalar(u8, s, '.') != null) {
+                if (try resolveQualifiedTypeValue(ctx, s)) |tv| return tv;
+            }
+
+            helpers.setErrorContext(ctx, "unknown type name '{s}' in method type position", .{s});
+            return error.TypeMismatch;
         },
         else => {
             helpers.setTypeMismatchError(ctx, "type, `any` marker, or string", val);
             return error.TypeMismatch;
         },
+    };
+}
+
+const ResolvedWord = struct {
+    dispatch_id: u32,
+    markers: []const *value_mod.Marker,
+    action: union(enum) {
+        native,
+        compound,
+    },
+};
+
+/// Resolve a word name (bare or dot-qualified) to dispatch-relevant fields.
+fn resolveWordForDispatch(ctx: *Context, name: []const u8) ?ResolvedWord {
+    // Try bare lookup first.
+    if (ctx.lookupWord(name)) |wd| {
+        return .{
+            .dispatch_id = wd.dispatch_id,
+            .markers = wd.markers,
+            .action = switch (wd.action) {
+                .native => .native,
+                .compound => .compound,
+            },
+        };
+    }
+
+    // Try qualified name: split on rightmost dot, execute module, look up word.
+    const dot = std.mem.lastIndexOfScalar(u8, name, '.') orelse return null;
+    const module_path = name[0..dot];
+    const word_name = name[dot + 1 ..];
+    if (module_path.len == 0 or word_name.len == 0) return null;
+
+    const module = resolveModule(ctx, module_path) orelse return null;
+
+    const mod_word = module.words.get(word_name) orelse return null;
+    return .{
+        .dispatch_id = mod_word.dispatch_id,
+        .markers = mod_word.markers,
+        .action = switch (mod_word.action) {
+            .native => .native,
+            .compound => .compound,
+        },
+    };
+}
+
+/// Resolve a dot-qualified type name (e.g., "ea.color") to a TypeValue by
+/// executing the module word and looking up the type in that module.
+fn resolveQualifiedTypeValue(ctx: *Context, name: []const u8) !?*const value_mod.TypeValue {
+    const dot = std.mem.lastIndexOfScalar(u8, name, '.') orelse return null;
+    const module_path = name[0..dot];
+    const type_name = name[dot + 1 ..];
+    if (module_path.len == 0 or type_name.len == 0) return null;
+
+    const module = resolveModule(ctx, module_path) orelse return null;
+
+    const mod_word = module.words.get(type_name) orelse return null;
+    switch (mod_word.action) {
+        .compound => |instrs| {
+            if (instrs.len == 1) {
+                switch (instrs[0].op) {
+                    .push_literal => |val| switch (val) {
+                        .type_val => |tv| return tv,
+                        .tagged => |t| return t.tag.type_val,
+                        else => return null,
+                    },
+                    else => return null,
+                }
+            }
+            return null;
+        },
+        .native => return null,
+    }
+}
+
+/// Execute a module path word and pop the resulting module from the stack.
+fn resolveModule(ctx: *Context, module_path: []const u8) ?*const value_mod.Module {
+    const module_word = ctx.lookupWord(module_path) orelse return null;
+    switch (module_word.action) {
+        .native => |func| func(ctx) catch return null,
+        .compound => |instrs| {
+            const q = value_mod.Quotation{ .instructions = instrs };
+            ctx.executeQuotation(q) catch return null;
+        },
+    }
+    const module_val = ctx.stack.pop() catch return null;
+    return switch (module_val) {
+        .module => |m| m,
+        else => null,
     };
 }

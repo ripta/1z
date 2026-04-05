@@ -156,15 +156,15 @@ PASS: hash >point still works after extension
 Stack: [ ]
 PASS: fixnum-created >point passes predicate
 Stack: [ ]
-=== method-qual: qualified type name in method{ fails ===
+=== method-qual: qualified type name in method{ works ===
 Stack: [ ]
-Stack: [ [ "ea: "cross_mod_conv_enum_lib_a.1z" load ; inspect: method{ ea.color } [ "from-a" ] ;" eval-string ] ]
-PASS: method{ ea.color } fails — qualified types not supported
+Stack: [ "color-a" ]
+PASS: method{ ea2.color } resolves qualified type
 Stack: [ ]
-=== method-qual: qualified word name in method{ fails ===
+=== method-qual: qualified word name in method{ works ===
 Stack: [ ]
-Stack: [ [ "ea: "cross_mod_conv_enum_lib_a.1z" load ; ea.>color: method{ string } [ drop red: ea.>color ] ;" eval-string ] ]
-PASS: ea.>color: method{ ... } fails — qualified word names not supported
+Stack: [ t ]
+PASS: ea3.>color: method{ string } registers on module word
 Stack: [ ]
 === make-name: qualified make-meters dispatches correctly ===
 Stack: [ ]
