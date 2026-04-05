@@ -49,7 +49,7 @@ pub fn install() void {
 
     const sigpipe_act: posix.Sigaction = .{
         .handler = .{ .handler = SIG.IGN },
-        .mask = 0,
+        .mask = posix.sigemptyset(),
         .flags = 0,
     };
     posix.sigaction(SIG.PIPE, &sigpipe_act, null);
@@ -60,7 +60,7 @@ pub fn install() void {
 pub fn installHandler(signum: u6) void {
     const act: posix.Sigaction = .{
         .handler = .{ .handler = handleSignal },
-        .mask = 0,
+        .mask = posix.sigemptyset(),
         .flags = 0,
     };
     var old: posix.Sigaction = undefined;

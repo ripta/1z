@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 pub const c_ffi = @cImport({
-    @cInclude("ffi/ffi.h");
+    @cInclude("ffi.h");
 });
 const Context = @import("../context.zig").Context;
 const helpers = @import("../primitives/helpers.zig");
