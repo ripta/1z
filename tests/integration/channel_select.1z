@@ -1,0 +1,85 @@
+use "testing" ;
+
+\ -- 1. Select with one channel that has data ready --
+
+test-select-immediate: ( -- ) [
+  [
+    <channel>
+    dup [ 42 swap send ] curry spawn drop
+    yield
+    { } swap #push
+    select
+    drop 42 "select immediate value" assert=
+  ] task-scope
+] ;
+
+\ -- 2. Select with two channels, first has data --
+
+test-select-first-ready: ( -- ) [
+  [
+    <channel>
+    <channel>
+    over [ 10 swap send ] curry spawn drop
+    yield
+    [ { } swap #push ] dip #push
+    select
+    drop 10 "select picks ready channel" assert=
+  ] task-scope
+] ;
+
+\ -- 3. Select blocks until data arrives --
+
+test-select-blocks: ( -- ) [
+  [
+    <channel>
+    dup [ yield 99 swap send ] curry spawn drop
+    { } swap #push
+    select
+    drop 99 "select unblocks with value" assert=
+  ] task-scope
+] ;
+
+\ -- 4. Select on all-closed throws --
+
+test-select-all-closed: ( -- ) [
+  [
+    [
+      <channel>
+      dup close-channel
+      { } swap #push
+      select
+    ] task-scope
+  ] channel-closed: "select on all closed throws" assert-error-type
+] ;
+
+\ -- 5. Select with buffered channel data --
+
+test-select-buffered: ( -- ) [
+  [
+    1 <buffered-channel>
+    dup 77 swap send
+    { } swap #push
+    select
+    drop 77 "select reads from buffer" assert=
+  ] task-scope
+] ;
+
+\ -- 6. Select with two channels, second gets data --
+
+test-select-second-channel: ( -- ) [
+  [
+    <channel>
+    <channel>
+    dup [ yield 55 swap send ] curry spawn drop
+    [ { } swap #push ] dip #push
+    select
+    drop 55 "select picks second channel" assert=
+  ] task-scope
+] ;
+
+test-select-immediate
+test-select-first-ready
+test-select-blocks
+test-select-all-closed
+test-select-buffered
+test-select-second-channel

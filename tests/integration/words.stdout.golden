@@ -127,6 +127,7 @@ print-benchmark-report
 receive ( ch -- val )
 recover ( try-quot recover-quot: ( error --  ) --  )
 rethrow ( error --  )
+select ( array -- val ch )
 send ( val ch --  )
 set-buffering-mode ( stream symbol --  )
 sleep ( duration --  )
