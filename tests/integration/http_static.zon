@@ -3,5 +3,7 @@
 // Keep this test on direct stdout/stderr expectations until the runtime/capture
 // interaction is understood and fixed.
 .{
+    .serial = true,
     .stdio_expect = .direct_expect,
+    .direct_run = true,
 }

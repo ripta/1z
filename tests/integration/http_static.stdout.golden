@@ -1,3 +1,4 @@
+Stack: [ ]
 === serve-static: missing file returns 404 ===
 Stack: [ ]
 PASS: missing status

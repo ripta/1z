@@ -2,32 +2,43 @@ use "testing" ;
 use "net/http" ;
 use "net" ;
 use "net/tcp" ;
+use "net/server" ;
 use "time" ;
+
+make-http-server-task: ( host port handler -- task ) [
+  [ swap dup -rot> dup read-request <rot- call stream-close ] curry
+  <server-config> swap >>handler swap >>port swap >>host
+  [
+    dup start-server
+    swap handler>>
+    over accept drop
+    swap call
+    close
+  ] curry spawn
+] ;
 
 "serve: root endpoint returns endpoint list" test-section
 [
-  [
-    "127.0.0.1" 39400 [
-      path>>
-      dup "/" = [
-        drop
-        "Available endpoints:\n  /\n  /healthz\n  /time\n"
-        "text/plain; charset=utf-8" ok send-response
+  "127.0.0.1" 39400 [
+    path>>
+    dup "/" = [
+      drop
+      "Available endpoints:\n  /\n  /healthz\n  /time\n"
+      "text/plain; charset=utf-8" ok send-response
+    ] [
+      dup "/healthz" = [
+        drop "ok" "text/plain; charset=utf-8" ok send-response
       ] [
-        dup "/healthz" = [
-          drop "ok" "text/plain; charset=utf-8" ok send-response
+        "/time" = [
+          now iso8601-fmt format
+          "text/plain; charset=utf-8" ok send-response
         ] [
-          "/time" = [
-            now iso8601-fmt format
-            "text/plain; charset=utf-8" ok send-response
-          ] [
-            not-found send-response
-          ] if
+          not-found send-response
         ] if
       ] if
-    ] serve
-  ] spawn
-  10 milliseconds sleep
+    ] if
+  ] make-http-server-task
+  100 milliseconds sleep
 
   "127.0.0.1" 39400 make-addr:tcp connect
   dup "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
@@ -44,21 +55,19 @@ use "time" ;
 
 "serve: healthz returns ok" test-section
 [
-  [
-    "127.0.0.1" 39401 [
-      path>>
-      dup "/" = [
-        drop "index" "text/plain; charset=utf-8" ok send-response
+  "127.0.0.1" 39401 [
+    path>>
+    dup "/" = [
+      drop "index" "text/plain; charset=utf-8" ok send-response
+    ] [
+      dup "/healthz" = [
+        drop "ok" "text/plain; charset=utf-8" ok send-response
       ] [
-        dup "/healthz" = [
-          drop "ok" "text/plain; charset=utf-8" ok send-response
-        ] [
-          drop not-found send-response
-        ] if
+        drop not-found send-response
       ] if
-    ] serve
-  ] spawn
-  10 milliseconds sleep
+    ] if
+  ] make-http-server-task
+  100 milliseconds sleep
 
   "127.0.0.1" 39401 make-addr:tcp connect
   dup "GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
@@ -72,17 +81,15 @@ use "time" ;
 
 "serve: unknown path returns 404" test-section
 [
-  [
-    "127.0.0.1" 39402 [
-      path>>
-      dup "/" = [
-        drop "index" "text/plain; charset=utf-8" ok send-response
-      ] [
-        drop not-found send-response
-      ] if
-    ] serve
-  ] spawn
-  10 milliseconds sleep
+  "127.0.0.1" 39402 [
+    path>>
+    dup "/" = [
+      drop "index" "text/plain; charset=utf-8" ok send-response
+    ] [
+      drop not-found send-response
+    ] if
+  ] make-http-server-task
+  100 milliseconds sleep
 
   "127.0.0.1" 39402 make-addr:tcp connect
   dup "GET /nope HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
@@ -93,18 +100,16 @@ use "time" ;
 
 "serve: time endpoint returns 200" test-section
 [
-  [
-    "127.0.0.1" 39403 [
-      path>>
-      "/time" = [
-        now iso8601-fmt format
-        "text/plain; charset=utf-8" ok send-response
-      ] [
-        not-found send-response
-      ] if
-    ] serve
-  ] spawn
-  10 milliseconds sleep
+  "127.0.0.1" 39403 [
+    path>>
+    "/time" = [
+      now iso8601-fmt format
+      "text/plain; charset=utf-8" ok send-response
+    ] [
+      not-found send-response
+    ] if
+  ] make-http-server-task
+  100 milliseconds sleep
 
   "127.0.0.1" 39403 make-addr:tcp connect
   dup "GET /time HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop

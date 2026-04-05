@@ -2,13 +2,24 @@ use "testing" ;
 use "net/http" ;
 use "net" ;
 use "net/tcp" ;
+use "net/server" ;
 use "time" ;
+
+make-http-server-task: ( host port handler -- task ) [
+  [ swap dup -rot> dup read-request <rot- call stream-close ] curry
+  <server-config> swap >>handler swap >>port swap >>host
+  [
+    dup start-server
+    swap handler>>
+    over accept drop
+    swap call
+    close
+  ] curry spawn
+] ;
 
 "serve-static: missing file returns 404" test-section
 [
-  [
-    "127.0.0.1" 39410 "tests/integration/http_static_root" serve-static
-  ] spawn
+  "127.0.0.1" 39410 "tests/integration/http_static_root" [ static-file-handler ] curry make-http-server-task
   100 milliseconds sleep
 
   "127.0.0.1" 39410 make-addr:tcp connect
@@ -20,9 +31,7 @@ use "time" ;
 
 "serve-static: serves index.html at root with correct headers and body" test-section
 [
-  [
-    "127.0.0.1" 39411 "tests/integration/http_static_root" serve-static
-  ] spawn
+  "127.0.0.1" 39411 "tests/integration/http_static_root" [ static-file-handler ] curry make-http-server-task
   100 milliseconds sleep
 
   "127.0.0.1" 39411 make-addr:tcp connect
@@ -38,9 +47,7 @@ use "time" ;
 
 "serve-static: serves css file with correct headers and body" test-section
 [
-  [
-    "127.0.0.1" 39412 "tests/integration/http_static_root" serve-static
-  ] spawn
+  "127.0.0.1" 39412 "tests/integration/http_static_root" [ static-file-handler ] curry make-http-server-task
   100 milliseconds sleep
 
   "127.0.0.1" 39412 make-addr:tcp connect
@@ -56,9 +63,7 @@ use "time" ;
 
 "serve-static: serves index.html for trailing-slash directory" test-section
 [
-  [
-    "127.0.0.1" 39414 "tests/integration/http_static_root" serve-static
-  ] spawn
+  "127.0.0.1" 39414 "tests/integration/http_static_root" [ static-file-handler ] curry make-http-server-task
   100 milliseconds sleep
 
   "127.0.0.1" 39414 make-addr:tcp connect
@@ -70,9 +75,7 @@ use "time" ;
 
 "serve-static: directory traversal blocked" test-section
 [
-  [
-    "127.0.0.1" 39413 "tests/integration/http_static_root" serve-static
-  ] spawn
+  "127.0.0.1" 39413 "tests/integration/http_static_root" [ static-file-handler ] curry make-http-server-task
   100 milliseconds sleep
 
   "127.0.0.1" 39413 make-addr:tcp connect
@@ -84,9 +87,7 @@ use "time" ;
 
 "serve-static: no-extension file gets application/octet-stream" test-section
 [
-  [
-    "127.0.0.1" 39415 "tests/integration/http_static_root" serve-static
-  ] spawn
+  "127.0.0.1" 39415 "tests/integration/http_static_root" [ static-file-handler ] curry make-http-server-task
   100 milliseconds sleep
 
   "127.0.0.1" 39415 make-addr:tcp connect

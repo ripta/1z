@@ -1,3 +1,4 @@
+Stack: [ ]
 === read-request: simple GET ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
@@ -175,9 +176,6 @@ PASS: serve recovery body
 Stack: [ ]
 === serve: concurrent connections ===
 Stack: [ ]
-PASS: concurrent gamma
-PASS: concurrent beta
-PASS: concurrent alpha
 Stack: [ ]
 === serve: handler exception recovery ===
 Stack: [ ]

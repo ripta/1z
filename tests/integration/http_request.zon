@@ -1,0 +1,5 @@
+.{
+    .serial = true,
+    .stdio_expect = .direct_expect,
+    .direct_run = true,
+}

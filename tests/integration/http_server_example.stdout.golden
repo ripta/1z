@@ -1,3 +1,4 @@
+Stack: [ ]
 === serve: root endpoint returns endpoint list ===
 Stack: [ ]
 PASS: root status
