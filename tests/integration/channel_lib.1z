@@ -1,0 +1,112 @@
+use "testing" ;
+use "channel" ;
+
+\ -- 1. channel-each consumes values until close --
+
+test-channel-each: ( -- ) [
+  [
+    <channel>
+    3 <buffered-channel>
+
+    over [
+      dup 1 swap send
+      dup 2 swap send
+      dup 3 swap send
+      close-channel
+    ] curry spawn drop
+
+    swap over [ send ] curry channel-each
+    dup close-channel
+
+    channel>array
+    { 1 2 3 } "channel-each forwards all values" assert=
+  ] task-scope
+] ;
+
+\ -- 2. channel>array collects all values --
+
+test-channel-to-array: ( -- ) [
+  [
+    <channel>
+    dup [
+      dup 10 swap send
+      dup 20 swap send
+      dup 30 swap send
+      close-channel
+    ] curry spawn drop
+    channel>array
+    { 10 20 30 } "channel>array drains channel" assert=
+  ] task-scope
+] ;
+
+\ -- 3. channel>array on empty closed channel returns empty array --
+
+test-channel-to-array-empty: ( -- ) [
+  [
+    <channel>
+    dup close-channel
+    channel>array
+    { } "channel>array on closed channel" assert=
+  ] task-scope
+] ;
+
+\ -- 4. spawn-server processes messages --
+
+test-spawn-server: ( -- ) [
+  [
+    3 <buffered-channel>
+    dup [ send ] curry [ 2 * ] swap compose spawn-server
+    \ stack: out-ch task in-ch
+
+    dup 5 swap send
+    dup 10 swap send
+    close-channel
+    \ stack: out-ch task
+
+    await drop
+    \ stack: out-ch
+
+    dup close-channel
+    channel>array
+    { 10 20 } "spawn-server processes messages" assert=
+  ] task-scope
+] ;
+
+\ -- 5. pipeline transforms values through a stage --
+
+test-pipeline: ( -- ) [
+  [
+    <channel>
+    dup [
+      dup 1 swap send
+      dup 2 swap send
+      dup 3 swap send
+      close-channel
+    ] curry spawn drop
+    [ 10 * ] pipeline
+    channel>array
+    { 10 20 30 } "pipeline transforms values" assert=
+  ] task-scope
+] ;
+
+\ -- 6. fan-out distributes work across workers --
+
+test-fan-out: ( -- ) [
+  [
+    3 <buffered-channel>
+    dup 1 swap send
+    dup 2 swap send
+    dup 3 swap send
+    dup close-channel
+    [ drop ] 2 fan-out
+    await-all drop
+    t "fan-out completes without error" assert-true
+  ] task-scope
+] ;
+
+test-channel-each
+test-channel-to-array
+test-channel-to-array-empty
+test-spawn-server
+test-pipeline
+test-fan-out

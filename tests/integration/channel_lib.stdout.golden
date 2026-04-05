@@ -1,0 +1,18 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: channel-each forwards all values
+Stack: [ ]
+PASS: channel>array drains channel
+Stack: [ ]
+PASS: channel>array on closed channel
+Stack: [ ]
+PASS: spawn-server processes messages
+Stack: [ ]
+PASS: pipeline transforms values
+Stack: [ ]
+PASS: fan-out completes without error
+Stack: [ ]
