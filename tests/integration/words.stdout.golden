@@ -46,6 +46,8 @@ Stack: [ ]
 >char ( codepoint -- str )
 >codepoint ( str -- int )
 >string ( value -- string )
+>symbol ( string -- symbol )
+>word ( name -- quotation )
 @adjoin ( set value -- set' )
 @difference ( set1 set2 -- set' )
 @get ( assoc key -- value )
@@ -161,7 +163,10 @@ yield (  --  )
 === User-Defined Words ===
 #all ( seq quot -- ? )
 #any ( seq quot -- ? )
+#first? ( seq -- option )
+#last? ( seq -- option )
 #none ( seq quot -- ? )
+#nth? ( seq n -- option )
 ++ ( a1 -- a2 )
 -- ( a1 -- a2 )
 -@ ( a -- -a )
@@ -182,6 +187,14 @@ yield (  --  )
 <= ( a b -- ? )
 <rot- ( a b c -- b c a )
 >= ( a b -- ? )
+>option:some
+>result:err
+>result:ok
+?and-then ( opt/res quot -- opt/res )
+?flatten ( nested -- opt/res )
+?map ( opt/res quot -- opt/res )
+?or-else ( opt/res quot -- opt/res )
+@get? ( assoc key -- option )
 B{
 ECannotRedefineConst
 EDivisionByZero
@@ -241,6 +254,11 @@ nip ( a b -- b )
 nl (  --  )
 no-matching-branch ( data -- error )
 not ( ? -- ? )
+option:none
+option:none?
+option:some>
+option:some?
+option?
 or ( ? ? -- ? )
 output-stream
 parameter
@@ -252,6 +270,11 @@ print-line ( str --  )
 quotation? ( val -- ? )
 read-line (  -- str/f )
 rem ( a b -- r )
+result:err>
+result:err?
+result:ok>
+result:ok?
+result?
 run-benchmarks ( quot --  )
 set? ( val -- ? )
 stream-write-string ( stream str -- n )
@@ -260,8 +283,11 @@ string? ( val -- ? )
 struct{
 symbol? ( val -- ? )
 times ( n quot --  )
+try ( quot -- result )
 tuck ( a b -- b a b )
 unless ( ? quot --  )
+unwrap-or ( opt/res default -- value )
+unwrap-or-throw ( opt/res -- value )
 use
 vector? ( val -- ? )
 virtual{

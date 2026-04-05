@@ -1,0 +1,383 @@
+=== option type ===
+Stack: [ ]
+PASS: some? on some is true
+Stack: [ ]
+PASS: none? on some is false
+Stack: [ ]
+PASS: option? on some is true
+Stack: [ ]
+PASS: none? on none is true
+Stack: [ ]
+PASS: some? on none is false
+Stack: [ ]
+PASS: option? on none is true
+Stack: [ ]
+PASS: unwrap some yields value
+Stack: [ ]
+PASS: type-of some
+Stack: [ ]
+PASS: type-of none
+Stack: [ ]
+PASS: enum-of some
+Stack: [ ]
+PASS: enum-of none
+Stack: [ ]
+PASS: option variants
+Stack: [ ]
+PASS: same some values equal
+Stack: [ ]
+PASS: different some values not equal
+Stack: [ ]
+PASS: none equals none
+Stack: [ ]
+PASS: some not equal to none
+Stack: [ ]
+PASS: option? on integer is false
+Stack: [ ]
+PASS: option? on string is false
+Stack: [ ]
+=== result type ===
+Stack: [ ]
+PASS: ok? on ok is true
+Stack: [ ]
+PASS: err? on ok is false
+Stack: [ ]
+PASS: result? on ok is true
+Stack: [ ]
+PASS: err? on err is true
+Stack: [ ]
+PASS: ok? on err is false
+Stack: [ ]
+PASS: result? on err is true
+Stack: [ ]
+PASS: unwrap ok yields value
+Stack: [ ]
+PASS: unwrap err yields error
+Stack: [ ]
+PASS: type-of ok
+Stack: [ ]
+PASS: type-of err
+Stack: [ ]
+PASS: enum-of ok
+Stack: [ ]
+PASS: enum-of err
+Stack: [ ]
+PASS: result variants
+Stack: [ ]
+PASS: same ok values equal
+Stack: [ ]
+PASS: different ok values not equal
+Stack: [ ]
+PASS: result? on integer is false
+Stack: [ ]
+=== match on option ===
+Stack: [ ]
+PASS: match some
+Stack: [ ]
+PASS: match none
+Stack: [ ]
+=== match on result ===
+Stack: [ ]
+PASS: match ok
+Stack: [ ]
+PASS: match err
+Stack: [ ]
+=== option wrapping structs ===
+Stack: [ ]
+Stack: [ ]
+PASS: some? on struct-wrapped option
+Stack: [ ]
+PASS: unwrap struct from option, read field
+Stack: [ ]
+PASS: unwrap struct from option, read second field
+Stack: [ ]
+PASS: unwrap struct from result ok
+Stack: [ ]
+=== option wrapping virtual types ===
+Stack: [ ]
+Stack: [ ]
+PASS: some? on virtual-wrapped option
+Stack: [ ]
+PASS: unwrap virtual from option
+Stack: [ ]
+PASS: type-of virtual inside option
+Stack: [ ]
+PASS: unwrap virtual from result ok
+Stack: [ ]
+=== option wrapping embedded structs ===
+Stack: [ ]
+Stack: [ ]
+PASS: some? on embedded-struct-wrapped option
+Stack: [ ]
+PASS: unwrap embedded struct dy from option
+PASS: unwrap embedded struct dx from option
+Stack: [ ]
+PASS: type-of embedded struct inside option
+Stack: [ ]
+PASS: unwrap embedded struct from result ok dy
+PASS: unwrap embedded struct from result ok dx
+Stack: [ ]
+=== option wrapping enum variants ===
+Stack: [ ]
+Stack: [ ]
+PASS: some? on enum-wrapped option
+Stack: [ ]
+PASS: unwrap enum from option, predicate
+Stack: [ ]
+PASS: type-of enum inside option
+Stack: [ ]
+PASS: enum-of on unwrapped enum from option
+Stack: [ ]
+PASS: unwrap enum from result ok
+Stack: [ ]
+PASS: some? on none-wrapped option
+Stack: [ ]
+PASS: unwrap none from some
+Stack: [ ]
+PASS: some? on nested some
+Stack: [ ]
+PASS: inner some is some
+Stack: [ ]
+PASS: double unwrap nested some
+Stack: [ ]
+=== result wrapping enum variants ===
+Stack: [ ]
+Stack: [ ]
+PASS: ok? on data-enum-wrapped result
+Stack: [ ]
+PASS: unwrap data enum from result ok
+Stack: [ ]
+PASS: unwrap data enum payload from result ok
+Stack: [ ]
+PASS: err wrapping error is err
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== match on option with complex payloads ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: match some with struct payload
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: match some with virtual payload
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: match some with enum payload
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== unwrap-or on option ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or some returns inner value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or none returns default
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or some with string
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or none with string default
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== unwrap-or on result ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or ok returns inner value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or err returns default
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or ok with string
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or err with string default
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== unwrap-or-throw on option ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or-throw some returns value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or-throw some string
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap called on none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== unwrap-or-throw on result ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or-throw ok returns value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: unwrap-or-throw ok string
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> [ "oops" "test" EUserThrown make-error >result:err unwrap-or-throw ] ]
+PASS: unwrap-or-throw err rethrows error
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== ?map on option ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: ?map some is still some
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: ?map some applies quot
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: ?map none passes through
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: ?map some with string
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== ?map on result ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: ?map ok is still ok
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: ?map ok applies quot
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: ?map err passes through
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== ?and-then on option ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <option:some option:some{ value: 42 }> ]
+PASS: ?and-then some with positive
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <option:none none:> ]
+PASS: ?and-then some producing none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <option:none none:> ]
+PASS: ?and-then none passes through
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== ?and-then on result ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <result:ok result:ok{ value: 42 }> ]
+PASS: ?and-then ok with valid value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <result:err result:err{ error: <error user-thrown: test data="negative"> }> ]
+PASS: ?and-then ok producing err
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <result:err result:err{ error: <error user-thrown: test data="oops"> }> ]
+PASS: ?and-then err passes through
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== ?or-else on option ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <option:some option:some{ value: 42 }> ]
+PASS: ?or-else some passes through
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <option:some option:some{ value: 99 }> ]
+PASS: ?or-else none calls quot
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <option:none none:> ]
+PASS: ?or-else none producing none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== ?or-else on result ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <result:ok result:ok{ value: 42 }> ]
+PASS: ?or-else ok passes through
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <result:ok result:ok{ value: 0 }> ]
+PASS: ?or-else err calls quot
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <result:err result:err{ error: <error user-thrown: test data="fallback"> }> ]
+PASS: ?or-else err producing err
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== ?flatten on option ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <option:some option:some{ value: 42 }> ]
+PASS: ?flatten some(some(x)) to some(x)
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <option:none none:> ]
+PASS: ?flatten some(none) to none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <option:none none:> ]
+PASS: ?flatten none stays none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== ?flatten on result ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <result:ok result:ok{ value: 42 }> ]
+PASS: ?flatten ok(ok(x)) to ok(x)
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <result:err result:err{ error: <error user-thrown: test data="oops"> }> ]
+PASS: ?flatten ok(err(e)) to err(e)
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <result:err result:err{ error: <error user-thrown: test data="oops"> }> ]
+PASS: ?flatten err stays err
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== chaining combinators ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <option:some option:some{ value: 84 }> ]
+PASS: ?map then ?and-then
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <option:some option:some{ value: 7 }> ]
+PASS: chained ?or-else
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: ?map requires an option or result
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: ?and-then requires an option or result
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: ?or-else requires an option or result
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: ?flatten requires an option or result
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== try ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try success is ok
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try success value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try throw is err
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try err contains error object
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try division by zero is err
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try successful division
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try then ?map ok
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try then ?map err passes through
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+Stack: [ <option:some option:some{ value: <color:red red:> }> <result:ok result:ok{ value: 42 }> ]
+PASS: try then ?and-then ok
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try err unwrap-or default
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: try ok unwrap-or value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: boom
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== @get? ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? existing key is some
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? existing key value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? missing key is none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? with unwrap-or
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? missing with unwrap-or
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? key with false value is some
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? key with false value unwraps to f
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== #nth? ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #nth? valid index is some
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #nth? valid index value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #nth? out of bounds is none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #nth? negative index is none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #nth? empty seq is none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #nth? on string
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== #first? ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #first? non-empty is some
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #first? non-empty value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #first? empty is none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #first? on string
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== #last? ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #last? non-empty is some
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #last? non-empty value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #last? empty is none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #last? on string
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== option wrappers with combinators ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? then ?map
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? none then ?map
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #nth? then ?map
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]

@@ -52,6 +52,12 @@ enum{: parse-time [
   define: [ define-enum ] @set!
 ] ;
 
+\ Standard sum types
+\\ Optional value: either `some` wrapping a value, or `none`.
+option: enum{ some struct{ value } none } ;
+\\ Fallible result: either `ok` wrapping a value, or `err` wrapping an error.
+result: enum{ ok struct{ value } err struct{ error } } ;
+
 \\ Method dispatch registration syntax.
 \   word: method{ type1 type2 } [ body ] ;
 method{: parse-time [
@@ -326,10 +332,61 @@ cond: ( branches -- ... ) [
 ] ;
 
 \ String formatting
+
 \\ Format a string by interpolating values from a source using a template string.
 fmt: ( source string -- string ) [ template interpolate ] ;
+
 \\ Format and print a string followed by a newline.
 fmt-line: ( source string -- ) [ fmt print-line ] ;
 
+\ Benchmarking
+
 \\ Run a quotation as a benchmark suite and print the report.
 run-benchmarks: ( quot -- ) [ make-benchmark-report swap call print-benchmark-report ] ;
+
+\ Option/Result combinators
+
+\\ Extract the inner value from an option or result, or return the default.
+unwrap-or: generic ( opt/res default -- value ) [ "unwrap-or requires an option or result" throw ] ;
+unwrap-or: method{ option any } [ swap dup option:some? [ option:some> nip ] [ drop ] if ] ;
+unwrap-or: method{ result any } [ swap dup result:ok? [ result:ok> nip ] [ drop ] if ] ;
+
+\\ Extract the inner value, or throw on none/err.
+unwrap-or-throw: generic ( opt/res -- value ) [ "unwrap-or-throw requires an option or result" throw ] ;
+unwrap-or-throw: method{ option } [ dup option:some? [ option:some> ] [ drop "unwrap called on none" throw ] if ] ;
+unwrap-or-throw: method{ result } [ dup result:ok? [ result:ok> ] [ result:err> throw ] if ] ;
+
+\\ Apply quot to the inner value if some/ok, wrapping the result in some/ok. Pass through none/err unchanged.
+?map: generic ( opt/res quot -- opt/res ) [ "?map requires an option or result" throw ] ;
+?map: method{ option quotation } [ swap dup option:some? [ option:some> swap call >option:some ] [ nip ] if ] ;
+?map: method{ result quotation } [ swap dup result:ok? [ result:ok> swap call >result:ok ] [ nip ] if ] ;
+
+\\ Apply quot to the inner value if some/ok; quot must itself return an option/result. Pass through none/err unchanged.
+?and-then: generic ( opt/res quot -- opt/res ) [ "?and-then requires an option or result" throw ] ;
+?and-then: method{ option quotation } [ swap dup option:some? [ option:some> swap call ] [ nip ] if ] ;
+?and-then: method{ result quotation } [ swap dup result:ok? [ result:ok> swap call ] [ nip ] if ] ;
+
+\\ If none/err, call quot to produce a replacement option/result. If some/ok, pass through unchanged.
+?or-else: generic ( opt/res quot -- opt/res ) [ "?or-else requires an option or result" throw ] ;
+?or-else: method{ option quotation } [ swap dup option:some? [ nip ] [ drop call ] if ] ;
+?or-else: method{ result quotation } [ swap dup result:ok? [ nip ] [ drop call ] if ] ;
+
+\\ Unwrap one layer of nesting: some(some(x)) becomes some(x), some(none) becomes none. Same for result.
+?flatten: generic ( nested -- opt/res ) [ "?flatten requires an option or result" throw ] ;
+?flatten: method{ option } [ dup option:some? [ option:some> ] when ] ;
+?flatten: method{ result } [ dup result:ok? [ result:ok> ] when ] ;
+
+\\ Call a quotation, wrapping success in result:ok and thrown errors in result:err.
+try: ( quot -- result ) [ [ call >result:ok ] [ >result:err ] recover ] ;
+
+\\ Look up a key in an associative, returning some(value) or none.
+@get?: ( assoc key -- option ) [ 2dup @has? [ @get >option:some ] [ 2drop option:none ] if ] ;
+
+\\ Get the nth element of a sequence, returning some(value) or none if out of bounds.
+#nth?: ( seq n -- option ) [ [ #nth >option:some ] [ drop option:none ] recover ] ;
+
+\\ Get the first element of a sequence, returning some(value) or none if empty.
+#first?: ( seq -- option ) [ [ #first >option:some ] [ drop option:none ] recover ] ;
+
+\\ Get the last element of a sequence, returning some(value) or none if empty.
+#last?: ( seq -- option ) [ [ #last >option:some ] [ drop option:none ] recover ] ;

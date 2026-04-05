@@ -1,0 +1,355 @@
+\ Test option and result enum types
+
+use "testing" ;
+
+"option type" test-section
+
+\ option:some wraps a value
+42 >option:some option:some? t "some? on some is true" assert=
+42 >option:some option:none? f "none? on some is false" assert=
+42 >option:some option? t "option? on some is true" assert=
+
+\ option:none is the empty variant
+option:none option:none? t "none? on none is true" assert=
+option:none option:some? f "some? on none is false" assert=
+option:none option? t "option? on none is true" assert=
+
+\ Unwrap some
+42 >option:some option:some> 42 "unwrap some yields value" assert=
+
+\ type-of
+42 >option:some type-of option:some: "type-of some" assert=
+option:none type-of option:none: "type-of none" assert=
+
+\ enum-of
+42 >option:some enum-of "option" "enum-of some" assert=
+option:none enum-of "option" "enum-of none" assert=
+
+\ enum-variants
+option: enum-variants { option:some: option:none: } "option variants" assert=
+
+\ Equality
+42 >option:some 42 >option:some = t "same some values equal" assert=
+42 >option:some 99 >option:some = f "different some values not equal" assert=
+option:none option:none = t "none equals none" assert=
+42 >option:some option:none = f "some not equal to none" assert=
+
+\ Non-option values
+42 option? f "option? on integer is false" assert=
+"hello" option? f "option? on string is false" assert=
+
+"result type" test-section
+
+\ result:ok wraps a value
+42 >result:ok result:ok? t "ok? on ok is true" assert=
+42 >result:ok result:err? f "err? on ok is false" assert=
+42 >result:ok result? t "result? on ok is true" assert=
+
+\ result:err wraps an error
+"oops" "test" EUserThrown make-error >result:err result:err? t "err? on err is true" assert=
+"oops" "test" EUserThrown make-error >result:err result:ok? f "ok? on err is false" assert=
+"oops" "test" EUserThrown make-error >result:err result? t "result? on err is true" assert=
+
+\ Unwrap ok
+42 >result:ok result:ok> 42 "unwrap ok yields value" assert=
+
+\ Unwrap err
+"oops" "test" EUserThrown make-error >result:err result:err> error? t "unwrap err yields error" assert=
+
+\ type-of
+42 >result:ok type-of result:ok: "type-of ok" assert=
+"oops" "test" EUserThrown make-error >result:err type-of result:err: "type-of err" assert=
+
+\ enum-of
+42 >result:ok enum-of "result" "enum-of ok" assert=
+"oops" "test" EUserThrown make-error >result:err enum-of "result" "enum-of err" assert=
+
+\ enum-variants
+result: enum-variants { result:ok: result:err: } "result variants" assert=
+
+\ Equality
+42 >result:ok 42 >result:ok = t "same ok values equal" assert=
+42 >result:ok 99 >result:ok = f "different ok values not equal" assert=
+
+\ Non-result values
+42 result? f "result? on integer is false" assert=
+
+"match on option" test-section
+
+42 >option:some {
+  option:some: [ 2 * ]
+  option:none: [ 0 ]
+} match 84 "match some" assert=
+
+option:none {
+  option:some: [ 2 * ]
+  option:none: [ 0 ]
+} match 0 "match none" assert=
+
+"match on result" test-section
+
+42 >result:ok {
+  result:ok: [ 1 + ]
+  result:err: [ drop -1 ]
+} match 43 "match ok" assert=
+
+"oops" "test" EUserThrown make-error >result:err {
+  result:ok: [ 1 + ]
+  result:err: [ drop -1 ]
+} match -1 "match err" assert=
+
+"option wrapping structs" test-section
+
+point: struct{ x y } ;
+10 20 make-point >option:some option:some? t "some? on struct-wrapped option" assert=
+10 20 make-point >option:some option:some> x>> 10 "unwrap struct from option, read field" assert=
+10 20 make-point >option:some option:some> y>> 20 "unwrap struct from option, read second field" assert=
+10 20 make-point >result:ok result:ok> x>> 10 "unwrap struct from result ok" assert=
+
+"option wrapping virtual types" test-section
+
+speed: virtual{ integer } ;
+42 >speed >option:some option:some? t "some? on virtual-wrapped option" assert=
+42 >speed >option:some option:some> speed> 42 "unwrap virtual from option" assert=
+42 >speed >option:some option:some> type-of speed: "type-of virtual inside option" assert=
+42 >speed >result:ok result:ok> speed> 42 "unwrap virtual from result ok" assert=
+
+"option wrapping embedded structs" test-section
+
+vec2: virtual{ struct{ dx dy } } ;
+3 4 >vec2 >option:some option:some? t "some? on embedded-struct-wrapped option" assert=
+3 4 >vec2 >option:some option:some> vec2> 4 "unwrap embedded struct dy from option" assert= 3 "unwrap embedded struct dx from option" assert=
+3 4 >vec2 >option:some option:some> type-of vec2: "type-of embedded struct inside option" assert=
+3 4 >vec2 >result:ok result:ok> vec2> 4 "unwrap embedded struct from result ok dy" assert= 3 "unwrap embedded struct from result ok dx" assert=
+
+"option wrapping enum variants" test-section
+
+color: enum{ red green blue } ;
+
+\ Flat enum variant inside option
+color:red >option:some option:some? t "some? on enum-wrapped option" assert=
+color:red >option:some option:some> color:red? t "unwrap enum from option, predicate" assert=
+color:red >option:some option:some> type-of color:red: "type-of enum inside option" assert=
+color:red >option:some option:some> enum-of "color" "enum-of on unwrapped enum from option" assert=
+color:green >result:ok result:ok> color:green? t "unwrap enum from result ok" assert=
+
+\ option:none inside option (nested option)
+option:none >option:some option:some? t "some? on none-wrapped option" assert=
+option:none >option:some option:some> option:none? t "unwrap none from some" assert=
+
+\ some inside option (nested some)
+42 >option:some >option:some option:some? t "some? on nested some" assert=
+42 >option:some >option:some option:some> option:some? t "inner some is some" assert=
+42 >option:some >option:some option:some> option:some> 42 "double unwrap nested some" assert=
+
+"result wrapping enum variants" test-section
+
+\ Data-carrying enum variant inside result
+shape: enum{ circle struct{ radius } dot } ;
+5 >shape:circle >result:ok result:ok? t "ok? on data-enum-wrapped result" assert=
+5 >shape:circle >result:ok result:ok> shape:circle? t "unwrap data enum from result ok" assert=
+5 >shape:circle >result:ok result:ok> shape:circle> 5 "unwrap data enum payload from result ok" assert=
+
+\ Enum inside result:err wrapped in an error object
+color:red >option:some "wrapped" "test" EUserThrown make-error >result:err result:err? t "err wrapping error is err" assert=
+
+"match on option with complex payloads" test-section
+
+10 20 make-point >option:some {
+  option:some: [ x>> ]
+  option:none: [ -1 ]
+} match 10 "match some with struct payload" assert=
+
+42 >speed >option:some {
+  option:some: [ speed> 2 * ]
+  option:none: [ 0 ]
+} match 84 "match some with virtual payload" assert=
+
+color:blue >option:some {
+  option:some: [ color:blue? ]
+  option:none: [ f ]
+} match t "match some with enum payload" assert=
+
+"unwrap-or on option" test-section
+
+42 >option:some 0 unwrap-or 42 "unwrap-or some returns inner value" assert=
+option:none 0 unwrap-or 0 "unwrap-or none returns default" assert=
+"hello" >option:some "fallback" unwrap-or "hello" "unwrap-or some with string" assert=
+option:none "fallback" unwrap-or "fallback" "unwrap-or none with string default" assert=
+
+"unwrap-or on result" test-section
+
+42 >result:ok 0 unwrap-or 42 "unwrap-or ok returns inner value" assert=
+"oops" "test" EUserThrown make-error >result:err 0 unwrap-or 0 "unwrap-or err returns default" assert=
+"hello" >result:ok "fallback" unwrap-or "hello" "unwrap-or ok with string" assert=
+"oops" "test" EUserThrown make-error >result:err "fallback" unwrap-or "fallback" "unwrap-or err with string default" assert=
+
+"unwrap-or-throw on option" test-section
+
+42 >option:some unwrap-or-throw 42 "unwrap-or-throw some returns value" assert=
+"hello" >option:some unwrap-or-throw "hello" "unwrap-or-throw some string" assert=
+
+\ Throws on none
+[ option:none unwrap-or-throw ] [ "unwrap called on none" assert-error ] recover
+
+"unwrap-or-throw on result" test-section
+
+42 >result:ok unwrap-or-throw 42 "unwrap-or-throw ok returns value" assert=
+"hello" >result:ok unwrap-or-throw "hello" "unwrap-or-throw ok string" assert=
+
+\ Rethrows the error inside err
+[ "oops" "test" EUserThrown make-error >result:err unwrap-or-throw ]
+[ error-type: @get user-thrown: "unwrap-or-throw err rethrows error" assert= ] recover
+
+"?map on option" test-section
+
+42 >option:some [ 2 * ] ?map option:some? t "?map some is still some" assert=
+42 >option:some [ 2 * ] ?map option:some> 84 "?map some applies quot" assert=
+option:none [ 2 * ] ?map option:none? t "?map none passes through" assert=
+"hello" >option:some [ " world" #append ] ?map option:some> "hello world" "?map some with string" assert=
+
+"?map on result" test-section
+
+42 >result:ok [ 1 + ] ?map result:ok? t "?map ok is still ok" assert=
+42 >result:ok [ 1 + ] ?map result:ok> 43 "?map ok applies quot" assert=
+"oops" "test" EUserThrown make-error >result:err [ 1 + ] ?map result:err? t "?map err passes through" assert=
+
+"?and-then on option" test-section
+
+42 >option:some [ dup 0 > [ >option:some ] [ drop option:none ] if ] ?and-then
+option:some> 42 "?and-then some with positive" assert=
+-1 >option:some [ dup 0 > [ >option:some ] [ drop option:none ] if ] ?and-then
+option:none? t "?and-then some producing none" assert=
+option:none [ >option:some ] ?and-then
+option:none? t "?and-then none passes through" assert=
+
+"?and-then on result" test-section
+
+42 >result:ok [ dup 0 > [ >result:ok ] [ drop "negative" "test" EUserThrown make-error >result:err ] if ] ?and-then
+result:ok> 42 "?and-then ok with valid value" assert=
+-1 >result:ok [ dup 0 > [ >result:ok ] [ drop "negative" "test" EUserThrown make-error >result:err ] if ] ?and-then
+result:err? t "?and-then ok producing err" assert=
+"oops" "test" EUserThrown make-error >result:err [ >result:ok ] ?and-then
+result:err? t "?and-then err passes through" assert=
+
+"?or-else on option" test-section
+
+42 >option:some [ 99 >option:some ] ?or-else
+option:some> 42 "?or-else some passes through" assert=
+option:none [ 99 >option:some ] ?or-else
+option:some> 99 "?or-else none calls quot" assert=
+option:none [ option:none ] ?or-else
+option:none? t "?or-else none producing none" assert=
+
+"?or-else on result" test-section
+
+42 >result:ok [ 0 >result:ok ] ?or-else
+result:ok> 42 "?or-else ok passes through" assert=
+"oops" "test" EUserThrown make-error >result:err [ 0 >result:ok ] ?or-else
+result:ok> 0 "?or-else err calls quot" assert=
+"oops" "test" EUserThrown make-error >result:err [ "fallback" "test" EUserThrown make-error >result:err ] ?or-else
+result:err? t "?or-else err producing err" assert=
+
+"?flatten on option" test-section
+
+42 >option:some >option:some ?flatten
+option:some> 42 "?flatten some(some(x)) to some(x)" assert=
+option:none >option:some ?flatten
+option:none? t "?flatten some(none) to none" assert=
+option:none ?flatten
+option:none? t "?flatten none stays none" assert=
+
+"?flatten on result" test-section
+
+42 >result:ok >result:ok ?flatten
+result:ok> 42 "?flatten ok(ok(x)) to ok(x)" assert=
+"oops" "test" EUserThrown make-error >result:err >result:ok ?flatten
+result:err? t "?flatten ok(err(e)) to err(e)" assert=
+"oops" "test" EUserThrown make-error >result:err ?flatten
+result:err? t "?flatten err stays err" assert=
+
+"chaining combinators" test-section
+
+\ ?map then ?and-then
+42 >option:some [ 2 * ] ?map [ dup 100 < [ >option:some ] [ drop option:none ] if ] ?and-then
+option:some> 84 "?map then ?and-then" assert=
+
+\ ?or-else as fallback chain
+option:none [ option:none ] ?or-else [ 7 >option:some ] ?or-else
+option:some> 7 "chained ?or-else" assert=
+
+\ generic error messages
+[ "?map requires an option or result" throw ] [ "?map requires an option or result" assert-error ] recover
+[ "?and-then requires an option or result" throw ] [ "?and-then requires an option or result" assert-error ] recover
+[ "?or-else requires an option or result" throw ] [ "?or-else requires an option or result" assert-error ] recover
+[ "?flatten requires an option or result" throw ] [ "?flatten requires an option or result" assert-error ] recover
+
+"try" test-section
+
+\ Successful quotation wraps in result:ok
+[ 42 ] try result:ok? t "try success is ok" assert=
+[ 42 ] try result:ok> 42 "try success value" assert=
+
+\ Throwing quotation wraps in result:err
+[ "oops" throw ] try result:err? t "try throw is err" assert=
+[ "oops" throw ] try result:err> error? t "try err contains error object" assert=
+
+\ Division by zero
+[ 10 0 / ] try result:err? t "try division by zero is err" assert=
+[ 10 2 / ] try result:ok> 5 "try successful division" assert=
+
+\ try with combinators
+[ 10 2 / ] try [ 1 + ] ?map result:ok> 6 "try then ?map ok" assert=
+[ 10 0 / ] try [ 1 + ] ?map result:err? t "try then ?map err passes through" assert=
+
+\ try chaining with ?and-then
+[ 42 ] try [ dup 0 > [ >result:ok ] [ drop "negative" throw ] if ] ?and-then
+result:ok> 42 "try then ?and-then ok" assert=
+
+\ try with unwrap-or
+[ "oops" throw ] try 0 unwrap-or 0 "try err unwrap-or default" assert=
+[ 42 ] try 0 unwrap-or 42 "try ok unwrap-or value" assert=
+
+\ try with unwrap-or-throw re-throws
+[ [ "boom" throw ] try unwrap-or-throw ] [ "boom" assert-error ] recover
+
+"@get?" test-section
+
+H{ x: 1 y: 2 } x: @get? option:some? t "@get? existing key is some" assert=
+H{ x: 1 y: 2 } x: @get? option:some> 1 "@get? existing key value" assert=
+H{ x: 1 y: 2 } z: @get? option:none? t "@get? missing key is none" assert=
+H{ x: 1 y: 2 } y: @get? 0 unwrap-or 2 "@get? with unwrap-or" assert=
+H{ x: 1 y: 2 } z: @get? 0 unwrap-or 0 "@get? missing with unwrap-or" assert=
+
+\ Resolves the f-as-sentinel ambiguity
+H{ x: f } x: @get? option:some? t "@get? key with false value is some" assert=
+H{ x: f } x: @get? option:some> f "@get? key with false value unwraps to f" assert=
+
+"#nth?" test-section
+
+{ 10 20 30 } 0 #nth? option:some? t "#nth? valid index is some" assert=
+{ 10 20 30 } 1 #nth? option:some> 20 "#nth? valid index value" assert=
+{ 10 20 30 } 5 #nth? option:none? t "#nth? out of bounds is none" assert=
+{ 10 20 30 } -1 #nth? option:none? t "#nth? negative index is none" assert=
+{ } 0 #nth? option:none? t "#nth? empty seq is none" assert=
+"hello" 1 #nth? option:some> "e" "#nth? on string" assert=
+
+"#first?" test-section
+
+{ 10 20 30 } #first? option:some? t "#first? non-empty is some" assert=
+{ 10 20 30 } #first? option:some> 10 "#first? non-empty value" assert=
+{ } #first? option:none? t "#first? empty is none" assert=
+"abc" #first? option:some> "a" "#first? on string" assert=
+
+"#last?" test-section
+
+{ 10 20 30 } #last? option:some? t "#last? non-empty is some" assert=
+{ 10 20 30 } #last? option:some> 30 "#last? non-empty value" assert=
+{ } #last? option:none? t "#last? empty is none" assert=
+"abc" #last? option:some> "c" "#last? on string" assert=
+
+"option wrappers with combinators" test-section
+
+H{ x: 42 } x: @get? [ 2 * ] ?map option:some> 84 "@get? then ?map" assert=
+H{ x: 42 } z: @get? [ 2 * ] ?map option:none? t "@get? none then ?map" assert=
+{ 10 20 30 } 1 #nth? [ 1 + ] ?map option:some> 21 "#nth? then ?map" assert=

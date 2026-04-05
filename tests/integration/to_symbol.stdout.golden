@@ -1,0 +1,63 @@
+=== string to symbol ===
+Stack: [ ]
+PASS: >symbol creates matching symbol
+Stack: [ ]
+PASS: >symbol with hyphens
+Stack: [ ]
+PASS: >symbol with operator char
+Stack: [ ]
+PASS: >symbol with digits
+Stack: [ ]
+=== symbol to string ===
+Stack: [ ]
+PASS: symbol >string strips colon
+Stack: [ ]
+PASS: symbol >string with hyphens
+Stack: [ ]
+=== roundtrip ===
+Stack: [ ]
+PASS: symbol>string>symbol roundtrip
+Stack: [ ]
+PASS: string>symbol>string roundtrip
+Stack: [ ]
+=== >symbol error cases ===
+Stack: [ ]
+PASS: empty string rejected
+Stack: [ ]
+PASS: string with space rejected
+Stack: [ ]
+PASS: integer rejected
+Stack: [ ]
+=== >word from string ===
+Stack: [ ]
+Stack: [ ]
+PASS: >word from string then call
+Stack: [ ]
+=== >word from symbol ===
+Stack: [ ]
+PASS: >word from symbol then call
+Stack: [ ]
+=== >word with native word ===
+Stack: [ ]
+PASS: >word with native +
+Stack: [ ]
+=== >word with nonexistent word ===
+Stack: [ ]
+PASS: nonexistent word fails on call
+Stack: [ ]
+=== >word sees quotation-local definitions ===
+Stack: [ ]
+PASS: >word resolves local in same frame
+Stack: [ ]
+=== >word sees outer local from nested call ===
+Stack: [ ]
+PASS: >word resolves outer local from inner call
+Stack: [ ]
+=== >word cannot see locals after frame exits ===
+Stack: [ ]
+PASS: local not visible after frame exit
+Stack: [ ]
+=== >word resolves at call time not creation time ===
+Stack: [ ]
+PASS: >word resolves word defined after >word
+Stack: [ ]
