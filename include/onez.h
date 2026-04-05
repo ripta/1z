@@ -48,6 +48,7 @@ typedef void *onez_t;
 #define ONEZ_TYPE_ITERATOR    16
 #define ONEZ_TYPE_TYPE_VAL    17
 #define ONEZ_TYPE_UNIT        18
+#define ONEZ_TYPE_STRUCT      19
 
 /* ---- Error codes ---- */
 
@@ -101,6 +102,21 @@ int onez_push_bool(onez_t ctx, bool value);
  * bytes are copied.
  */
 int onez_push_string(onez_t ctx, const char *data, size_t len);
+
+/*
+ * Push a symbol onto the stack. The data is copied; the caller retains
+ * ownership of `data`. The string need not be null-terminated; `len`
+ * bytes are copied.
+ */
+int onez_push_symbol(onez_t ctx, const char *data, size_t len);
+
+/*
+ * Push an array built from an array of value handles onto the stack.
+ *
+ * Returns ONEZ_OK on success.
+ * Returns ONEZ_ERR_NULL_VALUE if any element handle is NULL.
+ */
+int onez_push_array(onez_t ctx, const onez_value_t *handles, size_t count);
 
 /* ---- Opaque value handles ---- */
 
@@ -179,6 +195,33 @@ int onez_hash_get(onez_t ctx, onez_value_t handle, const char *key, size_t key_l
  * Returns ONEZ_ERR_TYPE_MISMATCH if handle is not a hash.
  */
 int onez_hash_keys(onez_t ctx, onez_value_t handle, onez_value_t *out);
+
+/*
+ * Look up a field by name on a struct instance handle.
+ *
+ * On success, *out is set to a new handle and ONEZ_OK is returned.
+ * Returns ONEZ_ERR_TYPE_MISMATCH if handle is not a struct instance.
+ * Returns ONEZ_ERR_KEY_NOT_FOUND if the field name is not present.
+ */
+int onez_struct_get(onez_t ctx, onez_value_t handle, const char *field, size_t field_len, onez_value_t *out);
+
+/*
+ * Return the tag name of a virtual type (tagged value) handle.
+ *
+ * On success, *out_ptr and *out_len are set to the name string.
+ * The pointer is valid until onez_deinit.
+ * Returns ONEZ_ERR_TYPE_MISMATCH if handle is not a tagged value.
+ * Returns ONEZ_ERR_NULL_VALUE if handle is NULL.
+ */
+int onez_virtual_type_name(onez_value_t handle, const char **out_ptr, size_t *out_len);
+
+/*
+ * Unwrap a virtual type (tagged value) to get its inner value.
+ *
+ * On success, *out is set to a new handle for the inner value.
+ * Returns ONEZ_ERR_TYPE_MISMATCH if handle is not a tagged value.
+ */
+int onez_virtual_unwrap(onez_t ctx, onez_value_t handle, onez_value_t *out);
 
 /* ---- Pop (1z stack -> C) ---- */
 

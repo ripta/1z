@@ -32,6 +32,7 @@ pub const ONEZ_TYPE_TAGGED: c_int = 15;
 pub const ONEZ_TYPE_ITERATOR: c_int = 16;
 pub const ONEZ_TYPE_TYPE_VAL: c_int = 17;
 pub const ONEZ_TYPE_UNIT: c_int = 18;
+pub const ONEZ_TYPE_STRUCT: c_int = 19;
 
 // Error code constants.
 pub const ONEZ_OK: c_int = 0;
@@ -325,6 +326,109 @@ export fn onez_hash_keys(ptr: ?*anyopaque, val_ptr: ?*anyopaque, out: *?*anyopaq
         },
         else => {
             setLastError(handle, "type mismatch: expected hash, got {s}", .{@tagName(value.*)});
+            return ONEZ_ERR_TYPE_MISMATCH;
+        },
+    }
+}
+
+export fn onez_struct_get(ptr: ?*anyopaque, val_ptr: ?*anyopaque, field: [*]const u8, field_len: usize, out: *?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const vp = val_ptr orelse {
+        setLastError(handle, "null value handle passed to onez_struct_get", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    };
+    const value: *const Value = @ptrCast(@alignCast(vp));
+    switch (value.*) {
+        .struct_instance => |si| {
+            const field_name = field[0..field_len];
+            for (si.struct_type.fields, 0..) |f, i| {
+                if (std.mem.eql(u8, f, field_name)) {
+                    const slot = handle.ctx.quotationAllocator().create(Value) catch {
+                        setLastError(handle, "allocation failure creating value handle", .{});
+                        return ONEZ_ERR_ALLOC;
+                    };
+                    slot.* = si.fields[i];
+                    out.* = slot;
+                    return ONEZ_OK;
+                }
+            }
+            setLastError(handle, "field not found: {s}", .{field_name});
+            return ONEZ_ERR_KEY_NOT_FOUND;
+        },
+        else => {
+            setLastError(handle, "type mismatch: expected struct, got {s}", .{@tagName(value.*)});
+            return ONEZ_ERR_TYPE_MISMATCH;
+        },
+    }
+}
+
+export fn onez_push_symbol(ptr: ?*anyopaque, data: [*]const u8, len: usize) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const copy = handle.ctx.quotationAllocator().dupe(u8, data[0..len]) catch {
+        setLastError(handle, "allocation failure copying symbol", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    handle.ctx.stack.push(.{ .symbol = copy }) catch {
+        setLastError(handle, "allocation failure pushing symbol", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    return ONEZ_OK;
+}
+
+export fn onez_push_array(ptr: ?*anyopaque, handles: [*]const ?*anyopaque, count: usize) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const alloc = handle.ctx.quotationAllocator();
+    const values = alloc.alloc(Value, count) catch {
+        setLastError(handle, "allocation failure creating array", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    for (0..count) |i| {
+        const elem_ptr = handles[i] orelse {
+            setLastError(handle, "null element handle at index {d}", .{i});
+            return ONEZ_ERR_NULL_VALUE;
+        };
+        const elem: *const Value = @ptrCast(@alignCast(elem_ptr));
+        values[i] = elem.*;
+    }
+    handle.ctx.stack.push(.{ .array = values }) catch {
+        setLastError(handle, "allocation failure pushing array", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    return ONEZ_OK;
+}
+
+export fn onez_virtual_type_name(val_ptr: ?*anyopaque, out_ptr: *[*]const u8, out_len: *usize) c_int {
+    const vp = val_ptr orelse return ONEZ_ERR_NULL_VALUE;
+    const value: *const Value = @ptrCast(@alignCast(vp));
+    switch (value.*) {
+        .tagged => |t| {
+            out_ptr.* = t.tag.name.ptr;
+            out_len.* = t.tag.name.len;
+            return ONEZ_OK;
+        },
+        else => return ONEZ_ERR_TYPE_MISMATCH,
+    }
+}
+
+export fn onez_virtual_unwrap(ptr: ?*anyopaque, val_ptr: ?*anyopaque, out: *?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const vp = val_ptr orelse {
+        setLastError(handle, "null value handle passed to onez_virtual_unwrap", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    };
+    const value: *const Value = @ptrCast(@alignCast(vp));
+    switch (value.*) {
+        .tagged => |t| {
+            const slot = handle.ctx.quotationAllocator().create(Value) catch {
+                setLastError(handle, "allocation failure creating value handle", .{});
+                return ONEZ_ERR_ALLOC;
+            };
+            slot.* = t.inner.*;
+            out.* = slot;
+            return ONEZ_OK;
+        },
+        else => {
+            setLastError(handle, "type mismatch: expected tagged, got {s}", .{@tagName(value.*)});
             return ONEZ_ERR_TYPE_MISMATCH;
         },
     }
@@ -667,6 +771,7 @@ fn valueTypeToInt(val: Value) c_int {
         .iterator => ONEZ_TYPE_ITERATOR,
         .type_val => ONEZ_TYPE_TYPE_VAL,
         .unit => ONEZ_TYPE_UNIT,
+        .struct_instance => ONEZ_TYPE_STRUCT,
         else => ONEZ_TYPE_UNKNOWN,
     };
 }
@@ -1180,4 +1285,244 @@ test "hash_keys type mismatch" {
 
     var keys_handle: ?*anyopaque = null;
     try std.testing.expectEqual(ONEZ_ERR_TYPE_MISMATCH, onez_hash_keys(handle_ptr, val_handle, &keys_handle));
+}
+
+test "struct_get basic field access" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const code = "point: struct{ x y } ;\n10 20 make-point";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code.ptr, code.len));
+    var struct_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &struct_handle));
+    try std.testing.expectEqual(ONEZ_TYPE_STRUCT, onez_value_type(struct_handle));
+
+    var field_val: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_struct_get(handle_ptr, struct_handle, "x", 1, &field_val));
+    try std.testing.expectEqual(ONEZ_TYPE_FIXNUM, onez_value_type(field_val));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_value(handle_ptr, field_val));
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 10), out);
+
+    var field_y: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_struct_get(handle_ptr, struct_handle, "y", 1, &field_y));
+    try std.testing.expectEqual(ONEZ_OK, onez_push_value(handle_ptr, field_y));
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 20), out);
+}
+
+test "struct_get field not found" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const code = "point2: struct{ x y } ;\n1 2 make-point2";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code.ptr, code.len));
+    var struct_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &struct_handle));
+
+    var field_val: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_ERR_KEY_NOT_FOUND, onez_struct_get(handle_ptr, struct_handle, "z", 1, &field_val));
+    try std.testing.expect(onez_last_error(handle_ptr) != null);
+}
+
+test "struct_get type mismatch" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 42));
+    var val_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &val_handle));
+
+    var field_val: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_ERR_TYPE_MISMATCH, onez_struct_get(handle_ptr, val_handle, "x", 1, &field_val));
+}
+
+test "struct_get null handle and null value" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    var field_val: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_struct_get(null, null, "x", 1, &field_val));
+    try std.testing.expectEqual(ONEZ_ERR_NULL_VALUE, onez_struct_get(handle_ptr, null, "x", 1, &field_val));
+}
+
+test "push_symbol round-trip" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_symbol(handle_ptr, "foo", 3));
+    try std.testing.expectEqual(ONEZ_TYPE_SYMBOL, onez_stack_type(handle_ptr, 0));
+
+    var val_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &val_handle));
+    try std.testing.expectEqual(ONEZ_TYPE_SYMBOL, onez_value_type(val_handle));
+}
+
+test "push_symbol null handle" {
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_push_symbol(null, "x", 1));
+}
+
+test "push_array from handles" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    // Create three value handles
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 10));
+    var h0: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &h0));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 20));
+    var h1: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &h1));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 30));
+    var h2: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &h2));
+
+    const handles = [_]?*anyopaque{ h0, h1, h2 };
+    try std.testing.expectEqual(ONEZ_OK, onez_push_array(handle_ptr, &handles, 3));
+
+    var arr_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &arr_handle));
+    try std.testing.expectEqual(ONEZ_TYPE_ARRAY, onez_value_type(arr_handle));
+    try std.testing.expectEqual(@as(usize, 3), onez_array_length(arr_handle));
+
+    var elem: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_array_get(handle_ptr, arr_handle, 1, &elem));
+    try std.testing.expectEqual(ONEZ_OK, onez_push_value(handle_ptr, elem));
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 20), out);
+}
+
+test "push_array empty" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const handles = [_]?*anyopaque{};
+    try std.testing.expectEqual(ONEZ_OK, onez_push_array(handle_ptr, &handles, 0));
+
+    var arr_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &arr_handle));
+    try std.testing.expectEqual(ONEZ_TYPE_ARRAY, onez_value_type(arr_handle));
+    try std.testing.expectEqual(@as(usize, 0), onez_array_length(arr_handle));
+}
+
+test "push_array null element" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 1));
+    var h0: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &h0));
+
+    const handles = [_]?*anyopaque{ h0, null };
+    try std.testing.expectEqual(ONEZ_ERR_NULL_VALUE, onez_push_array(handle_ptr, &handles, 2));
+    try std.testing.expect(onez_last_error(handle_ptr) != null);
+}
+
+test "push_array null handle" {
+    const handles = [_]?*anyopaque{};
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_push_array(null, &handles, 0));
+}
+
+test "virtual_type_name basic" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const code = "duration: virtual{ fixnum } ;\n42 make-duration";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code.ptr, code.len));
+    var val_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &val_handle));
+    try std.testing.expectEqual(ONEZ_TYPE_TAGGED, onez_value_type(val_handle));
+
+    var name_ptr: [*]const u8 = undefined;
+    var name_len: usize = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_virtual_type_name(val_handle, &name_ptr, &name_len));
+    try std.testing.expectEqualStrings("duration", name_ptr[0..name_len]);
+}
+
+test "virtual_type_name type mismatch" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 42));
+    var val_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &val_handle));
+
+    var name_ptr: [*]const u8 = undefined;
+    var name_len: usize = 0;
+    try std.testing.expectEqual(ONEZ_ERR_TYPE_MISMATCH, onez_virtual_type_name(val_handle, &name_ptr, &name_len));
+}
+
+test "virtual_type_name null handle" {
+    var name_ptr: [*]const u8 = undefined;
+    var name_len: usize = 0;
+    try std.testing.expectEqual(ONEZ_ERR_NULL_VALUE, onez_virtual_type_name(null, &name_ptr, &name_len));
+}
+
+test "virtual_unwrap basic" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const code = "wrapper: virtual{ fixnum } ;\n99 make-wrapper";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code.ptr, code.len));
+    var val_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &val_handle));
+    try std.testing.expectEqual(ONEZ_TYPE_TAGGED, onez_value_type(val_handle));
+
+    var inner: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_virtual_unwrap(handle_ptr, val_handle, &inner));
+    try std.testing.expectEqual(ONEZ_TYPE_FIXNUM, onez_value_type(inner));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_value(handle_ptr, inner));
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 99), out);
+}
+
+test "virtual_unwrap type mismatch" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 42));
+    var val_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &val_handle));
+
+    var inner: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_ERR_TYPE_MISMATCH, onez_virtual_unwrap(handle_ptr, val_handle, &inner));
+}
+
+test "virtual_unwrap null handle and null value" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    var inner: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_virtual_unwrap(null, null, &inner));
+    try std.testing.expectEqual(ONEZ_ERR_NULL_VALUE, onez_virtual_unwrap(handle_ptr, null, &inner));
+}
+
+test "struct_instance returns ONEZ_TYPE_STRUCT" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const code = "pt: struct{ a b } ;\n1 2 make-pt";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code.ptr, code.len));
+    try std.testing.expectEqual(ONEZ_TYPE_STRUCT, onez_stack_type(handle_ptr, 0));
 }
