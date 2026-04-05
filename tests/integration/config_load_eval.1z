@@ -1,0 +1,25 @@
+use "testing" ;
+use "config" ;
+
+"load-config-eval basics" test-section
+t sandbox{ eval } "tests/fixtures/config_eval.1z" load-config-eval config?
+"load-config-eval returns config" assert-true
+
+42 sandbox{ eval } "tests/fixtures/config_eval.1z" load-config-eval "port" config-get
+"computed value from eval config" assert=
+
+"localhost"
+sandbox{ eval } "tests/fixtures/config_eval.1z" load-config-eval "host" config-get
+"string value from eval config" assert=
+
+"load-config-eval sandbox violation" test-section
+[ sandbox{ eval } "tests/fixtures/config_eval_sandbox.1z" load-config-eval ]
+"sandbox denies system capability" assert-error
+
+"load-config-eval with system capability" test-section
+t sandbox{ eval system } "tests/fixtures/config_eval_sandbox.1z" load-config-eval config?
+"eval config with system sandbox loads" assert-true
+
+"load-config-eval definitions don't leak" test-section
+sandbox{ eval } "tests/fixtures/config_eval.1z" load-config-eval drop
+[ helper ] "helper defined in config is not visible" assert-error

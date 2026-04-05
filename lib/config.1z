@@ -1,6 +1,7 @@
 \ lib/config.1z - Config type with dot-path traversal
 
 use "strings" ;
+use { quotation-has-calls?: } "runtime/introspect" ;
 
 \\ A config value wrapping a hash, providing dot-path access.
 config: virtual{ hash } ;
@@ -42,4 +43,30 @@ inspect: method{ config } [
 
 >string: method{ config } [
   unmake-config >string
+] ;
+
+\\ Load a data-only config file.
+\\
+\\ The file must evaluate to a single value using only literals and
+\\ parse-time constructors (H{}, V{}, S{}, arrays). Word calls are rejected.
+load-config-data: ( path -- config ) [
+  read: stream-open dup stream-read-all swap stream-close bytes>
+  "[ " swap #append " ]" #append eval-string
+  dup quotation-has-calls?
+  [ f "config contains word calls; use load-config-eval for computed configs" EInvalidArgument make-error throw ]
+  when
+  with-isolation
+  >config
+] ;
+
+\\ Load a computed config file.
+\\
+\\ The file is evaluated inside the given sandbox with isolation.
+\\ The sandbox must include the eval capability.
+load-config-eval: ( sandbox path -- config ) [
+  read: stream-open dup stream-read-all swap stream-close bytes>
+  [ eval-string ] curry
+  [ with-isolation ] curry
+  with-sandbox
+  >config
 ] ;

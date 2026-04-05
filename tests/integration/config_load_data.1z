@@ -1,0 +1,24 @@
+use "testing" ;
+use "config" ;
+
+"load-config-data basics" test-section
+t "tests/fixtures/config_data.1z" load-config-data config?
+"load-config-data returns config" assert-true
+
+8080 "tests/fixtures/config_data.1z" load-config-data "port" config-get
+"flat key from loaded config" assert=
+
+"localhost" "tests/fixtures/config_data.1z" load-config-data "host" config-get
+"string value from loaded config" assert=
+
+"load-config-data nested access" test-section
+"/var/db/app.db" "tests/fixtures/config_data.1z" load-config-data "db.path" config-get
+"nested dot-path on loaded config" assert=
+
+"load-config-data rejects word calls" test-section
+[ "tests/fixtures/config_data_calls.1z" load-config-data ]
+"data config with calls is rejected" assert-error
+
+"load-config-data missing file" test-section
+[ "tests/fixtures/no_such_file.1z" load-config-data ]
+"missing file throws error" assert-error

@@ -1,0 +1,26 @@
+=== load-config-data basics ===
+Stack: [ ]
+Stack: [ t t ]
+PASS: load-config-data returns config
+Stack: [ t ]
+Stack: [ t 8080 8080 ]
+PASS: flat key from loaded config
+Stack: [ t ]
+Stack: [ t "localhost" "localhost" ]
+PASS: string value from loaded config
+Stack: [ t ]
+=== load-config-data nested access ===
+Stack: [ t ]
+Stack: [ t "/var/db/app.db" "/var/db/app.db" ]
+PASS: nested dot-path on loaded config
+Stack: [ t ]
+=== load-config-data rejects word calls ===
+Stack: [ t ]
+Stack: [ t [ "tests/fixtures/config_data_calls.1z" load-config-data ] ]
+PASS: data config with calls is rejected
+Stack: [ t ]
+=== load-config-data missing file ===
+Stack: [ t ]
+Stack: [ t [ "tests/fixtures/no_such_file.1z" load-config-data ] ]
+PASS: missing file throws error
+Stack: [ t ]
