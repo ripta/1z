@@ -104,6 +104,7 @@ fn nativeSend(ctx: *Context) anyerror!void {
         }
 
         receiver.blocked_on_channel = null;
+        receiver.value_delivered = true;
         try scheduler.enqueue(receiver);
         return;
     }
@@ -124,6 +125,15 @@ fn nativeSend(ctx: *Context) anyerror!void {
 
     // coming back from blocking
     current.blocked_on_channel = null;
+
+    // A receiver may have taken our value directly while we were suspended.
+    // If so, the send is complete regardless of whether the channel was
+    // subsequently closed.
+    if (current.value_delivered) {
+        current.value_delivered = false;
+        return;
+    }
+
     if (current.cancelled) {
         ctx.thrown_error = .{
             .error_type = "task-cancelled",
@@ -167,6 +177,7 @@ fn nativeReceive(ctx: *Context) anyerror!void {
         try ctx.stack.push(copied);
 
         sender.blocked_on_channel = null;
+        sender.value_delivered = true;
         try scheduler.enqueue(sender);
         return;
     }
@@ -182,6 +193,7 @@ fn nativeReceive(ctx: *Context) anyerror!void {
             const sender_entry = ch.waiting_senders.orderedRemove(0);
             ch.buffer.push(sender_entry.value);
             sender_entry.task.blocked_on_channel = null;
+            sender_entry.task.value_delivered = true;
             try scheduler.enqueue(sender_entry.task);
         }
         return;
@@ -201,6 +213,15 @@ fn nativeReceive(ctx: *Context) anyerror!void {
 
     // resume from blocking
     current.blocked_on_channel = null;
+
+    // NOTE(ripta_: A sender may have delivered a value directly to our stack while we
+    //              were suspended. If so, the receive is complete regardless of whether
+    //              the channel was subsequently closed.
+    if (current.value_delivered) {
+        current.value_delivered = false;
+        return;
+    }
+
     if (current.cancelled) {
         ctx.thrown_error = .{
             .error_type = "task-cancelled",
