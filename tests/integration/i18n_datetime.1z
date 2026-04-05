@@ -69,6 +69,59 @@ drop
 2dup = "japanese calendar differs from gregorian" assert-false
 swap drop drop
 
+"locale-time-parts en-US" test-section
+
+0 0 make-timestamp "en-US" <locale> locale-time-parts
+dup year: @get 1970 "localized parts keep numeric year" assert=
+dup month-num: @get 1 "localized parts keep numeric month-num" assert=
+dup day: @get 1 "localized parts keep numeric day" assert=
+dup month: @get "January" "localized parts month en-US" assert=
+dup month-name: @get "January" "localized parts month-name en-US" assert=
+dup month-short: @get "Jan" "localized parts month-short en-US" assert=
+dup weekday: @get "Thursday" "localized parts weekday en-US" assert=
+dup weekday-name: @get "Thursday" "localized parts weekday-name en-US" assert=
+dup weekday-short: @get "Thu" "localized parts weekday-short en-US" assert=
+dup ampm: @get "AM" "localized parts ampm en-US" assert=
+dup era: @get? option:some? "localized parts era present in en-US" assert-true
+drop
+
+"locale-time-parts locale variation" test-section
+
+0 0 make-timestamp "en-US" <locale> locale-time-parts month-name: @get
+0 0 make-timestamp "de-DE" <locale> locale-time-parts month-name: @get
+2dup = "de-DE month differs from en-US" assert-false
+swap drop
+dup "Januar" = "de-DE localized month name" assert-true
+drop
+
+0 0 make-timestamp "en-US" <locale> locale-time-parts weekday-name: @get
+0 0 make-timestamp "de-DE" <locale> locale-time-parts weekday-name: @get
+2dup = "de-DE weekday differs from en-US" assert-false
+swap drop drop
+
+"locale-time-parts calendar extension" test-section
+
+0 0 make-timestamp "ja-JP" <locale> locale-time-parts era: @get? option:some?
+"gregorian ja-JP era present" assert-true
+
+0 0 make-timestamp "ja-JP-u-ca-japanese" <locale> locale-time-parts
+dup era: @get? option:some? "japanese calendar era present" assert-true
+dup era: @get "" = not "localized japanese era is non-empty" assert-true
+drop
+
+0 0 make-timestamp "ja-JP" <locale> locale-time-parts era: @get
+0 0 make-timestamp "ja-JP-u-ca-japanese" <locale> locale-time-parts era: @get
+2dup = "japanese calendar era differs from gregorian ja-JP" assert-false
+swap drop drop
+
+"locale-time-parts pre-1970" test-section
+
+-1 0 make-timestamp "en-US" <locale> locale-time-parts
+dup year: @get 1969 "localized parts pre-1970 year" assert=
+dup month-name: @get "December" "localized parts pre-1970 month" assert=
+dup weekday-name: @get "Wednesday" "localized parts pre-1970 weekday" assert=
+drop
+
 "timezone-aware variants" test-section
 
 "1/1/70"

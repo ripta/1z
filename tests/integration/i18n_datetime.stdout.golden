@@ -63,6 +63,73 @@ Stack: [ "1970年1月1日" "昭和45年1月1日" ]
 PASS: japanese calendar differs from gregorian
 Stack: [ "1970年1月1日" "昭和45年1月1日" ]
 Stack: [ ]
+=== locale-time-parts en-US ===
+Stack: [ ]
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" era: "AD" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: localized parts keep numeric year
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" era: "AD" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: localized parts keep numeric month-num
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" era: "AD" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: localized parts keep numeric day
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" era: "AD" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: localized parts month en-US
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" era: "AD" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: localized parts month-name en-US
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" era: "AD" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: localized parts month-short en-US
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" era: "AD" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: localized parts weekday en-US
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" era: "AD" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: localized parts weekday-name en-US
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" era: "AD" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: localized parts weekday-short en-US
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" era: "AD" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: localized parts ampm en-US
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" era: "AD" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: localized parts era present in en-US
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "AM" weekday: "Thursday" hour24: 0 weekday-short: "Thu" usec: 0 month-short: "Jan" month-name: "January" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "January" era: "AD" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "Thursday" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+Stack: [ ]
+=== locale-time-parts locale variation ===
+Stack: [ ]
+Stack: [ "January" ]
+Stack: [ "January" "Januar" ]
+PASS: de-DE month differs from en-US
+Stack: [ "January" "Januar" ]
+Stack: [ "Januar" ]
+PASS: de-DE localized month name
+Stack: [ "Januar" ]
+Stack: [ ]
+Stack: [ "Thursday" ]
+Stack: [ "Thursday" "Donnerstag" ]
+PASS: de-DE weekday differs from en-US
+Stack: [ "Thursday" "Donnerstag" ]
+Stack: [ ]
+=== locale-time-parts calendar extension ===
+Stack: [ ]
+Stack: [ t ]
+PASS: gregorian ja-JP era present
+Stack: [ ]
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "午前" weekday: "木曜日" hour24: 0 weekday-short: "木" usec: 0 month-short: "1月" month-name: "1月" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "1月" era: "昭和" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "木曜日" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: japanese calendar era present
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "午前" weekday: "木曜日" hour24: 0 weekday-short: "木" usec: 0 month-short: "1月" month-name: "1月" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "1月" era: "昭和" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "木曜日" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+PASS: localized japanese era is non-empty
+Stack: [ H{ hour: 0 nsec: 0 tz-name: "UTC" ampm: "午前" weekday: "木曜日" hour24: 0 weekday-short: "木" usec: 0 month-short: "1月" month-name: "1月" hour12: 12 tz: "+0000" yearday: 1 day: 1 month: "1月" era: "昭和" iso-week: 1 iso-weekday: 4 year: 1970 year-short: 70 sec: 0 month-num: 1 weekday-name: "木曜日" tz-offset: "+0000" min: 0 posix-weekday: 4 msec: 0 } ]
+Stack: [ ]
+Stack: [ "西暦" ]
+Stack: [ "西暦" "昭和" ]
+PASS: japanese calendar era differs from gregorian ja-JP
+Stack: [ "西暦" "昭和" ]
+Stack: [ ]
+=== locale-time-parts pre-1970 ===
+Stack: [ ]
+Stack: [ H{ hour: 23 nsec: 0 tz-name: "UTC" ampm: "PM" weekday: "Wednesday" hour24: 23 weekday-short: "Wed" usec: 0 month-short: "Dec" month-name: "December" hour12: 11 tz: "+0000" yearday: 365 day: 31 month: "December" era: "AD" iso-week: 53 iso-weekday: 3 year: 1969 year-short: 69 sec: 59 month-num: 12 weekday-name: "Wednesday" tz-offset: "+0000" min: 59 posix-weekday: 3 msec: 0 } ]
+PASS: localized parts pre-1970 year
+Stack: [ H{ hour: 23 nsec: 0 tz-name: "UTC" ampm: "PM" weekday: "Wednesday" hour24: 23 weekday-short: "Wed" usec: 0 month-short: "Dec" month-name: "December" hour12: 11 tz: "+0000" yearday: 365 day: 31 month: "December" era: "AD" iso-week: 53 iso-weekday: 3 year: 1969 year-short: 69 sec: 59 month-num: 12 weekday-name: "Wednesday" tz-offset: "+0000" min: 59 posix-weekday: 3 msec: 0 } ]
+PASS: localized parts pre-1970 month
+Stack: [ H{ hour: 23 nsec: 0 tz-name: "UTC" ampm: "PM" weekday: "Wednesday" hour24: 23 weekday-short: "Wed" usec: 0 month-short: "Dec" month-name: "December" hour12: 11 tz: "+0000" yearday: 365 day: 31 month: "December" era: "AD" iso-week: 53 iso-weekday: 3 year: 1969 year-short: 69 sec: 59 month-num: 12 weekday-name: "Wednesday" tz-offset: "+0000" min: 59 posix-weekday: 3 msec: 0 } ]
+PASS: localized parts pre-1970 weekday
+Stack: [ H{ hour: 23 nsec: 0 tz-name: "UTC" ampm: "PM" weekday: "Wednesday" hour24: 23 weekday-short: "Wed" usec: 0 month-short: "Dec" month-name: "December" hour12: 11 tz: "+0000" yearday: 365 day: 31 month: "December" era: "AD" iso-week: 53 iso-weekday: 3 year: 1969 year-short: 69 sec: 59 month-num: 12 weekday-name: "Wednesday" tz-offset: "+0000" min: 59 posix-weekday: 3 msec: 0 } ]
+Stack: [ ]
 === timezone-aware variants ===
 Stack: [ ]
 Stack: [ "1/1/70" ]

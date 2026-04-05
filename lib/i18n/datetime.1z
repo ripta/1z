@@ -25,20 +25,23 @@ ffi-def{
 \ --- Enum ---
 
 date-style: enum{
-  short: unit
+  short:  unit
   medium: unit
-  long: unit
-  full: unit
+  long:   unit
+  full:   unit
 } ;
 
 \ --- Constants ---
 
-(UDAT_FULL):   const [ 0 ] ;
-(UDAT_LONG):   const [ 1 ] ;
-(UDAT_MEDIUM): const [ 2 ] ;
-(UDAT_SHORT):  const [ 3 ] ;
-(UDAT_NONE):   const [ -1 ] ;
+(UDAT_FULL):      const [ 0 ] ;
+(UDAT_LONG):      const [ 1 ] ;
+(UDAT_MEDIUM):    const [ 2 ] ;
+(UDAT_SHORT):     const [ 3 ] ;
+(UDAT_NONE):      const [ -1 ] ;
+(UDAT_PATTERN):   const [ -2 ] ;
 (uchar-buf-size): const [ 256 ] ;
+
+ffi-uchar-args: struct{ buf data-ptr data-len } ;
 
 \ --- Internal helpers ---
 
@@ -75,6 +78,14 @@ date-style: enum{
   ] if
 ] ;
 
+\\ Convert a pattern string to UChar args for udat_open.
+(pattern>udat-args): ( pattern -- ffi-uchar-args ) [
+  utf8>uchar
+  over bytes>ffi-ptr+len drop
+  swap
+  make-ffi-uchar-args
+] ;
+
 \\ Validate a named timezone through the existing libc-based time library.
 \\ Empty name is the local timezone sentinel and is accepted as-is.
 (timezone>icu-tz-name): ( timezone -- string ) [
@@ -97,6 +108,27 @@ date-style: enum{
   swap (icu-check)
   \ Stack: icu-locale-id time-style date-style tz-buf tz-ptr tz-len pat-buf pat-ptr fmt-ptr
   nip nip nip nip nip nip nip nip
+] ;
+
+\\ Open a UDateFormat using an explicit ICU pattern in UTC.
+(open-pattern-format-utc): ( pattern locale -- fmt-ptr ) [
+  (locale>icu-id) swap
+  (pattern>udat-args)
+  "UTC" (tz-name>udat-args) make-ffi-uchar-args
+  1 bytes-alloc dup bytes>ffi-ptr+len drop
+  \ Stack: icu-locale-id pat-args tz-args status-buf status-ptr
+  (UDAT_PATTERN) (UDAT_PATTERN)
+  6 pick-n
+  5 pick-n data-ptr>>
+  6 pick-n data-len>>
+  8 pick-n data-ptr>>
+  9 pick-n data-len>>
+  0
+  (udat-open)
+  \ Stack: icu-locale-id pat-args tz-args status-buf status-ptr status fmt-ptr
+  swap (icu-check)
+  \ Stack: icu-locale-id pat-args tz-args status-buf status-ptr fmt-ptr
+  nip nip nip nip nip
 ] ;
 
 \\ Convert a timestamp to ICU UDate milliseconds.
@@ -132,6 +164,18 @@ date-style: enum{
 \\ Format a timestamp and close the UDateFormat handle.
 (format-and-close): ( timestamp fmt-ptr -- string ) [
   dup [ (format-with-date) ] dip (udat-close)
+] ;
+
+\\ Format a timestamp in UTC using an explicit ICU pattern string.
+(format-pattern-utc): ( timestamp locale pattern -- string ) [
+  swap
+  (open-pattern-format-utc)
+  (format-and-close)
+] ;
+
+\\ Conditionally add a key-value pair to the hash if value is non-empty.
+(time-parts-maybe-set): ( hash value key -- hash ) [
+  swap dup "" = [ 2drop ] [ @set ] if
 ] ;
 
 \\ Open a date-only formatter in UTC.
@@ -227,4 +271,19 @@ format-time-in: ( timestamp tz style locale -- string ) [
 format-datetime-in: ( timestamp tz style locale -- string ) [
   (open-datetime-style-format-in)
   (format-and-close)
+] ;
+
+\\ Decompose a timestamp into localized time/date parts in UTC.
+\\ Mirrors >time-parts for numeric fields while localizing display strings.
+locale-time-parts: ( timestamp locale -- hash ) [
+  over >time-parts
+  2 pick-n 2 pick-n "MMMM" (format-pattern-utc) month: swap @set
+  2 pick-n 2 pick-n "MMMM" (format-pattern-utc) month-name: swap @set
+  2 pick-n 2 pick-n "MMM" (format-pattern-utc) month-short: swap @set
+  2 pick-n 2 pick-n "EEEE" (format-pattern-utc) weekday: swap @set
+  2 pick-n 2 pick-n "EEEE" (format-pattern-utc) weekday-name: swap @set
+  2 pick-n 2 pick-n "EEE" (format-pattern-utc) weekday-short: swap @set
+  2 pick-n 2 pick-n "a" (format-pattern-utc) ampm: swap @set
+  2 pick-n 2 pick-n "G" (format-pattern-utc) era: (time-parts-maybe-set)
+  nip nip
 ] ;
