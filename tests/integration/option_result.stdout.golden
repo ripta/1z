@@ -323,3 +323,61 @@ PASS: try ok unwrap-or value
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
 PASS: boom
 Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== @get? ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? existing key is some
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? existing key value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? missing key is none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? with unwrap-or
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? missing with unwrap-or
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? key with false value is some
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? key with false value unwraps to f
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== #nth? ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #nth? valid index is some
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #nth? valid index value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #nth? out of bounds is none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #nth? negative index is none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #nth? empty seq is none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #nth? on string
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== #first? ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #first? non-empty is some
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #first? non-empty value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #first? empty is none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #first? on string
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== #last? ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #last? non-empty is some
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #last? non-empty value
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #last? empty is none
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #last? on string
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+=== option wrappers with combinators ===
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? then ?map
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: @get? none then ?map
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]
+PASS: #nth? then ?map
+Stack: [ <option:some option:some{ value: <color:red red:> }> ]

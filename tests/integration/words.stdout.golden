@@ -163,7 +163,10 @@ yield (  --  )
 === User-Defined Words ===
 #all ( seq quot -- ? )
 #any ( seq quot -- ? )
+#first? ( seq -- option )
+#last? ( seq -- option )
 #none ( seq quot -- ? )
+#nth? ( seq n -- option )
 ++ ( a1 -- a2 )
 -- ( a1 -- a2 )
 -@ ( a -- -a )
@@ -191,6 +194,7 @@ yield (  --  )
 ?flatten ( nested -- opt/res )
 ?map ( opt/res quot -- opt/res )
 ?or-else ( opt/res quot -- opt/res )
+@get? ( assoc key -- option )
 B{
 ECannotRedefineConst
 EDivisionByZero

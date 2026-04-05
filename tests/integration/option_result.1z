@@ -89,12 +89,12 @@ option:none {
 "match on result" test-section
 
 42 >result:ok {
-  result:ok:  [ 1 + ]
+  result:ok: [ 1 + ]
   result:err: [ drop -1 ]
 } match 43 "match ok" assert=
 
 "oops" "test" EUserThrown make-error >result:err {
-  result:ok:  [ 1 + ]
+  result:ok: [ 1 + ]
   result:err: [ drop -1 ]
 } match -1 "match err" assert=
 
@@ -217,66 +217,66 @@ option:none [ 2 * ] ?map option:none? t "?map none passes through" assert=
 "?and-then on option" test-section
 
 42 >option:some [ dup 0 > [ >option:some ] [ drop option:none ] if ] ?and-then
-  option:some> 42 "?and-then some with positive" assert=
+option:some> 42 "?and-then some with positive" assert=
 -1 >option:some [ dup 0 > [ >option:some ] [ drop option:none ] if ] ?and-then
-  option:none? t "?and-then some producing none" assert=
+option:none? t "?and-then some producing none" assert=
 option:none [ >option:some ] ?and-then
-  option:none? t "?and-then none passes through" assert=
+option:none? t "?and-then none passes through" assert=
 
 "?and-then on result" test-section
 
 42 >result:ok [ dup 0 > [ >result:ok ] [ drop "negative" "test" EUserThrown make-error >result:err ] if ] ?and-then
-  result:ok> 42 "?and-then ok with valid value" assert=
+result:ok> 42 "?and-then ok with valid value" assert=
 -1 >result:ok [ dup 0 > [ >result:ok ] [ drop "negative" "test" EUserThrown make-error >result:err ] if ] ?and-then
-  result:err? t "?and-then ok producing err" assert=
+result:err? t "?and-then ok producing err" assert=
 "oops" "test" EUserThrown make-error >result:err [ >result:ok ] ?and-then
-  result:err? t "?and-then err passes through" assert=
+result:err? t "?and-then err passes through" assert=
 
 "?or-else on option" test-section
 
 42 >option:some [ 99 >option:some ] ?or-else
-  option:some> 42 "?or-else some passes through" assert=
+option:some> 42 "?or-else some passes through" assert=
 option:none [ 99 >option:some ] ?or-else
-  option:some> 99 "?or-else none calls quot" assert=
+option:some> 99 "?or-else none calls quot" assert=
 option:none [ option:none ] ?or-else
-  option:none? t "?or-else none producing none" assert=
+option:none? t "?or-else none producing none" assert=
 
 "?or-else on result" test-section
 
 42 >result:ok [ 0 >result:ok ] ?or-else
-  result:ok> 42 "?or-else ok passes through" assert=
+result:ok> 42 "?or-else ok passes through" assert=
 "oops" "test" EUserThrown make-error >result:err [ 0 >result:ok ] ?or-else
-  result:ok> 0 "?or-else err calls quot" assert=
+result:ok> 0 "?or-else err calls quot" assert=
 "oops" "test" EUserThrown make-error >result:err [ "fallback" "test" EUserThrown make-error >result:err ] ?or-else
-  result:err? t "?or-else err producing err" assert=
+result:err? t "?or-else err producing err" assert=
 
 "?flatten on option" test-section
 
 42 >option:some >option:some ?flatten
-  option:some> 42 "?flatten some(some(x)) to some(x)" assert=
+option:some> 42 "?flatten some(some(x)) to some(x)" assert=
 option:none >option:some ?flatten
-  option:none? t "?flatten some(none) to none" assert=
+option:none? t "?flatten some(none) to none" assert=
 option:none ?flatten
-  option:none? t "?flatten none stays none" assert=
+option:none? t "?flatten none stays none" assert=
 
 "?flatten on result" test-section
 
 42 >result:ok >result:ok ?flatten
-  result:ok> 42 "?flatten ok(ok(x)) to ok(x)" assert=
+result:ok> 42 "?flatten ok(ok(x)) to ok(x)" assert=
 "oops" "test" EUserThrown make-error >result:err >result:ok ?flatten
-  result:err? t "?flatten ok(err(e)) to err(e)" assert=
+result:err? t "?flatten ok(err(e)) to err(e)" assert=
 "oops" "test" EUserThrown make-error >result:err ?flatten
-  result:err? t "?flatten err stays err" assert=
+result:err? t "?flatten err stays err" assert=
 
 "chaining combinators" test-section
 
 \ ?map then ?and-then
 42 >option:some [ 2 * ] ?map [ dup 100 < [ >option:some ] [ drop option:none ] if ] ?and-then
-  option:some> 84 "?map then ?and-then" assert=
+option:some> 84 "?map then ?and-then" assert=
 
 \ ?or-else as fallback chain
 option:none [ option:none ] ?or-else [ 7 >option:some ] ?or-else
-  option:some> 7 "chained ?or-else" assert=
+option:some> 7 "chained ?or-else" assert=
 
 \ generic error messages
 [ "?map requires an option or result" throw ] [ "?map requires an option or result" assert-error ] recover
@@ -304,7 +304,7 @@ option:none [ option:none ] ?or-else [ 7 >option:some ] ?or-else
 
 \ try chaining with ?and-then
 [ 42 ] try [ dup 0 > [ >result:ok ] [ drop "negative" throw ] if ] ?and-then
-  result:ok> 42 "try then ?and-then ok" assert=
+result:ok> 42 "try then ?and-then ok" assert=
 
 \ try with unwrap-or
 [ "oops" throw ] try 0 unwrap-or 0 "try err unwrap-or default" assert=
@@ -312,3 +312,44 @@ option:none [ option:none ] ?or-else [ 7 >option:some ] ?or-else
 
 \ try with unwrap-or-throw re-throws
 [ [ "boom" throw ] try unwrap-or-throw ] [ "boom" assert-error ] recover
+
+"@get?" test-section
+
+H{ x: 1 y: 2 } x: @get? option:some? t "@get? existing key is some" assert=
+H{ x: 1 y: 2 } x: @get? option:some> 1 "@get? existing key value" assert=
+H{ x: 1 y: 2 } z: @get? option:none? t "@get? missing key is none" assert=
+H{ x: 1 y: 2 } y: @get? 0 unwrap-or 2 "@get? with unwrap-or" assert=
+H{ x: 1 y: 2 } z: @get? 0 unwrap-or 0 "@get? missing with unwrap-or" assert=
+
+\ Resolves the f-as-sentinel ambiguity
+H{ x: f } x: @get? option:some? t "@get? key with false value is some" assert=
+H{ x: f } x: @get? option:some> f "@get? key with false value unwraps to f" assert=
+
+"#nth?" test-section
+
+{ 10 20 30 } 0 #nth? option:some? t "#nth? valid index is some" assert=
+{ 10 20 30 } 1 #nth? option:some> 20 "#nth? valid index value" assert=
+{ 10 20 30 } 5 #nth? option:none? t "#nth? out of bounds is none" assert=
+{ 10 20 30 } -1 #nth? option:none? t "#nth? negative index is none" assert=
+{ } 0 #nth? option:none? t "#nth? empty seq is none" assert=
+"hello" 1 #nth? option:some> "e" "#nth? on string" assert=
+
+"#first?" test-section
+
+{ 10 20 30 } #first? option:some? t "#first? non-empty is some" assert=
+{ 10 20 30 } #first? option:some> 10 "#first? non-empty value" assert=
+{ } #first? option:none? t "#first? empty is none" assert=
+"abc" #first? option:some> "a" "#first? on string" assert=
+
+"#last?" test-section
+
+{ 10 20 30 } #last? option:some? t "#last? non-empty is some" assert=
+{ 10 20 30 } #last? option:some> 30 "#last? non-empty value" assert=
+{ } #last? option:none? t "#last? empty is none" assert=
+"abc" #last? option:some> "c" "#last? on string" assert=
+
+"option wrappers with combinators" test-section
+
+H{ x: 42 } x: @get? [ 2 * ] ?map option:some> 84 "@get? then ?map" assert=
+H{ x: 42 } z: @get? [ 2 * ] ?map option:none? t "@get? none then ?map" assert=
+{ 10 20 30 } 1 #nth? [ 1 + ] ?map option:some> 21 "#nth? then ?map" assert=

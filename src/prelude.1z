@@ -378,3 +378,15 @@ unwrap-or-throw: method{ result } [ dup result:ok? [ result:ok> ] [ result:err> 
 
 \\ Call a quotation, wrapping success in result:ok and thrown errors in result:err.
 try: ( quot -- result ) [ [ call >result:ok ] [ >result:err ] recover ] ;
+
+\\ Look up a key in an associative, returning some(value) or none.
+@get?: ( assoc key -- option ) [ 2dup @has? [ @get >option:some ] [ 2drop option:none ] if ] ;
+
+\\ Get the nth element of a sequence, returning some(value) or none if out of bounds.
+#nth?: ( seq n -- option ) [ [ #nth >option:some ] [ drop option:none ] recover ] ;
+
+\\ Get the first element of a sequence, returning some(value) or none if empty.
+#first?: ( seq -- option ) [ [ #first >option:some ] [ drop option:none ] recover ] ;
+
+\\ Get the last element of a sequence, returning some(value) or none if empty.
+#last?: ( seq -- option ) [ [ #last >option:some ] [ drop option:none ] recover ] ;
