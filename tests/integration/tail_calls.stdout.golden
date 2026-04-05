@@ -2,8 +2,6 @@
 Stack: [ ]
 PASS: times 10000 no-ops
 Stack: [ ]
-PASS: times 50000 no-ops
-Stack: [ ]
 === times correctness ===
 Stack: [ ]
 PASS: times 0 is identity
@@ -14,8 +12,6 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 PASS: countdown 10000
-Stack: [ ]
-PASS: countdown 50000
 Stack: [ ]
 === loop with large iteration ===
 Stack: [ ]

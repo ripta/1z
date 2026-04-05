@@ -2,6 +2,13 @@
 
 use "testing" ;
 
+my-test-word: ( x -- y ) [ 1 + ] ;
+helper-word:         [ 42 ] ;
+no-effect-word:      [ 1 ] ;
+all-words-array?:    [ all-words array? ] ;
+all-words-dup-count: [ all-words >iterator [ name>> "dup" = ] #filter #count ] ;
+all-words-first-name-string?: [ all-words #first name>> string? ] ;
+
 "native.>word returns raw array for native word" test-section
 native.current-scope dup: native.>word
 dup array? t "native.>word returns an array" assert=
@@ -14,7 +21,6 @@ dup 4 #nth t "native.>word raw array native? is t" assert=
 7 #nth f "native.>word raw array source-loc is f for native word" assert=
 
 "native.>word returns raw array for compound word" test-section
-my-test-word: ( x -- y ) [ 1 + ] ;
 native.current-scope my-test-word: native.>word
 dup array? t "native.>word returns array for compound word" assert=
 dup 0 #nth "my-test-word" "native.>word raw array name for compound word" assert=
@@ -58,34 +64,22 @@ dup: >word-info? unwrap-or-throw name>> "dup" ">word-info? some contains word-in
 nonexistent-xyz: >word-info? option:none? t ">word-info? returns none for unknown word" assert=
 
 ">quotation still works" test-section
-helper-word: [ 42 ] ;
 "helper-word" >quotation call 42 ">quotation still resolves words" assert=
 
-">word-info on word without stack effect" test-section
-no-effect-word: [ 1 ] ;
-no-effect-word: >word-info
-stack-effect>> f ">word-info stack-effect is f when none declared" assert=
-
-">word-info module field" test-section
-dup: >word-info module>> f ">word-info module is f for non-module word" assert=
-
-">word-info doc field" test-section
-dup: >word-info doc>> string? t ">word-info doc is a string for documented word" assert=
-no-effect-word: >word-info doc>> f ">word-info doc is f for undocumented word" assert=
-
-">word-info methods field" test-section
-dup: >word-info methods>> array? t ">word-info methods is an array" assert=
+">word-info metadata fields" test-section
+dup: >word-info
+dup module>> f ">word-info module is f for non-module word" assert=
+dup doc>> string? t ">word-info doc is a string for documented word" assert=
+methods>> array? t ">word-info methods is an array" assert=
 unwrap-or: >word-info methods>> #len 0 > t "generic word has methods" assert=
+no-effect-word: >word-info
+dup stack-effect>> f ">word-info stack-effect is f when none declared" assert=
+doc>> f ">word-info doc is f for undocumented word" assert=
 
-"all-words returns an array" test-section
-all-words array? t "all-words returns an array" assert=
-
-"all-words contains known words" test-section
-all-words >iterator [ name>> "dup" = ] #filter #count
-1 "all-words contains dup exactly once" assert=
-
-"all-words entries are word-info structs" test-section
-all-words #first name>> string? t "all-words entries have string names" assert=
+"all-words basics" test-section
+all-words-array? t "all-words returns an array" assert=
+all-words-dup-count 1 "all-words contains dup exactly once" assert=
+all-words-first-name-string? t "all-words entries have string names" assert=
 
 "stack-effect >string with inputs and outputs" test-section
 dup: >word-info stack-effect>> >string "( a -- a a )" "stack-effect >string for dup" assert=

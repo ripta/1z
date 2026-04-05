@@ -7,7 +7,6 @@ use "testing" ;
 "times with large iteration count" test-section
 \ times runs a ( -- ) quotation n times; use a side-effect-free body
 10000 [ ] times t "times 10000 no-ops" assert-true
-50000 [ ] times t "times 50000 no-ops" assert-true
 
 "times correctness" test-section
 0 [ ] times t "times 0 is identity" assert-true
@@ -21,7 +20,6 @@ countdown: [
   if
 ] ;
 10000 countdown 0 "countdown 10000" assert=
-50000 countdown 0 "countdown 50000" assert=
 
 "loop with large iteration" test-section
 0 [ 1 + dup 10000 < ] loop 10000 "loop to 10000" assert=

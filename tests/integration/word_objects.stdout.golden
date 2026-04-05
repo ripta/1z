@@ -1,3 +1,9 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 === native.>word returns raw array for native word ===
 Stack: [ ]
 Stack: [ { "dup" { { { "a" f f f } } { { "a" f f f } { "a" f f f } } } "Duplicate top of stack." { } t f { } f f f f } ]
@@ -19,14 +25,13 @@ PASS: native.>word raw array source-loc is f for native word
 Stack: [ ]
 === native.>word returns raw array for compound word ===
 Stack: [ ]
-Stack: [ ]
-Stack: [ { "my-test-word" { { { "x" f f f } } { { "y" f f f } } } f { } f [ 1 + ] { } { "tests/integration/word_objects.1z" 17 34 } f f f } ]
+Stack: [ { "my-test-word" { { { "x" f f f } } { { "y" f f f } } } f { } f [ 1 + ] { } { "tests/integration/word_objects.1z" 5 34 } f f f } ]
 PASS: native.>word returns array for compound word
-Stack: [ { "my-test-word" { { { "x" f f f } } { { "y" f f f } } } f { } f [ 1 + ] { } { "tests/integration/word_objects.1z" 17 34 } f f f } ]
+Stack: [ { "my-test-word" { { { "x" f f f } } { { "y" f f f } } } f { } f [ 1 + ] { } { "tests/integration/word_objects.1z" 5 34 } f f f } ]
 PASS: native.>word raw array name for compound word
-Stack: [ { "my-test-word" { { { "x" f f f } } { { "y" f f f } } } f { } f [ 1 + ] { } { "tests/integration/word_objects.1z" 17 34 } f f f } ]
+Stack: [ { "my-test-word" { { { "x" f f f } } { { "y" f f f } } } f { } f [ 1 + ] { } { "tests/integration/word_objects.1z" 5 34 } f f f } ]
 PASS: native.>word raw array native? is f for compound word
-Stack: [ { "my-test-word" { { { "x" f f f } } { { "y" f f f } } } f { } f [ 1 + ] { } { "tests/integration/word_objects.1z" 17 34 } f f f } ]
+Stack: [ { "my-test-word" { { { "x" f f f } } { { "y" f f f } } } f { } f [ 1 + ] { } { "tests/integration/word_objects.1z" 5 34 } f f f } ]
 PASS: native.>word raw array source-loc is array for compound word
 Stack: [ ]
 === >word-info on native word ===
@@ -47,23 +52,23 @@ PASS: >word-info source-loc is f for native word
 Stack: [ ]
 === >word-info on compound word ===
 Stack: [ ]
-Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 17 column: 34 } module: f provenance: f compiled?: f } ]
+Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 5 column: 34 } module: f provenance: f compiled?: f } ]
 PASS: >word-info name for compound word
-Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 17 column: 34 } module: f provenance: f compiled?: f } ]
+Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 5 column: 34 } module: f provenance: f compiled?: f } ]
 PASS: >word-info native? for compound word
-Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 17 column: 34 } module: f provenance: f compiled?: f } ]
+Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 5 column: 34 } module: f provenance: f compiled?: f } ]
 PASS: >word-info body is quotation for compound word
-Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 17 column: 34 } module: f provenance: f compiled?: f } ]
-Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 17 column: 34 } module: f provenance: f compiled?: f } stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } ]
+Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 5 column: 34 } module: f provenance: f compiled?: f } ]
+Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 5 column: 34 } module: f provenance: f compiled?: f } stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } ]
 PASS: >word-info stack-effect inputs for compound word
-Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 17 column: 34 } module: f provenance: f compiled?: f } stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } ]
+Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 5 column: 34 } module: f provenance: f compiled?: f } stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } ]
 PASS: >word-info stack-effect outputs for compound word
-Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 17 column: 34 } module: f provenance: f compiled?: f } ]
-Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 17 column: 34 } module: f provenance: f compiled?: f } source-loc{ file: "tests/integration/word_objects.1z" line: 17 column: 34 } source-loc{ file: "tests/integration/word_objects.1z" line: 17 column: 34 } ]
+Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 5 column: 34 } module: f provenance: f compiled?: f } ]
+Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 5 column: 34 } module: f provenance: f compiled?: f } source-loc{ file: "tests/integration/word_objects.1z" line: 5 column: 34 } source-loc{ file: "tests/integration/word_objects.1z" line: 5 column: 34 } ]
 PASS: >word-info source-loc file is string
-Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 17 column: 34 } module: f provenance: f compiled?: f } source-loc{ file: "tests/integration/word_objects.1z" line: 17 column: 34 } ]
+Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 5 column: 34 } module: f provenance: f compiled?: f } source-loc{ file: "tests/integration/word_objects.1z" line: 5 column: 34 } ]
 PASS: >word-info source-loc line is positive
-Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 17 column: 34 } module: f provenance: f compiled?: f } ]
+Stack: [ word-info{ name: "my-test-word" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 5 column: 34 } module: f provenance: f compiled?: f } ]
 PASS: >word-info markers is an array
 Stack: [ ]
 === native.>word on nonexistent word throws ===
@@ -86,41 +91,29 @@ PASS: >word-info? returns none for unknown word
 Stack: [ ]
 === >quotation still works ===
 Stack: [ ]
-Stack: [ ]
 PASS: >quotation still resolves words
 Stack: [ ]
-=== >word-info on word without stack effect ===
+=== >word-info metadata fields ===
 Stack: [ ]
-Stack: [ ]
-Stack: [ word-info{ name: "no-effect-word" stack-effect: f doc: f markers: { } native?: f body: [ 1 ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 65 column: 23 } module: f provenance: f compiled?: f } ]
-PASS: >word-info stack-effect is f when none declared
-Stack: [ ]
-=== >word-info module field ===
-Stack: [ ]
+Stack: [ word-info{ name: "dup" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } } doc: "Duplicate top of stack." markers: { } native?: t body: f methods: { } source-loc: f module: f provenance: f compiled?: f } ]
 PASS: >word-info module is f for non-module word
-Stack: [ ]
-=== >word-info doc field ===
-Stack: [ ]
+Stack: [ word-info{ name: "dup" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } } doc: "Duplicate top of stack." markers: { } native?: t body: f methods: { } source-loc: f module: f provenance: f compiled?: f } ]
 PASS: >word-info doc is a string for documented word
-Stack: [ ]
-PASS: >word-info doc is f for undocumented word
-Stack: [ ]
-=== >word-info methods field ===
-Stack: [ ]
+Stack: [ word-info{ name: "dup" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } } } doc: "Duplicate top of stack." markers: { } native?: t body: f methods: { } source-loc: f module: f provenance: f compiled?: f } ]
 PASS: >word-info methods is an array
 Stack: [ ]
 PASS: generic word has methods
 Stack: [ ]
-=== all-words returns an array ===
+Stack: [ word-info{ name: "no-effect-word" stack-effect: f doc: f markers: { } native?: f body: [ 1 ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 7 column: 28 } module: f provenance: f compiled?: f } ]
+PASS: >word-info stack-effect is f when none declared
+Stack: [ word-info{ name: "no-effect-word" stack-effect: f doc: f markers: { } native?: f body: [ 1 ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 7 column: 28 } module: f provenance: f compiled?: f } ]
+PASS: >word-info doc is f for undocumented word
+Stack: [ ]
+=== all-words basics ===
 Stack: [ ]
 PASS: all-words returns an array
 Stack: [ ]
-=== all-words contains known words ===
-Stack: [ ]
-Stack: [ 1 ]
 PASS: all-words contains dup exactly once
-Stack: [ ]
-=== all-words entries are word-info structs ===
 Stack: [ ]
 PASS: all-words entries have string names
 Stack: [ ]

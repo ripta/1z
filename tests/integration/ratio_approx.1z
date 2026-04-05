@@ -6,7 +6,7 @@ math: "math" load ;
 15 e-approx ratio>float math.e "e-approx at 15 digits matches math.e" assert=
 
 "e-approx: type" test-section
-15 e-approx ratio? "e-approx returns ratio" assert-true
+10 e-approx ratio? "e-approx returns ratio" assert-true
 
 "e-approx: 30-digit precision" test-section
 30 e-approx 100000000000000000000 * >integer >string
@@ -16,7 +16,7 @@ math: "math" load ;
 15 pi-approx ratio>float math.pi "pi-approx at 15 digits matches math.pi" assert=
 
 "pi-approx: type" test-section
-15 pi-approx ratio? "pi-approx returns ratio" assert-true
+10 pi-approx ratio? "pi-approx returns ratio" assert-true
 
 "pi-approx: 30-digit precision" test-section
 30 pi-approx 100000000000000000000 * >integer >string
@@ -26,7 +26,7 @@ math: "math" load ;
 20 sqrt2-approx ratio>float 2.0 math.sqrt "sqrt2-approx matches sqrt(2)" assert=
 
 "sqrt2-approx: type" test-section
-15 sqrt2-approx ratio? "sqrt2-approx returns ratio" assert-true
+10 sqrt2-approx ratio? "sqrt2-approx returns ratio" assert-true
 
 "sqrt2-approx: 30-digit precision" test-section
 30 sqrt2-approx 100000000000000000000 * >integer >string
@@ -36,7 +36,7 @@ math: "math" load ;
 20 sqrt5-approx ratio>float 5.0 math.sqrt "sqrt5-approx matches sqrt(5)" assert=
 
 "sqrt5-approx: type" test-section
-15 sqrt5-approx ratio? "sqrt5-approx returns ratio" assert-true
+10 sqrt5-approx ratio? "sqrt5-approx returns ratio" assert-true
 
 "sqrt5-approx: 30-digit precision" test-section
 30 sqrt5-approx 100000000000000000000 * >integer >string
@@ -46,7 +46,7 @@ math: "math" load ;
 20 phi-approx ratio>float 5.0 math.sqrt 1.0 + 2.0 / "phi-approx matches phi" assert=
 
 "phi-approx: type" test-section
-15 phi-approx ratio? "phi-approx returns ratio" assert-true
+10 phi-approx ratio? "phi-approx returns ratio" assert-true
 
 "phi-approx: 30-digit precision" test-section
 30 phi-approx 100000000000000000000 * >integer >string
@@ -56,7 +56,7 @@ math: "math" load ;
 20 ln2-approx ratio>float 2.0 math.log "ln2-approx matches ln(2)" assert=
 
 "ln2-approx: type" test-section
-15 ln2-approx ratio? "ln2-approx returns ratio" assert-true
+10 ln2-approx ratio? "ln2-approx returns ratio" assert-true
 
 "ln2-approx: 30-digit precision" test-section
 30 ln2-approx 1000000000000000000000 * >integer >string
@@ -67,7 +67,7 @@ math: "math" load ;
 "ln10-approx matches ln(10) within 1 ULP" assert-true
 
 "ln10-approx: type" test-section
-15 ln10-approx ratio? "ln10-approx returns ratio" assert-true
+10 ln10-approx ratio? "ln10-approx returns ratio" assert-true
 
 "ln10-approx: 30-digit precision" test-section
 30 ln10-approx 100000000000000000000 * >integer >string

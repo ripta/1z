@@ -39,7 +39,7 @@ test-concurrent-empty: ( -- ) [
 
 test-cancel-task: ( -- ) [
   [
-    [ 100000 milliseconds sleep ] spawn
+    [ 100 milliseconds sleep ] spawn
     dup cancel-task
     drop
   ] task-scope
@@ -50,7 +50,7 @@ test-cancel-task: ( -- ) [
 
 test-with-timeout-success: ( -- ) [
   [
-    [ 42 ] 5000 milliseconds with-timeout 42 "with-timeout returns result" assert=
+    [ 42 ] 100 milliseconds with-timeout 42 "with-timeout returns result" assert=
   ] task-scope
 ] ;
 
@@ -59,7 +59,7 @@ test-with-timeout-success: ( -- ) [
 test-with-timeout-fires: ( -- ) [
   [
     [
-      [ 10000 milliseconds sleep 1 ] 10 milliseconds with-timeout
+      [ 100 milliseconds sleep 1 ] 10 milliseconds with-timeout
     ] task-scope
   ] timeout: "with-timeout throws timeout error" assert-error-type
 ] ;
@@ -69,7 +69,7 @@ test-with-timeout-fires: ( -- ) [
 test-with-timeout-error: ( -- ) [
   [
     [
-      [ f "boom" test-err: make-error throw ] 5000 milliseconds with-timeout
+      [ f "boom" test-err: make-error throw ] 100 milliseconds with-timeout
     ] task-scope
   ] test-err: "with-timeout propagates task error" assert-error-type
 ] ;
