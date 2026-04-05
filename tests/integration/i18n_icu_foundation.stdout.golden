@@ -1,0 +1,54 @@
+=== ICU library loading ===
+Stack: [ ]
+PASS: ICU libraries loaded successfully
+Stack: [ ]
+=== UTF-8 to UChar conversion ===
+Stack: [ ]
+Stack: [ B{ 0x68 0x00 0x65 0x00 0x6C 0x00 0x6C 0x00 0x6F 0x00 } 5 ]
+PASS: hello utf8>uchar length
+Stack: [ B{ 0x68 0x00 0x65 0x00 0x6C 0x00 0x6C 0x00 0x6F 0x00 } ]
+Stack: [ ]
+Stack: [ B{ 0x63 0x00 0x61 0x00 0x66 0x00 0xE9 0x00 } 4 ]
+PASS: café utf8>uchar length
+Stack: [ B{ 0x63 0x00 0x61 0x00 0x66 0x00 0xE9 0x00 } ]
+Stack: [ ]
+Stack: [ B{ 0xE5 0x65 0x2C 0x67 0x9E 0x8A } 3 ]
+PASS: 日本語 utf8>uchar length
+Stack: [ B{ 0xE5 0x65 0x2C 0x67 0x9E 0x8A } ]
+Stack: [ ]
+Stack: [ B{ } 0 ]
+PASS: empty utf8>uchar length
+Stack: [ B{ } ]
+Stack: [ ]
+=== UChar to UTF-8 round-trip ===
+Stack: [ ]
+Stack: [ "hello" ]
+PASS: hello round-trip
+Stack: [ ]
+Stack: [ "café" ]
+PASS: café round-trip
+Stack: [ ]
+Stack: [ "日本語" ]
+PASS: 日本語 round-trip
+Stack: [ ]
+Stack: [ "" ]
+PASS: empty round-trip
+Stack: [ ]
+Stack: [ "🎉" ]
+PASS: emoji round-trip
+Stack: [ ]
+=== ICU error handling ===
+Stack: [ ]
+Stack: [ ]
+PASS: (icu-check) passes on status 0
+Stack: [ ]
+Stack: [ ]
+PASS: (icu-check) passes on warning
+Stack: [ ]
+PASS: icu-check throws on error status
+Stack: [ ]
+=== u_errorName ===
+Stack: [ ]
+Stack: [ "U_ZERO_ERROR" ]
+PASS: u_errorName(0)
+Stack: [ ]

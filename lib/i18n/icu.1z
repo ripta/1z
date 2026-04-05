@@ -1,0 +1,108 @@
+\ lib/i18n/icu.1z - ICU FFI foundation for i18n support
+\
+\ Loads ICU shared libraries, provides error handling wrappers,
+\ and UTF-8 <-> UChar (UTF-16) string conversion helpers.
+\
+\ macOS: loads libicucore (single system library, all ICU symbols)
+\ Linux: loads libicuuc + libicui18n (separate libraries)
+\ All platforms use unsuffixed symbol names.
+
+use "ffi" ;
+
+\ --- Library loading and FFI bindings ---
+
+\ On macOS, ICU is a single system library (libicucore).
+\ On Linux, it's split into libicuuc (core) and libicui18n (formatting).
+\ Both platforms export symbols without version suffixes.
+
+sys-info "os" @get "macos" = [
+  "icucore" lib-open
+] [
+  "icuuc" lib-open
+] if
+
+ffi-def{
+  (u-error-name):    "u_errorName" ffi{ i32 -> cstring }
+  (u-str-from-utf8): "u_strFromUTF8" ffi{ ptr i32 out-i32 cstring i32 inout-i32 -> ptr }
+  (u-str-to-utf8):   "u_strToUTF8" ffi{ ptr i32 out-i32 ptr i32 inout-i32 -> ptr }
+} call "icu-uc-raw" swap >module reexport
+
+\ --- Error handling ---
+
+\\ ICU error marker for make-error.
+EICUError: [ icu-error: ] ;
+
+\\ Check an ICU UErrorCode. Throw EICUError if status > 0.
+\\ ICU convention: <= 0 is success (0 = U_ZERO_ERROR, negative = warning).
+(icu-check): ( status -- ) [
+  dup 0 > [
+    (u-error-name) f swap EICUError make-error throw
+  ] [
+    drop
+  ] if
+] ;
+
+\ --- String conversion ---
+
+\\ Convert a 1z UTF-8 string to a UChar (UTF-16) buffer.
+\\ Returns the byte-array containing UChar data and the UChar count.
+\\ Overallocates to avoid a preflight call: max UChar count <= byte length.
+utf8>uchar: ( string -- byte-array fixnum ) [
+  dup >bytes #len
+  \ Stack: string byte-len
+  dup 0 = [
+    drop drop 0 bytes-alloc 0
+  ] [
+    \ Allocate worst-case: byte-len UChars * 2 bytes each
+    dup 2 * bytes-alloc
+    \ Stack: string byte-len buf
+    dup bytes>ffi-ptr+len drop
+    \ Stack: string byte-len buf dest-ptr
+    2 pick-n
+    \ Stack: string byte-len buf dest-ptr capacity(=byte-len)
+    4 pick-n -1
+    \ Stack: string byte-len buf dest-ptr capacity string srcLen(-1=null-terminated)
+    0
+    \ Stack: string byte-len buf dest-ptr capacity string srcLen status(=0)
+    (u-str-from-utf8)
+    \ FFI pushes out-params in order, then return value on top:
+    \ Stack: string byte-len buf destLength status return-ptr
+    drop (icu-check)
+    \ Stack: string(3) byte-len(2) buf(1) destLength(0)
+    [ drop drop ] 2dip
+    \ Stack: buf(1) destLength(0)
+    \ Resize buf to destLength * 2 bytes (UChar is 16-bit).
+    swap over 2 * bytes-resize! swap
+  ] if
+] ;
+
+\\ Convert a UChar (UTF-16) buffer back to a 1z UTF-8 string.
+\\ Takes the byte-array containing UChar data and the UChar count.
+uchar>utf8: ( byte-array fixnum -- string ) [
+  dup 0 = [
+    2drop ""
+  ] [
+    \ Allocate worst-case: each UChar can produce up to 3 UTF-8 bytes
+    dup 3 * bytes-alloc
+    \ Stack: uchar-buf uchar-len out-buf
+    dup bytes>ffi-ptr+len drop
+    \ Stack: uchar-buf uchar-len out-buf dest-ptr
+    2 pick-n 3 *
+    \ Stack: uchar-buf uchar-len out-buf dest-ptr capacity
+    4 pick-n bytes>ffi-ptr+len drop
+    \ Stack: uchar-buf uchar-len out-buf dest-ptr capacity src-ptr
+    4 pick-n
+    \ Stack: uchar-buf uchar-len out-buf dest-ptr capacity src-ptr srcLen
+    0
+    \ Stack: uchar-buf uchar-len out-buf dest-ptr capacity src-ptr srcLen status
+    (u-str-to-utf8)
+    \ FFI pushes out-params in order, then return value on top:
+    \ Stack: uchar-buf uchar-len out-buf destLength status return-ptr
+    drop (icu-check)
+    \ Stack: uchar-buf uchar-len out-buf destLength
+    \ Keep out-buf and destLength, drop the rest.
+    [ drop drop ] 2dip
+    \ Stack: out-buf destLength
+    bytes-resize! bytes>
+  ] if
+] ;

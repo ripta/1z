@@ -1,0 +1,58 @@
+\ ICU FFI foundation tests
+
+use "testing" ;
+use "i18n/icu" ;
+
+"ICU library loading" test-section
+
+t t "ICU libraries loaded successfully" assert=
+
+"UTF-8 to UChar conversion" test-section
+
+"hello" utf8>uchar
+5 swap "hello utf8>uchar length" assert=
+drop
+
+"café" utf8>uchar
+4 swap "café utf8>uchar length" assert=
+drop
+
+"日本語" utf8>uchar
+3 swap "日本語 utf8>uchar length" assert=
+drop
+
+"" utf8>uchar
+0 swap "empty utf8>uchar length" assert=
+drop
+
+"UChar to UTF-8 round-trip" test-section
+
+"hello" utf8>uchar uchar>utf8
+"hello" swap "hello round-trip" assert=
+
+"café" utf8>uchar uchar>utf8
+"café" swap "café round-trip" assert=
+
+"日本語" utf8>uchar uchar>utf8
+"日本語" swap "日本語 round-trip" assert=
+
+"" utf8>uchar uchar>utf8
+"" swap "empty round-trip" assert=
+
+"🎉" utf8>uchar uchar>utf8
+"🎉" swap "emoji round-trip" assert=
+
+"ICU error handling" test-section
+
+0 (icu-check)
+t t "(icu-check) passes on status 0" assert=
+
+-1 (icu-check)
+t t "(icu-check) passes on warning" assert=
+
+[ 1 (icu-check) ] "icu-check throws on error status" assert-error
+
+"u_errorName" test-section
+
+0 (u-error-name)
+"U_ZERO_ERROR" swap "u_errorName(0)" assert=
