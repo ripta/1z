@@ -1,0 +1,75 @@
+\ Pluralization tests
+
+use "testing" ;
+use "i18n/pluralization" ;
+use "i18n/locale" ;
+
+"plural-category English" test-section
+
+other: 0 "en-US" <locale> plural-category "0 in English" assert=
+one: 1 "en-US" <locale> plural-category "1 in English" assert=
+other: 2 "en-US" <locale> plural-category "2 in English" assert=
+other: 5 "en-US" <locale> plural-category "5 in English" assert=
+other: 100 "en-US" <locale> plural-category "100 in English" assert=
+
+"plural-category fractional" test-section
+
+other: 1.5 "en-US" <locale> plural-category "1.5 in English" assert=
+other: 0.5 "en-US" <locale> plural-category "0.5 in English" assert=
+
+"plural-category Polish" test-section
+
+\ Polish: one (1), few (2-4), many (5-21, 0), other (fractions)
+one: 1 "pl-PL" <locale> plural-category "1 in Polish" assert=
+few: 2 "pl-PL" <locale> plural-category "2 in Polish" assert=
+few: 3 "pl-PL" <locale> plural-category "3 in Polish" assert=
+few: 4 "pl-PL" <locale> plural-category "4 in Polish" assert=
+many: 5 "pl-PL" <locale> plural-category "5 in Polish" assert=
+many: 0 "pl-PL" <locale> plural-category "0 in Polish" assert=
+many: 12 "pl-PL" <locale> plural-category "12 in Polish" assert=
+
+"plural-category Arabic" test-section
+
+\ Arabic has all six categories
+zero: 0 "ar" <locale> plural-category "0 in Arabic" assert=
+one: 1 "ar" <locale> plural-category "1 in Arabic" assert=
+two: 2 "ar" <locale> plural-category "2 in Arabic" assert=
+few: 3 "ar" <locale> plural-category "3 in Arabic" assert=
+many: 11 "ar" <locale> plural-category "11 in Arabic" assert=
+
+"pluralize with # interpolation" test-section
+
+"5 cats"
+5 H{ one: "# cat" other: "# cats" } "en-US" <locale> pluralize
+"plural cats" assert=
+
+"1 cat"
+1 H{ one: "# cat" other: "# cats" } "en-US" <locale> pluralize
+"singular cat" assert=
+
+"pluralize without #" test-section
+
+"mice"
+5 H{ one: "mouse" other: "mice" } "en-US" <locale> pluralize
+"irregular plural" assert=
+
+"mouse"
+1 H{ one: "mouse" other: "mice" } "en-US" <locale> pluralize
+"irregular singular" assert=
+
+"pluralize fallback to other:" test-section
+
+"items"
+0 H{ other: "items" } "en-US" <locale> pluralize
+"fallback when one: missing" assert=
+
+"pluralize locale-aware # formatting" test-section
+
+"1,000 items"
+1000 H{ one: "# item" other: "# items" } "en-US" <locale> pluralize
+"large number with grouping" assert=
+
+"pluralize missing other: throws" test-section
+
+[ 5 H{ one: "thing" } "en-US" <locale> pluralize ]
+"missing other: throws" assert-error

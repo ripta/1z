@@ -1,0 +1,83 @@
+=== plural-category English ===
+Stack: [ ]
+PASS: 0 in English
+Stack: [ ]
+PASS: 1 in English
+Stack: [ ]
+PASS: 2 in English
+Stack: [ ]
+PASS: 5 in English
+Stack: [ ]
+PASS: 100 in English
+Stack: [ ]
+=== plural-category fractional ===
+Stack: [ ]
+PASS: 1.5 in English
+Stack: [ ]
+PASS: 0.5 in English
+Stack: [ ]
+=== plural-category Polish ===
+Stack: [ ]
+PASS: 1 in Polish
+Stack: [ ]
+PASS: 2 in Polish
+Stack: [ ]
+PASS: 3 in Polish
+Stack: [ ]
+PASS: 4 in Polish
+Stack: [ ]
+PASS: 5 in Polish
+Stack: [ ]
+PASS: 0 in Polish
+Stack: [ ]
+PASS: 12 in Polish
+Stack: [ ]
+=== plural-category Arabic ===
+Stack: [ ]
+PASS: 0 in Arabic
+Stack: [ ]
+PASS: 1 in Arabic
+Stack: [ ]
+PASS: 2 in Arabic
+Stack: [ ]
+PASS: 3 in Arabic
+Stack: [ ]
+PASS: 11 in Arabic
+Stack: [ ]
+=== pluralize with # interpolation ===
+Stack: [ ]
+Stack: [ "5 cats" ]
+Stack: [ "5 cats" "5 cats" ]
+PASS: plural cats
+Stack: [ ]
+Stack: [ "1 cat" ]
+Stack: [ "1 cat" "1 cat" ]
+PASS: singular cat
+Stack: [ ]
+=== pluralize without # ===
+Stack: [ ]
+Stack: [ "mice" ]
+Stack: [ "mice" "mice" ]
+PASS: irregular plural
+Stack: [ ]
+Stack: [ "mouse" ]
+Stack: [ "mouse" "mouse" ]
+PASS: irregular singular
+Stack: [ ]
+=== pluralize fallback to other: ===
+Stack: [ ]
+Stack: [ "items" ]
+Stack: [ "items" "items" ]
+PASS: fallback when one: missing
+Stack: [ ]
+=== pluralize locale-aware # formatting ===
+Stack: [ ]
+Stack: [ "1,000 items" ]
+Stack: [ "1,000 items" "1,000 items" ]
+PASS: large number with grouping
+Stack: [ ]
+=== pluralize missing other: throws ===
+Stack: [ ]
+Stack: [ [ 5 H{ one: "thing" } "en-US" <locale> pluralize ] ]
+PASS: missing other: throws
+Stack: [ ]

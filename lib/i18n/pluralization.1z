@@ -1,0 +1,114 @@
+\ lib/i18n/pluralization.1z - ICU plural rule support
+\
+\ Provides plural-category and pluralize via ICU's uplrules_* API.
+\ Uses CLDR plural rules for locale-aware pluralization.
+
+use "ffi" ;
+use "strings" ;
+use "i18n/icu" ;
+use "i18n/locale" ;
+use "i18n/number" ;
+
+\ --- Library loading and FFI bindings ---
+
+sys-info "os" @get "macos" = [
+  "icucore" lib-open
+] [
+  "icui18n" lib-open
+] if
+
+ffi-def{
+  (uplrules-open):   "uplrules_open" ffi{ cstring inout-i32 -> ptr }
+  (uplrules-close):  "uplrules_close" ffi{ ptr -> void }
+  (uplrules-select): "uplrules_select" ffi{ ptr f64 ptr i32 inout-i32 -> i32 }
+} call "icu-plrules-raw" swap >module reexport
+
+\ --- Constants ---
+
+(keyword-buf-size): const [ 32 ] ;
+
+\ --- Internal helpers ---
+
+\\ Allocate a UChar buffer for keyword output.
+(alloc-keyword-buf): ( -- byte-array ptr ) [
+  (keyword-buf-size) 2 * bytes-alloc
+  dup bytes>ffi-ptr+len drop
+] ;
+
+\\ Extract the ICU locale ID from a locale value.
+(locale>icu-id): ( locale -- icu-locale-id ) [
+  unmake-locale (bcp47>icu-id)
+] ;
+
+\ --- Public words ---
+
+\\ Return the CLDR plural category for a number in the given locale.
+\\ Categories are: zero:, one:, two:, few:, many:, other:.
+plural-category: ( n locale -- symbol ) [
+  (locale>icu-id)
+  \ Stack: n icu-id
+  dup 0 (uplrules-open)
+  \ Stack: n icu-id status rules-ptr
+  swap (icu-check)
+  \ Stack: n icu-id rules-ptr
+  nip
+  \ Stack: n rules-ptr
+  swap >float swap
+  \ Stack: f64-val rules-ptr
+  (alloc-keyword-buf)
+  \ Stack: f64-val rules-ptr buf ptr
+  2 pick-n 4 pick-n 2 pick-n (keyword-buf-size) 0
+  \ Stack: f64-val rules-ptr buf ptr rules-ptr f64-val ptr capacity status
+  (uplrules-select)
+  \ Stack: f64-val rules-ptr buf ptr status actual-len
+  swap (icu-check)
+  \ Stack: f64-val rules-ptr buf ptr actual-len
+  swap drop
+  \ Stack: f64-val rules-ptr buf actual-len
+  uchar>utf8
+  \ Stack: f64-val rules-ptr keyword-string
+  >symbol
+  \ Stack: f64-val rules-ptr keyword-symbol
+  swap (uplrules-close)
+  \ Stack: f64-val keyword-symbol
+  nip
+] ;
+
+\\ Pluralize a number using a hash of category forms.
+\\ Forms map CLDR category symbols to strings. If a form contains #,
+\\ it is replaced with the locale-formatted number. Falls back to
+\\ other: when the exact category is not in the forms hash.
+\\
+\\ Examples:
+\\   5 H{ one: "# cat" other: "# cats" } "en-US" <locale> pluralize
+\\   => "5 cats"
+\\   5 H{ one: "mouse" other: "mice" } "en-US" <locale> pluralize
+\\   => "mice"
+pluralize: ( n forms locale -- string ) [
+  \ Stack: n forms locale
+  2 pick-n over
+  \ Stack: n forms locale n locale
+  plural-category
+  \ Stack: n forms locale category
+
+  \ Look up form; fall back to other:
+  \ Stack: n forms locale category
+  2 pick-n over @has? [
+    \ Stack: n forms locale category
+    2 pick-n swap @get
+  ] [
+    \ Stack: n forms locale category
+    drop 2 pick-n other: @get
+  ] if
+  \ Stack: n forms locale form-str
+
+  \ Format number with locale for # interpolation
+  3 pick-n 2 pick-n format-number
+  \ Stack: n forms locale form-str num-str
+
+  \ Replace # with formatted number
+  swap "#" split swap #join
+  \ Stack: n forms locale result
+
+  nip nip nip
+] ;
