@@ -1,0 +1,88 @@
+\ lib/i18n/textdirection.1z - Text direction queries and bidi markers
+\
+\ Provides text-direction (locale -> ltr:/rtl:), script-direction
+\ (script code -> ltr:/rtl:), and Unicode bidi marker constants
+\ via ICU's uloc_getCharacterOrientation and uscript_* API.
+
+use "ffi" ;
+use "i18n/icu" ;
+use "i18n/locale" ;
+
+\ --- Library loading and FFI bindings ---
+
+sys-info "os" @get "macos" = [
+  "icucore" lib-open
+] [
+  "icuuc" lib-open
+] if
+
+ffi-def{
+  (uloc-get-char-orient): "uloc_getCharacterOrientation" ffi{ cstring inout-i32 -> i32 }
+  (uscript-get-code):     "uscript_getCode" ffi{ cstring out-i32 i32 inout-i32 -> i32 }
+  (uscript-is-rtl):       "uscript_isRightToLeft" ffi{ i32 -> i32 }
+} call "icu-textdir-raw" swap >module reexport
+
+\ --- Constants ---
+
+(ULOC_LAYOUT_RTL): const [ 1 ] ;
+
+\ --- Internal helpers ---
+
+\\ Extract the ICU locale ID from a locale value.
+(locale>icu-id): ( locale -- icu-locale-id ) [
+  unmake-locale (bcp47>icu-id)
+] ;
+
+\ --- Public query words ---
+
+\\ Return the character orientation of a locale as a symbol.
+\\ Returns rtl: for right-to-left locales (Arabic, Hebrew, etc.),
+\\ ltr: for everything else.
+text-direction: ( locale -- symbol ) [
+  (locale>icu-id)
+  0 (uloc-get-char-orient)
+  \ Stack: status layout-type
+  swap (icu-check)
+  (ULOC_LAYOUT_RTL) = [ rtl: ] [ ltr: ] if
+] ;
+
+\\ Return the directionality of a script as a symbol.
+\\ Takes an ISO 15924 script code (e.g., "Arab", "Latn", "Hebr").
+\\ Returns rtl: for right-to-left scripts, ltr: otherwise.
+\\ Unknown script codes default to ltr:.
+script-direction: ( string -- symbol ) [
+  1 0 (uscript-get-code)
+  \ Stack: script-code status count
+  swap (icu-check)
+  \ Stack: script-code count
+  0 > [
+    (uscript-is-rtl) 0 > [ rtl: ] [ ltr: ] if
+  ] [
+    drop ltr:
+  ] if
+] ;
+
+\ --- Bidi marker constants ---
+
+\\ U+200E Left-to-Right Mark
+bidi-lrm: const [ "\u{200E}" ] ;
+\\ U+200F Right-to-Left Mark
+bidi-rlm: const [ "\u{200F}" ] ;
+\\ U+202A Left-to-Right Embedding
+bidi-lre: const [ "\u{202A}" ] ;
+\\ U+202B Right-to-Left Embedding
+bidi-rle: const [ "\u{202B}" ] ;
+\\ U+202C Pop Directional Formatting
+bidi-pdf: const [ "\u{202C}" ] ;
+\\ U+202D Left-to-Right Override
+bidi-lro: const [ "\u{202D}" ] ;
+\\ U+202E Right-to-Left Override
+bidi-rlo: const [ "\u{202E}" ] ;
+\\ U+2066 Left-to-Right Isolate
+bidi-lri: const [ "\u{2066}" ] ;
+\\ U+2067 Right-to-Left Isolate
+bidi-rli: const [ "\u{2067}" ] ;
+\\ U+2068 First Strong Isolate
+bidi-fsi: const [ "\u{2068}" ] ;
+\\ U+2069 Pop Directional Isolate
+bidi-pdi: const [ "\u{2069}" ] ;

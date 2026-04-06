@@ -1,0 +1,47 @@
+\ Text direction tests
+
+use "testing" ;
+use "i18n/textdirection" ;
+use "i18n/locale" ;
+
+"text-direction LTR locales" test-section
+
+ltr: "en-US" <locale> text-direction "en-US is LTR" assert=
+ltr: "fr-FR" <locale> text-direction "fr-FR is LTR" assert=
+ltr: "de-DE" <locale> text-direction "de-DE is LTR" assert=
+ltr: "ja" <locale> text-direction "ja is LTR" assert=
+
+"text-direction RTL locales" test-section
+
+rtl: "ar" <locale> text-direction "ar is RTL" assert=
+rtl: "he" <locale> text-direction "he is RTL" assert=
+rtl: "fa" <locale> text-direction "fa is RTL" assert=
+
+"script-direction LTR scripts" test-section
+
+ltr: "Latn" script-direction "Latn is LTR" assert=
+ltr: "Cyrl" script-direction "Cyrl is LTR" assert=
+ltr: "Grek" script-direction "Grek is LTR" assert=
+
+"script-direction RTL scripts" test-section
+
+rtl: "Arab" script-direction "Arab is RTL" assert=
+rtl: "Hebr" script-direction "Hebr is RTL" assert=
+
+"bidi marker constants" test-section
+
+1 bidi-lrm #len "bidi-lrm is 1 char" assert=
+1 bidi-rlm #len "bidi-rlm is 1 char" assert=
+1 bidi-lre #len "bidi-lre is 1 char" assert=
+1 bidi-rle #len "bidi-rle is 1 char" assert=
+1 bidi-pdf #len "bidi-pdf is 1 char" assert=
+1 bidi-lro #len "bidi-lro is 1 char" assert=
+1 bidi-rlo #len "bidi-rlo is 1 char" assert=
+1 bidi-lri #len "bidi-lri is 1 char" assert=
+1 bidi-rli #len "bidi-rli is 1 char" assert=
+1 bidi-fsi #len "bidi-fsi is 1 char" assert=
+1 bidi-pdi #len "bidi-pdi is 1 char" assert=
+
+\ Verify markers are distinct
+bidi-lrm bidi-rlm = not "lrm != rlm" assert-true
+bidi-lri bidi-rli = not "lri != rli" assert-true

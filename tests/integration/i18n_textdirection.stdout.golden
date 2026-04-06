@@ -1,0 +1,60 @@
+=== text-direction LTR locales ===
+Stack: [ ]
+PASS: en-US is LTR
+Stack: [ ]
+PASS: fr-FR is LTR
+Stack: [ ]
+PASS: de-DE is LTR
+Stack: [ ]
+PASS: ja is LTR
+Stack: [ ]
+=== text-direction RTL locales ===
+Stack: [ ]
+PASS: ar is RTL
+Stack: [ ]
+PASS: he is RTL
+Stack: [ ]
+PASS: fa is RTL
+Stack: [ ]
+=== script-direction LTR scripts ===
+Stack: [ ]
+PASS: Latn is LTR
+Stack: [ ]
+PASS: Cyrl is LTR
+Stack: [ ]
+PASS: Grek is LTR
+Stack: [ ]
+=== script-direction RTL scripts ===
+Stack: [ ]
+PASS: Arab is RTL
+Stack: [ ]
+PASS: Hebr is RTL
+Stack: [ ]
+=== bidi marker constants ===
+Stack: [ ]
+PASS: bidi-lrm is 1 char
+Stack: [ ]
+PASS: bidi-rlm is 1 char
+Stack: [ ]
+PASS: bidi-lre is 1 char
+Stack: [ ]
+PASS: bidi-rle is 1 char
+Stack: [ ]
+PASS: bidi-pdf is 1 char
+Stack: [ ]
+PASS: bidi-lro is 1 char
+Stack: [ ]
+PASS: bidi-rlo is 1 char
+Stack: [ ]
+PASS: bidi-lri is 1 char
+Stack: [ ]
+PASS: bidi-rli is 1 char
+Stack: [ ]
+PASS: bidi-fsi is 1 char
+Stack: [ ]
+PASS: bidi-pdi is 1 char
+Stack: [ ]
+PASS: lrm != rlm
+Stack: [ ]
+PASS: lri != rli
+Stack: [ ]
