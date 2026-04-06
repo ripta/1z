@@ -38,3 +38,75 @@ Stack: [ ]
 Stack: [ ]
 PASS: empty inspect
 Stack: [ ]
+=== load-catalog ===
+Stack: [ ]
+Stack: [ <message-catalog H{ de-DE: H{ farewell: "Auf Wiedersehen!" greeting: "Hallo!" } en-US: H{ farewell: "Goodbye!" greeting: "Hello!" app-title: "My App" } }> ]
+Stack: [ <message-catalog H{ de-DE: H{ farewell: "Auf Wiedersehen!" greeting: "Hallo!" } en-US: H{ farewell: "Goodbye!" greeting: "Hello!" app-title: "My App" } }> "Hello!" ]
+PASS: en-US greeting
+Stack: [ <message-catalog H{ de-DE: H{ farewell: "Auf Wiedersehen!" greeting: "Hallo!" } en-US: H{ farewell: "Goodbye!" greeting: "Hello!" app-title: "My App" } }> ]
+Stack: [ <message-catalog H{ de-DE: H{ farewell: "Auf Wiedersehen!" greeting: "Hallo!" } en-US: H{ farewell: "Goodbye!" greeting: "Hello!" app-title: "My App" } }> "Hallo!" ]
+PASS: de-DE greeting
+Stack: [ <message-catalog H{ de-DE: H{ farewell: "Auf Wiedersehen!" greeting: "Hallo!" } en-US: H{ farewell: "Goodbye!" greeting: "Hello!" app-title: "My App" } }> ]
+Stack: [ <message-catalog H{ de-DE: H{ farewell: "Auf Wiedersehen!" greeting: "Hallo!" } en-US: H{ farewell: "Goodbye!" greeting: "Hello!" app-title: "My App" } }> "Goodbye!" ]
+PASS: en-US farewell
+Stack: [ <message-catalog H{ de-DE: H{ farewell: "Auf Wiedersehen!" greeting: "Hallo!" } en-US: H{ farewell: "Goodbye!" greeting: "Hello!" app-title: "My App" } }> ]
+Stack: [ f ]
+PASS: ignore-me not loaded
+Stack: [ ]
+=== load-catalog rejects word calls ===
+Stack: [ ]
+Stack: [ [ "tests/fixtures/catalogs_bad" load-catalog ] ]
+PASS: rejects word calls
+Stack: [ ]
+=== catalog-get? found ===
+Stack: [ ]
+Stack: [ <message-catalog H{ }> ]
+Stack: [ <message-catalog H{ en-US: H{ greeting: "Hello!" } }> ]
+Stack: [ "Hello!" t ]
+PASS: found flag
+Stack: [ "Hello!" ]
+PASS: found value
+Stack: [ ]
+=== catalog-get? fallback ===
+Stack: [ ]
+Stack: [ <message-catalog H{ }> ]
+Stack: [ <message-catalog H{ de-DE: H{ greeting: "Hallo!" } }> ]
+Stack: [ <message-catalog H{ de-DE: H{ greeting: "Hallo!" } en-US: H{ greeting: "Hello!" app-title: "My App" } }> ]
+Stack: [ "My App" t ]
+PASS: fallback found flag
+Stack: [ "My App" ]
+PASS: fallback found value
+Stack: [ ]
+=== catalog-get? not found ===
+Stack: [ ]
+Stack: [ <message-catalog H{ }> ]
+Stack: [ <message-catalog H{ en-US: H{ greeting: "Hello!" } }> ]
+Stack: [ f ]
+PASS: not found flag
+Stack: [ ]
+=== catalog-get found ===
+Stack: [ ]
+Stack: [ <message-catalog H{ }> ]
+Stack: [ <message-catalog H{ en-US: H{ greeting: "Hello!" } }> ]
+Stack: [ "Hello!" ]
+PASS: get found
+Stack: [ ]
+=== catalog-get throws on missing ===
+Stack: [ ]
+Stack: [ [ <message-catalog> H{ greeting: "Hello!" } "en-US" <locale> catalog-set missing-key: "en-US" <locale> <locale-chain> catalog-get ] ]
+PASS: missing key throws
+Stack: [ ]
+=== catalog-get-or found ===
+Stack: [ ]
+Stack: [ <message-catalog H{ }> ]
+Stack: [ <message-catalog H{ en-US: H{ greeting: "Hello!" } }> ]
+Stack: [ "Hello!" ]
+PASS: get-or found
+Stack: [ ]
+=== catalog-get-or default ===
+Stack: [ ]
+Stack: [ <message-catalog H{ }> ]
+Stack: [ <message-catalog H{ en-US: H{ greeting: "Hello!" } }> ]
+Stack: [ "fallback" ]
+PASS: get-or default
+Stack: [ ]

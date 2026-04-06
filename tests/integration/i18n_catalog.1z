@@ -1,6 +1,7 @@
 use "testing" ;
 use "i18n/locale" ;
 use "i18n/catalog" ;
+use "i18n/localechain" ;
 
 "<message-catalog> constructor" test-section
 <message-catalog> unmake-message-catalog H{ } swap "empty catalog" assert=
@@ -33,3 +34,77 @@ unmake-message-catalog "en-US" @get greeting: @get
 
 "inspect" test-section
 <message-catalog> inspect "<message-catalog H{ }>" swap "empty inspect" assert=
+
+\ --- load-catalog ---
+
+"load-catalog" test-section
+"tests/fixtures/catalogs" load-catalog
+
+dup greeting: "en-US" <locale> <locale-chain> catalog-get
+"Hello!" swap "en-US greeting" assert=
+
+dup greeting: "de-DE" <locale> <locale-chain> catalog-get
+"Hallo!" swap "de-DE greeting" assert=
+
+dup farewell: "en-US" <locale> <locale-chain> catalog-get
+"Goodbye!" swap "en-US farewell" assert=
+
+app-title: "de-DE" <locale> <locale-chain> catalog-get?
+f swap "ignore-me not loaded" assert=
+
+"load-catalog rejects word calls" test-section
+[ "tests/fixtures/catalogs_bad" load-catalog ]
+"rejects word calls" assert-error
+
+\ --- catalog-get? ---
+
+"catalog-get? found" test-section
+<message-catalog>
+H{ greeting: "Hello!" } "en-US" <locale> catalog-set
+greeting: "en-US" <locale> <locale-chain> catalog-get?
+t swap "found flag" assert=
+"Hello!" swap "found value" assert=
+
+"catalog-get? fallback" test-section
+<message-catalog>
+H{ greeting: "Hallo!" } "de-DE" <locale> catalog-set
+H{ greeting: "Hello!" app-title: "My App" } "en-US" <locale> catalog-set
+app-title: "de-DE" <locale> "en-US" <locale> <locale-chain-with> catalog-get?
+t swap "fallback found flag" assert=
+"My App" swap "fallback found value" assert=
+
+"catalog-get? not found" test-section
+<message-catalog>
+H{ greeting: "Hello!" } "en-US" <locale> catalog-set
+missing-key: "en-US" <locale> <locale-chain> catalog-get?
+f swap "not found flag" assert=
+
+\ --- catalog-get ---
+
+"catalog-get found" test-section
+<message-catalog>
+H{ greeting: "Hello!" } "en-US" <locale> catalog-set
+greeting: "en-US" <locale> <locale-chain> catalog-get
+"Hello!" swap "get found" assert=
+
+"catalog-get throws on missing" test-section
+[
+  <message-catalog>
+  H{ greeting: "Hello!" } "en-US" <locale> catalog-set
+  missing-key: "en-US" <locale> <locale-chain> catalog-get
+]
+"missing key throws" assert-error
+
+\ --- catalog-get-or ---
+
+"catalog-get-or found" test-section
+<message-catalog>
+H{ greeting: "Hello!" } "en-US" <locale> catalog-set
+greeting: "en-US" <locale> <locale-chain> "default" catalog-get-or
+"Hello!" swap "get-or found" assert=
+
+"catalog-get-or default" test-section
+<message-catalog>
+H{ greeting: "Hello!" } "en-US" <locale> catalog-set
+missing-key: "en-US" <locale> <locale-chain> "fallback" catalog-get-or
+"fallback" swap "get-or default" assert=

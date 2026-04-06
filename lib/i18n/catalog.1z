@@ -1,9 +1,13 @@
-\ lib/i18n/catalog.1z - Message catalog type
+\ lib/i18n/catalog.1z - Message catalog type and locale-chain-aware lookup
 \
 \ A message-catalog maps locales to hashes of message templates.
-\ Construction is programmatic; loading from files is in milestone 199.2.
+\ Catalogs can be built programmatically or loaded from a directory of .1z files.
 
+use "os/fs" ;
+use "os/path" ;
 use "i18n/locale" ;
+use "i18n/localechain" ;
+use { quotation-has-calls?: } "runtime/introspect" ;
 
 message-catalog: virtual{ hash } ;
 
@@ -35,3 +39,104 @@ catalog-set: ( catalog messages locale -- catalog ) [
 inspect: method{ message-catalog } [
   "<message-catalog " swap unmake-message-catalog inspect #append ">" #append
 ] ;
+
+\ --- Loading ---
+
+\\ Strip the .1z extension from a filename.
+(strip-1z-ext): ( filename -- stem ) [
+  dup #len 3 - #take
+] ;
+
+\\ Read and evaluate a single catalog file as data-only 1z.
+\\ Rejects files containing word calls. Result must be a hash.
+(load-catalog-file): ( path -- hash ) [
+  read: stream-open dup stream-read-all swap stream-close bytes>
+  "[ " swap #append " ]" #append eval-string
+  dup quotation-has-calls?
+  [ f "catalog file contains word calls" EInvalidArgument make-error throw ]
+  when
+  with-isolation
+  dup hash? not
+  [ f "catalog file must evaluate to a hash" EInvalidArgument make-error throw ]
+  when
+] ;
+
+\\ Process one directory entry during load-catalog.
+\\ The directory path is curried in.
+(load-one-locale): ( catalog entry dir-path -- catalog ) [
+  swap name>>
+  \ Stack: catalog dir-path filename
+  dup (strip-1z-ext) <locale>
+  \ Stack: catalog dir-path filename locale
+  -rot> path-join (load-catalog-file)
+  \ Stack: catalog locale messages-hash
+  swap catalog-set
+] ;
+
+\\ Load a message catalog from a directory of .1z files.
+\\ Each file is named by locale (e.g., en-US.1z) and must evaluate to a hash.
+load-catalog: ( path -- catalog ) [
+  dup list-files
+  [ name>> extension ".1z" = ] #filter #collect
+  swap
+  [ (load-one-locale) ] curry
+  <message-catalog> swap #reduce
+] ;
+
+\ --- Lookup ---
+
+\\ Try to find a key in one locale's messages within a catalog.
+\\ Short-circuits if the accumulator already holds a result.
+(try-locale-in-catalog): ( option locale catalog key -- option ) [
+  3 pick-n option:some? [
+    drop drop drop
+  ] [
+    \ Stack: option locale catalog key
+    [ unmake-message-catalog ] dip
+    \ Stack: option locale outer-hash key
+    [ swap unmake-locale @get? ] dip
+    \ Stack: option locale-msgs-option key
+    swap dup option:some? [
+      option:some> swap @get?
+      \ Stack: option result-option
+      dup option:some? [ nip ] [ drop ] if
+    ] [
+      drop drop
+    ] if
+  ] if
+] ;
+
+\\ Look up a key across a locale chain, returning an option.
+(catalog-lookup): ( catalog key chain -- option ) [
+  unmake-locale-chain -rot>
+  \ Stack: locale-array catalog key
+  [ (try-locale-in-catalog) ] curry curry
+  option:none swap #reduce
+] ;
+
+\\ Look up a message key across a locale chain.
+\\ Returns the template string and t if found, or f if not found.
+catalog-get?: ( catalog key chain -- string t | f ) [
+  (catalog-lookup)
+  dup option:some? [ option:some> t ] [ drop f ] if
+] ;
+
+\\ Look up a message key across a locale chain.
+\\ Throws an error if the key is not found in any locale.
+catalog-get: ( catalog key chain -- string ) [
+  (catalog-lookup)
+  dup option:some? [ option:some> ] [
+    drop f "message key not found in any locale" ECatalogKeyNotFound make-error throw
+  ] if
+] ;
+
+\\ Look up a message key across a locale chain.
+\\ Returns the default string if the key is not found.
+catalog-get-or: ( catalog key chain default -- string ) [
+  [ (catalog-lookup) ] dip
+  swap dup option:some? [ option:some> nip ] [ drop ] if
+] ;
+
+\\ Looks up template via catalog-get, then formats with args.
+\\ Can't do yet, because of variadic FFI args.
+\ catalog-format: ( catalog args key chain -- string )
