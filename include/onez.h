@@ -27,6 +27,29 @@ extern "C" {
 /* Opaque interpreter handle. */
 typedef void *onez_t;
 
+/* Callback function type for host-registered words. The callback receives
+ * the onez_t context and a user_data pointer provided at registration time.
+ *
+ * The callback may use the normal push / pop / value APIs to interact with
+ * the 1z stack and values. It should return ONEZ_OK (0) on success, or a
+ * positive error code on failure. After failure, call `onez_last_error`
+ * for a human-readable message.
+ */
+typedef int (*onez_callback_fn)(onez_t ctx, void *user_data);
+
+/*
+ * Opaque value handle. Valid until onez_deinit on the owning context.
+ *
+ * A handle is bound to the context that created it. Passing a handle to
+ * a different context, or using it after the owning context has been
+ * destroyed, is undefined behavior (same contract as onez_t itself).
+ *
+ * Each onez_pop_value call allocates a small arena cell that lives until
+ * onez_deinit. Handles are cheap but not free; callers doing unbounded
+ * pop_value calls on a long-lived context will accumulate memory.
+ */
+typedef void *onez_value_t;
+
 /* ---- Type codes, as returned by onez_stack_type ---- */
 
 #define ONEZ_TYPE_UNKNOWN     0
@@ -91,6 +114,14 @@ void onez_deinit(onez_t ctx);
  */
 int onez_eval(onez_t ctx, const char *code, size_t len);
 
+/*
+ * Register a host callback as a top-level 1z word.
+ *
+ * The name is copied. The callback receives the same onez_t handle passed to
+ * onez_register_word and may use the normal push / pop / value APIs.
+ */
+int onez_register_word(onez_t ctx, const char *name, onez_callback_fn callback, void *user_data);
+
 /* ---- Module loading ---- */
 
 /*
@@ -144,21 +175,6 @@ int onez_push_symbol(onez_t ctx, const char *data, size_t len);
  * Returns ONEZ_ERR_NULL_VALUE if any element handle is NULL.
  */
 int onez_push_array(onez_t ctx, const onez_value_t *handles, size_t count);
-
-/* ---- Opaque value handles ---- */
-
-/*
- * Opaque value handle. Valid until onez_deinit on the owning context.
- *
- * A handle is bound to the context that created it. Passing a handle to
- * a different context, or using it after the owning context has been
- * destroyed, is undefined behavior (same contract as onez_t itself).
- *
- * Each onez_pop_value call allocates a small arena cell that lives until
- * onez_deinit. Handles are cheap but not free; callers doing unbounded
- * pop_value calls on a long-lived context will accumulate memory.
- */
-typedef void *onez_value_t;
 
 /*
  * Pop any value from the stack as an opaque handle.

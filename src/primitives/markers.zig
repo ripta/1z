@@ -343,7 +343,7 @@ fn nativeIsNative(ctx: *Context) anyerror!void {
     };
 
     const is_native = switch (mod_word.action) {
-        .native => true,
+        .native, .host_callback => true,
         .compound => false,
     };
     try ctx.stack.push(.{ .boolean = is_native });

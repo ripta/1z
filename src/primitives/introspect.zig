@@ -87,12 +87,12 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
 
     const is_native: bool = switch (word.action) {
         .compound => false,
-        .native => true,
+        .native, .host_callback => true,
     };
 
     const body_val: Value = switch (word.action) {
         .compound => |instrs| .{ .quotation = .{ .instructions = instrs } },
-        .native => .{ .boolean = false },
+        .native, .host_callback => .{ .boolean = false },
     };
 
     const dispatch_pairs = try ctx.dispatchEntriesForWord(name, alloc);
@@ -186,6 +186,7 @@ fn moduleWordToWordDef(name: []const u8, mw: ModuleWord) WordDefinition {
         .action = switch (mw.action) {
             .compound => |instrs| .{ .compound = instrs },
             .native => |f| .{ .native = f },
+            .host_callback => |host| .{ .host_callback = host },
         },
     };
 }
@@ -204,6 +205,7 @@ fn wordDefToModuleWord(def: WordDefinition) ModuleWord {
         .action = switch (def.action) {
             .compound => |instrs| .{ .compound = instrs },
             .native => |f| .{ .native = f },
+            .host_callback => |host| .{ .host_callback = host },
         },
     };
 }

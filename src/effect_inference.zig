@@ -280,7 +280,7 @@ pub const InferenceEngine = struct {
         const module_word_def = self.lookupWord(module_path) orelse return null;
         const instrs = switch (module_word_def.action) {
             .compound => |i| i,
-            .native => return null,
+            .native, .host_callback => return null,
         };
         if (instrs.len != 1) return null;
         const module_ptr = switch (instrs[0].op) {
@@ -313,7 +313,7 @@ pub const InferenceEngine = struct {
 
         const word_def = self.lookupWord(name) orelse return .unknown;
         switch (word_def.action) {
-            .native => {
+            .native, .host_callback => {
                 const result = if (word_def.stack_effect) |eff|
                     computeDeclaredDelta(eff) orelse .unknown
                 else

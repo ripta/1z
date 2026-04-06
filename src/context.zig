@@ -88,7 +88,7 @@ fn shouldSkipTypeAnnotationValidation(word: WordDefinition) bool {
 
     return switch (word.action) {
         .compound => |instrs| instrs.len == 0,
-        .native => false,
+        .native, .host_callback => false,
     };
 }
 
@@ -911,6 +911,7 @@ pub const Context = struct {
                 .action = switch (entry.value_ptr.*.action) {
                     .compound => |instrs| .{ .compound = instrs },
                     .native => |func| .{ .native = func },
+                    .host_callback => |host| .{ .host_callback = host },
                 },
             });
         }
@@ -927,6 +928,7 @@ pub const Context = struct {
                 .action = switch (entry.value_ptr.*.action) {
                     .compound => |instrs| .{ .compound = instrs },
                     .native => |func| .{ .native = func },
+                    .host_callback => |host| .{ .host_callback = host },
                 },
             });
         }
@@ -1150,7 +1152,7 @@ pub const Context = struct {
     fn tryAutoCompile(self: *Context, name: []const u8, def: WordDefinition) void {
         const instrs = switch (def.action) {
             .compound => |i| i,
-            .native => return,
+            .native, .host_callback => return,
         };
 
         const effect = def.stack_effect orelse return;
@@ -1208,7 +1210,7 @@ pub const Context = struct {
     fn tryAssignWordId(self: *Context, name: []const u8, def: WordDefinition) void {
         switch (def.action) {
             .compound => {},
-            .native => return,
+            .native, .host_callback => return,
         }
 
         if (def.stack_effect == null) return;
@@ -1783,7 +1785,7 @@ pub const Context = struct {
                 }
                 return null;
             },
-            .native => return null,
+            .native, .host_callback => return null,
         }
     }
 
@@ -1843,7 +1845,7 @@ pub const Context = struct {
                                 else => {},
                             }
                         },
-                        .native => {},
+                        .native, .host_callback => {},
                     }
                 }
             }
@@ -1866,7 +1868,7 @@ pub const Context = struct {
                             else => {},
                         }
                     },
-                    .native => {},
+                    .native, .host_callback => {},
                 }
             }
 
@@ -2429,6 +2431,10 @@ pub const Context = struct {
 
             switch (module_word.action) {
                 .native => |func| try func(self),
+                .host_callback => |host| {
+                    const rc = host.callback(host.handle, host.user_data);
+                    if (rc != 0) return error.HostCallbackFailed;
+                },
                 .compound => |instrs| try self.executeInstructions(instrs, null),
             }
         } else {
@@ -2495,6 +2501,10 @@ pub const Context = struct {
                     try self.executeInstructions(instrs, null);
                 },
                 .native => |func| try func(self),
+                .host_callback => |host| {
+                    const rc = host.callback(host.handle, host.user_data);
+                    if (rc != 0) return error.HostCallbackFailed;
+                },
             }
         } else {
             if (self.trace.trace_resolve and trace_mod.matchesPattern(name, self.trace.trace_resolve_pattern)) {
@@ -3661,11 +3671,11 @@ pub const Context = struct {
                                     self.tail_call_module = word.source_module;
                                     return;
                                 },
-                                .native => |func| {
+                                .native, .host_callback => {
                                     self.tail_call_instructions = null;
                                     self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
                                     defer self.current_pic_entry = null;
-                                    if (func(self)) |_| {
+                                    if (word.invoke(self)) |_| {
                                         try self.wordSuccessCleanup(name, word.stack_effect);
                                     } else |err| {
                                         return self.wordErrorCleanup(name, err);
@@ -3697,7 +3707,7 @@ pub const Context = struct {
 
                             const callee_pic = if (word.action == .compound) self.getOrAllocPicTable(word.action.compound) else null;
 
-                            if (word.action == .native) {
+                            if (word.isNativeLike()) {
                                 self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
                             }
                             defer self.current_pic_entry = null;
@@ -3710,11 +3720,11 @@ pub const Context = struct {
                                             defer self.popModuleDepsFrameTraced(mod);
                                             break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic);
                                         },
-                                        .native => |func| break :blk func(self),
+                                        .native, .host_callback => break :blk word.invoke(self),
                                     }
                                 } else {
                                     break :blk switch (word.action) {
-                                        .native => |func| func(self),
+                                        .native, .host_callback => word.invoke(self),
                                         .compound => |instrs| self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic),
                                     };
                                 }
@@ -3820,6 +3830,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
                 .native_fn_ptr = @intFromPtr(func),
             };
         },
+        .host_callback => return null,
     }
 
     const effect = callee.stack_effect orelse return null;

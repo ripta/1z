@@ -57,7 +57,7 @@ fn shouldSkipTypeAnnotationValidation(word: WordDefinition) bool {
 
     return switch (word.action) {
         .compound => |instrs| instrs.len == 0,
-        .native => false,
+        .native, .host_callback => false,
     };
 }
 
@@ -3807,11 +3807,11 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize) callconv(.c) i3
                     defer ctx.popModuleDepsFrameTraced(mod);
                     break :blk ctx.executeQuotationWithPic(.{ .instructions = instrs }, null);
                 },
-                .native => |func| break :blk func(ctx),
+                .native, .host_callback => break :blk word.invoke(ctx),
             }
         } else {
             break :blk switch (word.action) {
-                .native => |func| func(ctx),
+                .native, .host_callback => word.invoke(ctx),
                 .compound => |instrs| ctx.executeQuotationWithPic(.{ .instructions = instrs }, null),
             };
         }

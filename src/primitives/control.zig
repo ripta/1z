@@ -583,6 +583,6 @@ test "semicolon defines named union type as parse-time word" {
             try std.testing.expect(instrs[0].op.push_literal == .type_val);
             try std.testing.expect(instrs[0].op.push_literal.type_val == union_tv);
         },
-        .native => try std.testing.expect(false),
+        .native, .host_callback => try std.testing.expect(false),
     }
 }

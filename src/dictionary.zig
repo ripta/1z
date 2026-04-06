@@ -10,6 +10,14 @@ pub const Capability = @import("primitives/types.zig").Capability;
 /// Native function signature: takes context, can return errors.
 pub const NativeFn = *const fn (ctx: *Context) anyerror!void;
 
+/// Host callback function signature: takes opaque context and user data, returns C int status code.
+pub const HostCallbackFn = *const fn (ctx: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) c_int;
+pub const HostCallback = struct {
+    handle: ?*anyopaque,
+    callback: HostCallbackFn,
+    user_data: ?*anyopaque,
+};
+
 /// Provenance metadata for generated words, e.g., constructors, predicates, accessors.
 pub const WordProvenance = struct {
     generator: []const u8,
@@ -60,8 +68,37 @@ pub const WordDefinition = struct {
     /// compound quotation. Unfortunate naming.
     action: union(enum) {
         native: NativeFn,
+        host_callback: HostCallback,
         compound: []const Instruction,
     },
+
+    /// Returns true if this word is a native function or host callback, i.e., not a compound quotation.
+    pub fn isNativeLike(self: WordDefinition) bool {
+        return switch (self.action) {
+            .native, .host_callback => true,
+            .compound => false,
+        };
+    }
+
+    /// Returns true if this word is a built-in native function.
+    pub fn isBuiltinNative(self: WordDefinition) bool {
+        return switch (self.action) {
+            .native => true,
+            .host_callback, .compound => false,
+        };
+    }
+
+    /// Invokes this word's action. For native functions, calls the function with the given context.
+    pub fn invoke(self: WordDefinition, ctx: *Context) anyerror!void {
+        switch (self.action) {
+            .native => |func| try func(ctx),
+            .host_callback => |host| {
+                const rc = host.callback(host.handle, host.user_data);
+                if (rc != 0) return error.HostCallbackFailed;
+            },
+            .compound => unreachable,
+        }
+    }
 };
 
 /// Dictionary maps word names to their definitions.

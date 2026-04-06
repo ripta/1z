@@ -214,7 +214,7 @@ pub fn traceModuleDefine(trace_writer: *TraceWriter, module_name: []const u8, wo
 
     const kind: []const u8 = switch (mod_word.action) {
         .compound => "compound",
-        .native => "native",
+        .native, .host_callback => "native",
     };
 
     w.print("MODULE define {s}: {s} ({s}", .{ module_name, word_name, kind }) catch return;

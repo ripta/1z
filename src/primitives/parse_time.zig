@@ -63,7 +63,7 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
                 if (word.parse_time) {
                     const pre_depth = ctx.stack.depth();
                     switch (word.action) {
-                        .native => |func| try func(ctx),
+                        .native, .host_callback => try word.invoke(ctx),
                         .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
                     }
                     const post_depth = ctx.stack.depth();
@@ -286,7 +286,7 @@ pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
             if (word.parse_time) {
                 const pre_depth = ctx.stack.depth();
                 switch (word.action) {
-                    .native => |func| try func(ctx),
+                    .native, .host_callback => try word.invoke(ctx),
                     .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
                 }
                 const post_depth = ctx.stack.depth();

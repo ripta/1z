@@ -104,8 +104,8 @@ pub fn nativeAtGet(ctx: *Context) anyerror!void {
                         }
                         try ctx.stack.push(.{ .quotation = quot });
                     },
-                    .native => |func| {
-                        try func(ctx);
+                    .native, .host_callback => {
+                        try word.invoke(ctx);
                     },
                 }
             } else {
@@ -168,8 +168,8 @@ fn nativeAtGetOr(ctx: *Context) anyerror!void {
                         }
                         try ctx.stack.push(.{ .quotation = quot });
                     },
-                    .native => |func| {
-                        try func(ctx);
+                    .native, .host_callback => {
+                        try word.invoke(ctx);
                     },
                 }
             } else {

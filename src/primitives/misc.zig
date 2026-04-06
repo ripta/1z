@@ -77,6 +77,7 @@ fn nativeToModule(ctx: *Context) anyerror!void {
                     .action = switch (word_def.action) {
                         .compound => |instrs| .{ .compound = instrs },
                         .native => |func| .{ .native = func },
+                        .host_callback => |host| .{ .host_callback = host },
                     },
                 });
             }
@@ -295,6 +296,7 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
             .action = switch (word_def.action) {
                 .compound => |instrs| .{ .compound = instrs },
                 .native => |func| .{ .native = func },
+                .host_callback => |host| .{ .host_callback = host },
             },
         };
         if (word_def.imported) {
@@ -358,6 +360,7 @@ pub fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module:
         .action = switch (mod_word.action) {
             .compound => |instrs| .{ .compound = instrs },
             .native => |func| .{ .native = func },
+            .host_callback => |host| .{ .host_callback = host },
         },
     });
     if (ctx.trace.trace_modules) {
@@ -558,6 +561,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
                 .stack_effect_ptr = effect_ptr,
             };
         },
+        .host_callback => return null,
     }
 
     const effect = callee.stack_effect orelse return null;
@@ -586,7 +590,7 @@ fn nativeCompile(ctx: *Context) anyerror!void {
 
     switch (word.action) {
         .compound => {},
-        .native => {
+        .native, .host_callback => {
             ctx.pending_error_message = "compile!: cannot compile native word";
             return error.TypeMismatch;
         },
@@ -660,7 +664,7 @@ fn detectMutualGroup(ctx: *Context, sym: []const u8, call_graph_ns: anytype) ?[]
         const word_def = ctx.lookupWord(name) orelse continue;
         const instrs = switch (word_def.action) {
             .compound => |i| i,
-            .native => {
+            .native, .host_callback => {
                 graph.put(ctx.allocator, name, .{ .callees = &.{}, .has_opaque = false }) catch return null;
                 continue;
             },
@@ -748,7 +752,7 @@ fn isSccEligibleViaLookup(
         // Must be compilable
         const instrs = switch (word_def.action) {
             .compound => |i| i,
-            .native => return false,
+            .native, .host_callback => return false,
         };
         _ = instrs;
 
@@ -775,7 +779,7 @@ fn isSccEligibleViaLookup(
         // Every inter-member edge must be a tail call
         const word_instrs = switch (word_def.action) {
             .compound => |i| i,
-            .native => return false,
+            .native, .host_callback => return false,
         };
         for (graph_entry.callees) |callee| {
             if (member_set.contains(callee)) {
@@ -792,7 +796,7 @@ fn compileSingleWord(ctx: *Context, sym: []const u8, mutual_group: ?[]const []co
 
     const instrs = switch (word.action) {
         .compound => |i| i,
-        .native => return error.TypeMismatch,
+        .native, .host_callback => return error.TypeMismatch,
     };
 
     const effect = word.stack_effect orelse return error.TypeMismatch;

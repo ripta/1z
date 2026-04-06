@@ -52,7 +52,7 @@ pub const Inspector = struct {
             }
 
             switch (word.action) {
-                .native => {
+                .native, .host_callback => {
                     try writer.writeAll("  <native>\n");
                 },
                 .compound => |instrs| {
@@ -97,7 +97,7 @@ pub const Inspector = struct {
             while (iter.next()) |entry| {
                 try writer.print("    {s} = ", .{entry.key_ptr.*});
                 switch (entry.value_ptr.*.action) {
-                    .native => try writer.writeAll("<native>"),
+                    .native, .host_callback => try writer.writeAll("<native>"),
                     .compound => |instrs| try writer.print("<compound: {d} instructions>", .{instrs.len}),
                 }
                 try writer.writeAll("\n");
@@ -155,7 +155,7 @@ pub const Inspector = struct {
             }
 
             switch (word.action) {
-                .native => {
+                .native, .host_callback => {
                     try writer.writeAll("  type: native\n");
                 },
                 .compound => |instrs| {
@@ -231,7 +231,7 @@ pub const Inspector = struct {
         while (iter.next()) |entry| {
             const word = entry.value_ptr.*;
             switch (word.action) {
-                .native => native_count += 1,
+                .native, .host_callback => native_count += 1,
                 .compound => compound_count += 1,
             }
             if (word.parse_time) parse_time_count += 1;

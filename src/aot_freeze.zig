@@ -279,7 +279,7 @@ fn discoverReachableWords(
         // they have no instructions to discover more words
         const instrs = switch (word.action) {
             .compound => |c| c,
-            .native => {
+            .native, .host_callback => {
                 try result.native_names.append(temp_allocator, name);
                 try result.native_defs.append(temp_allocator, word);
                 continue;

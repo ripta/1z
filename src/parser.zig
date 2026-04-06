@@ -267,7 +267,7 @@ fn executeParseTimeWord(
 
     // 4. Run the parse-time word
     switch (word.action) {
-        .native => |func| func(c) catch |err| return handleParseTimeError(c, err),
+        .native, .host_callback => word.invoke(c) catch |err| return handleParseTimeError(c, err),
         .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
     }
 
@@ -681,7 +681,7 @@ fn resolveTypeAnnotation(ctx: ?*Context, token: []const u8) ?*const value_mod.Ty
 
             const pre_depth = c.stack.depth();
             switch (word.action) {
-                .native => |func| func(c) catch return null,
+                .native, .host_callback => word.invoke(c) catch return null,
                 .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch return null,
             }
 
@@ -916,7 +916,7 @@ fn executeParseTimeWordForArray(
     defer c.parse_tokenizer = old_tokenizer;
 
     switch (word.action) {
-        .native => |func| func(c) catch |err| return handleParseTimeError(c, err),
+        .native, .host_callback => word.invoke(c) catch |err| return handleParseTimeError(c, err),
         .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
     }
 
@@ -925,7 +925,7 @@ fn executeParseTimeWordForArray(
     for (c.parse_time_deferred_calls.items) |call_name| {
         if (c.lookupWord(call_name)) |deferred_word| {
             switch (deferred_word.action) {
-                .native => |func| func(c) catch |err| return handleParseTimeError(c, err),
+                .native, .host_callback => deferred_word.invoke(c) catch |err| return handleParseTimeError(c, err),
                 .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
             }
         }
@@ -1565,6 +1565,6 @@ test "struct field annotations accept anonymous unions" {
             try std.testing.expect(field_types[0].type_val == field_types[1].type_val);
             try std.testing.expectEqualStrings("bignum|fixnum", field_types[0].type_val.name);
         },
-        .native => try std.testing.expect(false),
+        .native, .host_callback => try std.testing.expect(false),
     }
 }

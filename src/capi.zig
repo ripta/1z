@@ -10,15 +10,23 @@ const errors_mod = @import("primitives/errors.zig");
 const pascalToKebabRuntime = errors_mod.pascalToKebabRuntime;
 
 const misc = @import("primitives/misc.zig");
+const dictionary_mod = @import("dictionary.zig");
+const HostCallback = dictionary_mod.HostCallback;
+const HostCallbackFn = dictionary_mod.HostCallbackFn;
 
 const value_mod = @import("value.zig");
 const MutableMap = value_mod.MutableMap;
 const Value = value_mod.Value;
 
+const HostWordRegistration = struct {
+    name: []const u8,
+};
+
 const OnezHandle = struct {
     gpa: *std.heap.GeneralPurposeAllocator(.{}),
     ctx: *Context,
     last_error: ?[:0]const u8 = null,
+    host_words: std.ArrayListUnmanaged(HostWordRegistration) = .{},
 };
 
 const page = std.heap.page_allocator;
@@ -99,6 +107,11 @@ export fn onez_deinit(ptr: ?*anyopaque) void {
 
     clearLastError(handle);
 
+    for (handle.host_words.items) |entry| {
+        allocator.free(entry.name);
+    }
+    handle.host_words.deinit(allocator);
+
     if (handle.ctx.program_args.len > 0) {
         allocator.free(handle.ctx.program_args);
         handle.ctx.program_args = &.{};
@@ -162,6 +175,65 @@ export fn onez_eval(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
             }
         },
     }
+
+    return ONEZ_OK;
+}
+
+/// Register a host callback as a 1z word.
+///
+/// The callback receives a pointer to the 1z handle, allowing it to manipulate the 1z stack
+/// and call other API functions. The callback can return a non-zero error code to indicate
+/// failure, which will propagate as a runtime error in 1z.
+///
+/// The callback can also set the last error message on the handle to provide more details
+/// about the failure, which will be included in the 1z error report.
+export fn onez_register_word(ptr: ?*anyopaque, name: ?[*:0]const u8, callback: ?HostCallbackFn, user_data: ?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    clearLastError(handle);
+    handle.ctx.clearExecutionDetails();
+
+    const name_ptr = name orelse {
+        setLastError(handle, "null name passed to onez_register_word", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    };
+    const callback_fn = callback orelse {
+        setLastError(handle, "null callback passed to onez_register_word", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    };
+
+    const name_slice = std.mem.span(name_ptr);
+    if (name_slice.len == 0) {
+        setLastError(handle, "empty name passed to onez_register_word", .{});
+        return ONEZ_ERR_TYPE_MISMATCH;
+    }
+
+    const name_copy = handle.gpa.allocator().dupe(u8, name_slice) catch {
+        setLastError(handle, "allocation failure copying word name", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    errdefer handle.gpa.allocator().free(name_copy);
+
+    handle.host_words.append(handle.gpa.allocator(), .{ .name = name_copy }) catch {
+        setLastError(handle, "allocation failure tracking host word", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    errdefer _ = handle.host_words.pop();
+
+    handle.ctx.defineWord(name_copy, .{
+        .name = name_copy,
+        .action = .{ .host_callback = HostCallback{
+            .handle = ptr,
+            .callback = callback_fn,
+            .user_data = user_data,
+        } },
+    }) catch |err| {
+        if (handle.ctx.pending_error_message) |msg| {
+            setLastError(handle, "{s}", .{msg});
+        } else {
+            captureError(handle, err);
+        }
+        return 1;
+    };
 
     return ONEZ_OK;
 }
@@ -869,6 +941,35 @@ fn valueTypeToInt(val: Value) c_int {
     };
 }
 
+var test_host_callback_expected_handle: ?*anyopaque = null;
+var test_host_callback_seen_handle: ?*anyopaque = null;
+var test_host_callback_invocations: usize = 0;
+
+fn resetHostCallbackTestState() void {
+    test_host_callback_expected_handle = null;
+    test_host_callback_seen_handle = null;
+    test_host_callback_invocations = 0;
+}
+
+fn doublingHostCallback(ctx: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) c_int {
+    test_host_callback_seen_handle = ctx;
+    test_host_callback_invocations += 1;
+
+    var input: i64 = 0;
+    if (onez_pop_int(ctx, &input) != ONEZ_OK) return 1;
+
+    const factor_ptr: *const i64 = @ptrCast(@alignCast(user_data orelse return 1));
+    return onez_push_int(ctx, input * factor_ptr.*);
+}
+
+fn constantHostCallback(ctx: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) c_int {
+    test_host_callback_seen_handle = ctx;
+    test_host_callback_invocations += 1;
+
+    const value_ptr: *const i64 = @ptrCast(@alignCast(user_data orelse return 1));
+    return onez_push_int(ctx, value_ptr.*);
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -881,6 +982,58 @@ test "init/eval/deinit round-trip" {
     try std.testing.expectEqual(@as(c_int, 0), rc);
 
     onez_deinit(handle_ptr);
+}
+
+test "register host word and invoke via dictionary lookup" {
+    resetHostCallbackTestState();
+
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    test_host_callback_expected_handle = handle_ptr;
+    const factor: i64 = 3;
+    try std.testing.expectEqual(ONEZ_OK, onez_register_word(handle_ptr, "triple", doublingHostCallback, @constCast(&factor)));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 14));
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, "triple", 6));
+
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 42), out);
+    try std.testing.expectEqual(@as(usize, 1), test_host_callback_invocations);
+    try std.testing.expect(test_host_callback_seen_handle == test_host_callback_expected_handle);
+}
+
+test "register host word passes user_data and handle to callback" {
+    resetHostCallbackTestState();
+
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    test_host_callback_expected_handle = handle_ptr;
+    const value: i64 = 77;
+    try std.testing.expectEqual(ONEZ_OK, onez_register_word(handle_ptr, "host-const", constantHostCallback, @constCast(&value)));
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, "host-const", 10));
+
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(value, out);
+    try std.testing.expectEqual(@as(usize, 1), test_host_callback_invocations);
+    try std.testing.expect(test_host_callback_seen_handle == test_host_callback_expected_handle);
+}
+
+test "register host word rejects invalid arguments" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const value: i64 = 5;
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_register_word(null, "x", constantHostCallback, @constCast(&value)));
+    try std.testing.expectEqual(ONEZ_ERR_NULL_VALUE, onez_register_word(handle_ptr, null, constantHostCallback, @constCast(&value)));
+    try std.testing.expectEqual(ONEZ_ERR_NULL_VALUE, onez_register_word(handle_ptr, "x", null, @constCast(&value)));
+    try std.testing.expect(onez_last_error(handle_ptr) != null);
 }
 
 test "eval error returns 1" {

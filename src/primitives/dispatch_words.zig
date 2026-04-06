@@ -117,7 +117,7 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
     // sync. Until then, each type-switching native is responsible for
     // calling tryDispatchBinary or tryDispatchUnary itself.
     switch (resolved.action) {
-        .native => {},
+        .native, .host_callback => {},
         .compound => {
             var has_generic = false;
             for (resolved.markers) |mk| {
@@ -204,6 +204,7 @@ const ResolvedWord = struct {
     markers: []const *value_mod.Marker,
     action: union(enum) {
         native,
+        host_callback,
         compound,
     },
 };
@@ -216,6 +217,7 @@ fn resolveWordForDispatch(ctx: *Context, name: []const u8) ?ResolvedWord {
             .markers = wd.markers,
             .action = switch (wd.action) {
                 .native => .native,
+                .host_callback => .host_callback,
                 .compound => .compound,
             },
         };
@@ -233,6 +235,7 @@ fn resolveWordForDispatch(ctx: *Context, name: []const u8) ?ResolvedWord {
         .markers = mod_word.markers,
         .action = switch (mod_word.action) {
             .native => .native,
+            .host_callback => .host_callback,
             .compound => .compound,
         },
     };
@@ -262,7 +265,7 @@ fn resolveQualifiedTypeValue(ctx: *Context, name: []const u8) ?*const value_mod.
             }
             return null;
         },
-        .native => return null,
+        .native, .host_callback => return null,
     }
 }
 
@@ -273,7 +276,7 @@ fn resolveModuleLiteral(ctx: *Context, module_path: []const u8) ?*const value_mo
     const module_word = ctx.lookupWord(module_path) orelse return null;
     const instrs = switch (module_word.action) {
         .compound => |i| i,
-        .native => return null,
+        .native, .host_callback => return null,
     };
     if (instrs.len != 1) return null;
     return switch (instrs[0].op) {

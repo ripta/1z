@@ -845,7 +845,7 @@ fn typedNthMutDispatch(ctx: *Context) anyerror!void {
     // Delegate to the raw #nth!
     const nth_mut_word = ctx.lookupWord("#nth!") orelse return error.WordNotFound;
     switch (nth_mut_word.action) {
-        .native => |func| try func(ctx),
+        .native, .host_callback => try nth_mut_word.invoke(ctx),
         .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
     }
 
@@ -892,7 +892,7 @@ fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
     // Delegate to the raw @set!
     const at_set_word = ctx.lookupWord("@set!") orelse return error.WordNotFound;
     switch (at_set_word.action) {
-        .native => |func| try func(ctx),
+        .native, .host_callback => try at_set_word.invoke(ctx),
         .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
     }
 
@@ -921,7 +921,7 @@ fn typedAtRemoveMutDispatch(ctx: *Context) anyerror!void {
     // Delegate to the raw @remove!
     const at_remove_word = ctx.lookupWord("@remove!") orelse return error.WordNotFound;
     switch (at_remove_word.action) {
-        .native => |func| try func(ctx),
+        .native, .host_callback => try at_remove_word.invoke(ctx),
         .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
     }
 
@@ -972,7 +972,7 @@ fn typedFreezeDispatch(ctx: *Context) anyerror!void {
     // Push raw array and execute the wrap word
     try ctx.stack.push(.{ .array = items });
     switch (wrap_word.action) {
-        .native => |func| try func(ctx),
+        .native, .host_callback => try wrap_word.invoke(ctx),
         .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
     }
 }

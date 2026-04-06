@@ -45,7 +45,7 @@ pub fn build(dictionary: *const Dictionary, dispatch_table: *const DispatchTable
 
 fn buildEntry(_: []const u8, word_def: *const WordDefinition, dispatch_table: *const DispatchTable, allocator: Allocator) !CallGraphEntry {
     switch (word_def.action) {
-        .native => return .{ .callees = &.{}, .has_opaque = false },
+        .native, .host_callback => return .{ .callees = &.{}, .has_opaque = false },
         .compound => |instructions| {
             var callee_set: std.StringHashMapUnmanaged(void) = .{};
             defer callee_set.deinit(allocator);
@@ -307,7 +307,7 @@ pub const MutualTcoGroups = struct {
 /// An unknown stack effect means we cannot verify the arity requirement for trampoline groups.
 fn isCompilable(word_def: *const WordDefinition) bool {
     switch (word_def.action) {
-        .native => return false,
+        .native, .host_callback => return false,
         .compound => {},
     }
     const effect = word_def.stack_effect orelse return false;
@@ -402,7 +402,7 @@ fn isSccEligible(
         // Every inter-member callee edge must be a tail call
         const instructions = switch (word_def.action) {
             .compound => |i| i,
-            .native => return false,
+            .native, .host_callback => return false,
         };
         for (graph_entry.callees) |callee| {
             if (member_set.contains(callee)) {

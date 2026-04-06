@@ -1,17 +1,24 @@
 const std = @import("std");
+
 const context_mod = @import("context.zig");
 const Context = context_mod.Context;
+
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
+
 const BenchmarkReportHandle = @import("benchmark_report.zig").BenchmarkReportHandle;
 const Task = @import("task.zig").Task;
 const Iterator = @import("iterator.zig").Iterator;
 const Channel = @import("channel.zig").Channel;
+
 const dictionary_mod = @import("dictionary.zig");
+const HostCallback = dictionary_mod.HostCallback;
 const NativeFn = dictionary_mod.NativeFn;
 const WordProvenance = dictionary_mod.WordProvenance;
+
 const FfiSignature = @import("ffi/signature.zig").FfiSignature;
 const simd = @import("simd.zig");
+
 const types_mod = @import("primitives/types.zig");
 const Capability = types_mod.Capability;
 pub const SandboxSpec = types_mod.SandboxSpec;
@@ -464,7 +471,19 @@ pub const ModuleWord = struct {
     action: union(enum) {
         compound: []const Instruction,
         native: NativeFn,
+        host_callback: HostCallback,
     },
+
+    pub fn invoke(self: ModuleWord, ctx: *Context) anyerror!void {
+        switch (self.action) {
+            .native => |func| try func(ctx),
+            .host_callback => |host| {
+                const rc = host.callback(host.handle, host.user_data);
+                if (rc != 0) return error.HostCallbackFailed;
+            },
+            .compound => unreachable,
+        }
+    }
 };
 
 /// Module represents a collection of word definitions loaded from a file.

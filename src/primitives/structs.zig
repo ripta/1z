@@ -539,7 +539,7 @@ pub fn getStructTypeFromMaker(ctx: *const Context, maker_name: []const u8) ?*con
     const word = ctx.lookupWord(maker_name) orelse return null;
     const instrs = switch (word.action) {
         .compound => |c| c,
-        .native => return null,
+        .native, .host_callback => return null,
     };
 
     if (instrs.len == 0) return null;
