@@ -1,0 +1,37 @@
+\ lib/i18n/catalog.1z - Message catalog type
+\
+\ A message-catalog maps locales to hashes of message templates.
+\ Construction is programmatic; loading from files is in milestone 199.2.
+
+use "i18n/locale" ;
+
+message-catalog: virtual{ hash } ;
+
+\\ Create an empty message catalog.
+<message-catalog>: ( -- catalog ) [
+  H{ } >message-catalog
+] ;
+
+\\ Set the messages for a locale in a catalog, replacing any existing entry.
+\\ The messages argument must be a hash mapping message keys to template strings.
+catalog-set: ( catalog messages locale -- catalog ) [
+  over hash? not [
+    f "catalog-set requires a hash of messages" EInvalidArgument make-error throw
+  ] when
+  unmake-locale
+  \ Stack: catalog messages locale-str
+  [ unmake-message-catalog ] 2dip
+  \ Stack: inner-hash messages locale-str
+  swap @set
+  >message-catalog
+] ;
+
+\ --- Methods ---
+
+>string: method{ message-catalog } [
+  unmake-message-catalog >string
+] ;
+
+inspect: method{ message-catalog } [
+  "<message-catalog " swap unmake-message-catalog inspect #append ">" #append
+] ;

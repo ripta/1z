@@ -1,0 +1,35 @@
+use "testing" ;
+use "i18n/locale" ;
+use "i18n/catalog" ;
+
+"<message-catalog> constructor" test-section
+<message-catalog> unmake-message-catalog H{ } swap "empty catalog" assert=
+
+"catalog-set single locale" test-section
+<message-catalog>
+H{ greeting: "Hello!" farewell: "Goodbye!" } "en-US" <locale> catalog-set
+unmake-message-catalog
+dup "en-US" @has? t swap "has en-US key" assert=
+"en-US" @get greeting: @get "Hello!" swap "en-US greeting" assert=
+
+"catalog-set multiple locales" test-section
+<message-catalog>
+H{ greeting: "Hello!" } "en-US" <locale> catalog-set
+H{ greeting: "Hallo!" } "de-DE" <locale> catalog-set
+unmake-message-catalog
+dup "en-US" @get greeting: @get "Hello!" swap "en-US greeting" assert=
+"de-DE" @get greeting: @get "Hallo!" swap "de-DE greeting" assert=
+
+"catalog-set replaces existing" test-section
+<message-catalog>
+H{ greeting: "Hi!" } "en-US" <locale> catalog-set
+H{ greeting: "Hello!" } "en-US" <locale> catalog-set
+unmake-message-catalog "en-US" @get greeting: @get
+"Hello!" swap "replaced greeting" assert=
+
+"catalog-set validates messages" test-section
+[ <message-catalog> "not a hash" "en-US" <locale> catalog-set ]
+"non-hash throws" assert-error
+
+"inspect" test-section
+<message-catalog> inspect "<message-catalog H{ }>" swap "empty inspect" assert=

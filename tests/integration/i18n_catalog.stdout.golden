@@ -1,0 +1,40 @@
+=== <message-catalog> constructor ===
+Stack: [ ]
+PASS: empty catalog
+Stack: [ ]
+=== catalog-set single locale ===
+Stack: [ ]
+Stack: [ <message-catalog H{ }> ]
+Stack: [ <message-catalog H{ en-US: H{ farewell: "Goodbye!" greeting: "Hello!" } }> ]
+Stack: [ H{ en-US: H{ farewell: "Goodbye!" greeting: "Hello!" } } ]
+PASS: has en-US key
+Stack: [ H{ en-US: H{ farewell: "Goodbye!" greeting: "Hello!" } } ]
+PASS: en-US greeting
+Stack: [ ]
+=== catalog-set multiple locales ===
+Stack: [ ]
+Stack: [ <message-catalog H{ }> ]
+Stack: [ <message-catalog H{ en-US: H{ greeting: "Hello!" } }> ]
+Stack: [ <message-catalog H{ en-US: H{ greeting: "Hello!" } de-DE: H{ greeting: "Hallo!" } }> ]
+Stack: [ H{ en-US: H{ greeting: "Hello!" } de-DE: H{ greeting: "Hallo!" } } ]
+PASS: en-US greeting
+Stack: [ H{ en-US: H{ greeting: "Hello!" } de-DE: H{ greeting: "Hallo!" } } ]
+PASS: de-DE greeting
+Stack: [ ]
+=== catalog-set replaces existing ===
+Stack: [ ]
+Stack: [ <message-catalog H{ }> ]
+Stack: [ <message-catalog H{ en-US: H{ greeting: "Hi!" } }> ]
+Stack: [ <message-catalog H{ en-US: H{ greeting: "Hello!" } }> ]
+Stack: [ "Hello!" ]
+PASS: replaced greeting
+Stack: [ ]
+=== catalog-set validates messages ===
+Stack: [ ]
+Stack: [ [ <message-catalog> "not a hash" "en-US" <locale> catalog-set ] ]
+PASS: non-hash throws
+Stack: [ ]
+=== inspect ===
+Stack: [ ]
+PASS: empty inspect
+Stack: [ ]
