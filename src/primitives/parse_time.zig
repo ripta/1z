@@ -32,7 +32,7 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
     var tokens = std.ArrayListUnmanaged(Value){};
     defer tokens.deinit(alloc);
 
-    while (tokenizer.next()) |tok| {
+    while (tokenizer.nextOrYield()) |tok| {
         if (isSkippable(tok.kind)) continue;
 
         const token = tok.text;
@@ -106,7 +106,7 @@ fn nativeParseValuesUntil(ctx: *Context) anyerror!void {
 fn nativeParseToken(ctx: *Context) anyerror!void {
     const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
     const alloc = ctx.quotationAllocator();
-    while (tokenizer.next()) |tok| {
+    while (tokenizer.nextOrYield()) |tok| {
         if (isSkippable(tok.kind)) continue;
         const token_copy = try alloc.dupe(u8, tok.text);
         try ctx.stack.push(.{ .string = token_copy });
@@ -119,7 +119,7 @@ fn nativeParseToken(ctx: *Context) anyerror!void {
 fn nativeParseLiteral(ctx: *Context) anyerror!void {
     const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
     const alloc = ctx.quotationAllocator();
-    while (tokenizer.next()) |tok| {
+    while (tokenizer.nextOrYield()) |tok| {
         if (isSkippable(tok.kind)) continue;
 
         const token = tok.text;

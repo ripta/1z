@@ -1,0 +1,124 @@
+=== multiline H{ ===
+Stack: [ ]
+PASS: multiline hash name value
+Stack: [ ]
+PASS: multiline hash age value
+Stack: [ ]
+PASS: multiline empty hash
+Stack: [ ]
+=== multiline V{ ===
+Stack: [ ]
+PASS: multiline vector length
+Stack: [ ]
+PASS: multiline vector first element
+Stack: [ ]
+=== multiline M{ ===
+Stack: [ ]
+PASS: multiline mutable map x value
+Stack: [ ]
+PASS: multiline mutable map y value
+Stack: [ ]
+=== multiline struct{ ===
+Stack: [ ]
+Stack: [ ]
+PASS: multiline struct x field
+Stack: [ ]
+PASS: multiline struct y field
+Stack: [ ]
+PASS: multiline struct type-of
+Stack: [ ]
+=== multiline enum{ flat ===
+Stack: [ ]
+Stack: [ ]
+PASS: multiline flat enum variant predicate
+Stack: [ ]
+PASS: multiline flat enum aggregate predicate
+Stack: [ ]
+PASS: multiline flat enum variants not equal
+Stack: [ ]
+=== multiline enum{ data-carrying ===
+Stack: [ ]
+Stack: [ ]
+PASS: multiline enum data variant predicate
+Stack: [ ]
+PASS: multiline enum unwrap circle
+Stack: [ ]
+PASS: multiline enum multi-field variant
+Stack: [ ]
+PASS: multiline rect unwrap height
+PASS: multiline rect unwrap width
+Stack: [ ]
+PASS: multiline enum flat variant in mixed enum
+Stack: [ ]
+=== multiline virtual{ simple ===
+Stack: [ ]
+Stack: [ ]
+PASS: multiline virtual predicate
+Stack: [ ]
+PASS: multiline virtual unwrap
+Stack: [ ]
+=== multiline virtual{ embedded struct ===
+Stack: [ ]
+Stack: [ ]
+PASS: multiline virtual struct type-of
+Stack: [ ]
+PASS: multiline virtual struct predicate
+Stack: [ ]
+PASS: multiline virtual struct unwrap y
+PASS: multiline virtual struct unwrap x
+Stack: [ ]
+=== multiline method{ ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: multiline method dispatch red
+Stack: [ ]
+PASS: multiline method dispatch green
+Stack: [ ]
+=== multiline stack effect ===
+Stack: [ ]
+Stack: [ ]
+PASS: multiline stack effect word
+Stack: [ ]
+=== multiline parse-token ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "hello" ]
+PASS: multiline parse-token reads next line
+Stack: [ ]
+=== multiline parse-literal ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ 42 ]
+PASS: multiline parse-literal reads integer
+Stack: [ ]
+Stack: [ "hello" ]
+PASS: multiline parse-literal reads string
+Stack: [ ]
+=== multiline user-defined parse-until ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ 3 ]
+PASS: multiline user-defined parse-until
+Stack: [ ]
+=== multiline parse-tokens-until ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ { "a" "b" "c" } ]
+PASS: multiline parse-tokens-until collects tokens
+Stack: [ ]
+Stack: [ { "a" "b" "c" } ]
+PASS: multiline parse-tokens-until first token
+Stack: [ ]
+=== multiline parse-values-until ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ { M{ define: [ define-struct ] fields: { "a" "b" } type: struct-descriptor: } "hello" } ]
+PASS: multiline parse-values-until collects values
+Stack: [ ]
+=== nested multiline ===
+Stack: [ ]
+PASS: quotation in multiline hash
+Stack: [ ]
+PASS: string in multiline hash
+Stack: [ ]

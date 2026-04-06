@@ -1,0 +1,205 @@
+\ Test multiline parse-time constructs
+
+use "testing" ;
+
+"multiline H{" test-section
+
+H{
+  name: "Alice"
+  age: 30
+} name: @get "Alice" "multiline hash name value" assert=
+
+H{
+  name: "Alice"
+  age: 30
+} age: @get 30 "multiline hash age value" assert=
+
+H{
+} @keys #len 0 "multiline empty hash" assert=
+
+"multiline V{" test-section
+
+V{
+  10
+  20
+  30
+} #len 3 "multiline vector length" assert=
+
+V{
+  10
+  20
+  30
+} 0 #nth 10 "multiline vector first element" assert=
+
+"multiline M{" test-section
+
+M{
+  x: 1
+  y: 2
+} x: @get 1 "multiline mutable map x value" assert=
+
+M{
+  x: 1
+  y: 2
+} y: @get 2 "multiline mutable map y value" assert=
+
+"multiline struct{" test-section
+
+ml-point: struct{
+  x
+  y
+} ;
+
+1 2 make-ml-point x>> 1 "multiline struct x field" assert=
+1 2 make-ml-point y>> 2 "multiline struct y field" assert=
+1 2 make-ml-point type-of ml-point: "multiline struct type-of" assert=
+
+"multiline enum{ flat" test-section
+
+ml-color: enum{
+  red
+  green
+  blue
+} ;
+
+ml-color:red ml-color:red? t "multiline flat enum variant predicate" assert=
+ml-color:green ml-color? t "multiline flat enum aggregate predicate" assert=
+ml-color:red ml-color:green = f "multiline flat enum variants not equal" assert=
+
+"multiline enum{ data-carrying" test-section
+
+ml-shape: enum{
+  circle struct{ radius }
+  rect struct{
+    width
+    height
+  }
+  point
+} ;
+
+42 >ml-shape:circle ml-shape:circle? t "multiline enum data variant predicate" assert=
+42 >ml-shape:circle ml-shape:circle> 42 "multiline enum unwrap circle" assert=
+10 20 >ml-shape:rect ml-shape:rect? t "multiline enum multi-field variant" assert=
+10 20 >ml-shape:rect ml-shape:rect> 20 "multiline rect unwrap height" assert= 10 "multiline rect unwrap width" assert=
+ml-shape:point ml-shape? t "multiline enum flat variant in mixed enum" assert=
+
+"multiline virtual{ simple" test-section
+
+ml-meter: virtual{
+  integer
+} ;
+
+100 >ml-meter ml-meter? t "multiline virtual predicate" assert=
+100 >ml-meter ml-meter> 100 "multiline virtual unwrap" assert=
+
+"multiline virtual{ embedded struct" test-section
+
+ml-vec2: virtual{
+  struct{
+    x
+    y
+  }
+} ;
+
+3 4 >ml-vec2 type-of ml-vec2: "multiline virtual struct type-of" assert=
+3 4 >ml-vec2 ml-vec2? t "multiline virtual struct predicate" assert=
+3 4 >ml-vec2 ml-vec2> 4 "multiline virtual struct unwrap y" assert= 3 "multiline virtual struct unwrap x" assert=
+
+"multiline method{" test-section
+
+ml-describe: generic ( val -- str ) [ drop "unknown" ] ;
+
+ml-describe: method{
+  ml-color
+} [ drop "a color" ] ;
+
+ml-color:red ml-describe "a color" "multiline method dispatch red" assert=
+ml-color:green ml-describe "a color" "multiline method dispatch green" assert=
+
+"multiline stack effect" test-section
+
+ml-add: (
+  x
+  y
+  --
+  z
+) [ + ] ;
+
+3 4 ml-add 7 "multiline stack effect word" assert=
+
+"multiline parse-token" test-section
+
+ml-grab-token: parse-time [ parse-token ] ;
+
+ml-grab-token
+hello
+"hello" "multiline parse-token reads next line" assert=
+
+"multiline parse-literal" test-section
+
+ml-grab-lit: parse-time [ parse-literal ] ;
+
+ml-grab-lit
+42
+42 "multiline parse-literal reads integer" assert=
+
+ml-grab-lit
+"hello"
+"hello" "multiline parse-literal reads string" assert=
+
+"multiline user-defined parse-until" test-section
+
+ml-block: parse-time [ "END" parse-until ] ;
+
+ml-block
+  1 2
+  +
+END call
+3 "multiline user-defined parse-until" assert=
+
+"multiline parse-tokens-until" test-section
+
+ml-grab-until: parse-time [ "END" parse-tokens-until ] ;
+
+ml-grab-until
+  a
+  b
+  c
+END
+#len 3 "multiline parse-tokens-until collects tokens" assert=
+
+ml-grab-until
+  a
+  b
+  c
+END
+#first "a" "multiline parse-tokens-until first token" assert=
+
+"multiline parse-values-until" test-section
+
+ml-grab-vals: parse-time [ "END" parse-values-until ] ;
+
+ml-grab-vals
+  struct{
+    a
+    b
+  }
+  hello
+END
+#len 2 "multiline parse-values-until collects values" assert=
+
+"nested multiline" test-section
+
+H{
+  fn: [
+    2 *
+  ]
+  name: "doubler"
+} fn: @get 5 swap call 10 "quotation in multiline hash" assert=
+
+H{
+  fn: [
+    2 *
+  ]
+  name: "doubler"
+} name: @get "doubler" "string in multiline hash" assert=
