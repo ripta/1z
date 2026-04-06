@@ -6,13 +6,26 @@ const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const Instruction = @import("value.zig").Instruction;
 const parser = @import("parser.zig");
 const Context = @import("context.zig").Context;
+const pc_mod = @import("parser_coroutine.zig");
+const ParserCoroutine = pc_mod.ParserCoroutine;
+const task_mod = @import("task.zig");
 
 /// StatementProcessor handles accumulating multi-line input and parsing.
 /// Used by both REPL and batch modes to share the core logic.
 pub const StatementProcessor = struct {
+    // Buffer for accumulating statement lines. Size is arbitrary but large enough for typical(?) use.
     stmt_buf: [65536]u8 = undefined,
+    // Cur rent length of valid data in stmt_buf
     stmt_len: usize = 0,
-    start_line: usize = 0, // File line number where current statement started
+    // File line number where current statement started
+    start_line: usize = 0,
+    // Active parser coroutine, if any
+    coroutine: ?ParserCoroutine = null,
+    // Stack for parser coroutine; allocated on demand to avoid reserving for simple statements.
+    coroutine_stack: ?[]align(std.heap.page_size_min) u8 = null,
+
+    // Size for parser coroutine stack, which should be enough for typical parsing depth.
+    const coroutine_stack_size = 1024 * 1024;
 
     pub const Result = union(enum) {
         needs_more_input,
@@ -25,6 +38,13 @@ pub const StatementProcessor = struct {
         if (self.stmt_len == 0) {
             // This is the start of a new statement
             self.start_line = line_num;
+        }
+    }
+
+    pub fn deinit(self: *StatementProcessor) void {
+        if (self.coroutine_stack) |stack| {
+            task_mod.freeTaskStack(stack);
+            self.coroutine_stack = null;
         }
     }
 
@@ -56,44 +76,91 @@ pub const StatementProcessor = struct {
         self.stmt_len += copy_len;
 
         // Attempt to parse
-        var tokenizer = Tokenizer.init(self.stmt_buf[0..self.stmt_len]);
-        const instrs = parser.parseTopLevel(allocator, &tokenizer, ctx) catch |err| {
-            if (parser.isIncompleteError(err)) {
-                return .needs_more_input;
+        if (self.coroutine != null) {
+            self.coroutine.?.tokenizer.?.input = self.stmt_buf[0..self.stmt_len];
+            self.coroutine.?.@"resume"();
+        } else {
+            if (self.coroutine_stack == null) {
+                self.coroutine_stack = task_mod.allocateTaskStack(coroutine_stack_size) catch return .{ .parse_error = error.OutOfMemory };
             }
-            return .{ .parse_error = err };
-        };
-
-        if (instrs.len == 0 and self.stmt_len > 0 and bufferHasDocComment(self.stmt_buf[0..self.stmt_len])) {
-            return .needs_more_input;
+            self.coroutine = .{
+                .stack_mem = self.coroutine_stack.?,
+                .allocator = allocator,
+                .ctx = ctx,
+                .initial_input = self.stmt_buf[0..self.stmt_len],
+            };
+            pc_mod.pending_entry_coroutine = &self.coroutine.?;
+            pc_mod.initCoroutineContext(&self.coroutine.?);
+            (&self.coroutine.?).@"resume"();
         }
 
-        return .{ .complete = instrs };
+        return self.handleCoroutineReturn();
     }
 
-    // Reset buffer after successful execution or fatal error.
+    /// Handle the result of a coroutine resume, checking for completion or need for more input.
+    fn handleCoroutineReturn(self: *StatementProcessor) Result {
+        const status = self.coroutine.?.status;
+        switch (status) {
+            .yielded => return .needs_more_input,
+            .completed => {
+                const result = self.coroutine.?.result.?;
+                self.coroutine = null;
+                switch (result) {
+                    .success => |instrs| {
+                        if (instrs.len == 0 and self.stmt_len > 0 and bufferHasDocComment(self.stmt_buf[0..self.stmt_len])) {
+                            return .needs_more_input;
+                        }
+                        return .{ .complete = instrs };
+                    },
+                    .parse_error => |err| {
+                        if (parser.isIncompleteError(err)) {
+                            return .needs_more_input;
+                        }
+                        return .{ .parse_error = err };
+                    },
+                }
+            },
+            .running => unreachable,
+        }
+    }
+
+    /// Reset buffer after successful execution or fatal error.
     pub fn reset(self: *StatementProcessor) void {
+        self.coroutine = null;
         self.stmt_len = 0;
         self.start_line = 0;
     }
 
-    // Check if currently accumulating input (for continuation prompt).
+    /// Check if currently accumulating input (for continuation prompt).
     pub fn isAccumulating(self: *const StatementProcessor) bool {
         return self.stmt_len > 0;
     }
 
-    // Return the current accumulated statement text.
+    /// Return the current accumulated statement text.
     pub fn getStatement(self: *const StatementProcessor) []const u8 {
         return self.stmt_buf[0..self.stmt_len];
     }
 
-    // Try to parse any remaining buffered content (for EOF handling).
-    // If ctx is provided, parse-time words will be executed during parsing.
+    /// Try to parse any remaining buffered content (for EOF handling).
+    /// If ctx is provided, parse-time words will be executed during parsing.
     pub fn flush(self: *StatementProcessor, allocator: Allocator, ctx: ?*Context) Result {
+        if (self.coroutine != null) {
+            // resume without extending input; nextOrYield will see no growth and return null, causing
+            // the parser to complete 😩
+            self.coroutine.?.@"resume"();
+            const result = self.coroutine.?.result.?;
+            self.coroutine = null;
+            return switch (result) {
+                .success => |instrs| .{ .complete = instrs },
+                .parse_error => |err| .{ .parse_error = err },
+            };
+        }
+
         if (self.stmt_len == 0) {
             return .{ .complete = &.{} };
         }
 
+        // bo active coroutine but buffered content, e.g., doc-comment accumulation followed by EOF(?)
         var tokenizer = Tokenizer.init(self.stmt_buf[0..self.stmt_len]);
         const instrs = parser.parseTopLevel(allocator, &tokenizer, ctx) catch |err| {
             return .{ .parse_error = err };
@@ -120,6 +187,7 @@ test "StatementProcessor complete input" {
     defer arena.deinit();
 
     var processor: StatementProcessor = .{};
+    defer processor.deinit();
 
     const result = processor.feedLine(arena.allocator(), "1 2 +", null);
     switch (result) {
@@ -135,6 +203,7 @@ test "StatementProcessor multiline input" {
     defer arena.deinit();
 
     var processor: StatementProcessor = .{};
+    defer processor.deinit();
 
     // First line opens a quotation
     switch (processor.feedLine(arena.allocator(), "[", null)) {
@@ -158,6 +227,7 @@ test "StatementProcessor empty line" {
     defer arena.deinit();
 
     var processor: StatementProcessor = .{};
+    defer processor.deinit();
 
     // Empty line with no accumulation returns empty complete
     switch (processor.feedLine(arena.allocator(), "   ", null)) {
@@ -173,6 +243,7 @@ test "StatementProcessor flush" {
     defer arena.deinit();
 
     var processor: StatementProcessor = .{};
+    defer processor.deinit();
 
     // Feed incomplete input
     _ = processor.feedLine(arena.allocator(), "[", null);

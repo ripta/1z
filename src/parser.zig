@@ -64,6 +64,18 @@ fn nextToken(tokenizer: *Tokenizer) ?Token {
     return null;
 }
 
+/// Like `nextToken`, but calls `nextOrYield` so that delimited parse
+/// functions can suspend when input is exhausted mid-construct.
+fn nextTokenOrYield(tokenizer: *Tokenizer) ?Token {
+    while (tokenizer.nextOrYield()) |tok| {
+        if (tok.kind == .comment or tok.kind == .newline) {
+            continue;
+        }
+        return tok;
+    }
+    return null;
+}
+
 /// All the different errors that can occur during parsing.
 pub const ParseError = error{
     UnmatchedOpenBracket,
@@ -317,7 +329,7 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
     defer doc_lines.deinit(allocator);
     var doc_first_line: usize = 0;
 
-    while (nextToken(tokenizer)) |tok| {
+    while (nextTokenOrYield(tokenizer)) |tok| {
         if (tok.kind == .doc_comment) {
             doc_lines.append(allocator, stripDocCommentPrefix(tok.text)) catch return ParseError.OutOfMemory;
             if (doc_first_line == 0) doc_first_line = tok.line;
@@ -422,7 +434,7 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer) ParseError!
     var current_list = &inputs;
     var pending_param_name: ?[]const u8 = null;
 
-    while (nextToken(tokenizer)) |tok| {
+    while (nextTokenOrYield(tokenizer)) |tok| {
         if (tok.kind == .doc_comment) continue;
 
         const token = tok.text;
@@ -525,7 +537,7 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) P
     var values: std.ArrayListUnmanaged(Value) = .{};
     errdefer values.deinit(allocator);
 
-    while (nextToken(tokenizer)) |tok| {
+    while (nextTokenOrYield(tokenizer)) |tok| {
         if (tok.kind == .doc_comment) continue;
 
         const token = tok.text;

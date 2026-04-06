@@ -468,6 +468,7 @@ fn replInteractive(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
     editor.dictionary = &ctx.dictionary;
 
     var processor: StatementProcessor = .{};
+    defer processor.deinit();
     var repl_line: usize = 0;
     while (true) {
         const prompt: []const u8 = if (verbosity == .silent)
@@ -542,6 +543,7 @@ fn replPiped(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
     const reader = &stdin.interface;
 
     var processor: StatementProcessor = .{};
+    defer processor.deinit();
     var repl_line: usize = 0;
     while (true) {
         if (verbosity != .silent) {
@@ -647,6 +649,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
     var reader = file.reader(&file_buf);
 
     var processor: StatementProcessor = .{};
+    defer processor.deinit();
     var file_line: usize = 0;
     while (true) {
         const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {

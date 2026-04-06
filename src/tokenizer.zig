@@ -1,4 +1,5 @@
 const std = @import("std");
+const ParserCoroutine = @import("parser_coroutine.zig").ParserCoroutine;
 
 /// Token represents a lexical token with its kind, text, and source location.
 pub const Token = struct {
@@ -36,6 +37,7 @@ pub const Tokenizer = struct {
     pos: usize,
     line: usize, // 1-based line number
     preserve_newlines: bool,
+    parser_coroutine: ?*ParserCoroutine = null,
 
     pub fn init(input: []const u8) Tokenizer {
         return .{
@@ -137,6 +139,20 @@ pub const Tokenizer = struct {
     pub fn reset(self: *Tokenizer) void {
         self.pos = 0;
         self.line = 1;
+    }
+
+    /// Like `next`, but yields to the parser coroutine when input is
+    /// exhausted instead of returning null. Returns null only on true
+    /// EOF (no coroutine, or coroutine flush with no new input).
+    pub fn nextOrYield(self: *Tokenizer) ?Token {
+        while (true) {
+            if (self.next()) |tok| return tok;
+            const co = self.parser_coroutine orelse return null;
+            const prev_len = self.input.len;
+            co.yield();
+            if (self.input.len > prev_len) continue;
+            return null;
+        }
     }
 
     fn isWhitespace(c: u8) bool {
