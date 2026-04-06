@@ -1,0 +1,92 @@
+\ Locale chain tests
+
+use "testing" ;
+use "i18n/locale" ;
+use "i18n/localechain" ;
+
+"locale>chain multi-level" test-section
+
+"de-AT" <locale> locale>chain
+dup #len 2 "de-AT expands to 2 locales" assert=
+unmake-locale-chain
+dup 0 #nth unmake-locale "de-AT" "first is de-AT" assert=
+1 #nth unmake-locale "de" "second is de" assert=
+
+"locale>chain three-level" test-section
+
+"zh-Hant-TW" <locale> locale>chain
+dup #len 3 "zh-Hant-TW expands to 3 locales" assert=
+unmake-locale-chain
+dup 0 #nth unmake-locale "zh-Hant-TW" "first is zh-Hant-TW" assert=
+dup 1 #nth unmake-locale "zh-Hant" "second is zh-Hant" assert=
+2 #nth unmake-locale "zh" "third is zh" assert=
+
+"locale>chain simple" test-section
+
+"en" <locale> locale>chain
+dup #len 1 "en expands to 1 locale" assert=
+unmake-locale-chain
+0 #nth unmake-locale "en" "only element is en" assert=
+
+"<locale-chain-with> different default" test-section
+
+"de-AT" <locale> "en-US" <locale> <locale-chain-with>
+dup #len 4 "de-AT with en-US default has 4 locales" assert=
+unmake-locale-chain
+dup 0 #nth unmake-locale "de-AT" "first is de-AT" assert=
+dup 1 #nth unmake-locale "de" "second is de" assert=
+dup 2 #nth unmake-locale "en-US" "third is en-US" assert=
+3 #nth unmake-locale "en" "fourth is en" assert=
+
+"<locale-chain-with> deduplication" test-section
+
+"de-AT" <locale> "de" <locale> <locale-chain-with>
+dup #len 2 "de-AT with de default deduplicates to 2" assert=
+unmake-locale-chain
+dup 0 #nth unmake-locale "de-AT" "first is de-AT" assert=
+1 #nth unmake-locale "de" "second is de" assert=
+
+"<locale-chain> single" test-section
+
+"en-US" <locale> <locale-chain>
+dup #len 1 "single-locale chain has 1 element" assert=
+unmake-locale-chain
+0 #nth unmake-locale "en-US" "only element is en-US" assert=
+
+"chain-append" test-section
+
+"en" <locale> <locale-chain>
+"fr" <locale> chain-append
+dup #len 2 "chain-append adds one element" assert=
+unmake-locale-chain
+dup 0 #nth unmake-locale "en" "first is en" assert=
+1 #nth unmake-locale "fr" "second is fr" assert=
+
+"chain-prepend" test-section
+
+"en" <locale> <locale-chain>
+"fr" <locale> chain-prepend
+dup #len 2 "chain-prepend adds one element" assert=
+unmake-locale-chain
+dup 0 #nth unmake-locale "fr" "first is fr" assert=
+1 #nth unmake-locale "en" "second is en" assert=
+
+"chain-concat" test-section
+
+"en" <locale> <locale-chain>
+"fr" <locale> <locale-chain>
+chain-concat
+dup #len 2 "chain-concat combines both" assert=
+unmake-locale-chain
+dup 0 #nth unmake-locale "en" "first is en" assert=
+1 #nth unmake-locale "fr" "second is fr" assert=
+
+"inspect" test-section
+
+"de-AT" <locale> locale>chain inspect
+"<locale-chain de-AT, de>" "inspect format" assert=
+
+"#len" test-section
+
+"de-AT" <locale> "en-US" <locale> <locale-chain-with>
+#len 4 "#len returns count" assert=

@@ -1,0 +1,134 @@
+\ lib/i18n/localechain.1z - Locale fallback chain construction
+\
+\ Provides the `locale-chain` virtual type wrapping an ordered list of
+\ locale values for fallback, plus construction and composition words.
+\ Expansion uses ICU uloc_getParent for automatic parent traversal.
+
+use "ffi" ;
+use "sequences" ;
+use "strings" ;
+use "i18n/icu" ;
+use "i18n/locale" ;
+
+\ --- Library loading and FFI bindings ---
+
+sys-info "os" @get "macos" = [
+  "icucore" lib-open
+] [
+  "icuuc" lib-open
+] if
+
+ffi-def{
+  (uloc-get-parent): "uloc_getParent" ffi{ cstring ptr i32 inout-i32 -> i32 }
+} call "icu-localechain-raw" swap >module reexport
+
+\ --- locale-chain virtual type ---
+
+locale-chain: virtual{ array } ;
+
+\ --- Internal helpers ---
+
+\\ Extract the ICU locale ID from a locale value.
+(locale>icu-id): ( locale -- icu-locale-id ) [
+  unmake-locale (bcp47>icu-id)
+] ;
+
+\\ Call uloc_getParent once, returning the parent ICU locale ID string.
+(get-parent): ( icu-id -- parent-icu-id ) [
+  (alloc-locale-buf)
+  \ Stack: icu-id buf ptr
+  2 pick-n 1 pick-n (locale-buf-size) 0
+  \ Stack: icu-id buf ptr icu-id ptr capacity status
+  (uloc-get-parent)
+  \ Stack: icu-id buf ptr status actual-len
+  swap (icu-check) swap drop (buf>string) nip
+] ;
+
+\\ Recursive loop: expand parent locales until root is reached.
+(expand-loop): ( array icu-id -- array ) [
+  (get-parent)
+  \ Stack: array parent-icu-id
+  dup "" = [
+    drop
+  ] [
+    dup (icu-id>bcp47) >locale
+    \ Stack: array parent-icu-id parent-locale
+    swap [ #suffix ] dip
+    \ Stack: array' parent-icu-id
+    (expand-loop)
+  ] if
+] ;
+
+\\ Expand a locale into an array of locale values via parent traversal.
+(expand-parents): ( locale -- array ) [
+  dup (locale>icu-id)
+  \ Stack: locale icu-id
+  swap 1array swap
+  \ Stack: { locale } icu-id
+  (expand-loop)
+] ;
+
+\\ Merge two locale arrays, deduplicating the second against the first.
+(chain-dedup): ( primary secondary -- merged ) [
+  over [ swap #in? not ] curry #filter #collect
+  #append
+] ;
+
+\ --- Public words ---
+
+\\ Build a locale chain by auto-expanding parent locales via ICU.
+\\ "de-AT" <locale> locale>chain => chain of [ de-AT, de ]
+locale>chain: ( locale -- chain ) [
+  (expand-parents) >locale-chain
+] ;
+
+\\ Build a locale chain with a default fallback locale appended.
+\\ Auto-expands both the primary and default locales, deduplicating.
+\\ "de-AT" <locale> "en-US" <locale> <locale-chain-with>
+\\ => chain of [ de-AT, de, en-US, en ]
+<locale-chain-with>: ( locale default -- chain ) [
+  swap (expand-parents)
+  \ Stack: default primary-array
+  swap (expand-parents)
+  \ Stack: primary-array default-array
+  (chain-dedup)
+  >locale-chain
+] ;
+
+\\ Build a locale chain containing a single locale, with no expansion.
+<locale-chain>: ( locale -- chain ) [
+  1array >locale-chain
+] ;
+
+\\ Append a fallback locale to the end of a chain.
+chain-append: ( chain locale -- chain ) [
+  swap unmake-locale-chain swap #suffix >locale-chain
+] ;
+
+\\ Prepend a preferred locale to the beginning of a chain.
+chain-prepend: ( chain locale -- chain ) [
+  swap unmake-locale-chain #prefix >locale-chain
+] ;
+
+\\ Concatenate two locale chains.
+chain-concat: ( chain1 chain2 -- chain ) [
+  unmake-locale-chain swap unmake-locale-chain swap #append >locale-chain
+] ;
+
+\ --- Internal display helper ---
+
+(chain>display): ( locale-chain -- string ) [
+  unmake-locale-chain [ unmake-locale ] #map #collect ", " #join
+] ;
+
+\ --- Methods ---
+
+>string: method{ locale-chain } [ (chain>display) ] ;
+
+inspect: method{ locale-chain } [
+  "<locale-chain " swap (chain>display) #append ">" #append
+] ;
+
+#len: method{ locale-chain } [
+  unmake-locale-chain #len
+] ;

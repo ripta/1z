@@ -1,0 +1,106 @@
+=== locale>chain multi-level ===
+Stack: [ ]
+Stack: [ <locale-chain { <locale "de-AT"> <locale "de"> }> ]
+PASS: de-AT expands to 2 locales
+Stack: [ <locale-chain { <locale "de-AT"> <locale "de"> }> ]
+Stack: [ { <locale "de-AT"> <locale "de"> } ]
+PASS: first is de-AT
+Stack: [ { <locale "de-AT"> <locale "de"> } ]
+PASS: second is de
+Stack: [ ]
+=== locale>chain three-level ===
+Stack: [ ]
+Stack: [ <locale-chain { <locale "zh-Hant-TW"> <locale "zh-Hant"> <locale "zh"> }> ]
+PASS: zh-Hant-TW expands to 3 locales
+Stack: [ <locale-chain { <locale "zh-Hant-TW"> <locale "zh-Hant"> <locale "zh"> }> ]
+Stack: [ { <locale "zh-Hant-TW"> <locale "zh-Hant"> <locale "zh"> } ]
+PASS: first is zh-Hant-TW
+Stack: [ { <locale "zh-Hant-TW"> <locale "zh-Hant"> <locale "zh"> } ]
+PASS: second is zh-Hant
+Stack: [ { <locale "zh-Hant-TW"> <locale "zh-Hant"> <locale "zh"> } ]
+PASS: third is zh
+Stack: [ ]
+=== locale>chain simple ===
+Stack: [ ]
+Stack: [ <locale-chain { <locale "en"> }> ]
+PASS: en expands to 1 locale
+Stack: [ <locale-chain { <locale "en"> }> ]
+Stack: [ { <locale "en"> } ]
+PASS: only element is en
+Stack: [ ]
+=== <locale-chain-with> different default ===
+Stack: [ ]
+Stack: [ <locale-chain { <locale "de-AT"> <locale "de"> <locale "en-US"> <locale "en"> }> ]
+PASS: de-AT with en-US default has 4 locales
+Stack: [ <locale-chain { <locale "de-AT"> <locale "de"> <locale "en-US"> <locale "en"> }> ]
+Stack: [ { <locale "de-AT"> <locale "de"> <locale "en-US"> <locale "en"> } ]
+PASS: first is de-AT
+Stack: [ { <locale "de-AT"> <locale "de"> <locale "en-US"> <locale "en"> } ]
+PASS: second is de
+Stack: [ { <locale "de-AT"> <locale "de"> <locale "en-US"> <locale "en"> } ]
+PASS: third is en-US
+Stack: [ { <locale "de-AT"> <locale "de"> <locale "en-US"> <locale "en"> } ]
+PASS: fourth is en
+Stack: [ ]
+=== <locale-chain-with> deduplication ===
+Stack: [ ]
+Stack: [ <locale-chain { <locale "de-AT"> <locale "de"> }> ]
+PASS: de-AT with de default deduplicates to 2
+Stack: [ <locale-chain { <locale "de-AT"> <locale "de"> }> ]
+Stack: [ { <locale "de-AT"> <locale "de"> } ]
+PASS: first is de-AT
+Stack: [ { <locale "de-AT"> <locale "de"> } ]
+PASS: second is de
+Stack: [ ]
+=== <locale-chain> single ===
+Stack: [ ]
+Stack: [ <locale-chain { <locale "en-US"> }> ]
+PASS: single-locale chain has 1 element
+Stack: [ <locale-chain { <locale "en-US"> }> ]
+Stack: [ { <locale "en-US"> } ]
+PASS: only element is en-US
+Stack: [ ]
+=== chain-append ===
+Stack: [ ]
+Stack: [ <locale-chain { <locale "en"> }> ]
+Stack: [ <locale-chain { <locale "en"> <locale "fr"> }> ]
+PASS: chain-append adds one element
+Stack: [ <locale-chain { <locale "en"> <locale "fr"> }> ]
+Stack: [ { <locale "en"> <locale "fr"> } ]
+PASS: first is en
+Stack: [ { <locale "en"> <locale "fr"> } ]
+PASS: second is fr
+Stack: [ ]
+=== chain-prepend ===
+Stack: [ ]
+Stack: [ <locale-chain { <locale "en"> }> ]
+Stack: [ <locale-chain { <locale "fr"> <locale "en"> }> ]
+PASS: chain-prepend adds one element
+Stack: [ <locale-chain { <locale "fr"> <locale "en"> }> ]
+Stack: [ { <locale "fr"> <locale "en"> } ]
+PASS: first is fr
+Stack: [ { <locale "fr"> <locale "en"> } ]
+PASS: second is en
+Stack: [ ]
+=== chain-concat ===
+Stack: [ ]
+Stack: [ <locale-chain { <locale "en"> }> ]
+Stack: [ <locale-chain { <locale "en"> }> <locale-chain { <locale "fr"> }> ]
+Stack: [ <locale-chain { <locale "en"> <locale "fr"> }> ]
+PASS: chain-concat combines both
+Stack: [ <locale-chain { <locale "en"> <locale "fr"> }> ]
+Stack: [ { <locale "en"> <locale "fr"> } ]
+PASS: first is en
+Stack: [ { <locale "en"> <locale "fr"> } ]
+PASS: second is fr
+Stack: [ ]
+=== inspect ===
+Stack: [ ]
+Stack: [ "<locale-chain de-AT, de>" ]
+PASS: inspect format
+Stack: [ ]
+=== #len ===
+Stack: [ ]
+Stack: [ <locale-chain { <locale "de-AT"> <locale "de"> <locale "en-US"> <locale "en"> }> ]
+PASS: #len returns count
+Stack: [ ]
