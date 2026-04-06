@@ -19,6 +19,7 @@ pub const popMarker = helpers.popMarker;
 pub const popStructType = helpers.popStructType;
 pub const popStructInstance = helpers.popStructInstance;
 pub const popTask = helpers.popTask;
+pub const popChannel = helpers.popChannel;
 
 pub const stack = @import("stack.zig");
 pub const arithmetic = @import("arithmetic.zig");
@@ -47,6 +48,7 @@ pub const dispatch_words = @import("dispatch_words.zig");
 pub const dispatch_helpers = @import("dispatch_helpers.zig");
 pub const time = @import("time.zig");
 pub const tasks = @import("tasks.zig");
+pub const channels = @import("channels.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -95,4 +97,5 @@ pub const extracted_primitives = stack.primitives ++
     enums.primitives ++
     dispatch_words.primitives ++
     time.primitives ++
-    tasks.primitives;
+    tasks.primitives ++
+    channels.primitives;

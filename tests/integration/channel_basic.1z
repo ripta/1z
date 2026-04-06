@@ -1,0 +1,72 @@
+use "testing" ;
+
+\ -- 1. type-of returns "channel" for a channel value --
+
+test-channel-type: ( -- ) [
+  [
+    <channel> type-of channel: "type-of returns channel" assert=
+  ] task-scope
+] ;
+
+\ -- 2. Basic unbuffered ping-pong between two tasks --
+
+test-ping-pong: ( -- ) [
+  [
+    <channel>
+    dup [ 42 swap send ] curry spawn drop
+    receive
+    42 "unbuffered ping-pong" assert=
+  ] task-scope
+] ;
+
+\ -- 3. Value integrity: send and receive a string --
+
+test-send-string: ( -- ) [
+  [
+    <channel>
+    dup [ "hello world" swap send ] curry spawn drop
+    receive
+    "hello world" "send/receive string" assert=
+  ] task-scope
+] ;
+
+\ -- 4. Value integrity: send and receive an array --
+
+test-send-array: ( -- ) [
+  [
+    <channel>
+    dup [ { 1 2 3 } swap send ] curry spawn drop
+    receive
+    { 1 2 3 } "send/receive array" assert=
+  ] task-scope
+] ;
+
+\ -- 5. Rendezvous ordering: sender blocks until receiver --
+
+test-sender-blocks: ( -- ) [
+  [
+    <channel>
+    dup [ 99 swap send ] curry spawn drop
+    yield
+    receive
+    99 "sender blocks until receiver" assert=
+  ] task-scope
+] ;
+
+\ -- 6. Rendezvous ordering: receiver blocks until sender --
+
+test-receiver-blocks: ( -- ) [
+  [
+    <channel>
+    dup [ receive ] curry spawn
+    swap 77 swap send
+    await 77 "receiver blocks until sender" assert=
+  ] task-scope
+] ;
+
+test-channel-type
+test-ping-pong
+test-send-string
+test-send-array
+test-sender-blocks
+test-receiver-blocks

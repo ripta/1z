@@ -1,0 +1,27 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: double close is no-op
+Stack: [ ]
+PASS: send on closed throws channel-closed
+Stack: [ ]
+PASS: receive on closed empty throws
+Stack: [ ]
+PASS: drain first buffered
+PASS: drain second buffered
+PASS: throws after buffer drained
+Stack: [ ]
+PASS: receive? returns some(42)
+Stack: [ ]
+PASS: receive? returns none on closed
+Stack: [ ]
+PASS: receive? drains buffered value
+PASS: receive? returns none after drain
+Stack: [ ]
+PASS: blocked receiver gets none after close
+Stack: [ ]

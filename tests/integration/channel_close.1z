@@ -1,0 +1,105 @@
+use "testing" ;
+
+\ -- 1. Double-close is a no-op --
+
+test-double-close: ( -- ) [
+  [
+    <channel>
+    dup close-channel
+    close-channel
+    t "double close is no-op" assert-true
+  ] task-scope
+] ;
+
+\ -- 2. Send on closed channel throws --
+
+test-send-closed: ( -- ) [
+  [
+    [
+      <channel>
+      dup close-channel
+      42 swap send
+    ] task-scope
+  ] channel-closed: "send on closed throws channel-closed" assert-error-type
+] ;
+
+\ -- 3. Receive on closed empty channel throws --
+
+test-receive-closed-empty: ( -- ) [
+  [
+    [
+      <channel>
+      dup close-channel
+      receive
+    ] task-scope
+  ] channel-closed: "receive on closed empty throws" assert-error-type
+] ;
+
+\ -- 4. Receive drains buffered values before throwing --
+
+test-receive-drains-buffer: ( -- ) [
+  [
+    2 <buffered-channel>
+    dup 10 swap send
+    dup 20 swap send
+    dup close-channel
+    dup receive 10 "drain first buffered" assert=
+    dup receive 20 "drain second buffered" assert=
+    [ receive ] curry channel-closed: "throws after buffer drained" assert-error-type
+  ] task-scope
+] ;
+
+\ -- 5. receive? returns some on success --
+
+test-receive?-some: ( -- ) [
+  [
+    <channel>
+    dup [ 42 swap send ] curry spawn drop
+    receive?
+    unwrap-or-throw 42 "receive? returns some(42)" assert=
+  ] task-scope
+] ;
+
+\ -- 6. receive? returns none on closed empty channel --
+
+test-receive?-none: ( -- ) [
+  [
+    <channel>
+    dup close-channel
+    receive?
+    option:none? t "receive? returns none on closed" assert=
+  ] task-scope
+] ;
+
+\ -- 7. receive? drains buffer then returns none --
+
+test-receive?-drain-then-none: ( -- ) [
+  [
+    1 <buffered-channel>
+    dup 5 swap send
+    dup close-channel
+    dup receive? unwrap-or-throw 5 "receive? drains buffered value" assert=
+    receive? option:none? t "receive? returns none after drain" assert=
+  ] task-scope
+] ;
+
+\ -- 8. Close wakes blocked receiver --
+
+test-close-wakes-receiver: ( -- ) [
+  [
+    <channel>
+    dup [ receive? ] curry spawn
+    swap close-channel
+    await
+    option:none? t "blocked receiver gets none after close" assert=
+  ] task-scope
+] ;
+
+test-double-close
+test-send-closed
+test-receive-closed-empty
+test-receive-drains-buffer
+test-receive?-some
+test-receive?-none
+test-receive?-drain-then-none
+test-close-wakes-receiver

@@ -1,0 +1,18 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: select immediate value
+Stack: [ ]
+PASS: select picks ready channel
+Stack: [ ]
+PASS: select unblocks with value
+Stack: [ ]
+PASS: select on all closed throws
+Stack: [ ]
+PASS: select reads from buffer
+Stack: [ ]
+PASS: select picks second channel
+Stack: [ ]

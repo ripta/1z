@@ -69,6 +69,11 @@ pub const Task = struct {
     ctx: *@import("context.zig").Context,
     scope: *TaskScope,
     cancelled: bool = false,
+    blocked_on_channel: ?*anyopaque = null,
+    /// Set by a sender when it delivers a value directly to this receiver's
+    /// stack. The receiver checks and clears this on resume so it can
+    /// distinguish a value handoff from a close-channel wake.
+    value_delivered: bool = false,
     quotation: Quotation,
     /// Task that is waiting for this task to complete (via await).
     awaiting_task: ?*Task = null,

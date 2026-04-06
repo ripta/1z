@@ -131,6 +131,7 @@ pub fn valueTypeName(val: Value) []const u8 {
         .stack_effect => "stack-effect",
         .error_value => "error",
         .task => "task",
+        .channel => "channel",
         .doc_string => "doc-string",
     };
 }
@@ -175,6 +176,7 @@ pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]con
         .stack_effect => allocator.dupe(u8, "<stack-effect>"),
         .error_value => |e| std.fmt.allocPrint(allocator, "<error {s}>", .{e.error_type}),
         .task => |t| std.fmt.allocPrint(allocator, "<task #{d}>", .{t.id}),
+        .channel => allocator.dupe(u8, "<channel>"),
         .doc_string => |s| std.fmt.allocPrint(allocator, "<doc-string \"{s}\">", .{s}),
     };
 }
@@ -354,6 +356,17 @@ pub fn popTask(ctx: *Context) !*Task {
         .task => |t| t,
         else => {
             setTypeMismatchError(ctx, "task", val);
+            return error.TypeMismatch;
+        },
+    };
+}
+
+pub fn popChannel(ctx: *Context) !*@import("../channel.zig").Channel {
+    const val = try ctx.stack.pop();
+    return switch (val) {
+        .channel => |ch| ch,
+        else => {
+            setTypeMismatchError(ctx, "channel", val);
             return error.TypeMismatch;
         },
     };

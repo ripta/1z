@@ -390,3 +390,6 @@ try: ( quot -- result ) [ [ call >result:ok ] [ >result:err ] recover ] ;
 
 \\ Get the last element of a sequence, returning some(value) or none if empty.
 #last?: ( seq -- option ) [ [ #last >option:some ] [ drop option:none ] recover ] ;
+
+\\ Try to receive from a channel. Returns some(value) on success, none if closed and empty.
+receive?: ( ch -- option ) [ [ receive >option:some ] [ drop option:none ] recover ] ;

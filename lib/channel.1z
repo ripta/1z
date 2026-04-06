@@ -1,0 +1,63 @@
+\ lib/channel.1z - Channel combinators for use within task-scope
+
+use "task" ;
+
+\ Consume all values from a channel until it closes.
+\ Calls quot for each value received.
+channel-each: ( ch quot -- ) [
+  over receive?
+  dup option:some? [
+    unwrap-or-throw
+    over call
+    channel-each
+  ] [
+    3drop
+  ] if
+] ;
+
+\ Drain all values from a channel into an array.
+channel>array: ( ch -- array ) [
+
+  c>a-loop: ( arr ch -- arr ) [
+    dup receive?
+    dup option:some? [
+      unwrap-or-throw
+      swap [ #push ] dip
+      c>a-loop
+    ] [
+      2drop
+    ] if
+  ] ;
+
+  { } swap c>a-loop
+] ;
+
+\ Create a channel and spawn a task that runs channel-each with quot.
+\ Returns the task handle and the channel.
+spawn-server: ( quot -- task ch ) [
+  <channel>
+  swap
+  [ channel-each ] curry
+  over swap curry
+  spawn swap
+] ;
+
+\ Spawn a task that receives from in-ch, applies quot to each value,
+\ sends results to a new output channel, and closes it when in-ch closes.
+pipeline: ( in-ch quot -- out-ch ) [
+  <channel>
+  [
+    [ send ] curry compose
+    [ channel-each ] curry
+    curry
+  ] keep
+  swap over [ close-channel ] curry
+  compose spawn drop
+] ;
+
+\ Spawn n tasks, each receiving from ch and applying quot.
+\ Returns an array of task handles.
+fan-out: ( ch quot n -- array ) [
+  [ [ channel-each ] curry curry ] dip
+  spawn-n
+] ;

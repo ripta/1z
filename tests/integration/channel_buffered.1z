@@ -1,0 +1,53 @@
+use "testing" ;
+
+\ -- 1. Buffered channel: send doesn't block when buffer has space --
+
+test-buffered-send-nonblocking: ( -- ) [
+  [
+    3 <buffered-channel>
+    dup 1 swap send
+    dup 2 swap send
+    dup 3 swap send
+    dup receive 1 "buffered recv first" assert=
+    dup receive 2 "buffered recv second" assert=
+    receive 3 "buffered recv third" assert=
+  ] task-scope
+] ;
+
+\ -- 2. Buffered channel: FIFO ordering preserved --
+
+test-buffered-fifo: ( -- ) [
+  [
+    2 <buffered-channel>
+    dup 10 swap send
+    dup 20 swap send
+    dup receive 10 "fifo first" assert=
+    receive 20 "fifo second" assert=
+  ] task-scope
+] ;
+
+\ -- 3. Buffered channel: sender blocks when buffer is full --
+
+test-buffered-full-blocks: ( -- ) [
+  [
+    1 <buffered-channel>
+    dup 1 swap send
+    dup [ 2 swap send ] curry spawn
+    swap receive
+    swap await drop
+    1 "full buffer: first receive" assert=
+  ] task-scope
+] ;
+
+\ -- 4. Buffered channel: type-of still returns "channel" --
+
+test-buffered-type: ( -- ) [
+  [
+    2 <buffered-channel> type-of channel: "buffered type-of" assert=
+  ] task-scope
+] ;
+
+test-buffered-send-nonblocking
+test-buffered-fifo
+test-buffered-full-blocks
+test-buffered-type

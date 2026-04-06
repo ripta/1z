@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const task_mod = @import("task.zig");
 const Task = task_mod.Task;
+const Channel = @import("channel.zig").Channel;
 const TaskStatus = task_mod.TaskStatus;
 const TaskScope = task_mod.TaskScope;
 
@@ -38,6 +39,8 @@ pub const Scheduler = struct {
     allocator: Allocator,
     /// Finished tasks whose stacks and arenas are freed on deinit.
     finished_tasks: std.ArrayListUnmanaged(*Task),
+    /// Channels created during this scheduler's lifetime, freed on deinit.
+    channels: std.ArrayListUnmanaged(*Channel) = .{},
 
     pub fn init(allocator: Allocator) Scheduler {
         return .{
@@ -62,8 +65,18 @@ pub const Scheduler = struct {
             self.allocator.destroy(t);
         }
         self.finished_tasks.deinit(self.allocator);
+        for (self.channels.items) |ch| {
+            ch.deinit();
+            self.allocator.destroy(ch);
+        }
+        self.channels.deinit(self.allocator);
         self.run_queue.deinit(self.allocator);
         self.sleep_queue.deinit();
+    }
+
+    /// Register a channel for cleanup when the scheduler is destroyed.
+    pub fn trackChannel(self: *Scheduler, ch: *Channel) !void {
+        try self.channels.append(self.allocator, ch);
     }
 
     /// Append a task to the end of the run queue.
@@ -236,6 +249,9 @@ pub const Scheduler = struct {
                 switch (sibling.status) {
                     .pending, .running => {
                         sibling.cancelled = true;
+                        if (sibling.blocked_on_channel != null) {
+                            self.run_queue.append(self.allocator, sibling) catch {};
+                        }
                     },
                     .completed, .failed, .cancelled => {},
                 }

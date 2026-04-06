@@ -39,6 +39,7 @@ pub fn dispatchTypeName(val: Value) []const u8 {
         .stack_effect => "stack-effect",
         .error_value => "error",
         .task => "task",
+        .channel => "channel",
         .doc_string => "doc-string",
     };
 }
