@@ -5,6 +5,8 @@ const Task = task_mod.Task;
 const Channel = @import("channel.zig").Channel;
 const TaskStatus = task_mod.TaskStatus;
 const TaskScope = task_mod.TaskScope;
+const Multiplexer = @import("multiplexer.zig").Multiplexer;
+const IoEvent = @import("multiplexer.zig").IoEvent;
 
 /// Entry in the sleep queue: a task and its absolute monotonic wake time in nanoseconds.
 pub const SleepEntry = struct {
@@ -18,6 +20,11 @@ pub const SleepQueue = std.PriorityQueue(SleepEntry, void, sleepEntryLessThan);
 fn sleepEntryLessThan(_: void, a: SleepEntry, b: SleepEntry) std.math.Order {
     return std.math.order(a.wake_time, b.wake_time);
 }
+
+pub const IoWaitEntry = struct {
+    task: *Task,
+    event: IoEvent,
+};
 
 /// Read the monotonic clock and return the current time as a single i128 nanosecond value.
 pub fn monotonicNowNs() i128 {
@@ -41,8 +48,12 @@ pub const Scheduler = struct {
     finished_tasks: std.ArrayListUnmanaged(*Task),
     /// Channels created during this scheduler's lifetime, freed on deinit.
     channels: std.ArrayListUnmanaged(*Channel) = .{},
+    /// Platform I/O multiplexer for async-aware stream operations.
+    multiplexer: Multiplexer,
+    /// Maps file descriptors to tasks suspended waiting on I/O readiness.
+    io_wait_map: std.AutoHashMapUnmanaged(std.posix.fd_t, IoWaitEntry) = .{},
 
-    pub fn init(allocator: Allocator) Scheduler {
+    pub fn init(allocator: Allocator) !Scheduler {
         return .{
             .run_queue = .{},
             .sleep_queue = SleepQueue.init(allocator, {}),
@@ -50,6 +61,7 @@ pub const Scheduler = struct {
             .next_task_id = 1,
             .allocator = allocator,
             .finished_tasks = .{},
+            .multiplexer = try Multiplexer.init(),
         };
     }
 
@@ -72,6 +84,8 @@ pub const Scheduler = struct {
         self.channels.deinit(self.allocator);
         self.run_queue.deinit(self.allocator);
         self.sleep_queue.deinit();
+        self.multiplexer.deinit();
+        self.io_wait_map.deinit(self.allocator);
     }
 
     /// Register a channel for cleanup when the scheduler is destroyed.
@@ -149,16 +163,51 @@ pub const Scheduler = struct {
         }
     }
 
+    /// Register the current task's interest in an fd and suspend it until readiness.
+    /// Called from stream primitives when an I/O operation would block.
+    pub fn ioSuspendCurrentTask(self: *Scheduler, fd: std.posix.fd_t, event: IoEvent) void {
+        if (self.current_task) |task| {
+            self.multiplexer.register(fd, event) catch {};
+            self.io_wait_map.put(self.allocator, fd, .{ .task = task, .event = event }) catch {};
+            task.blocked_on_io_fd = fd;
+            _ = task_mod.swapcontext(&task.uctx, &self.scheduler_uctx);
+        }
+    }
+
+    /// Remove cancelled tasks from the io_wait_map so we don't block forever
+    /// waiting on fds that will never be consumed.
+    fn drainCancelledIOWaiters(self: *Scheduler) void {
+        var removals = std.ArrayListUnmanaged(std.posix.fd_t){};
+        defer removals.deinit(self.allocator);
+
+        var it = self.io_wait_map.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.task.cancelled) {
+                removals.append(self.allocator, entry.key_ptr.*) catch {};
+            }
+        }
+
+        for (removals.items) |fd| {
+            if (self.io_wait_map.fetchRemove(fd)) |kv| {
+                self.multiplexer.unregister(fd, kv.value.event) catch {};
+                kv.value.task.blocked_on_io_fd = null;
+                kv.value.task.status = .cancelled;
+                self.handleTaskDone(kv.value.task);
+            }
+        }
+    }
+
     /// Core scheduling loop
     ///
-    /// Happens in four phases, repeating until there are no more tasks to run or wait for:
+    /// Repeats until there are no more tasks to run and no more IO waiters:
     ///
     /// 1. Wake expired sleepers into the run queue.
     /// 2. If run queue non-empty: dequeue one task, handle cancellation or
-    ///    resume via swapcontext, handle completion. Loop back to phase 1.
-    /// 3. If run queue empty but sleep queue non-empty: drain cancelled sleepers,
-    ///    then nanosleep until the next wake time. Loop back to phase 1.
-    /// 4. Both queues empty: break.
+    ///    resume via swapcontext, handle completion. Loop back to step 1.
+    /// 3. Run queue empty: drain cancelled sleepers and I/O waiters.
+    /// 4. If sleepers or I/O waiters remain: poll multiplexer with the next
+    ///    sleep deadline as timeout, re-enqueue tasks whose fds are ready.
+    ///    Loop back to step 1.
     pub fn runLoop(self: *Scheduler) void {
         while (true) {
             self.wakeExpiredSleepers();
@@ -193,26 +242,31 @@ pub const Scheduler = struct {
                 continue;
             }
 
-            if (self.sleep_queue.count() > 0) {
-                self.drainCancelledSleepers();
+            self.drainCancelledSleepers();
+            self.drainCancelledIOWaiters();
 
-                // draining coulda woken waiting tasks via handleTaskDone, so re-check the runqueue before sleeping
-                if (self.run_queue.items.len > 0) continue;
+            // draining coulda woken waiting tasks via handleTaskDone, so re-check before blocking
+            if (self.run_queue.items.len > 0) continue;
 
-                if (self.sleep_queue.peek()) |next| {
-                    const now = monotonicNowNs();
-                    const remaining_ns = next.wake_time - now;
-                    if (remaining_ns > 0) {
-                        const ns_u: u128 = @intCast(remaining_ns);
-                        const sec: u64 = @intCast(ns_u / std.time.ns_per_s);
-                        const nsec: u64 = @intCast(ns_u % std.time.ns_per_s);
-                        std.posix.nanosleep(sec, nsec);
-                    }
-                    continue;
+            const has_sleepers = self.sleep_queue.count() > 0;
+            const has_io_waiters = self.io_wait_map.count() > 0;
+
+            if (!has_sleepers and !has_io_waiters) break;
+
+            const timeout: ?i128 = if (has_sleepers) blk: {
+                const next = self.sleep_queue.peek().?;
+                const now = monotonicNowNs();
+                const remaining = next.wake_time - now;
+                break :blk if (remaining > 0) remaining else @as(i128, 0);
+            } else null;
+
+            const ready = self.multiplexer.poll(timeout) catch &.{};
+            for (ready) |ev| {
+                if (self.io_wait_map.fetchRemove(ev.fd)) |kv| {
+                    kv.value.task.blocked_on_io_fd = null;
+                    self.run_queue.append(self.allocator, kv.value.task) catch {};
                 }
             }
-
-            break;
         }
     }
 
@@ -251,6 +305,12 @@ pub const Scheduler = struct {
                         sibling.cancelled = true;
                         if (sibling.blocked_on_channel != null) {
                             self.run_queue.append(self.allocator, sibling) catch {};
+                        } else if (sibling.blocked_on_io_fd) |fd| {
+                            if (self.io_wait_map.fetchRemove(fd)) |kv| {
+                                self.multiplexer.unregister(fd, kv.value.event) catch {};
+                            }
+                            sibling.blocked_on_io_fd = null;
+                            self.run_queue.append(self.allocator, sibling) catch {};
                         }
                     },
                     .completed, .failed, .cancelled => {},
@@ -274,7 +334,7 @@ pub const Scheduler = struct {
 // =============================================================================
 
 test "init and deinit empty scheduler" {
-    var sched = Scheduler.init(std.testing.allocator);
+    var sched = try Scheduler.init(std.testing.allocator);
     defer sched.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), sched.run_queue.items.len);
@@ -283,7 +343,7 @@ test "init and deinit empty scheduler" {
 }
 
 test "nextId increments" {
-    var sched = Scheduler.init(std.testing.allocator);
+    var sched = try Scheduler.init(std.testing.allocator);
     defer sched.deinit();
 
     try std.testing.expectEqual(@as(u64, 1), sched.nextId());
@@ -292,7 +352,7 @@ test "nextId increments" {
 }
 
 test "runLoop exits immediately with empty queue and should not hang or crash" {
-    var sched = Scheduler.init(std.testing.allocator);
+    var sched = try Scheduler.init(std.testing.allocator);
     defer sched.deinit();
 
     sched.runLoop();

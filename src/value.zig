@@ -84,6 +84,7 @@ pub const Stream = struct {
     closed: bool = false,
     name: []const u8, // For display: "stdout", "stderr", file path
     buffering: BufferingMode = .none,
+    nonblocking_set: bool = false,
 };
 
 /// Parameter represents a dynamically-scoped variable with a lazy default.

@@ -27,6 +27,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "sleep", .stack_effect = "duration --", .doc = "Suspend the current task for a duration.", .func = nativeSleep },
     .{ .name = "cancel-task", .stack_effect = "task --", .doc = "Cancel a task.", .func = nativeCancelTask },
     .{ .name = "with-timeout", .stack_effect = "quot duration -- value", .doc = "Run a quotation with a timeout duration.", .func = nativeWithTimeout },
+    .{ .name = "multiplexer-stats", .stack_effect = "-- hash", .doc = "Return a hash of I/O multiplexer statistics. Requires an active task-scope.", .func = nativeMultiplexerStats },
 };
 
 /// Allocate a Task and its Context on the heap, wire up the ucontext, and
@@ -100,7 +101,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     }
 
     // Case: Top-level
-    var scheduler = Scheduler.init(ctx.allocator);
+    var scheduler = try Scheduler.init(ctx.allocator);
     defer scheduler.deinit();
 
     ctx.scheduler = &scheduler;
@@ -369,12 +370,20 @@ fn timerTaskEntryPoint() callconv(.c) void {
 fn nativeCancelTask(ctx: *Context) anyerror!void {
     const task = try helpers.popTask(ctx);
 
-    if (ctx.scheduler == null) {
+    const scheduler = ctx.scheduler orelse {
         ctx.pending_error_message = "cancel-task must be called within a task-scope";
         return error.InvalidState;
-    }
+    };
 
     task.cancelled = true;
+
+    if (task.blocked_on_io_fd) |fd| {
+        if (scheduler.io_wait_map.fetchRemove(fd)) |kv| {
+            scheduler.multiplexer.unregister(fd, kv.value.event) catch {};
+        }
+        task.blocked_on_io_fd = null;
+        scheduler.run_queue.append(scheduler.allocator, task) catch {};
+    }
 }
 
 /// await ( task -- value )
@@ -724,4 +733,28 @@ fn deepCopyErrorObject(err: ErrorObject, alloc: Allocator) DeepCopyError!ErrorOb
         .data = new_data,
         .stack_trace = new_trace,
     };
+}
+
+/// multiplexer-stats ( -- hash )
+fn nativeMultiplexerStats(ctx: *Context) anyerror!void {
+    const scheduler = ctx.scheduler orelse {
+        ctx.pending_error_message = "multiplexer-stats requires an active task-scope";
+        return error.InvalidState;
+    };
+
+    const alloc = ctx.quotationAllocator();
+    const hash = alloc.create(value_mod.HashTable) catch return error.OutOfMemory;
+    hash.* = value_mod.HashTable{};
+
+    hash.put(alloc, try alloc.dupe(u8, "io-waiting"), .{
+        .integer = @intCast(scheduler.io_wait_map.count()),
+    }) catch return error.OutOfMemory;
+    hash.put(alloc, try alloc.dupe(u8, "sleeping"), .{
+        .integer = @intCast(scheduler.sleep_queue.count()),
+    }) catch return error.OutOfMemory;
+    hash.put(alloc, try alloc.dupe(u8, "run-queue"), .{
+        .integer = @intCast(scheduler.run_queue.items.len),
+    }) catch return error.OutOfMemory;
+
+    try ctx.stack.push(.{ .hash = hash });
 }
