@@ -12,6 +12,6 @@ spawn-n: ( quot n -- array ) [
 \ Run an array of quotations concurrently, returning an array of results
 \ in the same order. Must be called within a task-scope.
 concurrent: ( array -- array ) [
-  [ spawn ] #map
+  [ spawn ] #map #collect
   await-all
 ] ;

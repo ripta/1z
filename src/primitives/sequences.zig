@@ -17,6 +17,22 @@ const popVector = helpers.popVector;
 const setErrorContext = helpers.setErrorContext;
 const valueTypeName = helpers.valueTypeName;
 
+const Allocator = std.mem.Allocator;
+
+/// Convert a sequence value to an ArrayIter. Returns null if the value is not
+/// a recognized sequence type. For arrays, wraps directly; for other types
+/// (string, vector, byte-array, set), materializes to a values array first.
+fn seqToArrayIter(seq: Value, alloc: Allocator) !?*Iterator {
+    const items: []const Value = switch (seq) {
+        .array => |arr| arr,
+        .string, .vector, .byte_array, .set => try sequenceToValues(seq, alloc),
+        else => return null,
+    };
+    const iter = try alloc.create(Iterator);
+    iter.* = .{ .kind = .{ .array = .{ .items = items, .index = 0 } } };
+    return iter;
+}
+
 const SequenceIterator = sequence.SequenceIterator;
 const SequenceBuilder = sequence.SequenceBuilder;
 const SequenceKind = sequence.SequenceKind;
@@ -206,87 +222,48 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
     }
 }
 
-/// #map ( seq quot -- seq' ) - Transform each element of sequence
+/// #map ( seq quot -- iterator ) - Lazily transform each element of sequence
 ///
-/// Iterators are lazily mapped instead of materialized.
-/// Both string and byte_array map to array.
-/// Anything else preserve type.
+/// Always returns a lazy iterator, regardless of input type. Use #collect
+/// to materialize the result into an array.
 pub fn nativeMap(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
 
-    if (seq == .iterator) {
-        const iter = alloc.create(Iterator) catch return error.OutOfMemory;
-        iter.* = .{ .kind = .{ .map = .{ .inner = seq.iterator, .quotation = quot } } };
-        try ctx.stack.push(.{ .iterator = iter });
-        return;
-    }
+    const inner = if (seq == .iterator)
+        seq.iterator
+    else
+        try seqToArrayIter(seq, alloc) orelse {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        };
 
-    const input_kind = classifySequence(seq) orelse {
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
-        return error.TypeMismatch;
-    };
-    const output_kind: SequenceKind = switch (input_kind) {
-        .string, .byte_array => .array,
-        else => input_kind,
-    };
-
-    const len = sequenceLength(seq) orelse {
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
-        return error.TypeMismatch;
-    };
-    var iter = SequenceIterator.init(seq, alloc) orelse {
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
-        return error.TypeMismatch;
-    };
-    var builder = try SequenceBuilder.initWithCapacity(output_kind, alloc, len);
-
-    while (try iter.next()) |elem| {
-        try ctx.stack.push(elem);
-        try ctx.executeQuotationWithFrame(quot);
-        const mapped = try ctx.stack.pop();
-        try builder.append(mapped);
-    }
-
-    try ctx.stack.push(try builder.toValue());
+    const iter = alloc.create(Iterator) catch return error.OutOfMemory;
+    iter.* = .{ .kind = .{ .map = .{ .inner = inner, .quotation = quot } } };
+    try ctx.stack.push(.{ .iterator = iter });
 }
 
-/// #filter ( seq quot -- seq' ) - Keep elements where quotation returns true
+/// #filter ( seq quot -- iterator ) - Lazily keep elements where quotation returns true
 ///
-/// Iterators are lazily filtered instead of materialized.
+/// Always returns a lazy iterator, regardless of input type. Use #collect
+/// to materialize the result into an array.
 pub fn nativeFilter(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
 
-    if (seq == .iterator) {
-        const iter = alloc.create(Iterator) catch return error.OutOfMemory;
-        iter.* = .{ .kind = .{ .filter = .{ .inner = seq.iterator, .quotation = quot } } };
-        try ctx.stack.push(.{ .iterator = iter });
-        return;
-    }
+    const inner = if (seq == .iterator)
+        seq.iterator
+    else
+        try seqToArrayIter(seq, alloc) orelse {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        };
 
-    const kind = classifySequence(seq) orelse {
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
-        return error.TypeMismatch;
-    };
-    var iter = SequenceIterator.init(seq, alloc) orelse {
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
-        return error.TypeMismatch;
-    };
-    var builder = try SequenceBuilder.init(kind, alloc);
-
-    while (try iter.next()) |elem| {
-        try ctx.stack.push(elem);
-        try ctx.executeQuotationWithFrame(quot);
-        const predicate = try popBoolean(ctx);
-        if (predicate) {
-            try builder.append(elem);
-        }
-    }
-
-    try ctx.stack.push(try builder.toValue());
+    const iter = alloc.create(Iterator) catch return error.OutOfMemory;
+    iter.* = .{ .kind = .{ .filter = .{ .inner = inner, .quotation = quot } } };
+    try ctx.stack.push(.{ .iterator = iter });
 }
 
 /// #reduce ( seq init quot -- result ) - Fold sequence with accumulator

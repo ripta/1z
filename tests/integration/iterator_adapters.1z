@@ -86,18 +86,18 @@ test-filter-reduce: ( -- ) [
   12 "filter+reduce sums 3+4+5" assert=
 ] ;
 
-\ -- 12. Existing eager #map on arrays still works --
+\ -- 12. #map on arrays returns lazy iterator --
 
-test-eager-map-array: ( -- ) [
-  { 1 2 3 } [ 10 * ] #map
-  { 10 20 30 } "eager map on array" assert=
+test-lazy-map-array: ( -- ) [
+  { 1 2 3 } [ 10 * ] #map #collect
+  { 10 20 30 } "lazy map on array collects" assert=
 ] ;
 
-\ -- 13. Existing eager #filter on arrays still works --
+\ -- 13. #filter on arrays returns lazy iterator --
 
-test-eager-filter-array: ( -- ) [
-  { 1 2 3 4 5 } [ 3 > ] #filter
-  { 4 5 } "eager filter on array" assert=
+test-lazy-filter-array: ( -- ) [
+  { 1 2 3 4 5 } [ 3 > ] #filter #collect
+  { 4 5 } "lazy filter on array collects" assert=
 ] ;
 
 test-map-returns-iterator
@@ -111,5 +111,5 @@ test-map-then-filter
 test-filter-then-map
 test-map-each
 test-filter-reduce
-test-eager-map-array
-test-eager-filter-array
+test-lazy-map-array
+test-lazy-filter-array

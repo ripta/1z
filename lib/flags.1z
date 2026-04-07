@@ -58,12 +58,12 @@ parse-flags: [
   is-positional-flag: ( name -- ? ) [
     flag-registry swap @get
     "markers" @get
-    positional [ = ] curry #filter #len 0 >
+    positional [ = ] curry #filter #count 0 >
   ] ;
 
   positional-names: [
     flag-registry @keys
-    [ is-positional-flag ] #filter
+    [ is-positional-flag ] #filter #collect
   ] ;
 
   find-flag-by-short: [
@@ -94,7 +94,7 @@ parse-flags: [
     dup "markers" @get
     swap "descriptor" @get
 
-    swap positional [ = ] curry #filter #len 0 >
+    swap positional [ = ] curry #filter #count 0 >
     [
       over sym-to-str
       "  <" swap #append ">" #append
@@ -204,7 +204,7 @@ parse-flags: [
     [
       dup flag-registry swap @get
       "markers" @get
-      required [ = ] curry #filter #len 0 >
+      required [ = ] curry #filter #count 0 >
       [
         pf-result get over @has?
         [ drop ]
@@ -259,7 +259,7 @@ parse-flags: [
       [
         dup flag-registry swap @get
         "markers" @get
-        positional [ = ] curry #filter #len 0 >
+        positional [ = ] curry #filter #count 0 >
         [ drop ]
         [ pf-result get swap f @set! drop ]
         if

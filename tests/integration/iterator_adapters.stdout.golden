@@ -38,7 +38,7 @@ PASS: map+each sums mapped values
 Stack: [ ]
 PASS: filter+reduce sums 3+4+5
 Stack: [ ]
-PASS: eager map on array
+PASS: lazy map on array collects
 Stack: [ ]
-PASS: eager filter on array
+PASS: lazy filter on array collects
 Stack: [ ]

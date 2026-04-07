@@ -34,7 +34,7 @@ row>string: ( grid y -- str ) [
     col-x: swap ;
     row-g col-x row-y marked?
     [ row-g mark-char>> ] [ row-g empty-char>> ] if
-  ] #map
+  ] #map #collect
   "" #join
 ] ;
 
@@ -42,7 +42,7 @@ row>string: ( grid y -- str ) [
 grid>string: ( grid -- str ) [
   dup g: swap ;
   height>> iota
-  [ g swap row>string ] #map
+  [ g swap row>string ] #map #collect
   "\n" #join
 ] ;
 

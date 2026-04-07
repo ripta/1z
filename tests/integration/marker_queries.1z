@@ -25,9 +25,9 @@ multi-marker-word: mk1 mk2 mk3 [ 20 ] ;
 \ Check all markers are present (order may vary)
 \ Use [ over = ] so the reference marker survives each filter iteration;
 \ put parse-time marker first to avoid instruction reordering.
-mk1 "multi-marker-word" word-markers [ over = ] #filter swap drop #len 1 = t "mk1 in markers" assert=
-mk2 "multi-marker-word" word-markers [ over = ] #filter swap drop #len 1 = t "mk2 in markers" assert=
-mk3 "multi-marker-word" word-markers [ over = ] #filter swap drop #len 1 = t "mk3 in markers" assert=
+"multi-marker-word" word-markers [ mk1 = ] #filter #count 1 = t "mk1 in markers" assert=
+"multi-marker-word" word-markers [ mk2 = ] #filter #count 1 = t "mk2 in markers" assert=
+"multi-marker-word" word-markers [ mk3 = ] #filter #count 1 = t "mk3 in markers" assert=
 
 "word-markers on native words" test-section
 
@@ -72,4 +72,4 @@ my-lib-marker my-lib-marker = t "marker identity in module scope" assert=
 my-lib-marker "single-marked" word-markers #first = t "marker identity preserved through import" assert=
 
 \ Check that multi-marked has my-lib-marker among its markers
-my-lib-marker "multi-marked" word-markers [ over = ] #filter swap drop #len 1 = t "my-lib-marker in multi-marked" assert=
+"multi-marked" word-markers [ my-lib-marker = ] #filter #count 1 = t "my-lib-marker in multi-marked" assert=

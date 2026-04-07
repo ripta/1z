@@ -16,9 +16,9 @@ use "sequences" ;
 "" "" #ends-with? t "#ends-with? empty" assert=
 
 "squeeze" test-section
-{ "a" "" "b" "" "c" } #squeeze { "a" "b" "c" } "remove empties" assert=
-{ "" } #squeeze { } "single empty" assert=
-{ "a" "b" } #squeeze { "a" "b" } "no empties" assert=
-{ } #squeeze { } "empty array" assert=
+{ "a" "" "b" "" "c" } #squeeze #collect { "a" "b" "c" } "remove empties" assert=
+{ "" } #squeeze #collect { } "single empty" assert=
+{ "a" "b" } #squeeze #collect { "a" "b" } "no empties" assert=
+{ } #squeeze #collect { } "empty array" assert=
 
 "All sequence tests complete!" print-line

@@ -159,7 +159,7 @@ dup 0 #nth 3 = [ "PASS: append then slice first" print-line ] [ "FAIL: append th
 "hello world" 0 5 #slice " there" #append "hello there" = [ "PASS: slice then append" print-line ] [ "FAIL: slice then append" print-line ] if
 
 \ Map then append
-{ 1 2 } [ 10 * ] #map { 3 4 } [ 10 * ] #map #append
+{ 1 2 } [ 10 * ] #map #collect { 3 4 } [ 10 * ] #map #collect #append
 dup #len 4 = [ "PASS: map then append length" print-line ] [ "FAIL: map then append length" print-line ] if
 dup 0 #nth 10 = [ "PASS: map then append first" print-line ] [ "FAIL: map then append first" print-line ] if
 3 #nth 40 = [ "PASS: map then append last" print-line ] [ "FAIL: map then append last" print-line ] if
