@@ -8,6 +8,7 @@ const ByteArray = value_mod.ByteArray;
 const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
 const sequence = @import("sequence.zig");
+const Iterator = @import("../iterator.zig").Iterator;
 
 const popInteger = helpers.popInteger;
 const popBoolean = helpers.popBoolean;
@@ -183,7 +184,7 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     if (seq == .iterator) {
-        while (seq.iterator.next()) |elem| {
+        while (try seq.iterator.next(ctx)) |elem| {
             try ctx.stack.push(elem);
             try ctx.executeQuotationWithFrame(quot);
         }
@@ -202,11 +203,20 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
 
 /// #map ( seq quot -- seq' ) - Transform each element of sequence
 ///
-/// NOTE(ripta): string and byte_array map to array; others preserve type
+/// Iterators are lazily mapped instead of materialized.
+/// Both string and byte_array map to array.
+/// Anything else preserve type.
 pub fn nativeMap(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
+
+    if (seq == .iterator) {
+        const iter = alloc.create(Iterator) catch return error.OutOfMemory;
+        iter.* = .{ .kind = .{ .map = .{ .inner = seq.iterator, .quotation = quot } } };
+        try ctx.stack.push(.{ .iterator = iter });
+        return;
+    }
 
     const input_kind = classifySequence(seq) orelse {
         setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
@@ -238,10 +248,19 @@ pub fn nativeMap(ctx: *Context) anyerror!void {
 }
 
 /// #filter ( seq quot -- seq' ) - Keep elements where quotation returns true
+///
+/// Iterators are lazily filtered instead of materialized.
 pub fn nativeFilter(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
+
+    if (seq == .iterator) {
+        const iter = alloc.create(Iterator) catch return error.OutOfMemory;
+        iter.* = .{ .kind = .{ .filter = .{ .inner = seq.iterator, .quotation = quot } } };
+        try ctx.stack.push(.{ .iterator = iter });
+        return;
+    }
 
     const kind = classifySequence(seq) orelse {
         setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
@@ -273,7 +292,7 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     if (seq == .iterator) {
-        while (seq.iterator.next()) |elem| {
+        while (try seq.iterator.next(ctx)) |elem| {
             try ctx.stack.push(acc);
             try ctx.stack.push(elem);
             try ctx.executeQuotationWithFrame(quot);

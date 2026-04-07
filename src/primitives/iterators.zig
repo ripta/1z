@@ -32,7 +32,7 @@ fn nativeNext(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
         .iterator => |iter| {
-            if (iter.next()) |elem| {
+            if (try iter.next(ctx)) |elem| {
                 try ctx.stack.push(elem);
             } else {
                 ctx.thrown_error = .{
