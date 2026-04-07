@@ -11,6 +11,8 @@ pub const Iterator = struct {
         array: ArrayIter,
         map: MapIter,
         filter: FilterIter,
+        take: TakeIter,
+        drop: DropIter,
     };
 
     pub fn next(self: *Iterator, ctx: *Context) anyerror!?Value {
@@ -18,6 +20,8 @@ pub const Iterator = struct {
             .array => |*it| it.next(),
             .map => |*it| try it.next(ctx),
             .filter => |*it| try it.next(ctx),
+            .take => |*it| try it.next(ctx),
+            .drop => |*it| try it.next(ctx),
         };
     }
 
@@ -26,6 +30,8 @@ pub const Iterator = struct {
             .array => "array",
             .map => "map",
             .filter => "filter",
+            .take => "take",
+            .drop => "drop",
         };
     }
 
@@ -39,6 +45,16 @@ pub const Iterator = struct {
             },
             .filter => |it| {
                 try writer.writeAll("filter(");
+                try it.inner.progressDisplay(writer);
+                try writer.writeAll(")");
+            },
+            .take => |it| {
+                try writer.print("take({d}, ", .{it.remaining});
+                try it.inner.progressDisplay(writer);
+                try writer.writeAll(")");
+            },
+            .drop => |it| {
+                try writer.writeAll("drop(");
                 try it.inner.progressDisplay(writer);
                 try writer.writeAll(")");
             },
@@ -83,6 +99,30 @@ pub const FilterIter = struct {
             if (keep) return elem;
         }
         return null;
+    }
+};
+
+pub const TakeIter = struct {
+    inner: *Iterator,
+    remaining: usize,
+
+    pub fn next(self: *TakeIter, ctx: *Context) anyerror!?Value {
+        if (self.remaining == 0) return null;
+        self.remaining -= 1;
+        return try self.inner.next(ctx);
+    }
+};
+
+pub const DropIter = struct {
+    inner: *Iterator,
+    to_skip: usize,
+
+    pub fn next(self: *DropIter, ctx: *Context) anyerror!?Value {
+        while (self.to_skip > 0) {
+            self.to_skip -= 1;
+            _ = try self.inner.next(ctx) orelse return null;
+        }
+        return try self.inner.next(ctx);
     }
 };
 

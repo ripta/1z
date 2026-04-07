@@ -1276,6 +1276,13 @@ fn nativeTake(ctx: *Context) anyerror!void {
     const n: usize = @intCast(n_val);
     const alloc = ctx.quotationAllocator();
 
+    if (seq == .iterator) {
+        const iter = alloc.create(Iterator) catch return error.OutOfMemory;
+        iter.* = .{ .kind = .{ .take = .{ .inner = seq.iterator, .remaining = n } } };
+        try ctx.stack.push(.{ .iterator = iter });
+        return;
+    }
+
     switch (seq) {
         .string => |s| {
             const cp_count = sequence.utf8CodepointCount(s);
@@ -1335,6 +1342,13 @@ fn nativeDrop(ctx: *Context) anyerror!void {
     }
     const n: usize = @intCast(n_val);
     const alloc = ctx.quotationAllocator();
+
+    if (seq == .iterator) {
+        const iter = alloc.create(Iterator) catch return error.OutOfMemory;
+        iter.* = .{ .kind = .{ .drop = .{ .inner = seq.iterator, .to_skip = n } } };
+        try ctx.stack.push(.{ .iterator = iter });
+        return;
+    }
 
     switch (seq) {
         .string => |s| {
