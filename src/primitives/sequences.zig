@@ -182,6 +182,14 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
 
+    if (seq == .iterator) {
+        while (seq.iterator.next()) |elem| {
+            try ctx.stack.push(elem);
+            try ctx.executeQuotationWithFrame(quot);
+        }
+        return;
+    }
+
     var iter = SequenceIterator.init(seq, alloc) orelse {
         setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
         return error.TypeMismatch;
@@ -263,6 +271,17 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
     var acc = try ctx.stack.pop(); // initial accumulator
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
+
+    if (seq == .iterator) {
+        while (seq.iterator.next()) |elem| {
+            try ctx.stack.push(acc);
+            try ctx.stack.push(elem);
+            try ctx.executeQuotationWithFrame(quot);
+            acc = try ctx.stack.pop();
+        }
+        try ctx.stack.push(acc);
+        return;
+    }
 
     var iter = SequenceIterator.init(seq, alloc) orelse {
         setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
