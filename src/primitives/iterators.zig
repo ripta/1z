@@ -2,6 +2,7 @@ const std = @import("std");
 const Context = @import("../context.zig").Context;
 const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
+const dispatch_helpers = @import("dispatch_helpers.zig");
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const Iterator = @import("../iterator.zig").Iterator;
@@ -20,6 +21,8 @@ pub const primitives = [_]Primitive{
 
 /// >iterator ( seq -- iterator )
 fn nativeToIterator(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ">iterator")) return;
+
     const val = try ctx.stack.pop();
     switch (val) {
         .array => |items| {

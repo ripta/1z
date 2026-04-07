@@ -19,7 +19,16 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: iterable protocol validates when >iterator is implemented
+Stack: [ ]
+PASS: user-defined >iterator dispatches and produces working iterator
+Stack: [ ]
+PASS: user-defined >iterator works in lazy pipeline
+Stack: [ ]
+PASS: user-defined >iterator works with #reduce
 Stack: [ ]
 PASS: shapeful validates when both methods implemented
 Stack: [ ]

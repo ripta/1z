@@ -76,9 +76,29 @@ test-protocol-failure-error-type: ( -- ) [
   [ my-thing: showable ] protocol-error: "protocol-error has correct error type" assert-error-type
 ] ;
 
+\ -- User-defined >iterator dispatch --
+
+test-iterable-dispatch: ( -- ) [
+  { 1 2 3 } >my-list >iterator #collect
+  { 1 2 3 } "user-defined >iterator dispatches and produces working iterator" assert=
+] ;
+
+test-iterable-pipeline: ( -- ) [
+  { 10 20 30 } >my-list >iterator [ 2 * ] #map #collect
+  { 20 40 60 } "user-defined >iterator works in lazy pipeline" assert=
+] ;
+
+test-iterable-each: ( -- ) [
+  { 1 2 3 } >my-list >iterator 0 [ + ] #reduce
+  6 "user-defined >iterator works with #reduce" assert=
+] ;
+
 \ -- Run all tests --
 
 test-iterable-validates
+test-iterable-dispatch
+test-iterable-pipeline
+test-iterable-each
 test-shapeful-validates
 test-shapeful-methods-work
 test-single-method-validates
