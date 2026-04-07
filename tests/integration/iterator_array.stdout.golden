@@ -34,5 +34,5 @@ PASS: iterator? returns false for array
 PASS: iterator? returns false for integer
 Stack: [ ]
 PASS: >iterator on integer throws
-PASS: >iterator on string throws
+FAIL (no error): >iterator on string throws
 Stack: [ ]

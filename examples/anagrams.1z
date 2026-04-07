@@ -11,7 +11,7 @@ char-freq: ( word -- hash ) [
 
 \ Filter candidates to only those that are anagrams of the word
 anagrams: ( word candidates -- filtered ) [
-  swap char-freq [ swap char-freq = ] curry #filter
+  swap char-freq [ swap char-freq = ] curry #filter #collect
 ] ;
 
 "anagrams" test-section

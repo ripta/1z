@@ -39,8 +39,8 @@
 \ Remove empty elements from a sequence
 \
 \ Examples:
-\   { "a" "" "b" "" "c" } #squeeze  →  { "a" "b" "c" }
-\   { "" } #squeeze                 →  { }
-#squeeze: ( array -- array ) [
+\   { "a" "" "b" "" "c" } #squeeze #collect  →  { "a" "b" "c" }
+\   { "" } #squeeze #collect                 →  { }
+#squeeze: ( seq -- iterator ) [
   [ #len 0 > ] #filter
 ] ;

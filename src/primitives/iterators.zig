@@ -6,6 +6,7 @@ const dispatch_helpers = @import("dispatch_helpers.zig");
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const Iterator = @import("../iterator.zig").Iterator;
+const sequence = @import("sequence.zig");
 
 pub const primitives = [_]Primitive{
     .{ .name = ">iterator", .stack_effect = "seq -- iterator", .doc = "Create an iterator over a sequence.", .func = nativeToIterator },
@@ -24,18 +25,18 @@ fn nativeToIterator(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, ">iterator")) return;
 
     const val = try ctx.stack.pop();
-    switch (val) {
-        .array => |items| {
-            const alloc = ctx.quotationAllocator();
-            const iter = try alloc.create(Iterator);
-            iter.* = .{ .kind = .{ .array = .{ .items = items, .index = 0 } } };
-            try ctx.stack.push(.{ .iterator = iter });
-        },
+    const alloc = ctx.quotationAllocator();
+    const items: []const Value = switch (val) {
+        .array => |arr| arr,
+        .string, .vector, .byte_array, .set => sequence.sequenceToValues(val, alloc) catch return error.OutOfMemory,
         else => {
-            helpers.setTypeMismatchError(ctx, "array", val);
+            helpers.setTypeMismatchError(ctx, "sequence", val);
             return error.TypeMismatch;
         },
-    }
+    };
+    const iter = try alloc.create(Iterator);
+    iter.* = .{ .kind = .{ .array = .{ .items = items, .index = 0 } } };
+    try ctx.stack.push(.{ .iterator = iter });
 }
 
 /// #next ( iterator -- value )

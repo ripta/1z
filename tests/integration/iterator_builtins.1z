@@ -1,0 +1,41 @@
+\ Integration tests for >iterator on all built-in sequence types
+
+use "testing" ;
+use "sequences" ;
+
+">iterator on strings" test-section
+"hello" >iterator #collect { "h" "e" "l" "l" "o" } ">iterator on string" assert=
+"" >iterator #collect { } ">iterator on empty string" assert=
+"ab" >iterator #next "a" "string iter #next first" assert=
+
+">iterator on vectors" test-section
+V{ 10 20 30 } >iterator #collect { 10 20 30 } ">iterator on vector" assert=
+V{ } >iterator #collect { } ">iterator on empty vector" assert=
+V{ 1 2 } >iterator #next 1 "vector iter #next first" assert=
+
+">iterator on byte arrays" test-section
+B{ 1 2 3 } >iterator #collect { 1 2 3 } ">iterator on byte-array" assert=
+B{ } >iterator #collect { } ">iterator on empty byte-array" assert=
+B{ 255 0 } >iterator #next 255 "byte-array iter #next first" assert=
+
+">iterator on sets" test-section
+S{ 1 2 3 } >iterator #count 3 ">iterator on set count" assert=
+S{ } >iterator #collect { } ">iterator on empty set" assert=
+
+"Lazy pipelines on non-array sequences" test-section
+"abcde" >iterator [ drop "x" ] #map #collect { "x" "x" "x" "x" "x" } "string iter map" assert=
+V{ 1 2 3 4 5 } >iterator [ 3 > ] #filter #collect { 4 5 } "vector iter filter" assert=
+B{ 10 20 30 } >iterator 0 [ + ] #reduce 60 "byte-array iter reduce" assert=
+S{ 1 2 3 } >iterator [ 2 * ] #map #count 3 "set iter map count" assert=
+
+"#each on non-array iterators" test-section
+0 "abc" >iterator [ drop 1 + ] #each 3 "string iter #each count" assert=
+0 V{ 10 20 30 } >iterator [ + ] #each 60 "vector iter #each sum" assert=
+
+"#take and #drop on non-array iterators" test-section
+"hello" >iterator 3 #take #collect { "h" "e" "l" } "string iter #take" assert=
+V{ 1 2 3 4 5 } >iterator 2 #drop #collect { 3 4 5 } "vector iter #drop" assert=
+
+"Error on non-sequence" test-section
+[ 42 >iterator ] "integer >iterator error" assert-error
+[ t >iterator ] "boolean >iterator error" assert-error
