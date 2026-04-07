@@ -12,7 +12,7 @@ Conditional execution.
 Stack: [ ]
 #len ( seq -- n ) \native
 
-Get length of sequence.
+Get length of sequence. O(1) and non-destructive; does not work on iterators (use #count instead).
 Stack: [ ]
 recover ( try-quot recover-quot: ( error --  ) --  ) \native
 

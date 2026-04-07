@@ -50,6 +50,7 @@ pub const time = @import("time.zig");
 pub const tasks = @import("tasks.zig");
 pub const channels = @import("channels.zig");
 pub const iterators = @import("iterators.zig");
+pub const protocols = @import("protocols.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -100,4 +101,5 @@ pub const extracted_primitives = stack.primitives ++
     time.primitives ++
     tasks.primitives ++
     channels.primitives ++
-    iterators.primitives;
+    iterators.primitives ++
+    protocols.primitives;

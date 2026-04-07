@@ -67,6 +67,14 @@ method{: parse-time [
   define: [ define-method ] @set!
 ] ;
 
+\\ Protocol definition syntax. Defines a word that validates a type implements all listed methods.
+\   protocol-name: protocol{ method1 method2 } ;
+protocol{: parse-time [
+  M{ }
+  methods: "}" parse-tokens-until @set!
+  define: [ define-protocol ] @set!
+] ;
+
 \\ Dynamic variable definition syntax.
 parameter: parse-time [ dup parse-quotation make-parameter ] ;
 
