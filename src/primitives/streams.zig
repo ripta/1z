@@ -167,6 +167,8 @@ pub fn nativeStreamClose(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
 
+    restoreBlocking(stream);
+
     // Don't actually close stdin/stdout/stderr
     if (std.mem.eql(u8, stream.name, "stdin") or
         std.mem.eql(u8, stream.name, "stdout") or
@@ -197,8 +199,7 @@ pub fn nativeStreamWrite(ctx: *Context) anyerror!void {
         else => return error.TypeMismatch,
     };
 
-    // Write to file
-    const written = stream.file.write(bytes) catch |err| {
+    const written = asyncWrite(stream, bytes, ctx) catch |err| {
         return mapFileWriteError(err);
     };
 
@@ -241,7 +242,7 @@ pub fn nativeStreamRead(ctx: *Context) anyerror!void {
     const buffer = alloc.alloc(u8, @intCast(n)) catch return error.OutOfMemory;
     defer alloc.free(buffer);
 
-    const bytes_read = stream.file.read(buffer) catch |err| {
+    const bytes_read = asyncRead(stream, buffer, ctx) catch |err| {
         return mapFileReadError(err);
     };
 
@@ -266,7 +267,7 @@ pub fn nativeStreamReadLine(ctx: *Context) anyerror!void {
 
     while (true) {
         var byte_buf: [1]u8 = undefined;
-        const bytes_read = stream.file.read(&byte_buf) catch |err| {
+        const bytes_read = asyncRead(stream, &byte_buf, ctx) catch |err| {
             return mapFileReadError(err);
         };
 
@@ -289,7 +290,7 @@ pub fn nativeStreamReadLine(ctx: *Context) anyerror!void {
         // Handle \r\n by skipping \r if followed by \n
         if (byte == '\r') {
             var peek_buf: [1]u8 = undefined;
-            const peek_read = stream.file.read(&peek_buf) catch |err| {
+            const peek_read = asyncRead(stream, &peek_buf, ctx) catch |err| {
                 return mapFileReadError(err);
             };
             if (peek_read > 0 and peek_buf[0] == '\n') {
@@ -326,7 +327,7 @@ pub fn nativeStreamReadAll(ctx: *Context) anyerror!void {
 
     var buffer: [4096]u8 = undefined;
     while (true) {
-        const bytes_read = stream.file.read(&buffer) catch |err| {
+        const bytes_read = asyncRead(stream, &buffer, ctx) catch |err| {
             return mapFileReadError(err);
         };
 
@@ -512,4 +513,83 @@ pub fn nativeToCodepoint(ctx: *Context) anyerror!void {
     }
 
     try ctx.stack.push(.{ .integer = @intCast(first_codepoint) });
+}
+
+// =============================================================================
+// Async I/O helpers
+// =============================================================================
+
+/// Set O_NONBLOCK on the stream's fd.
+fn setNonBlocking(stream: *Stream) void {
+    if (stream.nonblocking_set) return;
+
+    const fd = stream.file.handle;
+    const raw_flags = std.c.fcntl(fd, std.c.F.GETFL);
+    if (raw_flags < 0) return;
+
+    var flags: std.c.O = @bitCast(@as(u32, @intCast(raw_flags)));
+    flags.NONBLOCK = true;
+    _ = std.c.fcntl(fd, std.c.F.SETFL, @as(c_int, @bitCast(flags)));
+    stream.nonblocking_set = true;
+}
+
+/// Clear O_NONBLOCK on the stream's fd, restoring blocking mode.
+fn restoreBlocking(stream: *Stream) void {
+    if (!stream.nonblocking_set) return;
+
+    const fd = stream.file.handle;
+    const raw_flags = std.c.fcntl(fd, std.c.F.GETFL);
+    if (raw_flags < 0) return;
+
+    var flags: std.c.O = @bitCast(@as(u32, @intCast(raw_flags)));
+    flags.NONBLOCK = false;
+    _ = std.c.fcntl(fd, std.c.F.SETFL, @as(c_int, @bitCast(flags)));
+    stream.nonblocking_set = false;
+}
+
+/// Read from a stream, yielding to the scheduler on WouldBlock.
+///
+/// When no scheduler is active and WouldBlock occurs (leftover O_NONBLOCK),
+/// restores blocking mode and retries.
+fn asyncRead(stream: *Stream, buffer: []u8, ctx: *Context) anyerror!usize {
+    if (ctx.scheduler != null and !stream.nonblocking_set) {
+        setNonBlocking(stream);
+    }
+
+    while (true) {
+        return stream.file.read(buffer) catch |err| {
+            if (err == error.WouldBlock) {
+                if (ctx.scheduler) |sched| {
+                    sched.ioSuspendCurrentTask(stream.file.handle, .read);
+                    continue;
+                }
+
+                restoreBlocking(stream);
+                continue;
+            }
+            return err;
+        };
+    }
+}
+
+/// Write to a stream, yielding to the scheduler on WouldBlock.
+///
+fn asyncWrite(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!usize {
+    if (ctx.scheduler != null and !stream.nonblocking_set) {
+        setNonBlocking(stream);
+    }
+
+    while (true) {
+        return stream.file.write(bytes) catch |err| {
+            if (err == error.WouldBlock) {
+                if (ctx.scheduler) |sched| {
+                    sched.ioSuspendCurrentTask(stream.file.handle, .write);
+                    continue;
+                }
+                restoreBlocking(stream);
+                continue;
+            }
+            return err;
+        };
+    }
 }
