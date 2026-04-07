@@ -305,6 +305,12 @@ pub const Scheduler = struct {
                         sibling.cancelled = true;
                         if (sibling.blocked_on_channel != null) {
                             self.run_queue.append(self.allocator, sibling) catch {};
+                        } else if (sibling.blocked_on_io_fd) |fd| {
+                            if (self.io_wait_map.fetchRemove(fd)) |kv| {
+                                self.multiplexer.unregister(fd, kv.value.event) catch {};
+                            }
+                            sibling.blocked_on_io_fd = null;
+                            self.run_queue.append(self.allocator, sibling) catch {};
                         }
                     },
                     .completed, .failed, .cancelled => {},

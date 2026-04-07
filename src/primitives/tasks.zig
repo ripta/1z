@@ -369,12 +369,20 @@ fn timerTaskEntryPoint() callconv(.c) void {
 fn nativeCancelTask(ctx: *Context) anyerror!void {
     const task = try helpers.popTask(ctx);
 
-    if (ctx.scheduler == null) {
+    const scheduler = ctx.scheduler orelse {
         ctx.pending_error_message = "cancel-task must be called within a task-scope";
         return error.InvalidState;
-    }
+    };
 
     task.cancelled = true;
+
+    if (task.blocked_on_io_fd) |fd| {
+        if (scheduler.io_wait_map.fetchRemove(fd)) |kv| {
+            scheduler.multiplexer.unregister(fd, kv.value.event) catch {};
+        }
+        task.blocked_on_io_fd = null;
+        scheduler.run_queue.append(scheduler.allocator, task) catch {};
+    }
 }
 
 /// await ( task -- value )
