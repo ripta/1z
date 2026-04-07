@@ -14,6 +14,9 @@ const dictionary_mod = @import("dictionary.zig");
 const HostCallback = dictionary_mod.HostCallback;
 const HostCallbackFn = dictionary_mod.HostCallbackFn;
 
+const helpers = @import("primitives/helpers.zig");
+const StackEffect = @import("stack_effect.zig").StackEffect;
+
 const value_mod = @import("value.zig");
 const MutableMap = value_mod.MutableMap;
 const Value = value_mod.Value;
@@ -64,6 +67,7 @@ pub const ONEZ_ERR_INDEX_OUT_OF_RANGE: c_int = 4;
 pub const ONEZ_ERR_KEY_NOT_FOUND: c_int = 5;
 pub const ONEZ_ERR_LOAD_FAILED: c_int = 6;
 pub const ONEZ_ERR_NOT_HOST_WORD: c_int = 7;
+pub const ONEZ_ERR_INVALID_EFFECT: c_int = 8;
 
 /// Initialize the 1z runtime for AOT-compiled programs.
 ///
@@ -222,6 +226,94 @@ export fn onez_register_word(ptr: ?*anyopaque, name: ?[*:0]const u8, callback: ?
 
     handle.ctx.defineWord(name_copy, .{
         .name = name_copy,
+        .action = .{ .host_callback = HostCallback{
+            .handle = ptr,
+            .callback = callback_fn,
+            .user_data = user_data,
+        } },
+    }) catch |err| {
+        if (handle.ctx.pending_error_message) |msg| {
+            setLastError(handle, "{s}", .{msg});
+        } else {
+            captureError(handle, err);
+        }
+        return 1;
+    };
+
+    return ONEZ_OK;
+}
+
+/// Strip optional surrounding parentheses and whitespace from an effect string.
+/// "( a b -- c )" -> "a b -- c"
+/// "a b -- c"     -> "a b -- c"  (no change)
+fn stripEffectParens(raw: []const u8) []const u8 {
+    var s = std.mem.trim(u8, raw, " \t");
+    if (s.len >= 2 and s[0] == '(' and s[s.len - 1] == ')') {
+        s = std.mem.trim(u8, s[1 .. s.len - 1], " \t");
+    }
+    return s;
+}
+
+/// Register a host callback as a 1z word with an optional stack effect annotation.
+///
+/// The effect_str may be NULL (no effect), empty (no effect), or a stack effect
+/// string such as "a b -- c" or "( a b -- c )". Parentheses are stripped
+/// automatically. The effect is visible through `help` and `>word-info`.
+export fn onez_register_word_with_effect(
+    ptr: ?*anyopaque,
+    name: ?[*:0]const u8,
+    effect_str: ?[*:0]const u8,
+    callback: ?HostCallbackFn,
+    user_data: ?*anyopaque,
+) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    clearLastError(handle);
+    handle.ctx.clearExecutionDetails();
+
+    const name_ptr = name orelse {
+        setLastError(handle, "null name passed to onez_register_word_with_effect", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    };
+    const callback_fn = callback orelse {
+        setLastError(handle, "null callback passed to onez_register_word_with_effect", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    };
+
+    const name_slice = std.mem.span(name_ptr);
+    if (name_slice.len == 0) {
+        setLastError(handle, "empty name passed to onez_register_word_with_effect", .{});
+        return ONEZ_ERR_TYPE_MISMATCH;
+    }
+
+    const parsed_effect: ?StackEffect = if (effect_str) |eptr| blk: {
+        const raw = std.mem.span(eptr);
+        if (raw.len == 0) break :blk null;
+        const stripped = stripEffectParens(raw);
+        if (std.mem.indexOf(u8, stripped, "--") == null) {
+            setLastError(handle, "stack effect string must contain '--'", .{});
+            return ONEZ_ERR_INVALID_EFFECT;
+        }
+        break :blk helpers.makeSimpleEffect(handle.ctx.quotationAllocator(), stripped) catch {
+            setLastError(handle, "invalid stack effect string", .{});
+            return ONEZ_ERR_INVALID_EFFECT;
+        };
+    } else null;
+
+    const name_copy = handle.gpa.allocator().dupe(u8, name_slice) catch {
+        setLastError(handle, "allocation failure copying word name", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    errdefer handle.gpa.allocator().free(name_copy);
+
+    handle.host_words.append(handle.gpa.allocator(), .{ .name = name_copy }) catch {
+        setLastError(handle, "allocation failure tracking host word", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    errdefer _ = handle.host_words.pop();
+
+    handle.ctx.defineWord(name_copy, .{
+        .name = name_copy,
+        .stack_effect = parsed_effect,
         .action = .{ .host_callback = HostCallback{
             .handle = ptr,
             .callback = callback_fn,
@@ -1973,4 +2065,137 @@ test "use_module returns error for nonexistent module" {
 
 test "use_module null handle" {
     try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_use_module(null, "x", 1));
+}
+
+test "register_word_with_effect attaches stack effect visible via introspection" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const value: i64 = 99;
+    try std.testing.expectEqual(ONEZ_OK, onez_register_word_with_effect(
+        handle_ptr,
+        "my-add",
+        "a b -- c",
+        constantHostCallback,
+        @constCast(&value),
+    ));
+
+    const code = "my-add: >word-info stack-effect>> f =";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code.ptr, code.len));
+
+    var out: bool = true;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_bool(handle_ptr, &out));
+    try std.testing.expectEqual(false, out); // stack-effect>> is not false
+}
+
+test "register_word_with_effect parenthesized form" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const value: i64 = 1;
+    try std.testing.expectEqual(ONEZ_OK, onez_register_word_with_effect(
+        handle_ptr,
+        "paren-word",
+        "( x y -- z )",
+        constantHostCallback,
+        @constCast(&value),
+    ));
+
+    const code = "paren-word: >word-info stack-effect>> f =";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code.ptr, code.len));
+
+    var out: bool = true;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_bool(handle_ptr, &out));
+    try std.testing.expectEqual(false, out); // stack-effect>> is not false
+}
+
+test "register_word_with_effect null effect behaves like register_word" {
+    resetHostCallbackTestState();
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    test_host_callback_expected_handle = handle_ptr;
+    const value: i64 = 42;
+    try std.testing.expectEqual(ONEZ_OK, onez_register_word_with_effect(
+        handle_ptr,
+        "no-effect",
+        null,
+        constantHostCallback,
+        @constCast(&value),
+    ));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, "no-effect", 9));
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 42), out);
+}
+
+test "register_word_with_effect empty string means no effect" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const value: i64 = 1;
+    try std.testing.expectEqual(ONEZ_OK, onez_register_word_with_effect(
+        handle_ptr,
+        "empty-effect",
+        "",
+        constantHostCallback,
+        @constCast(&value),
+    ));
+
+    const code = "empty-effect: >word-info stack-effect>>";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code.ptr, code.len));
+
+    var out: bool = true;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_bool(handle_ptr, &out));
+    try std.testing.expectEqual(false, out); // no effect = false
+}
+
+test "register_word_with_effect rejects effect without --" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const value: i64 = 1;
+    try std.testing.expectEqual(ONEZ_ERR_INVALID_EFFECT, onez_register_word_with_effect(
+        handle_ptr,
+        "bad-effect",
+        "no separator here",
+        constantHostCallback,
+        @constCast(&value),
+    ));
+    try std.testing.expect(onez_last_error(handle_ptr) != null);
+}
+
+test "register_word_with_effect rejects null handle and null name" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const value: i64 = 1;
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_register_word_with_effect(
+        null,
+        "x",
+        "a -- b",
+        constantHostCallback,
+        @constCast(&value),
+    ));
+    try std.testing.expectEqual(ONEZ_ERR_NULL_VALUE, onez_register_word_with_effect(
+        handle_ptr,
+        null,
+        "a -- b",
+        constantHostCallback,
+        @constCast(&value),
+    ));
+    try std.testing.expectEqual(ONEZ_ERR_NULL_VALUE, onez_register_word_with_effect(
+        handle_ptr,
+        "x",
+        "a -- b",
+        null,
+        @constCast(&value),
+    ));
 }

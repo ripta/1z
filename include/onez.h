@@ -85,6 +85,7 @@ typedef void *onez_value_t;
 #define ONEZ_ERR_KEY_NOT_FOUND      5
 #define ONEZ_ERR_LOAD_FAILED        6
 #define ONEZ_ERR_NOT_HOST_WORD      7
+#define ONEZ_ERR_INVALID_EFFECT     8
 
 /* ----- Lifecycle ----- */
 
@@ -122,6 +123,20 @@ int onez_eval(onez_t ctx, const char *code, size_t len);
  * onez_register_word and may use the normal push / pop / value APIs.
  */
 int onez_register_word(onez_t ctx, const char *name, onez_callback_fn callback, void *user_data);
+
+/*
+ * Register a host callback as a top-level 1z word with an optional stack
+ * effect annotation.
+ *
+ * effect_str may be NULL (no effect) or a stack effect string such as
+ * "a b -- c" or "( a b -- c )". Parentheses are stripped automatically.
+ * The annotated effect is visible through the 1z `help` word and the
+ * >word-info introspection API.
+ *
+ * Returns ONEZ_ERR_INVALID_EFFECT if effect_str is non-NULL but malformed.
+ */
+int onez_register_word_with_effect(onez_t ctx, const char *name,
+    const char *effect_str, onez_callback_fn callback, void *user_data);
 
 /*
  * Remove a previously registered host word from the dictionary.
