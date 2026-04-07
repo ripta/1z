@@ -1068,6 +1068,13 @@ pub const Context = struct {
         }
     }
 
+    /// Remove a word from the top-level dictionary under the shared write lock.
+    pub fn removeWord(self: *Context, name: []const u8) bool {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+        return self.dictionary.remove(name);
+    }
+
     fn defineWordLocked(self: *Context, name: []const u8, definition: WordDefinition) !void {
         if (self.lookupWordLocked(name)) |existing| {
             for (existing.markers) |mk| {

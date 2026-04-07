@@ -128,6 +128,10 @@ pub const Dictionary = struct {
     pub fn getPtr(self: *const Dictionary, name: []const u8) ?*WordDefinition {
         return self.entries.getPtr(name);
     }
+
+    pub fn remove(self: *Dictionary, name: []const u8) bool {
+        return self.entries.remove(name);
+    }
 };
 
 // =============================================================================
@@ -160,6 +164,27 @@ test "dictionary returns null for unknown word" {
     defer dict.deinit();
 
     try std.testing.expectEqual(null, dict.get("nonexistent"));
+}
+
+test "dictionary remove" {
+    const allocator = std.testing.allocator;
+    var dict = Dictionary.init(allocator);
+    defer dict.deinit();
+
+    const testFn: NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    try dict.put("removable", .{
+        .name = "removable",
+        .action = .{ .native = testFn },
+    });
+    try std.testing.expect(dict.get("removable") != null);
+
+    try std.testing.expect(dict.remove("removable"));
+    try std.testing.expectEqual(null, dict.get("removable"));
+
+    try std.testing.expect(!dict.remove("nonexistent"));
 }
 
 test "parse_time flag defaults to false" {

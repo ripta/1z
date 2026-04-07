@@ -84,6 +84,7 @@ typedef void *onez_value_t;
 #define ONEZ_ERR_INDEX_OUT_OF_RANGE 4
 #define ONEZ_ERR_KEY_NOT_FOUND      5
 #define ONEZ_ERR_LOAD_FAILED        6
+#define ONEZ_ERR_NOT_HOST_WORD      7
 
 /* ----- Lifecycle ----- */
 
@@ -121,6 +122,32 @@ int onez_eval(onez_t ctx, const char *code, size_t len);
  * onez_register_word and may use the normal push / pop / value APIs.
  */
 int onez_register_word(onez_t ctx, const char *name, onez_callback_fn callback, void *user_data);
+
+/*
+ * Remove a previously registered host word from the dictionary.
+ *
+ * Only words registered via onez_register_word can be unregistered.
+ * Attempting to unregister a native or compound word returns
+ * ONEZ_ERR_NOT_HOST_WORD.
+ *
+ * Returns ONEZ_OK on success.
+ * Returns ONEZ_ERR_KEY_NOT_FOUND if the word is not in the dictionary.
+ * Returns ONEZ_ERR_NOT_HOST_WORD if the word exists but is not a host callback.
+ */
+int onez_unregister_word(onez_t ctx, const char *name);
+
+/*
+ * Set a custom error message from within a host callback.
+ *
+ * Call this before returning a non-zero status from a callback to provide
+ * a human-readable error message. The message is copied; the caller
+ * retains ownership of `msg`. The string need not be null-terminated;
+ * `len` bytes are read.
+ *
+ * If called outside a callback, the message is stored but has no effect
+ * until the next error is raised.
+ */
+void onez_set_error(onez_t ctx, const char *msg, size_t len);
 
 /* ---- Module loading ---- */
 

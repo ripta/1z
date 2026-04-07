@@ -63,6 +63,7 @@ pub const ONEZ_ERR_NULL_VALUE: c_int = -2;
 pub const ONEZ_ERR_INDEX_OUT_OF_RANGE: c_int = 4;
 pub const ONEZ_ERR_KEY_NOT_FOUND: c_int = 5;
 pub const ONEZ_ERR_LOAD_FAILED: c_int = 6;
+pub const ONEZ_ERR_NOT_HOST_WORD: c_int = 7;
 
 /// Initialize the 1z runtime for AOT-compiled programs.
 ///
@@ -236,6 +237,57 @@ export fn onez_register_word(ptr: ?*anyopaque, name: ?[*:0]const u8, callback: ?
     };
 
     return ONEZ_OK;
+}
+
+/// Remove a previously registered host word from the dictionary.
+export fn onez_unregister_word(ptr: ?*anyopaque, name: ?[*:0]const u8) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    clearLastError(handle);
+    handle.ctx.clearExecutionDetails();
+
+    const name_ptr = name orelse {
+        setLastError(handle, "null name passed to onez_unregister_word", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    };
+    const name_slice = std.mem.span(name_ptr);
+
+    const definition = handle.ctx.lookupWord(name_slice) orelse {
+        setLastError(handle, "word '{s}' not found", .{name_slice});
+        return ONEZ_ERR_KEY_NOT_FOUND;
+    };
+
+    switch (definition.action) {
+        .host_callback => {},
+        else => {
+            setLastError(handle, "word '{s}' is not a host callback", .{name_slice});
+            return ONEZ_ERR_NOT_HOST_WORD;
+        },
+    }
+
+    _ = handle.ctx.removeWord(name_slice);
+
+    const allocator = handle.gpa.allocator();
+    for (handle.host_words.items, 0..) |entry, i| {
+        if (std.mem.eql(u8, entry.name, name_slice)) {
+            allocator.free(entry.name);
+            _ = handle.host_words.swapRemove(i);
+            break;
+        }
+    }
+
+    return ONEZ_OK;
+}
+
+/// Set a custom error message from within a host callback.
+// ( ctx msg len -- )
+export fn onez_set_error(ptr: ?*anyopaque, msg: ?[*]const u8, len: usize) void {
+    const handle = castHandle(ptr) orelse return;
+    const msg_ptr = msg orelse return;
+    handle.ctx.pending_error_message = std.fmt.allocPrint(
+        handle.ctx.arena.allocator(),
+        "{s}",
+        .{msg_ptr[0..len]},
+    ) catch null;
 }
 
 export fn onez_push_int(ptr: ?*anyopaque, value: i64) c_int {
@@ -970,6 +1022,12 @@ fn constantHostCallback(ctx: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) c
     return onez_push_int(ctx, value_ptr.*);
 }
 
+fn failingHostCallback(ctx: ?*anyopaque, _: ?*anyopaque) callconv(.c) c_int {
+    const msg = "custom host error message";
+    onez_set_error(ctx, msg.ptr, msg.len);
+    return 1;
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -1034,6 +1092,82 @@ test "register host word rejects invalid arguments" {
     try std.testing.expectEqual(ONEZ_ERR_NULL_VALUE, onez_register_word(handle_ptr, null, constantHostCallback, @constCast(&value)));
     try std.testing.expectEqual(ONEZ_ERR_NULL_VALUE, onez_register_word(handle_ptr, "x", null, @constCast(&value)));
     try std.testing.expect(onez_last_error(handle_ptr) != null);
+}
+
+test "set_error provides custom message on callback failure" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_register_word(handle_ptr, "fail-custom", failingHostCallback, null));
+
+    const rc = onez_eval(handle_ptr, "fail-custom", 11);
+    try std.testing.expect(rc != ONEZ_OK);
+
+    const err_msg = onez_last_error(handle_ptr);
+    try std.testing.expect(err_msg != null);
+    const err_str = std.mem.span(err_msg.?);
+    try std.testing.expect(std.mem.indexOf(u8, err_str, "custom host error message") != null);
+}
+
+test "unregister_word removes host word" {
+    resetHostCallbackTestState();
+
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const value: i64 = 99;
+    try std.testing.expectEqual(ONEZ_OK, onez_register_word(handle_ptr, "temp-word", constantHostCallback, @constCast(&value)));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, "temp-word", 9));
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 99), out);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_unregister_word(handle_ptr, "temp-word"));
+
+    const rc = onez_eval(handle_ptr, "temp-word", 9);
+    try std.testing.expect(rc != ONEZ_OK);
+}
+
+test "unregister_word returns KEY_NOT_FOUND for unknown word" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_ERR_KEY_NOT_FOUND, onez_unregister_word(handle_ptr, "no-such-word"));
+    try std.testing.expect(onez_last_error(handle_ptr) != null);
+}
+
+test "unregister_word returns NOT_HOST_WORD for native word" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_ERR_NOT_HOST_WORD, onez_unregister_word(handle_ptr, "+"));
+    try std.testing.expect(onez_last_error(handle_ptr) != null);
+}
+
+test "unregister_word rejects null arguments" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_unregister_word(null, "x"));
+    try std.testing.expectEqual(ONEZ_ERR_NULL_VALUE, onez_unregister_word(handle_ptr, null));
+    try std.testing.expect(onez_last_error(handle_ptr) != null);
+}
+
+test "unregister_word double unregister returns KEY_NOT_FOUND" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const value: i64 = 1;
+    try std.testing.expectEqual(ONEZ_OK, onez_register_word(handle_ptr, "once-word", constantHostCallback, @constCast(&value)));
+    try std.testing.expectEqual(ONEZ_OK, onez_unregister_word(handle_ptr, "once-word"));
+    try std.testing.expectEqual(ONEZ_ERR_KEY_NOT_FOUND, onez_unregister_word(handle_ptr, "once-word"));
 }
 
 test "eval error returns 1" {
