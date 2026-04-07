@@ -1,0 +1,91 @@
+use "testing" ;
+use "time" ;
+
+\ -- 1. Pipe read/write across tasks --
+
+test-pipe-across-tasks: ( -- ) [
+  [
+    <pipe>
+    \ stack: rd wr
+    dup [ "hello" stream-write drop ] curry spawn drop
+    swap dup 5 stream-read
+    \ stack: wr rd bytes
+    "hello" >bytes "pipe read receives data from writer task" assert=
+    \ stack: wr rd
+    stream-close stream-close
+  ] task-scope
+] ;
+
+\ -- 2. Multiple pipe writers, one reader --
+
+test-pipe-multi-writer: ( -- ) [
+  [
+    <pipe>
+    dup [ "ab" stream-write drop ] curry spawn drop
+    dup [ "cd" stream-write drop ] curry spawn drop
+    swap dup 4 stream-read
+    \ stack: wr rd bytes
+    #len 4 "reader receives all bytes from multiple writers" assert=
+    stream-close stream-close
+  ] task-scope
+] ;
+
+\ -- 3. Pipe read with timeout: read from a pipe nobody writes to --
+
+test-pipe-read-timeout: ( -- ) [
+  [
+    [
+      <pipe> drop
+      [ 1024 stream-read ] curry 50 milliseconds with-timeout
+    ] task-scope
+  ] timeout: "read from empty pipe times out" assert-error-type
+] ;
+
+\ -- 4. Cancel a task blocked on pipe read --
+
+test-cancel-io-blocked-task: ( -- ) [
+  [
+    [
+      <pipe> drop
+      [ 1024 stream-read ] curry spawn
+      10 milliseconds sleep
+      dup cancel-task
+      await
+    ] task-scope
+  ] "cancel-task wakes IO-blocked task without hanging" assert-error
+] ;
+
+\ -- 5. Sibling failure cancels IO-blocked task --
+
+test-sibling-failure-cancels-io: ( -- ) [
+  [
+    [
+      <pipe> drop
+      [ 1024 stream-read ] curry spawn drop
+      [ 10 milliseconds sleep f "boom" test-error: make-error throw ] spawn drop
+    ] task-scope
+  ] test-error: "sibling failure cancels IO-blocked task" assert-error-type
+] ;
+
+\ -- 6. multiplexer-stats returns a hash --
+
+test-multiplexer-stats: ( -- ) [
+  [
+    multiplexer-stats
+    type-of hash: "multiplexer-stats returns hash" assert=
+  ] task-scope
+] ;
+
+\ -- 7. multiplexer-stats outside task-scope throws --
+
+test-multiplexer-stats-no-scope: ( -- ) [
+  [ multiplexer-stats ] "multiplexer-stats without task-scope throws" assert-error
+] ;
+
+test-pipe-across-tasks
+test-pipe-multi-writer
+test-pipe-read-timeout
+test-cancel-io-blocked-task
+test-sibling-failure-cancels-io
+test-multiplexer-stats
+test-multiplexer-stats-no-scope

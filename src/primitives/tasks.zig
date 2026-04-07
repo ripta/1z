@@ -27,6 +27,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "sleep", .stack_effect = "duration --", .doc = "Suspend the current task for a duration.", .func = nativeSleep },
     .{ .name = "cancel-task", .stack_effect = "task --", .doc = "Cancel a task.", .func = nativeCancelTask },
     .{ .name = "with-timeout", .stack_effect = "quot duration -- value", .doc = "Run a quotation with a timeout duration.", .func = nativeWithTimeout },
+    .{ .name = "multiplexer-stats", .stack_effect = "-- hash", .doc = "Return a hash of I/O multiplexer statistics. Requires an active task-scope.", .func = nativeMultiplexerStats },
 };
 
 /// Allocate a Task and its Context on the heap, wire up the ucontext, and
@@ -732,4 +733,28 @@ fn deepCopyErrorObject(err: ErrorObject, alloc: Allocator) DeepCopyError!ErrorOb
         .data = new_data,
         .stack_trace = new_trace,
     };
+}
+
+/// multiplexer-stats ( -- hash )
+fn nativeMultiplexerStats(ctx: *Context) anyerror!void {
+    const scheduler = ctx.scheduler orelse {
+        ctx.pending_error_message = "multiplexer-stats requires an active task-scope";
+        return error.InvalidState;
+    };
+
+    const alloc = ctx.quotationAllocator();
+    const hash = alloc.create(value_mod.HashTable) catch return error.OutOfMemory;
+    hash.* = value_mod.HashTable{};
+
+    hash.put(alloc, try alloc.dupe(u8, "io-waiting"), .{
+        .integer = @intCast(scheduler.io_wait_map.count()),
+    }) catch return error.OutOfMemory;
+    hash.put(alloc, try alloc.dupe(u8, "sleeping"), .{
+        .integer = @intCast(scheduler.sleep_queue.count()),
+    }) catch return error.OutOfMemory;
+    hash.put(alloc, try alloc.dupe(u8, "run-queue"), .{
+        .integer = @intCast(scheduler.run_queue.items.len),
+    }) catch return error.OutOfMemory;
+
+    try ctx.stack.push(.{ .hash = hash });
 }

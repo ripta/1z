@@ -1,0 +1,21 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: pipe read receives data from writer task
+Stack: [ ]
+PASS: reader receives all bytes from multiple writers
+Stack: [ ]
+PASS: read from empty pipe times out
+Stack: [ ]
+PASS: cancel-task wakes IO-blocked task without hanging
+Stack: [ ]
+PASS: sibling failure cancels IO-blocked task
+Stack: [ ]
+PASS: multiplexer-stats returns hash
+Stack: [ ]
+PASS: multiplexer-stats without task-scope throws
+Stack: [ ]

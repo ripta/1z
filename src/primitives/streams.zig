@@ -46,6 +46,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "set-buffering-mode", .stack_effect = "stream symbol --", .doc = "Set stream buffering mode (none:, line:, block:).", .func = nativeSetBufferingMode },
     .{ .name = "stream->fd", .stack_effect = "stream -- int", .doc = "Get file descriptor from stream (Unix only).", .func = nativeStreamToFd },
     .{ .name = "fd->stream", .stack_effect = "int mode -- stream", .doc = "Create stream from file descriptor (Unix only).", .func = nativeFdToStream },
+    .{ .name = "<pipe>", .stack_effect = "-- rd wr", .doc = "Create a Unix pipe, returning read-end and write-end streams.", .func = nativePipe },
     .{ .name = ">char", .stack_effect = "codepoint -- str", .doc = "Convert Unicode codepoint to single-character string.", .func = nativeChr },
     .{ .name = ">codepoint", .stack_effect = "str -- int", .doc = "Convert single-character string to Unicode codepoint.", .func = nativeToCodepoint },
 };
@@ -474,6 +475,33 @@ pub fn nativeFdToStream(ctx: *Context) anyerror!void {
         .name = "fd",
     };
     try ctx.stack.push(.{ .stream = stream });
+}
+
+/// <pipe> ( -- rd wr ) - Create a Unix pipe, returning read-end and write-end streams
+fn nativePipe(ctx: *Context) anyerror!void {
+    if (native_os == .windows) {
+        return error.UnsupportedOperation;
+    }
+
+    const fds = std.posix.pipe() catch return error.SystemError;
+    const alloc = ctx.quotationAllocator();
+
+    const rd = alloc.create(Stream) catch return error.OutOfMemory;
+    rd.* = Stream{
+        .file = std.fs.File{ .handle = fds[0] },
+        .mode = .read,
+        .name = "pipe(rd)",
+    };
+
+    const wr = alloc.create(Stream) catch return error.OutOfMemory;
+    wr.* = Stream{
+        .file = std.fs.File{ .handle = fds[1] },
+        .mode = .write,
+        .name = "pipe(wr)",
+    };
+
+    try ctx.stack.push(.{ .stream = rd });
+    try ctx.stack.push(.{ .stream = wr });
 }
 
 // =============================================================================
