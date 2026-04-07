@@ -203,12 +203,11 @@ pub const Scheduler = struct {
     ///
     /// 1. Wake expired sleepers into the run queue.
     /// 2. If run queue non-empty: dequeue one task, handle cancellation or
-    ///    resume via swapcontext, handle completion. Loop back to phase 1.
-    /// 3. If run queue empty: drain cancelled sleepers and I/O waiters.
-    /// 4. If I/O waiters non-empty: poll multiplexer, re-enqueue tasks whose
-    ///    fds are ready. Loop back to step 1.
-    /// 5. If only sleepers remain: nanosleep until the next wake time. Loop
-    ///    back to step 1.
+    ///    resume via swapcontext, handle completion. Loop back to step 1.
+    /// 3. Run queue empty: drain cancelled sleepers and I/O waiters.
+    /// 4. If sleepers or I/O waiters remain: poll multiplexer with the next
+    ///    sleep deadline as timeout, re-enqueue tasks whose fds are ready.
+    ///    Loop back to step 1.
     pub fn runLoop(self: *Scheduler) void {
         while (true) {
             self.wakeExpiredSleepers();
@@ -254,35 +253,19 @@ pub const Scheduler = struct {
 
             if (!has_sleepers and !has_io_waiters) break;
 
-            if (has_io_waiters) {
-                const timeout: ?i128 = if (has_sleepers) blk: {
-                    const next = self.sleep_queue.peek().?;
-                    const now = monotonicNowNs();
-                    const remaining = next.wake_time - now;
-                    break :blk if (remaining > 0) remaining else @as(i128, 0);
-                } else null;
-
-                const ready = self.multiplexer.poll(timeout) catch &.{};
-                for (ready) |ev| {
-                    if (self.io_wait_map.fetchRemove(ev.fd)) |kv| {
-                        kv.value.task.blocked_on_io_fd = null;
-                        self.run_queue.append(self.allocator, kv.value.task) catch {};
-                    }
-                }
-                continue;
-            }
-
-            // only sleepers remain
-            if (self.sleep_queue.peek()) |next| {
+            const timeout: ?i128 = if (has_sleepers) blk: {
+                const next = self.sleep_queue.peek().?;
                 const now = monotonicNowNs();
-                const remaining_ns = next.wake_time - now;
-                if (remaining_ns > 0) {
-                    const ns_u: u128 = @intCast(remaining_ns);
-                    const sec: u64 = @intCast(ns_u / std.time.ns_per_s);
-                    const nsec: u64 = @intCast(ns_u % std.time.ns_per_s);
-                    std.posix.nanosleep(sec, nsec);
+                const remaining = next.wake_time - now;
+                break :blk if (remaining > 0) remaining else @as(i128, 0);
+            } else null;
+
+            const ready = self.multiplexer.poll(timeout) catch &.{};
+            for (ready) |ev| {
+                if (self.io_wait_map.fetchRemove(ev.fd)) |kv| {
+                    kv.value.task.blocked_on_io_fd = null;
+                    self.run_queue.append(self.allocator, kv.value.task) catch {};
                 }
-                continue;
             }
         }
     }
