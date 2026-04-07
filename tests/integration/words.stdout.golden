@@ -2,6 +2,8 @@ Stack: [ ]
 === Native Primitives ===
 #append ( seq1 seq2 -- seq )
 #append! ( vec seq -- vec )
+#collect ( iterator -- array )
+#count ( iterator -- n )
 #drop ( seq n -- seq' )
 #each ( seq quot: ( elem --  ) --  )
 #empty? ( seq -- ? )

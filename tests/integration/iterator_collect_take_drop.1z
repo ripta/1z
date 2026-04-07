@@ -1,0 +1,188 @@
+use "testing" ;
+
+\ -- #collect --
+
+test-collect-basic: ( -- ) [
+  { 1 2 3 } >iterator #collect
+  { 1 2 3 } "collect materializes array" assert=
+] ;
+
+test-collect-empty: ( -- ) [
+  { } >iterator #collect
+  { } "collect on empty returns empty array" assert=
+] ;
+
+test-collect-after-map: ( -- ) [
+  { 1 2 3 } >iterator [ 10 * ] #map #collect
+  { 10 20 30 } "collect after map" assert=
+] ;
+
+test-collect-after-filter: ( -- ) [
+  { 1 2 3 4 5 } >iterator [ 3 > ] #filter #collect
+  { 4 5 } "collect after filter" assert=
+] ;
+
+test-collect-map-filter-chain: ( -- ) [
+  { 1 2 3 4 5 } >iterator
+  [ 2 * ] #map
+  [ 6 > ] #filter
+  #collect
+  { 8 10 } "collect after map+filter chain" assert=
+] ;
+
+test-collect-type-error: ( -- ) [
+  [ 42 #collect ] "#collect on non-iterator throws" assert-error
+] ;
+
+\ -- #count --
+
+test-count-basic: ( -- ) [
+  { 1 2 3 4 5 } >iterator #count
+  5 "count returns element count" assert=
+] ;
+
+test-count-empty: ( -- ) [
+  { } >iterator #count
+  0 "count on empty returns 0" assert=
+] ;
+
+test-count-after-filter: ( -- ) [
+  { 1 2 3 4 5 } >iterator [ 3 > ] #filter #count
+  2 "count after filter" assert=
+] ;
+
+test-count-consumes: ( -- ) [
+  { 1 2 3 } >iterator
+  dup #count drop
+  #next? option:none? "iterator exhausted after count" assert-true
+] ;
+
+test-count-type-error: ( -- ) [
+  [ "hello" #count ] "#count on non-iterator throws" assert-error
+] ;
+
+\ -- #take on iterators --
+
+test-take-returns-iterator: ( -- ) [
+  { 1 2 3 4 5 } >iterator 3 #take
+  type-of iterator: "take returns iterator" assert=
+] ;
+
+test-take-limits-elements: ( -- ) [
+  { 1 2 3 4 5 } >iterator 3 #take #collect
+  { 1 2 3 } "take limits to n elements" assert=
+] ;
+
+test-take-zero: ( -- ) [
+  { 1 2 3 } >iterator 0 #take #collect
+  { } "take 0 returns empty" assert=
+] ;
+
+test-take-more-than-available: ( -- ) [
+  { 1 2 } >iterator 10 #take #collect
+  { 1 2 } "take more than available returns all" assert=
+] ;
+
+test-take-with-map: ( -- ) [
+  { 1 2 3 4 5 } >iterator [ 10 * ] #map 3 #take #collect
+  { 10 20 30 } "take after map" assert=
+] ;
+
+\ -- #drop on iterators --
+
+test-drop-returns-iterator: ( -- ) [
+  { 1 2 3 4 5 } >iterator 2 #drop
+  type-of iterator: "drop returns iterator" assert=
+] ;
+
+test-drop-skips-elements: ( -- ) [
+  { 1 2 3 4 5 } >iterator 2 #drop #collect
+  { 3 4 5 } "drop skips first n elements" assert=
+] ;
+
+test-drop-zero: ( -- ) [
+  { 1 2 3 } >iterator 0 #drop #collect
+  { 1 2 3 } "drop 0 returns all" assert=
+] ;
+
+test-drop-all: ( -- ) [
+  { 1 2 3 } >iterator 3 #drop #collect
+  { } "drop all returns empty" assert=
+] ;
+
+test-drop-more-than-available: ( -- ) [
+  { 1 2 } >iterator 10 #drop #collect
+  { } "drop more than available returns empty" assert=
+] ;
+
+test-drop-with-filter: ( -- ) [
+  { 1 2 3 4 5 6 } >iterator [ 2 > ] #filter 2 #drop #collect
+  { 5 6 } "drop after filter skips filtered results" assert=
+] ;
+
+\ -- Combined chains --
+
+test-take-drop-chain: ( -- ) [
+  { 1 2 3 4 5 6 7 8 9 10 } >iterator 3 #drop 4 #take #collect
+  { 4 5 6 7 } "drop 3 then take 4" assert=
+] ;
+
+test-full-pipeline: ( -- ) [
+  { 1 2 3 4 5 6 7 8 9 10 } >iterator
+  [ 2 * ] #map
+  [ 10 > ] #filter
+  2 #take
+  #collect
+  { 12 14 } "full pipeline: map+filter+take+collect" assert=
+] ;
+
+test-count-with-take: ( -- ) [
+  { 1 2 3 4 5 } >iterator 3 #take #count
+  3 "count after take" assert=
+] ;
+
+test-reduce-with-drop: ( -- ) [
+  { 1 2 3 4 5 } >iterator 2 #drop 0 [ + ] #reduce
+  12 "reduce after drop sums 3+4+5" assert=
+] ;
+
+\ -- Existing eager behavior unchanged --
+
+test-eager-take-array: ( -- ) [
+  { 1 2 3 4 5 } 3 #take
+  { 1 2 3 } "eager take on array" assert=
+] ;
+
+test-eager-drop-array: ( -- ) [
+  { 1 2 3 4 5 } 2 #drop
+  { 3 4 5 } "eager drop on array" assert=
+] ;
+
+test-collect-basic
+test-collect-empty
+test-collect-after-map
+test-collect-after-filter
+test-collect-map-filter-chain
+test-collect-type-error
+test-count-basic
+test-count-empty
+test-count-after-filter
+test-count-consumes
+test-count-type-error
+test-take-returns-iterator
+test-take-limits-elements
+test-take-zero
+test-take-more-than-available
+test-take-with-map
+test-drop-returns-iterator
+test-drop-skips-elements
+test-drop-zero
+test-drop-all
+test-drop-more-than-available
+test-drop-with-filter
+test-take-drop-chain
+test-full-pipeline
+test-count-with-take
+test-reduce-with-drop
+test-eager-take-array
+test-eager-drop-array

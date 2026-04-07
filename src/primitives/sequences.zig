@@ -28,7 +28,12 @@ const utf8SliceByCodepoints = sequence.utf8SliceByCodepoints;
 
 pub const primitives = [_]Primitive{
     // Sequence length
-    .{ .name = "#len", .stack_effect = "seq -- n", .doc = "Get length of sequence.", .func = nativeLen },
+    .{
+        .name = "#len",
+        .stack_effect = "seq -- n",
+        .doc = "Get length of sequence. O(1) and non-destructive; does not work on iterators (use #count instead).",
+        .func = nativeLen,
+    },
     // Sequence element access
     .{ .name = "#nth", .stack_effect = "seq n -- elem", .doc = "Get element at index.", .func = nativeNth },
     .{ .name = "#first", .stack_effect = "seq -- elem", .doc = "Get first element of sequence.", .func = nativeFirst },
