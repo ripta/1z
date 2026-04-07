@@ -764,4 +764,5 @@ test {
     _ = @import("memory_limit.zig");
     _ = @import("line_editor.zig");
     _ = @import("debugger/mod.zig");
+    _ = @import("multiplexer.zig");
 }

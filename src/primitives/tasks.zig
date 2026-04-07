@@ -100,7 +100,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     }
 
     // Case: Top-level
-    var scheduler = Scheduler.init(ctx.allocator);
+    var scheduler = try Scheduler.init(ctx.allocator);
     defer scheduler.deinit();
 
     ctx.scheduler = &scheduler;
