@@ -33,6 +33,7 @@ fn nativeTypeOf(ctx: *Context) anyerror!void {
         .error_value => "error",
         .task => "task",
         .channel => "channel",
+        .iterator => "iterator",
         .doc_string => "doc-string",
     };
     try ctx.stack.push(.{ .symbol = type_name });

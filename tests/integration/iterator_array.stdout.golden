@@ -1,0 +1,38 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: type-of returns iterator
+Stack: [ ]
+PASS: first element
+PASS: second element
+PASS: third element
+Stack: [ ]
+PASS: only element
+PASS: exhausted iterator throws
+Stack: [ ]
+PASS: first element
+PASS: second element
+PASS: third element
+Stack: [ ]
+PASS: only element
+PASS: exhausted returns none
+PASS: still none on subsequent call
+Stack: [ ]
+PASS: empty array returns none
+Stack: [ ]
+PASS: advance via first ref
+PASS: second ref sees advancement
+Stack: [ ]
+PASS: iterator? returns true for iterator
+PASS: iterator? returns false for array
+PASS: iterator? returns false for integer
+Stack: [ ]
+PASS: >iterator on integer throws
+PASS: >iterator on string throws
+Stack: [ ]

@@ -49,6 +49,7 @@ pub const dispatch_helpers = @import("dispatch_helpers.zig");
 pub const time = @import("time.zig");
 pub const tasks = @import("tasks.zig");
 pub const channels = @import("channels.zig");
+pub const iterators = @import("iterators.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -98,4 +99,5 @@ pub const extracted_primitives = stack.primitives ++
     dispatch_words.primitives ++
     time.primitives ++
     tasks.primitives ++
-    channels.primitives;
+    channels.primitives ++
+    iterators.primitives;
