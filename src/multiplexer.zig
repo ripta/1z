@@ -52,7 +52,7 @@ pub const Multiplexer = struct {
             };
             _ = try std.posix.kevent(self.mux_fd, &.{ev}, &.{}, null);
         } else if (is_epoll) {
-            const events: u32 = (if (event == .read) std.os.linux.EPOLL.IN else std.os.linux.EPOLL.OUT) | std.os.linux.EPOLL.ONESHOT;
+            const events: u32 = (if (event == .read) @as(u32, std.os.linux.EPOLL.IN) else @as(u32, std.os.linux.EPOLL.OUT)) | std.os.linux.EPOLL.ONESHOT;
             var ev = std.os.linux.epoll_event{
                 .events = events,
                 .data = .{ .fd = fd },
