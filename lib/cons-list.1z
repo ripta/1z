@@ -113,7 +113,6 @@ list-foldr: ( cons-list init quot: ( elem acc -- acc' ) -- result ) [
   } match
 ] ;
 
-
 \ Map over elements, producing a new list.
 list-map: ( cons-list quot -- cons-list' ) [
   swap {

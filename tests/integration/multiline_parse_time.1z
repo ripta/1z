@@ -118,12 +118,7 @@ ml-color:green ml-describe "a color" "multiline method dispatch green" assert=
 
 "multiline stack effect" test-section
 
-ml-add: (
-  x
-  y
-  --
-  z
-) [ + ] ;
+ml-add: ( x y -- z ) [ + ] ;
 
 3 4 ml-add 7 "multiline stack effect word" assert=
 
@@ -152,8 +147,8 @@ ml-grab-lit
 ml-block: parse-time [ "END" parse-until ] ;
 
 ml-block
-  1 2
-  +
+1 2
++
 END call
 3 "multiline user-defined parse-until" assert=
 
@@ -162,16 +157,16 @@ END call
 ml-grab-until: parse-time [ "END" parse-tokens-until ] ;
 
 ml-grab-until
-  a
-  b
-  c
+a
+b
+c
 END
 #len 3 "multiline parse-tokens-until collects tokens" assert=
 
 ml-grab-until
-  a
-  b
-  c
+a
+b
+c
 END
 #first "a" "multiline parse-tokens-until first token" assert=
 
@@ -180,11 +175,11 @@ END
 ml-grab-vals: parse-time [ "END" parse-values-until ] ;
 
 ml-grab-vals
-  struct{
-    a
-    b
-  }
-  hello
+struct{
+  a
+  b
+}
+hello
 END
 #len 2 "multiline parse-values-until collects values" assert=
 

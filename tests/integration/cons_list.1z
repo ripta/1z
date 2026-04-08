@@ -158,7 +158,7 @@ nil >iterator #collect { } ">iterator nil collects to empty array" assert=
 
 ">iterator with chained adapters" test-section
 { 1 2 3 4 5 } >cons-list >iterator
-  [ 2 * ] #map [ 5 > ] #filter #collect
+[ 2 * ] #map [ 5 > ] #filter #collect
 { 6 8 10 } "map then filter on cons-list iterator" assert=
 
 ">iterator with #count" test-section

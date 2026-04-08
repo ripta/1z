@@ -5,7 +5,7 @@
 []: [ [] ] ;
 
 \\ Read the next quotation from the tokenizer.
-parse-quotation: (  -- quotation ) [
+parse-quotation: ( -- quotation ) [
   parse-literal dup type-of quotation: =
   [ ] [ "expected quotation" throw ] if
 ] ;
@@ -134,7 +134,7 @@ parameter?:   ( val -- ? ) [ type-of parameter: = ] ;
 module?:      ( val -- ? ) [ type-of module: = ] ;
 marker?:      ( val -- ? ) [ type-of marker: = ] ;
 benchmark-report?: ( val -- ? ) [ type-of benchmark-report: = ] ;
-iterator?:  ( val -- ? ) [ type-of iterator: = ] ;
+iterator?: ( val -- ? ) [ type-of iterator: = ] ;
 \\ Test whether a named word has the `generic` marker.
 generic?: ( name -- ? ) [ word-markers [ generic = ] #any ] ;
 

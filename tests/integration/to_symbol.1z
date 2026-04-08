@@ -51,7 +51,9 @@ greet: >word call "hello" ">word from symbol then call" assert=
   \ the inner call defines ephemeral, creates >word quotation, then its frame exits
   \ the second call tries to execute it but ephemeral is no longer in scope
   [ [ ephemeral: 42 ;
-      "ephemeral" >word ] call call ]
+      "ephemeral" >word
+    ] call call
+  ]
   "local not visible after frame exit" assert-error
 ] call
 
