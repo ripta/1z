@@ -35,6 +35,9 @@ const OnezHandle = struct {
     ctx: *Context,
     last_error: ?[:0]const u8 = null,
     host_words: std.ArrayListUnmanaged(HostWordRegistration) = .{},
+    saved_obligation_frames: std.ArrayListUnmanaged(
+        std.ArrayListUnmanaged(context_mod.ProtocolObligation),
+    ) = .{},
 };
 
 const page = std.heap.page_allocator;
@@ -74,6 +77,7 @@ pub const ONEZ_ERR_LOAD_FAILED: c_int = 6;
 pub const ONEZ_ERR_NOT_HOST_WORD: c_int = 7;
 pub const ONEZ_ERR_INVALID_EFFECT: c_int = 8;
 pub const ONEZ_ERR_WORD_NOT_FOUND: c_int = 9;
+pub const ONEZ_ERR_ISOLATION_UNDERFLOW: c_int = 10;
 
 /// Initialize the 1z runtime with primitives only; no prelude is loaded.
 ///
@@ -130,6 +134,14 @@ export fn onez_deinit(ptr: ?*anyopaque) void {
         allocator.free(entry.name);
     }
     handle.host_words.deinit(allocator);
+
+    // XXX(ripta): forcefully close any unclosed isolation frames to avoid leaks. This
+    //             is a bit hacky but it avoids the need for a more complex ownership
+    //             model for obligation frames.
+    for (handle.saved_obligation_frames.items) |*frame| {
+        frame.deinit(handle.ctx.allocator);
+    }
+    handle.saved_obligation_frames.deinit(allocator);
 
     if (handle.ctx.program_args.len > 0) {
         allocator.free(handle.ctx.program_args);
@@ -320,6 +332,73 @@ export fn onez_eval_file(ptr: ?*anyopaque, path: ?[*:0]const u8) c_int {
     }
 
     return ONEZ_OK;
+}
+
+/// Push an isolation frame. Type registrations, dispatch entries, and
+/// protocol obligations created after this call are scoped: they will
+/// be discarded when onez_isolation_end is called. Stack values are
+/// not affected.
+export fn onez_isolation_begin(ptr: ?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const ctx = handle.ctx;
+
+    clearLastError(handle);
+
+    ctx.pushTypeRegistryFrame() catch {
+        setLastError(handle, "isolation begin: type registry frame alloc failed", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+
+    ctx.pushDispatchFrame() catch {
+        ctx.popTypeRegistryFrame();
+        setLastError(handle, "isolation begin: dispatch frame alloc failed", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+
+    handle.saved_obligation_frames.append(handle.gpa.allocator(), ctx.protocol_obligations) catch {
+        ctx.popDispatchFrame();
+        ctx.popTypeRegistryFrame();
+        setLastError(handle, "isolation begin: obligation frame alloc failed", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    ctx.protocol_obligations = .{};
+
+    return ONEZ_OK;
+}
+
+/// Pop an isolation frame, discarding type-system side effects created
+/// since the matching onez_isolation_begin call.
+export fn onez_isolation_end(ptr: ?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const ctx = handle.ctx;
+
+    clearLastError(handle);
+
+    if (handle.saved_obligation_frames.items.len == 0) {
+        setLastError(handle, "onez_isolation_end called without matching begin", .{});
+        return ONEZ_ERR_ISOLATION_UNDERFLOW;
+    }
+
+    ctx.protocol_obligations.deinit(ctx.allocator);
+    ctx.protocol_obligations = handle.saved_obligation_frames.pop().?;
+
+    ctx.popDispatchFrame();
+    ctx.popTypeRegistryFrame();
+
+    return ONEZ_OK;
+}
+
+/// Convenience wrapper: evaluate code within an isolation scope.
+/// Equivalent to begin + eval + end. The end always runs, even if eval failed.
+export fn onez_eval_isolated(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
+    const begin_rc = onez_isolation_begin(ptr);
+    if (begin_rc != ONEZ_OK) return begin_rc;
+
+    const eval_rc = onez_eval(ptr, code, len);
+    const end_rc = onez_isolation_end(ptr);
+
+    if (eval_rc != ONEZ_OK) return eval_rc;
+    return end_rc;
 }
 
 /// Register a host callback as a 1z word.
@@ -2759,4 +2838,124 @@ test "eval_file does not create a module" {
     var out: i64 = 0;
     try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
     try std.testing.expectEqual(@as(i64, 42), out);
+}
+
+// =============================================================================
+// Eval Modes: Isolation
+// =============================================================================
+
+test "isolation_begin null handle returns NULL_HANDLE" {
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_isolation_begin(null));
+}
+
+test "isolation_end null handle returns NULL_HANDLE" {
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_isolation_end(null));
+}
+
+test "isolation_end without begin returns underflow" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_ERR_ISOLATION_UNDERFLOW, onez_isolation_end(handle_ptr));
+}
+
+test "isolation preserves stack values across boundary" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 42));
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_begin(handle_ptr));
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 99));
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_end(handle_ptr));
+
+    try std.testing.expectEqual(@as(usize, 2), onez_stack_depth(handle_ptr));
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 99), out);
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 42), out);
+}
+
+test "isolation discards type registrations" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_begin(handle_ptr));
+
+    // Define a virtual type and use its constructor inside isolation.
+    const define_code = "iso-color: virtual{ string } ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, define_code, define_code.len));
+    const inside_code = "\"red\" >iso-color drop";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, inside_code, inside_code.len));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_end(handle_ptr));
+
+    // After isolation, the constructor should no longer find its type descriptor.
+    const outside_code = "\"red\" >iso-color";
+    try std.testing.expect(onez_eval(handle_ptr, outside_code, outside_code.len) != ONEZ_OK);
+}
+
+test "isolation discards dispatch entries" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    // Define a generic word at the top level.
+    const generic_code = "iso-op: generic ( a -- b ) [ ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, generic_code, generic_code.len));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_begin(handle_ptr));
+
+    // Register a method inside isolation and verify it dispatches.
+    const method_code = "iso-op: method{ fixnum } [ 1 + ] ; 42 iso-op";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, method_code, method_code.len));
+    var inside_out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &inside_out));
+    try std.testing.expectEqual(@as(i64, 43), inside_out);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_end(handle_ptr));
+
+    // After isolation, dispatch should fail (no method for fixnum).
+    const outside_code = "42 iso-op";
+    try std.testing.expect(onez_eval(handle_ptr, outside_code, outside_code.len) != ONEZ_OK);
+}
+
+test "eval_isolated executes code and isolates" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const code = "1 2 +";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval_isolated(handle_ptr, code, code.len));
+
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 3), out);
+}
+
+test "eval_isolated cleans up frames on eval error" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const code = "nonexistent-word-xyz";
+    try std.testing.expect(onez_eval_isolated(handle_ptr, code, code.len) != ONEZ_OK);
+
+    // The end ran inside eval_isolated; calling end again must underflow.
+    try std.testing.expectEqual(ONEZ_ERR_ISOLATION_UNDERFLOW, onez_isolation_end(handle_ptr));
+}
+
+test "isolation nests" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_begin(handle_ptr));
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_begin(handle_ptr));
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_end(handle_ptr));
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_end(handle_ptr));
+    try std.testing.expectEqual(ONEZ_ERR_ISOLATION_UNDERFLOW, onez_isolation_end(handle_ptr));
 }

@@ -90,6 +90,7 @@ typedef void *onez_type_t;
 #define ONEZ_ERR_NOT_HOST_WORD      7
 #define ONEZ_ERR_INVALID_EFFECT     8
 #define ONEZ_ERR_WORD_NOT_FOUND     9
+#define ONEZ_ERR_ISOLATION_UNDERFLOW 10
 
 /* ----- Lifecycle ----- */
 
@@ -155,6 +156,46 @@ int onez_eval(onez_t ctx, const char *code, size_t len);
  * Returns ONEZ_OK on success, or a non-zero error code on failure.
  */
 int onez_eval_file(onez_t ctx, const char *path);
+
+/* ---- Isolation ---- */
+
+/*
+ * Push an isolation frame. Type registrations, dispatch entries, and
+ * protocol obligations created after this call are scoped: they will
+ * be discarded when onez_isolation_end is called. Stack values are
+ * not affected -- only type-system side effects are isolated.
+ *
+ * Isolation frames nest: each begin must have a matching end.
+ *
+ * Returns ONEZ_OK on success, or ONEZ_ERR_ALLOC on allocation failure.
+ */
+int onez_isolation_begin(onez_t ctx);
+
+/*
+ * Pop an isolation frame, discarding type-system side effects created
+ * since the matching onez_isolation_begin call.
+ *
+ * Must be called even if evaluation within the isolation scope failed,
+ * to ensure frames are properly cleaned up.
+ *
+ * Returns ONEZ_OK on success.
+ * Returns ONEZ_ERR_ISOLATION_UNDERFLOW if no isolation frame is active.
+ */
+int onez_isolation_end(onez_t ctx);
+
+/*
+ * Convenience wrapper: evaluate code within an isolation scope.
+ *
+ * Equivalent to:
+ *
+ *   onez_isolation_begin(ctx);
+ *   int rc = onez_eval(ctx, code, len);
+ *   onez_isolation_end(ctx); // <- always runs, even if eval failed
+ *   return rc;
+ *
+ * Stack values survive; type-system side effects are discarded.
+ */
+int onez_eval_isolated(onez_t ctx, const char *code, size_t len);
 
 /*
  * Register a host callback as a top-level 1z word.
