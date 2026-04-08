@@ -94,7 +94,32 @@ typedef void *onez_type_t;
 /* ----- Lifecycle ----- */
 
 /*
- * Create and initialize a new interpreter context. Loads the prelude.
+ * Create and initialize a new interpreter context with primitives only.
+ * The prelude is NOT loaded. Call onez_load_prelude() afterwards to load
+ * the default embedded prelude or a custom prelude from a file.
+ *
+ * Returns NULL on allocation failure.
+ *
+ * The standard library is discovered relative to the executable by default.
+ * Call `onez_set_stdlib_path` after init if the stdlib lives elsewhere.
+ */
+onez_t onez_init_no_prelude(void);
+
+/*
+ * Load the prelude into a context created with onez_init_no_prelude().
+ *
+ * If path is NULL, the default embedded prelude is loaded.
+ * If path is non-NULL, the file at the given null-terminated path is
+ * read and used as the prelude source.
+ *
+ * Returns ONEZ_OK on success, or ONEZ_ERR_LOAD_FAILED on failure.
+ */
+int onez_load_prelude(onez_t ctx, const char *path);
+
+/*
+ * Create and initialize a new interpreter context. Loads the default
+ * embedded prelude. Equivalent to onez_init_no_prelude() followed by
+ * onez_load_prelude(ctx, NULL).
  *
  * Returns NULL on allocation or prelude failure.
  *
@@ -105,7 +130,7 @@ onez_t onez_init(void);
 
 /*
  * Destroy an interpreter context and free all associated memory.
- * Passing NULL is safe, and trated as noöp.
+ * Passing NULL is safe, and treated as noöp.
  */
 void onez_deinit(onez_t ctx);
 
@@ -119,6 +144,17 @@ void onez_deinit(onez_t ctx);
  * After failure, call `onez_last_error` for a human-readable message.
  */
 int onez_eval(onez_t ctx, const char *code, size_t len);
+
+/*
+ * Evaluate a .1z file by path. The null-terminated path is opened, read
+ * line-by-line, and executed as if passed to onez_eval. No module is
+ * created; definitions become visible in the current scope.
+ *
+ * Sets source attribution for error messages to the given file path.
+ *
+ * Returns ONEZ_OK on success, or a non-zero error code on failure.
+ */
+int onez_eval_file(onez_t ctx, const char *path);
 
 /*
  * Register a host callback as a top-level 1z word.

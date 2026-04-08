@@ -75,14 +75,11 @@ pub const ONEZ_ERR_NOT_HOST_WORD: c_int = 7;
 pub const ONEZ_ERR_INVALID_EFFECT: c_int = 8;
 pub const ONEZ_ERR_WORD_NOT_FOUND: c_int = 9;
 
-/// Initialize the 1z runtime for AOT-compiled programs.
+/// Initialize the 1z runtime with primitives only; no prelude is loaded.
 ///
-/// The runtime loads the prelude only. This is sufficient because the build
-/// rejects dynamic features (eval-string, load, etc.) and requires all
-/// reachable words to compile to C. Native primitives are available via the
-/// prelude dictionary; user words dispatch through the compiled function
-/// table registered by onez_runtime_register_compiled.
-export fn onez_init() ?*anyopaque {
+/// Call onez_load_prelude() afterwards to load the default or a custom
+/// prelude, or skip the prelude entirely for bare-metal embedding.
+export fn onez_init_no_prelude() ?*anyopaque {
     const gpa = page.create(std.heap.GeneralPurposeAllocator(.{})) catch return null;
     gpa.* = .{};
     const allocator = gpa.allocator();
@@ -102,13 +99,24 @@ export fn onez_init() ?*anyopaque {
         }
     } else |_| {}
 
-    ctx.loadPrelude(null) catch return null;
-
     const handle = page.create(OnezHandle) catch return null;
     handle.* = .{
         .gpa = gpa,
         .ctx = ctx,
     };
+    return handle;
+}
+
+/// Initialize the 1z runtime and load the default embedded prelude.
+///
+/// Equivalent to onez_init_no_prelude() followed by
+/// onez_load_prelude(handle, NULL).
+export fn onez_init() ?*anyopaque {
+    const handle = onez_init_no_prelude() orelse return null;
+    if (onez_load_prelude(handle, null) != ONEZ_OK) {
+        onez_deinit(handle);
+        return null;
+    }
     return handle;
 }
 
@@ -133,6 +141,47 @@ export fn onez_deinit(ptr: ?*anyopaque) void {
     _ = handle.gpa.deinit();
     page.destroy(handle.gpa);
     page.destroy(handle);
+}
+
+/// Load a prelude into a context.
+///
+/// If path is null, the default embedded prelude is loaded. If path is
+/// non-null, the file at the given null-terminated path is read and used
+/// as the prelude source.
+export fn onez_load_prelude(ptr: ?*anyopaque, path: ?[*:0]const u8) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const ctx = handle.ctx;
+
+    ctx.clearExecutionDetails();
+    clearLastError(handle);
+
+    if (path) |p| {
+        const filepath = std.mem.span(p);
+        const alloc = ctx.quotationAllocator();
+
+        const file = std.fs.cwd().openFile(filepath, .{}) catch {
+            setLastError(handle, "failed to open prelude file: {s}", .{filepath});
+            return ONEZ_ERR_LOAD_FAILED;
+        };
+        defer file.close();
+
+        const source = file.readToEndAlloc(alloc, 10 * 1024 * 1024) catch {
+            setLastError(handle, "failed to read prelude file: {s}", .{filepath});
+            return ONEZ_ERR_LOAD_FAILED;
+        };
+
+        ctx.loadPrelude(source) catch |err| {
+            captureError(handle, err);
+            return ONEZ_ERR_LOAD_FAILED;
+        };
+    } else {
+        ctx.loadPrelude(null) catch |err| {
+            captureError(handle, err);
+            return ONEZ_ERR_LOAD_FAILED;
+        };
+    }
+
+    return ONEZ_OK;
 }
 
 export fn onez_eval(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
@@ -185,6 +234,89 @@ export fn onez_eval(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
                 };
             }
         },
+    }
+
+    return ONEZ_OK;
+}
+
+/// Evaluate a .1z file by path. The null-terminated path is opened, read
+/// line-by-line, and executed as if passed to onez_eval. No module is
+/// created; definitions become visible in the current scope.
+export fn onez_eval_file(ptr: ?*anyopaque, path: ?[*:0]const u8) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const ctx = handle.ctx;
+    const alloc = ctx.quotationAllocator();
+
+    ctx.clearExecutionDetails();
+    clearLastError(handle);
+
+    const filepath = std.mem.span(path orelse {
+        setLastError(handle, "null path passed to onez_eval_file", .{});
+        return ONEZ_ERR_NULL_HANDLE;
+    });
+
+    const file = std.fs.cwd().openFile(filepath, .{}) catch {
+        setLastError(handle, "file not found: {s}", .{filepath});
+        return ONEZ_ERR_LOAD_FAILED;
+    };
+    defer file.close();
+
+    const old_source = ctx.current_source;
+    ctx.current_source = filepath;
+    defer ctx.current_source = old_source;
+
+    const old_source_dir = ctx.current_source_dir;
+    ctx.current_source_dir = std.fs.path.dirname(filepath);
+    defer ctx.current_source_dir = old_source_dir;
+
+    var file_buf: [4096]u8 = undefined;
+    var reader = file.reader(&file_buf);
+
+    var processor: StatementProcessor = .{};
+    defer processor.deinit();
+
+    while (true) {
+        const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
+            error.EndOfStream => {
+                switch (processor.flush(alloc, ctx)) {
+                    .needs_more_input => {},
+                    .parse_error => |e| {
+                        captureError(handle, e);
+                        return 1;
+                    },
+                    .complete => |instrs| {
+                        if (instrs.len > 0) {
+                            ctx.executeQuotation(.{ .instructions = instrs }) catch |e2| {
+                                captureError(handle, e2);
+                                return 1;
+                            };
+                        }
+                    },
+                }
+                break;
+            },
+            else => {
+                setLastError(handle, "failed to read file: {s}", .{filepath});
+                return ONEZ_ERR_LOAD_FAILED;
+            },
+        };
+
+        switch (processor.feedLine(alloc, line, ctx)) {
+            .needs_more_input => continue,
+            .parse_error => |err| {
+                captureError(handle, err);
+                return 1;
+            },
+            .complete => |instrs| {
+                if (instrs.len > 0) {
+                    ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
+                        captureError(handle, err);
+                        return 1;
+                    };
+                }
+                processor.reset();
+            },
+        }
     }
 
     return ONEZ_OK;
@@ -2501,4 +2633,130 @@ test "register_method passes user_data to callback" {
     try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
     try std.testing.expectEqual(@as(i64, 42), out);
     try std.testing.expect(test_host_callback_seen_handle == test_host_callback_expected_handle);
+}
+
+// =============================================================================
+// Eval Modes: Foundation
+// =============================================================================
+
+test "init_no_prelude returns non-null handle" {
+    const handle_ptr = onez_init_no_prelude();
+    try std.testing.expect(handle_ptr != null);
+    onez_deinit(handle_ptr);
+}
+
+test "init_no_prelude: native primitives work without prelude" {
+    const handle_ptr = onez_init_no_prelude();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, "1 2 +", 5));
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 3), out);
+}
+
+test "init_no_prelude: prelude-only words are unavailable" {
+    const handle_ptr = onez_init_no_prelude();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const rc = onez_eval(handle_ptr, "1 2 bi", 6);
+    try std.testing.expect(rc != ONEZ_OK);
+}
+
+test "load_prelude with null loads embedded prelude" {
+    const handle_ptr = onez_init_no_prelude();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_load_prelude(handle_ptr, null));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, "1 2 +", 5));
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 3), out);
+}
+
+test "load_prelude with invalid path returns LOAD_FAILED" {
+    const handle_ptr = onez_init_no_prelude();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_ERR_LOAD_FAILED, onez_load_prelude(handle_ptr, "/nonexistent/prelude.1z"));
+    try std.testing.expect(onez_last_error(handle_ptr) != null);
+}
+
+test "load_prelude with null handle returns NULL_HANDLE" {
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_load_prelude(null, null));
+}
+
+test "onez_init equals init_no_prelude + load_prelude" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, "1 2 +", 5));
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 3), out);
+}
+
+test "eval_file with null path returns error" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_eval_file(handle_ptr, null));
+}
+
+test "eval_file with nonexistent path returns LOAD_FAILED" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_ERR_LOAD_FAILED, onez_eval_file(handle_ptr, "/no/such/file.1z"));
+    try std.testing.expect(onez_last_error(handle_ptr) != null);
+}
+
+test "eval_file with null handle returns NULL_HANDLE" {
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_eval_file(null, null));
+}
+
+test "eval_file executes file contents" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tmp_path = "/private/tmp/claude-501/capi_eval_file_test.1z";
+    const tmp_file = std.fs.cwd().createFile(tmp_path, .{}) catch return;
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+    tmp_file.writeAll("1 2 +\n") catch return;
+    tmp_file.close();
+
+    try std.testing.expectEqual(ONEZ_OK, onez_eval_file(handle_ptr, tmp_path));
+
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 3), out);
+}
+
+test "eval_file does not create a module" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tmp_path = "/private/tmp/claude-501/capi_eval_file_no_module.1z";
+    const tmp_file = std.fs.cwd().createFile(tmp_path, .{}) catch return;
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+    tmp_file.writeAll("42\n") catch return;
+    tmp_file.close();
+
+    try std.testing.expectEqual(ONEZ_OK, onez_eval_file(handle_ptr, tmp_path));
+
+    // Stack should have the fixnum 42, not a module value
+    try std.testing.expectEqual(ONEZ_TYPE_FIXNUM, onez_stack_type(handle_ptr, 0));
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 42), out);
 }
