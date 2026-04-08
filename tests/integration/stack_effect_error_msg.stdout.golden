@@ -1,0 +1,8 @@
+=== stack effect mismatch errors ===
+Stack: [ ]
+Stack: [ ]
+PASS: too many inputs detected
+Stack: [ ]
+Stack: [ ]
+PASS: too few inputs detected
+Stack: [ ]

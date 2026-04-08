@@ -1,0 +1,141 @@
+\ lib/cons-list.1z - Immutable cons-cell linked lists
+
+use "sequences" ;
+
+cons-list: enum{
+  cons struct{ head tail }
+  nil
+} ;
+
+\ Short aliases for constructors and predicates
+cons:  ( head tail -- cons-list ) [ >cons-list:cons ] ;
+nil:   ( -- cons-list )           [ cons-list:nil ] ;
+cons?: ( value -- bool )          [ cons-list:cons? ] ;
+nil?:  ( value -- bool )          [ cons-list:nil? ] ;
+
+\ Accessors
+head: ( cons-list -- value ) [
+  {
+    cons-list:cons: [ drop ]
+    cons-list:nil: [ "head of empty list" throw ]
+  } match
+] ;
+
+tail: ( cons-list -- cons-list ) [
+  {
+    cons-list:cons: [ swap drop ]
+    cons-list:nil: [ "tail of empty list" throw ]
+  } match
+] ;
+
+\ Convert cons-list to array
+cons-list>array: ( cons-list -- array ) [
+  {
+    cons-list:cons: [ cons-list>array #prefix ]
+    cons-list:nil: [ { } ]
+  } match
+] ;
+
+\ Convert array to cons-list (preserving element order)
+>cons-list: ( array -- cons-list ) [
+  dup #len 0 = [ drop nil ] [
+    dup #first swap
+    1 over #len #slice
+    >cons-list cons
+  ] if
+] ;
+
+\ Length of a list, O(n).
+list-len: ( cons-list -- n ) [
+  0 swap
+  [ dup cons? ] [ tail swap 1 + swap ] while
+  drop
+] ;
+
+\ Reverse a list, O(n).
+list-reverse: ( cons-list -- cons-list ) [
+  list-reverse-acc: ( acc list -- cons-list ) [
+    {
+      cons-list:cons: [ [ swap cons ] dip list-reverse-acc ]
+      cons-list:nil: [ ]
+    } match
+  ] ;
+
+  nil swap list-reverse-acc
+] ;
+
+\ Nth element, O(n). Throws if out of bounds.
+list-nth: ( cons-list n -- value ) [
+  over nil? [ 2drop "list index out of bounds" throw ] [
+    dup 0 = [ drop head ] [ 1 - swap tail swap list-nth ] if
+  ] if
+] ;
+
+\ Append two lists, O(n) in the first list.
+list-append: ( cons-list-a cons-list-b -- cons-list' ) [
+  swap {
+    cons-list:cons: [ <rot- list-append cons ]
+    cons-list:nil: [ ]
+  } match
+] ;
+
+\ Call quot for each element, head to tail.
+list-each: ( cons-list quot -- ) [
+  swap {
+    cons-list:cons: [
+      [ swap dup [ call ] dip ] dip swap list-each
+    ]
+    cons-list:nil: [ drop ]
+  } match
+] ;
+
+\ Fold from left, head to tail.
+list-foldl: ( cons-list acc quot: ( acc elem -- acc' ) -- acc' ) [
+  <rot-
+  {
+    cons-list:cons: [
+      [ swap dup [ call ] dip ] dip -rot> list-foldl
+    ]
+    cons-list:nil: [ drop ]
+  } match
+] ;
+list-fold: ( cons-list acc quot: ( acc elem -- acc' ) -- acc' ) [ list-foldl ] ;
+
+\ Fold from right, tail to head. Not tail-recursive, O(n) stack frames.
+list-foldr: ( cons-list init quot: ( elem acc -- acc' ) -- result ) [
+  <rot-
+  {
+    cons-list:cons: [
+      3 pick-n 3 pick-n list-foldr
+      <rot- call swap drop
+    ]
+    cons-list:nil: [ drop ]
+  } match
+] ;
+
+\ Map over elements, producing a new list.
+list-map: ( cons-list quot -- cons-list' ) [
+  swap {
+    cons-list:cons: [
+      over 3 pick-n call
+      -rot> swap drop
+      swap [ swap list-map ] dip swap cons
+    ]
+    cons-list:nil: [ drop nil ]
+  } match
+] ;
+
+\ Keep elements where quot returns true.
+list-filter: ( cons-list quot -- cons-list' ) [
+  swap {
+    cons-list:cons: [
+      over 3 pick-n call
+      [ swap [ swap list-filter ] dip swap cons ]
+      [ swap drop swap list-filter ] if
+    ]
+    cons-list:nil: [ drop nil ]
+  } match
+] ;
+
+\ Iterator protocol integration
+>iterator: method{ cons-list } [ cons-list>array >iterator ] ;

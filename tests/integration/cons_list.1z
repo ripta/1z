@@ -1,0 +1,172 @@
+\ Integration tests for cons-list, an immutable linked list
+
+use "testing" ;
+use "cons-list" ;
+
+"nil constructor" test-section
+nil nil? t "nil is nil" assert=
+nil cons? f "nil is not cons" assert=
+
+"cons constructor" test-section
+1 nil cons cons? t "cons is cons" assert=
+1 nil cons nil? f "cons is not nil" assert=
+
+"head accessor" test-section
+1 nil cons head 1 "head of single element" assert=
+1 2 nil cons cons head 1 "head of two elements" assert=
+"hello" nil cons head "hello" "head with string" assert=
+
+"tail accessor" test-section
+1 nil cons tail nil? t "tail of single element is nil" assert=
+1 2 nil cons cons tail head 2 "tail gives rest of list" assert=
+1 2 3 nil cons cons cons tail tail head 3 "nested tail" assert=
+
+"head and tail errors" test-section
+[ nil head ] "head of nil" assert-error
+[ nil tail ] "tail of nil" assert-error
+
+">cons-list from array" test-section
+{ } >cons-list nil? t "empty array becomes nil" assert=
+{ 42 } >cons-list head 42 "single element array head" assert=
+{ 42 } >cons-list tail nil? t "single element array tail is nil" assert=
+{ 1 2 3 } >cons-list head 1 "first element preserved" assert=
+{ 1 2 3 } >cons-list tail head 2 "second element preserved" assert=
+{ 1 2 3 } >cons-list tail tail head 3 "third element preserved" assert=
+{ 1 2 3 } >cons-list tail tail tail nil? t "end of list is nil" assert=
+
+"cons-list>array" test-section
+nil cons-list>array { } "nil to array" assert=
+1 nil cons cons-list>array { 1 } "single element to array" assert=
+1 2 3 nil cons cons cons cons-list>array { 1 2 3 } "three elements to array" assert=
+
+"round-trip array -> cons-list -> array" test-section
+{ 1 2 3 } >cons-list cons-list>array { 1 2 3 } "round-trip preserves elements" assert=
+{ } >cons-list cons-list>array { } "round-trip empty" assert=
+{ 42 } >cons-list cons-list>array { 42 } "round-trip single" assert=
+{ "a" "b" "c" } >cons-list cons-list>array { "a" "b" "c" } "round-trip strings" assert=
+
+"nested cons-lists" test-section
+{ 1 2 } >cons-list nil cons cons-list>array 0 #nth cons-list>array
+{ 1 2 } "nested list in list" assert=
+
+"cons builds in correct order" test-section
+3 nil cons 2 swap cons 1 swap cons
+cons-list>array { 1 2 3 } "cons builds list front-to-back" assert=
+
+"list-len" test-section
+nil list-len 0 "len of nil" assert=
+{ 1 } >cons-list list-len 1 "len of single" assert=
+{ 1 2 3 } >cons-list list-len 3 "len of three" assert=
+{ 1 2 3 4 5 } >cons-list list-len 5 "len of five" assert=
+
+"list-reverse" test-section
+nil list-reverse nil? t "reverse nil is nil" assert=
+{ 1 } >cons-list list-reverse cons? t "reverse single is cons" assert=
+{ 1 } >cons-list list-reverse head 1 "reverse single head" assert=
+{ 1 } >cons-list list-reverse cons-list>array { 1 } "reverse single" assert=
+{ 1 2 3 } >cons-list list-reverse cons-list>array { 3 2 1 } "reverse three" assert=
+{ 1 2 3 } >cons-list list-reverse list-reverse cons-list>array
+{ 1 2 3 } "double reverse is identity" assert=
+
+"list-nth" test-section
+{ 10 20 30 } >cons-list 0 list-nth 10 "nth 0" assert=
+{ 10 20 30 } >cons-list 1 list-nth 20 "nth 1" assert=
+{ 10 20 30 } >cons-list 2 list-nth 30 "nth 2" assert=
+[ { 1 2 3 } >cons-list 3 list-nth ] "nth out of bounds" assert-error
+[ { 1 2 3 } >cons-list -1 list-nth ] "nth negative" assert-error
+[ nil 0 list-nth ] "nth on nil" assert-error
+
+"list-append" test-section
+nil nil list-append nil? t "append nil nil" assert=
+{ 1 2 } >cons-list nil list-append cons-list>array
+{ 1 2 } "append list nil" assert=
+nil { 3 4 } >cons-list list-append cons-list>array
+{ 3 4 } "append nil list" assert=
+{ 1 2 } >cons-list { 3 4 } >cons-list list-append cons-list>array
+{ 1 2 3 4 } "append two lists" assert=
+{ 1 } >cons-list { 2 } >cons-list list-append cons-list>array
+{ 1 2 } "append single element lists" assert=
+
+"list-each" test-section
+{ } >cons-list 0 swap [ + ] list-each 0 "each on nil sums nothing" assert=
+{ 10 } >cons-list 0 swap [ + ] list-each 10 "each on single" assert=
+{ 1 2 3 } >cons-list 0 swap [ + ] list-each 6 "each sums elements" assert=
+{ 1 2 3 } >cons-list { } swap [ #push ] list-each
+{ 1 2 3 } "each visits head to tail" assert=
+
+"list-fold" test-section
+nil 0 [ + ] list-fold 0 "fold on nil returns init" assert=
+{ 1 2 3 } >cons-list 0 [ + ] list-fold 6 "fold sum" assert=
+{ 1 2 3 } >cons-list 10 [ + ] list-fold 16 "fold sum with init" assert=
+{ 1 2 3 } >cons-list { } [ #push ] list-fold
+{ 1 2 3 } "fold collects head to tail" assert=
+{ 1 2 3 4 } >cons-list 1 [ * ] list-fold 24 "fold product" assert=
+
+"list-foldl" test-section
+nil 0 [ + ] list-foldl 0 "foldl on nil returns init" assert=
+{ 1 2 3 } >cons-list 0 [ + ] list-foldl 6 "foldl sum" assert=
+{ 1 2 3 } >cons-list 0 [ - ] list-foldl -6 "foldl subtract" assert=
+{ 1 2 3 } >cons-list { } [ #push ] list-foldl
+{ 1 2 3 } "foldl collects head to tail" assert=
+
+"list-foldr" test-section
+nil 0 [ + ] list-foldr 0 "foldr on nil returns init" assert=
+{ 1 2 3 } >cons-list 0 [ + ] list-foldr 6 "foldr sum" assert=
+{ 1 2 3 } >cons-list 0 [ - ] list-foldr 2 "foldr subtract" assert=
+{ 1 2 3 } >cons-list { } [ swap #push ] list-foldr
+{ 3 2 1 } "foldr collects tail to head" assert=
+{ 1 2 3 } >cons-list nil [ cons ] list-foldr cons-list>array
+{ 1 2 3 } "foldr cons rebuilds list" assert=
+
+"list-map" test-section
+nil [ 1 + ] list-map nil? t "map on nil is nil" assert=
+{ 1 2 3 } >cons-list [ 2 * ] list-map cons-list>array
+{ 2 4 6 } "map doubles" assert=
+{ 1 2 3 } >cons-list [ 10 + ] list-map cons-list>array
+{ 11 12 13 } "map adds ten" assert=
+{ 1 } >cons-list [ 100 * ] list-map cons-list>array
+{ 100 } "map single element" assert=
+
+"list-filter" test-section
+nil [ drop t ] list-filter nil? t "filter on nil is nil" assert=
+{ 1 2 3 4 5 } >cons-list [ 3 > ] list-filter cons-list>array
+{ 4 5 } "filter greater than 3" assert=
+{ 1 2 3 4 5 } >cons-list [ 2 % 0 = ] list-filter cons-list>array
+{ 2 4 } "filter even numbers" assert=
+{ 1 2 3 } >cons-list [ drop f ] list-filter nil? t "filter none" assert=
+{ 1 2 3 } >cons-list [ drop t ] list-filter cons-list>array
+{ 1 2 3 } "filter all" assert=
+
+">iterator on nil" test-section
+nil >iterator #collect { } ">iterator nil collects to empty array" assert=
+
+">iterator on cons-list" test-section
+{ 1 2 3 } >cons-list >iterator #collect
+{ 1 2 3 } ">iterator collects elements in order" assert=
+
+">iterator with #map" test-section
+{ 1 2 3 } >cons-list >iterator [ 10 * ] #map #collect
+{ 10 20 30 } "lazy map over cons-list iterator" assert=
+
+">iterator with #filter" test-section
+{ 1 2 3 4 5 } >cons-list >iterator [ 3 > ] #filter #collect
+{ 4 5 } "lazy filter over cons-list iterator" assert=
+
+">iterator with #reduce" test-section
+{ 1 2 3 } >cons-list >iterator 0 [ + ] #reduce
+6 "reduce cons-list iterator" assert=
+
+">iterator with chained adapters" test-section
+{ 1 2 3 4 5 } >cons-list >iterator
+[ 2 * ] #map [ 5 > ] #filter #collect
+{ 6 8 10 } "map then filter on cons-list iterator" assert=
+
+">iterator with #count" test-section
+{ 1 2 3 4 5 } >cons-list >iterator #count
+5 "count elements via iterator" assert=
+
+">iterator with #take and #drop" test-section
+{ 1 2 3 4 5 } >cons-list >iterator 3 #take #collect
+{ 1 2 3 } "take 3 from cons-list iterator" assert=
+{ 1 2 3 4 5 } >cons-list >iterator 2 #drop #collect
+{ 3 4 5 } "drop 2 from cons-list iterator" assert=
