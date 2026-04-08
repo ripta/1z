@@ -3807,11 +3807,21 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize) callconv(.c) i3
                     defer ctx.popModuleDepsFrameTraced(mod);
                     break :blk ctx.executeQuotationWithPic(.{ .instructions = instrs }, null);
                 },
-                .native, .host_callback => break :blk word.invoke(ctx),
+                .native => |func| break :blk func(ctx),
+                .host_callback => |host| break :blk host_result: {
+                    const rc = host.callback(host.handle, host.user_data);
+                    if (rc != 0) break :host_result error.HostCallbackFailed;
+                    break :host_result;
+                },
             }
         } else {
             break :blk switch (word.action) {
-                .native, .host_callback => word.invoke(ctx),
+                .native => |func| func(ctx),
+                .host_callback => |host| host_result: {
+                    const rc = host.callback(host.handle, host.user_data);
+                    if (rc != 0) break :host_result error.HostCallbackFailed;
+                    break :host_result;
+                },
                 .compound => |instrs| ctx.executeQuotationWithPic(.{ .instructions = instrs }, null),
             };
         }

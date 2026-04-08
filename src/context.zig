@@ -3671,11 +3671,25 @@ pub const Context = struct {
                                     self.tail_call_module = word.source_module;
                                     return;
                                 },
-                                .native, .host_callback => {
+                                .native => |func| {
                                     self.tail_call_instructions = null;
                                     self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
                                     defer self.current_pic_entry = null;
-                                    if (word.invoke(self)) |_| {
+                                    if (func(self)) |_| {
+                                        try self.wordSuccessCleanup(name, word.stack_effect);
+                                    } else |err| {
+                                        return self.wordErrorCleanup(name, err);
+                                    }
+                                },
+                                .host_callback => |host| {
+                                    self.tail_call_instructions = null;
+                                    self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
+                                    defer self.current_pic_entry = null;
+                                    const result: anyerror!void = blk: {
+                                        const rc = host.callback(host.handle, host.user_data);
+                                        if (rc != 0) break :blk error.HostCallbackFailed;
+                                    };
+                                    if (result) |_| {
                                         try self.wordSuccessCleanup(name, word.stack_effect);
                                     } else |err| {
                                         return self.wordErrorCleanup(name, err);
@@ -3720,11 +3734,21 @@ pub const Context = struct {
                                             defer self.popModuleDepsFrameTraced(mod);
                                             break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic);
                                         },
-                                        .native, .host_callback => break :blk word.invoke(self),
+                                        .native => |func| break :blk func(self),
+                                        .host_callback => |host| break :blk host_result: {
+                                            const rc = host.callback(host.handle, host.user_data);
+                                            if (rc != 0) break :host_result error.HostCallbackFailed;
+                                            break :host_result;
+                                        },
                                     }
                                 } else {
                                     break :blk switch (word.action) {
-                                        .native, .host_callback => word.invoke(self),
+                                        .native => |func| func(self),
+                                        .host_callback => |host| host_result: {
+                                            const rc = host.callback(host.handle, host.user_data);
+                                            if (rc != 0) break :host_result error.HostCallbackFailed;
+                                            break :host_result;
+                                        },
                                         .compound => |instrs| self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic),
                                     };
                                 }
