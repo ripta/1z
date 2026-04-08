@@ -25,10 +25,10 @@ split-host-port: ( str -- host port ) [
     \ Plain host:port -- split on ":" and rejoin all but last
     ":" split
     dup #len 1 = [ drop "invalid address: missing port" throw ] [
-      dup #last parse-integer swap            \ port parts
-      0 over #len 1 - #slice                  \ port host-parts
-      ":" #join                               \ port host
-      swap                                    \ host port
+      dup #last parse-integer swap  \ port parts
+      0 over #len 1 - #slice        \ port host-parts
+      ":" #join                     \ port host
+      swap                          \ host port
     ] if
   ] if
 ] ;

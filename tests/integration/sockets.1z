@@ -61,21 +61,21 @@ tcp-close
   dup socket
   dup 2 pick-n bind
   dup 128 listen
-  swap drop                               \ server-fd
+  swap drop  \ server-fd
 
   \ Spawn accept task: accept, close client, return the peer addr
   dup [
     accept drop fd-close
-  ] curry spawn                           \ server-fd task
+  ] curry spawn  \ server-fd task
 
   \ Client: connect then close
   "127.0.0.1" 39282 >addr:tcp resolve #first
   dup socket
-  dup <rot- connect                       \ server-fd task client-fd
-  fd-close                                \ server-fd task
+  dup <rot- connect  \ server-fd task client-fd
+  fd-close           \ server-fd task
 
   \ Await the accept task to ensure it completes
-  await drop                              \ server-fd
+  await drop  \ server-fd
   fd-close
 ] task-scope
 "PASS: connect and accept" print-line
@@ -86,29 +86,29 @@ tcp-close
   dup socket
   dup 2 pick-n bind
   dup 128 listen
-  swap drop                               \ server-fd
+  swap drop  \ server-fd
 
   \ Spawn accept+echo task: accept, read line, write it back, close
   dup [
-    accept drop                           \ client-fd
-    fd>stream                             \ stream
-    dup stream-read-line                  \ stream line
-    over swap stream-write drop           \ stream
+    accept drop                  \ client-fd
+    fd>stream                    \ stream
+    dup stream-read-line         \ stream line
+    over swap stream-write drop  \ stream
     stream-close
-  ] curry spawn                           \ server-fd task
+  ] curry spawn  \ server-fd task
 
   \ Client: connect, write, read
   "127.0.0.1" 39283 >addr:tcp resolve #first
   dup socket
-  dup <rot- connect                       \ server-fd task client-fd
-  fd>stream                               \ server-fd task client-stream
+  dup <rot- connect  \ server-fd task client-fd
+  fd>stream          \ server-fd task client-stream
 
   dup "hello\n" stream-write drop
-  dup 5 stream-read                       \ server-fd task client-stream data
+  dup 5 stream-read  \ server-fd task client-stream data
   #len 5 "echoed 5 bytes" assert=
 
-  stream-close                            \ server-fd task
-  await drop                              \ server-fd
+  stream-close  \ server-fd task
+  await drop    \ server-fd
   fd-close
 ] task-scope
 "PASS: echo server" print-line

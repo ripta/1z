@@ -29,9 +29,9 @@ serve-forever: ( config -- ) [
 
 \ Internal: repeatedly accept connections and spawn handler tasks.
 serve-loop: ( handler on-error tcp-server -- ) [
-  dup tcp-accept drop                    \ handler on-error tcp-server stream
-  3 pick-n curry                         \ handler on-error tcp-server [stream handler...]
-  2 pick-n [ recover ] curry curry       \ handler on-error tcp-server [[stream handler...] on-error recover]
-  spawn drop                            \ handler on-error tcp-server
+  dup tcp-accept drop               \ handler on-error tcp-server stream
+  3 pick-n curry                    \ handler on-error tcp-server [stream handler...]
+  2 pick-n [ recover ] curry curry  \ handler on-error tcp-server [[stream handler...] on-error recover]
+  spawn drop                        \ handler on-error tcp-server
   serve-loop
 ] ;
