@@ -1052,7 +1052,7 @@ pub const InferenceEngine = struct {
         for (dispatch_entries) |pair| {
             const entry_instrs = switch (pair.entry.body) {
                 .quotation => |instrs| instrs,
-                .native_fn => continue,
+                .native_fn, .host_callback => continue,
             };
             const entry_result = try self.inferInstructions(entry_instrs, caller, null);
             if (base_result == .known and entry_result == .known) {

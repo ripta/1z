@@ -59,7 +59,7 @@ fn buildEntry(_: []const u8, word_def: *const WordDefinition, dispatch_table: *c
                 for (dispatch_entries) |pair| {
                     switch (pair.entry.body) {
                         .quotation => |instrs| try collectCallees(instrs, &callee_set, &has_opaque, allocator),
-                        .native_fn => {},
+                        .native_fn, .host_callback => {},
                     }
                 }
             }

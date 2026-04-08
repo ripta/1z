@@ -12,6 +12,10 @@ pub fn executeDispatchBody(ctx: *Context, body: dispatch_mod.DispatchBody) !void
     switch (body) {
         .quotation => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
         .native_fn => |func| try func(ctx),
+        .host_callback => |host| {
+            const rc = host.callback(host.handle, host.user_data);
+            if (rc != 0) return error.HostCallbackFailed;
+        },
     }
 }
 

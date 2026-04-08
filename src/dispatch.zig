@@ -5,7 +5,9 @@ const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const HashTable = value_mod.HashTable;
 const Instruction = value_mod.Instruction;
-const NativeFn = @import("dictionary.zig").NativeFn;
+const dictionary_mod = @import("dictionary.zig");
+const NativeFn = dictionary_mod.NativeFn;
+const HostCallback = dictionary_mod.HostCallback;
 
 /// Returns the dispatch type name for a value. Also used by `type-of`.
 pub fn dispatchTypeName(val: Value) []const u8 {
@@ -173,6 +175,7 @@ pub const DispatchProvenance = struct {
 pub const DispatchBody = union(enum) {
     quotation: []const Instruction,
     native_fn: NativeFn,
+    host_callback: HostCallback,
 };
 
 /// A registered method body for a dispatch entry.

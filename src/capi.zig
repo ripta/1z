@@ -17,9 +17,14 @@ const HostCallbackFn = dictionary_mod.HostCallbackFn;
 const helpers = @import("primitives/helpers.zig");
 const StackEffect = @import("stack_effect.zig").StackEffect;
 
+const dispatch_mod = @import("dispatch.zig");
+const DispatchKey = dispatch_mod.DispatchKey;
+const DispatchEntry = dispatch_mod.DispatchEntry;
+
 const value_mod = @import("value.zig");
 const MutableMap = value_mod.MutableMap;
 const Value = value_mod.Value;
+const TypeValue = value_mod.TypeValue;
 
 const HostWordRegistration = struct {
     name: []const u8,
@@ -68,6 +73,7 @@ pub const ONEZ_ERR_KEY_NOT_FOUND: c_int = 5;
 pub const ONEZ_ERR_LOAD_FAILED: c_int = 6;
 pub const ONEZ_ERR_NOT_HOST_WORD: c_int = 7;
 pub const ONEZ_ERR_INVALID_EFFECT: c_int = 8;
+pub const ONEZ_ERR_WORD_NOT_FOUND: c_int = 9;
 
 /// Initialize the 1z runtime for AOT-compiled programs.
 ///
@@ -380,6 +386,96 @@ export fn onez_set_error(ptr: ?*anyopaque, msg: ?[*]const u8, len: usize) void {
         "{s}",
         .{msg_ptr[0..len]},
     ) catch null;
+}
+
+/// Look up a type by name. Returns an opaque handle for use with
+/// onez_register_method, or NULL if the type is not found.
+export fn onez_lookup_type(ptr: ?*anyopaque, name: ?[*:0]const u8) ?*anyopaque {
+    const handle = castHandle(ptr) orelse return null;
+    const name_ptr = name orelse return null;
+    const name_slice = std.mem.span(name_ptr);
+
+    if (name_slice.len == 0) return null;
+    const tv = handle.ctx.lookupTypeValueByName(name_slice) orelse return null;
+
+    return @ptrCast(@constCast(tv));
+}
+
+/// Register a host callback as a method on an existing generic word for
+/// a specific type combination.
+export fn onez_register_method(
+    ptr: ?*anyopaque,
+    word_name: ?[*:0]const u8,
+    type_a: ?*anyopaque,
+    type_b: ?*anyopaque,
+    callback: ?HostCallbackFn,
+    user_data: ?*anyopaque,
+) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    clearLastError(handle);
+    handle.ctx.clearExecutionDetails();
+
+    const name_ptr = word_name orelse {
+        setLastError(handle, "null word_name passed to onez_register_method", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    };
+    const callback_fn = callback orelse {
+        setLastError(handle, "null callback passed to onez_register_method", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    };
+
+    const name_slice = std.mem.span(name_ptr);
+    if (name_slice.len == 0) {
+        setLastError(handle, "empty word_name passed to onez_register_method", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    }
+
+    const dispatch_id = handle.ctx.resolveDispatchId(name_slice) orelse {
+        setLastError(handle, "word '{s}' not found in dictionary", .{name_slice});
+        return ONEZ_ERR_WORD_NOT_FOUND;
+    };
+
+    const any_sentinel = handle.ctx.getDispatchAnySentinel();
+    const unary_sentinel = handle.ctx.getDispatchUnarySentinel();
+
+    const desc_a: *const value_mod.HashTable = if (type_a) |ta|
+        (@as(*const TypeValue, @ptrCast(@alignCast(ta)))).descriptor orelse {
+            setLastError(handle, "type_a has no descriptor", .{});
+            return ONEZ_ERR_TYPE_MISMATCH;
+        }
+    else
+        any_sentinel.descriptor.?;
+
+    const desc_b: *const value_mod.HashTable = if (type_b) |tb|
+        (@as(*const TypeValue, @ptrCast(@alignCast(tb)))).descriptor orelse {
+            setLastError(handle, "type_b has no descriptor", .{});
+            return ONEZ_ERR_TYPE_MISMATCH;
+        }
+    else if (type_a != null)
+        any_sentinel.descriptor.?
+    else
+        unary_sentinel.descriptor.?;
+
+    const key = DispatchKey{
+        .dispatch_id = dispatch_id,
+        .type_a = desc_a,
+        .type_b = desc_b,
+    };
+
+    const entry = DispatchEntry{
+        .body = .{ .host_callback = HostCallback{
+            .handle = ptr,
+            .callback = callback_fn,
+            .user_data = user_data,
+        } },
+    };
+
+    handle.ctx.registerDispatch(key, entry, true) catch |err| {
+        captureError(handle, err);
+        return ONEZ_ERR_ALLOC;
+    };
+
+    return ONEZ_OK;
 }
 
 export fn onez_push_int(ptr: ?*anyopaque, value: i64) c_int {
@@ -2198,4 +2294,211 @@ test "register_word_with_effect rejects null handle and null name" {
         null,
         @constCast(&value),
     ));
+}
+
+// =============================================================================
+// onez_lookup_type tests
+// =============================================================================
+
+test "lookup_type returns non-null for builtin type" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const fixnum_type = onez_lookup_type(handle_ptr, "fixnum");
+    try std.testing.expect(fixnum_type != null);
+}
+
+test "lookup_type returns different handles for different types" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const fixnum_type = onez_lookup_type(handle_ptr, "fixnum");
+    const string_type = onez_lookup_type(handle_ptr, "string");
+    try std.testing.expect(fixnum_type != null);
+    try std.testing.expect(string_type != null);
+    try std.testing.expect(fixnum_type != string_type);
+}
+
+test "lookup_type returns same handle for same type" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const t1 = onez_lookup_type(handle_ptr, "fixnum");
+    const t2 = onez_lookup_type(handle_ptr, "fixnum");
+    try std.testing.expect(t1 != null);
+    try std.testing.expectEqual(t1, t2);
+}
+
+test "lookup_type returns null for nonexistent type" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(@as(?*anyopaque, null), onez_lookup_type(handle_ptr, "nonexistent-type-xyz"));
+}
+
+test "lookup_type returns null for null handle and null name" {
+    try std.testing.expectEqual(@as(?*anyopaque, null), onez_lookup_type(null, "fixnum"));
+    const handle_ptr = onez_init();
+    defer onez_deinit(handle_ptr);
+    try std.testing.expectEqual(@as(?*anyopaque, null), onez_lookup_type(handle_ptr, null));
+    try std.testing.expectEqual(@as(?*anyopaque, null), onez_lookup_type(handle_ptr, ""));
+}
+
+test "lookup_type finds user-defined struct type" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const code = "point: struct{ x y } ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code.ptr, code.len));
+
+    const point_type = onez_lookup_type(handle_ptr, "point");
+    try std.testing.expect(point_type != null);
+}
+
+// =============================================================================
+// onez_register_method tests
+// =============================================================================
+
+test "register_method unary method invoked via dispatch" {
+    resetHostCallbackTestState();
+
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    // inspect is a generic word with methods per type
+    const fixnum_type = onez_lookup_type(handle_ptr, "fixnum");
+    try std.testing.expect(fixnum_type != null);
+
+    const value: i64 = 99;
+    try std.testing.expectEqual(ONEZ_OK, onez_register_method(
+        handle_ptr,
+        "inspect",
+        fixnum_type,
+        null,
+        constantHostCallback,
+        @constCast(&value),
+    ));
+
+    // Push a fixnum and call inspect, which should invoke our callback
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 42));
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, "inspect", 7));
+
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 99), out);
+    try std.testing.expectEqual(@as(usize, 1), test_host_callback_invocations);
+}
+
+test "register_method binary method invoked via dispatch" {
+    resetHostCallbackTestState();
+
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const fixnum_type = onez_lookup_type(handle_ptr, "fixnum");
+    try std.testing.expect(fixnum_type != null);
+
+    // register a binary method on + for (fixnum, fixnum) that returns a constant
+    const value: i64 = 777;
+    try std.testing.expectEqual(ONEZ_OK, onez_register_method(
+        handle_ptr,
+        "+",
+        fixnum_type,
+        fixnum_type,
+        constantHostCallback,
+        @constCast(&value),
+    ));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 1));
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 2));
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, "+", 1));
+
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 777), out);
+}
+
+test "register_method rejects null arguments" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const value: i64 = 1;
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_register_method(
+        null,
+        "inspect",
+        null,
+        null,
+        constantHostCallback,
+        @constCast(&value),
+    ));
+    try std.testing.expectEqual(ONEZ_ERR_NULL_VALUE, onez_register_method(
+        handle_ptr,
+        null,
+        null,
+        null,
+        constantHostCallback,
+        @constCast(&value),
+    ));
+    try std.testing.expectEqual(ONEZ_ERR_NULL_VALUE, onez_register_method(
+        handle_ptr,
+        "inspect",
+        null,
+        null,
+        null,
+        @constCast(&value),
+    ));
+}
+
+test "register_method returns WORD_NOT_FOUND for unknown word" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const value: i64 = 1;
+    try std.testing.expectEqual(ONEZ_ERR_WORD_NOT_FOUND, onez_register_method(
+        handle_ptr,
+        "nonexistent-word-xyz",
+        null,
+        null,
+        constantHostCallback,
+        @constCast(&value),
+    ));
+}
+
+test "register_method passes user_data to callback" {
+    resetHostCallbackTestState();
+
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const fixnum_type = onez_lookup_type(handle_ptr, "fixnum");
+    try std.testing.expect(fixnum_type != null);
+
+    test_host_callback_expected_handle = handle_ptr;
+    const value: i64 = 42;
+    try std.testing.expectEqual(ONEZ_OK, onez_register_method(
+        handle_ptr,
+        "inspect",
+        fixnum_type,
+        null,
+        constantHostCallback,
+        @constCast(&value),
+    ));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 0));
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, "inspect", 7));
+
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 42), out);
+    try std.testing.expect(test_host_callback_seen_handle == test_host_callback_expected_handle);
 }

@@ -50,6 +50,9 @@ typedef int (*onez_callback_fn)(onez_t ctx, void *user_data);
  */
 typedef void *onez_value_t;
 
+/* Opaque type handle for dispatch integration. Obtained via onez_lookup_type. */
+typedef void *onez_type_t;
+
 /* ---- Type codes, as returned by onez_stack_type ---- */
 
 #define ONEZ_TYPE_UNKNOWN     0
@@ -86,6 +89,7 @@ typedef void *onez_value_t;
 #define ONEZ_ERR_LOAD_FAILED        6
 #define ONEZ_ERR_NOT_HOST_WORD      7
 #define ONEZ_ERR_INVALID_EFFECT     8
+#define ONEZ_ERR_WORD_NOT_FOUND     9
 
 /* ----- Lifecycle ----- */
 
@@ -163,6 +167,38 @@ int onez_unregister_word(onez_t ctx, const char *name);
  * until the next error is raised.
  */
 void onez_set_error(onez_t ctx, const char *msg, size_t len);
+
+/* ---- Type lookup and dispatch ---- */
+
+/*
+ * Look up a type by name, returning an opaque handle for use with
+ * onez_register_method. The handle remains valid for the lifetime of
+ * the context.
+ *
+ * Returns NULL if the type is not found, or if ctx or name is NULL.
+ */
+onez_type_t onez_lookup_type(onez_t ctx, const char *name);
+
+/*
+ * Register a host callback as a method on an existing generic word for
+ * a specific type combination.
+ *
+ * type_a and type_b are type handles obtained from onez_lookup_type.
+ * Pass NULL for a wildcard:
+ *   - type_a=NULL, type_b=NULL: unary wildcard (matches any single arg)
+ *   - type_a=T,    type_b=NULL: unary method for type T
+ *   - type_a=NULL, type_b=T:   binary wildcard on first, exact on second
+ *   - type_a=T,    type_b=U:   exact binary method
+ *
+ * The word must already exist in the dictionary. If the same type
+ * combination is already registered, the new callback overwrites it.
+ *
+ * Returns ONEZ_OK on success.
+ * Returns ONEZ_ERR_WORD_NOT_FOUND if word_name is not in the dictionary.
+ */
+int onez_register_method(onez_t ctx, const char *word_name,
+    onez_type_t type_a, onez_type_t type_b,
+    onez_callback_fn callback, void *user_data);
 
 /* ---- Module loading ---- */
 
