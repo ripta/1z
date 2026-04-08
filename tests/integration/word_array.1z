@@ -19,7 +19,7 @@ W{ foo_bar } #first "foo_bar" "underscored word" assert=
 W{ 123 } #first "123" "numeric token is a string" assert=
 
 "Works with sequence operations" test-section
-W{ alpha beta gamma } [ #len ] #map { 5 4 5 } "map string lengths" assert=
+W{ alpha beta gamma } [ #len ] #map #collect { 5 4 5 } "map string lengths" assert=
 W{ cat dog } #first #len 3 "first element length" assert=
 W{ cat dog } "fox" #in? f "element not in array" assert=
 W{ cat dog } "cat" #in? t "element in array" assert=

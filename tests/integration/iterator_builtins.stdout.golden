@@ -1,0 +1,58 @@
+=== >iterator on strings ===
+Stack: [ ]
+PASS: >iterator on string
+Stack: [ ]
+PASS: >iterator on empty string
+Stack: [ ]
+PASS: string iter #next first
+Stack: [ ]
+=== >iterator on vectors ===
+Stack: [ ]
+PASS: >iterator on vector
+Stack: [ ]
+PASS: >iterator on empty vector
+Stack: [ ]
+PASS: vector iter #next first
+Stack: [ ]
+=== >iterator on byte arrays ===
+Stack: [ ]
+PASS: >iterator on byte-array
+Stack: [ ]
+PASS: >iterator on empty byte-array
+Stack: [ ]
+PASS: byte-array iter #next first
+Stack: [ ]
+=== >iterator on sets ===
+Stack: [ ]
+PASS: >iterator on set count
+Stack: [ ]
+PASS: >iterator on empty set
+Stack: [ ]
+=== Lazy pipelines on non-array sequences ===
+Stack: [ ]
+PASS: string iter map
+Stack: [ ]
+PASS: vector iter filter
+Stack: [ ]
+PASS: byte-array iter reduce
+Stack: [ ]
+PASS: set iter map count
+Stack: [ ]
+=== #each on non-array iterators ===
+Stack: [ ]
+PASS: string iter #each count
+Stack: [ ]
+PASS: vector iter #each sum
+Stack: [ ]
+=== #take and #drop on non-array iterators ===
+Stack: [ ]
+PASS: string iter #take
+Stack: [ ]
+PASS: vector iter #drop
+Stack: [ ]
+=== Error on non-sequence ===
+Stack: [ ]
+PASS: integer >iterator error
+Stack: [ ]
+PASS: boolean >iterator error
+Stack: [ ]

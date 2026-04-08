@@ -108,7 +108,7 @@ PASS: #prepend string to byte array content
 Stack: [ ]
 === Byte array higher-order operations ===
 Stack: [ ]
-PASS: #map returns array, first element
+PASS: #map first element
 Stack: [ ]
 PASS: #map last element
 Stack: [ ]

@@ -40,6 +40,7 @@ pub fn dispatchTypeName(val: Value) []const u8 {
         .error_value => "error",
         .task => "task",
         .channel => "channel",
+        .iterator => "iterator",
         .doc_string => "doc-string",
     };
 }

@@ -2,6 +2,7 @@ const std = @import("std");
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const BenchmarkReport = @import("benchmark.zig").BenchmarkReport;
 const Task = @import("task.zig").Task;
+const Iterator = @import("iterator.zig").Iterator;
 
 /// Instruction represents a single operation in a compiled quotation.
 pub const Instruction = struct {
@@ -350,6 +351,7 @@ pub const Value = union(enum) {
     error_value: ErrorObject,
     task: *Task,
     channel: *@import("channel.zig").Channel,
+    iterator: *Iterator,
     doc_string: []const u8,
 
     pub fn write(self: Value, writer: anytype) anyerror!void {
@@ -489,6 +491,11 @@ pub const Value = union(enum) {
                     try writer.print("<channel capacity={d}>", .{ch.capacity});
                 }
             },
+            .iterator => |it| {
+                try writer.print("<iterator {s} ", .{it.kindName()});
+                try it.progressDisplay(writer);
+                try writer.writeAll(">");
+            },
             .doc_string => |s| try writer.print("<doc-string \"{s}\">", .{s}),
         }
     }
@@ -604,6 +611,7 @@ pub const Value = union(enum) {
             .error_value => |a| a.eql(other.error_value),
             .task => |a| a == other.task,
             .channel => |a| a == other.channel,
+            .iterator => |a| a == other.iterator,
             .doc_string => |a| std.mem.eql(u8, a, other.doc_string),
         };
     }
@@ -762,6 +770,10 @@ pub const Value = union(enum) {
             },
             .channel => |ch| {
                 const ptr_val = @intFromPtr(ch);
+                hasher.update(std.mem.asBytes(&ptr_val));
+            },
+            .iterator => |it| {
+                const ptr_val = @intFromPtr(it);
                 hasher.update(std.mem.asBytes(&ptr_val));
             },
             .doc_string => |s| hasher.update(s),

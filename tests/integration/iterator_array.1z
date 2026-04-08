@@ -1,0 +1,86 @@
+use "testing" ;
+
+\ -- 1. >iterator on array returns iterator type --
+
+test-iterator-type: ( -- ) [
+  { 1 2 3 } >iterator type-of
+  iterator: "type-of returns iterator" assert=
+] ;
+
+\ -- 2. #next returns each element in order --
+
+test-next-order: ( -- ) [
+  { 10 20 30 } >iterator
+  dup #next 10 "first element" assert=
+  dup #next 20 "second element" assert=
+  dup #next 30 "third element" assert=
+  drop
+] ;
+
+\ -- 3. #next throws when exhausted --
+
+test-next-exhausted: ( -- ) [
+  { 1 } >iterator
+  dup #next 1 "only element" assert=
+  [ #next ] curry "exhausted iterator throws" assert-error
+] ;
+
+\ -- 4. #next? returns option:some for each element --
+
+test-next-option-order: ( -- ) [
+  { 10 20 30 } >iterator
+  dup #next? option:some> 10 "first element" assert=
+  dup #next? option:some> 20 "second element" assert=
+  dup #next? option:some> 30 "third element" assert=
+  drop
+] ;
+
+\ -- 5. #next? returns option:none when exhausted --
+
+test-next-option-exhausted: ( -- ) [
+  { 1 } >iterator
+  dup #next? option:some> 1 "only element" assert=
+  dup #next? option:none? "exhausted returns none" assert-true
+  #next? option:none? "still none on subsequent call" assert-true
+] ;
+
+\ -- 6. Empty array iterator returns none immediately --
+
+test-empty-array: ( -- ) [
+  { } >iterator
+  #next? option:none? "empty array returns none" assert-true
+] ;
+
+\ -- 7. dup on iterator shares mutable state --
+
+test-dup-shares-state: ( -- ) [
+  { 1 2 3 } >iterator
+  dup
+  swap #next 1 "advance via first ref" assert=
+  #next 2 "second ref sees advancement" assert=
+] ;
+
+\ -- 8. iterator? predicate --
+
+test-iterator-predicate: ( -- ) [
+  { 1 } >iterator iterator? "iterator? returns true for iterator" assert-true
+  { 1 2 } iterator? "iterator? returns false for array" assert-false
+  42 iterator? "iterator? returns false for integer" assert-false
+] ;
+
+\ -- 9. >iterator on non-array throws type error --
+
+test-non-array-error: ( -- ) [
+  [ 42 >iterator ] ">iterator on integer throws" assert-error
+  [ "hello" >iterator ] ">iterator on string throws" assert-error
+] ;
+
+test-iterator-type
+test-next-order
+test-next-exhausted
+test-next-option-order
+test-next-option-exhausted
+test-empty-array
+test-dup-shares-state
+test-iterator-predicate
+test-non-array-error

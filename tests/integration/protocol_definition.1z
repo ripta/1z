@@ -1,0 +1,106 @@
+use "testing" ;
+
+\ -- Iterable protocol --
+
+iterable: protocol{ >iterator } ;
+
+\ Define a simple wrapper type and implement >iterator for it
+my-list: virtual{ array } ;
+
+>iterator: method{ my-list } [
+  my-list> >iterator
+] ;
+
+test-iterable-validates: ( -- ) [
+  my-list: iterable
+  t "iterable protocol validates when >iterator is implemented" assert-true
+] ;
+
+\ -- Custom protocol with multiple methods --
+
+shapeful: protocol{ perimeter area } ;
+
+circle: virtual{ integer } ;
+
+perimeter: generic ( shape -- n ) [ drop 0 ] ;
+area: generic ( shape -- n ) [ drop 0 ] ;
+
+perimeter: method{ circle } [
+  circle> 2 * 314 * 100 /
+] ;
+
+area: method{ circle } [
+  circle> dup * 314 * 100 /
+] ;
+
+test-shapeful-validates: ( -- ) [
+  circle: shapeful
+  t "shapeful validates when both methods implemented" assert-true
+] ;
+
+test-shapeful-methods-work: ( -- ) [
+  10 >circle perimeter
+  62 "circle perimeter" assert=
+  10 >circle area
+  314 "circle area" assert=
+] ;
+
+\ -- Single-method protocol --
+
+printable: protocol{ to-string } ;
+
+my-label: virtual{ string } ;
+
+to-string: generic ( val -- str ) [ drop "" ] ;
+
+to-string: method{ my-label } [
+  my-label>
+] ;
+
+test-single-method-validates: ( -- ) [
+  my-label: printable
+  t "single-method protocol validates" assert-true
+] ;
+
+\ -- Validation failure --
+
+showable: protocol{ show } ;
+
+my-thing: virtual{ integer } ;
+
+test-protocol-failure-throws: ( -- ) [
+  [ my-thing: showable ] "missing method throws protocol-error" assert-error
+] ;
+
+test-protocol-failure-error-type: ( -- ) [
+  [ my-thing: showable ] protocol-error: "protocol-error has correct error type" assert-error-type
+] ;
+
+\ -- User-defined >iterator dispatch --
+
+test-iterable-dispatch: ( -- ) [
+  { 1 2 3 } >my-list >iterator #collect
+  { 1 2 3 } "user-defined >iterator dispatches and produces working iterator" assert=
+] ;
+
+test-iterable-pipeline: ( -- ) [
+  { 10 20 30 } >my-list >iterator [ 2 * ] #map #collect
+  { 20 40 60 } "user-defined >iterator works in lazy pipeline" assert=
+] ;
+
+test-iterable-each: ( -- ) [
+  { 1 2 3 } >my-list >iterator 0 [ + ] #reduce
+  6 "user-defined >iterator works with #reduce" assert=
+] ;
+
+\ -- Run all tests --
+
+test-iterable-validates
+test-iterable-dispatch
+test-iterable-pipeline
+test-iterable-each
+test-shapeful-validates
+test-shapeful-methods-work
+test-single-method-validates
+test-protocol-failure-throws
+test-protocol-failure-error-type

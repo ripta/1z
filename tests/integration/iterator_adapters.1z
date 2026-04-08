@@ -1,0 +1,115 @@
+use "testing" ;
+
+\ -- 1. #map on iterator returns a lazy iterator --
+
+test-map-returns-iterator: ( -- ) [
+  { 1 2 3 } >iterator [ 2 * ] #map
+  type-of iterator: "map returns iterator" assert=
+] ;
+
+\ -- 2. #map on iterator transforms elements when consumed --
+
+test-map-transforms: ( -- ) [
+  { 1 2 3 } >iterator [ 10 * ] #map
+  dup #next 10 "first mapped" assert=
+  dup #next 20 "second mapped" assert=
+  #next 30 "third mapped" assert=
+] ;
+
+\ -- 3. #map on empty iterator returns empty iterator --
+
+test-map-empty: ( -- ) [
+  { } >iterator [ 2 * ] #map
+  #next? option:none? "map on empty returns none" assert-true
+] ;
+
+\ -- 4. #filter on iterator returns a lazy iterator --
+
+test-filter-returns-iterator: ( -- ) [
+  { 1 2 3 } >iterator [ 2 > ] #filter
+  type-of iterator: "filter returns iterator" assert=
+] ;
+
+\ -- 5. #filter on iterator keeps matching elements --
+
+test-filter-keeps: ( -- ) [
+  { 1 2 3 4 5 } >iterator [ 3 > ] #filter
+  dup #next 4 "first matching" assert=
+  #next 5 "second matching" assert=
+] ;
+
+\ -- 6. #filter where nothing matches returns empty --
+
+test-filter-none-match: ( -- ) [
+  { 1 2 3 } >iterator [ 10 > ] #filter
+  #next? option:none? "no matches returns none" assert-true
+] ;
+
+\ -- 7. #filter on empty iterator returns empty iterator --
+
+test-filter-empty: ( -- ) [
+  { } >iterator [ 0 > ] #filter
+  #next? option:none? "filter on empty returns none" assert-true
+] ;
+
+\ -- 8. Chaining #map then #filter --
+
+test-map-then-filter: ( -- ) [
+  { 1 2 3 4 5 } >iterator
+  [ 2 * ] #map
+  [ 6 > ] #filter
+  dup #next 8 "first: 4*2=8" assert=
+  #next 10 "second: 5*2=10" assert=
+] ;
+
+\ -- 9. Chaining #filter then #map --
+
+test-filter-then-map: ( -- ) [
+  { 1 2 3 4 5 } >iterator
+  [ 3 > ] #filter
+  [ 100 + ] #map
+  dup #next 104 "first: 4+100" assert=
+  #next 105 "second: 5+100" assert=
+] ;
+
+\ -- 10. Consuming lazy #map with #each --
+
+test-map-each: ( -- ) [
+  0 { 1 2 3 } >iterator [ 10 * ] #map [ + ] #each
+  60 "map+each sums mapped values" assert=
+] ;
+
+\ -- 11. Consuming lazy #filter with #reduce --
+
+test-filter-reduce: ( -- ) [
+  { 1 2 3 4 5 } >iterator [ 2 > ] #filter 0 [ + ] #reduce
+  12 "filter+reduce sums 3+4+5" assert=
+] ;
+
+\ -- 12. #map on arrays returns lazy iterator --
+
+test-lazy-map-array: ( -- ) [
+  { 1 2 3 } [ 10 * ] #map #collect
+  { 10 20 30 } "lazy map on array collects" assert=
+] ;
+
+\ -- 13. #filter on arrays returns lazy iterator --
+
+test-lazy-filter-array: ( -- ) [
+  { 1 2 3 4 5 } [ 3 > ] #filter #collect
+  { 4 5 } "lazy filter on array collects" assert=
+] ;
+
+test-map-returns-iterator
+test-map-transforms
+test-map-empty
+test-filter-returns-iterator
+test-filter-keeps
+test-filter-none-match
+test-filter-empty
+test-map-then-filter
+test-filter-then-map
+test-map-each
+test-filter-reduce
+test-lazy-map-array
+test-lazy-filter-array

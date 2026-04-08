@@ -1,0 +1,44 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: map returns iterator
+Stack: [ ]
+PASS: first mapped
+PASS: second mapped
+PASS: third mapped
+Stack: [ ]
+PASS: map on empty returns none
+Stack: [ ]
+PASS: filter returns iterator
+Stack: [ ]
+PASS: first matching
+PASS: second matching
+Stack: [ ]
+PASS: no matches returns none
+Stack: [ ]
+PASS: filter on empty returns none
+Stack: [ ]
+PASS: first: 4*2=8
+PASS: second: 5*2=10
+Stack: [ ]
+PASS: first: 4+100
+PASS: second: 5+100
+Stack: [ ]
+PASS: map+each sums mapped values
+Stack: [ ]
+PASS: filter+reduce sums 3+4+5
+Stack: [ ]
+PASS: lazy map on array collects
+Stack: [ ]
+PASS: lazy filter on array collects
+Stack: [ ]

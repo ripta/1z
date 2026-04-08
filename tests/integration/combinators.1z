@@ -4,26 +4,26 @@
 use "testing" ;
 
 "#map on arrays" test-section
-{ 1 2 3 } [ 2 * ] #map 0 #nth 2 "array #map first elem" assert=
-{ 1 2 3 } [ 2 * ] #map 1 #nth 4 "array #map second elem" assert=
-{ 1 2 3 } [ 2 * ] #map 2 #nth 6 "array #map third elem" assert=
-{ 1 2 3 } [ 2 * ] #map #len 3 "array #map length" assert=
-{ } [ 2 * ] #map #len 0 "empty array #map" assert=
-{ 10 20 30 } [ 1 + ] #map 0 #nth 11 "array #map increment first" assert=
-{ 5 } [ 3 * ] #map 0 #nth 15 "single element #map" assert=
+{ 1 2 3 } [ 2 * ] #map #collect 0 #nth 2 "array #map first elem" assert=
+{ 1 2 3 } [ 2 * ] #map #collect 1 #nth 4 "array #map second elem" assert=
+{ 1 2 3 } [ 2 * ] #map #collect 2 #nth 6 "array #map third elem" assert=
+{ 1 2 3 } [ 2 * ] #map #count 3 "array #map length" assert=
+{ } [ 2 * ] #map #count 0 "empty array #map" assert=
+{ 10 20 30 } [ 1 + ] #map #collect 0 #nth 11 "array #map increment first" assert=
+{ 5 } [ 3 * ] #map #collect 0 #nth 15 "single element #map" assert=
 
 "#filter on arrays" test-section
-{ 1 2 3 4 5 6 } [ 2 % 0 = ] #filter #len 3 "array #filter length" assert=
-{ 1 2 3 4 5 6 } [ 2 % 0 = ] #filter 0 #nth 2 "array #filter first" assert=
-{ 1 2 3 4 5 6 } [ 2 % 0 = ] #filter 1 #nth 4 "array #filter second" assert=
-{ 2 4 6 } [ 2 % 0 = ] #filter #len 3 "array #filter all pass" assert=
-{ 1 3 5 } [ 2 % 0 = ] #filter #len 0 "array #filter none pass" assert=
-{ } [ drop t ] #filter #len 0 "empty array #filter" assert=
-{ -1 0 1 2 -3 4 } [ 0 > ] #filter #len 3 "filter positive length" assert=
+{ 1 2 3 4 5 6 } [ 2 % 0 = ] #filter #count 3 "array #filter length" assert=
+{ 1 2 3 4 5 6 } [ 2 % 0 = ] #filter #collect 0 #nth 2 "array #filter first" assert=
+{ 1 2 3 4 5 6 } [ 2 % 0 = ] #filter #collect 1 #nth 4 "array #filter second" assert=
+{ 2 4 6 } [ 2 % 0 = ] #filter #count 3 "array #filter all pass" assert=
+{ 1 3 5 } [ 2 % 0 = ] #filter #count 0 "array #filter none pass" assert=
+{ } [ drop t ] #filter #count 0 "empty array #filter" assert=
+{ -1 0 1 2 -3 4 } [ 0 > ] #filter #count 3 "filter positive length" assert=
 
 "#filter on strings" test-section
-"abacada" [ "a" = ] #filter "aaaa" "string #filter" assert=
-"xyzxyz" [ "x" = not ] #filter "yzyz" "string #filter exclude" assert=
+"abacada" [ "a" = ] #filter #collect { "a" "a" "a" "a" } "string #filter" assert=
+"xyzxyz" [ "x" = not ] #filter #collect { "y" "z" "y" "z" } "string #filter exclude" assert=
 
 "#reduce on arrays" test-section
 { 1 2 3 4 5 } 0 [ + ] #reduce 15 "array #reduce sum" assert=
@@ -44,10 +44,10 @@ min: ( a b -- min ) [ over over < [ drop ] [ swap drop ] if ] ;
 0 "abc" [ drop 1 + ] #each 3 "string #each count" assert=
 
 "Combined operations" test-section
-{ 1 2 3 4 5 } [ 2 * ] #map [ 5 > ] #filter #len 3 "map then filter length" assert=
-{ 1 2 3 4 5 } [ 2 * ] #map [ 5 > ] #filter 0 #nth 6 "map then filter first" assert=
+{ 1 2 3 4 5 } [ 2 * ] #map [ 5 > ] #filter #count 3 "map then filter length" assert=
+{ 1 2 3 4 5 } [ 2 * ] #map [ 5 > ] #filter #collect 0 #nth 6 "map then filter first" assert=
 { 1 2 3 4 5 6 } [ 2 % 0 = ] #filter 0 [ + ] #reduce 12 "filter then reduce" assert=
-{ 1 2 3 } [ ] #map 0 #nth 1 "map identity first" assert=
+{ 1 2 3 } [ ] #map #collect 0 #nth 1 "map identity first" assert=
 { 1 2 3 4 5 6 7 8 9 10 } [ 2 * ] #map [ 15 < ] #filter 0 [ + ] #reduce 56 "map filter reduce combo" assert=
 
 "Sum of squares" test-section

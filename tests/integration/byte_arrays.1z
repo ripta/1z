@@ -71,10 +71,10 @@ B{ 67 } "AB" #prepend #len 3 "#prepend string to byte array length" assert=
 B{ 67 } "AB" #prepend bytes> "ABC" "#prepend string to byte array content" assert=
 
 "Byte array higher-order operations" test-section
-B{ 1 2 3 } [ 2 * ] #map #first 2 "#map returns array, first element" assert=
-B{ 1 2 3 } [ 2 * ] #map #last 6 "#map last element" assert=
-B{ 1 2 3 4 5 } [ 2 % 0 = ] #filter #len 2 "#filter count evens" assert=
-B{ 1 2 3 4 5 } [ 2 % 0 = ] #filter #first 2 "#filter first even" assert=
+B{ 1 2 3 } [ 2 * ] #map #collect #first 2 "#map first element" assert=
+B{ 1 2 3 } [ 2 * ] #map #collect #last 6 "#map last element" assert=
+B{ 1 2 3 4 5 } [ 2 % 0 = ] #filter #count 2 "#filter count evens" assert=
+B{ 1 2 3 4 5 } [ 2 % 0 = ] #filter #collect #first 2 "#filter first even" assert=
 B{ 1 2 3 } 0 [ + ] #reduce 6 "#reduce sum" assert=
 
 "Byte array #each" test-section

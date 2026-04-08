@@ -39,11 +39,11 @@ use "testing" ;
 0 "abc" [ drop 1 + ] #each 3 "#each abc count" assert=
 
 "#map with Unicode" test-section
-"ab" [ drop "x" ] #map #len 2 "#map ASCII" assert=
-"abc" [ drop "y" ] #map #len 3 "#map length preserved" assert=
+"ab" [ drop "x" ] #map #count 2 "#map ASCII" assert=
+"abc" [ drop "y" ] #map #count 3 "#map length preserved" assert=
 
 "#filter with Unicode" test-section
-"aeb" [ "a" = not ] #filter "eb" "#filter remove a" assert=
+"aeb" [ "a" = not ] #filter #collect { "e" "b" } "#filter remove a" assert=
 
 "#reduce with Unicode" test-section
 "ab" "" [ #append ] #reduce "ab" "#reduce concat" assert=

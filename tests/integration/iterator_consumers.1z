@@ -1,0 +1,68 @@
+use "testing" ;
+
+\ -- 1. #each on iterator calls quotation for each element --
+
+test-each-iterator: ( -- ) [
+  0 { 10 20 30 } >iterator [ + ] #each
+  60 "each sums elements via iterator" assert=
+] ;
+
+\ -- 2. #each on empty iterator does nothing --
+
+test-each-empty: ( -- ) [
+  0 { } >iterator [ + ] #each
+  0 "each on empty iterator leaves accumulator unchanged" assert=
+] ;
+
+\ -- 3. #each consumes the iterator --
+
+test-each-consumes: ( -- ) [
+  { 1 2 3 } >iterator
+  dup [ drop ] #each
+  #next? option:none? "iterator exhausted after each" assert-true
+] ;
+
+\ -- 4. #reduce on iterator folds elements --
+
+test-reduce-iterator: ( -- ) [
+  { 1 2 3 4 } >iterator 0 [ + ] #reduce
+  10 "reduce sums elements via iterator" assert=
+] ;
+
+\ -- 5. #reduce on empty iterator returns initial accumulator --
+
+test-reduce-empty: ( -- ) [
+  { } >iterator 42 [ + ] #reduce
+  42 "reduce on empty returns initial value" assert=
+] ;
+
+\ -- 6. #reduce consumes the iterator --
+
+test-reduce-consumes: ( -- ) [
+  { 1 2 3 } >iterator
+  dup 0 [ + ] #reduce drop
+  #next? option:none? "iterator exhausted after reduce" assert-true
+] ;
+
+\ -- 7. Existing array #each still works --
+
+test-each-array: ( -- ) [
+  0 { 5 10 15 } [ + ] #each
+  30 "array each still works" assert=
+] ;
+
+\ -- 8. Existing array #reduce still works --
+
+test-reduce-array: ( -- ) [
+  { 1 2 3 } 0 [ + ] #reduce
+  6 "array reduce still works" assert=
+] ;
+
+test-each-iterator
+test-each-empty
+test-each-consumes
+test-reduce-iterator
+test-reduce-empty
+test-reduce-consumes
+test-each-array
+test-reduce-array

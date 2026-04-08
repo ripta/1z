@@ -39,10 +39,10 @@ V{ 1 2 3 4 5 } 1 3 #slice #first 2 "#slice first element" assert=
 V{ 1 2 3 4 5 } 1 3 #slice #last 3 "#slice last element" assert=
 
 "Vector higher-order operations" test-section
-V{ 1 2 3 } [ 2 * ] #map #first 2 "#map first element" assert=
-V{ 1 2 3 } [ 2 * ] #map #last 6 "#map last element" assert=
-V{ 1 2 3 4 5 } [ 2 % 0 = ] #filter #len 2 "#filter count evens" assert=
-V{ 1 2 3 4 5 } [ 2 % 0 = ] #filter #first 2 "#filter first even" assert=
+V{ 1 2 3 } [ 2 * ] #map #collect #first 2 "#map first element" assert=
+V{ 1 2 3 } [ 2 * ] #map #collect #last 6 "#map last element" assert=
+V{ 1 2 3 4 5 } [ 2 % 0 = ] #filter #count 2 "#filter count evens" assert=
+V{ 1 2 3 4 5 } [ 2 % 0 = ] #filter #collect #first 2 "#filter first even" assert=
 V{ 1 2 3 } 0 [ + ] #reduce 6 "#reduce sum" assert=
 
 "Vector #each" test-section

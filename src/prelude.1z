@@ -67,6 +67,14 @@ method{: parse-time [
   define: [ define-method ] @set!
 ] ;
 
+\\ Protocol definition syntax. Defines a word that validates a type implements all listed methods.
+\   protocol-name: protocol{ method1 method2 } ;
+protocol{: parse-time [
+  M{ }
+  methods: "}" parse-tokens-until @set!
+  define: [ define-protocol ] @set!
+] ;
+
 \\ Dynamic variable definition syntax.
 parameter: parse-time [ dup parse-quotation make-parameter ] ;
 
@@ -126,6 +134,7 @@ parameter?:   ( val -- ? ) [ type-of parameter: = ] ;
 module?:      ( val -- ? ) [ type-of module: = ] ;
 marker?:      ( val -- ? ) [ type-of marker: = ] ;
 benchmark-report?: ( val -- ? ) [ type-of benchmark-report: = ] ;
+iterator?:  ( val -- ? ) [ type-of iterator: = ] ;
 \\ Test whether a named word has the `generic` marker.
 generic?: ( name -- ? ) [ word-markers [ generic = ] #any ] ;
 
@@ -393,3 +402,6 @@ try: ( quot -- result ) [ [ call >result:ok ] [ >result:err ] recover ] ;
 
 \\ Try to receive from a channel. Returns some(value) on success, none if closed and empty.
 receive?: ( ch -- option ) [ [ receive >option:some ] [ drop option:none ] recover ] ;
+
+\\ Advance an iterator, returning some(value) or none if exhausted.
+#next?: ( iter -- option ) [ [ #next >option:some ] [ drop option:none ] recover ] ;

@@ -65,17 +65,17 @@ S{ 1 2 3 4 5 } #len 5 "#len multiple elements" assert=
 0 S{ } [ + ] #each 0 "#each empty set" assert=
 
 "Set #map" test-section
-S{ 1 2 3 } [ 2 * ] #map #len 3 "#map preserves size" assert=
-S{ 1 2 3 } [ 2 * ] #map 2 @in? t "#map transforms elements" assert=
-S{ 1 2 3 } [ 2 * ] #map 4 @in? t "#map has transformed element" assert=
-S{ 1 2 3 } [ 2 * ] #map 6 @in? t "#map has all transformed" assert=
-S{ 1 2 3 } [ 0 * ] #map #len 1 "#map deduplicates results" assert=
+S{ 1 2 3 } [ 2 * ] #map #count 3 "#map preserves size" assert=
+S{ 1 2 3 } [ 2 * ] #map #collect 2 #in? t "#map transforms elements" assert=
+S{ 1 2 3 } [ 2 * ] #map #collect 4 #in? t "#map has transformed element" assert=
+S{ 1 2 3 } [ 2 * ] #map #collect 6 #in? t "#map has all transformed" assert=
+S{ 1 2 3 } [ 0 * ] #map #count 3 "#map on set returns iterator (no dedup)" assert=
 
 "Set #filter" test-section
-S{ 1 2 3 4 5 } [ 2 > ] #filter #len 3 "#filter count" assert=
-S{ 1 2 3 4 5 } [ 2 > ] #filter 3 @in? t "#filter keeps matching" assert=
-S{ 1 2 3 4 5 } [ 2 > ] #filter 1 @in? f "#filter removes non-matching" assert=
-S{ 1 2 3 4 5 } [ 2 % 0 = ] #filter #len 2 "#filter evens count" assert=
+S{ 1 2 3 4 5 } [ 2 > ] #filter #count 3 "#filter count" assert=
+S{ 1 2 3 4 5 } [ 2 > ] #filter #collect 3 #in? t "#filter keeps matching" assert=
+S{ 1 2 3 4 5 } [ 2 > ] #filter #collect 1 #in? f "#filter removes non-matching" assert=
+S{ 1 2 3 4 5 } [ 2 % 0 = ] #filter #count 2 "#filter evens count" assert=
 
 "Set #reduce" test-section
 S{ 1 2 3 } 0 [ + ] #reduce 6 "#reduce sum" assert=

@@ -8,6 +8,7 @@ const ByteArray = value_mod.ByteArray;
 const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
 const sequence = @import("sequence.zig");
+const Iterator = @import("../iterator.zig").Iterator;
 
 const popInteger = helpers.popInteger;
 const popBoolean = helpers.popBoolean;
@@ -15,6 +16,22 @@ const popQuotation = helpers.popQuotation;
 const popVector = helpers.popVector;
 const setErrorContext = helpers.setErrorContext;
 const valueTypeName = helpers.valueTypeName;
+
+const Allocator = std.mem.Allocator;
+
+/// Convert a sequence value to an ArrayIter. Returns null if the value is not
+/// a recognized sequence type. For arrays, wraps directly; for other types
+/// (string, vector, byte-array, set), materializes to a values array first.
+fn seqToArrayIter(seq: Value, alloc: Allocator) !?*Iterator {
+    const items: []const Value = switch (seq) {
+        .array => |arr| arr,
+        .string, .vector, .byte_array, .set => try sequenceToValues(seq, alloc),
+        else => return null,
+    };
+    const iter = try alloc.create(Iterator);
+    iter.* = .{ .kind = .{ .array = .{ .items = items, .index = 0 } } };
+    return iter;
+}
 
 const SequenceIterator = sequence.SequenceIterator;
 const SequenceBuilder = sequence.SequenceBuilder;
@@ -27,7 +44,12 @@ const utf8SliceByCodepoints = sequence.utf8SliceByCodepoints;
 
 pub const primitives = [_]Primitive{
     // Sequence length
-    .{ .name = "#len", .stack_effect = "seq -- n", .doc = "Get length of sequence.", .func = nativeLen },
+    .{
+        .name = "#len",
+        .stack_effect = "seq -- n",
+        .doc = "Get length of sequence. O(1) and non-destructive; does not work on iterators (use #count instead).",
+        .func = nativeLen,
+    },
     // Sequence element access
     .{ .name = "#nth", .stack_effect = "seq n -- elem", .doc = "Get element at index.", .func = nativeNth },
     .{ .name = "#first", .stack_effect = "seq -- elem", .doc = "Get first element of sequence.", .func = nativeFirst },
@@ -182,6 +204,14 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
 
+    if (seq == .iterator) {
+        while (try seq.iterator.next(ctx)) |elem| {
+            try ctx.stack.push(elem);
+            try ctx.executeQuotationWithFrame(quot);
+        }
+        return;
+    }
+
     var iter = SequenceIterator.init(seq, alloc) orelse {
         setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
         return error.TypeMismatch;
@@ -192,69 +222,48 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
     }
 }
 
-/// #map ( seq quot -- seq' ) - Transform each element of sequence
+/// #map ( seq quot -- iterator ) - Lazily transform each element of sequence
 ///
-/// NOTE(ripta): string and byte_array map to array; others preserve type
+/// Always returns a lazy iterator, regardless of input type. Use #collect
+/// to materialize the result into an array.
 pub fn nativeMap(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
 
-    const input_kind = classifySequence(seq) orelse {
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
-        return error.TypeMismatch;
-    };
-    const output_kind: SequenceKind = switch (input_kind) {
-        .string, .byte_array => .array,
-        else => input_kind,
-    };
+    const inner = if (seq == .iterator)
+        seq.iterator
+    else
+        try seqToArrayIter(seq, alloc) orelse {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        };
 
-    const len = sequenceLength(seq) orelse {
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
-        return error.TypeMismatch;
-    };
-    var iter = SequenceIterator.init(seq, alloc) orelse {
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
-        return error.TypeMismatch;
-    };
-    var builder = try SequenceBuilder.initWithCapacity(output_kind, alloc, len);
-
-    while (try iter.next()) |elem| {
-        try ctx.stack.push(elem);
-        try ctx.executeQuotationWithFrame(quot);
-        const mapped = try ctx.stack.pop();
-        try builder.append(mapped);
-    }
-
-    try ctx.stack.push(try builder.toValue());
+    const iter = alloc.create(Iterator) catch return error.OutOfMemory;
+    iter.* = .{ .kind = .{ .map = .{ .inner = inner, .quotation = quot } } };
+    try ctx.stack.push(.{ .iterator = iter });
 }
 
-/// #filter ( seq quot -- seq' ) - Keep elements where quotation returns true
+/// #filter ( seq quot -- iterator ) - Lazily keep elements where quotation returns true
+///
+/// Always returns a lazy iterator, regardless of input type. Use #collect
+/// to materialize the result into an array.
 pub fn nativeFilter(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
 
-    const kind = classifySequence(seq) orelse {
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
-        return error.TypeMismatch;
-    };
-    var iter = SequenceIterator.init(seq, alloc) orelse {
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
-        return error.TypeMismatch;
-    };
-    var builder = try SequenceBuilder.init(kind, alloc);
+    const inner = if (seq == .iterator)
+        seq.iterator
+    else
+        try seqToArrayIter(seq, alloc) orelse {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        };
 
-    while (try iter.next()) |elem| {
-        try ctx.stack.push(elem);
-        try ctx.executeQuotationWithFrame(quot);
-        const predicate = try popBoolean(ctx);
-        if (predicate) {
-            try builder.append(elem);
-        }
-    }
-
-    try ctx.stack.push(try builder.toValue());
+    const iter = alloc.create(Iterator) catch return error.OutOfMemory;
+    iter.* = .{ .kind = .{ .filter = .{ .inner = inner, .quotation = quot } } };
+    try ctx.stack.push(.{ .iterator = iter });
 }
 
 /// #reduce ( seq init quot -- result ) - Fold sequence with accumulator
@@ -263,6 +272,17 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
     var acc = try ctx.stack.pop(); // initial accumulator
     const seq = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
+
+    if (seq == .iterator) {
+        while (try seq.iterator.next(ctx)) |elem| {
+            try ctx.stack.push(acc);
+            try ctx.stack.push(elem);
+            try ctx.executeQuotationWithFrame(quot);
+            acc = try ctx.stack.pop();
+        }
+        try ctx.stack.push(acc);
+        return;
+    }
 
     var iter = SequenceIterator.init(seq, alloc) orelse {
         setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
@@ -1238,6 +1258,13 @@ fn nativeTake(ctx: *Context) anyerror!void {
     const n: usize = @intCast(n_val);
     const alloc = ctx.quotationAllocator();
 
+    if (seq == .iterator) {
+        const iter = alloc.create(Iterator) catch return error.OutOfMemory;
+        iter.* = .{ .kind = .{ .take = .{ .inner = seq.iterator, .remaining = n } } };
+        try ctx.stack.push(.{ .iterator = iter });
+        return;
+    }
+
     switch (seq) {
         .string => |s| {
             const cp_count = sequence.utf8CodepointCount(s);
@@ -1297,6 +1324,13 @@ fn nativeDrop(ctx: *Context) anyerror!void {
     }
     const n: usize = @intCast(n_val);
     const alloc = ctx.quotationAllocator();
+
+    if (seq == .iterator) {
+        const iter = alloc.create(Iterator) catch return error.OutOfMemory;
+        iter.* = .{ .kind = .{ .drop = .{ .inner = seq.iterator, .to_skip = n } } };
+        try ctx.stack.push(.{ .iterator = iter });
+        return;
+    }
 
     switch (seq) {
         .string => |s| {

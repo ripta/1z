@@ -13,7 +13,7 @@ sieve: ( candidates -- primes ) [
   [
     dup #first
     swap 1 over #len #slice
-    over [ % 0 /= ] curry #filter
+    over [ % 0 /= ] curry #filter #collect
     sieve
     swap 1array #prepend
   ]
@@ -21,8 +21,7 @@ sieve: ( candidates -- primes ) [
 ] ;
 
 member?: ( array elem -- ? ) [
-  [ = ] curry #filter
-  #len 0 >
+  [ = ] curry #filter #count 0 >
 ] ;
 
 command-line-args "Check if a number is prime." parse-flags

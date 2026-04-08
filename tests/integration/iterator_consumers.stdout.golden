@@ -1,0 +1,24 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: each sums elements via iterator
+Stack: [ ]
+PASS: each on empty iterator leaves accumulator unchanged
+Stack: [ ]
+PASS: iterator exhausted after each
+Stack: [ ]
+PASS: reduce sums elements via iterator
+Stack: [ ]
+PASS: reduce on empty returns initial value
+Stack: [ ]
+PASS: iterator exhausted after reduce
+Stack: [ ]
+PASS: array each still works
+Stack: [ ]
+PASS: array reduce still works
+Stack: [ ]

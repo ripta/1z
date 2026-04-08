@@ -110,7 +110,7 @@ PASS: #map has transformed element
 Stack: [ ]
 PASS: #map has all transformed
 Stack: [ ]
-PASS: #map deduplicates results
+PASS: #map on set returns iterator (no dedup)
 Stack: [ ]
 === Set #filter ===
 Stack: [ ]

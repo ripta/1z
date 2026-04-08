@@ -1,0 +1,43 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: iterable protocol validates when >iterator is implemented
+Stack: [ ]
+PASS: user-defined >iterator dispatches and produces working iterator
+Stack: [ ]
+PASS: user-defined >iterator works in lazy pipeline
+Stack: [ ]
+PASS: user-defined >iterator works with #reduce
+Stack: [ ]
+PASS: shapeful validates when both methods implemented
+Stack: [ ]
+PASS: circle perimeter
+PASS: circle area
+Stack: [ ]
+PASS: single-method protocol validates
+Stack: [ ]
+PASS: missing method throws protocol-error
+Stack: [ ]
+PASS: protocol-error has correct error type
+Stack: [ ]

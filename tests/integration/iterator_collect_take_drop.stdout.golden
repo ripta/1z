@@ -1,0 +1,84 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: collect materializes array
+Stack: [ ]
+PASS: collect on empty returns empty array
+Stack: [ ]
+PASS: collect after map
+Stack: [ ]
+PASS: collect after filter
+Stack: [ ]
+PASS: collect after map+filter chain
+Stack: [ ]
+PASS: #collect on non-iterator throws
+Stack: [ ]
+PASS: count returns element count
+Stack: [ ]
+PASS: count on empty returns 0
+Stack: [ ]
+PASS: count after filter
+Stack: [ ]
+PASS: iterator exhausted after count
+Stack: [ ]
+PASS: #count on non-iterator throws
+Stack: [ ]
+PASS: take returns iterator
+Stack: [ ]
+PASS: take limits to n elements
+Stack: [ ]
+PASS: take 0 returns empty
+Stack: [ ]
+PASS: take more than available returns all
+Stack: [ ]
+PASS: take after map
+Stack: [ ]
+PASS: drop returns iterator
+Stack: [ ]
+PASS: drop skips first n elements
+Stack: [ ]
+PASS: drop 0 returns all
+Stack: [ ]
+PASS: drop all returns empty
+Stack: [ ]
+PASS: drop more than available returns empty
+Stack: [ ]
+PASS: drop after filter skips filtered results
+Stack: [ ]
+PASS: drop 3 then take 4
+Stack: [ ]
+PASS: full pipeline: map+filter+take+collect
+Stack: [ ]
+PASS: count after take
+Stack: [ ]
+PASS: reduce after drop sums 3+4+5
+Stack: [ ]
+PASS: eager take on array
+Stack: [ ]
+PASS: eager drop on array
+Stack: [ ]
