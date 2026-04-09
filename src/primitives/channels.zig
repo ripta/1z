@@ -27,6 +27,7 @@ pub const primitives = [_]Primitive{
         .doc = "Receive a value from a channel. Blocks if no value available. Throws ChannelClosed if closed and empty.",
         .func = nativeReceive,
     },
+    .{ .name = "try-receive", .stack_effect = "ch -- val/f ?", .doc = "Non-blocking receive. Returns value and t if data is available, or f and f if not.", .func = nativeTryReceive },
     .{ .name = "<buffered-channel>", .stack_effect = "n -- ch", .doc = "Create a buffered channel with capacity n.", .func = nativeCreateBufferedChannel },
     .{ .name = "close-channel", .stack_effect = "ch --", .doc = "Close a channel. No more sends allowed; receives drain buffered values.", .func = nativeCloseChannel },
     .{ .name = "select", .stack_effect = "array -- val ch", .doc = "Wait on multiple channels. Returns the first available value and which channel it came from.", .func = nativeSelect },
@@ -234,6 +235,49 @@ fn nativeReceive(ctx: *Context) anyerror!void {
     if (ch.closed) {
         return throwChannelClosed(ctx, "channel is closed");
     }
+}
+
+/// try-receive ( ch -- val/f flag )
+///
+/// Non-blocking receive attempt. If a value is immediately available from a
+/// waiting sender or the buffer, pushes the value and t. Otherwise pushes f f.
+fn nativeTryReceive(ctx: *Context) anyerror!void {
+    const ch = try helpers.popChannel(ctx);
+
+    const scheduler = ctx.scheduler orelse {
+        ctx.pending_error_message = "try-receive must be called within a task-scope";
+        return error.InvalidState;
+    };
+
+    if (ch.waiting_senders.items.len > 0) {
+        const sender_entry = ch.waiting_senders.orderedRemove(0);
+        const copied = try tasks.deepCopyValue(sender_entry.value, ctx.arena.allocator());
+        try ctx.stack.push(copied);
+        try ctx.stack.push(.{ .boolean = true });
+        sender_entry.task.blocked_on_channel = null;
+        sender_entry.task.value_delivered = true;
+        try scheduler.enqueue(sender_entry.task);
+        return;
+    }
+
+    if (ch.capacity > 0 and !ch.buffer.isEmpty()) {
+        const val = ch.buffer.pop();
+        const copied = try tasks.deepCopyValue(val, ctx.arena.allocator());
+        try ctx.stack.push(copied);
+        try ctx.stack.push(.{ .boolean = true });
+
+        if (ch.waiting_senders.items.len > 0) {
+            const sender_entry = ch.waiting_senders.orderedRemove(0);
+            ch.buffer.push(sender_entry.value);
+            sender_entry.task.blocked_on_channel = null;
+            sender_entry.task.value_delivered = true;
+            try scheduler.enqueue(sender_entry.task);
+        }
+        return;
+    }
+
+    try ctx.stack.push(.{ .boolean = false });
+    try ctx.stack.push(.{ .boolean = false });
 }
 
 /// close-channel ( ch -- )

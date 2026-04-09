@@ -1,30 +1,30 @@
-=== time-format with date-fmt ===
+=== format with date-fmt ===
 Stack: [ ]
 PASS: epoch date-fmt
 Stack: [ ]
 PASS: billennium date-fmt
 Stack: [ ]
-=== time-format with time-fmt ===
+=== format with time-fmt ===
 Stack: [ ]
 PASS: epoch time-fmt
 Stack: [ ]
 PASS: billennium time-fmt
 Stack: [ ]
-=== time-format with iso8601-fmt ===
+=== format with iso8601-fmt ===
 Stack: [ ]
 PASS: epoch iso8601
 Stack: [ ]
-=== time-format with rfc2822-fmt ===
+=== format with rfc2822-fmt ===
 Stack: [ ]
 PASS: epoch rfc2822
 Stack: [ ]
-=== time-format-in with utc ===
+=== format-in with utc ===
 Stack: [ ]
 PASS: epoch utc iso8601
 Stack: [ ]
 PASS: epoch utc date
 Stack: [ ]
-=== custom time-format ===
+=== custom format ===
 Stack: [ ]
 PASS: epoch custom weekday month day year
 Stack: [ ]

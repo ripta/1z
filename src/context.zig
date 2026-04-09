@@ -377,6 +377,14 @@ pub const Context = struct {
     /// into the global namespace when loading modules.
     pub fn defineImportedWord(self: *Context, name: []const u8, definition: WordDefinition) !void {
         if (self.lookupWord(name)) |existing| {
+            // NOTE(ripta): Reïmporting from the same module is a no-op. The module cache
+            //              ensures the same module object is reused, so pointer equality
+            //              is sufficient to detect around subsequent imports.
+            if (existing.imported and existing.source_module != null and definition.source_module != null) {
+                if (existing.source_module == definition.source_module) {
+                    return;
+                }
+            }
             for (existing.markers) |mk| {
                 if (markers_mod.isConstMarker(mk)) {
                     self.pending_error_message = "cannot redefine const word";

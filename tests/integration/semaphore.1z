@@ -1,0 +1,70 @@
+\ Integration tests for semaphore
+
+use "testing" ;
+use "time" ;
+use "rate-limit" ;
+use "semaphore" ;
+
+"semaphore construction" test-section
+[
+  3 <semaphore>
+  dup semaphore? t "is semaphore" assert=
+  drop
+] task-scope
+"PASS: semaphore construction" print-line
+
+"acquire and release" test-section
+[
+  2 <semaphore>
+  dup acquire
+  dup acquire
+  dup release
+  dup acquire
+  drop
+] task-scope
+"PASS: acquire and release" print-line
+
+"try-acquire succeeds with permits" test-section
+[
+  2 <semaphore>
+  dup try-acquire option:some? t "first try-acquire succeeds" assert=
+  dup try-acquire option:some? t "second try-acquire succeeds" assert=
+  drop
+] task-scope
+"PASS: try-acquire succeeds with permits" print-line
+
+"try-acquire fails when exhausted" test-section
+[
+  1 <semaphore>
+  dup try-acquire drop
+  dup try-acquire option:none? t "try-acquire fails when exhausted" assert=
+  drop
+] task-scope
+"PASS: try-acquire fails when exhausted" print-line
+
+"concurrent acquire with semaphore" test-section
+[
+  2 <semaphore>
+  dup [ dup acquire release ] curry
+  dup spawn swap
+  dup spawn swap
+  dup spawn swap
+  dup spawn swap
+  drop
+  await drop await drop await drop await drop
+  drop
+] task-scope
+"PASS: concurrent acquire with semaphore" print-line
+
+"generic dispatch on both types" test-section
+[
+  1000 per-second 5 <rate-limiter>
+  acquire
+] task-scope
+
+[
+  2 <semaphore>
+  dup acquire
+  release
+] task-scope
+"PASS: generic dispatch on both types" print-line

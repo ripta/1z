@@ -30,6 +30,7 @@ now: ( -- timestamp ) [ clock-realtime make-timestamp ] ;
 -: method{ duration duration } [ swap duration> swap duration> - >duration ] ;
 *: method{ duration integer } [ swap duration> swap * >duration ] ;
 *: method{ integer duration } [ duration> * >duration ] ;
+/: method{ duration integer } [ swap duration> swap / >duration ] ;
 
 \ Duration comparison
 <: method{ duration duration } [ swap duration> swap duration> < ] ;
@@ -201,11 +202,11 @@ tm>time-parts: ( tm-result nsec -- hash ) [
 
 \ --- Formatting ---
 
-time-format: ( timestamp fmt-string -- string ) [
+format: ( timestamp fmt-string -- string ) [
   swap >time-parts swap fmt
 ] ;
 
-time-format-in: ( timestamp tz fmt-string -- string ) [
+format-in: ( timestamp tz fmt-string -- string ) [
   -rot> >time-parts-in swap fmt
 ] ;
 
@@ -217,11 +218,16 @@ time-fmt:    const [ "{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fi
 
 \ --- Elapsed time measurement ---
 
+\ Get monotonic clock as raw nanoseconds.
+monotonic-nanos: ( -- nanos ) [
+  clock-monotonic swap 1000000000 * +
+] ;
+
 \ elapsed ( quot -- ...results duration )
 \ Runs quotation, measures wall time, pushes duration on top.
 \ Quotation results remain on stack below the duration.
 elapsed: [
-  clock-monotonic swap 1000000000 * +
+  monotonic-nanos
   [ call ] dip
-  clock-monotonic swap 1000000000 * + swap - >duration
+  monotonic-nanos swap - >duration
 ] ;

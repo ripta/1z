@@ -405,3 +405,12 @@ receive?: ( ch -- option ) [ [ receive >option:some ] [ drop option:none ] recov
 
 \\ Advance an iterator, returning some(value) or none if exhausted.
 #next?: ( iter -- option ) [ [ #next >option:some ] [ drop option:none ] recover ] ;
+
+\\ Blocking acquire: consumes a token or permit from the resource.
+\\ Yields to the scheduler until a token is available.
+\\ Must be called inside task-scope.
+acquire: generic ( resource -- ) [ "acquire not implemented for this type" throw ] ;
+
+\\ Non-blocking acquire: attempts to consume a token without blocking.
+\\ Returns option:some on success, option:none if unavailable.
+try-acquire: generic ( resource -- option ) [ "try-acquire not implemented for this type" throw ] ;

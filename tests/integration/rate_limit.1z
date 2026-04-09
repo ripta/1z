@@ -1,0 +1,100 @@
+\ Integration tests for rate limiter
+
+use "testing" ;
+use "time" ;
+use "rate-limit" ;
+
+"duration division" test-section
+10 seconds 5 / 2 seconds = t "10s / 5 = 2s" assert=
+1 seconds 4 / 250 milliseconds = t "1s / 4 = 250ms" assert=
+1 seconds 1000 / 1 milliseconds = t "1s / 1000 = 1ms" assert=
+
+"per-second computes interval" test-section
+10 per-second 100 milliseconds = t "10 per-second = 100ms" assert=
+1 per-second 1 seconds = t "1 per-second = 1s" assert=
+
+"per-minute computes interval" test-section
+60 per-minute 1 seconds = t "60 per-minute = 1s" assert=
+6 per-minute 10 seconds = t "6 per-minute = 10s" assert=
+
+"rate-limiter construction" test-section
+[
+  10 per-second 5 <rate-limiter>
+  dup rate-limiter? t "is rate-limiter" assert=
+  dup tokens>> 5 "initial tokens = burst" assert=
+  dup burst>> 5 "burst = 5" assert=
+  drop
+] call
+
+"try-acquire succeeds with tokens" test-section
+[
+  10 per-second 3 <rate-limiter>
+  dup try-acquire option:some? t "first try-acquire succeeds" assert=
+  dup try-acquire option:some? t "second try-acquire succeeds" assert=
+  dup try-acquire option:some? t "third try-acquire succeeds" assert=
+  dup tokens>> 0 "tokens exhausted" assert=
+  drop
+] call
+
+"try-acquire fails when empty" test-section
+[
+  10 per-second 1 <rate-limiter>
+  dup try-acquire drop
+  dup try-acquire option:none? t "try-acquire fails when empty" assert=
+  drop
+] call
+
+"refill replenishes tokens after sleep" test-section
+[
+  10 per-second 1 <rate-limiter>
+  dup try-acquire drop
+  dup tokens>> 0 "tokens exhausted before sleep" assert=
+  200 milliseconds sleep
+  dup refill tokens>> 0 > t "tokens refilled after sleep" assert=
+  drop
+] task-scope
+"PASS: refill replenishes tokens after sleep" print-line
+
+"refill caps at burst" test-section
+[
+  10 per-second 2 <rate-limiter>
+  dup try-acquire drop
+  dup try-acquire drop
+  dup tokens>> 0 "tokens exhausted" assert=
+  500 milliseconds sleep
+  dup refill tokens>> 2 "refill capped at burst" assert=
+  drop
+] task-scope
+"PASS: refill caps at burst" print-line
+
+"blocking acquire waits for refill" test-section
+[
+  1000 per-second 1 <rate-limiter>
+  dup try-acquire drop
+  dup [ acquire ] curry spawn
+  swap drop await drop
+] task-scope
+"PASS: blocking acquire waits for refill" print-line
+
+"multiple blocking acquires" test-section
+[
+  1000 per-second 2 <rate-limiter>
+  [ acquire ] curry
+  dup spawn swap spawn
+  await drop await drop
+] task-scope
+"PASS: multiple blocking acquires" print-line
+
+"acquire under load" test-section
+[
+  1000 per-second 3 <rate-limiter>
+  dup [ acquire ] curry
+  dup spawn swap
+  dup spawn swap
+  dup spawn swap
+  dup spawn swap
+  dup spawn swap
+  drop
+  await drop await drop await drop await drop await drop
+] task-scope
+"PASS: acquire under load" print-line

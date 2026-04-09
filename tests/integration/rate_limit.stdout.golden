@@ -1,0 +1,66 @@
+=== duration division ===
+Stack: [ ]
+PASS: 10s / 5 = 2s
+Stack: [ ]
+PASS: 1s / 4 = 250ms
+Stack: [ ]
+PASS: 1s / 1000 = 1ms
+Stack: [ ]
+=== per-second computes interval ===
+Stack: [ ]
+PASS: 10 per-second = 100ms
+Stack: [ ]
+PASS: 1 per-second = 1s
+Stack: [ ]
+=== per-minute computes interval ===
+Stack: [ ]
+PASS: 60 per-minute = 1s
+Stack: [ ]
+PASS: 6 per-minute = 10s
+Stack: [ ]
+=== rate-limiter construction ===
+Stack: [ ]
+PASS: is rate-limiter
+PASS: initial tokens = burst
+PASS: burst = 5
+Stack: [ ]
+=== try-acquire succeeds with tokens ===
+Stack: [ ]
+PASS: first try-acquire succeeds
+PASS: second try-acquire succeeds
+PASS: third try-acquire succeeds
+PASS: tokens exhausted
+Stack: [ ]
+=== try-acquire fails when empty ===
+Stack: [ ]
+PASS: try-acquire fails when empty
+Stack: [ ]
+=== refill replenishes tokens after sleep ===
+Stack: [ ]
+PASS: tokens exhausted before sleep
+PASS: tokens refilled after sleep
+Stack: [ ]
+PASS: refill replenishes tokens after sleep
+Stack: [ ]
+=== refill caps at burst ===
+Stack: [ ]
+PASS: tokens exhausted
+PASS: refill capped at burst
+Stack: [ ]
+PASS: refill caps at burst
+Stack: [ ]
+=== blocking acquire waits for refill ===
+Stack: [ ]
+Stack: [ ]
+PASS: blocking acquire waits for refill
+Stack: [ ]
+=== multiple blocking acquires ===
+Stack: [ ]
+Stack: [ ]
+PASS: multiple blocking acquires
+Stack: [ ]
+=== acquire under load ===
+Stack: [ ]
+Stack: [ ]
+PASS: acquire under load
+Stack: [ ]
