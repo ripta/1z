@@ -57,7 +57,11 @@ pub const Multiplexer = struct {
                 .events = events,
                 .data = .{ .fd = fd },
             };
-            try std.posix.epoll_ctl(self.mux_fd, std.os.linux.EPOLL.CTL_ADD, fd, &ev);
+            std.posix.epoll_ctl(self.mux_fd, std.os.linux.EPOLL.CTL_ADD, fd, &ev) catch |err| switch (err) {
+                // EPOLLONESHOT fds remain in the interest set after firing and has to be reärmed with CTL_MOD before the next wait.
+                error.FileDescriptorAlreadyPresentInSet => try std.posix.epoll_ctl(self.mux_fd, std.os.linux.EPOLL.CTL_MOD, fd, &ev),
+                else => return err,
+            };
         }
     }
 
@@ -187,4 +191,32 @@ test "fresh pipe is write ready" {
     try std.testing.expectEqual(@as(usize, 1), events.len);
     try std.testing.expectEqual(fds[1], events[0].fd);
     try std.testing.expectEqual(IoEvent.write, events[0].event);
+}
+
+test "epoll can reärm oneshot fd" {
+    if (!is_epoll) return;
+
+    var mux = try Multiplexer.init();
+    defer mux.deinit();
+
+    const fds = try std.posix.pipe();
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+
+    try mux.register(fds[0], .read);
+    _ = try std.posix.write(fds[1], "x");
+
+    var events = try mux.poll(10 * std.time.ns_per_ms);
+    try std.testing.expectEqual(@as(usize, 1), events.len);
+    try std.testing.expectEqual(fds[0], events[0].fd);
+
+    var drain_buf: [1]u8 = undefined;
+    _ = try std.posix.read(fds[0], &drain_buf);
+
+    try mux.register(fds[0], .read);
+    _ = try std.posix.write(fds[1], "y");
+
+    events = try mux.poll(10 * std.time.ns_per_ms);
+    try std.testing.expectEqual(@as(usize, 1), events.len);
+    try std.testing.expectEqual(fds[0], events[0].fd);
 }
