@@ -170,6 +170,7 @@ task-self (  -- task )
 template ( string -- template )
 throw ( error --  )
 to-string ( value -- string )
+try-receive ( ch -- val/f ? )
 type-of ( val -- symbol )
 tz-decompose ( sec tz-name -- year month-num day hour min sec wday yday gmtoff tz-abbrev )
 uppercase ( str -- str )
@@ -238,6 +239,7 @@ V{
 W{
 []
 abs ( a -- b )
+acquire ( resource --  )
 and ( ? ? -- ? )
 array? ( val -- ? )
 benchmark-report? ( val -- ? )
@@ -308,6 +310,7 @@ struct{
 symbol? ( val -- ? )
 times ( n quot --  )
 try ( quot -- result )
+try-acquire ( resource -- option )
 tuck ( a b -- b a b )
 unless ( ? quot --  )
 unwrap-or ( opt/res default -- value )

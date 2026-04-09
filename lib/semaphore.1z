@@ -1,0 +1,23 @@
+\ lib/semaphore.1z - Counting semaphore backed by a buffered channel
+
+semaphore: virtual{ struct{ ch } } ;
+
+\ Create a counting semaphore with n permits.
+<semaphore>: ( n -- sem ) [
+  dup <buffered-channel>
+  swap [ dup t swap send ] times
+  >semaphore
+] ;
+
+acquire: method{ semaphore } [
+  semaphore> receive drop
+] ;
+
+try-acquire: method{ semaphore } [
+  semaphore> try-receive [ >option:some ] [ drop option:none ] if
+] ;
+
+\\ Release a permit back to the semaphore.
+release: ( sem -- ) [
+  semaphore> t swap send
+] ;

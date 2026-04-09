@@ -1,0 +1,35 @@
+=== semaphore construction ===
+Stack: [ ]
+PASS: is semaphore
+Stack: [ ]
+PASS: semaphore construction
+Stack: [ ]
+=== acquire and release ===
+Stack: [ ]
+Stack: [ ]
+PASS: acquire and release
+Stack: [ ]
+=== try-acquire succeeds with permits ===
+Stack: [ ]
+PASS: first try-acquire succeeds
+PASS: second try-acquire succeeds
+Stack: [ ]
+PASS: try-acquire succeeds with permits
+Stack: [ ]
+=== try-acquire fails when exhausted ===
+Stack: [ ]
+PASS: try-acquire fails when exhausted
+Stack: [ ]
+PASS: try-acquire fails when exhausted
+Stack: [ ]
+=== concurrent acquire with semaphore ===
+Stack: [ ]
+Stack: [ ]
+PASS: concurrent acquire with semaphore
+Stack: [ ]
+=== generic dispatch on both types ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: generic dispatch on both types
+Stack: [ ]

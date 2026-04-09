@@ -46,10 +46,10 @@ use "rate-limit" ;
 
 "refill replenishes tokens after sleep" test-section
 [
-  1000 per-second 1 <rate-limiter>
+  10 per-second 1 <rate-limiter>
   dup try-acquire drop
   dup tokens>> 0 "tokens exhausted before sleep" assert=
-  2 milliseconds sleep
+  200 milliseconds sleep
   dup refill tokens>> 0 > t "tokens refilled after sleep" assert=
   drop
 ] task-scope
@@ -57,11 +57,11 @@ use "rate-limit" ;
 
 "refill caps at burst" test-section
 [
-  1000 per-second 2 <rate-limiter>
+  10 per-second 2 <rate-limiter>
   dup try-acquire drop
   dup try-acquire drop
   dup tokens>> 0 "tokens exhausted" assert=
-  5 milliseconds sleep
+  500 milliseconds sleep
   dup refill tokens>> 2 "refill capped at burst" assert=
   drop
 ] task-scope
