@@ -183,7 +183,7 @@ fn runReplStartupStatement(ctx: *Context, writer: anytype, statement: []const u8
 fn printUsage() void {
     const stdout_file: File = .stdout();
     var stdout_buf: [4096]u8 = undefined;
-    var stdout = stdout_file.writer(&stdout_buf);
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
     const w = &stdout.interface;
 
     w.writeAll(
@@ -313,7 +313,7 @@ pub fn main() u8 {
             } else {
                 const stderr_file: File = .stderr();
                 var stderr_buf: [4096]u8 = undefined;
-                var stderr = stderr_file.writer(&stderr_buf);
+                var stderr = stderr_file.writerStreaming(&stderr_buf);
                 stderr.interface.print("Error: invalid value for --max-memory: '{s}'\n", .{value}) catch {};
                 stderr.interface.flush() catch {};
                 return 1;
@@ -357,7 +357,7 @@ pub fn main() u8 {
             const secs = std.fmt.parseInt(u64, value, 10) catch {
                 const stderr_file: File = .stderr();
                 var stderr_buf2: [4096]u8 = undefined;
-                var stderr2 = stderr_file.writer(&stderr_buf2);
+                var stderr2 = stderr_file.writerStreaming(&stderr_buf2);
                 stderr2.interface.print("Error: invalid value for --deadlock-detect: '{s}'\n", .{value}) catch {};
                 stderr2.interface.flush() catch {};
                 return 1;
@@ -366,7 +366,7 @@ pub fn main() u8 {
         } else if (std.mem.eql(u8, arg, "--test-timeout")) {
             const stderr_file: File = .stderr();
             var stderr_buf2: [4096]u8 = undefined;
-            var stderr2 = stderr_file.writer(&stderr_buf2);
+            var stderr2 = stderr_file.writerStreaming(&stderr_buf2);
             stderr2.interface.print("Error: --test-timeout requires a value (e.g. --test-timeout=5)\n", .{}) catch {};
             stderr2.interface.flush() catch {};
             return 1;
@@ -375,7 +375,7 @@ pub fn main() u8 {
             const secs = std.fmt.parseInt(u64, value, 10) catch {
                 const stderr_file: File = .stderr();
                 var stderr_buf2: [4096]u8 = undefined;
-                var stderr2 = stderr_file.writer(&stderr_buf2);
+                var stderr2 = stderr_file.writerStreaming(&stderr_buf2);
                 stderr2.interface.print("Error: invalid value for --test-timeout: '{s}'\n", .{value}) catch {};
                 stderr2.interface.flush() catch {};
                 return 1;
@@ -396,7 +396,7 @@ pub fn main() u8 {
             } else {
                 const stderr_file: File = .stderr();
                 var stderr_buf: [4096]u8 = undefined;
-                var stderr = stderr_file.writer(&stderr_buf);
+                var stderr = stderr_file.writerStreaming(&stderr_buf);
                 stderr.interface.print("Error: invalid value for --compile: '{s}' (expected 'off', 'eager', or 'hybrid')\n", .{value}) catch {};
                 stderr.interface.flush() catch {};
                 return 1;
@@ -498,7 +498,7 @@ pub fn main() u8 {
         external_prelude = std.fs.cwd().readFileAlloc(gpa_allocator, path, 10 * 1024 * 1024) catch |err| {
             const stderr_file: File = .stderr();
             var stderr_buf: [4096]u8 = undefined;
-            var stderr = stderr_file.writer(&stderr_buf);
+            var stderr = stderr_file.writerStreaming(&stderr_buf);
             stderr.interface.print("Error: cannot read prelude '{s}': {any}\n", .{ path, err }) catch {};
             stderr.interface.flush() catch {};
             return 1;
@@ -605,7 +605,7 @@ fn testTimeoutWatchdog(timeout_ns: u64, ctx: *Context) void {
 fn handleFmt(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
-    var stderr = stderr_file.writer(&stderr_buf);
+    var stderr = stderr_file.writerStreaming(&stderr_buf);
     const err_writer = &stderr.interface;
 
     var check_only = false;
@@ -638,7 +638,7 @@ fn handleFmt(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     if (stdout_mode) {
         const stdout_file: File = .stdout();
         var stdout_buf: [4096]u8 = undefined;
-        var stdout = stdout_file.writer(&stdout_buf);
+        var stdout = stdout_file.writerStreaming(&stdout_buf);
         const out_writer = &stdout.interface;
 
         for (paths.items) |path| {
@@ -755,7 +755,7 @@ fn formatDirectory(allocator: std.mem.Allocator, dir_path: []const u8, check_onl
 fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
-    var stderr = stderr_file.writer(&stderr_buf);
+    var stderr = stderr_file.writerStreaming(&stderr_buf);
     const err_writer = &stderr.interface;
 
     // Parse build-specific args.
@@ -1033,7 +1033,7 @@ fn repl(ctx: *Context, verbosity: Verbosity, max_memory_bytes: usize) void {
 
     const stdout_file: File = .stdout();
     var stdout_buf: [4096]u8 = undefined;
-    var stdout = stdout_file.writer(&stdout_buf);
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
     const writer = &stdout.interface;
 
     if (verbosity == .normal) {
@@ -1163,7 +1163,7 @@ fn replInteractive(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
 fn autoloadReplModules(ctx: *Context) void {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
-    var stderr = stderr_file.writer(&stderr_buf);
+    var stderr = stderr_file.writerStreaming(&stderr_buf);
     const writer = &stderr.interface;
 
     runReplStartupStatement(ctx, writer, "use \"runtime/introspect\" ;");
@@ -1266,13 +1266,13 @@ fn replPiped(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
 fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
-    var stderr = stderr_file.writer(&stderr_buf);
+    var stderr = stderr_file.writerStreaming(&stderr_buf);
     const err_writer = &stderr.interface;
 
     // For --show-stack, prepare stdout writer
     const stdout_file: File = .stdout();
     var stdout_buf: [4096]u8 = undefined;
-    var stdout = stdout_file.writer(&stdout_buf);
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
     const out_writer = &stdout.interface;
 
     const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
@@ -1406,60 +1406,9 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
             return 1;
         };
 
-        var severity_override: ?effect_inference.Severity = null;
-        var suppressed = false;
-        if (ctx.getPragma("suppress-checks")) |pragma_val| {
-            switch (pragma_val) {
-                .string => |s| {
-                    if (std.mem.eql(u8, s, "warn-only")) {
-                        severity_override = .warning;
-                    } else if (std.mem.eql(u8, s, "all")) {
-                        suppressed = true;
-                    }
-                },
-                else => {},
-            }
-        }
+        const pragma_settings = effect_inference.readCheckPragmas(ctx);
 
-        var suppress_undeclared = false;
-        if (ctx.getPragma("suppress-undeclared")) |pragma_val| {
-            switch (pragma_val) {
-                .boolean => |b| {
-                    suppress_undeclared = b;
-                },
-                else => {},
-            }
-        }
-
-        var type_check_mode: effect_inference.InferenceEngine.TypeCheckMode = .err;
-        if (ctx.getPragma("type-check")) |pragma_val| {
-            switch (pragma_val) {
-                .string => |s| {
-                    if (std.mem.eql(u8, s, "off")) {
-                        type_check_mode = .off;
-                    } else if (std.mem.eql(u8, s, "warning")) {
-                        type_check_mode = .warning;
-                    }
-                },
-                else => {},
-            }
-        }
-
-        var arity_check_mode: effect_inference.InferenceEngine.ArityCheckMode = .err;
-        if (ctx.getPragma("callsite-arity-mismatch")) |pragma_val| {
-            switch (pragma_val) {
-                .string => |s| {
-                    if (std.mem.eql(u8, s, "off")) {
-                        arity_check_mode = .off;
-                    } else if (std.mem.eql(u8, s, "warning")) {
-                        arity_check_mode = .warning;
-                    }
-                },
-                else => {},
-            }
-        }
-
-        var engine = effect_inference.InferenceEngine.init(&ctx.dictionary, &ctx.dispatch, ctx.local_frames.items, ctx.quotationAllocator(), severity_override, suppressed, suppress_undeclared, &ctx.builtin_type_values, ctx.getAnyTypeSentinel(), type_check_mode, arity_check_mode);
+        var engine = effect_inference.InferenceEngine.init(&ctx.dictionary, &ctx.dispatch, ctx.local_frames.items, ctx.quotationAllocator(), pragma_settings.severity_override, pragma_settings.suppressed, pragma_settings.suppress_undeclared, &ctx.builtin_type_values, ctx.getAnyTypeSentinel(), pragma_settings.type_check_mode, pragma_settings.arity_check_mode);
         defer engine.deinit();
         engine.analyzeAll(ctx.current_source) catch |err| {
             err_writer.print("Error during effect inference: {any}\n", .{err}) catch {};
