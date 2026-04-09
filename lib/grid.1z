@@ -29,7 +29,7 @@ marked?: ( grid x y -- ? ) [
 row>string: ( grid y -- str ) [
   row-y: swap ;
   row-g: swap ;
-  row-g width>> iota
+  row-g width>> iota >iterator
   [
     col-x: swap ;
     row-g col-x row-y marked?
@@ -41,7 +41,7 @@ row>string: ( grid y -- str ) [
 \ Convert grid to string (for testing)
 grid>string: ( grid -- str ) [
   dup g: swap ;
-  height>> iota
+  height>> iota >iterator
   [ g swap row>string ] #map #collect
   "\n" #join
 ] ;

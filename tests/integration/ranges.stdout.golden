@@ -1,14 +1,62 @@
-=== range ===
+=== range type ===
 Stack: [ ]
-PASS: range 0 to 5
+PASS: type-of returns range
 Stack: [ ]
-PASS: range 1 to 4
+PASS: range? on range
 Stack: [ ]
-PASS: range empty (start = end)
+PASS: range? on integer
 Stack: [ ]
-PASS: range empty (start > end)
+=== range (exclusive ascending) ===
 Stack: [ ]
-PASS: range negative to positive
+PASS: 1 to 10
+Stack: [ ]
+PASS: 0 to 5
+Stack: [ ]
+PASS: -2 to 2
+Stack: [ ]
+=== range (exclusive descending) ===
+Stack: [ ]
+PASS: 10 to 1
+Stack: [ ]
+PASS: 5 to 3
+Stack: [ ]
+=== range (empty) ===
+Stack: [ ]
+PASS: equal bounds
+Stack: [ ]
+=== range= (inclusive ascending) ===
+Stack: [ ]
+PASS: 1 to 10 inclusive
+Stack: [ ]
+PASS: 0 to 3 inclusive
+Stack: [ ]
+PASS: -2 to 2 inclusive
+Stack: [ ]
+=== range= (inclusive descending) ===
+Stack: [ ]
+PASS: 10 to 1 inclusive
+Stack: [ ]
+=== range= (single element) ===
+Stack: [ ]
+PASS: equal bounds inclusive
+Stack: [ ]
+=== range-step ===
+Stack: [ ]
+PASS: step 2
+Stack: [ ]
+PASS: step 5
+Stack: [ ]
+PASS: step -3
+Stack: [ ]
+PASS: equal bounds step 3
+Stack: [ ]
+=== range-step validation ===
+Stack: [ ]
+PASS: step zero throws
+Stack: [ ]
+PASS: ascending with negative step throws
+Stack: [ ]
+PASS: descending with positive step throws
 Stack: [ ]
 === iota ===
 Stack: [ ]
@@ -18,5 +66,113 @@ PASS: iota 0
 Stack: [ ]
 PASS: iota 1
 Stack: [ ]
-All range tests complete!
+=== range-inclusive (alias for range=) ===
+Stack: [ ]
+PASS: range-inclusive 3 7
+Stack: [ ]
+=== #len ===
+Stack: [ ]
+PASS: #len ascending
+Stack: [ ]
+PASS: #len inclusive
+Stack: [ ]
+PASS: #len stepped
+Stack: [ ]
+PASS: #len step 5
+Stack: [ ]
+PASS: #len descending
+Stack: [ ]
+PASS: #len descending stepped
+Stack: [ ]
+PASS: #len empty
+Stack: [ ]
+=== #nth ===
+Stack: [ ]
+PASS: #nth first
+Stack: [ ]
+PASS: #nth last
+Stack: [ ]
+PASS: #nth stepped
+Stack: [ ]
+PASS: #nth descending
+Stack: [ ]
+PASS: #nth negative
+Stack: [ ]
+PASS: #nth out of bounds
+Stack: [ ]
+PASS: #nth on empty
+Stack: [ ]
+=== #first ===
+Stack: [ ]
+PASS: #first ascending
+Stack: [ ]
+PASS: #first descending
+Stack: [ ]
+PASS: #first single element
+Stack: [ ]
+PASS: #first on empty
+Stack: [ ]
+=== #last ===
+Stack: [ ]
+PASS: #last ascending
+Stack: [ ]
+PASS: #last inclusive
+Stack: [ ]
+PASS: #last stepped
+Stack: [ ]
+PASS: #last descending
+Stack: [ ]
+PASS: #last descending stepped
+Stack: [ ]
+PASS: #last on empty
+Stack: [ ]
+=== range-from ===
+Stack: [ ]
+PASS: range-from 1 take 5
+Stack: [ ]
+PASS: range-from 0 take 3
+Stack: [ ]
+PASS: range-from -5 take 4
+Stack: [ ]
+=== range-from-step ===
+Stack: [ ]
+PASS: step 2
+Stack: [ ]
+PASS: step -3
+Stack: [ ]
+PASS: step 10
+Stack: [ ]
+PASS: step zero throws
+Stack: [ ]
+=== infinite range operations ===
+Stack: [ ]
+PASS: #first on infinite
+Stack: [ ]
+PASS: #first on infinite stepped
+Stack: [ ]
+PASS: #nth 0 on infinite
+Stack: [ ]
+PASS: #nth 99 on infinite
+Stack: [ ]
+PASS: #nth stepped on infinite
+Stack: [ ]
+PASS: #len on infinite throws
+Stack: [ ]
+PASS: #last on infinite throws
+Stack: [ ]
+=== infinite lazy pipeline ===
+Stack: [ ]
+PASS: infinite + map + take
+Stack: [ ]
+PASS: infinite + filter + take
+Stack: [ ]
+PASS: infinite + take + reduce
+Stack: [ ]
+=== lazy pipeline ===
+Stack: [ ]
+PASS: range + map
+Stack: [ ]
+PASS: range + filter
+Stack: [ ]
+PASS: range + reduce
 Stack: [ ]

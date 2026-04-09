@@ -8,7 +8,7 @@ use "ranges" ;
 \ Returns f if strands have different lengths.
 hamming: ( strand1 strand2 -- n|f ) [
   over #len over #len = not [ drop drop f ] [
-    dup #len iota 0 [
+    dup #len iota >iterator 0 [
       \ s1 s2 sit below the reduce; count and idx are on top
       dup 4 pick-n swap #nth
       swap 3 pick-n swap #nth

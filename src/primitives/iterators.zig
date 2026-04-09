@@ -5,7 +5,9 @@ const helpers = @import("helpers.zig");
 const dispatch_helpers = @import("dispatch_helpers.zig");
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
-const Iterator = @import("../iterator.zig").Iterator;
+const iter_mod = @import("../iterator.zig");
+const Iterator = iter_mod.Iterator;
+const RangeIter = iter_mod.RangeIter;
 const sequence = @import("sequence.zig");
 
 pub const primitives = [_]Primitive{
@@ -17,6 +19,12 @@ pub const primitives = [_]Primitive{
         .stack_effect = "iterator -- n",
         .doc = "Count elements by consuming the iterator. Unlike #len, this exhausts the iterator; it cannot be used afterward.",
         .func = nativeCount,
+    },
+    .{
+        .name = "make-range-iter",
+        .stack_effect = "start end step infinite? -- iterator",
+        .doc = "Create a lazy range iterator from start/end/step/infinite? components.",
+        .func = nativeMakeRangeIter,
     },
 };
 
@@ -97,4 +105,45 @@ fn nativeCount(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     }
+}
+
+/// make-range-iter ( start end step infinite? -- iterator )
+fn nativeMakeRangeIter(ctx: *Context) anyerror!void {
+    const infinite_val = try ctx.stack.pop();
+    const step_val = try ctx.stack.pop();
+    const end_val = try ctx.stack.pop();
+    const start_val = try ctx.stack.pop();
+
+    const start = switch (start_val) {
+        .integer => |n| n,
+        else => {
+            helpers.setTypeMismatchError(ctx, "integer", start_val);
+            return error.TypeMismatch;
+        },
+    };
+    const end = switch (end_val) {
+        .integer => |n| n,
+        else => {
+            helpers.setTypeMismatchError(ctx, "integer", end_val);
+            return error.TypeMismatch;
+        },
+    };
+    const step = switch (step_val) {
+        .integer => |n| n,
+        else => {
+            helpers.setTypeMismatchError(ctx, "integer", step_val);
+            return error.TypeMismatch;
+        },
+    };
+    const infinite = infinite_val != .boolean or infinite_val.boolean;
+
+    const alloc = ctx.quotationAllocator();
+    const iter = try alloc.create(Iterator);
+    iter.* = .{ .kind = .{ .range = .{
+        .current = start,
+        .end = end,
+        .step = step,
+        .infinite = infinite,
+    } } };
+    try ctx.stack.push(.{ .iterator = iter });
 }

@@ -1,29 +1,87 @@
-\ lib/ranges.1z - Ranging over integers
+\ lib/ranges.1z - Range type for lazy integer sequences
 
-\ Helper for range: ( arr counter limit -- arr )
-range-loop: [
-  2dup <
-  [
-    [ swap over 1array #append swap ++ ] dip
-    range-loop
-  ]
-  [ 2drop ]
-  if
+\ Range virtual type: start, end, step, infinite? fields
+range: virtual{ struct{ start end step infinite? } } ;
+
+\ Exclusive range [start, end) with auto-step +-1
+range: ( start end -- range ) [
+  2dup < [ 1 ] [ -1 ] if f >range
 ] ;
 
-\ Generate exclusive range [start, end)
-range: ( start end -- array ) [
-  2dup <
-  [
-    { } -rot>   \ arr start end
-    range-loop  \ arr
-  ]
-  [ 2drop { } ]
-  if
+\ Inclusive range [start, end] with auto-step +-1
+\ Adjusts end to convert to exclusive representation internally
+range=: ( start end -- range ) [
+  2dup < [ ++ 1 ] [ -- -1 ] if f >range
+] ;
+
+\ Exclusive range with explicit step
+range-step: ( start end step -- range ) [
+  dup 0 = [ "range-step: step must not be zero" throw ] when
+  2 pick-n 2 pick-n < over 0 < and
+  [ "range-step: ascending range requires positive step" throw ] when
+  2 pick-n 2 pick-n > over 0 > and
+  [ "range-step: descending range requires negative step" throw ] when
+  f >range
 ] ;
 
 \ Generate exclusive range [0, n)
-iota: ( n -- array ) [ 0 swap range ] ;
+iota: ( n -- range ) [ 0 swap range ] ;
 
-\ Generate inclusive range [start, end]
-range-inclusive: ( start end -- array ) [ ++ range ] ;
+\ Infinite range from start, step 1
+range-from: ( start -- range ) [ 0 1 t >range ] ;
+
+\ Infinite range from start with explicit step
+range-from-step: ( start step -- range ) [
+  dup 0 = [ "range-from-step: step must not be zero" throw ] when
+  0 swap t >range
+] ;
+
+\ Inclusive range (legacy alias for range=)
+range-inclusive: ( start end -- range ) [ range= ] ;
+
+\ Iterator support: convert range to a lazy iterator
+>iterator: method{ range } [ range> make-range-iter ] ;
+
+\ O(1) length: max(0, (end - start + step - signum(step)) / step)
+\ Throws for infinite ranges.
+#len: method{ range } [
+  range>
+  [ "#len: infinite range has no length" throw ] when
+  -rot> swap - over + over dup 0 > [ drop 1 ] [ drop -1 ] if - swap /
+  dup 0 < [ drop 0 ] when
+] ;
+
+\ O(1) indexed access: start + n * step
+\ Validates index is non-negative and within bounds.
+#nth: method{ range integer } [
+  dup 0 < [ "#nth: negative index" throw ] when
+  swap range>
+  [
+    nip <rot- * +
+  ] [
+    3 pick-n over * 3 pick-n +
+    over 0 >
+    [ dup 3 pick-n >= ]
+    [ dup 3 pick-n <= ] if
+    [ "#nth: index out of bounds" throw ] when
+    nip nip nip nip
+  ] if
+] ;
+
+\ First element (start). Throws for empty ranges.
+#first: method{ range } [
+  range>
+  [ drop drop ] [
+    dup 0 > [ drop 2dup >= ] [ drop 2dup <= ] if
+    [ 2drop "#first: empty range" throw ] when
+    drop
+  ] if
+] ;
+
+\ Last element: start + (len - 1) * step. Throws for infinite or empty ranges.
+#last: method{ range } [
+  dup #len
+  dup 0 = [ 2drop "#last: empty range" throw ] when
+  swap range> drop nip
+  <rot- -- * +
+] ;
