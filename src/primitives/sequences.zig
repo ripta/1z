@@ -7,6 +7,7 @@ const ByteArray = value_mod.ByteArray;
 
 const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
+const dispatch_helpers = @import("dispatch_helpers.zig");
 const sequence = @import("sequence.zig");
 const Iterator = @import("../iterator.zig").Iterator;
 
@@ -85,6 +86,7 @@ pub const primitives = [_]Primitive{
 
 /// #len ( seq -- n ) - Get length of sequence
 pub fn nativeLen(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchUnary(ctx, "#len")) return;
     const val = try ctx.stack.pop();
     // Use sequence module for standard sequences, handle associative types separately
     const len: i64 = if (sequenceLength(val)) |l|
@@ -104,6 +106,7 @@ pub fn nativeLen(ctx: *Context) anyerror!void {
 
 /// #nth ( seq n -- elem ) - Get element at index
 pub fn nativeNth(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "#nth")) return;
     const index = try popInteger(ctx);
     const val = try ctx.stack.pop();
 
@@ -153,6 +156,7 @@ pub fn nativeNth(ctx: *Context) anyerror!void {
 
 /// #first ( seq -- elem ) - Get first element
 pub fn nativeFirst(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchUnary(ctx, "#first")) return;
     const val = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
 
@@ -175,6 +179,7 @@ pub fn nativeFirst(ctx: *Context) anyerror!void {
 
 /// #last ( seq -- elem ) - Get last element
 pub fn nativeLast(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchUnary(ctx, "#last")) return;
     const val = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
 

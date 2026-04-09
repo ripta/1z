@@ -70,6 +70,62 @@ Stack: [ ]
 Stack: [ ]
 PASS: range-inclusive 3 7
 Stack: [ ]
+=== #len ===
+Stack: [ ]
+PASS: #len ascending
+Stack: [ ]
+PASS: #len inclusive
+Stack: [ ]
+PASS: #len stepped
+Stack: [ ]
+PASS: #len step 5
+Stack: [ ]
+PASS: #len descending
+Stack: [ ]
+PASS: #len descending stepped
+Stack: [ ]
+PASS: #len empty
+Stack: [ ]
+=== #nth ===
+Stack: [ ]
+PASS: #nth first
+Stack: [ ]
+PASS: #nth last
+Stack: [ ]
+PASS: #nth stepped
+Stack: [ ]
+PASS: #nth descending
+Stack: [ ]
+PASS: #nth negative
+Stack: [ ]
+PASS: #nth out of bounds
+Stack: [ ]
+PASS: #nth on empty
+Stack: [ ]
+=== #first ===
+Stack: [ ]
+PASS: #first ascending
+Stack: [ ]
+PASS: #first descending
+Stack: [ ]
+PASS: #first single element
+Stack: [ ]
+PASS: #first on empty
+Stack: [ ]
+=== #last ===
+Stack: [ ]
+PASS: #last ascending
+Stack: [ ]
+PASS: #last inclusive
+Stack: [ ]
+PASS: #last stepped
+Stack: [ ]
+PASS: #last descending
+Stack: [ ]
+PASS: #last descending stepped
+Stack: [ ]
+PASS: #last on empty
+Stack: [ ]
 === lazy pipeline ===
 Stack: [ ]
 PASS: range + map

@@ -32,3 +32,47 @@ range-inclusive: ( start end -- range ) [ range= ] ;
 
 \ Iterator support: convert range to a lazy iterator
 >iterator: method{ range } [ range> make-range-iter ] ;
+
+\ O(1) length: max(0, (end - start + step - signum(step)) / step)
+\ Throws for infinite ranges.
+#len: method{ range } [
+  range>
+  [ "#len: infinite range has no length" throw ] when
+  -rot> swap - over + over dup 0 > [ drop 1 ] [ drop -1 ] if - swap /
+  dup 0 < [ drop 0 ] when
+] ;
+
+\ O(1) indexed access: start + n * step
+\ Validates index is non-negative and within bounds.
+#nth: method{ range integer } [
+  dup 0 < [ "#nth: negative index" throw ] when
+  swap range>
+  [
+    nip <rot- * +
+  ] [
+    3 pick-n over * 3 pick-n +
+    over 0 >
+    [ dup 3 pick-n >= ]
+    [ dup 3 pick-n <= ] if
+    [ "#nth: index out of bounds" throw ] when
+    nip nip nip nip
+  ] if
+] ;
+
+\ First element (start). Throws for empty ranges.
+#first: method{ range } [
+  range>
+  [ drop drop ] [
+    dup 0 > [ drop 2dup >= ] [ drop 2dup <= ] if
+    [ 2drop "#first: empty range" throw ] when
+    drop
+  ] if
+] ;
+
+\ Last element: start + (len - 1) * step. Throws for infinite or empty ranges.
+#last: method{ range } [
+  dup #len
+  dup 0 = [ 2drop "#last: empty range" throw ] when
+  swap range> drop nip
+  <rot- -- * +
+] ;
