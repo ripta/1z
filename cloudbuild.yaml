@@ -17,5 +17,5 @@ steps:
         mkdir -p /home/build/.cache/zig
         mkdir -p /home/build/.zig-cache
         make build
-        make test
+        make TIMEOUT=60 test
         ./zig-out/bin/1z ./examples/showcase.1z
