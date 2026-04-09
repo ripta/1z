@@ -1,0 +1,2 @@
+<eval>:1: error 'division-by-zero' at word '/'
+  stack effect: ( a b -- a/b )

@@ -1,0 +1,4 @@
+@raw
+check
+--compile=eager
+{file}

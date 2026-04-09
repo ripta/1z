@@ -545,8 +545,7 @@ fn hasExcludedJitFlag(flags_lines: ?[]const u8) bool {
     var flag_iter = std.mem.splitScalar(u8, fl, '\n');
     while (flag_iter.next()) |flag| {
         const trimmed = std.mem.trim(u8, flag, " \t\r");
-        if (std.mem.eql(u8, trimmed, "--check") or
-            std.mem.eql(u8, trimmed, "--debug") or
+        if (std.mem.eql(u8, trimmed, "--debug") or
             std.mem.eql(u8, trimmed, "--no-jit") or
             std.mem.startsWith(u8, trimmed, "--trace-") or
             std.mem.startsWith(u8, trimmed, "--break=") or
@@ -554,6 +553,36 @@ fn hasExcludedJitFlag(flags_lines: ?[]const u8) bool {
         {
             return true;
         }
+    }
+    return false;
+}
+
+fn isSubcommandWord(line: []const u8) bool {
+    return std.mem.eql(u8, line, "run") or
+        std.mem.eql(u8, line, "eval") or
+        std.mem.eql(u8, line, "check") or
+        std.mem.eql(u8, line, "repl") or
+        std.mem.eql(u8, line, "version") or
+        std.mem.eql(u8, line, "fmt") or
+        std.mem.eql(u8, line, "build");
+}
+
+fn flagsContainRaw(flags_lines: ?[]const u8) bool {
+    const fl = flags_lines orelse return false;
+    var flag_iter = std.mem.splitScalar(u8, fl, '\n');
+    while (flag_iter.next()) |flag| {
+        const trimmed = std.mem.trim(u8, flag, " \t\r");
+        if (std.mem.eql(u8, trimmed, "@raw")) return true;
+    }
+    return false;
+}
+
+fn flagsContainSubcommand(flags_lines: ?[]const u8, sub: []const u8) bool {
+    const fl = flags_lines orelse return false;
+    var flag_iter = std.mem.splitScalar(u8, fl, '\n');
+    while (flag_iter.next()) |flag| {
+        const trimmed = std.mem.trim(u8, flag, " \t\r");
+        if (std.mem.eql(u8, trimmed, sub)) return true;
     }
     return false;
 }
@@ -664,6 +693,8 @@ fn addIntegrationTests(
             if (!matchesFilter(te.name_without_ext, filter)) continue;
         }
         if (jit_mode and hasExcludedJitFlag(te.flags_lines)) continue;
+        if (jit_mode and flagsContainSubcommand(te.flags_lines, "check")) continue;
+        if (jit_mode and flagsContainRaw(te.flags_lines)) continue;
         matched_count += 1;
 
         const label = if (jit_mode)
@@ -1123,6 +1154,13 @@ fn addAotTests(
     }
 }
 
+// The `.flags` sidecar drives how the harness invokes `1z`. A line equal
+// to `@raw` puts the test in full control of argv: no default subcommand,
+// no injected `--show-stack`/`--stdlib-path`/`--test-timeout`, and no file
+// append. A literal `{file}` line is substituted with the resolved `.1z`
+// file path. Otherwise, a line matching a subcommand word
+// (run|eval|check|repl|version|fmt|build) sets the subcommand used by the
+// harness; if no such line is present, the harness defaults to `run`.
 fn configureIntegrationRun(
     b: *std.Build,
     run: *std.Build.Step.Run,
@@ -1130,6 +1168,55 @@ fn configureIntegrationRun(
     timeout_secs: u32,
     jit_mode: bool,
 ) void {
+    var raw_mode = false;
+    var detected_subcommand: ?[]const u8 = null;
+    if (te.flags_lines) |fl| {
+        var classify_iter = std.mem.splitScalar(u8, fl, '\n');
+        while (classify_iter.next()) |line| {
+            const trimmed = std.mem.trim(u8, line, " \t\r");
+            if (trimmed.len == 0) continue;
+            if (std.mem.eql(u8, trimmed, "@raw")) {
+                raw_mode = true;
+            } else if (detected_subcommand == null and isSubcommandWord(trimmed)) {
+                detected_subcommand = trimmed;
+            }
+        }
+    }
+
+    if (raw_mode) {
+        run.setEnvironmentVariable("ONEZ_STDLIB", b.fmt("{s}/lib", .{b.build_root.path orelse "."}));
+        if (te.env_lines) |el| {
+            var env_iter = std.mem.splitScalar(u8, el, '\n');
+            while (env_iter.next()) |line| {
+                const trimmed_line = std.mem.trim(u8, line, " \t\r");
+                if (trimmed_line.len == 0) continue;
+                if (std.mem.indexOfScalar(u8, trimmed_line, '=')) |eq_pos| {
+                    run.setEnvironmentVariable(trimmed_line[0..eq_pos], trimmed_line[eq_pos + 1 ..]);
+                }
+            }
+        }
+        if (te.flags_lines) |fl| {
+            var flag_iter = std.mem.splitScalar(u8, fl, '\n');
+            while (flag_iter.next()) |flag| {
+                const trimmed = std.mem.trim(u8, flag, " \t\r");
+                if (trimmed.len == 0) continue;
+                if (std.mem.eql(u8, trimmed, "@raw")) continue;
+                if (std.mem.eql(u8, trimmed, "{file}")) {
+                    run.addFileArg(b.path(te.file_path));
+                } else {
+                    run.addArg(trimmed);
+                }
+            }
+        }
+        addCommonFileDeps(b, run);
+        if (te.has_flags) run.addFileInput(b.path(te.flags_path));
+        if (te.has_stdin) run.addFileInput(b.path(te.stdin_path));
+        if (te.has_exitcode) run.addFileInput(b.path(te.exitcode_path));
+        if (te.has_env) run.addFileInput(b.path(te.env_path));
+        return;
+    }
+
+    run.addArg(detected_subcommand orelse "run");
     if (te.show_stack) {
         run.addArg("--show-stack");
     }
@@ -1144,9 +1231,12 @@ fn configureIntegrationRun(
         var flag_iter = std.mem.splitScalar(u8, fl, '\n');
         while (flag_iter.next()) |flag| {
             const trimmed_flag = std.mem.trim(u8, flag, " \t\r");
-            if (trimmed_flag.len > 0 and !std.mem.eql(u8, trimmed_flag, "--no-show-stack") and !std.mem.eql(u8, trimmed_flag, "--no-jit")) {
-                run.addArg(trimmed_flag);
-            }
+            if (trimmed_flag.len == 0) continue;
+            if (std.mem.eql(u8, trimmed_flag, "--no-show-stack")) continue;
+            if (std.mem.eql(u8, trimmed_flag, "--no-jit")) continue;
+            if (std.mem.eql(u8, trimmed_flag, "@raw")) continue;
+            if (isSubcommandWord(trimmed_flag)) continue;
+            run.addArg(trimmed_flag);
         }
     }
     if (te.env_lines) |el| {

@@ -2,7 +2,12 @@
 
 for file in tests/integration/*.1z; do
   base=${file:t:r}
-  cmd=(timeout 8 ./zig-out/bin/1z)
+  sub=run
+  if [[ -f tests/integration/$base.subcommand ]]; then
+    sub=$(tr -d ' \t\r\n' < tests/integration/$base.subcommand)
+    [[ -z $sub ]] && sub=run
+  fi
+  cmd=(timeout 8 ./zig-out/bin/1z $sub)
   show_stack=1
   if [[ -f tests/integration/$base.flags ]]; then
     while IFS= read -r flag || [[ -n $flag ]]; do

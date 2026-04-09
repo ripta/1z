@@ -1,0 +1,12 @@
+Usage: 1z check [options] <file>
+
+Run static analysis on a 1z source file without executing it.
+
+The following execution flags are NOT accepted by `check`:
+  --compile=MODE, --benchmark, --benchmark=verbose, --benchmark=json
+
+Global options:
+  --max-memory=SIZE         Set memory limit (e.g. 128M, 1G; default 256M)
+  --load-path=PATH          Add a module search path (repeatable)
+  --stdlib-path=PATH        Override standard library path
+  --prelude=PATH            Override prelude file path

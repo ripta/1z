@@ -194,6 +194,7 @@ const GlobalFlags = struct {
     }
 };
 
+/// Shared state for flags that affect the runtime environment regardless of which subcommand is running.
 const ExecutionFlags = struct {
     show_stack: bool = false,
     verbosity: Verbosity = .normal,
@@ -204,7 +205,6 @@ const ExecutionFlags = struct {
     trace_config: trace_mod.TraceConfig = .{},
     deadlock_detect_ns: ?i128 = null,
     test_timeout_ns: ?u64 = null,
-    check_mode: bool = false,
     allow_all_recursion: bool = false,
     compile_mode: context.CompileMode = .off,
     cli_set_compile: bool = false,
@@ -359,10 +359,6 @@ fn parseExecutionFlag(
         state.test_timeout_ns = secs * std.time.ns_per_s;
         return .consumed;
     }
-    if (std.mem.eql(u8, arg, "--check")) {
-        state.check_mode = true;
-        return .consumed;
-    }
     if (std.mem.eql(u8, arg, "--allow-all-recursion")) {
         state.allow_all_recursion = true;
         return .consumed;
@@ -407,296 +403,787 @@ fn printUsage() void {
     const w = &stdout.interface;
 
     w.writeAll(
-        \\Usage: 1z [options] [file] [args...]
-        \\       1z build <file.1z> [-o <output>] [options]
-        \\       1z fmt [files...]
-        \\       1z version
+        \\Usage: 1z [<subcommand>] [options] [args...]
         \\
-        \\General:
-        \\  -h, --help              Show this help and exit
-        \\  -V, --version           Show version and exit
-        \\  -q, --quiet             Suppress REPL banner
-        \\  -qq, --silent           Suppress banner, prompts, stack, and goodbye
-        \\  --show-stack            Print the stack after execution
+        \\Subcommands:
+        \\  run <file> [args...]   Execute a 1z source file
+        \\  eval '<expr>'          Evaluate an expression string
+        \\  check <file>           Run static analysis without executing
+        \\  repl                   Start the interactive REPL (default)
+        \\  fmt [files...]         Format 1z source files
+        \\  build <file>           Compile a 1z file to a native executable
+        \\  version                Print version and exit
+        \\
+        \\Global options (available to all subcommands):
+        \\  -h, --help              Show help
+        \\  -V, --version           Show version
         \\  --max-memory=SIZE       Set memory limit (e.g. 128M, 1G; default 256M)
         \\  --load-path=PATH        Add a module search path (repeatable)
         \\  --stdlib-path=PATH      Override standard library path
         \\  --prelude=PATH          Override prelude file path
         \\
-        \\Debugging:
-        \\  --debug                 Start in interactive debugger
-        \\  --break=WORD            Set a breakpoint on WORD (implies --debug)
-        \\  --check                 Run static analysis without executing
-        \\  --allow-all-recursion   Suppress non-tail recursion warnings
-        \\
-        \\Tracing:
-        \\  --trace-words[=PAT]     Trace word execution (optional pattern filter)
-        \\  --trace-resolve[=PAT]   Trace word resolution (optional pattern filter)
-        \\  --trace-modules         Trace module loading
-        \\  --trace-jit             Trace JIT compilation
-        \\  --dump-scope=WORD       Dump scope after loading WORD
-        \\
-        \\Scheduling:
-        \\  --deadlock-detect[=SECS]  Enable deadlock detection (default 5s)
-        \\  --test-timeout=SECS     Set test timeout in seconds
-        \\
-        \\Compilation:
-        \\  --compile=MODE          Set compile mode: off, eager, hybrid
-        \\
-        \\Benchmarking:
-        \\  -b, --benchmark         Enable benchmarking
-        \\  --benchmark=verbose     Benchmark with human-readable output
-        \\  --benchmark=json        Benchmark with JSON output
+        \\Bare forms:
+        \\  1z                      Enter the REPL (same as `1z repl`)
+        \\  1z <file>               Alias for `1z run <file>`
         \\
         \\Environment variables:
         \\  ONEZ_MAX_MEMORY         Default memory limit (overridden by --max-memory)
         \\  ONEZ_COMPILE            Default compile mode (overridden by --compile)
         \\  ONEZ_PRELUDE            Default prelude path (overridden by --prelude)
+        \\  ONEZ_LOAD_PATH          Colon-separated module search paths
+        \\  ONEZ_STDLIB             Default standard library path
+        \\
+        \\Run '1z <subcommand> --help' for subcommand-specific options.
         \\
     ) catch {};
     w.flush() catch {};
 }
+
+const execution_flags_help =
+    \\  --show-stack              Print the stack after execution
+    \\  --debug                   Start in the interactive debugger
+    \\  --break=WORD              Set a breakpoint on WORD (implies --debug)
+    \\  --allow-all-recursion     Suppress non-tail recursion warnings
+    \\  --compile=MODE            Set compile mode: off, eager, hybrid
+    \\  --trace-words[=PAT]       Trace word execution (optional pattern filter)
+    \\  --trace-resolve[=PAT]     Trace word resolution (optional pattern filter)
+    \\  --trace-modules           Trace module loading
+    \\  --trace-jit               Trace JIT compilation
+    \\  --dump-scope=WORD         Dump scope after loading WORD
+    \\  --deadlock-detect[=SECS]  Enable deadlock detection (default 5s)
+    \\  --test-timeout=SECS       Set test timeout in seconds
+    \\  -b, --benchmark           Enable benchmarking
+    \\  --benchmark=verbose       Benchmark with human-readable output
+    \\  --benchmark=json          Benchmark with JSON output
+;
+
+const global_flags_help =
+    \\  --max-memory=SIZE         Set memory limit (e.g. 128M, 1G; default 256M)
+    \\  --load-path=PATH          Add a module search path (repeatable)
+    \\  --stdlib-path=PATH        Override standard library path
+    \\  --prelude=PATH            Override prelude file path
+;
+
+fn printRunHelp() void {
+    const stdout_file: File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
+    const w = &stdout.interface;
+    w.writeAll("Usage: 1z run [options] <file> [args...]\n\n") catch {};
+    w.writeAll("Execute a 1z source file.\n\n") catch {};
+    w.writeAll("Global options:\n") catch {};
+    w.writeAll(global_flags_help) catch {};
+    w.writeAll("\n\nExecution options:\n") catch {};
+    w.writeAll(execution_flags_help) catch {};
+    w.writeAll("\n") catch {};
+    w.flush() catch {};
+}
+
+fn printEvalHelp() void {
+    const stdout_file: File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
+    const w = &stdout.interface;
+    w.writeAll("Usage: 1z eval [options] '<expression>'\n\n") catch {};
+    w.writeAll("Evaluate an expression string.\n\n") catch {};
+    w.writeAll("Exit codes:\n") catch {};
+    w.writeAll("  0   Evaluation succeeded, and top of stack is truthy or stack is empty\n") catch {};
+    w.writeAll("  1   Evaluation succeeded, but top of stack is falsy\n") catch {};
+    w.writeAll("  2   Runtime or parse error\n\n") catch {};
+    w.writeAll("Eval options:\n") catch {};
+    w.writeAll("  -p                        Print top of stack via `inspect` after evaluation\n\n") catch {};
+    w.writeAll("Global options:\n") catch {};
+    w.writeAll(global_flags_help) catch {};
+    w.writeAll("\n\nExecution options:\n") catch {};
+    w.writeAll(execution_flags_help) catch {};
+    w.writeAll("\n") catch {};
+    w.flush() catch {};
+}
+
+fn printCheckHelp() void {
+    const stdout_file: File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
+    const w = &stdout.interface;
+    w.writeAll("Usage: 1z check [options] <file>\n\n") catch {};
+    w.writeAll("Run static analysis on a 1z source file without executing it.\n\n") catch {};
+    w.writeAll("The following execution flags are NOT accepted by `check`:\n") catch {};
+    w.writeAll("  --compile=MODE, --benchmark, --benchmark=verbose, --benchmark=json\n\n") catch {};
+    w.writeAll("Global options:\n") catch {};
+    w.writeAll(global_flags_help) catch {};
+    w.writeAll("\n") catch {};
+    w.flush() catch {};
+}
+
+fn printReplHelp() void {
+    const stdout_file: File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
+    const w = &stdout.interface;
+    w.writeAll("Usage: 1z repl [options]\n\n") catch {};
+    w.writeAll("Start the interactive REPL.\n\n") catch {};
+    w.writeAll("REPL options:\n") catch {};
+    w.writeAll("  -q, --quiet               Suppress banner\n") catch {};
+    w.writeAll("  -qq, --silent             Suppress banner, prompts, stack, and goodbye\n\n") catch {};
+    w.writeAll("Global options:\n") catch {};
+    w.writeAll(global_flags_help) catch {};
+    w.writeAll("\n\nExecution options:\n") catch {};
+    w.writeAll(execution_flags_help) catch {};
+    w.writeAll("\n") catch {};
+    w.flush() catch {};
+}
+
+const ExecutionContext = struct {
+    gpa: std.mem.Allocator,
+    mem_limit: *MemoryLimitAllocator,
+    bench_stats: *BenchmarkStats,
+    counting_allocator: *CountingAllocator,
+    allocator: std.mem.Allocator,
+    ctx: Context,
+    dbg: ?debugger_mod.Debugger,
+    watchdog: ?std.Thread,
+    external_prelude: ?[]const u8,
+    bench_enabled: bool,
+
+    fn init(
+        gpa: std.mem.Allocator,
+        global: *GlobalFlags,
+        exec: *ExecutionFlags,
+        err_writer: anytype,
+    ) !*ExecutionContext {
+        if (!global.cli_set_max_memory) {
+            if (std.posix.getenv("ONEZ_MAX_MEMORY")) |env_val| {
+                if (memory_limit.parseSize(env_val)) |bytes| {
+                    global.max_memory_bytes = bytes;
+                }
+            }
+        }
+        if (!exec.cli_set_compile) {
+            if (std.posix.getenv("ONEZ_COMPILE")) |env_val| {
+                if (std.mem.eql(u8, env_val, "off")) {
+                    exec.compile_mode = .off;
+                } else if (std.mem.eql(u8, env_val, "eager")) {
+                    exec.compile_mode = .eager;
+                } else if (std.mem.eql(u8, env_val, "hybrid")) {
+                    exec.compile_mode = .hybrid;
+                }
+            }
+        }
+
+        const ec = gpa.create(ExecutionContext) catch {
+            err_writer.writeAll("Error: out of memory\n") catch {};
+            err_writer.flush() catch {};
+            return error.ExecutionContextInitFailed;
+        };
+        errdefer gpa.destroy(ec);
+
+        const mem_limit_ptr = gpa.create(MemoryLimitAllocator) catch {
+            err_writer.writeAll("Error: out of memory\n") catch {};
+            err_writer.flush() catch {};
+            return error.ExecutionContextInitFailed;
+        };
+        errdefer gpa.destroy(mem_limit_ptr);
+        mem_limit_ptr.* = MemoryLimitAllocator.init(gpa, global.max_memory_bytes);
+
+        const bench_stats_ptr = gpa.create(BenchmarkStats) catch {
+            err_writer.writeAll("Error: out of memory\n") catch {};
+            err_writer.flush() catch {};
+            return error.ExecutionContextInitFailed;
+        };
+        errdefer gpa.destroy(bench_stats_ptr);
+        bench_stats_ptr.* = .{};
+
+        const counting_ptr = gpa.create(CountingAllocator) catch {
+            err_writer.writeAll("Error: out of memory\n") catch {};
+            err_writer.flush() catch {};
+            return error.ExecutionContextInitFailed;
+        };
+        errdefer gpa.destroy(counting_ptr);
+        counting_ptr.* = CountingAllocator.init(mem_limit_ptr.allocator(), bench_stats_ptr);
+
+        const bench_enabled = exec.bench_config.enabled;
+        const alloc: std.mem.Allocator = if (bench_enabled)
+            counting_ptr.allocator()
+        else
+            mem_limit_ptr.allocator();
+
+        if (bench_enabled) {
+            bench_stats_ptr.start();
+        }
+
+        ec.* = .{
+            .gpa = gpa,
+            .mem_limit = mem_limit_ptr,
+            .bench_stats = bench_stats_ptr,
+            .counting_allocator = counting_ptr,
+            .allocator = alloc,
+            .ctx = Context.init(alloc),
+            .dbg = null,
+            .watchdog = null,
+            .external_prelude = null,
+            .bench_enabled = bench_enabled,
+        };
+        errdefer ec.ctx.deinit();
+
+        ec.ctx.trace = exec.trace_config;
+        ec.ctx.deadlock_detect_ns = exec.deadlock_detect_ns;
+
+        for (global.load_paths.items) |lp| {
+            const duped = ec.ctx.quotationAllocator().dupe(u8, lp) catch {
+                err_writer.writeAll("Error: out of memory\n") catch {};
+                err_writer.flush() catch {};
+                return error.ExecutionContextInitFailed;
+            };
+            ec.ctx.load_paths.append(ec.ctx.allocator, duped) catch {
+                err_writer.writeAll("Error: out of memory\n") catch {};
+                err_writer.flush() catch {};
+                return error.ExecutionContextInitFailed;
+            };
+        }
+        if (std.posix.getenv("ONEZ_LOAD_PATH")) |env_val| {
+            var it = std.mem.splitScalar(u8, env_val, ':');
+            while (it.next()) |segment| {
+                if (segment.len > 0) {
+                    const duped = ec.ctx.quotationAllocator().dupe(u8, segment) catch {
+                        err_writer.writeAll("Error: out of memory\n") catch {};
+                        err_writer.flush() catch {};
+                        return error.ExecutionContextInitFailed;
+                    };
+                    ec.ctx.load_paths.append(ec.ctx.allocator, duped) catch {
+                        err_writer.writeAll("Error: out of memory\n") catch {};
+                        err_writer.flush() catch {};
+                        return error.ExecutionContextInitFailed;
+                    };
+                }
+            }
+        }
+
+        if (global.stdlib_path) |sp| {
+            ec.ctx.stdlib_path = ec.ctx.quotationAllocator().dupe(u8, sp) catch null;
+        } else if (std.posix.getenv("ONEZ_STDLIB")) |env_val| {
+            ec.ctx.stdlib_path = ec.ctx.quotationAllocator().dupe(u8, env_val) catch null;
+        } else {
+            var self_exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+            if (std.fs.selfExeDirPath(&self_exe_buf)) |exe_dir| {
+                const default_lib = std.fs.path.join(ec.ctx.quotationAllocator(), &.{ exe_dir, "../lib" }) catch null;
+                if (default_lib) |lib_path| {
+                    var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+                    if (std.fs.cwd().realpath(lib_path, &real_buf)) |real| {
+                        ec.ctx.stdlib_path = ec.ctx.quotationAllocator().dupe(u8, real) catch null;
+                    } else |_| {}
+                }
+            } else |_| {}
+        }
+
+        if (bench_enabled) {
+            ec.ctx.benchmark = bench_stats_ptr;
+        }
+
+        const prelude_path = global.prelude_path orelse std.posix.getenv("ONEZ_PRELUDE");
+        if (prelude_path) |path| {
+            ec.external_prelude = std.fs.cwd().readFileAlloc(gpa, path, 10 * 1024 * 1024) catch |err| {
+                err_writer.print("Error: cannot read prelude '{s}': {any}\n", .{ path, err }) catch {};
+                err_writer.flush() catch {};
+                return error.ExecutionContextInitFailed;
+            };
+        }
+        errdefer if (ec.external_prelude) |ep| gpa.free(ep);
+
+        ec.ctx.loadPrelude(ec.external_prelude) catch |err| {
+            std.debug.panic("Failed to load prelude: {any}", .{err});
+        };
+        ec.ctx.compile_mode = exec.compile_mode;
+        ec.ctx.allow_all_recursion = exec.allow_all_recursion;
+
+        if (bench_enabled) {
+            bench_stats_ptr.collectPreludeInventory(
+                if (ec.ctx.local_frames.items.len > 0) ec.ctx.local_frames.items[0].count() else 0,
+                ec.ctx.dispatch.entries.count(),
+                ec.ctx.dispatch.native_entries.count(),
+                ec.ctx.builtin_type_values.count(),
+                if (ec.ctx.type_registry_frames.items.len > 0) ec.ctx.type_registry_frames.items[0].enum_registry.count() else 0,
+                ec.ctx.pragma_registry.count(),
+                ec.ctx.virtual_type_count,
+                ec.ctx.struct_type_count,
+            );
+            bench_stats_ptr.markPreludeEnd();
+        }
+
+        if (exec.debug_mode) {
+            ec.dbg = debugger_mod.Debugger.init(alloc);
+            ec.ctx.debugger = &ec.dbg.?;
+            for (exec.initial_breakpoints[0..exec.initial_breakpoint_count]) |bp| {
+                _ = ec.dbg.?.breakpoints.addWord(bp);
+            }
+            if (exec.initial_breakpoint_count > 0) {
+                ec.dbg.?.stepper.mode = .continue_running;
+            }
+        }
+
+        signal.install();
+        return ec;
+    }
+
+    fn armWatchdog(self: *ExecutionContext, timeout_ns: u64) void {
+        self.watchdog = std.Thread.spawn(.{}, testTimeoutWatchdog, .{ timeout_ns, &self.ctx }) catch null;
+    }
+
+    fn fireExitHooks(self: *ExecutionContext, exit_code: u8) void {
+        hooks.fireHooks(&self.ctx, "on:exit", &.{.{ .fixnum = @intCast(exit_code) }});
+    }
+
+    fn finalizeBenchmark(self: *ExecutionContext, exec: *const ExecutionFlags) void {
+        if (!self.bench_enabled) return;
+        self.bench_stats.collectVariantHistogram(self.allocator, self.ctx.stack.items.items) catch {};
+        self.bench_stats.stop();
+
+        if (exec.bench_config.output != .none) {
+            var buf: [8192]u8 = undefined;
+            var stream = std.io.fixedBufferStream(&buf);
+            const writer = stream.writer();
+            switch (exec.bench_config.output) {
+                .human => self.bench_stats.formatHuman(writer) catch {},
+                .json => self.bench_stats.formatJson(writer) catch {},
+                .none => {},
+            }
+            const data = stream.getWritten();
+            var written: usize = 0;
+            while (written < data.len) {
+                written += std.posix.write(std.posix.STDOUT_FILENO, data[written..]) catch break;
+            }
+        }
+
+        self.bench_stats.deinit(self.allocator);
+    }
+
+    fn deinit(self: *ExecutionContext) void {
+        if (self.watchdog) |t| t.detach();
+        if (self.dbg != null) self.dbg.?.deinit();
+        self.ctx.deinit();
+        if (self.external_prelude) |ep| self.gpa.free(ep);
+        self.gpa.destroy(self.counting_allocator);
+        self.gpa.destroy(self.bench_stats);
+        self.gpa.destroy(self.mem_limit);
+        self.gpa.destroy(self);
+    }
+};
 
 pub fn main() u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const gpa_allocator = gpa.allocator();
 
-    // Use GPA for initial arg parsing
     const args = std.process.argsAlloc(gpa_allocator) catch return 1;
     defer std.process.argsFree(gpa_allocator, args);
 
-    // Check for --help/-h and --version/-V before anything else
+    if (args.len <= 1) return handleRepl(gpa_allocator, &.{});
+
     for (args[1..]) |arg| {
-        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            printUsage();
-            return 0;
-        }
         if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-V")) {
             printVersion();
             return 0;
         }
     }
 
-    // Check for subcommands first
-    if (args.len > 1 and std.mem.eql(u8, args[1], "fmt")) {
-        return handleFmt(gpa_allocator, args[2..]);
+    const first = args[1];
+
+    if (std.mem.eql(u8, first, "--help") or std.mem.eql(u8, first, "-h")) {
+        printUsage();
+        return 0;
     }
-    if (args.len > 1 and std.mem.eql(u8, args[1], "build")) {
-        return handleBuild(gpa_allocator, args[2..]);
-    }
-    if (args.len > 1 and std.mem.eql(u8, args[1], "version")) {
+
+    if (std.mem.eql(u8, first, "run")) return handleRun(gpa_allocator, args[2..]);
+    if (std.mem.eql(u8, first, "eval")) return handleEval(gpa_allocator, args[2..]);
+    if (std.mem.eql(u8, first, "check")) return handleCheck(gpa_allocator, args[2..]);
+    if (std.mem.eql(u8, first, "repl")) return handleRepl(gpa_allocator, args[2..]);
+    if (std.mem.eql(u8, first, "fmt")) return handleFmt(gpa_allocator, args[2..]);
+    if (std.mem.eql(u8, first, "build")) return handleBuild(gpa_allocator, args[2..]);
+    if (std.mem.eql(u8, first, "version")) {
         printVersion();
         return 0;
     }
 
-    // Parse flags
-    var global = GlobalFlags{};
-    defer global.deinit(gpa_allocator);
-    var exec = ExecutionFlags{};
-    var file_path: ?[]const u8 = null;
+    if (first.len > 0 and first[0] != '-') {
+        if (std.fs.cwd().access(first, .{})) |_| {
+            return handleRun(gpa_allocator, args[1..]);
+        } else |_| {}
+    }
 
-    var program_args: std.ArrayListUnmanaged([]const u8) = .{};
-    defer program_args.deinit(gpa_allocator);
+    const stderr_file: File = .stderr();
+    var stderr_buf: [1024]u8 = undefined;
+    var stderr = stderr_file.writerStreaming(&stderr_buf);
+    stderr.interface.print(
+        "Error: unknown subcommand or file: '{s}'\nRun '1z --help' for usage.\n",
+        .{first},
+    ) catch {};
+    stderr.interface.flush() catch {};
+    return 1;
+}
 
+fn hasHelpFlag(args: []const []const u8) bool {
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) return true;
+    }
+    return false;
+}
+
+fn handleRun(gpa: std.mem.Allocator, args: []const []const u8) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
     var stderr = stderr_file.writerStreaming(&stderr_buf);
     const err_writer = &stderr.interface;
 
-    for (args[1..]) |arg| {
+    if (hasHelpFlag(args)) {
+        printRunHelp();
+        return 0;
+    }
+
+    var global = GlobalFlags{};
+    defer global.deinit(gpa);
+    var exec = ExecutionFlags{};
+
+    var file_path: ?[]const u8 = null;
+    var program_args: std.ArrayListUnmanaged([]const u8) = .{};
+    defer program_args.deinit(gpa);
+
+    for (args) |arg| {
         if (file_path != null) {
-            program_args.append(gpa_allocator, arg) catch return 1;
+            program_args.append(gpa, arg) catch return 1;
             continue;
         }
-
-        const g = parseGlobalFlag(arg, &global, gpa_allocator, err_writer) catch return 1;
+        const g = parseGlobalFlag(arg, &global, gpa, err_writer) catch return 1;
         if (g == .consumed) continue;
-
         const e = parseExecutionFlag(arg, &exec, err_writer) catch return 1;
         if (e == .consumed) continue;
-
+        if (arg.len > 0 and arg[0] == '-') {
+            err_writer.print("Error: unknown flag '{s}'\n", .{arg}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        }
         file_path = arg;
     }
 
-    // Check environment variable if CLI flag was not set
-    if (!global.cli_set_max_memory) {
-        if (std.posix.getenv("ONEZ_MAX_MEMORY")) |env_val| {
-            if (memory_limit.parseSize(env_val)) |bytes| {
-                global.max_memory_bytes = bytes;
-            }
-            // Silently ignore invalid env var values
-        }
+    const path = file_path orelse {
+        err_writer.writeAll("Usage: 1z run [options] <file> [args...]\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+
+    const ec = ExecutionContext.init(gpa, &global, &exec, err_writer) catch return 1;
+    defer ec.deinit();
+
+    ec.ctx.program_args = program_args.items;
+
+    if (exec.test_timeout_ns) |timeout_ns| {
+        ec.armWatchdog(timeout_ns);
     }
 
-    if (!exec.cli_set_compile) {
-        if (std.posix.getenv("ONEZ_COMPILE")) |env_val| {
-            if (std.mem.eql(u8, env_val, "off")) {
-                exec.compile_mode = .off;
-            } else if (std.mem.eql(u8, env_val, "eager")) {
-                exec.compile_mode = .eager;
-            } else if (std.mem.eql(u8, env_val, "hybrid")) {
-                exec.compile_mode = .hybrid;
-            }
-            // Silently ignore invalid env var values
-        }
+    const result = batch(&ec.ctx, path, exec.show_stack);
+    ec.fireExitHooks(result);
+    ec.finalizeBenchmark(&exec);
+    return result;
+}
+
+fn handleCheck(gpa: std.mem.Allocator, args: []const []const u8) u8 {
+    const stderr_file: File = .stderr();
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr = stderr_file.writerStreaming(&stderr_buf);
+    const err_writer = &stderr.interface;
+
+    if (hasHelpFlag(args)) {
+        printCheckHelp();
+        return 0;
     }
 
-    // Create memory limit allocator (wraps GPA, enforces cap)
-    var mem_limit = MemoryLimitAllocator.init(gpa_allocator, global.max_memory_bytes);
-    const mem_limit_allocator = mem_limit.allocator();
+    var global = GlobalFlags{};
+    defer global.deinit(gpa);
+    var exec = ExecutionFlags{};
 
-    // Create benchmark stats and counting allocator if benchmarking enabled
-    var bench_stats = BenchmarkStats{};
-    var counting_allocator = CountingAllocator.init(mem_limit_allocator, &bench_stats);
+    var file_path: ?[]const u8 = null;
 
-    // Use counting allocator when benchmarking, memory limit allocator otherwise
-    const allocator = if (exec.bench_config.enabled) counting_allocator.allocator() else mem_limit_allocator;
-
-    if (exec.bench_config.enabled) {
-        bench_stats.start();
-    }
-
-    // Initialize context with the program arguments
-    var ctx = Context.init(allocator);
-    ctx.program_args = program_args.items;
-    ctx.trace = exec.trace_config;
-    ctx.deadlock_detect_ns = exec.deadlock_detect_ns;
-    defer ctx.deinit();
-
-    // Configure load paths: CLI flags, then env var
-    for (global.load_paths.items) |lp| {
-        const duped = ctx.quotationAllocator().dupe(u8, lp) catch return 1;
-        ctx.load_paths.append(ctx.allocator, duped) catch return 1;
-    }
-    if (std.posix.getenv("ONEZ_LOAD_PATH")) |env_val| {
-        var it = std.mem.splitScalar(u8, env_val, ':');
-        while (it.next()) |segment| {
-            if (segment.len > 0) {
-                const duped = ctx.quotationAllocator().dupe(u8, segment) catch return 1;
-                ctx.load_paths.append(ctx.allocator, duped) catch return 1;
-            }
-        }
-    }
-
-    // Configure stdlib path: CLI flag, then env var, then default relative to binary
-    if (global.stdlib_path) |sp| {
-        ctx.stdlib_path = ctx.quotationAllocator().dupe(u8, sp) catch return 1;
-    } else if (std.posix.getenv("ONEZ_STDLIB")) |env_val| {
-        ctx.stdlib_path = ctx.quotationAllocator().dupe(u8, env_val) catch return 1;
-    } else {
-        // TODO(ripta): more robust way to find default stdlib path?
-        //              Defaults to <bin_dir>/../lib
-        var self_exe_buf: [std.fs.max_path_bytes]u8 = undefined;
-        if (std.fs.selfExeDirPath(&self_exe_buf)) |exe_dir| {
-            const default_lib = std.fs.path.join(ctx.quotationAllocator(), &.{ exe_dir, "../lib" }) catch null;
-            if (default_lib) |lib_path| {
-                var real_buf: [std.fs.max_path_bytes]u8 = undefined;
-                if (std.fs.cwd().realpath(lib_path, &real_buf)) |real| {
-                    ctx.stdlib_path = ctx.quotationAllocator().dupe(u8, real) catch null;
-                } else |_| {}
-            }
-        } else |_| {}
-    }
-
-    if (exec.bench_config.enabled) {
-        ctx.benchmark = &bench_stats;
-    }
-
-    // Resolve prelude source: CLI flag, then env var, and lastly the embedded default
-    const prelude_path = global.prelude_path orelse std.posix.getenv("ONEZ_PRELUDE");
-    var external_prelude: ?[]const u8 = null;
-    if (prelude_path) |path| {
-        external_prelude = std.fs.cwd().readFileAlloc(gpa_allocator, path, 10 * 1024 * 1024) catch |err| {
-            err_writer.print("Error: cannot read prelude '{s}': {any}\n", .{ path, err }) catch {};
+    for (args) |arg| {
+        const g = parseGlobalFlag(arg, &global, gpa, err_writer) catch return 1;
+        if (g == .consumed) continue;
+        const e = parseExecutionFlag(arg, &exec, err_writer) catch return 1;
+        if (e == .consumed) continue;
+        if (arg.len > 0 and arg[0] == '-') {
+            err_writer.print("Error: unknown flag '{s}'\n", .{arg}) catch {};
             err_writer.flush() catch {};
             return 1;
-        };
+        }
+        if (file_path != null) {
+            err_writer.writeAll("Error: `check` accepts a single file argument\n") catch {};
+            err_writer.flush() catch {};
+            return 1;
+        }
+        file_path = arg;
     }
-    defer if (external_prelude) |ep| gpa_allocator.free(ep);
 
-    ctx.loadPrelude(external_prelude) catch |err| {
-        std.debug.panic("Failed to load prelude: {any}", .{err});
-    };
-    ctx.compile_mode = exec.compile_mode;
-    ctx.check_mode = exec.check_mode;
-    ctx.allow_all_recursion = exec.allow_all_recursion;
+    if (exec.cli_set_compile) {
+        err_writer.writeAll("Error: 'check' does not accept --compile\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
+    }
     if (exec.bench_config.enabled) {
-        bench_stats.collectPreludeInventory(
-            if (ctx.local_frames.items.len > 0) ctx.local_frames.items[0].count() else 0,
-            ctx.dispatch.entries.count(),
-            ctx.dispatch.native_entries.count(),
-            ctx.builtin_type_values.count(),
-            if (ctx.type_registry_frames.items.len > 0) ctx.type_registry_frames.items[0].enum_registry.count() else 0,
-            ctx.pragma_registry.count(),
-            ctx.virtual_type_count,
-            ctx.struct_type_count,
-        );
-        bench_stats.markPreludeEnd();
+        err_writer.writeAll("Error: 'check' does not accept --benchmark\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
     }
 
-    var dbg: ?debugger_mod.Debugger = if (exec.debug_mode) debugger_mod.Debugger.init(allocator) else null;
-    defer if (dbg != null) dbg.?.deinit();
-
-    if (dbg != null) {
-        ctx.debugger = &dbg.?;
-        for (exec.initial_breakpoints[0..exec.initial_breakpoint_count]) |bp| {
-            _ = dbg.?.breakpoints.addWord(bp);
-        }
-        if (exec.initial_breakpoint_count > 0) {
-            // Start in continue mode so execution runs until a breakpoint hits
-            dbg.?.stepper.mode = .continue_running;
-        }
-    }
-
-    // Spawn watchdog thread for --test-timeout (batch mode only)
-    const watchdog_thread: ?std.Thread = if (exec.test_timeout_ns != null and file_path != null)
-        std.Thread.spawn(.{}, testTimeoutWatchdog, .{ exec.test_timeout_ns.?, &ctx }) catch null
-    else
-        null;
-    defer if (watchdog_thread) |t| t.detach();
-
-    signal.install();
-
-    // If a file path is provided, run in batch mode, which executes the file
-    // and exits. Errors print to stderr, and cause a non-zero exit code.
-    // Otherwise, interactive REPL starts.
-    const result = if (file_path) |path|
-        batch(&ctx, path, exec.show_stack)
-    else blk: {
-        repl(&ctx, exec.verbosity, global.max_memory_bytes);
-        break :blk @as(u8, 0);
+    const path = file_path orelse {
+        err_writer.writeAll("Usage: 1z check [options] <file>\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
     };
 
-    hooks.fireHooks(&ctx, "on:exit", &.{.{ .fixnum = @intCast(result) }});
+    const ec = ExecutionContext.init(gpa, &global, &exec, err_writer) catch return 1;
+    defer ec.deinit();
 
-    // Stop benchmark timer if enabled
-    if (exec.bench_config.enabled) {
-        bench_stats.collectVariantHistogram(allocator, ctx.stack.items.items) catch {};
-        bench_stats.stop();
+    ec.ctx.check_mode = true;
+
+    if (exec.test_timeout_ns) |timeout_ns| {
+        ec.armWatchdog(timeout_ns);
     }
 
-    defer if (exec.bench_config.enabled) bench_stats.deinit(allocator);
-
-    if (exec.bench_config.output != .none) {
-        var buf: [8192]u8 = undefined;
-        var stream = std.io.fixedBufferStream(&buf);
-        const writer = stream.writer();
-
-        switch (exec.bench_config.output) {
-            .human => bench_stats.formatHuman(writer) catch {},
-            .json => bench_stats.formatJson(writer) catch {},
-            .none => {},
-        }
-
-        const data = stream.getWritten();
-        var written: usize = 0;
-        while (written < data.len) {
-            written += std.posix.write(std.posix.STDOUT_FILENO, data[written..]) catch break;
-        }
-    }
-
+    const result = batch(&ec.ctx, path, exec.show_stack);
+    ec.fireExitHooks(result);
+    ec.finalizeBenchmark(&exec);
     return result;
+}
+
+fn handleRepl(gpa: std.mem.Allocator, args: []const []const u8) u8 {
+    const stderr_file: File = .stderr();
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr = stderr_file.writerStreaming(&stderr_buf);
+    const err_writer = &stderr.interface;
+
+    if (hasHelpFlag(args)) {
+        printReplHelp();
+        return 0;
+    }
+
+    var global = GlobalFlags{};
+    defer global.deinit(gpa);
+    var exec = ExecutionFlags{};
+
+    for (args) |arg| {
+        const g = parseGlobalFlag(arg, &global, gpa, err_writer) catch return 1;
+        if (g == .consumed) continue;
+        const e = parseExecutionFlag(arg, &exec, err_writer) catch return 1;
+        if (e == .consumed) continue;
+        if (arg.len > 0 and arg[0] == '-') {
+            err_writer.print("Error: unknown flag '{s}'\n", .{arg}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        }
+        err_writer.print("Error: 'repl' does not accept positional arguments: '{s}'\n", .{arg}) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    }
+
+    const ec = ExecutionContext.init(gpa, &global, &exec, err_writer) catch return 1;
+    defer ec.deinit();
+
+    repl(&ec.ctx, exec.verbosity, global.max_memory_bytes);
+    ec.fireExitHooks(0);
+    ec.finalizeBenchmark(&exec);
+    return 0;
+}
+
+fn handleEval(gpa: std.mem.Allocator, args: []const []const u8) u8 {
+    const stderr_file: File = .stderr();
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr = stderr_file.writerStreaming(&stderr_buf);
+    const err_writer = &stderr.interface;
+
+    if (hasHelpFlag(args)) {
+        printEvalHelp();
+        return 0;
+    }
+
+    var global = GlobalFlags{};
+    defer global.deinit(gpa);
+    var exec = ExecutionFlags{};
+
+    var expression: ?[]const u8 = null;
+    var print_top: bool = false;
+
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "-p")) {
+            print_top = true;
+            continue;
+        }
+        const g = parseGlobalFlag(arg, &global, gpa, err_writer) catch return 1;
+        if (g == .consumed) continue;
+        const e = parseExecutionFlag(arg, &exec, err_writer) catch return 1;
+        if (e == .consumed) continue;
+        if (arg.len > 0 and arg[0] == '-') {
+            err_writer.print("Error: unknown flag '{s}'\n", .{arg}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        }
+        if (expression != null) {
+            err_writer.writeAll("Error: `eval` accepts a single expression string\n") catch {};
+            err_writer.flush() catch {};
+            return 1;
+        }
+        expression = arg;
+    }
+
+    const code = expression orelse {
+        err_writer.writeAll("Usage: 1z eval [options] '<expression>'\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+
+    const ec = ExecutionContext.init(gpa, &global, &exec, err_writer) catch return 2;
+    defer ec.deinit();
+
+    if (exec.test_timeout_ns) |timeout_ns| {
+        ec.armWatchdog(timeout_ns);
+    }
+
+    const result = runEval(&ec.ctx, code, print_top, exec.show_stack, err_writer);
+    ec.fireExitHooks(result);
+    ec.finalizeBenchmark(&exec);
+    return result;
+}
+
+/// Exit codes: 0 = truthy/empty, 1 = TOS is `f`, 2 = parse/runtime error.
+fn runEval(
+    ctx: *Context,
+    code: []const u8,
+    print_top: bool,
+    show_stack: bool,
+    err_writer: anytype,
+) u8 {
+    ctx.current_source = "<eval>";
+
+    ctx.pushLocalFrame() catch return 2;
+    defer ctx.popLocalFrame();
+    ctx.pushPragmaFrame() catch return 2;
+    defer ctx.popPragmaFrame();
+
+    const old_import_frame = ctx.import_frame_index;
+    ctx.import_frame_index = ctx.local_frames.items.len - 1;
+    defer ctx.import_frame_index = old_import_frame;
+
+    var processor: StatementProcessor = .{};
+    defer processor.deinit();
+
+    const alloc = ctx.quotationAllocator();
+
+    var start: usize = 0;
+    var line_num: usize = 0;
+    while (start < code.len) {
+        const end = std.mem.indexOfScalarPos(u8, code, start, '\n') orelse code.len;
+        const line = code[start..end];
+        start = end + 1;
+        line_num += 1;
+        processor.trackLine(line_num);
+
+        switch (processor.feedLine(alloc, line, ctx)) {
+            .needs_more_input => continue,
+            .parse_error => |err| {
+                if (ctx.parse_diagnostics != null) {
+                    printParseDiagnostics(ctx, err_writer, ctx.current_source, line_num, processor.start_line);
+                } else {
+                    err_writer.print("Error: {any}\n", .{err}) catch {};
+                }
+                err_writer.flush() catch {};
+                ctx.clearExecutionDetails();
+                return 2;
+            },
+            .complete => |instrs| {
+                if (instrs.len > 0) {
+                    adjustInstructionLines(instrs, processor.start_line);
+                    ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
+                        printErrorDetails(ctx, err_writer, err);
+                        err_writer.flush() catch {};
+                        return 2;
+                    };
+                }
+                processor.reset();
+            },
+        }
+    }
+
+    switch (processor.flush(alloc, ctx)) {
+        .needs_more_input => {},
+        .parse_error => |err| {
+            if (ctx.parse_diagnostics != null) {
+                printParseDiagnostics(ctx, err_writer, ctx.current_source, line_num, processor.start_line);
+            } else {
+                err_writer.print("Error: {any}\n", .{err}) catch {};
+            }
+            err_writer.flush() catch {};
+            ctx.clearExecutionDetails();
+            return 2;
+        },
+        .complete => |instrs| {
+            if (instrs.len > 0) {
+                adjustInstructionLines(instrs, processor.start_line);
+                ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
+                    printErrorDetails(ctx, err_writer, err);
+                    err_writer.flush() catch {};
+                    return 2;
+                };
+            }
+        },
+    }
+
+    const stack_items = ctx.stack.items.items;
+    const exit_code: u8 = blk: {
+        if (stack_items.len == 0) break :blk 0;
+        const top = stack_items[stack_items.len - 1];
+        switch (top) {
+            .boolean => |b| break :blk if (b) 0 else 1,
+            else => break :blk 0,
+        }
+    };
+
+    if (print_top and ctx.stack.items.items.len > 0) {
+        const top_copy = ctx.stack.items.items[ctx.stack.items.items.len - 1];
+        ctx.stack.push(top_copy) catch return 2;
+
+        const instrs = [_]Instruction{.{ .op = .{ .call_word = "inspect" }, .line = 0 }};
+        ctx.executeQuotation(.{ .instructions = &instrs }) catch |err| {
+            printErrorDetails(ctx, err_writer, err);
+            err_writer.flush() catch {};
+            return 2;
+        };
+
+        const stdout_file: File = .stdout();
+        var stdout_buf: [4096]u8 = undefined;
+        var stdout = stdout_file.writerStreaming(&stdout_buf);
+        const out = &stdout.interface;
+
+        const inspected = ctx.stack.pop() catch return 2;
+        switch (inspected) {
+            .string => |s| {
+                out.writeAll(s) catch {};
+                out.writeAll("\n") catch {};
+            },
+            else => {
+                inspected.write(out) catch {};
+                out.writeAll("\n") catch {};
+            },
+        }
+        out.flush() catch {};
+    }
+
+    if (show_stack) {
+        const stdout_file: File = .stdout();
+        var stdout_buf: [4096]u8 = undefined;
+        var stdout = stdout_file.writerStreaming(&stdout_buf);
+        const out = &stdout.interface;
+        out.writeAll("Stack: ") catch {};
+        ctx.stack.dump(out) catch {};
+        out.writeAll("\n") catch {};
+        out.flush() catch {};
+    }
+
+    return exit_code;
 }
 
 fn testTimeoutWatchdog(timeout_ns: u64, ctx: *Context) void {

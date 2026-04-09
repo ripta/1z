@@ -1,0 +1,2 @@
+\ Placeholder: argv-mode test; this file is never parsed because the
+\ unknown flag error fires before file loading.

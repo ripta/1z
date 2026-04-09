@@ -1,0 +1,26 @@
+Usage: 1z run [options] <file> [args...]
+
+Execute a 1z source file.
+
+Global options:
+  --max-memory=SIZE         Set memory limit (e.g. 128M, 1G; default 256M)
+  --load-path=PATH          Add a module search path (repeatable)
+  --stdlib-path=PATH        Override standard library path
+  --prelude=PATH            Override prelude file path
+
+Execution options:
+  --show-stack              Print the stack after execution
+  --debug                   Start in the interactive debugger
+  --break=WORD              Set a breakpoint on WORD (implies --debug)
+  --allow-all-recursion     Suppress non-tail recursion warnings
+  --compile=MODE            Set compile mode: off, eager, hybrid
+  --trace-words[=PAT]       Trace word execution (optional pattern filter)
+  --trace-resolve[=PAT]     Trace word resolution (optional pattern filter)
+  --trace-modules           Trace module loading
+  --trace-jit               Trace JIT compilation
+  --dump-scope=WORD         Dump scope after loading WORD
+  --deadlock-detect[=SECS]  Enable deadlock detection (default 5s)
+  --test-timeout=SECS       Set test timeout in seconds
+  -b, --benchmark           Enable benchmarking
+  --benchmark=verbose       Benchmark with human-readable output
+  --benchmark=json          Benchmark with JSON output

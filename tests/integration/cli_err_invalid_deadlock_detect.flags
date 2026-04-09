@@ -1,0 +1,4 @@
+@raw
+run
+--deadlock-detect=abc
+{file}

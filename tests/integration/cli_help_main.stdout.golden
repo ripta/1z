@@ -1,0 +1,31 @@
+Usage: 1z [<subcommand>] [options] [args...]
+
+Subcommands:
+  run <file> [args...]   Execute a 1z source file
+  eval '<expr>'          Evaluate an expression string
+  check <file>           Run static analysis without executing
+  repl                   Start the interactive REPL (default)
+  fmt [files...]         Format 1z source files
+  build <file>           Compile a 1z file to a native executable
+  version                Print version and exit
+
+Global options (available to all subcommands):
+  -h, --help              Show help
+  -V, --version           Show version
+  --max-memory=SIZE       Set memory limit (e.g. 128M, 1G; default 256M)
+  --load-path=PATH        Add a module search path (repeatable)
+  --stdlib-path=PATH      Override standard library path
+  --prelude=PATH          Override prelude file path
+
+Bare forms:
+  1z                      Enter the REPL (same as `1z repl`)
+  1z <file>               Alias for `1z run <file>`
+
+Environment variables:
+  ONEZ_MAX_MEMORY         Default memory limit (overridden by --max-memory)
+  ONEZ_COMPILE            Default compile mode (overridden by --compile)
+  ONEZ_PRELUDE            Default prelude path (overridden by --prelude)
+  ONEZ_LOAD_PATH          Colon-separated module search paths
+  ONEZ_STDLIB             Default standard library path
+
+Run '1z <subcommand> --help' for subcommand-specific options.
