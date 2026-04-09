@@ -26,7 +26,7 @@ member?: ( array elem -- ? ) [
 
 command-line-args "Check if a number is prime." parse-flags
 "number" @get
-dup 2 swap range-inclusive sieve
+dup 2 swap range-inclusive >iterator #collect sieve
 swap member?
 [ "prime" ] [ "not prime" ] if
 print-line

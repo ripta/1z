@@ -9,6 +9,7 @@ pub const Iterator = struct {
 
     pub const Kind = union(enum) {
         array: ArrayIter,
+        range: RangeIter,
         map: MapIter,
         filter: FilterIter,
         take: TakeIter,
@@ -18,6 +19,7 @@ pub const Iterator = struct {
     pub fn next(self: *Iterator, ctx: *Context) anyerror!?Value {
         return switch (self.kind) {
             .array => |*it| it.next(),
+            .range => |*it| it.next(),
             .map => |*it| try it.next(ctx),
             .filter => |*it| try it.next(ctx),
             .take => |*it| try it.next(ctx),
@@ -28,6 +30,7 @@ pub const Iterator = struct {
     pub fn kindName(self: *const Iterator) []const u8 {
         return switch (self.kind) {
             .array => "array",
+            .range => "range",
             .map => "map",
             .filter => "filter",
             .take => "take",
@@ -38,6 +41,12 @@ pub const Iterator = struct {
     pub fn progressDisplay(self: *const Iterator, writer: anytype) !void {
         switch (self.kind) {
             .array => |it| try writer.print("{d}/{d}", .{ it.index, it.items.len }),
+            .range => |it| {
+                if (it.infinite)
+                    try writer.print("{d}/inf", .{it.current})
+                else
+                    try writer.print("{d}..{d} step {d}", .{ it.current, it.end, it.step });
+            },
             .map => |it| {
                 try writer.writeAll("map(");
                 try it.inner.progressDisplay(writer);
@@ -71,6 +80,29 @@ pub const ArrayIter = struct {
         const val = self.items[self.index];
         self.index += 1;
         return val;
+    }
+};
+
+pub const RangeIter = struct {
+    current: i64,
+    end: i64,
+    step: i64,
+    infinite: bool,
+
+    pub fn next(self: *RangeIter) ?Value {
+        if (self.infinite) {
+            const val = self.current;
+            self.current +%= self.step;
+            return .{ .integer = val };
+        }
+        if (self.step > 0) {
+            if (self.current >= self.end) return null;
+        } else {
+            if (self.current <= self.end) return null;
+        }
+        const val = self.current;
+        self.current +%= self.step;
+        return .{ .integer = val };
     }
 };
 
@@ -149,4 +181,40 @@ test "ArrayIter on empty array returns null immediately" {
 test "Iterator kindName returns correct name" {
     const iter = Iterator{ .kind = .{ .array = .{ .items = &.{}, .index = 0 } } };
     try std.testing.expectEqualStrings("array", iter.kindName());
+}
+
+test "RangeIter ascending exclusive" {
+    var it = RangeIter{ .current = 1, .end = 5, .step = 1, .infinite = false };
+    try std.testing.expectEqual(@as(i64, 1), it.next().?.integer);
+    try std.testing.expectEqual(@as(i64, 2), it.next().?.integer);
+    try std.testing.expectEqual(@as(i64, 3), it.next().?.integer);
+    try std.testing.expectEqual(@as(i64, 4), it.next().?.integer);
+    try std.testing.expect(it.next() == null);
+}
+
+test "RangeIter descending exclusive" {
+    var it = RangeIter{ .current = 5, .end = 1, .step = -1, .infinite = false };
+    try std.testing.expectEqual(@as(i64, 5), it.next().?.integer);
+    try std.testing.expectEqual(@as(i64, 4), it.next().?.integer);
+    try std.testing.expectEqual(@as(i64, 3), it.next().?.integer);
+    try std.testing.expectEqual(@as(i64, 2), it.next().?.integer);
+    try std.testing.expect(it.next() == null);
+}
+
+test "RangeIter stepped" {
+    var it = RangeIter{ .current = 1, .end = 10, .step = 3, .infinite = false };
+    try std.testing.expectEqual(@as(i64, 1), it.next().?.integer);
+    try std.testing.expectEqual(@as(i64, 4), it.next().?.integer);
+    try std.testing.expectEqual(@as(i64, 7), it.next().?.integer);
+    try std.testing.expect(it.next() == null);
+}
+
+test "RangeIter empty when start equals end" {
+    var it = RangeIter{ .current = 5, .end = 5, .step = 1, .infinite = false };
+    try std.testing.expect(it.next() == null);
+}
+
+test "RangeIter kindName returns range" {
+    const iter = Iterator{ .kind = .{ .range = .{ .current = 0, .end = 10, .step = 1, .infinite = false } } };
+    try std.testing.expectEqualStrings("range", iter.kindName());
 }

@@ -1,4 +1,4 @@
-=== range-inclusive ===
+=== range= ===
 Stack: [ ]
 PASS: simple range
 Stack: [ ]
@@ -8,5 +8,5 @@ PASS: from zero
 Stack: [ ]
 PASS: negative to positive
 Stack: [ ]
-PASS: empty when start > end
+PASS: descending
 Stack: [ ]

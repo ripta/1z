@@ -15,4 +15,4 @@ use "grid" ;
 
 "add-load-path adds searchable directory" test-section
 use "ranges" ;
-0 5 range #len 5 "ranges available via stdlib" assert=
+0 5 range type-of range: "ranges available via stdlib" assert=

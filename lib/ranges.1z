@@ -1,29 +1,34 @@
-\ lib/ranges.1z - Ranging over integers
+\ lib/ranges.1z - Range type for lazy integer sequences
 
-\ Helper for range: ( arr counter limit -- arr )
-range-loop: [
-  2dup <
-  [
-    [ swap over 1array #append swap ++ ] dip
-    range-loop
-  ]
-  [ 2drop ]
-  if
+\ Range virtual type: start, end, step, infinite? fields
+range: virtual{ struct{ start end step infinite? } } ;
+
+\ Exclusive range [start, end) with auto-step +-1
+range: ( start end -- range ) [
+  2dup < [ 1 ] [ -1 ] if f >range
 ] ;
 
-\ Generate exclusive range [start, end)
-range: ( start end -- array ) [
-  2dup <
-  [
-    { } -rot>   \ arr start end
-    range-loop  \ arr
-  ]
-  [ 2drop { } ]
-  if
+\ Inclusive range [start, end] with auto-step +-1
+\ Adjusts end to convert to exclusive representation internally
+range=: ( start end -- range ) [
+  2dup < [ ++ 1 ] [ -- -1 ] if f >range
+] ;
+
+\ Exclusive range with explicit step
+range-step: ( start end step -- range ) [
+  dup 0 = [ "range-step: step must not be zero" throw ] when
+  2 pick-n 2 pick-n < over 0 < and
+  [ "range-step: ascending range requires positive step" throw ] when
+  2 pick-n 2 pick-n > over 0 > and
+  [ "range-step: descending range requires negative step" throw ] when
+  f >range
 ] ;
 
 \ Generate exclusive range [0, n)
-iota: ( n -- array ) [ 0 swap range ] ;
+iota: ( n -- range ) [ 0 swap range ] ;
 
-\ Generate inclusive range [start, end]
-range-inclusive: ( start end -- array ) [ ++ range ] ;
+\ Inclusive range (legacy alias for range=)
+range-inclusive: ( start end -- range ) [ range= ] ;
+
+\ Iterator support: convert range to a lazy iterator
+>iterator: method{ range } [ range> make-range-iter ] ;
