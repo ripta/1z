@@ -44,8 +44,8 @@ pub const primitives = [_]Primitive{
     .{ .name = "stream-seek-end", .stack_effect = "stream offset --", .doc = "Seek relative to end of stream.", .func = nativeStreamSeekEnd },
     .{ .name = "buffering-mode", .stack_effect = "stream -- symbol", .doc = "Get stream buffering mode.", .func = nativeBufferingMode },
     .{ .name = "set-buffering-mode", .stack_effect = "stream symbol --", .doc = "Set stream buffering mode (none:, line:, block:).", .func = nativeSetBufferingMode },
-    .{ .name = "stream->fd", .stack_effect = "stream -- int", .doc = "Get file descriptor from stream (Unix only).", .func = nativeStreamToFd },
-    .{ .name = "fd->stream", .stack_effect = "int mode -- stream", .doc = "Create stream from file descriptor (Unix only).", .func = nativeFdToStream },
+    .{ .name = "stream>fd", .stack_effect = "stream -- int", .doc = "Get file descriptor from stream (Unix only).", .func = nativeStreamToFd },
+    .{ .name = "fd>stream", .stack_effect = "fd -- stream", .doc = "Create stream from file descriptor (Unix only). Opens in read-write mode.", .func = nativeFdToStream },
     .{ .name = "<pipe>", .stack_effect = "-- rd wr", .doc = "Create a Unix pipe, returning read-end and write-end streams.", .func = nativePipe },
     .{ .name = ">char", .stack_effect = "codepoint -- str", .doc = "Convert Unicode codepoint to single-character string.", .func = nativeChr },
     .{ .name = ">codepoint", .stack_effect = "str -- int", .doc = "Convert single-character string to Unicode codepoint.", .func = nativeToCodepoint },
@@ -212,17 +212,20 @@ pub fn nativeStreamFlush(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
 
-    // Note: Zig's std.fs.File doesn't have a direct flush method for unbuffered I/O
-    // For buffered streams, we'd need to sync. For now, use sync for file streams.
-    // Standard streams (stdout/stderr) are typically line-buffered or unbuffered.
-    if (!std.mem.eql(u8, stream.name, "stdin") and
-        !std.mem.eql(u8, stream.name, "stdout") and
-        !std.mem.eql(u8, stream.name, "stderr"))
+    // NOTE(ripta): The standard streams and fd-based streams, e.g., sockets and pipes,
+    //              are unbuffered at the zig file level, so sync is a no-op or unsupported.
+    if (std.mem.eql(u8, stream.name, "stdin") or
+        std.mem.eql(u8, stream.name, "stdout") or
+        std.mem.eql(u8, stream.name, "stderr") or
+        std.mem.eql(u8, stream.name, "fd") or
+        std.mem.eql(u8, stream.name, "pipe"))
     {
-        stream.file.sync() catch |err| {
-            return mapFileSyncError(err);
-        };
+        return;
     }
+
+    stream.file.sync() catch |err| {
+        return mapFileSyncError(err);
+    };
 }
 
 // =============================================================================
@@ -430,7 +433,7 @@ pub fn nativeSetBufferingMode(ctx: *Context) anyerror!void {
 // Unix interop primitives
 // =============================================================================
 
-/// stream->fd ( stream -- int ) - Get file descriptor from stream (Unix only)
+/// stream>fd ( stream -- int ) - Get file descriptor from stream (Unix only)
 pub fn nativeStreamToFd(ctx: *Context) anyerror!void {
     if (native_os == .windows) {
         return error.UnsupportedOperation;
@@ -443,35 +446,30 @@ pub fn nativeStreamToFd(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .integer = fd });
 }
 
-/// fd->stream ( int mode -- stream ) - Create stream from file descriptor (Unix only)
+/// fd>stream ( fd -- stream ) - Create stream from file descriptor (Unix only)
+///
+/// Always opens in read-write mode, since we don't have access to the original
+/// mode and Unix fds are generally more flexible than zig's File.
+///
+/// If the fd is invalid or negative, returns an error.
+///
+/// The resulting stream won't have a meaningful name, so it's just "fd". 😬
 pub fn nativeFdToStream(ctx: *Context) anyerror!void {
     if (native_os == .windows) {
         return error.UnsupportedOperation;
     }
 
-    const mode_sym = try popSymbol(ctx);
     const fd_val = try popInteger(ctx);
 
     if (fd_val < 0) {
         return error.InvalidArgument;
     }
 
-    const mode: StreamMode = if (std.mem.eql(u8, mode_sym, "read"))
-        .read
-    else if (std.mem.eql(u8, mode_sym, "write"))
-        .write
-    else if (std.mem.eql(u8, mode_sym, "append"))
-        .append
-    else if (std.mem.eql(u8, mode_sym, "read-write"))
-        .read_write
-    else
-        return error.InvalidArgument;
-
     const alloc = ctx.quotationAllocator();
     const stream = alloc.create(Stream) catch return error.OutOfMemory;
     stream.* = Stream{
         .file = std.fs.File{ .handle = @intCast(fd_val) },
-        .mode = mode,
+        .mode = .read_write,
         .name = "fd",
     };
     try ctx.stack.push(.{ .stream = stream });

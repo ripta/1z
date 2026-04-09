@@ -1,0 +1,38 @@
+=== split-host-port basic ===
+PASS: port from host:port
+PASS: host from host:port
+PASS: port 443
+PASS: host 0.0.0.0
+PASS: port from localhost
+PASS: host localhost
+=== split-host-port error cases ===
+PASS: missing port error
+=== addr construction ===
+PASS: addr:tcp? predicate
+PASS: not addr:udp?
+PASS: addr:unix? predicate
+=== resolve on IP address ===
+PASS: resolve returns 1 address for IP
+PASS: resolved addr is addr:tcp
+=== socket lifecycle ===
+PASS: socket returns positive fd
+PASS: socket lifecycle (create, bind, listen, close)
+=== fd-close ===
+PASS: socket fd is positive
+PASS: fd-close
+=== tcp-listen and tcp-close ===
+PASS: tcp-listen returns tcp-server
+PASS: tcp-listen and tcp-close
+=== connect and accept ===
+PASS: connect and accept
+=== echo server ===
+PASS: echoed 5 bytes
+PASS: echo server
+=== server-config defaults ===
+PASS: default host
+PASS: default port
+PASS: default backlog
+PASS: server-config defaults
+=== start-server ===
+PASS: start-server returns tcp-server
+PASS: start-server

@@ -3,15 +3,15 @@
 use "testing" ;
 use "strings" ;
 
-"index-of" test-section
-"hello,world" "," index-of 5 "comma in middle" assert=
-"abcabc" "abc" index-of 0 "match at start" assert=
-"hello" "xyz" index-of -1 "no match" assert=
-"aaa" "a" index-of 0 "first occurrence" assert=
-"hello" "lo" index-of 3 "multi-char substring" assert=
-"abc" "abc" index-of 0 "exact match" assert=
-"ab" "abc" index-of -1 "sub longer than str" assert=
-"a::b::c" "::" index-of 1 "multi-char delimiter" assert=
+"#index-of" test-section
+"hello,world" "," #index-of 5 "comma in middle" assert=
+"abcabc" "abc" #index-of 0 "match at start" assert=
+"hello" "xyz" #index-of f "no match" assert=
+"aaa" "a" #index-of 0 "first occurrence" assert=
+"hello" "lo" #index-of 3 "multi-char substring" assert=
+"abc" "abc" #index-of 0 "exact match" assert=
+"ab" "abc" #index-of f "sub longer than str" assert=
+"a::b::c" "::" #index-of 1 "multi-char delimiter" assert=
 
 "split basics" test-section
 "a,b,c" "," split { "a" "b" "c" } "split by comma" assert=
