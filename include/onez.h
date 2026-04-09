@@ -92,6 +92,17 @@ typedef void *onez_type_t;
 #define ONEZ_ERR_WORD_NOT_FOUND     9
 #define ONEZ_ERR_ISOLATION_UNDERFLOW 10
 
+/* ---- Diagnostic severity ---- *
+ *
+ * Returned by onez_diag_severity() to classify diagnostics produced by
+ * onez_check(). Values match the declaration order of the internal
+ * Severity enum, so the mapping is stable.
+ */
+
+#define ONEZ_DIAG_ERROR   0
+#define ONEZ_DIAG_WARNING 1
+#define ONEZ_DIAG_NOTE    2
+
 /* ----- Lifecycle ----- */
 
 /*
@@ -467,6 +478,140 @@ const char *onez_last_error(onez_t ctx);
  * error type, stack traces, and hints when available.
  */
 void onez_print_error(onez_t ctx);
+
+/* ---- Static analysis ---- *
+ *
+ * onez_check() runs 1z's static analyzer over a chunk of source without
+ * executing non-definition statements. It is the embedded equivalent of
+ * the `--check` CLI flag: stack-effect inference, type checking, and
+ * arity validation are performed and reported as diagnostics, which can
+ * be iterated with the onez_diag_* accessors below.
+ *
+ * Behavior
+ * --------
+ * - The source is parsed line-by-line using the same statement processor
+ *   that onez_eval() uses.
+ * - Statements ending in `;` are treated as definitions: they are
+ *   registered into the current local frame. All other statements are
+ *   parsed and dropped; they are NOT executed.
+ * - After parsing, the inference engine analyzes every compound word
+ *   whose `source_file` matches `ctx.current_source` at the time of the
+ *   call.
+ * - Any #pragma directives in the checked source (`suppress-checks`,
+ *   `suppress-undeclared`, `type-check`, `callsite-arity-mismatch`)
+ *   affect severity and reporting exactly as they would under `--check`.
+ *
+ * Persistence
+ * -----------
+ * onez_check() is persistent by default: definitions added by the call
+ * remain in the dictionary after it returns. This matches onez_eval().
+ * Repeated onez_check() calls against different source names accumulate;
+ * calls against the same source name redefine those words.
+ *
+ * To run an ephemeral check, wrap the call in an isolation bracket. This
+ * is the composable way to opt into ephemeral semantics, and it lets the
+ * caller read diagnostics BEFORE the isolation frame is popped:
+ *
+ *   // Check a snippet without leaking definitions into the host context.
+ *   onez_isolation_begin(ctx);
+ *   int rc = onez_check(ctx, src, len);
+ *   for (size_t i = 0; i < onez_diag_count(ctx); i++) {
+ *       fprintf(stderr, "%s: %s\n",
+ *               onez_diag_source(ctx, i),
+ *               onez_diag_message(ctx, i));
+ *   }
+ *   onez_isolation_end(ctx);
+ *
+ * No dedicated `onez_check_isolated` helper is provided because the
+ * bracket form above is both trivial and more flexible.
+ *
+ * Source scoping
+ * --------------
+ * Analysis filters to words whose `source_file` equals `ctx.current_source`
+ * at the time of the call. To check multiple independent snippets, set a
+ * distinct source name with onez_set_source() before each call (for
+ * example, a file path or a synthetic name like "snippet-1"). Without
+ * explicit source control, every word defined under the default "<repl>"
+ * source is re-analyzed on each call.
+ *
+ * Return code
+ * -----------
+ * Returns ONEZ_OK (0) when no error-severity diagnostics were produced
+ * and parsing succeeded. Returns 1 if any error diagnostic was produced
+ * or if parsing failed. Warnings and notes DO NOT affect the return
+ * code; iterate with onez_diag_* to discover them.
+ *
+ * Parse errors vs inference diagnostics
+ * -------------------------------------
+ * Parse errors surface through onez_last_error() and DO NOT populate the
+ * diagnostics list: onez_diag_count() returns 0 in that case. This
+ * matches the LSP separation between syntax errors and inference output.
+ * Callers that want to treat both uniformly can check onez_last_error()
+ * whenever onez_check() returns a non-zero code.
+ *
+ * Diagnostic lifetime
+ * -------------------
+ * Each onez_check() call clears the previous diagnostics list before
+ * running. Any pointers returned by a previous onez_diag_message(),
+ * onez_diag_source(), or onez_diag_word() call are invalidated at the
+ * start of the next onez_check() on the same handle. Other API calls
+ * (including onez_eval) do not touch the diagnostics list.
+ */
+int onez_check(onez_t ctx, const char *code, size_t len);
+
+/*
+ * Return the number of diagnostics produced by the most recent
+ * onez_check() call on this handle. Returns 0 on a null handle.
+ */
+size_t onez_diag_count(onez_t ctx);
+
+/*
+ * Return the severity of the diagnostic at `index`. One of
+ * ONEZ_DIAG_ERROR, ONEZ_DIAG_WARNING, or ONEZ_DIAG_NOTE.
+ * Returns -1 on a null handle or out-of-range index.
+ */
+int onez_diag_severity(onez_t ctx, size_t index);
+
+/*
+ * Return the null-terminated message of the diagnostic at `index`.
+ * Returns NULL on a null handle or out-of-range index.
+ *
+ * The returned pointer is valid only until the next onez_check() call
+ * on this handle. Hosts that need to retain diagnostic data across
+ * checks must copy the string.
+ */
+const char *onez_diag_message(onez_t ctx, size_t index);
+
+/*
+ * Return the null-terminated source-file name attributed to the
+ * diagnostic at `index`. Returns NULL when the underlying diagnostic
+ * has no associated source file, on a null handle, or on an
+ * out-of-range index.
+ *
+ * The returned pointer is valid only until the next onez_check() call
+ * on this handle. Hosts that need to retain diagnostic data across
+ * checks must copy the string.
+ */
+const char *onez_diag_source(onez_t ctx, size_t index);
+
+/*
+ * Return the source line of the diagnostic at `index`. Returns 0 when
+ * the line is unknown, the handle is null, or the index is out of
+ * range. Callers that need to distinguish "unknown line" from
+ * "out-of-range index" should check onez_diag_count() first.
+ */
+size_t onez_diag_line(onez_t ctx, size_t index);
+
+/*
+ * Return the null-terminated name of the word the diagnostic at
+ * `index` was reported against. Returns NULL on a null handle or
+ * out-of-range index.
+ *
+ * The returned pointer is valid only until the next onez_check() call
+ * on this handle. Hosts that need to retain diagnostic data across
+ * checks must copy the string.
+ */
+const char *onez_diag_word(onez_t ctx, size_t index);
 
 /* ---- Configuration ---- */
 

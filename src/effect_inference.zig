@@ -69,6 +69,81 @@ pub const Diagnostic = struct {
     message: []const u8,
 };
 
+/// Derived settings that control how `InferenceEngine` runs a static-analysis
+/// pass. Produced by `readCheckPragmas` from the current pragma stack so that
+/// both the CLI `--check` path and the `onez_check` C API honor pragmas
+/// identically.
+pub const CheckPragmaSettings = struct {
+    severity_override: ?Severity,
+    suppressed: bool,
+    suppress_undeclared: bool,
+    type_check_mode: InferenceEngine.TypeCheckMode,
+    arity_check_mode: InferenceEngine.ArityCheckMode,
+};
+
+/// Read the `suppress-checks`, `suppress-undeclared`, `type-check`, and
+/// `callsite-arity-mismatch` pragmas from the given context and translate
+/// them into the settings consumed by `InferenceEngine.init`.
+pub fn readCheckPragmas(ctx: *const Context) CheckPragmaSettings {
+    var settings: CheckPragmaSettings = .{
+        .severity_override = null,
+        .suppressed = false,
+        .suppress_undeclared = false,
+        .type_check_mode = .err,
+        .arity_check_mode = .err,
+    };
+
+    if (ctx.getPragma("suppress-checks")) |pragma_val| {
+        switch (pragma_val) {
+            .string => |s| {
+                if (std.mem.eql(u8, s, "warn-only")) {
+                    settings.severity_override = .warning;
+                } else if (std.mem.eql(u8, s, "all")) {
+                    settings.suppressed = true;
+                }
+            },
+            else => {},
+        }
+    }
+
+    if (ctx.getPragma("suppress-undeclared")) |pragma_val| {
+        switch (pragma_val) {
+            .boolean => |b| {
+                settings.suppress_undeclared = b;
+            },
+            else => {},
+        }
+    }
+
+    if (ctx.getPragma("type-check")) |pragma_val| {
+        switch (pragma_val) {
+            .string => |s| {
+                if (std.mem.eql(u8, s, "off")) {
+                    settings.type_check_mode = .off;
+                } else if (std.mem.eql(u8, s, "warning")) {
+                    settings.type_check_mode = .warning;
+                }
+            },
+            else => {},
+        }
+    }
+
+    if (ctx.getPragma("callsite-arity-mismatch")) |pragma_val| {
+        switch (pragma_val) {
+            .string => |s| {
+                if (std.mem.eql(u8, s, "off")) {
+                    settings.arity_check_mode = .off;
+                } else if (std.mem.eql(u8, s, "warning")) {
+                    settings.arity_check_mode = .warning;
+                }
+            },
+            else => {},
+        }
+    }
+
+    return settings;
+}
+
 const max_union_types = 8;
 
 /// Static-analysis stack entry for a concrete typed value.

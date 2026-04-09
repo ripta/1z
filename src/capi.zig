@@ -6,6 +6,9 @@ const Context = context_mod.Context;
 const statement_mod = @import("statement.zig");
 const StatementProcessor = statement_mod.StatementProcessor;
 
+const effect_inference = @import("effect_inference.zig");
+const call_graph = @import("call_graph.zig");
+
 const errors_mod = @import("primitives/errors.zig");
 const pascalToKebabRuntime = errors_mod.pascalToKebabRuntime;
 
@@ -30,6 +33,19 @@ const HostWordRegistration = struct {
     name: []const u8,
 };
 
+/// Handle-owned snapshot of an InferenceEngine diagnostic. The engine frees
+/// `message` in its `deinit`, and `word_name`/`source_file` are borrowed
+/// references into the dictionary and source arena; copying all three gives
+/// a single lifetime contract for `onez_diag_*` callers: each pointer is
+/// valid until the next `onez_check` call on the same handle.
+const OwnedDiagnostic = struct {
+    severity: effect_inference.Severity,
+    message: [:0]const u8,
+    source_file: ?[:0]const u8,
+    source_line: usize,
+    word_name: [:0]const u8,
+};
+
 const OnezHandle = struct {
     gpa: *std.heap.GeneralPurposeAllocator(.{}),
     ctx: *Context,
@@ -38,6 +54,7 @@ const OnezHandle = struct {
     saved_obligation_frames: std.ArrayListUnmanaged(
         std.ArrayListUnmanaged(context_mod.ProtocolObligation),
     ) = .{},
+    diagnostics: std.ArrayListUnmanaged(OwnedDiagnostic) = .{},
 };
 
 const page = std.heap.page_allocator;
@@ -78,6 +95,18 @@ pub const ONEZ_ERR_NOT_HOST_WORD: c_int = 7;
 pub const ONEZ_ERR_INVALID_EFFECT: c_int = 8;
 pub const ONEZ_ERR_WORD_NOT_FOUND: c_int = 9;
 pub const ONEZ_ERR_ISOLATION_UNDERFLOW: c_int = 10;
+
+// Diagnostic severity constants returned by onez_diag_severity.
+// These match @intFromEnum of effect_inference.Severity by declaration order.
+pub const ONEZ_DIAG_ERROR: c_int = 0;
+pub const ONEZ_DIAG_WARNING: c_int = 1;
+pub const ONEZ_DIAG_NOTE: c_int = 2;
+
+comptime {
+    std.debug.assert(@intFromEnum(effect_inference.Severity.err) == ONEZ_DIAG_ERROR);
+    std.debug.assert(@intFromEnum(effect_inference.Severity.warning) == ONEZ_DIAG_WARNING);
+    std.debug.assert(@intFromEnum(effect_inference.Severity.note) == ONEZ_DIAG_NOTE);
+}
 
 /// Initialize the 1z runtime with primitives only; no prelude is loaded.
 ///
@@ -129,6 +158,8 @@ export fn onez_deinit(ptr: ?*anyopaque) void {
     const allocator = handle.gpa.allocator();
 
     clearLastError(handle);
+    clearDiagnostics(handle);
+    handle.diagnostics.deinit(allocator);
 
     for (handle.host_words.items) |entry| {
         allocator.free(entry.name);
@@ -399,6 +430,206 @@ export fn onez_eval_isolated(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_
 
     if (eval_rc != ONEZ_OK) return eval_rc;
     return end_rc;
+}
+
+/// Run static analysis on a chunk of 1z source without executing
+/// non-definition statements.
+///
+/// Parses the buffer line-by-line using the same statement processor as
+/// `onez_eval`. Definition statements (those ending in `;`) are registered
+/// into the current local frame; non-definition statements are parsed and
+/// dropped. After parsing, stack-effect inference, type checking, and arity
+/// validation run over every compound word whose `source_file` matches
+/// `ctx.current_source`. Diagnostics are copied onto the handle and can be
+/// iterated with the `onez_diag_*` accessors.
+///
+/// Definitions persist in the dictionary after the call, matching
+/// `onez_eval` semantics. Hosts that want ephemeral checking wrap the call
+/// in `onez_isolation_begin` / `onez_isolation_end`.
+///
+/// Returns `ONEZ_OK` (0) when no error-severity diagnostics were produced
+/// and parsing succeeded; returns `1` if any error diagnostic was produced
+/// or parsing failed. Warnings and notes do not affect the return code.
+/// Parse errors surface through `onez_last_error` and do not populate the
+/// diagnostics list.
+export fn onez_check(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const ctx = handle.ctx;
+    const alloc = ctx.quotationAllocator();
+    const source = code[0..len];
+
+    ctx.clearExecutionDetails();
+    clearLastError(handle);
+    clearDiagnostics(handle);
+
+    const prev_check_mode = ctx.check_mode;
+    ctx.check_mode = true;
+    defer ctx.check_mode = prev_check_mode;
+
+    var processor: StatementProcessor = .{};
+    defer processor.deinit();
+
+    var start: usize = 0;
+    while (start < source.len) {
+        const end = std.mem.indexOfScalarPos(u8, source, start, '\n') orelse source.len;
+        const line = source[start..end];
+        start = end + 1;
+
+        switch (processor.feedLine(alloc, line, ctx)) {
+            .needs_more_input => continue,
+            .parse_error => |err| {
+                captureError(handle, err);
+                return 1;
+            },
+            .complete => |instrs| {
+                if (instrs.len > 0 and Context.isDefinitionStatement(instrs)) {
+                    ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
+                        captureError(handle, err);
+                        return 1;
+                    };
+                }
+                processor.reset();
+            },
+        }
+    }
+
+    switch (processor.flush(alloc, ctx)) {
+        .needs_more_input => {},
+        .parse_error => |err| {
+            captureError(handle, err);
+            return 1;
+        },
+        .complete => |instrs| {
+            if (instrs.len > 0 and Context.isDefinitionStatement(instrs)) {
+                ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
+                    captureError(handle, err);
+                    return 1;
+                };
+            }
+        },
+    }
+
+    _ = call_graph.build(&ctx.dictionary, &ctx.dispatch, ctx.quotationAllocator()) catch {
+        setLastError(handle, "onez_check: failed to build call graph", .{});
+        return 1;
+    };
+
+    const settings = effect_inference.readCheckPragmas(ctx);
+
+    var engine = effect_inference.InferenceEngine.init(
+        &ctx.dictionary,
+        &ctx.dispatch,
+        ctx.local_frames.items,
+        ctx.quotationAllocator(),
+        settings.severity_override,
+        settings.suppressed,
+        settings.suppress_undeclared,
+        &ctx.builtin_type_values,
+        ctx.getAnyTypeSentinel(),
+        settings.type_check_mode,
+        settings.arity_check_mode,
+    );
+    defer engine.deinit();
+
+    engine.analyzeAll(ctx.current_source) catch {
+        setLastError(handle, "onez_check: effect inference failed", .{});
+        return 1;
+    };
+
+    // Deep-copy diagnostics BEFORE engine.deinit frees their `message` slices.
+    const handle_alloc = handle.gpa.allocator();
+    handle.diagnostics.ensureTotalCapacity(handle_alloc, engine.getDiagnostics().len) catch {
+        setLastError(handle, "onez_check: failed to allocate diagnostics buffer", .{});
+        return 1;
+    };
+
+    var any_error = false;
+    for (engine.getDiagnostics()) |diag| {
+        const msg_copy = handle_alloc.dupeZ(u8, diag.message) catch {
+            setLastError(handle, "onez_check: failed to copy diagnostic message", .{});
+            return 1;
+        };
+        const word_copy = handle_alloc.dupeZ(u8, diag.word_name) catch {
+            freeZ(handle_alloc, msg_copy);
+            setLastError(handle, "onez_check: failed to copy diagnostic word", .{});
+            return 1;
+        };
+        var source_copy: ?[:0]const u8 = null;
+        if (diag.source_file) |sf| {
+            source_copy = handle_alloc.dupeZ(u8, sf) catch {
+                freeZ(handle_alloc, msg_copy);
+                freeZ(handle_alloc, word_copy);
+                setLastError(handle, "onez_check: failed to copy diagnostic source", .{});
+                return 1;
+            };
+        }
+
+        handle.diagnostics.appendAssumeCapacity(.{
+            .severity = diag.severity,
+            .message = msg_copy,
+            .source_file = source_copy,
+            .source_line = diag.source_line,
+            .word_name = word_copy,
+        });
+
+        if (diag.severity == .err) any_error = true;
+    }
+
+    return if (any_error) 1 else ONEZ_OK;
+}
+
+/// Return the number of diagnostics produced by the most recent
+/// `onez_check` call on this handle.
+export fn onez_diag_count(ptr: ?*anyopaque) usize {
+    const handle = castHandle(ptr) orelse return 0;
+    return handle.diagnostics.items.len;
+}
+
+/// Return the severity of the diagnostic at `index`, one of
+/// `ONEZ_DIAG_ERROR`, `ONEZ_DIAG_WARNING`, `ONEZ_DIAG_NOTE`. Returns `-1`
+/// if the handle is null or the index is out of range.
+export fn onez_diag_severity(ptr: ?*anyopaque, index: usize) c_int {
+    const handle = castHandle(ptr) orelse return -1;
+    if (index >= handle.diagnostics.items.len) return -1;
+    return @intFromEnum(handle.diagnostics.items[index].severity);
+}
+
+/// Return the human-readable message of the diagnostic at `index`. The
+/// returned pointer is valid until the next `onez_check` call on this
+/// handle. Returns null on null handle or out-of-range index.
+export fn onez_diag_message(ptr: ?*anyopaque, index: usize) ?[*:0]const u8 {
+    const handle = castHandle(ptr) orelse return null;
+    if (index >= handle.diagnostics.items.len) return null;
+    return handle.diagnostics.items[index].message.ptr;
+}
+
+/// Return the source file attributed to the diagnostic at `index`, or
+/// null if the diagnostic has no associated source file or the index is
+/// out of range. The returned pointer is valid until the next
+/// `onez_check` call on this handle.
+export fn onez_diag_source(ptr: ?*anyopaque, index: usize) ?[*:0]const u8 {
+    const handle = castHandle(ptr) orelse return null;
+    if (index >= handle.diagnostics.items.len) return null;
+    const src = handle.diagnostics.items[index].source_file orelse return null;
+    return src.ptr;
+}
+
+/// Return the source line of the diagnostic at `index`, or `0` if the
+/// line is unknown, the handle is null, or the index is out of range.
+export fn onez_diag_line(ptr: ?*anyopaque, index: usize) usize {
+    const handle = castHandle(ptr) orelse return 0;
+    if (index >= handle.diagnostics.items.len) return 0;
+    return handle.diagnostics.items[index].source_line;
+}
+
+/// Return the name of the word the diagnostic at `index` was reported
+/// against. The returned pointer is valid until the next `onez_check`
+/// call on this handle. Returns null on null handle or out-of-range
+/// index.
+export fn onez_diag_word(ptr: ?*anyopaque, index: usize) ?[*:0]const u8 {
+    const handle = castHandle(ptr) orelse return null;
+    if (index >= handle.diagnostics.items.len) return null;
+    return handle.diagnostics.items[index].word_name.ptr;
 }
 
 /// Register a host callback as a 1z word.
@@ -1331,6 +1562,22 @@ fn clearLastError(handle: *OnezHandle) void {
         handle.gpa.allocator().free(@as([]const u8, msg.ptr[0 .. msg.len + 1]));
         handle.last_error = null;
     }
+}
+
+fn freeZ(allocator: std.mem.Allocator, s: [:0]const u8) void {
+    allocator.free(@as([]const u8, s.ptr[0 .. s.len + 1]));
+}
+
+fn clearDiagnostics(handle: *OnezHandle) void {
+    const allocator = handle.gpa.allocator();
+    for (handle.diagnostics.items) |entry| {
+        freeZ(allocator, entry.message);
+        freeZ(allocator, entry.word_name);
+        if (entry.source_file) |src| {
+            freeZ(allocator, src);
+        }
+    }
+    handle.diagnostics.clearRetainingCapacity();
 }
 
 fn setLastError(handle: *OnezHandle, comptime fmt: []const u8, args: anytype) void {
@@ -2958,4 +3205,190 @@ test "isolation nests" {
     try std.testing.expectEqual(ONEZ_OK, onez_isolation_end(handle_ptr));
     try std.testing.expectEqual(ONEZ_OK, onez_isolation_end(handle_ptr));
     try std.testing.expectEqual(ONEZ_ERR_ISOLATION_UNDERFLOW, onez_isolation_end(handle_ptr));
+}
+
+// =============================================================================
+// Eval Modes: Static analysis
+// =============================================================================
+
+test "check with null handle returns NULL_HANDLE" {
+    const src = "";
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_check(null, src, src.len));
+}
+
+test "check on clean code returns OK with zero diagnostics" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-clean";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const src = "dbl: ( n -- n ) [ 2 * ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src, src.len));
+    try std.testing.expectEqual(@as(usize, 0), onez_diag_count(handle_ptr));
+}
+
+test "check on arity-mismatched definition reports error diagnostic" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-arity";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    // Declared to leave one value on the stack but leaves none.
+    const src = "bad: ( -- n ) [ ] ;";
+    try std.testing.expectEqual(@as(c_int, 1), onez_check(handle_ptr, src, src.len));
+
+    try std.testing.expect(onez_diag_count(handle_ptr) > 0);
+    try std.testing.expectEqual(@as(c_int, ONEZ_DIAG_ERROR), onez_diag_severity(handle_ptr, 0));
+}
+
+test "check diagnostic accessors return expected fields" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-accessors";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const src = "bad: ( -- n ) [ ] ;";
+    try std.testing.expectEqual(@as(c_int, 1), onez_check(handle_ptr, src, src.len));
+    try std.testing.expect(onez_diag_count(handle_ptr) > 0);
+
+    try std.testing.expect(onez_diag_message(handle_ptr, 0) != null);
+    try std.testing.expect(onez_diag_word(handle_ptr, 0) != null);
+
+    const source_ptr = onez_diag_source(handle_ptr, 0);
+    try std.testing.expect(source_ptr != null);
+    const source_slice = std.mem.span(source_ptr.?);
+    try std.testing.expectEqualStrings(tag, source_slice);
+
+    try std.testing.expect(onez_diag_line(handle_ptr, 0) > 0);
+}
+
+test "check honors type-check warning pragma" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-warning";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const src =
+        "pragma{ type-check: \"warning\" }\n" ++
+        "pragma{ suppress-undeclared: t }\n" ++
+        "typed-add: ( n: fixnum -- m ) [ 1 + ] ;\n" ++
+        "bad-caller: ( -- ) [ \"hello\" typed-add drop ] ;\n";
+
+    // Warning-only: return code is OK.
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src, src.len));
+
+    const count = onez_diag_count(handle_ptr);
+    try std.testing.expect(count > 0);
+
+    var saw_warning = false;
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        if (onez_diag_severity(handle_ptr, i) == ONEZ_DIAG_WARNING) saw_warning = true;
+    }
+    try std.testing.expect(saw_warning);
+}
+
+test "check clears prior diagnostics on repeated call" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-repeat";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const bad_src = "bad: ( -- n ) [ ] ;";
+    try std.testing.expectEqual(@as(c_int, 1), onez_check(handle_ptr, bad_src, bad_src.len));
+    try std.testing.expect(onez_diag_count(handle_ptr) > 0);
+
+    // Use a fresh source name so the second check only analyzes the clean word.
+    const tag2 = "check-repeat-clean";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag2, tag2.len));
+
+    const good_src = "good: ( n -- n ) [ 1 + ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, good_src, good_src.len));
+    try std.testing.expectEqual(@as(usize, 0), onez_diag_count(handle_ptr));
+}
+
+test "check out-of-range accessors return documented fallbacks" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-oor";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    // Start from a clean state; diagnostics list is empty.
+    try std.testing.expectEqual(@as(usize, 0), onez_diag_count(handle_ptr));
+
+    try std.testing.expectEqual(@as(c_int, -1), onez_diag_severity(handle_ptr, 0));
+    try std.testing.expectEqual(@as(?[*:0]const u8, null), onez_diag_message(handle_ptr, 0));
+    try std.testing.expectEqual(@as(?[*:0]const u8, null), onez_diag_source(handle_ptr, 0));
+    try std.testing.expectEqual(@as(?[*:0]const u8, null), onez_diag_word(handle_ptr, 0));
+    try std.testing.expectEqual(@as(usize, 0), onez_diag_line(handle_ptr, 0));
+}
+
+test "check accessors with null handle return fallbacks" {
+    try std.testing.expectEqual(@as(usize, 0), onez_diag_count(null));
+    try std.testing.expectEqual(@as(c_int, -1), onez_diag_severity(null, 0));
+    try std.testing.expectEqual(@as(?[*:0]const u8, null), onez_diag_message(null, 0));
+    try std.testing.expectEqual(@as(?[*:0]const u8, null), onez_diag_source(null, 0));
+    try std.testing.expectEqual(@as(?[*:0]const u8, null), onez_diag_word(null, 0));
+    try std.testing.expectEqual(@as(usize, 0), onez_diag_line(null, 0));
+}
+
+test "check with parse error reports via last_error, not diagnostics" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-parse-error";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    // Mismatched bracket -- the parser should reject this.
+    const src = "oops: ( -- ) [ [ ] ;";
+    try std.testing.expectEqual(@as(c_int, 1), onez_check(handle_ptr, src, src.len));
+
+    try std.testing.expect(onez_last_error(handle_ptr) != null);
+    try std.testing.expectEqual(@as(usize, 0), onez_diag_count(handle_ptr));
+}
+
+test "check diagnostics survive intervening eval" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-survives";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const src = "bad: ( -- n ) [ ] ;";
+    try std.testing.expectEqual(@as(c_int, 1), onez_check(handle_ptr, src, src.len));
+
+    const count_before = onez_diag_count(handle_ptr);
+    try std.testing.expect(count_before > 0);
+
+    // Snapshot message pointer and content before the eval.
+    const msg_before_ptr = onez_diag_message(handle_ptr, 0);
+    try std.testing.expect(msg_before_ptr != null);
+    const msg_before_copy = try std.testing.allocator.dupe(u8, std.mem.span(msg_before_ptr.?));
+    defer std.testing.allocator.free(msg_before_copy);
+
+    // onez_eval does not clear the diagnostics list.
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, "1 2 +", 5));
+
+    try std.testing.expectEqual(count_before, onez_diag_count(handle_ptr));
+    const msg_after_ptr = onez_diag_message(handle_ptr, 0);
+    try std.testing.expect(msg_after_ptr != null);
+    try std.testing.expectEqualStrings(msg_before_copy, std.mem.span(msg_after_ptr.?));
+
+    // Drain the stack so deinit sees a clean slate.
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
 }
