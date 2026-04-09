@@ -27,6 +27,15 @@ range-step: ( start end step -- range ) [
 \ Generate exclusive range [0, n)
 iota: ( n -- range ) [ 0 swap range ] ;
 
+\ Infinite range from start, step 1
+range-from: ( start -- range ) [ 0 1 t >range ] ;
+
+\ Infinite range from start with explicit step
+range-from-step: ( start step -- range ) [
+  dup 0 = [ "range-from-step: step must not be zero" throw ] when
+  0 swap t >range
+] ;
+
 \ Inclusive range (legacy alias for range=)
 range-inclusive: ( start end -- range ) [ range= ] ;
 

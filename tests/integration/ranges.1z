@@ -82,6 +82,31 @@ use "ranges" ;
 10 1 -3 range-step #last 4 "#last descending stepped" assert=
 [ 5 5 range #last ] "#last on empty" assert-error
 
+"range-from" test-section
+1 range-from >iterator 5 #take #collect { 1 2 3 4 5 } "range-from 1 take 5" assert=
+0 range-from >iterator 3 #take #collect { 0 1 2 } "range-from 0 take 3" assert=
+-5 range-from >iterator 4 #take #collect { -5 -4 -3 -2 } "range-from -5 take 4" assert=
+
+"range-from-step" test-section
+0 2 range-from-step >iterator 5 #take #collect { 0 2 4 6 8 } "step 2" assert=
+10 -3 range-from-step >iterator 4 #take #collect { 10 7 4 1 } "step -3" assert=
+100 10 range-from-step >iterator 3 #take #collect { 100 110 120 } "step 10" assert=
+[ 0 0 range-from-step ] "step zero throws" assert-error
+
+"infinite range operations" test-section
+1 range-from #first 1 "#first on infinite" assert=
+0 2 range-from-step #first 0 "#first on infinite stepped" assert=
+1 range-from 0 #nth 1 "#nth 0 on infinite" assert=
+1 range-from 99 #nth 100 "#nth 99 on infinite" assert=
+0 5 range-from-step 3 #nth 15 "#nth stepped on infinite" assert=
+[ 1 range-from #len ] "#len on infinite throws" assert-error
+[ 1 range-from #last ] "#last on infinite throws" assert-error
+
+"infinite lazy pipeline" test-section
+1 range-from >iterator [ dup * ] #map 5 #take #collect { 1 4 9 16 25 } "infinite + map + take" assert=
+1 range-from >iterator [ 2 % 0 = ] #filter 4 #take #collect { 2 4 6 8 } "infinite + filter + take" assert=
+0 range-from >iterator 10 #take 0 [ + ] #reduce 45 "infinite + take + reduce" assert=
+
 "lazy pipeline" test-section
 1 10 range >iterator [ 2 * ] #map #collect { 2 4 6 8 10 12 14 16 18 } "range + map" assert=
 1 10 range >iterator [ 5 > ] #filter #collect { 6 7 8 9 } "range + filter" assert=

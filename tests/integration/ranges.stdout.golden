@@ -126,6 +126,48 @@ PASS: #last descending stepped
 Stack: [ ]
 PASS: #last on empty
 Stack: [ ]
+=== range-from ===
+Stack: [ ]
+PASS: range-from 1 take 5
+Stack: [ ]
+PASS: range-from 0 take 3
+Stack: [ ]
+PASS: range-from -5 take 4
+Stack: [ ]
+=== range-from-step ===
+Stack: [ ]
+PASS: step 2
+Stack: [ ]
+PASS: step -3
+Stack: [ ]
+PASS: step 10
+Stack: [ ]
+PASS: step zero throws
+Stack: [ ]
+=== infinite range operations ===
+Stack: [ ]
+PASS: #first on infinite
+Stack: [ ]
+PASS: #first on infinite stepped
+Stack: [ ]
+PASS: #nth 0 on infinite
+Stack: [ ]
+PASS: #nth 99 on infinite
+Stack: [ ]
+PASS: #nth stepped on infinite
+Stack: [ ]
+PASS: #len on infinite throws
+Stack: [ ]
+PASS: #last on infinite throws
+Stack: [ ]
+=== infinite lazy pipeline ===
+Stack: [ ]
+PASS: infinite + map + take
+Stack: [ ]
+PASS: infinite + filter + take
+Stack: [ ]
+PASS: infinite + take + reduce
+Stack: [ ]
 === lazy pipeline ===
 Stack: [ ]
 PASS: range + map
