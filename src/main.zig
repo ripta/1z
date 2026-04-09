@@ -180,6 +180,226 @@ fn runReplStartupStatement(ctx: *Context, writer: anytype, statement: []const u8
     }
 }
 
+/// Shared state for flags that affect the runtime environment regardless of
+/// which subcommand is running (paths, memory cap, prelude override).
+const GlobalFlags = struct {
+    max_memory_bytes: usize = 256 * 1024 * 1024,
+    cli_set_max_memory: bool = false,
+    load_paths: std.ArrayListUnmanaged([]const u8) = .{},
+    stdlib_path: ?[]const u8 = null,
+    prelude_path: ?[]const u8 = null,
+
+    fn deinit(self: *GlobalFlags, allocator: std.mem.Allocator) void {
+        self.load_paths.deinit(allocator);
+    }
+};
+
+const ExecutionFlags = struct {
+    show_stack: bool = false,
+    verbosity: Verbosity = .normal,
+    bench_config: BenchmarkConfig = .{},
+    debug_mode: bool = false,
+    initial_breakpoints: [16][]const u8 = undefined,
+    initial_breakpoint_count: usize = 0,
+    trace_config: trace_mod.TraceConfig = .{},
+    deadlock_detect_ns: ?i128 = null,
+    test_timeout_ns: ?u64 = null,
+    check_mode: bool = false,
+    allow_all_recursion: bool = false,
+    compile_mode: context.CompileMode = .off,
+    cli_set_compile: bool = false,
+};
+
+/// Result of attempting to parse a single argument as a flag.
+const FlagParseResult = enum { consumed, not_mine };
+
+/// Attempts to parse `arg` as a global flag and, if recognized, applies it to
+/// `state`. Returns `.consumed` on a match, `.not_mine` otherwise. On a
+/// malformed value, prints an error to `err_writer` and returns
+/// `error.InvalidFlagValue`.
+fn parseGlobalFlag(
+    arg: []const u8,
+    state: *GlobalFlags,
+    allocator: std.mem.Allocator,
+    err_writer: anytype,
+) !FlagParseResult {
+    if (std.mem.startsWith(u8, arg, "--max-memory=")) {
+        const value = arg["--max-memory=".len..];
+        if (memory_limit.parseSize(value)) |bytes| {
+            state.max_memory_bytes = bytes;
+            state.cli_set_max_memory = true;
+            return .consumed;
+        }
+        err_writer.print("Error: invalid value for --max-memory: '{s}'\n", .{value}) catch {};
+        err_writer.flush() catch {};
+        return error.InvalidFlagValue;
+    }
+    if (std.mem.startsWith(u8, arg, "--load-path=")) {
+        const value = arg["--load-path=".len..];
+        state.load_paths.append(allocator, value) catch {
+            err_writer.writeAll("Error: out of memory\n") catch {};
+            err_writer.flush() catch {};
+            return error.OutOfMemory;
+        };
+        return .consumed;
+    }
+    if (std.mem.startsWith(u8, arg, "--stdlib-path=")) {
+        state.stdlib_path = arg["--stdlib-path=".len..];
+        return .consumed;
+    }
+    if (std.mem.startsWith(u8, arg, "--prelude=")) {
+        state.prelude_path = arg["--prelude=".len..];
+        return .consumed;
+    }
+    return .not_mine;
+}
+
+/// Attempts to parse `arg` as an execution flag (run/eval/repl flags).
+/// Same contract as `parseGlobalFlag`.
+fn parseExecutionFlag(
+    arg: []const u8,
+    state: *ExecutionFlags,
+    err_writer: anytype,
+) !FlagParseResult {
+    if (std.mem.eql(u8, arg, "--show-stack")) {
+        state.show_stack = true;
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "-qq") or std.mem.eql(u8, arg, "--silent")) {
+        state.verbosity = .silent;
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "-q") or std.mem.eql(u8, arg, "--quiet")) {
+        state.verbosity = .quiet;
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--benchmark") or std.mem.eql(u8, arg, "-b")) {
+        state.bench_config.enabled = true;
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--benchmark=verbose")) {
+        state.bench_config.enabled = true;
+        state.bench_config.output = .human;
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--benchmark=json")) {
+        state.bench_config.enabled = true;
+        state.bench_config.output = .json;
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--debug")) {
+        state.debug_mode = true;
+        return .consumed;
+    }
+    if (std.mem.startsWith(u8, arg, "--break=")) {
+        state.debug_mode = true;
+        const word = arg["--break=".len..];
+        if (state.initial_breakpoint_count < state.initial_breakpoints.len) {
+            state.initial_breakpoints[state.initial_breakpoint_count] = word;
+            state.initial_breakpoint_count += 1;
+        }
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--trace-words")) {
+        state.trace_config.trace_words = true;
+        return .consumed;
+    }
+    if (std.mem.startsWith(u8, arg, "--trace-words=")) {
+        state.trace_config.trace_words = true;
+        state.trace_config.trace_words_pattern = arg["--trace-words=".len..];
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--trace-resolve")) {
+        state.trace_config.trace_resolve = true;
+        return .consumed;
+    }
+    if (std.mem.startsWith(u8, arg, "--trace-resolve=")) {
+        state.trace_config.trace_resolve = true;
+        state.trace_config.trace_resolve_pattern = arg["--trace-resolve=".len..];
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--trace-modules")) {
+        state.trace_config.trace_modules = true;
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--trace-jit")) {
+        state.trace_config.trace_jit = true;
+        return .consumed;
+    }
+    if (std.mem.startsWith(u8, arg, "--dump-scope=")) {
+        state.trace_config.dump_scope = arg["--dump-scope=".len..];
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--deadlock-detect")) {
+        state.deadlock_detect_ns = 5 * std.time.ns_per_s;
+        return .consumed;
+    }
+    if (std.mem.startsWith(u8, arg, "--deadlock-detect=")) {
+        const value = arg["--deadlock-detect=".len..];
+        const secs = std.fmt.parseInt(u64, value, 10) catch {
+            err_writer.print("Error: invalid value for --deadlock-detect: '{s}'\n", .{value}) catch {};
+            err_writer.flush() catch {};
+            return error.InvalidFlagValue;
+        };
+        state.deadlock_detect_ns = @as(i128, secs) * std.time.ns_per_s;
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--test-timeout")) {
+        err_writer.print("Error: --test-timeout requires a value (e.g. --test-timeout=5)\n", .{}) catch {};
+        err_writer.flush() catch {};
+        return error.InvalidFlagValue;
+    }
+    if (std.mem.startsWith(u8, arg, "--test-timeout=")) {
+        const value = arg["--test-timeout=".len..];
+        const secs = std.fmt.parseInt(u64, value, 10) catch {
+            err_writer.print("Error: invalid value for --test-timeout: '{s}'\n", .{value}) catch {};
+            err_writer.flush() catch {};
+            return error.InvalidFlagValue;
+        };
+        state.test_timeout_ns = secs * std.time.ns_per_s;
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--check")) {
+        state.check_mode = true;
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--allow-all-recursion")) {
+        state.allow_all_recursion = true;
+        return .consumed;
+    }
+    if (std.mem.startsWith(u8, arg, "--compile=")) {
+        const value = arg["--compile=".len..];
+        if (std.mem.eql(u8, value, "off")) {
+            state.compile_mode = .off;
+        } else if (std.mem.eql(u8, value, "eager")) {
+            state.compile_mode = .eager;
+        } else if (std.mem.eql(u8, value, "hybrid")) {
+            state.compile_mode = .hybrid;
+        } else {
+            err_writer.print("Error: invalid value for --compile: '{s}' (expected 'off', 'eager', or 'hybrid')\n", .{value}) catch {};
+            err_writer.flush() catch {};
+            return error.InvalidFlagValue;
+        }
+        state.cli_set_compile = true;
+        return .consumed;
+    }
+    return .not_mine;
+}
+
+/// Write the version string to `w`. Extracted from `printVersion` so it can
+/// be unit-tested without touching stdout.
+fn writeVersion(w: anytype) !void {
+    try w.print("1z {s}\n", .{version});
+}
+
+fn printVersion() void {
+    const stdout_file: File = .stdout();
+    var stdout_buf: [128]u8 = undefined;
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
+    writeVersion(&stdout.interface) catch {};
+    stdout.interface.flush() catch {};
+}
+
 fn printUsage() void {
     const stdout_file: File = .stdout();
     var stdout_buf: [4096]u8 = undefined;
@@ -190,9 +410,11 @@ fn printUsage() void {
         \\Usage: 1z [options] [file] [args...]
         \\       1z build <file.1z> [-o <output>] [options]
         \\       1z fmt [files...]
+        \\       1z version
         \\
         \\General:
         \\  -h, --help              Show this help and exit
+        \\  -V, --version           Show version and exit
         \\  -q, --quiet             Suppress REPL banner
         \\  -qq, --silent           Suppress banner, prompts, stack, and goodbye
         \\  --show-stack            Print the stack after execution
@@ -244,10 +466,14 @@ pub fn main() u8 {
     const args = std.process.argsAlloc(gpa_allocator) catch return 1;
     defer std.process.argsFree(gpa_allocator, args);
 
-    // Check for --help/-h before anything else
+    // Check for --help/-h and --version/-V before anything else
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             printUsage();
+            return 0;
+        }
+        if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-V")) {
+            printVersion();
             return 0;
         }
     }
@@ -259,179 +485,65 @@ pub fn main() u8 {
     if (args.len > 1 and std.mem.eql(u8, args[1], "build")) {
         return handleBuild(gpa_allocator, args[2..]);
     }
+    if (args.len > 1 and std.mem.eql(u8, args[1], "version")) {
+        printVersion();
+        return 0;
+    }
 
     // Parse flags
-    var show_stack = false;
-    var verbosity: Verbosity = .normal;
+    var global = GlobalFlags{};
+    defer global.deinit(gpa_allocator);
+    var exec = ExecutionFlags{};
     var file_path: ?[]const u8 = null;
-    var bench_config = BenchmarkConfig{};
-    var max_memory_bytes: usize = 256 * 1024 * 1024;
-    var cli_set_max_memory = false;
 
     var program_args: std.ArrayListUnmanaged([]const u8) = .{};
     defer program_args.deinit(gpa_allocator);
 
-    var cli_load_paths: std.ArrayListUnmanaged([]const u8) = .{};
-    defer cli_load_paths.deinit(gpa_allocator);
+    const stderr_file: File = .stderr();
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr = stderr_file.writerStreaming(&stderr_buf);
+    const err_writer = &stderr.interface;
 
-    var cli_stdlib_path: ?[]const u8 = null;
-    var cli_prelude_path: ?[]const u8 = null;
-    var debug_mode = false;
-    var initial_breakpoints: [16][]const u8 = undefined;
-    var initial_breakpoint_count: usize = 0;
-    var trace_config = trace_mod.TraceConfig{};
-    var deadlock_detect_ns: ?i128 = null;
-    var test_timeout_ns: ?u64 = null;
-    var check_mode = false;
-    var allow_all_recursion = false;
-    var compile_mode: context.CompileMode = .off;
-    var cli_set_compile = false;
-
-    // TODO(ripta): bit hacky arg parsing, improve later?
     for (args[1..]) |arg| {
         if (file_path != null) {
             program_args.append(gpa_allocator, arg) catch return 1;
-        } else if (std.mem.eql(u8, arg, "--show-stack")) {
-            show_stack = true;
-        } else if (std.mem.eql(u8, arg, "-qq") or std.mem.eql(u8, arg, "--silent")) {
-            verbosity = .silent;
-        } else if (std.mem.eql(u8, arg, "-q") or std.mem.eql(u8, arg, "--quiet")) {
-            verbosity = .quiet;
-        } else if (std.mem.eql(u8, arg, "--benchmark") or std.mem.eql(u8, arg, "-b")) {
-            bench_config.enabled = true;
-        } else if (std.mem.eql(u8, arg, "--benchmark=verbose")) {
-            bench_config.enabled = true;
-            bench_config.output = .human;
-        } else if (std.mem.eql(u8, arg, "--benchmark=json")) {
-            bench_config.enabled = true;
-            bench_config.output = .json;
-        } else if (std.mem.startsWith(u8, arg, "--max-memory=")) {
-            const value = arg["--max-memory=".len..];
-            if (memory_limit.parseSize(value)) |bytes| {
-                max_memory_bytes = bytes;
-                cli_set_max_memory = true;
-            } else {
-                const stderr_file: File = .stderr();
-                var stderr_buf: [4096]u8 = undefined;
-                var stderr = stderr_file.writerStreaming(&stderr_buf);
-                stderr.interface.print("Error: invalid value for --max-memory: '{s}'\n", .{value}) catch {};
-                stderr.interface.flush() catch {};
-                return 1;
-            }
-        } else if (std.mem.startsWith(u8, arg, "--load-path=")) {
-            const value = arg["--load-path=".len..];
-            cli_load_paths.append(gpa_allocator, value) catch return 1;
-        } else if (std.mem.startsWith(u8, arg, "--stdlib-path=")) {
-            cli_stdlib_path = arg["--stdlib-path=".len..];
-        } else if (std.mem.startsWith(u8, arg, "--prelude=")) {
-            cli_prelude_path = arg["--prelude=".len..];
-        } else if (std.mem.eql(u8, arg, "--debug")) {
-            debug_mode = true;
-        } else if (std.mem.startsWith(u8, arg, "--break=")) {
-            debug_mode = true;
-            const word = arg["--break=".len..];
-            if (initial_breakpoint_count < 16) {
-                initial_breakpoints[initial_breakpoint_count] = word;
-                initial_breakpoint_count += 1;
-            }
-        } else if (std.mem.eql(u8, arg, "--trace-words")) {
-            trace_config.trace_words = true;
-        } else if (std.mem.startsWith(u8, arg, "--trace-words=")) {
-            trace_config.trace_words = true;
-            trace_config.trace_words_pattern = arg["--trace-words=".len..];
-        } else if (std.mem.eql(u8, arg, "--trace-resolve")) {
-            trace_config.trace_resolve = true;
-        } else if (std.mem.startsWith(u8, arg, "--trace-resolve=")) {
-            trace_config.trace_resolve = true;
-            trace_config.trace_resolve_pattern = arg["--trace-resolve=".len..];
-        } else if (std.mem.eql(u8, arg, "--trace-modules")) {
-            trace_config.trace_modules = true;
-        } else if (std.mem.eql(u8, arg, "--trace-jit")) {
-            trace_config.trace_jit = true;
-        } else if (std.mem.startsWith(u8, arg, "--dump-scope=")) {
-            trace_config.dump_scope = arg["--dump-scope=".len..];
-        } else if (std.mem.eql(u8, arg, "--deadlock-detect")) {
-            deadlock_detect_ns = 5 * std.time.ns_per_s;
-        } else if (std.mem.startsWith(u8, arg, "--deadlock-detect=")) {
-            const value = arg["--deadlock-detect=".len..];
-            const secs = std.fmt.parseInt(u64, value, 10) catch {
-                const stderr_file: File = .stderr();
-                var stderr_buf2: [4096]u8 = undefined;
-                var stderr2 = stderr_file.writerStreaming(&stderr_buf2);
-                stderr2.interface.print("Error: invalid value for --deadlock-detect: '{s}'\n", .{value}) catch {};
-                stderr2.interface.flush() catch {};
-                return 1;
-            };
-            deadlock_detect_ns = @as(i128, secs) * std.time.ns_per_s;
-        } else if (std.mem.eql(u8, arg, "--test-timeout")) {
-            const stderr_file: File = .stderr();
-            var stderr_buf2: [4096]u8 = undefined;
-            var stderr2 = stderr_file.writerStreaming(&stderr_buf2);
-            stderr2.interface.print("Error: --test-timeout requires a value (e.g. --test-timeout=5)\n", .{}) catch {};
-            stderr2.interface.flush() catch {};
-            return 1;
-        } else if (std.mem.startsWith(u8, arg, "--test-timeout=")) {
-            const value = arg["--test-timeout=".len..];
-            const secs = std.fmt.parseInt(u64, value, 10) catch {
-                const stderr_file: File = .stderr();
-                var stderr_buf2: [4096]u8 = undefined;
-                var stderr2 = stderr_file.writerStreaming(&stderr_buf2);
-                stderr2.interface.print("Error: invalid value for --test-timeout: '{s}'\n", .{value}) catch {};
-                stderr2.interface.flush() catch {};
-                return 1;
-            };
-            test_timeout_ns = secs * std.time.ns_per_s;
-        } else if (std.mem.eql(u8, arg, "--check")) {
-            check_mode = true;
-        } else if (std.mem.eql(u8, arg, "--allow-all-recursion")) {
-            allow_all_recursion = true;
-        } else if (std.mem.startsWith(u8, arg, "--compile=")) {
-            const value = arg["--compile=".len..];
-            if (std.mem.eql(u8, value, "off")) {
-                compile_mode = .off;
-            } else if (std.mem.eql(u8, value, "eager")) {
-                compile_mode = .eager;
-            } else if (std.mem.eql(u8, value, "hybrid")) {
-                compile_mode = .hybrid;
-            } else {
-                const stderr_file: File = .stderr();
-                var stderr_buf: [4096]u8 = undefined;
-                var stderr = stderr_file.writerStreaming(&stderr_buf);
-                stderr.interface.print("Error: invalid value for --compile: '{s}' (expected 'off', 'eager', or 'hybrid')\n", .{value}) catch {};
-                stderr.interface.flush() catch {};
-                return 1;
-            }
-            cli_set_compile = true;
-        } else {
-            file_path = arg;
+            continue;
         }
+
+        const g = parseGlobalFlag(arg, &global, gpa_allocator, err_writer) catch return 1;
+        if (g == .consumed) continue;
+
+        const e = parseExecutionFlag(arg, &exec, err_writer) catch return 1;
+        if (e == .consumed) continue;
+
+        file_path = arg;
     }
 
     // Check environment variable if CLI flag was not set
-    if (!cli_set_max_memory) {
+    if (!global.cli_set_max_memory) {
         if (std.posix.getenv("ONEZ_MAX_MEMORY")) |env_val| {
             if (memory_limit.parseSize(env_val)) |bytes| {
-                max_memory_bytes = bytes;
+                global.max_memory_bytes = bytes;
             }
             // Silently ignore invalid env var values
         }
     }
 
-    if (!cli_set_compile) {
+    if (!exec.cli_set_compile) {
         if (std.posix.getenv("ONEZ_COMPILE")) |env_val| {
             if (std.mem.eql(u8, env_val, "off")) {
-                compile_mode = .off;
+                exec.compile_mode = .off;
             } else if (std.mem.eql(u8, env_val, "eager")) {
-                compile_mode = .eager;
+                exec.compile_mode = .eager;
             } else if (std.mem.eql(u8, env_val, "hybrid")) {
-                compile_mode = .hybrid;
+                exec.compile_mode = .hybrid;
             }
             // Silently ignore invalid env var values
         }
     }
 
     // Create memory limit allocator (wraps GPA, enforces cap)
-    var mem_limit = MemoryLimitAllocator.init(gpa_allocator, max_memory_bytes);
+    var mem_limit = MemoryLimitAllocator.init(gpa_allocator, global.max_memory_bytes);
     const mem_limit_allocator = mem_limit.allocator();
 
     // Create benchmark stats and counting allocator if benchmarking enabled
@@ -439,21 +551,21 @@ pub fn main() u8 {
     var counting_allocator = CountingAllocator.init(mem_limit_allocator, &bench_stats);
 
     // Use counting allocator when benchmarking, memory limit allocator otherwise
-    const allocator = if (bench_config.enabled) counting_allocator.allocator() else mem_limit_allocator;
+    const allocator = if (exec.bench_config.enabled) counting_allocator.allocator() else mem_limit_allocator;
 
-    if (bench_config.enabled) {
+    if (exec.bench_config.enabled) {
         bench_stats.start();
     }
 
     // Initialize context with the program arguments
     var ctx = Context.init(allocator);
     ctx.program_args = program_args.items;
-    ctx.trace = trace_config;
-    ctx.deadlock_detect_ns = deadlock_detect_ns;
+    ctx.trace = exec.trace_config;
+    ctx.deadlock_detect_ns = exec.deadlock_detect_ns;
     defer ctx.deinit();
 
     // Configure load paths: CLI flags, then env var
-    for (cli_load_paths.items) |lp| {
+    for (global.load_paths.items) |lp| {
         const duped = ctx.quotationAllocator().dupe(u8, lp) catch return 1;
         ctx.load_paths.append(ctx.allocator, duped) catch return 1;
     }
@@ -468,7 +580,7 @@ pub fn main() u8 {
     }
 
     // Configure stdlib path: CLI flag, then env var, then default relative to binary
-    if (cli_stdlib_path) |sp| {
+    if (global.stdlib_path) |sp| {
         ctx.stdlib_path = ctx.quotationAllocator().dupe(u8, sp) catch return 1;
     } else if (std.posix.getenv("ONEZ_STDLIB")) |env_val| {
         ctx.stdlib_path = ctx.quotationAllocator().dupe(u8, env_val) catch return 1;
@@ -487,20 +599,17 @@ pub fn main() u8 {
         } else |_| {}
     }
 
-    if (bench_config.enabled) {
+    if (exec.bench_config.enabled) {
         ctx.benchmark = &bench_stats;
     }
 
     // Resolve prelude source: CLI flag, then env var, and lastly the embedded default
-    const prelude_path = cli_prelude_path orelse std.posix.getenv("ONEZ_PRELUDE");
+    const prelude_path = global.prelude_path orelse std.posix.getenv("ONEZ_PRELUDE");
     var external_prelude: ?[]const u8 = null;
     if (prelude_path) |path| {
         external_prelude = std.fs.cwd().readFileAlloc(gpa_allocator, path, 10 * 1024 * 1024) catch |err| {
-            const stderr_file: File = .stderr();
-            var stderr_buf: [4096]u8 = undefined;
-            var stderr = stderr_file.writerStreaming(&stderr_buf);
-            stderr.interface.print("Error: cannot read prelude '{s}': {any}\n", .{ path, err }) catch {};
-            stderr.interface.flush() catch {};
+            err_writer.print("Error: cannot read prelude '{s}': {any}\n", .{ path, err }) catch {};
+            err_writer.flush() catch {};
             return 1;
         };
     }
@@ -509,10 +618,10 @@ pub fn main() u8 {
     ctx.loadPrelude(external_prelude) catch |err| {
         std.debug.panic("Failed to load prelude: {any}", .{err});
     };
-    ctx.compile_mode = compile_mode;
-    ctx.check_mode = check_mode;
-    ctx.allow_all_recursion = allow_all_recursion;
-    if (bench_config.enabled) {
+    ctx.compile_mode = exec.compile_mode;
+    ctx.check_mode = exec.check_mode;
+    ctx.allow_all_recursion = exec.allow_all_recursion;
+    if (exec.bench_config.enabled) {
         bench_stats.collectPreludeInventory(
             if (ctx.local_frames.items.len > 0) ctx.local_frames.items[0].count() else 0,
             ctx.dispatch.entries.count(),
@@ -526,23 +635,23 @@ pub fn main() u8 {
         bench_stats.markPreludeEnd();
     }
 
-    var dbg: ?debugger_mod.Debugger = if (debug_mode) debugger_mod.Debugger.init(allocator) else null;
+    var dbg: ?debugger_mod.Debugger = if (exec.debug_mode) debugger_mod.Debugger.init(allocator) else null;
     defer if (dbg != null) dbg.?.deinit();
 
     if (dbg != null) {
         ctx.debugger = &dbg.?;
-        for (initial_breakpoints[0..initial_breakpoint_count]) |bp| {
+        for (exec.initial_breakpoints[0..exec.initial_breakpoint_count]) |bp| {
             _ = dbg.?.breakpoints.addWord(bp);
         }
-        if (initial_breakpoint_count > 0) {
+        if (exec.initial_breakpoint_count > 0) {
             // Start in continue mode so execution runs until a breakpoint hits
             dbg.?.stepper.mode = .continue_running;
         }
     }
 
     // Spawn watchdog thread for --test-timeout (batch mode only)
-    const watchdog_thread: ?std.Thread = if (test_timeout_ns != null and file_path != null)
-        std.Thread.spawn(.{}, testTimeoutWatchdog, .{ test_timeout_ns.?, &ctx }) catch null
+    const watchdog_thread: ?std.Thread = if (exec.test_timeout_ns != null and file_path != null)
+        std.Thread.spawn(.{}, testTimeoutWatchdog, .{ exec.test_timeout_ns.?, &ctx }) catch null
     else
         null;
     defer if (watchdog_thread) |t| t.detach();
@@ -553,28 +662,28 @@ pub fn main() u8 {
     // and exits. Errors print to stderr, and cause a non-zero exit code.
     // Otherwise, interactive REPL starts.
     const result = if (file_path) |path|
-        batch(&ctx, path, show_stack)
+        batch(&ctx, path, exec.show_stack)
     else blk: {
-        repl(&ctx, verbosity, max_memory_bytes);
+        repl(&ctx, exec.verbosity, global.max_memory_bytes);
         break :blk @as(u8, 0);
     };
 
     hooks.fireHooks(&ctx, "on:exit", &.{.{ .fixnum = @intCast(result) }});
 
     // Stop benchmark timer if enabled
-    if (bench_config.enabled) {
+    if (exec.bench_config.enabled) {
         bench_stats.collectVariantHistogram(allocator, ctx.stack.items.items) catch {};
         bench_stats.stop();
     }
 
-    defer if (bench_config.enabled) bench_stats.deinit(allocator);
+    defer if (exec.bench_config.enabled) bench_stats.deinit(allocator);
 
-    if (bench_config.output != .none) {
+    if (exec.bench_config.output != .none) {
         var buf: [8192]u8 = undefined;
         var stream = std.io.fixedBufferStream(&buf);
         const writer = stream.writer();
 
-        switch (bench_config.output) {
+        switch (exec.bench_config.output) {
             .human => bench_stats.formatHuman(writer) catch {},
             .json => bench_stats.formatJson(writer) catch {},
             .none => {},
@@ -602,30 +711,49 @@ fn testTimeoutWatchdog(timeout_ns: u64, ctx: *Context) void {
     std.process.exit(124);
 }
 
-fn handleFmt(allocator: std.mem.Allocator, args: []const []const u8) u8 {
+fn handleFmt(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
     var stderr = stderr_file.writerStreaming(&stderr_buf);
     const err_writer = &stderr.interface;
 
+    var global = GlobalFlags{};
+    defer global.deinit(base_allocator);
+
     var check_only = false;
     var stdout_mode = false;
     var paths: std.ArrayListUnmanaged([]const u8) = .{};
-    defer paths.deinit(allocator);
+    defer paths.deinit(base_allocator);
 
     for (args) |arg| {
+        const g = parseGlobalFlag(arg, &global, base_allocator, err_writer) catch return 1;
+        if (g == .consumed) continue;
         if (std.mem.eql(u8, arg, "--check")) {
             check_only = true;
-        } else if (std.mem.eql(u8, arg, "--stdout")) {
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--stdout")) {
             stdout_mode = true;
-        } else {
-            paths.append(allocator, arg) catch {
-                err_writer.writeAll("Error: out of memory\n") catch {};
-                err_writer.flush() catch {};
-                return 1;
-            };
+            continue;
+        }
+        paths.append(base_allocator, arg) catch {
+            err_writer.writeAll("Error: out of memory\n") catch {};
+            err_writer.flush() catch {};
+            return 1;
+        };
+    }
+
+    if (!global.cli_set_max_memory) {
+        if (std.posix.getenv("ONEZ_MAX_MEMORY")) |env_val| {
+            if (memory_limit.parseSize(env_val)) |bytes| {
+                global.max_memory_bytes = bytes;
+            }
+            // Silently ignore invalid env var values.
         }
     }
+
+    var mem_limit = MemoryLimitAllocator.init(base_allocator, global.max_memory_bytes);
+    const allocator = mem_limit.allocator();
 
     if (paths.items.len == 0) {
         err_writer.writeAll("Usage: 1z fmt [--check] [--stdout] <file...>\n") catch {};
@@ -752,21 +880,20 @@ fn formatDirectory(allocator: std.mem.Allocator, dir_path: []const u8, check_onl
     return result;
 }
 
-fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) u8 {
+fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
     var stderr = stderr_file.writerStreaming(&stderr_buf);
     const err_writer = &stderr.interface;
 
     // Parse build-specific args.
+    var global = GlobalFlags{};
+    defer global.deinit(base_allocator);
+
     var source_file: ?[]const u8 = null;
     var output_path: ?[]const u8 = null;
-    var cli_stdlib_path: ?[]const u8 = null;
-    var cli_prelude_path: ?[]const u8 = null;
-    var cli_load_paths: std.ArrayListUnmanaged([]const u8) = .{};
-    defer cli_load_paths.deinit(allocator);
     var static_libs: std.ArrayListUnmanaged([]const u8) = .{};
-    defer static_libs.deinit(allocator);
+    defer static_libs.deinit(base_allocator);
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -779,35 +906,44 @@ fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) u8 {
                 return 1;
             }
             output_path = args[i];
-        } else if (std.mem.startsWith(u8, arg, "--stdlib-path=")) {
-            cli_stdlib_path = arg["--stdlib-path=".len..];
-        } else if (std.mem.startsWith(u8, arg, "--prelude=")) {
-            cli_prelude_path = arg["--prelude=".len..];
-        } else if (std.mem.startsWith(u8, arg, "--load-path=")) {
-            cli_load_paths.append(allocator, arg["--load-path=".len..]) catch {
+            continue;
+        }
+        const g = parseGlobalFlag(arg, &global, base_allocator, err_writer) catch return 1;
+        if (g == .consumed) continue;
+        if (std.mem.startsWith(u8, arg, "--link-static=")) {
+            static_libs.append(base_allocator, arg["--link-static=".len..]) catch {
                 err_writer.writeAll("Error: out of memory\n") catch {};
                 err_writer.flush() catch {};
                 return 1;
             };
-        } else if (std.mem.startsWith(u8, arg, "--link-static=")) {
-            static_libs.append(allocator, arg["--link-static=".len..]) catch {
-                err_writer.writeAll("Error: out of memory\n") catch {};
-                err_writer.flush() catch {};
-                return 1;
-            };
-        } else if (std.mem.startsWith(u8, arg, "-")) {
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "-")) {
             err_writer.print("Error: unknown flag '{s}'\n", .{arg}) catch {};
             err_writer.flush() catch {};
             return 1;
-        } else {
-            if (source_file != null) {
-                err_writer.writeAll("Error: multiple source files not supported\n") catch {};
-                err_writer.flush() catch {};
-                return 1;
+        }
+        if (source_file != null) {
+            err_writer.writeAll("Error: multiple source files not supported\n") catch {};
+            err_writer.flush() catch {};
+            return 1;
+        }
+        source_file = arg;
+    }
+
+    // Apply ONEZ_MAX_MEMORY fallback if --max-memory was not set.
+    if (!global.cli_set_max_memory) {
+        if (std.posix.getenv("ONEZ_MAX_MEMORY")) |env_val| {
+            if (memory_limit.parseSize(env_val)) |bytes| {
+                global.max_memory_bytes = bytes;
             }
-            source_file = arg;
+            // Silently ignore invalid env var values.
         }
     }
+
+    // Wrap the allocator in a memory limit for the rest of the build.
+    var mem_limit = MemoryLimitAllocator.init(base_allocator, global.max_memory_bytes);
+    const allocator = mem_limit.allocator();
 
     const source = source_file orelse {
         err_writer.writeAll("Usage: 1z build <file.1z> [-o <output>]\n") catch {};
@@ -833,7 +969,7 @@ fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var exe_dir_slice: ?[]const u8 = null;
     if (std.fs.selfExeDirPath(&self_exe_buf)) |exe_dir| {
         exe_dir_slice = exe_dir;
-        if (cli_stdlib_path) |sp| {
+        if (global.stdlib_path) |sp| {
             ctx.stdlib_path = sp;
         } else {
             const lib_path = std.fs.path.join(allocator, &.{ exe_dir, "../lib" }) catch null;
@@ -846,17 +982,17 @@ fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) u8 {
             }
         }
     } else |_| {
-        if (cli_stdlib_path) |sp| {
+        if (global.stdlib_path) |sp| {
             ctx.stdlib_path = sp;
         }
     }
 
-    for (cli_load_paths.items) |lp| {
+    for (global.load_paths.items) |lp| {
         const duped = ctx.quotationAllocator().dupe(u8, lp) catch continue;
         ctx.load_paths.append(allocator, duped) catch continue;
     }
 
-    ctx.loadPrelude(cli_prelude_path) catch |err| {
+    ctx.loadPrelude(global.prelude_path) catch |err| {
         err_writer.print("Error loading prelude: {s}\n", .{@errorName(err)}) catch {};
         err_writer.flush() catch {};
         return 1;
@@ -1485,4 +1621,12 @@ test {
     _ = @import("lsp/mod.zig");
     _ = @import("simd.zig");
     _ = @import("aot_freeze.zig");
+}
+
+test "writeVersion emits '1z <version>\\n'" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try writeVersion(fbs.writer());
+    const expected = "1z " ++ version ++ "\n";
+    try std.testing.expectEqualStrings(expected, fbs.getWritten());
 }

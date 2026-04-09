@@ -1,0 +1,2 @@
+\ Placeholder: --version early-exit scan intercepts before this file runs
+"this should never execute" print-line
