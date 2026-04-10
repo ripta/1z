@@ -4,6 +4,9 @@ const version = @import("build.zig.zon").version;
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const test_case_timeout_secs = b.option(u32, "test-case-timeout", "Per-test timeout in seconds") orelse 10;
+    const verbose_test_reporting = envFlagIsSet(b, "VERBOSE");
+    const slow_test_threshold_ms: u64 = 1000;
 
     const root_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -20,6 +23,9 @@ pub fn build(b: *std.Build) void {
     // Set version as a build option
     const options = b.addOptions();
     options.addOption([]const u8, "version", version);
+    options.addOption(u32, "test_case_timeout_secs", test_case_timeout_secs);
+    options.addOption(bool, "verbose_test_reporting", verbose_test_reporting);
+    options.addOption(u64, "slow_test_threshold_ms", slow_test_threshold_ms);
     root_module.addOptions("build_options", options);
 
     // zig-out/bin/1z
@@ -128,6 +134,16 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the 1z interpreter");
     run_step.dependOn(&run_cmd.step);
 
+    const helper_module = b.createModule(.{
+        .root_source_file = b.path("src/test_case_helper.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const test_case_helper = b.addExecutable(.{
+        .name = "test-case-helper",
+        .root_module = helper_module,
+    });
+
     // Unit tests
     const test_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -144,8 +160,13 @@ pub fn build(b: *std.Build) void {
 
     const lib_unit_tests = b.addTest(.{
         .root_module = test_module,
+        .test_runner = .{
+            .path = b.path("src/unit_test_runner.zig"),
+            .mode = .simple,
+        },
     });
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
+    run_lib_unit_tests.setName("unit tests");
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
@@ -181,14 +202,15 @@ pub fn build(b: *std.Build) void {
 
     // Integration tests
     const integration_test_step = b.step("integration-test", "Run integration tests");
-    integration_test_step.dependOn(&run_lib_unit_tests.step);
     integration_test_step.dependOn(&install_toy_shared.step);
+    var integration_status_files = std.ArrayListUnmanaged(std.Build.LazyPath){};
 
     // Update golden files step
     const update_golden_step = b.step("update-golden", "Update golden files for integration tests");
     var update_files = b.addUpdateSourceFiles();
 
-    addIntegrationTests(b, exe, integration_test_step, &update_files, test_entries, has_diff, false);
+    addIntegrationTests(b, exe, test_case_helper, integration_test_step, &update_files, &integration_status_files, test_entries, has_diff, false, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms);
+    if (verbose_test_reporting) addVerboseSummary(b, test_case_helper, integration_test_step, "integration", integration_status_files.items);
 
     update_golden_step.dependOn(&update_files.step);
 
@@ -209,13 +231,16 @@ pub fn build(b: *std.Build) void {
     const eager_test_step = b.step("eager-integration-test", "Run integration tests with eager compilation");
     eager_test_step.dependOn(&install_exe.step);
     eager_test_step.dependOn(&install_toy_shared.step);
+    var eager_status_files = std.ArrayListUnmanaged(std.Build.LazyPath){};
 
-    addIntegrationTests(b, exe, eager_test_step, null, test_entries, has_diff, true);
+    addIntegrationTests(b, exe, test_case_helper, eager_test_step, null, &eager_status_files, test_entries, has_diff, true, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms);
+    if (verbose_test_reporting) addVerboseSummary(b, test_case_helper, eager_test_step, "eager integration", eager_status_files.items);
 
     // Formatter tests
     const fmt_test_step = b.step("fmt-test", "Run formatter tests");
     const update_fmt_golden_step = b.step("update-fmt-golden", "Update golden files for formatter tests");
     var update_fmt_files = b.addUpdateSourceFiles();
+    var fmt_status_files = std.ArrayListUnmanaged(std.Build.LazyPath){};
 
     // Dynamically discover and run all .txt files in tests/formatting/
     var fmt_test_dir = b.build_root.handle.openDir("tests/formatting", .{ .iterate = true }) catch |err| {
@@ -234,10 +259,23 @@ pub fn build(b: *std.Build) void {
         const golden_path = b.fmt("tests/formatting/{s}.golden", .{name_without_ext});
 
         // Formatter test: run formatter and compare against golden file
-        const fmt_run = b.addRunArtifact(exe);
+        const fmt_label = b.fmt("fmt: {s}", .{name_without_ext});
+        const fmt_run = addWrappedCommand(
+            b,
+            test_case_helper,
+            fmt_label,
+            test_case_timeout_secs,
+            verbose_test_reporting,
+            slow_test_threshold_ms,
+            null,
+            &fmt_status_files,
+            &.{},
+        );
+        fmt_run.addArtifactArg(exe);
         fmt_run.addArg("fmt");
         fmt_run.addArg("--stdout");
         fmt_run.addFileArg(b.path(input_path));
+        fmt_run.setName(fmt_label);
 
         // Try to read golden file for comparison
         var has_fmt_golden = false;
@@ -283,10 +321,12 @@ pub fn build(b: *std.Build) void {
     }
 
     update_fmt_golden_step.dependOn(&update_fmt_files.step);
+    if (verbose_test_reporting) addVerboseSummary(b, test_case_helper, fmt_test_step, "fmt", fmt_status_files.items);
 
     // AOT build integration tests
     const aot_test_step = b.step("aot-test", "Run AOT build integration tests");
     aot_test_step.dependOn(b.getInstallStep());
+    var aot_status_files = std.ArrayListUnmanaged(std.Build.LazyPath){};
 
     const update_aot_golden_step = b.step("update-aot-golden", "Update AOT test golden files");
     var update_aot_files = b.addUpdateSourceFiles();
@@ -299,14 +339,16 @@ pub fn build(b: *std.Build) void {
         defer aot_dir.close();
 
         const aot_entries = collectAotTestEntries(b, &aot_dir) catch return;
-        addAotTests(b, exe, aot_test_step, &update_aot_files, aot_entries, has_diff);
+        addAotTests(b, exe, test_case_helper, aot_test_step, &update_aot_files, &aot_status_files, aot_entries, has_diff, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms);
     }
 
     update_aot_golden_step.dependOn(&update_aot_files.step);
+    if (verbose_test_reporting) addVerboseSummary(b, test_case_helper, aot_test_step, "aot", aot_status_files.items);
 
     // LSP server tests
     const lsp_test_step = b.step("lsp-test", "Run LSP server tests");
     lsp_test_step.dependOn(&install_lsp.step);
+    var lsp_status_files = std.ArrayListUnmanaged(std.Build.LazyPath){};
 
     const update_lsp_golden_step = b.step("update-lsp-golden", "Update LSP test golden files");
     var update_lsp_files = b.addUpdateSourceFiles();
@@ -319,10 +361,11 @@ pub fn build(b: *std.Build) void {
         defer lsp_dir.close();
 
         const lsp_entries = collectLspTestEntries(b, &lsp_dir) catch return;
-        addLspTests(b, lsp_exe, lsp_test_step, &update_lsp_files, lsp_entries, has_diff);
+        addLspTests(b, lsp_exe, test_case_helper, lsp_test_step, &update_lsp_files, &lsp_status_files, lsp_entries, has_diff, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms);
     }
 
     update_lsp_golden_step.dependOn(&update_lsp_files.step);
+    if (verbose_test_reporting) addVerboseSummary(b, test_case_helper, lsp_test_step, "lsp", lsp_status_files.items);
 }
 
 fn addFfiIncludePath(b: *std.Build, module: *std.Build.Module, target: std.Build.ResolvedTarget) void {
@@ -383,7 +426,7 @@ fn collectTestEntries(b: *std.Build, test_dir: *std.fs.Dir) ![]const TestEntry {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.name, ".1z")) continue;
 
-        const name_without_ext = entry.name[0 .. entry.name.len - 3];
+        const name_without_ext = b.dupe(entry.name[0 .. entry.name.len - 3]);
         const file_path = b.fmt("tests/integration/{s}", .{entry.name});
         const stdout_golden_path = b.fmt("tests/integration/{s}.stdout.golden", .{name_without_ext});
         const zon_path = b.fmt("tests/integration/{s}.zon", .{name_without_ext});
@@ -545,25 +588,133 @@ fn hasExcludedJitFlag(flags_lines: ?[]const u8) bool {
     return false;
 }
 
+fn hasTestTimeoutFlag(flags_lines: ?[]const u8) bool {
+    const fl = flags_lines orelse return false;
+    var flag_iter = std.mem.splitScalar(u8, fl, '\n');
+    while (flag_iter.next()) |flag| {
+        const trimmed = std.mem.trim(u8, flag, " \t\r");
+        if (std.mem.eql(u8, trimmed, "--test-timeout") or std.mem.startsWith(u8, trimmed, "--test-timeout=")) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn testTimeoutSeconds(flags_lines: ?[]const u8) ?u32 {
+    const fl = flags_lines orelse return null;
+    var flag_iter = std.mem.splitScalar(u8, fl, '\n');
+    while (flag_iter.next()) |flag| {
+        const trimmed = std.mem.trim(u8, flag, " \t\r");
+        if (std.mem.startsWith(u8, trimmed, "--test-timeout=")) {
+            return std.fmt.parseInt(u32, trimmed["--test-timeout=".len..], 10) catch null;
+        }
+    }
+    return null;
+}
+
+fn envFlagIsSet(b: *std.Build, name: []const u8) bool {
+    const value = b.graph.env_map.get(name) orelse return false;
+    return value.len != 0 and !std.mem.eql(u8, value, "0");
+}
+
+fn addWrappedCommand(
+    b: *std.Build,
+    helper: *std.Build.Step.Compile,
+    label: []const u8,
+    timeout_secs: u32,
+    print_slow: bool,
+    slow_ms: u64,
+    stdin_file: ?std.Build.LazyPath,
+    status_files: *std.ArrayListUnmanaged(std.Build.LazyPath),
+    extra_inputs: []const std.Build.LazyPath,
+) *std.Build.Step.Run {
+    const run = std.Build.Step.Run.create(b, label);
+    run.addArtifactArg(helper);
+    run.addArg("run");
+    run.addArg("--label");
+    run.addArg(label);
+    run.addArg("--timeout-secs");
+    run.addArg(b.fmt("{d}", .{timeout_secs}));
+    run.addArg("--slow-ms");
+    run.addArg(b.fmt("{d}", .{slow_ms}));
+    if (print_slow) {
+        run.addArg("--print-slow");
+    }
+    run.addArg("--status-file");
+    const status_file = run.addOutputFileArg(b.fmt("status_{d}.tsv", .{status_files.items.len}));
+    status_files.append(b.allocator, status_file) catch @panic("OOM");
+    if (stdin_file) |file| {
+        run.addArg("--stdin-file");
+        run.addFileArg(file);
+    }
+    run.addArg("--");
+    for (extra_inputs) |input| run.addFileInput(input);
+    run.setName(label);
+    return run;
+}
+
+fn addVerboseSummary(
+    b: *std.Build,
+    helper: *std.Build.Step.Compile,
+    test_step: *std.Build.Step,
+    suite_name: []const u8,
+    status_files: []const std.Build.LazyPath,
+) void {
+    if (status_files.len == 0) return;
+    const summary = std.Build.Step.Run.create(b, b.fmt("{s} summary", .{suite_name}));
+    summary.addArtifactArg(helper);
+    summary.addArg("summarize");
+    for (status_files) |status_file| {
+        summary.addFileArg(status_file);
+    }
+    test_step.dependOn(&summary.step);
+}
+
 fn addIntegrationTests(
     b: *std.Build,
     artifact: *std.Build.Step.Compile,
+    helper: *std.Build.Step.Compile,
     test_step: *std.Build.Step,
     update_files: ?**std.Build.Step.UpdateSourceFiles,
+    status_files: *std.ArrayListUnmanaged(std.Build.LazyPath),
     test_entries: []const TestEntry,
     has_diff: bool,
     jit_mode: bool,
+    timeout_secs: u32,
+    verbose_test_reporting: bool,
+    slow_test_threshold_ms: u64,
 ) void {
     for (test_entries) |te| {
         if (jit_mode and hasExcludedJitFlag(te.flags_lines)) continue;
 
-        const test_run = b.addRunArtifact(artifact);
+        const label = if (jit_mode)
+            b.fmt("eager integration: {s}", .{te.name_without_ext})
+        else
+            b.fmt("integration: {s}", .{te.name_without_ext});
+        const effective_timeout_secs = testTimeoutSeconds(te.flags_lines) orelse timeout_secs;
+        const wrapper_timeout_secs = effective_timeout_secs +| 1;
+        const test_run = addWrappedCommand(
+            b,
+            helper,
+            label,
+            wrapper_timeout_secs,
+            verbose_test_reporting,
+            slow_test_threshold_ms,
+            if (te.has_stdin) b.path(te.stdin_path) else null,
+            status_files,
+            &.{artifact.getEmittedBin()},
+        );
+        test_run.addArtifactArg(artifact);
+        test_run.setName(label);
         if (te.show_stack) {
             test_run.addArg("--show-stack");
         }
         test_run.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
         if (jit_mode) {
             test_run.addArg("--compile=eager");
+        }
+        if (!hasTestTimeoutFlag(te.flags_lines)) {
+            test_run.addArg(b.fmt("--test-timeout={d}", .{timeout_secs}));
         }
         if (te.flags_lines) |fl| {
             var flag_iter = std.mem.splitScalar(u8, fl, '\n');
@@ -595,9 +746,6 @@ fn addIntegrationTests(
                     test_run.addArg(trimmed_arg);
                 }
             }
-        }
-        if (te.has_stdin) {
-            test_run.setStdIn(.{ .bytes = te.stdin_content });
         }
 
         // Library file dependencies (recursive)
@@ -923,10 +1071,15 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
 fn addAotTests(
     b: *std.Build,
     artifact: *std.Build.Step.Compile,
+    helper: *std.Build.Step.Compile,
     test_step: *std.Build.Step,
     update_files: **std.Build.Step.UpdateSourceFiles,
+    status_files: *std.ArrayListUnmanaged(std.Build.LazyPath),
     aot_entries: []const AotTestEntry,
     has_diff: bool,
+    timeout_secs: u32,
+    verbose_test_reporting: bool,
+    slow_test_threshold_ms: u64,
 ) void {
     const exe_path = b.fmt("{s}/bin/1z", .{b.install_path});
 
@@ -936,7 +1089,20 @@ fn addAotTests(
         const expected_exit: u8 = te.expected_exit_code orelse if (te.has_stderr_golden) 1 else 0;
 
         // Compile: 1z build <file.1z> -o <output>
-        const compile_run = b.addSystemCommand(&.{exe_path});
+        const compile_label = b.fmt("aot build: {s}", .{te.name_without_ext});
+        const compile_run = addWrappedCommand(
+            b,
+            helper,
+            compile_label,
+            timeout_secs,
+            verbose_test_reporting,
+            slow_test_threshold_ms,
+            null,
+            status_files,
+            &.{artifact.getEmittedBin()},
+        );
+        compile_run.addArg(exe_path);
+        compile_run.setName(compile_label);
         compile_run.addArg("build");
         compile_run.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
         compile_run.addFileArg(b.path(te.file_path));
@@ -1046,8 +1212,20 @@ fn addAotTests(
         chmod.addFileArg(aot_binary);
 
         // Execute the compiled binary
-        const exec_run = std.Build.Step.Run.create(b, b.fmt("run aot: {s}", .{te.name_without_ext}));
+        const exec_label = b.fmt("aot run: {s}", .{te.name_without_ext});
+        const exec_run = addWrappedCommand(
+            b,
+            helper,
+            exec_label,
+            timeout_secs,
+            verbose_test_reporting,
+            slow_test_threshold_ms,
+            null,
+            status_files,
+            &.{aot_binary},
+        );
         exec_run.addFileArg(aot_binary);
+        exec_run.setName(exec_label);
         exec_run.step.dependOn(&chmod.step);
         exec_run.expectExitCode(expected_exit);
 
@@ -1271,16 +1449,35 @@ fn formatLspStdin(b: *std.Build, jsonl_content: []const u8) []const u8 {
 fn addLspTests(
     b: *std.Build,
     lsp_artifact: *std.Build.Step.Compile,
+    helper: *std.Build.Step.Compile,
     test_step: *std.Build.Step,
     update_files: **std.Build.Step.UpdateSourceFiles,
+    status_files: *std.ArrayListUnmanaged(std.Build.LazyPath),
     lsp_entries: []const LspTestEntry,
     has_diff: bool,
+    timeout_secs: u32,
+    verbose_test_reporting: bool,
+    slow_test_threshold_ms: u64,
 ) void {
+    var stdin_files = b.addWriteFiles();
     for (lsp_entries) |te| {
         const expected_exit: u8 = te.expected_exit_code orelse if (te.has_stderr_golden) 1 else 0;
+        const stdin_file = stdin_files.add(b.fmt("lsp_{s}.stdin", .{te.name_without_ext}), te.formatted_stdin);
 
-        const test_run = b.addRunArtifact(lsp_artifact);
-        test_run.setStdIn(.{ .bytes = te.formatted_stdin });
+        const label = b.fmt("lsp: {s}", .{te.name_without_ext});
+        const test_run = addWrappedCommand(
+            b,
+            helper,
+            label,
+            timeout_secs,
+            verbose_test_reporting,
+            slow_test_threshold_ms,
+            stdin_file,
+            status_files,
+            &.{lsp_artifact.getEmittedBin()},
+        );
+        test_run.addArtifactArg(lsp_artifact);
+        test_run.setName(label);
         test_run.expectExitCode(expected_exit);
 
         test_run.addFileInput(b.path(te.jsonl_path));

@@ -43,6 +43,7 @@ const max_history = 4096;
 /// LineEditor provides character-by-character line editing with raw terminal mode.
 pub const LineEditor = struct {
     original_termios: std.posix.termios,
+    raw_mode_enabled: bool = false,
     allocator: std.mem.Allocator,
     buf: [4096]u8 = undefined,
     len: usize = 0,
@@ -74,6 +75,7 @@ pub const LineEditor = struct {
         try std.posix.tcsetattr(fd, .FLUSH, raw);
         return .{
             .original_termios = original,
+            .raw_mode_enabled = true,
             .allocator = allocator,
         };
     }
@@ -84,7 +86,9 @@ pub const LineEditor = struct {
             self.allocator.free(entry);
         }
         self.history.deinit(self.allocator);
-        std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.original_termios) catch {};
+        if (self.raw_mode_enabled) {
+            std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.original_termios) catch {};
+        }
     }
 
     /// Resolve the history file path. Returns null if no path can be determined.
@@ -676,6 +680,7 @@ pub const LineEditor = struct {
 fn testEditor() LineEditor {
     return .{
         .original_termios = undefined,
+        .raw_mode_enabled = false,
         .allocator = std.testing.allocator,
     };
 }
