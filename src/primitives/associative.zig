@@ -91,15 +91,21 @@ pub fn nativeAtGet(ctx: *Context) anyerror!void {
         },
         .module => |mod| {
             if (mod.words.get(key_str)) |word| {
-                const alloc = ctx.quotationAllocator();
-                var quot = Quotation{ .instructions = word.instructions };
-                if (word.stack_effect) |effect| {
-                    const effect_ptr = alloc.create(@TypeOf(effect)) catch return error.OutOfMemory;
-                    effect_ptr.* = effect;
-                    quot.effect = effect_ptr;
+                switch (word.action) {
+                    .compound => |instrs| {
+                        const alloc = ctx.quotationAllocator();
+                        var quot = Quotation{ .instructions = instrs };
+                        if (word.stack_effect) |effect| {
+                            const effect_ptr = alloc.create(@TypeOf(effect)) catch return error.OutOfMemory;
+                            effect_ptr.* = effect;
+                            quot.effect = effect_ptr;
+                        }
+                        try ctx.stack.push(.{ .quotation = quot });
+                    },
+                    .native => |func| {
+                        try func(ctx);
+                    },
                 }
-
-                try ctx.stack.push(.{ .quotation = quot });
             } else {
                 setErrorContext(ctx, "key '{s}' not found in module", .{key_str});
                 return error.KeyNotFound;
@@ -148,14 +154,21 @@ fn nativeAtGetOr(ctx: *Context) anyerror!void {
         },
         .module => |mod| {
             if (mod.words.get(key_str)) |word| {
-                const alloc = ctx.quotationAllocator();
-                var quot = Quotation{ .instructions = word.instructions };
-                if (word.stack_effect) |effect| {
-                    const effect_ptr = alloc.create(@TypeOf(effect)) catch return error.OutOfMemory;
-                    effect_ptr.* = effect;
-                    quot.effect = effect_ptr;
+                switch (word.action) {
+                    .compound => |instrs| {
+                        const alloc = ctx.quotationAllocator();
+                        var quot = Quotation{ .instructions = instrs };
+                        if (word.stack_effect) |effect| {
+                            const effect_ptr = alloc.create(@TypeOf(effect)) catch return error.OutOfMemory;
+                            effect_ptr.* = effect;
+                            quot.effect = effect_ptr;
+                        }
+                        try ctx.stack.push(.{ .quotation = quot });
+                    },
+                    .native => |func| {
+                        try func(ctx);
+                    },
                 }
-                try ctx.stack.push(.{ .quotation = quot });
             } else {
                 try ctx.stack.push(default);
             }

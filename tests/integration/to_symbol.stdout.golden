@@ -28,36 +28,36 @@ PASS: string with space rejected
 Stack: [ ]
 PASS: integer rejected
 Stack: [ ]
-=== >word from string ===
+=== >quotation from string ===
 Stack: [ ]
 Stack: [ ]
-PASS: >word from string then call
+PASS: >quotation from string then call
 Stack: [ ]
-=== >word from symbol ===
+=== >quotation from symbol ===
 Stack: [ ]
-PASS: >word from symbol then call
+PASS: >quotation from symbol then call
 Stack: [ ]
-=== >word with native word ===
+=== >quotation with native word ===
 Stack: [ ]
-PASS: >word with native +
+PASS: >quotation with native +
 Stack: [ ]
-=== >word with nonexistent word ===
+=== >quotation with nonexistent word ===
 Stack: [ ]
 PASS: nonexistent word fails on call
 Stack: [ ]
-=== >word sees quotation-local definitions ===
+=== >quotation sees quotation-local definitions ===
 Stack: [ ]
-PASS: >word resolves local in same frame
+PASS: >quotation resolves local in same frame
 Stack: [ ]
-=== >word sees outer local from nested call ===
+=== >quotation sees outer local from nested call ===
 Stack: [ ]
-PASS: >word resolves outer local from inner call
+PASS: >quotation resolves outer local from inner call
 Stack: [ ]
-=== >word cannot see locals after frame exits ===
+=== >quotation cannot see locals after frame exits ===
 Stack: [ ]
 PASS: local not visible after frame exit
 Stack: [ ]
-=== >word resolves at call time not creation time ===
+=== >quotation resolves at call time not creation time ===
 Stack: [ ]
-PASS: >word resolves word defined after >word
+PASS: >quotation resolves word defined after >quotation
 Stack: [ ]

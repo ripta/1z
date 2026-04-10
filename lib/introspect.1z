@@ -1,0 +1,61 @@
+\ lib/introspect.1z - Word introspection and dictionary queries
+
+use "strings" ;
+
+\ Format a method type signature as "  method{ type1 }" or "  method{ type1 type2 }"
+format-method: ( method-types -- str ) [
+  "  method{ " swap " " #join #append " }" #append
+] ;
+
+\ Format word-info as a multi-line help string matching the native help output
+format-word-info: ( wi -- str ) [
+  dup name>>
+  over stack-effect>> dup f = [ drop ] [ " " swap >string #append #append ] if
+  over markers>> dup #len 0 = [ drop ] [
+    " [" swap >iterator [ to-string ] #map #collect ", " #join #append #append "]" #append
+  ] if
+  over native?>> [ " \\native" #append ] [ " \\compound" #append ] if
+  "\n" #append
+  over doc>> dup f = [ drop ] [ swap "\n" swap #append #append "\n" #append ] if
+  swap methods>> dup #len 0 = [ drop ] [
+    >iterator [ format-method ] #map #collect "\n" #join
+    swap #append swap #append "\n" #append
+  ] if
+] ;
+
+\ Display help for a word, matching the output of the native help primitive
+help: ( symbol -- ) [
+  dup >word? {
+    option:some: [ nip format-word-info print flush ]
+    option:none: [ to-string ": no such word\n" #append print flush ]
+  } match
+] ;
+
+\ Find words whose markers include the given marker name.
+\ Accepts a symbol or string: parse-time: words-with-marker
+\ Compares against the "<marker:NAME>" display form of each marker.
+words-with-marker: ( name -- array ) [
+  >string "<marker:" swap #append ">" #append
+  all-words >iterator swap
+  [ swap markers>> >iterator [ to-string ] #map #collect swap #in? ] curry #filter
+  #collect
+] ;
+
+\ Find words whose input arity matches n
+words-with-arity: ( n -- array ) [
+  all-words >iterator swap
+  [ swap stack-effect>> dup f = [ drop drop f ] [ inputs>> #len = ] if ] curry #filter
+  #collect
+] ;
+
+\ Find words whose name contains the given substring
+words-matching: ( str -- array ) [
+  all-words >iterator swap
+  [ swap name>> swap #in? ] curry #filter
+  #collect
+] ;
+
+\ Get the source location of a word as an option
+word-source: ( symbol -- option ) [
+  >word? [ source-loc>> ] ?map
+] ;

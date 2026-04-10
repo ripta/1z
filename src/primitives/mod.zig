@@ -2,6 +2,7 @@
 pub const types = @import("types.zig");
 pub const InterpreterError = types.InterpreterError;
 pub const Primitive = types.Primitive;
+pub const RegistryEntry = types.RegistryEntry;
 
 // Re-export helpers
 pub const helpers = @import("helpers.zig");
@@ -52,6 +53,7 @@ pub const channels = @import("channels.zig");
 pub const iterators = @import("iterators.zig");
 pub const protocols = @import("protocols.zig");
 pub const sockets = @import("sockets.zig");
+pub const introspect = @import("introspect.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -104,4 +106,12 @@ pub const extracted_primitives = stack.primitives ++
     channels.primitives ++
     iterators.primitives ++
     protocols.primitives ++
-    sockets.primitives;
+    sockets.primitives ++
+    introspect.primitives;
+
+// Aggregated registry entries for the native virtual module
+pub const extracted_registry_entries = structs.registry_entries ++
+    virtual.registry_entries ++
+    enums.registry_entries ++
+    protocols.registry_entries ++
+    introspect.registry_entries;

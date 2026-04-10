@@ -11,13 +11,19 @@ const Marker = value_mod.Marker;
 const helpers = @import("helpers.zig");
 const virtual = @import("virtual.zig");
 
-const Primitive = @import("types.zig").Primitive;
+const types_mod = @import("types.zig");
+const Primitive = types_mod.Primitive;
+const RegistryEntry = types_mod.RegistryEntry;
 
 pub const primitives = [_]Primitive{
     .{ .name = "define-enum", .stack_effect = "name: descriptor markers --", .doc = "Define an enum type with flat variant constructors and predicates.", .func = nativeDefineEnum },
     .{ .name = "enum-of", .stack_effect = "val -- str/f", .doc = "Return the parent enum name for an enum variant value, or f if not an enum variant.", .func = nativeEnumOf },
     .{ .name = "enum-variants", .stack_effect = "symbol -- array", .doc = "Return an array of variant name symbols for the named enum.", .func = nativeEnumVariants },
     .{ .name = "match", .stack_effect = "val branches -- ...", .doc = "Exhaustive dispatch on enum variants. Branches are alternating symbol-quotation pairs. Auto-unwraps data-carrying variants.", .func = nativeMatch },
+};
+
+pub const registry_entries = [_]RegistryEntry{
+    .{ .name = "enum-aggregate-predicate", .func = enumAggregatePredicateHelper },
 };
 
 /// define-enum ( name: descriptor markers -- )
@@ -180,10 +186,9 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     const agg_pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{enum_name});
     const enum_name_str = try alloc.dupe(u8, enum_name);
 
-    const agg_instrs = try alloc.alloc(Instruction, 3);
+    const agg_instrs = try alloc.alloc(Instruction, 2);
     agg_instrs[0] = .{ .op = .{ .push_literal = .{ .string = enum_name_str } }, .line = 0 };
-    agg_instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&enumAggregatePredicateHelper)) } }, .line = 0 };
-    agg_instrs[2] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
+    agg_instrs[1] = .{ .op = .{ .call_word = "native.enum-aggregate-predicate" }, .line = 0 };
 
     try ctx.defineWord(agg_pred_name, .{
         .name = agg_pred_name,

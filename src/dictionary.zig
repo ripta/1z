@@ -23,6 +23,12 @@ pub const WordDefinition = struct {
     markers: []const *Marker = &.{},
     // Documentation string for this word, if any.
     doc: ?[]const u8 = null,
+    /// Source file where this word was defined, or null for native primitives.
+    source_file: ?[]const u8 = null,
+    /// Source line where this word was defined, or 0 if unknown.
+    source_line: usize = 0,
+    /// Source column where this word was defined, or 0 if unknown.
+    source_column: usize = 0,
     /// Module this word was imported from. When set, executing this word
     /// pushes the module's deps as a local frame so that late-bound
     /// references to the module's dependencies resolve correctly.

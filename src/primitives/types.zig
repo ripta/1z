@@ -39,3 +39,8 @@ pub const Primitive = struct {
     func: NativeFn,
     parse_time: bool = false,
 };
+
+pub const RegistryEntry = struct {
+    name: []const u8,
+    func: NativeFn,
+};

@@ -4,6 +4,10 @@ const Allocator = std.mem.Allocator;
 const Dictionary = @import("dictionary.zig").Dictionary;
 const WordDefinition = @import("dictionary.zig").WordDefinition;
 const StackEffect = @import("stack_effect.zig").StackEffect;
+const value_mod = @import("value.zig");
+const Module = value_mod.Module;
+const ModuleWord = value_mod.ModuleWord;
+const Instruction = value_mod.Instruction;
 
 const primitives_mod = @import("primitives/mod.zig");
 pub const InterpreterError = primitives_mod.InterpreterError;
@@ -11,6 +15,7 @@ const Primitive = primitives_mod.Primitive;
 const makeSimpleEffect = primitives_mod.makeSimpleEffect;
 
 const all_primitives = primitives_mod.extracted_primitives;
+const all_registry_entries = primitives_mod.extracted_registry_entries;
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
     for (all_primitives) |p| {
@@ -27,4 +32,26 @@ pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
             .action = .{ .native = p.func },
         });
     }
+}
+
+pub fn createNativeModule(dict: *Dictionary, allocator: Allocator) !void {
+    const module = try allocator.create(Module);
+    module.* = .{
+        .name = "native",
+        .words = .{},
+        .importable = false,
+    };
+
+    for (all_registry_entries) |entry| {
+        try module.words.put(allocator, entry.name, .{
+            .action = .{ .native = entry.func },
+        });
+    }
+
+    const instrs = try allocator.alloc(Instruction, 1);
+    instrs[0] = .{ .op = .{ .push_literal = .{ .module = module } }, .line = 0 };
+    try dict.put("native", .{
+        .name = "native",
+        .action = .{ .compound = instrs },
+    });
 }

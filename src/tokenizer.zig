@@ -6,6 +6,7 @@ pub const Token = struct {
     kind: Kind,
     text: []const u8,
     line: usize, // 1-based line number
+    column: usize = 0, // 1-based column number
 
     pub const Kind = enum {
         word, // Regular token (word, number, symbol, bracket, etc.)
@@ -36,6 +37,7 @@ pub const Tokenizer = struct {
     input: []const u8,
     pos: usize,
     line: usize, // 1-based line number
+    line_start: usize = 0, // byte offset of the current line's start
     preserve_newlines: bool,
     parser_coroutine: ?*ParserCoroutine = null,
 
@@ -67,6 +69,7 @@ pub const Tokenizer = struct {
                 const current_line = self.line;
                 self.line += 1;
                 self.pos += 1;
+                self.line_start = self.pos;
                 if (self.preserve_newlines) {
                     return .{ .kind = .newline, .text = "\n", .line = current_line };
                 }
@@ -83,6 +86,7 @@ pub const Tokenizer = struct {
 
         const start = self.pos;
         const token_line = self.line;
+        const token_column = start - self.line_start + 1;
 
         // Doc-comment: `\\` followed by space/tab/newline/CR or end-of-input
         if (self.input[self.pos] == '\\' and
@@ -97,7 +101,7 @@ pub const Tokenizer = struct {
             while (self.pos < self.input.len and self.input[self.pos] != '\n') {
                 self.pos += 1;
             }
-            return .{ .kind = .doc_comment, .text = self.input[start..self.pos], .line = token_line };
+            return .{ .kind = .doc_comment, .text = self.input[start..self.pos], .line = token_line, .column = token_column };
         }
 
         // Line comment: `\ ` followed by space/tab, or `\` at end-of-line/input
@@ -112,7 +116,7 @@ pub const Tokenizer = struct {
             while (self.pos < self.input.len and self.input[self.pos] != '\n') {
                 self.pos += 1;
             }
-            return .{ .kind = .comment, .text = self.input[start..self.pos], .line = token_line };
+            return .{ .kind = .comment, .text = self.input[start..self.pos], .line = token_line, .column = token_column };
         }
 
         // String literal: collect until closing quote
@@ -124,7 +128,7 @@ pub const Tokenizer = struct {
             if (self.pos < self.input.len) {
                 self.pos += 1; // skip closing quote
             }
-            return .{ .kind = .word, .text = self.input[start..self.pos], .line = token_line };
+            return .{ .kind = .word, .text = self.input[start..self.pos], .line = token_line, .column = token_column };
         }
 
         // Collect non-whitespace characters
@@ -132,13 +136,14 @@ pub const Tokenizer = struct {
             self.pos += 1;
         }
 
-        return .{ .kind = .word, .text = self.input[start..self.pos], .line = token_line };
+        return .{ .kind = .word, .text = self.input[start..self.pos], .line = token_line, .column = token_column };
     }
 
     /// Reset the tokenizer to the beginning.
     pub fn reset(self: *Tokenizer) void {
         self.pos = 0;
         self.line = 1;
+        self.line_start = 0;
     }
 
     /// Like `next`, but yields to the parser coroutine when input is
@@ -471,4 +476,52 @@ test "doc-comment line tracking" {
 
     const tok2 = t.next().?;
     try std.testing.expectEqual(@as(usize, 3), tok2.line);
+}
+
+test "column tracking" {
+    var t = Tokenizer.init("abc def");
+    const tok1 = t.next().?;
+    try std.testing.expectEqualStrings("abc", tok1.text);
+    try std.testing.expectEqual(@as(usize, 1), tok1.column);
+
+    const tok2 = t.next().?;
+    try std.testing.expectEqualStrings("def", tok2.text);
+    try std.testing.expectEqual(@as(usize, 5), tok2.column);
+}
+
+test "column tracking across lines" {
+    var t = Tokenizer.init("ab\n  cd\nef");
+    const tok1 = t.next().?;
+    try std.testing.expectEqual(@as(usize, 1), tok1.line);
+    try std.testing.expectEqual(@as(usize, 1), tok1.column);
+
+    const tok2 = t.next().?;
+    try std.testing.expectEqual(@as(usize, 2), tok2.line);
+    try std.testing.expectEqual(@as(usize, 3), tok2.column);
+
+    const tok3 = t.next().?;
+    try std.testing.expectEqual(@as(usize, 3), tok3.line);
+    try std.testing.expectEqual(@as(usize, 1), tok3.column);
+}
+
+test "column tracking with string literal" {
+    var t = Tokenizer.init("a \"hello world\" b");
+    const tok1 = t.next().?;
+    try std.testing.expectEqual(@as(usize, 1), tok1.column);
+
+    const tok2 = t.next().?;
+    try std.testing.expectEqualStrings("\"hello world\"", tok2.text);
+    try std.testing.expectEqual(@as(usize, 3), tok2.column);
+
+    const tok3 = t.next().?;
+    try std.testing.expectEqual(@as(usize, 17), tok3.column);
+}
+
+test "column resets after reset" {
+    var t = Tokenizer.init("abc def");
+    _ = t.next();
+    _ = t.next();
+    t.reset();
+    const tok1 = t.next().?;
+    try std.testing.expectEqual(@as(usize, 1), tok1.column);
 }

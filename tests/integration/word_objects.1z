@@ -1,0 +1,113 @@
+\ Tests for native.>word and >word? (word object introspection)
+
+use "testing" ;
+
+"native.>word on native word" test-section
+dup: native.>word
+dup name>> "dup" "native.>word name for native word" assert=
+dup native?>> t "native.>word native? for native word" assert=
+dup body>> f "native.>word body is f for native word" assert=
+dup stack-effect>> dup
+inputs>> { "a" } "native.>word stack-effect inputs for dup" assert=
+outputs>> { "a" "a" } "native.>word stack-effect outputs for dup" assert=
+source-loc>> f "native.>word source-loc is f for native word" assert=
+
+"native.>word on compound word" test-section
+my-test-word: ( x -- y ) [ 1 + ] ;
+my-test-word: native.>word
+dup name>> "my-test-word" "native.>word name for compound word" assert=
+dup native?>> f "native.>word native? for compound word" assert=
+dup body>> quotation? t "native.>word body is quotation for compound word" assert=
+dup stack-effect>> dup
+inputs>> { "x" } "native.>word stack-effect inputs for compound word" assert=
+outputs>> { "y" } "native.>word stack-effect outputs for compound word" assert=
+dup source-loc>> dup
+file>> string? t "native.>word source-loc file is string" assert=
+line>> 0 > t "native.>word source-loc line is positive" assert=
+markers>> #len 0 >= t "native.>word markers is an array" assert=
+
+"native.>word on nonexistent word throws" test-section
+[ nonexistent-xyz: native.>word ] "NameError" assert-error
+
+"native.>word from string" test-section
+"dup" native.>word name>> "dup" "native.>word accepts string input" assert=
+
+">word? returns some for known word" test-section
+dup: >word? option:some? t ">word? returns some for known word" assert=
+dup: >word? unwrap-or-throw name>> "dup" ">word? some contains word-info" assert=
+
+">word? returns none for unknown word" test-section
+nonexistent-xyz: >word? option:none? t ">word? returns none for unknown word" assert=
+
+">quotation still works" test-section
+helper-word: [ 42 ] ;
+"helper-word" >quotation call 42 ">quotation still resolves words" assert=
+
+"native.>word on word without stack effect" test-section
+no-effect-word: [ 1 ] ;
+no-effect-word: native.>word
+stack-effect>> f "native.>word stack-effect is f when none declared" assert=
+
+"native.>word module field" test-section
+dup: native.>word module>> f "native.>word module is f for non-module word" assert=
+
+"native.>word doc field" test-section
+dup: native.>word doc>> string? t "native.>word doc is a string for documented word" assert=
+no-effect-word: native.>word doc>> f "native.>word doc is f for undocumented word" assert=
+
+"native.>word methods field" test-section
+dup: native.>word methods>> array? t "native.>word methods is an array" assert=
+unwrap-or: native.>word methods>> #len 0 > t "generic word has methods" assert=
+
+"all-words returns an array" test-section
+all-words array? t "all-words returns an array" assert=
+
+"all-words contains known words" test-section
+all-words >iterator [ name>> "dup" = ] #filter #count
+1 "all-words contains dup exactly once" assert=
+
+"all-words entries are word-info structs" test-section
+all-words #first name>> string? t "all-words entries have string names" assert=
+
+"stack-effect >string with inputs and outputs" test-section
+dup: native.>word stack-effect>> >string "( a -- a a )" "stack-effect >string for dup" assert=
+
+"stack-effect >string with single input and output" test-section
+my-test-word: native.>word stack-effect>> >string "( x -- y )" "stack-effect >string for compound word" assert=
+
+"stack-effect >string with no inputs" test-section
+all-words: native.>word stack-effect>> >string "( -- array )" "stack-effect >string for all-words" assert=
+
+\ Library word tests
+use "introspect" ;
+
+"words-matching finds words" test-section
+"dup" words-matching >iterator [ name>> "dup" = ] #filter #count
+1 "words-matching finds dup" assert=
+
+"words-matching returns empty for no match" test-section
+"zzz-nonexistent-zzz" words-matching #len
+0 "words-matching returns empty for no match" assert=
+
+"words-with-arity finds unary words" test-section
+1 words-with-arity >iterator [ name>> "dup" = ] #filter #count
+1 "words-with-arity finds dup (1 input)" assert=
+
+"words-with-arity 0 finds nullary words" test-section
+0 words-with-arity >iterator [ name>> "all-words" = ] #filter #count
+1 "words-with-arity finds all-words (0 inputs)" assert=
+
+"word-source returns some for known word" test-section
+my-test-word: word-source option:some? t "word-source returns some for compound word" assert=
+
+"word-source returns none for unknown word" test-section
+nonexistent-xyz: word-source option:none? t "word-source returns none for unknown" assert=
+
+"word-source returns none for native word" test-section
+dup: word-source unwrap-or-throw f "word-source returns f source-loc for native" assert=
+
+"words-with-marker finds parse-time words" test-section
+parse-time: words-with-marker #len 0 > t "words-with-marker finds parse-time words" assert=
+
+"format-word-info includes name" test-section
+dup: native.>word format-word-info "dup" #in? t "format-word-info includes word name" assert=

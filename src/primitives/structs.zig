@@ -10,10 +10,20 @@ const markers_mod = @import("markers.zig");
 
 const helpers = @import("helpers.zig");
 
-const Primitive = @import("types.zig").Primitive;
+const types_mod = @import("types.zig");
+const Primitive = types_mod.Primitive;
+const RegistryEntry = types_mod.RegistryEntry;
 
 pub const primitives = [_]Primitive{
     .{ .name = "define-struct", .stack_effect = "name: descriptor markers --", .doc = "Define a struct type and its accessor words.", .func = nativeDefineStruct },
+};
+
+pub const registry_entries = [_]RegistryEntry{
+    .{ .name = "make-struct-instance", .func = makeStructInstanceHelper },
+    .{ .name = "hash-to-struct", .func = hashToStructHelper },
+    .{ .name = "struct-type-predicate", .func = structTypePredicateHelper },
+    .{ .name = "struct-field-get", .func = structFieldGetHelper },
+    .{ .name = "struct-field-set", .func = structFieldSetHelper },
 };
 
 /// define-struct ( name: descriptor markers -- ) - Define a struct type and its accessor words
@@ -202,10 +212,9 @@ fn structFieldSetHelper(ctx: *Context) anyerror!void {
 fn defineConstructor(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    const instrs = try alloc.alloc(Instruction, 3);
+    const instrs = try alloc.alloc(Instruction, 2);
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&makeStructInstanceHelper)) } }, .line = 0 };
-    instrs[2] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
+    instrs[1] = .{ .op = .{ .call_word = "native.make-struct-instance" }, .line = 0 };
 
     try ctx.defineWord(name, .{
         .name = name,
@@ -218,10 +227,9 @@ fn defineConstructor(ctx: *Context, name: []const u8, struct_type: *const Struct
 fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    const instrs = try alloc.alloc(Instruction, 3);
+    const instrs = try alloc.alloc(Instruction, 2);
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&hashToStructHelper)) } }, .line = 0 };
-    instrs[2] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
+    instrs[1] = .{ .op = .{ .call_word = "native.hash-to-struct" }, .line = 0 };
 
     try ctx.defineWord(name, .{
         .name = name,
@@ -234,10 +242,9 @@ fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const Stru
 fn defineTypePredicate(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    const instrs = try alloc.alloc(Instruction, 3);
+    const instrs = try alloc.alloc(Instruction, 2);
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&structTypePredicateHelper)) } }, .line = 0 };
-    instrs[2] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
+    instrs[1] = .{ .op = .{ .call_word = "native.struct-type-predicate" }, .line = 0 };
 
     try ctx.defineWord(name, .{
         .name = name,
@@ -250,11 +257,10 @@ fn defineTypePredicate(ctx: *Context, name: []const u8, struct_type: *const Stru
 fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    const instrs = try alloc.alloc(Instruction, 4);
+    const instrs = try alloc.alloc(Instruction, 3);
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(field_index) } }, .line = 0 };
-    instrs[2] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&structFieldGetHelper)) } }, .line = 0 };
-    instrs[3] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
+    instrs[2] = .{ .op = .{ .call_word = "native.struct-field-get" }, .line = 0 };
 
     try ctx.defineWord(name, .{
         .name = name,
@@ -267,15 +273,32 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
 fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    const instrs = try alloc.alloc(Instruction, 4);
+    const instrs = try alloc.alloc(Instruction, 3);
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(field_index) } }, .line = 0 };
-    instrs[2] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&structFieldSetHelper)) } }, .line = 0 };
-    instrs[3] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
+    instrs[2] = .{ .op = .{ .call_word = "native.struct-field-set" }, .line = 0 };
 
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
         .action = .{ .compound = instrs },
     });
+}
+
+pub fn getStructTypeFromMaker(ctx: *const Context, maker_name: []const u8) ?*const StructType {
+    const word = ctx.lookupWord(maker_name) orelse return null;
+    const instrs = switch (word.action) {
+        .compound => |c| c,
+        .native => return null,
+    };
+
+    if (instrs.len == 0) return null;
+
+    return switch (instrs[0].op) {
+        .push_literal => |v| switch (v) {
+            .struct_type => |st| st,
+            else => null,
+        },
+        else => null,
+    };
 }

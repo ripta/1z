@@ -248,26 +248,27 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
 
         const token = tok.text;
         const line = tok.line;
+        const column = tok.column;
         if (std.mem.eql(u8, token, "[")) {
             const quotation = try parseQuotation(allocator, tokenizer, ctx);
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = quotation } }, .line = line }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = quotation } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "]")) {
             return ParseError.UnmatchedCloseBracket;
         } else if (std.mem.eql(u8, token, "{")) {
             const arr = try parseArray(allocator, tokenizer, ctx);
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .array = arr } }, .line = line }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .array = arr } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "}")) {
             return ParseError.UnmatchedCloseBrace;
         } else if (std.mem.eql(u8, token, "(")) {
             const effect = try parseStackEffect(allocator, tokenizer);
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = line }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, ")")) {
             return ParseError.UnmatchedCloseParen;
         } else if (parseInteger(token)) |n| {
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .integer = n } }, .line = line }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .integer = n } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
             const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (token.len > 0 and token[0] == '"') {
             return ParseError.UnmatchedOpenQuote;
         } else {
@@ -289,7 +290,7 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
 
             if (token.len > 1 and token[token.len - 1] == ':') {
                 const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
-                instructions.append(allocator, .{ .op = .{ .push_literal = .{ .symbol = sym_copy } }, .line = line }) catch return ParseError.OutOfMemory;
+                instructions.append(allocator, .{ .op = .{ .push_literal = .{ .symbol = sym_copy } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
 
                 if (has_pending_docs) {
                     const doc_text = try joinDocLines(allocator, doc_lines.items);
@@ -297,7 +298,7 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
                 }
             } else {
                 const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
-                instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line }) catch return ParseError.OutOfMemory;
+                instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
             }
         }
 
@@ -341,19 +342,20 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
 
         const token = tok.text;
         const line = tok.line;
+        const column = tok.column;
         if (std.mem.eql(u8, token, close_delim)) {
             const instrs = instructions.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
             return Quotation{ .instructions = instrs, .effect = quotation_effect };
         } else if (std.mem.eql(u8, token, "[")) {
             is_first_token = false;
             const nested = try parseQuotation(allocator, tokenizer, ctx);
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = nested } }, .line = line }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = nested } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "]")) {
             return ParseError.UnmatchedCloseBracket;
         } else if (std.mem.eql(u8, token, "{")) {
             is_first_token = false;
             const arr = try parseArray(allocator, tokenizer, ctx);
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .array = arr } }, .line = line }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .array = arr } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "}")) {
             return ParseError.UnmatchedCloseBrace;
         } else if (std.mem.eql(u8, token, "(")) {
@@ -365,18 +367,18 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
                 quotation_effect = effect_ptr;
             } else {
                 // Non-leading stack effect is pushed as a value
-                instructions.append(allocator, .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = line }) catch return ParseError.OutOfMemory;
+                instructions.append(allocator, .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
             }
             is_first_token = false;
         } else if (std.mem.eql(u8, token, ")")) {
             return ParseError.UnmatchedCloseParen;
         } else if (parseInteger(token)) |n| {
             is_first_token = false;
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .integer = n } }, .line = line }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .integer = n } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
             is_first_token = false;
             const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (token.len > 0 and token[0] == '"') {
             return ParseError.UnmatchedOpenQuote;
         } else {
@@ -399,7 +401,7 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
             is_first_token = false;
             if (token.len > 1 and token[token.len - 1] == ':') {
                 const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
-                instructions.append(allocator, .{ .op = .{ .push_literal = .{ .symbol = sym_copy } }, .line = line }) catch return ParseError.OutOfMemory;
+                instructions.append(allocator, .{ .op = .{ .push_literal = .{ .symbol = sym_copy } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
 
                 if (has_pending_docs) {
                     const doc_text = try joinDocLines(allocator, doc_lines.items);
@@ -407,7 +409,7 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
                 }
             } else {
                 const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
-                instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line }) catch return ParseError.OutOfMemory;
+                instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
             }
         }
 
