@@ -1,8 +1,6 @@
 .PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test lsp-test aot-test update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark build-example clean help docs
 
 SHELL := /bin/bash
-
-ONE_Z_FILES := $(shell find . -name '*.1z' -not -path './.zig-cache/*' -not -path './zig-out/*')
 TIMEOUT := 45
 
 all: build test
@@ -18,7 +16,7 @@ run: build ## Build and run the 1z interpreter
 
 fmt: build ## Format zig and 1z source files
 	zig fmt src/ build.zig
-	./zig-out/bin/1z fmt $(ONE_Z_FILES)
+	./zig-out/bin/1z fmt $$(find . \( -path './.zig-cache' -o -path './zig-out' \) -prune -o -name '*.1z' -print)
 
 test: unit-test integration-test fmt-test eager-test lsp-test aot-test ## Run all tests
 
