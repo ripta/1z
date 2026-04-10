@@ -1,0 +1,56 @@
+use "testing" ;
+
+"import-history: wildcard import" test-section
+native.import-history #len 0 > t "at least one record exists" assert=
+native.import-history #last
+dup 3 #nth "testing" "module-path is testing" assert=
+dup 4 #nth f "wildcard import has f for imported-words" assert=
+dup 5 #nth #first "/" #first = t "resolved-path is absolute" assert=
+0 #nth string? t "source-file is string" assert=
+
+"import-history: record structure" test-section
+native.import-history #last
+dup 0 #nth string? t "source-file is string" assert=
+dup 1 #nth fixnum? t "source-line is fixnum" assert=
+dup 1 #nth 0 > t "source-line is positive" assert=
+dup 2 #nth fixnum? t "source-column is fixnum" assert=
+dup 2 #nth 0 > t "source-column is positive" assert=
+dup 3 #nth string? t "module-path is string" assert=
+dup 5 #nth string? t "resolved-path is string" assert=
+drop
+
+"import-history: selective import" test-section
+use { assert=: assert-true: } "testing" shadow-ok ;
+native.import-history #last
+dup 3 #nth "testing" "selective module-path is testing" assert=
+4 #nth #len 2 "two words selected" assert=
+
+"import-history: ordering" test-section
+native.import-history
+dup #len 2 >= t "at least two records after two imports" assert=
+drop
+
+"import-history: source location for this file" test-section
+native.import-history #first
+dup 0 #nth "tests/integration/import_history.1z" swap #ends-with?
+t "source-file ends with test filename" assert=
+1 #nth 1 "first import is at line 1" assert=
+
+"import-history: reexport records" test-section
+use "mod_b_reexport.1z" shadow-ok ;
+\ The reexport inside mod_b_reexport.1z should produce a record.
+\ It won't be the last record (that's the use of mod_b_reexport.1z itself).
+\ Search for a record whose module-path is mod_a.1z.
+native.import-history
+[ 3 #nth "mod_a.1z" = ] #filter #collect
+#len 0 > t "reexport produced a record for mod_a.1z" assert=
+
+"import-history: library wrapper" test-section
+use "import-history" ;
+>import-records #last
+dup module-path>> string? t "struct module-path is string" assert=
+dup source-file>> string? t "struct source-file is string" assert=
+dup source-line>> fixnum? t "struct source-line is fixnum" assert=
+dup source-column>> fixnum? t "struct source-column is fixnum" assert=
+dup resolved-path>> string? t "struct resolved-path is string" assert=
+drop

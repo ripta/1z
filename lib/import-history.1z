@@ -1,0 +1,21 @@
+\ lib/import-history.1z - Import history introspection
+
+\\ An import record: source location, module path, imported words, and resolved path.
+import-record: struct{
+  source-file:    string
+  source-line:    fixnum
+  source-column:  fixnum
+  module-path:    string
+  imported-words: any
+  resolved-path:  string
+} ;
+
+\\ Return the import history as an array of import-record structs.
+>import-records: ( -- array ) [
+  native.import-history
+  [
+    dup 0 #nth swap dup 1 #nth swap dup 2 #nth swap
+    dup 3 #nth swap dup 4 #nth swap 5 #nth
+    make-import-record
+  ] #map #collect
+] ;

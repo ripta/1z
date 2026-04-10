@@ -1987,6 +1987,9 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
 
         file_line += 1;
         processor.trackLine(file_line);
+        if (processor.start_line > 0) {
+            ctx.parse_line_offset = processor.start_line - 1;
+        }
 
         switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
             .needs_more_input => continue,

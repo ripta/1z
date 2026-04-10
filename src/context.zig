@@ -293,6 +293,17 @@ pub const Context = struct {
     /// parse-time-only marker. Used by the parser to allow parse-time-only
     /// words inside parse-time definitions.
     parsing_parse_time_def: bool = false,
+    /// Source line of the current parse-time word invocation (file-relative).
+    /// Set by executeParseTimeWord with save/restore for nesting.
+    parse_time_source_line: usize = 0,
+    /// Source column of the current parse-time word invocation.
+    parse_time_source_column: usize = 0,
+    /// Offset to convert tokenizer-relative line numbers to file-relative.
+    /// The tokenizer restarts at line 1 for each statement. This offset is
+    /// the file line where the current statement starts minus 1.
+    parse_line_offset: usize = 0,
+    /// Accumulated import records from `use` and `reexport` calls.
+    import_history: std.ArrayListUnmanaged(Value) = .{},
     /// Cache of loaded modules keyed by canonical file path.
     /// Prevents redundant loading when multiple files `use` the same module.
     /// Stored as an M{} value so it can be exposed as a dynamic parameter.
@@ -777,6 +788,7 @@ pub const Context = struct {
         self.pragma_frames.deinit(self.allocator);
         self.pragma_registry.deinit(self.allocator);
         self.parse_time_deferred_calls.deinit(self.allocator);
+        self.import_history.deinit(self.allocator);
         for (self.type_registry_frames.items) |*frame| {
             frame.deinit(self.allocator);
         }

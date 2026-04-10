@@ -36,6 +36,10 @@ const RegistryEntry = @import("types.zig").RegistryEntry;
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "resolve-load-path", .func = nativeResolveLoadPath, .stack_effect = "filename -- resolved", .capability = .io_fs },
     .{ .name = "module-cache-value", .func = nativeModuleCacheValue, .stack_effect = "-- cache" },
+    .{ .name = "record-import", .func = nativeRecordImport, .stack_effect = "module-path words-or-f resolved-path --" },
+    .{ .name = "import-history", .func = nativeImportHistory, .stack_effect = "-- array" },
+    .{ .name = "parse-source-loc", .func = nativeParseSrcLoc, .stack_effect = "-- file line column" },
+    .{ .name = "module-name", .func = nativeModuleName, .stack_effect = "module -- name" },
 };
 
 fn nativeToModule(ctx: *Context) anyerror!void {
@@ -235,7 +239,11 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
         ctx.protocol_obligations = saved_obligations;
     }
 
+    const old_line_offset = ctx.parse_line_offset;
+    defer ctx.parse_line_offset = old_line_offset;
+
     var processor: StatementProcessor = .{};
+    var file_line: usize = 0;
     while (true) {
         const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
             error.EndOfStream => {
@@ -252,6 +260,12 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
             },
             else => return error.FileReadFailed,
         };
+
+        file_line += 1;
+        processor.trackLine(file_line);
+        if (processor.start_line > 0) {
+            ctx.parse_line_offset = processor.start_line - 1;
+        }
 
         switch (processor.feedLine(alloc, line, ctx)) {
             .needs_more_input => continue,
@@ -951,4 +965,74 @@ fn nativeEvalString(ctx: *Context) anyerror!void {
             }
         },
     }
+}
+
+// ( module-path words-or-f resolved-path -- )
+// Append an import record to the context's import history.
+// Allowed during parse-time or module loading.
+fn nativeRecordImport(ctx: *Context) anyerror!void {
+    const resolved_path = try popString(ctx);
+    const words_or_f = try ctx.stack.pop();
+    const module_path = try popString(ctx);
+
+    // Validate words-or-f is an array or false
+    switch (words_or_f) {
+        .array => {},
+        .boolean => |b| if (b) {
+            helpers.setTypeMismatchError(ctx, "array or f", words_or_f);
+            return error.TypeMismatch;
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "array or f", words_or_f);
+            return error.TypeMismatch;
+        },
+    }
+
+    const arena = ctx.arena.allocator();
+    const fields = try arena.alloc(Value, 6);
+    fields[0] = .{ .string = try arena.dupe(u8, ctx.current_source) };
+    fields[1] = .{ .fixnum = @intCast(ctx.parse_time_source_line) };
+    fields[2] = .{ .fixnum = @intCast(ctx.parse_time_source_column) };
+    fields[3] = .{ .string = try arena.dupe(u8, module_path) };
+    fields[4] = words_or_f;
+    fields[5] = .{ .string = try arena.dupe(u8, resolved_path) };
+
+    try ctx.import_history.append(ctx.allocator, .{ .array = fields });
+}
+
+// ( -- array )
+// Return the accumulated import history as an array of arrays.
+fn nativeImportHistory(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const items = ctx.import_history.items;
+    const result = try alloc.alloc(Value, items.len);
+    @memcpy(result, items);
+    try ctx.stack.push(.{ .array = result });
+}
+
+// ( -- file line column )
+// Push the current parse-time invocation source location.
+fn nativeParseSrcLoc(ctx: *Context) anyerror!void {
+    if (ctx.parse_tokenizer == null) {
+        ctx.pending_error_message = "parse-source-loc can only be called during parsing";
+        return error.ParseError;
+    }
+
+    try ctx.stack.push(.{ .string = ctx.current_source });
+    try ctx.stack.push(.{ .fixnum = @intCast(ctx.parse_time_source_line) });
+    try ctx.stack.push(.{ .fixnum = @intCast(ctx.parse_time_source_column) });
+}
+
+// ( module -- name )
+// Extract the name from a module value.
+fn nativeModuleName(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const module = switch (val) {
+        .module => |m| m,
+        else => {
+            helpers.setTypeMismatchError(ctx, "module", val);
+            return error.TypeMismatch;
+        },
+    };
+    try ctx.stack.push(.{ .string = module.name });
 }

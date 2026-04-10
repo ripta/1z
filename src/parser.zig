@@ -224,6 +224,7 @@ fn executeParseTimeWord(
     instructions: *std.ArrayListUnmanaged(Instruction),
     allocator: Allocator,
     line: usize,
+    column: usize,
 ) ParseError!void {
     const pre_depth = c.stack.depth();
 
@@ -260,6 +261,13 @@ fn executeParseTimeWord(
 
     // 3. Keep everything before the trail, including call_words and their operands, untouched
     instructions.items.len = tail_start;
+
+    const old_invoke_line = c.parse_time_source_line;
+    const old_invoke_column = c.parse_time_source_column;
+    c.parse_time_source_line = line + c.parse_line_offset;
+    c.parse_time_source_column = column;
+    defer c.parse_time_source_line = old_invoke_line;
+    defer c.parse_time_source_column = old_invoke_column;
 
     const old_tokenizer = c.parse_tokenizer;
     c.parse_tokenizer = tokenizer;
@@ -464,7 +472,7 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
                     if (ctx) |c| {
                         if (c.lookupWord(token)) |word| {
                             if (word.parse_time) {
-                                try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line);
+                                try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line, column);
 
                                 if (has_pending_docs) {
                                     doc_lines.clearRetainingCapacity();
@@ -606,7 +614,7 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
                                     return ParseError.ParseTimeExecutionError;
                                 }
                                 const was_first_token = is_first_token;
-                                try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line);
+                                try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line, column);
 
                                 if (was_first_token and instructions.items.len > 0) {
                                     const last = instructions.items[instructions.items.len - 1];

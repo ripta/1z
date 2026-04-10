@@ -553,32 +553,48 @@ use: parse-time [
     "reload" #in? [ reload ] [ load ] if
   ] ;
 
+  (record-use): ( filename words-or-f -- ) [
+    over native.resolve-load-path  \ filename words-or-f resolved
+    native.record-import
+  ] ;
+
   parse-literal
   dup string?
   [
     \ use "filename" [modifiers] ;
-    ";" parse-values-until dup (validate-use-tail)
-    dup [ (use-load) ] dip
-    shadow-ok #in? not
-    [ dup dup @keys assert-no-shadow ] when
-    import
+    dup  \ filename filename
+    [
+      ";" parse-values-until dup (validate-use-tail)
+      dup [ (use-load) ] dip
+      shadow-ok #in? not
+      [ dup dup @keys assert-no-shadow ] when
+      import
+    ] dip  \ filename
+    f (record-use)
   ]
   [
     \ use { selection } "filename" [modifiers] ;
-    parse-literal
-    ";" parse-values-until dup (validate-use-tail)
-    dup [ (use-load) ] dip  \ { sel } module { mods }
-    shadow-ok #in? not      \ { sel } module no-shadow?
-    [ over over swap assert-no-shadow ] when
-    swap import
+    parse-literal  \ selection filename
+    over over      \ selection filename selection filename
+    [
+      ";" parse-values-until dup (validate-use-tail)
+      dup [ (use-load) ] dip  \ { sel } module { mods }
+      shadow-ok #in? not      \ { sel } module no-shadow?
+      [ over over swap assert-no-shadow ] when
+      swap import
+    ] 2dip  \ selection filename
+    swap (record-use)
   ]
   if
 ] ;
 
 \\ Reexport all words from a module as public definitions.
 reexport: ( module -- ) [
-  dup @keys swap import
-  [ export ] #each
+  dup native.module-name swap  \ module-name module
+  dup @keys swap import        \ module-name
+  [ export ] #each             \ module-name
+  dup f swap                   \ module-name f module-name
+  native.record-import
 ] ;
 
 \ Loops

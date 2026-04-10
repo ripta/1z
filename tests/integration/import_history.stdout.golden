@@ -1,0 +1,72 @@
+=== import-history: wildcard import ===
+Stack: [ ]
+PASS: at least one record exists
+Stack: [ ]
+Stack: [ { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } ]
+PASS: module-path is testing
+Stack: [ { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } ]
+PASS: wildcard import has f for imported-words
+Stack: [ { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } ]
+PASS: resolved-path is absolute
+Stack: [ { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } ]
+PASS: source-file is string
+Stack: [ ]
+=== import-history: record structure ===
+Stack: [ ]
+Stack: [ { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } ]
+PASS: source-file is string
+Stack: [ { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } ]
+PASS: source-line is fixnum
+Stack: [ { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } ]
+PASS: source-line is positive
+Stack: [ { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } ]
+PASS: source-column is fixnum
+Stack: [ { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } ]
+PASS: source-column is positive
+Stack: [ { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } ]
+PASS: module-path is string
+Stack: [ { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } ]
+PASS: resolved-path is string
+Stack: [ { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } ]
+Stack: [ ]
+=== import-history: selective import ===
+Stack: [ ]
+Stack: [ { "tests/integration/import_history.1z" 23 1 "testing" { assert=: assert-true: } "/Users/ripta/projects/1z/lib/testing.1z" } ]
+PASS: selective module-path is testing
+Stack: [ { "tests/integration/import_history.1z" 23 1 "testing" { assert=: assert-true: } "/Users/ripta/projects/1z/lib/testing.1z" } ]
+PASS: two words selected
+Stack: [ ]
+=== import-history: ordering ===
+Stack: [ ]
+Stack: [ { { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } { "tests/integration/import_history.1z" 23 1 "testing" { assert=: assert-true: } "/Users/ripta/projects/1z/lib/testing.1z" } } ]
+PASS: at least two records after two imports
+Stack: [ { { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } { "tests/integration/import_history.1z" 23 1 "testing" { assert=: assert-true: } "/Users/ripta/projects/1z/lib/testing.1z" } } ]
+Stack: [ ]
+=== import-history: source location for this file ===
+Stack: [ ]
+Stack: [ { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } ]
+Stack: [ { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } t ]
+PASS: source-file ends with test filename
+Stack: [ { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } ]
+PASS: first import is at line 1
+Stack: [ ]
+=== import-history: reexport records ===
+Stack: [ ]
+Stack: [ { { "tests/integration/import_history.1z" 1 1 "testing" f "/Users/ripta/projects/1z/lib/testing.1z" } { "tests/integration/import_history.1z" 23 1 "testing" { assert=: assert-true: } "/Users/ripta/projects/1z/lib/testing.1z" } { "mod_b_reexport.1z" 40 1 "mod_a.1z" f "mod_a.1z" } { "tests/integration/import_history.1z" 40 1 "mod_b_reexport.1z" f "/Users/ripta/projects/1z/tests/integration/mod_b_reexport.1z" } } ]
+Stack: [ { { "mod_b_reexport.1z" 40 1 "mod_a.1z" f "mod_a.1z" } } ]
+PASS: reexport produced a record for mod_a.1z
+Stack: [ ]
+=== import-history: library wrapper ===
+Stack: [ ]
+Stack: [ import-record{ source-file: "tests/integration/import_history.1z" source-line: 49 source-column: 1 module-path: "import-history" imported-words: f resolved-path: "/Users/ripta/projects/1z/lib/import-history.1z" } ]
+PASS: struct module-path is string
+Stack: [ import-record{ source-file: "tests/integration/import_history.1z" source-line: 49 source-column: 1 module-path: "import-history" imported-words: f resolved-path: "/Users/ripta/projects/1z/lib/import-history.1z" } ]
+PASS: struct source-file is string
+Stack: [ import-record{ source-file: "tests/integration/import_history.1z" source-line: 49 source-column: 1 module-path: "import-history" imported-words: f resolved-path: "/Users/ripta/projects/1z/lib/import-history.1z" } ]
+PASS: struct source-line is fixnum
+Stack: [ import-record{ source-file: "tests/integration/import_history.1z" source-line: 49 source-column: 1 module-path: "import-history" imported-words: f resolved-path: "/Users/ripta/projects/1z/lib/import-history.1z" } ]
+PASS: struct source-column is fixnum
+Stack: [ import-record{ source-file: "tests/integration/import_history.1z" source-line: 49 source-column: 1 module-path: "import-history" imported-words: f resolved-path: "/Users/ripta/projects/1z/lib/import-history.1z" } ]
+PASS: struct resolved-path is string
+Stack: [ import-record{ source-file: "tests/integration/import_history.1z" source-line: 49 source-column: 1 module-path: "import-history" imported-words: f resolved-path: "/Users/ripta/projects/1z/lib/import-history.1z" } ]
+Stack: [ ]
