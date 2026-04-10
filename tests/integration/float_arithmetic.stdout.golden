@@ -1,0 +1,98 @@
+=== Float + float ===
+Stack: [ ]
+PASS: 1.5 + 2.5
+Stack: [ ]
+PASS: 10.0 - 3.0
+Stack: [ ]
+PASS: 2.0 * 3.0
+Stack: [ ]
+PASS: 7.0 / 2.0
+Stack: [ ]
+PASS: 5.5 fmod 2.0
+Stack: [ ]
+=== Mixed fixnum + float promotion ===
+Stack: [ ]
+PASS: fixnum + float
+Stack: [ ]
+PASS: float + fixnum
+Stack: [ ]
+PASS: fixnum - float
+Stack: [ ]
+PASS: float - fixnum
+Stack: [ ]
+PASS: fixnum * float
+Stack: [ ]
+PASS: float * fixnum
+Stack: [ ]
+PASS: fixnum / float
+Stack: [ ]
+PASS: float / fixnum
+Stack: [ ]
+PASS: fixnum fmod float
+Stack: [ ]
+PASS: float fmod fixnum
+Stack: [ ]
+=== Result type is float when mixed ===
+Stack: [ ]
+PASS: fixnum + float => float type
+Stack: [ ]
+PASS: float + fixnum => float type
+Stack: [ ]
+PASS: float * float => float type
+Stack: [ ]
+=== Fixnum arithmetic unchanged ===
+Stack: [ ]
+PASS: fixnum + fixnum
+Stack: [ ]
+PASS: fixnum - fixnum
+Stack: [ ]
+PASS: fixnum * fixnum
+Stack: [ ]
+PASS: fixnum / fixnum
+Stack: [ ]
+PASS: fixnum % fixnum
+Stack: [ ]
+PASS: fixnum + fixnum => fixnum type
+Stack: [ ]
+=== IEEE 754 division ===
+Stack: [ ]
+PASS: 1.0 / 0.0 is float
+Stack: [ ]
+PASS: -1.0 / 0.0 is float
+Stack: [ ]
+PASS: 0.0 / 0.0 is float
+Stack: [ ]
+=== Integer division by zero still throws ===
+Stack: [ ]
+PASS: DivisionByZero
+Stack: [ ]
+=== Mixed equality ===
+Stack: [ ]
+PASS: fixnum = float (equal)
+Stack: [ ]
+PASS: float = fixnum (equal)
+Stack: [ ]
+PASS: fixnum != float (unequal)
+Stack: [ ]
+PASS: zero fixnum = zero float
+Stack: [ ]
+=== Mixed less-than ===
+Stack: [ ]
+PASS: fixnum < float
+Stack: [ ]
+PASS: float < fixnum
+Stack: [ ]
+PASS: fixnum not < float
+Stack: [ ]
+PASS: float not < fixnum
+Stack: [ ]
+=== Mixed greater-than ===
+Stack: [ ]
+PASS: fixnum > float
+Stack: [ ]
+PASS: float > fixnum
+Stack: [ ]
+PASS: fixnum not > float
+Stack: [ ]
+PASS: float not > fixnum
+Stack: [ ]

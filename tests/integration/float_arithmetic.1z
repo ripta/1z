@@ -1,0 +1,61 @@
+\ Test float arithmetic: float+float, mixed int+float, IEEE 754 division, fmod
+
+use "testing" ;
+
+"Float + float" test-section
+1.5 2.5 + 4.0 "1.5 + 2.5" assert=
+10.0 3.0 - 7.0 "10.0 - 3.0" assert=
+2.0 3.0 * 6.0 "2.0 * 3.0" assert=
+7.0 2.0 / 3.5 "7.0 / 2.0" assert=
+5.5 2.0 % 1.5 "5.5 fmod 2.0" assert=
+
+"Mixed fixnum + float promotion" test-section
+1 0.5 + 1.5 "fixnum + float" assert=
+0.5 1 + 1.5 "float + fixnum" assert=
+10 2.5 - 7.5 "fixnum - float" assert=
+2.5 1 - 1.5 "float - fixnum" assert=
+3 1.5 * 4.5 "fixnum * float" assert=
+1.5 3 * 4.5 "float * fixnum" assert=
+7 2.0 / 3.5 "fixnum / float" assert=
+7.0 2 / 3.5 "float / fixnum" assert=
+5 2.0 % 1.0 "fixnum fmod float" assert=
+5.5 2 % 1.5 "float fmod fixnum" assert=
+
+"Result type is float when mixed" test-section
+1 1.0 + type-of float: "fixnum + float => float type" assert=
+1.0 1 + type-of float: "float + fixnum => float type" assert=
+2.0 1.0 * type-of float: "float * float => float type" assert=
+
+"Fixnum arithmetic unchanged" test-section
+3 4 + 7 "fixnum + fixnum" assert=
+10 3 - 7 "fixnum - fixnum" assert=
+3 4 * 12 "fixnum * fixnum" assert=
+7 2 / 3 "fixnum / fixnum" assert=
+7 3 % 1 "fixnum % fixnum" assert=
+3 4 + type-of fixnum: "fixnum + fixnum => fixnum type" assert=
+
+"IEEE 754 division" test-section
+1.0 0.0 / type-of float: "1.0 / 0.0 is float" assert=
+-1.0 0.0 / type-of float: "-1.0 / 0.0 is float" assert=
+0.0 0.0 / type-of float: "0.0 / 0.0 is float" assert=
+
+"Integer division by zero still throws" test-section
+[ 1 0 / ] "DivisionByZero" assert-error
+
+"Mixed equality" test-section
+42 42.0 = "fixnum = float (equal)" assert-true
+42.0 42 = "float = fixnum (equal)" assert-true
+42 42.1 = not "fixnum != float (unequal)" assert-true
+0 0.0 = "zero fixnum = zero float" assert-true
+
+"Mixed less-than" test-section
+1 1.5 < "fixnum < float" assert-true
+1.5 2 < "float < fixnum" assert-true
+2 1.5 < not "fixnum not < float" assert-true
+1.5 1 < not "float not < fixnum" assert-true
+
+"Mixed greater-than" test-section
+2 1.5 > "fixnum > float" assert-true
+1.5 1 > "float > fixnum" assert-true
+1 1.5 > not "fixnum not > float" assert-true
+1.5 2 > not "float not > fixnum" assert-true

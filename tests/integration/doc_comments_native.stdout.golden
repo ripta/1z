@@ -4,7 +4,7 @@ Duplicate top of stack.
 Stack: [ ]
 + ( a b -- a+b ) \native
 
-Add two fixnums.
+Add two numbers. Promotes to float if either operand is a float.
 Stack: [ ]
 if ( ? true-quot false-quot --  ) \native
 

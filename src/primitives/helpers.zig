@@ -387,6 +387,40 @@ pub fn popChannel(ctx: *Context) !*@import("../channel.zig").Channel {
     };
 }
 
+// =============================================================================
+// Number helpers (fixnum/float promotion)
+// =============================================================================
+
+pub const Number = union(enum) {
+    fixnum: i64,
+    float: f64,
+};
+
+pub fn popNumber(ctx: *Context) !Number {
+    const val = try ctx.stack.pop();
+    return switch (val) {
+        .fixnum => |i| .{ .fixnum = i },
+        .float => |f| .{ .float = f },
+        else => {
+            setTypeMismatchError(ctx, "number", val);
+            return error.TypeMismatch;
+        },
+    };
+}
+
+pub fn toFloats(a: Number, b: Number) [2]f64 {
+    return .{
+        switch (a) {
+            .fixnum => |i| @as(f64, @floatFromInt(i)),
+            .float => |f| f,
+        },
+        switch (b) {
+            .fixnum => |i| @as(f64, @floatFromInt(i)),
+            .float => |f| f,
+        },
+    };
+}
+
 /// Pop a duration value (tagged fixnum with inner_type "fixnum") and return
 /// the raw nanosecond count plus the original Value for re-use.
 pub fn popDuration(ctx: *Context) !struct { ns: i128, val: Value } {
