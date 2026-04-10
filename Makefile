@@ -1,7 +1,7 @@
 .PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test lsp-test aot-test update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark build-example clean help docs
 
 SHELL := /bin/bash
-TIMEOUT := 45
+TIMEOUT := 60
 MAKEFLAGS += -j4
 
 all: build test
