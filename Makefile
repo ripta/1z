@@ -23,25 +23,25 @@ fmt: build ## Format zig and 1z source files
 test: unit-test integration-test fmt-test ## Run all tests
 
 unit-test: ## Run unit tests
-	( time timeout $(TIMEOUT) zig build test )
+	( time timeout $(TIMEOUT) zig build test $(if $(VERBOSE),--summary all,) )
 
 integration-test: ## Run integration tests
-	( time timeout $(TIMEOUT) zig build integration-test )
+	( time timeout $(TIMEOUT) zig build integration-test $(if $(VERBOSE),--summary all,) )
 
 jit-build: ## Build only the 1z-jit binary
 	zig build jit-build
 
 jit-test: ## Run integration tests with JIT auto-compilation
-	timeout $(TIMEOUT) zig build jit-integration-test
+	( time timeout $(TIMEOUT) zig build jit-integration-test $(if $(VERBOSE),--summary all,) )
 
 fmt-test: ## Run formatter tests
-	( time timeout $(TIMEOUT) zig build fmt-test )
+	( time timeout $(TIMEOUT) zig build fmt-test $(if $(VERBOSE),--summary all,) )
 
 update-golden: ## Update integration test golden files
-	timeout $(TIMEOUT) zig build update-golden
+	( time timeout $(TIMEOUT) zig build update-golden )
 
 update-fmt-golden: ## Update formatter test golden files
-	timeout $(TIMEOUT) zig build update-fmt-golden
+	( time timeout $(TIMEOUT) zig build update-fmt-golden )
 
 BENCHMARK_FILES := $(wildcard tests/benchmark/*.1z)
 
