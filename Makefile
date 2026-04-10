@@ -1,12 +1,14 @@
 .PHONY: all build release run fmt test unit-test integration-test fmt-test update-golden update-fmt-golden clean help
 
+SHELL := /bin/bash
+
 ONE_Z_FILES := $(shell find . -name '*.1z' -not -path './.zig-cache/*' -not -path './zig-out/*')
 TIMEOUT := 30
 
 all: build
 
 build: ## Build the project (default)
-	zig build
+	( time zig build )
 
 release: ## Build with optimizations
 	zig build --release
@@ -21,13 +23,13 @@ fmt: build ## Format zig and 1z source files
 test: unit-test integration-test fmt-test ## Run all tests
 
 unit-test: ## Run unit tests
-	timeout $(TIMEOUT) zig build test
+	( time timeout $(TIMEOUT) zig build test )
 
 integration-test: ## Run integration tests
-	timeout $(TIMEOUT) zig build integration-test
+	( time timeout $(TIMEOUT) zig build integration-test )
 
 fmt-test: ## Run formatter tests
-	timeout $(TIMEOUT) zig build fmt-test
+	( time timeout $(TIMEOUT) zig build fmt-test )
 
 update-golden: ## Update integration test golden files
 	timeout $(TIMEOUT) zig build update-golden
