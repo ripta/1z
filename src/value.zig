@@ -336,6 +336,7 @@ fn writeFormatSpec(writer: anytype, spec: FormatSpec) !void {
 /// Value represents any value that can be stored on the stack.
 pub const Value = union(enum) {
     fixnum: i64,
+    float: f64,
     boolean: bool,
     string: []const u8,
     symbol: []const u8,
@@ -365,6 +366,21 @@ pub const Value = union(enum) {
     pub fn write(self: Value, writer: anytype) anyerror!void {
         switch (self) {
             .fixnum => |i| try writer.print("{d}", .{i}),
+            .float => |f| {
+                if (std.math.isNan(f)) {
+                    try writer.writeAll("nan");
+                } else if (std.math.isInf(f)) {
+                    if (f < 0) try writer.writeByte('-');
+                    try writer.writeAll("inf");
+                } else {
+                    var buf: [64]u8 = undefined;
+                    const formatted = std.fmt.bufPrint(&buf, "{d}", .{f}) catch unreachable;
+                    try writer.writeAll(formatted);
+                    if (std.mem.indexOfScalar(u8, formatted, '.') == null) {
+                        try writer.writeAll(".0");
+                    }
+                }
+            },
             .boolean => |b| try writer.writeAll(if (b) "t" else "f"),
             .string => |s| try writer.print("\"{s}\"", .{s}),
             .symbol => |s| try writer.print("{s}:", .{s}),
@@ -516,6 +532,7 @@ pub const Value = union(enum) {
 
         return switch (self) {
             .fixnum => |a| a == other.fixnum,
+            .float => |a| a == other.float,
             .boolean => |a| a == other.boolean,
             .string => |a| std.mem.eql(u8, a, other.string),
             .symbol => |a| std.mem.eql(u8, a, other.symbol),
@@ -636,6 +653,11 @@ pub const Value = union(enum) {
 
         switch (self) {
             .fixnum => |i| hasher.update(std.mem.asBytes(&i)),
+            .float => |f| {
+                var canonical = f;
+                if (canonical == 0.0) canonical = 0.0;
+                hasher.update(std.mem.asBytes(&canonical));
+            },
             .boolean => |b| hasher.update(std.mem.asBytes(&b)),
             .string, .symbol => |s| hasher.update(s),
             .array => |arr| {
@@ -818,6 +840,79 @@ test "fixnum equality" {
 
     try std.testing.expect(a.eql(b));
     try std.testing.expect(!a.eql(c));
+}
+
+test "float format" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const val = Value{ .float = 3.14 };
+    try val.write(fbs.writer());
+    try std.testing.expectEqualStrings("3.14", fbs.getWritten());
+}
+
+test "float format whole number" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const val = Value{ .float = 3.0 };
+    try val.write(fbs.writer());
+    const written = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOfScalar(u8, written, '.') != null);
+}
+
+test "float format nan" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const val = Value{ .float = std.math.nan(f64) };
+    try val.write(fbs.writer());
+    try std.testing.expectEqualStrings("nan", fbs.getWritten());
+}
+
+test "float format inf" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const val = Value{ .float = std.math.inf(f64) };
+    try val.write(fbs.writer());
+    try std.testing.expectEqualStrings("inf", fbs.getWritten());
+}
+
+test "float format negative inf" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const val = Value{ .float = -std.math.inf(f64) };
+    try val.write(fbs.writer());
+    try std.testing.expectEqualStrings("-inf", fbs.getWritten());
+}
+
+test "float equality" {
+    const a = Value{ .float = 3.14 };
+    const b = Value{ .float = 3.14 };
+    const c = Value{ .float = 2.71 };
+    try std.testing.expect(a.eql(b));
+    try std.testing.expect(!a.eql(c));
+}
+
+test "float nan inequality" {
+    const a = Value{ .float = std.math.nan(f64) };
+    const b = Value{ .float = std.math.nan(f64) };
+    try std.testing.expect(!a.eql(b));
+}
+
+test "float signed zero equality" {
+    const pos = Value{ .float = 0.0 };
+    const neg = Value{ .float = -0.0 };
+    try std.testing.expect(pos.eql(neg));
+}
+
+test "float signed zero hash equality" {
+    const pos = Value{ .float = 0.0 };
+    const neg = Value{ .float = -0.0 };
+    try std.testing.expectEqual(pos.hashValue(), neg.hashValue());
+}
+
+test "float vs fixnum not equal" {
+    const f = Value{ .float = 42.0 };
+    const i = Value{ .fixnum = 42 };
+    try std.testing.expect(!f.eql(i));
 }
 
 test "stack effect format" {

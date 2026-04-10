@@ -109,6 +109,7 @@ pub fn makeSimpleEffect(allocator: Allocator, raw: []const u8) !StackEffect {
 pub fn valueTypeName(val: Value) []const u8 {
     return switch (val) {
         .fixnum => "fixnum",
+        .float => "float",
         .boolean => "boolean",
         .string => "string",
         .symbol => "symbol",
@@ -143,6 +144,18 @@ pub fn valueTypeName(val: Value) []const u8 {
 pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]const u8 {
     return switch (val) {
         .fixnum => |i| std.fmt.allocPrint(allocator, "{d}", .{i}),
+        .float => |f| blk: {
+            if (std.math.isNan(f)) break :blk allocator.dupe(u8, "nan");
+            if (std.math.isInf(f)) {
+                break :blk allocator.dupe(u8, if (f < 0) "-inf" else "inf");
+            }
+            var buf: [64]u8 = undefined;
+            const formatted = std.fmt.bufPrint(&buf, "{d}", .{f}) catch break :blk allocator.dupe(u8, "?");
+            if (std.mem.indexOfScalar(u8, formatted, '.') == null) {
+                break :blk std.fmt.allocPrint(allocator, "{s}.0", .{formatted});
+            }
+            break :blk allocator.dupe(u8, formatted);
+        },
         .boolean => |b| allocator.dupe(u8, if (b) "t" else "f"),
         .string => |s| blk: {
             if (s.len <= max_len) {

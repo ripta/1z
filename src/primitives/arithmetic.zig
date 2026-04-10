@@ -115,15 +115,53 @@ pub fn nativeInnerEq(ctx: *Context) anyerror!void {
 /// < ( a b -- ? ) - Less than
 pub fn nativeLt(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "<")) return;
-    const b = try popFixnum(ctx);
-    const a = try popFixnum(ctx);
-    try ctx.stack.push(.{ .boolean = a < b });
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    switch (a) {
+        .fixnum => |av| switch (b) {
+            .fixnum => |bv| try ctx.stack.push(.{ .boolean = av < bv }),
+            else => {
+                helpers.setTypeMismatchError(ctx, "fixnum", b);
+                return error.TypeMismatch;
+            },
+        },
+        .float => |av| switch (b) {
+            .float => |bv| try ctx.stack.push(.{ .boolean = av < bv }),
+            else => {
+                helpers.setTypeMismatchError(ctx, "float", b);
+                return error.TypeMismatch;
+            },
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "fixnum or float", a);
+            return error.TypeMismatch;
+        },
+    }
 }
 
 /// > ( a b -- ? ) - Greater than
 pub fn nativeGt(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, ">")) return;
-    const b = try popFixnum(ctx);
-    const a = try popFixnum(ctx);
-    try ctx.stack.push(.{ .boolean = a > b });
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    switch (a) {
+        .fixnum => |av| switch (b) {
+            .fixnum => |bv| try ctx.stack.push(.{ .boolean = av > bv }),
+            else => {
+                helpers.setTypeMismatchError(ctx, "fixnum", b);
+                return error.TypeMismatch;
+            },
+        },
+        .float => |av| switch (b) {
+            .float => |bv| try ctx.stack.push(.{ .boolean = av > bv }),
+            else => {
+                helpers.setTypeMismatchError(ctx, "float", b);
+                return error.TypeMismatch;
+            },
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "fixnum or float", a);
+            return error.TypeMismatch;
+        },
+    }
 }
