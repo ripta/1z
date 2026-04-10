@@ -1,0 +1,56 @@
+=== Type checks ===
+Stack: [ ]
+PASS: decimal type-of
+Stack: [ ]
+PASS: negative decimal type-of
+Stack: [ ]
+PASS: scientific type-of
+Stack: [ ]
+PASS: scientific without decimal type-of
+Stack: [ ]
+=== Integers remain fixnums ===
+Stack: [ ]
+PASS: integer stays fixnum
+Stack: [ ]
+PASS: negative integer stays fixnum
+Stack: [ ]
+PASS: zero stays fixnum
+Stack: [ ]
+=== Decimal literals ===
+Stack: [ ]
+PASS: decimal equality
+Stack: [ ]
+PASS: leading zero decimal
+Stack: [ ]
+PASS: multi-digit decimal
+Stack: [ ]
+=== Negative literals ===
+Stack: [ ]
+PASS: negative decimal
+Stack: [ ]
+PASS: negative zero
+Stack: [ ]
+=== Scientific notation ===
+Stack: [ ]
+PASS: scientific notation
+Stack: [ ]
+PASS: scientific negative exponent
+Stack: [ ]
+PASS: negative scientific
+Stack: [ ]
+PASS: scientific without decimal
+Stack: [ ]
+=== Floats in arrays ===
+Stack: [ ]
+PASS: float array length
+Stack: [ ]
+PASS: float array first element
+Stack: [ ]
+PASS: float array last element
+Stack: [ ]
+=== Floats in quotations ===
+Stack: [ ]
+PASS: float in quotation
+Stack: [ ]
+PASS: negative float in quotation
+Stack: [ ]

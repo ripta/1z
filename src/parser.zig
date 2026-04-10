@@ -5,6 +5,7 @@ const tokenizer_mod = @import("tokenizer.zig");
 const Tokenizer = tokenizer_mod.Tokenizer;
 const Token = tokenizer_mod.Token;
 const parseInteger = tokenizer_mod.parseInteger;
+const parseFloat = tokenizer_mod.parseFloat;
 const parseString = tokenizer_mod.parseString;
 
 const value_mod = @import("value.zig");
@@ -266,6 +267,8 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
             return ParseError.UnmatchedCloseParen;
         } else if (parseInteger(token)) |n| {
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .fixnum = n } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+        } else if (parseFloat(token)) |f| {
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .float = f } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
             const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
@@ -375,6 +378,9 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
         } else if (parseInteger(token)) |n| {
             is_first_token = false;
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .fixnum = n } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+        } else if (parseFloat(token)) |f| {
+            is_first_token = false;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .float = f } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
             is_first_token = false;
             const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
@@ -554,6 +560,8 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) P
             values.append(allocator, .{ .quotation = quot }) catch return ParseError.OutOfMemory;
         } else if (parseInteger(token)) |n| {
             values.append(allocator, .{ .fixnum = n }) catch return ParseError.OutOfMemory;
+        } else if (parseFloat(token)) |f| {
+            values.append(allocator, .{ .float = f }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
             const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
             values.append(allocator, .{ .string = s_copy }) catch return ParseError.OutOfMemory;

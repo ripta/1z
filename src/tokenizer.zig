@@ -175,6 +175,39 @@ pub fn parseInteger(token: []const u8) ?i64 {
     return std.fmt.parseInt(i64, token, 10) catch null;
 }
 
+/// Parse a float from a token. Returns null if not a valid float literal.
+/// Accepts decimal (3.14), scientific (1.5e10), and negative (-3.14) forms.
+/// Rejects hex prefixes, nan/inf literals, and tokens missing digits on either
+/// side of the decimal point.
+pub fn parseFloat(token: []const u8) ?f64 {
+    if (token.len == 0) return null;
+
+    const has_dot = std.mem.indexOfScalar(u8, token, '.') != null;
+    const has_exp = std.mem.indexOfScalar(u8, token, 'e') != null or std.mem.indexOfScalar(u8, token, 'E') != null;
+    if (!has_dot and !has_exp) return null;
+
+    const body = if (token[0] == '-') token[1..] else token;
+    if (body.len > 2 and body[0] == '0' and (body[1] == 'x' or body[1] == 'X')) return null;
+
+    if (has_dot) {
+        if (std.mem.indexOfScalar(u8, token, '.')) |dot_idx| {
+            const before_dot = if (token[0] == '-') token[1..dot_idx] else token[0..dot_idx];
+            const after_dot = token[dot_idx + 1 ..];
+            if (before_dot.len == 0) return null;
+
+            const after_digits = if (std.mem.indexOfAny(u8, after_dot, "eE")) |ei| after_dot[0..ei] else after_dot;
+            if (after_digits.len == 0) return null;
+        }
+    }
+
+    // NOTE(ripta): nan / inf will be preludes instead of  literals
+    if (std.mem.eql(u8, body, "nan")) return null;
+    if (std.mem.eql(u8, body, "inf")) return null;
+    if (std.mem.eql(u8, body, "infinity")) return null;
+
+    return std.fmt.parseFloat(f64, token) catch null;
+}
+
 /// Parse a string literal from a token. Returns the content without quotes,
 /// or null if not a valid string literal.
 pub fn parseString(token: []const u8) ?[]const u8 {
@@ -524,4 +557,53 @@ test "column resets after reset" {
     t.reset();
     const tok1 = t.next().?;
     try std.testing.expectEqual(@as(usize, 1), tok1.column);
+}
+
+test "parseFloat valid decimals" {
+    try std.testing.expectEqual(@as(f64, 3.14), parseFloat("3.14").?);
+    try std.testing.expectEqual(@as(f64, 0.5), parseFloat("0.5").?);
+    try std.testing.expectEqual(@as(f64, 5.0), parseFloat("5.0").?);
+    try std.testing.expectEqual(@as(f64, 100.001), parseFloat("100.001").?);
+}
+
+test "parseFloat valid negatives" {
+    try std.testing.expectEqual(@as(f64, -3.14), parseFloat("-3.14").?);
+    const neg_zero = parseFloat("-0.0").?;
+    try std.testing.expect(neg_zero == 0.0 and std.math.isNegativeZero(neg_zero));
+}
+
+test "parseFloat valid scientific" {
+    try std.testing.expectEqual(@as(f64, 1.5e10), parseFloat("1.5e10").?);
+    try std.testing.expectEqual(@as(f64, 1.5e10), parseFloat("1.5E10").?);
+    try std.testing.expectEqual(@as(f64, 2.5e-3), parseFloat("2.5e-3").?);
+    try std.testing.expectEqual(@as(f64, -1.5e10), parseFloat("-1.5e10").?);
+    try std.testing.expectEqual(@as(f64, 1e10), parseFloat("1e10").?);
+}
+
+test "parseFloat rejects missing digits around dot" {
+    try std.testing.expectEqual(null, parseFloat(".5"));
+    try std.testing.expectEqual(null, parseFloat("5."));
+    try std.testing.expectEqual(null, parseFloat("-.5"));
+    try std.testing.expectEqual(null, parseFloat("-5."));
+    try std.testing.expectEqual(null, parseFloat("."));
+}
+
+test "parseFloat rejects special values" {
+    try std.testing.expectEqual(null, parseFloat("nan"));
+    try std.testing.expectEqual(null, parseFloat("inf"));
+    try std.testing.expectEqual(null, parseFloat("-inf"));
+    try std.testing.expectEqual(null, parseFloat("infinity"));
+    try std.testing.expectEqual(null, parseFloat("-infinity"));
+}
+
+test "parseFloat rejects non-float tokens" {
+    try std.testing.expectEqual(null, parseFloat("42"));
+    try std.testing.expectEqual(null, parseFloat("-42"));
+    try std.testing.expectEqual(null, parseFloat("abc"));
+    try std.testing.expectEqual(null, parseFloat("\"\""));
+}
+
+test "parseFloat rejects hex" {
+    try std.testing.expectEqual(null, parseFloat("0xDEAD"));
+    try std.testing.expectEqual(null, parseFloat("0xFF"));
 }

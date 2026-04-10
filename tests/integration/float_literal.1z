@@ -1,0 +1,38 @@
+\ Test float literal parsing
+
+use "testing" ;
+
+"Type checks" test-section
+3.14 type-of float: "decimal type-of" assert=
+-3.14 type-of float: "negative decimal type-of" assert=
+1.5e10 type-of float: "scientific type-of" assert=
+1e10 type-of float: "scientific without decimal type-of" assert=
+
+"Integers remain fixnums" test-section
+42 type-of fixnum: "integer stays fixnum" assert=
+-7 type-of fixnum: "negative integer stays fixnum" assert=
+0 type-of fixnum: "zero stays fixnum" assert=
+
+"Decimal literals" test-section
+3.14 3.14 "decimal equality" assert=
+0.5 0.5 "leading zero decimal" assert=
+100.001 100.001 "multi-digit decimal" assert=
+
+"Negative literals" test-section
+-3.14 -3.14 "negative decimal" assert=
+-0.0 -0.0 "negative zero" assert=
+
+"Scientific notation" test-section
+1.5e10 1.5e10 "scientific notation" assert=
+2.5e-3 2.5e-3 "scientific negative exponent" assert=
+-1.5e10 -1.5e10 "negative scientific" assert=
+1e10 1e10 "scientific without decimal" assert=
+
+"Floats in arrays" test-section
+{ 1.5 2.5 3.5 } #len 3 "float array length" assert=
+{ 1.5 2.5 3.5 } 0 #nth 1.5 "float array first element" assert=
+{ 1.5 2.5 3.5 } 2 #nth 3.5 "float array last element" assert=
+
+"Floats in quotations" test-section
+[ 3.14 ] call 3.14 "float in quotation" assert=
+[ -2.5 ] call -2.5 "negative float in quotation" assert=
