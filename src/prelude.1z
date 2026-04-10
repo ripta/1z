@@ -186,7 +186,7 @@ input-stream: define-parameter [ stdin ] ;
 \\ The current error stream, defaulting to `stderr`.
 error-stream: define-parameter [ stderr ] ;
 \\ The module cache M{}, used by `load` and `use` for caching loaded modules.
-module-cache: define-parameter [ module-cache-value ] ;
+module-cache: define-parameter [ native.module-cache-value ] ;
 \\ Scoped hooks for word-defined events (array of quotations).
 word-defined-hooks: define-parameter [ { } ] ;
 \\ Scoped hooks for module-loaded events (array of quotations).

@@ -30,12 +30,12 @@ pub const primitives = [_]Primitive{
     .{ .name = "export", .stack_effect = "name --", .doc = "Promote an imported word to a public definition in the current scope.", .func = nativeExport },
     .{ .name = "compile!", .stack_effect = "sym --", .doc = "JIT-compile a word for integer arithmetic. Throws if the word is not found or not compilable.", .func = nativeCompile },
     .{ .name = "load-file", .stack_effect = "cache filename -- module", .doc = "Load a 1z source file unconditionally (no cache check) and store the result in the given M{} cache.", .func = nativeLoadFile, .capability = .io_fs },
-    .{ .name = "module-cache-value", .stack_effect = "-- cache", .doc = "Push the current module cache M{} onto the stack.", .func = nativeModuleCacheValue },
 };
 
 const RegistryEntry = @import("types.zig").RegistryEntry;
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "resolve-load-path", .func = nativeResolveLoadPath, .stack_effect = "filename -- resolved", .capability = .io_fs },
+    .{ .name = "module-cache-value", .func = nativeModuleCacheValue, .stack_effect = "-- cache" },
 };
 
 fn nativeToModule(ctx: *Context) anyerror!void {
