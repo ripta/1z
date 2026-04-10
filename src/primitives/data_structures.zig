@@ -104,9 +104,9 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
 pub fn nativeMakeVector(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const instrs = quot.instructions;
+
     const alloc = ctx.quotationAllocator();
 
-    // Create a new vector
     const vec = alloc.create(Vector) catch return error.OutOfMemory;
     vec.* = Vector{};
 

@@ -1381,8 +1381,8 @@ fn nativePushMut(ctx: *Context) anyerror!void {
 
     const elem = try ctx.stack.pop();
     const vec = try popVector(ctx);
-    const alloc = ctx.quotationAllocator();
 
+    const alloc = ctx.quotationAllocator();
     vec.append(alloc, elem) catch return error.OutOfMemory;
     try ctx.stack.push(.{ .vector = vec });
 }

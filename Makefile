@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test unit-test integration-test jit-test fmt-test update-golden update-fmt-golden benchmark clean help docs
+.PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test update-golden update-fmt-golden benchmark clean help docs
 
 SHELL := /bin/bash
 
@@ -20,7 +20,7 @@ fmt: build ## Format zig and 1z source files
 	zig fmt src/ build.zig
 	./zig-out/bin/1z fmt $(ONE_Z_FILES)
 
-test: unit-test integration-test fmt-test jit-test ## Run all tests
+test: unit-test integration-test fmt-test eager-test ## Run all tests
 
 unit-test: ## Run unit tests
 	( time timeout $(TIMEOUT) zig build test $(if $(VERBOSE),--summary all,) )
@@ -29,10 +29,13 @@ integration-test: ## Run integration tests
 	( time timeout $(TIMEOUT) zig build integration-test $(if $(VERBOSE),--summary all,) )
 
 jit-build: ## Build only the 1z-jit binary
-	zig build jit-build
+	( time timeout $(TIMEOUT) zig build jit-build )
 
 jit-test: ## Run integration tests with JIT auto-compilation
 	( time timeout $(TIMEOUT) zig build jit-integration-test $(if $(VERBOSE),--summary all,) )
+
+eager-test: ## Run integration tests with eager compilation
+	( time timeout $(TIMEOUT) zig build eager-integration-test $(if $(VERBOSE),--summary all,) )
 
 fmt-test: ## Run formatter tests
 	( time timeout $(TIMEOUT) zig build fmt-test $(if $(VERBOSE),--summary all,) )

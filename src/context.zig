@@ -46,6 +46,8 @@ const StackEffectParam = stack_effect_mod.StackEffectParam;
 /// Embedded prelude source code
 const prelude_source = @embedFile("prelude.1z");
 
+pub const CompileMode = enum { off, eager };
+
 pub const ExecutionError = error{
     UnknownWord,
     StackUnderflow,
@@ -253,10 +255,11 @@ pub const Context = struct {
     /// ancestor scopes, up to the root context which holds primitives and
     /// prelude words.
     parent_context: ?*const Context = null,
-    /// When true, every word defined via defineWord is automatically
-    /// JIT-compiled. Compilation failures are silently ignored and the
-    /// word falls back to the interpreter. Set via the -Djit-all build option.
-    compile_all: bool = false,
+    /// Controls automatic JIT compilation of word definitions.
+    /// When .eager, every word defined via defineWord is automatically
+    /// compiled. Compilation failures are silently ignored and the
+    /// word falls back to the interpreter.
+    compile_mode: CompileMode = .off,
     /// Active sandbox spec restricting which capabilities are available.
     /// When non-null, word lookup checks the word's capability against
     /// this spec and rejects words whose capability is not granted.
@@ -747,7 +750,7 @@ pub const Context = struct {
             try self.dictionary.put(name, def);
         }
 
-        if (self.compile_all) {
+        if (self.compile_mode == .eager) {
             self.tryAutoCompile(name, def);
         }
     }

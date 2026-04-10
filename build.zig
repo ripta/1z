@@ -20,7 +20,6 @@ pub fn build(b: *std.Build) void {
     // Set version as a build option
     const options = b.addOptions();
     options.addOption([]const u8, "version", version);
-    options.addOption(bool, "jit_all", false);
     root_module.addOptions("build_options", options);
 
     // zig-out/bin/1z
@@ -138,37 +137,12 @@ pub fn build(b: *std.Build) void {
     validate_golden.step.dependOn(&update_files.step);
     update_golden_step.dependOn(&validate_golden.step);
 
-    // JIT integration tests: separate exe with jit_all=true
-    const jit_module = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    jit_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
-    jit_module.addIncludePath(b.path("ext/toy"));
-    jit_module.linkSystemLibrary("ffi", .{});
-    addIrSources(b, jit_module);
+    // Eager compilation integration tests: same exe with --compile=eager
+    const eager_test_step = b.step("eager-integration-test", "Run integration tests with eager compilation");
+    eager_test_step.dependOn(&install_exe.step);
+    eager_test_step.dependOn(&install_toy_shared.step);
 
-    const jit_options = b.addOptions();
-    jit_options.addOption([]const u8, "version", version);
-    jit_options.addOption(bool, "jit_all", true);
-    jit_module.addOptions("build_options", jit_options);
-
-    const jit_exe = b.addExecutable(.{
-        .name = "1z-jit",
-        .root_module = jit_module,
-    });
-    const install_jit_exe = b.addInstallArtifact(jit_exe, .{});
-
-    const jit_build_step = b.step("jit-build", "Build 1z-jit binary");
-    jit_build_step.dependOn(&install_jit_exe.step);
-
-    const jit_test_step = b.step("jit-integration-test", "Run integration tests with JIT auto-compilation");
-    jit_test_step.dependOn(&install_jit_exe.step);
-    jit_test_step.dependOn(&install_toy_shared.step);
-
-    addIntegrationTests(b, jit_exe, jit_test_step, null, test_entries, has_diff, true);
+    addIntegrationTests(b, exe, eager_test_step, null, test_entries, has_diff, true);
 
     // Formatter tests
     const fmt_test_step = b.step("fmt-test", "Run formatter tests");
@@ -426,6 +400,9 @@ fn addIntegrationTests(
             test_run.addArg("--show-stack");
         }
         test_run.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
+        if (jit_mode) {
+            test_run.addArg("--compile=eager");
+        }
         if (te.flags_lines) |fl| {
             var flag_iter = std.mem.splitScalar(u8, fl, '\n');
             while (flag_iter.next()) |flag| {

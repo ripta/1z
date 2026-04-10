@@ -139,6 +139,8 @@ pub fn main() u8 {
     var test_timeout_ns: ?u64 = null;
     var check_mode = false;
     var allow_all_recursion = false;
+    var compile_mode: context.CompileMode = .off;
+    var cli_set_compile = false;
 
     // TODO(ripta): bit hacky arg parsing, improve later?
     for (args[1..]) |arg| {
@@ -238,6 +240,21 @@ pub fn main() u8 {
             check_mode = true;
         } else if (std.mem.eql(u8, arg, "--allow-all-recursion")) {
             allow_all_recursion = true;
+        } else if (std.mem.startsWith(u8, arg, "--compile=")) {
+            const value = arg["--compile=".len..];
+            if (std.mem.eql(u8, value, "off")) {
+                compile_mode = .off;
+            } else if (std.mem.eql(u8, value, "eager")) {
+                compile_mode = .eager;
+            } else {
+                const stderr_file: File = .stderr();
+                var stderr_buf: [4096]u8 = undefined;
+                var stderr = stderr_file.writer(&stderr_buf);
+                stderr.interface.print("Error: invalid value for --compile: '{s}' (expected 'off' or 'eager')\n", .{value}) catch {};
+                stderr.interface.flush() catch {};
+                return 1;
+            }
+            cli_set_compile = true;
         } else {
             file_path = arg;
         }
@@ -248,6 +265,17 @@ pub fn main() u8 {
         if (std.posix.getenv("ONEZ_MAX_MEMORY")) |env_val| {
             if (memory_limit.parseSize(env_val)) |bytes| {
                 max_memory_bytes = bytes;
+            }
+            // Silently ignore invalid env var values
+        }
+    }
+
+    if (!cli_set_compile) {
+        if (std.posix.getenv("ONEZ_COMPILE")) |env_val| {
+            if (std.mem.eql(u8, env_val, "off")) {
+                compile_mode = .off;
+            } else if (std.mem.eql(u8, env_val, "eager")) {
+                compile_mode = .eager;
             }
             // Silently ignore invalid env var values
         }
@@ -332,7 +360,7 @@ pub fn main() u8 {
     ctx.loadPrelude(external_prelude) catch |err| {
         std.debug.panic("Failed to load prelude: {any}", .{err});
     };
-    ctx.compile_all = build_options.jit_all;
+    ctx.compile_mode = compile_mode;
     ctx.check_mode = check_mode;
     ctx.allow_all_recursion = allow_all_recursion;
     if (bench_config.enabled) {
