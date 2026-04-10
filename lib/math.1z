@@ -1,0 +1,46 @@
+\ Math module - trigonometry, exponentials, logarithms, rounding, and constants
+
+\\ Circle constant.
+pi: ( -- f ) [ 3.141592653589793 ] ;
+\\ Tau.
+tau: ( -- f ) [ 6.283185307179586 ] ;
+\\ Euler's number.
+e: ( -- f ) [ 2.718281828459045 ] ;
+
+\\ Sine.
+sin: ( n -- f ) [ native.sin ] ;
+\\ Cosine.
+cos: ( n -- f ) [ native.cos ] ;
+\\ Tangent.
+tan: ( n -- f ) [ native.tan ] ;
+\\ Arcsine.
+asin: ( n -- f ) [ native.asin ] ;
+\\ Arccosine.
+acos: ( n -- f ) [ native.acos ] ;
+\\ Arctangent.
+atan: ( n -- f ) [ native.atan ] ;
+\\ Two-argument arctangent.
+atan2: ( y x -- f ) [ native.atan2 ] ;
+
+\\ Natural exponential (e^n).
+exp: ( n -- f ) [ native.exp ] ;
+\\ Natural logarithm.
+log: ( n -- f ) [ native.log ] ;
+\\ Base-2 logarithm.
+log2: ( n -- f ) [ native.log2 ] ;
+\\ Base-10 logarithm.
+log10: ( n -- f ) [ native.log10 ] ;
+
+\\ Square root.
+sqrt: ( n -- f ) [ native.sqrt ] ;
+\\ Exponentiation.
+pow: ( base exp -- f ) [ native.pow ] ;
+
+\\ Round toward negative infinity.
+floor: ( n -- f ) [ native.floor ] ;
+\\ Round toward positive infinity.
+ceil: ( n -- f ) [ native.ceil ] ;
+\\ Round to nearest, ties to even.
+round: ( n -- f ) [ native.round ] ;
+\\ Round toward zero.
+truncate: ( n -- f ) [ native.truncate ] ;

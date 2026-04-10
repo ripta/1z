@@ -54,6 +54,7 @@ pub const iterators = @import("iterators.zig");
 pub const protocols = @import("protocols.zig");
 pub const sockets = @import("sockets.zig");
 pub const introspect = @import("introspect.zig");
+pub const math = @import("math.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -114,4 +115,5 @@ pub const extracted_registry_entries = structs.registry_entries ++
     virtual.registry_entries ++
     enums.registry_entries ++
     protocols.registry_entries ++
-    introspect.registry_entries;
+    introspect.registry_entries ++
+    math.registry_entries;

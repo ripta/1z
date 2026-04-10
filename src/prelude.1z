@@ -213,8 +213,6 @@ pick: ( a b c -- a b c a ) [ [ over ] dip swap ] ;
 \ Arithmetic operators
 \\ Negate a number.
 -@: ( a -- -a ) [ 0 swap - ] ;
-\\ Absolute value.
-abs: ( a -- b ) [ dup 0 < [ -@ ] when ] ;
 \\ Return the smaller of two values.
 min: ( a1 a2 -- a ) [ [ < ] choose ] ;
 \\ Return the larger of two values.

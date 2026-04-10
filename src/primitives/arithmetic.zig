@@ -24,6 +24,8 @@ pub const primitives = [_]Primitive{
     // Conversions
     .{ .name = ">float", .stack_effect = "x -- f", .doc = "Convert fixnum or string to float. Floats pass through. Throws on failure.", .func = nativeToFloat },
     .{ .name = ">integer", .stack_effect = "f -- n", .doc = "Convert float to fixnum, truncating toward zero. Fixnums pass through. Throws on NaN or infinity.", .func = nativeToInteger },
+    // Unary
+    .{ .name = "abs", .stack_effect = "n -- n", .doc = "Absolute value. Works on fixnums and floats.", .func = nativeAbs },
     // Comparators
     .{ .name = "=", .stack_effect = "a b -- ?", .doc = "Equality comparison.", .func = nativeEq },
     .{ .name = "(=)", .stack_effect = "a b -- ?", .doc = "Inner equality: unwraps one layer of tagged values, then compares.", .func = nativeInnerEq },
@@ -254,6 +256,25 @@ pub fn nativeGt(ctx: *Context) anyerror!void {
         },
         else => {
             helpers.setTypeMismatchError(ctx, "fixnum or float", a);
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// abs ( n -- n ) - Absolute value for fixnums and floats
+fn nativeAbs(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchUnary(ctx, "abs")) return;
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .fixnum => |i| {
+            if (i == std.math.minInt(i64)) return error.FixnumOverflow;
+            try ctx.stack.push(.{ .fixnum = if (i < 0) -i else i });
+        },
+        .float => |f| {
+            try ctx.stack.push(.{ .float = @abs(f) });
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "number", val);
             return error.TypeMismatch;
         },
     }

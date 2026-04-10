@@ -1,0 +1,189 @@
+Stack: [ ]
+=== Constants ===
+Stack: [ ]
+PASS: pi > 3.14159
+Stack: [ ]
+PASS: pi < 3.14160
+Stack: [ ]
+PASS: tau = 2*pi
+Stack: [ ]
+PASS: e > 2.71828
+Stack: [ ]
+PASS: e < 2.71829
+Stack: [ ]
+=== Trig basics ===
+Stack: [ ]
+PASS: sin(0)
+Stack: [ ]
+PASS: cos(0)
+Stack: [ ]
+PASS: tan(0)
+Stack: [ ]
+PASS: sin(0.0)
+Stack: [ ]
+PASS: cos(0.0)
+Stack: [ ]
+=== Trig at pi/2 ===
+Stack: [ ]
+PASS: sin(pi/2) ~ 1.0
+Stack: [ ]
+PASS: cos(pi/2) ~ 0.0
+Stack: [ ]
+=== Inverse trig ===
+Stack: [ ]
+PASS: asin(1) ~ pi/2
+Stack: [ ]
+PASS: acos(1) ~ 0.0
+Stack: [ ]
+PASS: atan(1) ~ pi/4
+Stack: [ ]
+=== atan2 ===
+Stack: [ ]
+PASS: atan2(1,0) ~ pi/2
+Stack: [ ]
+PASS: atan2(0,1) ~ 0.0
+Stack: [ ]
+PASS: atan2(1,1) ~ pi/4
+Stack: [ ]
+=== Exp and log ===
+Stack: [ ]
+PASS: exp(1) ~ e
+Stack: [ ]
+PASS: exp(0) = 1.0
+Stack: [ ]
+PASS: log(e) ~ 1.0
+Stack: [ ]
+PASS: log(1) = 0.0
+Stack: [ ]
+PASS: log2(1024)
+Stack: [ ]
+PASS: log10(100)
+Stack: [ ]
+PASS: log10(1000)
+Stack: [ ]
+=== Sqrt ===
+Stack: [ ]
+PASS: sqrt(4)
+Stack: [ ]
+PASS: sqrt(9)
+Stack: [ ]
+PASS: sqrt(2) ~ 1.41421
+Stack: [ ]
+PASS: sqrt(0)
+Stack: [ ]
+=== Pow ===
+Stack: [ ]
+PASS: 2^10
+Stack: [ ]
+PASS: 3^0
+Stack: [ ]
+PASS: 2^0.5 ~ sqrt(2)
+Stack: [ ]
+PASS: 10^3
+Stack: [ ]
+=== Floor ===
+Stack: [ ]
+PASS: floor(3.7)
+Stack: [ ]
+PASS: floor(3.2)
+Stack: [ ]
+PASS: floor(-3.7)
+Stack: [ ]
+PASS: floor(-3.2)
+Stack: [ ]
+PASS: floor(5.0)
+Stack: [ ]
+PASS: floor(fixnum 5)
+Stack: [ ]
+=== Ceil ===
+Stack: [ ]
+PASS: ceil(3.7)
+Stack: [ ]
+PASS: ceil(3.2)
+Stack: [ ]
+PASS: ceil(-3.7)
+Stack: [ ]
+PASS: ceil(-3.2)
+Stack: [ ]
+PASS: ceil(5.0)
+Stack: [ ]
+=== Round (ties-to-even) ===
+Stack: [ ]
+PASS: round(0.5) = 0 (even)
+Stack: [ ]
+PASS: round(1.5) = 2 (even)
+Stack: [ ]
+PASS: round(2.5) = 2 (even)
+Stack: [ ]
+PASS: round(3.5) = 4 (even)
+Stack: [ ]
+PASS: round(-0.5) = 0 (even)
+Stack: [ ]
+PASS: round(-1.5) = -2 (even)
+Stack: [ ]
+PASS: round(3.3)
+Stack: [ ]
+PASS: round(3.7)
+Stack: [ ]
+PASS: round(fixnum 7)
+Stack: [ ]
+=== Truncate ===
+Stack: [ ]
+PASS: truncate(3.7)
+Stack: [ ]
+PASS: truncate(-3.7)
+Stack: [ ]
+PASS: truncate(3.2)
+Stack: [ ]
+PASS: truncate(-3.2)
+Stack: [ ]
+PASS: truncate(5.0)
+Stack: [ ]
+=== Auto-promotion from fixnum ===
+Stack: [ ]
+PASS: fixnum sqrt = float sqrt
+Stack: [ ]
+PASS: fixnum input produces float
+Stack: [ ]
+PASS: fixnum floor produces float
+Stack: [ ]
+=== NaN propagation ===
+Stack: [ ]
+PASS: sin(nan) is nan
+Stack: [ ]
+PASS: cos(nan) is nan
+Stack: [ ]
+PASS: exp(nan) is nan
+Stack: [ ]
+PASS: sqrt(nan) is nan
+Stack: [ ]
+PASS: floor(nan) is nan
+Stack: [ ]
+=== Inf propagation ===
+Stack: [ ]
+PASS: exp(inf) is infinite
+Stack: [ ]
+PASS: exp(-inf) = 0
+Stack: [ ]
+=== abs fixnum ===
+Stack: [ ]
+PASS: abs positive fixnum
+Stack: [ ]
+PASS: abs negative fixnum
+Stack: [ ]
+PASS: abs zero
+Stack: [ ]
+=== abs float ===
+Stack: [ ]
+PASS: abs positive float
+Stack: [ ]
+PASS: abs negative float
+Stack: [ ]
+PASS: abs zero float
+Stack: [ ]
+PASS: abs negative zero float
+Stack: [ ]
+=== abs overflow ===
+Stack: [ ]
+PASS: FixnumOverflow
+Stack: [ ]

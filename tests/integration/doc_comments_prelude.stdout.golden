@@ -14,9 +14,9 @@ nip ( a b -- b ) \compound
 
 Drop the second element, keeping the top.
 Stack: [ ]
-abs ( a -- b ) \compound
+abs ( n -- n ) \native
 
-Absolute value.
+Absolute value. Works on fixnums and floats.
 Stack: [ ]
 <= ( a b -- ? ) \compound
 

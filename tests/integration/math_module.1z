@@ -1,0 +1,116 @@
+\ Test math module: trig, exp/log, sqrt, pow, rounding, constants, abs
+
+use "testing" ;
+math: "math" load ;
+
+"Constants" test-section
+math.pi 3.14159 > "pi > 3.14159" assert-true
+math.pi 3.14160 < "pi < 3.14160" assert-true
+math.tau math.pi 2 * - abs 1.0e-10 < "tau = 2*pi" assert-true
+math.e 2.71828 > "e > 2.71828" assert-true
+math.e 2.71829 < "e < 2.71829" assert-true
+
+"Trig basics" test-section
+0 math.sin 0.0 "sin(0)" assert=
+0 math.cos 1.0 "cos(0)" assert=
+0 math.tan 0.0 "tan(0)" assert=
+0.0 math.sin 0.0 "sin(0.0)" assert=
+0.0 math.cos 1.0 "cos(0.0)" assert=
+
+"Trig at pi/2" test-section
+math.pi 2 / math.sin 1.0 - abs 1.0e-10 < "sin(pi/2) ~ 1.0" assert-true
+math.pi 2 / math.cos abs 1.0e-10 < "cos(pi/2) ~ 0.0" assert-true
+
+"Inverse trig" test-section
+1 math.asin math.pi 2 / - abs 1.0e-10 < "asin(1) ~ pi/2" assert-true
+1 math.acos abs 1.0e-10 < "acos(1) ~ 0.0" assert-true
+1 math.atan math.pi 4 / - abs 1.0e-10 < "atan(1) ~ pi/4" assert-true
+
+"atan2" test-section
+1 0 math.atan2 math.pi 2 / - abs 1.0e-10 < "atan2(1,0) ~ pi/2" assert-true
+0 1 math.atan2 abs 1.0e-10 < "atan2(0,1) ~ 0.0" assert-true
+1.0 1.0 math.atan2 math.pi 4 / - abs 1.0e-10 < "atan2(1,1) ~ pi/4" assert-true
+
+"Exp and log" test-section
+1 math.exp math.e - abs 1.0e-10 < "exp(1) ~ e" assert-true
+0 math.exp 1.0 "exp(0) = 1.0" assert=
+math.e math.log 1.0 - abs 1.0e-10 < "log(e) ~ 1.0" assert-true
+1 math.log 0.0 "log(1) = 0.0" assert=
+1024 math.log2 10.0 "log2(1024)" assert=
+100 math.log10 2.0 "log10(100)" assert=
+1000 math.log10 3.0 "log10(1000)" assert=
+
+"Sqrt" test-section
+4 math.sqrt 2.0 "sqrt(4)" assert=
+9 math.sqrt 3.0 "sqrt(9)" assert=
+2.0 math.sqrt 1.41421356 - abs 1.0e-5 < "sqrt(2) ~ 1.41421" assert-true
+0 math.sqrt 0.0 "sqrt(0)" assert=
+
+"Pow" test-section
+2 10 math.pow 1024.0 "2^10" assert=
+3 0 math.pow 1.0 "3^0" assert=
+2.0 0.5 math.pow 2.0 math.sqrt - abs 1.0e-10 < "2^0.5 ~ sqrt(2)" assert-true
+10 3 math.pow 1000.0 "10^3" assert=
+
+"Floor" test-section
+3.7 math.floor 3.0 "floor(3.7)" assert=
+3.2 math.floor 3.0 "floor(3.2)" assert=
+-3.7 math.floor -4.0 "floor(-3.7)" assert=
+-3.2 math.floor -4.0 "floor(-3.2)" assert=
+5.0 math.floor 5.0 "floor(5.0)" assert=
+5 math.floor 5.0 "floor(fixnum 5)" assert=
+
+"Ceil" test-section
+3.7 math.ceil 4.0 "ceil(3.7)" assert=
+3.2 math.ceil 4.0 "ceil(3.2)" assert=
+-3.7 math.ceil -3.0 "ceil(-3.7)" assert=
+-3.2 math.ceil -3.0 "ceil(-3.2)" assert=
+5.0 math.ceil 5.0 "ceil(5.0)" assert=
+
+"Round (ties-to-even)" test-section
+0.5 math.round 0.0 "round(0.5) = 0 (even)" assert=
+1.5 math.round 2.0 "round(1.5) = 2 (even)" assert=
+2.5 math.round 2.0 "round(2.5) = 2 (even)" assert=
+3.5 math.round 4.0 "round(3.5) = 4 (even)" assert=
+-0.5 math.round 0.0 "round(-0.5) = 0 (even)" assert=
+-1.5 math.round -2.0 "round(-1.5) = -2 (even)" assert=
+3.3 math.round 3.0 "round(3.3)" assert=
+3.7 math.round 4.0 "round(3.7)" assert=
+7 math.round 7.0 "round(fixnum 7)" assert=
+
+"Truncate" test-section
+3.7 math.truncate 3.0 "truncate(3.7)" assert=
+-3.7 math.truncate -3.0 "truncate(-3.7)" assert=
+3.2 math.truncate 3.0 "truncate(3.2)" assert=
+-3.2 math.truncate -3.0 "truncate(-3.2)" assert=
+5.0 math.truncate 5.0 "truncate(5.0)" assert=
+
+"Auto-promotion from fixnum" test-section
+2 math.sqrt 2.0 math.sqrt = "fixnum sqrt = float sqrt" assert-true
+2 math.sqrt type-of float: "fixnum input produces float" assert=
+4 math.floor type-of float: "fixnum floor produces float" assert=
+
+"NaN propagation" test-section
+nan math.sin nan? "sin(nan) is nan" assert-true
+nan math.cos nan? "cos(nan) is nan" assert-true
+nan math.exp nan? "exp(nan) is nan" assert-true
+nan math.sqrt nan? "sqrt(nan) is nan" assert-true
+nan math.floor nan? "floor(nan) is nan" assert-true
+
+"Inf propagation" test-section
+inf math.exp infinite? "exp(inf) is infinite" assert-true
+-inf math.exp 0.0 "exp(-inf) = 0" assert=
+
+"abs fixnum" test-section
+42 abs 42 "abs positive fixnum" assert=
+-42 abs 42 "abs negative fixnum" assert=
+0 abs 0 "abs zero" assert=
+
+"abs float" test-section
+3.14 abs 3.14 "abs positive float" assert=
+-3.14 abs 3.14 "abs negative float" assert=
+0.0 abs 0.0 "abs zero float" assert=
+-0.0 abs 0.0 "abs negative zero float" assert=
+
+"abs overflow" test-section
+[ -9223372036854775808 abs ] "FixnumOverflow" assert-error
