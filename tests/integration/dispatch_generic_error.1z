@@ -6,7 +6,7 @@ use "testing" ;
 no-default: ( value -- result ) generic [ ] ;
 
 \ Register a method only for integers
-no-default: method{ integer } [ 1 + ] ;
+no-default: method{ fixnum } [ 1 + ] ;
 
 \ This should work fine
 42 no-default 43 "method works for registered type" assert=

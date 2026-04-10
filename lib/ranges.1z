@@ -53,7 +53,7 @@ range-inclusive: ( start end -- range ) [ range= ] ;
 
 \ O(1) indexed access: start + n * step
 \ Validates index is non-negative and within bounds.
-#nth: method{ range integer } [
+#nth: method{ range fixnum } [
   dup 0 < [ "#nth: negative index" throw ] when
   swap range>
   [

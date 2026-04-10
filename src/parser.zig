@@ -265,7 +265,7 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
         } else if (std.mem.eql(u8, token, ")")) {
             return ParseError.UnmatchedCloseParen;
         } else if (parseInteger(token)) |n| {
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .integer = n } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .fixnum = n } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
             const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
@@ -374,7 +374,7 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
             return ParseError.UnmatchedCloseParen;
         } else if (parseInteger(token)) |n| {
             is_first_token = false;
-            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .integer = n } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .fixnum = n } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
             is_first_token = false;
             const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
@@ -553,7 +553,7 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) P
             const quot = try parseQuotation(allocator, tokenizer, null);
             values.append(allocator, .{ .quotation = quot }) catch return ParseError.OutOfMemory;
         } else if (parseInteger(token)) |n| {
-            values.append(allocator, .{ .integer = n }) catch return ParseError.OutOfMemory;
+            values.append(allocator, .{ .fixnum = n }) catch return ParseError.OutOfMemory;
         } else if (parseString(token)) |s| {
             const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
             values.append(allocator, .{ .string = s_copy }) catch return ParseError.OutOfMemory;
@@ -590,8 +590,8 @@ test "parse simple quotation" {
     const quot = try parseQuotation(arena.allocator(), &tokenizer, null);
 
     try std.testing.expectEqual(@as(usize, 3), quot.instructions.len);
-    try std.testing.expectEqual(@as(i64, 1), quot.instructions[0].op.push_literal.integer);
-    try std.testing.expectEqual(@as(i64, 2), quot.instructions[1].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 1), quot.instructions[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 2), quot.instructions[1].op.push_literal.fixnum);
     try std.testing.expectEqualStrings("+", quot.instructions[2].op.call_word);
 }
 
@@ -605,7 +605,7 @@ test "parse nested quotation" {
     try std.testing.expectEqual(@as(usize, 1), quot.instructions.len);
     const nested = quot.instructions[0].op.push_literal.quotation;
     try std.testing.expectEqual(@as(usize, 1), nested.instructions.len);
-    try std.testing.expectEqual(@as(i64, 1), nested.instructions[0].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 1), nested.instructions[0].op.push_literal.fixnum);
 }
 
 test "parse quotation with leading stack effect" {
@@ -640,7 +640,7 @@ test "parse quotation with non-leading stack effect" {
 
     // The stack effect should be a push_literal instruction
     try std.testing.expectEqual(@as(usize, 2), quot.instructions.len);
-    try std.testing.expectEqual(@as(i64, 1), quot.instructions[0].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 1), quot.instructions[0].op.push_literal.fixnum);
     const effect = quot.instructions[1].op.push_literal.stack_effect;
     try std.testing.expectEqual(@as(usize, 1), effect.inputs.len);
 }
@@ -657,9 +657,9 @@ test "parse simple array" {
     defer std.testing.allocator.free(arr);
 
     try std.testing.expectEqual(@as(usize, 3), arr.len);
-    try std.testing.expectEqual(@as(i64, 1), arr[0].integer);
-    try std.testing.expectEqual(@as(i64, 2), arr[1].integer);
-    try std.testing.expectEqual(@as(i64, 3), arr[2].integer);
+    try std.testing.expectEqual(@as(i64, 1), arr[0].fixnum);
+    try std.testing.expectEqual(@as(i64, 2), arr[1].fixnum);
+    try std.testing.expectEqual(@as(i64, 3), arr[2].fixnum);
 }
 
 test "parse nested array" {
@@ -671,8 +671,8 @@ test "parse nested array" {
     const nested = arr[0].array;
     defer std.testing.allocator.free(nested);
     try std.testing.expectEqual(@as(usize, 2), nested.len);
-    try std.testing.expectEqual(@as(i64, 1), nested[0].integer);
-    try std.testing.expectEqual(@as(i64, 2), nested[1].integer);
+    try std.testing.expectEqual(@as(i64, 1), nested[0].fixnum);
+    try std.testing.expectEqual(@as(i64, 2), nested[1].fixnum);
 }
 
 test "parse array with string" {
@@ -684,7 +684,7 @@ test "parse array with string" {
 
     try std.testing.expectEqual(@as(usize, 2), arr.len);
     try std.testing.expectEqualStrings("hello", arr[0].string);
-    try std.testing.expectEqual(@as(i64, 42), arr[1].integer);
+    try std.testing.expectEqual(@as(i64, 42), arr[1].fixnum);
 }
 
 test "unmatched open brace" {
@@ -836,8 +836,8 @@ test "parse top level with comments" {
 
     // Comment should be skipped
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
-    try std.testing.expectEqual(@as(i64, 1), instrs[0].op.push_literal.integer);
-    try std.testing.expectEqual(@as(i64, 2), instrs[1].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 1), instrs[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 2), instrs[1].op.push_literal.fixnum);
     try std.testing.expectEqualStrings("+", instrs[2].op.call_word);
 }
 
@@ -849,8 +849,8 @@ test "parse with inline comment" {
     const instrs = try parseTopLevel(arena.allocator(), &tokenizer, null);
 
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
-    try std.testing.expectEqual(@as(i64, 1), instrs[0].op.push_literal.integer);
-    try std.testing.expectEqual(@as(i64, 2), instrs[1].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 1), instrs[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 2), instrs[1].op.push_literal.fixnum);
     try std.testing.expectEqualStrings("+", instrs[2].op.call_word);
 }
 
@@ -918,7 +918,7 @@ test "doc-comment before definition emits doc_string after symbol" {
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
     try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol);
     try std.testing.expectEqualStrings("Add two numbers.", instrs[1].op.push_literal.doc_string);
-    try std.testing.expectEqual(@as(i64, 42), instrs[2].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 42), instrs[2].op.push_literal.fixnum);
 }
 
 test "consecutive doc-comments joined with newlines" {
@@ -931,7 +931,7 @@ test "consecutive doc-comments joined with newlines" {
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
     try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol);
     try std.testing.expectEqualStrings("line one\nline two", instrs[1].op.push_literal.doc_string);
-    try std.testing.expectEqual(@as(i64, 1), instrs[2].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 1), instrs[2].op.push_literal.fixnum);
 }
 
 test "orphaned doc-comment before non-symbol is discarded" {
@@ -942,7 +942,7 @@ test "orphaned doc-comment before non-symbol is discarded" {
     const instrs = try parseTopLevel(arena.allocator(), &tokenizer, null);
 
     try std.testing.expectEqual(@as(usize, 1), instrs.len);
-    try std.testing.expectEqual(@as(i64, 42), instrs[0].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 42), instrs[0].op.push_literal.fixnum);
 }
 
 test "doc-comment inside quotation emits doc_string after symbol" {
@@ -955,7 +955,7 @@ test "doc-comment inside quotation emits doc_string after symbol" {
     try std.testing.expectEqual(@as(usize, 3), quot.instructions.len);
     try std.testing.expectEqualStrings("bar", quot.instructions[0].op.push_literal.symbol);
     try std.testing.expectEqualStrings("doc", quot.instructions[1].op.push_literal.doc_string);
-    try std.testing.expectEqual(@as(i64, 1), quot.instructions[2].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 1), quot.instructions[2].op.push_literal.fixnum);
 }
 
 test "doc-comment does not affect leading stack effect in quotation" {
@@ -985,7 +985,7 @@ test "doc-comment with definition in quotation preserves leading stack effect" {
     try std.testing.expectEqual(@as(usize, 3), quot.instructions.len);
     try std.testing.expectEqualStrings("foo", quot.instructions[0].op.push_literal.symbol);
     try std.testing.expectEqualStrings("doc", quot.instructions[1].op.push_literal.doc_string);
-    try std.testing.expectEqual(@as(i64, 1), quot.instructions[2].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 1), quot.instructions[2].op.push_literal.fixnum);
 }
 
 test "doc-comment line number preserved" {
@@ -1015,6 +1015,6 @@ test "doc-comment in array is skipped" {
     const arr = try parseArray(arena.allocator(), &tokenizer, null);
 
     try std.testing.expectEqual(@as(usize, 2), arr.len);
-    try std.testing.expectEqual(@as(i64, 1), arr[0].integer);
-    try std.testing.expectEqual(@as(i64, 2), arr[1].integer);
+    try std.testing.expectEqual(@as(i64, 1), arr[0].fixnum);
+    try std.testing.expectEqual(@as(i64, 2), arr[1].fixnum);
 }

@@ -102,7 +102,7 @@ error-type?: ( error type -- error ? ) [ over error-type: @get = ] ;
 EStackUnderflow:      [ stack-underflow: ] ;
 ETypeMismatch:        [ type-mismatch: ] ;
 EDivisionByZero:      [ division-by-zero: ] ;
-EIntegerOverflow:     [ integer-overflow: ] ;
+EFixnumOverflow:      [ fixnum-overflow: ] ;
 EStackEffectMismatch: [ stack-effect-mismatch: ] ;
 EUnknownWord:         [ unknown-word: ] ;
 EFileNotFound:        [ file-not-found: ] ;
@@ -118,7 +118,7 @@ ECannotRedefineConst: [ cannot-redefine-const: ] ;
 no-matching-branch: ( data -- error ) [ "no matching branch" ENoMatchingBranch make-error ] ;
 
 \ Type predicates
-integer?:    ( val -- ? ) [ type-of integer: = ] ;
+fixnum?:     ( val -- ? ) [ type-of fixnum: = ] ;
 boolean?:    ( val -- ? ) [ type-of boolean: = ] ;
 string?:     ( val -- ? ) [ type-of string: = ] ;
 symbol?:     ( val -- ? ) [ type-of symbol: = ] ;

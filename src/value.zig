@@ -111,7 +111,7 @@ pub const Marker = struct {
 pub const VirtualType = struct {
     // Type name, e.g., "duration"
     name: []const u8,
-    // Expected inner type name, e.g., "integer"
+    // Expected inner type name, e.g., "fixnum"
     inner_type: []const u8,
     // Anonymous struct backing, if struct-backed
     anon_struct: ?*const StructType = null,
@@ -335,7 +335,7 @@ fn writeFormatSpec(writer: anytype, spec: FormatSpec) !void {
 
 /// Value represents any value that can be stored on the stack.
 pub const Value = union(enum) {
-    integer: i64,
+    fixnum: i64,
     boolean: bool,
     string: []const u8,
     symbol: []const u8,
@@ -364,7 +364,7 @@ pub const Value = union(enum) {
 
     pub fn write(self: Value, writer: anytype) anyerror!void {
         switch (self) {
-            .integer => |i| try writer.print("{d}", .{i}),
+            .fixnum => |i| try writer.print("{d}", .{i}),
             .boolean => |b| try writer.writeAll(if (b) "t" else "f"),
             .string => |s| try writer.print("\"{s}\"", .{s}),
             .symbol => |s| try writer.print("{s}:", .{s}),
@@ -515,7 +515,7 @@ pub const Value = union(enum) {
         }
 
         return switch (self) {
-            .integer => |a| a == other.integer,
+            .fixnum => |a| a == other.fixnum,
             .boolean => |a| a == other.boolean,
             .string => |a| std.mem.eql(u8, a, other.string),
             .symbol => |a| std.mem.eql(u8, a, other.symbol),
@@ -635,7 +635,7 @@ pub const Value = union(enum) {
         hasher.update(std.mem.asBytes(&tag));
 
         switch (self) {
-            .integer => |i| hasher.update(std.mem.asBytes(&i)),
+            .fixnum => |i| hasher.update(std.mem.asBytes(&i)),
             .boolean => |b| hasher.update(std.mem.asBytes(&b)),
             .string, .symbol => |s| hasher.update(s),
             .array => |arr| {
@@ -795,26 +795,26 @@ pub const Value = union(enum) {
 // Tests
 // =============================================================================
 
-test "integer format" {
-    const val = Value{ .integer = 42 };
+test "fixnum format" {
+    const val = Value{ .fixnum = 42 };
     var buf: [32]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     try val.write(fbs.writer());
     try std.testing.expectEqualStrings("42", fbs.getWritten());
 }
 
-test "negative integer format" {
-    const val = Value{ .integer = -123 };
+test "negative fixnum format" {
+    const val = Value{ .fixnum = -123 };
     var buf: [32]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     try val.write(fbs.writer());
     try std.testing.expectEqualStrings("-123", fbs.getWritten());
 }
 
-test "integer equality" {
-    const a = Value{ .integer = 42 };
-    const b = Value{ .integer = 42 };
-    const c = Value{ .integer = 100 };
+test "fixnum equality" {
+    const a = Value{ .fixnum = 42 };
+    const b = Value{ .fixnum = 42 };
+    const c = Value{ .fixnum = 100 };
 
     try std.testing.expect(a.eql(b));
     try std.testing.expect(!a.eql(c));
@@ -927,10 +927,10 @@ test "symbol equality" {
 }
 
 test "array equality" {
-    const arr1 = &[_]Value{ .{ .integer = 1 }, .{ .integer = 2 } };
-    const arr2 = &[_]Value{ .{ .integer = 1 }, .{ .integer = 2 } };
-    const arr3 = &[_]Value{ .{ .integer = 1 }, .{ .integer = 3 } };
-    const arr4 = &[_]Value{.{ .integer = 1 }};
+    const arr1 = &[_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 2 } };
+    const arr2 = &[_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 2 } };
+    const arr3 = &[_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 3 } };
+    const arr4 = &[_]Value{.{ .fixnum = 1 }};
 
     const a = Value{ .array = arr1 };
     const b = Value{ .array = arr2 };
@@ -944,15 +944,15 @@ test "array equality" {
 
 test "quotation equality" {
     const instrs1 = &[_]Instruction{
-        .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
         .{ .op = .{ .call_word = "+" }, .line = 1 },
     };
     const instrs2 = &[_]Instruction{
-        .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
         .{ .op = .{ .call_word = "+" }, .line = 1 },
     };
     const instrs3 = &[_]Instruction{
-        .{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
     };
 
     const a = Value{ .quotation = .{ .instructions = instrs1 } };
@@ -964,7 +964,7 @@ test "quotation equality" {
 }
 
 test "cross-type inequality" {
-    const int_val = Value{ .integer = 42 };
+    const int_val = Value{ .fixnum = 42 };
     const bool_val = Value{ .boolean = true };
     const str_val = Value{ .string = "42" };
     const sym_val = Value{ .symbol = "42" };

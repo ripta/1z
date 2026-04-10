@@ -86,7 +86,7 @@ ml-shape:point ml-shape? t "multiline enum flat variant in mixed enum" assert=
 "multiline virtual{ simple" test-section
 
 ml-meter: virtual{
-  integer
+  fixnum
 } ;
 
 100 >ml-meter ml-meter? t "multiline virtual predicate" assert=

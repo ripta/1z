@@ -98,7 +98,7 @@ fn nativeCount(ctx: *Context) anyerror!void {
             while (try iter.next(ctx)) |_| {
                 count += 1;
             }
-            try ctx.stack.push(.{ .integer = count });
+            try ctx.stack.push(.{ .fixnum = count });
         },
         else => {
             helpers.setTypeMismatchError(ctx, "iterator", val);
@@ -115,23 +115,23 @@ fn nativeMakeRangeIter(ctx: *Context) anyerror!void {
     const start_val = try ctx.stack.pop();
 
     const start = switch (start_val) {
-        .integer => |n| n,
+        .fixnum => |n| n,
         else => {
-            helpers.setTypeMismatchError(ctx, "integer", start_val);
+            helpers.setTypeMismatchError(ctx, "fixnum", start_val);
             return error.TypeMismatch;
         },
     };
     const end = switch (end_val) {
-        .integer => |n| n,
+        .fixnum => |n| n,
         else => {
-            helpers.setTypeMismatchError(ctx, "integer", end_val);
+            helpers.setTypeMismatchError(ctx, "fixnum", end_val);
             return error.TypeMismatch;
         },
     };
     const step = switch (step_val) {
-        .integer => |n| n,
+        .fixnum => |n| n,
         else => {
-            helpers.setTypeMismatchError(ctx, "integer", step_val);
+            helpers.setTypeMismatchError(ctx, "fixnum", step_val);
             return error.TypeMismatch;
         },
     };

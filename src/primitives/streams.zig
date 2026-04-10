@@ -14,7 +14,7 @@ const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
 const error_mapping = @import("error_mapping.zig");
 
-const popInteger = helpers.popInteger;
+const popFixnum = helpers.popFixnum;
 const popSymbol = helpers.popSymbol;
 const popString = helpers.popString;
 const popStream = helpers.popStream;
@@ -204,7 +204,7 @@ pub fn nativeStreamWrite(ctx: *Context) anyerror!void {
         return mapFileWriteError(err);
     };
 
-    try ctx.stack.push(.{ .integer = @intCast(written) });
+    try ctx.stack.push(.{ .fixnum = @intCast(written) });
 }
 
 /// stream-flush ( stream -- ) - Flush stream buffer
@@ -234,7 +234,7 @@ pub fn nativeStreamFlush(ctx: *Context) anyerror!void {
 
 /// stream-read ( stream n -- bytes ) - Read up to n bytes from stream
 pub fn nativeStreamRead(ctx: *Context) anyerror!void {
-    const n = try popInteger(ctx);
+    const n = try popFixnum(ctx);
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
 
@@ -370,12 +370,12 @@ pub fn nativeStreamTell(ctx: *Context) anyerror!void {
         return mapGetPosError(err);
     };
 
-    try ctx.stack.push(.{ .integer = @intCast(pos) });
+    try ctx.stack.push(.{ .fixnum = @intCast(pos) });
 }
 
 /// stream-seek ( stream pos -- ) - Seek to absolute position
 pub fn nativeStreamSeek(ctx: *Context) anyerror!void {
-    const pos = try popInteger(ctx);
+    const pos = try popFixnum(ctx);
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
 
@@ -390,7 +390,7 @@ pub fn nativeStreamSeek(ctx: *Context) anyerror!void {
 
 /// stream-seek-end ( stream offset -- ) - Seek relative to end of stream
 pub fn nativeStreamSeekEnd(ctx: *Context) anyerror!void {
-    const offset = try popInteger(ctx);
+    const offset = try popFixnum(ctx);
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
 
@@ -443,7 +443,7 @@ pub fn nativeStreamToFd(ctx: *Context) anyerror!void {
     try ensureStreamOpen(stream);
 
     const fd: i64 = @intCast(stream.file.handle);
-    try ctx.stack.push(.{ .integer = fd });
+    try ctx.stack.push(.{ .fixnum = fd });
 }
 
 /// fd>stream ( fd -- stream ) - Create stream from file descriptor (Unix only)
@@ -459,7 +459,7 @@ pub fn nativeFdToStream(ctx: *Context) anyerror!void {
         return error.UnsupportedOperation;
     }
 
-    const fd_val = try popInteger(ctx);
+    const fd_val = try popFixnum(ctx);
 
     if (fd_val < 0) {
         return error.InvalidArgument;
@@ -508,7 +508,7 @@ fn nativePipe(ctx: *Context) anyerror!void {
 
 /// >char ( codepoint -- str ) - Convert Unicode codepoint to single-character string
 pub fn nativeChr(ctx: *Context) anyerror!void {
-    const codepoint_val = try popInteger(ctx);
+    const codepoint_val = try popFixnum(ctx);
     if (codepoint_val < 0 or codepoint_val > 0x10FFFF) {
         return error.InvalidArgument;
     }
@@ -538,7 +538,7 @@ pub fn nativeToCodepoint(ctx: *Context) anyerror!void {
         return error.InvalidArgument;
     }
 
-    try ctx.stack.push(.{ .integer = @intCast(first_codepoint) });
+    try ctx.stack.push(.{ .fixnum = @intCast(first_codepoint) });
 }
 
 // =============================================================================

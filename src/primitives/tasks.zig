@@ -553,7 +553,7 @@ const DeepCopyError = Allocator.Error;
 
 pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
     return switch (val) {
-        .integer, .boolean => val,
+        .fixnum, .boolean => val,
 
         .string => |s| .{ .string = try alloc.dupe(u8, s) },
         .symbol => |s| .{ .symbol = try alloc.dupe(u8, s) },
@@ -747,13 +747,13 @@ fn nativeMultiplexerStats(ctx: *Context) anyerror!void {
     hash.* = value_mod.HashTable{};
 
     hash.put(alloc, try alloc.dupe(u8, "io-waiting"), .{
-        .integer = @intCast(scheduler.io_wait_map.count()),
+        .fixnum = @intCast(scheduler.io_wait_map.count()),
     }) catch return error.OutOfMemory;
     hash.put(alloc, try alloc.dupe(u8, "sleeping"), .{
-        .integer = @intCast(scheduler.sleep_queue.count()),
+        .fixnum = @intCast(scheduler.sleep_queue.count()),
     }) catch return error.OutOfMemory;
     hash.put(alloc, try alloc.dupe(u8, "run-queue"), .{
-        .integer = @intCast(scheduler.run_queue.items.len),
+        .fixnum = @intCast(scheduler.run_queue.items.len),
     }) catch return error.OutOfMemory;
 
     try ctx.stack.push(.{ .hash = hash });

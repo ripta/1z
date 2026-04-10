@@ -47,7 +47,7 @@ fn nativeCreateChannel(ctx: *Context) anyerror!void {
 
 /// <buffered-channel> ( n -- ch )
 fn nativeCreateBufferedChannel(ctx: *Context) anyerror!void {
-    const n = try helpers.popInteger(ctx);
+    const n = try helpers.popFixnum(ctx);
 
     if (n <= 0) {
         ctx.pending_error_message = "buffered channel capacity must be positive";

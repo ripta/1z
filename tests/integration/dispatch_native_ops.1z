@@ -5,14 +5,14 @@ use "testing" ;
 "virtual type arithmetic dispatch" test-section
 
 \ Define a virtual type for testing
-duration: virtual{ integer } ;
+duration: virtual{ fixnum } ;
 
 \ Register methods for arithmetic operators
 +: method{ duration duration } [ swap duration> swap duration> + >duration ] ;
 -: method{ duration duration } [ swap duration> swap duration> - >duration ] ;
-*: method{ duration integer } [ swap duration> swap * >duration ] ;
-/: method{ duration integer } [ swap duration> swap / >duration ] ;
-%: method{ duration integer } [ swap duration> swap % >duration ] ;
+*: method{ duration fixnum } [ swap duration> swap * >duration ] ;
+/: method{ duration fixnum } [ swap duration> swap / >duration ] ;
+%: method{ duration fixnum } [ swap duration> swap % >duration ] ;
 
 \ Test: duration + duration
 42 >duration 10 >duration + duration> 52 "+ dispatches for duration duration" assert=
@@ -54,7 +54,7 @@ duration: virtual{ integer } ;
 "wildcard dispatch" test-section
 
 \ Define another virtual type
-weight: virtual{ integer } ;
+weight: virtual{ fixnum } ;
 
 \ Register a wildcard method: duration + any
 \ Note: Exact match (duration duration) takes precedence, so test with duration+integer

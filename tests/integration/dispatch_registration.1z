@@ -5,7 +5,7 @@ use "testing" ;
 "method{ registration" test-section
 
 \ Test 1: Define a virtual type for testing
-duration: virtual{ integer } ;
+duration: virtual{ fixnum } ;
 
 \ Test 2: Register a method on a native operator (should succeed silently)
 \ Native operators don't require the generic marker

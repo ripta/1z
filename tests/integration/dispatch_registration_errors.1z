@@ -5,7 +5,7 @@ use "testing" ;
 "method{ registration errors" test-section
 
 \ Setup: Define a virtual type
-duration: virtual{ integer } ;
+duration: virtual{ fixnum } ;
 
 \ Test 1: Error when registering on a non-existent word
 [

@@ -38,7 +38,7 @@ PASS: type-of returns symbol
 Stack: [ ]
 === type predicates - true cases ===
 Stack: [ ]
-PASS: integer? true
+PASS: fixnum? true
 Stack: [ ]
 PASS: boolean? true t
 Stack: [ ]
@@ -71,7 +71,7 @@ PASS: error? true
 Stack: [ ]
 === type predicates - false cases ===
 Stack: [ ]
-PASS: integer? false for string
+PASS: fixnum? false for string
 Stack: [ ]
 PASS: string? false for integer
 Stack: [ ]

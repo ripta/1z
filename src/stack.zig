@@ -89,11 +89,11 @@ test "push and pop" {
     var stack = Stack.init(std.testing.allocator);
     defer stack.deinit();
 
-    try stack.push(.{ .integer = 42 });
+    try stack.push(.{ .fixnum = 42 });
     try std.testing.expectEqual(@as(usize, 1), stack.depth());
 
     const val = try stack.pop();
-    try std.testing.expectEqual(@as(i64, 42), val.integer);
+    try std.testing.expectEqual(@as(i64, 42), val.fixnum);
     try std.testing.expectEqual(@as(usize, 0), stack.depth());
 }
 
@@ -101,14 +101,14 @@ test "push multiple and pop in LIFO order" {
     var stack = Stack.init(std.testing.allocator);
     defer stack.deinit();
 
-    try stack.push(.{ .integer = 1 });
-    try stack.push(.{ .integer = 2 });
-    try stack.push(.{ .integer = 3 });
+    try stack.push(.{ .fixnum = 1 });
+    try stack.push(.{ .fixnum = 2 });
+    try stack.push(.{ .fixnum = 3 });
     try std.testing.expectEqual(@as(usize, 3), stack.depth());
 
-    try std.testing.expectEqual(@as(i64, 3), (try stack.pop()).integer);
-    try std.testing.expectEqual(@as(i64, 2), (try stack.pop()).integer);
-    try std.testing.expectEqual(@as(i64, 1), (try stack.pop()).integer);
+    try std.testing.expectEqual(@as(i64, 3), (try stack.pop()).fixnum);
+    try std.testing.expectEqual(@as(i64, 2), (try stack.pop()).fixnum);
+    try std.testing.expectEqual(@as(i64, 1), (try stack.pop()).fixnum);
 }
 
 test "pop empty stack returns StackUnderflow" {
@@ -122,11 +122,11 @@ test "peek returns top without removing" {
     var stack = Stack.init(std.testing.allocator);
     defer stack.deinit();
 
-    try stack.push(.{ .integer = 42 });
-    try stack.push(.{ .integer = 99 });
+    try stack.push(.{ .fixnum = 42 });
+    try stack.push(.{ .fixnum = 99 });
 
     const val = try stack.peek();
-    try std.testing.expectEqual(@as(i64, 99), val.integer);
+    try std.testing.expectEqual(@as(i64, 99), val.fixnum);
     try std.testing.expectEqual(@as(usize, 2), stack.depth());
 }
 
@@ -141,14 +141,14 @@ test "peekN returns value at depth n" {
     var stack = Stack.init(std.testing.allocator);
     defer stack.deinit();
 
-    try stack.push(.{ .integer = 1 });
-    try stack.push(.{ .integer = 2 });
-    try stack.push(.{ .integer = 3 });
+    try stack.push(.{ .fixnum = 1 });
+    try stack.push(.{ .fixnum = 2 });
+    try stack.push(.{ .fixnum = 3 });
 
     // n=0 is top (3), n=1 is second (2), n=2 is bottom (1)
-    try std.testing.expectEqual(@as(i64, 3), (try stack.peekN(0)).integer);
-    try std.testing.expectEqual(@as(i64, 2), (try stack.peekN(1)).integer);
-    try std.testing.expectEqual(@as(i64, 1), (try stack.peekN(2)).integer);
+    try std.testing.expectEqual(@as(i64, 3), (try stack.peekN(0)).fixnum);
+    try std.testing.expectEqual(@as(i64, 2), (try stack.peekN(1)).fixnum);
+    try std.testing.expectEqual(@as(i64, 1), (try stack.peekN(2)).fixnum);
 
     // Doesn't remove values
     try std.testing.expectEqual(@as(usize, 3), stack.depth());
@@ -158,8 +158,8 @@ test "peekN returns StackUnderflow for n >= depth" {
     var stack = Stack.init(std.testing.allocator);
     defer stack.deinit();
 
-    try stack.push(.{ .integer = 1 });
-    try stack.push(.{ .integer = 2 });
+    try stack.push(.{ .fixnum = 1 });
+    try stack.push(.{ .fixnum = 2 });
 
     try std.testing.expectError(error.StackUnderflow, stack.peekN(2));
     try std.testing.expectError(error.StackUnderflow, stack.peekN(10));
@@ -187,9 +187,9 @@ test "dump stack with values" {
     var stack = Stack.init(std.testing.allocator);
     defer stack.deinit();
 
-    try stack.push(.{ .integer = 1 });
-    try stack.push(.{ .integer = 2 });
-    try stack.push(.{ .integer = 3 });
+    try stack.push(.{ .fixnum = 1 });
+    try stack.push(.{ .fixnum = 2 });
+    try stack.push(.{ .fixnum = 3 });
 
     var buf: [64]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);

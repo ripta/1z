@@ -472,7 +472,7 @@ fn nativeCommandLineArgs(ctx: *Context) anyerror!void {
 
 /// sys-exit ( code -- ) - Exit the process with the given exit code
 fn nativeSysExit(ctx: *Context) anyerror!void {
-    const code = try helpers.popInteger(ctx);
+    const code = try helpers.popFixnum(ctx);
     std.process.exit(@intCast(code));
 }
 
@@ -488,14 +488,14 @@ fn nativeAddLoadPath(ctx: *Context) anyerror!void {
 /// Dead code, kept for backward compatibility. All callsites were migrated to
 /// the native function registry (the native.* virtual module).
 ///
-/// Bridge primitive: pops a function pointer (as integer) from the stack and calls it.
+/// Bridge primitive: pops a function pointer as a fixnum from the stack and calls it.
 /// Used by auto-generated struct/virtual words to invoke their backing native helpers.
 ///
 /// WARNING: This is inherently unsafe! The function pointer must be valid and
 ///          must conform to the expected signature (fn (*Context) anyerror!void), or
 ///          else the runtime will likely crash. - This is an experiment.
 fn nativeTrampoline(ctx: *Context) anyerror!void {
-    const ptr_val = try helpers.popInteger(ctx);
+    const ptr_val = try helpers.popFixnum(ctx);
     if (ptr_val <= 0) {
         ctx.pending_error_message = "(trampoline): null or negative function pointer";
         return error.InvalidFunctionPointer;

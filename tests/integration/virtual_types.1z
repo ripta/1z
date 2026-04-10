@@ -5,7 +5,7 @@ use "testing" ;
 "virtual{ } syntax" test-section
 
 \ Define a virtual type backed by integer
-duration: virtual{ integer } ;
+duration: virtual{ fixnum } ;
 
 \ Test wrapping
 42 >duration type-of duration: "type-of returns virtual type name" assert=
@@ -16,7 +16,7 @@ duration: virtual{ integer } ;
 "hello" duration? f "duration? on string is false" assert=
 
 \ Test strict newtype semantics
-42 >duration integer? f "integer? on duration is false (strict)" assert=
+42 >duration fixnum? f "fixnum? on duration is false (strict)" assert=
 
 \ Test display format
 42 >duration to-string "<duration 42>" "display format is <name inner>" assert=
@@ -57,7 +57,7 @@ positive-duration: virtual{ duration } ;
 "multiple virtual types" test-section
 
 \ Define another virtual type backed by integer
-weight: virtual{ integer } ;
+weight: virtual{ fixnum } ;
 
 \ Different virtual types are not equal even with same inner
 42 >duration 42 >weight = f "different virtual types not equal" assert=

@@ -392,8 +392,8 @@ test "valueToString passes strings through" {
     try testing.expectEqualStrings("hello", result);
 }
 
-test "valueToString converts integer" {
-    const result = try valueToString(test_alloc, .{ .integer = 42 });
+test "valueToString converts fixnum" {
+    const result = try valueToString(test_alloc, .{ .fixnum = 42 });
     defer test_alloc.free(result);
     try testing.expectEqualStrings("42", result);
 }
@@ -407,33 +407,33 @@ test "valueToString converts boolean" {
 test "lookupNamed on hash" {
     var h = HashTable{};
     defer h.deinit(test_alloc);
-    try h.put(test_alloc, "x", .{ .integer = 10 });
+    try h.put(test_alloc, "x", .{ .fixnum = 10 });
     const val = try lookupNamed(.{ .hash = &h }, "x");
-    try testing.expectEqual(Value{ .integer = 10 }, val);
+    try testing.expectEqual(Value{ .fixnum = 10 }, val);
 }
 
 test "lookupNamed on hash missing key" {
     var h = HashTable{};
     defer h.deinit(test_alloc);
-    try h.put(test_alloc, "x", .{ .integer = 10 });
+    try h.put(test_alloc, "x", .{ .fixnum = 10 });
     const result = lookupNamed(.{ .hash = &h }, "y");
     try testing.expectError(error.KeyNotFound, result);
 }
 
 test "lookupNamed on array is TypeError" {
-    const arr = &[_]Value{.{ .integer = 1 }};
+    const arr = &[_]Value{.{ .fixnum = 1 }};
     const result = lookupNamed(.{ .array = arr }, "x");
     try testing.expectError(error.TypeMismatch, result);
 }
 
 test "lookupIndexed on array" {
-    const arr = &[_]Value{ .{ .integer = 10 }, .{ .integer = 20 } };
+    const arr = &[_]Value{ .{ .fixnum = 10 }, .{ .fixnum = 20 } };
     const val = try lookupIndexed(.{ .array = arr }, 1);
-    try testing.expectEqual(Value{ .integer = 20 }, val);
+    try testing.expectEqual(Value{ .fixnum = 20 }, val);
 }
 
 test "lookupIndexed out of bounds" {
-    const arr = &[_]Value{.{ .integer = 10 }};
+    const arr = &[_]Value{.{ .fixnum = 10 }};
     const result = lookupIndexed(.{ .array = arr }, 5);
     try testing.expectError(error.IndexOutOfBounds, result);
 }

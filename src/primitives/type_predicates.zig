@@ -9,7 +9,7 @@ pub const primitives = [_]Primitive{
 fn nativeTypeOf(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const type_name: []const u8 = switch (val) {
-        .integer => "integer",
+        .fixnum => "fixnum",
         .boolean => "boolean",
         .string => "string",
         .symbol => "symbol",

@@ -1,7 +1,7 @@
 const std = @import("std");
 const Context = @import("../context.zig").Context;
 const helpers = @import("helpers.zig");
-const popInteger = helpers.popInteger;
+const popFixnum = helpers.popFixnum;
 const popString = helpers.popString;
 const setErrorContext = helpers.setErrorContext;
 
@@ -22,8 +22,8 @@ fn nativeClockRealtime(ctx: *Context) anyerror!void {
         };
     };
 
-    try ctx.stack.push(.{ .integer = ts.sec });
-    try ctx.stack.push(.{ .integer = ts.nsec });
+    try ctx.stack.push(.{ .fixnum = ts.sec });
+    try ctx.stack.push(.{ .fixnum = ts.nsec });
 }
 
 /// clock-monotonic ( -- sec nsec ) - Monotonic clock for measuring durations
@@ -35,8 +35,8 @@ fn nativeClockMonotonic(ctx: *Context) anyerror!void {
         };
     };
 
-    try ctx.stack.push(.{ .integer = ts.sec });
-    try ctx.stack.push(.{ .integer = ts.nsec });
+    try ctx.stack.push(.{ .fixnum = ts.sec });
+    try ctx.stack.push(.{ .fixnum = ts.nsec });
 }
 
 // =========================================================================
@@ -75,7 +75,7 @@ fn nativeTzDecompose(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const tz_name = try popString(ctx);
-    const sec = try popInteger(ctx);
+    const sec = try popFixnum(ctx);
 
     const tz_name_z = try alloc.dupeZ(u8, tz_name);
 
@@ -123,14 +123,14 @@ fn nativeTzDecompose(ctx: *Context) anyerror!void {
         }
     }
 
-    try ctx.stack.push(.{ .integer = @as(i64, result.tm_year) + 1900 });
-    try ctx.stack.push(.{ .integer = @as(i64, result.tm_mon) + 1 });
-    try ctx.stack.push(.{ .integer = @intCast(result.tm_mday) });
-    try ctx.stack.push(.{ .integer = @intCast(result.tm_hour) });
-    try ctx.stack.push(.{ .integer = @intCast(result.tm_min) });
-    try ctx.stack.push(.{ .integer = @intCast(result.tm_sec) });
-    try ctx.stack.push(.{ .integer = @intCast(result.tm_wday) });
-    try ctx.stack.push(.{ .integer = @as(i64, result.tm_yday) + 1 });
-    try ctx.stack.push(.{ .integer = @intCast(result.tm_gmtoff) });
+    try ctx.stack.push(.{ .fixnum = @as(i64, result.tm_year) + 1900 });
+    try ctx.stack.push(.{ .fixnum = @as(i64, result.tm_mon) + 1 });
+    try ctx.stack.push(.{ .fixnum = @intCast(result.tm_mday) });
+    try ctx.stack.push(.{ .fixnum = @intCast(result.tm_hour) });
+    try ctx.stack.push(.{ .fixnum = @intCast(result.tm_min) });
+    try ctx.stack.push(.{ .fixnum = @intCast(result.tm_sec) });
+    try ctx.stack.push(.{ .fixnum = @intCast(result.tm_wday) });
+    try ctx.stack.push(.{ .fixnum = @as(i64, result.tm_yday) + 1 });
+    try ctx.stack.push(.{ .fixnum = @intCast(result.tm_gmtoff) });
     try ctx.stack.push(.{ .string = tz_zone_str });
 }

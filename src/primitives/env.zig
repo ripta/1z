@@ -67,7 +67,7 @@ fn nativeSysInfo(ctx: *Context) anyerror!void {
 
     // "ptr-width" - 32 or 64
     const pw_key = alloc.dupe(u8, "ptr-width") catch return error.OutOfMemory;
-    hash.put(alloc, pw_key, .{ .integer = target.ptrBitWidth() }) catch return error.OutOfMemory;
+    hash.put(alloc, pw_key, .{ .fixnum = target.ptrBitWidth() }) catch return error.OutOfMemory;
 
     // "os-family" - "unix", "windows", or "other"
     const os_family = if (target.os.tag == .windows) "windows" else if (target.os.tag.isDarwin() or target.os.tag == .linux or target.os.tag == .freebsd or target.os.tag == .openbsd or target.os.tag == .netbsd or target.os.tag == .dragonfly or target.os.tag == .solaris) "unix" else "other";

@@ -61,7 +61,7 @@ pub fn nativeWipe(ctx: *Context) anyerror!void {
 /// - over: 1 pick-n
 /// - pick: 2 pick-n
 fn nativePickN(ctx: *Context) anyerror!void {
-    const n = try helpers.popInteger(ctx);
+    const n = try helpers.popFixnum(ctx);
     if (n < 0) return error.StackUnderflow;
 
     const depth: usize = @intCast(n);

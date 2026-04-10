@@ -134,8 +134,8 @@ test "tryDispatchBinary returns false with only native types" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .integer = 1 });
-    try ctx.stack.push(.{ .integer = 2 });
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(.{ .fixnum = 2 });
 
     const result = try tryDispatchBinary(&ctx, "+");
     try std.testing.expect(!result);
@@ -155,7 +155,7 @@ test "tryDispatchUnary returns false with native type" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .integer = 42 });
+    try ctx.stack.push(.{ .fixnum = 42 });
 
     const result = try tryDispatchUnary(&ctx, "serialize");
     try std.testing.expect(!result);
@@ -175,7 +175,7 @@ test "tryDispatchGeneric returns false when no method registered" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .integer = 42 });
+    try ctx.stack.push(.{ .fixnum = 42 });
 
     const result = try tryDispatchGeneric(&ctx, "serialize");
     try std.testing.expect(!result);
@@ -188,22 +188,22 @@ test "tryDispatchGeneric dispatches unary method for native type" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    // Register a unary method for "integer" type
+    // Register a unary method for "fixnum" type
     const body = &[_]@import("../value.zig").Instruction{
         .{ .op = .{ .call_word = "to-string" }, .line = 0 },
     };
     try ctx.dispatch.register(
-        .{ .word_name = "serialize", .type_a = "integer", .type_b = dispatch_mod.unary_sentinel },
+        .{ .word_name = "serialize", .type_a = "fixnum", .type_b = dispatch_mod.unary_sentinel },
         .{ .body = body },
         false,
     );
 
-    try ctx.stack.push(.{ .integer = 42 });
+    try ctx.stack.push(.{ .fixnum = 42 });
 
     const result = try tryDispatchGeneric(&ctx, "serialize");
     try std.testing.expect(result);
 
-    // Method should have executed (to-string converts integer to string)
+    // Method should have executed (to-string converts fixnum to string)
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     const top = try ctx.stack.pop();
     try std.testing.expectEqualStrings("42", top.string);
@@ -222,19 +222,19 @@ test "tryDispatchGeneric tries binary before unary" {
     };
 
     try ctx.dispatch.register(
-        .{ .word_name = "combine", .type_a = "integer", .type_b = "integer" },
+        .{ .word_name = "combine", .type_a = "fixnum", .type_b = "fixnum" },
         .{ .body = binary_body },
         false,
     );
     try ctx.dispatch.register(
-        .{ .word_name = "combine", .type_a = "integer", .type_b = dispatch_mod.unary_sentinel },
+        .{ .word_name = "combine", .type_a = "fixnum", .type_b = dispatch_mod.unary_sentinel },
         .{ .body = unary_body },
         false,
     );
 
-    // With two integers on stack, binary should be chosen
-    try ctx.stack.push(.{ .integer = 10 });
-    try ctx.stack.push(.{ .integer = 32 });
+    // With two fixnums on stack, binary should be chosen
+    try ctx.stack.push(.{ .fixnum = 10 });
+    try ctx.stack.push(.{ .fixnum = 32 });
 
     const result = try tryDispatchGeneric(&ctx, "combine");
     try std.testing.expect(result);
@@ -242,5 +242,5 @@ test "tryDispatchGeneric tries binary before unary" {
     // Binary method (addition) should have run
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     const top = try ctx.stack.pop();
-    try std.testing.expectEqual(@as(i64, 42), top.integer);
+    try std.testing.expectEqual(@as(i64, 42), top.fixnum);
 }

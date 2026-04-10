@@ -149,7 +149,7 @@ fn nativeParseLiteral(ctx: *Context) anyerror!void {
         }
 
         if (tokenizer_mod.parseInteger(token)) |n| {
-            try ctx.stack.push(.{ .integer = n });
+            try ctx.stack.push(.{ .fixnum = n });
             return;
         }
 

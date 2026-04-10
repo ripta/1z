@@ -93,7 +93,7 @@ pub const RangeIter = struct {
         if (self.infinite) {
             const val = self.current;
             self.current +%= self.step;
-            return .{ .integer = val };
+            return .{ .fixnum = val };
         }
         if (self.step > 0) {
             if (self.current >= self.end) return null;
@@ -102,7 +102,7 @@ pub const RangeIter = struct {
         }
         const val = self.current;
         self.current +%= self.step;
-        return .{ .integer = val };
+        return .{ .fixnum = val };
     }
 };
 
@@ -163,12 +163,12 @@ pub const DropIter = struct {
 // =============================================================================
 
 test "ArrayIter advances through elements" {
-    const items = &[_]Value{ .{ .integer = 10 }, .{ .integer = 20 }, .{ .integer = 30 } };
+    const items = &[_]Value{ .{ .fixnum = 10 }, .{ .fixnum = 20 }, .{ .fixnum = 30 } };
     var it = ArrayIter{ .items = items, .index = 0 };
 
-    try std.testing.expectEqual(@as(i64, 10), it.next().?.integer);
-    try std.testing.expectEqual(@as(i64, 20), it.next().?.integer);
-    try std.testing.expectEqual(@as(i64, 30), it.next().?.integer);
+    try std.testing.expectEqual(@as(i64, 10), it.next().?.fixnum);
+    try std.testing.expectEqual(@as(i64, 20), it.next().?.fixnum);
+    try std.testing.expectEqual(@as(i64, 30), it.next().?.fixnum);
     try std.testing.expect(it.next() == null);
     try std.testing.expect(it.next() == null);
 }
@@ -185,27 +185,27 @@ test "Iterator kindName returns correct name" {
 
 test "RangeIter ascending exclusive" {
     var it = RangeIter{ .current = 1, .end = 5, .step = 1, .infinite = false };
-    try std.testing.expectEqual(@as(i64, 1), it.next().?.integer);
-    try std.testing.expectEqual(@as(i64, 2), it.next().?.integer);
-    try std.testing.expectEqual(@as(i64, 3), it.next().?.integer);
-    try std.testing.expectEqual(@as(i64, 4), it.next().?.integer);
+    try std.testing.expectEqual(@as(i64, 1), it.next().?.fixnum);
+    try std.testing.expectEqual(@as(i64, 2), it.next().?.fixnum);
+    try std.testing.expectEqual(@as(i64, 3), it.next().?.fixnum);
+    try std.testing.expectEqual(@as(i64, 4), it.next().?.fixnum);
     try std.testing.expect(it.next() == null);
 }
 
 test "RangeIter descending exclusive" {
     var it = RangeIter{ .current = 5, .end = 1, .step = -1, .infinite = false };
-    try std.testing.expectEqual(@as(i64, 5), it.next().?.integer);
-    try std.testing.expectEqual(@as(i64, 4), it.next().?.integer);
-    try std.testing.expectEqual(@as(i64, 3), it.next().?.integer);
-    try std.testing.expectEqual(@as(i64, 2), it.next().?.integer);
+    try std.testing.expectEqual(@as(i64, 5), it.next().?.fixnum);
+    try std.testing.expectEqual(@as(i64, 4), it.next().?.fixnum);
+    try std.testing.expectEqual(@as(i64, 3), it.next().?.fixnum);
+    try std.testing.expectEqual(@as(i64, 2), it.next().?.fixnum);
     try std.testing.expect(it.next() == null);
 }
 
 test "RangeIter stepped" {
     var it = RangeIter{ .current = 1, .end = 10, .step = 3, .infinite = false };
-    try std.testing.expectEqual(@as(i64, 1), it.next().?.integer);
-    try std.testing.expectEqual(@as(i64, 4), it.next().?.integer);
-    try std.testing.expectEqual(@as(i64, 7), it.next().?.integer);
+    try std.testing.expectEqual(@as(i64, 1), it.next().?.fixnum);
+    try std.testing.expectEqual(@as(i64, 4), it.next().?.fixnum);
+    try std.testing.expectEqual(@as(i64, 7), it.next().?.fixnum);
     try std.testing.expect(it.next() == null);
 }
 
