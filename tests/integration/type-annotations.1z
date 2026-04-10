@@ -45,7 +45,7 @@ dup 2 #nth f "unannotated has no nested effect" assert=
 3 #nth f "unannotated has no type annotation" assert=
 
 "type annotation round-trips through >string via effect.1z" test-section
-[ ( n: fixnum -- m: fixnum ) 1 + ] quotation>effect?
+[ ( n: fixnum -- m: fixnum ) 1 + ] quotation-effect-get?
 unwrap-or-throw >string
 "( n: fixnum -- m: fixnum )" "effect >string with type annotations" assert=
 

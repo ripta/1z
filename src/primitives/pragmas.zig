@@ -7,6 +7,7 @@ const Value = value_mod.Value;
 
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
+const RegistryEntry = @import("types.zig").RegistryEntry;
 const parse_time_mod = @import("parse_time.zig");
 
 const popString = helpers.popString;
@@ -16,7 +17,11 @@ pub const primitives = [_]Primitive{
     .{ .name = "pragma{", .parse_time = true, .stack_effect = "--", .doc = "Set pragma values for the current file scope.", .func = nativePragmaBlock },
     .{ .name = "pragma-def{", .parse_time = true, .stack_effect = "--", .doc = "Register multiple pragma keys. Bare names are boolean; name: [quot] registers a validated pragma.", .func = nativePragmaDefBlock },
     .{ .name = "pragma?", .stack_effect = "name -- ?", .doc = "Query whether the named pragma is set and truthy.", .func = nativePragmaQuery },
-    .{ .name = "pragma-get-raw", .doc = "Raw pragma lookup. Pushes value and t if set, or just f if unset.", .func = nativePragmaGetRaw },
+};
+
+pub const registry_entries = [_]RegistryEntry{
+    // ( name -- value t | f ) Raw pragma lookup for the prelude pragma-get?/pragma-get wrappers.
+    .{ .name = "pragma-get-raw", .func = nativePragmaGetRaw, .stack_effect = "name -- value t | f" },
 };
 
 /// register-pragma ( name validator -- ) - Register a pragma key

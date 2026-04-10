@@ -148,3 +148,12 @@ split-once?: ( str delim -- option ) [
   ]
   if
 ] ;
+
+\\ Split on first occurrence of delimiter, or throw if not found.
+split-once: ( str delim -- pair ) [
+  split-once?
+  dup option:some?
+  [ option:some> ]
+  [ drop f "delimiter not found" EKeyNotFound make-error throw ]
+  if
+] ;

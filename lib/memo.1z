@@ -10,12 +10,25 @@ with-memo: [
   [ M{ } memo-cache ] dip with-parameter
 ] ;
 
-\ Look up a string key in the memo cache.
-\ Returns the cached value and t on hit, or just f on miss.
-memo?: ( key -- value t/f ) [
+\ Check whether a key exists in the memo cache.
+memo-has?: ( key -- ? ) [
+  memo-cache get swap @has?
+] ;
+
+\ Look up a key in the memo cache, returning an option.
+memo-get?: ( key -- option ) [
   memo-cache get over @has?
-  [ memo-cache get swap @get t ]
-  [ drop f ]
+  [ memo-cache get swap @get >option:some ]
+  [ drop option:none ]
+  if
+] ;
+
+\ Look up a key in the memo cache, or throw if not found.
+memo-get: ( key -- value ) [
+  memo-get?
+  dup option:some?
+  [ option:some> ]
+  [ drop f "key not in memo cache" EKeyNotFound make-error throw ]
   if
 ] ;
 

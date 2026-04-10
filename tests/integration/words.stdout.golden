@@ -184,7 +184,6 @@ path-exists? ( path -- bool )
 peek-token ( -- string )
 pick-n ( n -- val )
 pragma-def{ ( -- )
-pragma-get-raw
 pragma? ( name -- ? )
 pragma{ ( -- )
 print-benchmark-report
@@ -540,7 +539,8 @@ parent>> ( instance: provenance -- parent: string )
 parse-quotation ( -- quotation )
 pick ( a b c -- a b c a )
 positive? ( x -- ? )
-pragma-get ( name -- option )
+pragma-get ( name -- value )
+pragma-get? ( name -- option )
 print ( str -- )
 print-line ( str -- )
 protocol{

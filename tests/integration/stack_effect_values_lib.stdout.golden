@@ -1,7 +1,7 @@
-=== quotation>effect? returns some for annotated quotation ===
+=== quotation-effect-get? returns some for annotated quotation ===
 Stack: [ ]
 Stack: [ <option:some option-payload{ value: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "c" row-variable?: f nested-effect: f type-annotation: f } } } }> ]
-PASS: quotation>effect? returns some
+PASS: quotation-effect-get? returns some
 Stack: [ <option:some option-payload{ value: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "c" row-variable?: f nested-effect: f type-annotation: f } } } }> ]
 Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "c" row-variable?: f nested-effect: f type-annotation: f } } } ]
 PASS: unwrapped value is stack-effect-info
@@ -10,10 +10,10 @@ PASS: effect-inputs returns 2
 Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "c" row-variable?: f nested-effect: f type-annotation: f } } } ]
 PASS: effect-outputs returns 1
 Stack: [ ]
-=== quotation>effect? returns none for unannotated quotation ===
+=== quotation-effect-get? returns none for unannotated quotation ===
 Stack: [ ]
 Stack: [ <option:none none:> ]
-PASS: quotation>effect? returns none
+PASS: quotation-effect-get? returns none
 Stack: [ ]
 === effect-compose: outputs match inputs exactly ===
 Stack: [ ]

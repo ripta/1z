@@ -3,22 +3,22 @@
 use "testing" ;
 use "runtime/effect" ;
 
-"quotation>effect? returns some for annotated quotation" test-section
-[ ( a b -- c ) + ] quotation>effect?
-dup option:some? t "quotation>effect? returns some" assert=
+"quotation-effect-get? returns some for annotated quotation" test-section
+[ ( a b -- c ) + ] quotation-effect-get?
+dup option:some? t "quotation-effect-get? returns some" assert=
 unwrap-or-throw
 dup stack-effect-info? t "unwrapped value is stack-effect-info" assert=
 dup effect-inputs 2 "effect-inputs returns 2" assert=
 effect-outputs 1 "effect-outputs returns 1" assert=
 
-"quotation>effect? returns none for unannotated quotation" test-section
-[ 1 + ] quotation>effect?
-option:none? t "quotation>effect? returns none" assert=
+"quotation-effect-get? returns none for unannotated quotation" test-section
+[ 1 + ] quotation-effect-get?
+option:none? t "quotation-effect-get? returns none" assert=
 
 "effect-compose: outputs match inputs exactly" test-section
 \ ( a -- b ) then ( x -- y ) => ( a -- y )
-[ ( a -- b ) ] quotation>effect? unwrap-or-throw
-[ ( x -- y ) ] quotation>effect? unwrap-or-throw
+[ ( a -- b ) ] quotation-effect-get? unwrap-or-throw
+[ ( x -- y ) ] quotation-effect-get? unwrap-or-throw
 effect-compose
 dup effect-inputs 1 "compose exact: inputs = 1" assert=
 dup effect-outputs 1 "compose exact: outputs = 1" assert=
@@ -27,8 +27,8 @@ outputs>> #first name>> "y" "compose exact: output name from e2" assert=
 
 "effect-compose: excess outputs carried forward" test-section
 \ ( a -- b c d ) then ( x -- y ) => ( a -- b c y )
-[ ( a -- b c d ) ] quotation>effect? unwrap-or-throw
-[ ( x -- y ) ] quotation>effect? unwrap-or-throw
+[ ( a -- b c d ) ] quotation-effect-get? unwrap-or-throw
+[ ( x -- y ) ] quotation-effect-get? unwrap-or-throw
 effect-compose
 dup effect-inputs 1 "compose excess out: inputs = 1" assert=
 dup effect-outputs 3 "compose excess out: outputs = 3" assert=
@@ -38,8 +38,8 @@ outputs>> 2 #nth name>> "y" "compose excess out: third output from e2" assert=
 
 "effect-compose: excess inputs prepended" test-section
 \ ( a -- b ) then ( x y z -- w ) => ( a x y -- w )
-[ ( a -- b ) ] quotation>effect? unwrap-or-throw
-[ ( x y z -- w ) ] quotation>effect? unwrap-or-throw
+[ ( a -- b ) ] quotation-effect-get? unwrap-or-throw
+[ ( x y z -- w ) ] quotation-effect-get? unwrap-or-throw
 effect-compose
 dup effect-inputs 3 "compose excess in: inputs = 3" assert=
 dup effect-outputs 1 "compose excess in: outputs = 1" assert=
@@ -50,28 +50,28 @@ outputs>> #first name>> "w" "compose excess in: output from e2" assert=
 
 "effect-compose: zero-input second effect" test-section
 \ ( a -- b c ) then ( -- y ) => ( a -- b c y )
-[ ( a -- b c ) ] quotation>effect? unwrap-or-throw
-[ ( -- y ) ] quotation>effect? unwrap-or-throw
+[ ( a -- b c ) ] quotation-effect-get? unwrap-or-throw
+[ ( -- y ) ] quotation-effect-get? unwrap-or-throw
 effect-compose
 dup effect-inputs 1 "compose zero-in: inputs = 1" assert=
 effect-outputs 3 "compose zero-in: outputs = 3" assert=
 
 "effect-compose: zero-output first effect" test-section
 \ ( a b -- ) then ( x -- y ) => ( a b x -- y )
-[ ( a b -- ) ] quotation>effect? unwrap-or-throw
-[ ( x -- y ) ] quotation>effect? unwrap-or-throw
+[ ( a b -- ) ] quotation-effect-get? unwrap-or-throw
+[ ( x -- y ) ] quotation-effect-get? unwrap-or-throw
 effect-compose
 dup effect-inputs 3 "compose zero-out: inputs = 3" assert=
 effect-outputs 1 "compose zero-out: outputs = 1" assert=
 
 "effect-diff: matching effects return false" test-section
-[ ( a b -- c ) ] quotation>effect? unwrap-or-throw
-[ ( a b -- c ) ] quotation>effect? unwrap-or-throw
+[ ( a b -- c ) ] quotation-effect-get? unwrap-or-throw
+[ ( a b -- c ) ] quotation-effect-get? unwrap-or-throw
 effect-diff f "matching effects return false" assert=
 
 "effect-diff: mismatched effects return string" test-section
-[ ( a -- b ) ] quotation>effect? unwrap-or-throw
-[ ( x y -- z ) ] quotation>effect? unwrap-or-throw
+[ ( a -- b ) ] quotation-effect-get? unwrap-or-throw
+[ ( x y -- z ) ] quotation-effect-get? unwrap-or-throw
 effect-diff
 dup f = f "mismatched effects return non-false" assert=
 dup string? t "mismatch result is a string" assert=
@@ -79,12 +79,12 @@ drop
 
 "assert-effect: passing case" test-section
 [ ( a b -- c ) + ]
-[ ( a b -- c ) ] quotation>effect? unwrap-or-throw
+[ ( a b -- c ) ] quotation-effect-get? unwrap-or-throw
 "assert-effect pass" assert-effect
 
 "assert-effect: failing case detected via effect-diff" test-section
-[ ( a -- b ) 1 + ] quotation>effect? unwrap-or-throw
-[ ( x y -- z ) ] quotation>effect? unwrap-or-throw
+[ ( a -- b ) 1 + ] quotation-effect-get? unwrap-or-throw
+[ ( x y -- z ) ] quotation-effect-get? unwrap-or-throw
 effect-diff
 dup f = f "mismatched effects produce non-false diff" assert=
 string? t "diff result is a string" assert=

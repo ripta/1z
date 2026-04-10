@@ -865,5 +865,14 @@ all-words: ( -- array ) [ native.all-words [ (raw>word-info) ] #map #collect ] ;
 \\ Safe variant of >word-info that returns an option instead of throwing.
 >word-info?: ( symbol -- option ) [ [ >word-info >option:some ] [ drop option:none ] recover ] ;
 
-\\ Return the value of a pragma as an option.
-pragma-get: ( name -- option ) [ pragma-get-raw [ >option:some ] [ option:none ] if ] ;
+\\ Return the value of a pragma as an option, or none if unset.
+pragma-get?: ( name -- option ) [ native.pragma-get-raw [ >option:some ] [ option:none ] if ] ;
+
+\\ Return the value of a pragma, or throw if unset.
+pragma-get: ( name -- value ) [
+  pragma-get?
+  dup option:some?
+  [ option:some> ]
+  [ drop f "pragma not set" EKeyNotFound make-error throw ]
+  if
+] ;

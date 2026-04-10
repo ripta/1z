@@ -23,9 +23,18 @@
 \\ Extract a quotation's declared stack effect as an option.
 \\ Returns option:some wrapping a stack-effect-info if the quotation has a
 \\ declared effect, or option:none otherwise.
-quotation>effect?: ( quot -- option ) [
+quotation-effect-get?: ( quot -- option ) [
   native.quotation>effect
   dup f = [ drop option:none ] [ (raw>effect) >option:some ] if
+] ;
+
+\\ Extract a quotation's declared stack effect, or throw if none is declared.
+quotation-effect-get: ( quot -- effect ) [
+  quotation-effect-get?
+  dup option:some?
+  [ option:some> ]
+  [ drop f "quotation has no effect annotation" ETypeMismatch make-error throw ]
+  if
 ] ;
 
 \\ Return the number of input parameters in a stack effect.

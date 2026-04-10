@@ -18,7 +18,7 @@ read-headers-loop: ( stream headers -- headers ) [
   over stream-read-line
   dup f = [ drop swap drop ] [
     dup #empty? [ drop swap drop ] [
-      ":" split-once? unwrap-or-throw
+      ":" split-once
       dup #first lowercase swap #last trim
       @set
       read-headers-loop

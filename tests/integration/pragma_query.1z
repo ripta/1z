@@ -1,4 +1,4 @@
-\ Test pragma? and pragma-get parse-time queries
+\ Test pragma? and pragma-get? parse-time queries
 
 use "testing" ;
 
@@ -20,12 +20,12 @@ pragma{ qflag: t }
 pragma{ qflag: f }
 "qflag" pragma? f "pragma? returns f after pragma{ qflag: f }" assert=
 
-"pragma-get before set" test-section
+"pragma-get? before set" test-section
 
-"qlevel" pragma-get option:none? t "pragma-get returns none before set" assert=
+"qlevel" pragma-get? option:none? t "pragma-get? returns none before set" assert=
 
-"pragma-get after set" test-section
+"pragma-get? after set" test-section
 
 pragma{ qlevel: 42 }
-"qlevel" pragma-get option:some? t "pragma-get returns some after set" assert=
-"qlevel" pragma-get option:some> 42 "pragma-get value is correct" assert=
+"qlevel" pragma-get? option:some? t "pragma-get? returns some after set" assert=
+"qlevel" pragma-get? option:some> 42 "pragma-get? value is correct" assert=

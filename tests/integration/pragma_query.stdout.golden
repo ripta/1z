@@ -12,13 +12,13 @@ Stack: [ ]
 Stack: [ ]
 PASS: pragma? returns f after pragma{ qflag: f }
 Stack: [ ]
-=== pragma-get before set ===
+=== pragma-get? before set ===
 Stack: [ ]
-PASS: pragma-get returns none before set
+PASS: pragma-get? returns none before set
 Stack: [ ]
-=== pragma-get after set ===
+=== pragma-get? after set ===
 Stack: [ ]
-PASS: pragma-get returns some after set
+PASS: pragma-get? returns some after set
 Stack: [ ]
-PASS: pragma-get value is correct
+PASS: pragma-get? value is correct
 Stack: [ ]
