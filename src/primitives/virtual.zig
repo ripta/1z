@@ -151,7 +151,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
 fn virtualWrapHelper(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    const ptr_val = try helpers.popInteger(ctx);
+    const ptr_val = try helpers.popFixnum(ctx);
     const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
 
     const val = try ctx.stack.pop();
@@ -166,7 +166,7 @@ fn virtualWrapHelper(ctx: *Context) anyerror!void {
 ///
 /// Given a tagged virtual type instance, unwraps and validates its type.
 fn virtualUnwrapHelper(ctx: *Context) anyerror!void {
-    const ptr_val = try helpers.popInteger(ctx);
+    const ptr_val = try helpers.popFixnum(ctx);
     const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
 
     const val = try ctx.stack.pop();
@@ -190,7 +190,7 @@ fn virtualUnwrapHelper(ctx: *Context) anyerror!void {
 ///
 /// Given a value, checks if it is a tagged instance of the given virtual type.
 fn virtualTypePredicateHelper(ctx: *Context) anyerror!void {
-    const ptr_val = try helpers.popInteger(ctx);
+    const ptr_val = try helpers.popFixnum(ctx);
     const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
 
     const val = try ctx.stack.pop();
@@ -207,7 +207,7 @@ pub fn defineWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, ma
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.virtual-wrap" }, .line = 0 };
 
     try ctx.defineWord(name, .{
@@ -222,7 +222,7 @@ pub fn defineUnwrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, 
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 0 };
 
     try ctx.defineWord(name, .{
@@ -237,7 +237,7 @@ pub fn definePredicate(ctx: *Context, name: []const u8, vtype: *const VirtualTyp
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.virtual-type-predicate" }, .line = 0 };
 
     try ctx.defineWord(name, .{
@@ -251,7 +251,7 @@ pub fn definePredicate(ctx: *Context, name: []const u8, vtype: *const VirtualTyp
 fn virtualStructWrapHelper(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    const ptr_val = try helpers.popInteger(ctx);
+    const ptr_val = try helpers.popFixnum(ctx);
     const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
 
     const st = vt.anon_struct orelse return error.TypeMismatch;
@@ -278,7 +278,7 @@ fn virtualStructWrapHelper(ctx: *Context) anyerror!void {
 
 /// Trampoline helper ( tagged vtype-ptr -- field1..fieldN )
 fn virtualStructUnwrapHelper(ctx: *Context) anyerror!void {
-    const ptr_val = try helpers.popInteger(ctx);
+    const ptr_val = try helpers.popFixnum(ctx);
     const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
 
     const val = try ctx.stack.pop();
@@ -312,7 +312,7 @@ pub fn defineStructWrap(ctx: *Context, name: []const u8, vtype: *const VirtualTy
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-wrap" }, .line = 0 };
 
     try ctx.defineWord(name, .{
@@ -327,7 +327,7 @@ pub fn defineStructUnwrap(ctx: *Context, name: []const u8, vtype: *const Virtual
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-unwrap" }, .line = 0 };
 
     try ctx.defineWord(name, .{

@@ -108,7 +108,7 @@ point: struct{ x y } ;
 
 "option wrapping virtual types" test-section
 
-speed: virtual{ integer } ;
+speed: virtual{ fixnum } ;
 42 >speed >option:some option:some? t "some? on virtual-wrapped option" assert=
 42 >speed >option:some option:some> speed> 42 "unwrap virtual from option" assert=
 42 >speed >option:some option:some> type-of speed: "type-of virtual inside option" assert=

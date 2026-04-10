@@ -108,7 +108,7 @@ pub fn makeSimpleEffect(allocator: Allocator, raw: []const u8) !StackEffect {
 /// Get the type name of a value as a string
 pub fn valueTypeName(val: Value) []const u8 {
     return switch (val) {
-        .integer => "integer",
+        .fixnum => "fixnum",
         .boolean => "boolean",
         .string => "string",
         .symbol => "symbol",
@@ -142,7 +142,7 @@ pub fn valueTypeName(val: Value) []const u8 {
 /// Strings and symbols are truncated to max_len characters.
 pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]const u8 {
     return switch (val) {
-        .integer => |i| std.fmt.allocPrint(allocator, "{d}", .{i}),
+        .fixnum => |i| std.fmt.allocPrint(allocator, "{d}", .{i}),
         .boolean => |b| allocator.dupe(u8, if (b) "t" else "f"),
         .string => |s| blk: {
             if (s.len <= max_len) {
@@ -210,12 +210,12 @@ pub fn setTypeMismatchError(ctx: *Context, expected: []const u8, val: Value) voi
 // Type-safe poppers
 // =============================================================================
 
-pub fn popInteger(ctx: *Context) !i64 {
+pub fn popFixnum(ctx: *Context) !i64 {
     const val = try ctx.stack.pop();
     return switch (val) {
-        .integer => |i| i,
+        .fixnum => |i| i,
         else => {
-            setTypeMismatchError(ctx, "integer", val);
+            setTypeMismatchError(ctx, "fixnum", val);
             return error.TypeMismatch;
         },
     };
@@ -374,18 +374,18 @@ pub fn popChannel(ctx: *Context) !*@import("../channel.zig").Channel {
     };
 }
 
-/// Pop a duration value (tagged integer with inner_type "integer") and return
+/// Pop a duration value (tagged fixnum with inner_type "fixnum") and return
 /// the raw nanosecond count plus the original Value for re-use.
 pub fn popDuration(ctx: *Context) !struct { ns: i128, val: Value } {
     const val = try ctx.stack.pop();
     return switch (val) {
         .tagged => |t| {
-            if (!std.mem.eql(u8, t.tag.inner_type, "integer")) {
+            if (!std.mem.eql(u8, t.tag.inner_type, "fixnum")) {
                 setTypeMismatchError(ctx, "duration", val);
                 return error.TypeMismatch;
             }
             return switch (t.inner.*) {
-                .integer => |i| .{ .ns = @as(i128, i), .val = val },
+                .fixnum => |i| .{ .ns = @as(i128, i), .val = val },
                 else => {
                     setTypeMismatchError(ctx, "duration", val);
                     return error.TypeMismatch;

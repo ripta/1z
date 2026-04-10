@@ -13,7 +13,7 @@ pub const InterpreterError = error{
     StackEffectMismatch,
     // Arithmetic error types
     DivisionByZero,
-    IntegerOverflow,
+    FixnumOverflow,
     // File error types
     FileNotFound,
     FileReadFailed,

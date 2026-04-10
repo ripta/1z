@@ -47,7 +47,7 @@ fn getErrorField(ctx: *Context, err: ErrorObject, field_name: []const u8) !Value
                 const word_key = alloc.dupe(u8, "word") catch return error.OutOfMemory;
                 frame_hash.put(alloc, word_key, .{ .string = frame.word_name }) catch return error.OutOfMemory;
                 const line_key = alloc.dupe(u8, "line") catch return error.OutOfMemory;
-                frame_hash.put(alloc, line_key, .{ .integer = @intCast(frame.line) }) catch return error.OutOfMemory;
+                frame_hash.put(alloc, line_key, .{ .fixnum = @intCast(frame.line) }) catch return error.OutOfMemory;
                 frames[i] = .{ .hash = frame_hash };
             }
             return .{ .array = frames };

@@ -205,7 +205,7 @@ pub const SequenceIterator = struct {
                 if (self.state.byte_array.index < self.state.byte_array.items.len) {
                     const byte = self.state.byte_array.items[self.state.byte_array.index];
                     self.state.byte_array.index += 1;
-                    return Value{ .integer = byte };
+                    return Value{ .fixnum = byte };
                 }
                 return null;
             },
@@ -307,7 +307,7 @@ pub const SequenceBuilder = struct {
 
     /// Append a Value to the builder.
     /// For strings, the value must be a string (appends the bytes).
-    /// For byte arrays, the value must be an integer 0-255.
+    /// For byte arrays, the value must be a fixnum 0-255.
     pub fn append(self: *SequenceBuilder, val: Value) !void {
         switch (self.kind) {
             .string => {
@@ -322,8 +322,8 @@ pub const SequenceBuilder = struct {
                 self.state.vector.append(self.allocator, val) catch return error.OutOfMemory;
             },
             .byte_array => {
-                // Expect integer value 0-255
-                const byte: u8 = @intCast(val.integer);
+                // Expect fixnum value 0-255
+                const byte: u8 = @intCast(val.fixnum);
                 self.state.byte_array.append(self.allocator, byte) catch return error.OutOfMemory;
             },
             .set => {
@@ -394,18 +394,18 @@ test "sequenceLength" {
     try std.testing.expectEqual(@as(?usize, 5), sequenceLength(.{ .string = "hello" }));
     try std.testing.expectEqual(@as(?usize, 4), sequenceLength(.{ .string = "café" }));
 
-    const arr = [_]Value{ .{ .integer = 1 }, .{ .integer = 2 } };
+    const arr = [_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 2 } };
     try std.testing.expectEqual(@as(?usize, 2), sequenceLength(.{ .array = &arr }));
 }
 
 test "SequenceIterator over array" {
     const allocator = std.testing.allocator;
-    const arr = [_]Value{ .{ .integer = 1 }, .{ .integer = 2 }, .{ .integer = 3 } };
+    const arr = [_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 2 }, .{ .fixnum = 3 } };
     var iter = SequenceIterator.init(.{ .array = &arr }, allocator).?;
 
-    try std.testing.expectEqual(@as(i64, 1), (try iter.next()).?.integer);
-    try std.testing.expectEqual(@as(i64, 2), (try iter.next()).?.integer);
-    try std.testing.expectEqual(@as(i64, 3), (try iter.next()).?.integer);
+    try std.testing.expectEqual(@as(i64, 1), (try iter.next()).?.fixnum);
+    try std.testing.expectEqual(@as(i64, 2), (try iter.next()).?.fixnum);
+    try std.testing.expectEqual(@as(i64, 3), (try iter.next()).?.fixnum);
     try std.testing.expect((try iter.next()) == null);
 }
 
@@ -428,13 +428,13 @@ test "SequenceBuilder for array" {
     const allocator = std.testing.allocator;
     var builder = try SequenceBuilder.init(.array, allocator);
 
-    try builder.append(.{ .integer = 1 });
-    try builder.append(.{ .integer = 2 });
+    try builder.append(.{ .fixnum = 1 });
+    try builder.append(.{ .fixnum = 2 });
 
     const result = try builder.toValue();
     defer allocator.free(result.array);
 
     try std.testing.expectEqual(@as(usize, 2), result.array.len);
-    try std.testing.expectEqual(@as(i64, 1), result.array[0].integer);
-    try std.testing.expectEqual(@as(i64, 2), result.array[1].integer);
+    try std.testing.expectEqual(@as(i64, 1), result.array[0].fixnum);
+    try std.testing.expectEqual(@as(i64, 2), result.array[1].fixnum);
 }

@@ -182,7 +182,7 @@ fn structTypePredicateHelper(ctx: *Context) anyerror!void {
 
 /// Trampoline helper ( instance struct-type field-index -- value )
 fn structFieldGetHelper(ctx: *Context) anyerror!void {
-    const idx: usize = @intCast(try helpers.popInteger(ctx));
+    const idx: usize = @intCast(try helpers.popFixnum(ctx));
     const st = try helpers.popStructType(ctx);
     const inst = try helpers.popStructInstance(ctx);
 
@@ -195,7 +195,7 @@ fn structFieldGetHelper(ctx: *Context) anyerror!void {
 
 /// Trampoline helper ( instance value struct-type field-index -- instance )
 fn structFieldSetHelper(ctx: *Context) anyerror!void {
-    const idx: usize = @intCast(try helpers.popInteger(ctx));
+    const idx: usize = @intCast(try helpers.popFixnum(ctx));
     const st = try helpers.popStructType(ctx);
     const new_val = try ctx.stack.pop();
     const inst = try helpers.popStructInstance(ctx);
@@ -259,7 +259,7 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
 
     const instrs = try alloc.alloc(Instruction, 3);
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(field_index) } }, .line = 0 };
+    instrs[1] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(field_index) } }, .line = 0 };
     instrs[2] = .{ .op = .{ .call_word = "native.struct-field-get" }, .line = 0 };
 
     try ctx.defineWord(name, .{
@@ -275,7 +275,7 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
 
     const instrs = try alloc.alloc(Instruction, 3);
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(field_index) } }, .line = 0 };
+    instrs[1] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(field_index) } }, .line = 0 };
     instrs[2] = .{ .op = .{ .call_word = "native.struct-field-set" }, .line = 0 };
 
     try ctx.defineWord(name, .{

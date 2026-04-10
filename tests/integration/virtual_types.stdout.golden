@@ -9,7 +9,7 @@ PASS: duration? on plain integer is false
 Stack: [ ]
 PASS: duration? on string is false
 Stack: [ ]
-PASS: integer? on duration is false (strict)
+PASS: fixnum? on duration is false (strict)
 Stack: [ ]
 PASS: display format is <name inner>
 Stack: [ ]

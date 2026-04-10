@@ -7,7 +7,7 @@ pub const RegistryEntry = types.RegistryEntry;
 // Re-export helpers
 pub const helpers = @import("helpers.zig");
 pub const makeSimpleEffect = helpers.makeSimpleEffect;
-pub const popInteger = helpers.popInteger;
+pub const popFixnum = helpers.popFixnum;
 pub const popBoolean = helpers.popBoolean;
 pub const popQuotation = helpers.popQuotation;
 pub const popSymbol = helpers.popSymbol;

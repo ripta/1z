@@ -18,7 +18,7 @@ pub fn dispatchTypeName(val: Value) []const u8 {
     return switch (val) {
         .tagged => |t| t.tag.name,
         .struct_instance => |si| si.struct_type.name,
-        .integer => "integer",
+        .fixnum => "fixnum",
         .boolean => "boolean",
         .string => "string",
         .symbol => "symbol",
@@ -177,7 +177,7 @@ pub const DispatchTable = struct {
 // =============================================================================
 
 test "dispatchTypeName returns correct name for native types" {
-    try std.testing.expectEqualStrings("integer", dispatchTypeName(.{ .integer = 42 }));
+    try std.testing.expectEqualStrings("fixnum", dispatchTypeName(.{ .fixnum = 42 }));
     try std.testing.expectEqualStrings("boolean", dispatchTypeName(.{ .boolean = true }));
     try std.testing.expectEqualStrings("string", dispatchTypeName(.{ .string = "hello" }));
     try std.testing.expectEqualStrings("symbol", dispatchTypeName(.{ .symbol = "foo" }));
@@ -185,8 +185,8 @@ test "dispatchTypeName returns correct name for native types" {
 }
 
 test "dispatchTypeName returns virtual type name for tagged values" {
-    const vt = value_mod.VirtualType{ .name = "duration", .inner_type = "integer" };
-    const inner = Value{ .integer = 42 };
+    const vt = value_mod.VirtualType{ .name = "duration", .inner_type = "fixnum" };
+    const inner = Value{ .fixnum = 42 };
     const tagged = Value{ .tagged = .{ .tag = &vt, .inner = &inner } };
     try std.testing.expectEqualStrings("duration", dispatchTypeName(tagged));
 }
@@ -198,8 +198,8 @@ test "dispatchTypeName returns struct type name for struct instances" {
 }
 
 test "isUserType returns true for tagged and struct_instance" {
-    const vt = value_mod.VirtualType{ .name = "duration", .inner_type = "integer" };
-    const inner = Value{ .integer = 42 };
+    const vt = value_mod.VirtualType{ .name = "duration", .inner_type = "fixnum" };
+    const inner = Value{ .fixnum = 42 };
     const tagged = Value{ .tagged = .{ .tag = &vt, .inner = &inner } };
     try std.testing.expect(isUserType(tagged));
 
@@ -209,7 +209,7 @@ test "isUserType returns true for tagged and struct_instance" {
 }
 
 test "isUserType returns false for native types" {
-    try std.testing.expect(!isUserType(.{ .integer = 42 }));
+    try std.testing.expect(!isUserType(.{ .fixnum = 42 }));
     try std.testing.expect(!isUserType(.{ .boolean = true }));
     try std.testing.expect(!isUserType(.{ .string = "hello" }));
     try std.testing.expect(!isUserType(.{ .symbol = "foo" }));
@@ -219,7 +219,7 @@ test "register and lookupBinary exact match" {
     var table = DispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 99 } }, .line = 0 }};
+    const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 0 }};
     try table.register(
         .{ .word_name = "+", .type_a = "duration", .type_b = "duration" },
         .{ .body = body },
@@ -243,10 +243,10 @@ test "lookupBinary wildcard precedence" {
     var table = DispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    const exact_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 0 }};
-    const wild_b_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 0 }};
-    const wild_a_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 3 } }, .line = 0 }};
-    const wild_both_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 4 } }, .line = 0 }};
+    const exact_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
+    const wild_b_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
+    const wild_a_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 0 }};
+    const wild_both_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 4 } }, .line = 0 }};
 
     // Register in reverse precedence order to ensure lookup logic is correct
     try table.register(
@@ -255,7 +255,7 @@ test "lookupBinary wildcard precedence" {
         false,
     );
     try table.register(
-        .{ .word_name = "+", .type_a = any_sentinel, .type_b = "integer" },
+        .{ .word_name = "+", .type_a = any_sentinel, .type_b = "fixnum" },
         .{ .body = wild_a_body },
         false,
     );
@@ -272,27 +272,27 @@ test "lookupBinary wildcard precedence" {
 
     // Exact match should win
     const r1 = table.lookupBinary("+", "duration", "duration").?;
-    try std.testing.expectEqual(@as(i64, 1), r1.body[0].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 1), r1.body[0].op.push_literal.fixnum);
 
-    // Wildcard on second: (duration, integer) matches (duration, *)
-    const r2 = table.lookupBinary("+", "duration", "integer").?;
-    try std.testing.expectEqual(@as(i64, 2), r2.body[0].op.push_literal.integer);
+    // Wildcard on second: (duration, fixnum) matches (duration, *)
+    const r2 = table.lookupBinary("+", "duration", "fixnum").?;
+    try std.testing.expectEqual(@as(i64, 2), r2.body[0].op.push_literal.fixnum);
 
-    // Wildcard on first: (string, integer) matches (*, integer)
-    const r3 = table.lookupBinary("+", "string", "integer").?;
-    try std.testing.expectEqual(@as(i64, 3), r3.body[0].op.push_literal.integer);
+    // Wildcard on first: (string, fixnum) matches (*, fixnum)
+    const r3 = table.lookupBinary("+", "string", "fixnum").?;
+    try std.testing.expectEqual(@as(i64, 3), r3.body[0].op.push_literal.fixnum);
 
     // Both wildcards: (string, string) matches (*, *)
     const r4 = table.lookupBinary("+", "string", "string").?;
-    try std.testing.expectEqual(@as(i64, 4), r4.body[0].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 4), r4.body[0].op.push_literal.fixnum);
 }
 
 test "lookupUnary exact and wildcard" {
     var table = DispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    const exact_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 10 } }, .line = 0 }};
-    const wild_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 20 } }, .line = 0 }};
+    const exact_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 10 } }, .line = 0 }};
+    const wild_body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 20 } }, .line = 0 }};
 
     try table.register(
         .{ .word_name = "serialize", .type_a = "duration", .type_b = unary_sentinel },
@@ -307,11 +307,11 @@ test "lookupUnary exact and wildcard" {
 
     // Exact match
     const r1 = table.lookupUnary("serialize", "duration").?;
-    try std.testing.expectEqual(@as(i64, 10), r1.body[0].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 10), r1.body[0].op.push_literal.fixnum);
 
     // Wildcard fallback
     const r2 = table.lookupUnary("serialize", "point").?;
-    try std.testing.expectEqual(@as(i64, 20), r2.body[0].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 20), r2.body[0].op.push_literal.fixnum);
 
     // No match for different word
     try std.testing.expect(table.lookupUnary("other-word", "duration") == null);
@@ -321,7 +321,7 @@ test "register duplicate key errors without allow_overwrite" {
     var table = DispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 0 }};
+    const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
     try table.register(
         .{ .word_name = "+", .type_a = "duration", .type_b = "duration" },
         .{ .body = body },
@@ -340,8 +340,8 @@ test "register duplicate key succeeds with allow_overwrite" {
     var table = DispatchTable.init(std.testing.allocator);
     defer table.deinit();
 
-    const body1 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 0 }};
-    const body2 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 0 }};
+    const body1 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
+    const body2 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
 
     try table.register(
         .{ .word_name = "+", .type_a = "duration", .type_b = "duration" },
@@ -356,5 +356,5 @@ test "register duplicate key succeeds with allow_overwrite" {
 
     // Shoulda gotten the overwritten body
     const result = table.lookupBinary("+", "duration", "duration").?;
-    try std.testing.expectEqual(@as(i64, 2), result.body[0].op.push_literal.integer);
+    try std.testing.expectEqual(@as(i64, 2), result.body[0].op.push_literal.fixnum);
 }

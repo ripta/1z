@@ -4,7 +4,7 @@ Duplicate top of stack.
 Stack: [ ]
 + ( a b -- a+b ) \native
 
-Add two integers.
+Add two fixnums.
 Stack: [ ]
 if ( ? true-quot false-quot --  ) \native
 

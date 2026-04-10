@@ -17,7 +17,7 @@ const popQuotation = helpers.popQuotation;
 pub const primitives = [_]Primitive{
     .{ .name = "make-hash", .stack_effect = "quotation -- hash", .doc = "Create a hash table from key: value pairs in a quotation.", .func = nativeMakeHash },
     .{ .name = "make-vector", .stack_effect = "quotation -- vector", .doc = "Create a mutable vector from values in a quotation.", .func = nativeMakeVector },
-    .{ .name = "make-byte-array", .stack_effect = "quotation -- byte-array", .doc = "Create a byte array from integer values in a quotation.", .func = nativeMakeByteArray },
+    .{ .name = "make-byte-array", .stack_effect = "quotation -- byte-array", .doc = "Create a byte array from fixnum values in a quotation.", .func = nativeMakeByteArray },
     .{ .name = "make-set", .stack_effect = "quotation -- set", .doc = "Create a set from unique values in a quotation.", .func = nativeMakeSet },
     .{ .name = "make-mutable-map", .stack_effect = "quotation -- mmap", .doc = "Create a mutable map from key: value pairs in a quotation.", .func = nativeMakeMutableMap },
     .{ .name = "@set!", .stack_effect = "mmap key value -- mmap", .doc = "Set value in mutable map, mutating in place.", .func = nativeAtSetMut },
@@ -130,10 +130,10 @@ pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
                 break :blk ctx.stack.pop() catch return error.OutOfMemory;
             },
         };
-        // Value must be an integer in byte range
+        // Value must be a fixnum in byte range
         switch (val) {
-            .integer => |int| {
-                if (int < 0 or int > 255) return error.IntegerOverflow;
+            .fixnum => |int| {
+                if (int < 0 or int > 255) return error.FixnumOverflow;
                 ba.append(alloc, @intCast(int)) catch return error.OutOfMemory;
             },
             else => return error.TypeMismatch,

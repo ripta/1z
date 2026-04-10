@@ -111,8 +111,8 @@ fn buildWordInfo(alloc: Allocator, ctx: *const Context, sts: StructTypes, name: 
     const source_loc_val: Value = if (word.source_file) |file| blk: {
         const sl_fields = try alloc.alloc(Value, 3);
         sl_fields[0] = .{ .string = file };
-        sl_fields[1] = .{ .integer = @intCast(word.source_line) };
-        sl_fields[2] = .{ .integer = @intCast(word.source_column) };
+        sl_fields[1] = .{ .fixnum = @intCast(word.source_line) };
+        sl_fields[2] = .{ .fixnum = @intCast(word.source_column) };
         const sl_instance = try alloc.create(StructInstance);
         sl_instance.* = .{ .struct_type = sts.source_loc, .fields = sl_fields };
         break :blk .{ .struct_instance = sl_instance };

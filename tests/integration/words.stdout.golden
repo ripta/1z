@@ -228,8 +228,8 @@ ECannotRedefineConst
 EDivisionByZero
 EFileNotFound
 EFileReadFailed
+EFixnumOverflow
 EIOFailed
-EIntegerOverflow
 EKeyNotFound
 ENoMatchingBranch
 EStackEffectMismatch
@@ -266,6 +266,7 @@ enum{
 error-type? ( error type -- error ? )
 error? ( val -- ? )
 file>>
+fixnum? ( val -- ? )
 flush (  --  )
 fmt ( source string -- string )
 fmt-line ( source string --  )
@@ -274,7 +275,6 @@ hash? ( val -- ? )
 ignore-errors ( quot --  )
 input-stream
 inputs>>
-integer? ( val -- ? )
 iterator? ( val -- ? )
 keep ( ..a x quot: ( ..a x -- ..b ) -- ..b x )
 line>>

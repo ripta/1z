@@ -14,7 +14,7 @@ const Primitive = @import("types.zig").Primitive;
 
 const popQuotation = helpers.popQuotation;
 const popString = helpers.popString;
-const popInteger = helpers.popInteger;
+const popFixnum = helpers.popFixnum;
 
 pub const primitives = [_]Primitive{
     .{ .name = "curry", .stack_effect = "x quot -- quot'", .doc = "Partially apply a value to a quotation.", .func = nativeCurry },
@@ -119,30 +119,30 @@ fn executeBenchmarkN(ctx: *Context, quot: Quotation, n: u64) !*HashTable {
     hash.* = HashTable{};
 
     const key1 = alloc.dupe(u8, "elapsed_ns") catch return error.OutOfMemory;
-    hash.put(alloc, key1, .{ .integer = @intCast(elapsed_ns) }) catch return error.OutOfMemory;
+    hash.put(alloc, key1, .{ .fixnum = @intCast(elapsed_ns) }) catch return error.OutOfMemory;
 
     const key2 = alloc.dupe(u8, "push_literal") catch return error.OutOfMemory;
-    hash.put(alloc, key2, .{ .integer = @intCast(local_stats.push_literal_count) }) catch return error.OutOfMemory;
+    hash.put(alloc, key2, .{ .fixnum = @intCast(local_stats.push_literal_count) }) catch return error.OutOfMemory;
 
     const key3 = alloc.dupe(u8, "call_word") catch return error.OutOfMemory;
-    hash.put(alloc, key3, .{ .integer = @intCast(local_stats.call_word_count) }) catch return error.OutOfMemory;
+    hash.put(alloc, key3, .{ .fixnum = @intCast(local_stats.call_word_count) }) catch return error.OutOfMemory;
 
     const key4 = alloc.dupe(u8, "total_instructions") catch return error.OutOfMemory;
-    hash.put(alloc, key4, .{ .integer = @intCast(local_stats.totalInstructions()) }) catch return error.OutOfMemory;
+    hash.put(alloc, key4, .{ .fixnum = @intCast(local_stats.totalInstructions()) }) catch return error.OutOfMemory;
 
     const key5 = alloc.dupe(u8, "peak_stack_depth") catch return error.OutOfMemory;
-    hash.put(alloc, key5, .{ .integer = @intCast(local_stats.peak_stack_depth) }) catch return error.OutOfMemory;
+    hash.put(alloc, key5, .{ .fixnum = @intCast(local_stats.peak_stack_depth) }) catch return error.OutOfMemory;
 
     const key_iter = alloc.dupe(u8, "iterations") catch return error.OutOfMemory;
-    hash.put(alloc, key_iter, .{ .integer = @intCast(n) }) catch return error.OutOfMemory;
+    hash.put(alloc, key_iter, .{ .fixnum = @intCast(n) }) catch return error.OutOfMemory;
 
     // Add allocation stats only when --benchmark is active
     if (alloc_delta) |delta| {
         const key6 = alloc.dupe(u8, "total_allocations") catch return error.OutOfMemory;
-        hash.put(alloc, key6, .{ .integer = @intCast(delta.allocs) }) catch return error.OutOfMemory;
+        hash.put(alloc, key6, .{ .fixnum = @intCast(delta.allocs) }) catch return error.OutOfMemory;
 
         const key7 = alloc.dupe(u8, "total_bytes") catch return error.OutOfMemory;
-        hash.put(alloc, key7, .{ .integer = @intCast(delta.bytes) }) catch return error.OutOfMemory;
+        hash.put(alloc, key7, .{ .fixnum = @intCast(delta.bytes) }) catch return error.OutOfMemory;
     }
 
     return hash;
@@ -183,7 +183,7 @@ fn nativeBenchmarkRun(ctx: *Context) anyerror!void {
 fn nativeBenchmarkN(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
 
-    const n_raw = try popInteger(ctx);
+    const n_raw = try popFixnum(ctx);
     if (n_raw < 1) return error.InvalidArgument;
     const n: u64 = @intCast(n_raw);
 
@@ -271,7 +271,7 @@ fn nativePrintBenchmarkReport(ctx: *Context) anyerror!void {
 fn getHashInt(hash: *HashTable, key: []const u8) ?i64 {
     const val = hash.get(key) orelse return null;
     return switch (val) {
-        .integer => |i| i,
+        .fixnum => |i| i,
         else => null,
     };
 }

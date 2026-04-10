@@ -1297,11 +1297,11 @@ test "stack operations through context" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(Value{ .integer = 42 });
+    try ctx.stack.push(Value{ .fixnum = 42 });
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
 
     const val = try ctx.stack.pop();
-    try std.testing.expectEqual(@as(i64, 42), val.integer);
+    try std.testing.expectEqual(@as(i64, 42), val.fixnum);
 }
 
 test "quotation allocator frees on deinit" {
@@ -1310,8 +1310,8 @@ test "quotation allocator frees on deinit" {
 
     const alloc = ctx.quotationAllocator();
     const instrs = try alloc.alloc(Instruction, 3);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 0 };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 };
+    instrs[1] = .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 };
     instrs[2] = .{ .op = .{ .call_word = "+" }, .line = 0 };
 
     try ctx.dictionary.put("test-word", .{
@@ -1329,7 +1329,7 @@ test "call stack captured on error, calling an unknown word" {
     const alloc = ctx.quotationAllocator();
     const inner_instrs = try alloc.alloc(Instruction, 2);
     inner_instrs[0] = .{ .op = .{ .call_word = "nonexistent" }, .line = 10 };
-    inner_instrs[1] = .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 10 };
+    inner_instrs[1] = .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 10 };
 
     try ctx.dictionary.put("inner", .{
         .name = "inner",
@@ -1338,7 +1338,7 @@ test "call stack captured on error, calling an unknown word" {
 
     const outer_instrs = try alloc.alloc(Instruction, 2);
     outer_instrs[0] = .{ .op = .{ .call_word = "inner" }, .line = 20 };
-    outer_instrs[1] = .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 20 };
+    outer_instrs[1] = .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 20 };
 
     try ctx.dictionary.put("outer", .{
         .name = "outer",
@@ -1349,7 +1349,7 @@ test "call stack captured on error, calling an unknown word" {
     // Add a trailing push so call_word("outer") is not in tail position
     const top_instrs = try alloc.alloc(Instruction, 2);
     top_instrs[0] = .{ .op = .{ .call_word = "outer" }, .line = 30 };
-    top_instrs[1] = .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 30 };
+    top_instrs[1] = .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 30 };
 
     const result = ctx.executeQuotation(.{ .instructions = top_instrs });
     try std.testing.expectError(ExecutionError.UnknownWord, result);
@@ -1377,8 +1377,8 @@ test "call stack empty after successful execution" {
     // Execute some successful operations
     const alloc = ctx.quotationAllocator();
     const instrs = try alloc.alloc(Instruction, 3);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .integer = 1 } }, .line = 1 };
-    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = 2 } }, .line = 2 };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 };
+    instrs[1] = .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 2 };
     instrs[2] = .{ .op = .{ .call_word = "+" }, .line = 3 };
 
     try ctx.executeQuotation(.{ .instructions = instrs });
@@ -1419,7 +1419,7 @@ test "stack effect validation passes for correct effect" {
     // Push 1, call dup, should have 2 items
     const alloc = ctx.quotationAllocator();
     const instrs = try alloc.alloc(Instruction, 2);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .integer = 5 } }, .line = 1 };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = 5 } }, .line = 1 };
     instrs[1] = .{ .op = .{ .call_word = "dup" }, .line = 2 };
 
     try ctx.executeQuotation(.{ .instructions = instrs });
@@ -1452,7 +1452,7 @@ test "stack effect validation fails when word produces fewer outputs than declar
     // (tail position skips post-validation as a known TCO limitation)
     const call_instrs = try alloc.alloc(Instruction, 2);
     call_instrs[0] = .{ .op = .{ .call_word = "bad-word" }, .line = 1 };
-    call_instrs[1] = .{ .op = .{ .push_literal = .{ .integer = 0 } }, .line = 2 };
+    call_instrs[1] = .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 2 };
 
     const result = ctx.executeQuotation(.{ .instructions = call_instrs });
     try std.testing.expectError(primitives.InterpreterError.StackEffectMismatch, result);
@@ -1468,7 +1468,7 @@ test "stack effect validation passes for combinator calling quotation" {
     const instrs = try alloc.alloc(Instruction, 4);
     instrs[0] = .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 };
     instrs[1] = .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &[_]Instruction{
-        .{ .op = .{ .push_literal = .{ .integer = 42 } }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 0 },
     } } } }, .line = 2 };
     instrs[2] = .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &[_]Instruction{} } } }, .line = 3 };
     instrs[3] = .{ .op = .{ .call_word = "if" }, .line = 4 };
@@ -1500,7 +1500,7 @@ test "quotation with correct declared effect passes" {
     };
 
     // Push initial value and execute
-    try ctx.stack.push(.{ .integer = 42 });
+    try ctx.stack.push(.{ .fixnum = 42 });
     try ctx.executeQuotation(quot);
 
     // Should have 1 value on stack
@@ -1528,7 +1528,7 @@ test "quotation with incorrect declared effect fails" {
     };
 
     // Push initial value and execute
-    try ctx.stack.push(.{ .integer = 42 });
+    try ctx.stack.push(.{ .fixnum = 42 });
     const result = ctx.executeQuotation(quot);
 
     // Should fail with StackEffectMismatch

@@ -11,7 +11,7 @@ describe: ( value -- string ) generic [ to-string "default" #append ] ;
 42 describe "42default" "default body runs for integer" assert=
 
 \ Test 2: Register a method for a specific type
-describe: method{ integer } [ to-string " (int)" #append ] ;
+describe: method{ fixnum } [ to-string " (int)" #append ] ;
 
 \ Now integer should use the registered method
 42 describe "42 (int)" "method dispatches for integer" assert=
@@ -28,7 +28,7 @@ f describe "no" "method dispatches for boolean false" assert=
 "generic word with virtual types" test-section
 
 \ Define a virtual type
-duration: virtual{ integer } ;
+duration: virtual{ fixnum } ;
 
 \ Register a method for the virtual type
 describe: method{ duration } [ duration> to-string " ns" #append ] ;
@@ -76,7 +76,7 @@ label: ( value -- string ) generic [ drop "default" ] ;
 
 \ Register both specific and wildcard methods
 label: method{ any } [ drop "any" ] ;
-label: method{ integer } [ drop "int" ] ;
+label: method{ fixnum } [ drop "int" ] ;
 
 \ Specific method should take precedence over wildcard
 42 label "int" "specific beats wildcard" assert=
@@ -88,7 +88,7 @@ t label "any" "wildcard handles other types" assert=
 process: ( value -- result ) generic [ ] ;
 
 \ Register a method
-process: method{ integer } [ 1 + ] ;
+process: method{ fixnum } [ 1 + ] ;
 
 \ Test: method works
 41 process 42 "method works on integer" assert=
@@ -104,8 +104,8 @@ wipe
 compute: ( args -- result ) generic [ ] ;
 
 \ Register both methods
-compute: method{ integer } [ 10 * ] ;
-compute: method{ integer integer } [ + 100 * ] ;
+compute: method{ fixnum } [ 10 * ] ;
+compute: method{ fixnum fixnum } [ + 100 * ] ;
 
 \ Test: with clean stack, binary dispatch takes both elements
 3 4 compute 700 "binary dispatch for two integers" assert=

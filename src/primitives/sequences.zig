@@ -11,7 +11,7 @@ const dispatch_helpers = @import("dispatch_helpers.zig");
 const sequence = @import("sequence.zig");
 const Iterator = @import("../iterator.zig").Iterator;
 
-const popInteger = helpers.popInteger;
+const popFixnum = helpers.popFixnum;
 const popBoolean = helpers.popBoolean;
 const popQuotation = helpers.popQuotation;
 const popVector = helpers.popVector;
@@ -101,13 +101,13 @@ pub fn nativeLen(ctx: *Context) anyerror!void {
         setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
         return error.TypeMismatch;
     };
-    try ctx.stack.push(.{ .integer = len });
+    try ctx.stack.push(.{ .fixnum = len });
 }
 
 /// #nth ( seq n -- elem ) - Get element at index
 pub fn nativeNth(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "#nth")) return;
-    const index = try popInteger(ctx);
+    const index = try popFixnum(ctx);
     const val = try ctx.stack.pop();
 
     if (index < 0) {
@@ -145,7 +145,7 @@ pub fn nativeNth(ctx: *Context) anyerror!void {
                 setErrorContext(ctx, "index {d} out of bounds for byte-array of length {d}", .{ idx, b.items.len });
                 return error.IndexOutOfBounds;
             }
-            try ctx.stack.push(.{ .integer = b.items[idx] });
+            try ctx.stack.push(.{ .fixnum = b.items[idx] });
         },
         else => {
             setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
@@ -304,8 +304,8 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
 
 /// #slice ( seq start end -- subseq ) - Extract subsequence [start, end)
 pub fn nativeSlice(ctx: *Context) anyerror!void {
-    const end_val = try popInteger(ctx);
-    const start_val = try popInteger(ctx);
+    const end_val = try popFixnum(ctx);
+    const start_val = try popFixnum(ctx);
     const seq = try ctx.stack.pop();
 
     if (start_val < 0) {
@@ -419,10 +419,10 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
             for (items2) |item| {
                 switch (item) {
                     .string => |s| total_len += s.len,
-                    .integer => |i| {
+                    .fixnum => |i| {
                         if (i < 0 or i > 255) {
                             setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
-                            return error.IntegerOverflow;
+                            return error.FixnumOverflow;
                         }
                         total_len += 1;
                     },
@@ -441,7 +441,7 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
                         @memcpy(result[pos..][0..s.len], s);
                         pos += s.len;
                     },
-                    .integer => |i| {
+                    .fixnum => |i| {
                         result[pos] = @intCast(i);
                         pos += 1;
                     },
@@ -457,10 +457,10 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
             var extra_len: usize = 0;
             for (items2) |item| {
                 switch (item) {
-                    .integer => |i| {
+                    .fixnum => |i| {
                         if (i < 0 or i > 255) {
                             setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
-                            return error.IntegerOverflow;
+                            return error.FixnumOverflow;
                         }
                         extra_len += 1;
                     },
@@ -479,7 +479,7 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
             }
             for (items2) |item| {
                 switch (item) {
-                    .integer => |i| {
+                    .fixnum => |i| {
                         result_ba.appendAssumeCapacity(@intCast(i));
                     },
                     .string => |s| {
@@ -551,10 +551,10 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
             for (items2) |item| {
                 switch (item) {
                     .string => |s| total_len += s.len,
-                    .integer => |i| {
+                    .fixnum => |i| {
                         if (i < 0 or i > 255) {
                             setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
-                            return error.IntegerOverflow;
+                            return error.FixnumOverflow;
                         }
                         total_len += 1; // single byte
                     },
@@ -573,7 +573,7 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
                         @memcpy(result[pos..][0..s.len], s);
                         pos += s.len;
                     },
-                    .integer => |i| {
+                    .fixnum => |i| {
                         result[pos] = @intCast(i);
                         pos += 1;
                     },
@@ -591,10 +591,10 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
             var extra_len: usize = 0;
             for (items2) |item| {
                 switch (item) {
-                    .integer => |i| {
+                    .fixnum => |i| {
                         if (i < 0 or i > 255) {
                             setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
-                            return error.IntegerOverflow;
+                            return error.FixnumOverflow;
                         }
                         extra_len += 1;
                     },
@@ -611,7 +611,7 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
             result_ba.ensureTotalCapacity(alloc, extra_len + b1.items.len) catch return error.OutOfMemory;
             for (items2) |item| {
                 switch (item) {
-                    .integer => |i| {
+                    .fixnum => |i| {
                         result_ba.appendAssumeCapacity(@intCast(i));
                     },
                     .string => |s| {
@@ -674,17 +674,17 @@ fn nativePush(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .string = result });
         },
         .byte_array => |b| {
-            // Element must be an integer 0-255
+            // Element must be a fixnum 0-255
             const byte_val: u8 = switch (elem) {
-                .integer => |i| blk: {
+                .fixnum => |i| blk: {
                     if (i < 0 or i > 255) {
                         setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
-                        return error.IntegerOverflow;
+                        return error.FixnumOverflow;
                     }
                     break :blk @intCast(i);
                 },
                 else => {
-                    setErrorContext(ctx, "#push on byte-array requires integer element, got {s}", .{valueTypeName(elem)});
+                    setErrorContext(ctx, "#push on byte-array requires fixnum element, got {s}", .{valueTypeName(elem)});
                     return error.TypeMismatch;
                 },
             };
@@ -765,7 +765,7 @@ fn nativePop(ctx: *Context) anyerror!void {
                 result_ba.appendAssumeCapacity(byte);
             }
             try ctx.stack.push(.{ .byte_array = result_ba });
-            try ctx.stack.push(.{ .integer = last_byte });
+            try ctx.stack.push(.{ .fixnum = last_byte });
         },
         else => {
             setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
@@ -812,15 +812,15 @@ fn nativeUnshift(ctx: *Context) anyerror!void {
         },
         .byte_array => |b| {
             const byte_val: u8 = switch (elem) {
-                .integer => |i| blk: {
+                .fixnum => |i| blk: {
                     if (i < 0 or i > 255) {
                         setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
-                        return error.IntegerOverflow;
+                        return error.FixnumOverflow;
                     }
                     break :blk @intCast(i);
                 },
                 else => {
-                    setErrorContext(ctx, "#unshift on byte-array requires integer element, got {s}", .{valueTypeName(elem)});
+                    setErrorContext(ctx, "#unshift on byte-array requires fixnum element, got {s}", .{valueTypeName(elem)});
                     return error.TypeMismatch;
                 },
             };
@@ -901,7 +901,7 @@ fn nativeShift(ctx: *Context) anyerror!void {
                 result_ba.appendAssumeCapacity(byte);
             }
             try ctx.stack.push(.{ .byte_array = result_ba });
-            try ctx.stack.push(.{ .integer = first_byte });
+            try ctx.stack.push(.{ .fixnum = first_byte });
         },
         else => {
             setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
@@ -1018,11 +1018,11 @@ fn nativeStartsWith(ctx: *Context) anyerror!void {
                 return;
             }
             for (prefix_items, 0..) |p, i| {
-                if (p != .integer or p.integer < 0 or p.integer > 255) {
-                    setErrorContext(ctx, "#starts-with? on byte-array requires integer elements 0-255", .{});
+                if (p != .fixnum or p.fixnum < 0 or p.fixnum > 255) {
+                    setErrorContext(ctx, "#starts-with? on byte-array requires fixnum elements 0-255", .{});
                     return error.TypeMismatch;
                 }
-                if (b.items[i] != @as(u8, @intCast(p.integer))) {
+                if (b.items[i] != @as(u8, @intCast(p.fixnum))) {
                     try ctx.stack.push(.{ .boolean = false });
                     return;
                 }
@@ -1091,11 +1091,11 @@ fn nativeEndsWith(ctx: *Context) anyerror!void {
             }
             const start = b.items.len - suffix_items.len;
             for (suffix_items, 0..) |s, i| {
-                if (s != .integer or s.integer < 0 or s.integer > 255) {
-                    setErrorContext(ctx, "#ends-with? on byte-array requires integer elements 0-255", .{});
+                if (s != .fixnum or s.fixnum < 0 or s.fixnum > 255) {
+                    setErrorContext(ctx, "#ends-with? on byte-array requires fixnum elements 0-255", .{});
                     return error.TypeMismatch;
                 }
-                if (b.items[start + i] != @as(u8, @intCast(s.integer))) {
+                if (b.items[start + i] != @as(u8, @intCast(s.fixnum))) {
                     try ctx.stack.push(.{ .boolean = false });
                     return;
                 }
@@ -1148,15 +1148,15 @@ fn nativeIn(ctx: *Context) anyerror!void {
         },
         .byte_array => |b| {
             const byte_val: u8 = switch (elem) {
-                .integer => |i| blk: {
+                .fixnum => |i| blk: {
                     if (i < 0 or i > 255) {
                         setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
-                        return error.IntegerOverflow;
+                        return error.FixnumOverflow;
                     }
                     break :blk @intCast(i);
                 },
                 else => {
-                    setErrorContext(ctx, "#in? on byte-array requires integer element, got {s}", .{valueTypeName(elem)});
+                    setErrorContext(ctx, "#in? on byte-array requires fixnum element, got {s}", .{valueTypeName(elem)});
                     return error.TypeMismatch;
                 },
             };
@@ -1201,7 +1201,7 @@ fn nativeIndexOf(ctx: *Context) anyerror!void {
             };
             if (std.mem.indexOf(u8, s, needle)) |byte_idx| {
                 const cp_idx = sequence.utf8CodepointCount(s[0..byte_idx]);
-                try ctx.stack.push(.{ .integer = @intCast(cp_idx) });
+                try ctx.stack.push(.{ .fixnum = @intCast(cp_idx) });
             } else {
                 try ctx.stack.push(.{ .boolean = false });
             }
@@ -1209,7 +1209,7 @@ fn nativeIndexOf(ctx: *Context) anyerror!void {
         .array => |arr| {
             for (arr, 0..) |item, idx| {
                 if (item.eql(elem)) {
-                    try ctx.stack.push(.{ .integer = @intCast(idx) });
+                    try ctx.stack.push(.{ .fixnum = @intCast(idx) });
                     return;
                 }
             }
@@ -1218,7 +1218,7 @@ fn nativeIndexOf(ctx: *Context) anyerror!void {
         .vector => |vec| {
             for (vec.items, 0..) |item, idx| {
                 if (item.eql(elem)) {
-                    try ctx.stack.push(.{ .integer = @intCast(idx) });
+                    try ctx.stack.push(.{ .fixnum = @intCast(idx) });
                     return;
                 }
             }
@@ -1226,20 +1226,20 @@ fn nativeIndexOf(ctx: *Context) anyerror!void {
         },
         .byte_array => |b| {
             const byte_val: u8 = switch (elem) {
-                .integer => |i| blk: {
+                .fixnum => |i| blk: {
                     if (i < 0 or i > 255) {
                         setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
-                        return error.IntegerOverflow;
+                        return error.FixnumOverflow;
                     }
                     break :blk @intCast(i);
                 },
                 else => {
-                    setErrorContext(ctx, "#index-of on byte-array requires integer element, got {s}", .{valueTypeName(elem)});
+                    setErrorContext(ctx, "#index-of on byte-array requires fixnum element, got {s}", .{valueTypeName(elem)});
                     return error.TypeMismatch;
                 },
             };
             if (std.mem.indexOfScalar(u8, b.items, byte_val)) |idx| {
-                try ctx.stack.push(.{ .integer = @intCast(idx) });
+                try ctx.stack.push(.{ .fixnum = @intCast(idx) });
             } else {
                 try ctx.stack.push(.{ .boolean = false });
             }
@@ -1253,7 +1253,7 @@ fn nativeIndexOf(ctx: *Context) anyerror!void {
 
 /// #take ( seq n -- seq' ) - First n elements
 fn nativeTake(ctx: *Context) anyerror!void {
-    const n_val = try popInteger(ctx);
+    const n_val = try popFixnum(ctx);
     const seq = try ctx.stack.pop();
 
     if (n_val < 0) {
@@ -1320,7 +1320,7 @@ fn nativeTake(ctx: *Context) anyerror!void {
 
 /// #drop ( seq n -- seq' ) - All but first n elements
 fn nativeDrop(ctx: *Context) anyerror!void {
-    const n_val = try popInteger(ctx);
+    const n_val = try popFixnum(ctx);
     const seq = try ctx.stack.pop();
 
     if (n_val < 0) {

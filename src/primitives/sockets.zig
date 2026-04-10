@@ -12,7 +12,7 @@ const VirtualType = value_mod.VirtualType;
 const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
 
-const popInteger = helpers.popInteger;
+const popFixnum = helpers.popFixnum;
 
 pub const primitives = [_]Primitive{
     .{ .name = "resolve", .stack_effect = "addr -- addrs", .doc = "DNS resolution; returns array of resolved addr values with IP addresses.", .func = nativeResolve },
@@ -68,9 +68,9 @@ fn extractAddrFromValue(ctx: *Context, val: Value) !AddrInfo {
                             },
                         };
                         const port = switch (si.fields[1]) {
-                            .integer => |i| i,
+                            .fixnum => |i| i,
                             else => {
-                                helpers.setErrorContext(ctx, "addr port field must be an integer", .{});
+                                helpers.setErrorContext(ctx, "addr port field must be a fixnum", .{});
                                 return error.TypeMismatch;
                             },
                         };
@@ -125,7 +125,7 @@ fn makeInetAddr(alloc: std.mem.Allocator, tag: *const VirtualType, host: []const
 
     const fields = try alloc.alloc(Value, 2);
     fields[0] = .{ .string = host };
-    fields[1] = .{ .integer = port };
+    fields[1] = .{ .fixnum = port };
 
     const instance = try alloc.create(StructInstance);
     instance.* = .{ .struct_type = struct_type, .fields = fields };
@@ -264,13 +264,13 @@ fn nativeSocket(ctx: *Context) anyerror!void {
         std.posix.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, &one) catch {};
     }
 
-    try ctx.stack.push(.{ .integer = @intCast(fd) });
+    try ctx.stack.push(.{ .fixnum = @intCast(fd) });
 }
 
 /// bind ( fd addr -- )
 fn nativeBind(ctx: *Context) anyerror!void {
     const addr_info = try extractAddr(ctx);
-    const fd_val = try popInteger(ctx);
+    const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
     const fd: std.posix.fd_t = @intCast(fd_val);
 
@@ -293,8 +293,8 @@ fn nativeBind(ctx: *Context) anyerror!void {
 
 /// listen ( fd backlog -- )
 fn nativeListen(ctx: *Context) anyerror!void {
-    const backlog_val = try popInteger(ctx);
-    const fd_val = try popInteger(ctx);
+    const backlog_val = try popFixnum(ctx);
+    const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
     if (backlog_val < 0) return error.InvalidArgument;
 
@@ -309,7 +309,7 @@ fn nativeListen(ctx: *Context) anyerror!void {
 
 /// accept ( fd -- fd addr )
 fn nativeAccept(ctx: *Context) anyerror!void {
-    const fd_val = try popInteger(ctx);
+    const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
     const fd: std.posix.fd_t = @intCast(fd_val);
 
@@ -334,7 +334,7 @@ fn nativeAccept(ctx: *Context) anyerror!void {
             return error.IOFailed;
         };
 
-        try ctx.stack.push(.{ .integer = @intCast(client_fd) });
+        try ctx.stack.push(.{ .fixnum = @intCast(client_fd) });
 
         const alloc = ctx.quotationAllocator();
         const net_addr = std.net.Address{ .any = @as(*const std.posix.sockaddr, @ptrCast(&peer_addr)).* };
@@ -347,7 +347,7 @@ fn nativeAccept(ctx: *Context) anyerror!void {
 /// connect ( fd addr -- )
 fn nativeConnect(ctx: *Context) anyerror!void {
     const addr_info = try extractAddr(ctx);
-    const fd_val = try popInteger(ctx);
+    const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
     const fd: std.posix.fd_t = @intCast(fd_val);
 
@@ -396,7 +396,7 @@ fn nativeConnect(ctx: *Context) anyerror!void {
 
 /// fd-close ( fd -- )
 fn nativeFdClose(ctx: *Context) anyerror!void {
-    const fd_val = try popInteger(ctx);
+    const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
     const fd: std.posix.fd_t = @intCast(fd_val);
     std.posix.close(fd);
@@ -449,7 +449,7 @@ fn findAddrTcpType(ctx: *const Context) ?*const VirtualType {
                 switch (instructions[0].op) {
                     .push_literal => |lit| {
                         switch (lit) {
-                            .integer => |ptr_val| {
+                            .fixnum => |ptr_val| {
                                 return @ptrFromInt(@as(usize, @intCast(ptr_val)));
                             },
                             else => return null,

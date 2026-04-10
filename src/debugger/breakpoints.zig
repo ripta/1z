@@ -169,7 +169,7 @@ pub const BreakpointManager = struct {
         const top = ctx.stack.pop() catch return false;
         return switch (top) {
             .boolean => |b| b,
-            .integer => |i| i != 0,
+            .fixnum => |i| i != 0,
             else => true,
         };
     }

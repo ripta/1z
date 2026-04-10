@@ -1,7 +1,7 @@
 \ Time library - durations, timestamps, and formatting
 
-\ Duration: virtual type backed by integer nanoseconds
-duration: virtual{ integer } ;
+\ Duration: virtual type backed by fixnum nanoseconds
+duration: virtual{ fixnum } ;
 
 \ Convenience constructors for durations
 nanoseconds:  ( n -- duration ) [ >duration ] ;
@@ -28,9 +28,9 @@ now: ( -- timestamp ) [ clock-realtime make-timestamp ] ;
 \ Duration arithmetic
 +: method{ duration duration } [ swap duration> swap duration> + >duration ] ;
 -: method{ duration duration } [ swap duration> swap duration> - >duration ] ;
-*: method{ duration integer } [ swap duration> swap * >duration ] ;
-*: method{ integer duration } [ duration> * >duration ] ;
-/: method{ duration integer } [ swap duration> swap / >duration ] ;
+*: method{ duration fixnum } [ swap duration> swap * >duration ] ;
+*: method{ fixnum duration } [ duration> * >duration ] ;
+/: method{ duration fixnum } [ swap duration> swap / >duration ] ;
 
 \ Duration comparison
 <: method{ duration duration } [ swap duration> swap duration> < ] ;
