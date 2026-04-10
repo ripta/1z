@@ -21,6 +21,9 @@ pub const primitives = [_]Primitive{
     .{ .name = "+%", .stack_effect = "a b -- a+b", .doc = "Add two fixnums with wraparound on overflow.", .func = nativeAddWrap },
     .{ .name = "-%", .stack_effect = "a b -- a-b", .doc = "Subtract with wraparound on overflow.", .func = nativeSubWrap },
     .{ .name = "*%", .stack_effect = "a b -- a*b", .doc = "Multiply with wraparound on overflow.", .func = nativeMulWrap },
+    // Conversions
+    .{ .name = ">float", .stack_effect = "x -- f", .doc = "Convert fixnum or string to float. Floats pass through. Throws on failure.", .func = nativeToFloat },
+    .{ .name = ">integer", .stack_effect = "f -- n", .doc = "Convert float to fixnum, truncating toward zero. Fixnums pass through. Throws on NaN or infinity.", .func = nativeToInteger },
     // Comparators
     .{ .name = "=", .stack_effect = "a b -- ?", .doc = "Equality comparison.", .func = nativeEq },
     .{ .name = "(=)", .stack_effect = "a b -- ?", .doc = "Inner equality: unwraps one layer of tagged values, then compares.", .func = nativeInnerEq },
@@ -172,6 +175,56 @@ pub fn nativeLt(ctx: *Context) anyerror!void {
         },
         else => {
             helpers.setTypeMismatchError(ctx, "fixnum or float", a);
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// >float ( x -- f ) - Convert fixnum or string to float
+fn nativeToFloat(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ">float")) return;
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .fixnum => |i| try ctx.stack.push(.{ .float = @floatFromInt(i) }),
+        .float => try ctx.stack.push(val),
+        .string => |s| {
+            const f = std.fmt.parseFloat(f64, s) catch {
+                helpers.setErrorContext(ctx, ">float: cannot parse \"{s}\" as float", .{s});
+                return error.TypeMismatch;
+            };
+            try ctx.stack.push(.{ .float = f });
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "fixnum, float, or string", val);
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// >integer ( f -- n ) - Float to fixnum, truncate toward zero
+fn nativeToInteger(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ">integer")) return;
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .float => |f| {
+            if (std.math.isNan(f)) {
+                helpers.setErrorContext(ctx, ">integer: NaN cannot be converted to fixnum", .{});
+                return error.TypeMismatch;
+            }
+            if (std.math.isInf(f)) {
+                helpers.setErrorContext(ctx, ">integer: infinity cannot be converted to fixnum", .{});
+                return error.TypeMismatch;
+            }
+            const truncated = @trunc(f);
+            const max_f: f64 = @floatFromInt(std.math.maxInt(i64));
+            const min_f: f64 = @floatFromInt(std.math.minInt(i64));
+            if (truncated >= max_f or truncated < min_f) return error.FixnumOverflow;
+            const i: i64 = @intFromFloat(truncated);
+            try ctx.stack.push(.{ .fixnum = i });
+        },
+        .fixnum => try ctx.stack.push(val),
+        else => {
+            helpers.setTypeMismatchError(ctx, "float or fixnum", val);
             return error.TypeMismatch;
         },
     }

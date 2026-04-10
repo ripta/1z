@@ -51,6 +51,8 @@ Stack: [ ]
 >bytes ( string -- byte-array )
 >char ( codepoint -- str )
 >codepoint ( str -- int )
+>float ( x -- f )
+>integer ( f -- n )
 >iterator ( seq -- iterator )
 >quotation ( name -- quotation )
 >string ( value -- string )
@@ -194,6 +196,7 @@ yield (  --  )
 ++ ( a1 -- a2 )
 -- ( a1 -- a2 )
 -@ ( a -- -a )
+-inf (  -- f )
 -rot> ( a b c -- c a b )
 . ( a --  )
 /= ( a b -- ? )
@@ -266,13 +269,17 @@ enum{
 error-type? ( error type -- error ? )
 error? ( val -- ? )
 file>>
+finite? ( x -- ? )
 fixnum? ( val -- ? )
+float? ( val -- ? )
 flush (  --  )
 fmt ( source string -- string )
 fmt-line ( source string --  )
 generic? ( name -- ? )
 hash? ( val -- ? )
 ignore-errors ( quot --  )
+inf (  -- f )
+infinite? ( x -- ? )
 input-stream
 inputs>>
 iterator? ( val -- ? )
@@ -293,6 +300,8 @@ module? ( val -- ? )
 mutable-map? ( val -- ? )
 my-test-word
 name>>
+nan (  -- f )
+nan? ( x -- ? )
 native
 native?>>
 nip ( a b -- b )

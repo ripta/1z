@@ -135,6 +135,21 @@ module?:      ( val -- ? ) [ type-of module: = ] ;
 marker?:      ( val -- ? ) [ type-of marker: = ] ;
 benchmark-report?: ( val -- ? ) [ type-of benchmark-report: = ] ;
 iterator?: ( val -- ? ) [ type-of iterator: = ] ;
+float?: ( val -- ? ) [ type-of float: = ] ;
+
+\\ Push IEEE 754 NaN (not a number).
+nan: ( -- f ) [ 0.0 0.0 / ] ;
+\\ Push IEEE 754 positive infinity.
+inf: ( -- f ) [ 1.0 0.0 / ] ;
+\\ Push IEEE 754 negative infinity.
+-inf: ( -- f ) [ -1.0 0.0 / ] ;
+
+\\ True if x is NaN. Uses the IEEE 754 property that NaN is not equal to itself.
+nan?: ( x -- ? ) [ dup float? [ dup = not ] [ drop f ] if ] ;
+\\ True if x is positive or negative infinity.
+infinite?: ( x -- ? ) [ dup inf = swap -inf = or ] ;
+\\ True if x is a finite float: not NaN and not infinite.
+finite?: ( x -- ? ) [ dup float? [ dup nan? not swap infinite? not and ] [ drop f ] if ] ;
 \\ Test whether a named word has the `generic` marker.
 generic?: ( name -- ? ) [ word-markers [ generic = ] #any ] ;
 
