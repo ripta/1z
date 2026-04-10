@@ -140,6 +140,10 @@ pub const Context = struct {
             std.debug.panic("Failed to register primitives: {any}", .{err});
         };
 
+        primitives.createNativeModule(&ctx.dictionary, ctx.arena.allocator()) catch |err| {
+            std.debug.panic("Failed to create native module: {any}", .{err});
+        };
+
         return ctx;
     }
 
@@ -336,7 +340,10 @@ pub const Context = struct {
                 .stack_effect = entry.value_ptr.*.stack_effect,
                 .markers = entry.value_ptr.*.markers,
                 .source_module = module,
-                .action = .{ .compound = entry.value_ptr.*.instructions },
+                .action = switch (entry.value_ptr.*.action) {
+                    .compound => |instrs| .{ .compound = instrs },
+                    .native => |func| .{ .native = func },
+                },
             });
         }
 
@@ -347,7 +354,10 @@ pub const Context = struct {
                 .stack_effect = entry.value_ptr.*.stack_effect,
                 .markers = entry.value_ptr.*.markers,
                 .source_module = module,
-                .action = .{ .compound = entry.value_ptr.*.instructions },
+                .action = switch (entry.value_ptr.*.action) {
+                    .compound => |instrs| .{ .compound = instrs },
+                    .native => |func| .{ .native = func },
+                },
             });
         }
     }
@@ -526,7 +536,10 @@ pub const Context = struct {
             try self.pushModuleDepsFrame(module);
             defer self.popLocalFrame();
 
-            try self.executeInstructions(mod_word.instructions);
+            switch (mod_word.action) {
+                .compound => |instrs| try self.executeInstructions(instrs),
+                .native => |func| try func(self),
+            }
         } else {
             return ExecutionError.UnknownWord;
         }

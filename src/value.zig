@@ -3,6 +3,7 @@ const StackEffect = @import("stack_effect.zig").StackEffect;
 const BenchmarkReport = @import("benchmark.zig").BenchmarkReport;
 const Task = @import("task.zig").Task;
 const Iterator = @import("iterator.zig").Iterator;
+const NativeFn = @import("dictionary.zig").NativeFn;
 
 /// Instruction represents a single operation in a compiled quotation.
 pub const Instruction = struct {
@@ -153,12 +154,15 @@ pub const StructInstance = struct {
     fields: []Value, // Field values in order (mutable for setter support)
 };
 
-/// ModuleWord represents a word definition captured from a loaded file.
-/// This is a simplified version of WordDefinition that only stores compound words.
+/// ModuleWord represents a word definition captured from a loaded file
+/// or registered in a virtual module.
 pub const ModuleWord = struct {
     stack_effect: ?StackEffect = null,
-    instructions: []const Instruction,
     markers: []const *Marker = &.{},
+    action: union(enum) {
+        compound: []const Instruction,
+        native: NativeFn,
+    },
 };
 
 /// Module represents a collection of word definitions loaded from a file.
@@ -170,6 +174,9 @@ pub const Module = struct {
     /// These are not part of the module's public API but are needed at
     /// runtime by the module's own words (late binding resolution).
     deps: std.StringHashMapUnmanaged(ModuleWord) = .{},
+    /// Whether this module can be imported with `import`. Virtual modules
+    /// like `native` set this to false.
+    importable: bool = true,
 };
 
 /// StackFrame represents a single frame in a stack trace.

@@ -346,8 +346,8 @@ fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator,
             .compound => |instrs| {
                 const mod_word = ModuleWord{
                     .stack_effect = word_def.stack_effect,
-                    .instructions = instrs,
                     .markers = word_def.markers,
+                    .action = .{ .compound = instrs },
                 };
                 if (word_def.imported) {
                     // Imported words go to deps (not part of public API,
@@ -377,7 +377,10 @@ fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module: *co
         .stack_effect = mod_word.stack_effect,
         .markers = mod_word.markers,
         .source_module = module,
-        .action = .{ .compound = mod_word.instructions },
+        .action = switch (mod_word.action) {
+            .compound => |instrs| .{ .compound = instrs },
+            .native => |func| .{ .native = func },
+        },
     });
 }
 
@@ -406,6 +409,11 @@ fn nativeImport(ctx: *Context) anyerror!void {
                 addImportError(ctx, "type-mismatch", "expected module, got non-module");
                 return error.TypeMismatch;
             };
+            if (!module.importable) {
+                const msg = std.fmt.allocPrint(alloc, "module '{s}' cannot be imported", .{module.name}) catch "module cannot be imported";
+                addImportError(ctx, "import-error", msg);
+                return error.EmptyImport;
+            }
             for (names) |name_val| {
                 const name = switch (name_val) {
                     .symbol, .string => |s| s,
@@ -425,6 +433,11 @@ fn nativeImport(ctx: *Context) anyerror!void {
             }
         },
         .module => |module| {
+            if (!module.importable) {
+                const msg = std.fmt.allocPrint(alloc, "module '{s}' cannot be imported", .{module.name}) catch "module cannot be imported";
+                addImportError(ctx, "import-error", msg);
+                return error.EmptyImport;
+            }
             // XXX(ripta): Consider better visibility control in the future? For
             //             now, all non-dep words are considered public API.
             //             Each imported word carries a source_module reference

@@ -10,12 +10,18 @@ const StructInstance = value_mod.StructInstance;
 const structs_mod = @import("structs.zig");
 const getStructTypeFromMaker = structs_mod.getStructTypeFromMaker;
 
-const Primitive = @import("types.zig").Primitive;
+const types_mod = @import("types.zig");
+const Primitive = types_mod.Primitive;
+const RegistryEntry = types_mod.RegistryEntry;
+
 const helpers = @import("helpers.zig");
 
 pub const primitives = [_]Primitive{
-    .{ .name = ">word", .stack_effect = "symbol -- word-info", .doc = "Look up a word by symbol name. Returns a word-info struct. Throws NameError if the word is not found.", .func = nativeToWord },
     .{ .name = "all-words", .stack_effect = "-- array", .doc = "Return an array of word-info structs for every word in the dictionary.", .func = nativeAllWords },
+};
+
+pub const registry_entries = [_]RegistryEntry{
+    .{ .name = ">word", .func = nativeToWord },
 };
 
 const StructTypes = struct {
@@ -93,7 +99,8 @@ fn buildWordInfo(alloc: Allocator, sts: StructTypes, name: []const u8, word: Wor
 
     const module_val: Value = if (word.source_module) |mod|
         .{ .module = @constCast(mod) }
-    else .{ .boolean = false };
+    else
+        .{ .boolean = false };
 
     const wi_fields = try alloc.alloc(Value, 7);
     wi_fields[0] = .{ .string = name };

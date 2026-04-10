@@ -1,36 +1,36 @@
-\ Tests for >word and >word? (word object introspection)
+\ Tests for native.>word and >word? (word object introspection)
 
 use "testing" ;
 
-">word on native word" test-section
-dup: >word
-  dup name>> "dup" ">word name for native word" assert=
-  dup native?>> t ">word native? for native word" assert=
-  dup body>> f ">word body is f for native word" assert=
+"native.>word on native word" test-section
+dup: native.>word
+  dup name>> "dup" "native.>word name for native word" assert=
+  dup native?>> t "native.>word native? for native word" assert=
+  dup body>> f "native.>word body is f for native word" assert=
   dup stack-effect>> dup
-    inputs>> { "a" } ">word stack-effect inputs for dup" assert=
-    outputs>> { "a" "a" } ">word stack-effect outputs for dup" assert=
-  source-loc>> f ">word source-loc is f for native word" assert=
+    inputs>> { "a" } "native.>word stack-effect inputs for dup" assert=
+    outputs>> { "a" "a" } "native.>word stack-effect outputs for dup" assert=
+  source-loc>> f "native.>word source-loc is f for native word" assert=
 
-">word on compound word" test-section
+"native.>word on compound word" test-section
 my-test-word: ( x -- y ) [ 1 + ] ;
-my-test-word: >word
-  dup name>> "my-test-word" ">word name for compound word" assert=
-  dup native?>> f ">word native? for compound word" assert=
-  dup body>> quotation? t ">word body is quotation for compound word" assert=
+my-test-word: native.>word
+  dup name>> "my-test-word" "native.>word name for compound word" assert=
+  dup native?>> f "native.>word native? for compound word" assert=
+  dup body>> quotation? t "native.>word body is quotation for compound word" assert=
   dup stack-effect>> dup
-    inputs>> { "x" } ">word stack-effect inputs for compound word" assert=
-    outputs>> { "y" } ">word stack-effect outputs for compound word" assert=
+    inputs>> { "x" } "native.>word stack-effect inputs for compound word" assert=
+    outputs>> { "y" } "native.>word stack-effect outputs for compound word" assert=
   dup source-loc>> dup
-    file>> string? t ">word source-loc file is string" assert=
-    line>> 0 > t ">word source-loc line is positive" assert=
-  markers>> #len 0 >= t ">word markers is an array" assert=
+    file>> string? t "native.>word source-loc file is string" assert=
+    line>> 0 > t "native.>word source-loc line is positive" assert=
+  markers>> #len 0 >= t "native.>word markers is an array" assert=
 
-">word on nonexistent word throws" test-section
-[ nonexistent-xyz: >word ] "NameError" assert-error
+"native.>word on nonexistent word throws" test-section
+[ nonexistent-xyz: native.>word ] "NameError" assert-error
 
-">word from string" test-section
-"dup" >word name>> "dup" ">word accepts string input" assert=
+"native.>word from string" test-section
+"dup" native.>word name>> "dup" "native.>word accepts string input" assert=
 
 ">word? returns some for known word" test-section
 dup: >word? option:some? t ">word? returns some for known word" assert=
@@ -43,13 +43,13 @@ nonexistent-xyz: >word? option:none? t ">word? returns none for unknown word" as
 helper-word: [ 42 ] ;
 "helper-word" >quotation call 42 ">quotation still resolves words" assert=
 
-">word on word without stack effect" test-section
+"native.>word on word without stack effect" test-section
 no-effect-word: [ 1 ] ;
-no-effect-word: >word
-  stack-effect>> f ">word stack-effect is f when none declared" assert=
+no-effect-word: native.>word
+  stack-effect>> f "native.>word stack-effect is f when none declared" assert=
 
-">word module field" test-section
-dup: >word module>> f ">word module is f for non-module word" assert=
+"native.>word module field" test-section
+dup: native.>word module>> f "native.>word module is f for non-module word" assert=
 
 "all-words returns an array" test-section
 all-words array? t "all-words returns an array" assert=

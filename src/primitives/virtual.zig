@@ -11,10 +11,20 @@ const MutableMap = value_mod.MutableMap;
 
 const helpers = @import("helpers.zig");
 
-const Primitive = @import("types.zig").Primitive;
+const types_mod = @import("types.zig");
+const Primitive = types_mod.Primitive;
+const RegistryEntry = types_mod.RegistryEntry;
 
 pub const primitives = [_]Primitive{
     .{ .name = "define-virtual", .stack_effect = "name: descriptor markers --", .doc = "Define a virtual type and its accessor words.", .func = nativeDefineVirtual },
+};
+
+pub const registry_entries = [_]RegistryEntry{
+    .{ .name = "virtual-wrap", .func = virtualWrapHelper },
+    .{ .name = "virtual-unwrap", .func = virtualUnwrapHelper },
+    .{ .name = "virtual-type-predicate", .func = virtualTypePredicateHelper },
+    .{ .name = "virtual-struct-wrap", .func = virtualStructWrapHelper },
+    .{ .name = "virtual-struct-unwrap", .func = virtualStructUnwrapHelper },
 };
 
 /// define-virtual ( name: descriptor markers -- ) - Define a virtual type and its accessor words
@@ -196,10 +206,9 @@ fn virtualTypePredicateHelper(ctx: *Context) anyerror!void {
 pub fn defineWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    const instrs = try alloc.alloc(Instruction, 3);
+    const instrs = try alloc.alloc(Instruction, 2);
     instrs[0] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&virtualWrapHelper)) } }, .line = 0 };
-    instrs[2] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
+    instrs[1] = .{ .op = .{ .call_word = "native.virtual-wrap" }, .line = 0 };
 
     try ctx.defineWord(name, .{
         .name = name,
@@ -212,10 +221,9 @@ pub fn defineWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, ma
 pub fn defineUnwrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    const instrs = try alloc.alloc(Instruction, 3);
+    const instrs = try alloc.alloc(Instruction, 2);
     instrs[0] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&virtualUnwrapHelper)) } }, .line = 0 };
-    instrs[2] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
+    instrs[1] = .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 0 };
 
     try ctx.defineWord(name, .{
         .name = name,
@@ -228,10 +236,9 @@ pub fn defineUnwrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, 
 pub fn definePredicate(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    const instrs = try alloc.alloc(Instruction, 3);
+    const instrs = try alloc.alloc(Instruction, 2);
     instrs[0] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&virtualTypePredicateHelper)) } }, .line = 0 };
-    instrs[2] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
+    instrs[1] = .{ .op = .{ .call_word = "native.virtual-type-predicate" }, .line = 0 };
 
     try ctx.defineWord(name, .{
         .name = name,
@@ -304,10 +311,9 @@ fn virtualStructUnwrapHelper(ctx: *Context) anyerror!void {
 pub fn defineStructWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    const instrs = try alloc.alloc(Instruction, 3);
+    const instrs = try alloc.alloc(Instruction, 2);
     instrs[0] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&virtualStructWrapHelper)) } }, .line = 0 };
-    instrs[2] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
+    instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-wrap" }, .line = 0 };
 
     try ctx.defineWord(name, .{
         .name = name,
@@ -320,10 +326,9 @@ pub fn defineStructWrap(ctx: *Context, name: []const u8, vtype: *const VirtualTy
 pub fn defineStructUnwrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
-    const instrs = try alloc.alloc(Instruction, 3);
+    const instrs = try alloc.alloc(Instruction, 2);
     instrs[0] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&virtualStructUnwrapHelper)) } }, .line = 0 };
-    instrs[2] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
+    instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-unwrap" }, .line = 0 };
 
     try ctx.defineWord(name, .{
         .name = name,

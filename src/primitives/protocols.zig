@@ -6,10 +6,17 @@ const MutableMap = value_mod.MutableMap;
 const Instruction = value_mod.Instruction;
 
 const helpers = @import("helpers.zig");
-const Primitive = @import("types.zig").Primitive;
+
+const types_mod = @import("types.zig");
+const Primitive = types_mod.Primitive;
+const RegistryEntry = types_mod.RegistryEntry;
 
 pub const primitives = [_]Primitive{
     .{ .name = "define-protocol", .stack_effect = "name: descriptor markers --", .doc = "Define a protocol word that validates a type implements all required methods.", .func = nativeDefineProtocol },
+};
+
+pub const registry_entries = [_]RegistryEntry{
+    .{ .name = "protocol-check", .func = protocolCheckHelper },
 };
 
 /// define-protocol ( name: descriptor markers -- )
@@ -52,11 +59,10 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
         else => return error.TypeMismatch,
     };
 
-    const instrs = try alloc.alloc(Instruction, 4);
+    const instrs = try alloc.alloc(Instruction, 3);
     instrs[0] = .{ .op = .{ .push_literal = .{ .array = methods_array } }, .line = 0 };
     instrs[1] = .{ .op = .{ .push_literal = .{ .string = protocol_name } }, .line = 0 };
-    instrs[2] = .{ .op = .{ .push_literal = .{ .integer = @intCast(@intFromPtr(&protocolCheckHelper)) } }, .line = 0 };
-    instrs[3] = .{ .op = .{ .call_word = "(trampoline)" }, .line = 0 };
+    instrs[2] = .{ .op = .{ .call_word = "native.protocol-check" }, .line = 0 };
 
     try ctx.defineWord(protocol_name, .{
         .name = protocol_name,

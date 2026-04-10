@@ -55,7 +55,6 @@ Stack: [ ]
 >quotation ( name -- quotation )
 >string ( value -- string )
 >symbol ( string -- symbol )
->word ( symbol -- word-info )
 @adjoin ( set value -- set' )
 @difference ( set1 set2 -- set' )
 @get ( assoc key -- value )
@@ -292,6 +291,7 @@ module? ( val -- ? )
 mutable-map? ( val -- ? )
 my-test-word
 name>>
+native
 native?>>
 nip ( a b -- b )
 nl (  --  )
