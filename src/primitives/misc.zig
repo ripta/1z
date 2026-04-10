@@ -483,7 +483,10 @@ fn nativeAddLoadPath(ctx: *Context) anyerror!void {
     ctx.load_paths.append(ctx.allocator, duped) catch return error.OutOfMemory;
 }
 
-/// (trampoline) ( *unsafe-fn-ptr* -- ) - Call a native function via pointer
+/// (trampoline) deprecated ( *unsafe-fn-ptr* -- ) - Call a native function via pointer
+///
+/// Dead code, kept for backward compatibility. All callsites were migrated to
+/// the native function registry (the native.* virtual module).
 ///
 /// Bridge primitive: pops a function pointer (as integer) from the stack and calls it.
 /// Used by auto-generated struct/virtual words to invoke their backing native helpers.
