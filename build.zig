@@ -5,6 +5,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const test_case_timeout_secs = b.option(u32, "test-case-timeout", "Per-test timeout in seconds") orelse 10;
+    const test_filter = b.option([]const u8, "test-filter", "Comma-separated substring filter for test names");
     const verbose_test_reporting = envFlagIsSet(b, "VERBOSE");
     const slow_test_threshold_ms: u64 = 1000;
 
@@ -209,7 +210,7 @@ pub fn build(b: *std.Build) void {
     const update_golden_step = b.step("update-golden", "Update golden files for integration tests");
     var update_files = b.addUpdateSourceFiles();
 
-    addIntegrationTests(b, exe, test_case_helper, integration_test_step, &update_files, &integration_status_files, test_entries, has_diff, false, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms);
+    addIntegrationTests(b, exe, test_case_helper, integration_test_step, &update_files, &integration_status_files, test_entries, has_diff, false, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms, test_filter);
     if (verbose_test_reporting) addVerboseSummary(b, test_case_helper, integration_test_step, "integration", integration_status_files.items);
 
     update_golden_step.dependOn(&update_files.step);
@@ -233,7 +234,7 @@ pub fn build(b: *std.Build) void {
     eager_test_step.dependOn(&install_toy_shared.step);
     var eager_status_files = std.ArrayListUnmanaged(std.Build.LazyPath){};
 
-    addIntegrationTests(b, exe, test_case_helper, eager_test_step, null, &eager_status_files, test_entries, has_diff, true, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms);
+    addIntegrationTests(b, exe, test_case_helper, eager_test_step, null, &eager_status_files, test_entries, has_diff, true, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms, test_filter);
     if (verbose_test_reporting) addVerboseSummary(b, test_case_helper, eager_test_step, "eager integration", eager_status_files.items);
 
     // Formatter tests
@@ -250,11 +251,18 @@ pub fn build(b: *std.Build) void {
     defer fmt_test_dir.close();
 
     var fmt_iter = fmt_test_dir.iterate();
+    var fmt_total_count: usize = 0;
+    var fmt_matched_count: usize = 0;
     while (fmt_iter.next() catch null) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.name, ".txt")) continue;
+        fmt_total_count += 1;
 
         const name_without_ext = entry.name[0 .. entry.name.len - 4];
+        if (test_filter) |filter| {
+            if (!matchesFilter(name_without_ext, filter)) continue;
+        }
+        fmt_matched_count += 1;
         const input_path = b.fmt("tests/formatting/{s}", .{entry.name});
         const golden_path = b.fmt("tests/formatting/{s}.golden", .{name_without_ext});
 
@@ -320,6 +328,11 @@ pub fn build(b: *std.Build) void {
         update_fmt_files.addCopyFileToSource(update_fmt_run.captureStdOut(), golden_path);
     }
 
+    if (test_filter) |filter| {
+        const fmt_summary_cmd = b.addSystemCommand(&.{ "echo", b.fmt("Filter active: {d}/{d} fmt tests match '{s}'", .{ fmt_matched_count, fmt_total_count, filter }) });
+        fmt_test_step.dependOn(&fmt_summary_cmd.step);
+    }
+
     update_fmt_golden_step.dependOn(&update_fmt_files.step);
     if (verbose_test_reporting) addVerboseSummary(b, test_case_helper, fmt_test_step, "fmt", fmt_status_files.items);
 
@@ -339,7 +352,7 @@ pub fn build(b: *std.Build) void {
         defer aot_dir.close();
 
         const aot_entries = collectAotTestEntries(b, &aot_dir) catch return;
-        addAotTests(b, exe, test_case_helper, aot_test_step, &update_aot_files, &aot_status_files, aot_entries, has_diff, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms);
+        addAotTests(b, exe, test_case_helper, aot_test_step, &update_aot_files, &aot_status_files, aot_entries, has_diff, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms, test_filter);
     }
 
     update_aot_golden_step.dependOn(&update_aot_files.step);
@@ -361,7 +374,7 @@ pub fn build(b: *std.Build) void {
         defer lsp_dir.close();
 
         const lsp_entries = collectLspTestEntries(b, &lsp_dir) catch return;
-        addLspTests(b, lsp_exe, test_case_helper, lsp_test_step, &update_lsp_files, &lsp_status_files, lsp_entries, has_diff, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms);
+        addLspTests(b, lsp_exe, test_case_helper, lsp_test_step, &update_lsp_files, &lsp_status_files, lsp_entries, has_diff, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms, test_filter);
     }
 
     update_lsp_golden_step.dependOn(&update_lsp_files.step);
@@ -580,6 +593,16 @@ fn collectTestEntries(b: *std.Build, test_dir: *std.fs.Dir) ![]const TestEntry {
     return entries.items;
 }
 
+fn matchesFilter(name: []const u8, filter: []const u8) bool {
+    var iter = std.mem.splitScalar(u8, filter, ',');
+    while (iter.next()) |pattern| {
+        const trimmed = std.mem.trim(u8, pattern, " \t");
+        if (trimmed.len == 0) continue;
+        if (std.mem.indexOf(u8, name, trimmed) != null) return true;
+    }
+    return false;
+}
+
 fn hasExcludedJitFlag(flags_lines: ?[]const u8) bool {
     const fl = flags_lines orelse return false;
     var flag_iter = std.mem.splitScalar(u8, fl, '\n');
@@ -693,12 +716,18 @@ fn addIntegrationTests(
     timeout_secs: u32,
     verbose_test_reporting: bool,
     slow_test_threshold_ms: u64,
+    test_filter: ?[]const u8,
 ) void {
     var previous_serial_test_run: ?*std.Build.Step = null;
+    var matched_count: usize = 0;
     var previous_serial_update_run: ?*std.Build.Step = null;
 
     for (test_entries) |te| {
+        if (test_filter) |filter| {
+            if (!matchesFilter(te.name_without_ext, filter)) continue;
+        }
         if (jit_mode and hasExcludedJitFlag(te.flags_lines)) continue;
+        matched_count += 1;
 
         const label = if (jit_mode)
             b.fmt("eager integration: {s}", .{te.name_without_ext})
@@ -976,6 +1005,12 @@ fn addIntegrationTests(
             }
         }
     }
+
+    if (test_filter) |filter| {
+        const label = if (jit_mode) "eager integration" else "integration";
+        const summary_cmd = b.addSystemCommand(&.{ "echo", b.fmt("Filter active: {d}/{d} {s} tests match '{s}'", .{ matched_count, test_entries.len, label, filter }) });
+        test_step.dependOn(&summary_cmd.step);
+    }
 }
 
 const AotTestEntry = struct {
@@ -1131,10 +1166,16 @@ fn addAotTests(
     timeout_secs: u32,
     verbose_test_reporting: bool,
     slow_test_threshold_ms: u64,
+    test_filter: ?[]const u8,
 ) void {
     const exe_path = b.fmt("{s}/bin/1z", .{b.install_path});
+    var matched_count: usize = 0;
 
     for (aot_entries) |te| {
+        if (test_filter) |filter| {
+            if (!matchesFilter(te.name_without_ext, filter)) continue;
+        }
+        matched_count += 1;
         const is_build_only = te.has_build_stdout_golden or te.has_build_stderr_golden or te.has_build_exitcode;
         const expected_build_exit: u8 = te.expected_build_exit_code orelse 0;
         const expected_exit: u8 = te.expected_exit_code orelse if (te.has_stderr_golden) 1 else 0;
@@ -1381,6 +1422,11 @@ fn addAotTests(
             }
         }
     }
+
+    if (test_filter) |filter| {
+        const summary_cmd = b.addSystemCommand(&.{ "echo", b.fmt("Filter active: {d}/{d} aot tests match '{s}'", .{ matched_count, aot_entries.len, filter }) });
+        test_step.dependOn(&summary_cmd.step);
+    }
 }
 
 fn addLibFileDeps(b: *std.Build, run: *std.Build.Step.Run) void {
@@ -1509,9 +1555,15 @@ fn addLspTests(
     timeout_secs: u32,
     verbose_test_reporting: bool,
     slow_test_threshold_ms: u64,
+    test_filter: ?[]const u8,
 ) void {
     var stdin_files = b.addWriteFiles();
+    var matched_count: usize = 0;
     for (lsp_entries) |te| {
+        if (test_filter) |filter| {
+            if (!matchesFilter(te.name_without_ext, filter)) continue;
+        }
+        matched_count += 1;
         const expected_exit: u8 = te.expected_exit_code orelse if (te.has_stderr_golden) 1 else 0;
         const stdin_file = stdin_files.add(b.fmt("lsp_{s}.stdin", .{te.name_without_ext}), te.formatted_stdin);
 
@@ -1594,6 +1646,11 @@ fn addLspTests(
                 update_files.*.addCopyFileToSource(update_run.captureStdErr(), te.stderr_golden_path);
             }
         }
+    }
+
+    if (test_filter) |filter| {
+        const summary_cmd = b.addSystemCommand(&.{ "echo", b.fmt("Filter active: {d}/{d} lsp tests match '{s}'", .{ matched_count, lsp_entries.len, filter }) });
+        test_step.dependOn(&summary_cmd.step);
     }
 }
 
