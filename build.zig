@@ -389,6 +389,8 @@ const TestEntry = struct {
 
     const Metadata = struct {
         stdio_expect: StdioExpectMode = .diff_capture,
+        serial: bool = false,
+        direct_run: bool = false,
     };
 
     name_without_ext: []const u8,
@@ -416,6 +418,8 @@ const TestEntry = struct {
     has_stdout_golden: bool,
     stdout_content: []const u8,
     stdio_expect_mode: StdioExpectMode,
+    serial: bool,
+    direct_run: bool,
 };
 
 fn collectTestEntries(b: *std.Build, test_dir: *std.fs.Dir) ![]const TestEntry {
@@ -512,6 +516,8 @@ fn collectTestEntries(b: *std.Build, test_dir: *std.fs.Dir) ![]const TestEntry {
         } else |_| {}
 
         var stdio_expect_mode: TestEntry.StdioExpectMode = .diff_capture;
+        var serial = false;
+        var direct_run = false;
         if (test_dir.openFile(b.fmt("{s}.zon", .{name_without_ext}), .{})) |file| {
             defer file.close();
             const zon_content = file.readToEndAlloc(b.allocator, 4096) catch return error.OutOfMemory;
@@ -533,6 +539,8 @@ fn collectTestEntries(b: *std.Build, test_dir: *std.fs.Dir) ![]const TestEntry {
                 }
             };
             stdio_expect_mode = metadata.stdio_expect;
+            serial = metadata.serial;
+            direct_run = metadata.direct_run;
         } else |err| switch (err) {
             error.FileNotFound => {},
             else => return err,
@@ -564,6 +572,8 @@ fn collectTestEntries(b: *std.Build, test_dir: *std.fs.Dir) ![]const TestEntry {
             .has_stdout_golden = has_stdout_golden,
             .stdout_content = stdout_content,
             .stdio_expect_mode = stdio_expect_mode,
+            .serial = serial,
+            .direct_run = direct_run,
         }) catch return error.OutOfMemory;
     }
 
@@ -684,6 +694,9 @@ fn addIntegrationTests(
     verbose_test_reporting: bool,
     slow_test_threshold_ms: u64,
 ) void {
+    var previous_serial_test_run: ?*std.Build.Step = null;
+    var previous_serial_update_run: ?*std.Build.Step = null;
+
     for (test_entries) |te| {
         if (jit_mode and hasExcludedJitFlag(te.flags_lines)) continue;
 
@@ -693,19 +706,32 @@ fn addIntegrationTests(
             b.fmt("integration: {s}", .{te.name_without_ext});
         const effective_timeout_secs = testTimeoutSeconds(te.flags_lines) orelse timeout_secs;
         const wrapper_timeout_secs = effective_timeout_secs +| 1;
-        const test_run = addWrappedCommand(
-            b,
-            helper,
-            label,
-            wrapper_timeout_secs,
-            verbose_test_reporting,
-            slow_test_threshold_ms,
-            if (te.has_stdin) b.path(te.stdin_path) else null,
-            status_files,
-            &.{artifact.getEmittedBin()},
-        );
-        test_run.addArtifactArg(artifact);
+        const test_run = if (te.direct_run)
+            b.addRunArtifact(artifact)
+        else
+            addWrappedCommand(
+                b,
+                helper,
+                label,
+                wrapper_timeout_secs,
+                verbose_test_reporting,
+                slow_test_threshold_ms,
+                if (te.has_stdin) b.path(te.stdin_path) else null,
+                status_files,
+                &.{artifact.getEmittedBin()},
+            );
+        if (!te.direct_run) {
+            test_run.addArtifactArg(artifact);
+        } else if (te.has_stdin) {
+            test_run.setStdIn(.{ .bytes = te.stdin_content });
+        }
         test_run.setName(label);
+        if (te.serial) {
+            if (previous_serial_test_run) |prev| {
+                test_run.step.dependOn(prev);
+            }
+            previous_serial_test_run = &test_run.step;
+        }
         if (te.show_stack) {
             test_run.addArg("--show-stack");
         }
@@ -850,11 +876,40 @@ fn addIntegrationTests(
 
         // Update golden (only for non-JIT mode)
         if (update_files) |uf_ptr| {
-            const update_run = b.addRunArtifact(artifact);
+            const update_label = b.fmt("update-golden: {s}", .{te.name_without_ext});
+            const update_timeout_secs = effective_timeout_secs +| 1;
+            const update_run = std.Build.Step.Run.create(b, update_label);
+            update_run.addArtifactArg(helper);
+            update_run.addArg("run");
+            update_run.addArg("--label");
+            update_run.addArg(update_label);
+            update_run.addArg("--timeout-secs");
+            update_run.addArg(b.fmt("{d}", .{update_timeout_secs}));
+            update_run.addArg("--slow-ms");
+            update_run.addArg(b.fmt("{d}", .{slow_test_threshold_ms}));
+            update_run.addArg("--print-slow");
+            update_run.addArg("--status-file");
+            update_run.addArg(b.fmt("/tmp/1z-update-golden-{s}.status.tsv", .{te.name_without_ext}));
+            if (te.serial) {
+                if (previous_serial_update_run) |prev| {
+                    update_run.step.dependOn(prev);
+                }
+                previous_serial_update_run = &update_run.step;
+            }
+            if (te.has_stdin) {
+                update_run.addArg("--stdin-file");
+                update_run.addFileArg(b.path(te.stdin_path));
+            }
+            update_run.addArg("--");
+            update_run.addFileInput(artifact.getEmittedBin());
+            update_run.addArtifactArg(artifact);
             if (te.show_stack) {
                 update_run.addArg("--show-stack");
             }
             update_run.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
+            if (!hasTestTimeoutFlag(te.flags_lines)) {
+                update_run.addArg(b.fmt("--test-timeout={d}", .{timeout_secs}));
+            }
             if (te.flags_lines) |fl| {
                 var flag_iter2 = std.mem.splitScalar(u8, fl, '\n');
                 while (flag_iter2.next()) |flag| {
@@ -886,10 +941,6 @@ fn addIntegrationTests(
                     }
                 }
             }
-            if (te.has_stdin) {
-                update_run.setStdIn(.{ .bytes = te.stdin_content });
-            }
-
             // Library file dependencies (recursive)
             {
                 var lib_dir2 = b.build_root.handle.openDir("lib", .{ .iterate = true }) catch |err| {

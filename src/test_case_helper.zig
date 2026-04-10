@@ -14,6 +14,8 @@ const RelayTarget = enum {
 const RelayContext = struct {
     source: std.fs.File,
     target: RelayTarget,
+    capture: ?std.fs.File = null,
+    relay_to_tty: bool = true,
 };
 
 const RunOptions = struct {
@@ -23,6 +25,9 @@ const RunOptions = struct {
     print_slow: bool,
     status_file: []const u8,
     stdin_file: ?[]const u8,
+    stdout_file: ?[]const u8,
+    stderr_file: ?[]const u8,
+    relay_to_tty: bool,
     argv_start: usize,
 };
 
@@ -68,6 +73,9 @@ fn parseRunArgs(args: []const []const u8) !RunOptions {
     var print_slow = false;
     var status_file: ?[]const u8 = null;
     var stdin_file: ?[]const u8 = null;
+    var stdout_file: ?[]const u8 = null;
+    var stderr_file: ?[]const u8 = null;
+    var relay_to_tty = true;
     var i: usize = 2;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
@@ -109,6 +117,22 @@ fn parseRunArgs(args: []const []const u8) !RunOptions {
             stdin_file = args[i];
             continue;
         }
+        if (std.mem.eql(u8, arg, "--stdout-file")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            stdout_file = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--stderr-file")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            stderr_file = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--no-relay")) {
+            relay_to_tty = false;
+            continue;
+        }
         return error.InvalidArguments;
     }
     if (i >= args.len or label == null or timeout_secs == null or status_file == null) {
@@ -121,6 +145,9 @@ fn parseRunArgs(args: []const []const u8) !RunOptions {
         .print_slow = print_slow,
         .status_file = status_file.?,
         .stdin_file = stdin_file,
+        .stdout_file = stdout_file,
+        .stderr_file = stderr_file,
+        .relay_to_tty = relay_to_tty,
         .argv_start = i,
     };
 }
@@ -139,6 +166,18 @@ fn runCase(allocator: std.mem.Allocator, args: []const []const u8, opts: RunOpti
     const child_stderr = child.stderr.?;
     child.stderr = null;
 
+    var stdout_capture: ?std.fs.File = null;
+    defer if (stdout_capture) |file| file.close();
+    if (opts.stdout_file) |stdout_file| {
+        stdout_capture = try std.fs.cwd().createFile(stdout_file, .{ .truncate = true });
+    }
+
+    var stderr_capture: ?std.fs.File = null;
+    defer if (stderr_capture) |file| file.close();
+    if (opts.stderr_file) |stderr_file| {
+        stderr_capture = try std.fs.cwd().createFile(stderr_file, .{ .truncate = true });
+    }
+
     var stdin_thread: ?std.Thread = null;
     if (opts.stdin_file) |stdin_file| {
         const child_stdin = child.stdin.?;
@@ -146,8 +185,18 @@ fn runCase(allocator: std.mem.Allocator, args: []const []const u8, opts: RunOpti
         stdin_thread = try std.Thread.spawn(.{}, writeInput, .{ child_stdin, stdin_file });
     }
 
-    const stdout_thread = try std.Thread.spawn(.{}, relayOutput, .{RelayContext{ .source = child_stdout, .target = .stdout }});
-    const stderr_thread = try std.Thread.spawn(.{}, relayOutput, .{RelayContext{ .source = child_stderr, .target = .stderr }});
+    const stdout_thread = try std.Thread.spawn(.{}, relayOutput, .{RelayContext{
+        .source = child_stdout,
+        .target = .stdout,
+        .capture = stdout_capture,
+        .relay_to_tty = opts.relay_to_tty,
+    }});
+    const stderr_thread = try std.Thread.spawn(.{}, relayOutput, .{RelayContext{
+        .source = child_stderr,
+        .target = .stderr,
+        .capture = stderr_capture,
+        .relay_to_tty = opts.relay_to_tty,
+    }});
 
     var wait_state = WaitState{};
     const wait_thread = try std.Thread.spawn(.{}, waitForChild, .{ &child, &wait_state });
@@ -277,6 +326,7 @@ fn writeInput(child_stdin: std.fs.File, stdin_file: []const u8) !void {
 fn relayOutput(ctx: RelayContext) !void {
     defer ctx.source.close();
     var buf: [4096]u8 = undefined;
+    var capture = ctx.capture;
     const out_file = switch (ctx.target) {
         .stdout => std.fs.File.stdout(),
         .stderr => std.fs.File.stderr(),
@@ -286,9 +336,16 @@ fn relayOutput(ctx: RelayContext) !void {
     while (true) {
         const n = try ctx.source.read(&buf);
         if (n == 0) break;
-        try out.interface.writeAll(buf[0..n]);
+        if (capture) |*file| {
+            try file.writeAll(buf[0..n]);
+        }
+        if (ctx.relay_to_tty) {
+            try out.interface.writeAll(buf[0..n]);
+        }
     }
-    try out.interface.flush();
+    if (ctx.relay_to_tty) {
+        try out.interface.flush();
+    }
 }
 
 fn waitForChild(child: *std.process.Child, state: *WaitState) void {
