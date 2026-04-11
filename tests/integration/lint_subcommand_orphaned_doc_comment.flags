@@ -1,3 +1,4 @@
 @raw
 lint
+--stdlib-path=lib
 tests/fixtures/lint/orphaned-doc-comment.1z

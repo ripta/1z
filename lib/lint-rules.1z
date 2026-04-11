@@ -4,9 +4,346 @@
 \ and whitespace discipline. Registered automatically when loaded.
 
 use "lint" ;
+use "char" ;
+
+\ --- Shared helpers ---
+
+(skip-doc-lookahead-token?): ( token -- ? ) [
+  kind>> dup whitespace: = [
+    drop t
+  ] [
+    dup newline: = [
+      drop t
+    ] [
+      dup comment: = [
+        drop t
+      ] [
+        doc-comment: =
+      ] if
+    ] if
+  ] if
+] ;
+
+(preserve-statement-start?): ( token -- ? ) [
+  kind>> dup whitespace: = [
+    drop t
+  ] [
+    dup newline: = [
+      drop t
+    ] [
+      dup comment: = [
+        drop t
+      ] [
+        dup doc-comment: = [
+          drop t
+        ] [
+          stack-effect: =
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+(next-doc-target-index): stack-recursive ( tokens idx -- idx ) [
+  over #len >= [
+    nip
+  ] [
+    2dup #nth (skip-doc-lookahead-token?) [
+      drop ++ (next-doc-target-index)
+    ] [
+      drop
+    ] if
+  ] if
+] ;
+
+(index-is-symbol?): ( tokens idx -- ? ) [
+  over #len < [
+    2dup #nth kind>> symbol: =
+    nip nip
+  ] [
+    2drop f
+  ] if
+] ;
+
+(trim-standard-prefixes): stack-recursive ( name -- core ) [
+  dup #len 0 = [
+  ] [
+    dup 0 #nth
+    dup "#" = over "@" = or over ">" = or swap "<" = or [
+      1 swap #drop
+      (trim-standard-prefixes)
+    ] [
+      drop
+    ] if
+  ] if
+] ;
+
+(trim-standard-suffixes): stack-recursive ( name -- core ) [
+  dup #len 0 = [
+  ] [
+    dup dup #len 1 - #nth
+    dup "?" = swap "!" = or [
+      drop
+      dup #len 1 - #take
+      (trim-standard-suffixes)
+    ] [
+      drop
+    ] if
+  ] if
+] ;
+
+(trim-standard-affixes): ( name -- core ) [
+  (trim-standard-prefixes)
+  (trim-standard-suffixes)
+] ;
+
+(kebab-eligible-char?): ( ch -- ? ) [
+  dup lower? [
+    drop t
+  ] [
+    dup upper? [
+      drop t
+    ] [
+      dup digit? [
+        drop t
+      ] [
+        dup "-" = [
+          drop t
+        ] [
+          "_" =
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+(kebab-valid-char?): ( ch -- ? ) [
+  dup lower? [
+    drop t
+  ] [
+    dup digit? [
+      drop t
+    ] [
+      "-" =
+    ] if
+  ] if
+] ;
+
+(non-kebab-core?): ( name -- ? ) [
+  (trim-standard-affixes)
+  dup #len 0 = [
+    drop f
+  ] [
+    dup [ alpha? ] #any not [
+      drop f
+    ] [
+      dup [ (kebab-eligible-char?) ] #all not [
+        drop f
+      ] [
+        dup 0 #nth "-" = over dup #len 1 - #nth "-" = or [
+          drop t
+        ] [
+          dup "--" #index-of f = not [
+            drop t
+          ] [
+            [ (kebab-valid-char?) ] #all not
+          ] if
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+\ Diagnostic helpers keep the (make-diag) call sites shallow.
+
+(push-orphaned-doc!): ( path tokens line-index state pos -- path tokens line-index state ) [
+  "orphaned-doc-comment" warning:
+  6 pick-n 5 pick-n 4 pick-n
+  "doc comment not followed by a definition"
+  (make-diag)
+  2 pick-n 0 #nth swap #push! drop
+  drop
+] ;
+
+(push-doc-misuse!): ( path tokens line-index state pos -- path tokens line-index state ) [
+  "doc-comment-misuse" warning:
+  6 pick-n 5 pick-n 4 pick-n
+  "doc comment used where regular comment would suffice"
+  (make-diag)
+  2 pick-n 0 #nth swap #push! drop
+  drop
+] ;
+
+(push-non-kebab!): ( path tokens line-index state pos -- path tokens line-index state ) [
+  "non-kebab-case" warning:
+  6 pick-n 5 pick-n 4 pick-n
+  "definition name is not kebab-case"
+  (make-diag)
+  2 pick-n 0 #nth swap #push! drop
+  drop
+] ;
+
+(push-comment-space!): ( path tokens line-index state pos -- path tokens line-index state ) [
+  "comment-missing-space" warning:
+  6 pick-n 5 pick-n 4 pick-n
+  "comment marker not followed by a space"
+  (make-diag)
+  2 pick-n 0 #nth swap #push! drop
+  drop
+] ;
+
+(push-blank-lines!): ( path tokens line-index state pos -- path tokens line-index state ) [
+  "excessive-blank-lines" warning:
+  6 pick-n 5 pick-n 4 pick-n
+  "3 or more consecutive blank lines"
+  (make-diag)
+  2 pick-n 0 #nth swap #push! drop
+  drop
+] ;
+
+\ --- Rule 1: orphaned-doc-comment ---
+
+(check-orphaned-doc-comment): ( path source tokens line-index -- diagnostics ) [
+  V{ } f
+  \ stack: path(5) source(4) tokens(3) line-index(2) results(1) pending-pos(0)
+  3 pick-n [
+    \ stack: path(6) source(5) tokens(4) line-index(3) results(2) pending-pos(1) token(0)
+    dup kind>> doc-comment: = [
+      pos>>
+      1 pick-n f = [
+        nip
+      ] [
+        drop
+      ] if
+    ] [
+      dup kind>> whitespace: = over kind>> newline: = or over kind>> comment: = or [
+        drop
+      ] [
+        1 pick-n dup f = not [
+          1 pick-n kind>> symbol: = [
+            drop
+          ] [
+            "orphaned-doc-comment" warning:
+            9 pick-n 7 pick-n 4 pick-n
+            "doc comment not followed by a definition" (make-diag)
+            4 pick-n swap #push! drop drop
+          ] if
+        ] [
+          drop
+        ] if
+        2drop f
+      ] if
+    ] if
+  ] #each
+  dup f = not [
+    "orphaned-doc-comment" warning:
+    7 pick-n 5 pick-n 4 pick-n
+    "doc comment not followed by a definition" (make-diag)
+    2 pick-n swap #push! drop drop
+  ] when
+  drop
+  [ drop drop drop drop ] dip
+] ;
+
+"orphaned-doc-comment" warning: [ (check-orphaned-doc-comment) ] f
+make-lint-rule register-lint-rule
+
+\ --- Rule 2: doc-comment-misuse ---
+
+\ State: V{ results bracket-depth line-has-code idx }
+
+(doc-comment-misuse-loop): stack-recursive ( path tokens line-index state -- path line-index state ) [
+  dup 3 #nth 2 pick-n #len >= [
+    drop
+  ] [
+    2 pick-n over 3 #nth #nth
+    dup kind>> doc-comment: = [
+      1 pick-n 1 #nth 0 > over 2 #nth or [
+        pos>> (push-doc-misuse!)
+      ] [
+        drop
+      ] if
+    ] [
+      dup kind>> newline: = [
+        drop
+        dup 2 f <rot- #nth! drop
+      ] [
+        dup kind>> whitespace: = over kind>> comment: = or [
+          drop
+        ] [
+          dup kind>> open-bracket: = [
+            drop
+            dup 1 #nth ++ over 1 <rot- #nth! drop
+          ] [
+            dup kind>> close-bracket: = [
+              drop
+              dup 1 #nth dup 0 > [
+                -- over 1 <rot- #nth! drop
+              ] [
+                2drop
+              ] if
+            ] [
+              drop
+            ] if
+          ] if
+          dup 2 t <rot- #nth! drop
+        ] if
+      ] if
+    ] if
+
+    dup 3 #nth ++ over 3 <rot- #nth! drop
+    (doc-comment-misuse-loop)
+  ] if
+] ;
+
+(check-doc-comment-misuse): ( path source tokens line-index -- diagnostics ) [
+  <rot- drop
+  V{ } 0 f 0 4 array-n
+  (doc-comment-misuse-loop)
+  nip nip 0 #nth
+] ;
+
+"doc-comment-misuse" warning: [ (check-doc-comment-misuse) ] f
+\ make-lint-rule register-lint-rule
+
+\ --- Rule 3: non-kebab-case ---
+
+(check-non-kebab-case): ( path source tokens line-index -- diagnostics ) [
+  V{ } t
+  \ stack: path(5) source(4) tokens(3) line-index(2) results(1) stmt-start?(0)
+  3 pick-n [
+    \ stack: path(6) source(5) tokens(4) line-index(3) results(2) stmt-start?(1) token(0)
+    dup kind>> symbol: = 2 pick-n and [
+      dup pos>> swap value>> dup #len 1 - #take (non-kebab-core?) [
+        drop
+        "non-kebab-case" warning:
+        8 pick-n 6 pick-n 4 pick-n
+        "definition name is not kebab-case" (make-diag)
+        3 pick-n swap #push! drop drop
+      ] [
+        drop
+      ] if
+      2drop f
+    ] [
+      dup (preserve-statement-start?) [
+        drop
+      ] [
+        dup kind>> open-bracket: = over kind>> semicolon: = or [
+          2drop t
+        ] [
+          2drop f
+        ] if
+      ] if
+    ] if
+  ] #each
+  drop
+  [ drop drop drop drop ] dip
+] ;
+
+"non-kebab-case" warning: [ (check-non-kebab-case) ] f
+\ make-lint-rule register-lint-rule
 
 \ --- Rule 4: comment-missing-space ---
-\
 \ A backslash not followed by a space. The tokenizer only recognizes
 \ comments when \ is followed by whitespace, so failed comments appear
 \ as word tokens starting with \.
@@ -37,7 +374,6 @@ use "lint" ;
 make-lint-rule register-lint-rule
 
 \ --- Rule 5: excessive-blank-lines ---
-\
 \ Three or more consecutive blank lines. Tracks consecutive newline
 \ tokens (whitespace between newlines does not break the run).
 \ Flags when count reaches 4 (content-line newline + 3 blank lines).
@@ -49,11 +385,8 @@ make-lint-rule register-lint-rule
     \ stack: path(7) source(6) tokens(5) line-index(4) results(3) nl-count(2) flag-pos(1) token(0)
     dup kind>> newline: = [
       pos>>
-      \ stack: ... nl-count(2) flag-pos(1) pos(0)
       [ [ ++ ] dip ] dip
-      \ stack: ... (nl-count+1)(2) flag-pos(1) pos(0)
       2 pick-n 4 = [
-        \ Record this position as the violation point
         [ drop ] dip
       ] [
         drop
@@ -63,24 +396,18 @@ make-lint-rule register-lint-rule
         drop
       ] [
         drop
-        \ Non-blank token: check if we had 3+ blank lines
         dup f = not [
-          \ Emit diagnostic using flag-pos as the position
           dup
-          \ stack: ... nl-count(3) flag-pos(2) flag-pos-copy(0)
           "excessive-blank-lines" warning:
-          \ stack: ... nl-count(5) flag-pos(4) flag-pos-copy(2) rid(1) sev(0)
           9 pick-n 7 pick-n 4 pick-n
           "3 or more consecutive blank lines" (make-diag)
           4 pick-n swap #push! drop
           drop
         ] when
-        \ Reset counter and flag
         nip 0 swap drop f
       ] if
     ] if
   ] #each
-  \ Check for trailing blank lines at end of file
   dup f = not [
     dup
     "excessive-blank-lines" warning:
@@ -88,7 +415,8 @@ make-lint-rule register-lint-rule
     "3 or more consecutive blank lines" (make-diag)
     3 pick-n swap #push! drop
     drop
-  ] when
+  ] [
+  ] if
   drop drop
   [ drop drop drop drop ] dip
 ] ;
