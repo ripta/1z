@@ -1,10 +1,11 @@
-\ lib/lint-rules.1z - Tier 1 lint rules
+\ lib/lint-rules.1z - Tier 1: core lint rules
 \
 \ Token-level rules for comment hygiene, naming conventions,
 \ and whitespace discipline. Registered automatically when loaded.
 
 use "lint" ;
 use "char" ;
+use "conversions" ;
 
 \ --- Shared helpers ---
 
@@ -70,11 +71,9 @@ use "char" ;
   ] [
     dup 0 #nth
     dup "#" = over "@" = or over ">" = or swap "<" = or [
-      1 swap #drop
+      1 #drop
       (trim-standard-prefixes)
-    ] [
-      drop
-    ] if
+    ] when
   ] if
 ] ;
 
@@ -83,12 +82,9 @@ use "char" ;
   ] [
     dup dup #len 1 - #nth
     dup "?" = swap "!" = or [
-      drop
       dup #len 1 - #take
       (trim-standard-suffixes)
-    ] [
-      drop
-    ] if
+    ] when
   ] if
 ] ;
 
@@ -165,21 +161,21 @@ use "char" ;
   drop
 ] ;
 
-(push-doc-misuse!): ( path tokens line-index state pos -- path tokens line-index state ) [
+(push-doc-misuse!): ( path source tokens line-index results depth line-has-code token -- path source tokens line-index results depth line-has-code ) [
   "doc-comment-misuse" warning:
-  6 pick-n 5 pick-n 4 pick-n
+  9 pick-n 7 pick-n 4 pick-n
   "doc comment used where regular comment would suffice"
-  (make-diag)
-  2 pick-n 0 #nth swap #push! drop
+  diag-at-token
+  4 pick-n swap #push! drop
   drop
 ] ;
 
-(push-non-kebab!): ( path tokens line-index state pos -- path tokens line-index state ) [
+(push-non-kebab!): ( path source tokens line-index results stmt-start token -- path source tokens line-index results stmt-start ) [
   "non-kebab-case" warning:
-  6 pick-n 5 pick-n 4 pick-n
+  8 pick-n 6 pick-n 4 pick-n
   "definition name is not kebab-case"
-  (make-diag)
-  2 pick-n 0 #nth swap #push! drop
+  diag-at-token
+  3 pick-n swap #push! drop
   drop
 ] ;
 
@@ -250,61 +246,47 @@ make-lint-rule register-lint-rule
 
 \ --- Rule 2: doc-comment-misuse ---
 
-\ State: V{ results bracket-depth line-has-code idx }
-
-(doc-comment-misuse-loop): stack-recursive ( path tokens line-index state -- path line-index state ) [
-  dup 3 #nth 2 pick-n #len >= [
-    drop
-  ] [
-    2 pick-n over 3 #nth #nth
+(check-doc-comment-misuse): ( path source tokens line-index -- diagnostics ) [
+  V{ } 0 f
+  \ stack: path(6) source(5) tokens(4) line-index(3) results(2) depth(1) line-has-code?(0)
+  4 pick-n [
+    \ stack: path(7) source(6) tokens(5) line-index(4) results(3) depth(2) line-has-code?(1) token(0)
     dup kind>> doc-comment: = [
-      1 pick-n 1 #nth 0 > over 2 #nth or [
-        pos>> (push-doc-misuse!)
+      2 pick-n 0 > 2 pick-n or [
+        (push-doc-misuse!)
       ] [
         drop
       ] if
     ] [
       dup kind>> newline: = [
         drop
-        dup 2 f <rot- #nth! drop
+        drop f
       ] [
         dup kind>> whitespace: = over kind>> comment: = or [
           drop
         ] [
           dup kind>> open-bracket: = [
             drop
-            dup 1 #nth ++ over 1 <rot- #nth! drop
+            swap ++ swap
           ] [
             dup kind>> close-bracket: = [
               drop
-              dup 1 #nth dup 0 > [
-                -- over 1 <rot- #nth! drop
-              ] [
-                2drop
-              ] if
+              swap dup 0 > [ -- ] when swap
             ] [
               drop
             ] if
           ] if
-          dup 2 t <rot- #nth! drop
+          drop t
         ] if
       ] if
     ] if
-
-    dup 3 #nth ++ over 3 <rot- #nth! drop
-    (doc-comment-misuse-loop)
-  ] if
-] ;
-
-(check-doc-comment-misuse): ( path source tokens line-index -- diagnostics ) [
-  <rot- drop
-  V{ } 0 f 0 4 array-n
-  (doc-comment-misuse-loop)
-  nip nip 0 #nth
+  ] #each
+  drop drop
+  [ drop drop drop drop ] dip
 ] ;
 
 "doc-comment-misuse" warning: [ (check-doc-comment-misuse) ] f
-\ make-lint-rule register-lint-rule
+make-lint-rule register-lint-rule
 
 \ --- Rule 3: non-kebab-case ---
 
@@ -313,25 +295,21 @@ make-lint-rule register-lint-rule
   \ stack: path(5) source(4) tokens(3) line-index(2) results(1) stmt-start?(0)
   3 pick-n [
     \ stack: path(6) source(5) tokens(4) line-index(3) results(2) stmt-start?(1) token(0)
-    dup kind>> symbol: = 2 pick-n and [
-      dup pos>> swap value>> dup #len 1 - #take (non-kebab-core?) [
-        drop
-        "non-kebab-case" warning:
-        8 pick-n 6 pick-n 4 pick-n
-        "definition name is not kebab-case" (make-diag)
-        3 pick-n swap #push! drop drop
+    dup definition-symbol? 2 pick-n and [
+      dup value>> dup #len 1 - #take (non-kebab-core?) [
+        (push-non-kebab!)
       ] [
         drop
       ] if
-      2drop f
+      drop f
     ] [
       dup (preserve-statement-start?) [
         drop
       ] [
         dup kind>> open-bracket: = over kind>> semicolon: = or [
-          2drop t
+          drop drop t
         ] [
-          2drop f
+          drop drop f
         ] if
       ] if
     ] if
@@ -341,7 +319,7 @@ make-lint-rule register-lint-rule
 ] ;
 
 "non-kebab-case" warning: [ (check-non-kebab-case) ] f
-\ make-lint-rule register-lint-rule
+make-lint-rule register-lint-rule
 
 \ --- Rule 4: comment-missing-space ---
 \ A backslash not followed by a space. The tokenizer only recognizes

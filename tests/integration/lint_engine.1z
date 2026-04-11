@@ -1,5 +1,7 @@
 use "testing" ;
 use "lint" ;
+use "lexer" ;
+use "1z-tokens" ;
 
 "rule registration" test-section
 
@@ -47,6 +49,33 @@ dup file>> "file.1z" "diag file" assert=
 dup rule-id>> "test-rule" "diag rule-id" assert=
 message>> "found issue" "diag message" assert=
 drop
+
+"public lint helpers" test-section
+
+"abc\ndef\nghi" (build-line-index)
+"test-rule" warning: "file.1z" 3 pick-n 4 "diag at pos" diag-at-pos
+dup line>> 2 "diag-at-pos line" assert=
+dup column>> 1 "diag-at-pos col" assert=
+message>> "diag at pos" "diag-at-pos message" assert=
+drop
+
+"abc\ndef\nghi" (build-line-index)
+number: "42" 8 make-token
+"test-rule" warning: "file.1z" 4 pick-n 4 pick-n "diag at token" diag-at-token
+dup line>> 3 "diag-at-token line" assert=
+dup column>> 1 "diag-at-token col" assert=
+message>> "diag at token" "diag-at-token message" assert=
+2drop
+
+number: "42" 8 make-token number: token-kind? t "token-kind? true" assert=
+number: "42" 8 make-token word: token-kind? f "token-kind? false" assert=
+
+whitespace: " " 0 make-token significant-token? f "whitespace not significant" assert=
+newline: "\n" 0 make-token significant-token? f "newline not significant" assert=
+word: "dup" 0 make-token significant-token? t "word is significant" assert=
+
+symbol: "name:" 0 make-token definition-symbol? t "symbol is definition symbol" assert=
+word: "dup" 0 make-token definition-symbol? f "word is not definition symbol" assert=
 
 "run-lint on clean file" test-section
 

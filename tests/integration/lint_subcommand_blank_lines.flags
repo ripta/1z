@@ -1,4 +1,4 @@
 @raw
 lint
 --stdlib-path=lib
-tests/fixtures/lint/blank-lines.1z
+tests/fixtures/lint/blank-lines.1z.txt

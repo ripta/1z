@@ -23,6 +23,20 @@ PASS: diag col
 PASS: diag file
 PASS: diag rule-id
 PASS: diag message
+=== public lint helpers ===
+PASS: diag-at-pos line
+PASS: diag-at-pos col
+PASS: diag-at-pos message
+PASS: diag-at-token line
+PASS: diag-at-token col
+PASS: diag-at-token message
+PASS: token-kind? true
+PASS: token-kind? false
+PASS: whitespace not significant
+PASS: newline not significant
+PASS: word is significant
+PASS: symbol is definition symbol
+PASS: word is not definition symbol
 === run-lint on clean file ===
 PASS: clean file has no findings
 === run-lint with findings ===

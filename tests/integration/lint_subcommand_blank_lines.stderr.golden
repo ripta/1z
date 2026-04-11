@@ -1,1 +1,1 @@
-tests/fixtures/lint/blank-lines.1z:5:1: warning: [excessive-blank-lines] 3 or more consecutive blank lines
+tests/fixtures/lint/blank-lines.1z.txt:5:1: warning: [excessive-blank-lines] 3 or more consecutive blank lines

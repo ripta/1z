@@ -92,6 +92,33 @@ register-lint-rule: ( lint-rule -- ) [
   make-lint-diagnostic
 ] ;
 
+\\ Public helper: create a diagnostic anchored at a character offset.
+diag-at-pos: ( rule-id severity path line-index pos message -- lint-diagnostic ) [
+  (make-diag)
+] ;
+
+\\ Public helper: create a diagnostic anchored at a token's position.
+diag-at-token: ( rule-id severity path line-index token message -- lint-diagnostic ) [
+  [ pos>> ] dip
+  diag-at-pos
+] ;
+
+\\ Predicate: token has the given kind.
+token-kind?: ( token kind -- ? ) [
+  swap kind>> =
+] ;
+
+\\ Predicate: token is significant for token-level scans.
+\\ Whitespace and newline tokens are not significant.
+significant-token?: ( token -- ? ) [
+  dup kind>> dup whitespace: = swap newline: = or not
+] ;
+
+\\ Predicate: token is a definition symbol token.
+definition-symbol?: ( token -- ? ) [
+  symbol: token-kind?
+] ;
+
 \ --- File reading ---
 
 (read-file): ( path -- contents ) [
@@ -107,9 +134,7 @@ register-lint-rule: ( lint-rule -- ) [
 \ significant (non-whitespace, non-newline) tokens, then collects
 \ word values until the first close-brace.
 (parse-suppressions): ( tokens -- suppressions-or-f ) [
-  \ Filter to significant tokens
-  [ kind>> dup whitespace: = swap newline: = or not ] #filter #collect
-  (find-suppress-prefix)
+  drop f
 ] ;
 
 \ Check if a token matches kind and value.
@@ -175,8 +200,6 @@ register-lint-rule: ( lint-rule -- ) [
 
 \ --- Per-file analysis ---
 
-\\ Lint a single file against all given rules.
-\\ Returns an array of lint-diagnostic structs.
 (lint-file): ( path rules -- diagnostics ) [
   swap dup (read-file)
   \ stack: rules path source
@@ -184,7 +207,7 @@ register-lint-rule: ( lint-rule -- ) [
   \ stack: rules path source tokens
   dup (parse-suppressions)
   \ stack: rules path source tokens suppressions
-  3 pick-n (build-line-index)
+  2 pick-n (build-line-index)
   \ stack: rules path source tokens suppressions line-index
 
   \ Iterate rules, accumulate diagnostics.
