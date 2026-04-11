@@ -1,0 +1,3 @@
+@raw
+lint
+tests/fixtures/lint/blank-lines.1z

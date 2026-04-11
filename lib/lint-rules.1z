@@ -1,0 +1,97 @@
+\ lib/lint-rules.1z - Tier 1 lint rules
+\
+\ Token-level rules for comment hygiene, naming conventions,
+\ and whitespace discipline. Registered automatically when loaded.
+
+use "lint" ;
+
+\ --- Rule 4: comment-missing-space ---
+\
+\ A backslash not followed by a space. The tokenizer only recognizes
+\ comments when \ is followed by whitespace, so failed comments appear
+\ as word tokens starting with \.
+
+(check-comment-space): ( path source tokens line-index -- diagnostics ) [
+  V{ }
+  \ stack: path(4) source(3) tokens(2) line-index(1) results(0)
+  2 pick-n [
+    \ stack: path(5) source(4) tokens(3) line-index(2) results(1) token(0)
+    dup kind>> word: = [
+      dup value>> "\\" #starts-with? [
+        dup pos>>
+        \ stack: ... line-index(3) results(2) token(1) pos(0)
+        "comment-missing-space" warning:
+        \ stack: ... line-index(5) results(4) token(3) pos(2) rid(1) sev(0)
+        8 pick-n 6 pick-n 4 pick-n
+        "comment marker not followed by a space" (make-diag)
+        \ stack: ... results(3) token(2) pos(1) diagnostic(0)
+        3 pick-n swap #push! drop drop
+      ] when
+    ] when
+    drop
+  ] #each
+  [ drop drop drop drop ] dip
+] ;
+
+"comment-missing-space" warning: [ (check-comment-space) ] f
+make-lint-rule register-lint-rule
+
+\ --- Rule 5: excessive-blank-lines ---
+\
+\ Three or more consecutive blank lines. Tracks consecutive newline
+\ tokens (whitespace between newlines does not break the run).
+\ Flags when count reaches 4 (content-line newline + 3 blank lines).
+
+(check-blank-lines): ( path source tokens line-index -- diagnostics ) [
+  V{ } 0 f
+  \ stack: path(6) source(5) tokens(4) line-index(3) results(2) nl-count(1) flag-pos(0)
+  4 pick-n [
+    \ stack: path(7) source(6) tokens(5) line-index(4) results(3) nl-count(2) flag-pos(1) token(0)
+    dup kind>> newline: = [
+      pos>>
+      \ stack: ... nl-count(2) flag-pos(1) pos(0)
+      [ [ ++ ] dip ] dip
+      \ stack: ... (nl-count+1)(2) flag-pos(1) pos(0)
+      2 pick-n 4 = [
+        \ Record this position as the violation point
+        [ drop ] dip
+      ] [
+        drop
+      ] if
+    ] [
+      dup kind>> whitespace: = [
+        drop
+      ] [
+        drop
+        \ Non-blank token: check if we had 3+ blank lines
+        dup f = not [
+          \ Emit diagnostic using flag-pos as the position
+          dup
+          \ stack: ... nl-count(3) flag-pos(2) flag-pos-copy(0)
+          "excessive-blank-lines" warning:
+          \ stack: ... nl-count(5) flag-pos(4) flag-pos-copy(2) rid(1) sev(0)
+          9 pick-n 7 pick-n 4 pick-n
+          "3 or more consecutive blank lines" (make-diag)
+          4 pick-n swap #push! drop
+          drop
+        ] when
+        \ Reset counter and flag
+        nip 0 swap drop f
+      ] if
+    ] if
+  ] #each
+  \ Check for trailing blank lines at end of file
+  dup f = not [
+    dup
+    "excessive-blank-lines" warning:
+    8 pick-n 6 pick-n 4 pick-n
+    "3 or more consecutive blank lines" (make-diag)
+    3 pick-n swap #push! drop
+    drop
+  ] when
+  drop drop
+  [ drop drop drop drop ] dip
+] ;
+
+"excessive-blank-lines" warning: [ (check-blank-lines) ] f
+make-lint-rule register-lint-rule

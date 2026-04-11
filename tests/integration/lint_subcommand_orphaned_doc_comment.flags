@@ -1,0 +1,3 @@
+@raw
+lint
+tests/fixtures/lint/orphaned-doc-comment.1z

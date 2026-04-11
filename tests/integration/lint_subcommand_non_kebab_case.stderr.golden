@@ -1,0 +1,1 @@
+tests/fixtures/lint/non-kebab-case.1z:1:1: warning: [non-kebab-case] definition name is not kebab-case

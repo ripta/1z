@@ -1,0 +1,2 @@
+\bad-comment
+double: ( n -- n ) [ 2 * ] ;

@@ -1,0 +1,1 @@
+tests/fixtures/lint/orphaned-doc-comment.1z:1:1: warning: [orphaned-doc-comment] doc comment not followed by a definition

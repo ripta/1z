@@ -1,0 +1,3 @@
+@raw
+lint
+tests/fixtures/lint/doc-comment-misuse.1z

@@ -1,0 +1,5 @@
+outer: [
+  \\ misplaced doc comment
+  helper: [ 1 ] ;
+  helper
+] ;
