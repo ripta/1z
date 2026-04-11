@@ -19,6 +19,7 @@ pub fn dispatchTypeName(val: Value) []const u8 {
         .tagged => |t| t.tag.name,
         .struct_instance => |si| si.struct_type.name,
         .fixnum => "fixnum",
+        .float => "float",
         .boolean => "boolean",
         .string => "string",
         .symbol => "symbol",

@@ -1,0 +1,85 @@
+\ Test float prelude words: predicates, constants, and conversions
+
+use "testing" ;
+
+"float? predicate" test-section
+3.14 float? "float is float" assert-true
+0.0 float? "zero float is float" assert-true
+42 float? not "fixnum is not float" assert-true
+"hello" float? not "string is not float" assert-true
+t float? not "boolean is not float" assert-true
+
+"nan constant" test-section
+nan type-of float: "nan is float type" assert=
+nan nan = not "nan != nan (IEEE 754)" assert-true
+
+"inf and -inf constants" test-section
+inf type-of float: "inf is float type" assert=
+-inf type-of float: "-inf is float type" assert=
+inf -inf = not "inf != -inf" assert-true
+inf 0.0 > "inf > 0.0" assert-true
+-inf 0.0 < "-inf < 0.0" assert-true
+
+"nan? predicate" test-section
+nan nan? "nan is nan" assert-true
+0.0 nan? not "0.0 is not nan" assert-true
+3.14 nan? not "3.14 is not nan" assert-true
+inf nan? not "inf is not nan" assert-true
+-inf nan? not "-inf is not nan" assert-true
+42 nan? not "fixnum is not nan" assert-true
+
+"infinite? predicate" test-section
+inf infinite? "inf is infinite" assert-true
+-inf infinite? "-inf is infinite" assert-true
+3.14 infinite? not "3.14 is not infinite" assert-true
+0.0 infinite? not "0.0 is not infinite" assert-true
+nan infinite? not "nan is not infinite" assert-true
+42 infinite? not "fixnum is not infinite" assert-true
+
+"finite? predicate" test-section
+3.14 finite? "3.14 is finite" assert-true
+0.0 finite? "0.0 is finite" assert-true
+-1.5 finite? "-1.5 is finite" assert-true
+nan finite? not "nan is not finite" assert-true
+inf finite? not "inf is not finite" assert-true
+-inf finite? not "-inf is not finite" assert-true
+42 finite? not "fixnum is not finite (not a float)" assert-true
+
+">float from fixnum" test-section
+42 >float 42.0 "42 >float" assert=
+0 >float 0.0 "0 >float" assert=
+-7 >float -7.0 "-7 >float" assert=
+42 >float type-of float: ">float produces float type" assert=
+
+">float from string" test-section
+"3.14" >float 3.14 ">float from decimal string" assert=
+"1e3" >float 1000.0 ">float from scientific string" assert=
+"-2.5" >float -2.5 ">float from negative string" assert=
+"0" >float 0.0 ">float from integer string" assert=
+
+">float from float (no-op)" test-section
+3.14 >float 3.14 ">float from float passthrough" assert=
+
+">float error on non-numeric string" test-section
+[ "abc" >float ] "TypeMismatch" assert-error
+[ "" >float ] "TypeMismatch" assert-error
+
+">integer from float" test-section
+3.7 >integer 3 "3.7 truncated to 3" assert=
+-3.7 >integer -3 "-3.7 truncated to -3" assert=
+5.0 >integer 5 "5.0 to 5" assert=
+0.0 >integer 0 "0.0 to 0" assert=
+-0.0 >integer 0 "-0.0 to 0" assert=
+0.9 >integer 0 "0.9 truncated to 0" assert=
+-0.9 >integer 0 "-0.9 truncated to 0" assert=
+3.7 >integer type-of fixnum: ">integer produces fixnum type" assert=
+
+">integer from fixnum (no-op)" test-section
+42 >integer 42 ">integer from fixnum passthrough" assert=
+
+">integer error on NaN" test-section
+[ nan >integer ] "TypeMismatch" assert-error
+
+">integer error on infinity" test-section
+[ inf >integer ] "TypeMismatch" assert-error
+[ -inf >integer ] "TypeMismatch" assert-error

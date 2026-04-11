@@ -6,18 +6,26 @@ const Primitive = @import("types.zig").Primitive;
 const dispatch_helpers = @import("dispatch_helpers.zig");
 
 const popFixnum = helpers.popFixnum;
+const popNumber = helpers.popNumber;
+const Number = helpers.Number;
+const toFloats = helpers.toFloats;
 
 pub const primitives = [_]Primitive{
     // Basic arithmetic
-    .{ .name = "+", .stack_effect = "a b -- a+b", .doc = "Add two fixnums.", .func = nativeAdd },
-    .{ .name = "-", .stack_effect = "a b -- a-b", .doc = "Subtract: a minus b.", .func = nativeSub },
-    .{ .name = "*", .stack_effect = "a b -- a*b", .doc = "Multiply two fixnums.", .func = nativeMul },
-    .{ .name = "/", .stack_effect = "a b -- a/b", .doc = "Integer division.", .func = nativeDiv },
-    .{ .name = "%", .stack_effect = "a b -- a%b", .doc = "Modulo (remainder).", .func = nativeMod },
+    .{ .name = "+", .stack_effect = "a b -- a+b", .doc = "Add two numbers. Promotes to float if either operand is a float.", .func = nativeAdd },
+    .{ .name = "-", .stack_effect = "a b -- a-b", .doc = "Subtract: a minus b. Promotes to float if either operand is a float.", .func = nativeSub },
+    .{ .name = "*", .stack_effect = "a b -- a*b", .doc = "Multiply two numbers. Promotes to float if either operand is a float.", .func = nativeMul },
+    .{ .name = "/", .stack_effect = "a b -- a/b", .doc = "Divide: a divided by b. Integer division for fixnums (throws on zero); IEEE 754 division for floats.", .func = nativeDiv },
+    .{ .name = "%", .stack_effect = "a b -- a%b", .doc = "Modulo for fixnums; fmod for floats. Promotes to float if either operand is a float.", .func = nativeMod },
     // Wraparound arithmetic
     .{ .name = "+%", .stack_effect = "a b -- a+b", .doc = "Add two fixnums with wraparound on overflow.", .func = nativeAddWrap },
     .{ .name = "-%", .stack_effect = "a b -- a-b", .doc = "Subtract with wraparound on overflow.", .func = nativeSubWrap },
     .{ .name = "*%", .stack_effect = "a b -- a*b", .doc = "Multiply with wraparound on overflow.", .func = nativeMulWrap },
+    // Conversions
+    .{ .name = ">float", .stack_effect = "x -- f", .doc = "Convert fixnum or string to float. Floats pass through. Throws on failure.", .func = nativeToFloat },
+    .{ .name = ">integer", .stack_effect = "f -- n", .doc = "Convert float to fixnum, truncating toward zero. Fixnums pass through. Throws on NaN or infinity.", .func = nativeToInteger },
+    // Unary
+    .{ .name = "abs", .stack_effect = "n -- n", .doc = "Absolute value. Works on fixnums and floats.", .func = nativeAbs },
     // Comparators
     .{ .name = "=", .stack_effect = "a b -- ?", .doc = "Equality comparison.", .func = nativeEq },
     .{ .name = "(=)", .stack_effect = "a b -- ?", .doc = "Inner equality: unwraps one layer of tagged values, then compares.", .func = nativeInnerEq },
@@ -25,53 +33,78 @@ pub const primitives = [_]Primitive{
     .{ .name = ">", .stack_effect = "a b -- ?", .doc = "Greater than.", .func = nativeGt },
 };
 
-/// + ( a b -- a+b ) - Add two fixnums
+/// + ( a b -- a+b ) - Add two numbers
 pub fn nativeAdd(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "+")) return;
-    const b = try popFixnum(ctx);
-    const a = try popFixnum(ctx);
-    const result = @addWithOverflow(a, b);
-    if (result[1] != 0) return error.FixnumOverflow;
-    try ctx.stack.push(.{ .fixnum = result[0] });
+    const b = try popNumber(ctx);
+    const a = try popNumber(ctx);
+    if (a == .fixnum and b == .fixnum) {
+        const result = @addWithOverflow(a.fixnum, b.fixnum);
+        if (result[1] != 0) return error.FixnumOverflow;
+        try ctx.stack.push(.{ .fixnum = result[0] });
+    } else {
+        const fs = toFloats(a, b);
+        try ctx.stack.push(.{ .float = fs[0] + fs[1] });
+    }
 }
 
 /// - ( a b -- a-b ) - Subtract: a minus b
 pub fn nativeSub(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "-")) return;
-    const b = try popFixnum(ctx);
-    const a = try popFixnum(ctx);
-    const result = @subWithOverflow(a, b);
-    if (result[1] != 0) return error.FixnumOverflow;
-    try ctx.stack.push(.{ .fixnum = result[0] });
+    const b = try popNumber(ctx);
+    const a = try popNumber(ctx);
+    if (a == .fixnum and b == .fixnum) {
+        const result = @subWithOverflow(a.fixnum, b.fixnum);
+        if (result[1] != 0) return error.FixnumOverflow;
+        try ctx.stack.push(.{ .fixnum = result[0] });
+    } else {
+        const fs = toFloats(a, b);
+        try ctx.stack.push(.{ .float = fs[0] - fs[1] });
+    }
 }
 
-/// * ( a b -- a*b ) - Multiply two fixnums
+/// * ( a b -- a*b ) - Multiply two numbers
 pub fn nativeMul(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "*")) return;
-    const b = try popFixnum(ctx);
-    const a = try popFixnum(ctx);
-    const result = @mulWithOverflow(a, b);
-    if (result[1] != 0) return error.FixnumOverflow;
-    try ctx.stack.push(.{ .fixnum = result[0] });
+    const b = try popNumber(ctx);
+    const a = try popNumber(ctx);
+    if (a == .fixnum and b == .fixnum) {
+        const result = @mulWithOverflow(a.fixnum, b.fixnum);
+        if (result[1] != 0) return error.FixnumOverflow;
+        try ctx.stack.push(.{ .fixnum = result[0] });
+    } else {
+        const fs = toFloats(a, b);
+        try ctx.stack.push(.{ .float = fs[0] * fs[1] });
+    }
 }
 
-/// / ( a b -- a/b ) - Integer division
+/// / ( a b -- a/b ) - Division
 pub fn nativeDiv(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "/")) return;
-    const b = try popFixnum(ctx);
-    const a = try popFixnum(ctx);
-    if (b == 0) return error.DivisionByZero;
-    if (a == std.math.minInt(i64) and b == -1) return error.FixnumOverflow;
-    try ctx.stack.push(.{ .fixnum = @divTrunc(a, b) });
+    const b = try popNumber(ctx);
+    const a = try popNumber(ctx);
+    if (a == .fixnum and b == .fixnum) {
+        if (b.fixnum == 0) return error.DivisionByZero;
+        if (a.fixnum == std.math.minInt(i64) and b.fixnum == -1) return error.FixnumOverflow;
+        try ctx.stack.push(.{ .fixnum = @divTrunc(a.fixnum, b.fixnum) });
+    } else {
+        const fs = toFloats(a, b);
+        try ctx.stack.push(.{ .float = fs[0] / fs[1] });
+    }
 }
 
-/// % ( a b -- a%b ) - Modulo (remainder)
+/// % ( a b -- a%b ) - Modulo / fmod
 pub fn nativeMod(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "%")) return;
-    const b = try popFixnum(ctx);
-    const a = try popFixnum(ctx);
-    if (b == 0) return error.DivisionByZero;
-    try ctx.stack.push(.{ .fixnum = @mod(a, b) });
+    const b = try popNumber(ctx);
+    const a = try popNumber(ctx);
+    if (a == .fixnum and b == .fixnum) {
+        if (b.fixnum == 0) return error.DivisionByZero;
+        try ctx.stack.push(.{ .fixnum = @mod(a.fixnum, b.fixnum) });
+    } else {
+        const fs = toFloats(a, b);
+        try ctx.stack.push(.{ .float = @rem(fs[0], fs[1]) });
+    }
 }
 
 /// +% ( a b -- a+b ) - Add two fixnums with wraparound on overflow
@@ -100,7 +133,15 @@ pub fn nativeEq(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "=")) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
-    try ctx.stack.push(.{ .boolean = a.eql(b) });
+    if (a == .fixnum and b == .float) {
+        const af: f64 = @floatFromInt(a.fixnum);
+        try ctx.stack.push(.{ .boolean = af == b.float });
+    } else if (a == .float and b == .fixnum) {
+        const bf: f64 = @floatFromInt(b.fixnum);
+        try ctx.stack.push(.{ .boolean = a.float == bf });
+    } else {
+        try ctx.stack.push(.{ .boolean = a.eql(b) });
+    }
 }
 
 /// (=) ( a b -- ? ) - Inner equality: unwraps one layer of tagged values, then compares
@@ -115,15 +156,126 @@ pub fn nativeInnerEq(ctx: *Context) anyerror!void {
 /// < ( a b -- ? ) - Less than
 pub fn nativeLt(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "<")) return;
-    const b = try popFixnum(ctx);
-    const a = try popFixnum(ctx);
-    try ctx.stack.push(.{ .boolean = a < b });
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    switch (a) {
+        .fixnum => |av| switch (b) {
+            .fixnum => |bv| try ctx.stack.push(.{ .boolean = av < bv }),
+            .float => |bv| try ctx.stack.push(.{ .boolean = @as(f64, @floatFromInt(av)) < bv }),
+            else => {
+                helpers.setTypeMismatchError(ctx, "number", b);
+                return error.TypeMismatch;
+            },
+        },
+        .float => |av| switch (b) {
+            .float => |bv| try ctx.stack.push(.{ .boolean = av < bv }),
+            .fixnum => |bv| try ctx.stack.push(.{ .boolean = av < @as(f64, @floatFromInt(bv)) }),
+            else => {
+                helpers.setTypeMismatchError(ctx, "number", b);
+                return error.TypeMismatch;
+            },
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "fixnum or float", a);
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// >float ( x -- f ) - Convert fixnum or string to float
+fn nativeToFloat(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ">float")) return;
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .fixnum => |i| try ctx.stack.push(.{ .float = @floatFromInt(i) }),
+        .float => try ctx.stack.push(val),
+        .string => |s| {
+            const f = std.fmt.parseFloat(f64, s) catch {
+                helpers.setErrorContext(ctx, ">float: cannot parse \"{s}\" as float", .{s});
+                return error.TypeMismatch;
+            };
+            try ctx.stack.push(.{ .float = f });
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "fixnum, float, or string", val);
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// >integer ( f -- n ) - Float to fixnum, truncate toward zero
+fn nativeToInteger(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ">integer")) return;
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .float => |f| {
+            if (std.math.isNan(f)) {
+                helpers.setErrorContext(ctx, ">integer: NaN cannot be converted to fixnum", .{});
+                return error.TypeMismatch;
+            }
+            if (std.math.isInf(f)) {
+                helpers.setErrorContext(ctx, ">integer: infinity cannot be converted to fixnum", .{});
+                return error.TypeMismatch;
+            }
+            const truncated = @trunc(f);
+            const max_f: f64 = @floatFromInt(std.math.maxInt(i64));
+            const min_f: f64 = @floatFromInt(std.math.minInt(i64));
+            if (truncated >= max_f or truncated < min_f) return error.FixnumOverflow;
+            const i: i64 = @intFromFloat(truncated);
+            try ctx.stack.push(.{ .fixnum = i });
+        },
+        .fixnum => try ctx.stack.push(val),
+        else => {
+            helpers.setTypeMismatchError(ctx, "float or fixnum", val);
+            return error.TypeMismatch;
+        },
+    }
 }
 
 /// > ( a b -- ? ) - Greater than
 pub fn nativeGt(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, ">")) return;
-    const b = try popFixnum(ctx);
-    const a = try popFixnum(ctx);
-    try ctx.stack.push(.{ .boolean = a > b });
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    switch (a) {
+        .fixnum => |av| switch (b) {
+            .fixnum => |bv| try ctx.stack.push(.{ .boolean = av > bv }),
+            .float => |bv| try ctx.stack.push(.{ .boolean = @as(f64, @floatFromInt(av)) > bv }),
+            else => {
+                helpers.setTypeMismatchError(ctx, "number", b);
+                return error.TypeMismatch;
+            },
+        },
+        .float => |av| switch (b) {
+            .float => |bv| try ctx.stack.push(.{ .boolean = av > bv }),
+            .fixnum => |bv| try ctx.stack.push(.{ .boolean = av > @as(f64, @floatFromInt(bv)) }),
+            else => {
+                helpers.setTypeMismatchError(ctx, "number", b);
+                return error.TypeMismatch;
+            },
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "fixnum or float", a);
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// abs ( n -- n ) - Absolute value for fixnums and floats
+fn nativeAbs(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchUnary(ctx, "abs")) return;
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .fixnum => |i| {
+            if (i == std.math.minInt(i64)) return error.FixnumOverflow;
+            try ctx.stack.push(.{ .fixnum = if (i < 0) -i else i });
+        },
+        .float => |f| {
+            try ctx.stack.push(.{ .float = @abs(f) });
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "number", val);
+            return error.TypeMismatch;
+        },
+    }
 }

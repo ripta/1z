@@ -553,7 +553,7 @@ const DeepCopyError = Allocator.Error;
 
 pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
     return switch (val) {
-        .fixnum, .boolean => val,
+        .fixnum, .float, .boolean => val,
 
         .string => |s| .{ .string = try alloc.dupe(u8, s) },
         .symbol => |s| .{ .symbol = try alloc.dupe(u8, s) },

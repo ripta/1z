@@ -1,0 +1,128 @@
+const std = @import("std");
+const Context = @import("../context.zig").Context;
+const helpers = @import("helpers.zig");
+const RegistryEntry = @import("types.zig").RegistryEntry;
+
+pub const registry_entries = [_]RegistryEntry{
+    .{ .name = "sin", .func = nativeSin },
+    .{ .name = "cos", .func = nativeCos },
+    .{ .name = "tan", .func = nativeTan },
+    .{ .name = "asin", .func = nativeAsin },
+    .{ .name = "acos", .func = nativeAcos },
+    .{ .name = "atan", .func = nativeAtan },
+    .{ .name = "atan2", .func = nativeAtan2 },
+    .{ .name = "exp", .func = nativeExp },
+    .{ .name = "log", .func = nativeLog },
+    .{ .name = "log2", .func = nativeLog2 },
+    .{ .name = "log10", .func = nativeLog10 },
+    .{ .name = "sqrt", .func = nativeSqrt },
+    .{ .name = "pow", .func = nativePow },
+    .{ .name = "floor", .func = nativeFloor },
+    .{ .name = "ceil", .func = nativeCeil },
+    .{ .name = "round", .func = nativeRound },
+    .{ .name = "truncate", .func = nativeTruncate },
+};
+
+fn popFloat(ctx: *Context) !f64 {
+    const val = try helpers.popNumber(ctx);
+    return switch (val) {
+        .fixnum => |i| @as(f64, @floatFromInt(i)),
+        .float => |f| f,
+    };
+}
+
+fn roundHalfToEven(x: f64) f64 {
+    const r = @round(x);
+    if (@abs(x - r) == 0.5) {
+        return 2.0 * @round(x / 2.0);
+    }
+
+    return r;
+}
+
+fn nativeSin(ctx: *Context) anyerror!void {
+    const x = try popFloat(ctx);
+    try ctx.stack.push(.{ .float = @sin(x) });
+}
+
+fn nativeCos(ctx: *Context) anyerror!void {
+    const x = try popFloat(ctx);
+    try ctx.stack.push(.{ .float = @cos(x) });
+}
+
+fn nativeTan(ctx: *Context) anyerror!void {
+    const x = try popFloat(ctx);
+    try ctx.stack.push(.{ .float = @tan(x) });
+}
+
+fn nativeAsin(ctx: *Context) anyerror!void {
+    const x = try popFloat(ctx);
+    try ctx.stack.push(.{ .float = std.math.asin(x) });
+}
+
+fn nativeAcos(ctx: *Context) anyerror!void {
+    const x = try popFloat(ctx);
+    try ctx.stack.push(.{ .float = std.math.acos(x) });
+}
+
+fn nativeAtan(ctx: *Context) anyerror!void {
+    const x = try popFloat(ctx);
+    try ctx.stack.push(.{ .float = std.math.atan(x) });
+}
+
+fn nativeAtan2(ctx: *Context) anyerror!void {
+    const x = try popFloat(ctx);
+    const y = try popFloat(ctx);
+    try ctx.stack.push(.{ .float = std.math.atan2(y, x) });
+}
+
+fn nativeExp(ctx: *Context) anyerror!void {
+    const x = try popFloat(ctx);
+    try ctx.stack.push(.{ .float = @exp(x) });
+}
+
+fn nativeLog(ctx: *Context) anyerror!void {
+    const x = try popFloat(ctx);
+    try ctx.stack.push(.{ .float = @log(x) });
+}
+
+fn nativeLog2(ctx: *Context) anyerror!void {
+    const x = try popFloat(ctx);
+    try ctx.stack.push(.{ .float = @log2(x) });
+}
+
+fn nativeLog10(ctx: *Context) anyerror!void {
+    const x = try popFloat(ctx);
+    try ctx.stack.push(.{ .float = @log10(x) });
+}
+
+fn nativeSqrt(ctx: *Context) anyerror!void {
+    const x = try popFloat(ctx);
+    try ctx.stack.push(.{ .float = @sqrt(x) });
+}
+
+fn nativePow(ctx: *Context) anyerror!void {
+    const exp_val = try popFloat(ctx);
+    const base_val = try popFloat(ctx);
+    try ctx.stack.push(.{ .float = std.math.pow(f64, base_val, exp_val) });
+}
+
+fn nativeFloor(ctx: *Context) anyerror!void {
+    const x = try popFloat(ctx);
+    try ctx.stack.push(.{ .float = @floor(x) });
+}
+
+fn nativeCeil(ctx: *Context) anyerror!void {
+    const x = try popFloat(ctx);
+    try ctx.stack.push(.{ .float = @ceil(x) });
+}
+
+fn nativeRound(ctx: *Context) anyerror!void {
+    const x = try popFloat(ctx);
+    try ctx.stack.push(.{ .float = roundHalfToEven(x) });
+}
+
+fn nativeTruncate(ctx: *Context) anyerror!void {
+    const x = try popFloat(ctx);
+    try ctx.stack.push(.{ .float = @trunc(x) });
+}

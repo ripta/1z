@@ -1,0 +1,136 @@
+=== float? predicate ===
+Stack: [ ]
+PASS: float is float
+Stack: [ ]
+PASS: zero float is float
+Stack: [ ]
+PASS: fixnum is not float
+Stack: [ ]
+PASS: string is not float
+Stack: [ ]
+PASS: boolean is not float
+Stack: [ ]
+=== nan constant ===
+Stack: [ ]
+PASS: nan is float type
+Stack: [ ]
+PASS: nan != nan (IEEE 754)
+Stack: [ ]
+=== inf and -inf constants ===
+Stack: [ ]
+PASS: inf is float type
+Stack: [ ]
+PASS: -inf is float type
+Stack: [ ]
+PASS: inf != -inf
+Stack: [ ]
+PASS: inf > 0.0
+Stack: [ ]
+PASS: -inf < 0.0
+Stack: [ ]
+=== nan? predicate ===
+Stack: [ ]
+PASS: nan is nan
+Stack: [ ]
+PASS: 0.0 is not nan
+Stack: [ ]
+PASS: 3.14 is not nan
+Stack: [ ]
+PASS: inf is not nan
+Stack: [ ]
+PASS: -inf is not nan
+Stack: [ ]
+PASS: fixnum is not nan
+Stack: [ ]
+=== infinite? predicate ===
+Stack: [ ]
+PASS: inf is infinite
+Stack: [ ]
+PASS: -inf is infinite
+Stack: [ ]
+PASS: 3.14 is not infinite
+Stack: [ ]
+PASS: 0.0 is not infinite
+Stack: [ ]
+PASS: nan is not infinite
+Stack: [ ]
+PASS: fixnum is not infinite
+Stack: [ ]
+=== finite? predicate ===
+Stack: [ ]
+PASS: 3.14 is finite
+Stack: [ ]
+PASS: 0.0 is finite
+Stack: [ ]
+PASS: -1.5 is finite
+Stack: [ ]
+PASS: nan is not finite
+Stack: [ ]
+PASS: inf is not finite
+Stack: [ ]
+PASS: -inf is not finite
+Stack: [ ]
+PASS: fixnum is not finite (not a float)
+Stack: [ ]
+=== >float from fixnum ===
+Stack: [ ]
+PASS: 42 >float
+Stack: [ ]
+PASS: 0 >float
+Stack: [ ]
+PASS: -7 >float
+Stack: [ ]
+PASS: >float produces float type
+Stack: [ ]
+=== >float from string ===
+Stack: [ ]
+PASS: >float from decimal string
+Stack: [ ]
+PASS: >float from scientific string
+Stack: [ ]
+PASS: >float from negative string
+Stack: [ ]
+PASS: >float from integer string
+Stack: [ ]
+=== >float from float (no-op) ===
+Stack: [ ]
+PASS: >float from float passthrough
+Stack: [ ]
+=== >float error on non-numeric string ===
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
+=== >integer from float ===
+Stack: [ ]
+PASS: 3.7 truncated to 3
+Stack: [ ]
+PASS: -3.7 truncated to -3
+Stack: [ ]
+PASS: 5.0 to 5
+Stack: [ ]
+PASS: 0.0 to 0
+Stack: [ ]
+PASS: -0.0 to 0
+Stack: [ ]
+PASS: 0.9 truncated to 0
+Stack: [ ]
+PASS: -0.9 truncated to 0
+Stack: [ ]
+PASS: >integer produces fixnum type
+Stack: [ ]
+=== >integer from fixnum (no-op) ===
+Stack: [ ]
+PASS: >integer from fixnum passthrough
+Stack: [ ]
+=== >integer error on NaN ===
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
+=== >integer error on infinity ===
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
