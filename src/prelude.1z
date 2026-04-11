@@ -473,6 +473,17 @@ print-line: ( str -- ) [ print "\n" print flush ] ;
 eprint: ( str -- ) [ error-stream get swap stream-write-string drop ] ;
 \\ Write a string followed by a newline to the current error stream.
 eprint-line: ( str -- ) [ eprint "\n" eprint ] ;
+\\ Print a labeled debug snapshot of the current stack to stderr, preserving the label.
+trace-stack: ( label -- label ) [
+  dup [ native.stack-snapshot ] dip
+  [ swap [ ": " #append ] dip #append ] 2keep
+  swap <rot- eprint-line drop
+] ;
+\\ Print a labeled inspected value to stderr, preserving both inputs.
+trace-value: ( x label -- x label ) [
+  [ swap inspect swap ": " #append swap #append ] 2keep
+  <rot- eprint-line
+] ;
 
 \\ Write a Unicode code point as a character.
 emit: ( codepoint -- ) [ >char print ] ;

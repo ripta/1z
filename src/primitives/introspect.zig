@@ -29,6 +29,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "defined?", .func = nativeDefined },
     .{ .name = "locally-defined?", .func = nativeLocallyDefined },
     .{ .name = "scope-frames", .func = nativeScopeFrames },
+    .{ .name = "stack-snapshot", .func = nativeStackSnapshot },
     .{ .name = "type-descriptor", .func = nativeTypeDescriptor },
     .{ .name = "type-generated-words", .func = nativeTypeGeneratedWords },
     .{ .name = "type-info-string", .func = nativeTypeInfoString },
@@ -614,6 +615,15 @@ fn nativeScopeFrames(ctx: *Context) anyerror!void {
     }
 
     try ctx.stack.push(.{ .array = results.items });
+}
+
+/// stack-snapshot ( -- string ) - Return a debug snapshot of the current data stack.
+fn nativeStackSnapshot(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    var buf = std.ArrayList(u8){};
+    defer buf.deinit(alloc);
+    try ctx.stack.dump(buf.writer(alloc));
+    try ctx.stack.push(.{ .string = try buf.toOwnedSlice(alloc) });
 }
 
 fn buildFrameHash(

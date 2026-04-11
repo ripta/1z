@@ -1,0 +1,11 @@
+=== trace helpers ===
+Stack: [ ]
+Stack: [ 1 42 "answer" ]
+Stack: [ 1 42 ]
+PASS: trace-value preserves top value
+Stack: [ 1 ]
+PASS: trace-value preserves lower stack
+Stack: [ ]
+Stack: [ "stack" "stack" ]
+PASS: trace-stack preserves label
+Stack: [ "stack" ]

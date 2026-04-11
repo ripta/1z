@@ -1,0 +1,11 @@
+use "testing" ;
+
+"trace helpers" test-section
+
+1 42 "answer" trace-value
+drop
+42 "trace-value preserves top value" assert=
+1 "trace-value preserves lower stack" assert=
+
+"stack" trace-stack
+"stack" "trace-stack preserves label" assert=
