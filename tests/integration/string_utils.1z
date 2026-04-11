@@ -1,0 +1,74 @@
+\ Integration tests for whitespace?, ltrim, rtrim, trim
+
+use "testing" ;
+use "strings" ;
+
+"whitespace? true cases" test-section
+" " whitespace? "space is whitespace" assert-true
+"\t" whitespace? "tab is whitespace" assert-true
+"\n" whitespace? "newline is whitespace" assert-true
+"\r" whitespace? "CR is whitespace" assert-true
+
+"whitespace? false cases" test-section
+"a" whitespace? "letter is not whitespace" assert-false
+"0" whitespace? "digit is not whitespace" assert-false
+"." whitespace? "period is not whitespace" assert-false
+
+"ltrim" test-section
+"  hello" ltrim "hello" "ltrim leading spaces" assert=
+"\thello" ltrim "hello" "ltrim leading tab" assert=
+" \t\nhello" ltrim "hello" "ltrim mixed whitespace" assert=
+"hello" ltrim "hello" "ltrim no whitespace" assert=
+"   " ltrim "" "ltrim all whitespace" assert=
+"" ltrim "" "ltrim empty string" assert=
+"hello   " ltrim "hello   " "ltrim preserves trailing" assert=
+
+"rtrim" test-section
+"hello  " rtrim "hello" "rtrim trailing spaces" assert=
+"hello\t" rtrim "hello" "rtrim trailing tab" assert=
+"hello\n\t " rtrim "hello" "rtrim mixed whitespace" assert=
+"hello" rtrim "hello" "rtrim no whitespace" assert=
+"   " rtrim "" "rtrim all whitespace" assert=
+"" rtrim "" "rtrim empty string" assert=
+"   hello" rtrim "   hello" "rtrim preserves leading" assert=
+
+"trim" test-section
+"  hello  " trim "hello" "trim both sides" assert=
+"  hello" trim "hello" "trim left only" assert=
+"hello  " trim "hello" "trim right only" assert=
+"hello" trim "hello" "trim no whitespace" assert=
+"   " trim "" "trim all whitespace" assert=
+"" trim "" "trim empty string" assert=
+"\t hello \n" trim "hello" "trim mixed whitespace both sides" assert=
+
+"unicode preservation" test-section
+"  cafe\u0301  " trim "cafe\u0301" "trim preserves combining accent" assert=
+
+"string #slice empty range" test-section
+"hello" 0 0 #slice "" "string slice 0 0" assert=
+"hello" 2 2 #slice "" "string slice middle empty" assert=
+"hello" 5 5 #slice "" "string slice end empty" assert=
+" " 1 1 #slice "" "string slice single-char end" assert=
+
+"split-once? found" test-section
+"hello,world" "," split-once? unwrap-or-throw
+dup #first "hello" "split-once? before" assert=
+#last "world" "split-once? after" assert=
+
+"a::b::c" "::" split-once? unwrap-or-throw
+dup #first "a" "split-once? multi-char delim before" assert=
+#last "b::c" "split-once? multi-char delim after" assert=
+
+",hello" "," split-once? unwrap-or-throw
+dup #first "" "split-once? delim at start before" assert=
+#last "hello" "split-once? delim at start after" assert=
+
+"hello," "," split-once? unwrap-or-throw
+dup #first "hello" "split-once? delim at end before" assert=
+#last "" "split-once? delim at end after" assert=
+
+"split-once? not found" test-section
+"hello" "," split-once? option:none? "split-once? no match is none" assert-true
+"" "," split-once? option:none? "split-once? empty string is none" assert-true
+
+"All string utility tests complete!" print-line

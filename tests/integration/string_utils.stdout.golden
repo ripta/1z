@@ -1,0 +1,110 @@
+=== whitespace? true cases ===
+Stack: [ ]
+PASS: space is whitespace
+Stack: [ ]
+PASS: tab is whitespace
+Stack: [ ]
+PASS: newline is whitespace
+Stack: [ ]
+PASS: CR is whitespace
+Stack: [ ]
+=== whitespace? false cases ===
+Stack: [ ]
+PASS: letter is not whitespace
+Stack: [ ]
+PASS: digit is not whitespace
+Stack: [ ]
+PASS: period is not whitespace
+Stack: [ ]
+=== ltrim ===
+Stack: [ ]
+PASS: ltrim leading spaces
+Stack: [ ]
+PASS: ltrim leading tab
+Stack: [ ]
+PASS: ltrim mixed whitespace
+Stack: [ ]
+PASS: ltrim no whitespace
+Stack: [ ]
+PASS: ltrim all whitespace
+Stack: [ ]
+PASS: ltrim empty string
+Stack: [ ]
+PASS: ltrim preserves trailing
+Stack: [ ]
+=== rtrim ===
+Stack: [ ]
+PASS: rtrim trailing spaces
+Stack: [ ]
+PASS: rtrim trailing tab
+Stack: [ ]
+PASS: rtrim mixed whitespace
+Stack: [ ]
+PASS: rtrim no whitespace
+Stack: [ ]
+PASS: rtrim all whitespace
+Stack: [ ]
+PASS: rtrim empty string
+Stack: [ ]
+PASS: rtrim preserves leading
+Stack: [ ]
+=== trim ===
+Stack: [ ]
+PASS: trim both sides
+Stack: [ ]
+PASS: trim left only
+Stack: [ ]
+PASS: trim right only
+Stack: [ ]
+PASS: trim no whitespace
+Stack: [ ]
+PASS: trim all whitespace
+Stack: [ ]
+PASS: trim empty string
+Stack: [ ]
+PASS: trim mixed whitespace both sides
+Stack: [ ]
+=== unicode preservation ===
+Stack: [ ]
+PASS: trim preserves combining accent
+Stack: [ ]
+=== string #slice empty range ===
+Stack: [ ]
+PASS: string slice 0 0
+Stack: [ ]
+PASS: string slice middle empty
+Stack: [ ]
+PASS: string slice end empty
+Stack: [ ]
+PASS: string slice single-char end
+Stack: [ ]
+=== split-once? found ===
+Stack: [ ]
+Stack: [ { "hello" "world" } ]
+PASS: split-once? before
+Stack: [ { "hello" "world" } ]
+PASS: split-once? after
+Stack: [ ]
+Stack: [ { "a" "b::c" } ]
+PASS: split-once? multi-char delim before
+Stack: [ { "a" "b::c" } ]
+PASS: split-once? multi-char delim after
+Stack: [ ]
+Stack: [ { "" "hello" } ]
+PASS: split-once? delim at start before
+Stack: [ { "" "hello" } ]
+PASS: split-once? delim at start after
+Stack: [ ]
+Stack: [ { "hello" "" } ]
+PASS: split-once? delim at end before
+Stack: [ { "hello" "" } ]
+PASS: split-once? delim at end after
+Stack: [ ]
+=== split-once? not found ===
+Stack: [ ]
+PASS: split-once? no match is none
+Stack: [ ]
+PASS: split-once? empty string is none
+Stack: [ ]
+All string utility tests complete!
+Stack: [ ]

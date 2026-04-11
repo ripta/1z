@@ -108,3 +108,43 @@ repeat: ( str n -- str ) [
     swap drop    \ result
   ] if
 ] ;
+
+\\ True if a single character is ASCII whitespace (space, tab, newline, CR).
+whitespace?: ( char -- ? ) [
+  >codepoint
+  dup 32 = over 9 = or over 10 = or swap 13 = or
+] ;
+
+\\ Remove leading ASCII whitespace.
+ltrim: ( str -- str ) [
+  dup #empty? not
+  [ dup #first whitespace? [ 1 #drop ltrim ] when ]
+  when
+] ;
+
+\\ Remove trailing ASCII whitespace.
+rtrim: ( str -- str ) [
+  dup #empty? not
+  [ dup #last whitespace?
+    [ dup #len 1 - #take rtrim ] when
+  ] when
+] ;
+
+\\ Remove leading and trailing ASCII whitespace.
+trim: ( str -- str ) [ ltrim rtrim ] ;
+
+\\ Split on first occurrence of delimiter. Returns some of { before after } or none.
+split-once?: ( str delim -- option ) [
+  2dup #index-of dup not
+  [ 3drop option:none ]
+  [
+    -rot> #len <rot-     \ str dlen idx
+    2 pick-n over #take  \ str dlen idx before
+    [ + ] dip            \ str after-start before
+    [ #drop ] dip        \ after before
+    swap
+    [ 1array ] dip 1array #append
+    >option:some
+  ]
+  if
+] ;
