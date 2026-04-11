@@ -515,9 +515,11 @@ pub const primitives = [_]Primitive{
     .{ .name = "#last", .stack_effect = "seq -- elem", .doc = "Get last element of sequence.", .func = nativeLast, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     // Sequence transformations
     .{ .name = "#each", .stack_effect = "seq quot: ( elem -- ) --", .doc = "Execute quotation for each element of sequence.", .func = nativeEach },
+    .{ .name = "#each-index", .stack_effect = "seq quot: ( elem idx -- ) --", .doc = "Execute quotation for each element of sequence with its zero-based index.", .func = nativeEachIndex },
     .{ .name = "#map", .stack_effect = "seq quot: ( elem -- elem' ) -- seq'", .doc = "Transform each element of sequence using quotation.", .func = nativeMap },
     .{ .name = "#filter", .stack_effect = "seq quot: ( elem -- ? ) -- seq'", .doc = "Keep elements where quotation returns true.", .func = nativeFilter },
     .{ .name = "#reduce", .stack_effect = "seq init quot: ( acc elem -- acc' ) -- value", .doc = "Fold sequence with accumulator.", .func = nativeReduce },
+    .{ .name = "#reduce-index", .stack_effect = "seq init quot: ( acc elem idx -- acc' ) -- value", .doc = "Fold sequence with accumulator and zero-based index.", .func = nativeReduceIndex },
     .{ .name = "#slice", .stack_effect = "seq start end -- subseq", .doc = "Extract subsequence from start (inclusive) to end (exclusive).", .func = nativeSlice },
     .{ .name = "#take", .stack_effect = "seq n -- seq'", .doc = "Take first n elements of sequence.", .func = nativeTake },
     .{ .name = "#drop", .stack_effect = "seq n -- seq'", .doc = "Drop first n elements of sequence.", .func = nativeDrop },
@@ -702,6 +704,36 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
     }
 }
 
+/// #each-index ( seq quot -- ) - Execute quotation for each element with zero-based index
+pub fn nativeEachIndex(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    const raw_seq = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+    const seq = unwrapBaseType(raw_seq);
+    var idx: i64 = 0;
+
+    if (seq == .iterator) {
+        while (try seq.iterator.next(ctx)) |elem| {
+            try ctx.stack.push(elem);
+            try ctx.stack.push(.{ .fixnum = idx });
+            try ctx.executeQuotationWithFrame(quot);
+            idx += 1;
+        }
+        return;
+    }
+
+    var iter = SequenceIterator.init(seq, alloc) orelse {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(raw_seq)});
+        return error.TypeMismatch;
+    };
+    while (try iter.next()) |elem| {
+        try ctx.stack.push(elem);
+        try ctx.stack.push(.{ .fixnum = idx });
+        try ctx.executeQuotationWithFrame(quot);
+        idx += 1;
+    }
+}
+
 /// #map ( seq quot -- iterator ) - Lazily transform each element of sequence
 ///
 /// Always returns a lazy iterator, regardless of input type. Use #collect
@@ -774,6 +806,43 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
         try ctx.stack.push(elem);
         try ctx.executeQuotationWithFrame(quot);
         acc = try ctx.stack.pop();
+    }
+    try ctx.stack.push(acc);
+}
+
+/// #reduce-index ( seq init quot -- result ) - Fold sequence with accumulator and zero-based index
+pub fn nativeReduceIndex(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    var acc = try ctx.stack.pop();
+    const raw_seq = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+    const seq = unwrapBaseType(raw_seq);
+    var idx: i64 = 0;
+
+    if (seq == .iterator) {
+        while (try seq.iterator.next(ctx)) |elem| {
+            try ctx.stack.push(acc);
+            try ctx.stack.push(elem);
+            try ctx.stack.push(.{ .fixnum = idx });
+            try ctx.executeQuotationWithFrame(quot);
+            acc = try ctx.stack.pop();
+            idx += 1;
+        }
+        try ctx.stack.push(acc);
+        return;
+    }
+
+    var iter = SequenceIterator.init(seq, alloc) orelse {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(raw_seq)});
+        return error.TypeMismatch;
+    };
+    while (try iter.next()) |elem| {
+        try ctx.stack.push(acc);
+        try ctx.stack.push(elem);
+        try ctx.stack.push(.{ .fixnum = idx });
+        try ctx.executeQuotationWithFrame(quot);
+        acc = try ctx.stack.pop();
+        idx += 1;
     }
     try ctx.stack.push(acc);
 }
@@ -2022,6 +2091,8 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "bytes-alloc", .func = nativeBytesAlloc },
     .{ .name = "#shrink!", .func = nativeShrinkMut },
     .{ .name = "#grow!", .func = nativeGrowMut },
+    .{ .name = "each-index", .func = nativeEachIndex },
+    .{ .name = "reduce-index", .func = nativeReduceIndex },
 };
 
 /// bytes-alloc ( n -- byte-array ) - Create a fresh zero-filled byte array of size n.

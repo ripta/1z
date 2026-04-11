@@ -56,6 +56,17 @@ Stack: [ ]
 Stack: [ ]
 PASS: array #reduce min
 Stack: [ ]
+=== #reduce-index ===
+Stack: [ ]
+Stack: [ 99 ]
+PASS: #reduce-index empty returns init
+Stack: [ ]
+Stack: [ 63 ]
+PASS: #reduce-index uses element and index
+Stack: [ ]
+Stack: [ 15 ]
+PASS: #reduce-index single element
+Stack: [ ]
 === #each ===
 Stack: [ ]
 PASS: array #each accumulate
@@ -63,6 +74,13 @@ Stack: [ ]
 PASS: empty array #each
 Stack: [ ]
 PASS: string #each count
+Stack: [ ]
+=== #each-index ===
+Stack: [ ]
+{ "x" 0 }
+{ "y" 1 }
+{ "z" 2 }
+Stack: [ ]
 Stack: [ ]
 === Combined operations ===
 Stack: [ ]

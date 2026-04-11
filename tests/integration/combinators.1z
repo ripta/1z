@@ -38,10 +38,26 @@ max: ( a b -- max ) [ over over > [ drop ] [ swap drop ] if ] ;
 min: ( a b -- min ) [ over over < [ drop ] [ swap drop ] if ] ;
 { 3 7 2 9 1 } 999 [ min ] #reduce 1 "array #reduce min" assert=
 
+"#reduce-index" test-section
+
+{ } 99 [ 2drop ] #reduce-index
+99 "#reduce-index empty returns init" assert=
+
+{ 10 20 30 } 0 [ + + ] #reduce-index
+63 "#reduce-index uses element and index" assert=
+
+{ 5 } 10 [ + + ] #reduce-index
+15 "#reduce-index single element" assert=
+
 "#each" test-section
 0 { 10 20 30 } [ + ] #each 60 "array #each accumulate" assert=
 5 { } [ + ] #each 5 "empty array #each" assert=
 0 "abc" [ drop 1 + ] #each 3 "string #each count" assert=
+
+"#each-index" test-section
+
+{ "x" "y" "z" } [ 2 array-n inspect print-line ] #each-index
+{ } [ 2 array-n inspect print-line ] #each-index
 
 "Combined operations" test-section
 { 1 2 3 4 5 } [ 2 * ] #map [ 5 > ] #filter #count 3 "map then filter length" assert=
