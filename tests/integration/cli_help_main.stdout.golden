@@ -6,6 +6,7 @@ Subcommands:
   check <file>           Run static analysis without executing
   repl                   Start the interactive REPL (default)
   fmt [files...]         Format 1z source files
+  lint [files...]        Check code style and conventions
   build <file>           Compile a 1z file to a native executable
   version                Print version and exit
 

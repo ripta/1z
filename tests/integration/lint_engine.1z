@@ -1,0 +1,69 @@
+use "testing" ;
+use "lint" ;
+
+"rule registration" test-section
+
+lint-rules #len 0 "no rules initially" assert=
+
+"test-rule" warning: [ drop drop drop drop { } ] f make-lint-rule
+register-lint-rule
+
+lint-rules #len 1 "one rule registered" assert=
+
+"second-rule" info: [ drop drop drop drop { } ] f make-lint-rule
+register-lint-rule
+
+lint-rules #len 2 "two rules registered" assert=
+
+"line index" test-section
+
+"abc\ndef\nghi" (build-line-index)
+dup #len 2 "two newlines" assert=
+dup 0 (pos>line-col) 1 "pos 0 col" assert= 1 "pos 0 line" assert=
+dup 2 (pos>line-col) 3 "pos 2 col" assert= 1 "pos 2 line" assert=
+dup 4 (pos>line-col) 1 "pos 4 col" assert= 2 "pos 4 line" assert=
+8 (pos>line-col) 1 "pos 8 col" assert= 3 "pos 8 line" assert=
+
+"" (build-line-index) #len 0 "empty source" assert=
+"hello" (build-line-index) #len 0 "single line" assert=
+
+"format-diagnostic" test-section
+
+"my-rule" warning: "test.1z" 5 12 "bad style" make-lint-diagnostic
+format-diagnostic
+"test.1z:5:12: warning: [my-rule] bad style" "warning format" assert=
+
+"my-rule" info: "lib/foo.1z" 1 1 "info msg" make-lint-diagnostic
+format-diagnostic
+"lib/foo.1z:1:1: info: [my-rule] info msg" "info format" assert=
+
+"make-diag helper" test-section
+
+"abc\ndef\nghi" (build-line-index)
+"test-rule" warning: "file.1z" 3 pick-n 4 "found issue" (make-diag)
+dup line>> 2 "diag line" assert=
+dup column>> 1 "diag col" assert=
+dup file>> "file.1z" "diag file" assert=
+dup rule-id>> "test-rule" "diag rule-id" assert=
+message>> "found issue" "diag message" assert=
+drop
+
+"run-lint on clean file" test-section
+
+{ "tests/fixtures/lint/clean.1z" } run-lint
+t "clean file has no findings" assert=
+
+"run-lint with findings" test-section
+
+\ Register a rule that always produces one diagnostic
+"always-fires" warning: [
+  \ ( path source tokens line-index -- diagnostics )
+  drop drop drop
+  \ stack: path
+  [ "always-fires" warning: ] dip 1 1 "always fires" make-lint-diagnostic
+  1array
+] f make-lint-rule
+register-lint-rule
+
+{ "tests/fixtures/lint/clean.1z" } run-lint
+f "findings present" assert=

@@ -1,0 +1,29 @@
+=== rule registration ===
+PASS: no rules initially
+PASS: one rule registered
+PASS: two rules registered
+=== line index ===
+PASS: two newlines
+PASS: pos 0 col
+PASS: pos 0 line
+PASS: pos 2 col
+PASS: pos 2 line
+PASS: pos 4 col
+PASS: pos 4 line
+PASS: pos 8 col
+PASS: pos 8 line
+PASS: empty source
+PASS: single line
+=== format-diagnostic ===
+PASS: warning format
+PASS: info format
+=== make-diag helper ===
+PASS: diag line
+PASS: diag col
+PASS: diag file
+PASS: diag rule-id
+PASS: diag message
+=== run-lint on clean file ===
+PASS: clean file has no findings
+=== run-lint with findings ===
+PASS: findings present

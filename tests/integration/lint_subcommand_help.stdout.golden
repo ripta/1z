@@ -1,0 +1,14 @@
+Usage: 1z lint [options] <file|dir...>
+
+Check code style and conventions.
+
+Exit codes:
+  0   No findings
+  1   Lint findings present
+  2   Invocation error
+
+Global options:
+  --max-memory=SIZE         Set memory limit (e.g. 128M, 1G; default 256M)
+  --load-path=PATH          Add a module search path (repeatable)
+  --stdlib-path=PATH        Override standard library path
+  --prelude=PATH            Override prelude file path

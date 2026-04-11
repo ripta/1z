@@ -1,0 +1,260 @@
+\ lib/lint.1z - Lint engine for 1z source code
+\
+\ Provides rule registration, per-file token-level analysis,
+\ diagnostic collection, and output formatting.
+\
+\ Usage:
+\   use "lint" ;
+\   "my-rule" warning: [ check-quot ] f make-lint-rule register-lint-rule
+\   command-line-args run-lint
+
+use "scanner" ;
+use "lexer" ;
+use "1z-tokens" ;
+use "os/fs" ;
+use "ranges" ;
+
+\ --- Struct definitions ---
+
+\\ A lint rule: id (string), severity (symbol), check (quotation), fix (reserved).
+\\ The check quotation has signature: ( path source tokens line-index -- diagnostics )
+\\ It returns an array of lint-diagnostic structs (possibly empty).
+lint-rule: struct{ id severity check fix } ;
+
+\\ A lint diagnostic produced by a rule check.
+lint-diagnostic: struct{ rule-id severity file line column message } ;
+
+\ --- Rule registry (module-scoped mutable storage) ---
+
+(lint-registry-storage): ( -- mmap ) parse-time [ [ rules: { } ] make-mutable-map ] ;
+(lint-registry): ( -- mmap ) [ (lint-registry-storage) ] ;
+
+\\ Return the array of registered lint rules.
+lint-rules: ( -- array ) [ (lint-registry) rules: @get ] ;
+
+\\ Register a lint rule for use by run-lint.
+register-lint-rule: ( lint-rule -- ) [
+  \ stack: rule
+  (lint-registry) dup rules: @get
+  \ stack: rule registry old-rules
+  <rot- 1array #append
+  \ stack: registry new-rules
+  rules: swap @set! drop
+] ;
+
+\ --- Line index computation ---
+
+(lf-string): ( -- str ) [ 10 >char ] ;
+
+\\ Build an array of newline character positions from a source string.
+\\ Used to convert character offsets to line:column.
+(build-line-index): ( source -- array ) [
+  dup #len 0 = [ drop V{ } ] [
+    V{ }
+    over #len 0 swap 1 - <range> >iterator [
+      2 pick-n over #nth (lf-string) = [
+        over swap #push!
+      ] when
+      drop
+    ] #each
+    nip
+  ] if
+] ;
+
+\\ Convert a 0-based character offset to 1-based line and column numbers.
+\\ line-index is the array of newline positions from (build-line-index).
+(pos>line-col): ( line-index pos -- line column ) [
+  \ Filter to newlines that occur strictly before pos.
+  swap over [ < ] curry #filter #collect
+  \ stack: pos newlines-before
+  dup #len ++ swap
+  \ stack: pos line newlines-before
+  dup #len 0 = [
+    \ No newlines before pos: column = pos + 1
+    \ stack: pos line { }
+    drop swap ++
+  ] [
+    \ Column = pos - last-newline-pos
+    \ stack: pos line newlines-before
+    #last [ swap ] dip -
+  ] if
+] ;
+
+\ --- Diagnostic construction helper ---
+
+\\ Create a lint-diagnostic from rule metadata and a token position.
+\\ Converts pos to line:column using the line-index, then constructs
+\\ the lint-diagnostic struct.
+(make-diag): ( rule-id severity path line-index pos message -- lint-diagnostic ) [
+  \ Save message, compute line:col from line-index and pos
+  [ (pos>line-col) ] dip
+  \ stack: rule-id severity path line column message
+  make-lint-diagnostic
+] ;
+
+\ --- File reading ---
+
+(read-file): ( path -- contents ) [
+  read: stream-open dup stream-read-all swap stream-close bytes>
+] ;
+
+\ --- Pragma suppression parsing ---
+
+\ Scan a materialized token array for pragma{ lint-suppress: { rule1 rule2 ... } }.
+\ Returns an array of suppressed rule ID strings, or f if no suppression found.
+\
+\ Looks for the three-token prefix pragma{ lint-suppress: { in the
+\ significant (non-whitespace, non-newline) tokens, then collects
+\ word values until the first close-brace.
+(parse-suppressions): ( tokens -- suppressions-or-f ) [
+  \ Filter to significant tokens
+  [ kind>> dup whitespace: = swap newline: = or not ] #filter #collect
+  (find-suppress-prefix)
+] ;
+
+\ Check if a token matches kind and value.
+(tok-match?): ( token kind value -- bool ) [
+  \ stack: token kind value
+  swap 2 pick-n kind>> =
+  \ stack: token value kind-match?
+  [ swap value>> = ] dip and
+] ;
+
+\ Find the lint-suppress pragma prefix in a significant-token array.
+\ Scans for pragma{ lint-suppress: { anywhere in the token stream,
+\ then collects word values until close-brace.
+(find-suppress-prefix): ( sig-tokens -- suppressions-or-f ) [
+  dup #len 4 < [ drop f ] [
+    \ Find index of pragma{ token with value "pragma{"
+    f  \ result
+    over #len 2 - 0 swap <range> >iterator [
+      \ stack: sig-tokens result i
+      over f = [
+        \ result is still f: check this position
+        2 pick-n over #nth open-brace: "pragma{" (tok-match?)
+        [
+          2 pick-n over ++ #nth symbol: "lint-suppress:" (tok-match?)
+          [
+            2 pick-n over 2 + #nth open-brace: "{" (tok-match?)
+            [
+              \ Found: collect from i+3 until close-brace
+              2 pick-n swap 3 + #drop
+              \ stack: sig-tokens result remaining-sig-tokens
+              { } swap
+              [
+                dup #len 0 > [
+                  dup 0 #nth kind>> close-brace: = [
+                    drop f
+                  ] [
+                    dup 0 #nth value>> [ 1array #append ] dip
+                    1 #drop t
+                  ] if
+                ] [ f ] if
+              ] loop
+              drop
+              \ stack: sig-tokens old-result collected-rules
+              nip
+            ] when
+          ] when
+        ] when
+        drop
+      ] [ drop ] if
+    ] #each
+    nip
+  ] if
+] ;
+
+\\ Check whether a rule ID is in the suppression list.
+(suppressed?): ( rule-id suppressions -- bool ) [
+  dup f = [
+    2drop f
+  ] [
+    swap [ = ] curry #any
+  ] if
+] ;
+
+\ --- Per-file analysis ---
+
+\\ Lint a single file against all given rules.
+\\ Returns an array of lint-diagnostic structs.
+(lint-file): ( path rules -- diagnostics ) [
+  swap dup (read-file)
+  \ stack: rules path source
+  dup 1z-tokenize #collect
+  \ stack: rules path source tokens
+  dup (parse-suppressions)
+  \ stack: rules path source tokens suppressions
+  3 pick-n (build-line-index)
+  \ stack: rules path source tokens suppressions line-index
+
+  \ Iterate rules, accumulate diagnostics.
+  \ The stack holds file context; we iterate the rules array.
+  \ stack: rules path source tokens suppressions line-index
+  { }
+  \ stack: rules path source tokens suppressions line-index results
+  6 pick-n [
+    \ stack: rules path source tokens suppressions line-index results rule
+    dup id>> 4 pick-n (suppressed?) [
+      drop
+    ] [
+      \ Run the rule check: ( path source tokens line-index -- diags )
+      \ depth: rule(0) results(1) line-index(2) suppressions(3)
+      \         tokens(4) source(5) path(6) rules(7)
+      6 pick-n 6 pick-n 6 pick-n 5 pick-n
+      \ stack: ... results rule path source tokens line-index
+      4 pick-n check>> call
+      \ stack: ... results rule diags
+      [ drop ] dip #append
+    ] if
+  ] #each
+  \ stack: rules path source tokens suppressions line-index results
+  [ drop drop drop drop drop drop ] dip
+] ;
+
+\ --- Output formatting ---
+
+\\ Format a lint diagnostic as "file:line:col: severity: [rule-id] message".
+format-diagnostic: ( lint-diagnostic -- string ) [
+  dup file>>
+  ":" #append over line>> >string #append
+  ":" #append over column>> >string #append
+  ": " #append over severity>> >string #append
+  ": [" #append over rule-id>> #append
+  "] " #append swap message>> #append
+] ;
+
+\ --- Main entry point ---
+
+\\ Run all registered lint rules against the given file list.
+\\ Prints diagnostics to stderr. Leaves t (clean) or f (findings) on stack.
+run-lint: ( files -- bool ) [
+  lint-rules dup #len 0 = [
+    \ No rules registered: everything is clean
+    2drop t
+  ] [
+    swap
+    \ stack: rules files
+    V{ }
+    swap [
+      \ stack: rules results file
+      dup file-exists? not [
+        "Error: file not found: " swap #append eprint-line
+        2 sys-exit
+      ] when
+      2 pick-n (lint-file)
+      \ stack: rules results file-diagnostics
+      #append
+    ] #each
+    nip
+
+    \ Sort by file, then line, then column
+    [ dup file>> swap dup line>> swap column>> 3 array-n ] #sort-by
+
+    dup #len 0 = [
+      drop t
+    ] [
+      [ format-diagnostic eprint-line ] #each
+      f
+    ] if
+  ] if
+] ;

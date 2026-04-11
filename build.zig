@@ -564,6 +564,7 @@ fn isSubcommandWord(line: []const u8) bool {
         std.mem.eql(u8, line, "repl") or
         std.mem.eql(u8, line, "version") or
         std.mem.eql(u8, line, "fmt") or
+        std.mem.eql(u8, line, "lint") or
         std.mem.eql(u8, line, "build");
 }
 

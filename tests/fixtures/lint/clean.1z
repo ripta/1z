@@ -1,0 +1,2 @@
+\ A clean 1z file with no lint issues.
+double: ( n -- n ) [ 2 * ] ;

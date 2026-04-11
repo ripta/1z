@@ -411,6 +411,7 @@ fn printUsage() void {
         \\  check <file>           Run static analysis without executing
         \\  repl                   Start the interactive REPL (default)
         \\  fmt [files...]         Format 1z source files
+        \\  lint [files...]        Check code style and conventions
         \\  build <file>           Compile a 1z file to a native executable
         \\  version                Print version and exit
         \\
@@ -529,6 +530,23 @@ fn printReplHelp() void {
     w.writeAll(global_flags_help) catch {};
     w.writeAll("\n\nExecution options:\n") catch {};
     w.writeAll(execution_flags_help) catch {};
+    w.writeAll("\n") catch {};
+    w.flush() catch {};
+}
+
+fn printLintHelp() void {
+    const stdout_file: File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
+    const w = &stdout.interface;
+    w.writeAll("Usage: 1z lint [options] <file|dir...>\n\n") catch {};
+    w.writeAll("Check code style and conventions.\n\n") catch {};
+    w.writeAll("Exit codes:\n") catch {};
+    w.writeAll("  0   No findings\n") catch {};
+    w.writeAll("  1   Lint findings present\n") catch {};
+    w.writeAll("  2   Invocation error\n\n") catch {};
+    w.writeAll("Global options:\n") catch {};
+    w.writeAll(global_flags_help) catch {};
     w.writeAll("\n") catch {};
     w.flush() catch {};
 }
@@ -797,6 +815,7 @@ pub fn main() u8 {
     if (std.mem.eql(u8, first, "check")) return handleCheck(gpa_allocator, args[2..]);
     if (std.mem.eql(u8, first, "repl")) return handleRepl(gpa_allocator, args[2..]);
     if (std.mem.eql(u8, first, "fmt")) return handleFmt(gpa_allocator, args[2..]);
+    if (std.mem.eql(u8, first, "lint")) return handleLint(gpa_allocator, args[2..]);
     if (std.mem.eql(u8, first, "build")) return handleBuild(gpa_allocator, args[2..]);
     if (std.mem.eql(u8, first, "version")) {
         printVersion();
@@ -1365,6 +1384,137 @@ fn formatDirectory(allocator: std.mem.Allocator, dir_path: []const u8, check_onl
     }
 
     return result;
+}
+
+fn handleLint(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
+    const stderr_file: File = .stderr();
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr = stderr_file.writerStreaming(&stderr_buf);
+    const err_writer = &stderr.interface;
+
+    if (hasHelpFlag(args)) {
+        printLintHelp();
+        return 0;
+    }
+
+    var global = GlobalFlags{};
+    defer global.deinit(base_allocator);
+
+    var paths: std.ArrayListUnmanaged([]const u8) = .{};
+    defer paths.deinit(base_allocator);
+
+    for (args) |arg| {
+        const g = parseGlobalFlag(arg, &global, base_allocator, err_writer) catch return 2;
+        if (g == .consumed) continue;
+        if (arg.len > 0 and arg[0] == '-') {
+            err_writer.print("Error: unknown flag '{s}'\n", .{arg}) catch {};
+            err_writer.flush() catch {};
+            return 2;
+        }
+        paths.append(base_allocator, arg) catch {
+            err_writer.writeAll("Error: out of memory\n") catch {};
+            err_writer.flush() catch {};
+            return 2;
+        };
+    }
+
+    if (!global.cli_set_max_memory) {
+        if (std.posix.getenv("ONEZ_MAX_MEMORY")) |env_val| {
+            if (memory_limit.parseSize(env_val)) |bytes| {
+                global.max_memory_bytes = bytes;
+            }
+        }
+    }
+
+    if (paths.items.len == 0) {
+        err_writer.writeAll("Usage: 1z lint [options] <file|dir...>\n") catch {};
+        err_writer.flush() catch {};
+        return 2;
+    }
+
+    // Resolve file paths: expand directories to .1z files
+    var resolved: std.ArrayListUnmanaged([]const u8) = .{};
+    defer {
+        for (resolved.items) |p| base_allocator.free(p);
+        resolved.deinit(base_allocator);
+    }
+
+    for (paths.items) |path| {
+        const stat = std.fs.cwd().statFile(path) catch |err| {
+            err_writer.print("Error: cannot access '{s}': {any}\n", .{ path, err }) catch {};
+            err_writer.flush() catch {};
+            return 2;
+        };
+
+        if (stat.kind == .directory) {
+            if (!collectLintFiles(base_allocator, path, &resolved, err_writer)) return 2;
+        } else {
+            const duped = base_allocator.dupe(u8, path) catch {
+                err_writer.writeAll("Error: out of memory\n") catch {};
+                err_writer.flush() catch {};
+                return 2;
+            };
+            resolved.append(base_allocator, duped) catch {
+                base_allocator.free(duped);
+                err_writer.writeAll("Error: out of memory\n") catch {};
+                err_writer.flush() catch {};
+                return 2;
+            };
+        }
+    }
+
+    if (resolved.items.len == 0) {
+        err_writer.writeAll("Error: no .1z files found\n") catch {};
+        err_writer.flush() catch {};
+        return 2;
+    }
+
+    // Set up execution context to run the 1z lint library
+    var exec = ExecutionFlags{};
+    const ec = ExecutionContext.init(base_allocator, &global, &exec, err_writer) catch return 2;
+    defer ec.deinit();
+
+    ec.ctx.program_args = resolved.items;
+
+    const code = "use \"lint\" ; command-line-args run-lint";
+    const result = runEval(&ec.ctx, code, false, false, err_writer);
+    ec.fireExitHooks(result);
+    return result;
+}
+
+fn collectLintFiles(allocator: std.mem.Allocator, dir_path: []const u8, list: *std.ArrayListUnmanaged([]const u8), err_writer: anytype) bool {
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+        err_writer.print("Error: cannot open directory '{s}': {any}\n", .{ dir_path, err }) catch {};
+        err_writer.flush() catch {};
+        return false;
+    };
+    defer dir.close();
+
+    var iter = dir.iterate();
+    while (iter.next() catch null) |entry| {
+        // Skip hidden entries
+        if (entry.name.len > 0 and entry.name[0] == '.') continue;
+
+        if (entry.kind == .directory) {
+            const sub_path = if (std.mem.eql(u8, dir_path, "."))
+                allocator.dupe(u8, entry.name) catch return false
+            else
+                std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name }) catch return false;
+            defer allocator.free(sub_path);
+            if (!collectLintFiles(allocator, sub_path, list, err_writer)) return false;
+        } else if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".1z")) {
+            const full_path = if (std.mem.eql(u8, dir_path, "."))
+                allocator.dupe(u8, entry.name) catch return false
+            else
+                std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name }) catch return false;
+            list.append(allocator, full_path) catch {
+                allocator.free(full_path);
+                return false;
+            };
+        }
+    }
+
+    return true;
 }
 
 fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
