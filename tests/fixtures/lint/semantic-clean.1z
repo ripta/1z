@@ -1,0 +1,5 @@
+\\ Add two numbers.
+my-add: ( a b -- c ) [ + ] ;
+
+\\ Double a number.
+my-double: ( n -- n ) [ 2 * ] ;

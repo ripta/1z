@@ -7,12 +7,12 @@ use "1z-tokens" ;
 
 lint-rules #len 0 "no rules initially" assert=
 
-"test-rule" warning: [ drop drop drop drop { } ] f make-lint-rule
+"test-rule" warning: [ drop drop drop drop drop { } ] f make-lint-rule
 register-lint-rule
 
 lint-rules #len 1 "one rule registered" assert=
 
-"second-rule" info: [ drop drop drop drop { } ] f make-lint-rule
+"second-rule" info: [ drop drop drop drop drop { } ] f make-lint-rule
 register-lint-rule
 
 lint-rules #len 2 "two rules registered" assert=
@@ -86,8 +86,8 @@ t "clean file has no findings" assert=
 
 \ Register a rule that always produces one diagnostic
 "always-fires" warning: [
-  \ ( path source tokens line-index -- diagnostics )
-  drop drop drop
+  \ ( path source tokens line-index semantic-context -- diagnostics )
+  drop drop drop drop
   \ stack: path
   [ "always-fires" warning: ] dip 1 1 "always fires" make-lint-diagnostic
   1array

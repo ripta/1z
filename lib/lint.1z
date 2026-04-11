@@ -1,7 +1,7 @@
 \ lib/lint.1z - Lint engine for 1z source code
 \
-\ Provides rule registration, per-file token-level analysis,
-\ diagnostic collection, and output formatting.
+\ Provides rule registration, per-file token-level and semantic
+\ analysis, diagnostic collection, and output formatting.
 \
 \ Usage:
 \   use "lint" ;
@@ -17,12 +17,17 @@ use "ranges" ;
 \ --- Struct definitions ---
 
 \\ A lint rule: id (string), severity (symbol), check (quotation), fix (reserved).
-\\ The check quotation has signature: ( path source tokens line-index -- diagnostics )
+\\ The check quotation has signature:
+\\   ( path source tokens line-index semantic-context -- diagnostics )
+\\ where semantic-context is a semantic-context struct or f if loading failed.
 \\ It returns an array of lint-diagnostic structs (possibly empty).
 lint-rule: struct{ id severity check fix } ;
 
 \\ A lint diagnostic produced by a rule check.
 lint-diagnostic: struct{ rule-id severity file line column message } ;
+
+\\ Semantic context: module loaded in check mode plus a hash of word-info structs.
+semantic-context: struct{ module word-infos } ;
 
 \ --- Rule registry (module-scoped mutable storage) ---
 
@@ -198,6 +203,47 @@ definition-symbol?: ( token -- ? ) [
   ] if
 ] ;
 
+\ --- Semantic analysis ---
+
+(lint-load-cache): ( -- mmap ) parse-time [ M{ } ] ;
+
+\\ Build a semantic context by loading a file in check mode.
+\\ Returns a semantic-context struct, or f if loading fails.
+(build-semantic-context): ( path -- semantic-context-or-f ) [
+  [ (lint-load-cache) swap native.load-check-file ] [ drop f ] recover
+  dup f = [ ] [
+    dup @keys
+    H{ }
+    swap [
+      \ stack: module hash word-name-symbol
+      >string
+      2 pick-n over >symbol native.>word (raw>word-info)
+      \ stack: module hash word-name-string word-info
+      \ @set ( assoc key value -- assoc' ): hash is already in position
+      @set
+      \ stack: module hash'
+    ] #each
+    \ stack: module word-infos-hash
+    make-semantic-context
+  ] if
+] ;
+
+\\ Look up a word-info by name from a semantic context. Returns word-info or f.
+semantic-word-info: ( semantic-context name -- word-info-or-f ) [
+  swap dup f = [ nip ] [
+    word-infos>> swap
+    \ stack: hash name
+    2dup @has? [
+      @get
+    ] [ 2drop f ] if
+  ] if
+] ;
+
+\\ Get all word names from a semantic context. Returns array or empty array.
+semantic-word-names: ( semantic-context -- array ) [
+  dup f = [ drop { } ] [ word-infos>> @keys ] if
+] ;
+
 \ --- Per-file analysis ---
 
 (lint-file): ( path rules -- diagnostics ) [
@@ -209,29 +255,28 @@ definition-symbol?: ( token -- ? ) [
   \ stack: rules path source tokens suppressions
   2 pick-n (build-line-index)
   \ stack: rules path source tokens suppressions line-index
+  4 pick-n (build-semantic-context)
+  \ stack: rules(6) path(5) source(4) tokens(3) suppressions(2) line-index(1) sem-ctx(0)
 
   \ Iterate rules, accumulate diagnostics.
   \ The stack holds file context; we iterate the rules array.
-  \ stack: rules path source tokens suppressions line-index
   { }
-  \ stack: rules path source tokens suppressions line-index results
-  6 pick-n [
-    \ stack: rules path source tokens suppressions line-index results rule
-    dup id>> 4 pick-n (suppressed?) [
+  \ stack: rules(7) path(6) source(5) tokens(4) suppressions(3) line-index(2) sem-ctx(1) results(0)
+  7 pick-n [
+    \ stack: rules(8) path(7) source(6) tokens(5) suppressions(4) line-index(3) sem-ctx(2) results(1) rule(0)
+    dup id>> 5 pick-n (suppressed?) [
       drop
     ] [
-      \ Run the rule check: ( path source tokens line-index -- diags )
-      \ depth: rule(0) results(1) line-index(2) suppressions(3)
-      \         tokens(4) source(5) path(6) rules(7)
-      6 pick-n 6 pick-n 6 pick-n 5 pick-n
-      \ stack: ... results rule path source tokens line-index
-      4 pick-n check>> call
+      \ Run the rule check: ( path source tokens line-index sem-ctx -- diags )
+      7 pick-n 7 pick-n 7 pick-n 6 pick-n 6 pick-n
+      \ stack: ... results rule path source tokens line-index sem-ctx
+      5 pick-n check>> call
       \ stack: ... results rule diags
       [ drop ] dip #append
     ] if
   ] #each
-  \ stack: rules path source tokens suppressions line-index results
-  [ drop drop drop drop drop drop ] dip
+  \ stack: rules path source tokens suppressions line-index sem-ctx results
+  [ drop drop drop drop drop drop drop ] dip
 ] ;
 
 \ --- Output formatting ---

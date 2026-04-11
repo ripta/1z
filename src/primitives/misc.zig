@@ -40,6 +40,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "import-history", .func = nativeImportHistory, .stack_effect = "-- array" },
     .{ .name = "parse-source-loc", .func = nativeParseSrcLoc, .stack_effect = "-- file line column" },
     .{ .name = "module-name", .func = nativeModuleName, .stack_effect = "module -- name" },
+    .{ .name = "load-check-file", .func = nativeLoadCheckFile, .stack_effect = "cache filename -- module", .capability = .io_fs },
 };
 
 fn nativeToModule(ctx: *Context) anyerror!void {
@@ -927,6 +928,42 @@ fn nativeLoadFile(ctx: *Context) anyerror!void {
         return error.FileNotFound;
     };
 
+    return nativeLoadImpl(ctx, cache, filename, alloc, resolved);
+}
+
+/// load-check-file ( cache filename -- module ) - Load a file in check mode (definitions only)
+///
+/// Resolves the filename relative to the current working directory (not
+/// current_source_dir). This is appropriate for linting, where paths come
+/// from the command line rather than from `use` statements.
+fn nativeLoadCheckFile(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const filename = try popString(ctx);
+    const cache_val = try ctx.stack.pop();
+    const cache: *value_mod.MutableMap = switch (cache_val) {
+        .mutable_map => |m| m,
+        else => {
+            helpers.setTypeMismatchError(ctx, "mutable-map", cache_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const resolved = std.fs.cwd().realpathAlloc(alloc, filename) catch {
+        const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
+        ctx.error_details.append(ctx.allocator, .{
+            .error_type = "file-not-found",
+            .message = msg,
+            .source = ctx.ownedCurrentSource(),
+            .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
+            .word_name = "load-check-file",
+        }) catch {};
+        return error.FileNotFound;
+    };
+
+    const prev_check_mode = ctx.check_mode;
+    ctx.check_mode = true;
+    defer ctx.check_mode = prev_check_mode;
     return nativeLoadImpl(ctx, cache, filename, alloc, resolved);
 }
 

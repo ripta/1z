@@ -1,0 +1,43 @@
+use "testing" ;
+use "lint" ;
+
+"semantic context" test-section
+
+\ Build context and verify it's not f
+"tests/fixtures/lint/semantic-clean.1z" (build-semantic-context)
+dup f = not t "build-semantic-context returns context" assert=
+
+\ Check word count
+dup semantic-word-names #len 2 "two words defined" assert=
+
+\ Look up my-add and verify fields
+dup "my-add" semantic-word-info dup f = not t "my-add found" assert=
+dup name>> "my-add" "my-add name" assert=
+dup stack-effect>> f = not t "my-add has stack effect" assert=
+dup doc>> "Add two numbers." "my-add doc" assert=
+source-loc>> dup f = not t "my-add has source-loc" assert=
+dup line>> 2 "my-add source line" assert=
+column>> 0 > t "my-add source column is positive" assert=
+
+\ Look up my-double
+dup "my-double" semantic-word-info name>> "my-double" "my-double name" assert=
+
+\ Missing word
+dup "nonexistent" semantic-word-info f "nonexistent returns f" assert=
+
+\ Done with semantic context
+drop
+
+"semantic context failure" test-section
+
+"tests/fixtures/lint/nonexistent-file.1z" (build-semantic-context)
+f "invalid file returns f" assert=
+
+f "my-add" semantic-word-info f "f context returns f" assert=
+
+f semantic-word-names #len 0 "f context returns empty" assert=
+
+"run-lint with semantic context" test-section
+
+{ "tests/fixtures/lint/semantic-clean.1z" } run-lint
+t "semantic-clean has no findings" assert=
