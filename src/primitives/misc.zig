@@ -307,6 +307,11 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
             .markers = word_def.markers,
             .source_module = word_def.source_module,
             .dispatch_id = word_def.dispatch_id,
+            .doc = word_def.doc,
+            .source_file = word_def.source_file,
+            .source_line = word_def.source_line,
+            .source_column = word_def.source_column,
+            .provenance = word_def.provenance,
             .action = switch (word_def.action) {
                 .compound => |instrs| .{ .compound = instrs },
                 .native => |func| .{ .native = func },
