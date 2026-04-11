@@ -17,7 +17,9 @@ const stack_effect_mod = @import("../stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
 
-const task_stack_size: usize = 512 * 1024;
+// Keep extra headroom so overflow handling can still unwind and materialize an
+// error object after detecting that a task exhausted its native stack.
+const task_stack_size: usize = 768 * 1024;
 
 const RegistryEntry = @import("types.zig").RegistryEntry;
 
