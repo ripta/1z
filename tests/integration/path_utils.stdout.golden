@@ -1,0 +1,152 @@
+=== basename basic ===
+Stack: [ ]
+PASS: basename file in dir
+Stack: [ ]
+PASS: basename no extension
+Stack: [ ]
+PASS: basename bare filename
+Stack: [ ]
+PASS: basename nested
+Stack: [ ]
+=== basename trailing slashes ===
+Stack: [ ]
+PASS: basename trailing slash
+Stack: [ ]
+PASS: basename multiple trailing slashes
+Stack: [ ]
+=== basename root and empty ===
+Stack: [ ]
+PASS: basename root
+Stack: [ ]
+PASS: basename empty
+Stack: [ ]
+PASS: basename all slashes
+Stack: [ ]
+=== dirname with file ===
+Stack: [ ]
+PASS: dirname file in dir
+Stack: [ ]
+PASS: dirname nested
+Stack: [ ]
+=== dirname bare filename ===
+Stack: [ ]
+PASS: dirname bare filename
+Stack: [ ]
+PASS: dirname bare name no ext
+Stack: [ ]
+=== dirname relative ===
+Stack: [ ]
+PASS: dirname relative path
+Stack: [ ]
+PASS: dirname relative nested
+Stack: [ ]
+=== dirname trailing slashes ===
+Stack: [ ]
+PASS: dirname trailing slash
+Stack: [ ]
+PASS: dirname multiple trailing slashes
+Stack: [ ]
+=== dirname root and empty ===
+Stack: [ ]
+PASS: dirname root
+Stack: [ ]
+PASS: dirname empty
+Stack: [ ]
+=== extension simple ===
+Stack: [ ]
+PASS: extension simple
+Stack: [ ]
+PASS: extension with path
+Stack: [ ]
+=== extension compound ===
+Stack: [ ]
+PASS: extension compound
+Stack: [ ]
+=== extension none ===
+Stack: [ ]
+PASS: extension none
+Stack: [ ]
+PASS: extension none with path
+Stack: [ ]
+=== extension dotfile ===
+Stack: [ ]
+PASS: extension dotfile
+Stack: [ ]
+=== extension dotfile with ext ===
+Stack: [ ]
+PASS: extension dotfile with ext
+Stack: [ ]
+=== extension trailing dot ===
+Stack: [ ]
+PASS: extension trailing dot
+Stack: [ ]
+=== normalize clean path ===
+Stack: [ ]
+PASS: normalize clean
+Stack: [ ]
+=== normalize dot segment ===
+Stack: [ ]
+PASS: normalize dot segment
+Stack: [ ]
+=== normalize dotdot ===
+Stack: [ ]
+PASS: normalize dotdot
+Stack: [ ]
+=== normalize mixed ===
+Stack: [ ]
+PASS: normalize mixed
+Stack: [ ]
+=== normalize repeated slashes ===
+Stack: [ ]
+PASS: normalize repeated slashes
+Stack: [ ]
+=== normalize traversal prevention ===
+Stack: [ ]
+PASS: normalize traversal prevention
+Stack: [ ]
+=== normalize partial escape ===
+Stack: [ ]
+PASS: normalize partial escape
+Stack: [ ]
+=== normalize relative clean ===
+Stack: [ ]
+PASS: normalize relative clean
+Stack: [ ]
+=== normalize relative dotdot ===
+Stack: [ ]
+PASS: normalize relative dotdot
+Stack: [ ]
+=== normalize dot ===
+Stack: [ ]
+PASS: normalize dot
+Stack: [ ]
+=== normalize empty ===
+Stack: [ ]
+PASS: normalize empty
+Stack: [ ]
+=== normalize root ===
+Stack: [ ]
+PASS: normalize root
+Stack: [ ]
+=== normalize relative escapes ===
+Stack: [ ]
+PASS: normalize relative escapes
+Stack: [ ]
+=== path-join simple ===
+Stack: [ ]
+PASS: path-join simple
+Stack: [ ]
+PASS: path-join nested rel
+Stack: [ ]
+=== path-join absolute rel replaces ===
+Stack: [ ]
+PASS: path-join absolute rel
+Stack: [ ]
+PASS: path-join absolute rel replaces
+Stack: [ ]
+=== path-join trailing slash on base ===
+Stack: [ ]
+PASS: path-join trailing slash on base
+Stack: [ ]
+All path utility tests complete!
+Stack: [ ]

@@ -1,0 +1,130 @@
+\ lib/path.1z - Path manipulation
+
+use "strings" ;
+use "sequences" ;
+
+\\ Recursively strip trailing slashes unless the string is entirely slashes.
+strip-trailing-slashes: ( path -- path ) [
+  dup #len 1 <=
+  [ ]
+  [ dup #last "/" =
+    [ dup #len 1 - #take strip-trailing-slashes ]
+    when
+  ]
+  if
+] ;
+
+\\ Extract the filename component from a path.
+\\ "/foo/bar.txt" -> "bar.txt", "/foo/bar/" -> "bar", "/" -> "/", "" -> ""
+basename: ( path -- name ) [
+  dup #empty?
+  [ ]
+  [
+    strip-trailing-slashes
+    "/" split #last
+    dup #empty? [ drop "/" ] when
+  ]
+  if
+] ;
+
+\\ Extract the directory component from a path.
+\\ "/foo/bar.txt" -> "/foo", "foo.txt" -> ".", "/" -> "/", "" -> "."
+dirname: ( path -- dir ) [
+  dup #empty?
+  [ drop "." ]
+  [
+    dup "/" =
+    [ ]
+    [
+      strip-trailing-slashes
+      "/" split
+      dup #len 1 <=
+      [ drop "." ]
+      [
+        dup #len 1 - #take
+        "/" #join
+        dup #empty? [ drop "/" ] when
+      ]
+      if
+    ]
+    if
+  ]
+  if
+] ;
+
+\\ Extract the file extension including the leading dot.
+\\ "bar.txt" -> ".txt", "foo.tar.gz" -> ".gz", "foo" -> "", ".hidden" -> ""
+extension: ( path -- ext ) [
+  basename
+  dup "/" = [ drop "" ] [
+    "." split
+    dup #len 1 <=
+    [ drop "" ]
+    [
+      dup #first #empty?
+      over #len 2 = and
+      [ drop "" ]
+      [ #last "." swap #append ]
+      if
+    ]
+    if
+  ]
+  if
+] ;
+
+\\ Join two path segments. If rel is absolute, it replaces base.
+\\ "/foo" "bar.txt" -> "/foo/bar.txt", "/foo" "/bar" -> "/bar"
+path-join: ( base rel -- path ) [
+  dup "/" #starts-with?
+  [ nip ]
+  [ swap strip-trailing-slashes "/" <rot- #append #append ]
+  if
+] ;
+
+\\ Process one segment during normalize's reduce.
+\\ The abs? flag is curried in by normalize.
+normalize-seg: ( acc seg abs? -- acc ) [
+  swap dup ".." =
+  [
+    drop
+    over #empty?
+    [
+      [ ]
+      [ drop { ".." } ]
+      if
+    ]
+    [
+      drop
+      dup #last ".." =
+      [ ".." #suffix ]
+      [ dup #len 1 - #take ]
+      if
+    ]
+    if
+  ]
+  [
+    swap drop #suffix
+  ]
+  if
+] ;
+
+\\ Resolve `.` and `..` segments, collapse repeated slashes.
+\\ Prevents directory traversal: `/../../../etc/passwd` -> `/etc/passwd`
+normalize: ( path -- path ) [
+  dup "/" #starts-with?  \ path abs?
+
+  \ Split and filter empty/dot segments
+  swap "/" split
+  [ dup #len 0 > swap "." /= and ] #filter #collect
+
+  \ Reduce with normalize-seg, currying in abs? flag
+  over [ normalize-seg ] curry  \ abs? segments quot
+  { } swap #reduce              \ abs? result-array
+
+  \ Reassemble
+  "/" #join  \ abs? joined
+  dup #empty?
+  [ drop [ "/" ] [ "." ] if ]
+  [ swap [ "/" swap #append ] when ]
+  if
+] ;

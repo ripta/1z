@@ -1,0 +1,111 @@
+\ Integration tests for lib/path.1z
+
+use "testing" ;
+use "path" ;
+
+"basename basic" test-section
+"/foo/bar.txt" basename "bar.txt" "basename file in dir" assert=
+"/foo/bar" basename "bar" "basename no extension" assert=
+"bar.txt" basename "bar.txt" "basename bare filename" assert=
+"/foo/bar/baz" basename "baz" "basename nested" assert=
+
+"basename trailing slashes" test-section
+"/foo/bar/" basename "bar" "basename trailing slash" assert=
+"/foo/bar///" basename "bar" "basename multiple trailing slashes" assert=
+
+"basename root and empty" test-section
+"/" basename "/" "basename root" assert=
+"" basename "" "basename empty" assert=
+"///" basename "/" "basename all slashes" assert=
+
+"dirname with file" test-section
+"/foo/bar.txt" dirname "/foo" "dirname file in dir" assert=
+"/foo/bar/baz" dirname "/foo/bar" "dirname nested" assert=
+
+"dirname bare filename" test-section
+"bar.txt" dirname "." "dirname bare filename" assert=
+"foo" dirname "." "dirname bare name no ext" assert=
+
+"dirname relative" test-section
+"foo/bar" dirname "foo" "dirname relative path" assert=
+"foo/bar/baz" dirname "foo/bar" "dirname relative nested" assert=
+
+"dirname trailing slashes" test-section
+"/foo/bar/" dirname "/foo" "dirname trailing slash" assert=
+"/foo/bar///" dirname "/foo" "dirname multiple trailing slashes" assert=
+
+"dirname root and empty" test-section
+"/" dirname "/" "dirname root" assert=
+"" dirname "." "dirname empty" assert=
+
+"extension simple" test-section
+"bar.txt" extension ".txt" "extension simple" assert=
+"/foo/bar.txt" extension ".txt" "extension with path" assert=
+
+"extension compound" test-section
+"foo.tar.gz" extension ".gz" "extension compound" assert=
+
+"extension none" test-section
+"foo" extension "" "extension none" assert=
+"/foo/bar" extension "" "extension none with path" assert=
+
+"extension dotfile" test-section
+".hidden" extension "" "extension dotfile" assert=
+
+"extension dotfile with ext" test-section
+".hidden.txt" extension ".txt" "extension dotfile with ext" assert=
+
+"extension trailing dot" test-section
+"foo." extension "." "extension trailing dot" assert=
+
+"normalize clean path" test-section
+"/foo/bar/baz" normalize "/foo/bar/baz" "normalize clean" assert=
+
+"normalize dot segment" test-section
+"/foo/./bar" normalize "/foo/bar" "normalize dot segment" assert=
+
+"normalize dotdot" test-section
+"/foo/bar/../baz" normalize "/foo/baz" "normalize dotdot" assert=
+
+"normalize mixed" test-section
+"/foo/./bar/../baz" normalize "/foo/baz" "normalize mixed" assert=
+
+"normalize repeated slashes" test-section
+"/foo//bar///baz" normalize "/foo/bar/baz" "normalize repeated slashes" assert=
+
+"normalize traversal prevention" test-section
+"/../../../etc/passwd" normalize "/etc/passwd" "normalize traversal prevention" assert=
+
+"normalize partial escape" test-section
+"/foo/../../bar" normalize "/bar" "normalize partial escape" assert=
+
+"normalize relative clean" test-section
+"foo/bar" normalize "foo/bar" "normalize relative clean" assert=
+
+"normalize relative dotdot" test-section
+"foo/bar/../baz" normalize "foo/baz" "normalize relative dotdot" assert=
+
+"normalize dot" test-section
+"." normalize "." "normalize dot" assert=
+
+"normalize empty" test-section
+"" normalize "." "normalize empty" assert=
+
+"normalize root" test-section
+"/" normalize "/" "normalize root" assert=
+
+"normalize relative escapes" test-section
+"foo/../.." normalize ".." "normalize relative escapes" assert=
+
+"path-join simple" test-section
+"/foo" "bar.txt" path-join "/foo/bar.txt" "path-join simple" assert=
+"/foo" "bar/baz" path-join "/foo/bar/baz" "path-join nested rel" assert=
+
+"path-join absolute rel replaces" test-section
+"/foo" "/bar" path-join "/bar" "path-join absolute rel" assert=
+"/foo/baz" "/bar/qux" path-join "/bar/qux" "path-join absolute rel replaces" assert=
+
+"path-join trailing slash on base" test-section
+"/foo/" "bar" path-join "/foo/bar" "path-join trailing slash on base" assert=
+
+"All path utility tests complete!" print-line
