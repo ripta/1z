@@ -1,0 +1,295 @@
+use "testing" ;
+use "scanner" ;
+use "lexer" ;
+use "1z-tokens" ;
+
+\ Helper: collect all tokens from a string
+(tokens): ( str -- array ) [ 1z-tokenize #collect ] ;
+
+\ Helper: assert token kind and value
+(assert-token): ( token kind value msg -- ) [
+  swap <rot-
+  \ msg token kind value
+  [ 2 pick-n kind>> 2 pick-n ] dip
+  \ msg token kind expected-kind value
+  drop
+  \ msg token kind expected-kind
+  3 pick-n " kind" #append assert=
+  \ msg token
+  swap value>> swap " value" #append assert=
+] ;
+
+\ ===== Basic words =====
+
+"basic words" test-section
+"dup" (tokens)
+dup #len 1 "dup: one token" assert=
+#first dup kind>> word: "dup kind" assert=
+value>> "dup" "dup value" assert=
+
+"+" (tokens)
+#first dup kind>> word: "+ kind" assert=
+value>> "+" "+ value" assert=
+
+"#len" (tokens)
+#first value>> "#len" "#len value" assert=
+
+\ ===== Whitespace =====
+
+"whitespace" test-section
+"a b" (tokens)
+dup #len 3 "a b: three tokens" assert=
+dup 0 #nth kind>> word: "a b: first kind" assert=
+dup 0 #nth value>> "a" "a b: first value" assert=
+dup 1 #nth kind>> whitespace: "a b: second kind" assert=
+dup 1 #nth value>> " " "a b: second value" assert=
+dup 2 #nth kind>> word: "a b: third kind" assert=
+2 #nth value>> "b" "a b: third value" assert=
+
+"a  b" (tokens)
+1 #nth value>> "  " "double space value" assert=
+
+"a\tb" (tokens)
+1 #nth value>> "\t" "tab value" assert=
+
+\ ===== Newlines =====
+
+"newlines" test-section
+"a\nb" (tokens)
+dup #len 3 "a-newline-b: three tokens" assert=
+dup 0 #nth kind>> word: "a-nl-b: first kind" assert=
+dup 1 #nth kind>> newline: "a-nl-b: second kind" assert=
+2 #nth kind>> word: "a-nl-b: third kind" assert=
+
+"a\n\nb" (tokens)
+dup #len 4 "double newline: four tokens" assert=
+dup 1 #nth kind>> newline: "double-nl first" assert=
+2 #nth kind>> newline: "double-nl second" assert=
+
+\ ===== String literals =====
+
+"strings" test-section
+"\"hello\"" (tokens)
+dup #len 1 "string: one token" assert=
+#first dup kind>> string: "string kind" assert=
+value>> "\"hello\"" "string value includes quotes" assert=
+
+"\"a\\nb\"" (tokens)
+#first dup kind>> string: "escape string kind" assert=
+value>> "\"a\\nb\"" "escape string value" assert=
+
+"\"\"" (tokens)
+#first dup kind>> string: "empty string kind" assert=
+value>> "\"\"" "empty string value" assert=
+
+"\"a\\\"b\"" (tokens)
+#first value>> "\"a\\\"b\"" "escaped quote value" assert=
+
+\ ===== Numbers =====
+
+"numbers" test-section
+"42" (tokens)
+#first dup kind>> number: "42 kind" assert=
+value>> "42" "42 value" assert=
+
+"0" (tokens)
+#first dup kind>> number: "0 kind" assert=
+value>> "0" "0 value" assert=
+
+"3.14" (tokens)
+#first dup kind>> number: "3.14 kind" assert=
+value>> "3.14" "3.14 value" assert=
+
+"1_000" (tokens)
+#first value>> "1_000" "1_000 value" assert=
+
+"0xFF" (tokens)
+#first dup kind>> number: "0xFF kind" assert=
+value>> "0xFF" "0xFF value" assert=
+
+"0o17" (tokens)
+#first value>> "0o17" "0o17 value" assert=
+
+"0b1010" (tokens)
+#first value>> "0b1010" "0b1010 value" assert=
+
+"1.5e10" (tokens)
+#first value>> "1.5e10" "1.5e10 value" assert=
+
+"2.5E-3" (tokens)
+#first value>> "2.5E-3" "2.5E-3 value" assert=
+
+"-42" (tokens)
+#first dup kind>> number: "-42 kind" assert=
+value>> "-42" "-42 value" assert=
+
+"-3.14" (tokens)
+#first value>> "-3.14" "-3.14 value" assert=
+
+\ ===== Symbols =====
+
+"symbols" test-section
+"name:" (tokens)
+#first dup kind>> symbol: "name: kind" assert=
+value>> "name:" "name: value" assert=
+
+"+:" (tokens)
+#first dup kind>> symbol: "+: kind" assert=
+value>> "+:" "+: value" assert=
+
+"foo-bar:" (tokens)
+#first dup kind>> symbol: "foo-bar: kind" assert=
+value>> "foo-bar:" "foo-bar: value" assert=
+
+\ standalone : is a word, not a symbol
+":" (tokens)
+#first kind>> word: "colon alone is word" assert=
+
+\ :: is a symbol (symbol literal for :)
+"::" (tokens)
+#first kind>> symbol: "double colon is symbol" assert=
+
+\ ===== Comments =====
+
+"comments" test-section
+"\\ a comment" (tokens)
+dup #len 1 "comment: one token" assert=
+#first dup kind>> comment: "comment kind" assert=
+value>> "\\ a comment" "comment value" assert=
+
+\ backslash not followed by whitespace is a word
+"\\word" (tokens)
+#first kind>> word: "backslash-word is word" assert=
+
+\ lone backslash at end
+"\\" (tokens)
+#first kind>> comment: "lone backslash is comment" assert=
+
+\ ===== Doc-comments =====
+
+"doc-comments" test-section
+"\\\\ a doc comment" (tokens)
+dup #len 1 "doc-comment: one token" assert=
+#first dup kind>> doc-comment: "doc-comment kind" assert=
+value>> "\\\\ a doc comment" "doc-comment value" assert=
+
+\ ===== Stack effects =====
+
+"stack effects" test-section
+"( a b -- c )" (tokens)
+dup #len 1 "stack effect: one token" assert=
+#first dup kind>> stack-effect: "stack-effect kind" assert=
+value>> "( a b -- c )" "stack-effect value" assert=
+
+"( -- )" (tokens)
+#first dup kind>> stack-effect: "minimal stack-effect kind" assert=
+value>> "( -- )" "minimal stack-effect value" assert=
+
+\ ===== Brackets =====
+
+"brackets" test-section
+"[" (tokens)
+#first kind>> open-bracket: "open-bracket kind" assert=
+
+"]" (tokens)
+#first kind>> close-bracket: "close-bracket kind" assert=
+
+"[ ]" (tokens)
+dup #len 3 "bracket pair: three tokens" assert=
+dup 0 #nth kind>> open-bracket: "bracket pair: open" assert=
+2 #nth kind>> close-bracket: "bracket pair: close" assert=
+
+\ ===== Braces =====
+
+"braces" test-section
+"{" (tokens)
+#first dup kind>> open-brace: "bare open-brace kind" assert=
+value>> "{" "bare open-brace value" assert=
+
+"}" (tokens)
+#first kind>> close-brace: "close-brace kind" assert=
+
+"struct{" (tokens)
+#first dup kind>> open-brace: "struct{ kind" assert=
+value>> "struct{" "struct{ value" assert=
+
+"virtual{" (tokens)
+#first value>> "virtual{" "virtual{ value" assert=
+
+"H{" (tokens)
+#first value>> "H{" "H{ value" assert=
+
+"V{" (tokens)
+#first value>> "V{" "V{ value" assert=
+
+"enum{" (tokens)
+#first value>> "enum{" "enum{ value" assert=
+
+"method{" (tokens)
+#first value>> "method{" "method{ value" assert=
+
+"match{" (tokens)
+#first value>> "match{" "match{ value" assert=
+
+"pragma{" (tokens)
+#first value>> "pragma{" "pragma{ value" assert=
+
+\ ===== Semicolons =====
+
+"semicolons" test-section
+";" (tokens)
+#first kind>> semicolon: "semicolon kind" assert=
+
+\ ===== Combined: full definition =====
+
+"combined definition" test-section
+"foo: ( a -- b ) [ 1 + ] ;" (tokens)
+dup 0 #nth kind>> symbol: "def: name is symbol" assert=
+dup 0 #nth value>> "foo:" "def: name value" assert=
+dup 1 #nth kind>> whitespace: "def: ws after name" assert=
+dup 2 #nth kind>> stack-effect: "def: stack effect" assert=
+dup 2 #nth value>> "( a -- b )" "def: stack effect value" assert=
+dup 3 #nth kind>> whitespace: "def: ws after effect" assert=
+dup 4 #nth kind>> open-bracket: "def: open bracket" assert=
+dup 5 #nth kind>> whitespace: "def: ws in body" assert=
+dup 6 #nth kind>> number: "def: number" assert=
+dup 6 #nth value>> "1" "def: number value" assert=
+dup 7 #nth kind>> whitespace: "def: ws after number" assert=
+dup 8 #nth kind>> word: "def: word" assert=
+dup 8 #nth value>> "+" "def: word value" assert=
+dup 9 #nth kind>> whitespace: "def: ws before close" assert=
+dup 10 #nth kind>> close-bracket: "def: close bracket" assert=
+dup 11 #nth kind>> whitespace: "def: ws before semi" assert=
+12 #nth kind>> semicolon: "def: semicolon" assert=
+
+\ ===== Position tracking =====
+
+"position tracking" test-section
+"a b" (tokens)
+dup 0 #nth pos>> 0 "pos: a at 0" assert=
+dup 1 #nth pos>> 1 "pos: space at 1" assert=
+2 #nth pos>> 2 "pos: b at 2" assert=
+
+"foo: [ ]" (tokens)
+dup 0 #nth pos>> 0 "pos: foo: at 0" assert=
+dup 2 #nth pos>> 5 "pos: [ at 5" assert=
+4 #nth pos>> 7 "pos: ] at 7" assert=
+
+\ ===== Edge cases =====
+
+"edge cases" test-section
+"" (tokens)
+#len 0 "empty string: no tokens" assert=
+
+\ dash alone is a word
+"-" (tokens)
+#first kind>> word: "dash alone is word" assert=
+
+\ dash followed by non-digit is a word
+"-foo" (tokens)
+#first dup kind>> word: "-foo kind" assert=
+value>> "-foo" "-foo value" assert=
+
+\ unmatched ( falls back to word
+"(" (tokens)
+#first kind>> word: "unmatched ( is word" assert=

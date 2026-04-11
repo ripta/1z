@@ -1,0 +1,323 @@
+Stack: [ ]
+Stack: [ ]
+=== basic words ===
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "dup" pos: 0 } } ]
+PASS: dup: one token
+Stack: [ { token{ kind: word: value: "dup" pos: 0 } } ]
+PASS: dup kind
+Stack: [ token{ kind: word: value: "dup" pos: 0 } ]
+PASS: dup value
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "+" pos: 0 } } ]
+PASS: + kind
+Stack: [ token{ kind: word: value: "+" pos: 0 } ]
+PASS: + value
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "#len" pos: 0 } } ]
+PASS: #len value
+Stack: [ ]
+=== whitespace ===
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: " " pos: 1 } token{ kind: word: value: "b" pos: 2 } } ]
+PASS: a b: three tokens
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: " " pos: 1 } token{ kind: word: value: "b" pos: 2 } } ]
+PASS: a b: first kind
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: " " pos: 1 } token{ kind: word: value: "b" pos: 2 } } ]
+PASS: a b: first value
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: " " pos: 1 } token{ kind: word: value: "b" pos: 2 } } ]
+PASS: a b: second kind
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: " " pos: 1 } token{ kind: word: value: "b" pos: 2 } } ]
+PASS: a b: second value
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: " " pos: 1 } token{ kind: word: value: "b" pos: 2 } } ]
+PASS: a b: third kind
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: " " pos: 1 } token{ kind: word: value: "b" pos: 2 } } ]
+PASS: a b: third value
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: "  " pos: 1 } token{ kind: word: value: "b" pos: 3 } } ]
+PASS: double space value
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: "	" pos: 1 } token{ kind: word: value: "b" pos: 2 } } ]
+PASS: tab value
+Stack: [ ]
+=== newlines ===
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: newline: value: "
+" pos: 1 } token{ kind: word: value: "b" pos: 2 } } ]
+PASS: a-newline-b: three tokens
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: newline: value: "
+" pos: 1 } token{ kind: word: value: "b" pos: 2 } } ]
+PASS: a-nl-b: first kind
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: newline: value: "
+" pos: 1 } token{ kind: word: value: "b" pos: 2 } } ]
+PASS: a-nl-b: second kind
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: newline: value: "
+" pos: 1 } token{ kind: word: value: "b" pos: 2 } } ]
+PASS: a-nl-b: third kind
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: newline: value: "
+" pos: 1 } token{ kind: newline: value: "
+" pos: 2 } token{ kind: word: value: "b" pos: 3 } } ]
+PASS: double newline: four tokens
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: newline: value: "
+" pos: 1 } token{ kind: newline: value: "
+" pos: 2 } token{ kind: word: value: "b" pos: 3 } } ]
+PASS: double-nl first
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: newline: value: "
+" pos: 1 } token{ kind: newline: value: "
+" pos: 2 } token{ kind: word: value: "b" pos: 3 } } ]
+PASS: double-nl second
+Stack: [ ]
+=== strings ===
+Stack: [ ]
+Stack: [ { token{ kind: string: value: ""hello"" pos: 0 } } ]
+PASS: string: one token
+Stack: [ { token{ kind: string: value: ""hello"" pos: 0 } } ]
+PASS: string kind
+Stack: [ token{ kind: string: value: ""hello"" pos: 0 } ]
+PASS: string value includes quotes
+Stack: [ ]
+Stack: [ { token{ kind: string: value: ""a\nb"" pos: 0 } } ]
+PASS: escape string kind
+Stack: [ token{ kind: string: value: ""a\nb"" pos: 0 } ]
+PASS: escape string value
+Stack: [ ]
+Stack: [ { token{ kind: string: value: """" pos: 0 } } ]
+PASS: empty string kind
+Stack: [ token{ kind: string: value: """" pos: 0 } ]
+PASS: empty string value
+Stack: [ ]
+Stack: [ { token{ kind: string: value: ""a\"b"" pos: 0 } } ]
+PASS: escaped quote value
+Stack: [ ]
+=== numbers ===
+Stack: [ ]
+Stack: [ { token{ kind: number: value: "42" pos: 0 } } ]
+PASS: 42 kind
+Stack: [ token{ kind: number: value: "42" pos: 0 } ]
+PASS: 42 value
+Stack: [ ]
+Stack: [ { token{ kind: number: value: "0" pos: 0 } } ]
+PASS: 0 kind
+Stack: [ token{ kind: number: value: "0" pos: 0 } ]
+PASS: 0 value
+Stack: [ ]
+Stack: [ { token{ kind: number: value: "3.14" pos: 0 } } ]
+PASS: 3.14 kind
+Stack: [ token{ kind: number: value: "3.14" pos: 0 } ]
+PASS: 3.14 value
+Stack: [ ]
+Stack: [ { token{ kind: number: value: "1_000" pos: 0 } } ]
+PASS: 1_000 value
+Stack: [ ]
+Stack: [ { token{ kind: number: value: "0xFF" pos: 0 } } ]
+PASS: 0xFF kind
+Stack: [ token{ kind: number: value: "0xFF" pos: 0 } ]
+PASS: 0xFF value
+Stack: [ ]
+Stack: [ { token{ kind: number: value: "0o17" pos: 0 } } ]
+PASS: 0o17 value
+Stack: [ ]
+Stack: [ { token{ kind: number: value: "0b1010" pos: 0 } } ]
+PASS: 0b1010 value
+Stack: [ ]
+Stack: [ { token{ kind: number: value: "1.5e10" pos: 0 } } ]
+PASS: 1.5e10 value
+Stack: [ ]
+Stack: [ { token{ kind: number: value: "2.5E-3" pos: 0 } } ]
+PASS: 2.5E-3 value
+Stack: [ ]
+Stack: [ { token{ kind: number: value: "-42" pos: 0 } } ]
+PASS: -42 kind
+Stack: [ token{ kind: number: value: "-42" pos: 0 } ]
+PASS: -42 value
+Stack: [ ]
+Stack: [ { token{ kind: number: value: "-3.14" pos: 0 } } ]
+PASS: -3.14 value
+Stack: [ ]
+=== symbols ===
+Stack: [ ]
+Stack: [ { token{ kind: symbol: value: "name:" pos: 0 } } ]
+PASS: name: kind
+Stack: [ token{ kind: symbol: value: "name:" pos: 0 } ]
+PASS: name: value
+Stack: [ ]
+Stack: [ { token{ kind: symbol: value: "+:" pos: 0 } } ]
+PASS: +: kind
+Stack: [ token{ kind: symbol: value: "+:" pos: 0 } ]
+PASS: +: value
+Stack: [ ]
+Stack: [ { token{ kind: symbol: value: "foo-bar:" pos: 0 } } ]
+PASS: foo-bar: kind
+Stack: [ token{ kind: symbol: value: "foo-bar:" pos: 0 } ]
+PASS: foo-bar: value
+Stack: [ ]
+Stack: [ { token{ kind: word: value: ":" pos: 0 } } ]
+PASS: colon alone is word
+Stack: [ ]
+Stack: [ { token{ kind: symbol: value: "::" pos: 0 } } ]
+PASS: double colon is symbol
+Stack: [ ]
+=== comments ===
+Stack: [ ]
+Stack: [ { token{ kind: comment: value: "\ a comment" pos: 0 } } ]
+PASS: comment: one token
+Stack: [ { token{ kind: comment: value: "\ a comment" pos: 0 } } ]
+PASS: comment kind
+Stack: [ token{ kind: comment: value: "\ a comment" pos: 0 } ]
+PASS: comment value
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "\word" pos: 0 } } ]
+PASS: backslash-word is word
+Stack: [ ]
+Stack: [ { token{ kind: comment: value: "\" pos: 0 } } ]
+PASS: lone backslash is comment
+Stack: [ ]
+=== doc-comments ===
+Stack: [ ]
+Stack: [ { token{ kind: doc-comment: value: "\\ a doc comment" pos: 0 } } ]
+PASS: doc-comment: one token
+Stack: [ { token{ kind: doc-comment: value: "\\ a doc comment" pos: 0 } } ]
+PASS: doc-comment kind
+Stack: [ token{ kind: doc-comment: value: "\\ a doc comment" pos: 0 } ]
+PASS: doc-comment value
+Stack: [ ]
+=== stack effects ===
+Stack: [ ]
+Stack: [ { token{ kind: stack-effect: value: "( a b -- c )" pos: 0 } } ]
+PASS: stack effect: one token
+Stack: [ { token{ kind: stack-effect: value: "( a b -- c )" pos: 0 } } ]
+PASS: stack-effect kind
+Stack: [ token{ kind: stack-effect: value: "( a b -- c )" pos: 0 } ]
+PASS: stack-effect value
+Stack: [ ]
+Stack: [ { token{ kind: stack-effect: value: "( -- )" pos: 0 } } ]
+PASS: minimal stack-effect kind
+Stack: [ token{ kind: stack-effect: value: "( -- )" pos: 0 } ]
+PASS: minimal stack-effect value
+Stack: [ ]
+=== brackets ===
+Stack: [ ]
+Stack: [ { token{ kind: open-bracket: value: "[" pos: 0 } } ]
+PASS: open-bracket kind
+Stack: [ ]
+Stack: [ { token{ kind: close-bracket: value: "]" pos: 0 } } ]
+PASS: close-bracket kind
+Stack: [ ]
+Stack: [ { token{ kind: open-bracket: value: "[" pos: 0 } token{ kind: whitespace: value: " " pos: 1 } token{ kind: close-bracket: value: "]" pos: 2 } } ]
+PASS: bracket pair: three tokens
+Stack: [ { token{ kind: open-bracket: value: "[" pos: 0 } token{ kind: whitespace: value: " " pos: 1 } token{ kind: close-bracket: value: "]" pos: 2 } } ]
+PASS: bracket pair: open
+Stack: [ { token{ kind: open-bracket: value: "[" pos: 0 } token{ kind: whitespace: value: " " pos: 1 } token{ kind: close-bracket: value: "]" pos: 2 } } ]
+PASS: bracket pair: close
+Stack: [ ]
+=== braces ===
+Stack: [ ]
+Stack: [ { token{ kind: open-brace: value: "{" pos: 0 } } ]
+PASS: bare open-brace kind
+Stack: [ token{ kind: open-brace: value: "{" pos: 0 } ]
+PASS: bare open-brace value
+Stack: [ ]
+Stack: [ { token{ kind: close-brace: value: "}" pos: 0 } } ]
+PASS: close-brace kind
+Stack: [ ]
+Stack: [ { token{ kind: open-brace: value: "struct{" pos: 0 } } ]
+PASS: struct{ kind
+Stack: [ token{ kind: open-brace: value: "struct{" pos: 0 } ]
+PASS: struct{ value
+Stack: [ ]
+Stack: [ { token{ kind: open-brace: value: "virtual{" pos: 0 } } ]
+PASS: virtual{ value
+Stack: [ ]
+Stack: [ { token{ kind: open-brace: value: "H{" pos: 0 } } ]
+PASS: H{ value
+Stack: [ ]
+Stack: [ { token{ kind: open-brace: value: "V{" pos: 0 } } ]
+PASS: V{ value
+Stack: [ ]
+Stack: [ { token{ kind: open-brace: value: "enum{" pos: 0 } } ]
+PASS: enum{ value
+Stack: [ ]
+Stack: [ { token{ kind: open-brace: value: "method{" pos: 0 } } ]
+PASS: method{ value
+Stack: [ ]
+Stack: [ { token{ kind: open-brace: value: "match{" pos: 0 } } ]
+PASS: match{ value
+Stack: [ ]
+Stack: [ { token{ kind: open-brace: value: "pragma{" pos: 0 } } ]
+PASS: pragma{ value
+Stack: [ ]
+=== semicolons ===
+Stack: [ ]
+Stack: [ { token{ kind: semicolon: value: ";" pos: 0 } } ]
+PASS: semicolon kind
+Stack: [ ]
+=== combined definition ===
+Stack: [ ]
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: stack-effect: value: "( a -- b )" pos: 5 } token{ kind: whitespace: value: " " pos: 15 } token{ kind: open-bracket: value: "[" pos: 16 } token{ kind: whitespace: value: " " pos: 17 } token{ kind: number: value: "1" pos: 18 } token{ kind: whitespace: value: " " pos: 19 } token{ kind: word: value: "+" pos: 20 } token{ kind: whitespace: value: " " pos: 21 } token{ kind: close-bracket: value: "]" pos: 22 } token{ kind: whitespace: value: " " pos: 23 } token{ kind: semicolon: value: ";" pos: 24 } } ]
+PASS: def: name is symbol
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: stack-effect: value: "( a -- b )" pos: 5 } token{ kind: whitespace: value: " " pos: 15 } token{ kind: open-bracket: value: "[" pos: 16 } token{ kind: whitespace: value: " " pos: 17 } token{ kind: number: value: "1" pos: 18 } token{ kind: whitespace: value: " " pos: 19 } token{ kind: word: value: "+" pos: 20 } token{ kind: whitespace: value: " " pos: 21 } token{ kind: close-bracket: value: "]" pos: 22 } token{ kind: whitespace: value: " " pos: 23 } token{ kind: semicolon: value: ";" pos: 24 } } ]
+PASS: def: name value
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: stack-effect: value: "( a -- b )" pos: 5 } token{ kind: whitespace: value: " " pos: 15 } token{ kind: open-bracket: value: "[" pos: 16 } token{ kind: whitespace: value: " " pos: 17 } token{ kind: number: value: "1" pos: 18 } token{ kind: whitespace: value: " " pos: 19 } token{ kind: word: value: "+" pos: 20 } token{ kind: whitespace: value: " " pos: 21 } token{ kind: close-bracket: value: "]" pos: 22 } token{ kind: whitespace: value: " " pos: 23 } token{ kind: semicolon: value: ";" pos: 24 } } ]
+PASS: def: ws after name
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: stack-effect: value: "( a -- b )" pos: 5 } token{ kind: whitespace: value: " " pos: 15 } token{ kind: open-bracket: value: "[" pos: 16 } token{ kind: whitespace: value: " " pos: 17 } token{ kind: number: value: "1" pos: 18 } token{ kind: whitespace: value: " " pos: 19 } token{ kind: word: value: "+" pos: 20 } token{ kind: whitespace: value: " " pos: 21 } token{ kind: close-bracket: value: "]" pos: 22 } token{ kind: whitespace: value: " " pos: 23 } token{ kind: semicolon: value: ";" pos: 24 } } ]
+PASS: def: stack effect
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: stack-effect: value: "( a -- b )" pos: 5 } token{ kind: whitespace: value: " " pos: 15 } token{ kind: open-bracket: value: "[" pos: 16 } token{ kind: whitespace: value: " " pos: 17 } token{ kind: number: value: "1" pos: 18 } token{ kind: whitespace: value: " " pos: 19 } token{ kind: word: value: "+" pos: 20 } token{ kind: whitespace: value: " " pos: 21 } token{ kind: close-bracket: value: "]" pos: 22 } token{ kind: whitespace: value: " " pos: 23 } token{ kind: semicolon: value: ";" pos: 24 } } ]
+PASS: def: stack effect value
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: stack-effect: value: "( a -- b )" pos: 5 } token{ kind: whitespace: value: " " pos: 15 } token{ kind: open-bracket: value: "[" pos: 16 } token{ kind: whitespace: value: " " pos: 17 } token{ kind: number: value: "1" pos: 18 } token{ kind: whitespace: value: " " pos: 19 } token{ kind: word: value: "+" pos: 20 } token{ kind: whitespace: value: " " pos: 21 } token{ kind: close-bracket: value: "]" pos: 22 } token{ kind: whitespace: value: " " pos: 23 } token{ kind: semicolon: value: ";" pos: 24 } } ]
+PASS: def: ws after effect
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: stack-effect: value: "( a -- b )" pos: 5 } token{ kind: whitespace: value: " " pos: 15 } token{ kind: open-bracket: value: "[" pos: 16 } token{ kind: whitespace: value: " " pos: 17 } token{ kind: number: value: "1" pos: 18 } token{ kind: whitespace: value: " " pos: 19 } token{ kind: word: value: "+" pos: 20 } token{ kind: whitespace: value: " " pos: 21 } token{ kind: close-bracket: value: "]" pos: 22 } token{ kind: whitespace: value: " " pos: 23 } token{ kind: semicolon: value: ";" pos: 24 } } ]
+PASS: def: open bracket
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: stack-effect: value: "( a -- b )" pos: 5 } token{ kind: whitespace: value: " " pos: 15 } token{ kind: open-bracket: value: "[" pos: 16 } token{ kind: whitespace: value: " " pos: 17 } token{ kind: number: value: "1" pos: 18 } token{ kind: whitespace: value: " " pos: 19 } token{ kind: word: value: "+" pos: 20 } token{ kind: whitespace: value: " " pos: 21 } token{ kind: close-bracket: value: "]" pos: 22 } token{ kind: whitespace: value: " " pos: 23 } token{ kind: semicolon: value: ";" pos: 24 } } ]
+PASS: def: ws in body
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: stack-effect: value: "( a -- b )" pos: 5 } token{ kind: whitespace: value: " " pos: 15 } token{ kind: open-bracket: value: "[" pos: 16 } token{ kind: whitespace: value: " " pos: 17 } token{ kind: number: value: "1" pos: 18 } token{ kind: whitespace: value: " " pos: 19 } token{ kind: word: value: "+" pos: 20 } token{ kind: whitespace: value: " " pos: 21 } token{ kind: close-bracket: value: "]" pos: 22 } token{ kind: whitespace: value: " " pos: 23 } token{ kind: semicolon: value: ";" pos: 24 } } ]
+PASS: def: number
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: stack-effect: value: "( a -- b )" pos: 5 } token{ kind: whitespace: value: " " pos: 15 } token{ kind: open-bracket: value: "[" pos: 16 } token{ kind: whitespace: value: " " pos: 17 } token{ kind: number: value: "1" pos: 18 } token{ kind: whitespace: value: " " pos: 19 } token{ kind: word: value: "+" pos: 20 } token{ kind: whitespace: value: " " pos: 21 } token{ kind: close-bracket: value: "]" pos: 22 } token{ kind: whitespace: value: " " pos: 23 } token{ kind: semicolon: value: ";" pos: 24 } } ]
+PASS: def: number value
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: stack-effect: value: "( a -- b )" pos: 5 } token{ kind: whitespace: value: " " pos: 15 } token{ kind: open-bracket: value: "[" pos: 16 } token{ kind: whitespace: value: " " pos: 17 } token{ kind: number: value: "1" pos: 18 } token{ kind: whitespace: value: " " pos: 19 } token{ kind: word: value: "+" pos: 20 } token{ kind: whitespace: value: " " pos: 21 } token{ kind: close-bracket: value: "]" pos: 22 } token{ kind: whitespace: value: " " pos: 23 } token{ kind: semicolon: value: ";" pos: 24 } } ]
+PASS: def: ws after number
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: stack-effect: value: "( a -- b )" pos: 5 } token{ kind: whitespace: value: " " pos: 15 } token{ kind: open-bracket: value: "[" pos: 16 } token{ kind: whitespace: value: " " pos: 17 } token{ kind: number: value: "1" pos: 18 } token{ kind: whitespace: value: " " pos: 19 } token{ kind: word: value: "+" pos: 20 } token{ kind: whitespace: value: " " pos: 21 } token{ kind: close-bracket: value: "]" pos: 22 } token{ kind: whitespace: value: " " pos: 23 } token{ kind: semicolon: value: ";" pos: 24 } } ]
+PASS: def: word
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: stack-effect: value: "( a -- b )" pos: 5 } token{ kind: whitespace: value: " " pos: 15 } token{ kind: open-bracket: value: "[" pos: 16 } token{ kind: whitespace: value: " " pos: 17 } token{ kind: number: value: "1" pos: 18 } token{ kind: whitespace: value: " " pos: 19 } token{ kind: word: value: "+" pos: 20 } token{ kind: whitespace: value: " " pos: 21 } token{ kind: close-bracket: value: "]" pos: 22 } token{ kind: whitespace: value: " " pos: 23 } token{ kind: semicolon: value: ";" pos: 24 } } ]
+PASS: def: word value
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: stack-effect: value: "( a -- b )" pos: 5 } token{ kind: whitespace: value: " " pos: 15 } token{ kind: open-bracket: value: "[" pos: 16 } token{ kind: whitespace: value: " " pos: 17 } token{ kind: number: value: "1" pos: 18 } token{ kind: whitespace: value: " " pos: 19 } token{ kind: word: value: "+" pos: 20 } token{ kind: whitespace: value: " " pos: 21 } token{ kind: close-bracket: value: "]" pos: 22 } token{ kind: whitespace: value: " " pos: 23 } token{ kind: semicolon: value: ";" pos: 24 } } ]
+PASS: def: ws before close
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: stack-effect: value: "( a -- b )" pos: 5 } token{ kind: whitespace: value: " " pos: 15 } token{ kind: open-bracket: value: "[" pos: 16 } token{ kind: whitespace: value: " " pos: 17 } token{ kind: number: value: "1" pos: 18 } token{ kind: whitespace: value: " " pos: 19 } token{ kind: word: value: "+" pos: 20 } token{ kind: whitespace: value: " " pos: 21 } token{ kind: close-bracket: value: "]" pos: 22 } token{ kind: whitespace: value: " " pos: 23 } token{ kind: semicolon: value: ";" pos: 24 } } ]
+PASS: def: close bracket
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: stack-effect: value: "( a -- b )" pos: 5 } token{ kind: whitespace: value: " " pos: 15 } token{ kind: open-bracket: value: "[" pos: 16 } token{ kind: whitespace: value: " " pos: 17 } token{ kind: number: value: "1" pos: 18 } token{ kind: whitespace: value: " " pos: 19 } token{ kind: word: value: "+" pos: 20 } token{ kind: whitespace: value: " " pos: 21 } token{ kind: close-bracket: value: "]" pos: 22 } token{ kind: whitespace: value: " " pos: 23 } token{ kind: semicolon: value: ";" pos: 24 } } ]
+PASS: def: ws before semi
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: stack-effect: value: "( a -- b )" pos: 5 } token{ kind: whitespace: value: " " pos: 15 } token{ kind: open-bracket: value: "[" pos: 16 } token{ kind: whitespace: value: " " pos: 17 } token{ kind: number: value: "1" pos: 18 } token{ kind: whitespace: value: " " pos: 19 } token{ kind: word: value: "+" pos: 20 } token{ kind: whitespace: value: " " pos: 21 } token{ kind: close-bracket: value: "]" pos: 22 } token{ kind: whitespace: value: " " pos: 23 } token{ kind: semicolon: value: ";" pos: 24 } } ]
+PASS: def: semicolon
+Stack: [ ]
+=== position tracking ===
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: " " pos: 1 } token{ kind: word: value: "b" pos: 2 } } ]
+PASS: pos: a at 0
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: " " pos: 1 } token{ kind: word: value: "b" pos: 2 } } ]
+PASS: pos: space at 1
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: " " pos: 1 } token{ kind: word: value: "b" pos: 2 } } ]
+PASS: pos: b at 2
+Stack: [ ]
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: open-bracket: value: "[" pos: 5 } token{ kind: whitespace: value: " " pos: 6 } token{ kind: close-bracket: value: "]" pos: 7 } } ]
+PASS: pos: foo: at 0
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: open-bracket: value: "[" pos: 5 } token{ kind: whitespace: value: " " pos: 6 } token{ kind: close-bracket: value: "]" pos: 7 } } ]
+PASS: pos: [ at 5
+Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: open-bracket: value: "[" pos: 5 } token{ kind: whitespace: value: " " pos: 6 } token{ kind: close-bracket: value: "]" pos: 7 } } ]
+PASS: pos: ] at 7
+Stack: [ ]
+=== edge cases ===
+Stack: [ ]
+Stack: [ { } ]
+PASS: empty string: no tokens
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "-" pos: 0 } } ]
+PASS: dash alone is word
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "-foo" pos: 0 } } ]
+PASS: -foo kind
+Stack: [ token{ kind: word: value: "-foo" pos: 0 } ]
+PASS: -foo value
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "(" pos: 0 } } ]
+PASS: unmatched ( is word
+Stack: [ ]

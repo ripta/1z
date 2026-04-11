@@ -1,0 +1,367 @@
+\ lib/1z-tokens.1z - Tokenizer for 1z source code
+\
+\ Configures the generic lexer framework with rules for all 1z token types.
+\ Produces a lazy token stream suitable for linting, syntax highlighting,
+\ and other source-level tools.
+
+use "scanner" ;
+use "lexer" ;
+use "char" ;
+use "conversions" ;
+
+\ --- Character helpers ---
+
+(tab): ( -- str ) [ 9 >char ] ;
+(lf):  ( -- str ) [ 10 >char ] ;
+(cr):  ( -- str ) [ 13 >char ] ;
+
+(non-newline?): ( ch -- ? ) [ (lf) = not ] ;
+(ws-not-newline?): ( ch -- ? ) [ dup " " = swap (tab) = or ] ;
+
+\ Extract the substring from start-pos to scanner's current position.
+\ Output matches the shape of take-while: start-pos scanner' value.
+(extract-value): ( start-pos scanner -- start-pos scanner value ) [
+  2dup
+  dup position>> swap str>>
+  \ start-pos scanner start-pos end-pos source
+  -rot> #slice
+] ;
+
+\ --- Rule 1: newline ---
+
+(newline-match): ( scanner -- new-scanner token | f ) [
+  dup peek (lf) = [
+    dup position>> swap advance swap
+    [ newline: (lf) ] dip make-token
+  ] [ drop f ] if
+] ;
+
+\ --- Rule 2: whitespace (spaces and tabs, not newlines) ---
+
+(ws-match): ( scanner -- new-scanner token | f ) [
+  dup peek dup f = [ 2drop f ] [
+    (ws-not-newline?) [
+      dup position>> swap
+      [ (ws-not-newline?) ] take-while
+      <rot- [ whitespace: swap ] dip make-token
+    ] [ drop f ] if
+  ] if
+] ;
+
+\ --- Rule 3: doc-comment (\\  followed by whitespace or at end) ---
+
+(starts-doc-comment?): ( scanner -- ? ) [
+  dup rest dup #len 2 < [ 2drop f ] [
+    dup 0 #nth "\\" = over 1 #nth "\\" = and [
+      \ two backslashes present; check third char or end
+      #len 2 = [
+        \ exactly \\ at end of input
+        drop t
+      ] [
+        rest 2 #nth
+        dup " " = over (tab) = or over (lf) = or swap (cr) = or
+      ] if
+    ] [ 2drop f ] if
+  ] if
+] ;
+
+(doc-comment-match): ( scanner -- new-scanner token | f ) [
+  dup (starts-doc-comment?) [
+    dup position>> swap
+    [ (non-newline?) ] take-while
+    <rot- [ doc-comment: swap ] dip make-token
+  ] [ drop f ] if
+] ;
+
+\ --- Rule 4: comment (\  followed by whitespace or at end) ---
+
+(starts-comment?): ( scanner -- ? ) [
+  dup rest dup #len 0 = [ 2drop f ] [
+    dup 0 #nth "\\" = [
+      #len 1 = [
+        \ lone backslash at end of input
+        drop t
+      ] [
+        rest 1 #nth
+        dup " " = over (tab) = or over (lf) = or swap (cr) = or
+      ] if
+    ] [ 2drop f ] if
+  ] if
+] ;
+
+(comment-match): ( scanner -- new-scanner token | f ) [
+  dup (starts-comment?) [
+    dup position>> swap
+    [ (non-newline?) ] take-while
+    <rot- [ comment: swap ] dip make-token
+  ] [ drop f ] if
+] ;
+
+\ --- Rule 5: string literal ---
+
+(string-loop): ( scanner -- scanner ) [
+  dup at-end? not [
+    dup peek dup "\"" = [
+      \ closing quote: advance past it and stop
+      drop advance
+    ] [
+      "\\" = [
+        \ escape: advance past backslash and the escaped char
+        advance
+        dup at-end? not [ advance ] when
+        (string-loop)
+      ] [
+        advance (string-loop)
+      ] if
+    ] if
+  ] when
+] ;
+
+(string-match): ( scanner -- new-scanner token | f ) [
+  dup peek "\"" = [
+    dup position>> swap advance (string-loop)
+    \ start-pos scanner'
+    (extract-value)
+    <rot- [ string: swap ] dip make-token
+  ] [ drop f ] if
+] ;
+
+\ --- Rule 6: stack effect ( ... ) ---
+
+(stack-effect-loop): ( scanner -- scanner found? ) [
+  dup at-end? [ f ] [
+    dup peek dup ")" = [
+      drop advance t
+    ] [
+      (lf) = [
+        \ newline inside parens: not a stack effect
+        f
+      ] [
+        advance (stack-effect-loop)
+      ] if
+    ] if
+  ] if
+] ;
+
+(stack-effect-match): ( scanner -- new-scanner token | f ) [
+  dup peek "(" = [
+    dup position>>
+    \ scanner start-pos
+    swap advance (stack-effect-loop)
+    \ start-pos scanner' found?
+    [
+      (extract-value)
+      <rot- [ stack-effect: swap ] dip make-token
+    ] [
+      \ not a stack effect: drop consumed scanner, return f
+      2drop f
+    ] if
+  ] [ drop f ] if
+] ;
+
+\ --- Rule 7: number literal ---
+
+(digit-or-sep?):  ( ch -- ? ) [ dup digit? swap "_" = or ] ;
+(hex-or-sep?):    ( ch -- ? ) [ dup hex-digit? swap "_" = or ] ;
+(octal-digit?):   ( ch -- ? ) [ >codepoint dup 48 >= swap 55 <= and ] ;
+(octal-or-sep?):  ( ch -- ? ) [ dup (octal-digit?) swap "_" = or ] ;
+(binary-digit?):  ( ch -- ? ) [ dup "0" = swap "1" = or ] ;
+(binary-or-sep?): ( ch -- ? ) [ dup (binary-digit?) swap "_" = or ] ;
+
+\ Check if scanner's next chars form a number (digit, or - followed by digit)
+(starts-number?): ( scanner -- ? ) [
+  dup peek dup f = [ 2drop f ] [
+    dup digit? [ 2drop t ] [
+      "-" = [
+        advance peek dup f = [ drop f ] [ digit? ] if
+      ] [ drop f ] if
+    ] if
+  ] if
+] ;
+
+\ Consume the exponent part: e/E, optional +/-, digits
+(consume-exponent): ( scanner -- scanner ) [
+  dup peek dup f = [ drop ] [
+    dup "e" = swap "E" = or [
+      advance
+      dup peek dup f = [ drop ] [
+        dup "+" = swap "-" = or [ advance ] when
+        [ (digit-or-sep?) ] take-while drop
+      ] if
+    ] when
+  ] if
+] ;
+
+\ Consume the fractional part: . followed by digits, then optional exponent
+(consume-fractional): ( scanner -- scanner ) [
+  dup peek "." = [
+    dup advance peek dup f = [ drop ] [
+      digit? [
+        advance
+        [ (digit-or-sep?) ] take-while drop
+        (consume-exponent)
+      ] when
+    ] if
+  ] when
+] ;
+
+(1z-number-match): ( scanner -- new-scanner token | f ) [
+  dup (starts-number?) [
+    dup position>>
+    \ scanner start-pos
+    swap
+    \ skip optional leading -
+    dup peek "-" = [ advance ] when
+    \ check for base prefix
+    dup peek "0" = [
+      dup advance peek dup f = [ drop
+        \ just "0" followed by end: consume the 0
+        advance
+      ] [
+        dup "x" = over "X" = or [
+          drop advance advance
+          [ (hex-or-sep?) ] take-while drop
+        ] [
+          dup "o" = over "O" = or [
+            drop advance advance
+            [ (octal-or-sep?) ] take-while drop
+          ] [
+            "b" = over advance peek "B" = or [
+              advance advance
+              [ (binary-or-sep?) ] take-while drop
+            ] [
+              \ decimal starting with 0
+              [ (digit-or-sep?) ] take-while drop
+              (consume-fractional)
+              (consume-exponent)
+            ] if
+          ] if
+        ] if
+      ] if
+    ] [
+      \ decimal number
+      [ (digit-or-sep?) ] take-while drop
+      (consume-fractional)
+      (consume-exponent)
+    ] if
+    \ start-pos scanner'
+    (extract-value)
+    <rot- [ number: swap ] dip make-token
+  ] [ drop f ] if
+] ;
+
+\ --- Rule 8: semicolon ---
+
+(semicolon-match): ( scanner -- new-scanner token | f ) [
+  dup peek ";" = [
+    dup position>> swap advance swap
+    [ semicolon: ";" ] dip make-token
+  ] [ drop f ] if
+] ;
+
+\ --- Rule 9: open-bracket ---
+
+(open-bracket-match): ( scanner -- new-scanner token | f ) [
+  dup peek "[" = [
+    dup position>> swap advance swap
+    [ open-bracket: "[" ] dip make-token
+  ] [ drop f ] if
+] ;
+
+\ --- Rule 10: close-bracket ---
+
+(close-bracket-match): ( scanner -- new-scanner token | f ) [
+  dup peek "]" = [
+    dup position>> swap advance swap
+    [ close-bracket: "]" ] dip make-token
+  ] [ drop f ] if
+] ;
+
+\ --- Rule 11: close-brace ---
+
+(close-brace-match): ( scanner -- new-scanner token | f ) [
+  dup peek "}" = [
+    dup position>> swap advance swap
+    [ close-brace: "}" ] dip make-token
+  ] [ drop f ] if
+] ;
+
+\ --- Rule 12: open-brace (including compound forms) ---
+
+BRACE-PREFIXES: const [
+  { "virtual{" "struct{" "pragma{" "method{" "match{" "enum{" "H{" "V{" "M{" "{" }
+] ;
+
+(try-brace-prefix): ( scanner prefixes -- new-scanner token | f ) [
+  dup #empty? [ 2drop f ] [
+    dup #first
+    2 pick-n rest over #starts-with? [
+      \ scanner prefixes prefix
+      [ drop ] dip
+      \ scanner prefix
+      2dup expect -rot>
+      \ new-scanner scanner prefix
+      swap position>>
+      [ open-brace: swap ] dip make-token
+    ] [
+      drop 1 #drop (try-brace-prefix)
+    ] if
+  ] if
+] ;
+
+(open-brace-match): ( scanner -- new-scanner token | f ) [
+  dup rest dup #len 0 = [ 2drop f ] [
+    drop BRACE-PREFIXES (try-brace-prefix)
+  ] if
+] ;
+
+\ --- Rule 13: symbol (2+ non-whitespace chars ending in :) ---
+
+(symbol-match): ( scanner -- new-scanner token | f ) [
+  dup position>> swap
+  [ whitespace? not ] take-while
+  \ start-pos scanner' candidate
+  dup #len 1 > over #last ":" = and [
+    <rot- [ symbol: swap ] dip make-token
+  ] [
+    3drop f
+  ] if
+] ;
+
+\ --- Rule 14: word (fallback, any non-whitespace) ---
+
+(1z-word-match): ( scanner -- new-scanner token | f ) [
+  dup peek dup f = [ 2drop f ] [
+    drop
+    dup position>> swap
+    [ whitespace? not ] take-while
+    <rot- [ word: swap ] dip make-token
+  ] if
+] ;
+
+\ --- Public API ---
+
+\\ Construct a lexer configured for all 1z token types.
+<1z-lexer>: ( -- lexer ) [
+  V{ }
+  H{ kind: newline: match: [ (newline-match) ] } #push!
+  H{ kind: whitespace: match: [ (ws-match) ] } #push!
+  H{ kind: doc-comment: match: [ (doc-comment-match) ] } #push!
+  H{ kind: comment: match: [ (comment-match) ] } #push!
+  H{ kind: string: match: [ (string-match) ] } #push!
+  H{ kind: stack-effect: match: [ (stack-effect-match) ] } #push!
+  H{ kind: number: match: [ (1z-number-match) ] } #push!
+  H{ kind: semicolon: match: [ (semicolon-match) ] } #push!
+  H{ kind: open-bracket: match: [ (open-bracket-match) ] } #push!
+  H{ kind: close-bracket: match: [ (close-bracket-match) ] } #push!
+  H{ kind: close-brace: match: [ (close-brace-match) ] } #push!
+  H{ kind: open-brace: match: [ (open-brace-match) ] } #push!
+  H{ kind: symbol: match: [ (symbol-match) ] } #push!
+  H{ kind: word: match: [ (1z-word-match) ] } #push!
+  >array <lexer>
+] ;
+
+\\ Tokenize a 1z source string into a lazy token iterator.
+1z-tokenize: ( string -- iterator ) [
+  <1z-lexer> tokenize
+] ;
