@@ -1,0 +1,4 @@
+tests/integration/dispatch_generic_error_none.1z:3: error 'type-error' no method found for generic word at word 'empty-generic'
+  stack effect: ( value -- result )
+  got method arguments: (fixnum)
+  available methods: none

@@ -215,6 +215,8 @@ pub const ErrorDetail = struct {
     word_name: ?[]const u8,
     stack_effect_str: ?[]const u8 = null,
     hint: ?[]const u8 = null,
+    dispatch_actual_types: ?[]const u8 = null,
+    dispatch_available_methods: ?[]const u8 = null,
 };
 
 /// Structured context for parse-time errors, populated by the parser's catch
@@ -319,6 +321,10 @@ pub const Context = struct {
     /// Pending error hint set by primitives before returning an error.
     /// Consumed by captureCallStackOnError for the innermost frame's hint.
     pending_error_hint: ?[]const u8 = null,
+    /// Pending generic-dispatch argument type tuple for the innermost frame.
+    pending_dispatch_actual_types: ?[]const u8 = null,
+    /// Pending generic-dispatch method list for the innermost frame.
+    pending_dispatch_available_methods: ?[]const u8 = null,
     /// Error captured by the FFI callback trampoline when a 1z quotation throws.
     /// Checked and cleared by nativeFfiCall after ffi_call returns.
     callback_error: ?anyerror = null,
@@ -838,6 +844,8 @@ pub const Context = struct {
         self.call_stack.clearRetainingCapacity();
         self.pending_error_message = null;
         self.pending_error_hint = null;
+        self.pending_dispatch_actual_types = null;
+        self.pending_dispatch_available_methods = null;
     }
 
     pub fn ownedCurrentSource(self: *Context) []const u8 {
@@ -2512,7 +2520,7 @@ pub const Context = struct {
                         if (try dispatch_helpers.tryDispatchGenericById(self, mod_word.dispatch_id, null)) return;
 
                         if (instrs.len == 0) {
-                            self.pending_error_message = "no method found for given argument types";
+                            self.setGenericDispatchErrorDetails(name, mod_word.stack_effect);
                             return error.TypeError;
                         }
                     }
@@ -3243,6 +3251,12 @@ pub const Context = struct {
         const pending_hint = self.pending_error_hint;
         self.pending_error_hint = null;
 
+        const pending_dispatch_actual_types = self.pending_dispatch_actual_types;
+        self.pending_dispatch_actual_types = null;
+
+        const pending_dispatch_available_methods = self.pending_dispatch_available_methods;
+        self.pending_dispatch_available_methods = null;
+
         // Iterate call_stack in reverse (innermost first for display)
         var i = self.call_stack.items.len;
         var is_innermost = true;
@@ -3276,9 +3290,83 @@ pub const Context = struct {
                 .word_name = frame.word_name,
                 .stack_effect_str = se_str,
                 .hint = if (is_innermost) pending_hint else null,
+                .dispatch_actual_types = if (is_innermost) pending_dispatch_actual_types else null,
+                .dispatch_available_methods = if (is_innermost) pending_dispatch_available_methods else null,
             }) catch {};
             is_innermost = false;
         }
+    }
+
+    fn formatDispatchTypeName(self: *const Context, desc: *const value_mod.HashTable) []const u8 {
+        if (desc == self.getDispatchAnySentinel().descriptor.?) return "any";
+        return self.lookupTypeNameByDescriptor(desc) orelse "<unknown>";
+    }
+
+    fn renderDispatchArgumentTypes(self: *Context, arity: usize) ?[]const u8 {
+        const alloc = self.arena.allocator();
+        switch (arity) {
+            2 => {
+                if (self.stack.depth() < 2) return alloc.dupe(u8, "(<missing>, <missing>)") catch null;
+                const a = self.stack.peekN(1) catch return alloc.dupe(u8, "(<missing>, <missing>)") catch null;
+                const b = self.stack.peek() catch return alloc.dupe(u8, "(<missing>, <missing>)") catch null;
+                const a_name = self.formatDispatchTypeName(dispatch_mod.dispatchDescriptor(a, self));
+                const b_name = self.formatDispatchTypeName(dispatch_mod.dispatchDescriptor(b, self));
+                return std.fmt.allocPrint(alloc, "({s}, {s})", .{ a_name, b_name }) catch null;
+            },
+            else => {
+                if (self.stack.depth() < 1) return alloc.dupe(u8, "(<missing>)") catch null;
+                const a = self.stack.peek() catch return alloc.dupe(u8, "(<missing>)") catch null;
+                const a_name = self.formatDispatchTypeName(dispatch_mod.dispatchDescriptor(a, self));
+                return std.fmt.allocPrint(alloc, "({s})", .{a_name}) catch null;
+            },
+        }
+    }
+
+    fn renderDispatchMethodSignature(self: *Context, key: DispatchKey, writer: anytype) !void {
+        const type_a_name = self.formatDispatchTypeName(key.type_a);
+        const unary_sentinel = self.getDispatchUnarySentinel().descriptor.?;
+        if (key.type_b == unary_sentinel) {
+            try writer.print("method{{ {s} }}", .{type_a_name});
+            return;
+        }
+
+        const type_b_name = self.formatDispatchTypeName(key.type_b);
+        try writer.print("method{{ {s} {s} }}", .{ type_a_name, type_b_name });
+    }
+
+    fn inferGenericDispatchArity(self: *Context, word_name: []const u8, stack_effect: ?StackEffect) usize {
+        const alloc = self.arena.allocator();
+        const entries = self.dispatchEntriesForWord(word_name, alloc) catch &.{};
+        for (entries) |pair| {
+            if (pair.key.type_b != self.getDispatchUnarySentinel().descriptor.?) return 2;
+        }
+        if (stack_effect) |effect| {
+            if (effect.inputs.len >= 2) return 2;
+        }
+        return 1;
+    }
+
+    pub fn setGenericDispatchErrorDetails(self: *Context, word_name: []const u8, stack_effect: ?StackEffect) void {
+        self.pending_error_message = "no method found for generic word";
+        self.pending_dispatch_actual_types = self.renderDispatchArgumentTypes(self.inferGenericDispatchArity(word_name, stack_effect));
+
+        const alloc = self.arena.allocator();
+        const entries = self.dispatchEntriesForWord(word_name, alloc) catch &.{};
+        if (entries.len == 0) {
+            self.pending_dispatch_available_methods = "none";
+            return;
+        }
+
+        var list: std.ArrayListUnmanaged(u8) = .{};
+        defer list.deinit(alloc);
+
+        for (entries, 0..) |pair, i| {
+            if (i > 0) list.append(alloc, '\n') catch return;
+            list.appendSlice(alloc, "    ") catch return;
+            self.renderDispatchMethodSignature(pair.key, list.writer(alloc)) catch return;
+        }
+
+        self.pending_dispatch_available_methods = list.toOwnedSlice(alloc) catch null;
     }
 
     /// Capture stack effect mismatch details for error reporting.
@@ -3659,7 +3747,7 @@ pub const Context = struct {
                                 }
 
                                 if (word.action.compound.len == 0) {
-                                    self.pending_error_message = "no method found for given argument types";
+                                    self.setGenericDispatchErrorDetails(name, word.stack_effect);
                                     return self.wordErrorCleanup(name, error.TypeError);
                                 }
                             }

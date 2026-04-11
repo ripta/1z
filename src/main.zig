@@ -99,6 +99,16 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
         if (detail.hint) |hint| {
             writer.print("  hint: {s}\n", .{hint}) catch return;
         }
+        if (detail.dispatch_actual_types) |types| {
+            writer.print("  got method arguments: {s}\n", .{types}) catch return;
+        }
+        if (detail.dispatch_available_methods) |methods| {
+            if (std.mem.eql(u8, methods, "none")) {
+                writer.writeAll("  available methods: none\n") catch return;
+            } else {
+                writer.print("  available methods:\n{s}\n", .{methods}) catch return;
+            }
+        }
 
         // print remaining caller chain
         if (details.len > 1) {

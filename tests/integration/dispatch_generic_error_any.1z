@@ -1,0 +1,4 @@
+wild-op: ( a b -- result ) generic [ ] ;
+wild-op: method{ fixnum any } [ 2drop "ok" ] ;
+
+"x" t wild-op

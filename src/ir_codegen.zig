@@ -3792,7 +3792,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize) callconv(.c) i3
                 return 0;
             }
             if (word.action.compound.len == 0) {
-                ctx.pending_error_message = "no method found for given argument types";
+                ctx.setGenericDispatchErrorDetails(word_name, word.stack_effect);
                 ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, error.TypeError);
                 return 2;
             }

@@ -1,0 +1,5 @@
+tests/integration/dispatch_generic_error_any.1z:4: error 'type-error' no method found for generic word at word 'wild-op'
+  stack effect: ( a b -- result )
+  got method arguments: (string, boolean)
+  available methods:
+    method{ fixnum any }

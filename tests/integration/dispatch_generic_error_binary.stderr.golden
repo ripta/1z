@@ -1,0 +1,5 @@
+tests/integration/dispatch_generic_error_binary.1z:4: error 'type-error' no method found for generic word at word 'pair-op'
+  stack effect: ( a b -- result )
+  got method arguments: (fixnum, fixnum)
+  available methods:
+    method{ fixnum string }
