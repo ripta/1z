@@ -1,0 +1,1 @@
+tests/fixtures/lint/unused-import.1z:1:1: warning: [unused-import] no words from "ranges" are used in this file

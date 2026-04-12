@@ -342,3 +342,139 @@ make-lint-rule register-lint-rule
 
 "import-ordering" info: [ (check-import-ordering) ] f
 make-lint-rule register-lint-rule
+
+\ --- Rule 12: unused-import ---
+\ Detects use statements where none of the imported words are referenced.
+
+\ Build a set of word names used in the file, excluding tokens inside
+\ use/reexport statements. Returns a mutable map (keys = word names).
+(build-usage-set): ( tokens -- usage-set ) [
+  M{ }                  \ result: usage-set
+  M{ } in-use: f @set!  \ state map
+
+  2 pick-n [
+    \ stack: tokens(3) usage-set(2) state(1) token(0)
+    dup kind>> word: = over value>> dup "use" = swap "reexport" = or and [
+      \ Entering a use/reexport statement
+      1 pick-n in-use: t @set! drop
+      drop
+    ] [
+      1 pick-n in-use: @get [
+        \ Inside a use/reexport statement: watch for semicolon
+        dup kind>> semicolon: = [
+          1 pick-n in-use: f @set! drop
+        ] when
+        drop
+      ] [
+        \ Outside use: record word and symbol tokens
+        dup kind>> word: = [
+          value>> 2 pick-n swap t @set! drop
+        ] [
+          dup kind>> symbol: = [
+            value>> dup #len 1 > [
+              dup #len 1 - #take
+              2 pick-n swap t @set! drop
+            ] [ drop ] if
+          ] [ drop ] if
+        ] if
+      ] if
+    ] if
+  ] #each
+  drop nip
+] ;
+
+\ Convert selective import symbols to word name strings.
+(selective-import-names): ( imported-words -- names ) [
+  [ >string dup #len 1 - #take ] #map #collect
+] ;
+
+\ Import record raw array indices:
+\   [0] source-file  [1] source-line  [2] source-column
+\   [3] module-path  [4] imported-words (array or f)  [5] resolved-path
+
+\ Check if any word from an array of name strings is in the usage set.
+(any-import-used?): ( word-names usage-set -- ? ) [
+  [ swap @has? ] curry #any
+] ;
+
+\ Emit an unused-import diagnostic: push it into state's results.
+\ stack on entry: state(1) record(0)
+\ stack on exit:  state(0)
+(emit-unused-diag): ( state record -- ) [
+  \ Extract values from record and state before building diagnostic.
+  \ make-lint-diagnostic needs: ( rule-id severity file line col message )
+  "unused-import" warning:
+  \ stack: state record rule-id severity
+  \ Index 3 is state (counting from 0 at top: severity=0, rule-id=1, record=2, state=3)
+  3 pick-n path: @get
+  \ stack: state record rule-id severity file
+  \ record is at index 3
+  3 pick-n 1 #nth
+  \ stack: state record rule-id severity file line
+  \ record is at index 4
+  4 pick-n 2 #nth
+  \ stack: state record rule-id severity file line col
+  \ record is at index 5
+  5 pick-n 3 #nth "no words from \"" swap #append "\" are used in this file" #append
+  \ stack: state record rule-id severity file line col message
+  make-lint-diagnostic
+  \ stack: state(1) record(0) diagnostic
+  [ drop ] dip
+  \ stack: state diagnostic
+  swap results: @get swap #push! drop
+] ;
+
+(check-unused-import): ( path source tokens line-index semantic-context -- diagnostics ) [
+  drop drop nip
+  \ stack: path(1) tokens(0)
+
+  dup (build-usage-set)
+  \ stack: path(2) tokens(1) usage-set(0)
+
+  \ Store path and usage-set in a state map for easy access inside #each.
+  M{ }
+  3 pick-n path: swap @set!
+  1 pick-n usage-set: swap @set!
+  results: V{ } @set!
+  \ stack: path(3) tokens(2) usage-set(1) state(0)
+  nip nip nip
+  \ stack: state(0)
+
+  native.import-history
+  \ stack: state(1) records(0)
+
+  [
+    \ stack: state(1) record(0)
+    dup 0 #nth 2 pick-n path: @get = [
+      \ This record belongs to the file being linted.
+      dup 4 #nth dup f = [
+        \ Wildcard import: get module exports via resolved-path
+        drop dup 5 #nth lint-module-exports
+        \ stack: state(2) record(1) export-names(0)
+        dup #len 0 = [
+          \ Could not load module or empty: skip
+          drop drop
+        ] [
+          2 pick-n usage-set: @get (any-import-used?) [
+            drop
+          ] [
+            1 pick-n swap (emit-unused-diag)
+          ] if
+        ] if
+      ] [
+        \ Selective import: check specific words
+        (selective-import-names)
+        \ stack: state(2) record(1) word-names(0)
+        2 pick-n usage-set: @get (any-import-used?) [
+          drop
+        ] [
+          1 pick-n swap (emit-unused-diag)
+        ] if
+      ] if
+    ] [ drop ] if
+  ] #each
+  results: @get
+] ;
+
+"unused-import" warning: [ (check-unused-import) ] f
+make-lint-rule register-lint-rule

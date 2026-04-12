@@ -1,0 +1,5 @@
+use "ranges" ;
+use "strings" ;
+
+\\ A word that uses split from strings but not ranges.
+helper: ( s -- array ) [ "," split ] ;
