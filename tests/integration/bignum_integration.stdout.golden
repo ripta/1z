@@ -1,0 +1,50 @@
+=== bignum? predicate ===
+Stack: [ ]
+PASS: bignum is bignum?
+Stack: [ ]
+PASS: fixnum is not bignum?
+Stack: [ ]
+PASS: float is not bignum?
+Stack: [ ]
+PASS: string is not bignum?
+Stack: [ ]
+=== >float bignum ===
+Stack: [ ]
+PASS: big >float type
+Stack: [ ]
+PASS: big >float value
+Stack: [ 0 ]
+PASS: neg big >float type
+Stack: [ 0 ]
+PASS: neg big >float value
+Stack: [ 0 0 ]
+=== >string-base fixnum ===
+Stack: [ 0 0 ]
+PASS: 255 base 16
+Stack: [ 0 0 ]
+PASS: 255 base 2
+Stack: [ 0 0 ]
+PASS: 255 base 8
+Stack: [ 0 0 ]
+PASS: 42 base 10
+Stack: [ 0 0 ]
+PASS: neg 255 base 16
+Stack: [ 0 0 ]
+PASS: 35 base 36
+Stack: [ 0 0 ]
+PASS: 0 base 16
+Stack: [ 0 0 ]
+=== >string-base bignum ===
+Stack: [ 0 0 ]
+PASS: 2^64 hex
+Stack: [ 0 0 ]
+PASS: big base 10
+Stack: [ 0 0 ]
+=== >string-base errors ===
+Stack: [ 0 0 ]
+PASS: InvalidArgument
+Stack: [ 0 0 ]
+PASS: InvalidArgument
+Stack: [ 0 0 ]
+PASS: TypeMismatch
+Stack: [ 0 0 ]

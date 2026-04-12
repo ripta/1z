@@ -20,6 +20,7 @@ pub fn dispatchTypeName(val: Value) []const u8 {
         .struct_instance => |si| si.struct_type.name,
         .fixnum => "fixnum",
         .float => "float",
+        .bignum => "bignum",
         .boolean => "boolean",
         .string => "string",
         .symbol => "symbol",

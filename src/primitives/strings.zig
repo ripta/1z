@@ -1,9 +1,11 @@
 const std = @import("std");
 const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
+const BigIntManaged = value_mod.BigIntManaged;
 const ByteArray = value_mod.ByteArray;
 const Instruction = value_mod.Instruction;
 
+const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 const dispatch_helpers = @import("dispatch_helpers.zig");
 
@@ -16,6 +18,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "bytes>", .stack_effect = "byte-array -- string", .doc = "Convert byte array to string (interprets as UTF-8).", .func = nativeBytesToString },
     .{ .name = "uppercase", .stack_effect = "str -- str", .doc = "Convert ASCII letters to uppercase, non-ASCII bytes pass through.", .func = nativeUppercase },
     .{ .name = "lowercase", .stack_effect = "str -- str", .doc = "Convert ASCII letters to lowercase, non-ASCII bytes pass through.", .func = nativeLowercase },
+    .{ .name = ">string-base", .stack_effect = "n base -- str", .doc = "Convert fixnum or bignum to string in the given base (2-36). Uses lowercase letters for digits above 9.", .func = nativeToStringBase },
 };
 
 /// to-string ( value -- string ) - Convert any value to its string representation,
@@ -149,5 +152,34 @@ fn nativeLowercase(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .string = result });
         },
         else => return error.TypeMismatch,
+    }
+}
+
+/// >string-base ( n base -- str ) - Convert fixnum or bignum to string in the given base (2-36)
+fn nativeToStringBase(ctx: *Context) anyerror!void {
+    const base_val = try helpers.popFixnum(ctx);
+    if (base_val < 2 or base_val > 36) {
+        helpers.setErrorContext(ctx, ">string-base: base must be 2-36, got {d}", .{base_val});
+        return error.InvalidArgument;
+    }
+    const base: u8 = @intCast(base_val);
+
+    const val = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+
+    switch (val) {
+        .fixnum => |i| {
+            var big = try BigIntManaged.initSet(alloc, i);
+            const str = try big.toConst().toStringAlloc(alloc, base, .lower);
+            try ctx.stack.push(.{ .string = str });
+        },
+        .bignum => |b| {
+            const str = try b.toConst().toStringAlloc(alloc, base, .lower);
+            try ctx.stack.push(.{ .string = str });
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "fixnum or bignum", val);
+            return error.TypeMismatch;
+        },
     }
 }

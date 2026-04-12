@@ -153,6 +153,11 @@ fn nativeParseLiteral(ctx: *Context) anyerror!void {
             return;
         }
 
+        if (tokenizer_mod.parseBigNum(ctx.arena.allocator(), token)) |big| {
+            try ctx.stack.push(.{ .bignum = big });
+            return;
+        }
+
         if (tokenizer_mod.parseFloat(token)) |f| {
             try ctx.stack.push(.{ .float = f });
             return;

@@ -1,0 +1,158 @@
+=== div: basic positive fixnums ===
+Stack: [ ]
+PASS: 7 div 2
+Stack: [ ]
+PASS: 10 div 5
+Stack: [ ]
+PASS: 1 div 3
+Stack: [ ]
+PASS: 0 div 5
+Stack: [ ]
+=== div: negative operands truncate toward zero ===
+Stack: [ ]
+PASS: -7 div 2
+Stack: [ ]
+PASS: 7 div -2
+Stack: [ ]
+PASS: -7 div -2
+Stack: [ ]
+=== div: min_i64 / -1 overflow promotes to bignum ===
+Stack: [ ]
+PASS: min_i64 div -1 type
+Stack: [ ]
+PASS: min_i64 div -1 value
+Stack: [ ]
+=== div: division by zero ===
+Stack: [ ]
+PASS: DivisionByZero
+Stack: [ ]
+=== div: bignum operands ===
+Stack: [ ]
+PASS: big div 3
+Stack: [ ]
+PASS: neg big div 3
+Stack: [ ]
+PASS: big div big
+Stack: [ ]
+=== div: mixed fixnum/bignum ===
+Stack: [ ]
+PASS: big div fixnum
+Stack: [ ]
+PASS: fixnum div big
+Stack: [ ]
+=== div: bignum division by zero ===
+Stack: [ ]
+PASS: DivisionByZero
+Stack: [ ]
+=== div: type errors ===
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
+=== rem: basic positive fixnums ===
+Stack: [ ]
+PASS: 7 rem 2
+Stack: [ ]
+PASS: 10 rem 5
+Stack: [ ]
+PASS: 1 rem 3
+Stack: [ ]
+PASS: 0 rem 5
+Stack: [ ]
+=== rem: negative operands ===
+Stack: [ ]
+PASS: -7 rem 2
+Stack: [ ]
+PASS: 7 rem -2
+Stack: [ ]
+PASS: -7 rem -2
+Stack: [ ]
+=== rem: identity ===
+Stack: [ ]
+PASS: identity 7 2
+Stack: [ ]
+PASS: identity -7 2
+Stack: [ ]
+PASS: identity 7 -2
+Stack: [ ]
+PASS: identity -7 -2
+Stack: [ ]
+PASS: identity 100 7
+Stack: [ ]
+PASS: identity -100 7
+Stack: [ ]
+=== rem: division by zero ===
+Stack: [ ]
+PASS: DivisionByZero
+Stack: [ ]
+=== rem: bignum operands ===
+Stack: [ ]
+PASS: big rem 7
+Stack: [ ]
+PASS: big rem big
+Stack: [ ]
+PASS: neg big rem 7
+Stack: [ ]
+=== rem: mixed fixnum/bignum ===
+Stack: [ ]
+PASS: fixnum rem big
+Stack: [ ]
+=== rem: bignum division by zero ===
+Stack: [ ]
+PASS: DivisionByZero
+Stack: [ ]
+=== rem: type errors ===
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
+=== gcd: basic cases ===
+Stack: [ ]
+PASS: gcd 12 8
+Stack: [ ]
+PASS: gcd 8 12
+Stack: [ ]
+PASS: gcd 100 75
+Stack: [ ]
+PASS: gcd primes
+Stack: [ ]
+=== gcd: negatives ===
+Stack: [ ]
+PASS: gcd -12 8
+Stack: [ ]
+PASS: gcd 12 -8
+Stack: [ ]
+PASS: gcd -12 -8
+Stack: [ ]
+=== gcd: zero cases ===
+Stack: [ ]
+PASS: gcd 0 5
+Stack: [ ]
+PASS: gcd 5 0
+Stack: [ ]
+PASS: gcd 0 0
+Stack: [ ]
+PASS: gcd 0 -5
+Stack: [ ]
+=== gcd: bignum operands ===
+Stack: [ ]
+PASS: gcd big fixnum
+Stack: [ ]
+PASS: gcd big big
+Stack: [ ]
+PASS: gcd fixnum big
+Stack: [ ]
+=== gcd: type errors ===
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]

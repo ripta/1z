@@ -1,0 +1,31 @@
+use "testing" ;
+
+"Bignum literal type" test-section
+99999999999999999999 type-of bignum: "bignum literal type-of" assert=
+-99999999999999999999 type-of bignum: "negative bignum literal type-of" assert=
+
+"Bignum display" test-section
+99999999999999999999 to-string "99999999999999999999" "bignum to-string" assert=
+-99999999999999999999 to-string "-99999999999999999999" "negative bignum to-string" assert=
+
+"Bignum equality" test-section
+99999999999999999999 99999999999999999999 = "bignum = bignum (same)" assert-true
+99999999999999999999 88888888888888888888 = "bignum = bignum (diff)" assert-false
+
+"Cross-type equality" test-section
+42 99999999999999999999 = "fixnum = bignum" assert-false
+99999999999999999999 42 = "bignum = fixnum" assert-false
+
+"Cross-type comparison" test-section
+42 99999999999999999999 < "fixnum < bignum" assert-true
+99999999999999999999 42 < "bignum < fixnum" assert-false
+42 99999999999999999999 > "fixnum > bignum" assert-false
+99999999999999999999 42 > "bignum > fixnum" assert-true
+
+"Bignum comparison" test-section
+88888888888888888888 99999999999999999999 < "bignum < bignum" assert-true
+99999999999999999999 88888888888888888888 > "bignum > bignum" assert-true
+
+"Negative bignum comparison" test-section
+-99999999999999999999 42 < "negative bignum < fixnum" assert-true
+-88888888888888888888 -99999999999999999999 > "neg bignum > neg bignum" assert-true

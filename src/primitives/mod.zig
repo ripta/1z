@@ -55,6 +55,7 @@ pub const protocols = @import("protocols.zig");
 pub const sockets = @import("sockets.zig");
 pub const introspect = @import("introspect.zig");
 pub const math = @import("math.zig");
+pub const bitwise = @import("bitwise.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -108,7 +109,8 @@ pub const extracted_primitives = stack.primitives ++
     iterators.primitives ++
     protocols.primitives ++
     sockets.primitives ++
-    introspect.primitives;
+    introspect.primitives ++
+    bitwise.primitives;
 
 // Aggregated registry entries for the native virtual module
 pub const extracted_registry_entries = structs.registry_entries ++

@@ -5,6 +5,8 @@ const Task = @import("task.zig").Task;
 const Iterator = @import("iterator.zig").Iterator;
 const NativeFn = @import("dictionary.zig").NativeFn;
 
+pub const BigIntManaged = std.math.big.int.Managed;
+
 /// Instruction represents a single operation in a compiled quotation.
 pub const Instruction = struct {
     op: Op,
@@ -337,6 +339,7 @@ fn writeFormatSpec(writer: anytype, spec: FormatSpec) !void {
 pub const Value = union(enum) {
     fixnum: i64,
     float: f64,
+    bignum: BigIntManaged,
     boolean: bool,
     string: []const u8,
     symbol: []const u8,
@@ -380,6 +383,10 @@ pub const Value = union(enum) {
                         try writer.writeAll(".0");
                     }
                 }
+            },
+            .bignum => |b| {
+                const str = try b.toConst().toStringAlloc(b.allocator, 10, .lower);
+                try writer.writeAll(str);
             },
             .boolean => |b| try writer.writeAll(if (b) "t" else "f"),
             .string => |s| try writer.print("\"{s}\"", .{s}),
@@ -533,6 +540,7 @@ pub const Value = union(enum) {
         return switch (self) {
             .fixnum => |a| a == other.fixnum,
             .float => |a| a == other.float,
+            .bignum => |a| a.toConst().eql(other.bignum.toConst()),
             .boolean => |a| a == other.boolean,
             .string => |a| std.mem.eql(u8, a, other.string),
             .symbol => |a| std.mem.eql(u8, a, other.symbol),
@@ -657,6 +665,14 @@ pub const Value = union(enum) {
                 var canonical = f;
                 if (canonical == 0.0) canonical = 0.0;
                 hasher.update(std.mem.asBytes(&canonical));
+            },
+            .bignum => |b| {
+                const c = b.toConst();
+                const positive_byte: u8 = if (c.positive) 1 else 0;
+                hasher.update(&.{positive_byte});
+                for (c.limbs[0..c.limbs.len]) |limb| {
+                    hasher.update(std.mem.asBytes(&limb));
+                }
             },
             .boolean => |b| hasher.update(std.mem.asBytes(&b)),
             .string, .symbol => |s| hasher.update(s),

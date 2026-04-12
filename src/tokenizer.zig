@@ -166,13 +166,54 @@ pub const Tokenizer = struct {
 };
 
 /// Parse an integer from a token. Returns null if not a valid integer.
-/// Supports hex literals with 0x or 0X prefix.
+/// Supports hex literals with 0x or 0X prefix, including negative hex (-0xFF).
 pub fn parseInteger(token: []const u8) ?i64 {
-    // Support hex literals (0x or 0X prefix)
-    if (token.len > 2 and (token[0] == '0') and (token[1] == 'x' or token[1] == 'X')) {
-        return std.fmt.parseInt(i64, token[2..], 16) catch null;
+    const is_negative = token.len > 0 and token[0] == '-';
+    const after_sign = if (is_negative) token[1..] else token;
+    if (after_sign.len > 2 and after_sign[0] == '0' and (after_sign[1] == 'x' or after_sign[1] == 'X')) {
+        const magnitude = std.fmt.parseInt(i64, after_sign[2..], 16) catch return null;
+        if (is_negative) {
+            if (magnitude == 0) return 0;
+            return std.math.negate(magnitude) catch null;
+        }
+        return magnitude;
     }
     return std.fmt.parseInt(i64, token, 10) catch null;
+}
+
+/// Parse a bignum from a token when parseInteger fails (overflow).
+/// Supports both decimal and hex (0x/0X prefix) integers, including negatives.
+pub fn parseBigNum(allocator: std.mem.Allocator, token: []const u8) ?std.math.big.int.Managed {
+    const is_negative = token.len > 0 and token[0] == '-';
+    const after_sign = if (is_negative) token[1..] else token;
+    const is_hex = after_sign.len > 2 and after_sign[0] == '0' and
+        (after_sign[1] == 'x' or after_sign[1] == 'X');
+
+    if (is_hex) {
+        const digits = after_sign[2..];
+        if (digits.len == 0) return null;
+        for (digits) |ch| {
+            if (!std.ascii.isHex(ch)) return null;
+        }
+        var big = std.math.big.int.Managed.init(allocator) catch return null;
+        big.setString(16, digits) catch {
+            big.deinit();
+            return null;
+        };
+        if (is_negative) big.negate();
+        return big;
+    }
+
+    if (after_sign.len == 0) return null;
+    for (after_sign) |ch| {
+        if (ch < '0' or ch > '9') return null;
+    }
+    var big = std.math.big.int.Managed.init(allocator) catch return null;
+    big.setString(10, token) catch {
+        big.deinit();
+        return null;
+    };
+    return big;
 }
 
 /// Parse a float from a token. Returns null if not a valid float literal.

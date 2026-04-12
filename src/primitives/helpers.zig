@@ -8,6 +8,7 @@ const Quotation = value_mod.Quotation;
 const Vector = value_mod.Vector;
 const ByteArray = value_mod.ByteArray;
 const Stream = value_mod.Stream;
+const BigIntManaged = value_mod.BigIntManaged;
 const Module = value_mod.Module;
 const Marker = value_mod.Marker;
 const StructType = value_mod.StructType;
@@ -110,6 +111,7 @@ pub fn valueTypeName(val: Value) []const u8 {
     return switch (val) {
         .fixnum => "fixnum",
         .float => "float",
+        .bignum => "bignum",
         .boolean => "boolean",
         .string => "string",
         .symbol => "symbol",
@@ -144,6 +146,8 @@ pub fn valueTypeName(val: Value) []const u8 {
 pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]const u8 {
     return switch (val) {
         .fixnum => |i| std.fmt.allocPrint(allocator, "{d}", .{i}),
+        .bignum => |b| b.toConst().toStringAlloc(allocator, 10, .lower) catch
+            allocator.dupe(u8, "<bignum>"),
         .float => |f| blk: {
             if (std.math.isNan(f)) break :blk allocator.dupe(u8, "nan");
             if (std.math.isInf(f)) {
@@ -444,4 +448,18 @@ pub fn popDuration(ctx: *Context) !struct { ns: i128, val: Value } {
             return error.TypeMismatch;
         },
     };
+}
+
+/// Return fixnum if the bignum fits in i64, otherwise bignum.
+pub fn demoteBignum(big: BigIntManaged) Value {
+    if (big.fits(i64)) {
+        return .{ .fixnum = big.toInt(i64) catch unreachable };
+    }
+    return .{ .bignum = big };
+}
+
+/// Promote a fixnum to a Managed bignum. Bignums are cloned so the result
+/// always owns its own memory.
+pub fn ensureBignum(alloc: Allocator, val: Value) !BigIntManaged {
+    return if (val == .bignum) try val.bignum.clone() else try BigIntManaged.initSet(alloc, val.fixnum);
 }
