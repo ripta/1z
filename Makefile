@@ -20,7 +20,7 @@ build: ## Build the project (default)
 	zig build --prefix $(ZIG_PREFIX)
 
 release: ## Build with optimizations
-	zig build --release --prefix $(ZIG_PREFIX)
+	zig build --release=fast --prefix $(ZIG_PREFIX)
 
 run: build ## Build and run the 1z interpreter
 	./$(ZIG_PREFIX)/bin/1z $(ARGS)
