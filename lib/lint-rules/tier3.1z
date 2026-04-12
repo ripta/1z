@@ -71,3 +71,64 @@ use "lint-rules/tier2" ;
 
 "sequence-prefix-misuse" warning: [ (check-sequence-prefix-misuse) ] f
 make-lint-rule register-lint-rule
+
+\ --- Helpers for associative-prefix-misuse ---
+
+\ Known associative type annotations (inspected form).
+(associative-type-annotation?): ( param -- ? ) [
+  type-annotation>> dup f = [
+    drop f
+  ] [
+    inspect
+    { "<type:hash>" "<type:mutable-map>" "<type:set>" "<type:mutable-set>" }
+    swap [ = ] curry #any
+  ] if
+] ;
+
+\ Known associative parameter names.
+(associative-param-name?): ( param -- ? ) [
+  name>> >string
+  { "assoc" "hash" "map" "mmap" "dict" "table" "set"
+    "set1" "set2"
+  }
+  swap [ = ] curry #any
+] ;
+
+\ Does a stack-effect-param indicate an associative structure?
+(associative-param?): ( param -- ? ) [
+  dup (associative-type-annotation?) [ drop t ] [
+    (associative-param-name?)
+  ] if
+] ;
+
+\ Does any input parameter indicate an associative structure?
+(has-associative-input?): ( word-info -- ? ) [
+  stack-effect>> dup f = [
+    \ No stack effect: skip (missing-stack-effect catches this)
+    drop t
+  ] [
+    inputs>> [ (associative-param?) ] #any
+  ] if
+] ;
+
+\ --- Rule: associative-prefix-misuse ---
+
+(check-associative-prefix-misuse): ( path source tokens line-index semantic-context -- diagnostics ) [
+  nip nip nip
+  [
+    dup name>> >string "@" #starts-with? [
+      dup (has-associative-input?) [
+        2drop f
+      ] [
+        source-loc>> dup f = [ 2drop f ] [
+          "associative-prefix-misuse" warning: 3 pick-n 3 pick-n dup line>> swap column>>
+          "word with @ prefix does not appear to operate on associative structures"
+          make-lint-diagnostic nip nip
+        ] if
+      ] if
+    ] [ 2drop f ] if
+  ] (check-semantic-words)
+] ;
+
+"associative-prefix-misuse" warning: [ (check-associative-prefix-misuse) ] f
+make-lint-rule register-lint-rule

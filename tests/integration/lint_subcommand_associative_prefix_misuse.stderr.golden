@@ -1,0 +1,1 @@
+tests/fixtures/lint/associative-prefix-misuse.1z:2:29: warning: [associative-prefix-misuse] word with @ prefix does not appear to operate on associative structures
