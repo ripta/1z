@@ -109,7 +109,7 @@ Stack: [ ]
 === error includes position ===
 Stack: [ ]
 Stack: [ [ "ab!cd" [ ] make-vector ALPHA-RULE #push! >array <lexer> tokenize #collect ] ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } <error invalid-argument: unrecognized input at position 2: '!' [tests/integration/lexer.1z:15:throw <- tests/integration/lexer.1z:39:if <- tests/integration/lexer.1z:7:(try-rules) <- tests/integration/lexer.1z:17:if <- tests/integration/lexer.1z:5:call <- tests/integration/lexer.1z:128:#collect <- tests/integration/lexer.1z:129:recover]> ]
+Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } <error invalid-argument: unrecognized input at position 2: '!' [tests/integration/lexer.1z:32:throw <- tests/integration/lexer.1z:56:if <- tests/integration/lexer.1z:65:(try-rules) <- tests/integration/lexer.1z:75:if <- tests/integration/lexer.1z:766:call <- tests/integration/lexer.1z:128:#collect <- tests/integration/lexer.1z:129:recover]> ]
 PASS: error mentions position
 Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
 === inspect ===
