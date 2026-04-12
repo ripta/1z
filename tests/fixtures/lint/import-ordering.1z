@@ -1,0 +1,7 @@
+use "strings" ;
+use "conversions" ;
+
+\\ A helper word.
+helper: ( -- n ) [ 42 ] ;
+
+use "ranges" ;

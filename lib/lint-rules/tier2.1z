@@ -201,9 +201,9 @@ make-lint-rule register-lint-rule
           2drop
         ] [
           drop
-          \ stack: ... sem-ctx(2) all-names(1) word-name(0)
-          2 pick-n over semantic-word-info
-          \ stack: ... all-names(2) word-name(1) word-info(0)
+          \ stack: path(4) sem-ctx(3) results(2) all-names(1) word-name(0)
+          3 pick-n over semantic-word-info
+          \ stack: path(4) sem-ctx(3) results(2) all-names(1) word-name(0) word-info
           dup f = [ 2drop ] [
             dup provenance>> f = not [ 2drop ] [
               source-loc>> dup f = [ 2drop ] [
@@ -225,7 +225,8 @@ make-lint-rule register-lint-rule
             2drop
           ] [
             drop
-            2 pick-n over semantic-word-info
+            \ stack: path(4) sem-ctx(3) results(2) all-names(1) word-name(0)
+            3 pick-n over semantic-word-info
             dup f = [ 2drop ] [
               dup provenance>> f = not [ 2drop ] [
                 source-loc>> dup f = [ 2drop ] [
@@ -296,7 +297,7 @@ make-lint-rule register-lint-rule
           2 pick-n last-module: @get dup f = [
             drop
           ] [
-            over >string swap >string < not [
+            over >string swap >string < [
               over pos>> 3 pick-n unsorted: @get swap #push! drop
             ] when
           ] if
@@ -339,6 +340,5 @@ make-lint-rule register-lint-rule
   [ drop drop drop drop drop ] dip
 ] ;
 
-\ TODO: import-ordering has stack management issues, temporarily disabled
-\ "import-ordering" info: [ (check-import-ordering) ] f
-\ make-lint-rule register-lint-rule
+"import-ordering" info: [ (check-import-ordering) ] f
+make-lint-rule register-lint-rule

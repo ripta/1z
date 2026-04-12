@@ -1,0 +1,4 @@
+@raw
+lint
+--stdlib-path=lib
+tests/fixtures/lint/predicate-naming.1z

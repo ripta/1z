@@ -1,0 +1,4 @@
+@raw
+lint
+--stdlib-path=lib
+tests/fixtures/lint/missing-doc-comment.1z

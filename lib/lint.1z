@@ -116,7 +116,7 @@ token-kind?: ( token kind -- ? ) [
 \\ Predicate: token is significant for token-level scans.
 \\ Whitespace and newline tokens are not significant.
 significant-token?: ( token -- ? ) [
-  dup kind>> dup whitespace: = swap newline: = or not
+  kind>> dup whitespace: = swap newline: = or not
 ] ;
 
 \\ Predicate: token is a definition symbol token.

@@ -1,0 +1,4 @@
+@raw
+lint
+--stdlib-path=lib
+tests/fixtures/lint/constructor-consistency.1z

@@ -1,0 +1,1 @@
+tests/fixtures/lint/conversion-naming.1z:2:26: warning: [conversion-naming] conversion word should have ( x -- y ) stack effect shape

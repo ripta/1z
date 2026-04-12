@@ -1,0 +1,1 @@
+tests/fixtures/lint/missing-doc-comment.1z:1:25: info: [missing-doc-comment] public word lacks a doc comment

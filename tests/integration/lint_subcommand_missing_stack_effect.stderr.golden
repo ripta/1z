@@ -1,0 +1,1 @@
+tests/fixtures/lint/missing-stack-effect.1z:2:19: warning: [missing-stack-effect] public word lacks a declared stack effect

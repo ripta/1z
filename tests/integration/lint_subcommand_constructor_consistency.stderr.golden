@@ -1,0 +1,1 @@
+tests/fixtures/lint/constructor-consistency.1z:2:36: warning: [constructor-consistency] make- constructor has no corresponding unmake- destructor

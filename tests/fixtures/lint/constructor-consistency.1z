@@ -1,0 +1,2 @@
+\\ Make a widget.
+make-widget: ( n -- w ) [ 1array ] ;

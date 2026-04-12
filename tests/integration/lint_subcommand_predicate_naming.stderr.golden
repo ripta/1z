@@ -1,0 +1,1 @@
+tests/fixtures/lint/predicate-naming.1z:2:31: warning: [predicate-naming] predicate word output does not indicate a boolean return type

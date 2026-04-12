@@ -1,0 +1,2 @@
+\\ A word without a stack effect.
+no-effect: [ 42 ] ;

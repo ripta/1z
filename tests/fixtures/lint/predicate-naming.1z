@@ -1,0 +1,2 @@
+\\ Check something.
+bad-pred?: ( n -- n ) [ 1 + ] ;

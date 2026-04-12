@@ -1,0 +1,2 @@
+tests/fixtures/lint/import-ordering.1z:7:1: info: [import-ordering] use statement should appear before other definitions
+tests/fixtures/lint/import-ordering.1z:2:5: info: [import-ordering] use statements should be sorted alphabetically
