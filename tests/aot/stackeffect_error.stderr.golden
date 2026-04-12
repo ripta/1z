@@ -1,2 +1,2 @@
-<aot>:0: error 'type-mismatch' expected string, got fixnum 42 at word '>bytes'
+src/prelude.1z:480: error 'type-mismatch' expected string, got fixnum 42 at word '>bytes'
   stack effect: ( string -- byte-array )

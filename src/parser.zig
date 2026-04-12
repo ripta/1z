@@ -262,10 +262,13 @@ fn executeParseTimeWord(
     // 3. Keep everything before the trail, including call_words and their operands, untouched
     instructions.items.len = tail_start;
 
+    const old_invoke_file = c.parse_time_source_file;
     const old_invoke_line = c.parse_time_source_line;
     const old_invoke_column = c.parse_time_source_column;
+    c.parse_time_source_file = c.current_source;
     c.parse_time_source_line = line + c.parse_line_offset;
     c.parse_time_source_column = column;
+    defer c.parse_time_source_file = old_invoke_file;
     defer c.parse_time_source_line = old_invoke_line;
     defer c.parse_time_source_column = old_invoke_column;
 

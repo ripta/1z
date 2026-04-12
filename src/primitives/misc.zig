@@ -208,6 +208,10 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     ctx.current_source = filename;
     defer ctx.current_source = old_source;
 
+    const old_load_file_source = ctx.load_file_source;
+    ctx.load_file_source = filename;
+    defer ctx.load_file_source = old_load_file_source;
+
     // Save/restore current_source_dir around file execution
     const old_source_dir = ctx.current_source_dir;
     ctx.current_source_dir = std.fs.path.dirname(resolved);
@@ -1039,7 +1043,14 @@ fn nativeRecordImport(ctx: *Context) anyerror!void {
 
     const arena = ctx.arena.allocator();
     const fields = try arena.alloc(Value, 6);
-    fields[0] = .{ .string = try arena.dupe(u8, ctx.current_source) };
+
+    // Determine the source file that triggered this import.
+    // For runtime imports (e.g., `reexport` called from within a loaded file),
+    // load_file_source holds the file being loaded by nativeLoadImpl.
+    // For parse-time imports (e.g., `use`), parse_time_source_file holds the
+    // file being parsed at the moment the parse-time word was invoked.
+    const import_source = ctx.load_file_source orelse ctx.parse_time_source_file;
+    fields[0] = .{ .string = try arena.dupe(u8, import_source) };
     fields[1] = .{ .fixnum = @intCast(ctx.parse_time_source_line) };
     fields[2] = .{ .fixnum = @intCast(ctx.parse_time_source_column) };
     fields[3] = .{ .string = try arena.dupe(u8, module_path) };

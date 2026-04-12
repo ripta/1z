@@ -19,7 +19,13 @@ const StackEffectParam = stack_effect_mod.StackEffectParam;
 
 // Keep extra headroom so overflow handling can still unwind and materialize an
 // error object after detecting that a task exhausted its native stack.
+// The reserve must exceed the largest single Zig frame in the recursive
+// execution path (executeInstructions + executeQuotationWithPic) so the 1z
+// overflow check always fires before the OS guard page is reached. Debug
+// builds have larger frames, so we use 1/8 of the total stack as the reserve
+// rather than a fixed byte count.
 const task_stack_size: usize = 768 * 1024;
+const task_stack_reserve: usize = task_stack_size / 8;
 
 const RegistryEntry = @import("types.zig").RegistryEntry;
 
@@ -74,9 +80,8 @@ fn allocateTask(
         .quotation = quotation,
     };
 
-    const reserve: usize = 32 * 1024;
     task_ctx.stack_high = @intFromPtr(stack_mem.ptr) + stack_mem.len;
-    task_ctx.stack_limit = @intFromPtr(stack_mem.ptr) + reserve;
+    task_ctx.stack_limit = @intFromPtr(stack_mem.ptr) + task_stack_reserve;
 
     task_mod.initTaskContext(task, &task_mod.taskEntryPoint, &scheduler.scheduler_uctx);
     try scheduler.all_tasks.append(ctx.allocator, task);

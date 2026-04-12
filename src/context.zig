@@ -67,6 +67,7 @@ pub const ExecutionError = error{
 /// CallFrame represents a single frame in the call stack.
 pub const CallFrame = struct {
     word_name: []const u8,
+    source: []const u8,
     line: usize,
     column: usize = 0,
 };
@@ -262,6 +263,9 @@ pub const Context = struct {
     /// Module whose deps frame should be pushed for the tail call target.
     /// Set alongside tail_call_instructions when the tail-called word has a source_module.
     tail_call_module: ?*const value_mod.Module = null,
+    /// Source file of the tail call target, for execution-source tracking.
+    /// Set alongside tail_call_instructions when the tail-called word has a source_file.
+    tail_call_source: ?[]const u8 = null,
     /// Directory of the currently executing source file for relative path resolution
     current_source_dir: ?[]const u8 = null,
     /// User-configured load paths for search-mode module resolution
@@ -295,11 +299,21 @@ pub const Context = struct {
     /// parse-time-only marker. Used by the parser to allow parse-time-only
     /// words inside parse-time definitions.
     parsing_parse_time_def: bool = false,
+    /// Source file of the current parse-time word invocation.
+    /// Set by the parser before invoking a parse-time word body (before any
+    /// compound-word execution-source tracking can change current_source).
+    parse_time_source_file: []const u8 = "",
     /// Source line of the current parse-time word invocation (file-relative).
     /// Set by executeParseTimeWord with save/restore for nesting.
     parse_time_source_line: usize = 0,
     /// Source column of the current parse-time word invocation.
     parse_time_source_column: usize = 0,
+    /// Source file of the file currently being loaded by nativeLoadImpl.
+    /// Set and restored via save-restore in nativeLoadImpl so that runtime words,
+    /// like `reexport`, which execute inside the loaded file's body, can record
+    /// the correct import source, even after execution-source tracking updates
+    /// current_source to their own defining file.
+    load_file_source: ?[]const u8 = null,
     /// Offset to convert tokenizer-relative line numbers to file-relative.
     /// The tokenizer restarts at line 1 for each statement. This offset is
     /// the file line where the current statement starts minus 1.
@@ -704,6 +718,10 @@ pub const Context = struct {
     /// instead of the compiled-in embedded prelude.
     pub fn loadPrelude(self: *Context, external_source: ?[]const u8) !void {
         var processor: StatementProcessor = .{};
+
+        const old_source = self.current_source;
+        self.current_source = if (external_source != null) "<prelude>" else "src/prelude.1z";
+        defer self.current_source = old_source;
 
         // Push an initial frame so that the prelude definitions land in a local
         // frame instead of the global dictionary
@@ -2456,7 +2474,7 @@ pub const Context = struct {
         }
 
         if (self.lookupWord(module_path)) |module_word| {
-            self.pushCallFrame(module_path, line, column);
+            self.pushCallFrame(module_path, self.current_source, line, column);
             defer self.popCallFrame();
 
             switch (module_word.action) {
@@ -2480,7 +2498,7 @@ pub const Context = struct {
         if (module.words.get(word_name)) |mod_word| {
             if (self.active_sandbox) |sandbox| {
                 if (!sandbox.allows(mod_word.capability)) {
-                    self.pushCallFrame(name, line, column);
+                    self.pushCallFrame(name, self.current_source, line, column);
                     self.pending_error_message = std.fmt.allocPrint(
                         self.arena.allocator(),
                         "'{s}' requires capability '{s}' which is not granted by the active sandbox",
@@ -2497,7 +2515,7 @@ pub const Context = struct {
                 trace_mod.traceResolve(&tw, name, .{ .qualified_found = .{ .module = module_path, .word = word_name } });
             }
 
-            self.pushCallFrame(name, line, column);
+            self.pushCallFrame(name, self.current_source, line, column);
             if (self.trace.trace_words and trace_mod.matchesPattern(name, self.trace.trace_words_pattern)) {
                 var tw = trace_mod.TraceWriter.init();
                 trace_mod.traceWord(&tw, name, self.current_source, line, &self.stack);
@@ -2546,9 +2564,10 @@ pub const Context = struct {
     }
 
     /// Push a call frame onto the call stack.
-    pub fn pushCallFrame(self: *Context, word_name: []const u8, line: usize, column: usize) void {
+    pub fn pushCallFrame(self: *Context, word_name: []const u8, source: []const u8, line: usize, column: usize) void {
         self.call_stack.append(self.allocator, .{
             .word_name = word_name,
+            .source = source,
             .line = line,
             .column = column,
         }) catch {};
@@ -3288,7 +3307,7 @@ pub const Context = struct {
             self.error_details.append(self.allocator, .{
                 .error_type = error_type,
                 .message = message,
-                .source = self.ownedCurrentSource(),
+                .source = frame.source,
                 .line = frame.line,
                 .word_name = frame.word_name,
                 .stack_effect_str = se_str,
@@ -3399,7 +3418,10 @@ pub const Context = struct {
 
         // Store the message (copy to arena so it outlives the buffer)
         const msg_copy = self.arena.allocator().dupe(u8, fbs.getWritten()) catch return;
-
+        const source = if (self.call_stack.items.len > 0)
+            self.call_stack.items[self.call_stack.items.len - 1].source
+        else
+            self.ownedCurrentSource();
         const line = if (self.call_stack.items.len > 0)
             self.call_stack.items[self.call_stack.items.len - 1].line
         else
@@ -3408,7 +3430,7 @@ pub const Context = struct {
         self.error_details.append(self.allocator, .{
             .error_type = "stack-effect-mismatch",
             .message = msg_copy,
-            .source = self.ownedCurrentSource(),
+            .source = source,
             .line = line,
             .word_name = word_name,
         }) catch {};
@@ -3423,6 +3445,9 @@ pub const Context = struct {
 
     /// Execute a quotation with an optional PIC table for inline caching.
     pub fn executeQuotationWithPic(self: *Context, quotation: Quotation, pic_table: ?*PicTable) anyerror!void {
+        const saved_source = self.current_source;
+        defer self.current_source = saved_source;
+
         var current_instructions = quotation.instructions;
         var current_pic = pic_table;
         var current_module: ?*const value_mod.Module = null;
@@ -3433,6 +3458,7 @@ pub const Context = struct {
             const depth_before = self.stack.depth();
             self.tail_call_instructions = null;
             self.tail_call_module = null;
+            self.tail_call_source = null;
 
             // Push module deps frame on first entry into a module context. On
             // subsequent iterations, the frame persists so that runtime-defined
@@ -3466,6 +3492,9 @@ pub const Context = struct {
                 // PIC table is per-word-body; on tail call to a different word,
                 // the PIC table no longer applies.
                 current_pic = null;
+
+                if (self.tail_call_source) |tcs| self.current_source = tcs;
+                self.tail_call_source = null;
 
                 const new_module = self.tail_call_module;
                 self.tail_call_module = null;
@@ -3654,7 +3683,7 @@ pub const Context = struct {
                 },
                 .call_word => |name| {
                     signal.checkPendingSignals(self) catch |err| {
-                        self.pushCallFrame(name, instr.line, instr.column);
+                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
                         return self.wordErrorCleanup(name, err);
                     };
 
@@ -3666,7 +3695,7 @@ pub const Context = struct {
                     if (self.lookupWord(name)) |word| {
                         if (self.active_sandbox) |sandbox| {
                             if (!sandbox.allows(word.capability)) {
-                                self.pushCallFrame(name, instr.line, instr.column);
+                                self.pushCallFrame(name, self.current_source, instr.line, instr.column);
                                 self.pending_error_message = std.fmt.allocPrint(
                                     self.arena.allocator(),
                                     "'{s}' requires capability '{s}' which is not granted by the active sandbox",
@@ -3677,7 +3706,7 @@ pub const Context = struct {
                         }
 
                         if (word.parse_time_only and self.parse_tokenizer == null) {
-                            self.pushCallFrame(name, instr.line, instr.column);
+                            self.pushCallFrame(name, self.current_source, instr.line, instr.column);
                             self.pending_error_message = "parse-time-only word cannot be called at runtime";
                             return self.wordErrorCleanup(name, error.ParseError);
                         }
@@ -3686,17 +3715,20 @@ pub const Context = struct {
                         if (word.word_id) |wid| {
                             if (word.stack_effect) |effect| {
                                 self.validateParameterEffects(&effect) catch |err| {
-                                    self.pushCallFrame(name, instr.line, instr.column);
+                                    self.pushCallFrame(name, self.current_source, instr.line, instr.column);
                                     return self.wordErrorCleanup(name, err);
                                 };
                                 if (!shouldSkipTypeAnnotationValidation(word)) {
                                     self.validateTypeAnnotations(&effect) catch |err| {
-                                        self.pushCallFrame(name, instr.line, instr.column);
+                                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
                                         return self.wordErrorCleanup(name, err);
                                     };
                                 }
                             }
+                            const saved_source = self.current_source;
+                            if (word.source_file) |sf| self.current_source = sf;
                             const jit_result = ir_codegen.executeCompiled(self, wid);
+                            self.current_source = saved_source;
                             if (self.trace.trace_jit) {
                                 var tw = trace_mod.TraceWriter.init();
                                 trace_mod.traceJitDispatch(&tw, name, wid, jit_result != .bail);
@@ -3719,7 +3751,7 @@ pub const Context = struct {
                             }
                         }
 
-                        self.pushCallFrame(name, instr.line, instr.column);
+                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
                         self.traceWordExecution(name, instr);
 
                         if (word.stack_effect) |effect| {
@@ -3779,6 +3811,7 @@ pub const Context = struct {
                                     if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                                     self.tail_call_instructions = instrs;
                                     self.tail_call_module = word.source_module;
+                                    self.tail_call_source = word.source_file;
                                     return;
                                 },
                                 .native => |func| {
@@ -3837,6 +3870,9 @@ pub const Context = struct {
                             defer self.current_pic_entry = null;
 
                             const result = blk: {
+                                const saved_source = self.current_source;
+                                defer self.current_source = saved_source;
+                                if (word.source_file) |sf| self.current_source = sf;
                                 if (word.source_module) |mod| {
                                     switch (word.action) {
                                         .compound => |instrs| {
@@ -3873,7 +3909,7 @@ pub const Context = struct {
                         }
                     } else if (isQualifiedName(name)) {
                         self.executeQualifiedName(name, instr.line, instr.column) catch |err| {
-                            self.pushCallFrame(name, instr.line, instr.column);
+                            self.pushCallFrame(name, self.current_source, instr.line, instr.column);
                             self.captureCallStackOnError(err);
                             self.popCallFrame();
                             return err;
@@ -3886,7 +3922,7 @@ pub const Context = struct {
                             var tw = trace_mod.TraceWriter.init();
                             trace_mod.traceResolve(&tw, name, .not_found);
                         }
-                        self.pushCallFrame(name, instr.line, instr.column);
+                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
                         self.captureCallStackOnError(ExecutionError.UnknownWord);
                         self.popCallFrame();
                         return ExecutionError.UnknownWord;
@@ -4125,7 +4161,7 @@ test "clearExecutionDetails clears both call stack and error details" {
     defer ctx.deinit();
 
     // Manually add some data to test clearing
-    ctx.call_stack.append(ctx.allocator, .{ .word_name = "test", .line = 1 }) catch {};
+    ctx.call_stack.append(ctx.allocator, .{ .word_name = "test", .source = "<test>", .line = 1 }) catch {};
     ctx.error_details.append(ctx.allocator, .{
         .error_type = "test-error",
         .message = "test",

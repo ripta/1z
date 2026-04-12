@@ -1982,7 +1982,7 @@ fn compileInstructions(
                             emitParamValidation(state, eff_ptr);
                         }
 
-                        emitNativeWordCall(state, ctx_val, resolved);
+                        emitNativeWordCall(state, ctx_val, resolved, instr.line);
 
                         sp.* = sp.* - resolved.input_count + resolved.output_count;
                         resetStackToPhysical(stack, sp.*);
@@ -2007,7 +2007,7 @@ fn compileInstructions(
                             emitParamValidation(state, eff_ptr);
                         }
 
-                        emitNativeWordCall(state, ctx_val, resolved);
+                        emitNativeWordCall(state, ctx_val, resolved, instr.line);
 
                         sp.* = sp.* - resolved.input_count + resolved.output_count;
                         resetStackToPhysical(stack, sp.*);
@@ -2032,7 +2032,7 @@ fn compileInstructions(
                             emitParamValidation(state, eff_ptr);
                         }
 
-                        emitNativeWordCall(state, ctx_val, resolved);
+                        emitNativeWordCall(state, ctx_val, resolved, instr.line);
 
                         sp.* = sp.* - resolved.input_count + resolved.output_count;
                         resetStackToPhysical(stack, sp.*);
@@ -2056,7 +2056,7 @@ fn compileInstructions(
                             emitParamValidation(state, eff_ptr);
                         }
 
-                        emitNativeWordCall(state, ctx_val, resolved);
+                        emitNativeWordCall(state, ctx_val, resolved, instr.line);
 
                         // Adjust abstract stack by declared effect
                         sp.* = sp.* - resolved.input_count + resolved.output_count;
@@ -2073,7 +2073,7 @@ fn compileInstructions(
                             emitParamValidation(state, eff_ptr);
                         }
 
-                        emitAotWordCall(state, ctx_val, name, resolved);
+                        emitAotWordCall(state, ctx_val, name, resolved, instr.line);
 
                         sp.* = sp.* - resolved.input_count + resolved.output_count;
                         resetStackToPhysical(stack, sp.*);
@@ -2115,7 +2115,8 @@ fn compileInstructions(
                             const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
                             const ctx_val2 = c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
                             const word_id_const = c.ir_const_addr(ctx, resolved.word_id);
-                            const fb_result = c._ir_CALL_2(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val2, word_id_const);
+                            const line_const = c.ir_const_addr(ctx, instr.line);
+                            const fb_result = c._ir_CALL_3(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val2, word_id_const, line_const);
                             emitCallbackPostCheck(state, fb_result, state.error_propagate_status);
                         }
                         const end_fallback = c._ir_END(ctx);
@@ -2857,6 +2858,7 @@ pub fn emitWordCAot(
     // Create prototypes for callback functions
     const proto_1arg = c.ir_proto_1(&ctx, 0, c.IR_I32, c.IR_ADDR);
     const proto_2arg = c.ir_proto_2(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR);
+    const proto_3arg = c.ir_proto_3(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
 
     // Named callback references for AOT C emission
     const safepoint_fn = if (scan_flags.needs_safepoint)
@@ -2893,7 +2895,7 @@ pub fn emitWordCAot(
         c.IR_UNUSED;
 
     const interpreted_call_fn = if (scan_flags.needs_dispatch or scan_flags.needs_native_call)
-        c.ir_const_func(&ctx, c.ir_str(&ctx, "jitInterpretedCall"), proto_2arg)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "jitInterpretedCall"), proto_3arg)
     else
         c.IR_UNUSED;
 
@@ -3119,7 +3121,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitWithParameter(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitIteratorOp(uintptr_t ctx, uintptr_t opcode);\n");
     try out.appendSlice(allocator, "extern int32_t jitNativeCall(uintptr_t ctx, uintptr_t fn_ptr);\n");
-    try out.appendSlice(allocator, "extern int32_t jitInterpretedCall(uintptr_t ctx, uintptr_t word_id);\n");
+    try out.appendSlice(allocator, "extern int32_t jitInterpretedCall(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
     try out.appendSlice(allocator, "extern int32_t jitValidateParamEffects(uintptr_t ctx, uintptr_t effect_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitCallQuotation(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushString(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
@@ -3533,11 +3535,12 @@ fn emitSafepointCall(state: *CompileState) void {
 /// the baked function pointer. In AOT mode, calls through jitInterpretedCall
 /// with the word ID since native function pointers are not available at C
 /// compile time.
-fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, resolved: ResolvedWord) void {
+fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, resolved: ResolvedWord, line: usize) void {
     const ictx = state.ctx;
     if (state.aot_mode) {
         const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
-        const call_result = c._ir_CALL_2(ictx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const);
+        const line_const = c.ir_const_addr(ictx, line);
+        const call_result = c._ir_CALL_3(ictx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, line_const);
         emitCallbackPostCheck(state, call_result, state.error_propagate_status);
     } else {
         const fn_ptr_const = c.ir_const_addr(ictx, resolved.native_fn_ptr.?);
@@ -3549,7 +3552,7 @@ fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, resolved: Resolve
 /// Emit a compound word call in AOT mode. If the target word is in the
 /// compiled word set, emits a direct call by mangled name. Otherwise, falls
 /// through to jitInterpretedCall with the word ID.
-fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, resolved: ResolvedWord) void {
+fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, resolved: ResolvedWord, line: usize) void {
     const ictx = state.ctx;
     if (state.aot_compiled_names) |names| {
         if (names.get(name)) |_| {
@@ -3564,7 +3567,8 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
     }
     // Fall through to interpreter for uncompiled words
     const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
-    const call_result = c._ir_CALL_2(ictx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const);
+    const line_const = c.ir_const_addr(ictx, line);
+    const call_result = c._ir_CALL_3(ictx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, line_const);
     emitCallbackPostCheck(state, call_result, state.error_propagate_status);
 }
 
@@ -3751,7 +3755,7 @@ export fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv
     return 0;
 }
 
-export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize) callconv(.c) i32 {
+export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const word_id: u32 = @intCast(word_id_raw);
@@ -3759,7 +3763,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize) callconv(.c) i3
     const word_name = entry.word_name;
     const word = ctx.lookupWord(word_name) orelse return 1;
 
-    ctx.pushCallFrame(word_name, 0, 0);
+    ctx.pushCallFrame(word_name, ctx.current_source, @intCast(line_raw), 0);
 
     if (word.stack_effect) |effect| {
         ctx.validateParameterEffects(&effect) catch |err| {
@@ -3800,6 +3804,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize) callconv(.c) i3
     }
 
     const result = blk: {
+        if (word.source_file) |sf| ctx.current_source = sf;
         if (word.source_module) |mod| {
             switch (word.action) {
                 .compound => |instrs| {
