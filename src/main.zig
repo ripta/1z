@@ -1476,6 +1476,14 @@ fn handleLint(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
 
     // Set up execution context to run the 1z lint library
     var exec = ExecutionFlags{};
+    if (std.posix.getenv("ONEZ_COMPILE")) |env_val| {
+        if (std.mem.eql(u8, env_val, "eager")) {
+            exec.compile_mode = .eager;
+        } else if (std.mem.eql(u8, env_val, "hybrid")) {
+            exec.compile_mode = .hybrid;
+        }
+    }
+
     const ec = ExecutionContext.init(base_allocator, &global, &exec, err_writer) catch return 2;
     defer ec.deinit();
 
