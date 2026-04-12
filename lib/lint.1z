@@ -315,8 +315,14 @@ run-lint: ( files -- bool ) [
     ] #each
     nip
 
-    \ Sort by file, then line, then column
-    [ dup file>> swap dup line>> swap column>> 3 array-n ] #sort-by
+    \ Sort by file, then line, then column.
+    \ Build a string key "file:NNNNNNNN:NNNNNNNN" with zero-padded numbers.
+    [
+      dup file>> ":" #append
+      over line>> >string dup #len 8 swap - [ "0" #append ] times swap #append
+      ":" #append
+      swap column>> >string dup #len 8 swap - [ "0" #append ] times swap #append
+    ] #sort-by
 
     dup #len 0 = [
       drop t

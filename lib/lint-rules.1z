@@ -1,3 +1,4 @@
 \ lib/lint-rules.1z - Load all lint rule tiers.
 
 "lint-rules/tier1" load reexport
+"lint-rules/tier2" load reexport

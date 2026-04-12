@@ -1,2 +1,4 @@
 \ A clean 1z file with no lint issues.
+
+\\ Double a number.
 double: ( n -- n ) [ 2 * ] ;

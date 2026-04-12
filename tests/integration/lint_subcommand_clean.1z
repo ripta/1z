@@ -1,3 +1,5 @@
 \ A clean file to lint. No rules are registered in the base lint library,
 \ so this should produce no findings.
+
+\\ Double a number.
 double: ( n -- n ) [ 2 * ] ;

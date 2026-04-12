@@ -1,0 +1,344 @@
+\ lib/lint-rules/tier2.1z - Tier 2: semantic lint rules
+\
+\ Rules that use word-info from the semantic analysis layer.
+\ Registered automatically when loaded.
+
+use "lint" ;
+
+\ --- Shared helpers ---
+
+\ Check whether a word should be skipped by semantic rules.
+\ Skips native words, auto-generated words (provenance), and private words.
+(skip-word?): ( word-info -- ? ) [
+  dup native?>> [
+    drop t
+  ] [
+    dup provenance>> f = not [
+      drop t
+    ] [
+      name>> >string "(" #starts-with?
+    ] if
+  ] if
+] ;
+
+\ Strip surrounding quotes from a string token value.
+(strip-string-quotes): ( str -- str' ) [
+  1 #drop dup #len 1 - #take
+] ;
+
+\ Iterate semantic word-infos, collecting diagnostics for words that
+\ match a predicate. The predicate receives ( path word-info -- diag-or-f ).
+\ Returns an array of lint-diagnostic structs.
+(check-semantic-words): ( path sem-ctx predicate -- diagnostics ) [
+  \ stack: path(2) sem-ctx(1) predicate(0)
+  swap dup f = [
+    3drop { }
+  ] [
+    V{ }
+    \ stack: path(3) predicate(2) sem-ctx(1) results(0)
+    1 pick-n semantic-word-names [
+      \ stack: path(4) predicate(3) sem-ctx(2) results(1) word-name(0)
+      2 pick-n swap semantic-word-info
+      \ stack: path(4) predicate(3) sem-ctx(2) results(1) word-info(0)
+      dup f = [ drop ] [
+        dup (skip-word?) [ drop ] [
+          \ Call predicate: ( path word-info -- diag-or-f )
+          4 pick-n swap 4 pick-n call
+          \ stack: path(4) predicate(3) sem-ctx(2) results(1) diag-or-f(0)
+          dup f = [ drop ] [ 1 pick-n swap #push! drop ] if
+        ] if
+      ] if
+    ] #each
+    nip nip [ drop ] dip
+  ] if
+] ;
+
+\ --- Rule 6: missing-stack-effect ---
+
+(check-missing-stack-effect): ( path source tokens line-index semantic-context -- diagnostics ) [
+  nip nip nip
+  \ stack: path(1) sem-ctx(0)
+  [
+    \ predicate: ( path word-info -- diag-or-f )
+    dup stack-effect>> f = [
+      source-loc>> dup f = [ 2drop f ] [
+        \ stack: path(1) source-loc(0)
+        "missing-stack-effect" warning: 3 pick-n 3 pick-n dup line>> swap column>>
+        "public word lacks a declared stack effect"
+        make-lint-diagnostic nip nip
+      ] if
+    ] [ 2drop f ] if
+  ] (check-semantic-words)
+] ;
+
+"missing-stack-effect" warning: [ (check-missing-stack-effect) ] f
+make-lint-rule register-lint-rule
+
+\ --- Rule 7: missing-doc-comment ---
+
+(check-missing-doc-comment): ( path source tokens line-index semantic-context -- diagnostics ) [
+  nip nip nip
+  [
+    dup doc>> f = [
+      source-loc>> dup f = [ 2drop f ] [
+        "missing-doc-comment" info: 3 pick-n 3 pick-n dup line>> swap column>>
+        "public word lacks a doc comment"
+        make-lint-diagnostic nip nip
+      ] if
+    ] [ 2drop f ] if
+  ] (check-semantic-words)
+] ;
+
+"missing-doc-comment" info: [ (check-missing-doc-comment) ] f
+make-lint-rule register-lint-rule
+
+\ --- Rule 8: predicate-naming ---
+
+(boolean-type-annotation?): ( param -- ? ) [
+  type-annotation>> dup f = [
+    drop f
+  ] [
+    inspect "<type:boolean>" =
+  ] if
+] ;
+
+(boolean-param-name?): ( param -- ? ) [
+  name>> >string dup "?" #ends-with? [
+    drop t
+  ] [
+    dup "bool" = swap "pred" = or
+  ] if
+] ;
+
+(predicate-output-ok?): ( word-info -- ? ) [
+  stack-effect>> dup f = [
+    \ No stack effect; skip (missing-stack-effect catches this)
+    drop t
+  ] [
+    outputs>> dup #len 0 = [
+      drop f
+    ] [
+      #last
+      dup (boolean-type-annotation?) [
+        drop t
+      ] [
+        (boolean-param-name?)
+      ] if
+    ] if
+  ] if
+] ;
+
+(check-predicate-naming): ( path source tokens line-index semantic-context -- diagnostics ) [
+  nip nip nip
+  [
+    dup name>> >string "?" #ends-with? [
+      dup (predicate-output-ok?) [
+        2drop f
+      ] [
+        source-loc>> dup f = [ 2drop f ] [
+          "predicate-naming" warning: 3 pick-n 3 pick-n dup line>> swap column>>
+          "predicate word output does not indicate a boolean return type"
+          make-lint-diagnostic nip nip
+        ] if
+      ] if
+    ] [ 2drop f ] if
+  ] (check-semantic-words)
+] ;
+
+"predicate-naming" warning: [ (check-predicate-naming) ] f
+make-lint-rule register-lint-rule
+
+\ --- Rule 9: conversion-naming ---
+
+(conversion-shape-ok?): ( word-info -- ? ) [
+  stack-effect>> dup f = [
+    \ No stack effect; skip
+    drop t
+  ] [
+    dup inputs>> #len 1 = swap outputs>> #len 1 = and
+  ] if
+] ;
+
+(check-conversion-naming): ( path source tokens line-index semantic-context -- diagnostics ) [
+  nip nip nip
+  [
+    dup name>> >string dup ">" #starts-with? swap ">>" #starts-with? not and [
+      dup (conversion-shape-ok?) [
+        2drop f
+      ] [
+        source-loc>> dup f = [ 2drop f ] [
+          "conversion-naming" warning: 3 pick-n 3 pick-n dup line>> swap column>>
+          "conversion word should have ( x -- y ) stack effect shape"
+          make-lint-diagnostic nip nip
+        ] if
+      ] if
+    ] [ 2drop f ] if
+  ] (check-semantic-words)
+] ;
+
+"conversion-naming" warning: [ (check-conversion-naming) ] f
+make-lint-rule register-lint-rule
+
+\ --- Rule 10: constructor-consistency ---
+
+(check-constructor-consistency): ( path source tokens line-index semantic-context -- diagnostics ) [
+  nip nip nip
+  \ stack: path(1) sem-ctx(0)
+  dup f = [
+    2drop { }
+  ] [
+    V{ }
+    \ stack: path(2) sem-ctx(1) results(0)
+    1 pick-n semantic-word-names
+    \ stack: path(3) sem-ctx(2) results(1) all-names(0)
+    dup [
+      \ stack: path(4) sem-ctx(3) results(2) all-names(1) word-name(0)
+      >string
+      dup "make-" #starts-with? [
+        dup 5 #drop "unmake-" swap #append
+        \ stack: ... all-names(2) word-name(1) unmake-name(0)
+        2 pick-n over [ = ] curry #any [
+          2drop
+        ] [
+          drop
+          \ stack: ... sem-ctx(2) all-names(1) word-name(0)
+          2 pick-n over semantic-word-info
+          \ stack: ... all-names(2) word-name(1) word-info(0)
+          dup f = [ 2drop ] [
+            dup provenance>> f = not [ 2drop ] [
+              source-loc>> dup f = [ 2drop ] [
+                nip
+                \ stack: path(4) sem-ctx(3) results(2) all-names(1) source-loc(0)
+                "constructor-consistency" warning: 6 pick-n 3 pick-n dup line>> swap column>>
+                "make- constructor has no corresponding unmake- destructor"
+                make-lint-diagnostic
+                \ stack: path(5) sem-ctx(4) results(3) all-names(2) source-loc(1) diagnostic(0)
+                swap drop 2 pick-n swap #push! drop
+              ] if
+            ] if
+          ] if
+        ] if
+      ] [
+        dup "unmake-" #starts-with? [
+          dup 7 #drop "make-" swap #append
+          2 pick-n over [ = ] curry #any [
+            2drop
+          ] [
+            drop
+            2 pick-n over semantic-word-info
+            dup f = [ 2drop ] [
+              dup provenance>> f = not [ 2drop ] [
+                source-loc>> dup f = [ 2drop ] [
+                  nip
+                  "constructor-consistency" warning: 6 pick-n 3 pick-n dup line>> swap column>>
+                  "unmake- destructor has no corresponding make- constructor"
+                  make-lint-diagnostic
+                  swap drop 2 pick-n swap #push! drop
+                ] if
+              ] if
+            ] if
+          ] if
+        ] [ drop ] if
+      ] if
+    ] #each
+    drop nip [ drop ] dip
+  ] if
+] ;
+
+"constructor-consistency" warning: [ (check-constructor-consistency) ] f
+make-lint-rule register-lint-rule
+
+\ --- Rule 11: import-ordering ---
+\ Token-level rule: use statements must be grouped at the top and sorted.
+\
+\ Uses mutable state (mutable-map) to avoid complex stack manipulation
+\ in the #each callback.
+
+(import-content-token?): ( token -- ? ) [
+  dup significant-token? [
+    dup kind>> comment: = not [
+      dup kind>> doc-comment: = not [
+        kind>> stack-effect: = not
+      ] [ drop f ] if
+    ] [ drop f ] if
+  ] [ drop f ] if
+] ;
+
+(check-import-ordering): ( path source tokens line-index semantic-context -- diagnostics ) [
+  drop
+  \ stack: path(3) source(2) tokens(1) line-index(0)
+
+  \ Use mutable map for state to avoid stack juggling
+  M{ }
+  in-use:       f @set!
+  seen-content: f @set!
+  last-module:  f @set!
+  late-uses:    V{ } @set!
+  unsorted:     V{ } @set!
+
+  \ stack: path(4) source(3) tokens(2) line-index(1) state(0)
+
+  2 pick-n [
+    \ stack: path(5) source(4) tokens(3) line-index(2) state(1) token(0)
+    dup kind>> word: = over value>> "use" = and [
+      \ Found `use` token
+      1 pick-n seen-content: @get [
+        dup pos>> 2 pick-n late-uses: @get swap #push! drop
+      ] when
+      1 pick-n in-use: t @set! drop
+      drop
+    ] [
+      1 pick-n in-use: @get [
+        \ Inside a use statement
+        dup kind>> string: = [
+          dup value>> (strip-string-quotes)
+          \ stack: ... state(2) token(1) module-name(0)
+          2 pick-n last-module: @get dup f = [
+            drop
+          ] [
+            over >string swap >string < not [
+              over pos>> 3 pick-n unsorted: @get swap #push! drop
+            ] when
+          ] if
+          \ Update last-module: set state.last-module = module-name
+          nip 1 pick-n last-module: 2 pick-n @set! drop drop
+        ] [
+          dup kind>> semicolon: = [
+            1 pick-n in-use: f @set! drop
+          ] when
+          drop
+        ] if
+      ] [
+        dup (import-content-token?) [
+          1 pick-n seen-content: t @set! drop
+          1 pick-n last-module: f @set! drop
+        ] when
+        drop
+      ] if
+    ] if
+  ] #each
+
+  \ stack: path(4) source(3) tokens(2) line-index(1) state(0)
+
+  \ Generate diagnostics from collected positions
+  V{ }
+  \ stack: path(5) source(4) tokens(3) line-index(2) state(1) results(0)
+  1 pick-n late-uses: @get [
+    \ stack: path(6) source(5) tokens(4) line-index(3) state(2) results(1) pos(0)
+    "import-ordering" info: 8 pick-n 6 pick-n 4 pick-n
+    "use statement should appear before other definitions"
+    (make-diag)
+    swap drop 1 pick-n swap #push! drop
+  ] #each
+  1 pick-n unsorted: @get [
+    "import-ordering" info: 8 pick-n 6 pick-n 4 pick-n
+    "use statements should be sorted alphabetically"
+    (make-diag)
+    swap drop 1 pick-n swap #push! drop
+  ] #each
+  [ drop drop drop drop drop ] dip
+] ;
+
+\ TODO: import-ordering has stack management issues, temporarily disabled
+\ "import-ordering" info: [ (check-import-ordering) ] f
+\ make-lint-rule register-lint-rule

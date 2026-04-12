@@ -1,1 +1,3 @@
 tests/fixtures/lint/non-kebab-case.1z:1:1: warning: [non-kebab-case] definition name is not kebab-case
+tests/fixtures/lint/non-kebab-case.1z:1:17: warning: [missing-stack-effect] public word lacks a declared stack effect
+tests/fixtures/lint/non-kebab-case.1z:1:17: info: [missing-doc-comment] public word lacks a doc comment
