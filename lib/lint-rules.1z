@@ -2,3 +2,4 @@
 
 "lint-rules/tier1" load reexport
 "lint-rules/tier2" load reexport
+"lint-rules/tier3" load reexport

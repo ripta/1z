@@ -1,0 +1,73 @@
+\ lib/lint-rules/tier3.1z - Tier 3: advanced lint rules
+\
+\ Rules that build on the semantic analysis layer with deeper
+\ naming convention and code pattern checks.
+\ Registered automatically when loaded.
+
+use "lint" ;
+use "lint-rules/tier2" ;
+
+\ --- Helpers for sequence-prefix-misuse ---
+
+\ Known sequence type annotations (inspected form).
+(sequence-type-annotation?): ( param -- ? ) [
+  type-annotation>> dup f = [
+    drop f
+  ] [
+    inspect
+    { "<type:array>" "<type:string>" "<type:byte-array>"
+      "<type:iterator>" "<type:linked-list>" "<type:range>"
+      "<type:typed-array>" "<type:ndarray>" "<type:mutable-array>"
+    }
+    swap [ = ] curry #any
+  ] if
+] ;
+
+\ Known sequence parameter names.
+(sequence-param-name?): ( param -- ? ) [
+  name>> >string
+  { "seq" "arr" "array" "list" "iter" "iterator"
+    "string" "str" "vec" "bytes" "elts" "items"
+    "elements" "seqs" "collections"
+  }
+  swap [ = ] curry #any
+] ;
+
+\ Does a stack-effect-param indicate a sequence?
+(sequence-param?): ( param -- ? ) [
+  dup (sequence-type-annotation?) [ drop t ] [
+    (sequence-param-name?)
+  ] if
+] ;
+
+\ Does any input parameter indicate a sequence?
+(has-sequence-input?): ( word-info -- ? ) [
+  stack-effect>> dup f = [
+    \ No stack effect: skip (missing-stack-effect catches this)
+    drop t
+  ] [
+    inputs>> [ (sequence-param?) ] #any
+  ] if
+] ;
+
+\ --- Rule: sequence-prefix-misuse ---
+
+(check-sequence-prefix-misuse): ( path source tokens line-index semantic-context -- diagnostics ) [
+  nip nip nip
+  [
+    dup name>> >string "#" #starts-with? [
+      dup (has-sequence-input?) [
+        2drop f
+      ] [
+        source-loc>> dup f = [ 2drop f ] [
+          "sequence-prefix-misuse" warning: 3 pick-n 3 pick-n dup line>> swap column>>
+          "word with # prefix does not appear to operate on sequences"
+          make-lint-diagnostic nip nip
+        ] if
+      ] if
+    ] [ 2drop f ] if
+  ] (check-semantic-words)
+] ;
+
+"sequence-prefix-misuse" warning: [ (check-sequence-prefix-misuse) ] f
+make-lint-rule register-lint-rule

@@ -1,0 +1,1 @@
+tests/fixtures/lint/sequence-prefix-misuse.1z:2:29: warning: [sequence-prefix-misuse] word with # prefix does not appear to operate on sequences

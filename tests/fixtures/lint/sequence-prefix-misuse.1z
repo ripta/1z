@@ -1,0 +1,2 @@
+\\ Double a number.
+#double: ( n -- n ) [ 2 * ] ;
