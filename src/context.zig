@@ -536,6 +536,21 @@ pub const Context = struct {
             try self.pushModuleDepsFrame(module);
             defer self.popLocalFrame();
 
+            if (mod_word.action == .compound) {
+                const has_generic = for (mod_word.markers) |mk| {
+                    if (markers_mod.isGenericMarker(mk)) break true;
+                } else false;
+
+                if (has_generic) {
+                    if (try dispatch_helpers.tryDispatchGeneric(self, word_name)) return;
+
+                    if (mod_word.action.compound.len == 0) {
+                        self.pending_error_message = "no method found for given argument types";
+                        return error.TypeError;
+                    }
+                }
+            }
+
             switch (mod_word.action) {
                 .compound => |instrs| try self.executeInstructions(instrs),
                 .native => |func| try func(self),
