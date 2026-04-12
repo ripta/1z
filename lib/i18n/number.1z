@@ -37,13 +37,13 @@ ffi-def{
 \\ Allocate a UChar result buffer and return (buf ptr).
 (alloc-uchar-buf): ( -- byte-array ptr ) [
   (uchar-buf-size) 2 * bytes-alloc
-  dup bytes>ffi-ptr+len drop
+  bytes>ffi-ptr
 ] ;
 
 \\ Open a UNumberFormat for a given style (no pattern).
 (open-number-format): ( style icu-locale-id -- fmt-ptr ) [
   \ Allocate a dummy 1-byte pattern buffer (not read, patternLength=0)
-  1 bytes-alloc dup bytes>ffi-ptr+len drop
+  1 bytes-alloc bytes>ffi-ptr
   \ Stack: style icu-locale-id pat-buf pat-ptr
   3 pick-n
   \ Stack: style icu-locale-id pat-buf pat-ptr style
@@ -55,7 +55,7 @@ ffi-def{
   \ Stack: style icu-locale-id pat-buf pat-ptr status fmt-ptr
   swap (icu-check)
   \ Stack: style icu-locale-id pat-buf pat-ptr fmt-ptr
-  nip nip nip nip
+  4nip
 ] ;
 
 \\ Open a UNumberFormat with a custom ICU pattern string.
@@ -74,7 +74,7 @@ ffi-def{
   \ Stack: icu-id uchar-buf status fmt-ptr
   swap (icu-check)
   \ Stack: icu-id uchar-buf fmt-ptr
-  nip nip
+  2nip
 ] ;
 
 \\ Format a number as a double using an open UNumberFormat.
@@ -177,5 +177,5 @@ parse-number: ( string locale -- float ) [
   \ Stack: fmt-ptr uchar-buf uchar-ptr uchar-len status f64
   swap (icu-check)
   \ Stack: fmt-ptr uchar-buf uchar-ptr uchar-len f64
-  nip nip nip swap (unum-close)
+  3nip swap (unum-close)
 ] ;

@@ -34,7 +34,7 @@ compress-level: ( byte-array level -- byte-array ) [
   dup #len (compress-bound)
   dup bytes-alloc
   \\ Stack: level input bound out-buf
-  dup bytes>ffi-ptr+len drop
+  bytes>ffi-ptr
   \\ Stack: level input bound out-buf dest-ptr
   2 pick-n
   \\ Stack: level input bound out-buf dest-ptr destLen
@@ -46,7 +46,7 @@ compress-level: ( byte-array level -- byte-array ) [
   \\ Stack: level input bound out-buf actual-destLen return-code
   (check-zlib)
   bytes-resize!
-  swap drop swap drop swap drop
+  3nip
 ] ;
 
 \\ Decompress a byte array with retry loop. Maximum output 256 MB.
@@ -64,7 +64,7 @@ uncompress-max: ( byte-array max-size -- byte-array ) [
 uncompress-sized: ( byte-array expected-len -- byte-array ) [
   dup bytes-alloc
   \\ Stack: input expected out-buf
-  dup bytes>ffi-ptr+len drop
+  bytes>ffi-ptr
   \\ Stack: input expected out-buf dest-ptr
   2 pick-n
   \\ Stack: input expected out-buf dest-ptr destLen
@@ -74,7 +74,7 @@ uncompress-sized: ( byte-array expected-len -- byte-array ) [
   \\ Stack: input expected out-buf actual-destLen return-code
   (check-zlib)
   bytes-resize!
-  swap drop swap drop
+  2nip
 ] ;
 
 \\ Internal retry loop for decompression.
@@ -82,7 +82,7 @@ uncompress-sized: ( byte-array expected-len -- byte-array ) [
   2 pick-n over > [ 3drop "output exceeds maximum size" EZlibError make-error throw ] [
     2 pick-n 2 pick-n (try-uncompress)
     dup option:some? [
-      option:some> swap drop swap drop swap drop
+      option:some> 3nip
     ] [
       drop
       [ 2 * ] 2dip
@@ -97,7 +97,7 @@ uncompress-sized: ( byte-array expected-len -- byte-array ) [
   \\ Stack: guess input
   over bytes-alloc
   \\ Stack: guess input out-buf
-  dup bytes>ffi-ptr+len drop
+  bytes>ffi-ptr
   \\ Stack: guess input out-buf dest-ptr
   3 pick-n
   \\ Stack: guess input out-buf dest-ptr destLen(=guess)
@@ -109,7 +109,7 @@ uncompress-sized: ( byte-array expected-len -- byte-array ) [
     drop
     \\ Stack: guess input out-buf actual-destLen
     bytes-resize!
-    swap drop swap drop
+    2nip
     >option:some
   ] [
     dup -5 = [

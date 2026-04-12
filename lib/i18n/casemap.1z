@@ -41,7 +41,7 @@ ffi-def{
     \ Allocate dest: (uchar-len+1)*2 UChars = (uchar-len+1)*4 bytes
     dup 1 + 2 * 2 * bytes-alloc
     \ Stack: quot(3) uchar-buf(2) uchar-len(1) dest-buf(0)
-    dup bytes>ffi-ptr+len drop
+    bytes>ffi-ptr
     \ Stack: quot(4) uchar-buf(3) uchar-len(2) dest-buf(1) dest-ptr(0)
     2 pick-n 1 + 2 *
     \ Stack: quot(5) uchar-buf(4) uchar-len(3) dest-buf(2) dest-ptr(1) dest-cap(0)
@@ -62,7 +62,7 @@ ffi-def{
     4 pick-n swap uchar>utf8
     \ Stack: quot(5) uchar-buf(4) uchar-len(3) dest-buf(2) dest-ptr(1)
     \        dest-cap(0) src-ptr result
-    nip nip nip nip nip nip nip
+    7 nip-n
   ] if
 ] ;
 

@@ -1,3 +1,4 @@
+const std = @import("std");
 const Context = @import("../context.zig").Context;
 const Value = @import("../value.zig").Value;
 const helpers = @import("helpers.zig");
@@ -17,6 +18,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "rot-n>", .stack_effect = "n --", .doc = "Push top item to depth n, shifting items above it up.", .func = nativeRotDown },
     .{ .name = "array-n", .stack_effect = "...elems n -- array", .doc = "Pop n, then pop n elements and pack them into an array (stack-order preserved).", .func = nativeArrayN },
     .{ .name = "drop-n", .stack_effect = "x1..xn n --", .doc = "Drop n items from the stack.", .func = nativeDropN },
+    .{ .name = "nip-n", .stack_effect = "...x1..xn y n -- y", .doc = "Drop n items beneath the top value, preserving the top value.", .func = nativeNipN },
     .{ .name = "apply-n", .stack_effect = "x1..xn quot: ( x -- ..results ) n -- ..results", .doc = "Apply quotation to each of the top n stack values separately, left to right.", .func = nativeApplyN },
 };
 
@@ -148,6 +150,22 @@ fn nativeDropN(ctx: *Context) anyerror!void {
     ctx.stack.items.shrinkRetainingCapacity(ctx.stack.items.items.len - count);
 }
 
+/// nip-n ( ...x1..xn y n -- y ) - Drop n items beneath the top value.
+fn nativeNipN(ctx: *Context) anyerror!void {
+    const n = try helpers.popFixnum(ctx);
+    if (n < 0) return error.StackUnderflow;
+
+    const count: usize = @intCast(n);
+    const len = ctx.stack.items.items.len;
+    if (count >= len) return error.StackUnderflow;
+    if (count == 0) return;
+
+    const new_len = len - count;
+    const top = ctx.stack.items.items[len - 1];
+    ctx.stack.items.items[new_len - 1] = top;
+    ctx.stack.items.shrinkRetainingCapacity(new_len);
+}
+
 /// apply-n ( x1...xn quot n -- ) - Apply quotation to each of the top n stack values.
 fn nativeApplyN(ctx: *Context) anyerror!void {
     const n = try helpers.popFixnum(ctx);
@@ -174,4 +192,50 @@ fn nativeApplyN(ctx: *Context) anyerror!void {
         try ctx.stack.push(val);
         try ctx.executeQuotationWithFrame(quot);
     }
+}
+
+test "nip-n preserves top value while dropping beneath values" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .fixnum = 10 });
+    try ctx.stack.push(.{ .fixnum = 20 });
+    try ctx.stack.push(.{ .fixnum = 30 });
+    try ctx.stack.push(.{ .fixnum = 99 });
+    try ctx.stack.push(.{ .fixnum = 3 });
+
+    try nativeNipN(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    const result = try ctx.stack.pop();
+    try std.testing.expectEqual(@as(i64, 99), result.fixnum);
+}
+
+test "nip-n keeps lower prefix intact" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .fixnum = 7 });
+    try ctx.stack.push(.{ .fixnum = 8 });
+    try ctx.stack.push(.{ .fixnum = 9 });
+    try ctx.stack.push(.{ .fixnum = 100 });
+    try ctx.stack.push(.{ .fixnum = 2 });
+
+    try nativeNipN(&ctx);
+
+    try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+    const top = try ctx.stack.pop();
+    const bottom = try ctx.stack.pop();
+    try std.testing.expectEqual(@as(i64, 100), top.fixnum);
+    try std.testing.expectEqual(@as(i64, 7), bottom.fixnum);
+}
+
+test "nip-n rejects dropping past stack bottom" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .fixnum = 42 });
+    try ctx.stack.push(.{ .fixnum = 1 });
+
+    try std.testing.expectError(error.StackUnderflow, nativeNipN(&ctx));
 }

@@ -39,8 +39,7 @@ ELocaleError: [ locale-error: ] ;
 
 \\ Allocate a buffer for ICU locale operations and return (buf ptr).
 (alloc-locale-buf): ( -- byte-array ptr ) [
-  (locale-buf-size) bytes-alloc
-  dup bytes>ffi-ptr+len drop
+  (locale-buf-size) bytes-alloc-ptr
 ] ;
 
 \\ Read a C string result from buf up to len bytes.
@@ -71,7 +70,7 @@ ELocaleError: [ locale-error: ] ;
   \ Stack: tag buf actual-len
   (buf>string)
   \ Stack: tag icu-id
-  swap drop
+  nip
 ] ;
 
 \\ Convert an ICU locale ID to a normalized BCP 47 tag.
@@ -89,7 +88,7 @@ ELocaleError: [ locale-error: ] ;
   \ Stack: icu-id buf actual-len
   (buf>string)
   \ Stack: icu-id bcp47
-  swap drop
+  nip
 ] ;
 
 \\ Strip POSIX charset suffix (everything from "." onward).

@@ -115,7 +115,7 @@ bind: ( stmt i value -- ) [
     3 pick-n 2 pick-n (read-hash-col)
     swap ++ swap (read-hash-loop)
   ] [
-    nip nip nip
+    3nip
   ] if
 ] ;
 
@@ -140,7 +140,7 @@ bind: ( stmt i value -- ) [
     3 pick-n 2 pick-n (read-array-col)
     swap ++ swap (read-array-loop)
   ] [
-    nip nip nip
+    3nip
   ] if
 ] ;
 

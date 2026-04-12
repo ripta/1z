@@ -360,16 +360,28 @@ bytes-resize!: ( byte-array n -- byte-array ) [ over #len over < [ 0x00 native.#
 ] ;
 
 \ Stack-shuffling
+\\ Drop the item at stack depth `n`, counting from the top (0 is the top item).
+drop-at: ( ... n -- ... ) [ <rot-n drop ] ;
 \\ Drop the second element, keeping the top.
 nip: ( a b -- b ) [ swap drop ] ;
 \\ Drop the second and third elements, keeping the top.
 2nip: ( a b c -- c ) [ swap drop swap drop ] ;
+\\ Drop the top three elements beneath the result.
+3nip: ( a b c d -- d ) [ 3 nip-n ] ;
+\\ Drop the top four elements beneath the result.
+4nip: ( a b c d e -- e ) [ 4 nip-n ] ;
+\\ Drop the top five elements beneath the result.
+5nip: ( a b c d e f -- f ) [ 5 nip-n ] ;
+\\ Drop the top six elements beneath the result.
+6nip: ( a b c d e f g -- g ) [ 6 nip-n ] ;
 \\ Call a quotation with `x`, then restore `x` to the stack.
 keep: ( ..a x quot: ( ..a x -- ..b ) -- ..b x ) [ over [ call ] dip ] ;
 \\ Call a quotation with `x y`, then restore both to the stack.
 2keep: ( ..a x y quot: ( ..a x y -- ..b ) -- ..b x y ) [ [ 2dup ] dip 2dip ] ;
 \\ Call a quotation with `x y z`, then restore all three to the stack.
 3keep: ( ..a x y z quot: ( ..a x y z -- ..b ) -- ..b x y z ) [ [ 3dup ] dip 3dip ] ;
+\\ Call a quotation with `w x y z`, then restore all four to the stack.
+4keep: ( ..a w x y z quot: ( ..a w x y z -- ..b ) -- ..b w x y z ) [ [ 4dup ] dip 4dip ] ;
 \\ Apply two quotations to the same value in sequence.
 bi: ( ..a x p: ( ..a x -- ..b ) q: ( ..a x -- ..c ) -- ..b ..c ) [ [ keep ] dip call ] ;
 \\ Apply three quotations to the same value in sequence.
@@ -380,6 +392,8 @@ cleave: ( x quots -- ) [ [ keep ] #each drop ] ;
 2dup: ( a b -- a b a b ) [ over over ] ;
 \\ Duplicate the top three stack elements.
 3dup: ( a b c -- a b c a b c ) [ 2 pick-n 2 pick-n 2 pick-n ] ;
+\\ Duplicate the top four stack elements.
+4dup: ( a b c d -- a b c d a b c d ) [ 2over 3 pick-n 3 pick-n ] ;
 \\ Duplicate the element below the top.
 dupd: ( a b -- a a b ) [ over swap ] ;
 \\ Drop the top two stack elements.
@@ -390,6 +404,8 @@ dupd: ( a b -- a a b ) [ over swap ] ;
 2dip: ( ..a x y quot: ( ..a -- ..b ) -- ..b x y ) [ swap [ dip ] dip ] ;
 \\ Temporarily hide the top three elements, execute a quotation, then restore them.
 3dip: ( ..a x y z quot: ( ..a -- ..b ) -- ..b x y z ) [ swap [ 2dip ] dip ] ;
+\\ Temporarily hide the top four elements, execute a quotation, then restore them.
+4dip: ( ..a w x y z quot: ( ..a -- ..b ) -- ..b w x y z ) [ swap [ 3dip ] dip ] ;
 \\ Rotate the top three elements left: `a b c` becomes `b c a`.
 <rot-: ( a b c -- b c a ) [ [ swap ] dip swap ] ;
 \\ Rotate the top three elements right: `a b c` becomes `c a b`.
@@ -413,6 +429,11 @@ pick: ( a b c -- a b c a ) [ [ over ] dip swap ] ;
 2apply: ( ..a x y quot: ( ..a x -- ..b ) -- ..b ) [ 2 apply-n ] ;
 \\ Apply a quotation to each of three values separately.
 3apply: ( ..a x y z quot: ( ..a x -- ..b ) -- ..b ) [ 3 apply-n ] ;
+
+\\ Keep a byte-array on the stack while extracting its raw FFI pointer.
+bytes>ffi-ptr: ( byte-array -- byte-array ptr ) [ dup bytes>ffi-ptr+len drop ] ;
+\\ Allocate a byte-array and leave both the byte-array and raw FFI pointer.
+bytes-alloc-ptr: ( n -- byte-array ptr ) [ bytes-alloc dup bytes>ffi-ptr+len drop ] ;
 
 \ Arithmetic operators
 \\ Negate a number.

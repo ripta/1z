@@ -47,8 +47,7 @@ ffi-uchar-args: struct{ buf data-ptr data-len } ;
 
 \\ Allocate a UChar result buffer and return (buf ptr).
 (alloc-uchar-buf): ( -- byte-array ptr ) [
-  (uchar-buf-size) 2 * bytes-alloc
-  dup bytes>ffi-ptr+len drop
+  (uchar-buf-size) 2 * bytes-alloc-ptr
 ] ;
 
 \\ Extract the ICU locale ID from a locale value.
@@ -73,7 +72,7 @@ ffi-uchar-args: struct{ buf data-ptr data-len } ;
     drop 0 bytes-alloc 0 0
   ] [
     utf8>uchar
-    over bytes>ffi-ptr+len drop
+    over bytes>ffi-ptr nip
     swap
   ] if
 ] ;
@@ -81,7 +80,7 @@ ffi-uchar-args: struct{ buf data-ptr data-len } ;
 \\ Convert a pattern string to UChar args for udat_open.
 (pattern>udat-args): ( pattern -- ffi-uchar-args ) [
   utf8>uchar
-  over bytes>ffi-ptr+len drop
+  over bytes>ffi-ptr nip
   swap
   make-ffi-uchar-args
 ] ;
@@ -99,7 +98,7 @@ ffi-uchar-args: struct{ buf data-ptr data-len } ;
 (open-date-format): ( icu-locale-id time-style date-style tz-name -- fmt-ptr ) [
   (tz-name>udat-args)
   \ Stack: icu-locale-id time-style date-style tz-buf tz-ptr tz-len
-  1 bytes-alloc dup bytes>ffi-ptr+len drop
+  1 bytes-alloc-ptr
   \ Stack: icu-locale-id time-style date-style tz-buf tz-ptr tz-len pat-buf pat-ptr
   6 pick-n 6 pick-n 9 pick-n 6 pick-n 6 pick-n 5 pick-n 0 0
   \ Stack: ... time-style date-style icu-locale-id tz-ptr tz-len pat-ptr 0 0
@@ -107,7 +106,7 @@ ffi-uchar-args: struct{ buf data-ptr data-len } ;
   \ Stack: icu-locale-id time-style date-style tz-buf tz-ptr tz-len pat-buf pat-ptr status fmt-ptr
   swap (icu-check)
   \ Stack: icu-locale-id time-style date-style tz-buf tz-ptr tz-len pat-buf pat-ptr fmt-ptr
-  nip nip nip nip nip nip nip nip
+  8 nip-n
 ] ;
 
 \\ Open a UDateFormat using an explicit ICU pattern in UTC.
@@ -115,7 +114,7 @@ ffi-uchar-args: struct{ buf data-ptr data-len } ;
   (locale>icu-id) swap
   (pattern>udat-args)
   "UTC" (tz-name>udat-args) make-ffi-uchar-args
-  1 bytes-alloc dup bytes>ffi-ptr+len drop
+  1 bytes-alloc-ptr
   \ Stack: icu-locale-id pat-args tz-args status-buf status-ptr
   (UDAT_PATTERN) (UDAT_PATTERN)
   6 pick-n
@@ -128,7 +127,7 @@ ffi-uchar-args: struct{ buf data-ptr data-len } ;
   \ Stack: icu-locale-id pat-args tz-args status-buf status-ptr status fmt-ptr
   swap (icu-check)
   \ Stack: icu-locale-id pat-args tz-args status-buf status-ptr fmt-ptr
-  nip nip nip nip nip
+  5nip
 ] ;
 
 \\ Convert a timestamp to ICU UDate milliseconds.
@@ -144,7 +143,7 @@ ffi-uchar-args: struct{ buf data-ptr data-len } ;
   \ Stack: f64-ms fmt-ptr
   (alloc-uchar-buf)
   \ Stack: f64-ms fmt-ptr buf ptr
-  16 bytes-alloc dup bytes>ffi-ptr+len drop
+  16 bytes-alloc-ptr
   \ Stack: f64-ms fmt-ptr buf ptr pos-buf pos-ptr
   4 pick-n 6 pick-n 4 pick-n
   \ Stack: f64-ms fmt-ptr buf ptr pos-buf pos-ptr fmt-ptr f64-ms ptr
@@ -212,7 +211,7 @@ ffi-uchar-args: struct{ buf data-ptr data-len } ;
   3 pick-n (timezone>icu-tz-name)
   2 pick-n (UDAT_NONE) 3 pick-n 3 pick-n
   (open-date-format)
-  nip nip nip nip nip
+  5nip
 ] ;
 
 \\ Open a time-only formatter in an explicit timezone.
@@ -222,7 +221,7 @@ ffi-uchar-args: struct{ buf data-ptr data-len } ;
   3 pick-n (timezone>icu-tz-name)
   2 pick-n 2 pick-n (UDAT_NONE) 3 pick-n
   (open-date-format)
-  nip nip nip nip nip
+  5nip
 ] ;
 
 \\ Open a date+time formatter in an explicit timezone.
@@ -232,7 +231,7 @@ ffi-uchar-args: struct{ buf data-ptr data-len } ;
   3 pick-n (timezone>icu-tz-name)
   2 pick-n 2 pick-n 3 pick-n 3 pick-n
   (open-date-format)
-  nip nip nip nip nip
+  5nip
 ] ;
 
 \ --- Public words ---

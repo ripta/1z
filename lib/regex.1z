@@ -75,8 +75,7 @@ ERegexMatchError: [ f swap regex-match-error: ] ;
 
 \\ Convert a PCRE2 error code to a human-readable string.
 (pcre2-error-msg): ( errorcode -- str ) [
-  256 bytes-alloc
-  dup bytes>ffi-ptr+len drop
+  256 bytes-alloc-ptr
   \ Stack: errorcode buf buf-resource
   <rot- swap 256 (get-error-message)
   \ Stack: buf written-or-error
@@ -117,10 +116,10 @@ regex-compile-with: ( flags pattern -- regex ) [
   \ Stack: pattern options err-buf err-ptr off-buf off-ptr code errorcode
   dup PCRE2_COMPILE_ERROR_BASE <= [
     \ Success: clean up temporaries and return regex
-    drop nip nip nip nip nip nip >regex
+    drop 6nip >regex
   ] [
     \ Failure: get error message and throw
-    nip nip nip nip nip nip nip
+    7 nip-n
     \ Stack: errorcode
     (pcre2-error-msg)
     ERegexCompileError make-error throw
@@ -148,13 +147,13 @@ regex-match: ( str regex -- option ) [
   \ Stack: subject-bytes str code match-data rc
   dup PCRE2_ERROR_NOMATCH = [
     drop (match-data-free)
-    drop drop drop
+    3drop
     option:none
   ] [
     dup 0 < [
       (pcre2-error-msg)
       swap (match-data-free)
-      drop drop drop
+      3drop
       ERegexMatchError make-error throw
     ] [
       \ Stack: subject-bytes str code match-data rc
@@ -169,7 +168,7 @@ regex-match: ( str regex -- option ) [
       <rot- 0 swap { } (extract-captures)
       \ Stack: subject-bytes str code array
       >option:some
-      swap drop swap drop swap drop
+      3nip
     ] if
   ] if
 ] ;

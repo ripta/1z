@@ -46,13 +46,12 @@ currency-style: enum{
 
 \\ Allocate a UChar result buffer and return (buf ptr).
 (alloc-uchar-buf): ( -- byte-array ptr ) [
-  (uchar-buf-size) 2 * bytes-alloc
-  dup bytes>ffi-ptr+len drop
+  (uchar-buf-size) 2 * bytes-alloc-ptr
 ] ;
 
 \\ Open a UNumberFormat for a given style (no pattern).
 (open-number-format): ( style icu-locale-id -- fmt-ptr ) [
-  1 bytes-alloc dup bytes>ffi-ptr+len drop
+  1 bytes-alloc-ptr
   \ Stack: style icu-locale-id pat-buf pat-ptr
   3 pick-n
   \ Stack: style icu-locale-id pat-buf pat-ptr style
@@ -64,7 +63,7 @@ currency-style: enum{
   \ Stack: style icu-locale-id pat-buf pat-ptr status fmt-ptr
   swap (icu-check)
   \ Stack: style icu-locale-id pat-buf pat-ptr fmt-ptr
-  nip nip nip nip
+  4nip
 ] ;
 
 \\ Format a number as a double using an open UNumberFormat.
@@ -112,14 +111,14 @@ currency-style: enum{
 (set-currency-code): ( fmt-ptr currency-string -- ) [
   utf8>uchar
   \ Stack: fmt-ptr uchar-buf uchar-len
-  over bytes>ffi-ptr+len drop
+  over bytes>ffi-ptr nip
   \ Stack: fmt-ptr uchar-buf uchar-len uchar-ptr
   3 pick-n (UNUM_CURRENCY_CODE_ATTR) 2 pick-n 4 pick-n 0
   \ Stack: fmt-ptr uchar-buf uchar-len uchar-ptr fmt-ptr 5 uchar-ptr uchar-len 0
   (unum-set-text-attribute)
   \ Stack: fmt-ptr uchar-buf uchar-len uchar-ptr status
   (icu-check)
-  drop drop drop drop
+  4 drop-n
 ] ;
 
 \ --- Public words ---

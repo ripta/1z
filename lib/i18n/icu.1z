@@ -56,7 +56,7 @@ utf8>uchar: ( string -- byte-array fixnum ) [
     \ Allocate worst-case: byte-len UChars * 2 bytes each
     dup 2 * bytes-alloc
     \ Stack: string byte-len buf
-    dup bytes>ffi-ptr+len drop
+    bytes>ffi-ptr
     \ Stack: string byte-len buf dest-ptr
     2 pick-n
     \ Stack: string byte-len buf dest-ptr capacity(=byte-len)
@@ -85,7 +85,7 @@ uchar>utf8: ( byte-array fixnum -- string ) [
     \ Allocate worst-case: each UChar can produce up to 3 UTF-8 bytes
     dup 3 * bytes-alloc
     \ Stack: uchar-buf uchar-len out-buf
-    dup bytes>ffi-ptr+len drop
+    bytes>ffi-ptr
     \ Stack: uchar-buf uchar-len out-buf dest-ptr
     2 pick-n 3 *
     \ Stack: uchar-buf uchar-len out-buf dest-ptr capacity

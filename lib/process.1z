@@ -41,7 +41,7 @@ shell-safe:     virtual{ string } ;
   2 pick-n stdin>> (stdio-mode>symbol)
   3 pick-n stdout>> (stdio-mode>symbol)
   4 pick-n stderr>> (stdio-mode>symbol)
-  5 <rot-n drop
+  5 drop-at
 ] ;
 
 (close-if-stream): ( value -- ) [ dup stream? [ stream-close ] [ drop ] if ] ;
@@ -146,7 +146,7 @@ fmt-shell: ( source fmt-string -- shell-safe ) [
 \\ Spawn a child process using argv and stdio options.
 spawn-process: ( argv opts -- process ) [
   dup (stdio-opts>native)
-  5 <rot-n drop
+  5 drop-at
   native.spawn-process
   make-process
 ] ;
