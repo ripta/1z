@@ -740,7 +740,10 @@ pub const Context = struct {
         // Split prelude into lines and process incrementally
         const source = external_source orelse prelude_source;
         var lines = std.mem.splitScalar(u8, source, '\n');
+        var line_num: usize = 0;
         while (lines.next()) |line| {
+            line_num += 1;
+            processor.trackLine(line_num);
             const parse_start = if (self.benchmark != null) std.time.nanoTimestamp() else 0;
             const result = processor.feedLine(self.arena.allocator(), line, self);
             if (self.benchmark) |b| b.prelude_parse_ns += std.time.nanoTimestamp() - parse_start;

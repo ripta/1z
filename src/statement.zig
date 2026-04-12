@@ -110,6 +110,7 @@ pub const StatementProcessor = struct {
                         if (instrs.len == 0 and self.stmt_len > 0 and bufferHasDocComment(self.stmt_buf[0..self.stmt_len])) {
                             return .needs_more_input;
                         }
+                        adjustInstructionLines(instrs, self.start_line);
                         return .{ .complete = instrs };
                     },
                     .parse_error => |err| {
@@ -165,10 +166,26 @@ pub const StatementProcessor = struct {
         const instrs = parser.parseTopLevel(allocator, &tokenizer, ctx) catch |err| {
             return .{ .parse_error = err };
         };
+        adjustInstructionLines(instrs, self.start_line);
 
         return .{ .complete = instrs };
     }
 };
+
+fn adjustInstructionLines(instrs: []const Instruction, line_offset: usize) void {
+    if (line_offset == 0) return;
+    for (instrs) |*instr| {
+        const ptr = @constCast(instr);
+        ptr.line += line_offset - 1; // tokenizer starts each statement at line 1
+        switch (instr.op) {
+            .push_literal => |val| switch (val) {
+                .quotation => |nested| adjustInstructionLines(nested.instructions, line_offset),
+                else => {},
+            },
+            else => {},
+        }
+    }
+}
 
 fn bufferHasDocComment(buf: []const u8) bool {
     var tokenizer = Tokenizer.init(buf);
@@ -206,6 +223,7 @@ test "StatementProcessor multiline input" {
     defer processor.deinit();
 
     // First line opens a quotation
+    processor.trackLine(2);
     switch (processor.feedLine(arena.allocator(), "[", null)) {
         .needs_more_input => {},
         else => return error.UnexpectedResult,
@@ -214,9 +232,11 @@ test "StatementProcessor multiline input" {
     try std.testing.expect(processor.isAccumulating());
 
     // Second line closes it
+    processor.trackLine(3);
     switch (processor.feedLine(arena.allocator(), "1 2 + ]", null)) {
         .complete => |instrs| {
             try std.testing.expectEqual(@as(usize, 1), instrs.len);
+            try std.testing.expectEqual(@as(usize, 2), instrs[0].line);
         },
         else => return error.UnexpectedResult,
     }
@@ -251,6 +271,24 @@ test "StatementProcessor flush" {
     // Flush should return parse error for incomplete input
     switch (processor.flush(arena.allocator(), null)) {
         .parse_error => {},
+        else => return error.UnexpectedResult,
+    }
+}
+
+test "StatementProcessor adjusts lines after trackLine" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var processor: StatementProcessor = .{};
+    defer processor.deinit();
+
+    processor.trackLine(8);
+    const result = processor.feedLine(arena.allocator(), "foo: ( -- ) [ 1 ] ;", null);
+    switch (result) {
+        .complete => |instrs| {
+            try std.testing.expect(instrs.len > 0);
+            try std.testing.expectEqual(@as(usize, 8), instrs[0].line);
+        },
         else => return error.UnexpectedResult,
     }
 }

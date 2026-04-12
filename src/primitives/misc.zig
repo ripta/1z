@@ -375,6 +375,10 @@ pub fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module:
         .stack_effect = mod_word.stack_effect,
         .markers = mod_word.markers,
         .source_module = module,
+        .source_file = mod_word.source_file,
+        .source_line = mod_word.source_line,
+        .source_column = mod_word.source_column,
+        .provenance = mod_word.provenance,
         .capability = mod_word.capability,
         .dispatch_id = effective_dispatch_id,
         .action = switch (mod_word.action) {
@@ -981,10 +985,13 @@ fn nativeEvalString(ctx: *Context) anyerror!void {
     defer processor.deinit();
 
     var start: usize = 0;
+    var line_num: usize = 0;
     while (start < code.len) {
         const end = std.mem.indexOfScalarPos(u8, code, start, '\n') orelse code.len;
         const line = code[start..end];
         start = end + 1;
+        line_num += 1;
+        processor.trackLine(line_num);
 
         switch (processor.feedLine(alloc, line, ctx)) {
             .needs_more_input => continue,

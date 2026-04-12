@@ -162,13 +162,10 @@ fn isInterruptError(ctx: *const Context) bool {
 fn runReplStartupStatement(ctx: *Context, writer: anytype, statement: []const u8) void {
     var processor: StatementProcessor = .{};
     defer processor.deinit();
+    processor.trackLine(1);
 
     switch (processor.feedLine(ctx.quotationAllocator(), statement, ctx)) {
         .complete => |instrs| {
-            if (instrs.len > 0) {
-                adjustInstructionLines(instrs, 1);
-            }
-
             ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
                 printErrorDetails(ctx, writer, err);
             };
@@ -1125,7 +1122,6 @@ fn runEval(
             },
             .complete => |instrs| {
                 if (instrs.len > 0) {
-                    adjustInstructionLines(instrs, processor.start_line);
                     ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
                         printErrorDetails(ctx, err_writer, err);
                         err_writer.flush() catch {};
@@ -1151,7 +1147,6 @@ fn runEval(
         },
         .complete => |instrs| {
             if (instrs.len > 0) {
-                adjustInstructionLines(instrs, processor.start_line);
                 ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
                     printErrorDetails(ctx, err_writer, err);
                     err_writer.flush() catch {};
@@ -1913,10 +1908,6 @@ fn replInteractive(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
                     editor.addHistory(stmt);
                 }
 
-                if (instrs.len > 0) {
-                    adjustInstructionLines(instrs, processor.start_line);
-                }
-
                 var had_error = false;
                 ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
                     if (isInterruptError(ctx)) {
@@ -2016,10 +2007,6 @@ fn replPiped(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
                 processor.reset();
             },
             .complete => |instrs| {
-                if (instrs.len > 0) {
-                    adjustInstructionLines(instrs, processor.start_line);
-                }
-
                 var had_error = false;
                 ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
                     if (isInterruptError(ctx)) {
@@ -2120,7 +2107,6 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                     },
                     .complete => |instrs| {
                         if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
-                            adjustInstructionLines(instrs, processor.start_line);
                             ctx.executeQuotation(.{ .instructions = instrs }) catch |e| {
                                 if (e == debugger_mod.DebuggerQuit.DebuggerQuit) return 0;
                                 printErrorDetails(ctx, err_writer, e);
@@ -2166,7 +2152,6 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
             },
             .complete => |instrs| {
                 if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
-                    adjustInstructionLines(instrs, processor.start_line);
                     ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
                         if (err == debugger_mod.DebuggerQuit.DebuggerQuit) return 0;
                         printErrorDetails(ctx, err_writer, err);
@@ -2225,25 +2210,6 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
     }
 
     return 0;
-}
-
-/// Adjust line numbers in instructions by adding an offset.
-fn adjustInstructionLines(instrs: []const Instruction, line_offset: usize) void {
-    if (line_offset == 0) return;
-    for (instrs) |*instr| {
-        const ptr = @constCast(instr);
-        ptr.line += line_offset - 1; // -1 because tokenizer starts at line 1
-        // Recursively adjust nested quotations
-        switch (instr.op) {
-            .push_literal => |val| {
-                switch (val) {
-                    .quotation => |nested| adjustInstructionLines(nested.instructions, line_offset),
-                    else => {},
-                }
-            },
-            else => {},
-        }
-    }
 }
 
 // =============================================================================
