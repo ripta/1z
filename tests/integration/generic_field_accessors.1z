@@ -1,0 +1,43 @@
+\ Test that struct field accessors are generic and dispatch on struct type,
+\ so that multiple structs sharing a field name do not collide.
+
+use "testing" ;
+
+"same-module field sharing (getters)" test-section
+
+point: struct{ x y } ;
+vleep: struct{ y z } ;
+
+1 2 make-point y>> 2 "point y>> returns point's y field" assert=
+5 6 make-vleep y>> 5 "vleep y>> returns vleep's y field" assert=
+1 2 make-point x>> 1 "point x>> still works" assert=
+5 6 make-vleep z>> 6 "vleep z>> still works" assert=
+
+"setter sharing" test-section
+
+mpt: mutable struct{ a b } ;
+mqt: mutable struct{ b c } ;
+
+10 20 make-mpt 99 >>b b>> 99 "mpt >>b sets mpt's b field" assert=
+30 40 make-mqt 77 >>b b>> 77 "mqt >>b sets mqt's b field" assert=
+10 20 make-mpt a>> 10 "mpt a>> unaffected" assert=
+30 40 make-mqt c>> 40 "mqt c>> unaffected" assert=
+
+"wrong type errors" test-section
+
+\ Calling a getter on a struct that lacks that field should throw
+[ 5 6 make-vleep x>> ] "getter on wrong struct type throws" assert-error
+[ 1 2 make-point z>> ] "getter on wrong struct type throws (2)" assert-error
+
+"constructors and predicates unaffected" test-section
+
+1 2 make-point point? t "make-point and point? work" assert=
+5 6 make-vleep vleep? t "make-vleep and vleep? work" assert=
+H{ x: 3 y: 4 } >point point? t ">point works" assert=
+H{ y: 7 z: 8 } >vleep vleep? t ">vleep works" assert=
+
+"const struct cannot be redefined" test-section
+
+foo: const struct{ a } ;
+[ foo: struct{ a } ;
+] ECannotRedefineConst "redefining const struct fails" assert-error-type

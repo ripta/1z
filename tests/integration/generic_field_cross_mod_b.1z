@@ -1,0 +1,3 @@
+\ Module B: defines size struct with fields w and y
+
+size: struct{ w y } ;

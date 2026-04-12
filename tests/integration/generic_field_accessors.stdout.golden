@@ -1,0 +1,45 @@
+=== same-module field sharing (getters) ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: point y>> returns point's y field
+Stack: [ ]
+PASS: vleep y>> returns vleep's y field
+Stack: [ ]
+PASS: point x>> still works
+Stack: [ ]
+PASS: vleep z>> still works
+Stack: [ ]
+=== setter sharing ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: mpt >>b sets mpt's b field
+Stack: [ ]
+PASS: mqt >>b sets mqt's b field
+Stack: [ ]
+PASS: mpt a>> unaffected
+Stack: [ ]
+PASS: mqt c>> unaffected
+Stack: [ ]
+=== wrong type errors ===
+Stack: [ ]
+PASS: getter on wrong struct type throws
+Stack: [ ]
+PASS: getter on wrong struct type throws (2)
+Stack: [ ]
+=== constructors and predicates unaffected ===
+Stack: [ ]
+PASS: make-point and point? work
+Stack: [ ]
+PASS: make-vleep and vleep? work
+Stack: [ ]
+PASS: >point works
+Stack: [ ]
+PASS: >vleep works
+Stack: [ ]
+=== const struct cannot be redefined ===
+Stack: [ ]
+Stack: [ ]
+PASS: redefining const struct fails
+Stack: [ ]

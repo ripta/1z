@@ -7,6 +7,7 @@ const StructType = value_mod.StructType;
 const StructInstance = value_mod.StructInstance;
 const Marker = value_mod.Marker;
 const markers_mod = @import("markers.zig");
+const dispatch_mod = @import("../dispatch.zig");
 
 const helpers = @import("helpers.zig");
 
@@ -253,8 +254,8 @@ fn defineTypePredicate(ctx: *Context, name: []const u8, struct_type: *const Stru
     });
 }
 
-/// FIELD>>: ( instance -- value ) - field getter
-fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, markers: []const *Marker) !void {
+/// FIELD>>: ( instance -- value ) - field getter (generic, dispatches on struct type)
+fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, _: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 3);
@@ -262,15 +263,37 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
     instrs[1] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(field_index) } }, .line = 0 };
     instrs[2] = .{ .op = .{ .call_word = "native.struct-field-get" }, .line = 0 };
 
-    try ctx.defineWord(name, .{
-        .name = name,
-        .markers = markers,
-        .action = .{ .compound = instrs },
-    });
+    const is_generic = if (ctx.lookupWord(name)) |existing| blk: {
+        for (existing.markers) |mk| {
+            if (markers_mod.isGenericMarker(mk)) break :blk true;
+        }
+        break :blk false;
+    } else false;
+
+    if (!is_generic) {
+        const generic_markers = try alloc.alloc(*Marker, 1);
+        generic_markers[0] = @constCast(&markers_mod.generic_marker);
+
+        try ctx.defineWord(name, .{
+            .name = name,
+            .markers = generic_markers,
+            .action = .{ .compound = &.{} },
+        });
+    }
+
+    try ctx.dispatch.register(.{
+        .word_name = name,
+        .type_a = struct_type.name,
+        .type_b = dispatch_mod.unary_sentinel,
+    }, .{ .body = instrs }, true);
 }
 
-/// >>FIELD: ( instance value -- instance ) - field setter
-fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, markers: []const *Marker) !void {
+/// >>FIELD: ( instance value -- instance ) - field setter (generic, dispatches on struct type)
+///
+/// Setters use binary dispatch keyed on (struct_type, *) so the dispatch
+/// system matches the struct instance at stack position N-2 regardless of
+/// the value type at the top.
+fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, _: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 3);
@@ -278,11 +301,29 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
     instrs[1] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(field_index) } }, .line = 0 };
     instrs[2] = .{ .op = .{ .call_word = "native.struct-field-set" }, .line = 0 };
 
-    try ctx.defineWord(name, .{
-        .name = name,
-        .markers = markers,
-        .action = .{ .compound = instrs },
-    });
+    const is_generic = if (ctx.lookupWord(name)) |existing| blk: {
+        for (existing.markers) |mk| {
+            if (markers_mod.isGenericMarker(mk)) break :blk true;
+        }
+        break :blk false;
+    } else false;
+
+    if (!is_generic) {
+        const generic_markers = try alloc.alloc(*Marker, 1);
+        generic_markers[0] = @constCast(&markers_mod.generic_marker);
+
+        try ctx.defineWord(name, .{
+            .name = name,
+            .markers = generic_markers,
+            .action = .{ .compound = &.{} },
+        });
+    }
+
+    try ctx.dispatch.register(.{
+        .word_name = name,
+        .type_a = struct_type.name,
+        .type_b = dispatch_mod.any_sentinel,
+    }, .{ .body = instrs }, true);
 }
 
 pub fn getStructTypeFromMaker(ctx: *const Context, maker_name: []const u8) ?*const StructType {

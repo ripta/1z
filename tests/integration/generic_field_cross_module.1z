@@ -1,0 +1,42 @@
+\ Test that generic struct field accessors dispatch correctly across modules
+\ when multiple modules define structs sharing the same field name.
+
+use "testing" ;
+
+"qualified access with shared fields" test-section
+
+ma: "generic_field_cross_mod_a.1z" load ;
+mb: "generic_field_cross_mod_b.1z" load ;
+
+1 2 ma.make-coord ma.y>> 2 "coord y>> returns coord's y field" assert=
+5 6 mb.make-size mb.y>> 6 "size y>> returns size's y field" assert=
+1 2 ma.make-coord ma.x>> 1 "coord x>> works" assert=
+5 6 mb.make-size mb.w>> 5 "size w>> works" assert=
+
+"imported access with shared fields" test-section
+
+use "generic_field_cross_mod_a.1z" ;
+use "generic_field_cross_mod_b.1z" ;
+
+10 20 make-coord y>> 20 "imported y>> dispatches on coord" assert=
+30 40 make-size y>> 40 "imported y>> dispatches on size" assert=
+10 20 make-coord x>> 10 "imported x>> works on coord" assert=
+30 40 make-size w>> 30 "imported w>> works on size" assert=
+
+"cross-module wrong-type errors" test-section
+
+[ 5 6 mb.make-size ma.x>> ] "x>> on size throws" assert-error
+[ 1 2 ma.make-coord mb.w>> ] "w>> on coord throws" assert-error
+
+"embedded struct virtual types unaffected" test-section
+
+vt: virtual{ struct{ y z } } ;
+
+\ y>> and z>> should not be accessible on the virtual type
+\ because virtual types use positional destructuring, not field accessors
+[ 10 20 >vt y>> ] "y>> does not work on embedded struct virtual" assert-error
+[ 10 20 >vt z>> ] "z>> does not work on embedded struct virtual" assert-error
+
+\ The virtual type itself works via positional wrap/unwrap
+10 20 >vt vt> 20 "virtual unwrap second field" assert=
+10 "virtual unwrap first field" assert=

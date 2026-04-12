@@ -1,0 +1,39 @@
+=== qualified access with shared fields ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: coord y>> returns coord's y field
+Stack: [ ]
+PASS: size y>> returns size's y field
+Stack: [ ]
+PASS: coord x>> works
+Stack: [ ]
+PASS: size w>> works
+Stack: [ ]
+=== imported access with shared fields ===
+Stack: [ ]
+PASS: imported y>> dispatches on coord
+Stack: [ ]
+PASS: imported y>> dispatches on size
+Stack: [ ]
+PASS: imported x>> works on coord
+Stack: [ ]
+PASS: imported w>> works on size
+Stack: [ ]
+=== cross-module wrong-type errors ===
+Stack: [ ]
+PASS: x>> on size throws
+Stack: [ ]
+PASS: w>> on coord throws
+Stack: [ ]
+=== embedded struct virtual types unaffected ===
+Stack: [ ]
+Stack: [ ]
+PASS: y>> does not work on embedded struct virtual
+Stack: [ ]
+PASS: z>> does not work on embedded struct virtual
+Stack: [ ]
+PASS: virtual unwrap second field
+Stack: [ 10 ]
+PASS: virtual unwrap first field
+Stack: [ ]
