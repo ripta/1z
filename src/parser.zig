@@ -87,6 +87,7 @@ pub const ParseError = error{
     UnmatchedOpenParen,
     UnmatchedCloseParen,
     UnmatchedOpenQuote,
+    InvalidArrayElement,
     OutOfMemory,
     ParseTimeExecutionError,
     DebuggerQuit,
@@ -587,7 +588,7 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) P
                     }
                 }
             }
-            return ParseError.OutOfMemory;
+            return ParseError.InvalidArrayElement;
         }
     }
 
