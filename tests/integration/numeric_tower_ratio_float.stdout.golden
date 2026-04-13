@@ -1,0 +1,34 @@
+=== ratio + float ===
+Stack: [ ]
+PASS: 1/2 + 0.5 = 1.0
+Stack: [ ]
+PASS: 0.5 + 1/2 = 1.0
+Stack: [ ]
+=== ratio - float ===
+Stack: [ ]
+PASS: 3/4 - 0.25 = 0.5
+Stack: [ ]
+PASS: 1.0 - 1/4 = 0.75
+Stack: [ ]
+=== ratio * float ===
+Stack: [ ]
+PASS: 1/3 * 3.0 = 1.0
+Stack: [ ]
+PASS: 2.0 * 1/3
+Stack: [ ]
+=== ratio / float ===
+Stack: [ ]
+PASS: 1/2 / 2.0 = 0.25
+Stack: [ ]
+PASS: 1.0 / 1/2 = 2.0
+Stack: [ ]
+=== ratio % float ===
+Stack: [ ]
+PASS: 3/2 % 1.0 = 0.5
+Stack: [ ]
+=== result is float ===
+Stack: [ ]
+PASS: ratio + float produces float
+Stack: [ ]
+PASS: float * ratio produces float
+Stack: [ ]

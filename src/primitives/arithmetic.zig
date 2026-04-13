@@ -6,6 +6,7 @@ const Value = value_mod.Value;
 const BigIntManaged = value_mod.BigIntManaged;
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
+const RegistryEntry = @import("types.zig").RegistryEntry;
 const dispatch_helpers = @import("dispatch_helpers.zig");
 
 const popFixnum = helpers.popFixnum;
@@ -14,6 +15,23 @@ const Number = helpers.Number;
 const toFloats = helpers.toFloats;
 const demoteBignum = helpers.demoteBignum;
 const ensureBignum = helpers.ensureBignum;
+
+/// Convert a Value (fixnum, float, or bignum) to f64 for the float promotion path.
+fn valToFloat(alloc: Allocator, val: Value) f64 {
+    return switch (val) {
+        .float => |f| f,
+        .fixnum => |i| @floatFromInt(i),
+        .bignum => |b| blk: {
+            const str = b.toConst().toStringAlloc(alloc, 10, .lower) catch break :blk std.math.nan(f64);
+            break :blk std.fmt.parseFloat(f64, str) catch std.math.nan(f64);
+        },
+        else => unreachable,
+    };
+}
+
+fn isNativeNumeric(val: Value) bool {
+    return val == .fixnum or val == .float or val == .bignum;
+}
 
 /// Convert a Value (fixnum or float) to a Number for the float promotion path.
 pub fn popNumVal(val: Value) Number {
@@ -63,6 +81,7 @@ pub const primitives = [_]Primitive{
     // Conversions
     .{ .name = ">float", .stack_effect = "x -- f", .doc = "Convert fixnum or string to float. Floats pass through. Throws on failure.", .func = nativeToFloat },
     .{ .name = ">integer", .stack_effect = "f -- n", .doc = "Convert float to fixnum, truncating toward zero. Fixnums pass through. Throws on NaN or infinity.", .func = nativeToInteger },
+    .{ .name = "float-parts", .stack_effect = "f -- mantissa exponent sign", .doc = "Decompose an IEEE 754 double into mantissa, exponent, and sign. value = sign * mantissa * 2^exponent. Throws on NaN or infinity.", .func = nativeFloatParts },
     // Unary
     .{ .name = "abs", .stack_effect = "n -- n", .doc = "Absolute value. Works on fixnums and floats.", .func = nativeAbs },
     // Comparators
@@ -96,11 +115,11 @@ pub fn nativeAdd(ctx: *Context) anyerror!void {
         try ba.add(&ba, &bb);
         bb.deinit();
         try ctx.stack.push(demoteBignum(ba));
-    } else if ((a == .fixnum or a == .float) and (b == .fixnum or b == .float)) {
-        const fs = toFloats(popNumVal(a), popNumVal(b));
-        try ctx.stack.push(.{ .float = fs[0] + fs[1] });
+    } else if (isNativeNumeric(a) and isNativeNumeric(b)) {
+        const alloc = ctx.arena.allocator();
+        try ctx.stack.push(.{ .float = valToFloat(alloc, a) + valToFloat(alloc, b) });
     } else {
-        helpers.setTypeMismatchError(ctx, "number", if (a != .fixnum and a != .float and a != .bignum) a else b);
+        helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
         return error.TypeMismatch;
     }
 }
@@ -129,11 +148,11 @@ pub fn nativeSub(ctx: *Context) anyerror!void {
         try ba.sub(&ba, &bb);
         bb.deinit();
         try ctx.stack.push(demoteBignum(ba));
-    } else if ((a == .fixnum or a == .float) and (b == .fixnum or b == .float)) {
-        const fs = toFloats(popNumVal(a), popNumVal(b));
-        try ctx.stack.push(.{ .float = fs[0] - fs[1] });
+    } else if (isNativeNumeric(a) and isNativeNumeric(b)) {
+        const alloc = ctx.arena.allocator();
+        try ctx.stack.push(.{ .float = valToFloat(alloc, a) - valToFloat(alloc, b) });
     } else {
-        helpers.setTypeMismatchError(ctx, "number", if (a != .fixnum and a != .float and a != .bignum) a else b);
+        helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
         return error.TypeMismatch;
     }
 }
@@ -162,11 +181,11 @@ pub fn nativeMul(ctx: *Context) anyerror!void {
         try ba.mul(&ba, &bb);
         bb.deinit();
         try ctx.stack.push(demoteBignum(ba));
-    } else if ((a == .fixnum or a == .float) and (b == .fixnum or b == .float)) {
-        const fs = toFloats(popNumVal(a), popNumVal(b));
-        try ctx.stack.push(.{ .float = fs[0] * fs[1] });
+    } else if (isNativeNumeric(a) and isNativeNumeric(b)) {
+        const alloc = ctx.arena.allocator();
+        try ctx.stack.push(.{ .float = valToFloat(alloc, a) * valToFloat(alloc, b) });
     } else {
-        helpers.setTypeMismatchError(ctx, "number", if (a != .fixnum and a != .float and a != .bignum) a else b);
+        helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
         return error.TypeMismatch;
     }
 }
@@ -255,11 +274,11 @@ pub fn nativeDiv(ctx: *Context) anyerror!void {
                 try ctx.stack.push(demoteBignum(q));
             }
         }
-    } else if ((a == .fixnum or a == .float) and (b == .fixnum or b == .float)) {
-        const fs = toFloats(popNumVal(a), popNumVal(b));
-        try ctx.stack.push(.{ .float = fs[0] / fs[1] });
+    } else if (isNativeNumeric(a) and isNativeNumeric(b)) {
+        const alloc = ctx.arena.allocator();
+        try ctx.stack.push(.{ .float = valToFloat(alloc, a) / valToFloat(alloc, b) });
     } else {
-        helpers.setTypeMismatchError(ctx, "number", if (a != .fixnum and a != .float and a != .bignum) a else b);
+        helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
         return error.TypeMismatch;
     }
 }
@@ -288,11 +307,11 @@ pub fn nativeMod(ctx: *Context) anyerror!void {
         bb.deinit();
         q.deinit();
         try ctx.stack.push(demoteBignum(r));
-    } else if ((a == .fixnum or a == .float) and (b == .fixnum or b == .float)) {
-        const fs = toFloats(popNumVal(a), popNumVal(b));
-        try ctx.stack.push(.{ .float = @rem(fs[0], fs[1]) });
+    } else if (isNativeNumeric(a) and isNativeNumeric(b)) {
+        const alloc = ctx.arena.allocator();
+        try ctx.stack.push(.{ .float = @rem(valToFloat(alloc, a), valToFloat(alloc, b)) });
     } else {
-        helpers.setTypeMismatchError(ctx, "number", if (a != .fixnum and a != .float and a != .bignum) a else b);
+        helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
         return error.TypeMismatch;
     }
 }
@@ -333,6 +352,12 @@ pub fn nativeEq(ctx: *Context) anyerror!void {
         try ctx.stack.push(.{ .boolean = b.bignum.toConst().orderAgainstScalar(a.fixnum) == .eq });
     } else if (a == .bignum and b == .fixnum) {
         try ctx.stack.push(.{ .boolean = a.bignum.toConst().orderAgainstScalar(b.fixnum) == .eq });
+    } else if (a == .bignum and b == .float) {
+        const alloc = ctx.arena.allocator();
+        try ctx.stack.push(.{ .boolean = valToFloat(alloc, a) == b.float });
+    } else if (a == .float and b == .bignum) {
+        const alloc = ctx.arena.allocator();
+        try ctx.stack.push(.{ .boolean = a.float == valToFloat(alloc, b) });
     } else {
         try ctx.stack.push(.{ .boolean = a.eql(b) });
     }
@@ -365,6 +390,7 @@ pub fn nativeLt(ctx: *Context) anyerror!void {
         .float => |av| switch (b) {
             .float => |bv| try ctx.stack.push(.{ .boolean = av < bv }),
             .fixnum => |bv| try ctx.stack.push(.{ .boolean = av < @as(f64, @floatFromInt(bv)) }),
+            .bignum => try ctx.stack.push(.{ .boolean = av < valToFloat(ctx.arena.allocator(), b) }),
             else => {
                 helpers.setTypeMismatchError(ctx, "number", b);
                 return error.TypeMismatch;
@@ -373,6 +399,7 @@ pub fn nativeLt(ctx: *Context) anyerror!void {
         .bignum => |av| switch (b) {
             .bignum => |bv| try ctx.stack.push(.{ .boolean = av.toConst().order(bv.toConst()) == .lt }),
             .fixnum => |bv| try ctx.stack.push(.{ .boolean = av.toConst().orderAgainstScalar(bv) == .lt }),
+            .float => |bv| try ctx.stack.push(.{ .boolean = valToFloat(ctx.arena.allocator(), a) < bv }),
             else => {
                 helpers.setTypeMismatchError(ctx, "number", b);
                 return error.TypeMismatch;
@@ -444,6 +471,46 @@ fn nativeToInteger(ctx: *Context) anyerror!void {
     }
 }
 
+/// float-parts ( f -- mantissa exponent sign ) - Decompose an IEEE 754 double
+fn nativeFloatParts(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    if (val != .float) {
+        helpers.setTypeMismatchError(ctx, "float", val);
+        return error.TypeMismatch;
+    }
+    const f = val.float;
+    if (std.math.isNan(f)) {
+        helpers.setErrorContext(ctx, "float-parts: NaN has no finite decomposition", .{});
+        return error.TypeMismatch;
+    }
+    if (std.math.isInf(f)) {
+        helpers.setErrorContext(ctx, "float-parts: infinity has no finite decomposition", .{});
+        return error.TypeMismatch;
+    }
+    const sign: i64 = if (std.math.signbit(f)) -1 else 1;
+    if (f == 0.0) {
+        try ctx.stack.push(.{ .fixnum = 0 });
+        try ctx.stack.push(.{ .fixnum = 0 });
+        try ctx.stack.push(.{ .fixnum = sign });
+        return;
+    }
+    const bits: u64 = @bitCast(f);
+    const raw_exp = @as(i64, @intCast((bits >> 52) & 0x7FF));
+    const raw_mantissa = bits & 0x000FFFFFFFFFFFFF;
+    if (raw_exp == 0) {
+        // Subnormal: mantissa is raw_mantissa, exponent is 1 - 1023 - 52 = -1074
+        try ctx.stack.push(.{ .fixnum = @intCast(raw_mantissa) });
+        try ctx.stack.push(.{ .fixnum = -1074 });
+    } else {
+        // Normal: mantissa has implicit 1 bit
+        const mantissa: i64 = @intCast(raw_mantissa | (1 << 52));
+        const exponent: i64 = raw_exp - 1023 - 52;
+        try ctx.stack.push(.{ .fixnum = mantissa });
+        try ctx.stack.push(.{ .fixnum = exponent });
+    }
+    try ctx.stack.push(.{ .fixnum = sign });
+}
+
 /// > ( a b -- ? ) - Greater than
 pub fn nativeGt(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, ">")) return;
@@ -462,6 +529,7 @@ pub fn nativeGt(ctx: *Context) anyerror!void {
         .float => |av| switch (b) {
             .float => |bv| try ctx.stack.push(.{ .boolean = av > bv }),
             .fixnum => |bv| try ctx.stack.push(.{ .boolean = av > @as(f64, @floatFromInt(bv)) }),
+            .bignum => try ctx.stack.push(.{ .boolean = av > valToFloat(ctx.arena.allocator(), b) }),
             else => {
                 helpers.setTypeMismatchError(ctx, "number", b);
                 return error.TypeMismatch;
@@ -470,6 +538,7 @@ pub fn nativeGt(ctx: *Context) anyerror!void {
         .bignum => |av| switch (b) {
             .bignum => |bv| try ctx.stack.push(.{ .boolean = av.toConst().order(bv.toConst()) == .gt }),
             .fixnum => |bv| try ctx.stack.push(.{ .boolean = av.toConst().orderAgainstScalar(bv) == .gt }),
+            .float => |bv| try ctx.stack.push(.{ .boolean = valToFloat(ctx.arena.allocator(), a) > bv }),
             else => {
                 helpers.setTypeMismatchError(ctx, "number", b);
                 return error.TypeMismatch;
@@ -580,6 +649,54 @@ fn nativeTruncRem(ctx: *Context) anyerror!void {
         helpers.setTypeMismatchError(ctx, "fixnum or bignum", if (a != .fixnum and a != .bignum) a else b);
         return error.TypeMismatch;
     }
+}
+
+pub const registry_entries = [_]RegistryEntry{
+    .{ .name = "float-approx-ratio", .func = nativeFloatApproxRatio },
+};
+
+/// float-approx-ratio ( f -- numer denom ) - Continued fraction approximation
+fn nativeFloatApproxRatio(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    if (val != .float) {
+        helpers.setTypeMismatchError(ctx, "float", val);
+        return error.TypeMismatch;
+    }
+    const f = val.float;
+    if (std.math.isNan(f) or std.math.isInf(f)) {
+        helpers.setErrorContext(ctx, "float-approx-ratio: NaN and infinity have no rational representation", .{});
+        return error.TypeMismatch;
+    }
+    if (f == 0.0) {
+        try ctx.stack.push(.{ .fixnum = 0 });
+        try ctx.stack.push(.{ .fixnum = 1 });
+        return;
+    }
+
+    const sign: i64 = if (f < 0) -1 else 1;
+    var x: f64 = @abs(f);
+    var h0: i64 = 1;
+    var h1: i64 = 0;
+    var k0: i64 = 0;
+    var k1: i64 = 1;
+
+    for (0..50) |_| {
+        const a: i64 = @intFromFloat(@floor(x));
+        const h = a *% h0 +% h1;
+        const k = a *% k0 +% k1;
+        h1 = h0;
+        h0 = h;
+        k1 = k0;
+        k0 = k;
+        const approx = @as(f64, @floatFromInt(h)) / @as(f64, @floatFromInt(k));
+        if (@abs(approx - @abs(f)) <= @abs(f) * 1e-15) break;
+        const remainder = x - @as(f64, @floatFromInt(a));
+        if (remainder == 0.0) break;
+        x = 1.0 / remainder;
+    }
+
+    try ctx.stack.push(.{ .fixnum = sign *% h0 });
+    try ctx.stack.push(.{ .fixnum = k0 });
 }
 
 /// gcd ( a b -- gcd ) - Greatest common divisor, always non-negative

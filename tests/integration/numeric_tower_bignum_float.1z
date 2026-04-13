@@ -1,0 +1,21 @@
+use "testing" ;
+
+"bignum + float" test-section
+99999999999999999999 1.0 + 1.0e20 "bignum + float" assert=
+1.0 99999999999999999999 + 1.0e20 "float + bignum" assert=
+
+"bignum - float" test-section
+99999999999999999999 0.5 - 1.0e20 "bignum - float" assert=
+1.0e20 99999999999999999999 - 0.0 "float - bignum" assert=
+
+"bignum * float" test-section
+99999999999999999999 2.0 * 2.0e20 "bignum * float" assert=
+2.0 99999999999999999999 * 2.0e20 "float * bignum" assert=
+
+"bignum / float" test-section
+99999999999999999999 2.0 / 5.0e19 "bignum / float" assert=
+2.0e20 99999999999999999999 / 2.0 "float / bignum" assert=
+
+"bignum % float" test-section
+10 3.5 % 3.0 "fixnum % float" assert=
+3.5 10 % 3.5 "float % fixnum" assert=

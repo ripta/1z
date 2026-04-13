@@ -1,0 +1,58 @@
+=== cross-type equality: fixnum/float ===
+Stack: [ ]
+PASS: 1 = 1.0
+Stack: [ ]
+PASS: 1.0 = 1
+Stack: [ ]
+PASS: 1 /= 1.5
+Stack: [ ]
+=== cross-type equality: bignum/float ===
+Stack: [ ]
+PASS: bignum = float (approx)
+Stack: [ ]
+PASS: float = bignum (approx)
+Stack: [ ]
+=== cross-type equality: ratio/float ===
+Stack: [ ]
+PASS: 1/2 = 0.5
+Stack: [ ]
+PASS: 0.5 = 1/2
+Stack: [ ]
+PASS: 1/3 /= 0.5
+Stack: [ ]
+=== cross-type less-than: fixnum/float ===
+Stack: [ ]
+PASS: 1 < 1.5
+Stack: [ ]
+PASS: 1.5 < 1 is false
+Stack: [ ]
+=== cross-type less-than: bignum/float ===
+Stack: [ ]
+PASS: bignum < larger float
+Stack: [ ]
+PASS: larger float < bignum is false
+Stack: [ ]
+=== cross-type less-than: ratio/float ===
+Stack: [ ]
+PASS: 1/3 < 0.5
+Stack: [ ]
+PASS: 0.5 < 1/3 is false
+Stack: [ ]
+=== cross-type greater-than: fixnum/float ===
+Stack: [ ]
+PASS: 2 > 1.5
+Stack: [ ]
+PASS: 1.5 > 2 is false
+Stack: [ ]
+=== cross-type greater-than: bignum/float ===
+Stack: [ ]
+PASS: bignum > smaller float
+Stack: [ ]
+PASS: smaller float > bignum is false
+Stack: [ ]
+=== cross-type greater-than: ratio/float ===
+Stack: [ ]
+PASS: 3/4 > 0.5
+Stack: [ ]
+PASS: 0.5 > 3/4 is false
+Stack: [ ]

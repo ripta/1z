@@ -1,0 +1,87 @@
+use "testing" ;
+use "ratio" ;
+
+"integer?" test-section
+42 integer? "fixnum is integer" assert-true
+99999999999999999999 integer? "bignum is integer" assert-true
+3.14 integer? "float is not integer" assert-false
+"hello" integer? "string is not integer" assert-false
+t integer? "boolean is not integer" assert-false
+1 2 make-ratio integer? "ratio is not integer" assert-false
+
+"number?" test-section
+42 number? "fixnum is number" assert-true
+99999999999999999999 number? "bignum is number" assert-true
+3.14 number? "float is number" assert-true
+1 2 make-ratio number? "ratio is number" assert-true
+"hello" number? "string is not number" assert-false
+t number? "boolean is not number" assert-false
+some: number? "symbol is not number" assert-false
+
+"exact?" test-section
+42 exact? "fixnum is exact" assert-true
+99999999999999999999 exact? "bignum is exact" assert-true
+1 2 make-ratio exact? "ratio is exact" assert-true
+3.14 exact? "float is not exact" assert-false
+"hello" exact? "string is not exact" assert-false
+
+"inexact?" test-section
+3.14 inexact? "float is inexact" assert-true
+42 inexact? "fixnum is not inexact" assert-false
+99999999999999999999 inexact? "bignum is not inexact" assert-false
+1 2 make-ratio inexact? "ratio is not inexact" assert-false
+"hello" inexact? "string is not inexact" assert-false
+
+"zero?" test-section
+0 zero? "fixnum zero" assert-true
+42 zero? "nonzero fixnum" assert-false
+-1 zero? "negative fixnum" assert-false
+0.0 zero? "float zero" assert-true
+-0.0 zero? "negative float zero" assert-true
+3.14 zero? "nonzero float" assert-false
+0 1 make-ratio zero? "zero ratio" assert-true
+1 2 make-ratio zero? "nonzero ratio" assert-false
+"hello" zero? "string returns false" assert-false
+
+"positive?" test-section
+42 positive? "positive fixnum" assert-true
+0 positive? "zero fixnum" assert-false
+-1 positive? "negative fixnum" assert-false
+3.14 positive? "positive float" assert-true
+0.0 positive? "zero float" assert-false
+-2.5 positive? "negative float" assert-false
+1 2 make-ratio positive? "positive ratio" assert-true
+0 1 make-ratio positive? "zero ratio" assert-false
+-1 2 make-ratio positive? "negative ratio" assert-false
+
+"negative?" test-section
+-1 negative? "negative fixnum" assert-true
+0 negative? "zero fixnum" assert-false
+42 negative? "positive fixnum" assert-false
+-2.5 negative? "negative float" assert-true
+0.0 negative? "zero float" assert-false
+3.14 negative? "positive float" assert-false
+-1 2 make-ratio negative? "negative ratio" assert-true
+0 1 make-ratio negative? "zero ratio" assert-false
+1 2 make-ratio negative? "positive ratio" assert-false
+
+"even?" test-section
+0 even? "zero is even" assert-true
+2 even? "even fixnum" assert-true
+3 even? "odd fixnum" assert-false
+-4 even? "negative even fixnum" assert-true
+-3 even? "negative odd fixnum" assert-false
+99999999999999999998 even? "even bignum" assert-true
+99999999999999999999 even? "odd bignum" assert-false
+[ 3.14 even? ] "even? requires an integer" assert-error
+[ 1 2 make-ratio even? ] "even? requires an integer" assert-error
+
+"odd?" test-section
+1 odd? "odd fixnum" assert-true
+2 odd? "even fixnum" assert-false
+-3 odd? "negative odd fixnum" assert-true
+-4 odd? "negative even fixnum" assert-false
+99999999999999999999 odd? "odd bignum" assert-true
+99999999999999999998 odd? "even bignum" assert-false
+[ 3.14 odd? ] "odd? requires an integer" assert-error
+[ 1 2 make-ratio odd? ] "odd? requires an integer" assert-error
