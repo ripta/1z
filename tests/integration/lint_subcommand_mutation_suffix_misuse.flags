@@ -1,0 +1,4 @@
+@raw
+lint
+--stdlib-path=lib
+tests/fixtures/lint/mutation-suffix-misuse.1z

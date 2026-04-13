@@ -1,0 +1,1 @@
+tests/fixtures/lint/mutation-suffix-misuse.1z:2:29: warning: [mutation-suffix-misuse] word with ! suffix does not appear to perform mutation

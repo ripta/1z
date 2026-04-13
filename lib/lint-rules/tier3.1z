@@ -132,3 +132,64 @@ make-lint-rule register-lint-rule
 
 "associative-prefix-misuse" warning: [ (check-associative-prefix-misuse) ] f
 make-lint-rule register-lint-rule
+
+\ --- Helpers for mutation-suffix-misuse ---
+
+\ Known mutable type annotations (inspected form).
+(mutable-type-annotation?): ( param -- ? ) [
+  type-annotation>> dup f = [
+    drop f
+  ] [
+    inspect
+    { "<type:mutable-array>" "<type:mutable-map>" "<type:mutable-set>"
+      "<type:byte-array>"
+    }
+    swap [ = ] curry #any
+  ] if
+] ;
+
+\ Known mutable parameter names.
+(mutable-param-name?): ( param -- ? ) [
+  name>> >string
+  { "vec" "mmap" "buf" "buffer" "byte-array" "mutable" "mut" }
+  swap [ = ] curry #any
+] ;
+
+\ Does a stack-effect-param indicate a mutable container?
+(mutable-param?): ( param -- ? ) [
+  dup (mutable-type-annotation?) [ drop t ] [
+    (mutable-param-name?)
+  ] if
+] ;
+
+\ Does any input parameter indicate a mutable container?
+(has-mutable-input?): ( word-info -- ? ) [
+  stack-effect>> dup f = [
+    \ No stack effect: skip (missing-stack-effect catches this)
+    drop t
+  ] [
+    inputs>> [ (mutable-param?) ] #any
+  ] if
+] ;
+
+\ --- Rule: mutation-suffix-misuse ---
+
+(check-mutation-suffix-misuse): ( path source tokens line-index semantic-context -- diagnostics ) [
+  nip nip nip
+  [
+    dup name>> >string "!" #ends-with? [
+      dup (has-mutable-input?) [
+        2drop f
+      ] [
+        source-loc>> dup f = [ 2drop f ] [
+          "mutation-suffix-misuse" warning: 3 pick-n 3 pick-n dup line>> swap column>>
+          "word with ! suffix does not appear to perform mutation"
+          make-lint-diagnostic nip nip
+        ] if
+      ] if
+    ] [ 2drop f ] if
+  ] (check-semantic-words)
+] ;
+
+"mutation-suffix-misuse" warning: [ (check-mutation-suffix-misuse) ] f
+make-lint-rule register-lint-rule
