@@ -1,0 +1,54 @@
+=== integer? ===
+Stack: [ ]
+PASS: fixnum is integer
+Stack: [ ]
+PASS: bignum is integer
+Stack: [ ]
+PASS: float is not integer
+Stack: [ ]
+PASS: string is not integer
+Stack: [ ]
+PASS: boolean is not integer
+Stack: [ ]
+PASS: ratio is not integer
+Stack: [ ]
+=== number? ===
+Stack: [ ]
+PASS: fixnum is number
+Stack: [ ]
+PASS: bignum is number
+Stack: [ ]
+PASS: float is number
+Stack: [ ]
+PASS: ratio is number
+Stack: [ ]
+PASS: string is not number
+Stack: [ ]
+PASS: boolean is not number
+Stack: [ ]
+PASS: symbol is not number
+Stack: [ ]
+=== exact? ===
+Stack: [ ]
+PASS: fixnum is exact
+Stack: [ ]
+PASS: bignum is exact
+Stack: [ ]
+PASS: ratio is exact
+Stack: [ ]
+PASS: float is not exact
+Stack: [ ]
+PASS: string is not exact
+Stack: [ ]
+=== inexact? ===
+Stack: [ ]
+PASS: float is inexact
+Stack: [ ]
+PASS: fixnum is not inexact
+Stack: [ ]
+PASS: bignum is not inexact
+Stack: [ ]
+PASS: ratio is not inexact
+Stack: [ ]
+PASS: string is not inexact
+Stack: [ ]

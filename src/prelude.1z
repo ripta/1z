@@ -138,6 +138,15 @@ iterator?: ( val -- ? ) [ type-of iterator: = ] ;
 float?: ( val -- ? ) [ type-of float: = ] ;
 bignum?: ( val -- ? ) [ type-of bignum: = ] ;
 
+\\ True for any integer type: fixnum or bignum.
+integer?: ( val -- ? ) [ dup fixnum? swap bignum? or ] ;
+\\ True for any numeric type: fixnum, bignum, float, or ratio (via dispatch).
+number?: generic ( val -- ? ) [ dup fixnum? [ drop t ] [ dup bignum? [ drop t ] [ float? ] if ] if ] ;
+\\ True for exact numeric types: fixnum, bignum, or ratio (via dispatch).
+exact?: generic ( val -- ? ) [ dup fixnum? swap bignum? or ] ;
+\\ True for inexact numeric types: float.
+inexact?: ( val -- ? ) [ float? ] ;
+
 \\ Push IEEE 754 NaN (not a number).
 nan: ( -- f ) [ 0.0 0.0 / ] ;
 \\ Push IEEE 754 positive infinity.

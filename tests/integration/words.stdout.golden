@@ -115,6 +115,7 @@ environ (  -- hash )
 f (  -- f )
 fd-close ( fd --  )
 fd>stream ( fd -- stream )
+float-parts ( f -- mantissa exponent sign )
 gcd ( a b -- gcd )
 generic (  -- marker )
 get ( param -- value )
@@ -281,6 +282,7 @@ emit ( codepoint --  )
 enum{
 error-type? ( error type -- error ? )
 error? ( val -- ? )
+exact? ( val -- ? )
 file>>
 finite? ( x -- ? )
 fixnum? ( val -- ? )
@@ -291,10 +293,12 @@ fmt-line ( source string --  )
 generic? ( name -- ? )
 hash? ( val -- ? )
 ignore-errors ( quot --  )
+inexact? ( val -- ? )
 inf (  -- f )
 infinite? ( x -- ? )
 input-stream
 inputs>>
+integer? ( val -- ? )
 iterator? ( val -- ? )
 keep ( ..a x quot: ( ..a x -- ..b ) -- ..b x )
 line>>
@@ -321,6 +325,7 @@ nip ( a b -- b )
 nl (  --  )
 no-matching-branch ( data -- error )
 not ( ? -- ? )
+number? ( val -- ? )
 option:none
 option:none?
 option:some>

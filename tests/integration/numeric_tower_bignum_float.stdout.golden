@@ -1,0 +1,30 @@
+=== bignum + float ===
+Stack: [ ]
+PASS: bignum + float
+Stack: [ ]
+PASS: float + bignum
+Stack: [ ]
+=== bignum - float ===
+Stack: [ ]
+PASS: bignum - float
+Stack: [ ]
+PASS: float - bignum
+Stack: [ ]
+=== bignum * float ===
+Stack: [ ]
+PASS: bignum * float
+Stack: [ ]
+PASS: float * bignum
+Stack: [ ]
+=== bignum / float ===
+Stack: [ ]
+PASS: bignum / float
+Stack: [ ]
+PASS: float / bignum
+Stack: [ ]
+=== bignum % float ===
+Stack: [ ]
+PASS: fixnum % float
+Stack: [ ]
+PASS: float % fixnum
+Stack: [ ]

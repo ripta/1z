@@ -118,4 +118,5 @@ pub const extracted_registry_entries = structs.registry_entries ++
     enums.registry_entries ++
     protocols.registry_entries ++
     introspect.registry_entries ++
+    arithmetic.registry_entries ++
     math.registry_entries;

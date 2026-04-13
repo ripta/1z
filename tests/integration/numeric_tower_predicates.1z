@@ -1,0 +1,33 @@
+use "testing" ;
+use "ratio" ;
+
+"integer?" test-section
+42 integer? "fixnum is integer" assert-true
+99999999999999999999 integer? "bignum is integer" assert-true
+3.14 integer? "float is not integer" assert-false
+"hello" integer? "string is not integer" assert-false
+t integer? "boolean is not integer" assert-false
+1 2 make-ratio integer? "ratio is not integer" assert-false
+
+"number?" test-section
+42 number? "fixnum is number" assert-true
+99999999999999999999 number? "bignum is number" assert-true
+3.14 number? "float is number" assert-true
+1 2 make-ratio number? "ratio is number" assert-true
+"hello" number? "string is not number" assert-false
+t number? "boolean is not number" assert-false
+some: number? "symbol is not number" assert-false
+
+"exact?" test-section
+42 exact? "fixnum is exact" assert-true
+99999999999999999999 exact? "bignum is exact" assert-true
+1 2 make-ratio exact? "ratio is exact" assert-true
+3.14 exact? "float is not exact" assert-false
+"hello" exact? "string is not exact" assert-false
+
+"inexact?" test-section
+3.14 inexact? "float is inexact" assert-true
+42 inexact? "fixnum is not inexact" assert-false
+99999999999999999999 inexact? "bignum is not inexact" assert-false
+1 2 make-ratio inexact? "ratio is not inexact" assert-false
+"hello" inexact? "string is not inexact" assert-false
