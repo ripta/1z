@@ -1,0 +1,5 @@
+\\ Custom error type constant that does not follow Ename convention.
+my-error: ( -- sym ) [ custom-error: ] ;
+
+\\ Throw a custom error.
+test-throw: ( -- ) [ f "test" my-error make-error throw ] ;

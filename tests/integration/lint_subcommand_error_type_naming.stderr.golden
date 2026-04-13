@@ -1,0 +1,1 @@
+tests/fixtures/lint/error-type-naming.1z:5:31: warning: [error-type-naming] error type constant does not follow Ename convention (e.g., EUserThrown)

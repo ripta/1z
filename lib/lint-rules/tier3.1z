@@ -6,6 +6,7 @@
 
 use "lint" ;
 use "lint-rules/tier2" ;
+use "char" ;
 
 \ --- Helpers for sequence-prefix-misuse ---
 
@@ -192,4 +193,61 @@ make-lint-rule register-lint-rule
 ] ;
 
 "mutation-suffix-misuse" warning: [ (check-mutation-suffix-misuse) ] f
+make-lint-rule register-lint-rule
+
+\ --- Helpers for error-type-naming ---
+
+\ Does a word name follow the Ename convention (E followed by uppercase)?
+(ename-pattern?): ( name -- ? ) [
+  dup #len 2 < [ drop f ] [
+    dup 0 #nth "E" = [
+      1 #nth upper?
+    ] [ drop f ] if
+  ] if
+] ;
+
+\ --- Rule: error-type-naming ---
+
+(check-error-type-naming): ( path source tokens line-index semantic-context -- diagnostics ) [
+  drop
+  V{ } f
+  \ stack: path(5) source(4) tokens(3) line-index(2) results(1) prev(0)
+  3 pick-n [
+    \ stack: path(6) source(5) tokens(4) line-index(3) results(2) prev(1) token(0)
+    dup kind>> word: = [
+      dup value>> "make-error" = [
+        \ Found make-error: check prev token
+        drop
+        \ stack: path(5) source(4) tokens(3) line-index(2) results(1) prev(0)
+        dup f = not [
+          dup kind>> word: = [
+            dup value>> (ename-pattern?) not [
+              pos>>
+              "error-type-naming" warning:
+              7 pick-n 5 pick-n 4 pick-n
+              "error type constant does not follow Ename convention (e.g., EUserThrown)"
+              (make-diag)
+              2 pick-n swap #push! drop
+              drop
+            ] [ drop ] if
+          ] [ drop ] if
+        ] [ drop ] if
+        f
+      ] [
+        \ Regular word: update prev
+        nip
+      ] if
+    ] [
+      dup significant-token? [
+        nip
+      ] [
+        drop
+      ] if
+    ] if
+  ] #each
+  drop
+  [ drop drop drop drop ] dip
+] ;
+
+"error-type-naming" warning: [ (check-error-type-naming) ] f
 make-lint-rule register-lint-rule
