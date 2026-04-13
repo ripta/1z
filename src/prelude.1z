@@ -233,6 +233,16 @@ max: ( a1 a2 -- a ) [ [ > ] choose ] ;
 ++: ( a1 -- a2 ) [ 1 + ] ;
 \\ Test whether a value equals zero.
 0?: ( a -- ? ) [ 0 = ] ;
+\\ Test whether a numeric value is zero.
+zero?: ( x -- ? ) [ 0 = ] ;
+\\ Test whether a numeric value is strictly positive.
+positive?: ( x -- ? ) [ 0 > ] ;
+\\ Test whether a numeric value is strictly negative.
+negative?: ( x -- ? ) [ 0 < ] ;
+\\ Test whether an integer is even.
+even?: ( n -- ? ) [ dup integer? [ 2 % 0 = ] [ "even? requires an integer" throw ] if ] ;
+\\ Test whether an integer is odd.
+odd?: ( n -- ? ) [ dup integer? [ 2 % 0 = not ] [ "odd? requires an integer" throw ] if ] ;
 \ Comparison operators
 \\ Less than or equal.
 <=: ( a b -- ? ) [ 2dup < [ 2drop t ] [ = ] if ] ;

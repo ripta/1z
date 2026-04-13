@@ -52,3 +52,101 @@ PASS: ratio is not inexact
 Stack: [ ]
 PASS: string is not inexact
 Stack: [ ]
+=== zero? ===
+Stack: [ ]
+PASS: fixnum zero
+Stack: [ ]
+PASS: nonzero fixnum
+Stack: [ ]
+PASS: negative fixnum
+Stack: [ ]
+PASS: float zero
+Stack: [ ]
+PASS: negative float zero
+Stack: [ ]
+PASS: nonzero float
+Stack: [ ]
+PASS: zero ratio
+Stack: [ ]
+PASS: nonzero ratio
+Stack: [ ]
+PASS: string returns false
+Stack: [ ]
+=== positive? ===
+Stack: [ ]
+PASS: positive fixnum
+Stack: [ ]
+PASS: zero fixnum
+Stack: [ ]
+PASS: negative fixnum
+Stack: [ ]
+PASS: positive float
+Stack: [ ]
+PASS: zero float
+Stack: [ ]
+PASS: negative float
+Stack: [ ]
+PASS: positive ratio
+Stack: [ ]
+PASS: zero ratio
+Stack: [ ]
+PASS: negative ratio
+Stack: [ ]
+=== negative? ===
+Stack: [ ]
+PASS: negative fixnum
+Stack: [ ]
+PASS: zero fixnum
+Stack: [ ]
+PASS: positive fixnum
+Stack: [ ]
+PASS: negative float
+Stack: [ ]
+PASS: zero float
+Stack: [ ]
+PASS: positive float
+Stack: [ ]
+PASS: negative ratio
+Stack: [ ]
+PASS: zero ratio
+Stack: [ ]
+PASS: positive ratio
+Stack: [ ]
+=== even? ===
+Stack: [ ]
+PASS: zero is even
+Stack: [ ]
+PASS: even fixnum
+Stack: [ ]
+PASS: odd fixnum
+Stack: [ ]
+PASS: negative even fixnum
+Stack: [ ]
+PASS: negative odd fixnum
+Stack: [ ]
+PASS: even bignum
+Stack: [ ]
+PASS: odd bignum
+Stack: [ ]
+PASS: even? requires an integer
+Stack: [ ]
+PASS: even? requires an integer
+Stack: [ ]
+=== odd? ===
+Stack: [ ]
+PASS: odd fixnum
+Stack: [ ]
+PASS: even fixnum
+Stack: [ ]
+PASS: negative odd fixnum
+Stack: [ ]
+PASS: negative even fixnum
+Stack: [ ]
+PASS: odd bignum
+Stack: [ ]
+PASS: even bignum
+Stack: [ ]
+PASS: odd? requires an integer
+Stack: [ ]
+PASS: odd? requires an integer
+Stack: [ ]
