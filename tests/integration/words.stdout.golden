@@ -26,6 +26,8 @@ Stack: [ ]
 #shift ( seq -- seq' elem )
 #shift! ( vec -- vec elem )
 #slice ( seq start end -- subseq )
+#sort ( seq quot: ( a b -- ? ) -- array )
+#sort-by ( seq quot: ( elem -- key ) -- array )
 #starts-with? ( seq prefix -- ? )
 #take ( seq n -- seq' )
 #unshift ( seq elem -- seq' )
@@ -249,6 +251,7 @@ EFixnumOverflow
 EIOFailed
 EKeyNotFound
 ENoMatchingBranch
+ENotComparable
 EStackEffectMismatch
 EStackUnderflow
 ETypeMismatch

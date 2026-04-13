@@ -23,6 +23,7 @@ pub const InterpreterError = error{
     IndexOutOfBounds,
     EmptySequence,
     KeyNotFound,
+    NotComparable,
     // Import error types
     EmptyImport,
     // I/O error types

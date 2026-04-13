@@ -34,6 +34,172 @@ fn seqToArrayIter(seq: Value, alloc: Allocator) !?*Iterator {
     return iter;
 }
 
+const arithmetic = @import("arithmetic.zig");
+
+/// Materialize any iterable to a mutable []Value for in-place sorting.
+fn collectToMutableArray(seq: Value, ctx: *Context, alloc: Allocator) ![]Value {
+    switch (seq) {
+        .array => |arr| {
+            const result = alloc.alloc(Value, arr.len) catch return error.OutOfMemory;
+            @memcpy(result, arr);
+            return result;
+        },
+        .iterator => |iter| {
+            var list = std.ArrayListUnmanaged(Value){};
+            while (try iter.next(ctx)) |elem| {
+                list.append(alloc, elem) catch return error.OutOfMemory;
+            }
+            return list.items;
+        },
+        .string, .vector, .byte_array, .set => return try sequenceToValues(seq, alloc),
+        else => {
+            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    }
+}
+
+const SortContext = struct {
+    ctx: *Context,
+    quotation: value_mod.Quotation,
+    err: ?anyerror,
+};
+
+fn sortCompareFn(sort_ctx: *SortContext, a: Value, b: Value) bool {
+    if (sort_ctx.err != null) return false;
+    sort_ctx.ctx.stack.push(a) catch |e| {
+        sort_ctx.err = e;
+        return false;
+    };
+    sort_ctx.ctx.stack.push(b) catch |e| {
+        sort_ctx.err = e;
+        return false;
+    };
+    sort_ctx.ctx.executeQuotationWithFrame(sort_ctx.quotation) catch |e| {
+        sort_ctx.err = e;
+        return false;
+    };
+    const result = popBoolean(sort_ctx.ctx) catch |e| {
+        sort_ctx.err = e;
+        return false;
+    };
+    return result;
+}
+
+fn nativeSort(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    const seq = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+
+    const items = try collectToMutableArray(seq, ctx, alloc);
+    if (items.len <= 1) {
+        try ctx.stack.push(.{ .array = items });
+        return;
+    }
+
+    var sort_ctx = SortContext{
+        .ctx = ctx,
+        .quotation = quot,
+        .err = null,
+    };
+    std.mem.sort(Value, items, &sort_ctx, sortCompareFn);
+    if (sort_ctx.err) |e| return e;
+    try ctx.stack.push(.{ .array = items });
+}
+
+const SortByContext = struct {
+    ctx: *Context,
+    keys: []const Value,
+    err: ?anyerror,
+};
+
+fn sortByKeyCompareFn(sort_ctx: *SortByContext, a_idx: usize, b_idx: usize) bool {
+    if (sort_ctx.err != null) return false;
+    const a_key = sort_ctx.keys[a_idx];
+    const b_key = sort_ctx.keys[b_idx];
+
+    switch (a_key) {
+        .fixnum => |av| switch (b_key) {
+            .fixnum => |bv| return av < bv,
+            else => {},
+        },
+        .float => |av| switch (b_key) {
+            .float => |bv| return av < bv,
+            else => {},
+        },
+        .string => |av| switch (b_key) {
+            .string => |bv| return std.mem.order(u8, av, bv) == .lt,
+            else => {},
+        },
+        else => {},
+    }
+
+    sort_ctx.ctx.stack.push(a_key) catch |e| {
+        sort_ctx.err = e;
+        return false;
+    };
+    sort_ctx.ctx.stack.push(b_key) catch |e| {
+        sort_ctx.err = e;
+        return false;
+    };
+    arithmetic.nativeLt(sort_ctx.ctx) catch |e| {
+        if (e == error.TypeMismatch) {
+            sort_ctx.err = error.NotComparable;
+        } else {
+            sort_ctx.err = e;
+        }
+        return false;
+    };
+    const result = popBoolean(sort_ctx.ctx) catch |e| {
+        sort_ctx.err = e;
+        return false;
+    };
+    return result;
+}
+
+fn nativeSortBy(ctx: *Context) anyerror!void {
+    const quot = try popQuotation(ctx);
+    const seq = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
+
+    const items = try collectToMutableArray(seq, ctx, alloc);
+    if (items.len == 0) {
+        try ctx.stack.push(.{ .array = items });
+        return;
+    }
+
+    const keys = alloc.alloc(Value, items.len) catch return error.OutOfMemory;
+    for (items, 0..) |item, i| {
+        try ctx.stack.push(item);
+        try ctx.executeQuotationWithFrame(quot);
+        keys[i] = try ctx.stack.pop();
+    }
+
+    const indices = alloc.alloc(usize, items.len) catch return error.OutOfMemory;
+    for (indices, 0..) |*idx, i| {
+        idx.* = i;
+    }
+
+    var sort_ctx = SortByContext{
+        .ctx = ctx,
+        .keys = keys,
+        .err = null,
+    };
+    std.mem.sort(usize, indices, &sort_ctx, sortByKeyCompareFn);
+    if (sort_ctx.err) |e| {
+        if (e == error.NotComparable) {
+            setErrorContext(ctx, "keys are not comparable", .{});
+        }
+        return e;
+    }
+
+    const result = alloc.alloc(Value, items.len) catch return error.OutOfMemory;
+    for (indices, 0..) |src_idx, dst_idx| {
+        result[dst_idx] = items[src_idx];
+    }
+    try ctx.stack.push(.{ .array = result });
+}
+
 const SequenceIterator = sequence.SequenceIterator;
 const SequenceBuilder = sequence.SequenceBuilder;
 const SequenceKind = sequence.SequenceKind;
@@ -63,6 +229,8 @@ pub const primitives = [_]Primitive{
     .{ .name = "#slice", .stack_effect = "seq start end -- subseq", .doc = "Extract subsequence from start (inclusive) to end (exclusive).", .func = nativeSlice },
     .{ .name = "#take", .stack_effect = "seq n -- seq'", .doc = "Take first n elements of sequence.", .func = nativeTake },
     .{ .name = "#drop", .stack_effect = "seq n -- seq'", .doc = "Drop first n elements of sequence.", .func = nativeDrop },
+    .{ .name = "#sort", .stack_effect = "seq quot: ( a b -- ? ) -- array", .doc = "Sort sequence using comparator quotation. Returns a new sorted array.", .func = nativeSort },
+    .{ .name = "#sort-by", .stack_effect = "seq quot: ( elem -- key ) -- array", .doc = "Sort sequence by keys extracted via quotation. Keys compared with natural ordering.", .func = nativeSortBy },
     // Sequence concatenation
     .{ .name = "#append", .stack_effect = "seq1 seq2 -- seq", .doc = "Concatenate seq2 to seq1, returning new sequence of seq1's type.", .func = nativeAppend },
     .{ .name = "#append!", .stack_effect = "vec seq -- vec", .doc = "Mutably append sequence elements to vector.", .func = nativeAppendMut },
