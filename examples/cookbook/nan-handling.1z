@@ -1,0 +1,50 @@
+\ NaN Handling Patterns
+\
+\ IEEE 754 NaN (Not a Number) is unordered: comparisons involving NaN
+\ produce surprising results. These patterns show how to detect and
+\ filter NaN values before doing arithmetic or comparison.
+\
+\ Note: nan, inf, and -inf are prelude words, not literals, so they
+\ cannot appear inside { } array syntax. Build arrays containing
+\ these values at runtime using #append or #prepend.
+
+use "testing" ;
+
+\ --- Detecting NaN in a single value ---
+
+nan nan? "nan? detects NaN" assert-true
+3.14 nan? "finite values are not NaN" assert-false
+inf nan? "infinity is not NaN" assert-false
+
+\ --- Building arrays that contain NaN ---
+\
+\ Since nan is a word, not a literal, you construct such arrays
+\ at runtime. A helper makes this convenient:
+
+with-nan: ( array -- array ) [ nan 1array #append ] ;
+
+{ 1.0 3.0 } with-nan #len
+3 "array with NaN has expected length" assert=
+
+\ --- Checking an array for NaN ---
+
+{ 1.0 3.0 } with-nan [ nan? ] #any
+"array contains NaN" assert-true
+
+{ 1.0 2.0 3.0 } [ nan? ] #any
+"clean array has no NaN" assert-false
+
+\ #none is the complement of #any
+{ 1.0 2.0 3.0 } [ nan? ] #none
+"no NaN present" assert-true
+
+\ --- Filtering NaN out of a sequence ---
+
+{ 1.0 3.0 } with-nan [ nan? not ] #filter #collect #len
+2 "filter NaN from array" assert=
+
+\ --- Keeping only finite values (excludes both NaN and infinity) ---
+
+{ 1.0 2.0 } with-nan inf 1array #append -inf 1array #append
+[ finite? ] #filter #collect #len
+2 "keep only finite values" assert=

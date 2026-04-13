@@ -30,7 +30,7 @@ now: ( -- timestamp ) [ clock-realtime make-timestamp ] ;
 -: method{ duration duration } [ swap duration> swap duration> - >duration ] ;
 *: method{ duration fixnum } [ swap duration> swap * >duration ] ;
 *: method{ fixnum duration } [ duration> * >duration ] ;
-/: method{ duration fixnum } [ swap duration> swap / >duration ] ;
+/: method{ duration fixnum } [ swap duration> swap div >duration ] ;
 
 \ Duration comparison
 <: method{ duration duration } [ swap duration> swap duration> < ] ;
@@ -39,7 +39,7 @@ now: ( -- timestamp ) [ clock-realtime make-timestamp ] ;
 
 \ Helper: split nanoseconds into sec + nsec with consistent floored semantics
 ns>sec-nsec: ( ns -- sec nsec ) [
-  dup 1000000000 % swap over - 1000000000 / swap
+  dup 1000000000 % swap over - 1000000000 div swap
 ] ;
 
 timestamp+nanos: ( ts nanos -- timestamp ) [
@@ -86,7 +86,7 @@ weekday-names-short: ( -- array ) [
 
 \ Compute ISO week number (simplified: edge cases at year boundaries may be off)
 compute-iso-week: ( yearday iso-weekday -- iso-week ) [
-  - 10 + 7 /
+  - 10 + 7 div
   dup 1 < [ drop 1 ] [ dup 53 > [ drop 53 ] [ ] if ] if
 ] ;
 
@@ -113,7 +113,7 @@ tz-localtime: ( sec tz-name -- tm-result ) [ tz-decompose make-tm-result ] ;
 format-tz-offset: ( gmtoff-sec -- string ) [
   dup 0 < [ 0 swap - "-" ] [ "+" ] if swap
   \ Stack: sign abs-gmtoff
-  60 / dup 60 / swap 60 %
+  60 div dup 60 div swap 60 %
   \ Stack: sign hh mm
   H{ }
   \ Stack: sign hh mm hash
@@ -168,8 +168,8 @@ tm>time-parts: ( tm-result nsec -- hash ) [
 
   \ Sub-second (from nsec argument)
   1 pick-n nsec: swap @set
-  1 pick-n 1000 / usec: swap @set
-  1 pick-n 1000000 / msec: swap @set
+  1 pick-n 1000 div usec: swap @set
+  1 pick-n 1000000 div msec: swap @set
 
   \ AM/PM
   2 pick-n hour>> 12 < [ "AM" ] [ "PM" ] if ampm: swap @set

@@ -43,7 +43,7 @@ pub const primitives = [_]Primitive{
     .{
         .name = "/",
         .stack_effect = "a b -- a/b",
-        .doc = "Divide: a divided by b. Integer division for fixnums (throws on zero); IEEE 754 division for floats.",
+        .doc = "Divide: a divided by b. Produces a ratio for inexact integer division when the ratio library is loaded, otherwise truncates. IEEE 754 division for floats.",
         .func = nativeDiv,
     },
     .{
@@ -171,6 +171,37 @@ pub fn nativeMul(ctx: *Context) anyerror!void {
     }
 }
 
+/// Execute a looked-up word (compound or native), respecting source_module.
+fn executeWord(ctx: *Context, word: anytype) anyerror!void {
+    if (word.source_module) |mod| {
+        switch (word.action) {
+            .compound => |instrs| {
+                try ctx.pushModuleDepsFrame(mod);
+                defer ctx.popLocalFrame();
+                try ctx.executeQuotation(.{ .instructions = instrs });
+            },
+            .native => |func| try func(ctx),
+        }
+    } else {
+        switch (word.action) {
+            .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
+            .native => |func| try func(ctx),
+        }
+    }
+}
+
+/// If make-ratio is in the dictionary, push a and b then call it.
+/// Otherwise push the pre-computed truncated quotient.
+fn callMakeRatioOrTruncate(ctx: *Context, a: Value, b: Value, truncated: Value) anyerror!void {
+    if (ctx.lookupWord("make-ratio")) |word| {
+        try ctx.stack.push(a);
+        try ctx.stack.push(b);
+        try executeWord(ctx, word);
+    } else {
+        try ctx.stack.push(truncated);
+    }
+}
+
 /// / ( a b -- a/b ) - Division
 pub fn nativeDiv(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "/")) return;
@@ -190,7 +221,11 @@ pub fn nativeDiv(ctx: *Context) anyerror!void {
             r.deinit();
             try ctx.stack.push(demoteBignum(q));
         } else {
-            try ctx.stack.push(.{ .fixnum = @divTrunc(a.fixnum, b.fixnum) });
+            if (@rem(a.fixnum, b.fixnum) != 0) {
+                try callMakeRatioOrTruncate(ctx, a, b, .{ .fixnum = @divTrunc(a.fixnum, b.fixnum) });
+            } else {
+                try ctx.stack.push(.{ .fixnum = @divTrunc(a.fixnum, b.fixnum) });
+            }
         }
     } else if ((a == .bignum or a == .fixnum) and (b == .bignum or b == .fixnum)) {
         const alloc = ctx.arena.allocator();
@@ -206,8 +241,20 @@ pub fn nativeDiv(ctx: *Context) anyerror!void {
         try q.divTrunc(&r, &ba, &bb);
         ba.deinit();
         bb.deinit();
-        r.deinit();
-        try ctx.stack.push(demoteBignum(q));
+        if (r.eqlZero()) {
+            r.deinit();
+            try ctx.stack.push(demoteBignum(q));
+        } else {
+            r.deinit();
+            if (ctx.lookupWord("make-ratio")) |word| {
+                q.deinit();
+                try ctx.stack.push(a);
+                try ctx.stack.push(b);
+                try executeWord(ctx, word);
+            } else {
+                try ctx.stack.push(demoteBignum(q));
+            }
+        }
     } else if ((a == .fixnum or a == .float) and (b == .fixnum or b == .float)) {
         const fs = toFloats(popNumVal(a), popNumVal(b));
         try ctx.stack.push(.{ .float = fs[0] / fs[1] });

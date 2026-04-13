@@ -1,0 +1,32 @@
+\ Division: `/` vs `div`
+\
+\ `/` produces exact ratios when integer division is inexact and the
+\ ratio library is loaded. `div` always truncates toward zero.
+\ When the ratio library is not loaded, `/` also truncates.
+
+use "ratio" ;
+use "testing" ;
+
+\ --- Exact division returns an integer either way ---
+
+6 2 / 3 "/ on exact division" assert=
+6 2 div 3 "div on exact division" assert=
+
+\ --- Inexact division: `/` preserves precision ---
+
+7 2 / ratio? "/ produces a ratio" assert-true
+7 2 / >string "7/2" "ratio display" assert=
+
+7 2 div 3 "div truncates toward zero" assert=
+
+\ --- Ratios recover the original value under multiplication ---
+
+1 3 / 3 * 1 "1/3 * 3 is exactly 1" assert=
+
+\ --- Choose `div` when you need an integer quotient ---
+\
+\ Time calculations, index math, and similar code that expects an
+\ integer result should use `div` so the result stays integral
+\ regardless of whether the ratio library is loaded.
+
+100 3 div 33 "integer quotient" assert=
