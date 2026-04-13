@@ -1,0 +1,86 @@
+=== #sort ascending ===
+Stack: [ ]
+Stack: [ { 1 1 2 3 4 5 6 9 } ]
+PASS: ascending integers
+Stack: [ ]
+=== #sort descending ===
+Stack: [ ]
+Stack: [ { 9 6 5 4 3 2 1 1 } ]
+PASS: descending integers
+Stack: [ ]
+=== #sort empty ===
+Stack: [ ]
+Stack: [ { } ]
+PASS: empty array
+Stack: [ ]
+=== #sort single ===
+Stack: [ ]
+Stack: [ { 42 } ]
+PASS: single element
+Stack: [ ]
+=== #sort already sorted ===
+Stack: [ ]
+Stack: [ { 1 2 3 4 5 } ]
+PASS: already sorted
+Stack: [ ]
+=== #sort from iterator ===
+Stack: [ ]
+Stack: [ { 1 2 3 4 5 } ]
+PASS: sort from iterator
+Stack: [ ]
+=== #sort from vector ===
+Stack: [ ]
+Stack: [ { 1 3 5 } ]
+PASS: sort from vector returns array
+Stack: [ ]
+=== #sort comparator error ===
+Stack: [ ]
+Stack: [ <result:err result:err{ error: <error type-mismatch: type-mismatch [tests/integration/sort_primitives.1z:32:+ <- tests/integration/sort_primitives.1z:32:#sort <- tests/integration/sort_primitives.1z:2:call <- tests/integration/sort_primitives.1z:2:recover]> }> ]
+PASS: bad comparator is error
+Stack: [ <result:err result:err{ error: <error type-mismatch: type-mismatch [tests/integration/sort_primitives.1z:32:+ <- tests/integration/sort_primitives.1z:32:#sort <- tests/integration/sort_primitives.1z:2:call <- tests/integration/sort_primitives.1z:2:recover]> }> ]
+Stack: [ type-mismatch: ]
+PASS: comparator type error
+Stack: [ ]
+=== #sort-by identity on integers ===
+Stack: [ ]
+Stack: [ { 1 2 3 } ]
+PASS: identity key sort
+Stack: [ ]
+=== #sort-by identity on strings ===
+Stack: [ ]
+Stack: [ { "apple" "banana" "cherry" } ]
+PASS: string natural order
+Stack: [ ]
+=== #sort-by negated key ===
+Stack: [ ]
+Stack: [ { 5 4 3 1 1 } ]
+PASS: descending via negated key
+Stack: [ ]
+=== #sort-by empty ===
+Stack: [ ]
+Stack: [ { } ]
+PASS: empty sort-by
+Stack: [ ]
+=== #sort-by string length ===
+Stack: [ ]
+Stack: [ { "hi" "hey" "hello" } ]
+PASS: sort by string length
+Stack: [ ]
+=== #sort-by from iterator ===
+Stack: [ ]
+Stack: [ { 1 2 3 4 5 } ]
+PASS: sort-by from iterator
+Stack: [ ]
+=== #sort-by float keys ===
+Stack: [ ]
+Stack: [ { 1 2 3 } ]
+PASS: float key sort
+Stack: [ ]
+=== #sort-by not-comparable keys ===
+Stack: [ ]
+Stack: [ <result:err result:err{ error: <error not-comparable: not-comparable [tests/integration/sort_primitives.1z:66:#sort-by <- tests/integration/sort_primitives.1z:2:call <- tests/integration/sort_primitives.1z:2:recover]> }> ]
+PASS: not-comparable is error
+Stack: [ <result:err result:err{ error: <error not-comparable: not-comparable [tests/integration/sort_primitives.1z:66:#sort-by <- tests/integration/sort_primitives.1z:2:call <- tests/integration/sort_primitives.1z:2:recover]> }> ]
+Stack: [ not-comparable: ]
+PASS: not-comparable error type
+Stack: [ ]

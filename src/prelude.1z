@@ -110,6 +110,7 @@ EFileReadFailed:      [ file-read-failed: ] ;
 EUserRethrown:        [ user-rethrown: ] ;
 EUserThrown:          [ user-thrown: ] ;
 EKeyNotFound:         [ key-not-found: ] ;
+ENotComparable:       [ not-comparable: ] ;
 EIOFailed: [ io-failed: ] ;
 ENoMatchingBranch: [ no-matching-branch: ] ;
 ECannotRedefineConst: [ cannot-redefine-const: ] ;

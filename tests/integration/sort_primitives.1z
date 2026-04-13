@@ -1,0 +1,69 @@
+use "testing" ;
+
+"#sort ascending" test-section
+{ 3 1 4 1 5 9 2 6 } [ < ] #sort
+{ 1 1 2 3 4 5 6 9 } "ascending integers" assert=
+
+"#sort descending" test-section
+{ 3 1 4 1 5 9 2 6 } [ > ] #sort
+{ 9 6 5 4 3 2 1 1 } "descending integers" assert=
+
+"#sort empty" test-section
+{ } [ < ] #sort
+{ } "empty array" assert=
+
+"#sort single" test-section
+{ 42 } [ < ] #sort
+{ 42 } "single element" assert=
+
+"#sort already sorted" test-section
+{ 1 2 3 4 5 } [ < ] #sort
+{ 1 2 3 4 5 } "already sorted" assert=
+
+"#sort from iterator" test-section
+{ 5 3 1 4 2 } >iterator [ < ] #sort
+{ 1 2 3 4 5 } "sort from iterator" assert=
+
+"#sort from vector" test-section
+V{ 5 3 1 } [ < ] #sort
+{ 1 3 5 } "sort from vector returns array" assert=
+
+"#sort comparator error" test-section
+[ { "a" "b" "c" } [ + ] #sort ] try
+dup result:err? "bad comparator is error" assert-true
+result:err> error-type: @get
+ETypeMismatch "comparator type error" assert=
+
+"#sort-by identity on integers" test-section
+{ 3 1 2 } [ ] #sort-by
+{ 1 2 3 } "identity key sort" assert=
+
+"#sort-by identity on strings" test-section
+{ "banana" "apple" "cherry" } [ ] #sort-by
+{ "apple" "banana" "cherry" } "string natural order" assert=
+
+"#sort-by negated key" test-section
+{ 3 1 4 1 5 } [ -@ ] #sort-by
+{ 5 4 3 1 1 } "descending via negated key" assert=
+
+"#sort-by empty" test-section
+{ } [ ] #sort-by
+{ } "empty sort-by" assert=
+
+"#sort-by string length" test-section
+{ "hi" "hello" "hey" } [ #len ] #sort-by
+{ "hi" "hey" "hello" } "sort by string length" assert=
+
+"#sort-by from iterator" test-section
+{ 5 3 1 4 2 } >iterator [ ] #sort-by
+{ 1 2 3 4 5 } "sort-by from iterator" assert=
+
+"#sort-by float keys" test-section
+{ 3 1 2 } [ >float ] #sort-by
+{ 1 2 3 } "float key sort" assert=
+
+"#sort-by not-comparable keys" test-section
+[ { 1 2 3 } [ drop [ ] ] #sort-by ] try
+dup result:err? "not-comparable is error" assert-true
+result:err> error-type: @get
+ENotComparable "not-comparable error type" assert=
