@@ -1,0 +1,8 @@
+\\ Shallow nesting (ok, depth 3).
+shallow: [ [ [ 1 ] ] ] ;
+
+\\ Exactly at threshold (ok, depth 5).
+at-threshold: [ [ [ [ [ 1 ] ] ] ] ] ;
+
+\\ One over threshold (triggers at the 6th bracket).
+too-deep: [ [ [ [ [ [ 42 ] ] ] ] ] ] ;

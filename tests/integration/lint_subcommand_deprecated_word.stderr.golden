@@ -1,0 +1,4 @@
+tests/fixtures/lint/deprecated-word.1z:5:24: warning: [deprecated-word] call to deprecated word 'old-helper'
+tests/fixtures/lint/deprecated-word.1z:5:37: info: [dead-definition] definition is not referenced by any other checked-file word
+tests/fixtures/lint/deprecated-word.1z:8:37: info: [dead-definition] definition is not referenced by any other checked-file word
+tests/fixtures/lint/deprecated-word.1z:8:37: warning: [duplicate-definition] definition body is identical to old-helper

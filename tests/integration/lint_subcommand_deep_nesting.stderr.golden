@@ -1,0 +1,7 @@
+tests/fixtures/lint/deep-nesting.1z:8:21: warning: [deep-nesting] quotation nesting depth exceeds 5
+tests/fixtures/lint/deep-nesting.1z:2:24: warning: [missing-stack-effect] public word lacks a declared stack effect
+tests/fixtures/lint/deep-nesting.1z:2:24: info: [dead-definition] definition is not referenced by any other checked-file word
+tests/fixtures/lint/deep-nesting.1z:5:37: warning: [missing-stack-effect] public word lacks a declared stack effect
+tests/fixtures/lint/deep-nesting.1z:5:37: info: [dead-definition] definition is not referenced by any other checked-file word
+tests/fixtures/lint/deep-nesting.1z:8:38: warning: [missing-stack-effect] public word lacks a declared stack effect
+tests/fixtures/lint/deep-nesting.1z:8:38: info: [dead-definition] definition is not referenced by any other checked-file word

@@ -606,3 +606,114 @@ make-lint-rule register-lint-rule
 
 "with-combinator-naming" warning: [ (check-with-combinator-naming) ] f
 make-lint-rule register-lint-rule
+
+\ --- Rule: deep-nesting ---
+\ Token-level rule: warn when quotation bracket nesting exceeds depth 5.
+
+(deep-nesting-threshold): ( -- n ) [ 5 ] ;
+
+(check-deep-nesting): ( path source tokens line-index semantic-context -- diagnostics ) [
+  drop
+  V{ } 0 f
+  \ stack: path(6) source(5) tokens(4) line-index(3) positions(2) depth(1) flagged(0)
+  4 pick-n [
+    \ stack: path(7) source(6) tokens(5) line-index(4) positions(3) depth(2) flagged(1) token(0)
+    dup kind>> open-bracket: = [
+      \ Increment depth; flag if crossing threshold.
+      pos>> [ [ ++ ] dip ] dip
+      \ stack: ... positions(3) depth(2) flagged(1) pos(0)
+      2 pick-n (deep-nesting-threshold) > [
+        1 pick-n not [
+          3 pick-n swap #push! drop
+          drop t
+        ] [ drop ] if
+      ] [ drop ] if
+    ] [
+      dup kind>> close-bracket: = [
+        drop
+        \ Decrement depth; clear flagged if back at threshold.
+        [ -- ] dip
+        over (deep-nesting-threshold) <= [ drop f ] when
+      ] [ drop ] if
+    ] if
+  ] #each
+  drop drop
+
+  \ Convert collected positions to diagnostics.
+  V{ }
+  \ stack: path(5) source(4) tokens(3) line-index(2) positions(1) results(0)
+  1 pick-n [
+    \ stack: path(6) source(5) tokens(4) line-index(3) positions(2) results(1) pos(0)
+    "deep-nesting" warning: 8 pick-n 6 pick-n 4 pick-n
+    "quotation nesting depth exceeds 5"
+    (make-diag)
+    swap drop 1 pick-n swap #push! drop
+  ] #each
+  [ drop drop drop drop drop ] dip
+] ;
+
+"deep-nesting" warning: [ (check-deep-nesting) ] f
+make-lint-rule register-lint-rule
+
+\ --- Helpers for deprecated-word ---
+
+\ Check whether a word-info has the well-known deprecated marker.
+(has-deprecated-marker?): ( word-info -- ? ) [
+  markers>> [ deprecated = ] #any
+] ;
+
+\ Build a mutable map of deprecated word names from semantic context word-infos.
+(build-deprecated-set): ( semantic-context -- mmap ) [
+  dup f = [ drop M{ } ] [
+    dup semantic-word-names
+    M{ }
+    \ stack: sem-ctx(2) names(1) M{}(0)
+    swap [
+      \ stack: sem-ctx(2) M{}(1) word-name(0)
+      2 pick-n swap semantic-word-info
+      dup f = [ drop ] [
+        dup (has-deprecated-marker?) [
+          name>> t @set!
+        ] [ drop ] if
+      ] if
+    ] #each
+    nip
+  ] if
+] ;
+
+\ --- Rule: deprecated-word ---
+\ Warn when a word token references a word carrying the deprecated marker.
+
+(check-deprecated-word): ( path source tokens line-index semantic-context -- diagnostics ) [
+  \ stack: path(4) source(3) tokens(2) line-index(1) sem-ctx(0)
+  (build-deprecated-set)
+  \ stack: path(4) source(3) tokens(2) line-index(1) deprecated-set(0)
+
+  V{ }
+  \ stack: path(5) source(4) tokens(3) line-index(2) deprecated-set(1) results(0)
+
+  3 pick-n [
+    \ stack: path(6) source(5) tokens(4) line-index(3) deprecated-set(2) results(1) token(0)
+    dup kind>> word: = [
+      dup value>> 3 pick-n swap @has? [
+        \ Token is a call to a deprecated word.
+        dup pos>> swap value>>
+        \ stack: path(7) source(6) tokens(5) line-index(4) deprecated-set(3) results(2) pos(1) name(0)
+        "deprecated-word" warning:
+        \ stack: path(9) source(8) tokens(7) line-index(6) ... pos(3) name(2) rid(1) sev(0)
+        9 pick-n 7 pick-n 5 pick-n
+        \ stack: ... name(5) rid(4) sev(3) path(2) line-index(1) pos(0)
+        "call to deprecated word '" 6 pick-n #append "'" #append
+        (make-diag)
+        \ stack: ... results(3) pos(2) name(1) diagnostic(0)
+        3 pick-n swap #push! drop
+        drop drop
+      ] [ drop ] if
+    ] [ drop ] if
+  ] #each
+
+  [ drop drop drop drop drop ] dip
+] ;
+
+"deprecated-word" warning: [ (check-deprecated-word) ] f
+make-lint-rule register-lint-rule

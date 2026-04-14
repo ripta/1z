@@ -63,6 +63,10 @@ pub const recursive_non_tco_marker: Marker = .{ .name = "recursive-non-tco" };
 /// When present, the word is never assigned a word_id and is always interpreted.
 pub const no_compile_marker: Marker = .{ .name = "no-compile" };
 
+/// Well-known marker for deprecated word definitions.
+/// When present, the linter warns at call sites of the word.
+pub const deprecated_marker: Marker = .{ .name = "deprecated" };
+
 /// Dispatch wildcard for `method{`, not a type -- no value has type `any`.
 pub const any_marker: Marker = .{ .name = "any" };
 
@@ -90,6 +94,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "typed", .stack_effect = "-- marker", .doc = "Push the well-known typed marker.", .func = nativeTypedMarker, .parse_time = true },
     .{ .name = "stack-recursive", .stack_effect = "-- marker", .doc = "Push the well-known stack-recursive marker.", .func = nativeStackRecursiveMarker, .parse_time = true },
     .{ .name = "no-compile", .stack_effect = "-- marker", .doc = "Push the well-known no-compile marker. Opts a word out of automatic compilation.", .func = nativeNoCompileMarker, .parse_time = true },
+    .{ .name = "deprecated", .stack_effect = "-- marker", .doc = "Push the well-known deprecated marker. The linter warns at call sites of deprecated words.", .func = nativeDeprecatedMarker, .parse_time = true },
     .{ .name = "any", .stack_effect = "-- marker", .doc = "Push the well-known any marker for method dispatch wildcards.", .func = nativeAnyMarker, .parse_time = true, .markers = &.{@constCast(&const_marker)} },
     .{ .name = "self", .stack_effect = "-- marker", .doc = "Push the well-known self marker for protocol type annotations.", .func = nativeSelfMarker, .parse_time = true, .markers = &.{@constCast(&const_marker)} },
 };
@@ -167,6 +172,11 @@ pub fn nativeNoCompileMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&no_compile_marker) });
 }
 
+/// deprecated ( -- marker ) - Push the well-known deprecated marker
+pub fn nativeDeprecatedMarker(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .marker = @constCast(&deprecated_marker) });
+}
+
 /// any ( -- marker ) - Push the well-known any marker
 pub fn nativeAnyMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&any_marker) });
@@ -240,6 +250,11 @@ pub fn isStackRecursiveMarker(mk: *const Marker) bool {
 /// Check if a marker is the well-known no-compile marker
 pub fn isNoCompileMarker(mk: *const Marker) bool {
     return mk == &no_compile_marker;
+}
+
+/// Check if a marker is the well-known deprecated marker
+pub fn isDeprecatedMarker(mk: *const Marker) bool {
+    return mk == &deprecated_marker;
 }
 
 /// word-markers ( module name -- markers ) - Get the markers attached to a word in a module

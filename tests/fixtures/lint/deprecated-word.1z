@@ -1,0 +1,8 @@
+\\ A deprecated word.
+old-helper: deprecated ( x -- x ) [ dup drop ] ;
+
+\\ A current word that calls the deprecated one -- should trigger.
+new-word: ( x -- x ) [ old-helper ] ;
+
+\\ A word that does not call any deprecated word -- should not trigger.
+clean-word: ( x -- x ) [ dup drop ] ;
