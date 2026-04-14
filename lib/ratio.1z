@@ -4,12 +4,12 @@ ratio: virtual{ struct{ numer denom } } ;
 
 \ Accessors: unwrap the virtual type, then extract by position
 \ Virtual structs don't export these by default
-numer>>: ( ratio -- n ) [ ratio> drop ] ;
-denom>>: ( ratio -- d ) [ ratio> nip ] ;
+numer>>: ( ratio -- n ) [ unmake-ratio drop ] ;
+denom>>: ( ratio -- d ) [ unmake-ratio nip ] ;
 
 \ Normalizing constructor: reduces to lowest terms, enforces positive
 \ denominator, demotes to integer when denominator is 1.
-make-ratio: ( numer denom -- ratio-or-int ) [
+normalize-ratio: ( numer denom -- ratio-or-int ) [
   dup 0 = [ "DivisionByZero" throw ] when
   2dup gcd
   tuck
@@ -21,7 +21,7 @@ make-ratio: ( numer denom -- ratio-or-int ) [
   [ [ 0 swap - ] dip 0 swap - ] when
   dup 1 =
   [ drop ]
-  [ >ratio ]
+  [ make-ratio ]
   if
 ] ;
 
@@ -40,7 +40,7 @@ exact?: method{ ratio } [ drop t ] ;
   2 pick-n denom>> 2 pick-n numer>> *
   +
   -rot> denom>> swap denom>> *
-  make-ratio
+  normalize-ratio
 ] ;
 
 -: method{ ratio ratio } [
@@ -48,19 +48,19 @@ exact?: method{ ratio } [ drop t ] ;
   2 pick-n denom>> 2 pick-n numer>> *
   -
   -rot> denom>> swap denom>> *
-  make-ratio
+  normalize-ratio
 ] ;
 
 *: method{ ratio ratio } [
   over numer>> over numer>> *
   -rot> denom>> swap denom>> *
-  make-ratio
+  normalize-ratio
 ] ;
 
 /: method{ ratio ratio } [
   over numer>> over denom>> *
   -rot> numer>> swap denom>> *
-  make-ratio
+  normalize-ratio
 ] ;
 
 %: method{ ratio ratio } [
@@ -68,7 +68,7 @@ exact?: method{ ratio } [ drop t ] ;
   2 pick-n denom>> 2 pick-n numer>> *
   %
   -rot> denom>> swap denom>> *
-  make-ratio
+  normalize-ratio
 ] ;
 
 =: method{ ratio ratio } [
@@ -122,52 +122,52 @@ ratio>float: ( ratio -- f ) [ dup numer>> >float swap denom>> >float / ] ;
 
 \ --- Mixed integer/ratio arithmetic ---
 
-+: method{ ratio fixnum } [ 1 >ratio + ] ;
-+: method{ fixnum ratio } [ swap 1 >ratio swap + ] ;
-+: method{ ratio bignum } [ 1 >ratio + ] ;
-+: method{ bignum ratio } [ swap 1 >ratio swap + ] ;
++: method{ ratio fixnum } [ 1 make-ratio + ] ;
++: method{ fixnum ratio } [ swap 1 make-ratio swap + ] ;
++: method{ ratio bignum } [ 1 make-ratio + ] ;
++: method{ bignum ratio } [ swap 1 make-ratio swap + ] ;
 
--: method{ ratio fixnum } [ 1 >ratio - ] ;
--: method{ fixnum ratio } [ swap 1 >ratio swap - ] ;
--: method{ ratio bignum } [ 1 >ratio - ] ;
--: method{ bignum ratio } [ swap 1 >ratio swap - ] ;
+-: method{ ratio fixnum } [ 1 make-ratio - ] ;
+-: method{ fixnum ratio } [ swap 1 make-ratio swap - ] ;
+-: method{ ratio bignum } [ 1 make-ratio - ] ;
+-: method{ bignum ratio } [ swap 1 make-ratio swap - ] ;
 
-*: method{ ratio fixnum } [ 1 >ratio * ] ;
-*: method{ fixnum ratio } [ swap 1 >ratio swap * ] ;
-*: method{ ratio bignum } [ 1 >ratio * ] ;
-*: method{ bignum ratio } [ swap 1 >ratio swap * ] ;
+*: method{ ratio fixnum } [ 1 make-ratio * ] ;
+*: method{ fixnum ratio } [ swap 1 make-ratio swap * ] ;
+*: method{ ratio bignum } [ 1 make-ratio * ] ;
+*: method{ bignum ratio } [ swap 1 make-ratio swap * ] ;
 
-/: method{ ratio fixnum } [ 1 >ratio / ] ;
-/: method{ fixnum ratio } [ swap 1 >ratio swap / ] ;
-/: method{ ratio bignum } [ 1 >ratio / ] ;
-/: method{ bignum ratio } [ swap 1 >ratio swap / ] ;
+/: method{ ratio fixnum } [ 1 make-ratio / ] ;
+/: method{ fixnum ratio } [ swap 1 make-ratio swap / ] ;
+/: method{ ratio bignum } [ 1 make-ratio / ] ;
+/: method{ bignum ratio } [ swap 1 make-ratio swap / ] ;
 
-%: method{ ratio fixnum } [ 1 >ratio % ] ;
-%: method{ fixnum ratio } [ swap 1 >ratio swap % ] ;
-%: method{ ratio bignum } [ 1 >ratio % ] ;
-%: method{ bignum ratio } [ swap 1 >ratio swap % ] ;
+%: method{ ratio fixnum } [ 1 make-ratio % ] ;
+%: method{ fixnum ratio } [ swap 1 make-ratio swap % ] ;
+%: method{ ratio bignum } [ 1 make-ratio % ] ;
+%: method{ bignum ratio } [ swap 1 make-ratio swap % ] ;
 
-=: method{ ratio fixnum } [ 1 >ratio = ] ;
-=: method{ fixnum ratio } [ swap 1 >ratio swap = ] ;
-=: method{ ratio bignum } [ 1 >ratio = ] ;
-=: method{ bignum ratio } [ swap 1 >ratio swap = ] ;
+=: method{ ratio fixnum } [ 1 make-ratio = ] ;
+=: method{ fixnum ratio } [ swap 1 make-ratio swap = ] ;
+=: method{ ratio bignum } [ 1 make-ratio = ] ;
+=: method{ bignum ratio } [ swap 1 make-ratio swap = ] ;
 
-<: method{ ratio fixnum } [ 1 >ratio < ] ;
-<: method{ fixnum ratio } [ swap 1 >ratio swap < ] ;
-<: method{ ratio bignum } [ 1 >ratio < ] ;
-<: method{ bignum ratio } [ swap 1 >ratio swap < ] ;
+<: method{ ratio fixnum } [ 1 make-ratio < ] ;
+<: method{ fixnum ratio } [ swap 1 make-ratio swap < ] ;
+<: method{ ratio bignum } [ 1 make-ratio < ] ;
+<: method{ bignum ratio } [ swap 1 make-ratio swap < ] ;
 
->: method{ ratio fixnum } [ 1 >ratio > ] ;
->: method{ fixnum ratio } [ swap 1 >ratio swap > ] ;
->: method{ ratio bignum } [ 1 >ratio > ] ;
->: method{ bignum ratio } [ swap 1 >ratio swap > ] ;
+>: method{ ratio fixnum } [ 1 make-ratio > ] ;
+>: method{ fixnum ratio } [ swap 1 make-ratio swap > ] ;
+>: method{ ratio bignum } [ 1 make-ratio > ] ;
+>: method{ bignum ratio } [ swap 1 make-ratio swap > ] ;
 
 \ --- Conversion words ---
 
 >integer: method{ ratio } [ dup numer>> swap denom>> div ] ;
 >float: method{ ratio } [ ratio>float ] ;
 
-float-approx-ratio: ( f -- ratio-or-int ) [ native.float-approx-ratio make-ratio ] ;
+float-approx-ratio: ( f -- ratio-or-int ) [ native.float-approx-ratio normalize-ratio ] ;
 
 \ Exact f64 bit representation as a ratio using float-parts.
 \ value = sign * mantissa * 2^exponent
@@ -181,7 +181,7 @@ float>ratio: ( f -- ratio-or-int ) [
   ] [
     0 swap -
     1 swap shift-left
-    make-ratio
+    normalize-ratio
     swap *
   ] if
 ] ;

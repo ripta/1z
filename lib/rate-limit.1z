@@ -7,10 +7,10 @@ rate-limiter: mutable struct{ tokens burst interval last-refill } ;
 \ Create a rate limiter.
 \ interval is a duration between token additions; burst is the max token count.
 <rate-limiter>: ( interval burst -- limiter ) [
-  dup                \ interval burst burst
-  <rot- duration>    \ burst burst interval-nanos
-  monotonic-nanos    \ burst burst interval-nanos last-refill
-  make-rate-limiter  \ tokens=burst burst=burst interval last-refill
+  dup                    \ interval burst burst
+  <rot- unmake-duration  \ burst burst interval-nanos
+  monotonic-nanos        \ burst burst interval-nanos last-refill
+  make-rate-limiter      \ tokens=burst burst=burst interval last-refill
 ] ;
 
 \ Convenience: compute interval from a per-second rate.

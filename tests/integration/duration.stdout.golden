@@ -2,7 +2,7 @@
 Stack: [ ]
 PASS: type-of returns duration:
 Stack: [ ]
-PASS: duration> unwraps correctly
+PASS: unmake-duration unwraps correctly
 Stack: [ ]
 PASS: duration? on duration is true
 Stack: [ ]

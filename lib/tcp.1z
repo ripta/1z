@@ -12,7 +12,7 @@ tcp-listen: ( addr backlog -- tcp-server ) [
   dup 2 pick-n bind         \ backlog resolved-addr fd
   -rot>                     \ fd backlog resolved-addr
   [ over swap listen ] dip  \ fd resolved-addr
-  >tcp-server
+  make-tcp-server
 ] ;
 
 \ Connect to a remote TCP address and return a read-write stream.
@@ -26,11 +26,11 @@ tcp-connect: ( addr -- stream ) [
 \ Accept a connection on a listening tcp-server.
 \ Returns the client stream and the peer address.
 tcp-accept: ( tcp-server -- stream addr ) [
-  tcp-server> drop accept
+  unmake-tcp-server drop accept
   [ fd>stream ] dip
 ] ;
 
 \ Close a tcp-server's listening socket.
 tcp-close: ( tcp-server -- ) [
-  tcp-server> drop fd-close
+  unmake-tcp-server drop fd-close
 ] ;

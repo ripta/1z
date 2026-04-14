@@ -33,7 +33,7 @@ PASS: y>> does not work on embedded struct virtual
 Stack: [ ]
 PASS: z>> does not work on embedded struct virtual
 Stack: [ ]
-PASS: virtual unwrap second field
+PASS: virtual unmake second field
 Stack: [ 10 ]
-PASS: virtual unwrap first field
+PASS: virtual unmake first field
 Stack: [ ]

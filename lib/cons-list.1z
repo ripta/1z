@@ -8,7 +8,7 @@ cons-list: enum{
 } ;
 
 \ Short aliases for constructors and predicates
-cons:  ( head tail -- cons-list ) [ >cons-list:cons ] ;
+cons:  ( head tail -- cons-list ) [ make-cons-list:cons ] ;
 nil:   ( -- cons-list )           [ cons-list:nil ] ;
 cons?: ( value -- bool )          [ cons-list:cons? ] ;
 nil?:  ( value -- bool )          [ cons-list:nil? ] ;

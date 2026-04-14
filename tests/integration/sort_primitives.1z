@@ -31,7 +31,7 @@ V{ 5 3 1 } [ < ] #sort
 "#sort comparator error" test-section
 [ { "a" "b" "c" } [ + ] #sort ] try
 dup result:err? "bad comparator is error" assert-true
-result:err> error-type: @get
+unmake-result:err error-type: @get
 ETypeMismatch "comparator type error" assert=
 
 "#sort-by identity on integers" test-section
@@ -65,5 +65,5 @@ ETypeMismatch "comparator type error" assert=
 "#sort-by not-comparable keys" test-section
 [ { 1 2 3 } [ drop [ ] ] #sort-by ] try
 dup result:err? "not-comparable is error" assert-true
-result:err> error-type: @get
+unmake-result:err error-type: @get
 ENotComparable "not-comparable error type" assert=

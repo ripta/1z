@@ -11,7 +11,8 @@ addr: enum{
 
 \ Split a "host:port" string on the last colon, parse port as integer.
 \ Handles IPv6 addresses in brackets: "[::1]:8080" -> "::1" 8080
-split-host-port: ( str -- host port ) [
+\ Returns a hash with host: and port: keys.
+split-host-port: ( str -- hash ) [
   dup #first "[" = [
     \ Bracketed host: "[host]:port"
     "]:" #index-of dup not [
@@ -31,4 +32,5 @@ split-host-port: ( str -- host port ) [
       swap                          \ host port
     ] if
   ] if
+  H{ } swap port: swap @set swap host: swap @set
 ] ;

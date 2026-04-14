@@ -1,0 +1,93 @@
+=== plain struct: unmake and >hash ===
+Stack: [ ]
+Stack: [ ]
+PASS: unmake-pt second field
+Stack: [ 1 ]
+Stack: [ ]
+PASS: unmake-pt first field
+Stack: [ ]
+PASS: pt>hash has 2 keys
+Stack: [ ]
+PASS: pt>hash x key
+Stack: [ ]
+PASS: pt>hash y key
+Stack: [ ]
+PASS: >hash dispatch x key
+Stack: [ ]
+PASS: >hash dispatch y key
+Stack: [ ]
+=== simple virtual: make and unmake ===
+Stack: [ ]
+Stack: [ ]
+PASS: make-speed creates speed
+Stack: [ ]
+PASS: make-speed type-of
+Stack: [ ]
+PASS: unmake-speed unwraps
+Stack: [ ]
+PASS: >speed still works
+Stack: [ ]
+=== struct-backed virtual: make, unmake, >hash ===
+Stack: [ ]
+Stack: [ ]
+PASS: make-vec2 creates vec2
+Stack: [ ]
+PASS: make-vec2 type-of
+Stack: [ ]
+PASS: unmake-vec2 second field
+Stack: [ 10 ]
+Stack: [ ]
+PASS: unmake-vec2 first field
+Stack: [ ]
+PASS: vec2>hash vx key
+Stack: [ ]
+PASS: vec2>hash vy key
+Stack: [ ]
+PASS: >hash dispatch on vec2 vx
+Stack: [ ]
+PASS: >hash dispatch on vec2 vy
+Stack: [ ]
+PASS: >vec2 accepts hash
+Stack: [ ]
+PASS: >vec2 hash wrap second field
+Stack: [ 10 ]
+Stack: [ ]
+=== enum data-carrying variants: make, unmake, >hash ===
+Stack: [ ]
+Stack: [ ]
+PASS: make-shape:circle creates circle
+Stack: [ ]
+PASS: unmake-shape:circle unwraps radius
+Stack: [ ]
+PASS: make-shape:rect creates rect
+Stack: [ ]
+PASS: unmake-shape:rect second field
+Stack: [ 3 ]
+Stack: [ ]
+PASS: unmake-shape:rect first field
+Stack: [ ]
+PASS: shape:circle>hash radius key
+Stack: [ ]
+PASS: shape:rect>hash w key
+Stack: [ ]
+PASS: shape:rect>hash h key
+Stack: [ ]
+PASS: >hash dispatch on circle
+Stack: [ ]
+PASS: >hash dispatch on rect w
+Stack: [ ]
+PASS: >shape:circle still works
+Stack: [ ]
+PASS: >shape:rect accepts hash
+Stack: [ ]
+PASS: >shape:rect hash wrap h field
+Stack: [ 3 ]
+Stack: [ ]
+=== >hash works across different types ===
+Stack: [ ]
+PASS: >hash on plain struct
+Stack: [ ]
+PASS: >hash on struct-backed virtual
+Stack: [ ]
+PASS: >hash on enum variant
+Stack: [ ]

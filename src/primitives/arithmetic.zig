@@ -209,10 +209,10 @@ fn executeWord(ctx: *Context, word: anytype) anyerror!void {
     }
 }
 
-/// If make-ratio is in the dictionary, push a and b then call it.
+/// If normalize-ratio is in the dictionary, push a and b then call it.
 /// Otherwise push the pre-computed truncated quotient.
 fn callMakeRatioOrTruncate(ctx: *Context, a: Value, b: Value, truncated: Value) anyerror!void {
-    if (ctx.lookupWord("make-ratio")) |word| {
+    if (ctx.lookupWord("normalize-ratio")) |word| {
         try ctx.stack.push(a);
         try ctx.stack.push(b);
         try executeWord(ctx, word);
@@ -265,7 +265,7 @@ pub fn nativeDiv(ctx: *Context) anyerror!void {
             try ctx.stack.push(demoteBignum(q));
         } else {
             r.deinit();
-            if (ctx.lookupWord("make-ratio")) |word| {
+            if (ctx.lookupWord("normalize-ratio")) |word| {
                 q.deinit();
                 try ctx.stack.push(a);
                 try ctx.stack.push(b);

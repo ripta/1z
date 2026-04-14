@@ -25,5 +25,5 @@ use "time" ;
 
 "elapsed" test-section
 [ ] elapsed duration? "elapsed returns duration" assert-true
-[ ] elapsed duration> 0 >= "elapsed noop is non-negative" assert-true
+[ ] elapsed unmake-duration 0 >= "elapsed noop is non-negative" assert-true
 [ 42 ] elapsed duration? "elapsed preserves result below duration" assert-true 42 "elapsed quotation result intact" assert=

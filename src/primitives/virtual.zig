@@ -10,6 +10,8 @@ const Marker = value_mod.Marker;
 const MutableMap = value_mod.MutableMap;
 
 const helpers = @import("helpers.zig");
+const markers_mod = @import("markers.zig");
+const dispatch_mod = @import("../dispatch.zig");
 
 const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
@@ -25,6 +27,8 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "virtual-type-predicate", .func = virtualTypePredicateHelper },
     .{ .name = "virtual-struct-wrap", .func = virtualStructWrapHelper },
     .{ .name = "virtual-struct-unwrap", .func = virtualStructUnwrapHelper },
+    .{ .name = "virtual-struct-to-hash", .func = virtualStructToHashHelper },
+    .{ .name = "virtual-struct-hash-wrap", .func = virtualStructHashWrapHelper },
 };
 
 /// define-virtual ( name: descriptor markers -- ) - Define a virtual type and its accessor words
@@ -85,13 +89,16 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
                 .inner_type = inner_type,
             };
 
-            // >NAME: ( value -- tagged ) - wrap
+            // >NAME / make-NAME: ( value -- tagged ) - wrap
             const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{name});
             try defineWrap(ctx, wrap_name, vtype, markers_slice);
 
-            // NAME>: ( tagged -- value ) - unwrap
-            const unwrap_name = try std.fmt.allocPrint(alloc, "{s}>", .{name});
-            try defineUnwrap(ctx, unwrap_name, vtype, markers_slice);
+            const make_name = try std.fmt.allocPrint(alloc, "make-{s}", .{name});
+            try defineWrap(ctx, make_name, vtype, markers_slice);
+
+            // unmake-NAME: ( tagged -- value ) - unwrap
+            const unmake_name = try std.fmt.allocPrint(alloc, "unmake-{s}", .{name});
+            try defineUnwrap(ctx, unmake_name, vtype, markers_slice);
 
             // NAME?: ( value -- bool ) - predicate
             const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{name});
@@ -132,11 +139,25 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
                 .anon_struct = anon_struct,
             };
 
+            // >NAME: ( hash -- tagged ) - hash-based wrap
             const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{name});
-            try defineStructWrap(ctx, wrap_name, vtype, markers_slice);
+            try defineStructHashWrap(ctx, wrap_name, vtype, markers_slice);
 
-            const unwrap_name = try std.fmt.allocPrint(alloc, "{s}>", .{name});
-            try defineStructUnwrap(ctx, unwrap_name, vtype, markers_slice);
+            // make-NAME: ( field1..fieldN -- tagged ) - positional wrap
+            const make_name = try std.fmt.allocPrint(alloc, "make-{s}", .{name});
+            try defineStructWrap(ctx, make_name, vtype, markers_slice);
+
+            // unmake-NAME: ( tagged -- field1..fieldN ) - destructuring unwrap
+            const unmake_name = try std.fmt.allocPrint(alloc, "unmake-{s}", .{name});
+            try defineStructUnwrap(ctx, unmake_name, vtype, markers_slice);
+
+            const to_hash_name = try std.fmt.allocPrint(alloc, "{s}>hash", .{name});
+            try defineVirtualToHash(ctx, to_hash_name, vtype, markers_slice);
+
+            const hash_instrs = try alloc.alloc(Instruction, 2);
+            hash_instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+            hash_instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-to-hash" }, .line = 0 };
+            try registerHashDispatch(ctx, name, hash_instrs);
 
             const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{name});
             try definePredicate(ctx, pred_name, vtype, markers_slice);
@@ -307,6 +328,111 @@ fn virtualStructUnwrapHelper(ctx: *Context) anyerror!void {
     }
 }
 
+/// Trampoline helper ( tagged vtype-ptr -- hash )
+///
+/// Validates the tag, unwraps to struct instance, converts fields to a hash.
+fn virtualStructToHashHelper(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const ptr_val = try helpers.popFixnum(ctx);
+    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+
+    const st = vt.anon_struct orelse return error.TypeMismatch;
+
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .tagged => |t| {
+            if (t.tag != vt) {
+                helpers.setErrorContext(ctx, "expected {s}, got {s}", .{ vt.name, t.tag.name });
+                return error.TypeMismatch;
+            }
+            switch (t.inner.*) {
+                .struct_instance => |si| {
+                    const hash = try alloc.create(value_mod.HashTable);
+                    hash.* = .{};
+                    for (st.fields, 0..) |field, i| {
+                        try hash.put(alloc, field, si.fields[i]);
+                    }
+                    try ctx.stack.push(.{ .hash = hash });
+                },
+                else => {
+                    helpers.setErrorContext(ctx, "expected struct-backed {s}", .{vt.name});
+                    return error.TypeMismatch;
+                },
+            }
+        },
+        else => {
+            helpers.setErrorContext(ctx, "expected {s}, got {s}", .{ vt.name, helpers.valueTypeName(val) });
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// Trampoline helper ( hash vtype-ptr -- tagged )
+///
+/// Takes a hash and a VirtualType pointer, validates that the hash has every
+/// field required by the anonymous struct (and no extras), reads field values
+/// from the hash in field order, and constructs a tagged struct instance.
+fn virtualStructHashWrapHelper(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const ptr_val = try helpers.popFixnum(ctx);
+    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+
+    const st = vt.anon_struct orelse {
+        helpers.setErrorContext(ctx, "{s} is not a struct-backed virtual type", .{vt.name});
+        return error.TypeMismatch;
+    };
+
+    const val = try ctx.stack.pop();
+    const hash = switch (val) {
+        .hash => |h| h,
+        else => {
+            helpers.setErrorContext(ctx, ">{s} expects a hash, got {s}", .{ vt.name, helpers.valueTypeName(val) });
+            return error.TypeMismatch;
+        },
+    };
+
+    if (hash.count() != st.fields.len) {
+        helpers.setErrorContext(ctx, ">{s} expects {d} fields, got {d}", .{ vt.name, st.fields.len, hash.count() });
+        return error.TypeMismatch;
+    }
+
+    const field_values = try alloc.alloc(Value, st.fields.len);
+    for (st.fields, 0..) |field, i| {
+        field_values[i] = hash.get(field) orelse {
+            helpers.setErrorContext(ctx, ">{s} missing field '{s}'", .{ vt.name, field });
+            return error.MissingField;
+        };
+    }
+
+    const instance = try alloc.create(StructInstance);
+    instance.* = .{
+        .struct_type = st,
+        .fields = field_values,
+    };
+
+    const inner = try alloc.create(Value);
+    inner.* = .{ .struct_instance = instance };
+
+    try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
+}
+
+/// >NAME: ( hash -- tagged ) - hash-based wrap for struct-backed virtuals
+pub fn defineStructHashWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
+    const alloc = ctx.quotationAllocator();
+
+    const instrs = try alloc.alloc(Instruction, 2);
+    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+    instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-hash-wrap" }, .line = 0 };
+
+    try ctx.defineWord(name, .{
+        .name = name,
+        .markers = markers,
+        .action = .{ .compound = instrs },
+    });
+}
+
 /// >NAME: ( field1..fieldN -- tagged ) - struct-aware positional wrap
 pub fn defineStructWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
@@ -335,4 +461,48 @@ pub fn defineStructUnwrap(ctx: *Context, name: []const u8, vtype: *const Virtual
         .markers = markers,
         .action = .{ .compound = instrs },
     });
+}
+
+/// NAME>hash: ( tagged -- hash ) - convert struct-backed virtual to hash
+pub fn defineVirtualToHash(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
+    const alloc = ctx.quotationAllocator();
+
+    const instrs = try alloc.alloc(Instruction, 2);
+    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+    instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-to-hash" }, .line = 0 };
+
+    try ctx.defineWord(name, .{
+        .name = name,
+        .markers = markers,
+        .action = .{ .compound = instrs },
+    });
+}
+
+/// Register a >hash dispatch entry for a type name, creating the generic `>hash` word if it doesn't exist yet.
+pub fn registerHashDispatch(ctx: *Context, type_name: []const u8, instrs: []const Instruction) !void {
+    const alloc = ctx.quotationAllocator();
+
+    const is_generic = if (ctx.lookupWord(">hash")) |existing| blk: {
+        for (existing.markers) |mk| {
+            if (markers_mod.isGenericMarker(mk)) break :blk true;
+        }
+        break :blk false;
+    } else false;
+
+    if (!is_generic) {
+        const generic_markers = try alloc.alloc(*Marker, 1);
+        generic_markers[0] = @constCast(&markers_mod.generic_marker);
+
+        try ctx.defineWord(">hash", .{
+            .name = ">hash",
+            .markers = generic_markers,
+            .action = .{ .compound = &.{} },
+        });
+    }
+
+    try ctx.dispatch.register(.{
+        .word_name = ">hash",
+        .type_a = type_name,
+        .type_b = dispatch_mod.unary_sentinel,
+    }, .{ .body = instrs }, true);
 }

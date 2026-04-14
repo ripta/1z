@@ -18,18 +18,18 @@ use "testing" ;
 geom: enum{ rect struct{ width height } tri struct{ a b c } dot } ;
 
 \ rect should have 2 fields (width, height), not 3 (a, b, c)
-10 20 >geom:rect geom:rect>
+10 20 make-geom:rect unmake-geom:rect
 20 "rect unwrap height" assert=
 10 "rect unwrap width" assert=
 
 \ tri should have 3 fields
-3 4 5 >geom:tri geom:tri>
+3 4 5 make-geom:tri unmake-geom:tri
 5 "tri unwrap c" assert=
 4 "tri unwrap b" assert=
 3 "tri unwrap a" assert=
 
 \ Display format reflects correct fields
-10 20 >geom:rect to-string "<geom:rect geom:rect{ width: 10 height: 20 }>"
+10 20 make-geom:rect to-string "<geom:rect geom:rect{ width: 10 height: 20 }>"
 "rect display" assert=
-3 4 5 >geom:tri to-string "<geom:tri geom:tri{ a: 3 b: 4 c: 5 }>"
+3 4 5 make-geom:tri to-string "<geom:tri geom:tri{ a: 3 b: 4 c: 5 }>"
 "tri display" assert=

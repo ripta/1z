@@ -8,26 +8,26 @@ use "testing" ;
 duration: virtual{ fixnum } ;
 
 \ Register methods for arithmetic operators
-+: method{ duration duration } [ swap duration> swap duration> + >duration ] ;
--: method{ duration duration } [ swap duration> swap duration> - >duration ] ;
-*: method{ duration fixnum } [ swap duration> swap * >duration ] ;
-/: method{ duration fixnum } [ swap duration> swap / >duration ] ;
-%: method{ duration fixnum } [ swap duration> swap % >duration ] ;
++: method{ duration duration } [ swap unmake-duration swap unmake-duration + >duration ] ;
+-: method{ duration duration } [ swap unmake-duration swap unmake-duration - >duration ] ;
+*: method{ duration fixnum } [ swap unmake-duration swap * >duration ] ;
+/: method{ duration fixnum } [ swap unmake-duration swap / >duration ] ;
+%: method{ duration fixnum } [ swap unmake-duration swap % >duration ] ;
 
 \ Test: duration + duration
-42 >duration 10 >duration + duration> 52 "+ dispatches for duration duration" assert=
+42 >duration 10 >duration + unmake-duration 52 "+ dispatches for duration duration" assert=
 
 \ Test: duration - duration
-100 >duration 30 >duration - duration> 70 "- dispatches for duration duration" assert=
+100 >duration 30 >duration - unmake-duration 70 "- dispatches for duration duration" assert=
 
 \ Test: duration * integer
-10 >duration 5 * duration> 50 "* dispatches for duration integer" assert=
+10 >duration 5 * unmake-duration 50 "* dispatches for duration integer" assert=
 
 \ Test: duration / integer
-100 >duration 4 / duration> 25 "/ dispatches for duration integer" assert=
+100 >duration 4 / unmake-duration 25 "/ dispatches for duration integer" assert=
 
 \ Test: duration % integer
-100 >duration 7 % duration> 2 "% dispatches for duration integer" assert=
+100 >duration 7 % unmake-duration 2 "% dispatches for duration integer" assert=
 
 \ Verify result is still a duration
 42 >duration 10 >duration + type-of duration: "result type is duration" assert=
@@ -35,9 +35,9 @@ duration: virtual{ fixnum } ;
 "comparison dispatch" test-section
 
 \ Register comparison methods
-=: method{ duration duration } [ swap duration> swap duration> = ] ;
-<: method{ duration duration } [ swap duration> swap duration> < ] ;
->: method{ duration duration } [ swap duration> swap duration> > ] ;
+=: method{ duration duration } [ swap unmake-duration swap unmake-duration = ] ;
+<: method{ duration duration } [ swap unmake-duration swap unmake-duration < ] ;
+>: method{ duration duration } [ swap unmake-duration swap unmake-duration > ] ;
 
 \ Test: duration = duration
 42 >duration 42 >duration = t "= dispatches for equal durations" assert=
@@ -58,16 +58,16 @@ weight: virtual{ fixnum } ;
 
 \ Register a wildcard method: duration + any
 \ Note: Exact match (duration duration) takes precedence, so test with duration+integer
-+: method{ duration any } [ swap duration> swap + >duration ] ;
++: method{ duration any } [ swap unmake-duration swap + >duration ] ;
 
 \ Test wildcard: duration + integer
-42 >duration 8 + duration> 50 "wildcard: duration + integer via any" assert=
+42 >duration 8 + unmake-duration 50 "wildcard: duration + integer via any" assert=
 
 "wildcard precedence" test-section
 
 \ Exact match should beat wildcard
 \ duration + duration already registered above should still be used
-100 >duration 50 >duration + duration> 150 "exact match beats wildcard for duration+duration" assert=
+100 >duration 50 >duration + unmake-duration 150 "exact match beats wildcard for duration+duration" assert=
 
 "struct instance dispatch" test-section
 

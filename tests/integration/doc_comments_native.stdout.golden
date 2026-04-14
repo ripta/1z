@@ -1,40 +1,40 @@
+Duplicate top of stack.
 dup ( a -- a a ) \native
 
-Duplicate top of stack.
 Stack: [ ]
+Add two numbers. Promotes to bignum on fixnum overflow, or to float if either operand is a float.
 + ( a b -- a+b ) \native
 
-Add two numbers. Promotes to bignum on fixnum overflow, or to float if either operand is a float.
 Stack: [ ]
-if ( ? true-quot false-quot --  ) \native
-
 Conditional execution.
+if ( ? true-quot false-quot -- ) \native
+
 Stack: [ ]
+Get length of sequence. O(1) and non-destructive; does not work on iterators (use #count instead).
 #len ( seq -- n ) \native
 
-Get length of sequence. O(1) and non-destructive; does not work on iterators (use #count instead).
 Stack: [ ]
-recover ( try-quot recover-quot: ( error --  ) --  ) \native
-
 Execute try quotation; if error, run recover quotation with error on stack.
+recover ( try-quot recover-quot -- ) \native
+
 Stack: [ ]
+Open a file stream with mode (read:, write:, append:, read-write:).
 stream-open ( path mode -- stream ) \native
 
-Open a file stream with mode (read:, write:, append:, read-write:).
 Stack: [ ]
+Spawn a new task from a quotation.
 spawn ( quot -- task ) \native
 
-Spawn a new task from a quotation.
 Stack: [ ]
+Create a dynamic parameter with a name and default quotation.
 make-parameter ( name quot -- param ) \native
 
-Create a dynamic parameter with a name and default quotation.
 Stack: [ ]
+Return type of value as a symbol.
 type-of ( val -- symbol ) \native
 
-Return type of value as a symbol.
 Stack: [ ]
+Get value by key from an associative type.
 @get ( assoc key -- value ) \native
 
-Get value by key from an associative type.
 Stack: [ ]

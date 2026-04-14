@@ -8,7 +8,7 @@ iterable: protocol{ >iterator } ;
 my-list: virtual{ array } ;
 
 >iterator: method{ my-list } [
-  my-list> >iterator
+  unmake-my-list >iterator
 ] ;
 
 test-iterable-validates: ( -- ) [
@@ -26,11 +26,11 @@ perimeter: generic ( shape -- n ) [ drop 0 ] ;
 area: generic ( shape -- n ) [ drop 0 ] ;
 
 perimeter: method{ circle } [
-  circle> 2 * 314 * 100 /
+  unmake-circle 2 * 314 * 100 /
 ] ;
 
 area: method{ circle } [
-  circle> dup * 314 * 100 /
+  unmake-circle dup * 314 * 100 /
 ] ;
 
 test-shapeful-validates: ( -- ) [
@@ -54,7 +54,7 @@ my-label: virtual{ string } ;
 to-string: generic ( val -- str ) [ drop "" ] ;
 
 to-string: method{ my-label } [
-  my-label>
+  unmake-my-label
 ] ;
 
 test-single-method-validates: ( -- ) [

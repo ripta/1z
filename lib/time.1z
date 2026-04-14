@@ -11,6 +11,9 @@ seconds:      ( n -- duration ) [ 1000000000 * >duration ] ;
 minutes:      ( n -- duration ) [ 60 * seconds ] ;
 hours: ( n -- duration ) [ 60 * minutes ] ;
 
+\ Accessor: extract nanosecond count from a duration
+duration-nsec: ( duration -- nsec ) [ unmake-duration ] ;
+
 \ Timestamp: virtual type backed by a hidden struct
 timestamp-inner: struct{ ts-sec ts-nsec } ;
 timestamp: virtual{ timestamp-inner } ;
@@ -19,23 +22,23 @@ timestamp: virtual{ timestamp-inner } ;
 make-timestamp: ( sec nsec -- timestamp ) [ make-timestamp-inner >timestamp ] ;
 
 \ Accessors
-timestamp-sec: ( timestamp -- sec ) [ timestamp> ts-sec>> ] ;
-timestamp-nsec: ( timestamp -- nsec ) [ timestamp> ts-nsec>> ] ;
+timestamp-sec: ( timestamp -- sec ) [ unmake-timestamp ts-sec>> ] ;
+timestamp-nsec: ( timestamp -- nsec ) [ unmake-timestamp ts-nsec>> ] ;
 
 \ Create timestamp from current wall-clock time
 now: ( -- timestamp ) [ clock-realtime make-timestamp ] ;
 
 \ Duration arithmetic
-+: method{ duration duration } [ swap duration> swap duration> + >duration ] ;
--: method{ duration duration } [ swap duration> swap duration> - >duration ] ;
-*: method{ duration fixnum } [ swap duration> swap * >duration ] ;
-*: method{ fixnum duration } [ duration> * >duration ] ;
-/: method{ duration fixnum } [ swap duration> swap div >duration ] ;
++: method{ duration duration } [ swap unmake-duration swap unmake-duration + >duration ] ;
+-: method{ duration duration } [ swap unmake-duration swap unmake-duration - >duration ] ;
+*: method{ duration fixnum } [ swap unmake-duration swap * >duration ] ;
+*: method{ fixnum duration } [ unmake-duration * >duration ] ;
+/: method{ duration fixnum } [ swap unmake-duration swap div >duration ] ;
 
 \ Duration comparison
-<: method{ duration duration } [ swap duration> swap duration> < ] ;
->: method{ duration duration } [ swap duration> swap duration> > ] ;
-=: method{ duration duration } [ swap duration> swap duration> = ] ;
+<: method{ duration duration } [ swap unmake-duration swap unmake-duration < ] ;
+>: method{ duration duration } [ swap unmake-duration swap unmake-duration > ] ;
+=: method{ duration duration } [ swap unmake-duration swap unmake-duration = ] ;
 
 \ Helper: split nanoseconds into sec + nsec with consistent floored semantics
 ns>sec-nsec: ( ns -- sec nsec ) [
@@ -50,13 +53,13 @@ timestamp+nanos: ( ts nanos -- timestamp ) [
 ] ;
 
 \ Timestamp + Duration = Timestamp
-+: method{ timestamp duration } [ duration> timestamp+nanos ] ;
++: method{ timestamp duration } [ unmake-duration timestamp+nanos ] ;
 
 \ Duration + Timestamp = Timestamp (commutative)
-+: method{ duration timestamp } [ swap duration> timestamp+nanos ] ;
++: method{ duration timestamp } [ swap unmake-duration timestamp+nanos ] ;
 
 \ Timestamp - Duration = Timestamp
--: method{ timestamp duration } [ duration> 0 swap - timestamp+nanos ] ;
+-: method{ timestamp duration } [ unmake-duration 0 swap - timestamp+nanos ] ;
 
 \ Timestamp - Timestamp = Duration
 -: method{ timestamp timestamp } [ over timestamp-sec over timestamp-sec - -rot> swap timestamp-nsec swap timestamp-nsec - swap 1000000000 * + >duration ] ;
@@ -97,8 +100,8 @@ timezone: virtual{ tz-inner } ;
 
 make-timezone: ( offset-min name -- timezone ) [ make-tz-inner >timezone ] ;
 
-timezone-offset: ( tz -- offset-min ) [ timezone> offset-min>> ] ;
-timezone-name: ( tz -- name ) [ timezone> name>> ] ;
+timezone-offset: ( tz -- offset-min ) [ unmake-timezone offset-min>> ] ;
+timezone-name: ( tz -- name ) [ unmake-timezone name>> ] ;
 
 utc: ( -- timezone ) [ 0 "UTC" make-timezone ] ;
 local: ( -- timezone ) [ 0 "" make-timezone ] ;

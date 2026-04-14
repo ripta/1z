@@ -13,7 +13,7 @@ PASS: fixnum? on duration is false (strict)
 Stack: [ ]
 PASS: display format is <name inner>
 Stack: [ ]
-PASS: duration> unwraps to inner value
+PASS: unmake-duration unwraps to inner value
 Stack: [ ]
 PASS: same tag same inner are equal
 Stack: [ ]

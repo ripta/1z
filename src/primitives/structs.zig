@@ -10,6 +10,7 @@ const markers_mod = @import("markers.zig");
 const dispatch_mod = @import("../dispatch.zig");
 
 const helpers = @import("helpers.zig");
+const virtual = @import("virtual.zig");
 
 const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
@@ -25,6 +26,8 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "struct-type-predicate", .func = structTypePredicateHelper },
     .{ .name = "struct-field-get", .func = structFieldGetHelper },
     .{ .name = "struct-field-set", .func = structFieldSetHelper },
+    .{ .name = "struct-instance-destructure", .func = structInstanceDestructureHelper },
+    .{ .name = "struct-instance-to-hash", .func = structInstanceToHashHelper },
 };
 
 /// define-struct ( name: descriptor markers -- ) - Define a struct type and its accessor words
@@ -93,6 +96,20 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     // >NAME: ( hash -- instance ) - hash-to-struct converter
     const convert_name = try std.fmt.allocPrint(alloc, ">{s}", .{name});
     try defineHashConverter(ctx, convert_name, struct_type, markers_slice);
+
+    // unmake-NAME: ( instance -- field1 field2 ... ) - positional destructor
+    const unmake_name = try std.fmt.allocPrint(alloc, "unmake-{s}", .{name});
+    try defineDestructor(ctx, unmake_name, struct_type, markers_slice);
+
+    // NAME>hash: ( instance -- hash ) - convert to hash
+    const to_hash_name = try std.fmt.allocPrint(alloc, "{s}>hash", .{name});
+    try defineToHash(ctx, to_hash_name, struct_type, markers_slice);
+
+    // >hash dispatch for this struct type
+    const hash_instrs = try alloc.alloc(Instruction, 2);
+    hash_instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
+    hash_instrs[1] = .{ .op = .{ .call_word = "native.struct-instance-to-hash" }, .line = 0 };
+    try virtual.registerHashDispatch(ctx, name, hash_instrs);
 
     // NAME?: ( val -- ? ) - type predicate
     const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{name});
@@ -209,6 +226,39 @@ fn structFieldSetHelper(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .struct_instance = inst });
 }
 
+/// Trampoline helper ( instance struct-type -- field1 ... fieldN )
+fn structInstanceDestructureHelper(ctx: *Context) anyerror!void {
+    const st = try helpers.popStructType(ctx);
+    const inst = try helpers.popStructInstance(ctx);
+
+    if (inst.struct_type != st) {
+        return error.TypeMismatch;
+    }
+
+    for (inst.fields) |field_val| {
+        try ctx.stack.push(field_val);
+    }
+}
+
+/// Trampoline helper ( instance struct-type -- hash )
+fn structInstanceToHashHelper(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const st = try helpers.popStructType(ctx);
+    const inst = try helpers.popStructInstance(ctx);
+
+    if (inst.struct_type != st) {
+        return error.TypeMismatch;
+    }
+
+    const hash = try alloc.create(value_mod.HashTable);
+    hash.* = .{};
+    for (st.fields, 0..) |field, i| {
+        try hash.put(alloc, field, inst.fields[i]);
+    }
+
+    try ctx.stack.push(.{ .hash = hash });
+}
+
 /// make-NAME: ( field1 field2 ... -- instance ) - positional constructor
 fn defineConstructor(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
@@ -231,6 +281,36 @@ fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const Stru
     const instrs = try alloc.alloc(Instruction, 2);
     instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.hash-to-struct" }, .line = 0 };
+
+    try ctx.defineWord(name, .{
+        .name = name,
+        .markers = markers,
+        .action = .{ .compound = instrs },
+    });
+}
+
+/// unmake-NAME: ( instance -- field1 field2 ... ) - positional destructor
+fn defineDestructor(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker) !void {
+    const alloc = ctx.quotationAllocator();
+
+    const instrs = try alloc.alloc(Instruction, 2);
+    instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
+    instrs[1] = .{ .op = .{ .call_word = "native.struct-instance-destructure" }, .line = 0 };
+
+    try ctx.defineWord(name, .{
+        .name = name,
+        .markers = markers,
+        .action = .{ .compound = instrs },
+    });
+}
+
+/// NAME>hash: ( instance -- hash ) - convert struct instance to hash
+fn defineToHash(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker) !void {
+    const alloc = ctx.quotationAllocator();
+
+    const instrs = try alloc.alloc(Instruction, 2);
+    instrs[0] = .{ .op = .{ .push_literal = .{ .struct_type = @constCast(struct_type) } }, .line = 0 };
+    instrs[1] = .{ .op = .{ .call_word = "native.struct-instance-to-hash" }, .line = 0 };
 
     try ctx.defineWord(name, .{
         .name = name,

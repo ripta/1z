@@ -51,10 +51,10 @@ option:none option:none = t "none equals none" assert=
 "oops" "test" EUserThrown make-error >result:err result? t "result? on err is true" assert=
 
 \ Unwrap ok
-42 >result:ok result:ok> 42 "unwrap ok yields value" assert=
+42 >result:ok unmake-result:ok 42 "unwrap ok yields value" assert=
 
 \ Unwrap err
-"oops" "test" EUserThrown make-error >result:err result:err> error? t "unwrap err yields error" assert=
+"oops" "test" EUserThrown make-error >result:err unmake-result:err error? t "unwrap err yields error" assert=
 
 \ type-of
 42 >result:ok type-of result:ok: "type-of ok" assert=
@@ -104,23 +104,23 @@ point: struct{ x y } ;
 10 20 make-point >option:some option:some? t "some? on struct-wrapped option" assert=
 10 20 make-point >option:some option:some> x>> 10 "unwrap struct from option, read field" assert=
 10 20 make-point >option:some option:some> y>> 20 "unwrap struct from option, read second field" assert=
-10 20 make-point >result:ok result:ok> x>> 10 "unwrap struct from result ok" assert=
+10 20 make-point >result:ok unmake-result:ok x>> 10 "unwrap struct from result ok" assert=
 
 "option wrapping virtual types" test-section
 
 speed: virtual{ fixnum } ;
 42 >speed >option:some option:some? t "some? on virtual-wrapped option" assert=
-42 >speed >option:some option:some> speed> 42 "unwrap virtual from option" assert=
+42 >speed >option:some option:some> unmake-speed 42 "unwrap virtual from option" assert=
 42 >speed >option:some option:some> type-of speed: "type-of virtual inside option" assert=
-42 >speed >result:ok result:ok> speed> 42 "unwrap virtual from result ok" assert=
+42 >speed >result:ok unmake-result:ok unmake-speed 42 "unwrap virtual from result ok" assert=
 
 "option wrapping embedded structs" test-section
 
 vec2: virtual{ struct{ dx dy } } ;
-3 4 >vec2 >option:some option:some? t "some? on embedded-struct-wrapped option" assert=
-3 4 >vec2 >option:some option:some> vec2> 4 "unwrap embedded struct dy from option" assert= 3 "unwrap embedded struct dx from option" assert=
-3 4 >vec2 >option:some option:some> type-of vec2: "type-of embedded struct inside option" assert=
-3 4 >vec2 >result:ok result:ok> vec2> 4 "unwrap embedded struct from result ok dy" assert= 3 "unwrap embedded struct from result ok dx" assert=
+3 4 make-vec2 >option:some option:some? t "some? on embedded-struct-wrapped option" assert=
+3 4 make-vec2 >option:some option:some> unmake-vec2 4 "unwrap embedded struct dy from option" assert= 3 "unwrap embedded struct dx from option" assert=
+3 4 make-vec2 >option:some option:some> type-of vec2: "type-of embedded struct inside option" assert=
+3 4 make-vec2 >result:ok unmake-result:ok unmake-vec2 4 "unwrap embedded struct from result ok dy" assert= 3 "unwrap embedded struct from result ok dx" assert=
 
 "option wrapping enum variants" test-section
 
@@ -131,7 +131,7 @@ color:red >option:some option:some? t "some? on enum-wrapped option" assert=
 color:red >option:some option:some> color:red? t "unwrap enum from option, predicate" assert=
 color:red >option:some option:some> type-of color:red: "type-of enum inside option" assert=
 color:red >option:some option:some> enum-of "color" "enum-of on unwrapped enum from option" assert=
-color:green >result:ok result:ok> color:green? t "unwrap enum from result ok" assert=
+color:green >result:ok unmake-result:ok color:green? t "unwrap enum from result ok" assert=
 
 \ option:none inside option (nested option)
 option:none >option:some option:some? t "some? on none-wrapped option" assert=
@@ -147,8 +147,8 @@ option:none >option:some option:some> option:none? t "unwrap none from some" ass
 \ Data-carrying enum variant inside result
 shape: enum{ circle struct{ radius } dot } ;
 5 >shape:circle >result:ok result:ok? t "ok? on data-enum-wrapped result" assert=
-5 >shape:circle >result:ok result:ok> shape:circle? t "unwrap data enum from result ok" assert=
-5 >shape:circle >result:ok result:ok> shape:circle> 5 "unwrap data enum payload from result ok" assert=
+5 >shape:circle >result:ok unmake-result:ok shape:circle? t "unwrap data enum from result ok" assert=
+5 >shape:circle >result:ok unmake-result:ok unmake-shape:circle 5 "unwrap data enum payload from result ok" assert=
 
 \ Enum inside result:err wrapped in an error object
 color:red >option:some "wrapped" "test" EUserThrown make-error >result:err result:err? t "err wrapping error is err" assert=
@@ -161,7 +161,7 @@ color:red >option:some "wrapped" "test" EUserThrown make-error >result:err resul
 } match 10 "match some with struct payload" assert=
 
 42 >speed >option:some {
-  option:some: [ speed> 2 * ]
+  option:some: [ unmake-speed 2 * ]
   option:none: [ 0 ]
 } match 84 "match some with virtual payload" assert=
 
@@ -211,7 +211,7 @@ option:none [ 2 * ] ?map option:none? t "?map none passes through" assert=
 "?map on result" test-section
 
 42 >result:ok [ 1 + ] ?map result:ok? t "?map ok is still ok" assert=
-42 >result:ok [ 1 + ] ?map result:ok> 43 "?map ok applies quot" assert=
+42 >result:ok [ 1 + ] ?map unmake-result:ok 43 "?map ok applies quot" assert=
 "oops" "test" EUserThrown make-error >result:err [ 1 + ] ?map result:err? t "?map err passes through" assert=
 
 "?and-then on option" test-section
@@ -226,7 +226,7 @@ option:none? t "?and-then none passes through" assert=
 "?and-then on result" test-section
 
 42 >result:ok [ dup 0 > [ >result:ok ] [ drop "negative" "test" EUserThrown make-error >result:err ] if ] ?and-then
-result:ok> 42 "?and-then ok with valid value" assert=
+unmake-result:ok 42 "?and-then ok with valid value" assert=
 -1 >result:ok [ dup 0 > [ >result:ok ] [ drop "negative" "test" EUserThrown make-error >result:err ] if ] ?and-then
 result:err? t "?and-then ok producing err" assert=
 "oops" "test" EUserThrown make-error >result:err [ >result:ok ] ?and-then
@@ -244,9 +244,9 @@ option:none? t "?or-else none producing none" assert=
 "?or-else on result" test-section
 
 42 >result:ok [ 0 >result:ok ] ?or-else
-result:ok> 42 "?or-else ok passes through" assert=
+unmake-result:ok 42 "?or-else ok passes through" assert=
 "oops" "test" EUserThrown make-error >result:err [ 0 >result:ok ] ?or-else
-result:ok> 0 "?or-else err calls quot" assert=
+unmake-result:ok 0 "?or-else err calls quot" assert=
 "oops" "test" EUserThrown make-error >result:err [ "fallback" "test" EUserThrown make-error >result:err ] ?or-else
 result:err? t "?or-else err producing err" assert=
 
@@ -262,7 +262,7 @@ option:none? t "?flatten none stays none" assert=
 "?flatten on result" test-section
 
 42 >result:ok >result:ok ?flatten
-result:ok> 42 "?flatten ok(ok(x)) to ok(x)" assert=
+unmake-result:ok 42 "?flatten ok(ok(x)) to ok(x)" assert=
 "oops" "test" EUserThrown make-error >result:err >result:ok ?flatten
 result:err? t "?flatten ok(err(e)) to err(e)" assert=
 "oops" "test" EUserThrown make-error >result:err ?flatten
@@ -288,23 +288,23 @@ option:some> 7 "chained ?or-else" assert=
 
 \ Successful quotation wraps in result:ok
 [ 42 ] try result:ok? t "try success is ok" assert=
-[ 42 ] try result:ok> 42 "try success value" assert=
+[ 42 ] try unmake-result:ok 42 "try success value" assert=
 
 \ Throwing quotation wraps in result:err
 [ "oops" throw ] try result:err? t "try throw is err" assert=
-[ "oops" throw ] try result:err> error? t "try err contains error object" assert=
+[ "oops" throw ] try unmake-result:err error? t "try err contains error object" assert=
 
 \ Division by zero
 [ 10 0 / ] try result:err? t "try division by zero is err" assert=
-[ 10 2 / ] try result:ok> 5 "try successful division" assert=
+[ 10 2 / ] try unmake-result:ok 5 "try successful division" assert=
 
 \ try with combinators
-[ 10 2 / ] try [ 1 + ] ?map result:ok> 6 "try then ?map ok" assert=
+[ 10 2 / ] try [ 1 + ] ?map unmake-result:ok 6 "try then ?map ok" assert=
 [ 10 0 / ] try [ 1 + ] ?map result:err? t "try then ?map err passes through" assert=
 
 \ try chaining with ?and-then
 [ 42 ] try [ dup 0 > [ >result:ok ] [ drop "negative" throw ] if ] ?and-then
-result:ok> 42 "try then ?and-then ok" assert=
+unmake-result:ok 42 "try then ?and-then ok" assert=
 
 \ try with unwrap-or
 [ "oops" throw ] try 0 unwrap-or 0 "try err unwrap-or default" assert=

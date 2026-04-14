@@ -5,13 +5,13 @@ range: virtual{ struct{ start end step infinite? } } ;
 
 \ Exclusive range [start, end) with auto-step +-1
 range: ( start end -- range ) [
-  2dup < [ 1 ] [ -1 ] if f >range
+  2dup < [ 1 ] [ -1 ] if f make-range
 ] ;
 
 \ Inclusive range [start, end] with auto-step +-1
 \ Adjusts end to convert to exclusive representation internally
 range=: ( start end -- range ) [
-  2dup < [ ++ 1 ] [ -- -1 ] if f >range
+  2dup < [ ++ 1 ] [ -- -1 ] if f make-range
 ] ;
 
 \ Exclusive range with explicit step
@@ -21,31 +21,31 @@ range-step: ( start end step -- range ) [
   [ "range-step: ascending range requires positive step" throw ] when
   2 pick-n 2 pick-n > over 0 > and
   [ "range-step: descending range requires negative step" throw ] when
-  f >range
+  f make-range
 ] ;
 
 \ Generate exclusive range [0, n)
 iota: ( n -- range ) [ 0 swap range ] ;
 
 \ Infinite range from start, step 1
-range-from: ( start -- range ) [ 0 1 t >range ] ;
+range-from: ( start -- range ) [ 0 1 t make-range ] ;
 
 \ Infinite range from start with explicit step
 range-from-step: ( start step -- range ) [
   dup 0 = [ "range-from-step: step must not be zero" throw ] when
-  0 swap t >range
+  0 swap t make-range
 ] ;
 
 \ Inclusive range (legacy alias for range=)
 range-inclusive: ( start end -- range ) [ range= ] ;
 
 \ Iterator support: convert range to a lazy iterator
->iterator: method{ range } [ range> make-range-iter ] ;
+>iterator: method{ range } [ unmake-range make-range-iter ] ;
 
 \ O(1) length: max(0, (end - start + step - signum(step)) / step)
 \ Throws for infinite ranges.
 #len: method{ range } [
-  range>
+  unmake-range
   [ "#len: infinite range has no length" throw ] when
   -rot> swap - over + over dup 0 > [ drop 1 ] [ drop -1 ] if - swap div
   dup 0 < [ drop 0 ] when
@@ -55,7 +55,7 @@ range-inclusive: ( start end -- range ) [ range= ] ;
 \ Validates index is non-negative and within bounds.
 #nth: method{ range fixnum } [
   dup 0 < [ "#nth: negative index" throw ] when
-  swap range>
+  swap unmake-range
   [
     nip <rot- * +
   ] [
@@ -70,7 +70,7 @@ range-inclusive: ( start end -- range ) [ range= ] ;
 
 \ First element (start). Throws for empty ranges.
 #first: method{ range } [
-  range>
+  unmake-range
   [ drop drop ] [
     dup 0 > [ drop 2dup >= ] [ drop 2dup <= ] if
     [ 2drop "#first: empty range" throw ] when
@@ -82,6 +82,6 @@ range-inclusive: ( start end -- range ) [ range= ] ;
 #last: method{ range } [
   dup #len
   dup 0 = [ 2drop "#last: empty range" throw ] when
-  swap range> drop nip
+  swap unmake-range drop nip
   <rot- -- * +
 ] ;

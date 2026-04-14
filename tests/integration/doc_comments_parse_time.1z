@@ -1,5 +1,7 @@
 \ Verify doc-comments on parse-time prelude words.
 
+use "introspect" ;
+
 H{: help
 struct{: help
 virtual{: help

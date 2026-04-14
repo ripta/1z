@@ -1,5 +1,7 @@
 \ Verify a sampling of prelude words have doc-comments visible via help.
 
+use "introspect" ;
+
 []: help
 when: help
 ignore-errors: help

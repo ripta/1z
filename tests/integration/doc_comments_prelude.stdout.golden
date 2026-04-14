@@ -1,50 +1,50 @@
+Push an empty array.
 [] \compound
 
-Push an empty array.
 Stack: [ ]
-when ( ? quot --  ) \compound
-
 Execute the quotation when the condition is true.
-Stack: [ ]
-ignore-errors ( quot --  ) \compound
+when ( ? quot -- ) \compound
 
-Execute a quotation, silently discarding any error.
 Stack: [ ]
+Execute a quotation, silently discarding any error.
+ignore-errors ( quot -- ) \compound
+
+Stack: [ ]
+Drop the second element, keeping the top.
 nip ( a b -- b ) \compound
 
-Drop the second element, keeping the top.
 Stack: [ ]
+Absolute value. Works on fixnums and floats.
 abs ( n -- n ) \native
 
-Absolute value. Works on fixnums and floats.
 Stack: [ ]
+Less than or equal.
 <= ( a b -- ? ) \compound
 
-Less than or equal.
 Stack: [ ]
+Logical negation. Only `f` is falsy.
 not ( ? -- ? ) \compound
 
-Logical negation. Only `f` is falsy.
 Stack: [ ]
-print ( str --  ) \compound
-
 Write a string to the current output stream.
-Stack: [ ]
-times ( n quot --  ) \compound
+print ( str -- ) \compound
 
+Stack: [ ]
 Execute a quotation `n` times.
-Stack: [ ]
-case ( val branches -- ... ) \compound
+times ( n quot -- ) \compound
 
+Stack: [ ]
 Dispatch on a value by matching it against an array of `{ key quot }` pairs.
 A trailing bare quotation acts as the default branch.
 Throws `no-matching-branch` if no branch matches.
+case ( val branches -- ... ) \compound
+
 Stack: [ ]
+Format a string by interpolating values from a source using a template string.
 fmt ( source string -- string ) \compound
 
-Format a string by interpolating values from a source using a template string.
 Stack: [ ]
-run-benchmarks ( quot --  ) \compound
-
 Run a quotation as a benchmark suite and print the report.
+run-benchmarks ( quot -- ) \compound
+
 Stack: [ ]

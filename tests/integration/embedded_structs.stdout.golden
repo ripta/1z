@@ -9,9 +9,11 @@ PASS: point? on integer is false
 Stack: [ ]
 PASS: point? on string is false
 Stack: [ ]
-PASS: unwrap second field
+PASS: make-point creates point
+Stack: [ ]
+PASS: unmake-point second field
 Stack: [ 10 ]
-PASS: unwrap first field
+PASS: unmake-point first field
 Stack: [ ]
 === display format ===
 Stack: [ ]
@@ -53,9 +55,19 @@ PASS: unwrap wrong type errors
 Stack: [ ]
 PASS: unwrap plain value errors
 Stack: [ ]
+=== hash-based >point ===
+Stack: [ ]
+PASS: >point hash wrap y field
+Stack: [ 10 ]
+PASS: >point hash wrap x field
+Stack: [ ]
+PASS: >point missing field errors
+Stack: [ ]
+PASS: >point extra field errors
+Stack: [ ]
 === no leaked struct words ===
 Stack: [ ]
-PASS: make-point does not exist
+PASS: make-point creates point instance
 Stack: [ ]
 PASS: x>> does not exist
 Stack: [ ]
