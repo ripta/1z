@@ -125,6 +125,93 @@ use "char" ;
 "doc-example-format" warning: [ (check-doc-example-format) ] f
 make-lint-rule register-lint-rule
 
+\ --- Helpers for complex-word-undocumented ---
+
+\ Skip leading spaces and tabs at the start of a doc line.
+(skip-doc-line-indent): stack-recursive ( str -- str' ) [
+  dup #len 0 = [
+  ] [
+    dup 0 #nth dup " " = swap 9 >char = or [
+      1 #drop (skip-doc-line-indent)
+    ] when
+  ] if
+] ;
+
+\ Drop characters until the next line, then return the remainder.
+(skip-to-next-doc-line): stack-recursive ( str -- str' ) [
+  dup #len 0 = [
+  ] [
+    dup 0 #nth 10 >char = [
+      1 #drop
+    ] [
+      1 #drop (skip-to-next-doc-line)
+    ] if
+  ] if
+] ;
+
+\ Does a doc string line look like an example output line?
+(doc-string-example-line?): ( str -- ? ) [
+  (skip-doc-line-indent) "=>" #starts-with?
+] ;
+
+\ Does a doc string contain any example output line?
+(doc-string-has-example?): stack-recursive ( doc -- ? ) [
+  dup #len 0 = [
+    drop f
+  ] [
+    dup (doc-string-example-line?) [
+      drop t
+    ] [
+      (skip-to-next-doc-line) (doc-string-has-example?)
+    ] if
+  ] if
+] ;
+
+\ Count all declared stack-effect parameters (inputs + outputs).
+(stack-effect-param-count): ( stack-effect -- n ) [
+  dup inputs>> #len swap outputs>> #len +
+] ;
+
+\ Is this word complex enough to require an example?
+(complex-word?): ( word-info -- ? ) [
+  stack-effect>> dup f = [
+    drop f
+  ] [
+    (stack-effect-param-count) 3 >=
+  ] if
+] ;
+
+\ --- Rule: complex-word-undocumented ---
+
+(check-complex-word-undocumented): ( path source tokens line-index semantic-context -- diagnostics ) [
+  nip nip nip
+  [
+    dup (complex-word?) [
+      dup doc>> dup f = [
+        drop
+        source-loc>> dup f = [ 2drop f ] [
+          "complex-word-undocumented" info: 3 pick-n 3 pick-n dup line>> swap column>>
+          "complex word should include a doc comment example"
+          make-lint-diagnostic nip nip
+        ] if
+      ] [
+        (doc-string-has-example?) [
+          2drop f
+        ] [
+          source-loc>> dup f = [ 2drop f ] [
+            "complex-word-undocumented" info: 3 pick-n 3 pick-n dup line>> swap column>>
+            "complex word should include a doc comment example"
+            make-lint-diagnostic nip nip
+          ] if
+        ] if
+      ] if
+    ] [ 2drop f ] if
+  ] (check-semantic-words)
+] ;
+
+"complex-word-undocumented" info: [ (check-complex-word-undocumented) ] f
+make-lint-rule register-lint-rule
+
 \ --- Helpers for sequence-prefix-misuse ---
 
 \ Known sequence type annotations (inspected form).

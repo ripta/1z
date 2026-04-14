@@ -1,0 +1,20 @@
+no-doc-complex: ( a b -- c d ) [ ] ;
+
+\\ Rearranges a pair into two outputs.
+prose-only-complex: ( left right -- first second ) [ ] ;
+
+\\ Examples:
+\\   1 2 dup-and-keep
+\\   => 1 2 2
+example-rich-complex: ( x y -- x y y ) [ ] ;
+
+\\   alpha beta gamma
+\\   => alpha gamma
+without-heading-example: ( a b -- c d ) [ ] ;
+
+\\ Simple rename without an example.
+simple-no-example: ( x -- y ) [ ] ;
+
+\\ Path mapping prose with arrow should not count.
+\\ "/foo/bar.txt" -> "bar.txt"
+arrow-prose-complex: ( path name -- file ext ) [ ] ;
