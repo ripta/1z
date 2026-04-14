@@ -3759,7 +3759,13 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const word_id: u32 = @intCast(word_id_raw);
-    const entry = ctx.jit_dispatch.get(word_id) orelse return 1;
+    const entry = ctx.jit_dispatch.get(word_id) orelse blk: {
+        var parent = ctx.parent_context;
+        while (parent) |p| : (parent = p.parent_context) {
+            if (p.jit_dispatch.get(word_id)) |e| break :blk e;
+        }
+        return 1;
+    };
     const word_name = entry.word_name;
     const word = ctx.lookupWord(word_name) orelse return 1;
 
@@ -3857,7 +3863,13 @@ pub const ExecResult = enum { ok, bail, error_propagate };
 /// .bail if the compiled function signals a type mismatch or overflow, in
 /// which case the stack is unchanged.
 pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
-    const entry = ctx.jit_dispatch.get(word_id) orelse return .bail;
+    const entry = ctx.jit_dispatch.get(word_id) orelse blk: {
+        var parent = ctx.parent_context;
+        while (parent) |p| : (parent = p.parent_context) {
+            if (p.jit_dispatch.get(word_id)) |e| break :blk e;
+        }
+        return .bail;
+    };
     var code_ptr = entry.code_ptr orelse return .bail;
 
     const saved_sp = ctx.stack.items.items.len;
@@ -3874,7 +3886,11 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     // Status 3 means "tail-call to trampoline_target instead of returning".
     while (status == 3) {
         const target_id = jit_ctx.trampoline_target;
-        const target_entry = ctx.jit_dispatch.get(target_id) orelse {
+        const target_entry = ctx.jit_dispatch.get(target_id) orelse blk: {
+            var parent = ctx.parent_context;
+            while (parent) |p| : (parent = p.parent_context) {
+                if (p.jit_dispatch.get(target_id)) |e| break :blk e;
+            }
             ctx.stack.items.items.len = saved_sp;
             return .bail;
         };
