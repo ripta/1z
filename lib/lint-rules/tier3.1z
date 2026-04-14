@@ -240,6 +240,86 @@ make-lint-rule register-lint-rule
 "dead-definition" info: [ (check-dead-definition) ] f
 make-lint-rule register-lint-rule
 
+\ --- Helpers for duplicate-definition ---
+
+\ Compute an opcode fingerprint for a word body, or f if not applicable.
+(body-fingerprint): ( word-info -- string-or-f ) [
+  body>> dup f = [
+  ] [
+    dup quotation? [
+      native.quotation>opcodes inspect
+    ] [ drop f ] if
+  ] if
+] ;
+
+\ --- Rule: duplicate-definition ---
+
+(check-duplicate-definition): ( path source tokens line-index semantic-context -- diagnostics ) [
+  nip nip nip
+  \ stack: path(1) sem-ctx(0)
+  dup f = [ 2drop { } ] [
+    \ Collect { fingerprint word-info } pairs for eligible words
+    V{ }
+    \ stack: path(2) sem-ctx(1) pairs(0)
+    1 pick-n semantic-word-names [
+      \ stack: path(3) sem-ctx(2) pairs(1) word-name(0)
+      2 pick-n swap semantic-word-info
+      dup f = [ drop ] [
+        dup (skip-word?) [ drop ] [
+          dup (body-fingerprint) dup f = [ 2drop ] [
+            \ stack: ... pairs(2) word-info(1) fingerprint(0)
+            swap 2 array-n
+            \ stack: ... pairs(1) { fingerprint word-info }(0)
+            1 pick-n swap #push! drop
+          ] if
+        ] if
+      ] if
+    ] #each
+    nip
+    \ stack: path(1) pairs(0)
+
+    \ Sort by fingerprint + left-padded line number for source-order grouping
+    [
+      dup 0 #nth swap 1 #nth source-loc>>
+      dup f = [ drop "99999999" ] [
+        line>> >string "00000000" swap #append
+        dup #len 8 - #drop
+      ] if
+      #append
+    ] #sort-by
+
+    \ Compare adjacent pairs for matching fingerprints
+    dup #len 2 < [ 2drop { } ] [
+      V{ }
+      \ stack: path(2) sorted(1) results(0)
+      1 pick-n #len 1 swap <range> >iterator [
+        \ stack: path(3) sorted(2) results(1) i(0)
+        2 pick-n over #nth 0 #nth
+        3 pick-n 2 pick-n 1 - #nth 0 #nth
+        = [
+          \ Duplicate: get current word-info and emit diagnostic
+          2 pick-n over #nth 1 #nth
+          source-loc>> dup f = [ drop ] [
+            "duplicate-definition" warning:
+            6 pick-n
+            3 pick-n dup line>> swap column>>
+            "definition body is identical to "
+            9 pick-n 8 pick-n 1 - #nth 1 #nth name>> >string #append
+            make-lint-diagnostic
+            3 pick-n swap #push! drop
+            drop
+          ] if
+        ] when
+        drop
+      ] #each
+      [ drop drop ] dip
+    ] if
+  ] if
+] ;
+
+"duplicate-definition" warning: [ (check-duplicate-definition) ] f
+make-lint-rule register-lint-rule
+
 \ --- Helpers for sequence-prefix-misuse ---
 
 \ Known sequence type annotations (inspected form).

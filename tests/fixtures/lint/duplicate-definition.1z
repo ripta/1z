@@ -1,0 +1,8 @@
+\\ First word with a body.
+foo: ( x -- x ) [ dup drop ] ;
+
+\\ Second word with identical body -- should trigger.
+bar: ( x -- x ) [ dup drop ] ;
+
+\\ Different body -- should NOT trigger.
+baz: ( x -- x ) [ drop 0 ] ;

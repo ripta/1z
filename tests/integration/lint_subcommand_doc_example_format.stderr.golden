@@ -2,5 +2,6 @@ tests/fixtures/lint/doc-example-format.1z:4:1: warning: [doc-example-format] doc
 tests/fixtures/lint/doc-example-format.1z:19:25: info: [dead-definition] definition is not referenced by any other checked-file word
 tests/fixtures/lint/doc-example-format.1z:11:34: info: [dead-definition] definition is not referenced by any other checked-file word
 tests/fixtures/lint/doc-example-format.1z:15:34: info: [dead-definition] definition is not referenced by any other checked-file word
+tests/fixtures/lint/doc-example-format.1z:15:34: warning: [duplicate-definition] definition body is identical to good-example
 tests/fixtures/lint/doc-example-format.1z:5:64: info: [complex-word-undocumented] complex word should include a doc comment example
 tests/fixtures/lint/doc-example-format.1z:5:64: info: [dead-definition] definition is not referenced by any other checked-file word

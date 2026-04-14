@@ -1,0 +1,4 @@
+tests/fixtures/lint/duplicate-definition.1z:8:28: info: [dead-definition] definition is not referenced by any other checked-file word
+tests/fixtures/lint/duplicate-definition.1z:2:30: info: [dead-definition] definition is not referenced by any other checked-file word
+tests/fixtures/lint/duplicate-definition.1z:5:30: info: [dead-definition] definition is not referenced by any other checked-file word
+tests/fixtures/lint/duplicate-definition.1z:5:30: warning: [duplicate-definition] definition body is identical to foo
