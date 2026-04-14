@@ -251,3 +251,46 @@ make-lint-rule register-lint-rule
 
 "error-type-naming" warning: [ (check-error-type-naming) ] f
 make-lint-rule register-lint-rule
+
+\ --- Helpers for with-combinator-naming ---
+
+\ Does a stack-effect-param indicate a quotation?
+(quotation-param?): ( param -- ? ) [
+  dup nested-effect>> f = not [ drop t ] [
+    name>> >string
+    { "quot" "quotation" "body" "pred" "fn" "callback" "action" "thunk" }
+    swap [ = ] curry #any
+  ] if
+] ;
+
+\ Does any input parameter indicate a quotation?
+(has-quotation-input?): ( word-info -- ? ) [
+  stack-effect>> dup f = [
+    \ No stack effect: skip (missing-stack-effect catches this)
+    drop t
+  ] [
+    inputs>> [ (quotation-param?) ] #any
+  ] if
+] ;
+
+\ --- Rule: with-combinator-naming ---
+
+(check-with-combinator-naming): ( path source tokens line-index semantic-context -- diagnostics ) [
+  nip nip nip
+  [
+    dup name>> >string "with-" #starts-with? [
+      dup (has-quotation-input?) [
+        2drop f
+      ] [
+        source-loc>> dup f = [ 2drop f ] [
+          "with-combinator-naming" warning: 3 pick-n 3 pick-n dup line>> swap column>>
+          "word with with- prefix does not appear to accept a quotation argument"
+          make-lint-diagnostic nip nip
+        ] if
+      ] if
+    ] [ 2drop f ] if
+  ] (check-semantic-words)
+] ;
+
+"with-combinator-naming" warning: [ (check-with-combinator-naming) ] f
+make-lint-rule register-lint-rule

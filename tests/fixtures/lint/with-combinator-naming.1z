@@ -1,0 +1,2 @@
+\\ Doubles a number.
+with-double: ( n -- n ) [ 2 * ] ;

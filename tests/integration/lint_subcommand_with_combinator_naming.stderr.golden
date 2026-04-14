@@ -1,0 +1,1 @@
+tests/fixtures/lint/with-combinator-naming.1z:2:33: warning: [with-combinator-naming] word with with- prefix does not appear to accept a quotation argument
