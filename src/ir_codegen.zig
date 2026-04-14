@@ -3872,6 +3872,14 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     };
     var code_ptr = entry.code_ptr orelse return .bail;
 
+    // Compiled code writes directly to the stack array without bounds checks.
+    // Ensure enough capacity for temporaries. The abstract stack is fixed at
+    // 64 slots, but typical functions need far fewer.
+    const min_capacity = ctx.stack.items.items.len + 16;
+    if (ctx.stack.items.capacity < min_capacity) {
+        ctx.stack.items.ensureTotalCapacity(ctx.stack.allocator, min_capacity) catch return .bail;
+    }
+
     const saved_sp = ctx.stack.items.items.len;
     var jit_ctx = JitContext{
         .items_ptr = ctx.stack.items.items.ptr,
