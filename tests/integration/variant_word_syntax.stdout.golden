@@ -1,0 +1,38 @@
+=== variant word syntax: define and call ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: greet returns hello
+Stack: [ ]
+PASS: greet(loud) returns HELLO!
+Stack: [ ]
+=== variant word syntax: symbol literals ===
+Stack: [ ]
+PASS: greet(loud): is a symbol
+Stack: [ ]
+PASS: greet(loud): symbol string
+Stack: [ ]
+=== variant word syntax: >word introspection ===
+Stack: [ ]
+PASS: >word name of variant word
+Stack: [ ]
+=== >float(exact): lossless fixnum ===
+Stack: [ ]
+PASS: 42 >float(exact) = 42.0
+Stack: [ ]
+=== >float(exact): lossless ratio ===
+Stack: [ ]
+PASS: 1/2 >float(exact) = 0.5
+Stack: [ ]
+=== >float(exact): float passthrough ===
+Stack: [ ]
+PASS: 3.14 >float(exact) = 3.14
+Stack: [ ]
+=== >float(exact): inexact fixnum ===
+Stack: [ ]
+PASS: EInexactConversion
+Stack: [ ]
+=== >float(exact): inexact ratio ===
+Stack: [ ]
+PASS: EInexactConversion
+Stack: [ ]

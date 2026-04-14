@@ -1,0 +1,35 @@
+use "testing" ;
+use "complex" ;
+
+"complex: construction" test-section
+1.0 2.0 make-complex complex? "complex? true" assert-true
+1.0 2.0 make-complex type-of complex: "type-of is complex" assert=
+
+"complex: C{ literal" test-section
+C{ 1.0 2.0 } complex? "C{ } creates complex" assert-true
+C{ 1.0 2.0 } real-part 1.0 "C{ } real-part" assert=
+C{ 1.0 2.0 } imaginary-part 2.0 "C{ } imaginary-part" assert=
+
+"complex: C{ int promotion" test-section
+C{ 1 2 } real-part 1.0 "C{ int } real promotes to float" assert=
+C{ 1 2 } imaginary-part 2.0 "C{ int } imag promotes to float" assert=
+
+"complex: accessors" test-section
+3.0 4.0 make-complex real-part 3.0 "real-part" assert=
+3.0 4.0 make-complex imaginary-part 4.0 "imaginary-part" assert=
+
+"complex: unmake" test-section
+3.0 4.0 make-complex unmake-complex
+4.0 "unmake imag" assert= 3.0 "unmake real" assert=
+
+"complex: >string" test-section
+C{ 1.0 2.0 } >string "C{ 1.0 2.0 }" ">string format" assert=
+C{ -1.0 0.0 } >string "C{ -1.0 0.0 }" ">string negative real" assert=
+
+"complex: equality" test-section
+C{ 1.0 2.0 } C{ 1.0 2.0 } = "equal complex" assert-true
+C{ 1.0 2.0 } C{ 1.0 3.0 } = not "unequal complex" assert-true
+
+"complex: numeric predicates" test-section
+C{ 1.0 2.0 } number? "complex is number" assert-true
+C{ 1.0 2.0 } inexact? "complex is inexact" assert-true

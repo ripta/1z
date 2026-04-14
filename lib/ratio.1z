@@ -185,3 +185,12 @@ float>ratio: ( f -- ratio-or-int ) [
     swap *
   ] if
 ] ;
+
+\\ Exact float conversion. Errors with EInexactConversion if the conversion
+\\ loses precision (e.g., large integers or non-dyadic rationals).
+>float(exact): ( x -- f ) [
+  dup float?
+  [ ]
+  [ dup >float dup float>ratio <rot- = not [ "EInexactConversion" throw ] when ]
+  if
+] ;

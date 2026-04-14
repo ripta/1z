@@ -1,0 +1,102 @@
+=== complex: addition ===
+Stack: [ ]
+PASS: add real
+Stack: [ ]
+PASS: add imag
+Stack: [ ]
+=== complex: subtraction ===
+Stack: [ ]
+PASS: sub real
+Stack: [ ]
+PASS: sub imag
+Stack: [ ]
+=== complex: multiplication ===
+Stack: [ ]
+PASS: mul real
+Stack: [ ]
+PASS: mul imag
+Stack: [ ]
+=== complex: division ===
+Stack: [ ]
+PASS: div real
+Stack: [ ]
+PASS: div imag
+Stack: [ ]
+=== complex: equality ===
+Stack: [ ]
+PASS: equal
+Stack: [ ]
+PASS: unequal
+Stack: [ ]
+=== complex: mixed float ===
+Stack: [ ]
+PASS: c+f real
+Stack: [ ]
+PASS: c+f imag
+Stack: [ ]
+PASS: f+c real
+Stack: [ ]
+PASS: c-f real
+Stack: [ ]
+PASS: f-c real
+Stack: [ ]
+PASS: f-c imag
+Stack: [ ]
+PASS: c*f real
+Stack: [ ]
+PASS: c*f imag
+Stack: [ ]
+PASS: c/f real
+Stack: [ ]
+PASS: c/f imag
+Stack: [ ]
+PASS: c=f equal
+Stack: [ ]
+PASS: c=f unequal
+Stack: [ ]
+PASS: f=c equal
+Stack: [ ]
+=== complex: mixed fixnum ===
+Stack: [ ]
+PASS: c+i real
+Stack: [ ]
+PASS: i+c real
+Stack: [ ]
+PASS: c*i imag
+Stack: [ ]
+PASS: c=i equal
+Stack: [ ]
+=== complex: magnitude ===
+Stack: [ ]
+PASS: 3+4i magnitude
+Stack: [ ]
+PASS: 0+0i magnitude
+Stack: [ ]
+PASS: real magnitude
+Stack: [ ]
+PASS: imag magnitude
+Stack: [ ]
+=== complex: phase ===
+Stack: [ ]
+PASS: real positive phase
+Stack: [ ]
+PASS: pi/2 phase
+Stack: [ ]
+=== complex: conjugate ===
+Stack: [ ]
+PASS: conj real
+Stack: [ ]
+PASS: conj imag
+Stack: [ ]
+PASS: conj neg imag
+Stack: [ ]
+PASS: conj real-only
+Stack: [ ]
+=== complex: complex? predicate ===
+Stack: [ ]
+PASS: complex is complex
+Stack: [ ]
+PASS: float not complex
+Stack: [ ]
+PASS: fixnum not complex
+Stack: [ ]

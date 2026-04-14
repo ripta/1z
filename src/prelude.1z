@@ -149,7 +149,7 @@ number?: generic ( val -- ? ) [ dup fixnum? [ drop t ] [ dup bignum? [ drop t ] 
 \\ True for exact numeric types: fixnum, bignum, or ratio (via dispatch).
 exact?: generic ( val -- ? ) [ dup fixnum? swap bignum? or ] ;
 \\ True for inexact numeric types: float.
-inexact?: ( val -- ? ) [ float? ] ;
+inexact?: generic ( val -- ? ) [ float? ] ;
 
 \\ Push IEEE 754 NaN (not a number).
 nan: ( -- f ) [ 0.0 0.0 / ] ;

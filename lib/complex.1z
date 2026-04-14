@@ -1,0 +1,152 @@
+\ lib/complex.1z - Complex numbers
+
+complex: virtual{ struct{ real imag } } ;
+
+\\ Extract the real component of a complex number.
+real-part: ( c -- f ) [ unmake-complex drop ] ;
+
+\\ Extract the imaginary component of a complex number.
+imaginary-part: ( c -- f ) [ unmake-complex nip ] ;
+
+\\ Complex literal syntax. Promotes components to float.
+C{: parse-time [ "}" parse-values-until dup 0 #nth >float swap 1 #nth >float make-complex ] ;
+
+number?: method{ complex } [ drop t ] ;
+inexact?: method{ complex } [ drop t ] ;
+
+>string: method{ complex } [
+  "C{ " over real-part >string #append
+  " " #append
+  swap imaginary-part >string #append
+  " }" #append
+] ;
+
+\ --- Complex-complex arithmetic ---
+
++: method{ complex complex } [
+  over real-part over real-part +
+  2 pick-n imaginary-part 2 pick-n imaginary-part +
+  make-complex -rot> 2drop
+] ;
+
+-: method{ complex complex } [
+  over real-part over real-part -
+  2 pick-n imaginary-part 2 pick-n imaginary-part -
+  make-complex -rot> 2drop
+] ;
+
+*: method{ complex complex } [
+  over real-part over real-part *
+  2 pick-n imaginary-part 2 pick-n imaginary-part *
+  -
+  2 pick-n real-part 2 pick-n imaginary-part *
+  3 pick-n imaginary-part 3 pick-n real-part *
+  +
+  make-complex -rot> 2drop
+] ;
+
+/: method{ complex complex } [
+  over real-part over real-part *
+  2 pick-n imaginary-part 2 pick-n imaginary-part *
+  +
+  2 pick-n imaginary-part 2 pick-n real-part *
+  3 pick-n real-part 3 pick-n imaginary-part *
+  -
+  2 pick-n real-part dup *
+  3 pick-n imaginary-part dup *
+  +
+  tuck / -rot> / swap
+  make-complex -rot> 2drop
+] ;
+
+=: method{ complex complex } [
+  over real-part over real-part =
+  [ imaginary-part swap imaginary-part = ]
+  [ 2drop f ]
+  if
+] ;
+
+\ --- Mixed complex/float ---
+
++: method{ complex float } [ 0.0 make-complex + ] ;
++: method{ float complex } [ swap 0.0 make-complex swap + ] ;
+
+-: method{ complex float } [ 0.0 make-complex - ] ;
+-: method{ float complex } [ swap 0.0 make-complex swap - ] ;
+
+*: method{ complex float } [ 0.0 make-complex * ] ;
+*: method{ float complex } [ swap 0.0 make-complex swap * ] ;
+
+/: method{ complex float } [ 0.0 make-complex / ] ;
+/: method{ float complex } [ swap 0.0 make-complex swap / ] ;
+
+=: method{ complex float } [ 0.0 make-complex = ] ;
+=: method{ float complex } [ swap 0.0 make-complex swap = ] ;
+
+\ --- Mixed complex/fixnum ---
+
++: method{ complex fixnum } [ >float 0.0 make-complex + ] ;
++: method{ fixnum complex } [ swap >float 0.0 make-complex swap + ] ;
+
+-: method{ complex fixnum } [ >float 0.0 make-complex - ] ;
+-: method{ fixnum complex } [ swap >float 0.0 make-complex swap - ] ;
+
+*: method{ complex fixnum } [ >float 0.0 make-complex * ] ;
+*: method{ fixnum complex } [ swap >float 0.0 make-complex swap * ] ;
+
+/: method{ complex fixnum } [ >float 0.0 make-complex / ] ;
+/: method{ fixnum complex } [ swap >float 0.0 make-complex swap / ] ;
+
+=: method{ complex fixnum } [ >float 0.0 make-complex = ] ;
+=: method{ fixnum complex } [ swap >float 0.0 make-complex swap = ] ;
+
+\ --- Mixed complex/bignum ---
+
++: method{ complex bignum } [ >float 0.0 make-complex + ] ;
++: method{ bignum complex } [ swap >float 0.0 make-complex swap + ] ;
+
+-: method{ complex bignum } [ >float 0.0 make-complex - ] ;
+-: method{ bignum complex } [ swap >float 0.0 make-complex swap - ] ;
+
+*: method{ complex bignum } [ >float 0.0 make-complex * ] ;
+*: method{ bignum complex } [ swap >float 0.0 make-complex swap * ] ;
+
+/: method{ complex bignum } [ >float 0.0 make-complex / ] ;
+/: method{ bignum complex } [ swap >float 0.0 make-complex swap / ] ;
+
+=: method{ complex bignum } [ >float 0.0 make-complex = ] ;
+=: method{ bignum complex } [ swap >float 0.0 make-complex swap = ] ;
+
+\ --- Mixed complex/ratio ---
+
++: method{ complex ratio } [ >float 0.0 make-complex + ] ;
++: method{ ratio complex } [ swap >float 0.0 make-complex swap + ] ;
+
+-: method{ complex ratio } [ >float 0.0 make-complex - ] ;
+-: method{ ratio complex } [ swap >float 0.0 make-complex swap - ] ;
+
+*: method{ complex ratio } [ >float 0.0 make-complex * ] ;
+*: method{ ratio complex } [ swap >float 0.0 make-complex swap * ] ;
+
+/: method{ complex ratio } [ >float 0.0 make-complex / ] ;
+/: method{ ratio complex } [ swap >float 0.0 make-complex swap / ] ;
+
+=: method{ complex ratio } [ >float 0.0 make-complex = ] ;
+=: method{ ratio complex } [ swap >float 0.0 make-complex swap = ] ;
+
+\ --- Misc. library words ---
+
+\\ Absolute value (modulus) of a complex number.
+magnitude: ( c -- f ) [
+  dup real-part dup * swap imaginary-part dup * + native.sqrt
+] ;
+
+\\ Argument (angle in radians) of a complex number.
+phase: ( c -- f ) [
+  dup imaginary-part swap real-part native.atan2
+] ;
+
+\\ Complex conjugate: negate the imaginary part.
+conjugate: ( c -- c ) [
+  dup real-part swap imaginary-part 0.0 swap - make-complex
+] ;
