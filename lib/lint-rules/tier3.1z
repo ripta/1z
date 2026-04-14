@@ -8,6 +8,123 @@ use "lint" ;
 use "lint-rules/tier2" ;
 use "char" ;
 
+\ --- Helpers for doc-example-format ---
+
+\ Strip the leading doc-comment marker and a single following space.
+(doc-comment-body): ( token -- str ) [
+  value>> 2 #drop
+  dup #len 0 > [
+    dup 0 #nth " " = [ 1 #drop ] when
+  ] when
+] ;
+
+\ Trim leading spaces and tabs from a doc-comment body.
+(ltrim-doc-body): stack-recursive ( str -- str' ) [
+  dup #len 0 = [
+  ] [
+    dup 0 #nth dup " " = swap 9 >char = or [
+      1 #drop (ltrim-doc-body)
+    ] when
+  ] if
+] ;
+
+\ Does a doc-comment body start with the given prefix after leading indent?
+(doc-body-prefix?): ( str prefix -- ? ) [
+  swap (ltrim-doc-body) swap #starts-with?
+] ;
+
+\ Is this doc comment an Example:/Examples: heading?
+(doc-example-heading?): ( token -- ? ) [
+  (doc-comment-body) (ltrim-doc-body)
+  dup "Example:" = swap "Examples:" = or
+] ;
+
+\ Is this doc comment blank after removing the marker?
+(blank-doc-comment?): ( token -- ? ) [
+  (doc-comment-body) (ltrim-doc-body) #len 0 =
+] ;
+
+\ Does this doc comment look like an output line using the wrong marker?
+(doc-example-arrow-line?): ( token -- ? ) [
+  (doc-comment-body) "->" (doc-body-prefix?)
+] ;
+
+\ Does this doc comment look like a valid output line?
+(doc-example-equals-line?): ( token -- ? ) [
+  (doc-comment-body) "=>" (doc-body-prefix?)
+] ;
+
+\ Can this doc comment serve as the input line before an output line?
+(doc-example-input-line?): ( token -- ? ) [
+  dup (blank-doc-comment?) [
+    drop f
+  ] [
+    dup (doc-example-heading?) [
+      drop f
+    ] [
+      dup (doc-example-arrow-line?) [
+        drop f
+      ] [
+        (doc-example-equals-line?) not
+      ] if
+    ] if
+  ] if
+] ;
+
+\ Can a doc-comment line establish example context for the next doc line?
+(doc-example-predecessor?): ( token -- ? ) [
+  dup (doc-example-heading?) [
+    drop t
+  ] [
+    (doc-example-input-line?)
+  ] if
+] ;
+
+\ --- Rule: doc-example-format ---
+
+(check-doc-example-format): ( path source tokens line-index semantic-context -- diagnostics ) [
+  drop
+  V{ } f
+  \ stack: path(5) source(4) tokens(3) line-index(2) positions(1) prev-example?(0)
+  3 pick-n [
+    \ stack: path(6) source(5) tokens(4) line-index(3) positions(2) prev-example?(1) token(0)
+    dup kind>> doc-comment: = [
+      dup (doc-example-predecessor?)
+      1 pick-n (doc-example-arrow-line?)
+      3 pick-n and [
+        1 pick-n dup pos>> swap drop
+        4 pick-n swap #push! drop
+      ] when
+      nip nip
+    ] [
+      dup significant-token? [
+        dup kind>> comment: = [
+          drop
+        ] [
+          drop drop f
+        ] if
+      ] [
+        drop
+      ] if
+    ] if
+  ] #each
+  drop
+  V{ }
+  \ stack: path(5) source(4) tokens(3) line-index(2) positions(1) results(0)
+  1 pick-n [
+    \ stack: path(6) source(5) tokens(4) line-index(3) positions(2) results(1) pos(0)
+    "doc-example-format" warning: 8 pick-n 6 pick-n 4 pick-n
+    "doc comment example output should use =>, not ->"
+    (make-diag)
+    swap drop 1 pick-n swap #push! drop
+  ] #each
+  swap drop
+  [ drop drop drop drop ] dip
+] ;
+
+"doc-example-format" warning: [ (check-doc-example-format) ] f
+make-lint-rule register-lint-rule
+
 \ --- Helpers for sequence-prefix-misuse ---
 
 \ Known sequence type annotations (inspected form).

@@ -1,0 +1,1 @@
+tests/fixtures/lint/doc-example-format.1z:4:1: warning: [doc-example-format] doc comment example output should use =>, not ->

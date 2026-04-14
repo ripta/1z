@@ -1,0 +1,19 @@
+\\ Demonstrate partitioning with the wrong marker.
+\\
+\\   { 1 2 3 4 } [ even? ] #partition
+\\   -> { 2 4 } { 1 3 }
+bad-example: ( seq quot -- true-arr false-arr ) [ #partition ] ;
+
+\\ Demonstrate grouping with the right marker.
+\\
+\\   { "apple" "banana" }
+\\   => { "apple" }
+good-example: ( seq -- seq ) [ ] ;
+
+\\ Path example in prose should not count as an example block.
+\\ "/foo/bar.txt" -> "bar.txt"
+prose-path: ( path -- name ) [ ] ;
+
+\\ Parse-time word for FFI signature descriptors.
+\\ ffi{ i32 i32 -> i32 } produces an ffi-sig.
+ffi-doc: ( -- f ) [ f ] ;
