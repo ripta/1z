@@ -1,0 +1,22 @@
+\ lib/complex.1z - Complex numbers
+
+complex: virtual{ struct{ real imag } } ;
+
+\\ Extract the real component of a complex number.
+real-part: ( c -- f ) [ unmake-complex drop ] ;
+
+\\ Extract the imaginary component of a complex number.
+imaginary-part: ( c -- f ) [ unmake-complex nip ] ;
+
+\\ Complex literal syntax. Promotes components to float.
+C{: parse-time [ "}" parse-values-until dup 0 #nth >float swap 1 #nth >float make-complex ] ;
+
+number?: method{ complex } [ drop t ] ;
+inexact?: method{ complex } [ drop t ] ;
+
+>string: method{ complex } [
+  "C{ " over real-part >string #append
+  " " #append
+  swap imaginary-part >string #append
+  " }" #append
+] ;

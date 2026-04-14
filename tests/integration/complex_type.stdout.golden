@@ -1,0 +1,50 @@
+=== complex: construction ===
+Stack: [ ]
+PASS: complex? true
+Stack: [ ]
+PASS: type-of is complex
+Stack: [ ]
+=== complex: C{ literal ===
+Stack: [ ]
+PASS: C{ } creates complex
+Stack: [ ]
+PASS: C{ } real-part
+Stack: [ ]
+PASS: C{ } imaginary-part
+Stack: [ ]
+=== complex: C{ int promotion ===
+Stack: [ ]
+PASS: C{ int } real promotes to float
+Stack: [ ]
+PASS: C{ int } imag promotes to float
+Stack: [ ]
+=== complex: accessors ===
+Stack: [ ]
+PASS: real-part
+Stack: [ ]
+PASS: imaginary-part
+Stack: [ ]
+=== complex: unmake ===
+Stack: [ ]
+Stack: [ 3.0 4.0 ]
+PASS: unmake imag
+PASS: unmake real
+Stack: [ ]
+=== complex: >string ===
+Stack: [ ]
+PASS: >string format
+Stack: [ ]
+PASS: >string negative real
+Stack: [ ]
+=== complex: equality ===
+Stack: [ ]
+PASS: equal complex
+Stack: [ ]
+PASS: unequal complex
+Stack: [ ]
+=== complex: numeric predicates ===
+Stack: [ ]
+PASS: complex is number
+Stack: [ ]
+PASS: complex is inexact
+Stack: [ ]
