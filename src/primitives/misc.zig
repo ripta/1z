@@ -852,14 +852,14 @@ fn compileSingleWord(ctx: *Context, sym: []const u8, mutual_group: ?[]const []co
 
     const final_id = if (word.word_id) |existing_id| blk: {
         if (ctx.jit_dispatch.get(existing_id) != null) {
-            ctx.jit_dispatch.update(existing_id, compiled.code_ptr, compiled.jit_buf);
+            ctx.jit_dispatch.update(existing_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
             break :blk existing_id;
         }
         const new_id = ctx.jit_dispatch.assignId(sym) catch {
             compiled.jit_buf.deinit();
             return error.OutOfMemory;
         };
-        ctx.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf);
+        ctx.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
         propagateWordId(ctx, sym, new_id);
         break :blk new_id;
     } else blk: {
@@ -867,7 +867,7 @@ fn compileSingleWord(ctx: *Context, sym: []const u8, mutual_group: ?[]const []co
             compiled.jit_buf.deinit();
             return error.OutOfMemory;
         };
-        ctx.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf);
+        ctx.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
         propagateWordId(ctx, sym, new_id);
         break :blk new_id;
     };

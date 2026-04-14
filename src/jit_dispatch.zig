@@ -8,6 +8,10 @@ pub const JitEntry = struct {
     word_name: []const u8,
     call_count: u32 = 0,
     uncompilable: bool = false,
+    /// Peak stack slots used above the current stack pointer during
+    /// compiled execution. Used to ensure the value stack has enough
+    /// capacity before entering compiled code.
+    peak_stack_depth: u32 = 0,
 };
 
 pub const JitDispatchTable = struct {
@@ -62,12 +66,13 @@ pub const JitDispatchTable = struct {
 
     /// Update the code pointer and JitBuffer for a word ID.
     /// Frees the old JitBuffer if one exists.
-    pub fn update(self: *JitDispatchTable, word_id: u32, code_ptr: *const anyopaque, buf: JitBuffer) void {
+    pub fn update(self: *JitDispatchTable, word_id: u32, code_ptr: *const anyopaque, buf: JitBuffer, peak: u32) void {
         if (self.entries.items[word_id].jit_buf) |old_buf| {
             old_buf.deinit();
         }
         self.entries.items[word_id].code_ptr = code_ptr;
         self.entries.items[word_id].jit_buf = buf;
+        self.entries.items[word_id].peak_stack_depth = peak;
     }
 
     /// Clear the code pointer for a word ID. Frees the JitBuffer.
@@ -151,7 +156,7 @@ test "update sets code_ptr and jit_buf" {
     const fake_ptr: *const anyopaque = &dummy;
     const fake_buf = JitBuffer{ .code = @constCast(fake_ptr), .size = 0 };
 
-    table.update(id, fake_ptr, fake_buf);
+    table.update(id, fake_ptr, fake_buf, 0);
 
     const entry = table.get(id).?;
     try std.testing.expectEqual(fake_ptr, entry.code_ptr.?);
@@ -168,7 +173,7 @@ test "invalidate clears code_ptr and jit_buf" {
     const fake_ptr: *const anyopaque = &dummy;
     const fake_buf = JitBuffer{ .code = @constCast(fake_ptr), .size = 0 };
 
-    table.update(id, fake_ptr, fake_buf);
+    table.update(id, fake_ptr, fake_buf, 0);
     table.invalidate(id);
 
     const entry = table.get(id).?;
@@ -243,7 +248,7 @@ test "multiple IDs coexist independently" {
     var dummy0: u8 = 0;
     const ptr0: *const anyopaque = &dummy0;
     const buf0 = JitBuffer{ .code = @constCast(ptr0), .size = 0 };
-    table.update(id0, ptr0, buf0);
+    table.update(id0, ptr0, buf0, 0);
 
     // id1 remains uncompiled
     const entry0 = table.get(id0).?;

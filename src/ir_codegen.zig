@@ -47,6 +47,7 @@ pub const CodegenDiagnostics = struct {
 pub const CompiledWord = struct {
     code_ptr: *const anyopaque,
     jit_buf: JitBuffer,
+    peak_stack_depth: u32 = 0,
 };
 
 fn shouldSkipTypeAnnotationValidation(word: WordDefinition) bool {
@@ -722,6 +723,10 @@ const CompileState = struct {
     /// Accumulator for string/symbol literals encountered during AOT compilation.
     /// Each entry gets emitted as a `static const char[]` in the C preamble.
     aot_string_literals: ?*std.ArrayListUnmanaged(AotStringLiteral) = null,
+    /// Peak abstract stack pointer reached during compilation. Used to
+    /// ensure the value stack has enough capacity before entering compiled
+    /// code.
+    peak_sp: u32 = 0,
 };
 
 const AotStringLiteral = struct {
@@ -2138,6 +2143,8 @@ fn compileInstructions(
                 }
             },
         }
+
+        if (sp.* > state.peak_sp) state.peak_sp = @intCast(sp.*);
     }
 }
 
@@ -2493,6 +2500,7 @@ pub fn compileWord(
         .validate_params_fn = validate_params_fn,
         .interp_ctx = interp_ctx,
         .error_propagate_status = error_propagate_status,
+        .peak_sp = @intCast(input_count),
     };
 
     // If this word contains a self-tail-call, wrap the body in a LOOP_BEGIN
@@ -2597,6 +2605,7 @@ pub fn compileWord(
         return .{
             .code_ptr = ptr,
             .jit_buf = .{ .code = ptr, .size = size },
+            .peak_stack_depth = state.peak_sp,
         };
     }
     return IrCodegenError.CompilationFailed;
@@ -3873,11 +3882,12 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     var code_ptr = entry.code_ptr orelse return .bail;
 
     // Compiled code writes directly to the stack array without bounds checks.
-    // Ensure enough capacity for temporaries. The abstract stack is fixed at
-    // 64 slots, but typical functions need far fewer.
-    const min_capacity = ctx.stack.items.items.len + 16;
-    if (ctx.stack.items.capacity < min_capacity) {
-        ctx.stack.items.ensureTotalCapacity(ctx.stack.allocator, min_capacity) catch return .bail;
+    // Ensure enough capacity for the peak stack depth reached during the compiled function's execution.
+    if (entry.peak_stack_depth > 0) {
+        const min_capacity = ctx.stack.items.items.len + entry.peak_stack_depth;
+        if (ctx.stack.items.capacity < min_capacity) {
+            ctx.stack.items.ensureTotalCapacity(ctx.stack.allocator, min_capacity) catch return .bail;
+        }
     }
 
     const saved_sp = ctx.stack.items.items.len;
@@ -4018,7 +4028,7 @@ test "compiled direct call preserves aliased lower stack values" {
     const callee_instrs = makeInstructions(.{"+"});
     const callee = try compileWord(&callee_instrs, 2, 1, null, null, null, null);
     const callee_id = try dispatch.assignId("sum2");
-    dispatch.update(callee_id, callee.code_ptr, callee.jit_buf);
+    dispatch.update(callee_id, callee.code_ptr, callee.jit_buf, callee.peak_stack_depth);
 
     const ResolverState = struct {
         callee_id: u32,

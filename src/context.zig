@@ -1227,14 +1227,14 @@ pub const Context = struct {
 
         const final_id = if (def.word_id) |existing_id| blk: {
             if (self.jit_dispatch.get(existing_id) != null) {
-                self.jit_dispatch.update(existing_id, compiled.code_ptr, compiled.jit_buf);
+                self.jit_dispatch.update(existing_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
                 break :blk existing_id;
             }
             const new_id = self.jit_dispatch.assignId(name) catch {
                 compiled.jit_buf.deinit();
                 return;
             };
-            self.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf);
+            self.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
             propagateWordId(self, name, new_id);
             break :blk new_id;
         } else blk: {
@@ -1242,7 +1242,7 @@ pub const Context = struct {
                 compiled.jit_buf.deinit();
                 return;
             };
-            self.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf);
+            self.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
             propagateWordId(self, name, new_id);
             break :blk new_id;
         };
