@@ -1,3 +1,4 @@
 tests/fixtures/lint/doc-comment-misuse.1z:2:3: warning: [doc-comment-misuse] doc comment used where regular comment would suffice
 tests/fixtures/lint/doc-comment-misuse.1z:5:3: warning: [missing-stack-effect] public word lacks a declared stack effect
 tests/fixtures/lint/doc-comment-misuse.1z:5:3: info: [missing-doc-comment] public word lacks a doc comment
+tests/fixtures/lint/doc-comment-misuse.1z:5:3: info: [dead-definition] definition is not referenced by any other checked-file word

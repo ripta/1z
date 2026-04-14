@@ -1,5 +1,3 @@
-\ A clean file to lint. No rules are registered in the base lint library,
-\ so this should produce no findings.
-
-\\ Double a number.
-double: ( n -- n ) [ 2 * ] ;
+\ A clean file to lint. All rules run, so this file must not trigger any.
+\ It contains no definitions (which would trigger dead-definition in a
+\ single-file lint) and no imports.

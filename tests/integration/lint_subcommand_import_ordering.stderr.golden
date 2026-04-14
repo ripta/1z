@@ -2,4 +2,5 @@ tests/fixtures/lint/import-ordering.1z:1:1: warning: [unused-import] no words fr
 tests/fixtures/lint/import-ordering.1z:2:1: warning: [unused-import] no words from "conversions" are used in this file
 tests/fixtures/lint/import-ordering.1z:7:1: info: [import-ordering] use statement should appear before other definitions
 tests/fixtures/lint/import-ordering.1z:7:1: warning: [unused-import] no words from "ranges" are used in this file
+tests/fixtures/lint/import-ordering.1z:5:25: info: [dead-definition] definition is not referenced by any other checked-file word
 tests/fixtures/lint/import-ordering.1z:2:5: info: [import-ordering] use statements should be sorted alphabetically

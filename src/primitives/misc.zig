@@ -969,6 +969,13 @@ fn nativeLoadCheckFile(ctx: *Context) anyerror!void {
         return error.FileNotFound;
     };
 
+    // Return cached module if already loaded, avoiding duplicate side effects
+    // such as import-history records from re-executing use statements.
+    if (cache.get(resolved)) |cached| {
+        try ctx.stack.push(cached);
+        return;
+    }
+
     const prev_check_mode = ctx.check_mode;
     ctx.check_mode = true;
     defer ctx.check_mode = prev_check_mode;

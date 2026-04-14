@@ -1,1 +1,2 @@
 tests/fixtures/lint/missing-stack-effect.1z:2:19: warning: [missing-stack-effect] public word lacks a declared stack effect
+tests/fixtures/lint/missing-stack-effect.1z:2:19: info: [dead-definition] definition is not referenced by any other checked-file word

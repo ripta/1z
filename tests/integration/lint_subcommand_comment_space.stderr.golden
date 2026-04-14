@@ -1,2 +1,3 @@
 tests/fixtures/lint/comment-space.1z:1:1: warning: [comment-missing-space] comment marker not followed by a space
 tests/fixtures/lint/comment-space.1z:2:28: info: [missing-doc-comment] public word lacks a doc comment
+tests/fixtures/lint/comment-space.1z:2:28: info: [dead-definition] definition is not referenced by any other checked-file word

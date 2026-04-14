@@ -1,4 +1,10 @@
+tests/fixtures/lint/complex-word-undocumented.1z:16:35: info: [dead-definition] definition is not referenced by any other checked-file word
 tests/fixtures/lint/complex-word-undocumented.1z:1:36: info: [missing-doc-comment] public word lacks a doc comment
 tests/fixtures/lint/complex-word-undocumented.1z:1:36: info: [complex-word-undocumented] complex word should include a doc comment example
+tests/fixtures/lint/complex-word-undocumented.1z:1:36: info: [dead-definition] definition is not referenced by any other checked-file word
+tests/fixtures/lint/complex-word-undocumented.1z:9:44: info: [dead-definition] definition is not referenced by any other checked-file word
+tests/fixtures/lint/complex-word-undocumented.1z:13:45: info: [dead-definition] definition is not referenced by any other checked-file word
 tests/fixtures/lint/complex-word-undocumented.1z:20:52: info: [complex-word-undocumented] complex word should include a doc comment example
+tests/fixtures/lint/complex-word-undocumented.1z:20:52: info: [dead-definition] definition is not referenced by any other checked-file word
 tests/fixtures/lint/complex-word-undocumented.1z:4:56: info: [complex-word-undocumented] complex word should include a doc comment example
+tests/fixtures/lint/complex-word-undocumented.1z:4:56: info: [dead-definition] definition is not referenced by any other checked-file word

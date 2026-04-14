@@ -1,1 +1,2 @@
+tests/fixtures/lint/mutation-suffix-misuse.1z:2:29: info: [dead-definition] definition is not referenced by any other checked-file word
 tests/fixtures/lint/mutation-suffix-misuse.1z:2:29: warning: [mutation-suffix-misuse] word with ! suffix does not appear to perform mutation
