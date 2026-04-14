@@ -133,3 +133,20 @@ inexact?: method{ complex } [ drop t ] ;
 
 =: method{ complex ratio } [ >float 0.0 make-complex = ] ;
 =: method{ ratio complex } [ swap >float 0.0 make-complex swap = ] ;
+
+\ --- Misc. library words ---
+
+\\ Absolute value (modulus) of a complex number.
+magnitude: ( c -- f ) [
+  dup real-part dup * swap imaginary-part dup * + native.sqrt
+] ;
+
+\\ Argument (angle in radians) of a complex number.
+phase: ( c -- f ) [
+  dup imaginary-part swap real-part native.atan2
+] ;
+
+\\ Complex conjugate: negate the imaginary part.
+conjugate: ( c -- c ) [
+  dup real-part swap imaginary-part 0.0 swap - make-complex
+] ;
