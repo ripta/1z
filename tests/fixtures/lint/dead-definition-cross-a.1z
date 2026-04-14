@@ -1,0 +1,2 @@
+\\ Used from the sibling fixture.
+shared-helper: ( x -- x ) [ dup drop ] ;

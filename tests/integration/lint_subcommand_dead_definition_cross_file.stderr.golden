@@ -1,0 +1,1 @@
+tests/fixtures/lint/dead-definition-cross-b.1z:4:43: info: [dead-definition] definition is not referenced by any other checked-file word

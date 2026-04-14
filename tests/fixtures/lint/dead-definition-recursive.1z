@@ -1,0 +1,8 @@
+\\ Self-recursive and otherwise unreachable.
+self-rec: ( n -- n ) [ dup 0 > [ 1 - self-rec ] [ ] if ] ;
+
+\\ Mutually recursive and otherwise unreachable.
+cycle-a: ( n -- n ) [ dup 0 > [ 1 - cycle-b ] [ ] if ] ;
+
+\\ Mutually recursive and otherwise unreachable.
+cycle-b: ( n -- n ) [ dup 0 > [ 1 - cycle-a ] [ ] if ] ;

@@ -5,11 +5,13 @@ const dispatch_mod = @import("../dispatch.zig");
 const dictionary_mod = @import("../dictionary.zig");
 const WordDefinition = dictionary_mod.WordDefinition;
 const WordProvenance = dictionary_mod.WordProvenance;
+const call_graph_mod = @import("../call_graph.zig");
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const HashTable = value_mod.HashTable;
 const Module = value_mod.Module;
 const ModuleWord = value_mod.ModuleWord;
+const MutableMap = value_mod.MutableMap;
 
 const StackEffect = @import("../stack_effect.zig").StackEffect;
 
@@ -26,6 +28,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = ">word", .func = nativeToWord },
     .{ .name = "all-words", .func = nativeAllWords },
     .{ .name = "current-scope", .func = nativeCurrentScope },
+    .{ .name = "dead-definitions", .func = nativeDeadDefinitions },
     .{ .name = "defined?", .func = nativeDefined },
     .{ .name = "locally-defined?", .func = nativeLocallyDefined },
     .{ .name = "scope-frames", .func = nativeScopeFrames },
@@ -209,6 +212,218 @@ fn wordDefToModuleWord(def: WordDefinition) ModuleWord {
             .host_callback => |host| .{ .host_callback = host },
         },
     };
+}
+
+const DeadDefinitionInfo = struct {
+    name: []const u8,
+    source_file: []const u8,
+    source_line: usize,
+    source_column: usize,
+};
+
+fn popStringArray(ctx: *Context, val: Value) anyerror![]const []const u8 {
+    const alloc = ctx.quotationAllocator();
+    const arr = switch (val) {
+        .array => |items| items,
+        else => {
+            helpers.setTypeMismatchError(ctx, "array", val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const result = try alloc.alloc([]const u8, arr.len);
+    for (arr, 0..) |item, i| {
+        result[i] = switch (item) {
+            .string => |s| s,
+            else => {
+                helpers.setTypeMismatchError(ctx, "string", item);
+                return error.TypeMismatch;
+            },
+        };
+    }
+    return result;
+}
+
+fn moduleFromCache(cache: *const MutableMap, resolved_path: []const u8) ?*const Module {
+    const cached = cache.get(resolved_path) orelse return null;
+    return switch (cached) {
+        .module => |m| m,
+        else => null,
+    };
+}
+
+fn isLintSemanticWord(name: []const u8, word: WordDefinition) bool {
+    if (word.provenance != null) return false;
+    if (std.mem.startsWith(u8, name, "(")) return false;
+    return switch (word.action) {
+        .compound => true,
+        .native, .host_callback => false,
+    };
+}
+
+fn componentKey(component_ids: *const std.StringHashMapUnmanaged(u32), name: []const u8) []const u8 {
+    if (component_ids.get(name)) |component_id| {
+        return std.fmt.comptimePrint("__scc__{d}", .{component_id});
+    }
+    return name;
+}
+
+fn buildDeadDefinitionValue(alloc: Allocator, info: DeadDefinitionInfo) !Value {
+    const fields = try alloc.alloc(Value, 4);
+    fields[0] = .{ .string = info.name };
+    fields[1] = .{ .string = info.source_file };
+    fields[2] = .{ .fixnum = @intCast(info.source_line) };
+    fields[3] = .{ .fixnum = @intCast(info.source_column) };
+    return .{ .array = fields };
+}
+
+/// dead-definitions ( cache files -- array )
+/// Return array entries of [ name file line column ] for checked-file compound
+/// words that have no inbound edge from another checked-file component.
+fn nativeDeadDefinitions(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const files_val = try ctx.stack.pop();
+    const file_paths = try popStringArray(ctx, files_val);
+
+    const cache_val = try ctx.stack.pop();
+    const cache = switch (cache_val) {
+        .mutable_map => |m| m,
+        else => {
+            helpers.setTypeMismatchError(ctx, "mutable-map", cache_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    var checked_files = std.StringHashMapUnmanaged(void){};
+    defer checked_files.deinit(alloc);
+
+    var dictionary = dictionary_mod.Dictionary.init(alloc);
+    defer dictionary.deinit();
+
+    var word_info = std.StringHashMapUnmanaged(DeadDefinitionInfo){};
+    defer word_info.deinit(alloc);
+
+    for (file_paths) |path| {
+        const resolved = std.fs.cwd().realpathAlloc(alloc, path) catch {
+            helpers.setErrorContext(ctx, "could not resolve lint path '{s}'", .{path});
+            return error.FileNotFound;
+        };
+        try checked_files.put(alloc, resolved, {});
+
+        const module = moduleFromCache(cache, resolved) orelse {
+            helpers.setErrorContext(ctx, "lint cache missing module for '{s}'", .{resolved});
+            return error.KeyNotFound;
+        };
+
+        var iter = module.words.iterator();
+        while (iter.next()) |entry| {
+            const name = entry.key_ptr.*;
+            const word = moduleWordToWordDef(name, entry.value_ptr.*);
+            if (!isLintSemanticWord(name, word)) continue;
+
+            const gop = try dictionary.entries.getOrPut(alloc, name);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = word;
+                const source_file = word.source_file orelse continue;
+                try word_info.put(alloc, name, .{
+                    .name = name,
+                    .source_file = source_file,
+                    .source_line = word.source_line,
+                    .source_column = word.source_column,
+                });
+            }
+        }
+    }
+
+    var graph = try call_graph_mod.build(&dictionary, &ctx.dispatch, alloc);
+    defer {
+        var iter = graph.iterator();
+        while (iter.next()) |entry| {
+            alloc.free(entry.value_ptr.callees);
+        }
+        graph.deinit(alloc);
+    }
+
+    const sccs = try call_graph_mod.findSCCs(&graph, alloc);
+    defer {
+        for (sccs) |members| {
+            alloc.free(members);
+        }
+        alloc.free(sccs);
+    }
+
+    var component_ids = std.StringHashMapUnmanaged(u32){};
+    defer component_ids.deinit(alloc);
+
+    for (sccs, 0..) |members, i| {
+        const component_id: u32 = @intCast(i);
+        for (members) |name| {
+            try component_ids.put(alloc, name, component_id);
+        }
+    }
+
+    var has_external_inbound = std.StringHashMapUnmanaged(void){};
+    defer has_external_inbound.deinit(alloc);
+
+    var graph_iter = graph.iterator();
+    while (graph_iter.next()) |entry| {
+        const caller_name = entry.key_ptr.*;
+        if (!word_info.contains(caller_name)) continue;
+
+        const caller_component = component_ids.get(caller_name);
+        for (entry.value_ptr.callees) |callee_name| {
+            if (!word_info.contains(callee_name)) continue;
+
+            const callee_component = component_ids.get(callee_name);
+            const same_component =
+                caller_component != null and callee_component != null and caller_component.? == callee_component.?;
+            if (same_component) continue;
+            if (caller_component == null and callee_component == null and std.mem.eql(u8, caller_name, callee_name)) continue;
+
+            try has_external_inbound.put(alloc, callee_name, {});
+        }
+    }
+
+    var dead_infos = std.ArrayListUnmanaged(DeadDefinitionInfo){};
+    defer dead_infos.deinit(alloc);
+
+    var info_iter = word_info.iterator();
+    while (info_iter.next()) |entry| {
+        const name = entry.key_ptr.*;
+        if (has_external_inbound.contains(name)) continue;
+
+        if (component_ids.get(name)) |component_id| {
+            var component_has_external = false;
+            var members_iter = component_ids.iterator();
+            while (members_iter.next()) |member| {
+                if (member.value_ptr.* != component_id) continue;
+                if (has_external_inbound.contains(member.key_ptr.*)) {
+                    component_has_external = true;
+                    break;
+                }
+            }
+            if (component_has_external) continue;
+        }
+
+        try dead_infos.append(alloc, entry.value_ptr.*);
+    }
+
+    std.mem.sort(DeadDefinitionInfo, dead_infos.items, {}, struct {
+        fn lessThan(_: void, a: DeadDefinitionInfo, b: DeadDefinitionInfo) bool {
+            const file_order = std.mem.order(u8, a.source_file, b.source_file);
+            if (file_order != .eq) return file_order == .lt;
+            if (a.source_line != b.source_line) return a.source_line < b.source_line;
+            if (a.source_column != b.source_column) return a.source_column < b.source_column;
+            return std.mem.order(u8, a.name, b.name) == .lt;
+        }
+    }.lessThan);
+
+    const result = try alloc.alloc(Value, dead_infos.items.len);
+    for (dead_infos.items, 0..) |info, i| {
+        result[i] = try buildDeadDefinitionValue(alloc, info);
+    }
+    try ctx.stack.push(.{ .array = result });
 }
 
 /// current-scope ( -- module ) - Snapshot all user-visible words into a Module value.

@@ -1,0 +1,8 @@
+\\ Used by entry-word.
+used-helper: ( x -- x ) [ dup drop ] ;
+
+\\ Public entry for the fixture.
+entry-word: ( x -- x ) [ used-helper ] ;
+
+\\ Intentionally left uncalled.
+dead-helper: ( x -- x ) [ drop 0 ] ;

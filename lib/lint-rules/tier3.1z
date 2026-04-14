@@ -212,6 +212,34 @@ make-lint-rule register-lint-rule
 "complex-word-undocumented" info: [ (check-complex-word-undocumented) ] f
 make-lint-rule register-lint-rule
 
+(check-dead-definition): ( path source tokens line-index semantic-context -- diagnostics ) [
+  drop drop drop drop
+  lint-dead-definitions dup f = [
+    drop { }
+  ] [
+    V{ } -rot>
+    [
+      \ record = [ name file line column ]
+      dup 1 #nth 2 pick-n = [
+        "dead-definition" info:
+        2 pick-n 1 #nth
+        3 pick-n 2 #nth
+        4 pick-n 3 #nth
+        "definition is not referenced by any other checked-file word"
+        make-lint-diagnostic
+        swap drop
+        2 pick-n swap #push! drop
+      ] [
+        drop
+      ] if
+    ] #each
+    drop
+  ] if
+] ;
+
+"dead-definition" info: [ (check-dead-definition) ] f
+make-lint-rule register-lint-rule
+
 \ --- Helpers for sequence-prefix-misuse ---
 
 \ Known sequence type annotations (inspected form).

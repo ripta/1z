@@ -34,6 +34,19 @@ semantic-context: struct{ module word-infos } ;
 (lint-registry-storage): ( -- mmap ) parse-time [ [ rules: { } ] make-mutable-map ] ;
 (lint-registry): ( -- mmap ) [ (lint-registry-storage) ] ;
 
+\ --- Run-scoped state shared by rules that need the full checked file set ---
+
+(lint-run-storage): ( -- mmap ) parse-time [
+  [ checked-files: { } dead-definitions: f ] make-mutable-map
+] ;
+(lint-run-state): ( -- mmap ) [ (lint-run-storage) ] ;
+
+lint-checked-files: ( -- array ) [ (lint-run-state) checked-files: @get ] ;
+set-lint-checked-files: ( files -- ) [ (lint-run-state) swap checked-files: swap @set! drop ] ;
+
+lint-dead-definitions: ( -- array/f ) [ (lint-run-state) dead-definitions: @get ] ;
+set-lint-dead-definitions: ( dead-defs -- ) [ (lint-run-state) swap dead-definitions: swap @set! drop ] ;
+
 \\ Return the array of registered lint rules.
 lint-rules: ( -- array ) [ (lint-registry) rules: @get ] ;
 
@@ -205,7 +218,8 @@ definition-symbol?: ( token -- ? ) [
 
 \ --- Semantic analysis ---
 
-(lint-load-cache): ( -- mmap ) parse-time [ M{ } ] ;
+(lint-load-cache-storage): ( -- mmap ) parse-time [ M{ } ] ;
+(lint-load-cache): ( -- mmap ) [ (lint-load-cache-storage) ] ;
 
 \\ Build a semantic context by loading a file in check mode.
 \\ Returns a semantic-context struct, or f if loading fails.
@@ -304,6 +318,24 @@ format-diagnostic: ( lint-diagnostic -- string ) [
   "] " #append swap message>> #append
 ] ;
 
+\ --- Whole-run semantic helpers ---
+
+(ensure-lint-file-exists): ( path -- path ) [
+  dup file-exists? not [
+    "Error: file not found: " swap #append eprint-line
+    2 sys-exit
+  ] when
+] ;
+
+(preload-lint-file): ( path -- ) [
+  (ensure-lint-file-exists)
+  (lint-load-cache) swap native.load-check-file drop
+] ;
+
+(compute-dead-definitions): ( files -- array ) [
+  (lint-load-cache) swap native.dead-definitions
+] ;
+
 \ --- Main entry point ---
 
 \\ Run all registered lint rules against the given file list.
@@ -315,13 +347,15 @@ run-lint: ( files -- bool ) [
   ] [
     swap
     \ stack: rules files
+    dup set-lint-checked-files
+    \ Preload all checked files into the lint module cache so semantic rules
+    \ that need whole-run analysis can query a complete module set.
+    dup [ (preload-lint-file) ] #each
+    dup (compute-dead-definitions) set-lint-dead-definitions
     V{ }
     swap [
       \ stack: rules results file
-      dup file-exists? not [
-        "Error: file not found: " swap #append eprint-line
-        2 sys-exit
-      ] when
+      (ensure-lint-file-exists)
       2 pick-n (lint-file)
       \ stack: rules results file-diagnostics
       #append

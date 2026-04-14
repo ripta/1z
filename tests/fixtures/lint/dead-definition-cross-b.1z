@@ -1,0 +1,4 @@
+use "./dead-definition-cross-a.1z" ;
+
+\\ Calls across files so shared-helper should not be dead.
+cross-entry: ( x -- x ) [ shared-helper ] ;
