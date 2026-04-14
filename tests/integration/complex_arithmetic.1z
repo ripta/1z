@@ -1,0 +1,45 @@
+use "testing" ;
+use "complex" ;
+
+"complex: addition" test-section
+C{ 1.0 2.0 } C{ 3.0 4.0 } + real-part 4.0 "add real" assert=
+C{ 1.0 2.0 } C{ 3.0 4.0 } + imaginary-part 6.0 "add imag" assert=
+
+"complex: subtraction" test-section
+C{ 5.0 7.0 } C{ 3.0 2.0 } - real-part 2.0 "sub real" assert=
+C{ 5.0 7.0 } C{ 3.0 2.0 } - imaginary-part 5.0 "sub imag" assert=
+
+"complex: multiplication" test-section
+\ (1+2i)(3+4i) = (3-8) + (4+6)i = -5 + 10i
+C{ 1.0 2.0 } C{ 3.0 4.0 } * real-part -5.0 "mul real" assert=
+C{ 1.0 2.0 } C{ 3.0 4.0 } * imaginary-part 10.0 "mul imag" assert=
+
+"complex: division" test-section
+\ (1+2i)/(3+4i) = (3+8)/(9+16) + (6-4)/(9+16)i = 11/25 + 2/25 i
+C{ 1.0 2.0 } C{ 3.0 4.0 } / real-part 0.44 "div real" assert=
+C{ 1.0 2.0 } C{ 3.0 4.0 } / imaginary-part 0.08 "div imag" assert=
+
+"complex: equality" test-section
+C{ 1.0 2.0 } C{ 1.0 2.0 } = "equal" assert-true
+C{ 1.0 2.0 } C{ 1.0 3.0 } = not "unequal" assert-true
+
+"complex: mixed float" test-section
+C{ 1.0 2.0 } 3.0 + real-part 4.0 "c+f real" assert=
+C{ 1.0 2.0 } 3.0 + imaginary-part 2.0 "c+f imag" assert=
+3.0 C{ 1.0 2.0 } + real-part 4.0 "f+c real" assert=
+C{ 5.0 3.0 } 2.0 - real-part 3.0 "c-f real" assert=
+2.0 C{ 5.0 3.0 } - real-part -3.0 "f-c real" assert=
+2.0 C{ 5.0 3.0 } - imaginary-part -3.0 "f-c imag" assert=
+C{ 2.0 3.0 } 2.0 * real-part 4.0 "c*f real" assert=
+C{ 2.0 3.0 } 2.0 * imaginary-part 6.0 "c*f imag" assert=
+C{ 4.0 6.0 } 2.0 / real-part 2.0 "c/f real" assert=
+C{ 4.0 6.0 } 2.0 / imaginary-part 3.0 "c/f imag" assert=
+C{ 3.0 0.0 } 3.0 = "c=f equal" assert-true
+C{ 3.0 1.0 } 3.0 = not "c=f unequal" assert-true
+3.0 C{ 3.0 0.0 } = "f=c equal" assert-true
+
+"complex: mixed fixnum" test-section
+C{ 1.0 2.0 } 3 + real-part 4.0 "c+i real" assert=
+3 C{ 1.0 2.0 } + real-part 4.0 "i+c real" assert=
+C{ 1.0 2.0 } 3 * imaginary-part 6.0 "c*i imag" assert=
+C{ 3.0 0.0 } 3 = "c=i equal" assert-true
