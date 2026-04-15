@@ -12,6 +12,7 @@ use "scanner" ;
 use "lexer" ;
 use "1z-tokens" ;
 use "os/fs" ;
+use "os/path" ;
 use "ranges" ;
 
 \ --- Struct definitions ---
@@ -37,7 +38,7 @@ semantic-context: struct{ module word-infos } ;
 \ --- Run-scoped state shared by rules that need the full checked file set ---
 
 (lint-run-storage): ( -- mmap ) parse-time [
-  [ checked-files: { } dead-definitions: f ] make-mutable-map
+  [ checked-files: { } dead-definitions: f circular-files: { } ] make-mutable-map
 ] ;
 (lint-run-state): ( -- mmap ) [ (lint-run-storage) ] ;
 
@@ -46,6 +47,9 @@ set-lint-checked-files: ( files -- ) [ (lint-run-state) swap checked-files: swap
 
 lint-dead-definitions: ( -- array/f ) [ (lint-run-state) dead-definitions: @get ] ;
 set-lint-dead-definitions: ( dead-defs -- ) [ (lint-run-state) swap dead-definitions: swap @set! drop ] ;
+
+lint-circular-files: ( -- array ) [ (lint-run-state) circular-files: @get ] ;
+set-lint-circular-files: ( circular -- ) [ (lint-run-state) swap circular-files: swap @set! drop ] ;
 
 \\ Return the array of registered lint rules.
 lint-rules: ( -- array ) [ (lint-registry) rules: @get ] ;
@@ -282,28 +286,17 @@ lint-module-exports: ( resolved-path -- array ) [
   \ stack: rules path source tokens suppressions
   2 pick-n (build-line-index)
   \ stack: rules path source tokens suppressions line-index
-  4 pick-n (build-semantic-context)
+  4 pick-n (lint-circular-file?) [
+    f
+  ] [
+    4 pick-n (build-semantic-context)
+  ] if
   \ stack: rules(6) path(5) source(4) tokens(3) suppressions(2) line-index(1) sem-ctx(0)
 
-  \ Iterate rules, accumulate diagnostics.
-  \ The stack holds file context; we iterate the rules array.
-  { }
-  \ stack: rules(7) path(6) source(5) tokens(4) suppressions(3) line-index(2) sem-ctx(1) results(0)
-  7 pick-n [
-    \ stack: rules(8) path(7) source(6) tokens(5) suppressions(4) line-index(3) sem-ctx(2) results(1) rule(0)
-    dup id>> 5 pick-n (suppressed?) [
-      drop
-    ] [
-      \ Run the rule check: ( path source tokens line-index sem-ctx -- diags )
-      7 pick-n 7 pick-n 7 pick-n 6 pick-n 6 pick-n
-      \ stack: ... results rule path source tokens line-index sem-ctx
-      5 pick-n check>> call
-      \ stack: ... results rule diags
-      [ drop ] dip #append
-    ] if
-  ] #each
-  \ stack: rules path source tokens suppressions line-index sem-ctx results
-  [ drop drop drop drop drop drop drop ] dip
+  6 array-n
+  \ stack: rules(1) ctx(0)
+  [ (lint-rule-with-context) ] curry #map #collect
+  { } [ #append ] #reduce
 ] ;
 
 \ --- Output formatting ---
@@ -329,11 +322,280 @@ format-diagnostic: ( lint-diagnostic -- string ) [
 
 (preload-lint-file): ( path -- ) [
   (ensure-lint-file-exists)
-  (lint-load-cache) swap native.load-check-file drop
+  [ (lint-load-cache) swap native.load-check-file drop ] [ drop ] recover
 ] ;
 
-(compute-dead-definitions): ( files -- array ) [
-  (lint-load-cache) swap native.dead-definitions
+(compute-dead-definitions): ( files -- array/f ) [
+  [ (lint-load-cache) swap native.dead-definitions ] [ drop f ] recover
+] ;
+
+\ --- Circular dependency detection (token-level, runs before preload) ---
+
+\ Does a module path refer to a relative import?
+(relative-import?): ( path -- ? ) [
+  dup "./" #starts-with? swap "../" #starts-with? or
+] ;
+
+\ Resolve a relative import path against the importing file's directory.
+(resolve-use-path): ( source-file import-path -- resolved ) [
+  swap dirname swap path-join normalize
+] ;
+
+\ Strip the surrounding quotes from a use-string token value.
+(strip-use-string-quotes): ( str -- str' ) [
+  1 #drop dup #len 1 - #take
+] ;
+
+\ Extract relative use targets from a file's token stream.
+\ Returns an array of { resolved-path line col } tuples.
+(extract-use-targets): ( path source tokens -- targets ) [
+  swap (build-line-index) swap
+  \ stack: path(2) line-index(1) tokens(0)
+  V{ } f
+  \ stack: path(4) line-index(3) tokens(2) targets(1) saw-use?(0)
+  2 pick-n [
+    \ stack: ... targets(2) saw-use?(1) token(0)
+    dup significant-token? [
+      swap
+      \ stack: ... path(4) line-index(3) tokens(2) targets(1) token(0) saw-use?
+      \ if consumes saw-use?, leaving token on top
+      [
+        \ Previous was use: check if this is a relative string import
+        dup kind>> string: = [
+          dup value>> (strip-use-string-quotes)
+          dup (relative-import?) [
+            5 pick-n swap (resolve-use-path)
+            over pos>> 5 pick-n swap (pos>line-col)
+            3 array-n
+            2 pick-n swap #push! drop
+          ] [ drop ] if
+          drop f
+        ] [
+          drop f
+        ] if
+      ] [
+        dup kind>> word: = over value>> "use" = and [
+          drop t
+        ] [
+          drop f
+        ] if
+      ] if
+    ] [ drop ] if
+  ] #each
+  drop
+  [ drop drop ] dip
+] ;
+
+\ Read and tokenize a file, then extract relative use targets.
+(file-use-targets): ( path -- targets ) [
+  dup (read-file) dup 1z-tokenize #collect (extract-use-targets)
+] ;
+
+\ Read and tokenize a file, returning only its relative use targets.
+(file-use-targets-only): ( path -- targets ) [
+  (file-use-targets) nip
+] ;
+
+\ Run one lint rule against a materialized lint-file context array:
+\ { path source tokens suppressions line-index sem-ctx }.
+(lint-rule-with-context): ( rule ctx -- diags ) [
+  swap
+  dup id>> 2 pick-n 3 #nth (suppressed?) [
+    2drop { }
+  ] [
+    1 pick-n 0 #nth
+    2 pick-n 1 #nth
+    3 pick-n 2 #nth
+    4 pick-n 4 #nth
+    5 pick-n 5 #nth
+    5 pick-n check>> call
+    swap drop swap drop
+  ] if
+] ;
+
+\ Build a dependency graph from all checked files.
+\ Returns M{ source-path -> [ { target-path line col } ... ] }.
+(build-dep-graph): ( files -- graph ) [
+  M{ } swap
+  \ stack: graph(1) files(0)
+  0
+  \ stack: graph(2) files(1) idx(0)
+  [
+    1 pick-n #len <
+  ] [
+    1 pick-n over #nth
+    \ stack: graph(3) files(2) idx(1) file(0)
+    dup (file-use-targets)
+    \ stack: graph(5) files(4) idx(3) file(2) file(1) targets(0)
+    dup #len 0 > [
+      5 pick-n -rot> @set! drop
+    ] [ drop ] if
+    drop
+    ++
+  ] while
+  drop [ drop ] dip
+] ;
+
+\ Check if target is reachable from start via BFS through the dep graph.
+\ Returns the cycle path (array of file paths) or f.
+(find-cycle-from): ( graph start -- cycle-or-f ) [
+  \ BFS: seen M{}, parent M{}, work V{}
+  M{ } over t @set! drop  \ seen
+  M{ }                    \ parent
+  V{ }                    \ work
+  \ stack: graph(4) start(3) seen(2) parent(1) work(0)
+
+  \ Seed work list with start's direct neighbors
+  4 pick-n 4 pick-n @has? [
+    4 pick-n 4 pick-n @get
+    dup #len 0
+    \ stack: graph(7) start(6) seen(5) parent(4) work(3) edges(2) len(1) i(0)
+    [
+      dup 2 pick-n <
+    ] [
+      2 pick-n over #nth 0 #nth
+      \ stack: ... len(2) i(1) target(0)
+      dup 6 pick-n swap @has? not [
+        5 pick-n swap #push! drop
+        6 pick-n over t @set! drop
+        5 pick-n over 7 pick-n @set! drop
+        drop
+      ] [ drop ] if
+      ++
+    ] while
+    drop drop
+  ] when
+
+  f
+  \ stack: graph(5) start(4) seen(3) parent(2) work(1) result(0)
+
+  [
+    dup f = 2 pick-n #len 0 > and
+  ] [
+    \ Pop from work
+    2 pick-n dup #len 1 - #nth
+    3 pick-n dup #len 1 - #take drop
+    \ stack: graph(6) start(5) seen(4) parent(3) work(2) result(1) node(0)
+
+    dup 5 pick-n = [
+      \ Found path back to start! Reconstruct via parent chain.
+      V{ } over #push! drop
+      \ stack: ... result(1) node(0) path-V{}
+      swap
+      \ stack: ... result(2) path(1) node(0)
+      [
+        dup 6 pick-n = not
+      ] [
+        2 pick-n over #push! drop
+        5 pick-n swap @get
+      ] while
+      2 pick-n swap #push! drop
+      \ Reverse path
+      { } swap #len 0
+      [
+        dup 2 pick-n #len <
+      ] [
+        2 pick-n over #nth
+        3 pick-n swap #suffix
+        [ drop ] dip
+        ++
+      ] while
+      drop nip
+      \ stack: ... result(1) reversed-path(0)
+      nip
+    ] [
+      \ Explore node's neighbors
+      6 pick-n over @has? [
+        6 pick-n over @get
+        dup #len 0
+        \ stack: ... result(2) node(1) edges(0) len i
+        [
+          dup 2 pick-n <
+        ] [
+          2 pick-n over #nth 0 #nth
+          \ stack: ... node(4) edges(3) len(2) i(1) target(0)
+          dup 9 pick-n swap @has? not [
+            8 pick-n swap #push! drop
+            9 pick-n over t @set! drop
+            8 pick-n over 5 pick-n @set! drop
+            drop
+          ] [ drop ] if
+          ++
+        ] while
+        drop drop
+      ] when
+      drop
+    ] if
+  ] while
+
+  [ drop drop drop drop drop ] dip
+] ;
+
+\ Does target directly import source?
+(reciprocal-import?): ( source target -- ? ) [
+  dup (file-use-targets-only) [ 0 #nth ] #map #collect nip swap #in?
+] ;
+
+\ Is this file part of a detected circular dependency?
+(lint-circular-file?): ( path -- ? ) [
+  lint-circular-files [ 1 #nth ] #map #collect swap #in?
+] ;
+
+\ Build a circular-dependency record { target-file file line col }.
+(make-reciprocal-cycle-record): ( file edge -- record ) [
+  dup 0 #nth
+  2 pick-n
+  2 pick-n 1 #nth
+  3 pick-n 2 #nth
+  4 array-n
+  [ drop drop ] dip
+] ;
+
+\ Does this import edge participate in a direct cycle with the given file?
+(direct-cycle-edge?): ( edge file -- ? ) [
+  swap dup 0 #nth nip (reciprocal-import?)
+] ;
+
+\ Convert an import edge into a circular-dependency record for the given file.
+(edge>circular-record): ( edge file -- record ) [
+  swap (make-reciprocal-cycle-record)
+] ;
+
+\ Compute circular-dependency records contributed by one file.
+(file-circular-records): ( file -- records ) [
+  dup dup (file-use-targets-only) swap
+  [ (direct-cycle-edge?) ] curry #filter #collect
+  swap [ (edge>circular-record) ] curry #map #collect
+] ;
+
+\ Compute files involved in circular dependencies.
+\ Returns an array of { target-file file line col } records for each
+\ import that participates in a direct circular dependency.
+(compute-circular-deps): ( files -- records ) [
+  [ (file-circular-records) ] #map #collect
+  { } [ #append ] #reduce
+] ;
+
+\ Compute the set of file paths involved in any circular dependency.
+(circular-file-set): ( records -- set ) [
+  [ 1 #nth ] #map #collect
+  H{ } [ t @set ] #reduce
+] ;
+
+\ Preload one file unless it is marked circular for this lint run.
+(preload-file-if-needed): ( file circular-set -- ) [
+  2dup swap @has? [ 2drop ] [ drop (preload-lint-file) ] if
+] ;
+
+\ Preload checked files that are not part of a detected cycle.
+(preload-non-circular-files): ( files circular-set -- ) [
+  [ (preload-file-if-needed) ] curry #each
+] ;
+
+\ Run lint rules across the checked file set and accumulate diagnostics.
+(lint-files): ( files rules -- diagnostics ) [
+  [ (lint-file) ] curry #map #collect
+  { } [ #append ] #reduce
 ] ;
 
 \ --- Main entry point ---
@@ -348,18 +610,14 @@ run-lint: ( files -- bool ) [
     swap
     \ stack: rules files
     dup set-lint-checked-files
-    \ Preload all checked files into the lint module cache so semantic rules
-    \ that need whole-run analysis can query a complete module set.
-    dup [ (preload-lint-file) ] #each
-    dup (compute-dead-definitions) set-lint-dead-definitions
-    V{ }
-    swap [
-      \ stack: rules results file
-      (ensure-lint-file-exists)
-      2 pick-n (lint-file)
-      \ stack: rules results file-diagnostics
-      #append
-    ] #each
+    \ Detect circular dependencies from tokens before preloading.
+    dup (compute-circular-deps) dup set-lint-circular-files
+    (circular-file-set)
+    \ Preload non-circular files into the lint module cache.
+    over over (preload-non-circular-files)
+    lint-checked-files (compute-dead-definitions) set-lint-dead-definitions
+    drop
+    over (lint-files)
     nip
 
     \ Sort by file, then line, then column.

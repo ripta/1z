@@ -1,0 +1,3 @@
+use "./circular-dep-b.1z" ;
+
+helper-a: ( -- x ) [ 1 ] ;
