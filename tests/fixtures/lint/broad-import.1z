@@ -1,0 +1,4 @@
+use "strings" ;
+
+\\ A word that uses only split from strings.
+helper: ( s -- array ) [ "," split ] ;

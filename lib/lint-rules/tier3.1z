@@ -755,3 +755,85 @@ make-lint-rule register-lint-rule
 
 "circular-dependency" warning: [ (check-circular-dependency) ] f
 make-lint-rule register-lint-rule
+
+\ --- Rule: broad-import ---
+\ Detects wildcard imports where only 1-2 words from the module are used;
+\ a selective import would be clearer.
+
+\ Count how many words from an export list appear in the usage set.
+(count-used-exports): ( export-names usage-set -- count ) [
+  0
+  \ stack: export-names(2) usage-set(1) count(0)
+  2 pick-n [
+    \ stack: export-names(3) usage-set(2) count(1) name(0)
+    2 pick-n swap @has? [ 1 + ] when
+  ] #each
+  nip nip
+] ;
+
+(check-broad-import): ( path source tokens line-index semantic-context -- diagnostics ) [
+  drop drop nip
+  \ stack: path(1) tokens(0)
+
+  dup (build-usage-set)
+  \ stack: path(2) tokens(1) usage-set(0)
+
+  M{ }
+  3 pick-n path: swap @set!
+  1 pick-n usage-set: swap @set!
+  results: V{ } @set!
+  \ stack: path(3) tokens(2) usage-set(1) state(0)
+  nip nip nip
+  \ stack: state(0)
+
+  native.import-history
+  \ stack: state(1) records(0)
+
+  [
+    \ stack: state(1) record(0)
+    dup 0 #nth 2 pick-n path: @get = [
+      \ This record belongs to the file being linted.
+      dup 4 #nth f = [
+        \ Wildcard import: check how many exports are used.
+        dup 5 #nth lint-module-exports
+        \ stack: state(2) record(1) export-names(0)
+        dup #len 3 > [
+          \ Module has more than 3 exports -- worth checking.
+          dup 3 pick-n usage-set: @get (count-used-exports)
+          \ stack: state(3) record(2) export-names(1) used-count(0)
+          dup 0 > over 2 <= and [
+            \ 1-2 words used out of many: suggest selective import.
+            swap #len
+            \ stack: state(3) record(2) used-count(1) total(0)
+            "only " 2 pick-n >string #append
+            " of " #append swap >string #append
+            " words from \"" #append
+            2 pick-n 3 #nth #append
+            "\" are used; consider selective import" #append
+            \ stack: state(3) record(2) used-count(1) message(0)
+            nip
+            \ stack: state(2) record(1) message(0)
+            "broad-import" info:
+            4 pick-n path: @get
+            4 pick-n 1 #nth
+            5 pick-n 2 #nth
+            5 pick-n
+            make-lint-diagnostic
+            \ stack: state(3) record(2) message(1) diagnostic(0)
+            [ drop drop ] dip
+            \ stack: state(1) diagnostic(0)
+            over results: @get swap #push! drop
+          ] [
+            drop drop drop
+          ] if
+        ] [
+          drop drop
+        ] if
+      ] [ drop ] if
+    ] [ drop ] if
+  ] #each
+  results: @get
+] ;
+
+"broad-import" info: [ (check-broad-import) ] f
+make-lint-rule register-lint-rule
