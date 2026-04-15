@@ -18,7 +18,8 @@ const JitDispatchTable = jit_dispatch_mod.JitDispatchTable;
 const JitEntry = jit_dispatch_mod.JitEntry;
 
 const Context = @import("context.zig").Context;
-const StackEffect = @import("stack_effect.zig").StackEffect;
+const stack_effect_mod = @import("stack_effect.zig");
+const StackEffect = stack_effect_mod.StackEffect;
 const signal = @import("signal.zig");
 const trace_mod = @import("trace.zig");
 const Scheduler = @import("scheduler.zig").Scheduler;
@@ -733,7 +734,61 @@ const CompileState = struct {
     /// Stack effect of the word being compiled. Used to resolve quotation
     /// parameter effects through calls.
     stack_effect: ?*const StackEffect = null,
+    /// Mapping from input slot indices to concrete quotation effects.
+    /// Populated when stack_effect is available and quotation parameters
+    /// have fixed (non-row-variable) arities.
+    quotation_slots: QuotationSlotMap = .{},
 };
+
+/// Concrete quotation effect for an input slot: the fixed number of values
+/// consumed and produced by calling the quotation at that slot.
+const QuotationSlotInfo = struct {
+    slot: usize,
+    input_count: u8,
+    output_count: u8,
+};
+
+/// Fixed-capacity mapping from input slot indices to concrete quotation effects.
+const QuotationSlotMap = struct {
+    items: [8]QuotationSlotInfo = undefined,
+    len: usize = 0,
+
+    fn add(self: *QuotationSlotMap, info: QuotationSlotInfo) void {
+        if (self.len < 8) {
+            self.items[self.len] = info;
+            self.len += 1;
+        }
+    }
+
+    fn findSlot(self: *const QuotationSlotMap, slot: usize) ?QuotationSlotInfo {
+        for (self.items[0..self.len]) |item| {
+            if (item.slot == slot) return item;
+        }
+        return null;
+    }
+};
+
+/// Build quotation slot mapping from a stack effect's input parameters.
+/// Records slots whose quotation_effect has concrete (non-row-variable) arities.
+fn buildQuotationSlotMap(effect: ?*const StackEffect) QuotationSlotMap {
+    var map = QuotationSlotMap{};
+    const eff = effect orelse return map;
+    var concrete_idx: usize = 0;
+    for (eff.inputs) |param| {
+        if (param.is_row_variable) continue;
+        if (param.quotation_effect) |qe| {
+            if (!stack_effect_mod.hasAnyRowVariable(qe.*)) {
+                map.add(.{
+                    .slot = concrete_idx,
+                    .input_count = @intCast(qe.concreteInputCount()),
+                    .output_count = @intCast(qe.concreteOutputCount()),
+                });
+            }
+        }
+        concrete_idx += 1;
+    }
+    return map;
+}
 
 const AotStringLiteral = struct {
     data: []const u8,
@@ -2509,6 +2564,7 @@ pub fn compileWord(
         .error_propagate_status = error_propagate_status,
         .peak_sp = @intCast(input_count),
         .stack_effect = stack_effect,
+        .quotation_slots = buildQuotationSlotMap(stack_effect),
     };
 
     // If this word contains a self-tail-call, wrap the body in a LOOP_BEGIN
@@ -3005,6 +3061,7 @@ pub fn emitWordCAot(
         .preloaded_ctx_val = preloaded_ctx_val,
         .aot_string_literals = string_literals,
         .stack_effect = stack_effect,
+        .quotation_slots = buildQuotationSlotMap(stack_effect),
     };
 
     // Self-tail-call detection for AOT
@@ -5556,4 +5613,114 @@ test "emitProgramC output compiles with cc" {
     try child.spawn();
     const result = try child.wait();
     try testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, result);
+}
+
+// =============================================================================
+// QuotationSlotMap tests
+// =============================================================================
+
+const StackEffectParam = stack_effect_mod.StackEffectParam;
+
+test "QuotationSlotMap add and findSlot" {
+    var map = QuotationSlotMap{};
+    try testing.expectEqual(@as(usize, 0), map.len);
+    try testing.expect(map.findSlot(0) == null);
+
+    map.add(.{ .slot = 1, .input_count = 1, .output_count = 1 });
+    map.add(.{ .slot = 3, .input_count = 2, .output_count = 0 });
+    try testing.expectEqual(@as(usize, 2), map.len);
+
+    const info1 = map.findSlot(1).?;
+    try testing.expectEqual(@as(usize, 1), info1.slot);
+    try testing.expectEqual(@as(u8, 1), info1.input_count);
+    try testing.expectEqual(@as(u8, 1), info1.output_count);
+
+    const info3 = map.findSlot(3).?;
+    try testing.expectEqual(@as(u8, 2), info3.input_count);
+    try testing.expectEqual(@as(u8, 0), info3.output_count);
+
+    try testing.expect(map.findSlot(0) == null);
+    try testing.expect(map.findSlot(2) == null);
+}
+
+test "buildQuotationSlotMap with concrete effect" {
+    // ( seq quot: ( a -- b ) -- seq' )
+    const nested = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "a" }},
+        .outputs = &[_]StackEffectParam{.{ .name = "b" }},
+    };
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "seq" },
+            .{ .name = "quot", .quotation_effect = &nested },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "seq'" }},
+    };
+
+    const map = buildQuotationSlotMap(&effect);
+    try testing.expectEqual(@as(usize, 1), map.len);
+
+    const info = map.findSlot(1).?;
+    try testing.expectEqual(@as(usize, 1), info.slot);
+    try testing.expectEqual(@as(u8, 1), info.input_count);
+    try testing.expectEqual(@as(u8, 1), info.output_count);
+
+    try testing.expect(map.findSlot(0) == null);
+}
+
+test "buildQuotationSlotMap skips row-variable effects" {
+    // ( ..a quot: ( ..x -- ..y ) -- ..b )
+    const nested = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "..x", .is_row_variable = true }},
+        .outputs = &[_]StackEffectParam{.{ .name = "..y", .is_row_variable = true }},
+    };
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "quot", .quotation_effect = &nested },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "..b", .is_row_variable = true }},
+    };
+
+    const map = buildQuotationSlotMap(&effect);
+    try testing.expectEqual(@as(usize, 0), map.len);
+}
+
+test "buildQuotationSlotMap mixed concrete and row-variable" {
+    // ( ..a pred: ( x -- ? ) transform: ( ..c -- ..d ) -- ..a seq )
+    const concrete_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "x" }},
+        .outputs = &[_]StackEffectParam{.{ .name = "?" }},
+    };
+    const row_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "..c", .is_row_variable = true }},
+        .outputs = &[_]StackEffectParam{.{ .name = "..d", .is_row_variable = true }},
+    };
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "pred", .quotation_effect = &concrete_effect },
+            .{ .name = "transform", .quotation_effect = &row_effect },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "seq" },
+        },
+    };
+
+    const map = buildQuotationSlotMap(&effect);
+    try testing.expectEqual(@as(usize, 1), map.len);
+
+    // pred is concrete slot 0 (first non-row-variable input)
+    const info = map.findSlot(0).?;
+    try testing.expectEqual(@as(u8, 1), info.input_count);
+    try testing.expectEqual(@as(u8, 1), info.output_count);
+
+    // transform has row variables, not mapped
+    try testing.expect(map.findSlot(1) == null);
+}
+
+test "buildQuotationSlotMap with null effect" {
+    const map = buildQuotationSlotMap(null);
+    try testing.expectEqual(@as(usize, 0), map.len);
 }
