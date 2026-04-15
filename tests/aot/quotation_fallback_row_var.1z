@@ -1,0 +1,2 @@
+my-apply: ( x quot: ( ..a -- ..b ) -- ..b ) [ call ] ;
+42 [ ] my-apply

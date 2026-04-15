@@ -41,8 +41,20 @@ pub const IrCodegenError = error{
     UncompiledWords,
 };
 
+pub const QuotationFallbackReason = enum {
+    row_variables,
+    no_annotation,
+};
+
+pub const QuotationFallbackWarning = struct {
+    word_name: []const u8,
+    param_name: []const u8,
+    reason: QuotationFallbackReason,
+};
+
 pub const CodegenDiagnostics = struct {
     uncompiled_words: []const []const u8 = &.{},
+    quotation_fallbacks: []const QuotationFallbackWarning = &.{},
 };
 
 pub const CompiledWord = struct {
@@ -788,6 +800,35 @@ fn buildQuotationSlotMap(effect: ?*const StackEffect) QuotationSlotMap {
         concrete_idx += 1;
     }
     return map;
+}
+
+/// Collect diagnostic warnings for quotation parameters that could not be
+/// given concrete effect mappings. Called after buildQuotationSlotMap to
+/// identify parameters skipped due to row variables or missing annotations.
+fn collectQuotationFallbacks(
+    effect: ?*const StackEffect,
+    slot_map: *const QuotationSlotMap,
+    word_name: []const u8,
+    out: *std.ArrayListUnmanaged(QuotationFallbackWarning),
+    allocator: Allocator,
+) Allocator.Error!void {
+    const eff = effect orelse return;
+    var concrete_idx: usize = 0;
+    for (eff.inputs) |param| {
+        if (param.is_row_variable) continue;
+        defer concrete_idx += 1;
+        if (param.quotation_effect) |qe| {
+            if (slot_map.findSlot(concrete_idx) == null) {
+                // Has quotation_effect but was skipped -- must be row variables
+                _ = qe;
+                try out.append(allocator, .{
+                    .word_name = word_name,
+                    .param_name = param.name,
+                    .reason = .row_variables,
+                });
+            }
+        }
+    }
 }
 
 const AotStringLiteral = struct {
@@ -3315,6 +3356,27 @@ pub fn emitProgramC(
         if (body.ptr != raw_body.ptr) allocator.free(raw_body);
         try compiled_bodies.append(allocator, .{ .word_id = w.word_id, .body = body });
         try actually_compiled.put(allocator, w.word_id, {});
+    }
+
+    // Collect quotation fallback warnings for all words with stack effects.
+    {
+        var fallbacks: std.ArrayListUnmanaged(QuotationFallbackWarning) = .{};
+        for (words) |w| {
+            if (w.is_native) continue;
+            if (w.stack_effect == null) continue;
+            const slot_map = buildQuotationSlotMap(&w.stack_effect.?);
+            try collectQuotationFallbacks(
+                &w.stack_effect.?,
+                &slot_map,
+                w.name,
+                &fallbacks,
+                allocator,
+            );
+        }
+        if (fallbacks.items.len > 0) {
+            diagnostics.quotation_fallbacks = try allocator.dupe(QuotationFallbackWarning, fallbacks.items);
+        }
+        fallbacks.deinit(allocator);
     }
 
     // Strict codegen: verify all non-prelude input words were compiled.

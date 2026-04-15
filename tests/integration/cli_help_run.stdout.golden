@@ -13,6 +13,7 @@ Execution options:
   --debug                   Start in the interactive debugger
   --break=WORD              Set a breakpoint on WORD (implies --debug)
   --allow-all-recursion     Suppress non-tail recursion warnings
+  --allow-interpreter-fallback  Suppress quotation fallback warnings in AOT builds
   --compile=MODE            Set compile mode: off, eager, hybrid
   --trace-words[=PAT]       Trace word execution (optional pattern filter)
   --trace-resolve[=PAT]     Trace word resolution (optional pattern filter)

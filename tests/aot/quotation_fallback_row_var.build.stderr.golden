@@ -1,0 +1,2 @@
+Warning: 'my-apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Error: word '__entry__' could not be compiled to C

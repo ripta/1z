@@ -215,6 +215,7 @@ const ExecutionFlags = struct {
     allow_all_recursion: bool = false,
     compile_mode: context.CompileMode = .off,
     cli_set_compile: bool = false,
+    allow_interpreter_fallback: bool = false,
 };
 
 /// Result of attempting to parse a single argument as a flag.
@@ -370,6 +371,10 @@ fn parseExecutionFlag(
         state.allow_all_recursion = true;
         return .consumed;
     }
+    if (std.mem.eql(u8, arg, "--allow-interpreter-fallback")) {
+        state.allow_interpreter_fallback = true;
+        return .consumed;
+    }
     if (std.mem.startsWith(u8, arg, "--compile=")) {
         const value = arg["--compile=".len..];
         if (std.mem.eql(u8, value, "off")) {
@@ -452,6 +457,7 @@ const execution_flags_help =
     \\  --debug                   Start in the interactive debugger
     \\  --break=WORD              Set a breakpoint on WORD (implies --debug)
     \\  --allow-all-recursion     Suppress non-tail recursion warnings
+    \\  --allow-interpreter-fallback  Suppress quotation fallback warnings in AOT builds
     \\  --compile=MODE            Set compile mode: off, eager, hybrid
     \\  --trace-words[=PAT]       Trace word execution (optional pattern filter)
     \\  --trace-resolve[=PAT]     Trace word resolution (optional pattern filter)
@@ -1530,6 +1536,30 @@ fn collectLintFiles(allocator: std.mem.Allocator, dir_path: []const u8, list: *s
     return true;
 }
 
+fn printQuotationFallbackWarnings(
+    diagnostics: *ir_codegen.CodegenDiagnostics,
+    allow_interpreter_fallback: bool,
+    err_writer: anytype,
+    allocator: std.mem.Allocator,
+) void {
+    if (diagnostics.quotation_fallbacks.len == 0) return;
+    if (!allow_interpreter_fallback) {
+        for (diagnostics.quotation_fallbacks) |w| {
+            err_writer.print("Warning: '{s}' parameter '{s}' has {s}; quotation call falls back to interpreter\n", .{
+                w.word_name,
+                w.param_name,
+                @as([]const u8, switch (w.reason) {
+                    .row_variables => "row-variable effect",
+                    .no_annotation => "no effect annotation",
+                }),
+            }) catch {};
+        }
+        err_writer.flush() catch {};
+    }
+    allocator.free(diagnostics.quotation_fallbacks);
+    diagnostics.quotation_fallbacks = &.{};
+}
+
 fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
@@ -1542,6 +1572,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
 
     var source_file: ?[]const u8 = null;
     var output_path: ?[]const u8 = null;
+    var allow_interpreter_fallback = false;
     var static_libs: std.ArrayListUnmanaged([]const u8) = .{};
     defer static_libs.deinit(base_allocator);
 
@@ -1560,6 +1591,10 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         }
         const g = parseGlobalFlag(arg, &global, base_allocator, err_writer) catch return 1;
         if (g == .consumed) continue;
+        if (std.mem.eql(u8, arg, "--allow-interpreter-fallback")) {
+            allow_interpreter_fallback = true;
+            continue;
+        }
         if (std.mem.startsWith(u8, arg, "--link-static=")) {
             static_libs.append(base_allocator, arg["--link-static=".len..]) catch {
                 err_writer.writeAll("Error: out of memory\n") catch {};
@@ -1695,6 +1730,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         &codegen_diagnostics,
         allocator,
     ) catch |err| {
+        printQuotationFallbackWarnings(&codegen_diagnostics, allow_interpreter_fallback, err_writer, allocator);
         if (err == error.UncompiledWords) {
             for (codegen_diagnostics.uncompiled_words) |name| {
                 err_writer.print(
@@ -1710,6 +1746,8 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         return 1;
     };
     defer allocator.free(c_source);
+
+    printQuotationFallbackWarnings(&codegen_diagnostics, allow_interpreter_fallback, err_writer, allocator);
 
     // Write C source to a temp file.
     const tmpdir = std.posix.getenv("TMPDIR") orelse "/tmp";

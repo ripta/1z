@@ -1,0 +1,2 @@
+my-apply: ( x quot: ( x -- y ) -- y ) [ call ] ;
+"ok" print-line
