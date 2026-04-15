@@ -408,6 +408,7 @@ fn buildAotDescs(
             .output_count = @intCast(effect.outputs.len),
             .word_id = id,
             .is_prelude = prelude_words.contains(name),
+            .stack_effect = effect,
         });
     }
 
@@ -428,6 +429,7 @@ fn buildAotDescs(
             .word_id = id,
             .is_prelude = true,
             .is_native = true,
+            .stack_effect = effect,
         });
     }
 

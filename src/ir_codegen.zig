@@ -77,6 +77,9 @@ pub const AotWordDesc = struct {
     /// so that non-prelude words calling them are not rejected, but they
     /// must not enter compiled_names or be trial-compiled.
     is_native: bool = false,
+    /// Full stack effect declaration for this word. Used by the compiler
+    /// to track stack shapes through quotation calls.
+    stack_effect: ?StackEffect = null,
 };
 
 const supported_binary_ops = [_][]const u8{ "+", "-", "*", "/", "div", "rem", "%" };
@@ -727,6 +730,9 @@ const CompileState = struct {
     /// ensure the value stack has enough capacity before entering compiled
     /// code.
     peak_sp: u32 = 0,
+    /// Stack effect of the word being compiled. Used to resolve quotation
+    /// parameter effects through calls.
+    stack_effect: ?*const StackEffect = null,
 };
 
 const AotStringLiteral = struct {
@@ -2344,6 +2350,7 @@ pub fn compileWord(
     self_name: ?[]const u8,
     interp_ctx: ?*const Context,
     mutual_group: ?[]const []const u8,
+    stack_effect: ?*const StackEffect,
 ) IrCodegenError!CompiledWord {
     ValueLayout.ensureInit();
 
@@ -2501,6 +2508,7 @@ pub fn compileWord(
         .interp_ctx = interp_ctx,
         .error_propagate_status = error_propagate_status,
         .peak_sp = @intCast(input_count),
+        .stack_effect = stack_effect,
     };
 
     // If this word contains a self-tail-call, wrap the body in a LOOP_BEGIN
@@ -2824,6 +2832,7 @@ pub fn emitWordCAot(
     aot_compiled_names: *const std.StringHashMapUnmanaged(u32),
     string_literals: ?*std.ArrayListUnmanaged(AotStringLiteral),
     allocator: Allocator,
+    stack_effect: ?*const StackEffect,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     ValueLayout.ensureInit();
 
@@ -2995,6 +3004,7 @@ pub fn emitWordCAot(
         .call_quotation_fn = call_quotation_fn,
         .preloaded_ctx_val = preloaded_ctx_val,
         .aot_string_literals = string_literals,
+        .stack_effect = stack_effect,
     };
 
     // Self-tail-call detection for AOT
@@ -3187,7 +3197,7 @@ pub fn emitProgramC(
     // Pass 1: trial compile to discover the compilable set.
     var compilable_names: std.StringHashMapUnmanaged(u32) = .{};
     defer compilable_names.deinit(allocator);
-    for (words) |w| {
+    for (words) |*w| {
         if (w.is_native) continue;
         const trial = emitWordCAot(
             w.instructions,
@@ -3199,6 +3209,7 @@ pub fn emitProgramC(
             &compiled_names,
             null,
             allocator,
+            if (w.stack_effect != null) &w.stack_effect.? else null,
         ) catch continue;
         allocator.free(trial);
         try compilable_names.put(allocator, w.name, w.word_id);
@@ -3218,7 +3229,7 @@ pub fn emitProgramC(
     var actually_compiled: std.AutoHashMapUnmanaged(u32, void) = .{};
     defer actually_compiled.deinit(allocator);
 
-    for (words) |w| {
+    for (words) |*w| {
         if (!compilable_names.contains(w.name)) continue;
         const raw_body = emitWordCAot(
             w.instructions,
@@ -3230,6 +3241,7 @@ pub fn emitProgramC(
             &compilable_names,
             &string_literals,
             allocator,
+            if (w.stack_effect != null) &w.stack_effect.? else null,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -3988,7 +4000,7 @@ fn callCompiledValues(func: CompiledFn, values: []Value, sp: *usize) i32 {
 
 test "compile double: 2 *" {
     const instrs = makeInstructions(.{ @as(i64, 2), "*" });
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4001,7 +4013,7 @@ test "compile double: 2 *" {
 
 test "compile (a+3)*4" {
     const instrs = makeInstructions(.{ @as(i64, 3), "+", @as(i64, 4), "*" });
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4012,7 +4024,7 @@ test "compile (a+3)*4" {
 
 test "compile a+b with two inputs" {
     const instrs = makeInstructions(.{"+"});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4026,7 +4038,7 @@ test "compiled direct call preserves aliased lower stack values" {
     defer dispatch.deinit();
 
     const callee_instrs = makeInstructions(.{"+"});
-    const callee = try compileWord(&callee_instrs, 2, 1, null, null, null, null);
+    const callee = try compileWord(&callee_instrs, 2, 1, null, null, null, null, null);
     const callee_id = try dispatch.assignId("sum2");
     dispatch.update(callee_id, callee.code_ptr, callee.jit_buf, callee.peak_stack_depth);
 
@@ -4052,7 +4064,7 @@ test "compiled direct call preserves aliased lower stack values" {
     };
 
     const caller_instrs = makeInstructions(.{ @as(i64, 1), "-", "over", "swap", "sum2", "*" });
-    const caller = try compileWord(&caller_instrs, 2, 1, resolver, null, null, null);
+    const caller = try compileWord(&caller_instrs, 2, 1, resolver, null, null, null, null);
     defer caller.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(caller.code_ptr));
@@ -4063,7 +4075,7 @@ test "compiled direct call preserves aliased lower stack values" {
 
 test "overflow bails out" {
     const instrs = makeInstructions(.{ std.math.maxInt(i64), "+" });
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4075,7 +4087,7 @@ test "overflow bails out" {
 
 test "overflow preserves sp" {
     const instrs = makeInstructions(.{ std.math.maxInt(i64), "+" });
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4088,7 +4100,7 @@ test "overflow preserves sp" {
 
 test "division by zero bails out" {
     const instrs = makeInstructions(.{"/"});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4100,7 +4112,7 @@ test "division by zero bails out" {
 
 test "division minInt/-1 bails out" {
     const instrs = makeInstructions(.{"/"});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4110,7 +4122,7 @@ test "division minInt/-1 bails out" {
 
 test "bail on non-fixnum input" {
     const instrs = makeInstructions(.{ @as(i64, 1), "+" });
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4123,7 +4135,7 @@ test "bail on non-fixnum input" {
 
 test "bail on stack underflow" {
     const instrs = makeInstructions(.{"+"});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4138,7 +4150,7 @@ test "compile string literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .string = "hello" } }, .line = 1 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4155,7 +4167,7 @@ test "compile float literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .float = 3.14 } }, .line = 1 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4172,7 +4184,7 @@ test "compile boolean literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4189,7 +4201,7 @@ test "compile symbol literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .symbol = "foo" } }, .line = 1 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4206,7 +4218,7 @@ test "compile unit literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .unit }, .line = 1 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4223,7 +4235,7 @@ test "arithmetic on opaque operand bails at runtime" {
         .{ .op = .{ .push_literal = .{ .string = "hello" } }, .line = 1 },
         .{ .op = .{ .call_word = "+" }, .line = 2 },
     };
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4237,7 +4249,7 @@ test "arithmetic on opaque operand bails at runtime" {
 
 test "bail on float input to arithmetic" {
     const instrs = makeInstructions(.{ @as(i64, 1), "+" });
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4250,7 +4262,7 @@ test "bail on float input to arithmetic" {
 
 test "bail on boolean input to arithmetic" {
     const instrs = makeInstructions(.{ @as(i64, 1), "+" });
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4265,7 +4277,7 @@ test "fixnum literal still works after refactor" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 1 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4282,12 +4294,12 @@ test "reject non-compilable: unsupported word" {
     const instrs = [_]Instruction{
         .{ .op = .{ .call_word = "print" }, .line = 1 },
     };
-    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 1, 1, null, null, null, null));
+    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 1, 1, null, null, null, null, null));
 }
 
 test "compile with output_count 2" {
     const instrs = makeInstructions(.{ @as(i64, 10), @as(i64, 20) });
-    const result = try compileWord(&instrs, 0, 2, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 2, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4302,7 +4314,7 @@ test "compile with output_count 2" {
 
 test "rem with div-by-zero guard" {
     const instrs = makeInstructions(.{"rem"});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4316,7 +4328,7 @@ test "rem with div-by-zero guard" {
 
 test "compile dup on fixnum" {
     const instrs = makeInstructions(.{"dup"});
-    const result = try compileWord(&instrs, 1, 2, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 2, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4332,7 +4344,7 @@ test "compile dup on fixnum" {
 
 test "compile drop on fixnum" {
     const instrs = makeInstructions(.{"drop"});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4346,7 +4358,7 @@ test "compile drop on fixnum" {
 
 test "compile swap on fixnums" {
     const instrs = makeInstructions(.{"swap"});
-    const result = try compileWord(&instrs, 2, 2, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 2, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4361,7 +4373,7 @@ test "compile swap on fixnums" {
 
 test "compile over on fixnums" {
     const instrs = makeInstructions(.{"over"});
-    const result = try compileWord(&instrs, 2, 3, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 3, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4379,7 +4391,7 @@ test "compile over on fixnums" {
 
 test "compile dup * (square)" {
     const instrs = makeInstructions(.{ "dup", "*" });
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4392,7 +4404,7 @@ test "compile dup * (square)" {
 
 test "compile swap - (reverse subtract)" {
     const instrs = makeInstructions(.{ "swap", "-" });
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4403,7 +4415,7 @@ test "compile swap - (reverse subtract)" {
 
 test "compile swap drop (nip)" {
     const instrs = makeInstructions(.{ "swap", "drop" });
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4417,7 +4429,7 @@ test "compile non-fixnum literal dup" {
         .{ .op = .{ .push_literal = .{ .string = "hello" } }, .line = 1 },
         .{ .op = .{ .call_word = "dup" }, .line = 2 },
     };
-    const result = try compileWord(&instrs, 0, 2, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 2, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4438,7 +4450,7 @@ test "compile non-fixnum literal swap" {
         .{ .op = .{ .push_literal = .{ .string = "bbb" } }, .line = 2 },
         .{ .op = .{ .call_word = "swap" }, .line = 3 },
     };
-    const result = try compileWord(&instrs, 0, 2, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 2, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4455,7 +4467,7 @@ test "compile non-fixnum literal swap" {
 
 test "compile = comparison" {
     const instrs = makeInstructions(.{"="});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4481,7 +4493,7 @@ test "compile = comparison" {
 
 test "compile < comparison" {
     const instrs = makeInstructions(.{"<"});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4505,7 +4517,7 @@ test "compile < comparison" {
 
 test "compile > comparison" {
     const instrs = makeInstructions(.{">"});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4529,7 +4541,7 @@ test "compile > comparison" {
 
 test "compile comparison on non-fixnum bails" {
     const instrs = makeInstructions(.{"="});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4552,7 +4564,7 @@ test "compile if with bool condition" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4577,7 +4589,7 @@ test "compile if with false condition" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4602,7 +4614,7 @@ test "compile comparison + if" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4641,7 +4653,7 @@ test "compile if with arithmetic in branches" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4666,7 +4678,7 @@ test "compile if with stack shape mismatch fails" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    try testing.expectError(IrCodegenError.StackShapeMismatch, compileWord(&instrs, 0, 1, null, null, null, null));
+    try testing.expectError(IrCodegenError.StackShapeMismatch, compileWord(&instrs, 0, 1, null, null, null, null, null));
 }
 
 test "compile if with non-compilable body fails" {
@@ -4682,7 +4694,7 @@ test "compile if with non-compilable body fails" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 0, 1, null, null, null, null));
+    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 0, 1, null, null, null, null, null));
 }
 
 test "compile float dup" {
@@ -4690,7 +4702,7 @@ test "compile float dup" {
         .{ .op = .{ .push_literal = .{ .float = 2.5 } }, .line = 1 },
         .{ .op = .{ .call_word = "dup" }, .line = 2 },
     };
-    const result = try compileWord(&instrs, 0, 2, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 2, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4710,7 +4722,7 @@ test "compile float swap" {
         .{ .op = .{ .push_literal = .{ .float = 2.0 } }, .line = 2 },
         .{ .op = .{ .call_word = "swap" }, .line = 3 },
     };
-    const result = try compileWord(&instrs, 0, 2, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 2, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4737,7 +4749,7 @@ test "compile float if-else merge" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4762,7 +4774,7 @@ test "compile float truthiness in if" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4780,7 +4792,7 @@ test "compile float addition" {
         .{ .op = .{ .push_literal = .{ .float = 2.5 } }, .line = 2 },
         .{ .op = .{ .call_word = "+" }, .line = 3 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4798,7 +4810,7 @@ test "compile float subtraction" {
         .{ .op = .{ .push_literal = .{ .float = 2.0 } }, .line = 2 },
         .{ .op = .{ .call_word = "-" }, .line = 3 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4816,7 +4828,7 @@ test "compile float multiplication" {
         .{ .op = .{ .push_literal = .{ .float = 3.0 } }, .line = 2 },
         .{ .op = .{ .call_word = "*" }, .line = 3 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4834,7 +4846,7 @@ test "compile float division" {
         .{ .op = .{ .push_literal = .{ .float = 2.0 } }, .line = 2 },
         .{ .op = .{ .call_word = "/" }, .line = 3 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4852,7 +4864,7 @@ test "compile float comparison =" {
         .{ .op = .{ .push_literal = .{ .float = 1.5 } }, .line = 2 },
         .{ .op = .{ .call_word = "=" }, .line = 3 },
     };
-    const result_eq = try compileWord(&instrs_eq, 0, 1, null, null, null, null);
+    const result_eq = try compileWord(&instrs_eq, 0, 1, null, null, null, null, null);
     defer result_eq.jit_buf.deinit();
 
     const func_eq: CompiledFn = @ptrCast(@alignCast(result_eq.code_ptr));
@@ -4868,7 +4880,7 @@ test "compile float comparison =" {
         .{ .op = .{ .push_literal = .{ .float = 2.5 } }, .line = 2 },
         .{ .op = .{ .call_word = "=" }, .line = 3 },
     };
-    const result_ne = try compileWord(&instrs_ne, 0, 1, null, null, null, null);
+    const result_ne = try compileWord(&instrs_ne, 0, 1, null, null, null, null, null);
     defer result_ne.jit_buf.deinit();
 
     const func_ne: CompiledFn = @ptrCast(@alignCast(result_ne.code_ptr));
@@ -4885,7 +4897,7 @@ test "compile float comparison <" {
         .{ .op = .{ .push_literal = .{ .float = 2.5 } }, .line = 2 },
         .{ .op = .{ .call_word = "<" }, .line = 3 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4903,7 +4915,7 @@ test "compile float comparison >" {
         .{ .op = .{ .push_literal = .{ .float = 1.5 } }, .line = 2 },
         .{ .op = .{ .call_word = ">" }, .line = 3 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4922,7 +4934,7 @@ test "compile float + raw_at_slot input" {
         .{ .op = .{ .push_literal = .{ .float = 1.5 } }, .line = 1 },
         .{ .op = .{ .call_word = "+" }, .line = 2 },
     };
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4942,7 +4954,7 @@ test "div with float operand bails" {
         .{ .op = .{ .push_literal = .{ .float = 2.0 } }, .line = 2 },
         .{ .op = .{ .call_word = "div" }, .line = 3 },
     };
-    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 0, 1, null, null, null, null));
+    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 0, 1, null, null, null, null, null));
 }
 
 test "% with float operand bails" {
@@ -4951,7 +4963,7 @@ test "% with float operand bails" {
         .{ .op = .{ .push_literal = .{ .float = 2.0 } }, .line = 2 },
         .{ .op = .{ .call_word = "%" }, .line = 3 },
     };
-    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 0, 1, null, null, null, null));
+    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 0, 1, null, null, null, null, null));
 }
 
 test "compile inline virtual-unwrap" {
@@ -4966,7 +4978,7 @@ test "compile inline virtual-unwrap" {
         .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 3 },
     };
 
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -4991,7 +5003,7 @@ test "inline virtual-unwrap bails on wrong vtype" {
         .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 3 },
     };
 
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -5009,7 +5021,7 @@ test "inline virtual-unwrap bails on non-tagged value" {
         .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 2 },
     };
 
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -5028,7 +5040,7 @@ test "inline virtual-unwrap on input parameter" {
         .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 2 },
     };
 
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -5052,7 +5064,7 @@ test "inline virtual-unwrap then arithmetic" {
         .{ .op = .{ .call_word = "+" }, .line = 4 },
     };
 
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -5076,7 +5088,7 @@ test "compile inline struct-field-get field 0" {
         .{ .op = .{ .call_word = "native.struct-field-get" }, .line = 4 },
     };
 
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -5100,7 +5112,7 @@ test "compile inline struct-field-get field 1" {
         .{ .op = .{ .call_word = "native.struct-field-get" }, .line = 4 },
     };
 
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -5123,7 +5135,7 @@ test "inline struct-field-get on input parameter" {
         .{ .op = .{ .call_word = "native.struct-field-get" }, .line = 3 },
     };
 
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -5144,7 +5156,7 @@ test "inline struct-field-get bails on non-struct value" {
         .{ .op = .{ .call_word = "native.struct-field-get" }, .line = 3 },
     };
 
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -5165,7 +5177,7 @@ test "inline struct-field-get bails on wrong struct type" {
         .{ .op = .{ .call_word = "native.struct-field-get" }, .line = 3 },
     };
 
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -5186,7 +5198,7 @@ test "compile inline typed-validate-and-promote with fixnum" {
         .{ .op = .{ .call_word = "native.typed-validate-and-promote" }, .line = 3 },
     };
 
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -5210,7 +5222,7 @@ test "compile inline typed-validate-and-promote with float" {
         .{ .op = .{ .call_word = "native.typed-validate-and-promote" }, .line = 3 },
     };
 
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -5233,7 +5245,7 @@ test "inline typed-validate-and-promote bails on type mismatch" {
         .{ .op = .{ .call_word = "native.typed-validate-and-promote" }, .line = 2 },
     };
 
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -5252,7 +5264,7 @@ test "inline typed-validate-and-promote no-op when no type_params" {
         .{ .op = .{ .call_word = "native.typed-validate-and-promote" }, .line = 3 },
     };
 
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -5275,7 +5287,7 @@ test "inline typed-validate-and-promote on input parameter" {
         .{ .op = .{ .call_word = "native.typed-validate-and-promote" }, .line = 2 },
     };
 
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -5301,7 +5313,7 @@ test "inline typed-validate-and-promote then arithmetic" {
         .{ .op = .{ .call_word = "+" }, .line = 5 },
     };
 
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -5413,6 +5425,7 @@ test "emitWordCAot emits named callback for safepoint" {
         &compiled_names,
         null,
         testing.allocator,
+        null,
     ) catch |err| {
         // times requires a quotation on stack which we don't have in this
         // minimal test -- NotCompilable is expected. Skip this test case
@@ -5443,6 +5456,7 @@ test "emitWordCAot basic arithmetic" {
         &compiled_names,
         null,
         testing.allocator,
+        null,
     );
     defer testing.allocator.free(source);
 

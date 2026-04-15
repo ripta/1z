@@ -841,7 +841,7 @@ fn compileSingleWord(ctx: *Context, sym: []const u8, mutual_group: ?[]const []co
         .dispatch_table_ptr = @ptrCast(&ctx.jit_dispatch),
     };
 
-    const compiled = ir_codegen.compileWord(instrs, input_count, output_count, resolver, sym, ctx, mutual_group) catch {
+    const compiled = ir_codegen.compileWord(instrs, input_count, output_count, resolver, sym, ctx, mutual_group, &effect) catch {
         return error.TypeMismatch;
     };
 

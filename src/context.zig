@@ -1223,7 +1223,7 @@ pub const Context = struct {
             .dispatch_table_ptr = @ptrCast(&self.jit_dispatch),
         };
 
-        const compiled = ir_codegen.compileWord(instrs, input_count, output_count, resolver, name, self, null) catch return;
+        const compiled = ir_codegen.compileWord(instrs, input_count, output_count, resolver, name, self, null, &effect) catch return;
 
         const final_id = if (def.word_id) |existing_id| blk: {
             if (self.jit_dispatch.get(existing_id) != null) {
