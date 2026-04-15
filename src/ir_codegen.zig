@@ -1706,7 +1706,15 @@ fn compileInstructions(
 
                             c._ir_MERGE_2(ctx, end_fallback, end_compiled);
 
-                            state.dynamic_call_emitted = true;
+                            if (state.quotation_slots.findSlot(s)) |info| {
+                                // Concrete effect known: apply it to the abstract stack
+                                // and continue compilation.
+                                if (sp.* < info.input_count) return IrCodegenError.StackUnderflow;
+                                sp.* = sp.* - info.input_count + info.output_count;
+                                resetStackToPhysical(stack, sp.*);
+                            } else {
+                                state.dynamic_call_emitted = true;
+                            }
                         },
                         .i64_ref, .f64_ref, .bool_ref => return IrCodegenError.NotCompilable,
                     }
@@ -5723,4 +5731,81 @@ test "buildQuotationSlotMap mixed concrete and row-variable" {
 test "buildQuotationSlotMap with null effect" {
     const map = buildQuotationSlotMap(null);
     try testing.expectEqual(@as(usize, 0), map.len);
+}
+
+test "concrete quotation effect continues compilation past call" {
+    // ( x quot: ( x -- y ) -- y y )  body: call dup
+    // Without concrete effect tracking, `dup` after `call` would return NotCompilable.
+    const nested = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "x" }},
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "x" },
+            .{ .name = "quot", .quotation_effect = &nested },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "y" },
+            .{ .name = "y'" },
+        },
+    };
+    const instrs = makeInstructions(.{ "call", "dup" });
+    const result = try compileWord(&instrs, 2, 2, null, null, null, null, &effect);
+    defer result.jit_buf.deinit();
+}
+
+test "call on raw slot without effect returns NotCompilable on next instruction" {
+    // ( x quot -- y y )  body: call dup -- no stack effect, so call sets
+    // dynamic_call_emitted and dup fails.
+    const instrs = makeInstructions(.{ "call", "dup" });
+    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 2, 2, null, null, null, null, null));
+}
+
+test "concrete quotation effect adjusts sp for multi-output" {
+    // ( x quot: ( x -- a b ) -- a b )  body: call
+    // Effect is (1 in, 2 out), so sp goes from 1 to 2 after call.
+    const nested = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "x" }},
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "a" },
+            .{ .name = "b" },
+        },
+    };
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "x" },
+            .{ .name = "quot", .quotation_effect = &nested },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "a" },
+            .{ .name = "b" },
+        },
+    };
+    const instrs = makeInstructions(.{"call"});
+    const result = try compileWord(&instrs, 2, 2, null, null, null, null, &effect);
+    defer result.jit_buf.deinit();
+}
+
+test "concrete quotation effect adjusts sp for consuming call" {
+    // ( x y quot: ( a b -- ) -- )  body: call
+    // Effect is (2 in, 0 out), so sp goes from 2 to 0 after call.
+    const nested = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "a" },
+            .{ .name = "b" },
+        },
+        .outputs = &[_]StackEffectParam{},
+    };
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "x" },
+            .{ .name = "y" },
+            .{ .name = "quot", .quotation_effect = &nested },
+        },
+        .outputs = &[_]StackEffectParam{},
+    };
+    const instrs = makeInstructions(.{"call"});
+    const result = try compileWord(&instrs, 3, 0, null, null, null, null, &effect);
+    defer result.jit_buf.deinit();
 }
