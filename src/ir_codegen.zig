@@ -743,6 +743,9 @@ const CompileState = struct {
     /// Accumulator for string/symbol literals encountered during AOT compilation.
     /// Each entry gets emitted as a `static const char[]` in the C preamble.
     aot_string_literals: ?*std.ArrayListUnmanaged(AotStringLiteral) = null,
+    /// Accumulator for quotation literals encountered during AOT compilation.
+    /// Each entry gets emitted as a `static const unsigned char[]` in the C preamble.
+    aot_quotation_literals: ?*std.ArrayListUnmanaged(AotQuotationLiteral) = null,
     /// Peak abstract stack pointer reached during compilation. Used to
     /// ensure the value stack has enough capacity before entering compiled
     /// code.
@@ -1338,21 +1341,224 @@ fn resolveOperandPair(entry_a: StackEntry, entry_b: StackEntry, state: *CompileS
     return IrCodegenError.NotCompilable;
 }
 
+const AotQuotationLiteral = struct {
+    data: []const u8,
+};
+
+/// Serialize a quotation's instruction slice into a portable byte array
+/// suitable for embedding as a C constant. The format is:
+///   [u32 instruction_count]
+///   per instruction:
+///     [u32 line] [u32 column] [u8 op_tag: 0=push_literal, 1=call_word]
+///     push_literal: [u8 value_tag] + payload
+///       0=fixnum: [i64]  1=float: [f64]  2=bool: [u8]
+///       3=string: [u32 len][bytes]  4=symbol: [u32 len][bytes]
+///       5=quotation: [recursive]
+///     call_word: [u32 name_len][bytes]
+fn serializeQuotationInstructions(instructions: []const Instruction, allocator: Allocator) ![]u8 {
+    var buf = std.ArrayListUnmanaged(u8){};
+    errdefer buf.deinit(allocator);
+    try serializeInstructionsInto(&buf, instructions, allocator);
+    return buf.toOwnedSlice(allocator);
+}
+
+fn serializeInstructionsInto(buf: *std.ArrayListUnmanaged(u8), instructions: []const Instruction, allocator: Allocator) !void {
+    const count: u32 = @intCast(instructions.len);
+    try buf.appendSlice(allocator, std.mem.asBytes(&count));
+    for (instructions) |instr| {
+        const line: u32 = @intCast(instr.line);
+        const col: u32 = @intCast(instr.column);
+        try buf.appendSlice(allocator, std.mem.asBytes(&line));
+        try buf.appendSlice(allocator, std.mem.asBytes(&col));
+        switch (instr.op) {
+            .push_literal => |val| {
+                try buf.append(allocator, 0); // op tag: push_literal
+                switch (val) {
+                    .fixnum => |v| {
+                        try buf.append(allocator, 0);
+                        try buf.appendSlice(allocator, std.mem.asBytes(&v));
+                    },
+                    .float => |v| {
+                        try buf.append(allocator, 1);
+                        try buf.appendSlice(allocator, std.mem.asBytes(&v));
+                    },
+                    .boolean => |v| {
+                        try buf.append(allocator, 2);
+                        try buf.append(allocator, @intFromBool(v));
+                    },
+                    .string => |v| {
+                        try buf.append(allocator, 3);
+                        const len: u32 = @intCast(v.len);
+                        try buf.appendSlice(allocator, std.mem.asBytes(&len));
+                        try buf.appendSlice(allocator, v);
+                    },
+                    .symbol => |v| {
+                        try buf.append(allocator, 4);
+                        const len: u32 = @intCast(v.len);
+                        try buf.appendSlice(allocator, std.mem.asBytes(&len));
+                        try buf.appendSlice(allocator, v);
+                    },
+                    .quotation => |q| {
+                        try buf.append(allocator, 5);
+                        try serializeInstructionsInto(buf, q.instructions, allocator);
+                    },
+                    else => return IrCodegenError.NotCompilable,
+                }
+            },
+            .call_word => |name| {
+                try buf.append(allocator, 1); // op tag: call_word
+                const len: u32 = @intCast(name.len);
+                try buf.appendSlice(allocator, std.mem.asBytes(&len));
+                try buf.appendSlice(allocator, name);
+            },
+        }
+    }
+}
+
+fn deserializeQuotationInstructions(data: []const u8, allocator: Allocator) ![]Instruction {
+    var offset: usize = 0;
+    return deserializeInstructionsAt(data, &offset, allocator);
+}
+
+fn deserializeInstructionsAt(data: []const u8, offset: *usize, allocator: Allocator) ![]Instruction {
+    if (offset.* + 4 > data.len) return error.OutOfMemory;
+    const count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+    offset.* += 4;
+    const instructions = try allocator.alloc(Instruction, count);
+    for (instructions) |*instr| {
+        if (offset.* + 9 > data.len) return error.OutOfMemory; // line(4)+col(4)+op_tag(1)
+        const line = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+        offset.* += 4;
+        const col = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+        offset.* += 4;
+        const op_tag = data[offset.*];
+        offset.* += 1;
+        if (op_tag == 0) {
+            // push_literal
+            if (offset.* >= data.len) return error.OutOfMemory;
+            const val_tag = data[offset.*];
+            offset.* += 1;
+            const val: Value = switch (val_tag) {
+                0 => blk: { // fixnum
+                    if (offset.* + 8 > data.len) return error.OutOfMemory;
+                    const v = std.mem.readInt(i64, data[offset.*..][0..8], .little);
+                    offset.* += 8;
+                    break :blk .{ .fixnum = v };
+                },
+                1 => blk: { // float
+                    if (offset.* + 8 > data.len) return error.OutOfMemory;
+                    const v = @as(f64, @bitCast(std.mem.readInt(u64, data[offset.*..][0..8], .little)));
+                    offset.* += 8;
+                    break :blk .{ .float = v };
+                },
+                2 => blk: { // bool
+                    if (offset.* >= data.len) return error.OutOfMemory;
+                    const v = data[offset.*] != 0;
+                    offset.* += 1;
+                    break :blk .{ .boolean = v };
+                },
+                3 => blk: { // string
+                    if (offset.* + 4 > data.len) return error.OutOfMemory;
+                    const slen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+                    offset.* += 4;
+                    if (offset.* + slen > data.len) return error.OutOfMemory;
+                    const copy = try allocator.dupe(u8, data[offset.*..][0..slen]);
+                    offset.* += slen;
+                    break :blk .{ .string = copy };
+                },
+                4 => blk: { // symbol
+                    if (offset.* + 4 > data.len) return error.OutOfMemory;
+                    const slen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+                    offset.* += 4;
+                    if (offset.* + slen > data.len) return error.OutOfMemory;
+                    const copy = try allocator.dupe(u8, data[offset.*..][0..slen]);
+                    offset.* += slen;
+                    break :blk .{ .symbol = copy };
+                },
+                5 => blk: { // quotation
+                    const nested = try deserializeInstructionsAt(data, offset, allocator);
+                    break :blk .{ .quotation = .{ .instructions = nested } };
+                },
+                else => return error.OutOfMemory,
+            };
+            instr.* = .{ .op = .{ .push_literal = val }, .line = line, .column = col };
+        } else if (op_tag == 1) {
+            // call_word
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const nlen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            if (offset.* + nlen > data.len) return error.OutOfMemory;
+            const name_copy = try allocator.dupe(u8, data[offset.*..][0..nlen]);
+            offset.* += nlen;
+            instr.* = .{ .op = .{ .call_word = name_copy }, .line = line, .column = col };
+        } else {
+            return error.OutOfMemory;
+        }
+    }
+    return instructions;
+}
+
 /// Materialize any quotation_body entries as raw Values on the physical stack.
 /// flushToPhysicalStack skips quotation_body since it's normally consumed by
 /// `if`/`call`, but callback-based ops need them as proper Values for the
 /// interpreter to pop.
-fn materializeQuotations(state: *CompileState, stack: *[64]StackEntry, sp: usize) void {
+///
+/// In AOT mode, quotation bodies are serialized to byte arrays and pushed
+/// via the jitPushQuotation callback, avoiding dangling instruction pointers.
+fn materializeQuotations(state: *CompileState, stack: *[64]StackEntry, sp: usize) IrCodegenError!void {
     const ctx = state.ctx;
     const base_addr = state.base_addr;
     for (0..sp) |qi| {
         switch (stack[qi]) {
             .quotation_body => |body| {
-                const qval = Value{ .quotation = .{ .instructions = body, .code_ptr = null } };
-                const slot_byte_offset = c.ir_const_addr(ctx, qi * ValueLayout.value_size);
-                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                emitPushValue(ctx, &qval, dest_addr);
-                stack[qi] = .{ .raw_at_slot = qi };
+                if (state.aot_mode) {
+                    // Serialize the instruction body and record it for C emission.
+                    const serialized = serializeQuotationInstructions(body, std.heap.page_allocator) catch
+                        return IrCodegenError.NotCompilable;
+
+                    const lit_id = if (state.aot_quotation_literals) |lits| lits.items.len else 0;
+
+                    if (state.aot_quotation_literals) |lits| {
+                        lits.append(std.heap.page_allocator, .{ .data = serialized }) catch
+                            return IrCodegenError.NotCompilable;
+                    }
+
+                    // Emit callback: jitPushQuotation(ctx, data_ptr, data_len, dest_addr)
+                    // Writes the quotation Value directly to the slot address
+                    // rather than pushing to the stack top.
+                    const proto_4arg = c.ir_proto_4(ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+                    const push_fn = c.ir_const_func(ctx, c.ir_str(ctx, "onez_push_quotation"), proto_4arg);
+
+                    const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+                        state.preloaded_ctx_val
+                    else blk: {
+                        JitContextLayout.ensureInit();
+                        const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+                        const ctx_addr2 = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+                        break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr2);
+                    };
+
+                    // Reference the quotation data via a named symbol.
+                    var sym_buf: [32]u8 = undefined;
+                    const sym_name = std.fmt.bufPrint(&sym_buf, "onez_quot_{d}", .{lit_id}) catch unreachable;
+                    const sym_ref = c.ir_const_func(ctx, c.ir_strl(ctx, &sym_buf, sym_name.len), 0);
+                    const data_len_const = c.ir_const_addr(ctx, serialized.len);
+
+                    // Compute destination address for this slot.
+                    const slot_byte_offset = c.ir_const_addr(ctx, qi * ValueLayout.value_size);
+                    const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+
+                    const call_result = c._ir_CALL_4(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, data_len_const, dest_addr);
+                    emitCallbackPostCheck(state, call_result, state.error_propagate_status);
+
+                    stack[qi] = .{ .raw_at_slot = qi };
+                } else {
+                    const qval = Value{ .quotation = .{ .instructions = body, .code_ptr = null } };
+                    const slot_byte_offset = c.ir_const_addr(ctx, qi * ValueLayout.value_size);
+                    const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                    emitPushValue(ctx, &qval, dest_addr);
+                    stack[qi] = .{ .raw_at_slot = qi };
+                }
             },
             else => {},
         }
@@ -2378,7 +2584,7 @@ fn compileInstructions(
                 } else if (isErrorHandlingOp(name)) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
 
-                    materializeQuotations(state, stack, sp.*);
+                    try materializeQuotations(state, stack, sp.*);
                     flushToPhysicalStack(state, stack, sp.*);
                     const ctx_val = emitCallbackPreamble(state, sp.*);
 
@@ -2397,7 +2603,7 @@ fn compileInstructions(
                     const required: usize = if (is_get) 1 else 3;
                     if (sp.* < required) return IrCodegenError.StackUnderflow;
 
-                    materializeQuotations(state, stack, sp.*);
+                    try materializeQuotations(state, stack, sp.*);
                     flushToPhysicalStack(state, stack, sp.*);
                     const ctx_val = emitCallbackPreamble(state, sp.*);
 
@@ -2418,7 +2624,7 @@ fn compileInstructions(
                     const effects = iteratorEffects(opcode);
                     if (sp.* < effects.inputs) return IrCodegenError.StackUnderflow;
 
-                    materializeQuotations(state, stack, sp.*);
+                    try materializeQuotations(state, stack, sp.*);
                     flushToPhysicalStack(state, stack, sp.*);
                     const ctx_val = emitCallbackPreamble(state, sp.*);
 
@@ -2530,7 +2736,7 @@ fn compileInstructions(
                     if (resolved.native_fn_ptr != null) {
                         if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
 
-                        materializeQuotations(state, stack, sp.*);
+                        try materializeQuotations(state, stack, sp.*);
                         flushToPhysicalStack(state, stack, sp.*);
                         const ctx_val = emitCallbackPreamble(state, sp.*);
 
@@ -2555,7 +2761,7 @@ fn compileInstructions(
                     if (resolved.native_fn_ptr != null) {
                         if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
 
-                        materializeQuotations(state, stack, sp.*);
+                        try materializeQuotations(state, stack, sp.*);
                         flushToPhysicalStack(state, stack, sp.*);
                         const ctx_val = emitCallbackPreamble(state, sp.*);
 
@@ -2580,7 +2786,7 @@ fn compileInstructions(
                     if (resolved.native_fn_ptr != null) {
                         if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
 
-                        materializeQuotations(state, stack, sp.*);
+                        try materializeQuotations(state, stack, sp.*);
                         flushToPhysicalStack(state, stack, sp.*);
                         const ctx_val = emitCallbackPreamble(state, sp.*);
 
@@ -2616,7 +2822,7 @@ fn compileInstructions(
                         // Generic native word callback
                         if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
 
-                        materializeQuotations(state, stack, sp.*);
+                        try materializeQuotations(state, stack, sp.*);
                         flushToPhysicalStack(state, stack, sp.*);
                         const ctx_val = emitCallbackPreamble(state, sp.*);
 
@@ -2633,7 +2839,7 @@ fn compileInstructions(
                         // AOT mode: direct call by name or interpreter fallback
                         if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
 
-                        materializeQuotations(state, stack, sp.*);
+                        try materializeQuotations(state, stack, sp.*);
                         flushToPhysicalStack(state, stack, sp.*);
                         const ctx_val = emitCallbackPreamble(state, sp.*);
 
@@ -2651,7 +2857,7 @@ fn compileInstructions(
 
                         if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
 
-                        materializeQuotations(state, stack, sp.*);
+                        try materializeQuotations(state, stack, sp.*);
                         flushToPhysicalStack(state, stack, sp.*);
                         _ = emitCallbackPreamble(state, sp.*);
 
@@ -3389,6 +3595,7 @@ pub fn emitWordCAot(
     self_name: ?[]const u8,
     aot_compiled_names: *const std.StringHashMapUnmanaged(u32),
     string_literals: ?*std.ArrayListUnmanaged(AotStringLiteral),
+    quotation_literals: ?*std.ArrayListUnmanaged(AotQuotationLiteral),
     allocator: Allocator,
     stack_effect: ?*const StackEffect,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
@@ -3562,6 +3769,7 @@ pub fn emitWordCAot(
         .call_quotation_fn = call_quotation_fn,
         .preloaded_ctx_val = preloaded_ctx_val,
         .aot_string_literals = string_literals,
+        .aot_quotation_literals = quotation_literals,
         .stack_effect = stack_effect,
         .quotation_slots = buildQuotationSlotMap(stack_effect),
     };
@@ -3707,8 +3915,10 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitCallQuotation(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushString(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushSymbol(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushQuotation(uintptr_t ctx, uintptr_t data, uintptr_t len, uintptr_t dest);\n");
     try out.appendSlice(allocator, "static int32_t onez_push_string(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushString(ctx, (uintptr_t)str, len); }\n");
     try out.appendSlice(allocator, "static int32_t onez_push_symbol(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushSymbol(ctx, (uintptr_t)str, len); }\n");
+    try out.appendSlice(allocator, "static int32_t onez_push_quotation(uintptr_t ctx, const unsigned char *data, uintptr_t len, uintptr_t dest) { return jitPushQuotation(ctx, (uintptr_t)data, len, dest); }\n");
 
     // Runtime entry point externs
     try out.appendSlice(allocator,
@@ -3776,6 +3986,7 @@ pub fn emitProgramC(
             w.name,
             &compiled_names,
             null,
+            null,
             allocator,
             if (w.stack_effect != null) &w.stack_effect.? else null,
         ) catch continue;
@@ -3786,6 +3997,10 @@ pub fn emitProgramC(
     // String literal table populated during pass 2.
     var string_literals: std.ArrayListUnmanaged(AotStringLiteral) = .{};
     defer string_literals.deinit(std.heap.page_allocator);
+
+    // Quotation literal table populated during pass 2.
+    var quotation_literals: std.ArrayListUnmanaged(AotQuotationLiteral) = .{};
+    defer quotation_literals.deinit(std.heap.page_allocator);
 
     // Pass 2: compile with only the compilable set.
     var compiled_bodies: std.ArrayListUnmanaged(struct { word_id: u32, body: []u8 }) = .{};
@@ -3808,6 +4023,7 @@ pub fn emitProgramC(
             w.name,
             &compilable_names,
             &string_literals,
+            &quotation_literals,
             allocator,
             if (w.stack_effect != null) &w.stack_effect.? else null,
         ) catch |err| switch (err) {
@@ -3883,6 +4099,25 @@ pub fn emitProgramC(
         try out.appendSlice(allocator, "\";\n");
     }
     if (string_literals.items.len > 0) {
+        try out.appendSlice(allocator, "\n");
+    }
+
+    // 3.6. Quotation literal constants
+    for (quotation_literals.items, 0..) |lit, lit_idx| {
+        var idx_buf: [20]u8 = undefined;
+        const idx_str = std.fmt.bufPrint(&idx_buf, "{d}", .{lit_idx}) catch unreachable;
+        try out.appendSlice(allocator, "static const unsigned char onez_quot_");
+        try out.appendSlice(allocator, idx_str);
+        try out.appendSlice(allocator, "[] = {");
+        for (lit.data, 0..) |byte, bi| {
+            if (bi > 0) try out.appendSlice(allocator, ",");
+            var byte_buf: [4]u8 = undefined;
+            const byte_str = std.fmt.bufPrint(&byte_buf, "{d}", .{byte}) catch unreachable;
+            try out.appendSlice(allocator, byte_str);
+        }
+        try out.appendSlice(allocator, "};\n");
+    }
+    if (quotation_literals.items.len > 0) {
         try out.appendSlice(allocator, "\n");
     }
 
@@ -4362,6 +4597,25 @@ export fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
+    return 0;
+}
+
+/// Materialize a quotation literal at a specific memory address. The serialized
+/// instruction data is at `data_ptr` with length `data_len`. The runtime
+/// deserializes into an Instruction slice and writes the quotation Value to
+/// `dest_ptr`. Unlike jitPushString which appends to the stack, this writes
+/// to an existing slot position used by materializeQuotations.
+export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, dest_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const src: [*]const u8 = @ptrFromInt(data_ptr);
+    const alloc = ctx.quotationAllocator();
+    const instructions = deserializeQuotationInstructions(src[0..data_len], alloc) catch {
+        ctx.jit_pending_error = error.OutOfMemory;
+        return 2;
+    };
+    const dest: *Value = @ptrFromInt(dest_raw);
+    dest.* = .{ .quotation = .{ .instructions = instructions } };
     return 0;
 }
 
@@ -6013,6 +6267,7 @@ test "emitWordCAot emits named callback for safepoint" {
         null,
         &compiled_names,
         null,
+        null,
         testing.allocator,
         null,
     ) catch |err| {
@@ -6043,6 +6298,7 @@ test "emitWordCAot basic arithmetic" {
         null,
         null,
         &compiled_names,
+        null,
         null,
         testing.allocator,
         null,
@@ -6778,4 +7034,86 @@ test "resolveRowVariableEffect: concrete quotation effect skipped" {
     try testing.expect(result != null);
     try testing.expectEqual(@as(u8, 2), result.?.input_count);
     try testing.expectEqual(@as(u8, 1), result.?.output_count);
+}
+
+// ---------------------------------------------------------------------------
+// Quotation serialization/deserialization tests
+// ---------------------------------------------------------------------------
+
+test "serializeQuotationInstructions: roundtrip fixnum push + call" {
+    const instrs = makeInstructions(.{ @as(i64, 1), "+" });
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator);
+    defer testing.allocator.free(data);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator);
+    defer {
+        for (decoded) |instr| {
+            switch (instr.op) {
+                .call_word => |n| testing.allocator.free(n),
+                else => {},
+            }
+        }
+        testing.allocator.free(decoded);
+    }
+    try testing.expectEqual(@as(usize, 2), decoded.len);
+    try testing.expect(decoded[0].op == .push_literal);
+    try testing.expectEqual(@as(i64, 1), decoded[0].op.push_literal.fixnum);
+    try testing.expect(decoded[1].op == .call_word);
+    try testing.expectEqualStrings("+", decoded[1].op.call_word);
+}
+
+test "serializeQuotationInstructions: roundtrip string literal" {
+    const str_val = Value{ .string = "hello" };
+    const instrs = [_]Instruction{.{ .op = .{ .push_literal = str_val }, .line = 1 }};
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator);
+    defer testing.allocator.free(data);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator);
+    defer {
+        for (decoded) |instr| {
+            switch (instr.op) {
+                .push_literal => |v| {
+                    if (v == .string) testing.allocator.free(v.string);
+                },
+                .call_word => |n| testing.allocator.free(n),
+            }
+        }
+        testing.allocator.free(decoded);
+    }
+    try testing.expectEqual(@as(usize, 1), decoded.len);
+    try testing.expect(decoded[0].op.push_literal == .string);
+    try testing.expectEqualStrings("hello", decoded[0].op.push_literal.string);
+}
+
+test "serializeQuotationInstructions: roundtrip empty body" {
+    const instrs: [0]Instruction = .{};
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator);
+    defer testing.allocator.free(data);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator);
+    defer testing.allocator.free(decoded);
+    try testing.expectEqual(@as(usize, 0), decoded.len);
+}
+
+test "serializeQuotationInstructions: roundtrip bool and float" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .float = 3.14 } }, .line = 2 },
+    };
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator);
+    defer testing.allocator.free(data);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator);
+    defer testing.allocator.free(decoded);
+    try testing.expectEqual(@as(usize, 2), decoded.len);
+    try testing.expectEqual(true, decoded[0].op.push_literal.boolean);
+    try testing.expectEqual(@as(f64, 3.14), decoded[1].op.push_literal.float);
+}
+
+test "serializeQuotationInstructions: preserves line and column" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 5, .column = 10 },
+    };
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator);
+    defer testing.allocator.free(data);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator);
+    defer testing.allocator.free(decoded);
+    try testing.expectEqual(@as(usize, 5), decoded[0].line);
+    try testing.expectEqual(@as(usize, 10), decoded[0].column);
 }
