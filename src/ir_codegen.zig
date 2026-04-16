@@ -831,6 +831,311 @@ fn collectQuotationFallbacks(
     }
 }
 
+/// Result of inferring a quotation body's stack effect by abstract simulation.
+const InferredEffect = struct {
+    input_count: u8,
+    output_count: u8,
+};
+
+/// Entry in the lightweight mini-stack used during quotation effect inference.
+/// Tracks whether a position holds a known quotation body (for resolving
+/// `call` and `if` within the body) or an opaque value.
+const MiniStackEntry = union(enum) {
+    quotation: []const Instruction,
+    other,
+};
+
+/// Infer the concrete stack effect of a quotation body by abstract stack
+/// simulation. Returns null if the effect cannot be statically determined
+/// (e.g., unresolvable word, dynamic call on unknown quotation).
+///
+/// Uses a low-water-mark algorithm: `input_count = -min_delta` and
+/// `output_count = input_count + final_delta`, where delta tracks the
+/// running net stack depth change.
+fn inferQuotationEffect(
+    instructions: []const Instruction,
+    resolver: ?WordResolver,
+) ?InferredEffect {
+    var delta: i32 = 0;
+    var min_delta: i32 = 0;
+
+    // Mini-stack tracks known quotation bodies above the initial level.
+    var mini_stack: [64]MiniStackEntry = undefined;
+    var sp: usize = 0;
+
+    for (instructions) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| {
+                if (sp < 64) {
+                    mini_stack[sp] = if (val == .quotation)
+                        .{ .quotation = val.quotation.instructions }
+                    else
+                        .other;
+                    sp += 1;
+                }
+                delta += 1;
+            },
+            .call_word => |name| {
+                if (inferBuiltinEffect(name, &mini_stack, &sp, &delta, &min_delta, resolver)) |ok| {
+                    if (!ok) return null;
+                } else {
+                    // Not a built-in word: resolve via WordResolver.
+                    const res = resolver orelse return null;
+                    const resolved = res.resolve(name, res.user_data) orelse return null;
+
+                    // Consume inputs.
+                    const in: i32 = @intCast(resolved.input_count);
+                    const out: i32 = @intCast(resolved.output_count);
+                    delta -= in;
+                    min_delta = @min(min_delta, delta);
+                    delta += out;
+
+                    // Update mini-stack: pop consumed entries, push opaque outputs.
+                    var pops: usize = resolved.input_count;
+                    while (pops > 0 and sp > 0) {
+                        sp -= 1;
+                        pops -= 1;
+                    }
+                    var pushes: usize = resolved.output_count;
+                    while (pushes > 0 and sp < 64) {
+                        mini_stack[sp] = .other;
+                        sp += 1;
+                        pushes -= 1;
+                    }
+                }
+            },
+        }
+    }
+
+    const input_count: i32 = if (min_delta < 0) -min_delta else 0;
+    const output_count: i32 = input_count + delta;
+    if (output_count < 0) return null;
+    return .{
+        .input_count = @intCast(input_count),
+        .output_count = @intCast(output_count),
+    };
+}
+
+/// Handle built-in words during quotation effect inference.
+/// Returns `true` if the word was handled successfully, `false` if inference
+/// should abort (bail), or `null` if the word is not a built-in (caller should
+/// try the WordResolver).
+fn inferBuiltinEffect(
+    name: []const u8,
+    mini_stack: *[64]MiniStackEntry,
+    sp: *usize,
+    delta: *i32,
+    min_delta: *i32,
+    resolver: ?WordResolver,
+) ?bool {
+    // Stack shufflers need special mini-stack handling to propagate
+    // quotation-body knowledge through shuffles.
+    if (std.mem.eql(u8, name, "dup")) {
+        // ( a -- a a ): net +1, needs 1 input.
+        delta.* -= 1;
+        min_delta.* = @min(min_delta.*, delta.*);
+        delta.* += 2;
+        if (sp.* >= 1) {
+            // Duplicate top entry (preserving quotation body if present).
+            const top = mini_stack[sp.* - 1];
+            if (sp.* < 64) {
+                mini_stack[sp.*] = top;
+                sp.* += 1;
+            }
+        } else {
+            // Duping from below initial level: push two unknowns.
+            if (sp.* < 64) {
+                mini_stack[sp.*] = .other;
+                sp.* += 1;
+            }
+            if (sp.* < 64) {
+                mini_stack[sp.*] = .other;
+                sp.* += 1;
+            }
+        }
+        return true;
+    }
+    if (std.mem.eql(u8, name, "drop")) {
+        delta.* -= 1;
+        min_delta.* = @min(min_delta.*, delta.*);
+        if (sp.* > 0) sp.* -= 1;
+        return true;
+    }
+    if (std.mem.eql(u8, name, "swap")) {
+        // ( a b -- b a ): net 0, needs 2 inputs.
+        delta.* -= 2;
+        min_delta.* = @min(min_delta.*, delta.*);
+        delta.* += 2;
+        if (sp.* >= 2) {
+            const tmp = mini_stack[sp.* - 1];
+            mini_stack[sp.* - 1] = mini_stack[sp.* - 2];
+            mini_stack[sp.* - 2] = tmp;
+        }
+        // If sp < 2, entries are below initial level; no mini-stack change needed.
+        return true;
+    }
+    if (std.mem.eql(u8, name, "over")) {
+        // ( a b -- a b a ): net +1, needs 2 inputs.
+        delta.* -= 2;
+        min_delta.* = @min(min_delta.*, delta.*);
+        delta.* += 3;
+        if (sp.* >= 2 and sp.* < 64) {
+            // Copy second element to top.
+            mini_stack[sp.*] = mini_stack[sp.* - 2];
+            sp.* += 1;
+        } else if (sp.* < 64) {
+            // Some entries below initial level; push unknown.
+            mini_stack[sp.*] = .other;
+            sp.* += 1;
+        }
+        return true;
+    }
+
+    // Boolean literals.
+    if (std.mem.eql(u8, name, "t") or std.mem.eql(u8, name, "f")) {
+        applyFixedEffect(mini_stack, sp, delta, min_delta, 0, 1);
+        return true;
+    }
+
+    // abs: ( n -- n )
+    if (std.mem.eql(u8, name, "abs")) {
+        applyFixedEffect(mini_stack, sp, delta, min_delta, 1, 1);
+        return true;
+    }
+
+    // Binary ops: ( a b -- result )
+    if (isBinaryOp(name)) {
+        applyFixedEffect(mini_stack, sp, delta, min_delta, 2, 1);
+        return true;
+    }
+
+    // Comparison ops: ( a b -- bool )
+    if (isComparisonOp(name)) {
+        applyFixedEffect(mini_stack, sp, delta, min_delta, 2, 1);
+        return true;
+    }
+
+    // `call`: pop quotation, apply its effect.
+    if (std.mem.eql(u8, name, "call")) {
+        // Consume the quotation from the stack.
+        delta.* -= 1;
+        min_delta.* = @min(min_delta.*, delta.*);
+
+        // Check if top of mini-stack is a known quotation body.
+        if (sp.* > 0) {
+            sp.* -= 1;
+            switch (mini_stack[sp.*]) {
+                .quotation => |body| {
+                    // Recursively infer the quotation's effect.
+                    const effect = inferQuotationEffect(body, resolver) orelse return false;
+                    const in: i32 = @intCast(effect.input_count);
+                    const out: i32 = @intCast(effect.output_count);
+                    delta.* -= in;
+                    min_delta.* = @min(min_delta.*, delta.*);
+                    delta.* += out;
+
+                    // Push opaque outputs onto mini-stack.
+                    var pushes: usize = effect.output_count;
+                    while (pushes > 0 and sp.* < 64) {
+                        mini_stack[sp.*] = .other;
+                        sp.* += 1;
+                        pushes -= 1;
+                    }
+                    return true;
+                },
+                .other => return false, // Unknown quotation, bail.
+            }
+        } else {
+            // Popping from below initial level: unknown value, bail.
+            return false;
+        }
+    }
+
+    // `if`: ( cond true-quot false-quot -- results... )
+    if (std.mem.eql(u8, name, "if")) {
+        // Consume condition + two quotations.
+        delta.* -= 3;
+        min_delta.* = @min(min_delta.*, delta.*);
+
+        // Need both quotation bodies visible on mini-stack.
+        if (sp.* >= 3) {
+            const false_entry = mini_stack[sp.* - 1];
+            const true_entry = mini_stack[sp.* - 2];
+            sp.* -= 3; // pop condition + both quotations
+
+            const true_body = switch (true_entry) {
+                .quotation => |body| body,
+                .other => return false,
+            };
+            const false_body = switch (false_entry) {
+                .quotation => |body| body,
+                .other => return false,
+            };
+
+            const true_eff = inferQuotationEffect(true_body, resolver) orelse return false;
+            const false_eff = inferQuotationEffect(false_body, resolver) orelse return false;
+
+            // Both branches must have the same net delta.
+            const true_delta = @as(i32, @intCast(true_eff.output_count)) - @as(i32, @intCast(true_eff.input_count));
+            const false_delta = @as(i32, @intCast(false_eff.output_count)) - @as(i32, @intCast(false_eff.input_count));
+            if (true_delta != false_delta) return false;
+
+            // Both branches must consume the same number of inputs.
+            if (true_eff.input_count != false_eff.input_count) return false;
+
+            // Apply branch effect.
+            const in: i32 = @intCast(true_eff.input_count);
+            const out: i32 = @intCast(true_eff.output_count);
+            delta.* -= in;
+            min_delta.* = @min(min_delta.*, delta.*);
+            delta.* += out;
+
+            // Push opaque outputs.
+            var pushes: usize = true_eff.output_count;
+            while (pushes > 0 and sp.* < 64) {
+                mini_stack[sp.*] = .other;
+                sp.* += 1;
+                pushes -= 1;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    // Not a recognized built-in.
+    return null;
+}
+
+/// Apply a fixed (input_count, output_count) effect to delta, min_delta,
+/// and the mini-stack.
+fn applyFixedEffect(
+    mini_stack: *[64]MiniStackEntry,
+    sp: *usize,
+    delta: *i32,
+    min_delta: *i32,
+    input_count: u8,
+    output_count: u8,
+) void {
+    const in: i32 = @intCast(input_count);
+    const out: i32 = @intCast(output_count);
+    delta.* -= in;
+    min_delta.* = @min(min_delta.*, delta.*);
+    delta.* += out;
+
+    // Update mini-stack.
+    var pops: usize = input_count;
+    while (pops > 0 and sp.* > 0) {
+        sp.* -= 1;
+        pops -= 1;
+    }
+    var pushes: usize = output_count;
+    while (pushes > 0 and sp.* < 64) {
+        mini_stack[sp.*] = .other;
+        sp.* += 1;
+        pushes -= 1;
+    }
+}
+
 const AotStringLiteral = struct {
     data: []const u8,
     is_symbol: bool,
@@ -5870,4 +6175,215 @@ test "concrete quotation effect adjusts sp for consuming call" {
     const instrs = makeInstructions(.{"call"});
     const result = try compileWord(&instrs, 3, 0, null, null, null, null, &effect);
     defer result.jit_buf.deinit();
+}
+
+// ---------------------------------------------------------------------------
+// inferQuotationEffect tests
+// ---------------------------------------------------------------------------
+
+test "inferQuotationEffect: empty body" {
+    const instrs = makeInstructions(.{});
+    const eff = inferQuotationEffect(&instrs, null);
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 0), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 0), eff.?.output_count);
+}
+
+test "inferQuotationEffect: push literal only" {
+    const instrs = makeInstructions(.{@as(i64, 42)});
+    const eff = inferQuotationEffect(&instrs, null);
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 0), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 1), eff.?.output_count);
+}
+
+test "inferQuotationEffect: 2 * (double)" {
+    // [ 2 * ] expects one input (multiplied by 2) and produces one output.
+    const instrs = makeInstructions(.{ @as(i64, 2), "*" });
+    const eff = inferQuotationEffect(&instrs, null);
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 1), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 1), eff.?.output_count);
+}
+
+test "inferQuotationEffect: dup *" {
+    // [ dup * ] squares the top value: (1 -- 1).
+    const instrs = makeInstructions(.{ "dup", "*" });
+    const eff = inferQuotationEffect(&instrs, null);
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 1), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 1), eff.?.output_count);
+}
+
+test "inferQuotationEffect: +" {
+    // [ + ] takes two inputs and produces one: (2 -- 1).
+    const instrs = makeInstructions(.{"+"});
+    const eff = inferQuotationEffect(&instrs, null);
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 2), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 1), eff.?.output_count);
+}
+
+test "inferQuotationEffect: drop" {
+    // [ drop ] consumes one: (1 -- 0).
+    const instrs = makeInstructions(.{"drop"});
+    const eff = inferQuotationEffect(&instrs, null);
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 1), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 0), eff.?.output_count);
+}
+
+test "inferQuotationEffect: swap" {
+    // [ swap ] rearranges two: (2 -- 2).
+    const instrs = makeInstructions(.{"swap"});
+    const eff = inferQuotationEffect(&instrs, null);
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 2), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 2), eff.?.output_count);
+}
+
+test "inferQuotationEffect: over" {
+    // [ over ] copies second: (2 -- 3).
+    const instrs = makeInstructions(.{"over"});
+    const eff = inferQuotationEffect(&instrs, null);
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 2), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 3), eff.?.output_count);
+}
+
+test "inferQuotationEffect: t and f literals" {
+    const instrs_t = makeInstructions(.{"t"});
+    const eff_t = inferQuotationEffect(&instrs_t, null);
+    try testing.expect(eff_t != null);
+    try testing.expectEqual(@as(u8, 0), eff_t.?.input_count);
+    try testing.expectEqual(@as(u8, 1), eff_t.?.output_count);
+
+    const instrs_f = makeInstructions(.{"f"});
+    const eff_f = inferQuotationEffect(&instrs_f, null);
+    try testing.expect(eff_f != null);
+    try testing.expectEqual(@as(u8, 0), eff_f.?.input_count);
+    try testing.expectEqual(@as(u8, 1), eff_f.?.output_count);
+}
+
+test "inferQuotationEffect: abs" {
+    // [ abs ] is (1 -- 1).
+    const instrs = makeInstructions(.{"abs"});
+    const eff = inferQuotationEffect(&instrs, null);
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 1), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 1), eff.?.output_count);
+}
+
+test "inferQuotationEffect: comparison ops" {
+    const instrs = makeInstructions(.{">"});
+    const eff = inferQuotationEffect(&instrs, null);
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 2), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 1), eff.?.output_count);
+}
+
+test "inferQuotationEffect: call on literal quotation" {
+    // [ [ 1 ] call ] pushes 1 onto the stack: (0 -- 1).
+    // The inner quotation [ 1 ] has effect (0 -- 1).
+    const inner = makeInstructions(.{@as(i64, 1)});
+    const inner_val = Value{ .quotation = .{ .instructions = &inner } };
+    const outer = [_]Instruction{
+        .{ .op = .{ .push_literal = inner_val }, .line = 1 },
+        .{ .op = .{ .call_word = "call" }, .line = 2 },
+    };
+    const eff = inferQuotationEffect(&outer, null);
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 0), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 1), eff.?.output_count);
+}
+
+test "inferQuotationEffect: call on unknown quotation returns null" {
+    // [ call ] alone: TOS is unknown, so we can't infer.
+    const instrs = makeInstructions(.{"call"});
+    const eff = inferQuotationEffect(&instrs, null);
+    try testing.expect(eff == null);
+}
+
+test "inferQuotationEffect: if with matching branches" {
+    // [ 0 > [ 1 ] [ 0 ] if ] is (1 -- 1):
+    //   consumes one value, pushes a comparison result, then if picks a branch.
+    //   Both branches produce one value from zero inputs.
+    const true_body = makeInstructions(.{@as(i64, 1)});
+    const false_body = makeInstructions(.{@as(i64, 0)});
+    const true_val = Value{ .quotation = .{ .instructions = &true_body } };
+    const false_val = Value{ .quotation = .{ .instructions = &false_body } };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 1 },
+        .{ .op = .{ .call_word = ">" }, .line = 2 },
+        .{ .op = .{ .push_literal = true_val }, .line = 3 },
+        .{ .op = .{ .push_literal = false_val }, .line = 4 },
+        .{ .op = .{ .call_word = "if" }, .line = 5 },
+    };
+    const eff = inferQuotationEffect(&instrs, null);
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 1), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 1), eff.?.output_count);
+}
+
+test "inferQuotationEffect: if with mismatched branches returns null" {
+    // [ [ 1 ] [ 1 2 ] if ] -- branches have different deltas.
+    const true_body = makeInstructions(.{@as(i64, 1)});
+    const false_body = makeInstructions(.{ @as(i64, 1), @as(i64, 2) });
+    const true_val = Value{ .quotation = .{ .instructions = &true_body } };
+    const false_val = Value{ .quotation = .{ .instructions = &false_body } };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = true_val }, .line = 1 },
+        .{ .op = .{ .push_literal = false_val }, .line = 2 },
+        .{ .op = .{ .call_word = "if" }, .line = 3 },
+    };
+    const eff = inferQuotationEffect(&instrs, null);
+    try testing.expect(eff == null);
+}
+
+test "inferQuotationEffect: unknown word without resolver returns null" {
+    const instrs = makeInstructions(.{"some-unknown-word"});
+    const eff = inferQuotationEffect(&instrs, null);
+    try testing.expect(eff == null);
+}
+
+test "inferQuotationEffect: resolved word via resolver" {
+    // Simulate a word "foo" with effect (1 -- 2) via a test resolver.
+    const TestResolver = struct {
+        fn resolve(name: []const u8, _: *anyopaque) ?ResolvedWord {
+            if (std.mem.eql(u8, name, "foo")) {
+                return .{ .word_id = 0, .input_count = 1, .output_count = 2 };
+            }
+            return null;
+        }
+    };
+    var dummy: u8 = 0;
+    const resolver = WordResolver{
+        .resolve = TestResolver.resolve,
+        .user_data = @ptrCast(&dummy),
+        .dispatch_table_ptr = @ptrFromInt(1),
+    };
+    const instrs = makeInstructions(.{"foo"});
+    const eff = inferQuotationEffect(&instrs, resolver);
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 1), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 2), eff.?.output_count);
+}
+
+test "inferQuotationEffect: dup propagates quotation body" {
+    // [ [ 1 ] dup call swap call + ] should be (0 -- 1):
+    // Push quotation, dup it, call first copy (pushes 1), swap, call second (pushes 1), add.
+    const inner = makeInstructions(.{@as(i64, 1)});
+    const inner_val = Value{ .quotation = .{ .instructions = &inner } };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = inner_val }, .line = 1 },
+        .{ .op = .{ .call_word = "dup" }, .line = 2 },
+        .{ .op = .{ .call_word = "call" }, .line = 3 },
+        .{ .op = .{ .call_word = "swap" }, .line = 4 },
+        .{ .op = .{ .call_word = "call" }, .line = 5 },
+        .{ .op = .{ .call_word = "+" }, .line = 6 },
+    };
+    const eff = inferQuotationEffect(&instrs, null);
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 0), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 1), eff.?.output_count);
 }
