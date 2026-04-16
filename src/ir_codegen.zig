@@ -387,6 +387,10 @@ pub const ResolvedWord = struct {
     output_count: u8,
     native_fn_ptr: ?usize = null,
     stack_effect_ptr: ?usize = null,
+    /// When non-null, the callee has row-variable quotation parameters.
+    /// The caller must specialize the effect at the call site using
+    /// resolveRowVariableEffect() before using input_count/output_count.
+    callee_effect: ?*const StackEffect = null,
 };
 
 /// Callback interface for resolving word names to dispatch table IDs.
@@ -883,6 +887,11 @@ fn inferQuotationEffect(
                     const res = resolver orelse return null;
                     const resolved = res.resolve(name, res.user_data) orelse return null;
 
+                    // Row-variable callees have input_count/output_count
+                    // that include row variable params. Without knowing their
+                    // quotation arguments, the counts are unusable here.
+                    if (resolved.callee_effect != null) return null;
+
                     // Consume inputs.
                     const in: i32 = @intCast(resolved.input_count);
                     const out: i32 = @intCast(resolved.output_count);
@@ -1134,6 +1143,133 @@ fn applyFixedEffect(
         sp.* += 1;
         pushes -= 1;
     }
+}
+
+/// Row variable binding: maps a row variable name to its resolved size.
+const RowVarBinding = struct {
+    name: []const u8,
+    size: u8,
+};
+
+/// Resolve row-variable quotation effects at a call site. Given the callee's
+/// full stack effect and the caller's abstract stack, infer concrete effects
+/// for quotation arguments and bind row variables to compute specialized
+/// input/output counts.
+///
+/// Returns null if specialization is not possible (quotation not visible as
+/// a literal body, inference fails, or row variable bindings conflict).
+fn resolveRowVariableEffect(
+    effect: *const StackEffect,
+    stack: *const [64]StackEntry,
+    sp: usize,
+    resolver: ?WordResolver,
+) ?InferredEffect {
+    const concrete_in = effect.concreteInputCount();
+
+    // Map each concrete input parameter to its stack position.
+    // Row variable params don't occupy stack slots.
+    // Stack layout: [... | param_0 | param_1 | ... | param_(N-1) ]
+    //                      ^-- sp - concrete_in
+
+    if (sp < concrete_in) return null;
+    const base_pos = sp - concrete_in;
+
+    // Collect row variable bindings from quotation parameters.
+    var bindings: [16]RowVarBinding = undefined;
+    var num_bindings: usize = 0;
+
+    var concrete_idx: usize = 0;
+    for (effect.inputs) |param| {
+        if (param.is_row_variable) continue;
+        defer concrete_idx += 1;
+
+        const qe_ptr = param.quotation_effect orelse continue;
+        const qe = qe_ptr.*;
+        if (!stack_effect_mod.hasAnyRowVariable(qe)) continue;
+
+        // This quotation parameter has row-variable effects.
+        // Check if the corresponding stack entry is a visible quotation body.
+        const stack_pos = base_pos + concrete_idx;
+        const body = switch (stack[stack_pos]) {
+            .quotation_body => |b| b,
+            else => return null,
+        };
+
+        // Infer the concrete effect of the quotation body.
+        const inferred = inferQuotationEffect(body, resolver) orelse return null;
+
+        // Compute row variable sizes from the difference between
+        // inferred concrete counts and the quotation's declared
+        // concrete (non-row-variable) counts.
+        const declared_concrete_in = qe.concreteInputCount();
+        const declared_concrete_out = qe.concreteOutputCount();
+
+        if (inferred.input_count < declared_concrete_in) return null;
+        if (inferred.output_count < declared_concrete_out) return null;
+
+        const row_in_size: u8 = inferred.input_count - @as(u8, @intCast(declared_concrete_in));
+        const row_out_size: u8 = inferred.output_count - @as(u8, @intCast(declared_concrete_out));
+
+        // Bind row variables from the quotation's input side.
+        for (qe.inputs) |qp| {
+            if (!qp.is_row_variable) continue;
+            if (!addOrCheckBinding(&bindings, &num_bindings, qp.name, row_in_size)) return null;
+        }
+
+        // Bind row variables from the quotation's output side.
+        for (qe.outputs) |qp| {
+            if (!qp.is_row_variable) continue;
+            if (!addOrCheckBinding(&bindings, &num_bindings, qp.name, row_out_size)) return null;
+        }
+    }
+
+    // Compute specialized outer effect using row variable bindings.
+    var specialized_in: u8 = @intCast(concrete_in);
+    for (effect.inputs) |param| {
+        if (!param.is_row_variable) continue;
+        const size = lookupBinding(bindings[0..num_bindings], param.name) orelse return null;
+        specialized_in = std.math.add(u8, specialized_in, size) catch return null;
+    }
+
+    var specialized_out: u8 = @intCast(effect.concreteOutputCount());
+    for (effect.outputs) |param| {
+        if (!param.is_row_variable) continue;
+        const size = lookupBinding(bindings[0..num_bindings], param.name) orelse return null;
+        specialized_out = std.math.add(u8, specialized_out, size) catch return null;
+    }
+
+    return .{
+        .input_count = specialized_in,
+        .output_count = specialized_out,
+    };
+}
+
+/// Add a row variable binding or verify consistency with an existing one.
+/// Returns false if the binding conflicts with a previously recorded size.
+fn addOrCheckBinding(
+    bindings: *[16]RowVarBinding,
+    num_bindings: *usize,
+    name: []const u8,
+    size: u8,
+) bool {
+    for (bindings[0..num_bindings.*]) |b| {
+        if (std.mem.eql(u8, b.name, name)) {
+            return b.size == size;
+        }
+    }
+    if (num_bindings.* < 16) {
+        bindings[num_bindings.*] = .{ .name = name, .size = size };
+        num_bindings.* += 1;
+    }
+    return true;
+}
+
+/// Look up a row variable's bound size.
+fn lookupBinding(bindings: []const RowVarBinding, name: []const u8) ?u8 {
+    for (bindings) |b| {
+        if (std.mem.eql(u8, b.name, name)) return b.size;
+    }
+    return null;
 }
 
 const AotStringLiteral = struct {
@@ -2464,9 +2600,21 @@ fn compileInstructions(
                     const res = state.resolver orelse return IrCodegenError.NotCompilable;
                     const resolved = res.resolve(name, res.user_data) orelse return IrCodegenError.NotCompilable;
 
+                    // Specialize input/output counts for row-variable effects
+                    // using literal quotation bodies visible on the abstract stack.
+                    // Must happen before materializeQuotations destroys quotation_body entries.
+                    var effective_in = resolved.input_count;
+                    var effective_out = resolved.output_count;
+                    if (resolved.callee_effect) |callee_eff| {
+                        const specialized = resolveRowVariableEffect(callee_eff, stack, sp.*, state.resolver) orelse
+                            return IrCodegenError.NotCompilable;
+                        effective_in = specialized.input_count;
+                        effective_out = specialized.output_count;
+                    }
+
                     if (resolved.native_fn_ptr != null) {
                         // Generic native word callback
-                        if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
+                        if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
 
                         materializeQuotations(state, stack, sp.*);
                         flushToPhysicalStack(state, stack, sp.*);
@@ -2478,12 +2626,12 @@ fn compileInstructions(
 
                         emitNativeWordCall(state, ctx_val, resolved, instr.line);
 
-                        // Adjust abstract stack by declared effect
-                        sp.* = sp.* - resolved.input_count + resolved.output_count;
+                        // Adjust abstract stack by specialized effect
+                        sp.* = sp.* - effective_in + effective_out;
                         resetStackToPhysical(stack, sp.*);
                     } else if (state.aot_mode) {
                         // AOT mode: direct call by name or interpreter fallback
-                        if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
+                        if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
 
                         materializeQuotations(state, stack, sp.*);
                         flushToPhysicalStack(state, stack, sp.*);
@@ -2495,13 +2643,13 @@ fn compileInstructions(
 
                         emitAotWordCall(state, ctx_val, name, resolved, instr.line);
 
-                        sp.* = sp.* - resolved.input_count + resolved.output_count;
+                        sp.* = sp.* - effective_in + effective_out;
                         resetStackToPhysical(stack, sp.*);
                     } else {
                         // Compound word: dispatch table indirect call
                         DispatchLayout.ensureInit();
 
-                        if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
+                        if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
 
                         materializeQuotations(state, stack, sp.*);
                         flushToPhysicalStack(state, stack, sp.*);
@@ -2551,8 +2699,8 @@ fn compileInstructions(
 
                         c._ir_MERGE_2(ctx, end_fallback, end_compiled);
 
-                        // Adjust abstract stack based on callee's known stack effect
-                        sp.* = sp.* - resolved.input_count + resolved.output_count;
+                        // Adjust abstract stack based on specialized effect
+                        sp.* = sp.* - effective_in + effective_out;
                         resetStackToPhysical(stack, sp.*);
                     }
                 }
@@ -3437,7 +3585,10 @@ pub fn emitWordCAot(
     if (state.diverged) {
         c._ir_RETURN(&ctx, ok_status);
     } else if (state.dynamic_call_emitted) {
-        c._ir_RETURN(&ctx, ok_status);
+        // Dynamic quotation calls generate C code that calls through a raw
+        // address (uintptr_t), which is not a valid C function call. Reject
+        // these words so they fall back to the interpreter.
+        return IrCodegenError.NotCompilable;
     } else {
         if (sp != output_count) return IrCodegenError.StackShapeMismatch;
         for (0..sp) |i| {
@@ -3585,12 +3736,18 @@ pub fn emitProgramC(
 
         fn resolve(name_ptr: []const u8, user_data: *anyopaque) ?ResolvedWord {
             const self: *const @This() = @ptrCast(@alignCast(user_data));
-            const w = self.map.get(name_ptr) orelse return null;
-            return ResolvedWord{
-                .word_id = w.word_id,
-                .input_count = w.input_count,
-                .output_count = w.output_count,
+            const entry = self.map.getPtr(name_ptr) orelse return null;
+            var result = ResolvedWord{
+                .word_id = entry.word_id,
+                .input_count = entry.input_count,
+                .output_count = entry.output_count,
             };
+            if (entry.stack_effect) |*eff| {
+                if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
+                    result.callee_effect = eff;
+                }
+            }
+            return result;
         }
     };
 
@@ -6386,4 +6543,239 @@ test "inferQuotationEffect: dup propagates quotation body" {
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 0), eff.?.input_count);
     try testing.expectEqual(@as(u8, 1), eff.?.output_count);
+}
+
+// ---------------------------------------------------------------------------
+// resolveRowVariableEffect tests
+// ---------------------------------------------------------------------------
+
+test "resolveRowVariableEffect: simple apply with [ 1 + ]" {
+    // my-apply: ( x quot: ( ..a -- ..b ) -- ..b )
+    // Quotation [ 1 + ] has inferred effect (1 -- 1).
+    // ..a = 1 - 0 = 1, ..b = 1 - 0 = 1
+    // Specialized: inputs = x(1) + quot(1) = 2, outputs = ..b(1) = 1
+    const quot_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "..b", .is_row_variable = true },
+        },
+    };
+    const outer = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "x" },
+            .{ .name = "quot", .quotation_effect = &quot_effect },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "..b", .is_row_variable = true },
+        },
+    };
+
+    const body = makeInstructions(.{ @as(i64, 1), "+" });
+    var stack: [64]StackEntry = undefined;
+    stack[0] = .{ .raw_at_slot = 0 }; // x
+    stack[1] = .{ .quotation_body = &body }; // quot
+
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null);
+    try testing.expect(result != null);
+    try testing.expectEqual(@as(u8, 2), result.?.input_count);
+    try testing.expectEqual(@as(u8, 1), result.?.output_count);
+}
+
+test "resolveRowVariableEffect: keep with [ 2 * ]" {
+    // keep: ( ..a x quot: ( ..a x -- ..b ) -- ..b x )
+    // Quotation [ 2 * ] has inferred effect (1 -- 1).
+    // quot declared: ( ..a x -- ..b ), concrete_in=1(x), concrete_out=0
+    // ..a = 1 - 1 = 0, ..b = 1 - 0 = 1
+    // Specialized: inputs = ..a(0) + x(1) + quot(1) = 2, outputs = ..b(1) + x(1) = 2
+    const quot_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "x" },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "..b", .is_row_variable = true },
+        },
+    };
+    const outer = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "x" },
+            .{ .name = "quot", .quotation_effect = &quot_effect },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "..b", .is_row_variable = true },
+            .{ .name = "x" },
+        },
+    };
+
+    const body = makeInstructions(.{ @as(i64, 2), "*" });
+    var stack: [64]StackEntry = undefined;
+    stack[0] = .{ .raw_at_slot = 0 }; // x
+    stack[1] = .{ .quotation_body = &body }; // quot
+
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null);
+    try testing.expect(result != null);
+    try testing.expectEqual(@as(u8, 2), result.?.input_count);
+    try testing.expectEqual(@as(u8, 2), result.?.output_count);
+}
+
+test "resolveRowVariableEffect: keep with [ dup ]" {
+    // keep: ( ..a x quot: ( ..a x -- ..b ) -- ..b x )
+    // Quotation [ dup ] has inferred effect (1 -- 2).
+    // ..a = 1 - 1 = 0, ..b = 2 - 0 = 2
+    // Specialized: inputs = 0 + 1 + 1 = 2, outputs = 2 + 1 = 3
+    const quot_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "x" },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "..b", .is_row_variable = true },
+        },
+    };
+    const outer = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "x" },
+            .{ .name = "quot", .quotation_effect = &quot_effect },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "..b", .is_row_variable = true },
+            .{ .name = "x" },
+        },
+    };
+
+    const body = makeInstructions(.{"dup"});
+    var stack: [64]StackEntry = undefined;
+    stack[0] = .{ .raw_at_slot = 0 };
+    stack[1] = .{ .quotation_body = &body };
+
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null);
+    try testing.expect(result != null);
+    try testing.expectEqual(@as(u8, 2), result.?.input_count);
+    try testing.expectEqual(@as(u8, 3), result.?.output_count);
+}
+
+test "resolveRowVariableEffect: raw_at_slot quotation returns null" {
+    const quot_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "x" },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "..b", .is_row_variable = true },
+        },
+    };
+    const outer = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "x" },
+            .{ .name = "quot", .quotation_effect = &quot_effect },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "..b", .is_row_variable = true },
+            .{ .name = "x" },
+        },
+    };
+
+    var stack: [64]StackEntry = undefined;
+    stack[0] = .{ .raw_at_slot = 0 };
+    stack[1] = .{ .raw_at_slot = 1 }; // runtime value, not quotation_body
+
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null);
+    try testing.expect(result == null);
+}
+
+test "resolveRowVariableEffect: unresolvable quotation body returns null" {
+    const quot_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "..b", .is_row_variable = true },
+        },
+    };
+    const outer = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "x" },
+            .{ .name = "quot", .quotation_effect = &quot_effect },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "..b", .is_row_variable = true },
+        },
+    };
+
+    const body = makeInstructions(.{"unknown-word"});
+    var stack: [64]StackEntry = undefined;
+    stack[0] = .{ .raw_at_slot = 0 };
+    stack[1] = .{ .quotation_body = &body };
+
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null);
+    try testing.expect(result == null);
+}
+
+test "resolveRowVariableEffect: empty quotation [ ]" {
+    // my-apply: ( x quot: ( ..a -- ..b ) -- ..b )
+    // [ ] inferred (0 -- 0). ..a = 0, ..b = 0
+    // Specialized: inputs = x(1) + quot(1) = 2, outputs = ..b(0) = 0
+    const quot_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "..b", .is_row_variable = true },
+        },
+    };
+    const outer = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "x" },
+            .{ .name = "quot", .quotation_effect = &quot_effect },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "..b", .is_row_variable = true },
+        },
+    };
+
+    const body = makeInstructions(.{});
+    var stack: [64]StackEntry = undefined;
+    stack[0] = .{ .raw_at_slot = 0 };
+    stack[1] = .{ .quotation_body = &body };
+
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null);
+    try testing.expect(result != null);
+    try testing.expectEqual(@as(u8, 2), result.?.input_count);
+    try testing.expectEqual(@as(u8, 0), result.?.output_count);
+}
+
+test "resolveRowVariableEffect: concrete quotation effect skipped" {
+    // If the quotation param has a concrete (non-row-variable) effect,
+    // resolveRowVariableEffect skips it. No row vars in outer either.
+    const quot_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "a" },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "b" },
+        },
+    };
+    const outer = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "x" },
+            .{ .name = "quot", .quotation_effect = &quot_effect },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "b" },
+        },
+    };
+
+    var stack: [64]StackEntry = undefined;
+    stack[0] = .{ .raw_at_slot = 0 };
+    stack[1] = .{ .raw_at_slot = 1 };
+
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null);
+    try testing.expect(result != null);
+    try testing.expectEqual(@as(u8, 2), result.?.input_count);
+    try testing.expectEqual(@as(u8, 1), result.?.output_count);
 }

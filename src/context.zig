@@ -3992,19 +3992,21 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         .compound => {},
         .native => |func| {
             const effect = callee.stack_effect orelse return null;
-            if (stack_effect_mod.hasAnyRowVariable(effect)) return null;
-            return ir_codegen.ResolvedWord{
+            var result = ir_codegen.ResolvedWord{
                 .word_id = 0,
                 .input_count = @intCast(effect.inputs.len),
                 .output_count = @intCast(effect.outputs.len),
                 .native_fn_ptr = @intFromPtr(func),
             };
+            if (stack_effect_mod.hasAnyRowVariable(effect)) {
+                result.callee_effect = ctx.lookupWordStackEffectPtr(name);
+            }
+            return result;
         },
         .host_callback => return null,
     }
 
     const effect = callee.stack_effect orelse return null;
-    if (stack_effect_mod.hasAnyRowVariable(effect)) return null;
 
     const word_id = if (callee.word_id) |id| id else blk: {
         const id = ctx.jit_dispatch.assignId(name) catch return null;
@@ -4012,11 +4014,15 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         break :blk id;
     };
 
-    return ir_codegen.ResolvedWord{
+    var result = ir_codegen.ResolvedWord{
         .word_id = word_id,
         .input_count = @intCast(effect.inputs.len),
         .output_count = @intCast(effect.outputs.len),
     };
+    if (stack_effect_mod.hasAnyRowVariable(effect)) {
+        result.callee_effect = ctx.lookupWordStackEffectPtr(name);
+    }
+    return result;
 }
 
 fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
