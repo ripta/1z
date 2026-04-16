@@ -679,6 +679,11 @@ const StackEntry = union(enum) {
     /// that can't be represented as IR scalars, i.e., anything other than
     /// fixnum / boolean.
     raw_at_slot: usize,
+    /// Opaque row region of unknown size inserted when a quotation call has
+    /// unresolved row variables. Operations on known entries above the
+    /// region work normally; operations that need exact positions within
+    /// the region return NotCompilable.
+    row_region,
 };
 
 /// Shared compilation state threaded through instruction compilation.
@@ -1565,6 +1570,14 @@ fn materializeQuotations(state: *CompileState, stack: *[64]StackEntry, sp: usize
     }
 }
 
+/// Check whether any stack entry in 0..sp is a row_region.
+fn hasRowRegion(stack: *const [64]StackEntry, sp: usize) bool {
+    for (0..sp) |i| {
+        if (stack[i] == .row_region) return true;
+    }
+    return false;
+}
+
 /// Reset all stack entries from 0..sp to raw_at_slot identity (slot i = i).
 /// Used after operations that flush to physical memory, ensuring the abstract
 /// stack mirrors the physical layout.
@@ -1621,6 +1634,7 @@ fn flushToPhysicalStack(state: *CompileState, stack: *[64]StackEntry, sp: usize)
             },
             .quotation_body => {},
             .raw_at_slot => {},
+            .row_region => {},
         }
     }
 
@@ -1666,7 +1680,7 @@ fn emitTruthiness(state: *CompileState, entry: StackEntry, base_addr: c.ir_ref) 
             const is_falsy = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_bool_tag, is_false_payload);
             break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), is_falsy, false_const);
         },
-        .quotation_body => IrCodegenError.NotCompilable,
+        .quotation_body, .row_region => IrCodegenError.NotCompilable,
     };
 }
 
@@ -1910,7 +1924,7 @@ fn tryEmitInlineTypedValidateAndPromote(
             return false;
         },
         .raw_at_slot => {},
-        .quotation_body => return false,
+        .quotation_body, .row_region => return false,
     }
 
     const expected_tag_const = mapTypeNameToTagConst(state, expected_name) orelse return false;
@@ -2118,6 +2132,7 @@ fn compileInstructions(
                             emitCopySlot(ctx, base_addr, s, sp.*);
                             stack[sp.*] = .{ .raw_at_slot = sp.* };
                         },
+                        .row_region => return IrCodegenError.NotCompilable,
                     }
                     sp.* += 1;
                 } else if (std.mem.eql(u8, name, "drop")) {
@@ -2150,6 +2165,7 @@ fn compileInstructions(
                             emitCopySlot(ctx, base_addr, s, sp.*);
                             stack[sp.*] = .{ .raw_at_slot = sp.* };
                         },
+                        .row_region => return IrCodegenError.NotCompilable,
                     }
                     sp.* += 1;
                 } else if (std.mem.eql(u8, name, "t")) {
@@ -2279,7 +2295,7 @@ fn compileInstructions(
                             // is_truthy = not is_falsy (negate by comparing with false)
                             break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), is_falsy, false_const);
                         },
-                        .quotation_body => return IrCodegenError.NotCompilable,
+                        .quotation_body, .row_region => return IrCodegenError.NotCompilable,
                     };
 
                     // Save stack state for the false branch
@@ -2404,7 +2420,7 @@ fn compileInstructions(
                                 state.dynamic_call_emitted = true;
                             }
                         },
-                        .i64_ref, .f64_ref, .bool_ref => return IrCodegenError.NotCompilable,
+                        .i64_ref, .f64_ref, .bool_ref, .row_region => return IrCodegenError.NotCompilable,
                     }
                 } else if (std.mem.eql(u8, name, "times")) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
@@ -2957,7 +2973,7 @@ fn mergeEntries(
             },
             else => return IrCodegenError.NotCompilable,
         },
-        .quotation_body => return IrCodegenError.NotCompilable,
+        .quotation_body, .row_region => return IrCodegenError.NotCompilable,
     }
 }
 
@@ -3304,7 +3320,7 @@ pub fn compileWord(
         // All paths loop back (no base case fell through).
         // Emit unreachable fallback return.
         c._ir_RETURN(&ctx, ok_status);
-    } else if (state.dynamic_call_emitted) {
+    } else if (state.dynamic_call_emitted or hasRowRegion(&stack, sp)) {
         // The callee updated sp_ptr and the physical stack directly.
         // Just return success.
         c._ir_RETURN(&ctx, ok_status);
@@ -3336,7 +3352,7 @@ pub fn compileWord(
                     const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
                     emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, boolean_tag_const, ref);
                 },
-                .quotation_body => return IrCodegenError.NotCompilable,
+                .quotation_body, .row_region => return IrCodegenError.NotCompilable,
                 .raw_at_slot => |s| {
                     if (s != i) {
                         // Check for swap pattern: stack[i] -> s and stack[s] -> i
@@ -3523,7 +3539,7 @@ pub fn emitWordC(
 
     if (state.diverged) {
         c._ir_RETURN(&ctx, ok_status);
-    } else if (state.dynamic_call_emitted) {
+    } else if (state.dynamic_call_emitted or hasRowRegion(&stack, sp)) {
         c._ir_RETURN(&ctx, ok_status);
     } else {
         if (sp != output_count) return IrCodegenError.StackShapeMismatch;
@@ -3544,7 +3560,7 @@ pub fn emitWordC(
                     const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
                     emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, boolean_tag_const, ref);
                 },
-                .quotation_body => return IrCodegenError.NotCompilable,
+                .quotation_body, .row_region => return IrCodegenError.NotCompilable,
                 .raw_at_slot => |s| {
                     if (s != i) {
                         if (s < sp and stack[s] == .raw_at_slot and stack[s].raw_at_slot == i) {
@@ -3792,7 +3808,7 @@ pub fn emitWordCAot(
 
     if (state.diverged) {
         c._ir_RETURN(&ctx, ok_status);
-    } else if (state.dynamic_call_emitted) {
+    } else if (state.dynamic_call_emitted or hasRowRegion(&stack_buf, sp)) {
         // Dynamic quotation calls generate C code that calls through a raw
         // address (uintptr_t), which is not a valid C function call. Reject
         // these words so they fall back to the interpreter.
@@ -3816,7 +3832,7 @@ pub fn emitWordCAot(
                     const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
                     emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, boolean_tag_const, ref);
                 },
-                .quotation_body => return IrCodegenError.NotCompilable,
+                .quotation_body, .row_region => return IrCodegenError.NotCompilable,
                 .raw_at_slot => |s| {
                     if (s != i) {
                         if (s < sp and stack_buf[s] == .raw_at_slot and stack_buf[s].raw_at_slot == i) {
@@ -7116,4 +7132,33 @@ test "serializeQuotationInstructions: preserves line and column" {
     defer testing.allocator.free(decoded);
     try testing.expectEqual(@as(usize, 5), decoded[0].line);
     try testing.expectEqual(@as(usize, 10), decoded[0].column);
+}
+
+// ---------------------------------------------------------------------------
+// row_region tests
+// ---------------------------------------------------------------------------
+
+test "hasRowRegion: returns false when no row_region present" {
+    var stack: [64]StackEntry = undefined;
+    stack[0] = .{ .raw_at_slot = 0 };
+    stack[1] = .{ .raw_at_slot = 1 };
+    try testing.expect(!hasRowRegion(&stack, 2));
+    try testing.expect(!hasRowRegion(&stack, 0));
+}
+
+test "hasRowRegion: returns true when row_region present" {
+    var stack: [64]StackEntry = undefined;
+    stack[0] = .row_region;
+    stack[1] = .{ .raw_at_slot = 1 };
+    try testing.expect(hasRowRegion(&stack, 2));
+    try testing.expect(hasRowRegion(&stack, 1));
+}
+
+test "row_region is distinct from other StackEntry variants" {
+    const entry: StackEntry = .row_region;
+    try testing.expect(entry != .raw_at_slot);
+    try testing.expect(entry != .quotation_body);
+    try testing.expect(entry != .i64_ref);
+    try testing.expect(entry != .f64_ref);
+    try testing.expect(entry != .bool_ref);
 }
