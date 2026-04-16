@@ -281,7 +281,7 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
         } else {
             // Check if this is a parse-time word
             if (ctx) |c| {
-                if (c.dictionary.get(token)) |word| {
+                if (c.lookupWord(token)) |word| {
                     if (word.parse_time) {
                         try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line);
 
@@ -397,7 +397,7 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
         } else {
             // Check if this is a parse-time word
             if (ctx) |c| {
-                if (c.dictionary.get(token)) |word| {
+                if (c.lookupWord(token)) |word| {
                     if (word.parse_time) {
                         try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line);
                         is_first_token = false;
@@ -581,7 +581,7 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) P
             values.append(allocator, .{ .symbol = sym_copy }) catch return ParseError.OutOfMemory;
         } else {
             if (ctx) |c| {
-                if (c.dictionary.get(token)) |word| {
+                if (c.lookupWord(token)) |word| {
                     if (word.parse_time) {
                         try executeParseTimeWordForArray(c, word, tokenizer, &values, allocator);
                         continue;

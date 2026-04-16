@@ -1,0 +1,23 @@
+PASS: prelude dup accessible
+Stack: [ 1 ]
+PASS: prelude drop accessible
+Stack: [ 1 ]
+PASS: prelude swap accessible
+Stack: [ 1 ]
+PASS: prelude fixnum? accessible
+Stack: [ 1 ]
+PASS: prelude string? accessible
+Stack: [ 1 ]
+PASS: prelude H{ accessible
+Stack: [ 1 ]
+Stack: [ 1 ]
+PASS: user word visible
+Stack: [ 1 ]
+PASS: all-words returns array
+Stack: [ 1 ]
+Stack: [ 1 t ]
+PASS: all-words includes prelude words
+Stack: [ 1 ]
+Stack: [ 1 t ]
+PASS: all-words includes user words
+Stack: [ 1 ]

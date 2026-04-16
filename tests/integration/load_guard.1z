@@ -1,0 +1,11 @@
+use "testing" ;
+
+"Module load guards" test-section
+
+[ "fixtures/load_guard_yield.1z" load ] invalid-state: "yield blocked during module load" assert-error-type
+[ "fixtures/load_guard_sleep.1z" load ] invalid-state: "sleep blocked during module load" assert-error-type
+[ "fixtures/load_guard_await.1z" load ] invalid-state: "await blocked during module load" assert-error-type
+[ "fixtures/load_guard_await_all.1z" load ] invalid-state: "await-all blocked during module load" assert-error-type
+[ "fixtures/load_guard_send.1z" load ] invalid-state: "send blocked during module load" assert-error-type
+[ "fixtures/load_guard_receive.1z" load ] invalid-state: "receive blocked during module load" assert-error-type
+[ "fixtures/load_guard_select.1z" load ] invalid-state: "select blocked during module load" assert-error-type

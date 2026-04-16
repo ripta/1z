@@ -1,0 +1,26 @@
+\ Test that batch mode pushes a user frame on top of the prelude frame,
+\ so user definitions and imports land in that frame while prelude words
+\ remain visible through the frame chain.
+
+use "testing" ;
+
+\ Prelude words are visible through the frame chain
+1 2 + 3 = "prelude + visible" assert-true
+1 2 swap drop 2 = "prelude swap visible" assert-true
+42 fixnum? "prelude fixnum? visible" assert-true
+
+\ User definitions work in the batch frame
+my-batch-word: 123 ;
+my-batch-word 123 = "user word in batch frame" assert-true
+
+\ Imports work in the batch frame
+use "introspect" ;
+all-words array? "imported all-words works" assert-true
+
+\ User-defined word appears in all-words
+all-words >iterator [ name>> "my-batch-word" = ] #filter #count 1 =
+"user word visible in all-words" assert-true
+
+\ Prelude words still appear in all-words
+all-words >iterator [ name>> "dup" = ] #filter #count 1 =
+"prelude words visible in all-words" assert-true

@@ -141,46 +141,34 @@ fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator,
     ctx.import_frame_index = ctx.local_frames.items.len - 1;
     defer ctx.import_frame_index = old_import_frame;
 
+    const was_in_module_load = ctx.in_module_load;
+    ctx.in_module_load = true;
+    defer ctx.in_module_load = was_in_module_load;
+
     var processor: StatementProcessor = .{};
     while (true) {
         const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
             error.EndOfStream => {
-                // Try to execute any remaining buffered content
                 switch (processor.flush(alloc, ctx)) {
                     .needs_more_input => {},
-                    .parse_error => |e| {
-                        ctx.popLocalFrame();
-                        return e;
-                    },
+                    .parse_error => |e| return e,
                     .complete => |instrs| {
                         if (instrs.len > 0) {
-                            ctx.executeQuotation(.{ .instructions = instrs }) catch |e| {
-                                ctx.popLocalFrame();
-                                return e;
-                            };
+                            try ctx.executeQuotation(.{ .instructions = instrs });
                         }
                     },
                 }
                 break;
             },
-            else => {
-                ctx.popLocalFrame();
-                return error.FileReadFailed;
-            },
+            else => return error.FileReadFailed,
         };
 
         switch (processor.feedLine(alloc, line, ctx)) {
             .needs_more_input => continue,
-            .parse_error => |err| {
-                ctx.popLocalFrame();
-                return err;
-            },
+            .parse_error => |err| return err,
             .complete => |instrs| {
                 if (instrs.len > 0) {
-                    ctx.executeQuotation(.{ .instructions = instrs }) catch |e| {
-                        ctx.popLocalFrame();
-                        return e;
-                    };
+                    try ctx.executeQuotation(.{ .instructions = instrs });
                 }
                 processor.reset();
             },

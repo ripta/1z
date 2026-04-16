@@ -163,16 +163,62 @@ fn nativeToWord(ctx: *Context) anyerror!void {
     try ctx.stack.push(try buildWordInfo(alloc, ctx, sts, name, word));
 }
 
-/// all-words ( -- array ) - Return an array of word-info structs for every word in the dictionary
+/// all-words ( -- array ) - Return an array of word-info structs for every visible word.
+///
+/// Searches in order:
+///
+/// 1. local frames, up to import_frame_index to skip transient module-deps frames;
+/// 2. the global dictionary; and
+/// 3. ancestor contexts.
+///
+/// Higher-priority definitions shadow lower ones.
 fn nativeAllWords(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const sts = try lookupStructTypes(ctx);
 
+    var seen: std.StringHashMapUnmanaged(void) = .{};
     var results: std.ArrayListUnmanaged(Value) = .{};
-    var iter = ctx.dictionary.entries.iterator();
-    while (iter.next()) |entry| {
-        try results.append(alloc, try buildWordInfo(alloc, ctx, sts, entry.key_ptr.*, entry.value_ptr.*));
+
+    try collectFrameWords(alloc, ctx, sts, ctx, &seen, &results);
+
+    var ancestor = ctx.parent_context;
+    while (ancestor) |anc| {
+        try collectFrameWords(alloc, ctx, sts, anc, &seen, &results);
+        ancestor = anc.parent_context;
     }
 
     try ctx.stack.push(.{ .array = results.items });
+}
+
+/// Collect words from a single context's local frames and dictionary,
+/// skipping any names already in `seen`. Only iterates frames up to
+/// import_frame_index to exclude transient frames pushed during word
+/// execution (module deps frames, combinator frames).
+fn collectFrameWords(
+    alloc: std.mem.Allocator,
+    lookup_ctx: *Context,
+    sts: StructTypes,
+    source_ctx: *const Context,
+    seen: *std.StringHashMapUnmanaged(void),
+    results: *std.ArrayListUnmanaged(Value),
+) !void {
+    const frame_cap = if (source_ctx.import_frame_index) |idx| idx + 1 else 0;
+    var i = frame_cap;
+    while (i > 0) {
+        i -= 1;
+        var iter = source_ctx.local_frames.items[i].iterator();
+        while (iter.next()) |entry| {
+            const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
+            if (!gop.found_existing) {
+                try results.append(alloc, try buildWordInfo(alloc, lookup_ctx, sts, entry.key_ptr.*, entry.value_ptr.*));
+            }
+        }
+    }
+    var dict_iter = source_ctx.dictionary.entries.iterator();
+    while (dict_iter.next()) |entry| {
+        const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
+        if (!gop.found_existing) {
+            try results.append(alloc, try buildWordInfo(alloc, lookup_ctx, sts, entry.key_ptr.*, entry.value_ptr.*));
+        }
+    }
 }

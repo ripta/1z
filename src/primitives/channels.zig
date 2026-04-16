@@ -72,6 +72,11 @@ fn nativeCreateBufferedChannel(ctx: *Context) anyerror!void {
 ///
 /// In all cases, if the channel is closed, throws ChannelClosed. If the current task is cancelled while blocked, throws a "task-cancelled" error.
 fn nativeSend(ctx: *Context) anyerror!void {
+    if (ctx.in_module_load) {
+        ctx.pending_error_message = "send cannot be called during module loading";
+        return error.InvalidState;
+    }
+
     const ch = try helpers.popChannel(ctx);
     const value = try ctx.stack.pop();
 
@@ -157,6 +162,11 @@ fn nativeSend(ctx: *Context) anyerror!void {
 ///
 /// In all cases, if the current task is cancelled while blocked, throws a "task-cancelled" error.
 fn nativeReceive(ctx: *Context) anyerror!void {
+    if (ctx.in_module_load) {
+        ctx.pending_error_message = "receive cannot be called during module loading";
+        return error.InvalidState;
+    }
+
     const ch = try helpers.popChannel(ctx);
 
     const scheduler = ctx.scheduler orelse {
@@ -321,6 +331,11 @@ fn nativeCloseChannel(ctx: *Context) anyerror!void {
 /// delivers a value (via send) or is closed, the task wakes and returns the
 /// result. Stale receiver entries are cleaned from the other channels.
 fn nativeSelect(ctx: *Context) anyerror!void {
+    if (ctx.in_module_load) {
+        ctx.pending_error_message = "select cannot be called during module loading";
+        return error.InvalidState;
+    }
+
     const val = try ctx.stack.pop();
     const items = switch (val) {
         .array => |a| a,
