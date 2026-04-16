@@ -1,0 +1,9 @@
+use "testing" ;
+use "http" ;
+use "path" ;
+
+"transitive deps: normalize via direct import" test-section
+"/a/b/../c" normalize "/a/c" "normalize direct" assert=
+
+"transitive deps: normalize via http module" test-section
+"/../foo/./bar/../baz" normalize "/foo/baz" "normalize via path" assert=

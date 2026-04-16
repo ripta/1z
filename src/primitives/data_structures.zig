@@ -15,26 +15,29 @@ const Primitive = @import("types.zig").Primitive;
 const popQuotation = helpers.popQuotation;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "make-hash", .stack_effect = "quotation -- hash", .doc = "Create a hash table from key: value pairs in a quotation.", .func = nativeMakeHash },
+    .{ .name = "make-hash", .stack_effect = "quotation -- hash", .doc = "Create a hash table from key-value pairs in a quotation. Keys may be symbols (name:) or strings (\"name\").", .func = nativeMakeHash },
     .{ .name = "make-vector", .stack_effect = "quotation -- vector", .doc = "Create a mutable vector from values in a quotation.", .func = nativeMakeVector },
     .{ .name = "make-byte-array", .stack_effect = "quotation -- byte-array", .doc = "Create a byte array from fixnum values in a quotation.", .func = nativeMakeByteArray },
     .{ .name = "make-set", .stack_effect = "quotation -- set", .doc = "Create a set from unique values in a quotation.", .func = nativeMakeSet },
-    .{ .name = "make-mutable-map", .stack_effect = "quotation -- mmap", .doc = "Create a mutable map from key: value pairs in a quotation.", .func = nativeMakeMutableMap },
+    .{ .name = "make-mutable-map", .stack_effect = "quotation -- mmap", .doc = "Create a mutable map from key-value pairs in a quotation. Keys may be symbols (name:) or strings (\"name\").", .func = nativeMakeMutableMap },
     .{ .name = "@set!", .stack_effect = "mmap key value -- mmap", .doc = "Set value in mutable map, mutating in place.", .func = nativeAtSetMut },
     .{ .name = "@remove!", .stack_effect = "mmap key -- mmap", .doc = "Remove key from mutable map, mutating in place.", .func = nativeAtRemoveMut },
 };
 
 /// Helper to extract string from symbol or string value
-pub fn extractKeyString(val: Value) ![]const u8 {
+pub fn extractKeyString(ctx: *Context, val: Value) ![]const u8 {
     return switch (val) {
         .symbol => |s| s,
         .string => |s| s,
-        else => error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol or string", val);
+            return error.TypeMismatch;
+        },
     };
 }
 
 /// make-hash ( quotation -- hash ) - Create a hash table from key: value pairs
-/// The quotation should contain alternating symbol keys and values.
+/// The quotation should contain alternating symbol or string keys and values.
 /// Example: [ name: "Alice" age: 30 ] make-hash
 pub fn nativeMakeHash(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
@@ -47,11 +50,11 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
     // Parse instructions as key: value pairs
     var i: usize = 0;
     while (i < instrs.len) {
-        // Expect a symbol key
         const key_instr = instrs[i];
         const key = switch (key_instr.op) {
             .push_literal => |v| switch (v) {
                 .symbol => |s| s,
+                .string => |s| s,
                 else => return error.InvalidHashSyntax,
             },
             .call_word => return error.InvalidHashSyntax,
@@ -136,7 +139,10 @@ pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
                 if (int < 0 or int > 255) return error.FixnumOverflow;
                 ba.append(alloc, @intCast(int)) catch return error.OutOfMemory;
             },
-            else => return error.TypeMismatch,
+            else => {
+                helpers.setTypeMismatchError(ctx, "fixnum", val);
+                return error.TypeMismatch;
+            },
         }
     }
 
@@ -185,11 +191,11 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
     // Parse instructions as key: value pairs (same as make-hash)
     var i: usize = 0;
     while (i < instrs.len) {
-        // Expect a symbol key
         const key_instr = instrs[i];
         const key = switch (key_instr.op) {
             .push_literal => |v| switch (v) {
                 .symbol => |s| s,
+                .string => |s| s,
                 else => return error.InvalidHashSyntax,
             },
             .call_word => return error.InvalidHashSyntax,
@@ -223,7 +229,7 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
     const key = try ctx.stack.pop();
     const obj = try ctx.stack.pop();
 
-    const key_str = try extractKeyString(key);
+    const key_str = try extractKeyString(ctx, key);
 
     switch (obj) {
         .mutable_map => |m| {
@@ -241,7 +247,10 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
 
             try ctx.stack.push(.{ .mutable_map = m });
         },
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "mutable-map", obj);
+            return error.TypeMismatch;
+        },
     }
 }
 
@@ -250,13 +259,16 @@ pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
     const key = try ctx.stack.pop();
     const obj = try ctx.stack.pop();
 
-    const key_str = try extractKeyString(key);
+    const key_str = try extractKeyString(ctx, key);
 
     switch (obj) {
         .mutable_map => |m| {
             _ = m.remove(key_str);
             try ctx.stack.push(.{ .mutable_map = m });
         },
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "mutable-map", obj);
+            return error.TypeMismatch;
+        },
     }
 }

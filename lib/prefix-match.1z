@@ -1,0 +1,30 @@
+\ lib/prefix-match.1z - Longest prefix matching
+
+use "sequences" ;
+
+\\ Opaque prefix table sorted by prefix length, longest first.
+prefix-table: virtual{ array } ;
+
+\\ Build a prefix table from any sequence of { prefix value } pairs.
+\\ Sorts entries by prefix length, longest first.
+<prefix-table>: ( seq -- prefix-table ) [
+  [ 0 #nth #len 0 swap - ] #sort-by
+  >prefix-table
+] ;
+
+\\ Find the value for the longest matching prefix, or none.
+prefix-match?: ( prefix-table key -- option ) [
+  swap unmake-prefix-table
+  swap [ swap 0 #nth #starts-with? ] curry #filter
+  [ 1 #nth ] #map
+  #next?
+] ;
+
+\\ Find the value for the longest matching prefix, or throw.
+prefix-match: ( prefix-table key -- value ) [
+  prefix-match?
+  dup option:some?
+  [ option:some> ]
+  [ drop f "no matching prefix" EKeyNotFound make-error throw ]
+  if
+] ;

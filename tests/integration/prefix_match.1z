@@ -1,0 +1,46 @@
+\ Integration tests for lib/prefix-match.1z
+
+use "testing" ;
+use "prefix-match" ;
+
+"basic prefix matching" test-section
+{ { "/foo/bar" "bar-handler" }
+  { "/foo" "foo-handler" }
+  { "/" "default" }
+}
+<prefix-table>
+dup "/foo/bar/baz" prefix-match "bar-handler" "longest prefix /foo/bar matches" assert=
+dup "/foo/quux" prefix-match "foo-handler" "longest prefix /foo matches" assert=
+dup "/other" prefix-match "default" "fallback to /" assert=
+dup "/" prefix-match "default" "exact root match" assert=
+"/foo/bar" prefix-match "bar-handler" "exact match /foo/bar" assert=
+
+"prefix-match? returns option" test-section
+{ { "/api" "api-handler" } } <prefix-table>
+dup "/api/users" prefix-match? option:some? t "match returns some" assert=
+"/other" prefix-match? option:some? f "no match returns none" assert=
+
+"no match throws" test-section
+{ { "/api" "api-handler" } } <prefix-table>
+[ "/other" prefix-match ] curry "no match throws error" assert-error
+
+"insertion order does not matter" test-section
+{ { "/a" "short" }
+  { "/a/b/c" "long" }
+  { "/a/b" "medium" }
+}
+<prefix-table>
+dup "/a/b/c/d" prefix-match "long" "longest match regardless of insertion order" assert=
+dup "/a/b/x" prefix-match "medium" "medium match regardless of insertion order" assert=
+"/a/x" prefix-match "short" "short match regardless of insertion order" assert=
+
+"empty table" test-section
+{ } <prefix-table>
+[ "/anything" prefix-match ] curry "empty table throws" assert-error
+
+"iterator input to constructor" test-section
+{ { "/x" "x-val" } { "/x/y" "xy-val" } }
+>iterator <prefix-table>
+"/x/y/z" prefix-match "xy-val" "works with iterator input" assert=
+
+"All prefix-match tests complete!" print-line

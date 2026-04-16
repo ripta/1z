@@ -120,8 +120,11 @@ fn resolveHostPort(host: []const u8, port: u16) !std.net.Address {
 }
 
 /// Build an addr:tcp or addr:udp tagged value with the given host string and port.
-fn makeInetAddr(alloc: std.mem.Allocator, tag: *const VirtualType, host: []const u8, port: i64) !Value {
-    const struct_type = tag.anon_struct orelse return error.TypeMismatch;
+fn makeInetAddr(ctx: *Context, alloc: std.mem.Allocator, tag: *const VirtualType, host: []const u8, port: i64) !Value {
+    const struct_type = tag.anon_struct orelse {
+        helpers.setErrorContext(ctx, "addr tag '{s}' has no anonymous struct descriptor", .{tag.name});
+        return error.TypeMismatch;
+    };
 
     const fields = try alloc.alloc(Value, 2);
     fields[0] = .{ .string = host };
@@ -156,7 +159,7 @@ fn nativeResolve(ctx: *Context) anyerror!void {
                 var ip_buf: [46]u8 = undefined;
                 const ip_str = formatAddress(net_addr, &ip_buf);
                 const host_copy = try alloc.dupe(u8, ip_str);
-                const addr_val = try makeInetAddr(alloc, addr_info.tag, host_copy, addr_info.port);
+                const addr_val = try makeInetAddr(ctx, alloc, addr_info.tag, host_copy, addr_info.port);
                 const arr = try alloc.alloc(Value, 1);
                 arr[0] = addr_val;
                 try ctx.stack.push(.{ .array = arr });
@@ -176,7 +179,7 @@ fn nativeResolve(ctx: *Context) anyerror!void {
                 var ip_buf: [46]u8 = undefined;
                 const ip_str = formatAddress(net_addr, &ip_buf);
                 const host_copy = try alloc.dupe(u8, ip_str);
-                const addr_val = try makeInetAddr(alloc, addr_info.tag, host_copy, addr_info.port);
+                const addr_val = try makeInetAddr(ctx, alloc, addr_info.tag, host_copy, addr_info.port);
                 try results.append(alloc, addr_val);
             }
 
@@ -189,7 +192,10 @@ fn nativeResolve(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .array = arr });
         },
         .unix => {
-            const struct_type = addr_info.tag.anon_struct orelse return error.TypeMismatch;
+            const struct_type = addr_info.tag.anon_struct orelse {
+                helpers.setErrorContext(ctx, "addr:unix tag has no anonymous struct descriptor", .{});
+                return error.TypeMismatch;
+            };
 
             const fields = try alloc.alloc(Value, 1);
             fields[0] = .{ .string = addr_info.path };
@@ -437,7 +443,7 @@ fn sockaddrToAddrValue(alloc: std.mem.Allocator, addr: std.net.Address, ctx: *Co
         return error.IOFailed;
     };
 
-    return makeInetAddr(alloc, tag, host_copy, port);
+    return makeInetAddr(ctx, alloc, tag, host_copy, port);
 }
 
 /// Find the addr:tcp VirtualType by inspecting the >addr:tcp word definition.

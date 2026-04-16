@@ -4,6 +4,7 @@ const Value = value_mod.Value;
 const Set = value_mod.Set;
 
 const Primitive = @import("types.zig").Primitive;
+const helpers = @import("helpers.zig");
 
 pub const primitives = [_]Primitive{
     .{ .name = "@in?", .stack_effect = "set value -- ?", .doc = "Check if value is in the set.", .func = nativeAtIn },
@@ -21,7 +22,10 @@ pub fn nativeAtIn(ctx: *Context) anyerror!void {
 
     const set = switch (set_val) {
         .set => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "set", set_val);
+            return error.TypeMismatch;
+        },
     };
 
     try ctx.stack.push(.{ .boolean = set.contains(val) });
@@ -34,7 +38,10 @@ pub fn nativeAtAdjoin(ctx: *Context) anyerror!void {
 
     const old_set = switch (set_val) {
         .set => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "set", set_val);
+            return error.TypeMismatch;
+        },
     };
 
     if (old_set.contains(val)) {
@@ -62,7 +69,10 @@ pub fn nativeAtRemove(ctx: *Context) anyerror!void {
 
     const old_set = switch (set_val) {
         .set => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "set", set_val);
+            return error.TypeMismatch;
+        },
     };
 
     const alloc = ctx.quotationAllocator();
@@ -82,11 +92,17 @@ pub fn nativeAtUnion(ctx: *Context) anyerror!void {
 
     const set1 = switch (set1_val) {
         .set => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "set", set1_val);
+            return error.TypeMismatch;
+        },
     };
     const set2 = switch (set2_val) {
         .set => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "set", set2_val);
+            return error.TypeMismatch;
+        },
     };
 
     const alloc = ctx.quotationAllocator();
@@ -110,11 +126,17 @@ pub fn nativeAtIntersection(ctx: *Context) anyerror!void {
 
     const set1 = switch (set1_val) {
         .set => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "set", set1_val);
+            return error.TypeMismatch;
+        },
     };
     const set2 = switch (set2_val) {
         .set => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "set", set2_val);
+            return error.TypeMismatch;
+        },
     };
 
     const alloc = ctx.quotationAllocator();
@@ -139,11 +161,17 @@ pub fn nativeAtDifference(ctx: *Context) anyerror!void {
 
     const set1 = switch (set1_val) {
         .set => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "set", set1_val);
+            return error.TypeMismatch;
+        },
     };
     const set2 = switch (set2_val) {
         .set => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "set", set2_val);
+            return error.TypeMismatch;
+        },
     };
 
     const alloc = ctx.quotationAllocator();

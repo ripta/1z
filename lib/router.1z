@@ -1,0 +1,55 @@
+\ lib/router.1z - HTTP path router
+\ à la Golang http.ServeMux
+
+use "prefix-match" ;
+use "http" ;
+
+\\ Mutable router builder.
+router: mutable struct{ routes } ;
+
+\\ Create an empty router.
+<router>: ( -- router ) [ { } make-router ] ;
+
+\\ Register a handler for a path pattern.
+\\ Trailing-slash patterns match any URL with that prefix.
+\\ Non-trailing-slash patterns require an exact match.
+\\ Handler stack effect is ( request -- response ).
+route: ( router path handler -- router ) [
+  { } <rot- #push swap #push
+  swap dup routes>> <rot- #push >>routes
+] ;
+
+\\ True if a route pattern requires exact matching.
+exact-path?: ( path -- ? ) [ "/" #ends-with? not ] ;
+
+\\ Look up the handler for a request path.
+find-handler: ( exact-hash prefix-table path -- handler ) [
+  2 pick-n over @get?
+  dup option:some? [
+    option:some> nip nip nip
+  ] [
+    drop <rot- drop
+    prefix-match?
+    dup option:some? [
+      option:some>
+    ] [
+      drop [ drop not-found ]
+    ] if
+  ] if
+] ;
+
+\\ Dispatch a request to the matched handler and send the response.
+route-dispatch: ( stream request lookup -- ) [
+  over path>> swap call call send-response
+] ;
+
+\\ Finalize the router into a ( stream request -- ) handler for `serve`.
+build: ( router -- quotation ) [
+  routes>>
+  dup [ 0 #nth exact-path? ] #filter #collect
+  H{ } [ dup 0 #nth swap 1 #nth @set ] #reduce
+  swap [ 0 #nth exact-path? not ] #filter #collect
+  <prefix-table>
+  [ <rot- find-handler ] curry curry
+  [ route-dispatch ] curry
+] ;

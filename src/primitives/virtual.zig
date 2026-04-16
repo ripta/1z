@@ -44,14 +44,20 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
     const markers_val = try ctx.stack.pop();
     const markers_array = switch (markers_val) {
         .array => |arr| arr,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "array", markers_val);
+            return error.TypeMismatch;
+        },
     };
 
     var markers_list = std.ArrayListUnmanaged(*Marker){};
     for (markers_array) |m| {
         switch (m) {
             .marker => |mk| try markers_list.append(alloc, mk),
-            else => return error.TypeMismatch,
+            else => {
+                helpers.setTypeMismatchError(ctx, "marker", m);
+                return error.TypeMismatch;
+            },
         }
     }
     const markers_slice = try markers_list.toOwnedSlice(alloc);
@@ -60,7 +66,10 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
     const desc_val = try ctx.stack.pop();
     const desc_map: *MutableMap = switch (desc_val) {
         .mutable_map => |m| m,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "mutable_map", desc_val);
+            return error.TypeMismatch;
+        },
     };
     const inner_type_raw = desc_map.get("inner-type") orelse return error.MissingField;
     const inner_type_val = switch (inner_type_raw) {
@@ -77,7 +86,10 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
     const name_val = try ctx.stack.pop();
     const name = switch (name_val) {
         .symbol => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol", name_val);
+            return error.TypeMismatch;
+        },
     };
 
     switch (inner_type_val) {
@@ -108,7 +120,10 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             const fields_val = struct_desc.get("fields") orelse return error.MissingField;
             const fields_array = switch (fields_val) {
                 .array => |arr| arr,
-                else => return error.TypeMismatch,
+                else => {
+                    helpers.setErrorContext(ctx, "virtual{{ struct descriptor 'fields' must be an array, got {s}", .{helpers.valueTypeName(fields_val)});
+                    return error.TypeMismatch;
+                },
             };
 
             var fields_list = std.ArrayListUnmanaged([]const u8){};
@@ -116,7 +131,10 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
                 const raw = switch (f) {
                     .string => |s| s,
                     .symbol => |s| s,
-                    else => return error.TypeMismatch,
+                    else => {
+                        helpers.setErrorContext(ctx, "virtual{{ struct field name must be a string or symbol, got {s}", .{helpers.valueTypeName(f)});
+                        return error.TypeMismatch;
+                    },
                 };
                 const field_name = if (raw.len > 1 and raw[raw.len - 1] == ':')
                     raw[0 .. raw.len - 1]
@@ -162,7 +180,10 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{name});
             try definePredicate(ctx, pred_name, vtype, markers_slice);
         },
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setErrorContext(ctx, "virtual{{ inner type must be a string or struct descriptor, got {s}", .{helpers.valueTypeName(inner_type_val)});
+            return error.TypeMismatch;
+        },
     }
 }
 
@@ -275,7 +296,10 @@ fn virtualStructWrapHelper(ctx: *Context) anyerror!void {
     const ptr_val = try helpers.popFixnum(ctx);
     const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
 
-    const st = vt.anon_struct orelse return error.TypeMismatch;
+    const st = vt.anon_struct orelse {
+        helpers.setErrorContext(ctx, "{s} is not a struct-backed virtual type", .{vt.name});
+        return error.TypeMismatch;
+    };
     const num_fields = st.fields.len;
 
     const field_values = try alloc.alloc(Value, num_fields);
@@ -337,7 +361,10 @@ fn virtualStructToHashHelper(ctx: *Context) anyerror!void {
     const ptr_val = try helpers.popFixnum(ctx);
     const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
 
-    const st = vt.anon_struct orelse return error.TypeMismatch;
+    const st = vt.anon_struct orelse {
+        helpers.setErrorContext(ctx, "{s} is not a struct-backed virtual type", .{vt.name});
+        return error.TypeMismatch;
+    };
 
     const val = try ctx.stack.pop();
     switch (val) {

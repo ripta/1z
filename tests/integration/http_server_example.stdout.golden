@@ -1,0 +1,23 @@
+=== serve: root endpoint returns endpoint list ===
+Stack: [ ]
+PASS: root status
+PASS: root blank
+PASS: root body line 1
+PASS: root body line 2
+PASS: root body line 3
+PASS: root body line 4
+Stack: [ ]
+=== serve: healthz returns ok ===
+Stack: [ ]
+PASS: healthz status
+PASS: healthz blank
+PASS: healthz body
+Stack: [ ]
+=== serve: unknown path returns 404 ===
+Stack: [ ]
+PASS: 404 status
+Stack: [ ]
+=== serve: time endpoint returns 200 ===
+Stack: [ ]
+PASS: time status
+Stack: [ ]

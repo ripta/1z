@@ -65,7 +65,10 @@ fn nativeToSymbol(ctx: *Context) anyerror!void {
             }
             try ctx.stack.push(.{ .symbol = s });
         },
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "string", val);
+            return error.TypeMismatch;
+        },
     }
 }
 
@@ -83,7 +86,10 @@ fn nativeToQuotation(ctx: *Context) anyerror!void {
     const name = switch (val) {
         .string => |s| s,
         .symbol => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "string or symbol", val);
+            return error.TypeMismatch;
+        },
     };
 
     const instrs = try alloc.alloc(Instruction, 1);
@@ -106,7 +112,10 @@ fn nativeToBytes(ctx: *Context) anyerror!void {
             }
             try ctx.stack.push(.{ .byte_array = ba });
         },
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "string", val);
+            return error.TypeMismatch;
+        },
     }
 }
 
@@ -119,7 +128,10 @@ fn nativeBytesToString(ctx: *Context) anyerror!void {
             const result = alloc.dupe(u8, b.items) catch return error.OutOfMemory;
             try ctx.stack.push(.{ .string = result });
         },
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "byte-array", val);
+            return error.TypeMismatch;
+        },
     }
 }
 
@@ -135,7 +147,10 @@ fn nativeUppercase(ctx: *Context) anyerror!void {
             }
             try ctx.stack.push(.{ .string = result });
         },
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "string", val);
+            return error.TypeMismatch;
+        },
     }
 }
 
@@ -151,7 +166,10 @@ fn nativeLowercase(ctx: *Context) anyerror!void {
             }
             try ctx.stack.push(.{ .string = result });
         },
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "string", val);
+            return error.TypeMismatch;
+        },
     }
 }
 

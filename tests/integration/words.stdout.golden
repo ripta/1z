@@ -248,12 +248,15 @@ EFileNotFound
 EFileReadFailed
 EFixnumOverflow
 EIOFailed
+EIndexOutOfBounds
+EInvalidArgument
 EKeyNotFound
 ENoMatchingBranch
 ENotComparable
 EStackEffectMismatch
 EStackUnderflow
 ETypeMismatch
+EUnexpectedEOF
 EUnknownWord
 EUserRethrown
 EUserThrown
@@ -378,6 +381,7 @@ stream? ( val -- ? )
 string? ( val -- ? )
 struct{
 symbol? ( val -- ? )
+throw-type-error ( value expected-str -- * )
 times ( n quot -- )
 try ( quot -- result )
 try-acquire ( resource -- option )

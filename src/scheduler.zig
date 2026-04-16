@@ -221,6 +221,14 @@ pub const Scheduler = struct {
                 //              it's still in the queue.
                 if (task.cancelled) {
                     task.status = .cancelled;
+                    // The coroutine frame won't resume, so any deferred scope
+                    // cleanup inside nativeTaskScope or nativeWithTimeout won't
+                    // run. Free the children array here while the scope pointer
+                    // is still valid (the task's stack memory hasn't been freed).
+                    if (task.blocked_on_scope) |scope| {
+                        scope.deinit();
+                        task.blocked_on_scope = null;
+                    }
                     self.handleTaskDone(task);
                     continue;
                 }
@@ -270,6 +278,34 @@ pub const Scheduler = struct {
         }
     }
 
+    /// Cancel a task, handling all blocking states and propagating into nested
+    /// scopes. Sets the cancelled flag and requeues the task if it is blocked
+    /// on a channel or I/O fd. If the task is waiting on a nested scope, we
+    /// recursively cancels all childrens of that scope so the scope drains and
+    /// the waiting task is eventually requeued by `handleTaskDone`.
+    pub fn cancelTask(self: *Scheduler, task: *Task) void {
+        switch (task.status) {
+            .completed, .failed, .cancelled => return,
+            .pending, .running => {},
+        }
+
+        task.cancelled = true;
+
+        if (task.blocked_on_channel != null) {
+            self.run_queue.append(self.allocator, task) catch {};
+        } else if (task.blocked_on_io_fd) |fd| {
+            if (self.io_wait_map.fetchRemove(fd)) |kv| {
+                self.multiplexer.unregister(fd, kv.value.event) catch {};
+            }
+            task.blocked_on_io_fd = null;
+            self.run_queue.append(self.allocator, task) catch {};
+        } else if (task.blocked_on_scope) |scope| {
+            for (scope.children.items) |child| {
+                self.cancelTask(child);
+            }
+        }
+    }
+
     /// Handle a completed or failed task
     ///
     /// 1. If the task is awaited by another task, re-enqueue the awaiting task.
@@ -287,7 +323,7 @@ pub const Scheduler = struct {
                 .message = "task failed without error details",
             };
 
-            // NOTE(ripta): When a task fails, convey the cancellation to siblings in the  same scope.
+            // NOTE(ripta): When a task fails, convey the cancellation to siblings in the same scope.
             //              This is a best-effort attempt to prevent siblings from doing more work after
             //              a failure, but it doesn't guarantee that they won't do any more work since
             //              they may have already been resumed and be running concurrently. The cancelled
@@ -300,21 +336,7 @@ pub const Scheduler = struct {
             for (task.scope.children.items) |sibling| {
                 if (sibling == task) continue;
                 if (sibling == task.scope.scope_task) continue;
-                switch (sibling.status) {
-                    .pending, .running => {
-                        sibling.cancelled = true;
-                        if (sibling.blocked_on_channel != null) {
-                            self.run_queue.append(self.allocator, sibling) catch {};
-                        } else if (sibling.blocked_on_io_fd) |fd| {
-                            if (self.io_wait_map.fetchRemove(fd)) |kv| {
-                                self.multiplexer.unregister(fd, kv.value.event) catch {};
-                            }
-                            sibling.blocked_on_io_fd = null;
-                            self.run_queue.append(self.allocator, sibling) catch {};
-                        }
-                    },
-                    .completed, .failed, .cancelled => {},
-                }
+                self.cancelTask(sibling);
             }
         }
 

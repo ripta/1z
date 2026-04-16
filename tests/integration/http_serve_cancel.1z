@@ -1,0 +1,30 @@
+use "testing" ;
+use "net" ;
+use "tcp" ;
+use "server" ;
+use "time" ;
+
+"serve-forever with cancel" test-section
+[
+  echo-handler: ( stream -- ) [
+    dup stream-read-line
+    over swap stream-write drop
+    stream-close
+  ] ;
+
+  <server-config>
+  "127.0.0.1" >>host
+  39421 >>port
+  [ echo-handler ] >>handler
+
+  [ serve-forever ] curry spawn
+
+  100 milliseconds sleep
+
+  "127.0.0.1" 39421 make-addr:tcp tcp-connect
+  dup "hello\n" stream-write drop
+  dup 5 stream-read #len 5 "echoed 5 bytes" assert=
+  stream-close
+
+  cancel-task
+] task-scope

@@ -16,7 +16,7 @@ split-host-port: ( str -- hash ) [
   dup #first "[" = [
     \ Bracketed host: "[host]:port"
     "]:" #index-of dup not [
-      drop "invalid address: missing ]:port" throw
+      drop f "invalid address: missing ]:port" EInvalidArgument make-error throw
     ] [
       \ str idx -- idx points at "]"
       2dup 2 + over #len #slice parse-integer  \ str idx port
@@ -25,7 +25,7 @@ split-host-port: ( str -- hash ) [
   ] [
     \ Plain host:port -- split on ":" and rejoin all but last
     ":" split
-    dup #len 1 = [ drop "invalid address: missing port" throw ] [
+    dup #len 1 = [ drop f "invalid address: missing port" EInvalidArgument make-error throw ] [
       dup #last parse-integer swap  \ port parts
       0 over #len 1 - #slice        \ port host-parts
       ":" #join                     \ port host

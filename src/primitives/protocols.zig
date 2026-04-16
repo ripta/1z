@@ -33,19 +33,28 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
     const markers_val = try ctx.stack.pop();
     _ = switch (markers_val) {
         .array => |arr| arr,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "array", markers_val);
+            return error.TypeMismatch;
+        },
     };
 
     const desc_val = try ctx.stack.pop();
     const desc_map: *MutableMap = switch (desc_val) {
         .mutable_map => |m| m,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "mutable-map", desc_val);
+            return error.TypeMismatch;
+        },
     };
 
     const methods_val = desc_map.get("methods") orelse return error.MissingField;
     const methods_array = switch (methods_val) {
         .array => |arr| arr,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setErrorContext(ctx, "protocol descriptor 'methods' field must be an array", .{});
+            return error.TypeMismatch;
+        },
     };
 
     if (methods_array.len == 0) {
@@ -56,7 +65,10 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
     const name_val = try ctx.stack.pop();
     const protocol_name = switch (name_val) {
         .symbol => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol", name_val);
+            return error.TypeMismatch;
+        },
     };
 
     const instrs = try alloc.alloc(Instruction, 3);
@@ -79,13 +91,21 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
 /// it throws an error with context about which method is missing and which type failed
 /// to implement the protocol.
 fn protocolCheckHelper(ctx: *Context) anyerror!void {
-    const protocol_name = switch (try ctx.stack.pop()) {
+    const pname_val = try ctx.stack.pop();
+    const protocol_name = switch (pname_val) {
         .string => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "string", pname_val);
+            return error.TypeMismatch;
+        },
     };
-    const methods_array = switch (try ctx.stack.pop()) {
+    const methods_val = try ctx.stack.pop();
+    const methods_array = switch (methods_val) {
         .array => |arr| arr,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "array", methods_val);
+            return error.TypeMismatch;
+        },
     };
     const type_name = switch (try ctx.stack.pop()) {
         .symbol => |s| s,
@@ -98,7 +118,10 @@ fn protocolCheckHelper(ctx: *Context) anyerror!void {
     for (methods_array) |method_val| {
         const method_name = switch (method_val) {
             .string => |s| s,
-            else => return error.TypeMismatch,
+            else => {
+                helpers.setErrorContext(ctx, "protocol method entries must be strings", .{});
+                return error.TypeMismatch;
+            },
         };
 
         if (ctx.dispatch.lookupUnary(method_name, type_name) == null) {

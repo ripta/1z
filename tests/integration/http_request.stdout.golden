@@ -1,0 +1,187 @@
+=== read-request: simple GET ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ request{ method: "GET" path: "/" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+PASS: method
+Stack: [ request{ method: "GET" path: "/" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+PASS: path
+Stack: [ request{ method: "GET" path: "/" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+PASS: version
+Stack: [ request{ method: "GET" path: "/" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+PASS: host header
+Stack: [ ]
+=== read-request: multiple headers ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ request{ method: "GET" path: "/index.html" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
+PASS: method
+Stack: [ request{ method: "GET" path: "/index.html" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
+PASS: path
+Stack: [ request{ method: "GET" path: "/index.html" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
+PASS: host header
+Stack: [ request{ method: "GET" path: "/index.html" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
+PASS: content-type lowercase
+Stack: [ request{ method: "GET" path: "/index.html" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
+PASS: custom header
+Stack: [ ]
+=== read-request: POST method ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ request{ method: "POST" path: "/submit" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } } ]
+PASS: POST method
+Stack: [ request{ method: "POST" path: "/submit" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } } ]
+PASS: POST path
+Stack: [ request{ method: "POST" path: "/submit" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } } ]
+PASS: POST version
+Stack: [ request{ method: "POST" path: "/submit" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } } ]
+PASS: content-length header
+Stack: [ ]
+=== read-request: no headers ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ request{ method: "GET" path: "/" version: "HTTP/1.1" headers: H{ } } ]
+PASS: no-headers method
+Stack: [ request{ method: "GET" path: "/" version: "HTTP/1.1" headers: H{ } } ]
+PASS: no headers count
+Stack: [ ]
+=== read-request: EOF throws EUnexpectedEOF ===
+Stack: [ ]
+PASS: EOF on empty stream
+Stack: [ ]
+=== read-request: malformed request line throws EMalformedRequest ===
+Stack: [ ]
+PASS: too few parts
+Stack: [ ]
+=== reason-for: known status code ===
+Stack: [ ]
+PASS: 200 reason
+Stack: [ ]
+PASS: 404 reason
+Stack: [ ]
+PASS: 500 reason
+Stack: [ ]
+=== reason-for: unknown status code ===
+Stack: [ ]
+PASS: unknown reason
+Stack: [ ]
+=== send-response: simple 200 ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> response{ status: 200 reason: "OK" headers: H{ content-type: "text/plain; charset=utf-8" } body: "hello" } ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: status line
+Stack: [ <stream pipe(rd) read> ]
+PASS: connection header
+Stack: [ <stream pipe(rd) read> ]
+PASS: content-length
+Stack: [ <stream pipe(rd) read> ]
+PASS: content-type header
+Stack: [ <stream pipe(rd) read> ]
+PASS: blank line
+Stack: [ <stream pipe(rd) read> ]
+PASS: body
+Stack: [ ]
+=== ok: convenience constructor ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: ok status line
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: ok blank line
+Stack: [ <stream pipe(rd) read> ]
+PASS: ok body
+Stack: [ ]
+=== not-found: convenience constructor ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: 404 status line
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: 404 blank line
+Stack: [ <stream pipe(rd) read> ]
+PASS: 404 body
+Stack: [ ]
+=== method-not-allowed: convenience constructor ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: 405 status line
+Stack: [ ]
+=== error-response: convenience constructor ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: 500 status line
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: 500 blank line
+Stack: [ <stream pipe(rd) read> ]
+PASS: 500 body
+Stack: [ ]
+=== send-response: empty body ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: empty body status
+Stack: [ <stream pipe(rd) read> ]
+PASS: empty body connection
+Stack: [ <stream pipe(rd) read> ]
+PASS: empty body content-length
+Stack: [ ]
+=== serve: handler wrapping via TCP ===
+Stack: [ ]
+PASS: serve handler status
+PASS: serve handler blank
+PASS: serve handler body
+Stack: [ ]
+=== serve: handler receives parsed POST request ===
+Stack: [ ]
+PASS: POST handler status
+PASS: POST handler blank
+PASS: POST handler body is method
+Stack: [ ]
+=== serve: config construction ===
+Stack: [ ]
+Stack: [ "127.0.0.1" 9999 [ drop drop ] ]
+Stack: [ "127.0.0.1" 9999 [ [ drop drop ] swap dup -rot> dup read-request <rot- call stream-close ] ]
+Stack: [ server-config{ host: "127.0.0.1" port: 9999 backlog: 128 handler: [ [ drop drop ] swap dup -rot> dup read-request <rot- call stream-close ] on-error: [ drop ] } ]
+PASS: serve config host
+Stack: [ server-config{ host: "127.0.0.1" port: 9999 backlog: 128 handler: [ [ drop drop ] swap dup -rot> dup read-request <rot- call stream-close ] on-error: [ drop ] } ]
+PASS: serve config port
+Stack: [ ]
+=== serve: end-to-end GET ===
+Stack: [ ]
+PASS: serve e2e status
+PASS: serve e2e blank
+PASS: serve e2e body
+Stack: [ ]
+=== serve: server continues after malformed request ===
+Stack: [ ]
+PASS: serve recovery status
+PASS: serve recovery blank
+PASS: serve recovery body
+Stack: [ ]
+=== serve: concurrent connections ===
+Stack: [ ]
+PASS: concurrent gamma
+PASS: concurrent beta
+PASS: concurrent alpha
+Stack: [ ]
+=== serve: handler exception recovery ===
+Stack: [ ]
+PASS: after-crash status
+PASS: after-crash blank
+PASS: after-crash body
+Stack: [ ]

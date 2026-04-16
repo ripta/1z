@@ -35,7 +35,10 @@ pub fn nativeGet(ctx: *Context) anyerror!void {
     const param_val = try ctx.stack.pop();
     const param = switch (param_val) {
         .parameter => |p| p,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "parameter", param_val);
+            return error.TypeMismatch;
+        },
     };
 
     // Search frames from top (innermost) to bottom (outermost)
@@ -55,7 +58,10 @@ pub fn nativeWithParameter(ctx: *Context) anyerror!void {
     const param_val = try ctx.stack.pop();
     const param = switch (param_val) {
         .parameter => |p| p,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "parameter", param_val);
+            return error.TypeMismatch;
+        },
     };
     const new_value = try ctx.stack.pop();
 

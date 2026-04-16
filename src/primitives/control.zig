@@ -85,7 +85,10 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                         _ = try ctx.stack.pop();
                     },
                     .symbol => break,
-                    else => return error.TypeMismatch,
+                    else => {
+                        helpers.setTypeMismatchError(ctx, "symbol before marker definition", next_val);
+                        return error.TypeMismatch;
+                    },
                 }
             }
 
@@ -112,7 +115,10 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
 
         else => {
             if (isTypeDescriptor(top_val)) {
-                const desc_map = getDescriptorMap(top_val) orelse return error.TypeMismatch;
+                const desc_map = getDescriptorMap(top_val) orelse {
+                    helpers.setErrorContext(ctx, "type descriptor has no accessible map", .{});
+                    return error.TypeMismatch;
+                };
 
                 var collected_markers = std.ArrayListUnmanaged(*Marker){};
                 defer collected_markers.deinit(alloc);
@@ -128,7 +134,10 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                             _ = try ctx.stack.pop();
                         },
                         .symbol => break,
-                        else => return error.TypeMismatch,
+                        else => {
+                            helpers.setTypeMismatchError(ctx, "symbol, marker, or doc-string before type definition", next_val);
+                            return error.TypeMismatch;
+                        },
                     }
                 }
 
@@ -146,7 +155,10 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 const define_val = desc_map.get("define") orelse return error.MissingField;
                 const define_quot = switch (define_val) {
                     .quotation => |q| q,
-                    else => return error.TypeMismatch,
+                    else => {
+                        helpers.setTypeMismatchError(ctx, "quotation for type descriptor 'define' field", define_val);
+                        return error.TypeMismatch;
+                    },
                 };
                 try ctx.executeQuotation(define_quot);
             } else {
@@ -172,7 +184,10 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                             doc_val = d;
                         },
                         .symbol => break,
-                        else => return error.TypeMismatch,
+                        else => {
+                            helpers.setTypeMismatchError(ctx, "symbol, marker, stack-effect, or doc-string before word definition", next_val);
+                            return error.TypeMismatch;
+                        },
                     }
                 }
 

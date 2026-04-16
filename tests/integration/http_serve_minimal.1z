@@ -1,0 +1,31 @@
+use "testing" ;
+use "net" ;
+use "tcp" ;
+use "time" ;
+
+"tcp wrappers: tcp-accept with raw connect" test-section
+[
+  "127.0.0.1" 39420 make-addr:tcp 128 tcp-listen
+
+  \ Spawn accept+echo task using tcp-accept
+  dup [
+    tcp-accept drop
+    dup stream-read-line
+    over swap stream-write drop
+    stream-close
+  ] curry spawn
+
+  \ Client: raw connect
+  "127.0.0.1" 39420 make-addr:tcp resolve #first
+  dup socket
+  dup <rot- connect
+  fd>stream
+
+  dup "hello\n" stream-write drop
+  dup 5 stream-read
+  #len 5 "echoed 5 bytes" assert=
+
+  stream-close
+  await drop
+  tcp-close
+] task-scope

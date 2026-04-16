@@ -1,0 +1,101 @@
+use "testing" ;
+use "http" ;
+use "net" ;
+use "tcp" ;
+use "time" ;
+
+"serve-static: missing file returns 404" test-section
+[
+  [
+    "127.0.0.1" 39410 "tests/integration/http_static_root" serve-static
+  ] spawn
+  100 milliseconds sleep
+
+  "127.0.0.1" 39410 make-addr:tcp tcp-connect
+  dup "GET /nope.txt HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  stream-read-line "HTTP/1.1 404 Not Found" "missing status" assert=
+
+  cancel-task
+] task-scope
+
+"serve-static: serves index.html at root with correct headers and body" test-section
+[
+  [
+    "127.0.0.1" 39411 "tests/integration/http_static_root" serve-static
+  ] spawn
+  100 milliseconds sleep
+
+  "127.0.0.1" 39411 make-addr:tcp tcp-connect
+  dup "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "index status" assert=
+  dup read-headers
+  dup "content-type" @get "text/html; charset=utf-8" "index content-type" assert=
+  "content-length" @get "15" "index content-length" assert=
+  stream-read-line "<h1>hello</h1>" "index body" assert=
+
+  cancel-task
+] task-scope
+
+"serve-static: serves css file with correct headers and body" test-section
+[
+  [
+    "127.0.0.1" 39412 "tests/integration/http_static_root" serve-static
+  ] spawn
+  100 milliseconds sleep
+
+  "127.0.0.1" 39412 make-addr:tcp tcp-connect
+  dup "GET /style.css HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "css status" assert=
+  dup read-headers
+  dup "content-type" @get "text/css; charset=utf-8" "css content-type" assert=
+  "content-length" @get "21" "css content-length" assert=
+  stream-read-line "body { color: red; }" "css body" assert=
+
+  cancel-task
+] task-scope
+
+"serve-static: serves index.html for trailing-slash directory" test-section
+[
+  [
+    "127.0.0.1" 39414 "tests/integration/http_static_root" serve-static
+  ] spawn
+  100 milliseconds sleep
+
+  "127.0.0.1" 39414 make-addr:tcp tcp-connect
+  dup "GET /subdir/ HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  stream-read-line "HTTP/1.1 200 OK" "subdir index status" assert=
+
+  cancel-task
+] task-scope
+
+"serve-static: directory traversal blocked" test-section
+[
+  [
+    "127.0.0.1" 39413 "tests/integration/http_static_root" serve-static
+  ] spawn
+  100 milliseconds sleep
+
+  "127.0.0.1" 39413 make-addr:tcp tcp-connect
+  dup "GET /../../../etc/passwd HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  stream-read-line "HTTP/1.1 404 Not Found" "traversal blocked" assert=
+
+  cancel-task
+] task-scope
+
+"serve-static: no-extension file gets application/octet-stream" test-section
+[
+  [
+    "127.0.0.1" 39415 "tests/integration/http_static_root" serve-static
+  ] spawn
+  100 milliseconds sleep
+
+  "127.0.0.1" 39415 make-addr:tcp tcp-connect
+  dup "GET /noext HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "noext status" assert=
+  dup read-headers
+  dup "content-type" @get "application/octet-stream" "noext content-type" assert=
+  "content-length" @get "14" "noext content-length" assert=
+  stream-read-line "binary content" "noext body" assert=
+
+  cancel-task
+] task-scope

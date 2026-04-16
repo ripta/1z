@@ -114,8 +114,10 @@ pub fn nativeStreamOpen(ctx: *Context) anyerror!void {
         .append
     else if (std.mem.eql(u8, mode_sym, "read-write"))
         .read_write
-    else
+    else {
+        helpers.setErrorContext(ctx, "stream-open mode must be read:, write:, append:, or read-write:, got {s}:", .{mode_sym});
         return error.TypeMismatch;
+    };
 
     // Open file based on mode
     const file = switch (mode) {
@@ -197,7 +199,10 @@ pub fn nativeStreamWrite(ctx: *Context) anyerror!void {
     const bytes: []const u8 = switch (bytes_val) {
         .byte_array => |ba| ba.items,
         .string => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "string or byte-array", bytes_val);
+            return error.TypeMismatch;
+        },
     };
 
     const written = asyncWrite(stream, bytes, ctx) catch |err| {

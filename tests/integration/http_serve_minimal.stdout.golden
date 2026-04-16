@@ -1,0 +1,4 @@
+=== tcp wrappers: tcp-accept with raw connect ===
+Stack: [ ]
+PASS: echoed 5 bytes
+Stack: [ ]

@@ -163,8 +163,10 @@ fn nativeParseLiteral(ctx: *Context) anyerror!void {
             return;
         }
 
+        helpers.setErrorContext(ctx, "parse-literal: not a recognized literal: {s}", .{token});
         return error.TypeMismatch;
     }
 
+    helpers.setErrorContext(ctx, "parse-literal: no token available", .{});
     return error.TypeMismatch;
 }

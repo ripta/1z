@@ -1,0 +1,26 @@
+use "testing" ;
+
+\ -- 1. Native error in task reports actual error type --
+\      A stack underflow (native Zig error, not user-thrown) should propagate
+\      with its real error type instead of the generic "task-error".
+
+test-native-error-type: ( -- ) [
+  [
+    [
+      [ drop ] spawn drop
+    ] task-scope
+  ] stack-underflow: "native error in task reports actual error type" assert-error-type
+] ;
+
+\ -- 2. Type mismatch error in task reports actual error type --
+
+test-type-mismatch-in-task: ( -- ) [
+  [
+    [
+      [ 1 "a" + ] spawn drop
+    ] task-scope
+  ] type-mismatch: "type mismatch in task reports actual error type" assert-error-type
+] ;
+
+test-native-error-type
+test-type-mismatch-in-task

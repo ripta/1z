@@ -1,0 +1,267 @@
+use "testing" ;
+use "http" ;
+use "net" ;
+use "tcp" ;
+use "server" ;
+use "time" ;
+
+"read-request: simple GET" test-section
+<pipe> dup "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+stream-close
+read-request
+dup method>> "GET" "method" assert=
+dup path>> "/" "path" assert=
+dup version>> "HTTP/1.1" "version" assert=
+headers>> "host" @get "localhost" "host header" assert=
+
+"read-request: multiple headers" test-section
+<pipe> dup "GET /index.html HTTP/1.1\r\nHost: example.com\r\nContent-Type: text/html\r\nX-Custom: hello world\r\n\r\n" stream-write drop
+stream-close
+read-request
+dup method>> "GET" "method" assert=
+dup path>> "/index.html" "path" assert=
+dup headers>> "host" @get "example.com" "host header" assert=
+dup headers>> "content-type" @get "text/html" "content-type lowercase" assert=
+headers>> "x-custom" @get "hello world" "custom header" assert=
+
+"read-request: POST method" test-section
+<pipe> dup "POST /submit HTTP/1.0\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n" stream-write drop
+stream-close
+read-request
+dup method>> "POST" "POST method" assert=
+dup path>> "/submit" "POST path" assert=
+dup version>> "HTTP/1.0" "POST version" assert=
+headers>> "content-length" @get "0" "content-length header" assert=
+
+"read-request: no headers" test-section
+<pipe> dup "GET / HTTP/1.1\r\n\r\n" stream-write drop
+stream-close
+read-request
+dup method>> "GET" "no-headers method" assert=
+headers>> @keys #len 0 "no headers count" assert=
+
+"read-request: EOF throws EUnexpectedEOF" test-section
+[ <pipe> stream-close read-request ] unexpected-eof: "EOF on empty stream" assert-error-type
+
+"read-request: malformed request line throws EMalformedRequest" test-section
+[ <pipe> dup "GET /\r\n\r\n" stream-write drop stream-close read-request ] malformed-request: "too few parts" assert-error-type
+
+"reason-for: known status code" test-section
+200 reason-for "OK" "200 reason" assert=
+404 reason-for "Not Found" "404 reason" assert=
+500 reason-for "Internal Server Error" "500 reason" assert=
+
+"reason-for: unknown status code" test-section
+999 reason-for "Unknown" "unknown reason" assert=
+
+"send-response: simple 200" test-section
+<pipe> dup
+200 "OK" "text/plain; charset=utf-8" "hello" <response>
+send-response
+stream-close
+dup stream-read-line "HTTP/1.1 200 OK" "status line" assert=
+dup stream-read-line "Connection: close" "connection header" assert=
+dup stream-read-line "Content-Length: 5" "content-length" assert=
+dup stream-read-line "content-type: text/plain; charset=utf-8" "content-type header" assert=
+dup stream-read-line "" "blank line" assert=
+stream-read-line "hello" "body" assert=
+
+"ok: convenience constructor" test-section
+<pipe> dup
+"world" "text/html; charset=utf-8" ok send-response
+stream-close
+dup stream-read-line "HTTP/1.1 200 OK" "ok status line" assert=
+dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+dup stream-read-line "" "ok blank line" assert=
+stream-read-line "world" "ok body" assert=
+
+"not-found: convenience constructor" test-section
+<pipe> dup
+not-found send-response
+stream-close
+dup stream-read-line "HTTP/1.1 404 Not Found" "404 status line" assert=
+dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+dup stream-read-line "" "404 blank line" assert=
+stream-read-line "404 Not Found" "404 body" assert=
+
+"method-not-allowed: convenience constructor" test-section
+<pipe> dup
+method-not-allowed send-response
+stream-close
+stream-read-line "HTTP/1.1 405 Method Not Allowed" "405 status line" assert=
+
+"error-response: convenience constructor" test-section
+<pipe> dup
+500 "Internal Server Error" "something broke" error-response send-response
+stream-close
+dup stream-read-line "HTTP/1.1 500 Internal Server Error" "500 status line" assert=
+dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+dup stream-read-line "" "500 blank line" assert=
+stream-read-line "something broke" "500 body" assert=
+
+"send-response: empty body" test-section
+<pipe> dup
+200 "OK" "text/plain" "" <response> send-response
+stream-close
+dup stream-read-line "HTTP/1.1 200 OK" "empty body status" assert=
+dup stream-read-line "Connection: close" "empty body connection" assert=
+stream-read-line "Content-Length: 0" "empty body content-length" assert=
+
+"serve: handler wrapping via TCP" test-section
+[
+  "127.0.0.1" 39285 make-addr:tcp 128 tcp-listen
+
+  dup [
+    tcp-accept drop
+    dup read-request
+    path>> "text/plain; charset=utf-8" ok
+    over -rot> send-response
+    stream-close
+  ] curry spawn
+
+  "127.0.0.1" 39285 make-addr:tcp tcp-connect
+  dup "GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "serve handler status" assert=
+  dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+  dup stream-read-line "" "serve handler blank" assert=
+  stream-read-line "/hello" "serve handler body" assert=
+
+  await drop
+  tcp-close
+] task-scope
+
+"serve: handler receives parsed POST request" test-section
+[
+  "127.0.0.1" 39286 make-addr:tcp 128 tcp-listen
+
+  dup [
+    tcp-accept drop
+    dup read-request
+    method>> "text/plain; charset=utf-8" ok
+    over -rot> send-response
+    stream-close
+  ] curry spawn
+
+  "127.0.0.1" 39286 make-addr:tcp tcp-connect
+  dup "POST /submit HTTP/1.0\r\nHost: test\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "POST handler status" assert=
+  dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+  dup stream-read-line "" "POST handler blank" assert=
+  stream-read-line "POST" "POST handler body is method" assert=
+
+  await drop
+  tcp-close
+] task-scope
+
+"serve: config construction" test-section
+"127.0.0.1" 9999 [ drop drop ]
+[ swap dup -rot> dup read-request <rot- call stream-close ] curry
+<server-config> swap >>handler swap >>port swap >>host
+dup host>> "127.0.0.1" "serve config host" assert=
+port>> 9999 "serve config port" assert=
+
+"serve: end-to-end GET" test-section
+[
+  [
+    "127.0.0.1" 39290 [
+      path>> "text/plain; charset=utf-8" ok send-response
+    ] serve
+  ] spawn
+  10 milliseconds sleep
+  "127.0.0.1" 39290 make-addr:tcp tcp-connect
+  dup "GET /test-path HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "serve e2e status" assert=
+  dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+  dup stream-read-line "" "serve e2e blank" assert=
+  stream-read-line "/test-path" "serve e2e body" assert=
+  cancel-task
+] task-scope
+
+"serve: server continues after malformed request" test-section
+[
+  [
+    "127.0.0.1" 39291 [
+      path>> "text/plain; charset=utf-8" ok send-response
+    ] serve
+  ] spawn
+  10 milliseconds sleep
+  "127.0.0.1" 39291 make-addr:tcp tcp-connect
+  dup "GARBAGE\r\n\r\n" stream-write drop
+  stream-close
+  10 milliseconds sleep
+  "127.0.0.1" 39291 make-addr:tcp tcp-connect
+  dup "GET /recovered HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "serve recovery status" assert=
+  dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+  dup stream-read-line "" "serve recovery blank" assert=
+  stream-read-line "/recovered" "serve recovery body" assert=
+  cancel-task
+] task-scope
+
+"serve: concurrent connections" test-section
+[
+  [
+    "127.0.0.1" 39292 [
+      path>> "text/plain; charset=utf-8" ok send-response
+    ] serve
+  ] spawn
+  10 milliseconds sleep
+
+  [
+    "127.0.0.1" 39292 make-addr:tcp tcp-connect
+    dup "GET /alpha HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+    dup stream-read-line drop
+    dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+    dup stream-read-line drop
+    stream-read-line
+  ] spawn
+  [
+    "127.0.0.1" 39292 make-addr:tcp tcp-connect
+    dup "GET /beta HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+    dup stream-read-line drop
+    dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+    dup stream-read-line drop
+    stream-read-line
+  ] spawn
+  [
+    "127.0.0.1" 39292 make-addr:tcp tcp-connect
+    dup "GET /gamma HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+    dup stream-read-line drop
+    dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+    dup stream-read-line drop
+    stream-read-line
+  ] spawn
+
+  await "/gamma" "concurrent gamma" assert=
+  await "/beta" "concurrent beta" assert=
+  await "/alpha" "concurrent alpha" assert=
+
+  cancel-task
+] task-scope
+
+"serve: handler exception recovery" test-section
+[
+  [
+    "127.0.0.1" 39293 [
+      dup path>> "/crash" =
+      [ drop "deliberate error" throw ]
+      [ path>> "text/plain; charset=utf-8" ok send-response ]
+      if
+    ] serve
+  ] spawn
+  10 milliseconds sleep
+
+  "127.0.0.1" 39293 make-addr:tcp tcp-connect
+  dup "GET /crash HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  stream-close
+  10 milliseconds sleep
+
+  "127.0.0.1" 39293 make-addr:tcp tcp-connect
+  dup "GET /ok HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "after-crash status" assert=
+  dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+  dup stream-read-line "" "after-crash blank" assert=
+  stream-read-line "/ok" "after-crash body" assert=
+
+  cancel-task
+] task-scope

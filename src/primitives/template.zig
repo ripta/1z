@@ -23,7 +23,7 @@ fn nativeTemplate(ctx: *Context) anyerror!void {
     const input = try helpers.popString(ctx);
     const alloc = ctx.quotationAllocator();
 
-    const segments = try parseTemplate(alloc, input);
+    const segments = try parseTemplate(ctx, alloc, input);
     try ctx.stack.push(.{ .template = segments });
 }
 
@@ -34,7 +34,10 @@ fn nativeInterpolate(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const segments = switch (val) {
         .template => |t| t,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "template", val);
+            return error.TypeMismatch;
+        },
     };
     const source = try ctx.stack.pop();
 
@@ -51,12 +54,12 @@ fn nativeInterpolate(ctx: *Context) anyerror!void {
                 try appendFormatted(writer, str, spec);
             },
             .named => |n| {
-                const field_val = try lookupNamed(source, n.name);
+                const field_val = try lookupNamed(ctx, source, n.name);
                 const str = try valueToString(alloc, field_val);
                 try appendFormatted(writer, str, n.spec);
             },
             .indexed => |idx| {
-                const elem = try lookupIndexed(source, idx.index);
+                const elem = try lookupIndexed(ctx, source, idx.index);
                 const str = try valueToString(alloc, elem);
                 try appendFormatted(writer, str, idx.spec);
             },
@@ -80,7 +83,7 @@ fn valueToString(alloc: Allocator, val: Value) ![]const u8 {
 }
 
 /// Look up a named field on a struct instance, hash, or mutable map.
-fn lookupNamed(source: Value, name: []const u8) !Value {
+fn lookupNamed(ctx: ?*Context, source: Value, name: []const u8) !Value {
     switch (source) {
         .struct_instance => |si| {
             for (si.struct_type.fields, 0..) |field, i| {
@@ -96,18 +99,24 @@ fn lookupNamed(source: Value, name: []const u8) !Value {
         .mutable_map => |m| {
             return m.get(name) orelse return error.KeyNotFound;
         },
-        else => return error.TypeMismatch,
+        else => {
+            if (ctx) |c| helpers.setTypeMismatchError(c, "struct, hash, or mutable-map", source);
+            return error.TypeMismatch;
+        },
     }
 }
 
 /// Look up an indexed element on an array.
-fn lookupIndexed(source: Value, index: usize) !Value {
+fn lookupIndexed(ctx: ?*Context, source: Value, index: usize) !Value {
     switch (source) {
         .array => |arr| {
             if (index >= arr.len) return error.IndexOutOfBounds;
             return arr[index];
         },
-        else => return error.TypeMismatch,
+        else => {
+            if (ctx) |c| helpers.setTypeMismatchError(c, "array", source);
+            return error.TypeMismatch;
+        },
     }
 }
 
@@ -141,7 +150,7 @@ fn appendFormatted(writer: anytype, str: []const u8, spec: FormatSpec) !void {
 ///
 /// Handles `\{` and `\}` escapes, `{}` identity, `{name}` named,
 /// `{0}` indexed placeholders, and `{name:key=value,...}` format specs.
-pub fn parseTemplate(alloc: Allocator, input: []const u8) ![]const TemplateSegment {
+pub fn parseTemplate(ctx: ?*Context, alloc: Allocator, input: []const u8) ![]const TemplateSegment {
     var segments: std.ArrayListUnmanaged(TemplateSegment) = .{};
     errdefer {
         for (segments.items) |seg| {
@@ -163,7 +172,7 @@ pub fn parseTemplate(alloc: Allocator, input: []const u8) ![]const TemplateSegme
             literal_buf.append(alloc, input[i + 1]) catch return error.OutOfMemory;
             i += 2;
         } else if (input[i] == '}') {
-            // Unmatched closing brace (not escaped)
+            if (ctx) |c| helpers.setErrorContext(c, "unmatched closing brace in template string", .{});
             return error.TypeMismatch;
         } else if (input[i] == '{') {
             // Flush accumulated literal text
@@ -176,7 +185,7 @@ pub fn parseTemplate(alloc: Allocator, input: []const u8) ![]const TemplateSegme
             var end = start;
             while (end < input.len and input[end] != '}') : (end += 1) {}
             if (end >= input.len) {
-                // Unmatched opening brace
+                if (ctx) |c| helpers.setErrorContext(c, "unmatched opening brace in template string", .{});
                 return error.TypeMismatch;
             }
 
@@ -190,11 +199,14 @@ pub fn parseTemplate(alloc: Allocator, input: []const u8) ![]const TemplateSegme
                 spec_part = content[colon_pos + 1 ..];
             }
 
-            const spec = if (spec_part) |sp| try parseFormatSpec(sp) else FormatSpec{};
+            const spec = if (spec_part) |sp| try parseFormatSpec(ctx, sp) else FormatSpec{};
             if (name_part.len == 0) {
                 segments.append(alloc, .{ .identity = spec }) catch return error.OutOfMemory;
             } else if (isNumeric(name_part)) {
-                const index = std.fmt.parseInt(usize, name_part, 10) catch return error.TypeMismatch;
+                const index = std.fmt.parseInt(usize, name_part, 10) catch {
+                    if (ctx) |c| helpers.setErrorContext(c, "invalid placeholder index '{s}'", .{name_part});
+                    return error.TypeMismatch;
+                };
                 segments.append(alloc, .{ .indexed = .{ .index = index, .spec = spec } }) catch return error.OutOfMemory;
             } else {
                 const name = alloc.dupe(u8, name_part) catch return error.OutOfMemory;
@@ -224,7 +236,7 @@ fn isNumeric(s: []const u8) bool {
 }
 
 /// Parse a format spec string like "width=2,fill=0,align=right".
-fn parseFormatSpec(spec_str: []const u8) !FormatSpec {
+fn parseFormatSpec(ctx: ?*Context, spec_str: []const u8) !FormatSpec {
     var spec = FormatSpec{};
     if (spec_str.len == 0) return spec;
 
@@ -236,9 +248,15 @@ fn parseFormatSpec(spec_str: []const u8) !FormatSpec {
             const val = pair[eq_pos + 1 ..];
 
             if (std.mem.eql(u8, key, "width")) {
-                spec.width = std.fmt.parseInt(usize, val, 10) catch return error.TypeMismatch;
+                spec.width = std.fmt.parseInt(usize, val, 10) catch {
+                    if (ctx) |c| helpers.setErrorContext(c, "invalid width value '{s}' in format spec", .{val});
+                    return error.TypeMismatch;
+                };
             } else if (std.mem.eql(u8, key, "fill")) {
-                if (val.len != 1) return error.TypeMismatch;
+                if (val.len != 1) {
+                    if (ctx) |c| helpers.setErrorContext(c, "fill must be a single character, got '{s}'", .{val});
+                    return error.TypeMismatch;
+                }
                 spec.fill = val[0];
             } else if (std.mem.eql(u8, key, "align")) {
                 if (std.mem.eql(u8, val, "left")) {
@@ -246,12 +264,15 @@ fn parseFormatSpec(spec_str: []const u8) !FormatSpec {
                 } else if (std.mem.eql(u8, val, "right")) {
                     spec.align_left = false;
                 } else {
+                    if (ctx) |c| helpers.setErrorContext(c, "invalid align value '{s}', expected 'left' or 'right'", .{val});
                     return error.TypeMismatch;
                 }
             } else {
+                if (ctx) |c| helpers.setErrorContext(c, "unknown format spec key '{s}'", .{key});
                 return error.TypeMismatch;
             }
         } else {
+            if (ctx) |c| helpers.setErrorContext(c, "format spec pair '{s}' missing '=' separator", .{pair});
             return error.TypeMismatch;
         }
     }
@@ -267,13 +288,13 @@ const testing = std.testing;
 const test_alloc = testing.allocator;
 
 test "parse empty template" {
-    const segments = try parseTemplate(test_alloc, "");
+    const segments = try parseTemplate(null, test_alloc, "");
     defer test_alloc.free(segments);
     try testing.expectEqual(@as(usize, 0), segments.len);
 }
 
 test "parse literal only" {
-    const segments = try parseTemplate(test_alloc, "hello world");
+    const segments = try parseTemplate(null, test_alloc, "hello world");
     defer {
         for (segments) |seg| {
             switch (seg) {
@@ -288,7 +309,7 @@ test "parse literal only" {
 }
 
 test "parse identity placeholder" {
-    const segments = try parseTemplate(test_alloc, "val={}");
+    const segments = try parseTemplate(null, test_alloc, "val={}");
     defer {
         for (segments) |seg| {
             switch (seg) {
@@ -304,7 +325,7 @@ test "parse identity placeholder" {
 }
 
 test "parse named placeholder" {
-    const segments = try parseTemplate(test_alloc, "Hello {name}!");
+    const segments = try parseTemplate(null, test_alloc, "Hello {name}!");
     defer {
         for (segments) |seg| {
             switch (seg) {
@@ -322,7 +343,7 @@ test "parse named placeholder" {
 }
 
 test "parse indexed placeholder" {
-    const segments = try parseTemplate(test_alloc, "{0} + {1}");
+    const segments = try parseTemplate(null, test_alloc, "{0} + {1}");
     defer {
         for (segments) |seg| {
             switch (seg) {
@@ -339,7 +360,7 @@ test "parse indexed placeholder" {
 }
 
 test "parse escaped braces" {
-    const segments = try parseTemplate(test_alloc, "\\{literal\\}");
+    const segments = try parseTemplate(null, test_alloc, "\\{literal\\}");
     defer {
         for (segments) |seg| {
             switch (seg) {
@@ -354,7 +375,7 @@ test "parse escaped braces" {
 }
 
 test "parse format spec" {
-    const segments = try parseTemplate(test_alloc, "{name:width=10,fill=0,align=left}");
+    const segments = try parseTemplate(null, test_alloc, "{name:width=10,fill=0,align=left}");
     defer {
         for (segments) |seg| {
             switch (seg) {
@@ -373,17 +394,17 @@ test "parse format spec" {
 }
 
 test "unmatched open brace is error" {
-    const result = parseTemplate(test_alloc, "hello {world");
+    const result = parseTemplate(null, test_alloc, "hello {world");
     try testing.expectError(error.TypeMismatch, result);
 }
 
 test "unmatched close brace is error" {
-    const result = parseTemplate(test_alloc, "hello }world");
+    const result = parseTemplate(null, test_alloc, "hello }world");
     try testing.expectError(error.TypeMismatch, result);
 }
 
 test "unknown format spec key is error" {
-    const result = parseTemplate(test_alloc, "{name:bogus=1}");
+    const result = parseTemplate(null, test_alloc, "{name:bogus=1}");
     try testing.expectError(error.TypeMismatch, result);
 }
 
@@ -408,7 +429,7 @@ test "lookupNamed on hash" {
     var h = HashTable{};
     defer h.deinit(test_alloc);
     try h.put(test_alloc, "x", .{ .fixnum = 10 });
-    const val = try lookupNamed(.{ .hash = &h }, "x");
+    const val = try lookupNamed(null, .{ .hash = &h }, "x");
     try testing.expectEqual(Value{ .fixnum = 10 }, val);
 }
 
@@ -416,32 +437,32 @@ test "lookupNamed on hash missing key" {
     var h = HashTable{};
     defer h.deinit(test_alloc);
     try h.put(test_alloc, "x", .{ .fixnum = 10 });
-    const result = lookupNamed(.{ .hash = &h }, "y");
+    const result = lookupNamed(null, .{ .hash = &h }, "y");
     try testing.expectError(error.KeyNotFound, result);
 }
 
 test "lookupNamed on array is TypeError" {
     const arr = &[_]Value{.{ .fixnum = 1 }};
-    const result = lookupNamed(.{ .array = arr }, "x");
+    const result = lookupNamed(null, .{ .array = arr }, "x");
     try testing.expectError(error.TypeMismatch, result);
 }
 
 test "lookupIndexed on array" {
     const arr = &[_]Value{ .{ .fixnum = 10 }, .{ .fixnum = 20 } };
-    const val = try lookupIndexed(.{ .array = arr }, 1);
+    const val = try lookupIndexed(null, .{ .array = arr }, 1);
     try testing.expectEqual(Value{ .fixnum = 20 }, val);
 }
 
 test "lookupIndexed out of bounds" {
     const arr = &[_]Value{.{ .fixnum = 10 }};
-    const result = lookupIndexed(.{ .array = arr }, 5);
+    const result = lookupIndexed(null, .{ .array = arr }, 5);
     try testing.expectError(error.IndexOutOfBounds, result);
 }
 
 test "lookupIndexed on hash is TypeError" {
     var h = HashTable{};
     defer h.deinit(test_alloc);
-    const result = lookupIndexed(.{ .hash = &h }, 0);
+    const result = lookupIndexed(null, .{ .hash = &h }, 0);
     try testing.expectError(error.TypeMismatch, result);
 }
 

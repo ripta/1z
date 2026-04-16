@@ -38,14 +38,20 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     const markers_val = try ctx.stack.pop();
     const markers_array = switch (markers_val) {
         .array => |arr| arr,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "array", markers_val);
+            return error.TypeMismatch;
+        },
     };
 
     var markers_list = std.ArrayListUnmanaged(*Marker){};
     for (markers_array) |m| {
         switch (m) {
             .marker => |mk| try markers_list.append(alloc, mk),
-            else => return error.TypeMismatch,
+            else => {
+                helpers.setTypeMismatchError(ctx, "marker", m);
+                return error.TypeMismatch;
+            },
         }
     }
     const markers_slice = try markers_list.toOwnedSlice(alloc);
@@ -53,7 +59,10 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     const desc_val = try ctx.stack.pop();
     const desc_map = switch (desc_val) {
         .mutable_map => |m| m,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "mutable-map", desc_val);
+            return error.TypeMismatch;
+        },
     };
     const variants_val = desc_map.get("variants") orelse {
         helpers.setErrorContext(ctx, "enum descriptor missing variants key", .{});
@@ -61,13 +70,19 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     };
     const variants_array = switch (variants_val) {
         .array => |arr| arr,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "array", variants_val);
+            return error.TypeMismatch;
+        },
     };
 
     const name_val = try ctx.stack.pop();
     const enum_name = switch (name_val) {
         .symbol => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol", name_val);
+            return error.TypeMismatch;
+        },
     };
 
     var vtype_list = std.ArrayListUnmanaged(*const VirtualType){};
@@ -78,7 +93,10 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
         const variant_sym = switch (variant_val) {
             .string => |s| s,
             .symbol => |s| s,
-            else => return error.TypeMismatch,
+            else => {
+                helpers.setTypeMismatchError(ctx, "string or symbol", variant_val);
+                return error.TypeMismatch;
+            },
         };
 
         const has_struct_desc = if (i + 1 < variants_array.len)
@@ -102,7 +120,10 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             };
             const fields_array = switch (fields_val) {
                 .array => |arr| arr,
-                else => return error.TypeMismatch,
+                else => {
+                    helpers.setTypeMismatchError(ctx, "array", fields_val);
+                    return error.TypeMismatch;
+                },
             };
 
             if (fields_array.len == 0) {
@@ -115,7 +136,10 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
                 const raw = switch (f) {
                     .string => |s| s,
                     .symbol => |s| s,
-                    else => return error.TypeMismatch,
+                    else => {
+                        helpers.setTypeMismatchError(ctx, "string or symbol", f);
+                        return error.TypeMismatch;
+                    },
                 };
                 const field_name = if (raw.len > 1 and raw[raw.len - 1] == ':')
                     raw[0 .. raw.len - 1]
@@ -228,7 +252,10 @@ fn enumAggregatePredicateHelper(ctx: *Context) anyerror!void {
     const name_val = try ctx.stack.pop();
     const enum_name = switch (name_val) {
         .string => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "string", name_val);
+            return error.TypeMismatch;
+        },
     };
 
     const val = try ctx.stack.pop();
@@ -265,7 +292,10 @@ fn nativeEnumVariants(ctx: *Context) anyerror!void {
     const name_val = try ctx.stack.pop();
     const enum_name = switch (name_val) {
         .symbol => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol", name_val);
+            return error.TypeMismatch;
+        },
     };
 
     const vtypes = ctx.lookupEnumVariants(enum_name) orelse {
@@ -292,7 +322,10 @@ fn nativeMatch(ctx: *Context) anyerror!void {
     const branches_val = try ctx.stack.pop();
     const branches = switch (branches_val) {
         .array => |arr| arr,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "array", branches_val);
+            return error.TypeMismatch;
+        },
     };
 
     const val = try ctx.stack.pop();

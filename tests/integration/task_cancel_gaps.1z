@@ -1,0 +1,178 @@
+use "testing" ;
+use "time" ;
+
+\ -- 1. Nested scope cancellation: outer cancels a task running its own
+\      inner task-scope with sleeping children. Scope completes without
+\      hanging, proving inner children were also cancelled.
+
+test-nested-scope-cancellation: ( -- ) [
+  [
+    [
+      [
+        [ 100000 milliseconds sleep ] spawn drop
+        [ 100000 milliseconds sleep ] spawn drop
+      ] task-scope
+    ] spawn
+    10 milliseconds sleep
+    dup cancel-task
+    drop
+  ] task-scope
+  t "nested scope children cancelled" assert-true
+] ;
+
+\ -- 2. Channel-blocked receive cancelled: a task blocked on receive with
+\      no sender is cancelled. Scope completes.
+
+test-cancel-channel-receive: ( -- ) [
+  [
+    <channel>
+    [ receive drop ] curry spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+  ] task-scope
+  t "cancel task blocked on channel receive" assert-true
+] ;
+
+\ -- 3. Channel-blocked send cancelled: a task blocked on send to an
+\      unbuffered channel with no receiver is cancelled.
+
+test-cancel-channel-send: ( -- ) [
+  [
+    <channel>
+    [ 42 swap send ] curry spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+  ] task-scope
+  t "cancel task blocked on channel send" assert-true
+] ;
+
+\ -- 4. Select-blocked task cancelled: a task blocked in select on two
+\      channels is cancelled.
+
+test-cancel-select: ( -- ) [
+  [
+    <channel> <channel>
+    [ { } swap #push ] dip #push
+    [ select drop drop ] curry spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+  ] task-scope
+  t "cancel task blocked on select" assert-true
+] ;
+
+\ -- 5. Await on already-cancelled task: cancel a task then await it.
+\      Verify it throws task-cancelled:.
+
+test-await-cancelled-task: ( -- ) [
+  [
+    [
+      [ 100000 milliseconds sleep ] spawn
+      dup cancel-task
+      await
+    ] task-scope
+  ] task-cancelled: "await on cancelled task throws" assert-error-type
+] ;
+
+\ -- 6. 3-level nested scope cancellation: cancel a task blocked on a scope
+\      whose child is blocked on its own inner scope. Exercises recursive
+\      cancelTask through multiple blocked_on_scope levels.
+
+test-deep-nested-scope-cancellation: ( -- ) [
+  [
+    [
+      [
+        [
+          [ 100000 milliseconds sleep ] spawn drop
+        ] task-scope
+      ] task-scope
+    ] spawn
+    10 milliseconds sleep
+    dup cancel-task
+    drop
+  ] task-scope
+  t "3-level nested scope cancellation" assert-true
+] ;
+
+\ -- 7. Cancel task blocked inside with-timeout: exercises the
+\      nativeWithTimeout variant of scope-blocked cancellation, where the
+\      internal scope has both a main task and a timer child.
+
+test-cancel-task-blocked-on-with-timeout: ( -- ) [
+  [
+    [
+      [ 100000 milliseconds sleep ] 100000 milliseconds with-timeout
+    ] spawn
+    10 milliseconds sleep
+    dup cancel-task
+    drop
+  ] task-scope
+  t "cancel task blocked inside with-timeout" assert-true
+] ;
+
+\ -- 8. Sibling failure cancels nested scope: one sibling throws, which
+\      triggers cancelTask on the other sibling that has blocked_on_scope
+\      set. Exercises the sibling-failure propagation path.
+
+test-sibling-failure-cancels-nested-scope: ( -- ) [
+  [
+    [
+      [
+        [
+          [ 100000 milliseconds sleep ] spawn drop
+          [ 100000 milliseconds sleep ] spawn drop
+        ] task-scope
+      ] spawn drop
+      [ 10 milliseconds sleep f "sibling-boom" test-error: make-error throw ] spawn drop
+    ] task-scope
+  ] test-error: "sibling failure cancels nested scope" assert-error-type
+] ;
+
+\ -- 9. Mixed blocking states in nested scope: children are blocked on
+\      channel receive, unbuffered channel send, and sleep. Verifies
+\      recursive cancel handles all child blocking variants.
+
+test-mixed-blocking-in-nested-scope: ( -- ) [
+  [
+    [
+      [
+        <channel> <channel>
+        [ receive drop ] curry spawn drop
+        [ 42 swap send ] curry spawn drop
+        [ 100000 milliseconds sleep ] spawn drop
+      ] task-scope
+    ] spawn
+    10 milliseconds sleep
+    dup cancel-task
+    drop
+  ] task-scope
+  t "mixed blocking states in nested scope cancelled" assert-true
+] ;
+
+\ -- 10. with-timeout cancels nested task-scope children: timeout fires,
+\       timer fails, sibling cancellation of the main task, which has
+\       blocked_on_scope from its inner task-scope, triggering recursive
+\       cancel of inner children.
+
+test-with-timeout-cancels-nested-task-scope: ( -- ) [
+  [
+    [
+      [
+        [
+          [ 100000 milliseconds sleep ] spawn drop
+          [ 100000 milliseconds sleep ] spawn drop
+        ] task-scope
+      ] 10 milliseconds with-timeout
+    ] task-scope
+  ] timeout: "with-timeout cancels nested task-scope children" assert-error-type
+] ;
+
+test-nested-scope-cancellation
+test-cancel-channel-receive
+test-cancel-channel-send
+test-cancel-select
+test-await-cancelled-task
+test-deep-nested-scope-cancellation
+test-cancel-task-blocked-on-with-timeout
+test-sibling-failure-cancels-nested-scope
+test-mixed-blocking-in-nested-scope
+test-with-timeout-cancels-nested-task-scope

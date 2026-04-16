@@ -1,0 +1,42 @@
+=== mimetype: known extensions ===
+Stack: [ ]
+PASS: html
+Stack: [ ]
+PASS: htm
+Stack: [ ]
+PASS: css
+Stack: [ ]
+PASS: js
+Stack: [ ]
+PASS: json
+Stack: [ ]
+PASS: txt
+Stack: [ ]
+PASS: xml
+Stack: [ ]
+PASS: png
+Stack: [ ]
+PASS: jpg
+Stack: [ ]
+PASS: jpeg
+Stack: [ ]
+PASS: gif
+Stack: [ ]
+PASS: svg
+Stack: [ ]
+PASS: ico
+Stack: [ ]
+PASS: woff
+Stack: [ ]
+PASS: woff2
+Stack: [ ]
+PASS: pdf
+Stack: [ ]
+=== mimetype: unknown extensions ===
+Stack: [ ]
+PASS: unknown ext
+Stack: [ ]
+PASS: tar
+Stack: [ ]
+PASS: empty string
+Stack: [ ]

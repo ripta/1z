@@ -339,7 +339,7 @@ pub const Context = struct {
                 .name = entry.key_ptr.*,
                 .stack_effect = entry.value_ptr.*.stack_effect,
                 .markers = entry.value_ptr.*.markers,
-                .source_module = module,
+                .source_module = entry.value_ptr.*.source_module orelse module,
                 .action = switch (entry.value_ptr.*.action) {
                     .compound => |instrs| .{ .compound = instrs },
                     .native => |func| .{ .native = func },
@@ -397,19 +397,41 @@ pub const Context = struct {
     /// dictionary otherwise. This prevents imported words from leaking
     /// into the global namespace when loading modules.
     pub fn defineImportedWord(self: *Context, name: []const u8, definition: WordDefinition) !void {
-        if (self.lookupWord(name)) |existing| {
-            // NOTE(ripta): Reïmporting from the same module is a no-op. The module cache
-            //              ensures the same module object is reused, so pointer equality
-            //              is sufficient to detect around subsequent imports.
-            if (existing.imported and existing.source_module != null and definition.source_module != null) {
-                if (existing.source_module == definition.source_module) {
-                    return;
+        // Check only the target frame for dedup, not the full lookup chain.
+        // The full lookupWord traverses parent frames, which would suppress
+        // imports that the current module needs captured in its own frame
+        // for later deps resolution.
+        const target_frame = if (self.import_frame_index) |idx|
+            &self.local_frames.items[idx]
+        else
+            null;
+
+        if (target_frame) |tf| {
+            if (tf.get(name)) |existing| {
+                if (existing.imported and existing.source_module != null and definition.source_module != null) {
+                    if (existing.source_module == definition.source_module) {
+                        return;
+                    }
+                }
+                for (existing.markers) |mk| {
+                    if (markers_mod.isConstMarker(mk)) {
+                        self.pending_error_message = "cannot redefine const word";
+                        return error.CannotRedefineConst;
+                    }
                 }
             }
-            for (existing.markers) |mk| {
-                if (markers_mod.isConstMarker(mk)) {
-                    self.pending_error_message = "cannot redefine const word";
-                    return error.CannotRedefineConst;
+        } else {
+            if (self.dictionary.get(name)) |existing| {
+                if (existing.imported and existing.source_module != null and definition.source_module != null) {
+                    if (existing.source_module == definition.source_module) {
+                        return;
+                    }
+                }
+                for (existing.markers) |mk| {
+                    if (markers_mod.isConstMarker(mk)) {
+                        self.pending_error_message = "cannot redefine const word";
+                        return error.CannotRedefineConst;
+                    }
                 }
             }
         }
@@ -448,6 +470,11 @@ pub const Context = struct {
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
+            var j = ctx.local_frames.items.len;
+            while (j > 0) {
+                j -= 1;
+                if (ctx.local_frames.items[j].get(name)) |def| return def;
+            }
             if (ctx.dictionary.get(name)) |def| return def;
             ancestor = ctx.parent_context;
         }
@@ -866,9 +893,23 @@ pub const Context = struct {
         // Only capture on first error
         if (self.error_details.items.len > 0) return;
 
-        var kebab_buf: [128]u8 = undefined;
-        const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
-        const duped_name = self.arena.allocator().dupe(u8, kebab_name) catch @errorName(err);
+        // For user-thrown errors, use the ErrorObject's type and message
+        // instead of the generic "user-thrown" Zig error name.
+        const error_type: []const u8 = blk: {
+            if (err == error.UserThrown) {
+                if (self.thrown_error) |thrown| break :blk thrown.error_type;
+            }
+            var kebab_buf: [128]u8 = undefined;
+            const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
+            break :blk self.arena.allocator().dupe(u8, kebab_name) catch @errorName(err);
+        };
+
+        const thrown_msg: ?[]const u8 = blk: {
+            if (err == error.UserThrown) {
+                if (self.thrown_error) |thrown| break :blk thrown.message;
+            }
+            break :blk null;
+        };
 
         // Consume any pending error message for the innermost frame
         const pending_msg = self.pending_error_message;
@@ -880,9 +921,14 @@ pub const Context = struct {
         while (i > 0) {
             i -= 1;
             const frame = self.call_stack.items[i];
-            const message = if (is_innermost and pending_msg != null) pending_msg.? else frame.word_name;
+            const message = if (is_innermost and thrown_msg != null)
+                thrown_msg.?
+            else if (is_innermost and pending_msg != null)
+                pending_msg.?
+            else
+                frame.word_name;
             self.error_details.append(self.allocator, .{
-                .error_type = duped_name,
+                .error_type = error_type,
                 .message = message,
                 .source = self.current_source,
                 .line = frame.line,
@@ -940,6 +986,7 @@ pub const Context = struct {
     pub fn executeQuotation(self: *Context, quotation: Quotation) anyerror!void {
         var current_instructions = quotation.instructions;
         var current_module: ?*const value_mod.Module = null;
+        var owns_frame = false;
 
         while (true) {
             // Record depth before execution for validation
@@ -947,17 +994,20 @@ pub const Context = struct {
             self.tail_call_instructions = null;
             self.tail_call_module = null;
 
-            // Push frame if this is a tail-called module word
-            if (current_module) |mod| {
-                try self.pushModuleDepsFrame(mod);
+            // Push module deps frame on first entry into a module context. On
+            // subsequent iterations, the frame persists so that runtime-defined
+            // local words, e.g. a recursive helper inside a module word, remain
+            // visible across tail calls.
+            if (current_module != null and !owns_frame) {
+                try self.pushModuleDepsFrame(current_module.?);
+                owns_frame = true;
             }
 
             const exec_result = self.executeInstructions(current_instructions);
-            if (current_module != null) {
-                self.popLocalFrame();
-            }
-
-            try exec_result;
+            exec_result catch |err| {
+                if (owns_frame) self.popLocalFrame();
+                return err;
+            };
 
             // Tail call case: pop the call frame that was pushed by the tail-calling
             // `executeInstructions`, then loop around
@@ -966,9 +1016,23 @@ pub const Context = struct {
                 current_instructions = tci;
                 self.tail_call_instructions = null;
 
-                current_module = self.tail_call_module;
+                const new_module = self.tail_call_module;
                 self.tail_call_module = null;
+
+                if (new_module) |new_mod| {
+                    if (owns_frame and current_module.? != new_mod) {
+                        self.popLocalFrame();
+                        owns_frame = false;
+                    }
+                    current_module = new_mod;
+                }
                 continue;
+            }
+
+            // Normal terminatio:n pop frame before validation
+            if (owns_frame) {
+                self.popLocalFrame();
+                owns_frame = false;
             }
 
             // Non-tail call: validate quotation's stack effect

@@ -16,11 +16,11 @@ range=: ( start end -- range ) [
 
 \ Exclusive range with explicit step
 range-step: ( start end step -- range ) [
-  dup 0 = [ "range-step: step must not be zero" throw ] when
+  dup 0 = [ f "step must not be zero" EInvalidArgument make-error throw ] when
   2 pick-n 2 pick-n < over 0 < and
-  [ "range-step: ascending range requires positive step" throw ] when
+  [ f "ascending range requires positive step" EInvalidArgument make-error throw ] when
   2 pick-n 2 pick-n > over 0 > and
-  [ "range-step: descending range requires negative step" throw ] when
+  [ f "descending range requires negative step" EInvalidArgument make-error throw ] when
   f make-range
 ] ;
 
@@ -32,7 +32,7 @@ range-from: ( start -- range ) [ 0 1 t make-range ] ;
 
 \ Infinite range from start with explicit step
 range-from-step: ( start step -- range ) [
-  dup 0 = [ "range-from-step: step must not be zero" throw ] when
+  dup 0 = [ f "step must not be zero" EInvalidArgument make-error throw ] when
   0 swap t make-range
 ] ;
 
@@ -46,7 +46,7 @@ range-inclusive: ( start end -- range ) [ range= ] ;
 \ Throws for infinite ranges.
 #len: method{ range } [
   unmake-range
-  [ "#len: infinite range has no length" throw ] when
+  [ f "infinite range has no length" EInvalidArgument make-error throw ] when
   -rot> swap - over + over dup 0 > [ drop 1 ] [ drop -1 ] if - swap div
   dup 0 < [ drop 0 ] when
 ] ;
@@ -54,7 +54,7 @@ range-inclusive: ( start end -- range ) [ range= ] ;
 \ O(1) indexed access: start + n * step
 \ Validates index is non-negative and within bounds.
 #nth: method{ range fixnum } [
-  dup 0 < [ "#nth: negative index" throw ] when
+  dup 0 < [ f "negative index" EIndexOutOfBounds make-error throw ] when
   swap unmake-range
   [
     nip <rot- * +
@@ -63,7 +63,7 @@ range-inclusive: ( start end -- range ) [ range= ] ;
     over 0 >
     [ dup 3 pick-n >= ]
     [ dup 3 pick-n <= ] if
-    [ "#nth: index out of bounds" throw ] when
+    [ f "index out of bounds" EIndexOutOfBounds make-error throw ] when
     nip nip nip nip
   ] if
 ] ;
@@ -73,7 +73,7 @@ range-inclusive: ( start end -- range ) [ range= ] ;
   unmake-range
   [ drop drop ] [
     dup 0 > [ drop 2dup >= ] [ drop 2dup <= ] if
-    [ 2drop "#first: empty range" throw ] when
+    [ 2drop f "empty range" EIndexOutOfBounds make-error throw ] when
     drop
   ] if
 ] ;
@@ -81,7 +81,7 @@ range-inclusive: ( start end -- range ) [ range= ] ;
 \ Last element: start + (len - 1) * step. Throws for infinite or empty ranges.
 #last: method{ range } [
   dup #len
-  dup 0 = [ 2drop "#last: empty range" throw ] when
+  dup 0 = [ 2drop f "empty range" EIndexOutOfBounds make-error throw ] when
   swap unmake-range drop nip
   <rot- -- * +
 ] ;

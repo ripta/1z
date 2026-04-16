@@ -7,7 +7,7 @@ test-dictionary-fallback: ( -- ) [
   [
     \ Task calls a word defined in the outer scope. If it can't find
     \ outer-word the task will error and task-scope will propagate.
-    [ outer-word 42 = [ ] [ "outer-word returned wrong value" throw ] if ] spawn drop
+    [ outer-word 42 = [ ] [ f "outer-word returned wrong value" EUserThrown make-error throw ] if ] spawn drop
   ] task-scope
   t "task inherits outer dictionary" assert-true
 ] ;
@@ -37,7 +37,7 @@ test-dvar-isolation: ( -- ) [
       \ Task sees the snapshot value from spawn time
       [
         test-dvar-snapshot get 10 =
-        [ ] [ "task did not see parent dvar value" throw ] if
+        [ ] [ f "task did not see parent dvar value" EUserThrown make-error throw ] if
       ] spawn drop
     ] task-scope
   ] with-parameter
@@ -51,7 +51,7 @@ test-dvar-task-modify: ( -- ) [
       [
         20 test-dvar-snapshot [
           test-dvar-snapshot get 20 =
-          [ ] [ "task did not see own modified dvar" throw ] if
+          [ ] [ f "task did not see own modified dvar" EUserThrown make-error throw ] if
         ] with-parameter
       ] spawn drop
     ] task-scope
@@ -75,12 +75,12 @@ test-per-task-alloc: ( -- ) [
   [
     [
       "hello" " world" #append "hello world" =
-      [ ] [ "string append failed in task" throw ] if
+      [ ] [ f "string append failed in task" EUserThrown make-error throw ] if
     ] spawn drop
     [
       { 1 2 3 } { 4 5 } #append
       #len 5 =
-      [ ] [ "array append length wrong in task" throw ] if
+      [ ] [ f "array append length wrong in task" EUserThrown make-error throw ] if
     ] spawn drop
   ] task-scope
   t "per-task heap allocation works" assert-true

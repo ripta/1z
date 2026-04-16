@@ -17,14 +17,14 @@ nil?:  ( value -- bool )          [ cons-list:nil? ] ;
 head: ( cons-list -- value ) [
   {
     cons-list:cons: [ drop ]
-    cons-list:nil: [ "head of empty list" throw ]
+    cons-list:nil: [ f "head of empty list" EIndexOutOfBounds make-error throw ]
   } match
 ] ;
 
 tail: ( cons-list -- cons-list ) [
   {
     cons-list:cons: [ swap drop ]
-    cons-list:nil: [ "tail of empty list" throw ]
+    cons-list:nil: [ f "tail of empty list" EIndexOutOfBounds make-error throw ]
   } match
 ] ;
 
@@ -66,7 +66,7 @@ list-reverse: ( cons-list -- cons-list ) [
 
 \ Nth element, O(n). Throws if out of bounds.
 list-nth: ( cons-list n -- value ) [
-  over nil? [ 2drop "list index out of bounds" throw ] [
+  over nil? [ 2drop f "list index out of bounds" EIndexOutOfBounds make-error throw ] [
     dup 0 = [ drop head ] [ 1 - swap tail swap list-nth ] if
   ] if
 ] ;

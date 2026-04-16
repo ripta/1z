@@ -14,3 +14,17 @@ H{ x: 1 y: 2 z: 3 } @keys #len 3 "hash with 3 keys" assert=
 H{ x: 1 y: 2 z: 3 } x: @get 1 "hash x value" assert=
 H{ x: 1 y: 2 z: 3 } y: @get 2 "hash y value" assert=
 H{ x: 1 y: 2 z: 3 } z: @get 3 "hash z value" assert=
+
+"Hash with string keys" test-section
+H{ "name" "Alice" "age" 30 } "name" @get "Alice" "string key name" assert=
+H{ "name" "Alice" "age" 30 } "age" @get 30 "string key age" assert=
+H{ ".html" "text/html" ".css" "text/css" } ".html" @get "text/html" "dotted string key" assert=
+H{ ".html" "text/html" ".css" "text/css" } @keys #len 2 "string key count" assert=
+
+"Hash with mixed symbol and string keys" test-section
+H{ name: "Alice" "age" 30 } name: @get "Alice" "mixed keys symbol" assert=
+H{ name: "Alice" "age" 30 } "age" @get 30 "mixed keys string" assert=
+
+"Mutable map with string keys" test-section
+M{ "x" 1 "y" 2 } "x" @get 1 "mmap string key x" assert=
+M{ "x" 1 "y" 2 } "y" @get 2 "mmap string key y" assert=

@@ -1,0 +1,76 @@
+=== throw requires error objects ===
+Stack: [ ]
+PASS: throw rejects string
+Stack: [ ]
+PASS: throw rejects integer
+Stack: [ ]
+PASS: throw rejects boolean
+Stack: [ ]
+PASS: throw accepts error object
+Stack: [ ]
+=== error type constants ===
+Stack: [ ]
+PASS: EIndexOutOfBounds is a symbol
+Stack: [ ]
+PASS: EInvalidArgument is a symbol
+Stack: [ ]
+PASS: EIndexOutOfBounds value
+Stack: [ ]
+PASS: EInvalidArgument value
+Stack: [ ]
+=== prelude throws proper error types ===
+Stack: [ ]
+PASS: parse-quotation error type
+Stack: [ ]
+PASS: even? on float throws type-mismatch
+Stack: [ ]
+PASS: odd? on float throws type-mismatch
+Stack: [ ]
+PASS: unwrap-or on non-option throws type-mismatch
+Stack: [ ]
+PASS: unwrap-or-throw on non-option throws type-mismatch
+Stack: [ ]
+PASS: unwrap-or-throw on none throws type-mismatch
+Stack: [ ]
+=== #any and #all short-circuit ===
+Stack: [ ]
+PASS: #any finds match
+Stack: [ ]
+PASS: #any no match
+Stack: [ ]
+PASS: #any empty sequence
+Stack: [ ]
+PASS: #all all positive
+Stack: [ ]
+PASS: #all not all positive
+Stack: [ ]
+PASS: #all empty sequence
+Stack: [ ]
+PASS: #none works
+Stack: [ ]
+PASS: #none finds negative
+Stack: [ ]
+=== range errors use proper types ===
+Stack: [ ]
+PASS: range-step zero step
+Stack: [ ]
+PASS: empty range #first
+Stack: [ ]
+PASS: empty range #last
+Stack: [ ]
+PASS: range negative index
+Stack: [ ]
+PASS: range out of bounds
+Stack: [ ]
+=== cons-list errors use proper types ===
+Stack: [ ]
+PASS: head of nil
+Stack: [ ]
+PASS: tail of nil
+Stack: [ ]
+PASS: list-nth on nil
+Stack: [ ]
+=== ratio errors use proper types ===
+Stack: [ ]
+PASS: ratio division by zero
+Stack: [ ]

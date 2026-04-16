@@ -1,0 +1,70 @@
+use "testing" ;
+use "ranges" ;
+use "cons-list" ;
+use "ratio" ;
+
+"throw requires error objects" test-section
+
+\ Verify throw rejects non-error values
+[ "bare string" throw ] "throw rejects string" assert-error
+[ 42 throw ] "throw rejects integer" assert-error
+[ t throw ] "throw rejects boolean" assert-error
+
+\ Verify proper error objects work
+[ f "test error" EUserThrown make-error throw ] "throw accepts error object" assert-error
+
+"error type constants" test-section
+
+\ Verify new error type constants exist and are symbols
+EIndexOutOfBounds type-of symbol: "EIndexOutOfBounds is a symbol" assert=
+EInvalidArgument type-of symbol: "EInvalidArgument is a symbol" assert=
+EIndexOutOfBounds index-out-of-bounds: "EIndexOutOfBounds value" assert=
+EInvalidArgument invalid-argument: "EInvalidArgument value" assert=
+
+"prelude throws proper error types" test-section
+
+\ parse-quotation type check
+[ f "expected quotation" ETypeMismatch make-error throw ] type-mismatch: "parse-quotation error type" assert-error-type
+
+\ even?/odd? type checks
+[ 3.14 even? ] type-mismatch: "even? on float throws type-mismatch" assert-error-type
+[ 3.14 odd? ] type-mismatch: "odd? on float throws type-mismatch" assert-error-type
+
+\ option/result combinator generic fallbacks
+[ 42 0 unwrap-or ] type-mismatch: "unwrap-or on non-option throws type-mismatch" assert-error-type
+[ 42 unwrap-or-throw ] type-mismatch: "unwrap-or-throw on non-option throws type-mismatch" assert-error-type
+[ option:none unwrap-or-throw ] type-mismatch: "unwrap-or-throw on none throws type-mismatch" assert-error-type
+
+"#any and #all short-circuit" test-section
+
+\ #any finds first match
+{ 1 2 3 4 5 } [ 3 = ] #any t "#any finds match" assert=
+{ 1 2 3 } [ 10 = ] #any f "#any no match" assert=
+{ } [ drop t ] #any f "#any empty sequence" assert=
+
+\ #all checks all elements
+{ 1 2 3 } [ 0 > ] #all t "#all all positive" assert=
+{ 1 -1 3 } [ 0 > ] #all f "#all not all positive" assert=
+{ } [ drop f ] #all t "#all empty sequence" assert=
+
+\ #none
+{ 1 2 3 } [ 0 < ] #none t "#none works" assert=
+{ 1 -1 3 } [ 0 < ] #none f "#none finds negative" assert=
+
+"range errors use proper types" test-section
+
+[ 1 10 0 range-step ] invalid-argument: "range-step zero step" assert-error-type
+[ 5 5 range #first ] index-out-of-bounds: "empty range #first" assert-error-type
+[ 5 5 range #last ] index-out-of-bounds: "empty range #last" assert-error-type
+[ 1 10 range -1 #nth ] index-out-of-bounds: "range negative index" assert-error-type
+[ 1 10 range 9 #nth ] index-out-of-bounds: "range out of bounds" assert-error-type
+
+"cons-list errors use proper types" test-section
+
+[ nil head ] index-out-of-bounds: "head of nil" assert-error-type
+[ nil tail ] index-out-of-bounds: "tail of nil" assert-error-type
+[ nil 0 list-nth ] index-out-of-bounds: "list-nth on nil" assert-error-type
+
+"ratio errors use proper types" test-section
+
+[ 1 0 normalize-ratio ] division-by-zero: "ratio division by zero" assert-error-type

@@ -39,14 +39,20 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     const markers_val = try ctx.stack.pop();
     const markers_array = switch (markers_val) {
         .array => |arr| arr,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "array", markers_val);
+            return error.TypeMismatch;
+        },
     };
 
     var markers_list = std.ArrayListUnmanaged(*Marker){};
     for (markers_array) |m| {
         switch (m) {
             .marker => |mk| try markers_list.append(alloc, mk),
-            else => return error.TypeMismatch,
+            else => {
+                helpers.setTypeMismatchError(ctx, "marker", m);
+                return error.TypeMismatch;
+            },
         }
     }
     const markers_slice = try markers_list.toOwnedSlice(alloc);
@@ -54,12 +60,18 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     const desc_val = try ctx.stack.pop();
     const desc_map: *value_mod.MutableMap = switch (desc_val) {
         .mutable_map => |m| m,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "mutable_map", desc_val);
+            return error.TypeMismatch;
+        },
     };
     const fields_val = desc_map.get("fields") orelse return error.MissingField;
     const fields_array = switch (fields_val) {
         .array => |arr| arr,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "array", fields_val);
+            return error.TypeMismatch;
+        },
     };
 
     var fields_list = std.ArrayListUnmanaged([]const u8){};
@@ -67,7 +79,10 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
         const raw = switch (f) {
             .string => |s| s,
             .symbol => |s| s,
-            else => return error.TypeMismatch,
+            else => {
+                helpers.setTypeMismatchError(ctx, "string or symbol", f);
+                return error.TypeMismatch;
+            },
         };
         const field_name = if (raw.len > 1 and raw[raw.len - 1] == ':')
             raw[0 .. raw.len - 1]
@@ -80,7 +95,10 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     const name_val = try ctx.stack.pop();
     const name = switch (name_val) {
         .symbol => |s| s,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol", name_val);
+            return error.TypeMismatch;
+        },
     };
 
     const struct_type = try alloc.create(StructType);
@@ -163,7 +181,10 @@ fn hashToStructHelper(ctx: *Context) anyerror!void {
     const hash_val = try ctx.stack.pop();
     const hash = switch (hash_val) {
         .hash => |h| h,
-        else => return error.TypeMismatch,
+        else => {
+            helpers.setTypeMismatchError(ctx, "hash", hash_val);
+            return error.TypeMismatch;
+        },
     };
 
     const field_values = try alloc.alloc(Value, st.fields.len);
@@ -205,6 +226,7 @@ fn structFieldGetHelper(ctx: *Context) anyerror!void {
     const inst = try helpers.popStructInstance(ctx);
 
     if (inst.struct_type != st) {
+        helpers.setErrorContext(ctx, "expected struct '{s}', got struct '{s}'", .{ st.name, inst.struct_type.name });
         return error.TypeMismatch;
     }
 
@@ -219,6 +241,7 @@ fn structFieldSetHelper(ctx: *Context) anyerror!void {
     const inst = try helpers.popStructInstance(ctx);
 
     if (inst.struct_type != st) {
+        helpers.setErrorContext(ctx, "expected struct '{s}', got struct '{s}'", .{ st.name, inst.struct_type.name });
         return error.TypeMismatch;
     }
 
@@ -232,6 +255,7 @@ fn structInstanceDestructureHelper(ctx: *Context) anyerror!void {
     const inst = try helpers.popStructInstance(ctx);
 
     if (inst.struct_type != st) {
+        helpers.setErrorContext(ctx, "expected struct '{s}', got struct '{s}'", .{ st.name, inst.struct_type.name });
         return error.TypeMismatch;
     }
 
@@ -247,6 +271,7 @@ fn structInstanceToHashHelper(ctx: *Context) anyerror!void {
     const inst = try helpers.popStructInstance(ctx);
 
     if (inst.struct_type != st) {
+        helpers.setErrorContext(ctx, "expected struct '{s}', got struct '{s}'", .{ st.name, inst.struct_type.name });
         return error.TypeMismatch;
     }
 

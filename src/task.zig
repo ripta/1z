@@ -38,6 +38,12 @@ pub fn taskEntryPoint() callconv(.c) void {
         task.status = .failed;
         if (task.ctx.thrown_error) |thrown| {
             task.error_obj = thrown;
+        } else if (task.ctx.error_details.items.len > 0) {
+            const detail = task.ctx.error_details.items[0];
+            task.error_obj = .{
+                .error_type = detail.error_type,
+                .message = detail.message,
+            };
         }
         return;
     };
@@ -71,6 +77,7 @@ pub const Task = struct {
     cancelled: bool = false,
     blocked_on_channel: ?*anyopaque = null,
     blocked_on_io_fd: ?std.posix.fd_t = null,
+    blocked_on_scope: ?*TaskScope = null,
     /// Set by a sender when it delivers a value directly to this receiver's
     /// stack. The receiver checks and clears this on resume so it can
     /// distinguish a value handoff from a close-channel wake.

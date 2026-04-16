@@ -1,0 +1,26 @@
+\ TCP echo server -- echoes back each line sent by the client.
+\
+\ Start:   zig build run -- examples/tcp-server.1z
+\ Connect: nc 127.0.0.1 9000
+
+use "server" ;
+
+echo-loop: ( stream -- ) [
+  dup stream-read-line
+  dup [
+    "\n" #append
+    over swap stream-write drop
+    echo-loop
+  ] [
+    drop stream-close
+  ] if
+] ;
+
+"Echo server listening on 127.0.0.1:9000" print-line
+[
+  <server-config>
+  "127.0.0.1" >>host
+  9000 >>port
+  [ echo-loop ] >>handler
+  serve-forever
+] task-scope
