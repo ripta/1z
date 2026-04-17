@@ -1573,6 +1573,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var source_file: ?[]const u8 = null;
     var output_path: ?[]const u8 = null;
     var allow_interpreter_fallback = false;
+    var save_temps = false;
     var static_libs: std.ArrayListUnmanaged([]const u8) = .{};
     defer static_libs.deinit(base_allocator);
 
@@ -1593,6 +1594,10 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         if (g == .consumed) continue;
         if (std.mem.eql(u8, arg, "--allow-interpreter-fallback")) {
             allow_interpreter_fallback = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--save-temps")) {
+            save_temps = true;
             continue;
         }
         if (std.mem.startsWith(u8, arg, "--link-static=")) {
@@ -1631,7 +1636,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const allocator = mem_limit.allocator();
 
     const source = source_file orelse {
-        err_writer.writeAll("Usage: 1z build <file.1z> [-o <output>]\n") catch {};
+        err_writer.writeAll("Usage: 1z build <file.1z> [-o <output>] [--save-temps]\n") catch {};
         err_writer.flush() catch {};
         return 1;
     };
@@ -1847,7 +1852,12 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     }
 
     // Clean up temp file on success.
-    std.fs.cwd().deleteFile(tmp_path) catch {};
+    if (save_temps) {
+        err_writer.print("Saved: {s}\n", .{tmp_path}) catch {};
+        err_writer.flush() catch {};
+    } else {
+        std.fs.cwd().deleteFile(tmp_path) catch {};
+    }
 
     return 0;
 }
