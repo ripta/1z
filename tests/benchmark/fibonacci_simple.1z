@@ -1,0 +1,42 @@
+\ Simple fibonacci benchmark
+\ No library imports, all words have stack effects.
+\ Used by `make benchmark-fib` to compare execution modes.
+
+fib-iter-step: ( a b n -- result ) [
+  dup 0 = [ drop drop ] [
+    1 - [ swap over + ] dip fib-iter-step
+  ] if
+] ;
+
+fib-iter: ( n -- fib(n) ) [
+  dup 2 < [ ] [
+    0 1 <rot- fib-iter-step
+  ] if
+] ;
+
+fib10-repeat: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - 10 fib-iter drop fib10-repeat
+  ] if
+] ;
+
+fib20-repeat: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - 20 fib-iter drop fib20-repeat
+  ] if
+] ;
+
+fib30-repeat: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - 30 fib-iter drop fib30-repeat
+  ] if
+] ;
+
+"fib(10) = " print 10 fib-iter .
+1000 fib10-repeat
+
+"fib(20) = " print 20 fib-iter .
+1000 fib20-repeat
+
+"fib(30) = " print 30 fib-iter .
+1000 fib30-repeat
