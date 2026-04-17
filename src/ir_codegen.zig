@@ -717,6 +717,11 @@ const CompileState = struct {
     iterator_fn: c.ir_ref = c.IR_UNUSED,
     native_call_fn: c.ir_ref = c.IR_UNUSED,
     interpreted_call_fn: c.ir_ref = c.IR_UNUSED,
+    /// Reference to jitRefreshStack: re-LOADs ctx.stack.items.items.ptr and
+    /// capacity into the JitContext after a callback may have reallocated
+    /// the stack. Emitted from emitCallbackPostCheck on the hot-path continue
+    /// branch.
+    refresh_stack_fn: c.ir_ref = c.IR_UNUSED,
     validate_params_fn: c.ir_ref = c.IR_UNUSED,
     interp_ctx: ?*const Context = null,
     error_propagate_status: c.ir_ref = c.IR_UNUSED,
@@ -3206,6 +3211,11 @@ pub fn compileWord(
     else
         c.IR_UNUSED;
 
+    // jitRefreshStack is emitted unconditionally: any callback in the body
+    // may reallocate ctx.stack, so emitCallbackPostCheck refreshes regardless
+    // of which callbacks the pre-scan flagged.
+    const refresh_stack_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitRefreshStack));
+
     const validate_params_fn = if (scan_flags.needs_param_validation)
         c.ir_const_addr(&ctx, @intFromPtr(&jitValidateParamEffects))
     else
@@ -3283,6 +3293,7 @@ pub fn compileWord(
         .iterator_fn = iterator_fn,
         .native_call_fn = native_call_fn,
         .interpreted_call_fn = interpreted_call_fn,
+        .refresh_stack_fn = refresh_stack_fn,
         .validate_params_fn = validate_params_fn,
         .interp_ctx = interp_ctx,
         .error_propagate_status = error_propagate_status,
@@ -3698,6 +3709,11 @@ pub fn emitWordCAot(
     else
         c.IR_UNUSED;
 
+    // jitRefreshStack is emitted unconditionally: any callback in the body
+    // may reallocate ctx.stack, so emitCallbackPostCheck refreshes regardless
+    // of which callbacks the pre-scan flagged.
+    const refresh_stack_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitRefreshStack"), proto_1arg);
+
     const validate_params_fn = if (scan_flags.needs_param_validation)
         c.ir_const_func(&ctx, c.ir_str(&ctx, "jitValidateParamEffects"), proto_2arg)
     else
@@ -3776,6 +3792,7 @@ pub fn emitWordCAot(
         .iterator_fn = iterator_fn,
         .native_call_fn = native_call_fn,
         .interpreted_call_fn = interpreted_call_fn,
+        .refresh_stack_fn = refresh_stack_fn,
         .validate_params_fn = validate_params_fn,
         .error_propagate_status = error_propagate_status,
         .aot_mode = true,
@@ -3927,6 +3944,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitIteratorOp(uintptr_t ctx, uintptr_t opcode);\n");
     try out.appendSlice(allocator, "extern int32_t jitNativeCall(uintptr_t ctx, uintptr_t fn_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitInterpretedCall(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
+    try out.appendSlice(allocator, "extern int32_t jitRefreshStack(uintptr_t jit_ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitValidateParamEffects(uintptr_t ctx, uintptr_t effect_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitCallQuotation(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushString(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
@@ -4365,6 +4383,19 @@ fn emitCallbackPreamble(state: *CompileState, sp: usize) c.ir_ref {
 
 /// Check if a callback returned non-zero and bail with the callback's return
 /// code if so. Used after interpreter callbacks from compiled code.
+///
+/// On the hot-path continue branch, also refreshes state.items_ptr and
+/// state.base_addr from the JitContext via jitRefreshStack. Any callback
+/// that runs Zig interpreter code (jitInterpretedCall, jitCallQuotation,
+/// jitNativeCall, jitRecover, jitCleanup, jitPushString, jitPushSymbol,
+/// jitPushQuotation, jitGet, jitWithParameter, jitIteratorOp,
+/// jitValidateParamEffects, jitSafepoint) may push values onto ctx.stack
+/// and trigger ArrayListUnmanaged.append to reallocate the backing slice.
+/// Without the refresh, subsequent compiled writes through state.items_ptr
+/// (or its derived state.base_addr) land in freed memory. The refresh is
+/// unconditional -- cheaper than auditing every callback for push safety,
+/// and keeps the invariant "items_ptr is live after any callback" trivially
+/// maintained as new callbacks are added.
 fn emitCallbackPostCheck(state: *CompileState, call_result: c.ir_ref, return_status: c.ir_ref) void {
     const ctx = state.ctx;
     const zero_status = c.ir_const_i32(ctx, 0);
@@ -4373,6 +4404,20 @@ fn emitCallbackPostCheck(state: *CompileState, call_result: c.ir_ref, return_sta
     c._ir_IF_TRUE_cold(ctx, if_bail);
     c._ir_RETURN(ctx, return_status);
     c._ir_IF_FALSE(ctx, if_bail);
+
+    // Hot-path continue: refresh cached stack pointer in case the callback
+    // reallocated ctx.stack.items. jitRefreshStack writes fresh items_ptr
+    // and capacity back into the JitContext struct; we then re-LOAD
+    // items_ptr (the first field of JitContext) and recompute base_addr
+    // from the unchanged base_idx. state.items_ptr and state.base_addr
+    // are updated so subsequent emissions use the fresh refs.
+    if (state.refresh_stack_fn == c.IR_UNUSED) return;
+    _ = c._ir_CALL_1(ctx, c.IR_I32, state.refresh_stack_fn, state.jit_ctx_ptr);
+    const fresh_items_ptr = c._ir_LOAD(ctx, c.IR_ADDR, state.jit_ctx_ptr);
+    const base_byte_offset = c.ir_fold2(ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), state.base_idx, state.value_size_const);
+    const fresh_base_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), fresh_items_ptr, base_byte_offset);
+    state.items_ptr = fresh_items_ptr;
+    state.base_addr = fresh_base_addr;
 }
 
 /// Emit a safepoint call at the current IR position. Loads the ctx field
@@ -4632,6 +4677,23 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
     };
     const dest: *Value = @ptrFromInt(dest_raw);
     dest.* = .{ .quotation = .{ .instructions = instructions } };
+    return 0;
+}
+
+/// Refresh cached stack-buffer pointer and capacity in the JitContext after
+/// a callback that may have caused ctx.stack to reallocate. Compiled code
+/// addresses the stack through JitContext.items_ptr, which becomes stale if
+/// an interpreter callback (e.g. jitInterpretedCall during non-tail
+/// recursion) pushes enough values to force ArrayListUnmanaged.append to
+/// move the backing slice. Subsequent compiled writes through the stale
+/// pointer would scribble into freed memory; this call re-reads the live
+/// ptr+capacity from the Context so emitted code can re-LOAD both fields.
+export fn jitRefreshStack(jit_ctx_raw: usize) callconv(.c) i32 {
+    if (jit_ctx_raw == 0) return 0;
+    const jc: *JitContext = @ptrFromInt(jit_ctx_raw);
+    const ctx: *Context = @ptrCast(@alignCast(jc.ctx));
+    jc.items_ptr = ctx.stack.items.items.ptr;
+    jc.capacity = ctx.stack.items.capacity;
     return 0;
 }
 
