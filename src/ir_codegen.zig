@@ -1575,6 +1575,23 @@ fn materializeQuotations(state: *CompileState, stack: *[64]StackEntry, sp: usize
     }
 }
 
+/// Reload the physical stack pointer and recompute the base address after a
+/// quotation call with unresolved row variables updated sp_ptr. Sets base_idx
+/// to new_sp - 1 so that abstract slot 0 (row_region) maps to the physical
+/// slot just below the new stack top, and abstract slot 1 (the first push
+/// after the reload) maps to the new stack top.
+fn reloadBaseAfterDynamicCall(state: *CompileState) void {
+    const ctx = state.ctx;
+    const new_sp_val = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
+    const one_const = c.ir_const_addr(ctx, 1);
+    const adjusted = c.ir_fold2(ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), new_sp_val, one_const);
+    const byte_off = c.ir_fold2(ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), adjusted, state.value_size_const);
+    const new_base = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.items_ptr, byte_off);
+    state.base_addr = new_base;
+    state.base_idx = adjusted;
+    state.sp_val = new_sp_val;
+}
+
 /// Check whether any stack entry in 0..sp is a row_region.
 fn hasRowRegion(stack: *const [64]StackEntry, sp: usize) bool {
     for (0..sp) |i| {
@@ -2422,7 +2439,13 @@ fn compileInstructions(
                                 sp.* = sp.* - info.input_count + info.output_count;
                                 resetStackToPhysical(stack, sp.*);
                             } else {
-                                state.dynamic_call_emitted = true;
+                                // Unresolved quotation effect (row variables).
+                                // Reload physical sp and insert row_region so
+                                // subsequent instructions above the region can
+                                // continue compiling.
+                                reloadBaseAfterDynamicCall(state);
+                                sp.* = 1;
+                                stack[0] = .row_region;
                             }
                         },
                         .i64_ref, .f64_ref, .bool_ref, .row_region => return IrCodegenError.NotCompilable,
@@ -3331,9 +3354,17 @@ pub fn compileWord(
         // All paths loop back (no base case fell through).
         // Emit unreachable fallback return.
         c._ir_RETURN(&ctx, ok_status);
-    } else if (state.dynamic_call_emitted or hasRowRegion(&stack, sp)) {
+    } else if (state.dynamic_call_emitted) {
         // The callee updated sp_ptr and the physical stack directly.
         // Just return success.
+        c._ir_RETURN(&ctx, ok_status);
+    } else if (hasRowRegion(&stack, sp)) {
+        // Row region present: flush any entries above it to physical memory,
+        // update sp_ptr, and return success.
+        flushToPhysicalStack(&state, &stack, sp);
+        const final_sp_const = c.ir_const_addr(&ctx, sp);
+        const final_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, final_sp_const);
+        c._ir_STORE(&ctx, state.sp_ptr, final_sp);
         c._ir_RETURN(&ctx, ok_status);
     } else {
         if (sp != output_count) return IrCodegenError.StackShapeMismatch;
@@ -3550,7 +3581,13 @@ pub fn emitWordC(
 
     if (state.diverged) {
         c._ir_RETURN(&ctx, ok_status);
-    } else if (state.dynamic_call_emitted or hasRowRegion(&stack, sp)) {
+    } else if (state.dynamic_call_emitted) {
+        c._ir_RETURN(&ctx, ok_status);
+    } else if (hasRowRegion(&stack, sp)) {
+        flushToPhysicalStack(&state, &stack, sp);
+        const final_sp_const = c.ir_const_addr(&ctx, sp);
+        const final_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, final_sp_const);
+        c._ir_STORE(&ctx, state.sp_ptr, final_sp);
         c._ir_RETURN(&ctx, ok_status);
     } else {
         if (sp != output_count) return IrCodegenError.StackShapeMismatch;
@@ -6613,9 +6650,9 @@ test "concrete quotation effect continues compilation past call" {
     defer result.jit_buf.deinit();
 }
 
-test "call on raw slot without effect returns NotCompilable on next instruction" {
-    // ( x quot -- y y )  body: call dup -- no stack effect, so call sets
-    // dynamic_call_emitted and dup fails.
+test "call on raw slot without effect returns NotCompilable when dup touches row_region" {
+    // ( x quot -- y y )  body: call dup -- no concrete effect, so call inserts
+    // row_region; dup on the row_region entry returns NotCompilable.
     const instrs = makeInstructions(.{ "call", "dup" });
     try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 2, 2, null, null, null, null, null));
 }
@@ -7223,4 +7260,43 @@ test "row_region is distinct from other StackEntry variants" {
     try testing.expect(entry != .i64_ref);
     try testing.expect(entry != .f64_ref);
     try testing.expect(entry != .bool_ref);
+}
+
+test "call with no concrete effect inserts row_region and compiles" {
+    // ( x quot -- )  body: call
+    // No stack effect annotation, so quotation_slots is empty. The call
+    // inserts row_region instead of setting dynamic_call_emitted, and the
+    // word compiles successfully via the row_region finalization path.
+    const instrs = makeInstructions(.{"call"});
+    const result = try compileWord(&instrs, 2, 0, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+}
+
+test "push after row_region compiles successfully" {
+    // ( x quot -- )  body: call 42
+    // After call inserts row_region, the push_literal for 42 succeeds
+    // because it operates above the opaque region.
+    const instrs = makeInstructions(.{ "call", @as(i64, 42) });
+    const result = try compileWord(&instrs, 2, 0, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+}
+
+test "row_region with row-variable quotation effect compiles" {
+    // ( ..a quot: ( ..x -- ..y ) -- )  body: call
+    // Row-variable effect means buildQuotationSlotMap produces no entry;
+    // call inserts row_region and the word compiles.
+    const nested = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "..x", .is_row_variable = true }},
+        .outputs = &[_]StackEffectParam{.{ .name = "..y", .is_row_variable = true }},
+    };
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "quot", .quotation_effect = &nested },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "..b", .is_row_variable = true }},
+    };
+    const instrs = makeInstructions(.{"call"});
+    const result = try compileWord(&instrs, 1, 0, null, null, null, null, &effect);
+    defer result.jit_buf.deinit();
 }
