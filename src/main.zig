@@ -1560,6 +1560,27 @@ fn printQuotationFallbackWarnings(
     diagnostics.quotation_fallbacks = &.{};
 }
 
+fn printPreludeStats(
+    stats: *const ir_codegen.PreludeStats,
+    err_writer: anytype,
+    allocator: std.mem.Allocator,
+) void {
+    if (stats.total == 0) return;
+    const pct = @as(f64, @floatFromInt(stats.compiled)) / @as(f64, @floatFromInt(stats.total)) * 100.0;
+    err_writer.print("Prelude compilation: {d}/{d} words compiled ({d:.1}%)\n", .{
+        stats.compiled,
+        stats.total,
+        pct,
+    }) catch {};
+    for (stats.uncompiled_names) |name| {
+        err_writer.print("  uncompiled: {s}\n", .{name}) catch {};
+    }
+    err_writer.flush() catch {};
+    if (stats.uncompiled_names.len > 0) {
+        allocator.free(stats.uncompiled_names);
+    }
+}
+
 fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
@@ -1573,6 +1594,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var source_file: ?[]const u8 = null;
     var output_path: ?[]const u8 = null;
     var allow_interpreter_fallback = false;
+    var compilation_stats = false;
     var save_temps = false;
     var static_libs: std.ArrayListUnmanaged([]const u8) = .{};
     defer static_libs.deinit(base_allocator);
@@ -1594,6 +1616,10 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         if (g == .consumed) continue;
         if (std.mem.eql(u8, arg, "--allow-interpreter-fallback")) {
             allow_interpreter_fallback = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--compilation-stats")) {
+            compilation_stats = true;
             continue;
         }
         if (std.mem.eql(u8, arg, "--save-temps")) {
@@ -1636,7 +1662,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const allocator = mem_limit.allocator();
 
     const source = source_file orelse {
-        err_writer.writeAll("Usage: 1z build <file.1z> [-o <output>] [--save-temps]\n") catch {};
+        err_writer.writeAll("Usage: 1z build <file.1z> [-o <output>] [--save-temps] [--compilation-stats]\n") catch {};
         err_writer.flush() catch {};
         return 1;
     };
@@ -1753,6 +1779,10 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     defer allocator.free(c_source);
 
     printQuotationFallbackWarnings(&codegen_diagnostics, allow_interpreter_fallback, err_writer, allocator);
+
+    if (compilation_stats) {
+        printPreludeStats(&codegen_diagnostics.prelude_stats, err_writer, allocator);
+    }
 
     // Write C source to a temp file.
     const tmpdir = std.posix.getenv("TMPDIR") orelse "/tmp";

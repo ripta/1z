@@ -52,9 +52,16 @@ pub const QuotationFallbackWarning = struct {
     reason: QuotationFallbackReason,
 };
 
+pub const PreludeStats = struct {
+    total: u32 = 0,
+    compiled: u32 = 0,
+    uncompiled_names: []const []const u8 = &.{},
+};
+
 pub const CodegenDiagnostics = struct {
     uncompiled_words: []const []const u8 = &.{},
     quotation_fallbacks: []const QuotationFallbackWarning = &.{},
+    prelude_stats: PreludeStats = .{},
 };
 
 pub const CompiledWord = struct {
@@ -4334,6 +4341,31 @@ pub fn emitProgramC(
         uncompiled.deinit(allocator);
     }
 
+    // Collect prelude compilation stats.
+    {
+        var total: u32 = 0;
+        var compiled: u32 = 0;
+        var names: std.ArrayListUnmanaged([]const u8) = .{};
+        for (words) |w| {
+            if (!w.is_prelude or w.is_native) continue;
+            total += 1;
+            if (actually_compiled.contains(w.word_id)) {
+                compiled += 1;
+            } else {
+                try names.append(allocator, w.name);
+            }
+        }
+        diagnostics.prelude_stats = .{
+            .total = total,
+            .compiled = compiled,
+            .uncompiled_names = if (names.items.len > 0)
+                try allocator.dupe([]const u8, names.items)
+            else
+                &.{},
+        };
+        names.deinit(allocator);
+    }
+
     // 3.5. String/symbol literal constants
     for (string_literals.items, 0..) |lit, lit_idx| {
         var idx_buf: [20]u8 = undefined;
@@ -7524,5 +7556,39 @@ test "row_region with row-variable quotation effect compiles" {
     };
     const instrs = makeInstructions(.{"call"});
     const result = try compileWord(&instrs, 1, 0, null, null, null, null, &effect);
+    defer result.jit_buf.deinit();
+}
+
+test "push after row_region then drop compiles" {
+    // ( x quot -- )  body: call 42 drop
+    // After call inserts row_region, push 42 adds above it, then drop
+    // removes it. The row_region remains but sp is back to 1.
+    const instrs = makeInstructions(.{ "call", @as(i64, 42), "drop" });
+    const result = try compileWord(&instrs, 2, 0, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+}
+
+test "multiple pushes above row_region compile" {
+    // ( x quot -- )  body: call 1 2 3
+    // Stacking values above the row_region succeeds.
+    const instrs = makeInstructions(.{ "call", @as(i64, 1), @as(i64, 2), @as(i64, 3) });
+    const result = try compileWord(&instrs, 2, 0, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+}
+
+test "dup on row_region entry returns NotCompilable" {
+    // ( x quot -- )  body: call dup
+    // After call inserts row_region at slot 0 with sp=1, dup tries to
+    // copy slot 0 (the row_region) which returns NotCompilable.
+    const instrs = makeInstructions(.{ "call", "dup" });
+    const result = compileWord(&instrs, 2, 0, null, null, null, null, null);
+    try testing.expectError(IrCodegenError.NotCompilable, result);
+}
+
+test "add above row_region compiles" {
+    // ( x quot -- )  body: call 10 20 +
+    // Push two known values above the row_region, then add them.
+    const instrs = makeInstructions(.{ "call", @as(i64, 10), @as(i64, 20), "+" });
+    const result = try compileWord(&instrs, 2, 0, null, null, null, null, null);
     defer result.jit_buf.deinit();
 }

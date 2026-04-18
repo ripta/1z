@@ -1,0 +1,2 @@
+double-and-inc: ( n -- n n ) [ [ 2 * ] [ 1 + ] bi ] ;
+10 double-and-inc . .
