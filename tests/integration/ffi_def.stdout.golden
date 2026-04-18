@@ -1,0 +1,32 @@
+Stack: [ ]
+=== ffi-def{ basic calls ===
+Stack: [ ]
+Stack: [ ]
+PASS: ffi-def toy_add(3, 4)
+Stack: [ ]
+PASS: ffi-def toy_strlen(hello)
+Stack: [ ]
+PASS: ffi-def toy_greeting(world)
+Stack: [ ]
+=== ffi-def{ resource lifecycle ===
+Stack: [ ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:toy-counter> ]
+Stack: [ <resource:dylib> <resource:toy-counter> ]
+Stack: [ <resource:dylib> <resource:toy-counter> ]
+Stack: [ <resource:dylib> <resource:toy-counter> ]
+PASS: ffi-def toy_read after 3 increments
+Stack: [ <resource:dylib> <resource:toy-counter> ]
+Stack: [ <resource:dylib> <resource:toy-counter> ]
+Stack: [ <resource:dylib> ]
+Stack: [ ]
+=== ffi-def{ system libm ===
+Stack: [ ]
+Stack: [ ]
+PASS: ffi-def sqrt(25)
+Stack: [ ]
+PASS: ffi-def pow(2, 10)
+Stack: [ ]

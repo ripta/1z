@@ -60,3 +60,36 @@ bind-close: ( resource ffi-fn -- ) [ native.bind-close ] ;
 \\ The resource wraps the byte array's internal buffer; it becomes
 \\ dangling if the byte array is resized or freed.
 bytes>ffi-ptr+len: ( byte-array -- resource fixnum ) [ native.bytes-raw-ptr ] ;
+
+\\ Build one FFI binding entry in the accumulator mutable map.
+\\ Looks up the C symbol in the dylib, binds the signature, curries
+\\ into a self-contained [ ffi-call ] quotation, and stores it by name.
+(build-ffi-entry): ( mmap dylib word-name c-symbol sig -- mmap dylib ) [
+  3 pick-n -rot> bound-symbol
+  [ ffi-call ] curry
+  <rot- [ @set! ] dip
+] ;
+
+\\ Parse-time block syntax for declaring multiple FFI bindings.
+\\ Each entry is: word-name: "c_symbol" ffi{ sig }
+\\ Produces a quotation ( dylib -- mmap ) that resolves all symbols
+\\ and builds a hashtable of callable quotations.
+ffi-def{: parse-time [
+  (read-ffi-def): ( accum -- accum ) [
+    peek-token dup "}" = [
+      drop parse-token drop
+    ] [
+      drop
+      parse-token dup #len 1 - 0 swap #slice
+      parse-literal
+      parse-literal
+      [ (build-ffi-entry) ] curry curry curry
+      compose
+      (read-ffi-def)
+    ] if
+  ] ;
+
+  [ M{ } swap ]
+  (read-ffi-def)
+  [ drop ] compose
+] ;
