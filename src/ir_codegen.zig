@@ -1688,6 +1688,122 @@ fn flushToPhysicalStack(state: *CompileState, stack: *[64]StackEntry, sp: usize)
     }
 }
 
+/// Emit the common epilogue for a compiled word: box typed stack entries
+/// into physical Value slots, resolve raw_at_slot copies/swaps, update
+/// sp_ptr, and emit RETURN with ok_status.
+fn emitEpilogue(
+    state: *CompileState,
+    stack: []StackEntry,
+    sp: usize,
+    input_count: u8,
+    output_count: u8,
+) IrCodegenError!void {
+    const ctx = state.ctx;
+    const base_addr = state.base_addr;
+
+    if (sp != output_count) return IrCodegenError.StackShapeMismatch;
+
+    for (0..sp) |i| {
+        switch (stack[i]) {
+            .i64_ref => |ref| {
+                const slot_byte_offset = c.ir_const_addr(ctx, i * ValueLayout.value_size);
+                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, ref);
+            },
+            .f64_ref => |ref| {
+                const slot_byte_offset = c.ir_const_addr(ctx, i * ValueLayout.value_size);
+                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.float_tag_const, ref);
+            },
+            .bool_ref => |ref| {
+                const slot_byte_offset = c.ir_const_addr(ctx, i * ValueLayout.value_size);
+                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.boolean_tag_const, ref);
+            },
+            .quotation_body, .row_region => return IrCodegenError.NotCompilable,
+            .raw_at_slot => |s| {
+                if (s != i) {
+                    if (s < sp and stack[s] == .raw_at_slot and stack[s].raw_at_slot == i) {
+                        emitSwapSlots(ctx, base_addr, i, s);
+                        stack[s] = .{ .raw_at_slot = s };
+                    } else {
+                        emitCopySlot(ctx, base_addr, s, i);
+                    }
+                }
+            },
+        }
+    }
+
+    if (input_count > output_count) {
+        const sp_delta = c.ir_const_addr(ctx, input_count - output_count);
+        const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), state.sp_val, sp_delta);
+        c._ir_STORE(ctx, state.sp_ptr, new_sp);
+    } else if (input_count < output_count) {
+        const sp_delta = c.ir_const_addr(ctx, output_count - input_count);
+        const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.sp_val, sp_delta);
+        c._ir_STORE(ctx, state.sp_ptr, new_sp);
+    } else {
+        c._ir_STORE(ctx, state.sp_ptr, state.sp_val);
+    }
+
+    c._ir_RETURN(ctx, state.ok_status);
+}
+
+/// Clone a stack entry to a new destination slot. For IR-ref entries
+/// (i64, f64, bool, quotation_body) the ref is shared. For raw_at_slot
+/// entries a physical copy is emitted and the new entry points to dest_slot.
+fn cloneStackEntry(
+    ctx: *c.ir_ctx,
+    base_addr: c.ir_ref,
+    entry: StackEntry,
+    dest_slot: usize,
+) IrCodegenError!StackEntry {
+    return switch (entry) {
+        .i64_ref => |ref| .{ .i64_ref = ref },
+        .f64_ref => |ref| .{ .f64_ref = ref },
+        .bool_ref => |ref| .{ .bool_ref = ref },
+        .quotation_body => |body| .{ .quotation_body = body },
+        .raw_at_slot => |s| blk: {
+            emitCopySlot(ctx, base_addr, s, dest_slot);
+            break :blk .{ .raw_at_slot = dest_slot };
+        },
+        .row_region => IrCodegenError.NotCompilable,
+    };
+}
+
+/// Resolve a word via the resolver and emit a native callback. Used for
+/// words that have an inline fast path (tryEmitInline*) with a fallback
+/// to the generic native call mechanism.
+fn emitResolvedNativeCallback(
+    state: *CompileState,
+    name: []const u8,
+    stack: *[64]StackEntry,
+    sp: *usize,
+    line: usize,
+) IrCodegenError!void {
+    const res = state.resolver orelse return IrCodegenError.NotCompilable;
+    const resolved = res.resolve(name, res.user_data) orelse return IrCodegenError.NotCompilable;
+
+    if (resolved.native_fn_ptr != null) {
+        if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
+
+        try materializeQuotations(state, stack, sp.*);
+        flushToPhysicalStack(state, stack, sp.*);
+        const ctx_val = emitCallbackPreamble(state, sp.*);
+
+        if (resolved.stack_effect_ptr) |eff_ptr| {
+            emitParamValidation(state, eff_ptr);
+        }
+
+        emitNativeWordCall(state, ctx_val, resolved, line);
+
+        sp.* = sp.* - resolved.input_count + resolved.output_count;
+        resetStackToPhysical(stack, sp.*);
+    } else {
+        return IrCodegenError.NotCompilable;
+    }
+}
+
 /// Compute the IR truthiness boolean for a stack entry.
 /// 1z truthiness: only `f` (boolean false) is falsy.
 fn emitTruthiness(state: *CompileState, entry: StackEntry, base_addr: c.ir_ref) IrCodegenError!c.ir_ref {
@@ -2152,25 +2268,7 @@ fn compileInstructions(
             .call_word => |name| {
                 if (std.mem.eql(u8, name, "dup")) {
                     if (sp.* < 1) return IrCodegenError.StackUnderflow;
-                    switch (stack[sp.* - 1]) {
-                        .i64_ref => |ref| {
-                            stack[sp.*] = .{ .i64_ref = ref };
-                        },
-                        .f64_ref => |ref| {
-                            stack[sp.*] = .{ .f64_ref = ref };
-                        },
-                        .bool_ref => |ref| {
-                            stack[sp.*] = .{ .bool_ref = ref };
-                        },
-                        .quotation_body => |body| {
-                            stack[sp.*] = .{ .quotation_body = body };
-                        },
-                        .raw_at_slot => |s| {
-                            emitCopySlot(ctx, base_addr, s, sp.*);
-                            stack[sp.*] = .{ .raw_at_slot = sp.* };
-                        },
-                        .row_region => return IrCodegenError.NotCompilable,
-                    }
+                    stack[sp.*] = try cloneStackEntry(ctx, base_addr, stack[sp.* - 1], sp.*);
                     sp.* += 1;
                 } else if (std.mem.eql(u8, name, "drop")) {
                     if (sp.* < 1) return IrCodegenError.StackUnderflow;
@@ -2185,25 +2283,7 @@ fn compileInstructions(
                     stack[sp.* - 1] = second;
                 } else if (std.mem.eql(u8, name, "over")) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
-                    switch (stack[sp.* - 2]) {
-                        .i64_ref => |ref| {
-                            stack[sp.*] = .{ .i64_ref = ref };
-                        },
-                        .f64_ref => |ref| {
-                            stack[sp.*] = .{ .f64_ref = ref };
-                        },
-                        .bool_ref => |ref| {
-                            stack[sp.*] = .{ .bool_ref = ref };
-                        },
-                        .quotation_body => |body| {
-                            stack[sp.*] = .{ .quotation_body = body };
-                        },
-                        .raw_at_slot => |s| {
-                            emitCopySlot(ctx, base_addr, s, sp.*);
-                            stack[sp.*] = .{ .raw_at_slot = sp.* };
-                        },
-                        .row_region => return IrCodegenError.NotCompilable,
-                    }
+                    stack[sp.*] = try cloneStackEntry(ctx, base_addr, stack[sp.* - 2], sp.*);
                     sp.* += 1;
                 } else if (std.mem.eql(u8, name, "t")) {
                     stack[sp.*] = .{ .bool_ref = c.ir_const_bool(ctx, true) };
@@ -2832,79 +2912,16 @@ fn compileInstructions(
                     sp.* = ic;
                     resetStackToPhysical(stack, sp.*);
                 } else if (std.mem.eql(u8, name, "native.virtual-unwrap")) {
-                    // fallthrough to resolver for runtime callback
-                    if (tryEmitInlineVirtualUnwrap(state, instructions, idx, stack, sp)) continue;
-
-                    const res = state.resolver orelse return IrCodegenError.NotCompilable;
-                    const resolved = res.resolve(name, res.user_data) orelse return IrCodegenError.NotCompilable;
-
-                    if (resolved.native_fn_ptr != null) {
-                        if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
-
-                        try materializeQuotations(state, stack, sp.*);
-                        flushToPhysicalStack(state, stack, sp.*);
-                        const ctx_val = emitCallbackPreamble(state, sp.*);
-
-                        if (resolved.stack_effect_ptr) |eff_ptr| {
-                            emitParamValidation(state, eff_ptr);
-                        }
-
-                        emitNativeWordCall(state, ctx_val, resolved, instr.line);
-
-                        sp.* = sp.* - resolved.input_count + resolved.output_count;
-                        resetStackToPhysical(stack, sp.*);
-                    } else {
-                        return IrCodegenError.NotCompilable;
+                    if (!tryEmitInlineVirtualUnwrap(state, instructions, idx, stack, sp)) {
+                        try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                     }
                 } else if (std.mem.eql(u8, name, "native.struct-field-get")) {
-                    // fallthrough to resolver for runtime callback
-                    if (tryEmitInlineStructFieldGet(state, instructions, idx, stack, sp)) continue;
-
-                    const res = state.resolver orelse return IrCodegenError.NotCompilable;
-                    const resolved = res.resolve(name, res.user_data) orelse return IrCodegenError.NotCompilable;
-
-                    if (resolved.native_fn_ptr != null) {
-                        if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
-
-                        try materializeQuotations(state, stack, sp.*);
-                        flushToPhysicalStack(state, stack, sp.*);
-                        const ctx_val = emitCallbackPreamble(state, sp.*);
-
-                        if (resolved.stack_effect_ptr) |eff_ptr| {
-                            emitParamValidation(state, eff_ptr);
-                        }
-
-                        emitNativeWordCall(state, ctx_val, resolved, instr.line);
-
-                        sp.* = sp.* - resolved.input_count + resolved.output_count;
-                        resetStackToPhysical(stack, sp.*);
-                    } else {
-                        return IrCodegenError.NotCompilable;
+                    if (!tryEmitInlineStructFieldGet(state, instructions, idx, stack, sp)) {
+                        try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                     }
                 } else if (std.mem.eql(u8, name, "native.typed-validate-and-promote")) {
-                    // fallthrough to resolver for runtime callback
-                    if (tryEmitInlineTypedValidateAndPromote(state, instructions, idx, stack, sp)) continue;
-
-                    const res = state.resolver orelse return IrCodegenError.NotCompilable;
-                    const resolved = res.resolve(name, res.user_data) orelse return IrCodegenError.NotCompilable;
-
-                    if (resolved.native_fn_ptr != null) {
-                        if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
-
-                        try materializeQuotations(state, stack, sp.*);
-                        flushToPhysicalStack(state, stack, sp.*);
-                        const ctx_val = emitCallbackPreamble(state, sp.*);
-
-                        if (resolved.stack_effect_ptr) |eff_ptr| {
-                            emitParamValidation(state, eff_ptr);
-                        }
-
-                        emitNativeWordCall(state, ctx_val, resolved, instr.line);
-
-                        sp.* = sp.* - resolved.input_count + resolved.output_count;
-                        resetStackToPhysical(stack, sp.*);
-                    } else {
-                        return IrCodegenError.NotCompilable;
+                    if (!tryEmitInlineTypedValidateAndPromote(state, instructions, idx, stack, sp)) {
+                        try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                     }
                 } else {
                     // Unrecognized word: try dispatch table call if a resolver is available
@@ -3491,65 +3508,7 @@ fn compileWordPass(
         c._ir_STORE(&ctx, state.sp_ptr, final_sp);
         c._ir_RETURN(&ctx, ok_status);
     } else {
-        if (sp != output_count) return IrCodegenError.StackShapeMismatch;
-
-        // Finalize each symbolic stack entry into a physical Value on the stack.
-        //   i64_ref       -- box with fixnum tag and write to the output slot
-        //   f64_ref       -- box with float tag and write to the output slot
-        //   bool_ref      -- box with boolean tag and write to the output slot
-        //   raw_at_slot   -- already a physical Value; copy only if the slot
-        //                    index differs from the output position
-        //   quotation_body -- should have been consumed by `if` or `call`;
-        //                     reaching here means an unconsumed quotation
-        for (0..sp) |i| {
-            switch (stack[i]) {
-                .i64_ref => |ref| {
-                    const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
-                    const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                    emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, fixnum_tag_const, ref);
-                },
-                .f64_ref => |ref| {
-                    const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
-                    const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                    emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, float_tag_const, ref);
-                },
-                .bool_ref => |ref| {
-                    const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
-                    const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                    emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, boolean_tag_const, ref);
-                },
-                .quotation_body, .row_region => return IrCodegenError.NotCompilable,
-                .raw_at_slot => |s| {
-                    if (s != i) {
-                        // Check for swap pattern: stack[i] -> s and stack[s] -> i
-                        if (s < sp and stack[s] == .raw_at_slot and stack[s].raw_at_slot == i) {
-                            emitSwapSlots(&ctx, base_addr, i, s);
-                            stack[s] = .{ .raw_at_slot = s };
-                        } else {
-                            emitCopySlot(&ctx, base_addr, s, i);
-                        }
-                    }
-                },
-            }
-        }
-
-        // Update sp: new_sp = sp_val - input_count + output_count
-        // Always store back to sp_ptr because intermediate callbacks
-        // (compound word dispatch, iterator ops, native calls) may have
-        // written to sp_ptr during execution.
-        if (input_count > output_count) {
-            const sp_delta = c.ir_const_addr(&ctx, input_count - output_count);
-            const new_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), sp_val, sp_delta);
-            c._ir_STORE(&ctx, sp_ptr, new_sp);
-        } else if (input_count < output_count) {
-            const sp_delta = c.ir_const_addr(&ctx, output_count - input_count);
-            const new_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), sp_val, sp_delta);
-            c._ir_STORE(&ctx, sp_ptr, new_sp);
-        } else {
-            c._ir_STORE(&ctx, sp_ptr, sp_val);
-        }
-
-        c._ir_RETURN(&ctx, ok_status);
+        try emitEpilogue(&state, &stack, sp, input_count, output_count);
     }
 
     // Discovery pass: the IR we just built is throwaway. Skip JIT and let
@@ -3723,49 +3682,7 @@ pub fn emitWordC(
         c._ir_STORE(&ctx, state.sp_ptr, final_sp);
         c._ir_RETURN(&ctx, ok_status);
     } else {
-        if (sp != output_count) return IrCodegenError.StackShapeMismatch;
-        for (0..sp) |i| {
-            switch (stack[i]) {
-                .i64_ref => |ref| {
-                    const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
-                    const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                    emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, fixnum_tag_const, ref);
-                },
-                .f64_ref => |ref| {
-                    const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
-                    const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                    emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, float_tag_const, ref);
-                },
-                .bool_ref => |ref| {
-                    const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
-                    const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                    emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, boolean_tag_const, ref);
-                },
-                .quotation_body, .row_region => return IrCodegenError.NotCompilable,
-                .raw_at_slot => |s| {
-                    if (s != i) {
-                        if (s < sp and stack[s] == .raw_at_slot and stack[s].raw_at_slot == i) {
-                            emitSwapSlots(&ctx, base_addr, i, s);
-                            stack[s] = .{ .raw_at_slot = s };
-                        } else {
-                            emitCopySlot(&ctx, base_addr, s, i);
-                        }
-                    }
-                },
-            }
-        }
-        if (input_count > output_count) {
-            const sp_delta = c.ir_const_addr(&ctx, input_count - output_count);
-            const new_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), sp_val, sp_delta);
-            c._ir_STORE(&ctx, sp_ptr, new_sp);
-        } else if (input_count < output_count) {
-            const sp_delta = c.ir_const_addr(&ctx, output_count - input_count);
-            const new_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), sp_val, sp_delta);
-            c._ir_STORE(&ctx, sp_ptr, new_sp);
-        } else {
-            c._ir_STORE(&ctx, sp_ptr, sp_val);
-        }
-        c._ir_RETURN(&ctx, ok_status);
+        try emitEpilogue(&state, &stack, sp, input_count, output_count);
     }
 
     // emit as C source with stdint.h preamble
@@ -4056,49 +3973,7 @@ fn emitWordCAotPass(
         // these words so they fall back to the interpreter.
         return IrCodegenError.NotCompilable;
     } else {
-        if (sp != output_count) return IrCodegenError.StackShapeMismatch;
-        for (0..sp) |i| {
-            switch (stack_buf[i]) {
-                .i64_ref => |ref| {
-                    const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
-                    const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                    emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, fixnum_tag_const, ref);
-                },
-                .f64_ref => |ref| {
-                    const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
-                    const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                    emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, float_tag_const, ref);
-                },
-                .bool_ref => |ref| {
-                    const slot_byte_offset = c.ir_const_addr(&ctx, i * ValueLayout.value_size);
-                    const dest_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                    emitBoxPayload(&ctx, dest_addr, tag_offset_const, payload_offset_const, boolean_tag_const, ref);
-                },
-                .quotation_body, .row_region => return IrCodegenError.NotCompilable,
-                .raw_at_slot => |s| {
-                    if (s != i) {
-                        if (s < sp and stack_buf[s] == .raw_at_slot and stack_buf[s].raw_at_slot == i) {
-                            emitSwapSlots(&ctx, base_addr, i, s);
-                            stack_buf[s] = .{ .raw_at_slot = s };
-                        } else {
-                            emitCopySlot(&ctx, base_addr, s, i);
-                        }
-                    }
-                },
-            }
-        }
-        if (input_count > output_count) {
-            const sp_delta = c.ir_const_addr(&ctx, input_count - output_count);
-            const new_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), sp_val, sp_delta);
-            c._ir_STORE(&ctx, sp_ptr, new_sp);
-        } else if (input_count < output_count) {
-            const sp_delta = c.ir_const_addr(&ctx, output_count - input_count);
-            const new_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), sp_val, sp_delta);
-            c._ir_STORE(&ctx, sp_ptr, new_sp);
-        } else {
-            c._ir_STORE(&ctx, sp_ptr, sp_val);
-        }
-        c._ir_RETURN(&ctx, ok_status);
+        try emitEpilogue(&state, &stack_buf, sp, input_count, output_count);
     }
 
     // Discovery pass: skip C emission, let the caller re-run with the peak.
