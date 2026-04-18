@@ -1,0 +1,80 @@
+use "testing" ;
+use "ffi" ;
+
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy.dylib" #append
+] ;
+
+toy-lib-path lib-open
+
+\\ --- Resource lifecycle ---
+
+[ + ] ffi{ i32 i32 -> i32 } ffi-callback
+dup resource? t "ffi-callback is a resource" assert=
+dup type-of ffi-callback: "ffi-callback type-of" assert=
+resource-close
+
+\\ --- Basic callback: addition ---
+\\ Stack: dylib
+
+dup "toy_apply2" ffi{ i32 i32 ptr:ffi-callback -> i32 } bound-symbol
+[ + ] ffi{ i32 i32 -> i32 } ffi-callback
+\\ Stack: dylib ffi-fn callback
+3 4 2 pick-n 4 pick-n ffi-call
+7 "toy_apply2(3, 4, add_cb) = 7" assert=
+
+10 20 2 pick-n 4 pick-n ffi-call
+30 "toy_apply2(10, 20, add_cb) = 30" assert=
+
+resource-close drop
+\\ Stack: dylib
+
+\\ --- Subtraction callback ---
+
+dup "toy_apply2" ffi{ i32 i32 ptr:ffi-callback -> i32 } bound-symbol
+[ - ] ffi{ i32 i32 -> i32 } ffi-callback
+\\ Stack: dylib ffi-fn callback
+10 3 2 pick-n 4 pick-n ffi-call
+7 "toy_apply2(10, 3, sub_cb) = 7" assert=
+resource-close drop
+\\ Stack: dylib
+
+\\ --- Multiplication callback ---
+
+dup "toy_apply2" ffi{ i32 i32 ptr:ffi-callback -> i32 } bound-symbol
+[ * ] ffi{ i32 i32 -> i32 } ffi-callback
+\\ Stack: dylib ffi-fn callback
+6 7 2 pick-n 4 pick-n ffi-call
+42 "toy_apply2(6, 7, mul_cb) = 42" assert=
+resource-close drop
+\\ Stack: dylib
+
+\\ --- Multiple callbacks reuse same ffi-fn ---
+
+dup "toy_apply2" ffi{ i32 i32 ptr:ffi-callback -> i32 } bound-symbol
+[ + ] ffi{ i32 i32 -> i32 } ffi-callback
+[ * ] ffi{ i32 i32 -> i32 } ffi-callback
+\\ Stack: dylib ffi-fn add-cb mul-cb
+
+5 5 3 pick-n 5 pick-n ffi-call
+10 "add callback returns 10" assert=
+
+5 5 2 pick-n 5 pick-n ffi-call
+25 "mul callback returns 25" assert=
+
+resource-close resource-close drop
+\\ Stack: dylib
+
+\\ --- Error propagation: callback that throws ---
+\\ The callback throws test-error:; we verify it propagates through ffi-call.
+
+dup "toy_apply2" ffi{ i32 i32 ptr:ffi-callback -> i32 } bound-symbol
+[ drop drop "boom" test-error: make-error throw ] ffi{ i32 i32 -> i32 } ffi-callback
+\\ Stack: dylib ffi-fn callback
+swap [ ffi-call ] curry curry
+\\ Stack: dylib curried=[ callback ffi-fn ffi-call ]
+\\ When called: pushes callback, pushes ffi-fn, runs ffi-call.
+\\ ffi-call pops ffi-fn, then pops 3 args from stack.
+[ [ 1 2 ] dip call ]
+[ error-type: @get test-error: = "callback error propagates" assert-true ]
+recover

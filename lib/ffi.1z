@@ -56,6 +56,11 @@ ffi-call: ( ..args ffi-fn -- result ) [ native.ffi-call ] ;
 \\ When resource-close is called, the bound function is invoked via libffi.
 bind-close: ( resource ffi-fn -- ) [ native.bind-close ] ;
 
+\\ Create a C-callable function pointer from a 1z quotation and FFI signature.
+\\ The returned resource can be passed as a ptr:ffi-callback argument to ffi-call.
+\\ Close the resource when done to free the closure memory.
+ffi-callback: ( quotation sig -- ffi-callback ) [ native.ffi-callback ] ;
+
 \\ Extract the raw buffer pointer and length from a byte array.
 \\ The resource wraps the byte array's internal buffer; it becomes
 \\ dangling if the byte array is resized or freed.

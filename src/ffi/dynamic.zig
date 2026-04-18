@@ -13,6 +13,7 @@ const BigIntManaged = @import("../value.zig").BigIntManaged;
 const Resource = @import("../value.zig").Resource;
 const FfiCloseFn = @import("../value.zig").FfiCloseFn;
 const ByteArray = @import("../value.zig").ByteArray;
+const Quotation = @import("../value.zig").Quotation;
 const signature = @import("signature.zig");
 const FfiType = signature.FfiType;
 const FfiSignature = signature.FfiSignature;
@@ -23,6 +24,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "bind-sig", .func = nativeBindSig },
     .{ .name = "bind-close", .func = nativeBindClose },
     .{ .name = "ffi-call", .func = nativeFfiCall },
+    .{ .name = "ffi-callback", .func = nativeFfiCallback },
     .{ .name = "bytes-raw-ptr", .func = nativeBytesRawPtr },
 };
 
@@ -357,6 +359,15 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
         if (nargs > 0) arg_ptrs.ptr else null,
     );
 
+    if (ctx.callback_error) |err| {
+        ctx.callback_error = null;
+        if (ctx.callback_error_context) |ectx| {
+            helpers.setErrorContext(ctx, "{s}", .{ectx});
+            ctx.callback_error_context = null;
+        }
+        return err;
+    }
+
     // Push out-param values in parameter order (first out-param deepest)
     for (sig.param_types, 0..) |param_type, pi| {
         if (param_type.is_out) {
@@ -505,6 +516,10 @@ fn marshalArg(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) 
                     helpers.setErrorContext(ctx, "argument {d}: expected resource type '{s}', got '{s}'", .{ arg_index + 1, expected_name, resource.type_name });
                     return error.FFITypeMismatch;
                 }
+            }
+            if (std.mem.eql(u8, resource.type_name, "ffi-callback")) {
+                const ud: *CallbackUserData = @ptrCast(@alignCast(resource.ptr.?));
+                return .{ .ptr_val = ud.code_ptr };
             }
             return .{ .ptr_val = resource.ptr };
         },
@@ -765,4 +780,416 @@ fn nativeBindClose(ctx: *Context) anyerror!void {
     const ffi_close = try alloc.create(FfiCloseFn);
     ffi_close.* = .{ .fn_ptr = ffi_fn.ptr.? };
     resource.close_fn = .{ .ffi = ffi_close };
+}
+
+const CallbackUserData = struct {
+    ctx: *Context,
+    quotation: Quotation,
+    sig: *const FfiSignature,
+    cif: c_ffi.ffi_cif,
+    arg_types: [][*c]c_ffi.ffi_type,
+    closure: *c_ffi.ffi_closure,
+    code_ptr: *anyopaque,
+};
+
+fn callbackTrampoline(
+    _: [*c]c_ffi.ffi_cif,
+    ret: ?*anyopaque,
+    args: [*c]?*anyopaque,
+    user_data: ?*anyopaque,
+) callconv(.c) void {
+    const ud: *CallbackUserData = @ptrCast(@alignCast(user_data.?));
+    const ctx = ud.ctx;
+
+    for (ud.sig.param_types, 0..) |pt, i| {
+        const arg_ptr = args[i].?;
+        unmarshalArg(ctx, pt, arg_ptr) catch |err| {
+            if (ret) |r| @memset(@as([*]u8, @ptrCast(r))[0..8], 0);
+            ctx.callback_error = err;
+            return;
+        };
+    }
+
+    ctx.executeQuotationWithFrame(ud.quotation) catch |err| {
+        if (ret) |r| @memset(@as([*]u8, @ptrCast(r))[0..8], 0);
+        ctx.callback_error = err;
+        ctx.callback_error_context = ctx.pending_error_message;
+        return;
+    };
+
+    if (ud.sig.return_type.tag != .void_type) {
+        const result_val = ctx.stack.pop() catch {
+            if (ret) |r| @memset(@as([*]u8, @ptrCast(r))[0..8], 0);
+            ctx.callback_error = error.StackUnderflow;
+            return;
+        };
+        marshalCallbackReturn(ret, ud.sig.return_type, result_val) catch |err| {
+            if (ret) |r| @memset(@as([*]u8, @ptrCast(r))[0..8], 0);
+            ctx.callback_error = err;
+            return;
+        };
+    }
+}
+
+fn unmarshalArg(ctx: *Context, param_type: FfiType, arg_ptr: *anyopaque) !void {
+    const alloc = ctx.arena.allocator();
+    switch (param_type.tag) {
+        .i8 => {
+            const val: *const i8 = @ptrCast(@alignCast(arg_ptr));
+            try ctx.stack.push(.{ .fixnum = @intCast(val.*) });
+        },
+        .i16 => {
+            const val: *const i16 = @ptrCast(@alignCast(arg_ptr));
+            try ctx.stack.push(.{ .fixnum = @intCast(val.*) });
+        },
+        .i32 => {
+            const val: *const i32 = @ptrCast(@alignCast(arg_ptr));
+            try ctx.stack.push(.{ .fixnum = @intCast(val.*) });
+        },
+        .i64 => {
+            const val: *const i64 = @ptrCast(@alignCast(arg_ptr));
+            try ctx.stack.push(.{ .fixnum = val.* });
+        },
+        .u8 => {
+            const val: *const u8 = @ptrCast(@alignCast(arg_ptr));
+            try ctx.stack.push(.{ .fixnum = @intCast(val.*) });
+        },
+        .u16 => {
+            const val: *const u16 = @ptrCast(@alignCast(arg_ptr));
+            try ctx.stack.push(.{ .fixnum = @intCast(val.*) });
+        },
+        .u32 => {
+            const val: *const u32 = @ptrCast(@alignCast(arg_ptr));
+            try ctx.stack.push(.{ .fixnum = @intCast(val.*) });
+        },
+        .u64 => {
+            const val: *const u64 = @ptrCast(@alignCast(arg_ptr));
+            if (val.* > std.math.maxInt(i64)) {
+                const big = try BigIntManaged.initSet(alloc, val.*);
+                try ctx.stack.push(helpers.demoteBignum(big));
+            } else {
+                try ctx.stack.push(.{ .fixnum = @intCast(val.*) });
+            }
+        },
+        .usize_type => {
+            const val: *const usize = @ptrCast(@alignCast(arg_ptr));
+            if (val.* > std.math.maxInt(i64)) {
+                const big = try BigIntManaged.initSet(alloc, val.*);
+                try ctx.stack.push(helpers.demoteBignum(big));
+            } else {
+                try ctx.stack.push(.{ .fixnum = @intCast(val.*) });
+            }
+        },
+        .isize_type => {
+            const val: *const isize = @ptrCast(@alignCast(arg_ptr));
+            try ctx.stack.push(.{ .fixnum = @intCast(val.*) });
+        },
+        .f32 => {
+            const val: *const f32 = @ptrCast(@alignCast(arg_ptr));
+            try ctx.stack.push(.{ .float = @floatCast(val.*) });
+        },
+        .f64 => {
+            const val: *const f64 = @ptrCast(@alignCast(arg_ptr));
+            try ctx.stack.push(.{ .float = val.* });
+        },
+        .bool_type => {
+            const val: *const u8 = @ptrCast(@alignCast(arg_ptr));
+            try ctx.stack.push(.{ .boolean = val.* != 0 });
+        },
+        .cstring, .cstring_retained => {
+            const val: *const [*c]const u8 = @ptrCast(@alignCast(arg_ptr));
+            if (val.* == null) {
+                try ctx.stack.push(.{ .string = "" });
+            } else {
+                const span = std.mem.span(val.*);
+                const str = try alloc.dupe(u8, span);
+                try ctx.stack.push(.{ .string = str });
+            }
+        },
+        .ptr => {
+            const val: *const ?*anyopaque = @ptrCast(@alignCast(arg_ptr));
+            const type_name = param_type.ptr_name orelse "ffi-ptr";
+            const r = try alloc.create(Resource);
+            r.* = .{
+                .type_name = type_name,
+                .ptr = val.*,
+                .closed = false,
+                .close_fn = .none,
+            };
+            try ctx.stack.push(.{ .resource = r });
+        },
+        .cstring_owned, .void_type => unreachable,
+    }
+}
+
+fn marshalCallbackReturn(ret: ?*anyopaque, return_type: FfiType, val: Value) !void {
+    const r = ret orelse return;
+    switch (return_type.tag) {
+        .i8 => {
+            const fixnum = switch (val) {
+                .fixnum => |v| v,
+                else => return error.FFITypeMismatch,
+            };
+            const ptr: *i8 = @ptrCast(@alignCast(r));
+            ptr.* = @intCast(fixnum);
+        },
+        .i16 => {
+            const fixnum = switch (val) {
+                .fixnum => |v| v,
+                else => return error.FFITypeMismatch,
+            };
+            const ptr: *i16 = @ptrCast(@alignCast(r));
+            ptr.* = @intCast(fixnum);
+        },
+        .i32 => {
+            const fixnum = switch (val) {
+                .fixnum => |v| v,
+                else => return error.FFITypeMismatch,
+            };
+            const ptr: *i32 = @ptrCast(@alignCast(r));
+            ptr.* = @intCast(fixnum);
+        },
+        .i64 => {
+            const fixnum = switch (val) {
+                .fixnum => |v| v,
+                else => return error.FFITypeMismatch,
+            };
+            const ptr: *i64 = @ptrCast(@alignCast(r));
+            ptr.* = fixnum;
+        },
+        .u8 => {
+            const fixnum = switch (val) {
+                .fixnum => |v| v,
+                else => return error.FFITypeMismatch,
+            };
+            const ptr: *u8 = @ptrCast(@alignCast(r));
+            ptr.* = @intCast(fixnum);
+        },
+        .u16 => {
+            const fixnum = switch (val) {
+                .fixnum => |v| v,
+                else => return error.FFITypeMismatch,
+            };
+            const ptr: *u16 = @ptrCast(@alignCast(r));
+            ptr.* = @intCast(fixnum);
+        },
+        .u32 => {
+            const fixnum = switch (val) {
+                .fixnum => |v| v,
+                else => return error.FFITypeMismatch,
+            };
+            const ptr: *u32 = @ptrCast(@alignCast(r));
+            ptr.* = @intCast(fixnum);
+        },
+        .u64 => {
+            const fixnum = switch (val) {
+                .fixnum => |v| v,
+                else => return error.FFITypeMismatch,
+            };
+            const ptr: *u64 = @ptrCast(@alignCast(r));
+            ptr.* = @intCast(fixnum);
+        },
+        .usize_type => {
+            const fixnum = switch (val) {
+                .fixnum => |v| v,
+                else => return error.FFITypeMismatch,
+            };
+            const ptr: *usize = @ptrCast(@alignCast(r));
+            ptr.* = @intCast(fixnum);
+        },
+        .isize_type => {
+            const fixnum = switch (val) {
+                .fixnum => |v| v,
+                else => return error.FFITypeMismatch,
+            };
+            const ptr: *isize = @ptrCast(@alignCast(r));
+            ptr.* = @intCast(fixnum);
+        },
+        .f32 => {
+            const float = switch (val) {
+                .float => |v| v,
+                else => return error.FFITypeMismatch,
+            };
+            const ptr: *f32 = @ptrCast(@alignCast(r));
+            ptr.* = @floatCast(float);
+        },
+        .f64 => {
+            const float = switch (val) {
+                .float => |v| v,
+                else => return error.FFITypeMismatch,
+            };
+            const ptr: *f64 = @ptrCast(@alignCast(r));
+            ptr.* = float;
+        },
+        .bool_type => {
+            const b = switch (val) {
+                .boolean => |v| v,
+                else => return error.FFITypeMismatch,
+            };
+            const ptr: *u8 = @ptrCast(@alignCast(r));
+            ptr.* = if (b) 1 else 0;
+        },
+        .cstring, .cstring_retained => {
+            const str = switch (val) {
+                .string => |s| s,
+                else => return error.FFITypeMismatch,
+            };
+            _ = str;
+            return error.FFITypeMismatch;
+        },
+        .ptr => {
+            const resource = switch (val) {
+                .resource => |res| res,
+                else => return error.FFITypeMismatch,
+            };
+            const ptr: *?*anyopaque = @ptrCast(@alignCast(r));
+            ptr.* = resource.ptr;
+        },
+        .cstring_owned, .void_type => {},
+    }
+}
+
+fn callbackCloseFn(ptr: *anyopaque) void {
+    const ud: *CallbackUserData = @ptrCast(@alignCast(ptr));
+    c_ffi.ffi_closure_free(@ptrCast(ud.closure));
+}
+
+fn nativeFfiCallback(ctx: *Context) anyerror!void {
+    const alloc = ctx.arena.allocator();
+
+    const sig_val = try ctx.stack.pop();
+    const quot_val = try ctx.stack.pop();
+
+    const quotation = switch (quot_val) {
+        .quotation => |q| q,
+        else => {
+            helpers.setTypeMismatchError(ctx, "quotation", quot_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const si = switch (sig_val) {
+        .struct_instance => |s| s,
+        else => {
+            helpers.setTypeMismatchError(ctx, "ffi-sig struct", sig_val);
+            return error.TypeMismatch;
+        },
+    };
+    if (!std.mem.eql(u8, si.struct_type.name, "ffi-sig")) {
+        helpers.setTypeMismatchError(ctx, "ffi-sig struct", sig_val);
+        return error.TypeMismatch;
+    }
+
+    const params_val = si.fields[0];
+    const params_array = switch (params_val) {
+        .array => |a| a,
+        else => {
+            helpers.setTypeMismatchError(ctx, "array for params", params_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const return_type_val = si.fields[1];
+    const return_type_str = switch (return_type_val) {
+        .string => |s| s,
+        else => {
+            helpers.setTypeMismatchError(ctx, "string for return-type", return_type_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    var param_types = try alloc.alloc(FfiType, params_array.len);
+    for (params_array, 0..) |param_val, i| {
+        const token = switch (param_val) {
+            .string => |s| s,
+            else => {
+                helpers.setTypeMismatchError(ctx, "string for param type", param_val);
+                return error.TypeMismatch;
+            },
+        };
+        param_types[i] = signature.parseTypeToken(token) catch {
+            helpers.setErrorContext(ctx, "unknown FFI type: {s}", .{token});
+            return error.FFITypeMismatch;
+        };
+        if (param_types[i].tag == .void_type) {
+            helpers.setErrorContext(ctx, "void is not valid as a parameter type", .{});
+            return error.FFITypeMismatch;
+        }
+        if (param_types[i].is_out) {
+            helpers.setErrorContext(ctx, "out-parameters are not valid in callback signatures", .{});
+            return error.FFITypeMismatch;
+        }
+    }
+
+    const return_type = signature.parseTypeToken(return_type_str) catch {
+        helpers.setErrorContext(ctx, "unknown FFI type: {s}", .{return_type_str});
+        return error.FFITypeMismatch;
+    };
+
+    const sig = try alloc.create(FfiSignature);
+    sig.* = .{
+        .param_types = param_types,
+        .return_type = return_type,
+    };
+
+    var arg_types = try alloc.alloc([*c]c_ffi.ffi_type, param_types.len);
+    for (param_types, 0..) |pt, i| {
+        arg_types[i] = ffiTypeToLibffi(pt.tag);
+    }
+
+    const ud = try alloc.create(CallbackUserData);
+    ud.* = .{
+        .ctx = ctx,
+        .quotation = quotation,
+        .sig = sig,
+        .cif = undefined,
+        .arg_types = arg_types,
+        .closure = undefined,
+        .code_ptr = undefined,
+    };
+
+    const prep_status = c_ffi.ffi_prep_cif(
+        &ud.cif,
+        c_ffi.FFI_DEFAULT_ABI,
+        @intCast(param_types.len),
+        ffiTypeToLibffi(return_type.tag),
+        if (param_types.len > 0) arg_types.ptr else null,
+    );
+    if (prep_status != c_ffi.FFI_OK) {
+        helpers.setErrorContext(ctx, "ffi_prep_cif failed for callback (status {d})", .{prep_status});
+        return error.FFICallFailed;
+    }
+
+    var code_ptr: *anyopaque = undefined;
+    const closure_raw = c_ffi.ffi_closure_alloc(@sizeOf(c_ffi.ffi_closure), @ptrCast(&code_ptr));
+    if (closure_raw == null) {
+        helpers.setErrorContext(ctx, "ffi_closure_alloc failed", .{});
+        return error.OutOfMemory;
+    }
+    const closure: *c_ffi.ffi_closure = @ptrCast(@alignCast(closure_raw.?));
+
+    ud.closure = closure;
+    ud.code_ptr = code_ptr;
+
+    const closure_status = c_ffi.ffi_prep_closure_loc(
+        closure,
+        &ud.cif,
+        callbackTrampoline,
+        @ptrCast(ud),
+        code_ptr,
+    );
+    if (closure_status != c_ffi.FFI_OK) {
+        c_ffi.ffi_closure_free(@ptrCast(closure));
+        helpers.setErrorContext(ctx, "ffi_prep_closure_loc failed (status {d})", .{closure_status});
+        return error.FFICallFailed;
+    }
+
+    const r = try alloc.create(Resource);
+    r.* = .{
+        .type_name = "ffi-callback",
+        .ptr = @ptrCast(ud),
+        .closed = false,
+        .close_fn = .{ .native = callbackCloseFn },
+    };
+    try ctx.stack.push(.{ .resource = r });
 }

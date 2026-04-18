@@ -1,0 +1,46 @@
+Stack: [ ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-callback> ]
+PASS: ffi-callback is a resource
+Stack: [ <resource:dylib> <resource:ffi-callback> ]
+PASS: ffi-callback type-of
+Stack: [ <resource:dylib> <resource:ffi-callback> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> 7 ]
+PASS: toy_apply2(3, 4, add_cb) = 7
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> 30 ]
+PASS: toy_apply2(10, 20, add_cb) = 30
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> 7 ]
+PASS: toy_apply2(10, 3, sub_cb) = 7
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> 42 ]
+PASS: toy_apply2(6, 7, mul_cb) = 42
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> <resource:ffi-callback> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> <resource:ffi-callback> 10 ]
+PASS: add callback returns 10
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> <resource:ffi-callback> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> <resource:ffi-callback> 25 ]
+PASS: mul callback returns 25
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> <resource:ffi-callback> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> <resource:ffi-callback> ]
+Stack: [ <resource:dylib> [ <resource:ffi-callback> <resource:ffi-fn> ffi-call ] ]
+Stack: [ <resource:dylib> [ <resource:ffi-callback> <resource:ffi-fn> ffi-call ] [ [ 1 2 ] dip call ] ]
+Stack: [ <resource:dylib> [ <resource:ffi-callback> <resource:ffi-fn> ffi-call ] [ [ 1 2 ] dip call ] [ error-type: @get test-error: = "callback error propagates" assert-true ] ]
+PASS: callback error propagates
+Stack: [ ]

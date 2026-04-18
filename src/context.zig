@@ -119,6 +119,11 @@ pub const Context = struct {
     /// Pending error message set by primitives before returning an error.
     /// Used by captureCallStackOnError for the innermost frame's message.
     pending_error_message: ?[]const u8 = null,
+    /// Error captured by the FFI callback trampoline when a 1z quotation throws.
+    /// Checked and cleared by nativeFfiCall after ffi_call returns.
+    callback_error: ?anyerror = null,
+    /// Human-readable context string for the callback error.
+    callback_error_context: ?[]const u8 = null,
     /// Optional debugger. When non-null, the execution loop checks whether to
     /// pause before each instruction. When null (the default), the cost is a
     /// single pointer check per instruction.
