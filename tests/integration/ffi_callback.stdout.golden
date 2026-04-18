@@ -1,4 +1,5 @@
 Stack: [ ]
+Stack: [ ]
 Stack: [ <resource:dylib> ]
 Stack: [ <resource:dylib> <resource:ffi-callback> ]
 PASS: ffi-callback is a resource

@@ -1,10 +1,15 @@
 use "testing" ;
 
+\\ Helper to get the shared library extension for the host OS.
+toy-lib-ext: ( -- ext ) [
+  sys-info "os" @get "macos" = [ ".dylib" ] [ ".so" ] if
+] ;
+
 \\ Helper to get the shared library path relative to the build root.
 \\ The stdlib-path flag gives us the project root's lib/ directory,
 \\ so we derive the project root from environ PWD and append zig-out/ext/.
 toy-lib-path: ( -- path ) [
-  environ "PWD" @get "/zig-out/ext/libtoy.dylib" #append
+  environ "PWD" @get "/zig-out/ext/libtoy" #append toy-lib-ext #append
 ] ;
 
 \\ lib-open: load toy shared library from explicit path

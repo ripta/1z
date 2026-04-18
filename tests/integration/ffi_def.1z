@@ -1,9 +1,14 @@
 use "testing" ;
 use "ffi" ;
 
+\\ Helper to get the shared library extension for the host OS.
+toy-lib-ext: ( -- ext ) [
+  sys-info "os" @get "macos" = [ ".dylib" ] [ ".so" ] if
+] ;
+
 \\ Helper to get the shared library path for the toy library.
 toy-lib-path: ( -- path ) [
-  environ "PWD" @get "/zig-out/ext/libtoy.dylib" #append
+  environ "PWD" @get "/zig-out/ext/libtoy" #append toy-lib-ext #append
 ] ;
 
 \ === Basic ffi-def{ with toy library ===

@@ -1,4 +1,5 @@
 Stack: [ ]
+Stack: [ ]
 Stack: [ <resource:dylib> ]
 PASS: lib-open returns dylib resource
 Stack: [ ]

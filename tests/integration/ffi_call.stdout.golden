@@ -1,4 +1,5 @@
 Stack: [ ]
+Stack: [ ]
 Stack: [ <resource:dylib> ]
 Stack: [ <resource:dylib> <resource:ffi-fn> ]
 Stack: [ <resource:dylib> <resource:ffi-fn> 7 ]

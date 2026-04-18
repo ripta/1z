@@ -1,4 +1,5 @@
 Stack: [ ]
+Stack: [ ]
 Stack: [ ffi-sig{ params: { "i32" "i32" } return-type: "i32" } ]
 PASS: ffi{ produces ffi-sig
 Stack: [ ]

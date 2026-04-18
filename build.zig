@@ -14,6 +14,7 @@ pub fn build(b: *std.Build) void {
     root_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
     root_module.addIncludePath(b.path("ext/toy"));
     root_module.linkSystemLibrary("ffi", .{});
+    addFfiIncludePath(b, root_module, target);
 
     // Set version as a build option
     const options = b.addOptions();
@@ -68,6 +69,7 @@ pub fn build(b: *std.Build) void {
     test_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
     test_module.addIncludePath(b.path("ext/toy"));
     test_module.linkSystemLibrary("ffi", .{});
+    addFfiIncludePath(b, test_module, target);
     test_module.addOptions("build_options", options);
 
     const lib_unit_tests = b.addTest(.{
@@ -170,6 +172,10 @@ pub fn build(b: *std.Build) void {
 
         // Integration test: compare against golden file if it exists
         const test_run = b.addRunArtifact(exe);
+        // FFI tests dlopen zig-out/ext/libtoy.{dylib,so}; without this explicit
+        // dependency, a test_run can race the install_toy_shared step and fail
+        // before the shared object is in place.
+        test_run.step.dependOn(&install_toy_shared.step);
         if (show_stack) {
             test_run.addArg("--show-stack");
         }
@@ -240,6 +246,7 @@ pub fn build(b: *std.Build) void {
 
         // Update golden: capture stdout and write to .stdout.golden file
         const update_run = b.addRunArtifact(exe);
+        update_run.step.dependOn(&install_toy_shared.step);
         if (show_stack) {
             update_run.addArg("--show-stack");
         }
@@ -355,4 +362,17 @@ pub fn build(b: *std.Build) void {
     }
 
     update_fmt_golden_step.dependOn(&update_fmt_files.step);
+}
+
+fn addFfiIncludePath(b: *std.Build, module: *std.Build.Module, target: std.Build.ResolvedTarget) void {
+    // @cInclude("ffi.h") needs an extra include path on macOS where the
+    // SDK places ffi.h under <sysroot>/usr/include/ffi/.  On Linux the
+    // header is already in the default multiarch search path.
+    if (target.result.os.tag.isDarwin()) {
+        if (std.zig.system.darwin.getSdk(b.allocator, &target.result)) |sdk| {
+            module.addSystemIncludePath(.{
+                .cwd_relative = b.fmt("{s}/usr/include/ffi", .{sdk}),
+            });
+        }
+    }
 }
