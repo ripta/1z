@@ -1,0 +1,36 @@
+Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: '3dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: 'tri' parameter 'p' has row-variable effect; quotation call falls back to interpreter
+Warning: 'tri' parameter 'q' has row-variable effect; quotation call falls back to interpreter
+Warning: 'tri' parameter 'r' has row-variable effect; quotation call falls back to interpreter
+Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
+Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter
+Warning: '2keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Prelude compilation: 6/16 words compiled (37.5%)
+  word '1apply' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word 'unless' cannot be compiled
+      NC.8: a quotation in abstract form must become a concrete runtime value
+      hint: blocked until quotation bodies can be compiled
+  word 'when' cannot be compiled
+      NC.8: a quotation in abstract form must become a concrete runtime value
+      hint: blocked until quotation bodies can be compiled
+  word 'output-stream' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word '3dip' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word '2dip' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word 'tri' cannot be compiled
+      NC.5: calls a quotation whose stack effect is unknown
+      hint: annotate the quotation parameter with a concrete stack effect
+  word 'bi' cannot be compiled
+      NC.5: calls a quotation whose stack effect is unknown
+      hint: annotate the quotation parameter with a concrete stack effect
+  word '2keep' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word 'keep' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries

@@ -1,0 +1,22 @@
+\ Audit: exercise HO prelude combinators with literal quotation arguments
+
+\ -- keep variants --
+5 [ 2 * ] keep . .
+5 10 [ + ] 2keep . . .
+
+\ -- bi / tri --
+10 [ 2 * ] [ 3 + ] bi . .
+10 [ 1 + ] [ 2 * ] [ dup + ] tri . . .
+
+\ -- dip variants --
+1 2 3 [ 10 + ] 2dip . . .
+1 2 3 4 [ 10 + ] 3dip . . . .
+
+\ -- when / unless --
+t [ "when-true" print-line ] when
+f [ "when-false" print-line ] when
+f [ "unless-true" print-line ] unless
+t [ "unless-false" print-line ] unless
+
+\ -- 1apply --
+42 [ 1 + ] 1apply .
