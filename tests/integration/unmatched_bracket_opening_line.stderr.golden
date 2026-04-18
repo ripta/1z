@@ -1,0 +1,1 @@
+tests/integration/unmatched_bracket_opening_line.1z:4: error 'unmatched-open-bracket' opened at line 3

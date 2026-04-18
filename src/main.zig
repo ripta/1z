@@ -4,6 +4,7 @@ const File = std.fs.File;
 const context = @import("context.zig");
 const Context = context.Context;
 const ErrorDetail = context.ErrorDetail;
+const ParseDiagnostics = context.ParseDiagnostics;
 const Quotation = @import("value.zig").Quotation;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 const formatter = @import("formatter.zig");
@@ -67,6 +68,27 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
         writer.print("error.{s}\n", .{kebab_name}) catch return;
     }
     ctx.clearExecutionDetails();
+}
+
+/// Print parse error details from parse_diagnostics.
+/// Format matches runtime errors: source:line: error 'TYPE' MESSAGE
+/// The start_line parameter converts tokenizer-relative opening_line to file-relative.
+fn printParseDiagnostics(ctx: *Context, writer: anytype, source: []const u8, line: usize, start_line: usize) void {
+    const diag = ctx.parse_diagnostics orelse return;
+    if (diag.error_type) |error_type| {
+        var kebab_buf: [128]u8 = undefined;
+        const kebab_name = pascalToKebabRuntime(error_type, &kebab_buf);
+        writer.print("{s}:{d}: error '{s}'", .{ source, line, kebab_name }) catch return;
+        if (diag.message) |msg| {
+            writer.print(" {s}", .{msg}) catch return;
+        }
+        if (diag.opening_line) |ol| {
+            const file_line = if (start_line > 0) ol + start_line - 1 else ol;
+            writer.print(" opened at line {d}", .{file_line}) catch return;
+        }
+        writer.writeAll("\n") catch return;
+    }
+    ctx.parse_diagnostics = null;
 }
 
 pub fn main() u8 {
@@ -511,8 +533,13 @@ fn replInteractive(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
             .needs_more_input => continue,
             .parse_error => |err| {
                 if (err == error.DebuggerQuit) return;
-                writer.print("Error: {any}\n", .{err}) catch {};
+                if (ctx.parse_diagnostics != null) {
+                    printParseDiagnostics(ctx, writer, ctx.current_source, repl_line, processor.start_line);
+                } else {
+                    writer.print("Error: {any}\n", .{err}) catch {};
+                }
                 writer.flush() catch {};
+                ctx.clearExecutionDetails();
                 processor.reset();
             },
             .complete => |instrs| {
@@ -610,8 +637,13 @@ fn replPiped(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
             .needs_more_input => continue,
             .parse_error => |err| {
                 if (err == error.DebuggerQuit) return;
-                writer.print("Error: {any}\n", .{err}) catch {};
+                if (ctx.parse_diagnostics != null) {
+                    printParseDiagnostics(ctx, writer, ctx.current_source, repl_line, processor.start_line);
+                } else {
+                    writer.print("Error: {any}\n", .{err}) catch {};
+                }
                 writer.flush() catch return;
+                ctx.clearExecutionDetails();
                 processor.reset();
             },
             .complete => |instrs| {
@@ -699,7 +731,11 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                     .needs_more_input => {},
                     .parse_error => |e| {
                         if (e == error.DebuggerQuit) return 0;
-                        err_writer.print("Error: {any}\n", .{e}) catch {};
+                        if (ctx.parse_diagnostics != null) {
+                            printParseDiagnostics(ctx, err_writer, ctx.current_source, file_line, processor.start_line);
+                        } else {
+                            err_writer.print("Error: {any}\n", .{e}) catch {};
+                        }
                         err_writer.flush() catch {};
                         return 1;
                     },
@@ -738,8 +774,13 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
             .needs_more_input => continue,
             .parse_error => |err| {
                 if (err == error.DebuggerQuit) return 0;
-                err_writer.print("Error at line {d}: {any}\n", .{ file_line, err }) catch {};
+                if (ctx.parse_diagnostics != null) {
+                    printParseDiagnostics(ctx, err_writer, ctx.current_source, file_line, processor.start_line);
+                } else {
+                    err_writer.print("Error at line {d}: {any}\n", .{ file_line, err }) catch {};
+                }
                 err_writer.flush() catch {};
+                ctx.clearExecutionDetails();
                 return 1;
             },
             .complete => |instrs| {

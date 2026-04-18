@@ -80,7 +80,7 @@ pub fn nativeParseUntil(ctx: *Context) anyerror!void {
 
     const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
 
-    const quot = parser.parseQuotationUntil(ctx.quotationAllocator(), tokenizer, ctx, delimiter) catch return error.OutOfMemory;
+    const quot = parser.parseQuotationUntil(ctx.quotationAllocator(), tokenizer, ctx, delimiter, 0) catch return error.OutOfMemory;
 
     try ctx.stack.push(.{ .quotation = quot });
 }
@@ -125,13 +125,13 @@ fn nativeParseLiteral(ctx: *Context) anyerror!void {
         const token = tok.text;
 
         if (std.mem.eql(u8, token, "{")) {
-            const arr = parser.parseArray(alloc, tokenizer, ctx) catch return error.OutOfMemory;
+            const arr = parser.parseArray(alloc, tokenizer, ctx, tok.line) catch return error.OutOfMemory;
             try ctx.stack.push(.{ .array = arr });
             return;
         }
 
         if (std.mem.eql(u8, token, "[")) {
-            const quot = parser.parseQuotation(alloc, tokenizer, ctx) catch return error.OutOfMemory;
+            const quot = parser.parseQuotation(alloc, tokenizer, ctx, tok.line) catch return error.OutOfMemory;
             try ctx.stack.push(.{ .quotation = quot });
             return;
         }

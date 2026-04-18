@@ -1,0 +1,2 @@
+\ Test that InvalidArrayElement errors include the offending token name.
+{ nan }

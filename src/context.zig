@@ -56,6 +56,16 @@ pub const ErrorDetail = struct {
     word_name: ?[]const u8,
 };
 
+/// Structured context for parse-time errors, populated by the parser's catch
+/// blocks and consumed by the display sites in main.zig. Separates parse error
+/// context from runtime error_details to avoid cross-contamination.
+pub const ParseDiagnostics = struct {
+    message: ?[]const u8 = null,
+    error_type: ?[]const u8 = null,
+    opening_line: ?usize = null,
+    source_file: ?[]const u8 = null,
+};
+
 /// The Context holds all interpreter state.
 pub const Context = struct {
     stack: Stack,
@@ -103,6 +113,9 @@ pub const Context = struct {
     module_cache: std.StringHashMapUnmanaged(*value_mod.Module) = .{},
     /// Stashed error object from user `throw`, consumed by `recover`.
     thrown_error: ?value_mod.ErrorObject = null,
+    /// Parse-time error diagnostics, populated by the parser catch blocks
+    /// and consumed by the display sites in main.zig.
+    parse_diagnostics: ?ParseDiagnostics = null,
     /// Pending error message set by primitives before returning an error.
     /// Used by captureCallStackOnError for the innermost frame's message.
     pending_error_message: ?[]const u8 = null,

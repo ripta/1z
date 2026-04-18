@@ -1,0 +1,5 @@
+\ Test that parse-time errors surface their error type and message
+\ instead of the generic "ParseTimeExecutionError".
+
+\ This triggers a parse-time error: 1 is not a valid hash key.
+H{ 1 "foo" }
