@@ -4861,6 +4861,8 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
 export fn jitRefreshStack(jit_ctx_raw: usize) callconv(.c) i32 {
     if (jit_ctx_raw == 0) return 0;
     const jc: *JitContext = @ptrFromInt(jit_ctx_raw);
+    const ctx_raw: usize = @intFromPtr(jc.ctx);
+    if (ctx_raw == 0 or ctx_raw % @alignOf(Context) != 0) return 0;
     const ctx: *Context = @ptrCast(@alignCast(jc.ctx));
     jc.items_ptr = ctx.stack.items.items.ptr;
     jc.capacity = ctx.stack.items.capacity;
@@ -4881,6 +4883,8 @@ export fn jitEnsureStackCapacity(jit_ctx_raw: usize, needed: usize) callconv(.c)
     // ctx does not need to be dereferenced. This keeps unit tests that pass
     // a sentinel ctx working.
     if (needed <= jc.capacity) return 0;
+    const ctx_raw: usize = @intFromPtr(jc.ctx);
+    if (ctx_raw == 0 or ctx_raw % @alignOf(Context) != 0) return 1;
     const ctx: *Context = @ptrCast(@alignCast(jc.ctx));
     ctx.stack.items.ensureTotalCapacity(ctx.stack.allocator, needed) catch return 1;
     jc.items_ptr = ctx.stack.items.items.ptr;
@@ -5100,14 +5104,20 @@ fn callCompiled(func: CompiledFn, inputs: []const i64, result: *i64) i32 {
 }
 
 /// Helper to call a compiled function with raw Value stack for non-fixnum tests.
+/// Uses a large internal buffer so the prologue capacity check never tries to
+/// grow through the sentinel ctx pointer.
 fn callCompiledValues(func: CompiledFn, values: []Value, sp: *usize) i32 {
+    var buf: [64]Value = undefined;
+    @memcpy(buf[0..values.len], values);
     var jit_ctx = JitContext{
-        .items_ptr = values.ptr,
+        .items_ptr = &buf,
         .sp_ptr = sp,
-        .capacity = values.len,
+        .capacity = buf.len,
         .ctx = @ptrFromInt(@as(usize, 1)),
     };
-    return func(&jit_ctx);
+    const status = func(&jit_ctx);
+    @memcpy(values, buf[0..values.len]);
+    return status;
 }
 
 test "compile double: 2 *" {
