@@ -1,0 +1,19 @@
+check-type: ( val -- ) [
+  dup fixnum? [ drop "fixnum" print-line ] [
+    dup boolean? [ drop "boolean" print-line ] [
+      dup string? [ drop "string" print-line ] [
+        dup symbol? [ drop "symbol" print-line ] [
+          dup float? [ drop "float" print-line ] [
+            drop "other" print-line
+          ] if
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+42 check-type
+t check-type
+"hello" check-type
+name: check-type
+3.14 check-type

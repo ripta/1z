@@ -1,0 +1,3 @@
+"hello" " " #append "world" #append print-line
+"test" #len .
+"abcdef" 1 3 #slice print-line

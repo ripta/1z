@@ -1,0 +1,8 @@
+t not .
+f not .
+t t and .
+t f and .
+f t or .
+f f or .
+t f xor .
+t t xor .

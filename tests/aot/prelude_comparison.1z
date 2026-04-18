@@ -1,0 +1,5 @@
+3 5 /= .
+5 5 /= .
+1 2 cmp inspect print-line
+2 2 cmp inspect print-line
+3 2 cmp inspect print-line
