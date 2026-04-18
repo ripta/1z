@@ -1,0 +1,4 @@
+\ Test that unmatched bracket reports the opening line.
+\ The bracket opens on line 3.
+[
+  1 2 3

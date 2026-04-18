@@ -1,0 +1,1 @@
+tests/integration/unmatched_brace_opening_line.1z:4: error 'unmatched-open-brace' opened at line 3

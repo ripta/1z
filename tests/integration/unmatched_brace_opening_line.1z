@@ -1,0 +1,4 @@
+\ Test that unmatched brace reports the opening line.
+\ The brace opens on line 3.
+{
+  1 2 3

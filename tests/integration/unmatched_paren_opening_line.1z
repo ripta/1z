@@ -1,0 +1,3 @@
+\ Test that unmatched paren reports the opening line.
+\ The paren opens on line 3.
+( hello --

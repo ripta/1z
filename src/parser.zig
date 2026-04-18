@@ -98,6 +98,15 @@ pub fn isIncompleteError(err: anyerror) bool {
     return err == error.UnmatchedOpenBracket or err == error.UnmatchedOpenBrace or err == error.UnmatchedOpenQuote;
 }
 
+fn setUnmatchedDiagnostics(ctx: ?*Context, comptime error_name: []const u8, opening_line: usize) void {
+    if (ctx) |c| {
+        c.parse_diagnostics = .{
+            .error_type = error_name,
+            .opening_line = opening_line,
+        };
+    }
+}
+
 const WordDefinition = @import("dictionary.zig").WordDefinition;
 
 /// Execute a parse-time word during parsing:
@@ -281,17 +290,17 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
         const line = tok.line;
         const column = tok.column;
         if (std.mem.eql(u8, token, "[")) {
-            const quotation = try parseQuotation(allocator, tokenizer, ctx);
+            const quotation = try parseQuotation(allocator, tokenizer, ctx, line);
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = quotation } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "]")) {
             return ParseError.UnmatchedCloseBracket;
         } else if (std.mem.eql(u8, token, "{")) {
-            const arr = try parseArray(allocator, tokenizer, ctx);
+            const arr = try parseArray(allocator, tokenizer, ctx, line);
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .array = arr } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "}")) {
             return ParseError.UnmatchedCloseBrace;
         } else if (std.mem.eql(u8, token, "(")) {
-            const effect = try parseStackEffect(allocator, tokenizer);
+            const effect = try parseStackEffect(allocator, tokenizer, ctx, line);
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, ")")) {
             return ParseError.UnmatchedCloseParen;
@@ -305,6 +314,7 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
             const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (token.len > 0 and token[0] == '"') {
+            setUnmatchedDiagnostics(ctx, "UnmatchedOpenQuote", line);
             return ParseError.UnmatchedOpenQuote;
         } else {
             // Check if this is a parse-time word
@@ -348,12 +358,12 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
 
 /// Parse a quotation. If ctx is provided, parse-time words will be executed.
 /// A leading stack effect `( ... )` becomes the quotation's declared effect.
-pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) ParseError!Quotation {
-    return parseQuotationUntil(allocator, tokenizer, ctx, "]");
+pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context, opening_line: usize) ParseError!Quotation {
+    return parseQuotationUntil(allocator, tokenizer, ctx, "]", opening_line);
 }
 
 /// Parse a quotation terminated by a caller-specified delimiter.
-pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context, close_delim: []const u8) ParseError!Quotation {
+pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context, close_delim: []const u8, opening_line: usize) ParseError!Quotation {
     var instructions: std.ArrayListUnmanaged(Instruction) = .{};
     errdefer instructions.deinit(allocator);
 
@@ -383,18 +393,18 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
             return Quotation{ .instructions = instrs, .effect = quotation_effect };
         } else if (std.mem.eql(u8, token, "[")) {
             is_first_token = false;
-            const nested = try parseQuotation(allocator, tokenizer, ctx);
+            const nested = try parseQuotation(allocator, tokenizer, ctx, line);
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = nested } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "]")) {
             return ParseError.UnmatchedCloseBracket;
         } else if (std.mem.eql(u8, token, "{")) {
             is_first_token = false;
-            const arr = try parseArray(allocator, tokenizer, ctx);
+            const arr = try parseArray(allocator, tokenizer, ctx, line);
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .array = arr } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "}")) {
             return ParseError.UnmatchedCloseBrace;
         } else if (std.mem.eql(u8, token, "(")) {
-            const effect = try parseStackEffect(allocator, tokenizer);
+            const effect = try parseStackEffect(allocator, tokenizer, ctx, line);
             if (is_first_token) {
                 // Leading stack effect becomes the quotation's declared effect
                 const effect_ptr = allocator.create(StackEffect) catch return ParseError.OutOfMemory;
@@ -421,6 +431,7 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
             const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
             instructions.append(allocator, .{ .op = .{ .push_literal = .{ .string = s_copy } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
         } else if (token.len > 0 and token[0] == '"') {
+            setUnmatchedDiagnostics(ctx, "UnmatchedOpenQuote", line);
             return ParseError.UnmatchedOpenQuote;
         } else {
             // Check if this is a parse-time word
@@ -460,6 +471,7 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
         }
     }
 
+    setUnmatchedDiagnostics(ctx, "UnmatchedOpenBracket", opening_line);
     return ParseError.UnmatchedOpenBracket;
 }
 
@@ -467,7 +479,7 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
 /// Handles nested parentheses for syntax like:
 ///   ( try-quot recover-quot: ( error -- ) -- )
 ///   ( seq quot: ( elem -- elem' ) -- seq' )
-pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer) ParseError!StackEffect {
+pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context, opening_line: usize) ParseError!StackEffect {
     var inputs: std.ArrayListUnmanaged(StackEffectParam) = .{};
     errdefer inputs.deinit(allocator);
 
@@ -484,7 +496,7 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer) ParseError!
         if (std.mem.eql(u8, token, "(")) {
             // This should be a nested effect for the pending parameter
             if (pending_param_name) |name| {
-                const nested = try parseStackEffect(allocator, tokenizer);
+                const nested = try parseStackEffect(allocator, tokenizer, ctx, tok.line);
                 const nested_ptr = allocator.create(StackEffect) catch return ParseError.OutOfMemory;
                 nested_ptr.* = nested;
 
@@ -532,6 +544,7 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer) ParseError!
         }
     }
 
+    setUnmatchedDiagnostics(ctx, "UnmatchedOpenParen", opening_line);
     return ParseError.UnmatchedOpenParen;
 }
 
@@ -576,7 +589,7 @@ fn executeParseTimeWordForArray(
     }
 }
 
-pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) ParseError![]const Value {
+pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context, opening_line: usize) ParseError![]const Value {
     var values: std.ArrayListUnmanaged(Value) = .{};
     errdefer values.deinit(allocator);
 
@@ -585,13 +598,13 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) P
 
         const token = tok.text;
         if (std.mem.eql(u8, token, "{")) {
-            const nested = try parseArray(allocator, tokenizer, ctx);
+            const nested = try parseArray(allocator, tokenizer, ctx, tok.line);
             values.append(allocator, .{ .array = nested }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "}")) {
             return values.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "[")) {
             // Quotations inside arrays don't execute parse-time words (arrays are data)
-            const quot = try parseQuotation(allocator, tokenizer, null);
+            const quot = try parseQuotation(allocator, tokenizer, null, tok.line);
             values.append(allocator, .{ .quotation = quot }) catch return ParseError.OutOfMemory;
         } else if (parseInteger(token)) |n| {
             values.append(allocator, .{ .fixnum = n }) catch return ParseError.OutOfMemory;
@@ -603,6 +616,7 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) P
             const s_copy = processEscapes(allocator, s) catch return ParseError.OutOfMemory;
             values.append(allocator, .{ .string = s_copy }) catch return ParseError.OutOfMemory;
         } else if (token.len > 0 and token[0] == '"') {
+            setUnmatchedDiagnostics(ctx, "UnmatchedOpenQuote", tok.line);
             return ParseError.UnmatchedOpenQuote;
         } else if (token.len > 1 and token[token.len - 1] == ':') {
             const sym_copy = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
@@ -620,6 +634,7 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) P
         }
     }
 
+    setUnmatchedDiagnostics(ctx, "UnmatchedOpenBrace", opening_line);
     return ParseError.UnmatchedOpenBrace;
 }
 
@@ -632,7 +647,7 @@ test "parse simple quotation" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("1 2 + ]");
-    const quot = try parseQuotation(arena.allocator(), &tokenizer, null);
+    const quot = try parseQuotation(arena.allocator(), &tokenizer, null, 0);
 
     try std.testing.expectEqual(@as(usize, 3), quot.instructions.len);
     try std.testing.expectEqual(@as(i64, 1), quot.instructions[0].op.push_literal.fixnum);
@@ -645,7 +660,7 @@ test "parse nested quotation" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("[ 1 ] ]");
-    const quot = try parseQuotation(arena.allocator(), &tokenizer, null);
+    const quot = try parseQuotation(arena.allocator(), &tokenizer, null, 0);
 
     try std.testing.expectEqual(@as(usize, 1), quot.instructions.len);
     const nested = quot.instructions[0].op.push_literal.quotation;
@@ -658,7 +673,7 @@ test "parse quotation with leading stack effect" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("( n -- n ) dup ]");
-    const quot = try parseQuotation(arena.allocator(), &tokenizer, null);
+    const quot = try parseQuotation(arena.allocator(), &tokenizer, null, 0);
 
     // The quotation should have an effect attached
     try std.testing.expect(quot.effect != null);
@@ -678,7 +693,7 @@ test "parse quotation with non-leading stack effect" {
 
     // Stack effect after other content is pushed as a value
     var tokenizer = Tokenizer.init("1 ( n -- n ) ]");
-    const quot = try parseQuotation(arena.allocator(), &tokenizer, null);
+    const quot = try parseQuotation(arena.allocator(), &tokenizer, null, 0);
 
     // No quotation-level effect
     try std.testing.expect(quot.effect == null);
@@ -692,13 +707,13 @@ test "parse quotation with non-leading stack effect" {
 
 test "unmatched open bracket" {
     var tokenizer = Tokenizer.init("1 2");
-    const result = parseQuotation(std.testing.allocator, &tokenizer, null);
+    const result = parseQuotation(std.testing.allocator, &tokenizer, null, 0);
     try std.testing.expectError(ParseError.UnmatchedOpenBracket, result);
 }
 
 test "parse simple array" {
     var tokenizer = Tokenizer.init("1 2 3 }");
-    const arr = try parseArray(std.testing.allocator, &tokenizer, null);
+    const arr = try parseArray(std.testing.allocator, &tokenizer, null, 0);
     defer std.testing.allocator.free(arr);
 
     try std.testing.expectEqual(@as(usize, 3), arr.len);
@@ -709,7 +724,7 @@ test "parse simple array" {
 
 test "parse nested array" {
     var tokenizer = Tokenizer.init("{ 1 2 } }");
-    const arr = try parseArray(std.testing.allocator, &tokenizer, null);
+    const arr = try parseArray(std.testing.allocator, &tokenizer, null, 0);
     defer std.testing.allocator.free(arr);
 
     try std.testing.expectEqual(@as(usize, 1), arr.len);
@@ -725,7 +740,7 @@ test "parse array with string" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("\"hello\" 42 }");
-    const arr = try parseArray(arena.allocator(), &tokenizer, null);
+    const arr = try parseArray(arena.allocator(), &tokenizer, null, 0);
 
     try std.testing.expectEqual(@as(usize, 2), arr.len);
     try std.testing.expectEqualStrings("hello", arr[0].string);
@@ -734,7 +749,7 @@ test "parse array with string" {
 
 test "unmatched open brace" {
     var tokenizer = Tokenizer.init("1 2");
-    const result = parseArray(std.testing.allocator, &tokenizer, null);
+    const result = parseArray(std.testing.allocator, &tokenizer, null, 0);
     try std.testing.expectError(ParseError.UnmatchedOpenBrace, result);
 }
 
@@ -743,7 +758,7 @@ test "parse simple stack effect" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("n -- n )");
-    const effect = try parseStackEffect(arena.allocator(), &tokenizer);
+    const effect = try parseStackEffect(arena.allocator(), &tokenizer, null, 0);
 
     try std.testing.expectEqual(@as(usize, 1), effect.inputs.len);
     try std.testing.expectEqual(@as(usize, 1), effect.outputs.len);
@@ -756,7 +771,7 @@ test "parse multi-arg stack effect" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("a b c -- sum )");
-    const effect = try parseStackEffect(arena.allocator(), &tokenizer);
+    const effect = try parseStackEffect(arena.allocator(), &tokenizer, null, 0);
 
     try std.testing.expectEqual(@as(usize, 3), effect.inputs.len);
     try std.testing.expectEqual(@as(usize, 1), effect.outputs.len);
@@ -771,7 +786,7 @@ test "parse empty stack effect" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("-- )");
-    const effect = try parseStackEffect(arena.allocator(), &tokenizer);
+    const effect = try parseStackEffect(arena.allocator(), &tokenizer, null, 0);
 
     try std.testing.expectEqual(@as(usize, 0), effect.inputs.len);
     try std.testing.expectEqual(@as(usize, 0), effect.outputs.len);
@@ -782,7 +797,7 @@ test "unmatched open paren" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("n -- n");
-    const result = parseStackEffect(arena.allocator(), &tokenizer);
+    const result = parseStackEffect(arena.allocator(), &tokenizer, null, 0);
     try std.testing.expectError(ParseError.UnmatchedOpenParen, result);
 }
 
@@ -791,7 +806,7 @@ test "parse stack effect with quotation annotation" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("seq quot: ( elem -- elem' ) -- seq' )");
-    const effect = try parseStackEffect(arena.allocator(), &tokenizer);
+    const effect = try parseStackEffect(arena.allocator(), &tokenizer, null, 0);
 
     try std.testing.expectEqual(@as(usize, 2), effect.inputs.len);
     try std.testing.expectEqual(@as(usize, 1), effect.outputs.len);
@@ -816,7 +831,7 @@ test "parse recover stack effect" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("try-quot recover-quot: ( error -- ) -- )");
-    const effect = try parseStackEffect(arena.allocator(), &tokenizer);
+    const effect = try parseStackEffect(arena.allocator(), &tokenizer, null, 0);
 
     try std.testing.expectEqual(@as(usize, 2), effect.inputs.len);
     try std.testing.expectEqual(@as(usize, 0), effect.outputs.len);
@@ -838,7 +853,7 @@ test "parse bi stack effect" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("x p: ( x -- a ) q: ( x -- b ) -- a b )");
-    const effect = try parseStackEffect(arena.allocator(), &tokenizer);
+    const effect = try parseStackEffect(arena.allocator(), &tokenizer, null, 0);
 
     try std.testing.expectEqual(@as(usize, 3), effect.inputs.len);
     try std.testing.expectEqual(@as(usize, 2), effect.outputs.len);
@@ -995,7 +1010,7 @@ test "doc-comment inside quotation emits doc_string after symbol" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("\\\\ doc\nbar: 1 ]");
-    const quot = try parseQuotation(arena.allocator(), &tokenizer, null);
+    const quot = try parseQuotation(arena.allocator(), &tokenizer, null, 0);
 
     try std.testing.expectEqual(@as(usize, 3), quot.instructions.len);
     try std.testing.expectEqualStrings("bar", quot.instructions[0].op.push_literal.symbol);
@@ -1008,7 +1023,7 @@ test "doc-comment does not affect leading stack effect in quotation" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("\\\\ orphaned doc\n( n -- n ) dup ]");
-    const quot = try parseQuotation(arena.allocator(), &tokenizer, null);
+    const quot = try parseQuotation(arena.allocator(), &tokenizer, null, 0);
 
     try std.testing.expect(quot.effect != null);
     try std.testing.expectEqual(@as(usize, 1), quot.effect.?.inputs.len);
@@ -1023,7 +1038,7 @@ test "doc-comment with definition in quotation preserves leading stack effect" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("( n -- n ) \\\\ doc\nfoo: 1 ]");
-    const quot = try parseQuotation(arena.allocator(), &tokenizer, null);
+    const quot = try parseQuotation(arena.allocator(), &tokenizer, null, 0);
 
     try std.testing.expect(quot.effect != null);
 
@@ -1057,7 +1072,7 @@ test "doc-comment in array is skipped" {
     defer arena.deinit();
 
     var tokenizer = Tokenizer.init("1 \\\\ comment inside array\n2 }");
-    const arr = try parseArray(arena.allocator(), &tokenizer, null);
+    const arr = try parseArray(arena.allocator(), &tokenizer, null, 0);
 
     try std.testing.expectEqual(@as(usize, 2), arr.len);
     try std.testing.expectEqual(@as(i64, 1), arr[0].fixnum);
