@@ -1832,6 +1832,14 @@ fn compilePredBodyLoop(
     c.ir_set_op2(ctx, loop_ref, loop_end);
 
     c._ir_IF_FALSE(ctx, if_continue);
+
+    // The safepoint on the IF_TRUE (continue) path updated
+    // state.items_ptr/base_addr to IR refs that don't dominate
+    // this exit path. Re-LOAD to get dominating refs.
+    if (state.refresh_stack_fn != c.IR_UNUSED) {
+        refreshCachedStackPointer(state);
+    }
+
     resetStackToPhysical(stack, sp.*);
 }
 
@@ -2326,6 +2334,13 @@ fn compileInstructions(
                     const saved_diverged = state.diverged;
                     const saved_loop_end_set = state.loop_end_set;
 
+                    // Save items_ptr/base_addr before the true branch so the
+                    // false branch can use refs that dominate both paths.
+                    // Callbacks in the true branch may update these to IR refs
+                    // that are only defined on the IF_TRUE path.
+                    const saved_items_ptr = state.items_ptr;
+                    const saved_base_addr = state.base_addr;
+
                     // Emit true branch
                     const if_ref = c._ir_IF(ctx, cond_ref);
                     c._ir_IF_TRUE(ctx, if_ref);
@@ -2337,6 +2352,11 @@ fn compileInstructions(
                         flushToPhysicalStack(state, stack, sp.*);
                         end_true = c._ir_END(ctx);
                     }
+
+                    // Restore items_ptr/base_addr before the false branch so
+                    // it uses refs from before the IF that dominate both paths.
+                    state.items_ptr = saved_items_ptr;
+                    state.base_addr = saved_base_addr;
 
                     // Emit false branch
                     c._ir_IF_FALSE(ctx, if_ref);
@@ -2360,6 +2380,12 @@ fn compileInstructions(
                     } else if (false_diverged) {
                         // Only true path continues. Resume from true branch's END.
                         c._ir_BEGIN(ctx, end_true);
+                        // The false branch compilation may have updated
+                        // state.items_ptr/base_addr; re-LOAD so we use refs
+                        // that are live on the true path we're resuming.
+                        if (state.refresh_stack_fn != c.IR_UNUSED) {
+                            refreshCachedStackPointer(state);
+                        }
                         resetStackToPhysical(stack, sp.*);
                         state.diverged = saved_diverged;
                     } else {
@@ -2368,6 +2394,12 @@ fn compileInstructions(
                         const end_false = c._ir_END(ctx);
                         c._ir_MERGE_2(ctx, end_true, end_false);
                         if (sp.* != false_sp) return IrCodegenError.StackShapeMismatch;
+                        // Both branches may have updated state.items_ptr/
+                        // base_addr to branch-local refs. Re-LOAD after
+                        // the merge so subsequent code uses dominating refs.
+                        if (state.refresh_stack_fn != c.IR_UNUSED) {
+                            refreshCachedStackPointer(state);
+                        }
                         resetStackToPhysical(stack, sp.*);
                         state.diverged = saved_diverged;
                         state.loop_end_set = saved_loop_end_set;
@@ -2431,6 +2463,14 @@ fn compileInstructions(
                             const end_compiled = c._ir_END(ctx);
 
                             c._ir_MERGE_2(ctx, end_fallback, end_compiled);
+
+                            // Both branches called emitCallbackPostCheck which
+                            // updated state.items_ptr/base_addr to branch-local
+                            // IR refs. Re-LOAD after the merge so subsequent
+                            // code uses refs that dominate this point.
+                            if (state.refresh_stack_fn != c.IR_UNUSED) {
+                                refreshCachedStackPointer(state);
+                            }
 
                             if (state.quotation_slots.findSlot(s)) |info| {
                                 // Concrete effect known: apply it to the abstract stack
@@ -2517,6 +2557,13 @@ fn compileInstructions(
 
                     c._ir_MERGE_2(ctx, skip_end, exit_end);
 
+                    // The safepoint on the loop-continue path updated
+                    // state.items_ptr/base_addr to IR refs that don't dominate
+                    // this merge point. Re-LOAD to get dominating refs.
+                    if (state.refresh_stack_fn != c.IR_UNUSED) {
+                        refreshCachedStackPointer(state);
+                    }
+
                     // After loop, reload sp from memory if dynamic calls were made
                     if (state.dynamic_call_emitted) {
                         // sp may have been modified by indirect calls; leave it
@@ -2569,6 +2616,13 @@ fn compileInstructions(
                     c.ir_set_op2(ctx, loop_ref, loop_end);
 
                     c._ir_IF_FALSE(ctx, if_continue);
+
+                    // The safepoint on the IF_TRUE (continue) path updated
+                    // state.items_ptr/base_addr to IR refs that don't dominate
+                    // this exit path. Re-LOAD to get dominating refs.
+                    if (state.refresh_stack_fn != c.IR_UNUSED) {
+                        refreshCachedStackPointer(state);
+                    }
                 } else if (std.mem.eql(u8, name, "while") or std.mem.eql(u8, name, "until")) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     sp.* -= 2;
@@ -2948,6 +3002,14 @@ fn compileInstructions(
                         const end_compiled = c._ir_END(ctx);
 
                         c._ir_MERGE_2(ctx, end_fallback, end_compiled);
+
+                        // Both branches called emitCallbackPostCheck which
+                        // updated state.items_ptr/base_addr to branch-local
+                        // IR refs. Re-LOAD after the merge so subsequent
+                        // code uses refs that dominate this point.
+                        if (state.refresh_stack_fn != c.IR_UNUSED) {
+                            refreshCachedStackPointer(state);
+                        }
 
                         // Adjust abstract stack based on specialized effect
                         sp.* = sp.* - effective_in + effective_out;
