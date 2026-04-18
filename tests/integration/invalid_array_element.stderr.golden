@@ -1,0 +1,1 @@
+tests/integration/invalid_array_element.1z:2: error 'invalid-array-element' 'nan' is not a literal value

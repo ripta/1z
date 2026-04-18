@@ -629,6 +629,10 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context, o
                         continue;
                     }
                 }
+                c.parse_diagnostics = .{
+                    .error_type = "InvalidArrayElement",
+                    .message = std.fmt.allocPrint(allocator, "'{s}' is not a literal value", .{token}) catch null,
+                };
             }
             return ParseError.InvalidArrayElement;
         }
