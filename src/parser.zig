@@ -106,6 +106,34 @@ const WordDefinition = @import("dictionary.zig").WordDefinition;
 /// 2. Push trailing literals onto the data stack
 /// 3. Keep everything before the trail, including call_words and their operands, untouched
 /// 4. Run the parse-time word
+/// Handle an error from a parse-time word execution: populate diagnostics on
+/// the context, clear stale runtime error state, and return the appropriate
+/// ParseError.
+fn handleParseTimeError(c: *Context, err: anyerror) ParseError {
+    if (err == error.DebuggerQuit) return ParseError.DebuggerQuit;
+    if (c.thrown_error) |thrown| {
+        c.parse_diagnostics = .{
+            .error_type = thrown.error_type,
+            .message = thrown.message,
+        };
+        c.thrown_error = null;
+    } else if (c.error_details.items.len > 0) {
+        const detail = c.error_details.items[0];
+        const has_real_message = detail.word_name == null or
+            !std.mem.eql(u8, detail.message, detail.word_name.?);
+        c.parse_diagnostics = .{
+            .error_type = detail.error_type,
+            .message = if (has_real_message) detail.message else null,
+        };
+    } else {
+        c.parse_diagnostics = .{
+            .error_type = @errorName(err),
+        };
+    }
+    c.clearExecutionDetails();
+    return ParseError.ParseTimeExecutionError;
+}
+
 /// 5. Capture all values above the pre-depth stack as `push_literal` instructions
 ///
 /// NOTE(ripta): The `call_word` acts as a barrier: the parse-time word can only reach back
@@ -162,8 +190,8 @@ fn executeParseTimeWord(
 
     // 4. Run the parse-time word
     switch (word.action) {
-        .native => |func| func(c) catch |err| return if (err == error.DebuggerQuit) ParseError.DebuggerQuit else ParseError.ParseTimeExecutionError,
-        .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch |err| return if (err == error.DebuggerQuit) ParseError.DebuggerQuit else ParseError.ParseTimeExecutionError,
+        .native => |func| func(c) catch |err| return handleParseTimeError(c, err),
+        .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
     }
 
     // 5. Capture all values above the pre-depth stack as `push_literal` instructions
@@ -529,8 +557,8 @@ fn executeParseTimeWordForArray(
     defer c.parse_tokenizer = old_tokenizer;
 
     switch (word.action) {
-        .native => |func| func(c) catch |err| return if (err == error.DebuggerQuit) ParseError.DebuggerQuit else ParseError.ParseTimeExecutionError,
-        .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch |err| return if (err == error.DebuggerQuit) ParseError.DebuggerQuit else ParseError.ParseTimeExecutionError,
+        .native => |func| func(c) catch |err| return handleParseTimeError(c, err),
+        .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
     }
 
     const post_depth = c.stack.depth();

@@ -1,0 +1,4 @@
+\ Test that a user-thrown error at parse time surfaces the error type and message.
+
+fail-at-parse: parse-time [ f "something went wrong" custom-error: make-error throw ] ;
+fail-at-parse
