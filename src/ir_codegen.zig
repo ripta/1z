@@ -1892,6 +1892,23 @@ fn emitResolvedNativeCallback(
 
         sp.* = sp.* - resolved.input_count + resolved.output_count;
         resetStackToPhysical(stack, sp.*);
+    } else if (state.aot_mode) {
+        // AOT mode: native_fn_ptr is unavailable; fall back to
+        // jitInterpretedCall via the AOT word call path.
+        if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
+
+        try materializeQuotations(state, stack, sp.*);
+        flushToPhysicalStack(state, stack, sp.*);
+        const ctx_val = emitCallbackPreamble(state, sp.*);
+
+        if (resolved.stack_effect_ptr) |eff_ptr| {
+            emitParamValidation(state, eff_ptr);
+        }
+
+        emitAotWordCall(state, ctx_val, name, resolved, line);
+
+        sp.* = sp.* - resolved.input_count + resolved.output_count;
+        resetStackToPhysical(stack, sp.*);
     } else {
         state.not_compilable_reason = .unresolvable_word;
         return IrCodegenError.NotCompilable;
@@ -3074,12 +3091,25 @@ fn compileInstructions(
                     var effective_in = resolved.input_count;
                     var effective_out = resolved.output_count;
                     if (resolved.callee_effect) |callee_eff| {
-                        const specialized = resolveRowVariableEffect(callee_eff, stack, sp.*, state.resolver) orelse {
+                        if (resolveRowVariableEffect(callee_eff, stack, sp.*, state.resolver)) |specialized| {
+                            effective_in = specialized.input_count;
+                            effective_out = specialized.output_count;
+                        } else if (state.aot_mode) {
+                            // Row-variable resolution failed but the word
+                            // exists in the resolver. Emit an interpreter
+                            // call for this call site and mark the abstract
+                            // stack as unknown so subsequent instructions
+                            // don't compile with a wrong stack shape.
+                            try materializeQuotations(state, stack, sp.*);
+                            flushToPhysicalStack(state, stack, sp.*);
+                            const ctx_val = emitCallbackPreamble(state, sp.*);
+                            emitAotWordCall(state, ctx_val, name, resolved, instr.line);
+                            state.dynamic_call_emitted = true;
+                            continue;
+                        } else {
                             state.not_compilable_reason = .unresolvable_word;
                             return IrCodegenError.NotCompilable;
-                        };
-                        effective_in = specialized.input_count;
-                        effective_out = specialized.output_count;
+                        }
                     }
 
                     if (resolved.native_fn_ptr != null) {
