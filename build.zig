@@ -15,6 +15,7 @@ pub fn build(b: *std.Build) void {
     root_module.addIncludePath(b.path("ext/toy"));
     root_module.linkSystemLibrary("ffi", .{});
     addFfiIncludePath(b, root_module, target);
+    addIrSources(b, root_module);
 
     // Set version as a build option
     const options = b.addOptions();
@@ -70,6 +71,7 @@ pub fn build(b: *std.Build) void {
     test_module.addIncludePath(b.path("ext/toy"));
     test_module.linkSystemLibrary("ffi", .{});
     addFfiIncludePath(b, test_module, target);
+    addIrSources(b, test_module);
     test_module.addOptions("build_options", options);
 
     const lib_unit_tests = b.addTest(.{
@@ -475,4 +477,52 @@ fn addFfiIncludePath(b: *std.Build, module: *std.Build.Module, target: std.Build
             });
         }
     }
+}
+
+fn addIrSources(b: *std.Build, module: *std.Build.Module) void {
+    const arch_flag: []const u8 = switch (module.resolved_target.?.result.cpu.arch) {
+        .aarch64 => "-DIR_TARGET_AARCH64",
+        .x86_64 => "-DIR_TARGET_X64",
+        .x86 => "-DIR_TARGET_X86",
+        else => @panic("unsupported architecture for ir JIT"),
+    };
+
+    const ir_c_files = [_][]const u8{
+        "ir.c",
+        "ir_strtab.c",
+        "ir_cfg.c",
+        "ir_sccp.c",
+        "ir_gcm.c",
+        "ir_ra.c",
+        "ir_emit.c",
+        "ir_save.c",
+        "ir_dump.c",
+        "ir_load.c",
+        "ir_emit_c.c",
+        "ir_emit_llvm.c",
+        "ir_check.c",
+        "ir_cpuinfo.c",
+        "ir_gdb.c",
+        "ir_perf.c",
+        "ir_patch.c",
+        "ir_mem2ssa.c",
+        "ir_disasm_stub.c",
+    };
+
+    const flags: []const []const u8 = &.{
+        arch_flag,
+        "-Wno-sign-compare",
+        "-Wno-unused-parameter",
+    };
+
+    for (ir_c_files) |name| {
+        module.addCSourceFile(.{
+            .file = b.path(b.fmt("ext/ir/{s}", .{name})),
+            .flags = flags,
+        });
+    }
+
+    module.addIncludePath(b.path("ext/ir"));
+    module.addIncludePath(b.path("ext/ir/dynasm"));
+    module.addIncludePath(b.path("ext/ir/generated"));
 }
