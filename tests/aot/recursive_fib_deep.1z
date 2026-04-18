@@ -1,0 +1,7 @@
+fib: stack-recursive ( n -- fib(n) ) [
+  dup 2 < [ ] [
+    dup 1 - fib swap 2 - fib +
+  ] if
+] ;
+
+20 fib .

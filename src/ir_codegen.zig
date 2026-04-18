@@ -3149,6 +3149,11 @@ fn preScanInstructions(
 /// The compiled function operates directly on the per-task Value stack.
 /// Supports push_literal of any Value variant and call_word of supported
 /// arithmetic ops (arithmetic still requires fixnum operands at runtime).
+///
+/// Runs two internal passes so the prologue capacity check can see the final
+/// peak stack depth as an IR constant. Pass 1 discovers `peak_sp` by emitting
+/// the body into a throwaway IR context; pass 2 emits the prologue check
+/// using that peak and JIT-compiles the result.
 pub fn compileWord(
     instructions: []const Instruction,
     input_count: u8,
@@ -3159,6 +3164,27 @@ pub fn compileWord(
     mutual_group: ?[]const []const u8,
     stack_effect: ?*const StackEffect,
 ) IrCodegenError!CompiledWord {
+    const discovered = try compileWordPass(instructions, input_count, output_count, resolver, self_name, interp_ctx, mutual_group, stack_effect, null);
+    const second = try compileWordPass(instructions, input_count, output_count, resolver, self_name, interp_ctx, mutual_group, stack_effect, discovered.peak_stack_depth);
+    return second.compiled orelse IrCodegenError.CompilationFailed;
+}
+
+const CompileWordPassResult = struct {
+    compiled: ?CompiledWord,
+    peak_stack_depth: u32,
+};
+
+fn compileWordPass(
+    instructions: []const Instruction,
+    input_count: u8,
+    output_count: u8,
+    resolver: ?WordResolver,
+    self_name: ?[]const u8,
+    interp_ctx: ?*const Context,
+    mutual_group: ?[]const []const u8,
+    stack_effect: ?*const StackEffect,
+    known_peak: ?u32,
+) IrCodegenError!CompileWordPassResult {
     ValueLayout.ensureInit();
 
     if (input_count > 8) return IrCodegenError.NotCompilable;
@@ -3239,6 +3265,12 @@ pub fn compileWord(
     // of which callbacks the pre-scan flagged.
     const refresh_stack_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitRefreshStack));
 
+    // jitEnsureStackCapacity grows ctx.stack to cover the word's peak depth
+    // when the capacity reserved by executeCompiled is insufficient. Needed
+    // because compiled-to-compiled recursion bypasses executeCompiled's
+    // capacity check, so each compiled entry re-validates.
+    const ensure_cap_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitEnsureStackCapacity));
+
     const validate_params_fn = if (scan_flags.needs_param_validation)
         c.ir_const_addr(&ctx, @intFromPtr(&jitValidateParamEffects))
     else
@@ -3250,6 +3282,29 @@ pub fn compileWord(
 
     // Load current stack depth
     const sp_val = c._ir_LOAD(&ctx, c.IR_ADDR, sp_ptr);
+
+    // Prologue capacity check: unconditionally call jitEnsureStackCapacity to
+    // grow the stack if sp + peak_stack_depth exceeds the current capacity.
+    // The helper is a fast no-op when capacity already suffices. An
+    // unconditional call avoids the PHI / diamond control flow that can
+    // interact badly with the register allocator. known_peak is null on the
+    // discovery pass and non-null on the emission pass.
+    var items_ptr_after_check = items_ptr;
+    if (known_peak) |peak| {
+        if (peak > 0) {
+            const peak_const = c.ir_const_addr(&ctx, peak);
+            const needed = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), sp_val, peak_const);
+            const ensure_status = c._ir_CALL_2(&ctx, c.IR_I32, ensure_cap_fn, jit_ctx_ptr, needed);
+            const ensure_failed = c.ir_fold2(&ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), ensure_status, ok_status);
+            const if_oom = c._ir_IF(&ctx, ensure_failed);
+            c._ir_IF_TRUE_cold(&ctx, if_oom);
+            c._ir_RETURN(&ctx, bail_status);
+            c._ir_IF_FALSE(&ctx, if_oom);
+            // Re-LOAD items_ptr after the call. IR treats calls as memory
+            // clobbers, so this LOAD is not CSE'd against the original.
+            items_ptr_after_check = c._ir_LOAD(&ctx, c.IR_ADDR, jit_ctx_ptr);
+        }
+    }
 
     // Check stack has enough values (sp >= input_count)
     if (input_count > 0) {
@@ -3276,7 +3331,7 @@ pub fn compileWord(
     const input_count_const = c.ir_const_addr(&ctx, input_count);
     const base_idx = c.ir_fold2(&ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), sp_val, input_count_const);
     const base_byte_offset = c.ir_fold2(&ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), base_idx, value_size_const);
-    const base_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), items_ptr, base_byte_offset);
+    const base_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), items_ptr_after_check, base_byte_offset);
 
     // Initialize inputs as raw_at_slot entries. Tag checking and unboxing
     // happen lazily at use sites (e.g., when arithmetic needs a fixnum).
@@ -3299,7 +3354,7 @@ pub fn compileWord(
         .struct_instance_tag_const = struct_instance_tag_const,
         .bail_status = bail_status,
         .ok_status = ok_status,
-        .items_ptr = items_ptr,
+        .items_ptr = items_ptr_after_check,
         .sp_ptr = sp_ptr,
         .capacity_param = capacity_param,
         .sp_val = sp_val,
@@ -3428,13 +3483,22 @@ pub fn compileWord(
         c._ir_RETURN(&ctx, ok_status);
     }
 
+    // Discovery pass: the IR we just built is throwaway. Skip JIT and let
+    // the caller re-run with known_peak to emit the prologue capacity check.
+    if (known_peak == null) {
+        return .{ .compiled = null, .peak_stack_depth = state.peak_sp };
+    }
+
     // JIT compile
     var size: usize = 0;
     const code: ?*anyopaque = c.ir_jit_compile(&ctx, 2, &size);
     if (code) |ptr| {
         return .{
-            .code_ptr = ptr,
-            .jit_buf = .{ .code = ptr, .size = size },
+            .compiled = .{
+                .code_ptr = ptr,
+                .jit_buf = .{ .code = ptr, .size = size },
+                .peak_stack_depth = state.peak_sp,
+            },
             .peak_stack_depth = state.peak_sp,
         };
     }
@@ -3650,6 +3714,9 @@ pub fn emitWordC(
 /// Emit a single word as a C function body for AOT compilation. Uses named
 /// extern references (ir_const_func) for callbacks instead of baked addresses.
 /// Does NOT include the #include preamble -- the caller (emitProgramC) adds it.
+///
+/// Runs two internal passes: the first discovers `peak_sp`, the second emits
+/// the prologue capacity check using that peak and produces the final C.
 pub fn emitWordCAot(
     instructions: []const Instruction,
     input_count: u8,
@@ -3663,6 +3730,31 @@ pub fn emitWordCAot(
     allocator: Allocator,
     stack_effect: ?*const StackEffect,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
+    const discovered = try emitWordCAotPass(instructions, input_count, output_count, name, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, allocator, stack_effect, null);
+    if (discovered.body) |b| allocator.free(b);
+    const result = try emitWordCAotPass(instructions, input_count, output_count, name, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, allocator, stack_effect, discovered.peak_stack_depth);
+    return result.body orelse return IrCodegenError.CompilationFailed;
+}
+
+const EmitWordCAotPassResult = struct {
+    body: ?[]u8,
+    peak_stack_depth: u32,
+};
+
+fn emitWordCAotPass(
+    instructions: []const Instruction,
+    input_count: u8,
+    output_count: u8,
+    name: []const u8,
+    resolver: ?WordResolver,
+    self_name: ?[]const u8,
+    aot_compiled_names: *const std.StringHashMapUnmanaged(u32),
+    string_literals: ?*std.ArrayListUnmanaged(AotStringLiteral),
+    quotation_literals: ?*std.ArrayListUnmanaged(AotQuotationLiteral),
+    allocator: Allocator,
+    stack_effect: ?*const StackEffect,
+    known_peak: ?u32,
+) (IrCodegenError || ir_mod.IrError || Allocator.Error)!EmitWordCAotPassResult {
     ValueLayout.ensureInit();
 
     if (input_count > 8) return IrCodegenError.NotCompilable;
@@ -3751,6 +3843,14 @@ pub fn emitWordCAot(
     // of which callbacks the pre-scan flagged.
     const refresh_stack_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitRefreshStack"), proto_1arg);
 
+    // jitEnsureStackCapacity is called unconditionally in the AOT prologue to
+    // grow ctx.stack when the capacity reserved by executeCompiled is
+    // insufficient. Unconditional (rather than branching as the JIT path does)
+    // sidesteps the ir_emit_c vreg-0 bug documented at the capacity_param
+    // load above. Cheap: one call per compiled-word entry, no-op when
+    // capacity already suffices.
+    const ensure_cap_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitEnsureStackCapacity"), proto_2arg);
+
     const validate_params_fn = if (scan_flags.needs_param_validation)
         c.ir_const_func(&ctx, c.ir_str(&ctx, "jitValidateParamEffects"), proto_2arg)
     else
@@ -3770,6 +3870,25 @@ pub fn emitWordCAot(
     const ctx_off = c.ir_const_addr(&ctx, JitContextLayout.ctx_offset);
     const ctx_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), jit_ctx_ptr, ctx_off);
     const preloaded_ctx_val = c._ir_LOAD(&ctx, c.IR_ADDR, ctx_addr);
+
+    // Prologue capacity growth (unconditional). known_peak is null on the
+    // discovery pass and non-null on the emission pass.
+    var items_ptr_after_check = items_ptr;
+    if (known_peak) |peak| {
+        if (peak > 0) {
+            const peak_const = c.ir_const_addr(&ctx, peak);
+            const needed = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), sp_val, peak_const);
+            const ensure_status = c._ir_CALL_2(&ctx, c.IR_I32, ensure_cap_fn, jit_ctx_ptr, needed);
+            const ensure_failed = c.ir_fold2(&ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), ensure_status, ok_status);
+            const if_oom = c._ir_IF(&ctx, ensure_failed);
+            c._ir_IF_TRUE_cold(&ctx, if_oom);
+            c._ir_RETURN(&ctx, bail_status);
+            c._ir_IF_FALSE(&ctx, if_oom);
+            // Re-load items_ptr from the JitContext since ensureStackCapacity
+            // may have grown the backing slice and moved the pointer.
+            items_ptr_after_check = c._ir_LOAD(&ctx, c.IR_ADDR, jit_ctx_ptr);
+        }
+    }
 
     if (input_count > 0) {
         const min_sp = c.ir_const_addr(&ctx, input_count);
@@ -3792,7 +3911,7 @@ pub fn emitWordCAot(
     const input_count_const = c.ir_const_addr(&ctx, input_count);
     const base_idx = c.ir_fold2(&ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), sp_val, input_count_const);
     const base_byte_offset = c.ir_fold2(&ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), base_idx, value_size_const);
-    const base_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), items_ptr, base_byte_offset);
+    const base_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), items_ptr_after_check, base_byte_offset);
 
     var stack_buf: [64]StackEntry = undefined;
     var sp: usize = 0;
@@ -3813,7 +3932,7 @@ pub fn emitWordCAot(
         .struct_instance_tag_const = struct_instance_tag_const,
         .bail_status = bail_status,
         .ok_status = ok_status,
-        .items_ptr = items_ptr,
+        .items_ptr = items_ptr_after_check,
         .sp_ptr = sp_ptr,
         .capacity_param = capacity_param,
         .sp_val = sp_val,
@@ -3913,7 +4032,13 @@ pub fn emitWordCAot(
         c._ir_RETURN(&ctx, ok_status);
     }
 
-    return ir_mod.emitC(&ctx, c_name.ptr, allocator);
+    // Discovery pass: skip C emission, let the caller re-run with the peak.
+    if (known_peak == null) {
+        return .{ .body = null, .peak_stack_depth = state.peak_sp };
+    }
+
+    const body = try ir_mod.emitC(&ctx, c_name.ptr, allocator);
+    return .{ .body = body, .peak_stack_depth = state.peak_sp };
 }
 
 /// Work around ir_emit_c vreg 0 bug: if the emitted C body uses `d_0` but
@@ -3982,6 +4107,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitNativeCall(uintptr_t ctx, uintptr_t fn_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitInterpretedCall(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
     try out.appendSlice(allocator, "extern int32_t jitRefreshStack(uintptr_t jit_ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitEnsureStackCapacity(uintptr_t jit_ctx, uintptr_t needed);\n");
     try out.appendSlice(allocator, "extern int32_t jitValidateParamEffects(uintptr_t ctx, uintptr_t effect_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitCallQuotation(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushString(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
@@ -4443,13 +4569,20 @@ fn emitCallbackPostCheck(state: *CompileState, call_result: c.ir_ref, return_sta
     c._ir_IF_FALSE(ctx, if_bail);
 
     // Hot-path continue: refresh cached stack pointer in case the callback
-    // reallocated ctx.stack.items. jitRefreshStack writes fresh items_ptr
-    // and capacity back into the JitContext struct; we then re-LOAD
-    // items_ptr (the first field of JitContext) and recompute base_addr
-    // from the unchanged base_idx. state.items_ptr and state.base_addr
-    // are updated so subsequent emissions use the fresh refs.
+    // reallocated ctx.stack.items. See refreshCachedStackPointer.
     if (state.refresh_stack_fn == c.IR_UNUSED) return;
     _ = c._ir_CALL_1(ctx, c.IR_I32, state.refresh_stack_fn, state.jit_ctx_ptr);
+    refreshCachedStackPointer(state);
+}
+
+/// Re-LOAD items_ptr from the JitContext struct and recompute base_addr,
+/// updating state.items_ptr and state.base_addr so subsequent emissions use
+/// the fresh refs. Call this immediately after any IR call that may have
+/// moved ctx.stack.items (jitRefreshStack or jitEnsureStackCapacity).
+/// IR treats calls as memory-clobbering barriers, so the fresh LOAD will
+/// not be CSE'd across the preceding call.
+fn refreshCachedStackPointer(state: *CompileState) void {
+    const ctx = state.ctx;
     const fresh_items_ptr = c._ir_LOAD(ctx, c.IR_ADDR, state.jit_ctx_ptr);
     const base_byte_offset = c.ir_fold2(ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), state.base_idx, state.value_size_const);
     const fresh_base_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), fresh_items_ptr, base_byte_offset);
@@ -4729,6 +4862,27 @@ export fn jitRefreshStack(jit_ctx_raw: usize) callconv(.c) i32 {
     if (jit_ctx_raw == 0) return 0;
     const jc: *JitContext = @ptrFromInt(jit_ctx_raw);
     const ctx: *Context = @ptrCast(@alignCast(jc.ctx));
+    jc.items_ptr = ctx.stack.items.items.ptr;
+    jc.capacity = ctx.stack.items.capacity;
+    return 0;
+}
+
+/// Grow ctx.stack capacity to at least `needed` slots and refresh the
+/// JitContext fields. Called from the compiled prologue when
+/// `sp + peak_stack_depth` exceeds the capacity captured when
+/// `executeCompiled` entered the initial frame. Recursive
+/// compiled-to-compiled calls bypass `executeCompiled`'s capacity
+/// reservation, so each compiled entry must re-check and grow the stack
+/// itself. Returns 0 on success, 1 on OOM.
+export fn jitEnsureStackCapacity(jit_ctx_raw: usize, needed: usize) callconv(.c) i32 {
+    if (jit_ctx_raw == 0) return 1;
+    const jc: *JitContext = @ptrFromInt(jit_ctx_raw);
+    // Fast path: capacity already suffices, so there is nothing to do and
+    // ctx does not need to be dereferenced. This keeps unit tests that pass
+    // a sentinel ctx working.
+    if (needed <= jc.capacity) return 0;
+    const ctx: *Context = @ptrCast(@alignCast(jc.ctx));
+    ctx.stack.items.ensureTotalCapacity(ctx.stack.allocator, needed) catch return 1;
     jc.items_ptr = ctx.stack.items.items.ptr;
     jc.capacity = ctx.stack.items.capacity;
     return 0;

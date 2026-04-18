@@ -1,0 +1,23 @@
+fib: stack-recursive ( n -- fib(n) ) [
+  dup 2 < [ ] [
+    dup 1 - fib swap 2 - fib +
+  ] if
+] ;
+
+fib-rec10-repeat: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - 10 fib drop fib-rec10-repeat
+  ] if
+] ;
+
+fib-rec15-repeat: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - 15 fib drop fib-rec15-repeat
+  ] if
+] ;
+
+10 fib .
+1000 fib-rec10-repeat
+
+15 fib .
+200 fib-rec15-repeat
