@@ -1563,7 +1563,6 @@ fn printQuotationFallbackWarnings(
 fn printPreludeStats(
     stats: *const ir_codegen.PreludeStats,
     err_writer: anytype,
-    allocator: std.mem.Allocator,
 ) void {
     if (stats.total == 0) return;
     const pct = @as(f64, @floatFromInt(stats.compiled)) / @as(f64, @floatFromInt(stats.total)) * 100.0;
@@ -1572,13 +1571,14 @@ fn printPreludeStats(
         stats.total,
         pct,
     }) catch {};
-    for (stats.uncompiled_names) |name| {
-        err_writer.print("  uncompiled: {s}\n", .{name}) catch {};
+    for (stats.uncompiled) |entry| {
+        err_writer.print("  word '{s}' cannot be compiled\n", .{entry.name}) catch {};
+        err_writer.print("      {s}: {s}\n", .{ entry.reason.code(), entry.reason.message() }) catch {};
+        if (entry.reason.hint()) |h| {
+            err_writer.print("      hint: {s}\n", .{h}) catch {};
+        }
     }
     err_writer.flush() catch {};
-    if (stats.uncompiled_names.len > 0) {
-        allocator.free(stats.uncompiled_names);
-    }
 }
 
 fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
@@ -1753,6 +1753,8 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     }
 
     var codegen_diagnostics: ir_codegen.CodegenDiagnostics = .{};
+    defer if (codegen_diagnostics.prelude_stats.uncompiled.len > 0)
+        allocator.free(codegen_diagnostics.prelude_stats.uncompiled);
     const c_source = ir_codegen.emitProgramC(
         freeze_result.words,
         freeze_result.entry_word_id,
@@ -1781,7 +1783,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     printQuotationFallbackWarnings(&codegen_diagnostics, allow_interpreter_fallback, err_writer, allocator);
 
     if (compilation_stats) {
-        printPreludeStats(&codegen_diagnostics.prelude_stats, err_writer, allocator);
+        printPreludeStats(&codegen_diagnostics.prelude_stats, err_writer);
     }
 
     // Write C source to a temp file.

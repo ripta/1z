@@ -41,6 +41,73 @@ pub const IrCodegenError = error{
     UncompiledWords,
 };
 
+/// Categorizes why a word returned NotCompilable.
+pub const NotCompilableReason = enum {
+    non_numeric_operand,
+    unresolvable_operands,
+    quotation_truthiness,
+    non_serializable_literal,
+    post_dynamic_call,
+    unresolvable_word,
+    too_many_inputs,
+    quotation_reification,
+    merge_type_mismatch,
+    nested_loop_conflict,
+    pre_scan_failure,
+    post_compile_reject,
+
+    pub fn code(self: NotCompilableReason) []const u8 {
+        return switch (self) {
+            .non_numeric_operand => "NC.1",
+            .unresolvable_operands => "NC.2",
+            .quotation_truthiness => "NC.3",
+            .non_serializable_literal => "NC.4",
+            .post_dynamic_call => "NC.5",
+            .unresolvable_word => "NC.6",
+            .too_many_inputs => "NC.7",
+            .quotation_reification => "NC.8",
+            .merge_type_mismatch => "NC.9",
+            .nested_loop_conflict => "NC.10",
+            .pre_scan_failure => "NC.11",
+            .post_compile_reject => "NC.12",
+        };
+    }
+
+    pub fn message(self: NotCompilableReason) []const u8 {
+        return switch (self) {
+            .non_numeric_operand => "arithmetic operand is not a fixnum or float",
+            .unresolvable_operands => "binary operation has two operands with no known numeric type",
+            .quotation_truthiness => "condition is a quotation value in abstract form",
+            .non_serializable_literal => "word pushes a value that cannot be embedded in an AOT binary",
+            .post_dynamic_call => "calls a quotation whose stack effect is unknown",
+            .unresolvable_word => "calls a word that is not available in the AOT compilation set",
+            .too_many_inputs => "takes more than 8 input parameters",
+            .quotation_reification => "a quotation in abstract form must become a concrete runtime value",
+            .merge_type_mismatch => "if/else branches produce different value types",
+            .nested_loop_conflict => "contains two self-recursive tail calls",
+            .pre_scan_failure => "instruction pre-scan rejected the word before compilation started",
+            .post_compile_reject => "compilation produced unresolved dynamic calls or abstract stack entries",
+        };
+    }
+
+    pub fn hint(self: NotCompilableReason) ?[]const u8 {
+        return switch (self) {
+            .non_numeric_operand => "blocked until polymorphic arithmetic can be compiled",
+            .unresolvable_operands => "blocked until polymorphic arithmetic can be compiled",
+            .quotation_truthiness => "blocked until quotation bodies can be compiled",
+            .non_serializable_literal => "blocked until AOT literals can be serialized",
+            .post_dynamic_call => "annotate the quotation parameter with a concrete stack effect",
+            .unresolvable_word => "blocked until the AOT resolver includes this word",
+            .too_many_inputs => "reduce input parameters to 8 or fewer",
+            .quotation_reification => "blocked until quotation bodies can be compiled",
+            .merge_type_mismatch => "blocked until polymorphic branch merging is implemented",
+            .nested_loop_conflict => "split into two words so each has one recursive call",
+            .pre_scan_failure => null,
+            .post_compile_reject => null,
+        };
+    }
+};
+
 pub const QuotationFallbackReason = enum {
     row_variables,
     no_annotation,
@@ -52,10 +119,15 @@ pub const QuotationFallbackWarning = struct {
     reason: QuotationFallbackReason,
 };
 
+pub const UncompiledWord = struct {
+    name: []const u8,
+    reason: NotCompilableReason,
+};
+
 pub const PreludeStats = struct {
     total: u32 = 0,
     compiled: u32 = 0,
-    uncompiled_names: []const []const u8 = &.{},
+    uncompiled: []const UncompiledWord = &.{},
 };
 
 pub const CodegenDiagnostics = struct {
@@ -713,6 +785,7 @@ const CompileState = struct {
     base_idx: c.ir_ref,
     value_size_const: c.ir_ref,
     dynamic_call_emitted: bool = false,
+    not_compilable_reason: ?NotCompilableReason = null,
     dispatch_ptr: c.ir_ref = c.IR_UNUSED,
     resolver: ?WordResolver = null,
     jit_ctx_ptr: c.ir_ref = c.IR_UNUSED,
@@ -1309,7 +1382,10 @@ fn requireI64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
             emitTagCheck(ctx, elem_addr, state.fixnum_tag_const, state.tag_offset_const, state.bail_status);
             return emitUnboxI64(ctx, elem_addr, state.payload_offset_const);
         },
-        else => IrCodegenError.NotCompilable,
+        else => {
+            state.not_compilable_reason = .non_numeric_operand;
+            return IrCodegenError.NotCompilable;
+        },
     };
 }
 
@@ -1325,7 +1401,10 @@ fn requireF64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
             emitTagCheck(ctx, elem_addr, state.float_tag_const, state.tag_offset_const, state.bail_status);
             return emitUnboxF64(ctx, elem_addr, state.payload_offset_const);
         },
-        else => IrCodegenError.NotCompilable,
+        else => {
+            state.not_compilable_reason = .non_numeric_operand;
+            return IrCodegenError.NotCompilable;
+        },
     };
 }
 
@@ -1355,6 +1434,7 @@ fn resolveOperandPair(entry_a: StackEntry, entry_b: StackEntry, state: *CompileS
             .b = try requireI64(entry_b, state),
         } };
     }
+    state.not_compilable_reason = .unresolvable_operands;
     return IrCodegenError.NotCompilable;
 }
 
@@ -1419,7 +1499,7 @@ fn serializeInstructionsInto(buf: *std.ArrayListUnmanaged(u8), instructions: []c
                         try buf.append(allocator, 5);
                         try serializeInstructionsInto(buf, q.instructions, allocator);
                     },
-                    else => return IrCodegenError.NotCompilable,
+                    else => return IrCodegenError.NotCompilable, // D.4: non-simple AOT literal
                 }
             },
             .call_word => |name| {
@@ -1530,14 +1610,18 @@ fn materializeQuotations(state: *CompileState, stack: *[64]StackEntry, sp: usize
             .quotation_body => |body| {
                 if (state.aot_mode) {
                     // Serialize the instruction body and record it for C emission.
-                    const serialized = serializeQuotationInstructions(body, std.heap.page_allocator) catch
+                    const serialized = serializeQuotationInstructions(body, std.heap.page_allocator) catch {
+                        state.not_compilable_reason = .non_serializable_literal;
                         return IrCodegenError.NotCompilable;
+                    };
 
                     const lit_id = if (state.aot_quotation_literals) |lits| lits.items.len else 0;
 
                     if (state.aot_quotation_literals) |lits| {
-                        lits.append(std.heap.page_allocator, .{ .data = serialized }) catch
+                        lits.append(std.heap.page_allocator, .{ .data = serialized }) catch {
+                            state.not_compilable_reason = .non_serializable_literal;
                             return IrCodegenError.NotCompilable;
+                        };
                     }
 
                     // Emit callback: jitPushQuotation(ctx, data_ptr, data_len, dest_addr)
@@ -1720,7 +1804,10 @@ fn emitEpilogue(
                 const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
                 emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.boolean_tag_const, ref);
             },
-            .quotation_body, .row_region => return IrCodegenError.NotCompilable,
+            .quotation_body, .row_region => {
+                state.not_compilable_reason = .quotation_truthiness;
+                return IrCodegenError.NotCompilable;
+            },
             .raw_at_slot => |s| {
                 if (s != i) {
                     if (s < sp and stack[s] == .raw_at_slot and stack[s].raw_at_slot == i) {
@@ -1781,8 +1868,14 @@ fn emitResolvedNativeCallback(
     sp: *usize,
     line: usize,
 ) IrCodegenError!void {
-    const res = state.resolver orelse return IrCodegenError.NotCompilable;
-    const resolved = res.resolve(name, res.user_data) orelse return IrCodegenError.NotCompilable;
+    const res = state.resolver orelse {
+        state.not_compilable_reason = .unresolvable_word;
+        return IrCodegenError.NotCompilable;
+    };
+    const resolved = res.resolve(name, res.user_data) orelse {
+        state.not_compilable_reason = .unresolvable_word;
+        return IrCodegenError.NotCompilable;
+    };
 
     if (resolved.native_fn_ptr != null) {
         if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
@@ -1800,6 +1893,7 @@ fn emitResolvedNativeCallback(
         sp.* = sp.* - resolved.input_count + resolved.output_count;
         resetStackToPhysical(stack, sp.*);
     } else {
+        state.not_compilable_reason = .unresolvable_word;
         return IrCodegenError.NotCompilable;
     }
 }
@@ -1825,7 +1919,10 @@ fn emitTruthiness(state: *CompileState, entry: StackEntry, base_addr: c.ir_ref) 
             const is_falsy = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_bool_tag, is_false_payload);
             break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), is_falsy, false_const);
         },
-        .quotation_body, .row_region => IrCodegenError.NotCompilable,
+        .quotation_body, .row_region => {
+            state.not_compilable_reason = .quotation_truthiness;
+            return IrCodegenError.NotCompilable;
+        },
     };
 }
 
@@ -1912,7 +2009,10 @@ fn compilePredBodyLoop(
             try emitIndirectQuotCall(state, stack, sp, s);
             resetStackToPhysical(stack, sp.*);
         },
-        else => return IrCodegenError.NotCompilable,
+        else => {
+            state.not_compilable_reason = .quotation_reification;
+            return IrCodegenError.NotCompilable;
+        },
     }
 
     // Pred should push a boolean on top
@@ -1945,7 +2045,10 @@ fn compilePredBodyLoop(
         .raw_at_slot => |s| {
             try emitIndirectQuotCall(state, stack, sp, s);
         },
-        else => return IrCodegenError.NotCompilable,
+        else => {
+            state.not_compilable_reason = .quotation_reification;
+            return IrCodegenError.NotCompilable;
+        },
     }
 
     resetStackToPhysical(stack, sp.*);
@@ -2184,7 +2287,10 @@ fn compileInstructions(
     const bail_status = state.bail_status;
 
     for (instructions, 0..) |instr, idx| {
-        if (state.dynamic_call_emitted) return IrCodegenError.NotCompilable;
+        if (state.dynamic_call_emitted) {
+            state.not_compilable_reason = .post_dynamic_call;
+            return IrCodegenError.NotCompilable;
+        }
 
         switch (instr.op) {
             .push_literal => |val| {
@@ -2256,6 +2362,7 @@ fn compileInstructions(
                     // In AOT mode, non-simple literals (parameters, tagged
                     // values, etc.) contain process-local pointers that are
                     // invalid in the AOT binary. Bail to interpreter fallback.
+                    state.not_compilable_reason = .non_serializable_literal;
                     return IrCodegenError.NotCompilable;
                 } else {
                     const sp_byte_offset = c.ir_const_addr(ctx, sp.* * ValueLayout.value_size);
@@ -2367,11 +2474,17 @@ fn compileInstructions(
                     const cond_entry = stack[sp.*];
                     const true_body = switch (stack[sp.* + 1]) {
                         .quotation_body => |body| body,
-                        else => return IrCodegenError.NotCompilable,
+                        else => {
+                            state.not_compilable_reason = .quotation_reification;
+                            return IrCodegenError.NotCompilable;
+                        },
                     };
                     const false_body = switch (stack[sp.* + 2]) {
                         .quotation_body => |body| body,
-                        else => return IrCodegenError.NotCompilable,
+                        else => {
+                            state.not_compilable_reason = .quotation_reification;
+                            return IrCodegenError.NotCompilable;
+                        },
                     };
 
                     // Determine the IR bool for the condition
@@ -2412,7 +2525,10 @@ fn compileInstructions(
                             // is_truthy = not is_falsy (negate by comparing with false)
                             break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), is_falsy, false_const);
                         },
-                        .quotation_body, .row_region => return IrCodegenError.NotCompilable,
+                        .quotation_body, .row_region => {
+                            state.not_compilable_reason = .quotation_truthiness;
+                            return IrCodegenError.NotCompilable;
+                        },
                     };
 
                     // Save stack state for the false branch
@@ -2575,7 +2691,10 @@ fn compileInstructions(
                                 stack[0] = .row_region;
                             }
                         },
-                        .i64_ref, .f64_ref, .bool_ref, .row_region => return IrCodegenError.NotCompilable,
+                        .i64_ref, .f64_ref, .bool_ref, .row_region => {
+                            state.not_compilable_reason = .quotation_reification;
+                            return IrCodegenError.NotCompilable;
+                        },
                     }
                 } else if (std.mem.eql(u8, name, "times")) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
@@ -2620,7 +2739,10 @@ fn compileInstructions(
                         .raw_at_slot => |s| {
                             try emitIndirectQuotCall(state, stack, sp, s);
                         },
-                        else => return IrCodegenError.NotCompilable,
+                        else => {
+                            state.not_compilable_reason = .quotation_reification;
+                            return IrCodegenError.NotCompilable;
+                        },
                     }
 
                     // Reset stack entries after body
@@ -2682,7 +2804,10 @@ fn compileInstructions(
                             try emitIndirectQuotCall(state, stack, sp, s);
                             resetStackToPhysical(stack, sp.*);
                         },
-                        else => return IrCodegenError.NotCompilable,
+                        else => {
+                            state.not_compilable_reason = .quotation_reification;
+                            return IrCodegenError.NotCompilable;
+                        },
                     }
 
                     // Pred should push a boolean on top
@@ -2844,7 +2969,10 @@ fn compileInstructions(
                     if (sp.* < ic) return IrCodegenError.StackUnderflow;
 
                     // Bail if both if-branches already set a loop end
-                    if (state.loop_end_set) return IrCodegenError.NotCompilable;
+                    if (state.loop_end_set) {
+                        state.not_compilable_reason = .nested_loop_conflict;
+                        return IrCodegenError.NotCompilable;
+                    }
 
                     // Flush symbolic stack to physical memory
                     flushToPhysicalStack(state, stack, sp.*);
@@ -2897,8 +3025,14 @@ fn compileInstructions(
                     c._ir_STORE(ctx, state.sp_ptr, state.sp_val);
 
                     // Resolve target word_id and store on JitContext
-                    const res = state.resolver orelse return IrCodegenError.NotCompilable;
-                    const resolved = res.resolve(name, res.user_data) orelse return IrCodegenError.NotCompilable;
+                    const res = state.resolver orelse {
+                        state.not_compilable_reason = .unresolvable_word;
+                        return IrCodegenError.NotCompilable;
+                    };
+                    const resolved = res.resolve(name, res.user_data) orelse {
+                        state.not_compilable_reason = .unresolvable_word;
+                        return IrCodegenError.NotCompilable;
+                    };
 
                     JitContextLayout.ensureInit();
                     const tramp_off = c.ir_const_addr(ctx, JitContextLayout.trampoline_target_offset);
@@ -2925,8 +3059,14 @@ fn compileInstructions(
                     }
                 } else {
                     // Unrecognized word: try dispatch table call if a resolver is available
-                    const res = state.resolver orelse return IrCodegenError.NotCompilable;
-                    const resolved = res.resolve(name, res.user_data) orelse return IrCodegenError.NotCompilable;
+                    const res = state.resolver orelse {
+                        state.not_compilable_reason = .unresolvable_word;
+                        return IrCodegenError.NotCompilable;
+                    };
+                    const resolved = res.resolve(name, res.user_data) orelse {
+                        state.not_compilable_reason = .unresolvable_word;
+                        return IrCodegenError.NotCompilable;
+                    };
 
                     // Specialize input/output counts for row-variable effects
                     // using literal quotation bodies visible on the abstract stack.
@@ -2934,8 +3074,10 @@ fn compileInstructions(
                     var effective_in = resolved.input_count;
                     var effective_out = resolved.output_count;
                     if (resolved.callee_effect) |callee_eff| {
-                        const specialized = resolveRowVariableEffect(callee_eff, stack, sp.*, state.resolver) orelse
+                        const specialized = resolveRowVariableEffect(callee_eff, stack, sp.*, state.resolver) orelse {
+                            state.not_compilable_reason = .unresolvable_word;
                             return IrCodegenError.NotCompilable;
+                        };
                         effective_in = specialized.input_count;
                         effective_out = specialized.output_count;
                     }
@@ -3715,10 +3857,19 @@ pub fn emitWordCAot(
     quotation_literals: ?*std.ArrayListUnmanaged(AotQuotationLiteral),
     allocator: Allocator,
     stack_effect: ?*const StackEffect,
+    reason_out: ?*?NotCompilableReason,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
-    const discovered = try emitWordCAotPass(instructions, input_count, output_count, name, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, allocator, stack_effect, null);
+    var reason: ?NotCompilableReason = null;
+    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, allocator, stack_effect, null, &reason) catch |err| {
+        if (reason_out) |ro| ro.* = reason;
+        return err;
+    };
     if (discovered.body) |b| allocator.free(b);
-    const result = try emitWordCAotPass(instructions, input_count, output_count, name, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, allocator, stack_effect, discovered.peak_stack_depth);
+    reason = null;
+    const result = emitWordCAotPass(instructions, input_count, output_count, name, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason) catch |err| {
+        if (reason_out) |ro| ro.* = reason;
+        return err;
+    };
     return result.body orelse return IrCodegenError.CompilationFailed;
 }
 
@@ -3740,10 +3891,14 @@ fn emitWordCAotPass(
     allocator: Allocator,
     stack_effect: ?*const StackEffect,
     known_peak: ?u32,
+    nc_reason_out: ?*?NotCompilableReason,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)!EmitWordCAotPassResult {
     ValueLayout.ensureInit();
 
-    if (input_count > 8) return IrCodegenError.NotCompilable;
+    if (input_count > 8) {
+        if (nc_reason_out) |ro| ro.* = .too_many_inputs;
+        return IrCodegenError.NotCompilable;
+    }
 
     const c_name = try mangleWordName(name, allocator);
     defer allocator.free(c_name);
@@ -3777,8 +3932,10 @@ fn emitWordCAotPass(
 
     // Pre-scan to determine which callbacks are needed
     var scan_flags = PreScanFlags{};
-    preScanInstructions(instructions, resolver, &scan_flags, false) catch
+    preScanInstructions(instructions, resolver, &scan_flags, false) catch {
+        if (nc_reason_out) |ro| ro.* = .pre_scan_failure;
         return IrCodegenError.NotCompilable;
+    };
 
     // Create prototypes for callback functions
     const proto_1arg = c.ir_proto_1(&ctx, 0, c.IR_I32, c.IR_ADDR);
@@ -3963,7 +4120,12 @@ fn emitWordCAotPass(
         }
     }
 
-    try compileInstructions(&state, instructions, &stack_buf, &sp);
+    compileInstructions(&state, instructions, &stack_buf, &sp) catch |err| {
+        if (err == IrCodegenError.NotCompilable) {
+            if (nc_reason_out) |ro| ro.* = state.not_compilable_reason;
+        }
+        return err;
+    };
 
     if (state.diverged) {
         c._ir_RETURN(&ctx, ok_status);
@@ -3971,6 +4133,7 @@ fn emitWordCAotPass(
         // Dynamic quotation calls generate C code that calls through a raw
         // address (uintptr_t), which is not a valid C function call. Reject
         // these words so they fall back to the interpreter.
+        if (nc_reason_out) |ro| ro.* = .post_compile_reject;
         return IrCodegenError.NotCompilable;
     } else {
         try emitEpilogue(&state, &stack_buf, sp, input_count, output_count);
@@ -4116,8 +4279,11 @@ pub fn emitProgramC(
     // Pass 1: trial compile to discover the compilable set.
     var compilable_names: std.StringHashMapUnmanaged(u32) = .{};
     defer compilable_names.deinit(allocator);
+    var failure_reasons: std.StringHashMapUnmanaged(NotCompilableReason) = .{};
+    defer failure_reasons.deinit(allocator);
     for (words) |*w| {
         if (w.is_native) continue;
+        var reason: ?NotCompilableReason = null;
         const trial = emitWordCAot(
             w.instructions,
             w.input_count,
@@ -4130,7 +4296,13 @@ pub fn emitProgramC(
             null,
             allocator,
             if (w.stack_effect != null) &w.stack_effect.? else null,
-        ) catch continue;
+            &reason,
+        ) catch {
+            if (reason) |r| {
+                try failure_reasons.put(allocator, w.name, r);
+            }
+            continue;
+        };
         allocator.free(trial);
         try compilable_names.put(allocator, w.name, w.word_id);
     }
@@ -4167,6 +4339,7 @@ pub fn emitProgramC(
             &quotation_literals,
             allocator,
             if (w.stack_effect != null) &w.stack_effect.? else null,
+            null,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -4216,29 +4389,30 @@ pub fn emitProgramC(
         uncompiled.deinit(allocator);
     }
 
-    // Collect prelude compilation stats.
+    // Collect prelude compilation stats with failure reasons.
     {
         var total: u32 = 0;
         var compiled: u32 = 0;
-        var names: std.ArrayListUnmanaged([]const u8) = .{};
+        var uncompiled_list: std.ArrayListUnmanaged(UncompiledWord) = .{};
         for (words) |w| {
             if (!w.is_prelude or w.is_native) continue;
             total += 1;
             if (actually_compiled.contains(w.word_id)) {
                 compiled += 1;
             } else {
-                try names.append(allocator, w.name);
+                const reason = failure_reasons.get(w.name) orelse .pre_scan_failure;
+                try uncompiled_list.append(allocator, .{ .name = w.name, .reason = reason });
             }
         }
         diagnostics.prelude_stats = .{
             .total = total,
             .compiled = compiled,
-            .uncompiled_names = if (names.items.len > 0)
-                try allocator.dupe([]const u8, names.items)
+            .uncompiled = if (uncompiled_list.items.len > 0)
+                try allocator.dupe(UncompiledWord, uncompiled_list.items)
             else
                 &.{},
         };
-        names.deinit(allocator);
+        uncompiled_list.deinit(allocator);
     }
 
     // 3.5. String/symbol literal constants
@@ -6518,6 +6692,7 @@ test "emitWordCAot emits named callback for safepoint" {
         null,
         testing.allocator,
         null,
+        null,
     ) catch |err| {
         // times requires a quotation on stack which we don't have in this
         // minimal test -- NotCompilable is expected. Skip this test case
@@ -6549,6 +6724,7 @@ test "emitWordCAot basic arithmetic" {
         null,
         null,
         testing.allocator,
+        null,
         null,
     );
     defer testing.allocator.free(source);
