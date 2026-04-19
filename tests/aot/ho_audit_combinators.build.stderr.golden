@@ -34,3 +34,4 @@ Prelude compilation: 6/16 words compiled (37.5%)
       NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'keep' cannot be compiled
       NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+Quotation bodies discovered: 22

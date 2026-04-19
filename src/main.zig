@@ -1791,6 +1791,8 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
 
     if (compilation_stats) {
         printPreludeStats(&codegen_diagnostics.prelude_stats, err_writer);
+        err_writer.print("Quotation bodies discovered: {d}\n", .{freeze_result.quotations.len}) catch {};
+        err_writer.flush() catch {};
     }
 
     // Write C source to a temp file.
