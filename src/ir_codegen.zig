@@ -32,6 +32,7 @@ const control = @import("primitives/control.zig");
 const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
 const markers_mod = @import("primitives/markers.zig");
 const WordDefinition = @import("dictionary.zig").WordDefinition;
+const AotQuotationDesc = @import("aot_freeze.zig").AotQuotationDesc;
 
 pub const IrCodegenError = error{
     NotCompilable,
@@ -3884,14 +3885,35 @@ pub fn emitWordCAot(
     stack_effect: ?*const StackEffect,
     reason_out: ?*?NotCompilableReason,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
+    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, allocator, stack_effect, reason_out);
+}
+
+/// Like emitWordCAot but with a pre-mangled C function name override.
+/// When c_name_override is non-null, it is used directly as the C function
+/// name instead of mangling `name`.
+fn emitWordCAotWithCName(
+    instructions: []const Instruction,
+    input_count: u8,
+    output_count: u8,
+    name: []const u8,
+    c_name_override: ?[]const u8,
+    resolver: ?WordResolver,
+    self_name: ?[]const u8,
+    aot_compiled_names: *const std.StringHashMapUnmanaged(u32),
+    string_literals: ?*std.ArrayListUnmanaged(AotStringLiteral),
+    quotation_literals: ?*std.ArrayListUnmanaged(AotQuotationLiteral),
+    allocator: Allocator,
+    stack_effect: ?*const StackEffect,
+    reason_out: ?*?NotCompilableReason,
+) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var reason: ?NotCompilableReason = null;
-    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, allocator, stack_effect, null, &reason) catch |err| {
+    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, allocator, stack_effect, null, &reason) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
     if (discovered.body) |b| allocator.free(b);
     reason = null;
-    const result = emitWordCAotPass(instructions, input_count, output_count, name, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason) catch |err| {
+    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
@@ -3908,6 +3930,7 @@ fn emitWordCAotPass(
     input_count: u8,
     output_count: u8,
     name: []const u8,
+    c_name_override: ?[]const u8,
     resolver: ?WordResolver,
     self_name: ?[]const u8,
     aot_compiled_names: *const std.StringHashMapUnmanaged(u32),
@@ -3925,7 +3948,10 @@ fn emitWordCAotPass(
         return IrCodegenError.NotCompilable;
     }
 
-    const c_name = try mangleWordName(name, allocator);
+    const c_name = if (c_name_override) |override|
+        try allocator.dupeZ(u8, override)
+    else
+        try mangleWordName(name, allocator);
     defer allocator.free(c_name);
 
     // C emission does not use IR_OPT_FOLDING because the opt-level-0 pipeline
@@ -4207,6 +4233,7 @@ fn patchMissingD0(body: []u8, allocator: Allocator) Allocator.Error![]u8 {
 /// `entry_word_id` identifies which word to call from main().
 pub fn emitProgramC(
     words: []const AotWordDesc,
+    quotations: []AotQuotationDesc,
     entry_word_id: u32,
     max_word_id: u32,
     static_libs: []const []const u8,
@@ -4301,7 +4328,7 @@ pub fn emitProgramC(
     // then re-compile with only the compilable set so that cross-word calls
     // to uncompilable words use jitInterpretedCall instead of direct calls.
 
-    // Pass 1: trial compile to discover the compilable set.
+    // Pass 1a: trial compile to discover the compilable set
     var compilable_names: std.StringHashMapUnmanaged(u32) = .{};
     defer compilable_names.deinit(allocator);
     var failure_reasons: std.StringHashMapUnmanaged(NotCompilableReason) = .{};
@@ -4332,6 +4359,30 @@ pub fn emitProgramC(
         try compilable_names.put(allocator, w.name, w.word_id);
     }
 
+    // Pass 1b: trial compile quotation bodies to discover the compilable set
+    var compilable_quotation_ids: std.AutoHashMapUnmanaged(u32, void) = .{};
+    defer compilable_quotation_ids.deinit(allocator);
+    for (quotations) |*q| {
+        const effect = q.inferred_effect orelse continue;
+        const trial = emitWordCAotWithCName(
+            q.instructions,
+            effect.input_count,
+            effect.output_count,
+            q.c_name,
+            q.c_name,
+            resolver,
+            null,
+            &compiled_names,
+            null,
+            null,
+            allocator,
+            null,
+            null,
+        ) catch continue;
+        allocator.free(trial);
+        try compilable_quotation_ids.put(allocator, q.quotation_id, {});
+    }
+
     // String literal table populated during pass 2.
     var string_literals: std.ArrayListUnmanaged(AotStringLiteral) = .{};
     defer string_literals.deinit(std.heap.page_allocator);
@@ -4340,7 +4391,7 @@ pub fn emitProgramC(
     var quotation_literals: std.ArrayListUnmanaged(AotQuotationLiteral) = .{};
     defer quotation_literals.deinit(std.heap.page_allocator);
 
-    // Pass 2: compile with only the compilable set.
+    // Pass 2a: compile with only the compilable set
     var compiled_bodies: std.ArrayListUnmanaged(struct { word_id: u32, body: []u8 }) = .{};
     defer {
         for (compiled_bodies.items) |item| allocator.free(item.body);
@@ -4373,6 +4424,39 @@ pub fn emitProgramC(
         if (body.ptr != raw_body.ptr) allocator.free(raw_body);
         try compiled_bodies.append(allocator, .{ .word_id = w.word_id, .body = body });
         try actually_compiled.put(allocator, w.word_id, {});
+    }
+
+    // Pass 2b: compile quotation bodies with the compilable set
+    var compiled_quotation_bodies: std.ArrayListUnmanaged(struct { id: u32, body: []u8 }) = .{};
+    defer {
+        for (compiled_quotation_bodies.items) |item| allocator.free(item.body);
+        compiled_quotation_bodies.deinit(allocator);
+    }
+    for (quotations) |*q| {
+        if (!compilable_quotation_ids.contains(q.quotation_id)) continue;
+        const effect = q.inferred_effect.?;
+        const raw_body = emitWordCAotWithCName(
+            q.instructions,
+            effect.input_count,
+            effect.output_count,
+            q.c_name,
+            q.c_name,
+            resolver,
+            null,
+            &compilable_names,
+            &string_literals,
+            &quotation_literals,
+            allocator,
+            null,
+            null,
+        ) catch |err| switch (err) {
+            error.NotCompilable => continue,
+            else => return err,
+        };
+        const body = try patchMissingD0(raw_body, allocator);
+        if (body.ptr != raw_body.ptr) allocator.free(raw_body);
+        try compiled_quotation_bodies.append(allocator, .{ .id = q.quotation_id, .body = body });
+        q.compiled = true;
     }
 
     // Collect quotation fallback warnings for all words with stack effects.
@@ -4495,10 +4579,26 @@ pub fn emitProgramC(
         try out.appendSlice(allocator, mangled);
         try out.appendSlice(allocator, "(uintptr_t jit_ctx);\n");
     }
+    // Forward declarations for compiled quotation bodies
+    for (compiled_quotation_bodies.items) |item| {
+        for (quotations) |q| {
+            if (q.quotation_id == item.id) {
+                try out.appendSlice(allocator, "int32_t ");
+                try out.appendSlice(allocator, q.c_name);
+                try out.appendSlice(allocator, "(uintptr_t jit_ctx);\n");
+                break;
+            }
+        }
+    }
     try out.appendSlice(allocator, "\n");
 
     // 4b. Emit compiled function bodies
     for (compiled_bodies.items) |item| {
+        try out.appendSlice(allocator, item.body);
+        try out.appendSlice(allocator, "\n");
+    }
+    // 4c. Emit compiled quotation function bod ies
+    for (compiled_quotation_bodies.items) |item| {
         try out.appendSlice(allocator, item.body);
         try out.appendSlice(allocator, "\n");
     }
@@ -6770,7 +6870,7 @@ test "emitProgramC generates complete C source" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, 0, 1, &.{}, &diag, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, &diag, testing.allocator);
     defer testing.allocator.free(source);
 
     // Preamble
@@ -6809,7 +6909,7 @@ test "emitProgramC dispatch table has correct entries" {
     };
 
     var diag2: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, 0, 2, &.{}, &diag2, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 2, &.{}, &diag2, testing.allocator);
     defer testing.allocator.free(source);
 
     // word_id 0 -> onez_w_foo
@@ -6830,7 +6930,7 @@ test "emitProgramC output compiles with cc" {
     };
 
     var diag3: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, 1, 1, &.{}, &diag3, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, &diag3, testing.allocator);
     defer testing.allocator.free(source);
 
     var tmp_dir = testing.tmpDir(.{});

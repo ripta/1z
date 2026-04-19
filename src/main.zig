@@ -1764,6 +1764,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         allocator.free(codegen_diagnostics.prelude_stats.uncompiled);
     const c_source = ir_codegen.emitProgramC(
         freeze_result.words,
+        freeze_result.quotations,
         freeze_result.entry_word_id,
         freeze_result.max_word_id,
         static_libs.items,
