@@ -2967,13 +2967,8 @@ fn compileInstructions(
                     const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.iterator_fn, ctx_val, opcode_const);
                     emitCallbackPostCheck(state, call_result, call_result);
 
-                    if (effects.dynamic) {
-                        sp.* -= effects.inputs;
-                        state.dynamic_call_emitted = true;
-                    } else {
-                        sp.* = sp.* - effects.inputs + effects.outputs;
-                        resetStackToPhysical(stack, sp.*);
-                    }
+                    sp.* = sp.* - effects.inputs + effects.outputs;
+                    resetStackToPhysical(stack, sp.*);
                 } else if (
                 // oh, yuck
                 state.self_name != null and

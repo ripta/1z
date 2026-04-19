@@ -1,0 +1,26 @@
+\ Verify major HO combinators compile with literal quotation arguments.
+\ Uses strings as sequences because array literals are D.4 (non-simple AOT
+\ literals). cleave is omitted because it requires an array-of-quotations
+\ argument, which is also D.4.
+
+\ -- dip --
+5 10 [ 1 + ] dip . .
+
+\ -- keep --
+5 [ 2 * ] keep . .
+
+\ -- bi --
+10 [ 2 * ] [ 3 + ] bi . .
+
+\ -- #each (code after #each also compiles) --
+"abc" [ . ] #each
+"each-done" print-line
+
+\ -- #map + #collect --
+"abc" [ inspect ] #map #collect .
+
+\ -- #filter + #collect --
+"abcde" [ "c" > ] #filter #collect .
+
+\ -- #reduce --
+"hello" "" [ #append ] #reduce print-line
