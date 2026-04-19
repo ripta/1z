@@ -73,7 +73,7 @@ PASS: stream redirection with with-output-stream
 Stack: [ ]
 === Parameter value display ===
 Stack: [ ]
-PASS: parameter to-string
+PASS: parameter inspect
 Stack: [ ]
 PASS: parameter value display
 Stack: [ ]

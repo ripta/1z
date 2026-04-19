@@ -1,4 +1,4 @@
-=== to-string on integers ===
+=== inspect on integers ===
 Stack: [ ]
 PASS: integer
 Stack: [ ]
@@ -6,23 +6,23 @@ PASS: negative integer
 Stack: [ ]
 PASS: zero
 Stack: [ ]
-=== to-string on booleans ===
+=== inspect on booleans ===
 Stack: [ ]
 PASS: true
 Stack: [ ]
 PASS: false
 Stack: [ ]
-=== to-string on strings ===
+=== inspect on strings ===
 Stack: [ ]
 PASS: string length includes quotes
 Stack: [ ]
 PASS: empty string length
 Stack: [ ]
-=== to-string on symbols ===
+=== inspect on symbols ===
 Stack: [ ]
 PASS: symbol
 Stack: [ ]
-=== to-string on arrays ===
+=== inspect on arrays ===
 Stack: [ ]
 PASS: empty array
 Stack: [ ]
@@ -30,13 +30,13 @@ PASS: array of integers
 Stack: [ ]
 PASS: array of strings length
 Stack: [ ]
-=== to-string on quotations ===
+=== inspect on quotations ===
 Stack: [ ]
 PASS: quotation
 Stack: [ ]
 PASS: empty quotation
 Stack: [ ]
-=== to-string on nested structures ===
+=== inspect on nested structures ===
 Stack: [ ]
 PASS: nested arrays
 Stack: [ ]
@@ -46,22 +46,22 @@ Stack: [ ]
 Stack: [ ]
 PASS: dot consumes value
 Stack: [ ]
-=== to-string with #append ===
+=== inspect with #append ===
 Stack: [ ]
 PASS: simple append
 Stack: [ ]
 PASS: chained append
 Stack: [ ]
-=== to-string on hash ===
+=== inspect on hash ===
 Stack: [ ]
 Stack: [ "H{ a: 1 }" ]
 PASS: hash prefix
 Stack: [ "H{ a: 1 }" ]
 PASS: hash suffix
 Stack: [ ]
-=== to-string preserves types ===
+=== inspect preserves types ===
 Stack: [ ]
 PASS: mixed array
 Stack: [ ]
-All to-string tests complete!
+All inspect tests complete!
 Stack: [ ]

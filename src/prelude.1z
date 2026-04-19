@@ -316,7 +316,7 @@ flush: ( -- ) [ output-stream get stream-flush ] ;
 read-line: ( -- str/f ) [ input-stream get stream-read-line ] ;
 
 \\ Convert a value to a string and print it followed by a newline.
-.: ( a -- ) [ to-string print-line ] ;
+.: ( a -- ) [ inspect print-line ] ;
 
 \ Module loading
 \   from search path:  use "testing" ;

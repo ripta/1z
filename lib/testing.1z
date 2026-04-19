@@ -29,8 +29,8 @@ assert=: ( actual expected msg -- ) [
   ]
   [
     \ Build: "FAIL: {msg} (expected {expected}, got {actual})"
-    to-string                  \ msg actual expected-str
-    swap to-string             \ msg expected-str actual-str
+    inspect                    \ msg actual expected-str
+    swap inspect               \ msg expected-str actual-str
     ", got " swap #append      \ msg expected-str ", got {actual}"
     swap                       \ msg ", got {actual}" expected-str
     "(expected " swap #append  \ msg ", got {actual}" "(expected {exp}"
@@ -134,8 +134,8 @@ assert-error-type: ( quot expected-type msg -- ) [
         [
           \ Wrong error type
           swap  \ expected actual
-          to-string ", got " swap #append
-          swap to-string "(expected " swap #append
+          inspect ", got " swap #append
+          swap inspect "(expected " swap #append
           ")" #append #append
           __aet_msg__ get
           " " swap #append swap #append

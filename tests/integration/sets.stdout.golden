@@ -142,9 +142,9 @@ PASS: set inequality different elements
 Stack: [ ]
 PASS: empty sets equal
 Stack: [ ]
-=== Set to-string ===
+=== Set inspect ===
 Stack: [ ]
-PASS: empty set to-string
+PASS: empty set inspect
 Stack: [ ]
 === Set immutability ===
 Stack: [ ]

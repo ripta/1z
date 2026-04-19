@@ -12,7 +12,7 @@ format-word-info: ( wi -- str ) [
   dup name>>
   over stack-effect>> dup f = [ drop ] [ " " swap >string #append #append ] if
   over markers>> dup #len 0 = [ drop ] [
-    " [" swap >iterator [ to-string ] #map #collect ", " #join #append #append "]" #append
+    " [" swap >iterator [ inspect ] #map #collect ", " #join #append #append "]" #append
   ] if
   over native?>> [ " \\native" #append ] [ " \\compound" #append ] if
   "\n" #append
@@ -27,7 +27,7 @@ format-word-info: ( wi -- str ) [
 help: ( symbol -- ) [
   dup >word? dup option:some?
   [ option:some> nip format-word-info ]
-  [ drop to-string ": no such word\n" #append ]
+  [ drop inspect ": no such word\n" #append ]
   if print flush
 ] ;
 
@@ -37,7 +37,7 @@ help: ( symbol -- ) [
 words-with-marker: ( name -- array ) [
   >string "<marker:" swap #append ">" #append
   all-words >iterator swap
-  [ swap markers>> >iterator [ to-string ] #map #collect swap #in? ] curry #filter
+  [ swap markers>> >iterator [ inspect ] #map #collect swap #in? ] curry #filter
   #collect
 ] ;
 

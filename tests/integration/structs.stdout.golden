@@ -17,7 +17,7 @@ PASS: same fields are equal
 Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } ]
 PASS: different fields not equal
 Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } ]
-PASS: struct to-string
+PASS: struct inspect
 Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } ]
 === mutable struct{ } syntax ===
 Stack: [ point{ x: 1 y: 2 } point{ x: 10 y: 20 } ]

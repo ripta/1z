@@ -13,18 +13,18 @@ use "testing" ;
 
 "div: min_i64 / -1 overflow promotes to bignum" test-section
 -9223372036854775808 -1 div type-of bignum: "min_i64 div -1 type" assert=
--9223372036854775808 -1 div to-string "9223372036854775808" "min_i64 div -1 value" assert=
+-9223372036854775808 -1 div inspect "9223372036854775808" "min_i64 div -1 value" assert=
 
 "div: division by zero" test-section
 [ 7 0 div ] "DivisionByZero" assert-error
 
 "div: bignum operands" test-section
-99999999999999999999 3 div to-string "33333333333333333333" "big div 3" assert=
--99999999999999999999 3 div to-string "-33333333333333333333" "neg big div 3" assert=
+99999999999999999999 3 div inspect "33333333333333333333" "big div 3" assert=
+-99999999999999999999 3 div inspect "-33333333333333333333" "neg big div 3" assert=
 99999999999999999999 99999999999999999999 div 1 "big div big" assert=
 
 "div: mixed fixnum/bignum" test-section
-99999999999999999999 7 div to-string "14285714285714285714" "big div fixnum" assert=
+99999999999999999999 7 div inspect "14285714285714285714" "big div fixnum" assert=
 100 99999999999999999999 div 0 "fixnum div big" assert=
 
 "div: bignum division by zero" test-section
@@ -58,9 +58,9 @@ use "testing" ;
 [ 7 0 rem ] "DivisionByZero" assert-error
 
 "rem: bignum operands" test-section
-99999999999999999999 7 rem to-string "1" "big rem 7" assert=
-100000000000000000000 99999999999999999999 rem to-string "1" "big rem big" assert=
--99999999999999999999 7 rem to-string "-1" "neg big rem 7" assert=
+99999999999999999999 7 rem inspect "1" "big rem 7" assert=
+100000000000000000000 99999999999999999999 rem inspect "1" "big rem big" assert=
+-99999999999999999999 7 rem inspect "-1" "neg big rem 7" assert=
 
 "rem: mixed fixnum/bignum" test-section
 5 99999999999999999999 rem 5 "fixnum rem big" assert=
@@ -92,7 +92,7 @@ use "testing" ;
 
 "gcd: bignum operands" test-section
 99999999999999999998 2 gcd 2 "gcd big fixnum" assert=
-99999999999999999999 33333333333333333333 gcd to-string "33333333333333333333" "gcd big big" assert=
+99999999999999999999 33333333333333333333 gcd inspect "33333333333333333333" "gcd big big" assert=
 12 99999999999999999996 gcd 12 "gcd fixnum big" assert=
 
 "gcd: type errors" test-section

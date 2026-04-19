@@ -3,17 +3,17 @@
 use "testing" ;
 
 "Standard streams" test-section
-stdout to-string "<stream stdout write>" "stdout to-string" assert=
-stderr to-string "<stream stderr write>" "stderr to-string" assert=
-stdin to-string "<stream stdin read>" "stdin to-string" assert=
+stdout inspect "<stream stdout write>" "stdout inspect" assert=
+stderr inspect "<stream stderr write>" "stderr inspect" assert=
+stdin inspect "<stream stdin read>" "stdin inspect" assert=
 
 "Stream close on standard streams" test-section
-stdout dup stream-close to-string "<stream stdout (closed)>" "closed stdout to-string" assert=
-stderr dup stream-close to-string "<stream stderr (closed)>" "closed stderr to-string" assert=
+stdout dup stream-close inspect "<stream stdout (closed)>" "closed stdout inspect" assert=
+stderr dup stream-close inspect "<stream stderr (closed)>" "closed stderr inspect" assert=
 
 "Stream open and close" test-section
 "tests/fixtures/hello.txt" read: stream-open
-dup to-string "<stream tests/fixtures/hello.txt read>" "read stream to-string" assert=
+dup inspect "<stream tests/fixtures/hello.txt read>" "read stream inspect" assert=
 stream-close
 "PASS: stream-open and close" print-line
 
@@ -99,7 +99,7 @@ stream-close
 
 \ Create stream from fd (wrap stdout fd as a stream)
 1 fd>stream
-to-string "<stream fd read-write>" "fd>stream creates stream" assert=
+inspect "<stream fd read-write>" "fd>stream creates stream" assert=
 "PASS: fd>stream" print-line
 
 "Error cases" test-section

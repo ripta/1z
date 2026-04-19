@@ -19,7 +19,7 @@ duration: virtual{ fixnum } ;
 42 >duration fixnum? f "fixnum? on duration is false (strict)" assert=
 
 \ Test display format
-42 >duration to-string "<duration 42>" "display format is <name inner>" assert=
+42 >duration inspect "<duration 42>" "display format is <name inner>" assert=
 
 \ Test unwrapping
 42 >duration unmake-duration 42 "unmake-duration unwraps to inner value" assert=
@@ -44,7 +44,7 @@ positive-duration: virtual{ duration } ;
 42 >duration >positive-duration unmake-positive-duration unmake-duration 42 "double unwrap reveals integer" assert=
 
 \ Test nested display
-42 >duration >positive-duration to-string "<positive-duration <duration 42>>" "nested display format" assert=
+42 >duration >positive-duration inspect "<positive-duration <duration 42>>" "nested display format" assert=
 
 "error cases" test-section
 

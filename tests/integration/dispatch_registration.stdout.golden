@@ -5,7 +5,7 @@ Stack: [ ]
 "registered + method for duration duration"
 Stack: [ ]
 Stack: [ ]
-"registered to-string method for duration"
+"registered inspect method for duration"
 Stack: [ ]
 Stack: [ ]
 "re-registered + method with mutable"

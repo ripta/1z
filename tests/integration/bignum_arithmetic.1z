@@ -13,9 +13,9 @@ use "testing" ;
 -9223372036854775808 2 * type-of bignum: "min_i64 * 2 promotes" assert=
 
 "Overflow promotion values" test-section
-9223372036854775807 1 + to-string "9223372036854775808" "max_i64 + 1 value" assert=
--9223372036854775808 1 - to-string "-9223372036854775809" "min_i64 - 1 value" assert=
-9223372036854775807 2 * to-string "18446744073709551614" "max_i64 * 2 value" assert=
+9223372036854775807 1 + inspect "9223372036854775808" "max_i64 + 1 value" assert=
+-9223372036854775808 1 - inspect "-9223372036854775809" "min_i64 - 1 value" assert=
+9223372036854775807 2 * inspect "18446744073709551614" "max_i64 * 2 value" assert=
 
 "Non-overflowing fixnum stays fixnum" test-section
 100 200 + type-of fixnum: "small add stays fixnum" assert=
@@ -23,18 +23,18 @@ use "testing" ;
 100 200 * type-of fixnum: "small mul stays fixnum" assert=
 
 "Bignum + bignum" test-section
-99999999999999999999 1 + to-string "100000000000000000000" "big + 1" assert=
-99999999999999999999 99999999999999999999 + to-string "199999999999999999998" "big + big" assert=
-1 99999999999999999999 + to-string "100000000000000000000" "1 + big" assert=
+99999999999999999999 1 + inspect "100000000000000000000" "big + 1" assert=
+99999999999999999999 99999999999999999999 + inspect "199999999999999999998" "big + big" assert=
+1 99999999999999999999 + inspect "100000000000000000000" "1 + big" assert=
 
 "Bignum - bignum" test-section
-100000000000000000000 1 - to-string "99999999999999999999" "big - 1" assert=
-100000000000000000000 99999999999999999999 - to-string "1" "big - big" assert=
+100000000000000000000 1 - inspect "99999999999999999999" "big - 1" assert=
+100000000000000000000 99999999999999999999 - inspect "1" "big - big" assert=
 
 "Bignum * bignum" test-section
-99999999999999999999 2 * to-string "199999999999999999998" "big * 2" assert=
-2 99999999999999999999 * to-string "199999999999999999998" "2 * big" assert=
-99999999999999999999 99999999999999999999 * to-string "9999999999999999999800000000000000000001" "big * big" assert=
+99999999999999999999 2 * inspect "199999999999999999998" "big * 2" assert=
+2 99999999999999999999 * inspect "199999999999999999998" "2 * big" assert=
+99999999999999999999 99999999999999999999 * inspect "9999999999999999999800000000000000000001" "big * big" assert=
 
 "Auto-demotion" test-section
 99999999999999999999 1 + 99999999999999999999 - 1 - type-of fixnum: "big that shrinks back" assert=
@@ -43,28 +43,28 @@ use "testing" ;
 99999999999999999999 1 + 100000000000000000000 - 0 "demoted zero" assert=
 
 "Bignum division" test-section
-99999999999999999999 3 / to-string "33333333333333333333" "big / 3" assert=
--99999999999999999999 3 / to-string "-33333333333333333333" "neg big / 3" assert=
+99999999999999999999 3 / inspect "33333333333333333333" "big / 3" assert=
+-99999999999999999999 3 / inspect "-33333333333333333333" "neg big / 3" assert=
 99999999999999999999 99999999999999999999 / 1 "big / big = 1" assert=
 100000000000000000000 99999999999999999999 / 1 "big / slightly-less = 1" assert=
 
 "Bignum modulo" test-section
-99999999999999999999 7 % to-string "1" "big % 7" assert=
-100000000000000000000 99999999999999999999 % to-string "1" "big % big" assert=
+99999999999999999999 7 % inspect "1" "big % 7" assert=
+100000000000000000000 99999999999999999999 % inspect "1" "big % big" assert=
 
 "Division special cases" test-section
 -9223372036854775808 -1 / type-of bignum: "min_i64 / -1 promotes" assert=
--9223372036854775808 -1 / to-string "9223372036854775808" "min_i64 / -1 value" assert=
+-9223372036854775808 -1 / inspect "9223372036854775808" "min_i64 / -1 value" assert=
 
 "Division by zero" test-section
 [ 99999999999999999999 0 / ] "DivisionByZero" assert-error
 [ 99999999999999999999 0 % ] "DivisionByZero" assert-error
 
 "Abs with bignum" test-section
--99999999999999999999 abs to-string "99999999999999999999" "abs neg bignum" assert=
-99999999999999999999 abs to-string "99999999999999999999" "abs pos bignum" assert=
+-99999999999999999999 abs inspect "99999999999999999999" "abs neg bignum" assert=
+99999999999999999999 abs inspect "99999999999999999999" "abs pos bignum" assert=
 -9223372036854775808 abs type-of bignum: "abs min_i64 promotes" assert=
--9223372036854775808 abs to-string "9223372036854775808" "abs min_i64 value" assert=
+-9223372036854775808 abs inspect "9223372036854775808" "abs min_i64 value" assert=
 
 "Mixed float still works" test-section
 1 2.0 + type-of float: "fixnum + float = float" assert=

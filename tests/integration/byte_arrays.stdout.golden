@@ -142,13 +142,13 @@ PASS: string -> bytes -> string
 Stack: [ ]
 PASS: bytes -> string -> bytes
 Stack: [ ]
-=== Byte array to-string ===
+=== Byte array inspect ===
 Stack: [ ]
-PASS: empty byte array to-string
+PASS: empty byte array inspect
 Stack: [ ]
-PASS: byte array to-string
+PASS: byte array inspect
 Stack: [ ]
-PASS: hex format in to-string
+PASS: hex format in inspect
 Stack: [ ]
 === Error cases ===
 Stack: [ ]

@@ -43,7 +43,7 @@ resource-close
 \\ resource-close: closed dylib displays (closed)
 toy-lib-path native.lib-open
 dup resource-close
-to-string "<resource:dylib (closed)>" "closed dylib display" assert=
+inspect "<resource:dylib (closed)>" "closed dylib display" assert=
 
 \\ lib-open: invalid path throws ffi-library-not-found
 [ "/nonexistent/path/libfake.dylib" native.lib-open ]

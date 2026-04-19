@@ -72,9 +72,9 @@ Stack: [ ]
 Stack: [ ]
 PASS: mmap @values count
 Stack: [ ]
-=== Mutable map to-string ===
+=== Mutable map inspect ===
 Stack: [ ]
-PASS: empty mmap to-string
+PASS: empty mmap inspect
 Stack: [ ]
 === Mutable map equality ===
 Stack: [ ]

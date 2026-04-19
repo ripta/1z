@@ -2,13 +2,13 @@ use "testing" ;
 
 "Hex bignum literal" test-section
 0xFFFFFFFFFFFFFFFFFF type-of bignum: "hex overflow is bignum" assert=
-0xFFFFFFFFFFFFFFFFFF to-string "4722366482869645213695" "hex bignum value" assert=
+0xFFFFFFFFFFFFFFFFFF inspect "4722366482869645213695" "hex bignum value" assert=
 0x10000000000000000 type-of bignum: "2^64 is bignum" assert=
-0x10000000000000000 to-string "18446744073709551616" "2^64 value" assert=
+0x10000000000000000 inspect "18446744073709551616" "2^64 value" assert=
 
 "Negative hex bignum" test-section
 -0x10000000000000000 type-of bignum: "neg hex bignum type" assert=
--0x10000000000000000 to-string "-18446744073709551616" "neg hex bignum value" assert=
+-0x10000000000000000 inspect "-18446744073709551616" "neg hex bignum value" assert=
 
 "Hex fixnum still works" test-section
 0xFF type-of fixnum: "small hex is fixnum" assert=

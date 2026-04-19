@@ -5,13 +5,13 @@ use "testing" ;
 "generic word dispatch basics" test-section
 
 \ Define a generic word with a default body that works on integers
-describe: ( value -- string ) generic [ to-string "default" #append ] ;
+describe: ( value -- string ) generic [ inspect "default" #append ] ;
 
 \ Test 1: Default body runs when no method registered
 42 describe "42default" "default body runs for integer" assert=
 
 \ Test 2: Register a method for a specific type
-describe: method{ fixnum } [ to-string " (int)" #append ] ;
+describe: method{ fixnum } [ inspect " (int)" #append ] ;
 
 \ Now integer should use the registered method
 42 describe "42 (int)" "method dispatches for integer" assert=
@@ -31,7 +31,7 @@ f describe "no" "method dispatches for boolean false" assert=
 duration: virtual{ fixnum } ;
 
 \ Register a method for the virtual type
-describe: method{ duration } [ unmake-duration to-string " ns" #append ] ;
+describe: method{ duration } [ unmake-duration inspect " ns" #append ] ;
 
 \ Test: virtual type uses its registered method
 100 >duration describe "100 ns" "method dispatches for duration" assert=
@@ -58,7 +58,7 @@ combine: method{ string string } [ #append ] ;
 
 "wildcard dispatch for generic words" test-section
 
-\ Define a generic word with a non-to-string default
+\ Define a generic word with a non-inspect default
 tag: ( value -- string ) generic [ drop "unknown" ] ;
 
 \ Register a wildcard method (matches any type)

@@ -50,8 +50,8 @@ M{ a: 1 b: 2 } @keys #len 2 "mmap @keys count" assert=
 "Mutable map @values" test-section
 M{ a: 1 b: 2 } @values #len 2 "mmap @values count" assert=
 
-"Mutable map to-string" test-section
-M{ } to-string "M{ }" "empty mmap to-string" assert=
+"Mutable map inspect" test-section
+M{ } inspect "M{ }" "empty mmap inspect" assert=
 
 "Mutable map equality" test-section
 M{ a: 1 b: 2 } M{ a: 1 b: 2 } = t "mmap equality same" assert=

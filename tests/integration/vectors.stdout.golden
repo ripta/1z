@@ -80,11 +80,11 @@ PASS: #prefix length
 Stack: [ ]
 PASS: #prefix element
 Stack: [ ]
-=== Vector to-string ===
+=== Vector inspect ===
 Stack: [ ]
-PASS: empty vector to-string
+PASS: empty vector inspect
 Stack: [ ]
-PASS: vector to-string
+PASS: vector inspect
 Stack: [ ]
 === Error cases ===
 Stack: [ ]

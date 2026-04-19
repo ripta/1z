@@ -5,8 +5,8 @@ use "testing" ;
 -99999999999999999999 type-of bignum: "negative bignum literal type-of" assert=
 
 "Bignum display" test-section
-99999999999999999999 to-string "99999999999999999999" "bignum to-string" assert=
--99999999999999999999 to-string "-99999999999999999999" "negative bignum to-string" assert=
+99999999999999999999 inspect "99999999999999999999" "bignum inspect" assert=
+-99999999999999999999 inspect "-99999999999999999999" "negative bignum inspect" assert=
 
 "Bignum equality" test-section
 99999999999999999999 99999999999999999999 = "bignum = bignum (same)" assert-true

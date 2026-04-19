@@ -47,13 +47,13 @@ test-shapeful-methods-work: ( -- ) [
 
 \ -- Single-method protocol --
 
-printable: protocol{ to-string } ;
+printable: protocol{ inspect } ;
 
 my-label: virtual{ string } ;
 
-to-string: generic ( val -- str ) [ drop "" ] ;
+inspect: generic ( val -- str ) [ drop "" ] ;
 
-to-string: method{ my-label } [
+inspect: method{ my-label } [
   unmake-my-label
 ] ;
 

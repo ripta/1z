@@ -1,0 +1,52 @@
+\ Integration tests for inspect primitive and . (dot) word
+
+use "testing" ;
+
+"inspect on integers" test-section
+42 inspect "42" "integer" assert=
+-7 inspect "-7" "negative integer" assert=
+0 inspect "0" "zero" assert=
+
+"inspect on booleans" test-section
+t inspect "t" "true" assert=
+f inspect "f" "false" assert=
+
+"inspect on strings" test-section
+\ Strings get quoted, so "hello" becomes "\"hello\"" (7 chars)
+"hello" inspect #len 7 "string length includes quotes" assert=
+"" inspect #len 2 "empty string length" assert=
+
+"inspect on symbols" test-section
+foo: inspect "foo:" "symbol" assert=
+
+"inspect on arrays" test-section
+{ } inspect "{ }" "empty array" assert=
+{ 1 2 3 } inspect "{ 1 2 3 }" "array of integers" assert=
+{ "a" "b" } inspect #len 11 "array of strings length" assert=
+
+"inspect on quotations" test-section
+[ 1 2 + ] inspect "[ 1 2 + ]" "quotation" assert=
+[ ] inspect "[ ]" "empty quotation" assert=
+
+"inspect on nested structures" test-section
+{ { 1 } { 2 } } inspect "{ { 1 } { 2 } }" "nested arrays" assert=
+
+"dot word" test-section
+\ Test . (dot) outputs inspect result and consumes value
+42 .
+\ Stack should be empty after . - verify by pushing and checking
+99 99 "dot consumes value" assert=
+
+"inspect with #append" test-section
+"Value: " 42 inspect #append "Value: 42" "simple append" assert=
+"Result: " 100 inspect #append " items" #append "Result: 100 items" "chained append" assert=
+
+"inspect on hash" test-section
+H{ a: 1 } inspect
+dup 0 2 #slice "H{" "hash prefix" assert=
+#last "}" "hash suffix" assert=
+
+"inspect preserves types" test-section
+{ 1 2 } inspect "{ 1 2 }" "mixed array" assert=
+
+"All inspect tests complete!" print-line

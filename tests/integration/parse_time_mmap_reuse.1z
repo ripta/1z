@@ -29,7 +29,7 @@ geom: enum{ rect struct{ width height } tri struct{ a b c } dot } ;
 3 "tri unwrap a" assert=
 
 \ Display format reflects correct fields
-10 20 make-geom:rect to-string "<geom:rect geom:rect{ width: 10 height: 20 }>"
+10 20 make-geom:rect inspect "<geom:rect geom:rect{ width: 10 height: 20 }>"
 "rect display" assert=
-3 4 5 make-geom:tri to-string "<geom:tri geom:tri{ a: 3 b: 4 c: 5 }>"
+3 4 5 make-geom:tri inspect "<geom:tri geom:tri{ a: 3 b: 4 c: 5 }>"
 "tri display" assert=

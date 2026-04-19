@@ -190,7 +190,7 @@ test "tryDispatchGeneric dispatches unary method for native type" {
 
     // Register a unary method for "fixnum" type
     const body = &[_]@import("../value.zig").Instruction{
-        .{ .op = .{ .call_word = "to-string" }, .line = 0 },
+        .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
     try ctx.dispatch.register(
         .{ .word_name = "serialize", .type_a = "fixnum", .type_b = dispatch_mod.unary_sentinel },
@@ -203,7 +203,7 @@ test "tryDispatchGeneric dispatches unary method for native type" {
     const result = try tryDispatchGeneric(&ctx, "serialize");
     try std.testing.expect(result);
 
-    // Method should have executed (to-string converts fixnum to string)
+    // Method should have executed (inspect converts fixnum to string)
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     const top = try ctx.stack.pop();
     try std.testing.expectEqualStrings("42", top.string);
@@ -218,7 +218,7 @@ test "tryDispatchGeneric tries binary before unary" {
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
     const unary_body = &[_]@import("../value.zig").Instruction{
-        .{ .op = .{ .call_word = "to-string" }, .line = 0 },
+        .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
 
     try ctx.dispatch.register(
