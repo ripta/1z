@@ -1,0 +1,2 @@
+\ Test that hash syntax errors report a missing value after a key.
+H{ name: }

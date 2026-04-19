@@ -1,0 +1,82 @@
+=== matrix{ basic ===
+Stack: [ ]
+Stack: [ { { 1 2 } { 3 4 } } ]
+PASS: matrix has two rows
+Stack: [ ]
+Stack: [ { { 1 2 } { 3 4 } } ]
+PASS: element [0][0] is 1
+Stack: [ ]
+Stack: [ { { 1 2 } { 3 4 } } ]
+PASS: element [0][1] is 2
+Stack: [ ]
+Stack: [ { { 1 2 } { 3 4 } } ]
+PASS: element [1][0] is 3
+Stack: [ ]
+Stack: [ { { 1 2 } { 3 4 } } ]
+PASS: element [1][1] is 4
+Stack: [ ]
+=== matrix{ single row ===
+Stack: [ ]
+Stack: [ { { 10 20 30 } } ]
+PASS: single row matrix has one row
+Stack: [ ]
+Stack: [ { { 10 20 30 } } ]
+PASS: single row has three elements
+Stack: [ ]
+=== matrix{ empty ===
+Stack: [ ]
+Stack: [ { { } } ]
+PASS: empty matrix has one row
+Stack: [ ]
+Stack: [ { { } } ]
+PASS: the single row is empty
+Stack: [ ]
+=== matrix{ trailing semicolon ===
+Stack: [ ]
+Stack: [ { { 1 2 } { } } ]
+PASS: trailing semicolon produces two rows
+Stack: [ ]
+Stack: [ { { 1 2 } { } } ]
+PASS: trailing semicolon row is empty
+Stack: [ ]
+=== matrix{ empty rows ===
+Stack: [ ]
+Stack: [ { { 1 } { } { 2 } } ]
+PASS: double semicolon produces three rows
+Stack: [ ]
+Stack: [ { { 1 } { } { 2 } } ]
+PASS: middle row is empty
+Stack: [ ]
+Stack: [ { { 1 } { } { 2 } } ]
+PASS: first row has 1
+Stack: [ ]
+Stack: [ { { 1 } { } { 2 } } ]
+PASS: third row has 2
+Stack: [ ]
+=== matrix{ mixed value types ===
+Stack: [ ]
+Stack: [ { { "a" "b" } { 1 2 } } ]
+PASS: string values work
+Stack: [ ]
+Stack: [ { { "a" "b" } { 1 2 } } ]
+PASS: mixed string and integer rows
+Stack: [ ]
+=== matrix{ nested arrays ===
+Stack: [ ]
+Stack: [ { { { 1 2 } { 3 4 } } { { 5 6 } { 7 8 } } } ]
+PASS: nested arrays work
+Stack: [ ]
+Stack: [ { { { 1 2 } { 3 4 } } { { 5 6 } { 7 8 } } } ]
+PASS: nested array in second row
+Stack: [ ]
+=== matrix{ 3x3 ===
+Stack: [ ]
+Stack: [ { { 1 2 3 } { 4 5 6 } { 7 8 9 } } ]
+PASS: 3x3 matrix has three rows
+Stack: [ ]
+Stack: [ { { 1 2 3 } { 4 5 6 } { 7 8 9 } } ]
+PASS: center element of 3x3 is 5
+Stack: [ ]
+Stack: [ { { 1 2 3 } { 4 5 6 } { 7 8 9 } } ]
+PASS: bottom-right element is 9
+Stack: [ ]

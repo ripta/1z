@@ -1,0 +1,42 @@
+\ >module primitive tests
+
+use "testing" ;
+
+\ === Create module from H{ } ===
+"Create module from immutable hash" test-section
+
+"mymod" H{ "double" [ 2 * ] "inc" [ 1 + ] } >module
+dup import
+
+5 double 10 "H{} module double" assert=
+9 inc 10 "H{} module inc" assert=
+
+\ === Qualified access ===
+"Qualified access on >module result" test-section
+
+qmod: "qualmod" H{ "triple" [ 3 * ] } >module ;
+4 qmod.triple 12 "qualified access" assert=
+
+\ === Create module from M{ } ===
+"Create module from mutable map" test-section
+
+M{ } m: swap ;
+m "add10" [ 10 + ] @set!
+m "negate" [ -1 * ] @set!
+
+"dynmod" m >module import
+
+5 add10 15 "M{} module add10" assert=
+3 negate -3 "M{} module negate" assert=
+
+\ === Non-quotation value errors ===
+"Non-quotation value in hashtable" test-section
+
+[ "bad" H{ "x" 42 } >module ] [ error-type: @get ETypeMismatch "non-quotation error type" assert= ] recover
+
+\ === Selective import from >module ===
+"Selective import from >module" test-section
+
+selmod: "selmod" H{ "a" [ 1 ] "b" [ 2 ] "c" [ 3 ] } >module ;
+selmod { a: c: } import
+a c + 4 "selective import from >module" assert=

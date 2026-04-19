@@ -31,6 +31,14 @@ pub const InterpreterError = error{
     ClosedStream,
     PermissionDenied,
     NotSeekable,
+    // Resource error types
+    UseAfterClose,
+    // FFI error types
+    FFILibraryNotFound,
+    FFISymbolNotFound,
+    FFITypeMismatch,
+    FFICallFailed,
+    FFIRangeError,
 };
 
 pub const Primitive = struct {

@@ -123,6 +123,7 @@ pub fn valueTypeName(val: Value) []const u8 {
         .set => "set",
         .mutable_map => "mutable-map",
         .stream => "stream",
+        .resource => "resource",
         .parameter => "parameter",
         .module => "module",
         .marker => "marker",
@@ -183,6 +184,7 @@ pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]con
         .set => |s| std.fmt.allocPrint(allocator, "set[{d}]", .{s.count()}),
         .mutable_map => |m| std.fmt.allocPrint(allocator, "mutable-map[{d}]", .{m.count()}),
         .stream => allocator.dupe(u8, "<stream>"),
+        .resource => |r| std.fmt.allocPrint(allocator, "<resource:{s}>", .{r.type_name}),
         .parameter => |p| std.fmt.allocPrint(allocator, "<parameter {s}>", .{p.name}),
         .module => |m| std.fmt.allocPrint(allocator, "<module {s}>", .{m.name}),
         .marker => |m| std.fmt.allocPrint(allocator, "<marker {s}>", .{m.name}),
@@ -320,6 +322,17 @@ pub fn popStream(ctx: *Context) !*Stream {
         .stream => |s| s,
         else => {
             setTypeMismatchError(ctx, "stream", val);
+            return error.TypeMismatch;
+        },
+    };
+}
+
+pub fn popResource(ctx: *Context) !*value_mod.Resource {
+    const val = try ctx.stack.pop();
+    return switch (val) {
+        .resource => |r| r,
+        else => {
+            setTypeMismatchError(ctx, "resource", val);
             return error.TypeMismatch;
         },
     };

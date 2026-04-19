@@ -615,6 +615,7 @@ fn parseDefinitionLine(line: []const u8) ?DefinitionLine {
 
     const stripped = std.mem.trimLeft(u8, line, " ");
     const indent_len = line.len - stripped.len;
+    if (indent_len >= def_end) return null;
     const indent = line[0..indent_len];
 
     const content = std.mem.trimRight(u8, line[indent_len..def_end], " ");

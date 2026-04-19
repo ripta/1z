@@ -1,0 +1,61 @@
+use "testing" ;
+use "ffi" ;
+
+\\ Helper to get the shared library extension for the host OS.
+toy-lib-ext: ( -- ext ) [
+  sys-info "os" @get "macos" = [ ".dylib" ] [ ".so" ] if
+] ;
+
+\\ Helper to get the shared library path for the toy library.
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy" #append toy-lib-ext #append
+] ;
+
+\ === Basic ffi-def{ with toy library ===
+"ffi-def{ basic calls" test-section
+
+toy-lib-path lib-open ffi-def{
+  toy-add: "toy_add" ffi{ i32 i32 -> i32 }
+  toy-strlen: "toy_strlen" ffi{ cstring -> i32 }
+  toy-greeting: "toy_greeting" ffi{ cstring -> cstring-owned }
+} call "toy" swap >module import
+
+3 4 toy-add 7 "ffi-def toy_add(3, 4)" assert=
+"hello" toy-strlen 5 "ffi-def toy_strlen(hello)" assert=
+"world" toy-greeting "Hello, world!" "ffi-def toy_greeting(world)" assert=
+
+\ === Resource lifecycle via ffi-def{ ===
+"ffi-def{ resource lifecycle" test-section
+
+toy-lib-path lib-open
+dup ffi-def{
+  toy-open: "toy_open" ffi{ -> ptr:toy-counter }
+  toy-increment: "toy_increment" ffi{ ptr:toy-counter -> void }
+  toy-read: "toy_read" ffi{ ptr:toy-counter -> i32 }
+} call "toy-counter" swap >module import
+
+\\ Look up close function for counter resources
+dup "toy_close" ffi{ ptr -> void } bound-symbol
+close-fn: swap ;
+
+toy-open
+dup toy-increment
+dup toy-increment
+dup toy-increment
+dup toy-read 3 "ffi-def toy_read after 3 increments" assert=
+dup close-fn bind-close
+resource-close
+
+\\ Close the dylib
+resource-close
+
+\ === System libm via ffi-def{ ===
+"ffi-def{ system libm" test-section
+
+"m" lib-open ffi-def{
+  ffi-sqrt: "sqrt" ffi{ f64 -> f64 }
+  ffi-pow: "pow" ffi{ f64 f64 -> f64 }
+} call "ffi-math" swap >module import
+
+25.0 ffi-sqrt 5.0 "ffi-def sqrt(25)" assert=
+2.0 10.0 ffi-pow 1024.0 "ffi-def pow(2, 10)" assert=

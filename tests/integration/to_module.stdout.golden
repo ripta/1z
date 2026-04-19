@@ -1,0 +1,33 @@
+=== Create module from immutable hash ===
+Stack: [ ]
+Stack: [ <module:mymod (2 words)> ]
+Stack: [ <module:mymod (2 words)> ]
+PASS: H{} module double
+Stack: [ <module:mymod (2 words)> ]
+PASS: H{} module inc
+Stack: [ <module:mymod (2 words)> ]
+=== Qualified access on >module result ===
+Stack: [ <module:mymod (2 words)> ]
+Stack: [ <module:mymod (2 words)> ]
+PASS: qualified access
+Stack: [ <module:mymod (2 words)> ]
+=== Create module from mutable map ===
+Stack: [ <module:mymod (2 words)> ]
+Stack: [ <module:mymod (2 words)> ]
+Stack: [ <module:mymod (2 words)> M{ add10: [ 10 + ] } ]
+Stack: [ <module:mymod (2 words)> M{ negate: [ -1 * ] add10: [ 10 + ] } M{ negate: [ -1 * ] add10: [ 10 + ] } ]
+Stack: [ <module:mymod (2 words)> M{ negate: [ -1 * ] add10: [ 10 + ] } M{ negate: [ -1 * ] add10: [ 10 + ] } ]
+PASS: M{} module add10
+Stack: [ <module:mymod (2 words)> M{ negate: [ -1 * ] add10: [ 10 + ] } M{ negate: [ -1 * ] add10: [ 10 + ] } ]
+PASS: M{} module negate
+Stack: [ <module:mymod (2 words)> M{ negate: [ -1 * ] add10: [ 10 + ] } M{ negate: [ -1 * ] add10: [ 10 + ] } ]
+=== Non-quotation value in hashtable ===
+Stack: [ <module:mymod (2 words)> M{ negate: [ -1 * ] add10: [ 10 + ] } M{ negate: [ -1 * ] add10: [ 10 + ] } ]
+PASS: non-quotation error type
+Stack: [ <module:mymod (2 words)> M{ negate: [ -1 * ] add10: [ 10 + ] } M{ negate: [ -1 * ] add10: [ 10 + ] } ]
+=== Selective import from >module ===
+Stack: [ <module:mymod (2 words)> M{ negate: [ -1 * ] add10: [ 10 + ] } M{ negate: [ -1 * ] add10: [ 10 + ] } ]
+Stack: [ <module:mymod (2 words)> M{ negate: [ -1 * ] add10: [ 10 + ] } M{ negate: [ -1 * ] add10: [ 10 + ] } ]
+Stack: [ <module:mymod (2 words)> M{ negate: [ -1 * ] add10: [ 10 + ] } M{ negate: [ -1 * ] add10: [ 10 + ] } ]
+PASS: selective import from >module
+Stack: [ <module:mymod (2 words)> M{ negate: [ -1 * ] add10: [ 10 + ] } M{ negate: [ -1 * ] add10: [ 10 + ] } ]

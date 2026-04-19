@@ -1,0 +1,100 @@
+\ lib/ffi.1z - FFI signature descriptor and convenience wrappers
+
+ffi-sig: struct{ params return-type } ;
+
+\\ Parse-time word for FFI signature descriptors.
+\\ ffi{ i32 i32 -> i32 } produces an ffi-sig with params { "i32" "i32" } and return-type "i32".
+\\ If no -> is present, return type defaults to "void".
+ffi{: parse-time [
+  (read-ffi-params): ( accum -- params return-type ) [
+    peek-token
+    dup "->" = [
+      drop parse-token drop
+      peek-token
+      dup "}" = [
+        drop parse-token drop
+        "void"
+      ] [
+        drop parse-token
+        parse-token drop
+      ] if
+    ] [
+      dup "}" = [
+        drop parse-token drop
+        "void"
+      ] [
+        drop parse-token
+        1array #append (read-ffi-params)
+      ] if
+    ] if
+  ] ;
+
+  { } (read-ffi-params) make-ffi-sig
+] ;
+
+\\ Open a shared library by path or short name.
+lib-open: ( path-or-name -- dylib ) [ native.lib-open ] ;
+
+\\ Look up a symbol in a shared library. Use bound-symbol for a one-shot lookup+bind.
+lib-symbol: ( dylib name -- ffi-fn ) [ native.lib-symbol ] ;
+
+\\ Attach an FFI signature to an ffi-fn resource. Use bound-symbol for a one-shot lookup+bind.
+bind-sig: ( ffi-fn sig -- ffi-fn ) [ native.bind-sig ] ;
+
+\\ Convenience wrapper to look up a symbol and bind a signature in one step.
+bound-symbol: ( dylib name sig -- ffi-fn ) [
+  -rot> lib-symbol
+  swap bind-sig
+] ;
+
+\\ Call a foreign function via libffi.
+\\ Arguments are consumed from the stack based on the bound signature.
+ffi-call: ( ..args ffi-fn -- result ) [ native.ffi-call ] ;
+
+\\ Bind an FFI close function to a resource.
+\\ The ffi-fn must have signature ( ptr -> void ).
+\\ When resource-close is called, the bound function is invoked via libffi.
+bind-close: ( resource ffi-fn -- ) [ native.bind-close ] ;
+
+\\ Create a C-callable function pointer from a 1z quotation and FFI signature.
+\\ The returned resource can be passed as a ptr:ffi-callback argument to ffi-call.
+\\ Close the resource when done to free the closure memory.
+ffi-callback: ( quotation sig -- ffi-callback ) [ native.ffi-callback ] ;
+
+\\ Extract the raw buffer pointer and length from a byte array.
+\\ The resource wraps the byte array's internal buffer; it becomes
+\\ dangling if the byte array is resized or freed.
+bytes>ffi-ptr+len: ( byte-array -- resource fixnum ) [ native.bytes-raw-ptr ] ;
+
+\\ Build one FFI binding entry in the accumulator mutable map.
+\\ Looks up the C symbol in the dylib, binds the signature, curries
+\\ into a self-contained [ ffi-call ] quotation, and stores it by name.
+(build-ffi-entry): ( mmap dylib word-name c-symbol sig -- mmap dylib ) [
+  3 pick-n -rot> bound-symbol
+  [ ffi-call ] curry
+  <rot- [ @set! ] dip
+] ;
+
+\\ Parse-time block syntax for declaring multiple FFI bindings.
+\\ Each entry is: word-name: "c_symbol" ffi{ sig }
+\\ Produces a quotation ( dylib -- mmap ) that resolves all symbols
+\\ and builds a hashtable of callable quotations.
+ffi-def{: parse-time [
+  (read-ffi-def): ( accum -- accum ) [
+    peek-token dup "}" = [
+      drop parse-token drop
+    ] [
+      drop
+      parse-token dup #len 1 - 0 swap #slice
+      parse-literal
+      parse-literal
+      [ (build-ffi-entry) ] curry curry curry
+      compose
+      (read-ffi-def)
+    ] if
+  ] ;
+
+  [ M{ } swap ]
+  (read-ffi-def)
+  [ drop ] compose
+] ;

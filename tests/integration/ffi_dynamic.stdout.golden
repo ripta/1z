@@ -1,0 +1,41 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ <resource:dylib> ]
+PASS: lib-open returns dylib resource
+Stack: [ ]
+Stack: [ <resource:dylib> ]
+PASS: dylib is a resource
+Stack: [ ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+PASS: lib-symbol returns ffi-fn resource
+Stack: [ <resource:dylib> ]
+Stack: [ ]
+Stack: [ <resource:dylib> ]
+PASS: toy_strlen is resource
+Stack: [ <resource:dylib> ]
+PASS: toy_greeting is resource
+Stack: [ <resource:dylib> ]
+PASS: toy_checksum is resource
+Stack: [ <resource:dylib> ]
+PASS: toy_open is resource
+Stack: [ <resource:dylib> ]
+Stack: [ ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+PASS: ffi-fn is a resource
+Stack: [ <resource:dylib> ]
+Stack: [ ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib (closed)> ]
+PASS: closed dylib display
+Stack: [ ]
+Stack: [ [ "/nonexistent/path/libfake.dylib" native.lib-open ] ]
+PASS: invalid path throws ffi-library-not-found
+Stack: [ ]
+Stack: [ [ toy-lib-path native.lib-open dup "nonexistent_symbol_xyz" native.lib-symbol swap resource-close ] ]
+PASS: invalid symbol throws ffi-symbol-not-found
+Stack: [ ]
+Stack: [ [ toy-lib-path native.lib-open dup resource-close "toy_add" native.lib-symbol ] ]
+PASS: symbol lookup after close throws use-after-close
+Stack: [ ]

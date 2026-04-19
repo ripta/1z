@@ -1,0 +1,44 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> <resource:toy-counter> ]
+Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> <resource:toy-counter> ]
+Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> <resource:toy-counter> ]
+Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> <resource:toy-counter> ]
+Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> <resource:toy-counter> ]
+Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> <resource:toy-counter> 3 ]
+PASS: toy counter after 3 increments
+Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> <resource:toy-counter> ]
+Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> [ toy-lib-path lib-open dup "toy_open" ffi-sig{ params: { } return-type: "ptr:toy-counter" } bound-symbol ffi-call over "toy_close" ffi-sig{ params: { "ptr" } return-type: "void" } bound-symbol over swap bind-close dup resource-close swap "toy_read" ffi-sig{ params: { "ptr:toy-counter" } return-type: "i32" } bound-symbol ffi-call ] ]
+PASS: use-after-close after resource-close via bind-close
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> B{ 0x00 0x00 0x00 0x00 0x00 } <resource:ffi-bytes> 5 ]
+Stack: [ <resource:dylib> <resource:ffi-fn> B{ 0x2A 0x2A 0x2A 0x2A 0x2A } ]
+PASS: byte 0 filled with 42
+Stack: [ <resource:dylib> <resource:ffi-fn> B{ 0x2A 0x2A 0x2A 0x2A 0x2A } ]
+PASS: byte 1 filled with 42
+Stack: [ <resource:dylib> <resource:ffi-fn> B{ 0x2A 0x2A 0x2A 0x2A 0x2A } ]
+PASS: byte 2 filled with 42
+Stack: [ <resource:dylib> <resource:ffi-fn> B{ 0x2A 0x2A 0x2A 0x2A 0x2A } ]
+PASS: byte 3 filled with 42
+Stack: [ <resource:dylib> <resource:ffi-fn> B{ 0x2A 0x2A 0x2A 0x2A 0x2A } ]
+PASS: byte 4 filled with 42
+Stack: [ <resource:dylib> <resource:ffi-fn> B{ 0x2A 0x2A 0x2A 0x2A 0x2A } ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> [ 42 "not-a-resource" native.bind-close ] ]
+PASS: bind-close on non-resource throws type-mismatch
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> [ toy-lib-path lib-open "toy_close" native.lib-symbol "test" <test-resource> swap native.bind-close ] ]
+PASS: bind-close without sig throws ffi-call-failed
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> [ toy-lib-path lib-open "toy_add" native.lib-symbol ffi-sig{ params: { "i32" "i32" } return-type: "i32" } native.bind-sig "test" <test-resource> swap native.bind-close ] ]
+PASS: bind-close with wrong sig throws ffi-type-mismatch
+Stack: [ <resource:dylib> ]
+Stack: [ ]

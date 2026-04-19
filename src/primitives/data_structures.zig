@@ -55,13 +55,23 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
             .push_literal => |v| switch (v) {
                 .symbol => |s| s,
                 .string => |s| s,
-                else => return error.InvalidHashSyntax,
+                else => {
+                    const brief = helpers.formatValueBrief(ctx.arena.allocator(), v, 20) catch helpers.valueTypeName(v);
+                    helpers.setErrorContext(ctx, "expected symbol or string key, got {s} {s}", .{ helpers.valueTypeName(v), brief });
+                    return error.InvalidHashSyntax;
+                },
             },
-            .call_word => return error.InvalidHashSyntax,
+            .call_word => |name| {
+                helpers.setErrorContext(ctx, "expected symbol or string key, got word '{s}'", .{name});
+                return error.InvalidHashSyntax;
+            },
         };
         i += 1;
 
-        if (i >= instrs.len) return error.InvalidHashSyntax;
+        if (i >= instrs.len) {
+            helpers.setErrorContext(ctx, "missing value after key '{s}'", .{key});
+            return error.InvalidHashSyntax;
+        }
 
         // Get the value - could be a literal or need execution
         const val_instr = instrs[i];
@@ -71,7 +81,10 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
                 // Execute the remaining instructions to get the value
                 // TODO(ripta): figure out supporting beyond single-words
                 try ctx.executeQuotation(.{ .instructions = instrs[i .. i + 1] });
-                break :blk ctx.stack.pop() catch return error.InvalidHashSyntax;
+                break :blk ctx.stack.pop() catch {
+                    helpers.setErrorContext(ctx, "value for key '{s}' produced no result", .{key});
+                    return error.InvalidHashSyntax;
+                };
             },
         };
         i += 1;
@@ -196,13 +209,23 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
             .push_literal => |v| switch (v) {
                 .symbol => |s| s,
                 .string => |s| s,
-                else => return error.InvalidHashSyntax,
+                else => {
+                    const brief = helpers.formatValueBrief(ctx.arena.allocator(), v, 20) catch helpers.valueTypeName(v);
+                    helpers.setErrorContext(ctx, "expected symbol or string key, got {s} {s}", .{ helpers.valueTypeName(v), brief });
+                    return error.InvalidHashSyntax;
+                },
             },
-            .call_word => return error.InvalidHashSyntax,
+            .call_word => |name| {
+                helpers.setErrorContext(ctx, "expected symbol or string key, got word '{s}'", .{name});
+                return error.InvalidHashSyntax;
+            },
         };
         i += 1;
 
-        if (i >= instrs.len) return error.InvalidHashSyntax;
+        if (i >= instrs.len) {
+            helpers.setErrorContext(ctx, "missing value after key '{s}'", .{key});
+            return error.InvalidHashSyntax;
+        }
 
         // Get the value - could be a literal or need execution
         const val_instr = instrs[i];
@@ -210,7 +233,10 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
             .push_literal => |v| v,
             .call_word => blk: {
                 try ctx.executeQuotation(.{ .instructions = instrs[i .. i + 1] });
-                break :blk ctx.stack.pop() catch return error.InvalidHashSyntax;
+                break :blk ctx.stack.pop() catch {
+                    helpers.setErrorContext(ctx, "value for key '{s}' produced no result", .{key});
+                    return error.InvalidHashSyntax;
+                };
             },
         };
         i += 1;

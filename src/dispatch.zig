@@ -32,6 +32,7 @@ pub fn dispatchTypeName(val: Value) []const u8 {
         .set => "set",
         .mutable_map => "mutable-map",
         .stream => "stream",
+        .resource => |r| r.type_name,
         .parameter => "parameter",
         .module => "module",
         .marker => "marker",
@@ -61,7 +62,7 @@ pub fn dispatchEnumName(val: Value) ?[]const u8 {
 /// at least one operand satisfies this.
 pub fn isUserType(val: Value) bool {
     return switch (val) {
-        .tagged, .struct_instance => true,
+        .tagged, .struct_instance, .resource => true,
         else => false,
     };
 }

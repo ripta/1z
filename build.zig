@@ -11,6 +11,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    root_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
+    root_module.addIncludePath(b.path("ext/toy"));
+    root_module.linkSystemLibrary("ffi", .{});
+    addFfiIncludePath(b, root_module, target);
 
     // Set version as a build option
     const options = b.addOptions();
@@ -62,6 +66,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    test_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
+    test_module.addIncludePath(b.path("ext/toy"));
+    test_module.linkSystemLibrary("ffi", .{});
+    addFfiIncludePath(b, test_module, target);
     test_module.addOptions("build_options", options);
 
     const lib_unit_tests = b.addTest(.{
@@ -72,9 +80,27 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
 
+    // Shared library build for dynamic FFI tests
+    const toy_shared_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    toy_shared_module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
+    toy_shared_module.addIncludePath(b.path("ext/toy"));
+    const toy_shared = b.addLibrary(.{
+        .name = "toy",
+        .root_module = toy_shared_module,
+        .linkage = .dynamic,
+    });
+    const install_toy_shared = b.addInstallArtifact(toy_shared, .{
+        .dest_dir = .{ .override = .{ .custom = "ext" } },
+    });
+
     // Integration tests
     const integration_test_step = b.step("integration-test", "Run integration tests");
     integration_test_step.dependOn(&run_lib_unit_tests.step);
+    integration_test_step.dependOn(&install_toy_shared.step);
 
     // Update golden files step
     const update_golden_step = b.step("update-golden", "Update golden files for integration tests");
@@ -146,6 +172,10 @@ pub fn build(b: *std.Build) void {
 
         // Integration test: compare against golden file if it exists
         const test_run = b.addRunArtifact(exe);
+        // FFI tests dlopen zig-out/ext/libtoy.{dylib,so}; without this explicit
+        // dependency, a test_run can race the install_toy_shared step and fail
+        // before the shared object is in place.
+        test_run.step.dependOn(&install_toy_shared.step);
         if (show_stack) {
             test_run.addArg("--show-stack");
         }
@@ -216,6 +246,7 @@ pub fn build(b: *std.Build) void {
 
         // Update golden: capture stdout and write to .stdout.golden file
         const update_run = b.addRunArtifact(exe);
+        update_run.step.dependOn(&install_toy_shared.step);
         if (show_stack) {
             update_run.addArg("--show-stack");
         }
@@ -331,4 +362,17 @@ pub fn build(b: *std.Build) void {
     }
 
     update_fmt_golden_step.dependOn(&update_fmt_files.step);
+}
+
+fn addFfiIncludePath(b: *std.Build, module: *std.Build.Module, target: std.Build.ResolvedTarget) void {
+    // @cInclude("ffi.h") needs an extra include path on macOS where the
+    // SDK places ffi.h under <sysroot>/usr/include/ffi/.  On Linux the
+    // header is already in the default multiarch search path.
+    if (target.result.os.tag.isDarwin()) {
+        if (std.zig.system.darwin.getSdk(b.allocator, &target.result)) |sdk| {
+            module.addSystemIncludePath(.{
+                .cwd_relative = b.fmt("{s}/usr/include/ffi", .{sdk}),
+            });
+        }
+    }
 }

@@ -1,0 +1,2 @@
+\ Test that hash syntax errors report the invalid key type.
+H{ 42 "foo" }

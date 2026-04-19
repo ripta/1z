@@ -16,6 +16,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "parse-tokens-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, return as string array.", .func = nativeParseTokensUntil },
     .{ .name = "parse-values-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, executing parse-time words. Return as array.", .func = nativeParseValuesUntil },
     .{ .name = "parse-token", .stack_effect = "-- string", .doc = "Read one raw token from the tokenizer, skipping comments and whitespace.", .func = nativeParseToken },
+    .{ .name = "peek-token", .stack_effect = "-- string", .doc = "Return the next token without consuming it. Repeated calls return the same token until parse-token or another consuming primitive advances past it.", .func = nativePeekToken },
     .{ .name = "parse-literal", .stack_effect = "-- value", .doc = "Read the next literal value from the tokenizer.", .func = nativeParseLiteral },
 };
 
@@ -115,6 +116,20 @@ fn nativeParseToken(ctx: *Context) anyerror!void {
     return error.ParseError;
 }
 
+/// peek-token ( -- string ) - Return the next token without consuming it
+fn nativePeekToken(ctx: *Context) anyerror!void {
+    const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
+    const alloc = ctx.quotationAllocator();
+    while (tokenizer.nextOrYield()) |tok| {
+        if (isSkippable(tok.kind)) continue;
+        tokenizer.peeked = tok;
+        const token_copy = try alloc.dupe(u8, tok.text);
+        try ctx.stack.push(.{ .string = token_copy });
+        return;
+    }
+    return error.ParseError;
+}
+
 /// parse-literal ( -- value ) - Read the next literal from the tokenizer
 fn nativeParseLiteral(ctx: *Context) anyerror!void {
     const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
@@ -161,6 +176,20 @@ fn nativeParseLiteral(ctx: *Context) anyerror!void {
         if (tokenizer_mod.parseFloat(token)) |f| {
             try ctx.stack.push(.{ .float = f });
             return;
+        }
+
+        if (ctx.lookupWord(token)) |word| {
+            if (word.parse_time) {
+                const pre_depth = ctx.stack.depth();
+                switch (word.action) {
+                    .native => |func| try func(ctx),
+                    .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
+                }
+                const post_depth = ctx.stack.depth();
+                if (post_depth > pre_depth) return;
+                helpers.setErrorContext(ctx, "parse-literal: parse-time word '{s}' did not produce a value", .{token});
+                return error.TypeMismatch;
+            }
         }
 
         helpers.setErrorContext(ctx, "parse-literal: not a recognized literal: {s}", .{token});

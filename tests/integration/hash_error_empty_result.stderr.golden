@@ -1,0 +1,1 @@
+tests/integration/hash_error_empty_result.1z:3: error 'invalid-hash-syntax' value for key 'name' produced no result

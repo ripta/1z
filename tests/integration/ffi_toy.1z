@@ -1,0 +1,75 @@
+use "testing" ;
+
+\\ toy-add: positive integers
+3 4 native.toy-add
+7
+"toy-add positive"
+assert=
+
+\\ toy-add: negative integers
+-10 3 native.toy-add
+-7
+"toy-add negative"
+assert=
+
+\\ toy-strlen: non-empty string
+"hello" native.toy-strlen
+5
+"toy-strlen non-empty"
+assert=
+
+\\ toy-strlen: empty string
+"" native.toy-strlen
+0
+"toy-strlen empty"
+assert=
+
+\\ toy-greeting: round-trip
+"world" native.toy-greeting
+"Hello, world!"
+"toy-greeting"
+assert=
+
+\\ toy-checksum: byte array
+B{ 1 2 3 4 } native.toy-checksum
+10
+"toy-checksum"
+assert=
+
+\\ toy-fill: mutates byte array in place
+B{ 0 0 0 } dup 42 native.toy-fill
+B{ 42 42 42 }
+"toy-fill"
+assert=
+
+\\ toy-open: returns a resource with type toy-counter
+native.toy-open type-of
+toy-counter:
+"toy-open type"
+assert=
+
+\\ toy-open + toy-read: initial value is 0
+native.toy-open dup native.toy-read
+0
+"toy-read initial"
+assert=
+resource-close
+
+\\ toy-increment + toy-read: lifecycle
+native.toy-open
+dup native.toy-increment
+dup native.toy-increment
+dup native.toy-increment
+dup native.toy-read
+3
+"toy-read after 3 increments"
+assert=
+resource-close
+
+\\ use-after-close: toy-read throws EUseAfterClose
+[ native.toy-open dup resource-close native.toy-read ]
+use-after-close: "use-after-close on toy-read" assert-error-type
+
+\\ use-after-close: toy-increment throws EUseAfterClose
+[ native.toy-open dup resource-close native.toy-increment ]
+use-after-close: "use-after-close on toy-increment" assert-error-type

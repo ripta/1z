@@ -1,0 +1,79 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> -42 ]
+PASS: toy_negate_i8(42) = -42
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 1 ]
+PASS: toy_negate_i8(-1) = 1
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 3000 ]
+PASS: toy_add_i16(1000, 2000) = 3000
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> -50 ]
+PASS: toy_add_i16(-100, 50) = -50
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 50000 ]
+PASS: toy_add_u16(40000, 10000) = 50000
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 3.75 ]
+PASS: toy_float_add(1.5, 2.25) = 3.75
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> t ]
+PASS: toy_is_positive(5) = t
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> f ]
+PASS: toy_is_positive(-3) = f
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> f ]
+PASS: toy_is_positive(0) = f
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 1 ]
+PASS: toy_bool_to_int(t) = 1
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 0 ]
+PASS: toy_bool_to_int(f) = 0
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 12345 ]
+PASS: toy_usize_identity(12345) = 12345
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 0 ]
+PASS: toy_usize_identity(0) = 0
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> -42 ]
+PASS: toy_isize_negate(42) = -42
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 100 ]
+PASS: toy_isize_negate(-100) = 100
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ ]

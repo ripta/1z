@@ -1,11 +1,20 @@
 steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--build-arg'
+      - 'BASE_IMAGE=gcr.io/$PROJECT_ID/zag:v0.15.2.1'
+      - '--tag'
+      - '1z-build:local'
+      - '.'
+
   - name: 'bash'
     args:
       - -c
       - |
         chown -R 65532:999 /workspace
 
-  - name: 'gcr.io/$PROJECT_ID/zag:v0.15.2.1'
+  - name: '1z-build:local'
     env:
       - ZIG_GLOBAL_CACHE_DIR=/home/build/.cache/zig
       - ZIG_LOCAL_CACHE_DIR=/home/build/.zig-cache

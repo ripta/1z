@@ -1,0 +1,64 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 3 2 ]
+PASS: toy_divmod remainder
+Stack: [ <resource:dylib> <resource:ffi-fn> 3 ]
+PASS: toy_divmod quotient
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 7 0 ]
+PASS: toy_add_with_carry carry
+Stack: [ <resource:dylib> <resource:ffi-fn> 7 ]
+PASS: toy_add_with_carry result
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 0.0 1.0 ]
+PASS: toy_sincos_approx cos(0)
+Stack: [ <resource:dylib> <resource:ffi-fn> 0.0 ]
+PASS: toy_sincos_approx sin(0)
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> t f ]
+PASS: toy_classify(5) is_zero
+Stack: [ <resource:dylib> <resource:ffi-fn> t ]
+PASS: toy_classify(5) is_positive
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> f t ]
+PASS: toy_classify(0) is_zero
+Stack: [ <resource:dylib> <resource:ffi-fn> f ]
+PASS: toy_classify(0) is_positive
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> f f ]
+PASS: toy_classify(-3) is_zero
+Stack: [ <resource:dylib> <resource:ffi-fn> f ]
+PASS: toy_classify(-3) is_positive
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 3000000 ]
+PASS: toy_widen_add result
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 42 ]
+PASS: toy_double_u8(21)
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 3.75 ]
+PASS: toy_f32_out(1.5, 2.25)
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> [ toy-lib-path lib-open dup "toy_add" lib-symbol ffi-sig{ params: { "i32" } return-type: "out-i32" } bind-sig drop swap resource-close ] ]
+PASS: out-param as return type rejected
+Stack: [ <resource:dylib> ]
+Stack: [ ]

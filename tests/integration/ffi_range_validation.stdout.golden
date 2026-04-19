@@ -1,0 +1,73 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+PASS: ffi-range-error
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+PASS: ffi-range-error
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+PASS: ffi-range-error
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+PASS: ffi-range-error
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+PASS: ffi-range-error
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+PASS: ffi-range-error
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+PASS: ffi-range-error
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+PASS: ffi-range-error
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+PASS: ffi-range-error
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+PASS: ffi-range-error
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+PASS: ffi-range-error
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> -128 ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> -127 ]
+PASS: toy_negate_i8(127) = -127
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 255 ]
+PASS: toy_add(u8:0, u8:255) = 255
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 0 ]
+PASS: toy_usize_identity(0) = 0
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 18446744073709551615 ]
+PASS: toy_u64_max returns a bignum
+Stack: [ <resource:dylib> <resource:ffi-fn> 18446744073709551615 ]
+PASS: toy_u64_max = UINT64_MAX
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ ]

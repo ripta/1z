@@ -1,0 +1,2 @@
+\ Test that hash syntax errors report when a word is used as key.
+H{ dup "foo" }

@@ -1,0 +1,62 @@
+use "testing" ;
+use "ffi" ;
+use "math" ;
+
+\\ Load system libm by bare name.
+"m" lib-open
+
+\\ sin(0.0) = 0.0
+dup "sin" lib-symbol ffi{ f64 -> f64 } bind-sig
+0.0 1 pick-n ffi-call
+0.0 "sin(0.0) = 0.0" assert=
+drop
+
+\\ cos(0.0) = 1.0
+dup "cos" lib-symbol ffi{ f64 -> f64 } bind-sig
+0.0 1 pick-n ffi-call
+1.0 "cos(0.0) = 1.0" assert=
+drop
+
+\\ sqrt(4.0) = 2.0
+dup "sqrt" lib-symbol ffi{ f64 -> f64 } bind-sig
+4.0 1 pick-n ffi-call
+2.0 "sqrt(4.0) = 2.0" assert=
+drop
+
+\\ sqrt(9.0) = 3.0
+dup "sqrt" lib-symbol ffi{ f64 -> f64 } bind-sig
+9.0 1 pick-n ffi-call
+3.0 "sqrt(9.0) = 3.0" assert=
+drop
+
+\\ pow(2.0, 10.0) = 1024.0
+dup "pow" lib-symbol ffi{ f64 f64 -> f64 } bind-sig
+2.0 10.0 2 pick-n ffi-call
+1024.0 "pow(2.0, 10.0) = 1024.0" assert=
+drop
+
+\\ floor(3.7) = 3.0
+dup "floor" lib-symbol ffi{ f64 -> f64 } bind-sig
+3.7 1 pick-n ffi-call
+3.0 "floor(3.7) = 3.0" assert=
+drop
+
+\\ ceil(3.2) = 4.0
+dup "ceil" lib-symbol ffi{ f64 -> f64 } bind-sig
+3.2 1 pick-n ffi-call
+4.0 "ceil(3.2) = 4.0" assert=
+drop
+
+\\ sqrtf(4.0) = 2.0 (exercises f32 type)
+dup "sqrtf" lib-symbol ffi{ f32 -> f32 } bind-sig
+4.0 1 pick-n ffi-call
+2.0 "sqrtf(4.0) = 2.0" assert=
+drop
+
+\\ sqrtf(9.0) = 3.0
+dup "sqrtf" lib-symbol ffi{ f32 -> f32 } bind-sig
+9.0 1 pick-n ffi-call
+3.0 "sqrtf(9.0) = 3.0" assert=
+drop
+
+resource-close

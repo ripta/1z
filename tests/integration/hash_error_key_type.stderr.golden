@@ -1,0 +1,1 @@
+tests/integration/hash_error_key_type.1z:2: error 'invalid-hash-syntax' expected symbol or string key, got fixnum 42

@@ -48,6 +48,7 @@ Stack: [ ]
 <buffered-channel> ( n -- ch )
 <channel> ( -- ch )
 <pipe> ( -- rd wr )
+<test-resource> ( name -- resource )
 = ( a b -- ? )
 > ( a b -- ? )
 >bytes ( string -- byte-array )
@@ -56,6 +57,7 @@ Stack: [ ]
 >float ( x -- f )
 >integer ( f -- n )
 >iterator ( seq -- iterator )
+>module ( name hashtable -- module )
 >quotation ( name -- quotation )
 >string ( value -- string )
 >string-base ( n base -- str )
@@ -148,12 +150,15 @@ parse-token ( -- string )
 parse-tokens-until ( delimiter -- array )
 parse-until ( delimiter -- quotation )
 parse-values-until ( delimiter -- array )
+peek-token ( -- string )
 pick-n ( n -- val )
 print-benchmark-report
 receive ( ch -- val )
 recover ( try-quot recover-quot -- )
 rem ( a b -- r )
 resolve ( addr -- addrs )
+resource-close ( resource -- )
+resource? ( val -- bool )
 rethrow ( error -- )
 select ( array -- val ch )
 send ( val ch -- )
@@ -258,6 +263,7 @@ EStackUnderflow
 ETypeMismatch
 EUnexpectedEOF
 EUnknownWord
+EUseAfterClose
 EUserRethrown
 EUserThrown
 H{

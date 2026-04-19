@@ -1,0 +1,40 @@
+\ lib/matrix.1z - Matrix literal syntax
+\
+\ matrix{ 1 2 ; 3 4 } produces { { 1 2 } { 3 4 } }
+\
+\ Semicolons terminate rows. Every semicolon starts a new row, so
+\ empty rows and trailing semicolons are preserved literally:
+\   matrix{ 1 ; ; 2 }  =>  { { 1 } { } { 2 } }
+\   matrix{ 1 ; }       =>  { { 1 } { } }
+\   matrix{ }            =>  { { } }
+
+\\ Parse-time word for matrix literals.
+\\ matrix{ v1 v2 ; v3 v4 } produces a nested array { { v1 v2 } { v3 v4 } }.
+matrix{: parse-time [
+  \ Read values into a row until ";" or "}" is hit.
+  \ Returns the completed row array and the delimiter string.
+  (read-matrix-row): ( accum -- array delimiter ) [
+    peek-token
+    dup ";" = [
+      drop parse-token drop ";"
+    ] [
+      dup "}" = [
+        drop parse-token drop "}"
+      ] [
+        drop parse-literal 1array #append (read-matrix-row)
+      ] if
+    ] if
+  ] ;
+
+  \ Read rows until "}" terminates the matrix.
+  (read-matrix): ( rows -- matrix ) [
+    { } (read-matrix-row)
+    ";" =
+    [ 1array #append (read-matrix) ]
+    [ 1array #append ]
+    if
+  ] ;
+
+  \ Entrypoint
+  { } (read-matrix)
+] ;
