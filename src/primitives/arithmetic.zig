@@ -340,6 +340,7 @@ pub fn nativeMulWrap(ctx: *Context) anyerror!void {
 /// = ( a b -- ? ) - Equality comparison
 pub fn nativeEq(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "=")) return;
+    if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .eq)) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     if (a == .fixnum and b == .float) {
@@ -375,6 +376,7 @@ pub fn nativeInnerEq(ctx: *Context) anyerror!void {
 /// < ( a b -- ? ) - Less than
 pub fn nativeLt(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "<")) return;
+    if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .lt)) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     switch (a) {
@@ -514,6 +516,7 @@ fn nativeFloatParts(ctx: *Context) anyerror!void {
 /// > ( a b -- ? ) - Greater than
 pub fn nativeGt(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, ">")) return;
+    if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .gt)) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     switch (a) {

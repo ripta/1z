@@ -100,6 +100,52 @@ pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
     return false;
 }
 
+/// Try to derive a comparison result from a `cmp` dispatch method.
+///
+/// When a user type has a `cmp` method but no direct `=`/`<`/`>` method,
+/// this function dispatches `cmp`, pops the result, and converts it to a
+/// boolean based on the requested comparison. Accepts both a raw fixnum
+/// (negative/zero/positive) and an ordering enum variant (ordering:lt,
+/// ordering:eq, ordering:gt).
+///
+/// XXX(ripta): This reaches into 1z runtime to look up ordering:* enum variants.
+pub fn tryDispatchBinaryViaCmp(ctx: *Context, comptime op: enum { eq, lt, gt }) !bool {
+    if (ctx.stack.depth() < 2) return false;
+
+    const a = try ctx.stack.peekN(1);
+    const b = try ctx.stack.peek();
+    if (!dispatch_mod.isUserType(a) and !dispatch_mod.isUserType(b)) return false;
+
+    if (lookupBinaryWithFallback(ctx, "cmp", a, b)) |entry| {
+        try ctx.executeQuotation(.{ .instructions = entry.body });
+        const result = try ctx.stack.pop();
+        const boolean = switch (result) {
+            .fixnum => |cmp_val| switch (op) {
+                .eq => cmp_val == 0,
+                .lt => cmp_val < 0,
+                .gt => cmp_val > 0,
+            },
+            .tagged => |t| blk: {
+                const name = t.tag.name;
+                if (std.mem.eql(u8, name, "ordering:lt")) {
+                    break :blk op == .lt;
+                } else if (std.mem.eql(u8, name, "ordering:eq")) {
+                    break :blk op == .eq;
+                } else if (std.mem.eql(u8, name, "ordering:gt")) {
+                    break :blk op == .gt;
+                } else {
+                    return error.TypeMismatch;
+                }
+            },
+            else => return error.TypeMismatch,
+        };
+        try ctx.stack.push(.{ .boolean = boolean });
+        return true;
+    }
+
+    return false;
+}
+
 /// Try to dispatch a generic word via the dispatch table.
 ///
 /// Unlike the tryDispatchBinary / tryDispatchUnary versions used by native ops,

@@ -65,7 +65,13 @@ result:err>: ( result -- error ) [ unmake-result:err ] ;
 ordering: enum{ lt eq gt } ;
 
 \\ Three-way comparison. Returns an ordering enum variant.
-cmp: ( a b -- ordering ) [ native.cmp dup 0 < [ drop ordering:lt ] [ 0 > [ ordering:gt ] [ ordering:eq ] if ] if ] ;
+cmp: generic ( a b -- ordering ) [
+  native.cmp dup 0 <
+  [ drop ordering:lt ] [
+    0 > [ ordering:gt ] [ ordering:eq ] if
+  ]
+  if
+] ;
 
 \\ Method dispatch registration syntax.
 \   word: method{ type1 type2 } [ body ] ;

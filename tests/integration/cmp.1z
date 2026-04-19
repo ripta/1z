@@ -58,6 +58,29 @@ unmake-result:err error-type: @get ENotComparable "string vs fixnum error type" 
 [ { } 1 cmp ] try dup result:err? "array vs fixnum is error" assert-true
 unmake-result:err error-type: @get ENotComparable "array vs fixnum error type" assert=
 
+"cmp fallback: = derived from cmp" test-section
+temperature: virtual{ fixnum } ;
+cmp: method{ temperature temperature } [ swap unmake-temperature swap unmake-temperature cmp ] ;
+20 >temperature 30 >temperature = f "different temps not equal" assert=
+25 >temperature 25 >temperature = t "same temps equal" assert=
+
+"cmp fallback: < derived from cmp" test-section
+10 >temperature 20 >temperature < t "10 < 20" assert=
+20 >temperature 10 >temperature < f "20 not < 10" assert=
+15 >temperature 15 >temperature < f "15 not < 15" assert=
+
+"cmp fallback: > derived from cmp" test-section
+20 >temperature 10 >temperature > t "20 > 10" assert=
+10 >temperature 20 >temperature > f "10 not > 20" assert=
+15 >temperature 15 >temperature > f "15 not > 15" assert=
+
+"cmp fallback: direct method takes precedence" test-section
+weight: virtual{ fixnum } ;
+cmp: method{ weight weight } [ swap unmake-weight swap unmake-weight cmp ] ;
+=: method{ weight weight } [ swap unmake-weight swap unmake-weight = ] ;
+50 >weight 50 >weight = t "direct = method used" assert=
+30 >weight 50 >weight < t "< still derives from cmp" assert=
+
 "cmp match on result" test-section
 3 5 cmp {
   ordering:lt: [ "less" ]
