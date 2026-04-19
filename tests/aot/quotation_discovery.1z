@@ -1,0 +1,9 @@
+\ Verify quotation body discovery finds all reachable quotation bodies,
+\ including nested ones, during AOT freeze.
+
+\ Two top-level quotation literals
+5 [ 2 * ] call .
+10 [ 1 + ] call .
+
+\ A nested quotation (outer + inner = 2 more bodies)
+3 [ [ 1 + ] call 2 * ] call .

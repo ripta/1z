@@ -17,6 +17,8 @@ pub const AotQuotationDesc = struct {
     quotation_id: u32,
     instructions: []const Instruction,
     c_name: []const u8,
+    inferred_effect: ?ir_codegen.InferredEffect = null,
+    compiled: bool = false,
 };
 
 pub const FreezeResult = struct {
@@ -518,6 +520,40 @@ fn buildAotDescs(
 
     const max_word_id = if (next_id > 0) next_id - 1 else 0;
 
+    // Build a resolver
+    var word_map: std.StringHashMapUnmanaged(AotWordDesc) = .{};
+    defer word_map.deinit(allocator);
+    for (words.items) |w| {
+        try word_map.put(allocator, w.name, w);
+    }
+
+    const FreezeResolverData = struct {
+        map: *const std.StringHashMapUnmanaged(AotWordDesc),
+
+        fn resolve(name_ptr: []const u8, user_data: *anyopaque) ?ir_codegen.ResolvedWord {
+            const self: *const @This() = @ptrCast(@alignCast(user_data));
+            const entry = self.map.getPtr(name_ptr) orelse return null;
+            var result = ir_codegen.ResolvedWord{
+                .word_id = entry.word_id,
+                .input_count = entry.input_count,
+                .output_count = entry.output_count,
+            };
+            if (entry.stack_effect) |*eff| {
+                if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
+                    result.callee_effect = eff;
+                }
+            }
+            return result;
+        }
+    };
+
+    var resolver_data = FreezeResolverData{ .map = &word_map };
+    const resolver = ir_codegen.WordResolver{
+        .resolve = &FreezeResolverData.resolve,
+        .user_data = @ptrCast(&resolver_data),
+        .dispatch_table_ptr = undefined,
+    };
+
     // Sequential ID for quot descriptors
     var quotations = std.ArrayListUnmanaged(AotQuotationDesc){};
     var next_q_id: u32 = 0;
@@ -529,6 +565,7 @@ fn buildAotDescs(
             .quotation_id = id,
             .instructions = body,
             .c_name = c_name,
+            .inferred_effect = ir_codegen.inferQuotationEffect(body, resolver),
         });
     }
     const max_quotation_id = if (next_q_id > 0) next_q_id - 1 else 0;
@@ -926,4 +963,134 @@ test "buildAotDescs assigns sequential quotation IDs" {
     try testing.expectEqualStrings("onez_q_1", result.quotations[1].c_name);
     try testing.expectEqual(q_body_1.ptr, result.quotations[0].instructions.ptr);
     try testing.expectEqual(q_body_2.ptr, result.quotations[1].instructions.ptr);
+
+    // dup: ( a -- a a ) = 1 input, 2 outputs
+    const eff_1 = result.quotations[0].inferred_effect.?;
+    try testing.expectEqual(@as(u8, 1), eff_1.input_count);
+    try testing.expectEqual(@as(u8, 2), eff_1.output_count);
+
+    // swap: ( a b -- b a ) = 2 inputs, 2 outputs
+    const eff_2 = result.quotations[1].inferred_effect.?;
+    try testing.expectEqual(@as(u8, 2), eff_2.input_count);
+    try testing.expectEqual(@as(u8, 2), eff_2.output_count);
+}
+
+test "buildAotDescs infers effect for quotation calling discovered word" {
+    const allocator = testing.allocator;
+    const entry_instrs = try allocator.dupe(Instruction, &[_]Instruction{
+        .{ .op = .{ .call_word = "drop" }, .line = 1 },
+    });
+    defer allocator.free(entry_instrs);
+
+    // A compound word "double" with effect ( n -- n )
+    const double_effect = StackEffect{
+        .inputs = &.{.{ .name = "n" }},
+        .outputs = &.{.{ .name = "n" }},
+    };
+    const double_body = &[_]Instruction{
+        .{ .op = .{ .call_word = "dup" }, .line = 1 },
+        .{ .op = .{ .call_word = "+" }, .line = 1 },
+    };
+
+    // A quotation that calls "double"
+    const q_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 5 } }, .line = 1 },
+        .{ .op = .{ .call_word = "double" }, .line = 1 },
+    };
+
+    var discovered = DiscoveredWords{
+        .names = .{},
+        .defs = .{},
+        .warning_entries = .{},
+        .native_names = .{},
+        .native_defs = .{},
+        .quotation_bodies = .{},
+    };
+    defer discovered.names.deinit(allocator);
+    defer discovered.defs.deinit(allocator);
+    defer discovered.quotation_bodies.deinit(allocator);
+
+    try discovered.names.append(allocator, "double");
+    try discovered.defs.append(allocator, .{
+        .name = "double",
+        .action = .{ .compound = double_body },
+        .stack_effect = double_effect,
+    });
+
+    try discovered.quotation_bodies.append(allocator, q_body);
+
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+    var result = try buildAotDescs(entry_instrs, &discovered, &prelude_words, allocator);
+    defer result.deinit(allocator);
+
+    // Quotation pushes 1, then calls double (1 in, 1 out) => net (0, 1)
+    const eff = result.quotations[0].inferred_effect.?;
+    try testing.expectEqual(@as(u8, 0), eff.input_count);
+    try testing.expectEqual(@as(u8, 1), eff.output_count);
+}
+
+test "buildAotDescs returns null effect for unresolvable quotation" {
+    const allocator = testing.allocator;
+    const entry_instrs = try allocator.dupe(Instruction, &[_]Instruction{
+        .{ .op = .{ .call_word = "drop" }, .line = 1 },
+    });
+    defer allocator.free(entry_instrs);
+
+    // A quotation calling a word not in the discovered set
+    const q_body = &[_]Instruction{
+        .{ .op = .{ .call_word = "unknown-word" }, .line = 1 },
+    };
+
+    var discovered = DiscoveredWords{
+        .names = .{},
+        .defs = .{},
+        .warning_entries = .{},
+        .native_names = .{},
+        .native_defs = .{},
+        .quotation_bodies = .{},
+    };
+    defer discovered.quotation_bodies.deinit(allocator);
+
+    try discovered.quotation_bodies.append(allocator, q_body);
+
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+    var result = try buildAotDescs(entry_instrs, &discovered, &prelude_words, allocator);
+    defer result.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), result.quotations.len);
+    try testing.expect(result.quotations[0].inferred_effect == null);
+}
+
+test "buildAotDescs infers effect for push-only quotation" {
+    const allocator = testing.allocator;
+    const entry_instrs = try allocator.dupe(Instruction, &[_]Instruction{
+        .{ .op = .{ .call_word = "drop" }, .line = 1 },
+    });
+    defer allocator.free(entry_instrs);
+
+    // A quotation that just pushes two values: ( -- a b )
+    const q_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+    };
+
+    var discovered = DiscoveredWords{
+        .names = .{},
+        .defs = .{},
+        .warning_entries = .{},
+        .native_names = .{},
+        .native_defs = .{},
+        .quotation_bodies = .{},
+    };
+    defer discovered.quotation_bodies.deinit(allocator);
+
+    try discovered.quotation_bodies.append(allocator, q_body);
+
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+    var result = try buildAotDescs(entry_instrs, &discovered, &prelude_words, allocator);
+    defer result.deinit(allocator);
+
+    const eff = result.quotations[0].inferred_effect.?;
+    try testing.expectEqual(@as(u8, 0), eff.input_count);
+    try testing.expectEqual(@as(u8, 2), eff.output_count);
 }

@@ -929,7 +929,7 @@ fn collectQuotationFallbacks(
 }
 
 /// Result of inferring a quotation body's stack effect by abstract simulation.
-const InferredEffect = struct {
+pub const InferredEffect = struct {
     input_count: u8,
     output_count: u8,
 };
@@ -949,7 +949,7 @@ const MiniStackEntry = union(enum) {
 /// Uses a low-water-mark algorithm: `input_count = -min_delta` and
 /// `output_count = input_count + final_delta`, where delta tracks the
 /// running net stack depth change.
-fn inferQuotationEffect(
+pub fn inferQuotationEffect(
     instructions: []const Instruction,
     resolver: ?WordResolver,
 ) ?InferredEffect {
