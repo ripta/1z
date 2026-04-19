@@ -284,6 +284,7 @@ boolean? ( val -- ? )
 byte-array? ( val -- ? )
 case ( val branches -- ... )
 choose ( a1 a2 quot -- a )
+cmp ( a b -- ordering )
 column>>
 cond ( branches -- ... )
 do ( pred body -- pred body )
@@ -354,6 +355,13 @@ option:some>hash
 option:some?
 option?
 or ( ? ? -- ? )
+ordering:eq
+ordering:eq?
+ordering:gt
+ordering:gt?
+ordering:lt
+ordering:lt?
+ordering?
 output-stream
 outputs>>
 parameter
