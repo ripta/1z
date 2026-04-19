@@ -90,6 +90,14 @@ pub fn freezeModuleGraphOpts(
             try prelude_words.put(allocator, entry.key_ptr.*, {});
         }
     }
+    // Include global dictionary words containing native primitives, so
+    // that compile-all-prelude can add them to the resolver.
+    {
+        var dict_it = ctx.dictionary.entries.iterator();
+        while (dict_it.next()) |entry| {
+            try prelude_words.put(allocator, entry.key_ptr.*, {});
+        }
+    }
 
     // Phase 1: Execute entry file, collect non-definition instructions.
     // The local frame and pragma frame are kept alive so that lookupWord

@@ -1,31 +1,224 @@
+Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
+Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter
+Warning: '3keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: '2apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'tri' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'tri' parameter 'q' has row-variable effect; quotation call falls back to interpreter
 Warning: 'tri' parameter 'r' has row-variable effect; quotation call falls back to interpreter
 Warning: '2keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'until' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
 Warning: 'until' parameter 'body' has row-variable effect; quotation call falls back to interpreter
-Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'loop' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
 Warning: '4dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '3dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
-Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter
-Warning: '3keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'while' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
 Warning: 'while' parameter 'body' has row-variable effect; quotation call falls back to interpreter
-Warning: '2apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Prelude compilation: 80/301 words compiled (26.6%)
+Prelude compilation: 95/301 words compiled (31.6%)
   word 'output-stream' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word 'do' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'provenance?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+  word 'run-benchmarks' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word '4nip' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word 'quotation?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word '>iterator' cannot be compiled
+      NC.6: calls a word that is not available in the AOT compilation set
+      hint: blocked until the AOT resolver includes this word
+  word '>dispatch-provenance' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word '>option:some' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'module-loaded-hooks' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'result' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'stack-effect-info' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word '>method-info' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word '>on' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'all-words' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'dispatch-provenance>hash' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'option:some>' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word '>iterator(with-cleanup)' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'source-loc>hash' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word '>result:err' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'load' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'ordering' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'set?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'source-loc?' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'ordering:lt?' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word '>option' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word '4keep' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word '#nth?' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word '#all' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'make-method-info' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'module?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'times' cannot be compiled
+      NC.5: calls a quotation whose stack effect is unknown
+      hint: annotate the quotation parameter with a concrete stack effect
+  word 'make-result-error' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'string?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word '#last?' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word 'try' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word 'bi' cannot be compiled
+      NC.5: calls a quotation whose stack effect is unknown
+      hint: annotate the quotation parameter with a concrete stack effect
+  word '3keep' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word 'pragma-get' cannot be compiled
+      NC.6: calls a word that is not available in the AOT compilation set
+      hint: blocked until the AOT resolver includes this word
+  word 'bignum?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'with-input-stream' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word 'type-name' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'make-option:some' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'make-stack-effect-info' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'keep' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word 'parse-quotation' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'cond' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'ordering?' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'make-result:ok' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word '6nip' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word 'unmake-word-info' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'on:unhandled-error?' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'unmake-provenance' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'result-error?' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word '2apply' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word 'unless' cannot be compiled
+      NC.8: a quotation in abstract form must become a concrete runtime value
+      hint: blocked until quotation bodies can be compiled
+  word '>result-error' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word '>source-loc' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word '3nip' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word 'native?' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'input-stream' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'make-stack-effect-param' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'stack-effect-param>hash' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'bytes-alloc-ptr' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'type-has-property?' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'on:module-loaded?' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'result?' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'unmake-result:err' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'result:err>' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'option?' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'bytes>ffi-ptr' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'benchmark-report?' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word '#resize!' cannot be compiled
+      NC.6: calls a word that is not available in the AOT compilation set
+      hint: blocked until the AOT resolver includes this word
+  word 'option:none' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'unmake-stack-effect-param' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'stack-effect-param?' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'type-union?' cannot be compiled
+      NC.2: binary operation has two operands with no known numeric type
+      hint: blocked until polymorphic arithmetic can be compiled
+  word 'error?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'make-source-loc' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'dispatch-provenance?' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'choose' cannot be compiled
+      NC.3: condition is a quotation value in abstract form
+      hint: blocked until quotation bodies can be compiled
+  word 'dispatch-provenance' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'option-payload>hash' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'ignore-errors' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word '>stack-effect-param' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word '>option-payload' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'trace-stack' cannot be compiled
+      NC.5: calls a quotation whose stack effect is unknown
+      hint: annotate the quotation parameter with a concrete stack effect
+  word 'unmake-result:ok' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'do' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'result:ok>' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word '1check' cannot be compiled
@@ -33,100 +226,53 @@ Prelude compilation: 80/301 words compiled (26.6%)
       hint: annotate the quotation parameter with a concrete stack effect
   word 'method-info?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'run-benchmarks' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word '>result' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '4nip' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'quotation?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'reexport' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'receive?' cannot be compiled
       NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'with-iterator' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'word-info?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '>iterator' cannot be compiled
-      NC.6: calls a word that is not available in the AOT compilation set
-      hint: blocked until the AOT resolver includes this word
   word 'unmake-option-payload' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'result:err?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '>option:some' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'module-loaded-hooks' cannot be compiled
-      NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
-  word '>dispatch-provenance' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'result-error' cannot be compiled
-      NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
-  word 'result' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
   word 'defined?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '.' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'stack-effect-info' cannot be compiled
-      NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
   word 'word-info' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word '>method-info' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'tri' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '>on' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'all-words' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+      NC.5: calls a quotation whose stack effect is unknown
+      hint: annotate the quotation parameter with a concrete stack effect
   word 'symbol?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'dispatch-provenance>hash' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '2swap' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'fmt' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'option:some>' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'on:module-loaded' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
   word '2keep' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '>iterator(with-cleanup)' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '2over' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'stack-effect-info>hash' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '>result:err' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'source-loc>hash' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'throw-type-error' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'load' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'unmake-option:some' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'iterator?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'provenance>hash' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'on:unhandled-error' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word 'emit' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'result-error>hash' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'stack-effect-info?' cannot be compiled
@@ -136,39 +282,20 @@ Prelude compilation: 80/301 words compiled (26.6%)
       hint: blocked until AOT literals can be serialized
   word 'until' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'reload' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'ordering' cannot be compiled
-      NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
-  word 'ordering:lt?' cannot be compiled
+  word 'word-markers' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'no-matching-branch' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'set?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '>option' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'word-markers' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'stack-effect-param' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word 'source-loc?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word '>word-info' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'on:word-defined' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word '4keep' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'ordering:eq?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '3dup' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '#nth?' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'on?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'option:some?' cannot be compiled
@@ -178,64 +305,46 @@ Prelude compilation: 80/301 words compiled (26.6%)
   word '#next?' cannot be compiled
       NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'loop' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '#all' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+      NC.5: calls a quotation whose stack effect is unknown
+      hint: annotate the quotation parameter with a concrete stack effect
   word 'option-payload?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'error-type?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'fixnum?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'generic?' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
   word '4dip' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word '>ordering' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'on:exit' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word 'make-method-info' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'module?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'word-defined-hooks' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
   word 'type-members' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'vector?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'boolean?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'times' cannot be compiled
-      NC.5: calls a quotation whose stack effect is unknown
-      hint: annotate the quotation parameter with a concrete stack effect
-  word 'make-result-error' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'result-value' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
   word 'error-stream' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word 'string?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '#last?' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word 'result-value' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word '3dip' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'try' cannot be compiled
       NC.12: compilation produced unresolved dynamic calls or abstract stack entries
-  word 'bi' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'mutable-map?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'make-result-value' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '3keep' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'option:some>hash' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
@@ -243,52 +352,38 @@ Prelude compilation: 80/301 words compiled (26.6%)
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
   word 'bytes-resize!' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'pragma-get' cannot be compiled
       NC.6: calls a word that is not available in the AOT compilation set
       hint: blocked until the AOT resolver includes this word
   word 'on' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
   word 'parameter?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'bignum?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'result-value>hash' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'with-input-stream' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'cmp' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'float?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'make-provenance' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'type-name' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'make-option:some' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'result:err>hash' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'make-stack-effect-info' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word '#any' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'keep' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'array?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'option-payload' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
   word 'unmake-result-error' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'stream?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '4dup' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '<rot-' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'unmake-result-value' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'ordering:gt?' cannot be compiled
@@ -297,35 +392,20 @@ Prelude compilation: 80/301 words compiled (26.6%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'unmake-dispatch-provenance' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'bytes-alloc' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'with-output-stream' cannot be compiled
       NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word 'bytes-alloc' cannot be compiled
+      NC.11: instruction pre-scan rejected the word before compilation started
   word 'assert-no-shadow' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'parse-quotation' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'cond' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'make-result:err' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'ordering?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'make-result:ok' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '6nip' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word '>stack-effect-info' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'result-value?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'unmake-word-info' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'option:none?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'on:unhandled-error?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'unmake-provenance' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'method-info>hash' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
@@ -337,39 +417,22 @@ Prelude compilation: 80/301 words compiled (26.6%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word '>result-value' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'result-error?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+  word '#first?' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word 'hash?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'ordering:eq' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word 'hash?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '-rot>' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '2apply' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word '3apply' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'unless' cannot be compiled
-      NC.8: a quotation in abstract form must become a concrete runtime value
-      hint: blocked until quotation bodies can be compiled
-  word '>result-error' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '5nip' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '2dip' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'trace-value' cannot be compiled
-      NC.5: calls a quotation whose stack effect is unknown
-      hint: annotate the quotation parameter with a concrete stack effect
-  word '#first?' cannot be compiled
       NC.12: compilation produced unresolved dynamic calls or abstract stack entries
-  word '>source-loc' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'unmake-source-loc' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '3nip' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+  word '5nip' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
+  word '2dip' cannot be compiled
+      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'result:ok?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'pragma-get?' cannot be compiled
@@ -377,28 +440,12 @@ Prelude compilation: 80/301 words compiled (26.6%)
   word 'ordering:gt' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word 'read-line' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'native?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'byte-array?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'input-stream' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
   word 'make-option-payload' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'make-stack-effect-param' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'stack-effect-param>hash' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'drop-at' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'type-has-property?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'bytes-alloc-ptr' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'on:module-loaded?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'unmake-stack-effect-info' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
@@ -407,30 +454,21 @@ Prelude compilation: 80/301 words compiled (26.6%)
   word 'method-info' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word 'result?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'ffi-ptr+len>bytes' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'unmake-result:err' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'module-cache' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word 'result:err>' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'when' cannot be compiled
       NC.8: a quotation in abstract form must become a concrete runtime value
       hint: blocked until quotation bodies can be compiled
   word 'result:ok>hash' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '@get?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'option?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word '>result:ok' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'bytes>ffi-ptr' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+  word 'make-word-info' cannot be compiled
+      NC.7: takes more than 8 input parameters
+      hint: reduce input parameters to 8 or fewer
   word 'case' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'acquire' cannot be compiled
@@ -438,64 +476,24 @@ Prelude compilation: 80/301 words compiled (26.6%)
   word 'option' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word 'make-word-info' cannot be compiled
-      NC.7: takes more than 8 input parameters
-      hint: reduce input parameters to 8 or fewer
   word 'add-hook' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'benchmark-report?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+      NC.6: calls a word that is not available in the AOT compilation set
+      hint: blocked until the AOT resolver includes this word
   word 'source-loc' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word 'marker?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'unmake-method-info' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '#resize!' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'pick' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'option:none' cannot be compiled
+  word 'marker?' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word 'type-union?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word 'close-iterator' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'unmake-stack-effect-param' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'error?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'stack-effect-param?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'make-source-loc' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'dispatch-provenance?' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'choose' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word '1apply' cannot be compiled
       NC.12: compilation produced unresolved dynamic calls or abstract stack entries
-  word 'dispatch-provenance' cannot be compiled
-      NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
   word 'make-dispatch-provenance' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word '...' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'option-payload>hash' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'ignore-errors' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
-  word '>stack-effect-param' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '>option-payload' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word '>word-info?' cannot be compiled
       NC.12: compilation produced unresolved dynamic calls or abstract stack entries
-  word 'trace-stack' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word 'unmake-result:ok' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
