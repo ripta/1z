@@ -10,7 +10,7 @@ const Primitive = @import("types.zig").Primitive;
 const dispatch_helpers = @import("dispatch_helpers.zig");
 
 pub const primitives = [_]Primitive{
-    .{ .name = "to-string", .stack_effect = "value -- string", .doc = "Convert any value to its string representation, including quotes for strings.", .func = nativeToString },
+    .{ .name = "inspect", .stack_effect = "value -- string", .doc = "Convert any value to its debug string representation, including quotes for strings.", .func = nativeInspect },
     .{ .name = ">string", .stack_effect = "value -- string", .doc = "Convert value to string, strings and symbols pass through as plain strings.", .func = nativeAsString },
     .{ .name = ">symbol", .stack_effect = "string -- symbol", .doc = "Convert string to symbol. The string must be a valid token: non-empty, no whitespace, no leading quote.", .func = nativeToSymbol },
     .{ .name = ">quotation", .stack_effect = "name -- quotation", .doc = "Convert a string or symbol name to a quotation that calls that word. Does not check if the word exists.", .func = nativeToQuotation },
@@ -21,9 +21,11 @@ pub const primitives = [_]Primitive{
     .{ .name = ">string-base", .stack_effect = "n base -- str", .doc = "Convert fixnum or bignum to string in the given base (2-36). Uses lowercase letters for digits above 9.", .func = nativeToStringBase },
 };
 
-/// to-string ( value -- string ) - Convert any value to its string representation,
+/// inspect ( value -- string ) - Convert any value to its debug string representation,
 /// including quotes for strings
-fn nativeToString(ctx: *Context) anyerror!void {
+fn nativeInspect(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchUnary(ctx, "inspect")) return;
+
     const val = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
     var buffer: std.ArrayListUnmanaged(u8) = .{};
@@ -32,7 +34,7 @@ fn nativeToString(ctx: *Context) anyerror!void {
 }
 
 /// >string ( value -- string ) - Convert value to string, strings pass through unquoted,
-/// in contrast to to-string
+/// in contrast to inspect
 fn nativeAsString(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, ">string")) return;
 

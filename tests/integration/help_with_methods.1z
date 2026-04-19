@@ -1,0 +1,19 @@
+use "testing" ;
+use "introspect" ;
+
+\\ A polymorphic word for testing help display with methods.
+greet: generic ( x -- str ) [ drop "hello" ] ;
+greet: method{ float } [ drop "hello float" ] ;
+
+greet: >word? unwrap-or-throw format-word-info
+dup "greet" #in? "help output contains word name" assert-true
+dup "method{ float }" #in? "help output contains method signature" assert-true
+
+\\ Verify ordering: doc then name line then methods.
+dup "A polymorphic word for testing help display with methods.\ngreet ( x -- str )" #in?
+"doc appears before name line" assert-true
+
+dup "\\compound\n\n  method{ float }" #in?
+"methods appear after name line" assert-true
+
+drop

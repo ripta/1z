@@ -30,12 +30,12 @@ fib-iter: ( n -- fib(n) ) [
 
 \ Memoized recursive fibonacci (linear time via caching)
 fib-memo: ( n -- fib(n) ) [
-  dup to-string memo?
+  dup inspect memo?
   [ swap drop ]
   [
     dup 2 < [ ] [
       dup [ dup 1 - fib-memo swap 2 - fib-memo + ] dip
-      over over to-string swap memo!
+      over over inspect swap memo!
       drop
     ] if
   ] if

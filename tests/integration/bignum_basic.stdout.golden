@@ -6,9 +6,9 @@ PASS: negative bignum literal type-of
 Stack: [ ]
 === Bignum display ===
 Stack: [ ]
-PASS: bignum to-string
+PASS: bignum inspect
 Stack: [ ]
-PASS: negative bignum to-string
+PASS: negative bignum inspect
 Stack: [ ]
 === Bignum equality ===
 Stack: [ ]

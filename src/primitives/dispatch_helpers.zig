@@ -55,6 +55,14 @@ fn lookupUnaryWithFallback(ctx: *Context, word_name: []const u8, a: Value) ?disp
 /// (tagged or struct_instance), and if so, looks up a registered method.
 /// If found, executes the method body; operands remain on stack for the
 /// body to consume. Returns true if dispatched, false if not.
+///
+/// Each native that supports user-type dispatch must call this function
+/// explicitly. Only type-switching natives that branch on operand types
+/// (arithmetic, comparison, inspect, sequence ops, etc.) should opt in.
+///
+/// Type-agnostic natives (dup, drop, swap, etc.) must not dispatch.
+///
+/// See also notes in the implementation of `nativeDefineMethod`.
 pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
     if (ctx.stack.depth() < 2) return false;
 
@@ -76,6 +84,9 @@ pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
 /// struct_instance), and if so, looks up a registered method. If found,
 /// executes the method body; operand remains on stack. Returns true if
 /// dispatched, false if not.
+///
+/// Same opt-in rules as tryDispatchBinary: each native that supports
+/// user-type dispatch must call this explicitly.
 pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
     if (ctx.stack.depth() < 1) return false;
 
@@ -190,7 +201,7 @@ test "tryDispatchGeneric dispatches unary method for native type" {
 
     // Register a unary method for "fixnum" type
     const body = &[_]@import("../value.zig").Instruction{
-        .{ .op = .{ .call_word = "to-string" }, .line = 0 },
+        .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
     try ctx.dispatch.register(
         .{ .word_name = "serialize", .type_a = "fixnum", .type_b = dispatch_mod.unary_sentinel },
@@ -203,7 +214,7 @@ test "tryDispatchGeneric dispatches unary method for native type" {
     const result = try tryDispatchGeneric(&ctx, "serialize");
     try std.testing.expect(result);
 
-    // Method should have executed (to-string converts fixnum to string)
+    // Method should have executed (inspect converts fixnum to string)
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     const top = try ctx.stack.pop();
     try std.testing.expectEqualStrings("42", top.string);
@@ -218,7 +229,7 @@ test "tryDispatchGeneric tries binary before unary" {
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
     const unary_body = &[_]@import("../value.zig").Instruction{
-        .{ .op = .{ .call_word = "to-string" }, .line = 0 },
+        .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
 
     try ctx.dispatch.register(

@@ -4,8 +4,8 @@ use "testing" ;
 
 "Parameter creation and get" test-section
 \ Test that output-stream parameter returns stdout by default
-output-stream get to-string "<stream stdout write>" "output-stream get returns stdout" assert=
-input-stream get to-string "<stream stdin read>" "input-stream get returns stdin" assert=
+output-stream get inspect "<stream stdout write>" "output-stream get returns stdout" assert=
+input-stream get inspect "<stream stdin read>" "input-stream get returns stdin" assert=
 "PASS: basic parameter get" print-line
 
 "Custom parameter definition" test-section
@@ -69,7 +69,7 @@ swap stream-close
 "PASS: stream redirection with with-output-stream" print-line
 
 "Parameter value display" test-section
-test-param to-string "<parameter:test-param>" "parameter to-string" assert=
+test-param inspect "<parameter:test-param>" "parameter inspect" assert=
 "PASS: parameter value display" print-line
 
 "Multiple parameters in same scope" test-section

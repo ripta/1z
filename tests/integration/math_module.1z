@@ -113,5 +113,5 @@ inf math.exp infinite? "exp(inf) is infinite" assert-true
 -0.0 abs 0.0 "abs negative zero float" assert=
 
 "abs min_i64 promotes to bignum" test-section
--9223372036854775808 abs to-string "9223372036854775808" "abs min_i64 value" assert=
+-9223372036854775808 abs inspect "9223372036854775808" "abs min_i64 value" assert=
 -9223372036854775808 abs type-of bignum: "abs min_i64 type" assert=

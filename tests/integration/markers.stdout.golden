@@ -11,7 +11,7 @@ PASS: marker? predicate
 Stack: [ ]
 PASS: type-of returns marker:
 Stack: [ ]
-PASS: named marker to-string
+PASS: named marker inspect
 Stack: [ ]
 === Marker identity after naming ===
 Stack: [ ]

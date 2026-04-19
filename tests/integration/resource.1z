@@ -1,13 +1,13 @@
 use "testing" ;
 
 \\ Display: open resource shows <resource:TYPE>
-"test-db" <test-resource> to-string
+"test-db" <test-resource> inspect
 "<resource:test-db>"
 "display open resource"
 assert=
 
 \\ Display: closed resource shows <resource:TYPE (closed)>
-"test-db" <test-resource> dup resource-close to-string
+"test-db" <test-resource> dup resource-close inspect
 "<resource:test-db (closed)>"
 "display closed resource"
 assert=
@@ -45,13 +45,13 @@ assert-false
 assert-false
 
 \\ resource-close: closes successfully
-"test-db" <test-resource> dup resource-close to-string
+"test-db" <test-resource> dup resource-close inspect
 "<resource:test-db (closed)>"
 "resource-close works"
 assert=
 
 \\ resource-close: double-close is a no-op
-"test-db" <test-resource> dup resource-close dup resource-close to-string
+"test-db" <test-resource> dup resource-close dup resource-close inspect
 "<resource:test-db (closed)>"
 "double close is no-op"
 assert=

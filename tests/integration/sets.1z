@@ -89,8 +89,8 @@ S{ 1 2 3 } S{ 1 2 } = f "set inequality different size" assert=
 S{ 1 2 3 } S{ 1 2 4 } = f "set inequality different elements" assert=
 S{ } S{ } = t "empty sets equal" assert=
 
-"Set to-string" test-section
-S{ } to-string "S{ }" "empty set to-string" assert=
+"Set inspect" test-section
+S{ } inspect "S{ }" "empty set inspect" assert=
 
 "Set immutability" test-section
 S{ 1 2 } 3 @adjoin drop

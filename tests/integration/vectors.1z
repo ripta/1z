@@ -54,9 +54,9 @@ V{ 1 2 } 3 #suffix #last 3 "#suffix element" assert=
 0 V{ 1 2 } #prefix #len 3 "#prefix length" assert=
 0 V{ 1 2 } #prefix #first 0 "#prefix element" assert=
 
-"Vector to-string" test-section
-V{ } to-string "V{ }" "empty vector to-string" assert=
-V{ 1 2 3 } to-string "V{ 1 2 3 }" "vector to-string" assert=
+"Vector inspect" test-section
+V{ } inspect "V{ }" "empty vector inspect" assert=
+V{ 1 2 3 } inspect "V{ 1 2 3 }" "vector inspect" assert=
 
 "Error cases" test-section
 [ V{ } #pop! ] [ drop "PASS: pop from empty vector error" print-line ] recover

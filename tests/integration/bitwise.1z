@@ -30,16 +30,16 @@ use "testing" ;
 99999999999999999999 99999999999999999999 bitxor 0 "big ^ big = 0" assert=
 
 "bitnot bignum" test-section
-99999999999999999999 bitnot to-string "-100000000000000000000" "~big" assert=
--99999999999999999999 bitnot to-string "99999999999999999998" "~neg-big" assert=
+99999999999999999999 bitnot inspect "-100000000000000000000" "~big" assert=
+-99999999999999999999 bitnot inspect "99999999999999999998" "~neg-big" assert=
 
 "shift-left" test-section
 1 0 shift-left 1 "1 << 0" assert=
 1 10 shift-left 1024 "1 << 10" assert=
 1 63 shift-left type-of bignum: "1 << 63 is bignum" assert=
-1 63 shift-left to-string "9223372036854775808" "1 << 63 value" assert=
+1 63 shift-left inspect "9223372036854775808" "1 << 63 value" assert=
 1 64 shift-left type-of bignum: "1 << 64 promotes" assert=
-1 64 shift-left to-string "18446744073709551616" "1 << 64 value" assert=
+1 64 shift-left inspect "18446744073709551616" "1 << 64 value" assert=
 
 "shift-right fixnum" test-section
 1024 10 shift-right 1 "1024 >> 10" assert=
@@ -47,11 +47,11 @@ use "testing" ;
 -8 1 shift-right -4 "-8 >> 1 (arithmetic)" assert=
 
 "shift-right bignum" test-section
-99999999999999999999 1 shift-right to-string "49999999999999999999" "big >> 1" assert=
+99999999999999999999 1 shift-right inspect "49999999999999999999" "big >> 1" assert=
 
 "ushift-right fixnum" test-section
--1 1 ushift-right to-string "9223372036854775807" "-1 >>> 1 (logical)" assert=
--8 1 ushift-right to-string "9223372036854775804" "-8 >>> 1 (logical)" assert=
+-1 1 ushift-right inspect "9223372036854775807" "-1 >>> 1 (logical)" assert=
+-8 1 ushift-right inspect "9223372036854775804" "-8 >>> 1 (logical)" assert=
 1024 10 ushift-right 1 "1024 >>> 10" assert=
 
 "ushift-right rejects bignum" test-section
@@ -62,7 +62,7 @@ use "testing" ;
 1024 -10 shift 1 "shift negative = right" assert=
 
 "shift-left bignum" test-section
-99999999999999999999 1 shift-left to-string "199999999999999999998" "big << 1" assert=
+99999999999999999999 1 shift-left inspect "199999999999999999998" "big << 1" assert=
 
 "auto-demotion from shift" test-section
 1 64 shift-left 64 shift-right type-of fixnum: "shift up then down demotes" assert=

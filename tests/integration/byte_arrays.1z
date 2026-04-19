@@ -93,10 +93,10 @@ B{ 0x48 0x69 } bytes> "Hi" "bytes> hex to string" assert=
 "test" >bytes bytes> "test" "string -> bytes -> string" assert=
 B{ 65 66 67 } bytes> >bytes #first 65 "bytes -> string -> bytes" assert=
 
-"Byte array to-string" test-section
-B{ } to-string "B{ }" "empty byte array to-string" assert=
-B{ 1 2 3 } to-string "B{ 0x01 0x02 0x03 }" "byte array to-string" assert=
-B{ 255 } to-string "B{ 0xFF }" "hex format in to-string" assert=
+"Byte array inspect" test-section
+B{ } inspect "B{ }" "empty byte array inspect" assert=
+B{ 1 2 3 } inspect "B{ 0x01 0x02 0x03 }" "byte array inspect" assert=
+B{ 255 } inspect "B{ 0xFF }" "hex format in inspect" assert=
 
 "Error cases" test-section
 [ B{ 1 } 5 #nth ] [ drop "PASS: index out of bounds error" print-line ] recover

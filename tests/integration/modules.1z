@@ -7,7 +7,7 @@ use "testing" ;
 
 "module_lib.1z" load
 \ Stack should have module on it
-dup to-string .
+dup inspect .
 
 \ === Import brings words into scope ===
 "Import brings words into scope" test-section

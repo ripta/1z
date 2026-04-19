@@ -1,0 +1,42 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ "A polymorphic word for testing help display with methods.
+greet ( x -- str ) [<marker:generic>] \compound
+
+  method{ float }
+" ]
+PASS: help output contains word name
+Stack: [ "A polymorphic word for testing help display with methods.
+greet ( x -- str ) [<marker:generic>] \compound
+
+  method{ float }
+" ]
+PASS: help output contains method signature
+Stack: [ "A polymorphic word for testing help display with methods.
+greet ( x -- str ) [<marker:generic>] \compound
+
+  method{ float }
+" ]
+Stack: [ "A polymorphic word for testing help display with methods.
+greet ( x -- str ) [<marker:generic>] \compound
+
+  method{ float }
+" t ]
+PASS: doc appears before name line
+Stack: [ "A polymorphic word for testing help display with methods.
+greet ( x -- str ) [<marker:generic>] \compound
+
+  method{ float }
+" ]
+Stack: [ "A polymorphic word for testing help display with methods.
+greet ( x -- str ) [<marker:generic>] \compound
+
+  method{ float }
+" t ]
+PASS: methods appear after name line
+Stack: [ "A polymorphic word for testing help display with methods.
+greet ( x -- str ) [<marker:generic>] \compound
+
+  method{ float }
+" ]
+Stack: [ ]

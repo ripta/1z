@@ -99,7 +99,25 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
     };
 
     // For user-defined words, require the `generic` marker.
-    // Native words are implicitly hookable, no marker needed.
+    //
+    // XXX(ripta): Native words accept method registrations without a marker,
+    // but only ones that manually call tryDispatchBinary/tryDispatchUnary
+    // actually check the dispatch table at runtime. Registering a method on
+    // a native that never calls those helpers silently does nothing.
+    //
+    // NOTE(ripta): Not every native should dispatch. Type-agnostic natives
+    // (e.g., dup, drop, swap, etc.) operate on values regardless of type;
+    // auto-dispatching them would silently replace structural stack operations,
+    // which is dangerous and surprising. Type-switching natives, i.e., those
+    // that branch on operand types (like +, inspect, #len), are safe candidates
+    // because they already do type-based branching and user types need to plug
+    // into that branching.
+    //
+    // A future `dispatchable` flag on Primitive could move the dispatch
+    // check from inside each native to the interpreter call site, removing
+    // the manual boilerplate and ensuring the flag and behavior stay in
+    // sync. Until then, each type-switching native is responsible for
+    // calling tryDispatchBinary or tryDispatchUnary itself.
     switch (word_def.action) {
         .native => {},
         .compound => {

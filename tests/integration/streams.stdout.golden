@@ -1,21 +1,21 @@
 === Standard streams ===
 Stack: [ ]
-PASS: stdout to-string
+PASS: stdout inspect
 Stack: [ ]
-PASS: stderr to-string
+PASS: stderr inspect
 Stack: [ ]
-PASS: stdin to-string
+PASS: stdin inspect
 Stack: [ ]
 === Stream close on standard streams ===
 Stack: [ ]
-PASS: closed stdout to-string
+PASS: closed stdout inspect
 Stack: [ ]
-PASS: closed stderr to-string
+PASS: closed stderr inspect
 Stack: [ ]
 === Stream open and close ===
 Stack: [ ]
 Stack: [ <stream tests/fixtures/hello.txt read> ]
-PASS: read stream to-string
+PASS: read stream inspect
 Stack: [ <stream tests/fixtures/hello.txt read> ]
 Stack: [ ]
 PASS: stream-open and close

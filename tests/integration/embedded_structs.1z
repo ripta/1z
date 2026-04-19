@@ -25,7 +25,7 @@ H{ x: 10 y: 20 } >point point? t "point? on point is true" assert=
 "display format" test-section
 
 \ Display format: <point point{ x: 10 y: 20 }>
-10 20 make-point to-string "<point point{ x: 10 y: 20 }>" "display format" assert=
+10 20 make-point inspect "<point point{ x: 10 y: 20 }>" "display format" assert=
 
 "equality" test-section
 

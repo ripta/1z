@@ -55,9 +55,9 @@ color:red red: = f "enum vs bare symbol not equal" assert=
 
 "display format" test-section
 
-color:red to-string "<color:red red:>" "color:red display format" assert=
-color:green to-string "<color:green green:>" "color:green display format" assert=
-color:blue to-string "<color:blue blue:>" "color:blue display format" assert=
+color:red inspect "<color:red red:>" "color:red display format" assert=
+color:green inspect "<color:green green:>" "color:green display format" assert=
+color:blue inspect "<color:blue blue:>" "color:blue display format" assert=
 
 "independent enums" test-section
 
@@ -106,11 +106,11 @@ shape:point shape:circle? f "shape:circle? on point is false" assert=
 42 >shape:circle 99 >shape:circle = f "different circle values are not equal" assert=
 
 \ Display format
-42 >shape:circle to-string "<shape:circle shape:circle{ radius: 42 }>" "circle display format" assert=
+42 >shape:circle inspect "<shape:circle shape:circle{ radius: 42 }>" "circle display format" assert=
 
 \ Flat variant still works alongside data variant
 shape:point type-of shape:point: "flat variant type-of in mixed enum" assert=
-shape:point to-string "<shape:point point:>" "flat variant display in mixed enum" assert=
+shape:point inspect "<shape:point point:>" "flat variant display in mixed enum" assert=
 
 "multi-field data variants" test-section
 
@@ -150,8 +150,8 @@ geom:dot geom? t "geom? on dot is true" assert=
 10 20 make-geom:rect 10 99 make-geom:rect = f "different rect values are not equal" assert=
 
 \ Display format
-10 20 make-geom:rect to-string "<geom:rect geom:rect{ width: 10 height: 20 }>" "rect display format" assert=
-geom:dot to-string "<geom:dot dot:>" "flat variant display in multi-field enum" assert=
+10 20 make-geom:rect inspect "<geom:rect geom:rect{ width: 10 height: 20 }>" "rect display format" assert=
+geom:dot inspect "<geom:dot dot:>" "flat variant display in multi-field enum" assert=
 
 "enum-of" test-section
 
