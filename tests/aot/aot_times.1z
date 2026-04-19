@@ -1,0 +1,2 @@
+\ Test: times word in AOT mode
+3 [ "tick" print-line ] times

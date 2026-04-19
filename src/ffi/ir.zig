@@ -30,6 +30,7 @@ pub fn emitC(ctx: *c.ir_ctx, name: [*:0]const u8, allocator: std.mem.Allocator) 
     c.ir_build_def_use_lists(ctx);
     if (c.ir_build_cfg(ctx) == 0) return IrError.EmitFailed;
     if (c.ir_assign_virtual_registers(ctx) == 0) return IrError.EmitFailed;
+    if (c.ir_compute_dessa_moves(ctx) == 0) return IrError.EmitFailed;
 
     const file: *c.FILE = c.tmpfile() orelse return IrError.EmitFailed;
     defer _ = c.fclose(file);
