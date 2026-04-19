@@ -837,6 +837,10 @@ const CompileState = struct {
     /// Accumulator for quotation literals encountered during AOT compilation.
     /// Each entry gets emitted as a `static const unsigned char[]` in the C preamble.
     aot_quotation_literals: ?*std.ArrayListUnmanaged(AotQuotationLiteral) = null,
+    /// Mapping from quotation instruction body pointers to global quotation IDs.
+    /// Used by materializeQuotations to pass the quotation_id to jitPushQuotation
+    /// so it can attach compiled code_ptrs.
+    aot_quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32) = null,
     /// Peak abstract stack pointer reached during compilation. Used to
     /// ensure the value stack has enough capacity before entering compiled
     /// code.
@@ -1625,11 +1629,12 @@ fn materializeQuotations(state: *CompileState, stack: *[64]StackEntry, sp: usize
                         };
                     }
 
-                    // Emit callback: jitPushQuotation(ctx, data_ptr, data_len, dest_addr)
-                    // Writes the quotation Value directly to the slot address
-                    // rather than pushing to the stack top.
-                    const proto_4arg = c.ir_proto_4(ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
-                    const push_fn = c.ir_const_func(ctx, c.ir_str(ctx, "onez_push_quotation"), proto_4arg);
+                    // Emit callback: jitPushQuotation(ctx, data_ptr, data_len, dest_addr, quotation_id)
+                    //
+                    // Writes the quotation Value directly to the slot address rather than pushing to
+                    // the stack top. The quotation_id allows jitPushQuotation to attach the compiled code_ptr.
+                    const proto_5arg = c.ir_proto_5(ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+                    const push_fn = c.ir_const_func(ctx, c.ir_str(ctx, "onez_push_quotation"), proto_5arg);
 
                     const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
                         state.preloaded_ctx_val
@@ -1650,7 +1655,14 @@ fn materializeQuotations(state: *CompileState, stack: *[64]StackEntry, sp: usize
                     const slot_byte_offset = c.ir_const_addr(ctx, qi * ValueLayout.value_size);
                     const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
 
-                    const call_result = c._ir_CALL_4(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, data_len_const, dest_addr);
+                    // Look up the global quotation_id for this body.
+                    const q_id: usize = if (state.aot_quotation_id_map) |m|
+                        m.get(@intFromPtr(body.ptr)) orelse std.math.maxInt(u32)
+                    else
+                        std.math.maxInt(u32);
+                    const q_id_const = c.ir_const_addr(ctx, q_id);
+
+                    const call_result = c._ir_CALL_5(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, data_len_const, dest_addr, q_id_const);
                     emitCallbackPostCheck(state, call_result, state.error_propagate_status);
 
                     stack[qi] = .{ .raw_at_slot = qi };
@@ -3884,8 +3896,9 @@ pub fn emitWordCAot(
     allocator: Allocator,
     stack_effect: ?*const StackEffect,
     reason_out: ?*?NotCompilableReason,
+    quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
-    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, allocator, stack_effect, reason_out);
+    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, allocator, stack_effect, reason_out, quotation_id_map);
 }
 
 /// Like emitWordCAot but with a pre-mangled C function name override.
@@ -3905,15 +3918,16 @@ fn emitWordCAotWithCName(
     allocator: Allocator,
     stack_effect: ?*const StackEffect,
     reason_out: ?*?NotCompilableReason,
+    quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var reason: ?NotCompilableReason = null;
-    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, allocator, stack_effect, null, &reason) catch |err| {
+    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, allocator, stack_effect, null, &reason, quotation_id_map) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
     if (discovered.body) |b| allocator.free(b);
     reason = null;
-    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason) catch |err| {
+    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason, quotation_id_map) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
@@ -3940,6 +3954,7 @@ fn emitWordCAotPass(
     stack_effect: ?*const StackEffect,
     known_peak: ?u32,
     nc_reason_out: ?*?NotCompilableReason,
+    quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)!EmitWordCAotPassResult {
     ValueLayout.ensureInit();
 
@@ -4153,6 +4168,7 @@ fn emitWordCAotPass(
         .preloaded_ctx_val = preloaded_ctx_val,
         .aot_string_literals = string_literals,
         .aot_quotation_literals = quotation_literals,
+        .aot_quotation_id_map = quotation_id_map,
         .stack_effect = stack_effect,
         .quotation_slots = buildQuotationSlotMap(stack_effect),
     };
@@ -4271,10 +4287,10 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitCallQuotation(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushString(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushSymbol(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
-    try out.appendSlice(allocator, "extern int32_t jitPushQuotation(uintptr_t ctx, uintptr_t data, uintptr_t len, uintptr_t dest);\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushQuotation(uintptr_t ctx, uintptr_t data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id);\n");
     try out.appendSlice(allocator, "static int32_t onez_push_string(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushString(ctx, (uintptr_t)str, len); }\n");
     try out.appendSlice(allocator, "static int32_t onez_push_symbol(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushSymbol(ctx, (uintptr_t)str, len); }\n");
-    try out.appendSlice(allocator, "static int32_t onez_push_quotation(uintptr_t ctx, const unsigned char *data, uintptr_t len, uintptr_t dest) { return jitPushQuotation(ctx, (uintptr_t)data, len, dest); }\n");
+    try out.appendSlice(allocator, "static int32_t onez_push_quotation(uintptr_t ctx, const unsigned char *data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id) { return jitPushQuotation(ctx, (uintptr_t)data, len, dest, quotation_id); }\n");
 
     // Runtime entry point externs
     try out.appendSlice(allocator,
@@ -4350,6 +4366,7 @@ pub fn emitProgramC(
             allocator,
             if (w.stack_effect != null) &w.stack_effect.? else null,
             &reason,
+            null,
         ) catch {
             if (reason) |r| {
                 try failure_reasons.put(allocator, w.name, r);
@@ -4379,9 +4396,18 @@ pub fn emitProgramC(
             allocator,
             null,
             null,
+            null,
         ) catch continue;
         allocator.free(trial);
         try compilable_quotation_ids.put(allocator, q.quotation_id, {});
+    }
+
+    // Map quotation instruction body pointers to global quotation IDs so materializeQuotations
+    // can pass the ID to jitPushQuotation for code_ptr attachment
+    var quotation_id_map: std.AutoHashMapUnmanaged(usize, u32) = .{};
+    defer quotation_id_map.deinit(allocator);
+    for (quotations) |q| {
+        try quotation_id_map.put(allocator, @intFromPtr(q.instructions.ptr), q.quotation_id);
     }
 
     // String literal table populated during pass 2.
@@ -4417,6 +4443,7 @@ pub fn emitProgramC(
             allocator,
             if (w.stack_effect != null) &w.stack_effect.? else null,
             null,
+            &quotation_id_map,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -4450,6 +4477,7 @@ pub fn emitProgramC(
             allocator,
             null,
             null,
+            &quotation_id_map,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -5145,7 +5173,7 @@ export fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv
 /// deserializes into an Instruction slice and writes the quotation Value to
 /// `dest_ptr`. Unlike jitPushString which appends to the stack, this writes
 /// to an existing slot position used by materializeQuotations.
-export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, dest_raw: usize) callconv(.c) i32 {
+export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, dest_raw: usize, quotation_id: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const src: [*]const u8 = @ptrFromInt(data_ptr);
@@ -5155,7 +5183,13 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
         return 2;
     };
     const dest: *Value = @ptrFromInt(dest_raw);
-    dest.* = .{ .quotation = .{ .instructions = instructions } };
+    var code_ptr: ?*const anyopaque = null;
+    if (ctx.aot_quotation_fns) |fns| {
+        if (quotation_id < fns.size) {
+            code_ptr = fns.table[quotation_id];
+        }
+    }
+    dest.* = .{ .quotation = .{ .instructions = instructions, .code_ptr = code_ptr } };
     return 0;
 }
 
@@ -6859,6 +6893,7 @@ test "emitWordCAot emits named callback for safepoint" {
         testing.allocator,
         null,
         null,
+        null,
     ) catch |err| {
         // times requires a quotation on stack which we don't have in this
         // minimal test -- NotCompilable is expected. Skip this test case
@@ -6890,6 +6925,7 @@ test "emitWordCAot basic arithmetic" {
         null,
         null,
         testing.allocator,
+        null,
         null,
         null,
     );
