@@ -230,6 +230,11 @@ pub const ParseDiagnostics = struct {
     source_file: ?[]const u8 = null,
 };
 
+pub const AotQuotationFnTable = struct {
+    table: [*]const ?*const anyopaque,
+    size: u32,
+};
+
 /// The Context holds all interpreter state.
 pub const Context = struct {
     stack: Stack,
@@ -361,6 +366,9 @@ pub const Context = struct {
     dispatch: DispatchTable,
     /// JIT dispatch table mapping word IDs to compiled code pointers.
     jit_dispatch: JitDispatchTable,
+    /// AOT quotation function pointers, indexed by quotation_id.
+    /// Registered at startup by onez_runtime_register_quotations.
+    aot_quotation_fns: ?AotQuotationFnTable = null,
     /// Pending error from a JIT error-handling callback (recover/cleanup).
     /// Set by the callback when it returns error_propagate status, consumed
     /// by the interpreter dispatch loop.

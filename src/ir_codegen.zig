@@ -4282,6 +4282,7 @@ pub fn emitProgramC(
         \\extern void *onez_init(void);
         \\extern int onez_set_args(void *ctx, int argc, char **argv);
         \\extern int32_t onez_runtime_register_compiled(void *rt, int32_t (**table)(uintptr_t), const char **names, uint32_t size);
+        \\extern int32_t onez_runtime_register_quotations(void *rt, int32_t (**table)(uintptr_t), uint32_t size);
         \\extern int32_t onez_runtime_run(void *rt, uint32_t entry_word_id);
         \\extern void onez_print_error(void *rt);
         \\extern void onez_deinit(void *rt);
@@ -4646,6 +4647,33 @@ pub fn emitProgramC(
     }
     try out.appendSlice(allocator, "};\n\n");
 
+    // 5c. Quotation function table
+    if (quotations.len > 0) {
+        var max_q_id: u32 = 0;
+        for (quotations) |q| {
+            if (q.quotation_id >= max_q_id) max_q_id = q.quotation_id;
+        }
+        const q_table_size = max_q_id + 1;
+
+        try out.appendSlice(allocator, "static onez_word_fn_t onez_quotation_table[] = {\n");
+        for (0..q_table_size) |id| {
+            var found = false;
+            for (quotations) |q| {
+                if (q.quotation_id == id and q.compiled) {
+                    try out.appendSlice(allocator, "    ");
+                    try out.appendSlice(allocator, q.c_name);
+                    try out.appendSlice(allocator, ",\n");
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                try out.appendSlice(allocator, "    NULL,\n");
+            }
+        }
+        try out.appendSlice(allocator, "};\n\n");
+    }
+
     // 6. Main entry point
     try out.appendSlice(allocator, "int main(int argc, char **argv) {\n");
     try out.appendSlice(allocator, "    void *rt = onez_init();\n");
@@ -4677,6 +4705,19 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "    onez_runtime_register_compiled(rt, onez_dispatch_table, onez_word_names, ");
     try out.appendSlice(allocator, size_str);
     try out.appendSlice(allocator, ");\n");
+
+    if (quotations.len > 0) {
+        var max_q_id: u32 = 0;
+        for (quotations) |q| {
+            if (q.quotation_id >= max_q_id) max_q_id = q.quotation_id;
+        }
+        var q_size_buf: [20]u8 = undefined;
+        const q_size_str = std.fmt.bufPrint(&q_size_buf, "{d}", .{max_q_id + 1}) catch unreachable;
+
+        try out.appendSlice(allocator, "    onez_runtime_register_quotations(rt, onez_quotation_table, ");
+        try out.appendSlice(allocator, q_size_str);
+        try out.appendSlice(allocator, ");\n");
+    }
 
     var id_buf: [20]u8 = undefined;
     const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{entry_word_id}) catch unreachable;
@@ -6918,6 +6959,50 @@ test "emitProgramC dispatch table has correct entries" {
     try testing.expect(std.mem.indexOf(u8, source, "NULL,") != null);
     // word_id 2 -> onez_w_bar
     try testing.expect(std.mem.indexOf(u8, source, "onez_w_bar,") != null);
+}
+
+test "emitProgramC quotation table with compiled and uncompiled entries" {
+    const instrs = makeInstructions(.{@as(i64, 42)});
+
+    const words = [_]AotWordDesc{
+        .{ .name = "main", .instructions = &instrs, .input_count = 0, .output_count = 1, .word_id = 0 },
+    };
+
+    var quotations = [_]AotQuotationDesc{
+        .{ .quotation_id = 0, .instructions = &instrs, .c_name = "onez_q_0", .compiled = true },
+        .{ .quotation_id = 1, .instructions = &instrs, .c_name = "onez_q_1", .compiled = false },
+        .{ .quotation_id = 2, .instructions = &instrs, .c_name = "onez_q_2", .compiled = true },
+    };
+
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, &diag, testing.allocator);
+    defer testing.allocator.free(source);
+
+    // Table exists
+    try testing.expect(std.mem.indexOf(u8, source, "onez_quotation_table") != null);
+
+    // Compiled entries present, uncompiled is NULL
+    try testing.expect(std.mem.indexOf(u8, source, "onez_q_0,") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_q_2,") != null);
+
+    // Registration call in main
+    try testing.expect(std.mem.indexOf(u8, source, "onez_runtime_register_quotations(rt, onez_quotation_table, 3)") != null);
+}
+
+test "emitProgramC no quotation table when quotations empty" {
+    const instrs = makeInstructions(.{@as(i64, 42)});
+
+    const words = [_]AotWordDesc{
+        .{ .name = "main", .instructions = &instrs, .input_count = 0, .output_count = 1, .word_id = 0 },
+    };
+
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, &diag, testing.allocator);
+    defer testing.allocator.free(source);
+
+    // No quotation table emitted (extern decl exists but table and call do not)
+    try testing.expect(std.mem.indexOf(u8, source, "onez_quotation_table") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_runtime_register_quotations(rt,") == null);
 }
 
 test "emitProgramC output compiles with cc" {

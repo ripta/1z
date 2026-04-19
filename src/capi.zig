@@ -1472,6 +1472,12 @@ export fn onez_runtime_register_compiled(ptr: ?*anyopaque, table: [*]const ?*con
     return ONEZ_OK;
 }
 
+export fn onez_runtime_register_quotations(ptr: ?*anyopaque, table: [*]const ?*const anyopaque, size: u32) i32 {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    handle.ctx.aot_quotation_fns = context_mod.AotQuotationFnTable{ .table = table, .size = size };
+    return ONEZ_OK;
+}
+
 export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
     const handle = castHandle(ptr) orelse return 1;
     const ctx = handle.ctx;
