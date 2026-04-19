@@ -1792,7 +1792,17 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
 
     if (compilation_stats) {
         printPreludeStats(&codegen_diagnostics.prelude_stats, err_writer);
-        err_writer.print("Quotation bodies discovered: {d}\n", .{freeze_result.quotations.len}) catch {};
+        var compiled_quotation_count: usize = 0;
+        for (freeze_result.quotations) |q| {
+            if (q.compiled) compiled_quotation_count += 1;
+        }
+        if (freeze_result.quotations.len > 0) {
+            const pct = @as(f64, @floatFromInt(compiled_quotation_count)) / @as(f64, @floatFromInt(freeze_result.quotations.len)) * 100.0;
+            err_writer.print("Quotation bodies compiled: {d}/{d} ({d:.1}%)\n", .{ compiled_quotation_count, freeze_result.quotations.len, pct }) catch {};
+        } else {
+            err_writer.print("Quotation bodies compiled: 0\n", .{}) catch {};
+        }
+
         err_writer.flush() catch {};
     }
 

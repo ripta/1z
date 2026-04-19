@@ -10,4 +10,4 @@ Prelude compilation: 5/8 words compiled (62.5%)
       hint: annotate the quotation parameter with a concrete stack effect
   word 'keep' cannot be compiled
       NC.12: compilation produced unresolved dynamic calls or abstract stack entries
-Quotation bodies discovered: 10
+Quotation bodies compiled: 8/10 (80.0%)

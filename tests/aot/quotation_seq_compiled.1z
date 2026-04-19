@@ -1,0 +1,11 @@
+\ Verify quotation bodies compile and execute via code_ptr
+\ for sequence higher-order operations.
+
+\ -- #each --
+"abc" [ . ] #each
+
+\ -- #map + #collect --
+"hello" [ inspect ] #map #collect .
+
+\ -- #filter + #collect --
+"abcde" [ "b" > ] #filter #collect .

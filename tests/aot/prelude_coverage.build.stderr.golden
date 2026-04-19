@@ -497,4 +497,4 @@ Prelude compilation: 95/301 words compiled (31.6%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word '>word-info?' cannot be compiled
       NC.12: compilation produced unresolved dynamic calls or abstract stack entries
-Quotation bodies discovered: 0
+Quotation bodies compiled: 0

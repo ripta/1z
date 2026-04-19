@@ -1,5 +1,5 @@
-Prelude compilation: 4/5 words compiled (80.0%)
+Prelude compilation: 5/6 words compiled (83.3%)
   word 'output-stream' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-Quotation bodies compiled: 0
+Quotation bodies compiled: 3/3 (100.0%)
