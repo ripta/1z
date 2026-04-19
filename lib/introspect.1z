@@ -19,7 +19,7 @@ format-word-info: ( wi -- str ) [
   over doc>> dup f = [ drop ] [ swap "\n" swap #append #append "\n" #append ] if
   swap methods>> dup #len 0 = [ drop ] [
     >iterator [ format-method ] #map #collect "\n" #join
-    swap #append swap #append "\n" #append
+    #append "\n" #append
   ] if
 ] ;
 
