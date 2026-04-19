@@ -61,6 +61,20 @@ pub fn freezeModuleGraph(
     diagnostics: *FreezeDiagnostics,
     allocator: Allocator,
 ) (FreezeError || Allocator.Error)!FreezeResult {
+    return freezeModuleGraphOpts(ctx, entry_file, diagnostics, allocator, .{});
+}
+
+pub const FreezeOptions = struct {
+    compile_all_prelude: bool = false,
+};
+
+pub fn freezeModuleGraphOpts(
+    ctx: *Context,
+    entry_file: []const u8,
+    diagnostics: *FreezeDiagnostics,
+    allocator: Allocator,
+    options: FreezeOptions,
+) (FreezeError || Allocator.Error)!FreezeResult {
     diagnostics.* = .{};
 
     // Snapshot prelude word names before loading the entry file. Words
@@ -103,6 +117,37 @@ pub fn freezeModuleGraph(
     defer discovered.warning_entries.deinit(ctx.quotationAllocator());
     defer discovered.native_names.deinit(ctx.quotationAllocator());
     defer discovered.native_defs.deinit(ctx.quotationAllocator());
+
+    if (options.compile_all_prelude) {
+        const temp_allocator = ctx.quotationAllocator();
+        var seen = std.StringHashMapUnmanaged(void){};
+        defer seen.deinit(temp_allocator);
+        for (discovered.names.items) |name| {
+            try seen.put(temp_allocator, name, {});
+        }
+        for (discovered.native_names.items) |name| {
+            try seen.put(temp_allocator, name, {});
+        }
+
+        var prelude_it = prelude_words.iterator();
+        while (prelude_it.next()) |entry| {
+            const name = entry.key_ptr.*;
+            if (seen.contains(name)) continue;
+            const word = ctx.lookupWord(name) orelse continue;
+            if (word.parse_time_only) continue;
+            if (word.stack_effect == null) continue;
+            switch (word.action) {
+                .compound => {
+                    try discovered.names.append(temp_allocator, name);
+                    try discovered.defs.append(temp_allocator, word);
+                },
+                .native, .host_callback => {
+                    try discovered.native_names.append(temp_allocator, name);
+                    try discovered.native_defs.append(temp_allocator, word);
+                },
+            }
+        }
+    }
 
     // Now safe to pop the frames
     ctx.popPragmaFrame();

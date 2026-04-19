@@ -1595,6 +1595,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var output_path: ?[]const u8 = null;
     var allow_interpreter_fallback = false;
     var compilation_stats = false;
+    var compile_all_prelude = false;
     var save_temps = false;
     var static_libs: std.ArrayListUnmanaged([]const u8) = .{};
     defer static_libs.deinit(base_allocator);
@@ -1620,6 +1621,10 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         }
         if (std.mem.eql(u8, arg, "--compilation-stats")) {
             compilation_stats = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--compile-all-prelude")) {
+            compile_all_prelude = true;
             continue;
         }
         if (std.mem.eql(u8, arg, "--save-temps")) {
@@ -1662,7 +1667,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const allocator = mem_limit.allocator();
 
     const source = source_file orelse {
-        err_writer.writeAll("Usage: 1z build <file.1z> [-o <output>] [--save-temps] [--compilation-stats]\n") catch {};
+        err_writer.writeAll("Usage: 1z build <file.1z> [-o <output>] [--save-temps] [--compilation-stats] [--compile-all-prelude]\n") catch {};
         err_writer.flush() catch {};
         return 1;
     };
@@ -1716,7 +1721,9 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
 
     // Stage 1: Freeze module graph and emit C source.
     var freeze_diagnostics: aot_freeze.FreezeDiagnostics = .{};
-    var freeze_result = aot_freeze.freezeModuleGraph(ctx, source, &freeze_diagnostics, allocator) catch |err| {
+    var freeze_result = aot_freeze.freezeModuleGraphOpts(ctx, source, &freeze_diagnostics, allocator, .{
+        .compile_all_prelude = compile_all_prelude,
+    }) catch |err| {
         if (err == error.MissingStackEffects) {
             for (freeze_diagnostics.missing_stack_effects) |name| {
                 err_writer.print(
