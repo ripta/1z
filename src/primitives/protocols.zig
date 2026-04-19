@@ -124,7 +124,9 @@ fn protocolCheckHelper(ctx: *Context) anyerror!void {
             },
         };
 
-        if (ctx.dispatch.lookupUnary(method_name, type_name) == null) {
+        const has_method = ctx.dispatch.lookupUnary(method_name, type_name) != null or
+            ctx.dispatch.lookupBinary(method_name, type_name, type_name) != null;
+        if (!has_method) {
             const msg = std.fmt.allocPrint(
                 ctx.arena.allocator(),
                 "type '{s}' does not implement '{s}' required by protocol '{s}'",
