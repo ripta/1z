@@ -55,6 +55,14 @@ fn lookupUnaryWithFallback(ctx: *Context, word_name: []const u8, a: Value) ?disp
 /// (tagged or struct_instance), and if so, looks up a registered method.
 /// If found, executes the method body; operands remain on stack for the
 /// body to consume. Returns true if dispatched, false if not.
+///
+/// Each native that supports user-type dispatch must call this function
+/// explicitly. Only type-switching natives that branch on operand types
+/// (arithmetic, comparison, inspect, sequence ops, etc.) should opt in.
+///
+/// Type-agnostic natives (dup, drop, swap, etc.) must not dispatch.
+///
+/// See also notes in the implementation of `nativeDefineMethod`.
 pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
     if (ctx.stack.depth() < 2) return false;
 
@@ -76,6 +84,9 @@ pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
 /// struct_instance), and if so, looks up a registered method. If found,
 /// executes the method body; operand remains on stack. Returns true if
 /// dispatched, false if not.
+///
+/// Same opt-in rules as tryDispatchBinary: each native that supports
+/// user-type dispatch must call this explicitly.
 pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
     if (ctx.stack.depth() < 1) return false;
 
