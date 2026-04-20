@@ -331,6 +331,7 @@ fn nativeAccept(ctx: *Context) anyerror!void {
             if (err == error.WouldBlock) {
                 if (ctx.scheduler) |sched| {
                     sched.ioSuspendCurrentTask(fd, .read);
+                    try helpers.checkCancellation(ctx);
                     continue;
                 }
                 clearNonBlocking(fd);
@@ -367,6 +368,7 @@ fn nativeConnect(ctx: *Context) anyerror!void {
         if (err == error.WouldBlock) {
             if (ctx.scheduler) |sched| {
                 sched.ioSuspendCurrentTask(fd, .write);
+                try helpers.checkCancellation(ctx);
                 var err_buf: [4]u8 = undefined;
                 std.posix.getsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.ERROR, &err_buf) catch {
                     helpers.setErrorContext(ctx, "connect failed: could not check SO_ERROR", .{});

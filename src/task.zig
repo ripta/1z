@@ -35,15 +35,22 @@ pub fn taskEntryPoint() callconv(.c) void {
     pending_entry_task = null;
 
     task.ctx.executeQuotation(task.quotation) catch {
-        task.status = .failed;
         if (task.ctx.thrown_error) |thrown| {
             task.error_obj = thrown;
+            if (task.cancellation_phase != .none and std.mem.eql(u8, thrown.error_type, "task-cancelled")) {
+                task.status = .cancelled;
+            } else {
+                task.status = .failed;
+            }
         } else if (task.ctx.error_details.items.len > 0) {
             const detail = task.ctx.error_details.items[0];
             task.error_obj = .{
                 .error_type = detail.error_type,
                 .message = detail.message,
             };
+            task.status = .failed;
+        } else {
+            task.status = .failed;
         }
         return;
     };
@@ -63,6 +70,25 @@ pub const TaskStatus = enum {
     cancelled,
 };
 
+/// Cooperative cancellation state machine.
+///
+/// Tasks progress through these phases:
+///
+///   none -> pending -> unwinding -> (task exits)
+///                   -> shielded -> unwinding (during cleanup handlers)
+///
+/// The meanings:
+/// - `pending`: cancellation requested but not yet observed by the task.
+/// - `unwinding`: task has observed the cancellation and is propagating the error.
+/// - `shielded`: cleanup handler is executing; cancellation checks are suppressed
+///               so the handler can yield, sleep, or do I/O without re-triggering.
+pub const CancellationPhase = enum {
+    none,
+    pending,
+    unwinding,
+    shielded,
+};
+
 /// Task represents a green thread with its own execution context.
 pub const Task = struct {
     id: u64,
@@ -74,7 +100,7 @@ pub const Task = struct {
     stack_mem: ?[]align(std.heap.page_size_min) u8 = null,
     ctx: *@import("context.zig").Context,
     scope: *TaskScope,
-    cancelled: bool = false,
+    cancellation_phase: CancellationPhase = .none,
     blocked_on_channel: ?*anyopaque = null,
     blocked_on_io_fd: ?std.posix.fd_t = null,
     blocked_on_scope: ?*TaskScope = null,

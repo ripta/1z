@@ -1,0 +1,224 @@
+use "testing" ;
+use "time" ;
+
+\ Cleanup handler runs when a sleeping task is cancelled.
+\ Uses a shared vector to verify cleanup executed. #push! mutates
+\ the vector in-place so the change is visible from outside.
+
+test-cleanup-on-cancelled-sleep: ( -- ) [
+  V{ }
+  dup
+  [
+    dup [ 99 #push! drop ] curry
+    [ [ 100000 milliseconds sleep ] swap cleanup ] curry
+    spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+    yield
+    drop
+  ] curry
+  task-scope
+  #len 1 "cleanup ran on cancelled sleeping task" assert=
+] ;
+
+\ Cleanup runs without crash (drop the error).
+test-cleanup-drops-on-cancel: ( -- ) [
+  [
+    [ [ 100000 milliseconds sleep ] [ drop ] cleanup ] spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+  ] task-scope
+  t "cleanup with drop completed" assert-true
+] ;
+
+\ recover catches task-cancelled from a cooperatively cancelled task.
+test-recover-catches-task-cancelled: ( -- ) [
+  [
+    [
+      [ 100000 milliseconds sleep ] spawn
+      dup cancel-task
+      await
+    ] task-scope
+  ] task-cancelled: "recover catches task-cancelled" assert-error-type
+] ;
+
+\ Channel-blocked cancel completes cooperatively.
+test-cancel-channel-blocked: ( -- ) [
+  [
+    <channel>
+    [ receive drop ] curry spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+  ] task-scope
+  t "channel-blocked cancel cooperates" assert-true
+] ;
+
+\ IO-blocked cancel completes cooperatively.
+test-cancel-io-blocked: ( -- ) [
+  [
+    <pipe> drop
+    [ 1024 stream-read drop ] curry spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+  ] task-scope
+  t "IO-blocked cancel cooperates" assert-true
+] ;
+
+\ Scope-blocked cancel completes cooperatively.
+test-cancel-scope-blocked: ( -- ) [
+  [
+    [
+      [
+        [ 100000 milliseconds sleep ] spawn drop
+        [ 100000 milliseconds sleep ] spawn drop
+      ] task-scope
+    ] spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+  ] task-scope
+  t "scope-blocked cancel cooperates" assert-true
+] ;
+
+\ Cleanup handler can sleep without being re-cancelled (shielding).
+\ The cleanup handler sleeps briefly; if shielding were broken, the
+\ sleep would throw task-cancelled again and the cleanup would not
+\ finish, so the vector would remain empty.
+test-cleanup-can-sleep: ( -- ) [
+  V{ }
+  dup
+  [
+    dup [ 1 milliseconds sleep 42 #push! drop ] curry
+    [ [ 100000 milliseconds sleep ] swap cleanup ] curry
+    spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+    yield
+    drop
+  ] curry
+  task-scope
+  #len 1 "shielded cleanup handler can sleep" assert=
+] ;
+
+\ Cleanup handler can yield without being re-cancelled.
+test-cleanup-can-yield: ( -- ) [
+  V{ }
+  dup
+  [
+    dup [ yield 77 #push! drop ] curry
+    [ [ 100000 milliseconds sleep ] swap cleanup ] curry
+    spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+    yield yield
+    drop
+  ] curry
+  task-scope
+  #len 1 "shielded cleanup handler can yield" assert=
+] ;
+
+\ Nested cleanup handlers each get their own shielding.
+\ Inner cleanup pushes 1, outer cleanup pushes 2.
+test-nested-cleanup-shielding: ( -- ) [
+  V{ }
+  dup
+  [
+    dup dup
+    [ 2 #push! drop ] curry
+    swap
+    [ 1 #push! drop ] curry
+    [ [ 100000 milliseconds sleep ] swap cleanup ] curry
+    swap
+    [ cleanup ] curry
+    curry
+    spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+    yield yield
+    drop
+  ] curry
+  task-scope
+  #len 2 "nested cleanup handlers both execute" assert=
+] ;
+
+\ cancelled? returns t for a cancelled task and f normally.
+test-cancelled-predicate: ( -- ) [
+  V{ }
+  dup
+  [
+    dup [
+      \ Record the value of cancelled? during cleanup
+      cancelled? #push! drop
+    ] curry
+    [ [ 100000 milliseconds sleep ] swap cleanup ] curry
+    spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+    yield
+    drop
+  ] curry
+  task-scope
+  dup #len 1 "cancelled? recorded a value" assert=
+  #first t "cancelled? returns t during cancellation" assert=
+] ;
+
+\ cancelled? returns f outside cancellation.
+test-cancelled-predicate-normal: ( -- ) [
+  [
+    cancelled? f "cancelled? is f in normal task" assert=
+  ] task-scope
+] ;
+
+\ cancelled? returns f outside task-scope.
+test-cancelled-predicate-no-scope: ( -- ) [
+  cancelled? f "cancelled? is f outside task-scope" assert=
+] ;
+
+\ Sibling failure triggers cleanup on the surviving sibling.
+\ Task A sleeps with a cleanup handler; task B throws an error.
+\ The scope cancels A (sibling cancellation), and A's cleanup runs.
+test-sibling-cancellation-with-cleanup: ( -- ) [
+  V{ }
+  dup
+  [
+    dup [ 88 #push! drop ] curry
+    [ [ 100000 milliseconds sleep ] swap cleanup ] curry
+    spawn drop
+    [ 10 milliseconds sleep f "boom" test-error: make-error throw ] spawn drop
+  ] curry
+  [
+    task-scope
+  ] [ drop ] recover
+  #len 1 "sibling cancellation triggers cleanup" assert=
+] ;
+
+\ with-timeout runs cleanup when the timeout fires.
+test-with-timeout-cleanup: ( -- ) [
+  V{ }
+  dup
+  [
+    dup [ 55 #push! drop ] curry
+    [
+      [ 100000 milliseconds sleep ] swap cleanup
+    ] curry
+    10 milliseconds with-timeout
+  ] curry
+  [
+    task-scope
+  ] [ drop ] recover
+  #len 1 "with-timeout runs cleanup on timeout" assert=
+] ;
+
+test-cleanup-on-cancelled-sleep
+test-cleanup-drops-on-cancel
+test-recover-catches-task-cancelled
+test-cancel-channel-blocked
+test-cancel-io-blocked
+test-cancel-scope-blocked
+test-cleanup-can-sleep
+test-cleanup-can-yield
+test-nested-cleanup-shielding
+test-cancelled-predicate
+test-cancelled-predicate-normal
+test-cancelled-predicate-no-scope
+test-sibling-cancellation-with-cleanup
+test-with-timeout-cleanup

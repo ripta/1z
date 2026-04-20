@@ -476,3 +476,21 @@ pub fn demoteBignum(big: BigIntManaged) Value {
 pub fn ensureBignum(alloc: Allocator, val: Value) !BigIntManaged {
     return if (val == .bignum) try val.bignum.clone() else try BigIntManaged.initSet(alloc, val.fixnum);
 }
+
+/// Check if the current task has a pending cancellation and inject the
+/// `task-cancelled` error. Called at resume points: after yield, sleep,
+/// channel ops, I/O suspend, scope suspend. Cancelled tasks should unwind
+/// coöperatively through their cleanup handlers.
+pub fn checkCancellation(ctx: *Context) error{UserThrown}!void {
+    const scheduler = ctx.scheduler orelse return;
+    const current = scheduler.current_task orelse return;
+
+    if (current.cancellation_phase == .pending) {
+        current.cancellation_phase = .unwinding;
+        ctx.thrown_error = .{
+            .error_type = "task-cancelled",
+            .message = "task was cancelled",
+        };
+        return error.UserThrown;
+    }
+}
