@@ -1,8 +1,9 @@
-.PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test lsp-test aot-test update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation build-example clean help docs docker-build docker-test
+.PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test lsp-test aot-test aot-run update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation build-example clean help docs docker-build docker-test
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
 TEST_CASE_TIMEOUT ?= 10
+AOT_TIMEOUT ?= 10
 ZIG_PREFIX ?= zig-out
 DOCKER_IMAGE ?= gcr.io/$(GCP_PROJECT_ID)/zag:v0.15.2
 TEST_FILTER_ARG = $(if $(TEST_FILTER),-Dtest-filter=$(TEST_FILTER))
@@ -54,6 +55,13 @@ eager-test: ## Run integration tests with eager compilation
 
 fmt-test: ## Run formatter tests
 	timeout $(TARGET_TIMEOUT) zig build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+
+aot-run: build ## AOT-compile and run a 1z file (FILE= ARGS= AOT_TIMEOUT=10)
+	$(eval _aot_tmp := $(shell mktemp /tmp/1z-aot-run-XXXXXX))
+	@trap 'rm -f $(_aot_tmp)' EXIT; \
+	timeout $(AOT_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z build $(FILE) -o $(_aot_tmp) $(ARGS) && \
+	chmod +x $(_aot_tmp) && \
+	timeout $(AOT_TIMEOUT) $(_aot_tmp)
 
 aot-test: ## Run AOT build integration tests
 	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
