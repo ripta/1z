@@ -125,6 +125,56 @@ PASS: direct = method used
 Stack: [ ]
 PASS: < still derives from cmp
 Stack: [ ]
+=== <= on native types ===
+Stack: [ ]
+PASS: 3 <= 5
+Stack: [ ]
+PASS: 5 <= 5
+Stack: [ ]
+PASS: 7 not <= 3
+Stack: [ ]
+PASS: 1.0 <= 2.0
+Stack: [ ]
+PASS: 2.0 <= 2.0
+Stack: [ ]
+PASS: 3.0 not <= 1.0
+Stack: [ ]
+=== >= on native types ===
+Stack: [ ]
+PASS: 3 not >= 5
+Stack: [ ]
+PASS: 5 >= 5
+Stack: [ ]
+PASS: 7 >= 3
+Stack: [ ]
+PASS: 1.0 not >= 2.0
+Stack: [ ]
+PASS: 2.0 >= 2.0
+Stack: [ ]
+PASS: 3.0 >= 1.0
+Stack: [ ]
+=== <= and >= on user types via cmp ===
+Stack: [ ]
+PASS: 10 <= 20 temp
+Stack: [ ]
+PASS: 20 <= 20 temp
+Stack: [ ]
+PASS: 30 not <= 20 temp
+Stack: [ ]
+PASS: 20 >= 10 temp
+Stack: [ ]
+PASS: 20 >= 20 temp
+Stack: [ ]
+PASS: 10 not >= 20 temp
+Stack: [ ]
+=== comparable protocol ===
+Stack: [ ]
+Stack: [ ]
+PASS: temperature satisfies comparable
+Stack: [ ]
+Stack: [ ]
+PASS: weight satisfies comparable
+Stack: [ ]
 === cmp match on result ===
 Stack: [ ]
 Stack: [ "less" ]

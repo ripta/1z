@@ -286,6 +286,7 @@ case ( val branches -- ... )
 choose ( a1 a2 quot -- a )
 cmp ( a b -- ordering )
 column>>
+comparable
 cond ( branches -- ... )
 do ( pred body -- pred body )
 doc>>
