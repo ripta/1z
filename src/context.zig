@@ -3564,16 +3564,14 @@ pub const Context = struct {
                 .ctx = self,
             };
             const func: ir_codegen.CompiledFn = @ptrCast(@alignCast(ptr));
-            const status = func(&jit_ctx);
-            switch (status) {
-                0 => return,
-                2 => {
+            switch (ir_codegen.ExecResult.fromStatus(func(&jit_ctx))) {
+                .ok => return,
+                .error_propagate => {
                     const err = self.jit_pending_error orelse error.UserThrown;
                     self.jit_pending_error = null;
                     return err;
                 },
-                else => {
-                    // Bail: restore stack pointer and fall through to interpreter
+                .bail => {
                     self.stack.items.items.len = saved_sp;
                 },
             }

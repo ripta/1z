@@ -5371,7 +5371,22 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
 }
 
 /// Result of attempting compiled execution.
-pub const ExecResult = enum { ok, bail, error_propagate };
+pub const ExecResult = enum {
+    ok,
+    bail,
+    error_propagate,
+
+    /// Convert a compiled function's raw i32 return status to an ExecResult.
+    /// Status 0 = ok, 2 = error_propagate, anything else = bail.
+    /// Status 3 (trampoline) must be handled by the caller before calling this.
+    pub fn fromStatus(status: i32) ExecResult {
+        return switch (status) {
+            0 => .ok,
+            2 => .error_propagate,
+            else => .bail,
+        };
+    }
+};
 
 /// Execute a JIT-compiled word. The compiled function operates directly on
 /// the per-task Value stack: it reads inputs, checks fixnum tags, performs
@@ -5430,14 +5445,11 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
         status = func(&jit_ctx);
     }
 
-    return switch (status) {
-        0 => .ok,
-        2 => .error_propagate,
-        else => blk: {
-            ctx.stack.items.items.len = saved_sp;
-            break :blk .bail;
-        },
-    };
+    const result = ExecResult.fromStatus(status);
+    if (result == .bail) {
+        ctx.stack.items.items.len = saved_sp;
+    }
+    return result;
 }
 
 // =============================================================================
