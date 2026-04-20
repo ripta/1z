@@ -40,6 +40,7 @@ pub const IrCodegenError = error{
     StackUnderflow,
     StackShapeMismatch,
     UncompiledWords,
+    UncompiledQuotations,
 };
 
 /// Categorizes why a word returned NotCompilable.
@@ -131,8 +132,14 @@ pub const PreludeStats = struct {
     uncompiled: []const UncompiledWord = &.{},
 };
 
+pub const UncompiledQuotation = struct {
+    quotation_id: u32,
+    c_name: []const u8,
+};
+
 pub const CodegenDiagnostics = struct {
     uncompiled_words: []const []const u8 = &.{},
+    uncompiled_quotations: []const UncompiledQuotation = &.{},
     quotation_fallbacks: []const QuotationFallbackWarning = &.{},
     prelude_stats: PreludeStats = .{},
 };
@@ -2658,12 +2665,18 @@ fn compileInstructions(
                             const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, code_ptr_off);
                             const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
 
-                            // Null-check code_ptr: fallback to interpreter if quotation not compiled
+                            // Null-check code_ptr: statically-discovered quotations always have code_ptrs.
+                            // That's enforced at build time.
                             const null_addr = c.ir_const_addr(ctx, 0);
                             const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
                             const if_null = c._ir_IF(ctx, is_null);
 
-                            // Cold path: quotation not compiled, call interpreter fallback
+                            // Cold path: only `>quotation`-constructed quotation (i.e., no code_ptr) should ever hit this.
+                            //
+                            // XXX(ripta): If we ever add user-level ways to construct quotations, we'll need to revisit this.
+                            //             We could add a new tag to mark uncompiled quotations, and to distinguish them from
+                            //             the compiled-but-not-yet-called quotations. That would still be non-ideal but at
+                            //             least wouldn't require a runtime check on every call.
                             c._ir_IF_TRUE_cold(ctx, if_null);
                             {
                                 // Flush stack with the quotation included at TOS for
@@ -4525,6 +4538,29 @@ pub fn emitProgramC(
             return error.UncompiledWords;
         }
         uncompiled.deinit(allocator);
+    }
+
+    // NOTE(ripta): Strict codegen: quotation bodies with inferred effects must compile.
+    //              Bodies without inferred effects (row-polymorphic, e.g., `[ call ]`
+    //              inside higher-order prelude words) are not yet handled, so this makes
+    //              their parent words compilable by inlining the quotation at the call
+    //              site. `>quotation`-constructed quotations are not in this set at all.
+    {
+        var uncompiled_q: std.ArrayListUnmanaged(UncompiledQuotation) = .{};
+        for (quotations) |q| {
+            if (!q.compiled and q.inferred_effect != null) {
+                try uncompiled_q.append(allocator, .{
+                    .quotation_id = q.quotation_id,
+                    .c_name = q.c_name,
+                });
+            }
+        }
+        if (uncompiled_q.items.len > 0) {
+            diagnostics.uncompiled_quotations = try allocator.dupe(UncompiledQuotation, uncompiled_q.items);
+            uncompiled_q.deinit(allocator);
+            return error.UncompiledQuotations;
+        }
+        uncompiled_q.deinit(allocator);
     }
 
     // Collect prelude compilation stats with failure reasons.
@@ -6997,7 +7033,7 @@ test "emitProgramC dispatch table has correct entries" {
     try testing.expect(std.mem.indexOf(u8, source, "onez_w_bar,") != null);
 }
 
-test "emitProgramC quotation table with compiled and uncompiled entries" {
+test "emitProgramC quotation table with all compiled entries" {
     const instrs = makeInstructions(.{@as(i64, 42)});
 
     const words = [_]AotWordDesc{
@@ -7006,7 +7042,7 @@ test "emitProgramC quotation table with compiled and uncompiled entries" {
 
     var quotations = [_]AotQuotationDesc{
         .{ .quotation_id = 0, .instructions = &instrs, .c_name = "onez_q_0", .compiled = true },
-        .{ .quotation_id = 1, .instructions = &instrs, .c_name = "onez_q_1", .compiled = false },
+        .{ .quotation_id = 1, .instructions = &instrs, .c_name = "onez_q_1", .compiled = true },
         .{ .quotation_id = 2, .instructions = &instrs, .c_name = "onez_q_2", .compiled = true },
     };
 
@@ -7014,15 +7050,41 @@ test "emitProgramC quotation table with compiled and uncompiled entries" {
     const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, &diag, testing.allocator);
     defer testing.allocator.free(source);
 
-    // Table exists
+    // Table exists with all entries
     try testing.expect(std.mem.indexOf(u8, source, "onez_quotation_table") != null);
-
-    // Compiled entries present, uncompiled is NULL
     try testing.expect(std.mem.indexOf(u8, source, "onez_q_0,") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_q_1,") != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_q_2,") != null);
 
     // Registration call in main
     try testing.expect(std.mem.indexOf(u8, source, "onez_runtime_register_quotations(rt, onez_quotation_table, 3)") != null);
+}
+
+test "emitProgramC rejects uncompiled quotation bodies with inferred effects" {
+    const good_instrs = makeInstructions(.{@as(i64, 42)});
+    // Boolean + addition: effect inferable (1,1) but fails compilation
+    // because bool_ref is not a numeric operand.
+    const bad_instrs = makeInstructions(.{ "t", "+" });
+
+    const words = [_]AotWordDesc{
+        .{ .name = "main", .instructions = &good_instrs, .input_count = 0, .output_count = 1, .word_id = 0 },
+    };
+
+    var quotations = [_]AotQuotationDesc{
+        .{ .quotation_id = 0, .instructions = &good_instrs, .c_name = "onez_q_0", .inferred_effect = .{ .input_count = 0, .output_count = 1 } },
+        .{ .quotation_id = 1, .instructions = &bad_instrs, .c_name = "onez_q_1", .inferred_effect = .{ .input_count = 1, .output_count = 1 } },
+        .{ .quotation_id = 2, .instructions = &good_instrs, .c_name = "onez_q_2", .inferred_effect = .{ .input_count = 0, .output_count = 1 } },
+    };
+
+    var diag: CodegenDiagnostics = .{};
+    const result = emitProgramC(&words, &quotations, 0, 0, &.{}, &diag, testing.allocator);
+    try testing.expectError(error.UncompiledQuotations, result);
+
+    // Diagnostics report the uncompiled quotation
+    try testing.expectEqual(@as(usize, 1), diag.uncompiled_quotations.len);
+    try testing.expectEqualStrings("onez_q_1", diag.uncompiled_quotations[0].c_name);
+    try testing.expectEqual(@as(u32, 1), diag.uncompiled_quotations[0].quotation_id);
+    testing.allocator.free(diag.uncompiled_quotations);
 }
 
 test "emitProgramC no quotation table when quotations empty" {

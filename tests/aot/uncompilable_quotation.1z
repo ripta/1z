@@ -1,0 +1,6 @@
+\ The quotation [ t + ] has an inferable effect (1 -- 1) but fails
+\ compilation because t pushes a boolean, which is not a valid
+\ numeric operand for +. This triggers a build error.
+discard-it: ( -- ) [ [ t + ] drop ] ;
+
+discard-it

@@ -1780,6 +1780,14 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
                 ) catch {};
             }
             allocator.free(codegen_diagnostics.uncompiled_words);
+        } else if (err == error.UncompiledQuotations) {
+            for (codegen_diagnostics.uncompiled_quotations) |q| {
+                err_writer.print(
+                    "Error: quotation body '{s}' could not be compiled\n",
+                    .{q.c_name},
+                ) catch {};
+            }
+            allocator.free(codegen_diagnostics.uncompiled_quotations);
         } else {
             err_writer.print("Error generating C source: {s}\n", .{@errorName(err)}) catch {};
         }
