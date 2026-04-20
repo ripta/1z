@@ -5,7 +5,7 @@ Warning: 'while' parameter 'body' has row-variable effect; quotation call falls 
 Warning: 'loop' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
 Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Prelude compilation: 9/17 words compiled (52.9%)
+Prelude compilation: 10/17 words compiled (58.8%)
   word 'until' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'while' cannot be compiled
@@ -22,7 +22,4 @@ Prelude compilation: 9/17 words compiled (52.9%)
       NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word '2dip' cannot be compiled
       NC.12: compilation produced unresolved dynamic calls or abstract stack entries
-  word 'output-stream' cannot be compiled
-      NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
 Quotation bodies compiled: 11/16 (68.8%)

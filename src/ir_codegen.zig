@@ -766,11 +766,29 @@ const StackEntry = union(enum) {
     /// that can't be represented as IR scalars, i.e., anything other than
     /// fixnum / boolean.
     raw_at_slot: usize,
+    /// Opaque Value at slot N that is known to be non-numeric (type value,
+    /// tagged value, parameter, etc.). Arithmetic and comparison operations
+    /// reject this entry instead of emitting tag checks that would bail.
+    non_numeric_at_slot: usize,
     /// Opaque row region of unknown size inserted when a quotation call has
     /// unresolved row variables. Operations on known entries above the
     /// region work normally; operations that need exact positions within
     /// the region return NotCompilable.
     row_region,
+
+    /// Returns the slot index if this is a raw_at_slot or non_numeric_at_slot.
+    fn slotIndex(self: StackEntry) ?usize {
+        return switch (self) {
+            .raw_at_slot => |s| s,
+            .non_numeric_at_slot => |s| s,
+            else => null,
+        };
+    }
+
+    /// Returns true if this is any kind of opaque slot (raw or non-numeric).
+    fn isAtSlot(self: StackEntry) bool {
+        return self == .raw_at_slot or self == .non_numeric_at_slot;
+    }
 };
 
 /// Shared compilation state threaded through instruction compilation.
@@ -1482,37 +1500,60 @@ fn serializeInstructionsInto(buf: *std.ArrayListUnmanaged(u8), instructions: []c
         try buf.appendSlice(allocator, std.mem.asBytes(&col));
         switch (instr.op) {
             .push_literal => |val| {
-                try buf.append(allocator, 0); // op tag: push_literal
-                switch (val) {
-                    .fixnum => |v| {
-                        try buf.append(allocator, 0);
-                        try buf.appendSlice(allocator, std.mem.asBytes(&v));
-                    },
-                    .float => |v| {
-                        try buf.append(allocator, 1);
-                        try buf.appendSlice(allocator, std.mem.asBytes(&v));
-                    },
-                    .boolean => |v| {
-                        try buf.append(allocator, 2);
-                        try buf.append(allocator, @intFromBool(v));
-                    },
-                    .string => |v| {
-                        try buf.append(allocator, 3);
-                        const len: u32 = @intCast(v.len);
-                        try buf.appendSlice(allocator, std.mem.asBytes(&len));
-                        try buf.appendSlice(allocator, v);
-                    },
-                    .symbol => |v| {
-                        try buf.append(allocator, 4);
-                        const len: u32 = @intCast(v.len);
-                        try buf.appendSlice(allocator, std.mem.asBytes(&len));
-                        try buf.appendSlice(allocator, v);
-                    },
-                    .quotation => |q| {
-                        try buf.append(allocator, 5);
-                        try serializeInstructionsInto(buf, q.instructions, allocator);
-                    },
-                    else => return IrCodegenError.NotCompilable, // D.4: non-simple AOT literal
+                // Non-simple literals (type values, enum variants, parameter
+                // definitions) are rewritten as call_word instructions so the
+                // quotation body dispatches to the named word at runtime.
+                if (val == .type_val) {
+                    const name = val.type_val.name;
+                    try buf.append(allocator, 1); // op tag: call_word
+                    const len: u32 = @intCast(name.len);
+                    try buf.appendSlice(allocator, std.mem.asBytes(&len));
+                    try buf.appendSlice(allocator, name);
+                } else if (val == .tagged) {
+                    const name = val.tagged.tag.name;
+                    try buf.append(allocator, 1); // op tag: call_word
+                    const len: u32 = @intCast(name.len);
+                    try buf.appendSlice(allocator, std.mem.asBytes(&len));
+                    try buf.appendSlice(allocator, name);
+                } else if (val == .parameter) {
+                    const name = val.parameter.name;
+                    try buf.append(allocator, 1); // op tag: call_word
+                    const len: u32 = @intCast(name.len);
+                    try buf.appendSlice(allocator, std.mem.asBytes(&len));
+                    try buf.appendSlice(allocator, name);
+                } else {
+                    try buf.append(allocator, 0); // op tag: push_literal
+                    switch (val) {
+                        .fixnum => |v| {
+                            try buf.append(allocator, 0);
+                            try buf.appendSlice(allocator, std.mem.asBytes(&v));
+                        },
+                        .float => |v| {
+                            try buf.append(allocator, 1);
+                            try buf.appendSlice(allocator, std.mem.asBytes(&v));
+                        },
+                        .boolean => |v| {
+                            try buf.append(allocator, 2);
+                            try buf.append(allocator, @intFromBool(v));
+                        },
+                        .string => |v| {
+                            try buf.append(allocator, 3);
+                            const len: u32 = @intCast(v.len);
+                            try buf.appendSlice(allocator, std.mem.asBytes(&len));
+                            try buf.appendSlice(allocator, v);
+                        },
+                        .symbol => |v| {
+                            try buf.append(allocator, 4);
+                            const len: u32 = @intCast(v.len);
+                            try buf.appendSlice(allocator, std.mem.asBytes(&len));
+                            try buf.appendSlice(allocator, v);
+                        },
+                        .quotation => |q| {
+                            try buf.append(allocator, 5);
+                            try serializeInstructionsInto(buf, q.instructions, allocator);
+                        },
+                        else => return IrCodegenError.NotCompilable, // D.4: non-simple AOT literal
+                    }
                 }
             },
             .call_word => |name| {
@@ -1767,7 +1808,7 @@ fn flushToPhysicalStack(state: *CompileState, stack: *[64]StackEntry, sp: usize)
                 stack[i] = .{ .raw_at_slot = i };
             },
             .quotation_body => {},
-            .raw_at_slot => {},
+            .raw_at_slot, .non_numeric_at_slot => {},
             .row_region => {},
         }
     }
@@ -1775,10 +1816,10 @@ fn flushToPhysicalStack(state: *CompileState, stack: *[64]StackEntry, sp: usize)
     // Second pass: resolve raw_at_slot entries, using swap for cross-references.
     for (0..sp) |i| {
         switch (stack[i]) {
-            .raw_at_slot => |s| {
+            .raw_at_slot, .non_numeric_at_slot => |s| {
                 if (s != i) {
                     // Check for swap pattern: stack[i] -> s and stack[s] -> i
-                    if (s < sp and stack[s] == .raw_at_slot and stack[s].raw_at_slot == i) {
+                    if (s < sp and stack[s].isAtSlot() and stack[s].slotIndex().? == i) {
                         emitSwapSlots(ctx, base_addr, i, s);
                         stack[i] = .{ .raw_at_slot = i };
                         stack[s] = .{ .raw_at_slot = s };
@@ -1829,9 +1870,9 @@ fn emitEpilogue(
                 state.not_compilable_reason = .quotation_truthiness;
                 return IrCodegenError.NotCompilable;
             },
-            .raw_at_slot => |s| {
+            .raw_at_slot, .non_numeric_at_slot => |s| {
                 if (s != i) {
-                    if (s < sp and stack[s] == .raw_at_slot and stack[s].raw_at_slot == i) {
+                    if (s < sp and stack[s].isAtSlot() and stack[s].slotIndex().? == i) {
                         emitSwapSlots(ctx, base_addr, i, s);
                         stack[s] = .{ .raw_at_slot = s };
                     } else {
@@ -1874,6 +1915,10 @@ fn cloneStackEntry(
         .raw_at_slot => |s| blk: {
             emitCopySlot(ctx, base_addr, s, dest_slot);
             break :blk .{ .raw_at_slot = dest_slot };
+        },
+        .non_numeric_at_slot => |s| blk: {
+            emitCopySlot(ctx, base_addr, s, dest_slot);
+            break :blk .{ .non_numeric_at_slot = dest_slot };
         },
         .row_region => IrCodegenError.NotCompilable,
     };
@@ -1957,6 +2002,7 @@ fn emitTruthiness(state: *CompileState, entry: StackEntry, base_addr: c.ir_ref) 
             const is_falsy = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_bool_tag, is_false_payload);
             break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), is_falsy, false_const);
         },
+        .non_numeric_at_slot => c.ir_const_bool(ctx, true),
         .quotation_body, .row_region => {
             state.not_compilable_reason = .quotation_truthiness;
             return IrCodegenError.NotCompilable;
@@ -2217,13 +2263,13 @@ fn tryEmitInlineTypedValidateAndPromote(
             }
             return false;
         },
-        .raw_at_slot => {},
+        .raw_at_slot, .non_numeric_at_slot => {},
         .quotation_body, .row_region => return false,
     }
 
     const expected_tag_const = mapTypeNameToTagConst(state, expected_name) orelse return false;
 
-    const value_slot: usize = value_entry.raw_at_slot;
+    const value_slot: usize = value_entry.slotIndex().?;
 
     sp.* -= 2;
 
@@ -2396,10 +2442,57 @@ fn compileInstructions(
                     _ = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
                     stack[sp.*] = .{ .raw_at_slot = sp.* };
                     sp.* += 1;
+                } else if (state.aot_mode and (val == .type_val or val == .tagged or val == .parameter)) {
+                    // Non-simple literals from named words (type values, enum
+                    // variants, parameter definitions). Emit a callback that
+                    // looks up the word at runtime and pushes its literal value.
+                    const lit_name = switch (val) {
+                        .type_val => |tv| tv.name,
+                        .tagged => |t| t.tag.name,
+                        .parameter => |p| p.name,
+                        else => unreachable,
+                    };
+
+                    const proto_3arg = c.ir_proto_3(ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+                    const push_fn = c.ir_const_func(ctx, c.ir_str(ctx, "onez_push_word_literal"), proto_3arg);
+
+                    // Store sp before callback.
+                    const sp_const = c.ir_const_addr(ctx, sp.*);
+                    const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
+                    c._ir_STORE(ctx, state.sp_ptr, new_sp);
+
+                    const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+                        state.preloaded_ctx_val
+                    else blk: {
+                        JitContextLayout.ensureInit();
+                        const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+                        const ctx_addr2 = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+                        break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr2);
+                    };
+
+                    const lit_id = if (state.aot_string_literals) |lits| lits.items.len else 0;
+                    var sym_buf: [32]u8 = undefined;
+                    const sym_name = std.fmt.bufPrint(&sym_buf, "onez_lit_{d}", .{lit_id}) catch unreachable;
+                    const sym_ref = c.ir_const_func(ctx, c.ir_strl(ctx, &sym_buf, sym_name.len), 0);
+                    const name_len_const = c.ir_const_addr(ctx, lit_name.len);
+
+                    const call_result = c._ir_CALL_3(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, name_len_const);
+                    emitCallbackPostCheck(state, call_result, state.error_propagate_status);
+
+                    if (state.aot_string_literals) |lits| {
+                        lits.append(std.heap.page_allocator, .{
+                            .data = lit_name,
+                            .is_symbol = false,
+                        }) catch {};
+                    }
+
+                    // Re-read sp after callback (it pushed one value).
+                    _ = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
+                    stack[sp.*] = .{ .non_numeric_at_slot = sp.* };
+                    sp.* += 1;
                 } else if (state.aot_mode) {
-                    // In AOT mode, non-simple literals (parameters, tagged
-                    // values, etc.) contain process-local pointers that are
-                    // invalid in the AOT binary. Bail to interpreter fallback.
+                    // Remaining non-simple literals (array, etc.) that cannot
+                    // be reconstructed from a named word lookup.
                     state.not_compilable_reason = .non_serializable_literal;
                     return IrCodegenError.NotCompilable;
                 } else {
@@ -2562,6 +2655,17 @@ fn compileInstructions(
                             const is_falsy = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_bool_tag, is_false_payload);
                             // is_truthy = not is_falsy (negate by comparing with false)
                             break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), is_falsy, false_const);
+                        },
+                        .non_numeric_at_slot => {
+                            // Non-numeric values (type values, tagged values,
+                            // parameters) are always truthy. Emit only the
+                            // true branch.
+                            var false_stack = stack.*;
+                            var false_sp = sp.*;
+                            try compileInstructions(state, false_body, &false_stack, &false_sp);
+                            try compileInstructions(state, true_body, stack, sp);
+                            if (false_sp != sp.*) return IrCodegenError.StackShapeMismatch;
+                            continue;
                         },
                         .quotation_body, .row_region => {
                             state.not_compilable_reason = .quotation_truthiness;
@@ -2735,7 +2839,7 @@ fn compileInstructions(
                                 stack[0] = .row_region;
                             }
                         },
-                        .i64_ref, .f64_ref, .bool_ref, .row_region => {
+                        .i64_ref, .f64_ref, .bool_ref, .non_numeric_at_slot, .row_region => {
                             state.not_compilable_reason = .quotation_reification;
                             return IrCodegenError.NotCompilable;
                         },
@@ -4309,6 +4413,8 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "static int32_t onez_push_string(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushString(ctx, (uintptr_t)str, len); }\n");
     try out.appendSlice(allocator, "static int32_t onez_push_symbol(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushSymbol(ctx, (uintptr_t)str, len); }\n");
     try out.appendSlice(allocator, "static int32_t onez_push_quotation(uintptr_t ctx, const unsigned char *data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id) { return jitPushQuotation(ctx, (uintptr_t)data, len, dest, quotation_id); }\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushWordLiteral(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len);\n");
+    try out.appendSlice(allocator, "static int32_t onez_push_word_literal(uintptr_t ctx, const char *name, uintptr_t len) { return jitPushWordLiteral(ctx, (uintptr_t)name, len); }\n");
 
     // Runtime entry point externs
     try out.appendSlice(allocator,
@@ -5207,6 +5313,40 @@ export fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv
         return 2;
     };
     return 0;
+}
+
+/// Push a word's literal value onto the stack. The word must be a single
+/// push_literal instruction (type words, enum variants, parameter definitions).
+/// The name is at `name_ptr` with length `name_len`. The runtime looks up the
+/// word in the dictionary and pushes its literal value.
+export fn jitPushWordLiteral(ctx_raw: usize, name_ptr: usize, name_len: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const src: [*]const u8 = @ptrFromInt(name_ptr);
+    const name = src[0..name_len];
+    const word = ctx.lookupWord(name) orelse {
+        ctx.jit_pending_error = error.WordNotFound;
+        return 2;
+    };
+    switch (word.action) {
+        .compound => |instrs| {
+            if (instrs.len == 1) {
+                switch (instrs[0].op) {
+                    .push_literal => |val| {
+                        ctx.stack.push(val) catch {
+                            ctx.jit_pending_error = error.OutOfMemory;
+                            return 2;
+                        };
+                        return 0;
+                    },
+                    else => {},
+                }
+            }
+        },
+        .native, .host_callback => {},
+    }
+    ctx.jit_pending_error = error.TypeMismatch;
+    return 2;
 }
 
 /// Materialize a quotation literal at a specific memory address. The serialized
