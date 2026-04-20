@@ -793,6 +793,7 @@ const CompileState = struct {
     base_idx: c.ir_ref,
     value_size_const: c.ir_ref,
     dynamic_call_emitted: bool = false,
+    error_handler_terminal: bool = false,
     not_compilable_reason: ?NotCompilableReason = null,
     dispatch_ptr: c.ir_ref = c.IR_UNUSED,
     resolver: ?WordResolver = null,
@@ -2951,6 +2952,7 @@ fn compileInstructions(
 
                     sp.* -= 2;
                     state.dynamic_call_emitted = true;
+                    state.error_handler_terminal = true;
                 } else if (isDynamicVarOp(name)) {
                     const is_get = std.mem.eql(u8, name, "get");
                     const required: usize = if (is_get) 1 else 3;
@@ -4209,10 +4211,13 @@ fn emitWordCAotPass(
 
     if (state.diverged) {
         c._ir_RETURN(&ctx, ok_status);
+    } else if (state.error_handler_terminal) {
+        // The error handler callback (jitRecover/jitCleanup) updated sp_ptr
+        // and the physical stack directly. Return success, matching the JIT path.
+        c._ir_RETURN(&ctx, ok_status);
     } else if (state.dynamic_call_emitted or hasRowRegion(&stack_buf, sp)) {
-        // Dynamic quotation calls generate C code that calls through a raw
-        // address (uintptr_t), which is not a valid C function call. Reject
-        // these words so they fall back to the interpreter.
+        // Dynamic quotation calls or unresolved row regions mean the
+        // stack shape is unknown. Reject for interpreter fallback.
         if (nc_reason_out) |ro| ro.* = .post_compile_reject;
         return IrCodegenError.NotCompilable;
     } else {

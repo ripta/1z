@@ -18,7 +18,7 @@ Warning: 'while' parameter 'body' has row-variable effect; quotation call falls 
 Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Prelude compilation: 95/301 words compiled (31.6%)
+Prelude compilation: 104/301 words compiled (34.6%)
   word 'output-stream' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
@@ -79,8 +79,6 @@ Prelude compilation: 95/301 words compiled (31.6%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word '4keep' cannot be compiled
       NC.12: compilation produced unresolved dynamic calls or abstract stack entries
-  word '#nth?' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word '#all' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'make-method-info' cannot be compiled
@@ -96,10 +94,6 @@ Prelude compilation: 95/301 words compiled (31.6%)
   word 'string?' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word '#last?' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
-  word 'try' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'bi' cannot be compiled
       NC.5: calls a quotation whose stack effect is unknown
       hint: annotate the quotation parameter with a concrete stack effect
@@ -206,8 +200,6 @@ Prelude compilation: 95/301 words compiled (31.6%)
       hint: blocked until AOT literals can be serialized
   word 'option-payload>hash' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'ignore-errors' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word '>stack-effect-param' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word '>option-payload' cannot be compiled
@@ -230,10 +222,6 @@ Prelude compilation: 95/301 words compiled (31.6%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'reexport' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'receive?' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
-  word 'with-iterator' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'word-info?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'unmake-option-payload' cannot be compiled
@@ -302,8 +290,6 @@ Prelude compilation: 95/301 words compiled (31.6%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'borrowed?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '#next?' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'loop' cannot be compiled
       NC.5: calls a quotation whose stack effect is unknown
       hint: annotate the quotation parameter with a concrete stack effect
@@ -417,8 +403,6 @@ Prelude compilation: 95/301 words compiled (31.6%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word '>result-value' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '#first?' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'hash?' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
@@ -495,6 +479,4 @@ Prelude compilation: 95/301 words compiled (31.6%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word '...' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '>word-info?' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
 Quotation bodies compiled: 0

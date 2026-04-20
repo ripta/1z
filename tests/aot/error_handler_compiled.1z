@@ -1,0 +1,20 @@
+\ Verify recover/cleanup handler quotation bodies execute compiled
+\ in AOT mode. Each case wraps recover/cleanup in a user-defined word
+\ where it is the terminal operation (no post-recover code in the same
+\ word body, which would be uncompilable due to dynamic_call_emitted).
+
+\ -- recover: body succeeds, handler not called --
+safe-succeed: ( -- n ) [ [ 42 ] [ drop 0 ] recover ] ;
+safe-succeed .
+
+\ -- recover: body throws, handler runs --
+safe-div: ( a b -- n ) [ [ / ] [ drop 99 ] recover ] ;
+10 0 safe-div .
+
+\ -- cleanup: body succeeds, cleanup runs --
+with-cleanup: ( -- n n ) [ [ 10 ] [ 20 ] cleanup ] ;
+with-cleanup . .
+
+\ -- cleanup: body throws, error re-thrown, outer recover catches --
+cleanup-recover: ( -- s ) [ [ [ 1 0 / ] [ ] cleanup ] [ drop "caught" ] recover ] ;
+cleanup-recover .
