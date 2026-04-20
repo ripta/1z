@@ -1,0 +1,48 @@
+\ Benchmark: quotation body compilation for sequence operations
+\
+\ Measures the performance impact of compiled quotation bodies
+\ on #map, #filter, #each, and #reduce operations.
+\ Uses strings as sequences (array literals are non-simple AOT literals).
+\ Each benchmark is a tail-recursive word for AOT compatibility.
+
+test-str: ( -- s ) const [ "abcdefghijklmnopqrstuvwxyz" ] ;
+
+bench-each: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - test-str [ drop ] #each bench-each
+  ] if
+] ;
+
+bench-map: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - test-str [ inspect ] #map #collect drop bench-map
+  ] if
+] ;
+
+bench-filter: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - test-str [ "m" > ] #filter #collect drop bench-filter
+  ] if
+] ;
+
+bench-reduce: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - test-str "" [ #append ] #reduce drop bench-reduce
+  ] if
+] ;
+
+bench-pipeline: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 -
+    test-str [ inspect ] #map [ "\"m\"" > ] #filter #collect drop
+    bench-pipeline
+  ] if
+] ;
+
+5000 bench-each
+5000 bench-map
+5000 bench-filter
+5000 bench-reduce
+5000 bench-pipeline
+
+"done" print-line

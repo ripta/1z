@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test lsp-test aot-test update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib build-example clean help docs docker-build docker-test
+.PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test lsp-test aot-test update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation build-example clean help docs docker-build docker-test
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -77,6 +77,9 @@ BENCHMARK_FILES := $(wildcard tests/benchmark/*.1z)
 
 benchmark-fib: build ## Run fibonacci benchmark across all execution modes
 	@scripts/benchmark-fib.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/fibonacci_simple.1z $(ZIG_PREFIX)/benchmark-fib-aot
+
+benchmark-quotation: build ## Run quotation sequence benchmark across all execution modes
+	@scripts/benchmark-quotation.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/quotation_seq.1z $(ZIG_PREFIX)/benchmark-quotation-aot
 
 benchmark: build ## Run benchmarks
 	@for f in $(BENCHMARK_FILES); do echo "--- $$f ---"; ./$(ZIG_PREFIX)/bin/1z "$$f"; echo; done
