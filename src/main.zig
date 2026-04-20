@@ -1581,6 +1581,23 @@ fn printPreludeStats(
     err_writer.flush() catch {};
 }
 
+fn printQuotationStats(
+    quotations: []const aot_freeze.AotQuotationDesc,
+    err_writer: anytype,
+) void {
+    var compiled_count: usize = 0;
+    for (quotations) |q| {
+        if (q.compiled) compiled_count += 1;
+    }
+    if (quotations.len > 0) {
+        const pct = @as(f64, @floatFromInt(compiled_count)) / @as(f64, @floatFromInt(quotations.len)) * 100.0;
+        err_writer.print("Quotation bodies compiled: {d}/{d} ({d:.1}%)\n", .{ compiled_count, quotations.len, pct }) catch {};
+    } else {
+        err_writer.print("Quotation bodies compiled: 0\n", .{}) catch {};
+    }
+    err_writer.flush() catch {};
+}
+
 fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
@@ -1772,6 +1789,10 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         allocator,
     ) catch |err| {
         printQuotationFallbackWarnings(&codegen_diagnostics, allow_interpreter_fallback, err_writer, allocator);
+        if (compilation_stats) {
+            printPreludeStats(&codegen_diagnostics.prelude_stats, err_writer);
+            printQuotationStats(freeze_result.quotations, err_writer);
+        }
         if (err == error.UncompiledWords) {
             for (codegen_diagnostics.uncompiled_words) |name| {
                 err_writer.print(
@@ -1800,18 +1821,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
 
     if (compilation_stats) {
         printPreludeStats(&codegen_diagnostics.prelude_stats, err_writer);
-        var compiled_quotation_count: usize = 0;
-        for (freeze_result.quotations) |q| {
-            if (q.compiled) compiled_quotation_count += 1;
-        }
-        if (freeze_result.quotations.len > 0) {
-            const pct = @as(f64, @floatFromInt(compiled_quotation_count)) / @as(f64, @floatFromInt(freeze_result.quotations.len)) * 100.0;
-            err_writer.print("Quotation bodies compiled: {d}/{d} ({d:.1}%)\n", .{ compiled_quotation_count, freeze_result.quotations.len, pct }) catch {};
-        } else {
-            err_writer.print("Quotation bodies compiled: 0\n", .{}) catch {};
-        }
-
-        err_writer.flush() catch {};
+        printQuotationStats(freeze_result.quotations, err_writer);
     }
 
     // Write C source to a temp file.

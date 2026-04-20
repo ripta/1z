@@ -1,0 +1,15 @@
+\ Verify recover/cleanup handler quotation bodies are discovered,
+\ compiled, and execute via code_ptr in AOT mode.
+
+\ -- recover: body succeeds --
+[ 42 ] [ drop 0 ] recover .
+
+\ -- recover: body throws (division by zero), handler runs --
+[ 1 0 / ] [ drop 99 ] recover .
+
+\ -- cleanup: body succeeds, cleanup runs --
+[ 10 ] [ 1 + ] cleanup .
+
+\ -- cleanup: body throws, cleanup runs, error re-thrown --
+[ [ 1 0 / ] [ "cleaned" print-line ] cleanup ]
+[ drop "recovered" print-line ] recover

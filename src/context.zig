@@ -3549,11 +3549,36 @@ pub const Context = struct {
     }
 
     /// Execute a quotation with a new local frame for *lexical* scoping.
+    /// If the quotation has a compiled code_ptr, dispatches to the compiled
+    /// function instead of interpreting instructions.
     pub fn executeQuotationWithFrame(self: *Context, quotation: Quotation) anyerror!void {
         try self.pushLocalFrame();
         defer self.popLocalFrame();
 
-        // TODO(ripta): I think executeQuotation is *always* necessary to get TCO loop?
+        if (quotation.code_ptr) |ptr| {
+            const saved_sp = self.stack.items.items.len;
+            var jit_ctx = ir_codegen.JitContext{
+                .items_ptr = self.stack.items.items.ptr,
+                .sp_ptr = &self.stack.items.items.len,
+                .capacity = self.stack.items.capacity,
+                .ctx = self,
+            };
+            const func: ir_codegen.CompiledFn = @ptrCast(@alignCast(ptr));
+            const status = func(&jit_ctx);
+            switch (status) {
+                0 => return,
+                2 => {
+                    const err = self.jit_pending_error orelse error.UserThrown;
+                    self.jit_pending_error = null;
+                    return err;
+                },
+                else => {
+                    // Bail: restore stack pointer and fall through to interpreter
+                    self.stack.items.items.len = saved_sp;
+                },
+            }
+        }
+
         try self.executeQuotation(quotation);
     }
 
