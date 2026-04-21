@@ -584,6 +584,10 @@ fn nativeTruncRem(ctx: *Context) anyerror!void {
     const a = try ctx.stack.pop();
     if (a == .fixnum and b == .fixnum) {
         if (b.fixnum == 0) return error.DivisionByZero;
+        if (a.fixnum == std.math.minInt(i64) and b.fixnum == -1) {
+            try ctx.stack.push(.{ .fixnum = 0 });
+            return;
+        }
         try ctx.stack.push(.{ .fixnum = @rem(a.fixnum, b.fixnum) });
     } else if ((a == .bignum or a == .fixnum) and (b == .bignum or b == .fixnum)) {
         const alloc = ctx.arena.allocator();
