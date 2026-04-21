@@ -114,7 +114,6 @@ pub const extracted_primitives = stack.primitives ++
     iterators.primitives ++
     protocols.primitives ++
     sockets.primitives ++
-    introspect.primitives ++
     bitwise.primitives ++
     resources.primitives;
 

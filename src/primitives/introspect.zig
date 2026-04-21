@@ -5,11 +5,6 @@ const dispatch_mod = @import("../dispatch.zig");
 const WordDefinition = @import("../dictionary.zig").WordDefinition;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
-const StructType = value_mod.StructType;
-const StructInstance = value_mod.StructInstance;
-
-const structs_mod = @import("structs.zig");
-const getStructTypeFromMaker = structs_mod.getStructTypeFromMaker;
 
 const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
@@ -17,45 +12,14 @@ const RegistryEntry = types_mod.RegistryEntry;
 
 const helpers = @import("helpers.zig");
 
-pub const primitives = [_]Primitive{
-    .{ .name = "all-words", .stack_effect = "-- array", .doc = "Return an array of word-info structs for every word in the dictionary.", .func = nativeAllWords },
-};
+pub const primitives = [_]Primitive{};
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = ">word", .func = nativeToWord },
+    .{ .name = "all-words", .func = nativeAllWords },
 };
 
-const StructTypes = struct {
-    word_info: *const StructType,
-    stack_effect: *const StructType,
-    source_loc: *const StructType,
-};
-
-fn lookupStructTypes(ctx: *const Context) !StructTypes {
-    // NOTE(ripta): Structs are defined as part of the prelude, which means we need to reach into the context
-    //              to retrieve the definitions for word-info, stack-effect, and source-loc structs.
-    //              This couples the native word `>word` to a specific prelude implementation.
-    //              It moreover couples a specific contract, i.e., `make-NAME` words.
-    const word_info_st = getStructTypeFromMaker(ctx, "make-word-info") orelse {
-        helpers.setErrorContext(@constCast(ctx), "word-info struct type not found", .{});
-        return error.NameError;
-    };
-    const stack_effect_st = getStructTypeFromMaker(ctx, "make-stack-effect") orelse {
-        helpers.setErrorContext(@constCast(ctx), "stack-effect struct type not found", .{});
-        return error.NameError;
-    };
-    const source_loc_st = getStructTypeFromMaker(ctx, "make-source-loc") orelse {
-        helpers.setErrorContext(@constCast(ctx), "source-loc struct type not found", .{});
-        return error.NameError;
-    };
-    return .{
-        .word_info = word_info_st,
-        .stack_effect = stack_effect_st,
-        .source_loc = source_loc_st,
-    };
-}
-
-fn buildWordInfo(alloc: Allocator, ctx: *const Context, sts: StructTypes, name: []const u8, word: WordDefinition) !Value {
+fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: WordDefinition) !Value {
     const effect_val: Value = if (word.stack_effect) |effect| blk: {
         const inputs_arr = try alloc.alloc(Value, effect.inputs.len);
         for (effect.inputs, 0..) |param, i| {
@@ -68,9 +32,7 @@ fn buildWordInfo(alloc: Allocator, ctx: *const Context, sts: StructTypes, name: 
         const se_fields = try alloc.alloc(Value, 2);
         se_fields[0] = .{ .array = inputs_arr };
         se_fields[1] = .{ .array = outputs_arr };
-        const se_instance = try alloc.create(StructInstance);
-        se_instance.* = .{ .struct_type = sts.stack_effect, .fields = se_fields };
-        break :blk .{ .struct_instance = se_instance };
+        break :blk .{ .array = se_fields };
     } else .{ .boolean = false };
 
     const doc_val: Value = if (word.doc) |d|
@@ -113,9 +75,7 @@ fn buildWordInfo(alloc: Allocator, ctx: *const Context, sts: StructTypes, name: 
         sl_fields[0] = .{ .string = file };
         sl_fields[1] = .{ .fixnum = @intCast(word.source_line) };
         sl_fields[2] = .{ .fixnum = @intCast(word.source_column) };
-        const sl_instance = try alloc.create(StructInstance);
-        sl_instance.* = .{ .struct_type = sts.source_loc, .fields = sl_fields };
-        break :blk .{ .struct_instance = sl_instance };
+        break :blk .{ .array = sl_fields };
     } else .{ .boolean = false };
 
     const module_val: Value = if (word.source_module) |mod|
@@ -123,7 +83,7 @@ fn buildWordInfo(alloc: Allocator, ctx: *const Context, sts: StructTypes, name: 
     else
         .{ .boolean = false };
 
-    // Fields: name stack-effect doc markers native? body methods source-loc module
+    // Raw array: name stack-effect doc markers native? body methods source-loc module
     const wi_fields = try alloc.alloc(Value, 9);
     wi_fields[0] = .{ .string = name };
     wi_fields[1] = effect_val;
@@ -134,13 +94,11 @@ fn buildWordInfo(alloc: Allocator, ctx: *const Context, sts: StructTypes, name: 
     wi_fields[6] = .{ .array = methods_arr };
     wi_fields[7] = source_loc_val;
     wi_fields[8] = module_val;
-    const wi_instance = try alloc.create(StructInstance);
-    wi_instance.* = .{ .struct_type = sts.word_info, .fields = wi_fields };
 
-    return .{ .struct_instance = wi_instance };
+    return .{ .array = wi_fields };
 }
 
-/// >word ( symbol -- word-info ) - Look up a word by symbol name and return structured word-info
+/// >word ( symbol -- array ) - Look up a word by symbol name and return a raw 9-element array
 fn nativeToWord(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -154,16 +112,15 @@ fn nativeToWord(ctx: *Context) anyerror!void {
         },
     };
 
-    const word = ctx.lookupWord(name) orelse {
+    const word = ctx.lookupUserVisibleWord(name) orelse {
         helpers.setErrorContext(ctx, "word not found: {s}", .{name});
         return error.NameError;
     };
 
-    const sts = try lookupStructTypes(ctx);
-    try ctx.stack.push(try buildWordInfo(alloc, ctx, sts, name, word));
+    try ctx.stack.push(try buildWordInfo(alloc, ctx, name, word));
 }
 
-/// all-words ( -- array ) - Return an array of word-info structs for every visible word.
+/// all-words ( -- array ) - Return an array of raw word-info arrays for every visible word.
 ///
 /// Searches in order:
 ///
@@ -174,16 +131,15 @@ fn nativeToWord(ctx: *Context) anyerror!void {
 /// Higher-priority definitions shadow lower ones.
 fn nativeAllWords(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
-    const sts = try lookupStructTypes(ctx);
 
     var seen: std.StringHashMapUnmanaged(void) = .{};
     var results: std.ArrayListUnmanaged(Value) = .{};
 
-    try collectFrameWords(alloc, ctx, sts, ctx, &seen, &results);
+    try collectFrameWords(alloc, ctx, ctx, &seen, &results);
 
     var ancestor = ctx.parent_context;
     while (ancestor) |anc| {
-        try collectFrameWords(alloc, ctx, sts, anc, &seen, &results);
+        try collectFrameWords(alloc, ctx, anc, &seen, &results);
         ancestor = anc.parent_context;
     }
 
@@ -197,7 +153,6 @@ fn nativeAllWords(ctx: *Context) anyerror!void {
 fn collectFrameWords(
     alloc: std.mem.Allocator,
     lookup_ctx: *Context,
-    sts: StructTypes,
     source_ctx: *const Context,
     seen: *std.StringHashMapUnmanaged(void),
     results: *std.ArrayListUnmanaged(Value),
@@ -210,7 +165,7 @@ fn collectFrameWords(
         while (iter.next()) |entry| {
             const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
             if (!gop.found_existing) {
-                try results.append(alloc, try buildWordInfo(alloc, lookup_ctx, sts, entry.key_ptr.*, entry.value_ptr.*));
+                try results.append(alloc, try buildWordInfo(alloc, lookup_ctx, entry.key_ptr.*, entry.value_ptr.*));
             }
         }
     }
@@ -218,7 +173,7 @@ fn collectFrameWords(
     while (dict_iter.next()) |entry| {
         const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
         if (!gop.found_existing) {
-            try results.append(alloc, try buildWordInfo(alloc, lookup_ctx, sts, entry.key_ptr.*, entry.value_ptr.*));
+            try results.append(alloc, try buildWordInfo(alloc, lookup_ctx, entry.key_ptr.*, entry.value_ptr.*));
         }
     }
 }
