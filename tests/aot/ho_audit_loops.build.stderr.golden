@@ -5,21 +5,12 @@ Warning: 'while' parameter 'body' has row-variable effect; quotation call falls 
 Warning: 'loop' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
 Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Prelude compilation: 10/17 words compiled (58.8%)
+Prelude compilation: 14/17 words compiled (82.4%)
   word 'until' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'while' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'when' cannot be compiled
-      NC.8: a quotation in abstract form must become a concrete runtime value
-      hint: blocked until quotation bodies can be compiled
   word 'loop' cannot be compiled
       NC.5: calls a quotation whose stack effect is unknown
       hint: annotate the quotation parameter with a concrete stack effect
-  word 'keep' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
-  word 'do' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
-  word '2dip' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
 Quotation bodies compiled: 11/16 (68.8%)

@@ -1,2 +1,1 @@
 Warning: 'my-apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Error: word 'my-apply' could not be compiled to C

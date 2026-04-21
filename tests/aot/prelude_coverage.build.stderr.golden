@@ -18,13 +18,11 @@ Warning: 'while' parameter 'body' has row-variable effect; quotation call falls 
 Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Prelude compilation: 132/301 words compiled (43.9%)
+Prelude compilation: 152/301 words compiled (50.5%)
   word 'provenance?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'run-benchmarks' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '4nip' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'quotation?' cannot be compiled
       NC.2: binary operation has two operands with no known numeric type
       hint: blocked until polymorphic arithmetic can be compiled
@@ -62,8 +60,6 @@ Prelude compilation: 132/301 words compiled (43.9%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word '>option' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '4keep' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word '#all' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'make-method-info' cannot be compiled
@@ -82,24 +78,18 @@ Prelude compilation: 132/301 words compiled (43.9%)
   word 'bi' cannot be compiled
       NC.5: calls a quotation whose stack effect is unknown
       hint: annotate the quotation parameter with a concrete stack effect
-  word '3keep' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'pragma-get' cannot be compiled
       NC.6: calls a word that is not available in the AOT compilation set
       hint: blocked until the AOT resolver includes this word
   word 'bignum?' cannot be compiled
       NC.2: binary operation has two operands with no known numeric type
       hint: blocked until polymorphic arithmetic can be compiled
-  word 'with-input-stream' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'type-name' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'make-option:some' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'make-stack-effect-info' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'keep' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'parse-quotation' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'cond' cannot be compiled
@@ -109,8 +99,6 @@ Prelude compilation: 132/301 words compiled (43.9%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'make-result:ok' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '6nip' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'unmake-word-info' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'on:unhandled-error?' cannot be compiled
@@ -119,17 +107,10 @@ Prelude compilation: 132/301 words compiled (43.9%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'result-error?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '2apply' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
-  word 'unless' cannot be compiled
-      NC.8: a quotation in abstract form must become a concrete runtime value
-      hint: blocked until quotation bodies can be compiled
   word '>result-error' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word '>source-loc' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '3nip' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'native?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'make-stack-effect-param' cannot be compiled
@@ -185,8 +166,6 @@ Prelude compilation: 132/301 words compiled (43.9%)
       hint: annotate the quotation parameter with a concrete stack effect
   word 'unmake-result:ok' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'do' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'result:ok>' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word '1check' cannot be compiled
@@ -212,8 +191,6 @@ Prelude compilation: 132/301 words compiled (43.9%)
   word 'symbol?' cannot be compiled
       NC.2: binary operation has two operands with no known numeric type
       hint: blocked until polymorphic arithmetic can be compiled
-  word '2keep' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'stack-effect-info>hash' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'throw-type-error' cannot be compiled
@@ -256,8 +233,6 @@ Prelude compilation: 132/301 words compiled (43.9%)
   word 'generic?' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word '4dip' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word '>ordering' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'type-members' cannot be compiled
@@ -268,8 +243,6 @@ Prelude compilation: 132/301 words compiled (43.9%)
   word 'boolean?' cannot be compiled
       NC.2: binary operation has two operands with no known numeric type
       hint: blocked until polymorphic arithmetic can be compiled
-  word '3dip' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'mutable-map?' cannot be compiled
       NC.2: binary operation has two operands with no known numeric type
       hint: blocked until polymorphic arithmetic can be compiled
@@ -312,8 +285,6 @@ Prelude compilation: 132/301 words compiled (43.9%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'unmake-dispatch-provenance' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'with-output-stream' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'bytes-alloc' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'assert-no-shadow' cannot be compiled
@@ -340,14 +311,8 @@ Prelude compilation: 132/301 words compiled (43.9%)
   word 'hash?' cannot be compiled
       NC.2: binary operation has two operands with no known numeric type
       hint: blocked until polymorphic arithmetic can be compiled
-  word '3apply' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'unmake-source-loc' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '5nip' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
-  word '2dip' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'result:ok?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'pragma-get?' cannot be compiled
@@ -365,9 +330,6 @@ Prelude compilation: 132/301 words compiled (43.9%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'ffi-ptr+len>bytes' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'when' cannot be compiled
-      NC.8: a quotation in abstract form must become a concrete runtime value
-      hint: blocked until quotation bodies can be compiled
   word 'result:ok>hash' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word '>result:ok' cannot be compiled
@@ -389,10 +351,6 @@ Prelude compilation: 132/301 words compiled (43.9%)
       hint: blocked until polymorphic arithmetic can be compiled
   word 'close-iterator' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word '1apply' cannot be compiled
-      NC.12: compilation produced unresolved dynamic calls or abstract stack entries
   word 'make-dispatch-provenance' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-  word '...' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
 Quotation bodies compiled: 0

@@ -2011,7 +2011,9 @@ fn emitTruthiness(state: *CompileState, entry: StackEntry, base_addr: c.ir_ref) 
 }
 
 /// Emit an indirect call to a quotation Value stored at physical stack slot.
-/// Performs tag check, code_ptr null check, flushes stack, and calls.
+/// In JIT mode: tag check, code_ptr null check, direct call.
+/// In AOT mode: dispatch via jitCallQuotation (indirect code_ptr calls
+/// cannot be emitted to C).
 fn emitIndirectQuotCall(
     state: *CompileState,
     stack: *[64]StackEntry,
@@ -2020,6 +2022,20 @@ fn emitIndirectQuotCall(
 ) IrCodegenError!void {
     const ctx = state.ctx;
     const base_addr = state.base_addr;
+
+    if (state.aot_mode) {
+        // AOT: dispatch via jitCallQuotation which handles both
+        // compiled and uncompiled quotations. The quotation must be at
+        // TOS for jitCallQuotation to pop it.
+        sp.* += 1;
+        flushToPhysicalStack(state, stack, sp.*);
+        const ctx_val = emitCallbackPreamble(state, sp.*);
+        sp.* -= 1;
+        const call_result = c._ir_CALL_1(ctx, c.IR_I32, state.call_quotation_fn, ctx_val);
+        emitCallbackPostCheck(state, call_result, state.error_propagate_status);
+        state.dynamic_call_emitted = true;
+        return;
+    }
 
     const slot_byte_offset = c.ir_const_addr(ctx, slot * ValueLayout.value_size);
     const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
@@ -2058,6 +2074,36 @@ fn emitIndirectQuotCall(
     c._ir_IF_FALSE(ctx, if_bail);
 
     state.dynamic_call_emitted = true;
+}
+
+/// Emit a runtime quotation dispatch for an `if` branch where the quotation
+/// is a `raw_at_slot` entry rather than a statically-known `quotation_body`.
+/// Dispatches via `jitCallQuotation` which handles both compiled and
+/// uncompiled quotations.
+///
+/// Unlike `emitIndirectQuotCall`, this does NOT set `dynamic_call_emitted`
+/// because the branch effect is known from the other (quotation_body) branch.
+fn emitIfBranchDispatch(
+    state: *CompileState,
+    stack: *[64]StackEntry,
+    sp: *usize,
+    slot: usize,
+) void {
+    const ctx = state.ctx;
+    _ = slot;
+
+    // The quotation is already on the physical stack at `slot`.
+    // jitCallQuotation pops TOS and calls it.
+    sp.* += 1;
+    flushToPhysicalStack(state, stack, sp.*);
+    const ctx_val = emitCallbackPreamble(state, sp.*);
+    sp.* -= 1;
+    const call_quot_fn = if (state.aot_mode)
+        state.call_quotation_fn
+    else
+        c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
+    const result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
+    emitCallbackPostCheck(state, result, state.error_propagate_status);
 }
 
 /// Compile a while/until loop: pred and body quotations with an optional
@@ -2603,33 +2649,64 @@ fn compileInstructions(
                     sp.* -= 3;
 
                     const cond_entry = stack[sp.*];
-                    const true_body = switch (stack[sp.* + 1]) {
+                    const true_entry = stack[sp.* + 1];
+                    const false_entry = stack[sp.* + 2];
+
+                    // Extract quotation bodies where available; raw_at_slot
+                    // branches will be dispatched at runtime.
+                    const true_body: ?[]const Instruction = switch (true_entry) {
                         .quotation_body => |body| body,
+                        .raw_at_slot => null,
                         else => {
                             state.not_compilable_reason = .quotation_reification;
                             return IrCodegenError.NotCompilable;
                         },
                     };
-                    const false_body = switch (stack[sp.* + 2]) {
+                    const false_body: ?[]const Instruction = switch (false_entry) {
                         .quotation_body => |body| body,
+                        .raw_at_slot => null,
                         else => {
                             state.not_compilable_reason = .quotation_reification;
                             return IrCodegenError.NotCompilable;
                         },
                     };
 
+                    // At least one branch must be a quotation_body so the
+                    // branch effect can be inferred. Both raw_at_slot is
+                    // unsupported (no effect information available).
+                    if (true_body == null and false_body == null) {
+                        state.not_compilable_reason = .quotation_reification;
+                        return IrCodegenError.NotCompilable;
+                    }
+
                     // Determine the IR bool for the condition
                     const cond_ref = switch (cond_entry) {
                         .bool_ref => |ref| ref,
                         .i64_ref, .f64_ref => {
                             // Non-boolean values are always truthy in 1z.
-                            // Compile both branches to validate stack effects
-                            // match, but only emit the true branch.
-                            var false_stack = stack.*;
-                            var false_sp = sp.*;
-                            try compileInstructions(state, false_body, &false_stack, &false_sp);
-                            try compileInstructions(state, true_body, stack, sp);
-                            if (false_sp != sp.*) return IrCodegenError.StackShapeMismatch;
+                            // Only the true branch executes; compile both to
+                            // validate stack effects match.
+                            if (true_body) |tb| {
+                                if (false_body) |fb| {
+                                    var false_stack = stack.*;
+                                    var false_sp = sp.*;
+                                    try compileInstructions(state, fb, &false_stack, &false_sp);
+                                    try compileInstructions(state, tb, stack, sp);
+                                    if (false_sp != sp.*) return IrCodegenError.StackShapeMismatch;
+                                } else {
+                                    try compileInstructions(state, tb, stack, sp);
+                                }
+                            } else {
+                                // True branch is raw_at_slot: dispatch at runtime.
+                                emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
+                                // Infer effect from the false (quotation_body) branch.
+                                const eff = inferQuotationEffect(false_body.?, if (state.resolver) |r| r else null) orelse {
+                                    state.not_compilable_reason = .quotation_reification;
+                                    return IrCodegenError.NotCompilable;
+                                };
+                                sp.* = sp.* - eff.input_count + eff.output_count;
+                                resetStackToPhysical(stack, sp.*);
+                            }
                             continue;
                         },
                         .raw_at_slot => |s| blk: {
@@ -2660,11 +2737,25 @@ fn compileInstructions(
                             // Non-numeric values (type values, tagged values,
                             // parameters) are always truthy. Emit only the
                             // true branch.
-                            var false_stack = stack.*;
-                            var false_sp = sp.*;
-                            try compileInstructions(state, false_body, &false_stack, &false_sp);
-                            try compileInstructions(state, true_body, stack, sp);
-                            if (false_sp != sp.*) return IrCodegenError.StackShapeMismatch;
+                            if (true_body) |tb| {
+                                if (false_body) |fb| {
+                                    var false_stack = stack.*;
+                                    var false_sp = sp.*;
+                                    try compileInstructions(state, fb, &false_stack, &false_sp);
+                                    try compileInstructions(state, tb, stack, sp);
+                                    if (false_sp != sp.*) return IrCodegenError.StackShapeMismatch;
+                                } else {
+                                    try compileInstructions(state, tb, stack, sp);
+                                }
+                            } else {
+                                emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
+                                const eff = inferQuotationEffect(false_body.?, if (state.resolver) |r| r else null) orelse {
+                                    state.not_compilable_reason = .quotation_reification;
+                                    return IrCodegenError.NotCompilable;
+                                };
+                                sp.* = sp.* - eff.input_count + eff.output_count;
+                                resetStackToPhysical(stack, sp.*);
+                            }
                             continue;
                         },
                         .quotation_body, .row_region => {
@@ -2686,11 +2777,30 @@ fn compileInstructions(
                     const saved_items_ptr = state.items_ptr;
                     const saved_base_addr = state.base_addr;
 
+                    // Infer the branch effect when one branch is raw_at_slot.
+                    // The raw_at_slot branch is assumed to have the same effect
+                    // as the quotation_body branch.
+                    const branch_effect: ?InferredEffect = if (true_body == null or false_body == null) blk: {
+                        const known_body = true_body orelse false_body orelse unreachable;
+                        break :blk inferQuotationEffect(known_body, if (state.resolver) |r| r else null) orelse {
+                            state.not_compilable_reason = .quotation_reification;
+                            return IrCodegenError.NotCompilable;
+                        };
+                    } else null;
+
                     // Emit true branch
                     const if_ref = c._ir_IF(ctx, cond_ref);
                     c._ir_IF_TRUE(ctx, if_ref);
                     state.diverged = false;
-                    try compileInstructions(state, true_body, stack, sp);
+                    if (true_body) |tb| {
+                        try compileInstructions(state, tb, stack, sp);
+                    } else {
+                        // Runtime dispatch for raw_at_slot quotation
+                        emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
+                        const eff = branch_effect.?;
+                        sp.* = sp.* - eff.input_count + eff.output_count;
+                        resetStackToPhysical(stack, sp.*);
+                    }
                     const true_diverged = state.diverged;
                     var end_true: c.ir_ref = c.IR_UNUSED;
                     if (!true_diverged) {
@@ -2707,7 +2817,14 @@ fn compileInstructions(
                     c._ir_IF_FALSE(ctx, if_ref);
                     var false_sp = saved_sp;
                     state.diverged = false;
-                    try compileInstructions(state, false_body, &saved_stack, &false_sp);
+                    if (false_body) |fb| {
+                        try compileInstructions(state, fb, &saved_stack, &false_sp);
+                    } else {
+                        emitIfBranchDispatch(state, &saved_stack, &false_sp, false_entry.raw_at_slot);
+                        const eff = branch_effect.?;
+                        false_sp = false_sp - eff.input_count + eff.output_count;
+                        resetStackToPhysical(&saved_stack, false_sp);
+                    }
                     const false_diverged = state.diverged;
 
                     if (true_diverged and false_diverged) {
@@ -2758,69 +2875,66 @@ fn compileInstructions(
                             try compileInstructions(state, body, stack, sp);
                         },
                         .raw_at_slot => |s| {
-                            const slot_byte_offset = c.ir_const_addr(ctx, s * ValueLayout.value_size);
-                            const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-
-                            // Check tag is quotation
-                            const quotation_tag_const = emitTagConst(ctx, .quotation);
-                            emitTagCheck(ctx, elem_addr, quotation_tag_const, state.tag_offset_const, bail_status);
-
-                            // Load code_ptr from the quotation's payload
-                            const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
-                            const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, code_ptr_off);
-                            const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
-
-                            // Null-check code_ptr: statically-discovered quotations always have code_ptrs.
-                            // That's enforced at build time.
-                            const null_addr = c.ir_const_addr(ctx, 0);
-                            const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
-                            const if_null = c._ir_IF(ctx, is_null);
-
-                            // Cold path: only `>quotation`-constructed quotation (i.e., no code_ptr) should ever hit this.
-                            //
-                            // XXX(ripta): If we ever add user-level ways to construct quotations, we'll need to revisit this.
-                            //             We could add a new tag to mark uncompiled quotations, and to distinguish them from
-                            //             the compiled-but-not-yet-called quotations. That would still be non-ideal but at
-                            //             least wouldn't require a runtime check on every call.
-                            c._ir_IF_TRUE_cold(ctx, if_null);
-                            {
-                                // Flush stack with the quotation included at TOS for
-                                // the interpreter's native call handler.
+                            if (state.aot_mode) {
+                                // AOT: dispatch via jitCallQuotation. Indirect
+                                // code_ptr calls cannot be emitted to C.
                                 sp.* += 1;
                                 flushToPhysicalStack(state, stack, sp.*);
                                 const ctx_val = emitCallbackPreamble(state, sp.*);
                                 sp.* -= 1;
-                                const call_quot_fn = if (state.aot_mode)
-                                    state.call_quotation_fn
-                                else
-                                    c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
-                                const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-                                emitCallbackPostCheck(state, fb_result, state.error_propagate_status);
-                            }
-                            const end_fallback = c._ir_END(ctx);
+                                const call_result = c._ir_CALL_1(ctx, c.IR_I32, state.call_quotation_fn, ctx_val);
+                                emitCallbackPostCheck(state, call_result, state.error_propagate_status);
+                            } else {
+                                const slot_byte_offset = c.ir_const_addr(ctx, s * ValueLayout.value_size);
+                                const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
 
-                            // Hot path: quotation is compiled, call directly
-                            c._ir_IF_FALSE(ctx, if_null);
-                            {
-                                flushToPhysicalStack(state, stack, sp.*);
+                                // Check tag is quotation
+                                const quotation_tag_const = emitTagConst(ctx, .quotation);
+                                emitTagCheck(ctx, elem_addr, quotation_tag_const, state.tag_offset_const, bail_status);
 
-                                const new_sp_const = c.ir_const_addr(ctx, sp.*);
-                                const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, new_sp_const);
-                                c._ir_STORE(ctx, state.sp_ptr, new_sp);
+                                // Load code_ptr from the quotation's payload
+                                const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
+                                const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, code_ptr_off);
+                                const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
 
-                                const call_result = c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-                                emitCallbackPostCheck(state, call_result, call_result);
-                            }
-                            const end_compiled = c._ir_END(ctx);
+                                // Null-check code_ptr
+                                const null_addr = c.ir_const_addr(ctx, 0);
+                                const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
+                                const if_null = c._ir_IF(ctx, is_null);
 
-                            c._ir_MERGE_2(ctx, end_fallback, end_compiled);
+                                // Cold path: interpreter fallback for quotations
+                                // without a code_ptr (e.g., >quotation-constructed).
+                                c._ir_IF_TRUE_cold(ctx, if_null);
+                                {
+                                    sp.* += 1;
+                                    flushToPhysicalStack(state, stack, sp.*);
+                                    const ctx_val = emitCallbackPreamble(state, sp.*);
+                                    sp.* -= 1;
+                                    const call_quot_fn = c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
+                                    const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
+                                    emitCallbackPostCheck(state, fb_result, state.error_propagate_status);
+                                }
+                                const end_fallback = c._ir_END(ctx);
 
-                            // Both branches called emitCallbackPostCheck which
-                            // updated state.items_ptr/base_addr to branch-local
-                            // IR refs. Re-LOAD after the merge so subsequent
-                            // code uses refs that dominate this point.
-                            if (state.refresh_stack_fn != c.IR_UNUSED) {
-                                refreshCachedStackPointer(state);
+                                // Hot path: quotation is compiled, call directly
+                                c._ir_IF_FALSE(ctx, if_null);
+                                {
+                                    flushToPhysicalStack(state, stack, sp.*);
+
+                                    const new_sp_const = c.ir_const_addr(ctx, sp.*);
+                                    const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, new_sp_const);
+                                    c._ir_STORE(ctx, state.sp_ptr, new_sp);
+
+                                    const call_result = c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
+                                    emitCallbackPostCheck(state, call_result, call_result);
+                                }
+                                const end_compiled = c._ir_END(ctx);
+
+                                c._ir_MERGE_2(ctx, end_fallback, end_compiled);
+
+                                if (state.refresh_stack_fn != c.IR_UNUSED) {
+                                    refreshCachedStackPointer(state);
+                                }
                             }
 
                             if (state.quotation_slots.findSlot(s)) |info| {
@@ -4321,9 +4435,10 @@ fn emitWordCAotPass(
         c._ir_RETURN(&ctx, ok_status);
     } else if (state.dynamic_call_emitted or hasRowRegion(&stack_buf, sp)) {
         // Dynamic quotation calls or unresolved row regions mean the
-        // stack shape is unknown. Reject for interpreter fallback.
-        if (nc_reason_out) |ro| ro.* = .post_compile_reject;
-        return IrCodegenError.NotCompilable;
+        // stack shape is determined at runtime by native callbacks.
+        // Return success; the caller resolves row variables at the call
+        // site and adjusts sp accordingly.
+        c._ir_RETURN(&ctx, ok_status);
     } else {
         try emitEpilogue(&state, &stack_buf, sp, input_count, output_count);
     }

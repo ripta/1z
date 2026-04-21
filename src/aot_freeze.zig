@@ -489,8 +489,8 @@ fn buildAotDescs(
         try words.append(allocator, .{
             .name = name,
             .instructions = def.action.compound,
-            .input_count = @intCast(effect.inputs.len),
-            .output_count = @intCast(effect.outputs.len),
+            .input_count = @intCast(effect.concreteInputCount()),
+            .output_count = @intCast(effect.concreteOutputCount()),
             .word_id = id,
             .is_prelude = prelude_words.contains(name),
             .stack_effect = effect,
@@ -509,8 +509,8 @@ fn buildAotDescs(
         try words.append(allocator, .{
             .name = name,
             .instructions = &.{},
-            .input_count = @intCast(effect.inputs.len),
-            .output_count = @intCast(effect.outputs.len),
+            .input_count = @intCast(effect.concreteInputCount()),
+            .output_count = @intCast(effect.concreteOutputCount()),
             .word_id = id,
             .is_prelude = true,
             .is_native = true,
