@@ -581,6 +581,42 @@ fn emitTagCheck(
     c._ir_IF_FALSE(ctx, if_mismatch);
 }
 
+/// Call an error-reporting callback and return error_propagate_status.
+/// Replaces the bail_status return pattern: instead of returning status 1
+/// (bail) and relying on the caller to retry, this sets jit_pending_error
+/// via the callback and returns status 2 (error_propagate).
+fn emitErrorReturn(state: *CompileState, error_fn: c.ir_ref) void {
+    const ctx = state.ctx;
+    const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+        state.preloaded_ctx_val
+    else blk: {
+        JitContextLayout.ensureInit();
+        const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+        const ctx_addr2 = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+        break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr2);
+    };
+    const call_result = c._ir_CALL_1(ctx, c.IR_I32, error_fn, ctx_val);
+    c._ir_RETURN(ctx, call_result);
+}
+
+/// Check the tag of a Value at elem_addr; on mismatch, call an error
+/// callback and return error_propagate_status instead of bailing.
+fn emitTagCheckOrError(
+    state: *CompileState,
+    elem_addr: c.ir_ref,
+    expected_tag: c.ir_ref,
+    error_fn: c.ir_ref,
+) void {
+    const ctx = state.ctx;
+    const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, state.tag_offset_const);
+    const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
+    const tag_mismatch = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), tag_val, expected_tag);
+    const if_mismatch = c._ir_IF(ctx, tag_mismatch);
+    c._ir_IF_TRUE_cold(ctx, if_mismatch);
+    emitErrorReturn(state, error_fn);
+    c._ir_IF_FALSE(ctx, if_mismatch);
+}
+
 /// Load an i64 payload from a Value at elem_addr.
 fn emitUnboxI64(ctx: *c.ir_ctx, elem_addr: c.ir_ref, payload_offset_const: c.ir_ref) c.ir_ref {
     const payload_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, payload_offset_const);
@@ -750,13 +786,21 @@ fn emitPerOperationFallback(
 ) void {
     const ctx = state.ctx;
 
-    // Without a resolver, fall back to bail.
+    // Without a resolver, report a type error.
     const res = state.resolver orelse {
-        c._ir_RETURN(ctx, state.bail_status);
+        if (state.type_mismatch_error_fn != c.IR_UNUSED) {
+            emitErrorReturn(state, state.type_mismatch_error_fn);
+        } else {
+            c._ir_RETURN(ctx, state.bail_status);
+        }
         return;
     };
     const resolved = res.resolve(op_name, res.user_data) orelse {
-        c._ir_RETURN(ctx, state.bail_status);
+        if (state.type_mismatch_error_fn != c.IR_UNUSED) {
+            emitErrorReturn(state, state.type_mismatch_error_fn);
+        } else {
+            c._ir_RETURN(ctx, state.bail_status);
+        }
         return;
     };
 
@@ -832,6 +876,11 @@ fn emitPolymorphicBinaryArith(
     const both_numeric = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), va.is_numeric, vb.is_numeric);
     const if_numeric = c._ir_IF(ctx, both_numeric);
 
+    // Collect fixnum error-path ends (overflow, div-by-zero, minInt/-1).
+    // These merge with the non-numeric fallback instead of bailing.
+    var fixnum_error_ends: [2]c.ir_ref = .{ c.IR_UNUSED, c.IR_UNUSED };
+    var fixnum_error_count: usize = 0;
+
     // === Numeric path (hottt) ===
     c._ir_IF_TRUE(ctx, if_numeric);
     {
@@ -849,15 +898,66 @@ fn emitPolymorphicBinaryArith(
             const a_i64 = emitUnboxI64(ctx, va.elem_addr, state.payload_offset_const);
             const b_i64 = emitUnboxI64(ctx, vb.elem_addr, state.payload_offset_const);
 
-            const result_i64 = switch (op) {
-                .add => emitOverflowCheckedBinary(ctx, c.IR_ADD_OV, a_i64, b_i64, state.bail_status),
-                .sub => emitOverflowCheckedBinary(ctx, c.IR_SUB_OV, a_i64, b_i64, state.bail_status),
-                .mul => emitOverflowCheckedBinary(ctx, c.IR_MUL_OV, a_i64, b_i64, state.bail_status),
-                .div => emitDivision(ctx, a_i64, b_i64, state.bail_status),
-                .mod => emitEuclideanMod(ctx, a_i64, b_i64, state.bail_status),
-            };
+            switch (op) {
+                .add, .sub, .mul => {
+                    const ir_op = switch (op) {
+                        .add => c.IR_ADD_OV,
+                        .sub => c.IR_SUB_OV,
+                        .mul => c.IR_MUL_OV,
+                        else => unreachable,
+                    };
+                    const result_i64 = c.ir_fold2(ctx, c.IR_OPT(ir_op, c.IR_I64), a_i64, b_i64);
+                    const ovf = c.ir_fold1(ctx, c.IR_OPT(c.IR_OVERFLOW, c.IR_BOOL), result_i64);
+                    const if_ovf = c._ir_IF(ctx, ovf);
+                    c._ir_IF_TRUE_cold(ctx, if_ovf);
+                    fixnum_error_ends[fixnum_error_count] = c._ir_END(ctx);
+                    fixnum_error_count += 1;
+                    c._ir_IF_FALSE(ctx, if_ovf);
+                    emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, result_i64);
+                },
+                .div => {
+                    const zero = c.ir_const_i64(ctx, 0);
+                    const is_zero = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), b_i64, zero);
+                    const if_zero = c._ir_IF(ctx, is_zero);
+                    c._ir_IF_TRUE_cold(ctx, if_zero);
+                    fixnum_error_ends[fixnum_error_count] = c._ir_END(ctx);
+                    fixnum_error_count += 1;
+                    c._ir_IF_FALSE(ctx, if_zero);
 
-            emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, result_i64);
+                    const min_val = c.ir_const_i64(ctx, std.math.minInt(i64));
+                    const neg_one = c.ir_const_i64(ctx, -1);
+                    const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a_i64, min_val);
+                    const is_neg_one = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), b_i64, neg_one);
+                    const is_overflow = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_min, is_neg_one);
+                    const if_ov = c._ir_IF(ctx, is_overflow);
+                    c._ir_IF_TRUE_cold(ctx, if_ov);
+                    fixnum_error_ends[fixnum_error_count] = c._ir_END(ctx);
+                    fixnum_error_count += 1;
+                    c._ir_IF_FALSE(ctx, if_ov);
+
+                    const result_i64 = c.ir_fold2(ctx, c.IR_OPT(c.IR_DIV, c.IR_I64), a_i64, b_i64);
+                    emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, result_i64);
+                },
+                .mod => {
+                    const zero = c.ir_const_i64(ctx, 0);
+                    const is_zero = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), b_i64, zero);
+                    const if_zero = c._ir_IF(ctx, is_zero);
+                    c._ir_IF_TRUE_cold(ctx, if_zero);
+                    fixnum_error_ends[fixnum_error_count] = c._ir_END(ctx);
+                    fixnum_error_count += 1;
+                    c._ir_IF_FALSE(ctx, if_zero);
+
+                    // Euclidean modulo
+                    const rem_val = c.ir_fold2(ctx, c.IR_OPT(c.IR_MOD, c.IR_I64), a_i64, b_i64);
+                    const rem_xor_b = c.ir_fold2(ctx, c.IR_OPT(c.IR_XOR, c.IR_I64), rem_val, b_i64);
+                    const signs_differ = c.ir_fold2(ctx, c.IR_OPT(c.IR_LT, c.IR_BOOL), rem_xor_b, zero);
+                    const rem_nonzero = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), rem_val, zero);
+                    const needs_adjust = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), rem_nonzero, signs_differ);
+                    const adjusted = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_I64), rem_val, b_i64);
+                    const result_i64 = c.ir_fold3(ctx, c.IR_OPT(c.IR_COND, c.IR_I64), needs_adjust, adjusted, rem_val);
+                    emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, result_i64);
+                },
+            }
         }
         const end_fixnum = c._ir_END(ctx);
 
@@ -883,8 +983,24 @@ fn emitPolymorphicBinaryArith(
     }
     const end_numeric = c._ir_END(ctx);
 
-    // === Non-numeric fallback (cold): call the polymorphic native ===
+    // === Native fallback (cold): call the polymorphic native ===
+    // Reached from non-numeric types AND fixnum overflow/division errors.
     c._ir_IF_FALSE_cold(ctx, if_numeric);
+
+    // Merge fixnum error paths into the fallback entry.
+    if (fixnum_error_count > 0) {
+        const end_non_numeric = c._ir_END(ctx);
+        if (fixnum_error_count == 1) {
+            c._ir_MERGE_2(ctx, end_non_numeric, fixnum_error_ends[0]);
+        } else {
+            var inputs: [3]c.ir_ref = undefined;
+            inputs[0] = end_non_numeric;
+            inputs[1] = fixnum_error_ends[0];
+            inputs[2] = fixnum_error_ends[1];
+            c._ir_MERGE_N(ctx, @as(c.ir_ref, @intCast(fixnum_error_count + 1)), &inputs);
+        }
+    }
+
     {
         const op_name: []const u8 = switch (op) {
             .add => "+",
@@ -1145,6 +1261,12 @@ const CompileState = struct {
     aot_proto_2arg: c.ir_ref = c.IR_UNUSED,
     /// jitCallQuotation callback ref (used inline, not stored in CompileState for JIT).
     call_quotation_fn: c.ir_ref = c.IR_UNUSED,
+    /// Error-reporting callbacks that set jit_pending_error and return 2.
+    /// Used to replace bail_status returns with proper error propagation.
+    type_mismatch_error_fn: c.ir_ref = c.IR_UNUSED,
+    overflow_error_fn: c.ir_ref = c.IR_UNUSED,
+    div_zero_error_fn: c.ir_ref = c.IR_UNUSED,
+    underflow_error_fn: c.ir_ref = c.IR_UNUSED,
     /// Pre-loaded interpreter Context pointer from JitContext. In AOT mode,
     /// this is loaded once in the prologue to avoid the ir_emit_c d_0 bug
     /// where unused LOADs get assigned vreg 0 without a declaration.
@@ -2334,19 +2456,27 @@ fn emitIndirectQuotCall(
 
     // Check tag is quotation
     const quotation_tag_const = emitTagConst(ctx, .quotation);
-    emitTagCheck(ctx, elem_addr, quotation_tag_const, state.tag_offset_const, state.bail_status);
+    if (state.type_mismatch_error_fn != c.IR_UNUSED) {
+        emitTagCheckOrError(state, elem_addr, quotation_tag_const, state.type_mismatch_error_fn);
+    } else {
+        emitTagCheck(ctx, elem_addr, quotation_tag_const, state.tag_offset_const, state.bail_status);
+    }
 
     // Load code_ptr
     const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
     const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, code_ptr_off);
     const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
 
-    // Null-check code_ptr
+    // Null-check code_ptr: report type mismatch (uncompiled quotation)
     const null_addr = c.ir_const_addr(ctx, 0);
     const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
     const if_null = c._ir_IF(ctx, is_null);
     c._ir_IF_TRUE_cold(ctx, if_null);
-    c._ir_RETURN(ctx, state.bail_status);
+    if (state.type_mismatch_error_fn != c.IR_UNUSED) {
+        emitErrorReturn(state, state.type_mismatch_error_fn);
+    } else {
+        c._ir_RETURN(ctx, state.bail_status);
+    }
     c._ir_IF_FALSE(ctx, if_null);
 
     // Flush and update sp
@@ -2358,11 +2488,12 @@ fn emitIndirectQuotCall(
     // Indirect call via jit_ctx_ptr
     const call_result = c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
 
+    // Propagate the callee's return status directly (may be error_propagate)
     const zero_status = c.ir_const_i32(ctx, 0);
     const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
     const if_bail = c._ir_IF(ctx, call_failed);
     c._ir_IF_TRUE_cold(ctx, if_bail);
-    c._ir_RETURN(ctx, state.bail_status);
+    c._ir_RETURN(ctx, call_result);
     c._ir_IF_FALSE(ctx, if_bail);
 
     state.dynamic_call_emitted = true;
@@ -2522,7 +2653,11 @@ fn tryEmitInlineVirtualUnwrap(
     const base_addr = state.base_addr;
 
     const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, value_slot * ValueLayout.value_size));
-    emitTagCheck(ctx, elem_addr, state.tagged_tag_const, state.tag_offset_const, state.bail_status);
+    if (state.type_mismatch_error_fn != c.IR_UNUSED) {
+        emitTagCheckOrError(state, elem_addr, state.tagged_tag_const, state.type_mismatch_error_fn);
+    } else {
+        emitTagCheck(ctx, elem_addr, state.tagged_tag_const, state.tag_offset_const, state.bail_status);
+    }
 
     const tag_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, c.ir_const_addr(ctx, ValueLayout.tagged_tag_ptr_offset));
     const actual_vtype = c._ir_LOAD(ctx, c.IR_ADDR, tag_ptr_addr);
@@ -2530,7 +2665,11 @@ fn tryEmitInlineVirtualUnwrap(
     const vtype_mismatch = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), actual_vtype, expected_vtype);
     const if_mismatch = c._ir_IF(ctx, vtype_mismatch);
     c._ir_IF_TRUE_cold(ctx, if_mismatch);
-    c._ir_RETURN(ctx, state.bail_status);
+    if (state.type_mismatch_error_fn != c.IR_UNUSED) {
+        emitErrorReturn(state, state.type_mismatch_error_fn);
+    } else {
+        c._ir_RETURN(ctx, state.bail_status);
+    }
     c._ir_IF_FALSE(ctx, if_mismatch);
 
     const inner_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, c.ir_const_addr(ctx, ValueLayout.tagged_inner_ptr_offset));
@@ -2615,7 +2754,11 @@ fn tryEmitInlineTypedValidateAndPromote(
     const base_addr = state.base_addr;
 
     const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, value_slot * ValueLayout.value_size));
-    emitTagCheck(ctx, elem_addr, expected_tag_const, state.tag_offset_const, state.bail_status);
+    if (state.type_mismatch_error_fn != c.IR_UNUSED) {
+        emitTagCheckOrError(state, elem_addr, expected_tag_const, state.type_mismatch_error_fn);
+    } else {
+        emitTagCheck(ctx, elem_addr, expected_tag_const, state.tag_offset_const, state.bail_status);
+    }
 
     stack[sp.*] = .{ .raw_at_slot = value_slot };
     sp.* += 1;
@@ -2668,19 +2811,27 @@ fn tryEmitInlineStructFieldGet(
 
     // check Value at instance_slot must be .struct_instance
     const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, instance_slot * ValueLayout.value_size));
-    emitTagCheck(ctx, elem_addr, state.struct_instance_tag_const, state.tag_offset_const, state.bail_status);
+    if (state.type_mismatch_error_fn != c.IR_UNUSED) {
+        emitTagCheckOrError(state, elem_addr, state.struct_instance_tag_const, state.type_mismatch_error_fn);
+    } else {
+        emitTagCheck(ctx, elem_addr, state.struct_instance_tag_const, state.tag_offset_const, state.bail_status);
+    }
 
     // load *StructInstance from Value
     const si_ptr = emitUnboxPtr(ctx, elem_addr, state.payload_offset_const);
 
-    // check si_ptr.struct_type must match expected tpye
+    // check si_ptr.struct_type must match expected type
     const type_field_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), si_ptr, c.ir_const_addr(ctx, StructInstanceLayout.struct_type_offset));
     const actual_type = c._ir_LOAD(ctx, c.IR_ADDR, type_field_addr);
     const expected_type = c.ir_const_addr(ctx, @intFromPtr(struct_type_ptr));
     const type_mismatch = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), actual_type, expected_type);
     const if_mismatch = c._ir_IF(ctx, type_mismatch);
     c._ir_IF_TRUE_cold(ctx, if_mismatch);
-    c._ir_RETURN(ctx, state.bail_status);
+    if (state.type_mismatch_error_fn != c.IR_UNUSED) {
+        emitErrorReturn(state, state.type_mismatch_error_fn);
+    } else {
+        c._ir_RETURN(ctx, state.bail_status);
+    }
     c._ir_IF_FALSE(ctx, if_mismatch);
 
     const fields_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), si_ptr, c.ir_const_addr(ctx, StructInstanceLayout.fields_ptr_offset));
@@ -2892,7 +3043,11 @@ fn compileInstructions(
                         const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a, min_val);
                         const if_min = c._ir_IF(ctx, is_min);
                         c._ir_IF_TRUE_cold(ctx, if_min);
-                        c._ir_RETURN(ctx, bail_status);
+                        if (state.overflow_error_fn != c.IR_UNUSED) {
+                            emitErrorReturn(state, state.overflow_error_fn);
+                        } else {
+                            c._ir_RETURN(ctx, bail_status);
+                        }
                         c._ir_IF_FALSE(ctx, if_min);
 
                         const zero = c.ir_const_i64(ctx, 0);
@@ -2914,7 +3069,7 @@ fn compileInstructions(
                     const resolved = resolveOperandPair(stack[sp.*], stack[sp.* + 1], state) catch |err| switch (err) {
                         IrCodegenError.NotCompilable => {
                             // Operands are not numeric, e.g., type values in type predicates like `type-of fixnum =`.
-                            // Fall back to the polymorphic native compairson.
+                            // Fall back to the polymorphic native comparison.
                             sp.* += 2;
                             try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                             continue;
@@ -4079,6 +4234,12 @@ fn compileWordPass(
     else
         c.IR_UNUSED;
 
+    // Error-reporting callbacks: set jit_pending_error and return 2.
+    const type_mismatch_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitTypeMismatchError));
+    const overflow_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitOverflowError));
+    const div_zero_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitDivisionByZeroError));
+    const underflow_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitStackUnderflowError));
+
     // jitRefreshStack is emitted unconditionally: any callback in the body
     // may reallocate ctx.stack, so emitCallbackPostCheck refreshes regardless
     // of which callbacks the pre-scan flagged.
@@ -4117,7 +4278,8 @@ fn compileWordPass(
             const ensure_failed = c.ir_fold2(&ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), ensure_status, ok_status);
             const if_oom = c._ir_IF(&ctx, ensure_failed);
             c._ir_IF_TRUE_cold(&ctx, if_oom);
-            c._ir_RETURN(&ctx, bail_status);
+            // jitEnsureStackCapacity returns 2 (error_propagate) on OOM.
+            c._ir_RETURN(&ctx, ensure_status);
             c._ir_IF_FALSE(&ctx, if_oom);
             // Re-LOAD items_ptr after the call. IR treats calls as memory
             // clobbers, so this LOAD is not CSE'd against the original.
@@ -4194,6 +4356,10 @@ fn compileWordPass(
         .validate_params_fn = validate_params_fn,
         .interp_ctx = interp_ctx,
         .error_propagate_status = error_propagate_status,
+        .type_mismatch_error_fn = type_mismatch_error_fn,
+        .overflow_error_fn = overflow_error_fn,
+        .div_zero_error_fn = div_zero_error_fn,
+        .underflow_error_fn = underflow_error_fn,
         .peak_sp = @intCast(input_count),
         .stack_effect = stack_effect,
         .quotation_slots = buildQuotationSlotMap(stack_effect),
@@ -4348,6 +4514,13 @@ pub fn emitWordC(
 
     const bail_status = c.ir_const_i32(&ctx, 1);
     const ok_status = c.ir_const_i32(&ctx, 0);
+    const error_propagate_status = c.ir_const_i32(&ctx, 2);
+
+    const proto_1arg = c.ir_proto_1(&ctx, 0, c.IR_I32, c.IR_ADDR);
+    const type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitTypeMismatchError"), proto_1arg);
+    const overflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitOverflowError"), proto_1arg);
+    const div_zero_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDivisionByZeroError"), proto_1arg);
+    const underflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitStackUnderflowError"), proto_1arg);
 
     const sp_val = c._ir_LOAD(&ctx, c.IR_ADDR, sp_ptr);
 
@@ -4400,6 +4573,11 @@ pub fn emitWordC(
         .base_idx = base_idx,
         .value_size_const = value_size_const,
         .jit_ctx_ptr = jit_ctx_ptr,
+        .error_propagate_status = error_propagate_status,
+        .type_mismatch_error_fn = type_mismatch_error_fn,
+        .overflow_error_fn = overflow_error_fn,
+        .div_zero_error_fn = div_zero_error_fn,
+        .underflow_error_fn = underflow_error_fn,
     };
 
     try compileInstructions(&state, instructions, &stack, &sp);
@@ -4422,7 +4600,12 @@ pub fn emitWordC(
     const body = try ir_mod.emitC(&ctx, c_name.ptr, allocator);
     errdefer allocator.free(body);
 
-    const preamble = "#include <stdint.h>\n#include <stdbool.h>\n\n";
+    const preamble =
+        "#include <stdint.h>\n#include <stdbool.h>\n\n" ++
+        "extern int32_t jitTypeMismatchError(uintptr_t ctx);\n" ++
+        "extern int32_t jitOverflowError(uintptr_t ctx);\n" ++
+        "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n" ++
+        "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n\n";
     const result = try allocator.alloc(u8, preamble.len + body.len);
     @memcpy(result[0..preamble.len], preamble);
     @memcpy(result[preamble.len..], body);
@@ -4620,6 +4803,12 @@ fn emitWordCAotPass(
 
     const call_quotation_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitCallQuotation"), proto_1arg);
 
+    // Error-reporting callbacks: set jit_pending_error and return 2.
+    const type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitTypeMismatchError"), proto_1arg);
+    const overflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitOverflowError"), proto_1arg);
+    const div_zero_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDivisionByZeroError"), proto_1arg);
+    const underflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitStackUnderflowError"), proto_1arg);
+
     const bail_status = c.ir_const_i32(&ctx, 1);
     const ok_status = c.ir_const_i32(&ctx, 0);
     const error_propagate_status = c.ir_const_i32(&ctx, 2);
@@ -4644,7 +4833,8 @@ fn emitWordCAotPass(
             const ensure_failed = c.ir_fold2(&ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), ensure_status, ok_status);
             const if_oom = c._ir_IF(&ctx, ensure_failed);
             c._ir_IF_TRUE_cold(&ctx, if_oom);
-            c._ir_RETURN(&ctx, bail_status);
+            // jitEnsureStackCapacity returns 2 (error_propagate) on OOM.
+            c._ir_RETURN(&ctx, ensure_status);
             c._ir_IF_FALSE(&ctx, if_oom);
             // Re-load items_ptr from the JitContext since ensureStackCapacity
             // may have grown the backing slice and moved the pointer.
@@ -4713,6 +4903,10 @@ fn emitWordCAotPass(
         .refresh_stack_fn = refresh_stack_fn,
         .validate_params_fn = validate_params_fn,
         .error_propagate_status = error_propagate_status,
+        .type_mismatch_error_fn = type_mismatch_error_fn,
+        .overflow_error_fn = overflow_error_fn,
+        .div_zero_error_fn = div_zero_error_fn,
+        .underflow_error_fn = underflow_error_fn,
         .aot_mode = true,
         .aot_compiled_names = aot_compiled_names,
         .aot_proto_1arg = proto_1arg,
@@ -4842,6 +5036,10 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitEnsureStackCapacity(uintptr_t jit_ctx, uintptr_t needed);\n");
     try out.appendSlice(allocator, "extern int32_t jitValidateParamEffects(uintptr_t ctx, uintptr_t effect_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitCallQuotation(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitTypeMismatchError(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitOverflowError(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushString(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushSymbol(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushQuotation(uintptr_t ctx, uintptr_t data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id);\n");
@@ -5834,21 +6032,50 @@ export fn jitRefreshStack(jit_ctx_raw: usize) callconv(.c) i32 {
 /// `executeCompiled` entered the initial frame. Recursive
 /// compiled-to-compiled calls bypass `executeCompiled`'s capacity
 /// reservation, so each compiled entry must re-check and grow the stack
-/// itself. Returns 0 on success, 1 on OOM.
+/// itself. Returns 0 on success, 2 (error_propagate) on OOM.
 export fn jitEnsureStackCapacity(jit_ctx_raw: usize, needed: usize) callconv(.c) i32 {
-    if (jit_ctx_raw == 0) return 1;
+    if (jit_ctx_raw == 0) return 2;
     const jc: *JitContext = @ptrFromInt(jit_ctx_raw);
     // Fast path: capacity already suffices, so there is nothing to do and
     // ctx does not need to be dereferenced. This keeps unit tests that pass
     // a sentinel ctx working.
     if (needed <= jc.capacity) return 0;
     const ctx_raw: usize = @intFromPtr(jc.ctx);
-    if (ctx_raw == 0 or ctx_raw % @alignOf(Context) != 0) return 1;
+    if (ctx_raw == 0 or ctx_raw % @alignOf(Context) != 0) return 2;
     const ctx: *Context = @ptrCast(@alignCast(jc.ctx));
-    ctx.stack.items.ensureTotalCapacity(ctx.stack.allocator, needed) catch return 1;
+    ctx.stack.items.ensureTotalCapacity(ctx.stack.allocator, needed) catch {
+        ctx.jit_pending_error = error.OutOfMemory;
+        return 2;
+    };
     jc.items_ptr = ctx.stack.items.items.ptr;
     jc.capacity = ctx.stack.items.capacity;
     return 0;
+}
+
+/// Error-reporting callbacks for compiled code. Each sets jit_pending_error
+/// and returns 2 (error_propagate) so the compiled function can propagate
+/// the error without bailing.
+fn setJitError(ctx_raw: usize, err: anyerror) i32 {
+    if (ctx_raw == 0 or ctx_raw % @alignOf(Context) != 0) return 2;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    ctx.jit_pending_error = err;
+    return 2;
+}
+
+export fn jitOverflowError(ctx_raw: usize) callconv(.c) i32 {
+    return setJitError(ctx_raw, error.Overflow);
+}
+
+export fn jitDivisionByZeroError(ctx_raw: usize) callconv(.c) i32 {
+    return setJitError(ctx_raw, error.DivisionByZero);
+}
+
+export fn jitStackUnderflowError(ctx_raw: usize) callconv(.c) i32 {
+    return setJitError(ctx_raw, error.StackUnderflow);
+}
+
+export fn jitTypeMismatchError(ctx_raw: usize) callconv(.c) i32 {
+    return setJitError(ctx_raw, error.TypeMismatch);
 }
 
 export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
@@ -6173,7 +6400,9 @@ test "compiled direct call preserves aliased lower stack values" {
     try testing.expectEqual(@as(i64, 10), out);
 }
 
-test "overflow bails out" {
+test "overflow bails out on non-polymorphic path" {
+    // When one operand is a compile-time i64 literal, the non-polymorphic
+    // path is taken which still uses bail_status for overflow.
     const instrs = makeInstructions(.{ std.math.maxInt(i64), "+" });
     const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
@@ -6185,7 +6414,7 @@ test "overflow bails out" {
     try testing.expectEqual(std.math.maxInt(i64), out);
 }
 
-test "overflow preserves sp" {
+test "overflow preserves sp on non-polymorphic path" {
     const instrs = makeInstructions(.{ std.math.maxInt(i64), "+" });
     const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
@@ -6198,26 +6427,28 @@ test "overflow preserves sp" {
     try testing.expectEqual(@as(usize, 1), sp);
 }
 
-test "division by zero bails out" {
+test "division by zero returns error_propagate" {
     const instrs = makeInstructions(.{"/"});
     const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
     var out: i64 = undefined;
-    try testing.expectEqual(@as(i32, 1), callCompiled(func, &.{ 10, 0 }, &out));
+    // Div-by-zero goes to native fallback; without a resolver it returns error_propagate (2).
+    try testing.expectEqual(@as(i32, 2), callCompiled(func, &.{ 10, 0 }, &out));
     try testing.expectEqual(@as(i32, 0), callCompiled(func, &.{ 10, 2 }, &out));
     try testing.expectEqual(@as(i64, 5), out);
 }
 
-test "division minInt/-1 bails out" {
+test "division minInt/-1 returns error_propagate" {
     const instrs = makeInstructions(.{"/"});
     const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
     var out: i64 = undefined;
-    try testing.expectEqual(@as(i32, 1), callCompiled(func, &.{ std.math.minInt(i64), -1 }, &out));
+    // minInt/-1 overflow goes to native fallback; without a resolver it returns error_propagate (2).
+    try testing.expectEqual(@as(i32, 2), callCompiled(func, &.{ std.math.minInt(i64), -1 }, &out));
 }
 
 test "bail on non-fixnum input" {
@@ -6229,6 +6460,8 @@ test "bail on non-fixnum input" {
     var values = [_]Value{.{ .string = "hello" }};
     var sp: usize = 1;
     const status = callCompiledValues(func, &values, &sp);
+    // requireI64 tag check still bails (will be converted when comparisons
+    // get polymorphic support).
     try testing.expectEqual(@as(i32, 1), status);
     try testing.expectEqual(@as(usize, 1), sp);
 }
@@ -6330,7 +6563,7 @@ test "compile unit literal" {
     try testing.expect(values[0] == .unit);
 }
 
-test "arithmetic on opaque operand bails at runtime" {
+test "arithmetic on opaque operand returns error_propagate" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .string = "hello" } }, .line = 1 },
         .{ .op = .{ .call_word = "+" }, .line = 2 },
@@ -6343,8 +6576,8 @@ test "arithmetic on opaque operand bails at runtime" {
     values[0] = .{ .fixnum = 1 };
     var sp: usize = 1;
     const status = callCompiledValues(func, &values, &sp);
-    try testing.expectEqual(@as(i32, 1), status);
-    try testing.expectEqual(@as(usize, 1), sp);
+    // Non-numeric operand goes to native fallback; without a resolver returns error_propagate.
+    try testing.expectEqual(@as(i32, 2), status);
 }
 
 test "bail on float input to arithmetic" {
@@ -7090,7 +7323,7 @@ test "compile inline virtual-unwrap" {
     try testing.expectEqual(@as(i64, 42), values[0].fixnum);
 }
 
-test "inline virtual-unwrap bails on wrong vtype" {
+test "inline virtual-unwrap returns error_propagate on wrong vtype" {
     var vtype_a = VirtualType{ .name = "type-a", .inner_type = "fixnum" };
     var vtype_b = VirtualType{ .name = "type-b", .inner_type = "fixnum" };
     var inner_val = Value{ .fixnum = 99 };
@@ -7109,10 +7342,10 @@ test "inline virtual-unwrap bails on wrong vtype" {
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
     var values: [4]Value = undefined;
     var sp: usize = 0;
-    try testing.expectEqual(@as(i32, 1), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(i32, 2), callCompiledValues(func, &values, &sp));
 }
 
-test "inline virtual-unwrap bails on non-tagged value" {
+test "inline virtual-unwrap returns error_propagate on non-tagged value" {
     var vtype = VirtualType{ .name = "test-vt", .inner_type = "fixnum" };
     const vtype_ptr: i64 = @intCast(@intFromPtr(&vtype));
 
@@ -7127,7 +7360,7 @@ test "inline virtual-unwrap bails on non-tagged value" {
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
     var values = [_]Value{ .{ .fixnum = 123 }, .unit, .unit, .unit };
     var sp: usize = 1;
-    try testing.expectEqual(@as(i32, 1), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(i32, 2), callCompiledValues(func, &values, &sp));
 }
 
 test "inline virtual-unwrap on input parameter" {
@@ -7247,7 +7480,7 @@ test "inline struct-field-get on input parameter" {
     try testing.expectEqual(@as(i64, 77), values[0].fixnum);
 }
 
-test "inline struct-field-get bails on non-struct value" {
+test "inline struct-field-get returns error_propagate on non-struct value" {
     var st = StructType{ .name = "point", .fields = &.{ "x", "y" } };
 
     const instrs = [_]Instruction{
@@ -7262,10 +7495,10 @@ test "inline struct-field-get bails on non-struct value" {
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
     var values = [_]Value{ .{ .fixnum = 123 }, .unit, .unit, .unit };
     var sp: usize = 1;
-    try testing.expectEqual(@as(i32, 1), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(i32, 2), callCompiledValues(func, &values, &sp));
 }
 
-test "inline struct-field-get bails on wrong struct type" {
+test "inline struct-field-get returns error_propagate on wrong struct type" {
     var st_a = StructType{ .name = "point", .fields = &.{ "x", "y" } };
     var st_b = StructType{ .name = "color", .fields = &.{ "r", "g" } };
     var fields = [_]Value{ .{ .fixnum = 42 }, .{ .fixnum = 99 } };
@@ -7283,7 +7516,7 @@ test "inline struct-field-get bails on wrong struct type" {
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
     var values = [_]Value{ .{ .struct_instance = &instance }, .unit, .unit, .unit };
     var sp: usize = 1;
-    try testing.expectEqual(@as(i32, 1), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(i32, 2), callCompiledValues(func, &values, &sp));
 }
 
 test "compile inline typed-validate-and-promote with fixnum" {
@@ -7334,7 +7567,7 @@ test "compile inline typed-validate-and-promote with float" {
     try testing.expectEqual(@as(f64, 3.14), values[0].float);
 }
 
-test "inline typed-validate-and-promote bails on type mismatch" {
+test "inline typed-validate-and-promote returns error_propagate on type mismatch" {
     var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
     var type_params = [_]*const TypeValue{&fixnum_tv};
     var vt = VirtualType{ .name = "array(fixnum)", .inner_type = "array", .type_params = &type_params };
@@ -7351,7 +7584,7 @@ test "inline typed-validate-and-promote bails on type mismatch" {
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
     var values = [_]Value{ .{ .float = 1.5 }, .unit, .unit, .unit };
     var sp: usize = 1;
-    try testing.expectEqual(@as(i32, 1), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(i32, 2), callCompiledValues(func, &values, &sp));
 }
 
 test "inline typed-validate-and-promote no-op when no type_params" {
