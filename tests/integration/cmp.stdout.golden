@@ -1,0 +1,188 @@
+=== cmp fixnum-fixnum ===
+Stack: [ ]
+PASS: 3 < 5
+Stack: [ ]
+PASS: 5 = 5
+Stack: [ ]
+PASS: 7 > 3
+Stack: [ ]
+=== cmp negative fixnums ===
+Stack: [ ]
+PASS: -5 < 3
+Stack: [ ]
+PASS: 3 > -5
+Stack: [ ]
+PASS: -5 = -5
+Stack: [ ]
+PASS: -10 < -3
+Stack: [ ]
+=== cmp zero ===
+Stack: [ ]
+PASS: 0 = 0
+Stack: [ ]
+PASS: 0 < 1
+Stack: [ ]
+PASS: 1 > 0
+Stack: [ ]
+=== cmp float-float ===
+Stack: [ ]
+PASS: 1.0 < 2.0
+Stack: [ ]
+PASS: 2.0 = 2.0
+Stack: [ ]
+PASS: 3.0 > 1.0
+Stack: [ ]
+=== cmp NaN ===
+Stack: [ ]
+PASS: nan left is error
+Stack: [ <result:err result:err{ error: <error not-comparable: not-comparable [tests/integration/cmp.1z:3:native.cmp <- tests/integration/cmp.1z:2:call <- tests/integration/cmp.1z:2:recover <- tests/integration/cmp.1z:25:try]> }> ]
+PASS: nan left error type
+Stack: [ ]
+PASS: nan right is error
+Stack: [ <result:err result:err{ error: <error not-comparable: not-comparable [tests/integration/cmp.1z:3:native.cmp <- tests/integration/cmp.1z:2:call <- tests/integration/cmp.1z:2:recover <- tests/integration/cmp.1z:27:try]> }> ]
+PASS: nan right error type
+Stack: [ ]
+PASS: nan both is error
+Stack: [ <result:err result:err{ error: <error not-comparable: not-comparable [tests/integration/cmp.1z:3:native.cmp <- tests/integration/cmp.1z:2:call <- tests/integration/cmp.1z:2:recover <- tests/integration/cmp.1z:29:try]> }> ]
+PASS: nan both error type
+Stack: [ ]
+=== cmp cross-type fixnum+float ===
+Stack: [ ]
+PASS: fixnum 1 < float 2.0
+Stack: [ ]
+PASS: fixnum 2 = float 2.0
+Stack: [ ]
+PASS: fixnum 3 > float 1.0
+Stack: [ ]
+=== cmp cross-type float+fixnum ===
+Stack: [ ]
+PASS: float 1.0 < fixnum 2
+Stack: [ ]
+PASS: float 2.0 = fixnum 2
+Stack: [ ]
+PASS: float 3.0 > fixnum 1
+Stack: [ ]
+=== cmp bignum-bignum ===
+Stack: [ ]
+PASS: big < bigger
+Stack: [ ]
+PASS: big = big
+Stack: [ ]
+PASS: bigger > big
+Stack: [ ]
+=== cmp cross-type fixnum+bignum ===
+Stack: [ ]
+PASS: fixnum < bignum
+Stack: [ ]
+PASS: bignum > fixnum
+Stack: [ ]
+=== cmp cross-type bignum+float ===
+Stack: [ ]
+PASS: bignum > float
+Stack: [ ]
+PASS: fixnum < big float
+Stack: [ ]
+=== cmp not-comparable types ===
+Stack: [ ]
+PASS: string vs fixnum is error
+Stack: [ <result:err result:err{ error: <error not-comparable: not-comparable [tests/integration/cmp.1z:3:native.cmp <- tests/integration/cmp.1z:2:call <- tests/integration/cmp.1z:2:recover <- tests/integration/cmp.1z:56:try]> }> ]
+PASS: string vs fixnum error type
+Stack: [ ]
+PASS: array vs fixnum is error
+Stack: [ <result:err result:err{ error: <error not-comparable: not-comparable [tests/integration/cmp.1z:3:native.cmp <- tests/integration/cmp.1z:2:call <- tests/integration/cmp.1z:2:recover <- tests/integration/cmp.1z:58:try]> }> ]
+PASS: array vs fixnum error type
+Stack: [ ]
+=== cmp fallback: = derived from cmp ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: different temps not equal
+Stack: [ ]
+PASS: same temps equal
+Stack: [ ]
+=== cmp fallback: < derived from cmp ===
+Stack: [ ]
+PASS: 10 < 20
+Stack: [ ]
+PASS: 20 not < 10
+Stack: [ ]
+PASS: 15 not < 15
+Stack: [ ]
+=== cmp fallback: > derived from cmp ===
+Stack: [ ]
+PASS: 20 > 10
+Stack: [ ]
+PASS: 10 not > 20
+Stack: [ ]
+PASS: 15 not > 15
+Stack: [ ]
+=== cmp fallback: direct method takes precedence ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: direct = method used
+Stack: [ ]
+PASS: < still derives from cmp
+Stack: [ ]
+=== <= on native types ===
+Stack: [ ]
+PASS: 3 <= 5
+Stack: [ ]
+PASS: 5 <= 5
+Stack: [ ]
+PASS: 7 not <= 3
+Stack: [ ]
+PASS: 1.0 <= 2.0
+Stack: [ ]
+PASS: 2.0 <= 2.0
+Stack: [ ]
+PASS: 3.0 not <= 1.0
+Stack: [ ]
+=== >= on native types ===
+Stack: [ ]
+PASS: 3 not >= 5
+Stack: [ ]
+PASS: 5 >= 5
+Stack: [ ]
+PASS: 7 >= 3
+Stack: [ ]
+PASS: 1.0 not >= 2.0
+Stack: [ ]
+PASS: 2.0 >= 2.0
+Stack: [ ]
+PASS: 3.0 >= 1.0
+Stack: [ ]
+=== <= and >= on user types via cmp ===
+Stack: [ ]
+PASS: 10 <= 20 temp
+Stack: [ ]
+PASS: 20 <= 20 temp
+Stack: [ ]
+PASS: 30 not <= 20 temp
+Stack: [ ]
+PASS: 20 >= 10 temp
+Stack: [ ]
+PASS: 20 >= 20 temp
+Stack: [ ]
+PASS: 10 not >= 20 temp
+Stack: [ ]
+=== comparable protocol ===
+Stack: [ ]
+Stack: [ ]
+PASS: temperature satisfies comparable
+Stack: [ ]
+Stack: [ ]
+PASS: weight satisfies comparable
+Stack: [ ]
+=== cmp match on result ===
+Stack: [ ]
+Stack: [ "less" ]
+PASS: match on cmp result
+Stack: [ ]
+Stack: [ "equal" ]
+PASS: match eq branch
+Stack: [ ]
+Stack: [ "greater" ]
+PASS: match gt branch
+Stack: [ ]

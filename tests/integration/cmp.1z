@@ -1,0 +1,132 @@
+use "testing" ;
+
+"cmp fixnum-fixnum" test-section
+3 5 cmp ordering:lt "3 < 5" assert=
+5 5 cmp ordering:eq "5 = 5" assert=
+7 3 cmp ordering:gt "7 > 3" assert=
+
+"cmp negative fixnums" test-section
+-5 3 cmp ordering:lt "-5 < 3" assert=
+3 -5 cmp ordering:gt "3 > -5" assert=
+-5 -5 cmp ordering:eq "-5 = -5" assert=
+-10 -3 cmp ordering:lt "-10 < -3" assert=
+
+"cmp zero" test-section
+0 0 cmp ordering:eq "0 = 0" assert=
+0 1 cmp ordering:lt "0 < 1" assert=
+1 0 cmp ordering:gt "1 > 0" assert=
+
+"cmp float-float" test-section
+1.0 2.0 cmp ordering:lt "1.0 < 2.0" assert=
+2.0 2.0 cmp ordering:eq "2.0 = 2.0" assert=
+3.0 1.0 cmp ordering:gt "3.0 > 1.0" assert=
+
+"cmp NaN" test-section
+[ nan 1.0 cmp ] try dup result:err? "nan left is error" assert-true
+unmake-result:err error-type: @get ENotComparable "nan left error type" assert=
+[ 1.0 nan cmp ] try dup result:err? "nan right is error" assert-true
+unmake-result:err error-type: @get ENotComparable "nan right error type" assert=
+[ nan nan cmp ] try dup result:err? "nan both is error" assert-true
+unmake-result:err error-type: @get ENotComparable "nan both error type" assert=
+
+"cmp cross-type fixnum+float" test-section
+1 2.0 cmp ordering:lt "fixnum 1 < float 2.0" assert=
+2 2.0 cmp ordering:eq "fixnum 2 = float 2.0" assert=
+3 1.0 cmp ordering:gt "fixnum 3 > float 1.0" assert=
+
+"cmp cross-type float+fixnum" test-section
+1.0 2 cmp ordering:lt "float 1.0 < fixnum 2" assert=
+2.0 2 cmp ordering:eq "float 2.0 = fixnum 2" assert=
+3.0 1 cmp ordering:gt "float 3.0 > fixnum 1" assert=
+
+"cmp bignum-bignum" test-section
+999999999999999999999 1000000000000000000000 cmp ordering:lt "big < bigger" assert=
+1000000000000000000000 1000000000000000000000 cmp ordering:eq "big = big" assert=
+1000000000000000000000 999999999999999999999 cmp ordering:gt "bigger > big" assert=
+
+"cmp cross-type fixnum+bignum" test-section
+1 999999999999999999999 cmp ordering:lt "fixnum < bignum" assert=
+999999999999999999999 1 cmp ordering:gt "bignum > fixnum" assert=
+
+"cmp cross-type bignum+float" test-section
+999999999999999999999 1.0 cmp ordering:gt "bignum > float" assert=
+1 999999999999999999999.0 cmp ordering:lt "fixnum < big float" assert=
+
+"cmp not-comparable types" test-section
+[ "a" 1 cmp ] try dup result:err? "string vs fixnum is error" assert-true
+unmake-result:err error-type: @get ENotComparable "string vs fixnum error type" assert=
+[ { } 1 cmp ] try dup result:err? "array vs fixnum is error" assert-true
+unmake-result:err error-type: @get ENotComparable "array vs fixnum error type" assert=
+
+"cmp fallback: = derived from cmp" test-section
+temperature: virtual{ fixnum } ;
+cmp: method{ temperature temperature } [ swap unmake-temperature swap unmake-temperature cmp ] ;
+20 >temperature 30 >temperature = f "different temps not equal" assert=
+25 >temperature 25 >temperature = t "same temps equal" assert=
+
+"cmp fallback: < derived from cmp" test-section
+10 >temperature 20 >temperature < t "10 < 20" assert=
+20 >temperature 10 >temperature < f "20 not < 10" assert=
+15 >temperature 15 >temperature < f "15 not < 15" assert=
+
+"cmp fallback: > derived from cmp" test-section
+20 >temperature 10 >temperature > t "20 > 10" assert=
+10 >temperature 20 >temperature > f "10 not > 20" assert=
+15 >temperature 15 >temperature > f "15 not > 15" assert=
+
+"cmp fallback: direct method takes precedence" test-section
+weight: virtual{ fixnum } ;
+cmp: method{ weight weight } [ swap unmake-weight swap unmake-weight cmp ] ;
+=: method{ weight weight } [ swap unmake-weight swap unmake-weight = ] ;
+50 >weight 50 >weight = t "direct = method used" assert=
+30 >weight 50 >weight < t "< still derives from cmp" assert=
+
+"<= on native types" test-section
+3 5 <= t "3 <= 5" assert=
+5 5 <= t "5 <= 5" assert=
+7 3 <= f "7 not <= 3" assert=
+1.0 2.0 <= t "1.0 <= 2.0" assert=
+2.0 2.0 <= t "2.0 <= 2.0" assert=
+3.0 1.0 <= f "3.0 not <= 1.0" assert=
+
+">= on native types" test-section
+3 5 >= f "3 not >= 5" assert=
+5 5 >= t "5 >= 5" assert=
+7 3 >= t "7 >= 3" assert=
+1.0 2.0 >= f "1.0 not >= 2.0" assert=
+2.0 2.0 >= t "2.0 >= 2.0" assert=
+3.0 1.0 >= t "3.0 >= 1.0" assert=
+
+"<= and >= on user types via cmp" test-section
+10 >temperature 20 >temperature <= t "10 <= 20 temp" assert=
+20 >temperature 20 >temperature <= t "20 <= 20 temp" assert=
+30 >temperature 20 >temperature <= f "30 not <= 20 temp" assert=
+20 >temperature 10 >temperature >= t "20 >= 10 temp" assert=
+20 >temperature 20 >temperature >= t "20 >= 20 temp" assert=
+10 >temperature 20 >temperature >= f "10 not >= 20 temp" assert=
+
+"comparable protocol" test-section
+temperature: comparable
+t "temperature satisfies comparable" assert-true
+weight: comparable
+t "weight satisfies comparable" assert-true
+
+"cmp match on result" test-section
+3 5 cmp {
+  ordering:lt: [ "less" ]
+  ordering:eq: [ "equal" ]
+  ordering:gt: [ "greater" ]
+} match
+"less" "match on cmp result" assert=
+5 5 cmp {
+  ordering:lt: [ "less" ]
+  ordering:eq: [ "equal" ]
+  ordering:gt: [ "greater" ]
+} match
+"equal" "match eq branch" assert=
+7 3 cmp {
+  ordering:lt: [ "less" ]
+  ordering:eq: [ "equal" ]
+  ordering:gt: [ "greater" ]
+} match
+"greater" "match gt branch" assert=

@@ -340,6 +340,7 @@ pub fn nativeMulWrap(ctx: *Context) anyerror!void {
 /// = ( a b -- ? ) - Equality comparison
 pub fn nativeEq(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "=")) return;
+    if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .eq)) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     if (a == .fixnum and b == .float) {
@@ -375,6 +376,7 @@ pub fn nativeInnerEq(ctx: *Context) anyerror!void {
 /// < ( a b -- ? ) - Less than
 pub fn nativeLt(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "<")) return;
+    if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .lt)) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     switch (a) {
@@ -514,6 +516,7 @@ fn nativeFloatParts(ctx: *Context) anyerror!void {
 /// > ( a b -- ? ) - Greater than
 pub fn nativeGt(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, ">")) return;
+    if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .gt)) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     switch (a) {
@@ -653,6 +656,7 @@ fn nativeTruncRem(ctx: *Context) anyerror!void {
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "float-approx-ratio", .func = nativeFloatApproxRatio },
+    .{ .name = "cmp", .func = nativeCmp },
 };
 
 /// float-approx-ratio ( f -- numer denom ) - Continued fraction approximation
@@ -752,4 +756,107 @@ fn nativeGcd(ctx: *Context) anyerror!void {
         helpers.setTypeMismatchError(ctx, "fixnum or bignum", if (a != .fixnum and a != .bignum) a else b);
         return error.TypeMismatch;
     }
+}
+
+/// cmp ( a b -- fixnum ) - Three-way comparison returning -1, 0, or 1.
+///
+/// Dispatches to user types first, then handles native numeric pairs.
+/// NaN on either operand produces NotComparable.
+fn nativeCmp(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "cmp")) return;
+
+    const alloc = ctx.arena.allocator();
+
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+
+    const result: i64 = switch (a) {
+        .fixnum => |av| switch (b) {
+            .fixnum => |bv| if (av < bv) @as(i64, -1) else if (av > bv) @as(i64, 1) else @as(i64, 0),
+            .float => |bv| blk: {
+                if (std.math.isNan(bv)) {
+                    helpers.setErrorContext(ctx, "cmp: NaN is not comparable", .{});
+                    return error.NotComparable;
+                }
+                const af: f64 = @floatFromInt(av);
+                break :blk if (af < bv) @as(i64, -1) else if (af > bv) @as(i64, 1) else @as(i64, 0);
+            },
+            .bignum => |bv| switch (bv.toConst().orderAgainstScalar(av)) {
+                .lt => @as(i64, 1),
+                .gt => @as(i64, -1),
+                .eq => @as(i64, 0),
+            },
+            else => {
+                helpers.setErrorContext(ctx, "cmp: values are not comparable", .{});
+                return error.NotComparable;
+            },
+        },
+        .float => |av| switch (b) {
+            .float => |bv| blk: {
+                if (std.math.isNan(av) or std.math.isNan(bv)) {
+                    helpers.setErrorContext(ctx, "cmp: NaN is not comparable", .{});
+                    return error.NotComparable;
+                }
+                break :blk if (av < bv) @as(i64, -1) else if (av > bv) @as(i64, 1) else @as(i64, 0);
+            },
+            .fixnum => |bv| blk: {
+                if (std.math.isNan(av)) {
+                    helpers.setErrorContext(ctx, "cmp: NaN is not comparable", .{});
+                    return error.NotComparable;
+                }
+                const bf: f64 = @floatFromInt(bv);
+                break :blk if (av < bf) @as(i64, -1) else if (av > bf) @as(i64, 1) else @as(i64, 0);
+            },
+            .bignum => blk: {
+                if (std.math.isNan(av)) {
+                    helpers.setErrorContext(ctx, "cmp: NaN is not comparable", .{});
+                    return error.NotComparable;
+                }
+                const bf = valToFloat(alloc, b);
+                if (std.math.isNan(bf)) {
+                    helpers.setErrorContext(ctx, "cmp: NaN is not comparable", .{});
+                    return error.NotComparable;
+                }
+                break :blk if (av < bf) @as(i64, -1) else if (av > bf) @as(i64, 1) else @as(i64, 0);
+            },
+            else => {
+                helpers.setErrorContext(ctx, "cmp: values are not comparable", .{});
+                return error.NotComparable;
+            },
+        },
+        .bignum => |av| switch (b) {
+            .bignum => |bv| switch (av.toConst().order(bv.toConst())) {
+                .lt => @as(i64, -1),
+                .gt => @as(i64, 1),
+                .eq => @as(i64, 0),
+            },
+            .fixnum => |bv| switch (av.toConst().orderAgainstScalar(bv)) {
+                .lt => @as(i64, -1),
+                .gt => @as(i64, 1),
+                .eq => @as(i64, 0),
+            },
+            .float => |bv| blk: {
+                if (std.math.isNan(bv)) {
+                    helpers.setErrorContext(ctx, "cmp: NaN is not comparable", .{});
+                    return error.NotComparable;
+                }
+                const af = valToFloat(alloc, a);
+                if (std.math.isNan(af)) {
+                    helpers.setErrorContext(ctx, "cmp: NaN is not comparable", .{});
+                    return error.NotComparable;
+                }
+                break :blk if (af < bv) @as(i64, -1) else if (af > bv) @as(i64, 1) else @as(i64, 0);
+            },
+            else => {
+                helpers.setErrorContext(ctx, "cmp: values are not comparable", .{});
+                return error.NotComparable;
+            },
+        },
+        else => {
+            helpers.setErrorContext(ctx, "cmp: values are not comparable", .{});
+            return error.NotComparable;
+        },
+    };
+
+    try ctx.stack.push(.{ .fixnum = result });
 }

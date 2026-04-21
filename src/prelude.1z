@@ -61,6 +61,23 @@ result: enum{ ok struct{ value } err struct{ error } } ;
 result:ok>: ( result -- value ) [ unmake-result:ok ] ;
 result:err>: ( result -- error ) [ unmake-result:err ] ;
 
+\\ Three-way comparison result: less-than, equal, or greater-than.
+ordering: enum{ lt eq gt } ;
+
+\\ Three-way comparison. Returns an ordering enum variant.
+cmp: generic ( a b -- ordering ) [
+  native.cmp dup 0 <
+  [ drop ordering:lt ] [
+    0 > [ ordering:gt ] [ ordering:eq ] if
+  ]
+  if
+] ;
+
+\\ Less than or equal. Derived from cmp: true unless the result is gt.
+<=: ( a b -- bool ) [ cmp ordering:gt = not ] ;
+\\ Greater than or equal. Derived from cmp: true unless the result is lt.
+>=: ( a b -- bool ) [ cmp ordering:lt = not ] ;
+
 \\ Method dispatch registration syntax.
 \   word: method{ type1 type2 } [ body ] ;
 method{: parse-time [
@@ -77,6 +94,9 @@ protocol{: parse-time [
   methods: "}" parse-tokens-until @set!
   define: [ define-protocol ] @set!
 ] ;
+
+\\ Protocol for types that support three-way comparison via cmp.
+comparable: protocol{ cmp } ;
 
 \\ Dynamic variable definition syntax.
 parameter: parse-time [ dup parse-quotation make-parameter ] ;
