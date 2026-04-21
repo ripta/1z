@@ -65,6 +65,24 @@ exact?: method{ ratio } [ drop t ] ;
   normalize-ratio
 ] ;
 
+\ --- Integer division producing ratios when inexact ---
+
+/: method{ fixnum fixnum } [
+  2dup rem 0 = [ div ] [ normalize-ratio ] if
+] ;
+
+/: method{ bignum bignum } [
+  2dup rem 0 = [ div ] [ normalize-ratio ] if
+] ;
+
+/: method{ fixnum bignum } [
+  2dup rem 0 = [ div ] [ normalize-ratio ] if
+] ;
+
+/: method{ bignum fixnum } [
+  2dup rem 0 = [ div ] [ normalize-ratio ] if
+] ;
+
 %: method{ ratio ratio } [
   over numer>> over denom>> *
   2 pick-n denom>> 2 pick-n numer>> *
