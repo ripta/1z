@@ -1,6 +1,8 @@
 \ Test polymorphic fixnum/float arithmetic in AOT compiled code.
 \ User-defined words receive parameters as raw_at_slot, triggering
 \ the polymorphic tag-check branching path.
+\
+\ In AOT mode bail is fatal, so correct output proves no bail occurred.
 
 add:  ( a b -- c ) [ + ] ;
 sub:  ( a b -- c ) [ - ] ;
@@ -8,23 +10,45 @@ mul:  ( a b -- c ) [ * ] ;
 fdiv: ( a b -- c ) [ / ] ;
 mod:  ( a b -- c ) [ % ] ;
 
-\ fixnum + float
+\ === Addition: all four type combinations ===
 3 2.5 add .
-\ float + fixnum
-10.0 3 sub .
-\ fixnum * float
-4 2.5 mul .
-\ float / fixnum
-7.0 2 fdiv .
-
-\ fixnum + fixnum (still works through polymorphic path)
+2.5 3 add .
 3 3 add .
-\ float + float (still works through polymorphic path)
 2.5 1.5 add .
 
-\ fixnum mod fixnum (Euclidean)
+\ === Subtraction: all four type combinations ===
+10 2.5 sub .
+10.0 3 sub .
+5 3 sub .
+4.5 1.5 sub .
+
+\ === Multiplication: all four type combinations ===
+4 2.5 mul .
+2.5 4 mul .
+3 3 mul .
+2.5 1.5 mul .
+
+\ === Division: all four type combinations ===
+7 2.0 fdiv .
+7.0 2 fdiv .
+6 3 fdiv .
+7.5 2.5 fdiv .
+
+\ === Modulo: all four type combinations ===
+7 2.0 mod .
+7.0 2 mod .
 7 3 mod .
+7.5 2.0 mod .
+
+\ === Edge cases: zero operands ===
+0 2.5 add .
+3.0 0 mul .
+
+\ === Edge cases: negative mixed ===
+-3 2.5 add .
+4 -1.5 mul .
 -7 3 mod .
 
-\ float mod float (truncating remainder)
-7.5 2.0 mod .
+\ === Edge cases: integer-valued floats ===
+3.0 2 add .
+2 3.0 sub .
