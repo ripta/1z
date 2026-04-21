@@ -2619,7 +2619,16 @@ fn compileInstructions(
                 } else if (isComparisonOp(name)) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     sp.* -= 2;
-                    const resolved = try resolveOperandPair(stack[sp.*], stack[sp.* + 1], state);
+                    const resolved = resolveOperandPair(stack[sp.*], stack[sp.* + 1], state) catch |err| switch (err) {
+                        IrCodegenError.NotCompilable => {
+                            // Operands are not numeric, e.g., type values in type predicates like `type-of fixnum =`.
+                            // Fall back to the polymorphic native compairson.
+                            sp.* += 2;
+                            try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
+                            continue;
+                        },
+                        else => return err,
+                    };
 
                     const ir_op: c_uint = if (std.mem.eql(u8, name, "="))
                         c.IR_EQ

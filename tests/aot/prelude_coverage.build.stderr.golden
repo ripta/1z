@@ -18,14 +18,11 @@ Warning: 'while' parameter 'body' has row-variable effect; quotation call falls 
 Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Prelude compilation: 152/301 words compiled (50.5%)
+Prelude compilation: 172/301 words compiled (57.1%)
   word 'provenance?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'run-benchmarks' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'quotation?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word '>iterator' cannot be compiled
       NC.6: calls a word that is not available in the AOT compilation set
       hint: blocked until the AOT resolver includes this word
@@ -51,9 +48,6 @@ Prelude compilation: 152/301 words compiled (50.5%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'load' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'set?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word 'source-loc?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'ordering:lt?' cannot be compiled
@@ -64,26 +58,17 @@ Prelude compilation: 152/301 words compiled (50.5%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'make-method-info' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'module?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word 'times' cannot be compiled
       NC.5: calls a quotation whose stack effect is unknown
       hint: annotate the quotation parameter with a concrete stack effect
   word 'make-result-error' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'string?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word 'bi' cannot be compiled
       NC.5: calls a quotation whose stack effect is unknown
       hint: annotate the quotation parameter with a concrete stack effect
   word 'pragma-get' cannot be compiled
       NC.6: calls a word that is not available in the AOT compilation set
       hint: blocked until the AOT resolver includes this word
-  word 'bignum?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word 'type-name' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'make-option:some' cannot be compiled
@@ -142,12 +127,6 @@ Prelude compilation: 152/301 words compiled (50.5%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'stack-effect-param?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'type-union?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
-  word 'error?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word 'make-source-loc' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'dispatch-provenance?' cannot be compiled
@@ -188,18 +167,12 @@ Prelude compilation: 152/301 words compiled (50.5%)
   word 'tri' cannot be compiled
       NC.5: calls a quotation whose stack effect is unknown
       hint: annotate the quotation parameter with a concrete stack effect
-  word 'symbol?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word 'stack-effect-info>hash' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'throw-type-error' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'unmake-option:some' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'iterator?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word 'provenance>hash' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'result-error>hash' cannot be compiled
@@ -227,9 +200,6 @@ Prelude compilation: 152/301 words compiled (50.5%)
       hint: annotate the quotation parameter with a concrete stack effect
   word 'option-payload?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'fixnum?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word 'generic?' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
@@ -237,15 +207,6 @@ Prelude compilation: 152/301 words compiled (50.5%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'type-members' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'vector?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
-  word 'boolean?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
-  word 'mutable-map?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word 'make-result-value' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'option:some>hash' cannot be compiled
@@ -253,30 +214,18 @@ Prelude compilation: 152/301 words compiled (50.5%)
   word 'bytes-resize!' cannot be compiled
       NC.6: calls a word that is not available in the AOT compilation set
       hint: blocked until the AOT resolver includes this word
-  word 'parameter?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word 'result-value>hash' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'cmp' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'float?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word 'make-provenance' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'result:err>hash' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word '#any' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'array?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word 'unmake-result-error' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'stream?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word 'unmake-result-value' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'ordering:gt?' cannot be compiled
@@ -308,18 +257,12 @@ Prelude compilation: 152/301 words compiled (50.5%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word '>result-value' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'hash?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word 'unmake-source-loc' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'result:ok?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'pragma-get?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'byte-array?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word 'make-option-payload' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'drop-at' cannot be compiled
@@ -346,9 +289,6 @@ Prelude compilation: 152/301 words compiled (50.5%)
       hint: blocked until the AOT resolver includes this word
   word 'unmake-method-info' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'marker?' cannot be compiled
-      NC.2: binary operation has two operands with no known numeric type
-      hint: blocked until polymorphic arithmetic can be compiled
   word 'close-iterator' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'make-dispatch-provenance' cannot be compiled
