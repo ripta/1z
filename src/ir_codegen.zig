@@ -232,6 +232,17 @@ fn isComparisonOp(name: []const u8) bool {
     return false;
 }
 
+/// Map a binary op name to a PolyArithOp for polymorphic fixnum/float handling.
+/// Returns null for integer-only ops (div, rem) that have no float path.
+fn polyArithOpFromName(name: []const u8) ?PolyArithOp {
+    if (std.mem.eql(u8, name, "+")) return .add;
+    if (std.mem.eql(u8, name, "-")) return .sub;
+    if (std.mem.eql(u8, name, "*")) return .mul;
+    if (std.mem.eql(u8, name, "/")) return .div;
+    if (std.mem.eql(u8, name, "%")) return .mod;
+    return null;
+}
+
 const supported_stack_ops = [_][]const u8{ "dup", "drop", "swap", "over" };
 
 fn isStackOp(name: []const u8) bool {
@@ -630,6 +641,169 @@ fn emitBoxPayload(
     emitBoxTag(ctx, dest_addr, tag_offset_const, tag_const);
     const payload_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dest_addr, payload_offset_const);
     c._ir_STORE(ctx, payload_addr, val);
+}
+
+/// Result of numeric tag validation: the loaded tag and per-type booleans.
+const NumericValidation = struct {
+    is_fixnum: c.ir_ref,
+    elem_addr: c.ir_ref,
+};
+
+/// Load a value's tag and validate it is fixnum or float. Bail if neither.
+/// Returns the is_fixnum boolean (true = fixnum, false = float after validation).
+fn emitNumericTagValidation(
+    ctx: *c.ir_ctx,
+    slot: usize,
+    base_addr: c.ir_ref,
+    tag_offset_const: c.ir_ref,
+    fixnum_tag_const: c.ir_ref,
+    float_tag_const: c.ir_ref,
+    bail_status: c.ir_ref,
+) NumericValidation {
+    const slot_byte_offset = c.ir_const_addr(ctx, slot * ValueLayout.value_size);
+    const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+    const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, tag_offset_const);
+    const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
+
+    const is_fixnum = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_val, fixnum_tag_const);
+    const is_float = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_val, float_tag_const);
+    const is_numeric = c.ir_fold2(ctx, c.IR_OPT(c.IR_OR, c.IR_BOOL), is_fixnum, is_float);
+
+    const if_not_numeric = c._ir_IF(ctx, is_numeric);
+    c._ir_IF_FALSE_cold(ctx, if_not_numeric);
+    c._ir_RETURN(ctx, bail_status);
+    c._ir_IF_TRUE(ctx, if_not_numeric);
+
+    return .{ .is_fixnum = is_fixnum, .elem_addr = elem_addr };
+}
+
+/// Given an operand address and its is_fixnum boolean, emit a conditional
+/// f64 load: if fixnum, load i64 and convert via INT2FP; if float, load f64
+/// directly. Returns the f64 IR ref via IF/MERGE/PHI.
+fn emitConditionalF64Load(
+    ctx: *c.ir_ctx,
+    elem_addr: c.ir_ref,
+    is_fixnum: c.ir_ref,
+    payload_offset_const: c.ir_ref,
+) c.ir_ref {
+    const payload_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, payload_offset_const);
+
+    const if_fixnum = c._ir_IF(ctx, is_fixnum);
+
+    // Fixnum path: load i64, convert to f64
+    c._ir_IF_TRUE(ctx, if_fixnum);
+    const raw_i64 = c._ir_LOAD(ctx, c.IR_I64, payload_addr);
+    const conv_f64 = c.ir_fold1(ctx, c.IR_OPT(c.IR_INT2FP, c.IR_DOUBLE), raw_i64);
+    const end_conv = c._ir_END(ctx);
+
+    // Float path: load f64 directly
+    c._ir_IF_FALSE(ctx, if_fixnum);
+    const raw_f64 = c._ir_LOAD(ctx, c.IR_DOUBLE, payload_addr);
+    const end_raw = c._ir_END(ctx);
+
+    c._ir_MERGE_2(ctx, end_conv, end_raw);
+    return c._ir_PHI_2(ctx, c.IR_DOUBLE, conv_f64, raw_f64);
+}
+
+/// Polymorphic arithmetic operation identifier.
+const PolyArithOp = enum {
+    add,
+    sub,
+    mul,
+    div,
+    mod,
+};
+
+/// Emit polymorphic binary arithmetic that handles both fixnum and float
+/// operands at runtime via tag-check branching. The result is written as a
+/// boxed Value at dest_slot. Non-numeric operands and fixnum overflow bail.
+fn emitPolymorphicBinaryArith(
+    state: *CompileState,
+    slot_a: usize,
+    slot_b: usize,
+    dest_slot: usize,
+    op: PolyArithOp,
+) void {
+    const ctx = state.ctx;
+
+    // Validate both operands are numeric (fixnum or float)
+    const va = emitNumericTagValidation(
+        ctx,
+        slot_a,
+        state.base_addr,
+        state.tag_offset_const,
+        state.fixnum_tag_const,
+        state.float_tag_const,
+        state.bail_status,
+    );
+    const vb = emitNumericTagValidation(
+        ctx,
+        slot_b,
+        state.base_addr,
+        state.tag_offset_const,
+        state.fixnum_tag_const,
+        state.float_tag_const,
+        state.bail_status,
+    );
+
+    // Destination address
+    const dest_byte_offset = c.ir_const_addr(ctx, dest_slot * ValueLayout.value_size);
+    const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, dest_byte_offset);
+
+    // Branch: both fixnum?
+    const both_fixnum = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), va.is_fixnum, vb.is_fixnum);
+    const if_both_fixnum = c._ir_IF(ctx, both_fixnum);
+
+    // === Fixnum path ===
+    c._ir_IF_TRUE(ctx, if_both_fixnum);
+    {
+        const a_i64 = emitUnboxI64(ctx, va.elem_addr, state.payload_offset_const);
+        const b_i64 = emitUnboxI64(ctx, vb.elem_addr, state.payload_offset_const);
+
+        const result_i64 = switch (op) {
+            .add => emitOverflowCheckedBinary(ctx, c.IR_ADD_OV, a_i64, b_i64, state.bail_status),
+            .sub => emitOverflowCheckedBinary(ctx, c.IR_SUB_OV, a_i64, b_i64, state.bail_status),
+            .mul => emitOverflowCheckedBinary(ctx, c.IR_MUL_OV, a_i64, b_i64, state.bail_status),
+            .div => emitDivision(ctx, a_i64, b_i64, state.bail_status),
+            .mod => emitEuclideanMod(ctx, a_i64, b_i64, state.bail_status),
+        };
+
+        emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, result_i64);
+    }
+    const end_fixnum = c._ir_END(ctx);
+
+    // === Float path (at least one operand is float) ===
+    c._ir_IF_FALSE(ctx, if_both_fixnum);
+    {
+        const a_f64 = emitConditionalF64Load(ctx, va.elem_addr, va.is_fixnum, state.payload_offset_const);
+        const b_f64 = emitConditionalF64Load(ctx, vb.elem_addr, vb.is_fixnum, state.payload_offset_const);
+
+        const result_f64 = switch (op) {
+            .add => c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_DOUBLE), a_f64, b_f64),
+            .sub => c.ir_fold2(ctx, c.IR_OPT(c.IR_SUB, c.IR_DOUBLE), a_f64, b_f64),
+            .mul => c.ir_fold2(ctx, c.IR_OPT(c.IR_MUL, c.IR_DOUBLE), a_f64, b_f64),
+            .div => c.ir_fold2(ctx, c.IR_OPT(c.IR_DIV, c.IR_DOUBLE), a_f64, b_f64),
+            .mod => emitFloatRemainder(ctx, a_f64, b_f64),
+        };
+
+        emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.float_tag_const, result_f64);
+    }
+    const end_float = c._ir_END(ctx);
+
+    c._ir_MERGE_2(ctx, end_fixnum, end_float);
+}
+
+/// Emit truncating float remainder: a - trunc(a/b) * b.
+/// Matches the interpreter's @rem semantics for float operands of %.
+fn emitFloatRemainder(ctx: *c.ir_ctx, a: c.ir_ref, b: c.ir_ref) c.ir_ref {
+    // quotient = a / b
+    const quotient = c.ir_fold2(ctx, c.IR_OPT(c.IR_DIV, c.IR_DOUBLE), a, b);
+    // trunc_q = (double)(int64_t)quotient -- truncate toward zero
+    const trunc_i64 = c.ir_fold1(ctx, c.IR_OPT(c.IR_FP2INT, c.IR_I64), quotient);
+    const trunc_f64 = c.ir_fold1(ctx, c.IR_OPT(c.IR_INT2FP, c.IR_DOUBLE), trunc_i64);
+    // result = a - trunc_f64 * b
+    const product = c.ir_fold2(ctx, c.IR_OPT(c.IR_MUL, c.IR_DOUBLE), trunc_f64, b);
+    return c.ir_fold2(ctx, c.IR_OPT(c.IR_SUB, c.IR_DOUBLE), a, product);
 }
 
 /// Copy an entire Value's raw bytes into the stack slot at dest_addr.
@@ -3117,25 +3291,40 @@ fn compileInstructions(
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     sp.* -= 2;
 
-                    // div, rem, and % are integer-only; resolve both operands as i64.
-                    if (std.mem.eql(u8, name, "div")) {
-                        const a = try requireI64(stack[sp.*], state);
-                        const b = try requireI64(stack[sp.* + 1], state);
+                    const entry_a = stack[sp.*];
+                    const entry_b = stack[sp.* + 1];
+
+                    // When both operands are raw_at_slot (runtime unknowns) and the
+                    // operation supports float, emit polymorphic code that branches
+                    // on fixnum vs float at runtime instead of bailing on type mismatch.
+                    const poly_op: ?PolyArithOp = if (entry_a == .raw_at_slot and entry_b == .raw_at_slot)
+                        polyArithOpFromName(name)
+                    else
+                        null;
+
+                    if (poly_op) |op| {
+                        emitPolymorphicBinaryArith(state, entry_a.raw_at_slot, entry_b.raw_at_slot, sp.*, op);
+                        stack[sp.*] = .{ .raw_at_slot = sp.* };
+                        sp.* += 1;
+                    } else if (std.mem.eql(u8, name, "div")) {
+                        // div and rem are integer-only; resolve both operands as i64.
+                        const a = try requireI64(entry_a, state);
+                        const b = try requireI64(entry_b, state);
                         stack[sp.*] = .{ .i64_ref = emitDivision(ctx, a, b, bail_status) };
                         sp.* += 1;
                     } else if (std.mem.eql(u8, name, "rem")) {
-                        const a = try requireI64(stack[sp.*], state);
-                        const b = try requireI64(stack[sp.* + 1], state);
+                        const a = try requireI64(entry_a, state);
+                        const b = try requireI64(entry_b, state);
                         stack[sp.*] = .{ .i64_ref = emitRemainder(ctx, a, b, bail_status) };
                         sp.* += 1;
                     } else if (std.mem.eql(u8, name, "%")) {
-                        const a = try requireI64(stack[sp.*], state);
-                        const b = try requireI64(stack[sp.* + 1], state);
+                        const a = try requireI64(entry_a, state);
+                        const b = try requireI64(entry_b, state);
                         stack[sp.*] = .{ .i64_ref = emitEuclideanMod(ctx, a, b, bail_status) };
                         sp.* += 1;
                     } else {
                         // +, -, *, / support both i64 and f64 operands.
-                        const resolved = try resolveOperandPair(stack[sp.*], stack[sp.* + 1], state);
+                        const resolved = try resolveOperandPair(entry_a, entry_b, state);
                         switch (resolved) {
                             .i64_pair => |p| {
                                 if (std.mem.eql(u8, name, "+")) {
