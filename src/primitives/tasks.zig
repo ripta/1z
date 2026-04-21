@@ -28,6 +28,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "cancel-task", .stack_effect = "task --", .doc = "Cancel a task.", .func = nativeCancelTask },
     .{ .name = "with-timeout", .stack_effect = "quot duration -- value", .doc = "Run a quotation with a timeout duration.", .func = nativeWithTimeout },
     .{ .name = "multiplexer-stats", .stack_effect = "-- hash", .doc = "Return a hash of I/O multiplexer statistics. Requires an active task-scope.", .func = nativeMultiplexerStats },
+    .{ .name = "cancelled?", .stack_effect = "-- bool", .doc = "Push t if the current task has a pending cancellation, f otherwise.", .func = nativeCancelledQuery },
 };
 
 /// Allocate a Task and its Context on the heap, wire up the ucontext, and
@@ -95,6 +96,9 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
         current.blocked_on_scope = &scope;
         scheduler.suspendCurrentTask();
         current.blocked_on_scope = null;
+
+        try helpers.checkCancellation(ctx);
+
         if (scope.failed_error) |err_obj| {
             ctx.thrown_error = err_obj;
             return error.UserThrown;
@@ -215,18 +219,7 @@ fn nativeYield(ctx: *Context) anyerror!void {
 
     scheduler.yieldCurrentTask();
 
-    // Check for cancellation after resuming back from yielding.
-    //
-    // TODO(ripta): Are there other cases when a task could get asynchronously cancelled?
-    if (scheduler.current_task) |current| {
-        if (current.cancelled) {
-            ctx.thrown_error = .{
-                .error_type = "task-cancelled",
-                .message = "task was cancelled",
-            };
-            return error.UserThrown;
-        }
-    }
+    try helpers.checkCancellation(ctx);
 }
 
 /// sleep ( duration -- )
@@ -253,15 +246,7 @@ fn nativeSleep(ctx: *Context) anyerror!void {
 
     scheduler.sleepCurrentTask(dur.ns);
 
-    if (scheduler.current_task) |current| {
-        if (current.cancelled) {
-            ctx.thrown_error = .{
-                .error_type = "task-cancelled",
-                .message = "task was cancelled",
-            };
-            return error.UserThrown;
-        }
-    }
+    try helpers.checkCancellation(ctx);
 }
 
 /// with-timeout ( quot duration -- value )
@@ -319,6 +304,8 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     scheduler.suspendCurrentTask();
     current.blocked_on_scope = null;
 
+    try helpers.checkCancellation(ctx);
+
     // inspect main task status to determine outcome
     switch (main_task.status) {
         .completed => {
@@ -360,8 +347,11 @@ fn timerTaskEntryPoint() callconv(.c) void {
     task_mod.pending_entry_task = null;
 
     task.ctx.executeQuotation(task.quotation) catch {
-        // Sleep was cancelled or errored -- mark as failed with whatever error
-        task.status = .failed;
+        if (task.cancellation_phase != .none) {
+            task.status = .cancelled;
+        } else {
+            task.status = .failed;
+        }
         if (task.ctx.thrown_error) |thrown| {
             task.error_obj = thrown;
         }
@@ -424,6 +414,8 @@ fn nativeAwait(ctx: *Context) anyerror!void {
         .completed, .failed, .cancelled => {},
     }
 
+    try helpers.checkCancellation(ctx);
+
     return handleAwaitResult(ctx, task);
 }
 
@@ -485,6 +477,8 @@ fn nativeAwaitAll(ctx: *Context) anyerror!void {
             .completed, .failed, .cancelled => {},
         }
     }
+
+    try helpers.checkCancellation(ctx);
 
     for (tasks) |item| {
         const task = item.task;
@@ -751,6 +745,19 @@ fn deepCopyErrorObject(err: ErrorObject, alloc: Allocator) DeepCopyError!ErrorOb
         .data = new_data,
         .stack_trace = new_trace,
     };
+}
+
+/// cancelled? ( -- bool )
+///
+/// Push `t` if the current task has a pending cancellation, `f` otherwise.
+/// Returns `f` outside a task-scope. Useful for compute-bound loops that
+/// need to poll for cancellation.
+fn nativeCancelledQuery(ctx: *Context) anyerror!void {
+    const cancelled = if (ctx.scheduler) |sched|
+        if (sched.current_task) |task| task.cancellation_phase != .none else false
+    else
+        false;
+    try ctx.stack.push(.{ .boolean = cancelled });
 }
 
 /// multiplexer-stats ( -- hash )

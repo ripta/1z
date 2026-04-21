@@ -144,19 +144,18 @@ pub const Scheduler = struct {
         }
     }
 
-    /// Remove cancelled tasks from the sleep queue so we don't idle-block
-    /// waiting for a task that will be immediately discarded.
+    /// Move cancelled tasks from the sleep queue to the run queue so they
+    /// resume and unwind cooperatively through their cleanup handlers.
     ///
     /// Uses removeIndex which swaps the last element into the removed slot,
     /// so the loop must not increment the index after removal.
     fn drainCancelledSleepers(self: *Scheduler) void {
         var i: usize = 0;
         while (i < self.sleep_queue.count()) {
-            if (self.sleep_queue.items[i].task.cancelled) {
+            if (self.sleep_queue.items[i].task.cancellation_phase != .none) {
                 const entry = self.sleep_queue.items[i];
-                entry.task.status = .cancelled;
-                self.handleTaskDone(entry.task);
                 _ = self.sleep_queue.removeIndex(i);
+                self.run_queue.append(self.allocator, entry.task) catch {};
             } else {
                 i += 1;
             }
@@ -174,15 +173,15 @@ pub const Scheduler = struct {
         }
     }
 
-    /// Remove cancelled tasks from the io_wait_map so we don't block forever
-    /// waiting on fds that will never be consumed.
+    /// Move cancelled tasks from the I/O wait map to the run queue so they
+    /// resume and unwind cooperatively through their cleanup handlers.
     fn drainCancelledIOWaiters(self: *Scheduler) void {
         var removals = std.ArrayListUnmanaged(std.posix.fd_t){};
         defer removals.deinit(self.allocator);
 
         var it = self.io_wait_map.iterator();
         while (it.next()) |entry| {
-            if (entry.value_ptr.task.cancelled) {
+            if (entry.value_ptr.task.cancellation_phase != .none) {
                 removals.append(self.allocator, entry.key_ptr.*) catch {};
             }
         }
@@ -191,8 +190,7 @@ pub const Scheduler = struct {
             if (self.io_wait_map.fetchRemove(fd)) |kv| {
                 self.multiplexer.unregister(fd, kv.value.event) catch {};
                 kv.value.task.blocked_on_io_fd = null;
-                kv.value.task.status = .cancelled;
-                self.handleTaskDone(kv.value.task);
+                self.run_queue.append(self.allocator, kv.value.task) catch {};
             }
         }
     }
@@ -216,23 +214,6 @@ pub const Scheduler = struct {
                 const task = self.run_queue.orderedRemove(0);
                 self.current_task = task;
 
-                // NOTE(ripta): Propagate cancellation flag to the task state.
-                //              A sibling's failure may have caused it, which is why
-                //              it's still in the queue.
-                if (task.cancelled) {
-                    task.status = .cancelled;
-                    // The coroutine frame won't resume, so any deferred scope
-                    // cleanup inside nativeTaskScope or nativeWithTimeout won't
-                    // run. Free the children array here while the scope pointer
-                    // is still valid (the task's stack memory hasn't been freed).
-                    if (task.blocked_on_scope) |scope| {
-                        scope.deinit();
-                        task.blocked_on_scope = null;
-                    }
-                    self.handleTaskDone(task);
-                    continue;
-                }
-
                 // NOTE(ripta): Set `pending_entry_task` before swapcontext.
                 //              For new tasks, the entry function reads and clears it.
                 //              For resumed tasks, the variable is ignored and overwritten on the next iteration.
@@ -242,10 +223,10 @@ pub const Scheduler = struct {
                 _ = task_mod.swapcontext(&self.scheduler_uctx, &task.uctx);
                 self.current_task = null;
                 switch (task.status) {
-                    .completed, .failed => {
+                    .completed, .failed, .cancelled => {
                         self.handleTaskDone(task);
                     },
-                    .running, .pending, .cancelled => {},
+                    .running, .pending => {},
                 }
                 continue;
             }
@@ -278,18 +259,19 @@ pub const Scheduler = struct {
         }
     }
 
-    /// Cancel a task, handling all blocking states and propagating into nested
-    /// scopes. Sets the cancelled flag and requeues the task if it is blocked
-    /// on a channel or I/O fd. If the task is waiting on a nested scope, we
-    /// recursively cancels all childrens of that scope so the scope drains and
-    /// the waiting task is eventually requeued by `handleTaskDone`.
+    /// Cancel a task cooperatively. Sets `cancellation_phase` to `.pending`
+    /// and requeues the task so it resumes and unwinds through its cleanup
+    /// handlers. If the task is blocked on a channel, I/O fd, or sleeping,
+    /// it is moved to the run queue immediately. If the task is waiting on a
+    /// nested scope, we recursively cancel all children so the scope drains
+    /// and the waiting task is eventually requeued by `handleTaskDone`.
     pub fn cancelTask(self: *Scheduler, task: *Task) void {
         switch (task.status) {
             .completed, .failed, .cancelled => return,
             .pending, .running => {},
         }
 
-        task.cancelled = true;
+        task.cancellation_phase = .pending;
 
         if (task.blocked_on_channel != null) {
             self.run_queue.append(self.allocator, task) catch {};
@@ -303,6 +285,22 @@ pub const Scheduler = struct {
             for (scope.children.items) |child| {
                 self.cancelTask(child);
             }
+        } else {
+            self.wakeSleepingTask(task);
+        }
+    }
+
+    /// Remove a specific task from the sleep queue and add it to the run queue.
+    /// Used to wake a sleeping task immediately when it is cancelled.
+    fn wakeSleepingTask(self: *Scheduler, task: *Task) void {
+        var i: usize = 0;
+        while (i < self.sleep_queue.count()) {
+            if (self.sleep_queue.items[i].task == task) {
+                _ = self.sleep_queue.removeIndex(i);
+                self.run_queue.append(self.allocator, task) catch {};
+                return;
+            }
+            i += 1;
         }
     }
 

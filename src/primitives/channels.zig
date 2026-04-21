@@ -140,13 +140,7 @@ fn nativeSend(ctx: *Context) anyerror!void {
         return;
     }
 
-    if (current.cancelled) {
-        ctx.thrown_error = .{
-            .error_type = "task-cancelled",
-            .message = "task was cancelled",
-        };
-        return error.UserThrown;
-    }
+    try helpers.checkCancellation(ctx);
 
     if (ch.closed) {
         return throwChannelClosed(ctx, "cannot send on closed channel");
@@ -233,13 +227,7 @@ fn nativeReceive(ctx: *Context) anyerror!void {
         return;
     }
 
-    if (current.cancelled) {
-        ctx.thrown_error = .{
-            .error_type = "task-cancelled",
-            .message = "task was cancelled",
-        };
-        return error.UserThrown;
-    }
+    try helpers.checkCancellation(ctx);
 
     // If the channel was closed while we were waiting, no value was pushed
     if (ch.closed) {
@@ -436,13 +424,7 @@ fn nativeSelect(ctx: *Context) anyerror!void {
         removeReceiverEntries(ch, current);
     }
 
-    if (current.cancelled) {
-        ctx.thrown_error = .{
-            .error_type = "task-cancelled",
-            .message = "task was cancelled",
-        };
-        return error.UserThrown;
-    }
+    try helpers.checkCancellation(ctx);
 
     if (sel_ctx.result_value) |result_val| {
         try ctx.stack.push(result_val);

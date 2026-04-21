@@ -592,6 +592,7 @@ fn asyncRead(stream: *Stream, buffer: []u8, ctx: *Context) anyerror!usize {
             if (err == error.WouldBlock) {
                 if (ctx.scheduler) |sched| {
                     sched.ioSuspendCurrentTask(stream.file.handle, .read);
+                    try helpers.checkCancellation(ctx);
                     continue;
                 }
 
@@ -615,6 +616,7 @@ fn asyncWrite(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!usize 
             if (err == error.WouldBlock) {
                 if (ctx.scheduler) |sched| {
                     sched.ioSuspendCurrentTask(stream.file.handle, .write);
+                    try helpers.checkCancellation(ctx);
                     continue;
                 }
                 restoreBlocking(stream);

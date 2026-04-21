@@ -1,0 +1,43 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: cleanup ran on cancelled sleeping task
+Stack: [ ]
+PASS: cleanup with drop completed
+Stack: [ ]
+PASS: recover catches task-cancelled
+Stack: [ ]
+PASS: channel-blocked cancel cooperates
+Stack: [ ]
+PASS: IO-blocked cancel cooperates
+Stack: [ ]
+PASS: scope-blocked cancel cooperates
+Stack: [ ]
+PASS: shielded cleanup handler can sleep
+Stack: [ ]
+PASS: shielded cleanup handler can yield
+Stack: [ ]
+PASS: nested cleanup handlers both execute
+Stack: [ ]
+PASS: cancelled? recorded a value
+PASS: cancelled? returns t during cancellation
+Stack: [ ]
+PASS: cancelled? is f in normal task
+Stack: [ ]
+PASS: cancelled? is f outside task-scope
+Stack: [ ]
+PASS: sibling cancellation triggers cleanup
+Stack: [ ]
+PASS: with-timeout runs cleanup on timeout
+Stack: [ ]
