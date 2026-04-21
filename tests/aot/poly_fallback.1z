@@ -1,0 +1,46 @@
+\ Test that the restructured three-way polymorphic arithmetic path
+\ (fixnum / float / native fallback) works correctly for all
+\ fixnum and float combinations. The non-numeric fallback path is
+\ structurally present but not triggered until non-numeric types
+\ reach compiled arithmetic (e.g., after fixnum overflow fallback
+\ in 222.2).
+
+add:  ( a b -- c ) [ + ] ;
+sub:  ( a b -- c ) [ - ] ;
+mul:  ( a b -- c ) [ * ] ;
+fdiv: ( a b -- c ) [ / ] ;
+mod:  ( a b -- c ) [ % ] ;
+
+\ === Fixnum + fixnum ===
+3 4 add .
+10 3 sub .
+5 6 mul .
+10 3 fdiv .
+7 3 mod .
+
+\ === Mixed fixnum + float ===
+3 2.5 add .
+2.5 3 add .
+10 2.5 sub .
+10.0 3 sub .
+4 2.5 mul .
+2.5 4 mul .
+7 2.0 fdiv .
+7.0 2 fdiv .
+7 2.0 mod .
+7.0 2 mod .
+
+\ === Float + float ===
+2.5 1.5 add .
+4.5 1.5 sub .
+2.5 1.5 mul .
+7.5 2.5 fdiv .
+7.5 2.0 mod .
+
+\ === Edge cases ===
+0 2.5 add .
+3.0 0 mul .
+-3 2.5 add .
+4 -1.5 mul .
+3.0 2 add .
+2 3.0 sub .

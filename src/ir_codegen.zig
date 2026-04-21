@@ -649,6 +649,35 @@ const NumericValidation = struct {
     elem_addr: c.ir_ref,
 };
 
+/// Result of non-bailing numeric tag check: includes is_numeric for branching.
+const NumericTagCheck = struct {
+    is_fixnum: c.ir_ref,
+    is_numeric: c.ir_ref,
+    elem_addr: c.ir_ref,
+};
+
+/// Load a value's tag and check whether it is fixnum or float. Does NOT bail;
+/// the caller is responsible for branching on is_numeric.
+fn emitNumericTagCheckNoBail(
+    ctx: *c.ir_ctx,
+    slot: usize,
+    base_addr: c.ir_ref,
+    tag_offset_const: c.ir_ref,
+    fixnum_tag_const: c.ir_ref,
+    float_tag_const: c.ir_ref,
+) NumericTagCheck {
+    const slot_byte_offset = c.ir_const_addr(ctx, slot * ValueLayout.value_size);
+    const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+    const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, tag_offset_const);
+    const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
+
+    const is_fixnum = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_val, fixnum_tag_const);
+    const is_float = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_val, float_tag_const);
+    const is_numeric = c.ir_fold2(ctx, c.IR_OPT(c.IR_OR, c.IR_BOOL), is_fixnum, is_float);
+
+    return .{ .is_fixnum = is_fixnum, .is_numeric = is_numeric, .elem_addr = elem_addr };
+}
+
 /// Load a value's tag and validate it is fixnum or float. Bail if neither.
 /// Returns the is_fixnum boolean (true = fixnum, false = float after validation).
 fn emitNumericTagValidation(
@@ -660,21 +689,14 @@ fn emitNumericTagValidation(
     float_tag_const: c.ir_ref,
     bail_status: c.ir_ref,
 ) NumericValidation {
-    const slot_byte_offset = c.ir_const_addr(ctx, slot * ValueLayout.value_size);
-    const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-    const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, tag_offset_const);
-    const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
+    const check = emitNumericTagCheckNoBail(ctx, slot, base_addr, tag_offset_const, fixnum_tag_const, float_tag_const);
 
-    const is_fixnum = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_val, fixnum_tag_const);
-    const is_float = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_val, float_tag_const);
-    const is_numeric = c.ir_fold2(ctx, c.IR_OPT(c.IR_OR, c.IR_BOOL), is_fixnum, is_float);
-
-    const if_not_numeric = c._ir_IF(ctx, is_numeric);
+    const if_not_numeric = c._ir_IF(ctx, check.is_numeric);
     c._ir_IF_FALSE_cold(ctx, if_not_numeric);
     c._ir_RETURN(ctx, bail_status);
     c._ir_IF_TRUE(ctx, if_not_numeric);
 
-    return .{ .is_fixnum = is_fixnum, .elem_addr = elem_addr };
+    return .{ .is_fixnum = check.is_fixnum, .elem_addr = check.elem_addr };
 }
 
 /// Given an operand address and its is_fixnum boolean, emit a conditional
@@ -714,83 +736,178 @@ const PolyArithOp = enum {
     mod,
 };
 
+/// Emit a per-operation fallback that calls the polymorphic native for a single arithmetic operation.
+/// The operands are already in physical memory at slot_a and slot_b.
+/// The native pops both and pushes one result, leaving it at slot_a (dest_slot).
+///
+/// If the resolver is unavailable or cannot resolve the operation, emits a bail return instead..
+fn emitPerOperationFallback(
+    state: *CompileState,
+    op_name: []const u8,
+    slot_a: usize,
+    slot_b: usize,
+    line: usize,
+) void {
+    const ctx = state.ctx;
+
+    // Without a resolver, fall back to bail.
+    const res = state.resolver orelse {
+        c._ir_RETURN(ctx, state.bail_status);
+        return;
+    };
+    const resolved = res.resolve(op_name, res.user_data) orelse {
+        c._ir_RETURN(ctx, state.bail_status);
+        return;
+    };
+
+    // Store physical SP so the native sees both operands.
+    // SP must point past slot_b (= slot_a + 1), i.e., slot_b + 1 elements.
+    const sp_for_call = c.ir_const_addr(ctx, slot_b + 1);
+    const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_for_call);
+    c._ir_STORE(ctx, state.sp_ptr, new_sp);
+
+    // Load the interpreter Context pointer.
+    const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+        state.preloaded_ctx_val
+    else blk: {
+        JitContextLayout.ensureInit();
+        const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+        const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+        break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
+    };
+
+    // Call the polymorphic native: use jitNativeCall when a function pointer
+    // is available (JIT mode), jitInterpretedCall with word_id otherwise (AOT).
+    if (resolved.native_fn_ptr) |fn_ptr| {
+        const fn_ptr_const = c.ir_const_addr(ctx, fn_ptr);
+        const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.native_call_fn, ctx_val, fn_ptr_const);
+        emitCallbackPostCheck(state, call_result, call_result);
+    } else {
+        const word_id_const = c.ir_const_addr(ctx, resolved.word_id);
+        const line_const = c.ir_const_addr(ctx, line);
+        const call_result = c._ir_CALL_3(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, line_const);
+        emitCallbackPostCheck(state, call_result, state.error_propagate_status);
+    }
+
+    // After the native returns, SP = base_idx + slot_a + 1 and the result
+    // is at physical slot slot_a. The caller sets the abstract stack entry
+    // to raw_at_slot(dest_slot).
+    _ = slot_a;
+}
+
 /// Emit polymorphic binary arithmetic that handles both fixnum and float
-/// operands at runtime via tag-check branching. The result is written as a
-/// boxed Value at dest_slot. Non-numeric operands and fixnum overflow bail.
+/// operands at runtime via tag-check branching. Non-numeric operands fall
+/// back to the polymorphic native via jitInterpretedCall for just that
+/// operation, then continue compiled execution. The result is written as a
+/// boxed Value at dest_slot.
 fn emitPolymorphicBinaryArith(
     state: *CompileState,
     slot_a: usize,
     slot_b: usize,
     dest_slot: usize,
     op: PolyArithOp,
+    line: usize,
 ) void {
     const ctx = state.ctx;
 
-    // Validate both operands are numeric (fixnum or float)
-    const va = emitNumericTagValidation(
+    // Check both operands for numeric tags (no bail on mismatch).
+    const va = emitNumericTagCheckNoBail(
         ctx,
         slot_a,
         state.base_addr,
         state.tag_offset_const,
         state.fixnum_tag_const,
         state.float_tag_const,
-        state.bail_status,
     );
-    const vb = emitNumericTagValidation(
+    const vb = emitNumericTagCheckNoBail(
         ctx,
         slot_b,
         state.base_addr,
         state.tag_offset_const,
         state.fixnum_tag_const,
         state.float_tag_const,
-        state.bail_status,
     );
 
-    // Destination address
-    const dest_byte_offset = c.ir_const_addr(ctx, dest_slot * ValueLayout.value_size);
-    const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, dest_byte_offset);
+    // Branch: both operands numeric (fixnum or float)?
+    const both_numeric = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), va.is_numeric, vb.is_numeric);
+    const if_numeric = c._ir_IF(ctx, both_numeric);
 
-    // Branch: both fixnum?
-    const both_fixnum = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), va.is_fixnum, vb.is_fixnum);
-    const if_both_fixnum = c._ir_IF(ctx, both_fixnum);
-
-    // === Fixnum path ===
-    c._ir_IF_TRUE(ctx, if_both_fixnum);
+    // === Numeric path (hottt) ===
+    c._ir_IF_TRUE(ctx, if_numeric);
     {
-        const a_i64 = emitUnboxI64(ctx, va.elem_addr, state.payload_offset_const);
-        const b_i64 = emitUnboxI64(ctx, vb.elem_addr, state.payload_offset_const);
+        // Destination address
+        const dest_byte_offset = c.ir_const_addr(ctx, dest_slot * ValueLayout.value_size);
+        const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, dest_byte_offset);
 
-        const result_i64 = switch (op) {
-            .add => emitOverflowCheckedBinary(ctx, c.IR_ADD_OV, a_i64, b_i64, state.bail_status),
-            .sub => emitOverflowCheckedBinary(ctx, c.IR_SUB_OV, a_i64, b_i64, state.bail_status),
-            .mul => emitOverflowCheckedBinary(ctx, c.IR_MUL_OV, a_i64, b_i64, state.bail_status),
-            .div => emitDivision(ctx, a_i64, b_i64, state.bail_status),
-            .mod => emitEuclideanMod(ctx, a_i64, b_i64, state.bail_status),
-        };
+        // Branch: both fixnum?
+        const both_fixnum = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), va.is_fixnum, vb.is_fixnum);
+        const if_both_fixnum = c._ir_IF(ctx, both_fixnum);
 
-        emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, result_i64);
+        // === Fixnum path ===
+        c._ir_IF_TRUE(ctx, if_both_fixnum);
+        {
+            const a_i64 = emitUnboxI64(ctx, va.elem_addr, state.payload_offset_const);
+            const b_i64 = emitUnboxI64(ctx, vb.elem_addr, state.payload_offset_const);
+
+            const result_i64 = switch (op) {
+                .add => emitOverflowCheckedBinary(ctx, c.IR_ADD_OV, a_i64, b_i64, state.bail_status),
+                .sub => emitOverflowCheckedBinary(ctx, c.IR_SUB_OV, a_i64, b_i64, state.bail_status),
+                .mul => emitOverflowCheckedBinary(ctx, c.IR_MUL_OV, a_i64, b_i64, state.bail_status),
+                .div => emitDivision(ctx, a_i64, b_i64, state.bail_status),
+                .mod => emitEuclideanMod(ctx, a_i64, b_i64, state.bail_status),
+            };
+
+            emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, result_i64);
+        }
+        const end_fixnum = c._ir_END(ctx);
+
+        // === Float path (at least one operand is float) ===
+        c._ir_IF_FALSE(ctx, if_both_fixnum);
+        {
+            const a_f64 = emitConditionalF64Load(ctx, va.elem_addr, va.is_fixnum, state.payload_offset_const);
+            const b_f64 = emitConditionalF64Load(ctx, vb.elem_addr, vb.is_fixnum, state.payload_offset_const);
+
+            const result_f64 = switch (op) {
+                .add => c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_DOUBLE), a_f64, b_f64),
+                .sub => c.ir_fold2(ctx, c.IR_OPT(c.IR_SUB, c.IR_DOUBLE), a_f64, b_f64),
+                .mul => c.ir_fold2(ctx, c.IR_OPT(c.IR_MUL, c.IR_DOUBLE), a_f64, b_f64),
+                .div => c.ir_fold2(ctx, c.IR_OPT(c.IR_DIV, c.IR_DOUBLE), a_f64, b_f64),
+                .mod => emitFloatRemainder(ctx, a_f64, b_f64),
+            };
+
+            emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.float_tag_const, result_f64);
+        }
+        const end_float = c._ir_END(ctx);
+
+        c._ir_MERGE_2(ctx, end_fixnum, end_float);
     }
-    const end_fixnum = c._ir_END(ctx);
+    const end_numeric = c._ir_END(ctx);
 
-    // === Float path (at least one operand is float) ===
-    c._ir_IF_FALSE(ctx, if_both_fixnum);
+    // === Non-numeric fallback (cold): call the polymorphic native ===
+    c._ir_IF_FALSE_cold(ctx, if_numeric);
     {
-        const a_f64 = emitConditionalF64Load(ctx, va.elem_addr, va.is_fixnum, state.payload_offset_const);
-        const b_f64 = emitConditionalF64Load(ctx, vb.elem_addr, vb.is_fixnum, state.payload_offset_const);
-
-        const result_f64 = switch (op) {
-            .add => c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_DOUBLE), a_f64, b_f64),
-            .sub => c.ir_fold2(ctx, c.IR_OPT(c.IR_SUB, c.IR_DOUBLE), a_f64, b_f64),
-            .mul => c.ir_fold2(ctx, c.IR_OPT(c.IR_MUL, c.IR_DOUBLE), a_f64, b_f64),
-            .div => c.ir_fold2(ctx, c.IR_OPT(c.IR_DIV, c.IR_DOUBLE), a_f64, b_f64),
-            .mod => emitFloatRemainder(ctx, a_f64, b_f64),
+        const op_name: []const u8 = switch (op) {
+            .add => "+",
+            .sub => "-",
+            .mul => "*",
+            .div => "/",
+            .mod => "%",
         };
-
-        emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.float_tag_const, result_f64);
+        // Save state refs before the callback (it may refresh them).
+        const saved_items_ptr = state.items_ptr;
+        const saved_base_addr = state.base_addr;
+        emitPerOperationFallback(state, op_name, slot_a, slot_b, line);
+        // Restore so the MERGE sees consistent refs from both paths.
+        state.items_ptr = saved_items_ptr;
+        state.base_addr = saved_base_addr;
     }
-    const end_float = c._ir_END(ctx);
+    const end_fallback = c._ir_END(ctx);
 
-    c._ir_MERGE_2(ctx, end_fixnum, end_float);
+    c._ir_MERGE_2(ctx, end_numeric, end_fallback);
+
+    // After the merge, the stack backing may have been reallocated by the
+    // fallback path's native call. Refresh so subsequent code uses live refs.
+    refreshCachedStackPointer(state);
 }
 
 /// Emit truncating float remainder: a - trunc(a/b) * b.
@@ -3303,7 +3420,7 @@ fn compileInstructions(
                         null;
 
                     if (poly_op) |op| {
-                        emitPolymorphicBinaryArith(state, entry_a.raw_at_slot, entry_b.raw_at_slot, sp.*, op);
+                        emitPolymorphicBinaryArith(state, entry_a.raw_at_slot, entry_b.raw_at_slot, sp.*, op, instr.line);
                         stack[sp.*] = .{ .raw_at_slot = sp.* };
                         sp.* += 1;
                     } else if (std.mem.eql(u8, name, "div")) {
@@ -3783,12 +3900,13 @@ const PreScanFlags = struct {
     needs_iterators: bool = false,
     needs_native_call: bool = false,
     needs_param_validation: bool = false,
+    needs_poly_fallback: bool = false,
 
     fn needsErrorPropagation(self: PreScanFlags) bool {
         return self.needs_error_handling or self.needs_safepoint or
             self.needs_dynamic_vars or self.needs_iterators or
             self.needs_native_call or self.needs_dispatch or
-            self.needs_param_validation;
+            self.needs_param_validation or self.needs_poly_fallback;
     }
 };
 
@@ -3808,6 +3926,9 @@ fn preScanInstructions(
                 }
             },
             .call_word => |name| {
+                if (polyArithOpFromName(name) != null) {
+                    flags.needs_poly_fallback = true;
+                }
                 if (isLoopOp(name)) {
                     flags.needs_safepoint = true;
                 } else if (isErrorHandlingOp(name)) {
@@ -3948,12 +4069,12 @@ fn compileWordPass(
     else
         c.IR_UNUSED;
 
-    const native_call_fn = if (scan_flags.needs_native_call)
+    const native_call_fn = if (scan_flags.needs_native_call or scan_flags.needs_poly_fallback)
         c.ir_const_addr(&ctx, @intFromPtr(&jitNativeCall))
     else
         c.IR_UNUSED;
 
-    const interpreted_call_fn = if (scan_flags.needs_dispatch)
+    const interpreted_call_fn = if (scan_flags.needs_dispatch or scan_flags.needs_poly_fallback)
         c.ir_const_addr(&ctx, @intFromPtr(&jitInterpretedCall))
     else
         c.IR_UNUSED;
@@ -4474,7 +4595,7 @@ fn emitWordCAotPass(
     else
         c.IR_UNUSED;
 
-    const interpreted_call_fn = if (scan_flags.needs_dispatch or scan_flags.needs_native_call)
+    const interpreted_call_fn = if (scan_flags.needs_dispatch or scan_flags.needs_native_call or scan_flags.needs_poly_fallback)
         c.ir_const_func(&ctx, c.ir_str(&ctx, "jitInterpretedCall"), proto_3arg)
     else
         c.IR_UNUSED;
