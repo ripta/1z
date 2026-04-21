@@ -79,7 +79,6 @@ Stack: [ ]
 abs ( n -- n )
 accept ( fd -- fd addr )
 add-load-path ( path -- )
-all-words ( -- array )
 await ( task -- value )
 await-all ( array -- array )
 benchmark ( quot -- hash )
@@ -213,6 +212,7 @@ yield ( -- )
 #next? ( iter -- option )
 #none ( seq quot -- ? )
 #nth? ( seq n -- option )
+(raw>word-info)
 ++ ( a1 -- a2 )
 -- ( a1 -- a2 )
 -@ ( a -- -a )
@@ -240,7 +240,7 @@ yield ( -- )
 >result:ok
 >source-loc
 >stack-effect
->word-info
+>word-info ( symbol -- word-info )
 >word? ( symbol -- option )
 ?and-then ( opt/res quot -- opt/res )
 ?flatten ( nested -- opt/res )
@@ -274,6 +274,7 @@ V{
 W{
 []
 acquire ( resource -- )
+all-words ( -- array )
 and ( ? ? -- ? )
 array? ( val -- ? )
 benchmark-report? ( val -- ? )

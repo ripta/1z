@@ -78,6 +78,26 @@ pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
     return false;
 }
 
+/// Like tryDispatchBinary, but without the isUserType guard.
+///
+/// Needed when a native operator has dispatch methods registered for native
+/// type pairs (e.g., `/` with fixnum/fixnum methods registered by the ratio
+/// library). Most operators should continue using tryDispatchBinary; only
+/// operators that need native-to-native dispatch should use this variant.
+pub fn tryDispatchBinaryAny(ctx: *Context, word_name: []const u8) !bool {
+    if (ctx.stack.depth() < 2) return false;
+
+    const a = try ctx.stack.peekN(1);
+    const b = try ctx.stack.peek();
+
+    if (lookupBinaryWithFallback(ctx, word_name, a, b)) |entry| {
+        try ctx.executeQuotation(.{ .instructions = entry.body });
+        return true;
+    }
+
+    return false;
+}
+
 /// Try to dispatch a unary operation via the dispatch table.
 ///
 /// Peeks at the top stack value, checks if it's a user type (tagged or

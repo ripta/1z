@@ -514,5 +514,27 @@ source-loc: struct{ file line column } ;
 \\ Structured word information for runtime introspection.
 word-info: struct{ name stack-effect doc markers native? body methods source-loc module } ;
 
-\\ Safe variant of native.>word that returns an option instead of throwing.
->word?: ( symbol -- option ) [ [ native.>word >option:some ] [ drop option:none ] recover ] ;
+\\ Convert a raw 9-element array from native.>word into a word-info struct.
+(raw>word-info): [
+  >stack-effect: [ dup f = [ ] [ dup #first swap #last make-stack-effect ] if ] ;
+  >source-loc: [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-source-loc nip ] if ] ;
+  dup 0 #nth
+  over 1 #nth >stack-effect
+  2 pick-n 2 #nth
+  3 pick-n 3 #nth
+  4 pick-n 4 #nth
+  5 pick-n 5 #nth
+  6 pick-n 6 #nth
+  7 pick-n 7 #nth >source-loc
+  8 pick-n 8 #nth
+  make-word-info nip
+] ;
+
+\\ Look up a word by symbol and return a word-info struct.
+>word-info: ( symbol -- word-info ) [ native.>word (raw>word-info) ] ;
+
+\\ Return an array of word-info structs for every word in the dictionary.
+all-words: ( -- array ) [ native.all-words [ (raw>word-info) ] #map #collect ] ;
+
+\\ Safe variant of >word-info that returns an option instead of throwing.
+>word?: ( symbol -- option ) [ [ >word-info >option:some ] [ drop option:none ] recover ] ;

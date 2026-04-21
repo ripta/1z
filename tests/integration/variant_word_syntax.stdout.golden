@@ -14,7 +14,7 @@ PASS: greet(loud): symbol string
 Stack: [ ]
 === variant word syntax: >word introspection ===
 Stack: [ ]
-PASS: >word name of variant word
+PASS: >word-info name of variant word
 Stack: [ ]
 === >float(exact): lossless fixnum ===
 Stack: [ ]

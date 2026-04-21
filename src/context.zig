@@ -487,6 +487,40 @@ pub const Context = struct {
         return null;
     }
 
+    /// Look up a word by name, searching only user visible frames; this skips
+    /// transient frames above `import_frame_index`, e.g., module deps frames
+    /// and combinator frames, so that introspection words see the some definitions
+    /// that the user would write at the top level.
+    pub fn lookupUserVisibleWord(self: *const Context, name: []const u8) ?WordDefinition {
+        const frame_cap = if (self.import_frame_index) |idx| idx + 1 else 0;
+
+        var i = frame_cap;
+        while (i > 0) {
+            i -= 1;
+            if (self.local_frames.items[i].get(name)) |def| {
+                return def;
+            }
+        }
+
+        if (self.dictionary.get(name)) |def| return def;
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            const anc_cap = if (ctx.import_frame_index) |idx| idx + 1 else 0;
+
+            var j = anc_cap;
+            while (j > 0) {
+                j -= 1;
+                if (ctx.local_frames.items[j].get(name)) |def| return def;
+            }
+
+            if (ctx.dictionary.get(name)) |def| return def;
+            ancestor = ctx.parent_context;
+        }
+
+        return null;
+    }
+
     /// Look up a binary dispatch entry by walking upthe parent context chain.
     pub fn lookupBinaryDispatch(self: *const Context, word_name: []const u8, type_a: []const u8, type_b: []const u8) ?DispatchEntry {
         if (self.dispatch.lookupBinary(word_name, type_a, type_b)) |entry| return entry;

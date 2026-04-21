@@ -16,7 +16,7 @@ greet(loud): >string "greet(loud)" "greet(loud): symbol string" assert=
 
 "variant word syntax: >word introspection" test-section
 
-greet(loud): native.>word name>> "greet(loud)" ">word name of variant word" assert=
+greet(loud): >word-info name>> "greet(loud)" ">word-info name of variant word" assert=
 
 ">float(exact): lossless fixnum" test-section
 
