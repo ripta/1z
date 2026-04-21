@@ -8,12 +8,14 @@ pub fn build(b: *std.Build) void {
     const test_filter = b.option([]const u8, "test-filter", "Comma-separated substring filter for test names");
     const verbose_test_reporting = envFlagIsSet(b, "VERBOSE");
     const slow_test_threshold_ms: u64 = 1000;
+    const bail_stats = b.option(bool, "bail-stats", "Enable bail frequency instrumentation (writes stats to stderr on exit)") orelse false;
 
     const options = b.addOptions();
     options.addOption([]const u8, "version", version);
     options.addOption(u32, "test_case_timeout_secs", test_case_timeout_secs);
     options.addOption(bool, "verbose_test_reporting", verbose_test_reporting);
     options.addOption(u64, "slow_test_threshold_ms", slow_test_threshold_ms);
+    options.addOption(bool, "bail_stats", bail_stats);
 
     const root_module = createCommonModule(b, target, optimize, options, b.path("src/main.zig"));
 

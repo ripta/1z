@@ -28,6 +28,7 @@ const call_graph = @import("call_graph.zig");
 const effect_inference = @import("effect_inference.zig");
 const aot_freeze = @import("aot_freeze.zig");
 const ir_codegen = @import("ir_codegen.zig");
+const bail_stats_mod = @import("bail_stats.zig");
 
 const signal = @import("signal.zig");
 const build_options = @import("build_options");
@@ -788,6 +789,7 @@ const ExecutionContext = struct {
     }
 
     fn deinit(self: *ExecutionContext) void {
+        bail_stats_mod.deinitGlobal();
         if (self.watchdog) |t| t.detach();
         if (self.dbg != null) self.dbg.?.deinit();
         self.ctx.deinit();

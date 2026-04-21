@@ -18,6 +18,7 @@ const HostCallback = dictionary_mod.HostCallback;
 const HostCallbackFn = dictionary_mod.HostCallbackFn;
 
 const helpers = @import("primitives/helpers.zig");
+const bail_stats_mod = @import("bail_stats.zig");
 const StackEffect = @import("stack_effect.zig").StackEffect;
 
 const dispatch_mod = @import("dispatch.zig");
@@ -154,6 +155,8 @@ export fn onez_init() ?*anyopaque {
 }
 
 export fn onez_deinit(ptr: ?*anyopaque) void {
+    bail_stats_mod.deinitGlobal();
+
     const handle = castHandle(ptr) orelse return;
     const allocator = handle.gpa.allocator();
 

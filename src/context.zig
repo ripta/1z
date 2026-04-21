@@ -24,6 +24,7 @@ const PicTable = pic_mod.PicTable;
 const PolymorphicCache = pic_mod.PolymorphicCache;
 const JitDispatchTable = @import("jit_dispatch.zig").JitDispatchTable;
 const ir_codegen = @import("ir_codegen.zig");
+const bail_stats_mod = @import("bail_stats.zig");
 const Scheduler = @import("scheduler.zig").Scheduler;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const types_mod = @import("primitives/types.zig");
@@ -3572,6 +3573,9 @@ pub const Context = struct {
                     return err;
                 },
                 .bail => {
+                    if (bail_stats_mod.enabled) {
+                        bail_stats_mod.global.recordQuotationBail();
+                    }
                     self.stack.items.items.len = saved_sp;
                 },
             }

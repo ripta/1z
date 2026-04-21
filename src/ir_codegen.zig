@@ -18,6 +18,7 @@ const JitDispatchTable = jit_dispatch_mod.JitDispatchTable;
 const JitEntry = jit_dispatch_mod.JitEntry;
 
 const Context = @import("context.zig").Context;
+const bail_stats_mod = @import("bail_stats.zig");
 const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
 const signal = @import("signal.zig");
@@ -5552,6 +5553,9 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
         return 1;
     };
     const word_name = entry.word_name;
+    if (bail_stats_mod.enabled) {
+        bail_stats_mod.global.recordInterpretedCall(word_id, word_name);
+    }
     const word = ctx.lookupWord(word_name) orelse return 1;
 
     ctx.pushCallFrame(word_name, ctx.current_source, @intCast(line_raw), 0);
@@ -5716,6 +5720,10 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
 
     const result = ExecResult.fromStatus(status);
     if (result == .bail) {
+        if (bail_stats_mod.enabled) {
+            const entry_name = if (ctx.jit_dispatch.get(word_id)) |e| e.word_name else "?";
+            bail_stats_mod.global.recordBail(word_id, entry_name);
+        }
         ctx.stack.items.items.len = saved_sp;
     }
     return result;
