@@ -170,6 +170,74 @@ pub fn freezeModuleGraphOpts(
         }
     }
 
+    // Phase 2b: Scan all discovered compound words for module-qualified
+    // native calls that the BFS couldn't resolve (because lookupWord
+    // doesn't handle qualified names). This catches references like
+    // "native.struct-field-get" in words added by compile_all_prelude
+    // which never went through the BFS.
+    {
+        const temp_allocator = ctx.quotationAllocator();
+        var qual_seen = std.StringHashMapUnmanaged(void){};
+        defer qual_seen.deinit(temp_allocator);
+        for (discovered.native_names.items) |name| {
+            try qual_seen.put(temp_allocator, name, {});
+        }
+        for (discovered.names.items) |name| {
+            try qual_seen.put(temp_allocator, name, {});
+        }
+
+        for (discovered.defs.items) |def| {
+            const instrs = switch (def.action) {
+                .compound => |c| c,
+                else => continue,
+            };
+            for (instrs) |instr| {
+                switch (instr.op) {
+                    .call_word => |call_name| {
+                        if (qual_seen.contains(call_name)) continue;
+                        try qual_seen.put(temp_allocator, call_name, {});
+                        if (resolveQualifiedModuleWord(ctx, call_name)) |mod_word| {
+                            switch (mod_word.action) {
+                                .native, .host_callback => {
+                                    if (mod_word.stack_effect != null) {
+                                        try discovered.native_names.append(temp_allocator, call_name);
+                                        try discovered.native_defs.append(temp_allocator, wordDefFromModuleWord(call_name, mod_word));
+                                    }
+                                },
+                                .compound => {},
+                            }
+                        }
+                    },
+                    .push_literal => |val| {
+                        // Also scan nested quotations
+                        if (val == .quotation) {
+                            for (val.quotation.instructions) |q_instr| {
+                                switch (q_instr.op) {
+                                    .call_word => |call_name| {
+                                        if (qual_seen.contains(call_name)) continue;
+                                        try qual_seen.put(temp_allocator, call_name, {});
+                                        if (resolveQualifiedModuleWord(ctx, call_name)) |mod_word| {
+                                            switch (mod_word.action) {
+                                                .native, .host_callback => {
+                                                    if (mod_word.stack_effect != null) {
+                                                        try discovered.native_names.append(temp_allocator, call_name);
+                                                        try discovered.native_defs.append(temp_allocator, wordDefFromModuleWord(call_name, mod_word));
+                                                    }
+                                                },
+                                                .compound => {},
+                                            }
+                                        }
+                                    },
+                                    else => {},
+                                }
+                            }
+                        }
+                    },
+                }
+            }
+        }
+    }
+
     // Now safe to pop the frames
     ctx.popPragmaFrame();
     ctx.popLocalFrame();
@@ -344,7 +412,39 @@ fn discoverReachableWords(
 
     // BFS
     while (worklist.pop()) |name| {
-        const word = ctx.lookupWord(name) orelse continue;
+        const word = ctx.lookupWord(name) orelse {
+            // Try module-qualified resolution (e.g., "native.struct-field-get").
+            // Generated words from struct{, virtual{, and enum{ call native
+            // operations via qualified names that lookupWord cannot resolve
+            // directly.
+            if (resolveQualifiedModuleWord(ctx, name)) |mod_word| {
+                switch (mod_word.action) {
+                    .native, .host_callback => {
+                        // Only add natives with declared stack effects.
+                        // Polymorphic natives (no fixed effect) cannot be
+                        // given correct input/output counts in the resolver.
+                        if (mod_word.stack_effect != null) {
+                            try result.native_names.append(temp_allocator, name);
+                            try result.native_defs.append(temp_allocator, wordDefFromModuleWord(name, mod_word));
+                        }
+                    },
+                    .compound => |compound_instrs| {
+                        try result.names.append(temp_allocator, name);
+                        try result.defs.append(temp_allocator, wordDefFromModuleWord(name, mod_word));
+                        collectCallWords(compound_instrs, name, &worklist, &seen, &result.warning_entries, &warning_seen, &result.quotation_bodies, &quotation_seen, diagnostics, temp_allocator) catch |err| {
+                            result.names.deinit(temp_allocator);
+                            result.defs.deinit(temp_allocator);
+                            result.warning_entries.deinit(temp_allocator);
+                            result.native_names.deinit(temp_allocator);
+                            result.native_defs.deinit(temp_allocator);
+                            result.quotation_bodies.deinit(temp_allocator);
+                            return err;
+                        };
+                    },
+                }
+            }
+            continue;
+        };
 
         // Skip parse-time-only words
         if (word.parse_time_only) continue;
@@ -426,6 +526,47 @@ fn collectCallWords(
             },
         }
     }
+}
+
+/// Resolve a module-qualified name (e.g., "native.struct-field-get") to
+/// its ModuleWord without executing the module word. Splits on the last
+/// dot, looks up the module in the dictionary, and extracts the word from
+/// the module's word map.
+fn resolveQualifiedModuleWord(ctx: *const Context, name: []const u8) ?value_mod.ModuleWord {
+    const dot_index = std.mem.lastIndexOfScalar(u8, name, '.') orelse return null;
+    const module_path = name[0..dot_index];
+    const word_name = name[dot_index + 1 ..];
+    if (module_path.len == 0 or word_name.len == 0) return null;
+
+    const module_word_def = ctx.lookupWord(module_path) orelse return null;
+    const instrs = switch (module_word_def.action) {
+        .compound => |i| i,
+        .native, .host_callback => return null,
+    };
+    if (instrs.len != 1) return null;
+    const module_ptr = switch (instrs[0].op) {
+        .push_literal => |val| switch (val) {
+            .module => |m| m,
+            else => return null,
+        },
+        else => return null,
+    };
+    return module_ptr.words.get(word_name);
+}
+
+/// Convert a ModuleWord to a WordDefinition, using the given qualified
+/// name (e.g., "native.struct-field-get") as the word name.
+fn wordDefFromModuleWord(name: []const u8, mod_word: value_mod.ModuleWord) WordDefinition {
+    return .{
+        .name = name,
+        .stack_effect = mod_word.stack_effect,
+        .action = switch (mod_word.action) {
+            .native => |f| .{ .native = f },
+            .host_callback => |h| .{ .host_callback = h },
+            .compound => |c| .{ .compound = c },
+        },
+        .capability = mod_word.capability,
+    };
 }
 
 fn isDisallowedDynamicFeature(name: []const u8) bool {
