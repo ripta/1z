@@ -2258,6 +2258,24 @@ fn emitEpilogue(
 
     if (sp != output_count) return IrCodegenError.StackShapeMismatch;
 
+    // Two-pass epilogue: relocate `raw_at_slot` entries first so copies read original physical
+    // slot values before unboxing overwrites them.
+    for (0..sp) |i| {
+        switch (stack[i]) {
+            .raw_at_slot => |s| {
+                if (s != i) {
+                    if (s < sp and stack[s].isAtSlot() and stack[s].slotIndex().? == i) {
+                        emitSwapSlots(ctx, base_addr, i, s);
+                        stack[s] = .{ .raw_at_slot = s };
+                    } else {
+                        emitCopySlot(ctx, base_addr, s, i);
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
     for (0..sp) |i| {
         switch (stack[i]) {
             .i64_ref => |ref| {
@@ -2279,16 +2297,7 @@ fn emitEpilogue(
                 state.not_compilable_reason = .quotation_truthiness;
                 return IrCodegenError.NotCompilable;
             },
-            .raw_at_slot => |s| {
-                if (s != i) {
-                    if (s < sp and stack[s].isAtSlot() and stack[s].slotIndex().? == i) {
-                        emitSwapSlots(ctx, base_addr, i, s);
-                        stack[s] = .{ .raw_at_slot = s };
-                    } else {
-                        emitCopySlot(ctx, base_addr, s, i);
-                    }
-                }
-            },
+            .raw_at_slot => {},
         }
     }
 
@@ -3552,7 +3561,19 @@ fn compileInstructions(
                         null;
 
                     if (poly_op) |op| {
-                        emitPolymorphicBinaryArith(state, entry_a.raw_at_slot, entry_b.raw_at_slot, sp.*, op, instr.line);
+                        // Polymorphic arith writes directly to a physical slot. If any entry below the operands
+                        // aliases `dest_slot`, save dest_slot to a scratch slot first so the write doesn't
+                        // clobber the aliased value.
+                        const dest_slot = sp.*;
+                        const scratch = @max(dest_slot, @max(entry_a.raw_at_slot, entry_b.raw_at_slot)) + 1;
+                        for (0..sp.*) |j| {
+                            if (stack[j] == .raw_at_slot and stack[j].raw_at_slot == dest_slot) {
+                                emitCopySlot(ctx, base_addr, dest_slot, scratch);
+                                stack[j] = .{ .raw_at_slot = scratch };
+                                break;
+                            }
+                        }
+                        emitPolymorphicBinaryArith(state, entry_a.raw_at_slot, entry_b.raw_at_slot, dest_slot, op, instr.line);
                         stack[sp.*] = .{ .raw_at_slot = sp.* };
                         sp.* += 1;
                     } else if (std.mem.eql(u8, name, "div")) {
@@ -6773,6 +6794,27 @@ test "compile non-fixnum literal swap" {
     try testing.expect(std.mem.eql(u8, "bbb", values[0].string));
     try testing.expect(values[1] == .string);
     try testing.expect(std.mem.eql(u8, "aaa", values[1].string));
+}
+
+test "compile literal + input swap" {
+    // ( n -- literal n )
+    // literal boxed onto slot 0 must never destroy the input before the raw_at_slot copy reads it
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 1 },
+        .{ .op = .{ .call_word = "swap" }, .line = 2 },
+    };
+    const result = try compileWord(&instrs, 1, 2, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    values[0] = .{ .fixnum = 42 };
+    var sp: usize = 1;
+    const status = callCompiledValues(func, &values, &sp);
+    try testing.expectEqual(@as(i32, 0), status);
+    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expectEqual(@as(i64, 0), values[0].fixnum);
+    try testing.expectEqual(@as(i64, 42), values[1].fixnum);
 }
 
 test "compile = comparison" {
