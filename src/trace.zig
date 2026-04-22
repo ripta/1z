@@ -299,6 +299,25 @@ pub fn traceModuleDepsPop(trace_writer: *TraceWriter, module_name: []const u8) v
     trace_writer.writeAll(fbs.getWritten());
 }
 
+/// Emit a SCOPE-DUMP header line for `--dump-scope`.
+pub fn traceDumpScopeHeader(tw: *TraceWriter, name: []const u8, source: []const u8, line: usize) void {
+    tw.print("SCOPE-DUMP at {s} ({s}:{d}):\n", .{ name, source, line });
+}
+
+/// Emit a single frame line in a scope dump.
+pub fn traceDumpScopeFrame(tw: *TraceWriter, prefix: []const u8, index: usize, count: usize, label: ?[]const u8) void {
+    if (label) |l| {
+        tw.print("  {s}local-frame[{d}]: {d} words ({s})\n", .{ prefix, index, count, l });
+    } else {
+        tw.print("  {s}local-frame[{d}]: {d} words\n", .{ prefix, index, count });
+    }
+}
+
+/// Emit a dictionary line in a scope dump.
+pub fn traceDumpScopeDict(tw: *TraceWriter, prefix: []const u8, count: usize) void {
+    tw.print("  {s}global-dict: {d} words\n", .{ prefix, count });
+}
+
 /// Returns true if `name` matches the given comma-separated pattern.
 /// A null pattern matches everything.
 pub fn matchesPattern(name: []const u8, pattern: ?[]const u8) bool {

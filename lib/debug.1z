@@ -1,0 +1,17 @@
+\ lib/debug.1z - Debugging utilities
+
+scope-trace: ( -- ) [
+  native.scope-frames
+  >iterator [
+    dup "type" @get
+    over "index" @get dup -1 =
+    [ drop ]
+    [ swap "[" swap >string #append "]" #append #append ]
+    if
+    ": " #append
+    over "count" @get >string #append " words" #append
+    over "import-frame?" @get [ " (import-frame)" #append ] when
+    nip
+    eprint-line
+  ] #each
+] ;

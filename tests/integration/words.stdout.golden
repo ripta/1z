@@ -295,6 +295,9 @@ doc>>
 dupd ( a b -- a a b )
 emit ( codepoint -- )
 enum{
+eprint ( str -- )
+eprint-line ( str -- )
+error-stream
 error-type? ( error type -- error ? )
 error? ( val -- ? )
 even? ( n -- ? )

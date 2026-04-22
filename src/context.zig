@@ -526,6 +526,37 @@ pub const Context = struct {
         return .not_found;
     }
 
+    /// Dump the full scope chain to stderr for `--dump-scope`.
+    fn dumpScope(self: *const Context, name: []const u8, source: []const u8, line: usize) void {
+        var tw = trace_mod.TraceWriter.init();
+        trace_mod.traceDumpScopeHeader(&tw, name, source, line);
+
+        var i = self.local_frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            const label: ?[]const u8 = if (self.import_frame_index != null and i == self.import_frame_index.?)
+                "import-frame"
+            else if (i == 0)
+                "prelude"
+            else
+                null;
+            trace_mod.traceDumpScopeFrame(&tw, "", i, self.local_frames.items[i].count(), label);
+        }
+
+        trace_mod.traceDumpScopeDict(&tw, "", self.dictionary.entries.count());
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            var j = ctx.local_frames.items.len;
+            while (j > 0) {
+                j -= 1;
+                trace_mod.traceDumpScopeFrame(&tw, "parent: ", j, ctx.local_frames.items[j].count(), null);
+            }
+            trace_mod.traceDumpScopeDict(&tw, "parent: ", ctx.dictionary.entries.count());
+            ancestor = ctx.parent_context;
+        }
+    }
+
     /// Look up a word by name, searching only user visible frames; this skips
     /// transient frames above `import_frame_index`, e.g., module deps frames
     /// and combinator frames, so that introspection words see the some definitions
@@ -1248,6 +1279,11 @@ pub const Context = struct {
                         if (self.trace.trace_resolve and trace_mod.matchesPattern(name, self.trace.trace_resolve_pattern)) {
                             var tw = trace_mod.TraceWriter.init();
                             trace_mod.traceResolve(&tw, name, self.lookupWordSource(name));
+                        }
+                        if (self.trace.dump_scope) |scope_word| {
+                            if (std.mem.eql(u8, name, scope_word)) {
+                                self.dumpScope(name, self.current_source, instr.line);
+                            }
                         }
 
                         // Validate quotation parameters against declared effects
