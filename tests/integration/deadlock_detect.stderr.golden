@@ -1,0 +1,4 @@
+STALL-DETECT: 1.0s with no progress, 1 tasks, 0 runnable
+TASK-DUMP: 1 tasks, 0 runnable
+  task[2] blocked_channel stack=[] callstack:
+    tests/integration/deadlock_detect.1z:2 receive

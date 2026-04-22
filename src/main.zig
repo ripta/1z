@@ -125,6 +125,8 @@ pub fn main() u8 {
     var initial_breakpoints: [16][]const u8 = undefined;
     var initial_breakpoint_count: usize = 0;
     var trace_config = trace_mod.TraceConfig{};
+    var deadlock_detect_ns: ?i128 = null;
+    var test_timeout_ns: ?u64 = null;
 
     // TODO(ripta): bit hacky arg parsing, improve later?
     for (args[1..]) |arg| {
@@ -185,6 +187,37 @@ pub fn main() u8 {
             trace_config.trace_modules = true;
         } else if (std.mem.startsWith(u8, arg, "--dump-scope=")) {
             trace_config.dump_scope = arg["--dump-scope=".len..];
+        } else if (std.mem.eql(u8, arg, "--deadlock-detect")) {
+            deadlock_detect_ns = 5 * std.time.ns_per_s;
+        } else if (std.mem.startsWith(u8, arg, "--deadlock-detect=")) {
+            const value = arg["--deadlock-detect=".len..];
+            const secs = std.fmt.parseInt(u64, value, 10) catch {
+                const stderr_file: File = .stderr();
+                var stderr_buf2: [4096]u8 = undefined;
+                var stderr2 = stderr_file.writer(&stderr_buf2);
+                stderr2.interface.print("Error: invalid value for --deadlock-detect: '{s}'\n", .{value}) catch {};
+                stderr2.interface.flush() catch {};
+                return 1;
+            };
+            deadlock_detect_ns = @as(i128, secs) * std.time.ns_per_s;
+        } else if (std.mem.eql(u8, arg, "--test-timeout")) {
+            const stderr_file: File = .stderr();
+            var stderr_buf2: [4096]u8 = undefined;
+            var stderr2 = stderr_file.writer(&stderr_buf2);
+            stderr2.interface.print("Error: --test-timeout requires a value (e.g. --test-timeout=5)\n", .{}) catch {};
+            stderr2.interface.flush() catch {};
+            return 1;
+        } else if (std.mem.startsWith(u8, arg, "--test-timeout=")) {
+            const value = arg["--test-timeout=".len..];
+            const secs = std.fmt.parseInt(u64, value, 10) catch {
+                const stderr_file: File = .stderr();
+                var stderr_buf2: [4096]u8 = undefined;
+                var stderr2 = stderr_file.writer(&stderr_buf2);
+                stderr2.interface.print("Error: invalid value for --test-timeout: '{s}'\n", .{value}) catch {};
+                stderr2.interface.flush() catch {};
+                return 1;
+            };
+            test_timeout_ns = secs * std.time.ns_per_s;
         } else {
             file_path = arg;
         }
@@ -219,6 +252,7 @@ pub fn main() u8 {
     var ctx = Context.init(allocator);
     ctx.program_args = program_args.items;
     ctx.trace = trace_config;
+    ctx.deadlock_detect_ns = deadlock_detect_ns;
     defer ctx.deinit();
 
     // Configure load paths: CLI flags, then env var
@@ -281,6 +315,13 @@ pub fn main() u8 {
         }
     }
 
+    // Spawn watchdog thread for --test-timeout (batch mode only)
+    const watchdog_thread: ?std.Thread = if (test_timeout_ns != null and file_path != null)
+        std.Thread.spawn(.{}, testTimeoutWatchdog, .{test_timeout_ns.?}) catch null
+    else
+        null;
+    defer if (watchdog_thread) |t| t.detach();
+
     // If a file path is provided, run in batch mode, which executes the file
     // and exits. Errors print to stderr, and cause a non-zero exit code.
     // Otherwise, interactive REPL starts.
@@ -317,6 +358,19 @@ pub fn main() u8 {
     }
 
     return result;
+}
+
+fn testTimeoutWatchdog(timeout_ns: u64) void {
+    std.Thread.sleep(timeout_ns);
+    var tw = trace_mod.TraceWriter.init();
+    const secs = @as(f64, @floatFromInt(timeout_ns)) /
+        @as(f64, @floatFromInt(@as(u64, std.time.ns_per_s)));
+    tw.print("TEST-TIMEOUT: {d:.1}s limit reached\n", .{secs});
+    const scheduler_mod = @import("scheduler.zig");
+    if (scheduler_mod.active_scheduler.load(.acquire)) |sched| {
+        sched.dumpAllTasks();
+    }
+    std.process.exit(124);
 }
 
 fn handleFmt(allocator: std.mem.Allocator, args: []const []const u8) u8 {

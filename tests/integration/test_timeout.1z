@@ -1,0 +1,2 @@
+use "testing" ;
+[ <channel> [ receive drop ] curry spawn yield ] task-scope

@@ -7,6 +7,11 @@ const TaskStatus = task_mod.TaskStatus;
 const TaskScope = task_mod.TaskScope;
 const Multiplexer = @import("multiplexer.zig").Multiplexer;
 const IoEvent = @import("multiplexer.zig").IoEvent;
+const trace = @import("trace.zig");
+
+/// Global pointer to the active top-level scheduler if any.
+/// Set by `nativeTaskScope` on entry, and cleared on exit.
+pub var active_scheduler: std.atomic.Value(?*Scheduler) = std.atomic.Value(?*Scheduler).init(null);
 
 /// Entry in the sleep queue: a task and its absolute monotonic wake time in nanoseconds.
 pub const SleepEntry = struct {
@@ -46,12 +51,18 @@ pub const Scheduler = struct {
     allocator: Allocator,
     /// Finished tasks whose stacks and arenas are freed on deinit.
     finished_tasks: std.ArrayListUnmanaged(*Task),
+    /// All tasks ever created, for diagnostic dumps.
+    all_tasks: std.ArrayListUnmanaged(*Task) = .{},
     /// Channels created during this scheduler's lifetime, freed on deinit.
     channels: std.ArrayListUnmanaged(*Channel) = .{},
     /// Platform I/O multiplexer for async-aware stream operations.
     multiplexer: Multiplexer,
     /// Maps file descriptors to tasks suspended waiting on I/O readiness.
     io_wait_map: std.AutoHashMapUnmanaged(std.posix.fd_t, IoWaitEntry) = .{},
+    /// Wall-clock stall detection threshold in nanoseconds.
+    deadlock_detect_ns: ?i128 = null,
+    /// Monotonic timestamp of the last progress event (task done, sleeper woken, I/O ready).
+    last_progress_ns: i128 = 0,
 
     pub fn init(allocator: Allocator) !Scheduler {
         return .{
@@ -82,6 +93,7 @@ pub const Scheduler = struct {
             self.allocator.destroy(ch);
         }
         self.channels.deinit(self.allocator);
+        self.all_tasks.deinit(self.allocator);
         self.run_queue.deinit(self.allocator);
         self.sleep_queue.deinit();
         self.multiplexer.deinit();
@@ -134,14 +146,18 @@ pub const Scheduler = struct {
     }
 
     /// Move all sleep queue entries whose wake time has passed into the run queue.
-    fn wakeExpiredSleepers(self: *Scheduler) void {
+    /// Returns true when at least one sleeper was woken.
+    fn wakeExpiredSleepers(self: *Scheduler) bool {
         const now = monotonicNowNs();
+        var woke_any = false;
         while (self.sleep_queue.peek()) |entry| {
             if (entry.wake_time > now) break;
 
             const woken = self.sleep_queue.remove();
             self.run_queue.append(self.allocator, woken.task) catch {};
+            woke_any = true;
         }
+        return woke_any;
     }
 
     /// Move cancelled tasks from the sleep queue to the run queue so they
@@ -207,8 +223,12 @@ pub const Scheduler = struct {
     ///    sleep deadline as timeout, re-enqueue tasks whose fds are ready.
     ///    Loop back to step 1.
     pub fn runLoop(self: *Scheduler) void {
+        self.last_progress_ns = monotonicNowNs();
+
         while (true) {
-            self.wakeExpiredSleepers();
+            if (self.wakeExpiredSleepers()) {
+                self.last_progress_ns = monotonicNowNs();
+            }
 
             if (self.run_queue.items.len > 0) {
                 const task = self.run_queue.orderedRemove(0);
@@ -225,6 +245,7 @@ pub const Scheduler = struct {
                 switch (task.status) {
                     .completed, .failed, .cancelled => {
                         self.handleTaskDone(task);
+                        self.last_progress_ns = monotonicNowNs();
                     },
                     .running, .pending => {},
                 }
@@ -239,23 +260,189 @@ pub const Scheduler = struct {
 
             const has_sleepers = self.sleep_queue.count() > 0;
             const has_io_waiters = self.io_wait_map.count() > 0;
+            const has_blocked_tasks = blk: {
+                for (self.all_tasks.items) |task| {
+                    switch (task.status) {
+                        .completed, .failed, .cancelled => continue,
+                        .pending, .running => {},
+                    }
+                    if (task.blocked_on_channel != null or task.blocked_on_scope != null) break :blk true;
+                }
+                break :blk false;
+            };
 
-            if (!has_sleepers and !has_io_waiters) break;
+            if (!has_sleepers and !has_io_waiters and !has_blocked_tasks) break;
 
-            const timeout: ?i128 = if (has_sleepers) blk: {
+            var timeout: ?i128 = if (has_sleepers) blk: {
                 const next = self.sleep_queue.peek().?;
                 const now = monotonicNowNs();
                 const remaining = next.wake_time - now;
                 break :blk if (remaining > 0) remaining else @as(i128, 0);
             } else null;
 
+            if (self.deadlock_detect_ns) |threshold| {
+                const now = monotonicNowNs();
+                const stall_remaining = threshold - (now - self.last_progress_ns);
+                const stall_timeout: i128 = if (stall_remaining > 0) stall_remaining else 0;
+                timeout = if (timeout) |t| @min(t, stall_timeout) else stall_timeout;
+            }
+
             const ready = self.multiplexer.poll(timeout) catch &.{};
+            if (ready.len > 0) {
+                self.last_progress_ns = monotonicNowNs();
+            }
             for (ready) |ev| {
                 if (self.io_wait_map.fetchRemove(ev.fd)) |kv| {
                     kv.value.task.blocked_on_io_fd = null;
                     self.run_queue.append(self.allocator, kv.value.task) catch {};
                 }
             }
+
+            if (self.deadlock_detect_ns) |threshold| {
+                const elapsed = monotonicNowNs() - self.last_progress_ns;
+                if (elapsed >= threshold) {
+                    self.emitStallDetect(threshold);
+                    self.dumpAllTasks();
+                    std.process.exit(124);
+                }
+            }
+        }
+    }
+
+    fn emitStallDetect(self: *const Scheduler, threshold_ns: i128) void {
+        var tw = trace.TraceWriter.init();
+
+        const secs = @as(f64, @floatFromInt(@as(i64, @intCast(@min(threshold_ns, std.math.maxInt(i64)))))) / @as(f64, @floatFromInt(@as(i64, std.time.ns_per_s)));
+
+        var active_count: usize = 0;
+        var runnable_count: usize = 0;
+        for (self.all_tasks.items) |task| {
+            switch (task.status) {
+                .completed, .failed, .cancelled => continue,
+                .pending, .running => {},
+            }
+            active_count += 1;
+            if (self.taskState(task) == .runnable) {
+                runnable_count += 1;
+            }
+        }
+
+        tw.print("STALL-DETECT: {d:.1}s with no progress, {d} tasks, {d} runnable\n", .{ secs, active_count, runnable_count });
+    }
+
+    /// Dump the state of all tasks to stderr for diagnostic purposes.
+    ///
+    /// Each task is printed with its ID, name, state, top 3 stack values, and
+    /// call stack. Used by stall detection and hard timeout to surface what
+    /// the scheduler is stuck on.
+    pub fn dumpAllTasks(self: *Scheduler) void {
+        var tw = trace.TraceWriter.init();
+
+        var runnable_count: usize = 0;
+        var active_count: usize = 0;
+        for (self.all_tasks.items) |task| {
+            switch (task.status) {
+                .completed, .failed, .cancelled => continue,
+                .pending, .running => {},
+            }
+            active_count += 1;
+            if (self.taskState(task) == .runnable) {
+                runnable_count += 1;
+            }
+        }
+
+        tw.print("TASK-DUMP: {d} tasks, {d} runnable\n", .{ active_count, runnable_count });
+
+        for (self.all_tasks.items) |task| {
+            switch (task.status) {
+                .completed, .failed, .cancelled => continue,
+                .pending, .running => {},
+            }
+            self.dumpOneTask(&tw, task);
+        }
+    }
+
+    const TaskState = enum {
+        running,
+        blocked_fd,
+        blocked_channel,
+        blocked_scope,
+        sleeping,
+        runnable,
+    };
+
+    fn taskState(self: *const Scheduler, task: *const Task) TaskState {
+        if (self.current_task == task) return .running;
+        if (task.blocked_on_io_fd != null) return .blocked_fd;
+        if (task.blocked_on_channel != null) return .blocked_channel;
+        if (task.blocked_on_scope != null) return .blocked_scope;
+        for (self.sleep_queue.items[0..self.sleep_queue.count()]) |entry| {
+            if (entry.task == task) return .sleeping;
+        }
+        return .runnable;
+    }
+
+    fn dumpOneTask(self: *const Scheduler, tw: *trace.TraceWriter, task: *const Task) void {
+        var buf: [4096]u8 = undefined;
+        var fbs = std.io.fixedBufferStream(&buf);
+        const w = fbs.writer();
+
+        w.print("  task[{d}]", .{task.id}) catch return;
+        if (task.name) |name| {
+            w.print(" \"{s}\"", .{name}) catch return;
+        }
+
+        switch (self.taskState(task)) {
+            .running => w.writeAll(" running") catch return,
+            .blocked_fd => w.print(" blocked_fd={d}", .{task.blocked_on_io_fd.?}) catch return,
+            .blocked_channel => w.writeAll(" blocked_channel") catch return,
+            .blocked_scope => w.writeAll(" blocked_scope") catch return,
+            .sleeping => {
+                const remaining = self.sleepRemaining(task);
+                if (remaining) |ns| {
+                    const secs = @as(f64, @floatFromInt(@as(i64, @intCast(@min(ns, std.math.maxInt(i64)))))) / @as(f64, @floatFromInt(@as(i64, std.time.ns_per_s)));
+                    w.print(" sleeping(+{d:.1}s)", .{secs}) catch return;
+                } else {
+                    w.writeAll(" sleeping") catch return;
+                }
+            },
+            .runnable => w.writeAll(" runnable") catch return,
+        }
+
+        w.writeByte(' ') catch return;
+        trace.formatStackPreview(&task.ctx.stack, w, 3);
+        w.writeAll(" callstack:\n") catch return;
+
+        tw.writeAll(fbs.getWritten());
+
+        self.dumpCallStack(tw, task);
+    }
+
+    fn sleepRemaining(self: *const Scheduler, task: *const Task) ?i128 {
+        for (self.sleep_queue.items[0..self.sleep_queue.count()]) |entry| {
+            if (entry.task == task) {
+                const now = monotonicNowNs();
+                const remaining = entry.wake_time - now;
+
+                return if (remaining > 0) remaining else 0;
+            }
+        }
+
+        return null;
+    }
+
+    fn dumpCallStack(_: *const Scheduler, tw: *trace.TraceWriter, task: *const Task) void {
+        const items = task.ctx.call_stack.items;
+        if (items.len == 0) {
+            tw.print("    (empty)\n", .{});
+            return;
+        }
+
+        var i = items.len;
+        while (i > 0) {
+            i -= 1;
+            const frame = items[i];
+            tw.print("    {s}:{d} {s}\n", .{ task.ctx.current_source, frame.line, frame.word_name });
         }
     }
 

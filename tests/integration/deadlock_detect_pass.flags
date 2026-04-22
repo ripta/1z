@@ -1,0 +1,2 @@
+--deadlock-detect=5
+--no-show-stack
