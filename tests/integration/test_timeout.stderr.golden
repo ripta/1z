@@ -1,0 +1,4 @@
+TEST-TIMEOUT: 1.0s limit reached
+TASK-DUMP: 1 tasks, 0 runnable
+  task[2] blocked_fd=5 stack=[] callstack:
+    tests/integration/test_timeout.1z:2 stream-read

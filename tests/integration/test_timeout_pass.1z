@@ -1,0 +1,2 @@
+use "testing" ;
+[ [ 1 ] spawn await 1 "task completes before timeout" assert= ] task-scope

@@ -4,7 +4,8 @@ const Context = @import("../context.zig").Context;
 const task_mod = @import("../task.zig");
 const Task = task_mod.Task;
 const TaskScope = task_mod.TaskScope;
-const Scheduler = @import("../scheduler.zig").Scheduler;
+const scheduler_mod = @import("../scheduler.zig");
+const Scheduler = scheduler_mod.Scheduler;
 const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
 const value_mod = @import("../value.zig");
@@ -115,8 +116,10 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     scheduler.deadlock_detect_ns = ctx.deadlock_detect_ns;
 
     ctx.scheduler = &scheduler;
+    scheduler_mod.active_scheduler.store(&scheduler, .release);
     defer {
         ctx.scheduler = null;
+        scheduler_mod.active_scheduler.store(null, .release);
     }
 
     var scope = TaskScope.init(ctx.allocator);

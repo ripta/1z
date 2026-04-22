@@ -1,0 +1,2 @@
+use "testing" ;
+[ <pipe> drop [ 1024 stream-read drop ] curry spawn yield ] task-scope
