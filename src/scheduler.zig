@@ -260,8 +260,18 @@ pub const Scheduler = struct {
 
             const has_sleepers = self.sleep_queue.count() > 0;
             const has_io_waiters = self.io_wait_map.count() > 0;
+            const has_blocked_tasks = blk: {
+                for (self.all_tasks.items) |task| {
+                    switch (task.status) {
+                        .completed, .failed, .cancelled => continue,
+                        .pending, .running => {},
+                    }
+                    if (task.blocked_on_channel != null or task.blocked_on_scope != null) break :blk true;
+                }
+                break :blk false;
+            };
 
-            if (!has_sleepers and !has_io_waiters) break;
+            if (!has_sleepers and !has_io_waiters and !has_blocked_tasks) break;
 
             var timeout: ?i128 = if (has_sleepers) blk: {
                 const next = self.sleep_queue.peek().?;
