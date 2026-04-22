@@ -1,0 +1,32 @@
+\ Test that type predicates compile and execute correctly in AOT mode.
+\ type-of returns a type value; the = comparison on type values goes
+\ through per-operation native fallback (not the fixnum/float fast path).
+\ In AOT mode bail is fatal, so correct output proves the per-op
+\ fallback handled type value comparison successfully.
+
+classify: ( val -- ) [
+  dup fixnum? [ drop "fixnum" print-line ] [
+    dup float? [ drop "float" print-line ] [
+      dup boolean? [ drop "boolean" print-line ] [
+        dup string? [ drop "string" print-line ] [
+          dup symbol? [ drop "symbol" print-line ] [
+            drop "other" print-line
+          ] if
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+\ Each call tests type-of followed by = on a type value.
+42 classify
+3.14 classify
+t classify
+f classify
+"hello" classify
+name: classify
+
+\ Negative cases: verify correct classification when the type
+\ does NOT match the first predicate tested.
+"not a fixnum" classify
+0.0 classify

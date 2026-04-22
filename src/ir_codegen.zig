@@ -1174,28 +1174,23 @@ const StackEntry = union(enum) {
     /// that can't be represented as IR scalars, i.e., anything other than
     /// fixnum / boolean.
     raw_at_slot: usize,
-    /// Opaque Value at slot N that is known to be non-numeric (type value,
-    /// tagged value, parameter, etc.). Arithmetic and comparison operations
-    /// reject this entry instead of emitting tag checks that would bail.
-    non_numeric_at_slot: usize,
     /// Opaque row region of unknown size inserted when a quotation call has
     /// unresolved row variables. Operations on known entries above the
     /// region work normally; operations that need exact positions within
     /// the region return NotCompilable.
     row_region,
 
-    /// Returns the slot index if this is a raw_at_slot or non_numeric_at_slot.
+    /// Returns the slot index if this is a raw_at_slot.
     fn slotIndex(self: StackEntry) ?usize {
         return switch (self) {
             .raw_at_slot => |s| s,
-            .non_numeric_at_slot => |s| s,
             else => null,
         };
     }
 
-    /// Returns true if this is any kind of opaque slot (raw or non-numeric).
+    /// Returns true if this is an opaque slot.
     fn isAtSlot(self: StackEntry) bool {
-        return self == .raw_at_slot or self == .non_numeric_at_slot;
+        return self == .raw_at_slot;
     }
 };
 
@@ -2222,7 +2217,7 @@ fn flushToPhysicalStack(state: *CompileState, stack: *[64]StackEntry, sp: usize)
                 stack[i] = .{ .raw_at_slot = i };
             },
             .quotation_body => {},
-            .raw_at_slot, .non_numeric_at_slot => {},
+            .raw_at_slot => {},
             .row_region => {},
         }
     }
@@ -2230,7 +2225,7 @@ fn flushToPhysicalStack(state: *CompileState, stack: *[64]StackEntry, sp: usize)
     // Second pass: resolve raw_at_slot entries, using swap for cross-references.
     for (0..sp) |i| {
         switch (stack[i]) {
-            .raw_at_slot, .non_numeric_at_slot => |s| {
+            .raw_at_slot => |s| {
                 if (s != i) {
                     // Check for swap pattern: stack[i] -> s and stack[s] -> i
                     if (s < sp and stack[s].isAtSlot() and stack[s].slotIndex().? == i) {
@@ -2284,7 +2279,7 @@ fn emitEpilogue(
                 state.not_compilable_reason = .quotation_truthiness;
                 return IrCodegenError.NotCompilable;
             },
-            .raw_at_slot, .non_numeric_at_slot => |s| {
+            .raw_at_slot => |s| {
                 if (s != i) {
                     if (s < sp and stack[s].isAtSlot() and stack[s].slotIndex().? == i) {
                         emitSwapSlots(ctx, base_addr, i, s);
@@ -2329,10 +2324,6 @@ fn cloneStackEntry(
         .raw_at_slot => |s| blk: {
             emitCopySlot(ctx, base_addr, s, dest_slot);
             break :blk .{ .raw_at_slot = dest_slot };
-        },
-        .non_numeric_at_slot => |s| blk: {
-            emitCopySlot(ctx, base_addr, s, dest_slot);
-            break :blk .{ .non_numeric_at_slot = dest_slot };
         },
         .row_region => IrCodegenError.NotCompilable,
     };
@@ -2416,7 +2407,6 @@ fn emitTruthiness(state: *CompileState, entry: StackEntry, base_addr: c.ir_ref) 
             const is_falsy = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_bool_tag, is_false_payload);
             break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), is_falsy, false_const);
         },
-        .non_numeric_at_slot => c.ir_const_bool(ctx, true),
         .quotation_body, .row_region => {
             state.not_compilable_reason = .quotation_truthiness;
             return IrCodegenError.NotCompilable;
@@ -2740,7 +2730,7 @@ fn tryEmitInlineTypedValidateAndPromote(
             }
             return false;
         },
-        .raw_at_slot, .non_numeric_at_slot => {},
+        .raw_at_slot => {},
         .quotation_body, .row_region => return false,
     }
 
@@ -2977,7 +2967,7 @@ fn compileInstructions(
 
                     // Re-read sp after callback (it pushed one value).
                     _ = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
-                    stack[sp.*] = .{ .non_numeric_at_slot = sp.* };
+                    stack[sp.*] = .{ .raw_at_slot = sp.* };
                     sp.* += 1;
                 } else if (state.aot_mode) {
                     // Remaining non-simple literals (array, etc.) that cannot
@@ -3066,9 +3056,21 @@ fn compileInstructions(
                 } else if (isComparisonOp(name)) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     sp.* -= 2;
+
+                    // When both operands are runtime unknowns and a resolver
+                    // is available, delegate to the polymorphic native
+                    // directly. resolveOperandPair would optimistically assume
+                    // i64 and emit a fixnum tag check that bails for
+                    // non-numeric types (type values, strings, etc.).
+                    if (stack[sp.*] == .raw_at_slot and stack[sp.* + 1] == .raw_at_slot and state.resolver != null) {
+                        sp.* += 2;
+                        try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
+                        continue;
+                    }
+
                     const resolved = resolveOperandPair(stack[sp.*], stack[sp.* + 1], state) catch |err| switch (err) {
                         IrCodegenError.NotCompilable => {
-                            // Operands are not numeric, e.g., type values in type predicates like `type-of fixnum =`.
+                            // Operands are not numeric (e.g., bool_ref vs raw_at_slot).
                             // Fall back to the polymorphic native comparison.
                             sp.* += 2;
                             try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
@@ -3188,31 +3190,6 @@ fn compileInstructions(
                             const is_falsy = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_bool_tag, is_false_payload);
                             // is_truthy = not is_falsy (negate by comparing with false)
                             break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), is_falsy, false_const);
-                        },
-                        .non_numeric_at_slot => {
-                            // Non-numeric values (type values, tagged values,
-                            // parameters) are always truthy. Emit only the
-                            // true branch.
-                            if (true_body) |tb| {
-                                if (false_body) |fb| {
-                                    var false_stack = stack.*;
-                                    var false_sp = sp.*;
-                                    try compileInstructions(state, fb, &false_stack, &false_sp);
-                                    try compileInstructions(state, tb, stack, sp);
-                                    if (false_sp != sp.*) return IrCodegenError.StackShapeMismatch;
-                                } else {
-                                    try compileInstructions(state, tb, stack, sp);
-                                }
-                            } else {
-                                emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
-                                const eff = inferQuotationEffect(false_body.?, if (state.resolver) |r| r else null) orelse {
-                                    state.not_compilable_reason = .quotation_reification;
-                                    return IrCodegenError.NotCompilable;
-                                };
-                                sp.* = sp.* - eff.input_count + eff.output_count;
-                                resetStackToPhysical(stack, sp.*);
-                            }
-                            continue;
                         },
                         .quotation_body, .row_region => {
                             state.not_compilable_reason = .quotation_truthiness;
@@ -3409,7 +3386,7 @@ fn compileInstructions(
                                 stack[0] = .row_region;
                             }
                         },
-                        .i64_ref, .f64_ref, .bool_ref, .non_numeric_at_slot, .row_region => {
+                        .i64_ref, .f64_ref, .bool_ref, .row_region => {
                             state.not_compilable_reason = .quotation_reification;
                             return IrCodegenError.NotCompilable;
                         },
@@ -4081,7 +4058,7 @@ fn preScanInstructions(
                 }
             },
             .call_word => |name| {
-                if (polyArithOpFromName(name) != null) {
+                if (polyArithOpFromName(name) != null or isComparisonOp(name)) {
                     flags.needs_poly_fallback = true;
                 }
                 if (isLoopOp(name)) {

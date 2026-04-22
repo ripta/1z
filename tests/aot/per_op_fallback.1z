@@ -1,0 +1,41 @@
+\ Test per-operation native fallback for non-numeric types in compiled
+\ words. Compiled comparison words receive different type combinations;
+\ the per-op fallback calls the polymorphic native for operations that
+\ the compiled fast path cannot handle.
+\
+\ In AOT mode bail is fatal, so correct output from every call proves
+\ that per-op fallback handled each type combination without
+\ re-executing the entire word through the interpreter.
+
+add: ( a b -- c ) [ + ] ;
+eq:  ( a b -- ? ) [ = ] ;
+lt:  ( a b -- ? ) [ < ] ;
+
+\ === Fixnum arithmetic (compiled fast path) ===
+3 4 add .
+10 3 add .
+
+\ === Float arithmetic (compiled fast path) ===
+1.5 2.5 add .
+
+\ === Mixed fixnum/float (compiled polymorphic path) ===
+3 2.5 add .
+2.5 3 add .
+
+\ === Comparison: fixnum via resolver (per-op native fallback) ===
+5 5 eq .
+3 5 eq .
+3 5 lt .
+5 3 lt .
+
+\ === Comparison: string (per-op native fallback) ===
+"abc" "abc" eq .
+"abc" "xyz" eq .
+
+\ === Comparison: type values (per-op native fallback) ===
+fixnum fixnum eq .
+fixnum float eq .
+
+\ === Comparison: boolean (per-op native fallback) ===
+t t eq .
+t f eq .
