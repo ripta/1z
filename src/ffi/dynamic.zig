@@ -33,8 +33,8 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "ffi-call", .func = nativeFfiCall, .capability = .ffi },
     .{ .name = "ffi-callback", .func = nativeFfiCallback, .capability = .ffi },
     .{ .name = "bytes-raw-ptr", .func = nativeBytesRawPtr, .capability = .ffi },
-    .{ .name = "ffi-ptr+len>bytes", .func = nativeFfiPtrLenToBytes, .capability = .ffi },
-    .{ .name = "ffi-ptr+len>borrowed-bytes", .func = nativeFfiPtrLenToBorrowedBytes, .capability = .ffi },
+    .{ .name = "ffi-ptr+len>bytes", .func = nativeFfiPtrLenToBytes, .capability = .ffi, .stack_effect = "resource n -- byte-array" },
+    .{ .name = "ffi-ptr+len>borrowed-bytes", .func = nativeFfiPtrLenToBorrowedBytes, .capability = .ffi, .stack_effect = "resource n -- byte-array" },
 };
 
 fn dylibCloseFn(ptr: *anyopaque) void {

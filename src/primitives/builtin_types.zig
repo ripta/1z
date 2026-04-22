@@ -9,9 +9,9 @@ const markers_mod = @import("markers.zig");
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "define-builtin-type", .func = nativeDefineBuiltinType },
-    .{ .name = "type-has-property?", .func = nativeTypeHasProperty },
-    .{ .name = "type-members", .func = nativeTypeMembers },
-    .{ .name = "type-name", .func = nativeTypeName },
+    .{ .name = "type-has-property?", .func = nativeTypeHasProperty, .stack_effect = "type property -- ?" },
+    .{ .name = "type-members", .func = nativeTypeMembers, .stack_effect = "type -- array/f" },
+    .{ .name = "type-name", .func = nativeTypeName, .stack_effect = "type -- string" },
 };
 
 /// define-builtin-type ( descriptor -- marker marker marker type ) - Create a type value from a descriptor,

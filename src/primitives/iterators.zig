@@ -13,10 +13,10 @@ const sequence = @import("sequence.zig");
 const unwrapBaseType = @import("../dispatch.zig").unwrapBaseType;
 
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = ">iterator", .func = nativeToIterator },
-    .{ .name = "make-callback-iter", .func = nativeMakeCallbackIter },
-    .{ .name = "make-callback-iter-with-cleanup", .func = nativeMakeCallbackIterWithCleanup },
-    .{ .name = "close-iterator", .func = nativeCloseIterator },
+    .{ .name = ">iterator", .func = nativeToIterator, .stack_effect = "seq -- iterator" },
+    .{ .name = "make-callback-iter", .func = nativeMakeCallbackIter, .stack_effect = "quot -- iterator" },
+    .{ .name = "make-callback-iter-with-cleanup", .func = nativeMakeCallbackIterWithCleanup, .stack_effect = "step-quot cleanup-quot -- iterator" },
+    .{ .name = "close-iterator", .func = nativeCloseIterator, .stack_effect = "iterator --" },
 };
 
 pub const primitives = [_]Primitive{

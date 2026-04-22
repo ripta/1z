@@ -2088,9 +2088,9 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
 }
 
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = "bytes-alloc", .func = nativeBytesAlloc },
-    .{ .name = "#shrink!", .func = nativeShrinkMut },
-    .{ .name = "#grow!", .func = nativeGrowMut },
+    .{ .name = "bytes-alloc", .func = nativeBytesAlloc, .stack_effect = "n -- byte-array" },
+    .{ .name = "#shrink!", .func = nativeShrinkMut, .stack_effect = "seq n -- seq" },
+    .{ .name = "#grow!", .func = nativeGrowMut, .stack_effect = "seq n fill -- seq" },
     .{ .name = "each-index", .func = nativeEachIndex },
     .{ .name = "reduce-index", .func = nativeReduceIndex },
 };
