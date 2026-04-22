@@ -393,6 +393,11 @@ pub const Context = struct {
                 },
             });
         }
+
+        if (self.trace.trace_modules) {
+            var tw = trace_mod.TraceWriter.init();
+            trace_mod.traceModuleDepsPush(&tw, module.name, &module.words, &module.deps, 5);
+        }
     }
 
     /// Define a word in the current local frame if one exists, otherwise
@@ -643,7 +648,13 @@ pub const Context = struct {
             defer self.popCallFrame();
 
             try self.pushModuleDepsFrame(module);
-            defer self.popLocalFrame();
+            defer {
+                if (self.trace.trace_modules) {
+                    var tw = trace_mod.TraceWriter.init();
+                    trace_mod.traceModuleDepsPop(&tw, module.name);
+                }
+                self.popLocalFrame();
+            }
 
             if (mod_word.action == .compound) {
                 const has_generic = for (mod_word.markers) |mk| {
@@ -1091,7 +1102,15 @@ pub const Context = struct {
 
             const exec_result = self.executeInstructions(current_instructions);
             exec_result catch |err| {
-                if (owns_frame) self.popLocalFrame();
+                if (owns_frame) {
+                    if (self.trace.trace_modules) {
+                        if (current_module) |cm| {
+                            var tw = trace_mod.TraceWriter.init();
+                            trace_mod.traceModuleDepsPop(&tw, cm.name);
+                        }
+                    }
+                    self.popLocalFrame();
+                }
                 return err;
             };
 
@@ -1107,6 +1126,10 @@ pub const Context = struct {
 
                 if (new_module) |new_mod| {
                     if (owns_frame and current_module.? != new_mod) {
+                        if (self.trace.trace_modules) {
+                            var tw = trace_mod.TraceWriter.init();
+                            trace_mod.traceModuleDepsPop(&tw, current_module.?.name);
+                        }
                         self.popLocalFrame();
                         owns_frame = false;
                     }
@@ -1117,6 +1140,12 @@ pub const Context = struct {
 
             // Normal terminatio:n pop frame before validation
             if (owns_frame) {
+                if (self.trace.trace_modules) {
+                    if (current_module) |cm| {
+                        var tw = trace_mod.TraceWriter.init();
+                        trace_mod.traceModuleDepsPop(&tw, cm.name);
+                    }
+                }
                 self.popLocalFrame();
                 owns_frame = false;
             }
@@ -1318,7 +1347,13 @@ pub const Context = struct {
                                     switch (word.action) {
                                         .compound => |instrs| {
                                             self.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
-                                            defer self.popLocalFrame();
+                                            defer {
+                                                if (self.trace.trace_modules) {
+                                                    var tw = trace_mod.TraceWriter.init();
+                                                    trace_mod.traceModuleDepsPop(&tw, mod.name);
+                                                }
+                                                self.popLocalFrame();
+                                            }
                                             break :blk self.executeQuotation(.{ .instructions = instrs });
                                         },
                                         .native => |func| break :blk func(self),
@@ -1355,14 +1390,26 @@ pub const Context = struct {
                                     }
 
                                     self.executeQuotation(.{ .instructions = tci }) catch |err2| {
-                                        if (tci_module != null) self.popLocalFrame();
+                                        if (tci_module) |tm| {
+                                            if (self.trace.trace_modules) {
+                                                var tw = trace_mod.TraceWriter.init();
+                                                trace_mod.traceModuleDepsPop(&tw, tm.name);
+                                            }
+                                            self.popLocalFrame();
+                                        }
                                         if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                                         self.popCallFrame(); // pop our own frame
                                         self.captureCallStackOnError(err2);
                                         return err2;
                                     };
 
-                                    if (tci_module != null) self.popLocalFrame();
+                                    if (tci_module) |tm| {
+                                        if (self.trace.trace_modules) {
+                                            var tw = trace_mod.TraceWriter.init();
+                                            trace_mod.traceModuleDepsPop(&tw, tm.name);
+                                        }
+                                        self.popLocalFrame();
+                                    }
                                 }
 
                                 // Validate stack effect if declared

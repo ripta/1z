@@ -1,7 +1,11 @@
 const std = @import("std");
 const File = std.fs.File;
-const Value = @import("value.zig").Value;
+const value_mod = @import("value.zig");
+const Value = value_mod.Value;
+const Marker = value_mod.Marker;
+const ModuleWord = value_mod.ModuleWord;
 const Stack = @import("stack.zig").Stack;
+const StackEffect = @import("stack_effect.zig").StackEffect;
 const dispatch = @import("dispatch.zig");
 
 /// Configuration for execution tracing.
@@ -175,6 +179,123 @@ pub fn traceResolve(
     }
     w.writeByte('\n') catch return;
 
+    trace_writer.writeAll(fbs.getWritten());
+}
+
+/// Emit a MODULE load line for `--trace-modules`.
+pub fn traceModuleLoad(trace_writer: *TraceWriter, name: []const u8, path: []const u8) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    w.print("MODULE load {s} ({s})\n", .{ name, path }) catch return;
+    trace_writer.writeAll(fbs.getWritten());
+}
+
+/// Emit a MODULE cache-hit line for `--trace-modules`.
+pub fn traceModuleCacheHit(trace_writer: *TraceWriter, name: []const u8, path: []const u8) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    w.print("MODULE cache-hit {s} ({s})\n", .{ name, path }) catch return;
+    trace_writer.writeAll(fbs.getWritten());
+}
+
+/// Emit a MODULE define line for `--trace-modules`.
+pub fn traceModuleDefine(trace_writer: *TraceWriter, module_name: []const u8, word_name: []const u8, mod_word: ModuleWord) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    const kind: []const u8 = switch (mod_word.action) {
+        .compound => "compound",
+        .native => "native",
+    };
+
+    w.print("MODULE define {s}: {s} ({s}", .{ module_name, word_name, kind }) catch return;
+
+    if (mod_word.stack_effect) |effect| {
+        w.writeByte(' ') catch return;
+        effect.write(w) catch return;
+    }
+
+    for (mod_word.markers) |mk| {
+        w.print(", {s}", .{mk.name}) catch return;
+    }
+
+    w.writeAll(")\n") catch return;
+    trace_writer.writeAll(fbs.getWritten());
+}
+
+/// Emit a MODULE load-end line for `--trace-modules`.
+pub fn traceModuleLoadEnd(trace_writer: *TraceWriter, name: []const u8, word_count: usize) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    w.print("MODULE load-end {s} ({d} words)\n", .{ name, word_count }) catch return;
+    trace_writer.writeAll(fbs.getWritten());
+}
+
+/// Emit a MODULE import line for `--trace-modules`.
+pub fn traceModuleImport(trace_writer: *TraceWriter, target_source: []const u8, word_name: []const u8, source_module_name: []const u8) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    w.print("MODULE import {s}: {s} (from {s})\n", .{ target_source, word_name, source_module_name }) catch return;
+    trace_writer.writeAll(fbs.getWritten());
+}
+
+/// Emit a MODULE deps-push line for `--trace-modules`.
+pub fn traceModuleDepsPush(
+    trace_writer: *TraceWriter,
+    module_name: []const u8,
+    words: *const std.StringHashMapUnmanaged(ModuleWord),
+    deps: *const std.StringHashMapUnmanaged(ModuleWord),
+    max_show: usize,
+) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    w.print("MODULE deps-push {s} [", .{module_name}) catch return;
+
+    const total = deps.count() + words.count();
+    var shown: usize = 0;
+
+    var dep_iter = deps.iterator();
+    while (dep_iter.next()) |entry| {
+        if (shown >= max_show) break;
+        if (shown > 0) w.writeAll(", ") catch return;
+        w.writeAll(entry.key_ptr.*) catch return;
+        shown += 1;
+    }
+
+    var word_iter = words.iterator();
+    while (word_iter.next()) |entry| {
+        if (shown >= max_show) break;
+        if (shown > 0) w.writeAll(", ") catch return;
+        w.writeAll(entry.key_ptr.*) catch return;
+        shown += 1;
+    }
+
+    if (total > max_show) {
+        w.print(", ... {d} more", .{total - max_show}) catch return;
+    }
+
+    w.writeAll("]\n") catch return;
+    trace_writer.writeAll(fbs.getWritten());
+}
+
+/// Emit a MODULE deps-pop line for `--trace-modules`.
+pub fn traceModuleDepsPop(trace_writer: *TraceWriter, module_name: []const u8) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    w.print("MODULE deps-pop {s}\n", .{module_name}) catch return;
     trace_writer.writeAll(fbs.getWritten());
 }
 

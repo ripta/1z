@@ -1,3 +1,2 @@
 --trace-words=__nonexistent__
 --trace-resolve=__nonexistent__
---trace-modules

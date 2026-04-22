@@ -1,0 +1,2 @@
+use "testing" ;
+t "trace modules works" assert-true
