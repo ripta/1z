@@ -17,6 +17,7 @@ const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const primitives = @import("primitives.zig");
 const parser = @import("parser.zig");
 const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
+const TraceConfig = @import("trace.zig").TraceConfig;
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
 const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
@@ -130,6 +131,8 @@ pub const Context = struct {
     ///
     /// TODO(ripta): Consider making this a comptime flag to eliminate the pointer check.
     debugger: ?*debugger_mod.Debugger = null,
+    /// Execution tracing configuration, parsed from CLI flags.
+    trace: TraceConfig = .{},
     /// Dispatch table for user-defined operator/method dispatch.
     dispatch: DispatchTable,
     /// Shared scheduler for green thread contexts. Null for the root context.
@@ -201,6 +204,7 @@ pub const Context = struct {
             .scheduler = scheduler,
             .parent_context = parent,
 
+            .trace = parent.trace,
             .current_source = parent.current_source,
             .current_source_dir = parent.current_source_dir,
             .load_paths = parent.load_paths,

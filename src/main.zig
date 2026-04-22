@@ -17,6 +17,7 @@ const BenchmarkConfig = benchmark.BenchmarkConfig;
 const CountingAllocator = benchmark.CountingAllocator;
 const memory_limit = @import("memory_limit.zig");
 const MemoryLimitAllocator = memory_limit.MemoryLimitAllocator;
+const trace_mod = @import("trace.zig");
 
 const build_options = @import("build_options");
 pub const version = build_options.version;
@@ -123,6 +124,7 @@ pub fn main() u8 {
     var debug_mode = false;
     var initial_breakpoints: [16][]const u8 = undefined;
     var initial_breakpoint_count: usize = 0;
+    var trace_config = trace_mod.TraceConfig{};
 
     // TODO(ripta): bit hacky arg parsing, improve later?
     for (args[1..]) |arg| {
@@ -169,6 +171,20 @@ pub fn main() u8 {
                 initial_breakpoints[initial_breakpoint_count] = word;
                 initial_breakpoint_count += 1;
             }
+        } else if (std.mem.eql(u8, arg, "--trace-words")) {
+            trace_config.trace_words = true;
+        } else if (std.mem.startsWith(u8, arg, "--trace-words=")) {
+            trace_config.trace_words = true;
+            trace_config.trace_words_pattern = arg["--trace-words=".len..];
+        } else if (std.mem.eql(u8, arg, "--trace-resolve")) {
+            trace_config.trace_resolve = true;
+        } else if (std.mem.startsWith(u8, arg, "--trace-resolve=")) {
+            trace_config.trace_resolve = true;
+            trace_config.trace_resolve_pattern = arg["--trace-resolve=".len..];
+        } else if (std.mem.eql(u8, arg, "--trace-modules")) {
+            trace_config.trace_modules = true;
+        } else if (std.mem.startsWith(u8, arg, "--dump-scope=")) {
+            trace_config.dump_scope = arg["--dump-scope=".len..];
         } else {
             file_path = arg;
         }
@@ -202,6 +218,7 @@ pub fn main() u8 {
     // Initialize context with the program arguments
     var ctx = Context.init(allocator);
     ctx.program_args = program_args.items;
+    ctx.trace = trace_config;
     defer ctx.deinit();
 
     // Configure load paths: CLI flags, then env var
@@ -846,4 +863,5 @@ test {
     _ = @import("line_editor.zig");
     _ = @import("debugger/mod.zig");
     _ = @import("multiplexer.zig");
+    _ = @import("trace.zig");
 }

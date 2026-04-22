@@ -1,0 +1,2 @@
+use "testing" ;
+1 2 + 3 "trace flags do not break execution" assert=
