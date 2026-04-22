@@ -1,0 +1,3 @@
+use "testing" ;
+my-word: ( -- n ) [ 42 ] ;
+my-word 42 "trace-resolve output" assert=

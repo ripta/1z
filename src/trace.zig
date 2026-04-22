@@ -121,6 +121,63 @@ pub fn writeValuePreview(val: Value, writer: anytype) !void {
     }
 }
 
+/// Where a word was found during lookup.
+pub const ResolveSource = union(enum) {
+    local_frame: usize,
+    global_dict: void,
+    parent_local_frame: usize,
+    parent_global_dict: void,
+    qualified_found: struct { module: []const u8, word: []const u8 },
+    qualified_not_found: struct { module: []const u8, word: []const u8 },
+    not_found: void,
+};
+
+/// Emit a TRACE call line for `--trace-words`. Caller is responsible for
+/// checking `trace.trace_words` and pattern matching before calling.
+pub fn traceWord(
+    trace_writer: *TraceWriter,
+    name: []const u8,
+    source: []const u8,
+    line: usize,
+    stack: *const Stack,
+) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    w.print("TRACE call {s} at {s}:{d} ", .{ name, source, line }) catch return;
+    formatStackPreview(stack, w, 3);
+    w.writeByte('\n') catch return;
+
+    trace_writer.writeAll(fbs.getWritten());
+}
+
+/// Emit a RESOLVE line for `--trace-resolve`. Caller is responsible for
+/// checking `trace.trace_resolve` and pattern matching before calling.
+pub fn traceResolve(
+    trace_writer: *TraceWriter,
+    name: []const u8,
+    source: ResolveSource,
+) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    w.print("RESOLVE {s} -> ", .{name}) catch return;
+    switch (source) {
+        .local_frame => |idx| w.print("local-frame[{d}]", .{idx}) catch return,
+        .global_dict => w.writeAll("global-dict") catch return,
+        .parent_local_frame => |idx| w.print("parent:local-frame[{d}]", .{idx}) catch return,
+        .parent_global_dict => w.writeAll("parent:global-dict") catch return,
+        .qualified_found => |q| w.print("qualified({s}, {s}) -> module-word", .{ q.module, q.word }) catch return,
+        .qualified_not_found => |q| w.print("qualified({s}, {s}) -> NOT FOUND", .{ q.module, q.word }) catch return,
+        .not_found => w.writeAll("NOT FOUND") catch return,
+    }
+    w.writeByte('\n') catch return;
+
+    trace_writer.writeAll(fbs.getWritten());
+}
+
 /// Returns true if `name` matches the given comma-separated pattern.
 /// A null pattern matches everything.
 pub fn matchesPattern(name: []const u8, pattern: ?[]const u8) bool {
