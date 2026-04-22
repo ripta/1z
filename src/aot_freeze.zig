@@ -170,11 +170,13 @@ pub fn freezeModuleGraphOpts(
         }
     }
 
-    // Phase 2b: Scan all discovered compound words for module-qualified
-    // native calls that the BFS couldn't resolve (because lookupWord
-    // doesn't handle qualified names). This catches references like
-    // "native.struct-field-get" in words added by compile_all_prelude
-    // which never went through the BFS.
+    // Phase 2b: Scan all discovered compound words for native calls that
+    // the BFS couldn't resolve. This catches:
+    //
+    // 1. Module-qualified names, e.g., "native.struct-field-get", that
+    //    lookupWord can't handle.
+    // 2. Direct dictionary words referenced by prelude words added by
+    //    compile_all_prelude which never went through the BFS.
     {
         const temp_allocator = ctx.quotationAllocator();
         var qual_seen = std.StringHashMapUnmanaged(void){};
@@ -196,17 +198,7 @@ pub fn freezeModuleGraphOpts(
                     .call_word => |call_name| {
                         if (qual_seen.contains(call_name)) continue;
                         try qual_seen.put(temp_allocator, call_name, {});
-                        if (resolveQualifiedModuleWord(ctx, call_name)) |mod_word| {
-                            switch (mod_word.action) {
-                                .native, .host_callback => {
-                                    if (mod_word.stack_effect != null) {
-                                        try discovered.native_names.append(temp_allocator, call_name);
-                                        try discovered.native_defs.append(temp_allocator, wordDefFromModuleWord(call_name, mod_word));
-                                    }
-                                },
-                                .compound => {},
-                            }
-                        }
+                        try discoverCalleeWord(ctx, call_name, &discovered, temp_allocator);
                     },
                     .push_literal => |val| {
                         // Also scan nested quotations
@@ -216,17 +208,7 @@ pub fn freezeModuleGraphOpts(
                                     .call_word => |call_name| {
                                         if (qual_seen.contains(call_name)) continue;
                                         try qual_seen.put(temp_allocator, call_name, {});
-                                        if (resolveQualifiedModuleWord(ctx, call_name)) |mod_word| {
-                                            switch (mod_word.action) {
-                                                .native, .host_callback => {
-                                                    if (mod_word.stack_effect != null) {
-                                                        try discovered.native_names.append(temp_allocator, call_name);
-                                                        try discovered.native_defs.append(temp_allocator, wordDefFromModuleWord(call_name, mod_word));
-                                                    }
-                                                },
-                                                .compound => {},
-                                            }
-                                        }
+                                        try discoverCalleeWord(ctx, call_name, &discovered, temp_allocator);
                                     },
                                     else => {},
                                 }
@@ -567,6 +549,46 @@ fn wordDefFromModuleWord(name: []const u8, mod_word: value_mod.ModuleWord) WordD
         },
         .capability = mod_word.capability,
     };
+}
+
+/// Try to discover a callee word that isn't yet in the discovered set.
+///
+/// It tries in order:
+///
+/// - module-qualified resolution, e.g., `native.struct-field-get`; then
+/// - direct dictionary lookup for unqualified names.
+///
+/// Only adds native words with declared stack effects.
+fn discoverCalleeWord(ctx: *const Context, call_name: []const u8, discovered: *DiscoveredWords, allocator: Allocator) Allocator.Error!void {
+    // Try module-qualified resolution first
+    if (resolveQualifiedModuleWord(ctx, call_name)) |mod_word| {
+        switch (mod_word.action) {
+            .native, .host_callback => {
+                if (mod_word.stack_effect != null) {
+                    try discovered.native_names.append(allocator, call_name);
+                    try discovered.native_defs.append(allocator, wordDefFromModuleWord(call_name, mod_word));
+                }
+            },
+            .compound => {},
+        }
+        return;
+    }
+
+    // Fall back to direct dictionary lookup for unqualified names.
+    // This catches native words called by prelude words that were added
+    // via compile_all_prelude but never went through the BFS.
+    const word = ctx.lookupWord(call_name) orelse return;
+    if (word.stack_effect == null) return;
+    switch (word.action) {
+        .native, .host_callback => {
+            try discovered.native_names.append(allocator, call_name);
+            try discovered.native_defs.append(allocator, word);
+        },
+        .compound => {
+            try discovered.names.append(allocator, call_name);
+            try discovered.defs.append(allocator, word);
+        },
+    }
 }
 
 fn isDisallowedDynamicFeature(name: []const u8) bool {
