@@ -112,6 +112,8 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     var scheduler = try Scheduler.init(ctx.allocator);
     defer scheduler.deinit();
 
+    scheduler.deadlock_detect_ns = ctx.deadlock_detect_ns;
+
     ctx.scheduler = &scheduler;
     defer {
         ctx.scheduler = null;

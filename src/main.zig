@@ -125,6 +125,7 @@ pub fn main() u8 {
     var initial_breakpoints: [16][]const u8 = undefined;
     var initial_breakpoint_count: usize = 0;
     var trace_config = trace_mod.TraceConfig{};
+    var deadlock_detect_ns: ?i128 = null;
 
     // TODO(ripta): bit hacky arg parsing, improve later?
     for (args[1..]) |arg| {
@@ -185,6 +186,19 @@ pub fn main() u8 {
             trace_config.trace_modules = true;
         } else if (std.mem.startsWith(u8, arg, "--dump-scope=")) {
             trace_config.dump_scope = arg["--dump-scope=".len..];
+        } else if (std.mem.eql(u8, arg, "--deadlock-detect")) {
+            deadlock_detect_ns = 5 * std.time.ns_per_s;
+        } else if (std.mem.startsWith(u8, arg, "--deadlock-detect=")) {
+            const value = arg["--deadlock-detect=".len..];
+            const secs = std.fmt.parseInt(u64, value, 10) catch {
+                const stderr_file: File = .stderr();
+                var stderr_buf2: [4096]u8 = undefined;
+                var stderr2 = stderr_file.writer(&stderr_buf2);
+                stderr2.interface.print("Error: invalid value for --deadlock-detect: '{s}'\n", .{value}) catch {};
+                stderr2.interface.flush() catch {};
+                return 1;
+            };
+            deadlock_detect_ns = @as(i128, secs) * std.time.ns_per_s;
         } else {
             file_path = arg;
         }
@@ -219,6 +233,7 @@ pub fn main() u8 {
     var ctx = Context.init(allocator);
     ctx.program_args = program_args.items;
     ctx.trace = trace_config;
+    ctx.deadlock_detect_ns = deadlock_detect_ns;
     defer ctx.deinit();
 
     // Configure load paths: CLI flags, then env var
