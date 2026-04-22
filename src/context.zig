@@ -17,6 +17,8 @@ const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const primitives = @import("primitives.zig");
 const parser = @import("parser.zig");
 const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
+const trace_mod = @import("trace.zig");
+const TraceConfig = trace_mod.TraceConfig;
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
 const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
@@ -130,6 +132,8 @@ pub const Context = struct {
     ///
     /// TODO(ripta): Consider making this a comptime flag to eliminate the pointer check.
     debugger: ?*debugger_mod.Debugger = null,
+    /// Execution tracing configuration, parsed from CLI flags.
+    trace: TraceConfig = .{},
     /// Dispatch table for user-defined operator/method dispatch.
     dispatch: DispatchTable,
     /// Shared scheduler for green thread contexts. Null for the root context.
@@ -201,6 +205,7 @@ pub const Context = struct {
             .scheduler = scheduler,
             .parent_context = parent,
 
+            .trace = parent.trace,
             .current_source = parent.current_source,
             .current_source_dir = parent.current_source_dir,
             .load_paths = parent.load_paths,
@@ -388,6 +393,11 @@ pub const Context = struct {
                 },
             });
         }
+
+        if (self.trace.trace_modules) {
+            var tw = trace_mod.TraceWriter.init();
+            trace_mod.traceModuleDepsPush(&tw, module.name, &module.words, &module.deps, 5);
+        }
     }
 
     /// Define a word in the current local frame if one exists, otherwise
@@ -485,6 +495,66 @@ pub const Context = struct {
         }
 
         return null;
+    }
+
+    /// Determine where a word was found during lookup, mirroring the
+    /// search order of `lookupWord`. Used only when trace_resolve is active.
+    fn lookupWordSource(self: *const Context, name: []const u8) trace_mod.ResolveSource {
+        var i = self.local_frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.local_frames.items[i].get(name) != null) {
+                return .{ .local_frame = i };
+            }
+        }
+
+        if (self.dictionary.get(name) != null) return .global_dict;
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            var j = ctx.local_frames.items.len;
+            while (j > 0) {
+                j -= 1;
+                if (ctx.local_frames.items[j].get(name) != null) {
+                    return .{ .parent_local_frame = j };
+                }
+            }
+            if (ctx.dictionary.get(name) != null) return .parent_global_dict;
+            ancestor = ctx.parent_context;
+        }
+
+        return .not_found;
+    }
+
+    /// Dump the full scope chain to stderr for `--dump-scope`.
+    fn dumpScope(self: *const Context, name: []const u8, source: []const u8, line: usize) void {
+        var tw = trace_mod.TraceWriter.init();
+        trace_mod.traceDumpScopeHeader(&tw, name, source, line);
+
+        var i = self.local_frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            const label: ?[]const u8 = if (self.import_frame_index != null and i == self.import_frame_index.?)
+                "import-frame"
+            else if (i == 0)
+                "prelude"
+            else
+                null;
+            trace_mod.traceDumpScopeFrame(&tw, "", i, self.local_frames.items[i].count(), label);
+        }
+
+        trace_mod.traceDumpScopeDict(&tw, "", self.dictionary.entries.count());
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            var j = ctx.local_frames.items.len;
+            while (j > 0) {
+                j -= 1;
+                trace_mod.traceDumpScopeFrame(&tw, "parent: ", j, ctx.local_frames.items[j].count(), null);
+            }
+            trace_mod.traceDumpScopeDict(&tw, "parent: ", ctx.dictionary.entries.count());
+            ancestor = ctx.parent_context;
+        }
     }
 
     /// Look up a word by name, searching only user visible frames; this skips
@@ -596,11 +666,26 @@ pub const Context = struct {
         };
 
         if (module.words.get(word_name)) |mod_word| {
+            if (self.trace.trace_resolve and trace_mod.matchesPattern(name, self.trace.trace_resolve_pattern)) {
+                var tw = trace_mod.TraceWriter.init();
+                trace_mod.traceResolve(&tw, name, .{ .qualified_found = .{ .module = module_path, .word = word_name } });
+            }
+
             self.pushCallFrame(name, line, column);
+            if (self.trace.trace_words and trace_mod.matchesPattern(name, self.trace.trace_words_pattern)) {
+                var tw = trace_mod.TraceWriter.init();
+                trace_mod.traceWord(&tw, name, self.current_source, line, &self.stack);
+            }
             defer self.popCallFrame();
 
             try self.pushModuleDepsFrame(module);
-            defer self.popLocalFrame();
+            defer {
+                if (self.trace.trace_modules) {
+                    var tw = trace_mod.TraceWriter.init();
+                    trace_mod.traceModuleDepsPop(&tw, module.name);
+                }
+                self.popLocalFrame();
+            }
 
             if (mod_word.action == .compound) {
                 const has_generic = for (mod_word.markers) |mk| {
@@ -622,6 +707,10 @@ pub const Context = struct {
                 .native => |func| try func(self),
             }
         } else {
+            if (self.trace.trace_resolve and trace_mod.matchesPattern(name, self.trace.trace_resolve_pattern)) {
+                var tw = trace_mod.TraceWriter.init();
+                trace_mod.traceResolve(&tw, name, .{ .qualified_not_found = .{ .module = module_path, .word = word_name } });
+            }
             return ExecutionError.UnknownWord;
         }
     }
@@ -1044,7 +1133,15 @@ pub const Context = struct {
 
             const exec_result = self.executeInstructions(current_instructions);
             exec_result catch |err| {
-                if (owns_frame) self.popLocalFrame();
+                if (owns_frame) {
+                    if (self.trace.trace_modules) {
+                        if (current_module) |cm| {
+                            var tw = trace_mod.TraceWriter.init();
+                            trace_mod.traceModuleDepsPop(&tw, cm.name);
+                        }
+                    }
+                    self.popLocalFrame();
+                }
                 return err;
             };
 
@@ -1060,6 +1157,10 @@ pub const Context = struct {
 
                 if (new_module) |new_mod| {
                     if (owns_frame and current_module.? != new_mod) {
+                        if (self.trace.trace_modules) {
+                            var tw = trace_mod.TraceWriter.init();
+                            trace_mod.traceModuleDepsPop(&tw, current_module.?.name);
+                        }
                         self.popLocalFrame();
                         owns_frame = false;
                     }
@@ -1070,6 +1171,12 @@ pub const Context = struct {
 
             // Normal terminatio:n pop frame before validation
             if (owns_frame) {
+                if (self.trace.trace_modules) {
+                    if (current_module) |cm| {
+                        var tw = trace_mod.TraceWriter.init();
+                        trace_mod.traceModuleDepsPop(&tw, cm.name);
+                    }
+                }
                 self.popLocalFrame();
                 owns_frame = false;
             }
@@ -1164,6 +1271,20 @@ pub const Context = struct {
                     if (self.lookupWord(name)) |word| {
                         // Push call frame before execution
                         self.pushCallFrame(name, instr.line, instr.column);
+
+                        if (self.trace.trace_words and trace_mod.matchesPattern(name, self.trace.trace_words_pattern)) {
+                            var tw = trace_mod.TraceWriter.init();
+                            trace_mod.traceWord(&tw, name, self.current_source, instr.line, &self.stack);
+                        }
+                        if (self.trace.trace_resolve and trace_mod.matchesPattern(name, self.trace.trace_resolve_pattern)) {
+                            var tw = trace_mod.TraceWriter.init();
+                            trace_mod.traceResolve(&tw, name, self.lookupWordSource(name));
+                        }
+                        if (self.trace.dump_scope) |scope_word| {
+                            if (std.mem.eql(u8, name, scope_word)) {
+                                self.dumpScope(name, self.current_source, instr.line);
+                            }
+                        }
 
                         // Validate quotation parameters against declared effects
                         if (word.stack_effect) |effect| {
@@ -1262,7 +1383,13 @@ pub const Context = struct {
                                     switch (word.action) {
                                         .compound => |instrs| {
                                             self.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
-                                            defer self.popLocalFrame();
+                                            defer {
+                                                if (self.trace.trace_modules) {
+                                                    var tw = trace_mod.TraceWriter.init();
+                                                    trace_mod.traceModuleDepsPop(&tw, mod.name);
+                                                }
+                                                self.popLocalFrame();
+                                            }
                                             break :blk self.executeQuotation(.{ .instructions = instrs });
                                         },
                                         .native => |func| break :blk func(self),
@@ -1299,14 +1426,26 @@ pub const Context = struct {
                                     }
 
                                     self.executeQuotation(.{ .instructions = tci }) catch |err2| {
-                                        if (tci_module != null) self.popLocalFrame();
+                                        if (tci_module) |tm| {
+                                            if (self.trace.trace_modules) {
+                                                var tw = trace_mod.TraceWriter.init();
+                                                trace_mod.traceModuleDepsPop(&tw, tm.name);
+                                            }
+                                            self.popLocalFrame();
+                                        }
                                         if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                                         self.popCallFrame(); // pop our own frame
                                         self.captureCallStackOnError(err2);
                                         return err2;
                                     };
 
-                                    if (tci_module != null) self.popLocalFrame();
+                                    if (tci_module) |tm| {
+                                        if (self.trace.trace_modules) {
+                                            var tw = trace_mod.TraceWriter.init();
+                                            trace_mod.traceModuleDepsPop(&tw, tm.name);
+                                        }
+                                        self.popLocalFrame();
+                                    }
                                 }
 
                                 // Validate stack effect if declared
@@ -1346,6 +1485,10 @@ pub const Context = struct {
                             b.updatePeakStackDepth(self.stack.depth());
                         }
                     } else {
+                        if (self.trace.trace_resolve and trace_mod.matchesPattern(name, self.trace.trace_resolve_pattern)) {
+                            var tw = trace_mod.TraceWriter.init();
+                            trace_mod.traceResolve(&tw, name, .not_found);
+                        }
                         // Unknown word - push frame, capture, pop, return error
                         self.pushCallFrame(name, instr.line, instr.column);
                         self.captureCallStackOnError(ExecutionError.UnknownWord);

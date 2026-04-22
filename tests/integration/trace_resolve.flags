@@ -1,0 +1,2 @@
+--trace-resolve=my-word
+--no-show-stack

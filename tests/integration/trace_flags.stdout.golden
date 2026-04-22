@@ -1,0 +1,2 @@
+PASS: trace flags do not break execution
+Stack: [ ]

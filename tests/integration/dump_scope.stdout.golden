@@ -1,0 +1,7 @@
+PASS: scope-frames returns array
+PASS: scope-frames has entries
+PASS: frame has type key
+PASS: frame has count key
+PASS: frame has index key
+PASS: frame has words key
+PASS: frame has import-frame? key

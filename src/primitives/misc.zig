@@ -9,6 +9,7 @@ const StatementProcessor = @import("../statement.zig").StatementProcessor;
 const markers_mod = @import("markers.zig");
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
+const trace_mod = @import("../trace.zig");
 
 const popString = helpers.popString;
 
@@ -140,6 +141,10 @@ fn nativeLoad(ctx: *Context) anyerror!void {
     // XXX(ripta): Module cache hit - side-effects won't run again.
     //             Is this okay? It better be.
     if (ctx.module_cache.get(resolved)) |cached_module| {
+        if (ctx.trace.trace_modules) {
+            var tw = trace_mod.TraceWriter.init();
+            trace_mod.traceModuleCacheHit(&tw, filename, resolved);
+        }
         return try ctx.stack.push(.{ .module = cached_module });
     }
 
@@ -147,6 +152,11 @@ fn nativeLoad(ctx: *Context) anyerror!void {
 }
 
 fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator, resolved: []const u8) anyerror!void {
+    if (ctx.trace.trace_modules) {
+        var tw = trace_mod.TraceWriter.init();
+        trace_mod.traceModuleLoad(&tw, filename, resolved);
+    }
+
     const file = std.fs.cwd().openFile(resolved, .{}) catch {
         // Add error context for FileNotFound
         const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
@@ -248,7 +258,16 @@ fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator,
             try module.deps.put(alloc, entry.key_ptr.*, mod_word);
         } else {
             try module.words.put(alloc, entry.key_ptr.*, mod_word);
+            if (ctx.trace.trace_modules) {
+                var tw = trace_mod.TraceWriter.init();
+                trace_mod.traceModuleDefine(&tw, filename, entry.key_ptr.*, mod_word);
+            }
         }
+    }
+
+    if (ctx.trace.trace_modules) {
+        var tw = trace_mod.TraceWriter.init();
+        trace_mod.traceModuleLoadEnd(&tw, filename, module.words.count());
     }
 
     ctx.module_cache.put(alloc, resolved, module) catch {};
@@ -272,6 +291,10 @@ fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module: *co
             .native => |func| .{ .native = func },
         },
     });
+    if (ctx.trace.trace_modules) {
+        var tw = trace_mod.TraceWriter.init();
+        trace_mod.traceModuleImport(&tw, ctx.current_source, name, module.name);
+    }
 }
 
 fn addImportError(ctx: *Context, error_type: []const u8, message: []const u8) void {

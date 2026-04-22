@@ -5,6 +5,7 @@ const dispatch_mod = @import("../dispatch.zig");
 const WordDefinition = @import("../dictionary.zig").WordDefinition;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
+const HashTable = value_mod.HashTable;
 
 const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
@@ -17,6 +18,7 @@ pub const primitives = [_]Primitive{};
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = ">word", .func = nativeToWord },
     .{ .name = "all-words", .func = nativeAllWords },
+    .{ .name = "scope-frames", .func = nativeScopeFrames },
 };
 
 fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: WordDefinition) !Value {
@@ -144,6 +146,82 @@ fn nativeAllWords(ctx: *Context) anyerror!void {
     }
 
     try ctx.stack.push(.{ .array = results.items });
+}
+
+/// scope-frames ( -- array ) - Return an array of frame descriptor hashes for the full scope chain.
+fn nativeScopeFrames(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    var results: std.ArrayListUnmanaged(Value) = .{};
+
+    try collectScopeFrames(alloc, ctx, "", &results);
+
+    var ancestor = ctx.parent_context;
+    while (ancestor) |anc| {
+        try collectScopeFrames(alloc, anc, "parent-", &results);
+        ancestor = anc.parent_context;
+    }
+
+    try ctx.stack.push(.{ .array = results.items });
+}
+
+fn buildFrameHash(
+    alloc: Allocator,
+    type_name: []const u8,
+    index: i64,
+    frame_words: anytype,
+    is_import_frame: bool,
+) !Value {
+    const hash = try alloc.create(HashTable);
+    hash.* = HashTable{};
+
+    try hash.put(alloc, "type", .{ .string = type_name });
+    try hash.put(alloc, "index", .{ .fixnum = index });
+    try hash.put(alloc, "import-frame?", .{ .boolean = is_import_frame });
+
+    var word_names: std.ArrayListUnmanaged(Value) = .{};
+    var count: i64 = 0;
+
+    var iter = frame_words.iterator();
+    while (iter.next()) |entry| {
+        try word_names.append(alloc, .{ .string = entry.key_ptr.* });
+        count += 1;
+    }
+
+    try hash.put(alloc, "words", .{ .array = word_names.items });
+    try hash.put(alloc, "count", .{ .fixnum = count });
+
+    return .{ .hash = hash };
+}
+
+fn collectScopeFrames(
+    alloc: Allocator,
+    source_ctx: *const Context,
+    prefix: []const u8,
+    results: *std.ArrayListUnmanaged(Value),
+) !void {
+    const local_type = if (prefix.len > 0) "parent-local-frame" else "local-frame";
+    const dict_type = if (prefix.len > 0) "parent-global-dict" else "global-dict";
+
+    var i = source_ctx.local_frames.items.len;
+    while (i > 0) {
+        i -= 1;
+        const is_import = source_ctx.import_frame_index != null and i == source_ctx.import_frame_index.?;
+        try results.append(alloc, try buildFrameHash(
+            alloc,
+            local_type,
+            @intCast(i),
+            &source_ctx.local_frames.items[i],
+            is_import,
+        ));
+    }
+
+    try results.append(alloc, try buildFrameHash(
+        alloc,
+        dict_type,
+        -1,
+        &source_ctx.dictionary.entries,
+        false,
+    ));
 }
 
 /// Collect words from a single context's local frames and dictionary,

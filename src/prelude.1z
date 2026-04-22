@@ -105,6 +105,8 @@ parameter: parse-time [ dup parse-quotation make-parameter ] ;
 output-stream: parameter [ stdout ] ;
 \\ The current input stream, defaulting to `stdin`.
 input-stream: parameter [ stdin ] ;
+\\ The current error stream, defaulting to `stderr`.
+error-stream: parameter [ stderr ] ;
 
 \ Control flow
 \\ Execute the quotation when the condition is true.
@@ -322,6 +324,11 @@ with-input-stream: ( stream quot -- ) [ input-stream swap with-parameter ] ;
 print: ( str -- ) [ output-stream get swap stream-write-string drop ] ;
 \\ Write a string followed by a newline.
 print-line: ( str -- ) [ print "\n" print flush ] ;
+
+\\ Write a string to the current error stream.
+eprint: ( str -- ) [ error-stream get swap stream-write-string drop ] ;
+\\ Write a string followed by a newline to the current error stream.
+eprint-line: ( str -- ) [ eprint "\n" eprint ] ;
 
 \\ Write a Unicode code point as a character.
 emit: ( codepoint -- ) [ >char print ] ;
