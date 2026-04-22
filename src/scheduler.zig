@@ -7,6 +7,7 @@ const TaskStatus = task_mod.TaskStatus;
 const TaskScope = task_mod.TaskScope;
 const Multiplexer = @import("multiplexer.zig").Multiplexer;
 const IoEvent = @import("multiplexer.zig").IoEvent;
+const trace = @import("trace.zig");
 
 /// Entry in the sleep queue: a task and its absolute monotonic wake time in nanoseconds.
 pub const SleepEntry = struct {
@@ -46,6 +47,8 @@ pub const Scheduler = struct {
     allocator: Allocator,
     /// Finished tasks whose stacks and arenas are freed on deinit.
     finished_tasks: std.ArrayListUnmanaged(*Task),
+    /// All tasks ever created, for diagnostic dumps.
+    all_tasks: std.ArrayListUnmanaged(*Task) = .{},
     /// Channels created during this scheduler's lifetime, freed on deinit.
     channels: std.ArrayListUnmanaged(*Channel) = .{},
     /// Platform I/O multiplexer for async-aware stream operations.
@@ -82,6 +85,7 @@ pub const Scheduler = struct {
             self.allocator.destroy(ch);
         }
         self.channels.deinit(self.allocator);
+        self.all_tasks.deinit(self.allocator);
         self.run_queue.deinit(self.allocator);
         self.sleep_queue.deinit();
         self.multiplexer.deinit();
@@ -256,6 +260,122 @@ pub const Scheduler = struct {
                     self.run_queue.append(self.allocator, kv.value.task) catch {};
                 }
             }
+        }
+    }
+
+    /// Dump the state of all tasks to stderr for diagnostic purposes.
+    ///
+    /// Each task is printed with its ID, name, state, top 3 stack values, and
+    /// call stack. Used by stall detection and hard timeout to surface what
+    /// the scheduler is stuck on.
+    pub fn dumpAllTasks(self: *Scheduler) void {
+        var tw = trace.TraceWriter.init();
+
+        var runnable_count: usize = 0;
+        var active_count: usize = 0;
+        for (self.all_tasks.items) |task| {
+            switch (task.status) {
+                .completed, .failed, .cancelled => continue,
+                .pending, .running => {},
+            }
+            active_count += 1;
+            if (self.taskState(task) == .runnable) {
+                runnable_count += 1;
+            }
+        }
+
+        tw.print("TASK-DUMP: {d} tasks, {d} runnable\n", .{ active_count, runnable_count });
+
+        for (self.all_tasks.items) |task| {
+            switch (task.status) {
+                .completed, .failed, .cancelled => continue,
+                .pending, .running => {},
+            }
+            self.dumpOneTask(&tw, task);
+        }
+    }
+
+    const TaskState = enum {
+        running,
+        blocked_fd,
+        blocked_channel,
+        blocked_scope,
+        sleeping,
+        runnable,
+    };
+
+    fn taskState(self: *const Scheduler, task: *const Task) TaskState {
+        if (self.current_task == task) return .running;
+        if (task.blocked_on_io_fd != null) return .blocked_fd;
+        if (task.blocked_on_channel != null) return .blocked_channel;
+        if (task.blocked_on_scope != null) return .blocked_scope;
+        for (self.sleep_queue.items[0..self.sleep_queue.count()]) |entry| {
+            if (entry.task == task) return .sleeping;
+        }
+        return .runnable;
+    }
+
+    fn dumpOneTask(self: *const Scheduler, tw: *trace.TraceWriter, task: *const Task) void {
+        var buf: [4096]u8 = undefined;
+        var fbs = std.io.fixedBufferStream(&buf);
+        const w = fbs.writer();
+
+        w.print("  task[{d}]", .{task.id}) catch return;
+        if (task.name) |name| {
+            w.print(" \"{s}\"", .{name}) catch return;
+        }
+
+        switch (self.taskState(task)) {
+            .running => w.writeAll(" running") catch return,
+            .blocked_fd => w.print(" blocked_fd={d}", .{task.blocked_on_io_fd.?}) catch return,
+            .blocked_channel => w.writeAll(" blocked_channel") catch return,
+            .blocked_scope => w.writeAll(" blocked_scope") catch return,
+            .sleeping => {
+                const remaining = self.sleepRemaining(task);
+                if (remaining) |ns| {
+                    const secs = @as(f64, @floatFromInt(@as(i64, @intCast(@min(ns, std.math.maxInt(i64)))))) / @as(f64, @floatFromInt(@as(i64, std.time.ns_per_s)));
+                    w.print(" sleeping(+{d:.1}s)", .{secs}) catch return;
+                } else {
+                    w.writeAll(" sleeping") catch return;
+                }
+            },
+            .runnable => w.writeAll(" runnable") catch return,
+        }
+
+        w.writeByte(' ') catch return;
+        trace.formatStackPreview(&task.ctx.stack, w, 3);
+        w.writeAll(" callstack:\n") catch return;
+
+        tw.writeAll(fbs.getWritten());
+
+        self.dumpCallStack(tw, task);
+    }
+
+    fn sleepRemaining(self: *const Scheduler, task: *const Task) ?i128 {
+        for (self.sleep_queue.items[0..self.sleep_queue.count()]) |entry| {
+            if (entry.task == task) {
+                const now = monotonicNowNs();
+                const remaining = entry.wake_time - now;
+
+                return if (remaining > 0) remaining else 0;
+            }
+        }
+
+        return null;
+    }
+
+    fn dumpCallStack(_: *const Scheduler, tw: *trace.TraceWriter, task: *const Task) void {
+        const items = task.ctx.call_stack.items;
+        if (items.len == 0) {
+            tw.print("    (empty)\n", .{});
+            return;
+        }
+
+        var i = items.len;
+        while (i > 0) {
+            i -= 1;
+            const frame = items[i];
+            tw.print("    {s}:{d} {s}\n", .{ task.ctx.current_source, frame.line, frame.word_name });
         }
     }
 

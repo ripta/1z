@@ -62,6 +62,7 @@ fn allocateTask(
     };
 
     task_mod.initTaskContext(task, &task_mod.taskEntryPoint, &scheduler.scheduler_uctx);
+    try scheduler.all_tasks.append(ctx.allocator, task);
     return task;
 }
 
