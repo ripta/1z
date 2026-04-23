@@ -1,8 +1,0 @@
-Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
-Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter
-Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Prelude compilation: 7/8 words compiled (87.5%)
-  word 'bi' cannot be compiled
-      NC.5: calls a quotation whose stack effect is unknown
-      hint: annotate the quotation parameter with a concrete stack effect
-Quotation bodies compiled: 8/10 (80.0%)
