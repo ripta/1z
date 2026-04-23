@@ -2400,6 +2400,25 @@ fn emitResolvedNativeCallback(
     }
 }
 
+/// Emit a runtime truthiness check for a Value at a physical stack slot.
+/// Loads the tag and payload, computing:
+///   is_falsy = (tag == boolean) AND (payload == false)
+/// Returns the negated result (is_truthy).
+fn emitSlotTruthiness(ctx: *c.ir_ctx, base_addr: c.ir_ref, s: usize, state: *CompileState) c.ir_ref {
+    const slot_byte_offset = c.ir_const_addr(ctx, s * ValueLayout.value_size);
+    const slot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+    const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), slot_addr, state.tag_offset_const);
+    const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
+    const is_bool_tag = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_val, state.boolean_tag_const);
+
+    const payload_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), slot_addr, state.payload_offset_const);
+    const payload_val = c._ir_LOAD(ctx, c.IR_BOOL, payload_addr);
+    const false_const = c.ir_const_bool(ctx, false);
+    const is_false_payload = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), payload_val, false_const);
+    const is_falsy = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_bool_tag, is_false_payload);
+    return c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), is_falsy, false_const);
+}
+
 /// Compute the IR truthiness boolean for a stack entry.
 /// 1z truthiness: only `f` (boolean false) is falsy.
 fn emitTruthiness(state: *CompileState, entry: StackEntry, base_addr: c.ir_ref) IrCodegenError!c.ir_ref {
@@ -2407,21 +2426,10 @@ fn emitTruthiness(state: *CompileState, entry: StackEntry, base_addr: c.ir_ref) 
     return switch (entry) {
         .bool_ref => |ref| ref,
         .i64_ref, .f64_ref => c.ir_const_bool(ctx, true),
-        .raw_at_slot => |s| blk: {
-            const slot_byte_offset = c.ir_const_addr(ctx, s * ValueLayout.value_size);
-            const slot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-            const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), slot_addr, state.tag_offset_const);
-            const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
-            const is_bool_tag = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_val, state.boolean_tag_const);
-
-            const payload_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), slot_addr, state.payload_offset_const);
-            const payload_val = c._ir_LOAD(ctx, c.IR_BOOL, payload_addr);
-            const false_const = c.ir_const_bool(ctx, false);
-            const is_false_payload = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), payload_val, false_const);
-            const is_falsy = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_bool_tag, is_false_payload);
-            break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), is_falsy, false_const);
-        },
-        .quotation_body, .row_region => {
+        .raw_at_slot => |s| emitSlotTruthiness(ctx, base_addr, s, state),
+        // Quotations are always truthy
+        .quotation_body => c.ir_const_bool(ctx, true),
+        .row_region => {
             state.not_compilable_reason = .quotation_truthiness;
             return IrCodegenError.NotCompilable;
         },
@@ -3147,13 +3155,12 @@ fn compileInstructions(
                     stack[sp.*] = .{ .bool_ref = result };
                     sp.* += 1;
                 } else if (std.mem.eql(u8, name, "if")) {
-                    // 1z truthiness: only `f` (boolean false) is falsy; every
-                    // other value is truthy. The three condition entry types
-                    // each need a different IR emission strategy:
+                    // 1z truthiness: only `f` (boolean false) is falsy; every other value is truthy.
+                    // The condition entry types each need a different IR emission strategy:
                     //
-                    //   bool_ref    -- use the IR bool directly as the branch condition
-                    //   i64_ref     -- always truthy, so emit only the true branch
-                    //   raw_at_slot -- load tag+payload from memory to compute is_truthy at runtime
+                    //   bool_ref       -- use the IR bool directly as the branch condition
+                    //   i64/f64/quot   -- always truthy, so emit only the true branch
+                    //   raw_at_slot    -- load tag+payload from memory to compute is_truthy at runtime
                     //
                     // Both branches must produce the same stack depth; results
                     // are merged with PHI nodes after the MERGE point.
@@ -3194,10 +3201,9 @@ fn compileInstructions(
                     // Determine the IR bool for the condition
                     const cond_ref = switch (cond_entry) {
                         .bool_ref => |ref| ref,
-                        .i64_ref, .f64_ref => {
-                            // Non-boolean values are always truthy in 1z.
-                            // Only the true branch executes; compile both to
-                            // validate stack effects match.
+                        .i64_ref, .f64_ref, .quotation_body => {
+                            // Non-boolean values and quotations are always truthy
+                            // Only the true branch executes; compile both to validate stack effects match
                             if (true_body) |tb| {
                                 if (false_body) |fb| {
                                     var false_stack = stack.*;
@@ -3221,31 +3227,8 @@ fn compileInstructions(
                             }
                             continue;
                         },
-                        .raw_at_slot => |s| blk: {
-                            // Trufiness check for an opaque Value in memory.
-                            // Steps: load the tag word, check if it equals the
-                            // boolean tag, load the payload byte, then compute:
-                            //
-                            //   is_falsy = (tag == boolean) AND (payload == false)
-                            //
-                            // Negate using EQ(is_falsy, false) because the IR
-                            // library has no dedicated boolean NOT operation.
-                            const slot_byte_offset = c.ir_const_addr(ctx, s * ValueLayout.value_size);
-                            const slot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                            const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), slot_addr, state.tag_offset_const);
-                            const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
-                            const is_bool_tag = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_val, state.boolean_tag_const);
-
-                            const payload_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), slot_addr, state.payload_offset_const);
-                            const payload_val = c._ir_LOAD(ctx, c.IR_BOOL, payload_addr);
-                            // is_falsy = tag is boolean AND payload is false (i.e., payload == 0)
-                            const false_const = c.ir_const_bool(ctx, false);
-                            const is_false_payload = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), payload_val, false_const);
-                            const is_falsy = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_bool_tag, is_false_payload);
-                            // is_truthy = not is_falsy (negate by comparing with false)
-                            break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), is_falsy, false_const);
-                        },
-                        .quotation_body, .row_region => {
+                        .raw_at_slot => |s| emitSlotTruthiness(ctx, base_addr, s, state),
+                        .row_region => {
                             state.not_compilable_reason = .quotation_truthiness;
                             return IrCodegenError.NotCompilable;
                         },
