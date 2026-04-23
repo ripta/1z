@@ -2501,8 +2501,6 @@ fn emitIndirectQuotCall(
     if (state.refresh_stack_fn != c.IR_UNUSED) {
         refreshCachedStackPointer(state);
     }
-
-    state.dynamic_call_emitted = true;
 }
 
 /// Emit a runtime quotation dispatch for an `if` branch where the quotation
@@ -2605,6 +2603,7 @@ fn compilePredBodyLoop(
         },
         .raw_at_slot => |s| {
             try emitIndirectQuotCall(state, stack, sp, s);
+            sp.* += 1; // predicate pushes one value (bool)
             resetStackToPhysical(stack, sp.*);
         },
         else => {
@@ -3519,12 +3518,6 @@ fn compileInstructions(
                     if (state.refresh_stack_fn != c.IR_UNUSED) {
                         refreshCachedStackPointer(state);
                     }
-
-                    // After loop, reload sp from memory if dynamic calls were made
-                    if (state.dynamic_call_emitted) {
-                        // sp may have been modified by indirect calls; leave it
-                        // for the dynamic_call_emitted finalization path
-                    }
                 } else if (std.mem.eql(u8, name, "loop")) {
                     if (sp.* < 1) return IrCodegenError.StackUnderflow;
                     sp.* -= 1;
@@ -3549,6 +3542,7 @@ fn compileInstructions(
                         },
                         .raw_at_slot => |s| {
                             try emitIndirectQuotCall(state, stack, sp, s);
+                            sp.* += 1; // predicate pushes one value (bool)
                             resetStackToPhysical(stack, sp.*);
                         },
                         else => {

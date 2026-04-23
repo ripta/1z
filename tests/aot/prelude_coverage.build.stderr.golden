@@ -18,7 +18,7 @@ Warning: 'while' parameter 'body' has row-variable effect; quotation call falls 
 Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Prelude compilation: 208/301 words compiled (69.1%)
+Prelude compilation: 209/301 words compiled (69.4%)
   word 'provenance?' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
@@ -162,8 +162,6 @@ Prelude compilation: 208/301 words compiled (69.1%)
   word 'stack-effect-info?' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word 'until' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
   word 'word-markers' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'no-matching-branch' cannot be compiled

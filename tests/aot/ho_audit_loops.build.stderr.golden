@@ -5,9 +5,7 @@ Warning: 'while' parameter 'body' has row-variable effect; quotation call falls 
 Warning: 'loop' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
 Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Prelude compilation: 14/17 words compiled (82.4%)
-  word 'until' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+Prelude compilation: 15/17 words compiled (88.2%)
   word 'while' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'loop' cannot be compiled
