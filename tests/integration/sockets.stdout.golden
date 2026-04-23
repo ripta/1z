@@ -20,9 +20,9 @@ PASS: socket lifecycle (create, bind, listen, close)
 === fd-close ===
 PASS: socket fd is positive
 PASS: fd-close
-=== tcp-listen and tcp-close ===
-PASS: tcp-listen returns tcp-server
-PASS: tcp-listen and tcp-close
+=== listen and close ===
+PASS: listen returns server
+PASS: listen and close
 === connect and accept ===
 PASS: connect and accept
 === echo server ===
@@ -34,5 +34,5 @@ PASS: default port
 PASS: default backlog
 PASS: server-config defaults
 === start-server ===
-PASS: start-server returns tcp-server
+PASS: start-server returns server
 PASS: start-server

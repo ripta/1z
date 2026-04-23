@@ -2,35 +2,36 @@
 
 use "net" ;
 
-tcp-server: virtual{ struct{ fd bound-addr } } ;
+server: virtual{ struct{ fd bound-addr } } ;
 
 \ Create a listening TCP server socket.
 \ Resolves the address, creates a socket, binds, and starts listening.
-tcp-listen: ( addr backlog -- tcp-server ) [
-  swap resolve #first       \ backlog resolved-addr
-  dup socket                \ backlog resolved-addr fd
-  dup 2 pick-n bind         \ backlog resolved-addr fd
-  -rot>                     \ fd backlog resolved-addr
-  [ over swap listen ] dip  \ fd resolved-addr
-  make-tcp-server
+listen: ( addr backlog -- server ) [
+  swap resolve #first              \ backlog resolved-addr
+  dup socket                       \ backlog resolved-addr fd
+  dup 2 pick-n bind                \ backlog resolved-addr fd
+  -rot>                            \ fd backlog resolved-addr
+  [ over swap native.listen ] dip  \ fd resolved-addr
+  make-server
 ] ;
 
 \ Connect to a remote TCP address and return a read-write stream.
-tcp-connect: ( addr -- stream ) [
+connect: ( addr -- stream ) [
   resolve #first
   dup socket
-  dup <rot- connect
+  dup <rot- native.connect
   fd>stream
 ] ;
 
-\ Accept a connection on a listening tcp-server.
+\ Accept a connection on a listening server.
 \ Returns the client stream and the peer address.
-tcp-accept: ( tcp-server -- stream addr ) [
-  unmake-tcp-server drop accept
+accept: ( server -- stream addr ) [
+  unmake-server drop native.accept
+  make-addr:tcp
   [ fd>stream ] dip
 ] ;
 
-\ Close a tcp-server's listening socket.
-tcp-close: ( tcp-server -- ) [
-  unmake-tcp-server drop fd-close
+\ Close a server's listening socket.
+close: ( server -- ) [
+  unmake-server drop fd-close
 ] ;

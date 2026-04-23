@@ -1,0 +1,12 @@
+use "testing" ;
+use "net" ;
+use "tcp" ;
+
+"test: inlined connect body in spawned task" test-section
+[
+  "127.0.0.1" 39501 make-addr:tcp 128 listen
+  dup [ "127.0.0.1" 39501 make-addr:tcp resolve #first dup socket dup <rot- native.connect fd>stream stream-close ] spawn
+  swap unmake-server drop native.accept drop drop fd-close
+  await drop
+  close
+] task-scope

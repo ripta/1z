@@ -3,13 +3,13 @@ use "net" ;
 use "tcp" ;
 use "time" ;
 
-"tcp wrappers: tcp-accept with raw connect" test-section
+"tcp wrappers: accept with raw connect" test-section
 [
-  "127.0.0.1" 39420 make-addr:tcp 128 tcp-listen
+  "127.0.0.1" 39420 make-addr:tcp 128 listen
 
-  \ Spawn accept+echo task using tcp-accept
+  \ Spawn accept+echo task using accept
   dup [
-    tcp-accept drop
+    accept drop
     dup stream-read-line
     over swap stream-write drop
     stream-close
@@ -18,7 +18,7 @@ use "time" ;
   \ Client: raw connect
   "127.0.0.1" 39420 make-addr:tcp resolve #first
   dup socket
-  dup <rot- connect
+  dup <rot- native.connect
   fd>stream
 
   dup "hello\n" stream-write drop
@@ -27,5 +27,5 @@ use "time" ;
 
   stream-close
   await drop
-  tcp-close
+  close
 ] task-scope

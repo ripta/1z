@@ -29,7 +29,7 @@ use "time" ;
   ] spawn
   10 milliseconds sleep
 
-  "127.0.0.1" 39400 make-addr:tcp tcp-connect
+  "127.0.0.1" 39400 make-addr:tcp connect
   dup "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
   dup stream-read-line "HTTP/1.1 200 OK" "root status" assert=
   dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
@@ -60,7 +60,7 @@ use "time" ;
   ] spawn
   10 milliseconds sleep
 
-  "127.0.0.1" 39401 make-addr:tcp tcp-connect
+  "127.0.0.1" 39401 make-addr:tcp connect
   dup "GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
   dup stream-read-line "HTTP/1.1 200 OK" "healthz status" assert=
   dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
@@ -84,7 +84,7 @@ use "time" ;
   ] spawn
   10 milliseconds sleep
 
-  "127.0.0.1" 39402 make-addr:tcp tcp-connect
+  "127.0.0.1" 39402 make-addr:tcp connect
   dup "GET /nope HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
   stream-read-line "HTTP/1.1 404 Not Found" "404 status" assert=
 
@@ -106,7 +106,7 @@ use "time" ;
   ] spawn
   10 milliseconds sleep
 
-  "127.0.0.1" 39403 make-addr:tcp tcp-connect
+  "127.0.0.1" 39403 make-addr:tcp connect
   dup "GET /time HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
   stream-read-line "HTTP/1.1 200 OK" "time status" assert=
 

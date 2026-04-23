@@ -681,32 +681,32 @@ pub const Context = struct {
             }
             defer self.popCallFrame();
 
-            try self.pushModuleDepsFrame(module);
-            defer {
-                if (self.trace.trace_modules) {
-                    var tw = trace_mod.TraceWriter.init();
-                    trace_mod.traceModuleDepsPop(&tw, module.name);
-                }
-                self.popLocalFrame();
-            }
-
-            if (mod_word.action == .compound) {
-                const has_generic = for (mod_word.markers) |mk| {
-                    if (markers_mod.isGenericMarker(mk)) break true;
-                } else false;
-
-                if (has_generic) {
-                    if (try dispatch_helpers.tryDispatchGeneric(self, word_name)) return;
-
-                    if (mod_word.action.compound.len == 0) {
-                        self.pending_error_message = "no method found for given argument types";
-                        return error.TypeError;
-                    }
-                }
-            }
-
             switch (mod_word.action) {
-                .compound => |instrs| try self.executeInstructions(instrs),
+                .compound => |instrs| {
+                    try self.pushModuleDepsFrame(module);
+                    defer {
+                        if (self.trace.trace_modules) {
+                            var tw = trace_mod.TraceWriter.init();
+                            trace_mod.traceModuleDepsPop(&tw, module.name);
+                        }
+                        self.popLocalFrame();
+                    }
+
+                    const has_generic = for (mod_word.markers) |mk| {
+                        if (markers_mod.isGenericMarker(mk)) break true;
+                    } else false;
+
+                    if (has_generic) {
+                        if (try dispatch_helpers.tryDispatchGeneric(self, word_name)) return;
+
+                        if (instrs.len == 0) {
+                            self.pending_error_message = "no method found for given argument types";
+                            return error.TypeError;
+                        }
+                    }
+
+                    try self.executeInstructions(instrs);
+                },
                 .native => |func| try func(self),
             }
         } else {

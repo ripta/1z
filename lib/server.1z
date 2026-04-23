@@ -10,12 +10,12 @@ server-config: mutable struct{ host port backlog handler on-error } ;
   "0.0.0.0" 0 128 [ drop ] [ drop ] make-server-config
 ] ;
 
-\ Start a server from a config. Returns the tcp-server handle.
+\ Start a server from a config. Returns the server handle.
 \ The server binds and listens but does not start accepting connections.
-start-server: ( config -- tcp-server ) [
+start-server: ( config -- server ) [
   dup host>> over port>> make-addr:tcp
   swap backlog>>
-  tcp-listen
+  listen
 ] ;
 
 \ Run a server forever: start, then loop accepting connections.
@@ -23,11 +23,11 @@ start-server: ( config -- tcp-server ) [
 \ Must be called inside task-scope.
 serve-forever: ( config -- ) [
   \ Repeatedly accept connections and spawn handler tasks.
-  serve-loop: ( handler on-error tcp-server -- ) [
-    dup tcp-accept drop               \ handler on-error tcp-server stream
-    3 pick-n curry                    \ handler on-error tcp-server [stream handler...]
-    2 pick-n [ recover ] curry curry  \ handler on-error tcp-server [[stream handler...] on-error recover]
-    spawn drop                        \ handler on-error tcp-server
+  serve-loop: ( handler on-error server -- ) [
+    dup accept drop                   \ handler on-error server stream
+    3 pick-n curry                    \ handler on-error server [stream handler...]
+    2 pick-n [ recover ] curry curry  \ handler on-error server [[stream handler...] on-error recover]
+    spawn drop                        \ handler on-error server
     serve-loop
   ] ;
 

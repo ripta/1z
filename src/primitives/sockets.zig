@@ -5,11 +5,10 @@ const native_os = builtin.os.tag;
 const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
-const Stream = value_mod.Stream;
 const StructInstance = value_mod.StructInstance;
 const VirtualType = value_mod.VirtualType;
-
 const Primitive = @import("types.zig").Primitive;
+const RegistryEntry = @import("types.zig").RegistryEntry;
 const helpers = @import("helpers.zig");
 
 const popFixnum = helpers.popFixnum;
@@ -18,10 +17,13 @@ pub const primitives = [_]Primitive{
     .{ .name = "resolve", .stack_effect = "addr -- addrs", .doc = "DNS resolution; returns array of resolved addr values with IP addresses.", .func = nativeResolve },
     .{ .name = "socket", .stack_effect = "addr -- fd", .doc = "Create socket; infers address family and type from addr variant.", .func = nativeSocket },
     .{ .name = "bind", .stack_effect = "fd addr --", .doc = "Bind socket fd to resolved address.", .func = nativeBind },
-    .{ .name = "listen", .stack_effect = "fd backlog --", .doc = "Mark socket as listening with given backlog.", .func = nativeListen },
-    .{ .name = "accept", .stack_effect = "fd -- fd addr", .doc = "Accept connection; returns client fd and peer addr.", .func = nativeAccept },
-    .{ .name = "connect", .stack_effect = "fd addr --", .doc = "Connect socket to resolved address.", .func = nativeConnect },
     .{ .name = "fd-close", .stack_effect = "fd --", .doc = "Close a raw file descriptor.", .func = nativeFdClose },
+};
+
+pub const registry_entries = [_]RegistryEntry{
+    .{ .name = "listen", .func = nativeListen },
+    .{ .name = "accept", .func = nativeAccept },
+    .{ .name = "connect", .func = nativeConnect },
 };
 
 /// Addr variant info extracted from a tagged addr enum value.
@@ -313,7 +315,7 @@ fn nativeListen(ctx: *Context) anyerror!void {
     };
 }
 
-/// accept ( fd -- fd addr )
+/// accept ( fd -- fd host port )
 fn nativeAccept(ctx: *Context) anyerror!void {
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
@@ -345,8 +347,11 @@ fn nativeAccept(ctx: *Context) anyerror!void {
 
         const alloc = ctx.quotationAllocator();
         const net_addr = std.net.Address{ .any = @as(*const std.posix.sockaddr, @ptrCast(&peer_addr)).* };
-        const peer_val = try sockaddrToAddrValue(alloc, net_addr, ctx);
-        try ctx.stack.push(peer_val);
+        var ip_buf: [46]u8 = undefined;
+        const ip_str = formatAddress(net_addr, &ip_buf);
+        const host_copy = try alloc.dupe(u8, ip_str);
+        try ctx.stack.push(.{ .string = host_copy });
+        try ctx.stack.push(.{ .fixnum = @intCast(net_addr.getPort()) });
         return;
     }
 }
@@ -430,45 +435,6 @@ fn addrToSockaddr(ctx: *Context, info: AddrInfo) !std.net.Address {
                 return error.InvalidArgument;
             };
         },
-    }
-}
-
-/// Convert a peer sockaddr to an addr:tcp tagged value.
-fn sockaddrToAddrValue(alloc: std.mem.Allocator, addr: std.net.Address, ctx: *Context) !Value {
-    var ip_buf: [46]u8 = undefined;
-    const ip_str = formatAddress(addr, &ip_buf);
-    const host_copy = try alloc.dupe(u8, ip_str);
-    const port: i64 = @intCast(addr.getPort());
-
-    const tag = findAddrTcpType(ctx) orelse {
-        helpers.setErrorContext(ctx, "addr:tcp type not found in dictionary", .{});
-        return error.IOFailed;
-    };
-
-    return makeInetAddr(ctx, alloc, tag, host_copy, port);
-}
-
-/// Find the addr:tcp VirtualType by inspecting the >addr:tcp word definition.
-fn findAddrTcpType(ctx: *const Context) ?*const VirtualType {
-    const word_def = ctx.lookupWord(">addr:tcp") orelse return null;
-    switch (word_def.action) {
-        .compound => |instructions| {
-            if (instructions.len >= 1) {
-                switch (instructions[0].op) {
-                    .push_literal => |lit| {
-                        switch (lit) {
-                            .fixnum => |ptr_val| {
-                                return @ptrFromInt(@as(usize, @intCast(ptr_val)));
-                            },
-                            else => return null,
-                        }
-                    },
-                    else => return null,
-                }
-            }
-            return null;
-        },
-        else => return null,
     }
 }
 
