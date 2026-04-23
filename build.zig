@@ -741,7 +741,7 @@ fn addIntegrationTests(
             test_run.addFileInput(b.path(te.stdout_golden_path));
         }
 
-        test_run.expectExitCode(te.expected_exit_code orelse if (te.has_stderr_golden) 1 else 0);
+        test_run.expectExitCode(te.expected_exit_code orelse 0);
 
         if (has_diff and te.stdio_expect_mode == .diff_capture) {
             addGoldenDiff(b, test_step, test_run.captureStdOut(), if (te.has_stdout_golden) te.stdout_golden_path else null, te.file_path);
@@ -792,7 +792,7 @@ fn addIntegrationTests(
             configureIntegrationRun(b, update_run, te, timeout_secs, false);
             uf_ptr.*.addCopyFileToSource(update_run.captureStdOut(), te.stdout_golden_path);
 
-            const update_exit_code = te.expected_exit_code orelse if (te.has_stderr_golden) @as(u8, 1) else @as(u8, 0);
+            const update_exit_code = te.expected_exit_code orelse 0;
             if (update_exit_code != 0) {
                 update_run.expectExitCode(update_exit_code);
             }
@@ -974,7 +974,7 @@ fn addAotTests(
         matched_count += 1;
         const is_build_only = te.has_build_stdout_golden or te.has_build_stderr_golden or te.has_build_exitcode;
         const expected_build_exit: u8 = te.expected_build_exit_code orelse 0;
-        const expected_exit: u8 = te.expected_exit_code orelse if (te.has_stderr_golden) 1 else 0;
+        const expected_exit: u8 = te.expected_exit_code orelse 0;
 
         // Compile: 1z build <file.1z> -o <output>
         const compile_label = b.fmt("aot build: {s}", .{te.name_without_ext});
@@ -1436,7 +1436,7 @@ fn addLspTests(
             if (!matchesFilter(te.name_without_ext, filter)) continue;
         }
         matched_count += 1;
-        const expected_exit: u8 = te.expected_exit_code orelse if (te.has_stderr_golden) 1 else 0;
+        const expected_exit: u8 = te.expected_exit_code orelse 0;
         const stdin_file = stdin_files.add(b.fmt("lsp_{s}.stdin", .{te.name_without_ext}), te.formatted_stdin);
 
         const label = b.fmt("lsp: {s}", .{te.name_without_ext});
