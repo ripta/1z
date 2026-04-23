@@ -39,7 +39,7 @@ dup socket
 dup 0 > t "socket returns positive fd" assert=
 swap resolve #first
 over swap bind
-dup 128 listen
+dup 128 native.listen
 fd-close
 "PASS: socket lifecycle (create, bind, listen, close)" print-line
 
@@ -49,30 +49,30 @@ dup 0 > t "socket fd is positive" assert=
 fd-close
 "PASS: fd-close" print-line
 
-"tcp-listen and tcp-close" test-section
-"127.0.0.1" 0 make-addr:tcp 128 tcp-listen
-dup tcp-server? t "tcp-listen returns tcp-server" assert=
-tcp-close
-"PASS: tcp-listen and tcp-close" print-line
+"listen and close" test-section
+"127.0.0.1" 0 make-addr:tcp 128 listen
+dup server? t "listen returns server" assert=
+close
+"PASS: listen and close" print-line
 
 "connect and accept" test-section
 [
   "127.0.0.1" 39282 make-addr:tcp resolve #first
   dup socket
   dup 2 pick-n bind
-  dup 128 listen
+  dup 128 native.listen
   swap drop  \ server-fd
 
-  \ Spawn accept task: accept, close client, return the peer addr
+  \ Spawn accept task: accept, close client, drop host and port
   dup [
-    accept drop fd-close
+    native.accept drop drop fd-close
   ] curry spawn  \ server-fd task
 
   \ Client: connect then close
   "127.0.0.1" 39282 make-addr:tcp resolve #first
   dup socket
-  dup <rot- connect  \ server-fd task client-fd
-  fd-close           \ server-fd task
+  dup <rot- native.connect  \ server-fd task client-fd
+  fd-close                  \ server-fd task
 
   \ Await the accept task to ensure it completes
   await drop  \ server-fd
@@ -85,12 +85,12 @@ tcp-close
   "127.0.0.1" 39283 make-addr:tcp resolve #first
   dup socket
   dup 2 pick-n bind
-  dup 128 listen
+  dup 128 native.listen
   swap drop  \ server-fd
 
   \ Spawn accept+echo task: accept, read line, write it back, close
   dup [
-    accept drop                  \ client-fd
+    native.accept drop drop      \ client-fd
     fd>stream                    \ stream
     dup stream-read-line         \ stream line
     over swap stream-write drop  \ stream
@@ -100,8 +100,8 @@ tcp-close
   \ Client: connect, write, read
   "127.0.0.1" 39283 make-addr:tcp resolve #first
   dup socket
-  dup <rot- connect  \ server-fd task client-fd
-  fd>stream          \ server-fd task client-stream
+  dup <rot- native.connect  \ server-fd task client-fd
+  fd>stream                 \ server-fd task client-stream
 
   dup "hello\n" stream-write drop
   dup 5 stream-read  \ server-fd task client-stream data
@@ -124,6 +124,6 @@ drop
 "start-server" test-section
 <server-config> "127.0.0.1" >>host 39284 >>port
 start-server
-dup tcp-server? t "start-server returns tcp-server" assert=
-tcp-close
+dup server? t "start-server returns server" assert=
+close
 "PASS: start-server" print-line

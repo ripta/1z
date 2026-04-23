@@ -21,7 +21,7 @@ use "time" ;
 
   100 milliseconds sleep
 
-  "127.0.0.1" 39421 make-addr:tcp tcp-connect
+  "127.0.0.1" 39421 make-addr:tcp connect
   dup "hello\n" stream-write drop
   dup 5 stream-read #len 5 "echoed 5 bytes" assert=
   stream-close

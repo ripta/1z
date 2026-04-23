@@ -1,0 +1,22 @@
+\ Diagnostic: tcp.accept works in a spawned task
+
+use "testing" ;
+use "net" ;
+use "tcp" ;
+
+"accept in spawned task" test-section
+[
+  "127.0.0.1" 39457 make-addr:tcp 128 listen
+
+  dup [
+    accept drop stream-close
+  ] curry spawn
+
+  swap
+  "127.0.0.1" 39457 make-addr:tcp resolve #first
+  dup socket dup <rot- native.connect fd-close
+
+  swap await drop
+  close
+] task-scope
+t "accept in spawned task" assert-true

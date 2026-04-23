@@ -109,17 +109,17 @@ stream-read-line "Content-Length: 0" "empty body content-length" assert=
 
 "serve: handler wrapping via TCP" test-section
 [
-  "127.0.0.1" 39285 make-addr:tcp 128 tcp-listen
+  "127.0.0.1" 39285 make-addr:tcp 128 listen
 
   dup [
-    tcp-accept drop
+    accept drop
     dup read-request
     path>> "text/plain; charset=utf-8" ok
     over -rot> send-response
     stream-close
   ] curry spawn
 
-  "127.0.0.1" 39285 make-addr:tcp tcp-connect
+  "127.0.0.1" 39285 make-addr:tcp connect
   dup "GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
   dup stream-read-line "HTTP/1.1 200 OK" "serve handler status" assert=
   dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
@@ -127,22 +127,22 @@ stream-read-line "Content-Length: 0" "empty body content-length" assert=
   stream-read-line "/hello" "serve handler body" assert=
 
   await drop
-  tcp-close
+  close
 ] task-scope
 
 "serve: handler receives parsed POST request" test-section
 [
-  "127.0.0.1" 39286 make-addr:tcp 128 tcp-listen
+  "127.0.0.1" 39286 make-addr:tcp 128 listen
 
   dup [
-    tcp-accept drop
+    accept drop
     dup read-request
     method>> "text/plain; charset=utf-8" ok
     over -rot> send-response
     stream-close
   ] curry spawn
 
-  "127.0.0.1" 39286 make-addr:tcp tcp-connect
+  "127.0.0.1" 39286 make-addr:tcp connect
   dup "POST /submit HTTP/1.0\r\nHost: test\r\n\r\n" stream-write drop
   dup stream-read-line "HTTP/1.1 200 OK" "POST handler status" assert=
   dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
@@ -150,7 +150,7 @@ stream-read-line "Content-Length: 0" "empty body content-length" assert=
   stream-read-line "POST" "POST handler body is method" assert=
 
   await drop
-  tcp-close
+  close
 ] task-scope
 
 "serve: config construction" test-section
@@ -168,7 +168,7 @@ port>> 9999 "serve config port" assert=
     ] serve
   ] spawn
   10 milliseconds sleep
-  "127.0.0.1" 39290 make-addr:tcp tcp-connect
+  "127.0.0.1" 39290 make-addr:tcp connect
   dup "GET /test-path HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
   dup stream-read-line "HTTP/1.1 200 OK" "serve e2e status" assert=
   dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
@@ -185,11 +185,11 @@ port>> 9999 "serve config port" assert=
     ] serve
   ] spawn
   10 milliseconds sleep
-  "127.0.0.1" 39291 make-addr:tcp tcp-connect
+  "127.0.0.1" 39291 make-addr:tcp connect
   dup "GARBAGE\r\n\r\n" stream-write drop
   stream-close
   10 milliseconds sleep
-  "127.0.0.1" 39291 make-addr:tcp tcp-connect
+  "127.0.0.1" 39291 make-addr:tcp connect
   dup "GET /recovered HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
   dup stream-read-line "HTTP/1.1 200 OK" "serve recovery status" assert=
   dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
@@ -208,7 +208,7 @@ port>> 9999 "serve config port" assert=
   10 milliseconds sleep
 
   [
-    "127.0.0.1" 39292 make-addr:tcp tcp-connect
+    "127.0.0.1" 39292 make-addr:tcp connect
     dup "GET /alpha HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
     dup stream-read-line drop
     dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
@@ -216,7 +216,7 @@ port>> 9999 "serve config port" assert=
     stream-read-line
   ] spawn
   [
-    "127.0.0.1" 39292 make-addr:tcp tcp-connect
+    "127.0.0.1" 39292 make-addr:tcp connect
     dup "GET /beta HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
     dup stream-read-line drop
     dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
@@ -224,7 +224,7 @@ port>> 9999 "serve config port" assert=
     stream-read-line
   ] spawn
   [
-    "127.0.0.1" 39292 make-addr:tcp tcp-connect
+    "127.0.0.1" 39292 make-addr:tcp connect
     dup "GET /gamma HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
     dup stream-read-line drop
     dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
@@ -251,12 +251,12 @@ port>> 9999 "serve config port" assert=
   ] spawn
   10 milliseconds sleep
 
-  "127.0.0.1" 39293 make-addr:tcp tcp-connect
+  "127.0.0.1" 39293 make-addr:tcp connect
   dup "GET /crash HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
   stream-close
   10 milliseconds sleep
 
-  "127.0.0.1" 39293 make-addr:tcp tcp-connect
+  "127.0.0.1" 39293 make-addr:tcp connect
   dup "GET /ok HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
   dup stream-read-line "HTTP/1.1 200 OK" "after-crash status" assert=
   dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
