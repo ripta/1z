@@ -3,6 +3,8 @@
 \ -- keep variants --
 5 [ 2 * ] keep . .
 5 10 [ + ] 2keep . . .
+1 2 3 [ + + ] 3keep . . . .
+1 2 3 4 [ + + + ] 4keep . . . . .
 
 \ -- bi / tri --
 10 [ 2 * ] [ 3 + ] bi . .
@@ -11,6 +13,7 @@
 \ -- dip variants --
 1 2 3 [ 10 + ] 2dip . . .
 1 2 3 4 [ 10 + ] 3dip . . . .
+1 2 3 4 5 [ 10 + ] 4dip . . . . .
 
 \ -- when / unless --
 t [ "when-true" print-line ] when
@@ -20,3 +23,9 @@ t [ "unless-false" print-line ] unless
 
 \ -- 1apply --
 42 [ 1 + ] 1apply .
+
+\ -- nip variants --
+1 2 3 4 3nip .
+1 2 3 4 5 4nip .
+1 2 3 4 5 6 5nip .
+1 2 3 4 5 6 7 6nip .

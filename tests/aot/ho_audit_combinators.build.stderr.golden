@@ -1,4 +1,5 @@
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: '4dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '3dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'tri' parameter 'p' has row-variable effect; quotation call falls back to interpreter
@@ -6,13 +7,15 @@ Warning: 'tri' parameter 'q' has row-variable effect; quotation call falls back 
 Warning: 'tri' parameter 'r' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter
+Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: '3keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Prelude compilation: 14/16 words compiled (87.5%)
+Prelude compilation: 24/26 words compiled (92.3%)
   word 'tri' cannot be compiled
       NC.5: calls a quotation whose stack effect is unknown
       hint: annotate the quotation parameter with a concrete stack effect
   word 'bi' cannot be compiled
       NC.5: calls a quotation whose stack effect is unknown
       hint: annotate the quotation parameter with a concrete stack effect
-Quotation bodies compiled: 16/22 (72.7%)
+Quotation bodies compiled: 21/28 (75.0%)

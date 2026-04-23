@@ -1,0 +1,13 @@
+\ Audit: exercise error-handling HO combinators in AOT mode
+
+\ -- try (success path) --
+[ 42 ] try drop
+"try-ok" print-line
+
+\ -- try (error path) --
+[ 1 0 / ] try drop
+"try-err" print-line
+
+\ -- ignore-errors --
+[ 1 0 / ] ignore-errors
+"after-ignore" print-line

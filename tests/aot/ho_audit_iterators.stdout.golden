@@ -1,0 +1,6 @@
+<option:some option-payload{ value: "c" }>
+<option:none none:>
+<option:some option-payload{ value: "a" }>
+<option:none none:>
+<option:some option-payload{ value: "c" }>
+<option:none none:>

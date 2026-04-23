@@ -1,0 +1,4 @@
+\ Audit: exercise loop combinator in AOT mode
+
+\ -- loop (count from 0 to 2) --
+0 [ dup . 1 + dup 3 < ] loop drop

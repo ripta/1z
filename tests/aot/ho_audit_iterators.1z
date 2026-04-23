@@ -1,0 +1,13 @@
+\ Audit: exercise iterator/option HO combinators in AOT mode
+
+\ -- #nth? --
+"abcde" 2 #nth? .
+"ab" 9 #nth? .
+
+\ -- #first? --
+"abc" #first? .
+"" #first? .
+
+\ -- #last? --
+"abc" #last? .
+"" #last? .
