@@ -222,29 +222,29 @@ error?: ( val -- ? ) [ type-of error = ] ;
 error-type?: ( error type -- error ? ) [ over error-type: @get = ] ;
 
 \ Error type constants
-EStackUnderflow:      [ stack-underflow: ] ;
-ETypeMismatch:        [ type-mismatch: ] ;
-EDivisionByZero:      [ division-by-zero: ] ;
-EFixnumOverflow:      [ fixnum-overflow: ] ;
-EStackEffectMismatch: [ stack-effect-mismatch: ] ;
-EUnknownWord:         [ unknown-word: ] ;
-EFileNotFound:        [ file-not-found: ] ;
-EFileReadFailed:      [ file-read-failed: ] ;
-EUserRethrown:        [ user-rethrown: ] ;
-EUserThrown:          [ user-thrown: ] ;
-EKeyNotFound:         [ key-not-found: ] ;
-ENotComparable:       [ not-comparable: ] ;
-EIOFailed: [ io-failed: ] ;
-ENoMatchingBranch: [ no-matching-branch: ] ;
-ECannotRedefineConst: [ cannot-redefine-const: ] ;
-EArityMismatch:       [ arity-mismatch: ] ;
-EUnexpectedEOF:       [ unexpected-eof: ] ;
-EIndexOutOfBounds:    [ index-out-of-bounds: ] ;
-EInvalidArgument:     [ invalid-argument: ] ;
-EUseAfterClose:       [ use-after-close: ] ;
-EMissingDocComment:   [ missing-doc-comment: ] ;
-ENonTailRecursion:    [ non-tail-recursion: ] ;
-EStackOverflow:       [ stack-overflow: ] ;
+EStackUnderflow:      ( -- sym ) [ stack-underflow: ] ;
+ETypeMismatch:        ( -- sym ) [ type-mismatch: ] ;
+EDivisionByZero:      ( -- sym ) [ division-by-zero: ] ;
+EFixnumOverflow:      ( -- sym ) [ fixnum-overflow: ] ;
+EStackEffectMismatch: ( -- sym ) [ stack-effect-mismatch: ] ;
+EUnknownWord:         ( -- sym ) [ unknown-word: ] ;
+EFileNotFound:        ( -- sym ) [ file-not-found: ] ;
+EFileReadFailed:      ( -- sym ) [ file-read-failed: ] ;
+EUserRethrown:        ( -- sym ) [ user-rethrown: ] ;
+EUserThrown:          ( -- sym ) [ user-thrown: ] ;
+EKeyNotFound:         ( -- sym ) [ key-not-found: ] ;
+ENotComparable:       ( -- sym ) [ not-comparable: ] ;
+EIOFailed: ( -- sym ) [ io-failed: ] ;
+ENoMatchingBranch: ( -- sym ) [ no-matching-branch: ] ;
+ECannotRedefineConst: ( -- sym ) [ cannot-redefine-const: ] ;
+EArityMismatch:       ( -- sym ) [ arity-mismatch: ] ;
+EUnexpectedEOF:       ( -- sym ) [ unexpected-eof: ] ;
+EIndexOutOfBounds:    ( -- sym ) [ index-out-of-bounds: ] ;
+EInvalidArgument:     ( -- sym ) [ invalid-argument: ] ;
+EUseAfterClose:       ( -- sym ) [ use-after-close: ] ;
+EMissingDocComment:   ( -- sym ) [ missing-doc-comment: ] ;
+ENonTailRecursion:    ( -- sym ) [ non-tail-recursion: ] ;
+EStackOverflow:       ( -- sym ) [ stack-overflow: ] ;
 
 \ TODO(ripta): the pattern is a bit repetitive and odd; maybe a parse-time?
 \\ Construct and throw a no-matching-branch error with the given data.
@@ -529,7 +529,7 @@ read-line: ( -- str/f ) [ input-stream get stream-read-line ] ;
 \   selective words:   use { word1: word2: } "file.1z" ;
 \   allow shadowing:   use "file.1z" shadow-ok ;
 
-EImportConflict: [ import-conflict: ] ;
+EImportConflict: ( -- sym ) [ import-conflict: ] ;
 
 \\ Check that none of the given names shadow words in the current import frame.
 \\ Throws an `import-conflict` error if any name is already locally defined.

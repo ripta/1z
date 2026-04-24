@@ -1,0 +1,13 @@
+\ Verify array and hash literals compile and execute in AOT mode.
+
+\ Empty array
+{ } #len .
+
+\ Array with elements
+{ 1 2 3 } #len .
+
+\ Array in a quotation body
+[ { 10 20 30 } ] call #len .
+
+\ Array element access
+{ 4 5 6 } 1 #nth .

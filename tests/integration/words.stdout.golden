@@ -337,30 +337,30 @@ yield ( -- )
 ?or-else ( opt/res quot -- opt/res )
 @get? ( assoc key -- option )
 B{
-EArityMismatch
-ECannotRedefineConst
-EDivisionByZero
-EFileNotFound
-EFileReadFailed
-EFixnumOverflow
-EIOFailed
-EImportConflict
-EIndexOutOfBounds
-EInvalidArgument
-EKeyNotFound
-EMissingDocComment
-ENoMatchingBranch
-ENonTailRecursion
-ENotComparable
-EStackEffectMismatch
-EStackOverflow
-EStackUnderflow
-ETypeMismatch
-EUnexpectedEOF
-EUnknownWord
-EUseAfterClose
-EUserRethrown
-EUserThrown
+EArityMismatch ( -- sym )
+ECannotRedefineConst ( -- sym )
+EDivisionByZero ( -- sym )
+EFileNotFound ( -- sym )
+EFileReadFailed ( -- sym )
+EFixnumOverflow ( -- sym )
+EIOFailed ( -- sym )
+EImportConflict ( -- sym )
+EIndexOutOfBounds ( -- sym )
+EInvalidArgument ( -- sym )
+EKeyNotFound ( -- sym )
+EMissingDocComment ( -- sym )
+ENoMatchingBranch ( -- sym )
+ENonTailRecursion ( -- sym )
+ENotComparable ( -- sym )
+EStackEffectMismatch ( -- sym )
+EStackOverflow ( -- sym )
+EStackUnderflow ( -- sym )
+ETypeMismatch ( -- sym )
+EUnexpectedEOF ( -- sym )
+EUnknownWord ( -- sym )
+EUseAfterClose ( -- sym )
+EUserRethrown ( -- sym )
+EUserThrown ( -- sym )
 H{
 M{
 S{

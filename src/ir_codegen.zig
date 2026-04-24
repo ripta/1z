@@ -1954,6 +1954,12 @@ fn serializeInstructionsInto(buf: *std.ArrayListUnmanaged(u8), instructions: []c
                     const len: u32 = @intCast(name.len);
                     try buf.appendSlice(allocator, std.mem.asBytes(&len));
                     try buf.appendSlice(allocator, name);
+                } else if (val == .marker) {
+                    const name = val.marker.name;
+                    try buf.append(allocator, 1); // op tag: call_word
+                    const len: u32 = @intCast(name.len);
+                    try buf.appendSlice(allocator, std.mem.asBytes(&len));
+                    try buf.appendSlice(allocator, name);
                 } else {
                     try buf.append(allocator, 0); // op tag: push_literal
                     try serializeValueInto(buf, val, allocator);
@@ -3171,14 +3177,15 @@ fn compileInstructions(
                     _ = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
                     stack[sp.*] = .{ .raw_at_slot = sp.* };
                     sp.* += 1;
-                } else if (state.aot_mode and (val == .type_val or val == .tagged or val == .parameter)) {
+                } else if (state.aot_mode and (val == .type_val or val == .tagged or val == .parameter or val == .marker)) {
                     // Non-simple literals from named words (type values, enum
-                    // variants, parameter definitions). Emit a callback that
-                    // looks up the word at runtime and pushes its literal value.
+                    // variants, parameter definitions, markers). Emit a callback
+                    // that looks up the word at runtime and pushes its literal value.
                     const lit_name = switch (val) {
                         .type_val => |tv| tv.name,
                         .tagged => |t| t.tag.name,
                         .parameter => |p| p.name,
+                        .marker => |mk| mk.name,
                         else => unreachable,
                     };
 
