@@ -8,6 +8,7 @@ const VirtualType = value_mod.VirtualType;
 const StructInstance = value_mod.StructInstance;
 const StructType = value_mod.StructType;
 const TypeValue = value_mod.TypeValue;
+const HashTable = value_mod.HashTable;
 
 const ir_mod = @import("ffi/ir.zig");
 const JitBuffer = ir_mod.JitBuffer;
@@ -1903,6 +1904,8 @@ const AotQuotationLiteral = struct {
 ///       0=fixnum: [i64]  1=float: [f64]  2=bool: [u8]
 ///       3=string: [u32 len][bytes]  4=symbol: [u32 len][bytes]
 ///       5=quotation: [recursive]
+///       6=array: [u32 elem_count][recursive values...]
+///       7=hash: [u32 entry_count][per entry: u32 key_len, key_bytes, recursive value]
 ///     call_word: [u32 name_len][bytes]
 fn serializeQuotationInstructions(instructions: []const Instruction, allocator: Allocator) ![]u8 {
     var buf = std.ArrayListUnmanaged(u8){};
@@ -1911,7 +1914,9 @@ fn serializeQuotationInstructions(instructions: []const Instruction, allocator: 
     return buf.toOwnedSlice(allocator);
 }
 
-fn serializeInstructionsInto(buf: *std.ArrayListUnmanaged(u8), instructions: []const Instruction, allocator: Allocator) !void {
+const SerializeError = Allocator.Error || error{NotCompilable};
+
+fn serializeInstructionsInto(buf: *std.ArrayListUnmanaged(u8), instructions: []const Instruction, allocator: Allocator) SerializeError!void {
     const count: u32 = @intCast(instructions.len);
     try buf.appendSlice(allocator, std.mem.asBytes(&count));
     for (instructions) |instr| {
@@ -1944,37 +1949,7 @@ fn serializeInstructionsInto(buf: *std.ArrayListUnmanaged(u8), instructions: []c
                     try buf.appendSlice(allocator, name);
                 } else {
                     try buf.append(allocator, 0); // op tag: push_literal
-                    switch (val) {
-                        .fixnum => |v| {
-                            try buf.append(allocator, 0);
-                            try buf.appendSlice(allocator, std.mem.asBytes(&v));
-                        },
-                        .float => |v| {
-                            try buf.append(allocator, 1);
-                            try buf.appendSlice(allocator, std.mem.asBytes(&v));
-                        },
-                        .boolean => |v| {
-                            try buf.append(allocator, 2);
-                            try buf.append(allocator, @intFromBool(v));
-                        },
-                        .string => |v| {
-                            try buf.append(allocator, 3);
-                            const len: u32 = @intCast(v.len);
-                            try buf.appendSlice(allocator, std.mem.asBytes(&len));
-                            try buf.appendSlice(allocator, v);
-                        },
-                        .symbol => |v| {
-                            try buf.append(allocator, 4);
-                            const len: u32 = @intCast(v.len);
-                            try buf.appendSlice(allocator, std.mem.asBytes(&len));
-                            try buf.appendSlice(allocator, v);
-                        },
-                        .quotation => |q| {
-                            try buf.append(allocator, 5);
-                            try serializeInstructionsInto(buf, q.instructions, allocator);
-                        },
-                        else => return IrCodegenError.NotCompilable, // D.4: non-simple AOT literal
-                    }
+                    try serializeValueInto(buf, val, allocator);
                 }
             },
             .call_word => |name| {
@@ -1987,12 +1962,67 @@ fn serializeInstructionsInto(buf: *std.ArrayListUnmanaged(u8), instructions: []c
     }
 }
 
+fn serializeValueInto(buf: *std.ArrayListUnmanaged(u8), val: Value, allocator: Allocator) SerializeError!void {
+    switch (val) {
+        .fixnum => |v| {
+            try buf.append(allocator, 0);
+            try buf.appendSlice(allocator, std.mem.asBytes(&v));
+        },
+        .float => |v| {
+            try buf.append(allocator, 1);
+            try buf.appendSlice(allocator, std.mem.asBytes(&v));
+        },
+        .boolean => |v| {
+            try buf.append(allocator, 2);
+            try buf.append(allocator, @intFromBool(v));
+        },
+        .string => |v| {
+            try buf.append(allocator, 3);
+            const len: u32 = @intCast(v.len);
+            try buf.appendSlice(allocator, std.mem.asBytes(&len));
+            try buf.appendSlice(allocator, v);
+        },
+        .symbol => |v| {
+            try buf.append(allocator, 4);
+            const len: u32 = @intCast(v.len);
+            try buf.appendSlice(allocator, std.mem.asBytes(&len));
+            try buf.appendSlice(allocator, v);
+        },
+        .quotation => |q| {
+            try buf.append(allocator, 5);
+            try serializeInstructionsInto(buf, q.instructions, allocator);
+        },
+        .array => |elems| {
+            try buf.append(allocator, 6);
+            const elem_count: u32 = @intCast(elems.len);
+            try buf.appendSlice(allocator, std.mem.asBytes(&elem_count));
+            for (elems) |elem| {
+                try serializeValueInto(buf, elem, allocator);
+            }
+        },
+        .hash => |h| {
+            try buf.append(allocator, 7);
+            const entry_count: u32 = @intCast(h.count());
+            try buf.appendSlice(allocator, std.mem.asBytes(&entry_count));
+            var iter = h.iterator();
+            while (iter.next()) |entry| {
+                const key = entry.key_ptr.*;
+                const key_len: u32 = @intCast(key.len);
+                try buf.appendSlice(allocator, std.mem.asBytes(&key_len));
+                try buf.appendSlice(allocator, key);
+                try serializeValueInto(buf, entry.value_ptr.*, allocator);
+            }
+        },
+        else => return IrCodegenError.NotCompilable, // D.4: non-simple AOT literal
+    }
+}
+
 fn deserializeQuotationInstructions(data: []const u8, allocator: Allocator) ![]Instruction {
     var offset: usize = 0;
     return deserializeInstructionsAt(data, &offset, allocator);
 }
 
-fn deserializeInstructionsAt(data: []const u8, offset: *usize, allocator: Allocator) ![]Instruction {
+fn deserializeInstructionsAt(data: []const u8, offset: *usize, allocator: Allocator) Allocator.Error![]Instruction {
     if (offset.* + 4 > data.len) return error.OutOfMemory;
     const count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
     offset.* += 4;
@@ -2007,52 +2037,7 @@ fn deserializeInstructionsAt(data: []const u8, offset: *usize, allocator: Alloca
         offset.* += 1;
         if (op_tag == 0) {
             // push_literal
-            if (offset.* >= data.len) return error.OutOfMemory;
-            const val_tag = data[offset.*];
-            offset.* += 1;
-            const val: Value = switch (val_tag) {
-                0 => blk: { // fixnum
-                    if (offset.* + 8 > data.len) return error.OutOfMemory;
-                    const v = std.mem.readInt(i64, data[offset.*..][0..8], .little);
-                    offset.* += 8;
-                    break :blk .{ .fixnum = v };
-                },
-                1 => blk: { // float
-                    if (offset.* + 8 > data.len) return error.OutOfMemory;
-                    const v = @as(f64, @bitCast(std.mem.readInt(u64, data[offset.*..][0..8], .little)));
-                    offset.* += 8;
-                    break :blk .{ .float = v };
-                },
-                2 => blk: { // bool
-                    if (offset.* >= data.len) return error.OutOfMemory;
-                    const v = data[offset.*] != 0;
-                    offset.* += 1;
-                    break :blk .{ .boolean = v };
-                },
-                3 => blk: { // string
-                    if (offset.* + 4 > data.len) return error.OutOfMemory;
-                    const slen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-                    offset.* += 4;
-                    if (offset.* + slen > data.len) return error.OutOfMemory;
-                    const copy = try allocator.dupe(u8, data[offset.*..][0..slen]);
-                    offset.* += slen;
-                    break :blk .{ .string = copy };
-                },
-                4 => blk: { // symbol
-                    if (offset.* + 4 > data.len) return error.OutOfMemory;
-                    const slen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-                    offset.* += 4;
-                    if (offset.* + slen > data.len) return error.OutOfMemory;
-                    const copy = try allocator.dupe(u8, data[offset.*..][0..slen]);
-                    offset.* += slen;
-                    break :blk .{ .symbol = copy };
-                },
-                5 => blk: { // quotation
-                    const nested = try deserializeInstructionsAt(data, offset, allocator);
-                    break :blk .{ .quotation = .{ .instructions = nested } };
-                },
-                else => return error.OutOfMemory,
-            };
+            const val = try deserializeValueAt(data, offset, allocator);
             instr.* = .{ .op = .{ .push_literal = val }, .line = line, .column = col };
         } else if (op_tag == 1) {
             // call_word
@@ -2068,6 +2053,85 @@ fn deserializeInstructionsAt(data: []const u8, offset: *usize, allocator: Alloca
         }
     }
     return instructions;
+}
+
+fn deserializeValueAt(data: []const u8, offset: *usize, allocator: Allocator) Allocator.Error!Value {
+    if (offset.* >= data.len) return error.OutOfMemory;
+    const val_tag = data[offset.*];
+    offset.* += 1;
+    return switch (val_tag) {
+        0 => blk: { // fixnum
+            if (offset.* + 8 > data.len) return error.OutOfMemory;
+            const v = std.mem.readInt(i64, data[offset.*..][0..8], .little);
+            offset.* += 8;
+            break :blk .{ .fixnum = v };
+        },
+        1 => blk: { // float
+            if (offset.* + 8 > data.len) return error.OutOfMemory;
+            const v = @as(f64, @bitCast(std.mem.readInt(u64, data[offset.*..][0..8], .little)));
+            offset.* += 8;
+            break :blk .{ .float = v };
+        },
+        2 => blk: { // bool
+            if (offset.* >= data.len) return error.OutOfMemory;
+            const v = data[offset.*] != 0;
+            offset.* += 1;
+            break :blk .{ .boolean = v };
+        },
+        3 => blk: { // string
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const slen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            if (offset.* + slen > data.len) return error.OutOfMemory;
+            const copy = try allocator.dupe(u8, data[offset.*..][0..slen]);
+            offset.* += slen;
+            break :blk .{ .string = copy };
+        },
+        4 => blk: { // symbol
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const slen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            if (offset.* + slen > data.len) return error.OutOfMemory;
+            const copy = try allocator.dupe(u8, data[offset.*..][0..slen]);
+            offset.* += slen;
+            break :blk .{ .symbol = copy };
+        },
+        5 => blk: { // quotation
+            const nested = try deserializeInstructionsAt(data, offset, allocator);
+            break :blk .{ .quotation = .{ .instructions = nested } };
+        },
+        6 => blk: { // array
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const elem_count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            const elems = try allocator.alloc(Value, elem_count);
+            for (elems) |*elem| {
+                elem.* = try deserializeValueAt(data, offset, allocator);
+            }
+            break :blk .{ .array = elems };
+        },
+        7 => blk: { // hash
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const entry_count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            var h = HashTable{};
+            try h.ensureTotalCapacity(allocator, entry_count);
+            for (0..entry_count) |_| {
+                if (offset.* + 4 > data.len) return error.OutOfMemory;
+                const klen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+                offset.* += 4;
+                if (offset.* + klen > data.len) return error.OutOfMemory;
+                const key = try allocator.dupe(u8, data[offset.*..][0..klen]);
+                offset.* += klen;
+                const value = try deserializeValueAt(data, offset, allocator);
+                h.putAssumeCapacity(key, value);
+            }
+            const h_ptr = try allocator.create(HashTable);
+            h_ptr.* = h;
+            break :blk .{ .hash = h_ptr };
+        },
+        else => return error.OutOfMemory,
+    };
 }
 
 /// Materialize any quotation_body entries as raw Values on the physical stack.
@@ -9056,6 +9120,190 @@ test "serializeQuotationInstructions: preserves line and column" {
     defer testing.allocator.free(decoded);
     try testing.expectEqual(@as(usize, 5), decoded[0].line);
     try testing.expectEqual(@as(usize, 10), decoded[0].column);
+}
+
+test "serializeQuotationInstructions: roundtrip empty array" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .array = &.{} } }, .line = 1 },
+    };
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator);
+    defer testing.allocator.free(data);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator);
+    defer testing.allocator.free(decoded);
+    try testing.expectEqual(@as(usize, 1), decoded.len);
+    try testing.expect(decoded[0].op.push_literal == .array);
+    try testing.expectEqual(@as(usize, 0), decoded[0].op.push_literal.array.len);
+}
+
+test "serializeQuotationInstructions: roundtrip array with elements" {
+    const elems = [_]Value{
+        .{ .fixnum = 42 },
+        .{ .string = "hello" },
+        .{ .boolean = true },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .array = &elems } }, .line = 1 },
+    };
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator);
+    defer testing.allocator.free(data);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator);
+    defer {
+        for (decoded) |instr| {
+            switch (instr.op) {
+                .push_literal => |v| {
+                    if (v == .array) {
+                        for (v.array) |elem| {
+                            if (elem == .string) testing.allocator.free(elem.string);
+                        }
+                        testing.allocator.free(v.array);
+                    }
+                },
+                .call_word => |n| testing.allocator.free(n),
+            }
+        }
+        testing.allocator.free(decoded);
+    }
+    try testing.expectEqual(@as(usize, 1), decoded.len);
+    const arr = decoded[0].op.push_literal.array;
+    try testing.expectEqual(@as(usize, 3), arr.len);
+    try testing.expectEqual(@as(i64, 42), arr[0].fixnum);
+    try testing.expectEqualStrings("hello", arr[1].string);
+    try testing.expectEqual(true, arr[2].boolean);
+}
+
+test "serializeQuotationInstructions: roundtrip nested array" {
+    const inner1 = [_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 2 } };
+    const inner2 = [_]Value{.{ .fixnum = 3 }};
+    const outer = [_]Value{
+        .{ .array = &inner1 },
+        .{ .array = &inner2 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .array = &outer } }, .line = 1 },
+    };
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator);
+    defer testing.allocator.free(data);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator);
+    defer {
+        for (decoded) |instr| {
+            switch (instr.op) {
+                .push_literal => |v| {
+                    if (v == .array) {
+                        for (v.array) |elem| {
+                            if (elem == .array) testing.allocator.free(elem.array);
+                        }
+                        testing.allocator.free(v.array);
+                    }
+                },
+                .call_word => |n| testing.allocator.free(n),
+            }
+        }
+        testing.allocator.free(decoded);
+    }
+    const arr = decoded[0].op.push_literal.array;
+    try testing.expectEqual(@as(usize, 2), arr.len);
+    try testing.expectEqual(@as(usize, 2), arr[0].array.len);
+    try testing.expectEqual(@as(i64, 1), arr[0].array[0].fixnum);
+    try testing.expectEqual(@as(i64, 2), arr[0].array[1].fixnum);
+    try testing.expectEqual(@as(usize, 1), arr[1].array.len);
+    try testing.expectEqual(@as(i64, 3), arr[1].array[0].fixnum);
+}
+
+test "serializeQuotationInstructions: roundtrip empty hash" {
+    const h = HashTable{};
+    const h_ptr = try testing.allocator.create(HashTable);
+    h_ptr.* = h;
+    defer testing.allocator.destroy(h_ptr);
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .hash = h_ptr } }, .line = 1 },
+    };
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator);
+    defer testing.allocator.free(data);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator);
+    defer {
+        for (decoded) |instr| {
+            switch (instr.op) {
+                .push_literal => |v| {
+                    if (v == .hash) {
+                        v.hash.deinit(testing.allocator);
+                        testing.allocator.destroy(v.hash);
+                    }
+                },
+                .call_word => |n| testing.allocator.free(n),
+            }
+        }
+        testing.allocator.free(decoded);
+    }
+    try testing.expect(decoded[0].op.push_literal == .hash);
+    try testing.expectEqual(@as(u32, 0), decoded[0].op.push_literal.hash.count());
+}
+
+test "serializeQuotationInstructions: roundtrip hash with entries" {
+    var h = HashTable{};
+    try h.put(testing.allocator, "x", .{ .fixnum = 10 });
+    try h.put(testing.allocator, "y", .{ .boolean = false });
+    defer h.deinit(testing.allocator);
+    const h_ptr = try testing.allocator.create(HashTable);
+    h_ptr.* = h;
+    defer testing.allocator.destroy(h_ptr);
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .hash = h_ptr } }, .line = 1 },
+    };
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator);
+    defer testing.allocator.free(data);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator);
+    defer {
+        for (decoded) |instr| {
+            switch (instr.op) {
+                .push_literal => |v| {
+                    if (v == .hash) {
+                        var iter = v.hash.iterator();
+                        while (iter.next()) |entry| {
+                            testing.allocator.free(entry.key_ptr.*);
+                        }
+                        v.hash.deinit(testing.allocator);
+                        testing.allocator.destroy(v.hash);
+                    }
+                },
+                .call_word => |n| testing.allocator.free(n),
+            }
+        }
+        testing.allocator.free(decoded);
+    }
+    const dh = decoded[0].op.push_literal.hash;
+    try testing.expectEqual(@as(u32, 2), dh.count());
+    try testing.expectEqual(@as(i64, 10), dh.get("x").?.fixnum);
+    try testing.expectEqual(false, dh.get("y").?.boolean);
+}
+
+test "serializeQuotationInstructions: roundtrip array containing symbol" {
+    // Matches the `{ cond: }` pattern from prelude.1z
+    const elems = [_]Value{.{ .symbol = "cond" }};
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .array = &elems } }, .line = 1 },
+    };
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator);
+    defer testing.allocator.free(data);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator);
+    defer {
+        for (decoded) |instr| {
+            switch (instr.op) {
+                .push_literal => |v| {
+                    if (v == .array) {
+                        for (v.array) |elem| {
+                            if (elem == .symbol) testing.allocator.free(elem.symbol);
+                        }
+                        testing.allocator.free(v.array);
+                    }
+                },
+                .call_word => |n| testing.allocator.free(n),
+            }
+        }
+        testing.allocator.free(decoded);
+    }
+    const arr = decoded[0].op.push_literal.array;
+    try testing.expectEqual(@as(usize, 1), arr.len);
+    try testing.expectEqualStrings("cond", arr[0].symbol);
 }
 
 // ---------------------------------------------------------------------------
