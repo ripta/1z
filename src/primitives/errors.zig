@@ -15,7 +15,9 @@ const StackEffect = stack_effect_mod.StackEffect;
 const helpers = @import("helpers.zig");
 const popQuotation = helpers.popQuotation;
 
+const Marker = value_mod.Marker;
 const Primitive = @import("types.zig").Primitive;
+const markers_mod = @import("markers.zig");
 
 /// Convert a PascalCase error name to kebab-case at comptime.
 /// E.g., "StackUnderflow" -> "stack-underflow", "IOError" -> "io-error"
@@ -101,9 +103,9 @@ pub fn pascalToKebabRuntime(name: []const u8, buf: []u8) []const u8 {
 pub const primitives = [_]Primitive{
     .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ..a ) --", .doc = "Execute try quotation; if error, run recover quotation with error on stack.", .func = nativeRecover },
     .{ .name = "cleanup", .stack_effect = "body-quot cleanup-quot --", .doc = "Execute body, always run cleanup, then re-throw any error from body.", .func = nativeCleanup },
-    .{ .name = "rethrow", .stack_effect = "error --", .doc = "Re-raise an error value as an actual error.", .func = nativeRethrow },
+    .{ .name = "rethrow", .stack_effect = "error --", .doc = "Re-raise an error value as an actual error.", .func = nativeRethrow, .markers = &.{@constCast(&markers_mod.never_returns_marker)} },
     .{ .name = "make-error", .stack_effect = "data message type -- error", .doc = "Construct an error object from data, message, and type.", .func = nativeMakeError },
-    .{ .name = "throw", .stack_effect = "error --", .doc = "Raise an error object as an actual error.", .func = nativeThrow },
+    .{ .name = "throw", .stack_effect = "error --", .doc = "Raise an error object as an actual error.", .func = nativeThrow, .markers = &.{@constCast(&markers_mod.never_returns_marker)} },
     .{ .name = "with-isolation", .stack_effect = "quot --", .doc = "Execute quotation with isolated type registry, dispatch tables, and protocol obligations. Only stack effects survive.", .func = nativeWithIsolation },
 };
 

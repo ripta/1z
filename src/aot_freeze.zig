@@ -12,6 +12,7 @@ const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
 const dictionary_mod = @import("dictionary.zig");
 const WordDefinition = dictionary_mod.WordDefinition;
+const markers_mod = @import("primitives/markers.zig");
 
 pub const AotQuotationDesc = struct {
     quotation_id: u32,
@@ -619,6 +620,13 @@ fn addFeatureWarning(
     });
 }
 
+fn hasNeverReturnsMarker(def: WordDefinition) bool {
+    for (def.markers) |mk| {
+        if (markers_mod.isNeverReturnsMarker(mk)) return true;
+    }
+    return false;
+}
+
 /// Assign word IDs and build the AotWordDesc array.
 fn buildAotDescs(
     entry_instrs: []const Instruction,
@@ -657,6 +665,7 @@ fn buildAotDescs(
             .word_id = id,
             .is_prelude = prelude_words.contains(name),
             .stack_effect = effect,
+            .never_returns = hasNeverReturnsMarker(def),
         });
     }
 
@@ -678,6 +687,7 @@ fn buildAotDescs(
             .is_prelude = true,
             .is_native = true,
             .stack_effect = effect,
+            .never_returns = hasNeverReturnsMarker(def),
         });
     }
 
@@ -700,6 +710,7 @@ fn buildAotDescs(
                 .word_id = entry.word_id,
                 .input_count = entry.input_count,
                 .output_count = entry.output_count,
+                .never_returns = entry.never_returns,
             };
             if (entry.stack_effect) |*eff| {
                 if (stack_effect_mod.hasAnyRowVariable(eff.*)) {

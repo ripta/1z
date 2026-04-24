@@ -563,6 +563,13 @@ fn hasQuotationParams(effect: stack_effect_mod.StackEffect) bool {
     return false;
 }
 
+fn hasNeverReturnsMarker(word_markers: []const *const value_mod.Marker) bool {
+    for (word_markers) |mk| {
+        if (markers_mod.isNeverReturnsMarker(mk)) return true;
+    }
+    return false;
+}
+
 fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.ResolvedWord {
     const state: *ResolverState = @ptrCast(@alignCast(user_data));
     const ctx = state.context;
@@ -587,6 +594,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
                 .output_count = @intCast(effect.outputs.len),
                 .native_fn_ptr = @intFromPtr(func),
                 .stack_effect_ptr = effect_ptr,
+                .never_returns = hasNeverReturnsMarker(callee.markers),
             };
         },
         .host_callback => return null,
@@ -605,6 +613,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         .input_count = @intCast(effect.inputs.len),
         .output_count = @intCast(effect.outputs.len),
         .stack_effect_ptr = effect_ptr,
+        .never_returns = hasNeverReturnsMarker(callee.markers),
     };
 }
 

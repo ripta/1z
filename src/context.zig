@@ -4018,6 +4018,13 @@ const ResolverState = struct {
     context: *Context,
 };
 
+fn hasNeverReturnsMarker(markers: []const *const value_mod.Marker) bool {
+    for (markers) |mk| {
+        if (markers_mod.isNeverReturnsMarker(mk)) return true;
+    }
+    return false;
+}
+
 fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.ResolvedWord {
     const state: *ResolverState = @ptrCast(@alignCast(user_data));
     const ctx = state.context;
@@ -4032,6 +4039,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
                 .input_count = @intCast(effect.inputs.len),
                 .output_count = @intCast(effect.outputs.len),
                 .native_fn_ptr = @intFromPtr(func),
+                .never_returns = hasNeverReturnsMarker(callee.markers),
             };
             if (stack_effect_mod.hasAnyRowVariable(effect)) {
                 result.callee_effect = ctx.lookupWordStackEffectPtr(name);
@@ -4053,6 +4061,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         .word_id = word_id,
         .input_count = @intCast(effect.inputs.len),
         .output_count = @intCast(effect.outputs.len),
+        .never_returns = hasNeverReturnsMarker(callee.markers),
     };
     if (stack_effect_mod.hasAnyRowVariable(effect)) {
         result.callee_effect = ctx.lookupWordStackEffectPtr(name);

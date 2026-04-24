@@ -59,6 +59,7 @@ pub const NotCompilableReason = enum {
     nested_loop_conflict,
     pre_scan_failure,
     post_compile_reject,
+    abstract_stack_underflow,
 
     pub fn code(self: NotCompilableReason) []const u8 {
         return switch (self) {
@@ -74,6 +75,7 @@ pub const NotCompilableReason = enum {
             .nested_loop_conflict => "NC.10",
             .pre_scan_failure => "NC.11",
             .post_compile_reject => "NC.12",
+            .abstract_stack_underflow => "NC.13",
         };
     }
 
@@ -91,6 +93,7 @@ pub const NotCompilableReason = enum {
             .nested_loop_conflict => "contains two self-recursive tail calls",
             .pre_scan_failure => "instruction pre-scan rejected the word before compilation started",
             .post_compile_reject => "compilation produced unresolved dynamic calls or abstract stack entries",
+            .abstract_stack_underflow => "word body underflows the abstract stack (row-variable effects)",
         };
     }
 
@@ -108,6 +111,7 @@ pub const NotCompilableReason = enum {
             .nested_loop_conflict => "split into two words so each has one recursive call",
             .pre_scan_failure => null,
             .post_compile_reject => null,
+            .abstract_stack_underflow => "blocked until row-variable stack regions can be modeled",
         };
     }
 };
@@ -182,6 +186,10 @@ pub const AotWordDesc = struct {
     /// Full stack effect declaration for this word. Used by the compiler
     /// to track stack shapes through quotation calls.
     stack_effect: ?StackEffect = null,
+    /// When true, the word never returns to its caller (has the
+    /// never-returns marker). The compiler sets state.diverged after
+    /// emitting the call.
+    never_returns: bool = false,
 };
 
 const supported_binary_ops = [_][]const u8{ "+", "-", "*", "/", "div", "rem", "%" };
@@ -492,6 +500,9 @@ pub const ResolvedWord = struct {
     /// The caller must specialize the effect at the call site using
     /// resolveRowVariableEffect() before using input_count/output_count.
     callee_effect: ?*const StackEffect = null,
+    /// When true, the word never returns to its caller (e.g., throw, rethrow).
+    /// The compiler sets state.diverged after emitting the call.
+    never_returns: bool = false,
 };
 
 /// Callback interface for resolving word names to dispatch table IDs.
@@ -5521,6 +5532,7 @@ pub fn emitProgramC(
                 .word_id = entry.word_id,
                 .input_count = entry.input_count,
                 .output_count = entry.output_count,
+                .never_returns = entry.never_returns,
             };
             if (entry.stack_effect) |*eff| {
                 if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
@@ -5565,9 +5577,11 @@ pub fn emitProgramC(
             if (w.stack_effect != null) &w.stack_effect.? else null,
             &reason,
             null,
-        ) catch {
+        ) catch |err| {
             if (reason) |r| {
                 try failure_reasons.put(allocator, w.name, r);
+            } else if (err == IrCodegenError.StackUnderflow or err == IrCodegenError.StackShapeMismatch) {
+                try failure_reasons.put(allocator, w.name, .abstract_stack_underflow);
             }
             continue;
         };
