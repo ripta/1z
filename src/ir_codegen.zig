@@ -187,8 +187,8 @@ pub const AotWordDesc = struct {
     /// to track stack shapes through quotation calls.
     stack_effect: ?StackEffect = null,
     /// When true, the word never returns to its caller (has the
-    /// never-returns marker). The compiler sets state.diverged after
-    /// emitting the call.
+    /// never-returns marker). The compiler emits terminal control flow
+    /// instead of continuing in the current block after the call.
     never_returns: bool = false,
 };
 
@@ -501,7 +501,8 @@ pub const ResolvedWord = struct {
     /// resolveRowVariableEffect() before using input_count/output_count.
     callee_effect: ?*const StackEffect = null,
     /// When true, the word never returns to its caller (e.g., throw, rethrow).
-    /// The compiler sets state.diverged after emitting the call.
+    /// The compiler emits a terminal return after the call instead of
+    /// continuing control flow in the current block.
     never_returns: bool = false,
 };
 
@@ -838,12 +839,12 @@ fn emitPerOperationFallback(
     if (resolved.native_fn_ptr) |fn_ptr| {
         const fn_ptr_const = c.ir_const_addr(ctx, fn_ptr);
         const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.native_call_fn, ctx_val, fn_ptr_const);
-        emitCallbackPostCheck(state, call_result, call_result);
+        emitCallbackPostCheck(state, call_result, call_result, null);
     } else {
         const word_id_const = c.ir_const_addr(ctx, resolved.word_id);
         const line_const = c.ir_const_addr(ctx, line);
         const call_result = c._ir_CALL_3(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, line_const);
-        emitCallbackPostCheck(state, call_result, state.error_propagate_status);
+        emitCallbackPostCheck(state, call_result, state.error_propagate_status, null);
     }
 
     // After the native returns, SP = base_idx + slot_a + 1 and the result
@@ -1207,6 +1208,23 @@ const StackEntry = union(enum) {
     }
 };
 
+const ExitKind = enum {
+    falls_through,
+    terminal_return,
+    loop_diverged,
+};
+
+fn exitFallsThrough(kind: ExitKind) bool {
+    return kind == .falls_through;
+}
+
+fn mergeNonFallthroughExitKinds(a: ExitKind, b: ExitKind) ExitKind {
+    std.debug.assert(!exitFallsThrough(a));
+    std.debug.assert(!exitFallsThrough(b));
+    if (a == .terminal_return or b == .terminal_return) return .terminal_return;
+    return .loop_diverged;
+}
+
 /// Shared compilation state threaded through instruction compilation.
 const CompileState = struct {
     ctx: *c.ir_ctx,
@@ -1251,7 +1269,7 @@ const CompileState = struct {
     self_name: ?[]const u8 = null,
     loop_begin_ref: c.ir_ref = c.IR_UNUSED,
     input_count: u8 = 0,
-    diverged: bool = false,
+    exit_kind: ExitKind = .falls_through,
     loop_end_set: bool = false,
     mutual_group: ?[]const []const u8 = null,
     trampoline_status: c.ir_ref = c.IR_UNUSED,
@@ -2221,7 +2239,7 @@ fn materializeQuotations(state: *CompileState, stack: *[64]StackEntry, sp: usize
                     const q_id_const = c.ir_const_addr(ctx, q_id);
 
                     const call_result = c._ir_CALL_5(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, data_len_const, dest_addr, q_id_const);
-                    emitCallbackPostCheck(state, call_result, state.error_propagate_status);
+                    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null);
 
                     stack[qi] = .{ .raw_at_slot = qi };
                 } else {
@@ -2470,8 +2488,10 @@ fn emitResolvedNativeCallback(
 
         emitNativeWordCall(state, ctx_val, resolved, line);
 
-        sp.* = sp.* - resolved.input_count + resolved.output_count;
-        resetStackToPhysical(stack, sp.*);
+        if (exitFallsThrough(state.exit_kind)) {
+            sp.* = sp.* - resolved.input_count + resolved.output_count;
+            resetStackToPhysical(stack, sp.*);
+        }
     } else if (state.aot_mode) {
         // AOT mode: native_fn_ptr is unavailable; fall back to
         // jitInterpretedCall via the AOT word call path.
@@ -2487,8 +2507,10 @@ fn emitResolvedNativeCallback(
 
         emitAotWordCall(state, ctx_val, name, resolved, line);
 
-        sp.* = sp.* - resolved.input_count + resolved.output_count;
-        resetStackToPhysical(stack, sp.*);
+        if (exitFallsThrough(state.exit_kind)) {
+            sp.* = sp.* - resolved.input_count + resolved.output_count;
+            resetStackToPhysical(stack, sp.*);
+        }
     } else {
         state.not_compilable_reason = .unresolvable_word;
         return IrCodegenError.NotCompilable;
@@ -2576,7 +2598,7 @@ fn emitIndirectQuotCall(
         else
             c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
         const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-        emitCallbackPostCheck(state, fb_result, state.error_propagate_status);
+        emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null);
     }
     const end_fallback = c._ir_END(ctx);
 
@@ -2595,7 +2617,7 @@ fn emitIndirectQuotCall(
             c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
         else
             c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-        emitCallbackPostCheck(state, call_result, call_result);
+        emitCallbackPostCheck(state, call_result, call_result, null);
     }
     const end_compiled = c._ir_END(ctx);
 
@@ -2647,7 +2669,7 @@ fn emitIfBranchDispatch(
         else
             c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
         const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-        emitCallbackPostCheck(state, fb_result, state.error_propagate_status);
+        emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null);
     }
     const end_fallback = c._ir_END(ctx);
 
@@ -2664,7 +2686,7 @@ fn emitIfBranchDispatch(
             c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
         else
             c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-        emitCallbackPostCheck(state, call_result, call_result);
+        emitCallbackPostCheck(state, call_result, call_result, null);
     }
     const end_compiled = c._ir_END(ctx);
 
@@ -3055,7 +3077,7 @@ fn emitChooseBuiltin(
         else
             c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
         const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-        emitCallbackPostCheck(state, fb_result, state.error_propagate_status);
+        emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null);
     }
     const end_fallback = c._ir_END(ctx);
 
@@ -3070,7 +3092,7 @@ fn emitChooseBuiltin(
             c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
         else
             c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-        emitCallbackPostCheck(state, call_result, call_result);
+        emitCallbackPostCheck(state, call_result, call_result, null);
     }
     const end_compiled = c._ir_END(ctx);
 
@@ -3174,7 +3196,7 @@ fn compileInstructions(
                     const str_len_const = c.ir_const_addr(ctx, str_data.len);
 
                     const call_result = c._ir_CALL_3(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, str_len_const);
-                    emitCallbackPostCheck(state, call_result, state.error_propagate_status);
+                    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null);
 
                     // Record the literal for emission in the C preamble.
                     if (state.aot_string_literals) |lits| {
@@ -3224,7 +3246,7 @@ fn compileInstructions(
                     const name_len_const = c.ir_const_addr(ctx, lit_name.len);
 
                     const call_result = c._ir_CALL_3(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, name_len_const);
-                    emitCallbackPostCheck(state, call_result, state.error_propagate_status);
+                    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null);
 
                     if (state.aot_string_literals) |lits| {
                         lits.append(std.heap.page_allocator, .{
@@ -3276,7 +3298,7 @@ fn compileInstructions(
                     const data_len_const = c.ir_const_addr(ctx, serialized.len);
 
                     const call_result = c._ir_CALL_3(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, data_len_const);
-                    emitCallbackPostCheck(state, call_result, state.error_propagate_status);
+                    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null);
 
                     // Re-read sp after callback (it pushed one value).
                     _ = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
@@ -3459,9 +3481,25 @@ fn compileInstructions(
                                 if (false_body) |fb| {
                                     var false_stack = stack.*;
                                     var false_sp = sp.*;
+                                    const saved_exit_kind = state.exit_kind;
+                                    const saved_loop_end_set = state.loop_end_set;
+                                    state.exit_kind = .falls_through;
                                     try compileInstructions(state, fb, &false_stack, &false_sp);
+                                    const false_exit_kind = state.exit_kind;
+                                    state.exit_kind = .falls_through;
+                                    state.loop_end_set = saved_loop_end_set;
                                     try compileInstructions(state, tb, stack, sp);
-                                    if (false_sp != sp.*) return IrCodegenError.StackShapeMismatch;
+                                    if (exitFallsThrough(false_exit_kind) and false_sp != sp.*) return IrCodegenError.StackShapeMismatch;
+                                    if (!exitFallsThrough(false_exit_kind) and exitFallsThrough(state.exit_kind)) {
+                                        state.loop_end_set = saved_loop_end_set;
+                                    } else if (exitFallsThrough(false_exit_kind) and !exitFallsThrough(state.exit_kind)) {
+                                        state.loop_end_set = saved_loop_end_set;
+                                    }
+                                    if (!exitFallsThrough(false_exit_kind) and !exitFallsThrough(state.exit_kind)) {
+                                        state.exit_kind = mergeNonFallthroughExitKinds(false_exit_kind, state.exit_kind);
+                                    } else if (exitFallsThrough(state.exit_kind)) {
+                                        state.exit_kind = saved_exit_kind;
+                                    }
                                 } else {
                                     try compileInstructions(state, tb, stack, sp);
                                 }
@@ -3488,7 +3526,7 @@ fn compileInstructions(
                     // Save stack state for the false branch
                     const saved_sp = sp.*;
                     var saved_stack = stack.*;
-                    const saved_diverged = state.diverged;
+                    const saved_exit_kind = state.exit_kind;
                     const saved_loop_end_set = state.loop_end_set;
 
                     // Save items_ptr/base_addr before the true branch so the
@@ -3512,7 +3550,7 @@ fn compileInstructions(
                     // Emit true branch
                     const if_ref = c._ir_IF(ctx, cond_ref);
                     c._ir_IF_TRUE(ctx, if_ref);
-                    state.diverged = false;
+                    state.exit_kind = .falls_through;
                     if (true_body) |tb| {
                         try compileInstructions(state, tb, stack, sp);
                     } else {
@@ -3522,9 +3560,9 @@ fn compileInstructions(
                         sp.* = sp.* - eff.input_count + eff.output_count;
                         resetStackToPhysical(stack, sp.*);
                     }
-                    const true_diverged = state.diverged;
+                    const true_exit_kind = state.exit_kind;
                     var end_true: c.ir_ref = c.IR_UNUSED;
-                    if (!true_diverged) {
+                    if (exitFallsThrough(true_exit_kind)) {
                         flushToPhysicalStack(state, stack, sp.*);
                         end_true = c._ir_END(ctx);
                     }
@@ -3537,7 +3575,7 @@ fn compileInstructions(
                     // Emit false branch
                     c._ir_IF_FALSE(ctx, if_ref);
                     var false_sp = saved_sp;
-                    state.diverged = false;
+                    state.exit_kind = .falls_through;
                     if (false_body) |fb| {
                         try compileInstructions(state, fb, &saved_stack, &false_sp);
                     } else {
@@ -3546,12 +3584,11 @@ fn compileInstructions(
                         false_sp = false_sp - eff.input_count + eff.output_count;
                         resetStackToPhysical(&saved_stack, false_sp);
                     }
-                    const false_diverged = state.diverged;
+                    const false_exit_kind = state.exit_kind;
 
-                    if (true_diverged and false_diverged) {
-                        // Both branches diverged via LOOP_END
-                        state.diverged = true;
-                    } else if (true_diverged) {
+                    if (!exitFallsThrough(true_exit_kind) and !exitFallsThrough(false_exit_kind)) {
+                        state.exit_kind = mergeNonFallthroughExitKinds(true_exit_kind, false_exit_kind);
+                    } else if (!exitFallsThrough(true_exit_kind)) {
                         // Only false path continues. No END or MERGE needed:
                         // the false branch code just falls through after IF_FALSE.
                         // The same pattern as the exit path of a compiled loop.
@@ -3559,8 +3596,8 @@ fn compileInstructions(
                         sp.* = false_sp;
                         stack.* = saved_stack;
                         resetStackToPhysical(stack, sp.*);
-                        state.diverged = saved_diverged;
-                    } else if (false_diverged) {
+                        state.exit_kind = saved_exit_kind;
+                    } else if (!exitFallsThrough(false_exit_kind)) {
                         // Only true path continues. Resume from true branch's END.
                         c._ir_BEGIN(ctx, end_true);
                         // The false branch compilation may have updated
@@ -3570,9 +3607,9 @@ fn compileInstructions(
                             refreshCachedStackPointer(state);
                         }
                         resetStackToPhysical(stack, sp.*);
-                        state.diverged = saved_diverged;
+                        state.exit_kind = saved_exit_kind;
                     } else {
-                        // Neither diverged: normal merge
+                        // Neither branch terminated: normal merge
                         flushToPhysicalStack(state, &saved_stack, false_sp);
                         const end_false = c._ir_END(ctx);
                         c._ir_MERGE_2(ctx, end_true, end_false);
@@ -3584,7 +3621,7 @@ fn compileInstructions(
                             refreshCachedStackPointer(state);
                         }
                         resetStackToPhysical(stack, sp.*);
-                        state.diverged = saved_diverged;
+                        state.exit_kind = saved_exit_kind;
                         state.loop_end_set = saved_loop_end_set;
                     }
                 } else if (std.mem.eql(u8, name, "call")) {
@@ -3627,7 +3664,7 @@ fn compileInstructions(
                                     else
                                         c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
                                     const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-                                    emitCallbackPostCheck(state, fb_result, state.error_propagate_status);
+                                    emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null);
                                 }
                                 const end_fallback = c._ir_END(ctx);
 
@@ -3644,7 +3681,7 @@ fn compileInstructions(
                                         c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
                                     else
                                         c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-                                    emitCallbackPostCheck(state, call_result, call_result);
+                                    emitCallbackPostCheck(state, call_result, call_result, null);
                                 }
                                 const end_compiled = c._ir_END(ctx);
 
@@ -3925,7 +3962,7 @@ fn compileInstructions(
                                 else
                                     c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
                                 const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-                                emitCallbackPostCheck(state, fb_result, state.error_propagate_status);
+                                emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null);
                             }
                             const end_fallback = c._ir_END(ctx);
 
@@ -3941,7 +3978,7 @@ fn compileInstructions(
                                     c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
                                 else
                                     c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-                                emitCallbackPostCheck(state, call_result, call_result);
+                                emitCallbackPostCheck(state, call_result, call_result, null);
                             }
                             const end_compiled = c._ir_END(ctx);
 
@@ -4069,7 +4106,7 @@ fn compileInstructions(
                         state.cleanup_fn;
 
                     const call_result = c._ir_CALL_1(ctx, c.IR_I32, callback_fn, ctx_val);
-                    emitCallbackPostCheck(state, call_result, call_result);
+                    emitCallbackPostCheck(state, call_result, call_result, null);
 
                     sp.* -= 2;
                     state.dynamic_call_emitted = true;
@@ -4085,7 +4122,7 @@ fn compileInstructions(
 
                     const callback_fn = if (is_get) state.get_fn else state.with_parameter_fn;
                     const call_result = c._ir_CALL_1(ctx, c.IR_I32, callback_fn, ctx_val);
-                    emitCallbackPostCheck(state, call_result, call_result);
+                    emitCallbackPostCheck(state, call_result, call_result, null);
 
                     if (is_get) {
                         // get: pops 1 param, pushes 1 value (net 0)
@@ -4114,7 +4151,7 @@ fn compileInstructions(
 
                     const opcode_const = c.ir_const_addr(ctx, @intFromEnum(opcode));
                     const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.iterator_fn, ctx_val, opcode_const);
-                    emitCallbackPostCheck(state, call_result, call_result);
+                    emitCallbackPostCheck(state, call_result, call_result, null);
 
                     sp.* = sp.* - effects.inputs + effects.outputs;
                     resetStackToPhysical(stack, sp.*);
@@ -4157,7 +4194,7 @@ fn compileInstructions(
                     const loop_end = c._ir_LOOP_END(ctx);
                     c.ir_set_op2(ctx, state.loop_begin_ref, loop_end);
                     state.loop_end_set = true;
-                    state.diverged = true;
+                    state.exit_kind = .loop_diverged;
 
                     // Reset abstract stack for code after this point
                     // (unreachable, but keeps state consistent)
@@ -4202,7 +4239,7 @@ fn compileInstructions(
                     c._ir_STORE(ctx, tramp_addr, target_const);
 
                     c._ir_RETURN(ctx, state.trampoline_status);
-                    state.diverged = true;
+                    state.exit_kind = .terminal_return;
 
                     sp.* = ic;
                     resetStackToPhysical(stack, sp.*);
@@ -4249,7 +4286,10 @@ fn compileInstructions(
                             const ctx_val = emitCallbackPreamble(state, sp.*);
                             emitAotWordCall(state, ctx_val, name, resolved, instr.line);
                             state.dynamic_call_emitted = true;
-                            continue;
+                            if (exitFallsThrough(state.exit_kind)) {
+                                continue;
+                            }
+                            break;
                         } else {
                             state.not_compilable_reason = .unresolvable_word;
                             return IrCodegenError.NotCompilable;
@@ -4270,9 +4310,11 @@ fn compileInstructions(
 
                         emitNativeWordCall(state, ctx_val, resolved, instr.line);
 
-                        // Adjust abstract stack by specialized effect
-                        sp.* = sp.* - effective_in + effective_out;
-                        resetStackToPhysical(stack, sp.*);
+                        if (exitFallsThrough(state.exit_kind)) {
+                            // Adjust abstract stack by specialized effect
+                            sp.* = sp.* - effective_in + effective_out;
+                            resetStackToPhysical(stack, sp.*);
+                        }
                     } else if (state.aot_mode) {
                         // AOT mode: direct call by name or interpreter fallback
                         if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
@@ -4287,8 +4329,10 @@ fn compileInstructions(
 
                         emitAotWordCall(state, ctx_val, name, resolved, instr.line);
 
-                        sp.* = sp.* - effective_in + effective_out;
-                        resetStackToPhysical(stack, sp.*);
+                        if (exitFallsThrough(state.exit_kind)) {
+                            sp.* = sp.* - effective_in + effective_out;
+                            resetStackToPhysical(stack, sp.*);
+                        }
                     } else {
                         // Compound word: dispatch table indirect call
                         DispatchLayout.ensureInit();
@@ -4329,37 +4373,41 @@ fn compileInstructions(
                             const word_id_const = c.ir_const_addr(ctx, resolved.word_id);
                             const line_const = c.ir_const_addr(ctx, instr.line);
                             const fb_result = c._ir_CALL_3(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val2, word_id_const, line_const);
-                            emitCallbackPostCheck(state, fb_result, state.error_propagate_status);
+                            emitCallbackPostCheck(state, fb_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null);
                         }
-                        const end_fallback = c._ir_END(ctx);
+                        const end_fallback = if (resolved.never_returns) c.IR_UNUSED else c._ir_END(ctx);
 
                         // Hot path: callee is compiled, call directly
                         c._ir_IF_FALSE(ctx, if_null);
                         {
                             const call_result = c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr);
-                            emitCallbackPostCheck(state, call_result, call_result);
+                            emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null);
                         }
-                        const end_compiled = c._ir_END(ctx);
+                        if (resolved.never_returns) {
+                            state.exit_kind = .terminal_return;
+                        } else {
+                            const end_compiled = c._ir_END(ctx);
+                            c._ir_MERGE_2(ctx, end_fallback, end_compiled);
 
-                        c._ir_MERGE_2(ctx, end_fallback, end_compiled);
+                            // Both branches called emitCallbackPostCheck which
+                            // updated state.items_ptr/base_addr to branch-local
+                            // IR refs. Re-LOAD after the merge so subsequent
+                            // code uses refs that dominate this point.
+                            if (state.refresh_stack_fn != c.IR_UNUSED) {
+                                refreshCachedStackPointer(state);
+                            }
 
-                        // Both branches called emitCallbackPostCheck which
-                        // updated state.items_ptr/base_addr to branch-local
-                        // IR refs. Re-LOAD after the merge so subsequent
-                        // code uses refs that dominate this point.
-                        if (state.refresh_stack_fn != c.IR_UNUSED) {
-                            refreshCachedStackPointer(state);
+                            // Adjust abstract stack based on specialized effect
+                            sp.* = sp.* - effective_in + effective_out;
+                            resetStackToPhysical(stack, sp.*);
                         }
-
-                        // Adjust abstract stack based on specialized effect
-                        sp.* = sp.* - effective_in + effective_out;
-                        resetStackToPhysical(stack, sp.*);
                     }
                 }
             },
         }
 
         if (sp.* > state.peak_sp) state.peak_sp = @intCast(sp.*);
+        if (!exitFallsThrough(state.exit_kind)) break;
     }
 }
 
@@ -4822,10 +4870,12 @@ fn compileWordPass(
 
     try compileInstructions(&state, instructions, &stack, &sp);
 
-    if (state.diverged) {
+    if (state.exit_kind == .loop_diverged) {
         // All paths loop back (no base case fell through).
         // Emit unreachable fallback return.
         c._ir_RETURN(&ctx, ok_status);
+    } else if (state.exit_kind == .terminal_return) {
+        // A terminal callback or trampoline already emitted the return.
     } else if (state.dynamic_call_emitted) {
         // The callee updated sp_ptr and the physical stack directly.
         // Just return success.
@@ -5014,8 +5064,10 @@ pub fn emitWordC(
 
     try compileInstructions(&state, instructions, &stack, &sp);
 
-    if (state.diverged) {
+    if (state.exit_kind == .loop_diverged) {
         c._ir_RETURN(&ctx, ok_status);
+    } else if (state.exit_kind == .terminal_return) {
+        // Terminal control flow already emitted the return.
     } else if (state.dynamic_call_emitted) {
         c._ir_RETURN(&ctx, ok_status);
     } else if (hasRowRegion(&stack, sp)) {
@@ -5389,8 +5441,10 @@ fn emitWordCAotPass(
         };
     }
 
-    if (state.diverged) {
+    if (state.exit_kind == .loop_diverged) {
         c._ir_RETURN(&ctx, ok_status);
+    } else if (state.exit_kind == .terminal_return) {
+        // Terminal control flow already emitted the return.
     } else if (state.error_handler_terminal) {
         // The error handler callback (jitRecover/jitCleanup) updated sp_ptr
         // and the physical stack directly. Return success, matching the JIT path.
@@ -6157,7 +6211,7 @@ fn emitCallbackPreamble(state: *CompileState, sp: usize) c.ir_ref {
 /// unconditional -- cheaper than auditing every callback for push safety,
 /// and keeps the invariant "items_ptr is live after any callback" trivially
 /// maintained as new callbacks are added.
-fn emitCallbackPostCheck(state: *CompileState, call_result: c.ir_ref, return_status: c.ir_ref) void {
+fn emitCallbackPostCheck(state: *CompileState, call_result: c.ir_ref, return_status: c.ir_ref, terminal_success_status: ?c.ir_ref) void {
     const ctx = state.ctx;
     const zero_status = c.ir_const_i32(ctx, 0);
     const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
@@ -6165,6 +6219,12 @@ fn emitCallbackPostCheck(state: *CompileState, call_result: c.ir_ref, return_sta
     c._ir_IF_TRUE_cold(ctx, if_bail);
     c._ir_RETURN(ctx, return_status);
     c._ir_IF_FALSE(ctx, if_bail);
+
+    if (terminal_success_status) |status| {
+        c._ir_RETURN(ctx, status);
+        state.exit_kind = .terminal_return;
+        return;
+    }
 
     // Hot-path continue: refresh cached stack pointer in case the callback
     // reallocated ctx.stack.items. See refreshCachedStackPointer.
@@ -6202,7 +6262,7 @@ fn emitSafepointCall(state: *CompileState) void {
         break :blk c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
     };
     const call_result = c._ir_CALL_1(state.ctx, c.IR_I32, state.safepoint_fn, ctx_val);
-    emitCallbackPostCheck(state, call_result, state.error_propagate_status);
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null);
 }
 
 /// Emit a native word call. In JIT mode, calls through jitNativeCall with
@@ -6215,11 +6275,11 @@ fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, resolved: Resolve
         const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
         const line_const = c.ir_const_addr(ictx, line);
         const call_result = c._ir_CALL_3(ictx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, line_const);
-        emitCallbackPostCheck(state, call_result, state.error_propagate_status);
+        emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null);
     } else {
         const fn_ptr_const = c.ir_const_addr(ictx, resolved.native_fn_ptr.?);
         const call_result = c._ir_CALL_2(ictx, c.IR_I32, state.native_call_fn, ctx_val, fn_ptr_const);
-        emitCallbackPostCheck(state, call_result, call_result);
+        emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null);
     }
 }
 
@@ -6235,7 +6295,7 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
             defer std.heap.page_allocator.free(mangled);
             const callee_fn = c.ir_const_func(ictx, c.ir_str(ictx, mangled.ptr), state.aot_proto_1arg);
             const call_result = c._ir_CALL_1(ictx, c.IR_I32, callee_fn, state.jit_ctx_ptr);
-            emitCallbackPostCheck(state, call_result, call_result);
+            emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null);
             return;
         }
     }
@@ -6243,7 +6303,7 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
     const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
     const line_const = c.ir_const_addr(ictx, line);
     const call_result = c._ir_CALL_3(ictx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, line_const);
-    emitCallbackPostCheck(state, call_result, state.error_propagate_status);
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null);
 }
 
 /// Emit a parameter effect validation call at the current IR position.
@@ -6261,7 +6321,7 @@ fn emitParamValidation(state: *CompileState, effect_ptr: usize) void {
     };
     const effect_const = c.ir_const_addr(state.ctx, effect_ptr);
     const call_result = c._ir_CALL_2(state.ctx, c.IR_I32, state.validate_params_fn, ctx_val, effect_const);
-    emitCallbackPostCheck(state, call_result, state.error_propagate_status);
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null);
 }
 
 // =============================================================================

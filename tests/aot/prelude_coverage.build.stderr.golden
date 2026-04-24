@@ -18,7 +18,7 @@ Warning: 'while' parameter 'body' has row-variable effect; quotation call falls 
 Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Prelude compilation: 236/325 words compiled (72.6%)
+Prelude compilation: 239/325 words compiled (73.5%)
   word 'provenance?' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
@@ -57,9 +57,6 @@ Prelude compilation: 236/325 words compiled (72.6%)
   word 'bi' cannot be compiled
       NC.5: calls a quotation whose stack effect is unknown
       hint: annotate the quotation parameter with a concrete stack effect
-  word 'pragma-get' cannot be compiled
-      NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
   word 'make-option:some' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'make-stack-effect-info' cannot be compiled
@@ -146,9 +143,6 @@ Prelude compilation: 236/325 words compiled (72.6%)
   word 'stack-effect-info>hash' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word 'throw-type-error' cannot be compiled
-      NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
   word 'unmake-option:some' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'provenance>hash' cannot be compiled
@@ -187,9 +181,6 @@ Prelude compilation: 236/325 words compiled (72.6%)
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'unmake-dispatch-provenance' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
-  word 'assert-no-shadow' cannot be compiled
-      NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
   word 'make-result:err' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word '>stack-effect-info' cannot be compiled

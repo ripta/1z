@@ -163,3 +163,28 @@ test "emit C for trivial add function" {
     try std.testing.expect(std.mem.indexOf(u8, source, "int64_t") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "return") != null);
 }
+
+test "emit C for terminal callback diamond" {
+    var ctx: c.ir_ctx = undefined;
+    c.ir_init(&ctx, c.IR_FUNCTION, c.IR_CONSTS_LIMIT_MIN, c.IR_INSNS_LIMIT_MIN);
+    defer c.ir_free(&ctx);
+    ctx.ret_type = c.IR_I32;
+
+    c._ir_START(&ctx);
+    const call_result = c._ir_PARAM(&ctx, c.IR_I32, "call_result", 1);
+    const zero = c.ir_const_i32(&ctx, 0);
+    const propagate = c.ir_const_i32(&ctx, 2);
+    const call_failed = c.ir_fold2(&ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero);
+    const if_bail = c._ir_IF(&ctx, call_failed);
+    c._ir_IF_TRUE_cold(&ctx, if_bail);
+    c._ir_RETURN(&ctx, call_result);
+    c._ir_IF_FALSE(&ctx, if_bail);
+    c._ir_RETURN(&ctx, propagate);
+
+    const source = try emitC(&ctx, "test_terminal_callback", std.testing.allocator);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "test_terminal_callback") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "return 2;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "return") != null);
+}
