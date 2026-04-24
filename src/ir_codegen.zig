@@ -202,6 +202,7 @@ fn isSupportedOp(name: []const u8) bool {
     //              as primitives instead of going through dynamic dispatch
     if (std.mem.eql(u8, name, "if")) return true;
     if (std.mem.eql(u8, name, "call")) return true;
+    if (std.mem.eql(u8, name, "choose")) return true;
     if (std.mem.eql(u8, name, "t") or std.mem.eql(u8, name, "f")) return true;
 
     if (isLoopOp(name)) return true;
@@ -1649,6 +1650,12 @@ fn inferBuiltinEffect(
         return false;
     }
 
+    // choose: ( a1 a2 quot -- a )
+    if (std.mem.eql(u8, name, "choose")) {
+        applyFixedEffect(mini_stack, sp, delta, min_delta, 3, 1);
+        return true;
+    }
+
     // Not a recognized built-in.
     return null;
 }
@@ -2899,6 +2906,116 @@ fn tryEmitInlineStructFieldGet(
     return true;
 }
 
+/// Emit the body of the `choose` built-in when compiled as a standalone word.
+/// All three parameters (a1, a2, quot) are raw_at_slot entries.
+/// choose: ( a1 a2 quot -- a )
+fn emitChooseBuiltin(
+    state: *CompileState,
+    stack: *[64]StackEntry,
+    sp: *usize,
+) IrCodegenError!void {
+    const ctx = state.ctx;
+    const base_addr = state.base_addr;
+
+    // a1 @ slot 0, a2 @ slot 1, quot @ slot 2
+    const a1_slot: usize = 0;
+    const a2_slot: usize = 1;
+    const quot_slot: usize = 2;
+    const output_slot: usize = 0;
+
+    // Load code_ptr from quotation before rearranging.
+    const quot_byte_offset = c.ir_const_addr(ctx, quot_slot * ValueLayout.value_size);
+    const quot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, quot_byte_offset);
+    const quotation_tag_const = emitTagConst(ctx, .quotation);
+    emitTagCheck(ctx, quot_addr, quotation_tag_const, state.tag_offset_const, state.bail_status);
+    const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
+    const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), quot_addr, code_ptr_off);
+    const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
+
+    // Copy a1 to slot 2, a2 to slot 3 (quotation consumption copies).
+    emitCopySlot(ctx, base_addr, a1_slot, 2);
+    emitCopySlot(ctx, base_addr, a2_slot, 3);
+    // Copy quotation to slot 4 (for interpreter fallback).
+    emitCopySlot(ctx, base_addr, quot_slot, 4);
+
+    sp.* = 4;
+    if (sp.* + 1 > state.peak_sp) state.peak_sp = @intCast(sp.* + 1);
+
+    // Null-check code_ptr for compiled vs interpreter dispatch.
+    const null_addr = c.ir_const_addr(ctx, 0);
+    const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
+    const if_null = c._ir_IF(ctx, is_null);
+
+    // Cold path: interpreter fallback expects quotation on top.
+    c._ir_IF_TRUE_cold(ctx, if_null);
+    {
+        const fb_sp: usize = 5;
+        const fb_sp_const = c.ir_const_addr(ctx, fb_sp);
+        const fb_sp_val = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, fb_sp_const);
+        c._ir_STORE(ctx, state.sp_ptr, fb_sp_val);
+
+        const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+            state.preloaded_ctx_val
+        else blk: {
+            JitContextLayout.ensureInit();
+            const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+            const ctx_addr2 = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+            break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr2);
+        };
+        const call_quot_fn = if (state.aot_mode)
+            state.call_quotation_fn
+        else
+            c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
+        const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
+        emitCallbackPostCheck(state, fb_result, state.error_propagate_status);
+    }
+    const end_fallback = c._ir_END(ctx);
+
+    // Hot path: compiled quotation via code_ptr.
+    c._ir_IF_FALSE(ctx, if_null);
+    {
+        const hot_sp_const = c.ir_const_addr(ctx, sp.*);
+        const hot_sp_val = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, hot_sp_const);
+        c._ir_STORE(ctx, state.sp_ptr, hot_sp_val);
+
+        const call_result = if (state.aot_mode)
+            c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
+        else
+            c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
+        emitCallbackPostCheck(state, call_result, call_result);
+    }
+    const end_compiled = c._ir_END(ctx);
+
+    c._ir_MERGE_2(ctx, end_fallback, end_compiled);
+
+    if (state.refresh_stack_fn != c.IR_UNUSED) {
+        refreshCachedStackPointer(state);
+    }
+
+    // Quotation consumed 2 copies, pushed 1 result at slot 2.
+    const cond_ref = emitSlotTruthiness(ctx, state.base_addr, output_slot + 2, state);
+
+    const if_ref = c._ir_IF(ctx, cond_ref);
+
+    c._ir_IF_TRUE(ctx, if_ref);
+    // a1 already at output_slot — no copy needed.
+    const true_end = c._ir_END(ctx);
+
+    c._ir_IF_FALSE(ctx, if_ref);
+    emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot);
+    const false_end = c._ir_END(ctx);
+
+    c._ir_MERGE_2(ctx, true_end, false_end);
+
+    // Final sp: output_slot + 1
+    const final_sp_const = c.ir_const_addr(ctx, output_slot + 1);
+    const final_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, final_sp_const);
+    c._ir_STORE(ctx, state.sp_ptr, final_sp);
+
+    sp.* = output_slot + 1;
+    stack[output_slot] = .{ .raw_at_slot = output_slot };
+}
+
 /// Compile a sequence of instructions, updating the abstract stack.
 /// Used both for top-level word bodies and for inlined quotation bodies.
 fn compileInstructions(
@@ -3565,6 +3682,169 @@ fn compileInstructions(
                     const pred_entry = stack[sp.*];
                     const body_entry = stack[sp.* + 1];
                     try compilePredBodyLoop(state, stack, sp, pred_entry, body_entry, std.mem.eql(u8, name, "until"));
+                } else if (std.mem.eql(u8, name, "choose")) {
+                    // choose: ( a1 a2 quot -- a )
+                    // Duplicate a1 and a2, call quot on the copies,
+                    // then branch: truthy keeps a1, falsy keeps a2.
+                    if (sp.* < 3) return IrCodegenError.StackUnderflow;
+                    sp.* -= 3;
+                    const output_slot = sp.*;
+                    const entry_a1 = stack[output_slot];
+                    const entry_a2 = stack[output_slot + 1];
+                    const entry_quot = stack[output_slot + 2];
+
+                    switch (entry_quot) {
+                        .quotation_body => |body| {
+                            // Flush a1/a2 to physical slots so they survive
+                            // the quotation body compilation.
+                            stack[output_slot] = entry_a1;
+                            stack[output_slot + 1] = entry_a2;
+                            sp.* = output_slot + 2;
+                            flushToPhysicalStack(state, stack, sp.*);
+
+                            // Copy a1/a2 for quotation consumption.
+                            emitCopySlot(ctx, base_addr, output_slot, output_slot + 2);
+                            emitCopySlot(ctx, base_addr, output_slot + 1, output_slot + 3);
+                            stack[output_slot + 2] = .{ .raw_at_slot = output_slot + 2 };
+                            stack[output_slot + 3] = .{ .raw_at_slot = output_slot + 3 };
+                            sp.* = output_slot + 4;
+                            if (sp.* > state.peak_sp) state.peak_sp = @intCast(sp.*);
+
+                            // Compile the quotation body: consumes 2, pushes 1.
+                            try compileInstructions(state, body, stack, sp);
+                            if (sp.* != output_slot + 3) return IrCodegenError.StackShapeMismatch;
+
+                            // Pop the result and compute truthiness.
+                            sp.* -= 1;
+                            const result_entry = stack[sp.*];
+                            const cond_ref = try emitTruthiness(state, result_entry, base_addr);
+
+                            // Branch: truthy keeps a1, falsy keeps a2.
+                            const if_ref = c._ir_IF(ctx, cond_ref);
+
+                            c._ir_IF_TRUE(ctx, if_ref);
+                            // a1 already at output_slot — nothing to copy.
+                            const true_end = c._ir_END(ctx);
+
+                            c._ir_IF_FALSE(ctx, if_ref);
+                            emitCopySlot(ctx, base_addr, output_slot + 1, output_slot);
+                            const false_end = c._ir_END(ctx);
+
+                            c._ir_MERGE_2(ctx, true_end, false_end);
+
+                            sp.* = output_slot + 1;
+                            stack[output_slot] = .{ .raw_at_slot = output_slot };
+                        },
+                        .raw_at_slot => |quot_slot| {
+                            // Dynamic quotation: load code_ptr before rearranging.
+                            const quot_byte_offset = c.ir_const_addr(ctx, quot_slot * ValueLayout.value_size);
+                            const quot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, quot_byte_offset);
+
+                            // Tag-check: must be a quotation.
+                            const quotation_tag_const = emitTagConst(ctx, .quotation);
+                            emitTagCheck(ctx, quot_addr, quotation_tag_const, state.tag_offset_const, bail_status);
+
+                            // Load code_ptr from the quotation payload.
+                            const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
+                            const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), quot_addr, code_ptr_off);
+                            const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
+
+                            // Flush a1/a2 to their physical slots.
+                            stack[output_slot] = entry_a1;
+                            stack[output_slot + 1] = entry_a2;
+                            sp.* = output_slot + 2;
+                            flushToPhysicalStack(state, stack, sp.*);
+
+                            // Copy a1/a2 for quotation consumption.
+                            emitCopySlot(ctx, base_addr, output_slot, output_slot + 2);
+                            emitCopySlot(ctx, base_addr, output_slot + 1, output_slot + 3);
+                            // Copy quotation to slot after the copies.
+                            emitCopySlot(ctx, base_addr, quot_slot, output_slot + 4);
+
+                            sp.* = output_slot + 4;
+                            if (sp.* + 1 > state.peak_sp) state.peak_sp = @intCast(sp.* + 1);
+
+                            // Null-check code_ptr for compiled vs interpreter dispatch.
+                            const null_addr = c.ir_const_addr(ctx, 0);
+                            const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
+                            const if_null = c._ir_IF(ctx, is_null);
+
+                            // Cold path: interpreter fallback.
+                            c._ir_IF_TRUE_cold(ctx, if_null);
+                            {
+                                // Interpreter expects quotation on top of stack.
+                                const fb_sp = output_slot + 5;
+                                const fb_sp_const = c.ir_const_addr(ctx, fb_sp);
+                                const fb_sp_val = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, fb_sp_const);
+                                c._ir_STORE(ctx, state.sp_ptr, fb_sp_val);
+
+                                const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+                                    state.preloaded_ctx_val
+                                else blk: {
+                                    JitContextLayout.ensureInit();
+                                    const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+                                    const ctx_addr2 = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+                                    break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr2);
+                                };
+                                const call_quot_fn = if (state.aot_mode)
+                                    state.call_quotation_fn
+                                else
+                                    c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
+                                const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
+                                emitCallbackPostCheck(state, fb_result, state.error_propagate_status);
+                            }
+                            const end_fallback = c._ir_END(ctx);
+
+                            // Hot path: compiled quotation via code_ptr.
+                            c._ir_IF_FALSE(ctx, if_null);
+                            {
+                                // sp points past the copies (no quotation on stack).
+                                const hot_sp_const = c.ir_const_addr(ctx, sp.*);
+                                const hot_sp_val = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, hot_sp_const);
+                                c._ir_STORE(ctx, state.sp_ptr, hot_sp_val);
+
+                                const call_result = if (state.aot_mode)
+                                    c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
+                                else
+                                    c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
+                                emitCallbackPostCheck(state, call_result, call_result);
+                            }
+                            const end_compiled = c._ir_END(ctx);
+
+                            c._ir_MERGE_2(ctx, end_fallback, end_compiled);
+
+                            if (state.refresh_stack_fn != c.IR_UNUSED) {
+                                refreshCachedStackPointer(state);
+                            }
+
+                            // Quotation consumed 2 copies and pushed 1 result.
+                            // Result is at physical slot output_slot + 2.
+                            const cond_ref = emitSlotTruthiness(ctx, state.base_addr, output_slot + 2, state);
+
+                            const if_ref = c._ir_IF(ctx, cond_ref);
+
+                            c._ir_IF_TRUE(ctx, if_ref);
+                            const true_end = c._ir_END(ctx);
+
+                            c._ir_IF_FALSE(ctx, if_ref);
+                            emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot);
+                            const false_end = c._ir_END(ctx);
+
+                            c._ir_MERGE_2(ctx, true_end, false_end);
+
+                            // Write final sp.
+                            const final_sp_const = c.ir_const_addr(ctx, output_slot + 1);
+                            const final_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, final_sp_const);
+                            c._ir_STORE(ctx, state.sp_ptr, final_sp);
+
+                            sp.* = output_slot + 1;
+                            stack[output_slot] = .{ .raw_at_slot = output_slot };
+                        },
+                        else => {
+                            state.not_compilable_reason = .quotation_reification;
+                            return IrCodegenError.NotCompilable;
+                        },
+                    }
                 } else if (isBinaryOp(name)) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     sp.* -= 2;
@@ -4954,12 +5234,22 @@ fn emitWordCAotPass(
         }
     }
 
-    compileInstructions(&state, instructions, &stack_buf, &sp) catch |err| {
-        if (err == IrCodegenError.NotCompilable) {
-            if (nc_reason_out) |ro| ro.* = state.not_compilable_reason;
-        }
-        return err;
-    };
+    // Built-in word bodies: emit custom IR instead of compiling the body.
+    if (std.mem.eql(u8, name, "choose")) {
+        emitChooseBuiltin(&state, &stack_buf, &sp) catch |err| {
+            if (err == IrCodegenError.NotCompilable) {
+                if (nc_reason_out) |ro| ro.* = state.not_compilable_reason;
+            }
+            return err;
+        };
+    } else {
+        compileInstructions(&state, instructions, &stack_buf, &sp) catch |err| {
+            if (err == IrCodegenError.NotCompilable) {
+                if (nc_reason_out) |ro| ro.* = state.not_compilable_reason;
+            }
+            return err;
+        };
+    }
 
     if (state.diverged) {
         c._ir_RETURN(&ctx, ok_status);

@@ -1,0 +1,4 @@
+3 5 [ < ] choose .
+5 3 [ < ] choose .
+3 5 min .
+3 5 max .
