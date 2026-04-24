@@ -91,103 +91,71 @@ pub const primitives = [_]Primitive{
     .{ .name = ">", .stack_effect = "a b -- ?", .doc = "Greater than.", .func = nativeGt },
 };
 
-/// + ( a b -- a+b ) - Add two numbers
+const ArithOp = enum { add, sub, mul };
+
+fn bignumOp(comptime op: ArithOp, ba: *BigIntManaged, bb: *BigIntManaged) !void {
+    switch (op) {
+        .add => try ba.add(ba, bb),
+        .sub => try ba.sub(ba, bb),
+        .mul => try ba.mul(ba, bb),
+    }
+}
+
+fn binaryArithOp(ctx: *Context, comptime op: ArithOp) anyerror!void {
+    const op_name = switch (op) {
+        .add => "+",
+        .sub => "-",
+        .mul => "*",
+    };
+    if (try dispatch_helpers.tryDispatchBinary(ctx, op_name)) return;
+    const b = try ctx.stack.pop();
+    const a = try ctx.stack.pop();
+    if (a == .fixnum and b == .fixnum) {
+        const result = switch (op) {
+            .add => @addWithOverflow(a.fixnum, b.fixnum),
+            .sub => @subWithOverflow(a.fixnum, b.fixnum),
+            .mul => @mulWithOverflow(a.fixnum, b.fixnum),
+        };
+        if (result[1] != 0) {
+            const alloc = ctx.arena.allocator();
+            var ba = try BigIntManaged.initSet(alloc, a.fixnum);
+            var bb = try BigIntManaged.initSet(alloc, b.fixnum);
+            try bignumOp(op, &ba, &bb);
+            bb.deinit();
+            try ctx.stack.push(demoteBignum(ba));
+        } else {
+            try ctx.stack.push(.{ .fixnum = result[0] });
+        }
+    } else if ((a == .bignum or a == .fixnum) and (b == .bignum or b == .fixnum)) {
+        const alloc = ctx.arena.allocator();
+        var ba = try ensureBignum(alloc, a);
+        var bb = try ensureBignum(alloc, b);
+        try bignumOp(op, &ba, &bb);
+        bb.deinit();
+        try ctx.stack.push(demoteBignum(ba));
+    } else if (isNativeNumeric(a) and isNativeNumeric(b)) {
+        const alloc = ctx.arena.allocator();
+        const fa = valToFloat(alloc, a);
+        const fb = valToFloat(alloc, b);
+        try ctx.stack.push(.{ .float = switch (op) {
+            .add => fa + fb,
+            .sub => fa - fb,
+            .mul => fa * fb,
+        } });
+    } else {
+        helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
+        return error.TypeMismatch;
+    }
+}
+
 pub fn nativeAdd(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "+")) return;
-    const b = try ctx.stack.pop();
-    const a = try ctx.stack.pop();
-    if (a == .fixnum and b == .fixnum) {
-        const result = @addWithOverflow(a.fixnum, b.fixnum);
-        if (result[1] != 0) {
-            const alloc = ctx.arena.allocator();
-            var ba = try BigIntManaged.initSet(alloc, a.fixnum);
-            var bb = try BigIntManaged.initSet(alloc, b.fixnum);
-            try ba.add(&ba, &bb);
-            bb.deinit();
-            try ctx.stack.push(demoteBignum(ba));
-        } else {
-            try ctx.stack.push(.{ .fixnum = result[0] });
-        }
-    } else if ((a == .bignum or a == .fixnum) and (b == .bignum or b == .fixnum)) {
-        const alloc = ctx.arena.allocator();
-        var ba = try ensureBignum(alloc, a);
-        var bb = try ensureBignum(alloc, b);
-        try ba.add(&ba, &bb);
-        bb.deinit();
-        try ctx.stack.push(demoteBignum(ba));
-    } else if (isNativeNumeric(a) and isNativeNumeric(b)) {
-        const alloc = ctx.arena.allocator();
-        try ctx.stack.push(.{ .float = valToFloat(alloc, a) + valToFloat(alloc, b) });
-    } else {
-        helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
-        return error.TypeMismatch;
-    }
+    return binaryArithOp(ctx, .add);
 }
-
-/// - ( a b -- a-b ) - Subtract: a minus b
 pub fn nativeSub(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "-")) return;
-    const b = try ctx.stack.pop();
-    const a = try ctx.stack.pop();
-    if (a == .fixnum and b == .fixnum) {
-        const result = @subWithOverflow(a.fixnum, b.fixnum);
-        if (result[1] != 0) {
-            const alloc = ctx.arena.allocator();
-            var ba = try BigIntManaged.initSet(alloc, a.fixnum);
-            var bb = try BigIntManaged.initSet(alloc, b.fixnum);
-            try ba.sub(&ba, &bb);
-            bb.deinit();
-            try ctx.stack.push(demoteBignum(ba));
-        } else {
-            try ctx.stack.push(.{ .fixnum = result[0] });
-        }
-    } else if ((a == .bignum or a == .fixnum) and (b == .bignum or b == .fixnum)) {
-        const alloc = ctx.arena.allocator();
-        var ba = try ensureBignum(alloc, a);
-        var bb = try ensureBignum(alloc, b);
-        try ba.sub(&ba, &bb);
-        bb.deinit();
-        try ctx.stack.push(demoteBignum(ba));
-    } else if (isNativeNumeric(a) and isNativeNumeric(b)) {
-        const alloc = ctx.arena.allocator();
-        try ctx.stack.push(.{ .float = valToFloat(alloc, a) - valToFloat(alloc, b) });
-    } else {
-        helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
-        return error.TypeMismatch;
-    }
+    return binaryArithOp(ctx, .sub);
 }
-
-/// * ( a b -- a*b ) - Multiply two numbers
 pub fn nativeMul(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "*")) return;
-    const b = try ctx.stack.pop();
-    const a = try ctx.stack.pop();
-    if (a == .fixnum and b == .fixnum) {
-        const result = @mulWithOverflow(a.fixnum, b.fixnum);
-        if (result[1] != 0) {
-            const alloc = ctx.arena.allocator();
-            var ba = try BigIntManaged.initSet(alloc, a.fixnum);
-            var bb = try BigIntManaged.initSet(alloc, b.fixnum);
-            try ba.mul(&ba, &bb);
-            bb.deinit();
-            try ctx.stack.push(demoteBignum(ba));
-        } else {
-            try ctx.stack.push(.{ .fixnum = result[0] });
-        }
-    } else if ((a == .bignum or a == .fixnum) and (b == .bignum or b == .fixnum)) {
-        const alloc = ctx.arena.allocator();
-        var ba = try ensureBignum(alloc, a);
-        var bb = try ensureBignum(alloc, b);
-        try ba.mul(&ba, &bb);
-        bb.deinit();
-        try ctx.stack.push(demoteBignum(ba));
-    } else if (isNativeNumeric(a) and isNativeNumeric(b)) {
-        const alloc = ctx.arena.allocator();
-        try ctx.stack.push(.{ .float = valToFloat(alloc, a) * valToFloat(alloc, b) });
-    } else {
-        helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
-        return error.TypeMismatch;
-    }
+    return binaryArithOp(ctx, .mul);
 }
 
 /// / ( a b -- a/b ) - Division
@@ -269,25 +237,24 @@ pub fn nativeMod(ctx: *Context) anyerror!void {
     }
 }
 
-/// +% ( a b -- a+b ) - Add two fixnums with wraparound on overflow
+fn wrapArithOp(ctx: *Context, comptime op: ArithOp) anyerror!void {
+    const b = try popFixnum(ctx);
+    const a = try popFixnum(ctx);
+    try ctx.stack.push(.{ .fixnum = switch (op) {
+        .add => a +% b,
+        .sub => a -% b,
+        .mul => a *% b,
+    } });
+}
+
 pub fn nativeAddWrap(ctx: *Context) anyerror!void {
-    const b = try popFixnum(ctx);
-    const a = try popFixnum(ctx);
-    try ctx.stack.push(.{ .fixnum = a +% b });
+    return wrapArithOp(ctx, .add);
 }
-
-/// -% ( a b -- a-b ) - Subtract with wraparound on overflow
 pub fn nativeSubWrap(ctx: *Context) anyerror!void {
-    const b = try popFixnum(ctx);
-    const a = try popFixnum(ctx);
-    try ctx.stack.push(.{ .fixnum = a -% b });
+    return wrapArithOp(ctx, .sub);
 }
-
-/// *% ( a b -- a*b ) - Multiply with wraparound on overflow
 pub fn nativeMulWrap(ctx: *Context) anyerror!void {
-    const b = try popFixnum(ctx);
-    const a = try popFixnum(ctx);
-    try ctx.stack.push(.{ .fixnum = a *% b });
+    return wrapArithOp(ctx, .mul);
 }
 
 /// = ( a b -- ? ) - Equality comparison

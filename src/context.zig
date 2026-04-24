@@ -1237,14 +1237,91 @@ pub const Context = struct {
         }
     }
 
+    /// End benchmark profiling, capture the call stack, pop the call frame,
+    /// and propagate the error.
+    fn wordErrorCleanup(self: *Context, name: []const u8, err: anyerror) anyerror {
+        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+        self.captureCallStackOnError(err);
+        self.popCallFrame();
+        return err;
+    }
+
+    /// Validate the stack effect (if declared), end benchmark profiling with
+    /// peak-depth update, and pop the call frame.
+    fn wordSuccessCleanup(self: *Context, name: []const u8, stack_effect: ?StackEffect) !void {
+        if (stack_effect) |effect| {
+            const depth_after = self.stack.depth();
+            if (depth_after < effect.outputs.len) {
+                self.captureStackEffectMismatch(name, effect, depth_after);
+                if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+                self.popCallFrame();
+                return primitives.InterpreterError.StackEffectMismatch;
+            }
+        }
+        if (self.benchmark) |b| {
+            b.endWordProfile(self.allocator, name);
+            b.updatePeakStackDepth(self.stack.depth());
+        }
+        self.popCallFrame();
+    }
+
+    /// Pop a module deps local frame, emitting a trace log when module
+    /// tracing is enabled.
+    fn popModuleDepsFrameTraced(self: *Context, mod: *const value_mod.Module) void {
+        if (self.trace.trace_modules) {
+            var tw = trace_mod.TraceWriter.init();
+            trace_mod.traceModuleDepsPop(&tw, mod.name);
+        }
+        self.popLocalFrame();
+    }
+
+    /// Emit trace output for word execution, resolve source, and scope dump.
+    fn traceWordExecution(self: *Context, name: []const u8, instr: Instruction) void {
+        if (self.trace.trace_words and trace_mod.matchesPattern(name, self.trace.trace_words_pattern)) {
+            var tw = trace_mod.TraceWriter.init();
+            trace_mod.traceWord(&tw, name, self.current_source, instr.line, &self.stack);
+        }
+        if (self.trace.trace_resolve and trace_mod.matchesPattern(name, self.trace.trace_resolve_pattern)) {
+            var tw = trace_mod.TraceWriter.init();
+            trace_mod.traceResolve(&tw, name, self.lookupWordSource(name));
+        }
+        if (self.trace.dump_scope) |scope_word| {
+            if (std.mem.eql(u8, name, scope_word)) {
+                self.dumpScope(name, self.current_source, instr.line);
+            }
+        }
+    }
+
+    /// When a native word in non-tail position propagated a tail call flag
+    /// via executeQuotationInline, consume it: pop the dangling call frame
+    /// and execute the deferred instructions normally. This prevents invalid
+    /// call stack frames from accumulating without bound.
+    fn consumePropagatedTailCall(self: *Context, name: []const u8) anyerror!void {
+        const tci = self.tail_call_instructions orelse return;
+        self.popCallFrame();
+        self.tail_call_instructions = null;
+
+        const tci_module = self.tail_call_module;
+        self.tail_call_module = null;
+
+        if (tci_module) |mod| {
+            self.pushModuleDepsFrame(mod) catch |e| return self.wordErrorCleanup(name, e);
+        }
+
+        self.executeQuotation(.{ .instructions = tci }) catch |err| {
+            if (tci_module) |mod| self.popModuleDepsFrameTraced(mod);
+            return self.wordErrorCleanup(name, err);
+        };
+
+        if (tci_module) |mod| self.popModuleDepsFrameTraced(mod);
+    }
+
     /// Execute raw instructions without stack-effect validation.
     ///
     /// Supports generic word dispatch.
     ///
     /// Supports tail call optimization: i.e., when the last instruction is a
     /// compound `call_word`, sets `tail_call_instructions` instead of recursing.
-    ///
-    /// TODO(ripta): Split into smaller functions for readability, cause holy cow.
     fn executeInstructions(self: *Context, instructions: []const Instruction) anyerror!void {
         for (instructions, 0..) |instr, idx| {
             if (self.debugger) |dbg| {
@@ -1258,48 +1335,26 @@ pub const Context = struct {
             switch (instr.op) {
                 .push_literal => |val| {
                     try self.stack.push(val);
-                    // Benchmark: count push_literal and update stack depth
                     if (self.benchmark) |b| {
                         b.recordPushLiteral();
                         b.updatePeakStackDepth(self.stack.depth());
                     }
                 },
                 .call_word => |name| {
-                    // Benchmark: count call_word and begin allocation profile
                     if (self.benchmark) |b| {
                         b.recordCallWord();
                         b.beginWordProfile();
                     }
 
                     if (self.lookupWord(name)) |word| {
-                        // Push call frame before execution
                         self.pushCallFrame(name, instr.line, instr.column);
+                        self.traceWordExecution(name, instr);
 
-                        if (self.trace.trace_words and trace_mod.matchesPattern(name, self.trace.trace_words_pattern)) {
-                            var tw = trace_mod.TraceWriter.init();
-                            trace_mod.traceWord(&tw, name, self.current_source, instr.line, &self.stack);
-                        }
-                        if (self.trace.trace_resolve and trace_mod.matchesPattern(name, self.trace.trace_resolve_pattern)) {
-                            var tw = trace_mod.TraceWriter.init();
-                            trace_mod.traceResolve(&tw, name, self.lookupWordSource(name));
-                        }
-                        if (self.trace.dump_scope) |scope_word| {
-                            if (std.mem.eql(u8, name, scope_word)) {
-                                self.dumpScope(name, self.current_source, instr.line);
-                            }
-                        }
-
-                        // Validate quotation parameters against declared effects
                         if (word.stack_effect) |effect| {
-                            self.validateParameterEffects(&effect) catch |err| {
-                                if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
-                                self.captureCallStackOnError(err);
-                                self.popCallFrame();
-                                return err;
-                            };
+                            self.validateParameterEffects(&effect) catch |err|
+                                return self.wordErrorCleanup(name, err);
                         }
 
-                        // Dispatch generic words, which are compound words with `generic` marker
                         if (word.action == .compound) {
                             const has_generic = blk: {
                                 for (word.markers) |mk| {
@@ -1309,90 +1364,45 @@ pub const Context = struct {
                             };
 
                             if (has_generic) {
-                                const dispatched = dispatch_helpers.tryDispatchGeneric(self, name) catch |err| {
-                                    if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
-                                    self.captureCallStackOnError(err);
-                                    self.popCallFrame();
-                                    return err;
-                                };
+                                const dispatched = dispatch_helpers.tryDispatchGeneric(self, name) catch |err|
+                                    return self.wordErrorCleanup(name, err);
 
                                 if (dispatched) {
-                                    if (self.benchmark) |b| {
-                                        b.endWordProfile(self.allocator, name);
-                                        b.updatePeakStackDepth(self.stack.depth());
-                                    }
-                                    self.popCallFrame();
-                                    continue; // NOTE: Advance to next instruction
+                                    try self.wordSuccessCleanup(name, null);
+                                    continue;
                                 }
 
-                                // No method found check if default body exists
-                                const instrs = word.action.compound;
-                                if (instrs.len == 0) {
+                                if (word.action.compound.len == 0) {
                                     self.pending_error_message = "no method found for given argument types";
-                                    self.captureCallStackOnError(error.TypeError);
-                                    if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
-                                    self.popCallFrame();
-                                    return error.TypeError;
+                                    return self.wordErrorCleanup(name, error.TypeError);
                                 }
-
-                                // NOTE: Fall through to execute default body
                             }
                         }
 
                         if (is_last) {
                             switch (word.action) {
                                 .compound => |instrs| {
-                                    // Tail call: flag instead of recurse
-                                    // leaving the call frame on the stack; executeQuotation will pop it
                                     if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                                     self.tail_call_instructions = instrs;
                                     self.tail_call_module = word.source_module;
                                     return;
                                 },
                                 .native => |func| {
-                                    // Native in tail position: execute normally, then
-                                    // let any tail_call_instructions set inside propagate
                                     self.tail_call_instructions = null;
-                                    const result = func(self);
-                                    if (result) |_| {
-                                        if (word.stack_effect) |effect| {
-                                            const depth_after = self.stack.depth();
-                                            if (depth_after < effect.outputs.len) {
-                                                self.captureStackEffectMismatch(name, effect, depth_after);
-                                                if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
-                                                self.popCallFrame();
-                                                return primitives.InterpreterError.StackEffectMismatch;
-                                            }
-                                        }
-                                        if (self.benchmark) |b| {
-                                            b.endWordProfile(self.allocator, name);
-                                            b.updatePeakStackDepth(self.stack.depth());
-                                        }
-                                        self.popCallFrame();
+                                    if (func(self)) |_| {
+                                        try self.wordSuccessCleanup(name, word.stack_effect);
                                     } else |err| {
-                                        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
-                                        self.captureCallStackOnError(err);
-                                        self.popCallFrame();
-                                        return err;
+                                        return self.wordErrorCleanup(name, err);
                                     }
                                 },
                             }
                         } else {
-                            // Non-last instruction: execute normally.
-                            // Compound words go through executeQuotation to get
-                            // the TCO loop, so internal tail calls are consumed.
                             const result = blk: {
                                 if (word.source_module) |mod| {
                                     switch (word.action) {
                                         .compound => |instrs| {
                                             self.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
-                                            defer {
-                                                if (self.trace.trace_modules) {
-                                                    var tw = trace_mod.TraceWriter.init();
-                                                    trace_mod.traceModuleDepsPop(&tw, mod.name);
-                                                }
-                                                self.popLocalFrame();
-                                            }
+                                            defer self.popModuleDepsFrameTraced(mod);
                                             break :blk self.executeQuotation(.{ .instructions = instrs });
                                         },
                                         .native => |func| break :blk func(self),
@@ -1406,84 +1416,19 @@ pub const Context = struct {
                             };
 
                             if (result) |_| {
-                                // NOTE(ripta): Special-handling - when a native word (e.g., `if`)
-                                //              propagated a tail call flag via executeQuotationInline,
-                                //              but we're not in tail position, consume it: pop the dangling
-                                //              call frame and execute the deferred instructions normally.
-                                //              This prevents invalid call stack frames from accumulating,
-                                //              eventually growing without bound.
-                                if (self.tail_call_instructions) |tci| {
-                                    self.popCallFrame();
-                                    self.tail_call_instructions = null;
-
-                                    const tci_module = self.tail_call_module;
-                                    self.tail_call_module = null;
-
-                                    if (tci_module) |mod| {
-                                        self.pushModuleDepsFrame(mod) catch |e| {
-                                            if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
-                                            self.popCallFrame();
-                                            self.captureCallStackOnError(e);
-                                            return e;
-                                        };
-                                    }
-
-                                    self.executeQuotation(.{ .instructions = tci }) catch |err2| {
-                                        if (tci_module) |tm| {
-                                            if (self.trace.trace_modules) {
-                                                var tw = trace_mod.TraceWriter.init();
-                                                trace_mod.traceModuleDepsPop(&tw, tm.name);
-                                            }
-                                            self.popLocalFrame();
-                                        }
-                                        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
-                                        self.popCallFrame(); // pop our own frame
-                                        self.captureCallStackOnError(err2);
-                                        return err2;
-                                    };
-
-                                    if (tci_module) |tm| {
-                                        if (self.trace.trace_modules) {
-                                            var tw = trace_mod.TraceWriter.init();
-                                            trace_mod.traceModuleDepsPop(&tw, tm.name);
-                                        }
-                                        self.popLocalFrame();
-                                    }
-                                }
-
-                                // Validate stack effect if declared
-                                if (word.stack_effect) |effect| {
-                                    const depth_after = self.stack.depth();
-                                    if (depth_after < effect.outputs.len) {
-                                        self.captureStackEffectMismatch(name, effect, depth_after);
-                                        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
-                                        self.popCallFrame();
-                                        return primitives.InterpreterError.StackEffectMismatch;
-                                    }
-                                }
-
-                                if (self.benchmark) |b| {
-                                    b.endWordProfile(self.allocator, name);
-                                    b.updatePeakStackDepth(self.stack.depth());
-                                }
-                                self.popCallFrame();
+                                try self.consumePropagatedTailCall(name);
+                                try self.wordSuccessCleanup(name, word.stack_effect);
                             } else |err| {
-                                if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
-                                self.captureCallStackOnError(err);
-                                self.popCallFrame();
-                                return err;
+                                return self.wordErrorCleanup(name, err);
                             }
                         }
                     } else if (isQualifiedName(name)) {
-                        // Try qualified name resolution, e.g., math.double
                         self.executeQualifiedName(name, instr.line, instr.column) catch |err| {
                             self.pushCallFrame(name, instr.line, instr.column);
                             self.captureCallStackOnError(err);
                             self.popCallFrame();
                             return err;
                         };
-
-                        // Benchmark: update stack depth after qualified word execution
                         if (self.benchmark) |b| {
                             b.updatePeakStackDepth(self.stack.depth());
                         }
@@ -1492,7 +1437,6 @@ pub const Context = struct {
                             var tw = trace_mod.TraceWriter.init();
                             trace_mod.traceResolve(&tw, name, .not_found);
                         }
-                        // Unknown word - push frame, capture, pop, return error
                         self.pushCallFrame(name, instr.line, instr.column);
                         self.captureCallStackOnError(ExecutionError.UnknownWord);
                         self.popCallFrame();
