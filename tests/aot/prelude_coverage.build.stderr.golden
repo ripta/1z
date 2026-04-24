@@ -67,8 +67,7 @@ Prelude compilation: 210/301 words compiled (69.8%)
   word 'parse-quotation' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'cond' cannot be compiled
-      NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
+      NC.11: instruction pre-scan rejected the word before compilation started
   word 'make-result:ok' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'unmake-word-info' cannot be compiled
