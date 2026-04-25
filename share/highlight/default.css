@@ -1,0 +1,20 @@
+/* default.css -- Default theme for 1z syntax highlighting.
+ *
+ * Use with the HTML output from lib/highlight.1z:
+ *   use "highlight" ;
+ *   "foo: [ 1 + ] ;" highlight-html print-line
+ */
+
+.token-parse-time   { color: #8b5cf6; font-weight: bold; }
+.token-flow         { color: #8b5cf6; }
+.token-error        { color: #dc2626; font-weight: bold; }
+.token-iteration    { color: #0891b2; }
+.token-combinator   { color: #ca8a04; }
+.token-definition   { color: #2563eb; font-weight: bold; }
+.token-comment      { color: #6b7280; }
+.token-doc-comment  { color: #6b7280; font-style: italic; }
+.token-string       { color: #16a34a; }
+.token-number       { color: #2563eb; }
+.token-bracket      { font-weight: bold; }
+.token-stack-effect { color: #6b7280; }
+.token-punctuation  { color: #6b7280; }

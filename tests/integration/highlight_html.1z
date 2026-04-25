@@ -1,0 +1,115 @@
+use "testing" ;
+use "highlight" ;
+
+\ --- Test helpers ---
+
+\ Build an HTML span: <span class="CLASS">VALUE</span>
+(html-span): ( value class -- str ) [
+  "<span class=\"" swap #append "\">" #append
+  swap #append
+  "</span>" #append
+] ;
+
+\ Check whether a CSS class span appears in a string.
+(has-span): ( str class -- ? ) [
+  "<span class=\"" swap #append "\">" #append
+  #index-of f = not
+] ;
+
+"empty input" test-section
+"" highlight-html "" "empty string" assert=
+
+"whitespace passthrough" test-section
+" " highlight-html " " "single space" assert=
+"  " highlight-html "  " "double space" assert=
+
+"HTML escaping" test-section
+\ Words containing HTML-special characters get no span (default category),
+\ so the output is just the escaped text.
+"x<y" highlight-html "x&lt;y" "less-than escaped" assert=
+"x>y" highlight-html "x&gt;y" "greater-than escaped" assert=
+"x&y" highlight-html "x&amp;y" "ampersand escaped" assert=
+"a<b>c&d" highlight-html "a&lt;b&gt;c&amp;d" "multiple escapes" assert=
+
+"escaping inside spans" test-section
+"\\ x < y" highlight-html
+"\\ x &lt; y" "token-comment" (html-span)
+"comment escapes angle brackets" assert=
+
+"comments" test-section
+"\\ a comment" highlight-html "\\ a comment" "token-comment" (html-span) "comment span" assert=
+
+"doc-comments" test-section
+"\\\\ a doc comment" highlight-html "\\\\ a doc comment" "token-doc-comment" (html-span) "doc-comment span" assert=
+
+"strings" test-section
+"\"hello\"" highlight-html "\"hello\"" "token-string" (html-span) "string span" assert=
+
+"numbers" test-section
+"42" highlight-html "42" "token-number" (html-span) "number span" assert=
+"3.14" highlight-html "3.14" "token-number" (html-span) "float span" assert=
+
+"definitions" test-section
+"foo:" highlight-html "foo:" "token-definition" (html-span) "definition span" assert=
+
+"brackets" test-section
+"[" highlight-html "[" "token-bracket" (html-span) "open bracket span" assert=
+"]" highlight-html "]" "token-bracket" (html-span) "close bracket span" assert=
+
+"stack effects" test-section
+"( a -- b )" highlight-html "( a -- b )" "token-stack-effect" (html-span) "stack-effect span" assert=
+
+"semicolons" test-section
+"x ;" highlight-html "token-punctuation" (has-span) "semicolon has span" assert-true
+
+"brace forms" test-section
+"struct{" highlight-html "struct{" "token-parse-time" (html-span) "struct{ span" assert=
+"H{" highlight-html "H{" "token-parse-time" (html-span) "H{ span" assert=
+"enum{" highlight-html "enum{" "token-parse-time" (html-span) "enum{ span" assert=
+
+"parse-time words" test-section
+"if" highlight-html "if" "token-parse-time" (html-span) "if span" assert=
+"use" highlight-html "use" "token-parse-time" (html-span) "use span" assert=
+"const" highlight-html "const" "token-parse-time" (html-span) "const span" assert=
+
+"flow words" test-section
+"cond" highlight-html "cond" "token-flow" (html-span) "cond span" assert=
+"loop" highlight-html "loop" "token-flow" (html-span) "loop span" assert=
+"while" highlight-html "while" "token-flow" (html-span) "while span" assert=
+
+"error words" test-section
+"recover" highlight-html "recover" "token-error" (html-span) "recover span" assert=
+"try" highlight-html "try" "token-error" (html-span) "try span" assert=
+"throw" highlight-html "throw" "token-error" (html-span) "throw span" assert=
+
+"iteration words" test-section
+"each" highlight-html "each" "token-iteration" (html-span) "each span" assert=
+"map" highlight-html "map" "token-iteration" (html-span) "map span" assert=
+"filter" highlight-html "filter" "token-iteration" (html-span) "filter span" assert=
+
+"combinator words" test-section
+"dip" highlight-html "dip" "token-combinator" (html-span) "dip span" assert=
+"keep" highlight-html "keep" "token-combinator" (html-span) "keep span" assert=
+"bi" highlight-html "bi" "token-combinator" (html-span) "bi span" assert=
+
+"unmatched words" test-section
+"dup" highlight-html "dup" "dup has no span" assert=
+"drop" highlight-html "drop" "drop has no span" assert=
+"swap" highlight-html "swap" "swap has no span" assert=
+
+"close brace" test-section
+"}" highlight-html "}" "close brace has no span" assert=
+
+"newline passthrough" test-section
+"\n" highlight-html "\n" "newline passes through" assert=
+
+"default-html-theme" test-section
+default-html-theme comment: @get "token-comment" "theme has comment class" assert=
+
+"full definition" test-section
+"foo: [ 1 + ] ;" highlight-html
+dup "token-definition" (has-span) "definition has span" assert-true
+dup "token-bracket" (has-span) "bracket has span" assert-true
+dup "token-number" (has-span) "number has span" assert-true
+dup "token-punctuation" (has-span) "semicolon has span" assert-true
+drop

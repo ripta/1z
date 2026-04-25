@@ -1,0 +1,144 @@
+Stack: [ ]
+Stack: [ ]
+=== empty input ===
+Stack: [ ]
+PASS: empty string
+Stack: [ ]
+=== whitespace passthrough ===
+Stack: [ ]
+PASS: single space
+Stack: [ ]
+PASS: double space
+Stack: [ ]
+=== HTML escaping ===
+Stack: [ ]
+PASS: less-than escaped
+Stack: [ ]
+PASS: greater-than escaped
+Stack: [ ]
+PASS: ampersand escaped
+Stack: [ ]
+PASS: multiple escapes
+Stack: [ ]
+=== escaping inside spans ===
+Stack: [ ]
+Stack: [ "<span class="token-comment">\ x &lt; y</span>" ]
+Stack: [ "<span class="token-comment">\ x &lt; y</span>" "<span class="token-comment">\ x &lt; y</span>" ]
+PASS: comment escapes angle brackets
+Stack: [ ]
+=== comments ===
+Stack: [ ]
+PASS: comment span
+Stack: [ ]
+=== doc-comments ===
+Stack: [ ]
+PASS: doc-comment span
+Stack: [ ]
+=== strings ===
+Stack: [ ]
+PASS: string span
+Stack: [ ]
+=== numbers ===
+Stack: [ ]
+PASS: number span
+Stack: [ ]
+PASS: float span
+Stack: [ ]
+=== definitions ===
+Stack: [ ]
+PASS: definition span
+Stack: [ ]
+=== brackets ===
+Stack: [ ]
+PASS: open bracket span
+Stack: [ ]
+PASS: close bracket span
+Stack: [ ]
+=== stack effects ===
+Stack: [ ]
+PASS: stack-effect span
+Stack: [ ]
+=== semicolons ===
+Stack: [ ]
+PASS: semicolon has span
+Stack: [ ]
+=== brace forms ===
+Stack: [ ]
+PASS: struct{ span
+Stack: [ ]
+PASS: H{ span
+Stack: [ ]
+PASS: enum{ span
+Stack: [ ]
+=== parse-time words ===
+Stack: [ ]
+PASS: if span
+Stack: [ ]
+PASS: use span
+Stack: [ ]
+PASS: const span
+Stack: [ ]
+=== flow words ===
+Stack: [ ]
+PASS: cond span
+Stack: [ ]
+PASS: loop span
+Stack: [ ]
+PASS: while span
+Stack: [ ]
+=== error words ===
+Stack: [ ]
+PASS: recover span
+Stack: [ ]
+PASS: try span
+Stack: [ ]
+PASS: throw span
+Stack: [ ]
+=== iteration words ===
+Stack: [ ]
+PASS: each span
+Stack: [ ]
+PASS: map span
+Stack: [ ]
+PASS: filter span
+Stack: [ ]
+=== combinator words ===
+Stack: [ ]
+PASS: dip span
+Stack: [ ]
+PASS: keep span
+Stack: [ ]
+PASS: bi span
+Stack: [ ]
+=== unmatched words ===
+Stack: [ ]
+PASS: dup has no span
+Stack: [ ]
+PASS: drop has no span
+Stack: [ ]
+PASS: swap has no span
+Stack: [ ]
+=== close brace ===
+Stack: [ ]
+PASS: close brace has no span
+Stack: [ ]
+=== newline passthrough ===
+Stack: [ ]
+PASS: newline passes through
+Stack: [ ]
+=== default-html-theme ===
+Stack: [ ]
+PASS: theme has comment class
+Stack: [ ]
+=== full definition ===
+Stack: [ ]
+Stack: [ "<span class="token-definition">foo:</span> <span class="token-bracket">[</span> <span class="token-number">1</span> + <span class="token-bracket">]</span> <span class="token-punctuation">;</span>" ]
+PASS: definition has span
+Stack: [ "<span class="token-definition">foo:</span> <span class="token-bracket">[</span> <span class="token-number">1</span> + <span class="token-bracket">]</span> <span class="token-punctuation">;</span>" ]
+PASS: bracket has span
+Stack: [ "<span class="token-definition">foo:</span> <span class="token-bracket">[</span> <span class="token-number">1</span> + <span class="token-bracket">]</span> <span class="token-punctuation">;</span>" ]
+PASS: number has span
+Stack: [ "<span class="token-definition">foo:</span> <span class="token-bracket">[</span> <span class="token-number">1</span> + <span class="token-bracket">]</span> <span class="token-punctuation">;</span>" ]
+PASS: semicolon has span
+Stack: [ "<span class="token-definition">foo:</span> <span class="token-bracket">[</span> <span class="token-number">1</span> + <span class="token-bracket">]</span> <span class="token-punctuation">;</span>" ]
+Stack: [ ]

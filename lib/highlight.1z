@@ -1,13 +1,15 @@
 \ lib/highlight.1z - Syntax highlighting for 1z source code
 \
-\ Tokenizes source code and produces ANSI-colored output.
-\ Uses the 1z-tokens tokenizer to produce a token stream,
-\ maps tokens to highlight categories, and applies ANSI
-\ SGR escape codes from a configurable theme.
+\ Tokenizes source code and produces styled output in ANSI
+\ terminal escape codes or HTML spans. Uses the 1z-tokens
+\ tokenizer to produce a token stream, maps tokens to
+\ highlight categories, and applies styling from a
+\ configurable theme.
 \
 \ Usage:
 \   use "highlight" ;
 \   "foo: [ 1 + ] ;" highlight-ansi print-line
+\   "foo: [ 1 + ] ;" highlight-html print-line
 
 use "scanner" ;
 use "lexer" ;
@@ -20,6 +22,21 @@ use "conversions" ;
 (esc): ( -- str ) [ 27 >char ] ;
 (ansi-reset): ( -- str ) [ (esc) "[0m" #append ] ;
 (ansi-sgr): ( code-str -- escape-str ) [ (esc) "[" #append swap #append "m" #append ] ;
+
+\ --- HTML escape helpers ---
+
+(html-escape-char): ( char -- str ) [
+  dup "&" = [ drop "&amp;" ] [
+    dup "<" = [ drop "&lt;" ] [
+      dup ">" = [ drop "&gt;" ] [
+      ] if
+    ] if
+  ] if
+] ;
+
+(html-escape): ( str -- str ) [
+  >iterator [ (html-escape-char) ] #map #collect "" #join
+] ;
 
 \ --- Word category lookup hashes ---
 \ Token values are strings; convert to symbols with >symbol before @has?.
@@ -131,7 +148,28 @@ use "conversions" ;
   }
 ] ;
 
-\ --- Rendering ---
+\ --- HTML theme ---
+\ Theme maps category symbols to CSS class name strings.
+
+(html-theme-default): const [
+  H{
+    parse-time: "token-parse-time"
+    flow:      "token-flow"
+    error:     "token-error"
+    iteration: "token-iteration"
+    combinator:   "token-combinator"
+    definition:   "token-definition"
+    comment:      "token-comment"
+    doc-comment:  "token-doc-comment"
+    string:       "token-string"
+    number:       "token-number"
+    bracket:      "token-bracket"
+    stack-effect: "token-stack-effect"
+    punctuation:  "token-punctuation"
+  }
+] ;
+
+\ --- ANSI rendering ---
 
 (apply-theme): ( token category theme -- str ) [
   2dup swap @has? [
@@ -158,6 +196,31 @@ use "conversions" ;
   #map #collect "" #join
 ] ;
 
+\ --- HTML rendering ---
+
+(apply-html-theme): ( token category theme -- str ) [
+  2dup swap @has? [
+    swap @get
+    \ token class-name
+    "<span class=\"" swap #append "\">" #append
+    swap value>> (html-escape) #append
+    "</span>" #append
+  ] [
+    drop drop value>> (html-escape)
+  ] if
+] ;
+
+(token>html): ( token theme -- str ) [
+  [ dup (token>category) ] dip
+  (apply-html-theme)
+] ;
+
+(highlight-html-with): ( source-string theme -- html-string ) [
+  swap 1z-tokenize
+  swap [ (token>html) ] curry
+  #map #collect "" #join
+] ;
+
 \ --- Public API ---
 
 \\ Return the default ANSI light color theme hash.
@@ -174,4 +237,12 @@ highlight-ansi: ( source-string -- styled-string ) [
 \\ Highlight 1z source code with ANSI terminal colors using a custom theme.
 highlight-ansi-themed: ( source-string theme -- styled-string ) [
   (highlight-ansi-with)
+] ;
+
+\\ Return the default HTML theme hash (category symbols to CSS class names).
+default-html-theme: ( -- theme ) [ (html-theme-default) ] ;
+
+\\ Highlight 1z source code as HTML spans using the default theme.
+highlight-html: ( source-string -- html-string ) [
+  (html-theme-default) (highlight-html-with)
 ] ;
