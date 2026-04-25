@@ -130,6 +130,32 @@ Stack: [ ]
 Stack: [ ]
 PASS: theme has comment class
 Stack: [ ]
+=== highlight-html-themed ===
+Stack: [ ]
+Stack: [ "<span class="my-comment">\ a comment</span>" ]
+Stack: [ "<span class="my-comment">\ a comment</span>" "<span class="my-comment">\ a comment</span>" ]
+PASS: custom theme applies custom class
+Stack: [ ]
+Stack: [ "<span class="my-number">42</span>" ]
+Stack: [ "<span class="my-number">42</span>" "<span class="my-number">42</span>" ]
+PASS: custom theme applies to numbers
+Stack: [ ]
+=== highlight-html-themed fallback ===
+Stack: [ ]
+Stack: [ "42" ]
+Stack: [ "42" "42" ]
+PASS: unspecified category falls back to plain text
+Stack: [ ]
+=== load-highlight-theme with HTML ===
+Stack: [ ]
+Stack: [ "<span class="hl-comment">\ a comment</span>" ]
+Stack: [ "<span class="hl-comment">\ a comment</span>" "<span class="hl-comment">\ a comment</span>" ]
+PASS: loaded HTML theme applies comment class
+Stack: [ ]
+Stack: [ "<span class="hl-string">"hello"</span>" ]
+Stack: [ "<span class="hl-string">"hello"</span>" "<span class="hl-string">"hello"</span>" ]
+PASS: loaded HTML theme applies string class
+Stack: [ ]
 === full definition ===
 Stack: [ ]
 Stack: [ "<span class="token-definition">foo:</span> <span class="token-bracket">[</span> <span class="token-number">1</span> + <span class="token-bracket">]</span> <span class="token-punctuation">;</span>" ]

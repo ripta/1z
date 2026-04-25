@@ -106,6 +106,29 @@ use "highlight" ;
 "default-html-theme" test-section
 default-html-theme comment: @get "token-comment" "theme has comment class" assert=
 
+"highlight-html-themed" test-section
+"\\ a comment" H{ comment: "my-comment" } highlight-html-themed
+"\\ a comment" "my-comment" (html-span)
+"custom theme applies custom class" assert=
+
+"42" H{ number: "my-number" } highlight-html-themed
+"42" "my-number" (html-span)
+"custom theme applies to numbers" assert=
+
+"highlight-html-themed fallback" test-section
+"42" H{ comment: "my-comment" } highlight-html-themed
+"42"
+"unspecified category falls back to plain text" assert=
+
+"load-highlight-theme with HTML" test-section
+"\\ a comment" "tests/fixtures/highlight_theme_html.1z" load-highlight-theme highlight-html-themed
+"\\ a comment" "hl-comment" (html-span)
+"loaded HTML theme applies comment class" assert=
+
+"\"hello\"" "tests/fixtures/highlight_theme_html.1z" load-highlight-theme highlight-html-themed
+"\"hello\"" "hl-string" (html-span)
+"loaded HTML theme applies string class" assert=
+
 "full definition" test-section
 "foo: [ 1 + ] ;" highlight-html
 dup "token-definition" (has-span) "definition has span" assert-true

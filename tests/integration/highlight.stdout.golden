@@ -131,6 +131,29 @@ PASS: light theme uses 37 for comments
 Stack: [ ]
 PASS: dark theme uses 90 for comments
 Stack: [ ]
+=== highlight-ansi-themed fallback ===
+Stack: [ ]
+Stack: [ "42" ]
+Stack: [ "42" "42" ]
+PASS: unspecified category falls back to plain text
+Stack: [ ]
+=== load-highlight-theme ===
+Stack: [ ]
+Stack: [ H{ string: "31" parse-time: "1;33" comment: "32" } ]
+PASS: loaded theme is a hash
+Stack: [ H{ string: "31" parse-time: "1;33" comment: "32" } ]
+PASS: loaded theme has comment key
+Stack: [ H{ string: "31" parse-time: "1;33" comment: "32" } ]
+PASS: loaded theme has parse-time key
+Stack: [ ]
+=== load-highlight-theme with ANSI ===
+Stack: [ ]
+Stack: [ "[32m\ a comment[0m" ]
+PASS: loaded ANSI theme applies comment color
+Stack: [ ]
+Stack: [ "[31m"hello"[0m" ]
+PASS: loaded ANSI theme applies string color
+Stack: [ ]
 === full definition ===
 Stack: [ ]
 Stack: [ "[1;34mfoo:[0m [37m( a -- b )[0m [1m[[0m [34m1[0m + [1m][0m [37m;[0m" ]

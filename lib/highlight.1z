@@ -16,6 +16,7 @@ use "lexer" ;
 use "1z-tokens" ;
 use "strings" ;
 use "conversions" ;
+use "config" ;
 
 \ --- ANSI escape helpers ---
 
@@ -245,4 +246,19 @@ default-html-theme: ( -- theme ) [ (html-theme-default) ] ;
 \\ Highlight 1z source code as HTML spans using the default theme.
 highlight-html: ( source-string -- html-string ) [
   (html-theme-default) (highlight-html-with)
+] ;
+
+\\ Highlight 1z source code as HTML spans using a custom theme.
+highlight-html-themed: ( source-string theme -- html-string ) [
+  (highlight-html-with)
+] ;
+
+\\ Load a highlight theme from a data-only config file.
+\\
+\\ The file must contain a single hash mapping category symbols to style
+\\ values (ANSI SGR codes for ANSI themes, CSS class names for HTML themes).
+\\ The returned hash can be passed to highlight-ansi-themed or
+\\ highlight-html-themed.
+load-highlight-theme: ( path -- theme ) [
+  load-config-data config-unwrap
 ] ;
