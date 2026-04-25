@@ -853,12 +853,12 @@ fn emitPerOperationFallback(
     if (resolved.native_fn_ptr) |fn_ptr| {
         const fn_ptr_const = c.ir_const_addr(ctx, fn_ptr);
         const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.native_call_fn, ctx_val, fn_ptr_const);
-        emitCallbackPostCheck(state, call_result, call_result, null);
+        emitCallbackPostCheck(state, call_result, call_result, null, .{ .named = .{ .name = op_name, .line = line } });
     } else {
         const word_id_const = c.ir_const_addr(ctx, resolved.word_id);
         const line_const = c.ir_const_addr(ctx, line);
         const call_result = c._ir_CALL_3(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, line_const);
-        emitCallbackPostCheck(state, call_result, state.error_propagate_status, null);
+        emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
     }
 
     // After the native returns, SP = base_idx + slot_a + 1 and the result
@@ -1316,6 +1316,8 @@ const CompileState = struct {
     overflow_error_fn: c.ir_ref = c.IR_UNUSED,
     div_zero_error_fn: c.ir_ref = c.IR_UNUSED,
     underflow_error_fn: c.ir_ref = c.IR_UNUSED,
+    append_word_trace_frame_fn: c.ir_ref = c.IR_UNUSED,
+    append_builtin_trace_frame_fn: c.ir_ref = c.IR_UNUSED,
     /// Pre-loaded interpreter Context pointer from JitContext. In AOT mode,
     /// this is loaded once in the prologue to avoid the ir_emit_c d_0 bug
     /// where unused LOADs get assigned vreg 0 without a declaration.
@@ -1344,7 +1346,27 @@ const CompileState = struct {
     /// Populated when stack_effect is available and quotation parameters
     /// have fixed (non-row-variable) arities.
     quotation_slots: QuotationSlotMap = .{},
+    inline_trace_frames: [max_inline_trace_frames]InlineTraceFrame = undefined,
+    inline_trace_frame_count: usize = 0,
 };
+
+const BuiltinTraceFrameKind = enum(usize) {
+    if_op = 0,
+    call = 1,
+    recover = 2,
+    cleanup = 3,
+};
+
+const InlineTraceFrame = struct {
+    kind: BuiltinTraceFrameKind,
+    line: usize,
+};
+
+const max_inline_trace_frames = 8;
+
+fn traceFramesEnabled(state: *const CompileState) bool {
+    return state.append_word_trace_frame_fn != c.IR_UNUSED or state.append_builtin_trace_frame_fn != c.IR_UNUSED;
+}
 
 /// Concrete quotation effect for an input slot: the fixed number of values
 /// consumed and produced by calling the quotation at that slot.
@@ -2268,7 +2290,7 @@ fn materializeQuotations(state: *CompileState, stack: *[max_abstract_stack_depth
                     const q_id_const = c.ir_const_addr(ctx, q_id);
 
                     const call_result = c._ir_CALL_5(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, data_len_const, dest_addr, q_id_const);
-                    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null);
+                    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
 
                     stack[qi] = .{ .raw_at_slot = qi };
                 } else {
@@ -2515,7 +2537,7 @@ fn emitResolvedNativeCallback(
             emitParamValidation(state, eff_ptr);
         }
 
-        emitNativeWordCall(state, ctx_val, resolved, line);
+        emitNativeWordCall(state, ctx_val, name, resolved, line);
 
         if (exitFallsThrough(state.exit_kind)) {
             sp.* = sp.* - resolved.input_count + resolved.output_count;
@@ -2649,6 +2671,7 @@ fn emitIndirectQuotCall(
     stack: *[max_abstract_stack_depth]StackEntry,
     sp: *usize,
     slot: usize,
+    line: usize,
 ) IrCodegenError!void {
     const ctx = state.ctx;
     const base_addr = state.base_addr;
@@ -2686,7 +2709,7 @@ fn emitIndirectQuotCall(
         else
             c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
         const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-        emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null);
+        emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .{ .builtin = .{ .kind = .call, .line = line } });
     }
     const end_fallback = c._ir_END(ctx);
 
@@ -2705,7 +2728,7 @@ fn emitIndirectQuotCall(
             c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
         else
             c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-        emitCallbackPostCheck(state, call_result, call_result, null);
+        emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = .call, .line = line } });
     }
     const end_compiled = c._ir_END(ctx);
 
@@ -2757,7 +2780,7 @@ fn emitIfBranchDispatch(
         else
             c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
         const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-        emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null);
+        emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .none);
     }
     const end_fallback = c._ir_END(ctx);
 
@@ -2774,7 +2797,7 @@ fn emitIfBranchDispatch(
             c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
         else
             c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-        emitCallbackPostCheck(state, call_result, call_result, null);
+        emitCallbackPostCheck(state, call_result, call_result, null, .none);
     }
     const end_compiled = c._ir_END(ctx);
 
@@ -2815,7 +2838,7 @@ fn compilePredBodyLoop(
             try compileInstructions(state, body, stack, sp);
         },
         .raw_at_slot => |s| {
-            try emitIndirectQuotCall(state, stack, sp, s);
+            try emitIndirectQuotCall(state, stack, sp, s, 0);
             sp.* += 1; // predicate pushes one value (bool)
             resetStackToPhysical(stack, sp.*);
         },
@@ -2853,7 +2876,7 @@ fn compilePredBodyLoop(
             flushToPhysicalStack(state, stack, sp.*);
         },
         .raw_at_slot => |s| {
-            try emitIndirectQuotCall(state, stack, sp, s);
+            try emitIndirectQuotCall(state, stack, sp, s, 0);
         },
         else => {
             state.not_compilable_reason = .quotation_reification;
@@ -3165,7 +3188,7 @@ fn emitChooseBuiltin(
         else
             c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
         const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-        emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null);
+        emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .none);
     }
     const end_fallback = c._ir_END(ctx);
 
@@ -3180,7 +3203,7 @@ fn emitChooseBuiltin(
             c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
         else
             c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-        emitCallbackPostCheck(state, call_result, call_result, null);
+        emitCallbackPostCheck(state, call_result, call_result, null, .none);
     }
     const end_compiled = c._ir_END(ctx);
 
@@ -3284,7 +3307,7 @@ fn compileInstructions(
                     const str_len_const = c.ir_const_addr(ctx, str_data.len);
 
                     const call_result = c._ir_CALL_3(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, str_len_const);
-                    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null);
+                    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
 
                     // Record the literal for emission in the C preamble.
                     if (state.aot_string_literals) |lits| {
@@ -3334,7 +3357,7 @@ fn compileInstructions(
                     const name_len_const = c.ir_const_addr(ctx, lit_name.len);
 
                     const call_result = c._ir_CALL_3(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, name_len_const);
-                    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null);
+                    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
 
                     if (state.aot_string_literals) |lits| {
                         lits.append(std.heap.page_allocator, .{
@@ -3376,7 +3399,7 @@ fn compileInstructions(
                     const name_len_const = c.ir_const_addr(ctx, struct_name.len);
 
                     const call_result = c._ir_CALL_3(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, name_len_const);
-                    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null);
+                    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
 
                     if (state.aot_string_literals) |lits| {
                         lits.append(std.heap.page_allocator, .{
@@ -3428,7 +3451,7 @@ fn compileInstructions(
                     const data_len_const = c.ir_const_addr(ctx, serialized.len);
 
                     const call_result = c._ir_CALL_3(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, data_len_const);
-                    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null);
+                    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
 
                     // Re-read sp after callback (it pushed one value).
                     _ = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
@@ -3681,6 +3704,14 @@ fn compileInstructions(
                     const if_ref = c._ir_IF(ctx, cond_ref);
                     c._ir_IF_TRUE(ctx, if_ref);
                     state.exit_kind = .falls_through;
+                    const saved_inline_trace_frame_count = state.inline_trace_frame_count;
+                    if (traceFramesEnabled(state) and state.inline_trace_frame_count < max_inline_trace_frames) {
+                        state.inline_trace_frames[state.inline_trace_frame_count] = .{
+                            .kind = .if_op,
+                            .line = instr.line,
+                        };
+                        state.inline_trace_frame_count += 1;
+                    }
                     if (true_body) |tb| {
                         try compileInstructions(state, tb, stack, sp);
                     } else {
@@ -3690,6 +3721,7 @@ fn compileInstructions(
                         sp.* = sp.* - eff.input_count + eff.output_count;
                         resetStackToPhysical(stack, sp.*);
                     }
+                    if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
                     const true_exit_kind = state.exit_kind;
                     var end_true: c.ir_ref = c.IR_UNUSED;
                     // Emit END for any branch that is not a loop back-edge.
@@ -3710,6 +3742,14 @@ fn compileInstructions(
                     c._ir_IF_FALSE(ctx, if_ref);
                     var false_sp = saved_sp;
                     state.exit_kind = .falls_through;
+                    if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
+                    if (traceFramesEnabled(state) and state.inline_trace_frame_count < max_inline_trace_frames) {
+                        state.inline_trace_frames[state.inline_trace_frame_count] = .{
+                            .kind = .if_op,
+                            .line = instr.line,
+                        };
+                        state.inline_trace_frame_count += 1;
+                    }
                     if (false_body) |fb| {
                         try compileInstructions(state, fb, &saved_stack, &false_sp);
                     } else {
@@ -3718,6 +3758,7 @@ fn compileInstructions(
                         false_sp = false_sp - eff.input_count + eff.output_count;
                         resetStackToPhysical(&saved_stack, false_sp);
                     }
+                    if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
                     const false_exit_kind = state.exit_kind;
 
                     // Use loop_diverged (not exitFallsThrough) for branch
@@ -3766,7 +3807,16 @@ fn compileInstructions(
                     const entry = stack[sp.*];
                     switch (entry) {
                         .quotation_body => |body| {
+                            const saved_inline_trace_frame_count = state.inline_trace_frame_count;
+                            if (traceFramesEnabled(state) and state.inline_trace_frame_count < max_inline_trace_frames) {
+                                state.inline_trace_frames[state.inline_trace_frame_count] = .{
+                                    .kind = .call,
+                                    .line = instr.line,
+                                };
+                                state.inline_trace_frame_count += 1;
+                            }
                             try compileInstructions(state, body, stack, sp);
+                            if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
                         },
                         .raw_at_slot => |s| {
                             {
@@ -3800,7 +3850,7 @@ fn compileInstructions(
                                     else
                                         c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
                                     const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-                                    emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null);
+                                    emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .{ .builtin = .{ .kind = .call, .line = instr.line } });
                                 }
                                 const end_fallback = c._ir_END(ctx);
 
@@ -3817,7 +3867,7 @@ fn compileInstructions(
                                         c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
                                     else
                                         c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-                                    emitCallbackPostCheck(state, call_result, call_result, null);
+                                    emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = .call, .line = instr.line } });
                                 }
                                 const end_compiled = c._ir_END(ctx);
 
@@ -3890,7 +3940,7 @@ fn compileInstructions(
                             flushToPhysicalStack(state, stack, sp.*);
                         },
                         .raw_at_slot => |s| {
-                            try emitIndirectQuotCall(state, stack, sp, s);
+                            try emitIndirectQuotCall(state, stack, sp, s, instr.line);
                         },
                         else => {
                             state.not_compilable_reason = .quotation_reification;
@@ -3948,7 +3998,7 @@ fn compileInstructions(
                             try compileInstructions(state, body, stack, sp);
                         },
                         .raw_at_slot => |s| {
-                            try emitIndirectQuotCall(state, stack, sp, s);
+                            try emitIndirectQuotCall(state, stack, sp, s, instr.line);
                             sp.* += 1; // predicate pushes one value (bool)
                             resetStackToPhysical(stack, sp.*);
                         },
@@ -4098,7 +4148,7 @@ fn compileInstructions(
                                 else
                                     c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
                                 const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-                                emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null);
+                                emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .none);
                             }
                             const end_fallback = c._ir_END(ctx);
 
@@ -4114,7 +4164,7 @@ fn compileInstructions(
                                     c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
                                 else
                                     c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-                                emitCallbackPostCheck(state, call_result, call_result, null);
+                                emitCallbackPostCheck(state, call_result, call_result, null, .none);
                             }
                             const end_compiled = c._ir_END(ctx);
 
@@ -4242,7 +4292,8 @@ fn compileInstructions(
                         state.cleanup_fn;
 
                     const call_result = c._ir_CALL_1(ctx, c.IR_I32, callback_fn, ctx_val);
-                    emitCallbackPostCheck(state, call_result, call_result, null);
+                    const frame_kind: BuiltinTraceFrameKind = if (std.mem.eql(u8, name, "recover")) .recover else .cleanup;
+                    emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = frame_kind, .line = instr.line } });
 
                     sp.* -= 2;
                     state.dynamic_call_emitted = true;
@@ -4258,7 +4309,7 @@ fn compileInstructions(
 
                     const callback_fn = if (is_get) state.get_fn else state.with_parameter_fn;
                     const call_result = c._ir_CALL_1(ctx, c.IR_I32, callback_fn, ctx_val);
-                    emitCallbackPostCheck(state, call_result, call_result, null);
+                    emitCallbackPostCheck(state, call_result, call_result, null, .none);
 
                     if (is_get) {
                         // get: pops 1 param, pushes 1 value (net 0)
@@ -4287,7 +4338,7 @@ fn compileInstructions(
 
                     const opcode_const = c.ir_const_addr(ctx, @intFromEnum(opcode));
                     const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.iterator_fn, ctx_val, opcode_const);
-                    emitCallbackPostCheck(state, call_result, call_result, null);
+                    emitCallbackPostCheck(state, call_result, call_result, null, .none);
 
                     sp.* = sp.* - effects.inputs + effects.outputs;
                     resetStackToPhysical(stack, sp.*);
@@ -4455,7 +4506,7 @@ fn compileInstructions(
                             emitParamValidation(state, eff_ptr);
                         }
 
-                        emitNativeWordCall(state, ctx_val, resolved, instr.line);
+                        emitNativeWordCall(state, ctx_val, name, resolved, instr.line);
 
                         if (exitFallsThrough(state.exit_kind)) {
                             // Adjust abstract stack by specialized effect
@@ -4520,7 +4571,7 @@ fn compileInstructions(
                             const word_id_const = c.ir_const_addr(ctx, resolved.word_id);
                             const line_const = c.ir_const_addr(ctx, instr.line);
                             const fb_result = c._ir_CALL_3(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val2, word_id_const, line_const);
-                            emitCallbackPostCheck(state, fb_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null);
+                            emitCallbackPostCheck(state, fb_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
                         }
                         const end_fallback = if (resolved.never_returns) c.IR_UNUSED else c._ir_END(ctx);
 
@@ -4528,7 +4579,7 @@ fn compileInstructions(
                         c._ir_IF_FALSE(ctx, if_null);
                         {
                             const call_result = c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr);
-                            emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null);
+                            emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, .{ .named = .{ .name = name, .line = instr.line } });
                         }
                         if (resolved.never_returns) {
                             state.exit_kind = .terminal_return;
@@ -4868,6 +4919,8 @@ fn compileWordPass(
     const overflow_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitOverflowError));
     const div_zero_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitDivisionByZeroError));
     const underflow_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitStackUnderflowError));
+    const append_word_trace_frame_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitAppendNamedTraceFrame));
+    const append_builtin_trace_frame_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitAppendBuiltinTraceFrame));
 
     // jitRefreshStack is emitted unconditionally: any callback in the body
     // may reallocate ctx.stack, so emitCallbackPostCheck refreshes regardless
@@ -4989,6 +5042,8 @@ fn compileWordPass(
         .overflow_error_fn = overflow_error_fn,
         .div_zero_error_fn = div_zero_error_fn,
         .underflow_error_fn = underflow_error_fn,
+        .append_word_trace_frame_fn = append_word_trace_frame_fn,
+        .append_builtin_trace_frame_fn = append_builtin_trace_frame_fn,
         .peak_sp = @intCast(input_count),
         .stack_effect = stack_effect,
         .quotation_slots = buildQuotationSlotMap(stack_effect),
@@ -5148,10 +5203,14 @@ pub fn emitWordC(
     const error_propagate_status = c.ir_const_i32(&ctx, 2);
 
     const proto_1arg = c.ir_proto_1(&ctx, 0, c.IR_I32, c.IR_ADDR);
+    const proto_3arg = c.ir_proto_3(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+    const proto_4arg = c.ir_proto_4(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
     const type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitTypeMismatchError"), proto_1arg);
     const overflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitOverflowError"), proto_1arg);
     const div_zero_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDivisionByZeroError"), proto_1arg);
     const underflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitStackUnderflowError"), proto_1arg);
+    const append_word_trace_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_named_trace_frame"), proto_4arg);
+    const append_builtin_trace_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitAppendBuiltinTraceFrame"), proto_3arg);
 
     const sp_val = c._ir_LOAD(&ctx, c.IR_ADDR, sp_ptr);
 
@@ -5209,6 +5268,8 @@ pub fn emitWordC(
         .overflow_error_fn = overflow_error_fn,
         .div_zero_error_fn = div_zero_error_fn,
         .underflow_error_fn = underflow_error_fn,
+        .append_word_trace_frame_fn = append_word_trace_frame_fn,
+        .append_builtin_trace_frame_fn = append_builtin_trace_frame_fn,
     };
 
     try compileInstructions(&state, instructions, &stack, &sp);
@@ -5238,7 +5299,10 @@ pub fn emitWordC(
         "extern int32_t jitTypeMismatchError(uintptr_t ctx);\n" ++
         "extern int32_t jitOverflowError(uintptr_t ctx);\n" ++
         "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n" ++
-        "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n\n";
+        "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n" ++
+        "extern int32_t jitAppendNamedTraceFrame(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t line);\n" ++
+        "extern int32_t jitAppendBuiltinTraceFrame(uintptr_t ctx, uintptr_t frame_kind, uintptr_t line);\n" ++
+        "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, uintptr_t line) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, line); }\n\n";
     const result = try allocator.alloc(u8, preamble.len + body.len);
     @memcpy(result[0..preamble.len], preamble);
     @memcpy(result[preamble.len..], body);
@@ -5445,7 +5509,6 @@ fn emitWordCAotPass(
     const overflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitOverflowError"), proto_1arg);
     const div_zero_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDivisionByZeroError"), proto_1arg);
     const underflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitStackUnderflowError"), proto_1arg);
-
     const bail_status = c.ir_const_i32(&ctx, 1);
     const ok_status = c.ir_const_i32(&ctx, 0);
     const error_propagate_status = c.ir_const_i32(&ctx, 2);
@@ -5544,6 +5607,8 @@ fn emitWordCAotPass(
         .overflow_error_fn = overflow_error_fn,
         .div_zero_error_fn = div_zero_error_fn,
         .underflow_error_fn = underflow_error_fn,
+        .append_word_trace_frame_fn = c.IR_UNUSED,
+        .append_builtin_trace_frame_fn = c.IR_UNUSED,
         .aot_mode = true,
         .aot_compiled_names = aot_compiled_names,
         .aot_proto_1arg = proto_1arg,
@@ -5692,6 +5757,9 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitOverflowError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitAppendNamedTraceFrame(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t line);\n");
+    try out.appendSlice(allocator, "extern int32_t jitAppendBuiltinTraceFrame(uintptr_t ctx, uintptr_t frame_kind, uintptr_t line);\n");
+    try out.appendSlice(allocator, "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, uintptr_t line) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, line); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPushString(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushSymbol(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushQuotation(uintptr_t ctx, uintptr_t data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id);\n");
@@ -6362,12 +6430,92 @@ fn emitCallbackPreamble(state: *CompileState, sp: usize) c.ir_ref {
 /// unconditional -- cheaper than auditing every callback for push safety,
 /// and keeps the invariant "items_ptr is live after any callback" trivially
 /// maintained as new callbacks are added.
-fn emitCallbackPostCheck(state: *CompileState, call_result: c.ir_ref, return_status: c.ir_ref, terminal_success_status: ?c.ir_ref) void {
+const CurrentTraceFrame = union(enum) {
+    none,
+    named: struct {
+        name: []const u8,
+        line: usize,
+    },
+    builtin: struct {
+        kind: BuiltinTraceFrameKind,
+        line: usize,
+    },
+};
+
+fn emitBuiltinTraceFrame(state: *CompileState, kind: BuiltinTraceFrameKind, line: usize) void {
+    if (state.append_builtin_trace_frame_fn == c.IR_UNUSED) return;
+    const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+        state.preloaded_ctx_val
+    else blk: {
+        JitContextLayout.ensureInit();
+        const ctx_off = c.ir_const_addr(state.ctx, JitContextLayout.ctx_offset);
+        const ctx_addr = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+        break :blk c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
+    };
+    const kind_const = c.ir_const_addr(state.ctx, @intFromEnum(kind));
+    const line_const = c.ir_const_addr(state.ctx, line);
+    _ = c._ir_CALL_3(state.ctx, c.IR_I32, state.append_builtin_trace_frame_fn, ctx_val, kind_const, line_const);
+}
+
+fn emitWordTraceFrame(state: *CompileState, word_name: []const u8, line: usize) void {
+    if (state.append_word_trace_frame_fn == c.IR_UNUSED) return;
+    const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+        state.preloaded_ctx_val
+    else blk: {
+        JitContextLayout.ensureInit();
+        const ctx_off = c.ir_const_addr(state.ctx, JitContextLayout.ctx_offset);
+        const ctx_addr = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+        break :blk c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
+    };
+    const name_ptr = if (state.aot_mode)
+        blk: {
+            const lit_id = if (state.aot_string_literals) |lits| lits.items.len else 0;
+            if (state.aot_string_literals) |lits| {
+                lits.append(std.heap.page_allocator, .{
+                    .data = word_name,
+                    .is_symbol = false,
+                }) catch return;
+            }
+            var sym_buf: [32]u8 = undefined;
+            const sym_name = std.fmt.bufPrint(&sym_buf, "onez_lit_{d}", .{lit_id}) catch unreachable;
+            break :blk c.ir_const_func(state.ctx, c.ir_strl(state.ctx, &sym_buf, sym_name.len), 0);
+        }
+    else
+        c.ir_const_addr(state.ctx, @intFromPtr(word_name.ptr));
+    const name_len_const = c.ir_const_addr(state.ctx, word_name.len);
+    const line_const = c.ir_const_addr(state.ctx, line);
+    _ = c._ir_CALL_4(state.ctx, c.IR_I32, state.append_word_trace_frame_fn, ctx_val, name_ptr, name_len_const, line_const);
+}
+
+fn emitActiveInlineTraceFrames(state: *CompileState) void {
+    var i = state.inline_trace_frame_count;
+    while (i > 0) {
+        i -= 1;
+        const frame = state.inline_trace_frames[i];
+        emitBuiltinTraceFrame(state, frame.kind, frame.line);
+    }
+}
+
+fn emitCallbackPostCheck(
+    state: *CompileState,
+    call_result: c.ir_ref,
+    return_status: c.ir_ref,
+    terminal_success_status: ?c.ir_ref,
+    current_trace_frame: CurrentTraceFrame,
+) void {
     const ctx = state.ctx;
     const zero_status = c.ir_const_i32(ctx, 0);
     const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
     const if_bail = c._ir_IF(ctx, call_failed);
     c._ir_IF_TRUE_cold(ctx, if_bail);
+    if (traceFramesEnabled(state)) {
+        switch (current_trace_frame) {
+            .none => {},
+            .named => |frame| if (frame.line != 0) emitWordTraceFrame(state, frame.name, frame.line),
+            .builtin => |frame| if (frame.line != 0) emitBuiltinTraceFrame(state, frame.kind, frame.line),
+        }
+        emitActiveInlineTraceFrames(state);
+    }
     c._ir_RETURN(ctx, return_status);
     c._ir_IF_FALSE(ctx, if_bail);
 
@@ -6413,24 +6561,24 @@ fn emitSafepointCall(state: *CompileState) void {
         break :blk c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
     };
     const call_result = c._ir_CALL_1(state.ctx, c.IR_I32, state.safepoint_fn, ctx_val);
-    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null);
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
 }
 
 /// Emit a native word call. In JIT mode, calls through jitNativeCall with
 /// the baked function pointer. In AOT mode, calls through jitInterpretedCall
 /// with the word ID since native function pointers are not available at C
 /// compile time.
-fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, resolved: ResolvedWord, line: usize) void {
+fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, resolved: ResolvedWord, line: usize) void {
     const ictx = state.ctx;
     if (state.aot_mode) {
         const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
         const line_const = c.ir_const_addr(ictx, line);
         const call_result = c._ir_CALL_3(ictx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, line_const);
-        emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null);
+        emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
     } else {
         const fn_ptr_const = c.ir_const_addr(ictx, resolved.native_fn_ptr.?);
         const call_result = c._ir_CALL_2(ictx, c.IR_I32, state.native_call_fn, ctx_val, fn_ptr_const);
-        emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null);
+        emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, .{ .named = .{ .name = name, .line = line } });
     }
 }
 
@@ -6446,7 +6594,7 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
             defer std.heap.page_allocator.free(mangled);
             const callee_fn = c.ir_const_func(ictx, c.ir_str(ictx, mangled.ptr), state.aot_proto_1arg);
             const call_result = c._ir_CALL_1(ictx, c.IR_I32, callee_fn, state.jit_ctx_ptr);
-            emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null);
+            emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, .{ .named = .{ .name = name, .line = line } });
             return;
         }
     }
@@ -6454,7 +6602,7 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
     const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
     const line_const = c.ir_const_addr(ictx, line);
     const call_result = c._ir_CALL_3(ictx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, line_const);
-    emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null);
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
 }
 
 /// Emit a parameter effect validation call at the current IR position.
@@ -6472,7 +6620,7 @@ fn emitParamValidation(state: *CompileState, effect_ptr: usize) void {
     };
     const effect_const = c.ir_const_addr(state.ctx, effect_ptr);
     const call_result = c._ir_CALL_2(state.ctx, c.IR_I32, state.validate_params_fn, ctx_val, effect_const);
-    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null);
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
 }
 
 // =============================================================================
@@ -6828,6 +6976,41 @@ fn setJitError(ctx_raw: usize, err: anyerror) i32 {
     return 2;
 }
 
+export fn jitAppendNamedTraceFrame(
+    ctx_raw: usize,
+    name_ptr_raw: usize,
+    name_len_raw: usize,
+    line_raw: usize,
+) callconv(.c) i32 {
+    if (ctx_raw == 0) return 0;
+    if (name_ptr_raw == 0) return 0;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const name_ptr: [*]const u8 = @ptrFromInt(name_ptr_raw);
+    const word_name = name_ptr[0..name_len_raw];
+    const source = ctx.jit_trace_source orelse ctx.current_source;
+    ctx.appendPendingSyntheticErrorFrame(word_name, source, @intCast(line_raw));
+    return 0;
+}
+
+export fn jitAppendBuiltinTraceFrame(
+    ctx_raw: usize,
+    frame_kind_raw: usize,
+    line_raw: usize,
+) callconv(.c) i32 {
+    if (ctx_raw == 0) return 0;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const kind: BuiltinTraceFrameKind = std.meta.intToEnum(BuiltinTraceFrameKind, frame_kind_raw) catch return 0;
+    const word_name = switch (kind) {
+        .if_op => "if",
+        .call => "call",
+        .recover => "recover",
+        .cleanup => "cleanup",
+    };
+    const source = ctx.jit_trace_source orelse ctx.current_source;
+    ctx.appendPendingSyntheticErrorFrame(word_name, source, @intCast(line_raw));
+    return 0;
+}
+
 export fn jitOverflowError(ctx_raw: usize) callconv(.c) i32 {
     return setJitError(ctx_raw, error.Overflow);
 }
@@ -6970,6 +7153,9 @@ pub const ExecResult = enum {
 /// .bail if the compiled function signals a type mismatch or overflow, in
 /// which case the stack is unchanged.
 pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
+    ctx.clearPendingSyntheticErrorFrames();
+    const saved_trace_source = ctx.jit_trace_source;
+    defer ctx.jit_trace_source = saved_trace_source;
     const entry = ctx.jit_dispatch.get(word_id) orelse blk: {
         var parent = ctx.parent_context;
         while (parent) |p| : (parent = p.parent_context) {
@@ -6978,6 +7164,11 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
         return .bail;
     };
     var code_ptr = entry.code_ptr orelse return .bail;
+    if (ctx.lookupWord(entry.word_name)) |word| {
+        ctx.jit_trace_source = word.source_file orelse ctx.current_source;
+    } else {
+        ctx.jit_trace_source = ctx.current_source;
+    }
 
     // Compiled code writes directly to the stack array without bounds checks.
     // Ensure enough capacity for the peak stack depth reached during the compiled function's execution.
@@ -7014,6 +7205,11 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
             ctx.stack.items.items.len = saved_sp;
             return .bail;
         };
+        if (ctx.lookupWord(target_entry.word_name)) |word| {
+            ctx.jit_trace_source = word.source_file orelse ctx.current_source;
+        } else {
+            ctx.jit_trace_source = ctx.current_source;
+        }
         // Re-read items_ptr/capacity in case stack was reallocated
         jit_ctx.items_ptr = ctx.stack.items.items.ptr;
         jit_ctx.capacity = ctx.stack.items.capacity;
@@ -7023,11 +7219,15 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
 
     const result = ExecResult.fromStatus(status);
     if (result == .bail) {
+        ctx.clearPendingSyntheticErrorFrames();
         if (bail_stats_mod.enabled) {
             const entry_name = if (ctx.jit_dispatch.get(word_id)) |e| e.word_name else "?";
             bail_stats_mod.global.recordBail(word_id, entry_name);
         }
         ctx.stack.items.items.len = saved_sp;
+    }
+    if (result != .error_propagate) {
+        ctx.clearPendingSyntheticErrorFrames();
     }
     return result;
 }

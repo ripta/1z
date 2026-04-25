@@ -374,6 +374,14 @@ pub const Context = struct {
     /// Set by the callback when it returns error_propagate status, consumed
     /// by the interpreter dispatch loop.
     jit_pending_error: ?anyerror = null,
+    /// Defining source file for the currently executing compiled word.
+    /// Used by JIT error callbacks so synthetic frames do not depend on the
+    /// mutable runtime current_source.
+    jit_trace_source: ?[]const u8 = null,
+    /// Synthetic frames accumulated by compiled code on a cold error path.
+    /// These are folded into error_details by captureCallStackOnError so the
+    /// interpreter can still append its outer frames afterward.
+    jit_pending_trace_frames: std.ArrayListUnmanaged(CallFrame) = .{},
     /// PIC cache mapping instruction slice pointers to their PIC tables.
     /// Lazily populated on first generic dispatch through a compound word body.
     pic_cache: std.AutoHashMapUnmanaged(usize, *PicTable) = .{},
@@ -817,6 +825,7 @@ pub const Context = struct {
         self.local_frames.deinit(self.allocator);
         self.call_stack.deinit(self.allocator);
         self.error_details.deinit(self.allocator);
+        self.jit_pending_trace_frames.deinit(self.allocator);
         self.load_paths.deinit(self.allocator);
         for (self.pragma_frames.items) |*frame| {
             frame.deinit(self.allocator);
@@ -880,6 +889,23 @@ pub const Context = struct {
 
     pub fn ownedCurrentSource(self: *Context) []const u8 {
         return self.arena.allocator().dupe(u8, self.current_source) catch self.current_source;
+    }
+
+    /// Queue a synthetic frame for compiled error propagation. This is a
+    /// targeted parity fix for current JIT trace gaps, not a general JIT frame
+    /// model. If broader compiled trace fidelity becomes important later, build
+    /// a runtime frame stack for inlined combinators instead of extending this.
+    pub fn appendPendingSyntheticErrorFrame(self: *Context, word_name: []const u8, source: []const u8, line: usize) void {
+        self.jit_pending_trace_frames.append(self.allocator, .{
+            .word_name = word_name,
+            .source = source,
+            .line = line,
+            .column = 0,
+        }) catch {};
+    }
+
+    pub fn clearPendingSyntheticErrorFrames(self: *Context) void {
+        self.jit_pending_trace_frames.clearRetainingCapacity();
     }
 
     /// Get the current binding for a parameter by name.
@@ -3288,9 +3314,48 @@ pub const Context = struct {
         const pending_dispatch_available_methods = self.pending_dispatch_available_methods;
         self.pending_dispatch_available_methods = null;
 
+        var is_innermost = true;
+
+        var pending_i: usize = 0;
+        while (pending_i < self.jit_pending_trace_frames.items.len) : (pending_i += 1) {
+            const frame = self.jit_pending_trace_frames.items[pending_i];
+            const message = if (is_innermost and thrown_msg != null)
+                thrown_msg.?
+            else if (is_innermost and pending_msg != null)
+                pending_msg.?
+            else
+                frame.word_name;
+
+            const se_str: ?[]const u8 = if (is_innermost) blk: {
+                if (self.lookupWord(frame.word_name)) |defn| {
+                    if (defn.stack_effect) |se| {
+                        var buf: [256]u8 = undefined;
+                        var fbs = std.io.fixedBufferStream(&buf);
+                        se.write(fbs.writer()) catch break :blk null;
+                        break :blk self.arena.allocator().dupe(u8, fbs.getWritten()) catch null;
+                    }
+                }
+                break :blk null;
+            } else null;
+
+            self.error_details.append(self.allocator, .{
+                .error_type = error_type,
+                .message = message,
+                .source = frame.source,
+                .line = frame.line,
+                .word_name = frame.word_name,
+                .stack_effect_str = se_str,
+                .hint = if (is_innermost) pending_hint else null,
+                .dispatch_actual_types = if (is_innermost) pending_dispatch_actual_types else null,
+                .dispatch_available_methods = if (is_innermost) pending_dispatch_available_methods else null,
+            }) catch {};
+            is_innermost = false;
+        }
+
+        self.clearPendingSyntheticErrorFrames();
+
         // Iterate call_stack in reverse (innermost first for display)
         var i = self.call_stack.items.len;
-        var is_innermost = true;
         while (i > 0) {
             i -= 1;
             const frame = self.call_stack.items[i];
