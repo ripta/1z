@@ -224,8 +224,22 @@ fn isSupportedOp(name: []const u8) bool {
     if (std.mem.eql(u8, name, "native.virtual-unwrap")) return true;
     if (std.mem.eql(u8, name, "native.struct-field-get")) return true;
     if (std.mem.eql(u8, name, "native.typed-validate-and-promote")) return true;
+    if (std.mem.eql(u8, name, "native.make-struct-instance")) return true;
+    if (std.mem.eql(u8, name, "native.struct-instance-destructure")) return true;
+    if (std.mem.eql(u8, name, "native.struct-instance-to-hash")) return true;
+    if (std.mem.eql(u8, name, "native.struct-type-predicate")) return true;
+    if (std.mem.eql(u8, name, "native.hash-to-struct")) return true;
 
     return false;
+}
+
+/// Struct native ops that need jitInterpretedCall at runtime.
+fn isStructNativeOp(name: []const u8) bool {
+    return std.mem.eql(u8, name, "native.make-struct-instance") or
+        std.mem.eql(u8, name, "native.struct-instance-destructure") or
+        std.mem.eql(u8, name, "native.struct-instance-to-hash") or
+        std.mem.eql(u8, name, "native.struct-type-predicate") or
+        std.mem.eql(u8, name, "native.hash-to-struct");
 }
 
 fn isBinaryOp(name: []const u8) bool {
@@ -2517,6 +2531,65 @@ fn emitResolvedNativeCallback(
     }
 }
 
+/// Emit a polymorphic struct native call (make-struct-instance or
+/// struct-instance-destructure). Derives input/output counts from the
+/// struct_type in the preceding push_literal instruction.
+fn emitStructNativeCall(
+    state: *CompileState,
+    instructions: []const Instruction,
+    idx: usize,
+    name: []const u8,
+    stack: *[64]StackEntry,
+    sp: *usize,
+    line: usize,
+) IrCodegenError!void {
+    // Extract struct_type from the preceding push_literal(.struct_type)
+    if (idx < 1) {
+        state.not_compilable_reason = .pre_scan_failure;
+        return IrCodegenError.NotCompilable;
+    }
+    const struct_type_ptr: *const StructType = switch (instructions[idx - 1].op) {
+        .push_literal => |v| if (v == .struct_type) v.struct_type else {
+            state.not_compilable_reason = .pre_scan_failure;
+            return IrCodegenError.NotCompilable;
+        },
+        else => {
+            state.not_compilable_reason = .pre_scan_failure;
+            return IrCodegenError.NotCompilable;
+        },
+    };
+
+    const num_fields: u8 = @intCast(struct_type_ptr.fields.len);
+    const is_constructor = std.mem.eql(u8, name, "native.make-struct-instance");
+
+    // make-struct-instance: ( field1..fieldN struct_type -- instance )
+    // struct-instance-destructure: ( instance struct_type -- field1..fieldN )
+    const effective_in: u8 = if (is_constructor) num_fields + 1 else 2;
+    const effective_out: u8 = if (is_constructor) 1 else num_fields;
+
+    if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
+
+    try materializeQuotations(state, stack, sp.*);
+    flushToPhysicalStack(state, stack, sp.*);
+    const ctx_val = emitCallbackPreamble(state, sp.*);
+
+    const res = state.resolver orelse {
+        state.not_compilable_reason = .unresolvable_word;
+        return IrCodegenError.NotCompilable;
+    };
+    const resolved = res.resolve(name, res.user_data) orelse {
+        state.not_compilable_reason = .unresolvable_word;
+        return IrCodegenError.NotCompilable;
+    };
+
+    emitAotWordCall(state, ctx_val, name, resolved, line);
+
+    if (exitFallsThrough(state.exit_kind)) {
+        sp.* = sp.* - effective_in + effective_out;
+        resetStackToPhysical(stack, sp.*);
+    }
+}
+
 /// Emit a runtime truthiness check for a Value at a physical stack slot.
 /// Loads the tag and payload, computing:
 ///   is_falsy = (tag == boolean) AND (payload == false)
@@ -3251,6 +3324,48 @@ fn compileInstructions(
                     if (state.aot_string_literals) |lits| {
                         lits.append(std.heap.page_allocator, .{
                             .data = lit_name,
+                            .is_symbol = false,
+                        }) catch {};
+                    }
+
+                    // Re-read sp after callback (it pushed one value).
+                    _ = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
+                    stack[sp.*] = .{ .raw_at_slot = sp.* };
+                    sp.* += 1;
+                } else if (state.aot_mode and val == .struct_type) {
+                    // struct_type literals: look up the constructor word at
+                    // runtime to recover the runtime struct_type pointer.
+                    const struct_name = val.struct_type.name;
+
+                    const proto_3arg = c.ir_proto_3(ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+                    const push_fn = c.ir_const_func(ctx, c.ir_str(ctx, "onez_push_struct_type"), proto_3arg);
+
+                    // Store sp before callback.
+                    const sp_const = c.ir_const_addr(ctx, sp.*);
+                    const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
+                    c._ir_STORE(ctx, state.sp_ptr, new_sp);
+
+                    const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+                        state.preloaded_ctx_val
+                    else blk: {
+                        JitContextLayout.ensureInit();
+                        const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+                        const ctx_addr2 = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+                        break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr2);
+                    };
+
+                    const lit_id = if (state.aot_string_literals) |lits| lits.items.len else 0;
+                    var sym_buf: [32]u8 = undefined;
+                    const sym_name = std.fmt.bufPrint(&sym_buf, "onez_lit_{d}", .{lit_id}) catch unreachable;
+                    const sym_ref = c.ir_const_func(ctx, c.ir_strl(ctx, &sym_buf, sym_name.len), 0);
+                    const name_len_const = c.ir_const_addr(ctx, struct_name.len);
+
+                    const call_result = c._ir_CALL_3(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, name_len_const);
+                    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null);
+
+                    if (state.aot_string_literals) |lits| {
+                        lits.append(std.heap.page_allocator, .{
+                            .data = struct_name,
                             .is_symbol = false,
                         }) catch {};
                     }
@@ -4255,6 +4370,17 @@ fn compileInstructions(
                     if (!tryEmitInlineTypedValidateAndPromote(state, instructions, idx, stack, sp)) {
                         try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                     }
+                } else if (std.mem.eql(u8, name, "native.make-struct-instance") or
+                    std.mem.eql(u8, name, "native.struct-instance-destructure"))
+                {
+                    // Polymorphic struct operations: derive input/output counts
+                    // from the struct_type in the preceding push_literal.
+                    try emitStructNativeCall(state, instructions, idx, name, stack, sp, instr.line);
+                } else if (std.mem.eql(u8, name, "native.struct-instance-to-hash") or
+                    std.mem.eql(u8, name, "native.struct-type-predicate") or
+                    std.mem.eql(u8, name, "native.hash-to-struct"))
+                {
+                    try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                 } else {
                     // Unrecognized word: try dispatch table call if a resolver is available
                     const res = state.resolver orelse {
@@ -4576,6 +4702,8 @@ fn preScanInstructions(
                     if (iteratorEffects(opcode).dynamic) {
                         flags.needs_param_validation = true;
                     }
+                } else if (isStructNativeOp(name)) {
+                    flags.needs_dispatch = true;
                 } else if (!isSupportedOp(name) and !isStackOp(name)) {
                     if (resolver) |res| {
                         if (res.resolve(name, res.user_data)) |resolved| {
@@ -5551,6 +5679,8 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "static int32_t onez_push_quotation(uintptr_t ctx, const unsigned char *data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id) { return jitPushQuotation(ctx, (uintptr_t)data, len, dest, quotation_id); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPushWordLiteral(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len);\n");
     try out.appendSlice(allocator, "static int32_t onez_push_word_literal(uintptr_t ctx, const char *name, uintptr_t len) { return jitPushWordLiteral(ctx, (uintptr_t)name, len); }\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushStructType(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len);\n");
+    try out.appendSlice(allocator, "static int32_t onez_push_struct_type(uintptr_t ctx, const char *name, uintptr_t len) { return jitPushStructType(ctx, (uintptr_t)name, len); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPushArray(uintptr_t ctx, uintptr_t data_ptr, uintptr_t data_len);\n");
     try out.appendSlice(allocator, "static int32_t onez_push_array(uintptr_t ctx, const unsigned char *data, uintptr_t len) { return jitPushArray(ctx, (uintptr_t)data, len); }\n");
 
@@ -6522,6 +6652,50 @@ export fn jitPushWordLiteral(ctx_raw: usize, name_ptr: usize, name_len: usize) c
                             return 2;
                         };
                         return 0;
+                    },
+                    else => {},
+                }
+            }
+        },
+        .native, .host_callback => {},
+    }
+    ctx.jit_pending_error = error.TypeMismatch;
+    return 2;
+}
+
+/// Push a struct_type value onto the stack by looking up the constructor word
+/// "make-{name}" and extracting the struct_type from its first instruction.
+/// Used by AOT-compiled struct words whose struct_type pointer is only valid
+/// at compile time.
+export fn jitPushStructType(ctx_raw: usize, name_ptr: usize, name_len: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const src: [*]const u8 = @ptrFromInt(name_ptr);
+    const struct_name = src[0..name_len];
+
+    // Build "make-{name}" to look up the constructor word
+    var buf: [256]u8 = undefined;
+    const ctor_name = std.fmt.bufPrint(&buf, "make-{s}", .{struct_name}) catch {
+        ctx.jit_pending_error = error.Overflow;
+        return 2;
+    };
+
+    const word = ctx.lookupWord(ctor_name) orelse {
+        ctx.jit_pending_error = error.WordNotFound;
+        return 2;
+    };
+    switch (word.action) {
+        .compound => |instrs| {
+            if (instrs.len >= 1) {
+                switch (instrs[0].op) {
+                    .push_literal => |val| {
+                        if (val == .struct_type) {
+                            ctx.stack.push(val) catch {
+                                ctx.jit_pending_error = error.OutOfMemory;
+                                return 2;
+                            };
+                            return 0;
+                        }
                     },
                     else => {},
                 }

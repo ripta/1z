@@ -559,13 +559,14 @@ fn wordDefFromModuleWord(name: []const u8, mod_word: value_mod.ModuleWord) WordD
 /// - module-qualified resolution, e.g., `native.struct-field-get`; then
 /// - direct dictionary lookup for unqualified names.
 ///
-/// Only adds native words with declared stack effects.
+/// Only adds native words with declared stack effects, plus known
+/// polymorphic struct native words (which have no fixed stack_effect).
 fn discoverCalleeWord(ctx: *const Context, call_name: []const u8, discovered: *DiscoveredWords, allocator: Allocator) Allocator.Error!void {
     // Try module-qualified resolution first
     if (resolveQualifiedModuleWord(ctx, call_name)) |mod_word| {
         switch (mod_word.action) {
             .native, .host_callback => {
-                if (mod_word.stack_effect != null) {
+                if (mod_word.stack_effect != null or isPolymorphicStructNative(call_name)) {
                     try discovered.native_names.append(allocator, call_name);
                     try discovered.native_defs.append(allocator, wordDefFromModuleWord(call_name, mod_word));
                 }
@@ -579,7 +580,7 @@ fn discoverCalleeWord(ctx: *const Context, call_name: []const u8, discovered: *D
     // This catches native words called by prelude words that were added
     // via compile_all_prelude but never went through the BFS.
     const word = ctx.lookupWord(call_name) orelse return;
-    if (word.stack_effect == null) return;
+    if (word.stack_effect == null and !isPolymorphicStructNative(call_name)) return;
     switch (word.action) {
         .native, .host_callback => {
             try discovered.native_names.append(allocator, call_name);
@@ -625,6 +626,13 @@ fn hasNeverReturnsMarker(def: WordDefinition) bool {
         if (markers_mod.isNeverReturnsMarker(mk)) return true;
     }
     return false;
+}
+
+/// Polymorphic struct native words that have no fixed stack_effect but must
+/// be included in the AOT word list for resolver access.
+fn isPolymorphicStructNative(name: []const u8) bool {
+    return std.mem.eql(u8, name, "native.make-struct-instance") or
+        std.mem.eql(u8, name, "native.struct-instance-destructure");
 }
 
 /// Assign word IDs and build the AotWordDesc array.
@@ -673,6 +681,25 @@ fn buildAotDescs(
     // so the strict codegen check allows interpreter fallback.
     for (discovered.native_names.items, discovered.native_defs.items) |name, def| {
         const effect = def.stack_effect orelse {
+            // Polymorphic native words (no fixed stack_effect) are still
+            // included so the AOT resolver can find them by word ID. The
+            // emit path derives the correct input/output counts from
+            // compile-time context (e.g., struct field count).
+            if (isPolymorphicStructNative(name)) {
+                const id = next_id;
+                next_id += 1;
+                try words.append(allocator, .{
+                    .name = name,
+                    .instructions = &.{},
+                    .input_count = 0,
+                    .output_count = 0,
+                    .word_id = id,
+                    .is_prelude = true,
+                    .is_native = true,
+                    .never_returns = hasNeverReturnsMarker(def),
+                });
+                continue;
+            }
             try skipped.append(allocator, name);
             continue;
         };
