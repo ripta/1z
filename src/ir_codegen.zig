@@ -87,7 +87,7 @@ pub const NotCompilableReason = enum {
             .non_serializable_literal => "word pushes a value that cannot be embedded in an AOT binary",
             .post_dynamic_call => "calls a quotation whose stack effect is unknown",
             .unresolvable_word => "calls a word that is not available in the AOT compilation set",
-            .too_many_inputs => "takes more than 8 input parameters",
+            .too_many_inputs => "takes more than 64 input parameters",
             .quotation_reification => "a quotation in abstract form must become a concrete runtime value",
             .merge_type_mismatch => "if/else branches produce different value types",
             .nested_loop_conflict => "contains two self-recursive tail calls",
@@ -105,7 +105,7 @@ pub const NotCompilableReason = enum {
             .non_serializable_literal => "blocked until AOT literals can be serialized",
             .post_dynamic_call => "annotate the quotation parameter with a concrete stack effect",
             .unresolvable_word => "blocked until the AOT resolver includes this word",
-            .too_many_inputs => "reduce input parameters to 8 or fewer",
+            .too_many_inputs => "reduce input parameters to 64 or fewer",
             .quotation_reification => "blocked until quotation bodies can be compiled",
             .merge_type_mismatch => "blocked until polymorphic branch merging is implemented",
             .nested_loop_conflict => "split into two words so each has one recursive call",
@@ -4641,7 +4641,7 @@ fn compileWordPass(
 ) IrCodegenError!CompileWordPassResult {
     ValueLayout.ensureInit();
 
-    if (input_count > 8) return IrCodegenError.NotCompilable;
+    if (input_count > 64) return IrCodegenError.NotCompilable;
 
     // Pre-scan: check if any call_word needs dispatch table resolution
     // or contains loops (which need safepoints).
@@ -4962,7 +4962,7 @@ pub fn emitWordC(
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     ValueLayout.ensureInit();
 
-    if (input_count > 8) return IrCodegenError.NotCompilable;
+    if (input_count > 64) return IrCodegenError.NotCompilable;
 
     const c_name = try mangleWordName(name, allocator);
     defer allocator.free(c_name);
@@ -5181,7 +5181,7 @@ fn emitWordCAotPass(
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)!EmitWordCAotPassResult {
     ValueLayout.ensureInit();
 
-    if (input_count > 8) {
+    if (input_count > 64) {
         if (nc_reason_out) |ro| ro.* = .too_many_inputs;
         return IrCodegenError.NotCompilable;
     }

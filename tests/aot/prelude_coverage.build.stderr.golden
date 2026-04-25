@@ -219,8 +219,7 @@ Prelude compilation: 239/325 words compiled (73.5%)
   word '>result:ok' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'make-word-info' cannot be compiled
-      NC.7: takes more than 8 input parameters
-      hint: reduce input parameters to 8 or fewer
+      NC.11: instruction pre-scan rejected the word before compilation started
   word 'case' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
