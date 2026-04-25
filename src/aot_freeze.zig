@@ -766,7 +766,7 @@ fn buildAotDescs(
             .quotation_id = id,
             .instructions = body,
             .c_name = c_name,
-            .inferred_effect = ir_codegen.inferQuotationEffect(body, resolver),
+            .inferred_effect = ir_codegen.inferQuotationEffect(body, resolver) catch null,
         });
     }
     const max_quotation_id = if (next_q_id > 0) next_q_id - 1 else 0;

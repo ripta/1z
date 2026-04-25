@@ -60,6 +60,8 @@ pub const NotCompilableReason = enum {
     pre_scan_failure,
     post_compile_reject,
     abstract_stack_underflow,
+    effect_inference_overflow,
+    row_binding_overflow,
 
     pub fn code(self: NotCompilableReason) []const u8 {
         return switch (self) {
@@ -76,6 +78,8 @@ pub const NotCompilableReason = enum {
             .pre_scan_failure => "NC.11",
             .post_compile_reject => "NC.12",
             .abstract_stack_underflow => "NC.13",
+            .effect_inference_overflow => "NC.14",
+            .row_binding_overflow => "NC.15",
         };
     }
 
@@ -94,6 +98,8 @@ pub const NotCompilableReason = enum {
             .pre_scan_failure => "instruction pre-scan rejected the word before compilation started",
             .post_compile_reject => "compilation produced unresolved dynamic calls or abstract stack entries",
             .abstract_stack_underflow => "word body underflows the abstract stack (row-variable effects)",
+            .effect_inference_overflow => std.fmt.comptimePrint("quotation effect inference exceeded mini-stack capacity ({d})", .{max_mini_stack_depth}),
+            .row_binding_overflow => std.fmt.comptimePrint("row variable specialization exceeded binding capacity ({d})", .{max_row_var_bindings}),
         };
     }
 
@@ -112,6 +118,8 @@ pub const NotCompilableReason = enum {
             .pre_scan_failure => null,
             .post_compile_reject => null,
             .abstract_stack_underflow => "blocked until row-variable stack regions can be modeled",
+            .effect_inference_overflow => "simplify the quotation body to use fewer intermediate values",
+            .row_binding_overflow => "reduce the number of distinct row variable bindings at this call site",
         };
     }
 };
@@ -1478,7 +1486,7 @@ const MiniStackEntry = union(enum) {
 pub fn inferQuotationEffect(
     instructions: []const Instruction,
     resolver: ?WordResolver,
-) ?InferredEffect {
+) error{EffectInferenceOverflow}!?InferredEffect {
     var delta: i32 = 0;
     var min_delta: i32 = 0;
 
@@ -1489,17 +1497,16 @@ pub fn inferQuotationEffect(
     for (instructions) |instr| {
         switch (instr.op) {
             .push_literal => |val| {
-                if (sp < max_mini_stack_depth) {
-                    mini_stack[sp] = if (val == .quotation)
-                        .{ .quotation = val.quotation.instructions }
-                    else
-                        .other;
-                    sp += 1;
-                }
+                if (sp >= max_mini_stack_depth) return error.EffectInferenceOverflow;
+                mini_stack[sp] = if (val == .quotation)
+                    .{ .quotation = val.quotation.instructions }
+                else
+                    .other;
+                sp += 1;
                 delta += 1;
             },
             .call_word => |name| {
-                if (inferBuiltinEffect(name, &mini_stack, &sp, &delta, &min_delta, resolver)) |ok| {
+                if (try inferBuiltinEffect(name, &mini_stack, &sp, &delta, &min_delta, resolver)) |ok| {
                     if (!ok) return null;
                 } else {
                     // Not a built-in word: resolve via WordResolver.
@@ -1525,7 +1532,8 @@ pub fn inferQuotationEffect(
                         pops -= 1;
                     }
                     var pushes: usize = resolved.output_count;
-                    while (pushes > 0 and sp < max_mini_stack_depth) {
+                    while (pushes > 0) {
+                        if (sp >= max_mini_stack_depth) return error.EffectInferenceOverflow;
                         mini_stack[sp] = .other;
                         sp += 1;
                         pushes -= 1;
@@ -1555,7 +1563,7 @@ fn inferBuiltinEffect(
     delta: *i32,
     min_delta: *i32,
     resolver: ?WordResolver,
-) ?bool {
+) error{EffectInferenceOverflow}!?bool {
     // Stack shufflers need special mini-stack handling to propagate
     // quotation-body knowledge through shuffles.
     if (std.mem.eql(u8, name, "dup")) {
@@ -1566,20 +1574,17 @@ fn inferBuiltinEffect(
         if (sp.* >= 1) {
             // Duplicate top entry (preserving quotation body if present).
             const top = mini_stack[sp.* - 1];
-            if (sp.* < max_mini_stack_depth) {
-                mini_stack[sp.*] = top;
-                sp.* += 1;
-            }
+            if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
+            mini_stack[sp.*] = top;
+            sp.* += 1;
         } else {
             // Duping from below initial level: push two unknowns.
-            if (sp.* < max_mini_stack_depth) {
-                mini_stack[sp.*] = .other;
-                sp.* += 1;
-            }
-            if (sp.* < max_mini_stack_depth) {
-                mini_stack[sp.*] = .other;
-                sp.* += 1;
-            }
+            if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
+            mini_stack[sp.*] = .other;
+            sp.* += 1;
+            if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
+            mini_stack[sp.*] = .other;
+            sp.* += 1;
         }
         return true;
     }
@@ -1607,39 +1612,39 @@ fn inferBuiltinEffect(
         delta.* -= 2;
         min_delta.* = @min(min_delta.*, delta.*);
         delta.* += 3;
-        if (sp.* >= 2 and sp.* < max_mini_stack_depth) {
+        if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
+        if (sp.* >= 2) {
             // Copy second element to top.
             mini_stack[sp.*] = mini_stack[sp.* - 2];
-            sp.* += 1;
-        } else if (sp.* < max_mini_stack_depth) {
+        } else {
             // Some entries below initial level; push unknown.
             mini_stack[sp.*] = .other;
-            sp.* += 1;
         }
+        sp.* += 1;
         return true;
     }
 
     // Boolean literals.
     if (std.mem.eql(u8, name, "t") or std.mem.eql(u8, name, "f")) {
-        applyFixedEffect(mini_stack, sp, delta, min_delta, 0, 1);
+        try applyFixedEffect(mini_stack, sp, delta, min_delta, 0, 1);
         return true;
     }
 
     // abs: ( n -- n )
     if (std.mem.eql(u8, name, "abs")) {
-        applyFixedEffect(mini_stack, sp, delta, min_delta, 1, 1);
+        try applyFixedEffect(mini_stack, sp, delta, min_delta, 1, 1);
         return true;
     }
 
     // Binary ops: ( a b -- result )
     if (isBinaryOp(name)) {
-        applyFixedEffect(mini_stack, sp, delta, min_delta, 2, 1);
+        try applyFixedEffect(mini_stack, sp, delta, min_delta, 2, 1);
         return true;
     }
 
     // Comparison ops: ( a b -- bool )
     if (isComparisonOp(name)) {
-        applyFixedEffect(mini_stack, sp, delta, min_delta, 2, 1);
+        try applyFixedEffect(mini_stack, sp, delta, min_delta, 2, 1);
         return true;
     }
 
@@ -1655,7 +1660,7 @@ fn inferBuiltinEffect(
             switch (mini_stack[sp.*]) {
                 .quotation => |body| {
                     // Recursively infer the quotation's effect.
-                    const effect = inferQuotationEffect(body, resolver) orelse return false;
+                    const effect = try inferQuotationEffect(body, resolver) orelse return false;
                     const in: i32 = @intCast(effect.input_count);
                     const out: i32 = @intCast(effect.output_count);
                     delta.* -= in;
@@ -1664,7 +1669,8 @@ fn inferBuiltinEffect(
 
                     // Push opaque outputs onto mini-stack.
                     var pushes: usize = effect.output_count;
-                    while (pushes > 0 and sp.* < max_mini_stack_depth) {
+                    while (pushes > 0) {
+                        if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
                         mini_stack[sp.*] = .other;
                         sp.* += 1;
                         pushes -= 1;
@@ -1700,8 +1706,8 @@ fn inferBuiltinEffect(
                 .other => return false,
             };
 
-            const true_eff = inferQuotationEffect(true_body, resolver) orelse return false;
-            const false_eff = inferQuotationEffect(false_body, resolver) orelse return false;
+            const true_eff = try inferQuotationEffect(true_body, resolver) orelse return false;
+            const false_eff = try inferQuotationEffect(false_body, resolver) orelse return false;
 
             // Both branches must have the same net delta.
             const true_delta = @as(i32, @intCast(true_eff.output_count)) - @as(i32, @intCast(true_eff.input_count));
@@ -1720,7 +1726,8 @@ fn inferBuiltinEffect(
 
             // Push opaque outputs.
             var pushes: usize = true_eff.output_count;
-            while (pushes > 0 and sp.* < max_mini_stack_depth) {
+            while (pushes > 0) {
+                if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
                 mini_stack[sp.*] = .other;
                 sp.* += 1;
                 pushes -= 1;
@@ -1732,7 +1739,7 @@ fn inferBuiltinEffect(
 
     // choose: ( a1 a2 quot -- a )
     if (std.mem.eql(u8, name, "choose")) {
-        applyFixedEffect(mini_stack, sp, delta, min_delta, 3, 1);
+        try applyFixedEffect(mini_stack, sp, delta, min_delta, 3, 1);
         return true;
     }
 
@@ -1749,7 +1756,7 @@ fn applyFixedEffect(
     min_delta: *i32,
     input_count: u8,
     output_count: u8,
-) void {
+) error{EffectInferenceOverflow}!void {
     const in: i32 = @intCast(input_count);
     const out: i32 = @intCast(output_count);
     delta.* -= in;
@@ -1763,7 +1770,8 @@ fn applyFixedEffect(
         pops -= 1;
     }
     var pushes: usize = output_count;
-    while (pushes > 0 and sp.* < max_mini_stack_depth) {
+    while (pushes > 0) {
+        if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
         mini_stack[sp.*] = .other;
         sp.* += 1;
         pushes -= 1;
@@ -1792,7 +1800,7 @@ fn resolveRowVariableEffect(
     stack: *const [max_abstract_stack_depth]StackEntry,
     sp: usize,
     resolver: ?WordResolver,
-) ?InferredEffect {
+) error{ RowBindingOverflow, EffectInferenceOverflow }!?InferredEffect {
     const concrete_in = effect.concreteInputCount();
 
     // Map each concrete input parameter to its stack position.
@@ -1825,7 +1833,7 @@ fn resolveRowVariableEffect(
         };
 
         // Infer the concrete effect of the quotation body.
-        const inferred = inferQuotationEffect(body, resolver) orelse return null;
+        const inferred = try inferQuotationEffect(body, resolver) orelse return null;
 
         // Compute row variable sizes from the difference between
         // inferred concrete counts and the quotation's declared
@@ -1842,13 +1850,13 @@ fn resolveRowVariableEffect(
         // Bind row variables from the quotation's input side.
         for (qe.inputs) |qp| {
             if (!qp.is_row_variable) continue;
-            if (!addOrCheckBinding(&bindings, &num_bindings, qp.name, row_in_size)) return null;
+            if (!(try addOrCheckBinding(&bindings, &num_bindings, qp.name, row_in_size))) return null;
         }
 
         // Bind row variables from the quotation's output side.
         for (qe.outputs) |qp| {
             if (!qp.is_row_variable) continue;
-            if (!addOrCheckBinding(&bindings, &num_bindings, qp.name, row_out_size)) return null;
+            if (!(try addOrCheckBinding(&bindings, &num_bindings, qp.name, row_out_size))) return null;
         }
     }
 
@@ -1880,16 +1888,15 @@ fn addOrCheckBinding(
     num_bindings: *usize,
     name: []const u8,
     size: u8,
-) bool {
+) error{RowBindingOverflow}!bool {
     for (bindings[0..num_bindings.*]) |b| {
         if (std.mem.eql(u8, b.name, name)) {
             return b.size == size;
         }
     }
-    if (num_bindings.* < max_row_var_bindings) {
-        bindings[num_bindings.*] = .{ .name = name, .size = size };
-        num_bindings.* += 1;
-    }
+    if (num_bindings.* >= max_row_var_bindings) return error.RowBindingOverflow;
+    bindings[num_bindings.*] = .{ .name = name, .size = size };
+    num_bindings.* += 1;
     return true;
 }
 
@@ -3660,7 +3667,10 @@ fn compileInstructions(
                                 // True branch is raw_at_slot: dispatch at runtime.
                                 emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
                                 // Infer effect from the false (quotation_body) branch.
-                                const eff = inferQuotationEffect(false_body.?, if (state.resolver) |r| r else null) orelse {
+                                const eff = inferQuotationEffect(false_body.?, if (state.resolver) |r| r else null) catch {
+                                    state.not_compilable_reason = .effect_inference_overflow;
+                                    return IrCodegenError.NotCompilable;
+                                } orelse {
                                     state.not_compilable_reason = .quotation_reification;
                                     return IrCodegenError.NotCompilable;
                                 };
@@ -3694,7 +3704,10 @@ fn compileInstructions(
                     // as the quotation_body branch.
                     const branch_effect: ?InferredEffect = if (true_body == null or false_body == null) blk: {
                         const known_body = true_body orelse false_body orelse unreachable;
-                        break :blk inferQuotationEffect(known_body, if (state.resolver) |r| r else null) orelse {
+                        break :blk inferQuotationEffect(known_body, if (state.resolver) |r| r else null) catch {
+                            state.not_compilable_reason = .effect_inference_overflow;
+                            return IrCodegenError.NotCompilable;
+                        } orelse {
                             state.not_compilable_reason = .quotation_reification;
                             return IrCodegenError.NotCompilable;
                         };
@@ -4470,7 +4483,14 @@ fn compileInstructions(
                     var effective_in = resolved.input_count;
                     var effective_out = resolved.output_count;
                     if (resolved.callee_effect) |callee_eff| {
-                        if (resolveRowVariableEffect(callee_eff, stack, sp.*, state.resolver)) |specialized| {
+                        const row_result = resolveRowVariableEffect(callee_eff, stack, sp.*, state.resolver) catch |err| {
+                            state.not_compilable_reason = switch (err) {
+                                error.EffectInferenceOverflow => .effect_inference_overflow,
+                                error.RowBindingOverflow => .row_binding_overflow,
+                            };
+                            return IrCodegenError.NotCompilable;
+                        };
+                        if (row_result) |specialized| {
                             effective_in = specialized.input_count;
                             effective_out = specialized.output_count;
                         } else if (state.aot_mode) {
@@ -9181,7 +9201,7 @@ test "concrete quotation effect adjusts sp for consuming call" {
 
 test "inferQuotationEffect: empty body" {
     const instrs = makeInstructions(.{});
-    const eff = inferQuotationEffect(&instrs, null);
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 0), eff.?.input_count);
     try testing.expectEqual(@as(u8, 0), eff.?.output_count);
@@ -9189,7 +9209,7 @@ test "inferQuotationEffect: empty body" {
 
 test "inferQuotationEffect: push literal only" {
     const instrs = makeInstructions(.{@as(i64, 42)});
-    const eff = inferQuotationEffect(&instrs, null);
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 0), eff.?.input_count);
     try testing.expectEqual(@as(u8, 1), eff.?.output_count);
@@ -9198,7 +9218,7 @@ test "inferQuotationEffect: push literal only" {
 test "inferQuotationEffect: 2 * (double)" {
     // [ 2 * ] expects one input (multiplied by 2) and produces one output.
     const instrs = makeInstructions(.{ @as(i64, 2), "*" });
-    const eff = inferQuotationEffect(&instrs, null);
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 1), eff.?.input_count);
     try testing.expectEqual(@as(u8, 1), eff.?.output_count);
@@ -9207,7 +9227,7 @@ test "inferQuotationEffect: 2 * (double)" {
 test "inferQuotationEffect: dup *" {
     // [ dup * ] squares the top value: (1 -- 1).
     const instrs = makeInstructions(.{ "dup", "*" });
-    const eff = inferQuotationEffect(&instrs, null);
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 1), eff.?.input_count);
     try testing.expectEqual(@as(u8, 1), eff.?.output_count);
@@ -9216,7 +9236,7 @@ test "inferQuotationEffect: dup *" {
 test "inferQuotationEffect: +" {
     // [ + ] takes two inputs and produces one: (2 -- 1).
     const instrs = makeInstructions(.{"+"});
-    const eff = inferQuotationEffect(&instrs, null);
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 2), eff.?.input_count);
     try testing.expectEqual(@as(u8, 1), eff.?.output_count);
@@ -9225,7 +9245,7 @@ test "inferQuotationEffect: +" {
 test "inferQuotationEffect: drop" {
     // [ drop ] consumes one: (1 -- 0).
     const instrs = makeInstructions(.{"drop"});
-    const eff = inferQuotationEffect(&instrs, null);
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 1), eff.?.input_count);
     try testing.expectEqual(@as(u8, 0), eff.?.output_count);
@@ -9234,7 +9254,7 @@ test "inferQuotationEffect: drop" {
 test "inferQuotationEffect: swap" {
     // [ swap ] rearranges two: (2 -- 2).
     const instrs = makeInstructions(.{"swap"});
-    const eff = inferQuotationEffect(&instrs, null);
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 2), eff.?.input_count);
     try testing.expectEqual(@as(u8, 2), eff.?.output_count);
@@ -9243,7 +9263,7 @@ test "inferQuotationEffect: swap" {
 test "inferQuotationEffect: over" {
     // [ over ] copies second: (2 -- 3).
     const instrs = makeInstructions(.{"over"});
-    const eff = inferQuotationEffect(&instrs, null);
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 2), eff.?.input_count);
     try testing.expectEqual(@as(u8, 3), eff.?.output_count);
@@ -9251,13 +9271,13 @@ test "inferQuotationEffect: over" {
 
 test "inferQuotationEffect: t and f literals" {
     const instrs_t = makeInstructions(.{"t"});
-    const eff_t = inferQuotationEffect(&instrs_t, null);
+    const eff_t = inferQuotationEffect(&instrs_t, null) catch unreachable;
     try testing.expect(eff_t != null);
     try testing.expectEqual(@as(u8, 0), eff_t.?.input_count);
     try testing.expectEqual(@as(u8, 1), eff_t.?.output_count);
 
     const instrs_f = makeInstructions(.{"f"});
-    const eff_f = inferQuotationEffect(&instrs_f, null);
+    const eff_f = inferQuotationEffect(&instrs_f, null) catch unreachable;
     try testing.expect(eff_f != null);
     try testing.expectEqual(@as(u8, 0), eff_f.?.input_count);
     try testing.expectEqual(@as(u8, 1), eff_f.?.output_count);
@@ -9266,7 +9286,7 @@ test "inferQuotationEffect: t and f literals" {
 test "inferQuotationEffect: abs" {
     // [ abs ] is (1 -- 1).
     const instrs = makeInstructions(.{"abs"});
-    const eff = inferQuotationEffect(&instrs, null);
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 1), eff.?.input_count);
     try testing.expectEqual(@as(u8, 1), eff.?.output_count);
@@ -9274,7 +9294,7 @@ test "inferQuotationEffect: abs" {
 
 test "inferQuotationEffect: comparison ops" {
     const instrs = makeInstructions(.{">"});
-    const eff = inferQuotationEffect(&instrs, null);
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 2), eff.?.input_count);
     try testing.expectEqual(@as(u8, 1), eff.?.output_count);
@@ -9289,7 +9309,7 @@ test "inferQuotationEffect: call on literal quotation" {
         .{ .op = .{ .push_literal = inner_val }, .line = 1 },
         .{ .op = .{ .call_word = "call" }, .line = 2 },
     };
-    const eff = inferQuotationEffect(&outer, null);
+    const eff = inferQuotationEffect(&outer, null) catch unreachable;
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 0), eff.?.input_count);
     try testing.expectEqual(@as(u8, 1), eff.?.output_count);
@@ -9298,7 +9318,7 @@ test "inferQuotationEffect: call on literal quotation" {
 test "inferQuotationEffect: call on unknown quotation returns null" {
     // [ call ] alone: TOS is unknown, so we can't infer.
     const instrs = makeInstructions(.{"call"});
-    const eff = inferQuotationEffect(&instrs, null);
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
     try testing.expect(eff == null);
 }
 
@@ -9317,7 +9337,7 @@ test "inferQuotationEffect: if with matching branches" {
         .{ .op = .{ .push_literal = false_val }, .line = 4 },
         .{ .op = .{ .call_word = "if" }, .line = 5 },
     };
-    const eff = inferQuotationEffect(&instrs, null);
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 1), eff.?.input_count);
     try testing.expectEqual(@as(u8, 1), eff.?.output_count);
@@ -9334,13 +9354,13 @@ test "inferQuotationEffect: if with mismatched branches returns null" {
         .{ .op = .{ .push_literal = false_val }, .line = 2 },
         .{ .op = .{ .call_word = "if" }, .line = 3 },
     };
-    const eff = inferQuotationEffect(&instrs, null);
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
     try testing.expect(eff == null);
 }
 
 test "inferQuotationEffect: unknown word without resolver returns null" {
     const instrs = makeInstructions(.{"some-unknown-word"});
-    const eff = inferQuotationEffect(&instrs, null);
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
     try testing.expect(eff == null);
 }
 
@@ -9361,7 +9381,7 @@ test "inferQuotationEffect: resolved word via resolver" {
         .dispatch_table_ptr = @ptrFromInt(1),
     };
     const instrs = makeInstructions(.{"foo"});
-    const eff = inferQuotationEffect(&instrs, resolver);
+    const eff = inferQuotationEffect(&instrs, resolver) catch unreachable;
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 1), eff.?.input_count);
     try testing.expectEqual(@as(u8, 2), eff.?.output_count);
@@ -9380,7 +9400,7 @@ test "inferQuotationEffect: dup propagates quotation body" {
         .{ .op = .{ .call_word = "call" }, .line = 5 },
         .{ .op = .{ .call_word = "+" }, .line = 6 },
     };
-    const eff = inferQuotationEffect(&instrs, null);
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 0), eff.?.input_count);
     try testing.expectEqual(@as(u8, 1), eff.?.output_count);
@@ -9418,7 +9438,7 @@ test "resolveRowVariableEffect: simple apply with [ 1 + ]" {
     stack[0] = .{ .raw_at_slot = 0 }; // x
     stack[1] = .{ .quotation_body = &body }; // quot
 
-    const result = resolveRowVariableEffect(&outer, &stack, 2, null);
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
     try testing.expect(result != null);
     try testing.expectEqual(@as(u8, 2), result.?.input_count);
     try testing.expectEqual(@as(u8, 1), result.?.output_count);
@@ -9456,7 +9476,7 @@ test "resolveRowVariableEffect: keep with [ 2 * ]" {
     stack[0] = .{ .raw_at_slot = 0 }; // x
     stack[1] = .{ .quotation_body = &body }; // quot
 
-    const result = resolveRowVariableEffect(&outer, &stack, 2, null);
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
     try testing.expect(result != null);
     try testing.expectEqual(@as(u8, 2), result.?.input_count);
     try testing.expectEqual(@as(u8, 2), result.?.output_count);
@@ -9493,7 +9513,7 @@ test "resolveRowVariableEffect: keep with [ dup ]" {
     stack[0] = .{ .raw_at_slot = 0 };
     stack[1] = .{ .quotation_body = &body };
 
-    const result = resolveRowVariableEffect(&outer, &stack, 2, null);
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
     try testing.expect(result != null);
     try testing.expectEqual(@as(u8, 2), result.?.input_count);
     try testing.expectEqual(@as(u8, 3), result.?.output_count);
@@ -9525,7 +9545,7 @@ test "resolveRowVariableEffect: raw_at_slot quotation returns null" {
     stack[0] = .{ .raw_at_slot = 0 };
     stack[1] = .{ .raw_at_slot = 1 }; // runtime value, not quotation_body
 
-    const result = resolveRowVariableEffect(&outer, &stack, 2, null);
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
     try testing.expect(result == null);
 }
 
@@ -9553,7 +9573,7 @@ test "resolveRowVariableEffect: unresolvable quotation body returns null" {
     stack[0] = .{ .raw_at_slot = 0 };
     stack[1] = .{ .quotation_body = &body };
 
-    const result = resolveRowVariableEffect(&outer, &stack, 2, null);
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
     try testing.expect(result == null);
 }
 
@@ -9584,7 +9604,7 @@ test "resolveRowVariableEffect: empty quotation [ ]" {
     stack[0] = .{ .raw_at_slot = 0 };
     stack[1] = .{ .quotation_body = &body };
 
-    const result = resolveRowVariableEffect(&outer, &stack, 2, null);
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
     try testing.expect(result != null);
     try testing.expectEqual(@as(u8, 2), result.?.input_count);
     try testing.expectEqual(@as(u8, 0), result.?.output_count);
@@ -9615,10 +9635,76 @@ test "resolveRowVariableEffect: concrete quotation effect skipped" {
     stack[0] = .{ .raw_at_slot = 0 };
     stack[1] = .{ .raw_at_slot = 1 };
 
-    const result = resolveRowVariableEffect(&outer, &stack, 2, null);
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
     try testing.expect(result != null);
     try testing.expectEqual(@as(u8, 2), result.?.input_count);
     try testing.expectEqual(@as(u8, 1), result.?.output_count);
+}
+
+// ---------------------------------------------------------------------------
+// Overflow diagnostic tests
+// ---------------------------------------------------------------------------
+
+test "inferQuotationEffect: mini-stack overflow returns error" {
+    // Push max_mini_stack_depth + 1 literals to exceed the mini-stack capacity.
+    var instrs: [max_mini_stack_depth + 1]Instruction = undefined;
+    for (&instrs, 0..) |*instr, i| {
+        instr.* = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(i) } }, .line = @intCast(i + 1) };
+    }
+    try testing.expectError(error.EffectInferenceOverflow, inferQuotationEffect(&instrs, null));
+}
+
+test "inferQuotationEffect: exactly at mini-stack capacity succeeds" {
+    // Push exactly max_mini_stack_depth literals -- should succeed.
+    var instrs: [max_mini_stack_depth]Instruction = undefined;
+    for (&instrs, 0..) |*instr, i| {
+        instr.* = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(i) } }, .line = @intCast(i + 1) };
+    }
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 0), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 64), eff.?.output_count);
+}
+
+test "addOrCheckBinding: overflow returns error" {
+    const names = [_][]const u8{ "..a", "..b", "..c", "..d", "..e", "..f", "..g", "..h", "..i", "..j", "..k", "..l", "..m", "..n", "..o", "..p" };
+    comptime {
+        if (names.len != max_row_var_bindings) @compileError("test name count must match max_row_var_bindings");
+    }
+
+    var bindings: [max_row_var_bindings]RowVarBinding = undefined;
+    var num_bindings: usize = 0;
+
+    // Fill all binding slots.
+    for (names) |name| {
+        const ok = try addOrCheckBinding(&bindings, &num_bindings, name, 1);
+        try testing.expect(ok);
+    }
+    try testing.expectEqual(max_row_var_bindings, num_bindings);
+
+    // Next binding should overflow.
+    try testing.expectError(error.RowBindingOverflow, addOrCheckBinding(&bindings, &num_bindings, "..overflow", 1));
+}
+
+test "addOrCheckBinding: existing binding at capacity does not overflow" {
+    var bindings: [max_row_var_bindings]RowVarBinding = undefined;
+    var num_bindings: usize = 0;
+
+    const names = [_][]const u8{ "..a", "..b", "..c", "..d", "..e", "..f", "..g", "..h", "..i", "..j", "..k", "..l", "..m", "..n", "..o", "..p" };
+
+    // Fill all binding slots.
+    for (names) |name| {
+        const ok = try addOrCheckBinding(&bindings, &num_bindings, name, 1);
+        try testing.expect(ok);
+    }
+
+    // Re-checking an existing binding with the same size should succeed.
+    const ok = try addOrCheckBinding(&bindings, &num_bindings, "..a", 1);
+    try testing.expect(ok);
+
+    // Re-checking an existing binding with a different size should return false (conflict).
+    const conflict = try addOrCheckBinding(&bindings, &num_bindings, "..a", 2);
+    try testing.expect(!conflict);
 }
 
 // ---------------------------------------------------------------------------
