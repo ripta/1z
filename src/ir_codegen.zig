@@ -3692,7 +3692,11 @@ fn compileInstructions(
                     }
                     const true_exit_kind = state.exit_kind;
                     var end_true: c.ir_ref = c.IR_UNUSED;
-                    if (exitFallsThrough(true_exit_kind)) {
+                    // Emit END for any branch that is not a loop back-edge.
+                    // terminal_return branches still get END so the IR has
+                    // well-formed END/MERGE structure; their code is dead but
+                    // the framework needs the node for correct optimization.
+                    if (true_exit_kind != .loop_diverged) {
                         flushToPhysicalStack(state, stack, sp.*);
                         end_true = c._ir_END(ctx);
                     }
@@ -3716,9 +3720,16 @@ fn compileInstructions(
                     }
                     const false_exit_kind = state.exit_kind;
 
-                    if (!exitFallsThrough(true_exit_kind) and !exitFallsThrough(false_exit_kind)) {
+                    // Use loop_diverged (not exitFallsThrough) for branch
+                    // merge decisions. terminal_return branches still have
+                    // END nodes and participate in MERGE; only loop_diverged
+                    // branches truly leave the basic block via a back-edge.
+                    const true_diverged = true_exit_kind == .loop_diverged;
+                    const false_diverged = false_exit_kind == .loop_diverged;
+
+                    if (true_diverged and false_diverged) {
                         state.exit_kind = mergeNonFallthroughExitKinds(true_exit_kind, false_exit_kind);
-                    } else if (!exitFallsThrough(true_exit_kind)) {
+                    } else if (true_diverged) {
                         // Only false path continues. No END or MERGE needed:
                         // the false branch code just falls through after IF_FALSE.
                         // The same pattern as the exit path of a compiled loop.
@@ -3727,26 +3738,21 @@ fn compileInstructions(
                         stack.* = saved_stack;
                         resetStackToPhysical(stack, sp.*);
                         state.exit_kind = saved_exit_kind;
-                    } else if (!exitFallsThrough(false_exit_kind)) {
+                    } else if (false_diverged) {
                         // Only true path continues. Resume from true branch's END.
                         c._ir_BEGIN(ctx, end_true);
-                        // The false branch compilation may have updated
-                        // state.items_ptr/base_addr; re-LOAD so we use refs
-                        // that are live on the true path we're resuming.
                         if (state.refresh_stack_fn != c.IR_UNUSED) {
                             refreshCachedStackPointer(state);
                         }
                         resetStackToPhysical(stack, sp.*);
                         state.exit_kind = saved_exit_kind;
                     } else {
-                        // Neither branch terminated: normal merge
+                        // Normal merge (includes terminal_return branches
+                        // whose END nodes are dead but structurally valid).
                         flushToPhysicalStack(state, &saved_stack, false_sp);
                         const end_false = c._ir_END(ctx);
                         c._ir_MERGE_2(ctx, end_true, end_false);
                         if (sp.* != false_sp) return IrCodegenError.StackShapeMismatch;
-                        // Both branches may have updated state.items_ptr/
-                        // base_addr to branch-local refs. Re-LOAD after
-                        // the merge so subsequent code uses dominating refs.
                         if (state.refresh_stack_fn != c.IR_UNUSED) {
                             refreshCachedStackPointer(state);
                         }
