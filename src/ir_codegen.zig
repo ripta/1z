@@ -43,6 +43,7 @@ pub const IrCodegenError = error{
     StackShapeMismatch,
     UncompiledWords,
     UncompiledQuotations,
+    OutOfMemory,
 };
 
 /// Categorizes why a word returned NotCompilable.
@@ -1198,6 +1199,37 @@ fn emitCopyFromPtr(ctx: *c.ir_ctx, base_addr: c.ir_ref, src_ptr: c.ir_ref, dest_
 /// which is currently 9 for `make-word-info`, 64 should provides plenty headroom.
 const max_abstract_stack_depth = 64;
 
+/// Compute a conservative upper bound on the abstract stack depth needed to
+/// compile a word during the discovery pass (pass 1). The exact depth is not
+/// known until after pass 1 discovers `peak_sp`, so this bound must be generous
+/// enough to cover any word without over-counting by too much.
+///
+/// A single `call_word` instruction can change the abstract stack depth by the
+/// called word's stack effect (which may be much larger than 1), making a tight
+/// instruction-count-based bound impractical. Instead, we use the total
+/// instruction count across all nested quotation bodies, scaled to account for
+/// multi-push effects, as the bound. This is still bounded by a minimum of 64
+/// to handle pathological cases.
+fn estimateStackDepth(instructions: []const Instruction, input_count: usize) usize {
+    const total = countTotalInstructions(instructions) + input_count;
+    return @max(total, 64);
+}
+
+fn countTotalInstructions(instructions: []const Instruction) usize {
+    var total: usize = instructions.len;
+    for (instructions) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| {
+                if (val == .quotation) {
+                    total += countTotalInstructions(val.quotation.instructions);
+                }
+            },
+            else => {},
+        }
+    }
+    return total;
+}
+
 /// Symbolic stack entry: tracks the IR representation of each value on the abstract compilation stack.
 const StackEntry = union(enum) {
     /// Unboxed fixnum payload, usable directly in arithmetic and comparisons.
@@ -1253,6 +1285,10 @@ fn mergeNonFallthroughExitKinds(a: ExitKind, b: ExitKind) ExitKind {
 
 /// Shared compilation state threaded through instruction compilation.
 const CompileState = struct {
+    /// Allocator for temporary heap allocations during compilation (branch
+    /// stack copies, etc.). The JIT path uses page_allocator; the AOT path
+    /// uses the caller-provided allocator.
+    allocator: Allocator = std.heap.page_allocator,
     ctx: *c.ir_ctx,
     base_addr: c.ir_ref,
     tag_offset_const: c.ir_ref,
@@ -1797,7 +1833,7 @@ const RowVarBinding = struct {
 /// a literal body, inference fails, or row variable bindings conflict).
 fn resolveRowVariableEffect(
     effect: *const StackEffect,
-    stack: *const [max_abstract_stack_depth]StackEntry,
+    stack: []const StackEntry,
     sp: usize,
     resolver: ?WordResolver,
 ) error{ RowBindingOverflow, EffectInferenceOverflow }!?InferredEffect {
@@ -2241,7 +2277,7 @@ fn deserializeValueAt(data: []const u8, offset: *usize, allocator: Allocator) Al
 ///
 /// In AOT mode, quotation bodies are serialized to byte arrays and pushed
 /// via the jitPushQuotation callback, avoiding dangling instruction pointers.
-fn materializeQuotations(state: *CompileState, stack: *[max_abstract_stack_depth]StackEntry, sp: usize) IrCodegenError!void {
+fn materializeQuotations(state: *CompileState, stack: []StackEntry, sp: usize) IrCodegenError!void {
     const ctx = state.ctx;
     const base_addr = state.base_addr;
     for (0..sp) |qi| {
@@ -2331,7 +2367,7 @@ fn reloadBaseAfterDynamicCall(state: *CompileState) void {
 }
 
 /// Check whether any stack entry in 0..sp is a row_region.
-fn hasRowRegion(stack: *const [max_abstract_stack_depth]StackEntry, sp: usize) bool {
+fn hasRowRegion(stack: []const StackEntry, sp: usize) bool {
     for (0..sp) |i| {
         if (stack[i] == .row_region) return true;
     }
@@ -2341,7 +2377,7 @@ fn hasRowRegion(stack: *const [max_abstract_stack_depth]StackEntry, sp: usize) b
 /// Reset all stack entries from 0..sp to raw_at_slot identity (slot i = i).
 /// Used after operations that flush to physical memory, ensuring the abstract
 /// stack mirrors the physical layout.
-fn resetStackToPhysical(stack: *[max_abstract_stack_depth]StackEntry, sp: usize) void {
+fn resetStackToPhysical(stack: []StackEntry, sp: usize) void {
     for (0..sp) |i| {
         stack[i] = .{ .raw_at_slot = i };
     }
@@ -2349,7 +2385,7 @@ fn resetStackToPhysical(stack: *[max_abstract_stack_depth]StackEntry, sp: usize)
 
 /// Write all pending symbolic stack entries to their physical memory slots.
 /// After this, every entry is materialized in the Value array at base_addr.
-fn flushToPhysicalStack(state: *CompileState, stack: *[max_abstract_stack_depth]StackEntry, sp: usize) void {
+fn flushToPhysicalStack(state: *CompileState, stack: []StackEntry, sp: usize) void {
     const ctx = state.ctx;
     const base_addr = state.base_addr;
 
@@ -2520,7 +2556,7 @@ fn cloneStackEntry(
 fn emitResolvedNativeCallback(
     state: *CompileState,
     name: []const u8,
-    stack: *[max_abstract_stack_depth]StackEntry,
+    stack: []StackEntry,
     sp: *usize,
     line: usize,
 ) IrCodegenError!void {
@@ -2583,7 +2619,7 @@ fn emitStructNativeCall(
     instructions: []const Instruction,
     idx: usize,
     name: []const u8,
-    stack: *[max_abstract_stack_depth]StackEntry,
+    stack: []StackEntry,
     sp: *usize,
     line: usize,
 ) IrCodegenError!void {
@@ -2675,7 +2711,7 @@ fn emitTruthiness(state: *CompileState, entry: StackEntry, base_addr: c.ir_ref) 
 /// interpreter fallback for uncompiled quotations.
 fn emitIndirectQuotCall(
     state: *CompileState,
-    stack: *[max_abstract_stack_depth]StackEntry,
+    stack: []StackEntry,
     sp: *usize,
     slot: usize,
     line: usize,
@@ -2755,7 +2791,7 @@ fn emitIndirectQuotCall(
 /// because the branch effect is known from the other (quotation_body) branch.
 fn emitIfBranchDispatch(
     state: *CompileState,
-    stack: *[max_abstract_stack_depth]StackEntry,
+    stack: []StackEntry,
     sp: *usize,
     slot: usize,
 ) void {
@@ -2819,7 +2855,7 @@ fn emitIfBranchDispatch(
 /// condition negation for `until` semantics.
 fn compilePredBodyLoop(
     state: *CompileState,
-    stack: *[max_abstract_stack_depth]StackEntry,
+    stack: []StackEntry,
     sp: *usize,
     pred_entry: StackEntry,
     body_entry: StackEntry,
@@ -2916,7 +2952,7 @@ fn tryEmitInlineVirtualUnwrap(
     state: *CompileState,
     instructions: []const Instruction,
     idx: usize,
-    stack: *[max_abstract_stack_depth]StackEntry,
+    stack: []StackEntry,
     sp: *usize,
 ) bool {
     if (sp.* < 2) return false;
@@ -2975,7 +3011,7 @@ fn tryEmitInlineTypedValidateAndPromote(
     state: *CompileState,
     instructions: []const Instruction,
     idx: usize,
-    stack: *[max_abstract_stack_depth]StackEntry,
+    stack: []StackEntry,
     sp: *usize,
 ) bool {
     if (sp.* < 2) return false;
@@ -3065,7 +3101,7 @@ fn tryEmitInlineStructFieldGet(
     state: *CompileState,
     instructions: []const Instruction,
     idx: usize,
-    stack: *[max_abstract_stack_depth]StackEntry,
+    stack: []StackEntry,
     sp: *usize,
 ) bool {
     if (sp.* < 3) return false;
@@ -3139,7 +3175,7 @@ fn tryEmitInlineStructFieldGet(
 /// choose: ( a1 a2 quot -- a )
 fn emitChooseBuiltin(
     state: *CompileState,
-    stack: *[max_abstract_stack_depth]StackEntry,
+    stack: []StackEntry,
     sp: *usize,
 ) IrCodegenError!void {
     const ctx = state.ctx;
@@ -3249,7 +3285,7 @@ fn emitChooseBuiltin(
 fn compileInstructions(
     state: *CompileState,
     instructions: []const Instruction,
-    stack: *[max_abstract_stack_depth]StackEntry,
+    stack: []StackEntry,
     sp: *usize,
 ) IrCodegenError!void {
     const ctx = state.ctx;
@@ -3639,12 +3675,13 @@ fn compileInstructions(
                             // Only the true branch executes; compile both to validate stack effects match
                             if (true_body) |tb| {
                                 if (false_body) |fb| {
-                                    var false_stack = stack.*;
+                                    const false_stack = state.allocator.dupe(StackEntry, stack) catch return IrCodegenError.OutOfMemory;
+                                    defer state.allocator.free(false_stack);
                                     var false_sp = sp.*;
                                     const saved_exit_kind = state.exit_kind;
                                     const saved_loop_end_set = state.loop_end_set;
                                     state.exit_kind = .falls_through;
-                                    try compileInstructions(state, fb, &false_stack, &false_sp);
+                                    try compileInstructions(state, fb, false_stack, &false_sp);
                                     const false_exit_kind = state.exit_kind;
                                     state.exit_kind = .falls_through;
                                     state.loop_end_set = saved_loop_end_set;
@@ -3688,7 +3725,8 @@ fn compileInstructions(
 
                     // Save stack state for the false branch
                     const saved_sp = sp.*;
-                    var saved_stack = stack.*;
+                    const saved_stack = state.allocator.dupe(StackEntry, stack) catch return IrCodegenError.OutOfMemory;
+                    defer state.allocator.free(saved_stack);
                     const saved_exit_kind = state.exit_kind;
                     const saved_loop_end_set = state.loop_end_set;
 
@@ -3764,12 +3802,12 @@ fn compileInstructions(
                         state.inline_trace_frame_count += 1;
                     }
                     if (false_body) |fb| {
-                        try compileInstructions(state, fb, &saved_stack, &false_sp);
+                        try compileInstructions(state, fb, saved_stack, &false_sp);
                     } else {
-                        emitIfBranchDispatch(state, &saved_stack, &false_sp, false_entry.raw_at_slot);
+                        emitIfBranchDispatch(state, saved_stack, &false_sp, false_entry.raw_at_slot);
                         const eff = branch_effect.?;
                         false_sp = false_sp - eff.input_count + eff.output_count;
-                        resetStackToPhysical(&saved_stack, false_sp);
+                        resetStackToPhysical(saved_stack, false_sp);
                     }
                     if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
                     const false_exit_kind = state.exit_kind;
@@ -3788,9 +3826,9 @@ fn compileInstructions(
                         // Only false path continues. No END or MERGE needed:
                         // the false branch code just falls through after IF_FALSE.
                         // The same pattern as the exit path of a compiled loop.
-                        flushToPhysicalStack(state, &saved_stack, false_sp);
+                        flushToPhysicalStack(state, saved_stack, false_sp);
                         sp.* = false_sp;
-                        stack.* = saved_stack;
+                        @memcpy(stack, saved_stack);
                         resetStackToPhysical(stack, sp.*);
                         state.exit_kind = saved_exit_kind;
                     } else if (false_diverged) {
@@ -3803,7 +3841,7 @@ fn compileInstructions(
                         state.exit_kind = saved_exit_kind;
                     } else {
                         // Neither branch terminated: normal merge.
-                        flushToPhysicalStack(state, &saved_stack, false_sp);
+                        flushToPhysicalStack(state, saved_stack, false_sp);
                         const end_false = c._ir_END(ctx);
                         c._ir_MERGE_2(ctx, end_true, end_false);
                         if (sp.* != false_sp) return IrCodegenError.StackShapeMismatch;
@@ -5018,7 +5056,10 @@ fn compileWordPass(
 
     // Initialize inputs as raw_at_slot entries. Tag checking and unboxing
     // happen lazily at use sites (e.g., when arithmetic needs a fixnum).
-    var stack: [max_abstract_stack_depth]StackEntry = undefined;
+    const stack_alloc = std.heap.page_allocator;
+    const stack_depth: usize = if (known_peak) |peak| @as(usize, peak) else estimateStackDepth(instructions, input_count);
+    const stack = stack_alloc.alloc(StackEntry, stack_depth) catch return IrCodegenError.OutOfMemory;
+    defer stack_alloc.free(stack);
     var sp: usize = 0;
     for (0..input_count) |_| {
         stack[sp] = .{ .raw_at_slot = sp };
@@ -5026,6 +5067,7 @@ fn compileWordPass(
     }
 
     var state = CompileState{
+        .allocator = stack_alloc,
         .ctx = &ctx,
         .base_addr = base_addr,
         .tag_offset_const = tag_offset_const,
@@ -5092,7 +5134,7 @@ fn compileWordPass(
         state.trampoline_status = c.ir_const_i32(&ctx, 3);
     }
 
-    try compileInstructions(&state, instructions, &stack, &sp);
+    try compileInstructions(&state, instructions, stack, &sp);
 
     if (state.exit_kind == .loop_diverged) {
         // All paths loop back (no base case fell through).
@@ -5104,16 +5146,16 @@ fn compileWordPass(
         // The callee updated sp_ptr and the physical stack directly.
         // Just return success.
         c._ir_RETURN(&ctx, ok_status);
-    } else if (hasRowRegion(&stack, sp)) {
+    } else if (hasRowRegion(stack, sp)) {
         // Row region present: flush any entries above it to physical memory,
         // update sp_ptr, and return success.
-        flushToPhysicalStack(&state, &stack, sp);
+        flushToPhysicalStack(&state, stack, sp);
         const final_sp_const = c.ir_const_addr(&ctx, sp);
         const final_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, final_sp_const);
         c._ir_STORE(&ctx, state.sp_ptr, final_sp);
         c._ir_RETURN(&ctx, ok_status);
     } else {
-        try emitEpilogue(&state, &stack, sp, input_count, output_count);
+        try emitEpilogue(&state, stack, sp, input_count, output_count);
     }
 
     // Discovery pass: the IR we just built is throwaway. Skip JIT and let
@@ -5257,7 +5299,9 @@ pub fn emitWordC(
     const base_byte_offset = c.ir_fold2(&ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), base_idx, value_size_const);
     const base_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), items_ptr, base_byte_offset);
 
-    var stack: [max_abstract_stack_depth]StackEntry = undefined;
+    const stack_depth: usize = estimateStackDepth(instructions, input_count);
+    const stack = try allocator.alloc(StackEntry, stack_depth);
+    defer allocator.free(stack);
     var sp: usize = 0;
     for (0..input_count) |_| {
         stack[sp] = .{ .raw_at_slot = sp };
@@ -5265,6 +5309,7 @@ pub fn emitWordC(
     }
 
     var state = CompileState{
+        .allocator = allocator,
         .ctx = &ctx,
         .base_addr = base_addr,
         .tag_offset_const = tag_offset_const,
@@ -5292,7 +5337,7 @@ pub fn emitWordC(
         .append_builtin_trace_frame_fn = append_builtin_trace_frame_fn,
     };
 
-    try compileInstructions(&state, instructions, &stack, &sp);
+    try compileInstructions(&state, instructions, stack, &sp);
 
     if (state.exit_kind == .loop_diverged) {
         c._ir_RETURN(&ctx, ok_status);
@@ -5300,14 +5345,14 @@ pub fn emitWordC(
         // Terminal control flow already emitted the return.
     } else if (state.dynamic_call_emitted) {
         c._ir_RETURN(&ctx, ok_status);
-    } else if (hasRowRegion(&stack, sp)) {
-        flushToPhysicalStack(&state, &stack, sp);
+    } else if (hasRowRegion(stack, sp)) {
+        flushToPhysicalStack(&state, stack, sp);
         const final_sp_const = c.ir_const_addr(&ctx, sp);
         const final_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, final_sp_const);
         c._ir_STORE(&ctx, state.sp_ptr, final_sp);
         c._ir_RETURN(&ctx, ok_status);
     } else {
-        try emitEpilogue(&state, &stack, sp, input_count, output_count);
+        try emitEpilogue(&state, stack, sp, input_count, output_count);
     }
 
     // emit as C source with stdint.h preamble
@@ -5585,7 +5630,9 @@ fn emitWordCAotPass(
     const base_byte_offset = c.ir_fold2(&ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), base_idx, value_size_const);
     const base_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), items_ptr_after_check, base_byte_offset);
 
-    var stack_buf: [max_abstract_stack_depth]StackEntry = undefined;
+    const stack_depth: usize = if (known_peak) |peak| @as(usize, peak) else estimateStackDepth(instructions, input_count);
+    const stack_buf = allocator.alloc(StackEntry, stack_depth) catch return IrCodegenError.OutOfMemory;
+    defer allocator.free(stack_buf);
     var sp: usize = 0;
     for (0..input_count) |_| {
         stack_buf[sp] = .{ .raw_at_slot = sp };
@@ -5593,6 +5640,7 @@ fn emitWordCAotPass(
     }
 
     var state = CompileState{
+        .allocator = allocator,
         .ctx = &ctx,
         .base_addr = base_addr,
         .tag_offset_const = tag_offset_const,
@@ -5640,6 +5688,7 @@ fn emitWordCAotPass(
         .aot_quotation_literals = quotation_literals,
         .aot_array_literals = array_literals,
         .aot_quotation_id_map = quotation_id_map,
+        .peak_sp = @intCast(input_count),
         .stack_effect = stack_effect,
         .quotation_slots = buildQuotationSlotMap(stack_effect),
     };
@@ -5660,14 +5709,14 @@ fn emitWordCAotPass(
 
     // Built-in word bodies: emit custom IR instead of compiling the body.
     if (std.mem.eql(u8, name, "choose")) {
-        emitChooseBuiltin(&state, &stack_buf, &sp) catch |err| {
+        emitChooseBuiltin(&state, stack_buf, &sp) catch |err| {
             if (err == IrCodegenError.NotCompilable) {
                 if (nc_reason_out) |ro| ro.* = state.not_compilable_reason;
             }
             return err;
         };
     } else {
-        compileInstructions(&state, instructions, &stack_buf, &sp) catch |err| {
+        compileInstructions(&state, instructions, stack_buf, &sp) catch |err| {
             if (err == IrCodegenError.NotCompilable) {
                 if (nc_reason_out) |ro| ro.* = state.not_compilable_reason;
             }
@@ -5683,14 +5732,14 @@ fn emitWordCAotPass(
         // The error handler callback (jitRecover/jitCleanup) updated sp_ptr
         // and the physical stack directly. Return success, matching the JIT path.
         c._ir_RETURN(&ctx, ok_status);
-    } else if (state.dynamic_call_emitted or hasRowRegion(&stack_buf, sp)) {
+    } else if (state.dynamic_call_emitted or hasRowRegion(stack_buf, sp)) {
         // Dynamic quotation calls or unresolved row regions mean the
         // stack shape is determined at runtime by native callbacks.
         // Return success; the caller resolves row variables at the call
         // site and adjusts sp accordingly.
         c._ir_RETURN(&ctx, ok_status);
     } else {
-        try emitEpilogue(&state, &stack_buf, sp, input_count, output_count);
+        try emitEpilogue(&state, stack_buf, sp, input_count, output_count);
     }
 
     // Discovery pass: skip C emission, let the caller re-run with the peak.
