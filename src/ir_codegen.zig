@@ -63,6 +63,7 @@ pub const NotCompilableReason = enum {
     abstract_stack_underflow,
     effect_inference_overflow,
     row_binding_overflow,
+    quotation_slot_overflow,
 
     pub fn code(self: NotCompilableReason) []const u8 {
         return switch (self) {
@@ -81,6 +82,7 @@ pub const NotCompilableReason = enum {
             .abstract_stack_underflow => "NC.13",
             .effect_inference_overflow => "NC.14",
             .row_binding_overflow => "NC.15",
+            .quotation_slot_overflow => "NC.16",
         };
     }
 
@@ -101,6 +103,7 @@ pub const NotCompilableReason = enum {
             .abstract_stack_underflow => "word body underflows the abstract stack (row-variable effects)",
             .effect_inference_overflow => std.fmt.comptimePrint("quotation effect inference exceeded mini-stack capacity ({d})", .{max_mini_stack_depth}),
             .row_binding_overflow => std.fmt.comptimePrint("row variable specialization exceeded binding capacity ({d})", .{max_row_var_bindings}),
+            .quotation_slot_overflow => std.fmt.comptimePrint("word has more quotation parameters with concrete effects than the compiler can track ({d})", .{max_quotation_slots}),
         };
     }
 
@@ -121,6 +124,7 @@ pub const NotCompilableReason = enum {
             .abstract_stack_underflow => "blocked until row-variable stack regions can be modeled",
             .effect_inference_overflow => "simplify the quotation body to use fewer intermediate values",
             .row_binding_overflow => "reduce the number of distinct row variable bindings at this call site",
+            .quotation_slot_overflow => "simplify the word to use fewer quotation parameters",
         };
     }
 };
@@ -1421,19 +1425,20 @@ const QuotationSlotInfo = struct {
 };
 
 /// Maximum number of quotation parameters whose effects can be tracked simultaneously during word compilation.
-/// No prelude word has more than three quotation parameters, so eight is plenty.
-const max_quotation_slots = 8;
+/// No prelude word has more than three quotation parameters, so sixteen is generous. Overflow produces an
+/// explicit NotCompilable error rather than silently truncating.
+const max_quotation_slots = 16;
 
 /// Fixed-capacity mapping from input slot indices to concrete quotation effects.
 const QuotationSlotMap = struct {
     items: [max_quotation_slots]QuotationSlotInfo = undefined,
     len: usize = 0,
 
-    fn add(self: *QuotationSlotMap, info: QuotationSlotInfo) void {
-        if (self.len < max_quotation_slots) {
-            self.items[self.len] = info;
-            self.len += 1;
-        }
+    fn add(self: *QuotationSlotMap, info: QuotationSlotInfo) bool {
+        if (self.len >= max_quotation_slots) return false;
+        self.items[self.len] = info;
+        self.len += 1;
+        return true;
     }
 
     fn findSlot(self: *const QuotationSlotMap, slot: usize) ?QuotationSlotInfo {
@@ -1446,7 +1451,7 @@ const QuotationSlotMap = struct {
 
 /// Build quotation slot mapping from a stack effect's input parameters.
 /// Records slots whose quotation_effect has concrete (non-row-variable) arities.
-fn buildQuotationSlotMap(effect: ?*const StackEffect) QuotationSlotMap {
+fn buildQuotationSlotMap(effect: ?*const StackEffect) ?QuotationSlotMap {
     var map = QuotationSlotMap{};
     const eff = effect orelse return map;
     var concrete_idx: usize = 0;
@@ -1454,11 +1459,11 @@ fn buildQuotationSlotMap(effect: ?*const StackEffect) QuotationSlotMap {
         if (param.is_row_variable) continue;
         if (param.quotation_effect) |qe| {
             if (!stack_effect_mod.hasAnyRowVariable(qe.*)) {
-                map.add(.{
+                if (!map.add(.{
                     .slot = concrete_idx,
                     .input_count = @intCast(qe.concreteInputCount()),
                     .output_count = @intCast(qe.concreteOutputCount()),
-                });
+                })) return null;
             }
         }
         concrete_idx += 1;
@@ -4899,8 +4904,6 @@ fn compileWordPass(
 ) IrCodegenError!CompileWordPassResult {
     ValueLayout.ensureInit();
 
-    if (input_count > max_abstract_stack_depth) return IrCodegenError.NotCompilable;
-
     // Pre-scan: check if any call_word needs dispatch table resolution
     // or contains loops (which need safepoints).
     var scan_flags = PreScanFlags{};
@@ -5108,7 +5111,7 @@ fn compileWordPass(
         .append_builtin_trace_frame_fn = append_builtin_trace_frame_fn,
         .peak_sp = @intCast(input_count),
         .stack_effect = stack_effect,
-        .quotation_slots = buildQuotationSlotMap(stack_effect),
+        .quotation_slots = buildQuotationSlotMap(stack_effect) orelse return IrCodegenError.NotCompilable,
     };
 
     // If this word contains a self-tail-call, wrap the body in a LOOP_BEGIN
@@ -5227,8 +5230,6 @@ pub fn emitWordC(
     allocator: Allocator,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     ValueLayout.ensureInit();
-
-    if (input_count > max_abstract_stack_depth) return IrCodegenError.NotCompilable;
 
     const c_name = try mangleWordName(name, allocator);
     defer allocator.free(c_name);
@@ -5459,11 +5460,6 @@ fn emitWordCAotPass(
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)!EmitWordCAotPassResult {
     ValueLayout.ensureInit();
 
-    if (input_count > max_abstract_stack_depth) {
-        if (nc_reason_out) |ro| ro.* = .too_many_inputs;
-        return IrCodegenError.NotCompilable;
-    }
-
     const c_name = if (c_name_override) |override|
         try allocator.dupeZ(u8, override)
     else
@@ -5690,7 +5686,10 @@ fn emitWordCAotPass(
         .aot_quotation_id_map = quotation_id_map,
         .peak_sp = @intCast(input_count),
         .stack_effect = stack_effect,
-        .quotation_slots = buildQuotationSlotMap(stack_effect),
+        .quotation_slots = buildQuotationSlotMap(stack_effect) orelse {
+            if (nc_reason_out) |ro| ro.* = .quotation_slot_overflow;
+            return IrCodegenError.NotCompilable;
+        },
     };
 
     // Self-tail-call detection for AOT
@@ -6055,7 +6054,7 @@ pub fn emitProgramC(
         for (words) |w| {
             if (w.is_native) continue;
             if (w.stack_effect == null) continue;
-            const slot_map = buildQuotationSlotMap(&w.stack_effect.?);
+            const slot_map = buildQuotationSlotMap(&w.stack_effect.?) orelse continue;
             try collectQuotationFallbacks(
                 &w.stack_effect.?,
                 &slot_map,
@@ -9068,8 +9067,8 @@ test "QuotationSlotMap add and findSlot" {
     try testing.expectEqual(@as(usize, 0), map.len);
     try testing.expect(map.findSlot(0) == null);
 
-    map.add(.{ .slot = 1, .input_count = 1, .output_count = 1 });
-    map.add(.{ .slot = 3, .input_count = 2, .output_count = 0 });
+    try testing.expect(map.add(.{ .slot = 1, .input_count = 1, .output_count = 1 }));
+    try testing.expect(map.add(.{ .slot = 3, .input_count = 2, .output_count = 0 }));
     try testing.expectEqual(@as(usize, 2), map.len);
 
     const info1 = map.findSlot(1).?;
@@ -9099,7 +9098,7 @@ test "buildQuotationSlotMap with concrete effect" {
         .outputs = &[_]StackEffectParam{.{ .name = "seq'" }},
     };
 
-    const map = buildQuotationSlotMap(&effect);
+    const map = buildQuotationSlotMap(&effect).?;
     try testing.expectEqual(@as(usize, 1), map.len);
 
     const info = map.findSlot(1).?;
@@ -9124,7 +9123,7 @@ test "buildQuotationSlotMap skips row-variable effects" {
         .outputs = &[_]StackEffectParam{.{ .name = "..b", .is_row_variable = true }},
     };
 
-    const map = buildQuotationSlotMap(&effect);
+    const map = buildQuotationSlotMap(&effect).?;
     try testing.expectEqual(@as(usize, 0), map.len);
 }
 
@@ -9150,7 +9149,7 @@ test "buildQuotationSlotMap mixed concrete and row-variable" {
         },
     };
 
-    const map = buildQuotationSlotMap(&effect);
+    const map = buildQuotationSlotMap(&effect).?;
     try testing.expectEqual(@as(usize, 1), map.len);
 
     // pred is concrete slot 0 (first non-row-variable input)
@@ -9163,7 +9162,7 @@ test "buildQuotationSlotMap mixed concrete and row-variable" {
 }
 
 test "buildQuotationSlotMap with null effect" {
-    const map = buildQuotationSlotMap(null);
+    const map = buildQuotationSlotMap(null).?;
     try testing.expectEqual(@as(usize, 0), map.len);
 }
 
