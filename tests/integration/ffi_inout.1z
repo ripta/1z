@@ -2,8 +2,12 @@ use "testing" ;
 use "ffi" ;
 
 \\ Helper to get the shared library path for the toy library.
+toy-lib-ext: ( -- ext ) [
+  sys-info "os" @get "macos" = [ ".dylib" ] [ ".so" ] if
+] ;
+
 toy-lib-path: ( -- path ) [
-  environ "PWD" @get "/zig-out/ext/libtoy.dylib" #append
+  environ "PWD" @get "/zig-out/ext/libtoy" #append toy-lib-ext #append
 ] ;
 
 toy-lib-path lib-open

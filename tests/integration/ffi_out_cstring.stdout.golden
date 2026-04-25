@@ -1,4 +1,5 @@
 Stack: [ ]
+Stack: [ ]
 Stack: [ <resource:dylib> ]
 Stack: [ <resource:ffi-fn> <resource:dylib> ]
 Stack: [ <resource:ffi-fn> <resource:dylib> "toy-1.0" ]

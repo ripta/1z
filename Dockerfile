@@ -3,7 +3,7 @@ FROM ${BASE_IMAGE}
 
 USER root
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends make libffi-dev libc6-dev && \
+    apt-get install -y --no-install-recommends make libffi-dev libc6-dev zlib1g-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # Debian's libc6-dev ships /usr/lib/x86_64-linux-gnu/libm.so as a linker script,
