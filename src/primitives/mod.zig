@@ -125,6 +125,8 @@ pub const extracted_registry_entries = structs.registry_entries ++
     introspect.registry_entries ++
     arithmetic.registry_entries ++
     math.registry_entries ++
+    sequences.registry_entries ++
     sockets.registry_entries ++
+    iterators.registry_entries ++
     ffi_toy.registry_entries ++
     ffi_dynamic.registry_entries;

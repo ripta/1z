@@ -14,6 +14,7 @@ pub const Iterator = struct {
         filter: FilterIter,
         take: TakeIter,
         drop: DropIter,
+        callback: CallbackIter,
     };
 
     pub fn next(self: *Iterator, ctx: *Context) anyerror!?Value {
@@ -24,7 +25,27 @@ pub const Iterator = struct {
             .filter => |*it| try it.next(ctx),
             .take => |*it| try it.next(ctx),
             .drop => |*it| try it.next(ctx),
+            .callback => |*it| try it.next(ctx),
         };
+    }
+
+    pub fn close(self: *Iterator, ctx: *Context) anyerror!void {
+        switch (self.kind) {
+            .map => |it| try it.inner.close(ctx),
+            .filter => |it| try it.inner.close(ctx),
+            .take => |it| try it.inner.close(ctx),
+            .drop => |it| try it.inner.close(ctx),
+            .callback => |*it| {
+                if (it.cleanup_quotation) |cq| {
+                    if (!it.cleanup_ran) {
+                        it.cleanup_ran = true;
+                        it.exhausted = true;
+                        try ctx.executeQuotationWithFrame(cq);
+                    }
+                }
+            },
+            .array, .range => {},
+        }
     }
 
     pub fn kindName(self: *const Iterator) []const u8 {
@@ -35,6 +56,7 @@ pub const Iterator = struct {
             .filter => "filter",
             .take => "take",
             .drop => "drop",
+            .callback => "callback",
         };
     }
 
@@ -67,6 +89,7 @@ pub const Iterator = struct {
                 try it.inner.progressDisplay(writer);
                 try writer.writeAll(")");
             },
+            .callback => try writer.writeAll("callback"),
         }
     }
 };
@@ -155,6 +178,32 @@ pub const DropIter = struct {
             _ = try self.inner.next(ctx) orelse return null;
         }
         return try self.inner.next(ctx);
+    }
+};
+
+pub const CallbackIter = struct {
+    quotation: Quotation,
+    exhausted: bool,
+    cleanup_quotation: ?Quotation,
+    cleanup_ran: bool,
+
+    pub fn next(self: *CallbackIter, ctx: *Context) anyerror!?Value {
+        if (self.exhausted) return null;
+        try ctx.executeQuotationWithFrame(self.quotation);
+        const flag = try ctx.stack.pop();
+        const is_true = flag != .boolean or flag.boolean;
+        if (is_true) {
+            return try ctx.stack.pop();
+        } else {
+            self.exhausted = true;
+            if (self.cleanup_quotation) |cq| {
+                if (!self.cleanup_ran) {
+                    self.cleanup_ran = true;
+                    try ctx.executeQuotationWithFrame(cq);
+                }
+            }
+            return null;
+        }
     }
 };
 

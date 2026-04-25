@@ -1,0 +1,124 @@
+\ lib/zlib.1z - zlib compression via dynamic FFI
+
+use "ffi" ;
+
+\\ Bind zlib functions via dynamic FFI.
+\\
+\\ compress2(dest, &destLen, source, sourceLen, level) -> int
+\\ uncompress(dest, &destLen, source, sourceLen) -> int
+\\ compressBound(sourceLen) -> ulong
+"z" lib-open ffi-def{
+  (compress2): "compress2" ffi{ ptr inout-usize ptr usize i32 -> i32 }
+  (uncompress-raw): "uncompress" ffi{ ptr inout-usize ptr usize -> i32 }
+  (compress-bound): "compressBound" ffi{ usize -> usize }
+} call "zlib-raw" swap >module import
+
+EZlibError: [ zlib-error: ] ;
+
+\\ Check zlib return code, throw on error.
+(check-zlib): ( code -- ) [
+  dup 0 = [ drop ] [
+    dup -5 = [ drop "output buffer too small" EZlibError make-error throw ] [
+      inspect " (zlib error)" #append EZlibError make-error throw
+    ] if
+  ] if
+] ;
+
+\\ Compress a byte array with default compression level (6).
+compress: ( byte-array -- byte-array ) [ 6 compress-level ] ;
+
+\\ Compress a byte array with a specific compression level (1-9).
+\\ TODO(ripta): Refactor; what a nightmare of stack manipulation words.
+compress-level: ( byte-array level -- byte-array ) [
+  swap
+  dup #len (compress-bound)
+  dup bytes-alloc
+  \\ Stack: level input bound out-buf
+  dup bytes>ffi-ptr+len drop
+  \\ Stack: level input bound out-buf dest-ptr
+  2 pick-n
+  \\ Stack: level input bound out-buf dest-ptr destLen
+  4 pick-n bytes>ffi-ptr+len
+  \\ Stack: level input bound out-buf dest-ptr destLen src-ptr srcLen
+  7 pick-n
+  \\ Stack: level input bound out-buf dest-ptr destLen src-ptr srcLen level
+  (compress2)
+  \\ Stack: level input bound out-buf actual-destLen return-code
+  (check-zlib)
+  bytes-resize!
+  swap drop swap drop swap drop
+] ;
+
+\\ Decompress a byte array with retry loop. Maximum output 256 MB.
+uncompress: ( byte-array -- byte-array ) [ 268435456 uncompress-max ] ;
+
+\\ Decompress with a caller-specified maximum output size.
+\\ Starts at 4x input size, doubles on each retry.
+uncompress-max: ( byte-array max-size -- byte-array ) [
+  over #len 4 *
+  -rot>
+  (uncompress-loop)
+] ;
+
+\\ Decompress expecting a known output size. Single attempt, no retry.
+uncompress-sized: ( byte-array expected-len -- byte-array ) [
+  dup bytes-alloc
+  \\ Stack: input expected out-buf
+  dup bytes>ffi-ptr+len drop
+  \\ Stack: input expected out-buf dest-ptr
+  2 pick-n
+  \\ Stack: input expected out-buf dest-ptr destLen
+  4 pick-n bytes>ffi-ptr+len
+  \\ Stack: input expected out-buf dest-ptr destLen src-ptr srcLen
+  (uncompress-raw)
+  \\ Stack: input expected out-buf actual-destLen return-code
+  (check-zlib)
+  bytes-resize!
+  swap drop swap drop
+] ;
+
+\\ Internal retry loop for decompression.
+(uncompress-loop): ( guess input max -- byte-array ) [
+  2 pick-n over > [ 3drop "output exceeds maximum size" EZlibError make-error throw ] [
+    2 pick-n 2 pick-n (try-uncompress)
+    dup option:some? [
+      option:some> swap drop swap drop swap drop
+    ] [
+      drop
+      [ 2 * ] 2dip
+      (uncompress-loop)
+    ] if
+  ] if
+] ;
+
+\\ Try a single decompression at a given buffer size.
+\\ Returns option:some on success, option:none on buffer-too-small.
+(try-uncompress): ( guess input -- option ) [
+  \\ Stack: guess input
+  over bytes-alloc
+  \\ Stack: guess input out-buf
+  dup bytes>ffi-ptr+len drop
+  \\ Stack: guess input out-buf dest-ptr
+  3 pick-n
+  \\ Stack: guess input out-buf dest-ptr destLen(=guess)
+  3 pick-n bytes>ffi-ptr+len
+  \\ Stack: guess input out-buf dest-ptr destLen src-ptr srcLen
+  (uncompress-raw)
+  \\ Stack: guess input out-buf actual-destLen return-code
+  dup 0 = [
+    drop
+    \\ Stack: guess input out-buf actual-destLen
+    bytes-resize!
+    swap drop swap drop
+    >option:some
+  ] [
+    dup -5 = [
+      \\ Buffer too small, clean up
+      drop drop drop drop drop
+      >option:none
+    ] [
+      \\ Other zlib error
+      (check-zlib)
+    ] if
+  ] if
+] ;

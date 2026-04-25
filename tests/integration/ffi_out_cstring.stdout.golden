@@ -1,0 +1,39 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:dylib> "toy-1.0" ]
+PASS: out-cstring returns static string
+Stack: [ <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> "toy-1.0" ]
+PASS: out-cstring-retained returns static string
+Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:dylib> "Hello, world!" ]
+PASS: out-cstring-owned returns greeting
+Stack: [ <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:dylib> "Hello, 1z!" ]
+PASS: out-cstring-owned with different name
+Stack: [ <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:dylib> "" ]
+PASS: out-cstring null returns empty string
+Stack: [ <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:dylib> "" ]
+PASS: out-cstring-retained null returns empty string
+Stack: [ <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:ffi-fn> <resource:dylib> "" ]
+PASS: out-cstring-owned null returns empty string
+Stack: [ <resource:ffi-fn> <resource:dylib> ]
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> [ toy-lib-path lib-open dup "toy_version_out" lib-symbol ffi-sig{ params: { "ptr" } return-type: "out-cstring" } bind-sig drop swap resource-close ] ]
+PASS: out-cstring as return type rejected
+Stack: [ <resource:dylib> ]
+Stack: [ ]

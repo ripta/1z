@@ -203,6 +203,14 @@ finite?: ( x -- ? ) [ dup float? [ dup nan? not swap infinite? not and ] [ drop 
 \\ Test whether a named word has the `generic` marker.
 generic?: ( name -- ? ) [ word-markers [ generic = ] #any ] ;
 
+\ Mutable sequence resize
+\\ Create an n-byte zeroed buffer.
+bytes-alloc: ( n -- byte-array ) [ native.bytes-alloc ] ;
+\\ Resize byte array in place, truncating or zero-filling as needed.
+bytes-resize!: ( byte-array n -- byte-array ) [ over #len over < [ 0x00 native.grow! ] [ native.shrink! ] if ] ;
+\\ Resize a mutable sequence in place with an explicit fill value for growth.
+resize!: ( seq n fill -- seq ) [ -rot> over #len over < [ [ swap ] dip swap native.grow! ] [ [ swap drop ] dip native.shrink! ] if ] ;
+
 \ Short-circuiting sequence predicates
 \\ Test whether any element satisfies the predicate. Short-circuits.
 #any: ( seq quot -- ? ) [
@@ -488,8 +496,40 @@ try: ( quot -- result ) [ [ call >result:ok ] [ >result:err ] recover ] ;
 \\ Try to receive from a channel. Returns some(value) on success, none if closed and empty.
 receive?: ( ch -- option ) [ [ receive >option:some ] [ drop option:none ] recover ] ;
 
+\\ Create an iterator. Accepts a sequence (delegates to the native) or a quotation
+\\ returning option values (wraps to the raw flag convention and creates a callback iterator).
+>iterator: generic ( seq-or-quot -- iterator ) [
+  dup quotation? [
+    [ call dup option:some? [ option:some> t ] [ drop f ] if ] curry
+    native.make-callback-iter
+  ] [
+    native.>iterator
+  ] if
+] ;
+
+\\ Create an iterator with a cleanup quotation. The step quotation returns option values;
+\\ the cleanup quotation runs automatically when the callback iterator is naturally exhausted.
+>iterator(with-cleanup): ( step-quot cleanup-quot -- iterator ) [
+  swap
+  [ call dup option:some? [ option:some> t ] [ drop f ] if ] curry
+  swap
+  native.make-callback-iter-with-cleanup
+] ;
+
 \\ Advance an iterator, returning some(value) or none if exhausted.
 #next?: ( iter -- option ) [ [ #next >option:some ] [ drop option:none ] recover ] ;
+
+\\ Close an iterator, running its cleanup quotation if present.
+\\ Propagates through adapter chains (#map, #filter, #take, #drop).
+\\ No-op on iterators without cleanup. Idempotent.
+close-iterator: ( iterator -- ) [ native.close-iterator ] ;
+
+\\ Execute a quotation with an iterator, guaranteeing close-iterator on exit.
+with-iterator: ( iterator quot -- ... ) [ over [ close-iterator ] curry cleanup ] ;
+
+\\ Copy n bytes from an FFI pointer resource into a new byte-array.
+\\ The resource is not consumed or closed.
+ffi-ptr+len>bytes: ( resource n -- byte-array ) [ native.ffi-ptr+len>bytes ] ;
 
 \\ Blocking acquire: consumes a token or permit from the resource.
 \\ Yields to the scheduler until a token is available.

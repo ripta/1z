@@ -26,6 +26,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "ffi-call", .func = nativeFfiCall },
     .{ .name = "ffi-callback", .func = nativeFfiCallback },
     .{ .name = "bytes-raw-ptr", .func = nativeBytesRawPtr },
+    .{ .name = "ffi-ptr+len>bytes", .func = nativeFfiPtrLenToBytes },
 };
 
 fn dylibCloseFn(ptr: *anyopaque) void {
@@ -206,7 +207,7 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
         helpers.setErrorContext(ctx, "unknown FFI type: {s}", .{return_type_str});
         return error.FFITypeMismatch;
     };
-    if (return_type.is_out) {
+    if (return_type.is_out() or return_type.is_inout()) {
         helpers.setErrorContext(ctx, "out-parameter annotation is not valid for return type", .{});
         return error.FFITypeMismatch;
     }
@@ -299,7 +300,7 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
     // Count non-out params to know how many values to pop from the stack
     var n_stack_args: usize = 0;
     for (sig.param_types) |pt| {
-        if (!pt.is_out) n_stack_args += 1;
+        if (!pt.is_out()) n_stack_args += 1;
     }
 
     if (ctx.stack.depth() < n_stack_args) {
@@ -322,11 +323,17 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
 
     var stack_arg_idx: usize = 0;
     for (sig.param_types, 0..) |param_type, pi| {
-        if (param_type.is_out) {
+        if (param_type.is_out()) {
             arg_slots[pi] = std.mem.zeroes(ArgSlot);
             out_ptr_slots[pi] = @ptrCast(&arg_slots[pi]);
             arg_types[pi] = &c_ffi.ffi_type_pointer;
             arg_ptrs[pi] = @ptrCast(&out_ptr_slots[pi]);
+        } else if (param_type.is_inout()) {
+            arg_slots[pi] = try marshalArg(ctx, param_type, arg_vals[stack_arg_idx], stack_arg_idx);
+            out_ptr_slots[pi] = @ptrCast(&arg_slots[pi]);
+            arg_types[pi] = &c_ffi.ffi_type_pointer;
+            arg_ptrs[pi] = @ptrCast(&out_ptr_slots[pi]);
+            stack_arg_idx += 1;
         } else {
             arg_types[pi] = ffiTypeToLibffi(param_type.tag);
             arg_slots[pi] = try marshalArg(ctx, param_type, arg_vals[stack_arg_idx], stack_arg_idx);
@@ -368,9 +375,9 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
         return err;
     }
 
-    // Push out-param values in parameter order (first out-param deepest)
+    // Push out-param and inout-param values in parameter order (first deepest)
     for (sig.param_types, 0..) |param_type, pi| {
-        if (param_type.is_out) {
+        if (param_type.is_out() or param_type.is_inout()) {
             try marshalOutParam(ctx, param_type, &arg_slots[pi]);
         }
     }
@@ -622,6 +629,7 @@ fn marshalReturn(ctx: *Context, return_type: FfiType, ret: *const ReturnStorage)
 
 /// Read a value from an out-parameter ArgSlot and push it onto the stack.
 fn marshalOutParam(ctx: *Context, param_type: FfiType, slot: *const ArgSlot) !void {
+    const alloc = ctx.arena.allocator();
     switch (param_type.tag) {
         inline .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64, .usize_type, .isize_type => |tag| {
             const T = ffiTagToZigType(tag);
@@ -631,7 +639,39 @@ fn marshalOutParam(ctx: *Context, param_type: FfiType, slot: *const ArgSlot) !vo
         .f32 => try ctx.stack.push(.{ .float = @floatCast(slot.f32_val) }),
         .f64 => try ctx.stack.push(.{ .float = slot.f64_val }),
         .bool_type => try ctx.stack.push(.{ .boolean = slot.bool_val != 0 }),
-        .void_type, .cstring, .cstring_retained, .cstring_owned, .ptr => unreachable,
+        .ptr => {
+            const type_name = param_type.ptr_name orelse "ffi-ptr";
+            const r = try alloc.create(Resource);
+            r.* = .{
+                .type_name = type_name,
+                .ptr = slot.ptr_val,
+                .closed = false,
+                .close_fn = .none,
+            };
+            try ctx.stack.push(.{ .resource = r });
+        },
+        .cstring, .cstring_retained => {
+            const cptr: [*c]const u8 = @ptrCast(slot.ptr_val);
+            if (cptr == null) {
+                try ctx.stack.push(.{ .string = "" });
+            } else {
+                const span = std.mem.span(cptr);
+                const str = try alloc.dupe(u8, span);
+                try ctx.stack.push(.{ .string = str });
+            }
+        },
+        .cstring_owned => {
+            const cptr: [*c]u8 = @ptrCast(slot.ptr_val);
+            if (cptr == null) {
+                try ctx.stack.push(.{ .string = "" });
+            } else {
+                const span = std.mem.span(cptr);
+                const str = try alloc.dupe(u8, span);
+                std.c.free(cptr);
+                try ctx.stack.push(.{ .string = str });
+            }
+        },
+        .void_type => unreachable,
     }
 }
 
@@ -655,6 +695,47 @@ fn nativeBytesRawPtr(ctx: *Context) anyerror!void {
 
     try ctx.stack.push(.{ .resource = r });
     try ctx.stack.push(.{ .fixnum = @intCast(ba.items.len) });
+}
+
+/// ffi-ptr+len>bytes ( resource n -- byte-array )
+///
+/// Copies n bytes from a raw pointer resource into a new byte-array.
+/// The resource is not consumed or closed.
+fn nativeFfiPtrLenToBytes(ctx: *Context) anyerror!void {
+    const n_val = try helpers.popFixnum(ctx);
+    const resource_val = try ctx.stack.pop();
+
+    const resource = switch (resource_val) {
+        .resource => |r| r,
+        else => {
+            helpers.setTypeMismatchError(ctx, "resource", resource_val);
+            return error.TypeMismatch;
+        },
+    };
+    try error_mapping.ensureResourceOpen(resource);
+
+    if (n_val < 0) {
+        helpers.setErrorContext(ctx, "ffi-ptr+len>bytes size must be non-negative, got {d}", .{n_val});
+        return error.IndexOutOfBounds;
+    }
+    const n: usize = @intCast(n_val);
+
+    const alloc = ctx.quotationAllocator();
+    const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+    ba.* = ByteArray{};
+
+    if (n > 0) {
+        const raw_ptr = resource.ptr orelse {
+            helpers.setErrorContext(ctx, "ffi-ptr+len>bytes: resource pointer is null", .{});
+            return error.FFICallFailed;
+        };
+        ba.ensureTotalCapacity(alloc, n) catch return error.OutOfMemory;
+        ba.items.len = n;
+        const src: [*]const u8 = @ptrCast(raw_ptr);
+        @memcpy(ba.items[0..n], src[0..n]);
+    }
+
+    try ctx.stack.push(.{ .byte_array = ba });
 }
 
 /// Call a foreign close function via libffi with the signature (ptr -> void).
@@ -702,8 +783,8 @@ fn nativeBindClose(ctx: *Context) anyerror!void {
         return error.FFICallFailed;
     };
 
-    if (sig.param_types.len != 1 or sig.param_types[0].tag != .ptr or sig.return_type.tag != .void_type) {
-        helpers.setErrorContext(ctx, "bind-close requires signature ( ptr -> void )", .{});
+    if (sig.param_types.len != 1 or sig.param_types[0].tag != .ptr) {
+        helpers.setErrorContext(ctx, "bind-close requires signature with exactly one ptr parameter", .{});
         return error.FFITypeMismatch;
     }
 
@@ -929,7 +1010,7 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
             helpers.setErrorContext(ctx, "void is not valid as a parameter type", .{});
             return error.FFITypeMismatch;
         }
-        if (param_types[i].is_out) {
+        if (param_types[i].is_out() or param_types[i].is_inout()) {
             helpers.setErrorContext(ctx, "out-parameters are not valid in callback signatures", .{});
             return error.FFITypeMismatch;
         }
