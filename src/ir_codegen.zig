@@ -87,7 +87,7 @@ pub const NotCompilableReason = enum {
             .non_serializable_literal => "word pushes a value that cannot be embedded in an AOT binary",
             .post_dynamic_call => "calls a quotation whose stack effect is unknown",
             .unresolvable_word => "calls a word that is not available in the AOT compilation set",
-            .too_many_inputs => "takes more than 64 input parameters",
+            .too_many_inputs => std.fmt.comptimePrint("takes more than {d} input parameters", .{max_abstract_stack_depth}),
             .quotation_reification => "a quotation in abstract form must become a concrete runtime value",
             .merge_type_mismatch => "if/else branches produce different value types",
             .nested_loop_conflict => "contains two self-recursive tail calls",
@@ -105,7 +105,7 @@ pub const NotCompilableReason = enum {
             .non_serializable_literal => "blocked until AOT literals can be serialized",
             .post_dynamic_call => "annotate the quotation parameter with a concrete stack effect",
             .unresolvable_word => "blocked until the AOT resolver includes this word",
-            .too_many_inputs => "reduce input parameters to 64 or fewer",
+            .too_many_inputs => std.fmt.comptimePrint("reduce input parameters to {d} or fewer", .{max_abstract_stack_depth}),
             .quotation_reification => "blocked until quotation bodies can be compiled",
             .merge_type_mismatch => "blocked until polymorphic branch merging is implemented",
             .nested_loop_conflict => "split into two words so each has one recursive call",
@@ -1185,8 +1185,12 @@ fn emitCopyFromPtr(ctx: *c.ir_ctx, base_addr: c.ir_ref, src_ptr: c.ir_ref, dest_
     }
 }
 
-/// Symbolic stack entry: tracks the IR representation of each value on the
-/// abstract compilation stack.
+/// Maximum depth of the abstract compilation stack used during word compilation. Each entry tracks
+/// the type and form of a value at that stack position. Bounded by the largest word arity in prelude,
+/// which is currently 9 for `make-word-info`, 64 should provides plenty headroom.
+const max_abstract_stack_depth = 64;
+
+/// Symbolic stack entry: tracks the IR representation of each value on the abstract compilation stack.
 const StackEntry = union(enum) {
     /// Unboxed fixnum payload, usable directly in arithmetic and comparisons.
     i64_ref: c.ir_ref,
@@ -1350,13 +1354,17 @@ const QuotationSlotInfo = struct {
     output_count: u8,
 };
 
+/// Maximum number of quotation parameters whose effects can be tracked simultaneously during word compilation.
+/// No prelude word has more than three quotation parameters, so eight is plenty.
+const max_quotation_slots = 8;
+
 /// Fixed-capacity mapping from input slot indices to concrete quotation effects.
 const QuotationSlotMap = struct {
-    items: [8]QuotationSlotInfo = undefined,
+    items: [max_quotation_slots]QuotationSlotInfo = undefined,
     len: usize = 0,
 
     fn add(self: *QuotationSlotMap, info: QuotationSlotInfo) void {
-        if (self.len < 8) {
+        if (self.len < max_quotation_slots) {
             self.items[self.len] = info;
             self.len += 1;
         }
@@ -1427,6 +1435,9 @@ pub const InferredEffect = struct {
     output_count: u8,
 };
 
+/// Maximum depth of the mini-stack used during quotation effect inference. Quotation bodies are typically short.
+const max_mini_stack_depth = 64;
+
 /// Entry in the lightweight mini-stack used during quotation effect inference.
 /// Tracks whether a position holds a known quotation body (for resolving
 /// `call` and `if` within the body) or an opaque value.
@@ -1450,13 +1461,13 @@ pub fn inferQuotationEffect(
     var min_delta: i32 = 0;
 
     // Mini-stack tracks known quotation bodies above the initial level.
-    var mini_stack: [64]MiniStackEntry = undefined;
+    var mini_stack: [max_mini_stack_depth]MiniStackEntry = undefined;
     var sp: usize = 0;
 
     for (instructions) |instr| {
         switch (instr.op) {
             .push_literal => |val| {
-                if (sp < 64) {
+                if (sp < max_mini_stack_depth) {
                     mini_stack[sp] = if (val == .quotation)
                         .{ .quotation = val.quotation.instructions }
                     else
@@ -1492,7 +1503,7 @@ pub fn inferQuotationEffect(
                         pops -= 1;
                     }
                     var pushes: usize = resolved.output_count;
-                    while (pushes > 0 and sp < 64) {
+                    while (pushes > 0 and sp < max_mini_stack_depth) {
                         mini_stack[sp] = .other;
                         sp += 1;
                         pushes -= 1;
@@ -1517,7 +1528,7 @@ pub fn inferQuotationEffect(
 /// try the WordResolver).
 fn inferBuiltinEffect(
     name: []const u8,
-    mini_stack: *[64]MiniStackEntry,
+    mini_stack: *[max_mini_stack_depth]MiniStackEntry,
     sp: *usize,
     delta: *i32,
     min_delta: *i32,
@@ -1533,17 +1544,17 @@ fn inferBuiltinEffect(
         if (sp.* >= 1) {
             // Duplicate top entry (preserving quotation body if present).
             const top = mini_stack[sp.* - 1];
-            if (sp.* < 64) {
+            if (sp.* < max_mini_stack_depth) {
                 mini_stack[sp.*] = top;
                 sp.* += 1;
             }
         } else {
             // Duping from below initial level: push two unknowns.
-            if (sp.* < 64) {
+            if (sp.* < max_mini_stack_depth) {
                 mini_stack[sp.*] = .other;
                 sp.* += 1;
             }
-            if (sp.* < 64) {
+            if (sp.* < max_mini_stack_depth) {
                 mini_stack[sp.*] = .other;
                 sp.* += 1;
             }
@@ -1574,11 +1585,11 @@ fn inferBuiltinEffect(
         delta.* -= 2;
         min_delta.* = @min(min_delta.*, delta.*);
         delta.* += 3;
-        if (sp.* >= 2 and sp.* < 64) {
+        if (sp.* >= 2 and sp.* < max_mini_stack_depth) {
             // Copy second element to top.
             mini_stack[sp.*] = mini_stack[sp.* - 2];
             sp.* += 1;
-        } else if (sp.* < 64) {
+        } else if (sp.* < max_mini_stack_depth) {
             // Some entries below initial level; push unknown.
             mini_stack[sp.*] = .other;
             sp.* += 1;
@@ -1631,7 +1642,7 @@ fn inferBuiltinEffect(
 
                     // Push opaque outputs onto mini-stack.
                     var pushes: usize = effect.output_count;
-                    while (pushes > 0 and sp.* < 64) {
+                    while (pushes > 0 and sp.* < max_mini_stack_depth) {
                         mini_stack[sp.*] = .other;
                         sp.* += 1;
                         pushes -= 1;
@@ -1687,7 +1698,7 @@ fn inferBuiltinEffect(
 
             // Push opaque outputs.
             var pushes: usize = true_eff.output_count;
-            while (pushes > 0 and sp.* < 64) {
+            while (pushes > 0 and sp.* < max_mini_stack_depth) {
                 mini_stack[sp.*] = .other;
                 sp.* += 1;
                 pushes -= 1;
@@ -1710,7 +1721,7 @@ fn inferBuiltinEffect(
 /// Apply a fixed (input_count, output_count) effect to delta, min_delta,
 /// and the mini-stack.
 fn applyFixedEffect(
-    mini_stack: *[64]MiniStackEntry,
+    mini_stack: *[max_mini_stack_depth]MiniStackEntry,
     sp: *usize,
     delta: *i32,
     min_delta: *i32,
@@ -1730,12 +1741,16 @@ fn applyFixedEffect(
         pops -= 1;
     }
     var pushes: usize = output_count;
-    while (pushes > 0 and sp.* < 64) {
+    while (pushes > 0 and sp.* < max_mini_stack_depth) {
         mini_stack[sp.*] = .other;
         sp.* += 1;
         pushes -= 1;
     }
 }
+
+/// Maximum number of distinct row variable bindings that can be resolved during a single callsite specialization.
+/// Row variable effects typically bind 1-2 variables per quotation parameter.
+const max_row_var_bindings = 16;
 
 /// Row variable binding: maps a row variable name to its resolved size.
 const RowVarBinding = struct {
@@ -1752,7 +1767,7 @@ const RowVarBinding = struct {
 /// a literal body, inference fails, or row variable bindings conflict).
 fn resolveRowVariableEffect(
     effect: *const StackEffect,
-    stack: *const [64]StackEntry,
+    stack: *const [max_abstract_stack_depth]StackEntry,
     sp: usize,
     resolver: ?WordResolver,
 ) ?InferredEffect {
@@ -1767,7 +1782,7 @@ fn resolveRowVariableEffect(
     const base_pos = sp - concrete_in;
 
     // Collect row variable bindings from quotation parameters.
-    var bindings: [16]RowVarBinding = undefined;
+    var bindings: [max_row_var_bindings]RowVarBinding = undefined;
     var num_bindings: usize = 0;
 
     var concrete_idx: usize = 0;
@@ -1839,7 +1854,7 @@ fn resolveRowVariableEffect(
 /// Add a row variable binding or verify consistency with an existing one.
 /// Returns false if the binding conflicts with a previously recorded size.
 fn addOrCheckBinding(
-    bindings: *[16]RowVarBinding,
+    bindings: *[max_row_var_bindings]RowVarBinding,
     num_bindings: *usize,
     name: []const u8,
     size: u8,
@@ -1849,7 +1864,7 @@ fn addOrCheckBinding(
             return b.size == size;
         }
     }
-    if (num_bindings.* < 16) {
+    if (num_bindings.* < max_row_var_bindings) {
         bindings[num_bindings.*] = .{ .name = name, .size = size };
         num_bindings.* += 1;
     }
@@ -2197,7 +2212,7 @@ fn deserializeValueAt(data: []const u8, offset: *usize, allocator: Allocator) Al
 ///
 /// In AOT mode, quotation bodies are serialized to byte arrays and pushed
 /// via the jitPushQuotation callback, avoiding dangling instruction pointers.
-fn materializeQuotations(state: *CompileState, stack: *[64]StackEntry, sp: usize) IrCodegenError!void {
+fn materializeQuotations(state: *CompileState, stack: *[max_abstract_stack_depth]StackEntry, sp: usize) IrCodegenError!void {
     const ctx = state.ctx;
     const base_addr = state.base_addr;
     for (0..sp) |qi| {
@@ -2287,7 +2302,7 @@ fn reloadBaseAfterDynamicCall(state: *CompileState) void {
 }
 
 /// Check whether any stack entry in 0..sp is a row_region.
-fn hasRowRegion(stack: *const [64]StackEntry, sp: usize) bool {
+fn hasRowRegion(stack: *const [max_abstract_stack_depth]StackEntry, sp: usize) bool {
     for (0..sp) |i| {
         if (stack[i] == .row_region) return true;
     }
@@ -2297,7 +2312,7 @@ fn hasRowRegion(stack: *const [64]StackEntry, sp: usize) bool {
 /// Reset all stack entries from 0..sp to raw_at_slot identity (slot i = i).
 /// Used after operations that flush to physical memory, ensuring the abstract
 /// stack mirrors the physical layout.
-fn resetStackToPhysical(stack: *[64]StackEntry, sp: usize) void {
+fn resetStackToPhysical(stack: *[max_abstract_stack_depth]StackEntry, sp: usize) void {
     for (0..sp) |i| {
         stack[i] = .{ .raw_at_slot = i };
     }
@@ -2305,7 +2320,7 @@ fn resetStackToPhysical(stack: *[64]StackEntry, sp: usize) void {
 
 /// Write all pending symbolic stack entries to their physical memory slots.
 /// After this, every entry is materialized in the Value array at base_addr.
-fn flushToPhysicalStack(state: *CompileState, stack: *[64]StackEntry, sp: usize) void {
+fn flushToPhysicalStack(state: *CompileState, stack: *[max_abstract_stack_depth]StackEntry, sp: usize) void {
     const ctx = state.ctx;
     const base_addr = state.base_addr;
 
@@ -2476,7 +2491,7 @@ fn cloneStackEntry(
 fn emitResolvedNativeCallback(
     state: *CompileState,
     name: []const u8,
-    stack: *[64]StackEntry,
+    stack: *[max_abstract_stack_depth]StackEntry,
     sp: *usize,
     line: usize,
 ) IrCodegenError!void {
@@ -2539,7 +2554,7 @@ fn emitStructNativeCall(
     instructions: []const Instruction,
     idx: usize,
     name: []const u8,
-    stack: *[64]StackEntry,
+    stack: *[max_abstract_stack_depth]StackEntry,
     sp: *usize,
     line: usize,
 ) IrCodegenError!void {
@@ -2631,7 +2646,7 @@ fn emitTruthiness(state: *CompileState, entry: StackEntry, base_addr: c.ir_ref) 
 /// interpreter fallback for uncompiled quotations.
 fn emitIndirectQuotCall(
     state: *CompileState,
-    stack: *[64]StackEntry,
+    stack: *[max_abstract_stack_depth]StackEntry,
     sp: *usize,
     slot: usize,
 ) IrCodegenError!void {
@@ -2710,7 +2725,7 @@ fn emitIndirectQuotCall(
 /// because the branch effect is known from the other (quotation_body) branch.
 fn emitIfBranchDispatch(
     state: *CompileState,
-    stack: *[64]StackEntry,
+    stack: *[max_abstract_stack_depth]StackEntry,
     sp: *usize,
     slot: usize,
 ) void {
@@ -2774,7 +2789,7 @@ fn emitIfBranchDispatch(
 /// condition negation for `until` semantics.
 fn compilePredBodyLoop(
     state: *CompileState,
-    stack: *[64]StackEntry,
+    stack: *[max_abstract_stack_depth]StackEntry,
     sp: *usize,
     pred_entry: StackEntry,
     body_entry: StackEntry,
@@ -2871,7 +2886,7 @@ fn tryEmitInlineVirtualUnwrap(
     state: *CompileState,
     instructions: []const Instruction,
     idx: usize,
-    stack: *[64]StackEntry,
+    stack: *[max_abstract_stack_depth]StackEntry,
     sp: *usize,
 ) bool {
     if (sp.* < 2) return false;
@@ -2930,7 +2945,7 @@ fn tryEmitInlineTypedValidateAndPromote(
     state: *CompileState,
     instructions: []const Instruction,
     idx: usize,
-    stack: *[64]StackEntry,
+    stack: *[max_abstract_stack_depth]StackEntry,
     sp: *usize,
 ) bool {
     if (sp.* < 2) return false;
@@ -3020,7 +3035,7 @@ fn tryEmitInlineStructFieldGet(
     state: *CompileState,
     instructions: []const Instruction,
     idx: usize,
-    stack: *[64]StackEntry,
+    stack: *[max_abstract_stack_depth]StackEntry,
     sp: *usize,
 ) bool {
     if (sp.* < 3) return false;
@@ -3094,7 +3109,7 @@ fn tryEmitInlineStructFieldGet(
 /// choose: ( a1 a2 quot -- a )
 fn emitChooseBuiltin(
     state: *CompileState,
-    stack: *[64]StackEntry,
+    stack: *[max_abstract_stack_depth]StackEntry,
     sp: *usize,
 ) IrCodegenError!void {
     const ctx = state.ctx;
@@ -3204,7 +3219,7 @@ fn emitChooseBuiltin(
 fn compileInstructions(
     state: *CompileState,
     instructions: []const Instruction,
-    stack: *[64]StackEntry,
+    stack: *[max_abstract_stack_depth]StackEntry,
     sp: *usize,
 ) IrCodegenError!void {
     const ctx = state.ctx;
@@ -4769,7 +4784,7 @@ fn compileWordPass(
 ) IrCodegenError!CompileWordPassResult {
     ValueLayout.ensureInit();
 
-    if (input_count > 64) return IrCodegenError.NotCompilable;
+    if (input_count > max_abstract_stack_depth) return IrCodegenError.NotCompilable;
 
     // Pre-scan: check if any call_word needs dispatch table resolution
     // or contains loops (which need safepoints).
@@ -4924,7 +4939,7 @@ fn compileWordPass(
 
     // Initialize inputs as raw_at_slot entries. Tag checking and unboxing
     // happen lazily at use sites (e.g., when arithmetic needs a fixnum).
-    var stack: [64]StackEntry = undefined;
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
     var sp: usize = 0;
     for (0..input_count) |_| {
         stack[sp] = .{ .raw_at_slot = sp };
@@ -5090,7 +5105,7 @@ pub fn emitWordC(
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     ValueLayout.ensureInit();
 
-    if (input_count > 64) return IrCodegenError.NotCompilable;
+    if (input_count > max_abstract_stack_depth) return IrCodegenError.NotCompilable;
 
     const c_name = try mangleWordName(name, allocator);
     defer allocator.free(c_name);
@@ -5157,7 +5172,7 @@ pub fn emitWordC(
     const base_byte_offset = c.ir_fold2(&ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), base_idx, value_size_const);
     const base_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), items_ptr, base_byte_offset);
 
-    var stack: [64]StackEntry = undefined;
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
     var sp: usize = 0;
     for (0..input_count) |_| {
         stack[sp] = .{ .raw_at_slot = sp };
@@ -5309,7 +5324,7 @@ fn emitWordCAotPass(
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)!EmitWordCAotPassResult {
     ValueLayout.ensureInit();
 
-    if (input_count > 64) {
+    if (input_count > max_abstract_stack_depth) {
         if (nc_reason_out) |ro| ro.* = .too_many_inputs;
         return IrCodegenError.NotCompilable;
     }
@@ -5481,7 +5496,7 @@ fn emitWordCAotPass(
     const base_byte_offset = c.ir_fold2(&ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), base_idx, value_size_const);
     const base_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), items_ptr_after_check, base_byte_offset);
 
-    var stack_buf: [64]StackEntry = undefined;
+    var stack_buf: [max_abstract_stack_depth]StackEntry = undefined;
     var sp: usize = 0;
     for (0..input_count) |_| {
         stack_buf[sp] = .{ .raw_at_slot = sp };
@@ -9196,7 +9211,7 @@ test "resolveRowVariableEffect: simple apply with [ 1 + ]" {
     };
 
     const body = makeInstructions(.{ @as(i64, 1), "+" });
-    var stack: [64]StackEntry = undefined;
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
     stack[0] = .{ .raw_at_slot = 0 }; // x
     stack[1] = .{ .quotation_body = &body }; // quot
 
@@ -9234,7 +9249,7 @@ test "resolveRowVariableEffect: keep with [ 2 * ]" {
     };
 
     const body = makeInstructions(.{ @as(i64, 2), "*" });
-    var stack: [64]StackEntry = undefined;
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
     stack[0] = .{ .raw_at_slot = 0 }; // x
     stack[1] = .{ .quotation_body = &body }; // quot
 
@@ -9271,7 +9286,7 @@ test "resolveRowVariableEffect: keep with [ dup ]" {
     };
 
     const body = makeInstructions(.{"dup"});
-    var stack: [64]StackEntry = undefined;
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
     stack[0] = .{ .raw_at_slot = 0 };
     stack[1] = .{ .quotation_body = &body };
 
@@ -9303,7 +9318,7 @@ test "resolveRowVariableEffect: raw_at_slot quotation returns null" {
         },
     };
 
-    var stack: [64]StackEntry = undefined;
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
     stack[0] = .{ .raw_at_slot = 0 };
     stack[1] = .{ .raw_at_slot = 1 }; // runtime value, not quotation_body
 
@@ -9331,7 +9346,7 @@ test "resolveRowVariableEffect: unresolvable quotation body returns null" {
     };
 
     const body = makeInstructions(.{"unknown-word"});
-    var stack: [64]StackEntry = undefined;
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
     stack[0] = .{ .raw_at_slot = 0 };
     stack[1] = .{ .quotation_body = &body };
 
@@ -9362,7 +9377,7 @@ test "resolveRowVariableEffect: empty quotation [ ]" {
     };
 
     const body = makeInstructions(.{});
-    var stack: [64]StackEntry = undefined;
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
     stack[0] = .{ .raw_at_slot = 0 };
     stack[1] = .{ .quotation_body = &body };
 
@@ -9393,7 +9408,7 @@ test "resolveRowVariableEffect: concrete quotation effect skipped" {
         },
     };
 
-    var stack: [64]StackEntry = undefined;
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
     stack[0] = .{ .raw_at_slot = 0 };
     stack[1] = .{ .raw_at_slot = 1 };
 
@@ -9674,7 +9689,7 @@ test "serializeQuotationInstructions: roundtrip array containing symbol" {
 // ---------------------------------------------------------------------------
 
 test "hasRowRegion: returns false when no row_region present" {
-    var stack: [64]StackEntry = undefined;
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
     stack[0] = .{ .raw_at_slot = 0 };
     stack[1] = .{ .raw_at_slot = 1 };
     try testing.expect(!hasRowRegion(&stack, 2));
@@ -9682,7 +9697,7 @@ test "hasRowRegion: returns false when no row_region present" {
 }
 
 test "hasRowRegion: returns true when row_region present" {
-    var stack: [64]StackEntry = undefined;
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
     stack[0] = .row_region;
     stack[1] = .{ .raw_at_slot = 1 };
     try testing.expect(hasRowRegion(&stack, 2));
