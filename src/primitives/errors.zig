@@ -295,6 +295,7 @@ fn nativeThrow(ctx: *Context) anyerror!void {
             return error.UserThrown;
         },
         else => {
+            helpers.setErrorHint(ctx, "use `data message type make-error` to create an error value");
             helpers.setTypeMismatchError(ctx, "error", val);
             return error.TypeMismatch;
         },

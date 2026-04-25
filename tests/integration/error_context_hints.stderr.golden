@@ -1,0 +1,3 @@
+tests/integration/error_context_hints.1z:4: error 'type-mismatch' expected error, got fixnum 42 at word 'throw'
+  stack effect: ( error --  )
+  hint: use `data message type make-error` to create an error value

@@ -68,6 +68,7 @@ fn nativeToSymbol(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .symbol = s });
         },
         else => {
+            helpers.setErrorHint(ctx, "use >string to convert a symbol to a string first");
             helpers.setTypeMismatchError(ctx, "string", val);
             return error.TypeMismatch;
         },
@@ -150,6 +151,7 @@ fn nativeUppercase(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .string = result });
         },
         else => {
+            helpers.setErrorHint(ctx, "use >string to convert to a string first");
             helpers.setTypeMismatchError(ctx, "string", val);
             return error.TypeMismatch;
         },
@@ -169,6 +171,7 @@ fn nativeLowercase(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .string = result });
         },
         else => {
+            helpers.setErrorHint(ctx, "use >string to convert to a string first");
             helpers.setTypeMismatchError(ctx, "string", val);
             return error.TypeMismatch;
         },
