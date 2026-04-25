@@ -26,6 +26,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "ffi-call", .func = nativeFfiCall },
     .{ .name = "ffi-callback", .func = nativeFfiCallback },
     .{ .name = "bytes-raw-ptr", .func = nativeBytesRawPtr },
+    .{ .name = "ffi-ptr+len>bytes", .func = nativeFfiPtrLenToBytes },
 };
 
 fn dylibCloseFn(ptr: *anyopaque) void {
@@ -694,6 +695,47 @@ fn nativeBytesRawPtr(ctx: *Context) anyerror!void {
 
     try ctx.stack.push(.{ .resource = r });
     try ctx.stack.push(.{ .fixnum = @intCast(ba.items.len) });
+}
+
+/// ffi-ptr+len>bytes ( resource n -- byte-array )
+///
+/// Copies n bytes from a raw pointer resource into a new byte-array.
+/// The resource is not consumed or closed.
+fn nativeFfiPtrLenToBytes(ctx: *Context) anyerror!void {
+    const n_val = try helpers.popFixnum(ctx);
+    const resource_val = try ctx.stack.pop();
+
+    const resource = switch (resource_val) {
+        .resource => |r| r,
+        else => {
+            helpers.setTypeMismatchError(ctx, "resource", resource_val);
+            return error.TypeMismatch;
+        },
+    };
+    try error_mapping.ensureResourceOpen(resource);
+
+    if (n_val < 0) {
+        helpers.setErrorContext(ctx, "ffi-ptr+len>bytes size must be non-negative, got {d}", .{n_val});
+        return error.IndexOutOfBounds;
+    }
+    const n: usize = @intCast(n_val);
+
+    const alloc = ctx.quotationAllocator();
+    const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
+    ba.* = ByteArray{};
+
+    if (n > 0) {
+        const raw_ptr = resource.ptr orelse {
+            helpers.setErrorContext(ctx, "ffi-ptr+len>bytes: resource pointer is null", .{});
+            return error.FFICallFailed;
+        };
+        ba.ensureTotalCapacity(alloc, n) catch return error.OutOfMemory;
+        ba.items.len = n;
+        const src: [*]const u8 = @ptrCast(raw_ptr);
+        @memcpy(ba.items[0..n], src[0..n]);
+    }
+
+    try ctx.stack.push(.{ .byte_array = ba });
 }
 
 /// Call a foreign close function via libffi with the signature (ptr -> void).

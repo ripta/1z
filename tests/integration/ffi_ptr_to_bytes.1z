@@ -1,0 +1,21 @@
+use "testing" ;
+use "ffi" ;
+
+\\ Round-trip: byte-array -> raw ptr+len -> byte-array
+B{ 72 101 108 108 111 } dup
+bytes>ffi-ptr+len ffi-ptr+len>bytes
+"round-trip B{ 72 101 108 108 111 }" assert=
+
+\\ Zero length returns empty byte-array
+B{ 1 2 3 } bytes>ffi-ptr+len drop 0 ffi-ptr+len>bytes
+B{ } "zero length returns empty byte-array" assert=
+
+\\ Partial copy: only first 3 bytes of a 5-byte source
+B{ 10 20 30 40 50 } bytes>ffi-ptr+len drop 3 ffi-ptr+len>bytes
+B{ 10 20 30 } "partial copy of 3 bytes" assert=
+
+\\ Negative count should error
+[ B{ 1 2 3 } bytes>ffi-ptr+len drop -1 ffi-ptr+len>bytes ] "IndexOutOfBounds" assert-error
+
+\\ Type mismatch: non-resource value
+[ 42 3 ffi-ptr+len>bytes ] "TypeMismatch" assert-error

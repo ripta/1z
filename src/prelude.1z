@@ -527,6 +527,10 @@ close-iterator: ( iterator -- ) [ native.close-iterator ] ;
 \\ Execute a quotation with an iterator, guaranteeing close-iterator on exit.
 with-iterator: ( iterator quot -- ... ) [ over [ close-iterator ] curry cleanup ] ;
 
+\\ Copy n bytes from an FFI pointer resource into a new byte-array.
+\\ The resource is not consumed or closed.
+ffi-ptr+len>bytes: ( resource n -- byte-array ) [ native.ffi-ptr+len>bytes ] ;
+
 \\ Blocking acquire: consumes a token or permit from the resource.
 \\ Yields to the scheduler until a token is available.
 \\ Must be called inside task-scope.

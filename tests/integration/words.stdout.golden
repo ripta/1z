@@ -303,6 +303,7 @@ error-type? ( error type -- error ? )
 error? ( val -- ? )
 even? ( n -- ? )
 exact? ( val -- ? )
+ffi-ptr+len>bytes ( resource n -- byte-array )
 file>>
 finite? ( x -- ? )
 fixnum? ( val -- ? )
