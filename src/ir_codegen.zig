@@ -3724,11 +3724,11 @@ fn compileInstructions(
                     if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
                     const true_exit_kind = state.exit_kind;
                     var end_true: c.ir_ref = c.IR_UNUSED;
-                    // Emit END for any branch that is not a loop back-edge.
-                    // terminal_return branches still get END so the IR has
-                    // well-formed END/MERGE structure; their code is dead but
-                    // the framework needs the node for correct optimization.
-                    if (true_exit_kind != .loop_diverged) {
+                    // In AOT mode (ir_emit_c), skip END after terminal_return
+                    // because ir_emit_c hangs on dead code after RETURN.
+                    // In JIT mode (ir_emit), terminal_return branches still
+                    // get END for well-formed END/MERGE structure.
+                    if (if (state.aot_mode) exitFallsThrough(true_exit_kind) else true_exit_kind != .loop_diverged) {
                         flushToPhysicalStack(state, stack, sp.*);
                         end_true = c._ir_END(ctx);
                     }
@@ -3761,12 +3761,13 @@ fn compileInstructions(
                     if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
                     const false_exit_kind = state.exit_kind;
 
-                    // Use loop_diverged (not exitFallsThrough) for branch
-                    // merge decisions. terminal_return branches still have
-                    // END nodes and participate in MERGE; only loop_diverged
-                    // branches truly leave the basic block via a back-edge.
-                    const true_diverged = true_exit_kind == .loop_diverged;
-                    const false_diverged = false_exit_kind == .loop_diverged;
+                    // In AOT mode, treat terminal_return the same as
+                    // loop_diverged (both are non-falls-through) because
+                    // ir_emit_c cannot handle dead END/MERGE after RETURN.
+                    // In JIT mode, only loop_diverged is truly diverged;
+                    // terminal_return branches participate in MERGE.
+                    const true_diverged = if (state.aot_mode) !exitFallsThrough(true_exit_kind) else true_exit_kind == .loop_diverged;
+                    const false_diverged = if (state.aot_mode) !exitFallsThrough(false_exit_kind) else false_exit_kind == .loop_diverged;
 
                     if (true_diverged and false_diverged) {
                         state.exit_kind = mergeNonFallthroughExitKinds(true_exit_kind, false_exit_kind);
@@ -3788,8 +3789,7 @@ fn compileInstructions(
                         resetStackToPhysical(stack, sp.*);
                         state.exit_kind = saved_exit_kind;
                     } else {
-                        // Normal merge (includes terminal_return branches
-                        // whose END nodes are dead but structurally valid).
+                        // Neither branch terminated: normal merge.
                         flushToPhysicalStack(state, &saved_stack, false_sp);
                         const end_false = c._ir_END(ctx);
                         c._ir_MERGE_2(ctx, end_true, end_false);
@@ -6467,21 +6467,18 @@ fn emitWordTraceFrame(state: *CompileState, word_name: []const u8, line: usize) 
         const ctx_addr = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
         break :blk c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
     };
-    const name_ptr = if (state.aot_mode)
-        blk: {
-            const lit_id = if (state.aot_string_literals) |lits| lits.items.len else 0;
-            if (state.aot_string_literals) |lits| {
-                lits.append(std.heap.page_allocator, .{
-                    .data = word_name,
-                    .is_symbol = false,
-                }) catch return;
-            }
-            var sym_buf: [32]u8 = undefined;
-            const sym_name = std.fmt.bufPrint(&sym_buf, "onez_lit_{d}", .{lit_id}) catch unreachable;
-            break :blk c.ir_const_func(state.ctx, c.ir_strl(state.ctx, &sym_buf, sym_name.len), 0);
+    const name_ptr = if (state.aot_mode) blk: {
+        const lit_id = if (state.aot_string_literals) |lits| lits.items.len else 0;
+        if (state.aot_string_literals) |lits| {
+            lits.append(std.heap.page_allocator, .{
+                .data = word_name,
+                .is_symbol = false,
+            }) catch return;
         }
-    else
-        c.ir_const_addr(state.ctx, @intFromPtr(word_name.ptr));
+        var sym_buf: [32]u8 = undefined;
+        const sym_name = std.fmt.bufPrint(&sym_buf, "onez_lit_{d}", .{lit_id}) catch unreachable;
+        break :blk c.ir_const_func(state.ctx, c.ir_strl(state.ctx, &sym_buf, sym_name.len), 0);
+    } else c.ir_const_addr(state.ctx, @intFromPtr(word_name.ptr));
     const name_len_const = c.ir_const_addr(state.ctx, word_name.len);
     const line_const = c.ir_const_addr(state.ctx, line);
     _ = c._ir_CALL_4(state.ctx, c.IR_I32, state.append_word_trace_frame_fn, ctx_val, name_ptr, name_len_const, line_const);
