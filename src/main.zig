@@ -425,6 +425,7 @@ fn printUsage() void {
         \\  repl                   Start the interactive REPL (default)
         \\  fmt [files...]         Format 1z source files
         \\  lint [files...]        Check code style and conventions
+        \\  highlight [file]       Highlight 1z source code
         \\  build <file>           Compile a 1z file to a native executable
         \\  version                Print version and exit
         \\
@@ -559,6 +560,23 @@ fn printLintHelp() void {
     w.writeAll("  0   No findings\n") catch {};
     w.writeAll("  1   Lint findings present\n") catch {};
     w.writeAll("  2   Invocation error\n\n") catch {};
+    w.writeAll("Global options:\n") catch {};
+    w.writeAll(global_flags_help) catch {};
+    w.writeAll("\n") catch {};
+    w.flush() catch {};
+}
+
+fn printHighlightHelp() void {
+    const stdout_file: File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
+    const w = &stdout.interface;
+    w.writeAll("Usage: 1z highlight [options] [file]\n\n") catch {};
+    w.writeAll("Syntax highlight 1z source code.\n\n") catch {};
+    w.writeAll("Reads from stdin when no file is given.\n\n") catch {};
+    w.writeAll("Options:\n") catch {};
+    w.writeAll("  --html              Output as HTML spans (default: ANSI)\n") catch {};
+    w.writeAll("  --theme=PATH        Load a custom theme from a config file\n\n") catch {};
     w.writeAll("Global options:\n") catch {};
     w.writeAll(global_flags_help) catch {};
     w.writeAll("\n") catch {};
@@ -831,6 +849,7 @@ pub fn main() u8 {
     if (std.mem.eql(u8, first, "repl")) return handleRepl(gpa_allocator, args[2..]);
     if (std.mem.eql(u8, first, "fmt")) return handleFmt(gpa_allocator, args[2..]);
     if (std.mem.eql(u8, first, "lint")) return handleLint(gpa_allocator, args[2..]);
+    if (std.mem.eql(u8, first, "highlight")) return handleHighlight(gpa_allocator, args[2..]);
     if (std.mem.eql(u8, first, "build")) return handleBuild(gpa_allocator, args[2..]);
     if (std.mem.eql(u8, first, "version")) {
         printVersion();
@@ -1598,6 +1617,81 @@ fn printQuotationStats(
         err_writer.print("Quotation bodies compiled: 0\n", .{}) catch {};
     }
     err_writer.flush() catch {};
+}
+
+fn handleHighlight(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
+    const stderr_file: File = .stderr();
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr = stderr_file.writerStreaming(&stderr_buf);
+    const err_writer = &stderr.interface;
+
+    if (hasHelpFlag(args)) {
+        printHighlightHelp();
+        return 0;
+    }
+
+    var global = GlobalFlags{};
+    defer global.deinit(base_allocator);
+
+    var html_mode = false;
+    var theme_path: []const u8 = "";
+    var file_path: ?[]const u8 = null;
+
+    for (args) |arg| {
+        const g = parseGlobalFlag(arg, &global, base_allocator, err_writer) catch return 2;
+        if (g == .consumed) continue;
+        if (std.mem.eql(u8, arg, "--html")) {
+            html_mode = true;
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--theme=")) {
+            theme_path = arg["--theme=".len..];
+            continue;
+        }
+        if (arg.len > 0 and arg[0] == '-') {
+            err_writer.print("Error: unknown flag '{s}'\n", .{arg}) catch {};
+            err_writer.flush() catch {};
+            return 2;
+        }
+        if (file_path != null) {
+            err_writer.writeAll("Error: only one file argument is allowed\n") catch {};
+            err_writer.flush() catch {};
+            return 2;
+        }
+        file_path = arg;
+    }
+
+    if (!global.cli_set_max_memory) {
+        if (std.posix.getenv("ONEZ_MAX_MEMORY")) |env_val| {
+            if (memory_limit.parseSize(env_val)) |bytes| {
+                global.max_memory_bytes = bytes;
+            }
+        }
+    }
+
+    // program_args: [path-or-"-", "ansi"/"html", theme-path-or-""]
+    const path_arg = file_path orelse "-";
+    const format_arg: []const u8 = if (html_mode) "html" else "ansi";
+    const program_args = [_][]const u8{ path_arg, format_arg, theme_path };
+
+    var exec = ExecutionFlags{};
+    if (std.posix.getenv("ONEZ_COMPILE")) |env_val| {
+        if (std.mem.eql(u8, env_val, "eager")) {
+            exec.compile_mode = .eager;
+        } else if (std.mem.eql(u8, env_val, "hybrid")) {
+            exec.compile_mode = .hybrid;
+        }
+    }
+
+    const ec = ExecutionContext.init(base_allocator, &global, &exec, err_writer) catch return 2;
+    defer ec.deinit();
+
+    ec.ctx.program_args = &program_args;
+
+    const code = "use \"highlight\" ; command-line-args run-highlight-cli";
+    const result = runEval(&ec.ctx, code, false, false, err_writer);
+    ec.fireExitHooks(result);
+    return result;
 }
 
 fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {

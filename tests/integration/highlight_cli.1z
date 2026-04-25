@@ -1,0 +1,86 @@
+use "testing" ;
+use "highlight" ;
+use "conversions" ;
+
+\ --- Test helpers ---
+
+(esc): ( -- str ) [ 27 >char ] ;
+
+\ Check whether an ANSI SGR code appears anywhere in a string.
+(has-sgr): ( str code -- ? ) [
+  (esc) "[" #append swap #append "m" #append
+  #index-of f = not
+] ;
+
+"highlight-with-options ANSI default" test-section
+
+"foo: [ 1 + ] ;" "ansi" "" (highlight-with-options)
+dup "1;34" (has-sgr)
+"definition gets bold blue SGR code" assert-true
+
+dup "34" (has-sgr)
+"number gets blue SGR code" assert-true
+
+dup "37" (has-sgr)
+"semicolon gets gray SGR code" assert-true
+drop
+
+"highlight-with-options HTML default" test-section
+
+"foo: [ 1 + ] ;" "html" "" (highlight-with-options)
+dup "<span class=\"token-definition\">foo:</span>" #index-of f = not
+"definition gets HTML span" assert-true
+
+dup "<span class=\"token-number\">1</span>" #index-of f = not
+"number gets HTML span" assert-true
+
+dup "<span class=\"token-punctuation\">;</span>" #index-of f = not
+"semicolon gets HTML span" assert-true
+drop
+
+"highlight-with-options ANSI custom theme" test-section
+
+"1 + 2" "ansi" "tests/fixtures/highlight_theme_ansi.1z" (highlight-with-options)
+dup #len 0 >
+"custom ANSI theme produces output" assert-true
+drop
+
+"highlight-with-options HTML custom theme" test-section
+
+"1 + 2" "html" "tests/fixtures/highlight_theme_html.1z" (highlight-with-options)
+dup #len 0 >
+"custom HTML theme produces output" assert-true
+drop
+
+"run-highlight-cli with file" test-section
+
+{ "tests/integration/highlight_cli_sample.1z" "ansi" "" } run-highlight-cli
+\ run-highlight-cli prints to stdout; if we get here without error, it worked
+t "run-highlight-cli ANSI completes" assert-true
+
+{ "tests/integration/highlight_cli_sample.1z" "html" "" } run-highlight-cli
+t "run-highlight-cli HTML completes" assert-true
+
+{ "tests/integration/highlight_cli_sample.1z" "ansi" "tests/fixtures/highlight_theme_ansi.1z" }
+run-highlight-cli
+t "run-highlight-cli with custom theme completes" assert-true
+
+"empty input" test-section
+
+"" "ansi" "" (highlight-with-options)
+"" "" "empty ANSI output" assert=
+
+"" "html" "" (highlight-with-options)
+"" "" "empty HTML output" assert=
+
+"format selection" test-section
+
+"42" "html" "" (highlight-with-options)
+dup "<span" #index-of f = not
+"html format produces spans" assert-true
+drop
+
+"42" "ansi" "" (highlight-with-options)
+dup (esc) #index-of f = not
+"ansi format produces escape codes" assert-true
+drop

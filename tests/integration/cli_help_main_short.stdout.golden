@@ -7,6 +7,7 @@ Subcommands:
   repl                   Start the interactive REPL (default)
   fmt [files...]         Format 1z source files
   lint [files...]        Check code style and conventions
+  highlight [file]       Highlight 1z source code
   build <file>           Compile a 1z file to a native executable
   version                Print version and exit
 

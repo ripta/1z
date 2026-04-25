@@ -262,3 +262,48 @@ highlight-html-themed: ( source-string theme -- html-string ) [
 load-highlight-theme: ( path -- theme ) [
   load-config-data config-unwrap
 ] ;
+
+\ --- CLI entry point ---
+
+(read-source): ( path -- source-string ) [
+  dup "-" = [
+    drop input-stream get stream-read-all bytes>
+  ] [
+    read: stream-open dup stream-read-all swap stream-close bytes>
+  ] if
+] ;
+
+(highlight-with-options): ( source format theme-path -- styled ) [
+  dup "" = [
+    \ No custom theme: stack is source format ""
+    drop "html" = [
+      highlight-html
+    ] [
+      highlight-ansi
+    ] if
+  ] [
+    \ Custom theme: stack is source format theme-path
+    load-highlight-theme
+    \ stack: source format theme
+    swap "html" = [
+      \ stack: source theme
+      highlight-html-themed
+    ] [
+      highlight-ansi-themed
+    ] if
+  ] if
+] ;
+
+\\ CLI entry point for `1z highlight`.
+\\
+\\ Reads command-line-args as: path (or "-" for stdin), format
+\\ ("ansi" or "html"), and theme path ("" for default).
+run-highlight-cli: ( args -- ) [
+  dup 0 #nth swap
+  dup 1 #nth swap
+  2 #nth
+  \ stack: path format theme-path
+  [ (read-source) ] 2dip
+  \ stack: source format theme-path
+  (highlight-with-options) print
+] ;

@@ -1,0 +1,77 @@
+Stack: [ ]
+Stack: [ ]
+=== highlight-with-options ANSI default ===
+Stack: [ ]
+Stack: [ "[1;34mfoo:[0m [1m[[0m [34m1[0m + [1m][0m [37m;[0m" ]
+Stack: [ "[1;34mfoo:[0m [1m[[0m [34m1[0m + [1m][0m [37m;[0m" t ]
+PASS: definition gets bold blue SGR code
+Stack: [ "[1;34mfoo:[0m [1m[[0m [34m1[0m + [1m][0m [37m;[0m" ]
+Stack: [ "[1;34mfoo:[0m [1m[[0m [34m1[0m + [1m][0m [37m;[0m" t ]
+PASS: number gets blue SGR code
+Stack: [ "[1;34mfoo:[0m [1m[[0m [34m1[0m + [1m][0m [37m;[0m" ]
+Stack: [ "[1;34mfoo:[0m [1m[[0m [34m1[0m + [1m][0m [37m;[0m" t ]
+PASS: semicolon gets gray SGR code
+Stack: [ "[1;34mfoo:[0m [1m[[0m [34m1[0m + [1m][0m [37m;[0m" ]
+Stack: [ ]
+=== highlight-with-options HTML default ===
+Stack: [ ]
+Stack: [ "<span class="token-definition">foo:</span> <span class="token-bracket">[</span> <span class="token-number">1</span> + <span class="token-bracket">]</span> <span class="token-punctuation">;</span>" ]
+Stack: [ "<span class="token-definition">foo:</span> <span class="token-bracket">[</span> <span class="token-number">1</span> + <span class="token-bracket">]</span> <span class="token-punctuation">;</span>" t ]
+PASS: definition gets HTML span
+Stack: [ "<span class="token-definition">foo:</span> <span class="token-bracket">[</span> <span class="token-number">1</span> + <span class="token-bracket">]</span> <span class="token-punctuation">;</span>" ]
+Stack: [ "<span class="token-definition">foo:</span> <span class="token-bracket">[</span> <span class="token-number">1</span> + <span class="token-bracket">]</span> <span class="token-punctuation">;</span>" t ]
+PASS: number gets HTML span
+Stack: [ "<span class="token-definition">foo:</span> <span class="token-bracket">[</span> <span class="token-number">1</span> + <span class="token-bracket">]</span> <span class="token-punctuation">;</span>" ]
+Stack: [ "<span class="token-definition">foo:</span> <span class="token-bracket">[</span> <span class="token-number">1</span> + <span class="token-bracket">]</span> <span class="token-punctuation">;</span>" t ]
+PASS: semicolon gets HTML span
+Stack: [ "<span class="token-definition">foo:</span> <span class="token-bracket">[</span> <span class="token-number">1</span> + <span class="token-bracket">]</span> <span class="token-punctuation">;</span>" ]
+Stack: [ ]
+=== highlight-with-options ANSI custom theme ===
+Stack: [ ]
+Stack: [ "1 + 2" ]
+Stack: [ "1 + 2" t ]
+PASS: custom ANSI theme produces output
+Stack: [ "1 + 2" ]
+Stack: [ ]
+=== highlight-with-options HTML custom theme ===
+Stack: [ ]
+Stack: [ "1 + 2" ]
+Stack: [ "1 + 2" t ]
+PASS: custom HTML theme produces output
+Stack: [ "1 + 2" ]
+Stack: [ ]
+=== run-highlight-cli with file ===
+Stack: [ ]
+[1;34mdouble:[0m [1m[[0m [34m2[0m * [1m][0m [37m;[0m
+Stack: [ ]
+PASS: run-highlight-cli ANSI completes
+Stack: [ ]
+<span class="token-definition">double:</span> <span class="token-bracket">[</span> <span class="token-number">2</span> * <span class="token-bracket">]</span> <span class="token-punctuation">;</span>
+Stack: [ ]
+PASS: run-highlight-cli HTML completes
+Stack: [ ]
+Stack: [ { "tests/integration/highlight_cli_sample.1z" "ansi" "tests/fixtures/highlight_theme_ansi.1z" } ]
+double: [ 2 * ] ;
+Stack: [ ]
+PASS: run-highlight-cli with custom theme completes
+Stack: [ ]
+=== empty input ===
+Stack: [ ]
+Stack: [ "" ]
+PASS: empty ANSI output
+Stack: [ "" ]
+Stack: [ "" "" ]
+PASS: empty HTML output
+Stack: [ "" "" ]
+=== format selection ===
+Stack: [ "" "" ]
+Stack: [ "" "" "<span class="token-number">42</span>" ]
+Stack: [ "" "" "<span class="token-number">42</span>" t ]
+PASS: html format produces spans
+Stack: [ "" "" "<span class="token-number">42</span>" ]
+Stack: [ "" "" ]
+Stack: [ "" "" "[34m42[0m" ]
+Stack: [ "" "" "[34m42[0m" t ]
+PASS: ansi format produces escape codes
+Stack: [ "" "" "[34m42[0m" ]
+Stack: [ "" "" ]
