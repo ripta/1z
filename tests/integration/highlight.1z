@@ -1,0 +1,114 @@
+use "testing" ;
+use "highlight" ;
+use "conversions" ;
+
+\ --- Test helpers ---
+
+\ Build an ANSI-wrapped string: value surrounded by SGR code and reset.
+(esc): ( -- str ) [ 27 >char ] ;
+(ansi-wrap): ( value code -- str ) [
+  (esc) "[" #append swap #append "m" #append
+  swap #append
+  (esc) "[0m" #append #append
+] ;
+
+\ Check whether an ANSI SGR code appears anywhere in a string.
+(has-sgr): ( str code -- ? ) [
+  \ build the needle: "\e[" + code + "m"
+  (esc) "[" #append swap #append "m" #append
+  \ stack: str needle
+  #index-of f = not
+] ;
+
+"empty input" test-section
+"" highlight-ansi "" "empty string" assert=
+
+"whitespace passthrough" test-section
+" " highlight-ansi " " "single space" assert=
+"  " highlight-ansi "  " "double space" assert=
+
+"comments" test-section
+"\\ a comment" highlight-ansi "\\ a comment" "37" (ansi-wrap) "comment coloring" assert=
+
+"doc-comments" test-section
+"\\\\ a doc comment" highlight-ansi "\\\\ a doc comment" "3;37" (ansi-wrap) "doc-comment coloring" assert=
+
+"strings" test-section
+"\"hello\"" highlight-ansi "\"hello\"" "32" (ansi-wrap) "string coloring" assert=
+
+"numbers" test-section
+"42" highlight-ansi "42" "34" (ansi-wrap) "number coloring" assert=
+"3.14" highlight-ansi "3.14" "34" (ansi-wrap) "float coloring" assert=
+
+"definitions" test-section
+"foo:" highlight-ansi "foo:" "1;34" (ansi-wrap) "definition coloring" assert=
+
+"brackets" test-section
+"[" highlight-ansi "[" "1" (ansi-wrap) "open bracket coloring" assert=
+"]" highlight-ansi "]" "1" (ansi-wrap) "close bracket coloring" assert=
+
+"stack effects" test-section
+"( a -- b )" highlight-ansi "( a -- b )" "37" (ansi-wrap) "stack-effect coloring" assert=
+
+"semicolons" test-section
+"x ;" highlight-ansi "37" (has-sgr) "semicolon has coloring" assert-true
+
+"brace forms" test-section
+"struct{" highlight-ansi "struct{" "1;35" (ansi-wrap) "struct{ coloring" assert=
+"H{" highlight-ansi "H{" "1;35" (ansi-wrap) "H{ coloring" assert=
+"enum{" highlight-ansi "enum{" "1;35" (ansi-wrap) "enum{ coloring" assert=
+
+"parse-time words" test-section
+"if" highlight-ansi "if" "1;35" (ansi-wrap) "if coloring" assert=
+"use" highlight-ansi "use" "1;35" (ansi-wrap) "use coloring" assert=
+"const" highlight-ansi "const" "1;35" (ansi-wrap) "const coloring" assert=
+"when" highlight-ansi "when" "1;35" (ansi-wrap) "when coloring" assert=
+"unless" highlight-ansi "unless" "1;35" (ansi-wrap) "unless coloring" assert=
+"reexport" highlight-ansi "reexport" "1;35" (ansi-wrap) "reexport coloring" assert=
+"load" highlight-ansi "load" "1;35" (ansi-wrap) "load coloring" assert=
+
+"flow words" test-section
+"cond" highlight-ansi "cond" "35" (ansi-wrap) "cond coloring" assert=
+"loop" highlight-ansi "loop" "35" (ansi-wrap) "loop coloring" assert=
+"times" highlight-ansi "times" "35" (ansi-wrap) "times coloring" assert=
+"while" highlight-ansi "while" "35" (ansi-wrap) "while coloring" assert=
+"case" highlight-ansi "case" "35" (ansi-wrap) "case coloring" assert=
+
+"error words" test-section
+"recover" highlight-ansi "recover" "1;31" (ansi-wrap) "recover coloring" assert=
+"try" highlight-ansi "try" "1;31" (ansi-wrap) "try coloring" assert=
+"throw" highlight-ansi "throw" "1;31" (ansi-wrap) "throw coloring" assert=
+
+"iteration words" test-section
+"each" highlight-ansi "each" "36" (ansi-wrap) "each coloring" assert=
+"map" highlight-ansi "map" "36" (ansi-wrap) "map coloring" assert=
+"filter" highlight-ansi "filter" "36" (ansi-wrap) "filter coloring" assert=
+
+"combinator words" test-section
+"dip" highlight-ansi "dip" "33" (ansi-wrap) "dip coloring" assert=
+"keep" highlight-ansi "keep" "33" (ansi-wrap) "keep coloring" assert=
+"bi" highlight-ansi "bi" "33" (ansi-wrap) "bi coloring" assert=
+"curry" highlight-ansi "curry" "33" (ansi-wrap) "curry coloring" assert=
+
+"unmatched words" test-section
+"dup" highlight-ansi "dup" "dup has no coloring" assert=
+"drop" highlight-ansi "drop" "drop has no coloring" assert=
+"swap" highlight-ansi "swap" "swap has no coloring" assert=
+
+"close brace" test-section
+"}" highlight-ansi "}" "close brace has no coloring" assert=
+
+"newline passthrough" test-section
+"\n" highlight-ansi "\n" "newline passes through" assert=
+
+"theme selection" test-section
+"\\ comment" highlight-ansi "37" (has-sgr) "light theme uses 37 for comments" assert-true
+"\\ comment" default-ansi-theme-dark highlight-ansi-themed "90" (has-sgr) "dark theme uses 90 for comments" assert-true
+
+"full definition" test-section
+"foo: ( a -- b ) [ 1 + ] ;" highlight-ansi
+dup "1;34" (has-sgr) "definition has bold blue" assert-true
+dup "37" (has-sgr) "stack effect has light gray" assert-true
+dup "1" (has-sgr) "bracket has bold" assert-true
+dup "34" (has-sgr) "number has blue" assert-true
+drop

@@ -1,0 +1,177 @@
+\ lib/highlight.1z - Syntax highlighting for 1z source code
+\
+\ Tokenizes source code and produces ANSI-colored output.
+\ Uses the 1z-tokens tokenizer to produce a token stream,
+\ maps tokens to highlight categories, and applies ANSI
+\ SGR escape codes from a configurable theme.
+\
+\ Usage:
+\   use "highlight" ;
+\   "foo: [ 1 + ] ;" highlight-ansi print-line
+
+use "scanner" ;
+use "lexer" ;
+use "1z-tokens" ;
+use "strings" ;
+use "conversions" ;
+
+\ --- ANSI escape helpers ---
+
+(esc): ( -- str ) [ 27 >char ] ;
+(ansi-reset): ( -- str ) [ (esc) "[0m" #append ] ;
+(ansi-sgr): ( code-str -- escape-str ) [ (esc) "[" #append swap #append "m" #append ] ;
+
+\ --- Word category lookup hashes ---
+\ Token values are strings; convert to symbols with >symbol before @has?.
+
+(parse-time-words): const [
+  H{ if: t when: t unless: t use: t reexport: t const: t load: t }
+] ;
+
+(flow-words): const [
+  H{ cond: t case: t loop: t times: t while: t }
+] ;
+
+(error-words): const [
+  H{ recover: t try: t throw: t with-cleanup: t ignore-errors: t }
+] ;
+
+(iteration-words): const [
+  H{ each: t map: t filter: t reduce: t call: t }
+] ;
+
+(combinator-words): const [
+  H{ dip: t keep: t bi: t tri: t curry: t compose: t }
+] ;
+
+\ --- Word sub-classification ---
+
+(classify-word): ( token -- category-sym ) [
+  value>> >symbol
+  dup (parse-time-words) swap @has? [ drop parse-time: ] [
+    dup (flow-words) swap @has? [ drop flow: ] [
+      dup (error-words) swap @has? [ drop error: ] [
+        dup (iteration-words) swap @has? [ drop iteration: ] [
+          dup (combinator-words) swap @has? [ drop combinator: ] [
+            drop default:
+          ] if
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+\ --- Token-to-category mapping ---
+
+(token>category): ( token -- category-sym ) [
+  dup kind>>
+  dup comment: = [ 2drop comment: ] [
+    dup doc-comment: = [ 2drop doc-comment: ] [
+      dup string: = [ 2drop string: ] [
+        dup number: = [ 2drop number: ] [
+          dup open-bracket: = [ 2drop bracket: ] [
+            dup close-bracket: = [ 2drop bracket: ] [
+              dup stack-effect: = [ 2drop stack-effect: ] [
+                dup semicolon: = [ 2drop punctuation: ] [
+                  dup open-brace: = [ 2drop parse-time: ] [
+                    dup symbol: = [ 2drop definition: ] [
+                      dup word: = [ drop (classify-word) ] [
+                        \ whitespace:, newline:, close-brace:
+                        2drop default:
+                      ] if
+                    ] if
+                  ] if
+                ] if
+              ] if
+            ] if
+          ] if
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+\ --- Theme definitions ---
+\ Themes map category symbols to ANSI SGR code strings.
+\ Uses standard 16-color codes for maximum terminal compatibility.
+
+(ansi-theme-light): const [
+  H{
+    parse-time: "1;35"
+    flow:      "35"
+    error:     "1;31"
+    iteration: "36"
+    combinator:   "33"
+    definition:   "1;34"
+    comment:      "37"
+    doc-comment:  "3;37"
+    string:       "32"
+    number:       "34"
+    bracket:      "1"
+    stack-effect: "37"
+    punctuation:  "37"
+  }
+] ;
+
+(ansi-theme-dark): const [
+  H{
+    parse-time: "1;35"
+    flow:      "35"
+    error:     "1;31"
+    iteration: "36"
+    combinator:   "33"
+    definition:   "1;34"
+    comment:      "90"
+    doc-comment:  "3;90"
+    string:       "32"
+    number:       "34"
+    bracket:      "1"
+    stack-effect: "90"
+    punctuation:  "90"
+  }
+] ;
+
+\ --- Rendering ---
+
+(apply-theme): ( token category theme -- str ) [
+  2dup swap @has? [
+    \ token category theme -- category found
+    swap @get (ansi-sgr)
+    \ token sgr-str
+    swap value>> #append
+    (ansi-reset) #append
+  ] [
+    \ token category theme -- category not found
+    drop drop value>>
+  ] if
+] ;
+
+(token>ansi): ( token theme -- str ) [
+  [ dup (token>category) ] dip
+  \ token category theme
+  (apply-theme)
+] ;
+
+(highlight-ansi-with): ( source-string theme -- styled-string ) [
+  swap 1z-tokenize
+  swap [ (token>ansi) ] curry
+  #map #collect "" #join
+] ;
+
+\ --- Public API ---
+
+\\ Return the default ANSI light color theme hash.
+default-ansi-theme-light: ( -- theme ) [ (ansi-theme-light) ] ;
+
+\\ Return the default ANSI dark color theme hash.
+default-ansi-theme-dark: ( -- theme ) [ (ansi-theme-dark) ] ;
+
+\\ Highlight 1z source code with ANSI terminal colors using the default light theme.
+highlight-ansi: ( source-string -- styled-string ) [
+  (ansi-theme-light) (highlight-ansi-with)
+] ;
+
+\\ Highlight 1z source code with ANSI terminal colors using a custom theme.
+highlight-ansi-themed: ( source-string theme -- styled-string ) [
+  (highlight-ansi-with)
+] ;

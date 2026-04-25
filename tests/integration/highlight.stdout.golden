@@ -1,0 +1,145 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== empty input ===
+Stack: [ ]
+PASS: empty string
+Stack: [ ]
+=== whitespace passthrough ===
+Stack: [ ]
+PASS: single space
+Stack: [ ]
+PASS: double space
+Stack: [ ]
+=== comments ===
+Stack: [ ]
+PASS: comment coloring
+Stack: [ ]
+=== doc-comments ===
+Stack: [ ]
+PASS: doc-comment coloring
+Stack: [ ]
+=== strings ===
+Stack: [ ]
+PASS: string coloring
+Stack: [ ]
+=== numbers ===
+Stack: [ ]
+PASS: number coloring
+Stack: [ ]
+PASS: float coloring
+Stack: [ ]
+=== definitions ===
+Stack: [ ]
+PASS: definition coloring
+Stack: [ ]
+=== brackets ===
+Stack: [ ]
+PASS: open bracket coloring
+Stack: [ ]
+PASS: close bracket coloring
+Stack: [ ]
+=== stack effects ===
+Stack: [ ]
+PASS: stack-effect coloring
+Stack: [ ]
+=== semicolons ===
+Stack: [ ]
+PASS: semicolon has coloring
+Stack: [ ]
+=== brace forms ===
+Stack: [ ]
+PASS: struct{ coloring
+Stack: [ ]
+PASS: H{ coloring
+Stack: [ ]
+PASS: enum{ coloring
+Stack: [ ]
+=== parse-time words ===
+Stack: [ ]
+PASS: if coloring
+Stack: [ ]
+PASS: use coloring
+Stack: [ ]
+PASS: const coloring
+Stack: [ ]
+PASS: when coloring
+Stack: [ ]
+PASS: unless coloring
+Stack: [ ]
+PASS: reexport coloring
+Stack: [ ]
+PASS: load coloring
+Stack: [ ]
+=== flow words ===
+Stack: [ ]
+PASS: cond coloring
+Stack: [ ]
+PASS: loop coloring
+Stack: [ ]
+PASS: times coloring
+Stack: [ ]
+PASS: while coloring
+Stack: [ ]
+PASS: case coloring
+Stack: [ ]
+=== error words ===
+Stack: [ ]
+PASS: recover coloring
+Stack: [ ]
+PASS: try coloring
+Stack: [ ]
+PASS: throw coloring
+Stack: [ ]
+=== iteration words ===
+Stack: [ ]
+PASS: each coloring
+Stack: [ ]
+PASS: map coloring
+Stack: [ ]
+PASS: filter coloring
+Stack: [ ]
+=== combinator words ===
+Stack: [ ]
+PASS: dip coloring
+Stack: [ ]
+PASS: keep coloring
+Stack: [ ]
+PASS: bi coloring
+Stack: [ ]
+PASS: curry coloring
+Stack: [ ]
+=== unmatched words ===
+Stack: [ ]
+PASS: dup has no coloring
+Stack: [ ]
+PASS: drop has no coloring
+Stack: [ ]
+PASS: swap has no coloring
+Stack: [ ]
+=== close brace ===
+Stack: [ ]
+PASS: close brace has no coloring
+Stack: [ ]
+=== newline passthrough ===
+Stack: [ ]
+PASS: newline passes through
+Stack: [ ]
+=== theme selection ===
+Stack: [ ]
+PASS: light theme uses 37 for comments
+Stack: [ ]
+PASS: dark theme uses 90 for comments
+Stack: [ ]
+=== full definition ===
+Stack: [ ]
+Stack: [ "[1;34mfoo:[0m [37m( a -- b )[0m [1m[[0m [34m1[0m + [1m][0m [37m;[0m" ]
+PASS: definition has bold blue
+Stack: [ "[1;34mfoo:[0m [37m( a -- b )[0m [1m[[0m [34m1[0m + [1m][0m [37m;[0m" ]
+PASS: stack effect has light gray
+Stack: [ "[1;34mfoo:[0m [37m( a -- b )[0m [1m[[0m [34m1[0m + [1m][0m [37m;[0m" ]
+PASS: bracket has bold
+Stack: [ "[1;34mfoo:[0m [37m( a -- b )[0m [1m[[0m [34m1[0m + [1m][0m [37m;[0m" ]
+PASS: number has blue
+Stack: [ "[1;34mfoo:[0m [37m( a -- b )[0m [1m[[0m [34m1[0m + [1m][0m [37m;[0m" ]
+Stack: [ ]
