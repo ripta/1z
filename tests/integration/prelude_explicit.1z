@@ -1,0 +1,5 @@
+\ Explicit prelude path loads prelude identically to the default
+use "testing" ;
+
+3 4 + 7 "explicit prelude: addition" assert=
+"hello" #len 5 "explicit prelude: #len" assert=

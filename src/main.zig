@@ -128,6 +128,7 @@ pub fn main() u8 {
     defer cli_load_paths.deinit(gpa_allocator);
 
     var cli_stdlib_path: ?[]const u8 = null;
+    var cli_prelude_path: ?[]const u8 = null;
     var debug_mode = false;
     var initial_breakpoints: [16][]const u8 = undefined;
     var initial_breakpoint_count: usize = 0;
@@ -171,6 +172,8 @@ pub fn main() u8 {
             cli_load_paths.append(gpa_allocator, value) catch return 1;
         } else if (std.mem.startsWith(u8, arg, "--stdlib-path=")) {
             cli_stdlib_path = arg["--stdlib-path=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--prelude=")) {
+            cli_prelude_path = arg["--prelude=".len..];
         } else if (std.mem.eql(u8, arg, "--debug")) {
             debug_mode = true;
         } else if (std.mem.startsWith(u8, arg, "--break=")) {
@@ -301,7 +304,22 @@ pub fn main() u8 {
         ctx.benchmark = &bench_stats;
     }
 
-    ctx.loadPrelude() catch |err| {
+    // Resolve prelude source: CLI flag, then env var, and lastly the embedded default
+    const prelude_path = cli_prelude_path orelse std.posix.getenv("ONEZ_PRELUDE");
+    var external_prelude: ?[]const u8 = null;
+    if (prelude_path) |path| {
+        external_prelude = std.fs.cwd().readFileAlloc(gpa_allocator, path, 10 * 1024 * 1024) catch |err| {
+            const stderr_file: File = .stderr();
+            var stderr_buf: [4096]u8 = undefined;
+            var stderr = stderr_file.writer(&stderr_buf);
+            stderr.interface.print("Error: cannot read prelude '{s}': {any}\n", .{ path, err }) catch {};
+            stderr.interface.flush() catch {};
+            return 1;
+        };
+    }
+    defer if (external_prelude) |ep| gpa_allocator.free(ep);
+
+    ctx.loadPrelude(external_prelude) catch |err| {
         std.debug.panic("Failed to load prelude: {any}", .{err});
     };
     if (bench_config.enabled) {

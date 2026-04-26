@@ -1,0 +1,2 @@
+\ CLI --prelude flag takes precedence over ONEZ_PRELUDE env var
+1 2 +

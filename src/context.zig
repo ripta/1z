@@ -202,7 +202,7 @@ pub const Context = struct {
     /// Initialize context and load prelude. Convenience method for non-benchmark use.
     pub fn initWithPrelude(allocator: Allocator) Context {
         var ctx = init(allocator);
-        ctx.loadPrelude() catch |err| {
+        ctx.loadPrelude(null) catch |err| {
             std.debug.panic("Failed to load prelude: {any}", .{err});
         };
         return ctx;
@@ -252,10 +252,9 @@ pub const Context = struct {
         return ctx;
     }
 
-    /// Load the embedded prelude source.
-    /// Processes definitions incrementally so that parse-time words defined
-    /// earlier in the prelude are available when parsing later definitions.
-    pub fn loadPrelude(self: *Context) !void {
+    /// Load the prelude source. When external_source is non-null, it is used
+    /// instead of the compiled-in embedded prelude.
+    pub fn loadPrelude(self: *Context, external_source: ?[]const u8) !void {
         const StatementProcessor = @import("statement.zig").StatementProcessor;
         var processor: StatementProcessor = .{};
 
@@ -275,7 +274,8 @@ pub const Context = struct {
         });
 
         // Split prelude into lines and process incrementally
-        var lines = std.mem.splitScalar(u8, prelude_source, '\n');
+        const source = external_source orelse prelude_source;
+        var lines = std.mem.splitScalar(u8, source, '\n');
         while (lines.next()) |line| {
             const result = processor.feedLine(self.arena.allocator(), line, self);
             switch (result) {
