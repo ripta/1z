@@ -4609,17 +4609,18 @@ fn compileInstructions(
                             effective_in = specialized.input_count;
                             effective_out = specialized.output_count;
                         } else if (state.aot_mode) {
-                            // Row-variable resolution failed but the word
-                            // exists in the resolver. Emit an interpreter
-                            // call for this call site and mark the abstract
-                            // stack as unknown so subsequent instructions
-                            // don't compile with a wrong stack shape.
+                            // Row-variable resolution failed but the word exists in the resolver.
+                            // Emit an interpreter call and insert a row_region so subsequent
+                            // instructions above the region can continue compiling.
+                            // Same model as quotation `call` with unresolved effects.
                             try materializeQuotations(state, stack, sp.*);
                             flushToPhysicalStack(state, stack, sp.*);
                             const ctx_val = emitCallbackPreamble(state, sp.*);
                             emitAotWordCall(state, ctx_val, name, resolved, instr.line);
-                            state.dynamic_call_emitted = true;
                             if (exitFallsThrough(state.exit_kind)) {
+                                reloadBaseAfterDynamicCall(state);
+                                sp.* = 1;
+                                stack[0] = .{ .row_region = state.nextRowId() };
                                 continue;
                             }
                             break;
@@ -4645,8 +4646,17 @@ fn compileInstructions(
 
                         if (exitFallsThrough(state.exit_kind)) {
                             // Adjust abstract stack by specialized effect
+                            const had_row = sp.* > 0 and stack[0].isRowRegion();
                             sp.* = sp.* - effective_in + effective_out;
-                            resetStackToPhysical(stack, sp.*);
+                            if (had_row and sp.* == 0) {
+                                // The call consumed all known entries above
+                                // the row_region. Reload physical sp and
+                                // keep the row_region for subsequent code.
+                                reloadBaseAfterDynamicCall(state);
+                                sp.* = 1;
+                            } else {
+                                resetStackToPhysical(stack, sp.*);
+                            }
                         }
                     } else if (state.aot_mode) {
                         // AOT mode: direct call by name or interpreter fallback
@@ -4663,8 +4673,14 @@ fn compileInstructions(
                         emitAotWordCall(state, ctx_val, name, resolved, instr.line);
 
                         if (exitFallsThrough(state.exit_kind)) {
+                            const had_row = sp.* > 0 and stack[0].isRowRegion();
                             sp.* = sp.* - effective_in + effective_out;
-                            resetStackToPhysical(stack, sp.*);
+                            if (had_row and sp.* == 0) {
+                                reloadBaseAfterDynamicCall(state);
+                                sp.* = 1;
+                            } else {
+                                resetStackToPhysical(stack, sp.*);
+                            }
                         }
                     } else {
                         // Compound word: dispatch table indirect call

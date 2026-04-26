@@ -1,0 +1,38 @@
+\ Audit: exercise case combinator in AOT mode
+
+\ -- single matching branch --
+1 {
+  { 1 [ "one" ] }
+} case print-line
+
+\ -- first of multiple branches matches --
+1 {
+  { 1 [ "one" ] }
+  { 2 [ "two" ] }
+  { 3 [ "three" ] }
+} case print-line
+
+\ -- non-first branch matches --
+2 {
+  { 1 [ "one" ] }
+  { 2 [ "two" ] }
+  { 3 [ "three" ] }
+} case print-line
+
+\ -- default branch (bare quotation) --
+99 {
+  { 1 [ "one" ] }
+  { 2 [ "two" ] }
+  [ drop "other" ]
+} case print-line
+
+\ -- symbol dispatch --
+read: {
+  { read: [ "reading" ] }
+  { write: [ "writing" ] }
+} case print-line
+
+\ -- stack preserved below --
+100 42 {
+  { 42 [ "answer" ] }
+} case print-line .

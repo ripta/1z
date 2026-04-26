@@ -1,0 +1,34 @@
+\ Audit: exercise cond combinator in AOT mode
+
+\ -- single matching branch --
+5 dup {
+  { [ t ] [ drop "matched" ] }
+} cond print-line
+
+\ -- first of multiple branches matches --
+3 dup {
+  { [ t ] [ drop "first" ] }
+  { [ t ] [ drop "second" ] }
+} cond print-line
+
+\ -- second branch matches --
+0 dup {
+  { [ f ] [ drop "no" ] }
+  { [ t ] [ drop "yes" ] }
+} cond print-line
+
+\ -- default branch (bare quotation) --
+42 dup {
+  { [ f ] [ drop "no" ] }
+  [ drop "default" ]
+} cond print-line
+
+\ -- default-only branch --
+99 dup {
+  [ drop "only" ]
+} cond print-line
+
+\ -- stack preserved below dispatched value --
+100 200 dup {
+  { [ t ] [ drop drop "found" ] }
+} cond print-line .
