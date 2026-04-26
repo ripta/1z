@@ -149,9 +149,14 @@ parse-until ( delimiter -- quotation )
 parse-values-until ( delimiter -- array )
 peek-token ( -- string )
 pick-n ( n -- val )
+pragma-def{ ( -- )
+pragma-get-raw
+pragma? ( name -- ? )
+pragma{ ( -- )
 print-benchmark-report
 receive ( ch -- val )
 recover ( try-quot recover-quot -- )
+register-pragma ( name validator -- )
 rem ( a b -- r )
 resolve ( addr -- addrs )
 resource-close ( resource -- )
@@ -255,6 +260,7 @@ EIOFailed
 EIndexOutOfBounds
 EInvalidArgument
 EKeyNotFound
+EMissingDocComment
 ENoMatchingBranch
 ENotComparable
 EStackEffectMismatch
@@ -377,6 +383,7 @@ parameter? ( val -- ? )
 parse-quotation ( -- quotation )
 pick ( a b c -- a b c a )
 positive? ( x -- ? )
+pragma-get ( name -- option )
 print ( str -- )
 print-line ( str -- )
 protocol{

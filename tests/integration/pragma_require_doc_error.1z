@@ -1,0 +1,3 @@
+\ Test that standard-level require-doc rejects undocumented words
+pragma{ require-doc }
+bad-word: [ 1 ] ;

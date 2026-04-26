@@ -1,0 +1,2 @@
+tests/integration/pragma_require_doc_error_strict.1z:3: error 'missing-doc-comment' word 'bad-pt' defined without a doc-comment at word ';'
+  stack effect: ( name quot --  )

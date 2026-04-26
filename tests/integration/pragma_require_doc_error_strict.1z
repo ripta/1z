@@ -1,0 +1,3 @@
+\ Test that strict-level require-doc rejects undocumented parse-time words
+pragma{ require-doc: "strict" }
+bad-pt: parse-time [ 1 ] ;

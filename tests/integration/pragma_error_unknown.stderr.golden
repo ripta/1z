@@ -1,0 +1,1 @@
+tests/integration/pragma_error_unknown.1z:2: error 'unknown-pragma' nonexistent

@@ -1,0 +1,3 @@
+\ Test that a boolean-only pragma rejects non-boolean values
+"my-flag" f register-pragma
+pragma{ my-flag: 42 }

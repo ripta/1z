@@ -42,6 +42,14 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
         }
 
         if (mode == .evaluate_parse_time) {
+            if (tryResolveLiteral(ctx, alloc, tokenizer, tok)) |val| {
+                try tokens.append(alloc, val);
+                continue;
+            } else |err| switch (err) {
+                error.NotALiteral => {},
+                else => return err,
+            }
+
             if (ctx.lookupWord(token)) |word| {
                 if (word.parse_time) {
                     const pre_depth = ctx.stack.depth();
@@ -74,6 +82,46 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
     return .{ .array = result };
 }
 
+/// Try to resolve a token as a literal value. Returns NotALiteral if the token
+/// is not a recognized literal form, allowing the caller to fall through.
+fn tryResolveLiteral(ctx: *Context, alloc: std.mem.Allocator, tokenizer: *tokenizer_mod.Tokenizer, tok: Token) !Value {
+    const token = tok.text;
+
+    if (std.mem.eql(u8, token, "{")) {
+        const arr = parser.parseArray(alloc, tokenizer, ctx, tok.line) catch return error.OutOfMemory;
+        return .{ .array = arr };
+    }
+
+    if (std.mem.eql(u8, token, "[")) {
+        const quot = parser.parseQuotation(alloc, tokenizer, ctx, tok.line) catch return error.OutOfMemory;
+        return .{ .quotation = quot };
+    }
+
+    if (tokenizer_mod.parseString(token)) |s| {
+        const s_copy = parser.processEscapes(alloc, s) catch return error.OutOfMemory;
+        return .{ .string = s_copy };
+    }
+
+    if (token.len > 1 and token[token.len - 1] == ':') {
+        const sym_copy = alloc.dupe(u8, token[0 .. token.len - 1]) catch return error.OutOfMemory;
+        return .{ .symbol = sym_copy };
+    }
+
+    if (tokenizer_mod.parseInteger(token)) |n| {
+        return .{ .fixnum = n };
+    }
+
+    if (tokenizer_mod.parseBigNum(ctx.arena.allocator(), token)) |big| {
+        return .{ .bignum = big };
+    }
+
+    if (tokenizer_mod.parseFloat(token)) |f| {
+        return .{ .float = f };
+    }
+
+    return error.NotALiteral;
+}
+
 /// parse-until ( delimiter -- quotation ) - Read tokens until delimiter, return as quotation
 /// This is a parse-time primitive that reads from the active tokenizer.
 pub fn nativeParseUntil(ctx: *Context) anyerror!void {
@@ -97,7 +145,7 @@ pub fn nativeParseTokensUntil(ctx: *Context) anyerror!void {
 }
 
 /// parse-values-until ( delimiter -- array ) - Read tokens until delimiter, executing parse-time words
-fn nativeParseValuesUntil(ctx: *Context) anyerror!void {
+pub fn nativeParseValuesUntil(ctx: *Context) anyerror!void {
     const delimiter = try popString(ctx);
     const result = try parseTokensUntilCore(ctx, delimiter, .evaluate_parse_time);
     try ctx.stack.push(result);
@@ -131,7 +179,7 @@ fn nativePeekToken(ctx: *Context) anyerror!void {
 }
 
 /// parse-literal ( -- value ) - Read the next literal from the tokenizer
-fn nativeParseLiteral(ctx: *Context) anyerror!void {
+pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
     const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
     const alloc = ctx.quotationAllocator();
     while (tokenizer.nextOrYield()) |tok| {

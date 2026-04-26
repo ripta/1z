@@ -1,0 +1,24 @@
+=== pragma-def for query tests ===
+Stack: [ ]
+=== pragma? before set ===
+Stack: [ ]
+PASS: pragma? returns f before pragma is set
+Stack: [ ]
+=== pragma? after set true ===
+Stack: [ ]
+PASS: pragma? returns t after pragma{ flag }
+Stack: [ ]
+=== pragma? after negation ===
+Stack: [ ]
+PASS: pragma? returns f after pragma{ !flag }
+Stack: [ ]
+=== pragma-get before set ===
+Stack: [ ]
+PASS: pragma-get returns none before set
+Stack: [ ]
+=== pragma-get after set ===
+Stack: [ ]
+PASS: pragma-get returns some after set
+Stack: [ ]
+PASS: pragma-get value is correct
+Stack: [ ]

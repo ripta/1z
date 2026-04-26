@@ -60,6 +60,7 @@ pub const bitwise = @import("bitwise.zig");
 pub const resources = @import("resources.zig");
 pub const ffi_toy = @import("../ffi/toy.zig");
 pub const ffi_dynamic = @import("../ffi/dynamic.zig");
+pub const pragmas = @import("pragmas.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -115,7 +116,8 @@ pub const extracted_primitives = stack.primitives ++
     protocols.primitives ++
     sockets.primitives ++
     bitwise.primitives ++
-    resources.primitives;
+    resources.primitives ++
+    pragmas.primitives;
 
 // Aggregated registry entries for the native virtual module
 pub const extracted_registry_entries = structs.registry_entries ++

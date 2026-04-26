@@ -1,0 +1,28 @@
+\ Test pragma-def{ batch registration
+
+use "testing" ;
+
+"boolean registration" test-section
+
+pragma-def{ my-flag }
+pragma{ my-flag }
+
+t "boolean pragma via pragma-def{ accepted" assert-true
+
+"validated registration" test-section
+
+pragma-def{ my-level: [ dup fixnum? [ t ] [ drop "must be fixnum" f ] if ] }
+pragma{ my-level: 5 }
+
+t "validated pragma via pragma-def{ accepted" assert-true
+
+"mixed boolean and validated" test-section
+
+pragma-def{
+  another-flag
+  another-level: [ dup fixnum? [ t ] [ drop "must be fixnum" f ] if ]
+}
+
+pragma{ another-flag another-level: 10 }
+
+t "mixed pragma-def{ accepted" assert-true

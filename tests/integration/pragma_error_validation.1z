@@ -1,0 +1,3 @@
+\ Test that a validator returning result:err produces a parse-time error
+"level" [ dup fixnum? [ t ] [ drop "must be a fixnum" f ] if ] register-pragma
+pragma{ level: "bad" }

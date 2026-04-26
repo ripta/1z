@@ -1,0 +1,49 @@
+\ Test basic pragma registration and setting
+
+use "testing" ;
+
+"boolean shorthand" test-section
+
+\ Register a boolean pragma and set it via shorthand
+"test-flag" f register-pragma
+pragma{ test-flag }
+
+t "boolean shorthand accepted" assert-true
+
+"negation shorthand" test-section
+
+pragma{ !test-flag }
+
+t "negation shorthand accepted" assert-true
+
+"validated pragma" test-section
+
+\ Register a pragma with a validator that accepts positive integers
+"warn-level" [ dup fixnum? [ t ] [ drop "must be a fixnum" f ] if ] register-pragma
+
+pragma{ warn-level: 3 }
+
+t "validated pragma accepted" assert-true
+
+"multiple keys in one block" test-section
+
+pragma{ test-flag !test-flag }
+
+t "multiple keys accepted" assert-true
+
+"multiline pragma block" test-section
+
+pragma{
+  test-flag
+  !test-flag
+}
+
+t "multiline block accepted" assert-true
+
+"built-in require-doc" test-section
+
+\ require-doc is pre-registered as a boolean pragma
+pragma{ require-doc }
+pragma{ !require-doc }
+
+t "built-in require-doc accepted" assert-true

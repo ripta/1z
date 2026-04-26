@@ -1,0 +1,30 @@
+=== standard level: documented word passes ===
+Stack: [ ]
+Stack: [ ]
+PASS: documented word returns 42
+Stack: [ ]
+=== standard level: parse-time word without doc passes ===
+Stack: [ ]
+Stack: [ ]
+PASS: parse-time word without doc at standard level
+Stack: [ ]
+=== toggling off allows undocumented words ===
+Stack: [ ]
+Stack: [ ]
+PASS: undocumented word after disabling
+Stack: [ ]
+=== strict level: documented parse-time word passes ===
+Stack: [ ]
+Stack: [ ]
+PASS: documented parse-time word at strict
+Stack: [ ]
+=== strict level: documented type descriptor passes ===
+Stack: [ ]
+Stack: [ ]
+PASS: struct with doc at strict level
+Stack: [ ]
+=== relaxed level: no enforcement ===
+Stack: [ ]
+Stack: [ ]
+PASS: undocumented word at relaxed level
+Stack: [ ]

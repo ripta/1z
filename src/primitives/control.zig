@@ -44,6 +44,82 @@ fn getDescriptorMap(val: Value) ?*value_mod.MutableMap {
     };
 }
 
+/// Bit flags for require-doc enforcement. The prelude validator maps level
+/// names to a bitmask of these flags; Zig only checks the relevant bit.
+const require_doc_normal: i64 = 1; // bit 0
+const require_doc_parse_time: i64 = 2; // bit 1
+const require_doc_type_descriptor: i64 = 4; // bit 2
+const require_doc_marker: i64 = 8; // bit 3
+
+/// Native validator for the require-doc pragma. Maps level names to the
+/// bitmask consumed by enforceRequireDoc. Follows the same protocol as
+/// quotation validators: push validated_value t on success, or error_msg f
+/// on failure.
+pub fn nativeRequireDocValidator(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .boolean => |b| {
+            try ctx.stack.push(.{ .fixnum = if (b) require_doc_normal else 0 });
+            try ctx.stack.push(.{ .boolean = true });
+        },
+        .string => |s| {
+            const level: ?i64 = if (std.mem.eql(u8, s, "relaxed"))
+                0
+            else if (std.mem.eql(u8, s, "standard"))
+                require_doc_normal
+            else if (std.mem.eql(u8, s, "strict"))
+                require_doc_normal | require_doc_parse_time | require_doc_type_descriptor
+            else if (std.mem.eql(u8, s, "pedantic"))
+                require_doc_normal | require_doc_parse_time | require_doc_type_descriptor | require_doc_marker
+            else
+                null;
+
+            if (level) |l| {
+                try ctx.stack.push(.{ .fixnum = l });
+                try ctx.stack.push(.{ .boolean = true });
+            } else {
+                try ctx.stack.push(.{ .string = "require-doc: expected t, f, or one of relaxed, standard, strict, pedantic" });
+                try ctx.stack.push(.{ .boolean = false });
+            }
+        },
+        else => {
+            try ctx.stack.push(.{ .string = "require-doc: expected t, f, or one of relaxed, standard, strict, pedantic" });
+            try ctx.stack.push(.{ .boolean = false });
+        },
+    }
+}
+
+/// Check the require-doc pragma and throw missing-doc-comment if a
+/// doc-comment is required but absent. The pragma value is an integer
+/// bitmask set by the native validator.
+fn enforceRequireDoc(ctx: *Context, name: []const u8, has_doc: bool, is_parse_time: bool, is_type_descriptor: bool, is_marker: bool) anyerror!void {
+    if (has_doc) return;
+
+    const pragma_val = ctx.getPragma("require-doc") orelse return;
+    const mask = switch (pragma_val) {
+        .fixnum => |n| n,
+        else => return,
+    };
+
+    const bit = if (is_marker)
+        require_doc_marker
+    else if (is_type_descriptor)
+        require_doc_type_descriptor
+    else if (is_parse_time)
+        require_doc_parse_time
+    else
+        require_doc_normal;
+
+    if (mask & bit == 0) return;
+
+    const alloc = ctx.quotationAllocator();
+    ctx.thrown_error = .{
+        .error_type = "missing-doc-comment",
+        .message = std.fmt.allocPrint(alloc, "word '{s}' defined without a doc-comment", .{name}) catch "word defined without a doc-comment",
+    };
+    return error.UserThrown;
+}
+
 pub const primitives = [_]Primitive{
     .{ .name = "call", .stack_effect = "quot --", .doc = "Execute a quotation.", .func = nativeCall },
     .{ .name = ";", .stack_effect = "name quot --", .doc = "Define a new word.", .func = nativeSemicolon },
@@ -78,11 +154,13 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
         // the name until the semicolon is executed.
         .marker => |marker| {
             // TODO(ripta): check for duplicate markers?
+            var has_doc = false;
             while (true) {
                 const next_val = try ctx.stack.peek();
                 switch (next_val) {
                     .doc_string => {
                         _ = try ctx.stack.pop();
+                        has_doc = true;
                     },
                     .symbol => break,
                     else => {
@@ -93,6 +171,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
             }
 
             const name = try popSymbol(ctx);
+            try enforceRequireDoc(ctx, name, has_doc, false, false, true);
             const name_copy = try alloc.dupe(u8, name);
 
             // Tag the marker with its name. This is just for identification
@@ -122,6 +201,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
 
                 var collected_markers = std.ArrayListUnmanaged(*Marker){};
                 defer collected_markers.deinit(alloc);
+                var has_doc = false;
 
                 while (true) {
                     const next_val = try ctx.stack.peek();
@@ -132,6 +212,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                         },
                         .doc_string => {
                             _ = try ctx.stack.pop();
+                            has_doc = true;
                         },
                         .symbol => break,
                         else => {
@@ -142,6 +223,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 }
 
                 const name = try popSymbol(ctx);
+                try enforceRequireDoc(ctx, name, has_doc, false, true, false);
                 try ctx.stack.push(.{ .symbol = name });
 
                 try ctx.stack.push(top_val);
@@ -192,6 +274,13 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 }
 
                 const name = try popSymbol(ctx);
+
+                const has_parse_time = for (collected_markers.items) |mk| {
+                    if (mk == @as(*const Marker, &markers_mod.parse_time_marker)) break true;
+                } else false;
+
+                try enforceRequireDoc(ctx, name, doc_val != null, has_parse_time, false, false);
+
                 const name_copy = try alloc.dupe(u8, name);
 
                 const instructions = switch (top_val) {
@@ -204,9 +293,6 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 };
 
                 const markers_slice = try alloc.dupe(*Marker, collected_markers.items);
-                const has_parse_time = for (collected_markers.items) |mk| {
-                    if (mk == @as(*const Marker, &markers_mod.parse_time_marker)) break true;
-                } else false;
 
                 try ctx.defineWord(name_copy, WordDefinition{
                     .name = name_copy,
