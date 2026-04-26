@@ -186,21 +186,21 @@ geom: enum-variants { geom:rect: geom:tri: geom:dot: } "enum-variants for multi-
 
 \ Basic match on flat variants
 color:red {
-  color:red: [ "R" ]
+  color:red:   [ "R" ]
   color:green: [ "G" ]
-  color:blue: [ "B" ]
+  color:blue:  [ "B" ]
 } match "R" "match selects correct flat variant" assert=
 
 color:green {
-  color:red: [ "R" ]
+  color:red:   [ "R" ]
   color:green: [ "G" ]
-  color:blue: [ "B" ]
+  color:blue:  [ "B" ]
 } match "G" "match selects green" assert=
 
 color:blue {
-  color:red: [ "R" ]
+  color:red:   [ "R" ]
   color:green: [ "G" ]
-  color:blue: [ "B" ]
+  color:blue:  [ "B" ]
 } match "B" "match selects blue" assert=
 
 "match data-carrying enum" test-section
@@ -222,20 +222,20 @@ shape:point {
 \ Multi-field unwrap pushes all fields
 10 20 make-geom:rect {
   geom:rect: [ + ]
-  geom:tri: [ + + ]
-  geom:dot: [ 0 ]
+  geom:tri:  [ + + ]
+  geom:dot:  [ 0 ]
 } match 30 "match unwraps multi-field variant" assert=
 
 3 4 5 make-geom:tri {
   geom:rect: [ + ]
-  geom:tri: [ + + ]
-  geom:dot: [ 0 ]
+  geom:tri:  [ + + ]
+  geom:dot:  [ 0 ]
 } match 12 "match unwraps three-field variant" assert=
 
 geom:dot {
   geom:rect: [ + ]
-  geom:tri: [ + + ]
-  geom:dot: [ 0 ]
+  geom:tri:  [ + + ]
+  geom:dot:  [ 0 ]
 } match 0 "match flat variant in multi-field enum" assert=
 
 "match exhaustiveness errors" test-section
@@ -249,10 +249,10 @@ geom:dot {
 
 \ Duplicate branch throws error
 [ color:red {
-    color:red: [ "R" ]
+    color:red:   [ "R" ]
     color:green: [ "G" ]
-    color:red: [ "R2" ]
-    color:blue: [ "B" ]
+    color:red:   [ "R2" ]
+    color:blue:  [ "B" ]
   } match
 ] [ "duplicate match branch" assert-error ] recover
 
@@ -264,7 +264,7 @@ geom:dot {
 
 \ Wrong variant name throws error
 [ color:red {
-    color:red: [ "R" ]
+    color:red:   [ "R" ]
     color:green: [ "G" ]
     suit:hearts: [ "H" ]
   } match

@@ -1,0 +1,31 @@
+\ Test that >module captures deps from the creating context,
+\ so tail-calls into the module's quotations can resolve imported words.
+
+use "testing" ;
+use "strings" ;
+
+\ Create a module whose quotations reference `trim` from use "strings".
+\ Before the fix, >module created modules with empty deps, so tail-calls
+\ into these quotations would fail with unknown-word for `trim`.
+"strmod" H{
+  "do-trim" [ trim ]
+  "do-upper" [ uppercase ]
+} >module import
+
+\ These forwarding words tail-call into the >module-created module.
+try-trim: [ do-trim ] ;
+try-upper: [ do-upper ] ;
+
+">module tail-call resolves imported deps" test-section
+
+"  hello  " try-trim "hello" "tail-call trim via >module" assert=
+"abc" try-upper "ABC" "tail-call uppercase via >module" assert=
+
+\ Direct calls should also still work.
+"  world  " do-trim "world" "direct call trim via >module" assert=
+"xyz" do-upper "XYZ" "direct call uppercase via >module" assert=
+
+\ Qualified access should also work under tail-call.
+strmod: "strmod2" H{ "do-trim" [ trim ] } >module ;
+qcall: [ strmod.do-trim ] ;
+"  qualified  " qcall "qualified" "qualified tail-call via >module" assert=

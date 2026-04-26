@@ -44,6 +44,30 @@ fn nativeToModule(ctx: *Context) anyerror!void {
         .words = .{},
     };
 
+    // Capture imported words from the current local frames into the module's
+    // deps so the module is self-contained. Without this, quotations stored
+    // in the module that reference imported symbols (e.g., ffi-call from
+    // use "ffi") would fail under tail-call optimization, because TCO pops
+    // the calling module's deps frame before the callee executes.
+    // Iterate outermost-first so innermost-scope entries take precedence.
+    for (ctx.local_frames.items) |*frame| {
+        var frame_iter = frame.iterator();
+        while (frame_iter.next()) |entry| {
+            const word_def = entry.value_ptr.*;
+            if (word_def.imported) {
+                try module.deps.put(alloc, entry.key_ptr.*, .{
+                    .stack_effect = word_def.stack_effect,
+                    .markers = word_def.markers,
+                    .source_module = word_def.source_module,
+                    .action = switch (word_def.action) {
+                        .compound => |instrs| .{ .compound = instrs },
+                        .native => |func| .{ .native = func },
+                    },
+                });
+            }
+        }
+    }
+
     var iter = entries.iterator();
     while (iter.next()) |entry| {
         const val = entry.value_ptr.*;

@@ -102,6 +102,8 @@ pub fn build(b: *std.Build) void {
     integration_test_step.dependOn(&run_lib_unit_tests.step);
     integration_test_step.dependOn(&install_toy_shared.step);
 
+    const has_diff: bool = (b.findProgram(&.{"diff"}, &.{}) catch null) != null;
+
     // Update golden files step
     const update_golden_step = b.step("update-golden", "Update golden files for integration tests");
     var update_files = b.addUpdateSourceFiles();
@@ -213,36 +215,79 @@ pub fn build(b: *std.Build) void {
         if (has_flags) test_run.addFileInput(b.path(flags_path));
         if (has_exitcode) test_run.addFileInput(b.path(exitcode_path));
 
-        // Check for stderr golden file for tests with stderr output
+        // Check for stderr golden file
         var has_stderr_golden = false;
         const stderr_golden_name = b.fmt("{s}.stderr.golden", .{name_without_ext});
+        const stderr_golden_path = b.fmt("tests/integration/{s}", .{stderr_golden_name});
+        var stderr_content: []const u8 = "";
         if (test_dir.openFile(stderr_golden_name, .{})) |file| {
             defer file.close();
-            const stderr_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            stderr_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
             has_stderr_golden = true;
-            // Track the stderr golden file as a dependency
-            test_run.addFileInput(b.path(b.fmt("tests/integration/{s}", .{stderr_golden_name})));
-            test_run.expectStdErrEqual(stderr_content);
+            test_run.addFileInput(b.path(stderr_golden_path));
         } else |_| {}
 
-        if (!has_stderr_golden) {
-            test_run.expectStdErrEqual("");
-        }
+        // Check for stdout golden file
+        var has_stdout_golden = false;
+        var stdout_content: []const u8 = "";
+        if (test_dir.openFile(b.fmt("{s}.stdout.golden", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            stdout_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            has_stdout_golden = true;
+            test_run.addFileInput(b.path(stdout_golden_path));
+        } else |_| {}
 
         // Set expected exit code: .exitcode file > default (1 for error tests, 0 otherwise)
         test_run.expectExitCode(expected_exit_code orelse if (has_stderr_golden) 1 else 0);
 
-        // Try to read stdout golden file for comparison
-        if (test_dir.openFile(b.fmt("{s}.stdout.golden", .{name_without_ext}), .{})) |file| {
-            defer file.close();
-            const golden_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
-            // Track the stdout golden file as a dependency
-            test_run.addFileInput(b.path(stdout_golden_path));
-            test_run.expectStdOutEqual(golden_content);
-        } else |_| {
-            test_run.expectStdOutEqual("");
+        if (has_diff) {
+            const captured_stdout = test_run.captureStdOut();
+            const stdout_diff = b.addSystemCommand(&.{
+                "sh", "-c",
+                b.fmt(
+                    "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
+                    .{ if (has_stdout_golden) stdout_golden_path else "(empty)", file_path },
+                ),
+                "sh",
+            });
+            if (has_stdout_golden) {
+                stdout_diff.addFileArg(b.path(stdout_golden_path));
+            } else {
+                stdout_diff.addArg("/dev/null");
+            }
+            stdout_diff.addFileArg(captured_stdout);
+
+            const captured_stderr = test_run.captureStdErr();
+            const stderr_diff = b.addSystemCommand(&.{
+                "sh", "-c",
+                b.fmt(
+                    "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
+                    .{ if (has_stderr_golden) stderr_golden_path else "(empty)", file_path },
+                ),
+                "sh",
+            });
+            if (has_stderr_golden) {
+                stderr_diff.addFileArg(b.path(stderr_golden_path));
+            } else {
+                stderr_diff.addArg("/dev/null");
+            }
+            stderr_diff.addFileArg(captured_stderr);
+
+            integration_test_step.dependOn(&stdout_diff.step);
+            integration_test_step.dependOn(&stderr_diff.step);
+        } else {
+            if (has_stdout_golden) {
+                test_run.expectStdOutEqual(stdout_content);
+            } else {
+                test_run.expectStdOutEqual("");
+            }
+            if (has_stderr_golden) {
+                test_run.expectStdErrEqual(stderr_content);
+            } else {
+                test_run.expectStdErrEqual("");
+            }
+            integration_test_step.dependOn(&test_run.step);
         }
-        integration_test_step.dependOn(&test_run.step);
 
         // Update golden: capture stdout and write to .stdout.golden file
         const update_run = b.addRunArtifact(exe);
@@ -291,7 +336,6 @@ pub fn build(b: *std.Build) void {
             update_run.expectExitCode(update_exit_code);
         }
         if (has_stderr_golden) {
-            const stderr_golden_path = b.fmt("tests/integration/{s}.stderr.golden", .{name_without_ext});
             update_files.addCopyFileToSource(update_run.captureStdErr(), stderr_golden_path);
         }
     }
@@ -339,19 +383,39 @@ pub fn build(b: *std.Build) void {
         fmt_run.addFileArg(b.path(input_path));
 
         // Try to read golden file for comparison
+        var has_fmt_golden = false;
+        var fmt_golden_content: []const u8 = "";
         if (fmt_test_dir.openFile(b.fmt("{s}.golden", .{name_without_ext}), .{})) |file| {
             defer file.close();
-            const golden_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
-            // Track the golden file as a dependency
+            fmt_golden_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            has_fmt_golden = true;
             fmt_run.addFileInput(b.path(golden_path));
-            fmt_run.expectStdOutEqual(golden_content);
         } else |_| {
             std.debug.print("Warning: No golden file for {s}\n", .{entry.name});
         }
 
         fmt_run.expectStdErrEqual("");
         fmt_run.expectExitCode(0);
-        fmt_test_step.dependOn(&fmt_run.step);
+
+        if (has_diff and has_fmt_golden) {
+            const captured_fmt_stdout = fmt_run.captureStdOut();
+            const fmt_diff = b.addSystemCommand(&.{
+                "sh", "-c",
+                b.fmt(
+                    "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
+                    .{ golden_path, input_path },
+                ),
+                "sh",
+            });
+            fmt_diff.addFileArg(b.path(golden_path));
+            fmt_diff.addFileArg(captured_fmt_stdout);
+            fmt_test_step.dependOn(&fmt_diff.step);
+        } else {
+            if (has_fmt_golden) {
+                fmt_run.expectStdOutEqual(fmt_golden_content);
+            }
+            fmt_test_step.dependOn(&fmt_run.step);
+        }
 
         // Update golden: capture stdout and write to .golden file
         const update_fmt_run = b.addRunArtifact(exe);

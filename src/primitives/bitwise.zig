@@ -24,10 +24,12 @@ pub const primitives = [_]Primitive{
 fn popShiftCount(ctx: *Context) !usize {
     const val = try ctx.stack.pop();
     if (val != .fixnum) {
+        helpers.setErrorHint(ctx, "shift count must be a non-negative fixnum");
         helpers.setTypeMismatchError(ctx, "fixnum", val);
         return error.TypeMismatch;
     }
     if (val.fixnum < 0) {
+        helpers.setErrorHint(ctx, "shift count must be a non-negative fixnum");
         helpers.setErrorContext(ctx, "shift count must be non-negative, got {d}", .{val.fixnum});
         return error.TypeMismatch;
     }
@@ -115,6 +117,7 @@ fn nativeShiftLeft(ctx: *Context) anyerror!void {
         try big.shiftLeft(&big, count);
         try ctx.stack.push(demoteBignum(big));
     } else {
+        helpers.setErrorHint(ctx, "shift count must be a non-negative fixnum");
         helpers.setTypeMismatchError(ctx, "fixnum or bignum", val);
         return error.TypeMismatch;
     }
@@ -135,6 +138,7 @@ fn nativeShiftRight(ctx: *Context) anyerror!void {
         try big.shiftRight(&big, count);
         try ctx.stack.push(demoteBignum(big));
     } else {
+        helpers.setErrorHint(ctx, "shift count must be a non-negative fixnum");
         helpers.setTypeMismatchError(ctx, "fixnum or bignum", val);
         return error.TypeMismatch;
     }
@@ -144,6 +148,7 @@ fn nativeUshiftRight(ctx: *Context) anyerror!void {
     const count = try popShiftCount(ctx);
     const val = try ctx.stack.pop();
     if (val != .fixnum) {
+        helpers.setErrorHint(ctx, "shift count must be a non-negative fixnum");
         helpers.setTypeMismatchError(ctx, "fixnum", val);
         return error.TypeMismatch;
     }
@@ -159,12 +164,14 @@ fn nativeUshiftRight(ctx: *Context) anyerror!void {
 fn nativeShift(ctx: *Context) anyerror!void {
     const count_val = try ctx.stack.pop();
     if (count_val != .fixnum) {
+        helpers.setErrorHint(ctx, "shift count must be a non-negative fixnum");
         helpers.setTypeMismatchError(ctx, "fixnum", count_val);
         return error.TypeMismatch;
     }
     const count = count_val.fixnum;
     const val = try ctx.stack.pop();
     if (val != .fixnum and val != .bignum) {
+        helpers.setErrorHint(ctx, "shift count must be a non-negative fixnum");
         helpers.setTypeMismatchError(ctx, "fixnum or bignum", val);
         return error.TypeMismatch;
     }

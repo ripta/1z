@@ -1,0 +1,3 @@
+tests/integration/error_context_hint_shift.1z:4: error 'type-mismatch' expected fixnum, got string "bad" at word 'shift-left'
+  stack effect: ( n count -- n' )
+  hint: shift count must be a non-negative fixnum

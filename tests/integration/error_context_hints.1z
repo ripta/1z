@@ -1,0 +1,4 @@
+\ error_context_hints.1z - Test that throw shows hint for non-error values
+\ Passing a non-error value to throw should display the hint about make-error.
+
+42 throw

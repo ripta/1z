@@ -1,0 +1,4 @@
+\ error_context_hint_shift.1z - Test that shift with wrong type shows hint
+\ Passing a string as shift count should display the shift count hint.
+
+42 "bad" shift-left

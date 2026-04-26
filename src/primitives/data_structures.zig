@@ -153,6 +153,7 @@ pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
                 ba.append(alloc, @intCast(int)) catch return error.OutOfMemory;
             },
             else => {
+                helpers.setErrorHint(ctx, "byte array elements must be fixnum values in 0-255");
                 helpers.setTypeMismatchError(ctx, "fixnum", val);
                 return error.TypeMismatch;
             },

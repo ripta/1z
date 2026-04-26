@@ -143,6 +143,7 @@ fn binaryArithOp(ctx: *Context, comptime op: ArithOp) anyerror!void {
             .mul => fa * fb,
         } });
     } else {
+        helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
         helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
         return error.TypeMismatch;
     }
@@ -199,6 +200,7 @@ pub fn nativeDiv(ctx: *Context) anyerror!void {
         const alloc = ctx.arena.allocator();
         try ctx.stack.push(.{ .float = valToFloat(alloc, a) / valToFloat(alloc, b) });
     } else {
+        helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
         helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
         return error.TypeMismatch;
     }
@@ -232,6 +234,7 @@ pub fn nativeMod(ctx: *Context) anyerror!void {
         const alloc = ctx.arena.allocator();
         try ctx.stack.push(.{ .float = @rem(valToFloat(alloc, a), valToFloat(alloc, b)) });
     } else {
+        helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
         helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
         return error.TypeMismatch;
     }

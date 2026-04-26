@@ -225,6 +225,12 @@ pub fn setTypeMismatchError(ctx: *Context, expected: []const u8, val: Value) voi
     ) catch null;
 }
 
+/// Set a pending error hint to be displayed alongside the error message.
+/// The hint string should be a comptime literal or arena-allocated.
+pub fn setErrorHint(ctx: *Context, hint: []const u8) void {
+    ctx.pending_error_hint = hint;
+}
+
 // =============================================================================
 // Type-safe poppers
 // =============================================================================

@@ -1,0 +1,71 @@
+\ Integration tests for SQLite FFI bindings
+
+use "testing" ;
+use "sqlite" ;
+
+\\ Assert that a return code is SQLITE_OK.
+(check-ok): ( rc msg -- ) [ SQLITE_OK swap assert= ] ;
+
+"open and close in-memory database" test-section
+":memory:" (open)
+"open rc" (check-ok)
+(close-v2)
+"close rc" (check-ok)
+
+"DDL and DML via exec" test-section
+":memory:" (open) "open" (check-ok)
+dup "CREATE TABLE t1 (id INTEGER PRIMARY KEY, name TEXT, value REAL)" 0 0 0 (exec)
+"create table" (check-ok)
+dup "INSERT INTO t1 VALUES (1, 'alice', 2.5)" 0 0 0 (exec)
+"insert via exec" (check-ok)
+(close-v2) drop
+
+"prepare, bind, step, and column reading" test-section
+":memory:" (open) "open" (check-ok)
+dup "CREATE TABLE t1 (id INTEGER PRIMARY KEY, name TEXT, value REAL)" 0 0 0 (exec)
+"create table" (check-ok)
+\\ Prepare INSERT
+dup "INSERT INTO t1 VALUES (?1, ?2, ?3)" -1 0 (prepare-v2) "prepare insert" (check-ok)
+\\ Bind parameters
+dup 1 42 (bind-int64) "bind int64" (check-ok)
+dup 2 "hello" -1 -1 (bind-text) "bind text" (check-ok)
+dup 3 3.14 (bind-double) "bind double" (check-ok)
+\\ Step to execute
+dup (step) SQLITE_DONE "step insert done" assert=
+\\ Finalize INSERT
+(finalize) drop
+\\ Prepare SELECT
+dup "SELECT id, name, value FROM t1" -1 0 (prepare-v2) "prepare select" (check-ok)
+\\ Step to get first row
+dup (step) SQLITE_ROW "step select row" assert=
+\\ Read columns
+dup 0 (column-int64) 42 "column int64 id" assert=
+dup 1 (column-text) "hello" "column text name" assert=
+dup 2 (column-double) 3.14 "column double value" assert=
+\\ Step again for SQLITE_DONE
+dup (step) SQLITE_DONE "step select done" assert=
+\\ Finalize SELECT
+(finalize) drop
+(close-v2) drop
+
+"NULL binding and column type detection" test-section
+":memory:" (open) "open" (check-ok)
+dup "CREATE TABLE t2 (x INTEGER)" 0 0 0 (exec) "create t2" (check-ok)
+\\ Insert NULL via bind_null
+dup "INSERT INTO t2 VALUES (?1)" -1 0 (prepare-v2) "prepare null insert" (check-ok)
+dup 1 (bind-null) "bind null" (check-ok)
+dup (step) SQLITE_DONE "step null insert" assert=
+(finalize) drop
+\\ Read back and check column type
+dup "SELECT x FROM t2" -1 0 (prepare-v2) "prepare null select" (check-ok)
+dup (step) SQLITE_ROW "step null select" assert=
+dup 0 (column-type) 5 "column type is SQLITE_NULL" assert=
+(finalize) drop
+(close-v2) drop
+
+"prepare invalid SQL returns error" test-section
+":memory:" (open) "open" (check-ok)
+dup "NOT VALID SQL !!!" -1 0 (prepare-v2)
+swap drop
+SQLITE_OK = f "non-zero error code" assert=
+(close-v2) drop

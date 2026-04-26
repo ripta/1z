@@ -56,6 +56,8 @@ pub const ErrorDetail = struct {
     source: []const u8,
     line: usize,
     word_name: ?[]const u8,
+    stack_effect_str: ?[]const u8 = null,
+    hint: ?[]const u8 = null,
 };
 
 /// Structured context for parse-time errors, populated by the parser's catch
@@ -121,6 +123,9 @@ pub const Context = struct {
     /// Pending error message set by primitives before returning an error.
     /// Used by captureCallStackOnError for the innermost frame's message.
     pending_error_message: ?[]const u8 = null,
+    /// Pending error hint set by primitives before returning an error.
+    /// Consumed by captureCallStackOnError for the innermost frame's hint.
+    pending_error_hint: ?[]const u8 = null,
     /// Error captured by the FFI callback trampoline when a 1z quotation throws.
     /// Checked and cleared by nativeFfiCall after ffi_call returns.
     callback_error: ?anyerror = null,
@@ -300,6 +305,7 @@ pub const Context = struct {
         self.error_details.clearRetainingCapacity();
         self.call_stack.clearRetainingCapacity();
         self.pending_error_message = null;
+        self.pending_error_hint = null;
     }
 
     /// Get the current binding for a parameter by name.
@@ -1046,6 +1052,10 @@ pub const Context = struct {
         const pending_msg = self.pending_error_message;
         self.pending_error_message = null;
 
+        // Consume any pending error hint for the innermost frame
+        const pending_hint = self.pending_error_hint;
+        self.pending_error_hint = null;
+
         // Iterate call_stack in reverse (innermost first for display)
         var i = self.call_stack.items.len;
         var is_innermost = true;
@@ -1058,12 +1068,27 @@ pub const Context = struct {
                 pending_msg.?
             else
                 frame.word_name;
+
+            const se_str: ?[]const u8 = if (is_innermost) blk: {
+                if (self.lookupWord(frame.word_name)) |defn| {
+                    if (defn.stack_effect) |se| {
+                        var buf: [256]u8 = undefined;
+                        var fbs = std.io.fixedBufferStream(&buf);
+                        se.write(fbs.writer()) catch break :blk null;
+                        break :blk self.arena.allocator().dupe(u8, fbs.getWritten()) catch null;
+                    }
+                }
+                break :blk null;
+            } else null;
+
             self.error_details.append(self.allocator, .{
                 .error_type = error_type,
                 .message = message,
                 .source = self.current_source,
                 .line = frame.line,
                 .word_name = frame.word_name,
+                .stack_effect_str = se_str,
+                .hint = if (is_innermost) pending_hint else null,
             }) catch {};
             is_innermost = false;
         }

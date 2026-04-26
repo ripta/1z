@@ -1,0 +1,4 @@
+\ error_context_hint_arith.1z - Test that arithmetic type mismatch shows hint
+\ Passing a string to + should display the numeric operands hint.
+
+1 "hello" +

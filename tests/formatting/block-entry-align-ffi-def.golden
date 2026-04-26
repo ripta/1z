@@ -1,0 +1,23 @@
+"sqlite3" lib-open ffi-def{
+  __open:       "sqlite3_open" ffi{ cstring out-ptr:sqlite3 -> i32 }
+  __close-v2:   "sqlite3_close_v2" ffi{ ptr -> i32 }
+  __prepare-v2: "sqlite3_prepare_v2" ffi{ ptr cstring i32 out-ptr:sqlite3-stmt isize -> i32 }
+  __finalize:   "sqlite3_finalize" ffi{ ptr -> i32 }
+  __step:       "sqlite3_step" ffi{ ptr -> i32 }
+  __reset:      "sqlite3_reset" ffi{ ptr -> i32 }
+  __exec:       "sqlite3_exec" ffi{ ptr cstring isize isize isize -> i32 }
+  __errmsg:     "sqlite3_errmsg" ffi{ ptr -> cstring }
+  __column-count:  "sqlite3_column_count" ffi{ ptr -> i32 }
+  __column-name:   "sqlite3_column_name" ffi{ ptr i32 -> cstring }
+  __column-type:   "sqlite3_column_type" ffi{ ptr i32 -> i32 }
+  __column-int64:  "sqlite3_column_int64" ffi{ ptr i32 -> i64 }
+  __column-double: "sqlite3_column_double" ffi{ ptr i32 -> f64 }
+  __column-text:   "sqlite3_column_text" ffi{ ptr i32 -> cstring }
+  __column-blob:   "sqlite3_column_blob" ffi{ ptr i32 -> ptr }
+  __column-bytes:  "sqlite3_column_bytes" ffi{ ptr i32 -> i32 }
+  __bind-int64:    "sqlite3_bind_int64" ffi{ ptr i32 i64 -> i32 }
+  __bind-double:   "sqlite3_bind_double" ffi{ ptr i32 f64 -> i32 }
+  __bind-text:     "sqlite3_bind_text" ffi{ ptr i32 cstring i32 isize -> i32 }
+  __bind-blob:     "sqlite3_bind_blob" ffi{ ptr i32 ptr i32 isize -> i32 }
+  __bind-null:     "sqlite3_bind_null" ffi{ ptr i32 -> i32 }
+} call "sqlite-raw" swap >module import

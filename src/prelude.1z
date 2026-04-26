@@ -82,8 +82,8 @@ cmp: generic ( a b -- ordering ) [
 \   word: method{ type1 type2 } [ body ] ;
 method{: parse-time [
   M{ }
-  types: "}" parse-tokens-until @set!
-  body: parse-quotation @set!
+  types:  "}" parse-tokens-until @set!
+  body:   parse-quotation @set!
   define: [ define-method ] @set!
 ] ;
 

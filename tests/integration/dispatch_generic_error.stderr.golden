@@ -1,1 +1,2 @@
 tests/integration/dispatch_generic_error.1z:16: error 'type-error' no method found for given argument types at word 'no-default'
+  stack effect: ( value -- result )

@@ -8,7 +8,7 @@ use "ffi" ;
 \\ uncompress(dest, &destLen, source, sourceLen) -> int
 \\ compressBound(sourceLen) -> ulong
 "z" lib-open ffi-def{
-  (compress2): "compress2" ffi{ ptr inout-usize ptr usize i32 -> i32 }
+  (compress2):      "compress2" ffi{ ptr inout-usize ptr usize i32 -> i32 }
   (uncompress-raw): "uncompress" ffi{ ptr inout-usize ptr usize -> i32 }
   (compress-bound): "compressBound" ffi{ usize -> usize }
 } call "zlib-raw" swap >module import

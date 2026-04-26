@@ -1,0 +1,78 @@
+\ Integration tests for SQLite lazy row iterators (query-hash, query-array)
+
+use "testing" ;
+use "sqlite" ;
+
+\ Helper to set up a test database with a populated table
+(setup-test-db): ( -- db ) [
+  ":memory:" open
+  dup "CREATE TABLE t (id INTEGER, name TEXT, score REAL)" { } execute
+  dup "INSERT INTO t VALUES (?1, ?2, ?3)" { 1 "alice" 95.5 } execute
+  dup "INSERT INTO t VALUES (?1, ?2, ?3)" { 2 "bob" 87.0 } execute
+  dup "INSERT INTO t VALUES (?1, ?2, ?3)" { 3 "carol" 92.3 } execute
+] ;
+
+"query-hash full consumption via #collect" test-section
+(setup-test-db)
+dup "SELECT id, name FROM t ORDER BY id" { } query-hash
+#collect
+dup #len 3 "collected 3 hash rows" assert=
+dup 0 #nth "name" @get "alice" "first row name" assert=
+dup 1 #nth "name" @get "bob" "second row name" assert=
+2 #nth "name" @get "carol" "third row name" assert=
+resource-close
+
+"query-array full consumption via #collect" test-section
+(setup-test-db)
+dup "SELECT id, name FROM t ORDER BY id" { } query-array
+#collect
+dup #len 3 "collected 3 array rows" assert=
+dup 0 #nth 0 #nth unwrap-or-throw 1 "first row id" assert=
+dup 0 #nth 1 #nth unwrap-or-throw "alice" "first row name" assert=
+2 #nth 0 #nth unwrap-or-throw 3 "third row id" assert=
+resource-close
+
+"query-hash with bound parameters" test-section
+(setup-test-db)
+dup "SELECT name FROM t WHERE score > ?1 ORDER BY name" { 90.0 } query-hash
+#collect
+dup #len 2 "filtered to 2 rows" assert=
+dup 0 #nth "name" @get "alice" "first filtered name" assert=
+1 #nth "name" @get "carol" "second filtered name" assert=
+resource-close
+
+"query-hash partial consumption with with-iterator" test-section
+(setup-test-db)
+dup "SELECT id FROM t ORDER BY id" { } query-hash
+[ 2 #take #collect ] with-iterator
+dup #len 2 "took 2 rows" assert=
+dup 0 #nth "id" @get 1 "first taken id" assert=
+1 #nth "id" @get 2 "second taken id" assert=
+resource-close
+
+"query-hash on empty result set" test-section
+(setup-test-db)
+dup "SELECT id FROM t WHERE id > 999" { } query-hash
+#collect
+#len 0 "empty result set" assert=
+resource-close
+
+"query-hash with #each consumer" test-section
+(setup-test-db)
+dup "SELECT id FROM t ORDER BY id" { } query-hash
+0 swap [ "id" @get + ] #each
+6 "sum of ids via #each" assert=
+resource-close
+
+"query-array NULL handling" test-section
+":memory:" open
+dup "CREATE TABLE n (a INTEGER, b TEXT)" { } execute
+dup "INSERT INTO n VALUES (?1, ?2)" 1 1array option:none #push execute
+dup "INSERT INTO n VALUES (?1, ?2)" option:none 1array "hello" #push execute
+dup "SELECT a, b FROM n ORDER BY rowid" { } query-array
+#collect
+dup 0 #nth 0 #nth unwrap-or-throw 1 "first row col a is 1" assert=
+dup 0 #nth 1 #nth option:none? "first row col b is none" assert-true
+dup 1 #nth 0 #nth option:none? "second row col a is none" assert-true
+1 #nth 1 #nth unwrap-or-throw "hello" "second row col b is hello" assert=
+resource-close
