@@ -1710,6 +1710,8 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var compilation_stats = false;
     var compile_all_prelude = false;
     var save_temps = false;
+    var interpreter_fallback: enum { true, false, auto } = .auto;
+    var lock_interpreter_setting = false;
     var static_libs: std.ArrayListUnmanaged([]const u8) = .{};
     defer static_libs.deinit(base_allocator);
 
@@ -1752,6 +1754,25 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             };
             continue;
         }
+        if (std.mem.startsWith(u8, arg, "--interpreter-fallback=")) {
+            const value = arg["--interpreter-fallback=".len..];
+            if (std.mem.eql(u8, value, "true")) {
+                interpreter_fallback = .true;
+            } else if (std.mem.eql(u8, value, "false")) {
+                interpreter_fallback = .false;
+            } else if (std.mem.eql(u8, value, "auto")) {
+                interpreter_fallback = .auto;
+            } else {
+                err_writer.print("Error: --interpreter-fallback must be 'true', 'false', or 'auto', got '{s}'\n", .{value}) catch {};
+                err_writer.flush() catch {};
+                return 1;
+            }
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--lock-interpreter-setting")) {
+            lock_interpreter_setting = true;
+            continue;
+        }
         if (std.mem.startsWith(u8, arg, "-")) {
             err_writer.print("Error: unknown flag '{s}'\n", .{arg}) catch {};
             err_writer.flush() catch {};
@@ -1763,6 +1784,13 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             return 1;
         }
         source_file = arg;
+    }
+
+    // Validate flag combinations.
+    if (lock_interpreter_setting and interpreter_fallback == .auto) {
+        err_writer.writeAll("Error: --lock-interpreter-setting requires --interpreter-fallback=true or --interpreter-fallback=false\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
     }
 
     // Apply ONEZ_MAX_MEMORY fallback if --max-memory was not set.
@@ -1780,7 +1808,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const allocator = mem_limit.allocator();
 
     const source = source_file orelse {
-        err_writer.writeAll("Usage: 1z build <file.1z> [-o <output>] [--save-temps] [--compilation-stats] [--compile-all-prelude]\n") catch {};
+        err_writer.writeAll("Usage: 1z build <file.1z> [-o <output>] [--save-temps] [--compilation-stats] [--compile-all-prelude] [--interpreter-fallback=true|false|auto] [--lock-interpreter-setting]\n") catch {};
         err_writer.flush() catch {};
         return 1;
     };

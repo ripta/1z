@@ -1,0 +1,1 @@
+Error: --lock-interpreter-setting requires --interpreter-fallback=true or --interpreter-fallback=false
