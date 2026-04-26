@@ -243,6 +243,32 @@ execute: ( db sql params -- ) [
   ] if
 ] ;
 
+\ Lazy row iterators
+
+\\ Query returning a lazy iterator of hash rows. Prepares and binds the statement,
+\\ then returns a callback iterator that steps through results and finalizes on cleanup.
+query-hash: ( db sql params -- iterator ) [
+  (query-prepare-bind)
+  dup [ step-hash ] curry
+  swap [ resource-close ] curry
+  >iterator(with-cleanup)
+] ;
+
+\\ Query returning a lazy iterator of array rows. Same lifecycle as query-hash
+\\ but each row is an array of option values.
+query-array: ( db sql params -- iterator ) [
+  (query-prepare-bind)
+  dup [ step-array ] curry
+  swap [ resource-close ] curry
+  >iterator(with-cleanup)
+] ;
+
+\\ Shared helper: prepare a statement and bind parameters, returning the statement.
+(query-prepare-bind): ( db sql params -- stmt ) [
+  [ -1 0 (prepare-v2) over (check-ok-stmt) ] dip
+  over swap (bind-params)
+] ;
+
 \ Transaction support
 
 \\ Execute a quotation inside a transaction. Commits on success, rolls back on error.
