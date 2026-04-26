@@ -2928,6 +2928,12 @@ fn compilePredBodyLoop(
 
     flushToPhysicalStack(state, stack, sp.*);
 
+    // Snapshot the symbolic stack state at loop entry for back-edge
+    // invariance checks (RowId positions must be identical each iteration).
+    const loop_entry_stack = state.allocator.dupe(StackEntry, stack[0..sp.*]) catch return IrCodegenError.OutOfMemory;
+    defer state.allocator.free(loop_entry_stack);
+    const loop_entry_sp = sp.*;
+
     const pre_loop_sp_const = c.ir_const_addr(ctx, sp.*);
     const pre_loop_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, pre_loop_sp_const);
     c._ir_STORE(ctx, state.sp_ptr, pre_loop_sp);
@@ -2939,13 +2945,13 @@ fn compilePredBodyLoop(
     const pre_body_sp = sp.*;
     switch (pred_entry) {
         .quotation_body => |body| {
-            resetStackToPhysical(stack, sp.*);
+            resetStackToPhysicalPreservingRows(stack, sp.*);
             try compileInstructions(state, body, stack, sp);
         },
         .raw_at_slot => |s| {
             try emitIndirectQuotCall(state, stack, sp, s, 0);
             sp.* += 1; // predicate pushes one value (bool)
-            resetStackToPhysical(stack, sp.*);
+            resetStackToPhysicalPreservingRows(stack, sp.*);
         },
         else => {
             state.not_compilable_reason = .quotation_reification;
@@ -2957,7 +2963,7 @@ fn compilePredBodyLoop(
     if (sp.* < pre_body_sp + 1) return IrCodegenError.StackShapeMismatch;
     sp.* -= 1;
     const cond_entry = stack[sp.*];
-    if (sp.* != pre_body_sp) return IrCodegenError.StackShapeMismatch;
+    if (!symbolicShapeMatches(stack, sp.*, loop_entry_stack, loop_entry_sp)) return IrCodegenError.StackShapeMismatch;
 
     const truthy = try emitTruthiness(state, cond_entry, base_addr);
     const continue_cond = if (negate_cond)
@@ -2974,10 +2980,9 @@ fn compilePredBodyLoop(
     // Execute body
     switch (body_entry) {
         .quotation_body => |body| {
-            resetStackToPhysical(stack, sp.*);
-            const body_pre_sp = sp.*;
+            resetStackToPhysicalPreservingRows(stack, sp.*);
             try compileInstructions(state, body, stack, sp);
-            if (sp.* != body_pre_sp) return IrCodegenError.StackShapeMismatch;
+            if (!symbolicShapeMatches(stack, sp.*, loop_entry_stack, loop_entry_sp)) return IrCodegenError.StackShapeMismatch;
             flushToPhysicalStack(state, stack, sp.*);
         },
         .raw_at_slot => |s| {
@@ -2989,7 +2994,7 @@ fn compilePredBodyLoop(
         },
     }
 
-    resetStackToPhysical(stack, sp.*);
+    resetStackToPhysicalPreservingRows(stack, sp.*);
 
     emitSafepointCall(state);
     const loop_end = c._ir_LOOP_END(ctx);
@@ -3004,7 +3009,7 @@ fn compilePredBodyLoop(
         refreshCachedStackPointer(state);
     }
 
-    resetStackToPhysical(stack, sp.*);
+    resetStackToPhysicalPreservingRows(stack, sp.*);
 }
 
 /// Try to emit inline IR for virtual type unwrapping.
@@ -4023,6 +4028,12 @@ fn compileInstructions(
                     // Flush user stack to physical memory before the loop
                     flushToPhysicalStack(state, stack, sp.*);
 
+                    // Snapshot symbolic stack state at loop entry for
+                    // back-edge invariance checks.
+                    const loop_entry_stack = state.allocator.dupe(StackEntry, stack[0..sp.*]) catch return IrCodegenError.OutOfMemory;
+                    defer state.allocator.free(loop_entry_stack);
+                    const loop_entry_sp = sp.*;
+
                     // Write sp to memory so indirect calls can see it
                     const pre_loop_sp_const = c.ir_const_addr(ctx, sp.*);
                     const pre_loop_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, pre_loop_sp_const);
@@ -4044,11 +4055,9 @@ fn compileInstructions(
 
                     switch (quot_entry) {
                         .quotation_body => |body| {
-                            // Reset stack entries to raw_at_slot for body
-                            const pre_body_sp = sp.*;
-                            resetStackToPhysical(stack, sp.*);
+                            resetStackToPhysicalPreservingRows(stack, sp.*);
                             try compileInstructions(state, body, stack, sp);
-                            if (sp.* != pre_body_sp) return IrCodegenError.StackShapeMismatch;
+                            if (!symbolicShapeMatches(stack, sp.*, loop_entry_stack, loop_entry_sp)) return IrCodegenError.StackShapeMismatch;
                             // Flush body results back
                             flushToPhysicalStack(state, stack, sp.*);
                         },
@@ -4062,7 +4071,7 @@ fn compileInstructions(
                     }
 
                     // Reset stack entries after body
-                    resetStackToPhysical(stack, sp.*);
+                    resetStackToPhysicalPreservingRows(stack, sp.*);
 
                     // Decrement counter
                     const one = c.ir_const_i64(ctx, 1);
@@ -4096,6 +4105,12 @@ fn compileInstructions(
                     // Flush user stack to physical memory before the loop
                     flushToPhysicalStack(state, stack, sp.*);
 
+                    // Snapshot symbolic stack state at loop entry for
+                    // back-edge invariance checks.
+                    const loop_entry_stack = state.allocator.dupe(StackEntry, stack[0..sp.*]) catch return IrCodegenError.OutOfMemory;
+                    defer state.allocator.free(loop_entry_stack);
+                    const loop_entry_sp = sp.*;
+
                     const pre_loop_sp_const = c.ir_const_addr(ctx, sp.*);
                     const pre_loop_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, pre_loop_sp_const);
                     c._ir_STORE(ctx, state.sp_ptr, pre_loop_sp);
@@ -4107,13 +4122,13 @@ fn compileInstructions(
                     const pre_body_sp = sp.*;
                     switch (pred_entry) {
                         .quotation_body => |body| {
-                            resetStackToPhysical(stack, sp.*);
+                            resetStackToPhysicalPreservingRows(stack, sp.*);
                             try compileInstructions(state, body, stack, sp);
                         },
                         .raw_at_slot => |s| {
                             try emitIndirectQuotCall(state, stack, sp, s, instr.line);
                             sp.* += 1; // predicate pushes one value (bool)
-                            resetStackToPhysical(stack, sp.*);
+                            resetStackToPhysicalPreservingRows(stack, sp.*);
                         },
                         else => {
                             state.not_compilable_reason = .quotation_reification;
@@ -4125,12 +4140,12 @@ fn compileInstructions(
                     if (sp.* < pre_body_sp + 1) return IrCodegenError.StackShapeMismatch;
                     sp.* -= 1;
                     const cond_entry = stack[sp.*];
-                    if (sp.* != pre_body_sp) return IrCodegenError.StackShapeMismatch;
+                    if (!symbolicShapeMatches(stack, sp.*, loop_entry_stack, loop_entry_sp)) return IrCodegenError.StackShapeMismatch;
 
                     const continue_cond = try emitTruthiness(state, cond_entry, base_addr);
 
                     flushToPhysicalStack(state, stack, sp.*);
-                    resetStackToPhysical(stack, sp.*);
+                    resetStackToPhysicalPreservingRows(stack, sp.*);
 
                     const if_continue = c._ir_IF(ctx, continue_cond);
                     c._ir_IF_TRUE(ctx, if_continue);
