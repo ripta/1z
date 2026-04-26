@@ -161,6 +161,8 @@ pub const CodegenDiagnostics = struct {
     uncompiled_quotations: []const UncompiledQuotation = &.{},
     quotation_fallbacks: []const QuotationFallbackWarning = &.{},
     prelude_stats: PreludeStats = .{},
+    resolved_interpreter_fallback: ?InterpreterFallbackMode = null,
+    has_interpreter_callbacks: bool = false,
 };
 
 pub const CompiledWord = struct {
@@ -5990,6 +5992,9 @@ pub fn emitProgramC(
     var array_literals: std.ArrayListUnmanaged(AotArrayLiteral) = .{};
     defer array_literals.deinit(std.heap.page_allocator);
 
+    // Record position before word bodies for auto-mode interpreter detection.
+    const preamble_end = out.items.len;
+
     // Pass 2a: compile with only the compilable set
     var compiled_bodies: std.ArrayListUnmanaged(struct { word_id: u32, body: []u8 }) = .{};
     defer {
@@ -6343,10 +6348,22 @@ pub fn emitProgramC(
     }
 
     // Configure interpreter fallback setting.
+    // In auto mode, scan the generated C source for interpreter callback
+    // references to determine whether the interpreter is actually needed.
     {
-        const default_allowed: u8 = switch (interpreter_fallback) {
-            .true, .auto => 1,
+        const resolved: InterpreterFallbackMode = if (interpreter_fallback == .auto) blk: {
+            const word_bodies = out.items[preamble_end..];
+            const interpreter_needed = std.mem.indexOf(u8, word_bodies, "jitInterpretedCall") != null or
+                std.mem.indexOf(u8, word_bodies, "jitCallQuotation") != null;
+            const mode: InterpreterFallbackMode = if (interpreter_needed) .true else .false;
+            diagnostics.resolved_interpreter_fallback = mode;
+            diagnostics.has_interpreter_callbacks = interpreter_needed;
+            break :blk mode;
+        } else interpreter_fallback;
+        const default_allowed: u8 = switch (resolved) {
+            .true => 1,
             .false => 0,
+            .auto => unreachable,
         };
         const locked: u8 = if (lock_interpreter_setting) 1 else 0;
         var fb_buf: [128]u8 = undefined;

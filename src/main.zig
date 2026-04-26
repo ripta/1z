@@ -1619,6 +1619,23 @@ fn printQuotationStats(
     err_writer.flush() catch {};
 }
 
+fn printInterpreterFallbackDecision(
+    diagnostics: *const ir_codegen.CodegenDiagnostics,
+    err_writer: anytype,
+) void {
+    const resolved = diagnostics.resolved_interpreter_fallback orelse return;
+    switch (resolved) {
+        .true => {
+            err_writer.writeAll("Interpreter fallback: included (auto: compiled code calls interpreter)\n") catch {};
+        },
+        .false => {
+            err_writer.writeAll("Interpreter fallback: not needed (auto: all code fully compiled)\n") catch {};
+        },
+        .auto => unreachable,
+    }
+    err_writer.flush() catch {};
+}
+
 fn handleHighlight(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
@@ -1943,12 +1960,13 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     };
     defer allocator.free(c_source);
 
-    printQuotationFallbackWarnings(&codegen_diagnostics, allow_interpreter_fallback, err_writer, allocator);
-
     if (compilation_stats) {
         printPreludeStats(&codegen_diagnostics.prelude_stats, err_writer);
         printQuotationStats(freeze_result.quotations, err_writer);
+        printInterpreterFallbackDecision(&codegen_diagnostics, err_writer);
     }
+
+    printQuotationFallbackWarnings(&codegen_diagnostics, allow_interpreter_fallback, err_writer, allocator);
 
     // When fallback=false, require all words to compile including prelude words.
     // Non-prelude failures are already caught by emitProgramC (error.UncompiledWords).
