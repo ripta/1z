@@ -809,6 +809,11 @@ fn addIntegrationTests(
     }
 }
 
+const AotEnvEntry = struct {
+    key: []const u8,
+    value: []const u8,
+};
+
 const AotTestEntry = struct {
     name_without_ext: []const u8,
     file_path: []const u8,
@@ -832,6 +837,8 @@ const AotTestEntry = struct {
     expected_exit_code: ?u8,
     build_flags: []const []const u8,
     build_flags_path: []const u8,
+    env_entries: []const AotEnvEntry,
+    env_path: []const u8,
 };
 
 fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEntry {
@@ -921,6 +928,24 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
             }
         } else |_| {}
 
+        var env_entries: std.ArrayListUnmanaged(AotEnvEntry) = .{};
+        const env_path = b.fmt("tests/aot/{s}.env", .{name_without_ext});
+        if (aot_dir.openFile(b.fmt("{s}.env", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            const content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            var lines = std.mem.splitScalar(u8, content, '\n');
+            while (lines.next()) |line| {
+                const trimmed = std.mem.trim(u8, line, " \t\r");
+                if (trimmed.len == 0) continue;
+                if (std.mem.indexOfScalar(u8, trimmed, '=')) |eq_idx| {
+                    env_entries.append(b.allocator, .{
+                        .key = trimmed[0..eq_idx],
+                        .value = trimmed[eq_idx + 1 ..],
+                    }) catch {};
+                }
+            }
+        } else |_| {}
+
         entries.append(b.allocator, .{
             .name_without_ext = name_without_ext,
             .file_path = file_path,
@@ -944,6 +969,8 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
             .expected_exit_code = expected_exit_code,
             .build_flags = build_flags.items,
             .build_flags_path = build_flags_path,
+            .env_entries = env_entries.items,
+            .env_path = env_path,
         }) catch return error.OutOfMemory;
     }
 
@@ -1083,6 +1110,8 @@ fn addAotTests(
         exec_run.setName(exec_label);
         exec_run.step.dependOn(&chmod.step);
         exec_run.expectExitCode(expected_exit);
+        for (te.env_entries) |env| exec_run.setEnvironmentVariable(env.key, env.value);
+        if (te.env_entries.len > 0) exec_run.addFileInput(b.path(te.env_path));
 
         if (has_diff) {
             addGoldenDiff(b, test_step, exec_run.captureStdOut(), if (te.has_stdout_golden) te.stdout_golden_path else null, te.file_path);
@@ -1133,6 +1162,7 @@ fn addAotTests(
             const update_exec = std.Build.Step.Run.create(b, b.fmt("update aot: {s}", .{te.name_without_ext}));
             update_exec.addFileArg(update_binary);
             update_exec.step.dependOn(&update_chmod.step);
+            for (te.env_entries) |env| update_exec.setEnvironmentVariable(env.key, env.value);
 
             if (expected_exit != 0) {
                 update_exec.expectExitCode(expected_exit);

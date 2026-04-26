@@ -5782,12 +5782,16 @@ fn patchMissingD0(body: []u8, allocator: Allocator) Allocator.Error![]u8 {
 ///   6. A main() entry point
 ///
 /// `entry_word_id` identifies which word to call from main().
+pub const InterpreterFallbackMode = enum { true, false, auto };
+
 pub fn emitProgramC(
     words: []const AotWordDesc,
     quotations: []AotQuotationDesc,
     entry_word_id: u32,
     max_word_id: u32,
     static_libs: []const []const u8,
+    interpreter_fallback: InterpreterFallbackMode,
+    lock_interpreter_setting: bool,
     diagnostics: *CodegenDiagnostics,
     allocator: Allocator,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
@@ -5803,7 +5807,7 @@ pub fn emitProgramC(
     }
 
     // 1. Preamble
-    try out.appendSlice(allocator, "#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n#include <string.h>\n\n");
+    try out.appendSlice(allocator, "#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n#include <stdlib.h>\n#include <string.h>\n\n");
 
     // 2. Callback extern declarations -- emit all unconditionally since the
     // two-pass compilation may introduce interpreter fallback calls that
@@ -5852,6 +5856,7 @@ pub fn emitProgramC(
         \\extern void onez_print_error(void *rt);
         \\extern void onez_deinit(void *rt);
         \\extern int onez_set_static_libs(void *rt, const char **names, unsigned int count);
+        \\extern int32_t onez_set_interpreter_fallback(void *rt, _Bool allowed);
         \\
         \\
     );
@@ -6326,6 +6331,30 @@ pub fn emitProgramC(
         try out.appendSlice(allocator, count_str);
         try out.appendSlice(allocator, ");\n");
         try out.appendSlice(allocator, "    }\n");
+    }
+
+    // Configure interpreter fallback setting.
+    {
+        const default_allowed: u8 = switch (interpreter_fallback) {
+            .true, .auto => 1,
+            .false => 0,
+        };
+        const locked: u8 = if (lock_interpreter_setting) 1 else 0;
+        var fb_buf: [128]u8 = undefined;
+        const fb_str = std.fmt.bufPrint(&fb_buf, "    {{\n        int fallback_allowed = {d};\n        int setting_locked = {d};\n", .{ default_allowed, locked }) catch unreachable;
+        try out.appendSlice(allocator, fb_str);
+        try out.appendSlice(allocator,
+            \\        if (!setting_locked) {
+            \\            const char *env = getenv("ONEZ_INTERPRETER_FALLBACK");
+            \\            if (env) {
+            \\                if (env[0] == '0') fallback_allowed = 0;
+            \\                else if (env[0] == '1') fallback_allowed = 1;
+            \\            }
+            \\        }
+            \\        onez_set_interpreter_fallback(rt, fallback_allowed);
+            \\    }
+            \\
+        );
     }
 
     // Format dispatch table size
@@ -6813,6 +6842,12 @@ export fn jitNativeCall(ctx_raw: usize, fn_ptr_raw: usize) callconv(.c) i32 {
 export fn jitCallQuotation(ctx_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
+    if (!ctx.allow_interpreted_fallback) {
+        const stderr_file: std.fs.File = .stderr();
+        stderr_file.writeAll("Fatal: quotation call requires interpreter fallback; rebuild with --interpreter-fallback=true\n") catch {};
+        ctx.jit_pending_error = error.InterpreterFallbackDisabled;
+        return 2;
+    }
     control.nativeCall(ctx) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
@@ -7104,6 +7139,14 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
         return 1;
     };
     const word_name = entry.word_name;
+    if (!ctx.allow_interpreted_fallback) {
+        const stderr_file: std.fs.File = .stderr();
+        stderr_file.writeAll("Fatal: word '") catch {};
+        stderr_file.writeAll(word_name) catch {};
+        stderr_file.writeAll("' requires interpreter fallback; rebuild with --interpreter-fallback=true\n") catch {};
+        ctx.jit_pending_error = error.InterpreterFallbackDisabled;
+        return 2;
+    }
     if (bail_stats_mod.enabled) {
         bail_stats_mod.global.recordInterpretedCall(word_id, word_name);
     }
@@ -8904,7 +8947,7 @@ test "emitProgramC generates complete C source" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, &diag, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, .auto, false, &diag, testing.allocator);
     defer testing.allocator.free(source);
 
     // Preamble
@@ -8943,7 +8986,7 @@ test "emitProgramC dispatch table has correct entries" {
     };
 
     var diag2: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 2, &.{}, &diag2, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 2, &.{}, .auto, false, &diag2, testing.allocator);
     defer testing.allocator.free(source);
 
     // word_id 0 -> onez_w_foo
@@ -8968,7 +9011,7 @@ test "emitProgramC quotation table with all compiled entries" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, &diag, testing.allocator);
+    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, &diag, testing.allocator);
     defer testing.allocator.free(source);
 
     // Table exists with all entries
@@ -8998,7 +9041,7 @@ test "emitProgramC rejects uncompiled quotation bodies with inferred effects" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const result = emitProgramC(&words, &quotations, 0, 0, &.{}, &diag, testing.allocator);
+    const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, &diag, testing.allocator);
     try testing.expectError(error.UncompiledQuotations, result);
 
     // Diagnostics report the uncompiled quotation
@@ -9016,7 +9059,7 @@ test "emitProgramC no quotation table when quotations empty" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, &diag, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, &diag, testing.allocator);
     defer testing.allocator.free(source);
 
     // No quotation table emitted (extern decl exists but table and call do not)
@@ -9034,7 +9077,7 @@ test "emitProgramC output compiles with cc" {
     };
 
     var diag3: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, &diag3, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, .auto, false, &diag3, testing.allocator);
     defer testing.allocator.free(source);
 
     var tmp_dir = testing.tmpDir(.{});

@@ -1371,6 +1371,16 @@ export fn onez_set_static_libs(ptr: ?*anyopaque, names: [*]const [*:0]const u8, 
 }
 
 // =========================================================================
+// Interpreter fallback control
+// =========================================================================
+
+export fn onez_set_interpreter_fallback(ptr: ?*anyopaque, allowed: bool) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    handle.ctx.allow_interpreted_fallback = allowed;
+    return ONEZ_OK;
+}
+
+// =========================================================================
 // Module loading
 // =========================================================================
 

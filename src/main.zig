@@ -1710,7 +1710,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var compilation_stats = false;
     var compile_all_prelude = false;
     var save_temps = false;
-    var interpreter_fallback: enum { true, false, auto } = .auto;
+    var interpreter_fallback: ir_codegen.InterpreterFallbackMode = .auto;
     var lock_interpreter_setting = false;
     var static_libs: std.ArrayListUnmanaged([]const u8) = .{};
     defer static_libs.deinit(base_allocator);
@@ -1909,6 +1909,8 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         freeze_result.entry_word_id,
         freeze_result.max_word_id,
         static_libs.items,
+        interpreter_fallback,
+        lock_interpreter_setting,
         &codegen_diagnostics,
         allocator,
     ) catch |err| {
