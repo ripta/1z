@@ -1236,6 +1236,10 @@ fn countTotalInstructions(instructions: []const Instruction) usize {
     return total;
 }
 
+/// Unique identity for a symbolic row region, used to compare rows across
+/// branch merge and loop back-edge checks.
+const RowId = u32;
+
 /// Symbolic stack entry: tracks the IR representation of each value on the abstract compilation stack.
 const StackEntry = union(enum) {
     /// Unboxed fixnum payload, usable directly in arithmetic and comparisons.
@@ -1253,10 +1257,11 @@ const StackEntry = union(enum) {
     /// fixnum / boolean.
     raw_at_slot: usize,
     /// Opaque row region of unknown size inserted when a quotation call has
-    /// unresolved row variables. Operations on known entries above the
-    /// region work normally; operations that need exact positions within
-    /// the region return NotCompilable.
-    row_region,
+    /// unresolved row variables. Carries a RowId so that branch merge and
+    /// loop back-edge checks can compare symbolic row identity. Operations
+    /// on known entries above the region work normally; operations that need
+    /// exact positions within the region return NotCompilable.
+    row_region: RowId,
 
     /// Returns the slot index if this is a raw_at_slot.
     fn slotIndex(self: StackEntry) ?usize {
@@ -1269,6 +1274,19 @@ const StackEntry = union(enum) {
     /// Returns true if this is an opaque slot.
     fn isAtSlot(self: StackEntry) bool {
         return self == .raw_at_slot;
+    }
+
+    /// Returns true if this entry is a symbolic row region.
+    fn isRowRegion(self: StackEntry) bool {
+        return self == .row_region;
+    }
+
+    /// Returns the RowId if this entry is a row_region, null otherwise.
+    fn rowId(self: StackEntry) ?RowId {
+        return switch (self) {
+            .row_region => |id| id,
+            else => null,
+        };
     }
 };
 
@@ -1398,6 +1416,15 @@ const CompileState = struct {
     quotation_slots: QuotationSlotMap = .{},
     inline_trace_frames: [max_inline_trace_frames]InlineTraceFrame = undefined,
     inline_trace_frame_count: usize = 0,
+    /// Monotonic counter for allocating unique RowId values.
+    next_row_id: RowId = 0,
+
+    /// Allocate a fresh RowId, unique within this compilation.
+    fn nextRowId(state: *CompileState) RowId {
+        const id = state.next_row_id;
+        state.next_row_id += 1;
+        return id;
+    }
 };
 
 const BuiltinTraceFrameKind = enum(usize) {
@@ -3949,7 +3976,7 @@ fn compileInstructions(
                                 // continue compiling.
                                 reloadBaseAfterDynamicCall(state);
                                 sp.* = 1;
-                                stack[0] = .row_region;
+                                stack[0] = .{ .row_region = state.nextRowId() };
                             }
                         },
                         .i64_ref, .f64_ref, .bool_ref, .row_region => {
@@ -10106,14 +10133,14 @@ test "hasRowRegion: returns false when no row_region present" {
 
 test "hasRowRegion: returns true when row_region present" {
     var stack: [max_abstract_stack_depth]StackEntry = undefined;
-    stack[0] = .row_region;
+    stack[0] = .{ .row_region = 0 };
     stack[1] = .{ .raw_at_slot = 1 };
     try testing.expect(hasRowRegion(&stack, 2));
     try testing.expect(hasRowRegion(&stack, 1));
 }
 
 test "row_region is distinct from other StackEntry variants" {
-    const entry: StackEntry = .row_region;
+    const entry: StackEntry = .{ .row_region = 0 };
     try testing.expect(entry != .raw_at_slot);
     try testing.expect(entry != .quotation_body);
     try testing.expect(entry != .i64_ref);
@@ -10192,4 +10219,57 @@ test "add above row_region compiles" {
     const instrs = makeInstructions(.{ "call", @as(i64, 10), @as(i64, 20), "+" });
     const result = try compileWord(&instrs, 2, 0, null, null, null, null, null);
     defer result.jit_buf.deinit();
+}
+
+test "nextRowId returns sequential ids" {
+    var state = CompileState{
+        .ctx = undefined,
+        .base_addr = c.IR_UNUSED,
+        .tag_offset_const = c.IR_UNUSED,
+        .payload_offset_const = c.IR_UNUSED,
+        .fixnum_tag_const = c.IR_UNUSED,
+        .float_tag_const = c.IR_UNUSED,
+        .boolean_tag_const = c.IR_UNUSED,
+        .tagged_tag_const = c.IR_UNUSED,
+        .struct_instance_tag_const = c.IR_UNUSED,
+        .bail_status = c.IR_UNUSED,
+        .ok_status = c.IR_UNUSED,
+        .items_ptr = c.IR_UNUSED,
+        .sp_ptr = c.IR_UNUSED,
+        .capacity_param = c.IR_UNUSED,
+        .sp_val = c.IR_UNUSED,
+        .base_idx = c.IR_UNUSED,
+        .value_size_const = c.IR_UNUSED,
+    };
+    const id0 = state.nextRowId();
+    const id1 = state.nextRowId();
+    const id2 = state.nextRowId();
+    try testing.expectEqual(@as(RowId, 0), id0);
+    try testing.expectEqual(@as(RowId, 1), id1);
+    try testing.expectEqual(@as(RowId, 2), id2);
+}
+
+test "isRowRegion: true for row_region, false for others" {
+    const row: StackEntry = .{ .row_region = 0 };
+    const slot: StackEntry = .{ .raw_at_slot = 0 };
+    const fixnum: StackEntry = .{ .i64_ref = c.IR_UNUSED };
+    try testing.expect(row.isRowRegion());
+    try testing.expect(!slot.isRowRegion());
+    try testing.expect(!fixnum.isRowRegion());
+}
+
+test "rowId: returns id for row_region, null for others" {
+    const row: StackEntry = .{ .row_region = 42 };
+    const slot: StackEntry = .{ .raw_at_slot = 0 };
+    try testing.expectEqual(@as(?RowId, 42), row.rowId());
+    try testing.expectEqual(@as(?RowId, null), slot.rowId());
+}
+
+test "row_region entries with different RowIds are distinguishable via rowId" {
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
+    stack[0] = .{ .row_region = 5 };
+    stack[1] = .{ .row_region = 9 };
+    try testing.expectEqual(@as(RowId, 5), stack[0].rowId().?);
+    try testing.expectEqual(@as(RowId, 9), stack[1].rowId().?);
+    try testing.expect(stack[0].rowId().? != stack[1].rowId().?);
 }
