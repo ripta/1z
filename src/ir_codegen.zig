@@ -2417,6 +2417,34 @@ fn resetStackToPhysical(stack: []StackEntry, sp: usize) void {
     }
 }
 
+/// Reset non-row stack entries to raw_at_slot identity, preserving
+/// row_region entries. Used after branch merge when the merged state
+/// must carry the symbolic row forward.
+fn resetStackToPhysicalPreservingRows(stack: []StackEntry, sp: usize) void {
+    for (0..sp) |i| {
+        if (stack[i] != .row_region) {
+            stack[i] = .{ .raw_at_slot = i };
+        }
+    }
+}
+
+/// Compare symbolic shapes of two stack states after flushToPhysicalStack.
+/// Returns true iff both have the same depth AND every position that is a
+/// row_region in either stack is a row_region with the same RowId in the
+/// other.
+fn symbolicShapeMatches(stack_a: []const StackEntry, sp_a: usize, stack_b: []const StackEntry, sp_b: usize) bool {
+    if (sp_a != sp_b) return false;
+    for (0..sp_a) |i| {
+        const a_row = stack_a[i].rowId();
+        const b_row = stack_b[i].rowId();
+        if (a_row != null or b_row != null) {
+            if (a_row == null or b_row == null) return false;
+            if (a_row.? != b_row.?) return false;
+        }
+    }
+    return true;
+}
+
 /// Write all pending symbolic stack entries to their physical memory slots.
 /// After this, every entry is materialized in the Value array at base_addr.
 fn flushToPhysicalStack(state: *CompileState, stack: []StackEntry, sp: usize) void {
@@ -3720,7 +3748,7 @@ fn compileInstructions(
                                     state.exit_kind = .falls_through;
                                     state.loop_end_set = saved_loop_end_set;
                                     try compileInstructions(state, tb, stack, sp);
-                                    if (exitFallsThrough(false_exit_kind) and false_sp != sp.*) return IrCodegenError.StackShapeMismatch;
+                                    if (exitFallsThrough(false_exit_kind) and !symbolicShapeMatches(stack, sp.*, false_stack, false_sp)) return IrCodegenError.StackShapeMismatch;
                                     if (!exitFallsThrough(false_exit_kind) and exitFallsThrough(state.exit_kind)) {
                                         state.loop_end_set = saved_loop_end_set;
                                     } else if (exitFallsThrough(false_exit_kind) and !exitFallsThrough(state.exit_kind)) {
@@ -3863,7 +3891,7 @@ fn compileInstructions(
                         flushToPhysicalStack(state, saved_stack, false_sp);
                         sp.* = false_sp;
                         @memcpy(stack, saved_stack);
-                        resetStackToPhysical(stack, sp.*);
+                        resetStackToPhysicalPreservingRows(stack, sp.*);
                         state.exit_kind = saved_exit_kind;
                     } else if (false_diverged) {
                         // Only true path continues. Resume from true branch's END.
@@ -3871,18 +3899,18 @@ fn compileInstructions(
                         if (state.refresh_stack_fn != c.IR_UNUSED) {
                             refreshCachedStackPointer(state);
                         }
-                        resetStackToPhysical(stack, sp.*);
+                        resetStackToPhysicalPreservingRows(stack, sp.*);
                         state.exit_kind = saved_exit_kind;
                     } else {
                         // Neither branch terminated: normal merge.
                         flushToPhysicalStack(state, saved_stack, false_sp);
                         const end_false = c._ir_END(ctx);
                         c._ir_MERGE_2(ctx, end_true, end_false);
-                        if (sp.* != false_sp) return IrCodegenError.StackShapeMismatch;
+                        if (!symbolicShapeMatches(stack, sp.*, saved_stack, false_sp)) return IrCodegenError.StackShapeMismatch;
                         if (state.refresh_stack_fn != c.IR_UNUSED) {
                             refreshCachedStackPointer(state);
                         }
-                        resetStackToPhysical(stack, sp.*);
+                        resetStackToPhysicalPreservingRows(stack, sp.*);
                         state.exit_kind = saved_exit_kind;
                         state.loop_end_set = saved_loop_end_set;
                     }
@@ -10272,4 +10300,79 @@ test "row_region entries with different RowIds are distinguishable via rowId" {
     try testing.expectEqual(@as(RowId, 5), stack[0].rowId().?);
     try testing.expectEqual(@as(RowId, 9), stack[1].rowId().?);
     try testing.expect(stack[0].rowId().? != stack[1].rowId().?);
+}
+
+test "symbolicShapeMatches: identical stacks match" {
+    var a: [max_abstract_stack_depth]StackEntry = undefined;
+    var b: [max_abstract_stack_depth]StackEntry = undefined;
+    a[0] = .{ .row_region = 0 };
+    a[1] = .{ .raw_at_slot = 1 };
+    b[0] = .{ .row_region = 0 };
+    b[1] = .{ .raw_at_slot = 1 };
+    try testing.expect(symbolicShapeMatches(&a, 2, &b, 2));
+}
+
+test "symbolicShapeMatches: mismatched depths" {
+    var a: [max_abstract_stack_depth]StackEntry = undefined;
+    var b: [max_abstract_stack_depth]StackEntry = undefined;
+    a[0] = .{ .raw_at_slot = 0 };
+    b[0] = .{ .raw_at_slot = 0 };
+    b[1] = .{ .raw_at_slot = 1 };
+    try testing.expect(!symbolicShapeMatches(&a, 1, &b, 2));
+}
+
+test "symbolicShapeMatches: mismatched RowIds" {
+    var a: [max_abstract_stack_depth]StackEntry = undefined;
+    var b: [max_abstract_stack_depth]StackEntry = undefined;
+    a[0] = .{ .row_region = 0 };
+    a[1] = .{ .raw_at_slot = 1 };
+    b[0] = .{ .row_region = 1 };
+    b[1] = .{ .raw_at_slot = 1 };
+    try testing.expect(!symbolicShapeMatches(&a, 2, &b, 2));
+}
+
+test "symbolicShapeMatches: row_region vs non-row at same position" {
+    var a: [max_abstract_stack_depth]StackEntry = undefined;
+    var b: [max_abstract_stack_depth]StackEntry = undefined;
+    a[0] = .{ .row_region = 0 };
+    a[1] = .{ .raw_at_slot = 1 };
+    b[0] = .{ .raw_at_slot = 0 };
+    b[1] = .{ .raw_at_slot = 1 };
+    try testing.expect(!symbolicShapeMatches(&a, 2, &b, 2));
+}
+
+test "symbolicShapeMatches: empty stacks match" {
+    var a: [max_abstract_stack_depth]StackEntry = undefined;
+    var b: [max_abstract_stack_depth]StackEntry = undefined;
+    try testing.expect(symbolicShapeMatches(&a, 0, &b, 0));
+}
+
+test "symbolicShapeMatches: no row regions, same depth" {
+    var a: [max_abstract_stack_depth]StackEntry = undefined;
+    var b: [max_abstract_stack_depth]StackEntry = undefined;
+    a[0] = .{ .raw_at_slot = 0 };
+    a[1] = .{ .raw_at_slot = 1 };
+    b[0] = .{ .raw_at_slot = 0 };
+    b[1] = .{ .raw_at_slot = 1 };
+    try testing.expect(symbolicShapeMatches(&a, 2, &b, 2));
+}
+
+test "resetStackToPhysicalPreservingRows: preserves row_region" {
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
+    stack[0] = .{ .row_region = 7 };
+    stack[1] = .{ .i64_ref = 42 };
+    stack[2] = .{ .raw_at_slot = 5 };
+    resetStackToPhysicalPreservingRows(&stack, 3);
+    try testing.expectEqual(StackEntry{ .row_region = 7 }, stack[0]);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 1 }, stack[1]);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 2 }, stack[2]);
+}
+
+test "resetStackToPhysicalPreservingRows: no rows behaves like resetStackToPhysical" {
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
+    stack[0] = .{ .i64_ref = 10 };
+    stack[1] = .{ .raw_at_slot = 5 };
+    resetStackToPhysicalPreservingRows(&stack, 2);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 0 }, stack[0]);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 1 }, stack[1]);
 }
