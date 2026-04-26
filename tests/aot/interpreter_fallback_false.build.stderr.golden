@@ -1,0 +1,71 @@
+Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
+Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter
+Warning: '3keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: '2apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: 'tri' parameter 'p' has row-variable effect; quotation call falls back to interpreter
+Warning: 'tri' parameter 'q' has row-variable effect; quotation call falls back to interpreter
+Warning: 'tri' parameter 'r' has row-variable effect; quotation call falls back to interpreter
+Warning: '2keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: 'until' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
+Warning: 'until' parameter 'body' has row-variable effect; quotation call falls back to interpreter
+Warning: 'loop' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
+Warning: '4dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: '3dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: 'while' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
+Warning: 'while' parameter 'body' has row-variable effect; quotation call falls back to interpreter
+Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Error: --interpreter-fallback=false requires all words to compile; 37 words need the interpreter
+  word 'run-benchmarks' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word '>option:some' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'option:some>' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word '>result:err' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word '#all' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'times' (prelude): NC.5: calls a quotation whose stack effect is unknown
+      hint: annotate the quotation parameter with a concrete stack effect
+  word 'bi' (prelude): NC.5: calls a quotation whose stack effect is unknown
+      hint: annotate the quotation parameter with a concrete stack effect
+  word 'make-option:some' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'parse-quotation' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'cond' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+  word 'make-result:ok' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'native?' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'bytes-alloc-ptr' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'unmake-result:err' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'result:err>' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'bytes>ffi-ptr' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'benchmark-report?' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'trace-stack' (prelude): NC.5: calls a quotation whose stack effect is unknown
+      hint: annotate the quotation parameter with a concrete stack effect
+  word 'unmake-result:ok' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'result:ok>' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word '1check' (prelude): NC.5: calls a quotation whose stack effect is unknown
+      hint: annotate the quotation parameter with a concrete stack effect
+  word 'defined?' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'tri' (prelude): NC.5: calls a quotation whose stack effect is unknown
+      hint: annotate the quotation parameter with a concrete stack effect
+  word 'unmake-option:some' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'word-markers' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word '>word-info' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'loop' (prelude): NC.5: calls a quotation whose stack effect is unknown
+      hint: annotate the quotation parameter with a concrete stack effect
+  word 'cmp' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word '#any' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'make-result:err' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'while' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+  word 'pragma-get?' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+  word 'drop-at' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+  word '>result:ok' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  word 'case' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+  word 'acquire' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+  word 'add-hook' (prelude): NC.6: calls a word that is not available in the AOT compilation set
+      hint: blocked until the AOT resolver includes this word

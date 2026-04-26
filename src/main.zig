@@ -1948,6 +1948,35 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         printQuotationStats(freeze_result.quotations, err_writer);
     }
 
+    // When fallback=false, require all words to compile including prelude words.
+    // Non-prelude failures are already caught by emitProgramC (error.UncompiledWords).
+    if (interpreter_fallback == .false) {
+        const stats = &codegen_diagnostics.prelude_stats;
+        if (stats.uncompiled.len > 0) {
+            err_writer.print(
+                "Error: --interpreter-fallback=false requires all words to compile; {d} word{s} need the interpreter\n",
+                .{ stats.uncompiled.len, if (stats.uncompiled.len == 1) @as([]const u8, "") else "s" },
+            ) catch {};
+            for (stats.uncompiled) |entry| {
+                const module = if (std.mem.indexOfScalar(u8, entry.name, '.')) |dot_idx|
+                    entry.name[0..dot_idx]
+                else
+                    "prelude";
+                err_writer.print("  word '{s}' ({s}): {s}: {s}\n", .{
+                    entry.name,
+                    module,
+                    entry.reason.code(),
+                    entry.reason.message(),
+                }) catch {};
+                if (entry.reason.hint()) |h| {
+                    err_writer.print("      hint: {s}\n", .{h}) catch {};
+                }
+            }
+            err_writer.flush() catch {};
+            return 1;
+        }
+    }
+
     // Write C source to a temp file.
     const tmpdir = std.posix.getenv("TMPDIR") orelse "/tmp";
     const pid = std.c.getpid();
