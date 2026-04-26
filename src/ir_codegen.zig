@@ -5807,7 +5807,16 @@ pub fn emitProgramC(
     }
 
     // 1. Preamble
-    try out.appendSlice(allocator, "#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n#include <stdlib.h>\n#include <string.h>\n\n");
+    try out.appendSlice(allocator,
+        \\#include <stdint.h>
+        \\#include <stdbool.h>
+        \\#include <stddef.h>
+        \\#include <stdio.h>
+        \\#include <stdlib.h>
+        \\#include <string.h>
+        \\
+        \\
+    );
 
     // 2. Callback extern declarations -- emit all unconditionally since the
     // two-pass compilation may introduce interpreter fallback calls that
@@ -6344,12 +6353,14 @@ pub fn emitProgramC(
         const fb_str = std.fmt.bufPrint(&fb_buf, "    {{\n        int fallback_allowed = {d};\n        int setting_locked = {d};\n", .{ default_allowed, locked }) catch unreachable;
         try out.appendSlice(allocator, fb_str);
         try out.appendSlice(allocator,
-            \\        if (!setting_locked) {
-            \\            const char *env = getenv("ONEZ_INTERPRETER_FALLBACK");
-            \\            if (env) {
-            \\                if (env[0] == '0') fallback_allowed = 0;
-            \\                else if (env[0] == '1') fallback_allowed = 1;
-            \\            }
+            \\        const char *env = getenv("ONEZ_INTERPRETER_FALLBACK");
+            \\        if (setting_locked && env) {
+            \\            fprintf(stderr, "Fatal: ONEZ_INTERPRETER_FALLBACK is set but the interpreter setting is locked; remove the env var or rebuild without lock\n");
+            \\            return 1;
+            \\        }
+            \\        if (!setting_locked && env) {
+            \\            if (env[0] == '0') fallback_allowed = 0;
+            \\            else if (env[0] == '1') fallback_allowed = 1;
             \\        }
             \\        onez_set_interpreter_fallback(rt, fallback_allowed);
             \\    }
