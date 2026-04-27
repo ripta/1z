@@ -2440,6 +2440,57 @@ fn extractPrecedingLiteralDepth(instructions: []const Instruction, idx: usize) ?
     };
 }
 
+/// Perform a compile-time symbolic rewrite of an indexed stack operation.
+/// Rearranges the StackEntry array directly when the operation touches only known entries above a symbolic row.
+/// The depth literal is popped from the abstract stack and the operation's semantics are applied abstractly.
+fn rewriteIndexedStackOp(
+    state: *CompileState,
+    name: []const u8,
+    stack: []StackEntry,
+    sp: *usize,
+    depth: usize,
+) IrCodegenError!void {
+    // Pop the depth literal from the abstract stack.
+    sp.* -= 1;
+
+    if (std.mem.eql(u8, name, "pick-n")) {
+        // ( ... x_n ... x_0 n -- ... x_n ... x_0 x_n )
+        // clone the entry at depth to the top
+        const target = sp.* - 1 - depth;
+        stack[sp.*] = try cloneStackEntry(state.ctx, state.base_addr, stack[target], sp.*);
+        sp.* += 1;
+    } else if (std.mem.eql(u8, name, "<rot-n")) {
+        // ( ... x_n x_n-1 ... x_0 n -- ... x_n-1 ... x_0 x_n )
+        // pull the entry at depth to the top, shifting others down
+        if (depth == 0) return;
+        const target = sp.* - 1 - depth;
+        const saved = stack[target];
+        var i = target;
+        while (i < sp.* - 1) : (i += 1) {
+            stack[i] = stack[i + 1];
+        }
+        stack[sp.* - 1] = saved;
+    } else if (std.mem.eql(u8, name, "rot-n>")) {
+        // ( ... x_0 n -- x_0 ... )
+        // push the top entry to depth, shifting others up
+        if (depth == 0) return;
+        const target = sp.* - 1 - depth;
+        const saved = stack[sp.* - 1];
+        var i = sp.* - 1;
+        while (i > target) : (i -= 1) {
+            stack[i] = stack[i - 1];
+        }
+        stack[target] = saved;
+    } else if (std.mem.eql(u8, name, "nip-n")) {
+        // ( ...x1..xn y n -- y )
+        // keep the top entry, drop depth entries beneath it
+        if (depth == 0) return;
+        const top = stack[sp.* - 1];
+        sp.* -= depth;
+        stack[sp.* - 1] = top;
+    }
+}
+
 /// Reset all stack entries from 0..sp to raw_at_slot identity (slot i = i).
 /// Used after operations that flush to physical memory, ensuring the abstract
 /// stack mirrors the physical layout.
@@ -4624,8 +4675,9 @@ fn compileInstructions(
                         return IrCodegenError.NotCompilable;
                     };
 
-                    // Indexed stack ops: reject when the literal depth
-                    // targets the symbolic row interior.
+                    // Indexed stack ops: reject when the literal depth targets the symbolic row interior.
+                    // When a row_region exists and the access is legal, do a compile-time symbolic rewrite
+                    // instead of the native callback, which would lose the row_region.
                     if (isIndexedStackOp(name)) {
                         const depth = extractPrecedingLiteralDepth(instructions, idx) orelse {
                             state.not_compilable_reason = .indexed_access_into_row;
@@ -4641,6 +4693,11 @@ fn compileInstructions(
                                     state.not_compilable_reason = .indexed_access_into_row;
                                     return IrCodegenError.NotCompilable;
                                 }
+                                // Row exists but access targets known slots.
+                                // Rewrite the StackEntry array directly
+                                // instead of calling the native function.
+                                try rewriteIndexedStackOp(state, name, stack, sp, depth);
+                                continue;
                             }
                         }
                     }
@@ -10547,4 +10604,237 @@ test "extractPrecedingLiteralDepth: extracts zero depth" {
         .{ .op = .{ .call_word = "pick-n" }, .line = 1 },
     };
     try testing.expectEqual(@as(?usize, 0), extractPrecedingLiteralDepth(&instrs, 1));
+}
+
+// --- rewriteIndexedStackOp tests ---
+
+fn makeTestState() CompileState {
+    return CompileState{
+        .ctx = undefined,
+        .base_addr = c.IR_UNUSED,
+        .tag_offset_const = c.IR_UNUSED,
+        .payload_offset_const = c.IR_UNUSED,
+        .fixnum_tag_const = c.IR_UNUSED,
+        .float_tag_const = c.IR_UNUSED,
+        .boolean_tag_const = c.IR_UNUSED,
+        .tagged_tag_const = c.IR_UNUSED,
+        .struct_instance_tag_const = c.IR_UNUSED,
+        .bail_status = c.IR_UNUSED,
+        .ok_status = c.IR_UNUSED,
+        .items_ptr = c.IR_UNUSED,
+        .sp_ptr = c.IR_UNUSED,
+        .capacity_param = c.IR_UNUSED,
+        .sp_val = c.IR_UNUSED,
+        .base_idx = c.IR_UNUSED,
+        .value_size_const = c.IR_UNUSED,
+    };
+}
+
+test "rewriteIndexedStackOp: pick-n duplicates entry at depth" {
+    // Stack: [row(0), i64(10), i64(20), i64(30), i64(depth)]  sp=5, depth=2
+    // Pop depth → sp=4, target = 4-1-2 = 1 → i64(10)
+    // After: [row(0), i64(10), i64(20), i64(30), i64(10)]  sp=5
+    var state = makeTestState();
+    const ref_a = @as(c.ir_ref, 10);
+    const ref_b = @as(c.ir_ref, 20);
+    const ref_c = @as(c.ir_ref, 30);
+    const ref_depth = @as(c.ir_ref, 2);
+
+    var stack = [_]StackEntry{
+        .{ .row_region = 0 },
+        .{ .i64_ref = ref_a },
+        .{ .i64_ref = ref_b },
+        .{ .i64_ref = ref_c },
+        .{ .i64_ref = ref_depth },
+        undefined, // space for cloned entry
+    };
+
+    var sp: usize = 5;
+    try rewriteIndexedStackOp(&state, "pick-n", &stack, &sp, 2);
+    try testing.expectEqual(@as(usize, 5), sp);
+    try testing.expectEqual(StackEntry{ .row_region = 0 }, stack[0]);
+    try testing.expectEqual(StackEntry{ .i64_ref = ref_a }, stack[1]);
+    try testing.expectEqual(StackEntry{ .i64_ref = ref_b }, stack[2]);
+    try testing.expectEqual(StackEntry{ .i64_ref = ref_c }, stack[3]);
+    try testing.expectEqual(StackEntry{ .i64_ref = ref_a }, stack[4]);
+}
+
+test "rewriteIndexedStackOp: pick-n depth 0 duplicates top" {
+    // Stack: [row(0), i64(10), i64(depth)]  sp=3, depth=0
+    // Pop depth → sp=2, target = 2-1-0 = 1 → i64(10)
+    // After: [row(0), i64(10), i64(10)]  sp=3
+    var state = makeTestState();
+    const ref_a = @as(c.ir_ref, 10);
+    const ref_depth = @as(c.ir_ref, 0);
+
+    var stack = [_]StackEntry{
+        .{ .row_region = 0 },
+        .{ .i64_ref = ref_a },
+        .{ .i64_ref = ref_depth },
+        undefined,
+    };
+
+    var sp: usize = 3;
+    try rewriteIndexedStackOp(&state, "pick-n", &stack, &sp, 0);
+    try testing.expectEqual(@as(usize, 3), sp);
+    try testing.expectEqual(StackEntry{ .i64_ref = ref_a }, stack[1]);
+    try testing.expectEqual(StackEntry{ .i64_ref = ref_a }, stack[2]);
+}
+
+test "rewriteIndexedStackOp: <rot-n pulls entry to top" {
+    // Stack: [row(0), raw(1), raw(2), raw(3), i64(depth)]  sp=5, depth=2
+    // Pop depth → sp=4, target = 4-1-2 = 1 → raw(1)
+    // After: [row(0), raw(2), raw(3), raw(1)]  sp=4
+    var state = makeTestState();
+    var stack = [_]StackEntry{
+        .{ .row_region = 0 },
+        .{ .raw_at_slot = 1 },
+        .{ .raw_at_slot = 2 },
+        .{ .raw_at_slot = 3 },
+        .{ .i64_ref = @as(c.ir_ref, 2) },
+    };
+
+    var sp: usize = 5;
+    try rewriteIndexedStackOp(&state, "<rot-n", &stack, &sp, 2);
+    try testing.expectEqual(@as(usize, 4), sp);
+    try testing.expectEqual(StackEntry{ .row_region = 0 }, stack[0]);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 2 }, stack[1]);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 3 }, stack[2]);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 1 }, stack[3]);
+}
+
+test "rewriteIndexedStackOp: <rot-n depth 0 is no-op" {
+    // Stack: [row(0), raw(1), raw(2), i64(depth)]  sp=4, depth=0
+    // Pop depth → sp=3, no rearrangement
+    var state = makeTestState();
+    var stack = [_]StackEntry{
+        .{ .row_region = 0 },
+        .{ .raw_at_slot = 1 },
+        .{ .raw_at_slot = 2 },
+        .{ .i64_ref = @as(c.ir_ref, 0) },
+    };
+
+    var sp: usize = 4;
+    try rewriteIndexedStackOp(&state, "<rot-n", &stack, &sp, 0);
+    try testing.expectEqual(@as(usize, 3), sp);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 1 }, stack[1]);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 2 }, stack[2]);
+}
+
+test "rewriteIndexedStackOp: rot-n> pushes top to depth" {
+    // Stack: [row(0), raw(1), raw(2), raw(3), i64(depth)]  sp=5, depth=2
+    // Pop depth → sp=4, target = 4-1-2 = 1
+    // saved = stack[3] = raw(3), shift up, stack[1] = raw(3)
+    // After: [row(0), raw(3), raw(1), raw(2)]  sp=4
+    var state = makeTestState();
+    var stack = [_]StackEntry{
+        .{ .row_region = 0 },
+        .{ .raw_at_slot = 1 },
+        .{ .raw_at_slot = 2 },
+        .{ .raw_at_slot = 3 },
+        .{ .i64_ref = @as(c.ir_ref, 2) },
+    };
+
+    var sp: usize = 5;
+    try rewriteIndexedStackOp(&state, "rot-n>", &stack, &sp, 2);
+    try testing.expectEqual(@as(usize, 4), sp);
+    try testing.expectEqual(StackEntry{ .row_region = 0 }, stack[0]);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 3 }, stack[1]);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 1 }, stack[2]);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 2 }, stack[3]);
+}
+
+test "rewriteIndexedStackOp: rot-n> depth 0 is no-op" {
+    // Stack: [row(0), raw(1), i64(depth)]  sp=3, depth=0
+    // Pop depth → sp=2
+    var state = makeTestState();
+    var stack = [_]StackEntry{
+        .{ .row_region = 0 },
+        .{ .raw_at_slot = 1 },
+        .{ .i64_ref = @as(c.ir_ref, 0) },
+    };
+
+    var sp: usize = 3;
+    try rewriteIndexedStackOp(&state, "rot-n>", &stack, &sp, 0);
+    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 1 }, stack[1]);
+}
+
+test "rewriteIndexedStackOp: nip-n keeps top and drops depth entries" {
+    // Stack: [row(0), raw(1), raw(2), raw(3), i64(depth)]  sp=5, depth=2
+    // Pop depth → sp=4, top = stack[3] = raw(3), sp -= 2 → sp=2
+    // stack[1] = raw(3)
+    // After: [row(0), raw(3)]  sp=2
+    var state = makeTestState();
+    var stack = [_]StackEntry{
+        .{ .row_region = 0 },
+        .{ .raw_at_slot = 1 },
+        .{ .raw_at_slot = 2 },
+        .{ .raw_at_slot = 3 },
+        .{ .i64_ref = @as(c.ir_ref, 2) },
+    };
+
+    var sp: usize = 5;
+    try rewriteIndexedStackOp(&state, "nip-n", &stack, &sp, 2);
+    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expectEqual(StackEntry{ .row_region = 0 }, stack[0]);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 3 }, stack[1]);
+}
+
+test "rewriteIndexedStackOp: nip-n depth 0 is no-op" {
+    // Stack: [row(0), raw(1), i64(depth)]  sp=3, depth=0
+    // Pop depth → sp=2
+    var state = makeTestState();
+    var stack = [_]StackEntry{
+        .{ .row_region = 0 },
+        .{ .raw_at_slot = 1 },
+        .{ .i64_ref = @as(c.ir_ref, 0) },
+    };
+
+    var sp: usize = 3;
+    try rewriteIndexedStackOp(&state, "nip-n", &stack, &sp, 0);
+    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 1 }, stack[1]);
+}
+
+test "rewriteIndexedStackOp: <rot-n depth 1 acts like swap" {
+    // Stack: [row(0), raw(1), raw(2), i64(depth)]  sp=4, depth=1
+    // Pop depth → sp=3, target = 3-1-1 = 1 → raw(1)
+    // After: [row(0), raw(2), raw(1)]  sp=3
+    var state = makeTestState();
+    var stack = [_]StackEntry{
+        .{ .row_region = 0 },
+        .{ .raw_at_slot = 1 },
+        .{ .raw_at_slot = 2 },
+        .{ .i64_ref = @as(c.ir_ref, 1) },
+    };
+
+    var sp: usize = 4;
+    try rewriteIndexedStackOp(&state, "<rot-n", &stack, &sp, 1);
+    try testing.expectEqual(@as(usize, 3), sp);
+    try testing.expectEqual(StackEntry{ .row_region = 0 }, stack[0]);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 2 }, stack[1]);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 1 }, stack[2]);
+}
+
+test "rewriteIndexedStackOp: nip-n depth 1 preserves row_region" {
+    // Stack: [row(0), raw(1), raw(2), raw(3), i64(depth)]  sp=5, depth=1
+    // Pop depth → sp=4, top = stack[3] = raw(3), sp -= 1 → sp=3
+    // stack[2] = raw(3)
+    // After: [row(0), raw(1), raw(3)]  sp=3
+    var state = makeTestState();
+    var stack = [_]StackEntry{
+        .{ .row_region = 0 },
+        .{ .raw_at_slot = 1 },
+        .{ .raw_at_slot = 2 },
+        .{ .raw_at_slot = 3 },
+        .{ .i64_ref = @as(c.ir_ref, 1) },
+    };
+
+    var sp: usize = 5;
+    try rewriteIndexedStackOp(&state, "nip-n", &stack, &sp, 1);
+    try testing.expectEqual(@as(usize, 3), sp);
+    try testing.expectEqual(StackEntry{ .row_region = 0 }, stack[0]);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 1 }, stack[1]);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 3 }, stack[2]);
 }
