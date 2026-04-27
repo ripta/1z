@@ -73,8 +73,8 @@ Prelude compilation: 288/325 words compiled (88.6%)
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
   word 'drop-at' cannot be compiled
-      NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
+      NC.17: indexed stack access targets the symbolic row region
+      hint: only literal depths into known stack slots above the row are supported
   word '>result:ok' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'case' cannot be compiled

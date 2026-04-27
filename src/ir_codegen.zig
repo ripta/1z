@@ -64,6 +64,7 @@ pub const NotCompilableReason = enum {
     effect_inference_overflow,
     row_binding_overflow,
     quotation_slot_overflow,
+    indexed_access_into_row,
 
     pub fn code(self: NotCompilableReason) []const u8 {
         return switch (self) {
@@ -83,6 +84,7 @@ pub const NotCompilableReason = enum {
             .effect_inference_overflow => "NC.14",
             .row_binding_overflow => "NC.15",
             .quotation_slot_overflow => "NC.16",
+            .indexed_access_into_row => "NC.17",
         };
     }
 
@@ -104,6 +106,7 @@ pub const NotCompilableReason = enum {
             .effect_inference_overflow => std.fmt.comptimePrint("quotation effect inference exceeded mini-stack capacity ({d})", .{max_mini_stack_depth}),
             .row_binding_overflow => std.fmt.comptimePrint("row variable specialization exceeded binding capacity ({d})", .{max_row_var_bindings}),
             .quotation_slot_overflow => std.fmt.comptimePrint("word has more quotation parameters with concrete effects than the compiler can track ({d})", .{max_quotation_slots}),
+            .indexed_access_into_row => "indexed stack access targets the symbolic row region",
         };
     }
 
@@ -125,6 +128,7 @@ pub const NotCompilableReason = enum {
             .effect_inference_overflow => "simplify the quotation body to use fewer intermediate values",
             .row_binding_overflow => "reduce the number of distinct row variable bindings at this call site",
             .quotation_slot_overflow => "simplify the word to use fewer quotation parameters",
+            .indexed_access_into_row => "only literal depths into known stack slots above the row are supported",
         };
     }
 };
@@ -286,6 +290,15 @@ const supported_stack_ops = [_][]const u8{ "dup", "drop", "swap", "over" };
 
 fn isStackOp(name: []const u8) bool {
     for (supported_stack_ops) |op| {
+        if (std.mem.eql(u8, name, op)) return true;
+    }
+    return false;
+}
+
+const supported_indexed_stack_ops = [_][]const u8{ "pick-n", "<rot-n", "rot-n>", "nip-n" };
+
+fn isIndexedStackOp(name: []const u8) bool {
+    for (supported_indexed_stack_ops) |op| {
         if (std.mem.eql(u8, name, op)) return true;
     }
     return false;
@@ -2406,6 +2419,25 @@ fn hasRowRegion(stack: []const StackEntry, sp: usize) bool {
         if (stack[i] == .row_region) return true;
     }
     return false;
+}
+
+/// Return the index of the first row_region entry in stack[0..sp], or null.
+fn findRowRegionIndex(stack: []const StackEntry, sp: usize) ?usize {
+    for (0..sp) |i| {
+        if (stack[i] == .row_region) return i;
+    }
+    return null;
+}
+
+/// Extract a non-negative fixnum literal from the instruction immediately
+/// preceding `idx`. Returns null if the preceding instruction is not a
+/// push_literal with a non-negative fixnum value.
+fn extractPrecedingLiteralDepth(instructions: []const Instruction, idx: usize) ?usize {
+    if (idx == 0) return null;
+    return switch (instructions[idx - 1].op) {
+        .push_literal => |v| if (v == .fixnum and v.fixnum >= 0) @as(?usize, @intCast(v.fixnum)) else null,
+        else => null,
+    };
 }
 
 /// Reset all stack entries from 0..sp to raw_at_slot identity (slot i = i).
@@ -4591,6 +4623,27 @@ fn compileInstructions(
                         state.not_compilable_reason = .unresolvable_word;
                         return IrCodegenError.NotCompilable;
                     };
+
+                    // Indexed stack ops: reject when the literal depth
+                    // targets the symbolic row interior.
+                    if (isIndexedStackOp(name)) {
+                        const depth = extractPrecedingLiteralDepth(instructions, idx) orelse {
+                            state.not_compilable_reason = .indexed_access_into_row;
+                            return IrCodegenError.NotCompilable;
+                        };
+                        // The depth argument is on top of the abstract stack.
+                        // After popping it, the deepest position the operation
+                        // can touch is sp - 2 - depth (0-indexed from bottom).
+                        if (sp.* >= 2 and depth <= sp.* - 2) {
+                            const target = sp.* - 2 - depth;
+                            if (findRowRegionIndex(stack, sp.*)) |row_idx| {
+                                if (target <= row_idx) {
+                                    state.not_compilable_reason = .indexed_access_into_row;
+                                    return IrCodegenError.NotCompilable;
+                                }
+                            }
+                        }
+                    }
 
                     // Specialize input/output counts for row-variable effects
                     // using literal quotation bodies visible on the abstract stack.
@@ -10406,4 +10459,92 @@ test "resetStackToPhysicalPreservingRows: no rows behaves like resetStackToPhysi
     resetStackToPhysicalPreservingRows(&stack, 2);
     try testing.expectEqual(StackEntry{ .raw_at_slot = 0 }, stack[0]);
     try testing.expectEqual(StackEntry{ .raw_at_slot = 1 }, stack[1]);
+}
+
+// --- isIndexedStackOp tests ---
+
+test "isIndexedStackOp: recognizes all four indexed stack ops" {
+    try testing.expect(isIndexedStackOp("pick-n"));
+    try testing.expect(isIndexedStackOp("<rot-n"));
+    try testing.expect(isIndexedStackOp("rot-n>"));
+    try testing.expect(isIndexedStackOp("nip-n"));
+}
+
+test "isIndexedStackOp: rejects non-indexed ops" {
+    try testing.expect(!isIndexedStackOp("dup"));
+    try testing.expect(!isIndexedStackOp("drop"));
+    try testing.expect(!isIndexedStackOp("swap"));
+    try testing.expect(!isIndexedStackOp("pick"));
+    try testing.expect(!isIndexedStackOp("rot"));
+}
+
+// --- findRowRegionIndex tests ---
+
+test "findRowRegionIndex: returns null when no row_region present" {
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
+    stack[0] = .{ .raw_at_slot = 0 };
+    stack[1] = .{ .i64_ref = 42 };
+    try testing.expectEqual(@as(?usize, null), findRowRegionIndex(&stack, 2));
+}
+
+test "findRowRegionIndex: returns 0 when row_region at bottom" {
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
+    stack[0] = .{ .row_region = 0 };
+    stack[1] = .{ .raw_at_slot = 1 };
+    stack[2] = .{ .i64_ref = 10 };
+    try testing.expectEqual(@as(?usize, 0), findRowRegionIndex(&stack, 3));
+}
+
+test "findRowRegionIndex: returns null for empty stack" {
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
+    try testing.expectEqual(@as(?usize, null), findRowRegionIndex(&stack, 0));
+}
+
+// --- extractPrecedingLiteralDepth tests ---
+
+test "extractPrecedingLiteralDepth: extracts non-negative fixnum" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 1 },
+        .{ .op = .{ .call_word = "nip-n" }, .line = 1 },
+    };
+    try testing.expectEqual(@as(?usize, 3), extractPrecedingLiteralDepth(&instrs, 1));
+}
+
+test "extractPrecedingLiteralDepth: returns null for negative fixnum" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = -1 } }, .line = 1 },
+        .{ .op = .{ .call_word = "pick-n" }, .line = 1 },
+    };
+    try testing.expectEqual(@as(?usize, null), extractPrecedingLiteralDepth(&instrs, 1));
+}
+
+test "extractPrecedingLiteralDepth: returns null for non-fixnum literal" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 },
+        .{ .op = .{ .call_word = "pick-n" }, .line = 1 },
+    };
+    try testing.expectEqual(@as(?usize, null), extractPrecedingLiteralDepth(&instrs, 1));
+}
+
+test "extractPrecedingLiteralDepth: returns null for call_word predecessor" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .call_word = "foo" }, .line = 1 },
+        .{ .op = .{ .call_word = "pick-n" }, .line = 1 },
+    };
+    try testing.expectEqual(@as(?usize, null), extractPrecedingLiteralDepth(&instrs, 1));
+}
+
+test "extractPrecedingLiteralDepth: returns null at index 0" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .call_word = "pick-n" }, .line = 1 },
+    };
+    try testing.expectEqual(@as(?usize, null), extractPrecedingLiteralDepth(&instrs, 0));
+}
+
+test "extractPrecedingLiteralDepth: extracts zero depth" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 1 },
+        .{ .op = .{ .call_word = "pick-n" }, .line = 1 },
+    };
+    try testing.expectEqual(@as(?usize, 0), extractPrecedingLiteralDepth(&instrs, 1));
 }

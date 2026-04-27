@@ -60,8 +60,8 @@ Error: --interpreter-fallback=false requires all words to compile; 37 words need
       hint: blocked until row-variable stack regions can be modeled
   word 'pragma-get?' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
-  word 'drop-at' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
+  word 'drop-at' (prelude): NC.17: indexed stack access targets the symbolic row region
+      hint: only literal depths into known stack slots above the row are supported
   word '>result:ok' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
   word 'case' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
