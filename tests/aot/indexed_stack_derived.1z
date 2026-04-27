@@ -1,0 +1,12 @@
+\ Verify derived indexed stack words compile in AOT mode
+
+\ -- 3dup / 4dup --
+1 2 3 3dup . . . . . .
+1 2 3 4 4dup . . . . . . . .
+
+\ -- 2swap / 2over --
+1 2 3 4 2swap . . . .
+1 2 3 4 2over . . . . . .
+
+\ -- drop-at (interpreter fallback: dynamic depth) --
+1 2 3 4 2 drop-at . . .
