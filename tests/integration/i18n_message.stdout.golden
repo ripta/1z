@@ -1,0 +1,77 @@
+=== format-message-positional: simple string ===
+Stack: [ ]
+Stack: [ { "Alice" } ]
+Stack: [ { "Alice" } "{0}" ]
+Stack: [ "Alice" ]
+PASS: simple string substitution
+Stack: [ ]
+=== format-message-positional: number ===
+Stack: [ ]
+Stack: [ { 42 } ]
+Stack: [ { 42 } "{0, number}" ]
+Stack: [ "42" ]
+PASS: number formatting
+Stack: [ ]
+=== format-message-positional: large number with grouping ===
+Stack: [ ]
+Stack: [ { 1234567 } ]
+Stack: [ { 1234567 } "{0, number}" ]
+Stack: [ "1,234,567" ]
+PASS: number grouping en-US
+Stack: [ ]
+=== format-message-positional: plural one ===
+Stack: [ ]
+Stack: [ { 1 } ]
+Stack: [ { 1 } "{0, plural, one {# item} other {# items}}" ]
+Stack: [ "1 item" ]
+PASS: plural one
+Stack: [ ]
+=== format-message-positional: plural other ===
+Stack: [ ]
+Stack: [ { 5 } ]
+Stack: [ { 5 } "{0, plural, one {# item} other {# items}}" ]
+Stack: [ "5 items" ]
+PASS: plural other
+Stack: [ ]
+=== format-message-positional: multiple args ===
+Stack: [ ]
+Stack: [ { "Alice" 3 } ]
+Stack: [ { "Alice" 3 } "{0} has {1, plural, one {# cat} other {# cats}}" ]
+Stack: [ "Alice has 3 cats" ]
+PASS: multiple args
+Stack: [ ]
+=== format-message-positional: no args ===
+Stack: [ ]
+Stack: [ { } ]
+Stack: [ { } "Hello, world!" ]
+Stack: [ "Hello, world!" ]
+PASS: no args
+Stack: [ ]
+=== format-message: named string ===
+Stack: [ ]
+Stack: [ H{ name: "Bob" } ]
+Stack: [ H{ name: "Bob" } "{name}" ]
+Stack: [ "Bob" ]
+PASS: named string substitution
+Stack: [ ]
+=== format-message: named plural ===
+Stack: [ ]
+Stack: [ H{ name: "Alice" count: 3 } ]
+Stack: [ H{ name: "Alice" count: 3 } "{name} has {count, plural, one {# cat} other {# cats}}" ]
+Stack: [ "Alice has 3 cats" ]
+PASS: named plural
+Stack: [ ]
+=== format-message: repeated name ===
+Stack: [ ]
+Stack: [ H{ name: "Bob" } ]
+Stack: [ H{ name: "Bob" } "{name} is {name}" ]
+Stack: [ "Bob is Bob" ]
+PASS: repeated name
+Stack: [ ]
+=== format-message: named number grouping ===
+Stack: [ ]
+Stack: [ H{ count: 1000 } ]
+Stack: [ H{ count: 1000 } "{count, number}" ]
+Stack: [ "1,000" ]
+PASS: named number grouping
+Stack: [ ]

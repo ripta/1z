@@ -110,3 +110,29 @@ Stack: [ <message-catalog H{ en-US: H{ greeting: "Hello!" } }> ]
 Stack: [ "fallback" ]
 PASS: get-or default
 Stack: [ ]
+=== catalog-format simple ===
+Stack: [ ]
+Stack: [ <message-catalog H{ }> ]
+Stack: [ <message-catalog H{ en-US: H{ greeting: "Hello, {name}!" } }> ]
+Stack: [ "Hello, Alice!" ]
+PASS: catalog-format simple
+Stack: [ ]
+=== catalog-format plural ===
+Stack: [ ]
+Stack: [ <message-catalog H{ }> ]
+Stack: [ <message-catalog H{ en-US: H{ items: "{name} has {count, plural, one {# item} other {# items}}" } }> ]
+Stack: [ "Bob has 3 items" ]
+PASS: catalog-format plural
+Stack: [ ]
+=== catalog-format locale fallback ===
+Stack: [ ]
+Stack: [ <message-catalog H{ }> ]
+Stack: [ <message-catalog H{ en-US: H{ greeting: "Hello, {name}!" } }> ]
+Stack: [ "Hello, Alice!" ]
+PASS: catalog-format fallback
+Stack: [ ]
+=== catalog-format throws on missing ===
+Stack: [ ]
+Stack: [ [ <message-catalog> H{ greeting: "Hello!" } "en-US" <locale> catalog-set H{ } missing-key: "en-US" <locale> <locale-chain> catalog-format ] ]
+PASS: catalog-format missing key throws
+Stack: [ ]

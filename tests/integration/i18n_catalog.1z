@@ -108,3 +108,31 @@ greeting: "en-US" <locale> <locale-chain> "default" catalog-get-or
 H{ greeting: "Hello!" } "en-US" <locale> catalog-set
 missing-key: "en-US" <locale> <locale-chain> "fallback" catalog-get-or
 "fallback" swap "get-or default" assert=
+
+\ --- catalog-format ---
+
+"catalog-format simple" test-section
+<message-catalog>
+H{ greeting: "Hello, {name}!" } "en-US" <locale> catalog-set
+H{ name: "Alice" } greeting: "en-US" <locale> <locale-chain> catalog-format
+"Hello, Alice!" swap "catalog-format simple" assert=
+
+"catalog-format plural" test-section
+<message-catalog>
+H{ items: "{name} has {count, plural, one {# item} other {# items}}" } "en-US" <locale> catalog-set
+H{ name: "Bob" count: 3 } items: "en-US" <locale> <locale-chain> catalog-format
+"Bob has 3 items" swap "catalog-format plural" assert=
+
+"catalog-format locale fallback" test-section
+<message-catalog>
+H{ greeting: "Hello, {name}!" } "en-US" <locale> catalog-set
+H{ name: "Alice" } greeting: "de-DE" <locale> "en-US" <locale> <locale-chain-with> catalog-format
+"Hello, Alice!" swap "catalog-format fallback" assert=
+
+"catalog-format throws on missing" test-section
+[
+  <message-catalog>
+  H{ greeting: "Hello!" } "en-US" <locale> catalog-set
+  H{ } missing-key: "en-US" <locale> <locale-chain> catalog-format
+]
+"catalog-format missing key throws" assert-error

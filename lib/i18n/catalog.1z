@@ -7,6 +7,7 @@ use "os/fs" ;
 use "os/path" ;
 use "i18n/locale" ;
 use "i18n/localechain" ;
+use { format-message: } "i18n/message" ;
 use { quotation-has-calls?: } "runtime/introspect" ;
 
 message-catalog: virtual{ hash } ;
@@ -137,6 +138,63 @@ catalog-get-or: ( catalog key chain default -- string ) [
   swap dup option:some? [ option:some> nip ] [ drop ] if
 ] ;
 
-\\ Looks up template via catalog-get, then formats with args.
-\\ Can't do yet, because of variadic FFI args.
-\ catalog-format: ( catalog args key chain -- string )
+\\ Given an option wrapping an associative container and a key, look up the key.
+(option-assoc-get): ( option key -- option ) [
+  swap dup option:some? [
+    option:some> swap @get?
+  ] [
+    drop drop
+  ] if
+] ;
+
+\\ Try to find a key in one locale's messages, preserving the matched locale.
+\\ Short-circuits if the accumulator already holds a result.
+\\ On success, wraps { template locale } in the option.
+(try-locale-in-catalog-with-locale): ( option locale catalog key -- option ) [
+  3 pick-n option:some? [
+    drop drop drop
+  ] [
+    1 pick-n unmake-message-catalog
+    3 pick-n unmake-locale
+    @get?
+    \ Stack: option locale catalog key locale-msgs-option
+    swap
+    \ Stack: option locale catalog locale-msgs-option key
+    (option-assoc-get)
+    \ Stack: option locale catalog result-option
+    dup option:some? [
+      option:some>
+      2 pick-n
+      2 array-n
+      3nip
+      >option:some
+    ] [
+      3drop option:none
+    ] if
+  ] if
+] ;
+
+\\ Look up a key across a locale chain, returning the template and matched locale.
+(catalog-lookup-with-locale): ( catalog key chain -- option ) [
+  unmake-locale-chain -rot>
+  [ (try-locale-in-catalog-with-locale) ] curry curry
+  option:none swap #reduce
+] ;
+
+\\ Look up a message template and format it with named arguments.
+\\ Uses the matched locale for ICU formatting rules.
+catalog-format: ( catalog args key chain -- string ) [
+  2 <rot-n
+  \ Stack: catalog key chain args
+  [ (catalog-lookup-with-locale) ] dip
+  \ Stack: option args
+  swap dup option:some? [
+    option:some>
+    \ Stack: args { template locale }
+    dup 0 #nth swap 1 #nth
+    \ Stack: args template locale
+    format-message
+  ] [
+    drop drop f "message key not found in any locale" ECatalogKeyNotFound make-error throw
+  ] if
+] ;

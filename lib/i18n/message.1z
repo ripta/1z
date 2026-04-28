@@ -1,0 +1,309 @@
+\ lib/i18n/message.1z - ICU MessageFormat binding
+\
+\ Provides format-message-positional (array + positional pattern) and
+\ format-message (hash + named pattern) via ICU's umsg_* C API.
+\ String arguments are converted to UChar (UTF-16) for ICU; numeric
+\ arguments are passed as doubles.
+
+use "ffi" ;
+use "i18n/icu" ;
+use "i18n/locale" ;
+
+\ --- Library loading and FFI bindings ---
+
+sys-info "os" @get "macos" = [
+  "icucore" lib-open
+] [
+  "icui18n" lib-open
+] if
+
+ffi-def{
+  (umsg-open):   "umsg_open" ffi{ ptr i32 cstring isize inout-i32 -> ptr }
+  (umsg-close):  "umsg_close" ffi{ ptr -> void }
+  (umsg-format): "umsg_format" ffi{ ptr ptr i32 inout-i32 ... -> i32 }
+} call "icu-msg-raw" swap >module reexport
+
+\ --- Constants ---
+
+(uchar-buf-size): const [ 256 ] ;
+
+\ --- Internal helpers ---
+
+\\ Extract the ICU locale ID from a locale value.
+(locale>icu-id): ( locale -- icu-locale-id ) [
+  unmake-locale (bcp47>icu-id)
+] ;
+
+\\ Allocate a UChar result buffer and return (buf ptr).
+(alloc-uchar-buf): ( -- byte-array ptr ) [
+  (uchar-buf-size) 2 * bytes-alloc-ptr
+] ;
+
+\\ Open a UMessageFormat for the given UChar pattern and ICU locale ID.
+\\ Passes NULL for parseError. Checks status and returns the formatter pointer.
+(open-msg-format): ( uchar-buf uchar-len icu-locale-id -- fmt-ptr ) [
+  \ Stack: uchar-buf uchar-len icu-locale-id
+  2 pick-n bytes>ffi-ptr nip
+  \ Stack: uchar-buf uchar-len icu-locale-id pat-ptr
+  2 pick-n
+  \ Stack: uchar-buf uchar-len icu-locale-id pat-ptr uchar-len
+  2 pick-n
+  \ Stack: uchar-buf uchar-len icu-locale-id pat-ptr uchar-len icu-locale-id
+  0 0
+  \ Stack: uchar-buf uchar-len icu-locale-id pat-ptr uchar-len icu-locale-id 0 0
+  (umsg-open)
+  \ Stack: uchar-buf uchar-len icu-locale-id status fmt-ptr
+  swap (icu-check)
+  \ Stack: uchar-buf uchar-len icu-locale-id fmt-ptr
+  3nip
+] ;
+
+\\ Convert one 1z value to the type ICU's umsg_format expects.
+\\ Strings become null-terminated UChar pointers (resource); numbers become floats.
+\\ Returns a pair: (keep-alive-value ffi-value).
+\\ The keep-alive-value prevents the UChar buffer from being collected
+\\ before the ffi-call completes.
+(prepare-arg): ( value -- keep-alive ffi-value ) [
+  dup string? [
+    utf8>uchar drop
+    \ Stack: uchar-buf
+    \ Append a null terminator (2 zero bytes for UChar16)
+    0 #push 0 #push
+    dup bytes>ffi-ptr nip
+    \ Stack: uchar-buf ptr-resource
+  ] [
+    dup number? [
+      >float
+      f swap
+    ] [
+      f "format-message: unsupported argument type" EInvalidArgument make-error throw
+    ] if
+  ] if
+] ;
+
+\\ Prepare all arguments in a positional array for umsg_format.
+\\ Returns (keep-alive-array ffi-args-array).
+(prepare-args): ( array -- keep-alive-array ffi-args-array ) [
+  dup
+  [ (prepare-arg) nip ] #map #collect
+  \ Stack: input-array ffi-args-array
+  swap
+  [ (prepare-arg) drop ] #map #collect
+  \ Stack: ffi-args-array keep-alive-array
+  swap
+] ;
+
+\\ Format using an open UMessageFormat and a prepared variadic args array.
+\\ Returns the formatted UTF-8 string.
+(format-with-args): ( ffi-args-array fmt-ptr -- string ) [
+  (alloc-uchar-buf)
+  \ Stack: ffi-args fmt-ptr buf ptr
+  2 pick-n 1 pick-n (uchar-buf-size) 0
+  \ Stack: ffi-args fmt-ptr buf ptr fmt-ptr ptr uchar-buf-size 0
+  7 pick-n
+  \ Stack: ffi-args fmt-ptr buf ptr fmt-ptr ptr uchar-buf-size 0 ffi-args
+  (umsg-format)
+  \ Stack: ffi-args fmt-ptr buf ptr status actual-len
+  swap (icu-check)
+  \ Stack: ffi-args fmt-ptr buf ptr actual-len
+  swap drop
+  \ Stack: ffi-args fmt-ptr buf actual-len
+  uchar>utf8
+  \ Stack: ffi-args fmt-ptr string
+  nip nip
+] ;
+
+\ --- Public words ---
+
+\\ Format a message using ICU MessageFormat with positional arguments.
+\\ The pattern uses {0}, {1}, etc. for argument positions.
+\\ Supports string, number, plural, select, and date formatting.
+format-message-positional: ( array pattern locale -- string ) [
+  (locale>icu-id)
+  \ Stack: array pattern icu-locale-id
+  [ utf8>uchar ] dip
+  \ Stack: array uchar-buf uchar-len icu-locale-id
+  (open-msg-format)
+  \ Stack: array fmt-ptr
+  swap (prepare-args) nip swap
+  \ Stack: ffi-args-array fmt-ptr
+  dup [ (format-with-args) ] dip (umsg-close)
+] ;
+
+\\ Look up or assign a positional index for a placeholder name.
+\\ Updates state's nmap: and keys: fields as needed.
+(assign-name-index): ( state name -- state index ) [
+  over nmap: @get over @has? [
+    \ Existing name: look up index
+    over nmap: @get over @get nip
+  ] [
+    over keys: @get #len
+    \ S: state(2) name(1) index(0)
+    H{ }
+    3 pick-n result: @get result: swap @set
+    3 pick-n depth: @get depth: swap @set
+    3 pick-n i: @get i: swap @set
+    3 pick-n keys: @get 3 pick-n #push keys: swap @set
+    3 pick-n nmap: @get 3 pick-n 3 pick-n @set nmap: swap @set
+    \ S: state(3) name(2) index(1) new-state(0)
+    3 <rot-n drop 2 <rot-n drop swap
+  ] if
+] ;
+
+\\ Append a string to the result field of the state hash.
+(st-append): ( state str -- state ) [
+  over result: @get swap #append result: swap @set
+] ;
+
+\\ Advance the index in the state hash by 1.
+(st-advance): ( state -- state ) [
+  dup i: @get 1 + i: swap @set
+] ;
+
+\\ Find the end position of a placeholder name starting at pos in pattern.
+\\ Scans until , or } and returns the end position.
+(find-name-end): ( pattern pos -- end-pos ) [
+  \ S: pattern(1) pos(0)
+  [
+    \ pred, after dup: pattern(2) pos(1) pos-copy(0)
+    dup 2 pick-n #len < [
+      \ pattern(2) pos(1); check char
+      1 pick-n over #nth dup "," = swap "}" = or not
+    ] [ f ] if
+  ] [ 1 + ] while
+  nip
+] ;
+
+\\ Scan and rewrite one placeholder. Called with state.i just past {.
+\\ Reads the name, assigns an index, appends {N} or {N, to result,
+\\ sets depth and i in the state hash.
+(scan-placeholder): ( pattern state -- pattern state ) [
+  \ Find end-pos
+  1 pick-n over i: @get (find-name-end)
+  \ S: pattern(2) state(1) end-pos(0)
+
+  \ Get delim = pattern[end-pos]
+  \ S(3): pattern(2) state(1) end-pos(0)
+  \ After 2 pick-n: S(4): pattern(3) state(2) end-pos(1) pcopy(0)
+  \ After over: S(5): pattern(4) state(3) end-pos(2) pcopy(1) ep(0)
+  \ After #nth: S(3): pattern(2) state(1) end-pos(0) + pushes delim
+  \ Actually #nth consumes pcopy and ep, pushes delim
+  \ S(4): pattern(3) state(2) end-pos(1) delim(0)
+  2 pick-n over #nth
+
+  \ Get start-i from state
+  \ S(4): pattern(3) state(2) end-pos(1) delim(0)
+  \ 2 pick-n = state
+  \ After push: S(5): ...delim(1) state-copy(0)
+  \ i: @get: S(5): ...delim(1) start-i(0)
+  2 pick-n i: @get
+
+  \ Build name = pattern[start-i .. end-pos]
+  \ S(5): pattern(4) state(3) end-pos(2) delim(1) start-i(0)
+  \ Need: pattern start-i end-pos → #slice
+  \ 4 pick-n=pattern push: S(6): [5]pat [4]st [3]ep [2]dl [1]si [0]pcopy
+  \ swap: S(6): [5]pat [4]st [3]ep [2]dl [1]pcopy [0]si
+  \ 3 pick-n copies [3]=ep: S(7): [6]pat [5]st [4]ep [3]dl [2]pcopy [1]si [0]ep
+  \ #slice(pcopy, si, ep) → name: S(5): pattern(4) state(3) end-pos(2) delim(1) name(0)
+  4 pick-n swap 3 pick-n #slice
+
+  \ Now: pattern(4) state(3) end-pos(2) delim(1) name(0)
+  \ Update state.i = end-pos + 1 using <rot-n
+  3 <rot-n
+  \ Moves [3]=state to top: pattern(3) end-pos(2) delim(1) name(0) state → wait
+  \ [4]=pattern [3]=state [2]=end-pos [1]=delim [0]=name
+  \ 3 <rot-n moves [3]=state: pattern(3) end-pos(2) delim(1) name(0) state
+  \ Actually after move, items shift:
+  \ pattern stays at bottom. Items [0],[1],[2] shift down from where [3] was removed.
+  \ Result: pattern(4→3) end-pos(3→2) delim(2→1) name(1→0) state(→TOS)
+  \ S: pattern(3) end-pos(2) delim(1) name(0) state... no, 5 items total
+  \ Let me just count: we had 5 items, <rot-n doesn't change count.
+  \ S(5): pattern(4) end-pos(3) delim(2) name(1) state(0)
+
+  3 <rot-n
+  \ Moves [3]=end-pos to top
+  \ S(5): pattern(4) delim(3) name(2) state(1) end-pos(0)
+
+  1 + i: swap @set
+  \ S(4): pattern(3) delim(2) name(1) updated-state(0)
+
+  \ Assign name index
+  1 <rot-n (assign-name-index) >string
+  \ 1 <rot-n moves [1]=name to top: S: pattern delim state name
+  \ (assign-name-index) ( state name -- state index ): S: pattern delim state index
+  \ >string: S(4): pattern(3) delim(2) state(1) index-str(0)
+
+  \ Build replacement based on delim
+  2 <rot-n "}" = [
+    "{" swap #append "}" #append (st-append)
+    depth: 0 @set
+  ] [
+    "{" swap #append "," #append (st-append)
+    depth: 1 @set
+  ] if
+  \ 2 <rot-n moves [2]=delim to top: S: pattern state index-str delim
+  \ "}" =: S: pattern state index-str bool
+  \ if consumes bool, runs branch on: S: pattern state index-str
+  \ Branch: "{" swap → pattern state "{" index-str → #append "}" #append → replacement
+  \ (st-append) ( state str -- state ): S: pattern updated-state
+  \ depth: N swap @set: sets depth
+  \ S(2): pattern(1) updated-state(0)
+] ;
+
+\\ Rewrite named placeholders to positional indices.
+\\ Scans the pattern, replaces top-level {name ...} with {N ...},
+\\ and returns the rewritten pattern and a name-ordered array of keys.
+(rewrite-named-placeholders): ( pattern -- rewritten-pattern keys-array ) [
+  H{ result: "" nmap: H{ } keys: { } depth: 0 i: 0 }
+  \ Stack: pattern state
+  [ dup i: @get 2 pick-n #len < ] [
+    \ Stack: pattern state
+    1 pick-n over i: @get #nth
+    \ Stack: pattern state char
+    over depth: @get 0 = [
+      \ Depth 0
+      dup "{" = [
+        drop
+        \ Advance past the {
+        (st-advance)
+        \ Scan and rewrite the placeholder
+        (scan-placeholder)
+      ] [
+        \ Regular character at depth 0
+        (st-append) (st-advance)
+      ] if
+    ] [
+      \ Depth > 0
+      dup "{" = [
+        drop "{" (st-append) (st-advance)
+        dup depth: @get 1 + depth: swap @set
+      ] [
+        dup "}" = [
+          drop "}" (st-append) (st-advance)
+          dup depth: @get 1 - depth: swap @set
+        ] [
+          (st-append) (st-advance)
+        ] if
+      ] if
+    ] if
+  ] while
+  \ Stack: pattern state
+  nip
+  dup result: @get swap keys: @get
+] ;
+
+\\ Format a message using ICU MessageFormat with named arguments.
+\\ The pattern uses {name}, {name, plural, ...}, etc.
+\\ Named placeholders are rewritten to positional indices before
+\\ delegating to format-message-positional.
+format-message: ( hash pattern locale -- string ) [
+  [ swap ] dip
+  \ Stack: pattern hash locale
+  [ (rewrite-named-placeholders) ] 2dip
+  \ Stack: rewritten-pattern keys-array hash locale
+  [ [ swap @get ] curry #map #collect ] dip
+  \ Stack: rewritten-pattern values-array locale
+  [ swap ] dip
+  \ Stack: values-array rewritten-pattern locale
+  format-message-positional
+] ;

@@ -1,0 +1,80 @@
+use "testing" ;
+use "i18n/message" ;
+use "i18n/locale" ;
+
+"format-message-positional: simple string" test-section
+
+{ "Alice" }
+"{0}"
+"en-US" <locale> format-message-positional
+"Alice" "simple string substitution" assert=
+
+"format-message-positional: number" test-section
+
+{ 42 }
+"{0, number}"
+"en-US" <locale> format-message-positional
+"42" "number formatting" assert=
+
+"format-message-positional: large number with grouping" test-section
+
+{ 1234567 }
+"{0, number}"
+"en-US" <locale> format-message-positional
+"1,234,567" "number grouping en-US" assert=
+
+"format-message-positional: plural one" test-section
+
+{ 1 }
+"{0, plural, one {# item} other {# items}}"
+"en-US" <locale> format-message-positional
+"1 item" "plural one" assert=
+
+"format-message-positional: plural other" test-section
+
+{ 5 }
+"{0, plural, one {# item} other {# items}}"
+"en-US" <locale> format-message-positional
+"5 items" "plural other" assert=
+
+"format-message-positional: multiple args" test-section
+
+{ "Alice" 3 }
+"{0} has {1, plural, one {# cat} other {# cats}}"
+"en-US" <locale> format-message-positional
+"Alice has 3 cats" "multiple args" assert=
+
+"format-message-positional: no args" test-section
+
+{ }
+"Hello, world!"
+"en-US" <locale> format-message-positional
+"Hello, world!" "no args" assert=
+
+"format-message: named string" test-section
+
+H{ name: "Bob" }
+"{name}"
+"en-US" <locale> format-message
+"Bob" "named string substitution" assert=
+
+"format-message: named plural" test-section
+
+H{ name: "Alice" count: 3 }
+"{name} has {count, plural, one {# cat} other {# cats}}"
+"en-US" <locale> format-message
+"Alice has 3 cats" "named plural" assert=
+
+"format-message: repeated name" test-section
+
+H{ name: "Bob" }
+"{name} is {name}"
+"en-US" <locale> format-message
+"Bob is Bob" "repeated name" assert=
+
+"format-message: named number grouping" test-section
+
+H{ count: 1000 }
+"{count, number}"
+"en-US" <locale> format-message
+"1,000" "named number grouping" assert=
