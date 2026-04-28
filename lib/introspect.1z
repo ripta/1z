@@ -2,9 +2,9 @@
 
 use "strings" ;
 
-\ Format a method type signature as "  method{ type1 }" or "  method{ type1 type2 }"
-format-method: ( method-types -- str ) [
-  "  method{ " swap " " #join #append " }" #append
+\ Format a method-info struct as "  method{ type1 }" or "  method{ type1 type2 }"
+format-method: ( method-info -- str ) [
+  types>> "  method{ " swap " " #join #append " }" #append
 ] ;
 
 \ Format word-info as a multi-line help string matching the native help output

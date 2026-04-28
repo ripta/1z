@@ -98,3 +98,31 @@ make-prov-shape:circle: >word-info provenance>>
 dup generator>> "enum" "data enum constructor generator" assert=
 dup parent>> "prov-shape" "data enum constructor parent" assert=
 role>> "constructor" "data enum constructor role" assert=
+
+"getter dispatch provenance" test-section
+dp-rec: struct{ alpha beta } ;
+x>>: >word-info methods>> #first
+dup method-info? t "getter method entry is method-info" assert=
+dup types>> #first "prov-point" "getter types includes struct name" assert=
+provenance>> dup dispatch-provenance? t "getter dispatch entry has provenance" assert=
+dup generator>> "struct" "getter dispatch provenance generator" assert=
+dup parent>> "prov-point" "getter dispatch provenance parent" assert=
+dup role>> "getter" "getter dispatch provenance role" assert=
+field>> "x" "getter dispatch provenance field" assert=
+
+"setter dispatch provenance" test-section
+dp-mut: mutable struct{ val } ;
+>>val: >word-info methods>> #first
+dup types>> #first "dp-mut" "setter types includes struct name" assert=
+provenance>> dup dispatch-provenance? t "setter dispatch entry has provenance" assert=
+dup generator>> "struct" "setter dispatch provenance generator" assert=
+dup parent>> "dp-mut" "setter dispatch provenance parent" assert=
+dup role>> "setter" "setter dispatch provenance role" assert=
+field>> "val" "setter dispatch provenance field" assert=
+
+"user-defined method has no dispatch provenance" test-section
+dp-widget: virtual{ fixnum } ;
+inspect: method{ dp-widget } [ unmake-dp-widget >string "widget:" swap #append ] ;
+inspect: >word-info methods>>
+>iterator [ types>> #first "dp-widget" = ] #filter #collect
+#first provenance>> f "user method dispatch provenance is f" assert=

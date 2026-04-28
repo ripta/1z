@@ -140,3 +140,45 @@ PASS: data enum constructor parent
 Stack: [ provenance{ generator: "enum" parent: "prov-shape" role: "constructor" } ]
 PASS: data enum constructor role
 Stack: [ ]
+=== getter dispatch provenance ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ method-info{ types: { "prov-point" } provenance: dispatch-provenance{ generator: "struct" parent: "prov-point" role: "getter" field: "x" } } ]
+PASS: getter method entry is method-info
+Stack: [ method-info{ types: { "prov-point" } provenance: dispatch-provenance{ generator: "struct" parent: "prov-point" role: "getter" field: "x" } } ]
+PASS: getter types includes struct name
+Stack: [ method-info{ types: { "prov-point" } provenance: dispatch-provenance{ generator: "struct" parent: "prov-point" role: "getter" field: "x" } } ]
+PASS: getter dispatch entry has provenance
+Stack: [ dispatch-provenance{ generator: "struct" parent: "prov-point" role: "getter" field: "x" } ]
+PASS: getter dispatch provenance generator
+Stack: [ dispatch-provenance{ generator: "struct" parent: "prov-point" role: "getter" field: "x" } ]
+PASS: getter dispatch provenance parent
+Stack: [ dispatch-provenance{ generator: "struct" parent: "prov-point" role: "getter" field: "x" } ]
+PASS: getter dispatch provenance role
+Stack: [ dispatch-provenance{ generator: "struct" parent: "prov-point" role: "getter" field: "x" } ]
+PASS: getter dispatch provenance field
+Stack: [ ]
+=== setter dispatch provenance ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ method-info{ types: { "dp-mut" "*" } provenance: dispatch-provenance{ generator: "struct" parent: "dp-mut" role: "setter" field: "val" } } ]
+PASS: setter types includes struct name
+Stack: [ method-info{ types: { "dp-mut" "*" } provenance: dispatch-provenance{ generator: "struct" parent: "dp-mut" role: "setter" field: "val" } } ]
+PASS: setter dispatch entry has provenance
+Stack: [ dispatch-provenance{ generator: "struct" parent: "dp-mut" role: "setter" field: "val" } ]
+PASS: setter dispatch provenance generator
+Stack: [ dispatch-provenance{ generator: "struct" parent: "dp-mut" role: "setter" field: "val" } ]
+PASS: setter dispatch provenance parent
+Stack: [ dispatch-provenance{ generator: "struct" parent: "dp-mut" role: "setter" field: "val" } ]
+PASS: setter dispatch provenance role
+Stack: [ dispatch-provenance{ generator: "struct" parent: "dp-mut" role: "setter" field: "val" } ]
+PASS: setter dispatch provenance field
+Stack: [ ]
+=== user-defined method has no dispatch provenance ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ { method-info{ types: { "dp-widget" } provenance: f } } ]
+Stack: [ { method-info{ types: { "dp-widget" } provenance: f } } ]
+PASS: user method dispatch provenance is f
+Stack: [ ]

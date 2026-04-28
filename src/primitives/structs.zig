@@ -140,7 +140,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     // FIELD>>: ( instance -- value ) - field getter
     for (fields_slice, 0..) |field, i| {
         const getter_name = try std.fmt.allocPrint(alloc, "{s}>>", .{field});
-        try defineFieldGetter(ctx, getter_name, struct_type, i, markers_slice);
+        try defineFieldGetter(ctx, getter_name, struct_type, i, markers_slice, field);
     }
 
     // >>FIELD: ( instance value -- instance ) - field setter (only if mutable)
@@ -150,7 +150,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     if (has_mutable) {
         for (fields_slice, 0..) |field, i| {
             const setter_name = try std.fmt.allocPrint(alloc, ">>{s}", .{field});
-            try defineFieldSetter(ctx, setter_name, struct_type, i, markers_slice);
+            try defineFieldSetter(ctx, setter_name, struct_type, i, markers_slice, field);
         }
     }
 }
@@ -369,7 +369,7 @@ fn defineTypePredicate(ctx: *Context, name: []const u8, struct_type: *const Stru
 }
 
 /// FIELD>>: ( instance -- value ) - field getter (generic, dispatches on struct type)
-fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, _: []const *Marker) !void {
+fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, _: []const *Marker, field: []const u8) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 3);
@@ -399,7 +399,10 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
         .word_name = name,
         .type_a = struct_type.name,
         .type_b = dispatch_mod.unary_sentinel,
-    }, .{ .body = instrs }, true);
+    }, .{
+        .body = instrs,
+        .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "getter", .field = field },
+    }, true);
 }
 
 /// >>FIELD: ( instance value -- instance ) - field setter (generic, dispatches on struct type)
@@ -407,7 +410,7 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
 /// Setters use binary dispatch keyed on (struct_type, *) so the dispatch
 /// system matches the struct instance at stack position N-2 regardless of
 /// the value type at the top.
-fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, _: []const *Marker) !void {
+fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, _: []const *Marker, field: []const u8) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 3);
@@ -437,7 +440,10 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
         .word_name = name,
         .type_a = struct_type.name,
         .type_b = dispatch_mod.any_sentinel,
-    }, .{ .body = instrs }, true);
+    }, .{
+        .body = instrs,
+        .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "setter", .field = field },
+    }, true);
 }
 
 pub fn getStructTypeFromMaker(ctx: *const Context, maker_name: []const u8) ?*const StructType {

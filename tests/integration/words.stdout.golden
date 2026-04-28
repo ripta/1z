@@ -236,9 +236,11 @@ yield ( -- )
 <= ( a b -- ? )
 <rot- ( a b c -- b c a )
 >= ( a b -- ? )
+>dispatch-provenance
 >hash
 >iterator ( seq-or-quot -- iterator )
 >iterator(with-cleanup) ( step-quot cleanup-quot -- iterator )
+>method-info
 >option:some
 >provenance
 >result:err
@@ -299,6 +301,8 @@ cmp ( a b -- ordering )
 column>>
 comparable
 cond ( branches -- ... )
+dispatch-provenance>hash
+dispatch-provenance?
 do ( pred body -- pred body )
 doc>>
 dupd ( a b -- a a b )
@@ -312,6 +316,7 @@ error? ( val -- ? )
 even? ( n -- ? )
 exact? ( val -- ? )
 ffi-ptr+len>bytes ( resource n -- byte-array )
+field>>
 file>>
 finite? ( x -- ? )
 fixnum? ( val -- ? )
@@ -319,7 +324,7 @@ float? ( val -- ? )
 flush ( -- )
 fmt ( source string -- string )
 fmt-line ( source string -- )
-format-method ( method-types -- str )
+format-method ( method-info -- str )
 format-word-info ( wi -- str )
 format-word-line ( wi -- )
 generator>>
@@ -337,6 +342,8 @@ iterator? ( val -- ? )
 keep ( ..a x quot -- ..b x )
 line>>
 loop ( ... pred -- ... )
+make-dispatch-provenance
+make-method-info
 make-option:some
 make-provenance
 make-result:err
@@ -347,6 +354,8 @@ make-word-info
 marker? ( val -- ? )
 markers>>
 max ( a1 a2 -- a )
+method-info>hash
+method-info?
 methods>>
 method{
 min ( a1 a2 -- a )
@@ -425,7 +434,10 @@ times ( n quot -- )
 try ( quot -- result )
 try-acquire ( resource -- option )
 tuck ( a b -- b a b )
+types>>
 unless ( ? quot -- )
+unmake-dispatch-provenance
+unmake-method-info
 unmake-option:some
 unmake-provenance
 unmake-result:err

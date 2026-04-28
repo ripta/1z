@@ -59,19 +59,33 @@ fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: 
         .native => .{ .boolean = false },
     };
 
-    const dispatch_keys = try ctx.dispatch.keysForWord(name, alloc);
-    const methods_arr = try alloc.alloc(Value, dispatch_keys.len);
-    for (dispatch_keys, 0..) |key, i| {
-        if (std.mem.eql(u8, key.type_b, dispatch_mod.unary_sentinel)) {
-            const types = try alloc.alloc(Value, 1);
-            types[0] = .{ .string = key.type_a };
-            methods_arr[i] = .{ .array = types };
-        } else {
-            const types = try alloc.alloc(Value, 2);
-            types[0] = .{ .string = key.type_a };
-            types[1] = .{ .string = key.type_b };
-            methods_arr[i] = .{ .array = types };
-        }
+    const dispatch_pairs = try ctx.dispatch.entriesForWord(name, alloc);
+    const methods_arr = try alloc.alloc(Value, dispatch_pairs.len);
+    for (dispatch_pairs, 0..) |pair, i| {
+        const types = if (std.mem.eql(u8, pair.key.type_b, dispatch_mod.unary_sentinel)) blk: {
+            const t = try alloc.alloc(Value, 1);
+            t[0] = .{ .string = pair.key.type_a };
+            break :blk t;
+        } else blk: {
+            const t = try alloc.alloc(Value, 2);
+            t[0] = .{ .string = pair.key.type_a };
+            t[1] = .{ .string = pair.key.type_b };
+            break :blk t;
+        };
+
+        const prov_val: Value = if (pair.entry.provenance) |dp| blk: {
+            const dp_fields = try alloc.alloc(Value, 4);
+            dp_fields[0] = .{ .string = dp.generator };
+            dp_fields[1] = .{ .string = dp.parent };
+            dp_fields[2] = .{ .string = dp.role };
+            dp_fields[3] = .{ .string = dp.field };
+            break :blk .{ .array = dp_fields };
+        } else .{ .boolean = false };
+
+        const method_fields = try alloc.alloc(Value, 2);
+        method_fields[0] = .{ .array = types };
+        method_fields[1] = prov_val;
+        methods_arr[i] = .{ .array = method_fields };
     }
 
     const source_loc_val: Value = if (word.source_file) |file| blk: {

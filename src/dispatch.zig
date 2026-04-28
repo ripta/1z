@@ -91,9 +91,18 @@ pub const DispatchKeyContext = struct {
     }
 };
 
+/// Provenance metadata for a dispatch entry: which generator created it and why.
+pub const DispatchProvenance = struct {
+    generator: []const u8,
+    parent: []const u8,
+    role: []const u8,
+    field: []const u8,
+};
+
 /// A registered method body for a dispatch entry.
 pub const DispatchEntry = struct {
     body: []const Instruction,
+    provenance: ?DispatchProvenance = null,
 };
 
 /// Dispatch table mapping (word_name, type_a, type_b) to method bodies.
@@ -166,6 +175,24 @@ pub const DispatchTable = struct {
         while (iter.next()) |entry| {
             if (std.mem.eql(u8, entry.key_ptr.word_name, word_name)) {
                 try results.append(alloc, entry.key_ptr.*);
+            }
+        }
+        return results.toOwnedSlice(alloc);
+    }
+
+    pub const KeyEntryPair = struct {
+        key: DispatchKey,
+        entry: DispatchEntry,
+    };
+
+    /// Collect all dispatch keys and entries registered for a given word name.
+    /// Caller owns the returned slice.
+    pub fn entriesForWord(self: *const DispatchTable, word_name: []const u8, alloc: Allocator) ![]KeyEntryPair {
+        var results: std.ArrayListUnmanaged(KeyEntryPair) = .{};
+        var iter = self.entries.iterator();
+        while (iter.next()) |entry| {
+            if (std.mem.eql(u8, entry.key_ptr.word_name, word_name)) {
+                try results.append(alloc, .{ .key = entry.key_ptr.*, .entry = entry.value_ptr.* });
             }
         }
         return results.toOwnedSlice(alloc);
