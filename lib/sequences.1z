@@ -44,3 +44,18 @@
 #squeeze: ( seq -- iterator ) [
   [ #len 0 > ] #filter
 ] ;
+
+\ Split sequence into two arrays by predicate
+\\
+\\ Elements satisfying the predicate go into the deeper array;
+\\ others go into the top array.
+\\
+\\   { 1 2 3 4 5 } [ even? ] #partition
+\\   => { 2 4 } { 1 3 5 }
+#partition: ( seq quot -- true-arr false-arr ) [
+  swap dup iterator? [ #collect ] when swap
+  2dup #filter #collect
+  -rot>
+  [ call not ] curry
+  #filter #collect
+] ;
