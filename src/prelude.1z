@@ -528,6 +528,9 @@ close-iterator: ( iterator -- ) [ native.close-iterator ] ;
 \\ Execute a quotation with an iterator, guaranteeing close-iterator on exit.
 with-iterator: ( iterator quot -- ... ) [ over [ close-iterator ] curry cleanup ] ;
 
+\\ Push each element of a sequence onto the stack individually.
+...: ( seq -- ...elems ) [ [ ] #each ] ;
+
 \\ Copy n bytes from an FFI pointer resource into a new byte-array.
 \\ The resource is not consumed or closed.
 ffi-ptr+len>bytes: ( resource n -- byte-array ) [ native.ffi-ptr+len>bytes ] ;

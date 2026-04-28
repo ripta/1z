@@ -1,0 +1,76 @@
+use "testing" ;
+use "ranges" ;
+
+\ -- 1. Array spread pushes each element --
+
+test-array-spread: ( -- ) [
+  { 1 2 3 } ...
+  3 "array spread: third element" assert=
+  2 "array spread: second element" assert=
+  1 "array spread: first element" assert=
+] ;
+
+\ -- 2. Empty array spread leaves stack unchanged --
+
+test-empty-array-spread: ( -- ) [
+  42 { } ...
+  42 "empty array spread: stack unchanged" assert=
+] ;
+
+\ -- 3. String spread pushes each character --
+
+test-string-spread: ( -- ) [
+  "abc" ...
+  "c" "string spread: third char" assert=
+  "b" "string spread: second char" assert=
+  "a" "string spread: first char" assert=
+] ;
+
+\ -- 4. Vector spread pushes each element --
+
+test-vector-spread: ( -- ) [
+  V{ 1 2 3 } ...
+  3 "vector spread: third element" assert=
+  2 "vector spread: second element" assert=
+  1 "vector spread: first element" assert=
+] ;
+
+\ -- 5. Byte array spread pushes each byte --
+
+test-byte-array-spread: ( -- ) [
+  B{ 65 66 } ...
+  66 "byte array spread: second byte" assert=
+  65 "byte array spread: first byte" assert=
+] ;
+
+\ -- 6. Iterator spread pushes each element --
+
+test-iterator-spread: ( -- ) [
+  { 1 2 3 } >iterator ...
+  3 "iterator spread: third element" assert=
+  2 "iterator spread: second element" assert=
+  1 "iterator spread: first element" assert=
+] ;
+
+\ -- 7. Range spread pushes each element --
+
+test-range-spread: ( -- ) [
+  3 iota ...
+  2 "range spread: third element" assert=
+  1 "range spread: second element" assert=
+  0 "range spread: first element" assert=
+] ;
+
+\ -- 8. Hash spread pushes key-value pairs as arrays --
+
+test-hash-spread: ( -- ) [
+  H{ "a" 1 } ...
+  { "a" 1 } "hash spread: key-value pair" assert=
+] ;
+
+\ -- 9. Mutable map spread pushes key-value pairs as arrays --
+
+test-mutable-map-spread: ( -- ) [
+  M{ "x" 99 } ...
+  { "x" 99 } "mutable map spread: key-value pair" assert=
+] ;
