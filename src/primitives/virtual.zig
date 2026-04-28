@@ -119,6 +119,15 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             // NAME?: ( value -- bool ) - predicate
             const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{name});
             try definePredicate(ctx, pred_name, vtype, markers_slice);
+
+            var generated_words = std.ArrayListUnmanaged(Value){};
+            try generated_words.append(alloc, .{ .string = wrap_name });
+            try generated_words.append(alloc, .{ .string = make_name });
+            try generated_words.append(alloc, .{ .string = unmake_name });
+            try generated_words.append(alloc, .{ .string = pred_name });
+            const gw_slice = try generated_words.toOwnedSlice(alloc);
+            try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
+            try ctx.type_descriptors.put(ctx.allocator, name, desc_map);
         },
         .mutable_map => |struct_desc| {
             const fields_val = struct_desc.get("fields") orelse return error.MissingField;
@@ -183,6 +192,16 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
 
             const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{name});
             try definePredicate(ctx, pred_name, vtype, markers_slice);
+
+            var generated_words = std.ArrayListUnmanaged(Value){};
+            try generated_words.append(alloc, .{ .string = wrap_name });
+            try generated_words.append(alloc, .{ .string = make_name });
+            try generated_words.append(alloc, .{ .string = unmake_name });
+            try generated_words.append(alloc, .{ .string = to_hash_name });
+            try generated_words.append(alloc, .{ .string = pred_name });
+            const gw_slice = try generated_words.toOwnedSlice(alloc);
+            try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
+            try ctx.type_descriptors.put(ctx.allocator, name, desc_map);
         },
         else => {
             helpers.setErrorContext(ctx, "virtual{{ inner type must be a string or struct descriptor, got {s}", .{helpers.valueTypeName(inner_type_val)});

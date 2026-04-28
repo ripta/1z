@@ -90,6 +90,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     };
 
     var vtype_list = std.ArrayListUnmanaged(*const VirtualType){};
+    var generated_words = std.ArrayListUnmanaged(Value){};
 
     var i: usize = 0;
     while (i < variants_array.len) {
@@ -171,13 +172,12 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 
             try vtype_list.append(alloc, vtype);
 
+            const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
             if (fields_slice.len > 1) {
                 // Multi-field: >NAME is hash-based
-                const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
                 try virtual.defineStructHashWrap(ctx, wrap_name, vtype, markers_slice);
             } else {
                 // Single-field: >NAME stays positional
-                const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
                 try virtual.defineStructWrap(ctx, wrap_name, vtype, markers_slice);
             }
 
@@ -199,6 +199,12 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 
             const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{full_name});
             try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
+
+            try generated_words.append(alloc, .{ .string = wrap_name });
+            try generated_words.append(alloc, .{ .string = make_name });
+            try generated_words.append(alloc, .{ .string = unmake_name });
+            try generated_words.append(alloc, .{ .string = to_hash_name });
+            try generated_words.append(alloc, .{ .string = pred_name });
         } else {
             const full_name = try std.fmt.allocPrint(alloc, "{s}:{s}", .{ enum_name, variant_sym });
 
@@ -227,6 +233,9 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             const pred_name = try std.fmt.allocPrint(alloc, "{s}:{s}?", .{ enum_name, variant_sym });
             try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
 
+            try generated_words.append(alloc, .{ .string = full_name });
+            try generated_words.append(alloc, .{ .string = pred_name });
+
             i += 1;
         }
     }
@@ -245,6 +254,11 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
         .provenance = .{ .generator = "enum", .parent = enum_name, .role = "predicate" },
         .action = .{ .compound = agg_instrs },
     });
+
+    try generated_words.append(alloc, .{ .string = agg_pred_name });
+    const gw_slice = try generated_words.toOwnedSlice(alloc);
+    try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
+    try ctx.type_descriptors.put(ctx.allocator, enum_name, desc_map);
 
     const vtypes_slice = try vtype_list.toOwnedSlice(alloc);
     try ctx.enum_registry.put(ctx.allocator, enum_name, vtypes_slice);

@@ -21,6 +21,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = ">word", .func = nativeToWord },
     .{ .name = "all-words", .func = nativeAllWords },
     .{ .name = "scope-frames", .func = nativeScopeFrames },
+    .{ .name = "type-descriptor", .func = nativeTypeDescriptor },
 };
 
 fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: WordDefinition) !Value {
@@ -145,6 +146,24 @@ fn nativeToWord(ctx: *Context) anyerror!void {
     };
 
     try ctx.stack.push(try buildWordInfo(alloc, ctx, name, word));
+}
+
+/// type-descriptor ( symbol -- mutable-map ) - Look up a type descriptor by name
+fn nativeTypeDescriptor(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const name = switch (val) {
+        .symbol => |s| s,
+        .string => |s| s,
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol", val);
+            return error.TypeMismatch;
+        },
+    };
+    const desc = ctx.lookupTypeDescriptor(name) orelse {
+        helpers.setErrorContext(ctx, "no type descriptor for '{s}'", .{name});
+        return error.NameError;
+    };
+    try ctx.stack.push(.{ .mutable_map = desc });
 }
 
 /// all-words ( -- array ) - Return an array of raw word-info arrays for every visible word.

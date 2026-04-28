@@ -1,6 +1,7 @@
 \ Tests for word-level provenance on generated words
 
 use "testing" ;
+use "introspect" ;
 
 "struct provenance on constructor" test-section
 prov-point: struct{ x y } ;
@@ -126,3 +127,70 @@ inspect: method{ dp-widget } [ unmake-dp-widget >string "widget:" swap #append ]
 inspect: >word-info methods>>
 >iterator [ types>> #first "dp-widget" = ] #filter #collect
 #first provenance>> f "user method dispatch provenance is f" assert=
+
+"struct generated-words" test-section
+gw-point: struct{ x y } ;
+gw-point: generated-words
+dup "make-gw-point" #in? t "struct generated-words includes make-" assert=
+dup ">gw-point" #in? t "struct generated-words includes >-" assert=
+dup "unmake-gw-point" #in? t "struct generated-words includes unmake-" assert=
+dup "gw-point>hash" #in? t "struct generated-words includes >hash" assert=
+dup "gw-point?" #in? t "struct generated-words includes predicate" assert=
+dup "x>>" #in? t "struct generated-words includes getter" assert=
+"y>>" #in? t "struct generated-words includes second getter" assert=
+
+"mutable struct generated-words includes setters" test-section
+gw-mut: mutable struct{ val } ;
+gw-mut: generated-words
+dup ">>val" #in? t "mutable struct generated-words includes setter" assert=
+"val>>" #in? t "mutable struct generated-words includes getter" assert=
+
+"simple virtual generated-words" test-section
+gw-meter: virtual{ fixnum } ;
+gw-meter: generated-words
+dup ">gw-meter" #in? t "virtual generated-words includes wrap" assert=
+dup "make-gw-meter" #in? t "virtual generated-words includes make-" assert=
+dup "unmake-gw-meter" #in? t "virtual generated-words includes unmake-" assert=
+"gw-meter?" #in? t "virtual generated-words includes predicate" assert=
+
+"struct-backed virtual generated-words" test-section
+gw-vec: virtual{ struct{ vx vy } } ;
+gw-vec: generated-words
+dup ">gw-vec" #in? t "sbv generated-words includes wrap" assert=
+dup "make-gw-vec" #in? t "sbv generated-words includes make-" assert=
+dup "unmake-gw-vec" #in? t "sbv generated-words includes unmake-" assert=
+dup "gw-vec>hash" #in? t "sbv generated-words includes >hash" assert=
+"gw-vec?" #in? t "sbv generated-words includes predicate" assert=
+
+"flat enum generated-words" test-section
+gw-dir: enum{ north south east west } ;
+gw-dir: generated-words
+dup "gw-dir:north" #in? t "enum generated-words includes variant constructor" assert=
+dup "gw-dir:south?" #in? t "enum generated-words includes variant predicate" assert=
+"gw-dir?" #in? t "enum generated-words includes aggregate predicate" assert=
+
+"data-carrying enum generated-words" test-section
+gw-shape: enum{ circle struct{ radius } dot } ;
+gw-shape: generated-words
+dup ">gw-shape:circle" #in? t "data enum generated-words includes wrap" assert=
+dup "make-gw-shape:circle" #in? t "data enum generated-words includes make-" assert=
+dup "unmake-gw-shape:circle" #in? t "data enum generated-words includes unmake-" assert=
+dup "gw-shape:circle>hash" #in? t "data enum generated-words includes >hash" assert=
+dup "gw-shape:circle?" #in? t "data enum generated-words includes variant pred" assert=
+dup "gw-shape:dot" #in? t "data enum generated-words includes flat variant" assert=
+"gw-shape?" #in? t "data enum generated-words includes aggregate pred" assert=
+
+"generated-by on generated word" test-section
+make-gw-point: generated-by
+dup provenance? t "generated-by returns provenance for generated word" assert=
+generator>> "struct" "generated-by generator matches" assert=
+
+"generated-by on hand-written word" test-section
+my-handwritten: generated-by f "generated-by returns f for hand-written word" assert=
+
+"generated-by on generic word" test-section
+x>>: generated-by f "generated-by returns f for generic word" assert=
+
+"consistency: all generated-words are findable" test-section
+gw-point: generated-words >iterator [ >word? option:some? ] #map #collect
+>iterator [ t "generated word is findable" assert= ] #each

@@ -153,6 +153,27 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
             try defineFieldSetter(ctx, setter_name, struct_type, i, markers_slice, field);
         }
     }
+
+    // Build generated-words reverse index
+    var generated_words = std.ArrayListUnmanaged(Value){};
+    try generated_words.append(alloc, .{ .string = make_name });
+    try generated_words.append(alloc, .{ .string = convert_name });
+    try generated_words.append(alloc, .{ .string = unmake_name });
+    try generated_words.append(alloc, .{ .string = to_hash_name });
+    try generated_words.append(alloc, .{ .string = pred_name });
+    for (fields_slice) |field| {
+        const gw_name = try std.fmt.allocPrint(alloc, "{s}>>", .{field});
+        try generated_words.append(alloc, .{ .string = gw_name });
+    }
+    if (has_mutable) {
+        for (fields_slice) |field| {
+            const gw_name = try std.fmt.allocPrint(alloc, ">>{s}", .{field});
+            try generated_words.append(alloc, .{ .string = gw_name });
+        }
+    }
+    const gw_slice = try generated_words.toOwnedSlice(alloc);
+    try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
+    try ctx.type_descriptors.put(ctx.allocator, name, desc_map);
 }
 
 /// Trampoline helper ( field1 .. fieldN struct-type -- instance )

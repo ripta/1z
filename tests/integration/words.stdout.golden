@@ -327,6 +327,8 @@ fmt-line ( source string -- )
 format-method ( method-info -- str )
 format-word-info ( wi -- str )
 format-word-line ( wi -- )
+generated-by ( symbol -- provenance/f )
+generated-words ( symbol -- array )
 generator>>
 generic? ( name -- ? )
 hash? ( val -- ? )

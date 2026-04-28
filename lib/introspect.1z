@@ -67,6 +67,19 @@ format-word-line: ( wi -- ) [
   "\n" print
 ] ;
 
+\ Look up the provenance of a generated word, or f if none
+generated-by: ( symbol -- provenance/f ) [
+  >word? dup option:some?
+  [ option:some> provenance>> ]
+  [ drop f ]
+  if
+] ;
+
+\ Return the generated-words array for a type name
+generated-words: ( symbol -- array ) [
+  native.type-descriptor "generated-words" @get
+] ;
+
 \ Print all defined words in the dictionary, grouped by native vs user-defined
 words: ( -- ) [
   all-words [ name>> ] #sort-by
