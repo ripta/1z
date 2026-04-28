@@ -15,6 +15,10 @@ const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
 const RegistryEntry = types_mod.RegistryEntry;
 
+const dictionary_mod = @import("../dictionary.zig");
+const WordProvenance = dictionary_mod.WordProvenance;
+const WordDefinition = dictionary_mod.WordDefinition;
+
 pub const primitives = [_]Primitive{
     .{ .name = "define-enum", .stack_effect = "name: descriptor markers --", .doc = "Define an enum type with flat variant constructors and predicates.", .func = nativeDefineEnum },
     .{ .name = "enum-of", .stack_effect = "val -- str/f", .doc = "Return the parent enum name for an enum variant value, or f if not an enum variant.", .func = nativeEnumOf },
@@ -216,6 +220,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             try ctx.defineWord(full_name, .{
                 .name = full_name,
                 .markers = markers_slice,
+                .provenance = .{ .generator = "enum", .parent = enum_name, .role = "variant-constructor" },
                 .action = .{ .compound = instrs },
             });
 
@@ -237,6 +242,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     try ctx.defineWord(agg_pred_name, .{
         .name = agg_pred_name,
         .markers = markers_slice,
+        .provenance = .{ .generator = "enum", .parent = enum_name, .role = "predicate" },
         .action = .{ .compound = agg_instrs },
     });
 

@@ -16,6 +16,10 @@ const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
 const RegistryEntry = types_mod.RegistryEntry;
 
+const dictionary_mod = @import("../dictionary.zig");
+const WordProvenance = dictionary_mod.WordProvenance;
+const WordDefinition = dictionary_mod.WordDefinition;
+
 pub const primitives = [_]Primitive{
     .{ .name = "define-struct", .stack_effect = "name: descriptor markers --", .doc = "Define a struct type and its accessor words.", .func = nativeDefineStruct },
 };
@@ -295,6 +299,7 @@ fn defineConstructor(ctx: *Context, name: []const u8, struct_type: *const Struct
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
+        .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "constructor" },
         .action = .{ .compound = instrs },
     });
 }
@@ -310,6 +315,7 @@ fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const Stru
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
+        .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "hash-converter" },
         .action = .{ .compound = instrs },
     });
 }
@@ -325,6 +331,7 @@ fn defineDestructor(ctx: *Context, name: []const u8, struct_type: *const StructT
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
+        .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "destructor" },
         .action = .{ .compound = instrs },
     });
 }
@@ -340,6 +347,7 @@ fn defineToHash(ctx: *Context, name: []const u8, struct_type: *const StructType,
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
+        .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "to-hash" },
         .action = .{ .compound = instrs },
     });
 }
@@ -355,6 +363,7 @@ fn defineTypePredicate(ctx: *Context, name: []const u8, struct_type: *const Stru
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
+        .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "predicate" },
         .action = .{ .compound = instrs },
     });
 }

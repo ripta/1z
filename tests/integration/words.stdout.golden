@@ -240,6 +240,7 @@ yield ( -- )
 >iterator ( seq-or-quot -- iterator )
 >iterator(with-cleanup) ( step-quot cleanup-quot -- iterator )
 >option:some
+>provenance
 >result:err
 >result:ok
 >source-loc
@@ -321,6 +322,7 @@ fmt-line ( source string -- )
 format-method ( method-types -- str )
 format-word-info ( wi -- str )
 format-word-line ( wi -- )
+generator>>
 generic? ( name -- ? )
 hash? ( val -- ? )
 help ( symbol -- )
@@ -336,6 +338,7 @@ keep ( ..a x quot -- ..b x )
 line>>
 loop ( ... pred -- ... )
 make-option:some
+make-provenance
 make-result:err
 make-result:ok
 make-source-loc
@@ -381,6 +384,7 @@ output-stream
 outputs>>
 parameter
 parameter? ( val -- ? )
+parent>>
 parse-quotation ( -- quotation )
 pick ( a b c -- a b c a )
 positive? ( x -- ? )
@@ -388,6 +392,9 @@ pragma-get ( name -- option )
 print ( str -- )
 print-line ( str -- )
 protocol{
+provenance>>
+provenance>hash
+provenance?
 quotation? ( val -- ? )
 read-line ( -- str/f )
 receive? ( ch -- option )
@@ -399,6 +406,7 @@ result:ok> ( result -- value )
 result:ok>hash
 result:ok?
 result?
+role>>
 run-benchmarks ( quot -- )
 set? ( val -- ? )
 source-loc>>
@@ -419,6 +427,7 @@ try-acquire ( resource -- option )
 tuck ( a b -- b a b )
 unless ( ? quot -- )
 unmake-option:some
+unmake-provenance
 unmake-result:err
 unmake-result:ok
 unmake-source-loc

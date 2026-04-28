@@ -9,6 +9,13 @@ const StackEffect = @import("stack_effect.zig").StackEffect;
 /// Native function signature: takes context, can return errors.
 pub const NativeFn = *const fn (ctx: *Context) anyerror!void;
 
+/// Provenance metadata for generated words, e.g., constructors, predicates, accessors.
+pub const WordProvenance = struct {
+    generator: []const u8,
+    parent: []const u8,
+    role: []const u8,
+};
+
 /// Word definition: either a native function or compound quotation.
 pub const WordDefinition = struct {
     /// The word itself.
@@ -33,6 +40,8 @@ pub const WordDefinition = struct {
     /// pushes the module's deps as a local frame so that late-bound
     /// references to the module's dependencies resolve correctly.
     source_module: ?*const value_mod.Module = null,
+    /// Provenance metadata for generated words, or null for hand-written words.
+    provenance: ?WordProvenance = null,
     /// The action performed by this word: either a native function or a
     /// compound quotation. Unfortunate naming.
     action: union(enum) {

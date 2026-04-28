@@ -1,0 +1,142 @@
+=== struct provenance on constructor ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "constructor" } ]
+PASS: struct constructor has provenance struct
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "constructor" } ]
+PASS: struct constructor generator
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "constructor" } ]
+PASS: struct constructor parent
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "constructor" } ]
+PASS: struct constructor role
+Stack: [ ]
+=== struct provenance on hash-converter ===
+Stack: [ ]
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "hash-converter" } ]
+PASS: struct hash-converter generator
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "hash-converter" } ]
+PASS: struct hash-converter parent
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "hash-converter" } ]
+PASS: struct hash-converter role
+Stack: [ ]
+=== struct provenance on destructor ===
+Stack: [ ]
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "destructor" } ]
+PASS: struct destructor generator
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "destructor" } ]
+PASS: struct destructor parent
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "destructor" } ]
+PASS: struct destructor role
+Stack: [ ]
+=== struct provenance on to-hash ===
+Stack: [ ]
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "to-hash" } ]
+PASS: struct to-hash generator
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "to-hash" } ]
+PASS: struct to-hash parent
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "to-hash" } ]
+PASS: struct to-hash role
+Stack: [ ]
+=== struct provenance on predicate ===
+Stack: [ ]
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "predicate" } ]
+PASS: struct predicate generator
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "predicate" } ]
+PASS: struct predicate parent
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "predicate" } ]
+PASS: struct predicate role
+Stack: [ ]
+=== virtual provenance on wrap ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ provenance{ generator: "virtual" parent: "prov-meter" role: "wrap" } ]
+PASS: virtual wrap generator
+Stack: [ provenance{ generator: "virtual" parent: "prov-meter" role: "wrap" } ]
+PASS: virtual wrap parent
+Stack: [ provenance{ generator: "virtual" parent: "prov-meter" role: "wrap" } ]
+PASS: virtual wrap role
+Stack: [ ]
+=== virtual provenance on unwrap ===
+Stack: [ ]
+Stack: [ provenance{ generator: "virtual" parent: "prov-meter" role: "unwrap" } ]
+PASS: virtual unwrap generator
+Stack: [ provenance{ generator: "virtual" parent: "prov-meter" role: "unwrap" } ]
+PASS: virtual unwrap parent
+Stack: [ provenance{ generator: "virtual" parent: "prov-meter" role: "unwrap" } ]
+PASS: virtual unwrap role
+Stack: [ ]
+=== virtual provenance on predicate ===
+Stack: [ ]
+Stack: [ provenance{ generator: "virtual" parent: "prov-meter" role: "predicate" } ]
+PASS: virtual predicate generator
+Stack: [ provenance{ generator: "virtual" parent: "prov-meter" role: "predicate" } ]
+PASS: virtual predicate parent
+Stack: [ provenance{ generator: "virtual" parent: "prov-meter" role: "predicate" } ]
+PASS: virtual predicate role
+Stack: [ ]
+=== enum provenance on flat variant constructor ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ provenance{ generator: "enum" parent: "prov-color" role: "variant-constructor" } ]
+PASS: enum variant-constructor generator
+Stack: [ provenance{ generator: "enum" parent: "prov-color" role: "variant-constructor" } ]
+PASS: enum variant-constructor parent
+Stack: [ provenance{ generator: "enum" parent: "prov-color" role: "variant-constructor" } ]
+PASS: enum variant-constructor role
+Stack: [ ]
+=== enum provenance on aggregate predicate ===
+Stack: [ ]
+Stack: [ provenance{ generator: "enum" parent: "prov-color" role: "predicate" } ]
+PASS: enum aggregate predicate generator
+Stack: [ provenance{ generator: "enum" parent: "prov-color" role: "predicate" } ]
+PASS: enum aggregate predicate parent
+Stack: [ provenance{ generator: "enum" parent: "prov-color" role: "predicate" } ]
+PASS: enum aggregate predicate role
+Stack: [ ]
+=== enum provenance on per-variant predicate ===
+Stack: [ ]
+Stack: [ provenance{ generator: "enum" parent: "prov-color" role: "predicate" } ]
+PASS: enum per-variant predicate generator
+Stack: [ provenance{ generator: "enum" parent: "prov-color" role: "predicate" } ]
+PASS: enum per-variant predicate parent
+Stack: [ provenance{ generator: "enum" parent: "prov-color" role: "predicate" } ]
+PASS: enum per-variant predicate role
+Stack: [ ]
+=== hand-written word has no provenance ===
+Stack: [ ]
+Stack: [ ]
+PASS: hand-written word provenance is f
+Stack: [ ]
+=== native word has no provenance ===
+Stack: [ ]
+PASS: native word provenance is f
+Stack: [ ]
+=== struct-backed virtual provenance ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ provenance{ generator: "virtual" parent: "prov-vec2" role: "constructor" } ]
+PASS: struct-backed virtual constructor generator
+Stack: [ provenance{ generator: "virtual" parent: "prov-vec2" role: "constructor" } ]
+PASS: struct-backed virtual constructor parent
+Stack: [ provenance{ generator: "virtual" parent: "prov-vec2" role: "constructor" } ]
+PASS: struct-backed virtual constructor role
+Stack: [ ]
+=== struct-backed virtual hash-wrap provenance ===
+Stack: [ ]
+Stack: [ provenance{ generator: "virtual" parent: "prov-vec2" role: "hash-wrap" } ]
+PASS: struct-backed virtual hash-wrap generator
+Stack: [ provenance{ generator: "virtual" parent: "prov-vec2" role: "hash-wrap" } ]
+PASS: struct-backed virtual hash-wrap parent
+Stack: [ provenance{ generator: "virtual" parent: "prov-vec2" role: "hash-wrap" } ]
+PASS: struct-backed virtual hash-wrap role
+Stack: [ ]
+=== data-carrying enum variant provenance ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ provenance{ generator: "enum" parent: "prov-shape" role: "constructor" } ]
+PASS: data enum constructor generator
+Stack: [ provenance{ generator: "enum" parent: "prov-shape" role: "constructor" } ]
+PASS: data enum constructor parent
+Stack: [ provenance{ generator: "enum" parent: "prov-shape" role: "constructor" } ]
+PASS: data enum constructor role
+Stack: [ ]

@@ -5,8 +5,13 @@ const Instruction = value_mod.Instruction;
 const Marker = value_mod.Marker;
 const Value = value_mod.Value;
 const Quotation = value_mod.Quotation;
+
 const StackEffect = @import("../stack_effect.zig").StackEffect;
-const WordDefinition = @import("../dictionary.zig").WordDefinition;
+
+const dictionary_mod = @import("../dictionary.zig");
+const WordProvenance = dictionary_mod.WordProvenance;
+const WordDefinition = dictionary_mod.WordDefinition;
+
 const markers_mod = @import("markers.zig");
 
 const helpers = @import("helpers.zig");

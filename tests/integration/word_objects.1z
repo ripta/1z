@@ -5,7 +5,7 @@ use "testing" ;
 "native.>word returns raw array for native word" test-section
 dup: native.>word
 dup array? t "native.>word returns an array" assert=
-dup #len 9 "native.>word array has 9 elements" assert=
+dup #len 10 "native.>word array has 10 elements" assert=
 dup 0 #nth "dup" "native.>word raw array name" assert=
 dup 1 #nth array? t "native.>word raw array stack-effect is array" assert=
 dup 1 #nth #first { "a" } "native.>word raw array stack-effect inputs" assert=

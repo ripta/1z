@@ -2,7 +2,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Context = @import("../context.zig").Context;
 const dispatch_mod = @import("../dispatch.zig");
-const WordDefinition = @import("../dictionary.zig").WordDefinition;
+const dictionary_mod = @import("../dictionary.zig");
+const WordDefinition = dictionary_mod.WordDefinition;
+const WordProvenance = dictionary_mod.WordProvenance;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const HashTable = value_mod.HashTable;
@@ -85,8 +87,16 @@ fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: 
     else
         .{ .boolean = false };
 
-    // Raw array: name stack-effect doc markers native? body methods source-loc module
-    const wi_fields = try alloc.alloc(Value, 9);
+    const provenance_val: Value = if (word.provenance) |p| blk: {
+        const prov_fields = try alloc.alloc(Value, 3);
+        prov_fields[0] = .{ .string = p.generator };
+        prov_fields[1] = .{ .string = p.parent };
+        prov_fields[2] = .{ .string = p.role };
+        break :blk .{ .array = prov_fields };
+    } else .{ .boolean = false };
+
+    // Raw array: name stack-effect doc markers native? body methods source-loc module provenance
+    const wi_fields = try alloc.alloc(Value, 10);
     wi_fields[0] = .{ .string = name };
     wi_fields[1] = effect_val;
     wi_fields[2] = doc_val;
@@ -96,6 +106,7 @@ fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: 
     wi_fields[6] = .{ .array = methods_arr };
     wi_fields[7] = source_loc_val;
     wi_fields[8] = module_val;
+    wi_fields[9] = provenance_val;
 
     return .{ .array = wi_fields };
 }

@@ -1,0 +1,100 @@
+\ Tests for word-level provenance on generated words
+
+use "testing" ;
+
+"struct provenance on constructor" test-section
+prov-point: struct{ x y } ;
+make-prov-point: >word-info provenance>>
+dup provenance? t "struct constructor has provenance struct" assert=
+dup generator>> "struct" "struct constructor generator" assert=
+dup parent>> "prov-point" "struct constructor parent" assert=
+role>> "constructor" "struct constructor role" assert=
+
+"struct provenance on hash-converter" test-section
+>prov-point: >word-info provenance>>
+dup generator>> "struct" "struct hash-converter generator" assert=
+dup parent>> "prov-point" "struct hash-converter parent" assert=
+role>> "hash-converter" "struct hash-converter role" assert=
+
+"struct provenance on destructor" test-section
+unmake-prov-point: >word-info provenance>>
+dup generator>> "struct" "struct destructor generator" assert=
+dup parent>> "prov-point" "struct destructor parent" assert=
+role>> "destructor" "struct destructor role" assert=
+
+"struct provenance on to-hash" test-section
+prov-point>hash: >word-info provenance>>
+dup generator>> "struct" "struct to-hash generator" assert=
+dup parent>> "prov-point" "struct to-hash parent" assert=
+role>> "to-hash" "struct to-hash role" assert=
+
+"struct provenance on predicate" test-section
+prov-point?: >word-info provenance>>
+dup generator>> "struct" "struct predicate generator" assert=
+dup parent>> "prov-point" "struct predicate parent" assert=
+role>> "predicate" "struct predicate role" assert=
+
+"virtual provenance on wrap" test-section
+prov-meter: virtual{ fixnum } ;
+>prov-meter: >word-info provenance>>
+dup generator>> "virtual" "virtual wrap generator" assert=
+dup parent>> "prov-meter" "virtual wrap parent" assert=
+role>> "wrap" "virtual wrap role" assert=
+
+"virtual provenance on unwrap" test-section
+unmake-prov-meter: >word-info provenance>>
+dup generator>> "virtual" "virtual unwrap generator" assert=
+dup parent>> "prov-meter" "virtual unwrap parent" assert=
+role>> "unwrap" "virtual unwrap role" assert=
+
+"virtual provenance on predicate" test-section
+prov-meter?: >word-info provenance>>
+dup generator>> "virtual" "virtual predicate generator" assert=
+dup parent>> "prov-meter" "virtual predicate parent" assert=
+role>> "predicate" "virtual predicate role" assert=
+
+"enum provenance on flat variant constructor" test-section
+prov-color: enum{ red green blue } ;
+prov-color:red: >word-info provenance>>
+dup generator>> "enum" "enum variant-constructor generator" assert=
+dup parent>> "prov-color" "enum variant-constructor parent" assert=
+role>> "variant-constructor" "enum variant-constructor role" assert=
+
+"enum provenance on aggregate predicate" test-section
+prov-color?: >word-info provenance>>
+dup generator>> "enum" "enum aggregate predicate generator" assert=
+dup parent>> "prov-color" "enum aggregate predicate parent" assert=
+role>> "predicate" "enum aggregate predicate role" assert=
+
+"enum provenance on per-variant predicate" test-section
+prov-color:red?: >word-info provenance>>
+dup generator>> "enum" "enum per-variant predicate generator" assert=
+dup parent>> "prov-color" "enum per-variant predicate parent" assert=
+role>> "predicate" "enum per-variant predicate role" assert=
+
+"hand-written word has no provenance" test-section
+my-handwritten: [ 42 ] ;
+my-handwritten: >word-info provenance>> f "hand-written word provenance is f" assert=
+
+"native word has no provenance" test-section
+dup: >word-info provenance>> f "native word provenance is f" assert=
+
+"struct-backed virtual provenance" test-section
+prov-vec2: virtual{ struct{ vx vy } } ;
+make-prov-vec2: >word-info provenance>>
+dup generator>> "virtual" "struct-backed virtual constructor generator" assert=
+dup parent>> "prov-vec2" "struct-backed virtual constructor parent" assert=
+role>> "constructor" "struct-backed virtual constructor role" assert=
+
+"struct-backed virtual hash-wrap provenance" test-section
+>prov-vec2: >word-info provenance>>
+dup generator>> "virtual" "struct-backed virtual hash-wrap generator" assert=
+dup parent>> "prov-vec2" "struct-backed virtual hash-wrap parent" assert=
+role>> "hash-wrap" "struct-backed virtual hash-wrap role" assert=
+
+"data-carrying enum variant provenance" test-section
+prov-shape: enum{ circle struct{ radius } rectangle struct{ width height } } ;
+make-prov-shape:circle: >word-info provenance>>
+dup generator>> "enum" "data enum constructor generator" assert=
+dup parent>> "prov-shape" "data enum constructor parent" assert=
+role>> "constructor" "data enum constructor role" assert=
