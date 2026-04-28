@@ -1,0 +1,52 @@
+use "testing" ;
+use "sequences" ;
+
+"#group-by strings by first character" test-section
+
+{ "apple" "avocado" "banana" "blueberry" "cherry" }
+[ 0 #nth >string ] #group-by
+dup "a" @get { "apple" "avocado" } "group a" assert=
+dup "b" @get { "banana" "blueberry" } "group b" assert=
+"c" @get { "cherry" } "group c" assert=
+
+"single-element groups" test-section
+
+{ "x" "y" "z" }
+[ ] #group-by
+dup "x" @get { "x" } "group x" assert=
+dup "y" @get { "y" } "group y" assert=
+"z" @get { "z" } "group z" assert=
+
+"all elements map to same key" test-section
+
+{ 1 2 3 }
+[ drop same: ] #group-by
+dup same: @get { 1 2 3 } "single group has all elements" assert=
+@keys #len 1 "only one key" assert=
+
+"empty sequence" test-section
+
+{ }
+[ drop x: ] #group-by
+H{ } "empty input gives empty hash" assert=
+
+"order preservation within groups" test-section
+
+{ 10 3 8 1 6 5 4 }
+[ even? [ even: ] [ odd: ] if ] #group-by
+dup even: @get { 10 8 6 4 } "even group preserves order" assert=
+odd: @get { 3 1 5 } "odd group preserves order" assert=
+
+"works on iterators" test-section
+
+{ 1 2 3 4 5 6 } >iterator
+[ 3 > [ high: ] [ low: ] if ] #group-by
+dup low: @get { 1 2 3 } "low group from iterator" assert=
+high: @get { 4 5 6 } "high group from iterator" assert=
+
+"symbol keys" test-section
+
+{ 1 2 3 4 5 }
+[ even? [ even: ] [ odd: ] if ] #group-by
+dup even: @get { 2 4 } "symbol key even" assert=
+odd: @get { 1 3 5 } "symbol key odd" assert=

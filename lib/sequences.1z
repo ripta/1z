@@ -44,3 +44,39 @@
 #squeeze: ( seq -- iterator ) [
   [ #len 0 > ] #filter
 ] ;
+
+\ Split sequence into two arrays by predicate
+\\
+\\ Elements satisfying the predicate go into the deeper array;
+\\ others go into the top array.
+\\
+\\   { 1 2 3 4 5 } [ even? ] #partition
+\\   => { 2 4 } { 1 3 5 }
+#partition: ( seq quot -- true-arr false-arr ) [
+  swap dup iterator? [ #collect ] when swap
+  2dup #filter #collect
+  -rot>
+  [ call not ] curry
+  #filter #collect
+] ;
+
+\\ Group elements by a key function into a hash of arrays.
+\\ The key function must return a string or symbol.
+\\
+\\   { "apple" "avocado" "banana" "blueberry" }
+\\   [ 0 #nth ] #group-by
+\\   => H{ "a" { "apple" "avocado" } "b" { "banana" "blueberry" } }
+#group-by: ( seq quot -- hash ) [
+  [
+    -rot>
+    dup 3 pick-n call
+    2 pick-n over @get?
+    dup option:some?
+    [ option:some> <rot- #suffix @set ]
+    [ drop swap 1array @set ]
+    if
+    swap drop
+  ] curry
+  H{ } swap
+  #reduce
+] ;

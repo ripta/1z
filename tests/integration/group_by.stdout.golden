@@ -1,0 +1,58 @@
+=== #group-by strings by first character ===
+Stack: [ ]
+Stack: [ { "apple" "avocado" "banana" "blueberry" "cherry" } ]
+Stack: [ H{ b: { "banana" "blueberry" } a: { "apple" "avocado" } c: { "cherry" } } ]
+PASS: group a
+Stack: [ H{ b: { "banana" "blueberry" } a: { "apple" "avocado" } c: { "cherry" } } ]
+PASS: group b
+Stack: [ H{ b: { "banana" "blueberry" } a: { "apple" "avocado" } c: { "cherry" } } ]
+PASS: group c
+Stack: [ ]
+=== single-element groups ===
+Stack: [ ]
+Stack: [ { "x" "y" "z" } ]
+Stack: [ H{ x: { "x" } z: { "z" } y: { "y" } } ]
+PASS: group x
+Stack: [ H{ x: { "x" } z: { "z" } y: { "y" } } ]
+PASS: group y
+Stack: [ H{ x: { "x" } z: { "z" } y: { "y" } } ]
+PASS: group z
+Stack: [ ]
+=== all elements map to same key ===
+Stack: [ ]
+Stack: [ { 1 2 3 } ]
+Stack: [ H{ same: { 1 2 3 } } ]
+PASS: single group has all elements
+Stack: [ H{ same: { 1 2 3 } } ]
+PASS: only one key
+Stack: [ ]
+=== empty sequence ===
+Stack: [ ]
+Stack: [ { } ]
+Stack: [ H{ } ]
+PASS: empty input gives empty hash
+Stack: [ ]
+=== order preservation within groups ===
+Stack: [ ]
+Stack: [ { 10 3 8 1 6 5 4 } ]
+Stack: [ H{ even: { 10 8 6 4 } odd: { 3 1 5 } } ]
+PASS: even group preserves order
+Stack: [ H{ even: { 10 8 6 4 } odd: { 3 1 5 } } ]
+PASS: odd group preserves order
+Stack: [ ]
+=== works on iterators ===
+Stack: [ ]
+Stack: [ <iterator array 0/6> ]
+Stack: [ H{ high: { 4 5 6 } low: { 1 2 3 } } ]
+PASS: low group from iterator
+Stack: [ H{ high: { 4 5 6 } low: { 1 2 3 } } ]
+PASS: high group from iterator
+Stack: [ ]
+=== symbol keys ===
+Stack: [ ]
+Stack: [ { 1 2 3 4 5 } ]
+Stack: [ H{ odd: { 1 3 5 } even: { 2 4 } } ]
+PASS: symbol key even
+Stack: [ H{ odd: { 1 3 5 } even: { 2 4 } } ]
+PASS: symbol key odd
+Stack: [ ]

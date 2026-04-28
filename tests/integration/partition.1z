@@ -1,0 +1,38 @@
+use "testing" ;
+use "sequences" ;
+
+"#partition" test-section
+
+{ 1 2 3 4 5 } [ even? ] #partition
+{ 1 3 5 } swap "false-arr: odd numbers" assert=
+{ 2 4 } swap "true-arr: even numbers" assert=
+
+"all-true predicate" test-section
+
+{ 1 2 3 } [ drop t ] #partition
+{ } swap "false-arr: empty when all true" assert=
+{ 1 2 3 } swap "true-arr: everything when all true" assert=
+
+"all-false predicate" test-section
+
+{ 1 2 3 } [ drop f ] #partition
+{ 1 2 3 } swap "false-arr: everything when all false" assert=
+{ } swap "true-arr: empty when all false" assert=
+
+"empty sequence" test-section
+
+{ } [ even? ] #partition
+{ } swap "false-arr: empty on empty input" assert=
+{ } swap "true-arr: empty on empty input" assert=
+
+"order preservation" test-section
+
+{ 10 3 8 1 6 5 4 } [ even? ] #partition
+{ 3 1 5 } swap "false-arr preserves order" assert=
+{ 10 8 6 4 } swap "true-arr preserves order" assert=
+
+"works on iterators" test-section
+
+{ 1 2 3 4 5 6 } >iterator [ 3 > ] #partition
+{ 1 2 3 } swap "false-arr from iterator" assert=
+{ 4 5 6 } swap "true-arr from iterator" assert=
