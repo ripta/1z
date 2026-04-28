@@ -59,3 +59,24 @@
   [ call not ] curry
   #filter #collect
 ] ;
+
+\\ Group elements by a key function into a hash of arrays.
+\\ The key function must return a string or symbol.
+\\
+\\   { "apple" "avocado" "banana" "blueberry" }
+\\   [ 0 #nth ] #group-by
+\\   => H{ "a" { "apple" "avocado" } "b" { "banana" "blueberry" } }
+#group-by: ( seq quot -- hash ) [
+  [
+    -rot>
+    dup 3 pick-n call
+    2 pick-n over @get?
+    dup option:some?
+    [ option:some> <rot- #suffix @set ]
+    [ drop swap 1array @set ]
+    if
+    swap drop
+  ] curry
+  H{ } swap
+  #reduce
+] ;
