@@ -1,4 +1,5 @@
 #include "toy.h"
+#include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -173,4 +174,26 @@ float toy_vec2_length_sq(toy_vec2 v) {
 toy_vec2 toy_vec2_add(toy_vec2 a, toy_vec2 b) {
     toy_vec2 result = { a.x + b.x, a.y + b.y };
     return result;
+}
+
+int toy_sum_variadic(int count, ...) {
+    va_list args;
+    va_start(args, count);
+    int sum = 0;
+    for (int i = 0; i < count; i++) {
+        sum += va_arg(args, int);
+    }
+    va_end(args);
+    return sum;
+}
+
+double toy_sum_doubles(int count, ...) {
+    va_list args;
+    va_start(args, count);
+    double sum = 0.0;
+    for (int i = 0; i < count; i++) {
+        sum += va_arg(args, double);
+    }
+    va_end(args);
+    return sum;
 }

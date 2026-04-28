@@ -1,0 +1,57 @@
+use "testing" ;
+use "ffi" ;
+
+\\ Helper to locate the toy shared library.
+toy-lib-ext: ( -- ext ) [
+  sys-info "os" @get "macos" = [ ".dylib" ] [ ".so" ] if
+] ;
+
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy" #append toy-lib-ext #append
+] ;
+
+toy-lib-path lib-open
+
+"untyped variadic: sum of 3 ints" test-section
+
+dup "toy_sum_variadic" lib-symbol ffi{ i32 ... -> i32 } bind-sig
+3 { 10 20 30 } 2 pick-n ffi-call
+60 "toy_sum_variadic(3, 10, 20, 30) = 60" assert=
+drop
+
+"typed variadic: sum of 2 ints" test-section
+
+dup "toy_sum_variadic" lib-symbol ffi{ i32 ...i32 -> i32 } bind-sig
+2 { 100 200 } 2 pick-n ffi-call
+300 "toy_sum_variadic(2, 100, 200) = 300" assert=
+drop
+
+"zero variadic args" test-section
+
+dup "toy_sum_variadic" lib-symbol ffi{ i32 ... -> i32 } bind-sig
+0 { } 2 pick-n ffi-call
+0 "toy_sum_variadic(0) = 0" assert=
+drop
+
+"typed variadic f64: sum of doubles" test-section
+
+dup "toy_sum_doubles" lib-symbol ffi{ i32 ...f64 -> f64 } bind-sig
+2 { 1.5 2.5 } 2 pick-n ffi-call
+4.0 "toy_sum_doubles(2, 1.5, 2.5) = 4.0" assert=
+drop
+
+"untyped variadic f64 inference" test-section
+
+dup "toy_sum_doubles" lib-symbol ffi{ i32 ... -> f64 } bind-sig
+3 { 1.0 2.0 3.0 } 2 pick-n ffi-call
+6.0 "toy_sum_doubles(3, 1.0, 2.0, 3.0) = 6.0" assert=
+drop
+
+"single variadic arg" test-section
+
+dup "toy_sum_variadic" lib-symbol ffi{ i32 ... -> i32 } bind-sig
+1 { 42 } 2 pick-n ffi-call
+42 "toy_sum_variadic(1, 42) = 42" assert=
+drop
+
+resource-close

@@ -48,7 +48,29 @@ pub const FfiType = struct {
 pub const FfiSignature = struct {
     param_types: []const FfiType,
     return_type: FfiType,
+    n_fixed_params: ?usize = null,
+    variadic_type: ?FfiType = null,
+
+    pub fn isVariadic(self: FfiSignature) bool {
+        return self.n_fixed_params != null;
+    }
 };
+
+pub const VariadicSpec = struct {
+    typed: ?FfiType,
+};
+
+pub fn parseVariadicToken(token: []const u8) ?VariadicSpec {
+    if (std.mem.eql(u8, token, "...")) {
+        return .{ .typed = null };
+    }
+    if (std.mem.startsWith(u8, token, "...")) {
+        const type_suffix = token["...".len..];
+        const ffi_type = parseBaseType(type_suffix) catch return null;
+        return .{ .typed = ffi_type };
+    }
+    return null;
+}
 
 pub const ParseError = error{
     UnknownFfiType,
@@ -269,4 +291,56 @@ test "parseTypeToken non-inout params have is_inout false" {
 
     const out_i32 = try parseTypeToken("out-i32");
     try std.testing.expect(!out_i32.is_inout());
+}
+
+test "parseVariadicToken bare ellipsis" {
+    const result = parseVariadicToken("...").?;
+    try std.testing.expect(result.typed == null);
+}
+
+test "parseVariadicToken typed i64" {
+    const result = parseVariadicToken("...i64").?;
+    try std.testing.expectEqual(FfiTypeTag.i64, result.typed.?.tag);
+}
+
+test "parseVariadicToken typed f64" {
+    const result = parseVariadicToken("...f64").?;
+    try std.testing.expectEqual(FfiTypeTag.f64, result.typed.?.tag);
+}
+
+test "parseVariadicToken typed i32" {
+    const result = parseVariadicToken("...i32").?;
+    try std.testing.expectEqual(FfiTypeTag.i32, result.typed.?.tag);
+}
+
+test "parseVariadicToken typed cstring" {
+    const result = parseVariadicToken("...cstring").?;
+    try std.testing.expectEqual(FfiTypeTag.cstring, result.typed.?.tag);
+}
+
+test "parseVariadicToken non-variadic returns null" {
+    try std.testing.expect(parseVariadicToken("i32") == null);
+    try std.testing.expect(parseVariadicToken("ptr") == null);
+    try std.testing.expect(parseVariadicToken("void") == null);
+    try std.testing.expect(parseVariadicToken("cstring") == null);
+}
+
+test "parseVariadicToken invalid suffix returns null" {
+    try std.testing.expect(parseVariadicToken("...banana") == null);
+    try std.testing.expect(parseVariadicToken("...out-i32") == null);
+}
+
+test "FfiSignature isVariadic" {
+    const non_var = FfiSignature{
+        .param_types = &.{},
+        .return_type = .{ .tag = .void_type },
+    };
+    try std.testing.expect(!non_var.isVariadic());
+
+    const var_sig = FfiSignature{
+        .param_types = &.{.{ .tag = .i32 }},
+        .return_type = .{ .tag = .i32 },
+        .n_fixed_params = 1,
+    };
+    try std.testing.expect(var_sig.isVariadic());
 }

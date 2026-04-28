@@ -52,4 +52,7 @@ typedef struct { float x; float y; } toy_vec2;
 float toy_vec2_length_sq(toy_vec2 v);
 toy_vec2 toy_vec2_add(toy_vec2 a, toy_vec2 b);
 
+int toy_sum_variadic(int count, ...);
+double toy_sum_doubles(int count, ...);
+
 #endif

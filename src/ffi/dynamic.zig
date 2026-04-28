@@ -21,6 +21,7 @@ const signature = @import("signature.zig");
 const FfiType = signature.FfiType;
 const FfiTypeTag = signature.FfiTypeTag;
 const FfiSignature = signature.FfiSignature;
+const VariadicSpec = signature.VariadicSpec;
 
 const struct_layout = @import("struct_layout.zig");
 const FfiStructLayout = struct_layout.FfiStructLayout;
@@ -227,7 +228,9 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
     };
 
     // Parse param type tokens
-    var param_types = try alloc.alloc(FfiType, params_array.len);
+    var param_list = std.ArrayListUnmanaged(FfiType){};
+    var variadic_spec: ?VariadicSpec = null;
+
     for (params_array, 0..) |param_val, i| {
         const token = switch (param_val) {
             .string => |s| s,
@@ -236,24 +239,44 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
                 return error.TypeMismatch;
             },
         };
-        param_types[i] = signature.parseTypeToken(token) catch {
-            if (resolveStructType(ctx, token)) |struct_type| {
-                param_types[i] = struct_type;
-            } else {
-                helpers.setErrorContext(ctx, "unknown FFI type: {s}", .{token});
+
+        if (signature.parseVariadicToken(token)) |vspec| {
+            if (variadic_spec != null) {
+                helpers.setErrorContext(ctx, "duplicate variadic marker in FFI signature", .{});
                 return error.FFITypeMismatch;
             }
+            if (i != params_array.len - 1) {
+                helpers.setErrorContext(ctx, "variadic marker must be the last parameter token", .{});
+                return error.FFITypeMismatch;
+            }
+            if (param_list.items.len == 0) {
+                helpers.setErrorContext(ctx, "variadic function must have at least one fixed parameter", .{});
+                return error.FFITypeMismatch;
+            }
+            variadic_spec = vspec;
             continue;
+        }
+
+        const ffi_type = signature.parseTypeToken(token) catch {
+            if (resolveStructType(ctx, token)) |struct_type| {
+                try param_list.append(alloc, struct_type);
+                continue;
+            }
+            helpers.setErrorContext(ctx, "unknown FFI type: {s}", .{token});
+            return error.FFITypeMismatch;
         };
-        if (param_types[i].tag == .void_type) {
+        if (ffi_type.tag == .void_type) {
             helpers.setErrorContext(ctx, "void is not valid as a parameter type", .{});
             return error.FFITypeMismatch;
         }
-        if (param_types[i].tag == .struct_type and (param_types[i].is_out() or param_types[i].is_inout())) {
+        if (ffi_type.tag == .struct_type and (ffi_type.is_out() or ffi_type.is_inout())) {
             helpers.setErrorContext(ctx, "out/inout parameters are not supported for struct types", .{});
             return error.FFITypeMismatch;
         }
+        try param_list.append(alloc, ffi_type);
     }
+
+    const param_types = try param_list.toOwnedSlice(alloc);
 
     // Parse return type token
     const return_type = signature.parseTypeToken(return_type_str) catch blk: {
@@ -273,6 +296,8 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
     sig.* = .{
         .param_types = param_types,
         .return_type = return_type,
+        .n_fixed_params = if (variadic_spec != null) param_types.len else null,
+        .variadic_type = if (variadic_spec) |vs| vs.typed else null,
     };
 
     ffi_fn.ffi_signature = sig;
@@ -375,6 +400,10 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
         helpers.setErrorContext(ctx, "ffi-fn has no bound signature (use bind-sig)", .{});
         return error.FFICallFailed;
     };
+
+    if (sig.isVariadic()) {
+        return nativeFfiCallVariadic(ctx, ffi_fn, sig);
+    }
 
     const nargs = sig.param_types.len;
 
@@ -487,6 +516,250 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
     }
 
     // Return value goes on top
+    try marshalReturn(ctx, sig.return_type, &ret_storage, ret_ba);
+}
+
+/// Infer an FFI type from a 1z value for untyped variadic arguments.
+fn inferFfiType(val: Value) ?FfiType {
+    return switch (val) {
+        .fixnum => .{ .tag = .i64 },
+        .float => .{ .tag = .f64 },
+        .string => .{ .tag = .cstring },
+        .boolean => .{ .tag = .i32 },
+        .resource => .{ .tag = .ptr },
+        else => null,
+    };
+}
+
+/// Apply C default argument promotions for variadic arguments.
+/// C requires that float promotes to double and integer types narrower than
+/// int promote to int when passed through `...`.
+fn promoteVariadicType(ffi_type: FfiType) FfiType {
+    return switch (ffi_type.tag) {
+        .i8, .i16 => .{ .tag = .i32 },
+        .u8, .u16 => .{ .tag = .u32 },
+        .f32 => .{ .tag = .f64 },
+        .bool_type => .{ .tag = .i32 },
+        else => ffi_type,
+    };
+}
+
+/// Marshal a single variadic argument into an ArgSlot, applying type promotion.
+fn marshalVariadicArg(ctx: *Context, promoted_type: FfiType, val: Value, vararg_index: usize) !ArgSlot {
+    const alloc = ctx.arena.allocator();
+    switch (promoted_type.tag) {
+        inline .i32, .i64, .u32, .u64, .usize_type, .isize_type => |tag| {
+            const T = ffiTagToZigType(tag);
+            const fixnum = switch (val) {
+                .fixnum => |v| v,
+                .boolean => |b| @as(i64, if (b) 1 else 0),
+                else => {
+                    helpers.setErrorContext(ctx, "variadic argument {d}: expected fixnum, got {s}", .{ vararg_index + 1, helpers.valueTypeName(val) });
+                    return error.FFITypeMismatch;
+                },
+            };
+            const info = @typeInfo(T).int;
+            if (info.signedness == .unsigned and info.bits >= 64) {
+                try checkNonNegative(ctx, fixnum, ffiTypeDisplayName(tag), vararg_index);
+            } else if (info.bits < 64) {
+                try checkIntRange(ctx, fixnum, T, ffiTypeDisplayName(tag), vararg_index);
+            }
+            return marshalFixnumToSlot(tag, fixnum);
+        },
+        .f64 => {
+            const float = switch (val) {
+                .float => |v| v,
+                else => {
+                    helpers.setErrorContext(ctx, "variadic argument {d}: expected float, got {s}", .{ vararg_index + 1, helpers.valueTypeName(val) });
+                    return error.FFITypeMismatch;
+                },
+            };
+            return .{ .f64_val = float };
+        },
+        .cstring => {
+            const str = switch (val) {
+                .string => |s| s,
+                else => {
+                    helpers.setErrorContext(ctx, "variadic argument {d}: expected string, got {s}", .{ vararg_index + 1, helpers.valueTypeName(val) });
+                    return error.FFITypeMismatch;
+                },
+            };
+            const cstr = try alloc.dupeZ(u8, str);
+            return .{ .ptr_val = @ptrCast(cstr.ptr) };
+        },
+        .ptr => {
+            const resource = switch (val) {
+                .resource => |r| r,
+                else => {
+                    helpers.setErrorContext(ctx, "variadic argument {d}: expected resource, got {s}", .{ vararg_index + 1, helpers.valueTypeName(val) });
+                    return error.FFITypeMismatch;
+                },
+            };
+            try error_mapping.ensureResourceOpen(resource);
+            return .{ .ptr_val = resource.ptr };
+        },
+        else => {
+            helpers.setErrorContext(ctx, "variadic argument {d}: unsupported type for variadic parameter", .{vararg_index + 1});
+            return error.FFITypeMismatch;
+        },
+    }
+}
+
+/// Variadic FFI call path. Pops a sequence of variadic args from the stack,
+/// marshals fixed and variadic args, and calls ffi_prep_cif_var + ffi_call.
+fn nativeFfiCallVariadic(ctx: *Context, ffi_fn: *Resource, sig: *const FfiSignature) anyerror!void {
+    const alloc = ctx.arena.allocator();
+    const n_fixed = sig.n_fixed_params.?;
+
+    // Pop the variadic args array from top of stack
+    const varargs_val = try ctx.stack.pop();
+    const varargs = switch (varargs_val) {
+        .array => |a| a,
+        else => {
+            helpers.setTypeMismatchError(ctx, "array for variadic arguments", varargs_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const n_varargs = varargs.len;
+    const n_total = n_fixed + n_varargs;
+
+    if (n_total > 32) {
+        helpers.setErrorContext(ctx, "ffi-call: too many arguments ({d} total, max 32)", .{n_total});
+        return error.FFICallFailed;
+    }
+
+    // Count non-out fixed params to know how many values to pop
+    var n_fixed_stack_args: usize = 0;
+    for (sig.param_types[0..n_fixed]) |pt| {
+        if (!pt.is_out()) n_fixed_stack_args += 1;
+    }
+
+    if (ctx.stack.depth() < n_fixed_stack_args) {
+        helpers.setErrorContext(ctx, "ffi-call expected {d} fixed arguments, got {d}", .{ n_fixed_stack_args, ctx.stack.depth() });
+        return error.FFICallFailed;
+    }
+
+    // Pop fixed args from stack (rightmost = top-of-stack = last C param)
+    var fixed_vals = try alloc.alloc(Value, n_fixed_stack_args);
+    var pop_i: usize = n_fixed_stack_args;
+    while (pop_i > 0) {
+        pop_i -= 1;
+        fixed_vals[pop_i] = try ctx.stack.pop();
+    }
+
+    // Allocate combined arrays for all args (fixed + variadic)
+    var arg_types = try alloc.alloc([*c]c_ffi.ffi_type, n_total);
+    var arg_slots = try alloc.alloc(ArgSlot, n_total);
+    var arg_ptrs = try alloc.alloc(?*anyopaque, n_total);
+    var out_ptr_slots = try alloc.alloc(?*anyopaque, n_total);
+
+    // Marshal fixed params
+    var stack_arg_idx: usize = 0;
+    for (sig.param_types[0..n_fixed], 0..) |param_type, pi| {
+        if (param_type.is_out()) {
+            arg_slots[pi] = std.mem.zeroes(ArgSlot);
+            out_ptr_slots[pi] = @ptrCast(&arg_slots[pi]);
+            arg_types[pi] = &c_ffi.ffi_type_pointer;
+            arg_ptrs[pi] = @ptrCast(&out_ptr_slots[pi]);
+        } else if (param_type.is_inout()) {
+            arg_slots[pi] = try marshalArg(ctx, param_type, fixed_vals[stack_arg_idx], stack_arg_idx);
+            out_ptr_slots[pi] = @ptrCast(&arg_slots[pi]);
+            arg_types[pi] = &c_ffi.ffi_type_pointer;
+            arg_ptrs[pi] = @ptrCast(&out_ptr_slots[pi]);
+            stack_arg_idx += 1;
+        } else if (param_type.tag == .struct_type) {
+            arg_types[pi] = ffiTypeToLibffiExt(param_type);
+            const ba = try extractStructByteArray(ctx, param_type, fixed_vals[stack_arg_idx], stack_arg_idx);
+            arg_ptrs[pi] = @ptrCast(ba.slice().ptr);
+            arg_slots[pi] = std.mem.zeroes(ArgSlot);
+            out_ptr_slots[pi] = null;
+            stack_arg_idx += 1;
+        } else {
+            arg_types[pi] = ffiTypeToLibffi(param_type.tag);
+            arg_slots[pi] = try marshalArg(ctx, param_type, fixed_vals[stack_arg_idx], stack_arg_idx);
+            arg_ptrs[pi] = @ptrCast(&arg_slots[pi]);
+            out_ptr_slots[pi] = null;
+            stack_arg_idx += 1;
+        }
+    }
+
+    // Marshal variadic args
+    for (varargs, 0..) |vararg_val, vi| {
+        const total_idx = n_fixed + vi;
+        const vararg_type = if (sig.variadic_type) |vt|
+            vt
+        else
+            inferFfiType(vararg_val) orelse {
+                helpers.setErrorContext(ctx, "variadic argument {d}: cannot infer FFI type from {s}", .{ vi + 1, helpers.valueTypeName(vararg_val) });
+                return error.FFITypeMismatch;
+            };
+
+        const promoted_type = promoteVariadicType(vararg_type);
+
+        arg_types[total_idx] = ffiTypeToLibffi(promoted_type.tag);
+        arg_slots[total_idx] = try marshalVariadicArg(ctx, promoted_type, vararg_val, vi);
+        arg_ptrs[total_idx] = @ptrCast(&arg_slots[total_idx]);
+        out_ptr_slots[total_idx] = null;
+    }
+
+    // Use ffi_prep_cif_var for variadic calls
+    var cif: c_ffi.ffi_cif = undefined;
+    const prep_status = c_ffi.ffi_prep_cif_var(
+        &cif,
+        c_ffi.FFI_DEFAULT_ABI,
+        @intCast(n_fixed),
+        @intCast(n_total),
+        ffiTypeToLibffiExt(sig.return_type),
+        if (n_total > 0) arg_types.ptr else null,
+    );
+    if (prep_status != c_ffi.FFI_OK) {
+        helpers.setErrorContext(ctx, "ffi_prep_cif_var failed (status {d})", .{prep_status});
+        return error.FFICallFailed;
+    }
+
+    // Call the foreign function
+    var ret_storage: ReturnStorage = .{ .as_u64 = 0 };
+    var ret_ba: ?*ByteArray = null;
+    var ret_buf: *anyopaque = undefined;
+
+    if (sig.return_type.tag == .struct_type) {
+        const layout = sig.return_type.struct_layout.?;
+        const ba = try alloc.create(ByteArray);
+        ba.* = ByteArray{};
+        try ba.ensureTotalCapacity(alloc, layout.total_size);
+        ba.items.len = layout.total_size;
+        @memset(ba.items[0..layout.total_size], 0);
+        ret_ba = ba;
+        ret_buf = @ptrCast(ba.slice().ptr);
+    } else {
+        ret_buf = @ptrCast(&ret_storage);
+    }
+
+    const fn_ptr: ?*const fn () callconv(.c) void = @ptrCast(@alignCast(ffi_fn.ptr.?));
+    c_ffi.ffi_call(
+        &cif,
+        fn_ptr,
+        ret_buf,
+        if (n_total > 0) arg_ptrs.ptr else null,
+    );
+
+    if (ctx.callback_error) |err| {
+        ctx.callback_error = null;
+        if (ctx.callback_error_context) |ectx| {
+            helpers.setErrorContext(ctx, "{s}", .{ectx});
+            ctx.callback_error_context = null;
+        }
+        return err;
+    }
+
+    // Push out-param values for fixed params
+    for (sig.param_types[0..n_fixed], 0..) |param_type, pi| {
+        if (param_type.is_out() or param_type.is_inout()) {
+            try marshalOutParam(ctx, param_type, &arg_slots[pi]);
+        }
+    }
+
     try marshalReturn(ctx, sig.return_type, &ret_storage, ret_ba);
 }
 
@@ -991,6 +1264,11 @@ fn nativeBindClose(ctx: *Context) anyerror!void {
         return error.FFICallFailed;
     };
 
+    if (sig.isVariadic()) {
+        helpers.setErrorContext(ctx, "bind-close does not support variadic signatures", .{});
+        return error.FFITypeMismatch;
+    }
+
     if (sig.param_types.len != 1 or sig.param_types[0].tag != .ptr) {
         helpers.setErrorContext(ctx, "bind-close requires signature with exactly one ptr parameter", .{});
         return error.FFITypeMismatch;
@@ -1200,6 +1478,18 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     };
+
+    // Check for variadic tokens before parsing
+    for (params_array) |pv| {
+        const tok = switch (pv) {
+            .string => |s| s,
+            else => continue,
+        };
+        if (signature.parseVariadicToken(tok) != null) {
+            helpers.setErrorContext(ctx, "variadic signatures are not supported for callbacks", .{});
+            return error.FFITypeMismatch;
+        }
+    }
 
     var param_types = try alloc.alloc(FfiType, params_array.len);
     for (params_array, 0..) |param_val, i| {

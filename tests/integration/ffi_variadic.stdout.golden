@@ -1,0 +1,46 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ <resource:dylib> ]
+=== untyped variadic: sum of 3 ints ===
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 60 ]
+PASS: toy_sum_variadic(3, 10, 20, 30) = 60
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+=== typed variadic: sum of 2 ints ===
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 300 ]
+PASS: toy_sum_variadic(2, 100, 200) = 300
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+=== zero variadic args ===
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 0 ]
+PASS: toy_sum_variadic(0) = 0
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+=== typed variadic f64: sum of doubles ===
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 4.0 ]
+PASS: toy_sum_doubles(2, 1.5, 2.5) = 4.0
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+=== untyped variadic f64 inference ===
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 6.0 ]
+PASS: toy_sum_doubles(3, 1.0, 2.0, 3.0) = 6.0
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+=== single variadic arg ===
+Stack: [ <resource:dylib> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> <resource:ffi-fn> 42 ]
+PASS: toy_sum_variadic(1, 42) = 42
+Stack: [ <resource:dylib> <resource:ffi-fn> ]
+Stack: [ <resource:dylib> ]
+Stack: [ ]
