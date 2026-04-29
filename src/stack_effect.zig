@@ -56,6 +56,22 @@ pub const StackEffect = struct {
     }
 };
 
+/// Check if a parameter name is a row variable (starts with "..")
+pub fn isRowVariable(name: []const u8) bool {
+    return name.len >= 2 and name[0] == '.' and name[1] == '.';
+}
+
+/// Check if a stack effect contains any row variables in its inputs or outputs.
+pub fn hasAnyRowVariable(effect: StackEffect) bool {
+    for (effect.inputs) |param| {
+        if (isRowVariable(param.name)) return true;
+    }
+    for (effect.outputs) |param| {
+        if (isRowVariable(param.name)) return true;
+    }
+    return false;
+}
+
 // =============================================================================
 // Tests
 // =============================================================================

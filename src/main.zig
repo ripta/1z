@@ -19,6 +19,7 @@ const memory_limit = @import("memory_limit.zig");
 const MemoryLimitAllocator = memory_limit.MemoryLimitAllocator;
 const trace_mod = @import("trace.zig");
 const call_graph = @import("call_graph.zig");
+const effect_inference = @import("effect_inference.zig");
 
 const build_options = @import("build_options");
 pub const version = build_options.version;
@@ -919,6 +920,35 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
             err_writer.flush() catch {};
             return 1;
         };
+
+        var engine = effect_inference.InferenceEngine.init(&ctx.dictionary, &ctx.dispatch, ctx.local_frames.items, ctx.quotationAllocator());
+        defer engine.deinit();
+        engine.analyzeAll(ctx.current_source) catch |err| {
+            err_writer.print("Error during effect inference: {any}\n", .{err}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        };
+
+        for (engine.getDiagnostics()) |diag| {
+            if (diag.source_file) |src| {
+                err_writer.print("{s}:{d}: {s}: {s}: {s}\n", .{
+                    src,
+                    diag.source_line,
+                    @tagName(diag.severity),
+                    diag.word_name,
+                    diag.message,
+                }) catch {};
+            } else {
+                err_writer.print("{s}: {s}: {s}\n", .{
+                    @tagName(diag.severity),
+                    diag.word_name,
+                    diag.message,
+                }) catch {};
+            }
+        }
+        err_writer.flush() catch {};
+
+        if (engine.hasErrors()) return 1;
     }
 
     return 0;
@@ -964,4 +994,5 @@ test {
     _ = @import("multiplexer.zig");
     _ = @import("trace.zig");
     _ = @import("call_graph.zig");
+    _ = @import("effect_inference.zig");
 }

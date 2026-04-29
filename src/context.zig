@@ -3,26 +3,35 @@ const Allocator = std.mem.Allocator;
 
 const Stack = @import("stack.zig").Stack;
 const Dictionary = @import("dictionary.zig").Dictionary;
+
 const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
+const Quotation = value_mod.Quotation;
+const Value = value_mod.Value;
+
 const debugger_mod = @import("debugger/mod.zig");
+
 const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
+
 const dispatch_mod = @import("dispatch.zig");
 const DispatchEntry = dispatch_mod.DispatchEntry;
 const DispatchTable = dispatch_mod.DispatchTable;
+
 const Scheduler = @import("scheduler.zig").Scheduler;
-const Quotation = value_mod.Quotation;
-const Value = value_mod.Value;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const primitives = @import("primitives.zig");
 const parser = @import("parser.zig");
 const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
+
 const trace_mod = @import("trace.zig");
 const TraceConfig = trace_mod.TraceConfig;
-const StackEffect = @import("stack_effect.zig").StackEffect;
-const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
+
 const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
 const markers_mod = @import("primitives/markers.zig");
+
+const stack_effect_mod = @import("stack_effect.zig");
+const StackEffect = stack_effect_mod.StackEffect;
+const StackEffectParam = stack_effect_mod.StackEffectParam;
 
 /// Embedded prelude source code
 const prelude_source = @embedFile("prelude.1z");
@@ -1037,9 +1046,8 @@ pub const Context = struct {
         return false;
     }
 
-    /// Check if a name is a row variable (starts with "..")
     fn isRowVariable(name: []const u8) bool {
-        return name.len >= 2 and name[0] == '.' and name[1] == '.';
+        return stack_effect_mod.isRowVariable(name);
     }
 
     /// Check if a row variable name is defined in a word's effect (inputs or outputs).
