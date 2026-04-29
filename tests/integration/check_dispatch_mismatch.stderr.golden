@@ -1,0 +1,1 @@
+tests/integration/check_dispatch_mismatch.1z:4: err: my-op: dispatch entry for (fixnum, ) has delta -1, but base body has delta 1

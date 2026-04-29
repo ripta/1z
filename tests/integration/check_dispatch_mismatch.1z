@@ -1,0 +1,7 @@
+\ Test that --check detects dispatch entry delta disagreeing with base body
+
+\ Base body: ( x -- x x ) -- delta of +1
+my-op: ( x -- x x ) generic [ dup ] ;
+
+\ Dispatch entry: ( x -- ) -- delta of -1, mismatches base delta of +1
+my-op: method{ fixnum } [ drop ] ;
