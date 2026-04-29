@@ -1,0 +1,16 @@
+use "testing" ;
+
+"until basic behavior" test-section
+
+\ Count up from 0 until reaching 5
+0 [ dup 5 >= ] [ ++ ] until
+5 "until counts to 5" assert=
+
+\ Count down from 10 until reaching 0
+10 [ dup 0 <= ] [ -- ] until
+0 "until counts down to 0" assert=
+
+"until exits immediately when predicate is true" test-section
+
+42 [ t ] [ 1 + ] until
+42 "until with immediately-true predicate" assert=

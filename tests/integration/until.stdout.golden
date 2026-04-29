@@ -1,0 +1,13 @@
+=== until basic behavior ===
+Stack: [ ]
+Stack: [ 5 ]
+PASS: until counts to 5
+Stack: [ ]
+Stack: [ 0 ]
+PASS: until counts down to 0
+Stack: [ ]
+=== until exits immediately when predicate is true ===
+Stack: [ ]
+Stack: [ 42 ]
+PASS: until with immediately-true predicate
+Stack: [ ]

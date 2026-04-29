@@ -387,6 +387,10 @@ times: loop-combinator ( n quot -- ) [
 while: loop-combinator ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b ) [
   swap do compose [ loop ] curry when
 ] ;
+\\ Loop until the predicate returns true, executing the body each iteration.
+until: loop-combinator ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b ) [
+  [ [ not ] compose ] dip while
+] ;
 \\ Execute the body once before checking the predicate in a `while` loop.
 do: ( pred body -- pred body ) [ dup 2dip ] ;
 \\ Repeatedly call a quotation while it returns true.
