@@ -232,7 +232,7 @@ fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator,
                     .needs_more_input => {},
                     .parse_error => |e| return e,
                     .complete => |instrs| {
-                        if (instrs.len > 0) {
+                        if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
                             try ctx.executeQuotation(.{ .instructions = instrs });
                         }
                     },
@@ -246,7 +246,7 @@ fn nativeLoadImpl(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator,
             .needs_more_input => continue,
             .parse_error => |err| return err,
             .complete => |instrs| {
-                if (instrs.len > 0) {
+                if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
                     try ctx.executeQuotation(.{ .instructions = instrs });
                 }
                 processor.reset();

@@ -135,6 +135,7 @@ pub fn main() u8 {
     var trace_config = trace_mod.TraceConfig{};
     var deadlock_detect_ns: ?i128 = null;
     var test_timeout_ns: ?u64 = null;
+    var check_mode = false;
 
     // TODO(ripta): bit hacky arg parsing, improve later?
     for (args[1..]) |arg| {
@@ -228,6 +229,8 @@ pub fn main() u8 {
                 return 1;
             };
             test_timeout_ns = secs * std.time.ns_per_s;
+        } else if (std.mem.eql(u8, arg, "--check")) {
+            check_mode = true;
         } else {
             file_path = arg;
         }
@@ -322,6 +325,7 @@ pub fn main() u8 {
     ctx.loadPrelude(external_prelude) catch |err| {
         std.debug.panic("Failed to load prelude: {any}", .{err});
     };
+    ctx.check_mode = check_mode;
     if (bench_config.enabled) {
         bench_stats.markPreludeEnd();
     }
@@ -845,8 +849,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                         return 1;
                     },
                     .complete => |instrs| {
-                        if (instrs.len > 0) {
-                            // Adjust line numbers in instructions based on file position
+                        if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
                             adjustInstructionLines(instrs, processor.start_line);
                             ctx.executeQuotation(.{ .instructions = instrs }) catch |e| {
                                 if (e == debugger_mod.DebuggerQuit.DebuggerQuit) return 0;
@@ -889,8 +892,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                 return 1;
             },
             .complete => |instrs| {
-                if (instrs.len > 0) {
-                    // Adjust line numbers in instructions based on file position
+                if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
                     adjustInstructionLines(instrs, processor.start_line);
                     ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
                         if (err == debugger_mod.DebuggerQuit.DebuggerQuit) return 0;

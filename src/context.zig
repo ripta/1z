@@ -167,11 +167,26 @@ pub const Context = struct {
     pragma_registry: std.StringHashMapUnmanaged(PragmaRegistration) = .{},
     /// Stack of pragma frames for file-scoped pragma values.
     pragma_frames: std.ArrayListUnmanaged(PragmaFrame) = .{},
+    /// When true, only definition statements (ending with `;`) are executed
+    /// at the top level. All other runtime statements are skipped. Parse-time
+    /// words still execute during parsing.
+    check_mode: bool = false,
     /// Parent context for dictionary and dispatch table lookup chaining.
     /// Task contexts walk this chain to find words and methods defined in
     /// ancestor scopes, up to the root context which holds primitives and
     /// prelude words.
     parent_context: ?*const Context = null,
+
+    /// Returns true when the instruction sequence ends with a call to `;`,
+    /// which means it is a word definition and should be executed even in
+    /// check mode.
+    pub fn isDefinitionStatement(instrs: []const Instruction) bool {
+        if (instrs.len == 0) return false;
+        return switch (instrs[instrs.len - 1].op) {
+            .call_word => |name| std.mem.eql(u8, name, ";"),
+            .push_literal => false,
+        };
+    }
 
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
