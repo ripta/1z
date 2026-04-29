@@ -1,0 +1,13 @@
+=== translate-c basic invocation ===
+PASS: translate-c returns a string
+PASS: output contains toy_add
+PASS: output contains toy_strlen
+PASS: output contains toy_greeting
+PASS: output contains struct decls
+PASS: output contains toy_vec2
+PASS: output contains opaque type
+=== translate-c with flags ===
+PASS: translate-c with flags returns a string
+PASS: output with flags contains toy_add
+=== translate-c error handling ===
+PASS: translate-c throws on bad input

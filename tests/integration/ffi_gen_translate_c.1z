@@ -1,0 +1,32 @@
+use "testing" ;
+use "ffi-gen" ;
+
+contains?: ( haystack needle -- ? ) [ #index-of f = not ] ;
+
+"translate-c basic invocation" test-section
+
+\ Translate the toy header with no extra flags
+"ext/toy/toy.h" { } translate-c
+
+\ Verify the output is a string containing expected declarations
+dup string? "translate-c returns a string" assert-true
+dup "pub extern fn toy_add" contains? "output contains toy_add" assert-true
+dup "pub extern fn toy_strlen" contains? "output contains toy_strlen" assert-true
+dup "pub extern fn toy_greeting" contains? "output contains toy_greeting" assert-true
+dup "extern struct" contains? "output contains struct decls" assert-true
+dup "toy_vec2" contains? "output contains toy_vec2" assert-true
+dup "opaque {}" contains? "output contains opaque type" assert-true
+drop
+
+"translate-c with flags" test-section
+
+\ Translate with an -I flag (validates flag passing)
+"ext/toy/toy.h" { "-I" "ext/toy" } translate-c
+dup string? "translate-c with flags returns a string" assert-true
+dup "pub extern fn toy_add" contains? "output with flags contains toy_add" assert-true
+drop
+
+"translate-c error handling" test-section
+
+\ Non-existent file should throw
+[ "nonexistent.h" { } translate-c ] "translate-c throws on bad input" assert-error

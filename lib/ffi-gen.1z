@@ -1,0 +1,22 @@
+\ lib/ffi-gen.1z - FFI binding generator
+\
+\ Generates 1z FFI bindings from C headers by parsing
+\ zig translate-c output.
+
+use "process" ;
+
+\\ Run zig translate-c on a C header file and return its Zig source output.
+\\ flags is an array of additional CLI flags (e.g., { "-I" "/usr/include" }).
+\\ Throws on non-zero exit.
+translate-c: ( header-path flags -- zig-source ) [
+  { "zig" "translate-c" } swap #append
+  swap 1array #append
+  <stdio-opts> capture-all
+  dup exit-code>> 0 =
+  [ stdout>> bytes> ]
+  [ stderr>> bytes>
+    "zig translate-c failed: " swap #append
+    f swap EUserThrown make-error throw
+  ]
+  if
+] ;
