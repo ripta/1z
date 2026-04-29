@@ -371,7 +371,7 @@ pub fn build(b: *std.Build) void {
         if (update_exit_code != 0) {
             update_run.expectExitCode(update_exit_code);
         }
-        if (has_stderr_golden or update_exit_code != 0) {
+        if (has_stderr_golden or update_exit_code != 0 or has_exitcode) {
             update_files.addCopyFileToSource(update_run.captureStdErr(), stderr_golden_path);
         }
     }

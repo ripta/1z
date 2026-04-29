@@ -299,6 +299,10 @@ pub const Context = struct {
             .native_validator = &control.nativeRequireDocValidator,
         });
 
+        try self.pragma_registry.put(self.allocator, "suppress-checks", .{
+            .native_validator = &@import("effect_inference.zig").nativeSuppressChecksValidator,
+        });
+
         // Split prelude into lines and process incrementally
         const source = external_source orelse prelude_source;
         var lines = std.mem.splitScalar(u8, source, '\n');

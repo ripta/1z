@@ -921,7 +921,22 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
             return 1;
         };
 
-        var engine = effect_inference.InferenceEngine.init(&ctx.dictionary, &ctx.dispatch, ctx.local_frames.items, ctx.quotationAllocator());
+        var severity_override: effect_inference.Severity = .err;
+        var suppressed = false;
+        if (ctx.getPragma("suppress-checks")) |pragma_val| {
+            switch (pragma_val) {
+                .string => |s| {
+                    if (std.mem.eql(u8, s, "warn-only")) {
+                        severity_override = .warning;
+                    } else if (std.mem.eql(u8, s, "all")) {
+                        suppressed = true;
+                    }
+                },
+                else => {},
+            }
+        }
+
+        var engine = effect_inference.InferenceEngine.init(&ctx.dictionary, &ctx.dispatch, ctx.local_frames.items, ctx.quotationAllocator(), severity_override, suppressed);
         defer engine.deinit();
         engine.analyzeAll(ctx.current_source) catch |err| {
             err_writer.print("Error during effect inference: {any}\n", .{err}) catch {};
