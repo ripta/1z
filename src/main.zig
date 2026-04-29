@@ -18,6 +18,7 @@ const CountingAllocator = benchmark.CountingAllocator;
 const memory_limit = @import("memory_limit.zig");
 const MemoryLimitAllocator = memory_limit.MemoryLimitAllocator;
 const trace_mod = @import("trace.zig");
+const call_graph = @import("call_graph.zig");
 
 const build_options = @import("build_options");
 pub const version = build_options.version;
@@ -912,6 +913,14 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
         }
     }
 
+    if (ctx.check_mode) {
+        _ = call_graph.build(&ctx.dictionary, &ctx.dispatch, ctx.quotationAllocator()) catch |err| {
+            err_writer.print("Error building call graph: {any}\n", .{err}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        };
+    }
+
     return 0;
 }
 
@@ -954,4 +963,5 @@ test {
     _ = @import("debugger/mod.zig");
     _ = @import("multiplexer.zig");
     _ = @import("trace.zig");
+    _ = @import("call_graph.zig");
 }
