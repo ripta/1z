@@ -1,0 +1,8 @@
+\ Parse-time words execute normally in check mode
+use "testing" ;
+
+point: struct{ x y } ;
+
+make-point: [ >point ] ;
+
+color: enum{ red green blue } ;
