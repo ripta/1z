@@ -88,6 +88,7 @@ bitand ( a b -- a&b )
 bitnot ( a -- ~a )
 bitor ( a b -- a|b )
 bitxor ( a b -- a^b )
+branch-combinator ( -- marker )
 buffering-mode ( stream -- symbol )
 bytes> ( byte-array -- string )
 call ( quot -- )
@@ -125,6 +126,7 @@ import ( module -- )
 inspect ( value -- string )
 interpolate ( source template -- string )
 load ( filename -- module )
+loop-combinator ( -- marker )
 lowercase ( str -- str )
 make-benchmark-report ( -- report )
 make-byte-array ( quotation -- byte-array )
@@ -448,6 +450,7 @@ unmake-result:ok
 unmake-source-loc
 unmake-stack-effect
 unmake-word-info
+until ( ..a pred body -- ..b )
 unwrap-or ( opt/res default -- value )
 unwrap-or-throw ( opt/res -- value )
 use

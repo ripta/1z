@@ -1,0 +1,18 @@
+\ Verify combinator markers survive --check mode (parse-time only)
+use "testing" ;
+
+"branch-combinator markers" test-section
+
+"if" word-markers [ branch-combinator = ] #filter #count 1 = t "if has branch-combinator" assert=
+"when" word-markers [ branch-combinator = ] #filter #count 1 = t "when has branch-combinator" assert=
+"unless" word-markers [ branch-combinator = ] #filter #count 1 = t "unless has branch-combinator" assert=
+"cond" word-markers [ branch-combinator = ] #filter #count 1 = t "cond has branch-combinator" assert=
+"case" word-markers [ branch-combinator = ] #filter #count 1 = t "case has branch-combinator" assert=
+"match" word-markers [ branch-combinator = ] #filter #count 1 = t "match has branch-combinator" assert=
+
+"loop-combinator markers" test-section
+
+"times" word-markers [ loop-combinator = ] #filter #count 1 = t "times has loop-combinator" assert=
+"while" word-markers [ loop-combinator = ] #filter #count 1 = t "while has loop-combinator" assert=
+"until" word-markers [ loop-combinator = ] #filter #count 1 = t "until has loop-combinator" assert=
+"loop" word-markers [ loop-combinator = ] #filter #count 1 = t "loop has loop-combinator" assert=
