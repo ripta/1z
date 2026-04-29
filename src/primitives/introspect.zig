@@ -2,7 +2,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Context = @import("../context.zig").Context;
 const dispatch_mod = @import("../dispatch.zig");
-const WordDefinition = @import("../dictionary.zig").WordDefinition;
+const dictionary_mod = @import("../dictionary.zig");
+const WordDefinition = dictionary_mod.WordDefinition;
+const WordProvenance = dictionary_mod.WordProvenance;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const HashTable = value_mod.HashTable;
@@ -19,6 +21,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = ">word", .func = nativeToWord },
     .{ .name = "all-words", .func = nativeAllWords },
     .{ .name = "scope-frames", .func = nativeScopeFrames },
+    .{ .name = "type-descriptor", .func = nativeTypeDescriptor },
 };
 
 fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: WordDefinition) !Value {
@@ -57,19 +60,33 @@ fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: 
         .native => .{ .boolean = false },
     };
 
-    const dispatch_keys = try ctx.dispatch.keysForWord(name, alloc);
-    const methods_arr = try alloc.alloc(Value, dispatch_keys.len);
-    for (dispatch_keys, 0..) |key, i| {
-        if (std.mem.eql(u8, key.type_b, dispatch_mod.unary_sentinel)) {
-            const types = try alloc.alloc(Value, 1);
-            types[0] = .{ .string = key.type_a };
-            methods_arr[i] = .{ .array = types };
-        } else {
-            const types = try alloc.alloc(Value, 2);
-            types[0] = .{ .string = key.type_a };
-            types[1] = .{ .string = key.type_b };
-            methods_arr[i] = .{ .array = types };
-        }
+    const dispatch_pairs = try ctx.dispatch.entriesForWord(name, alloc);
+    const methods_arr = try alloc.alloc(Value, dispatch_pairs.len);
+    for (dispatch_pairs, 0..) |pair, i| {
+        const types = if (std.mem.eql(u8, pair.key.type_b, dispatch_mod.unary_sentinel)) blk: {
+            const t = try alloc.alloc(Value, 1);
+            t[0] = .{ .string = pair.key.type_a };
+            break :blk t;
+        } else blk: {
+            const t = try alloc.alloc(Value, 2);
+            t[0] = .{ .string = pair.key.type_a };
+            t[1] = .{ .string = pair.key.type_b };
+            break :blk t;
+        };
+
+        const prov_val: Value = if (pair.entry.provenance) |dp| blk: {
+            const dp_fields = try alloc.alloc(Value, 4);
+            dp_fields[0] = .{ .string = dp.generator };
+            dp_fields[1] = .{ .string = dp.parent };
+            dp_fields[2] = .{ .string = dp.role };
+            dp_fields[3] = .{ .string = dp.field };
+            break :blk .{ .array = dp_fields };
+        } else .{ .boolean = false };
+
+        const method_fields = try alloc.alloc(Value, 2);
+        method_fields[0] = .{ .array = types };
+        method_fields[1] = prov_val;
+        methods_arr[i] = .{ .array = method_fields };
     }
 
     const source_loc_val: Value = if (word.source_file) |file| blk: {
@@ -85,8 +102,16 @@ fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: 
     else
         .{ .boolean = false };
 
-    // Raw array: name stack-effect doc markers native? body methods source-loc module
-    const wi_fields = try alloc.alloc(Value, 9);
+    const provenance_val: Value = if (word.provenance) |p| blk: {
+        const prov_fields = try alloc.alloc(Value, 3);
+        prov_fields[0] = .{ .string = p.generator };
+        prov_fields[1] = .{ .string = p.parent };
+        prov_fields[2] = .{ .string = p.role };
+        break :blk .{ .array = prov_fields };
+    } else .{ .boolean = false };
+
+    // Raw array: name stack-effect doc markers native? body methods source-loc module provenance
+    const wi_fields = try alloc.alloc(Value, 10);
     wi_fields[0] = .{ .string = name };
     wi_fields[1] = effect_val;
     wi_fields[2] = doc_val;
@@ -96,6 +121,7 @@ fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: 
     wi_fields[6] = .{ .array = methods_arr };
     wi_fields[7] = source_loc_val;
     wi_fields[8] = module_val;
+    wi_fields[9] = provenance_val;
 
     return .{ .array = wi_fields };
 }
@@ -120,6 +146,24 @@ fn nativeToWord(ctx: *Context) anyerror!void {
     };
 
     try ctx.stack.push(try buildWordInfo(alloc, ctx, name, word));
+}
+
+/// type-descriptor ( symbol -- mutable-map ) - Look up a type descriptor by name
+fn nativeTypeDescriptor(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const name = switch (val) {
+        .symbol => |s| s,
+        .string => |s| s,
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol", val);
+            return error.TypeMismatch;
+        },
+    };
+    const desc = ctx.lookupTypeDescriptor(name) orelse {
+        helpers.setErrorContext(ctx, "no type descriptor for '{s}'", .{name});
+        return error.NameError;
+    };
+    try ctx.stack.push(.{ .mutable_map = desc });
 }
 
 /// all-words ( -- array ) - Return an array of raw word-info arrays for every visible word.

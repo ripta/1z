@@ -161,6 +161,8 @@ pub const Context = struct {
     scheduler: ?*Scheduler = null,
     /// Enum registry mapping enum names to their variant VirtualType pointers.
     enum_registry: std.StringHashMapUnmanaged([]const *const value_mod.VirtualType) = .{},
+    /// Type descriptor registry mapping type names to their descriptor maps.
+    type_descriptors: std.StringHashMapUnmanaged(*value_mod.MutableMap) = .{},
     /// Registry of known pragma keys and their validation rules.
     pragma_registry: std.StringHashMapUnmanaged(PragmaRegistration) = .{},
     /// Stack of pragma frames for file-scoped pragma values.
@@ -322,6 +324,7 @@ pub const Context = struct {
         self.pragma_frames.deinit(self.allocator);
         self.pragma_registry.deinit(self.allocator);
         self.enum_registry.deinit(self.allocator);
+        self.type_descriptors.deinit(self.allocator);
         self.dispatch.deinit();
         self.arena.deinit();
         self.dictionary.deinit();
@@ -730,6 +733,19 @@ pub const Context = struct {
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
             if (ctx.enum_registry.get(enum_name)) |variants| return variants;
+            ancestor = ctx.parent_context;
+        }
+
+        return null;
+    }
+
+    /// Look up a type descriptor by type name, walking the parent context chain.
+    pub fn lookupTypeDescriptor(self: *const Context, name: []const u8) ?*value_mod.MutableMap {
+        if (self.type_descriptors.get(name)) |desc| return desc;
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| {
+            if (ctx.type_descriptors.get(name)) |desc| return desc;
             ancestor = ctx.parent_context;
         }
 

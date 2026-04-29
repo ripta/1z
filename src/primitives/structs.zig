@@ -16,6 +16,10 @@ const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
 const RegistryEntry = types_mod.RegistryEntry;
 
+const dictionary_mod = @import("../dictionary.zig");
+const WordProvenance = dictionary_mod.WordProvenance;
+const WordDefinition = dictionary_mod.WordDefinition;
+
 pub const primitives = [_]Primitive{
     .{ .name = "define-struct", .stack_effect = "name: descriptor markers --", .doc = "Define a struct type and its accessor words.", .func = nativeDefineStruct },
 };
@@ -136,7 +140,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     // FIELD>>: ( instance -- value ) - field getter
     for (fields_slice, 0..) |field, i| {
         const getter_name = try std.fmt.allocPrint(alloc, "{s}>>", .{field});
-        try defineFieldGetter(ctx, getter_name, struct_type, i, markers_slice);
+        try defineFieldGetter(ctx, getter_name, struct_type, i, markers_slice, field);
     }
 
     // >>FIELD: ( instance value -- instance ) - field setter (only if mutable)
@@ -146,9 +150,30 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     if (has_mutable) {
         for (fields_slice, 0..) |field, i| {
             const setter_name = try std.fmt.allocPrint(alloc, ">>{s}", .{field});
-            try defineFieldSetter(ctx, setter_name, struct_type, i, markers_slice);
+            try defineFieldSetter(ctx, setter_name, struct_type, i, markers_slice, field);
         }
     }
+
+    // Build generated-words reverse index
+    var generated_words = std.ArrayListUnmanaged(Value){};
+    try generated_words.append(alloc, .{ .string = make_name });
+    try generated_words.append(alloc, .{ .string = convert_name });
+    try generated_words.append(alloc, .{ .string = unmake_name });
+    try generated_words.append(alloc, .{ .string = to_hash_name });
+    try generated_words.append(alloc, .{ .string = pred_name });
+    for (fields_slice) |field| {
+        const gw_name = try std.fmt.allocPrint(alloc, "{s}>>", .{field});
+        try generated_words.append(alloc, .{ .string = gw_name });
+    }
+    if (has_mutable) {
+        for (fields_slice) |field| {
+            const gw_name = try std.fmt.allocPrint(alloc, ">>{s}", .{field});
+            try generated_words.append(alloc, .{ .string = gw_name });
+        }
+    }
+    const gw_slice = try generated_words.toOwnedSlice(alloc);
+    try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
+    try ctx.type_descriptors.put(ctx.allocator, name, desc_map);
 }
 
 /// Trampoline helper ( field1 .. fieldN struct-type -- instance )
@@ -295,6 +320,7 @@ fn defineConstructor(ctx: *Context, name: []const u8, struct_type: *const Struct
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
+        .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "constructor" },
         .action = .{ .compound = instrs },
     });
 }
@@ -310,6 +336,7 @@ fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const Stru
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
+        .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "hash-converter" },
         .action = .{ .compound = instrs },
     });
 }
@@ -325,6 +352,7 @@ fn defineDestructor(ctx: *Context, name: []const u8, struct_type: *const StructT
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
+        .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "destructor" },
         .action = .{ .compound = instrs },
     });
 }
@@ -340,6 +368,7 @@ fn defineToHash(ctx: *Context, name: []const u8, struct_type: *const StructType,
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
+        .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "to-hash" },
         .action = .{ .compound = instrs },
     });
 }
@@ -355,12 +384,13 @@ fn defineTypePredicate(ctx: *Context, name: []const u8, struct_type: *const Stru
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
+        .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "predicate" },
         .action = .{ .compound = instrs },
     });
 }
 
 /// FIELD>>: ( instance -- value ) - field getter (generic, dispatches on struct type)
-fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, _: []const *Marker) !void {
+fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, _: []const *Marker, field: []const u8) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 3);
@@ -390,7 +420,10 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
         .word_name = name,
         .type_a = struct_type.name,
         .type_b = dispatch_mod.unary_sentinel,
-    }, .{ .body = instrs }, true);
+    }, .{
+        .body = instrs,
+        .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "getter", .field = field },
+    }, true);
 }
 
 /// >>FIELD: ( instance value -- instance ) - field setter (generic, dispatches on struct type)
@@ -398,7 +431,7 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
 /// Setters use binary dispatch keyed on (struct_type, *) so the dispatch
 /// system matches the struct instance at stack position N-2 regardless of
 /// the value type at the top.
-fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, _: []const *Marker) !void {
+fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, _: []const *Marker, field: []const u8) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 3);
@@ -428,7 +461,10 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
         .word_name = name,
         .type_a = struct_type.name,
         .type_b = dispatch_mod.any_sentinel,
-    }, .{ .body = instrs }, true);
+    }, .{
+        .body = instrs,
+        .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "setter", .field = field },
+    }, true);
 }
 
 pub fn getStructTypeFromMaker(ctx: *const Context, maker_name: []const u8) ?*const StructType {

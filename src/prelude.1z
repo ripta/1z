@@ -562,22 +562,35 @@ stack-effect: struct{ inputs outputs } ;
 \\ Source location: file path, line number, and column number.
 source-loc: struct{ file line column } ;
 
+\\ Provenance metadata for generated words: generator, parent type, and role.
+provenance: struct{ generator parent role } ;
+
+\\ Provenance metadata for a dispatch entry: generator, parent type, role, and field name.
+dispatch-provenance: struct{ generator parent role field } ;
+
+\\ A single method entry: the dispatch type signature and optional provenance.
+method-info: struct{ types provenance } ;
+
 \\ Structured word information for runtime introspection.
-word-info: struct{ name stack-effect doc markers native? body methods source-loc module } ;
+word-info: struct{ name stack-effect doc markers native? body methods source-loc module provenance } ;
 
 \\ Convert a raw 9-element array from native.>word into a word-info struct.
 (raw>word-info): [
-  >stack-effect: [ dup f = [ ] [ dup #first swap #last make-stack-effect ] if ] ;
-  >source-loc: [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-source-loc nip ] if ] ;
+  >stack-effect:  [ dup f = [ ] [ dup #first swap #last make-stack-effect ] if ] ;
+  >source-loc:    [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-source-loc nip ] if ] ;
+  >provenance:    [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-provenance nip ] if ] ;
+  >dispatch-prov: [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth 3 pick-n 3 #nth make-dispatch-provenance nip ] if ] ;
+  >method-info:   [ dup 0 #nth swap 1 #nth >dispatch-prov make-method-info ] ;
   dup 0 #nth
   over 1 #nth >stack-effect
   2 pick-n 2 #nth
   3 pick-n 3 #nth
   4 pick-n 4 #nth
   5 pick-n 5 #nth
-  6 pick-n 6 #nth
+  6 pick-n 6 #nth [ >method-info ] #map #collect
   7 pick-n 7 #nth >source-loc
   8 pick-n 8 #nth
+  9 pick-n 9 #nth >provenance
   make-word-info nip
 ] ;
 

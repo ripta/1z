@@ -17,6 +17,10 @@ const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
 const RegistryEntry = types_mod.RegistryEntry;
 
+const dictionary_mod = @import("../dictionary.zig");
+const WordProvenance = dictionary_mod.WordProvenance;
+const WordDefinition = dictionary_mod.WordDefinition;
+
 pub const primitives = [_]Primitive{
     .{ .name = "define-virtual", .stack_effect = "name: descriptor markers --", .doc = "Define a virtual type and its accessor words.", .func = nativeDefineVirtual },
 };
@@ -115,6 +119,15 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             // NAME?: ( value -- bool ) - predicate
             const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{name});
             try definePredicate(ctx, pred_name, vtype, markers_slice);
+
+            var generated_words = std.ArrayListUnmanaged(Value){};
+            try generated_words.append(alloc, .{ .string = wrap_name });
+            try generated_words.append(alloc, .{ .string = make_name });
+            try generated_words.append(alloc, .{ .string = unmake_name });
+            try generated_words.append(alloc, .{ .string = pred_name });
+            const gw_slice = try generated_words.toOwnedSlice(alloc);
+            try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
+            try ctx.type_descriptors.put(ctx.allocator, name, desc_map);
         },
         .mutable_map => |struct_desc| {
             const fields_val = struct_desc.get("fields") orelse return error.MissingField;
@@ -179,6 +192,16 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
 
             const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{name});
             try definePredicate(ctx, pred_name, vtype, markers_slice);
+
+            var generated_words = std.ArrayListUnmanaged(Value){};
+            try generated_words.append(alloc, .{ .string = wrap_name });
+            try generated_words.append(alloc, .{ .string = make_name });
+            try generated_words.append(alloc, .{ .string = unmake_name });
+            try generated_words.append(alloc, .{ .string = to_hash_name });
+            try generated_words.append(alloc, .{ .string = pred_name });
+            const gw_slice = try generated_words.toOwnedSlice(alloc);
+            try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
+            try ctx.type_descriptors.put(ctx.allocator, name, desc_map);
         },
         else => {
             helpers.setErrorContext(ctx, "virtual{{ inner type must be a string or struct descriptor, got {s}", .{helpers.valueTypeName(inner_type_val)});
@@ -244,6 +267,14 @@ fn virtualTypePredicateHelper(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .boolean = is_match });
 }
 
+fn vtypeProvenance(vtype: *const VirtualType, role: []const u8) WordProvenance {
+    return .{
+        .generator = if (vtype.enum_name != null) "enum" else "virtual",
+        .parent = if (vtype.enum_name) |en| en else vtype.name,
+        .role = role,
+    };
+}
+
 /// >NAME: ( value -- tagged ) - wrap a value as this virtual type
 pub fn defineWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, markers: []const *Marker) !void {
     const alloc = ctx.quotationAllocator();
@@ -255,6 +286,7 @@ pub fn defineWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, ma
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
+        .provenance = vtypeProvenance(vtype, "wrap"),
         .action = .{ .compound = instrs },
     });
 }
@@ -270,6 +302,7 @@ pub fn defineUnwrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, 
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
+        .provenance = vtypeProvenance(vtype, "unwrap"),
         .action = .{ .compound = instrs },
     });
 }
@@ -285,6 +318,7 @@ pub fn definePredicate(ctx: *Context, name: []const u8, vtype: *const VirtualTyp
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
+        .provenance = vtypeProvenance(vtype, "predicate"),
         .action = .{ .compound = instrs },
     });
 }
@@ -456,6 +490,7 @@ pub fn defineStructHashWrap(ctx: *Context, name: []const u8, vtype: *const Virtu
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
+        .provenance = vtypeProvenance(vtype, "hash-wrap"),
         .action = .{ .compound = instrs },
     });
 }
@@ -471,6 +506,7 @@ pub fn defineStructWrap(ctx: *Context, name: []const u8, vtype: *const VirtualTy
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
+        .provenance = vtypeProvenance(vtype, "constructor"),
         .action = .{ .compound = instrs },
     });
 }
@@ -486,6 +522,7 @@ pub fn defineStructUnwrap(ctx: *Context, name: []const u8, vtype: *const Virtual
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
+        .provenance = vtypeProvenance(vtype, "unwrap"),
         .action = .{ .compound = instrs },
     });
 }
@@ -501,6 +538,7 @@ pub fn defineVirtualToHash(ctx: *Context, name: []const u8, vtype: *const Virtua
     try ctx.defineWord(name, .{
         .name = name,
         .markers = markers,
+        .provenance = vtypeProvenance(vtype, "to-hash"),
         .action = .{ .compound = instrs },
     });
 }

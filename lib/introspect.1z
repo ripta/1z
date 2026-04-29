@@ -2,9 +2,9 @@
 
 use "strings" ;
 
-\ Format a method type signature as "  method{ type1 }" or "  method{ type1 type2 }"
-format-method: ( method-types -- str ) [
-  "  method{ " swap " " #join #append " }" #append
+\ Format a method-info struct as "  method{ type1 }" or "  method{ type1 type2 }"
+format-method: ( method-info -- str ) [
+  types>> "  method{ " swap " " #join #append " }" #append
 ] ;
 
 \ Format word-info as a multi-line help string matching the native help output
@@ -65,6 +65,19 @@ format-word-line: ( wi -- ) [
   dup name>> print
   stack-effect>> dup f = [ drop ] [ " " print >string print ] if
   "\n" print
+] ;
+
+\ Look up the provenance of a generated word, or f if none
+generated-by: ( symbol -- provenance/f ) [
+  >word? dup option:some?
+  [ option:some> provenance>> ]
+  [ drop f ]
+  if
+] ;
+
+\ Return the generated-words array for a type name
+generated-words: ( symbol -- array ) [
+  native.type-descriptor "generated-words" @get
 ] ;
 
 \ Print all defined words in the dictionary, grouped by native vs user-defined
