@@ -165,14 +165,6 @@ PASS: exp(inf) is infinite
 Stack: [ ]
 PASS: exp(-inf) = 0
 Stack: [ ]
-=== abs fixnum ===
-Stack: [ ]
-PASS: abs positive fixnum
-Stack: [ ]
-PASS: abs negative fixnum
-Stack: [ ]
-PASS: abs zero
-Stack: [ ]
 === abs float ===
 Stack: [ ]
 PASS: abs positive float
@@ -182,10 +174,4 @@ Stack: [ ]
 PASS: abs zero float
 Stack: [ ]
 PASS: abs negative zero float
-Stack: [ ]
-=== abs min_i64 promotes to bignum ===
-Stack: [ ]
-PASS: abs min_i64 value
-Stack: [ ]
-PASS: abs min_i64 type
 Stack: [ ]

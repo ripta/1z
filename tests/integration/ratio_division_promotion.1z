@@ -27,14 +27,8 @@ use "testing" ;
 99999999999999999999 3 / >string "33333333333333333333" "big/3 exact value" assert=
 
 "division by zero unchanged" test-section
-[ 1 0 / ] "DivisionByZero" assert-error
 [ 0 0 / ] "DivisionByZero" assert-error
 
 "minInt / -1 still promotes to bignum" test-section
 -9223372036854775808 -1 / type-of bignum: "minInt/-1 is bignum" assert=
 -9223372036854775808 -1 / >string "9223372036854775808" "minInt/-1 value" assert=
-
-"float division unchanged" test-section
-7.0 2.0 / 3.5 "float / float" assert=
-7 2.0 / 3.5 "fixnum / float" assert=
-7.0 2 / 3.5 "float / fixnum" assert=

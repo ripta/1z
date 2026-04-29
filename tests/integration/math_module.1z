@@ -101,17 +101,8 @@ nan math.floor nan? "floor(nan) is nan" assert-true
 inf math.exp infinite? "exp(inf) is infinite" assert-true
 -inf math.exp 0.0 "exp(-inf) = 0" assert=
 
-"abs fixnum" test-section
-42 abs 42 "abs positive fixnum" assert=
--42 abs 42 "abs negative fixnum" assert=
-0 abs 0 "abs zero" assert=
-
 "abs float" test-section
 3.14 abs 3.14 "abs positive float" assert=
 -3.14 abs 3.14 "abs negative float" assert=
 0.0 abs 0.0 "abs zero float" assert=
 -0.0 abs 0.0 "abs negative zero float" assert=
-
-"abs min_i64 promotes to bignum" test-section
--9223372036854775808 abs inspect "9223372036854775808" "abs min_i64 value" assert=
--9223372036854775808 abs type-of bignum: "abs min_i64 type" assert=

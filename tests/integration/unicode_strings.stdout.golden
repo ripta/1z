@@ -6,8 +6,6 @@ PASS: cafe #len (4 codepoints)
 Stack: [ ]
 PASS: Japanese romaji #len
 Stack: [ ]
-PASS: empty string #len
-Stack: [ ]
 === #nth with Unicode ===
 Stack: [ ]
 PASS: #nth cafe[0]

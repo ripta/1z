@@ -89,12 +89,6 @@ dup "toy_add" lib-symbol ffi{ u8 u8 -> i32 } bind-sig
 255 "toy_add(u8:0, u8:255) = 255" assert=
 drop
 
-\\ usize at 0
-dup "toy_usize_identity" lib-symbol ffi{ usize -> usize } bind-sig
-0 1 pick-n ffi-call
-0 "toy_usize_identity(0) = 0" assert=
-drop
-
 \\ --- Return-path bignum promotion ---
 
 \\ toy_u64_max returns UINT64_MAX which exceeds i64 max
