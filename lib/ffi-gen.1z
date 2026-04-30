@@ -4,6 +4,7 @@
 \ zig translate-c output.
 
 use "process" ;
+use "strings" ;
 
 \\ Run zig translate-c on a C header file and return its Zig source output.
 \\ flags is an array of additional CLI flags (e.g., { "-I" "/usr/include" }).
@@ -19,4 +20,404 @@ translate-c: ( header-path flags -- zig-source ) [
     f swap EUserThrown make-error throw
   ]
   if
+] ;
+
+\ --- Type mapping ---
+
+\\ Map a Zig type string from translate-c output to a 1z FFI type string.
+\\ Returns the mapped type, or the input unchanged if no mapping exists
+\\ for simple types. Pointer types are handled structurally.
+zig>ffi-type: ( zig-type -- ffi-type ) [
+  \ Pointer types: [*c]const u8 and [*c]u8 → cstring
+  dup "[*c]const u8" = [ drop "cstring" ] [
+    dup "[*c]u8" = [ drop "cstring" ] [
+      \ Opaque pointer: ?*name → ptr:name
+      dup "?*" #starts-with? [
+        2 #drop "ptr:" swap #append
+      ] [
+        \ Non-opaque pointer: [*c]T → ptr
+        dup "[*c]" #starts-with? [ drop "ptr" ] [
+          \ Simple type lookup
+          (zig-simple-type)
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+(zig-simple-type): ( zig-type -- ffi-type ) [
+  dup "c_int" = [ drop "i32" ] [
+    dup "c_uint" = [ drop "u32" ] [
+      dup "c_short" = [ drop "i16" ] [
+        dup "c_ushort" = [ drop "u16" ] [
+          dup "c_long" = [ drop "i64" ] [
+            dup "c_ulong" = [ drop "u64" ] [
+              dup "c_longlong" = [ drop "i64" ] [
+                dup "c_ulonglong" = [ drop "u64" ] [
+                  dup "c_longdouble" = [ drop "f128" ] [
+                    \ i8..i64, u8..u64, f32, f64, usize, isize, bool, void
+                    \ pass through unchanged
+                  ] if
+                ] if
+              ] if
+            ] if
+          ] if
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+\ --- Function parameter parsing ---
+
+\\ Parse a single "name: type" parameter string into a hash.
+\\ Returns f if the parameter cannot be parsed (e.g., partial fn pointer).
+(parse-param): ( param-str -- hash/f ) [
+  trim
+  ": " split-once?
+  dup option:some? [
+    option:some>
+    dup 0 #nth swap 1 #nth
+    zig>ffi-type
+    swap
+    \ Strip @"..." quoting from parameter names (zig translate-c
+    \ quotes names that are Zig keywords)
+    dup "@\"" #starts-with? [
+      2 #drop
+      dup #len 1 - #take  \ strip trailing "
+    ] when
+    M{ } swap name: swap @set! swap type: swap @set!
+  ] [
+    drop f
+  ] if
+] ;
+
+\\ Parse the parameter list string (between parens) into an array of
+\\ param hashes and a variadic flag.
+(parse-params): ( params-str -- params variadic? ) [
+  ", " split
+  \ Check for variadic: last element is "..."
+  dup #last "..." = [
+    dup #len 1 - #take t
+  ] [
+    f
+  ] if
+  \ Stack: params-array variadic?
+  \ Move variadic? below so we can work on the array
+  swap
+  \ Filter out empty params (e.g., void functions)
+  [ trim #len 0 > ] #filter #collect
+  \ Parse each param; filter out f (unparseable, e.g., fn pointer fragments)
+  [ (parse-param) ] #map #collect
+  [ f = not ] #filter #collect
+  swap
+] ;
+
+\ --- Function declaration parsing ---
+
+\\ Split a string on the last occurrence of a delimiter.
+\\ Returns { before after }.
+(rsplit-once): ( str delim -- pair ) [
+  2dup split
+  \ Stack: str delim parts
+  dup #len 1 = [
+    \ No delimiter found
+    -rot> 2drop
+    "" 2 array-n
+  ] [
+    \ Last element is after the final delimiter
+    dup #last swap
+    dup #len 1 - #take
+    \ Rejoin everything before the last delimiter
+    2 pick-n #join
+    \ Stack: str delim before after
+    swap 2 array-n
+    -rot> 2drop
+  ] if
+] ;
+
+\\ Parse a "pub extern fn" line into a declaration hash.
+\\ Input: "pub extern fn toy_add(a: c_int, b: c_int) c_int;"
+(parse-fn-decl): ( line -- decl ) [
+  \ Strip "pub extern fn " prefix (14 chars)
+  14 #drop
+
+  \ Split on first "(" to get name and rest
+  "(" split-once
+  dup 0 #nth swap 1 #nth
+
+  \ rest contains params and possibly nested parens from fn pointer types
+  \ Split on the LAST ")" to correctly handle nested parens
+  ")" (rsplit-once)
+  dup 0 #nth swap 1 #nth
+
+  \ return-type part is " c_int;", so trim and strip trailing ";"
+  trim
+  dup #len 1 - #take  \ strip ";"
+  trim
+  zig>ffi-type
+
+  \ Stack: name params-str return-type
+  swap (parse-params)
+
+  \ Stack: name return-type params variadic?
+  M{ }
+  fn: kind: swap @set!
+  swap variadic?: swap @set!
+  swap params: swap @set!
+  swap return-type: swap @set!
+  swap name: swap @set!
+] ;
+
+\ --- Struct declaration parsing ---
+
+\\ Parse a struct field line like "    x: f32 = @import(...),"
+\\ into a { name: type: } hash.
+(parse-struct-field): ( line -- hash ) [
+  trim
+  \ Strip trailing comma if present
+  dup #last "," = [ dup #len 1 - #take ] when
+
+  \ Split on " = " to strip default initializer
+  " = " split-once? dup option:some?
+  [ option:some> 0 #nth ]
+  [ drop ]
+  if
+
+  \ Now we have "x: f32", so split on ": "
+  ": " split-once
+  dup 0 #nth swap 1 #nth
+  zig>ffi-type
+  swap
+  M{ } swap name: swap @set! swap type: swap @set!
+] ;
+
+\\ Parse a struct block starting at index i in lines.
+\\ The line at i is "pub const name = extern struct {".
+\\ Returns the declaration hash and the index past the closing "};".
+(parse-struct-decl): ( lines i -- decl next-i ) [
+  2dup #nth
+
+  \ Extract struct name from "pub const name = extern struct {"
+  10 #drop
+  " = extern struct {" split-once
+  0 #nth  \ struct name
+
+  \ Stack: lines i struct-name
+  \ Advance i past the opening line, stash name below
+  swap 1 + swap
+
+  \ Stack: lines i+1 struct-name
+  \ Collect fields into a vector
+  V{ }
+
+  \ Stack: lines i struct-name fields-vec
+  \ Use dip to keep fields-vec on top while accessing lines/i
+  (collect-struct-fields)
+
+  \ Stack: lines next-i struct-name fields-vec
+  >array
+  M{ }
+  struct: kind: swap @set!
+  swap fields: swap @set!
+  swap name: swap @set!
+
+  \ Stack: lines next-i decl
+  \ Return ( next-i decl ), drop lines
+  <rot- drop
+] ;
+
+\\ Collect struct fields from lines starting at index i.
+\\ Reads lines until "};" and advances i past it.
+\\ Stack: lines i name fields-vec
+\\ After: lines next-i name fields-vec
+(collect-struct-fields): [
+  \ Check if current line is "};"
+  [ 3 pick-n 3 pick-n #nth trim "};" = not ] [
+    \ Get current line
+    3 pick-n 3 pick-n #nth
+    (parse-struct-field)
+    over swap #push! drop
+    \ Advance i: swap name and i, increment, swap back
+    [ [ 1 + ] dip ] dip
+  ] while
+  \ Advance past "};"
+  [ [ 1 + ] dip ] dip
+] ;
+
+\\ Parse an opaque type line into a declaration hash.
+\\ Input: "pub const struct_toy_counter = opaque {};"
+(parse-opaque-decl): ( line -- decl ) [
+  \ Strip "pub const " prefix (10 chars)
+  10 #drop
+  " = opaque {};" split-once 0 #nth
+  M{ }
+  opaque: kind: swap @set!
+  swap name: swap @set!
+] ;
+
+\ --- Enum declaration parsing ---
+
+\\ Parse an enum variant line like "    ALIGN_LEFT = 0,"
+\\ into a { name: value: } hash. Returns f for the catch-all "_," line.
+(parse-enum-variant): ( line -- hash/f ) [
+  trim
+  \ Strip trailing comma
+  dup #last "," = [ dup #len 1 - #take ] when
+  trim
+
+  \ Skip the "_" catch-all
+  dup "_" = [ drop f ] [
+    " = " split-once
+    dup 0 #nth swap 1 #nth
+    swap
+    M{ } swap name: swap @set! swap value: swap @set!
+  ] if
+] ;
+
+\\ Parse an enum block starting at index i in lines.
+\\ The line at i is "pub const name = enum(c_int) {".
+\\ Returns the declaration hash and the index past the closing "};".
+(parse-enum-decl): ( lines i -- decl next-i ) [
+  2dup #nth
+
+  \ Extract enum name from "pub const name = enum(c_int) {"
+  10 #drop
+  " = enum(c_int) {" split-once
+  0 #nth  \ enum name
+
+  \ Stack: lines i enum-name
+  \ Advance i past the opening line
+  swap 1 + swap
+
+  \ Stack: lines i+1 enum-name
+  V{ }
+
+  \ Stack: lines i enum-name variants-vec
+  (collect-enum-variants)
+
+  \ Stack: lines next-i enum-name variants-vec
+  >array
+  M{ }
+  enum: kind: swap @set!
+  swap variants: swap @set!
+  swap name: swap @set!
+
+  \ Stack: lines next-i decl
+  \ Return ( next-i decl ), drop lines
+  <rot- drop
+] ;
+
+\\ Collect enum variants from lines starting at index i.
+\\ Stack: lines i name variants-vec
+\\ After: lines next-i name variants-vec
+(collect-enum-variants): [
+  [ 3 pick-n 3 pick-n #nth trim "};" = not ] [
+    3 pick-n 3 pick-n #nth
+    (parse-enum-variant)
+    dup [ over swap #push! drop ] [ drop ] if
+    [ [ 1 + ] dip ] dip
+  ] while
+  \ Advance past "};"
+  [ [ 1 + ] dip ] dip
+] ;
+
+\ --- Line classification helpers ---
+
+(line-contains?): ( line str -- ? ) [
+  #index-of f = not
+] ;
+
+\ --- Top-level parser ---
+
+\\ Parse pre-filtered Zig translate-c output into declaration hashes.
+\\ The input should contain only declaration-relevant lines; use
+\\ translate-c-decls for end-to-end header parsing.
+parse-zig-decls: ( zig-source -- decls ) [
+  "\n" split
+  V{ } swap  \ results lines
+  0
+  \ Stack throughout: results lines i
+  [ dup 2 pick-n #len < ] [
+    1 pick-n over #nth
+    (dispatch-line)
+  ] while
+  drop drop  \ drop i and lines
+  >array
+] ;
+
+\\ Run zig translate-c on a header, pre-filter the output to keep only
+\\ declaration-relevant lines, and parse into declaration hashes.
+\\ Uses grep to pre-filter the ~6000-line translate-c output down to
+\\ only declaration lines before parsing, avoiding OOM from splitting
+\\ the full output.
+translate-c-decls: ( header-path flags -- decls ) [
+  (translate-c-filtered)
+  parse-zig-decls
+] ;
+
+\\ Run zig translate-c piped through grep to keep only declaration lines.
+\\ Returns a string with only pub extern fn, pub const, struct/enum
+\\ field lines, and closing "};".
+(translate-c-filtered): ( header-path flags -- filtered-source ) [
+  \ Build: zig translate-c <flags> <header> | awk '<filter>'
+  { "zig" "translate-c" } swap #append
+  swap 1array #append
+  " " #join
+  " | awk '/^pub extern fn /{print} /^pub const .* = (extern struct |opaque \\{\\}|enum\\(c_int\\) )/{b=1} b{print} /^\\};/{b=0}'" #append
+  >shell-safe unmake-shell-safe
+  1array
+  { "/bin/sh" "-c" } swap #append
+  <stdio-opts> capture-stdout
+  dup exit-code>> dup 0 = swap 1 = or
+  [ stdout>> dup [ bytes> ] [ drop "" ] if ]
+  [ stderr>> dup [ bytes> ] [ drop "" ] if
+    "translate-c filtering failed: " swap #append
+    f swap EUserThrown make-error throw
+  ]
+  if
+] ;
+
+\\ Classify a line and dispatch to the appropriate parser.
+\\ Stack: results lines i line
+\\ After: results lines i' (i' advanced appropriately)
+(dispatch-line): [
+  dup "pub extern fn " #starts-with? [
+    \ Single-line function declaration
+    (parse-fn-decl)
+    \ Stack: results lines i decl
+    3 pick-n swap #push! drop
+    1 +
+  ] [
+    dup " = extern struct {" (line-contains?) [
+      drop
+      \ Stack: results lines i
+      1 pick-n over  \ results lines i lines i
+      (parse-struct-decl)
+      \ Stack: results lines i next-i decl
+      4 pick-n swap #push! drop
+      \ Stack: results lines i next-i
+      swap drop  \ results lines next-i
+    ] [
+      dup " = opaque {};" (line-contains?) [
+        (parse-opaque-decl)
+        \ Stack: results lines i decl
+        3 pick-n swap #push! drop
+        1 +
+      ] [
+        dup " = enum(c_int) {" (line-contains?) [
+          drop
+          1 pick-n over
+          (parse-enum-decl)
+          \ Stack: results lines i next-i decl
+          4 pick-n swap #push! drop
+          swap drop
+        ] [
+          \ Not a recognized declaration, so skip
+          drop
+          1 +
+        ] if
+      ] if
+    ] if
+  ] if
 ] ;

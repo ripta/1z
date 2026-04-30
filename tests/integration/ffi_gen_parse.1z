@@ -1,0 +1,178 @@
+use "testing" ;
+use "ffi-gen" ;
+
+\ --- Type mapping tests ---
+
+"zig>ffi-type simple types" test-section
+
+"i32" "c_int" zig>ffi-type "c_int maps to i32" assert=
+"u32" "c_uint" zig>ffi-type "c_uint maps to u32" assert=
+"i16" "c_short" zig>ffi-type "c_short maps to i16" assert=
+"u16" "c_ushort" zig>ffi-type "c_ushort maps to u16" assert=
+"i64" "c_long" zig>ffi-type "c_long maps to i64" assert=
+"u64" "c_ulong" zig>ffi-type "c_ulong maps to u64" assert=
+"i64" "c_longlong" zig>ffi-type "c_longlong maps to i64" assert=
+"u64" "c_ulonglong" zig>ffi-type "c_ulonglong maps to u64" assert=
+"i32" "i32" zig>ffi-type "i32 passes through" assert=
+"u8" "u8" zig>ffi-type "u8 passes through" assert=
+"f32" "f32" zig>ffi-type "f32 passes through" assert=
+"f64" "f64" zig>ffi-type "f64 passes through" assert=
+"usize" "usize" zig>ffi-type "usize passes through" assert=
+"isize" "isize" zig>ffi-type "isize passes through" assert=
+"bool" "bool" zig>ffi-type "bool passes through" assert=
+"void" "void" zig>ffi-type "void passes through" assert=
+
+"zig>ffi-type pointer types" test-section
+
+"cstring" "[*c]const u8" zig>ffi-type "const u8 ptr maps to cstring" assert=
+"cstring" "[*c]u8" zig>ffi-type "u8 ptr maps to cstring" assert=
+"ptr:toy_counter" "?*toy_counter" zig>ffi-type "opaque ptr maps to ptr:T" assert=
+"ptr" "[*c]c_int" zig>ffi-type "non-opaque ptr maps to ptr" assert=
+"ptr" "[*c]f64" zig>ffi-type "non-opaque f64 ptr maps to ptr" assert=
+
+\ --- Function parsing tests ---
+
+"parse-zig-decls functions" test-section
+
+"pub extern fn toy_add(a: c_int, b: c_int) c_int;\n" parse-zig-decls
+dup #len 1 = "parses one function declaration" assert-true
+#first
+dup kind: @get fn: = "fn decl has kind fn:" assert-true
+dup name: @get "toy_add" = "fn decl has correct name" assert-true
+dup return-type: @get "i32" = "fn return type is i32" assert-true
+dup variadic?: @get not "fn is not variadic" assert-true
+dup params: @get #len 2 = "fn has two params" assert-true
+dup params: @get 0 #nth name: @get "a" = "first param is a" assert-true
+dup params: @get 0 #nth type: @get "i32" = "first param type is i32" assert-true
+dup params: @get 1 #nth name: @get "b" = "second param is b" assert-true
+params: @get 1 #nth type: @get "i32" = "second param type is i32" assert-true
+
+"parse-zig-decls pointer params" test-section
+
+"pub extern fn toy_strlen(s: [*c]const u8) c_int;\n" parse-zig-decls
+#first
+dup params: @get 0 #nth type: @get "cstring" = "cstring param type" assert-true
+drop
+
+"pub extern fn toy_read(c: ?*toy_counter) c_int;\n" parse-zig-decls
+#first
+dup params: @get 0 #nth type: @get "ptr:toy_counter" = "opaque ptr param type" assert-true
+drop
+
+"parse-zig-decls variadic functions" test-section
+
+"pub extern fn toy_sum_variadic(count: c_int, ...) c_int;\n" parse-zig-decls
+#first
+dup kind: @get fn: = "variadic has kind fn:" assert-true
+dup variadic?: @get "variadic flag is true" assert-true
+dup params: @get #len 1 = "variadic fn has one named param" assert-true
+dup params: @get 0 #nth name: @get "count" = "variadic param name" assert-true
+drop
+
+"parse-zig-decls void return" test-section
+
+"pub extern fn toy_close(c: ?*toy_counter) void;\n" parse-zig-decls
+#first
+dup return-type: @get "void" = "void return type" assert-true
+drop
+
+"parse-zig-decls no-arg function" test-section
+
+"pub extern fn toy_u64_max() u64;\n" parse-zig-decls
+#first
+dup params: @get #len 0 = "no-arg fn has empty params" assert-true
+dup return-type: @get "u64" = "no-arg fn return type" assert-true
+drop
+
+\ --- Struct parsing tests ---
+
+"parse-zig-decls structs" test-section
+
+"pub const toy_vec2 = extern struct {\n    x: f32 = @import(\"std\").mem.zeroes(f32),\n    y: f32 = @import(\"std\").mem.zeroes(f32),\n};\n" parse-zig-decls
+dup #len 1 = "parses one struct declaration" assert-true
+#first
+dup kind: @get struct: = "struct decl has kind struct:" assert-true
+dup name: @get "toy_vec2" = "struct name is toy_vec2" assert-true
+dup fields: @get #len 2 = "struct has two fields" assert-true
+dup fields: @get 0 #nth name: @get "x" = "first field is x" assert-true
+dup fields: @get 0 #nth type: @get "f32" = "first field type is f32" assert-true
+dup fields: @get 1 #nth name: @get "y" = "second field is y" assert-true
+fields: @get 1 #nth type: @get "f32" = "second field type is f32" assert-true
+
+\ --- Opaque type parsing tests ---
+
+"parse-zig-decls opaque types" test-section
+
+"pub const struct_toy_counter = opaque {};\n" parse-zig-decls
+dup #len 1 = "parses one opaque declaration" assert-true
+#first
+dup kind: @get opaque: = "opaque decl has kind opaque:" assert-true
+name: @get "struct_toy_counter" = "opaque name is struct_toy_counter" assert-true
+
+\ --- Enum parsing tests ---
+
+"parse-zig-decls enums" test-section
+
+"pub const Alignment = enum(c_int) {\n    ALIGN_LEFT = 0,\n    ALIGN_CENTER = 1,\n    ALIGN_RIGHT = 2,\n    _,\n};\n" parse-zig-decls
+dup #len 1 = "parses one enum declaration" assert-true
+#first
+dup kind: @get enum: = "enum decl has kind enum:" assert-true
+dup name: @get "Alignment" = "enum name is Alignment" assert-true
+dup variants: @get #len 3 = "enum has three variants" assert-true
+dup variants: @get 0 #nth name: @get "ALIGN_LEFT" = "first variant name" assert-true
+dup variants: @get 0 #nth value: @get "0" = "first variant value" assert-true
+dup variants: @get 2 #nth name: @get "ALIGN_RIGHT" = "last variant name" assert-true
+variants: @get 2 #nth value: @get "2" = "last variant value" assert-true
+
+\ --- Filtering tests ---
+
+"parse-zig-decls filters non-declarations" test-section
+
+"pub const __builtin_bswap16 = @import(\"std\").zig.c_builtins.__builtin_bswap16;\npub const int_least8_t = i8;\npub extern fn toy_add(a: c_int, b: c_int) c_int;\n" parse-zig-decls
+dup #len 1 = "only the extern fn is parsed, builtins are ignored" assert-true
+#first name: @get "toy_add" = "parsed declaration is toy_add" assert-true
+
+\ --- Mixed declarations ---
+
+"parse-zig-decls mixed declarations" test-section
+
+"pub const struct_toy_counter = opaque {};\npub extern fn toy_add(a: c_int, b: c_int) c_int;\npub const toy_vec2 = extern struct {\n    x: f32 = @import(\"std\").mem.zeroes(f32),\n    y: f32 = @import(\"std\").mem.zeroes(f32),\n};\npub extern fn toy_sum_variadic(count: c_int, ...) c_int;\n" parse-zig-decls
+
+dup #len 4 = "parses four declarations total" assert-true
+dup 0 #nth kind: @get opaque: = "first is opaque" assert-true
+dup 1 #nth kind: @get fn: = "second is fn" assert-true
+dup 2 #nth kind: @get struct: = "third is struct" assert-true
+3 #nth kind: @get fn: = "fourth is fn (variadic)" assert-true
+
+\ --- End-to-end with real translate-c output ---
+\ The full translate-c output for toy.h is ~6000 lines (~450KB).
+\ parse-zig-decls pre-filters to keep only declaration lines,
+\ making the full parse tractable.
+
+"parse-zig-decls with real translate-c output" test-section
+
+"ext/toy/toy.h" { } translate-c-decls
+
+\ Count declarations by kind
+dup [ kind: @get fn: = ] #filter #collect #len
+dup 0 > "parses at least one function from toy.h" assert-true
+drop
+
+dup [ kind: @get struct: = ] #filter #collect #len
+0 > "parses at least one struct from toy.h" assert-true
+
+dup [ kind: @get opaque: = ] #filter #collect #len
+dup 0 > "parses at least one opaque type from toy.h" assert-true
+drop
+
+\ Verify specific declarations
+dup [ name: @get "toy_add" = ] #filter #collect #len
+1 = "finds toy_add" assert-true
+
+dup [ name: @get "toy_vec2" = ] #filter #collect #len
+1 = "finds toy_vec2 struct" assert-true
+
+dup [ name: @get "toy_sum_variadic" = ] #filter #collect
+#first variadic?: @get "toy_sum_variadic is variadic" assert-true
+
+drop
