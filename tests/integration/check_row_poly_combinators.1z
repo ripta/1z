@@ -1,0 +1,36 @@
+\ Test that --check mode correctly infers through row-poly annotated combinators.
+
+\ dip: quotation effect passes through
+uses-dip: ( -- x ) [ 1 2 [ drop ] dip ] ;
+
+\ call: quotation effect applied directly
+uses-call: ( -- x x ) [ 1 [ dup ] call ] ;
+
+\ if: both branches must agree
+uses-if: ( -- x ) [ t [ 1 ] [ 2 ] if ] ;
+
+\ bi: two quotations on same value
+uses-bi: ( -- x x ) [ 1 [ ] [ ] bi ] ;
+uses-bi-dup: ( -- x x x x ) [ 1 [ dup ] [ dup ] bi ] ;
+
+\ 2dip: quotation under two values
+uses-2dip: ( -- x x ) [ 1 2 3 [ drop ] 2dip ] ;
+
+\ 3dip: quotation under three values
+uses-3dip: ( -- x x x ) [ 1 2 3 4 [ drop ] 3dip ] ;
+
+\ when: flat effect with branch-combinator marker (static analysis handles via marker)
+uses-when: ( x -- ) [ t [ drop ] when ] ;
+
+\ unless: flat effect with branch-combinator marker
+uses-unless: ( x -- ) [ t [ drop ] unless ] ;
+
+\ times: flat effect with loop-combinator marker
+uses-times: ( -- ) [ 5 [ ] times ] ;
+
+\ loop: flat effect with loop-combinator marker
+uses-loop: ( -- ) [ [ f ] loop ] ;
+
+\ tri: three quotations on same value
+uses-tri: ( -- x x x ) [ 1 [ ] [ ] [ ] tri ] ;
+uses-tri-dup: ( -- x x x x x x ) [ 1 [ dup ] [ dup ] [ dup ] tri ] ;

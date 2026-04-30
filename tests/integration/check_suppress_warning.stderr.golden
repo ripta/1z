@@ -1,1 +1,1 @@
-tests/integration/check_suppress_warning.1z:5: warning: bad-branch: branch quotations have mismatched stack deltas
+tests/integration/check_suppress_warning.1z:5: warning: bad-branch: branch quotations have mismatched row variable adjustments

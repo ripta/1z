@@ -1268,7 +1268,7 @@ pub const Context = struct {
             // Non-tail call: validate quotation's stack effect
             if (quotation.effect) |effect| {
                 const depth_after = self.stack.depth();
-                const expected_delta: i64 = @as(i64, @intCast(effect.outputs.len)) - @as(i64, @intCast(effect.inputs.len));
+                const expected_delta = effect.concreteDelta();
                 const actual_delta: i64 = @as(i64, @intCast(depth_after)) - @as(i64, @intCast(depth_before));
 
                 if (expected_delta != actual_delta) {
@@ -1308,7 +1308,7 @@ pub const Context = struct {
 
         if (quotation.effect) |effect| {
             const depth_after = self.stack.depth();
-            const expected_delta: i64 = @as(i64, @intCast(effect.outputs.len)) - @as(i64, @intCast(effect.inputs.len));
+            const expected_delta = effect.concreteDelta();
             const actual_delta: i64 = @as(i64, @intCast(depth_after)) - @as(i64, @intCast(depth_before));
 
             if (expected_delta != actual_delta) {
@@ -1332,7 +1332,7 @@ pub const Context = struct {
     fn wordSuccessCleanup(self: *Context, name: []const u8, stack_effect: ?StackEffect) !void {
         if (stack_effect) |effect| {
             const depth_after = self.stack.depth();
-            if (depth_after < effect.outputs.len) {
+            if (depth_after < effect.concreteOutputCount()) {
                 self.captureStackEffectMismatch(name, effect, depth_after);
                 if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                 self.popCallFrame();
