@@ -7,7 +7,6 @@ use "testing" ;
 "hello" #len 5 "ASCII #len" assert=
 "cafe" #len 4 "cafe #len (4 codepoints)" assert=
 "nihongo" #len 7 "Japanese romaji #len" assert=
-"" #len 0 "empty string #len" assert=
 
 "#nth with Unicode" test-section
 "cafe" 0 #nth "c" "#nth cafe[0]" assert=

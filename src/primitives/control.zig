@@ -130,7 +130,7 @@ pub const primitives = [_]Primitive{
     .{ .name = ";", .stack_effect = "name quot --", .doc = "Define a new word.", .func = nativeSemicolon },
     .{ .name = "t", .stack_effect = "-- t", .doc = "Push true.", .func = nativeTrue },
     .{ .name = "f", .stack_effect = "-- f", .doc = "Push false.", .func = nativeFalse },
-    .{ .name = "if", .stack_effect = "? true-quot false-quot --", .doc = "Conditional execution.", .func = nativeIf },
+    .{ .name = "if", .stack_effect = "? true-quot false-quot --", .doc = "Conditional execution.", .func = nativeIf, .markers = &.{@constCast(&markers_mod.branch_combinator_marker)} },
 };
 
 /// call ( quot -- ) - Execute a quotation with a new local frame for scoping

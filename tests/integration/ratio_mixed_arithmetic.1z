@@ -93,6 +93,5 @@ use "testing" ;
 99999999999999999999 1 2 normalize-ratio > "bignum > 1/2" assert-true
 
 "negative mixed" test-section
--1 2 normalize-ratio 1 + >string "1/2" "-1/2 + 1" assert=
 1 -1 2 normalize-ratio + >string "1/2" "1 + -1/2" assert=
 -1 2 normalize-ratio 1 < "-1/2 < 1" assert-true

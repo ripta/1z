@@ -1,0 +1,7 @@
+\ Test that --check detects mismatched branch quotations and bad loop bodies
+
+\ Mismatched branch: true branch pushes 1 value, false branch pushes 2
+bad-branch: ( -- ) [ t [ 1 ] [ 1 2 ] if ] ;
+
+\ Declared effect disagrees with inferred effect
+bad-decl: ( -- x ) [ 1 2 ] ;

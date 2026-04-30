@@ -1,0 +1,5 @@
+\ Test that suppress-checks: "all" suppresses all diagnostics
+
+pragma{ suppress-checks: "all" }
+
+bad-branch: ( -- ) [ t [ 1 ] [ 1 2 ] if ] ;

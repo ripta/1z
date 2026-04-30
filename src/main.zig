@@ -18,6 +18,8 @@ const CountingAllocator = benchmark.CountingAllocator;
 const memory_limit = @import("memory_limit.zig");
 const MemoryLimitAllocator = memory_limit.MemoryLimitAllocator;
 const trace_mod = @import("trace.zig");
+const call_graph = @import("call_graph.zig");
+const effect_inference = @import("effect_inference.zig");
 
 const build_options = @import("build_options");
 pub const version = build_options.version;
@@ -135,6 +137,7 @@ pub fn main() u8 {
     var trace_config = trace_mod.TraceConfig{};
     var deadlock_detect_ns: ?i128 = null;
     var test_timeout_ns: ?u64 = null;
+    var check_mode = false;
 
     // TODO(ripta): bit hacky arg parsing, improve later?
     for (args[1..]) |arg| {
@@ -228,6 +231,8 @@ pub fn main() u8 {
                 return 1;
             };
             test_timeout_ns = secs * std.time.ns_per_s;
+        } else if (std.mem.eql(u8, arg, "--check")) {
+            check_mode = true;
         } else {
             file_path = arg;
         }
@@ -322,6 +327,7 @@ pub fn main() u8 {
     ctx.loadPrelude(external_prelude) catch |err| {
         std.debug.panic("Failed to load prelude: {any}", .{err});
     };
+    ctx.check_mode = check_mode;
     if (bench_config.enabled) {
         bench_stats.markPreludeEnd();
     }
@@ -845,8 +851,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                         return 1;
                     },
                     .complete => |instrs| {
-                        if (instrs.len > 0) {
-                            // Adjust line numbers in instructions based on file position
+                        if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
                             adjustInstructionLines(instrs, processor.start_line);
                             ctx.executeQuotation(.{ .instructions = instrs }) catch |e| {
                                 if (e == debugger_mod.DebuggerQuit.DebuggerQuit) return 0;
@@ -889,8 +894,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                 return 1;
             },
             .complete => |instrs| {
-                if (instrs.len > 0) {
-                    // Adjust line numbers in instructions based on file position
+                if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
                     adjustInstructionLines(instrs, processor.start_line);
                     ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
                         if (err == debugger_mod.DebuggerQuit.DebuggerQuit) return 0;
@@ -908,6 +912,58 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                 processor.reset();
             },
         }
+    }
+
+    if (ctx.check_mode) {
+        _ = call_graph.build(&ctx.dictionary, &ctx.dispatch, ctx.quotationAllocator()) catch |err| {
+            err_writer.print("Error building call graph: {any}\n", .{err}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        };
+
+        var severity_override: effect_inference.Severity = .err;
+        var suppressed = false;
+        if (ctx.getPragma("suppress-checks")) |pragma_val| {
+            switch (pragma_val) {
+                .string => |s| {
+                    if (std.mem.eql(u8, s, "warn-only")) {
+                        severity_override = .warning;
+                    } else if (std.mem.eql(u8, s, "all")) {
+                        suppressed = true;
+                    }
+                },
+                else => {},
+            }
+        }
+
+        var engine = effect_inference.InferenceEngine.init(&ctx.dictionary, &ctx.dispatch, ctx.local_frames.items, ctx.quotationAllocator(), severity_override, suppressed);
+        defer engine.deinit();
+        engine.analyzeAll(ctx.current_source) catch |err| {
+            err_writer.print("Error during effect inference: {any}\n", .{err}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        };
+
+        for (engine.getDiagnostics()) |diag| {
+            if (diag.source_file) |src| {
+                err_writer.print("{s}:{d}: {s}: {s}: {s}\n", .{
+                    src,
+                    diag.source_line,
+                    @tagName(diag.severity),
+                    diag.word_name,
+                    diag.message,
+                }) catch {};
+            } else {
+                err_writer.print("{s}: {s}: {s}\n", .{
+                    @tagName(diag.severity),
+                    diag.word_name,
+                    diag.message,
+                }) catch {};
+            }
+        }
+        err_writer.flush() catch {};
+
+        if (engine.hasErrors()) return 1;
     }
 
     return 0;
@@ -952,4 +1008,6 @@ test {
     _ = @import("debugger/mod.zig");
     _ = @import("multiplexer.zig");
     _ = @import("trace.zig");
+    _ = @import("call_graph.zig");
+    _ = @import("effect_inference.zig");
 }

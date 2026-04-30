@@ -1,0 +1,4 @@
+\ Test that --check detects non-zero loop body delta
+
+\ Loop body pushes 1 without consuming -- net delta of +1
+bad-loop: ( -- ) [ 5 [ 1 ] times ] ;

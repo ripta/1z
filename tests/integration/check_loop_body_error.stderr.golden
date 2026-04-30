@@ -1,0 +1,1 @@
+tests/integration/check_loop_body_error.1z:4: err: bad-loop: loop body has non-zero stack delta 1

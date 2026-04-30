@@ -29,12 +29,22 @@ pub const generic_marker: Marker = .{ .name = "generic" };
 ///             contentts and the word definition itself.
 pub const const_marker: Marker = .{ .name = "const" };
 
+/// Well-known marker for branch combinators.
+/// Indicates the word selects between quotation arguments based on a condition.
+pub const branch_combinator_marker: Marker = .{ .name = "branch-combinator" };
+
+/// Well-known marker for loop combinators.
+/// Indicates the word repeatedly executes a quotation argument.
+pub const loop_combinator_marker: Marker = .{ .name = "loop-combinator" };
+
 pub const primitives = [_]Primitive{
     .{ .name = "marker", .stack_effect = "-- marker", .doc = "Create an anonymous marker value.", .func = nativeMarker },
     .{ .name = "parse-time", .stack_effect = "-- marker", .doc = "Push the well-known parse-time marker.", .func = nativeParseTimeMarker, .parse_time = true },
     .{ .name = "mutable", .stack_effect = "-- marker", .doc = "Push the well-known mutable marker.", .func = nativeMutableMarker, .parse_time = true },
     .{ .name = "generic", .stack_effect = "-- marker", .doc = "Push the well-known generic marker.", .func = nativeGenericMarker, .parse_time = true },
     .{ .name = "const", .stack_effect = "-- marker", .doc = "Push the well-known const marker.", .func = nativeConstMarker, .parse_time = true },
+    .{ .name = "branch-combinator", .stack_effect = "-- marker", .doc = "Push the well-known branch-combinator marker.", .func = nativeBranchCombinatorMarker, .parse_time = true },
+    .{ .name = "loop-combinator", .stack_effect = "-- marker", .doc = "Push the well-known loop-combinator marker.", .func = nativeLoopCombinatorMarker, .parse_time = true },
     .{ .name = "word-markers", .stack_effect = "name -- markers", .doc = "Get the markers attached to a word definition.", .func = nativeWordMarkers },
     .{ .name = "native?", .stack_effect = "name -- ?", .doc = "Check if a word is implemented as a native primitive.", .func = nativeIsNative },
 };
@@ -72,6 +82,16 @@ pub fn nativeConstMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&const_marker) });
 }
 
+/// branch-combinator ( -- marker ) - Push the well-known branch-combinator marker
+pub fn nativeBranchCombinatorMarker(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .marker = @constCast(&branch_combinator_marker) });
+}
+
+/// loop-combinator ( -- marker ) - Push the well-known loop-combinator marker
+pub fn nativeLoopCombinatorMarker(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .marker = @constCast(&loop_combinator_marker) });
+}
+
 /// Check if a marker is the well-known mutable marker
 pub fn isMutableMarker(mk: *const Marker) bool {
     return mk == &mutable_marker;
@@ -90,6 +110,16 @@ pub fn isGenericMarker(mk: *const Marker) bool {
 /// Check if a marker is the well-known const marker
 pub fn isConstMarker(mk: *const Marker) bool {
     return mk == &const_marker;
+}
+
+/// Check if a marker is the well-known branch-combinator marker
+pub fn isBranchCombinatorMarker(mk: *const Marker) bool {
+    return mk == &branch_combinator_marker;
+}
+
+/// Check if a marker is the well-known loop-combinator marker
+pub fn isLoopCombinatorMarker(mk: *const Marker) bool {
+    return mk == &loop_combinator_marker;
 }
 
 /// word-markers ( name -- markers ) - Get the markers attached to a word definition

@@ -1,0 +1,15 @@
+\ Test stack effect inference in --check mode
+
+\ Words with matching branch quotations (no error expected)
+good-branch: ( -- x ) [ t [ 1 ] [ 2 ] if ] ;
+
+\ Words with matching branch quotations via when/unless
+good-when: ( x -- ) [ t [ drop ] when ] ;
+good-unless: ( x -- ) [ t [ drop ] unless ] ;
+
+\ Words with zero-delta loop body (no error expected)
+good-loop: ( -- ) [ 3 [ ] times ] ;
+
+\ Words that call other compound words transitively
+helper: ( -- x y ) [ 1 2 ] ;
+caller: ( -- x y ) [ helper ] ;

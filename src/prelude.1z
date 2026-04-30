@@ -110,9 +110,9 @@ error-stream: parameter [ stderr ] ;
 
 \ Control flow
 \\ Execute the quotation when the condition is true.
-when: ( ? quot -- ) [ [ ] if ] ;
+when: branch-combinator ( ? quot -- ) [ [ ] if ] ;
 \\ Execute the quotation when the condition is false.
-unless: ( ? quot -- ) [ [ ] swap if ] ;
+unless: branch-combinator ( ? quot -- ) [ [ ] swap if ] ;
 
 \ Error-handling
 \\ Execute a quotation, silently discarding any error.
@@ -373,7 +373,7 @@ use: parse-time [
 
 \ Loops
 \\ Execute a quotation `n` times.
-times: ( n quot -- ) [
+times: loop-combinator ( n quot -- ) [
   over 0 >
   [
     dup 2dip
@@ -384,13 +384,17 @@ times: ( n quot -- ) [
   if
 ] ;
 \\ Loop while the predicate returns true, executing the body each iteration.
-while: ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b ) [
+while: loop-combinator ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b ) [
   swap do compose [ loop ] curry when
+] ;
+\\ Loop until the predicate returns true, executing the body each iteration.
+until: loop-combinator ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b ) [
+  [ [ not ] compose ] dip while
 ] ;
 \\ Execute the body once before checking the predicate in a `while` loop.
 do: ( pred body -- pred body ) [ dup 2dip ] ;
 \\ Repeatedly call a quotation while it returns true.
-loop: ( ... pred: ( ... -- ... ? ) -- ... ) [
+loop: loop-combinator ( ... pred: ( ... -- ... ? ) -- ... ) [
   [ call ] keep [ loop ] curry when
 ] ;
 
@@ -398,7 +402,7 @@ loop: ( ... pred: ( ... -- ... ? ) -- ... ) [
 \\ Dispatch on a value by matching it against an array of `{ key quot }` pairs.
 \\ A trailing bare quotation acts as the default branch.
 \\ Throws `no-matching-branch` if no branch matches.
-case: ( val branches -- ... ) [
+case: branch-combinator ( val branches -- ... ) [
   dup #len 0 = [
     drop no-matching-branch throw
   ] [
@@ -418,7 +422,7 @@ case: ( val branches -- ... ) [
 \\ Each branch is a `{ pred-quot body-quot }` pair.
 \\ A trailing bare quotation acts as the default branch.
 \\ Throws `no-matching-branch` if no branch matches.
-cond: ( branches -- ... ) [
+cond: branch-combinator ( branches -- ... ) [
   dup #len 0 = [
     drop { cond: } no-matching-branch throw
   ] [

@@ -3,7 +3,7 @@ Push an empty array.
 
 Stack: [ ]
 Execute the quotation when the condition is true.
-when ( ? quot -- ) \compound
+when ( ? quot -- ) [<marker:branch-combinator>] \compound
 
 Stack: [ ]
 Execute a quotation, silently discarding any error.
@@ -31,13 +31,13 @@ print ( str -- ) \compound
 
 Stack: [ ]
 Execute a quotation `n` times.
-times ( n quot -- ) \compound
+times ( n quot -- ) [<marker:loop-combinator>] \compound
 
 Stack: [ ]
 Dispatch on a value by matching it against an array of `{ key quot }` pairs.
 A trailing bare quotation acts as the default branch.
 Throws `no-matching-branch` if no branch matches.
-case ( val branches -- ... ) \compound
+case ( val branches -- ... ) [<marker:branch-combinator>] \compound
 
 Stack: [ ]
 Format a string by interpolating values from a source using a template string.

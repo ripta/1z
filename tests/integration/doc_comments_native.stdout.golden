@@ -7,7 +7,7 @@ Add two numbers. Promotes to bignum on fixnum overflow, or to float if either op
 
 Stack: [ ]
 Conditional execution.
-if ( ? true-quot false-quot -- ) \native
+if ( ? true-quot false-quot -- ) [<marker:branch-combinator>] \native
 
 Stack: [ ]
 Get length of sequence. O(1) and non-destructive; does not work on iterators (use #count instead).

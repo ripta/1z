@@ -1,0 +1,2 @@
+tests/integration/check_effect_mismatch.1z:4: err: bad-branch: branch quotations have mismatched stack deltas
+tests/integration/check_effect_mismatch.1z:7: err: bad-decl: declared stack effect delta is 1, but inferred delta is 2

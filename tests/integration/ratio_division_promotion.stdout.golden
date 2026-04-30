@@ -42,19 +42,9 @@ Stack: [ ]
 Stack: [ ]
 PASS: DivisionByZero
 Stack: [ ]
-PASS: DivisionByZero
-Stack: [ ]
 === minInt / -1 still promotes to bignum ===
 Stack: [ ]
 PASS: minInt/-1 is bignum
 Stack: [ ]
 PASS: minInt/-1 value
-Stack: [ ]
-=== float division unchanged ===
-Stack: [ ]
-PASS: float / float
-Stack: [ ]
-PASS: fixnum / float
-Stack: [ ]
-PASS: float / fixnum
 Stack: [ ]

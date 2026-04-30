@@ -1,0 +1,24 @@
+=== branch-combinator markers ===
+Stack: [ ]
+PASS: if has branch-combinator
+Stack: [ ]
+PASS: when has branch-combinator
+Stack: [ ]
+PASS: unless has branch-combinator
+Stack: [ ]
+PASS: cond has branch-combinator
+Stack: [ ]
+PASS: case has branch-combinator
+Stack: [ ]
+PASS: match has branch-combinator
+Stack: [ ]
+=== loop-combinator markers ===
+Stack: [ ]
+PASS: times has loop-combinator
+Stack: [ ]
+PASS: while has loop-combinator
+Stack: [ ]
+PASS: until has loop-combinator
+Stack: [ ]
+PASS: loop has loop-combinator
+Stack: [ ]

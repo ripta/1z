@@ -28,6 +28,7 @@ pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator) !void {
             .name = p.name,
             .parse_time = p.parse_time,
             .stack_effect = effect,
+            .markers = p.markers,
             .doc = p.doc,
             .action = .{ .native = p.func },
         });
