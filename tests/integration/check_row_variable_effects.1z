@@ -1,0 +1,12 @@
+\ Test that --check mode handles row-polymorphic stack effects without false positives.
+\ Words with row variables currently produce no diagnostics (the engine returns
+\ unknown and skips them). This test documents that baseline for Phase 81.2.
+
+\ Balanced row variables: ..a in both inputs and outputs
+my-dip: ( ..a x quot: ( ..a -- ..b ) -- ..b x ) [ swap call swap ] ;
+
+\ Multiple row variables
+my-bi: ( ..a x p: ( ..a x -- ..b ) q: ( ..a x -- ..c ) -- ..b ..c ) [ [ keep ] dip call ] ;
+
+\ Concrete-only effect for comparison (should still be inferred normally)
+my-dup: ( x -- x x ) [ dup ] ;

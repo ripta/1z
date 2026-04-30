@@ -15,8 +15,9 @@ const StructType = value_mod.StructType;
 const StructInstance = value_mod.StructInstance;
 const Task = @import("../task.zig").Task;
 
-const StackEffect = @import("../stack_effect.zig").StackEffect;
-const StackEffectParam = @import("../stack_effect.zig").StackEffectParam;
+const stack_effect_mod = @import("../stack_effect.zig");
+const StackEffect = stack_effect_mod.StackEffect;
+const StackEffectParam = stack_effect_mod.StackEffectParam;
 
 /// Create a stack effect from a raw string at runtime.
 /// Supports quotation annotations like "seq quot: ( elem -- elem' ) -- seq'"
@@ -36,7 +37,7 @@ pub fn makeSimpleEffect(allocator: Allocator, raw: []const u8) !StackEffect {
         if (std.mem.eql(u8, token, "--")) {
             // Flush pending parameter
             if (pending_name) |name| {
-                try current_list.append(allocator, .{ .name = name });
+                try current_list.append(allocator, .{ .name = name, .is_row_variable = stack_effect_mod.isRowVariable(name) });
                 pending_name = null;
             }
             current_list = &outputs;
@@ -72,6 +73,7 @@ pub fn makeSimpleEffect(allocator: Allocator, raw: []const u8) !StackEffect {
                 try current_list.append(allocator, .{
                     .name = name,
                     .quotation_effect = nested_ptr,
+                    .is_row_variable = stack_effect_mod.isRowVariable(name),
                 });
                 pending_name = null;
             }
@@ -80,7 +82,7 @@ pub fn makeSimpleEffect(allocator: Allocator, raw: []const u8) !StackEffect {
 
         // Flush previous pending parameter
         if (pending_name) |name| {
-            try current_list.append(allocator, .{ .name = name });
+            try current_list.append(allocator, .{ .name = name, .is_row_variable = stack_effect_mod.isRowVariable(name) });
         }
 
         // Check if this token ends with : (annotation marker)
@@ -93,7 +95,7 @@ pub fn makeSimpleEffect(allocator: Allocator, raw: []const u8) !StackEffect {
 
     // Flush final pending parameter
     if (pending_name) |name| {
-        try current_list.append(allocator, .{ .name = name });
+        try current_list.append(allocator, .{ .name = name, .is_row_variable = stack_effect_mod.isRowVariable(name) });
     }
 
     return StackEffect{

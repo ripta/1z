@@ -899,22 +899,7 @@ pub const Context = struct {
                 .call_word => |name| {
                     if (self.lookupWord(name)) |word| {
                         if (word.stack_effect) |word_effect| {
-                            // Count only concrete parameters (skip row variables)
-                            var concrete_inputs: i64 = 0;
-                            var concrete_outputs: i64 = 0;
-
-                            for (word_effect.inputs) |param| {
-                                if (!isRowVariable(param.name)) {
-                                    concrete_inputs += 1;
-                                }
-                            }
-                            for (word_effect.outputs) |param| {
-                                if (!isRowVariable(param.name)) {
-                                    concrete_outputs += 1;
-                                }
-                            }
-
-                            delta = delta - concrete_inputs + concrete_outputs;
+                            delta += word_effect.concreteDelta();
                         } else {
                             // Word has no declared effect, can't infer
                             return null;
@@ -936,26 +921,11 @@ pub const Context = struct {
         // If the effect has unbalanced row variables (row vars that appear only in
         // inputs or only in outputs), we can't determine a fixed expected delta.
         // Skip validation in this case since the effect is polymorphic.
-        if (hasUnbalancedRowVariables(expected_effect)) {
+        if (!expected_effect.hasBalancedRowVariables()) {
             return;
         }
 
-        // Compute expected delta from effect
-        var expected_concrete_inputs: i64 = 0;
-        var expected_concrete_outputs: i64 = 0;
-
-        for (expected_effect.inputs) |param| {
-            if (!isRowVariable(param.name)) {
-                expected_concrete_inputs += 1;
-            }
-        }
-        for (expected_effect.outputs) |param| {
-            if (!isRowVariable(param.name)) {
-                expected_concrete_outputs += 1;
-            }
-        }
-
-        const expected_delta = expected_concrete_outputs - expected_concrete_inputs;
+        const expected_delta = expected_effect.concreteDelta();
 
         // Infer actual delta from quotation instructions
         const inferred_delta = self.inferQuotationDelta(quot);
@@ -1003,55 +973,7 @@ pub const Context = struct {
     /// Check if an effect has row variables that appear only in inputs or only in outputs.
     /// Such effects are polymorphic and their delta cannot be determined statically.
     fn hasUnbalancedRowVariables(effect: *const StackEffect) bool {
-        // Collect row variables from inputs
-        var input_row_vars: [8][]const u8 = undefined;
-        var input_count: usize = 0;
-        for (effect.inputs) |param| {
-            if (isRowVariable(param.name) and input_count < 8) {
-                input_row_vars[input_count] = param.name;
-                input_count += 1;
-            }
-        }
-
-        // Collect row variables from outputs
-        var output_row_vars: [8][]const u8 = undefined;
-        var output_count: usize = 0;
-        for (effect.outputs) |param| {
-            if (isRowVariable(param.name) and output_count < 8) {
-                output_row_vars[output_count] = param.name;
-                output_count += 1;
-            }
-        }
-
-        // Check if any input row var is missing from outputs
-        for (input_row_vars[0..input_count]) |input_var| {
-            var found = false;
-            for (output_row_vars[0..output_count]) |output_var| {
-                if (std.mem.eql(u8, input_var, output_var)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return true;
-        }
-
-        // Check if any output row var is missing from inputs
-        for (output_row_vars[0..output_count]) |output_var| {
-            var found = false;
-            for (input_row_vars[0..input_count]) |input_var| {
-                if (std.mem.eql(u8, output_var, input_var)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return true;
-        }
-
-        return false;
-    }
-
-    fn isRowVariable(name: []const u8) bool {
-        return stack_effect_mod.isRowVariable(name);
+        return !effect.hasBalancedRowVariables();
     }
 
     /// Check if a row variable name is defined in a word's effect (inputs or outputs).
@@ -1069,7 +991,7 @@ pub const Context = struct {
     fn validateRowVariables(self: *Context, quot_effect: *const StackEffect, word_effect: *const StackEffect, param_name: []const u8) !void {
         // Check all row variables in quotation effect inputs
         for (quot_effect.inputs) |param| {
-            if (isRowVariable(param.name) and !isRowVariableDefined(param.name, word_effect)) {
+            if (param.is_row_variable and !isRowVariableDefined(param.name, word_effect)) {
                 var buf: [256]u8 = undefined;
                 const msg = std.fmt.bufPrint(&buf, "parameter '{s}' uses undefined row variable '{s}'", .{
                     param_name,
@@ -1092,7 +1014,7 @@ pub const Context = struct {
 
         // Check all row variables in quotation effect outputs
         for (quot_effect.outputs) |param| {
-            if (isRowVariable(param.name) and !isRowVariableDefined(param.name, word_effect)) {
+            if (param.is_row_variable and !isRowVariableDefined(param.name, word_effect)) {
                 var buf: [256]u8 = undefined;
                 const msg = std.fmt.bufPrint(&buf, "parameter '{s}' uses undefined row variable '{s}'", .{
                     param_name,
@@ -1126,13 +1048,7 @@ pub const Context = struct {
             }
         }
 
-        // Count concrete parameters (skip row variables starting with "..")
-        var concrete_params: usize = 0;
-        for (effect.inputs) |param| {
-            if (!isRowVariable(param.name)) {
-                concrete_params += 1;
-            }
-        }
+        const concrete_params = effect.concreteInputCount();
 
         if (concrete_params == 0 or self.stack.depth() < concrete_params) return;
 
@@ -1143,7 +1059,7 @@ pub const Context = struct {
         var concrete_index: usize = 0;
         for (effect.inputs) |param| {
             // Skip row variables
-            if (isRowVariable(param.name)) {
+            if (param.is_row_variable) {
                 continue;
             }
 

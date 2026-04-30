@@ -553,8 +553,8 @@ test "row-variable effect returns unknown" {
         .name = "row-word",
         .source_file = "test.1z",
         .stack_effect = .{
-            .inputs = &.{.{ .name = "..a" }},
-            .outputs = &.{ .{ .name = "..a" }, .{ .name = "n" } },
+            .inputs = &.{.{ .name = "..a", .is_row_variable = true }},
+            .outputs = &.{ .{ .name = "..a", .is_row_variable = true }, .{ .name = "n" } },
         },
         .action = .{ .compound = instrs },
     });

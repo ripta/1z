@@ -14,8 +14,9 @@ const Value = value_mod.Value;
 const Instruction = value_mod.Instruction;
 const Quotation = value_mod.Quotation;
 
-const StackEffect = @import("stack_effect.zig").StackEffect;
-const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
+const stack_effect_mod = @import("stack_effect.zig");
+const StackEffect = stack_effect_mod.StackEffect;
+const StackEffectParam = stack_effect_mod.StackEffectParam;
 
 const Context = @import("context.zig").Context;
 
@@ -524,6 +525,7 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Cont
                 const param = StackEffectParam{
                     .name = name,
                     .quotation_effect = nested_ptr,
+                    .is_row_variable = stack_effect_mod.isRowVariable(name),
                 };
                 current_list.append(allocator, param) catch return ParseError.OutOfMemory;
                 pending_param_name = null;
@@ -534,7 +536,7 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Cont
         } else if (std.mem.eql(u8, token, ")")) {
             // Flush any pending parameter
             if (pending_param_name) |name| {
-                current_list.append(allocator, .{ .name = name }) catch return ParseError.OutOfMemory;
+                current_list.append(allocator, .{ .name = name, .is_row_variable = stack_effect_mod.isRowVariable(name) }) catch return ParseError.OutOfMemory;
             }
 
             return StackEffect{
@@ -544,21 +546,21 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Cont
         } else if (std.mem.eql(u8, token, "--")) {
             // Flush pending parameter before switching
             if (pending_param_name) |name| {
-                current_list.append(allocator, .{ .name = name }) catch return ParseError.OutOfMemory;
+                current_list.append(allocator, .{ .name = name, .is_row_variable = stack_effect_mod.isRowVariable(name) }) catch return ParseError.OutOfMemory;
                 pending_param_name = null;
             }
             current_list = &outputs;
         } else if (token.len > 0 and token[token.len - 1] == ':') {
             // Flush previous pending parameter (if any)
             if (pending_param_name) |name| {
-                current_list.append(allocator, .{ .name = name }) catch return ParseError.OutOfMemory;
+                current_list.append(allocator, .{ .name = name, .is_row_variable = stack_effect_mod.isRowVariable(name) }) catch return ParseError.OutOfMemory;
             }
             // This is a parameter name with annotation (strip the colon)
             pending_param_name = allocator.dupe(u8, token[0 .. token.len - 1]) catch return ParseError.OutOfMemory;
         } else {
             // Flush previous pending parameter (if any)
             if (pending_param_name) |name| {
-                current_list.append(allocator, .{ .name = name }) catch return ParseError.OutOfMemory;
+                current_list.append(allocator, .{ .name = name, .is_row_variable = stack_effect_mod.isRowVariable(name) }) catch return ParseError.OutOfMemory;
             }
             // Regular parameter name
             pending_param_name = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
@@ -1099,4 +1101,57 @@ test "doc-comment in array is skipped" {
     try std.testing.expectEqual(@as(usize, 2), arr.len);
     try std.testing.expectEqual(@as(i64, 1), arr[0].fixnum);
     try std.testing.expectEqual(@as(i64, 2), arr[1].fixnum);
+}
+
+test "parse row-polymorphic stack effect sets is_row_variable" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("..a x -- ..a x y )");
+    const effect = try parseStackEffect(arena.allocator(), &tokenizer, null, 0);
+
+    try std.testing.expectEqual(@as(usize, 2), effect.inputs.len);
+    try std.testing.expectEqual(@as(usize, 3), effect.outputs.len);
+
+    try std.testing.expect(effect.inputs[0].is_row_variable);
+    try std.testing.expectEqualStrings("..a", effect.inputs[0].name);
+    try std.testing.expect(!effect.inputs[1].is_row_variable);
+    try std.testing.expectEqualStrings("x", effect.inputs[1].name);
+
+    try std.testing.expect(effect.outputs[0].is_row_variable);
+    try std.testing.expectEqualStrings("..a", effect.outputs[0].name);
+    try std.testing.expect(!effect.outputs[1].is_row_variable);
+    try std.testing.expect(!effect.outputs[2].is_row_variable);
+}
+
+test "parse row-polymorphic effect with quotation annotation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("..a x quot: ( ..a x -- ..b ) -- ..b x )");
+    const effect = try parseStackEffect(arena.allocator(), &tokenizer, null, 0);
+
+    try std.testing.expectEqual(@as(usize, 3), effect.inputs.len);
+    try std.testing.expectEqual(@as(usize, 2), effect.outputs.len);
+
+    // ..a is a row variable
+    try std.testing.expect(effect.inputs[0].is_row_variable);
+    try std.testing.expectEqualStrings("..a", effect.inputs[0].name);
+
+    // x is concrete
+    try std.testing.expect(!effect.inputs[1].is_row_variable);
+
+    // quot has a quotation annotation with row variables
+    try std.testing.expect(!effect.inputs[2].is_row_variable);
+    try std.testing.expect(effect.inputs[2].quotation_effect != null);
+    const nested = effect.inputs[2].quotation_effect.?;
+    try std.testing.expect(nested.inputs[0].is_row_variable);
+    try std.testing.expectEqualStrings("..a", nested.inputs[0].name);
+    try std.testing.expect(nested.outputs[0].is_row_variable);
+    try std.testing.expectEqualStrings("..b", nested.outputs[0].name);
+
+    // ..b in outputs is a row variable
+    try std.testing.expect(effect.outputs[0].is_row_variable);
+    try std.testing.expectEqualStrings("..b", effect.outputs[0].name);
+    try std.testing.expect(!effect.outputs[1].is_row_variable);
 }
