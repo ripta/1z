@@ -1,0 +1,6 @@
+\ Test that --check detects unbalanced row variable adjustments in while loops.
+
+\ pred [ 1 t ] has delta +2, annotation QCD is +1, so adj = +1
+\ body [ ] has delta 0, annotation QCD is 0, so adj = 0
+\ sum of adjustments = 1, violates loop invariant
+bad-while: ( -- ) [ [ 1 t ] [ ] while ] ;

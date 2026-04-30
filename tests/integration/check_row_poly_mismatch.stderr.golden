@@ -1,0 +1,1 @@
+tests/integration/check_row_poly_mismatch.1z:6: err: bad-keep-decl: declared stack effect delta is 0, but inferred delta is 1
