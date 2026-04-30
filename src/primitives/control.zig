@@ -126,11 +126,11 @@ fn enforceRequireDoc(ctx: *Context, name: []const u8, has_doc: bool, is_parse_ti
 }
 
 pub const primitives = [_]Primitive{
-    .{ .name = "call", .stack_effect = "quot --", .doc = "Execute a quotation.", .func = nativeCall },
+    .{ .name = "call", .stack_effect = "..a quot: ( ..a -- ..b ) -- ..b", .doc = "Execute a quotation.", .func = nativeCall },
     .{ .name = ";", .stack_effect = "name quot --", .doc = "Define a new word.", .func = nativeSemicolon },
     .{ .name = "t", .stack_effect = "-- t", .doc = "Push true.", .func = nativeTrue },
     .{ .name = "f", .stack_effect = "-- f", .doc = "Push false.", .func = nativeFalse },
-    .{ .name = "if", .stack_effect = "? true-quot false-quot --", .doc = "Conditional execution.", .func = nativeIf, .markers = &.{@constCast(&markers_mod.branch_combinator_marker)} },
+    .{ .name = "if", .stack_effect = "..a ? true-quot: ( ..a -- ..b ) false-quot: ( ..a -- ..b ) -- ..b", .doc = "Conditional execution.", .func = nativeIf, .markers = &.{@constCast(&markers_mod.branch_combinator_marker)} },
 };
 
 /// call ( quot -- ) - Execute a quotation with a new local frame for scoping

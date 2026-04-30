@@ -9,7 +9,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "drop", .stack_effect = "a --", .doc = "Remove top of stack.", .func = nativeDrop },
     .{ .name = "swap", .stack_effect = "a b -- b a", .doc = "Swap top two items.", .func = nativeSwap },
     .{ .name = "over", .stack_effect = "a b -- a b a", .doc = "Copy second item to top.", .func = nativeOver },
-    .{ .name = "dip", .stack_effect = "x quot -- x", .doc = "Execute quotation with x temporarily removed.", .func = nativeDip },
+    .{ .name = "dip", .stack_effect = "..a x quot: ( ..a -- ..b ) -- ..b x", .doc = "Execute quotation with x temporarily removed.", .func = nativeDip },
     .{ .name = "wipe", .stack_effect = "... --", .doc = "Clear the entire stack.", .func = nativeWipe },
     .{ .name = "pick-n", .stack_effect = "n -- val", .doc = "Copy the item at stack depth n (0-indexed from top, before n itself).", .func = nativePickN },
 };
