@@ -1,0 +1,84 @@
+use "testing" ;
+use "ffi-gen" ;
+
+\ --- Struct emission tests ---
+
+"decl>ffi-binding struct" test-section
+
+M{ kind: struct: name: "toy_vec2" fields: { M{ name: "x" type: "f32" } M{ name: "y" type: "f32" } } }
+decl>ffi-binding
+"toy_vec2: ffi-struct{ x: f32 y: f32 } ;" "struct with two fields" assert=
+
+M{ kind: struct: name: "Color" fields: { M{ name: "r" type: "u8" } M{ name: "g" type: "u8" } M{ name: "b" type: "u8" } M{ name: "a" type: "u8" } } }
+decl>ffi-binding
+"Color: ffi-struct{ r: u8 g: u8 b: u8 a: u8 } ;" "struct with four fields" assert=
+
+\ --- Enum emission tests ---
+
+"decl>ffi-binding enum" test-section
+
+M{ kind: enum: name: "Alignment" variants: { M{ name: "ALIGN_LEFT" value: "0" } M{ name: "ALIGN_CENTER" value: "1" } M{ name: "ALIGN_RIGHT" value: "2" } } }
+decl>ffi-binding
+"ALIGN_LEFT: const [ 0 ] ;\nALIGN_CENTER: const [ 1 ] ;\nALIGN_RIGHT: const [ 2 ] ;" "enum with three variants" assert=
+
+\ --- Opaque emission tests ---
+
+"decl>ffi-binding opaque" test-section
+
+M{ kind: opaque: name: "struct_toy_counter" }
+decl>ffi-binding
+"\\ opaque: struct_toy_counter" "opaque type comment" assert=
+
+\ --- Function emission tests ---
+
+"decl>ffi-binding function" test-section
+
+M{ kind: fn: name: "toy_add" params: { M{ name: "a" type: "i32" } M{ name: "b" type: "i32" } } return-type: "i32" variadic?: f }
+decl>ffi-binding
+"  toy-add: \"toy_add\" ffi{ i32 i32 -> i32 }" "basic function" assert=
+
+M{ kind: fn: name: "toy_close" params: { M{ name: "c" type: "ptr:toy_counter" } } return-type: "void" variadic?: f }
+decl>ffi-binding
+"  toy-close: \"toy_close\" ffi{ ptr:toy_counter -> void }" "function with ptr param" assert=
+
+M{ kind: fn: name: "toy_greeting" params: { M{ name: "name" type: "cstring" } } return-type: "cstring" variadic?: f }
+decl>ffi-binding
+"  toy-greeting: \"toy_greeting\" ffi{ cstring -> cstring }" "function with cstring" assert=
+
+M{ kind: fn: name: "toy_u64_max" params: { } return-type: "u64" variadic?: f }
+decl>ffi-binding
+"  toy-u64-max: \"toy_u64_max\" ffi{ -> u64 }" "no-arg function" assert=
+
+M{ kind: fn: name: "toy_fill" params: { M{ name: "buf" type: "cstring" } M{ name: "len" type: "i32" } M{ name: "val" type: "u8" } } return-type: "void" variadic?: f }
+decl>ffi-binding
+"  toy-fill: \"toy_fill\" ffi{ cstring i32 u8 -> void }" "function with void return" assert=
+
+"decl>ffi-binding variadic function" test-section
+
+M{ kind: fn: name: "toy_sum_variadic" params: { M{ name: "count" type: "i32" } } return-type: "i32" variadic?: t }
+decl>ffi-binding
+"  toy-sum-variadic: \"toy_sum_variadic\" ffi{ i32 ... -> i32 }" "variadic function" assert=
+
+M{ kind: fn: name: "toy_sum_doubles" params: { M{ name: "count" type: "i32" } } return-type: "f64" variadic?: t }
+decl>ffi-binding
+"  toy-sum-doubles: \"toy_sum_doubles\" ffi{ i32 ... -> f64 }" "variadic with f64 return" assert=
+
+\ --- Round-trip tests: parse Zig source then emit ---
+
+"round-trip parse then emit" test-section
+
+"pub extern fn toy_add(a: c_int, b: c_int) c_int;\n" parse-zig-decls
+#first decl>ffi-binding
+"  toy-add: \"toy_add\" ffi{ i32 i32 -> i32 }" "round-trip function" assert=
+
+"pub const toy_vec2 = extern struct {\n    x: f32 = @import(\"std\").mem.zeroes(f32),\n    y: f32 = @import(\"std\").mem.zeroes(f32),\n};\n" parse-zig-decls
+#first decl>ffi-binding
+"toy_vec2: ffi-struct{ x: f32 y: f32 } ;" "round-trip struct" assert=
+
+"pub const Alignment = enum(c_int) {\n    ALIGN_LEFT = 0,\n    ALIGN_CENTER = 1,\n    ALIGN_RIGHT = 2,\n    _,\n};\n" parse-zig-decls
+#first decl>ffi-binding
+"ALIGN_LEFT: const [ 0 ] ;\nALIGN_CENTER: const [ 1 ] ;\nALIGN_RIGHT: const [ 2 ] ;" "round-trip enum" assert=
+
+"pub extern fn toy_sum_variadic(count: c_int, ...) c_int;\n" parse-zig-decls
+#first decl>ffi-binding
+"  toy-sum-variadic: \"toy_sum_variadic\" ffi{ i32 ... -> i32 }" "round-trip variadic" assert=

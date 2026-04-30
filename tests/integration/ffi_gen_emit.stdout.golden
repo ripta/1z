@@ -1,0 +1,76 @@
+=== decl>ffi-binding struct ===
+Stack: [ ]
+Stack: [ M{ fields: { M{ name: "x" type: "f32" } M{ name: "y" type: "f32" } } name: "toy_vec2" kind: struct: } ]
+Stack: [ "toy_vec2: ffi-struct{ x: f32 y: f32 } ;" ]
+PASS: struct with two fields
+Stack: [ ]
+Stack: [ M{ fields: { M{ name: "r" type: "u8" } M{ name: "g" type: "u8" } M{ name: "b" type: "u8" } M{ name: "a" type: "u8" } } name: "Color" kind: struct: } ]
+Stack: [ "Color: ffi-struct{ r: u8 g: u8 b: u8 a: u8 } ;" ]
+PASS: struct with four fields
+Stack: [ ]
+=== decl>ffi-binding enum ===
+Stack: [ ]
+Stack: [ M{ name: "Alignment" variants: { M{ value: "0" name: "ALIGN_LEFT" } M{ value: "1" name: "ALIGN_CENTER" } M{ value: "2" name: "ALIGN_RIGHT" } } kind: enum: } ]
+Stack: [ "ALIGN_LEFT: const [ 0 ] ;
+ALIGN_CENTER: const [ 1 ] ;
+ALIGN_RIGHT: const [ 2 ] ;" ]
+PASS: enum with three variants
+Stack: [ ]
+=== decl>ffi-binding opaque ===
+Stack: [ ]
+Stack: [ M{ name: "struct_toy_counter" kind: opaque: } ]
+Stack: [ "\ opaque: struct_toy_counter" ]
+PASS: opaque type comment
+Stack: [ ]
+=== decl>ffi-binding function ===
+Stack: [ ]
+Stack: [ M{ params: { M{ name: "a" type: "i32" } M{ name: "b" type: "i32" } } variadic?: f name: "toy_add" return-type: "i32" kind: fn: } ]
+Stack: [ "  toy-add: "toy_add" ffi{ i32 i32 -> i32 }" ]
+PASS: basic function
+Stack: [ ]
+Stack: [ M{ params: { M{ name: "c" type: "ptr:toy_counter" } } variadic?: f name: "toy_close" return-type: "void" kind: fn: } ]
+Stack: [ "  toy-close: "toy_close" ffi{ ptr:toy_counter -> void }" ]
+PASS: function with ptr param
+Stack: [ ]
+Stack: [ M{ params: { M{ name: "name" type: "cstring" } } variadic?: f name: "toy_greeting" return-type: "cstring" kind: fn: } ]
+Stack: [ "  toy-greeting: "toy_greeting" ffi{ cstring -> cstring }" ]
+PASS: function with cstring
+Stack: [ ]
+Stack: [ M{ params: { } variadic?: f name: "toy_u64_max" return-type: "u64" kind: fn: } ]
+Stack: [ "  toy-u64-max: "toy_u64_max" ffi{ -> u64 }" ]
+PASS: no-arg function
+Stack: [ ]
+Stack: [ M{ params: { M{ name: "buf" type: "cstring" } M{ name: "len" type: "i32" } M{ name: "val" type: "u8" } } variadic?: f name: "toy_fill" return-type: "void" kind: fn: } ]
+Stack: [ "  toy-fill: "toy_fill" ffi{ cstring i32 u8 -> void }" ]
+PASS: function with void return
+Stack: [ ]
+=== decl>ffi-binding variadic function ===
+Stack: [ ]
+Stack: [ M{ params: { M{ name: "count" type: "i32" } } variadic?: t name: "toy_sum_variadic" return-type: "i32" kind: fn: } ]
+Stack: [ "  toy-sum-variadic: "toy_sum_variadic" ffi{ i32 ... -> i32 }" ]
+PASS: variadic function
+Stack: [ ]
+Stack: [ M{ params: { M{ name: "count" type: "i32" } } variadic?: t name: "toy_sum_doubles" return-type: "f64" kind: fn: } ]
+Stack: [ "  toy-sum-doubles: "toy_sum_doubles" ffi{ i32 ... -> f64 }" ]
+PASS: variadic with f64 return
+Stack: [ ]
+=== round-trip parse then emit ===
+Stack: [ ]
+Stack: [ { M{ params: { M{ name: "a" type: "i32" } M{ name: "b" type: "i32" } } variadic?: f name: "toy_add" return-type: "i32" kind: fn: } } ]
+Stack: [ "  toy-add: "toy_add" ffi{ i32 i32 -> i32 }" ]
+PASS: round-trip function
+Stack: [ ]
+Stack: [ { M{ fields: { M{ name: "x" type: "f32" } M{ name: "y" type: "f32" } } name: "toy_vec2" kind: struct: } } ]
+Stack: [ "toy_vec2: ffi-struct{ x: f32 y: f32 } ;" ]
+PASS: round-trip struct
+Stack: [ ]
+Stack: [ { M{ variants: { M{ value: "0" name: "ALIGN_LEFT" } M{ value: "1" name: "ALIGN_CENTER" } M{ value: "2" name: "ALIGN_RIGHT" } } name: "Alignment" kind: enum: } } ]
+Stack: [ "ALIGN_LEFT: const [ 0 ] ;
+ALIGN_CENTER: const [ 1 ] ;
+ALIGN_RIGHT: const [ 2 ] ;" ]
+PASS: round-trip enum
+Stack: [ ]
+Stack: [ { M{ params: { M{ name: "count" type: "i32" } } variadic?: t name: "toy_sum_variadic" return-type: "i32" kind: fn: } } ]
+Stack: [ "  toy-sum-variadic: "toy_sum_variadic" ffi{ i32 ... -> i32 }" ]
+PASS: round-trip variadic
+Stack: [ ]

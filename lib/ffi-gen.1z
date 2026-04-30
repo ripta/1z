@@ -378,6 +378,83 @@ translate-c-decls: ( header-path flags -- decls ) [
   if
 ] ;
 
+\ --- Emission: declaration hash → 1z FFI source ---
+
+\\ Convert a C snake_case name to 1z kebab-case.
+(c-name>kebab): ( c-name -- kebab-name ) [
+  "_" split "-" #join
+] ;
+
+\\ Emit a struct declaration hash as 1z ffi-struct{ syntax.
+\\ Example: "toy_vec2: ffi-struct{ x: f32 y: f32 } ;"
+(struct-decl>ffi-binding): ( decl -- str ) [
+  dup name: @get ": ffi-struct{ " #append
+  swap fields: @get
+  [ dup name: @get ": " #append swap type: @get #append ] #map #collect
+  " " #join
+  #append
+  " } ;" #append
+] ;
+
+\\ Emit an enum declaration hash as 1z const words.
+\\ Example: "ALIGN_LEFT: const [ 0 ] ;\nALIGN_RIGHT: const [ 1 ] ;"
+(enum-decl>ffi-binding): ( decl -- str ) [
+  variants: @get
+  [ dup name: @get ": const [ " #append swap value: @get #append " ] ;" #append ] #map #collect
+  "\n" #join
+] ;
+
+\\ Emit an opaque type declaration hash as a comment.
+\\ Example: "\ opaque: struct_toy_counter"
+(opaque-decl>ffi-binding): ( decl -- str ) [
+  name: @get "\\ opaque: " swap #append
+] ;
+
+\\ Emit a function declaration hash as an ffi-def{ entry line.
+\\ Example: "  toy-add: \"toy_add\" ffi{ i32 i32 -> i32 }"
+(fn-decl>ffi-binding): ( decl -- str ) [
+  \ Stack: decl
+  dup name: @get (c-name>kebab)
+
+  \ Build: "  word-name: \"c_name\" ffi{ "
+  "  " swap #append ": " #append
+  "\"" #append over name: @get #append "\" ffi{ " #append
+
+  \ Stack: decl result-str
+  \ Build param types
+  over params: @get
+  [ type: @get ] #map #collect
+  " " #join
+
+  \ Stack: decl result-str params-joined
+  \ Variadic?
+  2 pick-n variadic?: @get [
+    dup #len 0 > [ " ..." #append ] [ drop "..." ] if
+  ] when
+
+  \ Append params and return type
+  dup #len 0 > [ " " #append #append ] [ drop ] if
+  "-> " #append
+  swap return-type: @get #append
+  " }" #append
+] ;
+
+\\ Convert a single declaration hash to 1z FFI syntax.
+\\ Dispatches on the kind: field.
+decl>ffi-binding: ( decl -- str ) [
+  dup kind: @get
+  dup fn: = [ drop (fn-decl>ffi-binding) ] [
+    dup struct: = [ drop (struct-decl>ffi-binding) ] [
+      dup enum: = [ drop (enum-decl>ffi-binding) ] [
+        dup opaque: = [ drop (opaque-decl>ffi-binding) ] [
+          inspect "unknown declaration kind: " swap #append
+          f swap EUserThrown make-error throw
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
 \\ Classify a line and dispatch to the appropriate parser.
 \\ Stack: results lines i line
 \\ After: results lines i' (i' advanced appropriately)
