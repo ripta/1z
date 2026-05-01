@@ -1,0 +1,88 @@
+\ tools/ffi-gen.1z - Generate 1z FFI bindings from a C header
+\
+\ Usage: 1z tools/ffi-gen.1z [--strip-prefix PREFIX] HEADER LIB-NAME OUTPUT
+
+use "ffi-gen" ;
+
+(usage): [
+  "Usage: 1z tools/ffi-gen.1z [--strip-prefix PREFIX] HEADER LIB-NAME OUTPUT\n" eprint
+  "\n" eprint
+  "Arguments:\n" eprint
+  "  HEADER       C header file path\n" eprint
+  "  LIB-NAME     Library name for lib-open\n" eprint
+  "  OUTPUT       Output .1z file path\n" eprint
+  "\n" eprint
+  "Options:\n" eprint
+  "  --strip-prefix PREFIX   Strip PREFIX from C function names\n" eprint
+  "  -h, --help              Show this help\n" eprint
+  1 sys-exit
+] ;
+
+\ Parse command-line arguments manually.
+\ Returns: ( opts header lib-name output )
+(parse-args): ( args -- opts header lib-name output ) [
+  M{ } swap
+  V{ } swap
+
+  \ Stack: opts positionals args
+  0
+  \ Stack throughout: opts positionals args i
+  [ dup 2 pick-n #len < ] [
+    1 pick-n over #nth
+    \ Stack: opts positionals args i arg
+
+    dup "--strip-prefix" = [
+      drop 1 +
+      dup 2 pick-n #len >= [
+        "Error: --strip-prefix requires a value\n" eprint
+        (usage)
+      ] when
+      1 pick-n over #nth
+      \ Stack: opts positionals args i+1 prefix-value
+      4 pick-n swap strip-prefix: swap @set! drop
+      1 +
+    ] [
+      dup "--help" = over "-h" = or [
+        drop (usage)
+      ] [
+        \ Stack: opts positionals args i arg
+        3 pick-n swap #push! drop
+        1 +
+      ] if
+    ] if
+  ] while
+  drop drop
+
+  \ Stack: opts positionals
+  dup #len 3 /= [
+    "Error: expected 3 arguments (HEADER LIB-NAME OUTPUT)\n" eprint
+    (usage)
+  ] when
+
+  dup 0 #nth swap
+  dup 1 #nth swap
+  2 #nth
+] ;
+
+\ Write a string to a file path.
+(write-file): ( content path -- ) [
+  write: stream-open
+  dup -rot> [ print ] with-output-stream
+  stream-close
+] ;
+
+\ Stash output path via parameter while running generate-bindings.
+fg-output: define-parameter [ "" ] ;
+
+\ --- Main ---
+
+command-line-args (parse-args)
+\ Stack: opts header lib-name output
+
+fg-output [
+  \ Stack: opts header lib-name
+  <rot-
+  \ Stack: header lib-name opts
+  generate-bindings
+  fg-output get (write-file)
+] with-parameter

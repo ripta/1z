@@ -1,0 +1,64 @@
+use "testing" ;
+use "ffi-gen" ;
+use "strings" ;
+
+contains?: ( haystack needle -- ? ) [ #index-of f = not ] ;
+
+\ --- Basic generation ---
+
+"generate-bindings basic" test-section
+
+"ext/toy/toy.h" "toy" M{ } generate-bindings
+
+dup "use \"ffi\" ;\n" #starts-with? "output starts with use ffi header" assert-true
+dup "ffi-struct{" contains? "output contains ffi-struct" assert-true
+dup "toy_vec2: ffi-struct{ x: f32 y: f32 } ;" contains? "output contains toy_vec2 struct" assert-true
+dup "\"toy\" lib-open ffi-def{" contains? "output contains lib-open block" assert-true
+dup "-raw\" swap >module import" contains? "output contains module wrapper" assert-true
+dup "  toy-add: \"toy_add\" ffi{ i32 i32 -> i32 }" contains? "output contains toy_add function" assert-true
+dup "  toy-greeting: \"toy_greeting\" ffi{ cstring -> cstring }" contains? "output contains toy_greeting" assert-true
+dup "\\ opaque:" contains? "output contains opaque comment" assert-true
+
+\ Verify ordering: struct section before ffi-def{ block
+dup dup "ffi-struct{" #index-of swap "lib-open ffi-def{" #index-of
+< "structs appear before ffi-def block" assert-true
+
+\ Verify ordering: opaque section before ffi-def{ block
+dup "\\ opaque:" #index-of over "lib-open ffi-def{" #index-of
+< "opaques appear before ffi-def block" assert-true
+
+drop
+
+\ --- Strip-prefix ---
+
+"generate-bindings strip-prefix" test-section
+
+"ext/toy/toy.h" "toy" M{ strip-prefix: "toy_" } generate-bindings
+
+\ Word names should have prefix stripped
+dup "  add: \"toy_add\" ffi{ i32 i32 -> i32 }" contains? "stripped function name" assert-true
+dup "  greeting: \"toy_greeting\" ffi{ cstring -> cstring }" contains? "stripped greeting" assert-true
+
+\ C symbol names preserved in ffi{ signatures
+dup "\"toy_add\"" contains? "C symbol preserved for toy_add" assert-true
+dup "\"toy_greeting\"" contains? "C symbol preserved for toy_greeting" assert-true
+drop
+
+\ --- Ordering with synthetic source ---
+
+"generate-bindings ordering" test-section
+
+\ Test that sections appear in correct order: structs, enums, opaques, fns
+"pub const MyStruct = extern struct {\n    x: f32 = @import(\"std\").mem.zeroes(f32),\n};\npub const MyEnum = enum(c_int) {\n    A = 0,\n    B = 1,\n    _,\n};\npub const my_opaque = opaque {};\npub extern fn my_func(a: c_int) c_int;\n"
+parse-zig-decls
+
+\ Verify we got all 4 kinds
+dup #len 4 "parsed 4 declarations" assert=
+
+\ Emit each one and check we get expected content
+[ decl>ffi-binding ] #map #collect "\n" #join
+dup "ffi-struct{" contains? "synthetic has struct" assert-true
+dup "const [" contains? "synthetic has enum constants" assert-true
+dup "opaque:" contains? "synthetic has opaque" assert-true
+dup "ffi{" contains? "synthetic has function" assert-true
+drop

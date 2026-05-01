@@ -1,0 +1,22 @@
+=== generate-bindings basic ===
+PASS: output starts with use ffi header
+PASS: output contains ffi-struct
+PASS: output contains toy_vec2 struct
+PASS: output contains lib-open block
+PASS: output contains module wrapper
+PASS: output contains toy_add function
+PASS: output contains toy_greeting
+PASS: output contains opaque comment
+PASS: structs appear before ffi-def block
+PASS: opaques appear before ffi-def block
+=== generate-bindings strip-prefix ===
+PASS: stripped function name
+PASS: stripped greeting
+PASS: C symbol preserved for toy_add
+PASS: C symbol preserved for toy_greeting
+=== generate-bindings ordering ===
+PASS: parsed 4 declarations
+PASS: synthetic has struct
+PASS: synthetic has enum constants
+PASS: synthetic has opaque
+PASS: synthetic has function

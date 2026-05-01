@@ -414,7 +414,10 @@ translate-c-decls: ( header-path flags -- decls ) [
 \\ Example: "  toy-add: \"toy_add\" ffi{ i32 i32 -> i32 }"
 (fn-decl>ffi-binding): ( decl -- str ) [
   \ Stack: decl
-  dup name: @get (c-name>kebab)
+  dup dup word-name: @has?
+  [ word-name: @get ]
+  [ name: @get (c-name>kebab) ]
+  if
 
   \ Build: "  word-name: \"c_name\" ffi{ "
   "  " swap #append ": " #append
@@ -497,4 +500,121 @@ decl>ffi-binding: ( decl -- str ) [
       ] if
     ] if
   ] if
+] ;
+
+\ --- End-to-end binding generation ---
+
+\\ Strip a prefix from the start of a string.
+\\ Returns the string unchanged if it does not start with the prefix.
+(strip-prefix): ( name prefix -- name' ) [
+  2dup #starts-with?
+  [ #len #drop ]
+  [ drop ]
+  if
+] ;
+
+\\ Apply strip-prefix to a single function declaration.
+\\ Strips prefix from name:, kebab-cases it, stores as word-name:.
+\\ Non-fn decls are returned unchanged.
+(strip-prefix-one): ( decl prefix -- decl ) [
+  swap
+  dup kind: @get fn: = [
+    dup name: @get 2 pick-n (strip-prefix) (c-name>kebab)
+    word-name: swap @set!
+    swap drop
+  ] [
+    swap drop
+  ] if
+] ;
+
+\\ Apply strip-prefix to all function declarations in an array.
+\\ For each fn: decl, strips the prefix from name:, kebab-cases it,
+\\ and stores the result as word-name:. Non-fn decls are unchanged.
+(apply-strip-prefix): ( decls prefix -- decls ) [
+  [ (strip-prefix-one) ] curry #map #collect
+] ;
+
+\\ Emit a section of declarations as a newline-joined string.
+\\ Returns "" for an empty input array.
+(emit-section): ( decls -- str ) [
+  dup #len 0 = [ drop "" ] [
+    [ decl>ffi-binding ] #map #collect "\n" #join
+  ] if
+] ;
+
+\\ Wrap function binding strings in a lib-open ffi-def{ module block.
+\\ lib-name is used for lib-open and the module name (lib-name + "-raw").
+(emit-ffi-def-block): ( fn-decls lib-name -- str ) [
+  swap
+  dup #len 0 = [ 2drop "" ] [
+    [ decl>ffi-binding ] #map #collect "\n" #join
+    \ Stack: lib-name fns-str
+    over
+    \ Stack: lib-name fns-str lib-name
+    "\"" swap #append "\" lib-open ffi-def{\n" #append
+    \ Stack: lib-name fns-str header
+    swap #append
+    \ Stack: lib-name body (header + fns-str)
+    swap "\n} call \"" swap #append "-raw\" swap >module import" #append
+    \ Stack: body footer
+    #append
+  ] if
+] ;
+
+\\ Filter empty strings and join non-empty ones with double newlines.
+(join-sections): ( sections -- str ) [
+  [ #len 0 > ] #filter #collect
+  "\n\n" #join
+] ;
+
+\\ Generate a complete .1z binding file from a C header.
+\\ opts is a hash with optional keys:
+\\   flags: -- array of extra CLI flags for zig translate-c (default { })
+\\   strip-prefix: -- string prefix to strip from C function names (default f)
+generate-bindings: ( header-path lib-name opts -- str ) [
+  gb-lib-name: define-parameter [ "" ] ;
+
+  \ Extract options
+  dup flags: @has? [ dup flags: @get ] [ { } ] if
+  swap dup strip-prefix: @has? [ strip-prefix: @get ] [ drop f ] if
+  \ Stack: header-path lib-name tc-flags strip-prefix
+
+  \ Stash lib-name, run translate-c
+  swap 3 pick-n swap translate-c-decls
+  \ Stack: header-path lib-name strip-prefix decls
+
+  \ Apply strip-prefix if set
+  over [ over (apply-strip-prefix) ] when
+  swap drop
+  \ Stack: header-path lib-name decls
+
+  \ Stash lib-name via parameter
+  swap gb-lib-name [
+    swap drop
+    \ Stack: decls
+
+    \ Build sections into a vector
+    V{ }
+
+    \ Structs
+    over [ kind: @get struct: = ] #filter #collect (emit-section)
+    dup #len 0 > [ over swap #push! drop ] [ drop ] if
+
+    \ Enums
+    over [ kind: @get enum: = ] #filter #collect (emit-section)
+    dup #len 0 > [ over swap #push! drop ] [ drop ] if
+
+    \ Opaques
+    over [ kind: @get opaque: = ] #filter #collect (emit-section)
+    dup #len 0 > [ over swap #push! drop ] [ drop ] if
+
+    \ Functions (wrapped in ffi-def{ block)
+    swap [ kind: @get fn: = ] #filter #collect
+    gb-lib-name get (emit-ffi-def-block)
+    dup #len 0 > [ over swap #push! drop ] [ drop ] if
+
+    \ Join sections
+    >array (join-sections)
+    "use \"ffi\" ;\n\n" swap #append "\n" #append
+  ] with-parameter
 ] ;
