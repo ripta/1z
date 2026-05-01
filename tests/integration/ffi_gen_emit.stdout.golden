@@ -74,3 +74,25 @@ Stack: [ { M{ params: { M{ name: "count" type: "i32" } } variadic?: t name: "toy
 Stack: [ "  toy-sum-variadic: "toy_sum_variadic" ffi{ i32 ... -> i32 }" ]
 PASS: round-trip variadic
 Stack: [ ]
+=== decl>ffi-binding ptr TODO annotation ===
+Stack: [ ]
+Stack: [ M{ params: { M{ name: "a" type: "i32" } M{ name: "b" type: "i32" } M{ name: "quotient" type: "ptr" } M{ name: "remainder" type: "ptr" } } variadic?: f name: "toy_divmod" return-type: "void" kind: fn: } ]
+Stack: [ "  toy-divmod: "toy_divmod" ffi{ i32 i32 ptr ptr -> void }  \ TODO: check if out-param: quotient, remainder" ]
+PASS: bare ptr params get TODO
+Stack: [ ]
+Stack: [ M{ params: { M{ name: "c" type: "ptr:toy_counter" } } variadic?: f name: "toy_close" return-type: "void" kind: fn: } ]
+Stack: [ "  toy-close: "toy_close" ffi{ ptr:toy_counter -> void }" ]
+PASS: ptr:T params no TODO
+Stack: [ ]
+Stack: [ M{ params: { M{ name: "a" type: "i32" } M{ name: "b" type: "i32" } } variadic?: f name: "toy_add" return-type: "i32" kind: fn: } ]
+Stack: [ "  toy-add: "toy_add" ffi{ i32 i32 -> i32 }" ]
+PASS: no ptr no TODO
+Stack: [ ]
+Stack: [ M{ params: { M{ name: "c" type: "ptr:toy_counter" } M{ name: "out" type: "ptr" } } variadic?: f name: "toy_mixed" return-type: "void" kind: fn: } ]
+Stack: [ "  toy-mixed: "toy_mixed" ffi{ ptr:toy_counter ptr -> void }  \ TODO: check if out-param: out" ]
+PASS: mixed ptr types
+Stack: [ ]
+Stack: [ M{ params: { M{ name: "val" type: "ptr" } } variadic?: f name: "toy_double_inout" return-type: "i32" kind: fn: } ]
+Stack: [ "  toy-double-inout: "toy_double_inout" ffi{ ptr -> i32 }  \ TODO: check if out-param: val" ]
+PASS: single ptr param
+Stack: [ ]

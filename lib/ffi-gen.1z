@@ -442,11 +442,25 @@ translate-c-decls: ( header-path flags -- decls ) [
   " }" #append
 ] ;
 
+\\ Emit a function binding with TODO annotations for bare ptr parameters.
+\\ If any parameter has type exactly "ptr", appends a comment listing
+\\ those parameter names for manual out-param review.
+(fn-decl>ffi-binding+todo): ( decl -- str ) [
+  dup (fn-decl>ffi-binding)
+  swap params: @get
+  [ type: @get "ptr" = ] #filter #collect
+  dup #len 0 > [
+    [ name: @get ] #map #collect ", " #join
+    "  \\ TODO: check if out-param: " swap #append
+    #append
+  ] [ drop ] if
+] ;
+
 \\ Convert a single declaration hash to 1z FFI syntax.
 \\ Dispatches on the kind: field.
 decl>ffi-binding: ( decl -- str ) [
   dup kind: @get
-  dup fn: = [ drop (fn-decl>ffi-binding) ] [
+  dup fn: = [ drop (fn-decl>ffi-binding+todo) ] [
     dup struct: = [ drop (struct-decl>ffi-binding) ] [
       dup enum: = [ drop (enum-decl>ffi-binding) ] [
         dup opaque: = [ drop (opaque-decl>ffi-binding) ] [
@@ -500,6 +514,37 @@ decl>ffi-binding: ( decl -- str ) [
       ] if
     ] if
   ] if
+] ;
+
+\ --- Header-origin filtering ---
+
+\\ Read the entire contents of a file as a string.
+(read-file-text): ( path -- text ) [
+  read: stream-open dup stream-read-all swap stream-close bytes>
+] ;
+
+\\ Check if a declaration's name appears in the header text.
+\\ Handles the struct_ prefix that zig translate-c adds for opaque types
+\\ (e.g., struct_toy_counter for a C typedef struct toy_counter).
+(decl-in-header?): ( decl header-text -- ? ) [
+  swap name: @get
+  \ Stack: header-text name
+  2dup #index-of f = not [
+    2drop t
+  ] [
+    \ Try stripping struct_ prefix
+    dup "struct_" #starts-with? [
+      7 #drop
+      #index-of f = not
+    ] [ 2drop f ] if
+  ] if
+] ;
+
+\\ Filter declarations to those whose names appear in the header text.
+(filter-to-header): ( decls header-path -- decls' ) [
+  (read-file-text)
+  [ (decl-in-header?) ] curry
+  #filter #collect
 ] ;
 
 \ --- End-to-end binding generation ---
@@ -582,6 +627,9 @@ generate-bindings: ( header-path lib-name opts -- str ) [
   \ Stash lib-name, run translate-c
   swap 3 pick-n swap translate-c-decls
   \ Stack: header-path lib-name strip-prefix decls
+
+  \ Filter to declarations originating from the user's header
+  3 pick-n (filter-to-header)
 
   \ Apply strip-prefix if set
   over [ over (apply-strip-prefix) ] when

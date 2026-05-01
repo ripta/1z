@@ -82,3 +82,32 @@ decl>ffi-binding
 "pub extern fn toy_sum_variadic(count: c_int, ...) c_int;\n" parse-zig-decls
 #first decl>ffi-binding
 "  toy-sum-variadic: \"toy_sum_variadic\" ffi{ i32 ... -> i32 }" "round-trip variadic" assert=
+
+\ --- TODO out-param annotation tests ---
+
+"decl>ffi-binding ptr TODO annotation" test-section
+
+\ Function with bare ptr params gets TODO comment
+M{ kind: fn: name: "toy_divmod" params: { M{ name: "a" type: "i32" } M{ name: "b" type: "i32" } M{ name: "quotient" type: "ptr" } M{ name: "remainder" type: "ptr" } } return-type: "void" variadic?: f }
+decl>ffi-binding
+"  toy-divmod: \"toy_divmod\" ffi{ i32 i32 ptr ptr -> void }  \\ TODO: check if out-param: quotient, remainder" "bare ptr params get TODO" assert=
+
+\ Function with only ptr:T params, so no TODO
+M{ kind: fn: name: "toy_close" params: { M{ name: "c" type: "ptr:toy_counter" } } return-type: "void" variadic?: f }
+decl>ffi-binding
+"  toy-close: \"toy_close\" ffi{ ptr:toy_counter -> void }" "ptr:T params no TODO" assert=
+
+\ Function with no pointer params, so no TODO
+M{ kind: fn: name: "toy_add" params: { M{ name: "a" type: "i32" } M{ name: "b" type: "i32" } } return-type: "i32" variadic?: f }
+decl>ffi-binding
+"  toy-add: \"toy_add\" ffi{ i32 i32 -> i32 }" "no ptr no TODO" assert=
+
+\ Function with mixed ptr and ptr:T, so only bare ptr listed
+M{ kind: fn: name: "toy_mixed" params: { M{ name: "c" type: "ptr:toy_counter" } M{ name: "out" type: "ptr" } } return-type: "void" variadic?: f }
+decl>ffi-binding
+"  toy-mixed: \"toy_mixed\" ffi{ ptr:toy_counter ptr -> void }  \\ TODO: check if out-param: out" "mixed ptr types" assert=
+
+\ Single bare ptr param
+M{ kind: fn: name: "toy_double_inout" params: { M{ name: "val" type: "ptr" } } return-type: "i32" variadic?: f }
+decl>ffi-binding
+"  toy-double-inout: \"toy_double_inout\" ffi{ ptr -> i32 }  \\ TODO: check if out-param: val" "single ptr param" assert=

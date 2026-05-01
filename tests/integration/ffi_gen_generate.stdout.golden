@@ -9,6 +9,10 @@ PASS: output contains toy_greeting
 PASS: output contains opaque comment
 PASS: structs appear before ffi-def block
 PASS: opaques appear before ffi-def block
+PASS: no darwin system decls in output
+PASS: toy_vec2 preserved after filtering
+PASS: opaque toy_counter preserved after filtering
+PASS: ptr params have TODO annotations
 === generate-bindings strip-prefix ===
 PASS: stripped function name
 PASS: stripped greeting

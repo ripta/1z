@@ -27,6 +27,14 @@ dup dup "ffi-struct{" #index-of swap "lib-open ffi-def{" #index-of
 dup "\\ opaque:" #index-of over "lib-open ffi-def{" #index-of
 < "opaques appear before ffi-def block" assert-true
 
+\ Header filtering: system declarations excluded, user declarations preserved
+dup "__darwin" contains? not "no darwin system decls in output" assert-true
+dup "toy_vec2" contains? "toy_vec2 preserved after filtering" assert-true
+dup "toy_counter" contains? "opaque toy_counter preserved after filtering" assert-true
+
+\ TODO annotations for pointer params
+dup "TODO: check if out-param" contains? "ptr params have TODO annotations" assert-true
+
 drop
 
 \ --- Strip-prefix ---
