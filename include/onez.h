@@ -91,6 +91,18 @@ typedef void *onez_type_t;
 #define ONEZ_ERR_INVALID_EFFECT     8
 #define ONEZ_ERR_WORD_NOT_FOUND     9
 #define ONEZ_ERR_ISOLATION_UNDERFLOW 10
+#define ONEZ_ERR_DEBUGGER_NOT_ACTIVE 11
+
+/* ---- Debug event constants ---- */
+
+#define ONEZ_EVENT_PAUSED          0
+#define ONEZ_EVENT_RESUMED         1
+#define ONEZ_EVENT_BREAKPOINT_HIT  2
+#define ONEZ_EVENT_STEP_COMPLETED  3
+
+/* Debug event callback. Receives the event code, the onez_t handle, and
+ * the user_data pointer provided to onez_debug_set_callback. */
+typedef void (*onez_debug_callback_fn)(int event, onez_t handle, void *user_data);
 
 /* ---- Diagnostic severity ---- *
  *
@@ -651,6 +663,74 @@ int onez_set_args(onez_t ctx, int argc, char **argv);
  * and its contents.
  */
 int onez_set_static_libs(onez_t ctx, const char **names, unsigned int count);
+
+/* ---- Debugger ---- */
+
+/*
+ * Activate the debugger. Allocates and attaches a debugger to the context.
+ * If the debugger was previously disabled, re-attaches the existing instance
+ * (preserving breakpoints and callbacks).
+ *
+ * Returns ONEZ_OK on success.
+ */
+int onez_debug_enable(onez_t ctx);
+
+/*
+ * Deactivate the debugger. Detaches from the context but preserves the
+ * debugger instance so breakpoints and callbacks survive re-enable.
+ *
+ * Returns ONEZ_OK on success.
+ * Returns ONEZ_ERR_DEBUGGER_NOT_ACTIVE if the debugger has not been enabled.
+ */
+int onez_debug_disable(onez_t ctx);
+
+/*
+ * Register or replace the debug event callback. May be called before or
+ * after onez_debug_enable.
+ *
+ * The callback fires from within the execution loop when the debugger
+ * pauses. The host calls stepping APIs (step_into, step_over, step_finish,
+ * continue) from within the callback to control what happens next. When
+ * the callback returns, execution resumes with whatever mode was set.
+ *
+ * Pass NULL to remove the callback.
+ *
+ * Returns ONEZ_OK on success.
+ */
+int onez_debug_set_callback(onez_t ctx, onez_debug_callback_fn callback, void *user_data);
+
+/*
+ * Set stepper mode to step_into. Pauses before the next instruction.
+ *
+ * Returns ONEZ_OK on success.
+ * Returns ONEZ_ERR_DEBUGGER_NOT_ACTIVE if the debugger has not been enabled.
+ */
+int onez_debug_step_into(onez_t ctx);
+
+/*
+ * Set stepper mode to step_over. Pauses when returning to the current
+ * call depth or shallower.
+ *
+ * Returns ONEZ_OK on success.
+ * Returns ONEZ_ERR_DEBUGGER_NOT_ACTIVE if the debugger has not been enabled.
+ */
+int onez_debug_step_over(onez_t ctx);
+
+/*
+ * Set stepper mode to step_finish. Runs until the current word returns.
+ *
+ * Returns ONEZ_OK on success.
+ * Returns ONEZ_ERR_DEBUGGER_NOT_ACTIVE if the debugger has not been enabled.
+ */
+int onez_debug_step_finish(onez_t ctx);
+
+/*
+ * Set stepper mode to continue. Runs until the next breakpoint or end.
+ *
+ * Returns ONEZ_OK on success.
+ * Returns ONEZ_ERR_DEBUGGER_NOT_ACTIVE if the debugger has not been enabled.
+ */
+int onez_debug_continue(onez_t ctx);
 
 /* ---- AOT Runtime ---- */
 

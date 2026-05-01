@@ -3771,7 +3771,11 @@ pub const Context = struct {
         for (instructions, 0..) |instr, idx| {
             if (self.debugger) |dbg| {
                 if (try dbg.shouldPause(instr, self)) {
-                    try dbg.enterPrompt(instr, self);
+                    if (dbg.hasCCallback()) {
+                        dbg.handleCPause(self);
+                    } else {
+                        try dbg.enterPrompt(instr, self);
+                    }
                 }
             }
 

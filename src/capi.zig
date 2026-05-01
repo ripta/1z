@@ -30,6 +30,8 @@ const MutableMap = value_mod.MutableMap;
 const Value = value_mod.Value;
 const TypeValue = value_mod.TypeValue;
 
+const debugger_mod = @import("debugger/mod.zig");
+
 const HostWordRegistration = struct {
     name: []const u8,
 };
@@ -56,6 +58,15 @@ const OnezHandle = struct {
         std.ArrayListUnmanaged(context_mod.ProtocolObligation),
     ) = .{},
     diagnostics: std.ArrayListUnmanaged(OwnedDiagnostic) = .{},
+
+    /// Heap-allocated debugger, created by onez_debug_enable. Persists across
+    /// enable/disable cycles so breakpoints and callbacks survive re-enable.
+    debugger: ?*debugger_mod.Debugger = null,
+
+    /// Stored C debug callback and userdata, wired into the debugger's
+    /// EventEmitter when the debugger is active.
+    debug_callback: ?OnezDebugCallbackFn = null,
+    debug_userdata: ?*anyopaque = null,
 };
 
 const page = std.heap.page_allocator;
@@ -96,6 +107,16 @@ pub const ONEZ_ERR_NOT_HOST_WORD: c_int = 7;
 pub const ONEZ_ERR_INVALID_EFFECT: c_int = 8;
 pub const ONEZ_ERR_WORD_NOT_FOUND: c_int = 9;
 pub const ONEZ_ERR_ISOLATION_UNDERFLOW: c_int = 10;
+pub const ONEZ_ERR_DEBUGGER_NOT_ACTIVE: c_int = 11;
+
+// Debug event constants for onez_debug_set_callback.
+pub const ONEZ_EVENT_PAUSED: c_int = 0;
+pub const ONEZ_EVENT_RESUMED: c_int = 1;
+pub const ONEZ_EVENT_BREAKPOINT_HIT: c_int = 2;
+pub const ONEZ_EVENT_STEP_COMPLETED: c_int = 3;
+
+// Debug callback function type.
+pub const OnezDebugCallbackFn = *const fn (c_int, ?*anyopaque, ?*anyopaque) callconv(.c) void;
 
 // Diagnostic severity constants returned by onez_diag_severity.
 // These match @intFromEnum of effect_inference.Severity by declaration order.
@@ -163,6 +184,13 @@ export fn onez_deinit(ptr: ?*anyopaque) void {
     clearLastError(handle);
     clearDiagnostics(handle);
     handle.diagnostics.deinit(allocator);
+
+    if (handle.debugger) |dbg| {
+        handle.ctx.debugger = null;
+        dbg.deinit();
+        allocator.destroy(dbg);
+        handle.debugger = null;
+    }
 
     for (handle.host_words.items) |entry| {
         allocator.free(entry.name);
@@ -1377,6 +1405,105 @@ export fn onez_set_static_libs(ptr: ?*anyopaque, names: [*]const [*:0]const u8, 
 export fn onez_set_interpreter_fallback(ptr: ?*anyopaque, allowed: bool) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     handle.ctx.allow_interpreted_fallback = allowed;
+    return ONEZ_OK;
+}
+
+// =========================================================================
+// Debugger
+// =========================================================================
+
+/// Activate the debugger. Allocates and attaches a Debugger to the context.
+/// If the debugger was previously disabled, reättaches the existing instance,
+/// preserving breakpoints and callbacks.
+export fn onez_debug_enable(ptr: ?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const allocator = handle.gpa.allocator();
+
+    if (handle.debugger == null) {
+        const dbg = allocator.create(debugger_mod.Debugger) catch return ONEZ_ERR_ALLOC;
+        dbg.* = debugger_mod.Debugger.init(allocator);
+        handle.debugger = dbg;
+    }
+
+    const dbg = handle.debugger.?;
+
+    // Wire up stored C callback if present.
+    if (handle.debug_callback) |cb| {
+        dbg.events.c_callback = cb;
+        dbg.events.c_handle = ptr;
+        dbg.events.c_userdata = handle.debug_userdata;
+    }
+
+    handle.ctx.debugger = dbg;
+    return ONEZ_OK;
+}
+
+/// Deactivate the debugger. Detaches from the context but preserves the
+/// debugger instance so breakpoints and callbacks survive re-enable.
+export fn onez_debug_disable(ptr: ?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    if (handle.debugger == null) return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
+
+    handle.ctx.debugger = null;
+    return ONEZ_OK;
+}
+
+/// Register or replace the debug event callback. May be called before or
+/// after onez_debug_enable. The callback fires from within the execution
+/// loop when the debugger pauses; the host calls stepping APIs from within
+/// the callback to control what happens next.
+export fn onez_debug_set_callback(
+    ptr: ?*anyopaque,
+    callback: ?OnezDebugCallbackFn,
+    userdata: ?*anyopaque,
+) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+
+    handle.debug_callback = callback;
+    handle.debug_userdata = userdata;
+
+    // If the debugger is already active, update the emitter immediately.
+    if (handle.debugger) |dbg| {
+        dbg.events.c_callback = callback;
+        dbg.events.c_handle = ptr;
+        dbg.events.c_userdata = userdata;
+    }
+
+    return ONEZ_OK;
+}
+
+/// Set stepper mode to step_into. Pauses before the next instruction.
+export fn onez_debug_step_into(ptr: ?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const dbg = handle.debugger orelse return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
+    dbg.stepper.mode = .step_into;
+    return ONEZ_OK;
+}
+
+/// Set stepper mode to step_over. Pauses when returning to the current
+/// call depth or shallower.
+export fn onez_debug_step_over(ptr: ?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const dbg = handle.debugger orelse return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
+    dbg.stepper.mode = .step_over;
+    dbg.stepper.target_depth = handle.ctx.call_stack.items.len;
+    return ONEZ_OK;
+}
+
+/// Set stepper mode to step_finish. Runs until the current word returns.
+export fn onez_debug_step_finish(ptr: ?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const dbg = handle.debugger orelse return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
+    dbg.stepper.mode = .step_finish;
+    dbg.stepper.target_depth = handle.ctx.call_stack.items.len;
+    return ONEZ_OK;
+}
+
+/// Set stepper mode to continue. Runs until the next breakpoint or end.
+export fn onez_debug_continue(ptr: ?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const dbg = handle.debugger orelse return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
+    dbg.stepper.mode = .continue_running;
     return ONEZ_OK;
 }
 
@@ -3408,6 +3535,171 @@ test "check diagnostics survive intervening eval" {
     try std.testing.expectEqualStrings(msg_before_copy, std.mem.span(msg_after_ptr.?));
 
     // Drain the stack so deinit sees a clean slate.
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+}
+
+// =========================================================================
+// Debugger tests
+// =========================================================================
+
+test "debug stepping APIs return DEBUGGER_NOT_ACTIVE before enable" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_ERR_DEBUGGER_NOT_ACTIVE, onez_debug_step_into(handle_ptr));
+    try std.testing.expectEqual(ONEZ_ERR_DEBUGGER_NOT_ACTIVE, onez_debug_step_over(handle_ptr));
+    try std.testing.expectEqual(ONEZ_ERR_DEBUGGER_NOT_ACTIVE, onez_debug_step_finish(handle_ptr));
+    try std.testing.expectEqual(ONEZ_ERR_DEBUGGER_NOT_ACTIVE, onez_debug_continue(handle_ptr));
+    try std.testing.expectEqual(ONEZ_ERR_DEBUGGER_NOT_ACTIVE, onez_debug_disable(handle_ptr));
+}
+
+test "debug enable and disable lifecycle" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_step_into(handle_ptr));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_disable(handle_ptr));
+
+    // After disable, stepping fails again.
+    try std.testing.expectEqual(ONEZ_ERR_DEBUGGER_NOT_ACTIVE, onez_debug_step_into(handle_ptr));
+
+    // Re-enable works -- the debugger instance is preserved.
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_step_into(handle_ptr));
+}
+
+test "debug null handle returns NULL_HANDLE" {
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_debug_enable(null));
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_debug_disable(null));
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_debug_step_into(null));
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_debug_step_over(null));
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_debug_step_finish(null));
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_debug_continue(null));
+    try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_debug_set_callback(null, null, null));
+}
+
+var test_debug_event_count: usize = 0;
+var test_debug_last_event: c_int = -1;
+var test_debug_seen_handle: ?*anyopaque = null;
+
+fn resetDebugTestState() void {
+    test_debug_event_count = 0;
+    test_debug_last_event = -1;
+    test_debug_seen_handle = null;
+}
+
+fn debugTestCallback(event: c_int, handle: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
+    test_debug_event_count += 1;
+    test_debug_last_event = event;
+    test_debug_seen_handle = handle;
+
+    // On pause, set continue so execution doesn't stay in step_into forever.
+    if (event == ONEZ_EVENT_PAUSED) {
+        _ = onez_debug_continue(handle);
+    }
+}
+
+test "debug callback fires during eval" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    resetDebugTestState();
+
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_set_callback(handle_ptr, &debugTestCallback, null));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+
+    // step_into is the default mode, so the first instruction will pause.
+    const src = "1 2 +";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src, src.len));
+
+    // The callback should have been invoked at least once with a paused event.
+    try std.testing.expect(test_debug_event_count > 0);
+    try std.testing.expectEqual(handle_ptr, test_debug_seen_handle);
+
+    // Drain the stack.
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 3), out);
+}
+
+var test_debug_step_into_pauses: usize = 0;
+
+fn debugStepIntoCallback(event: c_int, handle: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
+    if (event == ONEZ_EVENT_PAUSED) {
+        test_debug_step_into_pauses += 1;
+        // Keep stepping into so we pause on every instruction.
+        _ = onez_debug_step_into(handle);
+    }
+}
+
+test "debug step_into pauses on every instruction" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    test_debug_step_into_pauses = 0;
+
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_set_callback(handle_ptr, &debugStepIntoCallback, null));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+
+    // "1 2 +" has 3 instructions (push 1, push 2, call +).
+    const src = "1 2 +";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src, src.len));
+
+    // Should pause at least 3 times (one per instruction in the top-level quotation).
+    try std.testing.expect(test_debug_step_into_pauses >= 3);
+
+    // Drain the stack.
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+}
+
+test "debug set_callback before enable wires up on enable" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    resetDebugTestState();
+
+    // Set callback BEFORE enable.
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_set_callback(handle_ptr, &debugTestCallback, null));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+
+    const src = "1";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src, src.len));
+
+    try std.testing.expect(test_debug_event_count > 0);
+
+    // Drain.
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+}
+
+test "debug re-enable after disable preserves callback" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    resetDebugTestState();
+
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_set_callback(handle_ptr, &debugTestCallback, null));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_disable(handle_ptr));
+
+    // Re-enable.
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+
+    const src = "1";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src, src.len));
+
+    try std.testing.expect(test_debug_event_count > 0);
+
+    // Drain.
     var out: i64 = 0;
     try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
 }

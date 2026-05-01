@@ -91,6 +91,19 @@ pub const Debugger = struct {
         };
     }
 
+    /// Returns true if the debugger has a C embedding API callback registered.
+    pub fn hasCCallback(self: *const Debugger) bool {
+        return self.events.c_callback != null;
+    }
+
+    /// Non-interactive pause for the C embedding API. Fires the paused event
+    /// (which invokes the C callback) and returns immediately. The host sets
+    /// the stepping mode from within the callback; execution resumes when
+    /// this function returns.
+    pub fn handleCPause(self: *Debugger, ctx: *Context) void {
+        self.events.emit(.paused, ctx);
+    }
+
     /// Read a line from the editor (TTY) or stdin (piped).
     /// Returns null on EOF. Caller must call `freeLine` when done.
     fn readLine(self: *Debugger) ?[]const u8 {

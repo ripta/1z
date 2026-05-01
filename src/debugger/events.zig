@@ -10,11 +10,19 @@ pub const DebugEvent = enum {
 
 pub const EventListener = *const fn (event: DebugEvent, ctx: *Context) void;
 
+/// C-compatible callback type for the embedding API.
+pub const CCallbackFn = *const fn (c_int, ?*anyopaque, ?*anyopaque) callconv(.c) void;
+
 const max_listeners = 16;
 
 pub const EventEmitter = struct {
     listeners: [max_listeners]EventListener = undefined,
     len: usize = 0,
+
+    /// C embedding API callback and associated state.
+    c_callback: ?CCallbackFn = null,
+    c_handle: ?*anyopaque = null,
+    c_userdata: ?*anyopaque = null,
 
     pub fn addListener(self: *EventEmitter, listener: EventListener) void {
         if (self.len < max_listeners) {
@@ -40,6 +48,9 @@ pub const EventEmitter = struct {
     pub fn emit(self: *EventEmitter, event: DebugEvent, ctx: *Context) void {
         for (self.listeners[0..self.len]) |listener| {
             listener(event, ctx);
+        }
+        if (self.c_callback) |cb| {
+            cb(@intFromEnum(event), self.c_handle, self.c_userdata);
         }
     }
 };
