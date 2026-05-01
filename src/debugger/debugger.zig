@@ -102,6 +102,8 @@ pub const Debugger = struct {
     /// this function returns.
     pub fn handleCPause(self: *Debugger, ctx: *Context) void {
         self.events.emit(.paused, ctx);
+        self.events.emit(.resumed, ctx);
+        self.events.emit(.step_completed, ctx);
     }
 
     /// Read a line from the editor (TTY) or stdin (piped).

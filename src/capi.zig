@@ -3703,3 +3703,98 @@ test "debug re-enable after disable preserves callback" {
     var out: i64 = 0;
     try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
 }
+
+// Event sequence tracking for event-order tests.
+const max_tracked_events = 64;
+var tracked_events: [max_tracked_events]c_int = undefined;
+var tracked_event_count: usize = 0;
+
+fn resetTrackedEvents() void {
+    tracked_event_count = 0;
+}
+
+fn trackingCallback(event: c_int, handle: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
+    if (tracked_event_count < max_tracked_events) {
+        tracked_events[tracked_event_count] = event;
+        tracked_event_count += 1;
+    }
+    // Continue on pause so execution proceeds.
+    if (event == ONEZ_EVENT_PAUSED) {
+        _ = onez_debug_continue(handle);
+    }
+}
+
+test "debug callback receives RESUMED after PAUSED" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    resetTrackedEvents();
+
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_set_callback(handle_ptr, &trackingCallback, null));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+
+    const src = "1";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src, src.len));
+
+    // Should have at least PAUSED, RESUMED, STEP_COMPLETED.
+    try std.testing.expect(tracked_event_count >= 3);
+
+    // Find the first PAUSED and verify RESUMED follows it.
+    var found_paused = false;
+    for (0..tracked_event_count - 1) |i| {
+        if (tracked_events[i] == ONEZ_EVENT_PAUSED) {
+            found_paused = true;
+            try std.testing.expectEqual(ONEZ_EVENT_RESUMED, tracked_events[i + 1]);
+            break;
+        }
+    }
+    try std.testing.expect(found_paused);
+
+    // Drain.
+    var out_val: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out_val));
+}
+
+test "debug callback receives STEP_COMPLETED" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    resetTrackedEvents();
+
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_set_callback(handle_ptr, &trackingCallback, null));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+
+    const src = "1 2 +";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src, src.len));
+
+    // Verify STEP_COMPLETED appears in the event stream.
+    var found_step_completed = false;
+    for (0..tracked_event_count) |i| {
+        if (tracked_events[i] == ONEZ_EVENT_STEP_COMPLETED) {
+            found_step_completed = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_step_completed);
+
+    // Verify event triplet pattern: PAUSED -> RESUMED -> STEP_COMPLETED.
+    var found_triplet = false;
+    if (tracked_event_count >= 3) {
+        for (0..tracked_event_count - 2) |i| {
+            if (tracked_events[i] == ONEZ_EVENT_PAUSED and
+                tracked_events[i + 1] == ONEZ_EVENT_RESUMED and
+                tracked_events[i + 2] == ONEZ_EVENT_STEP_COMPLETED)
+            {
+                found_triplet = true;
+                break;
+            }
+        }
+    }
+    try std.testing.expect(found_triplet);
+
+    // Drain.
+    var out_val: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out_val));
+}
