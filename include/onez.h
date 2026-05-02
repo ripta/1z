@@ -92,6 +92,7 @@ typedef void *onez_type_t;
 #define ONEZ_ERR_WORD_NOT_FOUND     9
 #define ONEZ_ERR_ISOLATION_UNDERFLOW 10
 #define ONEZ_ERR_DEBUGGER_NOT_ACTIVE 11
+#define ONEZ_ERR_BREAKPOINT_NOT_FOUND 12
 
 /* ---- Debug event constants ---- */
 
@@ -731,6 +732,62 @@ int onez_debug_step_finish(onez_t ctx);
  * Returns ONEZ_ERR_DEBUGGER_NOT_ACTIVE if the debugger has not been enabled.
  */
 int onez_debug_continue(onez_t ctx);
+
+/* ---- Breakpoints ---- */
+
+/*
+ * Add a word-name breakpoint. Pauses when the named word is executed.
+ *
+ * Returns a breakpoint ID (>= 1) on success, or 0 if the debugger is
+ * not active, name is NULL, or allocation fails.
+ */
+unsigned int onez_breakpoint_add_word(onez_t ctx, const char *name);
+
+/*
+ * Add a source-location breakpoint. Pauses at the given file and line.
+ *
+ * Returns a breakpoint ID (>= 1) on success, or 0 on failure.
+ */
+unsigned int onez_breakpoint_add_source(onez_t ctx, const char *file,
+                                        unsigned int file_len,
+                                        unsigned int line);
+
+/*
+ * Add a conditional breakpoint. Pauses on the named word when the 1z
+ * condition expression evaluates to true on a cloned stack.
+ *
+ * Returns a breakpoint ID (>= 1) on success, or 0 on failure.
+ */
+unsigned int onez_breakpoint_add_conditional(onez_t ctx, const char *word,
+                                             const char *condition);
+
+/*
+ * Enable a breakpoint by ID.
+ *
+ * Returns ONEZ_OK on success.
+ * Returns ONEZ_ERR_BREAKPOINT_NOT_FOUND if the ID does not exist.
+ * Returns ONEZ_ERR_DEBUGGER_NOT_ACTIVE if the debugger has not been enabled.
+ */
+int onez_breakpoint_enable(onez_t ctx, unsigned int id);
+
+/*
+ * Disable a breakpoint by ID. Disabled breakpoints are retained but do
+ * not trigger.
+ *
+ * Returns ONEZ_OK on success.
+ * Returns ONEZ_ERR_BREAKPOINT_NOT_FOUND if the ID does not exist.
+ * Returns ONEZ_ERR_DEBUGGER_NOT_ACTIVE if the debugger has not been enabled.
+ */
+int onez_breakpoint_disable(onez_t ctx, unsigned int id);
+
+/*
+ * Delete a breakpoint by ID. Permanently removes the breakpoint.
+ *
+ * Returns ONEZ_OK on success.
+ * Returns ONEZ_ERR_BREAKPOINT_NOT_FOUND if the ID does not exist.
+ * Returns ONEZ_ERR_DEBUGGER_NOT_ACTIVE if the debugger has not been enabled.
+ */
+int onez_breakpoint_delete(onez_t ctx, unsigned int id);
 
 /* ---- AOT Runtime ---- */
 

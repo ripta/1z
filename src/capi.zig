@@ -108,6 +108,7 @@ pub const ONEZ_ERR_INVALID_EFFECT: c_int = 8;
 pub const ONEZ_ERR_WORD_NOT_FOUND: c_int = 9;
 pub const ONEZ_ERR_ISOLATION_UNDERFLOW: c_int = 10;
 pub const ONEZ_ERR_DEBUGGER_NOT_ACTIVE: c_int = 11;
+pub const ONEZ_ERR_BREAKPOINT_NOT_FOUND: c_int = 12;
 
 // Debug event constants for onez_debug_set_callback.
 pub const ONEZ_EVENT_PAUSED: c_int = 0;
@@ -1505,6 +1506,75 @@ export fn onez_debug_continue(ptr: ?*anyopaque) c_int {
     const dbg = handle.debugger orelse return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
     dbg.stepper.mode = .continue_running;
     return ONEZ_OK;
+}
+
+// =========================================================================
+// Breakpoints
+// =========================================================================
+
+/// Add a word-name breakpoint. Returns the breakpoint ID (>= 1), or 0
+/// if the debugger is not active or allocation fails.
+export fn onez_breakpoint_add_word(ptr: ?*anyopaque, name: ?[*:0]const u8) u32 {
+    const handle = castHandle(ptr) orelse return 0;
+    const dbg = handle.debugger orelse return 0;
+    const n = name orelse return 0;
+    return dbg.breakpoints.addWord(std.mem.sliceTo(n, 0));
+}
+
+/// Add a source-location breakpoint. Returns the breakpoint ID (>= 1),
+/// or 0 if the debugger is not active or allocation fails.
+export fn onez_breakpoint_add_source(
+    ptr: ?*anyopaque,
+    file: ?[*]const u8,
+    file_len: usize,
+    line: usize,
+) u32 {
+    const handle = castHandle(ptr) orelse return 0;
+    const dbg = handle.debugger orelse return 0;
+    const f = file orelse return 0;
+    return dbg.breakpoints.addSourceLocation(f[0..file_len], line);
+}
+
+/// Add a conditional breakpoint. Breaks on the named word when the 1z
+/// condition expression evaluates to true on a cloned stack. Returns the
+/// breakpoint ID (>= 1), or 0 on failure.
+export fn onez_breakpoint_add_conditional(
+    ptr: ?*anyopaque,
+    word: ?[*:0]const u8,
+    condition: ?[*:0]const u8,
+) u32 {
+    const handle = castHandle(ptr) orelse return 0;
+    const dbg = handle.debugger orelse return 0;
+    const w = word orelse return 0;
+    const c = condition orelse return 0;
+    return dbg.breakpoints.addConditional(
+        std.mem.sliceTo(w, 0),
+        std.mem.sliceTo(c, 0),
+    );
+}
+
+/// Enable a breakpoint by ID.
+export fn onez_breakpoint_enable(ptr: ?*anyopaque, id: u32) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const dbg = handle.debugger orelse return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
+    if (dbg.breakpoints.enable(id)) return ONEZ_OK;
+    return ONEZ_ERR_BREAKPOINT_NOT_FOUND;
+}
+
+/// Disable a breakpoint by ID.
+export fn onez_breakpoint_disable(ptr: ?*anyopaque, id: u32) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const dbg = handle.debugger orelse return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
+    if (dbg.breakpoints.disable(id)) return ONEZ_OK;
+    return ONEZ_ERR_BREAKPOINT_NOT_FOUND;
+}
+
+/// Delete a breakpoint by ID.
+export fn onez_breakpoint_delete(ptr: ?*anyopaque, id: u32) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const dbg = handle.debugger orelse return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
+    if (dbg.breakpoints.delete(id)) return ONEZ_OK;
+    return ONEZ_ERR_BREAKPOINT_NOT_FOUND;
 }
 
 // =========================================================================
@@ -3797,4 +3867,202 @@ test "debug callback receives STEP_COMPLETED" {
     // Drain.
     var out_val: i64 = 0;
     try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out_val));
+}
+
+// =========================================================================
+// Breakpoint tests
+// =========================================================================
+
+// Callback that tracks BREAKPOINT_HIT events and continues.
+var bp_hit_count: usize = 0;
+
+fn resetBpTestState() void {
+    bp_hit_count = 0;
+    resetTrackedEvents();
+}
+
+fn bpTrackingCallback(event: c_int, handle: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
+    if (event == ONEZ_EVENT_BREAKPOINT_HIT) {
+        bp_hit_count += 1;
+    }
+    if (tracked_event_count < max_tracked_events) {
+        tracked_events[tracked_event_count] = event;
+        tracked_event_count += 1;
+    }
+    if (event == ONEZ_EVENT_PAUSED) {
+        _ = onez_debug_continue(handle);
+    }
+}
+
+test "breakpoint APIs return DEBUGGER_NOT_ACTIVE before enable" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    // add functions return 0 when debugger is not active.
+    try std.testing.expectEqual(@as(u32, 0), onez_breakpoint_add_word(handle_ptr, "+"));
+    const f = "test.1z";
+    try std.testing.expectEqual(@as(u32, 0), onez_breakpoint_add_source(handle_ptr, f, f.len, 1));
+    try std.testing.expectEqual(@as(u32, 0), onez_breakpoint_add_conditional(handle_ptr, "+", "t"));
+
+    // Management functions return error code.
+    try std.testing.expectEqual(ONEZ_ERR_DEBUGGER_NOT_ACTIVE, onez_breakpoint_enable(handle_ptr, 1));
+    try std.testing.expectEqual(ONEZ_ERR_DEBUGGER_NOT_ACTIVE, onez_breakpoint_disable(handle_ptr, 1));
+    try std.testing.expectEqual(ONEZ_ERR_DEBUGGER_NOT_ACTIVE, onez_breakpoint_delete(handle_ptr, 1));
+}
+
+test "breakpoint enable/disable/delete lifecycle" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+
+    const id = onez_breakpoint_add_word(handle_ptr, "dup");
+    try std.testing.expect(id >= 1);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_breakpoint_disable(handle_ptr, id));
+    try std.testing.expectEqual(ONEZ_OK, onez_breakpoint_enable(handle_ptr, id));
+    try std.testing.expectEqual(ONEZ_OK, onez_breakpoint_delete(handle_ptr, id));
+
+    // Second delete fails: breakpoint no longer exists.
+    try std.testing.expectEqual(ONEZ_ERR_BREAKPOINT_NOT_FOUND, onez_breakpoint_delete(handle_ptr, id));
+
+    // Enable/disable also fail for deleted breakpoint.
+    try std.testing.expectEqual(ONEZ_ERR_BREAKPOINT_NOT_FOUND, onez_breakpoint_enable(handle_ptr, id));
+    try std.testing.expectEqual(ONEZ_ERR_BREAKPOINT_NOT_FOUND, onez_breakpoint_disable(handle_ptr, id));
+}
+
+test "breakpoint add_word triggers BREAKPOINT_HIT on matching word" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    resetBpTestState();
+
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_set_callback(handle_ptr, &bpTrackingCallback, null));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+
+    const id = onez_breakpoint_add_word(handle_ptr, "+");
+    try std.testing.expect(id >= 1);
+
+    // Set continue mode so we don't pause on every instruction before
+    // hitting the breakpoint.
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_continue(handle_ptr));
+
+    const src = "1 2 +";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src, src.len));
+
+    // The "+" word should have triggered BREAKPOINT_HIT.
+    try std.testing.expect(bp_hit_count >= 1);
+
+    // Verify BREAKPOINT_HIT appears in the event stream.
+    var found = false;
+    for (0..tracked_event_count) |i| {
+        if (tracked_events[i] == ONEZ_EVENT_BREAKPOINT_HIT) {
+            found = true;
+            break;
+        }
+    }
+    try std.testing.expect(found);
+
+    // Drain.
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+}
+
+test "breakpoint persists across disable/enable cycle" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    resetBpTestState();
+
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_set_callback(handle_ptr, &bpTrackingCallback, null));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+
+    const id = onez_breakpoint_add_word(handle_ptr, "+");
+    try std.testing.expect(id >= 1);
+
+    // Disable and re-enable the debugger.
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_disable(handle_ptr));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+
+    // Set continue so we run to the breakpoint.
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_continue(handle_ptr));
+
+    const src = "1 2 +";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src, src.len));
+
+    // Breakpoint should still fire after re-enable.
+    try std.testing.expect(bp_hit_count >= 1);
+
+    // Drain.
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+}
+
+test "breakpoint add_source triggers at file and line" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    resetBpTestState();
+
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_set_callback(handle_ptr, &bpTrackingCallback, null));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+
+    // Source breakpoints match on ctx.current_source and instruction line.
+    // onez_eval sets current_source to "<eval>".
+    const source = "<eval>";
+    const id = onez_breakpoint_add_source(handle_ptr, source, source.len, 1);
+    try std.testing.expect(id >= 1);
+
+    // Set continue so we run to the breakpoint.
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_continue(handle_ptr));
+
+    const src = "1 2 +";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src, src.len));
+
+    try std.testing.expect(bp_hit_count >= 1);
+
+    // Drain.
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+}
+
+test "breakpoint add_conditional triggers when condition is true" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    resetBpTestState();
+
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_set_callback(handle_ptr, &bpTrackingCallback, null));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+
+    // Break on "+" only when top of stack is > 2.
+    const id = onez_breakpoint_add_conditional(handle_ptr, "+", "dup 2 >");
+    try std.testing.expect(id >= 1);
+
+    // Set continue so we run to the breakpoint.
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_continue(handle_ptr));
+
+    // "1 2 +" -- top of stack when "+" executes is 2, not > 2, so no hit.
+    const src1 = "1 2 +";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src1, src1.len));
+    try std.testing.expectEqual(@as(usize, 0), bp_hit_count);
+
+    // Drain result of first eval.
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+
+    // "1 3 +" -- top of stack when "+" executes is 3, which is > 2.
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_continue(handle_ptr));
+    const src2 = "1 3 +";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src2, src2.len));
+    try std.testing.expect(bp_hit_count >= 1);
+
+    // Drain.
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
 }
