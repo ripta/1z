@@ -97,6 +97,9 @@ benchmark-fib: build ## Run fibonacci benchmark across all execution modes
 benchmark-quotation: build ## Run quotation sequence benchmark across all execution modes
 	@scripts/benchmark-quotation.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/quotation_seq.1z $(ZIG_PREFIX)/benchmark-quotation-aot
 
+benchmark-scanner: build ## Run scanner vs direct benchmark across interpreter modes
+	@scripts/benchmark-scanner.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/scanner_vs_direct.1z
+
 benchmark: build ## Run benchmarks
 	@for f in $(BENCHMARK_FILES); do echo "--- $$f ---"; ./$(ZIG_PREFIX)/bin/1z "$$f"; echo; done
 

@@ -1,0 +1,106 @@
+\ Benchmark: scanner-based splitting vs direct #index-of-from splitting
+\
+\ Measures the overhead of the scanner library layer (struct construction,
+\ field access, option wrapping) compared to raw #index-of-from usage.
+
+use "strings" ;
+use "scanner" ;
+
+\ --- Test string generation ---
+
+\ Build a string with n delimited segments: "abcd<delim>abcd<delim>...abcd"
+make-delimited: ( n delim -- str ) [
+  over 0 = [ 2drop "" ] [
+    dup #len
+    \ n delim delim-len
+    -rot>
+    \ delim-len n delim
+    "abcd" swap #append swap repeat
+    \ delim-len repeated-str
+    swap over #len swap - #take
+  ] if
+] ;
+
+\ --- Scanner-based full split ---
+
+\ Recursive scanner-split loop.
+\ delim stays at bottom of stack across iterations.
+(scanner-split-loop): stack-recursive ( delim scanner vec -- array ) [
+  \ Grab a copy of delim for take-until
+  -rot> over
+  \ vec delim scanner delim
+  take-until
+  \ vec delim scanner' text/f
+  dup f = [
+    \ Not found: push rest, done
+    drop rest
+    \ vec delim rest
+    nip #push! >array
+  ] [
+    \ Found: push text, skip delim, recurse
+    \ vec delim scanner-at-delim text
+    3 pick-n swap #push! drop
+    \ vec delim scanner-at-delim (vec mutated)
+    over skip-exact
+    \ vec delim scanner-past/f
+    dup f = [
+      drop drop >array
+    ] [
+      \ Restore stack order: delim scanner vec
+      <rot- (scanner-split-loop)
+    ] if
+  ] if
+] ;
+
+\ Uses take-until + skip-exact recursively, the way a user would write
+\ a split using scanner operations.
+scanner-split: ( str delim -- array ) [
+  dup #len 0 =
+  [ drop 1array ]
+  [
+    over #len 0 =
+    [ 2drop { "" } ]
+    [
+      swap <scanner> V{ }
+      (scanner-split-loop)
+    ] if
+  ] if
+] ;
+
+\ --- Test strings ---
+
+small-str:    "hello,world" ;
+medium-str:   100 "," make-delimited ;
+large-str:    1000 "," make-delimited ;
+multi-medium: 100 "::" make-delimited ;
+multi-large:  1000 "::" make-delimited ;
+
+\ --- Benchmarks ---
+
+"--- split-once? (scanner-based) ---" print-line
+
+[
+  "split-once? (small)" [ small-str "," split-once? drop ] benchmark-auto
+  "split-once? (100 fields)" [ medium-str "," split-once? drop ] benchmark-auto
+  "split-once? (1000 fields)" [ large-str "," split-once? drop ] benchmark-auto
+] run-benchmarks
+
+nl "--- Full split: direct (#index-of-from) vs scanner-based ---" print-line
+
+[
+  "split (direct, small)" [ small-str "," split drop ] benchmark-auto
+  "scanner-split (small)" [ small-str "," scanner-split drop ] benchmark-auto
+  "split (direct, 100)" [ medium-str "," split drop ] benchmark-auto
+  "scanner-split (100)" [ medium-str "," scanner-split drop ] benchmark-auto
+  "split (direct, 1000)" [ large-str "," split drop ] benchmark-auto
+  "scanner-split (1000)" [ large-str "," scanner-split drop ] benchmark-auto
+] run-benchmarks
+
+nl "--- Multi-char delimiter: direct vs scanner ---" print-line
+
+[
+  "split (direct, :: 100)" [ multi-medium "::" split drop ] benchmark-auto
+  "scanner-split (:: 100)" [ multi-medium "::" scanner-split drop ] benchmark-auto
+  "split (direct, :: 1000)" [ multi-large "::" split drop ] benchmark-auto
+  "scanner-split (:: 1000)" [ multi-large "::" scanner-split drop ] benchmark-auto
+] run-benchmarks
