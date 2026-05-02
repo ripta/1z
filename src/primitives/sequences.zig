@@ -888,8 +888,7 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
                 setErrorContext(ctx, "slice [{}:{}] out of bounds for string of length {}", .{ start, end, slen });
                 return error.IndexOutOfBounds;
             };
-            const result = alloc.dupe(u8, s[bounds.start_byte..bounds.end_byte]) catch return error.OutOfMemory;
-            try ctx.stack.push(.{ .string = result });
+            try ctx.stack.push(.{ .string = s[bounds.start_byte..bounds.end_byte] });
         },
         .vector => |v| {
             if (end > v.items.len) {
@@ -1324,10 +1323,8 @@ fn nativePop(ctx: *Context) anyerror!void {
                 setErrorContext(ctx, "internal error getting last codepoint", .{});
                 return error.InvalidUtf8;
             };
-            const rest = alloc.dupe(u8, s[0..bounds.start_byte]) catch return error.OutOfMemory;
-            const last = alloc.dupe(u8, s[bounds.start_byte..bounds.end_byte]) catch return error.OutOfMemory;
-            try ctx.stack.push(.{ .string = rest });
-            try ctx.stack.push(.{ .string = last });
+            try ctx.stack.push(.{ .string = s[0..bounds.start_byte] });
+            try ctx.stack.push(.{ .string = s[bounds.start_byte..bounds.end_byte] });
         },
         .byte_array => |b| {
             const bytes = b.slice();
@@ -1462,10 +1459,8 @@ fn nativeShift(ctx: *Context) anyerror!void {
                 setErrorContext(ctx, "internal error getting first codepoint", .{});
                 return error.InvalidUtf8;
             };
-            const first = alloc.dupe(u8, s[0..bounds.end_byte]) catch return error.OutOfMemory;
-            const rest = alloc.dupe(u8, s[bounds.end_byte..]) catch return error.OutOfMemory;
-            try ctx.stack.push(.{ .string = rest });
-            try ctx.stack.push(.{ .string = first });
+            try ctx.stack.push(.{ .string = s[bounds.end_byte..] });
+            try ctx.stack.push(.{ .string = s[0..bounds.end_byte] });
         },
         .byte_array => |b| {
             const bytes = b.slice();
@@ -1970,8 +1965,7 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
                 try ctx.stack.push(.{ .string = "" });
                 return;
             };
-            const result = alloc.dupe(u8, s[0..bounds.end_byte]) catch return error.OutOfMemory;
-            try ctx.stack.push(.{ .string = result });
+            try ctx.stack.push(.{ .string = s[0..bounds.end_byte] });
         },
         .array => |arr| {
             const take_count = @min(n, arr.len);
@@ -2037,8 +2031,7 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
                 try ctx.stack.push(.{ .string = "" });
                 return;
             };
-            const result = alloc.dupe(u8, s[bounds.start_byte..bounds.end_byte]) catch return error.OutOfMemory;
-            try ctx.stack.push(.{ .string = result });
+            try ctx.stack.push(.{ .string = s[bounds.start_byte..bounds.end_byte] });
         },
         .array => |arr| {
             if (n >= arr.len) {
