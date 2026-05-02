@@ -1,0 +1,40 @@
+\ Test #index-of-from primitive
+
+use "testing" ;
+
+"#index-of-from - basic ASCII" test-section
+6 "hello world" "world" 0 #index-of-from "find world at 0" assert=
+6 "hello world" "world" 6 #index-of-from "find world at 6" assert=
+f "hello world" "world" 7 #index-of-from "world not found past 7" assert=
+
+"#index-of-from - offset skips earlier matches" test-section
+3 "a,b,c" "," 2 #index-of-from "second comma from offset 2" assert=
+1 "a,b,c" "," 0 #index-of-from "first comma from offset 0" assert=
+
+"#index-of-from - not found" test-section
+f "hello" "xyz" 0 #index-of-from "xyz not in hello" assert=
+f "hello" "o" 5 #index-of-from "search from end, non-empty needle" assert=
+
+"#index-of-from - empty needle" test-section
+0 "hello" "" 0 #index-of-from "empty needle at 0" assert=
+3 "hello" "" 3 #index-of-from "empty needle at 3" assert=
+5 "hello" "" 5 #index-of-from "empty needle at end" assert=
+
+"#index-of-from - multi-byte codepoints" test-section
+4 "café,thé" "," 4 #index-of-from "comma after multi-byte content at start" assert=
+4 "café,thé" "," 0 #index-of-from "comma from start in multi-byte" assert=
+
+"#index-of-from - multi-byte delimiter" test-section
+3 "a→b→c" "→" 2 #index-of-from "second arrow from offset 2" assert=
+1 "a→b→c" "→" 0 #index-of-from "first arrow from offset 0" assert=
+
+"#index-of-from - leading/trailing positions" test-section
+0 "→a→b" "→" 0 #index-of-from "leading arrow" assert=
+2 "→a→b" "→" 1 #index-of-from "second arrow from offset 1" assert=
+
+"#index-of-from - error cases" test-section
+[ "hello" "l" -1 #index-of-from ] "negative start" assert-error
+[ "hello" "l" 6 #index-of-from ] "start beyond end" assert-error
+[ 42 "x" 0 #index-of-from ] "non-string str" assert-error
+[ "hello" 42 0 #index-of-from ] "non-string needle" assert-error
+[ "hello" "l" "x" #index-of-from ] "non-fixnum start" assert-error

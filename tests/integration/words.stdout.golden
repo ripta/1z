@@ -13,6 +13,7 @@ Stack: [ ]
 #first ( seq -- elem )
 #in? ( seq elem -- ? )
 #index-of ( seq elem -- n/f )
+#index-of-from ( str needle start -- n/f )
 #last ( seq -- elem )
 #len ( seq -- n )
 #map ( seq quot: ( elem -- elem' ) -- seq' )

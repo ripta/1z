@@ -545,6 +545,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "#ends-with?", .stack_effect = "seq suffix -- ?", .doc = "Test if sequence ends with suffix.", .func = nativeEndsWith },
     .{ .name = "#in?", .stack_effect = "seq elem -- ?", .doc = "Test if sequence contains element (substring test for strings).", .func = nativeIn },
     .{ .name = "#index-of", .stack_effect = "seq elem -- n/f", .doc = "Find index of element, or f if not found.", .func = nativeIndexOf },
+    .{ .name = "#index-of-from", .stack_effect = "str needle start -- n/f", .doc = "Find index of substring starting from codepoint position.", .func = nativeIndexOfFrom },
     // Freeze
     .{ .name = "freeze", .stack_effect = "vector -- array", .doc = "Convert a vector to an array (copy semantics).", .func = nativeFreeze, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     // Container conversion
@@ -1934,6 +1935,72 @@ fn nativeIndexOf(ctx: *Context) anyerror!void {
     }
 }
 
+/// #index-of-from ( str needle start -- n/f ) - Find index of substring starting from codepoint position
+fn nativeIndexOfFrom(ctx: *Context) anyerror!void {
+    const start_val = try ctx.stack.pop();
+    const elem = try ctx.stack.pop();
+    const seq = try ctx.stack.pop();
+
+    const start_fixnum = switch (start_val) {
+        .fixnum => |i| i,
+        else => {
+            setErrorContext(ctx, "#index-of-from requires fixnum start, got {s}", .{valueTypeName(start_val)});
+            return error.TypeMismatch;
+        },
+    };
+
+    const s = switch (seq) {
+        .string => |str| str,
+        else => {
+            setErrorContext(ctx, "#index-of-from requires string, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    };
+
+    const needle = switch (elem) {
+        .string => |es| es,
+        else => {
+            setErrorContext(ctx, "#index-of-from requires string needle, got {s}", .{valueTypeName(elem)});
+            return error.TypeMismatch;
+        },
+    };
+
+    if (start_fixnum < 0) {
+        setErrorContext(ctx, "negative start index {d}", .{start_fixnum});
+        return error.IndexOutOfBounds;
+    }
+    const start: usize = @intCast(start_fixnum);
+
+    const cp_count = sequence.utf8CodepointCount(s);
+
+    if (start > cp_count) {
+        setErrorContext(ctx, "start index {d} out of bounds for string of length {d}", .{ start, cp_count });
+        return error.IndexOutOfBounds;
+    }
+
+    if (needle.len == 0) {
+        try ctx.stack.push(.{ .fixnum = @intCast(start) });
+        return;
+    }
+
+    if (start == cp_count) {
+        try ctx.stack.push(.{ .boolean = false });
+        return;
+    }
+
+    const bounds = utf8SliceByCodepoints(s, start, cp_count) orelse {
+        try ctx.stack.push(.{ .boolean = false });
+        return;
+    };
+
+    if (std.mem.indexOf(u8, s[bounds.start_byte..], needle)) |byte_idx| {
+        const cp_idx = sequence.utf8CodepointCount(s[0 .. bounds.start_byte + byte_idx]);
+        try ctx.stack.push(.{ .fixnum = @intCast(cp_idx) });
+    } else {
+        try ctx.stack.push(.{ .boolean = false });
+    }
+}
+
 /// #take ( seq n -- seq' ) - First n elements
 pub fn nativeTake(ctx: *Context) anyerror!void {
     const n_val = try popFixnum(ctx);
@@ -2726,4 +2793,158 @@ test ">byte-array rejects unrelated values" {
 
     try ctx.stack.push(.{ .fixnum = 42 });
     try std.testing.expectError(error.TypeMismatch, nativeToByteArray(&ctx));
+}
+
+test "#index-of-from basic ASCII" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello world" });
+    try ctx.stack.push(.{ .string = "world" });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try nativeIndexOfFrom(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .fixnum);
+    try std.testing.expectEqual(@as(i64, 6), result.fixnum);
+}
+
+test "#index-of-from with offset skips earlier match" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "a,b,c" });
+    try ctx.stack.push(.{ .string = "," });
+    try ctx.stack.push(.{ .fixnum = 2 });
+    try nativeIndexOfFrom(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .fixnum);
+    try std.testing.expectEqual(@as(i64, 3), result.fixnum);
+}
+
+test "#index-of-from not found returns f" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(.{ .string = "xyz" });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try nativeIndexOfFrom(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .boolean);
+    try std.testing.expectEqual(false, result.boolean);
+}
+
+test "#index-of-from empty needle returns start" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(.{ .string = "" });
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try nativeIndexOfFrom(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .fixnum);
+    try std.testing.expectEqual(@as(i64, 3), result.fixnum);
+}
+
+test "#index-of-from multi-byte codepoints" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // "café,thé": 'é' is 2 bytes, comma is at codepoint index 4
+    try ctx.stack.push(.{ .string = "caf\xc3\xa9,th\xc3\xa9" });
+    try ctx.stack.push(.{ .string = "," });
+    try ctx.stack.push(.{ .fixnum = 4 });
+    try nativeIndexOfFrom(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .fixnum);
+    try std.testing.expectEqual(@as(i64, 4), result.fixnum);
+}
+
+test "#index-of-from multi-byte delimiter" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // "a→b→c": '→' is 3 bytes (U+2192), second '→' is at codepoint index 3
+    try ctx.stack.push(.{ .string = "a\xe2\x86\x92b\xe2\x86\x92c" });
+    try ctx.stack.push(.{ .string = "\xe2\x86\x92" });
+    try ctx.stack.push(.{ .fixnum = 2 });
+    try nativeIndexOfFrom(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .fixnum);
+    try std.testing.expectEqual(@as(i64, 3), result.fixnum);
+}
+
+test "#index-of-from start at end with empty needle" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(.{ .string = "" });
+    try ctx.stack.push(.{ .fixnum = 5 });
+    try nativeIndexOfFrom(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .fixnum);
+    try std.testing.expectEqual(@as(i64, 5), result.fixnum);
+}
+
+test "#index-of-from start at end with non-empty needle returns f" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(.{ .string = "o" });
+    try ctx.stack.push(.{ .fixnum = 5 });
+    try nativeIndexOfFrom(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .boolean);
+    try std.testing.expectEqual(false, result.boolean);
+}
+
+test "#index-of-from negative start throws IndexOutOfBounds" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(.{ .string = "l" });
+    try ctx.stack.push(.{ .fixnum = -1 });
+    try std.testing.expectError(error.IndexOutOfBounds, nativeIndexOfFrom(&ctx));
+}
+
+test "#index-of-from start beyond end throws IndexOutOfBounds" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(.{ .string = "l" });
+    try ctx.stack.push(.{ .fixnum = 6 });
+    try std.testing.expectError(error.IndexOutOfBounds, nativeIndexOfFrom(&ctx));
+}
+
+test "#index-of-from non-string str throws TypeMismatch" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .fixnum = 42 });
+    try ctx.stack.push(.{ .string = "x" });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try std.testing.expectError(error.TypeMismatch, nativeIndexOfFrom(&ctx));
+}
+
+test "#index-of-from non-string needle throws TypeMismatch" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(.{ .fixnum = 42 });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try std.testing.expectError(error.TypeMismatch, nativeIndexOfFrom(&ctx));
 }

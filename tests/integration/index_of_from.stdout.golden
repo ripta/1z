@@ -1,0 +1,58 @@
+=== #index-of-from - basic ASCII ===
+Stack: [ ]
+PASS: find world at 0
+Stack: [ ]
+PASS: find world at 6
+Stack: [ ]
+PASS: world not found past 7
+Stack: [ ]
+=== #index-of-from - offset skips earlier matches ===
+Stack: [ ]
+PASS: second comma from offset 2
+Stack: [ ]
+PASS: first comma from offset 0
+Stack: [ ]
+=== #index-of-from - not found ===
+Stack: [ ]
+PASS: xyz not in hello
+Stack: [ ]
+PASS: search from end, non-empty needle
+Stack: [ ]
+=== #index-of-from - empty needle ===
+Stack: [ ]
+PASS: empty needle at 0
+Stack: [ ]
+PASS: empty needle at 3
+Stack: [ ]
+PASS: empty needle at end
+Stack: [ ]
+=== #index-of-from - multi-byte codepoints ===
+Stack: [ ]
+PASS: comma after multi-byte content at start
+Stack: [ ]
+PASS: comma from start in multi-byte
+Stack: [ ]
+=== #index-of-from - multi-byte delimiter ===
+Stack: [ ]
+PASS: second arrow from offset 2
+Stack: [ ]
+PASS: first arrow from offset 0
+Stack: [ ]
+=== #index-of-from - leading/trailing positions ===
+Stack: [ ]
+PASS: leading arrow
+Stack: [ ]
+PASS: second arrow from offset 1
+Stack: [ ]
+=== #index-of-from - error cases ===
+Stack: [ ]
+PASS: negative start
+Stack: [ ]
+PASS: start beyond end
+Stack: [ ]
+PASS: non-string str
+Stack: [ ]
+PASS: non-string needle
+Stack: [ ]
+PASS: non-fixnum start
+Stack: [ ]
