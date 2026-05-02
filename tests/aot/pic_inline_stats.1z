@@ -1,4 +1,4 @@
-\ Verify --compilation-stats reports inline PIC pre-seeding.
+\ Verify --compilation-stats reports inline PIC preseeding.
 \ Uses #nth (a binary native generic not in the inline
 \ arithmetic/comparison set) to exercise emitInlinePicCheck.
 

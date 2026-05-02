@@ -1647,7 +1647,7 @@ fn printPicStats(
 ) void {
     const stats = &diagnostics.pic_stats;
     if (stats.sites_attempted == 0 and stats.sites_emitted == 0) return;
-    err_writer.print("Inline PIC sites: {d}/{d} generic call sites pre-seeded\n", .{
+    err_writer.print("Inline PIC sites: {d}/{d} generic call sites preseeded\n", .{
         stats.sites_emitted,
         stats.sites_attempted,
     }) catch {};

@@ -224,7 +224,7 @@ pub const AotWordDesc = struct {
     never_returns: bool = false,
     /// Snapshot of interpreter PIC data for this word's instructions.
     /// Captured during freeze so the AOT compiler can emit inline type
-    /// checks pre-seeded from interpreter profiling.
+    /// checks preseeded from interpreter profiling.
     pic_snapshot: ?*pic_mod.PicTable = null,
 };
 
@@ -1418,6 +1418,7 @@ const CompileState = struct {
     pic_table: ?*pic_mod.PicTable = null,
     pic_dispatch_fn: c.ir_ref = c.IR_UNUSED,
     pic_native_call_fn: c.ir_ref = c.IR_UNUSED,
+    pic_match_fn: c.ir_ref = c.IR_UNUSED,
     pic_stats: ?*PicStats = null,
     error_propagate_status: c.ir_ref = c.IR_UNUSED,
     self_name: ?[]const u8 = null,
@@ -4807,10 +4808,15 @@ fn compileInstructions(
                             emitParamValidation(state, eff_ptr);
                         }
 
-                        // Try inline PIC before falling back to generic native call.
-                        // emitInlinePicCheck includes the slow-path fallback
-                        // internally, so when it succeeds no separate call is needed.
-                        if (!emitInlinePicCheck(state, idx, ctx_val, name, resolved, effective_in, instr.line)) {
+                        // Try inline PIC (from interpreter profiling) or
+                        // dispatch-table-driven inline checks (from frozen
+                        // dispatch table) before falling back to generic
+                        // native call. Both include the slow-path fallback
+                        // internally, so when either succeeds no separate
+                        // call is needed.
+                        if (!emitInlinePicCheck(state, idx, ctx_val, name, resolved, effective_in, instr.line) and
+                            !emitInlineDispatchTableCheck(state, ctx_val, name, resolved, effective_in, instr.line))
+                        {
                             emitNativeWordCall(state, ctx_val, name, resolved, instr.line);
                         }
 
@@ -5055,6 +5061,7 @@ const PreScanFlags = struct {
     needs_native_call: bool = false,
     needs_param_validation: bool = false,
     needs_poly_fallback: bool = false,
+    needs_pic_dispatch: bool = false,
 
     fn needsErrorPropagation(self: PreScanFlags) bool {
         return self.needs_error_handling or self.needs_safepoint or
@@ -5827,10 +5834,15 @@ fn emitWordCAotPass(
     else
         c.IR_UNUSED;
 
-    // pic_dispatch_fn is allocated lazily inside emitInlinePicCheck
-    // on first use, to avoid shifting IR constant indices for words
-    // that have PIC data but no qualifying call sites.
-    const pic_dispatch_fn: c.ir_ref = c.IR_UNUSED;
+    const proto_4arg = c.ir_proto_4(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+    const pic_dispatch_fn = if (scan_flags.needs_native_call or interp_ctx_param != null)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPicDispatch"), proto_4arg)
+    else
+        c.IR_UNUSED;
+    const pic_match_fn = if (scan_flags.needs_native_call or interp_ctx_param != null)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPicTopTagsMatch"), proto_3arg)
+    else
+        c.IR_UNUSED;
 
     // jitRefreshStack is emitted unconditionally: any callback in the body
     // may reallocate ctx.stack, so emitCallbackPostCheck refreshes regardless
@@ -5953,6 +5965,7 @@ fn emitWordCAotPass(
         .native_call_fn = native_call_fn,
         .interpreted_call_fn = interpreted_call_fn,
         .pic_dispatch_fn = pic_dispatch_fn,
+        .pic_match_fn = pic_match_fn,
         .refresh_stack_fn = refresh_stack_fn,
         .validate_params_fn = validate_params_fn,
         .pic_table = pic_table,
@@ -7003,6 +7016,140 @@ const InlinePicEntry = struct {
     native_fn_ptr: usize,
 };
 
+/// Emit inline type-check-and-branch IR for a set of qualified PIC entries.
+/// Shared between PIC-sourced and dispatch-table-sourced inline checks.
+/// Returns true if at least one entry was emitted.
+fn emitInlinePicEntries(
+    state: *CompileState,
+    ctx_val: c.ir_ref,
+    name: []const u8,
+    resolved: ResolvedWord,
+    line: usize,
+    qualified: []const InlinePicEntry,
+    generation: u32,
+) bool {
+    if (qualified.len == 0) return false;
+
+    // In AOT mode, pic_dispatch_fn is pre-allocated in the prologue
+    // (emitWordCAotPass). In JIT mode, pic_native_call_fn is allocated
+    // lazily here on first use.
+    if (!state.aot_mode and state.pic_native_call_fn == c.IR_UNUSED) {
+        state.pic_native_call_fn = c.ir_const_addr(state.ctx, @intFromPtr(&jitPicNativeCall));
+    }
+
+    const ictx = state.ctx;
+    ValueLayout.ensureInit();
+    DispatchGenerationLayout.ensureInit();
+
+    // --- Generation guard ---
+    // Load ctx.dispatch.generation at runtime and compare against the
+    // compile-time value. If the dispatch table was modified since
+    // capture, skip inline checks.
+    const dispatch_off = c.ir_const_addr(ictx, DispatchGenerationLayout.dispatch_offset);
+    const dispatch_addr = c.ir_fold2(ictx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), ctx_val, dispatch_off);
+    const gen_off = c.ir_const_addr(ictx, DispatchGenerationLayout.generation_offset);
+    const gen_addr = c.ir_fold2(ictx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dispatch_addr, gen_off);
+    const runtime_gen = c._ir_LOAD(ictx, c.IR_U32, gen_addr);
+    const compile_gen = c.ir_const_u32(ictx, generation);
+    const gen_matches = c.ir_fold2(ictx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), runtime_gen, compile_gen);
+    const if_gen = c._ir_IF(ictx, gen_matches);
+
+    // --- Cold path: generation mismatch → slow dispatch ---
+    c._ir_IF_FALSE_cold(ictx, if_gen);
+    {
+        emitNativeWordCall(state, ctx_val, name, resolved, line);
+    }
+    const end_gen_miss = c._ir_END(ictx);
+
+    // --- Hot path: generation matches → try entries ---
+    c._ir_IF_TRUE(ictx, if_gen);
+
+    // In AOT mode, use the pre-allocated named extern reference.
+    // In JIT mode, bake the function pointer address directly.
+    const pic_match_fn = if (state.pic_match_fn != c.IR_UNUSED)
+        state.pic_match_fn
+    else
+        c.ir_const_addr(ictx, @intFromPtr(&jitPicTopTagsMatch));
+
+    // Emit nested type checks for each qualified entry. The pattern
+    // is a chain of IF/TRUE/FALSE with the slow path at the innermost FALSE.
+    // Collect END refs from each branch for the final MERGE.
+    var end_refs: [pic_mod.max_pic_entries + 1]c.ir_ref = .{c.IR_UNUSED} ** (pic_mod.max_pic_entries + 1);
+    var end_count: usize = 0;
+
+    // Save state refs before entering branches, since each branch's
+    // emitCallbackPostCheck will update them independently.
+    const saved_items_ptr = state.items_ptr;
+    const saved_base_addr = state.base_addr;
+
+    for (qualified) |entry| {
+        const tag_a_const = c.ir_const_addr(ictx, @intFromEnum(entry.tag_a));
+        const tag_b_const = c.ir_const_addr(ictx, @intFromEnum(entry.tag_b));
+        const match_status = c._ir_CALL_3(ictx, c.IR_I32, pic_match_fn, ctx_val, tag_a_const, tag_b_const);
+        const matched = c.ir_fold2(ictx, c.IR_OPT(c.IR_NE, c.IR_BOOL), match_status, state.ok_status);
+        const if_match = c._ir_IF(ictx, matched);
+
+        // Hit path: call the cached native method body directly
+        c._ir_IF_TRUE(ictx, if_match);
+        {
+            if (state.aot_mode) {
+                // AOT: can't bake function pointers; dispatch via
+                // jitPicDispatch with the pre-verified type tags.
+                const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
+                const tag_a_int = c.ir_const_addr(ictx, @intFromEnum(entry.tag_a));
+                const tag_b_int = c.ir_const_addr(ictx, @intFromEnum(entry.tag_b));
+                const call_result = c._ir_CALL_4(ictx, c.IR_I32, state.pic_dispatch_fn, ctx_val, word_id_const, tag_a_int, tag_b_int);
+                emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
+            } else {
+                const fn_ptr_const = c.ir_const_addr(ictx, entry.native_fn_ptr);
+                const name_ptr_const = c.ir_const_addr(ictx, @intFromPtr(name.ptr));
+                const name_len_const = c.ir_const_addr(ictx, name.len);
+                const call_result = c._ir_CALL_4(ictx, c.IR_I32, state.pic_native_call_fn, ctx_val, fn_ptr_const, name_ptr_const, name_len_const);
+                emitCallbackPostCheck(state, call_result, call_result, null, .{ .named = .{ .name = name, .line = line } });
+            }
+            // Restore state for next branch
+            state.items_ptr = saved_items_ptr;
+            state.base_addr = saved_base_addr;
+        }
+        end_refs[end_count] = c._ir_END(ictx);
+        end_count += 1;
+
+        // Miss path: continue to next entry (or fall through to slow path)
+        c._ir_IF_FALSE(ictx, if_match);
+    }
+
+    // Innermost miss: slow path, call the generic native function
+    {
+        emitNativeWordCall(state, ctx_val, name, resolved, line);
+        state.items_ptr = saved_items_ptr;
+        state.base_addr = saved_base_addr;
+    }
+    end_refs[end_count] = c._ir_END(ictx);
+    end_count += 1;
+
+    // Merge all hit branches + slow path
+    if (end_count == 2) {
+        c._ir_MERGE_2(ictx, end_refs[0], end_refs[1]);
+    } else {
+        var merge_inputs: [pic_mod.max_pic_entries + 1]c.ir_ref = undefined;
+        for (0..end_count) |i| merge_inputs[i] = end_refs[i];
+        c._ir_MERGE_N(ictx, @intCast(end_count), &merge_inputs);
+    }
+    const end_gen_hot = c._ir_END(ictx);
+
+    // --- Final merge: generation hot + generation miss ---
+    c._ir_MERGE_2(ictx, end_gen_hot, end_gen_miss);
+
+    // After merging branches that each refreshed the stack pointer
+    // independently, re-LOAD to get refs that dominate this point.
+    if (state.refresh_stack_fn != c.IR_UNUSED) {
+        refreshCachedStackPointer(state);
+    }
+
+    if (state.pic_stats) |ps| ps.sites_emitted += 1;
+    return true;
+}
+
 /// Try to emit inline PIC type checks at a generic call site. Reads the
 /// interpreter PIC data for instruction `idx` and emits tag-check-and-branch
 /// IR for entries that can be inlined (builtin types, native_fn bodies, no
@@ -7054,125 +7201,67 @@ fn emitInlinePicCheck(
         qualified_count += 1;
     }
 
-    if (qualified_count == 0) return false;
+    return emitInlinePicEntries(state, ctx_val, name, resolved, line, qualified[0..qualified_count], cache.generation);
+}
 
-    // Lazily allocate pic_dispatch_fn / pic_native_call_fn on first
-    // use, to avoid shifting IR constant indices for words that have
-    // PIC data but no qualifying call sites.
-    if (state.aot_mode and state.pic_dispatch_fn == c.IR_UNUSED) {
-        const proto = c.ir_proto_4(state.ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
-        state.pic_dispatch_fn = c.ir_const_func(state.ctx, c.ir_str(state.ctx, "jitPicDispatch"), proto);
-    }
-    if (!state.aot_mode and state.pic_native_call_fn == c.IR_UNUSED) {
-        state.pic_native_call_fn = c.ir_const_addr(state.ctx, @intFromPtr(&jitPicNativeCall));
-    }
+/// Try to emit inline dispatch-table-driven type checks at a generic call
+/// site. Reads all registered methods for the word from the frozen dispatch
+/// table and emits tag-check-and-branch IR for native-function entries with
+/// builtin type tags. This path does not require PIC observation data and
+/// works for all call sites regardless of whether they were exercised during
+/// interpretation.
+fn emitInlineDispatchTableCheck(
+    state: *CompileState,
+    ctx_val: c.ir_ref,
+    name: []const u8,
+    resolved: ResolvedWord,
+    effective_in: u8,
+    line: usize,
+) bool {
+    const interp_ctx = state.interp_ctx orelse return false;
+    if (resolved.never_returns) return false;
+    if (effective_in < 2) return false;
 
-    const ictx = state.ctx;
-    ValueLayout.ensureInit();
-    DispatchGenerationLayout.ensureInit();
+    const dispatch_id = interp_ctx.resolveDispatchId(name) orelse return false;
 
-    // --- Generation guard ---
-    // Load ctx.dispatch.generation at runtime and compare against the
-    // compile-time value. If the dispatch table was modified since PIC
-    // capture, skip inline checks.
-    const dispatch_off = c.ir_const_addr(ictx, DispatchGenerationLayout.dispatch_offset);
-    const dispatch_addr = c.ir_fold2(ictx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), ctx_val, dispatch_off);
-    const gen_off = c.ir_const_addr(ictx, DispatchGenerationLayout.generation_offset);
-    const gen_addr = c.ir_fold2(ictx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dispatch_addr, gen_off);
-    const runtime_gen = c._ir_LOAD(ictx, c.IR_U32, gen_addr);
-    const compile_gen = c.ir_const_u32(ictx, cache.generation);
-    const gen_matches = c.ir_fold2(ictx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), runtime_gen, compile_gen);
-    const if_gen = c._ir_IF(ictx, gen_matches);
+    // Skip sentinel descriptors so wildcard and unary entries are
+    // excluded from inline checks (they can't be matched by binary
+    // tag comparison).
+    const any_desc = if (interp_ctx.getDispatchAnySentinel().descriptor) |d| d else return false;
+    const unary_desc = if (interp_ctx.getDispatchUnarySentinel().descriptor) |d| d else return false;
 
-    // --- Cold path: generation mismatch → slow dispatch ---
-    c._ir_IF_FALSE_cold(ictx, if_gen);
-    {
-        emitNativeWordCall(state, ctx_val, name, resolved, line);
-    }
-    const end_gen_miss = c._ir_END(ictx);
+    if (state.pic_stats) |ps| ps.sites_attempted += 1;
 
-    // --- Hot path: generation matches → try PIC entries ---
-    c._ir_IF_TRUE(ictx, if_gen);
+    // Collect native-function entries with builtin type tags from the
+    // dispatch table. Cap at max_pic_entries to match PIC path behavior
+    // and avoid excessive code bloat.
+    var qualified: [pic_mod.max_pic_entries]InlinePicEntry = undefined;
+    var qualified_count: usize = 0;
 
-    const pic_match_fn = c.ir_const_addr(ictx, @intFromPtr(&jitPicTopTagsMatch));
+    var iter = interp_ctx.dispatch.entries.iterator();
+    while (iter.next()) |entry| {
+        if (qualified_count >= pic_mod.max_pic_entries) break;
+        if (entry.key_ptr.dispatch_id != dispatch_id) continue;
 
-    // Emit nested type checks for each qualified PIC entry. The pattern
-    // is a chain of IF/TRUE/FALSE with the slow path at the innermost FALSE.
-    // Collect END refs from each branch for the final MERGE.
-    var end_refs: [pic_mod.max_pic_entries + 1]c.ir_ref = .{c.IR_UNUSED} ** (pic_mod.max_pic_entries + 1);
-    var end_count: usize = 0;
+        // Skip wildcard and unary entries
+        if (entry.key_ptr.type_a == any_desc or entry.key_ptr.type_b == any_desc) continue;
+        if (entry.key_ptr.type_b == unary_desc) continue;
 
-    // Save state refs before entering branches — each branch's
-    // emitCallbackPostCheck will update them independently.
-    const saved_items_ptr = state.items_ptr;
-    const saved_base_addr = state.base_addr;
-
-    for (qualified[0..qualified_count]) |entry| {
-        const tag_a_const = c.ir_const_addr(ictx, @intFromEnum(entry.tag_a));
-        const tag_b_const = c.ir_const_addr(ictx, @intFromEnum(entry.tag_b));
-        const match_status = c._ir_CALL_3(ictx, c.IR_I32, pic_match_fn, ctx_val, tag_a_const, tag_b_const);
-        const matched = c.ir_fold2(ictx, c.IR_OPT(c.IR_NE, c.IR_BOOL), match_status, state.ok_status);
-        const if_match = c._ir_IF(ictx, matched);
-
-        // Hit path: call the cached native method body directly
-        c._ir_IF_TRUE(ictx, if_match);
-        {
-            if (state.aot_mode) {
-                // AOT: can't bake function pointers; dispatch via
-                // jitPicDispatch with the pre-verified type tags.
-                const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
-                const tag_a_int = c.ir_const_addr(ictx, @intFromEnum(entry.tag_a));
-                const tag_b_int = c.ir_const_addr(ictx, @intFromEnum(entry.tag_b));
-                const call_result = c._ir_CALL_4(ictx, c.IR_I32, state.pic_dispatch_fn, ctx_val, word_id_const, tag_a_int, tag_b_int);
-                emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
-            } else {
-                const fn_ptr_const = c.ir_const_addr(ictx, entry.native_fn_ptr);
-                const name_ptr_const = c.ir_const_addr(ictx, @intFromPtr(name.ptr));
-                const name_len_const = c.ir_const_addr(ictx, name.len);
-                const call_result = c._ir_CALL_4(ictx, c.IR_I32, state.pic_native_call_fn, ctx_val, fn_ptr_const, name_ptr_const, name_len_const);
-                emitCallbackPostCheck(state, call_result, call_result, null, .{ .named = .{ .name = name, .line = line } });
-            }
-            // Restore state for next branch
-            state.items_ptr = saved_items_ptr;
-            state.base_addr = saved_base_addr;
-        }
-        end_refs[end_count] = c._ir_END(ictx);
-        end_count += 1;
-
-        // Miss path: continue to next entry (or fall through to slow path)
-        c._ir_IF_FALSE(ictx, if_match);
+        const body_fn = switch (entry.value_ptr.body) {
+            .native_fn => |f| @intFromPtr(f),
+            .quotation, .host_callback => continue,
+        };
+        const tag_a = reverseMapDescriptorToTag(interp_ctx, entry.key_ptr.type_a) orelse continue;
+        const tag_b = reverseMapDescriptorToTag(interp_ctx, entry.key_ptr.type_b) orelse continue;
+        qualified[qualified_count] = .{
+            .tag_a = tag_a,
+            .tag_b = tag_b,
+            .native_fn_ptr = body_fn,
+        };
+        qualified_count += 1;
     }
 
-    // Innermost miss: slow path — call the generic native function
-    {
-        emitNativeWordCall(state, ctx_val, name, resolved, line);
-        state.items_ptr = saved_items_ptr;
-        state.base_addr = saved_base_addr;
-    }
-    end_refs[end_count] = c._ir_END(ictx);
-    end_count += 1;
-
-    // Merge all PIC hit branches + slow path
-    if (end_count == 2) {
-        c._ir_MERGE_2(ictx, end_refs[0], end_refs[1]);
-    } else {
-        var merge_inputs: [pic_mod.max_pic_entries + 1]c.ir_ref = undefined;
-        for (0..end_count) |i| merge_inputs[i] = end_refs[i];
-        c._ir_MERGE_N(ictx, @intCast(end_count), &merge_inputs);
-    }
-    const end_gen_hot = c._ir_END(ictx);
-
-    // --- Final merge: generation hot + generation miss ---
-    c._ir_MERGE_2(ictx, end_gen_hot, end_gen_miss);
-
-    // After merging branches that each refreshed the stack pointer
-    // independently, re-LOAD to get refs that dominate this point.
-    if (state.refresh_stack_fn != c.IR_UNUSED) {
-        refreshCachedStackPointer(state);
-    }
-
-    if (state.pic_stats) |ps| ps.sites_emitted += 1;
-    return true;
+    return emitInlinePicEntries(state, ctx_val, name, resolved, line, qualified[0..qualified_count], interp_ctx.dispatch.generation);
 }
 
 /// Emit a native word call. In JIT mode, calls through jitNativeCall with

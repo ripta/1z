@@ -1,5 +1,5 @@
 \ Inline PIC: verify that compiled code with inline type-check-and-branch
-\ PIC pre-seeding produces correct results for generic dispatch.
+\ PIC preseeding produces correct results for generic dispatch.
 
 use "testing" ;
 

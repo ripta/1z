@@ -1,3 +1,4 @@
 Prelude compilation: 6/6 words compiled (100.0%)
 Quotation bodies compiled: 0
+Inline PIC sites: 1/1 generic call sites preseeded
 Interpreter fallback: included (auto: compiled code calls interpreter)
