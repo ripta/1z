@@ -1929,6 +1929,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         interpreter_fallback,
         lock_interpreter_setting,
         &codegen_diagnostics,
+        ctx,
         allocator,
     ) catch |err| {
         printQuotationFallbackWarnings(&codegen_diagnostics, allow_interpreter_fallback, err_writer, allocator);

@@ -1,0 +1,21 @@
+\ Test that AOT inline PIC type checks work for polymorphic dispatch.
+\ The interpreter seeds PIC entries during freeze; the AOT compiler
+\ emits inline tag checks at generic call sites and dispatches via
+\ jitPicDispatch on a hit.
+
+add-nums: ( a b -- c ) [ + ] ;
+mul-nums: ( a b -- c ) [ * ] ;
+cmp: ( a b -- ? ) [ = ] ;
+
+\ Fixnum pairs: PIC-eligible, seeded during freeze
+1 2 add-nums .
+3 4 mul-nums .
+5 5 cmp .
+
+\ Float pairs: separate PIC entry
+1.5 2.5 add-nums .
+2.0 3.0 mul-nums .
+4.0 4.0 cmp .
+
+\ Mixed: exercises the slow path when PIC misses
+3 2.5 add-nums .

@@ -212,6 +212,10 @@ pub const AotWordDesc = struct {
     /// never-returns marker). The compiler emits terminal control flow
     /// instead of continuing in the current block after the call.
     never_returns: bool = false,
+    /// Snapshot of interpreter PIC data for this word's instructions.
+    /// Captured during freeze so the AOT compiler can emit inline type
+    /// checks pre-seeded from interpreter profiling.
+    pic_snapshot: ?*pic_mod.PicTable = null,
 };
 
 const supported_binary_ops = [_][]const u8{ "+", "-", "*", "/", "div", "rem", "%" };
@@ -1402,6 +1406,7 @@ const CompileState = struct {
     /// index maps to a PolymorphicCache recording observed type pairs.
     /// Read at compile time to emit inline type-check-and-branch IR.
     pic_table: ?*pic_mod.PicTable = null,
+    pic_dispatch_fn: c.ir_ref = c.IR_UNUSED,
     error_propagate_status: c.ir_ref = c.IR_UNUSED,
     self_name: ?[]const u8 = null,
     loop_begin_ref: c.ir_ref = c.IR_UNUSED,
@@ -4793,9 +4798,7 @@ fn compileInstructions(
                         // Try inline PIC before falling back to generic native call.
                         // emitInlinePicCheck includes the slow-path fallback
                         // internally, so when it succeeds no separate call is needed.
-                        if (state.aot_mode or
-                            !emitInlinePicCheck(state, idx, ctx_val, name, resolved, effective_in, instr.line))
-                        {
+                        if (!emitInlinePicCheck(state, idx, ctx_val, name, resolved, effective_in, instr.line)) {
                             emitNativeWordCall(state, ctx_val, name, resolved, instr.line);
                         }
 
@@ -5641,8 +5644,10 @@ pub fn emitWordCAot(
     stack_effect: ?*const StackEffect,
     reason_out: ?*?NotCompilableReason,
     quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
+    pic_table: ?*pic_mod.PicTable,
+    interp_ctx: ?*const Context,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
-    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, reason_out, quotation_id_map);
+    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, reason_out, quotation_id_map, pic_table, interp_ctx);
 }
 
 /// Like emitWordCAot but with a pre-mangled C function name override.
@@ -5664,15 +5669,17 @@ fn emitWordCAotWithCName(
     stack_effect: ?*const StackEffect,
     reason_out: ?*?NotCompilableReason,
     quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
+    pic_table: ?*pic_mod.PicTable,
+    interp_ctx: ?*const Context,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var reason: ?NotCompilableReason = null;
-    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, null, &reason, quotation_id_map) catch |err| {
+    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, null, &reason, quotation_id_map, pic_table, interp_ctx) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
     if (discovered.body) |b| allocator.free(b);
     reason = null;
-    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason, quotation_id_map) catch |err| {
+    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
@@ -5701,6 +5708,8 @@ fn emitWordCAotPass(
     known_peak: ?u32,
     nc_reason_out: ?*?NotCompilableReason,
     quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
+    pic_table: ?*pic_mod.PicTable,
+    interp_ctx_param: ?*const Context,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)!EmitWordCAotPassResult {
     ValueLayout.ensureInit();
 
@@ -5785,6 +5794,12 @@ fn emitWordCAotPass(
 
     const interpreted_call_fn = if (scan_flags.needs_dispatch or scan_flags.needs_native_call or scan_flags.needs_poly_fallback)
         c.ir_const_func(&ctx, c.ir_str(&ctx, "jitInterpretedCall"), proto_3arg)
+    else
+        c.IR_UNUSED;
+
+    const proto_4arg = c.ir_proto_4(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+    const pic_dispatch_fn = if (pic_table != null)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPicDispatch"), proto_4arg)
     else
         c.IR_UNUSED;
 
@@ -5908,8 +5923,11 @@ fn emitWordCAotPass(
         .iterator_fn = iterator_fn,
         .native_call_fn = native_call_fn,
         .interpreted_call_fn = interpreted_call_fn,
+        .pic_dispatch_fn = pic_dispatch_fn,
         .refresh_stack_fn = refresh_stack_fn,
         .validate_params_fn = validate_params_fn,
+        .pic_table = pic_table,
+        .interp_ctx = interp_ctx_param,
         .error_propagate_status = error_propagate_status,
         .type_mismatch_error_fn = type_mismatch_error_fn,
         .overflow_error_fn = overflow_error_fn,
@@ -6037,6 +6055,7 @@ pub fn emitProgramC(
     interpreter_fallback: InterpreterFallbackMode,
     lock_interpreter_setting: bool,
     diagnostics: *CodegenDiagnostics,
+    interp_ctx: ?*const Context,
     allocator: Allocator,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var out: std.ArrayListUnmanaged(u8) = .{};
@@ -6072,6 +6091,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitWithParameter(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitIteratorOp(uintptr_t ctx, uintptr_t opcode);\n");
     try out.appendSlice(allocator, "extern int32_t jitNativeCall(uintptr_t ctx, uintptr_t fn_ptr);\n");
+    try out.appendSlice(allocator, "extern int32_t jitPicDispatch(uintptr_t ctx, uintptr_t word_id, uintptr_t tag_a, uintptr_t tag_b);\n");
     try out.appendSlice(allocator, "extern int32_t jitInterpretedCall(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
     try out.appendSlice(allocator, "extern int32_t jitRefreshStack(uintptr_t jit_ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitEnsureStackCapacity(uintptr_t jit_ctx, uintptr_t needed);\n");
@@ -6176,6 +6196,8 @@ pub fn emitProgramC(
             if (w.stack_effect != null) &w.stack_effect.? else null,
             &reason,
             null,
+            w.pic_snapshot,
+            interp_ctx,
         ) catch |err| {
             if (reason) |r| {
                 try failure_reasons.put(allocator, w.name, r);
@@ -6209,6 +6231,8 @@ pub fn emitProgramC(
             null,
             null,
             null,
+            null,
+            interp_ctx,
         ) catch continue;
         allocator.free(trial);
         try compilable_quotation_ids.put(allocator, q.quotation_id, {});
@@ -6264,6 +6288,8 @@ pub fn emitProgramC(
             if (w.stack_effect != null) &w.stack_effect.? else null,
             null,
             &quotation_id_map,
+            w.pic_snapshot,
+            interp_ctx,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -6299,6 +6325,8 @@ pub fn emitProgramC(
             null,
             null,
             &quotation_id_map,
+            null,
+            interp_ctx,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -7079,9 +7107,19 @@ fn emitInlinePicCheck(
         // Hit path: call the cached native method body directly
         c._ir_IF_TRUE(ictx, if_match);
         {
-            const fn_ptr_const = c.ir_const_addr(ictx, entry.native_fn_ptr);
-            const call_result = c._ir_CALL_2(ictx, c.IR_I32, state.native_call_fn, ctx_val, fn_ptr_const);
-            emitCallbackPostCheck(state, call_result, call_result, null, .{ .named = .{ .name = name, .line = line } });
+            if (state.aot_mode) {
+                // AOT: can't bake function pointers; dispatch via
+                // jitPicDispatch with the pre-verified type tags.
+                const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
+                const tag_a_int = c.ir_const_addr(ictx, @intFromEnum(entry.tag_a));
+                const tag_b_int = c.ir_const_addr(ictx, @intFromEnum(entry.tag_b));
+                const call_result = c._ir_CALL_4(ictx, c.IR_I32, state.pic_dispatch_fn, ctx_val, word_id_const, tag_a_int, tag_b_int);
+                emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
+            } else {
+                const fn_ptr_const = c.ir_const_addr(ictx, entry.native_fn_ptr);
+                const call_result = c._ir_CALL_2(ictx, c.IR_I32, state.native_call_fn, ctx_val, fn_ptr_const);
+                emitCallbackPostCheck(state, call_result, call_result, null, .{ .named = .{ .name = name, .line = line } });
+            }
             // Restore state for next branch
             state.items_ptr = saved_items_ptr;
             state.base_addr = saved_base_addr;
@@ -7292,6 +7330,62 @@ export fn jitIteratorOp(ctx_raw: usize, opcode_raw: usize) callconv(.c) i32 {
         return 2;
     };
     return 0;
+}
+
+/// Lightweight dispatch for AOT inline PIC hits. The generated C code
+/// already verified operand types via tag comparison; this callback
+/// converts the tags back to type descriptors and resolves the dispatch
+/// entry directly, skipping the interpreter loop, stack inspection, and
+/// PIC cache management that jitInterpretedCall performs.
+export fn jitPicDispatch(ctx_raw: usize, word_id_raw: usize, tag_a_raw: usize, tag_b_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const tag_a: u8 = @intCast(tag_a_raw);
+    const tag_b: u8 = @intCast(tag_b_raw);
+
+    // Convert tags to type descriptors via builtin_type_array
+    const desc_a = blk: {
+        if (tag_a < ctx.builtin_type_array.len) {
+            if (ctx.builtin_type_array[tag_a]) |tv| {
+                if (tv.descriptor) |d| break :blk d;
+            }
+        }
+        return 1;
+    };
+    const desc_b = blk: {
+        if (tag_b < ctx.builtin_type_array.len) {
+            if (ctx.builtin_type_array[tag_b]) |tv| {
+                if (tv.descriptor) |d| break :blk d;
+            }
+        }
+        return 1;
+    };
+
+    // Resolve word_id → word_name → dispatch_id
+    const word_id: u32 = @intCast(word_id_raw);
+    const entry = ctx.jit_dispatch.get(word_id) orelse blk: {
+        var parent = ctx.parent_context;
+        while (parent) |p| : (parent = p.parent_context) {
+            if (p.jit_dispatch.get(word_id)) |e| break :blk e;
+        }
+        return 1;
+    };
+    const word_name = entry.word_name;
+    const dispatch_id = ctx.resolveDispatchId(word_name) orelse return 1;
+
+    // Direct dispatch table lookup with known descriptors
+    const dispatch_entry = ctx.lookupBinaryDispatch(dispatch_id, desc_a, desc_b) orelse return 1;
+
+    switch (dispatch_entry.body) {
+        .native_fn => |f| {
+            f(ctx) catch |err| {
+                ctx.jit_pending_error = err;
+                return 2;
+            };
+            return 0;
+        },
+        .quotation, .host_callback => return 1,
+    }
 }
 
 export fn jitNativeCall(ctx_raw: usize, fn_ptr_raw: usize) callconv(.c) i32 {
@@ -9332,6 +9426,8 @@ test "emitWordCAot emits named callback for safepoint" {
         null,
         null,
         null,
+        null,
+        null,
     ) catch |err| {
         // times requires a quotation on stack which we don't have in this
         // minimal test -- NotCompilable is expected. Skip this test case
@@ -9367,6 +9463,8 @@ test "emitWordCAot basic arithmetic" {
         null,
         null,
         null,
+        null,
+        null,
     );
     defer testing.allocator.free(source);
 
@@ -9399,6 +9497,8 @@ test "emitWordCAot quotation call emits code_ptr dispatch" {
         null,
         null,
         null,
+        null,
+        null,
     ) catch |err| {
         if (err == error.NotCompilable) return;
         return err;
@@ -9421,7 +9521,7 @@ test "emitProgramC generates complete C source" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, .auto, false, &diag, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, .auto, false, &diag, null, testing.allocator);
     defer testing.allocator.free(source);
 
     // Preamble
@@ -9460,7 +9560,7 @@ test "emitProgramC dispatch table has correct entries" {
     };
 
     var diag2: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 2, &.{}, .auto, false, &diag2, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 2, &.{}, .auto, false, &diag2, null, testing.allocator);
     defer testing.allocator.free(source);
 
     // word_id 0 -> onez_w_foo
@@ -9485,7 +9585,7 @@ test "emitProgramC quotation table with all compiled entries" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, &diag, testing.allocator);
+    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, &diag, null, testing.allocator);
     defer testing.allocator.free(source);
 
     // Table exists with all entries
@@ -9515,7 +9615,7 @@ test "emitProgramC rejects uncompiled quotation bodies with inferred effects" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, &diag, testing.allocator);
+    const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, &diag, null, testing.allocator);
     try testing.expectError(error.UncompiledQuotations, result);
 
     // Diagnostics report the uncompiled quotation
@@ -9533,7 +9633,7 @@ test "emitProgramC no quotation table when quotations empty" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, &diag, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, &diag, null, testing.allocator);
     defer testing.allocator.free(source);
 
     // No quotation table emitted (extern decl exists but table and call do not)
@@ -9551,7 +9651,7 @@ test "emitProgramC output compiles with cc" {
     };
 
     var diag3: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, .auto, false, &diag3, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, .auto, false, &diag3, null, testing.allocator);
     defer testing.allocator.free(source);
 
     var tmp_dir = testing.tmpDir(.{});
