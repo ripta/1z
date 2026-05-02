@@ -104,7 +104,8 @@ build-example: build ## Build the C embedding example
 	zig cc -o $(ZIG_PREFIX)/embed examples/embed.c -Iinclude $(ZIG_PREFIX)/clib/lib1z.a -lffi
 
 clean: ## Remove build artifacts
-	rm -rf $(ZIG_PREFIX) .zig-cache
+	mv .zig-cache .old.zig-cache
+	rm -rf $(ZIG_PREFIX) .old.zig-cache
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-20s %s\n", $$1, $$2}'
