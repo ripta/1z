@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const JitBuffer = @import("ffi/ir.zig").JitBuffer;
+const PicTable = @import("pic.zig").PicTable;
 
 pub const JitEntry = struct {
     code_ptr: ?*const anyopaque,
@@ -12,6 +13,10 @@ pub const JitEntry = struct {
     /// compiled execution. Used to ensure the value stack has enough
     /// capacity before entering compiled code.
     peak_stack_depth: u32 = 0,
+    /// Snapshot of the interpreter's PIC table at compilation time.
+    /// Captured so compiled code can benefit from type profiles
+    /// observed during interpretation.
+    pic_snapshot: ?*PicTable = null,
 };
 
 pub const JitDispatchTable = struct {
@@ -29,6 +34,10 @@ pub const JitDispatchTable = struct {
         for (self.entries.items) |*entry| {
             if (entry.jit_buf) |buf| {
                 buf.deinit();
+            }
+            if (entry.pic_snapshot) |ps| {
+                ps.deinit();
+                self.allocator.destroy(ps);
             }
         }
         self.entries.deinit(self.allocator);
@@ -82,10 +91,15 @@ pub const JitDispatchTable = struct {
         if (self.entries.items[word_id].jit_buf) |buf| {
             buf.deinit();
         }
+        if (self.entries.items[word_id].pic_snapshot) |ps| {
+            ps.deinit();
+            self.allocator.destroy(ps);
+        }
         self.entries.items[word_id].code_ptr = null;
         self.entries.items[word_id].jit_buf = null;
         self.entries.items[word_id].call_count = 0;
         self.entries.items[word_id].uncompilable = false;
+        self.entries.items[word_id].pic_snapshot = null;
     }
 
     /// Grow the entries array to at least `count` slots, filling new slots
@@ -236,6 +250,29 @@ test "new entries have zero call_count and uncompilable false" {
 
     try std.testing.expectEqual(@as(u32, 0), entry.call_count);
     try std.testing.expect(!entry.uncompilable);
+    try std.testing.expectEqual(null, entry.pic_snapshot);
+}
+
+test "invalidate frees and nulls pic_snapshot" {
+    var table = JitDispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    const id = try table.assignId("foo");
+
+    var dummy: u8 = 0;
+    const fake_ptr: *const anyopaque = &dummy;
+    const fake_buf = JitBuffer{ .code = @constCast(fake_ptr), .size = 0 };
+    table.update(id, fake_ptr, fake_buf, 0);
+
+    // Attach a real PicTable snapshot
+    const ps = try std.testing.allocator.create(PicTable);
+    ps.* = try PicTable.init(std.testing.allocator, 3);
+    table.getMut(id).?.pic_snapshot = ps;
+
+    table.invalidate(id);
+
+    const entry = table.get(id).?;
+    try std.testing.expectEqual(null, entry.pic_snapshot);
 }
 
 test "multiple IDs coexist independently" {

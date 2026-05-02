@@ -69,6 +69,14 @@ pub const PicTable = struct {
     pub fn get(self: *PicTable, idx: usize) *PolymorphicCache {
         return &self.entries[idx];
     }
+
+    /// Create an independent copy of this PicTable. The clone owns its
+    /// own entries slice and can be freed independently.
+    pub fn clone(self: *const PicTable, allocator: Allocator) !PicTable {
+        const entries = try allocator.alloc(PolymorphicCache, self.entries.len);
+        @memcpy(entries, self.entries);
+        return .{ .entries = entries, .allocator = allocator };
+    }
 };
 
 // =============================================================================
@@ -181,4 +189,28 @@ test "PicTable zero-length allocation" {
     defer table.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), table.entries.len);
+}
+
+test "PicTable clone produces independent copy" {
+    const allocator = std.testing.allocator;
+    var original = try PicTable.init(allocator, 3);
+    defer original.deinit();
+
+    const desc = try value_mod.createTypeDescriptor(allocator, "test:", .{});
+    defer value_mod.destroyTypeDescriptor(allocator, desc);
+
+    original.get(1).insert(.{ .type_a = desc, .type_b = desc });
+    original.get(1).generation = 42;
+
+    var cloned = try original.clone(allocator);
+    defer cloned.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), cloned.entries.len);
+    try std.testing.expectEqual(@as(u8, 1), cloned.entries[1].count);
+    try std.testing.expectEqual(@as(u32, 42), cloned.entries[1].generation);
+    try std.testing.expect(cloned.entries[1].lookup(desc, desc) != null);
+
+    // Mutating clone does not affect original
+    cloned.get(1).generation = 99;
+    try std.testing.expectEqual(@as(u32, 42), original.entries[1].generation);
 }

@@ -1286,6 +1286,20 @@ pub const Context = struct {
             break :blk new_id;
         };
 
+        // Snapshot the interpreter's PIC table for this word so compiled
+        // code can benefit from observed type profiles.
+        snapshot: {
+            const entry_mut = self.jit_dispatch.getMut(final_id) orelse break :snapshot;
+            const key = @intFromPtr(instrs.ptr);
+            const pt = self.pic_cache.get(key) orelse break :snapshot;
+            const ps = self.allocator.create(pic_mod.PicTable) catch break :snapshot;
+            ps.* = pt.clone(self.allocator) catch {
+                self.allocator.destroy(ps);
+                break :snapshot;
+            };
+            entry_mut.pic_snapshot = ps;
+        }
+
         if (self.trace.trace_jit) {
             var tw = trace_mod.TraceWriter.init();
             trace_mod.traceJitCompile(&tw, name, final_id);
