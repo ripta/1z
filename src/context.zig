@@ -1263,9 +1263,12 @@ pub const Context = struct {
         };
 
         const pic_snapshot = self.clonePicSnapshotForInstructions(instrs);
-        errdefer if (pic_snapshot) |ps| {
-            ps.deinit();
-            self.allocator.destroy(ps);
+        var pic_snapshot_owned = true;
+        defer if (pic_snapshot_owned) {
+            if (pic_snapshot) |ps| {
+                ps.deinit();
+                self.allocator.destroy(ps);
+            }
         };
 
         const compiled = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, name, pic_snapshot, self, null, &effect) catch return;
@@ -1293,6 +1296,7 @@ pub const Context = struct {
         };
 
         self.jit_dispatch.replacePicSnapshot(final_id, pic_snapshot);
+        pic_snapshot_owned = false;
 
         if (self.trace.trace_jit) {
             var tw = trace_mod.TraceWriter.init();
