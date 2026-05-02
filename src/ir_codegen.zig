@@ -5797,11 +5797,10 @@ fn emitWordCAotPass(
     else
         c.IR_UNUSED;
 
-    const proto_4arg = c.ir_proto_4(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
-    const pic_dispatch_fn = if (pic_table != null)
-        c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPicDispatch"), proto_4arg)
-    else
-        c.IR_UNUSED;
+    // pic_dispatch_fn is allocated lazily inside emitInlinePicCheck
+    // on first use, to avoid shifting IR constant indices for words
+    // that have PIC data but no qualifying call sites.
+    const pic_dispatch_fn: c.ir_ref = c.IR_UNUSED;
 
     // jitRefreshStack is emitted unconditionally: any callback in the body
     // may reallocate ctx.stack, so emitCallbackPostCheck refreshes regardless
@@ -7013,6 +7012,14 @@ fn emitInlinePicCheck(
     }
 
     if (qualified_count == 0) return false;
+
+    // Lazily allocate pic_dispatch_fn on first use in AOT mode.
+    // Allocating it upfront shifts IR constant indices for words
+    // that never reach this point, breaking the C backend.
+    if (state.aot_mode and state.pic_dispatch_fn == c.IR_UNUSED) {
+        const proto = c.ir_proto_4(state.ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+        state.pic_dispatch_fn = c.ir_const_func(state.ctx, c.ir_str(state.ctx, "jitPicDispatch"), proto);
+    }
 
     const ictx = state.ctx;
     ValueLayout.ensureInit();
