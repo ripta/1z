@@ -101,6 +101,11 @@ typedef void *onez_type_t;
 #define ONEZ_EVENT_BREAKPOINT_HIT  2
 #define ONEZ_EVENT_STEP_COMPLETED  3
 
+/* ---- Local kind constants ---- */
+
+#define ONEZ_LOCAL_COMPOUND 0
+#define ONEZ_LOCAL_NATIVE   1
+
 /* Debug event callback. Receives the event code, the onez_t handle, and
  * the user_data pointer provided to onez_debug_set_callback. */
 typedef void (*onez_debug_callback_fn)(int event, onez_t handle, void *user_data);
@@ -788,6 +793,91 @@ int onez_breakpoint_disable(onez_t ctx, unsigned int id);
  * Returns ONEZ_ERR_DEBUGGER_NOT_ACTIVE if the debugger has not been enabled.
  */
 int onez_breakpoint_delete(onez_t ctx, unsigned int id);
+
+/* ---- Debug State Inspection ---- */
+
+/*
+ * Return the name of the word currently being executed.
+ * Returns a null-terminated, library-owned string valid until the next
+ * stepping command or onez_deinit.
+ * Returns NULL if the debugger is not active or the call stack is empty.
+ */
+const char *onez_debug_current_word(onez_t ctx);
+
+/*
+ * Return the source location of the current instruction.
+ * Writes the source file path (null-terminated, library-owned), line number,
+ * and column number to the provided out-parameters.
+ *
+ * Returns ONEZ_OK on success.
+ * Returns ONEZ_ERR_DEBUGGER_NOT_ACTIVE if the debugger has not been enabled.
+ * Returns ONEZ_ERR_INDEX_OUT_OF_RANGE if the call stack is empty.
+ */
+int onez_debug_current_source(onez_t ctx, const char **out_file, unsigned int *out_line, unsigned int *out_col);
+
+/*
+ * Return the number of frames on the call stack.
+ * Returns 0 if the debugger is not active or the handle is NULL.
+ */
+size_t onez_debug_frame_count(onez_t ctx);
+
+/*
+ * Return the word name at call stack frame `index` (0 = innermost).
+ * Returns a null-terminated, library-owned string valid until the next
+ * stepping command or onez_deinit.
+ * Returns NULL if the debugger is not active or the index is out of range.
+ */
+const char *onez_debug_frame_word(onez_t ctx, size_t index);
+
+/*
+ * Return the source file at call stack frame `index` (0 = innermost).
+ * Returns a null-terminated, library-owned string valid until the next
+ * stepping command or onez_deinit.
+ * Returns NULL if the debugger is not active or the index is out of range.
+ */
+const char *onez_debug_frame_file(onez_t ctx, size_t index);
+
+/*
+ * Return the source line number at call stack frame `index` (0 = innermost).
+ * Returns -1 if the debugger is not active or the index is out of range.
+ */
+int onez_debug_frame_line(onez_t ctx, size_t index);
+
+/*
+ * Return the source column at call stack frame `index` (0 = innermost).
+ * Returns -1 if the debugger is not active or the index is out of range.
+ */
+int onez_debug_frame_column(onez_t ctx, size_t index);
+
+/*
+ * Return the number of local bindings in the innermost local frame.
+ * Returns 0 if the debugger is not active or there are no local frames.
+ */
+size_t onez_debug_local_count(onez_t ctx);
+
+/*
+ * Return the name of the local binding at `index` in the innermost frame.
+ * Returns a null-terminated, library-owned string valid until the next
+ * stepping command or onez_deinit.
+ * Returns NULL if the debugger is not active or the index is out of range.
+ */
+const char *onez_debug_local_name(onez_t ctx, size_t index);
+
+/*
+ * Return the kind of the local binding at `index` in the innermost frame.
+ * Returns ONEZ_LOCAL_COMPOUND (0) or ONEZ_LOCAL_NATIVE (1).
+ * Returns -1 if the debugger is not active or the index is out of range.
+ */
+int onez_debug_local_kind(onez_t ctx, size_t index);
+
+/*
+ * Non-destructive read of the value at stack position `index` (0 = top).
+ * Writes an onez_value_t handle to *out without popping the value.
+ *
+ * Returns ONEZ_OK on success.
+ * Returns ONEZ_ERR_INDEX_OUT_OF_RANGE if index >= stack depth.
+ */
+int onez_stack_peek(onez_t ctx, size_t index, onez_value_t *out);
 
 /* ---- AOT Runtime ---- */
 

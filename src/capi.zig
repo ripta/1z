@@ -1578,6 +1578,142 @@ export fn onez_breakpoint_delete(ptr: ?*anyopaque, id: u32) c_int {
 }
 
 // =========================================================================
+// Debug state inspection
+// =========================================================================
+
+const ONEZ_LOCAL_COMPOUND: c_int = 0;
+const ONEZ_LOCAL_NATIVE: c_int = 1;
+
+/// Return the name of the word currently being executed.
+export fn onez_debug_current_word(ptr: ?*anyopaque) ?[*:0]const u8 {
+    const handle = castHandle(ptr) orelse return null;
+    if (handle.debugger == null) return null;
+    const stack = handle.ctx.call_stack.items;
+    if (stack.len == 0) return null;
+    const frame = stack[stack.len - 1];
+    const duped = handle.ctx.quotationAllocator().dupeZ(u8, frame.word_name) catch return null;
+    return duped.ptr;
+}
+
+/// Return the source location of the current instruction.
+export fn onez_debug_current_source(ptr: ?*anyopaque, out_file: *?[*:0]const u8, out_line: *c_uint, out_col: *c_uint) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    if (handle.debugger == null) return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
+    const stack = handle.ctx.call_stack.items;
+    if (stack.len == 0) return ONEZ_ERR_INDEX_OUT_OF_RANGE;
+    const frame = stack[stack.len - 1];
+    const duped = handle.ctx.quotationAllocator().dupeZ(u8, frame.source) catch return ONEZ_ERR_ALLOC;
+    out_file.* = duped.ptr;
+    out_line.* = @intCast(frame.line);
+    out_col.* = @intCast(frame.column);
+    return ONEZ_OK;
+}
+
+/// Return the number of frames on the call stack.
+export fn onez_debug_frame_count(ptr: ?*anyopaque) usize {
+    const handle = castHandle(ptr) orelse return 0;
+    if (handle.debugger == null) return 0;
+    return handle.ctx.call_stack.items.len;
+}
+
+/// Helper to access a call stack frame by debugger index (0 = innermost).
+fn getCallFrame(handle: *OnezHandle, index: usize) ?context_mod.CallFrame {
+    const stack = handle.ctx.call_stack.items;
+    if (index >= stack.len) return null;
+    return stack[stack.len - 1 - index];
+}
+
+/// Return the word name at call stack frame `index` (0 = innermost).
+export fn onez_debug_frame_word(ptr: ?*anyopaque, index: usize) ?[*:0]const u8 {
+    const handle = castHandle(ptr) orelse return null;
+    if (handle.debugger == null) return null;
+    const frame = getCallFrame(handle, index) orelse return null;
+    const duped = handle.ctx.quotationAllocator().dupeZ(u8, frame.word_name) catch return null;
+    return duped.ptr;
+}
+
+/// Return the source file at call stack frame `index` (0 = innermost).
+export fn onez_debug_frame_file(ptr: ?*anyopaque, index: usize) ?[*:0]const u8 {
+    const handle = castHandle(ptr) orelse return null;
+    if (handle.debugger == null) return null;
+    const frame = getCallFrame(handle, index) orelse return null;
+    const duped = handle.ctx.quotationAllocator().dupeZ(u8, frame.source) catch return null;
+    return duped.ptr;
+}
+
+/// Return the source line number at call stack frame `index` (0 = innermost).
+export fn onez_debug_frame_line(ptr: ?*anyopaque, index: usize) c_int {
+    const handle = castHandle(ptr) orelse return -1;
+    if (handle.debugger == null) return -1;
+    const frame = getCallFrame(handle, index) orelse return -1;
+    return @intCast(frame.line);
+}
+
+/// Return the source column at call stack frame `index` (0 = innermost).
+export fn onez_debug_frame_column(ptr: ?*anyopaque, index: usize) c_int {
+    const handle = castHandle(ptr) orelse return -1;
+    if (handle.debugger == null) return -1;
+    const frame = getCallFrame(handle, index) orelse return -1;
+    return @intCast(frame.column);
+}
+
+/// Helper to get the nth entry from the innermost local frame.
+fn getLocalEntry(handle: *OnezHandle, index: usize) ?struct { name: []const u8, kind: c_int } {
+    const frames = handle.ctx.local_frames.items;
+    if (frames.len == 0) return null;
+    const frame = frames[frames.len - 1];
+    var iter = frame.iterator();
+    var i: usize = 0;
+    while (iter.next()) |entry| {
+        if (i == index) {
+            const kind: c_int = switch (entry.value_ptr.*.action) {
+                .native, .host_callback => ONEZ_LOCAL_NATIVE,
+                .compound => ONEZ_LOCAL_COMPOUND,
+            };
+            return .{ .name = entry.key_ptr.*, .kind = kind };
+        }
+        i += 1;
+    }
+    return null;
+}
+
+/// Return the number of local bindings in the innermost local frame.
+export fn onez_debug_local_count(ptr: ?*anyopaque) usize {
+    const handle = castHandle(ptr) orelse return 0;
+    if (handle.debugger == null) return 0;
+    const frames = handle.ctx.local_frames.items;
+    if (frames.len == 0) return 0;
+    return frames[frames.len - 1].count();
+}
+
+/// Return the name of the local binding at `index` in the innermost frame.
+export fn onez_debug_local_name(ptr: ?*anyopaque, index: usize) ?[*:0]const u8 {
+    const handle = castHandle(ptr) orelse return null;
+    if (handle.debugger == null) return null;
+    const entry = getLocalEntry(handle, index) orelse return null;
+    const duped = handle.ctx.quotationAllocator().dupeZ(u8, entry.name) catch return null;
+    return duped.ptr;
+}
+
+/// Return the kind of the local binding at `index` in the innermost frame.
+export fn onez_debug_local_kind(ptr: ?*anyopaque, index: usize) c_int {
+    const handle = castHandle(ptr) orelse return -1;
+    if (handle.debugger == null) return -1;
+    const entry = getLocalEntry(handle, index) orelse return -1;
+    return entry.kind;
+}
+
+/// Non-destructive read of the value at stack position `index` (0 = top).
+export fn onez_stack_peek(ptr: ?*anyopaque, index: usize, out: *?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const val = handle.ctx.stack.peekN(index) catch return ONEZ_ERR_INDEX_OUT_OF_RANGE;
+    const slot = handle.ctx.quotationAllocator().create(Value) catch return ONEZ_ERR_ALLOC;
+    slot.* = val;
+    out.* = slot;
+    return ONEZ_OK;
+}
+
+// =========================================================================
 // Module loading
 // =========================================================================
 
@@ -4065,4 +4201,223 @@ test "breakpoint add_conditional triggers when condition is true" {
 
     // Drain.
     try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+}
+
+// =========================================================================
+// Debug state inspection tests
+// =========================================================================
+
+var test_inspect_current_word: ?[*:0]const u8 = null;
+var test_inspect_frame_count: usize = 0;
+var test_inspect_handle: ?*anyopaque = null;
+
+fn inspectCurrentWordCallback(event: c_int, handle: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
+    if (event == ONEZ_EVENT_PAUSED) {
+        test_inspect_current_word = onez_debug_current_word(handle);
+        test_inspect_frame_count = onez_debug_frame_count(handle);
+        test_inspect_handle = handle;
+        // Continue to let execution finish.
+        _ = onez_debug_continue(handle);
+    }
+}
+
+test "debug current_word returns word name during callback" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    test_inspect_current_word = null;
+    test_inspect_frame_count = 0;
+
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_set_callback(handle_ptr, &inspectCurrentWordCallback, null));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+
+    // Define a word "my-add" and call it. When the debugger pauses inside
+    // "my-add", current_word should return "my-add".
+    const src = "my-add: [ + ] ; 1 2 my-add";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src, src.len));
+
+    // The callback should have captured a non-null word name.
+    try std.testing.expect(test_inspect_current_word != null);
+
+    // Drain.
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 3), out);
+}
+
+var test_inspect_source_file: ?[*:0]const u8 = null;
+var test_inspect_source_line: c_uint = 0;
+var test_inspect_source_col: c_uint = 0;
+var test_inspect_source_rc: c_int = -1;
+
+fn inspectSourceCallback(event: c_int, handle: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
+    if (event == ONEZ_EVENT_PAUSED) {
+        test_inspect_source_rc = onez_debug_current_source(handle, &test_inspect_source_file, &test_inspect_source_line, &test_inspect_source_col);
+        _ = onez_debug_continue(handle);
+    }
+}
+
+test "debug current_source returns source info during callback" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    test_inspect_source_file = null;
+    test_inspect_source_line = 0;
+    test_inspect_source_col = 0;
+    test_inspect_source_rc = -1;
+
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_set_callback(handle_ptr, &inspectSourceCallback, null));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+
+    const src = "my-word: [ 42 ] ; my-word";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src, src.len));
+
+    // current_source should have returned OK at some point during execution.
+    try std.testing.expectEqual(ONEZ_OK, test_inspect_source_rc);
+    try std.testing.expect(test_inspect_source_file != null);
+
+    // Drain.
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+}
+
+var test_inspect_frame_words: [8]?[*:0]const u8 = .{null} ** 8;
+var test_inspect_frame_total: usize = 0;
+
+fn inspectFrameCallback(event: c_int, handle: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
+    if (event == ONEZ_EVENT_PAUSED) {
+        const count = onez_debug_frame_count(handle);
+        if (count >= 2) {
+            // We're inside a nested call; capture frame info.
+            test_inspect_frame_total = count;
+            const n = @min(count, 8);
+            for (0..n) |i| {
+                test_inspect_frame_words[i] = onez_debug_frame_word(handle, i);
+            }
+            _ = onez_debug_continue(handle);
+        } else {
+            // Keep stepping until we get a deeper call stack.
+            _ = onez_debug_step_into(handle);
+        }
+    }
+}
+
+test "debug frame_count and frame accessors" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    test_inspect_frame_total = 0;
+    test_inspect_frame_words = .{null} ** 8;
+
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_set_callback(handle_ptr, &inspectFrameCallback, null));
+    try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
+
+    // Define nested words so we get a multi-frame call stack.
+    const src = "inner: [ 42 ] ; outer: [ inner ] ; outer";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src, src.len));
+
+    // We should have seen at least 2 frames (outer calling inner).
+    try std.testing.expect(test_inspect_frame_total >= 2);
+    // Frame 0 (innermost) should be non-null.
+    try std.testing.expect(test_inspect_frame_words[0] != null);
+
+    // Also test out-of-range returns null.
+    try std.testing.expectEqual(@as(?[*:0]const u8, null), onez_debug_frame_word(handle_ptr, 9999));
+
+    // frame_line and frame_column should return -1 for out-of-range.
+    try std.testing.expectEqual(@as(c_int, -1), onez_debug_frame_line(handle_ptr, 9999));
+    try std.testing.expectEqual(@as(c_int, -1), onez_debug_frame_column(handle_ptr, 9999));
+
+    // Drain.
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+}
+
+test "stack_peek reads without popping" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    // Push two values.
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 10));
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 20));
+
+    // Peek at top (index 0).
+    var val_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_stack_peek(handle_ptr, 0, &val_handle));
+    try std.testing.expect(val_handle != null);
+    try std.testing.expectEqual(ONEZ_TYPE_FIXNUM, onez_value_type(val_handle));
+
+    // Stack depth should still be 2.
+    try std.testing.expectEqual(@as(usize, 2), onez_stack_depth(handle_ptr));
+
+    // Peek at index 1 (second from top).
+    var val_handle2: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_stack_peek(handle_ptr, 1, &val_handle2));
+    try std.testing.expect(val_handle2 != null);
+
+    // Stack depth unchanged.
+    try std.testing.expectEqual(@as(usize, 2), onez_stack_depth(handle_ptr));
+
+    // Drain.
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 20), out);
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 10), out);
+}
+
+test "stack_peek out of range returns error" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    // Empty stack -- peek should fail.
+    var val_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_ERR_INDEX_OUT_OF_RANGE, onez_stack_peek(handle_ptr, 0, &val_handle));
+
+    // Push one value, peek at index 1 should fail.
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 42));
+    try std.testing.expectEqual(ONEZ_ERR_INDEX_OUT_OF_RANGE, onez_stack_peek(handle_ptr, 1, &val_handle));
+
+    // Peek at index 0 should succeed.
+    try std.testing.expectEqual(ONEZ_OK, onez_stack_peek(handle_ptr, 0, &val_handle));
+
+    // Drain.
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+}
+
+test "debug inspection APIs return defaults before enable" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    // current_word returns null when debugger not active.
+    try std.testing.expectEqual(@as(?[*:0]const u8, null), onez_debug_current_word(handle_ptr));
+
+    // current_source returns DEBUGGER_NOT_ACTIVE.
+    var file: ?[*:0]const u8 = null;
+    var line: c_uint = 0;
+    var col: c_uint = 0;
+    try std.testing.expectEqual(ONEZ_ERR_DEBUGGER_NOT_ACTIVE, onez_debug_current_source(handle_ptr, &file, &line, &col));
+
+    // frame_count returns 0.
+    try std.testing.expectEqual(@as(usize, 0), onez_debug_frame_count(handle_ptr));
+
+    // frame accessors return null / -1.
+    try std.testing.expectEqual(@as(?[*:0]const u8, null), onez_debug_frame_word(handle_ptr, 0));
+    try std.testing.expectEqual(@as(?[*:0]const u8, null), onez_debug_frame_file(handle_ptr, 0));
+    try std.testing.expectEqual(@as(c_int, -1), onez_debug_frame_line(handle_ptr, 0));
+    try std.testing.expectEqual(@as(c_int, -1), onez_debug_frame_column(handle_ptr, 0));
+
+    // local_count returns 0.
+    try std.testing.expectEqual(@as(usize, 0), onez_debug_local_count(handle_ptr));
+
+    // local accessors return null / -1.
+    try std.testing.expectEqual(@as(?[*:0]const u8, null), onez_debug_local_name(handle_ptr, 0));
+    try std.testing.expectEqual(@as(c_int, -1), onez_debug_local_kind(handle_ptr, 0));
 }
