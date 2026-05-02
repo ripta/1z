@@ -5139,8 +5139,22 @@ pub fn compileWord(
     mutual_group: ?[]const []const u8,
     stack_effect: ?*const StackEffect,
 ) IrCodegenError!CompiledWord {
-    const discovered = try compileWordPass(instructions, input_count, output_count, resolver, self_name, interp_ctx, mutual_group, stack_effect, null);
-    const second = try compileWordPass(instructions, input_count, output_count, resolver, self_name, interp_ctx, mutual_group, stack_effect, discovered.peak_stack_depth);
+    return compileWordWithPicSnapshot(instructions, input_count, output_count, resolver, self_name, null, interp_ctx, mutual_group, stack_effect);
+}
+
+pub fn compileWordWithPicSnapshot(
+    instructions: []const Instruction,
+    input_count: u8,
+    output_count: u8,
+    resolver: ?WordResolver,
+    self_name: ?[]const u8,
+    pic_table: ?*pic_mod.PicTable,
+    interp_ctx: ?*const Context,
+    mutual_group: ?[]const []const u8,
+    stack_effect: ?*const StackEffect,
+) IrCodegenError!CompiledWord {
+    const discovered = try compileWordPass(instructions, input_count, output_count, resolver, self_name, pic_table, interp_ctx, mutual_group, stack_effect, null);
+    const second = try compileWordPass(instructions, input_count, output_count, resolver, self_name, pic_table, interp_ctx, mutual_group, stack_effect, discovered.peak_stack_depth);
     return second.compiled orelse IrCodegenError.CompilationFailed;
 }
 
@@ -5155,6 +5169,7 @@ fn compileWordPass(
     output_count: u8,
     resolver: ?WordResolver,
     self_name: ?[]const u8,
+    pic_table: ?*pic_mod.PicTable,
     interp_ctx: ?*const Context,
     mutual_group: ?[]const []const u8,
     stack_effect: ?*const StackEffect,
@@ -5360,7 +5375,7 @@ fn compileWordPass(
         .refresh_stack_fn = refresh_stack_fn,
         .validate_params_fn = validate_params_fn,
         .interp_ctx = interp_ctx,
-        .pic_table = if (interp_ctx) |ictx| ictx.pic_cache.get(@intFromPtr(instructions.ptr)) else null,
+        .pic_table = pic_table,
         .error_propagate_status = error_propagate_status,
         .type_mismatch_error_fn = type_mismatch_error_fn,
         .overflow_error_fn = overflow_error_fn,
@@ -6106,6 +6121,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitWithParameter(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitIteratorOp(uintptr_t ctx, uintptr_t opcode);\n");
     try out.appendSlice(allocator, "extern int32_t jitNativeCall(uintptr_t ctx, uintptr_t fn_ptr);\n");
+    try out.appendSlice(allocator, "extern int32_t jitPicTopTagsMatch(uintptr_t ctx, uintptr_t tag_a, uintptr_t tag_b);\n");
     try out.appendSlice(allocator, "extern int32_t jitPicDispatch(uintptr_t ctx, uintptr_t word_id, uintptr_t tag_a, uintptr_t tag_b);\n");
     try out.appendSlice(allocator, "extern int32_t jitInterpretedCall(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
     try out.appendSlice(allocator, "extern int32_t jitRefreshStack(uintptr_t jit_ctx);\n");
@@ -7078,49 +7094,7 @@ fn emitInlinePicCheck(
     // --- Hot path: generation matches → try PIC entries ---
     c._ir_IF_TRUE(ictx, if_gen);
 
-    // Load tag bytes from the two operands. After flushToPhysicalStack,
-    // the operands are at physical stack slots relative to base_addr.
-    // The slot for operand A is sp - effective_in, B is sp - effective_in + 1.
-    // But emitCallbackPreamble has already been called and SP is flushed,
-    // so we use the abstract sp that the caller had. The slots are:
-    //   slot_a = sp_before_call - effective_in
-    //   slot_b = sp_before_call - effective_in + 1
-    // However, after flushToPhysicalStack, the stack pointer state.sp_val
-    // reflects the pre-call sp. The base_addr points to the start of the
-    // stack frame. We compute operand addresses from base_addr and slot indices.
-    //
-    // Actually, the caller already set up physical stack positions. The
-    // operand slots are at the same positions as for emitNumericTagCheckNoBail.
-    // We need the caller's sp value to compute them. But we don't have sp
-    // here directly. Instead, we can use the effective_in count: the last
-    // effective_in values on the stack are the operands. The SP was flushed
-    // by flushToPhysicalStack to state.sp_val. The operands start at
-    // sp_val - effective_in.
-    //
-    // For binary dispatch: operand B is at sp_val - 1, operand A is at sp_val - 2.
-    // This matches the interpreter convention where the top of stack (TOS) is B
-    // and TOS-1 is A for binary dispatch.
-    //
-    // We need sp_val as an IR ref. It was stored by emitCallbackPreamble.
-    // We stored sp into state.sp_ptr. Load it.
-    const sp_loaded = c._ir_LOAD(ictx, c.IR_ADDR, state.sp_ptr);
-
-    // slot_b = sp - 1, slot_a = sp - 2 (relative to base_idx)
-    const one_const = c.ir_const_addr(ictx, 1);
-    const two_const = c.ir_const_addr(ictx, 2);
-    const slot_b_idx = c.ir_fold2(ictx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), sp_loaded, one_const);
-    const slot_a_idx = c.ir_fold2(ictx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), sp_loaded, two_const);
-
-    // Compute byte offsets for tag access
-    const slot_a_byte_off = c.ir_fold2(ictx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), slot_a_idx, state.value_size_const);
-    const slot_b_byte_off = c.ir_fold2(ictx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), slot_b_idx, state.value_size_const);
-    const tag_off = c.ir_const_addr(ictx, ValueLayout.tag_offset);
-    const elem_a_addr = c.ir_fold2(ictx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.items_ptr, slot_a_byte_off);
-    const elem_b_addr = c.ir_fold2(ictx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.items_ptr, slot_b_byte_off);
-    const tag_a_addr = c.ir_fold2(ictx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_a_addr, tag_off);
-    const tag_b_addr = c.ir_fold2(ictx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_b_addr, tag_off);
-    const tag_a_val = c._ir_LOAD(ictx, ValueLayout.ir_tag_type, tag_a_addr);
-    const tag_b_val = c._ir_LOAD(ictx, ValueLayout.ir_tag_type, tag_b_addr);
+    const pic_match_fn = c.ir_const_addr(ictx, @intFromPtr(&jitPicTopTagsMatch));
 
     // Emit nested type checks for each qualified PIC entry. The pattern
     // is a chain of IF/TRUE/FALSE with the slow path at the innermost FALSE.
@@ -7134,12 +7108,11 @@ fn emitInlinePicCheck(
     const saved_base_addr = state.base_addr;
 
     for (qualified[0..qualified_count]) |entry| {
-        const tag_a_const = emitTagConst(ictx, entry.tag_a);
-        const tag_b_const = emitTagConst(ictx, entry.tag_b);
-        const match_a = c.ir_fold2(ictx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_a_val, tag_a_const);
-        const match_b = c.ir_fold2(ictx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_b_val, tag_b_const);
-        const both_match = c.ir_fold2(ictx, c.IR_OPT(c.IR_AND, c.IR_BOOL), match_a, match_b);
-        const if_match = c._ir_IF(ictx, both_match);
+        const tag_a_const = c.ir_const_addr(ictx, @intFromEnum(entry.tag_a));
+        const tag_b_const = c.ir_const_addr(ictx, @intFromEnum(entry.tag_b));
+        const match_status = c._ir_CALL_3(ictx, c.IR_I32, pic_match_fn, ctx_val, tag_a_const, tag_b_const);
+        const matched = c.ir_fold2(ictx, c.IR_OPT(c.IR_NE, c.IR_BOOL), match_status, state.ok_status);
+        const if_match = c._ir_IF(ictx, matched);
 
         // Hit path: call the cached native method body directly
         c._ir_IF_TRUE(ictx, if_match);
@@ -7452,6 +7425,16 @@ export fn jitPicNativeCall(ctx_raw: usize, fn_ptr_raw: usize, name_ptr_raw: usiz
         trace_mod.tracePicHit(&tw, name);
     }
     return 0;
+}
+
+export fn jitPicTopTagsMatch(ctx_raw: usize, tag_a_raw: usize, tag_b_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 0;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const items = ctx.stack.items.items;
+    if (items.len < 2) return 0;
+    const actual_a = @intFromEnum(std.meta.activeTag(items[items.len - 2]));
+    const actual_b = @intFromEnum(std.meta.activeTag(items[items.len - 1]));
+    return if (actual_a == tag_a_raw and actual_b == tag_b_raw) 1 else 0;
 }
 
 export fn jitNativeCall(ctx_raw: usize, fn_ptr_raw: usize) callconv(.c) i32 {

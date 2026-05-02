@@ -116,6 +116,14 @@ pub const JitDispatchTable = struct {
         self.entries.items[word_id].dispatch_pic = null;
     }
 
+    pub fn replacePicSnapshot(self: *JitDispatchTable, word_id: u32, pic_snapshot: ?*PicTable) void {
+        if (self.entries.items[word_id].pic_snapshot) |old_ps| {
+            old_ps.deinit();
+            self.allocator.destroy(old_ps);
+        }
+        self.entries.items[word_id].pic_snapshot = pic_snapshot;
+    }
+
     /// Grow the entries array to at least `count` slots, filling new slots
     /// with null placeholders. Used by AOT to pre-allocate the dispatch table.
     pub fn ensureCapacity(self: *JitDispatchTable, count: u32) !void {

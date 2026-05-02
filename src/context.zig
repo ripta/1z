@@ -1262,7 +1262,13 @@ pub const Context = struct {
             .dispatch_table_ptr = @ptrCast(&self.jit_dispatch),
         };
 
-        const compiled = ir_codegen.compileWord(instrs, input_count, output_count, resolver, name, self, null, &effect) catch return;
+        const pic_snapshot = self.clonePicSnapshotForInstructions(instrs);
+        errdefer if (pic_snapshot) |ps| {
+            ps.deinit();
+            self.allocator.destroy(ps);
+        };
+
+        const compiled = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, name, pic_snapshot, self, null, &effect) catch return;
 
         const final_id = if (def.word_id) |existing_id| blk: {
             if (self.jit_dispatch.get(existing_id) != null) {
@@ -1286,19 +1292,7 @@ pub const Context = struct {
             break :blk new_id;
         };
 
-        // Snapshot the interpreter's PIC table for this word so compiled
-        // code can benefit from observed type profiles.
-        snapshot: {
-            const entry_mut = self.jit_dispatch.getMut(final_id) orelse break :snapshot;
-            const key = @intFromPtr(instrs.ptr);
-            const pt = self.pic_cache.get(key) orelse break :snapshot;
-            const ps = self.allocator.create(pic_mod.PicTable) catch break :snapshot;
-            ps.* = pt.clone(self.allocator) catch {
-                self.allocator.destroy(ps);
-                break :snapshot;
-            };
-            entry_mut.pic_snapshot = ps;
-        }
+        self.jit_dispatch.replacePicSnapshot(final_id, pic_snapshot);
 
         if (self.trace.trace_jit) {
             var tw = trace_mod.TraceWriter.init();
@@ -1531,6 +1525,18 @@ pub const Context = struct {
             return null;
         };
         return pt;
+    }
+
+    pub fn clonePicSnapshotForInstructions(self: *const Context, instrs: []const Instruction) ?*PicTable {
+        if (instrs.len == 0) return null;
+        const key = @intFromPtr(instrs.ptr);
+        const pt = self.pic_cache.get(key) orelse return null;
+        const cloned = self.allocator.create(pic_mod.PicTable) catch return null;
+        cloned.* = pt.clone(self.allocator) catch {
+            self.allocator.destroy(cloned);
+            return null;
+        };
+        return cloned;
     }
 
     /// Determine where a word was found during lookup, mirroring the

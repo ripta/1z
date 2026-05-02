@@ -27,6 +27,7 @@ Execution options:
   --trace-resolve[=PAT]     Trace word resolution (optional pattern filter)
   --trace-modules           Trace module loading
   --trace-jit               Trace JIT compilation
+  --trace-pic               Trace inline PIC hits
   --dump-scope=WORD         Dump scope after loading WORD
   --deadlock-detect[=SECS]  Enable deadlock detection (default 5s)
   --test-timeout=SECS       Set test timeout in seconds

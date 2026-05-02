@@ -850,7 +850,13 @@ fn compileSingleWord(ctx: *Context, sym: []const u8, mutual_group: ?[]const []co
         .dispatch_table_ptr = @ptrCast(&ctx.jit_dispatch),
     };
 
-    const compiled = ir_codegen.compileWord(instrs, input_count, output_count, resolver, sym, ctx, mutual_group, &effect) catch {
+    const pic_snapshot = ctx.clonePicSnapshotForInstructions(instrs);
+    errdefer if (pic_snapshot) |ps| {
+        ps.deinit();
+        ctx.allocator.destroy(ps);
+    };
+
+    const compiled = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, sym, pic_snapshot, ctx, mutual_group, &effect) catch {
         return error.TypeMismatch;
     };
 
@@ -880,6 +886,7 @@ fn compileSingleWord(ctx: *Context, sym: []const u8, mutual_group: ?[]const []co
         propagateWordId(ctx, sym, new_id);
         break :blk new_id;
     };
+    ctx.jit_dispatch.replacePicSnapshot(final_id, pic_snapshot);
     if (ctx.trace.trace_jit) {
         var tw = trace_mod.TraceWriter.init();
         trace_mod.traceJitCompile(&tw, sym, final_id);
