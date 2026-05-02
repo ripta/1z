@@ -109,115 +109,115 @@ Stack: [ ]
 === error includes position ===
 Stack: [ ]
 Stack: [ [ "ab!cd" [ ] make-vector ALPHA-RULE #push! >array <lexer> tokenize #collect ] ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } <error invalid-argument: unrecognized input at position 2: '!' [lexer:32:throw <- lexer:56:if <- lexer:65:(try-rules) <- lexer:75:if <- tests/integration/lexer.1z:766:call <- tests/integration/lexer.1z:128:#collect <- tests/integration/lexer.1z:129:recover]> ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } <error invalid-argument: unrecognized input at position 2: '!' [lexer:32:throw <- lexer:56:if <- lexer:65:(try-rules) <- lexer:75:if <- tests/integration/lexer.1z:766:call <- tests/integration/lexer.1z:128:#collect <- tests/integration/lexer.1z:129:recover]> ]
 PASS: error mentions position
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
 === inspect ===
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } "<token number: "42">" ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } "<token number: "42">" ]
 PASS: token inspect format
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
 === number-rule integers ===
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: number: value: "42" pos: 0 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: number: value: "42" pos: 0 } } ]
 PASS: single integer yields one token
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: number: value: "42" pos: 0 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: number: value: "42" pos: 0 } } ]
 PASS: kind is number:
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } token{ kind: number: value: "42" pos: 0 } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } token{ kind: number: value: "42" pos: 0 } ]
 PASS: value is 42
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: number: value: "0" pos: 0 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: number: value: "0" pos: 0 } } ]
 PASS: zero
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
 === number-rule floats ===
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: number: value: "3.14" pos: 0 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: number: value: "3.14" pos: 0 } } ]
 PASS: float yields one token
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: number: value: "3.14" pos: 0 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: number: value: "3.14" pos: 0 } } ]
 PASS: float kind is number:
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } token{ kind: number: value: "3.14" pos: 0 } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } token{ kind: number: value: "3.14" pos: 0 } ]
 PASS: float value is 3.14
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: number: value: "0.5" pos: 0 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: number: value: "0.5" pos: 0 } } ]
 PASS: float value is 0.5
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
 === number-rule trailing dot ===
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: number: value: "3." pos: 0 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: number: value: "3." pos: 0 } } ]
 PASS: trailing dot kept as 3.
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
 === word-rule ===
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: word: value: "hello" pos: 0 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: word: value: "hello" pos: 0 } } ]
 PASS: word yields one token
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: word: value: "hello" pos: 0 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: word: value: "hello" pos: 0 } } ]
 PASS: kind is word:
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } token{ kind: word: value: "hello" pos: 0 } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } token{ kind: word: value: "hello" pos: 0 } ]
 PASS: value is hello
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: word: value: "abc123" pos: 0 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: word: value: "abc123" pos: 0 } } ]
 PASS: word with trailing digits
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: word: value: "x" pos: 0 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: word: value: "x" pos: 0 } } ]
 PASS: single letter
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
 === symbols-rule longest match ===
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } H{ match: [ { "++" "+" } (symbols-match) ] kind: symbol: } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } lexer{ rules: { H{ match: [ { "++" "+" } (symbols-match) ] kind: symbol: } } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: symbol: value: "++" pos: 0 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } H{ match: [ { "++" "+" } (symbols-match) ] kind: symbol: } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } lexer{ rules: { H{ match: [ { "++" "+" } (symbols-match) ] kind: symbol: } } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: symbol: value: "++" pos: 0 } } ]
 PASS: ++ yields one token (longest match)
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: symbol: value: "++" pos: 0 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: symbol: value: "++" pos: 0 } } ]
 PASS: kind is symbol:
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } token{ kind: symbol: value: "++" pos: 0 } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } token{ kind: symbol: value: "++" pos: 0 } ]
 PASS: value is ++ not +
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
 === symbols-rule multiple ===
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } H{ match: [ { "(" ")" } (symbols-match) ] kind: symbol: } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } lexer{ rules: { H{ match: [ { "(" ")" } (symbols-match) ] kind: symbol: } } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: symbol: value: "(" pos: 0 } token{ kind: symbol: value: ")" pos: 1 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } H{ match: [ { "(" ")" } (symbols-match) ] kind: symbol: } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } lexer{ rules: { H{ match: [ { "(" ")" } (symbols-match) ] kind: symbol: } } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: symbol: value: "(" pos: 0 } token{ kind: symbol: value: ")" pos: 1 } } ]
 PASS: () yields two tokens
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: symbol: value: "(" pos: 0 } token{ kind: symbol: value: ")" pos: 1 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: symbol: value: "(" pos: 0 } token{ kind: symbol: value: ")" pos: 1 } } ]
 PASS: first is (
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: symbol: value: "(" pos: 0 } token{ kind: symbol: value: ")" pos: 1 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: symbol: value: "(" pos: 0 } token{ kind: symbol: value: ")" pos: 1 } } ]
 PASS: second is )
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
 === skip-whitespace-rule ===
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } " hello " ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } " hello " lexer{ rules: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: word: value: "hello" pos: 1 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } " hello " ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } " hello " lexer{ rules: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: word: value: "hello" pos: 1 } } ]
 PASS: whitespace skipped, one word token
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: word: value: "hello" pos: 1 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: word: value: "hello" pos: 1 } } ]
 PASS: value is hello after skip
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } "ab  cd" ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } "ab  cd" lexer{ rules: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: word: value: "ab" pos: 0 } token{ kind: word: value: "cd" pos: 4 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } "ab  cd" ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } "ab  cd" lexer{ rules: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: word: value: "ab" pos: 0 } token{ kind: word: value: "cd" pos: 4 } } ]
 PASS: two words with whitespace yields two tokens
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: word: value: "ab" pos: 0 } token{ kind: word: value: "cd" pos: 4 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: word: value: "ab" pos: 0 } token{ kind: word: value: "cd" pos: 4 } } ]
 PASS: first word is ab
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: word: value: "ab" pos: 0 } token{ kind: word: value: "cd" pos: 4 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: word: value: "ab" pos: 0 } token{ kind: word: value: "cd" pos: 4 } } ]
 PASS: second word is cd
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
 === combined rules ===
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } "x + 42" ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } "x + 42" V{ H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } "x + 42" lexer{ rules: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } H{ match: [ (number-match) ] kind: number: } H{ match: [ { "+" } (symbols-match) ] kind: symbol: } } } ]
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: word: value: "x" pos: 0 } token{ kind: symbol: value: "+" pos: 2 } token{ kind: number: value: "42" pos: 4 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } "x + 42" ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } "x + 42" V{ H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } "x + 42" lexer{ rules: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } H{ match: [ (number-match) ] kind: number: } H{ match: [ { "+" } (symbols-match) ] kind: symbol: } } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: word: value: "x" pos: 0 } token{ kind: symbol: value: "+" pos: 2 } token{ kind: number: value: "42" pos: 4 } } ]
 PASS: x + 42 yields three tokens
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: word: value: "x" pos: 0 } token{ kind: symbol: value: "+" pos: 2 } token{ kind: number: value: "42" pos: 4 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: word: value: "x" pos: 0 } token{ kind: symbol: value: "+" pos: 2 } token{ kind: number: value: "42" pos: 4 } } ]
 PASS: first is word:
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: word: value: "x" pos: 0 } token{ kind: symbol: value: "+" pos: 2 } token{ kind: number: value: "42" pos: 4 } } token{ kind: word: value: "x" pos: 0 } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: word: value: "x" pos: 0 } token{ kind: symbol: value: "+" pos: 2 } token{ kind: number: value: "42" pos: 4 } } token{ kind: word: value: "x" pos: 0 } ]
 PASS: first is x
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: word: value: "x" pos: 0 } token{ kind: symbol: value: "+" pos: 2 } token{ kind: number: value: "42" pos: 4 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: word: value: "x" pos: 0 } token{ kind: symbol: value: "+" pos: 2 } token{ kind: number: value: "42" pos: 4 } } ]
 PASS: second is symbol:
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: word: value: "x" pos: 0 } token{ kind: symbol: value: "+" pos: 2 } token{ kind: number: value: "42" pos: 4 } } token{ kind: symbol: value: "+" pos: 2 } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: word: value: "x" pos: 0 } token{ kind: symbol: value: "+" pos: 2 } token{ kind: number: value: "42" pos: 4 } } token{ kind: symbol: value: "+" pos: 2 } ]
 PASS: second is +
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } { token{ kind: word: value: "x" pos: 0 } token{ kind: symbol: value: "+" pos: 2 } token{ kind: number: value: "42" pos: 4 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } { token{ kind: word: value: "x" pos: 0 } token{ kind: symbol: value: "+" pos: 2 } token{ kind: number: value: "42" pos: 4 } } ]
 PASS: third is number:
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } token{ kind: number: value: "42" pos: 4 } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } token{ kind: number: value: "42" pos: 4 } ]
 PASS: third is 42
-Stack: [ V{ scanner{ str: "ab!cd" position: 2 } } ]
+Stack: [ V{ scanner{ str: "ab!cd" start: 2 end: 5 } } ]

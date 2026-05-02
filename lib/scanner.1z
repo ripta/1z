@@ -1,21 +1,24 @@
 \ lib/scanner.1z - Cursor abstraction for character-by-character string scanning
 
-\ Scanner struct: str is the input, position is the current offset
-scanner: struct{ str position } ;
+\ Scanner struct: str is the input, start is the current offset, end is the upper bound
+scanner: struct{ str start end } ;
 
 \\ Construct a scanner at position 0 over a string.
-<scanner>: ( str -- scanner ) [ 0 make-scanner ] ;
+<scanner>: ( str -- scanner ) [ dup #len 0 swap make-scanner ] ;
+
+\\ Backward-compatible alias for start>>.
+position>>: ( scanner -- n ) [ start>> ] ;
 
 \\ True if the scanner has consumed all input.
 at-end?: ( scanner -- ? ) [
-  dup position>> swap str>> #len >=
+  dup start>> swap end>> >=
 ] ;
 
 \\ Current character as a single-character string, or f at end.
 peek: ( scanner -- char/f ) [
   dup at-end?
   [ drop f ]
-  [ dup position>> swap str>> swap #nth ]
+  [ dup start>> swap str>> swap #nth ]
   if
 ] ;
 
@@ -23,27 +26,27 @@ peek: ( scanner -- char/f ) [
 advance: ( scanner -- scanner ) [
   dup at-end?
   [ ]
-  [ unmake-scanner 1 + make-scanner ]
+  [ unmake-scanner swap 1 + swap make-scanner ]
   if
 ] ;
 
 \\ Return the remaining unconsumed portion of the input string.
 rest: ( scanner -- str ) [
-  dup position>> swap str>>
-  dup #len
-  <rot- swap #slice
+  dup start>> swap
+  dup end>> swap str>>
+  -rot> #slice
 ] ;
 
 \\ Consume characters while the predicate quotation returns true.
 \\ Returns the advanced scanner and the consumed substring.
 take-while: ( scanner quot -- scanner str ) [
-  over position>>
+  over start>>
   [
     [ over peek dup f = [ drop f ] [ over call ] if ]
     [ swap advance swap ] while
     drop
   ] dip
-  over position>>
+  over start>>
   2 pick-n str>>
   -rot> #slice
 ] ;
@@ -68,14 +71,83 @@ expect: ( scanner str -- scanner ) [
       f swap EInvalidArgument make-error throw
     ] [
       drop #len
-      [ unmake-scanner ] dip + make-scanner
+      [ unmake-scanner swap ] dip + swap make-scanner
     ] if
+  ] if
+] ;
+
+\\ Capture the current scanner position for later slicing.
+mark: ( scanner -- mark ) [ start>> ] ;
+
+\\ Search for the next occurrence of needle at or after the current position.
+\\ Returns a scanner positioned at the match, or f if not found.
+find: ( scanner needle -- scanner/f ) [
+  over str>> over
+  \ scanner needle str needle
+  3 pick-n start>>
+  \ scanner needle str needle from
+  #index-of-from
+  \ scanner needle idx/f
+  dup f = [
+    drop 2drop f
+  ] [
+    \ scanner needle idx
+    over #len over +
+    \ scanner needle idx match-end
+    3 pick-n end>> > [
+      \ match extends past end
+      3drop f
+    ] [
+      \ match ends within bounds: build new scanner
+      \ scanner needle idx
+      nip
+      \ scanner idx
+      over str>> swap 2 pick-n end>>
+      \ scanner str idx end
+      make-scanner nip
+    ] if
+  ] if
+] ;
+
+\\ If the remaining input starts with needle, advance past it; otherwise f.
+skip-exact: ( scanner needle -- scanner/f ) [
+  over rest over #starts-with?
+  [
+    #len over start>> +
+    over str>> swap
+    2 pick-n end>>
+    make-scanner nip
+  ]
+  [ 2drop f ]
+  if
+] ;
+
+\\ Extract the substring from mark to the current scanner position.
+slice-from: ( scanner mark -- str ) [
+  over str>>
+  -rot>
+  swap start>>
+  #slice
+] ;
+
+\\ Consume text up to needle. Returns advanced scanner and consumed text,
+\\ or original scanner and f if needle is not found.
+take-until: ( scanner needle -- scanner str/f ) [
+  over mark -rot>
+  \ mark scanner needle
+  over swap find
+  \ mark scanner found/f
+  dup f = [
+    drop nip f
+  ] [
+    nip dup <rot-
+    slice-from
   ] if
 ] ;
 
 \\ Debug representation of a scanner value.
 inspect: method{ scanner } [
-  dup position>> inspect
+  dup start>> inspect
   swap rest inspect
   "<scanner pos=" <rot- #append " rest=" #append swap #append ">" #append
 ] ;

@@ -94,6 +94,87 @@ rest " world" "expect leaves rest" assert=
 [ digit? ] take-while "123" "composed: take digits" assert=
 rest "abc" "composed: rest after take" assert=
 
+"start>> and end>>" test-section
+"hello" <scanner> start>> 0 "start>> is 0" assert=
+"hello" <scanner> end>> 5 "end>> is string length" assert=
+"hello" <scanner> advance start>> 1 "start>> after advance" assert=
+"hello" <scanner> advance end>> 5 "end>> unchanged after advance" assert=
+"" <scanner> end>> 0 "end>> on empty string" assert=
+
+"mark" test-section
+"hello" <scanner> mark 0 "mark at start is 0" assert=
+"hello" <scanner> advance advance mark 2 "mark after advances" assert=
+
+"slice-from" test-section
+"hello" <scanner> advance advance advance
+dup 0 slice-from "hel" "slice-from 0 to 3" assert=
+drop
+"hello" <scanner> dup mark swap
+advance advance advance
+swap slice-from "hel" "slice-from mark to current" assert=
+"hello" <scanner> advance dup mark swap advance advance
+swap slice-from "el" "slice-from mid-range" assert=
+"hello" <scanner> dup mark swap
+swap slice-from "" "slice-from same position is empty" assert=
+
+"find" test-section
+"hello world" <scanner> "world" find
+dup f = "find existing needle is not f" assert-false
+start>> 6 "find positions at match" assert=
+
+"hello world" <scanner> "xyz" find
+f "find missing needle returns f" assert=
+
+"hello world" <scanner> "" find
+start>> 0 "find empty needle returns current" assert=
+
+"hello world" <scanner> advance advance advance "lo" find
+start>> 3 "find respects current position" assert=
+
+"aXbXc" <scanner> "X" find
+start>> 1 "find first occurrence" assert=
+
+"skip-exact" test-section
+"hello world" <scanner> "hello" skip-exact
+dup f = "skip-exact match is not f" assert-false
+rest " world" "skip-exact advances past match" assert=
+
+"hello world" <scanner> "xyz" skip-exact
+f "skip-exact mismatch returns f" assert=
+
+"hello" <scanner> "" skip-exact
+start>> 0 "skip-exact empty is no-op" assert=
+
+"hello" <scanner> "hello" skip-exact
+at-end? "skip-exact full string reaches end" assert-true
+
+"take-until" test-section
+"hello world" <scanner> " " take-until
+"hello" "take-until returns text before needle" assert=
+start>> 5 "take-until scanner at delimiter" assert=
+
+"hello world" <scanner> " " take-until
+swap " " skip-exact
+dup f = "skip-exact after take-until is not f" assert-false
+rest "world" "skip then rest gives remainder" assert=
+drop
+
+"hello" <scanner> "xyz" take-until
+f "take-until not-found returns f" assert=
+rest "hello" "take-until not-found preserves scanner" assert=
+
+"hello" <scanner> "" take-until
+"" "take-until empty needle returns empty string" assert=
+start>> 0 "take-until empty needle stays at start" assert=
+
+"a::b::c" <scanner> "::" take-until
+"a" "take-until multi-char delimiter" assert=
+"::" skip-exact
+dup f = not "skip-exact after multi-char take-until" assert-true
+"::" take-until
+"b" "second take-until segment" assert=
+"::" skip-exact rest "c" "rest after second take-until" assert=
+
 "inspect" test-section
 "hello" <scanner> inspect "<scanner pos=0 rest=\"hello\">" "inspect at start" assert=
 "hello" <scanner> advance advance inspect "<scanner pos=2 rest=\"llo\">" "inspect after advances" assert=

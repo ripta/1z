@@ -64,50 +64,50 @@ PASS: rest on empty string
 Stack: [ ]
 === full scan ===
 Stack: [ ]
-Stack: [ scanner{ str: "abc" position: 0 } ]
+Stack: [ scanner{ str: "abc" start: 0 end: 3 } ]
 PASS: scan a
-Stack: [ scanner{ str: "abc" position: 0 } ]
-Stack: [ scanner{ str: "abc" position: 1 } ]
+Stack: [ scanner{ str: "abc" start: 0 end: 3 } ]
+Stack: [ scanner{ str: "abc" start: 1 end: 3 } ]
 PASS: scan b
-Stack: [ scanner{ str: "abc" position: 1 } ]
-Stack: [ scanner{ str: "abc" position: 2 } ]
+Stack: [ scanner{ str: "abc" start: 1 end: 3 } ]
+Stack: [ scanner{ str: "abc" start: 2 end: 3 } ]
 PASS: scan c
-Stack: [ scanner{ str: "abc" position: 2 } ]
-Stack: [ scanner{ str: "abc" position: 3 } ]
+Stack: [ scanner{ str: "abc" start: 2 end: 3 } ]
+Stack: [ scanner{ str: "abc" start: 3 end: 3 } ]
 PASS: at end after scanning all
 Stack: [ ]
 === backtracking via dup ===
 Stack: [ ]
-Stack: [ scanner{ str: "hello" position: 2 } scanner{ str: "hello" position: 2 } ]
+Stack: [ scanner{ str: "hello" start: 2 end: 5 } scanner{ str: "hello" start: 2 end: 5 } ]
 PASS: advanced copy at end
-Stack: [ scanner{ str: "hello" position: 2 } ]
+Stack: [ scanner{ str: "hello" start: 2 end: 5 } ]
 PASS: original unchanged at position 2
 Stack: [ ]
 === take-while ===
 Stack: [ ]
 PASS: take-while digits
-Stack: [ scanner{ str: "123abc" position: 3 } ]
+Stack: [ scanner{ str: "123abc" start: 3 end: 6 } ]
 PASS: take-while advances position
 Stack: [ ]
 PASS: take-while alpha
-Stack: [ scanner{ str: "abc123" position: 3 } ]
+Stack: [ scanner{ str: "abc123" start: 3 end: 6 } ]
 Stack: [ ]
 PASS: take-while no match returns empty
-Stack: [ scanner{ str: "abc" position: 0 } ]
+Stack: [ scanner{ str: "abc" start: 0 end: 3 } ]
 PASS: take-while no match stays at 0
 Stack: [ ]
 PASS: take-while on empty returns empty
-Stack: [ scanner{ str: "" position: 0 } ]
+Stack: [ scanner{ str: "" start: 0 end: 0 } ]
 Stack: [ ]
 PASS: take-while full match
-Stack: [ scanner{ str: "12345" position: 5 } ]
+Stack: [ scanner{ str: "12345" start: 5 end: 5 } ]
 PASS: take-while full match at end
 Stack: [ ]
 === skip-while ===
 Stack: [ ]
-Stack: [ scanner{ str: "   hello" position: 3 } ]
+Stack: [ scanner{ str: "   hello" start: 3 end: 8 } ]
 PASS: skip-while skips spaces
-Stack: [ scanner{ str: "   hello" position: 3 } ]
+Stack: [ scanner{ str: "   hello" start: 3 end: 8 } ]
 PASS: skip-while leaves rest
 Stack: [ ]
 PASS: skip-while on empty at end
@@ -116,9 +116,9 @@ PASS: skip-while no match stays at 0
 Stack: [ ]
 === expect ===
 Stack: [ ]
-Stack: [ scanner{ str: "hello world" position: 5 } ]
+Stack: [ scanner{ str: "hello world" start: 5 end: 11 } ]
 PASS: expect advances past expected
-Stack: [ scanner{ str: "hello world" position: 5 } ]
+Stack: [ scanner{ str: "hello world" start: 5 end: 11 } ]
 PASS: expect leaves rest
 Stack: [ ]
 PASS: expect empty string is no-op
@@ -129,11 +129,115 @@ PASS: expect past end throws
 Stack: [ ]
 === composition ===
 Stack: [ ]
-Stack: [ scanner{ str: "  123abc" position: 0 } ]
-Stack: [ scanner{ str: "  123abc" position: 2 } ]
+Stack: [ scanner{ str: "  123abc" start: 0 end: 8 } ]
+Stack: [ scanner{ str: "  123abc" start: 2 end: 8 } ]
 PASS: composed: take digits
-Stack: [ scanner{ str: "  123abc" position: 5 } ]
+Stack: [ scanner{ str: "  123abc" start: 5 end: 8 } ]
 PASS: composed: rest after take
+Stack: [ ]
+=== start>> and end>> ===
+Stack: [ ]
+PASS: start>> is 0
+Stack: [ ]
+PASS: end>> is string length
+Stack: [ ]
+PASS: start>> after advance
+Stack: [ ]
+PASS: end>> unchanged after advance
+Stack: [ ]
+PASS: end>> on empty string
+Stack: [ ]
+=== mark ===
+Stack: [ ]
+PASS: mark at start is 0
+Stack: [ ]
+PASS: mark after advances
+Stack: [ ]
+=== slice-from ===
+Stack: [ ]
+Stack: [ scanner{ str: "hello" start: 3 end: 5 } ]
+PASS: slice-from 0 to 3
+Stack: [ scanner{ str: "hello" start: 3 end: 5 } ]
+Stack: [ ]
+Stack: [ 0 scanner{ str: "hello" start: 0 end: 5 } ]
+Stack: [ 0 scanner{ str: "hello" start: 3 end: 5 } ]
+PASS: slice-from mark to current
+Stack: [ ]
+Stack: [ 1 scanner{ str: "hello" start: 3 end: 5 } ]
+PASS: slice-from mid-range
+Stack: [ ]
+Stack: [ 0 scanner{ str: "hello" start: 0 end: 5 } ]
+PASS: slice-from same position is empty
+Stack: [ ]
+=== find ===
+Stack: [ ]
+Stack: [ scanner{ str: "hello world" start: 6 end: 11 } ]
+PASS: find existing needle is not f
+Stack: [ scanner{ str: "hello world" start: 6 end: 11 } ]
+PASS: find positions at match
+Stack: [ ]
+Stack: [ f ]
+PASS: find missing needle returns f
+Stack: [ ]
+Stack: [ scanner{ str: "hello world" start: 0 end: 11 } ]
+PASS: find empty needle returns current
+Stack: [ ]
+Stack: [ scanner{ str: "hello world" start: 3 end: 11 } ]
+PASS: find respects current position
+Stack: [ ]
+Stack: [ scanner{ str: "aXbXc" start: 1 end: 5 } ]
+PASS: find first occurrence
+Stack: [ ]
+=== skip-exact ===
+Stack: [ ]
+Stack: [ scanner{ str: "hello world" start: 5 end: 11 } ]
+PASS: skip-exact match is not f
+Stack: [ scanner{ str: "hello world" start: 5 end: 11 } ]
+PASS: skip-exact advances past match
+Stack: [ ]
+Stack: [ f ]
+PASS: skip-exact mismatch returns f
+Stack: [ ]
+Stack: [ scanner{ str: "hello" start: 0 end: 5 } ]
+PASS: skip-exact empty is no-op
+Stack: [ ]
+Stack: [ scanner{ str: "hello" start: 5 end: 5 } ]
+PASS: skip-exact full string reaches end
+Stack: [ ]
+=== take-until ===
+Stack: [ ]
+Stack: [ scanner{ str: "hello world" start: 5 end: 11 } "hello" ]
+PASS: take-until returns text before needle
+Stack: [ scanner{ str: "hello world" start: 5 end: 11 } ]
+PASS: take-until scanner at delimiter
+Stack: [ ]
+Stack: [ scanner{ str: "hello world" start: 5 end: 11 } "hello" ]
+Stack: [ "hello" scanner{ str: "hello world" start: 6 end: 11 } ]
+PASS: skip-exact after take-until is not f
+Stack: [ "hello" scanner{ str: "hello world" start: 6 end: 11 } ]
+PASS: skip then rest gives remainder
+Stack: [ "hello" ]
+Stack: [ ]
+Stack: [ scanner{ str: "hello" start: 0 end: 5 } f ]
+PASS: take-until not-found returns f
+Stack: [ scanner{ str: "hello" start: 0 end: 5 } ]
+PASS: take-until not-found preserves scanner
+Stack: [ ]
+Stack: [ scanner{ str: "hello" start: 0 end: 5 } "" ]
+PASS: take-until empty needle returns empty string
+Stack: [ scanner{ str: "hello" start: 0 end: 5 } ]
+PASS: take-until empty needle stays at start
+Stack: [ ]
+Stack: [ scanner{ str: "a::b::c" start: 1 end: 7 } "a" ]
+PASS: take-until multi-char delimiter
+Stack: [ scanner{ str: "a::b::c" start: 1 end: 7 } ]
+Stack: [ scanner{ str: "a::b::c" start: 3 end: 7 } ]
+PASS: skip-exact after multi-char take-until
+Stack: [ scanner{ str: "a::b::c" start: 3 end: 7 } ]
+Stack: [ scanner{ str: "a::b::c" start: 4 end: 7 } "b" ]
+PASS: second take-until segment
+Stack: [ scanner{ str: "a::b::c" start: 4 end: 7 } ]
+PASS: rest after second take-until
 Stack: [ ]
 === inspect ===
 Stack: [ ]
