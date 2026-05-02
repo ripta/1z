@@ -250,7 +250,11 @@ keep: ( ..a x quot: ( ..a x -- ..b ) -- ..b x ) [ over [ call ] dip ] ;
 \\ Call a quotation with `x y z`, then restore all three to the stack.
 3keep: ( ..a x y z quot: ( ..a x y z -- ..b ) -- ..b x y z ) [ [ 3dup ] dip 3dip ] ;
 \\ Apply two quotations to the same value in sequence.
-bi: ( x quot1 quot2 -- ) [ [ keep ] dip call ] ;
+bi: ( ..a x p: ( ..a x -- ..b ) q: ( ..a x -- ..c ) -- ..b ..c ) [ [ keep ] dip call ] ;
+\\ Apply three quotations to the same value in sequence.
+tri: ( ..a x p: ( ..a x -- ..b ) q: ( ..a x -- ..c ) r: ( ..a x -- ..d ) -- ..b ..c ..d ) [ [ [ keep ] dip keep ] dip call ] ;
+\\ Apply each quotation in an array to the same value.
+cleave: ( x quots -- ) [ [ keep ] #each drop ] ;
 \\ Duplicate the top two stack elements.
 2dup: ( a b -- a b a b ) [ over over ] ;
 \\ Duplicate the top three stack elements.
@@ -262,9 +266,9 @@ dupd: ( a b -- a a b ) [ over swap ] ;
 \\ Drop the top three stack elements.
 3drop: ( a b c -- ) [ 2drop drop ] ;
 \\ Temporarily hide the top two elements, execute a quotation, then restore them.
-2dip: ( a b quot -- a b ) [ swap [ dip ] dip ] ;
+2dip: ( ..a x y quot: ( ..a -- ..b ) -- ..b x y ) [ swap [ dip ] dip ] ;
 \\ Temporarily hide the top three elements, execute a quotation, then restore them.
-3dip: ( a b c quot -- a b c ) [ swap [ 2dip ] dip ] ;
+3dip: ( ..a x y z quot: ( ..a -- ..b ) -- ..b x y z ) [ swap [ 2dip ] dip ] ;
 \\ Rotate the top three elements left: `a b c` becomes `b c a`.
 <rot-: ( a b c -- b c a ) [ [ swap ] dip swap ] ;
 \\ Rotate the top three elements right: `a b c` becomes `c a b`.

@@ -232,6 +232,35 @@ pub const InferenceEngine = struct {
                     const wd = word_def.?;
 
                     const combinator_kind = classifyCombinator(&wd);
+
+                    // Try row-polymorphic path for any word with row-poly effect and quotation annotations
+                    if (wd.stack_effect) |eff| {
+                        if (stack_effect_mod.hasAnyRowVariable(eff)) {
+                            const rp_result = try self.handleRowPoly(
+                                &wd,
+                                combinator_kind,
+                                &stack_model,
+                                delta,
+                                caller,
+                            );
+                            switch (rp_result) {
+                                .applied => |applied| {
+                                    delta = applied.new_delta;
+                                    stack_model.shrinkRetainingCapacity(0);
+
+                                    var i: usize = 0;
+                                    while (i < applied.new_model_size) : (i += 1) {
+                                        try stack_model.append(self.allocator, .other);
+                                    }
+                                    continue;
+                                },
+                                .unknown => return .unknown,
+                                .fallthrough => {},
+                            }
+                        }
+                    }
+
+                    // Try concrete combinator path for branch/loop without row vars
                     if (combinator_kind != .none) {
                         if (wd.stack_effect) |eff| {
                             if (!stack_effect_mod.hasAnyRowVariable(eff)) {
@@ -246,6 +275,7 @@ pub const InferenceEngine = struct {
                                     .applied => |applied| {
                                         delta = applied.new_delta;
                                         stack_model.shrinkRetainingCapacity(0);
+
                                         var i: usize = 0;
                                         while (i < applied.new_model_size) : (i += 1) {
                                             try stack_model.append(self.allocator, .other);
@@ -395,6 +425,122 @@ pub const InferenceEngine = struct {
         }
     }
 
+    fn handleRowPoly(
+        self: *InferenceEngine,
+        word_def: *const WordDefinition,
+        kind: CombinatorKind,
+        stack_model: *std.ArrayListUnmanaged(StackEntry),
+        current_delta: i64,
+        caller: CallerInfo,
+    ) Allocator.Error!CombinatorResult {
+        const eff = word_def.stack_effect orelse return .fallthrough;
+        const concrete_inputs = eff.concreteInputCount();
+
+        if (stack_model.items.len < concrete_inputs) return .fallthrough;
+
+        var adjustments: std.ArrayListUnmanaged(i64) = .{};
+        defer adjustments.deinit(self.allocator);
+
+        var all_literal = true;
+        var found_any_quot = false;
+        var concrete_index: usize = 0;
+        for (eff.inputs) |param| {
+            if (param.is_row_variable) continue;
+            defer concrete_index += 1;
+
+            if (param.quotation_effect) |annotation| {
+                found_any_quot = true;
+                const stack_pos = stack_model.items.len - concrete_inputs + concrete_index;
+                switch (stack_model.items[stack_pos]) {
+                    .quotation => |quot| {
+                        const qd = try self.inferInstructions(quot.instructions, caller);
+                        switch (qd) {
+                            .known => |d| {
+                                const annotated_qcd = annotation.concreteDelta();
+                                try adjustments.append(self.allocator, d - annotated_qcd);
+                            },
+                            .unknown => {
+                                all_literal = false;
+                            },
+                        }
+                    },
+                    .other => {
+                        all_literal = false;
+                    },
+                }
+            }
+        }
+
+        if (!all_literal or !found_any_quot or adjustments.items.len == 0) return .fallthrough;
+
+        const concrete_delta = eff.concreteDelta();
+        const consumed = @min(stack_model.items.len, concrete_inputs);
+        const new_model_size = stack_model.items.len - consumed;
+
+        switch (kind) {
+            .loop => {
+                var adj_sum: i64 = 0;
+                for (adjustments.items) |adj| adj_sum += adj;
+                if (adj_sum != 0) {
+                    try self.emitDiagnostic(.{
+                        .word_name = caller.word_name,
+                        .source_file = caller.source_file,
+                        .source_line = caller.source_line,
+                        .severity = .err,
+                        .message = try std.fmt.allocPrint(
+                            self.allocator,
+                            "loop quotations have unalanced row variable adjustment (net {d})",
+                            .{adj_sum},
+                        ),
+                    });
+                    return .unknown;
+                }
+
+                return .{ .applied = .{
+                    .new_delta = current_delta + concrete_delta,
+                    .new_model_size = new_model_size,
+                } };
+            },
+
+            .branch => {
+                const first = adjustments.items[0];
+                for (adjustments.items[1..]) |adj| {
+                    if (adj != first) {
+                        try self.emitDiagnostic(.{
+                            .word_name = caller.word_name,
+                            .source_file = caller.source_file,
+                            .source_line = caller.source_line,
+                            .severity = .err,
+                            .message = try std.fmt.allocPrint(
+                                self.allocator,
+                                "branch quotations have mismatched row variable adjustments",
+                                .{},
+                            ),
+                        });
+                        return .unknown;
+                    }
+                }
+
+                return .{ .applied = .{
+                    .new_delta = current_delta + concrete_delta + first,
+                    .new_model_size = new_model_size,
+                } };
+            },
+
+            .none => {
+                var adj_sum: i64 = 0;
+                for (adjustments.items) |adj| adj_sum += adj;
+
+                return .{
+                    .applied = .{
+                        .new_delta = current_delta + concrete_delta + adj_sum,
+                        .new_model_size = new_model_size,
+                    },
+                };
+            },
+        }
+    }
+
     fn validateDispatchEntries(self: *InferenceEngine, name: []const u8, base_result: InferenceResult, word_def: *const WordDefinition, caller: CallerInfo) Allocator.Error!void {
         const dispatch_entries = try self.dispatch_table.entriesForWord(name, self.allocator);
         defer self.allocator.free(dispatch_entries);
@@ -454,6 +600,7 @@ fn isGeneric(word_def: *const WordDefinition) bool {
     for (word_def.markers) |mk| {
         if (markers.isGenericMarker(mk)) return true;
     }
+
     return false;
 }
 
@@ -553,8 +700,8 @@ test "row-variable effect returns unknown" {
         .name = "row-word",
         .source_file = "test.1z",
         .stack_effect = .{
-            .inputs = &.{.{ .name = "..a" }},
-            .outputs = &.{ .{ .name = "..a" }, .{ .name = "n" } },
+            .inputs = &.{.{ .name = "..a", .is_row_variable = true }},
+            .outputs = &.{ .{ .name = "..a", .is_row_variable = true }, .{ .name = "n" } },
         },
         .action = .{ .compound = instrs },
     });
@@ -1081,4 +1228,383 @@ test "unknown word returns unknown" {
 
     const result = try engine.inferWord("calls-unknown");
     try testing.expectEqual(InferenceResult.unknown, result);
+}
+
+// =============================================================================
+// Row-polymorphic inference tests
+// =============================================================================
+
+test "row-poly keep with literal quotation computes delta" {
+    // keep: ( ..a x quot: ( ..a x -- ..b ) -- ..b x )
+    // concrete_delta = concreteOutputCount(1) - concreteInputCount(2) = -1
+    // quot annotation QCD = concreteOutputCount(0) - concreteInputCount(1) = -1
+    // With [ drop ] (delta = -1): total = -1 + (-1 - (-1)) = -1
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    const dummy: @import("dictionary.zig").NativeFn = struct {
+        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    }.f;
+
+    const quot_annotation = StackEffect{
+        .inputs = &.{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "x" },
+        },
+        .outputs = &.{
+            .{ .name = "..b", .is_row_variable = true },
+        },
+    };
+
+    try dict.put("keep", .{
+        .name = "keep",
+        .stack_effect = .{
+            .inputs = &.{
+                .{ .name = "..a", .is_row_variable = true },
+                .{ .name = "x" },
+                .{ .name = "quot", .quotation_effect = &quot_annotation },
+            },
+            .outputs = &.{
+                .{ .name = "..b", .is_row_variable = true },
+                .{ .name = "x" },
+            },
+        },
+        .action = .{ .native = dummy },
+    });
+
+    try dict.put("drop", .{
+        .name = "drop",
+        .stack_effect = .{
+            .inputs = &.{.{ .name = "a" }},
+            .outputs = &.{},
+        },
+        .action = .{ .native = dummy },
+    });
+
+    // test-word: ( -- ) [ 1 [ drop ] keep drop ] ;
+    // push 1 (+1), push [drop] (+1), call keep (-1), call drop (-1) = 0
+    const drop_body: []const Instruction = &.{
+        makeInstr(.{ .call_word = "drop" }),
+    };
+
+    const body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
+        makeInstr(.{ .push_literal = .{ .quotation = .{ .instructions = drop_body } } }),
+        makeInstr(.{ .call_word = "keep" }),
+        makeInstr(.{ .call_word = "drop" }),
+    };
+
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .stack_effect = .{
+            .inputs = &.{},
+            .outputs = &.{},
+        },
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, .err, false);
+    defer engine.deinit();
+
+    const result = try engine.inferWord("test-word");
+    try testing.expectEqual(InferenceResult{ .known = 0 }, result);
+    try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
+}
+
+test "row-poly while with balanced quotations" {
+    // while: loop-combinator ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b )
+    // concrete_delta = concreteOutputCount(0) - concreteInputCount(2) = -2
+    // pred QCD = concreteOutputCount(1) - concreteInputCount(0) = 1
+    // body QCD = concreteOutputCount(0) - concreteInputCount(0) = 0
+    // With pred [ t ] (d=1) and body [ ] (d=0):
+    //   adj_pred = 1 - 1 = 0, adj_body = 0 - 0 = 0
+    //   sum = 0, so loop constraint satisfied
+    //   total = -2
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    const dummy: @import("dictionary.zig").NativeFn = struct {
+        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    }.f;
+
+    const pred_annotation = StackEffect{
+        .inputs = &.{
+            .{ .name = "..a", .is_row_variable = true },
+        },
+        .outputs = &.{
+            .{ .name = "..b", .is_row_variable = true },
+            .{ .name = "?" },
+        },
+    };
+
+    const body_annotation = StackEffect{
+        .inputs = &.{
+            .{ .name = "..b", .is_row_variable = true },
+        },
+        .outputs = &.{
+            .{ .name = "..a", .is_row_variable = true },
+        },
+    };
+
+    try dict.put("while", .{
+        .name = "while",
+        .markers = &.{@constCast(&markers.loop_combinator_marker)},
+        .stack_effect = .{
+            .inputs = &.{
+                .{ .name = "..a", .is_row_variable = true },
+                .{ .name = "pred", .quotation_effect = &pred_annotation },
+                .{ .name = "body", .quotation_effect = &body_annotation },
+            },
+            .outputs = &.{
+                .{ .name = "..b", .is_row_variable = true },
+            },
+        },
+        .action = .{ .native = dummy },
+    });
+
+    // pred: [ t ] => push true, delta = 1
+    const pred_body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .boolean = true } }),
+    };
+
+    // body: [ ] => noop, delta = 0
+    const loop_body: []const Instruction = &.{};
+
+    // test-word: ( -- ) [ [ t ] [ ] while ] ;
+    // push pred (+1), push body (+1), call while (-2) = 0
+    const body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .quotation = .{ .instructions = pred_body } } }),
+        makeInstr(.{ .push_literal = .{ .quotation = .{ .instructions = loop_body } } }),
+        makeInstr(.{ .call_word = "while" }),
+    };
+
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .stack_effect = .{
+            .inputs = &.{},
+            .outputs = &.{},
+        },
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, .err, false);
+    defer engine.deinit();
+
+    const result = try engine.inferWord("test-word");
+    try testing.expectEqual(InferenceResult{ .known = 0 }, result);
+    try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
+}
+
+test "row-poly while with unbalanced quotations emits diagnostic" {
+    // pred: [ 1 t ] => push 1, push true, delta = 2
+    //   adj_pred = 2 - 1 = 1
+    // body: [ ] => delta = 0
+    //   adj_body = 0 - 0 = 0
+    // sum = 1, loop constraint violated
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    const dummy: @import("dictionary.zig").NativeFn = struct {
+        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    }.f;
+
+    const pred_annotation = StackEffect{
+        .inputs = &.{
+            .{ .name = "..a", .is_row_variable = true },
+        },
+        .outputs = &.{
+            .{ .name = "..b", .is_row_variable = true },
+            .{ .name = "?" },
+        },
+    };
+
+    const body_annotation = StackEffect{
+        .inputs = &.{
+            .{ .name = "..b", .is_row_variable = true },
+        },
+        .outputs = &.{
+            .{ .name = "..a", .is_row_variable = true },
+        },
+    };
+
+    try dict.put("while", .{
+        .name = "while",
+        .markers = &.{@constCast(&markers.loop_combinator_marker)},
+        .stack_effect = .{
+            .inputs = &.{
+                .{ .name = "..a", .is_row_variable = true },
+                .{ .name = "pred", .quotation_effect = &pred_annotation },
+                .{ .name = "body", .quotation_effect = &body_annotation },
+            },
+            .outputs = &.{
+                .{ .name = "..b", .is_row_variable = true },
+            },
+        },
+        .action = .{ .native = dummy },
+    });
+
+    // pred: [ 1 t ] => delta = 2, adj = 2 - 1 = 1
+    const pred_body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
+        makeInstr(.{ .push_literal = .{ .boolean = true } }),
+    };
+
+    // body: [ ] => delta = 0, adj = 0
+    const loop_body: []const Instruction = &.{};
+
+    const body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .quotation = .{ .instructions = pred_body } } }),
+        makeInstr(.{ .push_literal = .{ .quotation = .{ .instructions = loop_body } } }),
+        makeInstr(.{ .call_word = "while" }),
+    };
+
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, .err, false);
+    defer engine.deinit();
+
+    const result = try engine.inferWord("test-word");
+    try testing.expectEqual(InferenceResult.unknown, result);
+    try testing.expectEqual(@as(usize, 1), engine.diagnostics.items.len);
+    try testing.expectEqual(Severity.err, engine.diagnostics.items[0].severity);
+}
+
+test "row-poly keep with insufficient stack falls through" {
+    // When the stack model has fewer entries than concreteInputCount,
+    // handleRowPoly should return .fallthrough
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    const dummy: @import("dictionary.zig").NativeFn = struct {
+        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    }.f;
+
+    const quot_annotation = StackEffect{
+        .inputs = &.{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "x" },
+        },
+        .outputs = &.{
+            .{ .name = "..b", .is_row_variable = true },
+        },
+    };
+
+    try dict.put("keep", .{
+        .name = "keep",
+        .stack_effect = .{
+            .inputs = &.{
+                .{ .name = "..a", .is_row_variable = true },
+                .{ .name = "x" },
+                .{ .name = "quot", .quotation_effect = &quot_annotation },
+            },
+            .outputs = &.{
+                .{ .name = "..b", .is_row_variable = true },
+                .{ .name = "x" },
+            },
+        },
+        .action = .{ .native = dummy },
+    });
+
+    // Body only pushes the quotation -- x comes from outer scope.
+    // Stack model has only 1 entry but keep needs 2 concrete inputs.
+    const drop_body: []const Instruction = &.{};
+    const body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .quotation = .{ .instructions = drop_body } } }),
+        makeInstr(.{ .call_word = "keep" }),
+    };
+
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, .err, false);
+    defer engine.deinit();
+
+    // Falls through to inferWord which returns unknown for row-poly keep
+    const result = try engine.inferWord("test-word");
+    try testing.expectEqual(InferenceResult.unknown, result);
+    try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
+}
+
+test "row-poly keep with non-literal quotation falls through" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    const dummy: @import("dictionary.zig").NativeFn = struct {
+        fn f(_: *@import("context.zig").Context) anyerror!void {}
+    }.f;
+
+    const quot_annotation = StackEffect{
+        .inputs = &.{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "x" },
+        },
+        .outputs = &.{
+            .{ .name = "..b", .is_row_variable = true },
+        },
+    };
+
+    try dict.put("keep", .{
+        .name = "keep",
+        .stack_effect = .{
+            .inputs = &.{
+                .{ .name = "..a", .is_row_variable = true },
+                .{ .name = "x" },
+                .{ .name = "quot", .quotation_effect = &quot_annotation },
+            },
+            .outputs = &.{
+                .{ .name = "..b", .is_row_variable = true },
+                .{ .name = "x" },
+            },
+        },
+        .action = .{ .native = dummy },
+    });
+
+    try dict.put("get-quot", .{
+        .name = "get-quot",
+        .stack_effect = .{
+            .inputs = &.{},
+            .outputs = &.{.{ .name = "q" }},
+        },
+        .action = .{ .native = dummy },
+    });
+
+    // Both args come from runtime -- quotation arg is .other in stack model
+    const body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
+        makeInstr(.{ .call_word = "get-quot" }),
+        makeInstr(.{ .call_word = "keep" }),
+    };
+
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, .err, false);
+    defer engine.deinit();
+
+    // Falls through to inferWord which returns unknown for row-poly keep
+    const result = try engine.inferWord("test-word");
+    try testing.expectEqual(InferenceResult.unknown, result);
+    try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
 }

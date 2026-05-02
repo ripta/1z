@@ -1,0 +1,21 @@
+\ Test that --check mode handles row-polymorphic stack effects without false positives.
+
+\ Balanced row variables: ..a in both inputs and outputs
+my-dip: ( ..a x quot: ( ..a -- ..b ) -- ..b x ) [ swap call swap ] ;
+
+\ Multiple row variables
+my-bi: ( ..a x p: ( ..a x -- ..b ) q: ( ..a x -- ..c ) -- ..b ..c ) [ [ keep ] dip call ] ;
+
+\ Concrete-only effect for comparison (should still be inferred normally)
+my-dup: ( x -- x x ) [ dup ] ;
+
+\ Row-poly inference: keep with visible literal quotation
+\ keep with [ ] is identity: 1 [ ] keep => 1 1 (keep preserves x, quot is noop)
+uses-keep: ( -- x x ) [ 1 [ ] keep ] ;
+
+\ Row-poly inference: keep with a quotation that changes delta
+\ [ dup ] keep on 1 => 1 1 1 (dup produces x x, keep restores original x)
+uses-keep-dup: ( -- x x x ) [ 1 [ dup ] keep ] ;
+
+\ Row-poly inference: while with balanced quotations
+uses-while: ( -- ) [ [ f ] [ ] while ] ;

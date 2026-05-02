@@ -1,0 +1,6 @@
+\ Test that --check detects declared vs inferred mismatch via row-poly keep.
+
+\ keep with [ drop ] has delta = -1 (from the formula).
+\ Body: push 1 (+1), push [drop] (+1), call keep (-1) = net +1.
+\ But declared effect says ( -- ), which is delta 0. Mismatch.
+bad-keep-decl: ( -- ) [ 1 [ drop ] keep ] ;

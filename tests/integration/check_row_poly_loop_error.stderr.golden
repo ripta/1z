@@ -1,0 +1,1 @@
+tests/integration/check_row_poly_loop_error.1z:6: err: bad-while: loop quotations have unalanced row variable adjustment (net 1)
