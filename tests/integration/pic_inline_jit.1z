@@ -1,0 +1,45 @@
+\ Inline PIC: verify that compiled code with inline type-check-and-branch
+\ PIC pre-seeding produces correct results for generic dispatch.
+
+use "testing" ;
+
+\ ---------------------------------------------------------------
+\ Binary generic dispatch on builtin types
+\ ---------------------------------------------------------------
+
+combine: generic ( a b -- c ) [ ] ;
+combine: method{ fixnum fixnum } [ + ] ;
+combine: method{ string string } [ #append ] ;
+
+\ Call combine with fixnums (PIC populates during interpretation,
+\ then inline PIC takes over in compiled code)
+3 4 combine 7 "combine fixnum+fixnum" assert=
+10 20 combine 30 "combine fixnum+fixnum repeat" assert=
+
+\ Call combine with strings (PIC miss on first call, then hits)
+"hello" " world" combine "hello world" "combine string+string" assert=
+"foo" "bar" combine "foobar" "combine string+string repeat" assert=
+
+\ Back to fixnums (polymorphic PIC should hold both)
+1 2 combine 3 "combine fixnum after string" assert=
+
+\ ---------------------------------------------------------------
+\ Method registration after PIC populated (generation bump)
+\ ---------------------------------------------------------------
+
+combine: method{ float float } [ + ] ;
+3.0 4.0 combine 7.0 "combine float+float after gen bump" assert=
+
+\ Previous methods still work after new registration
+5 6 combine 11 "combine fixnum after gen bump" assert=
+"a" "b" combine "ab" "combine string after gen bump" assert=
+
+\ ---------------------------------------------------------------
+\ Compilation verification
+\ ---------------------------------------------------------------
+
+\ A word that calls combine should be compiled in eager mode.
+\ The inline PIC checks are an optimization within the compiled code.
+do-combine: ( a b -- c ) [ combine ] ;
+10 20 do-combine 30 "do-combine fixnum" assert=
+t do-combine: >word-info compiled?>> "do-combine is compiled" assert=

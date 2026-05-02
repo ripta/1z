@@ -19,6 +19,7 @@ const JitDispatchTable = jit_dispatch_mod.JitDispatchTable;
 const JitEntry = jit_dispatch_mod.JitEntry;
 
 const pic_mod = @import("pic.zig");
+const dispatch_mod = @import("dispatch.zig");
 
 const Context = @import("context.zig").Context;
 const bail_stats_mod = @import("bail_stats.zig");
@@ -584,6 +585,37 @@ const DispatchLayout = struct {
         initialized = true;
     }
 };
+
+/// Offsets for loading ctx.dispatch.generation at runtime.
+const DispatchGenerationLayout = struct {
+    var dispatch_offset: usize = 0;
+    var generation_offset: usize = 0;
+    var initialized: bool = false;
+
+    fn ensureInit() void {
+        if (initialized) return;
+        dispatch_offset = @offsetOf(Context, "dispatch");
+        generation_offset = @offsetOf(dispatch_mod.DispatchTable, "generation");
+        initialized = true;
+    }
+};
+
+/// Given a dispatch descriptor pointer, search the builtin_type_array to find
+/// which Value tag it corresponds to. Returns null for non-builtin types
+/// (tagged, struct_instance, resource with instance-specific descriptors).
+fn reverseMapDescriptorToTag(
+    interp_ctx: *const Context,
+    descriptor: *const HashTable,
+) ?std.meta.Tag(Value) {
+    for (interp_ctx.builtin_type_array, 0..) |slot, i| {
+        if (slot) |tv| {
+            if (tv.descriptor) |desc| {
+                if (desc == descriptor) return @enumFromInt(i);
+            }
+        }
+    }
+    return null;
+}
 
 // =============================================================================
 // Emit helpers
@@ -1366,6 +1398,10 @@ const CompileState = struct {
     refresh_stack_fn: c.ir_ref = c.IR_UNUSED,
     validate_params_fn: c.ir_ref = c.IR_UNUSED,
     interp_ctx: ?*const Context = null,
+    /// Interpreter PIC table for the word being compiled. Each instruction
+    /// index maps to a PolymorphicCache recording observed type pairs.
+    /// Read at compile time to emit inline type-check-and-branch IR.
+    pic_table: ?*pic_mod.PicTable = null,
     error_propagate_status: c.ir_ref = c.IR_UNUSED,
     self_name: ?[]const u8 = null,
     loop_begin_ref: c.ir_ref = c.IR_UNUSED,
@@ -4754,7 +4790,14 @@ fn compileInstructions(
                             emitParamValidation(state, eff_ptr);
                         }
 
-                        emitNativeWordCall(state, ctx_val, name, resolved, instr.line);
+                        // Try inline PIC before falling back to generic native call.
+                        // emitInlinePicCheck includes the slow-path fallback
+                        // internally, so when it succeeds no separate call is needed.
+                        if (state.aot_mode or
+                            !emitInlinePicCheck(state, idx, ctx_val, name, resolved, effective_in, instr.line))
+                        {
+                            emitNativeWordCall(state, ctx_val, name, resolved, instr.line);
+                        }
 
                         if (exitFallsThrough(state.exit_kind)) {
                             // Adjust abstract stack by specialized effect
@@ -5302,6 +5345,7 @@ fn compileWordPass(
         .refresh_stack_fn = refresh_stack_fn,
         .validate_params_fn = validate_params_fn,
         .interp_ctx = interp_ctx,
+        .pic_table = if (interp_ctx) |ictx| ictx.pic_cache.get(@intFromPtr(instructions.ptr)) else null,
         .error_propagate_status = error_propagate_status,
         .type_mismatch_error_fn = type_mismatch_error_fn,
         .overflow_error_fn = overflow_error_fn,
@@ -6882,6 +6926,202 @@ fn emitSafepointCall(state: *CompileState) void {
     };
     const call_result = c._ir_CALL_1(state.ctx, c.IR_I32, state.safepoint_fn, ctx_val);
     emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
+}
+
+/// A compile-time-filtered PIC entry ready for inline emission.
+const InlinePicEntry = struct {
+    tag_a: std.meta.Tag(Value),
+    tag_b: std.meta.Tag(Value),
+    native_fn_ptr: usize,
+};
+
+/// Try to emit inline PIC type checks at a generic call site. Reads the
+/// interpreter PIC data for instruction `idx` and emits tag-check-and-branch
+/// IR for entries that can be inlined (builtin types, native_fn bodies, no
+/// unwrap). Includes the fallback slow path; returns true if emission
+/// succeeded (caller should NOT emit a separate native call).
+///
+/// Returns false if no inline PIC is possible (no PIC data, no qualifying
+/// entries, unsupported configuration). The caller then falls through to the
+/// standard emitNativeWordCall path.
+fn emitInlinePicCheck(
+    state: *CompileState,
+    idx: usize,
+    ctx_val: c.ir_ref,
+    name: []const u8,
+    resolved: ResolvedWord,
+    effective_in: u8,
+    line: usize,
+) bool {
+    const pic_table = state.pic_table orelse return false;
+    const interp_ctx = state.interp_ctx orelse return false;
+    if (idx >= pic_table.entries.len) return false;
+    if (resolved.never_returns) return false;
+    if (effective_in < 2) return false;
+
+    const cache = pic_table.entries[idx];
+    if (cache.megamorphic or cache.count == 0) return false;
+
+    // Filter entries at compile time: only keep entries where both
+    // types reverse-map to builtin Value tags, the body is a native
+    // function, and no unwrap is needed.
+    var qualified: [pic_mod.max_pic_entries]InlinePicEntry = undefined;
+    var qualified_count: usize = 0;
+
+    for (cache.entries[0..cache.count]) |entry| {
+        if (entry.unwrap_a or entry.unwrap_b) continue;
+        const body_fn = switch (entry.entry.body) {
+            .native_fn => |f| @intFromPtr(f),
+            .quotation, .host_callback => continue,
+        };
+        const tag_a = reverseMapDescriptorToTag(interp_ctx, entry.type_a) orelse continue;
+        const tag_b = reverseMapDescriptorToTag(interp_ctx, entry.type_b) orelse continue;
+        qualified[qualified_count] = .{
+            .tag_a = tag_a,
+            .tag_b = tag_b,
+            .native_fn_ptr = body_fn,
+        };
+        qualified_count += 1;
+    }
+
+    if (qualified_count == 0) return false;
+
+    const ictx = state.ctx;
+    ValueLayout.ensureInit();
+    DispatchGenerationLayout.ensureInit();
+
+    // --- Generation guard ---
+    // Load ctx.dispatch.generation at runtime and compare against the
+    // compile-time value. If the dispatch table was modified since PIC
+    // capture, skip inline checks.
+    const dispatch_off = c.ir_const_addr(ictx, DispatchGenerationLayout.dispatch_offset);
+    const dispatch_addr = c.ir_fold2(ictx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), ctx_val, dispatch_off);
+    const gen_off = c.ir_const_addr(ictx, DispatchGenerationLayout.generation_offset);
+    const gen_addr = c.ir_fold2(ictx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dispatch_addr, gen_off);
+    const runtime_gen = c._ir_LOAD(ictx, c.IR_U32, gen_addr);
+    const compile_gen = c.ir_const_u32(ictx, cache.generation);
+    const gen_matches = c.ir_fold2(ictx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), runtime_gen, compile_gen);
+    const if_gen = c._ir_IF(ictx, gen_matches);
+
+    // --- Cold path: generation mismatch → slow dispatch ---
+    c._ir_IF_FALSE_cold(ictx, if_gen);
+    {
+        emitNativeWordCall(state, ctx_val, name, resolved, line);
+    }
+    const end_gen_miss = c._ir_END(ictx);
+
+    // --- Hot path: generation matches → try PIC entries ---
+    c._ir_IF_TRUE(ictx, if_gen);
+
+    // Load tag bytes from the two operands. After flushToPhysicalStack,
+    // the operands are at physical stack slots relative to base_addr.
+    // The slot for operand A is sp - effective_in, B is sp - effective_in + 1.
+    // But emitCallbackPreamble has already been called and SP is flushed,
+    // so we use the abstract sp that the caller had. The slots are:
+    //   slot_a = sp_before_call - effective_in
+    //   slot_b = sp_before_call - effective_in + 1
+    // However, after flushToPhysicalStack, the stack pointer state.sp_val
+    // reflects the pre-call sp. The base_addr points to the start of the
+    // stack frame. We compute operand addresses from base_addr and slot indices.
+    //
+    // Actually, the caller already set up physical stack positions. The
+    // operand slots are at the same positions as for emitNumericTagCheckNoBail.
+    // We need the caller's sp value to compute them. But we don't have sp
+    // here directly. Instead, we can use the effective_in count: the last
+    // effective_in values on the stack are the operands. The SP was flushed
+    // by flushToPhysicalStack to state.sp_val. The operands start at
+    // sp_val - effective_in.
+    //
+    // For binary dispatch: operand B is at sp_val - 1, operand A is at sp_val - 2.
+    // This matches the interpreter convention where the top of stack (TOS) is B
+    // and TOS-1 is A for binary dispatch.
+    //
+    // We need sp_val as an IR ref. It was stored by emitCallbackPreamble.
+    // We stored sp into state.sp_ptr. Load it.
+    const sp_loaded = c._ir_LOAD(ictx, c.IR_ADDR, state.sp_ptr);
+
+    // slot_b = sp - 1, slot_a = sp - 2 (relative to base_idx)
+    const one_const = c.ir_const_addr(ictx, 1);
+    const two_const = c.ir_const_addr(ictx, 2);
+    const slot_b_idx = c.ir_fold2(ictx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), sp_loaded, one_const);
+    const slot_a_idx = c.ir_fold2(ictx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), sp_loaded, two_const);
+
+    // Compute byte offsets for tag access
+    const slot_a_byte_off = c.ir_fold2(ictx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), slot_a_idx, state.value_size_const);
+    const slot_b_byte_off = c.ir_fold2(ictx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), slot_b_idx, state.value_size_const);
+    const tag_off = c.ir_const_addr(ictx, ValueLayout.tag_offset);
+    const elem_a_addr = c.ir_fold2(ictx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.items_ptr, slot_a_byte_off);
+    const elem_b_addr = c.ir_fold2(ictx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.items_ptr, slot_b_byte_off);
+    const tag_a_addr = c.ir_fold2(ictx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_a_addr, tag_off);
+    const tag_b_addr = c.ir_fold2(ictx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_b_addr, tag_off);
+    const tag_a_val = c._ir_LOAD(ictx, ValueLayout.ir_tag_type, tag_a_addr);
+    const tag_b_val = c._ir_LOAD(ictx, ValueLayout.ir_tag_type, tag_b_addr);
+
+    // Emit nested type checks for each qualified PIC entry. The pattern
+    // is a chain of IF/TRUE/FALSE with the slow path at the innermost FALSE.
+    // Collect END refs from each branch for the final MERGE.
+    var end_refs: [pic_mod.max_pic_entries + 1]c.ir_ref = .{c.IR_UNUSED} ** (pic_mod.max_pic_entries + 1);
+    var end_count: usize = 0;
+
+    // Save state refs before entering branches — each branch's
+    // emitCallbackPostCheck will update them independently.
+    const saved_items_ptr = state.items_ptr;
+    const saved_base_addr = state.base_addr;
+
+    for (qualified[0..qualified_count]) |entry| {
+        const tag_a_const = emitTagConst(ictx, entry.tag_a);
+        const tag_b_const = emitTagConst(ictx, entry.tag_b);
+        const match_a = c.ir_fold2(ictx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_a_val, tag_a_const);
+        const match_b = c.ir_fold2(ictx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_b_val, tag_b_const);
+        const both_match = c.ir_fold2(ictx, c.IR_OPT(c.IR_AND, c.IR_BOOL), match_a, match_b);
+        const if_match = c._ir_IF(ictx, both_match);
+
+        // Hit path: call the cached native method body directly
+        c._ir_IF_TRUE(ictx, if_match);
+        {
+            const fn_ptr_const = c.ir_const_addr(ictx, entry.native_fn_ptr);
+            const call_result = c._ir_CALL_2(ictx, c.IR_I32, state.native_call_fn, ctx_val, fn_ptr_const);
+            emitCallbackPostCheck(state, call_result, call_result, null, .{ .named = .{ .name = name, .line = line } });
+            // Restore state for next branch
+            state.items_ptr = saved_items_ptr;
+            state.base_addr = saved_base_addr;
+        }
+        end_refs[end_count] = c._ir_END(ictx);
+        end_count += 1;
+
+        // Miss path: continue to next entry (or fall through to slow path)
+        c._ir_IF_FALSE(ictx, if_match);
+    }
+
+    // Innermost miss: slow path — call the generic native function
+    {
+        emitNativeWordCall(state, ctx_val, name, resolved, line);
+        state.items_ptr = saved_items_ptr;
+        state.base_addr = saved_base_addr;
+    }
+    end_refs[end_count] = c._ir_END(ictx);
+    end_count += 1;
+
+    // Merge all PIC hit branches + slow path
+    if (end_count == 2) {
+        c._ir_MERGE_2(ictx, end_refs[0], end_refs[1]);
+    } else {
+        var merge_inputs: [pic_mod.max_pic_entries + 1]c.ir_ref = undefined;
+        for (0..end_count) |i| merge_inputs[i] = end_refs[i];
+        c._ir_MERGE_N(ictx, @intCast(end_count), &merge_inputs);
+    }
+    const end_gen_hot = c._ir_END(ictx);
+
+    // --- Final merge: generation hot + generation miss ---
+    c._ir_MERGE_2(ictx, end_gen_hot, end_gen_miss);
+
+    // After merging branches that each refreshed the stack pointer
+    // independently, re-LOAD to get refs that dominate this point.
+    if (state.refresh_stack_fn != c.IR_UNUSED) {
+        refreshCachedStackPointer(state);
+    }
+
+    return true;
 }
 
 /// Emit a native word call. In JIT mode, calls through jitNativeCall with

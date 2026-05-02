@@ -1,0 +1,25 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: combine fixnum+fixnum
+Stack: [ ]
+PASS: combine fixnum+fixnum repeat
+Stack: [ ]
+PASS: combine string+string
+Stack: [ ]
+PASS: combine string+string repeat
+Stack: [ ]
+PASS: combine fixnum after string
+Stack: [ ]
+Stack: [ ]
+PASS: combine float+float after gen bump
+Stack: [ ]
+PASS: combine fixnum after gen bump
+Stack: [ ]
+PASS: combine string after gen bump
+Stack: [ ]
+Stack: [ ]
+PASS: do-combine fixnum
+Stack: [ ]
+PASS: do-combine is compiled
+Stack: [ ]
