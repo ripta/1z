@@ -1,0 +1,10 @@
+\ Verify --compilation-stats reports inline PIC pre-seeding.
+\ Uses #nth (a binary native generic not in the inline
+\ arithmetic/comparison set) to exercise emitInlinePicCheck.
+
+nth-elem: ( seq n -- elem ) [ #nth ] ;
+
+{ 10 20 30 } 0 nth-elem .
+{ 10 20 30 } 1 nth-elem .
+"abc" 0 nth-elem .
+"wxyz" 3 nth-elem .

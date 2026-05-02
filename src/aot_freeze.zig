@@ -735,6 +735,13 @@ fn buildAotDescs(
             .word_id = id,
             .is_prelude = true,
             .is_native = true,
+            .native_fn_ptr = blk: {
+                if (def.action != .native) break :blk null;
+                for (def.markers) |mk| {
+                    if (markers_mod.isGenericMarker(mk)) break :blk @intFromPtr(def.action.native);
+                }
+                break :blk null;
+            },
             .stack_effect = effect,
             .never_returns = hasNeverReturnsMarker(def),
         });

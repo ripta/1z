@@ -335,6 +335,10 @@ fn parseExecutionFlag(
         state.trace_config.trace_jit = true;
         return .consumed;
     }
+    if (std.mem.eql(u8, arg, "--trace-pic")) {
+        state.trace_config.trace_pic = true;
+        return .consumed;
+    }
     if (std.mem.startsWith(u8, arg, "--dump-scope=")) {
         state.trace_config.dump_scope = arg["--dump-scope=".len..];
         return .consumed;
@@ -465,6 +469,7 @@ const execution_flags_help =
     \\  --trace-resolve[=PAT]     Trace word resolution (optional pattern filter)
     \\  --trace-modules           Trace module loading
     \\  --trace-jit               Trace JIT compilation
+    \\  --trace-pic               Trace inline PIC hits
     \\  --dump-scope=WORD         Dump scope after loading WORD
     \\  --deadlock-detect[=SECS]  Enable deadlock detection (default 5s)
     \\  --test-timeout=SECS       Set test timeout in seconds
@@ -1636,6 +1641,19 @@ fn printInterpreterFallbackDecision(
     err_writer.flush() catch {};
 }
 
+fn printPicStats(
+    diagnostics: *const ir_codegen.CodegenDiagnostics,
+    err_writer: anytype,
+) void {
+    const stats = &diagnostics.pic_stats;
+    if (stats.sites_attempted == 0 and stats.sites_emitted == 0) return;
+    err_writer.print("Inline PIC sites: {d}/{d} generic call sites pre-seeded\n", .{
+        stats.sites_emitted,
+        stats.sites_attempted,
+    }) catch {};
+    err_writer.flush() catch {};
+}
+
 fn handleHighlight(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
@@ -1936,6 +1954,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         if (compilation_stats) {
             printPreludeStats(&codegen_diagnostics.prelude_stats, err_writer);
             printQuotationStats(freeze_result.quotations, err_writer);
+            printPicStats(&codegen_diagnostics, err_writer);
         }
         if (err == error.UncompiledWords) {
             for (codegen_diagnostics.uncompiled_words) |name| {
@@ -1964,6 +1983,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     if (compilation_stats) {
         printPreludeStats(&codegen_diagnostics.prelude_stats, err_writer);
         printQuotationStats(freeze_result.quotations, err_writer);
+        printPicStats(&codegen_diagnostics, err_writer);
         printInterpreterFallbackDecision(&codegen_diagnostics, err_writer);
     }
 

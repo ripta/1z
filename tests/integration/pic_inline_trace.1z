@@ -1,0 +1,20 @@
+\ Probe a compiled #nth caller under --trace-pic.
+\ #nth is binary, native, generic, and not intercepted by the
+\ arithmetic/comparison inline fast paths, so it is the most likely
+\ reachable native-generic inline PIC candidate.
+
+use "testing" ;
+
+nth-elem: ( seq n -- elem ) [ #nth ] ;
+
+\ Seed interpreter PIC entries before compiling.
+{ 10 20 30 } 0 nth-elem drop
+"abc" 2 nth-elem drop
+
+nth-elem: compile!
+
+{ 10 20 30 } 0 nth-elem 10 "nth fixnum array first" assert=
+{ 10 20 30 } 1 nth-elem 20 "nth fixnum array second" assert=
+"abc" 2 nth-elem "c" "nth string third" assert=
+"xyz" 0 nth-elem "x" "nth string first" assert=
+t nth-elem: >word-info compiled?>> "nth-elem is compiled" assert=

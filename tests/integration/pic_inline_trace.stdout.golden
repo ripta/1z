@@ -1,0 +1,14 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: nth fixnum array first
+Stack: [ ]
+PASS: nth fixnum array second
+Stack: [ ]
+PASS: nth string third
+Stack: [ ]
+PASS: nth string first
+Stack: [ ]
+PASS: nth-elem is compiled
+Stack: [ ]

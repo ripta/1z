@@ -16,10 +16,11 @@ pub const TraceConfig = struct {
     trace_resolve_pattern: ?[]const u8 = null,
     trace_modules: bool = false,
     trace_jit: bool = false,
+    trace_pic: bool = false,
     dump_scope: ?[]const u8 = null,
 
     pub fn isEnabled(self: TraceConfig) bool {
-        return self.trace_words or self.trace_resolve or self.trace_modules or self.trace_jit or self.dump_scope != null;
+        return self.trace_words or self.trace_resolve or self.trace_modules or self.trace_jit or self.trace_pic or self.dump_scope != null;
     }
 };
 
@@ -356,6 +357,16 @@ pub fn traceJitSafepoint(trace_writer: *TraceWriter, yielded: bool, cancelled: b
     } else {
         w.writeAll("JIT safepoint -> no-op\n") catch return;
     }
+    trace_writer.writeAll(fbs.getWritten());
+}
+
+/// Emit a PIC hit line for `--trace-pic`.
+pub fn tracePicHit(trace_writer: *TraceWriter, name: []const u8) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    w.print("PIC hit {s}\n", .{name}) catch return;
     trace_writer.writeAll(fbs.getWritten());
 }
 
