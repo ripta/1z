@@ -1,4 +1,9 @@
 \ lib/strings.1z - String manipulation utilities
+\
+\ Compositional layer above scanner and sequences: split, join, trim,
+\ and other compound string operations. Some languages place scanner
+\ above strings; here scanner is a thin native-level abstraction and
+\ strings composes it into higher-level words.
 
 use "sequences" ;
 use "scanner" ;

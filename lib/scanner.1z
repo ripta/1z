@@ -1,4 +1,9 @@
 \ lib/scanner.1z - Cursor abstraction for character-by-character string scanning
+\
+\ Scanner is a thin abstraction over native string primitives (#nth, #slice,
+\ #index-of-from, #starts-with?), sitting at the same level as sequences.
+\ It has no library imports. Higher-level string utilities in lib/strings.1z
+\ compose scanner operations into convenience words like split-once?.
 
 \ Scanner struct: str is the input, start is the current offset, end is the upper bound
 scanner: struct{ str start end } ;
