@@ -9,49 +9,33 @@ use "sequences" ;
 \   "hello" "," split         →  { "hello" }
 \   "" "," split              →  { "" }
 \   "a::b::c" "::" split      →  { "a" "b" "c" }
-split: stack-recursive ( str delim -- array ) [
-  \ Compute rest of string after a delimiter match
-  split-rest: ( delim str idx -- delim rest ) [
-    [ swap dup #len ] dip
-    + swap
+split: ( str delim -- array ) [
+  (split-scan): stack-recursive ( str delim vec pos -- array ) [
+    3 pick-n 3 pick-n 2 pick-n #index-of-from
+    dup
     [
-      over #len over <=
-      [ 2drop "" ]
-      [ over #len #slice ]
-      if
-    ] dip
-    swap
+      \ Found at idx: push str[pos..idx] to vec, advance pos, recurse
+      4 pick-n 2 pick-n 2 pick-n #slice
+      3 pick-n swap #push! drop
+      3 pick-n #len + swap drop
+      (split-scan)
+    ]
+    [
+      \ Not found: push str[pos..end] to vec, freeze
+      drop
+      3 pick-n dup #len 2 pick-n swap #slice
+      2 pick-n swap #push! drop
+      drop nip nip >array
+    ]
+    if
   ] ;
 
-  over #len 0 =
-  [ 2drop { "" } ]
+  dup #len 0 =
+  [ drop 1array ]
   [
-    dup #len 0 =
-    [ drop 1array ]
-    [
-      2dup #index-of dup not
-      [ drop drop 1array ]
-      [
-        \ str delim idx -- move delim to bottom
-        [ swap ] dip  \ delim str idx
-
-        \ Compute prefix = str[0..idx], guarding empty slice
-        dup 0 =
-        [ "" ]
-        [ 2dup 0 swap #slice ]
-        if  \ delim str idx prefix
-
-        \ Compute rest (replaces str idx, keeps delim at bottom)
-        [ split-rest ] dip  \ delim rest prefix
-
-        \ Recurse on rest and prepend prefix
-        swap                 \ delim prefix rest
-        -rot>                \ rest delim prefix
-        [ split ] dip        \ rest-parts prefix
-        1array swap #append  \ { prefix } ++ rest-parts
-      ]
-      if
-    ]
+    over #len 0 =
+    [ 2drop { "" } ]
+    [ V{ } 0 (split-scan) ]
     if
   ]
   if
