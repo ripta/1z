@@ -1,6 +1,7 @@
 \ lib/strings.1z - String manipulation utilities
 
 use "sequences" ;
+use "scanner" ;
 
 \ Split string by delimiter (any string), keeping empty segments
 \ Examples:
@@ -119,18 +120,27 @@ trim: ( str -- str ) [ ltrim rtrim ] ;
 
 \\ Split on first occurrence of delimiter. Returns some of { before after } or none.
 split-once?: ( str delim -- option ) [
-  2dup #index-of dup not
-  [ 3drop option:none ]
-  [
-    -rot> #len <rot-     \ str dlen idx
-    2 pick-n over #take  \ str dlen idx before
-    [ + ] dip            \ str after-start before
-    [ #drop ] dip        \ after before
-    swap
-    [ 1array ] dip 1array #append
-    >option:some
-  ]
-  if
+  swap <scanner> swap
+  \ scanner delim
+  dup -rot>
+  \ delim scanner delim
+  take-until
+  \ delim scanner-at-match before  (found)
+  \ delim original-scanner f       (not found)
+  dup f = [
+    drop 2drop option:none
+  ] [
+    -rot>
+    \ before delim scanner-at-match
+    swap skip-exact
+    \ before scanner-past-delim/f
+    dup f = [
+      2drop option:none
+    ] [
+      rest
+      2 array-n >option:some
+    ] if
+  ] if
 ] ;
 
 \\ Split on first occurrence of delimiter, or throw if not found.
