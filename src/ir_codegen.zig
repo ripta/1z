@@ -18,6 +18,8 @@ const jit_dispatch_mod = @import("jit_dispatch.zig");
 const JitDispatchTable = jit_dispatch_mod.JitDispatchTable;
 const JitEntry = jit_dispatch_mod.JitEntry;
 
+const pic_mod = @import("pic.zig");
+
 const Context = @import("context.zig").Context;
 const bail_stats_mod = @import("bail_stats.zig");
 const stack_effect_mod = @import("stack_effect.zig");
@@ -7397,7 +7399,15 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
         } else false;
 
         if (has_generic) {
-            const dispatched = dispatch_helpers.tryDispatchGenericWithPic(ctx, word_name, null) catch |err| {
+            const dispatch_pic: ?*pic_mod.PolymorphicCache = blk: {
+                const em = ctx.jit_dispatch.getMut(word_id) orelse break :blk null;
+                if (em.dispatch_pic) |p| break :blk p;
+                const p = ctx.allocator.create(pic_mod.PolymorphicCache) catch break :blk null;
+                p.* = .{};
+                em.dispatch_pic = p;
+                break :blk p;
+            };
+            const dispatched = dispatch_helpers.tryDispatchGenericWithPic(ctx, word_name, dispatch_pic) catch |err| {
                 ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
                 return 2;
             };
@@ -7423,7 +7433,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
                 .compound => |instrs| {
                     ctx.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
                     defer ctx.popModuleDepsFrameTraced(mod);
-                    break :blk ctx.executeQuotationWithPic(.{ .instructions = instrs }, null);
+                    break :blk ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot);
                 },
                 .native => |func| break :blk func(ctx),
                 .host_callback => |host| break :blk host_result: {
@@ -7440,7 +7450,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
                     if (rc != 0) break :host_result error.HostCallbackFailed;
                     break :host_result;
                 },
-                .compound => |instrs| ctx.executeQuotationWithPic(.{ .instructions = instrs }, null),
+                .compound => |instrs| ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot),
             };
         }
     };

@@ -1,7 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const JitBuffer = @import("ffi/ir.zig").JitBuffer;
-const PicTable = @import("pic.zig").PicTable;
+const pic_mod = @import("pic.zig");
+const PicTable = pic_mod.PicTable;
+const PolymorphicCache = pic_mod.PolymorphicCache;
 
 pub const JitEntry = struct {
     code_ptr: ?*const anyopaque,
@@ -17,6 +19,11 @@ pub const JitEntry = struct {
     /// Captured so compiled code can benefit from type profiles
     /// observed during interpretation.
     pic_snapshot: ?*PicTable = null,
+    /// Per-word PIC for generic dispatch in the jitInterpretedCall
+    /// fallback path. Lazily allocated on first fallback call for a
+    /// generic word. Caches dispatch table lookups so repeated
+    /// fallback calls avoid the full lookup.
+    dispatch_pic: ?*PolymorphicCache = null,
 };
 
 pub const JitDispatchTable = struct {
@@ -38,6 +45,9 @@ pub const JitDispatchTable = struct {
             if (entry.pic_snapshot) |ps| {
                 ps.deinit();
                 self.allocator.destroy(ps);
+            }
+            if (entry.dispatch_pic) |dp| {
+                self.allocator.destroy(dp);
             }
         }
         self.entries.deinit(self.allocator);
@@ -95,11 +105,15 @@ pub const JitDispatchTable = struct {
             ps.deinit();
             self.allocator.destroy(ps);
         }
+        if (self.entries.items[word_id].dispatch_pic) |dp| {
+            self.allocator.destroy(dp);
+        }
         self.entries.items[word_id].code_ptr = null;
         self.entries.items[word_id].jit_buf = null;
         self.entries.items[word_id].call_count = 0;
         self.entries.items[word_id].uncompilable = false;
         self.entries.items[word_id].pic_snapshot = null;
+        self.entries.items[word_id].dispatch_pic = null;
     }
 
     /// Grow the entries array to at least `count` slots, filling new slots
@@ -273,6 +287,23 @@ test "invalidate frees and nulls pic_snapshot" {
 
     const entry = table.get(id).?;
     try std.testing.expectEqual(null, entry.pic_snapshot);
+}
+
+test "invalidate frees and nulls dispatch_pic" {
+    var table = JitDispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    const id = try table.assignId("foo");
+
+    // Attach a heap-allocated PolymorphicCache
+    const dp = try std.testing.allocator.create(PolymorphicCache);
+    dp.* = .{};
+    table.getMut(id).?.dispatch_pic = dp;
+
+    table.invalidate(id);
+
+    const entry = table.get(id).?;
+    try std.testing.expectEqual(null, entry.dispatch_pic);
 }
 
 test "multiple IDs coexist independently" {
