@@ -346,17 +346,17 @@ parse-zig-decls: ( zig-source -- decls ) [
   >array
 ] ;
 
-\\ Run zig translate-c on a header, pre-filter the output to keep only
-\\ declaration-relevant lines, and parse into declaration hashes.
-\\ Uses grep to pre-filter the ~6000-line translate-c output down to
-\\ only declaration lines before parsing, avoiding OOM from splitting
-\\ the full output.
+\\ Run zig translate-c on a header, pre-filter the output through awk to
+\\ keep only declaration-relevant lines, and parse into declaration
+\\ hashes. The awk pre-filter is ~35-50x faster than feeding the full
+\\ ~6000-line translate-c output through parse-zig-decls in 1z, or
+\\ replicating the filter in 1z; see tests/benchmark/ffi_gen_filter.1z.
 translate-c-decls: ( header-path flags -- decls ) [
   (translate-c-filtered)
   parse-zig-decls
 ] ;
 
-\\ Run zig translate-c piped through grep to keep only declaration lines.
+\\ Run zig translate-c piped through awk to keep only declaration lines.
 \\ Returns a string with only pub extern fn, pub const, struct/enum
 \\ field lines, and closing "};".
 (translate-c-filtered): ( header-path flags -- filtered-source ) [

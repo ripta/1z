@@ -1,0 +1,135 @@
+\ Benchmark: awk pre-filter vs no filter vs native 1z line filter for ffi-gen.
+\
+\ Compares three variants of translate-c-decls:
+\
+\   awk      - current production path: shell pipe through awk to drop
+\              non-declaration lines before parse-zig-decls splits.
+\   no-filt  - call translate-c directly, then parse-zig-decls. Relies on
+\              parse-zig-decls's own line dispatcher to skip junk.
+\   native   - 1z state-machine line filter that mirrors the awk script.
+\              Uses split + #push! + a mutable b flag.
+\
+\ The benchmark times each variant against ext/toy/toy.h (already used by
+\ ffi_gen integration tests; ~6000 lines of translate-c output) and
+\ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/zlib.h
+\ (~6700 lines).
+
+use "ffi-gen" ;
+use "strings" ;
+
+\ --- Path B prototype: native 1z line filter ---
+
+filter-state: mutable struct{ acc b } ;
+
+native-line-contains?: ( line str -- ? ) [ #index-of f = not ] ;
+
+native-block-start?: ( line -- ? ) [
+  dup "pub const " #starts-with?
+  [
+    dup " = extern struct {" native-line-contains?
+    [ drop t ]
+    [
+      dup " = opaque {};" native-line-contains?
+      [ drop t ]
+      [ " = enum(c_int) {" native-line-contains? ]
+      if
+    ]
+    if
+  ]
+  [ drop f ]
+  if
+] ;
+
+\ Apply the awk state machine for one line. Mutates state in place.
+native-filter-step: ( state line -- state ) [
+  dup "pub extern fn " #starts-with?
+  [
+    \ pub extern fn line: emit, b unchanged
+    over acc>> swap #push! drop
+  ]
+  [
+    over b>>
+    [
+      \ inside block: emit, then check end-of-block
+      [ over acc>> swap #push! drop ] keep
+      "};" #starts-with?
+      [ f >>b ]
+      [ ]
+      if
+    ]
+    [
+      \ outside block: check block-start
+      dup native-block-start?
+      [
+        \ block start: emit and enter block
+        over acc>> swap #push! drop
+        t >>b
+      ]
+      [ drop ]
+      if
+    ]
+    if
+  ]
+  if
+] ;
+
+translate-c-filtered-native: ( header-path flags -- filtered-source ) [
+  translate-c
+  "\n" split
+  V{ } f make-filter-state
+  [ native-filter-step ] #reduce
+  acc>> >array "\n" #join
+] ;
+
+\ --- Three variants of translate-c-decls ---
+
+decls-awk: ( header-path flags -- decls ) [ translate-c-decls ] ;
+
+decls-no-filter: ( header-path flags -- decls ) [
+  translate-c parse-zig-decls
+] ;
+
+decls-native: ( header-path flags -- decls ) [
+  translate-c-filtered-native parse-zig-decls
+] ;
+
+\ --- Correctness check: all three must produce the same declarations ---
+
+toy-header: "/Users/ripta/projects/1z/ext/toy/toy.h" ;
+zlib-header: "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/zlib.h" ;
+
+check-equivalence: ( header -- ) [
+  dup print-line
+  dup { } decls-awk
+  over { } decls-no-filter
+  2 pick-n { } decls-native
+  \ Stack: header awk-decls nofilt-decls native-decls
+  "  awk #len:      " print over #len . nl
+  "  no-filt #len:  " print over #len . nl
+  "  native #len:   " print dup #len . nl
+  drop drop drop drop
+] ;
+
+"--- correctness ---" print-line
+toy-header check-equivalence
+zlib-header check-equivalence
+
+nl
+
+"--- timing: toy.h (translate-c output ~6000 lines) ---" print-line
+
+[
+  "awk      (toy.h)" [ toy-header { } decls-awk drop ] benchmark-auto
+  "no-filt  (toy.h)" [ toy-header { } decls-no-filter drop ] benchmark-auto
+  "native   (toy.h)" [ toy-header { } decls-native drop ] benchmark-auto
+] run-benchmarks
+
+nl
+
+"--- timing: zlib.h (translate-c output ~6700 lines) ---" print-line
+
+[
+  "awk      (zlib.h)" [ zlib-header { } decls-awk drop ] benchmark-auto
+  "no-filt  (zlib.h)" [ zlib-header { } decls-no-filter drop ] benchmark-auto
+  "native   (zlib.h)" [ zlib-header { } decls-native drop ] benchmark-auto
+] run-benchmarks
