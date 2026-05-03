@@ -229,9 +229,7 @@ zig>ffi-type: ( zig-type -- ffi-type ) [
 
 \\ Collect struct fields from lines starting at index i.
 \\ Reads lines until "};" and advances i past it.
-\\ Stack: lines i name fields-vec
-\\ After: lines next-i name fields-vec
-(collect-struct-fields): [
+(collect-struct-fields): ( lines i name fields-vec -- lines next-i name fields-vec ) [
   \ Check if current line is "};"
   [ 3 pick-n 3 pick-n #nth trim "};" = not ] [
     \ Get current line
@@ -309,9 +307,7 @@ zig>ffi-type: ( zig-type -- ffi-type ) [
 ] ;
 
 \\ Collect enum variants from lines starting at index i.
-\\ Stack: lines i name variants-vec
-\\ After: lines next-i name variants-vec
-(collect-enum-variants): [
+(collect-enum-variants): ( lines i name variants-vec -- lines next-i name variants-vec ) [
   [ 3 pick-n 3 pick-n #nth trim "};" = not ] [
     3 pick-n 3 pick-n #nth
     (parse-enum-variant)
@@ -473,9 +469,7 @@ decl>ffi-binding: ( decl -- str ) [
 ] ;
 
 \\ Classify a line and dispatch to the appropriate parser.
-\\ Stack: results lines i line
-\\ After: results lines i' (i' advanced appropriately)
-(dispatch-line): [
+(dispatch-line): ( results lines i line -- results lines i' ) [
   dup "pub extern fn " #starts-with? [
     \ Single-line function declaration
     (parse-fn-decl)

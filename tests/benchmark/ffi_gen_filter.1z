@@ -95,8 +95,8 @@ decls-native: ( header-path flags -- decls ) [
 
 \ --- Correctness check: all three must produce the same declarations ---
 
-toy-header: "/Users/ripta/projects/1z/ext/toy/toy.h" ;
-zlib-header: "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/zlib.h" ;
+toy-header: ( -- str ) [ "/Users/ripta/projects/1z/ext/toy/toy.h" ] ;
+zlib-header: ( -- str ) [ "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/zlib.h" ] ;
 
 check-equivalence: ( header -- ) [
   dup print-line
