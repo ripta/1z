@@ -38,8 +38,6 @@ PASS: -inf round-trips
 Stack: [ ]
 === float-raw-bits nan ===
 Stack: [ ]
-Stack: [ 9221120237041090560 ]
-Stack: [ 9221120237041090560 9221120237041090560 ]
 PASS: nan bit pattern preserved
 Stack: [ ]
 === raw-bits-float error cases ===

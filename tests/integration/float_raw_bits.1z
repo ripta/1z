@@ -31,9 +31,7 @@ use "testing" ;
 = t "-inf round-trips" assert=
 
 "float-raw-bits nan" test-section
-0.0 0.0 / native.float-raw-bits native.raw-bits-float native.float-raw-bits
-0.0 0.0 / native.float-raw-bits
-"nan bit pattern preserved" assert=
+0.0 0.0 / native.float-raw-bits native.raw-bits-float native.float-raw-bits 0.0 0.0 / native.float-raw-bits "nan bit pattern preserved" assert=
 
 "raw-bits-float error cases" test-section
 [ -1 native.raw-bits-float ] "negative fixnum errors" assert-error
