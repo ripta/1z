@@ -1,0 +1,375 @@
+use "testing" ;
+use "ndarray" ;
+
+"ndarray construction" test-section
+
+{ 1 2 3 } { 3 } ndarray ndarray? t "make 1D ndarray" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray ndarray? t "make 2D ndarray" assert=
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray ndarray? t "make 3D ndarray" assert=
+
+"ndarray shape and rank" test-section
+
+{ 1 2 3 } { 3 } ndarray shape { 3 } "1D shape" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray shape { 2 3 } "2D shape" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray rank 2 "2D rank" assert=
+{ 1 2 3 } { 3 } ndarray rank 1 "1D rank" assert=
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray rank 3 "3D rank" assert=
+
+"ndarray element type detection" test-section
+
+{ 1 2 3 } { 3 } ndarray element-type fixnum: "fixnum element-type" assert=
+{ 1.0 2.0 3.0 } { 3 } ndarray element-type float: "float element-type" assert=
+
+"ndarray homogeneity validation" test-section
+
+[ { 1 2.0 3 } { 3 } ndarray ] "mixed types rejected" assert-error
+
+"ndarray? predicate" test-section
+
+{ 1 2 3 } { 3 } ndarray ndarray? t "ndarray? on ndarray" assert=
+{ 1 2 3 } ndarray? f "ndarray? on array" assert=
+42 ndarray? f "ndarray? on fixnum" assert=
+
+"ndarray reshape" test-section
+
+{ 1 2 3 4 5 6 } { 2 3 } ndarray { 3 2 } reshape shape { 3 2 } "reshape 2x3 to 3x2" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray { 6 } reshape shape { 6 } "reshape 2x3 to flat" assert=
+{ 1 2 3 4 5 6 } { 6 } ndarray { 2 3 } reshape shape { 2 3 } "reshape flat to 2x3" assert=
+[ { 1 2 3 4 5 6 } { 2 3 } ndarray { 4 } reshape ] "reshape size mismatch" assert-error
+
+"ndarray construction validation" test-section
+
+[ { 1 2 3 } { 2 } ndarray ] "data/shape mismatch" assert-error
+[ { 1 2 3 } { } ndarray ] "empty shape rejected" assert-error
+
+"ndarray #len" test-section
+
+{ 1 2 3 } { 3 } ndarray #len 3 "1D #len" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray #len 6 "2D #len" assert=
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray #len 12 "3D #len" assert=
+
+"ndarray #nth" test-section
+
+{ 10 20 30 } { 3 } ndarray 0 #nth 10 "1D #nth first" assert=
+{ 10 20 30 } { 3 } ndarray 2 #nth 30 "1D #nth last" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray 0 #nth 1 "2D #nth first" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray 5 #nth 6 "2D #nth last" assert=
+[ { 1 2 3 } { 3 } ndarray -1 #nth ] "#nth negative index" assert-error
+[ { 1 2 3 } { 3 } ndarray 3 #nth ] "#nth index == #len" assert-error
+
+"ndarray ref" test-section
+
+{ 10 20 30 } { 3 } ndarray { 0 } ref 10 "1D ref first" assert=
+{ 10 20 30 } { 3 } ndarray { 2 } ref 30 "1D ref last" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray { 0 0 } ref 1 "2D ref (0,0)" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray { 1 2 } ref 6 "2D ref (1,2)" assert=
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray { 0 0 0 } ref 1 "3D ref first" assert=
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray { 1 2 1 } ref 12 "3D ref last" assert=
+[ { 1 2 3 } { 3 } ndarray { 0 0 } ref ] "ref wrong index length" assert-error
+[ { 1 2 3 4 5 6 } { 2 3 } ndarray { -1 0 } ref ] "ref negative index" assert-error
+[ { 1 2 3 4 5 6 } { 2 3 } ndarray { 2 0 } ref ] "ref out of bounds" assert-error
+
+"ndarray ref2d" test-section
+
+{ 1 2 3 4 5 6 } { 2 3 } ndarray 0 0 ref2d 1 "ref2d (0,0)" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray 1 2 ref2d 6 "ref2d (1,2)" assert=
+[ { 1 2 3 } { 3 } ndarray 0 0 ref2d ] "ref2d on 1D" assert-error
+
+"ndarray ref3d" test-section
+
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray 0 0 0 ref3d 1 "ref3d (0,0,0)" assert=
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray 1 2 1 ref3d 12 "ref3d (1,2,1)" assert=
+[ { 1 2 3 4 5 6 } { 2 3 } ndarray 0 0 0 ref3d ] "ref3d on 2D" assert-error
+
+"ndarray + ndarray element-wise" test-section
+
+{ 1 2 3 } { 3 } ndarray { 4 5 6 } { 3 } ndarray +
+dup 0 #nth 5 "1D add elem 0" assert=
+dup 1 #nth 7 "1D add elem 1" assert=
+2 #nth 9 "1D add elem 2" assert=
+
+{ 1 2 3 4 } { 2 2 } ndarray { 10 20 30 40 } { 2 2 } ndarray +
+dup 0 #nth 11 "2D add elem 0" assert=
+3 #nth 44 "2D add elem 3" assert=
+
+{ 10 20 30 } { 3 } ndarray { 1 2 3 } { 3 } ndarray -
+dup 0 #nth 9 "1D sub elem 0" assert=
+2 #nth 27 "1D sub elem 2" assert=
+
+{ 2 3 4 } { 3 } ndarray { 5 6 7 } { 3 } ndarray *
+dup 0 #nth 10 "1D mul elem 0" assert=
+2 #nth 28 "1D mul elem 2" assert=
+
+{ 10 20 30 } { 3 } ndarray { 2 5 10 } { 3 } ndarray /
+dup 0 #nth 5 "1D div elem 0" assert=
+2 #nth 3 "1D div elem 2" assert=
+
+"ndarray + scalar (right-hand)" test-section
+
+{ 1 2 3 } { 3 } ndarray 10 +
+dup 0 #nth 11 "add fixnum scalar elem 0" assert=
+2 #nth 13 "add fixnum scalar elem 2" assert=
+
+{ 1.0 2.0 3.0 } { 3 } ndarray 0.5 *
+dup 0 #nth 0.5 "mul float scalar elem 0" assert=
+2 #nth 1.5 "mul float scalar elem 2" assert=
+
+{ 10 20 30 } { 3 } ndarray 3 -
+dup 0 #nth 7 "sub fixnum scalar elem 0" assert=
+2 #nth 27 "sub fixnum scalar elem 2" assert=
+
+{ 10 20 30 } { 3 } ndarray 2 /
+dup 0 #nth 5 "div fixnum scalar elem 0" assert=
+2 #nth 15 "div fixnum scalar elem 2" assert=
+
+"scalar + ndarray (left-hand)" test-section
+
+10 { 1 2 3 } { 3 } ndarray +
+dup 0 #nth 11 "fixnum + ndarray elem 0" assert=
+2 #nth 13 "fixnum + ndarray elem 2" assert=
+
+10 { 1 2 3 } { 3 } ndarray *
+dup 0 #nth 10 "fixnum * ndarray elem 0" assert=
+2 #nth 30 "fixnum * ndarray elem 2" assert=
+
+10 { 1 2 3 } { 3 } ndarray -
+dup 0 #nth 9 "fixnum - ndarray elem 0" assert=
+2 #nth 7 "fixnum - ndarray elem 2" assert=
+
+100 { 2 5 10 } { 3 } ndarray /
+dup 0 #nth 50 "fixnum / ndarray elem 0" assert=
+2 #nth 10 "fixnum / ndarray elem 2" assert=
+
+2.0 { 1.0 2.0 4.0 } { 3 } ndarray +
+0 #nth 3.0 "float + ndarray elem 0" assert=
+
+"ndarray shape mismatch" test-section
+
+[ { 1 2 3 } { 3 } ndarray { 1 2 } { 2 } ndarray + ] "add shape mismatch" assert-error
+[ { 1 2 3 } { 3 } ndarray { 1 2 3 4 5 6 } { 2 3 } ndarray - ] "sub shape mismatch" assert-error
+
+"ndarray arithmetic shape preservation" test-section
+
+{ 1 2 3 4 5 6 } { 2 3 } ndarray { 1 2 3 4 5 6 } { 2 3 } ndarray +
+shape { 2 3 } "ndarray+ndarray preserves shape" assert=
+
+{ 1 2 3 4 5 6 } { 2 3 } ndarray 1 +
+shape { 2 3 } "ndarray+scalar preserves shape" assert=
+
+"ndarray arithmetic element type detection" test-section
+
+{ 1 2 3 } { 3 } ndarray { 4 5 6 } { 3 } ndarray +
+element-type fixnum: "fixnum+fixnum -> fixnum" assert=
+
+{ 1.0 2.0 3.0 } { 3 } ndarray { 4.0 5.0 6.0 } { 3 } ndarray +
+element-type float: "float+float -> float" assert=
+
+{ 1 2 3 } { 3 } ndarray 1.0 +
+element-type float: "fixnum ndarray + float scalar -> float" assert=
+
+"ndarray logical-nth" test-section
+
+{ 1 2 3 4 5 6 } { 2 3 } ndarray 0 logical-nth 1 "logical-nth 2D first" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray 5 logical-nth 6 "logical-nth 2D last" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray 4 logical-nth 5 "logical-nth 2D middle" assert=
+{ 10 20 30 } { 3 } ndarray 1 logical-nth 20 "logical-nth 1D" assert=
+
+"ndarray transpose" test-section
+
+\ 2D transpose: [[1,2,3],[4,5,6]] -> [[1,4],[2,5],[3,6]]
+{ 1 2 3 4 5 6 } { 2 3 } ndarray transpose
+dup shape { 3 2 } "transpose 2D shape" assert=
+dup 0 0 ref2d 1 "transpose (0,0)" assert=
+dup 0 1 ref2d 4 "transpose (0,1)" assert=
+dup 1 0 ref2d 2 "transpose (1,0)" assert=
+dup 2 1 ref2d 6 "transpose (2,1)" assert=
+drop
+
+\ 3D transpose: shape reversal
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray transpose
+shape { 2 3 2 } "transpose 3D shape" assert=
+
+\ Transpose of transpose = original shape
+{ 1 2 3 4 5 6 } { 2 3 } ndarray
+dup transpose transpose shape
+swap shape
+"transpose of transpose shape" assert=
+
+\ 1D transpose is identity on shape
+{ 1 2 3 } { 3 } ndarray transpose
+shape { 3 } "transpose 1D shape unchanged" assert=
+
+"ndarray map" test-section
+
+{ 1 2 3 4 5 6 } { 2 3 } ndarray [ 10 * ] map
+dup shape { 2 3 } "map preserves shape" assert=
+dup 0 logical-nth 10 "map elem 0" assert=
+dup 3 logical-nth 40 "map elem 3" assert=
+5 logical-nth 60 "map elem 5" assert=
+
+\ Map over transposed array respects logical order
+{ 1 2 3 4 5 6 } { 2 3 } ndarray transpose [ 2 * ] map
+dup shape { 3 2 } "map transposed shape" assert=
+dup 0 logical-nth 2 "map transposed elem 0" assert=
+dup 1 logical-nth 8 "map transposed elem 1" assert=
+5 logical-nth 12 "map transposed elem 5" assert=
+
+"ndarray reduce" test-section
+
+{ 1 2 3 4 5 6 } { 2 3 } ndarray [ + ] reduce
+21 "reduce sum 2D" assert=
+
+{ 10 20 30 } { 3 } ndarray [ + ] reduce
+60 "reduce sum 1D" assert=
+
+\ Reduce on transposed array: same elements, same sum
+{ 1 2 3 4 5 6 } { 2 3 } ndarray transpose [ + ] reduce
+21 "reduce sum transposed" assert=
+
+{ 1 2 3 4 } { 2 2 } ndarray [ * ] reduce
+24 "reduce product" assert=
+
+"ndarray reduce-axis" test-section
+
+\ Reduce 2D along axis 0 (column reduction)
+\ [[1,2,3],[4,5,6]] reduced along axis 0 -> [5, 7, 9]
+{ 1 2 3 4 5 6 } { 2 3 } ndarray 0 [ + ] reduce-axis
+dup shape { 3 } "reduce-axis 0 shape" assert=
+dup 0 logical-nth 5 "reduce-axis 0 elem 0" assert=
+dup 1 logical-nth 7 "reduce-axis 0 elem 1" assert=
+2 logical-nth 9 "reduce-axis 0 elem 2" assert=
+
+\ Reduce 2D along axis 1 (row reduction)
+\ [[1,2,3],[4,5,6]] reduced along axis 1 -> [6, 15]
+{ 1 2 3 4 5 6 } { 2 3 } ndarray 1 [ + ] reduce-axis
+dup shape { 2 } "reduce-axis 1 shape" assert=
+dup 0 logical-nth 6 "reduce-axis 1 elem 0" assert=
+1 logical-nth 15 "reduce-axis 1 elem 1" assert=
+
+\ Invalid axis
+[ { 1 2 3 } { 3 } ndarray 1 [ + ] reduce-axis ] "reduce-axis invalid axis" assert-error
+
+"ndarray matmul" test-section
+
+\ 2D * 2D: [[1,2],[3,4]] * [[5,6],[7,8]] = [[19,22],[43,50]]
+{ 1 2 3 4 } { 2 2 } ndarray { 5 6 7 8 } { 2 2 } ndarray matmul
+dup shape { 2 2 } "matmul 2D*2D shape" assert=
+dup 0 0 ref2d 19 "matmul 2D*2D (0,0)" assert=
+dup 0 1 ref2d 22 "matmul 2D*2D (0,1)" assert=
+dup 1 0 ref2d 43 "matmul 2D*2D (1,0)" assert=
+1 1 ref2d 50 "matmul 2D*2D (1,1)" assert=
+
+\ 1D * 1D dot product: [1,2,3] . [4,5,6] = 32
+{ 1 2 3 } { 3 } ndarray { 4 5 6 } { 3 } ndarray matmul
+32 "matmul 1D*1D dot product" assert=
+
+\ 1D * 2D: [1,2] * [[1,2,3],[4,5,6]] = [9, 12, 15]
+{ 1 2 } { 2 } ndarray { 1 2 3 4 5 6 } { 2 3 } ndarray matmul
+dup shape { 3 } "matmul 1D*2D shape" assert=
+dup 0 logical-nth 9 "matmul 1D*2D elem 0" assert=
+dup 1 logical-nth 12 "matmul 1D*2D elem 1" assert=
+2 logical-nth 15 "matmul 1D*2D elem 2" assert=
+
+\ 2D * 1D: [[1,2,3],[4,5,6]] * [1,2,3] = [14, 32]
+{ 1 2 3 4 5 6 } { 2 3 } ndarray { 1 2 3 } { 3 } ndarray matmul
+dup shape { 2 } "matmul 2D*1D shape" assert=
+dup 0 logical-nth 14 "matmul 2D*1D elem 0" assert=
+1 logical-nth 32 "matmul 2D*1D elem 1" assert=
+
+\ Shape mismatch
+[ { 1 2 3 } { 3 } ndarray { 1 2 } { 2 } ndarray matmul ] "matmul shape mismatch" assert-error
+
+\ matmul with transposed input
+\ A = [[1,2],[3,4]], B = [[5,6],[7,8]], B^T = [[5,7],[6,8]]
+\ A * B^T = [[1*5+2*7, 1*6+2*8], [3*5+4*7, 3*6+4*8]] = [[19,22],[43,50]]
+{ 1 2 3 4 } { 2 2 } ndarray
+{ 5 7 6 8 } { 2 2 } ndarray transpose
+matmul
+dup 0 0 ref2d 19 "matmul transposed (0,0)" assert=
+1 1 ref2d 50 "matmul transposed (1,1)" assert=
+
+"ndarray outer" test-section
+
+\ Outer product: [1,2,3] outer [4,5] = [[4,5],[8,10],[12,15]]
+{ 1 2 3 } { 3 } ndarray { 4 5 } { 2 } ndarray outer
+dup shape { 3 2 } "outer shape" assert=
+dup 0 0 ref2d 4 "outer (0,0)" assert=
+dup 0 1 ref2d 5 "outer (0,1)" assert=
+dup 1 0 ref2d 8 "outer (1,0)" assert=
+dup 2 1 ref2d 15 "outer (2,1)" assert=
+drop
+
+\ Non-1D input error
+[ { 1 2 3 4 } { 2 2 } ndarray { 1 2 } { 2 } ndarray outer ] "outer non-1D first" assert-error
+[ { 1 2 } { 2 } ndarray { 1 2 3 4 } { 2 2 } ndarray outer ] "outer non-1D second" assert-error
+
+"nd{ syntax" test-section
+
+nd{ 1 2 3 } shape { 3 } "nd{ 1D shape" assert=
+nd{ 1 2 3 } 0 #nth 1 "nd{ 1D elem 0" assert=
+nd{ 1 2 3 } 2 #nth 3 "nd{ 1D elem 2" assert=
+
+nd{ 1 2 3 ;
+  4 5 6 } shape { 2 3 } "nd{ 2D shape" assert=
+nd{ 1 2 3 ;
+  4 5 6 } 0 0 ref2d 1 "nd{ 2D (0,0)" assert=
+nd{ 1 2 3 ;
+  4 5 6 } 1 2 ref2d 6 "nd{ 2D (1,2)" assert=
+
+nd{ 1.0 2.0 3.0 } element-type float: "nd{ float auto-detect" assert=
+nd{ 1 2 3 } element-type fixnum: "nd{ fixnum auto-detect" assert=
+
+"ndarray mask" test-section
+
+\ Boolean arrays must be constructed at runtime since { } is parse-time
+V{ } t #push! f #push! t #push! f #push! t #push! >iterator #collect { 5 } ndarray
+nd{ 1 2 3 4 5 } swap mask
+dup shape { 3 } "mask shape" assert=
+dup 0 #nth 1 "mask elem 0" assert=
+dup 1 #nth 3 "mask elem 1" assert=
+2 #nth 5 "mask elem 2" assert=
+
+V{ } t #push! f #push! >iterator #collect { 2 } ndarray
+[ nd{ 1 2 3 } swap mask ] "mask shape mismatch" assert-error
+
+V{ } f #push! f #push! f #push! >iterator #collect { 3 } ndarray
+nd{ 10 20 30 } swap mask
+#len 0 "mask empty result" assert=
+
+"ndarray gather" test-section
+
+nd{ 10 20 30 40 50 } { 0 2 4 } gather
+dup shape { 3 } "gather shape" assert=
+dup 0 #nth 10 "gather elem 0" assert=
+dup 1 #nth 30 "gather elem 1" assert=
+2 #nth 50 "gather elem 2" assert=
+
+[ nd{ 10 20 30 } { 5 } gather ] "gather out of bounds" assert-error
+
+"ndarray >iterator" test-section
+
+nd{ 1 2 3 } >iterator #collect { 1 2 3 } "1D >iterator collect" assert=
+{ 1 2 3 4 5 6 } { 2 3 } ndarray >iterator #collect { 1 2 3 4 5 6 } "2D >iterator collect" assert=
+
+nd{ 10 20 30 } >iterator 0 [ + ] #reduce 60 ">iterator reduce" assert=
+
+"ndarray inspect" test-section
+
+nd{ 1.0 2.0 3.0 } inspect "ndarray{float}(3): 1.0 2.0 3.0" "1D inspect" assert=
+nd{ 1 2 3 } inspect "ndarray{fixnum}(3): 1 2 3" "1D inspect fixnum" assert=
+
+nd{ 1 2 3 ;
+  4 5 6 } inspect "2x3 ndarray{fixnum}:\n1 2 3\n4 5 6" "2D inspect" assert=
+
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 2 3 } ndarray inspect
+"2x2x3 ndarray{fixnum}:\n[:, :, 0] =\n1 2 3\n4 5 6\n[:, :, 1] =\n 7  8  9\n10 11 12" "3D inspect" assert=
+
+"ndarray >string" test-section
+
+nd{ 1 2 3 } >string "nd{ 1 2 3 }" "1D >string" assert=
+nd{ 1.0 2.0 3.0 } >string "nd{ 1.0 2.0 3.0 }" "1D >string float" assert=
+nd{ 1 2 3 ;
+  4 5 6 } >string "nd{ 1 2 3 ; 4 5 6 }" "2D >string" assert=
+
+{ 1 2 3 4 5 6 7 8 9 10 11 12 } { 2 3 2 } ndarray >string
+"ndarray(shape={ 2 3 2 } data={ 1 2 3 4 5 6 7 8 9 10 11 12 })" "3D >string" assert=
