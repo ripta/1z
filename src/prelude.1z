@@ -397,28 +397,25 @@ assert-no-shadow: ( names -- ) [
   if
 ] ;
 
-\\ Validate the tail tokens of a `use` invocation.
-\\ Each value must be the well-known `shadow-ok` marker; throws on any unrecognized value.
-\\ Returns `t` if `shadow-ok` was present, `f` if no tail tokens.
-(validate-use-tail): ( values -- ? ) [
-  dup #empty?
-  [ drop f ]
-  [
-    [
-      dup shadow-ok = not
-      [ inspect "unrecognized token in use: " swap #append f swap EInvalidArgument make-error throw ]
-      when
-      drop
-    ] #each
-    t
-  ]
-  if
-] ;
-
 \\ Load and import a module by name or file path.
 \\ Optionally restrict imported words with a set of symbols.
 \\ Insert `shadow-ok` before `;` to suppress the shadow check.
 use: parse-time [
+  (validate-use-tail): ( values -- ? ) [
+    dup #empty?
+    [ drop f ]
+    [
+      [
+        dup shadow-ok = not
+        [ inspect "unrecognized token in use: " swap #append f swap EInvalidArgument make-error throw ]
+        when
+        drop
+      ] #each
+      t
+    ]
+    if
+  ] ;
+
   parse-literal
   dup string?
   [

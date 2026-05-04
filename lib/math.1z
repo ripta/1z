@@ -44,3 +44,82 @@ ceil: ( n -- f ) [ native.ceil ] ;
 round: ( n -- f ) [ native.round ] ;
 \\ Round toward zero.
 truncate: ( n -- f ) [ native.truncate ] ;
+
+\ --- IEEE 754 bit introspection ---
+
+\\ Virtual type wrapping a raw IEEE 754 bit pattern as an integer.
+bits: virtual{ fixnum } ;
+
+\\ Convert a float to its raw IEEE 754 bit pattern.
+float>bits: ( f -- bits ) [ native.float-raw-bits make-bits ] ;
+\\ Convert a raw IEEE 754 bit pattern back to a float.
+bits>float: ( bits -- f ) [ unmake-bits native.raw-bits-float ] ;
+
+\ Prepend "0" until the string is 16 characters.
+bits-pad-hex: [
+  dup #len 16 < [
+    "0" swap #append bits-pad-hex
+  ] when
+] ;
+
+\\ Display bits as zero-padded 16-digit uppercase hex.
+>string: method{ bits } [
+  unmake-bits 16 >string-base uppercase
+  bits-pad-hex
+  "0x" swap #append
+] ;
+
+bitand:      method{ bits bits } [ swap unmake-bits swap unmake-bits bitand make-bits ] ;
+bitor:       method{ bits bits } [ swap unmake-bits swap unmake-bits bitor make-bits ] ;
+bitxor:      method{ bits bits } [ swap unmake-bits swap unmake-bits bitxor make-bits ] ;
+bitnot:      method{ bits } [ unmake-bits bitnot make-bits ] ;
+shift-left:  method{ bits fixnum } [ swap unmake-bits swap shift-left make-bits ] ;
+shift-right: method{ bits fixnum } [ swap unmake-bits swap shift-right make-bits ] ;
+ushift-right: method{ bits fixnum } [ swap unmake-bits swap ushift-right make-bits ] ;
+shift: method{ bits fixnum } [ swap unmake-bits swap shift make-bits ] ;
+
+\\ Next representable float toward positive infinity.
+next-float: ( f -- f' ) [
+  dup nan? [ ] [
+    dup inf = [ ] [
+      dup 0.0 = [
+        drop 1 native.raw-bits-float
+      ] [
+        dup 0.0 > [
+          native.float-raw-bits 1 + native.raw-bits-float
+        ] [
+          native.float-raw-bits 1 - native.raw-bits-float
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+\\ Next representable float toward negative infinity.
+prev-float: ( f -- f' ) [
+  dup nan? [ ] [
+    dup -inf = [ ] [
+      dup 0.0 = [
+        drop 9223372036854775809 native.raw-bits-float
+      ] [
+        dup 0.0 > [
+          native.float-raw-bits 1 - native.raw-bits-float
+        ] [
+          native.float-raw-bits 1 + native.raw-bits-float
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+\\ Unit in the last place of a float.
+float-ulp: ( f -- ulp ) [
+  dup nan? [ ] [
+    dup infinite? [
+      "float-ulp: undefined for infinity" EInvalidArgument make-error throw
+    ] [
+      dup 0.0 < [ -1.0 * ] when
+      dup next-float swap -
+    ] if
+  ] if
+] ;

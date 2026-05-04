@@ -48,27 +48,3 @@ use "strings" ;
 
 use "strict_use_mod_prelude_shadow.1z" ;
 nip "custom nip" "prelude word shadowing allowed" assert=
-
-\ === Input validation on use tail tokens ===
-"(validate-use-tail) accepts shadow-ok marker" test-section
-
-{ shadow-ok } (validate-use-tail) t "(validate-use-tail) accepts shadow-ok" assert=
-
-"(validate-use-tail) returns f for empty array" test-section
-
-{ } (validate-use-tail) f "(validate-use-tail) returns f for empty" assert=
-
-"(validate-use-tail) rejects a string token" test-section
-
-[ { "blah" } (validate-use-tail) ]
-[ error-type: @get EInvalidArgument "(validate-use-tail) rejects string" assert= ] recover
-
-"(validate-use-tail) rejects a number literal" test-section
-
-[ { 42 } (validate-use-tail) ]
-[ error-type: @get EInvalidArgument "(validate-use-tail) rejects number" assert= ] recover
-
-"(validate-use-tail) rejects a different marker" test-section
-
-[ { const } (validate-use-tail) ]
-[ error-type: @get EInvalidArgument "(validate-use-tail) rejects wrong marker" assert= ] recover

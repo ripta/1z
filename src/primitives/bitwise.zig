@@ -6,6 +6,7 @@ const Value = value_mod.Value;
 const BigIntManaged = value_mod.BigIntManaged;
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
+const dispatch_helpers = @import("dispatch_helpers.zig");
 
 const demoteBignum = helpers.demoteBignum;
 const ensureBignum = helpers.ensureBignum;
@@ -37,6 +38,7 @@ fn popShiftCount(ctx: *Context) !usize {
 }
 
 fn nativeBitand(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "bitand")) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     if (a == .fixnum and b == .fixnum) {
@@ -55,6 +57,7 @@ fn nativeBitand(ctx: *Context) anyerror!void {
 }
 
 fn nativeBitor(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "bitor")) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     if (a == .fixnum and b == .fixnum) {
@@ -73,6 +76,7 @@ fn nativeBitor(ctx: *Context) anyerror!void {
 }
 
 fn nativeBitxor(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "bitxor")) return;
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     if (a == .fixnum and b == .fixnum) {
@@ -91,6 +95,7 @@ fn nativeBitxor(ctx: *Context) anyerror!void {
 }
 
 fn nativeBitnot(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchUnary(ctx, "bitnot")) return;
     const val = try ctx.stack.pop();
     if (val == .fixnum) {
         try ctx.stack.push(.{ .fixnum = ~val.fixnum });
@@ -109,6 +114,7 @@ fn nativeBitnot(ctx: *Context) anyerror!void {
 }
 
 fn nativeShiftLeft(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "shift-left")) return;
     const count = try popShiftCount(ctx);
     const val = try ctx.stack.pop();
     if (val == .fixnum or val == .bignum) {
@@ -124,6 +130,7 @@ fn nativeShiftLeft(ctx: *Context) anyerror!void {
 }
 
 fn nativeShiftRight(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "shift-right")) return;
     const count = try popShiftCount(ctx);
     const val = try ctx.stack.pop();
     if (val == .fixnum) {
@@ -145,6 +152,7 @@ fn nativeShiftRight(ctx: *Context) anyerror!void {
 }
 
 fn nativeUshiftRight(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "ushift-right")) return;
     const count = try popShiftCount(ctx);
     const val = try ctx.stack.pop();
     if (val != .fixnum) {
@@ -162,6 +170,7 @@ fn nativeUshiftRight(ctx: *Context) anyerror!void {
 }
 
 fn nativeShift(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "shift")) return;
     const count_val = try ctx.stack.pop();
     if (count_val != .fixnum) {
         helpers.setErrorHint(ctx, "shift count must be a non-negative fixnum");

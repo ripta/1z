@@ -1,0 +1,43 @@
+=== parse-time definition scoping ===
+Stack: [ ]
+Stack: [ ]
+PASS: parse-time body can use its own helper
+Stack: [ ]
+PASS: internal helper not visible outside
+Stack: [ ]
+Stack: [ ]
+PASS: parse-time computed value
+Stack: [ ]
+Stack: [ ]
+Stack: [ "hello" ]
+PASS: parse-token works in scoped body
+Stack: [ ]
+Stack: [ ]
+Stack: [ "alpha" "beta" ]
+PASS: recursive helper second token
+Stack: [ "alpha" ]
+PASS: recursive helper first token
+Stack: [ ]
+Stack: [ ]
+PASS: first invocation
+Stack: [ ]
+PASS: second invocation
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: external helper visible inside parse-time body
+Stack: [ ]
+=== parse-time helpers do not leak into module exports ===
+Stack: [ ]
+Stack: [ f ]
+PASS: ffi module does not export (read-ffi-params)
+Stack: [ ]
+Stack: [ f ]
+PASS: ffi module does not export (read-ffi-def)
+Stack: [ ]
+Stack: [ f ]
+PASS: matrix module does not export (read-matrix-row)
+Stack: [ ]
+Stack: [ f ]
+PASS: matrix module does not export (read-matrix)
+Stack: [ ]

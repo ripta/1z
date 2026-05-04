@@ -1,0 +1,38 @@
+use "testing" ;
+
+"float-raw-bits known bit patterns" test-section
+1.0 native.float-raw-bits 4607182418800017408 "1.0 raw bits" assert=
+0.0 native.float-raw-bits 0 "0.0 raw bits" assert=
+
+"float-raw-bits round-trip positive floats" test-section
+1.0 native.float-raw-bits native.raw-bits-float 1.0 "1.0 round-trips" assert=
+0.0 native.float-raw-bits native.raw-bits-float 0.0 "0.0 round-trips" assert=
+3.14 native.float-raw-bits native.raw-bits-float 3.14 "3.14 round-trips" assert=
+
+"float-raw-bits round-trip negative floats" test-section
+-1.0 native.float-raw-bits native.raw-bits-float -1.0 "-1.0 round-trips" assert=
+
+"float-raw-bits negative zero" test-section
+0.0 -1.0 * native.float-raw-bits
+0.0 native.float-raw-bits
+= f "-0.0 has different bit pattern from 0.0" assert=
+
+0.0 -1.0 * native.float-raw-bits native.raw-bits-float native.float-raw-bits
+0.0 -1.0 * native.float-raw-bits
+"-0.0 round-trips" assert=
+
+"float-raw-bits infinity" test-section
+1.0 0.0 / native.float-raw-bits native.raw-bits-float
+1.0 0.0 /
+= t "inf round-trips" assert=
+
+-1.0 0.0 / native.float-raw-bits native.raw-bits-float
+-1.0 0.0 /
+= t "-inf round-trips" assert=
+
+"float-raw-bits nan" test-section
+0.0 0.0 / native.float-raw-bits native.raw-bits-float native.float-raw-bits 0.0 0.0 / native.float-raw-bits "nan bit pattern preserved" assert=
+
+"raw-bits-float error cases" test-section
+[ -1 native.raw-bits-float ] "negative fixnum errors" assert-error
+[ 1 native.float-raw-bits ] "fixnum rejected by float-raw-bits" assert-error
