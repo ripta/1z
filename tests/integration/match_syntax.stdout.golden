@@ -1,0 +1,41 @@
+Stack: [ ]
+=== match{ flat enum dispatch ===
+Stack: [ ]
+PASS: match{ selects correct flat variant
+Stack: [ ]
+PASS: match{ selects green
+Stack: [ ]
+PASS: match{ selects blue
+Stack: [ ]
+=== match{ data-carrying variant ===
+Stack: [ ]
+Stack: [ ]
+PASS: match{ unwraps data variant
+Stack: [ ]
+PASS: match{ flat variant in mixed enum
+Stack: [ ]
+=== match{ with _ default on flat variant ===
+Stack: [ ]
+PASS: match{ default: named branch wins
+Stack: [ ]
+PASS: match{ default: _ catches non-matched
+Stack: [ ]
+=== match{ with _ default on data-carrying variant ===
+Stack: [ ]
+PASS: match{ default: _ receives raw tagged value
+Stack: [ ]
+PASS: match{ default: named branch still unwraps
+Stack: [ ]
+=== match{ inside word definition ===
+Stack: [ ]
+Stack: [ ]
+PASS: match{ inside word def
+Stack: [ ]
+PASS: match{ inside word def blue
+Stack: [ ]
+=== match{ multiline layout ===
+Stack: [ ]
+Stack: [ <color:green green:> ]
+Stack: [ "G" ]
+PASS: match{ multiline layout works
+Stack: [ ]

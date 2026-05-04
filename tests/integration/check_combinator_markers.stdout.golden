@@ -10,7 +10,7 @@ PASS: cond has branch-combinator
 Stack: [ ]
 PASS: case has branch-combinator
 Stack: [ ]
-PASS: match has branch-combinator
+PASS: unchecked-match has branch-combinator
 Stack: [ ]
 === loop-combinator markers ===
 Stack: [ ]

@@ -1,0 +1,3 @@
+\ Test helper module B - exports greet (conflicts with A) and mul
+greet: [ "hello from B" ] ;
+mul: ( a b -- c ) [ * ] ;

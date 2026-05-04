@@ -17,6 +17,7 @@ Stack: [ ]
 #map ( seq quot -- seq' )
 #next ( iterator -- value )
 #nth ( seq n -- elem )
+#nth! ( seq n value -- seq )
 #pop ( seq -- seq' elem )
 #pop! ( vec -- vec elem )
 #prepend ( seq1 seq2 -- seq )
@@ -111,9 +112,11 @@ dip ( ..a x quot -- ..b x )
 div ( a b -- q )
 drop ( a -- )
 dup ( a -- a a )
+emit-call ( symbol -- )
 enum-of ( val -- str/f )
 enum-variants ( symbol -- array )
 environ ( -- hash )
+eval-string ( string -- )
 f ( -- f )
 fd-close ( fd -- )
 fd>stream ( fd -- stream )
@@ -138,7 +141,6 @@ make-range-iter ( start end step infinite? -- iterator )
 make-set ( quotation -- set )
 make-vector ( quotation -- vector )
 marker ( -- marker )
-match ( val branches -- ... )
 multiplexer-stats ( -- hash )
 mutable ( -- marker )
 native? ( name -- ? )
@@ -168,6 +170,7 @@ rethrow ( error -- )
 select ( array -- val ch )
 send ( val ch -- )
 set-buffering-mode ( stream symbol -- )
+shadow-ok ( -- marker )
 shift ( n count -- n' )
 shift-left ( n count -- n' )
 shift-right ( n count -- n' )
@@ -200,8 +203,10 @@ throw ( error -- )
 try-receive ( ch -- val/f ? )
 type-of ( val -- symbol )
 tz-decompose ( sec tz-name -- year month-num day hour min sec wday yday gmtoff tz-abbrev )
+unchecked-match ( val branches -- ... )
 uppercase ( str -- str )
 ushift-right ( n count -- n' )
+validate-match-block ( array -- array )
 wipe ( ... -- )
 with-parameter ( value param quot -- )
 with-timeout ( quot duration -- value )
@@ -216,7 +221,9 @@ yield ( -- )
 #next? ( iter -- option )
 #none ( seq quot -- ? )
 #nth? ( seq n -- option )
+#resize! ( seq n fill -- seq )
 (raw>word-info)
+(validate-use-tail) ( values -- ? )
 ++ ( a1 -- a2 )
 -- ( a1 -- a2 )
 -@ ( a -- -a )
@@ -264,6 +271,7 @@ EFileNotFound
 EFileReadFailed
 EFixnumOverflow
 EIOFailed
+EImportConflict
 EIndexOutOfBounds
 EInvalidArgument
 EKeyNotFound
@@ -288,6 +296,7 @@ acquire ( resource -- )
 all-words ( -- array )
 and ( ? ? -- ? )
 array? ( val -- ? )
+assert-no-shadow ( names -- )
 benchmark-report? ( val -- ? )
 bi ( ..a x p q -- ..b ..c )
 bignum? ( val -- ? )
@@ -359,6 +368,7 @@ make-stack-effect
 make-word-info
 marker? ( val -- ? )
 markers>>
+match{
 max ( a1 a2 -- a )
 method-info>hash
 method-info?
@@ -413,7 +423,6 @@ provenance?
 quotation? ( val -- ? )
 read-line ( -- str/f )
 receive? ( ch -- option )
-resize! ( seq n fill -- seq )
 result:err> ( result -- error )
 result:err>hash
 result:err?

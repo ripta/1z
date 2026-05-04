@@ -1,0 +1,71 @@
+\ Tests for native.locally-defined?, native.defined?, native.word-source
+
+use "testing" ;
+
+\ -- locally-defined? --
+
+"locally-defined? returns t for user-defined word" test-section
+my-word: [ 42 ] ;
+"my-word" native.locally-defined? t "locally-defined? t for user-defined word" assert=
+
+"locally-defined? returns t via symbol" test-section
+my-word: native.locally-defined? t "locally-defined? t via symbol" assert=
+
+"locally-defined? returns f for prelude word" test-section
+"dup" native.locally-defined? f "locally-defined? f for prelude word" assert=
+
+"locally-defined? returns f for native word" test-section
+"+" native.locally-defined? f "locally-defined? f for native word" assert=
+
+"locally-defined? returns f for nonexistent word" test-section
+"no-such-word-xyz" native.locally-defined? f "locally-defined? f for nonexistent word" assert=
+
+"locally-defined? returns t for imported word" test-section
+use "module_lib.1z" ;
+"double" native.locally-defined? t "locally-defined? t for imported word" assert=
+
+"locally-defined? type error on non-string/symbol" test-section
+[ 42 native.locally-defined? ] "TypeMismatch" assert-error
+
+\ -- defined? --
+
+"defined? returns t for user-defined word" test-section
+"my-word" native.defined? t "defined? t for user-defined word" assert=
+
+"defined? returns t via symbol" test-section
+my-word: native.defined? t "defined? t via symbol" assert=
+
+"defined? returns t for prelude word" test-section
+"dup" native.defined? t "defined? t for prelude word" assert=
+
+"defined? returns t for native word" test-section
+"+" native.defined? t "defined? t for native word" assert=
+
+"defined? returns f for nonexistent word" test-section
+"no-such-word-xyz" native.defined? f "defined? f for nonexistent word" assert=
+
+"defined? type error on non-string/symbol" test-section
+[ 42 native.defined? ] "TypeMismatch" assert-error
+
+\ -- word-source --
+
+"word-source returns module for imported word" test-section
+"double" native.word-source module? t "word-source returns module for imported word" assert=
+
+"word-source returns f for user-defined word" test-section
+"my-word" native.word-source f "word-source f for user-defined word" assert=
+
+"word-source returns f for prelude word" test-section
+"dup" native.word-source f "word-source f for prelude word" assert=
+
+"word-source returns f for native word" test-section
+"+" native.word-source f "word-source f for native word" assert=
+
+"word-source returns f for nonexistent word" test-section
+"no-such-word-xyz" native.word-source f "word-source f for nonexistent word" assert=
+
+"word-source via symbol" test-section
+double: native.word-source module? t "word-source returns module via symbol" assert=
+
+"word-source type error on non-string/symbol" test-section
+[ 42 native.word-source ] "TypeMismatch" assert-error

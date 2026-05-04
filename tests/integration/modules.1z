@@ -20,7 +20,7 @@ import
 \ === Multiple imports ===
 "Multiple imports" test-section
 
-use "module_lib.1z" ;
+use "module_lib.1z" shadow-ok ;
 10 double .
 
 \ === Module without import ===
@@ -44,7 +44,7 @@ math import
 \ === use shorthand ===
 "use shorthand" test-section
 
-use "module_lib.1z" ;
+use "module_lib.1z" shadow-ok ;
 8 double .
 
 \ === Qualified name access ===
@@ -114,12 +114,12 @@ selmod2 { double: triple: } import
 
 "Selective use" test-section
 
-use { squared: } "module_lib.1z" ;
+use { squared: } "module_lib.1z" shadow-ok ;
 4 squared 16 "selective use squared" assert=
 
 "Selective use multiple" test-section
 
-use { double: triple: } "module_lib.1z" ;
+use { double: triple: } "module_lib.1z" shadow-ok ;
 7 double 14 "selective use multiple - double" assert=
 2 triple 6 "selective use multiple - triple" assert=
 

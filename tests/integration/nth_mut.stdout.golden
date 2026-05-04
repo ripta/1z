@@ -1,0 +1,82 @@
+=== Vector #nth! basic ===
+Stack: [ ]
+PASS: set first element
+Stack: [ ]
+PASS: set middle element
+Stack: [ ]
+PASS: set last element
+Stack: [ ]
+=== Vector #nth! preserves other elements ===
+Stack: [ ]
+PASS: element before unchanged
+Stack: [ ]
+PASS: element after unchanged
+Stack: [ ]
+PASS: length unchanged
+Stack: [ ]
+=== Vector #nth! any value type ===
+Stack: [ ]
+PASS: set string value
+Stack: [ ]
+PASS: set boolean value
+Stack: [ ]
+PASS: set symbol value
+Stack: [ ]
+=== Vector #nth! mutation is in-place ===
+Stack: [ ]
+PASS: aliased vector sees mutation
+Stack: [ ]
+=== Byte-array #nth! basic ===
+Stack: [ ]
+PASS: set first byte
+Stack: [ ]
+PASS: set middle byte
+Stack: [ ]
+PASS: set last byte
+Stack: [ ]
+=== Byte-array #nth! preserves other elements ===
+Stack: [ ]
+PASS: byte before unchanged
+Stack: [ ]
+PASS: byte after unchanged
+Stack: [ ]
+PASS: length unchanged
+Stack: [ ]
+=== Byte-array #nth! boundary values ===
+Stack: [ ]
+PASS: set byte to 0
+Stack: [ ]
+PASS: set byte to 255
+Stack: [ ]
+=== Byte-array #nth! mutation is in-place ===
+Stack: [ ]
+PASS: aliased byte-array sees mutation
+Stack: [ ]
+=== #nth! error: out of bounds ===
+Stack: [ ]
+PASS: IndexOutOfBounds
+Stack: [ ]
+PASS: IndexOutOfBounds
+Stack: [ ]
+PASS: IndexOutOfBounds
+Stack: [ ]
+=== #nth! error: negative index ===
+Stack: [ ]
+PASS: IndexOutOfBounds
+Stack: [ ]
+PASS: IndexOutOfBounds
+Stack: [ ]
+=== #nth! error: immutable types ===
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
+=== #nth! error: byte-array value out of range ===
+Stack: [ ]
+PASS: FixnumOverflow
+Stack: [ ]
+PASS: FixnumOverflow
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]

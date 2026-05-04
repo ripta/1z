@@ -1,0 +1,26 @@
+\ Test emit-call mechanism
+
+use "testing" ;
+
+"single emit-call" test-section
+
+\ Define a helper word and a parse-time word that uses emit-call
+helper-add1: [ 1 + ] ;
+add1{: parse-time [ helper-add1: emit-call ] ;
+
+5 add1{ 6 "emit-call invokes the named word" assert=
+
+  "multiple emit-call invocations" test-section
+
+  helper-double: [ 2 * ] ;
+  double-add1{: parse-time [
+    helper-double: emit-call
+    helper-add1: emit-call
+  ] ;
+
+  5 double-add1{ 11 "multiple emit-call: double then add1" assert=
+
+    "emit-call outside parse time" test-section
+
+    \ emit-call should error when called outside parse time
+    [ helper-add1: emit-call ] [ "parse time" assert-error ] recover

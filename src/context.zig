@@ -107,6 +107,8 @@ pub const Context = struct {
     local_frames: std.ArrayListUnmanaged(LocalFrame),
     /// Tokenizer for parse-time word access (set during parsing, null otherwise)
     parse_tokenizer: ?*Tokenizer = null,
+    /// Deferred call_word emissions requested by parse-time words via `emit-call`
+    parse_time_deferred_calls: std.ArrayListUnmanaged([]const u8) = .{},
     /// Optional benchmark stats (null when benchmarking is disabled)
     benchmark: ?*BenchmarkStats = null,
     /// Current source file name for error reporting (defaults to "<repl>")
@@ -351,6 +353,7 @@ pub const Context = struct {
         }
         self.pragma_frames.deinit(self.allocator);
         self.pragma_registry.deinit(self.allocator);
+        self.parse_time_deferred_calls.deinit(self.allocator);
         self.enum_registry.deinit(self.allocator);
         self.type_descriptors.deinit(self.allocator);
         self.dispatch.deinit();

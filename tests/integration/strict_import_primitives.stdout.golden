@@ -1,0 +1,81 @@
+=== locally-defined? returns t for user-defined word ===
+Stack: [ ]
+Stack: [ ]
+PASS: locally-defined? t for user-defined word
+Stack: [ ]
+=== locally-defined? returns t via symbol ===
+Stack: [ ]
+PASS: locally-defined? t via symbol
+Stack: [ ]
+=== locally-defined? returns f for prelude word ===
+Stack: [ ]
+PASS: locally-defined? f for prelude word
+Stack: [ ]
+=== locally-defined? returns f for native word ===
+Stack: [ ]
+PASS: locally-defined? f for native word
+Stack: [ ]
+=== locally-defined? returns f for nonexistent word ===
+Stack: [ ]
+PASS: locally-defined? f for nonexistent word
+Stack: [ ]
+=== locally-defined? returns t for imported word ===
+Stack: [ ]
+PASS: locally-defined? t for imported word
+Stack: [ ]
+=== locally-defined? type error on non-string/symbol ===
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
+=== defined? returns t for user-defined word ===
+Stack: [ ]
+PASS: defined? t for user-defined word
+Stack: [ ]
+=== defined? returns t via symbol ===
+Stack: [ ]
+PASS: defined? t via symbol
+Stack: [ ]
+=== defined? returns t for prelude word ===
+Stack: [ ]
+PASS: defined? t for prelude word
+Stack: [ ]
+=== defined? returns t for native word ===
+Stack: [ ]
+PASS: defined? t for native word
+Stack: [ ]
+=== defined? returns f for nonexistent word ===
+Stack: [ ]
+PASS: defined? f for nonexistent word
+Stack: [ ]
+=== defined? type error on non-string/symbol ===
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
+=== word-source returns module for imported word ===
+Stack: [ ]
+PASS: word-source returns module for imported word
+Stack: [ ]
+=== word-source returns f for user-defined word ===
+Stack: [ ]
+PASS: word-source f for user-defined word
+Stack: [ ]
+=== word-source returns f for prelude word ===
+Stack: [ ]
+PASS: word-source f for prelude word
+Stack: [ ]
+=== word-source returns f for native word ===
+Stack: [ ]
+PASS: word-source f for native word
+Stack: [ ]
+=== word-source returns f for nonexistent word ===
+Stack: [ ]
+PASS: word-source f for nonexistent word
+Stack: [ ]
+=== word-source via symbol ===
+Stack: [ ]
+PASS: word-source returns module via symbol
+Stack: [ ]
+=== word-source type error on non-string/symbol ===
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]

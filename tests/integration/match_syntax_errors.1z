@@ -1,0 +1,31 @@
+\ Test parse-time error detection for match{
+
+use "testing" ;
+
+color: enum{ red green blue } ;
+
+"match{ unknown variant" test-section
+
+\ Typo in variant name caught at parse time
+[ eval-string "color:red match{ color:redd: [ 1 ] color:green: [ 2 ] color:blue: [ 3 ] }" ]
+[ "not a known enum variant" assert-error ] recover
+
+"match{ non-exhaustive" test-section
+
+\ Missing variant caught at parse time
+[ eval-string "color:red match{ color:red: [ 1 ] color:green: [ 2 ] }" ]
+[ "non-exhaustive" assert-error ] recover
+
+"match{ wrong enum variant" test-section
+
+suit: enum{ hearts diamonds clubs spades } ;
+
+\ Variant from different enum caught at parse time
+[ eval-string "color:red match{ color:red: [ 1 ] color:green: [ 2 ] suit:hearts: [ 3 ] }" ]
+[ "not a variant" assert-error ] recover
+
+"match{ duplicate branch" test-section
+
+\ Duplicate caught at parse time
+[ eval-string "color:red match{ color:red: [ 1 ] color:green: [ 2 ] color:red: [ 3 ] color:blue: [ 4 ] }" ]
+[ "duplicate" assert-error ] recover

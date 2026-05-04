@@ -20,8 +20,11 @@ pub const primitives = [_]Primitive{};
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = ">word", .func = nativeToWord },
     .{ .name = "all-words", .func = nativeAllWords },
+    .{ .name = "defined?", .func = nativeDefined },
+    .{ .name = "locally-defined?", .func = nativeLocallyDefined },
     .{ .name = "scope-frames", .func = nativeScopeFrames },
     .{ .name = "type-descriptor", .func = nativeTypeDescriptor },
+    .{ .name = "word-source", .func = nativeWordSource },
 };
 
 fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: WordDefinition) !Value {
@@ -164,6 +167,63 @@ fn nativeTypeDescriptor(ctx: *Context) anyerror!void {
         return error.NameError;
     };
     try ctx.stack.push(.{ .mutable_map = desc });
+}
+
+/// locally-defined? ( name -- bool ) - Check if a word is defined in the import frame.
+fn nativeLocallyDefined(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const name = switch (val) {
+        .symbol => |s| s,
+        .string => |s| s,
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol or string", val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const idx = ctx.import_frame_index orelse {
+        try ctx.stack.push(.{ .boolean = false });
+        return;
+    };
+
+    const found = ctx.local_frames.items[idx].get(name) != null;
+    try ctx.stack.push(.{ .boolean = found });
+}
+
+/// defined? ( name -- bool ) - Check if a word is visible in any scope.
+fn nativeDefined(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const name = switch (val) {
+        .symbol => |s| s,
+        .string => |s| s,
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol or string", val);
+            return error.TypeMismatch;
+        },
+    };
+
+    try ctx.stack.push(.{ .boolean = ctx.lookupWord(name) != null });
+}
+
+/// word-source ( name -- module/f ) - Return the source module for a word, or f.
+fn nativeWordSource(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    const name = switch (val) {
+        .symbol => |s| s,
+        .string => |s| s,
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol or string", val);
+            return error.TypeMismatch;
+        },
+    };
+
+    if (ctx.lookupWord(name)) |word| {
+        if (word.source_module) |mod| {
+            try ctx.stack.push(.{ .module = @constCast(mod) });
+            return;
+        }
+    }
+    try ctx.stack.push(.{ .boolean = false });
 }
 
 /// all-words ( -- array ) - Return an array of raw word-info arrays for every visible word.

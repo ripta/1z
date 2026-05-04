@@ -1,0 +1,21 @@
+use "testing" ;
+
+\ Basic arithmetic
+"1 2 +" eval-string
+3 "eval-string: basic arithmetic" assert=
+
+\ Definitions persist in caller scope
+"foo: [ 42 ] ;" eval-string
+foo 42 "eval-string: definitions persist" assert=
+
+\ Multi-line string with multiple statements
+"bar: [ 10 ] ;
+baz: [ 20 ] ;" eval-string
+bar baz + 30 "eval-string: multi-line definitions" assert=
+
+\ Incomplete input throws an error
+[ "[ 1 2" eval-string ] "error" assert-error
+
+\ Parse-time words work inside eval-string
+"point: struct{ x y } ;" eval-string
+1 2 make-point point? "eval-string: parse-time struct" assert-true

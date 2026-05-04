@@ -189,19 +189,19 @@ color:red {
   color:red:   [ "R" ]
   color:green: [ "G" ]
   color:blue:  [ "B" ]
-} match "R" "match selects correct flat variant" assert=
+} unchecked-match "R" "match selects correct flat variant" assert=
 
 color:green {
   color:red:   [ "R" ]
   color:green: [ "G" ]
   color:blue:  [ "B" ]
-} match "G" "match selects green" assert=
+} unchecked-match "G" "match selects green" assert=
 
 color:blue {
   color:red:   [ "R" ]
   color:green: [ "G" ]
   color:blue:  [ "B" ]
-} match "B" "match selects blue" assert=
+} unchecked-match "B" "match selects blue" assert=
 
 "match data-carrying enum" test-section
 
@@ -209,13 +209,13 @@ color:blue {
 42 >shape:circle {
   shape:circle: [ 2 * ]
   shape:point: [ 0 ]
-} match 84 "match unwraps data variant" assert=
+} unchecked-match 84 "match unwraps data variant" assert=
 
 \ Flat variant in mixed enum
 shape:point {
   shape:circle: [ 2 * ]
   shape:point: [ 99 ]
-} match 99 "match flat variant in mixed enum" assert=
+} unchecked-match 99 "match flat variant in mixed enum" assert=
 
 "match multi-field data variant" test-section
 
@@ -224,19 +224,19 @@ shape:point {
   geom:rect: [ + ]
   geom:tri:  [ + + ]
   geom:dot:  [ 0 ]
-} match 30 "match unwraps multi-field variant" assert=
+} unchecked-match 30 "match unwraps multi-field variant" assert=
 
 3 4 5 make-geom:tri {
   geom:rect: [ + ]
   geom:tri:  [ + + ]
   geom:dot:  [ 0 ]
-} match 12 "match unwraps three-field variant" assert=
+} unchecked-match 12 "match unwraps three-field variant" assert=
 
 geom:dot {
   geom:rect: [ + ]
   geom:tri:  [ + + ]
   geom:dot:  [ 0 ]
-} match 0 "match flat variant in multi-field enum" assert=
+} unchecked-match 0 "match flat variant in multi-field enum" assert=
 
 "match exhaustiveness errors" test-section
 
@@ -244,7 +244,7 @@ geom:dot {
 [ color:red {
     color:red: [ "R" ]
     color:green: [ "G" ]
-  } match
+  } unchecked-match
 ] [ "missing match branch" assert-error ] recover
 
 \ Duplicate branch throws error
@@ -253,13 +253,13 @@ geom:dot {
     color:green: [ "G" ]
     color:red:   [ "R2" ]
     color:blue:  [ "B" ]
-  } match
+  } unchecked-match
 ] [ "duplicate match branch" assert-error ] recover
 
 \ Non-enum value throws error
 [ 42 {
     color:red: [ "R" ]
-  } match
+  } unchecked-match
 ] [ "match requires an enum" assert-error ] recover
 
 \ Wrong variant name throws error
@@ -267,7 +267,7 @@ geom:dot {
     color:red:   [ "R" ]
     color:green: [ "G" ]
     suit:hearts: [ "H" ]
-  } match
+  } unchecked-match
 ] [ "not a variant" assert-error ] recover
 
 "enum-level dispatch fallback" test-section

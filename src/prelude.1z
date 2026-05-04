@@ -52,6 +52,12 @@ enum{: parse-time [
   define: [ define-enum ] @set!
 ] ;
 
+\\ Parse-time validated exhaustive match on enum variants.
+match{: parse-time [
+  "}" parse-values-until validate-match-block
+  unchecked-match: emit-call
+] ;
+
 \ Standard sum types
 \\ Optional value: either `some` wrapping a value, or `none`.
 option: enum{ some struct{ value } none } ;
@@ -208,9 +214,9 @@ generic?: ( name -- ? ) [ word-markers [ generic = ] #any ] ;
 \\ Create an n-byte zeroed buffer.
 bytes-alloc: ( n -- byte-array ) [ native.bytes-alloc ] ;
 \\ Resize byte array in place, truncating or zero-filling as needed.
-bytes-resize!: ( byte-array n -- byte-array ) [ over #len over < [ 0x00 native.grow! ] [ native.shrink! ] if ] ;
+bytes-resize!: ( byte-array n -- byte-array ) [ over #len over < [ 0x00 native.#grow! ] [ native.#shrink! ] if ] ;
 \\ Resize a mutable sequence in place with an explicit fill value for growth.
-resize!: ( seq n fill -- seq ) [ -rot> over #len over < [ [ swap ] dip swap native.grow! ] [ [ swap drop ] dip native.shrink! ] if ] ;
+#resize!: ( seq n fill -- seq ) [ -rot> over #len over < [ [ swap ] dip swap native.#grow! ] [ [ swap drop ] dip native.#shrink! ] if ] ;
 
 \ Short-circuiting sequence predicates
 \\ Test whether any element satisfies the predicate. Short-circuits.
@@ -364,15 +370,70 @@ read-line: ( -- str/f ) [ input-stream get stream-read-line ] ;
 \                      use "./file.1z" ;
 \                      use "path/to/file.1z" ;
 \   selective words:   use { word1: word2: } "file.1z" ;
+\   allow shadowing:   use "file.1z" shadow-ok ;
+
+EImportConflict: [ import-conflict: ] ;
+
+\\ Check that none of the given names shadow words in the current import frame.
+\\ Throws an `import-conflict` error if any name is already locally defined.
+assert-no-shadow: ( names -- ) [
+  { } swap
+  [ dup native.locally-defined? [ 1array #append ] [ drop ] if ] #each
+  dup #empty?
+  [ drop ]
+  [
+    "" swap
+    [
+      >string
+      dup native.word-source dup
+      [ inspect swap " (from " #append swap #append ")" #append ]
+      [ drop ]
+      if
+      swap dup #empty? [ swap #append ] [ ", " #append swap #append ] if
+    ] #each
+    "use would shadow existing words: " swap #append
+    f swap EImportConflict make-error throw
+  ]
+  if
+] ;
+
+\\ Validate the tail tokens of a `use` invocation.
+\\ Each value must be the well-known `shadow-ok` marker; throws on any unrecognized value.
+\\ Returns `t` if `shadow-ok` was present, `f` if no tail tokens.
+(validate-use-tail): ( values -- ? ) [
+  dup #empty?
+  [ drop f ]
+  [
+    [
+      dup shadow-ok = not
+      [ inspect "unrecognized token in use: " swap #append f swap EInvalidArgument make-error throw ]
+      when
+      drop
+    ] #each
+    t
+  ]
+  if
+] ;
+
 \\ Load and import a module by name or file path.
 \\ Optionally restrict imported words with a set of symbols.
+\\ Insert `shadow-ok` before `;` to suppress the shadow check.
 use: parse-time [
   parse-literal
   dup string?
-  [ load import ]
-  [ parse-literal load swap import ]
+  [
+    load
+    ";" parse-values-until (validate-use-tail) not
+    [ dup @keys assert-no-shadow ] when
+    import
+  ]
+  [
+    parse-literal load swap
+    ";" parse-values-until (validate-use-tail) not
+    [ dup assert-no-shadow ] when
+    import
+  ]
   if
-  ";" parse-until drop
 ] ;
 
 \ Loops

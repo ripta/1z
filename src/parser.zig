@@ -235,6 +235,12 @@ fn executeParseTimeWord(
             instructions.append(allocator, doc_instr) catch return ParseError.OutOfMemory;
         }
     }
+
+    // 6. Emit deferred call_word instructions requested via `emit-call`
+    for (c.parse_time_deferred_calls.items) |call_name| {
+        instructions.append(allocator, .{ .op = .{ .call_word = call_name }, .line = line }) catch return ParseError.OutOfMemory;
+    }
+    c.parse_time_deferred_calls.clearRetainingCapacity();
 }
 
 /// Strip the `\\ ` prefix from a doc-comment token's text.

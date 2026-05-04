@@ -1,0 +1,53 @@
+=== Full import of two modules with overlapping word names errors ===
+Stack: [ ]
+Stack: [ [ "strict_use_mod_b.1z" load @keys assert-no-shadow ] ]
+PASS: conflicting full import throws import-conflict
+Stack: [ ]
+=== shadow-ok suppresses import conflict on full import ===
+Stack: [ ]
+PASS: shadow-ok full import uses later module
+Stack: [ ]
+=== Selective import of conflicting word errors ===
+Stack: [ ]
+Stack: [ [ { greet: } assert-no-shadow ] ]
+PASS: conflicting selective import throws import-conflict
+Stack: [ ]
+=== shadow-ok suppresses selective import conflict ===
+Stack: [ ]
+PASS: shadow-ok selective import works
+Stack: [ ]
+=== Importing a non-conflicting subset does not error ===
+Stack: [ ]
+PASS: non-conflicting selective import works
+Stack: [ ]
+=== Library-internal chain imports work without cascading errors ===
+Stack: [ ]
+PASS: chain import via strings works
+Stack: [ ]
+=== Importing a word with the same name as a prelude word succeeds ===
+Stack: [ ]
+PASS: prelude word shadowing allowed
+Stack: [ ]
+=== (validate-use-tail) accepts shadow-ok marker ===
+Stack: [ ]
+PASS: (validate-use-tail) accepts shadow-ok
+Stack: [ ]
+=== (validate-use-tail) returns f for empty array ===
+Stack: [ ]
+PASS: (validate-use-tail) returns f for empty
+Stack: [ ]
+=== (validate-use-tail) rejects a string token ===
+Stack: [ ]
+Stack: [ [ { "blah" } (validate-use-tail) ] ]
+PASS: (validate-use-tail) rejects string
+Stack: [ ]
+=== (validate-use-tail) rejects a number literal ===
+Stack: [ ]
+Stack: [ [ { 42 } (validate-use-tail) ] ]
+PASS: (validate-use-tail) rejects number
+Stack: [ ]
+=== (validate-use-tail) rejects a different marker ===
+Stack: [ ]
+Stack: [ [ { <marker:const> } (validate-use-tail) ] ]
+PASS: (validate-use-tail) rejects wrong marker
+Stack: [ ]

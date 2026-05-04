@@ -27,6 +27,6 @@ m2 { >meters: unmake-meters: } import
 
 "Full import works for virtual words" test-section
 
-use "module_virtual_lib.1z" ;
+use "module_virtual_lib.1z" shadow-ok ;
 99 >meters meters? t "full import predicate" assert=
 99 >meters unmake-meters 99 "full import unwrap" assert=

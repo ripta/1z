@@ -1,0 +1,22 @@
+Stack: [ ]
+=== match{ unknown variant ===
+Stack: [ ]
+Stack: [ [ eval-string "color:red match{ color:redd: [ 1 ] color:green: [ 2 ] color:blue: [ 3 ] }" ] ]
+PASS: not a known enum variant
+Stack: [ ]
+=== match{ non-exhaustive ===
+Stack: [ ]
+Stack: [ [ eval-string "color:red match{ color:red: [ 1 ] color:green: [ 2 ] }" ] ]
+PASS: non-exhaustive
+Stack: [ ]
+=== match{ wrong enum variant ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ [ eval-string "color:red match{ color:red: [ 1 ] color:green: [ 2 ] suit:hearts: [ 3 ] }" ] ]
+PASS: not a variant
+Stack: [ ]
+=== match{ duplicate branch ===
+Stack: [ ]
+Stack: [ [ eval-string "color:red match{ color:red: [ 1 ] color:green: [ 2 ] color:red: [ 3 ] color:blue: [ 4 ] }" ] ]
+PASS: duplicate
+Stack: [ ]

@@ -1,0 +1,3 @@
+\ Test helper module A - exports greet and add
+greet: [ "hello from A" ] ;
+add: ( a b -- c ) [ + ] ;

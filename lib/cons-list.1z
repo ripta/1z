@@ -18,14 +18,14 @@ head: ( cons-list -- value ) [
   {
     cons-list:cons: [ drop ]
     cons-list:nil: [ f "head of empty list" EIndexOutOfBounds make-error throw ]
-  } match
+  } unchecked-match
 ] ;
 
 tail: ( cons-list -- cons-list ) [
   {
     cons-list:cons: [ swap drop ]
     cons-list:nil: [ f "tail of empty list" EIndexOutOfBounds make-error throw ]
-  } match
+  } unchecked-match
 ] ;
 
 \ Convert cons-list to array
@@ -33,7 +33,7 @@ cons-list>array: ( cons-list -- array ) [
   {
     cons-list:cons: [ cons-list>array #prefix ]
     cons-list:nil: [ { } ]
-  } match
+  } unchecked-match
 ] ;
 
 \ Convert array to cons-list (preserving element order)
@@ -58,7 +58,7 @@ list-reverse: ( cons-list -- cons-list ) [
     {
       cons-list:cons: [ [ swap cons ] dip list-reverse-acc ]
       cons-list:nil: [ ]
-    } match
+    } unchecked-match
   ] ;
 
   nil swap list-reverse-acc
@@ -76,7 +76,7 @@ list-append: ( cons-list-a cons-list-b -- cons-list' ) [
   swap {
     cons-list:cons: [ <rot- list-append cons ]
     cons-list:nil: [ ]
-  } match
+  } unchecked-match
 ] ;
 
 \ Call quot for each element, head to tail.
@@ -86,7 +86,7 @@ list-each: ( cons-list quot -- ) [
       [ swap dup [ call ] dip ] dip swap list-each
     ]
     cons-list:nil: [ drop ]
-  } match
+  } unchecked-match
 ] ;
 
 \ Fold from left, head to tail.
@@ -97,7 +97,7 @@ list-foldl: ( cons-list acc quot: ( acc elem -- acc' ) -- acc' ) [
       [ swap dup [ call ] dip ] dip -rot> list-foldl
     ]
     cons-list:nil: [ drop ]
-  } match
+  } unchecked-match
 ] ;
 list-fold: ( cons-list acc quot: ( acc elem -- acc' ) -- acc' ) [ list-foldl ] ;
 
@@ -110,7 +110,7 @@ list-foldr: ( cons-list init quot: ( elem acc -- acc' ) -- result ) [
       <rot- call swap drop
     ]
     cons-list:nil: [ drop ]
-  } match
+  } unchecked-match
 ] ;
 
 \ Map over elements, producing a new list.
@@ -122,7 +122,7 @@ list-map: ( cons-list quot -- cons-list' ) [
       swap [ swap list-map ] dip swap cons
     ]
     cons-list:nil: [ drop nil ]
-  } match
+  } unchecked-match
 ] ;
 
 \ Keep elements where quot returns true.
@@ -134,7 +134,7 @@ list-filter: ( cons-list quot -- cons-list' ) [
       [ swap drop swap list-filter ] if
     ]
     cons-list:nil: [ drop nil ]
-  } match
+  } unchecked-match
 ] ;
 
 \ Iterator protocol integration

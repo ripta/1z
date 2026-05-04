@@ -16,7 +16,7 @@ mb: "generic_field_cross_mod_b.1z" load ;
 "imported access with shared fields" test-section
 
 use "generic_field_cross_mod_a.1z" ;
-use "generic_field_cross_mod_b.1z" ;
+use "generic_field_cross_mod_b.1z" shadow-ok ;
 
 10 20 make-coord y>> 20 "imported y>> dispatches on coord" assert=
 30 40 make-size y>> 40 "imported y>> dispatches on size" assert=

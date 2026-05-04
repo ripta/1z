@@ -1,0 +1,56 @@
+\ Integration tests for #nth! (indexed element mutation)
+
+use "testing" ;
+
+"Vector #nth! basic" test-section
+V{ 10 20 30 } 0 99 #nth! 0 #nth 99 "set first element" assert=
+V{ 10 20 30 } 1 99 #nth! 1 #nth 99 "set middle element" assert=
+V{ 10 20 30 } 2 99 #nth! 2 #nth 99 "set last element" assert=
+
+"Vector #nth! preserves other elements" test-section
+V{ 10 20 30 } 1 99 #nth! 0 #nth 10 "element before unchanged" assert=
+V{ 10 20 30 } 1 99 #nth! 2 #nth 30 "element after unchanged" assert=
+V{ 10 20 30 } 1 99 #nth! #len 3 "length unchanged" assert=
+
+"Vector #nth! any value type" test-section
+V{ 1 2 3 } 0 "hello" #nth! 0 #nth "hello" "set string value" assert=
+V{ 1 2 3 } 0 t #nth! 0 #nth t "set boolean value" assert=
+V{ 1 2 3 } 0 sym: #nth! 0 #nth sym: "set symbol value" assert=
+
+"Vector #nth! mutation is in-place" test-section
+V{ 10 20 30 } dup 1 99 #nth! drop 1 #nth 99 "aliased vector sees mutation" assert=
+
+"Byte-array #nth! basic" test-section
+B{ 10 20 30 } 0 99 #nth! 0 #nth 99 "set first byte" assert=
+B{ 10 20 30 } 1 99 #nth! 1 #nth 99 "set middle byte" assert=
+B{ 10 20 30 } 2 99 #nth! 2 #nth 99 "set last byte" assert=
+
+"Byte-array #nth! preserves other elements" test-section
+B{ 10 20 30 } 1 99 #nth! 0 #nth 10 "byte before unchanged" assert=
+B{ 10 20 30 } 1 99 #nth! 2 #nth 30 "byte after unchanged" assert=
+B{ 10 20 30 } 1 99 #nth! #len 3 "length unchanged" assert=
+
+"Byte-array #nth! boundary values" test-section
+B{ 10 } 0 0 #nth! 0 #nth 0 "set byte to 0" assert=
+B{ 10 } 0 255 #nth! 0 #nth 255 "set byte to 255" assert=
+
+"Byte-array #nth! mutation is in-place" test-section
+B{ 10 20 30 } dup 1 99 #nth! drop 1 #nth 99 "aliased byte-array sees mutation" assert=
+
+"#nth! error: out of bounds" test-section
+[ V{ 1 2 3 } 3 99 #nth! ] "IndexOutOfBounds" assert-error
+[ V{ 1 2 3 } 10 99 #nth! ] "IndexOutOfBounds" assert-error
+[ B{ 1 2 3 } 3 99 #nth! ] "IndexOutOfBounds" assert-error
+
+"#nth! error: negative index" test-section
+[ V{ 1 2 3 } -1 99 #nth! ] "IndexOutOfBounds" assert-error
+[ B{ 1 2 3 } -1 99 #nth! ] "IndexOutOfBounds" assert-error
+
+"#nth! error: immutable types" test-section
+[ { 1 2 3 } 0 99 #nth! ] "TypeMismatch" assert-error
+[ "abc" 0 "x" #nth! ] "TypeMismatch" assert-error
+
+"#nth! error: byte-array value out of range" test-section
+[ B{ 1 } 0 256 #nth! ] "FixnumOverflow" assert-error
+[ B{ 1 } 0 -1 #nth! ] "FixnumOverflow" assert-error
+[ B{ 1 } 0 "x" #nth! ] "TypeMismatch" assert-error

@@ -1,0 +1,2 @@
+\ Test helper module C - exports unique word sub
+sub: ( a b -- c ) [ - ] ;
