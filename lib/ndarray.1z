@@ -628,3 +628,278 @@ element-wise/: ( ndarray ndarray -- ndarray ) [
 -: method{ ratio ndarray } [ swap [ swap - ] scalar-op ] ;
 *: method{ ratio ndarray } [ swap [ * ] scalar-op ] ;
 /: method{ ratio ndarray } [ swap [ swap / ] scalar-op ] ;
+
+\ Parse-time literal syntax: nd{ 1 2 3 ; 4 5 6 }
+nd{: parse-time [
+  (read-nd-row): ( accum -- array delimiter ) [
+    peek-token
+    dup ";" = [
+      drop parse-token drop ";"
+    ] [
+      dup "}" = [
+        drop parse-token drop "}"
+      ] [
+        drop parse-literal 1array #append (read-nd-row)
+      ] if
+    ] if
+  ] ;
+
+  (read-nd): ( rows -- rows' ) [
+    { } (read-nd-row)
+    \ stack: rows row delimiter
+    ";" =
+    [ 1array #append (read-nd) ]
+    [ 1array #append ]
+    if
+  ] ;
+
+  { } (read-nd)
+  \ stack: rows-array
+
+  dup #len 1 = [
+    \ 1D: single row, shape is { n }
+    0 #nth
+    dup { } swap #len #push
+    ndarray
+  ] [
+    \ 2D: validate all rows have same length, flatten
+    dup 0 #nth #len
+    \ stack: rows ncols
+    over >iterator [
+      #len over =
+      not [ f "nd{: all rows must have the same length" EInvalidArgument make-error throw ] when
+    ] #each
+    \ stack: rows ncols
+    { } 2 pick-n #len #push over #push nip
+    \ stack: rows shape
+    swap
+    \ stack: shape rows
+    { } swap >iterator [ #append ] #each
+    \ stack: shape flat-data
+    swap ndarray
+  ] if
+] ;
+
+\ Selection operations
+
+mask: ( ndarray bool-ndarray -- ndarray ) [
+  2dup assert-shapes=
+  over element-type -rot>
+  \ stack: elem-type ndarray bool-ndarray
+  [ ] make-vector
+  2 pick-n #len 0
+  \ stack: elem-type(5) ndarray(4) bool-ndarray(3) result-vec(2) total(1) i(0)
+  [ 2dup > ] [
+    dup 4 pick-n swap logical-nth
+    t = [
+      dup 5 pick-n swap logical-nth
+      3 pick-n swap #push! drop
+    ] when
+    ++
+  ] while
+  drop drop nip nip
+  \ stack: elem-type(1) result-vec(0)
+  >iterator #collect
+  \ stack: elem-type(1) result-arr(0)
+  dup #len 0 = [
+    drop { } { 0 } { 1 } <rot- make-ndarray
+  ] [
+    { } over #len #push ndarray nip
+  ] if
+] ;
+
+gather: ( ndarray indices -- ndarray ) [
+  over element-type -rot>
+  \ stack: elem-type(2) ndarray(1) indices(0)
+  [ ] make-vector
+  over >iterator [
+    dup 0 < [ f "index out of bounds" EIndexOutOfBounds make-error throw ] when
+    dup 4 pick-n #len >= [ f "index out of bounds" EIndexOutOfBounds make-error throw ] when
+    3 pick-n swap logical-nth
+    over swap #push! drop
+  ] #each
+  nip nip
+  \ stack: elem-type(1) result-vec(0)
+  >iterator #collect
+  \ stack: elem-type(1) result-arr(0)
+  dup #len 0 = [
+    drop { } { 0 } { 1 } <rot- make-ndarray
+  ] [
+    { } over #len #push ndarray nip
+  ] if
+] ;
+
+\ Iterator support: row-major element traversal via callback iterator.
+\ Captures ndarray, total, and a mutable index counter in a closure.
+(nd-iter-step): ( ndarray total state -- option ) [
+  dup 0 #nth 2 pick-n < [
+    dup 0 #nth 3 pick-n swap logical-nth
+    \ stack: ndarray(3) total(2) state(1) elem(0)
+    over dup 0 #nth ++ swap 0 <rot- #nth! drop
+    nip nip nip >option:some
+  ] [
+    drop drop drop option:none
+  ] if
+] ;
+
+>iterator: method{ ndarray } [
+  dup #len [ ] make-vector 0 #push!
+  \ stack: ndarray(2) total(1) state(0)
+  [ (nd-iter-step) ] curry curry curry
+  >iterator
+] ;
+
+\ Display support
+
+\ Join array of strings with separator
+(join): ( array sep -- string ) [
+  swap dup #len 0 = [ 2drop "" ] [
+    dup #len 1 = [ 0 #nth nip ] [
+      dup 0 #nth -rot>
+      \ stack: result sep array
+      1 #drop >iterator [
+        \ stack: result(2) sep(1) elem(0)
+        over swap #append
+        \ stack: result(2) sep(1) sep++elem(0)
+        <rot- swap #append swap
+        \ stack: new-result(1) sep(0)
+      ] #each
+      drop
+    ] if
+  ] if
+] ;
+
+\ Left-pad a string to width with spaces
+(pad-left): ( str width -- str ) [
+  over #len - dup 0 > [
+    "" swap 0
+    [ 2dup > ] [ <rot- " " #append -rot> ++ ] while
+    drop drop swap #append
+  ] [ drop ] if
+] ;
+
+\ Inspect each element and collect strings
+(inspect-elements): ( ndarray -- string-array ) [
+  dup #len swap
+  [ ] make-vector 0
+  \ stack: total(3) ndarray(2) result-vec(1) i(0)
+  [ dup 4 pick-n < ] [
+    dup 3 pick-n swap logical-nth inspect
+    2 pick-n swap #push! drop
+    ++
+  ] while
+  drop nip nip
+  >iterator #collect
+] ;
+
+\ Format shape as "2x3" or "2x3x4"
+(format-shape): ( shape -- string ) [
+  [ inspect ] #map #collect "x" (join)
+] ;
+
+\ Return the larger of two values.
+(max2): ( a b -- max ) [ 2dup < [ nip ] [ drop ] if ] ;
+
+\ Find the max string length across an array of strings.
+(max-str-len): ( str-arr -- max-width ) [
+  0 [ #len (max2) ] #reduce
+] ;
+
+\ Format a flat string-array as a 2D grid with uniform column padding.
+(format-2d-grid): ( str-arr ncols -- string ) [
+  over (max-str-len)
+  \ stack: str-arr(2) ncols(1) max-width(0)
+  2 pick-n #len 0 ""
+  \ stack: str-arr(5) ncols(4) max-width(3) total(2) i(1) output(0)
+  [ over 3 pick-n < ] [
+    over 0 > [
+      over 5 pick-n % 0 = [
+        "\n" #append
+      ] [
+        " " #append
+      ] if
+    ] when
+    over 6 pick-n swap #nth 4 pick-n (pad-left) #append
+    swap ++ swap
+  ] while
+  nip nip nip nip nip
+] ;
+
+inspect: method{ ndarray } [
+  dup rank 1 = [
+    \ 1D: ndarray{float}(3): 1.0 2.0 3.0
+    "ndarray{" over element-type >string #append "}(" #append
+    over #len inspect #append "): " #append
+    swap (inspect-elements) " " (join) #append
+  ] [
+    dup rank 2 = [
+      \ 2D: aligned grid with header
+      dup shape (format-shape) " ndarray{" #append
+      over element-type >string #append "}:\n" #append
+      swap dup (inspect-elements) swap shape 1 #nth
+      (format-2d-grid) #append
+    ] [
+      \ 3D+: labeled slices over leading dimensions
+      dup shape (format-shape) " ndarray{" #append
+      over element-type >string #append "}:" #append
+      \ stack: ndarray(1) header(0)
+      swap dup (inspect-elements) swap shape
+      \ stack: header(3) str-arr(2) shape(1)
+      dup dup #len 2 - #nth over dup #len -- #nth *
+      \ stack: header(3) str-arr(2) shape(1) slice-size(0)
+      over dup #len 2 - 0 swap #slice shape-product
+      \ stack: header(4) str-arr(3) shape(2) slice-size(1) num-slices(0)
+      0 ""
+      \ stack: header(6) str-arr(5) shape(4) slice-size(3) num-slices(2) s(1) output(0)
+      [ over 3 pick-n < ] [
+        \ Build slice label: decode s into leading-dim coordinates
+        over 5 pick-n dup #len 2 - 0 swap #slice decode-coords
+        "\n[:, :, " swap [ inspect ] #map #collect ", " (join) #append "] =\n" #append
+        #append
+        \ stack: ...(6) num-slices(2) s(1) output-with-label(0)
+
+        \ Extract slice elements as string sub-array
+        over 4 pick-n * dup 5 pick-n +
+        7 pick-n -rot> #slice
+        \ stack: ...(6) num-slices(2) s(1) output(0) slice-strs
+        5 pick-n dup #len -- #nth (format-2d-grid)
+        #append
+        \ stack: ...(7) s(1) output(0)
+        swap ++ swap
+      ] while
+      nip nip nip nip nip
+      #append
+    ] if
+  ] if
+] ;
+
+>string: method{ ndarray } [
+  dup rank 1 = [
+    "nd{ " swap (inspect-elements) " " (join) #append " }" #append
+  ] [
+    dup rank 2 = [
+      dup (inspect-elements) swap shape 1 #nth
+      \ stack: str-arr(1) ncols(0)
+      over #len swap "" 0 swap
+      \ stack: str-arr(4) total(3) ncols(2) i(1) output(0)
+      [ over 4 pick-n < ] [
+        over 0 > [
+          over 3 pick-n % 0 = [
+            " ; " #append
+          ] [
+            " " #append
+          ] if
+        ] when
+        over 5 pick-n swap #nth #append
+        swap ++ swap
+      ] while
+      nip nip nip nip
+      "nd{ " swap #append " }" #append
+    ] [
+      \ 3D+: not roundtrip-compatible
+      "ndarray(shape="
+      over shape inspect #append " data=" #append
+      swap data>> >iterator #collect inspect #append ")" #append
+    ] if
+  ] if
+] ;
