@@ -34,7 +34,7 @@ Stack: [ ]
 Stack: [ ]
 PASS: type-of error
 Stack: [ ]
-PASS: type-of returns symbol
+PASS: type-of returns type value
 Stack: [ ]
 === type predicates - true cases ===
 Stack: [ ]

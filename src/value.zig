@@ -141,6 +141,8 @@ pub const VirtualType = struct {
     anon_struct: ?*const StructType = null,
     // Parent enum name for enum variants, e.g., "color" for "color:red"
     enum_name: ?[]const u8 = null,
+    // First-class type value for this virtual type, set during type registration
+    type_val: ?*TypeValue = null,
 };
 
 /// StructType represents the definition of a struct type.
@@ -148,6 +150,8 @@ pub const VirtualType = struct {
 pub const StructType = struct {
     name: []const u8, // Type name (e.g., "point")
     fields: []const []const u8, // Field names in order (e.g., ["x", "y"])
+    // First-class type value for this struct type, set during type registration
+    type_val: ?*TypeValue = null,
 };
 
 /// FormatSpec controls padding/alignment when rendering a template placeholder.
@@ -175,7 +179,7 @@ pub const TemplateSegment = union(enum) {
 /// Created when type names are used as words.
 pub const TypeValue = struct {
     name: []const u8,
-    descriptor: ?*MutableMap,
+    descriptor: ?*HashTable,
 };
 
 /// StructInstance represents an instance of a struct type.

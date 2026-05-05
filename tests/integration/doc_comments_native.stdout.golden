@@ -30,8 +30,8 @@ Create a dynamic parameter with a name and default quotation.
 make-parameter ( name quot -- param ) \native
 
 Stack: [ ]
-Return type of value as a symbol.
-type-of ( val -- symbol ) \native
+Return the type of a value as a first-class type value.
+type-of ( val -- type ) \native
 
 Stack: [ ]
 Get value by key from an associative type.

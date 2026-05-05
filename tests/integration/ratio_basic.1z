@@ -3,7 +3,7 @@ use "testing" ;
 
 "ratio: type" test-section
 5 3 normalize-ratio ratio? "5/3 is ratio" assert-true
-5 3 normalize-ratio type-of ratio: "type-of is ratio:" assert=
+5 3 normalize-ratio type-name "ratio" "type-of is ratio:" assert=
 
 "ratio: normalization" test-section
 10 6 normalize-ratio >string "5/3" "10/6 normalizes to 5/3" assert=

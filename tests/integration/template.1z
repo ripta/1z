@@ -5,10 +5,10 @@ use "testing" ;
 "template parsing" test-section
 
 \ type-of returns template:
-"test {x}" >template type-of template: "type-of is template:" assert=
-"{}" >template type-of template: "identity template type" assert=
-"" >template type-of template: "empty template type" assert=
-"literal" >template type-of template: "literal-only template type" assert=
+"test {x}" >template type-name "template" "type-of is template:" assert=
+"{}" >template type-name "template" "identity template type" assert=
+"" >template type-name "template" "empty template type" assert=
+"literal" >template type-name "template" "literal-only template type" assert=
 
 "template parse errors" test-section
 

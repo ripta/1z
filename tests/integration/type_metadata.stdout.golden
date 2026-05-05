@@ -1,0 +1,76 @@
+=== numeric property: positive cases ===
+Stack: [ ]
+PASS: fixnum is numeric
+Stack: [ ]
+PASS: bignum is numeric
+Stack: [ ]
+PASS: float is numeric
+Stack: [ ]
+=== numeric property: negative cases ===
+Stack: [ ]
+PASS: string is not numeric
+Stack: [ ]
+PASS: boolean is not numeric
+Stack: [ ]
+PASS: array is not numeric
+Stack: [ ]
+=== exact property: positive cases ===
+Stack: [ ]
+PASS: fixnum is exact
+Stack: [ ]
+PASS: bignum is exact
+Stack: [ ]
+=== exact property: negative cases ===
+Stack: [ ]
+PASS: float is not exact
+Stack: [ ]
+PASS: string is not exact
+Stack: [ ]
+=== integer property: positive cases ===
+Stack: [ ]
+PASS: fixnum is integer
+Stack: [ ]
+PASS: bignum is integer
+Stack: [ ]
+=== integer property: negative cases ===
+Stack: [ ]
+PASS: float is not integer
+Stack: [ ]
+PASS: string is not integer
+Stack: [ ]
+=== mutable property: positive cases ===
+Stack: [ ]
+PASS: vector is mutable
+Stack: [ ]
+PASS: mutable-map is mutable
+Stack: [ ]
+PASS: stream is mutable
+Stack: [ ]
+=== mutable property: negative cases ===
+Stack: [ ]
+PASS: array is not mutable
+Stack: [ ]
+PASS: hash is not mutable
+Stack: [ ]
+PASS: string is not mutable
+Stack: [ ]
+=== mutable property: channel ===
+Stack: [ ]
+PASS: channel is mutable
+Stack: [ ]
+=== native.type-has-property? with metadata keys ===
+Stack: [ ]
+PASS: native: fixnum has numeric
+Stack: [ ]
+PASS: native: fixnum has exact
+Stack: [ ]
+PASS: native: fixnum has integer
+Stack: [ ]
+PASS: native: float has numeric
+Stack: [ ]
+PASS: native: float lacks exact
+Stack: [ ]
+PASS: native: vector has mutable
+Stack: [ ]
+PASS: native: array lacks mutable
+Stack: [ ]

@@ -66,15 +66,23 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
     }
     const markers_slice = try markers_list.toOwnedSlice(alloc);
 
-    // Extract inner-type from descriptor map
+    // Extract inner-type from descriptor map.
+    // Clone the map so each virtual type gets its own descriptor,
+    // since parse-time literals like M{ } are shared across invocations.
     const desc_val = try ctx.stack.pop();
-    const desc_map: *MutableMap = switch (desc_val) {
+    const src_map: *MutableMap = switch (desc_val) {
         .mutable_map => |m| m,
         else => {
             helpers.setTypeMismatchError(ctx, "mutable_map", desc_val);
             return error.TypeMismatch;
         },
     };
+    const desc_map = try alloc.create(MutableMap);
+    desc_map.* = MutableMap{};
+    var src_iter = src_map.iterator();
+    while (src_iter.next()) |entry| {
+        try desc_map.put(alloc, entry.key_ptr.*, entry.value_ptr.*);
+    }
     const inner_type_raw = desc_map.get("inner-type") orelse return error.MissingField;
     const inner_type_val = switch (inner_type_raw) {
         .array => |arr| blk: {
@@ -110,6 +118,11 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
                 .inner_type = inner_type,
             };
 
+            // Create a TypeValue for type-of lookups
+            const tv = try alloc.create(value_mod.TypeValue);
+            tv.* = .{ .name = name, .descriptor = null };
+            vtype.type_val = tv;
+
             // >NAME / make-NAME: ( value -- tagged ) - wrap
             const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{name});
             try defineWrap(ctx, wrap_name, vtype, markers_slice);
@@ -132,7 +145,9 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try generated_words.append(alloc, .{ .string = pred_name });
             const gw_slice = try generated_words.toOwnedSlice(alloc);
             try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
-            try ctx.type_descriptors.put(ctx.allocator, name, desc_map);
+            const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
+            try ctx.type_descriptors.put(ctx.allocator, name, frozen_desc);
+            vtype.type_val.?.descriptor = frozen_desc;
         },
         .mutable_map => |struct_desc| {
             const fields_val = struct_desc.get("fields") orelse return error.MissingField;
@@ -175,6 +190,11 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
                 .anon_struct = anon_struct,
             };
 
+            // Create a TypeValue for type-of lookups
+            const tv = try alloc.create(value_mod.TypeValue);
+            tv.* = .{ .name = name, .descriptor = null };
+            vtype.type_val = tv;
+
             // >NAME: ( hash -- tagged ) - hash-based wrap
             const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{name});
             try defineStructHashWrap(ctx, wrap_name, vtype, markers_slice);
@@ -206,7 +226,9 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try generated_words.append(alloc, .{ .string = pred_name });
             const gw_slice = try generated_words.toOwnedSlice(alloc);
             try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
-            try ctx.type_descriptors.put(ctx.allocator, name, desc_map);
+            const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
+            try ctx.type_descriptors.put(ctx.allocator, name, frozen_desc);
+            vtype.type_val.?.descriptor = frozen_desc;
         },
         else => {
             helpers.setErrorContext(ctx, "virtual{{ inner type must be a string or struct descriptor, got {s}", .{helpers.valueTypeName(inner_type_val)});

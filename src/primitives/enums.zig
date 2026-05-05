@@ -172,6 +172,11 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
                 .anon_struct = anon_struct,
             };
 
+            // Create a TypeValue for type-of lookups
+            const tv = try alloc.create(value_mod.TypeValue);
+            tv.* = .{ .name = full_name, .descriptor = null };
+            vtype.type_val = tv;
+
             try vtype_list.append(alloc, vtype);
 
             const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{full_name});
@@ -217,6 +222,11 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
                 .enum_name = enum_name,
             };
 
+            // Create a TypeValue for type-of lookups
+            const tv = try alloc.create(value_mod.TypeValue);
+            tv.* = .{ .name = full_name, .descriptor = null };
+            vtype.type_val = tv;
+
             try vtype_list.append(alloc, vtype);
 
             const inner = try alloc.create(Value);
@@ -260,7 +270,8 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     try generated_words.append(alloc, .{ .string = agg_pred_name });
     const gw_slice = try generated_words.toOwnedSlice(alloc);
     try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
-    try ctx.type_descriptors.put(ctx.allocator, enum_name, desc_map);
+    const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
+    try ctx.type_descriptors.put(ctx.allocator, enum_name, frozen_desc);
 
     const vtypes_slice = try vtype_list.toOwnedSlice(alloc);
     try ctx.enum_registry.put(ctx.allocator, enum_name, vtypes_slice);

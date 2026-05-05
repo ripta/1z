@@ -1,0 +1,24 @@
+\ Tests for type-descriptor accepting type values
+
+use "testing" ;
+
+"Symbol path still works" test-section
+
+"fixnum" native.type-descriptor hash? t "symbol returns hash" assert=
+"string" native.type-descriptor hash? t "string returns hash" assert=
+
+"Type value path works" test-section
+
+fixnum native.type-descriptor hash? t "type value returns hash" assert=
+string native.type-descriptor hash? t "string type value returns hash" assert=
+
+"Both paths return the same descriptor" test-section
+
+fixnum native.type-descriptor "fixnum" native.type-descriptor = t "fixnum descriptors match" assert=
+string native.type-descriptor "string" native.type-descriptor = t "string descriptors match" assert=
+boolean native.type-descriptor "boolean" native.type-descriptor = t "boolean descriptors match" assert=
+array native.type-descriptor "array" native.type-descriptor = t "array descriptors match" assert=
+
+"Type mismatch error" test-section
+
+[ 42 native.type-descriptor ] type-mismatch: "fixnum value is not a type" assert-error-type

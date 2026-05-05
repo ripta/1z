@@ -7,9 +7,9 @@ use "testing" ;
 "hello" bignum? "string is not bignum?" assert-false
 
 ">float bignum" test-section
-99999999999999999999 >float type-of float: "big >float type" assert=
+99999999999999999999 >float type-of float "big >float type" assert=
 0 99999999999999999999 >float 9.999999999999998e19 - abs 1e5 < "big >float value" assert-true
--99999999999999999999 >float type-of float: "neg big >float type" assert=
+-99999999999999999999 >float type-of float "neg big >float type" assert=
 0 -99999999999999999999 >float -9.999999999999998e19 - abs 1e5 < "neg big >float value" assert-true
 
 ">string-base fixnum" test-section

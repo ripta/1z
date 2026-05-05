@@ -5,7 +5,7 @@ use "testing" ;
 "sys-info primitive" test-section
 
 \ sys-info returns a hash
-sys-info type-of hash: "sys-info returns hash" assert=
+sys-info type-of hash "sys-info returns hash" assert=
 
 \ Has expected keys
 sys-info "os" @has? t "sys-info has os" assert=
@@ -16,12 +16,12 @@ sys-info "ptr-width" @has? t "sys-info has ptr-width" assert=
 sys-info "os-family" @has? t "sys-info has os-family" assert=
 
 \ All values are strings
-sys-info "os" @get type-of string: "os is a string" assert=
-sys-info "arch" @get type-of string: "arch is a string" assert=
-sys-info "abi" @get type-of string: "abi is a string" assert=
-sys-info "endian" @get type-of string: "endian is a string" assert=
-sys-info "ptr-width" @get type-of fixnum: "ptr-width is an integer" assert=
-sys-info "os-family" @get type-of string: "os-family is a string" assert=
+sys-info "os" @get type-of string "os is a string" assert=
+sys-info "arch" @get type-of string "arch is a string" assert=
+sys-info "abi" @get type-of string "abi is a string" assert=
+sys-info "endian" @get type-of string "endian is a string" assert=
+sys-info "ptr-width" @get type-of fixnum "ptr-width is an integer" assert=
+sys-info "os-family" @get type-of string "os-family is a string" assert=
 
 \ Has exactly 6 keys
 sys-info @keys #len 6 "sys-info has 6 keys" assert=

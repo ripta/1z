@@ -4,7 +4,7 @@ use "testing" ;
 
 test-channel-type: ( -- ) [
   [
-    <channel> type-of channel: "type-of returns channel" assert=
+    <channel> type-of channel "type-of returns channel" assert=
   ] task-scope
 ] ;
 

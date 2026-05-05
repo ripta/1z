@@ -1,0 +1,63 @@
+\ Tests for built-in type metadata properties
+
+use "testing" ;
+
+"numeric property: positive cases" test-section
+
+42 numeric: type-has-property? t "fixnum is numeric" assert=
+99999999999999999999 numeric: type-has-property? t "bignum is numeric" assert=
+3.14 numeric: type-has-property? t "float is numeric" assert=
+
+"numeric property: negative cases" test-section
+
+"hello" numeric: type-has-property? f "string is not numeric" assert=
+t numeric: type-has-property? f "boolean is not numeric" assert=
+{ 1 2 3 } numeric: type-has-property? f "array is not numeric" assert=
+
+"exact property: positive cases" test-section
+
+42 exact: type-has-property? t "fixnum is exact" assert=
+99999999999999999999 exact: type-has-property? t "bignum is exact" assert=
+
+"exact property: negative cases" test-section
+
+3.14 exact: type-has-property? f "float is not exact" assert=
+"hello" exact: type-has-property? f "string is not exact" assert=
+
+"integer property: positive cases" test-section
+
+42 integer: type-has-property? t "fixnum is integer" assert=
+99999999999999999999 integer: type-has-property? t "bignum is integer" assert=
+
+"integer property: negative cases" test-section
+
+3.14 integer: type-has-property? f "float is not integer" assert=
+"hello" integer: type-has-property? f "string is not integer" assert=
+
+"mutable property: positive cases" test-section
+
+V{ 1 2 } mutable: type-has-property? t "vector is mutable" assert=
+M{ } mutable: type-has-property? t "mutable-map is mutable" assert=
+stdout mutable: type-has-property? t "stream is mutable" assert=
+
+"mutable property: negative cases" test-section
+
+{ 1 2 } mutable: type-has-property? f "array is not mutable" assert=
+H{ a: 1 } mutable: type-has-property? f "hash is not mutable" assert=
+"hello" mutable: type-has-property? f "string is not mutable" assert=
+
+"mutable property: channel" test-section
+
+[
+  <channel> mutable: type-has-property? t "channel is mutable" assert=
+] task-scope
+
+"native.type-has-property? with metadata keys" test-section
+
+fixnum numeric: native.type-has-property? t "native: fixnum has numeric" assert=
+fixnum exact: native.type-has-property? t "native: fixnum has exact" assert=
+fixnum integer: native.type-has-property? t "native: fixnum has integer" assert=
+float numeric: native.type-has-property? t "native: float has numeric" assert=
+float exact: native.type-has-property? f "native: float lacks exact" assert=
+vector mutable: native.type-has-property? t "native: vector has mutable" assert=
+array mutable: native.type-has-property? f "native: array lacks mutable" assert=

@@ -1,16 +1,16 @@
 use "testing" ;
 
 "Fixnum overflow promotion (+)" test-section
-9223372036854775807 1 + type-of bignum: "max_i64 + 1 promotes" assert=
--9223372036854775808 -1 + type-of bignum: "min_i64 + -1 promotes" assert=
+9223372036854775807 1 + type-of bignum "max_i64 + 1 promotes" assert=
+-9223372036854775808 -1 + type-of bignum "min_i64 + -1 promotes" assert=
 
 "Fixnum overflow promotion (-)" test-section
--9223372036854775808 1 - type-of bignum: "min_i64 - 1 promotes" assert=
-9223372036854775807 -1 - type-of bignum: "max_i64 - -1 promotes" assert=
+-9223372036854775808 1 - type-of bignum "min_i64 - 1 promotes" assert=
+9223372036854775807 -1 - type-of bignum "max_i64 - -1 promotes" assert=
 
 "Fixnum overflow promotion (*)" test-section
-9223372036854775807 2 * type-of bignum: "max_i64 * 2 promotes" assert=
--9223372036854775808 2 * type-of bignum: "min_i64 * 2 promotes" assert=
+9223372036854775807 2 * type-of bignum "max_i64 * 2 promotes" assert=
+-9223372036854775808 2 * type-of bignum "min_i64 * 2 promotes" assert=
 
 "Overflow promotion values" test-section
 9223372036854775807 1 + inspect "9223372036854775808" "max_i64 + 1 value" assert=
@@ -18,9 +18,9 @@ use "testing" ;
 9223372036854775807 2 * inspect "18446744073709551614" "max_i64 * 2 value" assert=
 
 "Non-overflowing fixnum stays fixnum" test-section
-100 200 + type-of fixnum: "small add stays fixnum" assert=
-100 200 - type-of fixnum: "small sub stays fixnum" assert=
-100 200 * type-of fixnum: "small mul stays fixnum" assert=
+100 200 + type-of fixnum "small add stays fixnum" assert=
+100 200 - type-of fixnum "small sub stays fixnum" assert=
+100 200 * type-of fixnum "small mul stays fixnum" assert=
 
 "Bignum + bignum" test-section
 99999999999999999999 1 + inspect "100000000000000000000" "big + 1" assert=
@@ -37,9 +37,9 @@ use "testing" ;
 99999999999999999999 99999999999999999999 * inspect "9999999999999999999800000000000000000001" "big * big" assert=
 
 "Auto-demotion" test-section
-99999999999999999999 1 + 99999999999999999999 - 1 - type-of fixnum: "big that shrinks back" assert=
+99999999999999999999 1 + 99999999999999999999 - 1 - type-of fixnum "big that shrinks back" assert=
 99999999999999999999 1 + 99999999999999999999 - 1 - 0 "demoted value" assert=
-99999999999999999999 1 + 100000000000000000000 - type-of fixnum: "sub demotes to zero" assert=
+99999999999999999999 1 + 100000000000000000000 - type-of fixnum "sub demotes to zero" assert=
 99999999999999999999 1 + 100000000000000000000 - 0 "demoted zero" assert=
 
 "Bignum division" test-section
@@ -53,7 +53,7 @@ use "testing" ;
 100000000000000000000 99999999999999999999 % inspect "1" "big % big" assert=
 
 "Division special cases" test-section
--9223372036854775808 -1 / type-of bignum: "min_i64 / -1 promotes" assert=
+-9223372036854775808 -1 / type-of bignum "min_i64 / -1 promotes" assert=
 -9223372036854775808 -1 / inspect "9223372036854775808" "min_i64 / -1 value" assert=
 
 "Division by zero" test-section
@@ -63,11 +63,11 @@ use "testing" ;
 "Abs with bignum" test-section
 -99999999999999999999 abs inspect "99999999999999999999" "abs neg bignum" assert=
 99999999999999999999 abs inspect "99999999999999999999" "abs pos bignum" assert=
--9223372036854775808 abs type-of bignum: "abs min_i64 promotes" assert=
+-9223372036854775808 abs type-of bignum "abs min_i64 promotes" assert=
 -9223372036854775808 abs inspect "9223372036854775808" "abs min_i64 value" assert=
 
 "Mixed float still works" test-section
-1 2.0 + type-of float: "fixnum + float = float" assert=
-2.0 1 + type-of float: "float + fixnum = float" assert=
-10 2.5 * type-of float: "fixnum * float = float" assert=
-10.0 3 / type-of float: "float / fixnum = float" assert=
+1 2.0 + type-of float "fixnum + float = float" assert=
+2.0 1 + type-of float "float + fixnum = float" assert=
+10 2.5 * type-of float "fixnum * float = float" assert=
+10.0 3 / type-of float "float / fixnum = float" assert=

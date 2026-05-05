@@ -37,7 +37,7 @@ describe: method{ duration } [ unmake-duration inspect " ns" #append ] ;
 100 >duration describe "100 ns" "method dispatches for duration" assert=
 
 \ Verify type resolution
-100 >duration type-of duration: "duration has correct type" assert=
+100 >duration type-name "duration" "duration has correct type" assert=
 
 "binary generic dispatch" test-section
 

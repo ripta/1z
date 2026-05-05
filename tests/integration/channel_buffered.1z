@@ -43,7 +43,7 @@ test-buffered-full-blocks: ( -- ) [
 
 test-buffered-type: ( -- ) [
   [
-    2 <buffered-channel> type-of channel: "buffered type-of" assert=
+    2 <buffered-channel> type-of channel "buffered type-of" assert=
   ] task-scope
 ] ;
 

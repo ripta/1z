@@ -19,7 +19,7 @@ H{ x: 10 y: 20 } >point dup point? t ">point converts hash" assert=
 H{ x: 10 y: 20 } >point x>> 10 ">point x value" assert=
 
 \ Test type-of
-1 2 make-point type-of point: "type-of returns struct name" assert=
+1 2 make-point type-name "point" "type-of returns struct name" assert=
 
 \ Test struct instance equality
 1 2 make-point 1 2 make-point = t "same fields are equal" assert=

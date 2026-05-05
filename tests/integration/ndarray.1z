@@ -17,8 +17,8 @@ use "ndarray" ;
 
 "ndarray element type detection" test-section
 
-{ 1 2 3 } { 3 } ndarray element-type fixnum: "fixnum element-type" assert=
-{ 1.0 2.0 3.0 } { 3 } ndarray element-type float: "float element-type" assert=
+{ 1 2 3 } { 3 } ndarray element-type fixnum "fixnum element-type" assert=
+{ 1.0 2.0 3.0 } { 3 } ndarray element-type float "float element-type" assert=
 
 "ndarray homogeneity validation" test-section
 
@@ -159,13 +159,13 @@ shape { 2 3 } "ndarray+scalar preserves shape" assert=
 "ndarray arithmetic element type detection" test-section
 
 { 1 2 3 } { 3 } ndarray { 4 5 6 } { 3 } ndarray +
-element-type fixnum: "fixnum+fixnum -> fixnum" assert=
+element-type fixnum "fixnum+fixnum -> fixnum" assert=
 
 { 1.0 2.0 3.0 } { 3 } ndarray { 4.0 5.0 6.0 } { 3 } ndarray +
-element-type float: "float+float -> float" assert=
+element-type float "float+float -> float" assert=
 
 { 1 2 3 } { 3 } ndarray 1.0 +
-element-type float: "fixnum ndarray + float scalar -> float" assert=
+element-type float "fixnum ndarray + float scalar -> float" assert=
 
 "ndarray logical-nth" test-section
 
@@ -319,8 +319,8 @@ nd{ 1 2 3 ;
   4 5 6
 } 1 2 ref2d 6 "nd{ 2D (1,2)" assert=
 
-nd{ 1.0 2.0 3.0 } element-type float: "nd{ float auto-detect" assert=
-nd{ 1 2 3 } element-type fixnum: "nd{ fixnum auto-detect" assert=
+nd{ 1.0 2.0 3.0 } element-type float "nd{ float auto-detect" assert=
+nd{ 1 2 3 } element-type fixnum "nd{ fixnum auto-detect" assert=
 
 "ndarray mask" test-section
 

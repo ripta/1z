@@ -87,8 +87,8 @@ math.e math.log 1.0 - abs 1.0e-10 < "log(e) ~ 1.0" assert-true
 
 "Auto-promotion from fixnum" test-section
 2 math.sqrt 2.0 math.sqrt = "fixnum sqrt = float sqrt" assert-true
-2 math.sqrt type-of float: "fixnum input produces float" assert=
-4 math.floor type-of float: "fixnum floor produces float" assert=
+2 math.sqrt type-of float "fixnum input produces float" assert=
+4 math.floor type-of float "fixnum floor produces float" assert=
 
 "NaN propagation" test-section
 nan math.sin nan? "sin(nan) is nan" assert-true

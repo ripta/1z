@@ -18,9 +18,9 @@ Stack: [ t ]
 Stack: [ t "different resources not equal" ]
 PASS: different resources not equal
 Stack: [ ]
-Stack: [ sqlite-db: ]
-Stack: [ sqlite-db: sqlite-db: ]
-Stack: [ sqlite-db: sqlite-db: "type-of resource" ]
+Stack: [ "sqlite-db" ]
+Stack: [ "sqlite-db" "sqlite-db" ]
+Stack: [ "sqlite-db" "sqlite-db" "type-of resource" ]
 PASS: type-of resource
 Stack: [ ]
 Stack: [ t ]

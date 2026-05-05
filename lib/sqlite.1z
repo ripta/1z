@@ -104,11 +104,11 @@ bind: ( stmt i value -- ) [
   dup option:none? [
     drop (bind-null)
   ] [
-    dup type-of {
-      { fixnum: [ (bind-int64) ] }
-      { float: [ (bind-double) ] }
-      { string: [ -1 -1 (bind-text) ] }
-      { byte-array: [ bytes>ffi-ptr+len -1 (bind-blob) ] }
+    dup type-name {
+      { "fixnum" [ (bind-int64) ] }
+      { "float" [ (bind-double) ] }
+      { "string" [ -1 -1 (bind-text) ] }
+      { "byte-array" [ bytes>ffi-ptr+len -1 (bind-blob) ] }
       [ "fixnum, float, string, byte-array, or option:none" throw-type-error ]
     } case
   ] if

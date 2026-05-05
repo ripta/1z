@@ -4,7 +4,7 @@ use "testing" ;
 
 test-map-returns-iterator: ( -- ) [
   { 1 2 3 } >iterator [ 2 * ] #map
-  type-of iterator: "map returns iterator" assert=
+  type-of iterator "map returns iterator" assert=
 ] ;
 
 \ -- 2. #map on iterator transforms elements when consumed --
@@ -27,7 +27,7 @@ test-map-empty: ( -- ) [
 
 test-filter-returns-iterator: ( -- ) [
   { 1 2 3 } >iterator [ 2 > ] #filter
-  type-of iterator: "filter returns iterator" assert=
+  type-of iterator "filter returns iterator" assert=
 ] ;
 
 \ -- 5. #filter on iterator keeps matching elements --

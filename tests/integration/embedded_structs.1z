@@ -8,7 +8,7 @@ use "testing" ;
 point: virtual{ struct{ x y } } ;
 
 \ Hash-based wrap + type-of
-H{ x: 10 y: 20 } >point type-of point: "type-of returns virtual type name" assert=
+H{ x: 10 y: 20 } >point type-name "point" "type-of returns virtual type name" assert=
 
 \ Predicate
 H{ x: 10 y: 20 } >point point? t "point? on point is true" assert=
@@ -43,7 +43,7 @@ H{ x: 10 y: 20 } >point point? t "point? on point is true" assert=
 \ Unit type with no fields
 unit: virtual{ struct{ } } ;
 
-H{ } >unit type-of unit: "zero-field type-of" assert=
+H{ } >unit type-name "unit" "zero-field type-of" assert=
 H{ } >unit unit? t "zero-field predicate true" assert=
 
 \ Unwrap pushes nothing, re-wrap should produce an equal value
@@ -57,7 +57,7 @@ make-unit make-unit = t "zero-field values are equal" assert=
 \ Second distinct struct-backed virtual type
 color: virtual{ struct{ r g b } } ;
 
-255 128 0 make-color type-of color: "color type-of" assert=
+255 128 0 make-color type-name "color" "color type-of" assert=
 255 128 0 make-color color? t "color predicate true" assert=
 10 20 make-point color? f "point is not a color" assert=
 255 128 0 make-color point? f "color is not a point" assert=

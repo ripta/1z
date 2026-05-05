@@ -8,7 +8,7 @@ use "testing" ;
 duration: virtual{ fixnum } ;
 
 \ Test wrapping
-42 >duration type-of duration: "type-of returns virtual type name" assert=
+42 >duration type-name "duration" "type-of returns virtual type name" assert=
 
 \ Test predicate
 42 >duration duration? t "duration? on duration is true" assert=
@@ -35,12 +35,12 @@ duration: virtual{ fixnum } ;
 positive-duration: virtual{ duration } ;
 
 \ Test nested wrapping
-42 >duration >positive-duration type-of positive-duration: "nested type-of" assert=
+42 >duration >positive-duration type-name "positive-duration" "nested type-of" assert=
 42 >duration >positive-duration positive-duration? t "nested predicate true" assert=
 42 >duration >positive-duration duration? f "nested does not match inner type predicate" assert=
 
 \ Test nested unwrapping
-42 >duration >positive-duration unmake-positive-duration type-of duration: "unwrap nested reveals duration" assert=
+42 >duration >positive-duration unmake-positive-duration type-name "duration" "unwrap nested reveals duration" assert=
 42 >duration >positive-duration unmake-positive-duration unmake-duration 42 "double unwrap reveals integer" assert=
 
 \ Test nested display

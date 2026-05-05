@@ -13,8 +13,8 @@ test-basic-spawn-named: ( -- ) [
 
 test-task-self-type: ( -- ) [
   [
-    [ task-self type-of ] spawn
-    await task: "task-self returns a task value" assert=
+    [ task-self type-name ] spawn
+    await "task" "task-self returns a task value" assert=
   ] task-scope
 ] ;
 

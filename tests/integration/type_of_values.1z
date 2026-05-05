@@ -1,0 +1,44 @@
+use "testing" ;
+
+\ type-of returns type values for built-in types
+"=== type-of built-in types ===" test-section
+42 type-of fixnum = "fixnum type-of" assert-true
+"hello" type-of string = "string type-of" assert-true
+t type-of boolean = "boolean type-of" assert-true
+3.14 type-of float = "float type-of" assert-true
+hello: type-of symbol = "symbol type-of" assert-true
+{ } type-of array = "array type-of" assert-true
+[ ] type-of quotation = "quotation type-of" assert-true
+H{ } type-of hash = "hash type-of" assert-true
+V{ } type-of vector = "vector type-of" assert-true
+
+\ type-of on virtual types returns specific type
+"=== type-of virtual/enum types ===" test-section
+option:none type-name "option:none" = "option:none type-name" assert-true
+42 >option:some type-name "option:some" = "option:some type-name" assert-true
+
+\ type-name extracts the name string
+"=== type-name ===" test-section
+42 type-name "fixnum" = "fixnum type-name" assert-true
+"hello" type-name "string" = "string type-name" assert-true
+t type-name "boolean" = "boolean type-name" assert-true
+3.14 type-name "float" = "float type-name" assert-true
+
+\ type-of on type values returns the type built-in type
+"=== type-of on type values ===" test-section
+fixnum type-of type = "type-of type value is type" assert-true
+fixnum type-of type-name "type" = "type value type-name" assert-true
+
+\ type predicates still work
+"=== type predicates ===" test-section
+42 fixnum? "fixnum?" assert-true
+"hello" string? "string?" assert-true
+t boolean? "boolean?" assert-true
+42 string? not "42 not string?" assert-true
+3.14 float? "float?" assert-true
+42 float? not "42 not float?" assert-true
+
+\ pointer equality: type-of returns the same type value for same types
+"=== type identity ===" test-section
+42 type-of 99 type-of = "same type-of for same type" assert-true
+42 type-of "hello" type-of = not "different type-of for different types" assert-true

@@ -16,8 +16,8 @@ use "ratio" ;
 "error type constants" test-section
 
 \ Verify new error type constants exist and are symbols
-EIndexOutOfBounds type-of symbol: "EIndexOutOfBounds is a symbol" assert=
-EInvalidArgument type-of symbol: "EInvalidArgument is a symbol" assert=
+EIndexOutOfBounds type-of symbol "EIndexOutOfBounds is a symbol" assert=
+EInvalidArgument type-of symbol "EInvalidArgument is a symbol" assert=
 EIndexOutOfBounds index-out-of-bounds: "EIndexOutOfBounds value" assert=
 EInvalidArgument invalid-argument: "EInvalidArgument value" assert=
 

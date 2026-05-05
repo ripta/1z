@@ -1,0 +1,26 @@
+=== Symbol path still works ===
+Stack: [ ]
+PASS: symbol returns hash
+Stack: [ ]
+PASS: string returns hash
+Stack: [ ]
+=== Type value path works ===
+Stack: [ ]
+PASS: type value returns hash
+Stack: [ ]
+PASS: string type value returns hash
+Stack: [ ]
+=== Both paths return the same descriptor ===
+Stack: [ ]
+PASS: fixnum descriptors match
+Stack: [ ]
+PASS: string descriptors match
+Stack: [ ]
+PASS: boolean descriptors match
+Stack: [ ]
+PASS: array descriptors match
+Stack: [ ]
+=== Type mismatch error ===
+Stack: [ ]
+PASS: fixnum value is not a type
+Stack: [ ]

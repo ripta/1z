@@ -4,7 +4,7 @@ use "testing" ;
 use "ranges" ;
 
 "range type" test-section
-1 10 range type-of range: "type-of returns range" assert=
+1 10 range type-name "range" "type-of returns range" assert=
 1 10 range range? t "range? on range" assert=
 42 range? f "range? on integer" assert=
 
