@@ -25,6 +25,36 @@ S{: parse-time [ "}" parse-until make-set ] ;
 \\ Mutable map literal syntax.
 M{: parse-time [ "}" parse-until make-mutable-map ] ;
 
+\ Built-in type values
+fixnum:    M{ type: builtin-type: } native.define-builtin-type ;
+bignum:    M{ type: builtin-type: } native.define-builtin-type ;
+float:     M{ type: builtin-type: } native.define-builtin-type ;
+boolean:   M{ type: builtin-type: } native.define-builtin-type ;
+string:    M{ type: builtin-type: } native.define-builtin-type ;
+symbol:    M{ type: builtin-type: } native.define-builtin-type ;
+array:     M{ type: builtin-type: } native.define-builtin-type ;
+quotation: M{ type: builtin-type: } native.define-builtin-type ;
+hash:      M{ type: builtin-type: } native.define-builtin-type ;
+vector:    M{ type: builtin-type: } native.define-builtin-type ;
+byte-array: M{ type: builtin-type: } native.define-builtin-type ;
+set: M{ type: builtin-type: } native.define-builtin-type ;
+mutable-map: M{ type: builtin-type: } native.define-builtin-type ;
+stream:      M{ type: builtin-type: } native.define-builtin-type ;
+resource:    M{ type: builtin-type: } native.define-builtin-type ;
+parameter:   M{ type: builtin-type: } native.define-builtin-type ;
+module:      M{ type: builtin-type: } native.define-builtin-type ;
+marker:      M{ type: builtin-type: } native.define-builtin-type ;
+struct-type: M{ type: builtin-type: } native.define-builtin-type ;
+struct-instance: M{ type: builtin-type: } native.define-builtin-type ;
+tagged:       M{ type: builtin-type: } native.define-builtin-type ;
+template:     M{ type: builtin-type: } native.define-builtin-type ;
+stack-effect: M{ type: builtin-type: } native.define-builtin-type ;
+error:    M{ type: builtin-type: } native.define-builtin-type ;
+task:     M{ type: builtin-type: } native.define-builtin-type ;
+channel:  M{ type: builtin-type: } native.define-builtin-type ;
+iterator: M{ type: builtin-type: } native.define-builtin-type ;
+doc-string: M{ type: builtin-type: } native.define-builtin-type ;
+
 \\ Word array literal syntax. Tokenizes words as strings without requiring quotes.
 W{: parse-time [ "}" parse-tokens-until ] ;
 
@@ -105,14 +135,14 @@ protocol{: parse-time [
 comparable: protocol{ cmp } ;
 
 \\ Dynamic variable definition syntax.
-parameter: parse-time [ dup parse-quotation make-parameter ] ;
+define-parameter: parse-time [ dup parse-quotation make-parameter ] ;
 
 \\ The current output stream, defaulting to `stdout`.
-output-stream: parameter [ stdout ] ;
+output-stream: define-parameter [ stdout ] ;
 \\ The current input stream, defaulting to `stdin`.
-input-stream: parameter [ stdin ] ;
+input-stream: define-parameter [ stdin ] ;
 \\ The current error stream, defaulting to `stderr`.
-error-stream: parameter [ stderr ] ;
+error-stream: define-parameter [ stderr ] ;
 
 \ Control flow
 \\ Execute the quotation when the condition is true.
@@ -503,7 +533,7 @@ cond: branch-combinator ( branches -- ... ) [
 \ String formatting
 
 \\ Format a string by interpolating values from a source using a template string.
-fmt: ( source string -- string ) [ template interpolate ] ;
+fmt: ( source string -- string ) [ >template interpolate ] ;
 
 \\ Format and print a string followed by a newline.
 fmt-line: ( source string -- ) [ fmt print-line ] ;
@@ -613,9 +643,9 @@ try-acquire: generic ( resource -- option ) [ "acquirable resource" throw-type-e
 \ Introspection struct types
 
 \\ Parsed stack effect with input and output parameter lists.
-stack-effect: struct{ inputs outputs } ;
-\\ Format a stack-effect struct as "( inputs -- outputs )".
->string: method{ stack-effect } [
+stack-effect-info: struct{ inputs outputs } ;
+\\ Format a stack-effect-info struct as "( inputs -- outputs )".
+>string: method{ stack-effect-info } [
   dup inputs>> ""
   [ >string #append " " #append ]
   #reduce swap outputs>> ""
@@ -642,13 +672,13 @@ word-info: struct{ name stack-effect doc markers native? body methods source-loc
 
 \\ Convert a raw 9-element array from native.>word into a word-info struct.
 (raw>word-info): [
-  >stack-effect:  [ dup f = [ ] [ dup #first swap #last make-stack-effect ] if ] ;
-  >source-loc:    [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-source-loc nip ] if ] ;
-  >provenance:    [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-provenance nip ] if ] ;
-  >dispatch-prov: [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth 3 pick-n 3 #nth make-dispatch-provenance nip ] if ] ;
-  >method-info:   [ dup 0 #nth swap 1 #nth >dispatch-prov make-method-info ] ;
+  >stack-effect-info: [ dup f = [ ] [ dup #first swap #last make-stack-effect-info ] if ] ;
+  >source-loc:        [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-source-loc nip ] if ] ;
+  >provenance:        [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-provenance nip ] if ] ;
+  >dispatch-prov:     [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth 3 pick-n 3 #nth make-dispatch-provenance nip ] if ] ;
+  >method-info:       [ dup 0 #nth swap 1 #nth >dispatch-prov make-method-info ] ;
   dup 0 #nth
-  over 1 #nth >stack-effect
+  over 1 #nth >stack-effect-info
   2 pick-n 2 #nth
   3 pick-n 3 #nth
   4 pick-n 4 #nth

@@ -96,7 +96,12 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
         },
     };
 
-    switch (inner_type_val) {
+    const effective_inner_type_val = switch (inner_type_val) {
+        .type_val => |tv| Value{ .string = tv.name },
+        else => inner_type_val,
+    };
+
+    switch (effective_inner_type_val) {
         .string => |inner_type| {
             // Allocate singleton VirtualType shared by all instances
             const vtype = try alloc.create(VirtualType);

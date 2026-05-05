@@ -122,6 +122,7 @@ pub fn writeValuePreview(val: Value, writer: anytype) !void {
         .stack_effect => try writer.writeAll("<stack-effect>"),
         .error_value => try writer.writeAll("<error>"),
         .doc_string => try writer.writeAll("<doc-string>"),
+        .type_val => |tv| try writer.print("<type:{s}>", .{tv.name}),
     }
 }
 

@@ -55,6 +55,7 @@ pub const iterators = @import("iterators.zig");
 pub const protocols = @import("protocols.zig");
 pub const sockets = @import("sockets.zig");
 pub const introspect = @import("introspect.zig");
+pub const builtin_types = @import("builtin_types.zig");
 pub const math = @import("math.zig");
 pub const bitwise = @import("bitwise.zig");
 pub const resources = @import("resources.zig");
@@ -125,6 +126,7 @@ pub const extracted_registry_entries = structs.registry_entries ++
     enums.registry_entries ++
     protocols.registry_entries ++
     introspect.registry_entries ++
+    builtin_types.registry_entries ++
     arithmetic.registry_entries ++
     math.registry_entries ++
     sequences.registry_entries ++

@@ -1,0 +1,8 @@
+use "testing" ;
+
+test-type: [ type: builtin-type: ] make-mutable-map native.define-builtin-type ;
+
+test-type inspect "<type:test-type>" "inspect shows type name" assert=
+
+"test-type" native.type-descriptor
+"type" @get builtin-type: "descriptor registered" assert=

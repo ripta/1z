@@ -62,6 +62,7 @@ Stack: [ ]
 >string ( value -- string )
 >string-base ( n base -- str )
 >symbol ( string -- symbol )
+>template ( string -- template )
 @adjoin ( set value -- set' )
 @difference ( set1 set2 -- set' )
 @get ( assoc key -- value )
@@ -104,6 +105,7 @@ compose ( quot1 quot2 -- quot' )
 const ( -- marker )
 curry ( x quot -- quot' )
 define-enum ( name descriptor markers -- )
+define-marker ( -- marker )
 define-method ( name descriptor markers -- )
 define-protocol ( name descriptor markers -- )
 define-struct ( name descriptor markers -- )
@@ -140,7 +142,6 @@ make-parameter ( name quot -- param )
 make-range-iter ( start end step infinite? -- iterator )
 make-set ( quotation -- set )
 make-vector ( quotation -- vector )
-marker ( -- marker )
 multiplexer-stats ( -- hash )
 mutable ( -- marker )
 native? ( name -- ? )
@@ -198,7 +199,6 @@ sys-info ( -- hash )
 t ( -- t )
 task-scope ( quot -- )
 task-self ( -- task )
-template ( string -- template )
 throw ( error -- )
 try-receive ( ch -- val/f ? )
 type-of ( val -- symbol )
@@ -255,7 +255,7 @@ yield ( -- )
 >result:err
 >result:ok
 >source-loc
->stack-effect
+>stack-effect-info
 >word-info ( symbol -- word-info )
 >word? ( symbol -- option )
 ?and-then ( opt/res quot -- opt/res )
@@ -294,18 +294,23 @@ W{
 acquire ( resource -- )
 all-words ( -- array )
 and ( ? ? -- ? )
+array
 array? ( val -- ? )
 assert-no-shadow ( names -- )
 benchmark-report? ( val -- ? )
 bi ( ..a x p q -- ..b ..c )
+bignum
 bignum? ( val -- ? )
 bl ( -- )
 body>>
+boolean
 boolean? ( val -- ? )
+byte-array
 byte-array? ( val -- ? )
 bytes-alloc ( n -- byte-array )
 bytes-resize! ( byte-array n -- byte-array )
 case ( val branches -- ... )
+channel
 choose ( a1 a2 quot -- a )
 cleave ( x quots -- )
 close-iterator ( iterator -- )
@@ -313,15 +318,18 @@ cmp ( a b -- ordering )
 column>>
 comparable
 cond ( branches -- ... )
+define-parameter
 dispatch-provenance>hash
 dispatch-provenance?
 do ( pred body -- pred body )
+doc-string
 doc>>
 dupd ( a b -- a a b )
 emit ( codepoint -- )
 enum{
 eprint ( str -- )
 eprint-line ( str -- )
+error
 error-stream
 error-type? ( error type -- error ? )
 error? ( val -- ? )
@@ -331,7 +339,9 @@ ffi-ptr+len>bytes ( resource n -- byte-array )
 field>>
 file>>
 finite? ( x -- ? )
+fixnum
 fixnum? ( val -- ? )
+float
 float? ( val -- ? )
 flush ( -- )
 fmt ( source string -- string )
@@ -343,6 +353,7 @@ generated-by ( symbol -- provenance/f )
 generated-words ( symbol -- array )
 generator>>
 generic? ( name -- ? )
+hash
 hash? ( val -- ? )
 help ( symbol -- )
 ignore-errors ( quot -- )
@@ -352,6 +363,7 @@ infinite? ( x -- ? )
 input-stream
 inputs>>
 integer? ( val -- ? )
+iterator
 iterator? ( val -- ? )
 keep ( ..a x quot -- ..b x )
 line>>
@@ -363,8 +375,9 @@ make-provenance
 make-result:err
 make-result:ok
 make-source-loc
-make-stack-effect
+make-stack-effect-info
 make-word-info
+marker
 marker? ( val -- ? )
 markers>>
 match{
@@ -374,8 +387,10 @@ method-info?
 methods>>
 method{
 min ( a1 a2 -- a )
+module
 module>>
 module? ( val -- ? )
+mutable-map
 mutable-map? ( val -- ? )
 my-test-word
 name>>
@@ -419,9 +434,11 @@ protocol{
 provenance>>
 provenance>hash
 provenance?
+quotation
 quotation? ( val -- ? )
 read-line ( -- str/f )
 receive? ( ch -- option )
+resource
 result:err> ( result -- error )
 result:err>hash
 result:err?
@@ -431,18 +448,28 @@ result:ok?
 result?
 role>>
 run-benchmarks ( quot -- )
+set
 set? ( val -- ? )
 source-loc>>
 source-loc>hash
 source-loc?
+stack-effect
+stack-effect-info>hash
+stack-effect-info?
 stack-effect>>
-stack-effect>hash
-stack-effect?
+stream
 stream-write-string ( stream str -- n )
 stream? ( val -- ? )
+string
 string? ( val -- ? )
+struct-instance
+struct-type
 struct{
+symbol
 symbol? ( val -- ? )
+tagged
+task
+template
 throw-type-error ( value expected-str -- * )
 times ( n quot -- )
 tri ( ..a x p q r -- ..b ..c ..d )
@@ -458,12 +485,13 @@ unmake-provenance
 unmake-result:err
 unmake-result:ok
 unmake-source-loc
-unmake-stack-effect
+unmake-stack-effect-info
 unmake-word-info
 until ( ..a pred body -- ..b )
 unwrap-or ( opt/res default -- value )
 unwrap-or-throw ( opt/res -- value )
 use
+vector
 vector? ( val -- ? )
 virtual{
 when ( ? quot -- )

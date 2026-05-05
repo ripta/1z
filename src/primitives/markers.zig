@@ -42,7 +42,7 @@ pub const loop_combinator_marker: Marker = .{ .name = "loop-combinator" };
 pub const shadow_ok_marker: Marker = .{ .name = "shadow-ok" };
 
 pub const primitives = [_]Primitive{
-    .{ .name = "marker", .stack_effect = "-- marker", .doc = "Create an anonymous marker value.", .func = nativeMarker },
+    .{ .name = "define-marker", .stack_effect = "-- marker", .doc = "Create an anonymous marker value.", .func = nativeMarker },
     .{ .name = "parse-time", .stack_effect = "-- marker", .doc = "Push the well-known parse-time marker.", .func = nativeParseTimeMarker, .parse_time = true },
     .{ .name = "mutable", .stack_effect = "-- marker", .doc = "Push the well-known mutable marker.", .func = nativeMutableMarker, .parse_time = true },
     .{ .name = "generic", .stack_effect = "-- marker", .doc = "Push the well-known generic marker.", .func = nativeGenericMarker, .parse_time = true },

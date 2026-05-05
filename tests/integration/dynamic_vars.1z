@@ -10,28 +10,28 @@ input-stream get inspect "<stream stdin read>" "input-stream get returns stdin" 
 
 "Custom parameter definition" test-section
 \ Define a test parameter with a numeric default
-test-param: parameter [ 42 ] ;
+test-param: define-parameter [ 42 ] ;
 test-param get 42 "test-param get returns default" assert=
 "PASS: custom parameter with numeric default" print-line
 
 "Lazy default evaluation" test-section
 \ Define a parameter with a side-effecting default
 \ The default quotation should be evaluated each time if no binding
-counter: parameter [ 100 ] ;
+counter: define-parameter [ 100 ] ;
 counter get 100 "counter first get" assert=
 counter get 100 "counter second get" assert=
 "PASS: lazy default evaluation" print-line
 
 "with-parameter rebinding" test-section
 \ Test temporary rebinding
-rebind-test: parameter [ 100 ] ;
+rebind-test: define-parameter [ 100 ] ;
 rebind-test get 100 "before rebind" assert=
 999 rebind-test [ rebind-test get 999 "inside rebind" assert= ] with-parameter
 rebind-test get 100 "after rebind restored" assert=
 "PASS: with-parameter rebinding" print-line
 
 "Nested with-parameter" test-section
-nested: parameter [ 1 ] ;
+nested: define-parameter [ 1 ] ;
 nested get 1 "outer default" assert=
 10 nested [
   nested get 10 "first level binding" assert=
@@ -44,7 +44,7 @@ nested get 1 "outer restored" assert=
 "PASS: nested with-parameter" print-line
 
 "with-parameter restores on error" test-section
-error-test: parameter [ 0 ] ;
+error-test: define-parameter [ 0 ] ;
 error-test get 0 "before error" assert=
 [
   999 error-test [
@@ -73,8 +73,8 @@ test-param inspect "<parameter:test-param>" "parameter inspect" assert=
 "PASS: parameter value display" print-line
 
 "Multiple parameters in same scope" test-section
-multi-a: parameter [ 1 ] ;
-multi-b: parameter [ 2 ] ;
+multi-a: define-parameter [ 1 ] ;
+multi-b: define-parameter [ 2 ] ;
 multi-a get 1 "multi-a default" assert=
 multi-b get 2 "multi-b default" assert=
 10 multi-a [
