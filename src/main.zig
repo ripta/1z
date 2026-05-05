@@ -1957,13 +1957,22 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             printPicStats(&codegen_diagnostics, err_writer);
         }
         if (err == error.UncompiledWords) {
-            for (codegen_diagnostics.uncompiled_words) |name| {
-                err_writer.print(
-                    "Error: word '{s}' could not be compiled to C\n",
-                    .{name},
-                ) catch {};
+            const items = codegen_diagnostics.uncompiled_words;
+            err_writer.print(
+                "Error: {d} word{s} could not be compiled to C\n",
+                .{ items.len, if (items.len == 1) @as([]const u8, "") else "s" },
+            ) catch {};
+            for (items) |entry| {
+                err_writer.print("  word '{s}': {s}: {s}\n", .{
+                    entry.name,
+                    entry.reason.code(),
+                    entry.reason.message(),
+                }) catch {};
+                if (entry.reason.hint()) |h| {
+                    err_writer.print("      hint: {s}\n", .{h}) catch {};
+                }
             }
-            allocator.free(codegen_diagnostics.uncompiled_words);
+            allocator.free(items);
         } else if (err == error.UncompiledQuotations) {
             for (codegen_diagnostics.uncompiled_quotations) |q| {
                 err_writer.print(

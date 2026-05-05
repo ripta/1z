@@ -1,0 +1,6 @@
+\ Mutable struct field setter (>>x) is currently not AOT-compilable;
+\ the build now surfaces the reason in stderr. Pins the diagnostic
+\ format for non-prelude uncompiled words.
+foo: mutable struct{ x } ;
+do-it: ( -- ) [ 0 make-foo 99 over >>x drop ] ;
+do-it

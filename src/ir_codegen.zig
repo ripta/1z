@@ -169,7 +169,7 @@ pub const PicStats = struct {
 };
 
 pub const CodegenDiagnostics = struct {
-    uncompiled_words: []const []const u8 = &.{},
+    uncompiled_words: []const UncompiledWord = &.{},
     uncompiled_quotations: []const UncompiledQuotation = &.{},
     quotation_fallbacks: []const QuotationFallbackWarning = &.{},
     prelude_stats: PreludeStats = .{},
@@ -6415,14 +6415,15 @@ pub fn emitProgramC(
     // Prelude words can safely fall back to jitInterpretedCall since they
     // exist in the AOT runtime dictionary.
     {
-        var uncompiled: std.ArrayListUnmanaged([]const u8) = .{};
+        var uncompiled: std.ArrayListUnmanaged(UncompiledWord) = .{};
         for (words) |w| {
             if (!w.is_prelude and !actually_compiled.contains(w.word_id)) {
-                try uncompiled.append(allocator, w.name);
+                const reason = failure_reasons.get(w.name) orelse .pre_scan_failure;
+                try uncompiled.append(allocator, .{ .name = w.name, .reason = reason });
             }
         }
         if (uncompiled.items.len > 0) {
-            diagnostics.uncompiled_words = try allocator.dupe([]const u8, uncompiled.items);
+            diagnostics.uncompiled_words = try allocator.dupe(UncompiledWord, uncompiled.items);
             uncompiled.deinit(allocator);
             return error.UncompiledWords;
         }

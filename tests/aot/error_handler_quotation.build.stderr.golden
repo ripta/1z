@@ -1,2 +1,4 @@
 Quotation bodies compiled: 10/10 (100.0%)
-Error: word '__entry__' could not be compiled to C
+Error: 1 word could not be compiled to C
+  word '__entry__': NC.5: calls a quotation whose stack effect is unknown
+      hint: annotate the quotation parameter with a concrete stack effect

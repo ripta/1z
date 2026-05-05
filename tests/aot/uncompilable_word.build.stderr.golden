@@ -1,1 +1,3 @@
-Error: word 'not-compilable' could not be compiled to C
+Error: 1 word could not be compiled to C
+  word 'not-compilable': NC.5: calls a quotation whose stack effect is unknown
+      hint: annotate the quotation parameter with a concrete stack effect
