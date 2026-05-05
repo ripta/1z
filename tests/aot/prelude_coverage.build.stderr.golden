@@ -1,12 +1,16 @@
 Prelude compilation: 289/325 words compiled (88.9%)
   word '>option:some' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'option:some>' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word '>result:err' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word '#all' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'times' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
@@ -15,55 +19,73 @@ Prelude compilation: 289/325 words compiled (88.9%)
       hint: blocked until quotation bodies can be compiled
   word 'make-option:some' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'parse-quotation' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'cond' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
   word 'make-result:ok' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'native?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'bytes-alloc-ptr' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'unmake-result:err' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'result:err>' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'bytes>ffi-ptr' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'benchmark-report?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'trace-stack' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
   word 'unmake-result:ok' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'result:ok>' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word '1check' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
   word 'defined?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'tri' cannot be compiled
       NC.8: a quotation in abstract form must become a concrete runtime value
       hint: blocked until quotation bodies can be compiled
   word 'unmake-option:some' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'word-markers' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word '>word-info' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'loop' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
   word 'cmp' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word '#any' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'make-result:err' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'while' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
@@ -75,6 +97,7 @@ Prelude compilation: 289/325 words compiled (88.9%)
       hint: only literal depths into known stack slots above the row are supported
   word '>result:ok' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
   word 'case' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled

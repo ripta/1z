@@ -68,6 +68,7 @@ pub const NotCompilableReason = enum {
     row_binding_overflow,
     quotation_slot_overflow,
     indexed_access_into_row,
+    unknown_reason,
 
     pub fn code(self: NotCompilableReason) []const u8 {
         return switch (self) {
@@ -88,6 +89,7 @@ pub const NotCompilableReason = enum {
             .row_binding_overflow => "NC.15",
             .quotation_slot_overflow => "NC.16",
             .indexed_access_into_row => "NC.17",
+            .unknown_reason => "NC.18",
         };
     }
 
@@ -110,6 +112,7 @@ pub const NotCompilableReason = enum {
             .row_binding_overflow => std.fmt.comptimePrint("row variable specialization exceeded binding capacity ({d})", .{max_row_var_bindings}),
             .quotation_slot_overflow => std.fmt.comptimePrint("word has more quotation parameters with concrete effects than the compiler can track ({d})", .{max_quotation_slots}),
             .indexed_access_into_row => "indexed stack access targets the symbolic row region",
+            .unknown_reason => "compilation failed without a categorized reason",
         };
     }
 
@@ -125,13 +128,14 @@ pub const NotCompilableReason = enum {
             .quotation_reification => "blocked until quotation bodies can be compiled",
             .merge_type_mismatch => "blocked until polymorphic branch merging is implemented",
             .nested_loop_conflict => "split into two words so each has one recursive call",
-            .pre_scan_failure => null,
+            .pre_scan_failure => "blocked until the called word is in the AOT compilation set",
             .post_compile_reject => null,
             .abstract_stack_underflow => "blocked until row-variable stack regions can be modeled",
             .effect_inference_overflow => "simplify the quotation body to use fewer intermediate values",
             .row_binding_overflow => "reduce the number of distinct row variable bindings at this call site",
             .quotation_slot_overflow => "simplify the word to use fewer quotation parameters",
             .indexed_access_into_row => "only literal depths into known stack slots above the row are supported",
+            .unknown_reason => "diagnostic gap; please report",
         };
     }
 };
@@ -2513,7 +2517,7 @@ fn rewriteIndexedStackOp(
         // ( ... x_n ... x_0 n -- ... x_n ... x_0 x_n )
         // clone the entry at depth to the top
         const target = sp.* - 1 - depth;
-        stack[sp.*] = try cloneStackEntry(state.ctx, state.base_addr, stack[target], sp.*);
+        stack[sp.*] = try cloneStackEntry(state, state.base_addr, stack[target], sp.*);
         sp.* += 1;
     } else if (std.mem.eql(u8, name, "<rot-n")) {
         // ( ... x_n x_n-1 ... x_0 n -- ... x_n-1 ... x_0 x_n )
@@ -2733,7 +2737,7 @@ fn emitEpilogue(
 /// (i64, f64, bool, quotation_body) the ref is shared. For raw_at_slot
 /// entries a physical copy is emitted and the new entry points to dest_slot.
 fn cloneStackEntry(
-    ctx: *c.ir_ctx,
+    state: *CompileState,
     base_addr: c.ir_ref,
     entry: StackEntry,
     dest_slot: usize,
@@ -2744,10 +2748,13 @@ fn cloneStackEntry(
         .bool_ref => |ref| .{ .bool_ref = ref },
         .quotation_body => |body| .{ .quotation_body = body },
         .raw_at_slot => |s| blk: {
-            emitCopySlot(ctx, base_addr, s, dest_slot);
+            emitCopySlot(state.ctx, base_addr, s, dest_slot);
             break :blk .{ .raw_at_slot = dest_slot };
         },
-        .row_region => IrCodegenError.NotCompilable,
+        .row_region => blk: {
+            state.not_compilable_reason = .abstract_stack_underflow;
+            break :blk IrCodegenError.NotCompilable;
+        },
     };
 }
 
@@ -3722,7 +3729,7 @@ fn compileInstructions(
             .call_word => |name| {
                 if (std.mem.eql(u8, name, "dup")) {
                     if (sp.* < 1) return IrCodegenError.StackUnderflow;
-                    stack[sp.*] = try cloneStackEntry(ctx, base_addr, stack[sp.* - 1], sp.*);
+                    stack[sp.*] = try cloneStackEntry(state, base_addr, stack[sp.* - 1], sp.*);
                     sp.* += 1;
                 } else if (std.mem.eql(u8, name, "drop")) {
                     if (sp.* < 1) return IrCodegenError.StackUnderflow;
@@ -3737,7 +3744,7 @@ fn compileInstructions(
                     stack[sp.* - 1] = second;
                 } else if (std.mem.eql(u8, name, "over")) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
-                    stack[sp.*] = try cloneStackEntry(ctx, base_addr, stack[sp.* - 2], sp.*);
+                    stack[sp.*] = try cloneStackEntry(state, base_addr, stack[sp.* - 2], sp.*);
                     sp.* += 1;
                 } else if (std.mem.eql(u8, name, "t")) {
                     stack[sp.*] = .{ .bool_ref = c.ir_const_bool(ctx, true) };
@@ -6418,7 +6425,7 @@ pub fn emitProgramC(
         var uncompiled: std.ArrayListUnmanaged(UncompiledWord) = .{};
         for (words) |w| {
             if (!w.is_prelude and !actually_compiled.contains(w.word_id)) {
-                const reason = failure_reasons.get(w.name) orelse .pre_scan_failure;
+                const reason = failure_reasons.get(w.name) orelse .unknown_reason;
                 try uncompiled.append(allocator, .{ .name = w.name, .reason = reason });
             }
         }
@@ -6464,7 +6471,7 @@ pub fn emitProgramC(
             if (actually_compiled.contains(w.word_id)) {
                 compiled += 1;
             } else {
-                const reason = failure_reasons.get(w.name) orelse .pre_scan_failure;
+                const reason = failure_reasons.get(w.name) orelse .unknown_reason;
                 try uncompiled_list.append(allocator, .{ .name = w.name, .reason = reason });
             }
         }
@@ -10872,6 +10879,22 @@ test "dup on row_region entry returns NotCompilable" {
     const instrs = makeInstructions(.{ "call", "dup" });
     const result = compileWord(&instrs, 2, 0, null, null, null, null, null);
     try testing.expectError(IrCodegenError.NotCompilable, result);
+}
+
+test "NotCompilableReason: unknown_reason formatting" {
+    const r: NotCompilableReason = .unknown_reason;
+    try testing.expectEqualStrings("NC.18", r.code());
+    try testing.expectEqualStrings("compilation failed without a categorized reason", r.message());
+    try testing.expectEqualStrings("diagnostic gap; please report", r.hint().?);
+}
+
+test "NotCompilableReason: pre_scan_failure now has a hint" {
+    const r: NotCompilableReason = .pre_scan_failure;
+    try testing.expectEqualStrings("NC.11", r.code());
+    try testing.expectEqualStrings(
+        "blocked until the called word is in the AOT compilation set",
+        r.hint().?,
+    );
 }
 
 test "add above row_region compiles" {
