@@ -18,8 +18,7 @@ Warning: 'while' parameter 'body' has row-variable effect; quotation call falls 
 Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Error: --interpreter-fallback=false requires all words to compile; 37 words need the interpreter
-  word 'run-benchmarks' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+Error: --interpreter-fallback=false requires all words to compile; 36 words need the interpreter
   word '>option:some' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
   word 'option:some>' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
   word '>result:err' (prelude): NC.11: instruction pre-scan rejected the word before compilation started

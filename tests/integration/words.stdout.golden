@@ -192,7 +192,7 @@ pick-n ( n -- val )
 pragma-def{ ( -- )
 pragma? ( name -- ? )
 pragma{ ( -- )
-print-benchmark-report
+print-benchmark-report ( report -- )
 read-symlink ( path -- target-path )
 receive ( ch -- val )
 recover ( try-quot recover-quot: ( error -- ..a ) -- )

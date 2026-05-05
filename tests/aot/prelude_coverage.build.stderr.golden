@@ -1,6 +1,4 @@
-Prelude compilation: 288/325 words compiled (88.6%)
-  word 'run-benchmarks' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
+Prelude compilation: 289/325 words compiled (88.9%)
   word '>option:some' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
   word 'option:some>' cannot be compiled
